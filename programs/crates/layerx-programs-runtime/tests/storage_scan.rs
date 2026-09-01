@@ -559,7 +559,7 @@ fn candidate_scan_status_fixtures_preserve_negative_status_and_scan_output_senti
         (
             scan_status_guest(1, b"", b"", 1, 13, 128, 13, 128),
             CapabilitySet::empty(),
-            -1,
+            -1_i32,
         ),
         (
             scan_status_guest(2, b"", b"", 1, 13, 128, 13, 128),

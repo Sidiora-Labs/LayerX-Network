@@ -166,7 +166,7 @@
   },
   {
     "description": "Variable array with mixed types",
-    "hex": "0131000000021042012000000003666f6f",
+    "hex": "01310000000210422000000003666f6f",
     "expected": "pass"
   },
   {
@@ -181,7 +181,7 @@
   },
   {
     "description": "Option: Some(bytes)",
-    "hex": "0140011200000004646174",
+    "hex": "014001200000000464617461",
     "expected": "pass"
   },
   {
@@ -191,7 +191,7 @@
   },
   {
     "description": "Union variant 1 with bytes",
-    "hex": "0150000000011200000003616263",
+    "hex": "0150000000012000000003616263",
     "expected": "pass"
   },
   {
@@ -206,12 +206,12 @@
   },
   {
     "description": "Nested array: array of arrays",
-    "hex": "0130000000021300000001100113000000011002",
+    "hex": "0130000000023000000001100130000000011002",
     "expected": "pass"
   },
   {
     "description": "Complex nested structure",
-    "hex": "0150000000011400011300000002102a1042",
+    "hex": "01500000000140013000000002102a1042",
     "expected": "pass"
   }
 ]

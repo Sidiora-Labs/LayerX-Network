@@ -473,6 +473,8 @@ pub fn inject<R: Rules, B: Backend>(
 
 	#[cfg(feature = "bulk")]
 	let mut dynamic_helpers = Vec::<DynamicHelper>::new();
+	#[cfg(feature = "bulk")]
+	let mut need_internal_grow_counter = false;
 	let mut error = false;
 
 	// Iterate over module sections and perform needed transformations.
@@ -527,15 +529,23 @@ pub fn inject<R: Rules, B: Backend>(
 						break
 					}
 					#[cfg(feature = "bulk")]
-					inject_dynamic_counters(
-						func_body.code_mut(),
-						total_func,
-						dynamic_check_idx,
-						#[cfg(feature = "reference_types")]
-						&table_types,
-						rules,
-						&mut dynamic_helpers,
-					);
+					if matches!(&gas_meter, GasMeter::Internal { .. }) {
+						if rules.memory_grow_cost().enabled() &&
+							inject_internal_grow_counter(func_body.code_mut(), total_func) > 0
+						{
+							need_internal_grow_counter = true;
+						}
+					} else {
+						inject_dynamic_counters(
+							func_body.code_mut(),
+							total_func,
+							dynamic_check_idx,
+							#[cfg(feature = "reference_types")]
+							&table_types,
+							rules,
+							&mut dynamic_helpers,
+						);
+					}
 				}
 			},
 			elements::Section::Export(export_section) =>
@@ -610,6 +620,12 @@ pub fn inject<R: Rules, B: Backend>(
 		return Err(module)
 	}
 
+	#[cfg(feature = "bulk")]
+	let module = if need_internal_grow_counter {
+		add_internal_grow_counter(module, rules, gas_func_idx)
+	} else {
+		module
+	};
 	#[cfg(feature = "bulk")]
 	let module = add_dynamic_helpers(module, gas_func_idx, dynamic_check_idx, &dynamic_helpers);
 	let mut standards = Vec::new();
@@ -834,6 +850,58 @@ impl Counter {
 		top_block.cost = cost;
 		Ok(())
 	}
+}
+
+#[cfg(feature = "bulk")]
+fn inject_internal_grow_counter(
+	instructions: &mut elements::Instructions,
+	grow_counter_func: u32,
+) -> usize {
+	use parity_wasm::elements::Instruction::*;
+	let mut counter = 0;
+	for instruction in instructions.elements_mut() {
+		if let GrowMemory(_) = *instruction {
+			*instruction = Call(grow_counter_func);
+			counter += 1;
+		}
+	}
+	counter
+}
+
+#[cfg(feature = "bulk")]
+fn add_internal_grow_counter<R: Rules>(
+	module: elements::Module,
+	rules: &R,
+	gas_func: u32,
+) -> elements::Module {
+	use parity_wasm::elements::Instruction::*;
+
+	let cost = match rules.memory_grow_cost() {
+		MemoryGrowCost::Free => return module,
+		MemoryGrowCost::Linear(value) => value.get(),
+	};
+	let mut builder = builder::from_module(module);
+	builder.push_function(
+		builder::function()
+			.signature()
+			.with_param(ValueType::I32)
+			.with_result(ValueType::I32)
+			.build()
+			.body()
+			.with_instructions(elements::Instructions::new(vec![
+				GetLocal(0),
+				GetLocal(0),
+				I64ExtendUI32,
+				I64Const(i64::from(cost)),
+				I64Mul,
+				Call(gas_func),
+				GrowMemory(0),
+				End,
+			]))
+			.build()
+			.build(),
+	);
+	builder.build()
 }
 
 #[cfg(feature = "bulk")]
@@ -1347,18 +1415,17 @@ mod tests {
 
 		assert_eq!(
 			get_function_body(&injected_module, 0).unwrap(),
-			&vec![I64Const(2), Call(0), GetGlobal(0), Call(2), End][..]
+			&vec![I64Const(3), Call(0), GetGlobal(0), Call(3), End][..]
 		);
 		assert_eq!(
 			get_function_body(&injected_module, 1).unwrap(),
 			&vec![
-				GetLocal(0),
-				GetLocal(0),
-				I64ExtendUI32,
-				I64Const(10000),
-				I64Mul,
-				Call(0),
-				GrowMemory(0),
+				GetLocal(0), I32Const(65_536), I32GtU,
+				If(elements::BlockType::Value(ValueType::I32)), I32Const(-1), Else,
+				GetLocal(0), I64ExtendUI32, I64Const(10_000), I64Mul, Call(1),
+				GetLocal(0), GrowMemory(0), TeeLocal(1), I32Const(-1), I32Ne,
+				If(elements::BlockType::NoResult), GetLocal(0), I64ExtendUI32,
+				I64Const(10_000), I64Mul, Call(0), End, GetLocal(1), End,
 				End,
 			][..]
 		);
@@ -1384,7 +1451,7 @@ mod tests {
 
 		assert_eq!(
 			get_function_body(&injected_module, 0).unwrap(),
-			&vec![I64Const(13), Call(1), GetGlobal(0), Call(2), End][..]
+			&vec![I64Const(14), Call(1), GetGlobal(0), Call(2), End][..]
 		);
 		assert_eq!(
 			get_function_body(&injected_module, 1).unwrap(),
@@ -1441,10 +1508,10 @@ mod tests {
 
 		assert_eq!(
 			get_function_body(&injected_module, 0).unwrap(),
-			&vec![I64Const(2), Call(0), GetGlobal(0), GrowMemory(0), End][..]
+			&vec![I64Const(3), Call(0), GetGlobal(0), GrowMemory(0), End][..]
 		);
 
-		assert_eq!(injected_module.functions_space(), 2);
+		assert_eq!(injected_module.functions_space(), 3);
 
 		let binary = serialize(injected_module).expect("serialization failed");
 		wasmparser::validate(&binary).unwrap();
@@ -1467,7 +1534,7 @@ mod tests {
 
 		assert_eq!(
 			get_function_body(&injected_module, 0).unwrap(),
-			&vec![I64Const(13), Call(1), GetGlobal(0), GrowMemory(0), End][..]
+			&vec![I64Const(14), Call(1), GetGlobal(0), GrowMemory(0), End][..]
 		);
 
 		assert_eq!(injected_module.functions_space(), 2);
@@ -1521,22 +1588,22 @@ mod tests {
 		assert_eq!(
 			get_function_body(&injected_module, 1).unwrap(),
 			&vec![
-				I64Const(3),
+				I64Const(4),
 				Call(0),
-				Call(1),
+				Call(2),
 				If(elements::BlockType::NoResult),
 				I64Const(3),
 				Call(0),
-				Call(1),
-				Call(1),
-				Call(1),
+				Call(2),
+				Call(2),
+				Call(2),
 				Else,
-				I64Const(2),
+				I64Const(4),
 				Call(0),
-				Call(1),
-				Call(1),
+				Call(2),
+				Call(2),
 				End,
-				Call(1),
+				Call(2),
 				End
 			][..]
 		);
@@ -1587,7 +1654,7 @@ mod tests {
 		assert_eq!(
 			get_function_body(&injected_module, 1).unwrap(),
 			&vec![
-				I64Const(14),
+				I64Const(15),
 				Call(2),
 				Call(0),
 				If(elements::BlockType::NoResult),
@@ -1597,7 +1664,7 @@ mod tests {
 				Call(0),
 				Call(0),
 				Else,
-				I64Const(13),
+				I64Const(15),
 				Call(2),
 				Call(0),
 				Call(0),
@@ -1686,7 +1753,7 @@ mod tests {
 		expected = r#"
 		(module
 			(func (result i32)
-				(call 0 (i64.const 1))
+				(call 0 (i64.const 2))
 				(get_global 0)))
 		"#
 	}
@@ -1706,7 +1773,7 @@ mod tests {
 		expected = r#"
 		(module
 			(func (result i32)
-				(call 0 (i64.const 6))
+				(call 0 (i64.const 8))
 				(get_global 0)
 				(block
 					(get_global 0)
@@ -1735,7 +1802,7 @@ mod tests {
 		expected = r#"
 		(module
 			(func (result i32)
-				(call 0 (i64.const 3))
+				(call 0 (i64.const 4))
 				(get_global 0)
 				(if
 					(then
@@ -1744,7 +1811,7 @@ mod tests {
 						(get_global 0)
 						(get_global 0))
 					(else
-						(call 0 (i64.const 2))
+						(call 0 (i64.const 4))
 						(get_global 0)
 						(get_global 0)))
 				(get_global 0)))
@@ -1768,13 +1835,12 @@ mod tests {
 		expected = r#"
 		(module
 			(func (result i32)
-				(call 0 (i64.const 6))
+				(call 0 (i64.const 7))
 				(get_global 0)
 				(block
 					(get_global 0)
 					(drop)
 					(br 0)
-					(call 0 (i64.const 2))
 					(get_global 0)
 					(drop))
 				(get_global 0)))
@@ -1802,18 +1868,17 @@ mod tests {
 		expected = r#"
 		(module
 			(func (result i32)
-				(call 0 (i64.const 5))
+				(call 0 (i64.const 9))
 				(get_global 0)
 				(block
 					(get_global 0)
 					(if
 						(then
-							(call 0 (i64.const 4))
+							(call 0 (i64.const 5))
 							(get_global 0)
 							(get_global 0)
 							(drop)
 							(br_if 1)))
-					(call 0 (i64.const 2))
 					(get_global 0)
 					(drop))
 				(get_global 0)))
@@ -1844,10 +1909,10 @@ mod tests {
 		expected = r#"
 		(module
 			(func (result i32)
-				(call 0 (i64.const 3))
+				(call 0 (i64.const 4))
 				(get_global 0)
 				(loop
-					(call 0 (i64.const 4))
+					(call 0 (i64.const 5))
 					(get_global 0)
 					(if
 						(then
@@ -1855,7 +1920,7 @@ mod tests {
 							(get_global 0)
 							(br_if 0))
 						(else
-							(call 0 (i64.const 4))
+							(call 0 (i64.const 6))
 							(get_global 0)
 							(get_global 0)
 							(drop)
@@ -1886,7 +1951,7 @@ mod tests {
 					(then
 						(call 0 (i64.const 1))
 						(return)))
-				(call 0 (i64.const 1))
+				(call 0 (i64.const 2))
 				(get_global 0)))
 		"#
 	}
@@ -1909,7 +1974,7 @@ mod tests {
 		expected = r#"
 		(module
 			(func (result i32)
-				(call 0 (i64.const 5))
+				(call 0 (i64.const 6))
 				(get_global 0)
 				(block
 					(get_global 0)
@@ -1920,7 +1985,7 @@ mod tests {
 						(else
 							(call 0 (i64.const 1))
 							(br 0)))
-					(call 0 (i64.const 2))
+					(call 0 (i64.const 3))
 					(get_global 0)
 					(drop))
 				(get_global 0)))
@@ -1942,7 +2007,7 @@ mod tests {
 		expected = r#"
 		(module
 			(func
-				(call 0 (i64.const 2))
+				(call 0 (i64.const 1))
 				(loop
 					(call 0 (i64.const 1))
 					(br 0)

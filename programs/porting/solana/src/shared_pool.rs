@@ -4,9 +4,12 @@
 //! contribute to, demonstrating program-owned accounts mapped onto the
 //! shared namespace.
 
-use crate::account::{AccountMapping, AccountRole, AccountSchema, FieldType, Field, FieldValue};
+use crate::account::{AccountMapping, AccountRole, AccountSchema, Field, FieldType, FieldValue};
 use crate::error::PortRefusal;
-use crate::pubkey::{SeedPath, PUBKEY_BYTES};
+use crate::pubkey::{Pubkey, SeedPath, PUBKEY_BYTES};
+
+/// Seed positions supplied by the authenticated LayerX invocation envelope.
+pub const PARTICIPANT_ENVELOPE_SEEDS: [usize; 1] = [2];
 
 /// The pool account schema holding the shared reserve.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -80,8 +83,8 @@ impl PoolReserve {
     pub fn encode_initial(authority: [u8; PUBKEY_BYTES]) -> Result<Vec<u8>, PortRefusal> {
         let schema = Self::schema()?;
         schema.encode(&[
-            FieldValue::U64(0),           // total_deposited
-            FieldValue::U32(0),           // participant_count
+            FieldValue::U64(0),            // total_deposited
+            FieldValue::U32(0),            // participant_count
             FieldValue::Pubkey(authority), // pool_authority
         ])
     }
@@ -136,8 +139,12 @@ impl ParticipantDeposit {
     /// # Errors
     ///
     /// Refuses seed paths the runtime cannot admit.
-    pub fn seeds() -> Result<SeedPath, PortRefusal> {
-        SeedPath::new(vec![b"deposit".to_vec(), b"participant".to_vec()])
+    pub fn seeds(signer: Pubkey) -> Result<SeedPath, PortRefusal> {
+        SeedPath::new(vec![
+            b"deposit".to_vec(),
+            b"participant".to_vec(),
+            signer.bytes().to_vec(),
+        ])
     }
 
     /// Returns the role of the participant deposit account.
@@ -152,8 +159,7 @@ impl ParticipantDeposit {
     ///
     /// Refuses key derivation failures.
     pub fn storage_key() -> Result<Vec<u8>, PortRefusal> {
-        // Envelope position 2 would be the signer pubkey, which collapses
-        Self::seeds()?.collapse(&[2])?.storage_key()
+        SeedPath::new(vec![b"deposit".to_vec(), b"participant".to_vec()])?.storage_key()
     }
 }
 
@@ -165,7 +171,7 @@ mod tests {
     fn pool_reserve_is_program_owned_shared() {
         let role = PoolReserve::role();
         assert_eq!(role, AccountRole::ProgramOwnedShared);
-        
+
         let mapping = PoolReserve::translate().unwrap();
         assert_eq!(mapping, AccountMapping::SharedCell);
     }
@@ -174,7 +180,7 @@ mod tests {
     fn participant_deposit_is_principal_scoped() {
         let role = ParticipantDeposit::role();
         assert_eq!(role, AccountRole::ProgramState);
-        
+
         let mapping = role.translate().unwrap();
         assert_eq!(mapping, AccountMapping::NamespacedCell);
     }
@@ -191,7 +197,7 @@ mod tests {
         let authority = [42u8; PUBKEY_BYTES];
         let encoded = PoolReserve::encode_initial(authority).unwrap();
         let (total, count, auth) = PoolReserve::decode(&encoded).unwrap();
-        
+
         assert_eq!(total, 0);
         assert_eq!(count, 0);
         assert_eq!(auth, authority);
@@ -216,7 +222,19 @@ mod tests {
     fn participant_storage_key_collapses_signer() {
         // Demonstrates that the participant key collapses the signer seed
         // and will land in principal-scoped namespace
-        let key = ParticipantDeposit::storage_key().unwrap();
-        assert!(!key.is_empty());
+        let first = ParticipantDeposit::seeds(Pubkey::new([1; PUBKEY_BYTES]).unwrap())
+            .unwrap()
+            .collapse(&PARTICIPANT_ENVELOPE_SEEDS)
+            .unwrap()
+            .storage_key()
+            .unwrap();
+        let second = ParticipantDeposit::seeds(Pubkey::new([2; PUBKEY_BYTES]).unwrap())
+            .unwrap()
+            .collapse(&PARTICIPANT_ENVELOPE_SEEDS)
+            .unwrap()
+            .storage_key()
+            .unwrap();
+        assert_eq!(first, second);
+        assert_eq!(first, ParticipantDeposit::storage_key().unwrap());
     }
 }

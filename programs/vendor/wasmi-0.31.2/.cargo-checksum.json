@@ -74,7 +74,7 @@
     "src/module/read.rs": "172fe16205bbf838ebb5267e53ec6c8db01222f6ee1f97e39a800d85db59cee7",
     "src/module/utils.rs": "7f6d7bdc404028755fa30e1174fa34bf8d19d78bcbe60585917abf0967c76cdd",
     "src/reftype.rs": "c4100cb2573a01c60dc8445eab038b5bae2ff635f171dd5c3ba4153ba502b1d2",
-    "src/store.rs": "9e813487088fa44aee7217db29278f9f4b5fe7ee7df19576c091339b252d15d0",
+    "src/store.rs": "50e5206fee2e089467ba8b21c61a2345a08094445ba582c1a496be02226923dd",
     "src/table/element.rs": "3d13d267916ed96b945513bb50f32af406b3d8afef0f1d9fce9e35a2f061f051",
     "src/table/error.rs": "f6159588fad301c89e841ccf0a1c8751a335fb16c1e84e17e92d4b9b69563af2",
     "src/table/mod.rs": "93053bfdc0a3a1f91ec604ac91f6ce8220d73bd635435eb7f027136b0dc72bd3",

@@ -3,15 +3,16 @@ use layerx_programs_runtime::test_support::{
     TYPE_I32,
 };
 use layerx_programs_runtime::{
-    AbiError, ActivityBudgetBinding, AuthorizationContext, AuthorizedExecutionRequest,
+    AbiError, AccessSet, ActivityBudgetBinding, AuthorizationContext, AuthorizedExecutionRequest,
     BudgetAdmissionRefusal, BudgetDimension, BudgetMeterRefusal, BudgetResourceKind,
     BudgetedAuthorizedExecutionRequest, BudgetedV1ActivityOutcome, BudgetedV1FailureCause,
     CandidateActivityOutcome, CandidateReceiptOutcome, Capability, CapabilitySet,
     CompositionContext, CompositionRefusal, DeclaredBudget, EntrypointRefusal, ExecutionError,
-    Executor, FeeSchedule, MeterRefusal, PrincipalId, ProgramCatalog, ProgramId, ReceiptOracle,
-    ReceiptView, RefusalClass, ResourceBudget, ResourceKind, Storage, StorageNamespace, WasmEngine,
-    CALL_ENTRY_EXPORT,
+    Executor, FeeSchedule, FuelSchedule, MeterInjection, MeterRefusal, PrincipalId, ProgramCatalog,
+    ProgramId, ReceiptOracle, ReceiptView, RefusalClass, ResourceBudget, ResourceKind, Storage,
+    StorageNamespace, WasmEngine, CALL_ENTRY_EXPORT, MIN_ACTIVITY_CPU_FUEL,
 };
+use wasm_instrument::parity_wasm::elements::{self, External, Instruction};
 
 struct NoReceipts;
 
@@ -160,6 +161,80 @@ fn candidate_with_entry(entry: &[u8]) -> Vec<u8> {
         section(7, &exports),
         code_section(&[func_body(&[], &[0x41, 0, 0x0b]), func_body(&[], entry)]),
     ])
+}
+
+fn frozen_defined_function_charge_sites(wasm: &[u8], defined_index: usize) -> Vec<u64> {
+    let injection = MeterInjection::instrument(wasm, FuelSchedule::WASMI_0_31_2)
+        .unwrap_or_else(|error| panic!("meter injection: {error}"));
+    let module = elements::deserialize_buffer::<elements::Module>(injection.instrumented_wasm())
+        .unwrap_or_else(|error| panic!("instrumented module decode: {error}"));
+    let mut function_index = 0_u32;
+    let charge_function = module
+        .import_section()
+        .unwrap_or_else(|| panic!("instrumented import section absent"))
+        .entries()
+        .iter()
+        .find_map(|entry| match entry.external() {
+            External::Function(_) => {
+                let current = function_index;
+                function_index += 1;
+                (entry.module() == "layerx_private_metering/v1"
+                    && entry.field() == "charge_i64")
+                    .then_some(current)
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("private charge import absent"));
+    let body = &module
+        .code_section()
+        .unwrap_or_else(|| panic!("instrumented code section absent"))
+        .bodies()[defined_index];
+    let instructions = body.code().elements();
+    instructions
+        .windows(2)
+        .filter_map(|window| match window {
+            [Instruction::I64Const(charge), Instruction::Call(target)]
+                if *target == charge_function => {
+                u64::try_from(*charge).ok()
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn access_charge(callees: impl IntoIterator<Item = ProgramId>) -> u64 {
+    AccessSet::new_with_callees([], [], callees)
+        .and_then(|set| set.charge())
+        .unwrap_or_else(|error| panic!("access charge: {error}"))
+        .total_units()
+}
+
+fn storage_write_call_access_charge(
+    root: ProgramId,
+    payer: PrincipalId,
+    child: ProgramId,
+) -> u64 {
+    let mut builder = AccessSet::builder();
+    builder
+        .write_namespace(StorageNamespace::principal(root, payer))
+        .and_then(|builder| {
+            builder.write_namespace(StorageNamespace::principal(child, payer))
+        })
+        .and_then(|builder| builder.call(child))
+        .unwrap_or_else(|error| panic!("storage/call access set: {error}"));
+    builder
+        .build()
+        .and_then(|set| set.charge())
+        .unwrap_or_else(|error| panic!("storage/call access charge: {error}"))
+        .total_units()
+}
+
+fn repeated_charge_exhaustion(limit: u64, prefix: u64, repeated: u64) -> (u64, u64) {
+    assert!(repeated > 0);
+    assert!(prefix <= limit);
+    let admitted_repetitions = (limit - prefix) / repeated;
+    let usage = prefix + admitted_repetitions * repeated;
+    (usage, usage + repeated)
 }
 
 fn v1_forwarder(callee: ProgramId) -> Vec<u8> {
@@ -910,8 +985,8 @@ fn run_candidate_graph(
 
 #[test]
 fn declared_budget_enforces_exact_v1_bounds_in_stable_dimension_order() {
-    let minimum = declared(3, 65_536, 0, 0, 1, 0, 0);
-    assert_eq!(minimum.cpu_fuel(), 3);
+    let minimum = declared(MIN_ACTIVITY_CPU_FUEL, 65_536, 0, 0, 1, 0, 0);
+    assert_eq!(minimum.cpu_fuel(), MIN_ACTIVITY_CPU_FUEL);
     assert_eq!(minimum.memory_bytes(), 65_536);
     assert_eq!(minimum.storage_read_bytes(), 0);
     assert_eq!(minimum.storage_write_bytes(), 0);
@@ -920,15 +995,15 @@ fn declared_budget_enforces_exact_v1_bounds_in_stable_dimension_order() {
     assert_eq!(minimum.table_elements(), 0);
 
     assert_eq!(
-        DeclaredBudget::new(2, 65_535, 0, 0, 0, 0, 0),
+        DeclaredBudget::new(MIN_ACTIVITY_CPU_FUEL - 1, 65_535, 0, 0, 0, 0, 0),
         Err(BudgetAdmissionRefusal::BelowMinimum {
             dimension: BudgetDimension::CpuFuel,
-            minimum: 3,
-            declared: 2,
+            minimum: MIN_ACTIVITY_CPU_FUEL,
+            declared: MIN_ACTIVITY_CPU_FUEL - 1,
         })
     );
     assert_eq!(
-        DeclaredBudget::new(3, 65_535, 0, 0, 1, 0, 0),
+        DeclaredBudget::new(MIN_ACTIVITY_CPU_FUEL, 65_535, 0, 0, 1, 0, 0),
         Err(BudgetAdmissionRefusal::BelowMinimum {
             dimension: BudgetDimension::MemoryBytes,
             minimum: 65_536,
@@ -936,7 +1011,7 @@ fn declared_budget_enforces_exact_v1_bounds_in_stable_dimension_order() {
         })
     );
     assert_eq!(
-        DeclaredBudget::new(3, 65_536, 0, 0, 0, 0, 0),
+        DeclaredBudget::new(MIN_ACTIVITY_CPU_FUEL, 65_536, 0, 0, 0, 0, 0),
         Err(BudgetAdmissionRefusal::BelowMinimum {
             dimension: BudgetDimension::OutputValues,
             minimum: 1,
@@ -964,32 +1039,80 @@ fn declared_budget_enforces_exact_v1_bounds_in_stable_dimension_order() {
         ),
         (
             BudgetDimension::MemoryBytes,
-            DeclaredBudget::new(3, maximum.memory_bytes() + 1, 0, 0, 1, 0, 0),
+            DeclaredBudget::new(
+                MIN_ACTIVITY_CPU_FUEL,
+                maximum.memory_bytes() + 1,
+                0,
+                0,
+                1,
+                0,
+                0,
+            ),
             maximum.memory_bytes(),
         ),
         (
             BudgetDimension::StorageReadBytes,
-            DeclaredBudget::new(3, 65_536, maximum.storage_read_bytes() + 1, 0, 1, 0, 0),
+            DeclaredBudget::new(
+                MIN_ACTIVITY_CPU_FUEL,
+                65_536,
+                maximum.storage_read_bytes() + 1,
+                0,
+                1,
+                0,
+                0,
+            ),
             maximum.storage_read_bytes(),
         ),
         (
             BudgetDimension::StorageWriteBytes,
-            DeclaredBudget::new(3, 65_536, 0, maximum.storage_write_bytes() + 1, 1, 0, 0),
+            DeclaredBudget::new(
+                MIN_ACTIVITY_CPU_FUEL,
+                65_536,
+                0,
+                maximum.storage_write_bytes() + 1,
+                1,
+                0,
+                0,
+            ),
             maximum.storage_write_bytes(),
         ),
         (
             BudgetDimension::OutputValues,
-            DeclaredBudget::new(3, 65_536, 0, 0, maximum.output_values() + 1, 0, 0),
+            DeclaredBudget::new(
+                MIN_ACTIVITY_CPU_FUEL,
+                65_536,
+                0,
+                0,
+                maximum.output_values() + 1,
+                0,
+                0,
+            ),
             u64::from(maximum.output_values()),
         ),
         (
             BudgetDimension::OutputBytes,
-            DeclaredBudget::new(3, 65_536, 0, 0, 1, maximum.output_bytes() + 1, 0),
+            DeclaredBudget::new(
+                MIN_ACTIVITY_CPU_FUEL,
+                65_536,
+                0,
+                0,
+                1,
+                maximum.output_bytes() + 1,
+                0,
+            ),
             maximum.output_bytes(),
         ),
         (
             BudgetDimension::TableElements,
-            DeclaredBudget::new(3, 65_536, 0, 0, 1, 0, maximum.table_elements() + 1),
+            DeclaredBudget::new(
+                MIN_ACTIVITY_CPU_FUEL,
+                65_536,
+                0,
+                0,
+                1,
+                0,
+                maximum.table_elements() + 1,
+            ),
             u64::from(maximum.table_elements()),
         ),
     ];
@@ -1008,11 +1131,15 @@ fn declared_budget_enforces_exact_v1_bounds_in_stable_dimension_order() {
 #[test]
 fn protocol_minimum_executes_the_smallest_valid_empty_call() {
     let minimum = DeclaredBudget::minimum();
-    assert_eq!(minimum.cpu_fuel(), 3);
+    let wasm = candidate_with_entry(&[0x41, 0, 0x0b]);
+    let charge_sites = frozen_defined_function_charge_sites(&wasm, 1);
+    assert_eq!(charge_sites, [3]);
+    let exact_cpu = access_charge([]) + charge_sites[0];
+    assert_eq!(exact_cpu, MIN_ACTIVITY_CPU_FUEL);
+    assert_eq!(minimum.cpu_fuel(), exact_cpu);
     assert_eq!(minimum.memory_bytes(), 65_536);
     assert_eq!(minimum.output_values(), 1);
 
-    let wasm = candidate_with_entry(&[0x41, 0, 0x0b]);
     let (result, storage) = run_isolated_candidate(
         &wasm,
         minimum,
@@ -1023,7 +1150,7 @@ fn protocol_minimum_executes_the_smallest_valid_empty_call() {
         230,
     );
     let record = result.unwrap_or_else(|error| panic!("minimum measurement: {error}"));
-    assert_eq!(record.execution().usage().cpu_fuel, 3);
+    assert_eq!(record.execution().usage().cpu_fuel, exact_cpu);
     assert_eq!(record.execution().usage().memory_bytes, 65_536);
     assert_eq!(record.execution().usage().output_values, 1);
     assert_eq!(storage, Storage::new());
@@ -1060,15 +1187,20 @@ fn protocol_minimum_executes_the_smallest_valid_empty_call() {
     let BudgetedV1ActivityOutcome::Success(v1) = v1 else {
         panic!("minimum v1 execution did not succeed");
     };
-    assert_eq!(v1.execution.usage.cpu_fuel, 3);
+    assert_eq!(v1.execution.usage.cpu_fuel, exact_cpu);
     assert_eq!(v1.execution.usage.memory_bytes, 65_536);
     assert_eq!(v1.execution.usage.output_values, 1);
 }
 
 #[test]
 fn legacy_candidate_calldata_copy_exhaustion_keeps_frozen_cpu_diagnostics() {
+    let calldata = b"copy exhaustion";
+    let attempted = access_charge([])
+        + u64::try_from(calldata.len()).unwrap_or_else(|_| unreachable!())
+            * layerx_programs_runtime::CALL_INPUT_FUEL_PER_BYTE;
+    let limit = attempted - 1;
     let executor = Executor::new(
-        ResourceBudget::new_complete(3, 65_536, 0, 0, 2, 0, 0),
+        ResourceBudget::new_complete(limit, 65_536, 0, 0, 2, 0, 0),
         FeeSchedule::declared(),
     );
     let engine = WasmEngine::declared().unwrap_or_else(|error| panic!("engine: {error}"));
@@ -1084,7 +1216,7 @@ fn legacy_candidate_calldata_copy_exhaustion_keeps_frozen_cpu_diagnostics() {
             authorization: AuthorizationContext::new(payer, CapabilitySet::empty()),
             receipts: &NoReceipts,
             entrypoint: CALL_ENTRY_EXPORT,
-            calldata: b"copy exhaustion",
+            calldata,
             composition: CompositionContext::isolated(),
             response_capacity: 0,
         },
@@ -1093,15 +1225,15 @@ fn legacy_candidate_calldata_copy_exhaustion_keeps_frozen_cpu_diagnostics() {
         result,
         Err(ExecutionError::Resource(MeterRefusal::BudgetExceeded {
             resource: ResourceKind::Cpu,
-            limit: 3,
-            attempted: 4,
+            limit,
+            attempted,
         }))
     );
 }
 
 #[test]
 fn declared_budget_codec_is_fixed_width_strict_and_revalidates() {
-    let budget = declared(19, 65_536, 23, 29, 3, 31, 5);
+    let budget = declared(MIN_ACTIVITY_CPU_FUEL + 16, 65_536, 23, 29, 3, 31, 5);
     let encoded = budget.canonical_bytes();
     assert_eq!(encoded.len(), 79);
     assert!(encoded.starts_with(b"LXP/program-declared-budget/v1\0"));
@@ -1127,7 +1259,7 @@ fn declared_budget_codec_is_fixed_width_strict_and_revalidates() {
         DeclaredBudget::canonical_decode(&below_minimum),
         Err(BudgetAdmissionRefusal::BelowMinimum {
             dimension: BudgetDimension::CpuFuel,
-            minimum: 3,
+            minimum: MIN_ACTIVITY_CPU_FUEL,
             declared: 0,
         })
     );
@@ -1138,26 +1270,26 @@ fn activity_budget_admission_binds_exact_coverage_schedule_and_custom_maximum() 
     let prices = FeeSchedule::new(1, 1, 2, 4, 1).with_output_byte_price(1);
     let maximum = ResourceBudget::new_complete(100, 100_000, 100, 100, 5, 100, 5);
     let executor = Executor::new(maximum, prices);
-    let budget = declared(10, 65_536, 3, 4, 2, 5, 3);
+    let budget = declared(MIN_ACTIVITY_CPU_FUEL, 65_536, 3, 4, 2, 5, 3);
     let payer = principal(7);
     let binding = match ActivityBudgetBinding::new([8; 32]) {
         Ok(binding) => binding,
         Err(error) => panic!("binding: {error}"),
     };
     let admitted =
-        match executor.admit_activity_budget_for_qualification(budget, payer, binding, 65_575) {
+        match executor.admit_activity_budget_for_qualification(budget, payer, binding, 65_604) {
             Ok(admitted) => admitted,
             Err(error) => panic!("admission: {error}"),
         };
     assert_eq!(admitted.resource_budget(), budget.resource_budget());
     assert_eq!(admitted.payer(), payer);
-    assert_eq!(admitted.maximum_fee_units(), 65_575);
+    assert_eq!(admitted.maximum_fee_units(), 65_604);
 
     assert_eq!(
-        executor.admit_activity_budget_for_qualification(budget, payer, binding, 65_574),
+        executor.admit_activity_budget_for_qualification(budget, payer, binding, 65_603),
         Err(BudgetAdmissionRefusal::InsufficientCoverage {
-            required: 65_575,
-            available: 65_574,
+            required: 65_604,
+            available: 65_603,
         })
     );
     assert_eq!(
@@ -1569,7 +1701,7 @@ fn candidate_resource_precedes_negative_entry_and_allocator_results() {
 fn first_activity_meter_refusal_survives_a_later_cpu_exhaustion() {
     let capabilities = CapabilitySet::new([Capability::StorageWrite])
         .unwrap_or_else(|error| panic!("capabilities: {error}"));
-    let budget = declared(100, 65_536, 0, 0, 1, 0, 0);
+    let budget = declared(10_000, 65_536, 0, 0, 1, 0, 0);
     let expected = BudgetMeterRefusal::BudgetExceeded {
         resource: BudgetResourceKind::StorageWrite,
         limit: 0,
@@ -1683,10 +1815,14 @@ fn budgeted_candidate_cpu_exhaustion_is_a_receipt_resource_outcome() {
     let record = executor
         .execute_authorized_candidate_budgeted_for_qualification(&mut Storage::new(), request)
         .unwrap_or_else(|error| panic!("budgeted execution: {error}"));
+    let charge_sites = frozen_defined_function_charge_sites(&looping_candidate(), 1);
+    assert_eq!(charge_sites, [1, 2]);
+    let (usage, attempted) =
+        repeated_charge_exhaustion(100, access_charge([]) + charge_sites[0], charge_sites[1]);
     let refusal = BudgetMeterRefusal::BudgetExceeded {
         resource: BudgetResourceKind::Cpu,
         limit: 100,
-        attempted: 101,
+        attempted,
     };
     assert_eq!(
         record.outcome(),
@@ -1696,7 +1832,7 @@ fn budgeted_candidate_cpu_exhaustion_is_a_receipt_resource_outcome() {
     assert!(record.response().is_none());
     assert!(record.failure().is_none());
     assert!(record.effects().is_none());
-    assert_eq!(record.execution().usage().cpu_fuel, 99);
+    assert_eq!(record.execution().usage().cpu_fuel, usage);
     let projection = record.receipt_projection();
     assert_eq!(
         projection.outcome(),
@@ -1791,15 +1927,19 @@ fn budgeted_v1_cpu_exhaustion_retains_actual_usage_and_failed_graph() {
         panic!("expected resource outcome");
     };
     assert_eq!(failure.root_program(), program);
+    let charge_sites = frozen_defined_function_charge_sites(&looping_candidate(), 1);
+    assert_eq!(charge_sites, [1, 2]);
+    let (usage, attempted) =
+        repeated_charge_exhaustion(100, access_charge([]) + charge_sites[0], charge_sites[1]);
     assert_eq!(
         failure.refusal(),
         BudgetMeterRefusal::BudgetExceeded {
             resource: BudgetResourceKind::Cpu,
             limit: 100,
-            attempted: 101,
+            attempted,
         }
     );
-    assert_eq!(failure.usage().cpu_fuel, 99);
+    assert_eq!(failure.usage().cpu_fuel, usage);
     assert!(failure.call_graph().edges().is_empty());
     assert_eq!(storage, before);
 }
@@ -2041,15 +2181,28 @@ fn retained_start_faults_keep_usage_leaf_identity_and_atomic_rollback() {
     else {
         panic!("nested start exhaustion was not a resource outcome");
     };
+    let root_program =
+        ProgramId::new([203; 32]).unwrap_or_else(|error| panic!("root program: {error}"));
+    let root_charge_sites = frozen_defined_function_charge_sites(&root_wasm, 1);
+    let child_wasm = storage_start_candidate(true);
+    let child_charge_sites = frozen_defined_function_charge_sites(&child_wasm, 0);
+    assert_eq!(root_charge_sites, [9]);
+    assert_eq!(child_charge_sites, [7, 2]);
+    let prefix = storage_write_call_access_charge(root_program, principal(202), child)
+        + root_charge_sites[0]
+        + layerx_programs_runtime::call_admission_fuel(0)
+        + child_charge_sites[0];
+    let (usage, attempted) =
+        repeated_charge_exhaustion(5_000, prefix, child_charge_sites[1]);
     assert_eq!(
         exhausted.refusal(),
         BudgetMeterRefusal::BudgetExceeded {
             resource: BudgetResourceKind::Cpu,
             limit: 5_000,
-            attempted: 5_001,
+            attempted,
         }
     );
-    assert!(exhausted.usage().cpu_fuel > 0);
+    assert_eq!(exhausted.usage().cpu_fuel, usage);
     assert_eq!(exhausted.usage().storage_write_bytes, 2);
     assert_eq!(exhausted.call_graph().edges().len(), 1);
     assert_eq!(storage, Storage::new());
@@ -2062,7 +2215,12 @@ fn start_time_call_at_exact_remaining_fuel_is_a_resource_outcome() {
     let child_wasm = candidate_with_entry(&[0x41, 0, 0x0b]);
     let capabilities = CapabilitySet::new([Capability::Call { program: child }])
         .unwrap_or_else(|error| panic!("capabilities: {error}"));
-    let cpu_fuel = 1_034;
+    let start_charge_sites = frozen_defined_function_charge_sites(&root_wasm, 0);
+    assert_eq!(start_charge_sites, [10]);
+    let cpu_fuel = access_charge([child])
+        + start_charge_sites[0]
+        + layerx_programs_runtime::call_admission_fuel(0);
+    let attempted = cpu_fuel + 1;
     let (outcome, storage) = run_v1_graph(
         &root_wasm,
         &[(child, child_wasm)],
@@ -2081,7 +2239,7 @@ fn start_time_call_at_exact_remaining_fuel_is_a_resource_outcome() {
         BudgetMeterRefusal::BudgetExceeded {
             resource: BudgetResourceKind::Cpu,
             limit: cpu_fuel,
-            attempted: cpu_fuel + 1,
+            attempted,
         }
     );
     assert_eq!(resource.call_graph().edges()[0].callee(), child);
@@ -2090,8 +2248,6 @@ fn start_time_call_at_exact_remaining_fuel_is_a_resource_outcome() {
 
 #[test]
 fn nested_start_time_call_keeps_the_full_failed_graph_on_exact_fuel() {
-    const EXACT_FUEL: u64 = 2_068;
-
     let middle = ProgramId::new([187; 32]).unwrap_or_else(|error| panic!("middle: {error}"));
     let leaf = ProgramId::new([188; 32]).unwrap_or_else(|error| panic!("leaf: {error}"));
     let requested = CapabilitySet::new([Capability::Call { program: leaf }])
@@ -2105,10 +2261,20 @@ fn nested_start_time_call_keeps_the_full_failed_graph_on_exact_fuel() {
     ])
     .unwrap_or_else(|error| panic!("capabilities: {error}"));
     let children = [(middle, middle_wasm), (leaf, leaf_wasm)];
+    let root_start_sites = frozen_defined_function_charge_sites(&root_wasm, 0);
+    let middle_start_sites = frozen_defined_function_charge_sites(&children[0].1, 0);
+    assert_eq!(root_start_sites, [10]);
+    assert_eq!(middle_start_sites, [10]);
+    let exact_fuel = access_charge([middle, leaf])
+        + root_start_sites[0]
+        + layerx_programs_runtime::call_admission_fuel(0)
+        + middle_start_sites[0]
+        + layerx_programs_runtime::call_admission_fuel(0);
+    let attempted = exact_fuel + 1;
     let (outcome, storage) = run_v1_graph(
         &root_wasm,
         &children,
-        declared(EXACT_FUEL, 196_608, 0, 0, 3, 0, 0),
+        declared(exact_fuel, 196_608, 0, 0, 3, 0, 0),
         capabilities,
         190,
     );
@@ -2122,8 +2288,8 @@ fn nested_start_time_call_keeps_the_full_failed_graph_on_exact_fuel() {
         resource.refusal(),
         BudgetMeterRefusal::BudgetExceeded {
             resource: BudgetResourceKind::Cpu,
-            limit: EXACT_FUEL,
-            attempted: EXACT_FUEL + 1,
+            limit: exact_fuel,
+            attempted,
         }
     );
     assert_eq!(resource.call_graph().edges()[0].callee(), middle);
@@ -2495,7 +2661,8 @@ fn sibling_calls_share_storage_and_output_ceilings_and_rollback_atomically() {
             attempted: 3,
         }
     );
-    assert_eq!(output_failure.usage().output_values, 2);
+    assert_eq!(output_failure.usage().output_values, 1);
+    assert_eq!(output_failure.usage().storage_write_bytes, 7);
     assert_eq!(output_failure.call_graph().edges().len(), 2);
     assert_eq!(rolled_back.transaction(namespace).read(b"key"), Ok(None));
 }
@@ -2983,8 +3150,13 @@ fn budgeted_storage_read_is_exact_unbilled_on_rejection_and_fee_priced_on_succes
 
 #[test]
 fn budgeted_resource_exhaustion_supersedes_a_published_candidate_response() {
+    let wasm = response_candidate(b"x", true);
+    let charge_sites = frozen_defined_function_charge_sites(&wasm, 1);
+    assert_eq!(charge_sites, [6, 2]);
+    let (usage, attempted) =
+        repeated_charge_exhaustion(100, access_charge([]) + charge_sites[0], charge_sites[1]);
     let (result, storage) = run_isolated_candidate(
-        &response_candidate(b"x", true),
+        &wasm,
         declared(100, 65_536, 0, 0, 2, 1, 0),
         CapabilitySet::empty(),
         Storage::new(),
@@ -2998,11 +3170,12 @@ fn budgeted_resource_exhaustion_supersedes_a_published_candidate_response() {
         Some(BudgetMeterRefusal::BudgetExceeded {
             resource: BudgetResourceKind::Cpu,
             limit: 100,
-            attempted: 101,
-        })
+            attempted: actual,
+        }) if *actual == attempted
     ));
     assert!(record.response().is_none());
     assert!(record.failure().is_none());
+    assert_eq!(record.execution().usage().cpu_fuel, usage);
     assert_eq!(record.execution().usage().output_bytes, 1);
     assert_eq!(storage, Storage::new());
 }
@@ -3010,6 +3183,10 @@ fn budgeted_resource_exhaustion_supersedes_a_published_candidate_response() {
 #[test]
 fn budgeted_resource_exhaustion_supersedes_published_refusal_but_legacy_does_not() {
     let wasm = refusal_then_loop_candidate();
+    let charge_sites = frozen_defined_function_charge_sites(&wasm, 1);
+    assert_eq!(charge_sites, [6, 2]);
+    let (usage, attempted) =
+        repeated_charge_exhaustion(100, access_charge([]) + charge_sites[0], charge_sites[1]);
     let (budgeted, _) = run_isolated_candidate(
         &wasm,
         declared(100, 65_536, 0, 0, 2, 1, 0),
@@ -3025,9 +3202,10 @@ fn budgeted_resource_exhaustion_supersedes_published_refusal_but_legacy_does_not
         Some(BudgetMeterRefusal::BudgetExceeded {
             resource: BudgetResourceKind::Cpu,
             limit: 100,
-            attempted: 101,
-        })
+            attempted: actual,
+        }) if *actual == attempted
     ));
+    assert_eq!(budgeted.execution().usage().cpu_fuel, usage);
     assert!(budgeted.failure().is_none());
 
     let legacy_budget = ResourceBudget::new_complete(100, 65_536, 0, 0, 2, 1, 0);

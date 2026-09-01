@@ -164,7 +164,7 @@ function finish<T>(reader:Reader,value:T):T{reader.done();return value;}
         for entry in &self.entries { emit_guest_entry(&mut out, entry, &self.entries); }
         out.push_str("pub fn dispatch<P:Program>(program:&mut P,input:&[u8])->Result<Vec<u8>,DispatchFailure>{let (disc,payload)=if input.len()>=4{input.split_at(4)}else{return Err(DispatchFailure::Malformed)};match disc{\n");
         for entry in &self.entries { let n=entry_ident(entry,&self.entries,false); let _=writeln!(out,"{:?}=>{n}::dispatch(program,payload),", entry.discriminator); }
-        out.push_str("_=>Err(DispatchFailure::MissingEntry)}}}\n#[derive(Clone,Debug,Eq,PartialEq)]pub enum DispatchFailure{Malformed,MissingEntry,Decode(CodecError),Encode(CodecError),Typed{code:u32,detail:Vec<u8>}}\n");
+        out.push_str("_=>Err(DispatchFailure::MissingEntry)}}\n#[derive(Clone,Debug,Eq,PartialEq)]pub enum DispatchFailure{Malformed,MissingEntry,Decode(CodecError),Encode(CodecError),Typed{code:u32,detail:Vec<u8>}}\n");
         out
     }
 }
@@ -230,7 +230,9 @@ fn emit_rust_entry(out:&mut String,e:&Entry,entries:&[Entry]){
     let n=entry_ident(e,entries,false);let mut definitions=String::new();
     let input=rust_named_type(&e.input,"Input",&mut definitions);let output=rust_named_type(&e.output,"Output",&mut definitions);
     let mut failure_types=Vec::new();for f in &e.failures{failure_types.push(rust_named_type(&f.detail,&format!("{}Detail",failure_ident(f,&e.failures)),&mut definitions));}
-    let _=writeln!(out,"pub mod {n} {{ use super::*;{definitions} pub type Input={input}; pub type Output={output};");
+    let _=write!(out,"pub mod {n} {{ use super::*;{definitions}");
+    if input != "Input" { let _=writeln!(out,"pub type Input={input};"); }
+    if output != "Output" { let _=writeln!(out,"pub type Output={output};"); }
     if e.failures.is_empty(){out.push_str("pub type Failure=core::convert::Infallible;\n");}else{out.push_str("#[derive(Clone,Debug,Eq,PartialEq)]pub enum Failure{");for (f,t) in e.failures.iter().zip(failure_types){let _=write!(out,"{}({t}),",failure_ident(f,&e.failures));}out.push_str("}\n");}
     let convention=if matches!(e.input,Type::EvmHead){2}else{1};let _=write!(out,"pub fn call(input:&Input,deployed_code_hash:[u8;32],published_digest:[u8;32])->Result<Call<Output,Failure>,BindingRefusal>{{check_target(deployed_code_hash,published_digest)?;let mut bytes=vec!{:?};bytes.push({convention});CanonicalEncode::encode(input,&mut bytes).map_err(BindingRefusal::Encode)?;if bytes.len()>MAX_CALLDATA_BYTES+4{{return Err(BindingRefusal::Encode(CodecError::TooLong))}}Ok(Call{{bytes,_type:core::marker::PhantomData}})}}\n",e.discriminator);
     let output_convention=if matches!(e.output,Type::EvmHead){2}else{1};let _=writeln!(out,"pub fn decode_output(bytes:&[u8])->Result<Output,BindingRefusal>{{decode_message(bytes,{output_convention}).map_err(BindingRefusal::Decode)}}");
@@ -307,7 +309,9 @@ fn emit_guest_entry(out:&mut String,e:&Entry,entries:&[Entry]){
     let n=entry_ident(e,entries,false);let mut definitions=String::new();
     let input=rust_named_type(&e.input,"Input",&mut definitions);let output=rust_named_type(&e.output,"Output",&mut definitions);
     let mut failure_types=Vec::new();for f in &e.failures{failure_types.push(rust_named_type(&f.detail,&format!("{}Detail",failure_ident(f,&e.failures)),&mut definitions));}
-    let _=writeln!(out,"pub mod {n}{{use super::*;{definitions}pub type Input={input};pub type Output={output};");
+    let _=write!(out,"pub mod {n}{{use super::*;{definitions}");
+    if input != "Input" { let _=writeln!(out,"pub type Input={input};"); }
+    if output != "Output" { let _=writeln!(out,"pub type Output={output};"); }
     if e.failures.is_empty(){out.push_str("pub type Failure=core::convert::Infallible;\nfn encode_failure(value:Failure)->Result<(u32,Vec<u8>),CodecError>{match value{}}\n");}else{out.push_str("#[derive(Clone,Debug,Eq,PartialEq)]pub enum Failure{");for (f,t) in e.failures.iter().zip(&failure_types){let _=write!(out,"{}({t}),",failure_ident(f,&e.failures));}out.push_str("}\nfn encode_failure(value:Failure)->Result<(u32,Vec<u8>),CodecError>{match value{");for f in &e.failures{let convention=if matches!(f.detail,Type::EvmHead){2}else{1};let _=write!(out,"Failure::{}(v)=>{{let mut detail=vec![{convention}];v.encode(&mut detail)?;if detail.len()>MAX_CALLDATA_BYTES{{return Err(CodecError::TooLong)}}Ok(({},detail))}},",failure_ident(f,&e.failures),f.code);}out.push_str("}}\n");}
     let input_convention=if matches!(e.input,Type::EvmHead){2}else{1};let output_convention=if matches!(e.output,Type::EvmHead){2}else{1};
     let _=write!(out,"pub(super) fn dispatch<P:Program>(p:&mut P,b:&[u8])->Result<Vec<u8>,DispatchFailure>{{let input=decode_message::<Input>(b,{input_convention}).map_err(DispatchFailure::Decode)?;match p.{n}(input){{Ok(v)=>{{let mut o=vec![{output_convention}];v.encode(&mut o).map_err(DispatchFailure::Encode)?;if o.len()>MAX_CALLDATA_BYTES{{return Err(DispatchFailure::Encode(CodecError::TooLong))}}Ok(o)}},Err(e)=>{{let(code,detail)=encode_failure(e).map_err(DispatchFailure::Encode)?;Err(DispatchFailure::Typed{{code,detail}})}}}}}}}}\n");
@@ -334,6 +338,8 @@ fn hex_array(out:&mut String,bytes:&[u8]){for b in bytes{let _=write!(out,"0x{b:
 
 #[cfg(test)]
 mod vectors {
+    use alloc::vec;
+
     use super::*;
     #[test] fn stale_digest_is_a_typed_refusal(){let generator=BindingGenerator{digest:[7;32],code_hash:[9;32],entries:Vec::new()};assert_eq!(generator.require_digest([8;32]),Err(BindgenError::StaleBinding{expected:[7;32],published:[8;32]}));assert_eq!(generator.require_code_hash([1;32]),Err(BindgenError::CodeHashMismatch{expected:[9;32],deployed:[1;32]}));}
     #[test] fn every_schema_type_has_both_language_shapes(){let all=[Type::U8,Type::U16,Type::U32,Type::U64,Type::U128,Type::U256,Type::I8,Type::I16,Type::I32,Type::I64,Type::I128,Type::Bytes(4),Type::Fixed(Box::new(Type::U8),2),Type::Variable(Box::new(Type::U16),3),Type::Option(Box::new(Type::U32)),Type::Union(vec![Variant{tag:0,value:Type::U8}]),Type::EvmHead];for value in all{assert!(!rust_type(&value).is_empty());assert!(!ts_type(&value).is_empty());}}

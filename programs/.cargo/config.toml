@@ -6,3 +6,11 @@ directory = "vendor"
 
 [net]
 offline = true
+
+[target.wasm32-unknown-unknown]
+rustflags = [
+    "-C",
+    "target-feature=-reference-types",
+    "-C",
+    "link-arg=--compress-relocations",
+]

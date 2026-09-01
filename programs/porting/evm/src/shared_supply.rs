@@ -322,14 +322,23 @@ mod tests {
         };
         let port = SharedSupplyPort::new(terms).unwrap();
         let caps = port.mint_capabilities(10).unwrap();
-        
+
         // Mint needs principal-scoped read/write for balances
         // and shared read/write for total supply
-        let cap_list: Vec<_> = caps.iter().collect();
-        assert!(cap_list.contains(&Capability::StorageRead));
-        assert!(cap_list.contains(&Capability::StorageWrite));
-        assert!(cap_list.contains(&Capability::SharedStorageRead));
-        assert!(cap_list.contains(&Capability::SharedStorageWrite));
+        let expected = CapabilitySet::new([
+            Capability::StorageRead,
+            Capability::SharedStorageRead,
+            Capability::StorageWrite,
+            Capability::SharedStorageWrite,
+            Capability::EmitEvent,
+            Capability::Transfer402 {
+                asset: [1u8; 32],
+                to: [1u8; 32],
+                maximum_amount: 1_000,
+            },
+        ])
+        .unwrap();
+        assert_eq!(caps, expected);
     }
 
     #[test]
@@ -340,10 +349,9 @@ mod tests {
         };
         let port = SharedSupplyPort::new(terms).unwrap();
         let caps = port.supply_query_capabilities().unwrap();
-        
+
         // Total supply query only needs shared read
-        let cap_list: Vec<_> = caps.iter().collect();
-        assert_eq!(cap_list.len(), 1);
-        assert!(cap_list.contains(&Capability::SharedStorageRead));
+        let expected = CapabilitySet::new([Capability::SharedStorageRead]).unwrap();
+        assert_eq!(caps, expected);
     }
 }

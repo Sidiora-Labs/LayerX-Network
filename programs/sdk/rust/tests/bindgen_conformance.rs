@@ -1,6 +1,6 @@
 use layerx_program_sdk::{BindgenError, BindingGenerator};
 use sha2::{Digest, Sha256};
-use std::{fs, process::Command};
+use std::{fs, path::Path, process::Command};
 
 const DOMAIN: &[u8] = b"LayerX/program-interface/v1\0";
 const CODE_HASH: [u8; 32] = [0x5a; 32];
@@ -133,13 +133,17 @@ fn generated_sources_expose_every_roundtrip_and_failure_path() {
         assert!(generated.typescript.contains(&format!("export function decode{name}Output(")));
         assert!(generated.typescript.contains(&format!("export function decode{name}Failure(")));
     }
-    for name in ["bytes", "evm", "fixed", "i128", "i16", "i32", "i64", "i8", "option", "u128", "u16", "u256", "u32", "u64", "u8", "union", "variable"] {
+    for name in ["bytes", "evm", "fixed", "i128", "i16", "i32", "i64", "i8", "option", "u128", "u16", "u256", "u32", "u64", "u8", "union_binding", "variable"] {
         assert!(generated.rust.contains(&format!("pub fn decode_output(bytes:&[u8])")));
         assert!(generated.rust.contains(&format!("pub mod {name}")));
         assert!(generated.guest.contains(&format!("fn {name}(&mut self, input:")));
     }
     assert_eq!(generated.rust.matches("pub fn decode_failure(code:u32").count(), 17);
     assert_eq!(generated.guest.matches("Err(DispatchFailure::Typed{code,detail})").count(), 17);
+    assert!(!generated.rust.contains("pub type Input=Input"));
+    assert!(!generated.rust.contains("pub type Output=Output"));
+    assert!(!generated.guest.contains("pub type Input=Input"));
+    assert!(!generated.guest.contains("pub type Output=Output"));
 }
 
 #[test]
@@ -179,9 +183,9 @@ fn main(){
  let fixed=FixedArray::<u8,2>::new(vec![1,2]).unwrap_or_else(|e|panic!("fixed: {e:?}"));assert_eq!(encoded(&fixed),FROZEN_CODEC_VECTORS[12].1);
  let variable=BoundedVec::<u16,3>::new(vec![1,2]).unwrap_or_else(|e|panic!("variable: {e:?}"));assert_eq!(encoded(&variable),FROZEN_CODEC_VECTORS[13].1);
  assert_eq!(encoded(&Option::<u32>::None),FROZEN_CODEC_VECTORS[14].1);assert_eq!(encoded(&Some(8u32)),FROZEN_CODEC_VECTORS[15].1);
- let union0=union::Input::Variant0(9);let union7=union::Input::Variant1(10);assert_eq!(encoded(&union0),FROZEN_CODEC_VECTORS[16].1);assert_eq!(encoded(&union7),FROZEN_CODEC_VECTORS[17].1);
+ let union0=union_binding::Input::Variant0(9);let union7=union_binding::Input::Variant1(10);assert_eq!(encoded(&union0),FROZEN_CODEC_VECTORS[16].1);assert_eq!(encoded(&union7),FROZEN_CODEC_VECTORS[17].1);
  let evm=EvmHead::new({let mut v=vec![0;32];v[31]=1;v}).unwrap_or_else(|e|panic!("evm: {e:?}"));assert_eq!(encoded(&evm),FROZEN_CODEC_VECTORS[18].1);
- let values=(bytes::call(&bytes,CODE_HASH,INTERFACE_DIGEST),evm::call(&evm,CODE_HASH,INTERFACE_DIGEST),fixed::call(&fixed,CODE_HASH,INTERFACE_DIGEST),i128::call(&-5,CODE_HASH,INTERFACE_DIGEST),i16::call(&-2,CODE_HASH,INTERFACE_DIGEST),i32::call(&-3,CODE_HASH,INTERFACE_DIGEST),i64::call(&-4,CODE_HASH,INTERFACE_DIGEST),i8::call(&-1,CODE_HASH,INTERFACE_DIGEST),option::call(&Some(8),CODE_HASH,INTERFACE_DIGEST),u128::call(&11,CODE_HASH,INTERFACE_DIGEST),u16::call(&0x1234,CODE_HASH,INTERFACE_DIGEST),u256::call(&U256([0;32]),CODE_HASH,INTERFACE_DIGEST),u32::call(&7,CODE_HASH,INTERFACE_DIGEST),u64::call(&9,CODE_HASH,INTERFACE_DIGEST),u8::call(&127,CODE_HASH,INTERFACE_DIGEST),union::call(&union0,CODE_HASH,INTERFACE_DIGEST),variable::call(&variable,CODE_HASH,INTERFACE_DIGEST));
+ let values=(bytes::call(&bytes,CODE_HASH,INTERFACE_DIGEST),evm::call(&evm,CODE_HASH,INTERFACE_DIGEST),fixed::call(&fixed,CODE_HASH,INTERFACE_DIGEST),i128::call(&-5,CODE_HASH,INTERFACE_DIGEST),i16::call(&-2,CODE_HASH,INTERFACE_DIGEST),i32::call(&-3,CODE_HASH,INTERFACE_DIGEST),i64::call(&-4,CODE_HASH,INTERFACE_DIGEST),i8::call(&-1,CODE_HASH,INTERFACE_DIGEST),option::call(&Some(8),CODE_HASH,INTERFACE_DIGEST),u128::call(&11,CODE_HASH,INTERFACE_DIGEST),u16::call(&0x1234,CODE_HASH,INTERFACE_DIGEST),u256::call(&U256([0;32]),CODE_HASH,INTERFACE_DIGEST),u32::call(&7,CODE_HASH,INTERFACE_DIGEST),u64::call(&9,CODE_HASH,INTERFACE_DIGEST),u8::call(&127,CODE_HASH,INTERFACE_DIGEST),union_binding::call(&union0,CODE_HASH,INTERFACE_DIGEST),variable::call(&variable,CODE_HASH,INTERFACE_DIGEST));
  let _=values;
  assert!(matches!(u8::call(&127,[0;32],INTERFACE_DIGEST),Err(BindingRefusal::CodeHashMismatch)));
  assert!(matches!(u8::call(&127,CODE_HASH,[0;32]),Err(BindingRefusal::StaleInterface)));
@@ -201,7 +205,7 @@ impl Program for ConformanceProgram {
  fn u16(&mut self,v:u16::Input)->Result<u16::Output,u16::Failure>{Ok(v)} fn u256(&mut self,v:u256::Input)->Result<u256::Output,u256::Failure>{Ok(v)}
  fn u32(&mut self,v:u32::Input)->Result<u32::Output,u32::Failure>{Ok(v)} fn u64(&mut self,v:u64::Input)->Result<u64::Output,u64::Failure>{Ok(v)}
  fn u8(&mut self,v:u8::Input)->Result<u8::Output,u8::Failure>{Err(u8::Failure::Refused(v))}
- fn union(&mut self,v:union::Input)->Result<union::Output,union::Failure>{Ok(v)} fn variable(&mut self,v:variable::Input)->Result<variable::Output,variable::Failure>{Ok(v)}
+ fn union_binding(&mut self,v:union_binding::Input)->Result<union_binding::Output,union_binding::Failure>{match v{union_binding::Input::Variant0(value)=>Ok(union_binding::Output::Variant0(value)),union_binding::Input::Variant1(value)=>Ok(union_binding::Output::Variant1(value))}} fn variable(&mut self,v:variable::Input)->Result<variable::Output,variable::Failure>{Ok(v)}
 }
 fn main(){let mut p=ConformanceProgram;assert_eq!(dispatch(&mut p,&[0xa5,0,0,15,1,0x10,0x7f]),Err(DispatchFailure::Typed{code:7,detail:vec![1,0x10,0x7f]}));assert!(dispatch(&mut p,&[0xa5,0,0,16,1,0x50,0,0,0,0,0x10,9]).is_ok());assert!(dispatch(&mut p,&[0xa5,0,0,16,1,0x50,0,0,0,7,0x11,0,10]).is_ok());}
 "#;
@@ -228,12 +232,13 @@ void calls;void forged;
         let output = Command::new(&executable).output().unwrap_or_else(|error| panic!("run generated conformance consumer {}: {error}", executable.display()));
         assert!(output.status.success(), "generated conformance consumer {} failed:\n{}", executable.display(), String::from_utf8_lossy(&output.stderr));
     }
-    let output = Command::new("tsc")
+    let typescript_compiler = Path::new(env!("CARGO_MANIFEST_DIR")).join("node_modules/.bin/tsc");
+    let output = Command::new(&typescript_compiler)
         .args(["--strict", "--target", "ES2020", "--module", "commonjs", "--outDir"])
         .arg(&root)
         .arg(&typescript)
         .output()
-        .unwrap_or_else(|error| panic!("invoke TypeScript compiler: {error}"));
+        .unwrap_or_else(|error| panic!("invoke TypeScript compiler {}: {error}", typescript_compiler.display()));
     assert!(output.status.success(), "tsc rejected generated bindings:\n{}", String::from_utf8_lossy(&output.stderr));
     let output = Command::new("node").arg(root.join("bindings.js")).output().unwrap_or_else(|error| panic!("run generated TypeScript consumer: {error}"));
     assert!(output.status.success(), "generated TypeScript consumer failed:\n{}", String::from_utf8_lossy(&output.stderr));

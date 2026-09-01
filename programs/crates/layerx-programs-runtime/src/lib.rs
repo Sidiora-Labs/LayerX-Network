@@ -129,7 +129,7 @@ pub use access::{
 };
 pub use budget::{
     ActivityBudgetBinding, AdmittedBudget, BudgetAdmissionRefusal, BudgetDimension, DeclaredBudget,
-    DECLARED_BUDGET_DOMAIN,
+    DECLARED_BUDGET_DOMAIN, MIN_ACTIVITY_CPU_FUEL,
 };
 pub use cache::{
     CompiledModule, CompiledModuleRefusal, ModuleCache, ModuleCacheKey, ModuleCacheLimits,

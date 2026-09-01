@@ -14,7 +14,7 @@ import {
   ProgramId
 } from "../assembly/index";
 
-const CAPABILITY_FIXTURE = includeBytes("../../vectors/capability-boundary.kvx");
+const MIXED_FIXTURE_HEX = "000303041111111111111111111111111111111111111111111111111111111111111111052222222222222222222222222222222222222222222222222222222222222222333333333333333333333333333333333333333333333333333333333333333300000000000000000000000000000007";
 
 function hexDigit(byte: u8): i32 {
   if (byte >= 48 && byte <= 57) return <i32>byte - 48;
@@ -23,29 +23,10 @@ function hexDigit(byte: u8): i32 {
 }
 
 function mixedFixtureBytes(): StaticArray<u8> {
-  const marker = "encoded_hex = \"";
-  let start = -1;
-  for (let offset = 0; offset + marker.length < CAPABILITY_FIXTURE.length; offset++) {
-    let matches = true;
-    for (let index = 0; index < marker.length; index++) {
-      if (CAPABILITY_FIXTURE[offset + index] != <u8>marker.charCodeAt(index)) {
-        matches = false;
-        break;
-      }
-    }
-    if (matches) {
-      start = offset + marker.length;
-      break;
-    }
-  }
-  if (start < 0) return new StaticArray<u8>(0);
-  let end = start;
-  while (end < CAPABILITY_FIXTURE.length && CAPABILITY_FIXTURE[end] != 34) end++;
-  if ((end - start) % 2 != 0) return new StaticArray<u8>(0);
-  const decoded = new StaticArray<u8>((end - start) / 2);
+  const decoded = new StaticArray<u8>(MIXED_FIXTURE_HEX.length / 2);
   for (let index = 0; index < decoded.length; index++) {
-    const high = hexDigit(CAPABILITY_FIXTURE[start + index * 2]);
-    const low = hexDigit(CAPABILITY_FIXTURE[start + index * 2 + 1]);
+    const high = hexDigit(<u8>MIXED_FIXTURE_HEX.charCodeAt(index * 2));
+    const low = hexDigit(<u8>MIXED_FIXTURE_HEX.charCodeAt(index * 2 + 1));
     if (high < 0 || low < 0) return new StaticArray<u8>(0);
     decoded[index] = <u8>((high << 4) | low);
   }

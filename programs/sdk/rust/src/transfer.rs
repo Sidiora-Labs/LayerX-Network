@@ -268,6 +268,8 @@ mod tests {
         let source = AccountId::new([1; 32]).unwrap_or_else(|error| panic!("source: {error}"));
         let asset = AssetId::new([2; 32]).unwrap_or_else(|error| panic!("asset: {error}"));
         let to = AccountId::new([3; 32]).unwrap_or_else(|error| panic!("to: {error}"));
-        assert!(ProgramAccountPayment::new(seed, source, asset, to, Amount::zero()).is_err());
+        assert!(
+            ProgramAccountPayment::new(seed, source, asset, to, Amount::from_u128(0)).is_err()
+        );
     }
 }

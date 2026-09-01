@@ -510,7 +510,7 @@ mod tests {
 
     #[test]
     fn entry_and_complete_page_byte_ceilings_have_independent_exact_bounds() {
-        let (storage, namespace) = seeded(&[b"c", b"a", b"b"]);
+        let (storage, namespace) = seeded(&[b"c", b"a", b"b", b"d"]);
         let entry_exact = ScanLimits::new(1, 93).unwrap_or_else(|error| panic!("limits: {error}"));
         let entry_page = storage
             .scan(namespace, b"", b"", entry_exact)
@@ -524,6 +524,7 @@ mod tests {
             .unwrap_or_else(|error| panic!("byte page: {error}"));
         assert_eq!(byte_page.entries().len(), 2);
         assert_eq!(byte_page.metered_bytes(), 101);
+        assert!(byte_page.cursor().is_some());
 
         let byte_one_past =
             ScanLimits::new(64, 100).unwrap_or_else(|error| panic!("limits: {error}"));
@@ -662,7 +663,17 @@ mod tests {
             }))
         );
         assert_eq!(
-            short_meter.finish().map(|usage| usage.storage_read_bytes),
+            short_meter.finish(),
+            Err(MeterRefusal::BudgetExceeded {
+                resource: ResourceKind::StorageRead,
+                limit: 104,
+                attempted: 105,
+            })
+        );
+        assert_eq!(
+            short_meter
+                .finish_resource_failure()
+                .map(|usage| usage.storage_read_bytes),
             Ok(0)
         );
     }

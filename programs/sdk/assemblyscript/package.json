@@ -24,7 +24,7 @@
   },
   "scripts": {
     "lint": "node tools/determinism-lint.mjs assembly",
-    "test:source": "asc tests/safety.ts --config asconfig.json --target release --outFile build/safety.wasm"
+    "test:source": "node tools/check-capability-fixture.mjs && asc tests/safety.ts --config asconfig.json --target release --outFile build/safety.wasm"
   },
   "devDependencies": {
     "assemblyscript": "0.27.31"

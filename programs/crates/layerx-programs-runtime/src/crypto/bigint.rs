@@ -394,6 +394,15 @@ pub(crate) fn register(linker: &mut Linker<RuntimeState>) -> Result<(), Executio
 mod golden_vectors {
     use super::*;
 
+    fn reference_product(left: &[u8; 32], right: &[u8; 32]) -> [u8; 64] {
+        let product = num_bigint::BigUint::from_bytes_be(left)
+            * num_bigint::BigUint::from_bytes_be(right);
+        let encoded = product.to_bytes_be();
+        let mut expected = [0; 64];
+        expected[64 - encoded.len()..].copy_from_slice(&encoded);
+        expected
+    }
+
     #[test]
     fn mul_identity() {
         let one = [0u8; 32];
@@ -419,16 +428,11 @@ mod golden_vectors {
         two_val[31] = 2;
         
         let result = bigint_mul_256(&max, &two_val);
-        
-        assert_eq!(result[0], 0x01);
-        assert_eq!(result[1], 0xFF);
-        for i in 2..32 {
-            assert_eq!(result[i], 0xFF);
-        }
-        assert_eq!(result[32], 0xFF);
-        for i in 33..64 {
-            assert_eq!(result[i], 0xFF);
-        }
+
+        assert_eq!(result, reference_product(&max, &two_val));
+        assert_eq!(&result[..31], &[0; 31]);
+        assert_eq!(result[31], 0x01);
+        assert_eq!(&result[32..63], &[0xFF; 31]);
         assert_eq!(result[63], 0xFE);
     }
 
@@ -436,15 +440,11 @@ mod golden_vectors {
     fn mul_maximum_width() {
         let max = [0xFFu8; 32];
         let result = bigint_mul_256(&max, &max);
-        
-        assert_eq!(result[0], 0xFE);
-        for i in 1..32 {
-            assert_eq!(result[i], 0xFF);
-        }
-        assert_eq!(result[32], 0xFF);
-        for i in 33..63 {
-            assert_eq!(result[i], 0xFF);
-        }
+
+        assert_eq!(result, reference_product(&max, &max));
+        assert_eq!(&result[..31], &[0xFF; 31]);
+        assert_eq!(result[31], 0xFE);
+        assert_eq!(&result[32..63], &[0; 31]);
         assert_eq!(result[63], 0x01);
     }
 
@@ -584,7 +584,7 @@ mod golden_vectors {
         let result = bigint_modexp_256(&max, &exp, &modulus).unwrap();
         
         let mut expected = [0u8; 32];
-        expected[31] = 81;
+        expected[31] = 25;
         assert_eq!(result, expected);
     }
 }

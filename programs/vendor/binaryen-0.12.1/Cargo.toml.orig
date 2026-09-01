@@ -1,0 +1,19 @@
+[package]
+name = "binaryen"
+# See docs/RELEASING.md
+version = "0.12.1"
+authors = ["Sergey Pepyakin <s.pepyakin@gmail.com>"]
+license = "Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/pepyakin/binaryen-rs"
+homepage = "https://github.com/pepyakin/binaryen-rs"
+description = "Bindings to the binaryen library"
+categories = ["api-bindings"]
+keywords = ["binaryen", "webassembly", "wasm", "compiler"]
+
+[dependencies]
+binaryen-sys = { path = "binaryen-sys", version = "0.12.0" }
+
+[dev-dependencies]
+rand = "0.8.0"
+wat = "1.0"

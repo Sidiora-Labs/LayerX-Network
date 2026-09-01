@@ -1,0 +1,22 @@
+# Appveyor configuration template for Rust using rustup for Rust installation
+# https://github.com/starkat99/appveyor-rust
+
+image: Visual Studio 2019
+
+environment:
+  matrix:
+    - target: x86_64-pc-windows-msvc
+
+install:
+  # Add Python 3.6 to the path. Otherwise, CMake would complain on the Python 2.6 that it finds.
+  - SET PATH=C:\Python36-x64;%PATH%
+  - appveyor DownloadFile https://win.rustup.rs/ -FileName rustup-init.exe
+  - rustup-init -yv --default-toolchain stable --default-host %target%
+  - set PATH=%PATH%;%USERPROFILE%\.cargo\bin
+  - rustc -vV
+  - cargo -vV
+
+build: false
+
+test_script:
+  - cargo test --verbose

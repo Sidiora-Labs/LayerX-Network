@@ -12,7 +12,8 @@ use std::path::Path;
 #[derive(Debug, Deserialize, Serialize)]
 struct TestVector {
     description: String,
-    hex: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    hex: Option<String>,
     expected: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
@@ -42,7 +43,13 @@ fn run_vector(vector: &TestVector) -> bool {
         return false;
     }
 
-    let bytes = hex_decode(&vector.hex);
+    let hex = vector.hex.as_deref().unwrap_or_else(|| {
+        panic!(
+            "Vector '{}' has neither literal hex nor a generator",
+            vector.description
+        )
+    });
+    let bytes = hex_decode(hex);
     let result = Calldata::from_bytes(&bytes);
 
     match vector.expected.as_str() {

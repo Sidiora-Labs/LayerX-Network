@@ -29,7 +29,8 @@ enum {
     INTERFACE_MAX_FIXTURE_BYTES = 256,
     INTERFACE_CAPABILITIES_NONE = 0,
     INTERFACE_CAPABILITIES_STORAGE_READ = 1,
-    INTERFACE_CAPABILITIES_STAGED_TERMINAL = 2
+    INTERFACE_CAPABILITIES_STAGED_TERMINAL = 2,
+    INTERFACE_CAPABILITIES_EMIT_EVENT = 3
 };
 
 static void write_u16(uint8_t *out, uint16_t value)
@@ -252,15 +253,16 @@ static int exact_fee_applied(lxp_u128 actor_before, lxp_u128 treasury_before,
            lxp_u128_cmp(treasury->balance, expected_treasury) == 0 ? 0 : 1;
 }
 
+static const uint64_t call_budget[LX_PROGRAMS_CALL_BUDGET_FIELDS] = {
+    1000000U, 16777216U, 1048576U, 1048576U, 64U, 1048576U, 4096U
+};
+
 static size_t call_payload_with_access(
     uint8_t *out, const uint8_t program_id[32],
     const uint8_t *capabilities, size_t capabilities_length,
     const uint8_t *access_declaration, size_t access_declaration_length)
 {
     static const uint8_t entrypoint[] = "layerx_call";
-    const uint64_t budget[LX_PROGRAMS_CALL_BUDGET_FIELDS] = {
-        1000000U, 1048576U, 1048576U, 1048576U, 64U, 1024U, 64U
-    };
     size_t cursor = 0U;
     size_t index;
     (void)memcpy(out + cursor, program_id, 32U);
@@ -278,7 +280,7 @@ static size_t call_payload_with_access(
     write_u32(out + cursor, 16U);
     cursor += 4U;
     for (index = 0U; index < LX_PROGRAMS_CALL_BUDGET_FIELDS; ++index) {
-        write_u64(out + cursor, budget[index]);
+        write_u64(out + cursor, call_budget[index]);
         cursor += 8U;
     }
     (void)memcpy(out + cursor, entrypoint, sizeof(entrypoint) - 1U);
@@ -484,6 +486,10 @@ static size_t interface_payload(uint8_t *out, const uint8_t code_hash[32],
         write_u16(out + offset, 1U);
         offset += 2U;
         out[offset++] = 0U;
+    } else if (capability_profile == INTERFACE_CAPABILITIES_EMIT_EVENT) {
+        write_u16(out + offset, 1U);
+        offset += 2U;
+        out[offset++] = 4U;
     } else {
         write_u16(out + offset, 3U);
         offset += 2U;
@@ -507,19 +513,20 @@ static size_t interface_payload(uint8_t *out, const uint8_t code_hash[32],
 static size_t deploy_payload(uint8_t *out, const uint8_t program_id[32],
                              const uint8_t authority[32], const uint8_t *wasm,
                              size_t wasm_length, uint8_t code_hash[32],
+                             uint16_t abi_version,
                              uint8_t capability_profile)
 {
     size_t interface_length;
     (void)lxp_hash_sha256(wasm, wasm_length, code_hash);
     (void)memcpy(out, program_id, 32U);
-    write_u16(out + 32U, LX_PROGRAMS_ABI_VERSION);
+    write_u16(out + 32U, abi_version);
     out[34] = 1U;
     out[35] = 0U;
     (void)memcpy(out + 36U, authority, 32U);
     (void)memcpy(out + 68U, code_hash, 32U);
     write_u32(out + 100U, (uint32_t)wasm_length);
     interface_length = interface_payload(out + DEPLOY_FIXED_BYTES, code_hash,
-                                         LX_PROGRAMS_ABI_VERSION,
+                                         abi_version,
                                          capability_profile);
     write_u32(out + 104U, (uint32_t)interface_length);
     (void)memcpy(out + DEPLOY_FIXED_BYTES + interface_length, wasm,
@@ -558,8 +565,8 @@ static size_t reference_deploy_payload(
 {
     size_t length = deploy_payload(out, program_id, authority, wasm,
                                    wasm_length, code_hash,
-                                   INTERFACE_CAPABILITIES_STORAGE_READ);
-    write_u16(out + 32U, LX_PROGRAMS_ACCOUNT_ABI_VERSION);
+                                   LX_PROGRAMS_ACCOUNT_ABI_VERSION,
+                                   INTERFACE_CAPABILITIES_NONE);
     return length;
 }
 
@@ -743,6 +750,7 @@ static int deploy_and_upgrade_persist_exact_artifacts(void)
     runtime.occupancy_parameter_context = &runtime;
     payload_length = deploy_payload(payload, program_id, authority.principal,
                                     wasm, wasm_length, code_hash,
+                                    LX_PROGRAMS_ABI_VERSION,
                                     INTERFACE_CAPABILITIES_NONE);
     fill_activity(&activity, LX_PROGRAMS_DEPLOY, payload, payload_length,
                   did, sizeof(did) - 1U, primary_key);
@@ -985,7 +993,7 @@ static int qualify_porting_reference(const char *path, uint8_t marker)
     static const uint8_t treasury_name[] = "system:fees";
     static uint8_t wasm[LXP_MAX_ACTIVITY_BYTES];
     static uint8_t payload[LXP_MAX_ACTIVITY_BYTES];
-    static uint8_t arena_bytes[LXP_MAX_ACTIVITY_BYTES + 4096U];
+    static uint8_t arena_bytes[2U * LXP_MAX_ACTIVITY_BYTES + 4096U];
     uint8_t program_id[32];
     uint8_t primary_key[32] = {1U};
     uint8_t code_hash[32];
@@ -1012,6 +1020,8 @@ static int qualify_porting_reference(const char *path, uint8_t marker)
     lx_programs_transfer_runtime runtime;
     lxp_activity activity;
     lxp_receipt receipt;
+    lxp_result execute_status;
+    lxp_result arena_status;
     uint64_t parameters = 1U;
     artifact = fopen(path, "rb");
     if (artifact == NULL)
@@ -1072,7 +1082,7 @@ static int qualify_porting_reference(const char *path, uint8_t marker)
                   did, sizeof(did) - 1U, primary_key);
     fees.version = 1U;
     fees.multiplier_basis_points = 10000U;
-    if (lxp_state_store_init(&state, 0U) != LXP_OK ||
+    if (lxp_state_store_init(&state, 1U) != LXP_OK ||
         lxp_identity_register(&identities, did, sizeof(did) - 1U,
                               primary_key, &identity) != LXP_OK ||
         lxp_kernel_create(&kernel, &state, &journal, &parameters, 0U) != LXP_OK ||
@@ -1096,10 +1106,21 @@ static int qualify_porting_reference(const char *path, uint8_t marker)
     execution.fee_parameters = &fees;
     execution.gas_limit = 1000000U;
     execution.arena = &arena;
-    if (lxp_kernel_execute_activity(&kernel, &activity, &execution, &receipt) != LXP_OK ||
+    execute_status =
+        lxp_kernel_execute_activity(&kernel, &activity, &execution, &receipt);
+    if (execute_status != LXP_OK ||
         receipt.result_code != LXP_OK ||
-        receipt.module_version != LX_PROGRAMS_ACCOUNT_ABI_VERSION)
+        receipt.module_version != LX_PROGRAMS_ACCOUNT_ABI_VERSION) {
+        (void)fprintf(stderr,
+                      "porting deploy failed path=%s execute=%d result=%d module_version=%u expected_module_version=%u wasm=%zu interface=%zu payload=%zu arena=%zu\n",
+                      path, (int)execute_status, (int)receipt.result_code,
+                      (unsigned)receipt.module_version,
+                      (unsigned)LX_PROGRAMS_ACCOUNT_ABI_VERSION, wasm_length,
+                      payload_length - DEPLOY_FIXED_BYTES - wasm_length,
+                      payload_length,
+                      sizeof(arena_bytes));
         return 1;
+    }
     payload_length = reference_call_payload(payload, program_id);
     fill_activity(&activity, LX_PROGRAMS_CALL, payload, payload_length,
                   did, sizeof(did) - 1U, primary_key);
@@ -1108,8 +1129,12 @@ static int qualify_porting_reference(const char *path, uint8_t marker)
     activity.fee_limit = (lxp_u128){0U, UINT64_MAX};
     execution.global_sequence = 2U;
     execution.fee_balance = (lxp_u128){0U, UINT64_MAX};
-    if (lxp_arena_reset(&arena, 0U) != LXP_OK ||
-        lxp_kernel_execute_activity(&kernel, &activity, &execution, &receipt) != LXP_OK ||
+    arena_status = lxp_arena_reset(&arena, 0U);
+    execute_status = arena_status == LXP_OK
+                         ? lxp_kernel_execute_activity(&kernel, &activity,
+                                                       &execution, &receipt)
+                         : arena_status;
+    if (arena_status != LXP_OK || execute_status != LXP_OK ||
         receipt.result_code != LXP_OK || !receipt.program_outcome.present ||
         receipt.program_outcome.terminal_kind != LXP_PROGRAM_TERMINAL_SUCCESS ||
         receipt.program_outcome.runtime_version == 0U ||
@@ -1117,8 +1142,44 @@ static int qualify_porting_reference(const char *path, uint8_t marker)
         receipt.program_outcome.fee_schedule_version != 1U ||
         receipt.program_outcome.metering_schedule_version !=
             LXP_PROGRAM_METERING_SCHEDULE_VERSION_V1 ||
-        lxp_ct_is_zero(receipt.program_outcome.terminal_payload_root, 32U))
+        lxp_ct_is_zero(receipt.program_outcome.terminal_payload_root, 32U)) {
+        (void)fprintf(stderr,
+                      "porting call failed path=%s arena=%d execute=%d result=%d present=%u terminal=%u runtime=%u abi=%u expected_abi=%u fee_schedule=%u metering_schedule=%u cpu=%llu memory=%llu read=%llu write=%llu outputs=%u output_bytes=%llu terminal_root_zero=%u\n",
+                      path, (int)arena_status, (int)execute_status,
+                      (int)receipt.result_code,
+                      receipt.program_outcome.present ? 1U : 0U,
+                      (unsigned)receipt.program_outcome.terminal_kind,
+                      (unsigned)receipt.program_outcome.runtime_version,
+                      (unsigned)receipt.program_outcome.abi_version,
+                      (unsigned)LX_PROGRAMS_ACCOUNT_ABI_VERSION,
+                      (unsigned)receipt.program_outcome.fee_schedule_version,
+                      (unsigned)receipt.program_outcome.metering_schedule_version,
+                      (unsigned long long)receipt.program_outcome.cpu_fuel,
+                      (unsigned long long)receipt.program_outcome.memory_bytes,
+                      (unsigned long long)receipt.program_outcome.storage_read_bytes,
+                      (unsigned long long)receipt.program_outcome.storage_write_bytes,
+                      (unsigned)receipt.program_outcome.output_values,
+                      (unsigned long long)receipt.program_outcome.output_bytes,
+                      lxp_ct_is_zero(receipt.program_outcome.terminal_payload_root,
+                                     32U)
+                          ? 1U
+                          : 0U);
+        {
+            size_t detail_index;
+            (void)fprintf(stderr, "porting terminal payload path=%s bytes=%zu hex=",
+                          path,
+                          receipt.program_outcome.terminal_payload.length);
+            for (detail_index = 0U;
+                 detail_index < receipt.program_outcome.terminal_payload.length;
+                 ++detail_index)
+                (void)fprintf(
+                    stderr, "%02x",
+                    (unsigned)receipt.program_outcome.terminal_payload
+                        .bytes[detail_index]);
+            (void)fputc('\n', stderr);
+        }
         return 1;
+    }
     return lxp_state_store_destroy(&state) == LXP_OK ? 0 : 1;
 }
 
@@ -1130,7 +1191,13 @@ int main(int argc, char **argv)
     if (deploy_and_upgrade_persist_exact_artifacts() != 0) return 1;
     if (argc == 1) return 0;
     if (argc != 4) return 1;
-    if (qualify_porting_reference(argv[1], 0x41U) != 0) return 1;
-    if (qualify_porting_reference(argv[2], 0x42U) != 0) return 1;
+    if (qualify_porting_reference(argv[1], 0x41U) != 0) {
+        (void)fprintf(stderr, "EVM porting reference failed: %s\n", argv[1]);
+        return 1;
+    }
+    if (qualify_porting_reference(argv[2], 0x42U) != 0) {
+        (void)fprintf(stderr, "Solana porting reference failed: %s\n", argv[2]);
+        return 1;
+    }
     return qualify_porting_reference(argv[3], 0x43U);
 }

@@ -1848,7 +1848,8 @@ lxp_result lxp_programs_call_schedule_decode(
 lxp_result lxp_programs_call_schedule_item_prepare(
     const lxp_programs_call_schedule_descriptor *descriptor,
     const uint8_t fee_asset[32], const uint8_t occupancy_asset[32],
-    bool effects_complete, lxp_programs_schedule_item *item)
+    bool occupancy_active, bool effects_complete,
+    lxp_programs_schedule_item *item)
 {
     if (descriptor == NULL || fee_asset == NULL || occupancy_asset == NULL ||
         item == NULL || lxp_ct_is_zero(descriptor->principal, 32U) ||
@@ -1865,12 +1866,19 @@ lxp_result lxp_programs_call_schedule_item_prepare(
     (void)memcpy(item->account_effects[0].account, descriptor->payer, 32U);
     (void)memcpy(item->account_effects[0].asset, fee_asset, 32U);
     item->account_effects[0].mode = 1U;
-    (void)memcpy(item->occupancy_asset, occupancy_asset, 32U);
-    /* Base execution fees settle only at the canonical prefix boundary. The
-     * treasury is retained separately because occupancy reads and credits it
-     * during guest preparation whenever storage can grow. */
-    (void)memcpy(item->occupancy_treasury,
-                 descriptor->fee_treasury, 32U);
+    if (occupancy_active) {
+        if (lxp_ct_is_zero(occupancy_asset, 32U))
+            return LXP_ERR_NON_CANONICAL;
+        (void)memcpy(item->occupancy_asset, occupancy_asset, 32U);
+        (void)memcpy(item->occupancy_treasury,
+                     descriptor->fee_treasury, 32U);
+        item->account_effect_count = 2U;
+        (void)memcpy(item->account_effects[1].account,
+                     descriptor->fee_treasury, 32U);
+        (void)memcpy(item->account_effects[1].asset,
+                     occupancy_asset, 32U);
+        item->account_effects[1].mode = 1U;
+    }
     return LXP_OK;
 }
 

@@ -27,6 +27,7 @@
 
 #![no_std]
 
+#[cfg(not(target_arch = "wasm32"))]
 extern crate alloc;
 
 #[cfg(test)]
@@ -36,6 +37,7 @@ pub mod abi;
 pub mod access;
 pub mod amount;
 pub mod balance;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod bindgen;
 pub mod buffer;
 pub mod call;
@@ -69,6 +71,7 @@ pub use abi::{
     MAX_STORAGE_VALUE_BYTES, MAX_PROGRAM_ACCOUNT_SEED_BYTES, MEMORY_EXPORT, RECEIPT_ENCODING_BYTES,
 };
 pub use amount::{Amount, ProtocolInteger};
+#[cfg(not(target_arch = "wasm32"))]
 pub use bindgen::{BindgenError, BindingGenerator, GeneratedBindings};
 pub use access::{AccessEntry, AccessMode, AccessRecipe, AccessScope, ActivityAccess, KeyAccess};
 pub use buffer::Bytes;

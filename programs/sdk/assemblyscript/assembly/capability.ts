@@ -252,11 +252,11 @@ export class CapabilitySet {
   private grants: Array<Capability>;
 
   constructor(capacity: i32) {
+    this.grants = new Array<Capability>();
     this.configurationStatus = capacity < 0 || capacity > MAX_CAPABILITIES
       ? ERR_CAPABILITY_LIMIT
       : OK;
     this.declaredCapacity = this.configurationStatus == OK ? capacity : 0;
-    this.grants = new Array<Capability>();
   }
 
   /** Reports whether the declared capacity was canonical. */

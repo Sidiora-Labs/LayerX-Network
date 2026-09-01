@@ -1,11 +1,14 @@
 use layerx_programs_runtime::test_support::{
     code_section, export_section, func_body, function_section, module, raw_section, type_section,
-    OP_CALL, OP_DROP, OP_END, OP_I32_ADD, OP_I32_CONST, OP_LOCAL_GET, TYPE_I32,
+    unsigned_leb, OP_CALL, OP_DROP, OP_END, OP_I32_ADD, OP_I32_CONST, OP_LOCAL_GET, TYPE_I32,
 };
 use layerx_programs_runtime::{
-    ExecutionError, ExecutionFault, Executor, TracePolicy,
+    ExecutionError, ExecutionFault, Executor, FeeSchedule, ResourceBudget, TracePolicy,
     ValidatedModule, WasmEngine, WasmValue,
 };
+
+const STATE_RICH_TRACED_CPU_FUEL: u64 = 10_654_360;
+const TRACE_TEST_CPU_HEADROOM: u64 = STATE_RICH_TRACED_CPU_FUEL * 2;
 
 fn state_rich_module() -> Vec<u8> {
     let memory_section = raw_section(5, &[1, 0, 1]);
@@ -54,13 +57,31 @@ fn validated(wasm: &[u8]) -> ValidatedModule {
         .unwrap_or_else(|error| panic!("module validation refused: {error}"))
 }
 
+fn trace_executor(policy: TracePolicy) -> Executor {
+    let declared = ResourceBudget::declared();
+    Executor::new(
+        ResourceBudget::new_complete(
+            TRACE_TEST_CPU_HEADROOM,
+            declared.memory_bytes(),
+            declared.storage_read_bytes(),
+            declared.storage_write_bytes(),
+            declared.output_values(),
+            declared.output_bytes(),
+            declared.table_elements(),
+        ),
+        FeeSchedule::declared(),
+    )
+    .with_trace_policy(policy)
+}
+
 fn traced_state_rich_call() -> layerx_programs_runtime::TracedExecutionRecord {
     let policy = TracePolicy::new(3, 256)
         .unwrap_or_else(|error| panic!("trace policy refused: {error}"));
-    Executor::declared()
-        .with_trace_policy(policy)
+    let record = trace_executor(policy)
         .execute_traced(&validated(&state_rich_module()), "run", &[WasmValue::I32(7)])
-        .unwrap_or_else(|error| panic!("traced execution refused: {error}"))
+        .unwrap_or_else(|error| panic!("traced execution refused: {error}"));
+    assert_eq!(record.execution.usage.cpu_fuel, STATE_RICH_TRACED_CPU_FUEL);
+    record
 }
 
 #[test]
@@ -70,7 +91,33 @@ fn traced_execution_captures_complete_integer_runtime_state() {
     assert_eq!(record.trace.policy().interval(), 3);
     assert!(!record.trace.steps().is_empty());
     assert!(!record.trace.commitments().is_empty());
-    assert!(record.trace.commitments().len() < record.trace.steps().len());
+    let mut expected_commitments = Vec::new();
+    for step in record.trace.steps() {
+        for commitment in [step.pre_commitment, step.post_commitment] {
+            if expected_commitments.last().map(|prior: &layerx_programs_runtime::StepCommitment| prior.step_index)
+                != Some(commitment.step_index)
+            {
+                expected_commitments.push(commitment);
+            }
+        }
+    }
+    assert_eq!(record.trace.commitments(), expected_commitments);
+    let mut expected_arbitration_commitments = Vec::new();
+    for step in record.trace.arbitration_steps() {
+        for commitment in [step.pre_commitment, step.post_commitment] {
+            if expected_arbitration_commitments
+                .last()
+                .map(|prior: &layerx_programs_runtime::ArbitrationStepCommitment| prior.step_index)
+                != Some(commitment.step_index)
+            {
+                expected_arbitration_commitments.push(commitment);
+            }
+        }
+    }
+    assert_eq!(
+        record.trace.arbitration_commitments(),
+        expected_arbitration_commitments
+    );
     assert!(record.trace.steps().iter().any(|step| {
         step.pre_state.globals.iter().any(|global| {
             global.mutable
@@ -118,10 +165,17 @@ fn receipt_commitment_total_equals_the_metered_trace_delta() {
     let traced = traced_state_rich_call();
     let charged = traced.execution.usage.cpu_fuel.checked_sub(plain.usage.cpu_fuel)
         .unwrap_or_else(|| panic!("traced execution consumed less fuel than plain execution"));
-    assert_eq!(charged, traced.trace.total_commitment_fuel());
+    let total_trace_fuel = traced.trace.total_commitment_fuel()
+        .checked_add(traced.trace.total_arbitration_commitment_fuel())
+        .unwrap_or_else(|| panic!("trace fuel total overflowed"));
+    assert_eq!(charged, total_trace_fuel);
     assert_eq!(
         traced.trace.total_commitment_fuel(),
         traced.trace.commitments().iter().map(|commitment| commitment.commitment_fuel).sum(),
+    );
+    assert_eq!(
+        traced.trace.total_arbitration_commitment_fuel(),
+        traced.trace.arbitration_commitments().iter().map(|commitment| commitment.commitment_fuel).sum(),
     );
 }
 
@@ -130,14 +184,15 @@ fn trace_identity_distinguishes_code_and_inputs() {
     let first = traced_state_rich_call();
     let policy = TracePolicy::new(3, 256)
         .unwrap_or_else(|error| panic!("trace policy refused: {error}"));
-    let different_input = Executor::declared()
-        .with_trace_policy(policy)
+    let different_input = trace_executor(policy)
         .execute_traced(&validated(&state_rich_module()), "run", &[WasmValue::I32(8)])
         .unwrap_or_else(|error| panic!("traced execution refused: {error}"));
     let mut distinct_code = state_rich_module();
-    distinct_code.extend(raw_section(0, b"distinct-module-identity"));
-    let different_code = Executor::declared()
-        .with_trace_policy(policy)
+    let custom_name = b"distinct-module-identity";
+    let mut custom_payload = unsigned_leb(custom_name.len() as u64);
+    custom_payload.extend_from_slice(custom_name);
+    distinct_code.extend(raw_section(0, &custom_payload));
+    let different_code = trace_executor(policy)
         .execute_traced(&validated(&distinct_code), "run", &[WasmValue::I32(7)])
         .unwrap_or_else(|error| panic!("traced execution refused: {error}"));
     assert_ne!(first.trace.commitments()[0].digest, different_input.trace.commitments()[0].digest);
@@ -196,8 +251,7 @@ fn ordinary_observer_emits_complete_v2_arbitration_state() {
 fn trapped_execution_refuses_partial_trace_evidence() {
     let policy = TracePolicy::new(1, 64)
         .unwrap_or_else(|error| panic!("trace policy refused: {error}"));
-    let result = Executor::declared()
-        .with_trace_policy(policy)
+    let result = trace_executor(policy)
         .execute_traced(&validated(&trapping_module()), "run", &[]);
     match result {
         Err(ExecutionError::Fault(ExecutionFault::EngineFault { reason })) => {
@@ -211,12 +265,14 @@ fn trapped_execution_refuses_partial_trace_evidence() {
 fn receipt_commitment_bound_refuses_an_incomplete_chain() {
     let policy = TracePolicy::new(1, 1)
         .unwrap_or_else(|error| panic!("trace policy refused: {error}"));
-    let result = Executor::declared()
-        .with_trace_policy(policy)
+    let result = trace_executor(policy)
         .execute_traced(&validated(&state_rich_module()), "run", &[WasmValue::I32(7)]);
     match result {
         Err(ExecutionError::Fault(ExecutionFault::EngineFault { reason })) => {
-            assert!(reason.contains("commitment limit"));
+            assert_eq!(
+                reason,
+                "deterministic execution commitment refused: execution trace exceeds commitment limit 1"
+            );
         }
         other => panic!("bounded trace returned partial evidence: {other:?}"),
     }

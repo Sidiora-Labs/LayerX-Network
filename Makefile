@@ -2920,10 +2920,12 @@ programs-sdk-c:
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/programs_sdk_c_capability_parity
 
 programs-sdk-rust:
+	npm --prefix programs/sdk/rust ci --ignore-scripts --no-audit --no-fund
 	sh programs/sdk/rust/quickstart/build.sh all
 	sh programs/sdk/rust/response-fixture/build.sh
 	sh programs/sdk/rust/examples/escrow/build.sh
 	sh programs/sdk/rust/examples/vault/build.sh
+	cd programs && $(PROGRAMS_CARGO) test --locked -p layerx-program-sdk --test bindgen_conformance generated_client_guest_and_typescript_are_compiler_inputs -- --ignored --exact
 
 programs-sdk-assemblyscript:
 	npm --prefix programs/sdk/assemblyscript run test:source

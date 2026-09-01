@@ -677,7 +677,8 @@ lxp_result lxp_programs_call_schedule_decode(
 lxp_result lxp_programs_call_schedule_item_prepare(
     const lxp_programs_call_schedule_descriptor *descriptor,
     const uint8_t fee_asset[32], const uint8_t occupancy_asset[32],
-    bool effects_complete, lxp_programs_schedule_item *item);
+    bool occupancy_active, bool effects_complete,
+    lxp_programs_schedule_item *item);
 lxp_result lxp_programs_call_execute(
     lxp_module_ctx *ctx, const lxp_activity *activity,
     const lxp_authority_resolved *authority, const void *decoded,

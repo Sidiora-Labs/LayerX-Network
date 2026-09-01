@@ -6,6 +6,8 @@ use crate::{FeeSchedule, PrincipalId, ResourceBudget};
 
 /// Canonical domain separating a declared execution budget from every receipt.
 pub const DECLARED_BUDGET_DOMAIN: &[u8] = b"LXP/program-declared-budget/v1\0";
+/// Canonical empty access-set charge plus the smallest instrumented empty entry.
+pub const MIN_ACTIVITY_CPU_FUEL: u64 = 39;
 
 /// Nonzero canonical activity identity bound into one admitted budget token.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -215,7 +217,15 @@ impl DeclaredBudget {
     #[must_use]
     pub const fn minimum() -> Self {
         Self {
-            resources: ResourceBudget::new_complete(3, 65_536, 0, 0, 1, 0, 0),
+            resources: ResourceBudget::new_complete(
+                MIN_ACTIVITY_CPU_FUEL,
+                65_536,
+                0,
+                0,
+                1,
+                0,
+                0,
+            ),
         }
     }
 
@@ -415,7 +425,7 @@ pub(crate) const fn validate_bounds(
         (
             BudgetDimension::CpuFuel,
             resources.cpu_fuel(),
-            3,
+            MIN_ACTIVITY_CPU_FUEL,
             maximum.cpu_fuel(),
         ),
         (

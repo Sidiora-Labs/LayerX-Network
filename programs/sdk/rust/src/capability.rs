@@ -324,6 +324,8 @@ fn write_bytes(output: &mut [u8], cursor: &mut usize, bytes: &[u8]) -> Result<()
 
 #[cfg(test)]
 mod parity_vectors {
+    use alloc::{vec, vec::Vec};
+
     use super::{Capability, CapabilitySet};
     use crate::{
         AccountId, Amount, AssetId, GrantedCapabilities, ProgramId,

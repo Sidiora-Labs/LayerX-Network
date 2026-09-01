@@ -136,7 +136,7 @@ fn build_control_flow_graph(
 	let mut metered_blocks_iter = blocks.iter().peekable();
 
 	let locals_count = body.locals().iter().fold(0, |count, val_type| count + val_type.count());
-	let locals_init_cost = (rules.call_per_local_cost()).checked_mul(locals_count).ok_or(())?;
+	let locals_init_cost = rules.call_locals_cost(locals_count).ok_or(())?;
 
 	for (cursor, instruction) in body.code().elements().iter().enumerate() {
 		let active_node_id = stack
@@ -155,9 +155,10 @@ fn build_control_flow_graph(
 
 		// Add locals initialization cost to the function block.
 		if cursor == 0 {
+			graph.increment_actual_cost(active_node_id, rules.block_entry_cost());
 			graph.increment_actual_cost(active_node_id, locals_init_cost);
 		}
-		let instruction_cost = rules.instruction_cost(instruction).ok_or(())?;
+		let instruction_cost = rules.instruction_cost_at(0, cursor as u32, instruction).ok_or(())?;
 		match instruction {
 			Instruction::Block(_) => {
 				graph.increment_actual_cost(active_node_id, instruction_cost);
@@ -173,6 +174,7 @@ fn build_control_flow_graph(
 
 				stack.push(ControlFrame::new(then_node_id, exit_node_id, false));
 				graph.new_forward_edge(active_node_id, then_node_id);
+				graph.increment_actual_cost(then_node_id, rules.block_entry_cost());
 				graph.set_first_instr_pos(then_node_id, cursor + 1);
 			},
 			Instruction::Loop(_) => {
@@ -183,6 +185,7 @@ fn build_control_flow_graph(
 
 				stack.push(ControlFrame::new(loop_node_id, exit_node_id, true));
 				graph.new_forward_edge(active_node_id, loop_node_id);
+				graph.increment_actual_cost(loop_node_id, rules.block_entry_cost());
 				graph.set_first_instr_pos(loop_node_id, cursor + 1);
 			},
 			Instruction::Else => {
@@ -191,12 +194,15 @@ fn build_control_flow_graph(
 
 				let else_node_id = graph.add_node();
 				stack[active_frame_idx].active_node = else_node_id;
+				graph.increment_actual_cost(else_node_id, instruction_cost);
+				graph.increment_actual_cost(else_node_id, rules.block_entry_cost());
 
 				let prev_node_id = stack[prev_frame_idx].active_node;
 				graph.new_forward_edge(prev_node_id, else_node_id);
 				graph.set_first_instr_pos(else_node_id, cursor + 1);
 			},
 			Instruction::End => {
+				graph.increment_actual_cost(active_node_id, instruction_cost);
 				let closing_frame = stack.pop()
 					.expect("module is valid by pre-condition; ends correspond to control stack frames; qed");
 
@@ -249,6 +255,13 @@ fn build_control_flow_graph(
 
 				graph.new_forward_edge(active_node_id, terminal_node_id);
 
+				let active_frame_idx = stack.len() - 1;
+				let new_node_id = graph.add_node();
+				stack[active_frame_idx].active_node = new_node_id;
+				graph.set_first_instr_pos(new_node_id, cursor + 1);
+			},
+			Instruction::Unreachable => {
+				graph.increment_actual_cost(active_node_id, instruction_cost);
 				let active_frame_idx = stack.len() - 1;
 				let new_node_id = graph.add_node();
 				stack[active_frame_idx].active_node = new_node_id;

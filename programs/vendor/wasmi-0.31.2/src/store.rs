@@ -210,7 +210,9 @@ impl StoreInner {
 
     pub(crate) fn fail_execution_observer(&mut self, error: ExecutionObserverError) {
         if let Some(observer) = self.execution_observer.as_mut() {
-            observer.error = Some(error);
+            if observer.error.is_none() {
+                observer.error = Some(error);
+            }
         }
     }
     pub(crate) fn push_execution_snapshot(&mut self, snapshot: ExecutionSnapshot) -> Result<(), ExecutionObserverError> {
@@ -708,7 +710,9 @@ impl StoreInner {
     pub(crate) fn refuse_trapped_transition(&mut self) {
         if let Some(observer) = self.execution_observer.as_mut() {
             observer.pending = None;
-            observer.error = Some(ExecutionObserverError::UnsupportedState);
+            if observer.error.is_none() {
+                observer.error = Some(ExecutionObserverError::UnsupportedState);
+            }
         }
     }
 }
@@ -1381,6 +1385,22 @@ impl<T> Store<T> {
             .execution_observer
             .as_ref()
             .and_then(|observer| observer.error)
+    }
+
+    /// Returns the number of snapshots retained by the active observer.
+    pub fn execution_observer_retained_snapshots(&self) -> Option<usize> {
+        self.inner
+            .execution_observer
+            .as_ref()
+            .map(|observer| observer.retained_snapshots)
+    }
+
+    /// Returns retained and maximum snapshot counts for refusal classification.
+    pub fn execution_observer_snapshot_counts(&self) -> Option<(usize, usize)> {
+        self.inner
+            .execution_observer
+            .as_ref()
+            .map(|observer| (observer.retained_snapshots, observer.maximum_snapshots))
     }
 
     pub fn take_execution_transitions(&mut self) -> Vec<ExecutionTransition> {

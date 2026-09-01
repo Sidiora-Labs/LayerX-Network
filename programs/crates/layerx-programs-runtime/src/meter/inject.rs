@@ -459,6 +459,7 @@ fn refuse_private_import_collision(module: &elements::Module) -> Result<(), Inje
 #[cfg(test)]
 mod golden_vectors {
     use super::{analyze_branch_costs, BranchCost, FuelSchedule, MeterInjection};
+    use wasm_instrument::parity_wasm::elements::{self, External, Instruction, Type};
 
     const EMPTY_FUNCTION_SOURCE: &[u8] = &[
         0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
@@ -468,11 +469,11 @@ mod golden_vectors {
     ];
 
     // One empty function costs one function-entry base and one implicit-return base.
-    // Both private imports are frozen even though this module has no dynamic operation.
+    // Both private imports are frozen even though this module has no dynamic operation,
+    // and share their identical canonical `(i64) -> ()` type entry.
     const EMPTY_FUNCTION_INSTRUMENTED: &[u8] = &[
         0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
-        0x01, 0x0c, 0x03, 0x60, 0x00, 0x00, 0x60, 0x01, 0x7e, 0x00,
-        0x60, 0x01, 0x7e, 0x00,
+        0x01, 0x08, 0x02, 0x60, 0x00, 0x00, 0x60, 0x01, 0x7e, 0x00,
         0x02, 0x50, 0x02,
         0x1a, 0x6c, 0x61, 0x79, 0x65, 0x72, 0x78, 0x5f, 0x70, 0x72, 0x69,
         0x76, 0x61, 0x74, 0x65, 0x5f, 0x6d, 0x65, 0x74, 0x65, 0x72, 0x69,
@@ -483,7 +484,7 @@ mod golden_vectors {
         0x76, 0x61, 0x74, 0x65, 0x5f, 0x6d, 0x65, 0x74, 0x65, 0x72, 0x69,
         0x6e, 0x67, 0x2f, 0x76, 0x31,
         0x09, 0x63, 0x68, 0x65, 0x63, 0x6b, 0x5f, 0x69, 0x36, 0x34,
-        0x00, 0x02,
+        0x00, 0x01,
         0x03, 0x02, 0x01, 0x00,
         0x0a, 0x08, 0x01, 0x06, 0x00, 0x42, 0x02, 0x10, 0x00, 0x0b,
     ];
@@ -509,6 +510,40 @@ mod golden_vectors {
         )
         .unwrap_or_else(|error| panic!("golden instrumentation refused: {error}"));
         assert_eq!(injection.instrumented_wasm(), EMPTY_FUNCTION_INSTRUMENTED);
+        let module = elements::deserialize_buffer::<elements::Module>(
+            injection.instrumented_wasm(),
+        )
+        .unwrap_or_else(|error| panic!("instrumented golden decode: {error}"));
+        let types = module
+            .type_section()
+            .unwrap_or_else(|| panic!("instrumented golden type section absent"));
+        assert_eq!(types.types().len(), 2);
+        let import_type_indices = module
+            .import_section()
+            .unwrap_or_else(|| panic!("instrumented golden imports absent"))
+            .entries()
+            .iter()
+            .map(|entry| match entry.external() {
+                External::Function(index) => *index,
+                _ => panic!("instrumented golden import is not a function"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(import_type_indices, vec![1, 1]);
+        assert!(matches!(
+            &types.types()[1],
+            Type::Function(function)
+                if function.params() == [elements::ValueType::I64]
+                    && function.results().is_empty()
+        ));
+        assert_eq!(
+            module
+                .code_section()
+                .unwrap_or_else(|| panic!("instrumented golden code absent"))
+                .bodies()[0]
+                .code()
+                .elements(),
+            &[Instruction::I64Const(2), Instruction::Call(0), Instruction::End]
+        );
     }
 
     #[test]

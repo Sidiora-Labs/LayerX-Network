@@ -872,6 +872,7 @@ pub(crate) struct QualificationMeterSnapshot {
     pub(crate) output_bytes: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct OutputReservation(u32);
 
 /// Typed resource refusal with exact limit and attempted use.
@@ -1176,8 +1177,14 @@ impl Meter {
     }
 
     pub(crate) fn charge_output(&mut self, values: usize) -> Result<OutputReservation, MeterRefusal> {
-        let previous = self.output_values;
-        let requested = u64::try_from(values).unwrap_or(u64::MAX);
+        let reserved = u32::try_from(values).map_err(|_| {
+            let refusal = MeterRefusal::CounterOverflow {
+                resource: ResourceKind::Output,
+            };
+            self.record_exhaustion(refusal);
+            refusal
+        })?;
+        let requested = u64::from(reserved);
         let attempted = self.counter_add(
             ResourceKind::Output,
             u64::from(self.output_values),
@@ -1194,11 +1201,14 @@ impl Meter {
                 limit: u64::from(self.budget.output_values),
                 attempted,
             })?;
-        Ok(OutputReservation(previous))
+        Ok(OutputReservation(reserved))
     }
 
     pub(crate) fn rollback_output(&mut self, reservation: OutputReservation) {
-        self.output_values = reservation.0;
+        self.output_values = self
+            .output_values
+            .checked_sub(reservation.0)
+            .unwrap_or_else(|| unreachable!());
     }
 
     pub(crate) fn charge_output_bytes(&mut self, bytes: usize) -> Result<(), MeterRefusal> {
@@ -1500,5 +1510,45 @@ mod response_tests {
                 resource: ResourceKind::OutputBytes,
             })
         );
+    }
+
+    #[test]
+    fn failed_parent_output_rollback_preserves_nested_output_usage() {
+        let mut meter = Meter::new_activity(
+            ResourceBudget::declared(),
+            FeeSchedule::declared(),
+        );
+        let parent = meter
+            .charge_output(1)
+            .unwrap_or_else(|error| panic!("parent reservation: {error}"));
+        let _child = meter
+            .charge_output(1)
+            .unwrap_or_else(|error| panic!("child reservation: {error}"));
+        meter.rollback_output(parent);
+        let _sibling = meter
+            .charge_output(1)
+            .unwrap_or_else(|error| panic!("sibling reservation: {error}"));
+        let usage = meter
+            .finish_resource_failure()
+            .unwrap_or_else(|error| panic!("usage: {error}"));
+        assert_eq!(usage.output_values, 2);
+    }
+
+    #[test]
+    fn oversized_output_reservation_is_typed_and_unbilled() {
+        let mut meter = Meter::new_activity(
+            ResourceBudget::declared(),
+            FeeSchedule::declared(),
+        );
+        assert_eq!(
+            meter.charge_output(usize::MAX),
+            Err(MeterRefusal::CounterOverflow {
+                resource: ResourceKind::Output,
+            })
+        );
+        let usage = meter
+            .finish_resource_failure()
+            .unwrap_or_else(|error| panic!("usage: {error}"));
+        assert_eq!(usage.output_values, 0);
     }
 }

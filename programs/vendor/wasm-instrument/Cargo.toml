@@ -49,6 +49,27 @@ features = [
 ]
 default-features = false
 
+[dev-dependencies.diff]
+version = "=0.1.13"
+
+[dev-dependencies.binaryen]
+version = "=0.12.1"
+
+[dev-dependencies.pretty_assertions]
+version = "=1.4.1"
+
+[dev-dependencies.rand]
+version = "=0.8.8"
+
+[dev-dependencies.wasmparser]
+version = "=0.95.0"
+
+[dev-dependencies.wasmprinter]
+version = "=0.2.44"
+
+[dev-dependencies.wat]
+version = "=1.0.40"
+
 [features]
 default = ["std"]
 sign_ext = ["parity-wasm/sign_ext"]

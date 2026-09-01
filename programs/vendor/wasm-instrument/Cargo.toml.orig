@@ -14,6 +14,15 @@ include = ["src/**/*", "LICENSE-*", "README.md"]
 [dependencies]
 parity-wasm = { version = "0.45", default-features = false, features = ["bulk", "multi_value", "reference_types"] }
 
+[dev-dependencies]
+binaryen = "=0.12.1"
+diff = "=0.1.13"
+pretty_assertions = "=1.4.1"
+rand = "=0.8.8"
+wat = "=1.0.40"
+wasmparser = "=0.95.0"
+wasmprinter = "=0.2.44"
+
 [features]
 default = ["std"]
 std = ["parity-wasm/std"]

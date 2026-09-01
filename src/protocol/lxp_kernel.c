@@ -650,6 +650,7 @@ lxp_result lxp_kernel_batch_schedule_item(
             payer != NULL && payer->has_asset ? payer->asset_id :
                 (const uint8_t[32]){0},
             view->occupancy_asset_id,
+            activity->protocol_version == LXP_PROTOCOL_VERSION_OCCUPANCY,
             payer != NULL && payer->has_asset, item);
     if (registration != NULL && registration->iface->release != NULL &&
         decoded != NULL)

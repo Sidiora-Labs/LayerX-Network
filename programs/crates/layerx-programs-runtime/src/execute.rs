@@ -571,6 +571,21 @@ impl ProgramInstance {
         identities: TraceIdentities,
     ) -> Result<crate::ExecutionTrace, ExecutionFault> {
         if let Some(error) = self.store.execution_observer_error() {
+            let commitment_limit = usize::try_from(policy.maximum_commitments()).map_err(|_| {
+                ExecutionFault::EngineFault {
+                    reason: "execution trace commitment limit is unrepresentable".to_string(),
+                }
+            })?;
+            if error == wasmi::ExecutionObserverError::SnapshotLimitExceeded
+                && self
+                    .store
+                    .execution_observer_retained_snapshots()
+                    .is_some_and(|retained| retained >= commitment_limit)
+            {
+                return Err(commitment_fault(crate::CommitmentError::CommitmentLimit {
+                    limit: commitment_limit,
+                }));
+            }
             return Err(ExecutionFault::EngineFault {
                 reason: format!("deterministic execution observer refused: {error:?}"),
             });
@@ -754,8 +769,22 @@ impl ProgramInstance {
     pub(crate) fn execution_observer_fault(&self) -> Option<ExecutionFault> {
         self.store.execution_observer_error().map(|error| {
             self.store.data().meter().exhaustion().map_or_else(
-                || ExecutionFault::EngineFault {
-                    reason: format!("deterministic execution observer refused: {error:?}"),
+                || {
+                    match (error, self.store.execution_observer_snapshot_counts()) {
+                        (
+                            wasmi::ExecutionObserverError::SnapshotLimitExceeded,
+                            Some((retained, maximum)),
+                        ) if retained >= maximum => {
+                            commitment_fault(crate::CommitmentError::CommitmentLimit {
+                                limit: maximum,
+                            })
+                        }
+                        _ => ExecutionFault::EngineFault {
+                            reason: format!(
+                                "deterministic execution observer refused: {error:?}"
+                            ),
+                        },
+                    }
                 },
                 |refusal| ExecutionFault::Resource { refusal },
             )

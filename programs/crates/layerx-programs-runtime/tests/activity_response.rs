@@ -599,23 +599,29 @@ fn v1_refuses_candidate_import_and_candidate_returns_binary_response() {
     assert_eq!(record.execution().usage().output_bytes, bytes.len() as u64);
     assert!(record
         .canonical_evidence()
-        .starts_with(b"LXP/program-execution/v2\0"));
+        .starts_with(b"LXP/program-execution/v4\0"));
     let projection = record.receipt_projection();
     let encoded = projection.canonical_encode();
     let decoded = layerx_programs_runtime::CandidateActivityReceipt::canonical_decode(&encoded)
         .unwrap_or_else(|error| panic!("success receipt decode: {error}"));
     assert_eq!(decoded, projection);
     assert_eq!(decoded.canonical_encode(), encoded);
-    let domain = b"LXP/program-activity-receipt/v2\0".len();
-    let graph_length_offset = domain + 32 + 2 + 2 + 4 + 5 * 8 + 4 + 16;
+    let domain = b"LXP/program-activity-receipt/v4\0".len();
+    let usage_offset = domain + 32 + 2 + 2 + 4 + 4;
+    let graph_length_offset = usage_offset + 5 * 8 + 4 + 16;
     let graph_length = projection.graph_evidence().len();
-    let outcome_offset = graph_length_offset + 4 + graph_length;
+    let graph_tail_offset = graph_length_offset + 4 + graph_length;
+    let trace_length = projection
+        .trace_evidence()
+        .map_or(1, |trace| 1 + 4 + trace.len());
+    let outcome_offset = graph_tail_offset + trace_length;
+    assert_eq!(encoded[outcome_offset], 0);
     let mut negative_success = encoded.clone();
     negative_success[outcome_offset + 1..outcome_offset + 5]
         .copy_from_slice(&(-1i32).to_be_bytes());
-    assert!(
-        layerx_programs_runtime::CandidateActivityReceipt::canonical_decode(&negative_success)
-            .is_err()
+    assert_eq!(
+        layerx_programs_runtime::CandidateActivityReceipt::canonical_decode(&negative_success),
+        Err(layerx_programs_runtime::FailureEncodingError::Malformed)
     );
     let maximum_graph = b"LayerX/programs/call-graph/v1\0".len()
         + 32
@@ -625,18 +631,18 @@ fn v1_refuses_candidate_import_and_candidate_returns_binary_response() {
     let mut oversized_graph = encoded[..graph_length_offset].to_vec();
     oversized_graph.extend_from_slice(&((maximum_graph + 1) as u32).to_be_bytes());
     oversized_graph.extend(vec![0; maximum_graph + 1]);
-    oversized_graph.extend_from_slice(&encoded[outcome_offset..]);
-    assert!(
-        layerx_programs_runtime::CandidateActivityReceipt::canonical_decode(&oversized_graph)
-            .is_err()
+    oversized_graph.extend_from_slice(&encoded[graph_tail_offset..]);
+    assert_eq!(
+        layerx_programs_runtime::CandidateActivityReceipt::canonical_decode(&oversized_graph),
+        Err(layerx_programs_runtime::FailureEncodingError::Malformed)
     );
     let mut oversized_response = encoded[..=outcome_offset].to_vec();
     oversized_response.extend_from_slice(&0i32.to_be_bytes());
     oversized_response.extend_from_slice(&((MAX_CALL_RESPONSE_BYTES + 1) as u32).to_be_bytes());
     oversized_response.extend(vec![0; MAX_CALL_RESPONSE_BYTES + 1]);
-    assert!(
-        layerx_programs_runtime::CandidateActivityReceipt::canonical_decode(&oversized_response)
-            .is_err()
+    assert_eq!(
+        layerx_programs_runtime::CandidateActivityReceipt::canonical_decode(&oversized_response),
+        Err(layerx_programs_runtime::FailureEncodingError::Malformed)
     );
     for end in 0..encoded.len() {
         assert!(

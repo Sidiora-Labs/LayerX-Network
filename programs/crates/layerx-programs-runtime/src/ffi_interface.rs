@@ -9,7 +9,8 @@ const VERSION_UNSUPPORTED: i32 = -101;
 const LENGTH_LIMIT: i32 = -5;
 const CONTEXT_MISMATCH: i32 = -213;
 const DOMAIN: &[u8] = b"LayerX/program-interface/v1\0";
-const MAX_BYTES: usize = 952;
+const MAX_INTERFACE_BYTES: usize = 952;
+const MAX_MODULE_BYTES: usize = 1_048_576;
 const MAX_ENTRIES: usize = 256;
 const MAX_FIELDS: usize = 256;
 const MAX_DEPTH: usize = 16;
@@ -39,8 +40,8 @@ struct Entry {
 struct Interface { hash: [u8; 32], abi: u16, entries: Vec<Entry> }
 fn capability_mask(capabilities:&[Vec<u8>])->u16{capabilities.iter().fold(0u16,|mask,c|mask|c.first().map_or(0,|tag|1u16<<u32::from(*tag)))}
 
-fn bytes(token: u64, section: u16, length: usize) -> Result<Vec<u8>, i32> {
-    if token == 0 || length == 0 || length > MAX_BYTES { return Err(LENGTH_LIMIT); }
+fn bytes(token: u64, section: u16, length: usize, maximum: usize) -> Result<Vec<u8>, i32> {
+    if token == 0 || length == 0 || length > maximum { return Err(LENGTH_LIMIT); }
     let length = u32::try_from(length).map_err(|_| LENGTH_LIMIT)?;
     let mut out = Vec::with_capacity(length as usize);
     for offset in 0..length {
@@ -87,7 +88,7 @@ fn value_type(input:&[u8],cursor:&mut usize,depth:usize)->Result<ValueType,i32>{
     })
 }
 fn decode(input: &[u8]) -> Result<Interface, i32> {
-    if input.len()>MAX_BYTES || input.get(..DOMAIN.len())!=Some(DOMAIN){return Err(NON_CANONICAL)}
+    if input.len()>MAX_INTERFACE_BYTES || input.get(..DOMAIN.len())!=Some(DOMAIN){return Err(NON_CANONICAL)}
     let mut c=DOMAIN.len(); let hash=take::<32>(input,&mut c)?; let abi=u16::from_be_bytes(take::<2>(input,&mut c)?);
     if hash==[0;32] || !matches!(abi,1|2){return Err(VERSION_UNSUPPORTED)}
     let n=count(input,&mut c)?; if n==0||n>MAX_ENTRIES{return Err(NON_CANONICAL)} let mut entries=Vec::with_capacity(n);
@@ -116,11 +117,11 @@ fn widening(new:&Interface,old:&Interface)->bool {new.abi==old.abi&&old.entries.
 
 #[no_mangle]
 pub extern "C" fn layerx_programs_interface_validate(token:u64,wasm_length:u32,interface_length:u32,prior_length:u32,abi:u16,breaking:u8,h0:u64,h1:u64,h2:u64,h3:u64)->i32 {
-    let wasm=match bytes(token,0,wasm_length as usize){Ok(x)=>x,Err(e)=>return e}; let encoded=match bytes(token,2,interface_length as usize){Ok(x)=>x,Err(e)=>return e}; let interface=match decode(&encoded){Ok(x)=>x,Err(e)=>return e};
+    let wasm=match bytes(token,0,wasm_length as usize,MAX_MODULE_BYTES){Ok(x)=>x,Err(e)=>return e}; let encoded=match bytes(token,2,interface_length as usize,MAX_INTERFACE_BYTES){Ok(x)=>x,Err(e)=>return e}; let interface=match decode(&encoded){Ok(x)=>x,Err(e)=>return e};
     let mut hash=[0u8;32]; for(c,w)in hash.chunks_exact_mut(8).zip([h0,h1,h2,h3]){c.copy_from_slice(&w.to_be_bytes())}
     if interface.hash!=hash||interface.abi!=abi||<[u8;32]>::from(Sha256::digest(&wasm))!=hash{return CONTEXT_MISMATCH}
     let engine=match WasmEngine::declared(){Ok(x)=>x,Err(_)=>return NON_CANONICAL}; let module=match match abi{1=>engine.validate(&wasm),2=>engine.validate_v2(&wasm),_=>return VERSION_UNSUPPORTED}{Ok(x)=>x,Err(_)=>return NON_CANONICAL};
     if interface.entries.iter().any(|e|!module.supports_interface_entrypoint(&e.name)||!module.interface_capability_mask_matches(&e.name,capability_mask(&e.capabilities))){return NON_CANONICAL}
-    if prior_length>0 {let prior=match bytes(token,3,prior_length as usize).and_then(|x|decode(&x)){Ok(x)=>x,Err(e)=>return e}; if breaking==0&&!widening(&interface,&prior){return NON_CANONICAL}}
+    if prior_length>0 {let prior=match bytes(token,3,prior_length as usize,MAX_INTERFACE_BYTES).and_then(|x|decode(&x)){Ok(x)=>x,Err(e)=>return e}; if breaking==0&&!widening(&interface,&prior){return NON_CANONICAL}}
     OK
 }
