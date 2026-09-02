@@ -19,9 +19,10 @@ mod disclosure_binding;
 mod lifecycle;
 
 pub use disclosure_binding::{DisclosedPreparation, DisclosureBindingError};
+pub(crate) use lifecycle::PreparationAuthorization;
 pub use lifecycle::{
-    ExpirationReport, LifecycleError, LifecycleState, PayloadRedaction, PreparationLifecycle,
-    RetentionReport,
+    ExpirationReport, LifecycleError, LifecycleState, PayloadRedaction,
+    PreparationInvalidationReport, PreparationLifecycle, RetentionReport,
 };
 
 /// Domain-separated digest of the validated structured disclosure.

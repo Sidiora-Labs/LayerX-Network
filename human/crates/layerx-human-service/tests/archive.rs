@@ -128,7 +128,7 @@ impl AuthorityLayer {
 
     fn daemon_open(&self, grant: [u8; 32]) -> bool {
         self.sessions
-            .get(SessionId(grant))
+            .get(&self.tenant, SessionId(grant))
             .is_some_and(|session| session.open)
     }
 
@@ -136,7 +136,13 @@ impl AuthorityLayer {
         self.installed.get(&grant).is_some_and(|installed| {
             installed
                 .token
-                .authorize(&self.tenant, &self.did, "prepare", self.core_sequence)
+                .authorize(
+                    &self.sessions,
+                    &self.tenant,
+                    &self.did,
+                    "prepare",
+                    self.core_sequence,
+                )
                 .is_ok()
         })
     }
@@ -245,6 +251,7 @@ impl AgentSessionContract for AuthorityLayer {
         close(
             &mut self.store,
             &mut self.sessions,
+            &self.tenant,
             SessionId(target.daemon_session_id),
         )
         .map_err(|_| AgentContractError::Refused("archive daemon close failed"))?;

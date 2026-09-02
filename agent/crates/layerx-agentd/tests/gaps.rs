@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
@@ -12,23 +13,40 @@ use layerx_agent_api::subscription::{
 };
 use layerx_agent_api::Sequence;
 use layerx_agentd::events::gap::{
-    admit, apply_backfill, attempt_backfill, detect, enforce_retention, BackfillFailure,
+    admit, admit_authorized, apply_backfill, apply_backfill_authorized, attempt_backfill, detect,
+    detect_authorized, enforce_retention, enforce_retention_authorized, BackfillFailure,
     BackfillReport, BackfillResolution, GapError, Retention, Truncated,
 };
-use layerx_agentd::events::subscription::{Continuity, Store as SubscriptionStore};
+use layerx_agentd::events::subscription::{
+    Continuity, Store as SubscriptionStore, SubscriptionError,
+};
 use layerx_agentd::events::{
     backfill, ingest, CoreEvent, DeliveryEngine, DeliveryError, EventAttributes, EventIngestor,
     RetryPolicy,
 };
+use layerx_agentd::identity::{
+    register, CoreIdentity, IdentityError, IdentityRecord, IdentityResolver, ProtocolAuthority,
+};
+use layerx_agentd::session::{close, open, OpenRequest, SessionId, SessionRegistry, Token};
 use layerx_agentd::store::{Store, TenantId};
+use layerx_agentd::tenant::{AuthorizationError, TenantObservability};
 use layerx_client::head::Head;
 use layerx_client::lni::framing::{read_frame, write_frame};
 use layerx_client::lni::schema::{decode_envelope, encode_envelope, Envelope, Version};
 use layerx_client::lni::transport::{ConnectionGate, Limits, Uds};
 use layerx_client::stream::{Cursor as ClientCursor, StreamConfig};
+use layerx_types::ids::Did;
 use layerx_types::verify::VerificationLevel;
 
 static NEXT_PATH: AtomicU64 = AtomicU64::new(1);
+
+struct BoundaryIdentity(CoreIdentity);
+
+impl IdentityResolver for BoundaryIdentity {
+    fn resolve(&mut self, _did: &Did) -> Result<Option<CoreIdentity>, IdentityError> {
+        Ok(Some(self.0.clone()))
+    }
+}
 
 struct SocketPath(PathBuf);
 
@@ -117,6 +135,78 @@ fn subscriptions(root: &PathBuf, start: u64) -> SubscriptionStore {
         panic!("subscription create failed: {error}");
     }
     subscriptions
+}
+
+fn session_identity(store: &mut Store) -> IdentityRecord {
+    let mut boundary = BoundaryIdentity(CoreIdentity {
+        canonical_bytes: b"gap-session-identity".to_vec(),
+        head_sequence: 10,
+        revocation_sequence: 1,
+        verification_level: VerificationLevel::STATE_PROVEN,
+        frozen: false,
+        authorities: vec![ProtocolAuthority::SessionKey([4; 32])],
+    });
+    text(
+        register(
+            store,
+            durable_tenant(),
+            text(Did::new(b"agent-a"), "agent DID"),
+            &mut boundary,
+        ),
+        "session identity",
+    )
+}
+
+fn authorized_subscriptions(
+    root: &PathBuf,
+    start: u64,
+) -> (SubscriptionStore, Store, SessionRegistry, Token) {
+    let mut session_store = text(Store::open(root.join("sessions")), "session store");
+    let identity = session_identity(&mut session_store);
+    let mut sessions = SessionRegistry::default();
+    let token = text(
+        open(
+            &mut session_store,
+            &mut sessions,
+            &identity,
+            OpenRequest {
+                session_id: SessionId([1; 32]),
+                token_id: [2; 32],
+                tenant: durable_tenant(),
+                agent: text(Did::new(b"agent-a"), "agent DID"),
+                authority: ProtocolAuthority::SessionKey([4; 32]),
+                permitted_activity_types: BTreeSet::from([9]),
+                scopes: BTreeSet::from(["subscribe".to_owned()]),
+                expiry_sequence: 100,
+                opening_client: "gap-suite".to_owned(),
+                policy_version: "policy-v1".to_owned(),
+            },
+            10,
+        ),
+        "session",
+    );
+    let durable = text(Store::open(root.join("events")), "event store");
+    let mut subscriptions = text(
+        SubscriptionStore::open(durable, durable_tenant()),
+        "subscription store",
+    );
+    text(
+        subscriptions.create_authorized(
+            &sessions,
+            &token,
+            &mut TenantObservability::default(),
+            10,
+            id(),
+            SubscriptionCreate {
+                scope: scope(),
+                filter: filter(),
+                start: ApiCursor(Sequence(start)),
+                delivery_target: text(DeliveryTarget::new("uds://consumer-a"), "target"),
+            },
+        ),
+        "authorized subscription",
+    );
+    (subscriptions, session_store, sessions, token)
 }
 
 fn limits() -> Limits {
@@ -412,5 +502,140 @@ fn retention_expiry_marks_outage_truncated_and_survives_restart() {
             lost_through: 20,
         })
     ));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn bound_gap_runtime_requires_the_common_resolver_and_refuses_after_revocation() {
+    let root = test_directory("authorized");
+    let (mut subscriptions, mut session_store, mut sessions, token) =
+        authorized_subscriptions(&root, 11);
+    let mut observability = TenantObservability::default();
+
+    assert!(matches!(
+        detect(&mut subscriptions, &target(), 11, 13),
+        Err(GapError::Subscription(
+            SubscriptionError::AuthorizationRequired
+        ))
+    ));
+    let gap = match detect_authorized(
+        &mut subscriptions,
+        &sessions,
+        &token,
+        &mut observability,
+        11,
+        &target(),
+        11,
+        13,
+    ) {
+        Ok(Some(value)) => value,
+        other => panic!("authorized gap was not detected: {other:?}"),
+    };
+    assert!(matches!(
+        admit(&subscriptions, &target()),
+        Err(GapError::Subscription(
+            SubscriptionError::AuthorizationRequired
+        ))
+    ));
+    assert!(matches!(
+        admit_authorized(
+            &subscriptions,
+            &sessions,
+            &token,
+            &mut observability,
+            11,
+            &target(),
+        ),
+        Err(GapError::Blocked(value)) if value == gap
+    ));
+    let report = BackfillReport::Incomplete {
+        gap,
+        recovered: Vec::new(),
+        failure: BackfillFailure::Incomplete,
+    };
+    assert!(matches!(
+        apply_backfill(&mut subscriptions, &target(), gap, &report),
+        Err(GapError::Subscription(
+            SubscriptionError::AuthorizationRequired
+        ))
+    ));
+    assert!(matches!(
+        apply_backfill_authorized(
+            &mut subscriptions,
+            &sessions,
+            &token,
+            &mut observability,
+            11,
+            &target(),
+            gap,
+            &report,
+        ),
+        Ok(BackfillResolution::StillBlocked {
+            recovered_through: None,
+        })
+    ));
+
+    text(
+        close(
+            &mut session_store,
+            &mut sessions,
+            &durable_tenant(),
+            SessionId([1; 32]),
+        ),
+        "session close",
+    );
+    assert!(matches!(
+        admit_authorized(
+            &subscriptions,
+            &sessions,
+            &token,
+            &mut observability,
+            11,
+            &target(),
+        ),
+        Err(GapError::Subscription(SubscriptionError::Authorization(
+            AuthorizationError::Revoked
+        )))
+    ));
+    assert_eq!(observability.audit().len(), 4);
+
+    let retention_root = root.join("retention");
+    let (mut retention, _store, sessions, token) = authorized_subscriptions(&retention_root, 10);
+    let mut retention_observability = TenantObservability::default();
+    assert!(matches!(
+        enforce_retention(
+            &mut retention,
+            &target(),
+            31,
+            15,
+            Retention {
+                maximum_undelivered_sequences: 10,
+            },
+        ),
+        Err(GapError::Subscription(
+            SubscriptionError::AuthorizationRequired
+        ))
+    ));
+    assert!(matches!(
+        enforce_retention_authorized(
+            &mut retention,
+            &sessions,
+            &token,
+            &mut retention_observability,
+            11,
+            &target(),
+            31,
+            15,
+            Retention {
+                maximum_undelivered_sequences: 10,
+            },
+        ),
+        Ok(Some(Truncated {
+            requested_from: 10,
+            oldest_available: 21,
+            lost_through: 20,
+        }))
+    ));
+    assert_eq!(retention_observability.audit().len(), 1);
     let _ = fs::remove_dir_all(root);
 }

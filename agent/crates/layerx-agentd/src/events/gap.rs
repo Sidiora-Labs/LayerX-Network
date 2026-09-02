@@ -11,6 +11,8 @@ use layerx_client::stream::{
 
 use super::ingestion::durable_event;
 use super::subscription::{Continuity, Store as SubscriptionStore, SubscriptionError};
+use crate::session::{SessionRegistry, Token};
+use crate::tenant::{Operation, TenantObservability};
 
 /// Explicit missing interval emitted instead of silently closing sequence.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -152,6 +154,39 @@ pub fn detect(
     expected: u64,
     observed: u64,
 ) -> Result<Option<Gap>, GapError> {
+    subscriptions.require_unbound_target(target)?;
+    detect_inner(subscriptions, target, expected, observed)
+}
+
+/// Detects and durably blocks a gap for an exact session-bound subscription after resolving the
+/// current token generation through the common tenant gate.
+pub fn detect_authorized(
+    subscriptions: &mut SubscriptionStore,
+    sessions: &SessionRegistry,
+    token: &Token,
+    observability: &mut TenantObservability,
+    core_sequence: u64,
+    target: &SubscriptionTarget,
+    expected: u64,
+    observed: u64,
+) -> Result<Option<Gap>, GapError> {
+    subscriptions.authorize_target(
+        sessions,
+        token,
+        observability,
+        core_sequence,
+        target,
+        Operation::SubscriptionResume,
+    )?;
+    detect_inner(subscriptions, target, expected, observed)
+}
+
+fn detect_inner(
+    subscriptions: &mut SubscriptionStore,
+    target: &SubscriptionTarget,
+    expected: u64,
+    observed: u64,
+) -> Result<Option<Gap>, GapError> {
     if observed < expected {
         return Err(GapError::Regressed { expected, observed });
     }
@@ -163,7 +198,7 @@ pub fn detect(
         missing_last: observed.saturating_sub(1),
         observed_sequence: observed,
     };
-    subscriptions.block_gap(target, gap.missing_first, gap.missing_last)?;
+    subscriptions.block_gap_inner(target, gap.missing_first, gap.missing_last)?;
     Ok(Some(gap))
 }
 
@@ -257,11 +292,44 @@ pub fn apply_backfill(
     gap: Gap,
     report: &BackfillReport,
 ) -> Result<BackfillResolution, GapError> {
+    subscriptions.require_unbound_target(target)?;
+    apply_backfill_inner(subscriptions, target, gap, report)
+}
+
+/// Applies a core backfill report for an exact session-bound subscription only after resolving
+/// its current token generation through the common tenant gate.
+pub fn apply_backfill_authorized(
+    subscriptions: &mut SubscriptionStore,
+    sessions: &SessionRegistry,
+    token: &Token,
+    observability: &mut TenantObservability,
+    core_sequence: u64,
+    target: &SubscriptionTarget,
+    gap: Gap,
+    report: &BackfillReport,
+) -> Result<BackfillResolution, GapError> {
+    subscriptions.authorize_target(
+        sessions,
+        token,
+        observability,
+        core_sequence,
+        target,
+        Operation::SubscriptionResume,
+    )?;
+    apply_backfill_inner(subscriptions, target, gap, report)
+}
+
+fn apply_backfill_inner(
+    subscriptions: &mut SubscriptionStore,
+    target: &SubscriptionTarget,
+    gap: Gap,
+    report: &BackfillReport,
+) -> Result<BackfillResolution, GapError> {
     let Continuity::GapBlocked {
         missing_first,
         missing_last,
         ..
-    } = subscriptions.continuity(target)?
+    } = subscriptions.continuity_inner(target)?
     else {
         return Err(GapError::MismatchedReport);
     };
@@ -294,14 +362,14 @@ pub fn apply_backfill(
             if events.last().map(|event| event.global_sequence) != Some(gap.missing_last) {
                 return Err(GapError::MismatchedReport);
             }
-            subscriptions.clear_gap(target)?;
+            subscriptions.clear_gap_inner(target)?;
             Ok(BackfillResolution::Restored)
         }
         BackfillReport::Incomplete {
             gap: report_gap, ..
         } if *report_gap == gap => {
             let recovered_through = report.recovered_through();
-            subscriptions.record_backfill(target, recovered_through)?;
+            subscriptions.record_backfill_inner(target, recovered_through)?;
             Ok(BackfillResolution::StillBlocked { recovered_through })
         }
         _ => Err(GapError::MismatchedReport),
@@ -318,7 +386,36 @@ pub fn admit(
     subscriptions: &SubscriptionStore,
     target: &SubscriptionTarget,
 ) -> Result<(), GapError> {
-    match subscriptions.continuity(target)? {
+    subscriptions.require_unbound_target(target)?;
+    admit_inner(subscriptions, target)
+}
+
+/// Checks continuity for an exact session-bound subscription after resolving its current token
+/// generation through the common tenant gate.
+pub fn admit_authorized(
+    subscriptions: &SubscriptionStore,
+    sessions: &SessionRegistry,
+    token: &Token,
+    observability: &mut TenantObservability,
+    core_sequence: u64,
+    target: &SubscriptionTarget,
+) -> Result<(), GapError> {
+    subscriptions.authorize_target(
+        sessions,
+        token,
+        observability,
+        core_sequence,
+        target,
+        Operation::SubscriptionHealth,
+    )?;
+    admit_inner(subscriptions, target)
+}
+
+fn admit_inner(
+    subscriptions: &SubscriptionStore,
+    target: &SubscriptionTarget,
+) -> Result<(), GapError> {
+    match subscriptions.continuity_inner(target)? {
         Continuity::Healthy => Ok(()),
         Continuity::GapBlocked {
             missing_first,
@@ -356,10 +453,57 @@ pub fn enforce_retention(
     core_oldest_available: u64,
     retention: Retention,
 ) -> Result<Option<Truncated>, GapError> {
+    subscriptions.require_unbound_target(target)?;
+    enforce_retention_inner(
+        subscriptions,
+        target,
+        head_exclusive,
+        core_oldest_available,
+        retention,
+    )
+}
+
+/// Enforces retention for an exact session-bound subscription after resolving its current token
+/// generation through the common tenant gate.
+pub fn enforce_retention_authorized(
+    subscriptions: &mut SubscriptionStore,
+    sessions: &SessionRegistry,
+    token: &Token,
+    observability: &mut TenantObservability,
+    core_sequence: u64,
+    target: &SubscriptionTarget,
+    head_exclusive: u64,
+    core_oldest_available: u64,
+    retention: Retention,
+) -> Result<Option<Truncated>, GapError> {
+    subscriptions.authorize_target(
+        sessions,
+        token,
+        observability,
+        core_sequence,
+        target,
+        Operation::SubscriptionResume,
+    )?;
+    enforce_retention_inner(
+        subscriptions,
+        target,
+        head_exclusive,
+        core_oldest_available,
+        retention,
+    )
+}
+
+fn enforce_retention_inner(
+    subscriptions: &mut SubscriptionStore,
+    target: &SubscriptionTarget,
+    head_exclusive: u64,
+    core_oldest_available: u64,
+    retention: Retention,
+) -> Result<Option<Truncated>, GapError> {
     if retention.maximum_undelivered_sequences == 0 {
         return Err(GapError::InvalidRetention);
     }
-    let requested_from = subscriptions.resume_cursor(target)?.0;
+    let requested_from = subscriptions.resume_cursor_inner(target)?.0;
     let bounded_oldest = head_exclusive.saturating_sub(retention.maximum_undelivered_sequences);
     let oldest_available = core_oldest_available.max(bounded_oldest);
     if requested_from >= oldest_available {
@@ -370,7 +514,7 @@ pub fn enforce_retention(
         oldest_available,
         lost_through: oldest_available.saturating_sub(1),
     };
-    subscriptions.mark_truncated(
+    subscriptions.mark_truncated_inner(
         target,
         notice.requested_from,
         notice.oldest_available,

@@ -175,10 +175,17 @@ struct InProcessAgentLayer {
 
 impl InProcessAgentLayer {
     fn new(root: &std::path::Path, fail_once: Option<CreationStage>) -> Self {
+        let store = Store::open(root).unwrap_or_else(|error| panic!("agent store: {error}"));
+        let tenant =
+            TenantId::new("tenant-alice").unwrap_or_else(|error| panic!("tenant: {error}"));
+        let mut sessions = SessionRegistry::default();
+        sessions
+            .restore_tenant(&store, &tenant)
+            .unwrap_or_else(|error| panic!("session restore: {error:?}"));
         Self {
-            store: Store::open(root).unwrap_or_else(|error| panic!("agent store: {error}")),
-            tenant: TenantId::new("tenant-alice").unwrap_or_else(|error| panic!("tenant: {error}")),
-            sessions: SessionRegistry::default(),
+            store,
+            tenant,
+            sessions,
             fail_once,
             protocol_cache: BTreeMap::new(),
             agent_cache: BTreeMap::new(),
@@ -311,31 +318,45 @@ impl AgentCreationContract for InProcessAgentLayer {
         )
         .map_err(|_| AgentFailure::Refused("agent identity registration failed"))?;
         let token_id: [u8; 32] = Sha256::digest(request.action_key).into();
-        let token = open(
-            &mut self.store,
-            &mut self.sessions,
-            &identity,
-            OpenRequest {
-                session_id: SessionId(issued.grant_id),
-                token_id,
-                tenant: self.tenant.clone(),
-                agent: request.did.clone(),
-                authority,
-                permitted_activity_types: request
-                    .activity_types
-                    .iter()
-                    .map(|activity| activity.ordinal())
-                    .collect(),
-                scopes: request.daemon_scopes.iter().cloned().collect(),
-                expiry_sequence: request.expires_at,
-                opening_client: "layerx-human-service".to_owned(),
-                policy_version: "operator-policy-2026-08".to_owned(),
-            },
-            CORE_SEQUENCE,
-        )
-        .map_err(|_| AgentFailure::Refused("agent session open failed"))?;
+        let open_request = OpenRequest {
+            session_id: SessionId(issued.grant_id),
+            token_id,
+            tenant: self.tenant.clone(),
+            agent: request.did.clone(),
+            authority,
+            permitted_activity_types: request
+                .activity_types
+                .iter()
+                .map(|activity| activity.ordinal())
+                .collect(),
+            scopes: request.daemon_scopes.iter().cloned().collect(),
+            expiry_sequence: request.expires_at,
+            opening_client: "layerx-human-service".to_owned(),
+            policy_version: "operator-policy-2026-08".to_owned(),
+        };
+        let token = match self.sessions.get(&self.tenant, open_request.session_id) {
+            Some(existing) if existing.open && existing.request == open_request => self
+                .sessions
+                .authenticate_bearer(&self.tenant, open_request.session_id, token_id)
+                .map_err(|_| AgentFailure::Refused("agent session replay failed"))?,
+            Some(_) => return Err(AgentFailure::Refused("agent session identity mismatch")),
+            None => open(
+                &mut self.store,
+                &mut self.sessions,
+                &identity,
+                open_request,
+                CORE_SEQUENCE,
+            )
+            .map_err(|_| AgentFailure::Refused("agent session open failed"))?,
+        };
         token
-            .authorize(&self.tenant, &request.did, "prepare", CORE_SEQUENCE)
+            .authorize(
+                &self.sessions,
+                &self.tenant,
+                &request.did,
+                "prepare",
+                CORE_SEQUENCE,
+            )
             .map_err(|_| AgentFailure::Refused("session scope verification failed"))?;
         let evidence = Self::evidence(
             CreationStage::SessionProvision,

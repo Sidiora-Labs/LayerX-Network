@@ -230,7 +230,7 @@ fn unreachable_endpoint_schedules_retry_and_preserves_health_cursor() {
             ..
         })
     ));
-    let health = event_health(&delivery);
+    let health = event_health(&delivery).unwrap_or_else(|error| panic!("event health: {error}"));
     assert_eq!(health.acknowledged_cursor.0, 0);
     assert_eq!(health.lag_sequences, 1);
     assert_eq!(health.failure_count, 1);
@@ -330,7 +330,7 @@ fn slow_endpoint_receives_byte_identical_retry_and_bound_event_evidence() {
     if let Err(error) = delivery.acknowledge(&acknowledgement) {
         panic!("consumer cursor acknowledgement failed: {error}");
     }
-    let health = event_health(&delivery);
+    let health = event_health(&delivery).unwrap_or_else(|error| panic!("event health: {error}"));
     assert_eq!(health.acknowledged_cursor.0, 1);
     assert_eq!(health.lag_sequences, 0);
     assert_eq!(health.failure_count, 1);

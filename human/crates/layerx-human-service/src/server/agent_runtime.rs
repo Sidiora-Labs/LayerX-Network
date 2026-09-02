@@ -59,6 +59,7 @@ const AGENT_SESSION_SNAPSHOT: u8 = 34;
 const AGENT_SESSION_SUSPEND: u8 = 35;
 const AGENT_SESSION_BIND: u8 = 36;
 const AGENT_LIFECYCLE_PUBLISH: u8 = 37;
+const AGENT_SESSION_RESTRICT: u8 = 38;
 const MAX_TEXT: usize = 255;
 const MAX_BYTES: usize = 1_048_576;
 const MAX_EVIDENCE: usize = 64;
@@ -121,10 +122,26 @@ pub struct AgentOwnerValidation {
     pub canonical_identity: Vec<u8>,
 }
 pub struct AgentOwnerInstalled {
-    pub token_id: [u8; 32],
+    pub token_id: AgentSessionToken,
     pub session_id: [u8; 32],
+    pub generation: u64,
     pub expiry_sequence: u64,
     pub observed_head_sequence: u64,
+}
+pub struct AgentSessionToken(Zeroizing<[u8; 32]>);
+impl AgentSessionToken {
+    fn new(value: [u8; 32]) -> Result<Self, AgentBoundaryError> {
+        if value == [0; 32] {
+            Err(AgentBoundaryError::CorruptResponse)
+        } else {
+            Ok(Self(Zeroizing::new(value)))
+        }
+    }
+
+    #[must_use]
+    pub fn expose(&self) -> [u8; 32] {
+        *self.0
+    }
 }
 pub struct AgentSessionSeed(Zeroizing<[u8; 32]>);
 impl AgentSessionSeed {
@@ -280,7 +297,8 @@ pub struct AgentLifecycleContext {
     pub seed: AgentLifecycleSeed,
     pub agent_did: String,
     pub session_id: [u8; 32],
-    pub session_token_id: [u8; 32],
+    pub session_token_id: AgentSessionToken,
+    pub session_generation: u64,
     pub protocol_grant_id: [u8; 32],
     pub active_budget_id: [u8; 32],
     pub state: u8,
@@ -319,7 +337,8 @@ pub struct AgentSessionSnapshot {
     pub agent_id: String,
     pub agent_did: String,
     pub session_id: [u8; 32],
-    pub token_id: [u8; 32],
+    pub token_id: AgentSessionToken,
+    pub generation: u64,
     pub open: bool,
     pub expiry_sequence: u64,
     pub sequence: u64,
@@ -328,7 +347,8 @@ pub struct AgentSessionObservation {
     pub agent_id: String,
     pub agent_did: String,
     pub session_id: [u8; 32],
-    pub token_id: [u8; 32],
+    pub token_id: AgentSessionToken,
+    pub generation: u64,
     pub open: bool,
     pub action_key: [u8; 32],
     pub evidence_digest: [u8; 32],
@@ -629,7 +649,8 @@ impl AgentRuntime {
             seed,
             agent_did: reader.text()?,
             session_id: reader.fixed()?,
-            session_token_id: reader.fixed()?,
+            session_token_id: AgentSessionToken::new(reader.fixed()?)?,
+            session_generation: reader.u64()?,
             protocol_grant_id: reader.fixed()?,
             active_budget_id: reader.fixed()?,
             state: reader.u8()?,
@@ -639,7 +660,7 @@ impl AgentRuntime {
         };
         if value.agent_did.is_empty()
             || value.session_id == [0; 32]
-            || value.session_token_id == [0; 32]
+            || value.session_generation == 0
             || value.protocol_grant_id == [0; 32]
             || value.active_budget_id == [0; 32]
             || value.state > 4
@@ -746,7 +767,8 @@ impl AgentRuntime {
             agent_id: reader.text()?,
             agent_did: reader.text()?,
             session_id: reader.fixed()?,
-            token_id: reader.fixed()?,
+            token_id: AgentSessionToken::new(reader.fixed()?)?,
+            generation: reader.u64()?,
             open: match reader.u8()? {
                 0 => false,
                 1 => true,
@@ -758,9 +780,8 @@ impl AgentRuntime {
         if value.agent_id != agent_id
             || value.agent_did.is_empty()
             || value.session_id == [0; 32]
-            || value.token_id == [0; 32]
+            || value.generation == 0
             || value.expiry_sequence == 0
-            || value.sequence == 0
         {
             return Err(AgentBoundaryError::CorruptResponse);
         }
@@ -790,10 +811,42 @@ impl AgentRuntime {
         writer.fixed(&token_id);
         writer.fixed(&action_key);
         let value = self.session_observation(writer, agent_id, action_key, true)?;
-        if value.session_id != session_id || value.token_id != token_id {
+        if value.session_id != session_id || value.token_id.expose() != token_id {
             return Err(AgentBoundaryError::CorruptResponse);
         }
         Ok(value)
+    }
+    pub fn agent_session_restrict(
+        &mut self,
+        agent_id: &str,
+        current_sequence: u64,
+        action_key: [u8; 32],
+        permitted_activity_types: &[u16],
+        scopes: &[String],
+    ) -> Result<AgentSessionObservation, AgentBoundaryError> {
+        if permitted_activity_types.is_empty()
+            || permitted_activity_types.len() > 256
+            || scopes.is_empty()
+            || scopes.len() > 64
+        {
+            return Err(AgentBoundaryError::Refused);
+        }
+        let mut writer = Writer::new(AGENT_SESSION_RESTRICT);
+        writer.text(agent_id)?;
+        writer.u64(current_sequence);
+        writer.fixed(&action_key);
+        writer.u16(
+            u16::try_from(permitted_activity_types.len())
+                .map_err(|_| AgentBoundaryError::Refused)?,
+        );
+        for activity_type in permitted_activity_types {
+            writer.u16(*activity_type);
+        }
+        writer.u16(u16::try_from(scopes.len()).map_err(|_| AgentBoundaryError::Refused)?);
+        for scope in scopes {
+            writer.text(scope)?;
+        }
+        self.session_observation(writer, agent_id, action_key, true)
     }
     fn session_observation(
         &mut self,
@@ -810,7 +863,8 @@ impl AgentRuntime {
             agent_id: reader.text()?,
             agent_did: reader.text()?,
             session_id: reader.fixed()?,
-            token_id: reader.fixed()?,
+            token_id: AgentSessionToken::new(reader.fixed()?)?,
+            generation: reader.u64()?,
             open: match reader.u8()? {
                 0 => false,
                 1 => true,
@@ -824,7 +878,7 @@ impl AgentRuntime {
             || value.open != open
             || value.action_key != action_key
             || value.session_id == [0; 32]
-            || value.token_id == [0; 32]
+            || value.generation == 0
             || value.evidence_digest == [0; 32]
         {
             return Err(AgentBoundaryError::CorruptResponse);
@@ -1053,11 +1107,19 @@ impl AgentRuntime {
         encode_owner(&mut writer, request)?;
         let mut reader = self.exchange_secret(writer.finish_secret())?;
         let value = AgentOwnerInstalled {
-            token_id: reader.fixed()?,
+            token_id: AgentSessionToken::new(reader.fixed()?)?,
             session_id: reader.fixed()?,
+            generation: reader.u64()?,
             expiry_sequence: reader.u64()?,
             observed_head_sequence: reader.u64()?,
         };
+        if value.session_id == [0; 32]
+            || value.generation == 0
+            || value.expiry_sequence == 0
+            || value.observed_head_sequence == 0
+        {
+            return Err(AgentBoundaryError::CorruptResponse);
+        }
         reader.finish()?;
         Ok(value)
     }
@@ -2309,13 +2371,16 @@ impl Writer {
 }
 
 struct Reader {
-    bytes: Vec<u8>,
+    bytes: Zeroizing<Vec<u8>>,
     offset: usize,
 }
 
 impl Reader {
     fn new(bytes: Vec<u8>) -> Self {
-        Self { bytes, offset: 0 }
+        Self {
+            bytes: Zeroizing::new(bytes),
+            offset: 0,
+        }
     }
     fn take(&mut self, length: usize) -> Result<&[u8], AgentBoundaryError> {
         let end = self

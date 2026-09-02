@@ -5,7 +5,7 @@ use layerx_agent_api::track::{ReceiptRef, SubmissionRef, SubmissionState, Tracke
 use layerx_agent_api::verify::Level;
 use layerx_types::result::ResultCode;
 
-use crate::server::{InvocationOutcome, Server, ServerError};
+use crate::server::{DaemonInvocation, InvocationOutcome, Server, ServerError};
 
 /// Mandatory client stages. No MCP-only write stage exists.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -91,22 +91,33 @@ pub enum WriteToolError {
 /// # Errors
 ///
 /// Returns typed stage, transcript, evidence, or daemon-routing failures.
-pub fn execute(
+pub fn execute<F>(
     server: &mut Server,
+    core_sequence: u64,
     validated_arguments: Vec<u8>,
-    transcript: WriteTranscript,
+    executor: F,
     unknown_age_ms: u64,
-) -> Result<WriteOutcome, WriteToolError> {
-    let invocation = server
-        .route("activity.submit", validated_arguments)
-        .map_err(WriteToolError::Server)?;
-    if !transcript_matches(&transcript.stages, &ORDINARY_WRITE_STAGES) {
-        server
-            .complete(&invocation, InvocationOutcome::Failed)
-            .map_err(WriteToolError::Server)?;
-        return Err(WriteToolError::InvalidTranscript);
-    }
-    finish(server, &invocation, transcript, unknown_age_ms)
+) -> Result<WriteOutcome, WriteToolError>
+where
+    F: FnOnce(&DaemonInvocation) -> WriteTranscript,
+{
+    server
+        .execute_committed(
+            core_sequence,
+            "activity.submit",
+            validated_arguments,
+            |invocation| {
+                let transcript = executor(invocation);
+                let result = if transcript_matches(&transcript.stages, &ORDINARY_WRITE_STAGES) {
+                    classify_transcript(transcript, unknown_age_ms)
+                } else {
+                    Err(WriteToolError::InvalidTranscript)
+                };
+                let outcome = invocation_outcome(&result);
+                (result, outcome)
+            },
+        )
+        .map_err(WriteToolError::Server)?
 }
 
 /// Resolves a prior honest non-terminal result through the same daemon tracking path.
@@ -114,60 +125,63 @@ pub fn execute(
 /// # Errors
 ///
 /// Returns typed evidence or daemon-routing failures and never manufactures completion.
-pub fn track(
+pub fn track<F>(
     server: &mut Server,
+    core_sequence: u64,
     validated_arguments: Vec<u8>,
-    mut transcript: WriteTranscript,
+    executor: F,
     unknown_age_ms: u64,
-) -> Result<WriteOutcome, WriteToolError> {
-    let invocation = server
-        .route("activity.track", validated_arguments)
-        .map_err(WriteToolError::Server)?;
-    if transcript.stages != [WriteStage::Track] {
-        server
-            .complete(&invocation, InvocationOutcome::Failed)
-            .map_err(WriteToolError::Server)?;
-        return Err(WriteToolError::InvalidTranscript);
-    }
-    transcript.stages = ORDINARY_WRITE_STAGES.to_vec();
-    finish(server, &invocation, transcript, unknown_age_ms)
+) -> Result<WriteOutcome, WriteToolError>
+where
+    F: FnOnce(&DaemonInvocation) -> WriteTranscript,
+{
+    server
+        .execute_committed(
+            core_sequence,
+            "activity.track",
+            validated_arguments,
+            |invocation| {
+                let mut transcript = executor(invocation);
+                let result = if transcript.stages == [WriteStage::Track] {
+                    transcript.stages = ORDINARY_WRITE_STAGES.to_vec();
+                    classify_transcript(transcript, unknown_age_ms)
+                } else {
+                    Err(WriteToolError::InvalidTranscript)
+                };
+                let outcome = invocation_outcome(&result);
+                (result, outcome)
+            },
+        )
+        .map_err(WriteToolError::Server)?
 }
 
-fn finish(
-    server: &mut Server,
-    invocation: &crate::server::DaemonInvocation,
+fn classify_transcript(
     transcript: WriteTranscript,
     unknown_age_ms: u64,
 ) -> Result<WriteOutcome, WriteToolError> {
     let submission = match transcript.submission {
         Ok(submission) => submission,
-        Err(failure) => {
-            let outcome = if failure.class == FailureClass::Refused {
-                InvocationOutcome::Refused
-            } else {
-                InvocationOutcome::Failed
-            };
-            server
-                .complete(invocation, outcome)
-                .map_err(WriteToolError::Server)?;
-            return Err(WriteToolError::Stage(failure));
-        }
+        Err(failure) => return Err(WriteToolError::Stage(failure)),
     };
-    let result = classify_submission(submission, transcript.receipt, unknown_age_ms);
-    let outcome = match &result {
+    classify_submission(submission, transcript.receipt, unknown_age_ms)
+}
+
+fn invocation_outcome(result: &Result<WriteOutcome, WriteToolError>) -> InvocationOutcome {
+    match result {
         Ok(WriteOutcome::Executed { .. }) => InvocationOutcome::Completed,
         Ok(WriteOutcome::Unknown { .. } | WriteOutcome::Pending { .. }) => {
             InvocationOutcome::Unknown
         }
-        Err(WriteToolError::Stage(failure)) if failure.class == FailureClass::Protocol => {
+        Err(WriteToolError::Stage(failure))
+            if matches!(
+                failure.class,
+                FailureClass::Refused | FailureClass::Protocol
+            ) =>
+        {
             InvocationOutcome::Refused
         }
         Err(_) => InvocationOutcome::Failed,
-    };
-    server
-        .complete(invocation, outcome)
-        .map_err(WriteToolError::Server)?;
-    result
+    }
 }
 
 fn classify_submission(

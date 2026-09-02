@@ -14,11 +14,17 @@ use layerx_agent_api::subscription::{
 use layerx_agent_api::{subscription::CursorAcknowledgement, Sequence};
 use layerx_types::result::ResultCode;
 
+use crate::session::{SessionCredential, SessionRegistry, Token};
 use crate::store::{
     ObjectKind, StorageClass, Store as DurableStore, StoreError, TenantId, TenantKey,
 };
+use crate::tenant::{
+    self, AuthorizationError, ObjectOwner, Operation, RequestContext, Surface, TenantObservability,
+};
+use layerx_types::ids::Did;
 
-const RECORD_MAGIC: &[u8; 4] = b"LXSB";
+const RECORD_MAGIC: &[u8; 4] = b"LXS2";
+const LEGACY_RECORD_MAGIC: &[u8; 4] = b"LXSB";
 
 /// Durable subscription position. The value is the next stream cursor after
 /// acknowledged delivery, not a locally inferred protocol sequence.
@@ -71,6 +77,7 @@ struct DurableRecord {
     current_delivery: Cursor,
     continuity: Continuity,
     termination: Option<Termination>,
+    session: Option<SessionCredential>,
 }
 
 /// Durable subscription store failures.
@@ -86,6 +93,8 @@ pub enum SubscriptionError {
     CursorRegressed { current: Cursor, received: Cursor },
     SequenceExhausted,
     Corrupt,
+    Authorization(AuthorizationError),
+    AuthorizationRequired,
     Durable(StoreError),
 }
 
@@ -112,6 +121,12 @@ impl Display for SubscriptionError {
             ),
             Self::SequenceExhausted => formatter.write_str("subscription cursor is exhausted"),
             Self::Corrupt => formatter.write_str("durable subscription record is corrupt"),
+            Self::Authorization(error) => {
+                write!(formatter, "subscription authorization failed: {error:?}")
+            }
+            Self::AuthorizationRequired => {
+                formatter.write_str("session-bound subscription requires an authorized operation")
+            }
             Self::Durable(error) => Display::fmt(error, formatter),
         }
     }
@@ -141,15 +156,24 @@ impl Store {
     /// Returns `Corrupt` for a missing or non-local stored value, a record whose
     /// identifier, tenant, or encoding disagrees with its key, or a duplicate
     /// identifier; `Durable` wraps a rejected object key.
-    pub fn open(durable: DurableStore, tenant: TenantId) -> Result<Self, SubscriptionError> {
+    pub fn open(mut durable: DurableStore, tenant: TenantId) -> Result<Self, SubscriptionError> {
         let mut records = BTreeMap::new();
+        let mut legacy_migrations = Vec::new();
         for object_id in durable.list_object_ids(&tenant, ObjectKind::Subscription) {
             let key = TenantKey::new(tenant.clone(), ObjectKind::Subscription, object_id.clone())?;
             let stored = durable.get(&key).ok_or(SubscriptionError::Corrupt)?;
             if stored.class() != StorageClass::LocalOnly {
                 return Err(SubscriptionError::Corrupt);
             }
-            let record = decode_record(stored.bytes())?;
+            let (mut record, legacy_without_session) = decode_record(stored.bytes())?;
+            if legacy_without_session {
+                record.public.paused = true;
+                record.delivered_unacknowledged.clear();
+                if record.termination.is_none() {
+                    record.termination = Some(Termination::SessionRevoked);
+                }
+                legacy_migrations.push((key, encode_record(&record)?));
+            }
             let id = record.public.subscription_id.as_str().to_owned();
             if object_id != id.as_bytes()
                 || record.public.scope.tenant.as_str() != tenant.as_str()
@@ -157,6 +181,9 @@ impl Store {
             {
                 return Err(SubscriptionError::Corrupt);
             }
+        }
+        for (key, bytes) in legacy_migrations {
+            durable.put_local(key, bytes)?;
         }
         Ok(Self {
             durable,
@@ -177,6 +204,45 @@ impl Store {
         &mut self,
         subscription_id: SubscriptionId,
         request: SubscriptionCreate,
+    ) -> Result<SubscriptionRecord, SubscriptionError> {
+        self.create_bound(subscription_id, request, None)
+    }
+
+    /// Creates a token-gated durable subscription bound to the exact session credential that
+    /// authorized it.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Authorization` when the common tenant resolver refuses the current token, plus
+    /// the same validation and persistence failures as [`Self::create`].
+    pub fn create_authorized(
+        &mut self,
+        sessions: &SessionRegistry,
+        token: &Token,
+        observability: &mut TenantObservability,
+        core_sequence: u64,
+        subscription_id: SubscriptionId,
+        request: SubscriptionCreate,
+    ) -> Result<SubscriptionRecord, SubscriptionError> {
+        let owner = subscription_owner(&request.scope)?;
+        let context = RequestContext {
+            surface: Surface::Subscription,
+            operation: Operation::SubscriptionCreate,
+            core_sequence,
+            supplied_header_tenant: None,
+            supplied_body_tenant: None,
+            target_owner: Some(owner),
+        };
+        tenant::resolve(token, sessions, &context, observability)
+            .map_err(SubscriptionError::Authorization)?;
+        self.create_bound(subscription_id, request, Some(token.credential()))
+    }
+
+    fn create_bound(
+        &mut self,
+        subscription_id: SubscriptionId,
+        request: SubscriptionCreate,
+        session: Option<SessionCredential>,
     ) -> Result<SubscriptionRecord, SubscriptionError> {
         self.validate_scope(&request.scope)?;
         validate_filter(&request.scope, &request.filter)?;
@@ -201,13 +267,22 @@ impl Store {
             current_delivery: Cursor::from(request.start),
             continuity: Continuity::Healthy,
             termination: None,
+            session,
         };
         self.persist(&record)?;
         self.records.insert(id, record.clone());
         Ok(record.public)
     }
 
-    /// Lists only records owned by the exact tenant, agent and capability scope.
+    pub(super) fn session_binding(
+        &self,
+        target: &SubscriptionTarget,
+    ) -> Result<Option<SessionCredential>, SubscriptionError> {
+        Ok(self.record_any(target)?.session.clone())
+    }
+
+    /// Lists only intentionally unbound records owned by the exact tenant, agent and capability
+    /// scope. Session-bound records require [`Self::list_authorized`].
     #[must_use]
     pub fn list(&self, scope: &SubscriptionScope) -> Vec<SubscriptionRecord> {
         if self.validate_scope(scope).is_err() {
@@ -215,9 +290,45 @@ impl Store {
         }
         self.records
             .values()
-            .filter(|record| record.public.scope == *scope && record.termination.is_none())
+            .filter(|record| {
+                record.public.scope == *scope
+                    && record.termination.is_none()
+                    && record.session.is_none()
+            })
             .map(|record| record.public.clone())
             .collect()
+    }
+
+    /// Lists only subscriptions bound to the exact current session credential after passing the
+    /// common resolver.
+    pub fn list_authorized(
+        &self,
+        sessions: &SessionRegistry,
+        token: &Token,
+        observability: &mut TenantObservability,
+        core_sequence: u64,
+        scope: &SubscriptionScope,
+    ) -> Result<Vec<SubscriptionRecord>, SubscriptionError> {
+        self.validate_scope(scope)?;
+        authorize_scope(
+            token,
+            sessions,
+            scope,
+            Operation::SubscriptionList,
+            core_sequence,
+            observability,
+        )?;
+        let credential = token.credential();
+        Ok(self
+            .records
+            .values()
+            .filter(|record| {
+                record.public.scope == *scope
+                    && record.termination.is_none()
+                    && record.session.as_ref() == Some(&credential)
+            })
+            .map(|record| record.public.clone())
+            .collect())
     }
 
     /// Reads one subscription without revealing cross-scope existence.
@@ -230,7 +341,35 @@ impl Store {
         &self,
         target: &SubscriptionTarget,
     ) -> Result<SubscriptionRecord, SubscriptionError> {
-        Ok(self.target(target)?.public.clone())
+        self.require_unbound_target(target)?;
+        self.get_inner(target)
+    }
+
+    /// Reads one session-bound subscription after reauthorizing its exact credential.
+    pub fn health_authorized(
+        &self,
+        sessions: &SessionRegistry,
+        token: &Token,
+        observability: &mut TenantObservability,
+        core_sequence: u64,
+        target: &SubscriptionTarget,
+    ) -> Result<SubscriptionRecord, SubscriptionError> {
+        self.authorize_target(
+            sessions,
+            token,
+            observability,
+            core_sequence,
+            target,
+            Operation::SubscriptionHealth,
+        )?;
+        self.get_inner(target)
+    }
+
+    pub(super) fn get_inner(
+        &self,
+        target: &SubscriptionTarget,
+    ) -> Result<SubscriptionRecord, SubscriptionError> {
+        Ok(self.target_inner(target)?.public.clone())
     }
 
     /// Records one strictly consecutive delivered cursor durably so a later
@@ -246,8 +385,17 @@ impl Store {
         target: &SubscriptionTarget,
         cursor: Cursor,
     ) -> Result<(), SubscriptionError> {
+        self.require_unbound_target(target)?;
+        self.mark_delivered_inner(target, cursor)
+    }
+
+    pub(super) fn mark_delivered_inner(
+        &mut self,
+        target: &SubscriptionTarget,
+        cursor: Cursor,
+    ) -> Result<(), SubscriptionError> {
         let id = target.subscription_id.as_str().to_owned();
-        let record = self.target(target)?;
+        let record = self.target_inner(target)?;
         if record.public.paused {
             return Err(SubscriptionError::Paused);
         }
@@ -285,12 +433,18 @@ impl Store {
         &mut self,
         acknowledgement: &CursorAcknowledgement,
     ) -> Result<SubscriptionRecord, SubscriptionError> {
-        let target = SubscriptionTarget {
-            scope: acknowledgement.scope.clone(),
-            subscription_id: acknowledgement.subscription_id.clone(),
-        };
+        let target = acknowledgement_target(acknowledgement);
+        self.require_unbound_target(&target)?;
+        self.acknowledge_inner(acknowledgement)
+    }
+
+    pub(super) fn acknowledge_inner(
+        &mut self,
+        acknowledgement: &CursorAcknowledgement,
+    ) -> Result<SubscriptionRecord, SubscriptionError> {
+        let target = acknowledgement_target(acknowledgement);
         let id = target.subscription_id.as_str().to_owned();
-        let record = self.target(&target)?;
+        let record = self.target_inner(&target)?;
         let current = Cursor::from(record.public.last_acknowledged);
         let received = Cursor::from(acknowledgement.cursor);
         if received < current {
@@ -312,6 +466,28 @@ impl Store {
         Ok(updated.public)
     }
 
+    /// Acknowledges one delivery on an exact session-bound subscription through the common
+    /// resolver.
+    pub fn acknowledge_authorized(
+        &mut self,
+        sessions: &SessionRegistry,
+        token: &Token,
+        observability: &mut TenantObservability,
+        core_sequence: u64,
+        acknowledgement: &CursorAcknowledgement,
+    ) -> Result<SubscriptionRecord, SubscriptionError> {
+        let target = acknowledgement_target(acknowledgement);
+        self.authorize_target(
+            sessions,
+            token,
+            observability,
+            core_sequence,
+            &target,
+            Operation::SubscriptionAcknowledge,
+        )?;
+        self.acknowledge_inner(acknowledgement)
+    }
+
     /// Pauses delivery durably.
     ///
     /// # Errors
@@ -322,7 +498,28 @@ impl Store {
         &mut self,
         target: &SubscriptionTarget,
     ) -> Result<SubscriptionRecord, SubscriptionError> {
-        self.set_paused(target, true)
+        self.require_unbound_target(target)?;
+        self.set_paused_inner(target, true)
+    }
+
+    /// Pauses one exact session-bound subscription through the common resolver.
+    pub fn pause_authorized(
+        &mut self,
+        sessions: &SessionRegistry,
+        token: &Token,
+        observability: &mut TenantObservability,
+        core_sequence: u64,
+        target: &SubscriptionTarget,
+    ) -> Result<SubscriptionRecord, SubscriptionError> {
+        self.authorize_target(
+            sessions,
+            token,
+            observability,
+            core_sequence,
+            target,
+            Operation::SubscriptionPause,
+        )?;
+        self.set_paused_inner(target, true)
     }
 
     /// Resumes delivery durably from the last acknowledged cursor.
@@ -335,7 +532,28 @@ impl Store {
         &mut self,
         target: &SubscriptionTarget,
     ) -> Result<SubscriptionRecord, SubscriptionError> {
-        self.set_paused(target, false)
+        self.require_unbound_target(target)?;
+        self.set_paused_inner(target, false)
+    }
+
+    /// Resumes one exact session-bound subscription through the common resolver.
+    pub fn resume_authorized(
+        &mut self,
+        sessions: &SessionRegistry,
+        token: &Token,
+        observability: &mut TenantObservability,
+        core_sequence: u64,
+        target: &SubscriptionTarget,
+    ) -> Result<SubscriptionRecord, SubscriptionError> {
+        self.authorize_target(
+            sessions,
+            token,
+            observability,
+            core_sequence,
+            target,
+            Operation::SubscriptionResume,
+        )?;
+        self.set_paused_inner(target, false)
     }
 
     /// Stops one exact-scope subscription while retaining its durable audit record.
@@ -345,8 +563,37 @@ impl Store {
     /// Returns `NotFound` for an unknown, foreign-scope, or already terminated subscription,
     /// or the `Durable` failure of persisting the retained audit record.
     pub fn delete(&mut self, target: &SubscriptionTarget) -> Result<(), SubscriptionError> {
-        self.terminate(target, Termination::Deleted)?;
+        self.require_unbound_target(target)?;
+        self.terminate_inner(target, Termination::Deleted)?;
         Ok(())
+    }
+
+    /// Deletes one exact session-bound subscription through the common resolver.
+    pub fn delete_authorized(
+        &mut self,
+        sessions: &SessionRegistry,
+        token: &Token,
+        observability: &mut TenantObservability,
+        core_sequence: u64,
+        target: &SubscriptionTarget,
+    ) -> Result<(), SubscriptionError> {
+        self.authorize_target(
+            sessions,
+            token,
+            observability,
+            core_sequence,
+            target,
+            Operation::SubscriptionDelete,
+        )?;
+        self.terminate_inner(target, Termination::Deleted)?;
+        Ok(())
+    }
+
+    pub(super) fn delete_inner(
+        &mut self,
+        target: &SubscriptionTarget,
+    ) -> Result<(), SubscriptionError> {
+        self.terminate_inner(target, Termination::Deleted)
     }
 
     /// Stops a subscription immediately for an owner revocation reason.
@@ -363,7 +610,7 @@ impl Store {
         if reason == Termination::Deleted {
             return Err(SubscriptionError::Corrupt);
         }
-        self.terminate(target, reason)
+        self.terminate_inner(target, reason)
     }
 
     /// Returns the retained terminal audit state without exposing another scope.
@@ -386,7 +633,17 @@ impl Store {
     /// Returns `NotFound` for an unknown identifier, a foreign scope, or a subscription
     /// already terminated.
     pub fn resume_cursor(&self, target: &SubscriptionTarget) -> Result<Cursor, SubscriptionError> {
-        Ok(Cursor::from(self.target(target)?.public.last_acknowledged))
+        self.require_unbound_target(target)?;
+        self.resume_cursor_inner(target)
+    }
+
+    pub(super) fn resume_cursor_inner(
+        &self,
+        target: &SubscriptionTarget,
+    ) -> Result<Cursor, SubscriptionError> {
+        Ok(Cursor::from(
+            self.target_inner(target)?.public.last_acknowledged,
+        ))
     }
 
     /// Returns the durable continuity state for the exact subscription scope.
@@ -396,7 +653,15 @@ impl Store {
     /// Returns `NotFound` for an unknown identifier, a foreign scope, or a subscription
     /// already terminated.
     pub fn continuity(&self, target: &SubscriptionTarget) -> Result<Continuity, SubscriptionError> {
-        Ok(self.target(target)?.continuity)
+        self.require_unbound_target(target)?;
+        self.continuity_inner(target)
+    }
+
+    pub(super) fn continuity_inner(
+        &self,
+        target: &SubscriptionTarget,
+    ) -> Result<Continuity, SubscriptionError> {
+        Ok(self.target_inner(target)?.continuity)
     }
 
     /// Blocks delivery at an explicit missing global-sequence range.
@@ -411,8 +676,18 @@ impl Store {
         missing_first: u64,
         missing_last: u64,
     ) -> Result<(), SubscriptionError> {
+        self.require_unbound_target(target)?;
+        self.block_gap_inner(target, missing_first, missing_last)
+    }
+
+    pub(super) fn block_gap_inner(
+        &mut self,
+        target: &SubscriptionTarget,
+        missing_first: u64,
+        missing_last: u64,
+    ) -> Result<(), SubscriptionError> {
         let id = target.subscription_id.as_str().to_owned();
-        let mut updated = self.target(target)?.clone();
+        let mut updated = self.target_inner(target)?.clone();
         updated.continuity = Continuity::GapBlocked {
             missing_first,
             missing_last,
@@ -435,8 +710,17 @@ impl Store {
         target: &SubscriptionTarget,
         recovered_through: Option<u64>,
     ) -> Result<(), SubscriptionError> {
+        self.require_unbound_target(target)?;
+        self.record_backfill_inner(target, recovered_through)
+    }
+
+    pub(super) fn record_backfill_inner(
+        &mut self,
+        target: &SubscriptionTarget,
+        recovered_through: Option<u64>,
+    ) -> Result<(), SubscriptionError> {
         let id = target.subscription_id.as_str().to_owned();
-        let mut updated = self.target(target)?.clone();
+        let mut updated = self.target_inner(target)?.clone();
         let Continuity::GapBlocked {
             missing_first,
             missing_last,
@@ -463,8 +747,16 @@ impl Store {
     /// Returns `Corrupt` unless a gap is currently blocked, `NotFound` outside the exact live
     /// scope, or the `Durable` persist failure.
     pub fn clear_gap(&mut self, target: &SubscriptionTarget) -> Result<(), SubscriptionError> {
+        self.require_unbound_target(target)?;
+        self.clear_gap_inner(target)
+    }
+
+    pub(super) fn clear_gap_inner(
+        &mut self,
+        target: &SubscriptionTarget,
+    ) -> Result<(), SubscriptionError> {
         let id = target.subscription_id.as_str().to_owned();
-        let mut updated = self.target(target)?.clone();
+        let mut updated = self.target_inner(target)?.clone();
         if !matches!(updated.continuity, Continuity::GapBlocked { .. }) {
             return Err(SubscriptionError::Corrupt);
         }
@@ -487,8 +779,19 @@ impl Store {
         oldest_available: u64,
         lost_through: u64,
     ) -> Result<(), SubscriptionError> {
+        self.require_unbound_target(target)?;
+        self.mark_truncated_inner(target, requested_from, oldest_available, lost_through)
+    }
+
+    pub(super) fn mark_truncated_inner(
+        &mut self,
+        target: &SubscriptionTarget,
+        requested_from: u64,
+        oldest_available: u64,
+        lost_through: u64,
+    ) -> Result<(), SubscriptionError> {
         let id = target.subscription_id.as_str().to_owned();
-        let mut updated = self.target(target)?.clone();
+        let mut updated = self.target_inner(target)?.clone();
         updated.continuity = Continuity::Truncated {
             requested_from,
             oldest_available,
@@ -511,20 +814,23 @@ impl Store {
         &self.durable
     }
 
-    fn set_paused(
+    fn set_paused_inner(
         &mut self,
         target: &SubscriptionTarget,
         paused: bool,
     ) -> Result<SubscriptionRecord, SubscriptionError> {
         let id = target.subscription_id.as_str().to_owned();
-        let mut updated = self.target(target)?.clone();
+        let mut updated = self.target_inner(target)?.clone();
         updated.public.paused = paused;
         self.persist(&updated)?;
         self.records.insert(id, updated.clone());
         Ok(updated.public)
     }
 
-    fn target(&self, target: &SubscriptionTarget) -> Result<&DurableRecord, SubscriptionError> {
+    fn target_inner(
+        &self,
+        target: &SubscriptionTarget,
+    ) -> Result<&DurableRecord, SubscriptionError> {
         let record = self.record_any(target)?;
         if record.termination.is_some() {
             Err(SubscriptionError::NotFound)
@@ -543,18 +849,55 @@ impl Store {
             .ok_or(SubscriptionError::NotFound)
     }
 
-    fn terminate(
+    fn terminate_inner(
         &mut self,
         target: &SubscriptionTarget,
         reason: Termination,
     ) -> Result<(), SubscriptionError> {
         let id = target.subscription_id.as_str().to_owned();
-        let mut updated = self.target(target)?.clone();
+        let mut updated = self.target_inner(target)?.clone();
         updated.public.paused = true;
         updated.delivered_unacknowledged.clear();
         updated.termination = Some(reason);
         self.persist(&updated)?;
         self.records.insert(id, updated);
+        Ok(())
+    }
+
+    pub(super) fn require_unbound_target(
+        &self,
+        target: &SubscriptionTarget,
+    ) -> Result<(), SubscriptionError> {
+        if self.record_any(target)?.session.is_some() {
+            Err(SubscriptionError::AuthorizationRequired)
+        } else {
+            Ok(())
+        }
+    }
+
+    pub(super) fn authorize_target(
+        &self,
+        sessions: &SessionRegistry,
+        token: &Token,
+        observability: &mut TenantObservability,
+        core_sequence: u64,
+        target: &SubscriptionTarget,
+        operation: Operation,
+    ) -> Result<(), SubscriptionError> {
+        authorize_scope(
+            token,
+            sessions,
+            &target.scope,
+            operation,
+            core_sequence,
+            observability,
+        )?;
+        let record = self.record_any(target)?;
+        if record.session.as_ref() != Some(&token.credential()) {
+            return Err(SubscriptionError::Authorization(
+                AuthorizationError::NotAuthorized,
+            ));
+        }
         Ok(())
     }
 
@@ -607,6 +950,44 @@ fn validate_filter(
     Ok(())
 }
 
+fn subscription_owner(scope: &SubscriptionScope) -> Result<ObjectOwner, SubscriptionError> {
+    let tenant = TenantId::new(scope.tenant.as_str())?;
+    let agent =
+        Did::new(scope.agent.as_str().as_bytes()).map_err(|_| SubscriptionError::InvalidScope)?;
+    Ok(ObjectOwner {
+        tenant,
+        agent: Some(agent),
+    })
+}
+
+fn acknowledgement_target(acknowledgement: &CursorAcknowledgement) -> SubscriptionTarget {
+    SubscriptionTarget {
+        scope: acknowledgement.scope.clone(),
+        subscription_id: acknowledgement.subscription_id.clone(),
+    }
+}
+
+fn authorize_scope(
+    token: &Token,
+    sessions: &SessionRegistry,
+    scope: &SubscriptionScope,
+    operation: Operation,
+    core_sequence: u64,
+    observability: &mut TenantObservability,
+) -> Result<(), SubscriptionError> {
+    let context = RequestContext {
+        surface: Surface::Subscription,
+        operation,
+        core_sequence,
+        supplied_header_tenant: None,
+        supplied_body_tenant: None,
+        target_owner: Some(subscription_owner(scope)?),
+    };
+    tenant::resolve(token, sessions, &context, observability)
+        .map(|_| ())
+        .map_err(SubscriptionError::Authorization)
+}
+
 fn subscription_key(tenant: TenantId, id: &SubscriptionId) -> Result<TenantKey, StoreError> {
     TenantKey::new(
         tenant,
@@ -622,6 +1003,21 @@ fn encode_record(record: &DurableRecord) -> Result<Vec<u8>, SubscriptionError> {
     push_string(&mut bytes, record.public.scope.tenant.as_str())?;
     push_string(&mut bytes, record.public.scope.agent.as_str())?;
     push_string(&mut bytes, record.public.scope.capability.as_str())?;
+    match &record.session {
+        None => bytes.push(0),
+        Some(credential) => {
+            if credential.tenant().as_str() != record.public.scope.tenant.as_str()
+                || credential.token_id() == [0; 32]
+                || credential.generation() == 0
+            {
+                return Err(SubscriptionError::Corrupt);
+            }
+            bytes.push(1);
+            bytes.extend_from_slice(&credential.session_id().0);
+            bytes.extend_from_slice(&credential.token_id());
+            bytes.extend_from_slice(&credential.generation().to_be_bytes());
+        }
+    }
     push_string(&mut bytes, record.public.delivery_target.as_str())?;
     bytes.extend_from_slice(&record.public.start.0 .0.to_be_bytes());
     bytes.extend_from_slice(&record.public.last_acknowledged.0 .0.to_be_bytes());
@@ -682,17 +1078,43 @@ fn encode_filter(
     Ok(())
 }
 
-fn decode_record(bytes: &[u8]) -> Result<DurableRecord, SubscriptionError> {
+fn decode_record(bytes: &[u8]) -> Result<(DurableRecord, bool), SubscriptionError> {
     let mut decoder = Decoder::new(bytes);
-    if decoder.take(4)? != RECORD_MAGIC {
-        return Err(SubscriptionError::Corrupt);
-    }
+    let has_session_binding = match decoder.take(4)? {
+        value if value == RECORD_MAGIC => true,
+        value if value == LEGACY_RECORD_MAGIC => false,
+        _ => return Err(SubscriptionError::Corrupt),
+    };
     let subscription_id =
         SubscriptionId::new(decoder.string()?).map_err(|_| SubscriptionError::Corrupt)?;
     let tenant = ApiTenantId::new(decoder.string()?).map_err(|_| SubscriptionError::Corrupt)?;
     let agent = AgentDid::new(decoder.string()?).map_err(|_| SubscriptionError::Corrupt)?;
     let capability =
         CapabilityId::new(decoder.string()?).map_err(|_| SubscriptionError::Corrupt)?;
+    let session = if has_session_binding {
+        match decoder.byte()? {
+            0 => None,
+            1 => {
+                let mut session_id = [0_u8; 32];
+                session_id.copy_from_slice(decoder.take(32)?);
+                let mut token_id = [0_u8; 32];
+                token_id.copy_from_slice(decoder.take(32)?);
+                let generation = decoder.u64()?;
+                if token_id == [0; 32] || generation == 0 {
+                    return Err(SubscriptionError::Corrupt);
+                }
+                Some(SessionCredential::new(
+                    TenantId::new(tenant.as_str()).map_err(|_| SubscriptionError::Corrupt)?,
+                    crate::session::SessionId(session_id),
+                    token_id,
+                    generation,
+                ))
+            }
+            _ => return Err(SubscriptionError::Corrupt),
+        }
+    } else {
+        None
+    };
     let delivery_target =
         DeliveryTarget::new(decoder.string()?).map_err(|_| SubscriptionError::Corrupt)?;
     let start = ApiCursor(Sequence(decoder.u64()?));
@@ -735,21 +1157,25 @@ fn decode_record(bytes: &[u8]) -> Result<DurableRecord, SubscriptionError> {
     {
         return Err(SubscriptionError::Corrupt);
     }
-    Ok(DurableRecord {
-        public: SubscriptionRecord {
-            subscription_id,
-            scope,
-            filter,
-            start,
-            last_acknowledged,
-            delivery_target,
-            paused: paused == 1,
+    Ok((
+        DurableRecord {
+            public: SubscriptionRecord {
+                subscription_id,
+                scope,
+                filter,
+                start,
+                last_acknowledged,
+                delivery_target,
+                paused: paused == 1,
+            },
+            delivered_unacknowledged,
+            current_delivery: Cursor::from(last_acknowledged),
+            continuity,
+            termination,
+            session,
         },
-        delivered_unacknowledged,
-        current_delivery: Cursor::from(last_acknowledged),
-        continuity,
-        termination,
-    })
+        !has_session_binding,
+    ))
 }
 
 fn encode_continuity(bytes: &mut Vec<u8>, continuity: Continuity) {

@@ -129,7 +129,7 @@ impl RealAgentLayer {
 
     fn daemon_open(&self, grant_id: [u8; 32]) -> bool {
         self.sessions
-            .get(SessionId(grant_id))
+            .get(&self.tenant, SessionId(grant_id))
             .is_some_and(|record| record.open)
     }
 
@@ -137,7 +137,13 @@ impl RealAgentLayer {
         self.installed.get(&grant_id).is_some_and(|installed| {
             installed
                 .token
-                .authorize(&self.tenant, &self.did, scope, self.core_sequence)
+                .authorize(
+                    &self.sessions,
+                    &self.tenant,
+                    &self.did,
+                    scope,
+                    self.core_sequence,
+                )
                 .is_ok()
         })
     }
@@ -271,6 +277,7 @@ impl AgentSessionContract for RealAgentLayer {
         close(
             &mut self.store,
             &mut self.sessions,
+            &self.tenant,
             SessionId(target.daemon_session_id),
         )
         .map_err(|_| AgentContractError::Refused("daemon close failed"))?;

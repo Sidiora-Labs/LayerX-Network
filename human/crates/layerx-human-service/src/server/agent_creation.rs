@@ -42,6 +42,7 @@ pub struct ProductionAgentCreation<'a> {
     timestamp_span: u64,
     fee_limit: u128,
     owner_primary_key: Option<[u8; 32]>,
+    latest_session_credential: Option<(zeroize::Zeroizing<[u8; 32]>, u64)>,
 }
 
 impl<'a> ProductionAgentCreation<'a> {
@@ -68,7 +69,15 @@ impl<'a> ProductionAgentCreation<'a> {
             timestamp_span,
             fee_limit,
             owner_primary_key: None,
+            latest_session_credential: None,
         })
+    }
+
+    pub fn take_latest_session_credential(&mut self) -> Result<([u8; 32], u64), AgentFailure> {
+        self.latest_session_credential
+            .take()
+            .map(|(token, generation)| (*token, generation))
+            .ok_or(AgentFailure::Refused("session token was not provisioned"))
     }
 
     fn submit_scoped(
@@ -501,7 +510,9 @@ impl ScopedAgentCreationContract for ProductionAgentCreation<'_> {
             authority_kind: 2,
             authority_id: issued.grant_id,
             session_id: request.action_key,
-            token_id: digest(&[b"layerx-human/agent-session-token/v1", &request.action_key]),
+            // The daemon owns bearer creation. Zero is a wire sentinel and is never installed as
+            // a credential; this keeps retries under the same action key byte-for-byte stable.
+            token_id: [0; 32],
             session_public_key: issued.session_public_key,
             registration_payload: issued.registration_payload.clone(),
             grantor: request.grantor,
@@ -538,14 +549,17 @@ impl ScopedAgentCreationContract for ProductionAgentCreation<'_> {
                 &install,
             )
             .map_err(map_boundary)?;
-        if installed.token_id != install.token_id
-            || installed.session_id != install.session_id
+        if installed.session_id != install.session_id
             || installed.observed_head_sequence < finalization.observed_sequence
         {
             return Err(AgentFailure::Refused(
                 "owner installation evidence differs from protocol grant",
             ));
         }
+        self.latest_session_credential = Some((
+            zeroize::Zeroizing::new(installed.token_id.expose()),
+            installed.generation,
+        ));
         Ok(AgentEvidence {
             action_key: request.action_key,
             object_id: issued.grant_id,

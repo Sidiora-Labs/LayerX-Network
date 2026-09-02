@@ -8,7 +8,7 @@ use std::os::unix::fs::MetadataExt;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock, Weak};
 use std::thread;
 use std::time::Duration;
 
@@ -351,6 +351,9 @@ pub enum EndpointFailure {
 #[derive(Clone, Debug)]
 pub struct StopSignal(Arc<AtomicU8>);
 
+#[derive(Clone, Debug)]
+pub(crate) struct StopWatcher(Weak<AtomicU8>);
+
 impl StopSignal {
     #[must_use]
     pub fn active() -> Self {
@@ -365,6 +368,24 @@ impl StopSignal {
     pub fn reason(&self) -> Option<Termination> {
         decode_termination(self.0.load(Ordering::Acquire))
     }
+
+    #[must_use]
+    pub(crate) fn watcher(&self) -> StopWatcher {
+        StopWatcher(Arc::downgrade(&self.0))
+    }
+}
+
+impl StopWatcher {
+    #[must_use]
+    pub(crate) fn live(&self) -> bool {
+        self.0.strong_count() != 0
+    }
+
+    pub(crate) fn stop(&self, reason: Termination) {
+        if let Some(signal) = self.0.upgrade() {
+            signal.store(encode_termination(reason), Ordering::Release);
+        }
+    }
 }
 
 /// Outbound delivery failures and durable retry decisions.
@@ -377,6 +398,7 @@ pub enum OutboundError {
         failure: EndpointFailure,
     },
     Stopped(Termination),
+    AuthorizationUnavailable,
     Authentication,
     Binding,
     Acknowledgement,
@@ -393,6 +415,9 @@ impl Display for OutboundError {
                 write!(formatter, "outbound retry scheduled after {failure:?}")
             }
             Self::Stopped(reason) => write!(formatter, "outbound delivery stopped: {reason:?}"),
+            Self::AuthorizationUnavailable => {
+                formatter.write_str("outbound authorization registry is unavailable")
+            }
             Self::Authentication => formatter.write_str("endpoint authentication failed"),
             Self::Binding => formatter.write_str("outbound payload binding failed"),
             Self::Acknowledgement => formatter.write_str("endpoint acknowledgement is invalid"),
@@ -431,6 +456,77 @@ pub fn deliver(
     stop: &StopSignal,
     now_ms: u64,
 ) -> Result<OutboundReceipt, OutboundError> {
+    engine.require_unbound()?;
+    let pending = exchange(engine, endpoint, authenticator, stop, now_ms)?;
+    finish_delivery(engine, pending, now_ms)
+}
+
+/// Delivers through the exact durable session binding, reauthorizing both before endpoint I/O and
+/// immediately before accepting the delivery. The registered stop signal also interrupts bounded
+/// I/O after a persist-before-publish revocation.
+pub fn deliver_authorized(
+    engine: &mut DeliveryEngine,
+    sessions: &crate::session::SessionRegistry,
+    endpoint: &Endpoint,
+    authenticator: &Authenticator,
+    core_sequence: u64,
+    observability: &mut crate::tenant::TenantObservability,
+    now_ms: u64,
+) -> Result<OutboundReceipt, OutboundError> {
+    authorize_engine(engine, sessions, core_sequence, observability)?;
+    let stop = engine
+        .authorization_stop()
+        .ok_or(OutboundError::Delivery(DeliveryError::UnboundSession))?;
+    let pending = exchange(engine, endpoint, authenticator, &stop, now_ms)?;
+    authorize_engine(engine, sessions, core_sequence, observability)?;
+    finish_delivery(engine, pending, now_ms)
+}
+
+/// Delivers with a shared registry, releasing the read lock during endpoint I/O so close,
+/// authority revocation, and scope restriction can durably advance the exact session generation.
+/// The registry is read again while the acknowledged item is accepted, making invalidation and
+/// completion mutually ordered.
+pub fn deliver_shared_authorized(
+    engine: &mut DeliveryEngine,
+    sessions: &RwLock<crate::session::SessionRegistry>,
+    endpoint: &Endpoint,
+    authenticator: &Authenticator,
+    core_sequence: u64,
+    observability: &mut crate::tenant::TenantObservability,
+    now_ms: u64,
+) -> Result<OutboundReceipt, OutboundError> {
+    {
+        let registry = sessions
+            .read()
+            .map_err(|_| OutboundError::AuthorizationUnavailable)?;
+        authorize_engine(engine, &registry, core_sequence, observability)?;
+    }
+    let stop = engine
+        .authorization_stop()
+        .ok_or(OutboundError::Delivery(DeliveryError::UnboundSession))?;
+    let pending = exchange(engine, endpoint, authenticator, &stop, now_ms)?;
+    let registry = sessions
+        .read()
+        .map_err(|_| OutboundError::AuthorizationUnavailable)?;
+    authorize_engine(engine, &registry, core_sequence, observability)?;
+    let result = finish_delivery(engine, pending, now_ms);
+    drop(registry);
+    result
+}
+
+struct PendingOutbound {
+    binding: [u8; 32],
+    peer: PeerIdentity,
+    item: DeliveryItem,
+}
+
+fn exchange(
+    engine: &mut DeliveryEngine,
+    endpoint: &Endpoint,
+    authenticator: &Authenticator,
+    stop: &StopSignal,
+    now_ms: u64,
+) -> Result<PendingOutbound, OutboundError> {
     if let Some(reason) = stop.reason() {
         apply_stop(engine, reason)?;
         return Err(OutboundError::Stopped(reason));
@@ -481,11 +577,41 @@ pub fn deliver(
         apply_stop(engine, reason)?;
         return Err(OutboundError::Stopped(reason));
     }
-    engine.accept_front(now_ms)?;
-    Ok(OutboundReceipt {
+    Ok(PendingOutbound {
         binding: frame.binding,
         peer: endpoint.expected_peer,
         item,
+    })
+}
+
+fn authorize_engine(
+    engine: &mut DeliveryEngine,
+    sessions: &crate::session::SessionRegistry,
+    core_sequence: u64,
+    observability: &mut crate::tenant::TenantObservability,
+) -> Result<(), OutboundError> {
+    match engine.authorize_boundary(
+        sessions,
+        crate::tenant::Operation::SubscriptionHealth,
+        core_sequence,
+        observability,
+    ) {
+        Ok(()) => Ok(()),
+        Err(DeliveryError::Revoked) => Err(OutboundError::Stopped(Termination::SessionRevoked)),
+        Err(error) => Err(OutboundError::Delivery(error)),
+    }
+}
+
+fn finish_delivery(
+    engine: &mut DeliveryEngine,
+    pending: PendingOutbound,
+    delivered_at_ms: u64,
+) -> Result<OutboundReceipt, OutboundError> {
+    engine.accept_front_inner(delivered_at_ms)?;
+    Ok(OutboundReceipt {
+        binding: pending.binding,
+        peer: pending.peer,
+        item: pending.item,
     })
 }
 

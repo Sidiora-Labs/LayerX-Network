@@ -5,6 +5,7 @@ mod error_contract;
 pub mod generated;
 #[path = "identity.rs"]
 mod identity_contract;
+mod operation_generated;
 #[path = "read.rs"]
 mod read_contract;
 #[path = "stream.rs"]
@@ -53,6 +54,7 @@ pub mod track {
     };
 }
 
+pub use operation_generated::Operation;
 pub use write_contract::SubmissionState;
 
 /// Verified read contract namespace.

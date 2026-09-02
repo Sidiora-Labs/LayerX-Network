@@ -49,6 +49,23 @@ pub fn ingest_local_restriction(
 /// when the buffer fills with source items still pending; durable read and
 /// subscription failures propagate.
 pub fn backfill(engine: &mut DeliveryEngine) -> Result<PumpReport, DeliveryError> {
+    engine.require_unbound()?;
+    delivery::pump(engine)
+}
+
+/// Loads durable history only after reauthorizing the exact bound session generation.
+pub fn backfill_authorized(
+    engine: &mut DeliveryEngine,
+    sessions: &crate::session::SessionRegistry,
+    core_sequence: u64,
+    observability: &mut crate::tenant::TenantObservability,
+) -> Result<PumpReport, DeliveryError> {
+    engine.authorize_boundary(
+        sessions,
+        crate::tenant::Operation::SubscriptionResume,
+        core_sequence,
+        observability,
+    )?;
     delivery::pump(engine)
 }
 
@@ -60,11 +77,44 @@ pub fn backfill(engine: &mut DeliveryEngine) -> Result<PumpReport, DeliveryError
 /// durable read and subscription failures of a refill; backpressure alone is not
 /// an error.
 pub fn deliver(engine: &mut DeliveryEngine) -> Result<Option<DeliveryItem>, DeliveryError> {
+    engine.require_unbound()?;
     delivery::delivery_attempt(engine)
 }
 
-/// Returns complete subscription delivery health including durable cursor and lag.
-#[must_use]
-pub fn health(engine: &DeliveryEngine) -> DeliveryHealth {
-    engine.health_snapshot().clone()
+/// Returns a delivery attempt only after reauthorizing the exact bound session generation.
+pub fn deliver_authorized(
+    engine: &mut DeliveryEngine,
+    sessions: &crate::session::SessionRegistry,
+    core_sequence: u64,
+    observability: &mut crate::tenant::TenantObservability,
+) -> Result<Option<DeliveryItem>, DeliveryError> {
+    engine.authorize_boundary(
+        sessions,
+        crate::tenant::Operation::SubscriptionHealth,
+        core_sequence,
+        observability,
+    )?;
+    delivery::delivery_attempt(engine)
+}
+
+/// Returns complete health for an intentionally unbound delivery engine.
+pub fn health(engine: &DeliveryEngine) -> Result<DeliveryHealth, DeliveryError> {
+    engine.require_unbound()?;
+    Ok(engine.health_snapshot().clone())
+}
+
+/// Returns complete subscription delivery health after reauthorizing the exact bound session.
+pub fn health_authorized(
+    engine: &mut DeliveryEngine,
+    sessions: &crate::session::SessionRegistry,
+    core_sequence: u64,
+    observability: &mut crate::tenant::TenantObservability,
+) -> Result<DeliveryHealth, DeliveryError> {
+    engine.authorize_boundary(
+        sessions,
+        crate::tenant::Operation::SubscriptionHealth,
+        core_sequence,
+        observability,
+    )?;
+    Ok(engine.health_snapshot().clone())
 }

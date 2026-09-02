@@ -2,8 +2,10 @@ use std::collections::BTreeMap;
 
 use layerx_types::ids::Did;
 
-use crate::session::{SessionError, SessionId, Token};
+use crate::session::{SessionError, SessionId, SessionRegistry, Token};
 use crate::store::TenantId;
+
+pub use layerx_agent_api::Operation;
 
 pub mod delete;
 #[path = "tenant/errors.rs"]
@@ -24,6 +26,22 @@ pub use isolation::{
     ChannelBinding, ChannelKind, Config, IsolationError, RedactionPolicy, Retention, SignerBinding,
     SignerMaterial, TenantIsolation,
 };
+
+macro_rules! enumerated {
+    (@count) => { 0_usize };
+    (@count $head:ident $($tail:ident)*) => { 1_usize + enumerated!(@count $($tail)*) };
+    ($(#[$meta:meta])* $name:ident { $($variant:ident),+ $(,)? }) => {
+        $(#[$meta])*
+        pub enum $name {
+            $($variant),+
+        }
+
+        impl $name {
+            /// Every variant, in declaration order.
+            pub const ALL: [Self; enumerated!(@count $($variant)+)] = [$(Self::$variant),+];
+        }
+    };
+}
 
 /// Produces the only public error, trace, and metric representation for an internal failure.
 pub fn normalize_error(
@@ -52,23 +70,146 @@ pub fn delete_tenant_data(
     delete::delete_tenant(store, tenant, policy, current_sequence, deletion_id)
 }
 
-/// Every public surface that must use the same authenticated tenant resolution.
+enumerated! {
+    /// Every public surface that must use the same authenticated tenant resolution.
+    #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+    Surface {
+        Contract,
+        RustSdk,
+        TypeScriptSdk,
+        PythonSdk,
+        Mcp,
+        Subscription,
+        Export,
+    }
+}
+
+/// Every class of token-gated operation dispatched through [`resolve`].
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub enum Surface {
-    Contract,
-    RustSdk,
-    TypeScriptSdk,
-    PythonSdk,
-    Mcp,
-    Subscription,
+pub enum OperationClass {
+    Read,
+    Subscribe,
+    Prepare,
     Export,
+    Approve,
+    Write,
+}
+
+impl OperationClass {
+    pub const ALL: [Self; 6] = [
+        Self::Read,
+        Self::Subscribe,
+        Self::Prepare,
+        Self::Export,
+        Self::Approve,
+        Self::Write,
+    ];
+
+    /// Classifies the generated Agent API operation inventory. Bootstrap operations that cannot
+    /// carry a pre-existing token are explicitly excluded. This exhaustive match makes adding a
+    /// schema operation a compile-time authorization decision.
+    #[must_use]
+    pub const fn for_operation(operation: Operation) -> Option<Self> {
+        match operation {
+            Operation::AgentRegister | Operation::SessionOpen => None,
+            Operation::ApprovalApprove
+            | Operation::ApprovalGet
+            | Operation::ApprovalList
+            | Operation::ApprovalReject => Some(Self::Approve),
+            Operation::ExportOffline => Some(Self::Export),
+            Operation::Prepare => Some(Self::Prepare),
+            Operation::SubscriptionAcknowledge
+            | Operation::SubscriptionCreate
+            | Operation::SubscriptionDelete
+            | Operation::SubscriptionHealth
+            | Operation::SubscriptionList
+            | Operation::SubscriptionPause
+            | Operation::SubscriptionResume => Some(Self::Subscribe),
+            Operation::AvailabilityFetch
+            | Operation::BudgetList
+            | Operation::BudgetReconciliation
+            | Operation::CapabilityList
+            | Operation::ProgramActivity
+            | Operation::ProgramDiscover
+            | Operation::ProgramInterface
+            | Operation::ProgramReceipt
+            | Operation::ProgramSimulate
+            | Operation::Project
+            | Operation::ReadAccount
+            | Operation::ReadBalance
+            | Operation::ReadBatch
+            | Operation::ReadCheckpoint
+            | Operation::ReadHistory
+            | Operation::ReadModuleState
+            | Operation::ReadProofBundle
+            | Operation::SessionList => Some(Self::Read),
+            Operation::BudgetCreate
+            | Operation::BudgetFund
+            | Operation::BudgetRevoke
+            | Operation::CapabilityAttenuate
+            | Operation::CapabilityCreate
+            | Operation::CapabilityRevoke
+            | Operation::ProgramCall
+            | Operation::SessionClose
+            | Operation::SessionRefresh
+            | Operation::Sign
+            | Operation::Submit
+            | Operation::Track
+            | Operation::Wait => Some(Self::Write),
+        }
+    }
+
+    /// Returns the server-owned scope set for an operation. Broad class scopes are canonical;
+    /// established MCP tool scopes remain explicit aliases and cannot be selected by a request.
+    #[must_use]
+    pub const fn authorized_scopes(operation: Operation) -> &'static [&'static str] {
+        match operation {
+            Operation::ReadBalance => &["read", "read:balance"],
+            Operation::ReadHistory => &["read", "read:history"],
+            Operation::ProgramDiscover
+            | Operation::ProgramInterface
+            | Operation::ProgramActivity => &["read", "program:read"],
+            Operation::ProgramReceipt => &["read", "program:read", "read:receipt"],
+            Operation::ProgramSimulate => &["read", "program:simulate"],
+            Operation::ProgramCall => &["write", "program:call"],
+            Operation::ReadCheckpoint => &["read", "read:checkpoint"],
+            Operation::ReadProofBundle => &["read", "read:proof"],
+            Operation::AvailabilityFetch => &["read", "read:availability"],
+            Operation::Prepare => &["prepare", "write:prepare", "write:disclose"],
+            Operation::Sign => &["write", "write:sign"],
+            Operation::Submit => &["write", "write:submit"],
+            Operation::Track => &["write", "write:track"],
+            operation => match Self::for_operation(operation) {
+                Some(Self::Read) => &["read"],
+                Some(Self::Subscribe) => &["subscribe"],
+                Some(Self::Prepare) => &["prepare"],
+                Some(Self::Export) => &["export"],
+                Some(Self::Approve) => &["approve"],
+                Some(Self::Write) => &["write"],
+                None => &[],
+            },
+        }
+    }
+
+    /// Returns the scope a token must carry for this operation class.
+    #[must_use]
+    pub const fn scope(self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::Subscribe => "subscribe",
+            Self::Prepare => "prepare",
+            Self::Export => "export",
+            Self::Approve => "approve",
+            Self::Write => "write",
+        }
+    }
 }
 
 /// Untrusted request metadata and the trusted owner loaded for its target.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RequestContext {
     pub surface: Surface,
-    pub operation: String,
+    pub operation: Operation,
     pub core_sequence: u64,
     pub supplied_header_tenant: Option<TenantId>,
     pub supplied_body_tenant: Option<TenantId>,
@@ -96,6 +237,7 @@ pub enum AuthorizationOutcome {
     NotAuthorized,
     ScopeDenied,
     Expired,
+    Revoked,
     InvalidRequest,
 }
 
@@ -104,6 +246,7 @@ pub enum AuthorizationError {
     NotAuthorized,
     ScopeDenied,
     Expired,
+    Revoked,
     InvalidRequest,
 }
 
@@ -113,18 +256,33 @@ impl AuthorizationError {
             Self::NotAuthorized => AuthorizationOutcome::NotAuthorized,
             Self::ScopeDenied => AuthorizationOutcome::ScopeDenied,
             Self::Expired => AuthorizationOutcome::Expired,
+            Self::Revoked => AuthorizationOutcome::Revoked,
             Self::InvalidRequest => AuthorizationOutcome::InvalidRequest,
         }
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct TenantAuditEntry {
     pub tenant: TenantId,
-    pub token_id: [u8; 32],
+    /// Domain-separated SHA-256 correlation digest, never the raw bearer identifier.
+    pub token_correlation: [u8; 32],
     pub surface: Surface,
     pub operation: String,
     pub outcome: AuthorizationOutcome,
+}
+
+impl std::fmt::Debug for TenantAuditEntry {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("TenantAuditEntry")
+            .field("tenant", &self.tenant)
+            .field("token_correlation", &"[REDACTED]")
+            .field("surface", &self.surface)
+            .field("operation", &self.operation)
+            .field("outcome", &self.outcome)
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -176,7 +334,7 @@ impl TenantObservability {
         let tenant = token.tenant().clone();
         self.audit.push(TenantAuditEntry {
             tenant: tenant.clone(),
-            token_id: token.token_id(),
+            token_correlation: token.audit_correlation(),
             surface,
             operation: operation.to_owned(),
             outcome,
@@ -199,60 +357,66 @@ impl TenantObservability {
     }
 }
 
-/// Resolves the tenant and agent exclusively from the authenticated token.
+/// Resolves the tenant and agent exclusively from the authenticated token against the current
+/// session registry view.
 ///
 /// # Errors
 ///
 /// Returns `InvalidRequest` for an empty, oversized, or NUL-bearing operation,
-/// `ScopeDenied` or `Expired` from the token authorization, and `NotAuthorized`
-/// for any other session failure or a target owned by another principal.
+/// `ScopeDenied`, `Expired` or `Revoked` from the token authorization, and
+/// `NotAuthorized` for any other session failure or a target owned by another principal.
 pub fn resolve(
     token: &Token,
+    sessions: &SessionRegistry,
     request: &RequestContext,
     observability: &mut TenantObservability,
 ) -> Result<ResolvedPrincipal, AuthorizationError> {
-    if request.operation.is_empty()
-        || request.operation.len() > 255
-        || request.operation.as_bytes().contains(&0)
-    {
+    let authorized_scopes = OperationClass::authorized_scopes(request.operation);
+    if authorized_scopes.is_empty() {
         let error = AuthorizationError::InvalidRequest;
-        observability.record(token, request.surface, &request.operation, error.outcome());
+        observability.record(
+            token,
+            request.surface,
+            request.operation.name(),
+            error.outcome(),
+        );
         return Err(error);
     }
-    let authorization = token.authorize(
-        token.tenant(),
-        token.agent(),
-        &request.operation,
-        request.core_sequence,
-    );
+    let authorization =
+        token.authorize_any_scope(sessions, authorized_scopes, request.core_sequence);
     let session_id = match authorization {
         Ok(session_id) => session_id,
-        Err(SessionError::ScopeDenied) => {
-            let error = AuthorizationError::ScopeDenied;
-            observability.record(token, request.surface, &request.operation, error.outcome());
-            return Err(error);
-        }
-        Err(SessionError::Expired) => {
-            let error = AuthorizationError::Expired;
-            observability.record(token, request.surface, &request.operation, error.outcome());
-            return Err(error);
-        }
-        Err(_) => {
-            let error = AuthorizationError::NotAuthorized;
-            observability.record(token, request.surface, &request.operation, error.outcome());
+        Err(failure) => {
+            let error = match failure {
+                SessionError::ScopeDenied => AuthorizationError::ScopeDenied,
+                SessionError::Expired => AuthorizationError::Expired,
+                SessionError::Revoked => AuthorizationError::Revoked,
+                _ => AuthorizationError::NotAuthorized,
+            };
+            observability.record(
+                token,
+                request.surface,
+                request.operation.name(),
+                error.outcome(),
+            );
             return Err(error);
         }
     };
     if let Some(owner) = &request.target_owner {
         if let Err(error) = require_owner(token.tenant(), token.agent(), owner) {
-            observability.record(token, request.surface, &request.operation, error.outcome());
+            observability.record(
+                token,
+                request.surface,
+                request.operation.name(),
+                error.outcome(),
+            );
             return Err(error);
         }
     }
     observability.record(
         token,
         request.surface,
-        &request.operation,
+        request.operation.name(),
         AuthorizationOutcome::Allowed,
     );
     Ok(ResolvedPrincipal {

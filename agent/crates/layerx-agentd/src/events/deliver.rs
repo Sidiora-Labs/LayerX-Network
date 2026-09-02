@@ -11,10 +11,17 @@ use layerx_agent_api::Sequence;
 use sha2::{Digest, Sha256};
 
 use super::ingestion::{durable_event, durable_sequences, IngestError};
+use super::outbound::StopSignal;
 use super::subscription::{
     Continuity, Cursor, Store as SubscriptionStore, SubscriptionError, Termination,
 };
+use crate::session::{SessionRegistry, Token};
 use crate::store::TenantId;
+use crate::tenant::{
+    self, AuthorizationError, ObjectOwner, Operation, OperationClass, RequestContext, Surface,
+    TenantObservability,
+};
+use layerx_types::ids::Did;
 
 /// Public consumer contract for the at-least-once delivery interface.
 pub const CONSUMER_DEDUPLICATION_OBLIGATION: &str =
@@ -115,6 +122,10 @@ pub enum DeliveryError {
     RetryExhausted { attempts: u32 },
     Ingest(IngestError),
     Subscription(SubscriptionError),
+    Authorization(AuthorizationError),
+    AuthorizationRequired,
+    UnboundSession,
+    Revoked,
 }
 
 impl Display for DeliveryError {
@@ -142,6 +153,14 @@ impl Display for DeliveryError {
             }
             Self::Ingest(error) => Display::fmt(error, formatter),
             Self::Subscription(error) => Display::fmt(error, formatter),
+            Self::Authorization(error) => {
+                write!(formatter, "delivery authorization failed: {error:?}")
+            }
+            Self::AuthorizationRequired => {
+                formatter.write_str("session-bound subscription requires an authorized boundary")
+            }
+            Self::UnboundSession => formatter.write_str("subscription has no session binding"),
+            Self::Revoked => formatter.write_str("subscription session was revoked"),
         }
     }
 }
@@ -175,6 +194,13 @@ pub struct DeliveryEngine {
     retry_policy: RetryPolicy,
     consecutive_failures: u32,
     health: DeliveryHealth,
+    authorization: Option<DeliveryAuthorization>,
+}
+
+#[derive(Debug)]
+struct DeliveryAuthorization {
+    token: Token,
+    stop: StopSignal,
 }
 
 impl DeliveryEngine {
@@ -193,14 +219,27 @@ impl DeliveryEngine {
         capacity: usize,
         retry_policy: RetryPolicy,
     ) -> Result<Self, DeliveryError> {
+        if subscriptions.session_binding(&target)?.is_some() {
+            return Err(DeliveryError::AuthorizationRequired);
+        }
+        Self::open_inner(subscriptions, target, live_start, capacity, retry_policy)
+    }
+
+    fn open_inner(
+        subscriptions: SubscriptionStore,
+        target: SubscriptionTarget,
+        live_start: u64,
+        capacity: usize,
+        retry_policy: RetryPolicy,
+    ) -> Result<Self, DeliveryError> {
         if capacity == 0 {
             return Err(DeliveryError::InvalidCapacity);
         }
         let retry_policy = retry_policy.validate()?;
-        let record = subscriptions.get(&target)?;
+        let record = subscriptions.get_inner(&target)?;
         let tenant = TenantId::new(record.scope.tenant.as_str())
             .map_err(|_| DeliveryError::InvalidTenant)?;
-        let next_sequence = subscriptions.resume_cursor(&target)?.0;
+        let next_sequence = subscriptions.resume_cursor_inner(&target)?.0;
         Ok(Self {
             subscriptions,
             target,
@@ -221,12 +260,92 @@ impl DeliveryEngine {
                 failure_count: 0,
                 last_error: None,
             },
+            authorization: None,
         })
+    }
+
+    /// Opens a token-gated delivery engine only when the durable subscription binding exactly
+    /// matches the current token and registers a generation-specific revocation signal.
+    pub fn open_authorized(
+        subscriptions: SubscriptionStore,
+        target: SubscriptionTarget,
+        live_start: u64,
+        capacity: usize,
+        retry_policy: RetryPolicy,
+        sessions: &mut SessionRegistry,
+        token: Token,
+        observability: &mut TenantObservability,
+        core_sequence: u64,
+    ) -> Result<Self, DeliveryError> {
+        let binding = subscriptions
+            .session_binding(&target)?
+            .ok_or(DeliveryError::UnboundSession)?;
+        if binding != token.credential() {
+            return Err(DeliveryError::Revoked);
+        }
+        authorize_subscription(
+            &token,
+            sessions,
+            &target,
+            Operation::SubscriptionResume,
+            core_sequence,
+            observability,
+        )?;
+        let mut engine =
+            Self::open_inner(subscriptions, target, live_start, capacity, retry_policy)?;
+        let stop = sessions
+            .revocation_stop(&token)
+            .map_err(|_| DeliveryError::Revoked)?;
+        engine.authorization = Some(DeliveryAuthorization { token, stop });
+        Ok(engine)
+    }
+
+    /// Re-resolves an authorized subscription at one pump, delivery, or completion boundary.
+    pub fn authorize_boundary(
+        &mut self,
+        sessions: &SessionRegistry,
+        operation: Operation,
+        core_sequence: u64,
+        observability: &mut TenantObservability,
+    ) -> Result<(), DeliveryError> {
+        self.check_registered_stop()?;
+        let token = self
+            .authorization
+            .as_ref()
+            .ok_or(DeliveryError::UnboundSession)?
+            .token
+            .clone();
+        match authorize_subscription(
+            &token,
+            sessions,
+            &self.target,
+            operation,
+            core_sequence,
+            observability,
+        ) {
+            Ok(()) => Ok(()),
+            Err(DeliveryError::Authorization(AuthorizationError::Revoked))
+            | Err(DeliveryError::Revoked) => {
+                if let Some(authorization) = &self.authorization {
+                    authorization.stop.stop(Termination::SessionRevoked);
+                }
+                self.stop_revoked(Termination::SessionRevoked)?;
+                Err(DeliveryError::Revoked)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    #[must_use]
+    pub fn authorization_stop(&self) -> Option<StopSignal> {
+        self.authorization
+            .as_ref()
+            .map(|authorization| authorization.stop.clone())
     }
 
     /// Returns the current health without exposing another subscription.
     #[must_use]
-    pub const fn health_snapshot(&self) -> &DeliveryHealth {
+    pub(super) const fn health_snapshot(&self) -> &DeliveryHealth {
         &self.health
     }
 
@@ -250,6 +369,15 @@ impl DeliveryEngine {
     /// Returns `NoPendingDelivery` for an empty buffer, and the continuity, subscription, or
     /// durable history failure raised while recording the delivered cursor or refreshing health.
     pub fn accept_front(&mut self, delivered_at_ms: u64) -> Result<DeliveryItem, DeliveryError> {
+        self.require_unbound()?;
+        self.accept_front_inner(delivered_at_ms)
+    }
+
+    pub(super) fn accept_front_inner(
+        &mut self,
+        delivered_at_ms: u64,
+    ) -> Result<DeliveryItem, DeliveryError> {
+        self.check_registered_stop()?;
         let item = self
             .buffer
             .front()
@@ -258,7 +386,7 @@ impl DeliveryEngine {
         match &item {
             DeliveryItem::Event(event) => {
                 self.subscriptions
-                    .mark_delivered(&self.target, Cursor::from(event.delivery.cursor))?;
+                    .mark_delivered_inner(&self.target, Cursor::from(event.delivery.cursor))?;
                 self.health.last_delivery_at_ms = Some(delivered_at_ms);
             }
             DeliveryItem::BackfillComplete(_) => {
@@ -324,9 +452,51 @@ impl DeliveryEngine {
         &mut self,
         acknowledgement: &CursorAcknowledgement,
     ) -> Result<SubscriptionRecord, DeliveryError> {
-        let record = self.subscriptions.acknowledge(acknowledgement)?;
+        self.require_unbound()?;
+        self.acknowledge_inner(acknowledgement)
+    }
+
+    fn acknowledge_inner(
+        &mut self,
+        acknowledgement: &CursorAcknowledgement,
+    ) -> Result<SubscriptionRecord, DeliveryError> {
+        let record = self.subscriptions.acknowledge_inner(acknowledgement)?;
         self.refresh_health()?;
         Ok(record)
+    }
+
+    /// Reauthorizes and durably acknowledges through the common tenant resolver.
+    pub fn acknowledge_authorized(
+        &mut self,
+        sessions: &SessionRegistry,
+        acknowledgement: &CursorAcknowledgement,
+        core_sequence: u64,
+        observability: &mut TenantObservability,
+    ) -> Result<SubscriptionRecord, DeliveryError> {
+        self.authorize_boundary(
+            sessions,
+            Operation::SubscriptionAcknowledge,
+            core_sequence,
+            observability,
+        )?;
+        self.acknowledge_inner(acknowledgement)
+    }
+
+    /// Reauthorizes immediately before accepting the current front delivery.
+    pub fn accept_front_authorized(
+        &mut self,
+        sessions: &SessionRegistry,
+        delivered_at_ms: u64,
+        core_sequence: u64,
+        observability: &mut TenantObservability,
+    ) -> Result<DeliveryItem, DeliveryError> {
+        self.authorize_boundary(
+            sessions,
+            Operation::SubscriptionHealth,
+            core_sequence,
+            observability,
+        )?;
+        self.accept_front_inner(delivered_at_ms)
     }
 
     /// Consumes delivery state and returns the subscription store.
@@ -343,7 +513,7 @@ impl DeliveryEngine {
     /// deletion.
     pub fn stop_deleted(&mut self) -> Result<(), DeliveryError> {
         if self.subscriptions.termination(&self.target)? != Some(Termination::Deleted) {
-            self.subscriptions.delete(&self.target)?;
+            self.subscriptions.delete_inner(&self.target)?;
         }
         self.buffer.clear();
         Ok(())
@@ -370,6 +540,7 @@ impl DeliveryEngine {
     }
 
     fn pump(&mut self) -> Result<PumpReport, DeliveryError> {
+        self.check_registered_stop()?;
         let sequences = self.eligible_sequences()?;
         let mut backfill_events = 0;
         let mut live_events = 0;
@@ -467,7 +638,7 @@ impl DeliveryEngine {
             .last()
             .copied()
             .map_or(self.next_sequence, |sequence| sequence.saturating_add(1));
-        let acknowledged = self.subscriptions.resume_cursor(&self.target)?.0;
+        let acknowledged = self.subscriptions.resume_cursor_inner(&self.target)?.0;
         self.health.acknowledged_cursor = Cursor(acknowledged);
         self.health.lag_sequences = head.saturating_sub(acknowledged);
         self.health.lagging = self.health.lag_sequences > 0
@@ -477,12 +648,13 @@ impl DeliveryEngine {
     }
 
     fn eligible_sequences(&self) -> Result<Vec<u64>, DeliveryError> {
-        if self.subscriptions.continuity(&self.target)? != Continuity::Healthy {
+        if self.subscriptions.continuity_inner(&self.target)? != Continuity::Healthy {
             return Err(DeliveryError::ContinuityBlocked);
         }
         // The tenant is fixed by the structurally scoped durable store and the
         // exact subscription target was resolved before its narrowing filter.
-        let filter = &self.subscriptions.get(&self.target)?.filter;
+        let record = self.subscriptions.get_inner(&self.target)?;
+        let filter = &record.filter;
         let mut eligible = Vec::new();
         for sequence in durable_sequences(self.subscriptions.durable(), &self.tenant)? {
             let event = durable_event(self.subscriptions.durable(), &self.tenant, sequence)?;
@@ -491,6 +663,37 @@ impl DeliveryEngine {
             }
         }
         Ok(eligible)
+    }
+
+    fn check_registered_stop(&mut self) -> Result<(), DeliveryError> {
+        let reason = self
+            .authorization
+            .as_ref()
+            .and_then(|authorization| authorization.stop.reason());
+        if let Some(reason) = reason {
+            match reason {
+                Termination::SessionRevoked => {
+                    self.stop_revoked(reason)?;
+                    Err(DeliveryError::Revoked)
+                }
+                other => {
+                    self.stop_revoked(other)?;
+                    Err(DeliveryError::Authorization(
+                        AuthorizationError::NotAuthorized,
+                    ))
+                }
+            }
+        } else {
+            Ok(())
+        }
+    }
+
+    pub(super) fn require_unbound(&self) -> Result<(), DeliveryError> {
+        if self.authorization.is_some() {
+            Err(DeliveryError::AuthorizationRequired)
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -501,6 +704,7 @@ pub(super) fn pump(engine: &mut DeliveryEngine) -> Result<PumpReport, DeliveryEr
 pub(super) fn delivery_attempt(
     engine: &mut DeliveryEngine,
 ) -> Result<Option<DeliveryItem>, DeliveryError> {
+    engine.check_registered_stop()?;
     if engine.buffer.is_empty() {
         match engine.pump() {
             Ok(_) | Err(DeliveryError::Backpressure { .. }) => {}
@@ -508,6 +712,40 @@ pub(super) fn delivery_attempt(
         }
     }
     Ok(engine.buffer.front().cloned())
+}
+
+fn authorize_subscription(
+    token: &Token,
+    sessions: &SessionRegistry,
+    target: &SubscriptionTarget,
+    operation: Operation,
+    core_sequence: u64,
+    observability: &mut TenantObservability,
+) -> Result<(), DeliveryError> {
+    if OperationClass::for_operation(operation) != Some(OperationClass::Subscribe) {
+        return Err(DeliveryError::Authorization(
+            AuthorizationError::InvalidRequest,
+        ));
+    }
+    let owner = ObjectOwner {
+        tenant: TenantId::new(target.scope.tenant.as_str())
+            .map_err(|_| DeliveryError::InvalidTenant)?,
+        agent: Some(
+            Did::new(target.scope.agent.as_str().as_bytes())
+                .map_err(|_| DeliveryError::InvalidTenant)?,
+        ),
+    };
+    let request = RequestContext {
+        surface: Surface::Subscription,
+        operation,
+        core_sequence,
+        supplied_header_tenant: None,
+        supplied_body_tenant: None,
+        target_owner: Some(owner),
+    };
+    tenant::resolve(token, sessions, &request, observability)
+        .map(|_| ())
+        .map_err(DeliveryError::Authorization)
 }
 
 fn event_identity(sequence: u64, canonical_bytes: &[u8]) -> EventIdentity {

@@ -14,7 +14,7 @@ use layerx_agent_api::subscription::{
 use layerx_agent_api::Sequence;
 use layerx_agentd::events::subscription::Store as SubscriptionStore;
 use layerx_agentd::events::{
-    backfill, deliver, ingest, CoreEvent, DeliveryEngine, DeliveryError, DeliveryItem,
+    backfill, deliver, health, ingest, CoreEvent, DeliveryEngine, DeliveryError, DeliveryItem,
     DeliveryPhase, EventAttributes, EventIngestor, RetryPolicy, CONSUMER_DEDUPLICATION_OBLIGATION,
 };
 use layerx_agentd::store::{Store, TenantId};
@@ -294,7 +294,8 @@ fn loaded_seam_is_ordered_observable_and_has_no_duplicate() {
     ];
     assert_eq!(order, expected);
     assert!(delivery.seam_confirmed());
-    assert_eq!(delivery.health_snapshot().lag_sequences, 0);
+    let snapshot = health(&delivery).unwrap_or_else(|error| panic!("health: {error}"));
+    assert_eq!(snapshot.lag_sequences, 0);
     assert!(CONSUMER_DEDUPLICATION_OBLIGATION.contains("must deduplicate"));
     let _ = fs::remove_dir_all(root);
 }
@@ -327,8 +328,9 @@ fn stalled_consumer_keeps_the_seam_and_event_under_bounded_retry() {
         delivery.fail_front(300, "still unavailable"),
         Err(DeliveryError::RetryExhausted { attempts: 2 })
     ));
-    assert!(delivery.health_snapshot().lagging);
-    assert_eq!(delivery.health_snapshot().failure_count, 2);
+    let snapshot = health(&delivery).unwrap_or_else(|error| panic!("health: {error}"));
+    assert!(snapshot.lagging);
+    assert_eq!(snapshot.failure_count, 2);
     assert!(matches!(
         deliver(&mut delivery),
         Ok(Some(DeliveryItem::Event(ref event))) if *event == first

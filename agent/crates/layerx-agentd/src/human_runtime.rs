@@ -1,7 +1,7 @@
 //! Production operation owner for the authenticated Human-to-agent boundary.
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 
 use layerx_client::evidence::{CheckpointSelector, EvidenceError, ProofBundleSelector};
 use layerx_client::receipt::{Lookup, ReceiptSelector};
@@ -42,11 +42,12 @@ use crate::prepare::{
     ProductionCorePreparationBoundary,
 };
 use crate::session::{self, OpenRequest, SessionId, SessionRegistry};
+use crate::session_control::SessionControl;
 use crate::session_keys::SessionKeyRegistry;
 use crate::sign::{
     attach_external_signature, validate_issued_session, verify_before_submit, ProvisionedSessionKey,
 };
-use crate::store::{key, ObjectKind, StorageClass, Store, TenantId};
+use crate::store::{key, ObjectKind, StorageClass, Store, TenantId, TenantKey};
 
 const MAX_RESPONSE: usize = 1_048_576;
 
@@ -652,14 +653,15 @@ struct CachedPreparation {
 /// construct short-lived adapters borrowing these owners; none opens a second
 /// store or maintains an independent approval/budget/session universe.
 pub struct UnifiedAgentOwner<A> {
-    operations: ProductionHumanOperations<A>,
+    operations: Arc<Mutex<ProductionHumanOperations<A>>>,
     store: Arc<Mutex<Store>>,
-    pub approvals: ApprovalRegistry,
-    pub approval_queue: ApprovalSubmissionQueue,
-    pub approval_expiry: ApprovalExpiry,
-    pub budgets: BudgetLimiter,
-    pub preparation_lifecycle: PreparationLifecycle,
-    pub sessions: SessionRegistry,
+    pub approvals: Arc<ApprovalRegistry>,
+    pub approval_queue: Arc<ApprovalSubmissionQueue>,
+    pub approval_expiry: Arc<ApprovalExpiry>,
+    pub budgets: Arc<BudgetLimiter>,
+    pub preparation_lifecycle: Arc<PreparationLifecycle>,
+    pub sessions: Arc<RwLock<SessionRegistry>>,
+    pub session_control: SessionControl,
     pub session_keys: SessionKeyRegistry,
     pub degraded: Controller,
 }
@@ -675,10 +677,11 @@ impl<A: HumanAuthorityBoundary> UnifiedAgentOwner<A> {
         if verified_limits.is_empty() {
             return Err(HumanOperationError::Refused);
         }
-        let approvals = ApprovalRegistry::with_store(Arc::clone(&shared_store));
-        let budgets =
-            BudgetLimiter::new(verified_limits).map_err(|_| HumanOperationError::Refused)?;
-        let approval_queue = ApprovalSubmissionQueue::default();
+        let approvals = Arc::new(ApprovalRegistry::with_store(Arc::clone(&shared_store)));
+        let budgets = Arc::new(
+            BudgetLimiter::new(verified_limits).map_err(|_| HumanOperationError::Refused)?,
+        );
+        let approval_queue = Arc::new(ApprovalSubmissionQueue::default());
         let mut replayed = std::collections::BTreeSet::new();
         for (uid, (principal, tenant)) in peers {
             if replayed.insert(tenant.clone()) {
@@ -724,48 +727,73 @@ impl<A: HumanAuthorityBoundary> UnifiedAgentOwner<A> {
             }
         }
         operations.unified_owner_active = true;
+        {
+            let store = shared_store
+                .lock()
+                .map_err(|_| HumanOperationError::Unavailable)?;
+            for tenant in store.tenant_ids_for_kind(ObjectKind::Session) {
+                replayed.insert(tenant.as_str().to_owned());
+            }
+        }
         let mut sessions = SessionRegistry::default();
         {
             let store = shared_store
                 .lock()
                 .map_err(|_| HumanOperationError::Unavailable)?;
             for tenant in &replayed {
+                let tenant_id =
+                    TenantId::new(tenant.clone()).map_err(|_| HumanOperationError::Refused)?;
                 sessions
-                    .restore_tenant(
-                        &store,
-                        &TenantId::new(tenant.clone()).map_err(|_| HumanOperationError::Refused)?,
-                    )
+                    .restore_tenant(&store, &tenant_id)
                     .map_err(|_| HumanOperationError::Refused)?;
+                managed_agent::validate_session_coordinates(&store, &sessions, &tenant_id)?;
             }
         }
         session_keys
             .probe()
             .map_err(|_| HumanOperationError::Unavailable)?;
+        let preparation_lifecycle = Arc::new(PreparationLifecycle::default());
+        let session_control = SessionControl::new(
+            Arc::clone(&shared_store),
+            sessions,
+            Arc::clone(&preparation_lifecycle),
+            Arc::clone(&budgets),
+        );
+        let sessions = session_control.registry();
         Ok(Self {
-            operations,
+            operations: Arc::new(Mutex::new(operations)),
             store: Arc::clone(&shared_store),
             approvals,
             approval_queue,
-            approval_expiry: ApprovalExpiry::from_shared_store(shared_store),
+            approval_expiry: Arc::new(ApprovalExpiry::from_shared_store(shared_store)),
             budgets,
-            preparation_lifecycle: PreparationLifecycle::default(),
+            preparation_lifecycle,
             sessions,
+            session_control,
             session_keys,
             degraded: Controller::default(),
         })
+    }
+
+    fn lock_operations(
+        &self,
+    ) -> Result<MutexGuard<'_, ProductionHumanOperations<A>>, HumanOperationError> {
+        self.operations
+            .lock()
+            .map_err(|_| HumanOperationError::Unavailable)
     }
 }
 
 impl<A: HumanAuthorityBoundary> HumanOperations for UnifiedAgentOwner<A> {
     fn registry(&self, peer: &HumanPeer) -> Result<HumanResponse, HumanOperationError> {
-        self.operations.registry(peer)
+        self.lock_operations()?.registry(peer)
     }
     fn prepare(
         &mut self,
         peer: &HumanPeer,
         request: MutationEnvelope<HumanPrepare>,
     ) -> Result<HumanResponse, HumanOperationError> {
-        self.operations.prepare(peer, request)
+        self.lock_operations()?.prepare(peer, request)
     }
     fn submit_external(
         &mut self,
@@ -778,9 +806,10 @@ impl<A: HumanAuthorityBoundary> HumanOperations for UnifiedAgentOwner<A> {
             request.operation.preparation_ref.clone(),
         );
         let prepared = self
-            .operations
+            .lock_operations()?
             .prepared
             .get(&prepared_key)
+            .cloned()
             .ok_or(HumanOperationError::Refused)?;
         let tenant =
             TenantId::new(peer.tenant.clone()).map_err(|_| HumanOperationError::Refused)?;
@@ -792,14 +821,14 @@ impl<A: HumanAuthorityBoundary> HumanOperations for UnifiedAgentOwner<A> {
                 request.operation.approval_release_ref,
             )
             .map_err(|_| HumanOperationError::Refused)?;
-        self.operations.submit_external(peer, request)
+        self.lock_operations()?.submit_external(peer, request)
     }
     fn track(
         &mut self,
         peer: &HumanPeer,
         submission_ref: &str,
     ) -> Result<HumanResponse, HumanOperationError> {
-        self.operations.track(peer, submission_ref)
+        self.lock_operations()?.track(peer, submission_ref)
     }
     fn receipt_by_idempotency_key(
         &mut self,
@@ -807,12 +836,10 @@ impl<A: HumanAuthorityBoundary> HumanOperations for UnifiedAgentOwner<A> {
         idempotency_key: [u8; 32],
         expected_activity_id: [u8; 32],
     ) -> Result<HumanResponse, HumanOperationError> {
-        let response = self.operations.receipt_by_idempotency_key(
-            peer,
-            idempotency_key,
-            expected_activity_id,
-        )?;
-        if let Some((key, result_code, sequence)) = self.operations.last_verified_receipt.take() {
+        let mut operations = self.lock_operations()?;
+        let response =
+            operations.receipt_by_idempotency_key(peer, idempotency_key, expected_activity_id)?;
+        if let Some((key, result_code, sequence)) = operations.last_verified_receipt.take() {
             let tenant =
                 TenantId::new(peer.tenant.clone()).map_err(|_| HumanOperationError::Refused)?;
             let mut store = self
@@ -957,10 +984,10 @@ impl<A: HumanAuthorityBoundary> HumanOperations for UnifiedAgentOwner<A> {
         encode_decision(&decision)
     }
     fn balance(&mut self, peer: &HumanPeer) -> Result<HumanResponse, HumanOperationError> {
-        self.operations.balance(peer)
+        self.lock_operations()?.balance(peer)
     }
     fn head(&self, peer: &HumanPeer) -> Result<HumanResponse, HumanOperationError> {
-        self.operations.head(peer)
+        self.lock_operations()?.head(peer)
     }
     fn evidence(
         &mut self,
@@ -968,7 +995,7 @@ impl<A: HumanAuthorityBoundary> HumanOperations for UnifiedAgentOwner<A> {
         idempotency_key: [u8; 32],
         expected_activity_id: [u8; 32],
     ) -> Result<HumanResponse, HumanOperationError> {
-        self.operations
+        self.lock_operations()?
             .evidence(peer, idempotency_key, expected_activity_id)
     }
     fn account_sequence(
@@ -977,7 +1004,8 @@ impl<A: HumanAuthorityBoundary> HumanOperations for UnifiedAgentOwner<A> {
         actor: &str,
         authority: &str,
     ) -> Result<HumanResponse, HumanOperationError> {
-        self.operations.account_sequence(peer, actor, authority)
+        self.lock_operations()?
+            .account_sequence(peer, actor, authority)
     }
     fn identity_resolve(
         &mut self,
@@ -986,7 +1014,7 @@ impl<A: HumanAuthorityBoundary> HumanOperations for UnifiedAgentOwner<A> {
     ) -> Result<HumanResponse, HumanOperationError> {
         let did = Did::new(agent.as_bytes()).map_err(|_| HumanOperationError::Refused)?;
         let identity = self
-            .operations
+            .lock_operations()?
             .authority
             .core_identity(peer, &did)
             .map_err(map_identity_operation)?;
@@ -998,7 +1026,7 @@ impl<A: HumanAuthorityBoundary> HumanOperations for UnifiedAgentOwner<A> {
         not_before_unix_ms: u64,
         not_after_unix_ms: u64,
     ) -> Result<HumanResponse, HumanOperationError> {
-        let attestation = self.operations.authority.lease_attestation(peer)?;
+        let attestation = self.lock_operations()?.authority.lease_attestation(peer)?;
         let (not_before_sequence, expiry_sequence) =
             attestation.map(not_before_unix_ms, not_after_unix_ms)?;
         let mut out = Encoder::new();
@@ -1052,18 +1080,33 @@ impl<A: HumanAuthorityBoundary> HumanOperations for UnifiedAgentOwner<A> {
                 }
             }
         };
-        let validated = match replay {
+        let (validated, allocated_token_id) = match replay {
             Some(OwnerAction::Completed(response)) => return Ok(response),
-            Some(OwnerAction::Validated(value)) => value,
+            Some(OwnerAction::Validated(value, Some(token_id))) => (value, token_id),
+            Some(OwnerAction::Validated(value, None)) => match self.persist_owner_validation(
+                &tenant,
+                &action,
+                request.body_digest,
+                request.operation.session_id,
+                value,
+            )? {
+                OwnerAction::Completed(response) => return Ok(response),
+                OwnerAction::Validated(value, Some(token_id)) => (value, token_id),
+                _ => return Err(HumanOperationError::Unavailable),
+            },
             Some(OwnerAction::Pending) | None => {
                 let value = self.validate_owner(peer, &request.operation)?;
-                let encoded = encode_owner_validated(request.body_digest, &value)?;
-                self.store
-                    .lock()
-                    .map_err(|_| HumanOperationError::Unavailable)?
-                    .put_local(action.clone(), encoded)
-                    .map_err(|_| HumanOperationError::Unavailable)?;
-                value
+                match self.persist_owner_validation(
+                    &tenant,
+                    &action,
+                    request.body_digest,
+                    request.operation.session_id,
+                    value,
+                )? {
+                    OwnerAction::Completed(response) => return Ok(response),
+                    OwnerAction::Validated(value, Some(token_id)) => (value, token_id),
+                    _ => return Err(HumanOperationError::Unavailable),
+                }
             }
         };
         let did = Did::new(request.operation.agent.as_bytes())
@@ -1071,6 +1114,10 @@ impl<A: HumanAuthorityBoundary> HumanOperations for UnifiedAgentOwner<A> {
         let installed_agent = request.operation.agent.clone();
         let lifecycle = request.operation.lifecycle.clone();
         let mut resolver = FixedIdentity(validated.0.clone());
+        let mut sessions = self
+            .sessions
+            .write()
+            .map_err(|_| HumanOperationError::Unavailable)?;
         let mut store = self
             .store
             .lock()
@@ -1109,7 +1156,7 @@ impl<A: HumanAuthorityBoundary> HumanOperations for UnifiedAgentOwner<A> {
         }
         let open_request = OpenRequest {
             session_id: SessionId(request.operation.session_id),
-            token_id: request.operation.token_id,
+            token_id: allocated_token_id,
             tenant: tenant.clone(),
             agent: did,
             authority: owner_authority(&request.operation)?,
@@ -1124,20 +1171,23 @@ impl<A: HumanAuthorityBoundary> HumanOperations for UnifiedAgentOwner<A> {
             opening_client: request.operation.opening_client,
             policy_version: request.operation.policy_version,
         };
-        if let Some(existing) = self.sessions.get(open_request.session_id) {
+        if let Some(existing) = sessions.get(&tenant, open_request.session_id) {
             if !existing.open || existing.request != open_request {
                 return Err(HumanOperationError::Refused);
             }
         } else {
             session::open(
                 &mut store,
-                &mut self.sessions,
+                &mut sessions,
                 &identity,
                 open_request,
                 validated.2,
             )
             .map_err(|_| HumanOperationError::Refused)?;
         }
+        let installed_generation = sessions
+            .generation(&tenant, SessionId(request.operation.session_id))
+            .ok_or(HumanOperationError::Unavailable)?;
         if let Some(seed) = lifecycle.as_ref() {
             managed_agent::publish_creation(
                 &mut store,
@@ -1146,13 +1196,15 @@ impl<A: HumanAuthorityBoundary> HumanOperations for UnifiedAgentOwner<A> {
                     seed,
                     &installed_agent,
                     request.operation.session_id,
-                    request.operation.token_id,
+                    allocated_token_id,
+                    installed_generation,
                 )?,
             )?;
         }
         let mut out = Encoder::new();
-        out.fixed(&request.operation.token_id);
+        out.fixed(&allocated_token_id);
         out.fixed(&request.operation.session_id);
+        out.u64(installed_generation);
         out.u64(validated.1);
         out.u64(validated.2);
         let response = out.finish()?;
@@ -1265,6 +1317,34 @@ impl<A: HumanAuthorityBoundary> HumanOperations for UnifiedAgentOwner<A> {
                 ready_at,
             } => (2, 0, String::new(), challenge_delay_seconds, ready_at),
         };
+        let evidence: managed_agent::FinalizationEvidence = evidence.into();
+        if matches!(kind, 1 | 2) {
+            let finalized = {
+                let store = self
+                    .store
+                    .lock()
+                    .map_err(|_| HumanOperationError::Unavailable)?;
+                managed_agent::validate_authority_revocation(
+                    &store,
+                    &tenant,
+                    agent_id,
+                    kind,
+                    delay,
+                    ready,
+                    pre_observation,
+                    post_observation,
+                    evidence,
+                )?
+            };
+            self.session_control
+                .invalidate_finalized(&finalized)
+                .map_err(|error| match error {
+                    crate::session_control::SessionControlError::Unavailable => {
+                        HumanOperationError::Unavailable
+                    }
+                    _ => HumanOperationError::Refused,
+                })?;
+        }
         let mut store = self
             .store
             .lock()
@@ -1280,7 +1360,7 @@ impl<A: HumanAuthorityBoundary> HumanOperations for UnifiedAgentOwner<A> {
             ready,
             pre_observation,
             post_observation,
-            evidence.into(),
+            evidence,
         )
     }
     fn agent_archive(
@@ -1315,7 +1395,12 @@ impl<A: HumanAuthorityBoundary> HumanOperations for UnifiedAgentOwner<A> {
         peer: &HumanPeer,
         request: HumanCapabilityInstall,
     ) -> Result<HumanResponse, HumanOperationError> {
-        install_capability(&mut self.operations.authority, &self.store, peer, request)
+        install_capability(
+            &mut self.lock_operations()?.authority,
+            &self.store,
+            peer,
+            request,
+        )
     }
     fn agent_lifecycle_publish(
         &mut self,
@@ -1332,7 +1417,10 @@ impl<A: HumanAuthorityBoundary> HumanOperations for UnifiedAgentOwner<A> {
         }
         let record = self
             .sessions
-            .get(SessionId(request.key))
+            .read()
+            .map_err(|_| HumanOperationError::Unavailable)?
+            .get(&tenant, SessionId(request.key))
+            .cloned()
             .ok_or(HumanOperationError::Refused)?;
         if !record.open
             || record.request.tenant != tenant
@@ -1347,6 +1435,7 @@ impl<A: HumanAuthorityBoundary> HumanOperations for UnifiedAgentOwner<A> {
                 .map_err(|_| HumanOperationError::Refused)?,
             request.key,
             record.request.token_id,
+            record.generation,
         )?;
         let companion = lifecycle_action_key(&tenant, request.key)?;
         let mut completed = Vec::with_capacity(34);
@@ -1389,7 +1478,7 @@ impl<A: HumanAuthorityBoundary> HumanOperations for UnifiedAgentOwner<A> {
             return Err(HumanOperationError::Refused);
         }
         let state = self
-            .operations
+            .lock_operations()?
             .authority
             .budget_state(peer, active_budget_id)?;
         let mut out = Encoder::new();
@@ -1428,7 +1517,7 @@ impl<A: HumanAuthorityBoundary> HumanOperations for UnifiedAgentOwner<A> {
     ) -> Result<HumanResponse, HumanOperationError> {
         let did = Did::new(agent_did.as_bytes()).map_err(|_| HumanOperationError::Refused)?;
         let state = self
-            .operations
+            .lock_operations()?
             .authority
             .key_rotation_policy(peer, &did, recovery)?;
         let mut out = Encoder::new();
@@ -1467,17 +1556,23 @@ impl<A: HumanAuthorityBoundary> HumanOperations for UnifiedAgentOwner<A> {
     ) -> Result<HumanResponse, HumanOperationError> {
         let tenant =
             TenantId::new(peer.tenant.clone()).map_err(|_| HumanOperationError::Refused)?;
+        let sessions = self
+            .sessions
+            .read()
+            .map_err(|_| HumanOperationError::Unavailable)?;
         let store = self
             .store
             .lock()
             .map_err(|_| HumanOperationError::Unavailable)?;
-        let (did, session_id, token) =
+        let (did, session_id, token, generation) =
             managed_agent::session_coordinates(&store, &tenant, agent_id)?;
-        let record = self
-            .sessions
-            .get(SessionId(session_id))
+        let record = sessions
+            .get(&tenant, SessionId(session_id))
             .ok_or(HumanOperationError::Refused)?;
-        if record.request.tenant != tenant || record.request.token_id != token {
+        if record.request.tenant != tenant
+            || record.request.token_id != token
+            || record.generation != generation
+        {
             return Err(HumanOperationError::Refused);
         }
         let mut out = Encoder::new();
@@ -1485,6 +1580,7 @@ impl<A: HumanAuthorityBoundary> HumanOperations for UnifiedAgentOwner<A> {
         out.text(&did)?;
         out.fixed(&session_id);
         out.fixed(&token);
+        out.u64(generation);
         out.u8(u8::from(record.open));
         out.u64(record.request.expiry_sequence);
         out.u64(record.sequence);
@@ -1498,18 +1594,18 @@ impl<A: HumanAuthorityBoundary> HumanOperations for UnifiedAgentOwner<A> {
     ) -> Result<HumanResponse, HumanOperationError> {
         let tenant =
             TenantId::new(peer.tenant.clone()).map_err(|_| HumanOperationError::Refused)?;
+        let mut sessions = self
+            .sessions
+            .write()
+            .map_err(|_| HumanOperationError::Unavailable)?;
         let mut store = self
             .store
             .lock()
             .map_err(|_| HumanOperationError::Unavailable)?;
-        let (_, session_id, _) = managed_agent::session_coordinates(&store, &tenant, agent_id)?;
+        let (_, session_id, _, _) = managed_agent::session_coordinates(&store, &tenant, agent_id)?;
         let grant = managed_agent::protocol_grant(&store, &tenant, agent_id)?;
-        self.session_keys
-            .revoke(grant)
-            .map_err(|_| HumanOperationError::Unavailable)?;
-        let was_open = self
-            .sessions
-            .get(SessionId(session_id))
+        let was_open = sessions
+            .get(&tenant, SessionId(session_id))
             .map(|record| record.open)
             .ok_or(HumanOperationError::Refused)?;
         if !was_open {
@@ -1522,12 +1618,18 @@ impl<A: HumanAuthorityBoundary> HumanOperations for UnifiedAgentOwner<A> {
         )?;
         session::close_with_companion(
             &mut store,
-            &mut self.sessions,
+            &mut sessions,
+            &tenant,
             SessionId(session_id),
             key,
             bytes,
         )
         .map_err(|_| HumanOperationError::Unavailable)?;
+        drop(store);
+        drop(sessions);
+        self.session_keys
+            .revoke(grant)
+            .map_err(|_| HumanOperationError::Unavailable)?;
         Ok(response)
     }
     fn agent_session_bind(
@@ -1540,34 +1642,70 @@ impl<A: HumanAuthorityBoundary> HumanOperations for UnifiedAgentOwner<A> {
     ) -> Result<HumanResponse, HumanOperationError> {
         let tenant =
             TenantId::new(peer.tenant.clone()).map_err(|_| HumanOperationError::Refused)?;
+        let sessions = self
+            .sessions
+            .read()
+            .map_err(|_| HumanOperationError::Unavailable)?;
         let mut store = self
             .store
             .lock()
             .map_err(|_| HumanOperationError::Unavailable)?;
-        let (did, _, _) = managed_agent::session_coordinates(&store, &tenant, agent_id)?;
-        let record = self
-            .sessions
-            .get(SessionId(session_id))
-            .ok_or(HumanOperationError::Refused)?;
-        if !record.open
-            || record.request.tenant != tenant
-            || record.request.token_id != token_id
-            || record.request.agent.as_bytes() != did.as_bytes()
-        {
+        let (did, _, _, _) = managed_agent::session_coordinates(&store, &tenant, agent_id)?;
+        let agent = Did::new(did.as_bytes()).map_err(|_| HumanOperationError::Refused)?;
+        let token = sessions
+            .authenticate_bearer(&tenant, SessionId(session_id), token_id)
+            .map_err(|_| HumanOperationError::Refused)?;
+        token
+            .boundary(&sessions)
+            .map_err(|_| HumanOperationError::Refused)?;
+        if token.tenant() != &tenant || token.agent() != &agent {
             return Err(HumanOperationError::Refused);
         }
+        let authority = match sessions
+            .get(&tenant, SessionId(session_id))
+            .map(|record| record.request.authority.clone())
+        {
+            Some(ProtocolAuthority::SessionKey(id)) => id,
+            _ => return Err(HumanOperationError::Refused),
+        };
         managed_agent::bind_session(
             &mut store,
             &tenant,
             agent_id,
             session_id,
             token_id,
-            match record.request.authority {
-                ProtocolAuthority::SessionKey(id) => id,
-                _ => return Err(HumanOperationError::Refused),
-            },
+            token.generation(),
+            authority,
             action_key,
         )
+    }
+    fn agent_session_restrict(
+        &mut self,
+        peer: &HumanPeer,
+        agent_id: &str,
+        current_sequence: u64,
+        action_key: [u8; 32],
+        permitted_activity_types: Vec<u16>,
+        scopes: Vec<String>,
+    ) -> Result<HumanResponse, HumanOperationError> {
+        let tenant =
+            TenantId::new(peer.tenant.clone()).map_err(|_| HumanOperationError::Refused)?;
+        self.session_control
+            .restrict_managed_agent(
+                &tenant,
+                agent_id,
+                scopes.into_iter().collect(),
+                permitted_activity_types.into_iter().collect(),
+                current_sequence,
+                action_key,
+            )
+            .map(|(_, _, response)| response)
+            .map_err(|error| match error {
+                crate::session_control::SessionControlError::Unavailable => {
+                    HumanOperationError::Unavailable
+                }
+                _ => HumanOperationError::Refused,
+            })
     }
 }
 
@@ -1579,7 +1717,7 @@ impl IdentityResolver for FixedIdentity {
 }
 enum OwnerAction {
     Pending,
-    Validated((CoreIdentity, u64, u64)),
+    Validated((CoreIdentity, u64, u64), Option<[u8; 32]>),
     Completed(HumanResponse),
 }
 fn pending_owner_action(bytes: &[u8], body: [u8; 32]) -> bool {
@@ -1604,7 +1742,11 @@ fn lifecycle_action_key(
 fn encode_owner_validated(
     body: [u8; 32],
     value: &(CoreIdentity, u64, u64),
+    token_id: [u8; 32],
 ) -> Result<Vec<u8>, HumanOperationError> {
+    if token_id == [0; 32] {
+        return Err(HumanOperationError::Refused);
+    }
     let mut out = Encoder::new();
     out.u8(1);
     out.u8(1);
@@ -1633,6 +1775,7 @@ fn encode_owner_validated(
     out.bytes(&value.0.canonical_bytes)?;
     out.u64(value.1);
     out.u64(value.2);
+    out.fixed(&token_id);
     Ok(out.0)
 }
 fn decode_owner_action(bytes: &[u8], body: [u8; 32]) -> Result<OwnerAction, HumanOperationError> {
@@ -1679,21 +1822,30 @@ fn decode_owner_action(bytes: &[u8], body: [u8; 32]) -> Result<OwnerAction, Huma
     let canonical_bytes = input.bytes()?;
     let expiry = input.u64()?;
     let observed = input.u64()?;
-    if !input.remaining().is_empty() {
-        return Err(HumanOperationError::Refused);
-    }
-    Ok(OwnerAction::Validated((
-        CoreIdentity {
-            canonical_bytes,
-            head_sequence,
-            revocation_sequence,
-            verification_level,
-            frozen,
-            authorities,
-        },
-        expiry,
-        observed,
-    )))
+    let allocated_token_id = if input.remaining().is_empty() {
+        None
+    } else {
+        let token_id = input.fixed().ok_or(HumanOperationError::Refused)?;
+        if token_id == [0; 32] || !input.remaining().is_empty() {
+            return Err(HumanOperationError::Refused);
+        }
+        Some(token_id)
+    };
+    Ok(OwnerAction::Validated(
+        (
+            CoreIdentity {
+                canonical_bytes,
+                head_sequence,
+                revocation_sequence,
+                verification_level,
+                frozen,
+                authorities,
+            },
+            expiry,
+            observed,
+        ),
+        allocated_token_id,
+    ))
 }
 struct OwnerInput<'a> {
     bytes: &'a [u8],
@@ -1753,6 +1905,60 @@ fn rank(value: u8) -> Result<VerificationLevel, HumanOperationError> {
 }
 
 impl<A: HumanAuthorityBoundary> UnifiedAgentOwner<A> {
+    fn persist_owner_validation(
+        &self,
+        tenant: &TenantId,
+        action: &TenantKey,
+        body_digest: [u8; 32],
+        session_id: [u8; 32],
+        validated: (CoreIdentity, u64, u64),
+    ) -> Result<OwnerAction, HumanOperationError> {
+        let sessions = self
+            .sessions
+            .read()
+            .map_err(|_| HumanOperationError::Unavailable)?;
+        let mut store = self
+            .store
+            .lock()
+            .map_err(|_| HumanOperationError::Unavailable)?;
+        let current = store.get(action).ok_or(HumanOperationError::Unavailable)?;
+        let decoded = if pending_owner_action(current.bytes(), body_digest) {
+            OwnerAction::Pending
+        } else {
+            decode_owner_action(current.bytes(), body_digest)?
+        };
+        match decoded {
+            OwnerAction::Completed(response) => return Ok(OwnerAction::Completed(response)),
+            OwnerAction::Validated(value, Some(token_id)) => {
+                return Ok(OwnerAction::Validated(value, Some(token_id)))
+            }
+            OwnerAction::Pending | OwnerAction::Validated(_, None) => {}
+        }
+        let token_id = match sessions.get(tenant, SessionId(session_id)) {
+            Some(existing) if existing.request.token_id != [0; 32] => existing.request.token_id,
+            Some(_) => return Err(HumanOperationError::Refused),
+            None => {
+                let mut generated = None;
+                for _ in 0..8 {
+                    let mut token_id = [0_u8; 32];
+                    getrandom::fill(&mut token_id).map_err(|_| HumanOperationError::Unavailable)?;
+                    if token_id != [0; 32] {
+                        generated = Some(token_id);
+                        break;
+                    }
+                }
+                generated.ok_or(HumanOperationError::Unavailable)?
+            }
+        };
+        store
+            .put_local(
+                action.clone(),
+                encode_owner_validated(body_digest, &validated, token_id)?,
+            )
+            .map_err(|_| HumanOperationError::Unavailable)?;
+        Ok(OwnerAction::Validated(validated, Some(token_id)))
+    }
+
     fn validate_owner(
         &mut self,
         peer: &HumanPeer,
@@ -1760,7 +1966,7 @@ impl<A: HumanAuthorityBoundary> UnifiedAgentOwner<A> {
     ) -> Result<(CoreIdentity, u64, u64), HumanOperationError> {
         if request.authority_kind != 2
             || request.session_id == [0; 32]
-            || request.token_id == [0; 32]
+            || request.token_id != [0; 32]
             || request.session_public_key == [0; 32]
             || request.grantor == [0; 32]
             || request.registration_payload.is_empty()
@@ -1777,7 +1983,7 @@ impl<A: HumanAuthorityBoundary> UnifiedAgentOwner<A> {
             return Err(HumanOperationError::Refused);
         }
         let (authenticated_account, _, _, _, account_age, maximum_account_age, _) =
-            self.operations.authority.balance_context(peer)?;
+            self.lock_operations()?.authority.balance_context(peer)?;
         if request.grantor != authenticated_account
             || maximum_account_age == 0
             || account_age > maximum_account_age
@@ -1816,7 +2022,7 @@ impl<A: HumanAuthorityBoundary> UnifiedAgentOwner<A> {
         drop(provisioned);
         let did = Did::new(request.agent.as_bytes()).map_err(|_| HumanOperationError::Refused)?;
         let identity = self
-            .operations
+            .lock_operations()?
             .authority
             .core_identity(peer, &did)
             .map_err(map_identity_operation)?;
@@ -1829,7 +2035,7 @@ impl<A: HumanAuthorityBoundary> UnifiedAgentOwner<A> {
         {
             return Err(HumanOperationError::Refused);
         }
-        let attestation = self.operations.authority.lease_attestation(peer)?;
+        let attestation = self.lock_operations()?.authority.lease_attestation(peer)?;
         let (not_before, expiry) = attestation.map(
             request.lease_not_before_unix_ms,
             request.lease_not_after_unix_ms,

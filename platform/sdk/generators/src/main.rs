@@ -9,7 +9,8 @@ use std::process::{Command, Stdio};
 use sha2::{Digest, Sha256};
 
 const LOCK_PATH: &str = "platform/sdk/pipeline.kvx";
-const RUST_OPERATION_GENERATED_PATH: &str = "agent/crates/layerx-sdk/src/operation_generated.rs";
+const RUST_OPERATION_GENERATED_PATH: &str =
+    "agent/crates/layerx-agent-api/src/operation_generated.rs";
 const GO_GENERATED_PATH: &str = "platform/sdk/go/generated.go";
 const JVM_GENERATED_PATH: &str =
     "platform/sdk/jvm/src/main/java/com/sidiora/layerx/sdk/GeneratedContract.java";
@@ -57,16 +58,18 @@ pub const JVM_FILES: &[&str] = &[
     "src/test/java/com/sidiora/layerx/sdk/GoldenVectorTest.java",
 ];
 
-const OUTPUTS: [(&str, &str, &str, Option<&[&str]>); 11] = [
+const OUTPUTS: [(&str, &str, &str, Option<&[&str]>); 12] = [
+    (
+        "agent-api-rust",
+        "rust",
+        "agent/crates/layerx-agent-api/src",
+        Some(&["operation_generated.rs"]),
+    ),
     (
         "agent-rust",
         "rust",
         "agent/crates/layerx-sdk/src",
-        Some(&[
-            "mirror_generated.rs",
-            "operation_generated.rs",
-            "receipt_generated.rs",
-        ]),
+        Some(&["mirror_generated.rs", "receipt_generated.rs"]),
     ),
     (
         "agent-typescript",

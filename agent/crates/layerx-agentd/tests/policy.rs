@@ -56,6 +56,8 @@ fn session() -> SessionRecord {
         sequence: 0,
         budget_reserved: 0,
         subscription_cursor: 0,
+        generation: 1,
+        retired_token_ids: BTreeSet::new(),
     }
 }
 

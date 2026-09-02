@@ -2,13 +2,13 @@
 
 use std::path::Path;
 
-use layerx_agentd::capability::{Capability, CapabilityId};
-use layerx_agentd::session::{SessionId, SessionRecord, SessionRegistry};
-use layerx_agentd::store::Store;
+use layerx_agentd::capability::CapabilityId;
+use layerx_agentd::session::SessionCredential;
+use layerx_agentd::session_control::SessionControl;
 
 use crate::server::{
-    CapabilityDeclaration, DaemonInvocation, DeploymentMode, InvocationOutcome, InvocationRecord,
-    ScopeBinding, Server, ServerError, ToolDefinition, ToolKind,
+    CapabilityDeclaration, DaemonInvocation, DeploymentMode, InvocationOutcome, ScopeBinding,
+    Server, ServerError, ToolDefinition, ToolKind,
 };
 
 /// Opaque read-only MCP server. Its inner full server is never exposed.
@@ -23,39 +23,16 @@ impl ReadOnly {
     ///
     /// Refuses invalid authority or a scope set containing no reachable read tool.
     pub fn bind(
-        store: &Store,
-        sessions: &SessionRegistry,
-        session_id: SessionId,
+        control: SessionControl,
+        credential: SessionCredential,
         capability_id: CapabilityId,
         core_sequence: u64,
         audit_root: impl AsRef<Path>,
     ) -> Result<Self, ServerError> {
         Server::bind_for_mode(
-            store,
-            sessions,
-            session_id,
+            control,
+            credential,
             capability_id,
-            core_sequence,
-            audit_root,
-            DeploymentMode::ReadOnly,
-        )
-        .map(|server| Self { server })
-    }
-
-    /// Binds a read-only server from already resolved daemon records.
-    ///
-    /// # Errors
-    ///
-    /// Applies normal authority checks and refuses a scope set with no read tool.
-    pub fn bind_records(
-        session: &SessionRecord,
-        capability: &Capability,
-        core_sequence: u64,
-        audit_root: impl AsRef<Path>,
-    ) -> Result<Self, ServerError> {
-        Server::bind_records_for_mode(
-            session,
-            capability,
             core_sequence,
             audit_root,
             DeploymentMode::ReadOnly,
@@ -78,16 +55,22 @@ impl ReadOnly {
         self.server.capability_declaration()
     }
 
-    /// Routes a read invocation through the ordinary daemon choke point.
+    /// Runs a read executor only between route authorization and completion reauthorization.
     ///
     /// # Errors
     ///
-    /// Refuses every absent or non-read definition before an invocation can be emitted.
-    pub fn route(
+    /// Refuses every absent or non-read definition before an invocation can be emitted, and a
+    /// closed or revoked bound session at the choke point.
+    pub fn execute_authorized<T, F>(
         &mut self,
+        core_sequence: u64,
         name: &str,
         arguments: Vec<u8>,
-    ) -> Result<DaemonInvocation, ServerError> {
+        executor: F,
+    ) -> Result<T, ServerError>
+    where
+        F: FnOnce(&DaemonInvocation) -> (T, InvocationOutcome),
+    {
         if self
             .server
             .tool(name)
@@ -95,23 +78,8 @@ impl ReadOnly {
         {
             return Err(ServerError::ToolAbsent);
         }
-        self.server.route(name, arguments)
-    }
-
-    /// Completes an invocation emitted by this exact read-only server binding.
-    ///
-    /// # Errors
-    ///
-    /// Refuses invocations from any other binding or deployment mode.
-    pub fn complete(
-        &mut self,
-        invocation: &DaemonInvocation,
-        outcome: InvocationOutcome,
-    ) -> Result<InvocationRecord, ServerError> {
-        if invocation.tool().kind != ToolKind::Read || invocation.tool().mutation != "none" {
-            return Err(ServerError::ToolAbsent);
-        }
-        self.server.complete(invocation, outcome)
+        self.server
+            .execute_read(core_sequence, name, arguments, executor)
     }
 
     #[must_use]

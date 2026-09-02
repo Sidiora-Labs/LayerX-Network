@@ -1,6 +1,6 @@
 [pipeline]
 sources = ["agent-api", "human-api", "mirror-v2"]
-outputs = ["agent-rust", "agent-typescript", "agent-python", "agent-compatibility", "human-typescript", "platform-go", "platform-jvm", "platform-conformance", "platform-swift", "platform-dotnet", "platform-portable-conformance"]
+outputs = ["agent-api-rust", "agent-rust", "agent-typescript", "agent-python", "agent-compatibility", "human-typescript", "platform-go", "platform-jvm", "platform-conformance", "platform-swift", "platform-dotnet", "platform-portable-conformance"]
 
 [source.agent-api]
 root = "agent/schema/agent-api"
@@ -14,13 +14,19 @@ digest = "50efbd6ab9cf7bb4fe8ca60899d2a2e9819ffe42d884d669b30473caadd4f0d5"
 root = "platform/sdk/schema"
 digest = "dcf89b2dd01409c6c0429574f49d43e66adb3e027448243a894c210bc0d309ca"
 
+[output.agent-api-rust]
+language = "rust"
+root = "agent/crates/layerx-agent-api/src"
+
+[files.agent-api-rust]
+"operation_generated.rs" = "15d0fb4d427a7feb91f036f3e49a00a297a948314b98f47b55ecf6cff75ff07b"
+
 [output.agent-rust]
 language = "rust"
 root = "agent/crates/layerx-sdk/src"
 
 [files.agent-rust]
 "mirror_generated.rs" = "36c041d89f4cb23a73ea0baec0f7a15e6568763d603716b641e3d99dff2571fa"
-"operation_generated.rs" = "15d0fb4d427a7feb91f036f3e49a00a297a948314b98f47b55ecf6cff75ff07b"
 "receipt_generated.rs" = "e9d7bc01d51eaf6588595d7d9807a8d180841bc61e535c8af6985e2a79ba52f4"
 
 [output.agent-typescript]

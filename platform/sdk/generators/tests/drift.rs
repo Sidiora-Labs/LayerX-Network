@@ -110,7 +110,7 @@ fn repo_fixture(label: &str) -> PathBuf {
     );
     place(
         &root,
-        "agent/crates/layerx-sdk/src/operation_generated.rs",
+        "agent/crates/layerx-agent-api/src/operation_generated.rs",
         "// generated Rust operations\n",
     );
     place(
@@ -202,7 +202,7 @@ fn rust_operation_catalogue_is_derived_from_programs_schema() {
     let root = repo_fixture("rust-programs");
     generate(&root);
     let generated =
-        fs::read_to_string(root.join("agent/crates/layerx-sdk/src/operation_generated.rs"))
+        fs::read_to_string(root.join("agent/crates/layerx-agent-api/src/operation_generated.rs"))
             .unwrap_or_else(|error| panic!("read generated Rust operation catalogue: {error}"));
     assert!(generated.contains("ProgramDiscover"));
     assert!(generated.contains("ProgramInterface"));

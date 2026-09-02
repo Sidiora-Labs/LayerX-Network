@@ -325,6 +325,21 @@ impl Store {
             .collect()
     }
 
+    /// Lists the distinct tenants that own at least one object of `kind`.
+    ///
+    /// The identifiers are derived only from persisted keys and returned in stable tenant order;
+    /// object identifiers and values remain inaccessible without an exact tenant-scoped key.
+    #[must_use]
+    pub fn tenant_ids_for_kind(&self, kind: ObjectKind) -> Vec<TenantId> {
+        self.entries
+            .keys()
+            .filter(|key| key.kind() == kind)
+            .map(|key| key.tenant().clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
     /// Persists daemon-local bytes.
     ///
     /// # Errors
@@ -333,6 +348,107 @@ impl Store {
     /// temporary-file write, fsync or rename; the entry is rolled back on either failure.
     pub fn put_local(&mut self, key: TenantKey, bytes: Vec<u8>) -> Result<(), StoreError> {
         self.put(key, StorageClass::LocalOnly, bytes)
+    }
+
+    /// Atomically updates an existing set of daemon-local records.
+    ///
+    /// Every key is validated before mutation, duplicate keys are refused, and the complete
+    /// entries map is persisted once. An encoding or I/O failure restores the exact in-memory
+    /// map that preceded the batch.
+    pub fn update_local_batch(
+        &mut self,
+        updates: Vec<(TenantKey, Vec<u8>)>,
+    ) -> Result<(), StoreError> {
+        if updates.is_empty() {
+            return Ok(());
+        }
+        let mut keys = BTreeSet::new();
+        for (key, _) in &updates {
+            if !keys.insert(key.clone())
+                || self
+                    .entries
+                    .get(key)
+                    .is_none_or(|value| value.class != StorageClass::LocalOnly)
+            {
+                return Err(StoreError::Corrupt("invalid local batch update"));
+            }
+        }
+        let before = self.entries.clone();
+        for (key, bytes) in updates {
+            self.entries.insert(
+                key,
+                StoredValue {
+                    class: StorageClass::LocalOnly,
+                    bytes,
+                },
+            );
+        }
+        if let Err(error) = self.persist() {
+            self.entries = before;
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    /// Atomically updates existing local records and creates one absent local companion.
+    pub fn update_local_batch_with_companion(
+        &mut self,
+        updates: Vec<(TenantKey, Vec<u8>)>,
+        companion_key: TenantKey,
+        companion_bytes: Vec<u8>,
+    ) -> Result<(), StoreError> {
+        self.update_local_batch_with_companions(updates, vec![(companion_key, companion_bytes)])
+    }
+
+    /// Atomically updates existing local records and creates an absent set of local companions.
+    pub fn update_local_batch_with_companions(
+        &mut self,
+        updates: Vec<(TenantKey, Vec<u8>)>,
+        companions: Vec<(TenantKey, Vec<u8>)>,
+    ) -> Result<(), StoreError> {
+        if updates.is_empty() || companions.is_empty() {
+            return Err(StoreError::Corrupt("invalid local batch companion"));
+        }
+        let mut keys = BTreeSet::new();
+        for (key, _) in &updates {
+            if !keys.insert(key.clone())
+                || self
+                    .entries
+                    .get(key)
+                    .is_none_or(|value| value.class != StorageClass::LocalOnly)
+            {
+                return Err(StoreError::Corrupt("invalid local batch companion"));
+            }
+        }
+        for (key, _) in &companions {
+            if !keys.insert(key.clone()) || self.entries.contains_key(key) {
+                return Err(StoreError::Corrupt("invalid local batch companion"));
+            }
+        }
+        let before = self.entries.clone();
+        for (key, bytes) in updates {
+            self.entries.insert(
+                key,
+                StoredValue {
+                    class: StorageClass::LocalOnly,
+                    bytes,
+                },
+            );
+        }
+        for (key, bytes) in companions {
+            self.entries.insert(
+                key,
+                StoredValue {
+                    class: StorageClass::LocalOnly,
+                    bytes,
+                },
+            );
+        }
+        if let Err(error) = self.persist() {
+            self.entries = before;
+            return Err(error);
+        }
+        Ok(())
     }
 
     /// Persists exact bytes produced by the core as a rebuildable cache.

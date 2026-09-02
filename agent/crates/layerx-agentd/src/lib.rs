@@ -29,6 +29,7 @@ pub mod protocol_evidence;
 pub mod read;
 pub mod receipt;
 pub mod session;
+pub mod session_control;
 pub mod session_keys;
 pub mod shutdown;
 pub mod sign;

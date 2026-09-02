@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::sync::Mutex;
 
 use crate::budget::{release, BudgetLimiter, LimitRefusal, ReleaseKind};
+use crate::session::SessionRef;
 
 use super::Prepared;
 
@@ -38,6 +39,7 @@ pub enum PayloadRedaction {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct RetainedPreparation {
+    authorization: Option<PreparationAuthorization>,
     state: LifecycleState,
     not_after: u64,
     reservation_ids: Vec<[u8; 32]>,
@@ -45,6 +47,13 @@ struct RetainedPreparation {
     activity_id: Option<[u8; 32]>,
     payload_hash: [u8; 32],
     terminal_at_sequence: Option<u64>,
+}
+
+/// Exact session generation that owns a token-gated preparation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PreparationAuthorization {
+    pub(crate) session: SessionRef,
+    pub(crate) generation: u64,
 }
 
 #[derive(Default)]
@@ -65,6 +74,35 @@ impl PreparationLifecycle {
         prepared: &Prepared,
         reservation_ids: Vec<[u8; 32]>,
     ) -> Result<(), LifecycleError> {
+        self.register_inner(preparation_id, prepared, reservation_ids, None)
+    }
+
+    /// Records a preparation under the exact session generation that authorized it.
+    pub(crate) fn register_authorized(
+        &self,
+        preparation_id: [u8; 32],
+        prepared: &Prepared,
+        reservation_ids: Vec<[u8; 32]>,
+        authorization: PreparationAuthorization,
+    ) -> Result<(), LifecycleError> {
+        if authorization.generation == 0 {
+            return Err(LifecycleError::InvalidAuthorization);
+        }
+        self.register_inner(
+            preparation_id,
+            prepared,
+            reservation_ids,
+            Some(authorization),
+        )
+    }
+
+    fn register_inner(
+        &self,
+        preparation_id: [u8; 32],
+        prepared: &Prepared,
+        reservation_ids: Vec<[u8; 32]>,
+        authorization: Option<PreparationAuthorization>,
+    ) -> Result<(), LifecycleError> {
         let mut records = self
             .records
             .lock()
@@ -75,6 +113,7 @@ impl PreparationLifecycle {
         records.insert(
             preparation_id,
             RetainedPreparation {
+                authorization,
                 state: LifecycleState::Prepared,
                 not_after: prepared.envelope.timestamp_bound().not_after(),
                 reservation_ids,
@@ -85,6 +124,55 @@ impl PreparationLifecycle {
             },
         );
         Ok(())
+    }
+
+    /// Fails every not-yet-submitted preparation owned by an invalidated exact generation while
+    /// preserving submitted/unknown work for honest receipt resolution.
+    pub fn invalidate_authorizations(
+        &self,
+        invalidated: &[(SessionRef, u64)],
+        current_sequence: u64,
+        limiter: &BudgetLimiter,
+    ) -> Result<PreparationInvalidationReport, LifecycleError> {
+        let mut records = self
+            .records
+            .lock()
+            .map_err(|_| LifecycleError::Unavailable)?;
+        let mut report = PreparationInvalidationReport::default();
+        for record in records.values_mut() {
+            let selected = record.authorization.as_ref().is_some_and(|authorization| {
+                invalidated.iter().any(|(session, generation)| {
+                    &authorization.session == session && authorization.generation == *generation
+                })
+            });
+            if !selected {
+                continue;
+            }
+            match record.state {
+                LifecycleState::Prepared | LifecycleState::Signing | LifecycleState::Signed => {
+                    for reservation in &record.reservation_ids {
+                        if release(limiter, *reservation, ReleaseKind::Failed, current_sequence)
+                            .map_err(LifecycleError::Reservation)?
+                        {
+                            report.released_reservations.push(*reservation);
+                        }
+                    }
+                    record.state = LifecycleState::Failed;
+                    record.signed_bytes = None;
+                    record.terminal_at_sequence = Some(current_sequence);
+                    report.cancelled_preparations += 1;
+                }
+                LifecycleState::Submitted
+                | LifecycleState::Acknowledged
+                | LifecycleState::Unknown => {
+                    report.unresolved_preserved += 1;
+                }
+                LifecycleState::Executed | LifecycleState::Failed | LifecycleState::Expired => {
+                    report.terminal_untouched += 1;
+                }
+            }
+        }
+        Ok(report)
     }
 
     /// Advances one preparation along the permitted lifecycle edges only.
@@ -99,6 +187,27 @@ impl PreparationLifecycle {
         next: LifecycleState,
         current_sequence: u64,
     ) -> Result<(), LifecycleError> {
+        self.transition_inner(preparation_id, next, current_sequence, None)
+    }
+
+    /// Advances a token-bound preparation only for its exact owning session generation.
+    pub(crate) fn transition_authorized(
+        &self,
+        preparation_id: [u8; 32],
+        next: LifecycleState,
+        current_sequence: u64,
+        authorization: &PreparationAuthorization,
+    ) -> Result<(), LifecycleError> {
+        self.transition_inner(preparation_id, next, current_sequence, Some(authorization))
+    }
+
+    fn transition_inner(
+        &self,
+        preparation_id: [u8; 32],
+        next: LifecycleState,
+        current_sequence: u64,
+        authorization: Option<&PreparationAuthorization>,
+    ) -> Result<(), LifecycleError> {
         let mut records = self
             .records
             .lock()
@@ -106,6 +215,7 @@ impl PreparationLifecycle {
         let record = records
             .get_mut(&preparation_id)
             .ok_or(LifecycleError::NotFound)?;
+        require_authorization(record, authorization)?;
         if !valid_transition(record.state, next) {
             return Err(LifecycleError::InvalidTransition {
                 from: record.state,
@@ -132,6 +242,32 @@ impl PreparationLifecycle {
         signed_bytes: Vec<u8>,
         activity_id: [u8; 32],
     ) -> Result<(), LifecycleError> {
+        self.retain_signed_bytes_inner(preparation_id, signed_bytes, activity_id, None)
+    }
+
+    /// Retains signed bytes only for the exact session generation that owns the preparation.
+    pub(crate) fn retain_signed_bytes_authorized(
+        &self,
+        preparation_id: [u8; 32],
+        signed_bytes: Vec<u8>,
+        activity_id: [u8; 32],
+        authorization: &PreparationAuthorization,
+    ) -> Result<(), LifecycleError> {
+        self.retain_signed_bytes_inner(
+            preparation_id,
+            signed_bytes,
+            activity_id,
+            Some(authorization),
+        )
+    }
+
+    fn retain_signed_bytes_inner(
+        &self,
+        preparation_id: [u8; 32],
+        signed_bytes: Vec<u8>,
+        activity_id: [u8; 32],
+        authorization: Option<&PreparationAuthorization>,
+    ) -> Result<(), LifecycleError> {
         if signed_bytes.is_empty() {
             return Err(LifecycleError::InvalidSignedBytes);
         }
@@ -142,6 +278,7 @@ impl PreparationLifecycle {
         let record = records
             .get_mut(&preparation_id)
             .ok_or(LifecycleError::NotFound)?;
+        require_authorization(record, authorization)?;
         if record.state != LifecycleState::Signing {
             return Err(LifecycleError::InvalidTransition {
                 from: record.state,
@@ -166,6 +303,25 @@ impl PreparationLifecycle {
         preparation_id: [u8; 32],
         core_batch_time: u64,
     ) -> Result<(), LifecycleError> {
+        self.admit_submission_inner(preparation_id, core_batch_time, None)
+    }
+
+    /// Admits a token-bound preparation only for its exact owning session generation.
+    pub(crate) fn admit_submission_authorized(
+        &self,
+        preparation_id: [u8; 32],
+        core_batch_time: u64,
+        authorization: &PreparationAuthorization,
+    ) -> Result<(), LifecycleError> {
+        self.admit_submission_inner(preparation_id, core_batch_time, Some(authorization))
+    }
+
+    fn admit_submission_inner(
+        &self,
+        preparation_id: [u8; 32],
+        core_batch_time: u64,
+        authorization: Option<&PreparationAuthorization>,
+    ) -> Result<(), LifecycleError> {
         let records = self
             .records
             .lock()
@@ -173,6 +329,7 @@ impl PreparationLifecycle {
         let record = records
             .get(&preparation_id)
             .ok_or(LifecycleError::NotFound)?;
+        require_authorization(record, authorization)?;
         if core_batch_time > record.not_after || record.state == LifecycleState::Expired {
             return Err(LifecycleError::PreparationExpired);
         }
@@ -261,6 +418,14 @@ pub struct RetentionReport {
     pub preserved_unresolved_signed_bytes: usize,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct PreparationInvalidationReport {
+    pub cancelled_preparations: usize,
+    pub unresolved_preserved: usize,
+    pub terminal_untouched: usize,
+    pub released_reservations: Vec<[u8; 32]>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum LifecycleError {
     Duplicate,
@@ -269,11 +434,26 @@ pub enum LifecycleError {
     InvalidSignedBytes,
     ActivityIdUnavailable,
     PreparationExpired,
+    InvalidAuthorization,
+    AuthorizationRequired,
+    AuthorizationMismatch,
     InvalidTransition {
         from: LifecycleState,
         to: LifecycleState,
     },
     Reservation(LimitRefusal),
+}
+
+fn require_authorization(
+    record: &RetainedPreparation,
+    presented: Option<&PreparationAuthorization>,
+) -> Result<(), LifecycleError> {
+    match (&record.authorization, presented) {
+        (None, None) => Ok(()),
+        (Some(expected), Some(presented)) if expected == presented => Ok(()),
+        (Some(_), None) => Err(LifecycleError::AuthorizationRequired),
+        _ => Err(LifecycleError::AuthorizationMismatch),
+    }
 }
 
 pub(crate) fn expire_elapsed(

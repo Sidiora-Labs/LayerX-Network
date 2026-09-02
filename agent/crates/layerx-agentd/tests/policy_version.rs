@@ -46,6 +46,8 @@ fn session(version: &str) -> SessionRecord {
         sequence: 0,
         budget_reserved: 0,
         subscription_cursor: 0,
+        generation: 1,
+        retired_token_ids: BTreeSet::new(),
     }
 }
 
@@ -95,15 +97,13 @@ fn activation_only_changes_requests_received_after_it() {
     let request = request();
     let capability = capability();
     let old_session = session("v1");
-    let old_input =
-        EvaluationInput::without_protocol_budget(&request, &old_session, &capability);
+    let old_input = EvaluationInput::without_protocol_budget(&request, &old_session, &capability);
     let old_decision = evaluate(in_flight.policy(), &old_input);
     assert_eq!(old_decision.outcome, Outcome::Deny);
     assert_eq!(old_decision.reason, DecisionReason::InvalidContext);
 
     let new_session = session("v2");
-    let new_input =
-        EvaluationInput::without_protocol_budget(&request, &new_session, &capability);
+    let new_input = EvaluationInput::without_protocol_budget(&request, &new_session, &capability);
     let new_decision = evaluate(later.policy(), &new_input);
     assert_eq!(new_decision.outcome, Outcome::Deny);
     assert_eq!(new_decision.reason, DecisionReason::InvalidContext);

@@ -1,15 +1,19 @@
 //! Durable tenant-owned projection of agents created through the Human plane.
 
+use std::collections::BTreeSet;
+
 use layerx_types::payload::ModuleId;
 use layerx_types::verify::VerificationLevel;
 use layerx_wire::receipt::decode as decode_receipt;
 use sha2::{Digest, Sha256};
 
 use crate::human::{HumanAgentLifecycleSeed, HumanOperationError, HumanResponse};
+use crate::session::{InvalidationReason, RevocationEvent, SessionId, SessionRegistry};
 use crate::store::{key, ObjectKind, StorageClass, Store, TenantId};
 
 const PREFIX: &[u8] = b"managed-agent-v1:";
-const VERSION: u8 = 3;
+const VERSION: u8 = 4;
+const LEGACY_VERSION: u8 = 3;
 const MAX_AGENTS_PER_PAGE: u8 = 100;
 const MAX_EVIDENCE: usize = 64;
 
@@ -35,7 +39,7 @@ impl From<crate::human::HumanFinalizationEvidence> for FinalizationEvidence {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct ManagedAgent {
     pub agent_id: String,
     pub name: String,
@@ -53,8 +57,43 @@ pub struct ManagedAgent {
     pub agent_did: String,
     pub session_id: [u8; 32],
     pub session_token_id: [u8; 32],
+    pub session_generation: u64,
     pub protocol_grant_id: [u8; 32],
     pub active_budget_id: [u8; 32],
+}
+
+impl std::fmt::Debug for ManagedAgent {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ManagedAgent")
+            .field("agent_id", &self.agent_id)
+            .field("state", &self.state)
+            .field("agent_did", &self.agent_did)
+            .field("session_id", &self.session_id)
+            .field("session_token_id", &"[redacted]")
+            .field("session_generation", &self.session_generation)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Durable replay result for one server-issued session-scope restriction.
+pub struct SessionRestrictionReplay {
+    pub session_id: [u8; 32],
+    pub replacement_token: [u8; 32],
+    pub generation: u64,
+    pub response: HumanResponse,
+}
+
+/// Authority revocation whose finalized receipt and managed-agent observations were verified.
+/// The inner event is intentionally constructible only in this module.
+pub struct ValidatedAuthorityRevocation {
+    event: RevocationEvent,
+}
+
+impl ValidatedAuthorityRevocation {
+    pub(crate) const fn event(&self) -> &RevocationEvent {
+        &self.event
+    }
 }
 
 impl ManagedAgent {
@@ -63,10 +102,12 @@ impl ManagedAgent {
         installed_agent: &str,
         session_id: [u8; 32],
         session_token_id: [u8; 32],
+        session_generation: u64,
     ) -> Result<Self, HumanOperationError> {
         if installed_agent.is_empty()
             || session_id == [0; 32]
             || session_token_id == [0; 32]
+            || session_generation == 0
             || seed.agent_id.is_empty()
             || seed.name.is_empty()
             || seed.purpose.is_empty()
@@ -99,6 +140,7 @@ impl ManagedAgent {
             agent_did: installed_agent.to_owned(),
             session_id,
             session_token_id,
+            session_generation,
             protocol_grant_id: seed.protocol_grant_id,
             active_budget_id,
         })
@@ -112,6 +154,7 @@ impl ManagedAgent {
             || self.agent_did.is_empty()
             || self.session_id == [0; 32]
             || self.session_token_id == [0; 32]
+            || self.session_generation == 0
             || self.name.is_empty()
             || self.purpose.is_empty()
             || self.currency.is_empty()
@@ -194,6 +237,40 @@ pub fn validate_tenant(store: &Store, tenant: &TenantId) -> Result<(), HumanOper
     Ok(())
 }
 
+/// Validates every durable managed-agent credential against the restored authoritative session
+/// record. Legacy v3 managed records decode at the legacy session generation of one and are
+/// refused if the corresponding restored session has ever advanced.
+pub fn validate_session_coordinates(
+    store: &Store,
+    sessions: &SessionRegistry,
+    tenant: &TenantId,
+) -> Result<(), HumanOperationError> {
+    for object_id in store.list_object_ids(tenant, ObjectKind::Configuration) {
+        if !object_id.starts_with(PREFIX) {
+            continue;
+        }
+        let object_key = key(tenant.clone(), ObjectKind::Configuration, object_id)
+            .map_err(|_| HumanOperationError::Refused)?;
+        let value = store
+            .get(&object_key)
+            .ok_or(HumanOperationError::Unavailable)?;
+        if value.class() != StorageClass::LocalOnly {
+            return Err(HumanOperationError::Refused);
+        }
+        let agent = decode(value.bytes())?;
+        let session = sessions
+            .get(tenant, SessionId(agent.session_id))
+            .ok_or(HumanOperationError::Refused)?;
+        if session.request.token_id != agent.session_token_id
+            || session.generation != agent.session_generation
+            || session.request.agent.as_bytes() != agent.agent_did.as_bytes()
+        {
+            return Err(HumanOperationError::Refused);
+        }
+    }
+    Ok(())
+}
+
 pub fn get(
     store: &Store,
     tenant: &TenantId,
@@ -223,6 +300,7 @@ pub fn context(
     out.text(&agent.agent_did)?;
     out.fixed(&agent.session_id);
     out.fixed(&agent.session_token_id);
+    out.u64(agent.session_generation);
     out.fixed(&agent.protocol_grant_id);
     out.fixed(&agent.active_budget_id);
     out.u8(agent.state);
@@ -586,6 +664,81 @@ pub fn finalize_journey(
     )
 }
 
+/// Verifies the finalized governance evidence that invalidates all sessions under an agent DID.
+/// This performs no session mutation and returns an opaque value for the short ordered commit.
+pub fn validate_authority_revocation(
+    store: &Store,
+    tenant: &TenantId,
+    agent_id: &str,
+    kind: u8,
+    delay: u64,
+    ready_at: u64,
+    pre_observation: [u8; 32],
+    post_observation: [u8; 32],
+    evidence: FinalizationEvidence,
+) -> Result<ValidatedAuthorityRevocation, HumanOperationError> {
+    if !matches!(kind, 1 | 2)
+        || delay == 0
+        || ready_at <= evidence.finalized_at
+        || pre_observation == [0; 32]
+        || post_observation != [0; 32]
+    {
+        return Err(HumanOperationError::Refused);
+    }
+    let current = load_agent(store, tenant, agent_id)?;
+    if current.state == 4 {
+        return Err(HumanOperationError::Refused);
+    }
+    key_policy_observation(
+        store,
+        tenant,
+        pre_observation,
+        &current.agent_did,
+        kind == 2,
+        delay,
+        ready_at,
+        evidence.finalized_at,
+    )?;
+    let mut body = Vec::new();
+    body.push(28);
+    body.push(kind);
+    body.extend_from_slice(&0_u128.to_be_bytes());
+    body.extend_from_slice(&delay.to_be_bytes());
+    body.extend_from_slice(&ready_at.to_be_bytes());
+    body.extend_from_slice(&pre_observation);
+    body.extend_from_slice(&post_observation);
+    let source = validate_finalization_source(
+        store,
+        tenant,
+        agent_id,
+        evidence,
+        ModuleId::Governance,
+        2,
+        &body,
+    )?;
+    let agent = match source {
+        FinalizationSource::Completed(_) => current.clone(),
+        FinalizationSource::Pending { agent, .. } => agent,
+    };
+    if agent.state == 4 || agent.agent_did != current.agent_did {
+        return Err(HumanOperationError::Refused);
+    }
+    let did = layerx_types::ids::Did::new(agent.agent_did.as_bytes())
+        .map_err(|_| HumanOperationError::Refused)?;
+    Ok(ValidatedAuthorityRevocation {
+        event: RevocationEvent {
+            did,
+            authority: None,
+            reason: if kind == 1 {
+                InvalidationReason::PrimaryKeyRotated
+            } else {
+                InvalidationReason::AccountRecovered
+            },
+            observed_sequence: evidence.observed_sequence,
+        },
+    })
+}
+
 pub fn finalize_archive(
     store: &mut Store,
     tenant: &TenantId,
@@ -659,9 +812,14 @@ pub fn session_coordinates(
     store: &Store,
     tenant: &TenantId,
     agent_id: &str,
-) -> Result<(String, [u8; 32], [u8; 32]), HumanOperationError> {
+) -> Result<(String, [u8; 32], [u8; 32], u64), HumanOperationError> {
     let agent = load_agent(store, tenant, agent_id)?;
-    Ok((agent.agent_did, agent.session_id, agent.session_token_id))
+    Ok((
+        agent.agent_did,
+        agent.session_id,
+        agent.session_token_id,
+        agent.session_generation,
+    ))
 }
 pub fn protocol_grant(
     store: &Store,
@@ -688,6 +846,7 @@ fn session_bytes(
     out.text(&agent.agent_did)?;
     out.fixed(&agent.session_id);
     out.fixed(&agent.session_token_id);
+    out.u64(agent.session_generation);
     out.u8(u8::from(open));
     out.fixed(&action);
     let digest: [u8; 32] = Sha256::digest(
@@ -750,21 +909,214 @@ pub fn prepare_session_observation(
     let bytes = response.bytes().to_vec();
     Ok((response, record, bytes))
 }
+
+pub fn prepare_session_token_restriction(
+    store: &Store,
+    tenant: &TenantId,
+    agent_id: &str,
+    session: [u8; 32],
+    previous_token: [u8; 32],
+    previous_generation: u64,
+    replacement_token: [u8; 32],
+    action: [u8; 32],
+    generation: u64,
+    current_sequence: u64,
+    scopes: &BTreeSet<String>,
+    permitted_activity_types: &BTreeSet<u16>,
+) -> Result<
+    (
+        HumanResponse,
+        crate::store::TenantKey,
+        Vec<u8>,
+        crate::store::TenantKey,
+        Vec<u8>,
+        crate::store::TenantKey,
+        Vec<u8>,
+    ),
+    HumanOperationError,
+> {
+    if replacement_token == [0; 32] || replacement_token == previous_token || generation == 0 {
+        return Err(HumanOperationError::Refused);
+    }
+    let mut agent = load_agent(store, tenant, agent_id)?;
+    if agent.session_id != session
+        || agent.session_token_id != previous_token
+        || agent.session_generation != previous_generation
+    {
+        return Err(HumanOperationError::Refused);
+    }
+    agent.session_token_id = replacement_token;
+    agent.session_generation = generation;
+    let (response, digest) = session_bytes(&agent, action, true)?;
+    let mut id = b"managed-agent-observation-v1:".to_vec();
+    id.push(3);
+    id.extend_from_slice(&digest);
+    let companion = key(tenant.clone(), ObjectKind::Configuration, id)
+        .map_err(|_| HumanOperationError::Refused)?;
+    if store.get(&companion).is_some() {
+        return Err(HumanOperationError::Refused);
+    }
+    let request_digest = session_restriction_digest(
+        agent_id,
+        action,
+        current_sequence,
+        scopes,
+        permitted_activity_types,
+    )?;
+    let ledger_key = session_restriction_key(tenant, action)?;
+    if store.get(&ledger_key).is_some() {
+        return Err(HumanOperationError::Refused);
+    }
+    let mut ledger = Wire::new();
+    ledger.fixed(b"LXRT01");
+    ledger.fixed(&request_digest);
+    ledger.fixed(&session);
+    ledger.fixed(&replacement_token);
+    ledger.u64(generation);
+    ledger.u32(u32::try_from(response.bytes().len()).map_err(|_| HumanOperationError::Refused)?);
+    ledger.fixed(response.bytes());
+    Ok((
+        response.clone(),
+        agent_key(tenant, agent_id)?,
+        encode(&agent)?,
+        companion,
+        response.bytes().to_vec(),
+        ledger_key,
+        ledger.0,
+    ))
+}
+
+pub fn replay_session_token_restriction(
+    store: &Store,
+    tenant: &TenantId,
+    agent_id: &str,
+    action: [u8; 32],
+    current_sequence: u64,
+    scopes: &BTreeSet<String>,
+    permitted_activity_types: &BTreeSet<u16>,
+) -> Result<Option<SessionRestrictionReplay>, HumanOperationError> {
+    let ledger_key = session_restriction_key(tenant, action)?;
+    let Some(stored) = store.get(&ledger_key) else {
+        return Ok(None);
+    };
+    if stored.class() != StorageClass::LocalOnly {
+        return Err(HumanOperationError::Refused);
+    }
+    let expected = session_restriction_digest(
+        agent_id,
+        action,
+        current_sequence,
+        scopes,
+        permitted_activity_types,
+    )?;
+    let mut input = Input {
+        bytes: stored.bytes(),
+        offset: 0,
+    };
+    if input.take::<6>()? != *b"LXRT01" || input.fixed()? != expected {
+        return Err(HumanOperationError::Refused);
+    }
+    let session_id = input.fixed()?;
+    let replacement_token = input.fixed()?;
+    let generation = input.u64()?;
+    let response_length =
+        usize::try_from(input.u32()?).map_err(|_| HumanOperationError::Refused)?;
+    let response = HumanResponse::new(input.bytes(response_length)?.to_vec())
+        .map_err(|_| HumanOperationError::Refused)?;
+    if input.offset != input.bytes.len()
+        || session_id == [0; 32]
+        || replacement_token == [0; 32]
+        || generation == 0
+    {
+        return Err(HumanOperationError::Refused);
+    }
+    Ok(Some(SessionRestrictionReplay {
+        session_id,
+        replacement_token,
+        generation,
+        response,
+    }))
+}
+
+fn session_restriction_key(
+    tenant: &TenantId,
+    action: [u8; 32],
+) -> Result<crate::store::TenantKey, HumanOperationError> {
+    if action == [0; 32] {
+        return Err(HumanOperationError::Refused);
+    }
+    let mut id = b"managed-agent-session-restrict-v1:".to_vec();
+    id.extend_from_slice(&action);
+    key(tenant.clone(), ObjectKind::Idempotency, id).map_err(|_| HumanOperationError::Refused)
+}
+
+fn session_restriction_digest(
+    agent_id: &str,
+    action: [u8; 32],
+    current_sequence: u64,
+    scopes: &BTreeSet<String>,
+    permitted_activity_types: &BTreeSet<u16>,
+) -> Result<[u8; 32], HumanOperationError> {
+    if agent_id.is_empty()
+        || action == [0; 32]
+        || current_sequence == 0
+        || scopes.is_empty()
+        || scopes.len() > 64
+        || permitted_activity_types.is_empty()
+        || permitted_activity_types.len() > 256
+    {
+        return Err(HumanOperationError::Refused);
+    }
+    let mut digest = Sha256::new();
+    digest.update(b"layerx-agentd/session-restrict/v1\0");
+    digest.update(
+        u32::try_from(agent_id.len())
+            .map_err(|_| HumanOperationError::Refused)?
+            .to_be_bytes(),
+    );
+    digest.update(agent_id.as_bytes());
+    digest.update(action);
+    digest.update(current_sequence.to_be_bytes());
+    digest.update(
+        u16::try_from(scopes.len())
+            .map_err(|_| HumanOperationError::Refused)?
+            .to_be_bytes(),
+    );
+    for scope in scopes {
+        digest.update(
+            u32::try_from(scope.len())
+                .map_err(|_| HumanOperationError::Refused)?
+                .to_be_bytes(),
+        );
+        digest.update(scope.as_bytes());
+    }
+    digest.update(
+        u16::try_from(permitted_activity_types.len())
+            .map_err(|_| HumanOperationError::Refused)?
+            .to_be_bytes(),
+    );
+    for activity in permitted_activity_types {
+        digest.update(activity.to_be_bytes());
+    }
+    Ok(digest.finalize().into())
+}
 pub fn bind_session(
     store: &mut Store,
     tenant: &TenantId,
     agent_id: &str,
     session: [u8; 32],
     token: [u8; 32],
+    generation: u64,
     grant: [u8; 32],
     action: [u8; 32],
 ) -> Result<HumanResponse, HumanOperationError> {
-    if session == [0; 32] || token == [0; 32] {
+    if session == [0; 32] || token == [0; 32] || generation == 0 {
         return Err(HumanOperationError::Refused);
     }
     let mut agent = load_agent(store, tenant, agent_id)?;
     agent.session_id = session;
     agent.session_token_id = token;
+    agent.session_generation = generation;
     agent.protocol_grant_id = grant;
     agent.context.protocol_grant_id = grant;
     let (response, digest) = session_bytes(&agent, action, true)?;
@@ -778,7 +1130,10 @@ pub fn bind_session(
             return Err(HumanOperationError::Refused);
         }
         let current = load_agent(store, tenant, agent_id)?;
-        if current.session_id != session || current.session_token_id != token {
+        if current.session_id != session
+            || current.session_token_id != token
+            || current.session_generation != generation
+        {
             return Err(HumanOperationError::Refused);
         }
         return Ok(response);
@@ -809,6 +1164,57 @@ where
     F: FnOnce(&mut ManagedAgent) -> Result<(), HumanOperationError>,
     R: FnOnce(&ManagedAgent) -> Result<HumanResponse, HumanOperationError>,
 {
+    let validation = validate_finalization_source(
+        store,
+        tenant,
+        agent_id,
+        evidence,
+        expected_module,
+        expected_operation,
+        operation,
+    )?;
+    let (aggregate_key, action_key, request_digest, mut agent) = match validation {
+        FinalizationSource::Completed(response) => return Ok(response),
+        FinalizationSource::Pending {
+            aggregate_key,
+            action_key,
+            request_digest,
+            agent,
+        } => (aggregate_key, action_key, request_digest, agent),
+    };
+    mutate(&mut agent)?;
+    agent.updated_at = evidence.finalized_at;
+    agent.verified_evidence.push(evidence.receipt_digest);
+    agent.validate()?;
+    let response = response(&agent)?;
+    let mut action = Vec::with_capacity(32 + response.bytes().len());
+    action.extend_from_slice(&request_digest);
+    action.extend_from_slice(response.bytes());
+    store
+        .update_local_with_companion(aggregate_key, encode(&agent)?, action_key, action)
+        .map_err(|_| HumanOperationError::Unavailable)?;
+    Ok(response)
+}
+
+enum FinalizationSource {
+    Completed(HumanResponse),
+    Pending {
+        aggregate_key: crate::store::TenantKey,
+        action_key: crate::store::TenantKey,
+        request_digest: [u8; 32],
+        agent: ManagedAgent,
+    },
+}
+
+fn validate_finalization_source(
+    store: &Store,
+    tenant: &TenantId,
+    agent_id: &str,
+    evidence: FinalizationEvidence,
+    expected_module: ModuleId,
+    expected_operation: u8,
+    operation: &[u8],
+) -> Result<FinalizationSource, HumanOperationError> {
     if !valid_finalization_shape(evidence) {
         return Err(HumanOperationError::Refused);
     }
@@ -822,8 +1228,10 @@ where
         {
             return Err(HumanOperationError::Refused);
         }
-        return HumanResponse::new(saved.bytes()[32..].to_vec())
-            .map_err(|_| HumanOperationError::Refused);
+        return Ok(FinalizationSource::Completed(
+            HumanResponse::new(saved.bytes()[32..].to_vec())
+                .map_err(|_| HumanOperationError::Refused)?,
+        ));
     }
     let served = crate::receipt::serve(
         store,
@@ -859,22 +1267,16 @@ where
     if value.class() != StorageClass::LocalOnly {
         return Err(HumanOperationError::Refused);
     }
-    let mut agent = decode(value.bytes())?;
+    let agent = decode(value.bytes())?;
     if evidence.finalized_at < agent.updated_at {
         return Err(HumanOperationError::Refused);
     }
-    mutate(&mut agent)?;
-    agent.updated_at = evidence.finalized_at;
-    agent.verified_evidence.push(evidence.receipt_digest);
-    agent.validate()?;
-    let response = response(&agent)?;
-    let mut action = Vec::with_capacity(32 + response.bytes().len());
-    action.extend_from_slice(&request_digest);
-    action.extend_from_slice(response.bytes());
-    store
-        .update_local_with_companion(aggregate_key, encode(&agent)?, action_key, action)
-        .map_err(|_| HumanOperationError::Unavailable)?;
-    Ok(response)
+    Ok(FinalizationSource::Pending {
+        aggregate_key,
+        action_key,
+        request_digest,
+        agent,
+    })
 }
 
 fn valid_finalization_shape(evidence: FinalizationEvidence) -> bool {
@@ -1095,13 +1497,15 @@ fn encode(agent: &ManagedAgent) -> Result<Vec<u8>, HumanOperationError> {
     out.text(&agent.agent_did)?;
     out.fixed(&agent.session_id);
     out.fixed(&agent.session_token_id);
+    out.u64(agent.session_generation);
     out.fixed(&agent.protocol_grant_id);
     out.fixed(&agent.active_budget_id);
     Ok(out.0)
 }
 fn decode(bytes: &[u8]) -> Result<ManagedAgent, HumanOperationError> {
     let mut input = Input { bytes, offset: 0 };
-    if input.u8()? != VERSION {
+    let version = input.u8()?;
+    if version != VERSION && version != LEGACY_VERSION {
         return Err(HumanOperationError::Refused);
     }
     let agent = ManagedAgent {
@@ -1131,6 +1535,7 @@ fn decode(bytes: &[u8]) -> Result<ManagedAgent, HumanOperationError> {
         agent_did: input.text()?,
         session_id: input.fixed()?,
         session_token_id: input.fixed()?,
+        session_generation: if version == VERSION { input.u64()? } else { 1 },
         protocol_grant_id: input.fixed()?,
         active_budget_id: input.fixed()?,
     };
@@ -1233,6 +1638,18 @@ impl Input<'_> {
         )
         .map_err(|_| HumanOperationError::Refused)?
         .to_owned();
+        self.offset = end;
+        Ok(value)
+    }
+    fn bytes(&mut self, length: usize) -> Result<&[u8], HumanOperationError> {
+        let end = self
+            .offset
+            .checked_add(length)
+            .ok_or(HumanOperationError::Refused)?;
+        let value = self
+            .bytes
+            .get(self.offset..end)
+            .ok_or(HumanOperationError::Refused)?;
         self.offset = end;
         Ok(value)
     }

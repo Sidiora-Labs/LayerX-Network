@@ -60,6 +60,67 @@ fn every_access_is_tenant_scoped_and_persists_exact_bytes() {
 }
 
 #[test]
+fn tenant_enumeration_is_kind_scoped_stable_and_restored_from_disk() {
+    let root = test_directory("tenant-enumeration");
+    let alpha = tenant("alpha");
+    let beta = tenant("beta");
+    let zeta = tenant("zeta");
+    let policy_only = tenant("policy-only");
+    let mut store = match Store::open(&root) {
+        Ok(value) => value,
+        Err(error) => panic!("store open failed: {error}"),
+    };
+    assert!(store.tenant_ids_for_kind(ObjectKind::Session).is_empty());
+
+    for (tenant_id, object_id) in [
+        (zeta.clone(), b"session-z".as_slice()),
+        (alpha.clone(), b"session-a-2".as_slice()),
+        (beta.clone(), b"session-b".as_slice()),
+        (alpha.clone(), b"session-a-1".as_slice()),
+    ] {
+        let key = tenant_key(&tenant_id, ObjectKind::Session, object_id);
+        if let Err(error) = store.put_local(key, object_id.to_vec()) {
+            panic!("session write failed: {error}");
+        }
+    }
+    if let Err(error) = store.put_local(
+        tenant_key(&policy_only, ObjectKind::Policy, b"policy"),
+        b"policy-bytes".to_vec(),
+    ) {
+        panic!("policy write failed: {error}");
+    }
+    if let Err(error) = store.put_core_cache(
+        tenant_key(&beta, ObjectKind::Receipt, b"receipt"),
+        b"receipt-bytes".to_vec(),
+    ) {
+        panic!("receipt write failed: {error}");
+    }
+    drop(store);
+
+    let reopened = match Store::open(&root) {
+        Ok(value) => value,
+        Err(error) => panic!("store reopen failed: {error}"),
+    };
+    assert_eq!(
+        reopened.tenant_ids_for_kind(ObjectKind::Session),
+        vec![alpha, beta.clone(), zeta]
+    );
+    assert_eq!(
+        reopened.tenant_ids_for_kind(ObjectKind::Receipt),
+        vec![beta]
+    );
+    assert_eq!(
+        reopened.tenant_ids_for_kind(ObjectKind::Policy),
+        vec![policy_only]
+    );
+    assert!(reopened
+        .tenant_ids_for_kind(ObjectKind::Configuration)
+        .is_empty());
+    drop(reopened);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn signed_bytes_outbox_and_idempotency_are_one_durable_write() {
     let root = test_directory("transaction");
     let tenant_id = tenant("tenant-a");

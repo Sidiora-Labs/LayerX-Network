@@ -1104,17 +1104,15 @@ impl HumanApiComponents for ProductionComponents {
                             },
                         )
                         .map_err(agent_failure_from_creation_contract)?;
-                    let token_id: [u8; 32] = Sha256::digest(
-                        [
-                            b"layerx-human/agent-session-token/v1".as_slice(),
-                            operation_key.as_slice(),
-                        ]
-                        .concat(),
-                    )
-                    .into();
+                    let (token_id, generation) = adapter
+                        .take_latest_session_credential()
+                        .map_err(agent_failure_from_creation_contract)?;
                     let observation = agent
                         .agent_session_bind(agent_id, operation_key, token_id, operation_key)
                         .map_err(agent_failure)?;
+                    if observation.generation != generation {
+                        return Err(ApiFailure::upstream_degraded());
+                    }
                     let finalization = super::agent_runtime::AgentFinalizationEvidence {
                         action_key: operation_key,
                         activity_id: operation_key,

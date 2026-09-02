@@ -39,6 +39,7 @@ const AGENT_SESSION_SNAPSHOT: u8 = 34;
 const AGENT_SESSION_SUSPEND: u8 = 35;
 const AGENT_SESSION_BIND: u8 = 36;
 const AGENT_LIFECYCLE_PUBLISH: u8 = 37;
+const AGENT_SESSION_RESTRICT: u8 = 38;
 const ACCOUNT_SEQUENCE: u8 = 13;
 const BALANCE: u8 = 6;
 const HEAD: u8 = 7;
@@ -120,7 +121,6 @@ impl std::fmt::Debug for HumanAgentSessionSecret {
     }
 }
 
-#[derive(Debug)]
 pub struct HumanOwnerInstall {
     pub agent: String,
     pub authority_kind: u8,
@@ -224,7 +224,6 @@ pub enum HumanAgentJourneyKind {
     },
 }
 
-#[derive(Debug)]
 pub enum HumanRequest {
     Prepare(MutationEnvelope<HumanPrepare>),
     Submit(MutationEnvelope<HumanSubmit>),
@@ -336,13 +335,36 @@ pub enum HumanRequest {
         token_id: [u8; 32],
         action_key: [u8; 32],
     },
+    AgentSessionRestrict {
+        agent_id: String,
+        current_sequence: u64,
+        action_key: [u8; 32],
+        permitted_activity_types: Vec<u16>,
+        scopes: Vec<String>,
+    },
 }
 
 /// Response bytes are the canonical typed payload following the shared magic
 /// and success byte. Implementations build them from the daemon's existing
 /// prepare, outbox, approval and receipt response objects.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct HumanResponse(Vec<u8>);
+
+impl std::fmt::Debug for HumanResponse {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("HumanResponse")
+            .field("bytes", &"[redacted]")
+            .field("length", &self.0.len())
+            .finish()
+    }
+}
+
+impl Drop for HumanResponse {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.0);
+    }
+}
 
 impl HumanResponse {
     pub fn new(bytes: Vec<u8>) -> Result<Self, HumanProtocolError> {
@@ -546,6 +568,18 @@ pub trait HumanOperations {
         token_id: [u8; 32],
         action_key: [u8; 32],
     ) -> Result<HumanResponse, HumanOperationError>;
+
+    fn agent_session_restrict(
+        &mut self,
+        _peer: &HumanPeer,
+        _agent_id: &str,
+        _current_sequence: u64,
+        _action_key: [u8; 32],
+        _permitted_activity_types: Vec<u16>,
+        _scopes: Vec<String>,
+    ) -> Result<HumanResponse, HumanOperationError> {
+        Err(HumanOperationError::Refused)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -846,6 +880,20 @@ pub fn serve_one<T: FrameTransport, O: HumanOperations>(
             token_id,
             action_key,
         } => operations.agent_session_bind(peer, &agent_id, session_id, token_id, action_key),
+        HumanRequest::AgentSessionRestrict {
+            agent_id,
+            current_sequence,
+            action_key,
+            permitted_activity_types,
+            scopes,
+        } => operations.agent_session_restrict(
+            peer,
+            &agent_id,
+            current_sequence,
+            action_key,
+            permitted_activity_types,
+            scopes,
+        ),
     };
     let mut response = Vec::with_capacity(64);
     response.extend_from_slice(MAGIC);
@@ -1159,6 +1207,26 @@ fn decode_request(bytes: Vec<u8>) -> Result<HumanRequest, HumanProtocolError> {
             token_id: reader.fixed()?,
             action_key: reader.fixed()?,
         },
+        AGENT_SESSION_RESTRICT => {
+            let agent_id = reader.text()?;
+            let current_sequence = reader.u64()?;
+            let action_key = reader.fixed()?;
+            let count = usize::from(reader.u16()?);
+            if count == 0 || count > 256 {
+                return Err(HumanProtocolError::Malformed);
+            }
+            let mut permitted_activity_types = Vec::with_capacity(count);
+            for _ in 0..count {
+                permitted_activity_types.push(reader.u16()?);
+            }
+            HumanRequest::AgentSessionRestrict {
+                agent_id,
+                current_sequence,
+                action_key,
+                permitted_activity_types,
+                scopes: text_list(&mut reader, 64)?,
+            }
+        }
         _ => return Err(HumanProtocolError::Malformed),
     };
     reader.finish()?;
