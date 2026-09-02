@@ -90,7 +90,7 @@ spec:
             - {name: LAYERX_GATEWAY_KEY_PROVISIONING_KEY_FILE, value: /run/layerx/provisioning/key}
             - {name: LAYERX_GATEWAY_NETWORK_ID, value: layerx-testnet}
             - {name: LAYERX_GATEWAY_LXP_WIRE_VERSION, value: "2"}
-            - {name: LAYERX_GATEWAY_PROTOCOL_NETWORK_ID, value: "1"}
+            - {name: LAYERX_GATEWAY_PROTOCOL_NETWORK_ID, value: "402"}
             - {name: LAYERX_GATEWAY_MODULE_REGISTRY_FILE, value: /run/layerx/modules/registry.json}
             - {name: LAYERX_GATEWAY_IDEMPOTENCY_SECONDS, value: "604800"}
           readinessProbe: {httpGet: {scheme: HTTPS, path: /readyz, port: https}, periodSeconds: 5, failureThreshold: 3}
@@ -160,7 +160,7 @@ spec:
   podSelector: {matchLabels: {app: layerx-gateway}}
   policyTypes: [Ingress, Egress]
   ingress:
-    - from: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ingress-nginx}}}]
+    - from: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ingress-nginx}}}, {podSelector: {matchLabels: {app: layerx-testnet-control}}}]
       ports: [{protocol: TCP, port: 9443}]
   egress:
     - to: [{podSelector: {matchLabels: {app: layerx-gateway-redis}}}]
@@ -184,9 +184,9 @@ metadata:
     nginx.ingress.kubernetes.io/proxy-read-timeout: "10"
 spec:
   ingressClassName: nginx
-  tls: [{hosts: [gateway.testnet.layerx.network], secretName: layerx-gateway-ingress-tls}]
+  tls: [{hosts: [api.testnet.layerx.network], secretName: layerx-gateway-ingress-tls}]
   rules:
-    - host: gateway.testnet.layerx.network
+    - host: api.testnet.layerx.network
       http:
         paths:
           - path: /

@@ -380,4 +380,26 @@ file = "src/protocol/lxp_protocol.c"
 symbol = "domain_tags Domain::CheckpointCertificate CanonicalCheckpoint.CHECKPOINT_DOMAIN CheckpointRegistry.registerCheckpoint"
 observed = "cg spec done 3.2 ran verify_cmd (make test-protocol agent-test-wire-hashing agent-test-proof-checkpoint test-contracts interop-test-mirrors) to pass and 30 of 31 touch checks to pass, then failed graph checks for four symbols and one touch. domain_tags is a static const array at src/protocol/lxp_protocol.c:9, Domain::CheckpointCertificate is an enum variant at agent/crates/layerx-wire/src/hash.rs:33, CanonicalCheckpoint.CHECKPOINT_DOMAIN is a Solidity library constant and CheckpointRegistry.registerCheckpoint is the function at contracts/CheckpointRegistry.sol:149; the graph does not resolve static data, enum variants or dotted Solidity members. interop/Cargo.lock gained one line in commit c82e26f6 (the layerx-mirror dev-dependency on layerx-types) but the touch check reports no matching change because lock files are not part of the graph snapshot."
 assumption = "The task was marked done with --force solely to override graph checks that cannot see these identifiers or the lock file change; the verify_cmd was executed and passed and no gate was skipped, consistent with observation.1.1.7."
+[observation.3.6.1]
+task = "3.6"
+file = "platform/hosted/tests/topology-check.sh"
+symbol = "topology_check external"
+observed = "bash platform/hosted/tests/topology-check.sh (pyyaml and --yaml-parser builtin) resolves 24 configured in-cluster edges across the testnet, gateway and registry manifests: 12 ok with Service port, pod port and NetworkPolicy admission verified on both ends, 4 notes for ConfigMap-sourced values provisioned outside the manifests, and 12 external edges to layerx-pending-core, layerx-pending-core-admin, paxeer-boundary, layerx-identity, layerx-receipt-authority, layerx-agent-boundary and status-publisher.layerx-status, whose Services and NetworkPolicies are not in the repository (observation.1.1.5). For those edges only the caller-side egress policy is checked; --strict turns them into a failure (exit 1)."
+assumption = "The default target passes because the callee side of the separately operated services cannot be verified from the repository; when task 3.7 adds their manifests, topology-check picks them up by listing those manifests and the external edges become ok or fail without further tooling changes."
+severity = "note"
+
+[observation.3.6.2]
+task = "3.6"
+file = "platform/hosted/testnet/tests/hosted-smoke.sh"
+symbol = "platform-hosted-smoke"
+observed = "The extended hosted smoke (per-dependency and per-journey readiness assertions, journey admission before each step, cluster identity line, first-payment path) is syntax-checked by sh -n and bash -n inside platform-test-tooling but was not executed: this host has no cluster and command -v reports kind, k3d, kubectl, helm, cosign, syft, yq and shellcheck missing, and the owner inputs LAYERX_TESTNET_URL, LAYERX_GATEWAY_URL, LAYERX_FAUCET_URL, LAYERX_TEST_AUTH_TOKEN_FILE, LAYERX_TEST_CA_FILE and LAYERX_TEST_SOURCE_DID are not provided."
+assumption = "platform-hosted-smoke stays a bring-up gate for tasks 3.7 and 5.x against the real beta cluster; no pass is claimed for it under task 3.6."
+severity = "blocker"
+
+[observation.3.6.3]
+task = "3.6"
+file = "platform/hosted/testnet/src/lib.rs"
+symbol = "cargo clippy --offline --manifest-path platform/Cargo.toml --locked -p layerx-platform-testnet --all-targets"
+observed = "Under the workspace deny-level lints the testnet crate fails clippy on one pre-existing finding outside the task's touches: lib.rs:26 fn validate returns Result without a # Errors doc section (missing_errors_doc, unchanged since 093d2b90). The task-owned platform/hosted/testnet/src/main.rs lints clean once the four findings that existed in it on main (two ToOwned assignments in client_request, two needless pass-by-value parameters of serve) were rewritten; verified by a diagnostic run allowing only clippy::missing_errors_doc, which reported no findings."
+assumption = "The crate's clippy gate is left failing on lib.rs for its owner rather than silenced under task 3.6; the task verify_cmd does not include platform-lint. See observation.1.2.5 for the same pattern in the CLI and emulator crates."
 severity = "note"

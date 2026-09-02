@@ -9,7 +9,7 @@ PLATFORM_MANIFEST := platform/Cargo.toml
 	platform-test-android-artifact platform-test-ios-artifact \
 	platform-real-agent-integration \
 	platform-real-ios-integration platform-real-android-integration \
-	platform-test-docs platform-hosted-smoke platform-test-agent-install \
+	platform-test-docs platform-hosted-smoke platform-hosted-topology-check platform-test-agent-install \
 	platform-policy-install platform-sample-preflight platform-sample-install platform-sample-dependencies-ready \
 	platform-install-local-artifacts platform-dependencies-install platform-gradle-qualification
 
@@ -116,7 +116,8 @@ platform-test-tooling: platform-test-cli-production-credential-refusal
 	sh -n platform/hosted/testnet/run-testnet.sh platform/hosted/testnet/reset-testnet.sh \
 		platform/hosted/testnet/render-status.sh platform/hosted/testnet/tests/hosted-smoke.sh
 	bash -n platform/cli/tests/install-journey.sh \
-		platform/examples/agent-program-call/walkthrough.sh
+		platform/examples/agent-program-call/walkthrough.sh \
+		platform/hosted/tests/topology-check.sh
 	bash -n platform/cli/tests/clean-bootstrap.sh
 	$(PLATFORM_CARGO) build --offline --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-cli
 	bash platform/cli/tests/clean-bootstrap.sh
@@ -136,6 +137,9 @@ platform-hosted-smoke:
 	@test -n "$${LAYERX_TEST_ASSET:-}"
 	@test -n "$${LAYERX_TEST_AMOUNT:-}"
 	sh platform/hosted/testnet/tests/hosted-smoke.sh
+
+platform-hosted-topology-check:
+	bash platform/hosted/tests/topology-check.sh
 
 platform-test-agent-install:
 	@test -n "$${LAYERX_BIN:-}"

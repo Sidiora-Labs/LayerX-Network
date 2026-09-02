@@ -61,6 +61,7 @@ The reached rung of a surface is raised only by a `[gate.*]` record in the evide
 | hosted-registry | hosted program registry | hosted | deployment_proven | source_present | platform/hosted/registry |
 | hosted-webhooks | signed webhook deliveries | hosted | deployment_proven | source_present | platform/hosted/webhooks |
 | hosted-dashboard | developer dashboard API and web | hosted | deployment_proven | source_present | platform/hosted/dashboard |
+| hosted-tests | static topology check: every configured in-cluster URL resolves to an exposed Service port admitted by NetworkPolicy on both ends | hosted | deployment_proven | source_present | platform/hosted/tests |
 | middleware-buyer | @sidiora/layerx-buyer-middleware | functional | runtime_proven | source_present | platform/middleware/buyer |
 | middleware-seller | @sidiora/layerx-seller-middleware | functional | runtime_proven | source_present | platform/middleware/seller |
 | middleware-merchant | @sidiora/layerx-merchant-middleware | functional | runtime_proven | source_present | platform/middleware/merchant |
@@ -119,7 +120,7 @@ The reached rung of a surface is raised only by a `[gate.*]` record in the evide
 | emulator_endpoint | http://127.0.0.1:9402 | platform/docs/content/install.md; platform/docs/content/environments/emulator.md |
 | testnet_core_url | https://layerx-pending-core.layerx-testnet.svc.cluster.local:9443 | platform/hosted/testnet/deployment.yaml LAYERX_TESTNET_CORE_URL |
 | testnet_core_admin_url | https://layerx-pending-core-admin.layerx-testnet.svc.cluster.local:9444 | platform/hosted/testnet/deployment.yaml LAYERX_TESTNET_CORE_ADMIN_URL |
-| testnet_gateway_url | https://layerx-gateway.layerx-testnet.svc.cluster.local:9443 | platform/hosted/testnet/deployment.yaml LAYERX_TESTNET_GATEWAY_URL |
+| testnet_gateway_url | https://layerx-gateway.layerx-testnet.svc.cluster.local:443 | platform/hosted/testnet/deployment.yaml LAYERX_TESTNET_GATEWAY_URL |
 | testnet_paxeer_url | https://paxeer-boundary.layerx-testnet.svc.cluster.local:9443 | platform/hosted/testnet/deployment.yaml LAYERX_TESTNET_PAXEER_URL |
 | gateway_component_url | https://layerx-agent-boundary.layerx-testnet.svc.cluster.local:9443 | platform/hosted/gateway/deployment.yaml LAYERX_GATEWAY_COMPONENT_URL |
 | gateway_authority_url | https://layerx-receipt-authority.layerx-testnet.svc.cluster.local:9443 | platform/hosted/gateway/deployment.yaml LAYERX_GATEWAY_AUTHORITY_URL |
@@ -232,7 +233,7 @@ The artifact set of the beta is exactly the content of the artifact manifest at 
 An outcome that is not known is reported as unknown, never as success, at every layer of the beta:
 
 - A submission whose result the client did not observe stays `unknown` (ramp status vocabulary) or `still_checking` (faucet claims) under its idempotency key and is resolved only by looking up the canonical receipt or activity; it is never resubmitted blindly and never translated into a safe outcome.
-- `testnet-control` reports `/readyz` degraded until the core, core-admin, gateway, identity and Paxeer readiness endpoints answer and the package semantic version and wire protocol version match the pending release; a gateway outage does not imply a core outage and Paxeer degradation is never presented as LayerX finality.
+- `testnet-control` reports `/readyz` per dependency (identity, faucet, core, core admin, receipt authority, registry, Redis, gateway, Paxeer boundary) and per journey (funding, payment, receipt inspection, Programs), each journey being the conjunction of its declared dependency set; the global state is `ready` only when every dependency is reachable, every journey is ready and the package semantic version and wire protocol version match the pending release, and `/v1/journeys/<journey>` admits a tester only while that journey is ready, naming the failing dependency otherwise. A gateway outage does not imply a core outage and Paxeer degradation is never presented as LayerX finality.
 - A gate that cannot run because an owner input is missing is recorded in the evidence ledger with outcome `blocked` and the input named; it is never recorded as `pass`.
 - A surface without an executed gate remains at rung `source_present`; a task status never raises a surface above `tested`.
 - The readiness claim of this contract stays `false` while any surface is below its required rung or any contradiction listed below is open.
@@ -276,12 +277,8 @@ Checkpoint identity and freshness are declared once, in `contracts/config/checkp
 
 | Key | Canonical value | Divergent source | Divergent value | Resolving task |
 | --- | --- | --- | --- | --- |
-| gateway_hostname | api.testnet.layerx.network | platform/hosted/gateway/deployment.yaml Ingress layerx-gateway host | gateway.testnet.layerx.network | 3.6 |
 | faucet_hostname | faucet.testnet.layerx.network | platform/hosted/testnet/deployment.yaml: Service layerx-faucet-public is a LoadBalancer with no Ingress host | (no ingress host) | 3.7 |
-| docs_wire_protocol_version | 2 | platform/docs/testnet.md LXP wire protocol version | 1 | 3.6 |
-| protocol_network_id | 402 | platform/hosted/gateway/deployment.yaml LAYERX_GATEWAY_PROTOCOL_NETWORK_ID | 1 | 3.6 |
 | placeholder_hostname | layerx.network | platform/hosted/webhooks/deployment.yaml Ingress layerx-developer and layerx-developer-web host | developers.layerx.example | 3.7 |
-| testnet_gateway_url_port | 443 | platform/hosted/testnet/deployment.yaml LAYERX_TESTNET_GATEWAY_URL port versus platform/hosted/gateway/deployment.yaml Service layerx-gateway port | 9443 | 3.6 |
 | install_package_unlisted | com.sidiora.layerx:layerx-android, com.sidiora.layerx:layerx-sdk, com.sidiora.layerx:layerx-spring-boot-starter | platform/docs/content/install.md Java and Kotlin install coordinate carries the version and is not listed verbatim in platform/release/registries.kvx [registry.maven-central] packages | com.sidiora.layerx:layerx-sdk:0.1.0 | 4.2 |
 
 Each row records a value that a source carries today and that disagrees with the canonical value. The contract check recomputes every row from the sources; a row that disappears from the sources must be removed here, a disagreement that is not listed here fails the build, and the readiness claim cannot become `true` while any row remains.

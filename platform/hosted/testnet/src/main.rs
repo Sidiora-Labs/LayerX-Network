@@ -1,7 +1,7 @@
 use layerx_platform_testnet::{
     platform_testnet, PendingRelease, LXP_WIRE_PROTOCOL_VERSION, TESTNET_NETWORK_ID,
 };
-use native_tls::{Certificate, TlsConnector};
+use native_tls::{Certificate, TlsConnector, TlsStream};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use rustls::{ServerConfig, ServerConnection, StreamOwned};
 use serde::{Deserialize, Serialize};
@@ -32,9 +32,24 @@ struct Endpoint {
 
 impl Endpoint {
     fn parse(value: &str) -> Result<Self, String> {
-        let rest = value
-            .strip_prefix("https://")
-            .ok_or_else(|| "component endpoint must use HTTPS".to_owned())?;
+        Self::parse_scheme(value, "https", 443)
+    }
+
+    fn parse_redis(value: &str) -> Result<Self, String> {
+        let endpoint = Self::parse_scheme(value, "rediss", 6379)?;
+        if !endpoint.path.is_empty() {
+            return Err("Redis endpoint must not carry a path".to_owned());
+        }
+        Ok(endpoint)
+    }
+
+    fn parse_scheme(value: &str, scheme: &str, default_port: u16) -> Result<Self, String> {
+        let rest = value.strip_prefix(&format!("{scheme}://")).ok_or_else(|| {
+            format!(
+                "component endpoint must use {}",
+                scheme.to_ascii_uppercase()
+            )
+        })?;
         let (authority, tail) = rest.split_once('/').unwrap_or((rest, ""));
         if authority.is_empty()
             || authority.contains(['@', '?', '#', '\\'])
@@ -43,7 +58,7 @@ impl Endpoint {
             return Err("component endpoint is not canonical".to_owned());
         }
         let (host, port) = authority.rsplit_once(':').map_or_else(
-            || Ok::<_, String>((authority.to_owned(), 443)),
+            || Ok::<_, String>((authority.to_owned(), default_port)),
             |(host, port)| {
                 Ok((
                     host.to_owned(),
@@ -88,15 +103,557 @@ struct Config {
     admin_listen: SocketAddr,
     tls: Arc<ServerConfig>,
     outbound_ca: Certificate,
-    package_semver: String,
-    pending_package_semver: String,
-    pending_wire_version: u16,
+    release: ReleaseGate,
+    identity: Endpoint,
+    faucet: Endpoint,
     core: Endpoint,
     core_admin: Endpoint,
+    receipt_authority: Endpoint,
+    registry: Endpoint,
+    redis: Endpoint,
     gateway: Endpoint,
     paxeer: Endpoint,
     backend_admin_token: Zeroizing<String>,
     inbound_admin_token: Zeroizing<String>,
+}
+
+struct ReleaseGate {
+    package_semver: String,
+    pending_package_semver: String,
+    pending_wire_version: u16,
+}
+
+struct ReleaseCompatible;
+
+impl ReleaseGate {
+    fn verify(&self) -> Result<ReleaseCompatible, String> {
+        if self.package_semver != self.pending_package_semver {
+            return Err(format!(
+                "package release {} does not match the pending release {}",
+                self.package_semver, self.pending_package_semver
+            ));
+        }
+        if self.pending_wire_version != LXP_WIRE_PROTOCOL_VERSION {
+            return Err(format!(
+                "LXP wire protocol version {LXP_WIRE_PROTOCOL_VERSION} does not match the pending version {}",
+                self.pending_wire_version
+            ));
+        }
+        Ok(ReleaseCompatible)
+    }
+
+    fn view(&self) -> ReleaseView {
+        let (state, detail) = match self.verify() {
+            Ok(ReleaseCompatible) => ("ready", "pending release matches".to_owned()),
+            Err(detail) => ("degraded", detail),
+        };
+        ReleaseView {
+            state,
+            detail,
+            package_semver: self.package_semver.clone(),
+            pending_package_semver: self.pending_package_semver.clone(),
+            lxp_wire_protocol_version: LXP_WIRE_PROTOCOL_VERSION,
+            pending_lxp_wire_protocol_version: self.pending_wire_version,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Dependency {
+    Identity,
+    Faucet,
+    Core,
+    CoreAdmin,
+    ReceiptAuthority,
+    Registry,
+    Redis,
+    Gateway,
+    Paxeer,
+}
+
+impl Dependency {
+    const ALL: [Self; 9] = [
+        Self::Identity,
+        Self::Faucet,
+        Self::Core,
+        Self::CoreAdmin,
+        Self::ReceiptAuthority,
+        Self::Registry,
+        Self::Redis,
+        Self::Gateway,
+        Self::Paxeer,
+    ];
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Identity => "identity",
+            Self::Faucet => "faucet",
+            Self::Core => "core",
+            Self::CoreAdmin => "core_admin",
+            Self::ReceiptAuthority => "receipt_authority",
+            Self::Registry => "registry",
+            Self::Redis => "redis",
+            Self::Gateway => "gateway",
+            Self::Paxeer => "paxeer",
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Journey {
+    Funding,
+    Payment,
+    ReceiptInspection,
+    Programs,
+}
+
+impl Journey {
+    const ALL: [Self; 4] = [
+        Self::Funding,
+        Self::Payment,
+        Self::ReceiptInspection,
+        Self::Programs,
+    ];
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Funding => "funding",
+            Self::Payment => "payment",
+            Self::ReceiptInspection => "receipt_inspection",
+            Self::Programs => "programs",
+        }
+    }
+
+    fn route(self) -> &'static str {
+        match self {
+            Self::Funding => "/v1/journeys/funding",
+            Self::Payment => "/v1/journeys/payment",
+            Self::ReceiptInspection => "/v1/journeys/receipt-inspection",
+            Self::Programs => "/v1/journeys/programs",
+        }
+    }
+
+    fn from_route(path: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|journey| journey.route() == path)
+    }
+
+    fn dependencies(self) -> &'static [Dependency] {
+        match self {
+            Self::Funding => &[
+                Dependency::Identity,
+                Dependency::Faucet,
+                Dependency::Redis,
+                Dependency::CoreAdmin,
+                Dependency::Core,
+            ],
+            Self::Payment => &[
+                Dependency::Identity,
+                Dependency::Gateway,
+                Dependency::Core,
+                Dependency::ReceiptAuthority,
+            ],
+            Self::ReceiptInspection => &[
+                Dependency::Gateway,
+                Dependency::ReceiptAuthority,
+                Dependency::Core,
+            ],
+            Self::Programs => &[
+                Dependency::Gateway,
+                Dependency::Registry,
+                Dependency::Core,
+                Dependency::ReceiptAuthority,
+            ],
+        }
+    }
+}
+
+#[derive(Clone)]
+struct DependencyReport {
+    dependency: Dependency,
+    outcome: Result<String, String>,
+}
+
+#[derive(Clone)]
+struct ReadyDependency {
+    name: &'static str,
+    detail: String,
+}
+
+#[derive(Clone)]
+struct FailedDependency {
+    name: &'static str,
+    detail: String,
+}
+
+impl DependencyReport {
+    fn classify(&self) -> Result<ReadyDependency, FailedDependency> {
+        match &self.outcome {
+            Ok(detail) => Ok(ReadyDependency {
+                name: self.dependency.name(),
+                detail: detail.clone(),
+            }),
+            Err(detail) => Err(FailedDependency {
+                name: self.dependency.name(),
+                detail: detail.clone(),
+            }),
+        }
+    }
+}
+
+impl ReadyDependency {
+    fn view(&self) -> DependencyView {
+        DependencyView {
+            name: self.name,
+            ready: true,
+            detail: self.detail.clone(),
+        }
+    }
+}
+
+impl FailedDependency {
+    fn view(&self) -> DependencyView {
+        DependencyView {
+            name: self.name,
+            ready: false,
+            detail: self.detail.clone(),
+        }
+    }
+}
+
+fn dependency_view(dependency: &Result<ReadyDependency, FailedDependency>) -> DependencyView {
+    match dependency {
+        Ok(ready) => ready.view(),
+        Err(failed) => failed.view(),
+    }
+}
+
+struct DependencyReports {
+    reports: [DependencyReport; 9],
+}
+
+impl DependencyReports {
+    #[cfg(test)]
+    fn new(outcome: impl Fn(Dependency) -> Result<String, String>) -> Self {
+        Self {
+            reports: Dependency::ALL.map(|dependency| DependencyReport {
+                dependency,
+                outcome: outcome(dependency),
+            }),
+        }
+    }
+
+    fn probe(config: &Config) -> Self {
+        let mut probed = probe_dependencies(config, &Dependency::ALL).into_iter();
+        Self {
+            reports: Dependency::ALL.map(|dependency| {
+                probed
+                    .next()
+                    .filter(|report| report.dependency == dependency)
+                    .unwrap_or_else(|| DependencyReport {
+                        dependency,
+                        outcome: Err("dependency was not probed".to_owned()),
+                    })
+            }),
+        }
+    }
+
+    fn report(&self, dependency: Dependency) -> &DependencyReport {
+        &self.reports[dependency as usize]
+    }
+
+    fn classify(&self) -> Vec<Result<ReadyDependency, FailedDependency>> {
+        self.reports
+            .iter()
+            .map(DependencyReport::classify)
+            .collect()
+    }
+}
+
+struct ReadyJourney {
+    journey: Journey,
+    dependencies: Vec<ReadyDependency>,
+}
+
+struct DegradedJourney {
+    journey: Journey,
+    failing: FailedDependency,
+    dependencies: Vec<Result<ReadyDependency, FailedDependency>>,
+}
+
+enum JourneyReadiness {
+    Ready(ReadyJourney),
+    Degraded(DegradedJourney),
+}
+
+impl ReadyJourney {
+    fn view(&self) -> JourneyView {
+        JourneyView {
+            journey: self.journey.name(),
+            ready: true,
+            dependencies: self
+                .dependencies
+                .iter()
+                .map(ReadyDependency::view)
+                .collect(),
+            failing: Vec::new(),
+        }
+    }
+}
+
+impl DegradedJourney {
+    fn failing_names(&self) -> Vec<&'static str> {
+        std::iter::once(self.failing.name)
+            .chain(
+                self.dependencies
+                    .iter()
+                    .filter_map(|dependency| dependency.as_ref().err())
+                    .map(|failed| failed.name)
+                    .filter(|name| *name != self.failing.name),
+            )
+            .collect()
+    }
+
+    fn view(&self) -> JourneyView {
+        JourneyView {
+            journey: self.journey.name(),
+            ready: false,
+            dependencies: self.dependencies.iter().map(dependency_view).collect(),
+            failing: self.failing_names(),
+        }
+    }
+
+    fn refusal(&self) -> serde_json::Value {
+        serde_json::json!({
+            "error": {
+                "code": "journey_degraded",
+                "journey": self.journey.name(),
+                "failing": self.failing_names(),
+                "retry": "after"
+            }
+        })
+    }
+}
+
+impl JourneyReadiness {
+    fn compute(journey: Journey, reports: &DependencyReports) -> Self {
+        Self::from_reports(
+            journey,
+            &journey
+                .dependencies()
+                .iter()
+                .map(|dependency| reports.report(*dependency).clone())
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    fn probe(config: &Config, journey: Journey) -> Self {
+        Self::from_reports(journey, &probe_dependencies(config, journey.dependencies()))
+    }
+
+    fn from_reports(journey: Journey, reports: &[DependencyReport]) -> Self {
+        let dependencies: Vec<Result<ReadyDependency, FailedDependency>> =
+            reports.iter().map(DependencyReport::classify).collect();
+        match dependencies
+            .iter()
+            .cloned()
+            .collect::<Result<Vec<ReadyDependency>, FailedDependency>>()
+        {
+            Ok(ready) => Self::Ready(ReadyJourney {
+                journey,
+                dependencies: ready,
+            }),
+            Err(failing) => Self::Degraded(DegradedJourney {
+                journey,
+                failing,
+                dependencies,
+            }),
+        }
+    }
+
+    fn is_ready(&self) -> bool {
+        matches!(self, Self::Ready(_))
+    }
+
+    fn view(&self) -> JourneyView {
+        match self {
+            Self::Ready(ready) => ready.view(),
+            Self::Degraded(degraded) => degraded.view(),
+        }
+    }
+
+    fn admission(&self) -> JourneyAdmission {
+        JourneyAdmission {
+            admitted: self.is_ready(),
+            readiness: self.view(),
+        }
+    }
+}
+
+struct ReadyJourneys {
+    funding: ReadyJourney,
+    payment: ReadyJourney,
+    receipt_inspection: ReadyJourney,
+    programs: ReadyJourney,
+}
+
+enum HostedReadiness {
+    Ready {
+        journeys: ReadyJourneys,
+        dependencies: Vec<ReadyDependency>,
+        release: ReleaseCompatible,
+    },
+    Degraded {
+        journeys: Vec<JourneyReadiness>,
+        dependencies: Vec<Result<ReadyDependency, FailedDependency>>,
+        release: Result<ReleaseCompatible, String>,
+    },
+}
+
+impl HostedReadiness {
+    fn compute(config: &Config) -> Self {
+        Self::assemble(&DependencyReports::probe(config), &config.release)
+    }
+
+    fn assemble(reports: &DependencyReports, release: &ReleaseGate) -> Self {
+        let [funding, payment, receipt_inspection, programs] =
+            Journey::ALL.map(|journey| JourneyReadiness::compute(journey, reports));
+        let dependencies = reports.classify();
+        let every_dependency: Result<Vec<ReadyDependency>, FailedDependency> =
+            dependencies.iter().cloned().collect();
+        match (
+            funding,
+            payment,
+            receipt_inspection,
+            programs,
+            every_dependency,
+            release.verify(),
+        ) {
+            (
+                JourneyReadiness::Ready(funding),
+                JourneyReadiness::Ready(payment),
+                JourneyReadiness::Ready(receipt_inspection),
+                JourneyReadiness::Ready(programs),
+                Ok(dependencies),
+                Ok(release),
+            ) => Self::Ready {
+                journeys: ReadyJourneys {
+                    funding,
+                    payment,
+                    receipt_inspection,
+                    programs,
+                },
+                dependencies,
+                release,
+            },
+            (funding, payment, receipt_inspection, programs, _, release) => Self::Degraded {
+                journeys: vec![funding, payment, receipt_inspection, programs],
+                dependencies,
+                release,
+            },
+        }
+    }
+
+    fn is_ready(&self) -> bool {
+        matches!(self, Self::Ready { .. })
+    }
+
+    fn state(&self) -> &'static str {
+        if self.is_ready() {
+            "ready"
+        } else {
+            "degraded"
+        }
+    }
+
+    fn release_ready(&self) -> bool {
+        match self {
+            Self::Ready {
+                release: ReleaseCompatible,
+                ..
+            } => true,
+            Self::Degraded { release, .. } => release.is_ok(),
+        }
+    }
+
+    fn dependency_ready(&self, dependency: Dependency) -> bool {
+        match self {
+            Self::Ready { .. } => true,
+            Self::Degraded { dependencies, .. } => dependencies
+                .iter()
+                .any(|entry| matches!(entry, Ok(ready) if ready.name == dependency.name())),
+        }
+    }
+
+    fn dependency_views(&self) -> Vec<DependencyView> {
+        match self {
+            Self::Ready { dependencies, .. } => {
+                dependencies.iter().map(ReadyDependency::view).collect()
+            }
+            Self::Degraded { dependencies, .. } => {
+                dependencies.iter().map(dependency_view).collect()
+            }
+        }
+    }
+
+    fn journey_views(&self) -> Vec<JourneyView> {
+        match self {
+            Self::Ready { journeys, .. } => vec![
+                journeys.funding.view(),
+                journeys.payment.view(),
+                journeys.receipt_inspection.view(),
+                journeys.programs.view(),
+            ],
+            Self::Degraded { journeys, .. } => {
+                journeys.iter().map(JourneyReadiness::view).collect()
+            }
+        }
+    }
+
+    fn document<'a>(&self, release: &'a ReleaseGate) -> ReadinessDocument<'a> {
+        ReadinessDocument {
+            service: "layerx-hosted-testnet",
+            state: self.state(),
+            package_semver: &release.package_semver,
+            lxp_wire_protocol_version: LXP_WIRE_PROTOCOL_VERSION,
+            network_id: TESTNET_NETWORK_ID,
+            release: release.view(),
+            dependencies: self.dependency_views(),
+            journeys: self.journey_views(),
+        }
+    }
+
+    fn public_status<'a>(&self, release: &'a ReleaseGate) -> PublicStatus<'a> {
+        let component = |dependency: Dependency| ComponentStatus {
+            name: dependency.name(),
+            state: if self.dependency_ready(dependency) {
+                "ready"
+            } else {
+                "unavailable"
+            },
+        };
+        PublicStatus {
+            service: "layerx-hosted-testnet",
+            state: self.state(),
+            package_semver: &release.package_semver,
+            lxp_wire_protocol_version: LXP_WIRE_PROTOCOL_VERSION,
+            network_id: TESTNET_NETWORK_ID,
+            components: vec![
+                ComponentStatus {
+                    name: "testnet",
+                    state: if self.release_ready() {
+                        "ready"
+                    } else {
+                        "degraded"
+                    },
+                },
+                component(Dependency::Gateway),
+                component(Dependency::Core),
+                component(Dependency::Paxeer),
+            ],
+        }
+    }
 }
 
 struct Request {
@@ -134,6 +691,50 @@ struct PublicStatus<'a> {
     lxp_wire_protocol_version: u16,
     network_id: u32,
     components: Vec<ComponentStatus>,
+}
+
+#[derive(Serialize)]
+struct DependencyView {
+    name: &'static str,
+    ready: bool,
+    detail: String,
+}
+
+#[derive(Serialize)]
+struct JourneyView {
+    journey: &'static str,
+    ready: bool,
+    dependencies: Vec<DependencyView>,
+    failing: Vec<&'static str>,
+}
+
+#[derive(Serialize)]
+struct JourneyAdmission {
+    admitted: bool,
+    #[serde(flatten)]
+    readiness: JourneyView,
+}
+
+#[derive(Serialize)]
+struct ReleaseView {
+    state: &'static str,
+    detail: String,
+    package_semver: String,
+    pending_package_semver: String,
+    lxp_wire_protocol_version: u16,
+    pending_lxp_wire_protocol_version: u16,
+}
+
+#[derive(Serialize)]
+struct ReadinessDocument<'a> {
+    service: &'static str,
+    state: &'static str,
+    package_semver: &'a str,
+    lxp_wire_protocol_version: u16,
+    network_id: u32,
+    release: ReleaseView,
+    dependencies: Vec<DependencyView>,
+    journeys: Vec<JourneyView>,
 }
 
 #[derive(Deserialize)]
@@ -214,9 +815,19 @@ fn config() -> Result<Config, String> {
             .map_err(|error| error.to_string())?,
         )
         .map_err(|error| error.to_string())?,
-        package_semver: testnet.package_semver,
-        pending_package_semver,
-        pending_wire_version,
+        release: ReleaseGate {
+            package_semver: testnet.package_semver,
+            pending_package_semver,
+            pending_wire_version,
+        },
+        identity: Endpoint::parse(
+            &env::var("LAYERX_TESTNET_IDENTITY_URL")
+                .map_err(|_| "LAYERX_TESTNET_IDENTITY_URL is required")?,
+        )?,
+        faucet: Endpoint::parse(
+            &env::var("LAYERX_TESTNET_FAUCET_URL")
+                .map_err(|_| "LAYERX_TESTNET_FAUCET_URL is required")?,
+        )?,
         core: Endpoint::parse(
             &env::var("LAYERX_TESTNET_CORE_URL")
                 .map_err(|_| "LAYERX_TESTNET_CORE_URL is required")?,
@@ -224,6 +835,18 @@ fn config() -> Result<Config, String> {
         core_admin: Endpoint::parse(
             &env::var("LAYERX_TESTNET_CORE_ADMIN_URL")
                 .map_err(|_| "LAYERX_TESTNET_CORE_ADMIN_URL is required")?,
+        )?,
+        receipt_authority: Endpoint::parse(
+            &env::var("LAYERX_TESTNET_RECEIPT_AUTHORITY_URL")
+                .map_err(|_| "LAYERX_TESTNET_RECEIPT_AUTHORITY_URL is required")?,
+        )?,
+        registry: Endpoint::parse(
+            &env::var("LAYERX_TESTNET_REGISTRY_URL")
+                .map_err(|_| "LAYERX_TESTNET_REGISTRY_URL is required")?,
+        )?,
+        redis: Endpoint::parse_redis(
+            &env::var("LAYERX_TESTNET_REDIS_URL")
+                .map_err(|_| "LAYERX_TESTNET_REDIS_URL is required")?,
         )?,
         gateway: Endpoint::parse(
             &env::var("LAYERX_TESTNET_GATEWAY_URL")
@@ -264,6 +887,18 @@ fn connect(endpoint: &Endpoint) -> Result<TcpStream, String> {
     ))
 }
 
+fn tls_stream(ca: &Certificate, endpoint: &Endpoint) -> Result<TlsStream<TcpStream>, String> {
+    let connector = TlsConnector::builder()
+        .add_root_certificate(ca.clone())
+        .min_protocol_version(Some(native_tls::Protocol::Tlsv12))
+        .build()
+        .map_err(|error| error.to_string())?;
+    let tcp = connect(endpoint)?;
+    connector
+        .connect(&endpoint.host, tcp)
+        .map_err(|error| error.to_string())
+}
+
 fn upstream(
     ca: &Certificate,
     endpoint: &Endpoint,
@@ -272,15 +907,7 @@ fn upstream(
     idempotency: Option<&str>,
     body: &[u8],
 ) -> Result<Response, String> {
-    let connector = TlsConnector::builder()
-        .add_root_certificate(ca.clone())
-        .min_protocol_version(Some(native_tls::Protocol::Tlsv12))
-        .build()
-        .map_err(|error| error.to_string())?;
-    let tcp = connect(endpoint)?;
-    let mut stream = connector
-        .connect(&endpoint.host, tcp)
-        .map_err(|error| error.to_string())?;
+    let mut stream = tls_stream(ca, endpoint)?;
     let authorization = bearer.map_or(String::new(), |token| {
         format!("Authorization: Bearer {token}\r\n")
     });
@@ -380,8 +1007,14 @@ fn client_request(stream: &mut impl Read) -> Result<Request, String> {
         .remove("")
         .ok_or_else(|| "request line is missing".to_owned())?;
     let mut parts = start.split_whitespace();
-    request.method = parts.next().unwrap_or_default().to_owned();
-    request.path = parts.next().unwrap_or_default().to_owned();
+    parts
+        .next()
+        .unwrap_or_default()
+        .clone_into(&mut request.method);
+    parts
+        .next()
+        .unwrap_or_default()
+        .clone_into(&mut request.path);
     if parts.next() != Some("HTTP/1.1")
         || parts.next().is_some()
         || request.method.is_empty()
@@ -396,49 +1029,113 @@ fn client_request(stream: &mut impl Read) -> Result<Request, String> {
     Ok(request)
 }
 
-fn probe(ca: &Certificate, endpoint: &Endpoint) -> bool {
-    matches!(
-        upstream(ca, &endpoint.with_path("/readyz"), "GET", None, None, &[]),
-        Ok(Response { status: 200, .. })
+fn probe(ca: &Certificate, endpoint: &Endpoint) -> Result<String, String> {
+    match upstream(ca, &endpoint.with_path("/readyz"), "GET", None, None, &[]) {
+        Ok(Response { status: 200, .. }) => Ok("GET /readyz answered 200".to_owned()),
+        Ok(Response { status, .. }) => Err(format!("GET /readyz answered {status}")),
+        Err(error) => Err(format!("GET /readyz failed: {error}")),
+    }
+}
+
+fn probe_tls(ca: &Certificate, endpoint: &Endpoint) -> Result<String, String> {
+    let mut stream =
+        tls_stream(ca, endpoint).map_err(|error| format!("TLS handshake failed: {error}"))?;
+    let _ = stream.shutdown();
+    Ok("TLS handshake completed".to_owned())
+}
+
+fn probe_tcp(endpoint: &Endpoint) -> Result<String, String> {
+    let stream = connect(endpoint).map_err(|error| format!("TCP connect failed: {error}"))?;
+    let _ = stream.shutdown(std::net::Shutdown::Both);
+    Ok(
+        "TCP connection accepted; the registry requires client-certificate TLS beyond this probe"
+            .to_owned(),
     )
 }
 
-fn status(config: &Config) -> PublicStatus<'_> {
-    let core = probe(&config.outbound_ca, &config.core);
-    let gateway = probe(&config.outbound_ca, &config.gateway);
-    let paxeer = probe(&config.outbound_ca, &config.paxeer);
-    let release = config.package_semver == config.pending_package_semver
-        && config.pending_wire_version == LXP_WIRE_PROTOCOL_VERSION;
-    let state = if core && gateway && paxeer && release {
-        "ready"
-    } else {
-        "degraded"
-    };
-    PublicStatus {
-        service: "layerx-hosted-testnet",
-        state,
-        package_semver: &config.package_semver,
-        lxp_wire_protocol_version: LXP_WIRE_PROTOCOL_VERSION,
-        network_id: TESTNET_NETWORK_ID,
-        components: vec![
-            ComponentStatus {
-                name: "testnet",
-                state: if release { "ready" } else { "degraded" },
-            },
-            ComponentStatus {
-                name: "gateway",
-                state: if gateway { "ready" } else { "unavailable" },
-            },
-            ComponentStatus {
-                name: "core",
-                state: if core { "ready" } else { "unavailable" },
-            },
-            ComponentStatus {
-                name: "paxeer",
-                state: if paxeer { "ready" } else { "unavailable" },
-            },
-        ],
+fn probe_redis(ca: &Certificate, endpoint: &Endpoint) -> Result<String, String> {
+    let mut stream =
+        tls_stream(ca, endpoint).map_err(|error| format!("TLS handshake failed: {error}"))?;
+    stream
+        .write_all(b"*1\r\n$4\r\nPING\r\n")
+        .and_then(|()| stream.flush())
+        .map_err(|error| format!("PING could not be sent: {error}"))?;
+    let mut line = Vec::with_capacity(64);
+    let mut byte = [0_u8; 1];
+    while !line.ends_with(b"\r\n") {
+        let count = stream
+            .read(&mut byte)
+            .map_err(|error| format!("PING answer could not be read: {error}"))?;
+        if count == 0 {
+            return Err("Redis closed the connection before answering PING".to_owned());
+        }
+        if line.len() >= 256 {
+            return Err("Redis answer exceeds its bound".to_owned());
+        }
+        line.push(byte[0]);
     }
+    let _ = stream.shutdown();
+    let answer = std::str::from_utf8(&line)
+        .map_err(|_| "Redis answer is not UTF-8".to_owned())?
+        .trim_end();
+    let word = answer.split_whitespace().next().unwrap_or_default();
+    if word == "+PONG" {
+        Ok("PING answered PONG".to_owned())
+    } else if word == "-NOAUTH" {
+        Ok(
+            "PING answered NOAUTH; the TLS listener is reachable and enforces ACL credentials"
+                .to_owned(),
+        )
+    } else {
+        Err(format!("PING answered {word}"))
+    }
+}
+
+fn probe_dependency(config: &Config, dependency: Dependency) -> DependencyReport {
+    let ca = &config.outbound_ca;
+    let outcome = match dependency {
+        Dependency::Identity => probe(ca, &config.identity),
+        Dependency::Faucet => probe(ca, &config.faucet),
+        Dependency::Core => probe(ca, &config.core),
+        Dependency::CoreAdmin => probe_tls(ca, &config.core_admin),
+        Dependency::ReceiptAuthority => probe(ca, &config.receipt_authority),
+        Dependency::Registry => probe_tcp(&config.registry),
+        Dependency::Redis => probe_redis(ca, &config.redis),
+        Dependency::Gateway => probe(ca, &config.gateway),
+        Dependency::Paxeer => probe(ca, &config.paxeer),
+    };
+    DependencyReport {
+        dependency,
+        outcome,
+    }
+}
+
+fn probe_dependencies(config: &Config, dependencies: &[Dependency]) -> Vec<DependencyReport> {
+    thread::scope(|scope| {
+        let handles: Vec<_> = dependencies
+            .iter()
+            .map(|dependency| {
+                let dependency = *dependency;
+                (
+                    dependency,
+                    scope.spawn(move || probe_dependency(config, dependency)),
+                )
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|(dependency, handle)| {
+                handle.join().unwrap_or_else(|_| DependencyReport {
+                    dependency,
+                    outcome: Err("probe thread did not complete".to_owned()),
+                })
+            })
+            .collect()
+    })
+}
+
+fn status(config: &Config) -> HostedReadiness {
+    HostedReadiness::compute(config)
 }
 
 fn public_route(config: &Config, request: &Request) -> Response {
@@ -448,21 +1145,33 @@ fn public_route(config: &Config, request: &Request) -> Response {
     match request.path.as_str() {
         "/livez" => json_response(200, serde_json::json!({ "status": "live" })),
         "/readyz" => {
-            let value = status(config);
-            json_response(if value.state == "ready" { 200 } else { 503 }, value)
+            let readiness = status(config);
+            json_response(
+                if readiness.is_ready() { 200 } else { 503 },
+                readiness.document(&config.release),
+            )
         }
-        "/v1/status" => json_response(200, status(config)),
+        "/v1/status" => json_response(200, status(config).public_status(&config.release)),
         "/v1/parameters" => json_response(
             200,
             serde_json::json!({
                 "network": "layerx-testnet",
                 "network_id": TESTNET_NETWORK_ID,
-                "package_semver": config.package_semver,
+                "package_semver": config.release.package_semver,
                 "lxp_wire_protocol_version": LXP_WIRE_PROTOCOL_VERSION,
                 "reset_schedule": "09:00 UTC on the first Tuesday of every month"
             }),
         ),
-        _ => json_response(404, serde_json::json!({ "error": { "code": "not_found" } })),
+        path => match Journey::from_route(path) {
+            Some(journey) => {
+                let readiness = JourneyReadiness::probe(config, journey);
+                json_response(
+                    if readiness.is_ready() { 200 } else { 503 },
+                    readiness.admission(),
+                )
+            }
+            None => json_response(404, serde_json::json!({ "error": { "code": "not_found" } })),
+        },
     }
 }
 
@@ -538,6 +1247,11 @@ fn admin_route(config: &Config, request: &Request) -> Response {
                     serde_json::json!({ "error": { "code": "invalid_argument" } }),
                 );
             }
+            if let JourneyReadiness::Degraded(degraded) =
+                JourneyReadiness::probe(config, Journey::Funding)
+            {
+                return json_response(503, degraded.refusal());
+            }
             config.core_admin.with_path("/admin/v1/testnet/fund")
         }
         ("POST", "/admin/v1/testnet/reset") => {
@@ -599,7 +1313,7 @@ fn write_response(stream: &mut impl Write, response: &Response) -> Result<(), St
         .map_err(|error| error.to_string())
 }
 
-fn serve(listener: TcpListener, config: Arc<Config>, admin: bool) -> Result<(), String> {
+fn serve(listener: &TcpListener, config: &Arc<Config>, admin: bool) -> Result<(), String> {
     for connection in listener.incoming() {
         match connection {
             Ok(tcp) => {
@@ -610,7 +1324,7 @@ fn serve(listener: TcpListener, config: Arc<Config>, admin: bool) -> Result<(), 
                     .map_err(|e| e.to_string())?;
                 tcp.set_write_timeout(Some(IO_TIMEOUT))
                     .map_err(|e| e.to_string())?;
-                let shared = Arc::clone(&config);
+                let shared = Arc::clone(config);
                 thread::spawn(move || {
                     let _permit = permit;
                     let result = (|| -> Result<(), String> {
@@ -670,17 +1384,291 @@ fn run(config: Config) -> Result<(), String> {
     let config = Arc::new(config);
     let admin_config = Arc::clone(&config);
     thread::spawn(move || {
-        if let Err(error) = serve(admin, admin_config, true) {
+        if let Err(error) = serve(&admin, &admin_config, true) {
             eprintln!("layerx-testnet-control admin listener failed: {error}");
         }
     });
     eprintln!("layerx-testnet-control public and private TLS listeners started");
-    serve(public, config, false)
+    serve(&public, &config, false)
 }
 
 fn main() {
     if let Err(error) = config().and_then(run) {
         eprintln!("layerx-testnet-control: {error}");
         std::process::exit(2);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn release() -> ReleaseGate {
+        ReleaseGate {
+            package_semver: "0.1.0".to_owned(),
+            pending_package_semver: "0.1.0".to_owned(),
+            pending_wire_version: LXP_WIRE_PROTOCOL_VERSION,
+        }
+    }
+
+    fn reports(failing: &[Dependency]) -> DependencyReports {
+        DependencyReports::new(|dependency| {
+            if failing.contains(&dependency) {
+                Err(format!("{} is unreachable", dependency.name()))
+            } else {
+                Ok(format!("{} answered", dependency.name()))
+            }
+        })
+    }
+
+    fn json(value: impl Serialize) -> Result<serde_json::Value, String> {
+        serde_json::to_value(value).map_err(|error| error.to_string())
+    }
+
+    fn keys(value: &serde_json::Value) -> Vec<String> {
+        value
+            .as_object()
+            .map(|object| object.keys().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn dependency_reports_are_indexed_by_dependency() {
+        let reports = reports(&[]);
+        for dependency in Dependency::ALL {
+            assert_eq!(reports.report(dependency).dependency, dependency);
+        }
+        assert_eq!(reports.classify().len(), Dependency::ALL.len());
+    }
+
+    #[test]
+    fn journeys_declare_their_dependency_sets() {
+        assert_eq!(
+            Journey::Funding.dependencies(),
+            &[
+                Dependency::Identity,
+                Dependency::Faucet,
+                Dependency::Redis,
+                Dependency::CoreAdmin,
+                Dependency::Core
+            ]
+        );
+        assert_eq!(
+            Journey::Payment.dependencies(),
+            &[
+                Dependency::Identity,
+                Dependency::Gateway,
+                Dependency::Core,
+                Dependency::ReceiptAuthority
+            ]
+        );
+        assert_eq!(
+            Journey::ReceiptInspection.dependencies(),
+            &[
+                Dependency::Gateway,
+                Dependency::ReceiptAuthority,
+                Dependency::Core
+            ]
+        );
+        assert_eq!(
+            Journey::Programs.dependencies(),
+            &[
+                Dependency::Gateway,
+                Dependency::Registry,
+                Dependency::Core,
+                Dependency::ReceiptAuthority
+            ]
+        );
+        assert_eq!(
+            Journey::from_route("/v1/journeys/receipt-inspection"),
+            Some(Journey::ReceiptInspection)
+        );
+        assert_eq!(
+            Journey::from_route("/v1/journeys/funding"),
+            Some(Journey::Funding)
+        );
+        assert_eq!(
+            Journey::from_route("/v1/journeys/payment"),
+            Some(Journey::Payment)
+        );
+        assert_eq!(
+            Journey::from_route("/v1/journeys/programs"),
+            Some(Journey::Programs)
+        );
+        assert_eq!(Journey::from_route("/v1/journeys/settlement"), None);
+    }
+
+    #[test]
+    fn journey_readiness_is_the_conjunction_of_its_declared_dependencies() {
+        let reports = reports(&[Dependency::Identity]);
+        for journey in Journey::ALL {
+            let declares_identity = journey.dependencies().contains(&Dependency::Identity);
+            match JourneyReadiness::compute(journey, &reports) {
+                JourneyReadiness::Ready(ready) => {
+                    assert!(!declares_identity, "{} must be degraded", journey.name());
+                    assert_eq!(ready.dependencies.len(), journey.dependencies().len());
+                    assert!(ready.view().failing.is_empty());
+                }
+                JourneyReadiness::Degraded(degraded) => {
+                    assert!(declares_identity, "{} must be ready", journey.name());
+                    assert_eq!(degraded.failing.name, "identity");
+                    assert_eq!(degraded.failing_names(), vec!["identity"]);
+                    let view = degraded.view();
+                    assert!(!view.ready);
+                    assert_eq!(view.dependencies.len(), journey.dependencies().len());
+                    assert_eq!(
+                        view.dependencies
+                            .iter()
+                            .filter(|dependency| !dependency.ready)
+                            .map(|dependency| dependency.name)
+                            .collect::<Vec<_>>(),
+                        vec!["identity"]
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn degraded_journey_names_every_failing_dependency_once() -> Result<(), String> {
+        let reports = reports(&[Dependency::Faucet, Dependency::Core]);
+        let JourneyReadiness::Degraded(degraded) =
+            JourneyReadiness::compute(Journey::Funding, &reports)
+        else {
+            return Err("funding must be degraded".to_owned());
+        };
+        assert_eq!(degraded.failing_names(), vec!["faucet", "core"]);
+        let refusal = degraded.refusal();
+        assert_eq!(refusal["error"]["code"], "journey_degraded");
+        assert_eq!(refusal["error"]["journey"], "funding");
+        assert_eq!(
+            refusal["error"]["failing"],
+            serde_json::json!(["faucet", "core"])
+        );
+        let admission = json(JourneyReadiness::Degraded(degraded).admission())?;
+        assert_eq!(admission["admitted"], false);
+        assert_eq!(admission["journey"], "funding");
+        assert_eq!(admission["failing"], serde_json::json!(["faucet", "core"]));
+        Ok(())
+    }
+
+    #[test]
+    fn global_ready_needs_every_journey_every_dependency_and_the_release() -> Result<(), String> {
+        let ready = HostedReadiness::assemble(&reports(&[]), &release());
+        assert!(ready.is_ready());
+        let document = json(ready.document(&release()))?;
+        assert_eq!(document["state"], "ready");
+        assert_eq!(document["release"]["state"], "ready");
+        assert_eq!(document["dependencies"].as_array().map(Vec::len), Some(9));
+        assert_eq!(document["journeys"].as_array().map(Vec::len), Some(4));
+        assert!(document["dependencies"]
+            .as_array()
+            .is_some_and(|entries| entries.iter().all(|entry| entry["ready"] == true)));
+        assert!(document["journeys"]
+            .as_array()
+            .is_some_and(|entries| entries.iter().all(|entry| entry["ready"] == true)));
+
+        let paxeer_down = HostedReadiness::assemble(&reports(&[Dependency::Paxeer]), &release());
+        assert!(!paxeer_down.is_ready());
+        let document = json(paxeer_down.document(&release()))?;
+        assert_eq!(document["state"], "degraded");
+        assert!(document["journeys"]
+            .as_array()
+            .is_some_and(|entries| entries.iter().all(|entry| entry["ready"] == true)));
+        assert_eq!(document["dependencies"][8]["name"], "paxeer");
+        assert_eq!(document["dependencies"][8]["ready"], false);
+
+        let registry_down =
+            HostedReadiness::assemble(&reports(&[Dependency::Registry]), &release());
+        assert!(!registry_down.is_ready());
+        let document = json(registry_down.document(&release()))?;
+        assert_eq!(document["state"], "degraded");
+        assert_eq!(document["journeys"][3]["journey"], "programs");
+        assert_eq!(document["journeys"][3]["ready"], false);
+        assert_eq!(
+            document["journeys"][3]["failing"],
+            serde_json::json!(["registry"])
+        );
+        for index in 0..3 {
+            assert_eq!(document["journeys"][index]["ready"], true);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn release_mismatch_degrades_the_global_state_without_touching_journeys() -> Result<(), String>
+    {
+        let mismatch = ReleaseGate {
+            package_semver: "0.1.0".to_owned(),
+            pending_package_semver: "0.1.1".to_owned(),
+            pending_wire_version: LXP_WIRE_PROTOCOL_VERSION,
+        };
+        let readiness = HostedReadiness::assemble(&reports(&[]), &mismatch);
+        assert!(!readiness.is_ready());
+        assert!(!readiness.release_ready());
+        let document = json(readiness.document(&mismatch))?;
+        assert_eq!(document["state"], "degraded");
+        assert_eq!(document["release"]["state"], "degraded");
+        assert!(document["journeys"]
+            .as_array()
+            .is_some_and(|entries| entries.iter().all(|entry| entry["ready"] == true)));
+        let status = json(readiness.public_status(&mismatch))?;
+        assert_eq!(status["state"], "degraded");
+        assert_eq!(status["components"][0]["name"], "testnet");
+        assert_eq!(status["components"][0]["state"], "degraded");
+        Ok(())
+    }
+
+    #[test]
+    fn public_status_keeps_the_published_four_component_shape() -> Result<(), String> {
+        let readiness = HostedReadiness::assemble(&reports(&[Dependency::Gateway]), &release());
+        let status = json(readiness.public_status(&release()))?;
+        assert_eq!(
+            keys(&status),
+            vec![
+                "components",
+                "lxp_wire_protocol_version",
+                "network_id",
+                "package_semver",
+                "service",
+                "state"
+            ]
+        );
+        assert_eq!(status["state"], "degraded");
+        assert_eq!(status["network_id"], TESTNET_NETWORK_ID);
+        let components = status["components"]
+            .as_array()
+            .ok_or_else(|| "components must be an array".to_owned())?;
+        assert_eq!(
+            components
+                .iter()
+                .map(|component| component["name"].clone())
+                .collect::<Vec<_>>(),
+            vec!["testnet", "gateway", "core", "paxeer"]
+        );
+        for component in components {
+            assert_eq!(keys(component), vec!["name", "state"]);
+        }
+        assert_eq!(components[1]["state"], "unavailable");
+        assert_eq!(components[2]["state"], "ready");
+        Ok(())
+    }
+
+    #[test]
+    fn redis_endpoint_requires_the_rediss_scheme() -> Result<(), String> {
+        let endpoint = Endpoint::parse_redis(
+            "rediss://layerx-faucet-redis.layerx-testnet.svc.cluster.local:6379",
+        )?;
+        assert_eq!(endpoint.port, 6379);
+        assert!(endpoint.path.is_empty());
+        assert_eq!(Endpoint::parse_redis("rediss://redis.internal")?.port, 6379);
+        assert!(Endpoint::parse_redis("redis://redis.internal:6379").is_err());
+        assert!(Endpoint::parse_redis("rediss://redis.internal:6379/0").is_err());
+        assert!(Endpoint::parse("rediss://redis.internal:6379").is_err());
+        assert_eq!(
+            Endpoint::parse("https://layerx-gateway.layerx-testnet.svc.cluster.local:443")?.port,
+            443
+        );
+        Ok(())
     }
 }

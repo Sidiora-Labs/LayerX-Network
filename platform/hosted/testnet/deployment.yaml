@@ -87,8 +87,13 @@ spec:
             - {name: LAYERX_TESTNET_ADMIN_LISTEN, value: "0.0.0.0:9444"}
             - {name: LAYERX_TESTNET_CORE_URL, value: "https://layerx-pending-core.layerx-testnet.svc.cluster.local:9443"}
             - {name: LAYERX_TESTNET_CORE_ADMIN_URL, value: "https://layerx-pending-core-admin.layerx-testnet.svc.cluster.local:9444"}
-            - {name: LAYERX_TESTNET_GATEWAY_URL, value: "https://layerx-gateway.layerx-testnet.svc.cluster.local:9443"}
+            - {name: LAYERX_TESTNET_GATEWAY_URL, value: "https://layerx-gateway.layerx-testnet.svc.cluster.local:443"}
             - {name: LAYERX_TESTNET_PAXEER_URL, value: "https://paxeer-boundary.layerx-testnet.svc.cluster.local:9443"}
+            - {name: LAYERX_TESTNET_IDENTITY_URL, value: "https://layerx-identity.layerx-testnet.svc.cluster.local:9443"}
+            - {name: LAYERX_TESTNET_FAUCET_URL, value: "https://layerx-faucet-public.layerx-testnet.svc.cluster.local:443"}
+            - {name: LAYERX_TESTNET_RECEIPT_AUTHORITY_URL, value: "https://layerx-receipt-authority.layerx-testnet.svc.cluster.local:9443"}
+            - {name: LAYERX_TESTNET_REGISTRY_URL, value: "https://layerx-program-registry.layerx-testnet.svc.cluster.local:9420"}
+            - {name: LAYERX_TESTNET_REDIS_URL, value: "rediss://layerx-faucet-redis.layerx-testnet.svc.cluster.local:6379"}
             - {name: LAYERX_TESTNET_TLS_CERT_DER, value: /run/layerx/tls/server.crt.der}
             - {name: LAYERX_TESTNET_TLS_KEY_DER, value: /run/layerx/tls/server.key.der}
             - {name: LAYERX_OUTBOUND_CA_DER, value: /run/layerx/tls/ca.crt.der}
@@ -260,12 +265,32 @@ spec:
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
+metadata: {name: layerx-testnet-control-egress, namespace: layerx-testnet}
+spec:
+  podSelector: {matchLabels: {app: layerx-testnet-control}}
+  policyTypes: [Egress]
+  egress:
+    - to: [{podSelector: {matchLabels: {layerx-plane: trusted-boundary}}}]
+      ports: [{protocol: TCP, port: 9443}, {protocol: TCP, port: 9444}]
+    - to: [{podSelector: {matchLabels: {app: layerx-gateway}}}]
+      ports: [{protocol: TCP, port: 9443}]
+    - to: [{podSelector: {matchLabels: {app: layerx-faucet}}}]
+      ports: [{protocol: TCP, port: 9443}]
+    - to: [{podSelector: {matchLabels: {app: layerx-faucet-redis}}}]
+      ports: [{protocol: TCP, port: 6379}]
+    - to: [{podSelector: {matchLabels: {app: layerx-program-registry}}}]
+      ports: [{protocol: TCP, port: 9420}]
+    - to: [{namespaceSelector: {}}]
+      ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
 metadata: {name: layerx-faucet-redis-ingress, namespace: layerx-testnet}
 spec:
   podSelector: {matchLabels: {app: layerx-faucet-redis}}
   policyTypes: [Ingress]
   ingress:
-    - from: [{podSelector: {matchLabels: {app: layerx-faucet}}}]
+    - from: [{podSelector: {matchLabels: {app: layerx-faucet}}}, {podSelector: {matchLabels: {app: layerx-testnet-control}}}]
       ports: [{protocol: TCP, port: 6379}]
 ---
 apiVersion: networking.k8s.io/v1
@@ -277,3 +302,21 @@ spec:
   ingress:
     - from: [{ipBlock: {cidr: 0.0.0.0/0}}, {ipBlock: {cidr: "::/0"}}]
       ports: [{protocol: TCP, port: 9443}]
+    - from: [{podSelector: {matchLabels: {app: layerx-testnet-control}}}]
+      ports: [{protocol: TCP, port: 9443}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: layerx-faucet-egress, namespace: layerx-testnet}
+spec:
+  podSelector: {matchLabels: {app: layerx-faucet}}
+  policyTypes: [Egress]
+  egress:
+    - to: [{podSelector: {matchLabels: {layerx-plane: trusted-boundary}}}]
+      ports: [{protocol: TCP, port: 9443}]
+    - to: [{podSelector: {matchLabels: {app: layerx-testnet-control}}}]
+      ports: [{protocol: TCP, port: 9444}]
+    - to: [{podSelector: {matchLabels: {app: layerx-faucet-redis}}}]
+      ports: [{protocol: TCP, port: 6379}]
+    - to: [{namespaceSelector: {}}]
+      ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]

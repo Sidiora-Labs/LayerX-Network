@@ -84,7 +84,7 @@ spec:
   podSelector: {matchLabels: {app: layerx-program-registry}}
   policyTypes: [Ingress, Egress]
   ingress:
-    - from: [{podSelector: {matchLabels: {app: layerx-gateway}}}]
+    - from: [{podSelector: {matchLabels: {app: layerx-gateway}}}, {podSelector: {matchLabels: {app: layerx-testnet-control}}}]
       ports: [{protocol: TCP, port: 9420}]
     - from: [{podSelector: {matchLabels: {layerx-role: source-publication-operator}}}]
       ports: [{protocol: TCP, port: 9420}]

@@ -407,16 +407,16 @@ reqs = ["9.3","9.4","9.5"]
 
 [task.3.6]
 title = "Align hosted topology and make readiness journey-specific"
-status = "pending"
+status = "in_progress"
 wave = 3
 requires = ["1.1"]
 do_1 = "Point testnet-control's in-cluster gateway URL at the port the gateway Service exposes, and admit testnet-control in the gateway NetworkPolicy ingress alongside ingress-nginx; do the same for every other declared dependency edge."
 do_2 = "Write platform/hosted/tests/topology-check.sh that parses the hosted manifests, resolves every configured in-cluster URL to a Service and port, checks each declared edge against NetworkPolicy on both ends and fails on any mismatch; add a platform-hosted-topology-check target."
 do_3 = "Extend the testnet readiness endpoint to report per-dependency readiness for identity, faucet, core, receipt authority, registry, Redis, gateway and Paxeer boundary, and per-journey readiness as the conjunction of each journey's declared dependency set; make the status surface unable to render a global ready state with any journey degraded."
 do_4 = "Extend hosted-smoke.sh to verify pod-to-Service connectivity for every declared edge and exercise the complete hosted first-payment path, emitting the cluster identity for the gate record."
-verify_cmd = "make platform-test-tooling platform-hosted-topology-check"
+verify_cmd = "make platform-test-tooling platform-hosted-topology-check beta-contract-check"
 symbols = ["testnet probe and status","gateway Service","gateway NetworkPolicy","JourneyReadiness"]
-touches = ["platform/hosted/testnet/deployment.yaml","platform/hosted/gateway/deployment.yaml","platform/hosted/testnet/src/main.rs","platform/hosted/testnet/tests/hosted-smoke.sh","platform/hosted/tests/topology-check.sh","platform/Makefile.inc"]
+touches = ["platform/hosted/testnet/deployment.yaml","platform/hosted/gateway/deployment.yaml","platform/hosted/registry/deployment.yaml","platform/hosted/testnet/src/main.rs","platform/hosted/testnet/tests/hosted-smoke.sh","platform/hosted/testnet/run-testnet.sh","platform/hosted/testnet/README.md","platform/hosted/tests/topology-check.sh","platform/Makefile.inc","platform/docs/content/beta.md","platform/docs/testnet.md"]
 reqs = ["7.1","7.2","7.3","7.4","7.6"]
 
 [task.3.7]
