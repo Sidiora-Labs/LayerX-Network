@@ -104,7 +104,7 @@ Two points need owner confirmation before the corresponding task starts, and one
     - In bridge finalization, derive the settlement asset from the withdrawal record located by nullifier, validate any caller-supplied asset for equality, and refuse on mismatch before settlement is reached.
     - Extend the asset withdraw and bridge withdraw tests with cross-asset mismatch at both boundaries asserting no transfer, no settlement, state-root equality and a still-claimable record, and extend the conservation property across request, settle and refused-settle per asset.
     - _Requirements: 10.1, 10.2, 10.3, 10.4, 10.5_
-  - [-] 3.4 Make hosted registry publication one commit unit
+  - [x] 3.4 Make hosted registry publication one commit unit
     - Replace the separate record and proof replacements in FileDeploymentJournal::append with one canonical envelope written to a temporary file, fsynced and renamed atomically, or a two-phase write with a commit marker written last.
     - Make startup load complete units, quarantine incomplete units with a typed per-unit report, and never reject the whole journal for one incomplete unit.
     - Add a platform-test-registry target running the registry crate suite, with fault-injection tests that interrupt every write step and prove restart recovery and replay equivalence.

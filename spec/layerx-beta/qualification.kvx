@@ -456,3 +456,11 @@ symbol = "PROGRAMS_RUNTIME_LIB liblayerx.a"
 observed = "At the task base, build/liblayerx.a carries 14 unresolved references to layerx_programs_* host-FFI symbols (lxp_kernel.o, call.o, deploy.o, occupancy.o, sandbox.o, sandbox_expiry.o, transfer.o, winddown.o) that only programs/target/debug/liblayerx_programs_sandbox.a defines, so every test rule that links $(LIBRARY) without $(PROGRAMS_RUNTIME_LIB) and pulls the kernel fails at link time. The unchanged rules for build/tests/test_asset_withdraw and build/tests/test_bridge_withdraw failed this way before task 3.3 touched the Makefile, and the untouched build/tests/test_asset_deposit rule still fails with 16 undefined references. 54 rules already link $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) with -ldl -lm behind an order-only programs-build prerequisite; 117 rules still link $(LIBRARY) alone."
 assumption = "Task 3.3 repairs only its two verify_cmd rules in the established form (test_asset_transfer pattern). The remaining kernel-linked test rules (for example test_asset_deposit, test_bridge_deposit, test_emergency_exit, test_reserve_reconcile) and the make test aggregate need one repository-wide decision on how liblayerx.a consumers obtain the programs runtime; that is owner scope, not task 3.3."
 severity = "blocker"
+
+[observation.3.4.5]
+task = "3.4"
+file = "platform/hosted/registry/src/journal.rs"
+symbol = "FileDeploymentJournal::append"
+observed = "cg spec done 3.4 ran verify_cmd (make platform-test-registry) to pass (3 bin tests including the repaired deployment contract case, 6 journal fault-injection tests, 5 lib tests) and every other touch check to pass, then failed the graph symbol check for FileDeploymentJournal::append, an impl method in platform/hosted/registry/src/journal.rs, and the touch check for platform/Cargo.lock, which the task commit does change (three dev-dependency edges) but which the graph snapshot does not track."
+assumption = "The task was marked done with --force solely to override an impl-qualified method symbol check and a lock file touch check; the verify_cmd was executed and passed and no gate was skipped, consistent with observation.1.1.7 and observation.3.2.5."
+severity = "note"
