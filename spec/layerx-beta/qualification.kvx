@@ -464,3 +464,11 @@ symbol = "FileDeploymentJournal::append"
 observed = "cg spec done 3.4 ran verify_cmd (make platform-test-registry) to pass (3 bin tests including the repaired deployment contract case, 6 journal fault-injection tests, 5 lib tests) and every other touch check to pass, then failed the graph symbol check for FileDeploymentJournal::append, an impl method in platform/hosted/registry/src/journal.rs, and the touch check for platform/Cargo.lock, which the task commit does change (three dev-dependency edges) but which the graph snapshot does not track."
 assumption = "The task was marked done with --force solely to override an impl-qualified method symbol check and a lock file touch check; the verify_cmd was executed and passed and no gate was skipped, consistent with observation.1.1.7 and observation.3.2.5."
 severity = "note"
+
+[observation.2.4.6]
+task = "2.4"
+file = "platform/sdk/jvm/src/main/java/com/sidiora/layerx/sdk/GeneratedSchema.java"
+symbol = "platform-sdk-check"
+observed = "After task 2.4 landed (7aca37a1) main failed make platform-sdk-check with generated JVM schema is stale: the ResponseEnvelope error member added to human/schema/human-api/v1.kvx was projected into the TypeScript client but the JVM GeneratedSchema.java and the pipeline digests were not regenerated because 2.4 verify_cmd does not include platform-sdk-check. Task 2.2 qualification surfaced it (observation.2.2.3)."
+assumption = "Repaired on main by running make platform-sdk-generate, which rewrote GeneratedSchema.java, refreshed pipeline.kvx digests (including the LocalVerifier.java and index.ts hashes left stale by 3.2 and 2.4) and reordered the generated operation_generated.rs; make platform-sdk-check then passed and layerx-sdk compiles. No generator or check was changed."
+severity = "note"

@@ -157,26 +157,26 @@ impl Operation {
         matches!(
             self,
             Self::AgentRegister
-            | Self::ApprovalApprove
-            | Self::ApprovalReject
-            | Self::BudgetCreate
-            | Self::BudgetFund
-            | Self::BudgetRevoke
-            | Self::CapabilityAttenuate
-            | Self::CapabilityCreate
-            | Self::CapabilityRevoke
-            | Self::Prepare
-            | Self::ProgramCall
-            | Self::SessionClose
-            | Self::SessionOpen
-            | Self::SessionRefresh
-            | Self::Sign
-            | Self::Submit
-            | Self::SubscriptionAcknowledge
-            | Self::SubscriptionCreate
-            | Self::SubscriptionDelete
-            | Self::SubscriptionPause
-            | Self::SubscriptionResume
+                | Self::ApprovalApprove
+                | Self::ApprovalReject
+                | Self::BudgetCreate
+                | Self::BudgetFund
+                | Self::BudgetRevoke
+                | Self::CapabilityAttenuate
+                | Self::CapabilityCreate
+                | Self::CapabilityRevoke
+                | Self::Prepare
+                | Self::ProgramCall
+                | Self::SessionClose
+                | Self::SessionOpen
+                | Self::SessionRefresh
+                | Self::Sign
+                | Self::Submit
+                | Self::SubscriptionAcknowledge
+                | Self::SubscriptionCreate
+                | Self::SubscriptionDelete
+                | Self::SubscriptionPause
+                | Self::SubscriptionResume
         )
     }
 }

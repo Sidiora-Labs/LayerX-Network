@@ -8,7 +8,7 @@ digest = "5a96edc827e890fe6c95219e39201c0994d8e3488519fcc80fc6f4c40745609e"
 
 [source.human-api]
 root = "human/schema/human-api"
-digest = "8e09b9a6fee871ecc234bf193182ed4f3deb26b3c40ce3f96261cac147bc7622"
+digest = "50efbd6ab9cf7bb4fe8ca60899d2a2e9819ffe42d884d669b30473caadd4f0d5"
 
 [source.mirror-v2]
 root = "platform/sdk/schema"
@@ -60,7 +60,7 @@ root = "human/apps/web/src/api/generated"
 
 [files.human-typescript]
 "conformance.ts" = "67f073911f82337aa82d185eb64e5cd9097e1e54539275609f172aac8178a90a"
-"index.ts" = "a27595610fdcdb68fa342721b2548eca70ceab9c5ba13fb3987a6fd7686a1bce"
+"index.ts" = "677b0447a2810d85124d0b0234975dcebb4999932ceb0598aacd086677ac06b8"
 
 [output.platform-go]
 language = "go"
@@ -79,7 +79,7 @@ root = "platform/sdk/jvm"
 "pom.xml" = "43d9af46728bf4507ea4eaa2ba6b6cc779559085f27862b78f26d01a09e975a1"
 "src/main/java/com/sidiora/layerx/sdk/HttpProductionTransport.java" = "c9901b3857b493015aae029729ab30e785e66deaa3e3db2226b6ed06fbeea39b"
 "src/main/java/com/sidiora/layerx/sdk/GeneratedContract.java" = "b8a2850616d22ea0270e7952827d6e4edba6168d2a63ac759f89e470c01118c0"
-"src/main/java/com/sidiora/layerx/sdk/GeneratedSchema.java" = "f9d326db48e0a14ba88d7e0166e80a1d6bdc0563b4e1d911936c39945c9c3087"
+"src/main/java/com/sidiora/layerx/sdk/GeneratedSchema.java" = "6f01325886a0cc03880a01abf3bba0dd4bc4838e344727e67667fa2afaf64ba3"
 "src/main/java/com/sidiora/layerx/sdk/GeneratedMirror.java" = "facf45b2da6828d41371b36bc0f2119f643d7b45003dead0c9590a9b0f0b6b8f"
 "src/main/java/com/sidiora/layerx/sdk/IdempotencyKey.java" = "2cfba7826e4bb7a6f0d4af63530f43c7aece547cf9f64ff1664b781cc431f6a4"
 "src/main/java/com/sidiora/layerx/sdk/OperationCatalog.java" = "477843c32935ffbc9ecff6dd6a35b78693b059c3d29a59aa021349b4a868e8e3"
@@ -92,7 +92,7 @@ root = "platform/sdk/jvm"
 "src/main/java/com/sidiora/layerx/sdk/SchemaErrors.java" = "90a11904638f91609e6c4ce7ca7e98244323b799799d9a6f1f5b0345d78ffa8f"
 "src/main/java/com/sidiora/layerx/sdk/SchemaTypes.java" = "2fe1eb340835d7df1ce84b8664b0f837e6010a21fcc577553e6ba821af957780"
 "src/main/java/com/sidiora/layerx/sdk/SecretBytes.java" = "c651515a3541ee6d2fbbee0c348bf480844b33124ee4a40b0a4688a3e9da5ee5"
-"src/main/java/com/sidiora/layerx/sdk/verify/LocalVerifier.java" = "70b5562c4f33adc5ae7981a65e003c743a509d5cb1916679157d876fc5833701"
+"src/main/java/com/sidiora/layerx/sdk/verify/LocalVerifier.java" = "fda2c85e20cf3296bcd6f535213a6d5dee6f6400f0b0006222220e5731c7bb81"
 "src/main/java/com/sidiora/layerx/sdk/verify/GeneratedReceiptContract.java" = "23368a29361e567777b2f386a2e9a76c86b5fafa7ca897aa892db76ce59f430d"
 "src/conformance/java/com/sidiora/layerx/sdk/ConformanceMain.java" = "53f616fd55957f24eb3e4dd373a1b6409776ca26d6a9ba3ffc2cc4b71c509d15"
 "src/main/kotlin/com/sidiora/layerx/sdk/LayerX.kt" = "4557618f74dd11d88c9615e915b3377f9c41fab1187a735ab36a9a3d359df4a3"

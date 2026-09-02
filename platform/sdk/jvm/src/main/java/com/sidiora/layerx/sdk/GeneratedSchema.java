@@ -1243,7 +1243,7 @@ public final class GeneratedSchema {
                 throw new IllegalArgumentException("unknown schema variant");
             }
         }
-        public record ResponseEnvelope(boolean ok, JsonNode result, String trace) implements SchemaTypes.GeneratedResponse {
+        public record ResponseEnvelope(boolean ok, JsonNode result, String trace, HumanModels.ApiError error) implements SchemaTypes.GeneratedResponse {
             public ResponseEnvelope {
                 Objects.requireNonNull(result, "result");
                 Objects.requireNonNull(trace, "trace");
