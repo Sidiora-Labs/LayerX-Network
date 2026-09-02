@@ -321,7 +321,7 @@ reqs = ["5.1","5.2","5.3","5.4","5.5"]
 
 [task.2.4]
 title = "Carry the structured error in the envelope and type the overload state"
-status = "in_progress"
+status = "done"
 wave = 2
 requires = ["1.1"]
 do_1 = "Add the ApiError member to record.ResponseEnvelope in human/schema/human-api/v1.kvx and add failed-response golden vectors carrying it for every operation."
@@ -330,7 +330,7 @@ do_3 = "In the explorer verifier client, map HTTP 429 to an explicit retryable o
 do_4 = "Add a unit test over the status-to-state mapping for 401, 409, 429, 503 and other 5xx proving only genuine verification failures render as refused."
 verify_cmd = "make human-build human-test-unit human-test-component"
 symbols = ["record.ResponseEnvelope","ApiError","explorer verifier verify"]
-touches = ["human/schema/human-api/v1.kvx","human/schema/human-api/compatibility.kvx","human/schema/human-api/golden/version.response.json","human/apps/web/src/api/generated/index.ts","human/apps/web/src/app/api/explorer/verify/route.ts","human/apps/web/src/explorer/verifier.tsx","human/apps/web/src/explorer/verifier-state.ts","human/apps/web/e2e/explorer-verifier.test.ts","human/apps/web/copy/catalog.ts","human/apps/web/package.json","platform/docs/content/reference/human-api.md"]
+touches = ["human/schema/human-api/v1.kvx","human/schema/human-api/compatibility.kvx","human/schema/human-api/golden/version.response.json","human/apps/web/src/api/generated/index.ts","human/apps/web/src/explorer/verifier.tsx","human/apps/web/src/explorer/verifier-state.ts","human/apps/web/e2e/explorer-verifier.test.ts","human/apps/web/copy/catalog.ts","human/apps/web/package.json","platform/docs/content/reference/human-api.md"]
 reqs = ["11.1","11.2","11.3","11.4","11.5"]
 
 [task.3]

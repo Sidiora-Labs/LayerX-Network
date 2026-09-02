@@ -259,3 +259,11 @@ symbol = "execute"
 observed = "production_components.rs:659 answers the version operation with a literal {\"schema\": {\"major\": 1, \"minor\": 0}} while human/schema/human-api/v1.kvx now declares minor 2 and the served path in server/schema.rs reads the minor from the schema at runtime; golden/version.response.json carries minor 2."
 assumption = "Pre-existing drift from before the minor 1 bump; not a projection the generator drives and outside this task's touches, so it is recorded rather than edited."
 severity = "note"
+
+[observation.2.4.5]
+task = "2.4"
+file = "human/apps/web/src/explorer/verifier.tsx"
+symbol = "record.ResponseEnvelope explorer verifier verify"
+observed = "cg spec done 2.4 ran verify_cmd (make human-build human-test-unit human-test-component) to pass (114 node tests, next build complete) and every remaining touch check to pass, then failed the graph symbol check for record.ResponseEnvelope (a kvx schema record at human/schema/human-api/v1.kvx:102, not a code symbol) and explorer verifier verify (the arrow-function const verify at verifier.tsx:52, which the graph does not index), and the touch check for human/apps/web/src/app/api/explorer/verify/route.ts, which do_3 says to keep returning 429 with Retry-After and which therefore needed no change."
+assumption = "The route touch was reconciled out of touches because the task deliberately left that file as it was; the task was then marked done with --force solely to override the two graph symbol checks for a kvx record and a TypeScript arrow function; the verify_cmd was executed and passed and no gate was skipped, consistent with observation.1.1.7."
+severity = "note"
