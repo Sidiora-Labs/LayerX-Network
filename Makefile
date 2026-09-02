@@ -422,10 +422,10 @@ test-asset-deposit: $(BUILD_DIR)/tests/test_asset_deposit
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_asset_deposit
 
 $(BUILD_DIR)/tests/test_asset_withdraw: tests/modules/test_asset_withdraw.c \
-		$(LIBRARY)
+		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(EXTRA_LDFLAGS) \
-		-lcrypto -pthread -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
+		$(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
 
 test-asset-withdraw: $(BUILD_DIR)/tests/test_asset_withdraw
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_asset_withdraw
@@ -1045,10 +1045,11 @@ $(BUILD_DIR)/tests/test_bridge_deposit: tests/test_bridge_deposit.c $(LIBRARY)
 test-bridge-deposit: $(BUILD_DIR)/tests/test_bridge_deposit test-contracts
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_bridge_deposit
 
-$(BUILD_DIR)/tests/test_bridge_withdraw: tests/test_bridge_withdraw.c $(LIBRARY)
+$(BUILD_DIR)/tests/test_bridge_withdraw: tests/test_bridge_withdraw.c \
+		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(EXTRA_LDFLAGS) \
-		-lcrypto -pthread -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
+		$(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
 
 test-bridge-withdraw: $(BUILD_DIR)/tests/test_bridge_withdraw test-contracts
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_bridge_withdraw

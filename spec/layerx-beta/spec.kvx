@@ -368,15 +368,15 @@ reqs = ["6.1","6.2","6.3","6.4","6.5","6.6"]
 
 [task.3.3]
 title = "Bind withdrawal settlement to the recorded asset"
-status = "pending"
+status = "in_progress"
 wave = 3
 requires = ["1.1"]
 do_1 = "In custody settlement, compare the supplied asset identity with the asset recorded by the withdrawal request and refuse with a typed mismatch result before any transfer or state mutation."
 do_2 = "In bridge finalization, derive the settlement asset from the withdrawal record located by nullifier, validate any caller-supplied asset for equality, and refuse on mismatch before settlement is reached."
 do_3 = "Extend the asset withdraw and bridge withdraw tests with cross-asset mismatch at both boundaries asserting no transfer, no settlement, state-root equality and a still-claimable record, and extend the conservation property across request, settle and refused-settle per asset."
-verify_cmd = "make test-asset-withdraw test-bridge-withdraw"
+verify_cmd = "make test-asset-withdraw test-bridge-withdraw test-result"
 symbols = ["lx_asset_withdraw_settle","lx_asset_withdraw_request","lxp_bridge_withdraw_finalize"]
-touches = ["src/modules/asset/lx_asset_custody.c","src/modules/bridge/lxp_bridge_withdraw.c","tests/modules/test_asset_withdraw.c","tests/test_bridge_withdraw.c"]
+touches = ["src/modules/asset/lx_asset_custody.c","src/modules/bridge/lxp_bridge_withdraw.c","tests/modules/test_asset_withdraw.c","tests/test_bridge_withdraw.c","include/layerx/lxp_result.h","agent/crates/layerx-types/src/result.rs","Makefile"]
 reqs = ["10.1","10.2","10.3","10.4","10.5"]
 
 [task.3.4]

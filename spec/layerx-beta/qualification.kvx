@@ -411,3 +411,18 @@ symbol = "probe status gateway Service gateway NetworkPolicy"
 observed = "cg spec done 3.6 ran verify_cmd (make platform-test-tooling platform-hosted-topology-check beta-contract-check) to pass under the shared tooling lock and every touch check to pass, then failed its graph symbol check for the descriptive symbols testnet probe and status (the probe and status functions in platform/hosted/testnet/src/main.rs), gateway Service and gateway NetworkPolicy (Kubernetes objects in platform/hosted/gateway/deployment.yaml); the graph indexes neither space-separated descriptive names nor YAML manifests."
 assumption = "The task was marked done with --force solely to override the three descriptive-symbol graph checks; the verify_cmd was executed and passed and no gate was skipped, consistent with observation.1.1.7."
 severity = "note"
+[observation.3.3.1]
+task = "3.3"
+file = "test/PaxeerBetaDeploymentValidator.t.sol"
+symbol = "test-contracts forge test --offline"
+observed = "The task verify_cmd make test-asset-withdraw test-bridge-withdraw test-result exits 2 at Makefile:1279 test-contracts because forge test --offline --root . fails to compile: test/PaxeerBetaDeploymentValidator.t.sol:7 imports ../script/PaxeerBetaDeploy.s.sol, and script/PaxeerBetaDeploy.s.sol was deleted by cc5191b5 (the file now exists only as scripts/PaxeerBetaDeploy.s.sol). contracts/, test/ and foundry.toml are byte-identical to the task base 15267435, so the failure pre-exists task 3.3. test-bridge-withdraw depends on test-contracts, so the exact verify_cmd cannot pass in this worktree; the task binaries build/tests/test_asset_withdraw, build/tests/test_bridge_withdraw and build/tests/lxp_test_result each run with exit 0, and make test-asset-withdraw test-result passes."
+assumption = "Task 3.3 leaves the forge test, the deploy script and the test-contracts prerequisite unchanged. Repairing the import path or restoring script/PaxeerBetaDeploy.s.sol belongs to the contracts and release surface owner; until then every C target that depends on test-contracts (test-bridge-deposit, test-bridge-withdraw, test-emergency-exit and their aggregates) is blocked at the gate of record."
+severity = "blocker"
+
+[observation.3.3.2]
+task = "3.3"
+file = "Makefile"
+symbol = "PROGRAMS_RUNTIME_LIB liblayerx.a"
+observed = "At the task base, build/liblayerx.a carries 14 unresolved references to layerx_programs_* host-FFI symbols (lxp_kernel.o, call.o, deploy.o, occupancy.o, sandbox.o, sandbox_expiry.o, transfer.o, winddown.o) that only programs/target/debug/liblayerx_programs_sandbox.a defines, so every test rule that links $(LIBRARY) without $(PROGRAMS_RUNTIME_LIB) and pulls the kernel fails at link time. The unchanged rules for build/tests/test_asset_withdraw and build/tests/test_bridge_withdraw failed this way before task 3.3 touched the Makefile, and the untouched build/tests/test_asset_deposit rule still fails with 16 undefined references. 54 rules already link $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) with -ldl -lm behind an order-only programs-build prerequisite; 117 rules still link $(LIBRARY) alone."
+assumption = "Task 3.3 repairs only its two verify_cmd rules in the established form (test_asset_transfer pattern). The remaining kernel-linked test rules (for example test_asset_deposit, test_bridge_deposit, test_emergency_exit, test_reserve_reconcile) and the make test aggregate need one repository-wide decision on how liblayerx.a consumers obtain the programs runtime; that is owner scope, not task 3.3."
+severity = "blocker"

@@ -339,6 +339,14 @@ lxp_result lx_asset_withdraw_settle(lxp_module_ctx *ctx,
         if (memcmp(store->records[i].nullifier, nullifier, 32U) == 0) break;
     if (i == store->count || store->records[i].settled)
         return LXP_ERR_WITHDRAWAL_ALREADY_SETTLED;
+    if (memcmp(asset->asset_id, store->records[i].request.asset_id, 32U) != 0 ||
+        !withdrawals->has_asset ||
+        memcmp(withdrawals->asset_id,
+               store->records[i].request.asset_id, 32U) != 0 ||
+        (reserve->has_asset &&
+         memcmp(reserve->asset_id,
+                store->records[i].request.asset_id, 32U) != 0))
+        return LXP_ERR_WITHDRAWAL_ASSET_MISMATCH;
     if (memcmp(store->records[i].request.checkpoint_id,
                checkpoint->checkpoint_id, 32U) != 0 ||
         withdrawals->kind != LX_ACCOUNT_SYSTEM_PAXEER_WITHDRAWALS ||
@@ -348,7 +356,8 @@ lxp_result lx_asset_withdraw_settle(lxp_module_ctx *ctx,
     set.leg_count = 1U;
     set.legs[0].from = withdrawals;
     set.legs[0].to = reserve;
-    (void)memcpy(set.legs[0].asset_id, asset->asset_id, 32U);
+    (void)memcpy(set.legs[0].asset_id,
+                 store->records[i].request.asset_id, 32U);
     set.legs[0].amount = store->records[i].request.amount;
     set.legs[0].reason = LXP_REASON_WITHDRAWAL;
     set.context = context;

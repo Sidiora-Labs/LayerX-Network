@@ -136,6 +136,7 @@ protocol_result_codes! {
     WithdrawalAlreadySettled = -415, Terminal;
     ChallengeWindowOpen = -416, Retriable;
     WithdrawalCancelled = -417, Terminal;
+    WithdrawalAssetMismatch = -418, Terminal;
     Overflow = -500, Terminal;
     Underflow = -501, Terminal;
     DivZero = -502, Terminal;
