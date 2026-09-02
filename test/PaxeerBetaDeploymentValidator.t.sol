@@ -4,7 +4,7 @@ pragma solidity ^0.8.24;
 import {PaxeerBetaDeploymentValidator} from "../contracts/deployment/PaxeerBetaDeploymentValidator.sol";
 import {StaticConfig} from "../contracts/config/StaticConfig.sol";
 import {Features} from "../contracts/config/Features.sol";
-import {PaxeerBetaDeploy} from "../script/PaxeerBetaDeploy.s.sol";
+import {PaxeerBetaDeploy} from "../scripts/PaxeerBetaDeploy.s.sol";
 
 interface BetaDeploymentVm {
     function chainId(uint256 newChainId) external;

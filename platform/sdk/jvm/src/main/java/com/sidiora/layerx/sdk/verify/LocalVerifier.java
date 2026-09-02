@@ -32,8 +32,8 @@ public final class LocalVerifier {
     private static final byte[] MERKLE_INTERNAL_DOMAIN = ascii("LXP/v1/merkle-internal\0");
     private static final byte[] BATCH_HEADER_DOMAIN = ascii("LXP/v1/batch-header\0");
     private static final byte[] RECEIPT_DOMAIN = ascii("LXP/v1/receipt\0");
-    private static final byte[] CHECKPOINT_DOMAIN = ascii("LXP/v1/checkpoint-certificate\0");
-    private static final byte[] GUARANTOR_ATTESTATION_DOMAIN = ascii("LXP/v1/guarantor-attestation\0");
+    private static final byte[] CHECKPOINT_DOMAIN = ascii("LXP/v2/checkpoint-certificate\0");
+    private static final byte[] GUARANTOR_ATTESTATION_DOMAIN = ascii("LXP/v2/guarantor-attestation\0");
     private static final byte[] ED25519_X509_PREFIX = hex("302a300506032b6570032100");
     private static final int BATCH_HEADER_BYTES = 354;
     private static final int MAX_MESSAGE_BYTES = 1_048_576;

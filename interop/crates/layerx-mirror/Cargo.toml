@@ -22,5 +22,8 @@ sha2.workspace = true
 sha3.workspace = true
 zeroize.workspace = true
 
+[dev-dependencies]
+layerx-types.workspace = true
+
 [lints]
 workspace = true

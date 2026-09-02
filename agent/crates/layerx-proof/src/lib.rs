@@ -9,4 +9,5 @@ pub mod level;
 pub mod merkle;
 pub mod program;
 pub mod receipt;
+pub mod settlement;
 pub mod state;

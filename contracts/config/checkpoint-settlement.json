@@ -1,0 +1,36 @@
+{
+  "schema": "layerx/checkpoint-settlement/1",
+  "protocol_version": 2,
+  "checkpoint_certificate_domain": "LXP/v2/checkpoint-certificate",
+  "guarantor_attestation_domain": "LXP/v2/guarantor-attestation",
+  "header_encoding_prefix": "0x000217010f",
+  "header_length": 354,
+  "finality_policy": {
+    "maximum_attestation_delay_seconds": 3600,
+    "certificate_threshold": 2
+  },
+  "settlement_domains": {
+    "vectors": {
+      "paxeer_chain_id": 31337,
+      "network_id": 42,
+      "settlement_contract": "0x2e234dae75c793f67a35089c9d99245e1c58470b",
+      "guarantor_set": [
+        {
+          "guarantor_id": "0x0000000000000000000000000000000000000000000000000000000000000001",
+          "signer": "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+          "public_key": "0x0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+        },
+        {
+          "guarantor_id": "0x0000000000000000000000000000000000000000000000000000000000000002",
+          "signer": "0x2b5ad5c4795c026514f8317c7a215e218dccd6cf",
+          "public_key": "0x02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5"
+        },
+        {
+          "guarantor_id": "0x0000000000000000000000000000000000000000000000000000000000000003",
+          "signer": "0x6813eb9362372eef6200f3b1dbc3f819671cba69",
+          "public_key": "0x02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9"
+        }
+      ]
+    }
+  }
+}

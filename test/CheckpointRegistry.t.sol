@@ -14,6 +14,15 @@ interface CheckpointVm {
     function warp(uint256 timestamp) external;
     function expectRevert(bytes4 selector) external;
     function etch(address target, bytes calldata code) external;
+    function readFile(string calldata path) external view returns (string memory);
+    function keyExistsJson(string calldata json, string calldata key) external pure returns (bool);
+    function parseJsonUint(string calldata json, string calldata key) external pure returns (uint256);
+    function parseJsonBool(string calldata json, string calldata key) external pure returns (bool);
+    function parseJsonString(string calldata json, string calldata key) external pure returns (string memory);
+    function parseJsonBytes(string calldata json, string calldata key) external pure returns (bytes memory);
+    function parseJsonBytes32(string calldata json, string calldata key) external pure returns (bytes32);
+    function parseJsonAddress(string calldata json, string calldata key) external pure returns (address);
+    function toString(uint256 value) external pure returns (string memory);
 }
 
 contract CheckpointToken {
@@ -54,9 +63,20 @@ contract CheckpointRegistryTest {
     bytes32 private constant GENESIS_MANIFEST_DIGEST = bytes32(uint256(0x13) << 248);
     bytes32 private constant CONFIG = keccak256("checkpoint-test-config");
     uint192 private constant RELEASE = uint192(1) << 128;
+    string private constant SETTLEMENT_PATH = "contracts/config/checkpoint-settlement.json";
+    string private constant VECTOR_DIRECTORY = "tests/vectors/checkpoint/";
+    uint256 private constant VECTOR_GUARANTORS = 3;
+
+    string private settlement;
+    uint64 private declaredDelaySeconds;
+    uint16 private declaredThreshold;
+    uint256 private declaredHeaderLength;
+    bytes private declaredHeaderPrefix;
+    address private declaredSettlementContract;
 
     function setUp() public {
         vm.warp(1000);
+        _loadDeclaredSettlement();
         CheckpointToken implementation = new CheckpointToken();
         vm.etch(Constants.USDL_TOKEN, address(implementation).code);
         bond = new GuarantorBond(
@@ -82,13 +102,14 @@ contract CheckpointRegistryTest {
             vm.prank(signer);
             bond.depositBond(bytes32(i + 1), 2 ether);
         }
+        require(address(bond) == declaredSettlementContract, "bond differs from the declared settlement contract");
         registry = new CheckpointRegistry(
             bond,
             Constants.PROTOCOL_VERSION,
             42,
-            2,
+            declaredThreshold,
             4,
-            1 hours,
+            declaredDelaySeconds,
             5 minutes,
             GENESIS_MANIFEST_DIGEST,
             GENESIS_CANONICAL_STATE_ROOT,
@@ -96,6 +117,250 @@ contract CheckpointRegistryTest {
             CONFIG,
             RELEASE
         );
+    }
+
+    function _loadDeclaredSettlement() private {
+        settlement = vm.readFile(SETTLEMENT_PATH);
+        require(_same(vm.parseJsonString(settlement, ".schema"), "layerx/checkpoint-settlement/1"), "settlement schema");
+        require(vm.parseJsonUint(settlement, ".protocol_version") == Constants.PROTOCOL_VERSION, "declared protocol");
+        require(
+            _sameBytes(
+                _nulTerminated(vm.parseJsonString(settlement, ".checkpoint_certificate_domain")),
+                CanonicalCheckpoint.CHECKPOINT_DOMAIN
+            ),
+            "declared checkpoint domain differs from CanonicalCheckpoint.CHECKPOINT_DOMAIN"
+        );
+        require(
+            _sameBytes(
+                _nulTerminated(vm.parseJsonString(settlement, ".guarantor_attestation_domain")),
+                CanonicalCheckpoint.ATTESTATION_DOMAIN
+            ),
+            "declared attestation domain differs from CanonicalCheckpoint.ATTESTATION_DOMAIN"
+        );
+        declaredHeaderPrefix = vm.parseJsonBytes(settlement, ".header_encoding_prefix");
+        require(_sameBytes(declaredHeaderPrefix, hex"000217010f"), "declared header prefix");
+        declaredHeaderLength = vm.parseJsonUint(settlement, ".header_length");
+        require(declaredHeaderLength == CanonicalCheckpoint.HEADER_LENGTH, "declared header length");
+        uint256 delaySeconds = vm.parseJsonUint(settlement, ".finality_policy.maximum_attestation_delay_seconds");
+        require(delaySeconds > 0 && delaySeconds <= type(uint64).max, "declared delay");
+        declaredDelaySeconds = uint64(delaySeconds);
+        uint256 threshold = vm.parseJsonUint(settlement, ".finality_policy.certificate_threshold");
+        require(threshold > 0 && threshold <= VECTOR_GUARANTORS, "declared threshold");
+        declaredThreshold = uint16(threshold);
+        require(
+            vm.parseJsonUint(settlement, ".settlement_domains.vectors.paxeer_chain_id") == block.chainid,
+            "declared paxeer chain id differs from the forge chain"
+        );
+        require(vm.parseJsonUint(settlement, ".settlement_domains.vectors.network_id") == 42, "declared network id");
+        declaredSettlementContract = vm.parseJsonAddress(settlement, ".settlement_domains.vectors.settlement_contract");
+        for (uint256 i = 0; i < VECTOR_GUARANTORS; ++i) {
+            string memory entry = string.concat(".settlement_domains.vectors.guarantor_set[", vm.toString(i), "]");
+            require(
+                vm.parseJsonBytes32(settlement, string.concat(entry, ".guarantor_id")) == bytes32(i + 1),
+                "declared guarantor id"
+            );
+            require(
+                vm.parseJsonAddress(settlement, string.concat(entry, ".signer")) == vm.addr(keys[i]),
+                "declared guarantor signer"
+            );
+        }
+        require(!vm.keyExistsJson(settlement, ".settlement_domains.vectors.guarantor_set[3]"), "declared set size");
+    }
+
+    function testDeclaredSettlementDrivesRegistryFreshnessPolicy() public view {
+        require(
+            registry.maximumAttestationDelayMilliseconds() == uint256(declaredDelaySeconds) * 1_000,
+            "registry delay differs from the declared value"
+        );
+        require(
+            registry.maximumAttestationDelay() == declaredDelaySeconds,
+            "registry delay seconds differ from the declared value"
+        );
+        require(registry.threshold() == declaredThreshold, "registry threshold differs from the declared value");
+        require(registry.networkId() == 42, "registry network id");
+    }
+
+    function testVectorFresh() public {
+        _runVector("fresh");
+    }
+
+    function testVectorTooEarly() public {
+        _runVector("too_early");
+    }
+
+    function testVectorTooLate() public {
+        _runVector("too_late");
+    }
+
+    function testVectorBoundaryLow() public {
+        _runVector("boundary_low");
+    }
+
+    function testVectorBoundaryHigh() public {
+        _runVector("boundary_high");
+    }
+
+    function _runVector(string memory name) private {
+        string memory vector = vm.readFile(string.concat(VECTOR_DIRECTORY, name, ".json"));
+        require(_same(vm.parseJsonString(vector, ".schema"), "layerx/checkpoint-vector/1"), "vector schema");
+        require(_same(vm.parseJsonString(vector, ".case"), name), "vector case");
+        require(_same(vm.parseJsonString(vector, ".settlement_domain"), "vectors"), "vector settlement domain");
+        CanonicalCheckpoint.HeaderCommitments memory header = _vectorHeaderFromJson(vector);
+        bytes memory encoded = registry.canonicalHeader(header);
+        require(encoded.length == declaredHeaderLength, "vector header length");
+        require(
+            _sameBytes(encoded, vm.parseJsonBytes(vector, ".header.bytes")),
+            "Solidity header encoding differs from the vector bytes"
+        );
+        require(_startsWith(encoded, declaredHeaderPrefix), "Solidity header prefix differs from the declared prefix");
+        bytes memory validityProof = vm.parseJsonBytes(vector, ".certificate.validity_proof");
+        require(vm.parseJsonUint(vector, ".certificate.threshold") == declaredThreshold, "vector threshold");
+        bytes32 digest = registry.checkpointHash(header, validityProof);
+        require(
+            digest == vm.parseJsonBytes32(vector, ".expected_digest"),
+            "Solidity checkpoint identity differs from the expected digest"
+        );
+        CanonicalCheckpoint.GuarantorAttestation[] memory attestations = _vectorAttestations(vector, header, digest);
+        string memory rejection = vm.parseJsonString(vector, ".expected_rejection");
+        if (_same(vm.parseJsonString(vector, ".expected_outcome"), "accept")) {
+            require(_same(rejection, "none"), "accept vector names a rejection");
+            registry.registerCheckpoint(header, validityProof, attestations);
+            require(registry.checkpointAtBatch(header.batchNumber) == digest, "vector checkpoint not registered");
+            require(registry.checkpointTimestamp(digest) == header.timestamp, "vector timestamp not recorded");
+        } else {
+            require(_same(vm.parseJsonString(vector, ".expected_outcome"), "reject"), "vector outcome");
+            require(_same(rejection, "not_yet_valid") || _same(rejection, "expired"), "vector rejection");
+            vm.expectRevert(CheckpointRegistry.InvalidCertificate.selector);
+            registry.registerCheckpoint(header, validityProof, attestations);
+            require(registry.checkpointAtBatch(header.batchNumber) == bytes32(0), "rejected vector was registered");
+        }
+    }
+
+    function _vectorHeaderFromJson(string memory vector)
+        private
+        view
+        returns (CanonicalCheckpoint.HeaderCommitments memory header)
+    {
+        header.protocolVersion = uint16(vm.parseJsonUint(vector, ".header.protocol_version"));
+        header.networkId = uint32(vm.parseJsonUint(vector, ".header.network_id"));
+        header.epoch = uint64(vm.parseJsonUint(vector, ".header.epoch"));
+        header.batchNumber = uint64(vm.parseJsonUint(vector, ".header.batch_number"));
+        header.firstSequence = uint64(vm.parseJsonUint(vector, ".header.first_sequence"));
+        header.lastSequence = uint64(vm.parseJsonUint(vector, ".header.last_sequence"));
+        header.previousStateRoot = vm.parseJsonBytes32(vector, ".header.previous_state_root");
+        header.resultingStateRoot = vm.parseJsonBytes32(vector, ".header.resulting_state_root");
+        header.activityMerkleRoot = vm.parseJsonBytes32(vector, ".header.activity_merkle_root");
+        header.receiptMerkleRoot = vm.parseJsonBytes32(vector, ".header.receipt_merkle_root");
+        header.eventMerkleRoot = vm.parseJsonBytes32(vector, ".header.event_merkle_root");
+        header.dataAvailabilityRoot = vm.parseJsonBytes32(vector, ".header.data_availability_root");
+        header.oracleRoot = vm.parseJsonBytes32(vector, ".header.oracle_root");
+        header.timestamp = uint64(vm.parseJsonUint(vector, ".header.timestamp_ms"));
+        header.sequencerId = vm.parseJsonBytes32(vector, ".header.sequencer_id");
+        require(header.protocolVersion == Constants.PROTOCOL_VERSION, "vector protocol version");
+        require(header.networkId == 42, "vector network id");
+    }
+
+    function _vectorAttestations(
+        string memory vector,
+        CanonicalCheckpoint.HeaderCommitments memory header,
+        bytes32 digest
+    ) private view returns (CanonicalCheckpoint.GuarantorAttestation[] memory attestations) {
+        require(!vm.keyExistsJson(vector, ".attestations[3]"), "vector attestation count");
+        attestations = new CanonicalCheckpoint.GuarantorAttestation[](VECTOR_GUARANTORS);
+        for (uint256 i = 0; i < VECTOR_GUARANTORS; ++i) {
+            attestations[i] = _vectorAttestation(vector, header, digest, i);
+        }
+    }
+
+    function _vectorAttestation(
+        string memory vector,
+        CanonicalCheckpoint.HeaderCommitments memory header,
+        bytes32 digest,
+        uint256 index
+    ) private view returns (CanonicalCheckpoint.GuarantorAttestation memory attestation) {
+        string memory entry = string.concat(".attestations[", vm.toString(index), "]");
+        bytes memory signature = vm.parseJsonBytes(vector, string.concat(entry, ".signature"));
+        require(signature.length == 64, "vector signature width");
+        attestation.protocolVersion = header.protocolVersion;
+        attestation.networkId = header.networkId;
+        attestation.paxeerChainId = uint64(block.chainid);
+        attestation.settlementContract = declaredSettlementContract;
+        attestation.epoch = header.epoch;
+        attestation.checkpointId = digest;
+        attestation.checkpointHash = digest;
+        attestation.guarantorId = vm.parseJsonBytes32(vector, string.concat(entry, ".guarantor_id"));
+        attestation.batchNumber = header.batchNumber;
+        attestation.dataAvailabilityRoot = header.dataAvailabilityRoot;
+        attestation.replayed = vm.parseJsonBool(vector, string.concat(entry, ".replayed"));
+        attestation.dataAvailable = vm.parseJsonBool(vector, string.concat(entry, ".data_possessed"));
+        attestation.availabilityClassMask =
+            uint8(vm.parseJsonUint(vector, string.concat(entry, ".availability_class_mask")));
+        attestation.attestedAt = uint64(vm.parseJsonUint(vector, string.concat(entry, ".attested_at_ms")));
+        attestation.signer = vm.parseJsonAddress(vector, string.concat(entry, ".signer"));
+        (attestation.r, attestation.s) = _splitSignature(signature);
+        attestation.v = uint8(vm.parseJsonUint(vector, string.concat(entry, ".signature_v")));
+        _checkVectorAttestation(vector, entry, index, attestation);
+    }
+
+    function _checkVectorAttestation(
+        string memory vector,
+        string memory entry,
+        uint256 index,
+        CanonicalCheckpoint.GuarantorAttestation memory attestation
+    ) private view {
+        string memory declared = string.concat(".settlement_domains.vectors.guarantor_set[", vm.toString(index), "]");
+        require(
+            attestation.guarantorId == vm.parseJsonBytes32(settlement, string.concat(declared, ".guarantor_id")),
+            "vector guarantor differs from the declared set"
+        );
+        require(
+            attestation.signer == vm.parseJsonAddress(settlement, string.concat(declared, ".signer")),
+            "vector signer differs from the declared set"
+        );
+        bytes32 attestationDigest = CanonicalCheckpoint.attestationHash(attestation);
+        require(
+            attestationDigest == vm.parseJsonBytes32(vector, string.concat(entry, ".digest")),
+            "Solidity attestation digest differs from the vector digest"
+        );
+        require(
+            sha256(
+                abi.encodePacked(
+                    CanonicalCheckpoint.ATTESTATION_DOMAIN, vm.parseJsonBytes(vector, string.concat(entry, ".message"))
+                )
+            ) == attestationDigest,
+            "Solidity attestation digest differs from the declared domain over the vector message"
+        );
+        require(
+            ecrecover(attestationDigest, attestation.v, attestation.r, attestation.s) == attestation.signer,
+            "vector signature does not recover the declared signer"
+        );
+    }
+
+    function _splitSignature(bytes memory signature) private pure returns (bytes32 r, bytes32 s) {
+        assembly {
+            r := mload(add(signature, 32))
+            s := mload(add(signature, 64))
+        }
+    }
+
+    function _nulTerminated(string memory text) private pure returns (bytes memory) {
+        return bytes.concat(bytes(text), hex"00");
+    }
+
+    function _same(string memory left, string memory right) private pure returns (bool) {
+        return keccak256(bytes(left)) == keccak256(bytes(right));
+    }
+
+    function _sameBytes(bytes memory left, bytes memory right) private pure returns (bool) {
+        return keccak256(left) == keccak256(right);
+    }
+
+    function _startsWith(bytes memory data, bytes memory prefix) private pure returns (bool) {
+        if (data.length < prefix.length) return false;
+        for (uint256 i = 0; i < prefix.length; ++i) {
+            if (data[i] != prefix[i]) return false;
+        }
+        return true;
     }
 
     function testCanonicalHeaderMatchesCVector() public view {
@@ -166,9 +431,9 @@ contract CheckpointRegistryTest {
             bond,
             Constants.PROTOCOL_VERSION,
             42,
-            2,
+            declaredThreshold,
             4,
-            1 hours,
+            declaredDelaySeconds,
             5 minutes,
             keccak256("other-manifest"),
             GENESIS_CANONICAL_STATE_ROOT,
@@ -183,9 +448,9 @@ contract CheckpointRegistryTest {
             bond,
             Constants.PROTOCOL_VERSION,
             42,
-            2,
+            declaredThreshold,
             4,
-            1 hours,
+            declaredDelaySeconds,
             5 minutes,
             GENESIS_RECEIPT_ROOT,
             GENESIS_RECEIPT_ROOT,
@@ -201,7 +466,7 @@ contract CheckpointRegistryTest {
         header.timestamp = 1_700_000_000_123;
         bytes32 digest = registry.checkpointHash(header, "");
         CanonicalCheckpoint.GuarantorAttestation[] memory attestations = _attestations(header, digest, 2);
-        attestations[0].attestedAt = header.timestamp + (1 hours * 1_000);
+        attestations[0].attestedAt = header.timestamp + (declaredDelaySeconds * 1_000);
         (attestations[0].v, attestations[0].r, attestations[0].s) =
             vm.sign(keys[0], CanonicalCheckpoint.attestationHash(attestations[0]));
         registry.registerCheckpoint(header, "", attestations);
@@ -222,7 +487,7 @@ contract CheckpointRegistryTest {
         CanonicalCheckpoint.HeaderCommitments memory header = _header();
         bytes32 digest = registry.checkpointHash(header, "");
         CanonicalCheckpoint.GuarantorAttestation[] memory attestations = _attestations(header, digest, 2);
-        attestations[0].attestedAt = header.timestamp + ((1 hours + 1) * 1_000);
+        attestations[0].attestedAt = header.timestamp + ((declaredDelaySeconds + 1) * 1_000);
         (attestations[0].v, attestations[0].r, attestations[0].s) =
             vm.sign(keys[0], CanonicalCheckpoint.attestationHash(attestations[0]));
         vm.expectRevert(CheckpointRegistry.InvalidCertificate.selector);

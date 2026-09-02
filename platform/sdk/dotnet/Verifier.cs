@@ -203,8 +203,8 @@ public static class LocalVerifier
     private static readonly byte[] MerkleInternalDomain = Encoding.UTF8.GetBytes("LXP/v1/merkle-internal\0");
     private static readonly byte[] BatchHeaderDomain = Encoding.UTF8.GetBytes("LXP/v1/batch-header\0");
     private static readonly byte[] ReceiptDomain = Encoding.UTF8.GetBytes("LXP/v1/receipt\0");
-    private static readonly byte[] CheckpointDomain = Encoding.UTF8.GetBytes("LXP/v1/checkpoint-certificate\0");
-    private static readonly byte[] GuarantorAttestationDomain = Encoding.UTF8.GetBytes("LXP/v1/guarantor-attestation\0");
+    private static readonly byte[] CheckpointDomain = Encoding.UTF8.GetBytes("LXP/v2/checkpoint-certificate\0");
+    private static readonly byte[] GuarantorAttestationDomain = Encoding.UTF8.GetBytes("LXP/v2/guarantor-attestation\0");
     private const int MaximumMessageBytes = 1_048_576;
     private const uint MaximumEffects = 512;
     private const uint MaximumEffectBody = 256;

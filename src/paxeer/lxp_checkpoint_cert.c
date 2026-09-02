@@ -1,9 +1,29 @@
 #include "layerx/lxp_guarantor.h"
 
 #include "layerx/lxp_crypto.h"
+#include "lxp_checkpoint_settlement.h"
 
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+
+uint64_t lxp_checkpoint_maximum_attestation_delay_ms(void)
+{
+    return LXP_CHECKPOINT_MAXIMUM_ATTESTATION_DELAY_SECONDS * UINT64_C(1000);
+}
+
+static lxp_result attestation_within_freshness_window(
+    const lxp_batch_header *header,
+    const lxp_guarantor_attestation *attestation)
+{
+    const uint64_t maximum_delay_ms =
+        lxp_checkpoint_maximum_attestation_delay_ms();
+    if (attestation->attested_at_ms < header->timestamp_ms)
+        return LXP_ERR_NOT_YET_VALID;
+    if (attestation->attested_at_ms - header->timestamp_ms > maximum_delay_ms)
+        return LXP_ERR_EXPIRED;
+    return LXP_OK;
+}
 
 lxp_result lxp_guarantor_attestation_verify(
     const lxp_guarantor_attestation *attestation,
@@ -171,6 +191,9 @@ lxp_result lxp_guarantor_cert_verify(
                    certificate->checkpoint.header.data_availability_root,
                    32U) != 0)
             return LXP_ERR_ROOT_MISMATCH;
+        status = attestation_within_freshness_window(
+            &certificate->checkpoint.header, attestation);
+        if (status != LXP_OK) return status;
         key = key_for(keys, key_count, attestation->guarantor_id);
         if (key != NULL && key->bonded &&
             lxp_guarantor_attestation_verify(attestation, key->public_key) ==

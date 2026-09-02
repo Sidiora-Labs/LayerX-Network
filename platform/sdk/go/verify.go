@@ -13,8 +13,8 @@ var (
 	merkleInternalDomain       = []byte("LXP/v1/merkle-internal\x00")
 	batchHeaderDomain          = []byte("LXP/v1/batch-header\x00")
 	receiptDomain              = []byte("LXP/v1/receipt\x00")
-	checkpointDomain           = []byte("LXP/v1/checkpoint-certificate\x00")
-	guarantorAttestationDomain = []byte("LXP/v1/guarantor-attestation\x00")
+	checkpointDomain           = []byte("LXP/v2/checkpoint-certificate\x00")
+	guarantorAttestationDomain = []byte("LXP/v2/guarantor-attestation\x00")
 )
 
 const (

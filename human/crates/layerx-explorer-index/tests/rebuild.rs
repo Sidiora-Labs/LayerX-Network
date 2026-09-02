@@ -167,7 +167,7 @@ fn attestation(
     message[180] = 0x1f;
     message[181..].copy_from_slice(&(1_000 + u64::from(guarantor_id[0])).to_be_bytes());
     let mut hasher = Sha256::new();
-    hasher.update(b"LXP/v1/guarantor-attestation\0");
+    hasher.update(b"LXP/v2/guarantor-attestation\0");
     hasher.update(message);
     let digest: [u8; 32] = hasher.finalize().into();
     let (signature, recovery_id): (Signature, _) = signing_key

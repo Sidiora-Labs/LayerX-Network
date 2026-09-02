@@ -793,6 +793,7 @@ dependencies = [
  "layerx-client",
  "layerx-crypto",
  "layerx-proof",
+ "layerx-types",
  "layerx-wire",
  "openssl",
  "rustls",

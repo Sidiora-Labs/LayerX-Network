@@ -1,8 +1,22 @@
+use std::fs;
+use std::path::{Path, PathBuf};
+
 use k256::ecdsa::{Signature, SigningKey};
 use layerx_crypto::secp256k1;
 use layerx_proof::checkpoint::{
-    checkpoint_id, verify_certificate, Attestation, Certificate, Checkpoint, CheckpointError,
-    GuarantorKey, SettlementDomain,
+    checkpoint_id, verify_certificate, verify_declared_certificate, Attestation, Certificate,
+    Checkpoint, CheckpointError, GuarantorKey, SettlementDomain,
+};
+use layerx_proof::settlement::{
+    declared, declared_domain, maximum_attestation_delay_ms, DeclaredDomain,
+    DECLARED_CHECKPOINT_SETTLEMENT,
+};
+use layerx_types::settlement::{
+    DeclaredCheckpointSettlement, SettlementError, CHECKPOINT_SETTLEMENT_PATH,
+};
+use layerx_types::vectors::checkpoint::{
+    load_checkpoint_vectors, CheckpointOutcome, CheckpointRejection, CheckpointVector,
+    CHECKPOINT_VECTOR_CASES,
 };
 use layerx_types::verify::VerificationLevel;
 use layerx_wire::encode::Encoder;
@@ -49,10 +63,28 @@ fn key(value: u8) -> (SigningKey, [u8; 33], [u8; 32]) {
     (signing, public_key, id)
 }
 
+fn repository_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..")
+}
+
 fn attestation(
     checkpoint_id: [u8; 32],
     guarantor_id: [u8; 32],
     signing_key: &SigningKey,
+) -> Attestation {
+    attestation_at(
+        checkpoint_id,
+        guarantor_id,
+        signing_key,
+        1_000 + u64::from(guarantor_id[0]),
+    )
+}
+
+fn attestation_at(
+    checkpoint_id: [u8; 32],
+    guarantor_id: [u8; 32],
+    signing_key: &SigningKey,
+    attested_at_ms: u64,
 ) -> Attestation {
     let settlement_contract = [0x55; 20];
     let mut message = [0_u8; 189];
@@ -69,7 +101,7 @@ fn attestation(
     message[178] = 1;
     message[179] = 1;
     message[180] = 0x1f;
-    message[181..].copy_from_slice(&(1_000 + u64::from(guarantor_id[0])).to_be_bytes());
+    message[181..].copy_from_slice(&attested_at_ms.to_be_bytes());
     let digest = checkpoint_attestation_digest(&message)
         .unwrap_or_else(|error| panic!("attestation hash failed: {error:?}"));
     let (signature, recovery_id): (Signature, _) = signing_key
@@ -96,10 +128,44 @@ fn attestation(
         true,
         true,
         0x1f,
-        1_000 + u64::from(guarantor_id[0]),
+        attested_at_ms,
         signer,
         signature.to_bytes().into(),
         27 + u8::from(recovery_id),
+    )
+}
+
+fn vector_certificate(vector: &CheckpointVector, domain: &DeclaredDomain) -> Certificate {
+    let attestations = vector
+        .attestations
+        .iter()
+        .map(|attestation| {
+            Attestation::new(
+                vector.header.protocol_version,
+                vector.header.network_id,
+                domain.settlement().paxeer_chain_id(),
+                domain.settlement().settlement_contract(),
+                vector.header.epoch,
+                vector.expected_digest,
+                vector.expected_digest,
+                attestation.guarantor_id,
+                vector.header.batch_number,
+                vector.header.data_availability_root,
+                attestation.replayed,
+                attestation.data_possessed,
+                attestation.availability_class_mask,
+                attestation.attested_at_ms,
+                attestation.signer,
+                attestation.signature,
+                attestation.signature_v,
+            )
+        })
+        .collect();
+    Certificate::new(
+        Checkpoint::new(vector.header.bytes.clone(), vector.validity_proof.clone()),
+        attestations,
+        vector.threshold,
+        None,
     )
 }
 
@@ -311,5 +377,204 @@ fn rejects_threshold_duplicate_membership_signature_and_identifier_failures() {
             None,
         ),
         Err(CheckpointError::Settlement)
+    );
+}
+
+#[test]
+fn embedded_settlement_is_the_declared_document() {
+    let on_disk = fs::read_to_string(repository_root().join(CHECKPOINT_SETTLEMENT_PATH))
+        .unwrap_or_else(|error| panic!("declared settlement unreadable: {error}"));
+    assert_eq!(on_disk, DECLARED_CHECKPOINT_SETTLEMENT);
+    let parsed = DeclaredCheckpointSettlement::parse(&on_disk)
+        .unwrap_or_else(|error| panic!("declared settlement invalid: {error}"));
+    let embedded =
+        declared().unwrap_or_else(|error| panic!("embedded settlement invalid: {error}"));
+    assert_eq!(*embedded, parsed);
+    assert_eq!(
+        maximum_attestation_delay_ms(),
+        Ok(parsed.finality_policy().maximum_attestation_delay_seconds() * 1_000)
+    );
+    assert_eq!(
+        declared_domain("undeclared").map(|domain| domain.name().to_owned()),
+        Err(SettlementError::UnknownDomain("undeclared".to_owned()))
+    );
+    let vectors = declared_domain("vectors")
+        .unwrap_or_else(|error| panic!("vectors domain undeclared: {error}"));
+    assert_eq!(vectors.network_id(), 42);
+    assert_eq!(vectors.settlement().paxeer_chain_id(), 31_337);
+    assert_eq!(vectors.guarantor_set().len(), 3);
+    assert_eq!(
+        vectors.certificate_threshold(),
+        parsed.finality_policy().certificate_threshold()
+    );
+}
+
+#[test]
+fn checkpoint_vectors_apply_the_declared_freshness_window() {
+    let vectors = load_checkpoint_vectors(&repository_root())
+        .unwrap_or_else(|error| panic!("checkpoint vectors failed to load: {error:?}"));
+    assert_eq!(vectors.len(), CHECKPOINT_VECTOR_CASES.len());
+    let maximum_delay_ms = maximum_attestation_delay_ms()
+        .unwrap_or_else(|error| panic!("declared delay unavailable: {error}"));
+    for vector in &vectors {
+        let domain = declared_domain(&vector.settlement_domain)
+            .unwrap_or_else(|error| panic!("{}: domain undeclared: {error}", vector.case_name));
+        let certificate = vector_certificate(vector, &domain);
+        assert_eq!(
+            checkpoint_id(certificate.checkpoint()),
+            Ok(vector.expected_digest),
+            "{}",
+            vector.case_name
+        );
+        let declared_result = verify_declared_certificate(
+            &certificate,
+            &vector.settlement_domain,
+            &vector.expected_digest,
+            None,
+        );
+        let generic_result = verify_certificate(
+            &certificate,
+            domain.guarantor_set(),
+            &vector.expected_digest,
+            domain.settlement(),
+            None,
+        );
+        assert_eq!(declared_result, generic_result, "{}", vector.case_name);
+        let first = &vector.attestations[0];
+        match vector.outcome {
+            CheckpointOutcome::Accept => {
+                let report = declared_result.unwrap_or_else(|error| {
+                    panic!("{}: expected accept, got {error:?}", vector.case_name)
+                });
+                assert_eq!(report.achieved, vector.attestations.len());
+                assert_eq!(report.required, vector.threshold);
+                assert_eq!(report.level(), VerificationLevel::CHECKPOINT_FINALISED);
+                assert_eq!(report.batch_number(), vector.header.batch_number);
+                assert_eq!(report.network_id(), vector.header.network_id);
+                assert_eq!(
+                    report.resulting_state_root(),
+                    vector.header.resulting_state_root
+                );
+                assert_eq!(
+                    report.evidence().checkpoint_id(),
+                    Some(vector.expected_digest)
+                );
+            }
+            CheckpointOutcome::Reject(CheckpointRejection::NotYetValid) => assert_eq!(
+                declared_result,
+                Err(CheckpointError::AttestationNotYetValid {
+                    guarantor_id: first.guarantor_id,
+                    attested_at_ms: first.attested_at_ms,
+                    header_timestamp_ms: vector.header.timestamp_ms,
+                }),
+                "{}",
+                vector.case_name
+            ),
+            CheckpointOutcome::Reject(CheckpointRejection::Expired) => assert_eq!(
+                declared_result,
+                Err(CheckpointError::AttestationExpired {
+                    guarantor_id: first.guarantor_id,
+                    attested_at_ms: first.attested_at_ms,
+                    deadline_ms: vector.header.timestamp_ms + maximum_delay_ms,
+                }),
+                "{}",
+                vector.case_name
+            ),
+        }
+    }
+}
+
+#[test]
+fn freshness_window_is_header_relative_and_closed_on_both_ends() {
+    let maximum_delay_ms = maximum_attestation_delay_ms()
+        .unwrap_or_else(|error| panic!("declared delay unavailable: {error}"));
+    let checkpoint = Checkpoint::new(header_bytes(), b"PROOF".to_vec());
+    let identifier = checkpoint_id(&checkpoint)
+        .unwrap_or_else(|error| panic!("checkpoint hash failed: {error:?}"));
+    let mut keys = Vec::new();
+    for value in 1..=3 {
+        let (_, public, id) = key(value);
+        keys.push(GuarantorKey::new(id, public, true));
+    }
+    let (signing, _, first_id) = key(1);
+    let certificate_at = |attested_at_ms: u64| {
+        Certificate::new(
+            checkpoint.clone(),
+            vec![attestation_at(
+                identifier,
+                first_id,
+                &signing,
+                attested_at_ms,
+            )],
+            1,
+            None,
+        )
+    };
+    for attested_at_ms in [1_000, 1_000 + maximum_delay_ms] {
+        let report = verify_certificate(
+            &certificate_at(attested_at_ms),
+            &keys,
+            &identifier,
+            settlement_domain(),
+            None,
+        )
+        .unwrap_or_else(|error| panic!("boundary {attested_at_ms} rejected: {error:?}"));
+        assert_eq!(report.achieved, 1);
+    }
+    assert_eq!(
+        verify_certificate(
+            &certificate_at(999),
+            &keys,
+            &identifier,
+            settlement_domain(),
+            None
+        ),
+        Err(CheckpointError::AttestationNotYetValid {
+            guarantor_id: first_id,
+            attested_at_ms: 999,
+            header_timestamp_ms: 1_000,
+        })
+    );
+    assert_eq!(
+        verify_certificate(
+            &certificate_at(1_001 + maximum_delay_ms),
+            &keys,
+            &identifier,
+            settlement_domain(),
+            None
+        ),
+        Err(CheckpointError::AttestationExpired {
+            guarantor_id: first_id,
+            attested_at_ms: 1_001 + maximum_delay_ms,
+            deadline_ms: 1_000 + maximum_delay_ms,
+        })
+    );
+}
+
+#[test]
+fn declared_domain_verification_rejects_foreign_contracts_and_weak_thresholds() {
+    let (certificate, _, identifier) = fixture();
+    assert_eq!(
+        verify_declared_certificate(&certificate, "vectors", &identifier, None),
+        Err(CheckpointError::CheckpointFields)
+    );
+    let weak = Certificate::new(
+        certificate.checkpoint().clone(),
+        certificate.attestations().to_vec(),
+        1,
+        None,
+    );
+    assert_eq!(
+        verify_declared_certificate(&weak, "vectors", &identifier, None),
+        Err(CheckpointError::Threshold {
+            achieved: 1,
+            required: 2,
+        })
+    );
+    assert_eq!(
+        verify_declared_certificate(&certificate, "undeclared", &identifier, None),
+        Err(CheckpointError::Configuration(
+            SettlementError::UnknownDomain("undeclared".to_owned())
+        ))
     );
 }

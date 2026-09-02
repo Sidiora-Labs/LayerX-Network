@@ -23,7 +23,10 @@ PAXEER_DIR := $(CURDIR)/paxeer-network
 PAXEER_MAKE := $(MAKE) -C $(PAXEER_DIR)
 HPX_ORIGIN ?= https://node.hyperpaxeer.com
 
-CPPFLAGS := -Iinclude \
+CHECKPOINT_SETTLEMENT := contracts/config/checkpoint-settlement.json
+CHECKPOINT_SETTLEMENT_HEADER := $(BUILD_DIR)/generated/lxp_checkpoint_settlement.h
+
+CPPFLAGS := -Iinclude -I$(BUILD_DIR)/generated \
 	-DLXP_BUILD_TARGET_TRIPLE=\"$(shell $(CC) -dumpmachine)\" \
 	-DLXP_BUILD_OPTIMISATION=\"$(OPT_LEVEL)\" \
 	-DLXP_BUILD_REVISION=\"$(LXP_REVISION)\"
@@ -197,6 +200,15 @@ $(BUILD_DIR)/test-obj/%.o: %.c
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) -DLXP_TESTING $(CFLAGS) -MMD -MP -c $< -o $@
 
+$(CHECKPOINT_SETTLEMENT_HEADER): $(CHECKPOINT_SETTLEMENT)
+	@mkdir -p $(@D)
+	test "$$(grep -c '"maximum_attestation_delay_seconds"' $<)" -eq 1
+	printf '#ifndef LXP_CHECKPOINT_SETTLEMENT_H\n#define LXP_CHECKPOINT_SETTLEMENT_H\n#define LXP_CHECKPOINT_MAXIMUM_ATTESTATION_DELAY_SECONDS UINT64_C(%s)\n#endif\n' \
+		"$$(sed -n 's/^[[:space:]]*"maximum_attestation_delay_seconds"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' $<)" > $@
+
+$(BUILD_DIR)/obj/src/paxeer/lxp_checkpoint_cert.o \
+$(BUILD_DIR)/test-obj/src/paxeer/lxp_checkpoint_cert.o: $(CHECKPOINT_SETTLEMENT_HEADER)
+
 clean:
 	rm -rf -- build
 
@@ -216,7 +228,7 @@ test-result: $(BUILD_DIR)/tests/lxp_test_result
 
 $(BUILD_DIR)/tests/lxp_test_protocol: tests/protocol/lxp_test_protocol.c $(LIBRARY)
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(EXTRA_LDFLAGS) -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -o $@
 
 test-protocol: $(BUILD_DIR)/tests/lxp_test_protocol
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_protocol

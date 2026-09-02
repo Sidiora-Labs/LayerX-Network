@@ -3,13 +3,15 @@
 use std::collections::BTreeSet;
 
 use layerx_crypto::secp256k1;
+use layerx_types::settlement::SettlementError;
 use layerx_wire::hash::{checkpoint_attestation_digest, checkpoint_id as hash_checkpoint_id};
 use layerx_wire::limits::PROTOCOL_VERSION;
-use layerx_wire::receipt::{decode_batch_header, encode_batch_header};
+use layerx_wire::receipt::{decode_batch_header, encode_batch_header, BatchHeader};
 
 use crate::availability::RootCommitments;
 use crate::evidence::Evidence;
 use crate::level::achieved;
+use crate::settlement;
 
 const ATTESTATION_BYTES: usize = 189;
 const ALL_AVAILABILITY_CLASSES: u8 = 0x1f;
@@ -351,6 +353,20 @@ pub enum CheckpointError {
     Threshold { achieved: usize, required: usize },
     /// The settlement reference is absent from or differs from registration.
     Settlement,
+    /// One attestation precedes the checkpoint header timestamp.
+    AttestationNotYetValid {
+        guarantor_id: [u8; 32],
+        attested_at_ms: u64,
+        header_timestamp_ms: u64,
+    },
+    /// One attestation follows the header timestamp plus the declared delay.
+    AttestationExpired {
+        guarantor_id: [u8; 32],
+        attested_at_ms: u64,
+        deadline_ms: u64,
+    },
+    /// The declared settlement configuration failed validation.
+    Configuration(SettlementError),
 }
 
 /// Recomputes the checkpoint identifier from its canonical body.
@@ -366,6 +382,54 @@ pub fn checkpoint_id(checkpoint: &Checkpoint) -> Result<[u8; 32], CheckpointErro
         return Err(CheckpointError::Header);
     }
     hash_checkpoint_id(&encoded, &checkpoint.validity_proof).map_err(|_| CheckpointError::Header)
+}
+
+fn attestation_matches_checkpoint(
+    attestation: &Attestation,
+    header: &BatchHeader,
+    identifier: &[u8; 32],
+    expected_settlement_domain: SettlementDomain,
+) -> bool {
+    attestation.protocol_version == header.protocol_version()
+        && attestation.network_id == header.network_id()
+        && attestation.paxeer_chain_id == expected_settlement_domain.paxeer_chain_id
+        && attestation.paxeer_settlement_contract == expected_settlement_domain.settlement_contract
+        && attestation.epoch == header.epoch()
+        && attestation.checkpoint_id == *identifier
+        && attestation.checkpoint_hash == *identifier
+        && attestation.batch_number == header.batch_number()
+        && attestation.data_availability_root == header.data_availability_root()
+        && attestation.replayed
+        && attestation.data_possessed
+        && attestation.availability_class_mask == ALL_AVAILABILITY_CLASSES
+        && attestation.attested_at_ms != 0
+        && attestation.signer != [0; 20]
+        && matches!(attestation.signature_v, 27 | 28)
+}
+
+/// Checks that an attestation falls inside the closed header-relative
+/// freshness window `[header.timestamp, header.timestamp + maximum delay]`.
+fn check_attestation_freshness(
+    guarantor_id: [u8; 32],
+    attested_at_ms: u64,
+    header_timestamp_ms: u64,
+    maximum_delay_ms: u64,
+) -> Result<(), CheckpointError> {
+    if attested_at_ms < header_timestamp_ms {
+        return Err(CheckpointError::AttestationNotYetValid {
+            guarantor_id,
+            attested_at_ms,
+            header_timestamp_ms,
+        });
+    }
+    if attested_at_ms - header_timestamp_ms > maximum_delay_ms {
+        return Err(CheckpointError::AttestationExpired {
+            guarantor_id,
+            attested_at_ms,
+            deadline_ms: header_timestamp_ms.saturating_add(maximum_delay_ms),
+        });
+    }
+    Ok(())
 }
 
 /// Verifies all certificate attestations against the bonded checkpoint set.
@@ -390,6 +454,9 @@ pub fn verify_certificate(
     if &identifier != registered_checkpoint_id {
         return Err(CheckpointError::CheckpointIdentifier);
     }
+    let maximum_delay_ms =
+        settlement::maximum_attestation_delay_ms().map_err(CheckpointError::Configuration)?;
+    let header_timestamp_ms = header.timestamp_ms();
     let mut seen = BTreeSet::new();
     let mut achieved = 0;
     if expected_settlement_domain.paxeer_chain_id == 0
@@ -401,25 +468,20 @@ pub fn verify_certificate(
         if !seen.insert(attestation.guarantor_id) {
             return Err(CheckpointError::DuplicateSigner(attestation.guarantor_id));
         }
-        if attestation.protocol_version != header.protocol_version()
-            || attestation.network_id != header.network_id()
-            || attestation.paxeer_chain_id != expected_settlement_domain.paxeer_chain_id
-            || attestation.paxeer_settlement_contract
-                != expected_settlement_domain.settlement_contract
-            || attestation.epoch != header.epoch()
-            || attestation.checkpoint_id != identifier
-            || attestation.checkpoint_hash != identifier
-            || attestation.batch_number != header.batch_number()
-            || attestation.data_availability_root != header.data_availability_root()
-            || !attestation.replayed
-            || !attestation.data_possessed
-            || attestation.availability_class_mask != ALL_AVAILABILITY_CLASSES
-            || attestation.attested_at_ms == 0
-            || attestation.signer == [0; 20]
-            || !matches!(attestation.signature_v, 27 | 28)
-        {
+        if !attestation_matches_checkpoint(
+            attestation,
+            &header,
+            &identifier,
+            expected_settlement_domain,
+        ) {
             return Err(CheckpointError::CheckpointFields);
         }
+        check_attestation_freshness(
+            attestation.guarantor_id,
+            attestation.attested_at_ms,
+            header_timestamp_ms,
+            maximum_delay_ms,
+        )?;
         let key = bonded_set
             .iter()
             .find(|key| key.guarantor_id == attestation.guarantor_id && key.bonded)
@@ -474,4 +536,42 @@ pub fn verify_certificate(
         },
         resulting_state_root: header.resulting_state_root(),
     })
+}
+
+/// Verifies a certificate against one settlement domain declared in the
+/// checkpoint settlement configuration: its chain, contract, bonded
+/// guarantor set, network identifier and certificate threshold.
+///
+/// # Errors
+///
+/// Returns a configuration error when the domain is undeclared, a field
+/// error when the header commits to another network, a threshold error when
+/// the certificate threshold is below the declared policy, and otherwise
+/// exactly what [`verify_certificate`] returns.
+pub fn verify_declared_certificate(
+    certificate: &Certificate,
+    domain_name: &str,
+    registered_checkpoint_id: &[u8; 32],
+    registered_settlement_reference: Option<&[u8]>,
+) -> Result<ThresholdReport, CheckpointError> {
+    let domain =
+        settlement::declared_domain(domain_name).map_err(CheckpointError::Configuration)?;
+    let header = decode_batch_header(&certificate.checkpoint.header_bytes)
+        .map_err(|_| CheckpointError::Header)?;
+    if header.network_id() != domain.network_id() {
+        return Err(CheckpointError::CheckpointFields);
+    }
+    if certificate.threshold < domain.certificate_threshold() {
+        return Err(CheckpointError::Threshold {
+            achieved: certificate.threshold,
+            required: domain.certificate_threshold(),
+        });
+    }
+    verify_certificate(
+        certificate,
+        domain.guarantor_set(),
+        registered_checkpoint_id,
+        domain.settlement(),
+        registered_settlement_reference,
+    )
 }

@@ -1,5 +1,7 @@
 //! Loader and coverage accounting for repository-owned conformance corpora.
 
+pub mod checkpoint;
+
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::fs;

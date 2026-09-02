@@ -16,7 +16,7 @@ static const domain_tag_entry domain_tags[LXP_DOMAIN_TAG_COUNT] = {
     LXP_TAG("LXP/v1/merkle-internal\000"),
     LXP_TAG("LXP/v1/batch-header\000"),
     LXP_TAG("LXP/v1/receipt\000"),
-    LXP_TAG("LXP/v1/checkpoint-certificate\000"),
+    LXP_TAG("LXP/v2/checkpoint-certificate\000"),
     LXP_TAG("LXP/v1/account-id\000"),
     LXP_TAG("LXP/v1/did-id\000"),
     LXP_TAG("LXP/v1/evm-payout-binding\000"),
@@ -26,7 +26,7 @@ static const domain_tag_entry domain_tags[LXP_DOMAIN_TAG_COUNT] = {
     LXP_TAG("LXP/v1/snapshot\000"),
     LXP_TAG("LXP/v1/da-chunk\000"),
     LXP_TAG("LXP/v1/da-challenge\000"),
-    LXP_TAG("LXP/v1/guarantor-attestation\000"),
+    LXP_TAG("LXP/v2/guarantor-attestation\000"),
     LXP_TAG("LXP/v1/genesis-manifest\000"),
     LXP_TAG("LXP/v1/genesis-receipt-root\000")
 };

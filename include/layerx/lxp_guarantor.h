@@ -311,6 +311,7 @@ lxp_result lxp_guarantor_cert_assemble(
     const lxp_checkpoint_certificate *checkpoint,
     const lxp_guarantor_attestation *attestations, size_t attestation_count,
     size_t threshold, lxp_guarantor_cert *certificate);
+uint64_t lxp_checkpoint_maximum_attestation_delay_ms(void);
 lxp_result lxp_guarantor_cert_verify(
     const lxp_guarantor_cert *certificate,
     const lxp_guarantor_key_record *keys, size_t key_count,

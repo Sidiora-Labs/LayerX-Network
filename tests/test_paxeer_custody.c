@@ -58,7 +58,8 @@ static int assemble(uint64_t batch_number, uint64_t last_sequence,
     checkpoint.header.sequencer_id[0] = 6U;
     for (i = 0U; i < 3U; ++i)
         if (lxp_guarantor_attest(&guarantors[i], &checkpoint, true, true,
-                                 100U + i, arena, &attestations[i]) != LXP_OK)
+                                 checkpoint.header.timestamp_ms + 100U + i,
+                                 arena, &attestations[i]) != LXP_OK)
             return 1;
     return lxp_guarantor_cert_assemble(&checkpoint, attestations, 3U, 2U,
                                        certificate) == LXP_OK ? 0 : 1;
@@ -115,7 +116,7 @@ int main(void)
     (void)memset(&requirements, 0, sizeof(requirements));
     requirements.checkpoint_epoch = 1U;
     requirements.challenge_window_end_ms = 50U;
-    requirements.checkpoint_deadline_ms = 1000U;
+    requirements.checkpoint_deadline_ms = 3000U;
     requirements.now_ms = 60U;
     requirements.threshold = 2U;
     requirements.minimum_bond = (lxp_u128){0U, 500U};

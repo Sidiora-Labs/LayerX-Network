@@ -67,7 +67,7 @@ impl Domain {
             Self::MerkleInternal => b"LXP/v1/merkle-internal\0",
             Self::BatchHeader => b"LXP/v1/batch-header\0",
             Self::Receipt => b"LXP/v1/receipt\0",
-            Self::CheckpointCertificate => b"LXP/v1/checkpoint-certificate\0",
+            Self::CheckpointCertificate => b"LXP/v2/checkpoint-certificate\0",
             Self::AccountId => b"LXP/v1/account-id\0",
             Self::DidId => b"LXP/v1/did-id\0",
             Self::EvmPayoutBinding => b"LXP/v1/evm-payout-binding\0",
@@ -77,7 +77,7 @@ impl Domain {
             Self::Snapshot => b"LXP/v1/snapshot\0",
             Self::DaChunk => b"LXP/v1/da-chunk\0",
             Self::DaChallenge => b"LXP/v1/da-challenge\0",
-            Self::GuarantorAttestation => b"LXP/v1/guarantor-attestation\0",
+            Self::GuarantorAttestation => b"LXP/v2/guarantor-attestation\0",
         }
     }
 }

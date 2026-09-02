@@ -354,7 +354,7 @@ reqs = ["2.1","2.2","2.3","2.4","2.5","2.6","2.7"]
 
 [task.3.2]
 title = "Unify checkpoint identity and freshness across C, Rust and Solidity"
-status = "pending"
+status = "in_progress"
 wave = 3
 requires = ["1.1"]
 do_1 = "Confirm decision.checkpoint_v2 with the owner and record the answer as an observation; then move the native domain table and the layerx-wire Domain enum to the version 2 checkpoint-certificate and guarantor-attestation tags, removing the version 1 tags unless retained evidence requires an explicit version-keyed path."
@@ -363,7 +363,7 @@ do_3 = "Create one cross-language checkpoint vector set under tests/vectors cove
 do_4 = "Source the settlement domain layerx-proof verifies against from the declared configuration the beta contract names, and prove the Solidity and native header encodings agree byte for byte through the vectors."
 verify_cmd = "make test-protocol agent-test-wire-hashing agent-test-proof-checkpoint test-contracts interop-test-mirrors"
 symbols = ["domain_tags","Domain::CheckpointCertificate","verify_certificate","CanonicalCheckpoint.CHECKPOINT_DOMAIN","CheckpointRegistry.registerCheckpoint"]
-touches = ["src/protocol/lxp_protocol.c","agent/crates/layerx-wire/src/hash.rs","agent/crates/layerx-proof/src/checkpoint.rs","contracts/libraries/CanonicalCheckpoint.sol","contracts/CheckpointRegistry.sol","test/CheckpointRegistry.t.sol","tests/vectors/checkpoint"]
+touches = ["src/protocol/lxp_protocol.c","agent/crates/layerx-wire/src/hash.rs","agent/crates/layerx-proof/src/checkpoint.rs","contracts/libraries/CanonicalCheckpoint.sol","contracts/CheckpointRegistry.sol","test/CheckpointRegistry.t.sol","test/PaxeerBetaDeploymentValidator.t.sol","tests/vectors/checkpoint","contracts/config/checkpoint-settlement.json","foundry.toml","Makefile","include/layerx/lxp_guarantor.h","src/paxeer/lxp_checkpoint_cert.c","tests/protocol/lxp_test_protocol.c","tests/test_paxeer_custody.c","tests/storage/lxp_test_finality_evidence.c","tests/vectors/finality_evidence_v1.vec","agent/crates/layerx-types/src/json.rs","agent/crates/layerx-types/src/settlement.rs","agent/crates/layerx-types/src/vectors.rs","agent/crates/layerx-types/src/vectors/checkpoint.rs","agent/crates/layerx-types/src/lib.rs","agent/crates/layerx-proof/src/settlement.rs","agent/crates/layerx-proof/src/lib.rs","agent/crates/layerx-proof/tests/checkpoint.rs","agent/crates/layerx-wire/tests/hashing.rs","interop/crates/layerx-mirror/Cargo.toml","interop/crates/layerx-mirror/tests/checkpoint_vectors.rs","interop/Cargo.lock","agent/sdk/python/layerx_sdk/verifier.py","agent/sdk/typescript/src/verifier.ts","platform/sdk/dotnet/Verifier.cs","platform/sdk/go/verify.go","platform/sdk/jvm/src/main/java/com/sidiora/layerx/sdk/verify/LocalVerifier.java","platform/sdk/swift/Sources/LayerXSDK/Verifier.swift","human/crates/layerx-explorer-index/tests/rebuild.rs","platform/docs/content/beta.md"]
 reqs = ["6.1","6.2","6.3","6.4","6.5","6.6"]
 
 [task.3.3]
