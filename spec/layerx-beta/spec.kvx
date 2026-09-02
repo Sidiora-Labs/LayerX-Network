@@ -308,7 +308,7 @@ reqs = ["4.1","4.2","4.3","4.4","4.5","4.6"]
 
 [task.2.3]
 title = "Run the evidence verifier before any verified label"
-status = "in_progress"
+status = "done"
 wave = 2
 requires = ["1.1"]
 do_1 = "In the authenticated evidence read, after decoding the cached bundle, call EvidenceBundle::verify with the expected activity digest, the requesting principal, the settlement domain and the receipt authority, and map its result to receipt-verified, unverified with the typed reason, or unavailable."
