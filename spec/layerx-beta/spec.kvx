@@ -340,7 +340,7 @@ status = "pending"
 
 [task.3.1]
 title = "Persist committed Programs blobs through snapshots"
-status = "pending"
+status = "in_progress"
 wave = 3
 requires = ["1.1"]
 do_1 = "Add a kernel-blob section to the snapshot format with a declared bound on count and total bytes, account for it in snapshot_size, and serialise blobs in canonical key order in lxp_snapshot_write, refusing with a typed error when the bound is exceeded."
@@ -349,7 +349,7 @@ do_3 = "On successful load, replace the kernel blob store atomically with the sn
 do_4 = "Extend tests/test_snapshot.c and the programs call-activity test to prove deploy, snapshot, restore into a fresh node, state-root equality and a post-restore CALL, plus rejection for tampered, missing and oversize blob sets."
 verify_cmd = "make test-snapshot test-state-root programs-core-test"
 symbols = ["snapshot_size","lxp_snapshot_write","lxp_snapshot_load","lxp_programs_artifact_open","lxp_state_subtree_root"]
-touches = ["src/state/lxp_snapshot.c","include/layerx/lxp_snapshot.h","src/modules/programs/artifact.c","tests/test_snapshot.c","tests/programs/test_call_activity.c"]
+touches = ["src/state/lxp_snapshot.c","include/layerx/lxp_snapshot.h","src/modules/programs/artifact.c","tests/test_snapshot.c","tests/programs/test_call_activity.c","include/layerx/lxp_result.h","agent/crates/layerx-types/src/result.rs"]
 reqs = ["2.1","2.2","2.3","2.4","2.5","2.6","2.7"]
 
 [task.3.2]

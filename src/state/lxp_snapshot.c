@@ -5,8 +5,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-enum { LXP_SNAPSHOT_STRUCTURE_TAG = 0x1804 };
-
 static void snapshot_put_u64(uint8_t out[8], uint64_t value)
 {
     size_t i;
@@ -115,6 +113,38 @@ static void sort_kv(const lxp_kernel *kernel, size_t *indices)
     }
 }
 
+static int blob_order(const lxp_module_blob *left,
+                      const lxp_module_blob *right)
+{
+    if (left->module_id != right->module_id)
+        return left->module_id < right->module_id ? -1 : 1;
+    return memcmp(left->key, right->key, 32U);
+}
+
+static void sort_blobs(const lxp_kernel *kernel, size_t *indices)
+{
+    size_t i;
+    for (i = 0U; i < kernel->blob_count; ++i) indices[i] = i;
+    for (i = 1U; i < kernel->blob_count; ++i) {
+        size_t value = indices[i];
+        size_t at = i;
+        while (at != 0U && blob_order(&kernel->blobs[indices[at - 1U]],
+                                      &kernel->blobs[value]) > 0) {
+            indices[at] = indices[at - 1U];
+            --at;
+        }
+        indices[at] = value;
+    }
+}
+
+static bool module_registered(const lxp_kernel *kernel, uint16_t module_id)
+{
+    size_t i;
+    for (i = 0U; i < kernel->module_count; ++i)
+        if (kernel->modules[i].module_id == module_id) return true;
+    return false;
+}
+
 static void sort_accounts(const lx_account_registry *accounts,
                           size_t *indices)
 {
@@ -139,6 +169,7 @@ static lxp_result snapshot_size(const lxp_kernel *kernel,
 {
     size_t total = 4U + 8U + 4U + 4U + 4U + 4U + 2U +
                    module_root_count * 36U;
+    size_t blob_total = 0U;
     size_t i;
     if (kernel->state->count > LXP_STATE_MAX_CELLS ||
         kernel->state->idempotency_count > LXP_STATE_MAX_IDEMPOTENCY ||
@@ -169,6 +200,24 @@ static lxp_result snapshot_size(const lxp_kernel *kernel,
             return LXP_ERR_LENGTH_LIMIT;
         total += 10U + entry->key_length + entry->value_length;
     }
+    if (kernel->blob_count > LXP_SNAPSHOT_MAX_BLOBS)
+        return LXP_ERR_LENGTH_LIMIT;
+    if (SIZE_MAX - total < LXP_SNAPSHOT_BLOB_SECTION_BYTES)
+        return LXP_ERR_LENGTH_LIMIT;
+    total += LXP_SNAPSHOT_BLOB_SECTION_BYTES;
+    for (i = 0U; i < kernel->blob_count; ++i) {
+        const lxp_module_blob *blob = &kernel->blobs[i];
+        if (blob->length == 0U || blob->bytes == NULL)
+            return LXP_FATAL_INVARIANT;
+        if (blob->length > LXP_SNAPSHOT_MAX_BLOB_BYTES ||
+            blob->length >
+                (size_t)LXP_SNAPSHOT_MAX_BLOB_TOTAL_BYTES - blob_total ||
+            blob->length > SIZE_MAX - total - LXP_SNAPSHOT_BLOB_ENTRY_BYTES)
+            return LXP_ERR_LENGTH_LIMIT;
+        blob_total += blob->length;
+        total += LXP_SNAPSHOT_BLOB_ENTRY_BYTES + blob->length;
+    }
+    if (blob_total != kernel->blob_total_bytes) return LXP_FATAL_INVARIANT;
     if (include_accounts) {
         const lx_account_registry *accounts = kernel->state->accounts;
         if (accounts == NULL) return LXP_FATAL_INVARIANT;
@@ -232,6 +281,7 @@ lxp_result lxp_snapshot_write(const lxp_kernel *kernel,
     size_t *cell_order;
     size_t *idem_order;
     size_t *kv_indices;
+    size_t *blob_indices;
     size_t *account_indices = NULL;
     void *memory;
     size_t capacity;
@@ -273,6 +323,10 @@ lxp_result lxp_snapshot_write(const lxp_kernel *kernel,
                              _Alignof(size_t), &memory);
     if (status != LXP_OK) return status;
     kv_indices = (size_t *)memory;
+    status = lxp_arena_alloc(arena, kernel->blob_count * sizeof(size_t),
+                             _Alignof(size_t), &memory);
+    if (status != LXP_OK) return status;
+    blob_indices = (size_t *)memory;
     if (include_accounts) {
         status = lxp_arena_alloc(
             arena, kernel->state->accounts->count * sizeof(size_t),
@@ -283,12 +337,14 @@ lxp_result lxp_snapshot_write(const lxp_kernel *kernel,
     sort_cells(kernel->state, cell_order);
     sort_idempotency(kernel->state, idem_order);
     sort_kv(kernel, kv_indices);
+    sort_blobs(kernel, blob_indices);
     if (include_accounts)
         sort_accounts(kernel->state->accounts, account_indices);
     status = lxp_codec_writer_init(&writer, arena, capacity);
     if (status == LXP_OK)
         status = lxp_codec_write_struct_header_version(
-            &writer, LXP_SNAPSHOT_STRUCTURE_TAG, snapshot_version);
+            &writer, (uint16_t)LXP_SNAPSHOT_FORMAT_VERSION,
+            snapshot_version);
     if (status == LXP_OK)
         status = lxp_codec_write_u64(&writer, global_sequence);
     if (status == LXP_OK)
@@ -346,6 +402,25 @@ lxp_result lxp_snapshot_write(const lxp_kernel *kernel,
         if (status == LXP_OK)
             status = lxp_codec_write_bytes(&writer, entry->value,
                 entry->value_length, LXP_MODULE_MAX_VALUE_BYTES);
+    }
+    if (status == LXP_OK)
+        status = lxp_codec_write_u32(&writer, (uint32_t)kernel->blob_count);
+    if (status == LXP_OK)
+        status = lxp_codec_write_u64(&writer,
+                                     (uint64_t)kernel->blob_total_bytes);
+    for (i = 0U; status == LXP_OK && i < kernel->blob_count; ++i) {
+        const lxp_module_blob *blob = &kernel->blobs[blob_indices[i]];
+        if (i != 0U && blob_order(&kernel->blobs[blob_indices[i - 1U]],
+                                  blob) >= 0) {
+            status = LXP_FATAL_INVARIANT;
+            break;
+        }
+        status = lxp_codec_write_u16(&writer, blob->module_id);
+        if (status == LXP_OK)
+            status = lxp_codec_write_bytes(&writer, blob->key, 32U, 32U);
+        if (status == LXP_OK)
+            status = lxp_codec_write_bytes(&writer, blob->bytes, blob->length,
+                                           LXP_SNAPSHOT_MAX_BLOB_BYTES);
     }
     if (status == LXP_OK && include_accounts)
         status = lxp_codec_write_u32(
@@ -491,11 +566,13 @@ lxp_result lxp_snapshot_load(const uint8_t *snapshot, size_t snapshot_length,
     uint32_t count = 0U;
     uint16_t root_count = 0U;
     uint16_t snapshot_version = 0U;
+    uint16_t format_tag = (uint16_t)LXP_SNAPSHOT_FORMAT_VERSION;
     size_t i;
     lxp_result status;
     if ((snapshot == NULL && snapshot_length != 0U) || manifest == NULL ||
         kernel == NULL || kernel->state == NULL)
         return LXP_ERR_NON_CANONICAL;
+    if (kernel->blob_count > LXP_KERNEL_MAX_BLOBS) return LXP_FATAL_INVARIANT;
     live_accounts = kernel->state->accounts;
     status = snapshot_digest(snapshot, snapshot_length,
                              manifest->global_sequence,
@@ -512,6 +589,12 @@ lxp_result lxp_snapshot_load(const uint8_t *snapshot, size_t snapshot_length,
     }
     if (manifest->global_sequence == UINT64_MAX)
         return LXP_ERR_SEQUENCE_MISMATCH;
+    if (snapshot_length >= 4U) {
+        uint16_t encoded_tag =
+            (uint16_t)(((uint16_t)snapshot[2] << 8U) | snapshot[3]);
+        if (encoded_tag == (uint16_t)LXP_SNAPSHOT_FORMAT_LEGACY)
+            format_tag = encoded_tag;
+    }
     candidate = malloc(sizeof(*candidate));
     state = malloc(sizeof(*state));
     if (candidate == NULL || state == NULL) {
@@ -521,10 +604,13 @@ lxp_result lxp_snapshot_load(const uint8_t *snapshot, size_t snapshot_length,
     (void)memset(state, 0, sizeof(*state));
     candidate->state = state;
     candidate->module_kv_count = 0U;
+    candidate->blob_count = 0U;
+    candidate->blob_total_bytes = 0U;
+    (void)memset(candidate->blobs, 0, sizeof(candidate->blobs));
     status = lxp_codec_reader_init(&reader, snapshot, snapshot_length);
     if (status == LXP_OK)
         status = lxp_codec_read_struct_header_version(
-            &reader, LXP_SNAPSHOT_STRUCTURE_TAG, &snapshot_version);
+            &reader, format_tag, &snapshot_version);
     if (status == LXP_OK &&
         snapshot_version != (uint16_t)LXP_PROTOCOL_VERSION_LEGACY &&
         snapshot_version != (uint16_t)LXP_PROTOCOL_VERSION_OCCUPANCY)
@@ -642,6 +728,57 @@ lxp_result lxp_snapshot_load(const uint8_t *snapshot, size_t snapshot_length,
     }
     candidate->module_kv_count = status == LXP_OK ? count : 0U;
     if (status == LXP_OK &&
+        format_tag == (uint16_t)LXP_SNAPSHOT_FORMAT_LEGACY &&
+        module_registered(candidate, LXP_MODULE_PROGRAMS))
+        status = LXP_ERR_SNAPSHOT_BLOBS_MISSING;
+    if (status == LXP_OK &&
+        format_tag == (uint16_t)LXP_SNAPSHOT_FORMAT_BLOBS) {
+        uint64_t declared_total = 0U;
+        status = lxp_codec_read_u32(&reader, &count);
+        if (status == LXP_OK && count > LXP_SNAPSHOT_MAX_BLOBS)
+            status = LXP_ERR_LENGTH_LIMIT;
+        if (status == LXP_OK)
+            status = lxp_codec_read_u64(&reader, &declared_total);
+        if (status == LXP_OK &&
+            declared_total > LXP_SNAPSHOT_MAX_BLOB_TOTAL_BYTES)
+            status = LXP_ERR_LENGTH_LIMIT;
+        for (i = 0U; status == LXP_OK && i < count; ++i) {
+            lxp_module_blob *blob = &candidate->blobs[i];
+            lxp_byte_span bytes;
+            status = lxp_codec_read_u16(&reader, &blob->module_id);
+            if (status == LXP_OK)
+                status = read_fixed(&reader, blob->key, 32U);
+            if (status == LXP_OK)
+                status = lxp_codec_read_bytes(&reader, &bytes,
+                                              LXP_SNAPSHOT_MAX_BLOB_BYTES);
+            if (status == LXP_OK && bytes.length >
+                (size_t)LXP_SNAPSHOT_MAX_BLOB_TOTAL_BYTES -
+                    candidate->blob_total_bytes)
+                status = LXP_ERR_LENGTH_LIMIT;
+            if (status == LXP_OK && (blob->module_id == 0U ||
+                blob->module_id > LXP_MODULE_RESERVED_COUNT ||
+                !module_registered(candidate, blob->module_id)))
+                status = LXP_ERR_UNKNOWN_MODULE;
+            if (status == LXP_OK && (bytes.length == 0U || (i != 0U &&
+                blob_order(&candidate->blobs[i - 1U], blob) >= 0)))
+                status = LXP_ERR_NON_CANONICAL;
+            if (status == LXP_OK) {
+                blob->bytes = (uint8_t *)malloc(bytes.length);
+                if (blob->bytes == NULL) status = LXP_ERR_ARENA_EXHAUSTED;
+            }
+            if (status == LXP_OK) {
+                (void)memcpy(blob->bytes, bytes.bytes, bytes.length);
+                blob->length = bytes.length;
+                blob->deleted = false;
+                candidate->blob_total_bytes += bytes.length;
+                candidate->blob_count = i + 1U;
+            }
+        }
+        if (status == LXP_OK &&
+            candidate->blob_total_bytes != declared_total)
+            status = LXP_ERR_NON_CANONICAL;
+    }
+    if (status == LXP_OK &&
         snapshot_version == (uint16_t)LXP_PROTOCOL_VERSION_OCCUPANCY)
         status = lxp_codec_read_u32(&reader, &count);
     if (status == LXP_OK &&
@@ -693,6 +830,11 @@ lxp_result lxp_snapshot_load(const uint8_t *snapshot, size_t snapshot_length,
     if (status == LXP_OK)
         status = lxp_snapshot_verify_root(candidate, manifest);
     if (status == LXP_OK) {
+        for (i = 0U; i < kernel->blob_count; ++i)
+            free(kernel->blobs[i].bytes);
+        (void)memcpy(kernel->blobs, candidate->blobs, sizeof(kernel->blobs));
+        kernel->blob_count = candidate->blob_count;
+        kernel->blob_total_bytes = candidate->blob_total_bytes;
         if (snapshot_version ==
                 (uint16_t)LXP_PROTOCOL_VERSION_OCCUPANCY) {
             live_accounts->count = accounts->count;
@@ -718,6 +860,9 @@ lxp_result lxp_snapshot_load(const uint8_t *snapshot, size_t snapshot_length,
         (void)memcpy(kernel->current_state_root,
                      manifest->receipt_state_root, 32U);
     }
+    if (status != LXP_OK)
+        for (i = 0U; i < candidate->blob_count; ++i)
+            free(candidate->blobs[i].bytes);
     free(accounts);
     free(state);
     free(candidate);

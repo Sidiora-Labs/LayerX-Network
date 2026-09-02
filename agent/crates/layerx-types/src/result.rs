@@ -191,6 +191,7 @@ protocol_result_codes! {
     ProjectionStale = -903, Retriable;
     Io = -904, Retriable;
     ArenaExhausted = -905, Retriable;
+    SnapshotBlobsMissing = -906, Terminal;
     FatalInvariant = -1001, Terminal;
     FatalReplayDivergence = -1002, Terminal;
     FatalSupplyMismatch = -1003, Terminal;

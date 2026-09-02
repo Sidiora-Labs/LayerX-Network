@@ -1,11 +1,14 @@
 #include "layerx/programs.h"
 
+#include "../../src/modules/programs/artifact.h"
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_hash.h"
 #include "layerx/lxp_kernel.h"
+#include "layerx/lxp_snapshot.h"
 
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 static lxp_result occupancy_parameters(
     void *context, uint32_t version, lx_programs_fee_schedule *schedule,
@@ -713,6 +716,29 @@ static int deploy_and_upgrade_persist_exact_artifacts(void)
     size_t module_kv_before;
     lxp_u128 actor_before;
     lxp_u128 treasury_before;
+    static uint8_t snapshot_storage[262144];
+    static lxp_state_store restored_state;
+    static lxp_kernel restored;
+    static lxp_identity_store restored_identities;
+    lxp_state_journal restored_journal;
+    lx_account_registry restored_accounts;
+    lx_account *restored_actor;
+    lx_account *restored_treasury;
+    lx_programs_transfer_runtime restored_runtime;
+    lxp_kernel_execution restored_execution;
+    lxp_receipt first_call_receipt;
+    lxp_receipt restored_receipt;
+    lxp_module_ctx original_ctx;
+    lxp_module_ctx restored_ctx;
+    lxp_arena snapshot_arena;
+    lxp_byte_span snapshot;
+    lxp_snapshot_manifest_record manifest;
+    const uint8_t *original_artifact;
+    const uint8_t *restored_artifact;
+    size_t original_artifact_length;
+    size_t restored_artifact_length;
+    uint8_t original_root[32];
+    uint8_t restored_root[32];
     (void)memset(program_id, 0x31, sizeof(program_id));
     (void)memset(&authority, 0, sizeof(authority));
     if (lx_account_registry_init(&accounts) != LXP_OK ||
@@ -838,6 +864,152 @@ static int deploy_and_upgrade_persist_exact_artifacts(void)
         return 1;
     (void)memcpy(first_terminal_root,
                  receipt.program_outcome.terminal_payload_root, 32U);
+    first_call_receipt = receipt;
+    if (lxp_arena_init(&snapshot_arena, snapshot_storage,
+                       sizeof(snapshot_storage)) != LXP_OK ||
+        lxp_state_root(&kernel, original_root) != LXP_OK ||
+        lxp_snapshot_write(&kernel, 2U, &snapshot_arena, &snapshot) !=
+            LXP_OK ||
+        lxp_snapshot_manifest_build(snapshot.bytes, snapshot.length, 2U,
+                                    original_root, kernel.current_state_root,
+                                    &manifest) != LXP_OK ||
+        lx_account_registry_init(&restored_accounts) != LXP_OK ||
+        lx_account_open(&restored_accounts, actor_name,
+                        sizeof(actor_name) - 1U, actor_id, 1U,
+                        LX_ACCOUNT_OPEN_GENESIS, NULL,
+                        &restored_actor) != LXP_OK ||
+        lx_account_open(&restored_accounts, treasury_name,
+                        sizeof(treasury_name) - 1U, treasury_id, 2U,
+                        LX_ACCOUNT_OPEN_GENESIS, NULL,
+                        &restored_treasury) != LXP_OK ||
+        lxp_ledger_bootstrap_balance(restored_actor, fee_asset,
+                                     (lxp_u128){0U, UINT64_MAX}, 1U) !=
+            LXP_OK ||
+        lxp_ledger_bootstrap_balance(restored_treasury, fee_asset,
+                                     (lxp_u128){0U, 0U}, 0U) != LXP_OK ||
+        lxp_state_store_init(&restored_state, 1U) != LXP_OK ||
+        lxp_kernel_create(&restored, &restored_state, &restored_journal,
+                          &parameters, 0U) != LXP_OK ||
+        install_metering_v1(&restored) != LXP_OK ||
+        lxp_kernel_register_module(&restored,
+                                   programs_module_registration_v2()) !=
+            LXP_OK)
+        return 1;
+    restored_runtime = runtime;
+    restored_runtime.accounts = &restored_accounts;
+    restored_runtime.metering_schedule_context = &restored;
+    restored_runtime.occupancy_parameter_context = &restored_runtime;
+    restored_identities = identities;
+    if (lxp_kernel_bind_module_runtime(&restored, LXP_MODULE_PROGRAMS,
+                                       &restored_runtime) != LXP_OK ||
+        lxp_programs_bind_fee_transaction(&restored) != LXP_OK ||
+        restored.blob_count != 0U ||
+        lxp_snapshot_load(snapshot.bytes, snapshot.length, &manifest,
+                          &restored) != LXP_OK ||
+        restored.blob_count != 1U ||
+        restored.blob_total_bytes != wasm_length ||
+        restored.blobs[0].module_id != LXP_MODULE_PROGRAMS ||
+        memcmp(restored.blobs[0].key, code_hash, 32U) != 0 ||
+        restored.blobs[0].length != wasm_length ||
+        restored.blobs[0].bytes == kernel.blobs[0].bytes ||
+        memcmp(restored.blobs[0].bytes, wasm, wasm_length) != 0 ||
+        restored.module_kv_count != kernel.module_kv_count ||
+        restored_state.next_sequence != 3U ||
+        lxp_state_root(&restored, restored_root) != LXP_OK ||
+        memcmp(original_root, restored_root, 32U) != 0 ||
+        memcmp(restored.current_state_root, kernel.current_state_root,
+               32U) != 0 ||
+        lxp_snapshot_verify_root(&restored, &manifest) != LXP_OK)
+        return 1;
+    if (lxp_arena_reset(&arena, 0U) != LXP_OK ||
+        lxp_module_ctx_init(&original_ctx, &kernel, LXP_MODULE_PROGRAMS,
+                            10U, 0U, 3U, 1000000U, &arena, false) != LXP_OK ||
+        lxp_module_ctx_init(&restored_ctx, &restored, LXP_MODULE_PROGRAMS,
+                            10U, 0U, 3U, 1000000U, &arena, false) != LXP_OK)
+        return 1;
+    if (lxp_programs_artifact_open(&original_ctx, program_id, code_hash,
+                                   &original_artifact,
+                                   &original_artifact_length) != LXP_OK ||
+        lxp_programs_artifact_open(&restored_ctx, program_id, code_hash,
+                                   &restored_artifact,
+                                   &restored_artifact_length) != LXP_OK ||
+        original_artifact_length != wasm_length ||
+        restored_artifact_length != wasm_length ||
+        memcmp(original_artifact, wasm, wasm_length) != 0 ||
+        memcmp(restored_artifact, wasm, wasm_length) != 0 ||
+        lxp_programs_artifact_open(&original_ctx, program_id, program_id,
+                                   &original_artifact,
+                                   &original_artifact_length) !=
+            LXP_ERR_VERSION_UNSUPPORTED ||
+        lxp_programs_artifact_open(&restored_ctx, program_id, program_id,
+                                   &restored_artifact,
+                                   &restored_artifact_length) !=
+            LXP_ERR_VERSION_UNSUPPORTED) {
+        lxp_module_ctx_rollback(&original_ctx);
+        lxp_module_ctx_rollback(&restored_ctx);
+        return 1;
+    }
+    lxp_module_ctx_rollback(&original_ctx);
+    lxp_module_ctx_rollback(&restored_ctx);
+    payload_length = staged_call_payload(call, program_id);
+    fill_activity(&activity, LX_PROGRAMS_CALL, call, payload_length,
+                  did, sizeof(did) - 1U, primary_key);
+    activity.account_sequence = 2U;
+    activity.idempotency_key[31] = 0x21U;
+    activity.fee_limit = (lxp_u128){0U, UINT64_MAX};
+    restored_execution = execution;
+    restored_execution.identities = &restored_identities;
+    restored_execution.fee_balance = (lxp_u128){0U, UINT64_MAX};
+    restored_execution.global_sequence = 3U;
+    actor_before = restored_actor->balance;
+    treasury_before = restored_treasury->balance;
+    if (lxp_arena_reset(&arena, 0U) != LXP_OK ||
+        lxp_kernel_execute_activity(&restored, &activity, &restored_execution,
+                                    &restored_receipt) != LXP_OK ||
+        restored_receipt.result_code != LXP_OK ||
+        !restored_receipt.program_outcome.present ||
+        restored_receipt.program_outcome.terminal_kind !=
+            LXP_PROGRAM_TERMINAL_SUCCESS ||
+        restored_receipt.module_id != first_call_receipt.module_id ||
+        restored_receipt.module_version !=
+            first_call_receipt.module_version ||
+        restored_receipt.program_outcome.encoding_version !=
+            first_call_receipt.program_outcome.encoding_version ||
+        restored_receipt.program_outcome.runtime_version !=
+            first_call_receipt.program_outcome.runtime_version ||
+        restored_receipt.program_outcome.abi_version !=
+            first_call_receipt.program_outcome.abi_version ||
+        restored_receipt.program_outcome.fee_schedule_version !=
+            first_call_receipt.program_outcome.fee_schedule_version ||
+        restored_receipt.program_outcome.metering_schedule_version !=
+            first_call_receipt.program_outcome.metering_schedule_version ||
+        restored_receipt.effects.count != first_call_receipt.effects.count ||
+        restored_receipt.effects.effects[0].event_type !=
+            first_call_receipt.effects.effects[0].event_type ||
+        restored_receipt.effects.effects[0].body_length !=
+            first_call_receipt.effects.effects[0].body_length ||
+        memcmp(restored_receipt.program_outcome.terminal_payload_root,
+               first_terminal_root, 32U) != 0 ||
+        memcmp(restored_receipt.program_outcome.occupancy_asset_id,
+               fee_asset, 32U) != 0 ||
+        !lxp_ct_is_zero(restored_receipt.program_outcome.transfer_root,
+                        32U) ||
+        lxp_u128_cmp(restored_receipt.fee_charged,
+                     first_call_receipt.fee_charged) != 0 ||
+        memcmp(restored_receipt.previous_state_root,
+               first_call_receipt.resulting_state_root, 32U) != 0 ||
+        restored_identities.identities[identity - identities.identities]
+                .next_sequence != 3U ||
+        identity->next_sequence != 2U ||
+        restored_state.next_sequence != 4U || state.next_sequence != 3U ||
+        exact_fee_applied(actor_before, treasury_before, restored_actor,
+                          restored_treasury,
+                          restored_receipt.fee_charged) != 0)
+        return 1;
+    while (restored.blob_count != 0U)
+        free(restored.blobs[--restored.blob_count].bytes);
+    restored.blob_total_bytes = 0U;
+    if (lxp_state_store_destroy(&restored_state) != LXP_OK) return 1;
     payload_length = upgrade_payload(payload, program_id, code_hash,
                                      upgraded_wasm, upgraded_wasm_length,
                                      upgraded_hash,

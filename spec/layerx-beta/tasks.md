@@ -87,7 +87,7 @@ Two points need owner confirmation before the corresponding task starts, and one
 ## Wave 3 - Durability, Settlement Identity and Hosted Topology
 
 - [ ] 3. Make committed state durable, settlement identity singular and hosted readiness truthful
-  - [ ] 3.1 Persist committed Programs blobs through snapshots
+  - [-] 3.1 Persist committed Programs blobs through snapshots
     - Add a kernel-blob section to the snapshot format with a declared bound on count and total bytes, account for it in snapshot_size, and serialise blobs in canonical key order in lxp_snapshot_write, refusing with a typed error when the bound is exceeded.
     - Parse and structurally validate the section in the loader, recompute the module subtree root from the parsed blobs and reject the snapshot when it does not reproduce the committed state root; reject a snapshot lacking the section while the state carries a Programs registration or committed blob keys.
     - On successful load, replace the kernel blob store atomically with the snapshot's blob set, removing blobs the snapshot does not carry, before publishing state and module KV.
