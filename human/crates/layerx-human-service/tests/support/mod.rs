@@ -3,7 +3,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::thread;
+use std::thread::JoinHandle;
 use std::time::Duration;
 
 use ed25519_dalek::{Signer as _, SigningKey};
@@ -11,9 +11,6 @@ use layerx_agentd::boot::{handshake_gate, Gate};
 use layerx_agentd::config::StartupConfig;
 use layerx_agentd::protocol_evidence::{EvidenceAuthority, RawReceiptEvidence, RawStateEvidence};
 use layerx_agentd::store::TenantId;
-use layerx_client::lni::framing::{read_frame, write_frame};
-use layerx_client::lni::handshake::{encode_node_info, NodeInfo, NodeRole};
-use layerx_client::lni::schema::{decode_envelope, encode_envelope, Envelope, Version};
 use layerx_client::lni::transport::{ConnectionGate, Limits, Uds};
 use layerx_human_service::store::{
     AgentTenantId, PrincipalId, PrincipalStore, RetentionPeriod, RetentionPolicy, RowKey,
@@ -21,10 +18,17 @@ use layerx_human_service::store::{
 };
 use layerx_proof::merkle::build_proof;
 use layerx_proof::receipt::AuthorizedBatch;
+use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
 use layerx_types::verify::VerificationLevel;
 use layerx_wire::hash::execution_batch_id as wire_execution_batch_id;
 use layerx_wire::limits::PROTOCOL_VERSION;
 use sha2::{Digest as _, Sha256};
+
+pub mod evidence_node;
+
+use evidence_node::{EvidenceNode, FRAME_BYTES};
+
+pub const EVIDENCE_NETWORK_ID: u32 = 42;
 
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(1);
 
@@ -77,7 +81,16 @@ pub fn install_and_open(
     (store, digest)
 }
 
-pub fn evidence_verifier(receipt_signer: &SigningKey) -> EvidenceAuthority {
+pub fn evidence_registry() -> ModuleRegistry {
+    let activity = ActivityType::new(ModuleId::Asset, 1)
+        .unwrap_or_else(|error| panic!("evidence activity type: {error:?}"));
+    let registration = ModuleRegistration::new(ModuleId::Asset, &[activity])
+        .unwrap_or_else(|error| panic!("evidence module registration: {error:?}"));
+    ModuleRegistry::new(&[registration])
+        .unwrap_or_else(|error| panic!("evidence module registry: {error:?}"))
+}
+
+pub fn evidence_gate(receipt_signer: &SigningKey) -> Gate {
     let receipt_key = receipt_signer.verifying_key().to_bytes();
     let authority_path = directory("evidence-authority").with_extension("csv");
     let authority_source = format!(
@@ -91,7 +104,7 @@ pub fn evidence_verifier(receipt_signer: &SigningKey) -> EvidenceAuthority {
         .unwrap_or_else(|error| panic!("authority source permissions: {error}"));
     let tenant = TenantId::new("human-evidence").unwrap_or_else(|error| panic!("tenant: {error}"));
     let config = StartupConfig {
-        network_id: 42,
+        network_id: EVIDENCE_NETWORK_ID,
         node_endpoint: PathBuf::from("/run/layerx/layerxd.sock"),
         expected_protocol_version: layerx_wire::limits::PROTOCOL_VERSION,
         tenants: BTreeSet::from([tenant.clone()]),
@@ -106,63 +119,57 @@ pub fn evidence_verifier(receipt_signer: &SigningKey) -> EvidenceAuthority {
         verification_defaults: BTreeMap::from([(tenant, VerificationLevel::STATE_PROVEN)]),
         sequencer_authority_source: authority_path,
     };
-    let mut gate = Gate::new(&config).unwrap_or_else(|error| panic!("authority gate: {error:?}"));
-    let socket_path = directory("evidence-handshake").with_extension("sock");
+    Gate::new(&config).unwrap_or_else(|error| panic!("authority gate: {error:?}"))
+}
+
+pub fn evidence_node(
+    receipt_signer: &SigningKey,
+    label: &str,
+    queue_capacity: usize,
+) -> EvidenceNode {
+    EvidenceNode::new(
+        receipt_signer.verifying_key().to_bytes(),
+        EVIDENCE_NETWORK_ID,
+        evidence_registry(),
+        &directory(label),
+        queue_capacity,
+    )
+}
+
+pub fn serve_evidence_node(node: EvidenceNode, label: &str) -> (PathBuf, JoinHandle<EvidenceNode>) {
+    let socket_path = directory(label).with_extension("sock");
     let listener = UnixListener::bind(&socket_path)
-        .unwrap_or_else(|error| panic!("bind evidence handshake: {error}"));
-    let node = NodeInfo {
-        interface_version: Version::V1_0,
-        protocol_version: layerx_wire::limits::PROTOCOL_VERSION,
-        network_id: 42,
-        role: NodeRole::Sequencer,
-        chain_head_sequence: 50,
-        latest_sealed_batch: 7,
-        latest_finalised_checkpoint: [0x91; 32],
-        authorised_sequencer_key: receipt_key,
-        advertised_capabilities: vec!["submit".to_owned()],
-    };
-    let server = thread::spawn(move || {
-        let (mut stream, _) = listener
-            .accept()
-            .unwrap_or_else(|error| panic!("accept evidence handshake: {error}"));
-        let request = read_frame(&mut stream, 1_048_576)
-            .unwrap_or_else(|error| panic!("read evidence handshake: {error:?}"));
-        let request = decode_envelope(&request)
-            .unwrap_or_else(|error| panic!("decode evidence handshake: {error:?}"));
-        assert_eq!(request.message_tag, 1);
-        assert_eq!(request.correlation_id, 0);
-        assert!(request.canonical_payload.is_empty());
-        assert!(request.proof_material.is_empty());
-        let payload = encode_node_info(&node)
-            .unwrap_or_else(|error| panic!("encode evidence node information: {error:?}"));
-        let response = encode_envelope(Envelope {
-            version: node.interface_version,
-            message_tag: 2,
-            correlation_id: 0,
-            canonical_payload: &payload,
-            proof_material: &[],
-        })
-        .unwrap_or_else(|error| panic!("encode evidence handshake response: {error:?}"));
-        write_frame(&mut stream, &response, 1_048_576)
-            .unwrap_or_else(|error| panic!("write evidence handshake: {error:?}"));
-    });
-    let mut transport = Uds::connect(
-        &socket_path,
+        .unwrap_or_else(|error| panic!("bind evidence node: {error}"));
+    (socket_path, node.serve(listener))
+}
+
+pub fn connect_evidence_node(socket_path: &Path) -> Uds {
+    Uds::connect(
+        socket_path,
         &ConnectionGate::new(1),
         Limits {
-            maximum_frame_bytes: 1_048_576,
+            maximum_frame_bytes: FRAME_BYTES,
             maximum_connections: 1,
             maximum_streams: 1,
-            maximum_queued_bytes: 1_048_576,
+            maximum_queued_bytes: FRAME_BYTES,
             deadline: Duration::from_secs(2),
         },
     )
-    .unwrap_or_else(|error| panic!("connect evidence handshake: {error:?}"));
+    .unwrap_or_else(|error| panic!("connect evidence node: {error:?}"))
+}
+
+pub fn evidence_verifier(receipt_signer: &SigningKey) -> EvidenceAuthority {
+    let mut gate = evidence_gate(receipt_signer);
+    let node = evidence_node(receipt_signer, "evidence-admission", 1);
+    let (socket_path, server) = serve_evidence_node(node, "evidence-handshake");
+    let mut transport = connect_evidence_node(&socket_path);
     handshake_gate(&mut gate, &mut transport)
         .unwrap_or_else(|error| panic!("accepted handshake: {error:?}"));
-    server
+    drop(transport);
+    let node = server
         .join()
-        .unwrap_or_else(|_| panic!("evidence handshake server panicked"));
+        .unwrap_or_else(|_| panic!("evidence node panicked"));
+    assert!(!node.fail_stopped());
     let _ = std::fs::remove_file(socket_path);
     gate.evidence_authority()
         .unwrap_or_else(|error| panic!("evidence authority: {error:?}"))
