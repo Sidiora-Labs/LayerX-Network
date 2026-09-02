@@ -540,3 +540,11 @@ symbol = "artifact_manifest_status not_emitted"
 observed = "The manifest is emitted only by the release-verification job of a release run and retained as the release-artifact-manifest workflow artifact; no release run has happened, so platform/release/artifact-manifest.json does not exist, artifact_manifest_status stays not_emitted and the contract states that the file is committed with the gate records of the first tagged beta release. The rollback identity is the most recent earlier sdk-v tag by creator date (none on the first release), resolved in the job from the full tag history."
 assumption = "Wave 5 (release gate records) commits the emitted manifest to artifact_manifest_path and flips artifact_manifest_status to emitted in the same change, which beta-contract-check enforces in both directions."
 severity = "note"
+
+[observation.4.2.6]
+task = "4.2"
+file = "platform/Cargo.lock"
+symbol = "release_pipeline verify"
+observed = "cg spec done 4.2 on main 5f249b65 ran the verify_cmd green (platform-release-check, platform-release-plan, platform-release-test with 16 and 37 passing tests, beta-contract-check ok with readiness_claim=false; log .worktrees/beta-orchestration/done-4-2.log) but the graph gate reported two failures: symbol release_pipeline verify not defined in the graph, and touched platform/Cargo.lock with no matching change tagged [spec:layerx-beta/4.2]. The verify subcommand is dispatched at platform/release/src/main.rs line 1739 (Some(\"verify\") => run_verify) under a descriptive symbol name the graph cannot resolve, and platform/Cargo.lock is changed in the task commit 5f249b65 itself; the Codify graph does not index lock files."
+assumption = "Both graph failures are Codify false negatives against code and a lock change that are really present in the task commit; the task is completed with --force under the owner authorization for graph-only failures, with nothing weakened."
+severity = "note"

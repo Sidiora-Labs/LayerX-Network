@@ -453,7 +453,7 @@ reqs = ["8.1","8.2","8.5","8.6"]
 
 [task.4.2]
 title = "Emit the source-bound artifact manifest and verify published bytes"
-status = "in_progress"
+status = "done"
 wave = 4
 requires = ["4.1"]
 do_1 = "Extend the release tool to emit one artifact manifest listing name, version, registry, immutable digest, signature, SBOM and attestation references, source revision and rollback identity for every published artifact."
