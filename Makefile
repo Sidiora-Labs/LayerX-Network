@@ -2960,3 +2960,12 @@ beta-ledger-check:
 
 beta-contract-check:
 	tools/ci/beta-contract-check.sh
+
+# LayerX beta: qualification runner gate and in-repository driver
+.PHONY: beta-qualify beta-driver-test
+
+beta-qualify:
+	python3 tools/qualification/release_runner.py $@
+
+beta-driver-test:
+	python3 -m unittest tools.qualification.test_release_runner tools.qualification.test_beta_driver

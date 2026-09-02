@@ -466,7 +466,7 @@ reqs = ["8.3","8.4","8.6"]
 
 [task.4.3]
 title = "Add the beta-qualify runner gate and the in-repository qualification driver"
-status = "pending"
+status = "in_progress"
 wave = 4
 requires = ["1.1"]
 do_1 = "In tools/qualification/release_runner.py add a human-qualify-functional gate whose local commands are those of human-qualify without human-qualify-perf and with no external ui or usability gates, and a beta-qualify gate whose local commands are those of platform-qualify with human-qualify-functional in place of human-qualify and whose external gates are platform-qualify-adoption, programs-qualify, interop-qualify and multichain-qualify; leave platform-qualify and human-qualify unchanged."
@@ -475,7 +475,7 @@ do_3 = "Make every case's result the outcome of execution; a case that cannot ru
 do_4 = "Extend tools/qualification/test_release_runner.py to cover the two new gates and add a driver test that runs the driver against the local emulator-backed stack for at least the adoption and multichain inventories; add beta-qualify and beta-driver-test make targets."
 verify_cmd = "make beta-driver-test"
 symbols = ["ReleaseRunner","LOCAL_COMMANDS","EXTERNAL_GATES","beta_driver"]
-touches = ["tools/qualification/release_runner.py","tools/qualification/beta_driver.py","tools/qualification/test_release_runner.py","Makefile"]
+touches = ["tools/qualification/release_runner.py","tools/qualification/beta_driver.py","tools/qualification/test_release_runner.py","tools/qualification/test_beta_driver.py","Makefile"]
 reqs = ["12.1","12.4"]
 
 [task.5]

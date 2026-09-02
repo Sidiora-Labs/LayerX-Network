@@ -11,6 +11,7 @@ from pathlib import Path
 
 from tools.qualification.release_runner import (
     EVIDENCE_SPECS,
+    EXTERNAL_GATES,
     LOCAL_COMMANDS,
     SCHEMA,
     QualificationFailure,
@@ -50,6 +51,143 @@ class ReleaseRunnerTests(unittest.TestCase):
             "program-heavy-monetary-law-replay",
         }
         self.assertTrue(required.issubset(EVIDENCE_SPECS["programs-qualify"].cases))
+
+    def test_functional_human_gate_drops_perf_and_has_no_external_gates(self) -> None:
+        self.assertEqual(
+            LOCAL_COMMANDS["human-qualify-functional"],
+            (
+                ("make", "--no-print-directory", "human-build"),
+                ("make", "--no-print-directory", "human-test"),
+                ("make", "--no-print-directory", "human-lint"),
+                ("make", "--no-print-directory", "human-check"),
+                ("make", "--no-print-directory", "human-check-ui"),
+                ("make", "--no-print-directory", "human-check-bundle"),
+                ("make", "--no-print-directory", "human-qualify-journeys"),
+                ("make", "--no-print-directory", "human-qualify-fabrication"),
+                ("make", "--no-print-directory", "human-qualify-faults"),
+            ),
+        )
+        self.assertNotIn("human-qualify-functional", EXTERNAL_GATES)
+        self.assertNotIn("human-qualify-functional", EVIDENCE_SPECS)
+
+    def test_beta_gate_substitutes_functional_human_gate_and_binds_driver_gates(self) -> None:
+        expected = list(LOCAL_COMMANDS["platform-qualify"])
+        expected[0] = ("make", "--no-print-directory", "human-qualify-functional")
+        self.assertEqual(LOCAL_COMMANDS["beta-qualify"], tuple(expected))
+        self.assertEqual(
+            EXTERNAL_GATES["beta-qualify"],
+            (
+                "platform-qualify-adoption",
+                "programs-qualify",
+                "interop-qualify",
+                "multichain-qualify",
+            ),
+        )
+        self.assertNotIn(("make", "--no-print-directory", "human-qualify"), LOCAL_COMMANDS["beta-qualify"])
+        self.assertNotIn(("make", "--no-print-directory", "human-qualify-perf"), LOCAL_COMMANDS["beta-qualify"])
+        self.assertNotIn("beta-qualify", EVIDENCE_SPECS)
+
+    def test_production_gates_are_unchanged(self) -> None:
+        self.assertEqual(
+            LOCAL_COMMANDS["human-qualify"],
+            (
+                ("make", "--no-print-directory", "human-build"),
+                ("make", "--no-print-directory", "human-test"),
+                ("make", "--no-print-directory", "human-lint"),
+                ("make", "--no-print-directory", "human-check"),
+                ("make", "--no-print-directory", "human-check-ui"),
+                ("make", "--no-print-directory", "human-check-bundle"),
+                ("make", "--no-print-directory", "human-qualify-journeys"),
+                ("make", "--no-print-directory", "human-qualify-fabrication"),
+                ("make", "--no-print-directory", "human-qualify-faults"),
+                ("make", "--no-print-directory", "human-qualify-perf"),
+            ),
+        )
+        self.assertEqual(
+            LOCAL_COMMANDS["platform-qualify"],
+            (
+                ("make", "--no-print-directory", "human-qualify"),
+                ("make", "--no-print-directory", "platform-build-all"),
+                ("make", "--no-print-directory", "platform-lint"),
+                ("make", "--no-print-directory", "platform-test"),
+                ("make", "--no-print-directory", "platform-test-sdks"),
+                ("make", "--no-print-directory", "platform-test-middleware"),
+                ("make", "--no-print-directory", "platform-test-docs"),
+                ("make", "--no-print-directory", "platform-hosted-smoke"),
+                ("make", "--no-print-directory", "platform-test-agent-install"),
+                ("make", "--no-print-directory", "platform-emulator-conformance"),
+                ("make", "--no-print-directory", "platform-real-agent-integration"),
+                ("make", "--no-print-directory", "platform-test-mobile-artifacts"),
+                ("make", "--no-print-directory", "platform-real-ios-integration"),
+                ("make", "--no-print-directory", "platform-real-android-integration"),
+                ("make", "--no-print-directory", "programs-test"),
+                ("make", "--no-print-directory", "interop-test"),
+                ("make", "--no-print-directory", "interop-test-migration-testnets"),
+                ("make", "--no-print-directory", "interop-test-ramps-sandbox"),
+                ("make", "--no-print-directory", "platform-release-check"),
+            ),
+        )
+        self.assertEqual(
+            EXTERNAL_GATES["human-qualify"], ("human-qualify-ui", "human-qualify-usability")
+        )
+        self.assertEqual(
+            EXTERNAL_GATES["platform-qualify"],
+            (
+                "platform-qualify-adoption",
+                "programs-qualify",
+                "interop-qualify",
+                "multichain-qualify",
+            ),
+        )
+
+    def test_beta_aggregate_failure_report_refuses_release_and_lists_driver_gates(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            environment = dict(os.environ)
+            for name in tuple(environment):
+                if name.startswith("LAYERX_QUALIFICATION_"):
+                    environment.pop(name)
+            environment["LAYERX_QUALIFICATION_ARTIFACT_DIR"] = temporary
+            completed = subprocess.run(
+                [sys.executable, str(RUNNER), "beta-qualify"],
+                cwd=ROOT,
+                env=environment,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            self.assertEqual(completed.returncode, 1)
+            output = Path(temporary) / "beta-qualify"
+            status = json.loads((output / "status.json").read_text(encoding="utf-8"))
+            self.assertEqual(status["state"], "failed")
+            self.assertEqual(status["commands"], [])
+            self.assertIn("LAYERX_QUALIFICATION_REAL_STACK=1", status["failure"])
+            self.assertEqual(
+                status["external_gates"],
+                [
+                    "platform-qualify-adoption",
+                    "programs-qualify",
+                    "interop-qualify",
+                    "multichain-qualify",
+                ],
+            )
+            self.assertIn(
+                "make --no-print-directory human-qualify-functional", status["planned_commands"]
+            )
+            self.assertNotIn("make --no-print-directory human-qualify", status["planned_commands"])
+            report = json.loads((output / "report.json").read_text(encoding="utf-8"))
+            self.assertFalse(report["release_allowed"])
+            self.assertEqual(report["gate"], "beta-qualify")
+            layers = {entry["layer"] for entry in report["guarantees"]}
+            self.assertIn("programs-plane-enforced", layers)
+            self.assertIn("interop-plane-enforced", layers)
+            unmet = {(entry["gate"], entry["state"]) for entry in report["unmet_gates"]}
+            self.assertIn(("make --no-print-directory human-qualify-functional", "not-run"), unmet)
+            self.assertIn(("make --no-print-directory platform-release-check", "not-run"), unmet)
+            for external in EXTERNAL_GATES["beta-qualify"]:
+                self.assertIn((external, "not-run"), unmet)
+            self.assertNotIn(("human-qualify-ui", "not-run"), unmet)
+            self.assertNotIn(("human-qualify-usability", "not-run"), unmet)
 
     def test_missing_real_stack_fails_before_any_local_gate(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

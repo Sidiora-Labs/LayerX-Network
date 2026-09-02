@@ -296,11 +296,28 @@ LOCAL_COMMANDS = {
         ("make", "--no-print-directory", "programs-conservation"),
     ),
 }
+LOCAL_COMMANDS["human-qualify-functional"] = tuple(
+    command
+    for command in LOCAL_COMMANDS["human-qualify"]
+    if command != ("make", "--no-print-directory", "human-qualify-perf")
+)
+LOCAL_COMMANDS["beta-qualify"] = tuple(
+    ("make", "--no-print-directory", "human-qualify-functional")
+    if command == ("make", "--no-print-directory", "human-qualify")
+    else command
+    for command in LOCAL_COMMANDS["platform-qualify"]
+)
 
 
 EXTERNAL_GATES = {
     "human-qualify": ("human-qualify-ui", "human-qualify-usability"),
     "platform-qualify": (
+        "platform-qualify-adoption",
+        "programs-qualify",
+        "interop-qualify",
+        "multichain-qualify",
+    ),
+    "beta-qualify": (
         "platform-qualify-adoption",
         "programs-qualify",
         "interop-qualify",
@@ -655,7 +672,12 @@ class ReleaseRunner:
         self._status("running")
 
     def _report(self, state: str, failure: str | None) -> None:
-        if self.gate not in ("human-qualify", "platform-qualify"):
+        if self.gate not in (
+            "human-qualify",
+            "human-qualify-functional",
+            "platform-qualify",
+            "beta-qualify",
+        ):
             return
         compatibility = self.root / "human" / "schema" / "human-api" / "compatibility.kvx"
         compatibility_record: dict[str, str] | None = None
@@ -681,7 +703,7 @@ class ReleaseRunner:
                 "layer": "human-plane-enforced",
             },
         ]
-        if self.gate == "platform-qualify":
+        if self.gate in ("platform-qualify", "beta-qualify"):
             guarantees.extend(
                 (
                     {
