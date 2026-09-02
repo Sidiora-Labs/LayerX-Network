@@ -1445,6 +1445,10 @@ name = "layerx-platform-release"
 version = "0.1.0"
 dependencies = [
  "layerx-platform-kvx",
+ "serde",
+ "serde_json",
+ "sha2",
+ "ureq",
 ]
 
 [[package]]

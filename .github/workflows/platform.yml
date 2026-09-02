@@ -446,12 +446,21 @@ jobs:
         run: |
           mkdir -p "$LAYERX_RELEASE_OUTPUT"
           if [ -n "$LAYERX_RELEASE_CRATES_IO_INDEX" ]; then
+            case "$LAYERX_RELEASE_CRATES_IO_INDEX" in
+              sparse+https://*) ;;
+              *) echo "LAYERX_RELEASE_CRATES_IO_INDEX must be a sparse+https:// index so the published crate bytes can be fetched for verification" >&2; exit 1 ;;
+            esac
+            index=${LAYERX_RELEASE_CRATES_IO_INDEX#sparse+}
+            download=$(curl --fail --silent --show-error --proto '=https' --tlsv1.2 --max-time 60 "${index%/}/config.json" \
+              | python3 -c 'import json, sys; dl = json.load(sys.stdin)["dl"]; print(dl if "{" in dl else dl.rstrip("/") + "/{crate}/{version}/download")')
             echo "CARGO_REGISTRIES_BETA_INDEX=$LAYERX_RELEASE_CRATES_IO_INDEX" >> "$GITHUB_ENV"
             echo "LAYERX_RELEASE_REGISTRY_FLAG=--registry beta" >> "$GITHUB_ENV"
             echo "LAYERX_RELEASE_TARGET=$LAYERX_RELEASE_CRATES_IO_INDEX" >> "$GITHUB_ENV"
+            echo "LAYERX_RELEASE_DOWNLOAD=$download" >> "$GITHUB_ENV"
           else
             echo "LAYERX_RELEASE_REGISTRY_FLAG=" >> "$GITHUB_ENV"
             echo "LAYERX_RELEASE_TARGET=$LAYERX_RELEASE_DISTRIBUTION" >> "$GITHUB_ENV"
+            echo "LAYERX_RELEASE_DOWNLOAD=$LAYERX_RELEASE_DISTRIBUTION/api/v1/crates/{crate}/{version}/download" >> "$GITHUB_ENV"
           fi
       - name: Package every declared crate from the locked workspaces
         run: |
@@ -463,7 +472,7 @@ jobs:
             test -n "$found"
             cp "$found" "$LAYERX_RELEASE_OUTPUT/"
           done
-      - name: Record the immutable digest of every crate and the publication
+      - name: Record the immutable digest of every crate, its artifact record and the publication
         run: |
           cd "$LAYERX_RELEASE_OUTPUT"
           sha256sum *.crate | tee digests.txt
@@ -475,6 +484,19 @@ jobs:
             echo "packages=$LAYERX_RELEASE_PACKAGES"
             echo "revision=$GITHUB_SHA"
           } > publication.txt
+          rm -f artifacts.kvx
+          for package in $LAYERX_RELEASE_PACKAGES; do
+            case "$package" in
+              layerx-mirror | layerx-programs-runtime) sbom=$package.sbom.spdx.json ;;
+              *) sbom=agent.sbom.spdx.json ;;
+            esac
+            crate=$package-$LAYERX_RELEASE_VERSION.crate
+            location=$(printf '%s' "$LAYERX_RELEASE_DOWNLOAD" | sed "s#{crate}#$package#g; s#{version}#$LAYERX_RELEASE_VERSION#g")
+            case "$location" in
+              *'{'*) echo "crate download template $LAYERX_RELEASE_DOWNLOAD carries a placeholder this pipeline cannot fill" >&2; exit 1 ;;
+            esac
+            $GITHUB_WORKSPACE/tools/ci/release-artifact-record.sh "$package" "$crate" built-bytes "$crate.sigstore.json" "$sbom" provenance.sigstore.json "$location"
+          done
       - name: Generate the SBOM of every published workspace
         run: |
           syft scan dir:agent -o spdx-json="$LAYERX_RELEASE_OUTPUT/agent.sbom.spdx.json"
@@ -489,9 +511,18 @@ jobs:
           done
       - name: Attest the build provenance of every crate
         if: startsWith(github.ref, 'refs/tags/sdk-v')
+        id: attest
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: build/release/crates-io/*.crate
+      - name: Retain the provenance attestation bundle
+        if: startsWith(github.ref, 'refs/tags/sdk-v')
+        env:
+          LAYERX_RELEASE_ATTESTATION_BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+          LAYERX_RELEASE_ATTESTATION_URL: ${{ steps.attest.outputs.attestation-url }}
+        run: |
+          cp "$LAYERX_RELEASE_ATTESTATION_BUNDLE" "$LAYERX_RELEASE_OUTPUT/provenance.sigstore.json"
+          echo "attestation_url=$LAYERX_RELEASE_ATTESTATION_URL" >> "$LAYERX_RELEASE_OUTPUT/publication.txt"
       - name: Publish the crates in dependency order
         if: startsWith(github.ref, 'refs/tags/sdk-v')
         env:
@@ -531,7 +562,7 @@ jobs:
           done
           cargo build --offline --manifest-path "$install/Cargo.toml"
           echo install_check=pass >> "$LAYERX_RELEASE_OUTPUT/publication.txt"
-      - name: Retain the crates, digests, SBOMs, signatures and publication record
+      - name: Retain the crates, digests, SBOMs, signatures, attestation, artifact records and publication record
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-crates-io
@@ -588,7 +619,7 @@ jobs:
           for package in $LAYERX_RELEASE_PUBLICATION_ORDER; do
             npm run build --workspace "$package"
           done
-      - name: Pack every declared package, generate its SBOM and record the digests
+      - name: Pack every declared package, generate its SBOM and record the digests and artifact records
         run: |
           for package in $LAYERX_RELEASE_PACKAGES; do
             npm pack --workspace "$package" --pack-destination "$LAYERX_RELEASE_OUTPUT" --ignore-scripts
@@ -604,6 +635,13 @@ jobs:
             echo "packages=$LAYERX_RELEASE_PACKAGES"
             echo "revision=$GITHUB_SHA"
           } > publication.txt
+          rm -f artifacts.kvx
+          for package in $LAYERX_RELEASE_PACKAGES; do
+            tarball=$(echo "$package" | sed 's/^@//; s#/#-#')-$LAYERX_RELEASE_VERSION.tgz
+            bare=${package#*/}
+            encoded=$(printf '%s' "$package" | sed 's#/#%2F#')
+            $GITHUB_WORKSPACE/tools/ci/release-artifact-record.sh "$package" "$tarball" built-bytes "$tarball.sigstore.json" "$(echo "$package" | tr '/@' '-_').sbom.spdx.json" "npm-provenance:${LAYERX_RELEASE_TARGET%/}/-/npm/v1/attestations/$encoded@$LAYERX_RELEASE_VERSION" "${LAYERX_RELEASE_TARGET%/}/$package/-/$bare-$LAYERX_RELEASE_VERSION.tgz"
+          done
       - name: Sign every tarball with sigstore keyless signing
         if: startsWith(github.ref, 'refs/tags/sdk-v')
         run: |
@@ -651,7 +689,7 @@ jobs:
           cd registry
           sha256sum --check ../../digests.txt
           echo install_check=pass >> ../../publication.txt
-      - name: Retain the tarballs, digests, SBOMs, signatures and publication record
+      - name: Retain the tarballs, digests, SBOMs, signatures, artifact records and publication record
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-npm
@@ -699,7 +737,7 @@ jobs:
         run: |
           python -m build --wheel --outdir "$LAYERX_RELEASE_OUTPUT/dist" agent/sdk/python
           python -m build --wheel --outdir "$LAYERX_RELEASE_OUTPUT/dist" platform/integrations/fastapi
-      - name: Record the immutable digest of every wheel and the publication
+      - name: Record the immutable digest of every wheel, its artifact record and the publication
         run: |
           cd "$LAYERX_RELEASE_OUTPUT/dist"
           sha256sum *.whl | tee ../digests.txt
@@ -711,6 +749,15 @@ jobs:
             echo "packages=$LAYERX_RELEASE_PACKAGES"
             echo "revision=$GITHUB_SHA"
           } > ../publication.txt
+          cd ..
+          rm -f artifacts.kvx
+          for package in $LAYERX_RELEASE_PACKAGES; do
+            wheel=$(find dist -maxdepth 1 -name "$(echo "$package" | tr '-' '_')-*.whl" | sort | head -n 1)
+            test -n "$wheel"
+            file=$(basename "$wheel")
+            pep440=$(echo "$file" | cut -d '-' -f 2)
+            $GITHUB_WORKSPACE/tools/ci/release-artifact-record.sh "$package" "$wheel" built-bytes "signatures/$file.sigstore.json" "$package.sbom.spdx.json" "pypi-integrity:$LAYERX_RELEASE_DISTRIBUTION/integrity/$package/$pep440/$file/provenance" "simple+${LAYERX_RELEASE_TARGET%/}/$package/"
+          done
       - name: Generate the SBOM of every published package
         run: |
           syft scan dir:agent/sdk/python -o spdx-json="$LAYERX_RELEASE_OUTPUT/layerx-sdk.sbom.spdx.json"
@@ -756,7 +803,7 @@ jobs:
           pip install --pre --index-url "$LAYERX_RELEASE_TARGET" --extra-index-url https://pypi.org/simple $specs
           python -c "import layerx_sdk, layerx_fastapi"
           echo install_check=pass >> "$LAYERX_RELEASE_OUTPUT/publication.txt"
-      - name: Retain the wheels, digests, SBOMs, signatures and publication record
+      - name: Retain the wheels, digests, SBOMs, signatures, artifact records and publication record
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-pypi
@@ -798,9 +845,10 @@ jobs:
           echo "LAYERX_RELEASE_TARGET=${LAYERX_RELEASE_GO_PROXY:-$LAYERX_RELEASE_DISTRIBUTION}" >> "$GITHUB_ENV"
       - name: Build and vet the module from the locked sources
         run: cd platform/sdk/go && go build ./... && go vet ./...
-      - name: Record the source digest of the module and the publication
+      - name: Record the source digest of the module, its artifact record and the publication
         run: |
-          git archive --format=tar "HEAD:platform/sdk/go" | sha256sum | tee "$LAYERX_RELEASE_OUTPUT/source-digest.txt"
+          git archive --format=tar --output="$LAYERX_RELEASE_OUTPUT/layerx-go-$LAYERX_RELEASE_VERSION.tar" "HEAD:platform/sdk/go"
+          sha256sum "$LAYERX_RELEASE_OUTPUT/layerx-go-$LAYERX_RELEASE_VERSION.tar" | cut -d ' ' -f 1 | tee "$LAYERX_RELEASE_OUTPUT/source-digest.txt"
           {
             echo "registry=$LAYERX_RELEASE_REGISTRY"
             echo "version=$LAYERX_RELEASE_VERSION"
@@ -809,6 +857,10 @@ jobs:
             echo "packages=$LAYERX_RELEASE_PACKAGES"
             echo "revision=$GITHUB_SHA"
           } > "$LAYERX_RELEASE_OUTPUT/publication.txt"
+          escaped=$(printf '%s' "$LAYERX_RELEASE_PACKAGES" | sed 's/[A-Z]/!\L&/g')
+          cd "$LAYERX_RELEASE_OUTPUT"
+          rm -f artifacts.kvx
+          $GITHUB_WORKSPACE/tools/ci/release-artifact-record.sh "$LAYERX_RELEASE_PACKAGES" "layerx-go-$LAYERX_RELEASE_VERSION.tar" source-archive tag-signature.txt layerx-go.sbom.spdx.json go-checksum-database:sum.golang.org "${LAYERX_RELEASE_TARGET%/}/$escaped/@v/v$LAYERX_RELEASE_VERSION.zip"
       - name: Generate the SBOM of the module
         run: syft scan dir:platform/sdk/go -o spdx-json="$LAYERX_RELEASE_OUTPUT/layerx-go.sbom.spdx.json"
       - name: Import the release signing key
@@ -862,10 +914,17 @@ jobs:
           directory=$(python3 -c 'import json, sys; print(json.load(sys.stdin)["Dir"])' < download.json)
           zip=$(python3 -c 'import json, sys; print(json.load(sys.stdin)["Zip"])' < download.json)
           diff -r "$directory" "$GITHUB_WORKSPACE/platform/sdk/go"
-          sha256sum "$zip" | tee "$LAYERX_RELEASE_OUTPUT/../go-modules/registry-digest.txt"
-          grep " $module v$LAYERX_RELEASE_VERSION " go.sum | tee -a "$LAYERX_RELEASE_OUTPUT/../go-modules/registry-digest.txt"
-          echo install_check=pass >> "$LAYERX_RELEASE_OUTPUT/../go-modules/publication.txt"
-      - name: Retain the digests, SBOM, tag signature and publication record
+          output=$GITHUB_WORKSPACE/$LAYERX_RELEASE_OUTPUT
+          sha256sum "$zip" | tee "$output/registry-digest.txt"
+          checksum=$(grep " $module v$LAYERX_RELEASE_VERSION h1:" go.sum | tee -a "$output/registry-digest.txt")
+          test -n "$checksum"
+          cp "$zip" "$output/layerx-go-v$LAYERX_RELEASE_VERSION.zip"
+          escaped=$(printf '%s' "$module" | sed 's/[A-Z]/!\L&/g')
+          cd "$output"
+          rm -f artifacts.kvx
+          $GITHUB_WORKSPACE/tools/ci/release-artifact-record.sh "$module" "layerx-go-v$LAYERX_RELEASE_VERSION.zip" registry-bytes tag-signature.txt layerx-go.sbom.spdx.json "go-checksum-database:sum.golang.org $checksum" "${LAYERX_RELEASE_TARGET%/}/$escaped/@v/v$LAYERX_RELEASE_VERSION.zip"
+          echo install_check=pass >> publication.txt
+      - name: Retain the archives, digests, SBOM, tag signature, artifact record and publication record
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-go-modules
@@ -916,7 +975,7 @@ jobs:
             mvn deploy -B -DskipTests -f "$pom" -DaltDeploymentRepository="staging::file://$staging"
           done
           find "$staging" -name 'maven-metadata*' -delete
-      - name: Record the immutable digest of every artifact and the publication
+      - name: Record the immutable digest of every artifact, its artifact record and the publication
         run: |
           cd "$LAYERX_RELEASE_OUTPUT"
           find staging -type f \( -name '*.jar' -o -name '*.pom' \) | sort | xargs sha256sum | tee digests.txt
@@ -930,6 +989,16 @@ jobs:
             echo "packages=$LAYERX_RELEASE_PACKAGES"
             echo "revision=$GITHUB_SHA"
           } > publication.txt
+          rm -f artifacts.kvx
+          for coordinate in $LAYERX_RELEASE_PACKAGES; do
+            group=${coordinate%%:*}
+            name=${coordinate#*:}
+            directory=$(printf '%s' "$group" | tr '.' '/')/$name/$LAYERX_RELEASE_VERSION
+            for extension in jar pom; do
+              file=staging/$directory/$name-$LAYERX_RELEASE_VERSION.$extension
+              $GITHUB_WORKSPACE/tools/ci/release-artifact-record.sh "$coordinate" "$file" built-bytes "$file.asc" "$name.sbom.spdx.json" provenance.sigstore.json "${LAYERX_RELEASE_TARGET%/}/$directory/$name-$LAYERX_RELEASE_VERSION.$extension"
+            done
+          done
       - name: Generate the SBOM of every published module
         run: |
           syft scan dir:platform/sdk/jvm -o spdx-json="$LAYERX_RELEASE_OUTPUT/layerx-sdk.sbom.spdx.json"
@@ -954,11 +1023,22 @@ jobs:
             md5sum "$artifact" | cut -d ' ' -f 1 > "$artifact.md5"
             sha1sum "$artifact" | cut -d ' ' -f 1 > "$artifact.sha1"
           done
-      - name: Attest the build provenance of every jar
+      - name: Attest the build provenance of every jar and pom
         if: startsWith(github.ref, 'refs/tags/sdk-v')
+        id: attest
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: build/release/maven-central/staging/**/*.jar
+          subject-path: |
+            build/release/maven-central/staging/**/*.jar
+            build/release/maven-central/staging/**/*.pom
+      - name: Retain the provenance attestation bundle
+        if: startsWith(github.ref, 'refs/tags/sdk-v')
+        env:
+          LAYERX_RELEASE_ATTESTATION_BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+          LAYERX_RELEASE_ATTESTATION_URL: ${{ steps.attest.outputs.attestation-url }}
+        run: |
+          cp "$LAYERX_RELEASE_ATTESTATION_BUNDLE" "$LAYERX_RELEASE_OUTPUT/provenance.sigstore.json"
+          echo "attestation_url=$LAYERX_RELEASE_ATTESTATION_URL" >> "$LAYERX_RELEASE_OUTPUT/publication.txt"
       - name: Upload the signed bundle to the Central publisher
         if: startsWith(github.ref, 'refs/tags/sdk-v')
         env:
@@ -991,7 +1071,7 @@ jobs:
           cd "$repository"
           sha256sum --check ../install-digests.txt
           echo install_check=pass >> ../publication.txt
-      - name: Retain the staging repository, digests, SBOMs, signatures and publication record
+      - name: Retain the staging repository, digests, SBOMs, signatures, attestation, artifact records and publication record
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-maven-central
@@ -1035,7 +1115,7 @@ jobs:
           echo "LAYERX_RELEASE_TARGET=$LAYERX_RELEASE_SWIFTPM_URL" >> "$GITHUB_ENV"
       - name: Build the package from the locked sources
         run: swift build --disable-automatic-resolution --package-path platform/sdk/swift
-      - name: Split the package tree, archive it and record its digest and the publication
+      - name: Split the package tree, archive it and record its digest, its artifact record and the publication
         run: |
           commit=$(git subtree split --prefix=platform/sdk/swift)
           git archive --format=tar --output="$LAYERX_RELEASE_OUTPUT/LayerXSDK-$LAYERX_RELEASE_VERSION.tar" "$commit"
@@ -1051,6 +1131,8 @@ jobs:
             echo "package_commit=$commit"
           } > publication.txt
           echo "LAYERX_RELEASE_PACKAGE_COMMIT=$commit" >> "$GITHUB_ENV"
+          rm -f artifacts.kvx
+          $GITHUB_WORKSPACE/tools/ci/release-artifact-record.sh LayerXSDK "LayerXSDK-$LAYERX_RELEASE_VERSION.tar" built-bytes tag-signature.txt LayerXSDK.sbom.spdx.json provenance.sigstore.json "${LAYERX_RELEASE_TARGET:+git+${LAYERX_RELEASE_TARGET%/}#$LAYERX_RELEASE_VERSION}"
       - name: Generate the SBOM of the package
         run: syft scan dir:platform/sdk/swift -o spdx-json="$LAYERX_RELEASE_OUTPUT/LayerXSDK.sbom.spdx.json"
       - name: Import the release signing key
@@ -1067,9 +1149,18 @@ jobs:
           echo "LAYERX_RELEASE_GPG_KEY_ID=$(gpg --batch --list-secret-keys --with-colons | awk -F: '/^sec/ { print $5; exit }')" >> "$GITHUB_ENV"
       - name: Attest the build provenance of the package archive
         if: startsWith(github.ref, 'refs/tags/sdk-v')
+        id: attest
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: build/release/swiftpm/*.tar
+      - name: Retain the provenance attestation bundle
+        if: startsWith(github.ref, 'refs/tags/sdk-v')
+        env:
+          LAYERX_RELEASE_ATTESTATION_BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+          LAYERX_RELEASE_ATTESTATION_URL: ${{ steps.attest.outputs.attestation-url }}
+        run: |
+          cp "$LAYERX_RELEASE_ATTESTATION_BUNDLE" "$LAYERX_RELEASE_OUTPUT/provenance.sigstore.json"
+          echo "attestation_url=$LAYERX_RELEASE_ATTESTATION_URL" >> "$LAYERX_RELEASE_OUTPUT/publication.txt"
       - name: Tag the split package with a signed tag and push it to the package remote
         if: startsWith(github.ref, 'refs/tags/sdk-v')
         env:
@@ -1118,7 +1209,7 @@ jobs:
           sha256sum --check ../digests.txt
           swift build --package-path .
           echo install_check=pass >> ../publication.txt
-      - name: Retain the archive, digest, SBOM, tag signature and publication record
+      - name: Retain the archive, digest, SBOM, tag signature, attestation, artifact record and publication record
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-swiftpm
@@ -1160,10 +1251,14 @@ jobs:
           LAYERX_RELEASE_NUGET_SOURCE: ${{ vars.LAYERX_RELEASE_NUGET_SOURCE }}
         run: |
           mkdir -p "$LAYERX_RELEASE_OUTPUT/dist"
-          echo "LAYERX_RELEASE_TARGET=${LAYERX_RELEASE_NUGET_SOURCE:-https://api.nuget.org/v3/index.json}" >> "$GITHUB_ENV"
+          target=${LAYERX_RELEASE_NUGET_SOURCE:-https://api.nuget.org/v3/index.json}
+          base=$(curl --fail --silent --show-error --proto '=https' --tlsv1.2 --max-time 60 "$target" \
+            | python3 -c 'import json, sys; resources = json.load(sys.stdin)["resources"]; print(next(resource["@id"] for resource in resources if str(resource.get("@type", "")).startswith("PackageBaseAddress/3.0.0")))')
+          echo "LAYERX_RELEASE_TARGET=$target" >> "$GITHUB_ENV"
+          echo "LAYERX_RELEASE_NUGET_BASE=${base%/}/" >> "$GITHUB_ENV"
       - name: Pack the package from the locked sources
         run: dotnet pack platform/sdk/dotnet/LayerX.Sdk.csproj --configuration Release --nologo --output "$LAYERX_RELEASE_OUTPUT/dist" -p:ContinuousIntegrationBuild=true
-      - name: Record the immutable digest of the package and the publication
+      - name: Record the immutable digest of the package, its artifact record and the publication
         run: |
           cd "$LAYERX_RELEASE_OUTPUT/dist"
           sha256sum *.nupkg | tee ../digests.txt
@@ -1175,6 +1270,10 @@ jobs:
             echo "packages=$LAYERX_RELEASE_PACKAGES"
             echo "revision=$GITHUB_SHA"
           } > ../publication.txt
+          cd ..
+          lower=$(printf '%s' "$LAYERX_RELEASE_VERSION" | tr '[:upper:]' '[:lower:]')
+          rm -f artifacts.kvx
+          $GITHUB_WORKSPACE/tools/ci/release-artifact-record.sh LayerX.Sdk "dist/LayerX.Sdk.$LAYERX_RELEASE_VERSION.nupkg" built-bytes "LayerX.Sdk.$LAYERX_RELEASE_VERSION.nupkg.sigstore.json" LayerX.Sdk.sbom.spdx.json provenance.sigstore.json "${LAYERX_RELEASE_NUGET_BASE}layerx.sdk/$lower/layerx.sdk.$lower.nupkg"
       - name: Generate the SBOM of the package
         run: syft scan dir:platform/sdk/dotnet -o spdx-json="$LAYERX_RELEASE_OUTPUT/LayerX.Sdk.sbom.spdx.json"
       - name: Sign the package with sigstore keyless signing
@@ -1186,9 +1285,18 @@ jobs:
           done
       - name: Attest the build provenance of the package
         if: startsWith(github.ref, 'refs/tags/sdk-v')
+        id: attest
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: build/release/nuget/dist/*.nupkg
+      - name: Retain the provenance attestation bundle
+        if: startsWith(github.ref, 'refs/tags/sdk-v')
+        env:
+          LAYERX_RELEASE_ATTESTATION_BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+          LAYERX_RELEASE_ATTESTATION_URL: ${{ steps.attest.outputs.attestation-url }}
+        run: |
+          cp "$LAYERX_RELEASE_ATTESTATION_BUNDLE" "$LAYERX_RELEASE_OUTPUT/provenance.sigstore.json"
+          echo "attestation_url=$LAYERX_RELEASE_ATTESTATION_URL" >> "$LAYERX_RELEASE_OUTPUT/publication.txt"
       - name: Push the package to the source
         if: startsWith(github.ref, 'refs/tags/sdk-v')
         env:
@@ -1226,8 +1334,12 @@ jobs:
           rm -f "$install/registry/.signature.p7s"
           diff -r "$install/local" "$install/registry"
           sha256sum "$fetched" | tee "$install/../registry-digest.txt"
-          echo install_check=pass >> "$install/../publication.txt"
-      - name: Retain the package, digests, SBOM, signature and publication record
+          cp "$fetched" "$install/../LayerX.Sdk.$LAYERX_RELEASE_VERSION.registry.nupkg"
+          cd "$install/.."
+          rm -f artifacts.kvx
+          $GITHUB_WORKSPACE/tools/ci/release-artifact-record.sh LayerX.Sdk "LayerX.Sdk.$LAYERX_RELEASE_VERSION.registry.nupkg" registry-bytes repository-signature.txt LayerX.Sdk.sbom.spdx.json provenance.sigstore.json "${LAYERX_RELEASE_NUGET_BASE}layerx.sdk/$lower/layerx.sdk.$lower.nupkg"
+          echo install_check=pass >> publication.txt
+      - name: Retain the packages, digests, SBOM, signatures, attestation, artifact record and publication record
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-nuget
@@ -1236,9 +1348,59 @@ jobs:
             !build/release/nuget/install
           if-no-files-found: error
 
-  release-promotion:
+  release-verification:
     if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/sdk-v')
     needs: [release-pipeline, publish-crates-io, publish-npm, publish-pypi, publish-go-modules, publish-maven-central, publish-swiftpm, publish-nuget]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      LAYERX_RELEASE_VERSION: ${{ needs.release-pipeline.outputs.version }}
+    steps:
+      - name: Check out source with every release tag for the rollback identity
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.91.1 --profile minimal && rustup default 1.91.1
+      - name: Fetch locked platform workspace crates
+        run: cargo fetch --locked --manifest-path platform/Cargo.toml
+      - name: Collect every retained publication bundle
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: release-*
+          path: build/release
+      - name: Resolve the rollback identity from the most recent earlier release tag
+        run: |
+          previous=$(git tag --list 'sdk-v*' --sort=-creatordate | grep -vx "sdk-v$LAYERX_RELEASE_VERSION" | head -n 1 || true)
+          echo "LAYERX_RELEASE_ROLLBACK_VERSION=${previous:+${previous#sdk-v}}" >> "$GITHUB_ENV"
+          echo "rollback identity: ${previous:-none}"
+      - name: Emit the source-bound artifact manifest from the retained publication bundles
+        run: |
+          cargo run --offline --manifest-path platform/Cargo.toml --locked -p layerx-platform-release -- manifest \
+            --release-dir build/release \
+            --output build/release/artifact-manifest.json \
+            --rollback-version "${LAYERX_RELEASE_ROLLBACK_VERSION:-none}"
+          cat build/release/artifact-manifest.json
+      - name: Fetch every published artifact from its registry and verify its bytes against the manifest
+        if: startsWith(github.ref, 'refs/tags/sdk-v')
+        run: |
+          cargo run --offline --manifest-path platform/Cargo.toml --locked -p layerx-platform-release -- verify \
+            --manifest build/release/artifact-manifest.json \
+            --fetch build/release/verification \
+            --source-revision "$GITHUB_SHA"
+      - name: Retain the artifact manifest
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-artifact-manifest
+          path: build/release/artifact-manifest.json
+          if-no-files-found: error
+
+  release-promotion:
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/sdk-v')
+    needs: [release-pipeline, publish-crates-io, publish-npm, publish-pypi, publish-go-modules, publish-maven-central, publish-swiftpm, publish-nuget, release-verification]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
@@ -1249,13 +1411,15 @@ jobs:
         with:
           pattern: release-*
           path: build/release
-      - name: Verify every ecosystem completed its publication and install verification before promoting
+      - name: Verify every ecosystem completed its publication, install verification and byte verification before promoting
         env:
           LAYERX_RELEASE_TAGGED: ${{ startsWith(github.ref, 'refs/tags/sdk-v') }}
         run: |
           test -s build/release/release-pipeline/release-plan.txt
           test -s build/release/release-pipeline/source-digest.txt
           grep -q "^version=$LAYERX_RELEASE_VERSION\$" build/release/release-pipeline/version.txt
+          test -s build/release/release-artifact-manifest/artifact-manifest.json
+          grep -q "\"version\": \"$LAYERX_RELEASE_VERSION\"" build/release/release-artifact-manifest/artifact-manifest.json
           for registry in crates-io npm pypi go-modules maven-central swiftpm nuget; do
             record=build/release/release-$registry/publication.txt
             test -f "$record"

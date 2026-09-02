@@ -2,7 +2,7 @@ PLATFORM_CARGO ?= cargo
 PLATFORM_MANIFEST := platform/Cargo.toml
 
 .PHONY: platform-js-install platform-build platform-build-all platform-lint platform-test platform-sdk-check \
-	platform-sdk-generate platform-receipt-fixture platform-verify-sdks platform-test-sdks platform-release-check platform-release-plan \
+	platform-sdk-generate platform-receipt-fixture platform-verify-sdks platform-test-sdks platform-release-check platform-release-plan platform-release-test \
 	platform-test-tooling platform-emulator-conformance platform-test-middleware \
 	platform-test-cli-production-credential-refusal platform-test-registry \
 	platform-test-reference-apps platform-test-mobile-artifacts \
@@ -227,6 +227,9 @@ platform-release-check:
 
 platform-release-plan:
 	$(PLATFORM_CARGO) run --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-release -- --plan platform/release/registries.kvx
+
+platform-release-test:
+	$(PLATFORM_CARGO) test --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-release
 
 platform-test-middleware: platform-sample-dependencies-ready
 	npm run build --workspace @sidiora/layerx-seller-middleware

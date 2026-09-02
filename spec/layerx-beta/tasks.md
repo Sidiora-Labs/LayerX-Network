@@ -135,7 +135,7 @@ Two points need owner confirmation before the corresponding task starts, and one
     - Add a publication job for every ecosystem registries.kvx declares - crates.io, npm, PyPI, Go modules, Maven Central, SwiftPM and NuGet - publishing under a beta pre-release version with an immutable digest, a signature, an SBOM and a provenance attestation, targeting the real registry or the owner-designated beta registry by secret name, and an install check per artifact that installs from that registry and verifies the digest; complete the skeleton entries in registries.kvx with the real package identities.
     - Promote the aggregate Programs acceptance, the sanitizer jobs, the committed long-fuzz corpus and supported-architecture replay to required jobs on the release revision - remove the schedule-only and opt-in gating - and record each as a gate entry when run.
     - _Requirements: 8.1, 8.2, 8.5, 8.6_
-  - [ ] 4.2 Emit the source-bound artifact manifest and verify published bytes
+  - [-] 4.2 Emit the source-bound artifact manifest and verify published bytes
     - Extend the release tool to emit one artifact manifest listing name, version, registry, immutable digest, signature, SBOM and attestation references, source revision and rollback identity for every published artifact.
     - Add a verification step that fetches each published artifact, checks its bytes against the manifest digest and halts the release before promotion naming the failing artifact.
     - Retain the manifest as a release artifact, reference it from the beta contract, and extend beta-contract-check so the docs name only manifest-listed artifacts.

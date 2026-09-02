@@ -453,15 +453,15 @@ reqs = ["8.1","8.2","8.5","8.6"]
 
 [task.4.2]
 title = "Emit the source-bound artifact manifest and verify published bytes"
-status = "pending"
+status = "in_progress"
 wave = 4
 requires = ["4.1"]
 do_1 = "Extend the release tool to emit one artifact manifest listing name, version, registry, immutable digest, signature, SBOM and attestation references, source revision and rollback identity for every published artifact."
 do_2 = "Add a verification step that fetches each published artifact, checks its bytes against the manifest digest and halts the release before promotion naming the failing artifact."
 do_3 = "Retain the manifest as a release artifact, reference it from the beta contract, and extend beta-contract-check so the docs name only manifest-listed artifacts."
-verify_cmd = "make platform-release-check platform-release-plan beta-contract-check"
+verify_cmd = "make platform-release-check platform-release-plan platform-release-test beta-contract-check"
 symbols = ["ArtifactManifest","release_pipeline verify"]
-touches = ["platform/release/src/main.rs","platform/release/registries.kvx",".github/workflows/platform.yml","platform/docs/content/beta.md","tools/ci/beta-contract-check.sh"]
+touches = ["platform/release/src/main.rs","platform/release/src/fetch.rs","platform/release/Cargo.toml","platform/Cargo.lock","platform/release/tests/manifest.rs","platform/release/tests/registries.rs","platform/release/registries.kvx",".github/workflows/platform.yml","platform/docs/content/beta.md","tools/ci/beta-contract-check.sh","tools/ci/release-artifact-record.sh","platform/Makefile.inc"]
 reqs = ["8.3","8.4","8.6"]
 
 [task.4.3]

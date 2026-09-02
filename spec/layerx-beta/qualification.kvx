@@ -501,4 +501,42 @@ file = "agent/crates/layerx-sdk/src/operation_generated.rs"
 symbol = "Token::authorize SessionRegistry::generation"
 observed = "cg spec done 2.2 on main edcc4ca6 ran the full verify_cmd green (every agentd, mcp, sdk, contract-schema, platform-sdk-check and human-test-service suite passed; log .worktrees/beta-orchestration/done-2-2.log) but the graph gate reported three failures: symbol Token::authorize not defined in the graph, symbol SessionRegistry::generation not defined in the graph, and touched agent/crates/layerx-sdk/src/operation_generated.rs with no matching change tagged [spec:layerx-beta/2.2]. Both methods exist as impl-qualified associated functions in agent/crates/layerx-agentd/src/session.rs (authorize at line 203, generation at lines 105, 268 and 349); the Codify graph does not index impl-qualified Rust methods. The generated SDK file was regenerated on main in commit 4ae0327e by the orchestrator when task 2.4 left the projections stale (observation 2.2.3), so the change the touch expects exists on main but under a commit not tagged for task 2.2."
 assumption = "All three graph failures are Codify false negatives against code and commits that are really present; the task is completed with --force under the owner authorization for graph-only failures, with nothing weakened."
+[observation.4.2.1]
+task = "4.2"
+file = "tools/ci/beta-contract-check.sh"
+symbol = "coordinate_identity install_package_unlisted"
+observed = "The install_package_unlisted contradiction assigned by observation.4.1.1 was resolved in the check rather than in install.md: a Maven install coordinate group:artifact:version is compared by its group:artifact identity while the manifest is absent and the contract states not_emitted (its version was already compared against package_semver), and once platform/release/artifact-manifest.json exists every install coordinate must match a manifest entry by name, ecosystem and pinned version. The contradiction row was removed from platform/docs/content/beta.md and beta-contract-check now lists two contradictions (faucet_hostname, placeholder_hostname, both owned by 3.7)."
+assumption = "install.md keeps carrying the versioned Maven coordinate, which is how Maven and Gradle consumers install; the contract check enforces the exact rule the contract states."
+severity = "note"
+
+[observation.4.2.2]
+task = "4.2"
+file = "platform/release/src/fetch.rs"
+symbol = "fetch release_pipeline_verify --fetch"
+observed = "The registry-fetch mode of the verification step (layerx-platform-release verify --fetch, run by the tag-gated step of the release-verification job) and the publication jobs that write artifacts.kvx cannot be executed in this environment: cosign and syft are not installed, no publish token or registry override is available (secrets LAYERX_RELEASE_CRATES_IO_TOKEN, LAYERX_RELEASE_NPM_TOKEN, LAYERX_RELEASE_GO_TAG_TOKEN, LAYERX_RELEASE_MAVEN_CENTRAL_TOKEN, LAYERX_RELEASE_NUGET_API_KEY, LAYERX_RELEASE_SWIFTPM_REMOTE, LAYERX_RELEASE_GPG_PRIVATE_KEY, LAYERX_RELEASE_GPG_PASSPHRASE and the LAYERX_RELEASE_* registry variables are owner inputs), and no tagged sdk-v release exists to fetch from. The fetch code paths for https://, simple+https:// (PEP 503 project pages) and git+https://<repository>#<tag> compile under the workspace lints but have not been exercised against a live registry. The manifest emission, the JSON round trip, the download-directory verification (--from), the tamper, missing-artifact, unpublished and revision-mismatch halts and the workflow recognisers are covered by platform/release/tests/manifest.rs against fixture bundles and by the CLI test on the built binary."
+assumption = "The first tagged beta release run of .github/workflows/platform.yml is the gate of record for the registry-fetch verification; it is blocked on the named owner inputs, not on repository state."
+severity = "blocker"
+
+[observation.4.2.3]
+task = "4.2"
+file = ".github/workflows/platform.yml"
+symbol = "publish-go-modules install step LAYERX_RELEASE_OUTPUT/../go-modules"
+observed = "The go-modules install step landed by task 4.1 wrote registry-digest.txt and install_check=pass to \"$LAYERX_RELEASE_OUTPUT/../go-modules/...\" after cd \"$install\"; because LAYERX_RELEASE_OUTPUT is the relative path build/release/go-modules, that path resolves under the install directory to a directory that does not exist and tee would have failed the step on the first tagged run. Task 4.2 rewrote the step to resolve the bundle as \"$GITHUB_WORKSPACE/$LAYERX_RELEASE_OUTPUT\" while adding the registry-bytes artifact record, so the repair is task-scoped and is recorded here for transparency."
+assumption = "No other publication job carried the same relative-path defect: npm, pypi, maven-central, swiftpm and nuget resolve their bundle from absolute or cwd-relative paths that exist."
+severity = "note"
+
+[observation.4.2.4]
+task = "4.2"
+file = ".github/workflows/platform.yml"
+symbol = "publish-crates-io LAYERX_RELEASE_DOWNLOAD publish-nuget LAYERX_RELEASE_NUGET_BASE"
+observed = "To give every artifact a fetchable registry location the crates-io job now requires a beta index override LAYERX_RELEASE_CRATES_IO_INDEX to be a sparse+https:// index (it reads the dl template from <index>/config.json) and the nuget job resolves the PackageBaseAddress/3.0.0 resource from the v3 service index at LAYERX_RELEASE_NUGET_SOURCE (default https://api.nuget.org/v3/index.json) in its configure step; both are single HTTPS reads of public registry metadata and run on workflow_dispatch as well as on tags. The Go module proxy zip and the repository-signed NuGet package differ from the built bytes, so their manifest entries carry digest_of=registry-bytes captured by the install step after the byte-for-byte content comparison; on an untagged run those registries retain source-archive and built-bytes digests with published=false and verify halts on them as not published rather than presenting them as verified."
+assumption = "A git-based crates index override is not supported for the beta; owners who set LAYERX_RELEASE_CRATES_IO_INDEX use a sparse index."
+severity = "note"
+
+[observation.4.2.5]
+task = "4.2"
+file = "platform/docs/content/beta.md"
+symbol = "artifact_manifest_status not_emitted"
+observed = "The manifest is emitted only by the release-verification job of a release run and retained as the release-artifact-manifest workflow artifact; no release run has happened, so platform/release/artifact-manifest.json does not exist, artifact_manifest_status stays not_emitted and the contract states that the file is committed with the gate records of the first tagged beta release. The rollback identity is the most recent earlier sdk-v tag by creator date (none on the first release), resolved in the job from the full tag history."
+assumption = "Wave 5 (release gate records) commits the emitted manifest to artifact_manifest_path and flips artifact_manifest_status to emitted in the same change, which beta-contract-check enforces in both directions."
 severity = "note"

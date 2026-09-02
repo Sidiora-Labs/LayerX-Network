@@ -24,9 +24,14 @@ first row is the header and second row the separator:
   Artifact set               Ecosystem | Registry | Surface | Packages |
                              Publication job (present|absent), a Key | Value
                              table (artifact_manifest_path,
-                             artifact_manifest_status, release_tag_format,
-                             source_digest) and the H3 "Install coordinates"
-                             table Language | Coordinate | Ecosystem
+                             artifact_manifest_status,
+                             artifact_manifest_emitter,
+                             artifact_manifest_verifier,
+                             artifact_manifest_verification_job,
+                             artifact_manifest_workflow_artifact,
+                             release_tag_format, source_digest) and the H3
+                             "Install coordinates" table
+                             Language | Coordinate | Ecosystem
   Documentation journeys     Page | Surface | Journey
   Unknown-state behaviour, Architecture summary
                              non-empty prose
@@ -93,7 +98,20 @@ Checks: every value the contract states equals the value its sources carry;
 every derived surface and docs journey is listed; every rung is in the
 vocabulary and matches its class; each ecosystem's publication job matches
 the workflow; artifact_manifest_status is not_emitted exactly while the
-manifest file is absent; the differences key set is closed; the
+manifest file is absent; the release-verification job emits the manifest
+with the emitter, verifies published bytes with the verifier and retains the
+manifest under the workflow artifact name, and release-promotion needs it;
+the docs name only manifest-listed artifacts: while the manifest file is
+absent and the contract states not_emitted, every install coordinate must be
+a package identity declared in platform/release/registries.kvx (a Maven
+coordinate by its group:artifact, its version checked against
+package_semver) or it is an install_package_unlisted contradiction; once the
+manifest file exists, every install coordinate must match a manifest entry
+(name, ecosystem and, when the coordinate carries one, version), the
+manifest must list every declared package and nothing undeclared, and the
+manifest file absent while the contract does not state not_emitted makes
+every install coordinate an unlisted violation; the differences key set is
+closed; the
 Contradictions table lists exactly the cross-source disagreements the check
 computes (gateway_hostname, faucet_hostname, docs_wire_protocol_version,
 protocol_network_id, placeholder_hostname, testnet_gateway_url_port,
@@ -844,15 +862,90 @@ for row in artifact_rows:
     if job != present:
         violation(f"contract: ecosystem {ecosystem} publication job is {job!r} but .github/workflows/platform.yml shows {present!r}")
 manifest_path = artifact_keys.get("artifact_manifest_path", "")
+manifest_status = artifact_keys.get("artifact_manifest_status")
+manifest_exists = False
+artifact_manifest = None
+declared_by_registry = {}
+for ecosystem in registry_ids:
+    declared = registries.get(f"registry.{ecosystem}", {}).get("packages", [])
+    declared_by_registry[ecosystem] = list(declared) if isinstance(declared, list) else [declared]
+
+
+def load_artifact_manifest(relative):
+    text = read(relative)
+    if not text:
+        return None
+    try:
+        document = json.loads(text)
+    except ValueError as error:
+        violation(f"{relative}: not JSON ({error})")
+        return None
+    if not isinstance(document, dict) or document.get("schema") != "layerx/artifact-manifest/1":
+        violation(f"{relative}: schema is not layerx/artifact-manifest/1")
+        return None
+    entries = document.get("artifacts")
+    if not isinstance(entries, list) or not entries:
+        violation(f"{relative}: artifacts list is missing or empty")
+        return None
+    required = ("name", "version", "registry", "digest", "digest_of", "signature", "sbom", "attestation", "source_revision", "published", "install_check")
+    listed = []
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict) or any(field not in entry for field in required):
+            violation(f"{relative}: artifacts[{index}] lacks one of {', '.join(required)}")
+            continue
+        if entry["registry"] not in registry_ids:
+            violation(f"{relative}: {entry['name']}@{entry['version']} names unknown registry {entry['registry']!r}")
+            continue
+        if entry["name"] not in declared_by_registry[entry["registry"]]:
+            violation(f"{relative}: {entry['name']}@{entry['version']} from {entry['registry']} is not declared in platform/release/registries.kvx")
+            continue
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", str(entry["digest"])):
+            violation(f"{relative}: {entry['name']}@{entry['version']} digest {entry['digest']!r} is not sha256:<64 hex>")
+        if not re.fullmatch(r"[0-9a-f]{40}", str(entry["source_revision"])):
+            violation(f"{relative}: {entry['name']}@{entry['version']} source_revision {entry['source_revision']!r} is not a 40-hex commit")
+        listed.append(entry)
+    for ecosystem, packages in declared_by_registry.items():
+        for package in packages:
+            if not any(entry["registry"] == ecosystem and entry["name"] == package for entry in listed):
+                violation(f"{relative}: declared package {package} from {ecosystem} is not listed")
+    return listed
+
+
 if not manifest_path:
     violation("contract: Artifact set lacks artifact_manifest_path")
 else:
-    exists = (root / manifest_path).is_file()
-    expected_status = "emitted" if exists else "not_emitted"
-    if artifact_keys.get("artifact_manifest_status") != expected_status:
-        violation(f"contract: artifact_manifest_status is {artifact_keys.get('artifact_manifest_status')!r} but {manifest_path} {'exists' if exists else 'does not exist'}")
+    manifest_exists = (root / manifest_path).is_file()
+    expected_status = "emitted" if manifest_exists else "not_emitted"
+    if manifest_status != expected_status:
+        violation(f"contract: artifact_manifest_status is {manifest_status!r} but {manifest_path} {'exists' if manifest_exists else 'does not exist'}")
+    if manifest_exists:
+        artifact_manifest = load_artifact_manifest(manifest_path)
 expect("Artifact set", artifact_keys, "release_tag_format", str(release.get("tag_format", "")), "platform/release/registries.kvx tag_format")
 expect("Artifact set", artifact_keys, "source_digest", str(release.get("source_digest", "")), "platform/release/registries.kvx source_digest")
+
+verification_job = re.search(r"^  (release-verification):\n((?:    .*\n|\n)*)", workflow, re.M)
+if verification_job is None:
+    violation(".github/workflows/platform.yml: job release-verification is missing")
+    verification_text = ""
+    expect("Artifact set", artifact_keys, "artifact_manifest_verification_job", "", ".github/workflows/platform.yml release-verification job")
+else:
+    verification_text = verification_job.group(2)
+    expect("Artifact set", artifact_keys, "artifact_manifest_verification_job", verification_job.group(1), ".github/workflows/platform.yml release-verification job")
+emitter = re.search(r"-p layerx-platform-release -- manifest\b", verification_text)
+expect("Artifact set", artifact_keys, "artifact_manifest_emitter", "layerx-platform-release -- manifest" if emitter else "", ".github/workflows/platform.yml release-verification manifest step")
+verifier = re.search(r"-p layerx-platform-release -- verify\b", verification_text)
+expect("Artifact set", artifact_keys, "artifact_manifest_verifier", "layerx-platform-release -- verify" if verifier else "", ".github/workflows/platform.yml release-verification verify step")
+if verification_text and not re.search(r"--fetch\s", verification_text):
+    violation(".github/workflows/platform.yml: release-verification does not fetch the published artifacts from their registries (--fetch)")
+retained = re.search(r"uses: actions/upload-artifact@[^\n]*\n\s+with:\n\s+name: (\S+)\n\s+path: (\S+)", verification_text)
+expect("Artifact set", artifact_keys, "artifact_manifest_workflow_artifact", retained.group(1) if retained else "", ".github/workflows/platform.yml release-verification upload-artifact name")
+if retained and not retained.group(2).endswith("/" + Path(manifest_path).name):
+    violation(f".github/workflows/platform.yml: release-verification retains {retained.group(2)}, not a file named {Path(manifest_path).name}")
+promotion_needs = re.search(r"^  release-promotion:\n(?:    .*\n)*?    needs: \[([^\]]*)\]", workflow, re.M)
+if promotion_needs is None:
+    violation(".github/workflows/platform.yml: job release-promotion has no needs list")
+elif "release-verification" not in [item.strip() for item in promotion_needs.group(1).split(",")]:
+    violation(".github/workflows/platform.yml: release-promotion does not need release-verification")
 
 install_rows = table(sections, "Artifact set/Install coordinates", ["Language", "Coordinate", "Ecosystem"])
 install_table = re.search(r"^\| Language \| Install \|\n\|[-| ]+\|\n((?:\|.*\n?)+)", install, re.M)
@@ -873,15 +966,37 @@ for language, coordinate in documented.items():
         violation(f"contract: install coordinate for {language} ({coordinate}) is missing")
     elif contract_install[language][0] != coordinate:
         violation(f"contract: install coordinate for {language} is {contract_install[language][0]!r} but install.md carries {coordinate!r}")
+
+
+def coordinate_identity(coordinate, ecosystem):
+    if ecosystem == "maven-central":
+        parts = coordinate.split(":")
+        if len(parts) == 3:
+            return ":".join(parts[:2]), parts[2]
+    return coordinate, None
+
+
 for language, (coordinate, ecosystem) in contract_install.items():
     if language not in documented:
         violation(f"contract: install coordinate for {language} is not in install.md")
     if ecosystem not in registry_ids:
         violation(f"contract: install coordinate for {language} names unknown ecosystem {ecosystem!r}")
         continue
-    declared_packages = registries.get(f"registry.{ecosystem}", {}).get("packages")
-    if isinstance(declared_packages, list) and coordinate not in declared_packages:
-        contradiction("install_package_unlisted", ", ".join(sorted(declared_packages)), coordinate)
+    identity, pinned = coordinate_identity(coordinate, ecosystem)
+    if manifest_exists:
+        if artifact_manifest is None:
+            continue
+        matches = [entry for entry in artifact_manifest if entry["registry"] == ecosystem and entry["name"] == identity]
+        if not matches:
+            violation(f"contract: install coordinate for {language} ({coordinate}) names an artifact {manifest_path} does not list for {ecosystem}")
+        elif pinned is not None and all(entry["version"] != pinned for entry in matches):
+            violation(f"contract: install coordinate for {language} ({coordinate}) pins version {pinned!r} but {manifest_path} lists {sorted({entry['version'] for entry in matches})}")
+    elif manifest_status == "not_emitted":
+        declared_packages = declared_by_registry.get(ecosystem, [])
+        if identity not in declared_packages:
+            contradiction("install_package_unlisted", ", ".join(sorted(declared_packages)), coordinate)
+    else:
+        violation(f"contract: install coordinate for {language} ({coordinate}) is unlisted: {manifest_path} is absent and the contract does not state artifact_manifest_status not_emitted")
 
 page_ids = [section[len("page."):] for section in site if section.startswith("page.")]
 if not page_ids:

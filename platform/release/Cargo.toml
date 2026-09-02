@@ -8,6 +8,10 @@ publish = false
 
 [dependencies]
 layerx-platform-kvx.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+ureq.workspace = true
 
 [lints]
 workspace = true

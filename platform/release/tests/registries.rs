@@ -161,7 +161,7 @@ fn plan_is_deterministic_and_machine_readable() {
     let first = plan(&pipeline).unwrap_or_else(|error| panic!("plan: {error}"));
     let second = plan(&pipeline).unwrap_or_else(|error| panic!("plan: {error}"));
     assert_eq!(first, second);
-    assert_eq!(first.lines().count(), 3 + 7 + 4);
+    assert_eq!(first.lines().count(), 3 + 7 + 4 + 1);
     assert!(first.starts_with("tag_format=sdk-v{version}\n"));
     assert!(first
         .lines()
@@ -182,7 +182,7 @@ fn plan_is_deterministic_and_machine_readable() {
             "plan line lost its publication binding: {line}"
         );
     }
-    for line in first.lines().skip(10) {
+    for line in first.lines().skip(10).take(4) {
         assert!(
             line.starts_with("gate=") && line.contains(" command=make "),
             "unexpected gate line: {line}"
@@ -190,6 +190,10 @@ fn plan_is_deterministic_and_machine_readable() {
     }
     assert!(first
         .contains("gate=replay-matrix command=make test-replay-golden machines=aarch64,x86_64"));
+    assert!(first
+        .lines()
+        .last()
+        .is_some_and(|line| line.starts_with("verification_job=release-verification ")));
 }
 
 #[test]
@@ -550,7 +554,11 @@ fn replay_on_a_single_architecture_is_refused() {
 
 #[test]
 fn partial_promotion_is_refused() {
-    let source = replaced(&committed_workflow(), ", publish-nuget]", "]");
+    let source = replaced(
+        &committed_workflow(),
+        ", publish-nuget, release-verification]",
+        ", release-verification]",
+    );
     expect_workflow_refusal(
         &source,
         "job release-promotion must need publish-nuget so no partial promotion is presented as a release",
