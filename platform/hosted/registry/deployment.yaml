@@ -13,6 +13,7 @@ spec:
       containers:
         - name: registry
           image: ghcr.io/sidiora-labs/layerx-program-registry:0.1.0
+          imagePullPolicy: Always
           args: [layerx-program-registry]
           ports: [{name: registry, containerPort: 9420}]
           env:

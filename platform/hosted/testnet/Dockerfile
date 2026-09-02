@@ -1,6 +1,6 @@
 FROM rust:1.91.1-alpine3.22 AS build
 WORKDIR /src
-RUN apk add --no-cache musl-dev openssl-dev pkgconfig
+RUN apk add --no-cache musl-dev openssl-dev openssl-libs-static pkgconfig
 COPY . .
 RUN cargo build --locked --release --manifest-path platform/Cargo.toml -p layerx-platform-testnet
 

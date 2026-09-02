@@ -6,7 +6,7 @@ COPY platform/hosted/dashboard/web /src/platform/hosted/dashboard/web
 COPY tools/ci/developer-dashboard-lock.mjs /src/tools/ci/developer-dashboard-lock.mjs
 RUN node tools/ci/developer-dashboard-lock.mjs
 RUN npm --prefix /src/human/apps/web ci --ignore-scripts --no-audit --no-fund && \
-    npm --prefix /src/human/apps/web run build --workspace @layerx/ui && \
+    npm --prefix /src/human/apps/web run build:ui && \
     ln -s ../../../../human/apps/web/node_modules /src/platform/hosted/dashboard/web/node_modules
 WORKDIR /src/platform/hosted/dashboard/web
 RUN npm run test:static && npm run build

@@ -421,7 +421,7 @@ reqs = ["7.1","7.2","7.3","7.4","7.6"]
 
 [task.3.7]
 title = "Stand the hosted stack up on a beta cluster from the repository"
-status = "pending"
+status = "in_progress"
 wave = 3
 requires = ["3.6"]
 do_1 = "Write platform/hosted/tests/beta-cluster.sh: build the testnet, gateway, faucet, webhooks and dashboard images from their Dockerfiles at the current revision, add the missing platform/hosted/registry/Dockerfile so the layerx-program-registry image the StatefulSet references is built from source rather than pulled, create a disposable local cluster or target the owner-designated beta cluster from an environment variable, install the registry node boundary unit and node-provision-build-boundary.sh on every node that schedules the registry, generate a beta CA and beta secrets by secret name, apply the real hosted manifests for every service, and wait until every journey reports ready through the readiness endpoint from task 3.6."
@@ -430,7 +430,7 @@ do_3 = "Run the existing hosted boundary, webhook fault-injection and registry n
 do_4 = "Add platform-beta-cluster-up and platform-beta-cluster-down make targets, and a syntax check of the script in platform-test-tooling; add a teardown that leaves nothing on the host."
 verify_cmd = "make platform-test-tooling platform-beta-cluster-up platform-hosted-smoke platform-beta-cluster-down"
 symbols = ["beta_cluster_up","beta_cluster_down","hosted-boundary.sh","fault-injection.sh","node-provision-build-boundary.sh"]
-touches = ["platform/hosted/tests/beta-cluster.sh","platform/hosted/registry/Dockerfile","platform/hosted/registry/deployment.yaml","platform/hosted/gateway/tests/hosted-boundary.sh","platform/hosted/webhooks/tests/fault-injection.sh","platform/hosted/registry/node-provision-build-boundary.sh","platform/hosted/registry/layerx-program-registry-boundary.service","platform/Makefile.inc"]
+touches = ["platform/hosted/tests/beta-cluster.sh","platform/hosted/registry/Dockerfile","platform/hosted/registry/deployment.yaml","platform/hosted/testnet/Dockerfile","platform/hosted/gateway/Dockerfile","platform/hosted/faucet/Dockerfile","platform/hosted/dashboard/web/Dockerfile","platform/hosted/gateway/tests/hosted-boundary.sh","platform/hosted/webhooks/tests/fault-injection.sh","platform/hosted/registry/node-provision-build-boundary.sh","platform/hosted/registry/layerx-program-registry-boundary.service","platform/Makefile.inc"]
 reqs = ["7.5","7.7","12.5"]
 
 [task.4]
