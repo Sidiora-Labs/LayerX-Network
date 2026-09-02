@@ -1,11 +1,11 @@
 use std::collections::BTreeSet;
 
 use layerx_client::lni::schema::{
-    encode_envelope, lni_golden_vectors, lni_schema_v1, Envelope, Version, LNI_V1_SOURCE,
+    encode_envelope, lni_golden_vectors, lni_schema_v1, Capability, Envelope, Version,
+    LNI_V1_SOURCE,
 };
 
-const NODE_BOUNDARY: &str =
-    include_str!("../../../../spec/layerx-agent-interface/docs/node-boundary.md");
+const NODE_BOUNDARY: &str = include_str!("../../../schema/lni/README.md");
 
 fn hex(value: &str) -> Vec<u8> {
     value
@@ -23,7 +23,7 @@ fn hex(value: &str) -> Vec<u8> {
 #[test]
 fn lni_schema_and_document_cover_every_declared_message() {
     let schema = lni_schema_v1();
-    assert_eq!(schema.version, Version::V1_2);
+    assert_eq!(schema.version, Version::V1_3);
     assert_eq!(schema.messages.len(), lni_golden_vectors().len());
     let mut tags = BTreeSet::new();
     for message in schema.messages {
@@ -65,4 +65,22 @@ fn version_and_capability_rules_are_checked_against_the_schema_source() {
     assert!(LNI_V1_SOURCE.contains("availability_fetch"));
     assert!(LNI_V1_SOURCE.contains("historical_proofs"));
     assert!(LNI_V1_SOURCE.contains("preparation_state"));
+    assert!(LNI_V1_SOURCE.contains("authenticated_durable_submit"));
+    assert!(Version::V1_3.is_compatible_with(Version::V1_0));
+    assert_eq!(
+        Capability::AuthenticatedDurableSubmit.name(),
+        "authenticated_durable_submit"
+    );
+    assert_eq!(
+        encode_envelope(Envelope {
+            version: Version::V1_3,
+            message_tag: 2,
+            correlation_id: 0,
+            canonical_payload: b"authenticated_durable_submit",
+            proof_material: &[],
+        }),
+        Ok(hex(
+            "00010003000200000000000000000000001c61757468656e746963617465645f64757261626c655f7375626d697400000000"
+        ))
+    );
 }

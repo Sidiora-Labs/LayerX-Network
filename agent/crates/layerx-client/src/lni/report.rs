@@ -127,6 +127,7 @@ const fn absent_behavior(capability: Capability) -> &'static str {
     match capability {
         Capability::NodeInfo => "startup_refused",
         Capability::Submit => "submission_unavailable",
+        Capability::AuthenticatedDurableSubmit => "authenticated_durable_submission_unavailable",
         Capability::ReceiptLookup => "receipt_resolution_unavailable",
         Capability::AccountRead => "verified_account_read_unavailable",
         Capability::HistoryRange => "history_read_unavailable",

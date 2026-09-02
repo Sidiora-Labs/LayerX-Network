@@ -5,13 +5,17 @@
 
 #include "layerx/lxp_activity.h"
 #include "layerx/lxp_crypto.h"
+#include "layerx/lxp_identity.h"
 #include "layerx/lxp_protocol.h"
 #include "layerx/lxp_receipt.h"
+
+#include "lxp_daemon_lni_internal.h"
 
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <poll.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -23,7 +27,7 @@
 
 enum {
     LNI_VERSION_MAJOR = 1,
-    LNI_VERSION_MINOR = 2,
+    LNI_VERSION_MINOR = 3,
     LNI_NODE_INFO_REQUEST = 1,
     LNI_NODE_INFO_RESPONSE = 2,
     LNI_SUBMIT_REQUEST = 3,
@@ -46,10 +50,19 @@ enum {
     LNI_ENVELOPE_FIXED_BYTES = 22,
     LNI_NODE_INFO_FIXED_BYTES = 93,
     LNI_PREPARATION_STATE_MAX_BYTES = 4096,
-    LNI_BACKLOG = 16
+    LNI_BACKLOG = 16,
+    LNI_ADMISSION_JOURNAL_SUPERBLOCK_BYTES = 32,
+    LNI_ADMISSION_JOURNAL_RECORD_BYTES = 64,
+    LNI_ADMISSION_JOURNAL_VERSION = 1
 };
 
 static const char LNI_LIFETIME_LOCK_NAME[] = ".layerxd-lni.lock";
+static const char LNI_ADMISSION_JOURNAL_NAME[] =
+    ".layerxd-lni-admission.log";
+static const char LNI_ADMISSION_JOURNAL_TEMP_NAME[] =
+    ".layerxd-lni-admission.tmp";
+static const uint32_t LNI_ADMISSION_JOURNAL_MAGIC = UINT32_C(0x4c58414a);
+static const uint32_t LNI_ADMISSION_RECORD_MAGIC = UINT32_C(0x4c584152);
 
 typedef struct lni_envelope {
     uint16_t major;
@@ -104,6 +117,631 @@ static void store_u64(uint8_t *bytes, uint64_t value)
         bytes[index] = (uint8_t)(value >> ((7U - index) * 8U));
 }
 
+static uint64_t admission_journal_max_bytes(void)
+{
+    return (uint64_t)LNI_ADMISSION_JOURNAL_SUPERBLOCK_BYTES +
+        (uint64_t)LXP_DAEMON_QUEUE_MAX_BYTES +
+        (uint64_t)LXP_DAEMON_QUEUE_CAPACITY *
+            (uint64_t)LNI_ADMISSION_JOURNAL_RECORD_BYTES;
+}
+
+static lxp_result file_read_exact(int descriptor, uint8_t *bytes,
+                                  size_t length, uint64_t offset)
+{
+    size_t consumed = 0U;
+    while (consumed < length) {
+        ssize_t result = pread(descriptor, bytes + consumed,
+                               length - consumed,
+                               (off_t)(offset + consumed));
+        if (result < 0 && errno == EINTR) continue;
+        if (result <= 0) return LXP_ERR_LOG_TRUNCATED;
+        consumed += (size_t)result;
+    }
+    return LXP_OK;
+}
+
+static lxp_result file_write_exact(int descriptor, const uint8_t *bytes,
+                                   size_t length, uint64_t offset)
+{
+    size_t written = 0U;
+    while (written < length) {
+        ssize_t result = pwrite(descriptor, bytes + written,
+                                length - written,
+                                (off_t)(offset + written));
+        if (result < 0 && errno == EINTR) continue;
+        if (result <= 0) return LXP_ERR_IO;
+        written += (size_t)result;
+    }
+    return LXP_OK;
+}
+
+static void admission_superblock_encode(uint32_t network_id,
+    uint8_t bytes[LNI_ADMISSION_JOURNAL_SUPERBLOCK_BYTES])
+{
+    (void)memset(bytes, 0, LNI_ADMISSION_JOURNAL_SUPERBLOCK_BYTES);
+    store_u32(bytes, LNI_ADMISSION_JOURNAL_MAGIC);
+    store_u16(bytes + 4U, LNI_ADMISSION_JOURNAL_VERSION);
+    store_u16(bytes + 6U, LNI_ADMISSION_JOURNAL_SUPERBLOCK_BYTES);
+    store_u32(bytes + 8U, network_id);
+    store_u32(bytes + 28U, lxp_log_crc32c(bytes, 28U));
+}
+
+static bool admission_superblock_valid(const uint8_t *bytes,
+                                       uint32_t network_id)
+{
+    size_t index;
+    if (load_u32(bytes) != LNI_ADMISSION_JOURNAL_MAGIC ||
+        load_u16(bytes + 4U) != LNI_ADMISSION_JOURNAL_VERSION ||
+        load_u16(bytes + 6U) != LNI_ADMISSION_JOURNAL_SUPERBLOCK_BYTES ||
+        load_u32(bytes + 8U) != network_id ||
+        load_u32(bytes + 28U) != lxp_log_crc32c(bytes, 28U))
+        return false;
+    for (index = 12U; index < 28U; ++index)
+        if (bytes[index] != 0U) return false;
+    return true;
+}
+
+static void admission_record_encode(
+    uint64_t global_sequence, const uint8_t activity_id[32],
+    const uint8_t *activity, size_t activity_length,
+    uint8_t bytes[LNI_ADMISSION_JOURNAL_RECORD_BYTES])
+{
+    (void)memset(bytes, 0, LNI_ADMISSION_JOURNAL_RECORD_BYTES);
+    store_u32(bytes, LNI_ADMISSION_RECORD_MAGIC);
+    store_u16(bytes + 4U, LNI_ADMISSION_JOURNAL_VERSION);
+    store_u16(bytes + 6U, LNI_ADMISSION_JOURNAL_RECORD_BYTES);
+    store_u64(bytes + 8U, global_sequence);
+    store_u32(bytes + 16U, (uint32_t)activity_length);
+    store_u32(bytes + 20U, lxp_log_crc32c(activity, activity_length));
+    (void)memcpy(bytes + 24U, activity_id, 32U);
+    store_u32(bytes + 56U, lxp_log_crc32c(bytes, 56U));
+}
+
+static bool admission_record_header_valid(const uint8_t *bytes)
+{
+    return load_u32(bytes) == LNI_ADMISSION_RECORD_MAGIC &&
+        load_u16(bytes + 4U) == LNI_ADMISSION_JOURNAL_VERSION &&
+        load_u16(bytes + 6U) == LNI_ADMISSION_JOURNAL_RECORD_BYTES &&
+        load_u32(bytes + 16U) != 0U &&
+        load_u32(bytes + 16U) <= LXP_MAX_ACTIVITY_BYTES &&
+        load_u32(bytes + 56U) == lxp_log_crc32c(bytes, 56U) &&
+        load_u32(bytes + 60U) == 0U;
+}
+
+static bool admission_journal_named(
+    const lxp_daemon_lni_server *server, int descriptor,
+    uint64_t expected_device, uint64_t expected_inode)
+{
+    struct stat opened;
+    struct stat named;
+    struct stat parent;
+    struct stat parent_named;
+    return descriptor >= 0 && server->admission_parent_descriptor >= 0 &&
+        fstat(server->admission_parent_descriptor, &parent) == 0 &&
+        lstat(server->admission_directory, &parent_named) == 0 &&
+        S_ISDIR(parent.st_mode) && S_ISDIR(parent_named.st_mode) &&
+        parent.st_uid == geteuid() && parent_named.st_uid == geteuid() &&
+        (parent.st_mode & 0022U) == 0U &&
+        (parent_named.st_mode & 0022U) == 0U &&
+        parent.st_dev == parent_named.st_dev &&
+        parent.st_ino == parent_named.st_ino &&
+        (uint64_t)parent.st_dev == server->admission_parent_device &&
+        (uint64_t)parent.st_ino == server->admission_parent_inode &&
+        fstat(descriptor, &opened) == 0 &&
+        fstatat(server->admission_parent_descriptor,
+                LNI_ADMISSION_JOURNAL_NAME,
+                &named, AT_SYMLINK_NOFOLLOW) == 0 &&
+        S_ISREG(opened.st_mode) && S_ISREG(named.st_mode) &&
+        opened.st_nlink == 1 && named.st_nlink == 1 &&
+        opened.st_uid == geteuid() && named.st_uid == geteuid() &&
+        (opened.st_mode & 0777U) == 0600U &&
+        (named.st_mode & 0777U) == 0600U &&
+        opened.st_dev == named.st_dev && opened.st_ino == named.st_ino &&
+        (uint64_t)opened.st_dev == expected_device &&
+        (uint64_t)opened.st_ino == expected_inode;
+}
+
+static lxp_result admission_journal_create(
+    lxp_daemon_lni_server *server, int *descriptor)
+{
+    uint8_t superblock[LNI_ADMISSION_JOURNAL_SUPERBLOCK_BYTES];
+    struct stat metadata;
+    int opened = openat(server->admission_parent_descriptor,
+                        LNI_ADMISSION_JOURNAL_NAME,
+                        O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW,
+                        0600);
+    bool created = opened >= 0;
+    lxp_result status = opened < 0 ? LXP_ERR_IO : LXP_OK;
+    admission_superblock_encode(server->daemon->config.network_id,
+                                superblock);
+    if (status == LXP_OK)
+        status = file_write_exact(opened, superblock, sizeof(superblock), 0U);
+    if (status == LXP_OK && fdatasync(opened) != 0) status = LXP_ERR_IO;
+    if (status == LXP_OK && fsync(server->admission_parent_descriptor) != 0)
+        status = LXP_ERR_IO;
+    if (status == LXP_OK &&
+        (fstat(opened, &metadata) != 0 || !S_ISREG(metadata.st_mode) ||
+         metadata.st_nlink != 1 || metadata.st_uid != geteuid() ||
+         (metadata.st_mode & 0777U) != 0600U))
+        status = LXP_ERR_AUTH_SCOPE;
+    if (status != LXP_OK) {
+        if (opened >= 0) (void)close(opened);
+        if (created)
+            (void)unlinkat(server->admission_parent_descriptor,
+                           LNI_ADMISSION_JOURNAL_NAME, 0);
+        return status;
+    }
+    *descriptor = opened;
+    return LXP_OK;
+}
+
+static lxp_result admission_journal_open(lxp_daemon_lni_server *server)
+{
+    uint8_t superblock[LNI_ADMISSION_JOURNAL_SUPERBLOCK_BYTES];
+    struct stat metadata;
+    int descriptor = openat(server->admission_parent_descriptor,
+                            LNI_ADMISSION_JOURNAL_NAME,
+                            O_RDWR | O_CLOEXEC | O_NOFOLLOW);
+    lxp_result status;
+    if (descriptor < 0 && errno == ENOENT)
+        status = admission_journal_create(server, &descriptor);
+    else
+        status = descriptor < 0 ? LXP_ERR_IO : LXP_OK;
+    if (status == LXP_OK &&
+        (fstat(descriptor, &metadata) != 0 || metadata.st_size < 0 ||
+         (uint64_t)metadata.st_size > admission_journal_max_bytes() ||
+         !S_ISREG(metadata.st_mode) || metadata.st_nlink != 1 ||
+         metadata.st_uid != geteuid() ||
+         (metadata.st_mode & 0777U) != 0600U))
+        status = LXP_ERR_AUTH_SCOPE;
+    if (status == LXP_OK)
+        status = file_read_exact(descriptor, superblock,
+                                 sizeof(superblock), 0U);
+    if (status == LXP_OK &&
+        !admission_superblock_valid(
+            superblock, server->daemon->config.network_id))
+        status = LXP_ERR_LOG_CORRUPT;
+    if (status != LXP_OK) {
+        if (descriptor >= 0) (void)close(descriptor);
+        return status;
+    }
+    server->journal_descriptor = descriptor;
+    server->journal_device = (uint64_t)metadata.st_dev;
+    server->journal_inode = (uint64_t)metadata.st_ino;
+    server->journal_end = (uint64_t)metadata.st_size;
+    return admission_journal_named(
+        server, descriptor, server->journal_device, server->journal_inode) ?
+        LXP_OK : LXP_ERR_AUTH_SCOPE;
+}
+
+static void recovered_admissions_release(lxp_daemon_activity *activities,
+                                         size_t count)
+{
+    size_t index;
+    if (activities == NULL) return;
+    for (index = 0U; index < count; ++index) {
+        if (activities[index].bytes != NULL) {
+            lxp_secure_zero(activities[index].bytes,
+                            activities[index].length);
+            free(activities[index].bytes);
+        }
+    }
+    free(activities);
+}
+
+static lxp_result completed_activity_matches(
+    lxp_daemon_protocol_owner *owner, uint64_t global_sequence,
+    const uint8_t activity_id[32])
+{
+    lxp_receipt_query query;
+    lxp_byte_span canonical_receipt = {NULL, 0U};
+    lxp_receipt receipt;
+    size_t mark;
+    lxp_result status;
+    if (pthread_mutex_lock(&owner->mutex) != 0) return LXP_ERR_IO;
+    (void)memset(&query, 0, sizeof(query));
+    query.kind = LXP_RECEIPT_BY_GLOBAL_SEQUENCE;
+    query.global_sequence = global_sequence;
+    query.maximum_response_bytes = LXP_MAX_ACTIVITY_BYTES;
+    mark = lxp_arena_mark(owner->scratch);
+    status = lxp_receipt_lookup(owner->history, &query, owner->scratch,
+                                &canonical_receipt);
+    if (status == LXP_OK)
+        status = lxp_receipt_decode(canonical_receipt.bytes,
+                                    canonical_receipt.length, true,
+                                    &receipt);
+    if (status == LXP_OK &&
+        (receipt.global_sequence != global_sequence ||
+         lxp_ct_memcmp(receipt.activity_id, activity_id, 32U) != 0))
+        status = LXP_ERR_LOG_CORRUPT;
+    if (status == LXP_ERR_UNKNOWN_ACTIVITY)
+        status = LXP_ERR_LOG_CORRUPT;
+    (void)lxp_arena_reset(owner->scratch, mark);
+    if (pthread_mutex_unlock(&owner->mutex) != 0 && status == LXP_OK)
+        status = LXP_FATAL_INVARIANT;
+    return status;
+}
+
+static lxp_result admission_journal_recover(
+    lxp_daemon_lni_server *server)
+{
+    lxp_daemon_activity *recovered = calloc(
+        LXP_DAEMON_QUEUE_CAPACITY, sizeof(*recovered));
+    lxp_daemon_lni_journal_entry *recovered_entries = calloc(
+        LXP_DAEMON_QUEUE_CAPACITY, sizeof(*recovered_entries));
+    uint64_t offset = LNI_ADMISSION_JOURNAL_SUPERBLOCK_BYTES;
+    uint64_t valid_end = LNI_ADMISSION_JOURNAL_SUPERBLOCK_BYTES;
+    uint64_t previous_sequence = 0U;
+    uint64_t floor;
+    size_t recovered_count = 0U;
+    size_t recovered_bytes = 0U;
+    bool have_previous = false;
+    bool incomplete_tail = false;
+    lxp_result status = recovered == NULL || recovered_entries == NULL ?
+        LXP_ERR_ARENA_EXHAUSTED : LXP_OK;
+    if (status != LXP_OK) {
+        free(recovered);
+        free(recovered_entries);
+        return status;
+    }
+    if (pthread_mutex_lock(&server->owner->mutex) != 0) {
+        free(recovered);
+        free(recovered_entries);
+        return LXP_ERR_IO;
+    }
+    if (!server->owner->feed_store.baseline_present ||
+        server->owner->feed_store.baseline_next_sequence == 0U ||
+        server->owner->feed_store.scanned_through_sequence == UINT64_MAX)
+        status = LXP_ERR_PROJECTION_STALE;
+    floor = server->owner->feed_store.scanned_through_sequence == 0U ?
+        server->owner->feed_store.baseline_next_sequence :
+        server->owner->feed_store.scanned_through_sequence + 1U;
+    if (pthread_mutex_unlock(&server->owner->mutex) != 0 && status == LXP_OK)
+        status = LXP_FATAL_INVARIANT;
+    if (status == LXP_OK && pthread_mutex_lock(&server->daemon->mutex) != 0) {
+        free(recovered);
+        free(recovered_entries);
+        return LXP_ERR_IO;
+    }
+    if (status == LXP_OK) {
+        if (server->daemon->queue_count != 0U ||
+            server->daemon->next_sequence != floor)
+            status = LXP_ERR_CONTEXT_MISMATCH;
+        if (pthread_mutex_unlock(&server->daemon->mutex) != 0)
+            status = LXP_FATAL_INVARIANT;
+    }
+    while (status == LXP_OK && offset < server->journal_end) {
+        uint8_t header[LNI_ADMISSION_JOURNAL_RECORD_BYTES];
+        uint8_t computed_id[32];
+        uint8_t *activity;
+        uint64_t sequence;
+        uint32_t length;
+        lxp_activity decoded;
+        if (server->journal_end - offset < sizeof(header)) {
+            incomplete_tail = true;
+            break;
+        }
+        status = file_read_exact(server->journal_descriptor, header,
+                                 sizeof(header), offset);
+        if (status != LXP_OK) break;
+        if (!admission_record_header_valid(header)) {
+            status = LXP_ERR_LOG_CORRUPT;
+            break;
+        }
+        sequence = load_u64(header + 8U);
+        length = load_u32(header + 16U);
+        if ((uint64_t)length > server->journal_end - offset -
+                sizeof(header)) {
+            incomplete_tail = true;
+            break;
+        }
+        if (have_previous &&
+            (previous_sequence == UINT64_MAX ||
+             sequence != previous_sequence + 1U)) {
+            status = LXP_ERR_LOG_CORRUPT;
+            break;
+        }
+        activity = (uint8_t *)malloc(length);
+        if (activity == NULL) {
+            status = LXP_ERR_ARENA_EXHAUSTED;
+            break;
+        }
+        status = file_read_exact(server->journal_descriptor, activity,
+                                 length, offset + sizeof(header));
+        if (status == LXP_OK &&
+            lxp_log_crc32c(activity, length) != load_u32(header + 20U))
+            status = LXP_ERR_LOG_CORRUPT;
+        if (status == LXP_OK &&
+            lxp_activity_id(activity, length, computed_id) != LXP_OK)
+            status = LXP_ERR_LOG_CORRUPT;
+        if (status == LXP_OK &&
+            lxp_ct_memcmp(computed_id, header + 24U, 32U) != 0)
+            status = LXP_ERR_LOG_CORRUPT;
+        if (status == LXP_OK &&
+            lxp_activity_decode(activity, length, &decoded) != LXP_OK)
+            status = LXP_ERR_LOG_CORRUPT;
+        if (status == LXP_OK &&
+            lxp_activity_check_envelope(
+                &decoded, server->daemon->config.network_id) != LXP_OK)
+            status = LXP_ERR_LOG_CORRUPT;
+        if (status == LXP_OK &&
+            lxp_activity_verify_payload_hash(&decoded) != LXP_OK)
+            status = LXP_ERR_LOG_CORRUPT;
+        if (status == LXP_OK &&
+            lxp_activity_verify_signature(&decoded) != LXP_OK)
+            status = LXP_ERR_LOG_CORRUPT;
+        if (status != LXP_OK) {
+            lxp_secure_zero(activity, length);
+            free(activity);
+            break;
+        }
+        if (sequence >= floor) {
+            size_t prior;
+            if (recovered_count == LXP_DAEMON_QUEUE_CAPACITY ||
+                length > LXP_DAEMON_QUEUE_MAX_BYTES - recovered_bytes ||
+                sequence != floor + recovered_count) {
+                lxp_secure_zero(activity, length);
+                free(activity);
+                status = LXP_ERR_LOG_CORRUPT;
+                break;
+            }
+            for (prior = 0U; prior < recovered_count; ++prior)
+                if (lxp_ct_memcmp(recovered[prior].activity_id,
+                                  computed_id, 32U) == 0)
+                    status = LXP_ERR_LOG_CORRUPT;
+            if (status != LXP_OK) {
+                lxp_secure_zero(activity, length);
+                free(activity);
+                break;
+            }
+            recovered[recovered_count].bytes = activity;
+            recovered[recovered_count].length = length;
+            (void)memcpy(recovered[recovered_count].activity_id,
+                         computed_id, 32U);
+            recovered[recovered_count].global_sequence = sequence;
+            recovered[recovered_count].durable_admission = true;
+            recovered_entries[recovered_count].global_sequence = sequence;
+            recovered_entries[recovered_count].file_offset = offset;
+            recovered_entries[recovered_count].activity_length = length;
+            (void)memcpy(recovered_entries[recovered_count].activity_id,
+                         computed_id, 32U);
+            ++recovered_count;
+            recovered_bytes += length;
+        } else {
+            status = completed_activity_matches(server->owner, sequence,
+                                                computed_id);
+            lxp_secure_zero(activity, length);
+            free(activity);
+            if (status != LXP_OK) break;
+        }
+        have_previous = true;
+        previous_sequence = sequence;
+        offset += sizeof(header) + length;
+        valid_end = offset;
+    }
+    if (status == LXP_OK && incomplete_tail) {
+        if (ftruncate(server->journal_descriptor, (off_t)valid_end) != 0 ||
+            fdatasync(server->journal_descriptor) != 0)
+            status = LXP_ERR_IO;
+        else
+            server->journal_end = valid_end;
+    }
+    if (status == LXP_OK && pthread_mutex_lock(&server->daemon->mutex) != 0)
+        status = LXP_ERR_IO;
+    if (status == LXP_OK) {
+        size_t index;
+        if (server->daemon->queue_count != 0U ||
+            server->daemon->next_sequence != floor)
+            status = LXP_ERR_CONTEXT_MISMATCH;
+        for (index = 0U; status == LXP_OK && index < recovered_count;
+             ++index) {
+            server->daemon->queue[index] = recovered[index];
+            recovered[index].bytes = NULL;
+            server->journal_entries[index] = recovered_entries[index];
+        }
+        if (status == LXP_OK) {
+            server->daemon->queue_head = 0U;
+            server->daemon->queue_count = recovered_count;
+            server->daemon->queue_bytes = recovered_bytes;
+            server->journal_entry_count = recovered_count;
+            if (recovered_count != 0U)
+                (void)pthread_cond_signal(&server->daemon->queue_changed);
+        }
+        if (pthread_mutex_unlock(&server->daemon->mutex) != 0)
+            status = LXP_FATAL_INVARIANT;
+    }
+    recovered_admissions_release(recovered, recovered_count);
+    free(recovered_entries);
+    return status;
+}
+
+static lxp_result admission_temp_remove(lxp_daemon_lni_server *server)
+{
+    struct stat metadata;
+    if (fstatat(server->admission_parent_descriptor,
+                LNI_ADMISSION_JOURNAL_TEMP_NAME, &metadata,
+                AT_SYMLINK_NOFOLLOW) != 0)
+        return errno == ENOENT ? LXP_OK : LXP_ERR_IO;
+    if (!S_ISREG(metadata.st_mode) || metadata.st_nlink != 1 ||
+        metadata.st_uid != geteuid() ||
+        (metadata.st_mode & 0777U) != 0600U)
+        return LXP_ERR_AUTH_SCOPE;
+    return unlinkat(server->admission_parent_descriptor,
+                    LNI_ADMISSION_JOURNAL_TEMP_NAME, 0) == 0 ?
+        LXP_OK : LXP_ERR_IO;
+}
+
+static lxp_result admission_journal_compact_locked(
+    lxp_daemon_lni_server *server)
+{
+    uint8_t superblock[LNI_ADMISSION_JOURNAL_SUPERBLOCK_BYTES];
+    lxp_daemon_lni_journal_entry rebuilt[LXP_DAEMON_QUEUE_CAPACITY];
+    struct stat metadata;
+    uint64_t offset = sizeof(superblock);
+    size_t index;
+    int descriptor = -1;
+    bool renamed = false;
+    lxp_result status = admission_temp_remove(server);
+    if (status == LXP_OK && !admission_journal_named(
+            server, server->journal_descriptor,
+            server->journal_device, server->journal_inode))
+        status = LXP_ERR_AUTH_SCOPE;
+    if (status == LXP_OK) {
+        descriptor = openat(server->admission_parent_descriptor,
+                            LNI_ADMISSION_JOURNAL_TEMP_NAME,
+                            O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC |
+                                O_NOFOLLOW,
+                            0600);
+        if (descriptor < 0) status = LXP_ERR_IO;
+    }
+    admission_superblock_encode(server->daemon->config.network_id,
+                                superblock);
+    if (status == LXP_OK)
+        status = file_write_exact(descriptor, superblock,
+                                  sizeof(superblock), 0U);
+    (void)memset(rebuilt, 0, sizeof(rebuilt));
+    for (index = 0U; status == LXP_OK &&
+         index < server->daemon->queue_count; ++index) {
+        size_t at = (server->daemon->queue_head + index) %
+            LXP_DAEMON_QUEUE_CAPACITY;
+        lxp_daemon_activity *activity = &server->daemon->queue[at];
+        uint8_t header[LNI_ADMISSION_JOURNAL_RECORD_BYTES];
+        uint8_t activity_id[32];
+        uint64_t expected = server->daemon->next_sequence + index;
+        if (activity->global_sequence != expected ||
+            activity->length == 0U ||
+            activity->length > LXP_MAX_ACTIVITY_BYTES)
+            status = LXP_FATAL_INVARIANT;
+        if (status == LXP_OK)
+            status = lxp_activity_id(activity->bytes, activity->length,
+                                     activity_id);
+        if (status == LXP_OK && activity->durable_admission &&
+            lxp_ct_memcmp(activity->activity_id, activity_id, 32U) != 0)
+            status = LXP_FATAL_INVARIANT;
+        if (status != LXP_OK) break;
+        admission_record_encode(expected, activity_id, activity->bytes,
+                                activity->length, header);
+        status = file_write_exact(descriptor, header, sizeof(header), offset);
+        if (status == LXP_OK)
+            status = file_write_exact(descriptor, activity->bytes,
+                                      activity->length,
+                                      offset + sizeof(header));
+        if (status == LXP_OK) {
+            rebuilt[index].global_sequence = expected;
+            rebuilt[index].file_offset = offset;
+            rebuilt[index].activity_length = (uint32_t)activity->length;
+            (void)memcpy(rebuilt[index].activity_id, activity_id, 32U);
+            offset += sizeof(header) + activity->length;
+        }
+    }
+    if (status == LXP_OK && fdatasync(descriptor) != 0) status = LXP_ERR_IO;
+    if (status == LXP_OK &&
+        (fstat(descriptor, &metadata) != 0 || !S_ISREG(metadata.st_mode) ||
+         metadata.st_nlink != 1 || metadata.st_uid != geteuid() ||
+         (metadata.st_mode & 0777U) != 0600U))
+        status = LXP_ERR_AUTH_SCOPE;
+    if (status == LXP_OK && renameat(
+            server->admission_parent_descriptor,
+            LNI_ADMISSION_JOURNAL_TEMP_NAME,
+            server->admission_parent_descriptor,
+            LNI_ADMISSION_JOURNAL_NAME) != 0)
+        status = LXP_ERR_IO;
+    else if (status == LXP_OK)
+        renamed = true;
+    if (status == LXP_OK && fsync(server->admission_parent_descriptor) != 0)
+        status = LXP_FATAL_INVARIANT;
+    if (renamed) {
+        int old = server->journal_descriptor;
+        server->journal_descriptor = descriptor;
+        server->journal_device = (uint64_t)metadata.st_dev;
+        server->journal_inode = (uint64_t)metadata.st_ino;
+        server->journal_end = offset;
+        server->journal_entry_count = server->daemon->queue_count;
+        (void)memcpy(server->journal_entries, rebuilt,
+                     server->journal_entry_count * sizeof(rebuilt[0]));
+        descriptor = -1;
+        if (close(old) != 0 && status == LXP_OK) status = LXP_ERR_IO;
+    }
+    if (descriptor >= 0) (void)close(descriptor);
+    if (!renamed) (void)admission_temp_remove(server);
+    return status;
+}
+
+static lxp_result admission_journal_persist(
+    void *context, uint64_t global_sequence,
+    const uint8_t activity_id[32],
+    const uint8_t *activity, size_t activity_length)
+{
+    lxp_daemon_lni_server *server = (lxp_daemon_lni_server *)context;
+    uint8_t header[LNI_ADMISSION_JOURNAL_RECORD_BYTES];
+    uint64_t prior_end;
+    size_t index;
+    bool append_started = false;
+    bool expected = false;
+    lxp_result status = LXP_OK;
+    if (server == NULL || activity_id == NULL || activity == NULL ||
+        activity_length == 0U || activity_length > LXP_MAX_ACTIVITY_BYTES)
+        return LXP_ERR_CONTEXT_MISMATCH;
+    if (pthread_mutex_lock(&server->mutex) != 0) return LXP_ERR_IO;
+    expected = server->admission_sequence_expected &&
+        global_sequence == server->expected_admission_sequence &&
+        lxp_ct_memcmp(server->expected_admission_activity_id,
+                      activity_id, 32U) == 0 &&
+        pthread_equal(server->expected_admission_submitter,
+                      pthread_self()) != 0;
+    if (pthread_mutex_unlock(&server->mutex) != 0)
+        return LXP_FATAL_INVARIANT;
+    if (!expected) return LXP_ERR_CONTEXT_MISMATCH;
+    for (index = 0U; index < server->journal_entry_count; ++index)
+        if (lxp_ct_memcmp(server->journal_entries[index].activity_id,
+                          activity_id, 32U) == 0)
+            return LXP_ERR_SEQUENCE_REUSED;
+    if (server->journal_entry_count == LXP_DAEMON_QUEUE_CAPACITY ||
+        activity_length + LNI_ADMISSION_JOURNAL_RECORD_BYTES >
+            admission_journal_max_bytes() - server->journal_end)
+        status = admission_journal_compact_locked(server);
+    if (status == LXP_OK &&
+        server->journal_entry_count == LXP_DAEMON_QUEUE_CAPACITY)
+        status = LXP_ERR_LENGTH_LIMIT;
+    if (status == LXP_OK && !admission_journal_named(
+            server, server->journal_descriptor,
+            server->journal_device, server->journal_inode))
+        status = LXP_ERR_AUTH_SCOPE;
+    prior_end = server->journal_end;
+    admission_record_encode(global_sequence, activity_id, activity,
+                            activity_length, header);
+    if (status == LXP_OK) {
+        append_started = true;
+        status = file_write_exact(server->journal_descriptor,
+                                  header, sizeof(header), prior_end);
+    }
+    if (status == LXP_OK)
+        status = file_write_exact(server->journal_descriptor,
+                                  activity, activity_length,
+                                  prior_end + sizeof(header));
+    if (status == LXP_OK && fdatasync(server->journal_descriptor) != 0)
+        status = LXP_ERR_IO;
+    if (status != LXP_OK) {
+        if (append_started &&
+            (ftruncate(server->journal_descriptor, (off_t)prior_end) != 0 ||
+             fdatasync(server->journal_descriptor) != 0))
+            return LXP_FATAL_INVARIANT;
+        return status;
+    }
+    server->journal_entries[server->journal_entry_count].global_sequence =
+        global_sequence;
+    server->journal_entries[server->journal_entry_count].file_offset =
+        prior_end;
+    server->journal_entries[server->journal_entry_count].activity_length =
+        (uint32_t)activity_length;
+    (void)memcpy(
+        server->journal_entries[server->journal_entry_count].activity_id,
+        activity_id, 32U);
+    ++server->journal_entry_count;
+    server->journal_end = prior_end + sizeof(header) + activity_length;
+    return LXP_OK;
+}
+
 static lxp_result secure_parent_open(lxp_daemon_lni_server *server,
                                      const char *socket_path)
 {
@@ -137,6 +775,37 @@ static lxp_result secure_parent_open(lxp_daemon_lni_server *server,
     server->parent_device = (uint64_t)metadata.st_dev;
     server->parent_inode = (uint64_t)metadata.st_ino;
     (void)memcpy(server->parent_path, parent, length + 1U);
+    return LXP_OK;
+}
+
+static lxp_result secure_admission_parent_open(
+    lxp_daemon_lni_server *server, const char *directory)
+{
+    char resolved[LXP_DAEMON_LNI_ADMISSION_PATH_BYTES];
+    struct stat metadata;
+    size_t length;
+    int descriptor;
+    if (directory == NULL || directory[0] != '/')
+        return LXP_ERR_NON_CANONICAL;
+    length = strlen(directory);
+    if (length == 0U || length >= sizeof(server->admission_directory) ||
+        realpath(directory, resolved) == NULL ||
+        strcmp(directory, resolved) != 0 ||
+        strcmp(resolved, server->parent_path) == 0)
+        return LXP_ERR_AUTH_SCOPE;
+    descriptor = open(resolved,
+                      O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (descriptor < 0) return LXP_ERR_IO;
+    if (fstat(descriptor, &metadata) != 0 ||
+        !S_ISDIR(metadata.st_mode) || metadata.st_uid != geteuid() ||
+        (metadata.st_mode & 0022U) != 0U) {
+        (void)close(descriptor);
+        return LXP_ERR_AUTH_SCOPE;
+    }
+    server->admission_parent_descriptor = descriptor;
+    server->admission_parent_device = (uint64_t)metadata.st_dev;
+    server->admission_parent_inode = (uint64_t)metadata.st_ino;
+    (void)memcpy(server->admission_directory, resolved, length + 1U);
     return LXP_OK;
 }
 
@@ -480,18 +1149,20 @@ static lxp_result send_node_info(lxp_daemon_lni_server *server,
                                  int64_t deadline)
 {
     static const char *sequencer_capabilities[] = {
-        "batch_header", "node_info", "preparation_state",
+        "authenticated_durable_submit", "batch_header", "node_info",
+        "preparation_state",
         "receipt_lookup", "submit"
     };
     static const char *evidence_capabilities[] = {
-        "account_read", "batch_header", "checkpoint", "historical_proofs",
-        "node_info", "preparation_state", "proof_bundle", "receipt_lookup",
-        "submit"
+        "account_read", "authenticated_durable_submit", "batch_header",
+        "checkpoint", "historical_proofs", "node_info",
+        "preparation_state", "proof_bundle", "receipt_lookup", "submit"
     };
     static const char *finalizer_capabilities[] = {
-        "account_read", "batch_header", "checkpoint",
-        "finality_evidence_register", "historical_proofs", "node_info",
-        "preparation_state", "proof_bundle", "receipt_lookup", "submit"
+        "account_read", "authenticated_durable_submit", "batch_header",
+        "checkpoint", "finality_evidence_register", "historical_proofs",
+        "node_info", "preparation_state", "proof_bundle", "receipt_lookup",
+        "submit"
     };
     static const char *reader_capabilities[] = {
         "batch_header", "node_info", "receipt_lookup"
@@ -510,7 +1181,7 @@ static lxp_result send_node_info(lxp_daemon_lni_server *server,
                                   sequencer_capabilities) :
             (evidence_available ? evidence_reader_capabilities :
                                   reader_capabilities);
-    uint8_t payload[256];
+    uint8_t payload[512];
     uint64_t head;
     uint64_t batch;
     size_t cursor = 0U;
@@ -530,6 +1201,15 @@ static lxp_result send_node_info(lxp_daemon_lni_server *server,
                 sizeof(reader_capabilities) /
                     sizeof(reader_capabilities[0]));
     lxp_result status = LXP_OK;
+    for (index = 0U; index < capability_count; ++index) {
+        size_t length = strlen(capabilities[index]);
+        if (length > UINT16_MAX || length + 2U > sizeof(payload) - cursor)
+            return LXP_ERR_LENGTH_LIMIT;
+        cursor += length + 2U;
+    }
+    if (LNI_NODE_INFO_FIXED_BYTES > sizeof(payload) - cursor)
+        return LXP_ERR_LENGTH_LIMIT;
+    cursor = 0U;
     if (pthread_mutex_lock(&server->daemon->mutex) != 0) return LXP_ERR_IO;
     head = server->daemon->next_sequence == 0U ? 0U :
         server->daemon->next_sequence - 1U;
@@ -641,11 +1321,134 @@ static lxp_result send_batch_header(lxp_daemon_lni_server *server,
     return status;
 }
 
+static lxp_result wall_clock_milliseconds(uint64_t *milliseconds)
+{
+    struct timespec now;
+    if (milliseconds == NULL || clock_gettime(CLOCK_REALTIME, &now) != 0 ||
+        now.tv_sec < 0 || now.tv_nsec < 0 ||
+        (uint64_t)now.tv_sec > UINT64_MAX / UINT64_C(1000))
+        return LXP_ERR_IO;
+    *milliseconds = (uint64_t)now.tv_sec * UINT64_C(1000) +
+        (uint64_t)now.tv_nsec / UINT64_C(1000000);
+    return LXP_OK;
+}
+
+static lxp_result admission_journal_contains(
+    lxp_daemon_lni_server *server, const uint8_t activity_id[32],
+    bool *present)
+{
+    size_t index;
+    lxp_result status = LXP_OK;
+    *present = false;
+    if (pthread_mutex_lock(&server->daemon->mutex) != 0) return LXP_ERR_IO;
+    for (index = 0U; index < server->journal_entry_count; ++index)
+        if (lxp_ct_memcmp(server->journal_entries[index].activity_id,
+                          activity_id, 32U) == 0) {
+            *present = true;
+            break;
+        }
+    if (pthread_mutex_unlock(&server->daemon->mutex) != 0)
+        status = LXP_FATAL_INVARIANT;
+    return status;
+}
+
+static lxp_result committed_activity_present(
+    lxp_daemon_protocol_owner *owner, const uint8_t activity_id[32],
+    bool *present)
+{
+    lxp_receipt_query query;
+    lxp_byte_span canonical_receipt = {NULL, 0U};
+    lxp_receipt receipt;
+    size_t mark;
+    lxp_result status;
+    *present = false;
+    if (owner->history == NULL || owner->scratch == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    (void)memset(&query, 0, sizeof(query));
+    query.kind = LXP_RECEIPT_BY_TRANSACTION_ID;
+    (void)memcpy(query.identifier, activity_id, 32U);
+    query.maximum_response_bytes = LXP_MAX_ACTIVITY_BYTES;
+    mark = lxp_arena_mark(owner->scratch);
+    status = lxp_receipt_lookup(owner->history, &query, owner->scratch,
+                                &canonical_receipt);
+    if (status == LXP_ERR_UNKNOWN_ACTIVITY)
+        status = LXP_OK;
+    else if (status == LXP_OK)
+        status = lxp_receipt_decode(canonical_receipt.bytes,
+                                    canonical_receipt.length, true,
+                                    &receipt);
+    if (status == LXP_OK && canonical_receipt.bytes != NULL &&
+        lxp_ct_memcmp(receipt.activity_id, activity_id, 32U) != 0)
+        status = LXP_ERR_LOG_CORRUPT;
+    if (status == LXP_OK && canonical_receipt.bytes != NULL)
+        *present = receipt.global_sequence <
+                owner->feed_store.baseline_next_sequence ||
+            (owner->feed_store.scanned_through_sequence != 0U &&
+             receipt.global_sequence <=
+                owner->feed_store.scanned_through_sequence);
+    (void)lxp_arena_reset(owner->scratch, mark);
+    return status;
+}
+
+static void authentication_refusal_record(
+    lxp_daemon_lni_server *server, const struct ucred *credential)
+{
+    size_t index;
+    if (pthread_mutex_lock(&server->mutex) != 0) return;
+    for (index = 0U; index < server->observed_peer_count; ++index) {
+        lxp_daemon_lni_peer_observation *peer =
+            &server->observed_peers[index];
+        if (peer->pid != (uint32_t)credential->pid ||
+            peer->uid != (uint32_t)credential->uid ||
+            peer->gid != (uint32_t)credential->gid)
+            continue;
+        if (peer->authentication_refusals != UINT64_MAX)
+            ++peer->authentication_refusals;
+        (void)pthread_mutex_unlock(&server->mutex);
+        return;
+    }
+    if (server->evicted_authentication_refusals != UINT64_MAX)
+        ++server->evicted_authentication_refusals;
+    (void)pthread_mutex_unlock(&server->mutex);
+}
+
+static lxp_result authentication_refusal(
+    lxp_daemon_lni_server *server, int descriptor,
+    const lni_envelope *request, const struct ucred *credential,
+    lxp_result result, int64_t deadline)
+{
+    authentication_refusal_record(server, credential);
+    return send_refusal(descriptor, server->frame_bytes,
+                        request->correlation_id, 6U, result, deadline);
+}
+
+static lxp_result fail_stop_submit_daemon(lxp_daemon *daemon,
+                                          lxp_result failure)
+{
+    if (pthread_mutex_lock(&daemon->mutex) != 0)
+        return LXP_FATAL_INVARIANT;
+    daemon->failure = failure;
+    daemon->accepting = false;
+    daemon->stop_requested = true;
+    if (pthread_cond_broadcast(&daemon->queue_changed) != 0)
+        failure = LXP_FATAL_INVARIANT;
+    if (pthread_mutex_unlock(&daemon->mutex) != 0)
+        return LXP_FATAL_INVARIANT;
+    return failure;
+}
+
 static lxp_result send_submit(lxp_daemon_lni_server *server, int descriptor,
-                              const lni_envelope *request, int64_t deadline)
+                              const lni_envelope *request,
+                              const struct ucred *credential,
+                              int64_t deadline)
 {
     lxp_activity activity;
+    lxp_identity *identity = NULL;
     uint8_t activity_id[32];
+    uint64_t timestamp;
+    uint64_t expected_sequence;
+    bool known = false;
+    bool submitted = false;
     lxp_result status;
     if (request->proof_length != 0U || request->payload_length == 0U ||
         request->payload_length > LXP_MAX_ACTIVITY_BYTES)
@@ -669,24 +1472,96 @@ static lxp_result send_submit(lxp_daemon_lni_server *server, int descriptor,
     if (status != LXP_OK)
         return send_refusal(descriptor, server->frame_bytes,
                             request->correlation_id, 4U, status, deadline);
-    if (pthread_mutex_lock(&server->daemon->mutex) != 0) return LXP_ERR_IO;
-    if (!server->daemon->accepting)
-        status = server->daemon->failure == LXP_OK ?
-            LXP_ERR_MODULE_DISABLED : server->daemon->failure;
-    else if (server->daemon->queue_count == LXP_DAEMON_QUEUE_CAPACITY ||
-             request->payload_length > LXP_DAEMON_QUEUE_MAX_BYTES -
-                 server->daemon->queue_bytes)
-        status = LXP_ERR_LENGTH_LIMIT;
-    if (pthread_mutex_unlock(&server->daemon->mutex) != 0 && status == LXP_OK)
-        status = LXP_FATAL_INVARIANT;
+    status = lxp_activity_verify_signature(&activity);
     if (status != LXP_OK)
-        return send_refusal(descriptor, server->frame_bytes,
-                            request->correlation_id, 4U,
-                            status == LXP_ERR_LENGTH_LIMIT ? status :
-                                LXP_ERR_MODULE_DISABLED,
-                            deadline);
-    status = lxp_daemon_submit(server->daemon, request->payload,
-                               request->payload_length);
+        return authentication_refusal(
+            server, descriptor, request, credential,
+            status, deadline);
+    if (pthread_mutex_lock(&server->owner->mutex) != 0) return LXP_ERR_IO;
+    status = admission_journal_contains(server, activity_id, &known);
+    if (status == LXP_OK && !known)
+        status = committed_activity_present(server->owner, activity_id,
+                                            &known);
+    if (status == LXP_OK)
+        status = wall_clock_milliseconds(&timestamp);
+    if (status == LXP_OK &&
+        pthread_mutex_lock(&server->daemon->mutex) != 0)
+        status = LXP_ERR_IO;
+    if (status == LXP_OK) {
+        if (server->daemon->queue_count >=
+            UINT64_MAX - server->daemon->next_sequence)
+            status = LXP_ERR_SEQUENCE_GAP;
+        else
+            expected_sequence = server->daemon->next_sequence +
+                server->daemon->queue_count;
+        if (pthread_mutex_unlock(&server->daemon->mutex) != 0)
+            status = LXP_FATAL_INVARIANT;
+    }
+    if (status == LXP_OK)
+        status = lxp_identity_resolve(server->owner->identities,
+                                      activity.actor_did.bytes,
+                                      activity.actor_did.length, &identity);
+    if (status == LXP_OK &&
+        (activity.authority.length != 32U ||
+         !lxp_identity_key_valid(identity, activity.authority.bytes,
+                                 timestamp, expected_sequence)))
+        status = LXP_ERR_BAD_SIGNATURE;
+    if (status == LXP_ERR_BAD_SIGNATURE || status == LXP_ERR_UNKNOWN_DID ||
+        status == LXP_ERR_IDENTITY_FROZEN) {
+        lxp_result unlock_status = pthread_mutex_unlock(
+            &server->owner->mutex) == 0 ? LXP_OK : LXP_FATAL_INVARIANT;
+        if (unlock_status != LXP_OK) return unlock_status;
+        return authentication_refusal(
+            server, descriptor, request, credential,
+            status, deadline);
+    }
+    if (status != LXP_OK)
+        goto unlock_owner;
+    if (known) {
+        if (pthread_mutex_unlock(&server->owner->mutex) != 0)
+            return LXP_FATAL_INVARIANT;
+        return send_envelope(descriptor, server->frame_bytes,
+                             LNI_SUBMIT_RESPONSE, request->correlation_id,
+                             request->payload, request->payload_length,
+                             activity_id, sizeof(activity_id), deadline);
+    }
+    if (pthread_mutex_lock(&server->mutex) != 0) {
+        status = LXP_ERR_IO;
+        goto unlock_owner;
+    }
+    if (server->admission_sequence_expected) {
+        status = LXP_ERR_CONTEXT_MISMATCH;
+    } else {
+        server->expected_admission_sequence = expected_sequence;
+        (void)memcpy(server->expected_admission_activity_id,
+                     activity_id, 32U);
+        server->expected_admission_submitter = pthread_self();
+        server->admission_sequence_expected = true;
+    }
+    if (pthread_mutex_unlock(&server->mutex) != 0)
+        status = LXP_FATAL_INVARIANT;
+    if (status == LXP_OK)
+        status = lxp_daemon_submit(server->daemon, request->payload,
+                                   request->payload_length);
+    submitted = status == LXP_OK;
+    if (pthread_mutex_lock(&server->mutex) != 0) {
+        status = LXP_FATAL_INVARIANT;
+    } else {
+        server->admission_sequence_expected = false;
+        server->expected_admission_sequence = 0U;
+        (void)memset(server->expected_admission_activity_id, 0,
+                     sizeof(server->expected_admission_activity_id));
+        if (pthread_mutex_unlock(&server->mutex) != 0)
+            status = LXP_FATAL_INVARIANT;
+    }
+unlock_owner:
+    if (pthread_mutex_unlock(&server->owner->mutex) != 0)
+        status = LXP_FATAL_INVARIANT;
+    if (status == LXP_FATAL_INVARIANT) {
+        if (submitted)
+            status = fail_stop_submit_daemon(server->daemon, status);
+        return status;
+    }
     if (status != LXP_OK)
         return send_refusal(descriptor, server->frame_bytes,
                             request->correlation_id, 4U,
@@ -948,7 +1823,7 @@ static lxp_result send_preparation_state(
     uint8_t payload[LNI_PREPARATION_STATE_MAX_BYTES];
     size_t payload_length = 0U;
     lxp_result status;
-    if (request->minor < LNI_VERSION_MINOR)
+    if (request->minor < 1U)
         return send_refusal(descriptor, server->frame_bytes,
                             request->correlation_id, 3U,
                             LXP_ERR_VERSION_UNSUPPORTED, deadline);
@@ -1395,36 +2270,132 @@ static lxp_result send_finality_evidence_register(
     return status;
 }
 
-static bool peer_authorized(const lxp_daemon_lni_server *server,
-                            int descriptor)
+static lxp_result peer_credentials(const lxp_daemon_lni_server *server,
+                                   int descriptor,
+                                   struct ucred *credential)
 {
-    struct ucred credential;
-    socklen_t length = sizeof(credential);
+    socklen_t length = sizeof(*credential);
     uint8_t expected[8];
     uint8_t observed[8];
     if (getsockopt(descriptor, SOL_SOCKET, SO_PEERCRED,
-                   &credential, &length) != 0 || length != sizeof(credential))
-        return false;
+                   credential, &length) != 0 ||
+        length != sizeof(*credential) || credential->pid <= 0)
+        return LXP_ERR_AUTH_SCOPE;
     store_u32(expected, server->allowed_peer_uid);
     store_u32(expected + 4U, server->allowed_peer_gid);
-    store_u32(observed, (uint32_t)credential.uid);
-    store_u32(observed + 4U, (uint32_t)credential.gid);
-    return lxp_ct_memcmp(expected, observed, sizeof(expected)) == 0;
+    store_u32(observed, (uint32_t)credential->uid);
+    store_u32(observed + 4U, (uint32_t)credential->gid);
+    return lxp_ct_memcmp(expected, observed, sizeof(expected)) == 0 ?
+        LXP_OK : LXP_ERR_AUTH_SCOPE;
 }
 
-static lxp_result configure_connection(lxp_daemon_lni_server *server,
-                                       int descriptor)
+static lxp_result peer_observation_begin(
+    lxp_daemon_lni_server *server, const struct ucred *credential,
+    uint64_t *generation)
 {
-    int flags;
-    if (!peer_authorized(server, descriptor)) return LXP_ERR_AUTH_SCOPE;
-    flags = fcntl(descriptor, F_GETFL, 0);
-    if (flags < 0 || fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) != 0)
-        return LXP_ERR_IO;
+    lxp_daemon_lni_peer_observation *peer;
+    size_t index;
+    if (pthread_mutex_lock(&server->mutex) != 0) return LXP_ERR_IO;
+    if (server->connection_generation != UINT64_MAX)
+        ++server->connection_generation;
+    *generation = server->connection_generation;
+    for (index = 0U; index < server->observed_peer_count; ++index) {
+        peer = &server->observed_peers[index];
+        if (peer->pid != (uint32_t)credential->pid ||
+            peer->uid != (uint32_t)credential->uid ||
+            peer->gid != (uint32_t)credential->gid)
+            continue;
+        if (peer->active_connections != UINT32_MAX)
+            ++peer->active_connections;
+        peer->active = true;
+        peer->latest_connection_generation = *generation;
+        if (pthread_mutex_unlock(&server->mutex) != 0)
+            return LXP_FATAL_INVARIANT;
+        return LXP_OK;
+    }
+    if (server->observed_peer_count < LXP_DAEMON_LNI_MAX_OBSERVED_PEERS) {
+        index = server->observed_peer_count++;
+    } else {
+        size_t searched;
+        index = LXP_DAEMON_LNI_MAX_OBSERVED_PEERS;
+        for (searched = 0U;
+             searched < LXP_DAEMON_LNI_MAX_OBSERVED_PEERS; ++searched) {
+            size_t candidate = (server->observed_peer_next + searched) %
+                LXP_DAEMON_LNI_MAX_OBSERVED_PEERS;
+            if (!server->observed_peers[candidate].active) {
+                index = candidate;
+                server->observed_peer_next = (candidate + 1U) %
+                    LXP_DAEMON_LNI_MAX_OBSERVED_PEERS;
+                break;
+            }
+        }
+        if (index == LXP_DAEMON_LNI_MAX_OBSERVED_PEERS) {
+            if (server->evicted_peers != UINT64_MAX)
+                ++server->evicted_peers;
+            (void)pthread_mutex_unlock(&server->mutex);
+            return LXP_OK;
+        }
+        peer = &server->observed_peers[index];
+        if (server->evicted_peers != UINT64_MAX) ++server->evicted_peers;
+        if (UINT64_MAX - server->evicted_authentication_refusals <
+            peer->authentication_refusals)
+            server->evicted_authentication_refusals = UINT64_MAX;
+        else
+            server->evicted_authentication_refusals +=
+                peer->authentication_refusals;
+    }
+    peer = &server->observed_peers[index];
+    (void)memset(peer, 0, sizeof(*peer));
+    peer->pid = (uint32_t)credential->pid;
+    peer->uid = (uint32_t)credential->uid;
+    peer->gid = (uint32_t)credential->gid;
+    peer->latest_connection_generation = *generation;
+    peer->active_connections = 1U;
+    peer->active = true;
+    if (pthread_mutex_unlock(&server->mutex) != 0)
+        return LXP_FATAL_INVARIANT;
     return LXP_OK;
 }
 
+static void peer_observation_end(lxp_daemon_lni_server *server,
+                                 const struct ucred *credential)
+{
+    size_t index;
+    if (pthread_mutex_lock(&server->mutex) != 0) return;
+    for (index = 0U; index < server->observed_peer_count; ++index)
+        if (server->observed_peers[index].pid ==
+                (uint32_t)credential->pid &&
+            server->observed_peers[index].uid ==
+                (uint32_t)credential->uid &&
+            server->observed_peers[index].gid ==
+                (uint32_t)credential->gid) {
+            if (server->observed_peers[index].active_connections != 0U)
+                --server->observed_peers[index].active_connections;
+            server->observed_peers[index].active =
+                server->observed_peers[index].active_connections != 0U;
+            break;
+        }
+    (void)pthread_mutex_unlock(&server->mutex);
+}
+
+static lxp_result configure_connection(lxp_daemon_lni_server *server,
+                                       int descriptor,
+                                       struct ucred *credential,
+                                       uint64_t *connection_generation)
+{
+    int flags;
+    lxp_result status = peer_credentials(server, descriptor, credential);
+    if (status != LXP_OK) return status;
+    flags = fcntl(descriptor, F_GETFL, 0);
+    if (flags < 0 || fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) != 0)
+        return LXP_ERR_IO;
+    return peer_observation_begin(server, credential,
+                                  connection_generation);
+}
+
 static lxp_result serve_connection(lxp_daemon_lni_server *server,
-                                   int descriptor)
+                                   int descriptor,
+                                   const struct ucred *credential)
 {
     bool handshaken = false;
     for (;;) {
@@ -1467,7 +2438,8 @@ static lxp_result serve_connection(lxp_daemon_lni_server *server,
                                   request.correlation_id, 1U,
                                   LXP_ERR_NON_CANONICAL, deadline);
         } else if (request.tag == LNI_SUBMIT_REQUEST) {
-            status = send_submit(server, descriptor, &request, deadline);
+            status = send_submit(server, descriptor, &request,
+                                 credential, deadline);
         } else if (request.tag == LNI_RECEIPT_LOOKUP_REQUEST) {
             status = send_receipt(server, descriptor, &request, deadline);
         } else if (request.tag == LNI_ACCOUNT_READ_REQUEST) {
@@ -1496,6 +2468,37 @@ static lxp_result serve_connection(lxp_daemon_lni_server *server,
     }
 }
 
+lxp_result lxp_daemon_lni_serve_connected(
+    lxp_daemon_lni_server *server, int descriptor)
+{
+    struct ucred credential;
+    uint64_t connection_generation = 0U;
+    bool observed = false;
+    lxp_result status;
+    if (server == NULL || descriptor < 0 || !server->mutex_initialized)
+        return LXP_ERR_NON_CANONICAL;
+    if (pthread_mutex_lock(&server->daemon->mutex) != 0)
+        return LXP_ERR_IO;
+    status = server->journal_bound && server->journal_descriptor >= 0 &&
+            server->daemon->persist_admission == admission_journal_persist &&
+            server->daemon->persist_admission_context == server &&
+            admission_journal_named(
+                server, server->journal_descriptor,
+                server->journal_device, server->journal_inode) ?
+        LXP_OK : LXP_ERR_CONTEXT_MISMATCH;
+    if (pthread_mutex_unlock(&server->daemon->mutex) != 0 && status == LXP_OK)
+        status = LXP_FATAL_INVARIANT;
+    if (status == LXP_OK)
+        status = configure_connection(server, descriptor, &credential,
+                                  &connection_generation);
+    if (status == LXP_OK) {
+        observed = true;
+        status = serve_connection(server, descriptor, &credential);
+    }
+    if (observed) peer_observation_end(server, &credential);
+    return status;
+}
+
 static bool server_stopping(lxp_daemon_lni_server *server)
 {
     bool stopping;
@@ -1519,9 +2522,7 @@ static void *server_run(void *context)
             (void)pthread_mutex_lock(&server->mutex);
             server->connection_descriptor = descriptor;
             (void)pthread_mutex_unlock(&server->mutex);
-            status = configure_connection(server, descriptor);
-            if (status == LXP_OK)
-                status = serve_connection(server, descriptor);
+            status = lxp_daemon_lni_serve_connected(server, descriptor);
             (void)shutdown(descriptor, SHUT_RDWR);
             (void)close(descriptor);
             (void)pthread_mutex_lock(&server->mutex);
@@ -1551,8 +2552,10 @@ lxp_result lxp_daemon_lni_serve(
 {
     struct sockaddr_un address;
     int descriptor = -1;
+    lxp_result status = LXP_OK;
     if (server == NULL || daemon == NULL || owner == NULL ||
         configuration == NULL || configuration->socket_path == NULL ||
+        configuration->admission_directory == NULL ||
         !daemon->primitives_initialized || !owner->attached ||
         daemon->config.network_id == 0U ||
         daemon->config.network_id != owner->network_id ||
@@ -1564,63 +2567,118 @@ lxp_result lxp_daemon_lni_serve(
         strlen(configuration->socket_path) >= sizeof(address.sun_path))
         return LXP_ERR_NON_CANONICAL;
     (void)memset(server, 0, sizeof(*server));
+    server->daemon = daemon;
+    server->owner = owner;
     server->listener_descriptor = -1;
     server->connection_descriptor = -1;
     server->parent_descriptor = -1;
+    server->admission_parent_descriptor = -1;
     server->lifetime_lock_descriptor = -1;
+    server->journal_descriptor = -1;
     if (pthread_mutex_init(&server->mutex, NULL) != 0) return LXP_ERR_IO;
     server->mutex_initialized = true;
     server->allowed_peer_uid = configuration->allowed_peer_uid;
     server->allowed_peer_gid = configuration->allowed_peer_gid;
     (void)memcpy(server->socket_path, configuration->socket_path,
                  strlen(configuration->socket_path) + 1U);
-    if (secure_parent_open(server, configuration->socket_path) != LXP_OK)
-        goto fail;
-    if (acquire_lifetime_lock(server) != LXP_OK) goto fail;
-    if (recover_stale_socket(server) != LXP_OK) goto fail;
+    status = secure_parent_open(server, configuration->socket_path);
+    if (status != LXP_OK) goto fail;
+    status = secure_admission_parent_open(
+        server, configuration->admission_directory);
+    if (status != LXP_OK) goto fail;
+    status = acquire_lifetime_lock(server);
+    if (status != LXP_OK) goto fail;
+    status = recover_stale_socket(server);
+    if (status != LXP_OK) goto fail;
+    status = admission_journal_open(server);
+    if (status != LXP_OK) goto fail;
+    status = admission_journal_recover(server);
+    if (status != LXP_OK) goto fail;
     descriptor = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
-    if (descriptor < 0) goto fail;
+    if (descriptor < 0) {
+        status = LXP_ERR_IO;
+        goto fail;
+    }
     (void)memset(&address, 0, sizeof(address));
     address.sun_family = AF_UNIX;
     (void)memcpy(address.sun_path, configuration->socket_path,
                  strlen(configuration->socket_path) + 1U);
-    if (bind(descriptor, (struct sockaddr *)&address, sizeof(address)) != 0)
+    if (bind(descriptor, (struct sockaddr *)&address, sizeof(address)) != 0) {
+        status = LXP_ERR_IO;
         goto fail_path;
-    if (pin_bound_socket(server) != LXP_OK) goto fail_path;
+    }
+    status = pin_bound_socket(server);
+    if (status != LXP_OK) goto fail_path;
     if (chown(configuration->socket_path, geteuid(),
               (gid_t)configuration->allowed_peer_gid) != 0 ||
         chmod(configuration->socket_path,
-              (mode_t)configuration->socket_mode) != 0 ||
-        validate_pinned_socket(server) != LXP_OK ||
-        listen(descriptor, LNI_BACKLOG) != 0)
+              (mode_t)configuration->socket_mode) != 0) {
+        status = LXP_ERR_IO;
         goto fail_created;
-    server->daemon = daemon;
-    server->owner = owner;
+    }
+    status = validate_pinned_socket(server);
+    if (status != LXP_OK) goto fail_created;
+    if (listen(descriptor, LNI_BACKLOG) != 0) {
+        status = LXP_ERR_IO;
+        goto fail_created;
+    }
     server->frame_bytes = configuration->frame_bytes;
     server->deadline_milliseconds = configuration->deadline_milliseconds;
     server->listener_descriptor = descriptor;
-    if (pthread_create(&server->thread, NULL, server_run, server) != 0)
+    if (pthread_mutex_lock(&daemon->mutex) != 0) {
+        status = LXP_ERR_IO;
         goto fail_created;
+    }
+    if (daemon->persist_admission != NULL) {
+        (void)pthread_mutex_unlock(&daemon->mutex);
+        status = LXP_ERR_CONTEXT_MISMATCH;
+        goto fail_created;
+    }
+    daemon->persist_admission = admission_journal_persist;
+    daemon->persist_admission_context = server;
+    server->journal_bound = true;
+    if (pthread_mutex_unlock(&daemon->mutex) != 0) {
+        status = LXP_FATAL_INVARIANT;
+        goto fail_created;
+    }
+    if (pthread_create(&server->thread, NULL, server_run, server) != 0) {
+        status = LXP_ERR_IO;
+        goto fail_created;
+    }
     server->started = true;
     return LXP_OK;
 fail_created:
+    if (server->journal_bound && pthread_mutex_lock(&daemon->mutex) == 0) {
+        if (daemon->persist_admission_context == server) {
+            daemon->persist_admission = NULL;
+            daemon->persist_admission_context = NULL;
+        }
+        server->journal_bound = false;
+        (void)pthread_mutex_unlock(&daemon->mutex);
+    }
     (void)unlink_pinned_socket(server);
 fail_path:
 fail:
     if (descriptor >= 0) (void)close(descriptor);
+    if (server->journal_descriptor >= 0)
+        (void)close(server->journal_descriptor);
     if (server->lifetime_lock_descriptor >= 0) {
         (void)flock(server->lifetime_lock_descriptor, LOCK_UN);
         (void)close(server->lifetime_lock_descriptor);
     }
     if (server->parent_descriptor >= 0)
         (void)close(server->parent_descriptor);
+    if (server->admission_parent_descriptor >= 0)
+        (void)close(server->admission_parent_descriptor);
     (void)pthread_mutex_destroy(&server->mutex);
     (void)memset(server, 0, sizeof(*server));
     server->listener_descriptor = -1;
     server->connection_descriptor = -1;
     server->parent_descriptor = -1;
+    server->admission_parent_descriptor = -1;
     server->lifetime_lock_descriptor = -1;
-    return LXP_ERR_IO;
+    server->journal_descriptor = -1;
+    return status;
 }
 
 lxp_result lxp_daemon_lni_stop(lxp_daemon_lni_server *server)
@@ -1639,6 +2697,20 @@ lxp_result lxp_daemon_lni_stop(lxp_daemon_lni_server *server)
         LXP_OK : LXP_ERR_IO;
     if (pthread_join(server->thread, NULL) != 0 && status == LXP_OK)
         status = LXP_ERR_IO;
+    if (pthread_mutex_lock(&server->daemon->mutex) != 0) {
+        if (status == LXP_OK) status = LXP_ERR_IO;
+    } else {
+        if (server->daemon->persist_admission_context == server) {
+            server->daemon->persist_admission = NULL;
+            server->daemon->persist_admission_context = NULL;
+        } else if (status == LXP_OK) {
+            status = LXP_ERR_CONTEXT_MISMATCH;
+        }
+        server->journal_bound = false;
+        if (pthread_mutex_unlock(&server->daemon->mutex) != 0 &&
+            status == LXP_OK)
+            status = LXP_FATAL_INVARIANT;
+    }
     if (server->failure != LXP_OK && status == LXP_OK)
         status = server->failure;
     {
@@ -1647,6 +2719,13 @@ lxp_result lxp_daemon_lni_stop(lxp_daemon_lni_server *server)
     }
     if (!pinned_lifetime_lock(server) && status == LXP_OK)
         status = LXP_ERR_AUTH_SCOPE;
+    if (!admission_journal_named(
+            server, server->journal_descriptor,
+            server->journal_device, server->journal_inode) &&
+        status == LXP_OK)
+        status = LXP_ERR_AUTH_SCOPE;
+    if (close(server->journal_descriptor) != 0 && status == LXP_OK)
+        status = LXP_ERR_IO;
     if (flock(server->lifetime_lock_descriptor, LOCK_UN) != 0 &&
         status == LXP_OK)
         status = LXP_ERR_IO;
@@ -1654,10 +2733,14 @@ lxp_result lxp_daemon_lni_stop(lxp_daemon_lni_server *server)
         status = LXP_ERR_IO;
     if (close(server->parent_descriptor) != 0 && status == LXP_OK)
         status = LXP_ERR_IO;
+    if (close(server->admission_parent_descriptor) != 0 && status == LXP_OK)
+        status = LXP_ERR_IO;
     server->started = false;
     server->listener_descriptor = -1;
     server->parent_descriptor = -1;
+    server->admission_parent_descriptor = -1;
     server->lifetime_lock_descriptor = -1;
+    server->journal_descriptor = -1;
     if (pthread_mutex_destroy(&server->mutex) != 0 && status == LXP_OK)
         status = LXP_ERR_IO;
     server->mutex_initialized = false;
@@ -1672,6 +2755,28 @@ lxp_result lxp_daemon_lni_status(lxp_daemon_lni_server *server)
     if (pthread_mutex_lock(&server->mutex) != 0) return LXP_ERR_IO;
     status = server->failure;
     if (pthread_mutex_unlock(&server->mutex) != 0 && status == LXP_OK)
+        status = LXP_FATAL_INVARIANT;
+    return status;
+}
+
+lxp_result lxp_daemon_lni_observability_snapshot(
+    lxp_daemon_lni_server *server,
+    lxp_daemon_lni_observability *observability)
+{
+    lxp_result status = LXP_OK;
+    if (server == NULL || observability == NULL ||
+        !server->mutex_initialized)
+        return LXP_ERR_NON_CANONICAL;
+    if (pthread_mutex_lock(&server->mutex) != 0) return LXP_ERR_IO;
+    (void)memset(observability, 0, sizeof(*observability));
+    observability->peer_count = server->observed_peer_count;
+    observability->evicted_peers = server->evicted_peers;
+    observability->evicted_authentication_refusals =
+        server->evicted_authentication_refusals;
+    (void)memcpy(observability->peers, server->observed_peers,
+                 server->observed_peer_count *
+                    sizeof(server->observed_peers[0]));
+    if (pthread_mutex_unlock(&server->mutex) != 0)
         status = LXP_FATAL_INVARIANT;
     return status;
 }

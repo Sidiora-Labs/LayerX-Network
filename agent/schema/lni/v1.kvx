@@ -1,7 +1,7 @@
 [schema]
 name = "LayerX Node Interface"
 major = 1
-minor = 2
+minor = 3
 encoding = "major:u16be minor:u16be message_tag:u16be correlation_id:u64be canonical_payload:bytes32 proof_material:bytes32"
 compatibility = "Within major version 1, minor releases may add only new message tags, optional trailing fields, and capabilities; removal, reuse, reordering, or changed meaning requires a new major version."
 protocol_payload = "Any protocol datum is opaque canonical LayerX bytes. It is never expanded into an LNI-specific activity, receipt, state, batch, checkpoint, proof, or event layout."
@@ -9,7 +9,7 @@ transport = "Length-prefixed canonical frames over Unix sockets by default, mutu
 handshake = "NodeInfo is the first exchange and carries LNI version, protocol version, network id, node role, chain head, latest sealed batch, latest finalised checkpoint, authorised sequencer key, and capabilities."
 
 [capabilities]
-values = ["node_info","submit","receipt_lookup","account_read","history_range","batch_header","checkpoint","proof_bundle","availability_fetch","event_subscribe","historical_proofs","preparation_state","finality_evidence_register"]
+values = ["node_info","submit","authenticated_durable_submit","receipt_lookup","account_read","history_range","batch_header","checkpoint","proof_bundle","availability_fetch","event_subscribe","historical_proofs","preparation_state","finality_evidence_register"]
 
 [message.1]
 name = "NodeInfoRequest"
@@ -39,8 +39,8 @@ golden = "0001000000030000000000000000000000010300000000"
 name = "SubmitResponse"
 kind = "response"
 capability = "submit"
-canonical_payload = "canonical admission acknowledgement or rejection bytes"
-proof_material = "core result evidence bytes"
+canonical_payload = "canonical admission acknowledgement or rejection bytes; authenticated_durable_submit echoes the exact SubmitRequest canonical payload only after signature and current signing-authority verification and fdatasync-backed bounded-queue admission in the configured persistent checkpoint directory, while a refusal never consumes queue capacity"
+proof_material = "core result evidence bytes; authenticated_durable_submit returns exactly the 32-byte activity id derived from the echoed canonical payload"
 golden = "0001000000040000000000000000000000010400000001a5"
 
 [message.5]
@@ -207,7 +207,7 @@ golden = "0001000000180000000000000000000000011800000000"
 name = "ErrorResponse"
 kind = "response"
 capability = "node_info"
-canonical_payload = "canonical typed boundary-error bytes"
+canonical_payload = "canonical typed boundary-error bytes: refusal class u8 followed by big-endian lxp_result i32; class 6 is an authentication refusal and means the submitted activity did not touch the queue"
 proof_material = "empty"
 golden = "0001000000190000000000000000000000011900000000"
 

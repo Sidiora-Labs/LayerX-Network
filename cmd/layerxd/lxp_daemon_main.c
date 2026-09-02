@@ -16,6 +16,10 @@ static void release_queue_locked(lxp_daemon *daemon)
         }
         daemon->queue[at].bytes = NULL;
         daemon->queue[at].length = 0U;
+        (void)memset(daemon->queue[at].activity_id, 0,
+                     sizeof(daemon->queue[at].activity_id));
+        daemon->queue[at].global_sequence = 0U;
+        daemon->queue[at].durable_admission = false;
     }
     daemon->queue_head = 0U;
     daemon->queue_count = 0U;
@@ -87,6 +91,10 @@ static void *executor_run(void *argument)
                 free(daemon->queue[at].bytes);
                 daemon->queue[at].bytes = NULL;
                 daemon->queue[at].length = 0U;
+                (void)memset(daemon->queue[at].activity_id, 0,
+                             sizeof(daemon->queue[at].activity_id));
+                daemon->queue[at].global_sequence = 0U;
+                daemon->queue[at].durable_admission = false;
             }
             daemon->queue_head = (daemon->queue_head + consumed_count) %
                 LXP_DAEMON_QUEUE_CAPACITY;
@@ -224,35 +232,75 @@ lxp_result lxp_daemon_submit(
     lxp_daemon *daemon, const uint8_t *activity, size_t activity_length)
 {
     size_t tail;
+    uint64_t global_sequence;
+    uint8_t activity_id[32] = {0};
     uint8_t *retained;
+    lxp_result status = LXP_OK;
     if (daemon == NULL || activity == NULL || activity_length == 0U ||
         activity_length > LXP_MAX_ACTIVITY_BYTES)
         return LXP_ERR_LENGTH_LIMIT;
-    (void)pthread_mutex_lock(&daemon->mutex);
+    if (pthread_mutex_lock(&daemon->mutex) != 0) return LXP_ERR_IO;
     if (!daemon->accepting) {
         lxp_result failure = daemon->failure == LXP_OK ?
             LXP_ERR_MODULE_DISABLED : daemon->failure;
-        (void)pthread_mutex_unlock(&daemon->mutex);
-        return failure;
+        return pthread_mutex_unlock(&daemon->mutex) == 0 ?
+            failure : LXP_FATAL_INVARIANT;
     }
     if (daemon->queue_count == LXP_DAEMON_QUEUE_CAPACITY ||
         activity_length > LXP_DAEMON_QUEUE_MAX_BYTES - daemon->queue_bytes) {
-        (void)pthread_mutex_unlock(&daemon->mutex);
-        return LXP_ERR_LENGTH_LIMIT;
+        return pthread_mutex_unlock(&daemon->mutex) == 0 ?
+            LXP_ERR_LENGTH_LIMIT : LXP_FATAL_INVARIANT;
     }
+    if (daemon->queue_count >= UINT64_MAX - daemon->next_sequence) {
+        return pthread_mutex_unlock(&daemon->mutex) == 0 ?
+            LXP_ERR_SEQUENCE_GAP : LXP_FATAL_INVARIANT;
+    }
+    global_sequence = daemon->next_sequence + daemon->queue_count;
     retained = (uint8_t *)malloc(activity_length);
     if (retained == NULL) {
-        (void)pthread_mutex_unlock(&daemon->mutex);
-        return LXP_ERR_ARENA_EXHAUSTED;
+        return pthread_mutex_unlock(&daemon->mutex) == 0 ?
+            LXP_ERR_ARENA_EXHAUSTED : LXP_FATAL_INVARIANT;
     }
     (void)memcpy(retained, activity, activity_length);
+    if (daemon->persist_admission != NULL) {
+        status = lxp_activity_id(activity, activity_length, activity_id);
+        if (status == LXP_OK)
+            status = daemon->persist_admission(
+                daemon->persist_admission_context, global_sequence,
+                activity_id, activity, activity_length);
+        if (status != LXP_OK) {
+            lxp_secure_zero(retained, activity_length);
+            free(retained);
+            if (status == LXP_FATAL_INVARIANT) {
+                daemon->failure = status;
+                daemon->accepting = false;
+                daemon->stop_requested = true;
+                (void)pthread_cond_broadcast(&daemon->queue_changed);
+            }
+            if (pthread_mutex_unlock(&daemon->mutex) != 0)
+                return LXP_FATAL_INVARIANT;
+            return status;
+        }
+    }
     tail = (daemon->queue_head + daemon->queue_count) %
         LXP_DAEMON_QUEUE_CAPACITY;
     daemon->queue[tail].bytes = retained;
     daemon->queue[tail].length = activity_length;
+    (void)memcpy(daemon->queue[tail].activity_id, activity_id,
+                 sizeof(activity_id));
+    daemon->queue[tail].global_sequence = global_sequence;
+    daemon->queue[tail].durable_admission =
+        daemon->persist_admission != NULL;
     ++daemon->queue_count;
     daemon->queue_bytes += activity_length;
-    (void)pthread_cond_signal(&daemon->queue_changed);
-    (void)pthread_mutex_unlock(&daemon->mutex);
-    return LXP_OK;
+    if (pthread_cond_signal(&daemon->queue_changed) != 0) {
+        daemon->failure = LXP_FATAL_INVARIANT;
+        daemon->accepting = false;
+        daemon->stop_requested = true;
+        (void)pthread_cond_broadcast(&daemon->queue_changed);
+        status = LXP_FATAL_INVARIANT;
+    }
+    if (pthread_mutex_unlock(&daemon->mutex) != 0)
+        return LXP_FATAL_INVARIANT;
+    return status;
 }

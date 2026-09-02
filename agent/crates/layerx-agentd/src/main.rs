@@ -170,7 +170,7 @@ fn start_human_owner() -> Result<mpsc::Receiver<Result<(), String>>, String> {
     let node = Client::connect(ClientConfig {
         endpoint: node_path,
         handshake: HandshakeConfig {
-            built_interface_version: Version::V1_2,
+            built_interface_version: Version::V1_3,
             expected_protocol_version: human_protocol_version,
             expected_network_id: required("LAYERX_AGENT_HUMAN_NETWORK_ID")?
                 .parse()

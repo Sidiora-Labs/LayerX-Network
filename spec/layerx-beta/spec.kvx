@@ -279,7 +279,7 @@ status = "pending"
 
 [task.2.1]
 title = "Authenticate LNI activities before queue insertion"
-status = "pending"
+status = "done"
 wave = 2
 requires = ["1.1"]
 do_1 = "In the native LNI submit handler, after structural validation and before lxp_daemon_submit, verify the activity signature and signing authority against current state through the existing native verifier, and return a typed authentication refusal without touching the queue on failure."
@@ -287,9 +287,9 @@ do_2 = "Move the acknowledgement so it is sent only after verification and durab
 do_3 = "Leave validate_canonical_items in the batch and WAL path verifying signatures exactly as before; add nothing that lets a pre-verified activity skip it."
 do_4 = "Run verification outside the queue lock and add a per-peer authentication-refusal counter to the daemon observability surface."
 do_5 = "Add tests/test_daemon_lni_admission.c with a test-daemon-lni-admission target proving invalid signature refused with zero occupancy, wrong authority refused, valid activity acknowledged only after insertion, and full capacity available to a valid submitter after a flood of invalid ones."
-verify_cmd = "make test-daemon-lni-admission test-admission test-batch-wal-recovery"
+verify_cmd = "make test-daemon-lni-admission test-admission test-batch-wal-recovery agent-test-lni-schema agent-test-client-submit-focused agent-test-agentd-handshake-gate agent-test-boundary"
 symbols = ["send_submit","lxp_daemon_submit","lxp_activity_verify_signature","validate_canonical_items"]
-touches = ["cmd/layerxd/lxp_daemon_lni.c","cmd/layerxd/lxp_daemon_main.c","cmd/layerxd/lxp_daemon_batch_wal.c","tests/test_daemon_lni_admission.c","Makefile"]
+touches = ["include/layerx/lxp_daemon.h","cmd/layerxd/lxp_daemon_lni.c","cmd/layerxd/lxp_daemon_lni_internal.h","cmd/layerxd/lxp_daemon_main.c","cmd/layerxd/lxp_daemon_process.c","cmd/layerxd/lxp_daemon_batch_wal.c","cmd/layerxd/lni.env.example","tests/test_daemon_lni_admission.c","tests/storage/lxp_test_batch_wal_recovery.c","Makefile","agent/schema/lni/v1.kvx","agent/schema/lni/README.md","agent/crates/layerx-client/src/client.rs","agent/crates/layerx-client/src/submit.rs","agent/crates/layerx-client/src/lni/handshake.rs","agent/crates/layerx-client/src/lni/schema.rs","agent/crates/layerx-client/src/lni/report.rs","agent/crates/layerx-client/tests/lni_schema.rs","agent/crates/layerx-client/tests/submit.rs","agent/crates/layerx-agentd/src/main.rs","agent/crates/layerx-agentd/src/boot.rs","agent/crates/layerx-agentd/tests/handshake_gate.rs","agent/tests/boundary/src/production.rs","agent/tests/boundary/cases.rs","agent/tests/boundary/gaps.rs","agent/tests/boundary/node/layerxd_lni.c","spec/layerx-beta/qualification.kvx"]
 reqs = ["3.1","3.2","3.3","3.4","3.5"]
 
 [task.2.2]

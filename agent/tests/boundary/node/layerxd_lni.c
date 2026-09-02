@@ -158,7 +158,7 @@ static int send_envelope(
     if (frame == NULL) return 1;
     store_u32(frame, (uint32_t)body_length);
     store_u16(frame + cursor, 1U); cursor += 2U;
-    store_u16(frame + cursor, 1U); cursor += 2U;
+    store_u16(frame + cursor, 3U); cursor += 2U;
     store_u16(frame + cursor, message_tag); cursor += 2U;
     store_u64(frame + cursor, correlation_id); cursor += 8U;
     store_u32(frame + cursor, (uint32_t)payload_length); cursor += 4U;
@@ -506,7 +506,7 @@ static size_t node_info_payload(
     size_t cursor = 0U;
     size_t index;
     store_u16(output + cursor, 1U); cursor += 2U;
-    store_u16(output + cursor, 1U); cursor += 2U;
+    store_u16(output + cursor, 3U); cursor += 2U;
     store_u16(output + cursor, LXP_PROTOCOL_VERSION); cursor += 2U;
     store_u32(output + cursor, 77U); cursor += 4U;
     output[cursor++] = 1U;
@@ -536,6 +536,7 @@ static int handle_request(
     lxp_daemon *daemon, node_mode mode)
 {
     uint16_t major;
+    uint16_t minor;
     uint16_t tag;
     uint64_t correlation_id;
     uint32_t payload_length;
@@ -544,13 +545,15 @@ static int handle_request(
     uint8_t end[33];
     if (length < 22U) return send_error(descriptor, 0U, 1U);
     major = load_u16(request);
+    minor = load_u16(request + 2U);
     tag = load_u16(request + 4U);
     correlation_id = load_u64(request + 6U);
     payload_length = load_u32(request + 14U);
     if ((size_t)payload_length + 22U > length)
         return send_error(descriptor, correlation_id, 1U);
     payload = request + 18U;
-    if (major != 1U) return send_error(descriptor, correlation_id, 2U);
+    if (major != 1U || (tag == 1U ? minor != 0U : minor > 3U))
+        return send_error(descriptor, correlation_id, 2U);
     if (tag == 1U) {
         size_t info_length = node_info_payload(info, fixture, mode);
         return send_envelope(

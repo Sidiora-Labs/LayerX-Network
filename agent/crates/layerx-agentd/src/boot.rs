@@ -49,6 +49,14 @@ pub enum GateError {
     Evidence(VerifierPolicyError),
 }
 
+fn missing_write_capability(status: &HandshakeStatus) -> Capability {
+    if status.available_capabilities.contains(&Capability::Submit) {
+        Capability::AuthenticatedDurableSubmit
+    } else {
+        Capability::Submit
+    }
+}
+
 impl From<HandshakeError> for GateError {
     fn from(value: HandshakeError) -> Self {
         Self::Handshake(value)
@@ -74,7 +82,7 @@ impl Gate {
         let verifier = ProtocolEvidenceVerifier::load(config).map_err(GateError::Evidence)?;
         Ok(Self {
             config: HandshakeConfig {
-                built_interface_version: Version::V1_0,
+                built_interface_version: Version::V1_3,
                 expected_protocol_version: config.expected_protocol_version,
                 expected_network_id: config.network_id,
             },
@@ -111,7 +119,9 @@ impl Gate {
     pub fn guard_write<T>(&self, operation: impl FnOnce() -> T) -> Result<T, WriteGateError> {
         match &self.status {
             Status::Ready(status) if status.writes_ready => Ok(operation()),
-            Status::Ready(_) => Err(WriteGateError::MissingCapability(Capability::Submit)),
+            Status::Ready(status) => Err(WriteGateError::MissingCapability(
+                missing_write_capability(status),
+            )),
             Status::AwaitingHandshake | Status::Refused(_) | Status::EvidenceRefused(_) => {
                 Err(WriteGateError::NotReady)
             }
@@ -127,7 +137,9 @@ impl Gate {
     pub fn evidence_authority(&self) -> Result<&EvidenceAuthority, WriteGateError> {
         match &self.status {
             Status::Ready(status) if status.writes_ready => Ok(&self.evidence),
-            Status::Ready(_) => Err(WriteGateError::MissingCapability(Capability::Submit)),
+            Status::Ready(status) => Err(WriteGateError::MissingCapability(
+                missing_write_capability(status),
+            )),
             Status::AwaitingHandshake | Status::Refused(_) | Status::EvidenceRefused(_) => {
                 Err(WriteGateError::NotReady)
             }
@@ -188,7 +200,8 @@ fn apply_handshake(gate: &mut Gate, accepted: Handshake) -> Result<&HandshakeSta
         available_capabilities: capabilities.available().clone(),
         missing_capabilities: capabilities.unavailable().clone(),
         unknown_advertised: capabilities.unknown_advertised().to_vec(),
-        writes_ready: capabilities.contains(Capability::Submit),
+        writes_ready: capabilities.contains(Capability::Submit)
+            && capabilities.contains(Capability::AuthenticatedDurableSubmit),
     };
     gate.last_accepted = Some(accepted);
     gate.status = Status::Ready(status);

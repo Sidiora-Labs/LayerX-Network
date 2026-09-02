@@ -5,7 +5,7 @@ use layerx_types::error::LayerError;
 
 pub fn verify_and_render(handshake: &Handshake) -> Result<String, String> {
     let report = capability_report(handshake.capabilities());
-    if report.entries().len() != 13 {
+    if report.entries().len() != 14 {
         return Err("capability report omitted schema requirements".to_owned());
     }
     if report.daemon_status() != report.cli_output()
@@ -13,11 +13,24 @@ pub fn verify_and_render(handshake: &Handshake) -> Result<String, String> {
     {
         return Err("daemon, CLI, and qualification capability views diverged".to_owned());
     }
-    if report.gaps() != ["historical_proofs", "finality_evidence_register"] {
+    if report.gaps()
+        != [
+            "authenticated_durable_submit",
+            "historical_proofs",
+            "finality_evidence_register",
+        ]
+    {
         return Err(format!(
             "unexpected real-node capability gaps: {:?}",
             report.gaps()
         ));
+    }
+    if report.require(Capability::AuthenticatedDurableSubmit)
+        != Err(LayerError::UnavailableCapability {
+            capability: "authenticated_durable_submit".to_owned(),
+        })
+    {
+        return Err("legacy local submission opened the durable write gate".to_owned());
     }
     if report.require(Capability::HistoricalProofs)
         != Err(LayerError::UnavailableCapability {
@@ -32,6 +45,12 @@ pub fn verify_and_render(handshake: &Handshake) -> Result<String, String> {
         })
     {
         return Err("unbound finality authority did not fail as unavailable".to_owned());
+    }
+    if !report
+        .qualification_output()
+        .contains("capability=authenticated_durable_submit exposed=false absent_behavior=authenticated_durable_submission_unavailable")
+    {
+        return Err("qualification omitted the durable-write downgrade".to_owned());
     }
     if !report
         .qualification_output()

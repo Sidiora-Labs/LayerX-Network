@@ -22,6 +22,9 @@ impl Version {
     /// Additive finality-evidence registration revision.
     pub const V1_2: Self = Self { major: 1, minor: 2 };
 
+    /// Additive authenticated durable admission capability revision.
+    pub const V1_3: Self = Self { major: 1, minor: 3 };
+
     /// Returns whether the two peers can interpret the same stable message set.
     #[must_use]
     pub const fn is_compatible_with(self, peer: Self) -> bool {
@@ -45,6 +48,7 @@ pub enum MessageKind {
 pub enum Capability {
     NodeInfo,
     Submit,
+    AuthenticatedDurableSubmit,
     ReceiptLookup,
     AccountRead,
     HistoryRange,
@@ -65,6 +69,7 @@ impl Capability {
         match self {
             Self::NodeInfo => "node_info",
             Self::Submit => "submit",
+            Self::AuthenticatedDurableSubmit => "authenticated_durable_submit",
             Self::ReceiptLookup => "receipt_lookup",
             Self::AccountRead => "account_read",
             Self::HistoryRange => "history_range",
@@ -99,9 +104,10 @@ pub struct Schema {
     pub capabilities: &'static [Capability],
 }
 
-const CAPABILITIES: [Capability; 13] = [
+const CAPABILITIES: [Capability; 14] = [
     Capability::NodeInfo,
     Capability::Submit,
+    Capability::AuthenticatedDurableSubmit,
     Capability::ReceiptLookup,
     Capability::AccountRead,
     Capability::HistoryRange,
@@ -369,7 +375,7 @@ const MESSAGES: [MessageDescriptor; 29] = [
 ];
 
 const SCHEMA: Schema = Schema {
-    version: Version::V1_2,
+    version: Version::V1_3,
     messages: &MESSAGES,
     capabilities: &CAPABILITIES,
 };

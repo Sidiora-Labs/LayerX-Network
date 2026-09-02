@@ -34,7 +34,7 @@ fn exchange(
     payload: &[u8],
 ) -> Result<(u16, Vec<u8>, Vec<u8>), String> {
     let request = encode_envelope(Envelope {
-        version: Version::V1_1,
+        version: Version::V1_3,
         message_tag: tag,
         correlation_id,
         canonical_payload: payload,
@@ -49,7 +49,7 @@ fn exchange(
         .map_err(|error| format!("production response receive failed: {error:?}"))?;
     let response = decode_envelope(&response)
         .map_err(|error| format!("production response malformed: {error:?}"))?;
-    if response.version.major != Version::V1_1.major || response.correlation_id != correlation_id {
+    if response.version.major != Version::V1_3.major || response.correlation_id != correlation_id {
         return Err("production response changed version or correlation".to_owned());
     }
     Ok((
@@ -99,7 +99,7 @@ pub fn run_if_configured() -> Result<Option<String>, String> {
         .map_err(|error| format!("qualification activity id failed: {error:?}"))?;
     let mut transport = connect(Path::new(&socket))?;
     let expected = HandshakeConfig {
-        built_interface_version: Version::V1_1,
+        built_interface_version: Version::V1_3,
         expected_protocol_version: std::env::var("LAYERX_QUALIFY_PROTOCOL_VERSION")
             .map_err(|_| "LAYERX_QUALIFY_PROTOCOL_VERSION is required".to_owned())?
             .parse()
@@ -115,6 +115,12 @@ pub fn run_if_configured() -> Result<Option<String>, String> {
         .capabilities()
         .require(layerx_client::lni::schema::Capability::Submit)
         .map_err(|error| format!("production submit unavailable: {error:?}"))?;
+    handshake
+        .capabilities()
+        .require(layerx_client::lni::schema::Capability::AuthenticatedDurableSubmit)
+        .map_err(|error| {
+            format!("production authenticated durable submit unavailable: {error:?}")
+        })?;
     handshake
         .capabilities()
         .require(layerx_client::lni::schema::Capability::ReceiptLookup)

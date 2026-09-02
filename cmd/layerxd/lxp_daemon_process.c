@@ -2771,7 +2771,20 @@ static lxp_result path_empty_or_absent(const char *path)
         LXP_OK : LXP_ERR_ROOT_MISMATCH;
 }
 
-static lxp_result directory_empty(const char *path)
+static bool bootstrap_checkpoint_entry(const char *name)
+{
+    static const char *const allowed[] = {
+        ".layerxd-lni-admission.log",
+        ".layerxd-lni-admission.tmp"
+    };
+    size_t index;
+    if (name == NULL) return false;
+    for (index = 0U; index < sizeof(allowed) / sizeof(allowed[0]); ++index)
+        if (strcmp(name, allowed[index]) == 0) return true;
+    return false;
+}
+
+static lxp_result bootstrap_checkpoint_directory_clean(const char *path)
 {
     DIR *directory;
     struct dirent *entry;
@@ -2781,8 +2794,16 @@ static lxp_result directory_empty(const char *path)
     if (directory == NULL) return LXP_ERR_IO;
     errno = 0;
     while ((entry = readdir(directory)) != NULL) {
-        if (strcmp(entry->d_name, ".") != 0 &&
-            strcmp(entry->d_name, "..") != 0) {
+        struct stat metadata;
+        if (strcmp(entry->d_name, ".") == 0 ||
+            strcmp(entry->d_name, "..") == 0)
+            continue;
+        if (!bootstrap_checkpoint_entry(entry->d_name) ||
+            fstatat(dirfd(directory), entry->d_name, &metadata,
+                    AT_SYMLINK_NOFOLLOW) != 0 ||
+            !S_ISREG(metadata.st_mode) || metadata.st_nlink != 1 ||
+            metadata.st_uid != geteuid() ||
+            (metadata.st_mode & 0777U) != 0600U) {
             status = LXP_ERR_ROOT_MISMATCH;
             break;
         }
@@ -2800,7 +2821,8 @@ static lxp_result bootstrap_storage_empty(const char *checkpoint_directory)
         "LAYERX_NODE_EVIDENCE_LOG", "LAYERX_NODE_HISTORY_DATABASE"
     };
     size_t index;
-    lxp_result status = directory_empty(checkpoint_directory);
+    lxp_result status =
+        bootstrap_checkpoint_directory_clean(checkpoint_directory);
     for (index = 0U; status == LXP_OK &&
          index < sizeof(names) / sizeof(names[0]); ++index)
         status = path_empty_or_absent(required_environment(names[index]));
@@ -3213,8 +3235,11 @@ static lxp_result open_process(lxp_daemon_process *process,
         status = LXP_ERR_NON_CANONICAL;
     if (status == LXP_OK) {
         const char *lni_socket = required_environment("LAYERX_NODE_LNI_SOCKET");
+        const char *admission_directory = required_environment(
+            "LAYERX_NODE_CHECKPOINT_DIRECTORY");
         (void)memset(lni_configuration, 0, sizeof(*lni_configuration));
         lni_configuration->socket_path = lni_socket;
+        lni_configuration->admission_directory = admission_directory;
         lni_configuration->socket_mode = 0660U;
         status = parse_u64_text(
             required_environment("LAYERX_NODE_LNI_ALLOWED_UID"), &value);
@@ -3243,7 +3268,8 @@ static lxp_result open_process(lxp_daemon_process *process,
             status = LXP_ERR_LENGTH_LIMIT;
         if (status == LXP_OK)
             lni_configuration->deadline_milliseconds = (uint32_t)value;
-        if (status == LXP_OK && lni_socket == NULL)
+        if (status == LXP_OK &&
+            (lni_socket == NULL || admission_directory == NULL))
             status = LXP_ERR_NON_CANONICAL;
     }
     return status;

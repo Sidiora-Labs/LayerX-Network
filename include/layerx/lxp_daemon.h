@@ -33,7 +33,9 @@ enum {
         LXP_MAX_VALIDITY_PROOF_BYTES + 96 * 1024,
     LXP_DAEMON_LNI_MAX_FRAME_BYTES =
         LXP_DAEMON_FINALITY_REGISTER_MAX_BYTES + 64 * 1024,
-    LXP_DAEMON_LNI_SOCKET_PATH_BYTES = 108
+    LXP_DAEMON_LNI_SOCKET_PATH_BYTES = 108,
+    LXP_DAEMON_LNI_ADMISSION_PATH_BYTES = 4096,
+    LXP_DAEMON_LNI_MAX_OBSERVED_PEERS = 64
 };
 
 typedef enum lxp_daemon_evidence_kind {
@@ -274,6 +276,7 @@ typedef struct lxp_daemon_protocol_response {
 
 typedef struct lxp_daemon_lni_configuration {
     const char *socket_path;
+    const char *admission_directory;
     uint32_t allowed_peer_uid;
     uint32_t allowed_peer_gid;
     uint32_t frame_bytes;
@@ -281,11 +284,38 @@ typedef struct lxp_daemon_lni_configuration {
     uint32_t socket_mode;
 } lxp_daemon_lni_configuration;
 
+typedef struct lxp_daemon_lni_peer_observation {
+    /* A peer is one stable kernel SO_PEERCRED pid/uid/gid triple. */
+    uint32_t pid;
+    uint32_t uid;
+    uint32_t gid;
+    uint64_t latest_connection_generation;
+    uint64_t authentication_refusals;
+    uint32_t active_connections;
+    bool active;
+} lxp_daemon_lni_peer_observation;
+
+typedef struct lxp_daemon_lni_observability {
+    lxp_daemon_lni_peer_observation
+        peers[LXP_DAEMON_LNI_MAX_OBSERVED_PEERS];
+    size_t peer_count;
+    uint64_t evicted_peers;
+    uint64_t evicted_authentication_refusals;
+} lxp_daemon_lni_observability;
+
+typedef struct lxp_daemon_lni_journal_entry {
+    uint8_t activity_id[32];
+    uint64_t global_sequence;
+    uint64_t file_offset;
+    uint32_t activity_length;
+} lxp_daemon_lni_journal_entry;
+
 typedef struct lxp_daemon_lni_server {
     lxp_daemon *daemon;
     lxp_daemon_protocol_owner *owner;
     char socket_path[LXP_DAEMON_LNI_SOCKET_PATH_BYTES];
     char parent_path[LXP_DAEMON_LNI_SOCKET_PATH_BYTES];
+    char admission_directory[LXP_DAEMON_LNI_ADMISSION_PATH_BYTES];
     uint32_t allowed_peer_uid;
     uint32_t allowed_peer_gid;
     uint32_t frame_bytes;
@@ -295,16 +325,38 @@ typedef struct lxp_daemon_lni_server {
     int listener_descriptor;
     int connection_descriptor;
     int parent_descriptor;
+    int admission_parent_descriptor;
     int lifetime_lock_descriptor;
     uint64_t parent_device;
     uint64_t parent_inode;
+    uint64_t admission_parent_device;
+    uint64_t admission_parent_inode;
     uint64_t socket_device;
     uint64_t socket_inode;
     uint64_t lifetime_lock_device;
     uint64_t lifetime_lock_inode;
+    uint64_t journal_device;
+    uint64_t journal_inode;
+    uint64_t journal_end;
+    uint64_t connection_generation;
+    uint64_t expected_admission_sequence;
+    uint8_t expected_admission_activity_id[32];
+    pthread_t expected_admission_submitter;
+    uint64_t evicted_peers;
+    uint64_t evicted_authentication_refusals;
+    lxp_daemon_lni_journal_entry
+        journal_entries[LXP_DAEMON_QUEUE_CAPACITY];
+    lxp_daemon_lni_peer_observation
+        observed_peers[LXP_DAEMON_LNI_MAX_OBSERVED_PEERS];
+    size_t journal_entry_count;
+    size_t observed_peer_count;
+    size_t observed_peer_next;
+    int journal_descriptor;
     lxp_result failure;
     bool started;
     bool stopping;
+    bool admission_sequence_expected;
+    bool journal_bound;
     bool mutex_initialized;
 } lxp_daemon_lni_server;
 
@@ -365,6 +417,9 @@ lxp_result lxp_daemon_lni_serve(
     const lxp_daemon_lni_configuration *configuration);
 lxp_result lxp_daemon_lni_stop(lxp_daemon_lni_server *server);
 lxp_result lxp_daemon_lni_status(lxp_daemon_lni_server *server);
+lxp_result lxp_daemon_lni_observability_snapshot(
+    lxp_daemon_lni_server *server,
+    lxp_daemon_lni_observability *observability);
 lxp_result lxp_daemon_lni_preparation_state(
     lxp_daemon_protocol_owner *owner, const uint8_t *request,
     size_t request_length,
@@ -391,7 +446,15 @@ typedef struct lxp_daemon_configuration {
 typedef struct lxp_daemon_activity {
     uint8_t *bytes;
     size_t length;
+    uint8_t activity_id[32];
+    uint64_t global_sequence;
+    bool durable_admission;
 } lxp_daemon_activity;
+
+typedef lxp_result (*lxp_daemon_admission_persist_fn)(
+    void *context, uint64_t global_sequence,
+    const uint8_t activity_id[32],
+    const uint8_t *activity, size_t activity_length);
 
 typedef lxp_result (*lxp_daemon_apply_fn)(
     void *context, uint64_t global_sequence,
@@ -417,6 +480,8 @@ struct lxp_daemon {
     size_t queue_head;
     size_t queue_count;
     size_t queue_bytes;
+    lxp_daemon_admission_persist_fn persist_admission;
+    void *persist_admission_context;
     uint64_t next_sequence;
     lxp_result failure;
     bool accepting;

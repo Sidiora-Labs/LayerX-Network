@@ -274,9 +274,15 @@ pub fn submit_signed(
             result: refusal.result,
         });
     }
+    let exact_durable_ack = context.interface_version.major == Version::V1_3.major
+        && context.interface_version.minor >= Version::V1_3.minor;
     if response.version.major != context.interface_version.major
         || response.message_tag != SUBMIT_RESPONSE_TAG
         || response.correlation_id != context.correlation_id
+        || (exact_durable_ack
+            && (response.canonical_payload != signed_bytes
+                || response.proof_material.len() != activity_id.len()
+                || response.proof_material != activity_id.as_slice()))
     {
         return Ok(Submission::Unknown(unknown(
             context,

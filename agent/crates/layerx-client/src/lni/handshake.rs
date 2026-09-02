@@ -130,7 +130,10 @@ pub fn perform<T: FrameTransport>(
     previous: Option<&Handshake>,
 ) -> Result<Handshake, HandshakeError> {
     let request = encode_envelope(Envelope {
-        version: config.built_interface_version,
+        version: Version {
+            major: config.built_interface_version.major,
+            minor: 0,
+        },
         message_tag: NODE_INFO_REQUEST_TAG,
         correlation_id: 0,
         canonical_payload: &[],

@@ -145,7 +145,7 @@ TEST_LIBRARY := $(BUILD_DIR)/liblayerx-testing.a
 	test-gateway-send \
 	test-gateway-receive \
 	test-receipt-offline \
-	test-layerxd \
+	test-layerxd test-daemon-lni-admission \
 	test-tools \
 	test-genesis \
 	test-genesis-bootstrap \
@@ -1161,6 +1161,20 @@ $(BUILD_DIR)/tests/test_layerxd: tests/test_layerxd.c $(LAYERXD_SOURCES) \
 test-layerxd: $(BUILD_DIR)/tests/test_layerxd
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_layerxd
 
+$(BUILD_DIR)/tests/test_daemon_lni_admission: \
+		tests/test_daemon_lni_admission.c $(LAYERXD_SOURCES) \
+		cmd/layerxd/lxp_daemon_lni_internal.h $(LIBRARY) \
+		$(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) -Icmd/layerxd $(CFLAGS) \
+		tests/test_daemon_lni_admission.c $(LAYERXD_SOURCES) \
+		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) $(EXTRA_LDFLAGS) \
+		-Wl,--wrap=fdatasync -Wl,--wrap=pwrite -Wl,--wrap=send \
+		-lcrypto -lsqlite3 -pthread -ldl -lm -o $@
+
+test-daemon-lni-admission: $(BUILD_DIR)/tests/test_daemon_lni_admission
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_daemon_lni_admission
+
 TOOL_SOURCES = \
 	cmd/layerxctl/lxp_ctl_main.c \
 	cmd/layerx-verify/lxp_verify_main.c \
@@ -2148,6 +2162,9 @@ agent-test-client-connection:
 agent-test-client-submit:
 	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-client --test submit
 	$(AGENT_CARGO) run --manifest-path agent/tools/boundary-check/Cargo.toml --locked --quiet -- agent
+
+agent-test-client-submit-focused:
+	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-client --test submit
 
 agent-test-client-receipt:
 	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-client --test receipt

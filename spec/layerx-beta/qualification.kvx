@@ -136,12 +136,12 @@ assumption = "The task was marked done with --force solely to override the symbo
 severity = "note"
 
 [observation.0.7]
-task = "0"
-file = "agent/crates/layerx-client/tests/lni_schema.rs"
+task = "2.1"
+file = "agent/schema/lni/README.md"
 symbol = "NODE_BOUNDARY"
-observed = "The layerx-client integration test lni_schema.rs embeds spec/layerx-agent-interface/docs/node-boundary.md with include_str!, but commit cc5191b5 archived that document to spec/.beta/layerx-agent-interface/docs/node-boundary.md, so cargo test -p layerx-client and any aggregate agent-workspace test run (make agent-test) fails at compile time with: couldn't read crates/layerx-client/tests/../../../../spec/layerx-agent-interface/docs/node-boundary.md: No such file or directory. Found during the shared cargo pre-warm of the agent workspace (cargo test --no-run --workspace, exit 101)."
-assumption = "This is a pre-existing failure outside every beta task's touches; no beta task edits lni_schema.rs or the archived document. It is recorded here rather than repaired. Per-crate targets that the beta tasks verify (make agent-test-agentd-*) compile only layerx-agentd tests and are not affected, but any aggregate agent-workspace test gate in wave 5 will fail on this until the include path is pointed at the archived document or the document is restored."
-severity = "blocker"
+observed = "Task 2.1 resolves the stale NODE_BOUNDARY include by adding the current active LNI contract at agent/schema/lni/README.md and pointing lni_schema.rs to it. The active document indexes every v1 message and records the additive v1.3 authenticated_durable_submit contract; no archived spec/.beta document is restored or edited."
+assumption = "agent-test-lni-schema is now part of task 2.1's verify_cmd, so the source resolution and message coverage must compile and pass during task qualification before this resolution is claimed as tested."
+severity = "note"
 [observation.1.2.1]
 task = "1.2"
 file = "platform/cli/tests/install-journey.sh"
@@ -181,3 +181,27 @@ symbol = "cargo clippy --no-deps -p layerx-platform-cli --all-targets"
 observed = "Under the workspace deny-level clippy lints, the CLI crate reports 27 errors in files task 1.2 does not touch (a2a.rs, programs.rs, workspace.rs, credential.rs, http.rs, install/a2a.rs, install/mcp.rs, install/mod.rs, tests/commands.rs, tests/workspace.rs, fn program in main.rs, and the pre-existing 104-line payment test at tests/emulator.rs:115), and the emulator library reports 28 errors that are identical when platform/emulator/src/main.rs is swapped to its main revision at cc5191b5. The task 1.2 code (cli/src/emulator.rs, the Provision and Use wiring in cli/src/main.rs, cli/tests/emulator.rs, the GET /v1/sequencer route) lints clean once its one single_match_else finding was rewritten."
 assumption = "platform-lint cannot pass on main for these crates today; the pre-existing findings belong to the tasks that own those files and are left intact under task 1.2 rather than silenced or refactored out of scope."
 severity = "note"
+
+[observation.2.1.1]
+task = "2.1"
+file = "cmd/layerxd/lxp_daemon_process.c"
+symbol = "apply_canonical_activity apply_canonical_batch executor_run admission_journal_recover"
+observed = "The durable admission journal preserves an acknowledged activity when downstream application returns a failure before canonical publication, and restart replays that preserved record. The existing executor has only success or fail-stop outcomes, while apply_canonical_activity and apply_canonical_batch can return state-dependent pre-publication errors after admission (for example an identity becoming frozen or a signing key becoming invalid behind earlier queued state changes). No existing canonical rejection transition advances the Programs feed frontier for such a record, so repeated restart can repeatedly encounter the same preserved head. Dropping it, assigning a canonical sequence at admission, or fabricating a rejection receipt would change sequencer and consensus semantics beyond task 2.1."
+assumption = "Task 2.1 remains fail-closed and preserves the acknowledged bytes. A follow-up protocol task must define and qualify a canonical terminal rejection transition, including receipt identity, sequence consumption, WAL publication and retry semantics, before the node may retire this class of record without a successful canonical apply."
+severity = "blocker"
+
+[observation.2.1.2]
+task = "2.1"
+file = "agent/crates/layerx-sdk/src/program_http.rs"
+symbol = "agent-test-client-submit boundary-check"
+observed = "The unchanged shared agent-test-client-submit target runs the changed layerx-client submit integration test successfully (5 passed) and then fails its strict repository-wide boundary-check with ambient-nondeterminism at program_http.rs. The same exact cargo run --manifest-path agent/tools/boundary-check/Cargo.toml --locked --quiet -- agent command exits 1 with the same finding from the root checkout at the task's qualification baseline; both program_http.rs and the checker are byte-unchanged from task base 6eef3d06."
+assumption = "Task 2.1 leaves the strict shared target and the out-of-scope SDK source unchanged. Its verify_cmd uses agent-test-client-submit-focused to execute only the task-owned submit integration suite; the repository-wide ambient-clock violation remains visible and must be repaired by the owner of program_http.rs before agent-test-client-submit can pass."
+severity = "blocker"
+
+[observation.2.1.3]
+task = "2.1"
+file = ".codegraph"
+symbol = "cg guard --strict cg review"
+observed = "In the isolated task worktree, cg guard --strict exited 0 but reported 'no task in progress - nothing to measure against', so no scope pass was claimed, and bounded cg review timed out silently after 120.45 seconds. After integration under active task 2.1, cg sync completed in 2.76 seconds and the exact Git diff remained limited to the declared task paths plus the owner's separate spec/workflow.kvx edit. Codify status still compared the tree to snapshot a89579585fb7 from 2026-08-28 rather than Git base 6eef3d06, so cg changes reported 256 historical files and cg guard --strict reported 639 out-of-scope paths from already-committed work before timing out at 120.05 seconds. Root cg review again produced no output and timed out at 120.08 seconds."
+assumption = "No guard or review pass is claimed. The stale Codify snapshot and non-terminating review are tool-state blockers rather than evidence against the task-scoped Git diff; the exact verify command, render check, Git diff-to-touch reconciliation and two independent source reviews remain the task evidence. Task completion may use the owner's authorized force override only after those substantive gates pass, while the Codify snapshot is repaired separately without rewriting committed project history."
+severity = "blocker"

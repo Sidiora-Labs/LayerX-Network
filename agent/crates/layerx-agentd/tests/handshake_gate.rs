@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::Read;
 use std::os::unix::fs::{symlink, PermissionsExt};
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
@@ -183,6 +184,7 @@ fn serve_handshake(path: &PathBuf, info: NodeInfo) -> thread::JoinHandle<()> {
             .unwrap_or_else(|error| panic!("read handshake request: {error:?}"));
         let request = decode_envelope(&request)
             .unwrap_or_else(|error| panic!("decode handshake request: {error:?}"));
+        assert_eq!(request.version, Version { major: 1, minor: 0 });
         assert_eq!(request.message_tag, 1);
         assert_eq!(request.correlation_id, 0);
         assert!(request.canonical_payload.is_empty());
@@ -199,6 +201,48 @@ fn serve_handshake(path: &PathBuf, info: NodeInfo) -> thread::JoinHandle<()> {
         .unwrap_or_else(|error| panic!("encode handshake response: {error:?}"));
         write_frame(&mut stream, &response, 1_048_576)
             .unwrap_or_else(|error| panic!("write handshake response: {error:?}"));
+    })
+}
+
+fn serve_strict_legacy_handshake(path: &PathBuf, info: NodeInfo) -> thread::JoinHandle<()> {
+    let listener =
+        UnixListener::bind(path).unwrap_or_else(|error| panic!("bind handshake socket: {error}"));
+    thread::spawn(move || {
+        let (mut stream, _) = listener
+            .accept()
+            .unwrap_or_else(|error| panic!("accept handshake: {error}"));
+        let request = read_frame(&mut stream, 1_048_576)
+            .unwrap_or_else(|error| panic!("read handshake request: {error:?}"));
+        let request = decode_envelope(&request)
+            .unwrap_or_else(|error| panic!("decode handshake request: {error:?}"));
+        assert_eq!(request.version, Version::V1_0);
+        assert_eq!(request.message_tag, 1);
+        let payload = encode_node_info(&info)
+            .unwrap_or_else(|error| panic!("encode node information: {error:?}"));
+        let response = encode_envelope(Envelope {
+            version: info.interface_version,
+            message_tag: 2,
+            correlation_id: 0,
+            canonical_payload: &payload,
+            proof_material: &[],
+        })
+        .unwrap_or_else(|error| panic!("encode handshake response: {error:?}"));
+        write_frame(&mut stream, &response, 1_048_576)
+            .unwrap_or_else(|error| panic!("write handshake response: {error:?}"));
+        stream
+            .set_read_timeout(Some(Duration::from_millis(250)))
+            .unwrap_or_else(|error| panic!("legacy read timeout: {error}"));
+        let mut observed = [0_u8; 1];
+        match stream.read(&mut observed) {
+            Ok(0) => {}
+            Ok(_) => panic!("legacy boundary received a post-handshake write"),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) => {}
+            Err(error) => panic!("legacy boundary observation failed: {error}"),
+        }
     })
 }
 
@@ -220,23 +264,34 @@ fn startup_is_not_ready_until_real_framed_handshake_reports_the_full_intersectio
     let path = socket_path("startup");
     let server = serve_handshake(
         &path,
-        node(0, &["future_capability", "node_info", "submit"]),
+        node(
+            3,
+            &[
+                "authenticated_durable_submit",
+                "future_capability",
+                "node_info",
+                "submit",
+            ],
+        ),
     );
     let mut transport = connect(&path);
     let status = handshake_gate(&mut gate, &mut transport)
         .unwrap_or_else(|error| panic!("handshake gate: {error:?}"));
-    assert_eq!(status.interface_version, Version::V1_0);
+    assert_eq!(status.interface_version, Version::V1_3);
     assert_eq!(
         status.protocol_version,
         layerx_wire::limits::PROTOCOL_VERSION
     );
     assert_eq!(status.network_id, 42);
     assert_eq!(status.node_role, NodeRole::Sequencer);
-    assert_eq!(status.chain_head_sequence, 900);
+    assert_eq!(status.chain_head_sequence, 903);
     assert_eq!(status.latest_sealed_batch, 44);
     assert_eq!(status.latest_finalised_checkpoint, [7; 32]);
     assert_eq!(status.authorised_sequencer_key, [8; 32]);
     assert!(status.available_capabilities.contains(&Capability::Submit));
+    assert!(status
+        .available_capabilities
+        .contains(&Capability::AuthenticatedDurableSubmit));
     assert!(status
         .missing_capabilities
         .contains(&Capability::AvailabilityFetch));
@@ -254,10 +309,38 @@ fn startup_is_not_ready_until_real_framed_handshake_reports_the_full_intersectio
 }
 
 #[test]
+fn legacy_submit_capability_does_not_open_beta_write_gate() {
+    let mut gate = Gate::new(&config()).unwrap_or_else(|error| panic!("startup gate: {error:?}"));
+    let path = socket_path("legacy-submit");
+    let server = serve_strict_legacy_handshake(&path, node(2, &["node_info", "submit"]));
+    let mut transport = connect(&path);
+    let status = handshake_gate(&mut gate, &mut transport)
+        .unwrap_or_else(|error| panic!("handshake gate: {error:?}"));
+    assert!(!status.writes_ready);
+    assert_eq!(status.interface_version, Version::V1_2);
+    assert!(status
+        .missing_capabilities
+        .contains(&Capability::AuthenticatedDurableSubmit));
+    assert_eq!(
+        gate.guard_write(|| 1),
+        Err(WriteGateError::MissingCapability(
+            Capability::AuthenticatedDurableSubmit
+        ))
+    );
+    server
+        .join()
+        .unwrap_or_else(|_| panic!("handshake server panicked"));
+    let _ = fs::remove_file(path);
+}
+
+#[test]
 fn reconnect_repeats_handshake_for_node_upgrade_and_disappearing_capability() {
     let mut gate = Gate::new(&config()).unwrap_or_else(|error| panic!("startup gate: {error:?}"));
     let first_path = socket_path("reconnect-first");
-    let first_server = serve_handshake(&first_path, node(0, &["node_info", "submit"]));
+    let first_server = serve_handshake(
+        &first_path,
+        node(3, &["authenticated_durable_submit", "node_info", "submit"]),
+    );
     let mut first_transport = connect(&first_path);
     assert!(handshake_gate(&mut gate, &mut first_transport).is_ok());
     first_server
@@ -322,7 +405,7 @@ fn network_protocol_and_major_upgrade_mismatches_refuse_operation() {
                 value
             },
             HandshakeError::InterfaceIncompatible {
-                built: Version::V1_0,
+                built: Version::V1_3,
                 peer: Version { major: 2, minor: 0 },
             },
         ),

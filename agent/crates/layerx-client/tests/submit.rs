@@ -7,7 +7,9 @@ use std::thread;
 use std::time::Duration;
 
 use ed25519_dalek::{Signer as _, SigningKey};
-use layerx_client::lni::framing::read_frame;
+use layerx_client::client::{Client, ClientConfig, ReconnectPolicy};
+use layerx_client::lni::framing::{read_frame, write_frame};
+use layerx_client::lni::handshake::{encode_node_info, HandshakeConfig, NodeInfo, NodeRole};
 use layerx_client::lni::schema::{decode_envelope, encode_envelope, Envelope, Version};
 use layerx_client::lni::transport::{ConnectionGate, Limits, Uds};
 use layerx_client::submit::{
@@ -120,8 +122,12 @@ fn limits() -> Limits {
 }
 
 fn context(public_key: [u8; 32], attempt: u32) -> SubmissionContext {
+    context_at(Version::V1_0, public_key, attempt)
+}
+
+fn context_at(interface_version: Version, public_key: [u8; 32], attempt: u32) -> SubmissionContext {
     SubmissionContext {
-        interface_version: Version::V1_0,
+        interface_version,
         protocol_version: PROTOCOL_VERSION,
         network_id: 77,
         correlation_id: 42,
@@ -132,6 +138,12 @@ fn context(public_key: [u8; 32], attempt: u32) -> SubmissionContext {
 
 #[test]
 fn retries_and_reconnects_preserve_exact_signed_bytes_under_fragmentation() {
+    let (signed, public_key) = signed_activity();
+    let response_bytes = signed.clone();
+    let decoded = layerx_wire::activity::decode_signed(&signed, &registry())
+        .unwrap_or_else(|error| panic!("activity decode failed: {error:?}"));
+    let response_id = layerx_wire::hash::activity_id(&decoded)
+        .unwrap_or_else(|error| panic!("activity id failed: {error:?}"));
     let socket = SocketPath::new("exact");
     let listener = match UnixListener::bind(&socket.0) {
         Ok(listener) => listener,
@@ -159,8 +171,8 @@ fn retries_and_reconnects_preserve_exact_signed_bytes_under_fragmentation() {
                     version: Version::V1_0,
                     message_tag: 4,
                     correlation_id: envelope.correlation_id,
-                    canonical_payload: &[0xac],
-                    proof_material: &[0xed; 32],
+                    canonical_payload: &response_bytes,
+                    proof_material: &response_id,
                 }) {
                     Ok(response) => response,
                     Err(error) => panic!("response encoding failed: {error:?}"),
@@ -181,7 +193,6 @@ fn retries_and_reconnects_preserve_exact_signed_bytes_under_fragmentation() {
         observed
     });
 
-    let (signed, public_key) = signed_activity();
     let gate = ConnectionGate::new(1);
     for attempt in 1..=3 {
         let mut transport = match Uds::connect(&socket.0, &gate, limits()) {
@@ -191,7 +202,7 @@ fn retries_and_reconnects_preserve_exact_signed_bytes_under_fragmentation() {
         let outcome = match submit_signed(
             &mut transport,
             &registry(),
-            context(public_key, attempt),
+            context_at(Version::V1_3, public_key, attempt),
             &signed,
         ) {
             Ok(outcome) => outcome,
@@ -208,14 +219,212 @@ fn retries_and_reconnects_preserve_exact_signed_bytes_under_fragmentation() {
             let Submission::Acknowledged(acknowledgement) = outcome else {
                 panic!("complete response was not acknowledged");
             };
-            assert_eq!(acknowledgement.admission_bytes(), &[0xac]);
-            assert_eq!(acknowledgement.core_evidence(), &[0xed; 32]);
+            assert_eq!(acknowledgement.admission_bytes(), signed);
+            assert_eq!(acknowledgement.core_evidence(), response_id);
         }
     }
     let Ok(observed) = server.join() else {
         panic!("submission server panicked");
     };
     assert_eq!(observed, vec![signed.clone(), signed.clone(), signed]);
+}
+
+#[test]
+fn mismatched_submit_acknowledgement_is_indeterminate() {
+    let (signed, public_key) = signed_activity();
+    let response_bytes = signed.clone();
+    let decoded = layerx_wire::activity::decode_signed(&signed, &registry())
+        .unwrap_or_else(|error| panic!("activity decode failed: {error:?}"));
+    let response_id = layerx_wire::hash::activity_id(&decoded)
+        .unwrap_or_else(|error| panic!("activity id failed: {error:?}"));
+    let socket = SocketPath::new("mismatched-ack");
+    let listener =
+        UnixListener::bind(&socket.0).unwrap_or_else(|error| panic!("listener failed: {error}"));
+    let server = thread::spawn(move || {
+        for mismatch in 0..2 {
+            let (mut stream, _) = listener
+                .accept()
+                .unwrap_or_else(|error| panic!("accept failed: {error}"));
+            let request = read_frame(&mut stream, 1024 * 1024)
+                .unwrap_or_else(|error| panic!("request frame failed: {error:?}"));
+            let request = decode_envelope(&request)
+                .unwrap_or_else(|error| panic!("request envelope failed: {error:?}"));
+            let wrong_id = [0xee; 32];
+            let response = encode_envelope(Envelope {
+                version: Version::V1_3,
+                message_tag: 4,
+                correlation_id: request.correlation_id,
+                canonical_payload: if mismatch == 0 {
+                    &[0xac]
+                } else {
+                    &response_bytes
+                },
+                proof_material: if mismatch == 0 {
+                    &response_id
+                } else {
+                    &wrong_id
+                },
+            })
+            .unwrap_or_else(|error| panic!("response encoding failed: {error:?}"));
+            let mut framed = u32::try_from(response.len())
+                .unwrap_or_else(|error| panic!("response length failed: {error}"))
+                .to_be_bytes()
+                .to_vec();
+            framed.extend_from_slice(&response);
+            stream
+                .write_all(&framed)
+                .unwrap_or_else(|error| panic!("response failed: {error}"));
+        }
+    });
+    let gate = ConnectionGate::new(1);
+    for attempt in 1..=2 {
+        let mut transport = Uds::connect(&socket.0, &gate, limits())
+            .unwrap_or_else(|error| panic!("connection failed: {error:?}"));
+        let outcome = submit_signed(
+            &mut transport,
+            &registry(),
+            context_at(Version::V1_3, public_key, attempt),
+            &signed,
+        )
+        .unwrap_or_else(|error| panic!("submission failed: {error:?}"));
+        let Submission::Unknown(unknown) = outcome else {
+            panic!("mismatched acknowledgement was accepted");
+        };
+        assert_eq!(unknown.cause(), UnknownCause::IndeterminateResponse);
+    }
+    server
+        .join()
+        .unwrap_or_else(|_| panic!("submission server panicked"));
+}
+
+#[test]
+fn legacy_submit_acknowledgement_preserves_broad_v1_evidence() {
+    let (signed, public_key) = signed_activity();
+    let socket = SocketPath::new("legacy-ack");
+    let listener =
+        UnixListener::bind(&socket.0).unwrap_or_else(|error| panic!("listener failed: {error}"));
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener
+            .accept()
+            .unwrap_or_else(|error| panic!("accept failed: {error}"));
+        let request = read_frame(&mut stream, 1024 * 1024)
+            .unwrap_or_else(|error| panic!("request frame failed: {error:?}"));
+        let request = decode_envelope(&request)
+            .unwrap_or_else(|error| panic!("request envelope failed: {error:?}"));
+        let response = encode_envelope(Envelope {
+            version: Version::V1_0,
+            message_tag: 4,
+            correlation_id: request.correlation_id,
+            canonical_payload: &[0xac],
+            proof_material: &[0xed],
+        })
+        .unwrap_or_else(|error| panic!("response encoding failed: {error:?}"));
+        let mut framed = u32::try_from(response.len())
+            .unwrap_or_else(|error| panic!("response length failed: {error}"))
+            .to_be_bytes()
+            .to_vec();
+        framed.extend_from_slice(&response);
+        stream
+            .write_all(&framed)
+            .unwrap_or_else(|error| panic!("response failed: {error}"));
+    });
+    let gate = ConnectionGate::new(1);
+    let mut transport = Uds::connect(&socket.0, &gate, limits())
+        .unwrap_or_else(|error| panic!("connection failed: {error:?}"));
+    let outcome = submit_signed(&mut transport, &registry(), context(public_key, 1), &signed)
+        .unwrap_or_else(|error| panic!("legacy submission failed: {error:?}"));
+    let Submission::Acknowledged(acknowledgement) = outcome else {
+        panic!("legacy acknowledgement was not preserved");
+    };
+    assert_eq!(acknowledgement.admission_bytes(), [0xac]);
+    assert_eq!(acknowledgement.core_evidence(), [0xed]);
+    server
+        .join()
+        .unwrap_or_else(|_| panic!("submission server panicked"));
+}
+
+#[test]
+fn high_level_client_refuses_legacy_submit_without_durable_capability() {
+    let socket = SocketPath::new("legacy-client-gate");
+    let listener =
+        UnixListener::bind(&socket.0).unwrap_or_else(|error| panic!("listener failed: {error}"));
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener
+            .accept()
+            .unwrap_or_else(|error| panic!("accept failed: {error}"));
+        let request = read_frame(&mut stream, 1024 * 1024)
+            .unwrap_or_else(|error| panic!("request frame failed: {error:?}"));
+        let request = decode_envelope(&request)
+            .unwrap_or_else(|error| panic!("request envelope failed: {error:?}"));
+        assert_eq!(request.version, Version::V1_0);
+        assert_eq!(request.message_tag, 1);
+        let node = NodeInfo {
+            interface_version: Version::V1_2,
+            protocol_version: PROTOCOL_VERSION,
+            network_id: 77,
+            role: NodeRole::Sequencer,
+            chain_head_sequence: 9,
+            latest_sealed_batch: 8,
+            latest_finalised_checkpoint: [7; 32],
+            authorised_sequencer_key: [6; 32],
+            advertised_capabilities: vec!["node_info".to_owned(), "submit".to_owned()],
+        };
+        let payload = encode_node_info(&node)
+            .unwrap_or_else(|error| panic!("node info encoding failed: {error:?}"));
+        let response = encode_envelope(Envelope {
+            version: Version::V1_2,
+            message_tag: 2,
+            correlation_id: 0,
+            canonical_payload: &payload,
+            proof_material: &[],
+        })
+        .unwrap_or_else(|error| panic!("response encoding failed: {error:?}"));
+        write_frame(&mut stream, &response, 1024 * 1024)
+            .unwrap_or_else(|error| panic!("response failed: {error:?}"));
+        stream
+            .set_read_timeout(Some(Duration::from_millis(250)))
+            .unwrap_or_else(|error| panic!("read timeout failed: {error}"));
+        let mut byte = [0_u8; 1];
+        match stream.read(&mut byte) {
+            Ok(0) => false,
+            Ok(_) => true,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                false
+            }
+            Err(error) => panic!("submit observation failed: {error}"),
+        }
+    });
+    let mut client = Client::connect(ClientConfig {
+        endpoint: socket.0.clone(),
+        handshake: HandshakeConfig {
+            built_interface_version: Version::V1_3,
+            expected_protocol_version: PROTOCOL_VERSION,
+            expected_network_id: 77,
+        },
+        limits: limits(),
+        reconnect: ReconnectPolicy {
+            maximum_attempts: 1,
+            base_delay: Duration::from_millis(1),
+            maximum_delay: Duration::from_millis(1),
+            jitter_percent: 0,
+        },
+    })
+    .unwrap_or_else(|error| panic!("client connection failed: {error:?}"));
+    let (signed, public_key) = signed_activity();
+    assert!(matches!(
+        client.submit_signed(&registry(), public_key, 42, 1, &signed),
+        Err(SubmitError::UnavailableCapability)
+    ));
+    drop(client);
+    let observed_submit = server
+        .join()
+        .unwrap_or_else(|_| panic!("legacy server panicked"));
+    assert!(!observed_submit);
 }
 
 #[test]

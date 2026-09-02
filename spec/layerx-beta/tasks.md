@@ -59,7 +59,7 @@ Two points need owner confirmation before the corresponding task starts, and one
 ## Wave 2 - Admission, Revocation, Evidence Truth and Recovery Contracts
 
 - [ ] 2. Close the authorization and truthfulness seams on the smallest signed mutation path
-  - [ ] 2.1 Authenticate LNI activities before queue insertion
+  - [x] 2.1 Authenticate LNI activities before queue insertion
     - In the native LNI submit handler, after structural validation and before lxp_daemon_submit, verify the activity signature and signing authority against current state through the existing native verifier, and return a typed authentication refusal without touching the queue on failure.
     - Move the acknowledgement so it is sent only after verification and durable queue insertion succeed, and update the LNI contract text and the daemon documentation to define admission as authenticated-and-queued.
     - Leave validate_canonical_items in the batch and WAL path verifying signatures exactly as before; add nothing that lets a pre-verified activity skip it.

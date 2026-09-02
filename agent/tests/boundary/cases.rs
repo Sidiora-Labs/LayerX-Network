@@ -11,6 +11,7 @@ use layerx_client::lni::preparation::{preparation_state, PreparationStateContext
 use layerx_client::lni::schema::{encode_envelope, Capability, Envelope, Version};
 use layerx_client::lni::transport::{ConnectionGate, FrameTransport, Limits, Uds};
 use layerx_proof::merkle::leaf_hash;
+use layerx_types::error::LayerError;
 use layerx_types::ids::Did;
 use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
 use layerx_wire::activity::decode_signed;
@@ -107,7 +108,7 @@ pub(crate) fn connect(socket: &Path) -> Result<Uds, String> {
 
 fn config() -> HandshakeConfig {
     HandshakeConfig {
-        built_interface_version: Version::V1_1,
+        built_interface_version: Version::V1_3,
         expected_protocol_version: layerx_wire::limits::PROTOCOL_VERSION,
         expected_network_id: 77,
     }
@@ -120,7 +121,7 @@ fn request(
     payload: &[u8],
 ) -> Result<(), String> {
     let encoded = encode_envelope(Envelope {
-        version: Version::V1_1,
+        version: Version::V1_3,
         message_tag: tag,
         correlation_id,
         canonical_payload: payload,
@@ -189,7 +190,7 @@ fn decode_response(bytes: &[u8]) -> Result<Response, String> {
 }
 
 fn expect(response: &Response, tag: u16, correlation_id: u64) -> Result<(), String> {
-    if response.version != Version::V1_1
+    if response.version != Version::V1_3
         || response.tag != tag
         || response.correlation_id != correlation_id
     {
@@ -244,6 +245,22 @@ fn exercise_live_messages(
             .capabilities()
             .require(capability)
             .map_err(|error| format!("real node capability gap: {error:?}"))?;
+    }
+    if handshake.capabilities().contains(Capability::Submit)
+        && handshake
+            .capabilities()
+            .contains(Capability::AuthenticatedDurableSubmit)
+    {
+        return Err("legacy local node opened the authenticated durable write gate".to_owned());
+    }
+    if handshake
+        .capabilities()
+        .require(Capability::AuthenticatedDurableSubmit)
+        != Err(LayerError::UnavailableCapability {
+            capability: "authenticated_durable_submit".to_owned(),
+        })
+    {
+        return Err("durable write downgrade was not typed unavailable".to_owned());
     }
 
     let mut covered = BTreeSet::from([1_u16, 2_u16]);
@@ -386,7 +403,7 @@ fn exercise_live_messages(
         transport,
         &actor,
         PreparationStateContext {
-            interface_version: Version::V1_1,
+            interface_version: Version::V1_3,
             expected_network_id: 77,
             minimum_observed_head: handshake.node().chain_head_sequence,
             correlation_id: 27,

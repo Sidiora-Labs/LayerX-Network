@@ -281,7 +281,12 @@ impl Client {
         attempt: u32,
         signed_bytes: &[u8],
     ) -> Result<Submission, SubmitError> {
-        if !self.handshake.capabilities().contains(Capability::Submit) {
+        if !self.handshake.capabilities().contains(Capability::Submit)
+            || !self
+                .handshake
+                .capabilities()
+                .contains(Capability::AuthenticatedDurableSubmit)
+        {
             return Err(SubmitError::UnavailableCapability);
         }
         let context = SubmissionContext {
