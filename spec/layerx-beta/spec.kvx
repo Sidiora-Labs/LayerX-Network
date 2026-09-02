@@ -308,7 +308,7 @@ reqs = ["4.1","4.2","4.3","4.4","4.5","4.6"]
 
 [task.2.3]
 title = "Run the evidence verifier before any verified label"
-status = "pending"
+status = "in_progress"
 wave = 2
 requires = ["1.1"]
 do_1 = "In the authenticated evidence read, after decoding the cached bundle, call EvidenceBundle::verify with the expected activity digest, the requesting principal, the settlement domain and the receipt authority, and map its result to receipt-verified, unverified with the typed reason, or unavailable."
@@ -316,7 +316,7 @@ do_2 = "Make the verification-status type constructible only from the verifier's
 do_3 = "Add activity and export tests for an altered row, a foreign-principal row, a foreign-settlement-domain row and a wrong-authority row each returning unverified with the correct reason, and a genuine row returning verified."
 verify_cmd = "make human-test-activity"
 symbols = ["evidence_get","EvidenceBundle::verify","VerificationStatus"]
-touches = ["human/crates/layerx-human-service/src/server/production_reads.rs","human/crates/layerx-human-service/src/activity/export.rs","human/crates/layerx-human-service/tests/activity.rs","human/crates/layerx-human-service/tests/export.rs"]
+touches = ["human/crates/layerx-human-service/src/server/production_reads.rs","human/crates/layerx-human-service/src/activity/export.rs","human/crates/layerx-human-service/tests/activity.rs","human/crates/layerx-human-service/tests/export.rs","human/crates/layerx-human-service/src/activity/mod.rs","human/crates/layerx-human-service/src/server/production_components.rs","human/crates/layerx-human-service/src/server/stream_journal.rs","human/crates/layerx-human-service/Cargo.toml","Makefile"]
 reqs = ["5.1","5.2","5.3","5.4","5.5"]
 
 [task.2.4]

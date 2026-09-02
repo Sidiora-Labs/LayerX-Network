@@ -5,7 +5,8 @@ mod export;
 
 pub use detail::EntryDetail;
 pub use export::{
-    BundleReport, EvidenceBundle, EvidenceEntry, EvidenceExport, ExportError, StatementExport,
+    verification_status, BundleReport, EvidenceBundle, EvidenceEntry, EvidenceExport, ExportError,
+    ReceiptAuthority, StatementExport, UnverifiedReason, VerificationStatus, VerifyError,
 };
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -1263,7 +1264,7 @@ fn validate_agent(agent: Option<&str>) -> Result<(), FeedError> {
     }
 }
 
-fn stable_entry_id(value: &str) -> Result<ActivityEntryId, FeedError> {
+pub(crate) fn stable_entry_id(value: &str) -> Result<ActivityEntryId, FeedError> {
     let digest = source_id(&[ENTRY_DOMAIN, value.as_bytes()]);
     Ok(ActivityEntryId::new(format!("act_{}", hex(digest)))?)
 }

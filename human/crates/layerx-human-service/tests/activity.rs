@@ -2,6 +2,7 @@
 mod support;
 
 use std::collections::BTreeSet;
+use std::fmt::Write as _;
 use std::fs;
 
 use ed25519_dalek::{Signer as _, SigningKey};
@@ -25,13 +26,15 @@ use layerx_agentd::events::{
 };
 use layerx_agentd::store::{Store as AgentStore, TenantId};
 use layerx_human_service::activity::{
-    ActivityKind, ActivityStatus, AgentActivity, DepositStage, Feed, FeedCursor, FeedError,
-    FilterDraft, PageRequest, PendingStatus, VerifiedStatus, WithdrawalStage,
+    verification_status, ActivityKind, ActivityStatus, AgentActivity, DepositStage, EvidenceBundle,
+    Feed, FeedCursor, FeedError, FilterDraft, PageRequest, PendingStatus, ReceiptAuthority,
+    UnverifiedReason, VerifiedStatus, VerifyError, WithdrawalStage,
 };
 use layerx_human_service::audit::{AuditChain, AuditEvent, SecurityChangeKind, StepUpEvidence};
 use layerx_human_service::notify::ActivityEntryId;
-use layerx_human_service::store::PrincipalStore;
+use layerx_human_service::store::{PrincipalStore, RowKey, Table};
 use layerx_human_service::trace::TraceId;
+use layerx_proof::checkpoint::SettlementDomain;
 use layerx_proof::receipt::{verify as verify_receipt, AuthorizedBatch};
 use layerx_types::result::ResultCode;
 use layerx_types::verify::VerificationLevel;
@@ -176,6 +179,11 @@ fn encode_receipt(fields: &ReceiptFields, signature: Option<[u8; 64]>) -> Vec<u8
 }
 
 fn real_verified_receipt() -> ([u8; 32], Vec<u8>) {
+    let (reference, canonical, _) = real_receipt_material();
+    (reference, canonical)
+}
+
+fn real_receipt_material() -> ([u8; 32], Vec<u8>, AuthorizedBatch) {
     let fields = ReceiptFields {
         activity_id: [0x11; 32],
         previous_state_root: [0x12; 32],
@@ -200,7 +208,56 @@ fn real_verified_receipt() -> ([u8; 32], Vec<u8>) {
     let verified = verify_receipt(&canonical, &authorised)
         .unwrap_or_else(|error| panic!("real receipt verification: {error:?}"));
     assert_eq!(verified.level(), VerificationLevel::SEQUENCER_SIGNED);
-    (Sha256::digest(verified.canonical_bytes()).into(), canonical)
+    (
+        Sha256::digest(verified.canonical_bytes()).into(),
+        canonical,
+        authorised,
+    )
+}
+
+fn digest_hex(digest: &[u8]) -> String {
+    let mut out = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        let _ = write!(out, "{byte:02x}");
+    }
+    out
+}
+
+fn evidence_row_key(digest: [u8; 32]) -> RowKey {
+    text(
+        RowKey::new(format!("activity-evidence-{}", digest_hex(&digest))),
+        "evidence row key",
+    )
+}
+
+fn unique_position(bytes: &[u8], needle: &[u8]) -> usize {
+    let positions = bytes
+        .windows(needle.len())
+        .enumerate()
+        .filter(|(_, window)| *window == needle)
+        .map(|(position, _)| position)
+        .collect::<Vec<_>>();
+    assert_eq!(positions.len(), 1, "expected exactly one occurrence");
+    positions[0]
+}
+
+fn cache_row(
+    scope: &mut layerx_human_service::store::PrincipalScope<'_>,
+    bytes: Vec<u8>,
+    written_at: u64,
+) -> ([u8; 32], EvidenceBundle) {
+    let digest: [u8; 32] = Sha256::digest(&bytes).into();
+    text(
+        scope.put(Table::Cache, evidence_row_key(digest), written_at, bytes),
+        "evidence cache row",
+    );
+    let row = scope
+        .get(Table::Cache, &evidence_row_key(digest))
+        .unwrap_or_else(|| panic!("evidence cache row missing"));
+    (
+        digest,
+        text(EvidenceBundle::decode(row.bytes()), "cached row decode"),
+    )
 }
 
 fn delivered_events(root: &std::path::Path) -> Vec<EventDelivery> {
@@ -634,5 +691,211 @@ fn completion_is_unrepresentable_without_verified_receipt_evidence() {
     )
     .entries()
     .is_empty());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn cached_receipt_rows_are_labelled_only_by_the_verifier() {
+    let (reference, canonical, authorised) = real_receipt_material();
+    let root = support::directory("activity-receipt-rows");
+    let map = support::tenancy(&[("alice", "tenant-a"), ("bob", "tenant-b")]);
+    let (mut store, _) = support::install_and_open(&root, &map, support::retention_uniform(100));
+    let alice = support::principal("alice");
+    let bob = support::principal("bob");
+    let domain = SettlementDomain::new(31_337, [0x55; 20]);
+    let foreign_domain = SettlementDomain::new(1, [0x66; 20]);
+    let entry_id = id("act_receiptrow1");
+    let feed = text(Feed::new(5), "feed");
+    let other_key = SigningKey::from_bytes(&[0x17; 32])
+        .verifying_key()
+        .to_bytes();
+    let wrong_batch =
+        AuthorizedBatch::new([0x14; 32], [0x15; 32], [0x12; 32], [0x13; 32], other_key);
+    let mut authority = ReceiptAuthority::default();
+    authority.insert(digest_hex(&reference), authorised);
+    let mut scope = text(store.principal(&alice), "alice scope");
+
+    let genuine = text(
+        EvidenceBundle::receipt(
+            entry_id.clone(),
+            canonical.clone(),
+            authorised,
+            scope.principal(),
+            domain,
+        ),
+        "genuine receipt bundle",
+    );
+    let genuine_bytes = text(genuine.encode(), "genuine bundle bytes");
+    let (digest, cached) = cache_row(&mut scope, genuine_bytes.clone(), 1);
+    assert_eq!(digest, text(genuine.digest(), "genuine digest"));
+    assert_eq!(cached.settlement_domain(), domain);
+    let status = verification_status(cached.verify(digest, scope.principal(), domain, &authority));
+    assert!(status.is_receipt_verified());
+    assert_eq!(status.label(), "receipt-verified");
+    assert_eq!(status.unverified_reason(), None);
+    assert_eq!(
+        status.report().map(|report| report.verified_receipts()),
+        Some(1)
+    );
+    assert_eq!(status.report().map(|report| report.entries()), Some(1));
+
+    let loaded = text(cached.receipt_authority(feed, &scope), "feed authority");
+    let status = verification_status(cached.verify(digest, scope.principal(), domain, &loaded));
+    assert!(status.is_unavailable());
+    assert!(!status.is_receipt_verified());
+    assert_eq!(status.label(), "unavailable");
+    assert!(matches!(
+        cached.verify(digest, scope.principal(), domain, &loaded),
+        Err(VerifyError::Unavailable(_))
+    ));
+
+    let mut altered_bytes = genuine_bytes.clone();
+    let altered_at = unique_position(&altered_bytes, &canonical) + 8;
+    altered_bytes[altered_at] ^= 0x01;
+    text(
+        scope.put(
+            Table::Cache,
+            evidence_row_key(digest),
+            2,
+            altered_bytes.clone(),
+        ),
+        "altered evidence row",
+    );
+    let altered = text(
+        EvidenceBundle::decode(
+            scope
+                .get(Table::Cache, &evidence_row_key(digest))
+                .unwrap_or_else(|| panic!("altered evidence row missing"))
+                .bytes(),
+        ),
+        "altered row decode",
+    );
+    let status = verification_status(altered.verify(digest, scope.principal(), domain, &authority));
+    assert!(!status.is_receipt_verified());
+    assert_eq!(status.label(), "unverified");
+    assert_eq!(
+        status.unverified_reason(),
+        Some(UnverifiedReason::DigestMismatch)
+    );
+    let (rekeyed_digest, rekeyed) = cache_row(&mut scope, altered_bytes, 3);
+    let status =
+        verification_status(rekeyed.verify(rekeyed_digest, scope.principal(), domain, &authority));
+    assert_eq!(status.label(), "unverified");
+    assert_eq!(status.unverified_reason(), Some(UnverifiedReason::Tampered));
+
+    let bob_bytes = text(
+        text(
+            EvidenceBundle::receipt(
+                entry_id.clone(),
+                canonical.clone(),
+                authorised,
+                &bob,
+                domain,
+            ),
+            "bob receipt bundle",
+        )
+        .encode(),
+        "bob bundle bytes",
+    );
+    let (bob_digest, bob_row) = cache_row(&mut scope, bob_bytes, 4);
+    let status =
+        verification_status(bob_row.verify(bob_digest, scope.principal(), domain, &authority));
+    assert_eq!(status.label(), "unverified");
+    assert_eq!(
+        status.unverified_reason(),
+        Some(UnverifiedReason::PrincipalMismatch)
+    );
+    assert!(
+        verification_status(bob_row.verify(bob_digest, &bob, domain, &authority))
+            .is_receipt_verified()
+    );
+
+    let foreign_bytes = text(
+        text(
+            EvidenceBundle::receipt(
+                entry_id.clone(),
+                canonical.clone(),
+                authorised,
+                scope.principal(),
+                foreign_domain,
+            ),
+            "foreign-domain receipt bundle",
+        )
+        .encode(),
+        "foreign-domain bundle bytes",
+    );
+    let (foreign_digest, foreign_row) = cache_row(&mut scope, foreign_bytes, 5);
+    let status = verification_status(foreign_row.verify(
+        foreign_digest,
+        scope.principal(),
+        domain,
+        &authority,
+    ));
+    assert_eq!(status.label(), "unverified");
+    assert_eq!(
+        status.unverified_reason(),
+        Some(UnverifiedReason::SettlementDomainMismatch)
+    );
+
+    let wrong_bytes = text(
+        text(
+            EvidenceBundle::receipt(
+                entry_id.clone(),
+                canonical.clone(),
+                wrong_batch,
+                scope.principal(),
+                domain,
+            ),
+            "wrong-authority receipt bundle",
+        )
+        .encode(),
+        "wrong-authority bundle bytes",
+    );
+    let (wrong_digest, wrong_row) = cache_row(&mut scope, wrong_bytes, 6);
+    let status =
+        verification_status(wrong_row.verify(wrong_digest, scope.principal(), domain, &authority));
+    assert_eq!(status.label(), "unverified");
+    assert_eq!(
+        status.unverified_reason(),
+        Some(UnverifiedReason::AuthorityMismatch)
+    );
+
+    let report = text(
+        EvidenceBundle::verify_receipt(
+            entry_id.clone(),
+            &canonical,
+            &authorised,
+            reference,
+            scope.principal(),
+            domain,
+        ),
+        "single receipt verification",
+    );
+    assert_eq!(report.verified_receipts(), 1);
+    assert!(matches!(
+        EvidenceBundle::verify_receipt(
+            entry_id.clone(),
+            &canonical,
+            &wrong_batch,
+            reference,
+            scope.principal(),
+            domain,
+        ),
+        Err(VerifyError::Unverified(UnverifiedReason::Tampered))
+    ));
+    let mut wrong_reference = reference;
+    wrong_reference[0] ^= 0xff;
+    assert!(matches!(
+        EvidenceBundle::verify_receipt(
+            entry_id,
+            &canonical,
+            &authorised,
+            wrong_reference,
+            scope.principal(),
+            domain,
+        ),
+        Err(VerifyError::Unverified(UnverifiedReason::DigestMismatch))
+    ));
     let _ = fs::remove_dir_all(root);
 }

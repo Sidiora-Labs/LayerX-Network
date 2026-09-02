@@ -22,7 +22,7 @@ use layerx_paxeer_client::{
     raw_call, EmergencyExit, EndpointConfig, EndpointTransport, ExitConfig, ExitEligibility,
 };
 use layerx_proof::checkpoint::SettlementDomain;
-use layerx_proof::export::{OfflineExport, ReceiptFact};
+use layerx_proof::export::OfflineExport;
 use layerx_types::account::AccountId;
 use layerx_types::activity::TimestampBound;
 use layerx_types::amount::Amount as ProtocolAmount;
@@ -41,7 +41,10 @@ use serde_json::json;
 use sha2::{Digest as _, Sha256};
 
 use super::agent_creation::ProductionAgentCreation;
-use crate::activity::{AppliedFilters, EvidenceExport, Feed, FeedCursor, FilterDraft, PageRequest};
+use crate::activity::{
+    verification_status, AppliedFilters, EvidenceBundle, EvidenceExport, Feed, FeedCursor,
+    FilterDraft, PageRequest, ReceiptAuthority,
+};
 use crate::agents::{
     CreateAgentRequest, CreationContext, CreationJourney, PurposePresetCatalog,
     ScopedAgentCreationContract, SessionProvision,
@@ -472,6 +475,8 @@ impl ProductionComponents {
             delayed_after_polls: config.exit_delayed_after_polls,
         })
         .map_err(|_| "Paxeer exit boundary refused startup".to_owned())?;
+        let settlement_domain =
+            SettlementDomain::new(config.settlement_chain_id, config.exit_contract.bytes());
         Ok(Self {
             store,
             passkeys,
@@ -482,14 +487,14 @@ impl ProductionComponents {
             agent_limits: config.agent_limits,
             custody,
             security: Mutex::new(security),
-            stream: super::stream_journal::StreamJournal::new(config.stream_cursor_key),
+            stream: super::stream_journal::StreamJournal::new(
+                config.stream_cursor_key,
+                settlement_domain,
+            ),
             feed: Feed::new(config.activity_freshness_seconds)
                 .map_err(|_| "activity freshness bound is invalid".to_owned())?,
             activity_export_maximum_bytes: config.activity_export_maximum_bytes,
-            settlement_domain: SettlementDomain::new(
-                config.settlement_chain_id,
-                config.exit_contract.bytes(),
-            ),
+            settlement_domain,
             identity,
             movement: Mutex::new(movement),
             paxeer_endpoint: config.paxeer_endpoint,
@@ -2083,7 +2088,7 @@ impl HumanApiComponents for ProductionComponents {
                 .map_err(move_journey_failure)?;
                 schedule_continuation(&mut scope, "move", status.journey_id(), now()?)?;
                 Ok(BackendResponse {
-                    result: move_public_json(&scope, &status, now()?)?,
+                    result: move_public_json(&scope, self.settlement_domain, &status, now()?)?,
                     session: None,
                 })
             }
@@ -2107,7 +2112,7 @@ impl HumanApiComponents for ProductionComponents {
                         .map_err(deposit_journey_failure)?;
                 let status = journey.status().map_err(deposit_journey_failure)?;
                 Ok(BackendResponse {
-                    result: deposit_public_json(&scope, &status, now()?)?,
+                    result: deposit_public_json(&scope, self.settlement_domain, &status, now()?)?,
                     session: None,
                 })
             }
@@ -2147,7 +2152,7 @@ impl HumanApiComponents for ProductionComponents {
                     .map_err(deposit_journey_failure)?;
                 schedule_continuation(&mut scope, "deposit", status.journey_id(), now()?)?;
                 Ok(BackendResponse {
-                    result: deposit_public_json(&scope, &status, now()?)?,
+                    result: deposit_public_json(&scope, self.settlement_domain, &status, now()?)?,
                     session: None,
                 })
             }
@@ -2224,7 +2229,12 @@ impl HumanApiComponents for ProductionComponents {
                 }
                 schedule_continuation(&mut scope, "withdraw", status.journey_id(), now()?)?;
                 Ok(BackendResponse {
-                    result: withdrawal_public_json(&scope, &status, now()?)?,
+                    result: withdrawal_public_json(
+                        &scope,
+                        self.settlement_domain,
+                        &status,
+                        now()?,
+                    )?,
                     session: None,
                 })
             }
@@ -2246,7 +2256,12 @@ impl HumanApiComponents for ProductionComponents {
                     .map_err(withdrawal_journey_failure)?;
                 schedule_continuation(&mut scope, "withdraw", status.journey_id(), now()?)?;
                 Ok(BackendResponse {
-                    result: withdrawal_public_json(&scope, &status, now()?)?,
+                    result: withdrawal_public_json(
+                        &scope,
+                        self.settlement_domain,
+                        &status,
+                        now()?,
+                    )?,
                     session: None,
                 })
             }
@@ -2837,6 +2852,7 @@ impl HumanApiComponents for ProductionComponents {
                     .map(|entry| {
                         super::production_reads::activity_entry_json(
                             self.feed,
+                            self.settlement_domain,
                             &scope,
                             entry.entry_id(),
                         )
@@ -2949,6 +2965,7 @@ impl HumanApiComponents for ProductionComponents {
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 let mut exports = Vec::new();
+                let mut entries = Vec::new();
                 for id in &ids {
                     let entry = self
                         .feed
@@ -2962,50 +2979,55 @@ impl HumanApiComponents for ProductionComponents {
                             .to_vec();
                         let authority = receipt
                             .authority()
-                            .ok_or_else(ApiFailure::upstream_degraded)?
-                            .clone();
+                            .copied()
+                            .ok_or_else(ApiFailure::upstream_degraded)?;
                         let digest: [u8; 32] = sha2::Sha256::digest(&canonical).into();
                         if hex_bytes(&digest) != receipt.reference() {
                             return Err(ApiFailure::upstream_degraded());
                         }
+                        let fact = EvidenceBundle::receipt_fact(id, canonical, authority)
+                            .map_err(|_| ApiFailure::upstream_degraded())?;
                         exports.push(OfflineExport {
-                            receipts: vec![ReceiptFact {
-                                statement: format!(
-                                    "activity {} receipt {}",
-                                    id.as_str(),
-                                    receipt.reference()
-                                ),
-                                canonical_receipt_bytes: canonical,
-                                authorised_batch: authority,
-                                expected_receipt_digest: digest,
-                            }],
+                            receipts: vec![fact],
                             inclusions: Vec::new(),
                             checkpoints: Vec::new(),
                             derived_aggregates: Vec::new(),
                         });
                     }
+                    entries.push(entry);
                 }
+                let receipt_authority = ReceiptAuthority::from_entries(&entries);
                 let head = self
                     .agent
                     .lock()
                     .map_err(|_| ApiFailure::unavailable())?
                     .head()
                     .map_err(|_| ApiFailure::upstream_degraded())?;
-                let bundle = EvidenceExport::new(self.feed, self.activity_export_maximum_bytes)
-                    .map_err(activity_export_failure)?
-                    .evidence(
-                        &scope,
-                        &filters,
-                        &ids,
-                        exports,
-                        self.settlement_domain,
-                        now()?,
-                        head.chain_sequence,
-                    )
-                    .map_err(activity_export_failure)?;
+                let (bundle, _) =
+                    EvidenceExport::new(self.feed, self.activity_export_maximum_bytes)
+                        .map_err(activity_export_failure)?
+                        .evidence(
+                            &scope,
+                            &filters,
+                            &ids,
+                            exports,
+                            self.settlement_domain,
+                            &receipt_authority,
+                            now()?,
+                            head.chain_sequence,
+                        )
+                        .map_err(activity_export_failure)?;
                 let bytes = bundle.encode().map_err(activity_export_failure)?;
                 let digest: [u8; 32] = sha2::Sha256::digest(&bytes).into();
                 let text = hex_bytes(&digest);
+                let verification = super::production_reads::verification_label(
+                    &verification_status(bundle.verify(
+                        digest,
+                        scope.principal(),
+                        self.settlement_domain,
+                        &receipt_authority,
+                    )),
+                )?;
                 scope
                     .put(
                         Table::Cache,
@@ -3016,13 +3038,16 @@ impl HumanApiComponents for ProductionComponents {
                     )
                     .map_err(|_| ApiFailure::unavailable())?;
                 Ok(BackendResponse {
-                    result: json!({"export_id":format!("exp_{text}"),"kind":"evidence-bundle","download_path":format!("/v1/evidence/evd_{text}"),"content_type":"application/vnd.layerx.evidence-bundle","created_at":now()?.to_string(),"evidence":bundle.entries().iter().flat_map(|entry|entry.receipt_references().iter()).map(|reference|json!({"evidence_id":format!("evd_{reference}"),"class":"layerx-receipt","verification":"receipt-verified"})).collect::<Vec<_>>() }),
+                    result: json!({"export_id":format!("exp_{text}"),"kind":"evidence-bundle","download_path":format!("/v1/evidence/evd_{text}"),"content_type":"application/vnd.layerx.evidence-bundle","created_at":now()?.to_string(),"evidence":bundle.entries().iter().flat_map(|entry|entry.receipt_references().iter()).map(|reference|json!({"evidence_id":format!("evd_{reference}"),"class":"layerx-receipt","verification":verification})).collect::<Vec<_>>() }),
                     session: None,
                 })
             }
-            "activity.entry" => {
-                super::production_reads::activity_entry(self.feed, &scope, &request)
-            }
+            "activity.entry" => super::production_reads::activity_entry(
+                self.feed,
+                self.settlement_domain,
+                &scope,
+                &request,
+            ),
             "activity.query" => {
                 let filters = activity_filters(&request.body)?;
                 let limit = request
@@ -3118,8 +3143,13 @@ impl HumanApiComponents for ProductionComponents {
                     session: None,
                 })
             }
-            _ => super::production_reads::execute(&scope, &request)
-                .unwrap_or_else(|| Err(ApiFailure::not_found())),
+            _ => super::production_reads::execute(
+                self.feed,
+                self.settlement_domain,
+                &scope,
+                &request,
+            )
+            .unwrap_or_else(|| Err(ApiFailure::not_found())),
         }
     }
 
@@ -3727,6 +3757,7 @@ fn public_journey(
 }
 fn move_public_json(
     scope: &crate::store::PrincipalScope<'_>,
+    settlement_domain: SettlementDomain,
     status: &crate::journeys::MoveStatus,
     now: u64,
 ) -> Result<serde_json::Value, ApiFailure> {
@@ -3737,7 +3768,20 @@ fn move_public_json(
         crate::journeys::MoveStage::Done => "done",
         crate::journeys::MoveStage::Refused => "refused",
     };
-    let evidence=status.receipt_references().iter().map(|receipt|json!({"evidence_id":receipt.reference(),"class":"layerx-receipt","verification":"receipt-verified"})).collect();
+    let evidence = status
+        .receipt_references()
+        .iter()
+        .map(|receipt| {
+            let verification = super::production_reads::custody_receipt_label(
+                scope,
+                settlement_domain,
+                receipt.digest(),
+            )?;
+            Ok(
+                json!({"evidence_id":receipt.reference(),"class":"layerx-receipt","verification":verification}),
+            )
+        })
+        .collect::<Result<Vec<_>, ApiFailure>>()?;
     public_journey(
         scope,
         "move",
@@ -3750,6 +3794,7 @@ fn move_public_json(
 }
 fn deposit_public_json(
     scope: &crate::store::PrincipalScope<'_>,
+    settlement_domain: SettlementDomain,
     status: &crate::journeys::DepositStatus,
     now: u64,
 ) -> Result<serde_json::Value, ApiFailure> {
@@ -3764,7 +3809,19 @@ fn deposit_public_json(
         crate::journeys::DepositStage::Done => ("done", "deposit.stage.done"),
         crate::journeys::DepositStage::Failed(_) => ("refused", "deposit.stage.refused"),
     };
-    let evidence=status.activity().map(|activity|vec![json!({"evidence_id":format!("evd_{}",hex_bytes(&activity.credit_receipt_digest)),"class":"layerx-receipt","verification":"receipt-verified"})]).unwrap_or_default();
+    let evidence = match status.activity() {
+        Some(activity) => {
+            let verification = super::production_reads::custody_receipt_label(
+                scope,
+                settlement_domain,
+                activity.credit_receipt_digest,
+            )?;
+            vec![
+                json!({"evidence_id":format!("evd_{}",hex_bytes(&activity.credit_receipt_digest)),"class":"layerx-receipt","verification":verification}),
+            ]
+        }
+        None => Vec::new(),
+    };
     public_journey(
         scope,
         "deposit",
@@ -3777,6 +3834,7 @@ fn deposit_public_json(
 }
 fn withdrawal_public_json(
     scope: &crate::store::PrincipalScope<'_>,
+    settlement_domain: SettlementDomain,
     status: &crate::journeys::WithdrawalStatus,
     now: u64,
 ) -> Result<serde_json::Value, ApiFailure> {
@@ -3786,7 +3844,16 @@ fn withdrawal_public_json(
         crate::journeys::WithdrawalStage::Cancelled(_) => "refused",
         _ => "processing",
     };
-    let evidence=status.debit_receipt_reference().map(|digest|vec![json!({"evidence_id":format!("evd_{}",hex_bytes(&digest)),"class":"layerx-receipt","verification":"receipt-verified"})]).unwrap_or_default();
+    let evidence = match status.debit_receipt_reference() {
+        Some(digest) => {
+            let verification =
+                super::production_reads::custody_receipt_label(scope, settlement_domain, digest)?;
+            vec![
+                json!({"evidence_id":format!("evd_{}",hex_bytes(&digest)),"class":"layerx-receipt","verification":verification}),
+            ]
+        }
+        None => Vec::new(),
+    };
     public_journey(
         scope,
         "withdraw",

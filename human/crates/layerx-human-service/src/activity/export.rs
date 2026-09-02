@@ -1,17 +1,20 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Display, Formatter, Write as _};
 
 use layerx_proof::checkpoint::SettlementDomain;
 use layerx_proof::export::{
-    verify as verify_offline, ExportVerificationError, OfflineExport, VerificationReport,
+    verify as verify_offline, ExportVerificationError, OfflineExport, ReceiptFact,
+    VerificationReport,
 };
 use layerx_proof::merkle::encode_proof;
 use layerx_proof::receipt::AuthorizedBatch;
+use layerx_wire::hash::receipt_digest as protocol_receipt_digest;
+use layerx_wire::receipt::{decode as decode_receipt, encode_unsigned as encode_unsigned_receipt};
 use sha2::{Digest as _, Sha256};
 
 use crate::audit::{verify_export as verify_audit, AuditChain, AuditError};
 use crate::notify::ActivityEntryId;
-use crate::store::PrincipalScope;
+use crate::store::{PrincipalId, PrincipalScope};
 
 use super::{
     ActivityEntry, ActivityKind, AppliedFilters, Feed, FeedCursor, FeedError, PageRequest,
@@ -22,7 +25,7 @@ const MAXIMUM_EXPORT_BYTES: usize = 64 * 1024 * 1024;
 const PRINCIPAL_DOMAIN: &[u8] = b"layerx-human-export-principal/v1";
 const CSV_HEADER: &str =
     "entry_id,kind,status,occurred_at,projected_at,verification,receipt_references\r\n";
-const BUNDLE_MAGIC: &[u8; 8] = b"LXHEXP01";
+const BUNDLE_MAGIC: &[u8; 8] = b"LXHEXP02";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StatementExport {
@@ -68,6 +71,7 @@ impl EvidenceEntry {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EvidenceBundle {
     principal_binding: [u8; 32],
+    settlement_domain: SettlementDomain,
     entries: Vec<EvidenceEntry>,
     protocol_evidence: Vec<OfflineExport>,
     audit_export: Option<Vec<u8>>,
@@ -80,6 +84,8 @@ impl EvidenceBundle {
         let mut out = Vec::new();
         out.extend_from_slice(BUNDLE_MAGIC);
         out.extend_from_slice(&self.principal_binding);
+        out.extend_from_slice(&self.settlement_domain.paxeer_chain_id().to_be_bytes());
+        out.extend_from_slice(&self.settlement_domain.settlement_contract());
         push_u32(&mut out, self.entries.len())?;
         for entry in &self.entries {
             push_bytes(&mut out, entry.entry_id.as_str().as_bytes())?;
@@ -127,6 +133,8 @@ impl EvidenceBundle {
             return Err(ExportError::UnboundProtocolEvidence);
         }
         let principal_binding = reader.array()?;
+        let settlement_domain =
+            SettlementDomain::new(u64::from_be_bytes(reader.array()?), reader.array()?);
         let entry_count = reader.count()?;
         let mut entries = Vec::with_capacity(entry_count);
         for _ in 0..entry_count {
@@ -187,6 +195,7 @@ impl EvidenceBundle {
         }
         Ok(Self {
             principal_binding,
+            settlement_domain,
             entries,
             protocol_evidence,
             audit_export,
@@ -196,6 +205,11 @@ impl EvidenceBundle {
     #[must_use]
     pub const fn principal_binding(&self) -> [u8; 32] {
         self.principal_binding
+    }
+
+    #[must_use]
+    pub const fn settlement_domain(&self) -> SettlementDomain {
+        self.settlement_domain
     }
 
     #[must_use]
@@ -218,26 +232,179 @@ impl EvidenceBundle {
         self.bounded_bytes
     }
 
-    /// Re-verifies the bundle without access to a human-service store.
+    /// Content digest naming this bundle as evidence.
     ///
     /// # Errors
     ///
-    /// Refuses altered protocol evidence, changed activity-to-receipt bindings,
-    /// or an invalid audit export.
+    /// Returns encoding and size-bound failures.
+    pub fn digest(&self) -> Result<[u8; 32], ExportError> {
+        Ok(Sha256::digest(self.encode()?).into())
+    }
+
+    /// Builds the offline receipt fact for one service-held receipt: the
+    /// reference is the digest of the exact canonical bytes and the expected
+    /// protocol digest is recomputed from those bytes, so the fact claims
+    /// nothing the bytes do not carry.
+    ///
+    /// # Errors
+    ///
+    /// Returns `VerifyError::Unverified(Tampered)` when the bytes are not a
+    /// canonical receipt.
+    pub fn receipt_fact(
+        entry_id: &ActivityEntryId,
+        canonical_receipt: Vec<u8>,
+        authorised_batch: AuthorizedBatch,
+    ) -> Result<ReceiptFact, VerifyError> {
+        let reference = receipt_reference(&canonical_receipt);
+        let expected_receipt_digest = decode_receipt(&canonical_receipt)
+            .ok()
+            .and_then(|receipt| encode_unsigned_receipt(&receipt).ok())
+            .and_then(|unsigned| protocol_receipt_digest(&unsigned).ok())
+            .ok_or(VerifyError::Unverified(UnverifiedReason::Tampered))?;
+        Ok(ReceiptFact {
+            statement: format!("activity {} receipt {reference}", entry_id.as_str()),
+            canonical_receipt_bytes: canonical_receipt,
+            authorised_batch,
+            expected_receipt_digest,
+        })
+    }
+
+    /// Binds one service-held receipt to its activity entry so a single
+    /// receipt row is verified through the same bundle verifier as an
+    /// exported bundle.
+    ///
+    /// # Errors
+    ///
+    /// Returns `VerifyError::Unverified(Tampered)` for bytes that are not a
+    /// canonical receipt and `VerifyError::Unavailable` on size overflows.
+    pub fn receipt(
+        entry_id: ActivityEntryId,
+        canonical_receipt: Vec<u8>,
+        authorised_batch: AuthorizedBatch,
+        principal: &PrincipalId,
+        settlement_domain: SettlementDomain,
+    ) -> Result<Self, VerifyError> {
+        let reference = receipt_reference(&canonical_receipt);
+        let fact = Self::receipt_fact(&entry_id, canonical_receipt, authorised_batch)?;
+        let entries = vec![EvidenceEntry {
+            entry_id,
+            receipt_references: vec![reference],
+        }];
+        let protocol_evidence = vec![OfflineExport {
+            receipts: vec![fact],
+            inclusions: Vec::new(),
+            checkpoints: Vec::new(),
+            derived_aggregates: Vec::new(),
+        }];
+        let bounded_bytes =
+            evidence_size(&entries, &protocol_evidence, None).map_err(VerifyError::Unavailable)?;
+        let bundle = Self {
+            principal_binding: principal_binding(principal.as_str()),
+            settlement_domain,
+            entries,
+            protocol_evidence,
+            audit_export: None,
+            bounded_bytes,
+        };
+        bundle.encode().map_err(VerifyError::Unavailable)?;
+        Ok(bundle)
+    }
+
+    /// Loads the receipt authority the service holds for every activity entry
+    /// this bundle binds.
+    ///
+    /// # Errors
+    ///
+    /// Returns feed read failures.
+    pub fn receipt_authority(
+        &self,
+        feed: Feed,
+        scope: &PrincipalScope<'_>,
+    ) -> Result<ReceiptAuthority, FeedError> {
+        let mut authority = ReceiptAuthority::default();
+        for entry in &self.entries {
+            if let Some(entry) = feed.entry(scope, &entry.entry_id)? {
+                authority.extend_from_entry(&entry);
+            }
+        }
+        Ok(authority)
+    }
+
+    /// Re-verifies the bundle against the evidence identity the caller
+    /// expects: the digest the evidence identifier names, the requesting
+    /// principal, the service settlement domain and the receipt authority the
+    /// service loaded from the agent layer. The checks run in that order and
+    /// the embedded protocol and audit evidence is re-verified independently
+    /// last, so each refusal names the first binding that disagrees.
+    ///
+    /// # Errors
+    ///
+    /// Returns `VerifyError::Unverified` with the typed reason on a digest,
+    /// principal, settlement-domain or authority mismatch and on altered or
+    /// inconsistent protocol or audit evidence; returns
+    /// `VerifyError::Unavailable` when a bound receipt has no loaded
+    /// authority or the bundle cannot be re-encoded.
     pub fn verify(
         &self,
+        expected_digest: [u8; 32],
+        principal: &PrincipalId,
         expected_settlement_domain: SettlementDomain,
-    ) -> Result<BundleReport, ExportError> {
+        receipt_authority: &ReceiptAuthority,
+    ) -> Result<BundleReport, VerifyError> {
+        if self.digest().map_err(VerifyError::Unavailable)? != expected_digest {
+            return Err(VerifyError::Unverified(UnverifiedReason::DigestMismatch));
+        }
+        self.verify_bindings(principal, expected_settlement_domain, receipt_authority)
+    }
+
+    fn verify_bindings(
+        &self,
+        principal: &PrincipalId,
+        expected_settlement_domain: SettlementDomain,
+        receipt_authority: &ReceiptAuthority,
+    ) -> Result<BundleReport, VerifyError> {
+        if principal_binding(principal.as_str()) != self.principal_binding {
+            return Err(VerifyError::Unverified(UnverifiedReason::PrincipalMismatch));
+        }
+        if self.settlement_domain != expected_settlement_domain {
+            return Err(VerifyError::Unverified(
+                UnverifiedReason::SettlementDomainMismatch,
+            ));
+        }
         let expected = referenced_receipts(&self.entries);
+        for receipt in self
+            .protocol_evidence
+            .iter()
+            .flat_map(|export| export.receipts.iter())
+        {
+            let reference = receipt_reference(&receipt.canonical_receipt_bytes);
+            if !expected.contains(&reference) {
+                return Err(VerifyError::Unverified(UnverifiedReason::Tampered));
+            }
+            let Some(loaded) = receipt_authority.get(&reference) else {
+                return Err(VerifyError::Unavailable(
+                    ExportError::AuthorityUnavailable { reference },
+                ));
+            };
+            if *loaded != receipt.authorised_batch {
+                return Err(VerifyError::Unverified(UnverifiedReason::AuthorityMismatch));
+            }
+        }
         let protocol = verify_protocol_set(
             &self.protocol_evidence,
             &expected,
             expected_settlement_domain,
-        )?;
-        let audit = self.audit_export.as_deref().map(verify_audit).transpose()?;
+        )
+        .map_err(VerifyError::from)?;
+        let audit = self
+            .audit_export
+            .as_deref()
+            .map(verify_audit)
+            .transpose()
+            .map_err(|error| VerifyError::from(ExportError::Audit(error)))?;
         if let Some(report) = &audit {
             if principal_binding(report.principal().as_str()) != self.principal_binding {
-                return Err(ExportError::PrincipalMismatch);
+                return Err(VerifyError::Unverified(UnverifiedReason::PrincipalMismatch));
             }
         }
         Ok(BundleReport {
@@ -253,6 +420,38 @@ impl EvidenceBundle {
                 .sum(),
             audit_entries: audit.map_or(0, |report| report.entries()),
         })
+    }
+
+    /// Verifies one service-held receipt row through the bundle verifier,
+    /// binding it to its activity entry, the requesting principal, the
+    /// service settlement domain and the authority the service loaded for it.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same typed result as [`Self::verify`].
+    pub fn verify_receipt(
+        entry_id: ActivityEntryId,
+        canonical_receipt: &[u8],
+        authorised_batch: &AuthorizedBatch,
+        expected_receipt_digest: [u8; 32],
+        principal: &PrincipalId,
+        settlement_domain: SettlementDomain,
+    ) -> Result<BundleReport, VerifyError> {
+        let reference = receipt_reference(canonical_receipt);
+        if reference != hex(expected_receipt_digest) {
+            return Err(VerifyError::Unverified(UnverifiedReason::DigestMismatch));
+        }
+        let bundle = Self::receipt(
+            entry_id,
+            canonical_receipt.to_vec(),
+            *authorised_batch,
+            principal,
+            settlement_domain,
+        )?;
+        let digest = bundle.digest().map_err(VerifyError::Unavailable)?;
+        let mut receipt_authority = ReceiptAuthority::default();
+        receipt_authority.insert(reference, *authorised_batch);
+        bundle.verify(digest, principal, settlement_domain, &receipt_authority)
     }
 }
 
@@ -310,7 +509,9 @@ impl<'a> BundleReader<'a> {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Counts reported by one successful verifier run. It is neither cloneable
+/// nor copyable, so a verified result cannot be reused for other evidence.
+#[derive(Debug, Eq, PartialEq)]
 pub struct BundleReport {
     entries: usize,
     verified_receipts: usize,
@@ -321,29 +522,232 @@ pub struct BundleReport {
 
 impl BundleReport {
     #[must_use]
-    pub const fn entries(self) -> usize {
+    pub const fn entries(&self) -> usize {
         self.entries
     }
 
     #[must_use]
-    pub const fn verified_receipts(self) -> usize {
+    pub const fn verified_receipts(&self) -> usize {
         self.verified_receipts
     }
 
     #[must_use]
-    pub const fn verified_inclusions(self) -> usize {
+    pub const fn verified_inclusions(&self) -> usize {
         self.verified_inclusions
     }
 
     #[must_use]
-    pub const fn verified_checkpoints(self) -> usize {
+    pub const fn verified_checkpoints(&self) -> usize {
         self.verified_checkpoints
     }
 
     #[must_use]
-    pub const fn audit_entries(self) -> usize {
+    pub const fn audit_entries(&self) -> usize {
         self.audit_entries
     }
+}
+
+/// Receipt authorities the service loaded from the agent layer, keyed by the
+/// receipt reference each one authorises.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ReceiptAuthority {
+    batches: BTreeMap<String, AuthorizedBatch>,
+}
+
+impl ReceiptAuthority {
+    /// Collects the stored authority of every receipt on the given entries.
+    #[must_use]
+    pub fn from_entries(entries: &[ActivityEntry]) -> Self {
+        let mut authority = Self::default();
+        for entry in entries {
+            authority.extend_from_entry(entry);
+        }
+        authority
+    }
+
+    /// Adds the stored authority of every receipt on one entry.
+    pub fn extend_from_entry(&mut self, entry: &ActivityEntry) {
+        for receipt in entry.receipts() {
+            if let Some(batch) = receipt.authority() {
+                self.batches.insert(receipt.reference().to_owned(), *batch);
+            }
+        }
+    }
+
+    /// Records the authority the service loaded for one receipt reference.
+    pub fn insert(&mut self, reference: String, batch: AuthorizedBatch) {
+        self.batches.insert(reference, batch);
+    }
+
+    #[must_use]
+    pub fn get(&self, reference: &str) -> Option<&AuthorizedBatch> {
+        self.batches.get(reference)
+    }
+}
+
+/// Typed reason the verifier refused to label evidence receipt-verified.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UnverifiedReason {
+    Tampered,
+    DigestMismatch,
+    PrincipalMismatch,
+    SettlementDomainMismatch,
+    AuthorityMismatch,
+}
+
+impl UnverifiedReason {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Tampered => "tampered",
+            Self::DigestMismatch => "digest-mismatch",
+            Self::PrincipalMismatch => "principal-mismatch",
+            Self::SettlementDomainMismatch => "settlement-domain-mismatch",
+            Self::AuthorityMismatch => "authority-mismatch",
+        }
+    }
+}
+
+/// Typed outcome of a verifier run that did not verify.
+#[derive(Debug)]
+pub enum VerifyError {
+    Unverified(UnverifiedReason),
+    Unavailable(ExportError),
+}
+
+impl Display for VerifyError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unverified(reason) => {
+                write!(formatter, "evidence is unverified: {}", reason.as_str())
+            }
+            Self::Unavailable(error) => write!(formatter, "evidence verifier unavailable: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for VerifyError {}
+
+impl From<ExportError> for VerifyError {
+    fn from(value: ExportError) -> Self {
+        match value {
+            ExportError::PrincipalMismatch => Self::Unverified(UnverifiedReason::PrincipalMismatch),
+            ExportError::Protocol(_)
+            | ExportError::Audit(_)
+            | ExportError::EvidenceUnavailable { .. }
+            | ExportError::UnexpectedEvidence { .. }
+            | ExportError::DuplicateEvidence
+            | ExportError::UnboundProtocolEvidence => Self::Unverified(UnverifiedReason::Tampered),
+            ExportError::Unverified(reason) => Self::Unverified(reason),
+            ExportError::Feed(_)
+            | ExportError::InvalidSizeBound
+            | ExportError::SizeBoundExceeded { .. }
+            | ExportError::SizeOverflow
+            | ExportError::DuplicateEntry
+            | ExportError::EntryNotFound
+            | ExportError::AuthorityUnavailable { .. } => Self::Unavailable(value),
+        }
+    }
+}
+
+/// Verification status of one evidence row as the service may label it.
+///
+/// The receipt-verified verdict exists only as the return path of
+/// [`EvidenceBundle::verify`]: the verdict field is private and the sole
+/// constructor, [`verification_status`], consumes that verifier's typed
+/// result, whose success value cannot be built outside this module.
+///
+/// ```
+/// use layerx_human_service::activity::{verification_status, UnverifiedReason, VerifyError};
+///
+/// let status = verification_status(Err(VerifyError::Unverified(UnverifiedReason::Tampered)));
+/// assert_eq!(status.label(), "unverified");
+/// assert_eq!(status.unverified_reason(), Some(UnverifiedReason::Tampered));
+/// assert!(!status.is_receipt_verified());
+/// ```
+///
+/// Outside code cannot name the verdict:
+///
+/// ```compile_fail
+/// use layerx_human_service::activity::VerificationStatus;
+///
+/// let forged = VerificationStatus { verdict: () };
+/// ```
+///
+/// Outside code cannot forge the verifier's success value either:
+///
+/// ```compile_fail
+/// use layerx_human_service::activity::{verification_status, BundleReport};
+///
+/// let forged = verification_status(Ok(BundleReport {
+///     entries: 0,
+///     verified_receipts: 0,
+///     verified_inclusions: 0,
+///     verified_checkpoints: 0,
+///     audit_entries: 0,
+/// }));
+/// ```
+#[derive(Debug, Eq, PartialEq)]
+pub struct VerificationStatus {
+    verdict: Verdict,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum Verdict {
+    ReceiptVerified(BundleReport),
+    Unverified(UnverifiedReason),
+    Unavailable,
+}
+
+impl VerificationStatus {
+    /// Wire-level label of this status.
+    #[must_use]
+    pub const fn label(&self) -> &'static str {
+        match self.verdict {
+            Verdict::ReceiptVerified(_) => "receipt-verified",
+            Verdict::Unverified(_) => "unverified",
+            Verdict::Unavailable => "unavailable",
+        }
+    }
+
+    #[must_use]
+    pub const fn is_receipt_verified(&self) -> bool {
+        matches!(self.verdict, Verdict::ReceiptVerified(_))
+    }
+
+    #[must_use]
+    pub const fn is_unavailable(&self) -> bool {
+        matches!(self.verdict, Verdict::Unavailable)
+    }
+
+    #[must_use]
+    pub const fn unverified_reason(&self) -> Option<UnverifiedReason> {
+        match &self.verdict {
+            Verdict::Unverified(reason) => Some(*reason),
+            Verdict::ReceiptVerified(_) | Verdict::Unavailable => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn report(&self) -> Option<&BundleReport> {
+        match &self.verdict {
+            Verdict::ReceiptVerified(report) => Some(report),
+            Verdict::Unverified(_) | Verdict::Unavailable => None,
+        }
+    }
+}
+
+/// The only constructor of a verification status: it consumes the verifier's
+/// typed result and maps success to receipt-verified, a typed refusal to
+/// unverified and a verifier or authority failure to unavailable.
+#[must_use]
+pub fn verification_status(result: Result<BundleReport, VerifyError>) -> VerificationStatus {
+    let verdict = match result {
+        Ok(report) => Verdict::ReceiptVerified(report),
+        Err(VerifyError::Unverified(reason)) => Verdict::Unverified(reason),
+        Err(VerifyError::Unavailable(_)) => Verdict::Unavailable,
+    };
+    VerificationStatus { verdict }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -395,12 +799,16 @@ impl EvidenceExport {
     }
 
     /// Exports selected activity and its exact independently verified protocol
-    /// evidence.
+    /// evidence, bound to the principal, the settlement domain and the receipt
+    /// authority the service loaded, together with the verifier report that
+    /// bound it.
     ///
     /// # Errors
     ///
     /// Refuses missing entries, missing or extra receipt evidence, invalid
-    /// proofs, cross-scope selections and outputs over the configured bound.
+    /// proofs, an authority the service did not load, cross-scope selections
+    /// and outputs over the configured bound.
+    #[allow(clippy::too_many_arguments)]
     pub fn evidence(
         self,
         scope: &PrincipalScope<'_>,
@@ -408,9 +816,10 @@ impl EvidenceExport {
         entry_ids: &[ActivityEntryId],
         protocol_evidence: Vec<OfflineExport>,
         expected_settlement_domain: SettlementDomain,
+        receipt_authority: &ReceiptAuthority,
         now: u64,
         observed_agent_head: u64,
-    ) -> Result<EvidenceBundle, ExportError> {
+    ) -> Result<(EvidenceBundle, BundleReport), ExportError> {
         let selected = self.select(scope, filters, entry_ids, now, observed_agent_head)?;
         let entries = selected
             .iter()
@@ -429,13 +838,18 @@ impl EvidenceExport {
         require_bound(bounded_bytes, self.maximum_bytes)?;
         let bundle = EvidenceBundle {
             principal_binding: principal_binding(scope.principal().as_str()),
+            settlement_domain: expected_settlement_domain,
             entries,
             protocol_evidence,
             audit_export: None,
             bounded_bytes,
         };
-        bundle.verify(expected_settlement_domain)?;
-        Ok(bundle)
+        let report = bundle.verify_bindings(
+            scope.principal(),
+            expected_settlement_domain,
+            receipt_authority,
+        )?;
+        Ok((bundle, report))
     }
 
     /// Exports the principal's audit chain through the same independently
@@ -456,12 +870,19 @@ impl EvidenceExport {
         require_bound(bounded_bytes, self.maximum_bytes)?;
         let bundle = EvidenceBundle {
             principal_binding: principal_binding(scope.principal().as_str()),
+            settlement_domain: expected_settlement_domain,
             entries: Vec::new(),
             protocol_evidence: Vec::new(),
             audit_export: Some(audit_export),
             bounded_bytes,
         };
-        bundle.verify(expected_settlement_domain)?;
+        let digest = bundle.digest()?;
+        bundle.verify(
+            digest,
+            scope.principal(),
+            expected_settlement_domain,
+            &ReceiptAuthority::default(),
+        )?;
         Ok(bundle)
     }
 
@@ -571,6 +992,10 @@ fn csv_field(value: &str) -> String {
     }
 }
 
+fn receipt_reference(canonical_receipt: &[u8]) -> String {
+    hex(Sha256::digest(canonical_receipt))
+}
+
 fn referenced_receipts(entries: &[EvidenceEntry]) -> BTreeSet<String> {
     entries
         .iter()
@@ -615,7 +1040,7 @@ fn evidence_size(
     protocol: &[OfflineExport],
     audit: Option<&[u8]>,
 ) -> Result<usize, ExportError> {
-    let mut size = 64_usize;
+    let mut size = 96_usize;
     for entry in entries {
         size = checked_add(size, entry.entry_id.as_str().len())?;
         for reference in &entry.receipt_references {
@@ -731,6 +1156,8 @@ pub enum ExportError {
     DuplicateEvidence,
     UnboundProtocolEvidence,
     PrincipalMismatch,
+    AuthorityUnavailable { reference: String },
+    Unverified(UnverifiedReason),
 }
 
 impl Display for ExportError {
@@ -769,6 +1196,19 @@ impl Display for ExportError {
             Self::PrincipalMismatch => {
                 formatter.write_str("audit export principal binding does not match")
             }
+            Self::AuthorityUnavailable { reference } => {
+                write!(
+                    formatter,
+                    "activity evidence {reference} has no loaded receipt authority"
+                )
+            }
+            Self::Unverified(reason) => {
+                write!(
+                    formatter,
+                    "activity evidence is unverified: {}",
+                    reason.as_str()
+                )
+            }
         }
     }
 }
@@ -784,5 +1224,14 @@ impl From<FeedError> for ExportError {
 impl From<AuditError> for ExportError {
     fn from(value: AuditError) -> Self {
         Self::Audit(value)
+    }
+}
+
+impl From<VerifyError> for ExportError {
+    fn from(value: VerifyError) -> Self {
+        match value {
+            VerifyError::Unverified(reason) => Self::Unverified(reason),
+            VerifyError::Unavailable(error) => error,
+        }
     }
 }

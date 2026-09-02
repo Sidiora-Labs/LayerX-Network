@@ -9,15 +9,16 @@ use layerx_agent_api::verify::Level;
 use layerx_agent_api::Sequence;
 use layerx_agentd::export::build as build_agent_export;
 use layerx_human_service::activity::{
-    ActivityKind, AgentActivity, EvidenceExport, ExportError, Feed, FilterDraft, PendingStatus,
-    VerifiedStatus,
+    verification_status, ActivityKind, AgentActivity, EvidenceBundle, EvidenceExport, ExportError,
+    Feed, FilterDraft, PendingStatus, ReceiptAuthority, UnverifiedReason, VerifiedStatus,
+    VerifyError,
 };
 use layerx_human_service::audit::{
     verify_export as verify_audit_export, AuditChain, AuditEvent, SecurityChangeKind,
     StepUpEvidence,
 };
 use layerx_human_service::notify::ActivityEntryId;
-use layerx_human_service::store::{EvidenceRef, PrincipalScope, Table};
+use layerx_human_service::store::{EvidenceRef, PrincipalScope, RowKey, Table};
 use layerx_human_service::trace::TraceId;
 use layerx_intents::vectors::{
     batch_header, batch_header_signing_digest, receipt as receipt_vector, receipt_signing_digest,
@@ -101,13 +102,98 @@ fn protocol_artifact() -> OfflineExport {
     }
 }
 
-fn receipt_reference(artifact: &OfflineExport) -> String {
-    let digest = Sha256::digest(&artifact.receipts[0].canonical_receipt_bytes);
-    let mut reference = String::with_capacity(64);
+fn receipt_artifact() -> OfflineExport {
+    OfflineExport {
+        inclusions: Vec::new(),
+        ..protocol_artifact()
+    }
+}
+
+fn hex_digest(digest: &[u8]) -> String {
+    let mut reference = String::with_capacity(digest.len() * 2);
     for byte in digest {
         let _ = write!(reference, "{byte:02x}");
     }
     reference
+}
+
+fn receipt_reference(artifact: &OfflineExport) -> String {
+    hex_digest(&Sha256::digest(
+        &artifact.receipts[0].canonical_receipt_bytes,
+    ))
+}
+
+fn receipt_authority(artifact: &OfflineExport) -> ReceiptAuthority {
+    let mut authority = ReceiptAuthority::default();
+    authority.insert(
+        receipt_reference(artifact),
+        artifact.receipts[0].authorised_batch,
+    );
+    authority
+}
+
+fn evidence_row_key(digest: [u8; 32]) -> RowKey {
+    result(
+        RowKey::new(format!("activity-evidence-{}", hex_digest(&digest))),
+        "evidence row key",
+    )
+}
+
+fn unique_position(bytes: &[u8], needle: &[u8]) -> usize {
+    let positions = bytes
+        .windows(needle.len())
+        .enumerate()
+        .filter(|(_, window)| *window == needle)
+        .map(|(position, _)| position)
+        .collect::<Vec<_>>();
+    assert_eq!(positions.len(), 1, "expected exactly one occurrence");
+    positions[0]
+}
+
+fn cache_bundle(
+    scope: &mut PrincipalScope<'_>,
+    bytes: Vec<u8>,
+    written_at: u64,
+) -> ([u8; 32], EvidenceBundle) {
+    let digest: [u8; 32] = Sha256::digest(&bytes).into();
+    result(
+        scope.put(Table::Cache, evidence_row_key(digest), written_at, bytes),
+        "evidence cache row",
+    );
+    let row = scope
+        .get(Table::Cache, &evidence_row_key(digest))
+        .unwrap_or_else(|| panic!("evidence cache row missing"));
+    (
+        digest,
+        result(EvidenceBundle::decode(row.bytes()), "cached bundle decode"),
+    )
+}
+
+fn export_bundle(
+    scope: &PrincipalScope<'_>,
+    artifact: &OfflineExport,
+    movement_id: &ActivityEntryId,
+    domain: SettlementDomain,
+) -> EvidenceBundle {
+    let feed = result(Feed::new(5), "feed");
+    let filters = result(
+        Feed::apply_filters(FilterDraft::new().with_kinds([ActivityKind::Movement])),
+        "filters",
+    );
+    result(
+        result(EvidenceExport::new(feed, 64 * 1024), "evidence exporter").evidence(
+            scope,
+            &filters,
+            std::slice::from_ref(movement_id),
+            vec![artifact.clone()],
+            domain,
+            &receipt_authority(artifact),
+            21,
+            2,
+        ),
+        "evidence bundle",
+    )
+    .0
 }
 
 fn activity_id(value: &str) -> ActivityEntryId {
@@ -205,21 +291,18 @@ fn filtered_statement_and_evidence_are_offline_verifiable_and_redacted() {
     assert!(!csv.contains("private-agent-label"));
     assert!(!csv.contains("canonical-state-leaf"));
 
-    let bundle = result(
+    let (bundle, report) = result(
         result(EvidenceExport::new(feed, 64 * 1024), "evidence exporter").evidence(
             &scope,
             &filters,
             std::slice::from_ref(&movement_id),
             vec![artifact.clone()],
             settlement_domain(),
+            &receipt_authority(&artifact),
             21,
             2,
         ),
         "evidence bundle",
-    );
-    let report = result(
-        bundle.verify(settlement_domain()),
-        "third-party bundle verification",
     );
     let agent_verified = result(
         build_agent_export(bundle.protocol_evidence()[0].clone(), settlement_domain()),
@@ -238,6 +321,7 @@ fn filtered_statement_and_evidence_are_offline_verifiable_and_redacted() {
             std::slice::from_ref(&movement_id),
             vec![artifact.clone()],
             settlement_domain(),
+            &receipt_authority(&artifact),
             21,
             2,
         ),
@@ -254,6 +338,7 @@ fn filtered_statement_and_evidence_are_offline_verifiable_and_redacted() {
             std::slice::from_ref(&movement_id),
             vec![artifact.clone()],
             settlement_domain(),
+            &receipt_authority(&artifact),
             21,
             0,
         ),
@@ -318,8 +403,14 @@ fn audit_uses_the_same_bounded_bundle_and_keeps_referenced_bytes() {
         ),
         "audit evidence bundle",
     );
+    let digest = result(bundle.digest(), "audit bundle digest");
     let report = result(
-        bundle.verify(settlement_domain()),
+        bundle.verify(
+            digest,
+            scope.principal(),
+            settlement_domain(),
+            &ReceiptAuthority::default(),
+        ),
         "offline audit bundle verification",
     );
     assert_eq!(report.audit_entries(), 1);
@@ -341,5 +432,198 @@ fn audit_uses_the_same_bounded_bundle_and_keeps_referenced_bytes() {
         ),
         Err(ExportError::SizeBoundExceeded { maximum: 64 })
     ));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn cached_bundle_rows_are_labelled_only_by_the_verifier() {
+    let artifact = receipt_artifact();
+    let reference = receipt_reference(&artifact);
+    let movement_id = activity_id("act_movementexport1");
+    let root = support::directory("activity-evidence-rows");
+    let tenancy = support::tenancy(&[("alice", "tenant-a"), ("bob", "tenant-b")]);
+    let (mut store, _) =
+        support::install_and_open(&root, &tenancy, support::retention_uniform(100));
+    let alice = support::principal("alice");
+    let bob = support::principal("bob");
+    let foreign_domain = SettlementDomain::new(1, [0x66; 20]);
+    let authority = receipt_authority(&artifact);
+
+    let bob_bytes = {
+        let mut bob_scope = result(store.principal(&bob), "bob scope");
+        record_export_activity(&mut bob_scope, &artifact, &reference, &movement_id);
+        result(
+            export_bundle(&bob_scope, &artifact, &movement_id, settlement_domain()).encode(),
+            "bob bundle bytes",
+        )
+    };
+    let mut scope = result(store.principal(&alice), "alice scope");
+    record_export_activity(&mut scope, &artifact, &reference, &movement_id);
+    let genuine = export_bundle(&scope, &artifact, &movement_id, settlement_domain());
+    let genuine_bytes = result(genuine.encode(), "genuine bundle bytes");
+    let foreign_domain_bytes = result(
+        export_bundle(&scope, &artifact, &movement_id, foreign_domain).encode(),
+        "foreign-domain bundle bytes",
+    );
+
+    let (digest, cached) = cache_bundle(&mut scope, genuine_bytes.clone(), 30);
+    assert_eq!(digest, result(genuine.digest(), "genuine digest"));
+    let status = verification_status(cached.verify(
+        digest,
+        scope.principal(),
+        settlement_domain(),
+        &authority,
+    ));
+    assert!(status.is_receipt_verified());
+    assert!(!status.is_unavailable());
+    assert_eq!(status.label(), "receipt-verified");
+    assert_eq!(status.unverified_reason(), None);
+    assert_eq!(
+        status.report().map(|report| report.verified_receipts()),
+        Some(1)
+    );
+
+    let feed = result(Feed::new(5), "feed");
+    let loaded = result(cached.receipt_authority(feed, &scope), "feed authority");
+    let status =
+        verification_status(cached.verify(digest, scope.principal(), settlement_domain(), &loaded));
+    assert!(status.is_unavailable());
+    assert!(!status.is_receipt_verified());
+    assert_eq!(status.label(), "unavailable");
+    assert_eq!(status.unverified_reason(), None);
+    assert!(matches!(
+        cached.verify(
+            digest,
+            scope.principal(),
+            settlement_domain(),
+            &ReceiptAuthority::default(),
+        ),
+        Err(VerifyError::Unavailable(ExportError::AuthorityUnavailable { reference: ref missing }))
+            if *missing == reference
+    ));
+
+    let mut substituted = digest;
+    substituted[0] ^= 0xff;
+    let status = verification_status(cached.verify(
+        substituted,
+        scope.principal(),
+        settlement_domain(),
+        &authority,
+    ));
+    assert_eq!(status.label(), "unverified");
+    assert_eq!(
+        status.unverified_reason(),
+        Some(UnverifiedReason::DigestMismatch)
+    );
+
+    let mut altered_bytes = genuine_bytes.clone();
+    let altered_at = unique_position(
+        &altered_bytes,
+        &artifact.receipts[0].canonical_receipt_bytes,
+    ) + 8;
+    altered_bytes[altered_at] ^= 0x01;
+    result(
+        scope.put(
+            Table::Cache,
+            evidence_row_key(digest),
+            31,
+            altered_bytes.clone(),
+        ),
+        "altered evidence row",
+    );
+    let altered = result(
+        EvidenceBundle::decode(
+            scope
+                .get(Table::Cache, &evidence_row_key(digest))
+                .unwrap_or_else(|| panic!("altered evidence row missing"))
+                .bytes(),
+        ),
+        "altered row decode",
+    );
+    let status = verification_status(altered.verify(
+        digest,
+        scope.principal(),
+        settlement_domain(),
+        &authority,
+    ));
+    assert!(!status.is_receipt_verified());
+    assert_eq!(status.label(), "unverified");
+    assert_eq!(
+        status.unverified_reason(),
+        Some(UnverifiedReason::DigestMismatch)
+    );
+    let (rekeyed_digest, rekeyed) = cache_bundle(&mut scope, altered_bytes, 32);
+    assert_ne!(rekeyed_digest, digest);
+    let status = verification_status(rekeyed.verify(
+        rekeyed_digest,
+        scope.principal(),
+        settlement_domain(),
+        &authority,
+    ));
+    assert_eq!(status.label(), "unverified");
+    assert_eq!(status.unverified_reason(), Some(UnverifiedReason::Tampered));
+
+    let (bob_digest, bob_row) = cache_bundle(&mut scope, bob_bytes, 33);
+    let status = verification_status(bob_row.verify(
+        bob_digest,
+        scope.principal(),
+        settlement_domain(),
+        &authority,
+    ));
+    assert_eq!(status.label(), "unverified");
+    assert_eq!(
+        status.unverified_reason(),
+        Some(UnverifiedReason::PrincipalMismatch)
+    );
+    assert!(bob_row
+        .verify(bob_digest, &bob, settlement_domain(), &authority)
+        .is_ok());
+
+    let (foreign_digest, foreign_row) = cache_bundle(&mut scope, foreign_domain_bytes, 34);
+    let status = verification_status(foreign_row.verify(
+        foreign_digest,
+        scope.principal(),
+        settlement_domain(),
+        &authority,
+    ));
+    assert_eq!(status.label(), "unverified");
+    assert_eq!(
+        status.unverified_reason(),
+        Some(UnverifiedReason::SettlementDomainMismatch)
+    );
+
+    let genuine_key = SigningKey::from_bytes(&[3; 32]).verifying_key().to_bytes();
+    let other_key = SigningKey::from_bytes(&[9; 32]).verifying_key().to_bytes();
+    let mut spliced_bytes = genuine_bytes.clone();
+    let spliced_at = unique_position(&spliced_bytes, &genuine_key);
+    spliced_bytes[spliced_at..spliced_at + 32].copy_from_slice(&other_key);
+    let (spliced_digest, spliced) = cache_bundle(&mut scope, spliced_bytes, 35);
+    let status = verification_status(spliced.verify(
+        spliced_digest,
+        scope.principal(),
+        settlement_domain(),
+        &authority,
+    ));
+    assert_eq!(status.label(), "unverified");
+    assert_eq!(
+        status.unverified_reason(),
+        Some(UnverifiedReason::AuthorityMismatch)
+    );
+    let mut wrong_authority = ReceiptAuthority::default();
+    wrong_authority.insert(
+        reference.clone(),
+        AuthorizedBatch::new([4; 32], [5; 32], [2; 32], [3; 32], other_key),
+    );
+    let status = verification_status(cached.verify(
+        digest,
+        scope.principal(),
+        settlement_domain(),
+        &wrong_authority,
+    ));
+    assert_eq!(
+        status.unverified_reason(),
+        Some(UnverifiedReason::AuthorityMismatch)
+    );
     let _ = std::fs::remove_dir_all(root);
 }

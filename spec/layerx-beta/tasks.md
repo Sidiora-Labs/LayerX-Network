@@ -72,7 +72,7 @@ Two points need owner confirmation before the corresponding task starts, and one
     - Reload generations from the store before the daemon accepts any token on boot, and terminate in-flight subscriptions for a closed or revoked session at the next boundary with a typed revoked event.
     - Add a test that enumerates every token-gated operation entry point and proves each refuses a revoked token, plus post-closure, post-revocation and post-restart cases and a cross-tenant isolation case, in the session, revocation, tenant_resolve and subscription suites.
     - _Requirements: 4.1, 4.2, 4.3, 4.4, 4.5, 4.6_
-  - [ ] 2.3 Run the evidence verifier before any verified label
+  - [-] 2.3 Run the evidence verifier before any verified label
     - In the authenticated evidence read, after decoding the cached bundle, call EvidenceBundle::verify with the expected activity digest, the requesting principal, the settlement domain and the receipt authority, and map its result to receipt-verified, unverified with the typed reason, or unavailable.
     - Make the verification-status type constructible only from the verifier's result path by restricting its constructor to the export module, and apply the same path to custody evidence rows and exported bundles.
     - Add activity and export tests for an altered row, a foreign-principal row, a foreign-settlement-domain row and a wrong-authority row each returning unverified with the correct reason, and a genuine row returning verified.
