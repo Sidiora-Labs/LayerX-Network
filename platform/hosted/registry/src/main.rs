@@ -856,7 +856,7 @@ mod tests {
             "--ro-bind",
             "--attach-before-exec",
             "--cpu-time-max-usec=",
-            "environment_digest(&root.join(\"environment\"), Some(deadline))",
+            "environment_digest(&workspace.root.join(\"environment\"), Some(deadline))",
             "openat2(",
             "ResolveFlags::BENEATH",
         ] {
