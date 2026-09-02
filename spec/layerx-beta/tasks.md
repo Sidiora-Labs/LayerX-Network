@@ -130,7 +130,7 @@ Two points need owner confirmation before the corresponding task starts, and one
 ## Wave 4 - Artifact Identity, Publication and the Qualification Gate
 
 - [ ] 4. Publish every ecosystem with provenance, and give the runner a real driver
-  - [-] 4.1 Make the release manifest and the release workflow agree
+  - [x] 4.1 Make the release manifest and the release workflow agree
     - Make platform-release-check compare the ecosystems declared in registries.kvx with the publication jobs in the release workflow in both directions and fail on any declared-but-unpublished or published-but-undeclared artifact.
     - Add a publication job for every ecosystem registries.kvx declares - crates.io, npm, PyPI, Go modules, Maven Central, SwiftPM and NuGet - publishing under a beta pre-release version with an immutable digest, a signature, an SBOM and a provenance attestation, targeting the real registry or the owner-designated beta registry by secret name, and an install check per artifact that installs from that registry and verifies the digest; complete the skeleton entries in registries.kvx with the real package identities.
     - Promote the aggregate Programs acceptance, the sanitizer jobs, the committed long-fuzz corpus and supported-architecture replay to required jobs on the release revision - remove the schedule-only and opt-in gating - and record each as a gate entry when run.

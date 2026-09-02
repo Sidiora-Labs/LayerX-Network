@@ -440,7 +440,7 @@ status = "pending"
 
 [task.4.1]
 title = "Make the release manifest and the release workflow agree"
-status = "in_progress"
+status = "done"
 wave = 4
 requires = ["1.1"]
 do_1 = "Make platform-release-check compare the ecosystems declared in registries.kvx with the publication jobs in the release workflow in both directions and fail on any declared-but-unpublished or published-but-undeclared artifact."
