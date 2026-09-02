@@ -1,5 +1,6 @@
 PLATFORM_CARGO ?= cargo
 PLATFORM_MANIFEST := platform/Cargo.toml
+PLATFORM_BETA_CLUSTER_ENV ?= build/beta-cluster/env
 
 .PHONY: platform-js-install platform-build platform-build-all platform-lint platform-test platform-sdk-check \
 	platform-sdk-generate platform-receipt-fixture platform-verify-sdks platform-test-sdks platform-release-check platform-release-plan platform-release-test \
@@ -131,16 +132,14 @@ platform-test-registry:
 	$(PLATFORM_CARGO) test --offline --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-registry
 
 platform-hosted-smoke:
-	@test -n "$${LAYERX_TESTNET_URL:-}"
-	@test -n "$${LAYERX_GATEWAY_URL:-}"
-	@test -n "$${LAYERX_FAUCET_URL:-}"
-	@test -n "$${LAYERX_TEST_AUTH_TOKEN_FILE:-}"
-	@test -n "$${LAYERX_TEST_CA_FILE:-}"
-	@test -n "$${LAYERX_TEST_SOURCE_DID:-}"
-	@test -n "$${LAYERX_TEST_SOURCE_PUBLIC_KEY:-}"
-	@test -n "$${LAYERX_TEST_DESTINATION_DID:-}"
-	@test -n "$${LAYERX_TEST_ASSET:-}"
-	@test -n "$${LAYERX_TEST_AMOUNT:-}"
+	@set -e; \
+	if [ -r "$(PLATFORM_BETA_CLUSTER_ENV)" ]; then . "$(PLATFORM_BETA_CLUSTER_ENV)"; fi; \
+	for variable in LAYERX_TESTNET_URL LAYERX_GATEWAY_URL LAYERX_FAUCET_URL LAYERX_TEST_AUTH_TOKEN_FILE \
+		LAYERX_TEST_CA_FILE LAYERX_TEST_SOURCE_DID LAYERX_TEST_SOURCE_PUBLIC_KEY LAYERX_TEST_DESTINATION_DID \
+		LAYERX_TEST_ASSET LAYERX_TEST_AMOUNT; do \
+		eval "value=\$${$$variable:-}"; \
+		if [ -z "$$value" ]; then echo "platform-hosted-smoke: missing input $$variable" >&2; exit 1; fi; \
+	done; \
 	sh platform/hosted/testnet/tests/hosted-smoke.sh
 
 platform-hosted-topology-check:

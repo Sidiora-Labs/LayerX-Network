@@ -15,6 +15,7 @@ FROM node:24.6.0-bookworm-slim
 ENV NODE_ENV=production PORT=3000
 WORKDIR /app
 COPY --from=build /src/platform/hosted/dashboard/web/.next/standalone ./
-COPY --from=build /src/platform/hosted/dashboard/web/.next/static ./.next/static
+COPY --from=build /src/platform/hosted/dashboard/web/.next/static ./platform/hosted/dashboard/web/.next/static
+WORKDIR /app/platform/hosted/dashboard/web
 USER 65532:65532
 CMD ["node", "server.js"]
