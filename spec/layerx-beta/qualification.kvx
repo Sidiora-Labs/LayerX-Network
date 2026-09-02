@@ -221,3 +221,11 @@ symbol = "Journal::append ProviderCallbackApplied"
 observed = "cg spec done 3.5 ran verify_cmd (make interop-test-ramps) to pass (9 passed, 0 failed) and every touch check to pass, then failed its graph symbol check for Journal::append and ProviderCallbackApplied. Both are defined at platform/ramps/toolkit/src/journal.rs (impl method append on Journal at line 949, enum variant Event::ProviderCallbackApplied at line 82); the Codify graph does not resolve path-qualified impl methods or enum variants, so cg symbol reports them not defined."
 assumption = "The task was marked done with --force solely to override the two graph symbol checks that cannot see impl-qualified methods and enum variants; the verify_cmd was executed and passed and no gate was skipped, consistent with observation.1.1.7."
 severity = "note"
+
+[observation.3.1.1]
+task = "3.1"
+file = "src/modules/programs/artifact.c"
+symbol = "lxp_programs_artifact_open"
+observed = "cg spec done 3.1 ran verify_cmd (make test-snapshot test-state-root programs-core-test) to pass and every symbol check to pass, then failed the touch check for src/modules/programs/artifact.c because the task changed no line in it. No do_ item of task 3.1 requires editing the artifact resolver: lxp_programs_artifact_open resolves through the kernel blob store, which the new loader now restores, and req 2.5 (identical artifact bytes and identical wrong-hash refusal on a restored node) is proven by the new deploy, snapshot, restore and post-restore CALL coverage in tests/programs/test_call_activity.c."
+assumption = "The touch entry was an anticipated edit rather than a required one; it was removed from touches so the completion reflects the files the task really changed, and no gate was skipped or forced."
+severity = "note"
