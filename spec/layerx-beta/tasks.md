@@ -93,7 +93,7 @@ Two points need owner confirmation before the corresponding task starts, and one
     - On successful load, replace the kernel blob store atomically with the snapshot's blob set, removing blobs the snapshot does not carry, before publishing state and module KV.
     - Extend tests/test_snapshot.c and the programs call-activity test to prove deploy, snapshot, restore into a fresh node, state-root equality and a post-restore CALL, plus rejection for tampered, missing and oversize blob sets.
     - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7_
-  - [-] 3.2 Unify checkpoint identity and freshness across C, Rust and Solidity
+  - [x] 3.2 Unify checkpoint identity and freshness across C, Rust and Solidity
     - Confirm decision.checkpoint_v2 with the owner and record the answer as an observation; then move the native domain table and the layerx-wire Domain enum to the version 2 checkpoint-certificate and guarantor-attestation tags, removing the version 1 tags unless retained evidence requires an explicit version-keyed path.
     - Add the header-relative attestation freshness window to the native verifier and to layerx-proof verify_certificate, sourcing the maximum attestation delay from one declared configuration value that the Solidity registry, the native core and layerx-proof all consume.
     - Create one cross-language checkpoint vector set under tests/vectors covering fresh, too-early, too-late and boundary attestation times with expected digests and outcomes, and consume it from the C protocol test, the Rust wire and proof tests, the Foundry registry test and the mirror verifier test.
