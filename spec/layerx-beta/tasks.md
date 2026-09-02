@@ -114,7 +114,7 @@ Two points need owner confirmation before the corresponding task starts, and one
     - On apply failure after validation, retain no event and leave every index unchanged; make a retry of the same callback identity produce the same outcome.
     - Add fault-injection tests interrupting every write step and proving restart recovery without operator repair, replay equivalence and callback idempotency.
     - _Requirements: 9.3, 9.4, 9.5_
-  - [-] 3.6 Align hosted topology and make readiness journey-specific
+  - [x] 3.6 Align hosted topology and make readiness journey-specific
     - Point testnet-control's in-cluster gateway URL at the port the gateway Service exposes, and admit testnet-control in the gateway NetworkPolicy ingress alongside ingress-nginx; do the same for every other declared dependency edge.
     - Write platform/hosted/tests/topology-check.sh that parses the hosted manifests, resolves every configured in-cluster URL to a Service and port, checks each declared edge against NetworkPolicy on both ends and fails on any mismatch; add a platform-hosted-topology-check target.
     - Extend the testnet readiness endpoint to report per-dependency readiness for identity, faucet, core, receipt authority, registry, Redis, gateway and Paxeer boundary, and per-journey readiness as the conjunction of each journey's declared dependency set; make the status surface unable to render a global ready state with any journey degraded.

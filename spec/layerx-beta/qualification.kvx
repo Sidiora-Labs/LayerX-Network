@@ -403,3 +403,11 @@ symbol = "cargo clippy --offline --manifest-path platform/Cargo.toml --locked -p
 observed = "Under the workspace deny-level lints the testnet crate fails clippy on one pre-existing finding outside the task's touches: lib.rs:26 fn validate returns Result without a # Errors doc section (missing_errors_doc, unchanged since 093d2b90). The task-owned platform/hosted/testnet/src/main.rs lints clean once the four findings that existed in it on main (two ToOwned assignments in client_request, two needless pass-by-value parameters of serve) were rewritten; verified by a diagnostic run allowing only clippy::missing_errors_doc, which reported no findings."
 assumption = "The crate's clippy gate is left failing on lib.rs for its owner rather than silenced under task 3.6; the task verify_cmd does not include platform-lint. See observation.1.2.5 for the same pattern in the CLI and emulator crates."
 severity = "note"
+
+[observation.3.6.4]
+task = "3.6"
+file = "platform/hosted/testnet/src/main.rs"
+symbol = "probe status gateway Service gateway NetworkPolicy"
+observed = "cg spec done 3.6 ran verify_cmd (make platform-test-tooling platform-hosted-topology-check beta-contract-check) to pass under the shared tooling lock and every touch check to pass, then failed its graph symbol check for the descriptive symbols testnet probe and status (the probe and status functions in platform/hosted/testnet/src/main.rs), gateway Service and gateway NetworkPolicy (Kubernetes objects in platform/hosted/gateway/deployment.yaml); the graph indexes neither space-separated descriptive names nor YAML manifests."
+assumption = "The task was marked done with --force solely to override the three descriptive-symbol graph checks; the verify_cmd was executed and passed and no gate was skipped, consistent with observation.1.1.7."
+severity = "note"

@@ -407,7 +407,7 @@ reqs = ["9.3","9.4","9.5"]
 
 [task.3.6]
 title = "Align hosted topology and make readiness journey-specific"
-status = "in_progress"
+status = "done"
 wave = 3
 requires = ["1.1"]
 do_1 = "Point testnet-control's in-cluster gateway URL at the port the gateway Service exposes, and admit testnet-control in the gateway NetworkPolicy ingress alongside ingress-nginx; do the same for every other declared dependency edge."
