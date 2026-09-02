@@ -2,7 +2,7 @@
 
 # Human API reference
 
-Schema `LayerX Human API`, contract major `1`, minor `0`, generated from `human/schema/human-api`.
+Schema `LayerX Human API`, contract major `1`, minor `2`, generated from `human/schema/human-api`.
 
 Transport is HTTPS with JSON bodies under the `/v1` base path. Every amount is a decimal string of base units and always travels with its currency code. Every mutation that can move money requires the `Idempotency-Key` header, and repeating the request returns the original journey rather than a second effect.
 
@@ -34,6 +34,8 @@ Additive only within a major version: a release may only add sections, keys, lis
 | `approval.get` | `GET` | `/v1/approvals/{approval_id}` | `Empty` | `ApprovalDetail` | not used |
 | `approval.list` | `GET` | `/v1/approvals` | `Empty` | `ApprovalPage` | not used |
 | `approval.reject` | `POST` | `/v1/approvals/{approval_id}/reject` | `Empty` | `ApprovalDecision` | required |
+| `account.balance` | `GET` | `/v1/account/balance` | `Empty` | `AccountBalance` | not used |
+| `home.summary` | `GET` | `/v1/home` | `Empty` | `HomeSummary` | not used |
 | `account.create` | `POST` | `/v1/accounts` | `AccountCreateRequest` | `AccountCreation` | required |
 | `authenticator.backup.rotate` | `POST` | `/v1/security/authenticators/backup-codes` | `BackupCodeRotation` | `BackupCodeSet` | not used |
 | `authenticator.disable` | `POST` | `/v1/security/authenticators/{authenticator_id}/disable` | `AuthenticatorDisable` | `AuthenticatorStatus` | not used |
@@ -59,13 +61,13 @@ Additive only within a major version: a release may only add sections, keys, lis
 | `security.passkey.register.finish` | `POST` | `/v1/security/passkeys/registrations/{registration_id}` | `SecurityPasskeyRegistrationFinish` | `Passkey` | not used |
 | `security.passkey.revoke` | `POST` | `/v1/security/passkeys/{passkey_id}/revoke` | `SecurityPasskeyRevocation` | `PasskeyList` | not used |
 | `security.recovery.reveal` | `POST` | `/v1/security/recovery/evidence` | `SecurityRecoveryReveal` | `TimedSecret` | not used |
-| `security.session.revoke` | `POST` | `/v1/security/sessions/{session_id}/revoke` | `SecuritySessionRevocation` | `SessionRevocation` | not used |
-| `security.session.revoke-all` | `POST` | `/v1/security/sessions/revoke-all` | `SecuritySessionRevocation` | `SessionRevocation` | not used |
+| `security.session.revoke` | `POST` | `/v1/security/sessions/{session_id}/revoke` | `SecuritySessionRevocation` | `SessionRevocation` | required |
+| `security.session.revoke-all` | `POST` | `/v1/security/sessions/revoke-all` | `SecuritySessionRevocation` | `SessionRevocation` | required |
 | `session.list` | `GET` | `/v1/sessions` | `Empty` | `SessionList` | not used |
-| `session.open` | `POST` | `/v1/sessions` | `SessionOpenRequest` | `Session` | not used |
+| `session.open` | `POST` | `/v1/sessions` | `SessionOpenRequest` | `Session` | required |
 | `session.refresh` | `POST` | `/v1/sessions/refresh` | `Empty` | `Session` | not used |
-| `session.revoke` | `DELETE` | `/v1/sessions/{session_id}` | `Empty` | `SessionRevocation` | not used |
-| `session.revoke-all` | `POST` | `/v1/sessions/revoke-all` | `Empty` | `SessionRevocation` | not used |
+| `session.revoke` | `DELETE` | `/v1/sessions/{session_id}` | `Empty` | `SessionRevocation` | required |
+| `session.revoke-all` | `POST` | `/v1/sessions/revoke-all` | `Empty` | `SessionRevocation` | required |
 | `stepup.begin` | `POST` | `/v1/step-up` | `StepUpRequest` | `StepUpChallenge` | not used |
 | `stepup.finish` | `POST` | `/v1/step-up/{challenge_id}` | `StepUpFinish` | `StepUpEvidence` | not used |
 | `evidence.get` | `GET` | `/v1/evidence/{evidence_id}` | `Empty` | `EvidenceMaterial` | not used |
@@ -163,6 +165,16 @@ additive_only
 | `ErrorCode` | type | variants: `unauthenticated`, `session-expired`, `step-up-required`, `forbidden`, `not-found`, `invalid-request`, `conflict`, `rate-limited`, `cursor-expired`, `unavailable`, `upstream-degraded`, `challenge-expired`, `refused-by-policy`, `refused-by-budget`, `refused-by-capability`, `refused-by-protocol`, `refused-by-limit`, `quote-expired`, `wallet-not-bound`, `exit-unavailable`, `already-decided`, `hold-expired`, `hold-defective`, `archive-needs-disposition`, `confirmation-mismatch`, `not-suppressible`, `support-unavailable`, `support-conversation-unknown`, `support-message-unknown` |
 | `Retriability` | type | variants: `retriable`, `retriable-after`, `structural`, `final` |
 
+### Module `home`
+
+additive_only
+
+| Declaration | Kind | Shape |
+|---|---|---|
+| `AccountBalance` | type | required: `account_id:AccountId`, `money:Money`, `verification:VerificationLevel`, `freshness:ProtocolFreshness`, `evidence:EvidenceRef[]` |
+| `HomeSummary` | type | required: `balance:AccountBalance`, `agents:Agent[]`, `approvals:ApprovalSummary[]`, `recent_activity:ActivityEntryDetail[]` |
+| `ProtocolFreshness` | type | required: `observed_at:Timestamp`, `age_seconds:integer`, `source_head:string`, `within_bound:boolean`<br>optional: `checkpoint:string` |
+
 ### Module `identity`
 
 additive_only
@@ -221,8 +233,9 @@ additive_only
 | `SecurityRecoveryReveal` | type | required: `evidence_id:EvidenceId`, `step_up:StepUpEvidence` |
 | `SecuritySessionRevocation` | type | required: `step_up:StepUpEvidence` |
 | `Session` | type | required: `session_id:SessionId`, `device:Device`, `opened_at:Timestamp`, `last_active_at:Timestamp`, `current:boolean` |
+| `SessionDevice` | type | required: `label:string`, `platform:string` |
 | `SessionList` | type | required: `sessions:Session[]` |
-| `SessionOpenRequest` | type | required: `assertion_id:AssertionId` |
+| `SessionOpenRequest` | type | required: `assertion_id:AssertionId`<br>optional: `device:SessionDevice` |
 | `SessionRevocation` | type | required: `revoked_session_ids:SessionId[]`, `revoked_at:Timestamp` |
 | `StepUpChallenge` | type | required: `challenge_id:StepUpChallengeId`, `confirms:OperationDigest`, `ceremony:OpaqueCredential`, `expires_at:Timestamp` |
 | `StepUpEvidence` | type | required: `challenge_id:StepUpChallengeId`, `confirms:OperationDigest`, `passkey_id:PasskeyId`, `completed_at:Timestamp`, `expires_at:Timestamp` |
@@ -314,7 +327,7 @@ additive_only
 | Declaration | Kind | Shape |
 |---|---|---|
 | `Money` | record | fields: `amount:Amount`, `currency:CurrencyCode` |
-| `ResponseEnvelope` | record | fields: `ok:boolean`, `result:object`, `trace:TraceId` |
+| `ResponseEnvelope` | record | optional: `error:ApiError`<br>fields: `ok:boolean`, `result:object`, `trace:TraceId` |
 | `SchemaVersion` | record | fields: `major:integer`, `minor:integer` |
 | `VersionInfo` | record | fields: `schema:SchemaVersion`, `service:string` |
 | `Amount` | scalar | json: `string`<br>format: `decimal`<br>rust: `u128`<br>typescript: `bigint` |

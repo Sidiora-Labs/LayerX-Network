@@ -228,4 +228,34 @@ file = "src/modules/programs/artifact.c"
 symbol = "lxp_programs_artifact_open"
 observed = "cg spec done 3.1 ran verify_cmd (make test-snapshot test-state-root programs-core-test) to pass and every symbol check to pass, then failed the touch check for src/modules/programs/artifact.c because the task changed no line in it. No do_ item of task 3.1 requires editing the artifact resolver: lxp_programs_artifact_open resolves through the kernel blob store, which the new loader now restores, and req 2.5 (identical artifact bytes and identical wrong-hash refusal on a restored node) is proven by the new deploy, snapshot, restore and post-restore CALL coverage in tests/programs/test_call_activity.c."
 assumption = "The touch entry was an anticipated edit rather than a required one; it was removed from touches so the completion reflects the files the task really changed, and no gate was skipped or forced."
+[observation.2.4.1]
+task = "2.4"
+file = "human/schema/human-api/baseline.kvx"
+symbol = "committed_baseline_matches_regeneration"
+observed = "cargo test --manifest-path human/tools/schema-check/Cargo.toml --locked --offline exits 101 with 39 passed and 5 failed: real_schema_passes_with_fresh_baseline, committed_baseline_matches_regeneration, added_declaration_passes_beyond_the_baseline, appended_enum_variant_is_additive and adding_a_settlement_domain_variant_is_additive_by_construction all assert additions_beyond_baseline against the real schema. The built checker reports 88 declarations beyond the frozen baseline for the untouched main schema at /root/Layerx-protocol/human/schema/human-api and 93 for this branch after the ResponseEnvelope optional and failure keys and compatibility row 3 were added; baseline.kvx was last refreshed at 1171c81c. The conformance run itself passes on this branch: 970 declarations, 78 operations, 234 golden vectors."
+assumption = "The five failures are pre-existing baseline drift, not task-scoped; this task adds only additive declarations and does not run --write-baseline because the schema-check tool names that refresh a deliberate act. The task verify_cmd does not include the schema-check test suite (make human-check does)."
+severity = "suspect"
+
+[observation.2.4.2]
+task = "2.4"
+file = "human/apps/web/src/explorer/mirror-server.ts"
+symbol = "npm run lint"
+observed = "npx eslint --max-warnings=0 \"src/**/*.{ts,tsx}\" \"copy/**/*.ts\" in human/apps/web exits 1 with 8 errors in src/api/index.ts:23, src/auth/session.ts:15, src/explorer/mirror-server.ts:49 (four restrict-template-expressions), src/journeys/agents/shell.ts:6 and src/journeys/home/model.ts:108. git diff --stat main over those five files is empty, so they are byte-identical to main 15267435. tsc --noEmit, node policy/check.mjs and eslint over the files this task touched all pass."
+assumption = "Pre-existing lint failures outside this task's touches; left unmodified. The task verify_cmd (next build and node tests) does not run eslint, so the failures do not gate this task, but npm run lint fails on main until their owning tasks repair them."
+severity = "suspect"
+
+[observation.2.4.3]
+task = "2.4"
+file = "human/schema/human-api/v1.kvx"
+symbol = "record.ResponseEnvelope"
+observed = "The frozen baseline declares record.ResponseEnvelope.fields as ok:boolean, result:object, trace:TraceId, so result stays a required member while the encoding rule says result matches the response type only when ok is true and every golden failure vector omits it. error:ApiError was therefore added as an optional member. The generated decodeResponseEnvelope still requires response.result and would reject a failure envelope; the generated execute() reads ok, trace and error individually and decodes every failure vector into HumanApiError, which e2e/api-client.test.ts asserts."
+assumption = "Declaring result optional is a breaking declaration change under the additive-only rule and the frozen baseline, so it needs owner authority (a baseline refresh or a major bump); the envelope as declared is consistent with the wire encoding for every path the client actually uses."
+severity = "suspect"
+
+[observation.2.4.4]
+task = "2.4"
+file = "human/crates/layerx-human-service/src/server/production_components.rs"
+symbol = "execute"
+observed = "production_components.rs:659 answers the version operation with a literal {\"schema\": {\"major\": 1, \"minor\": 0}} while human/schema/human-api/v1.kvx now declares minor 2 and the served path in server/schema.rs reads the minor from the schema at runtime; golden/version.response.json carries minor 2."
+assumption = "Pre-existing drift from before the minor 1 bump; not a projection the generator drives and outside this task's touches, so it is recorded rather than edited."
 severity = "note"

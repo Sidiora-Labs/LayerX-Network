@@ -3,6 +3,7 @@
 import { useState, type SyntheticEvent } from "react";
 
 import { copyEntry } from "../../copy/catalog";
+import { formatCopy } from "../../copy/format";
 import {
   ExplorerEvidenceInput,
   ExplorerPanel,
@@ -17,47 +18,69 @@ import {
   decodeVerificationReport,
   type EvidenceVerificationReport,
 } from "./model";
+import {
+  explorerVerifierFailure,
+  type ExplorerVerifierFailure,
+  type ExplorerVerifierRetryAfter,
+} from "./verifier-state";
 
 type EvidenceKind = EvidenceVerificationReport["kind"];
+
+type VerifierStatus = Readonly<{ kind: "idle" }> | Readonly<{ kind: "checking" }> | ExplorerVerifierFailure;
+
+const IDLE: VerifierStatus = { kind: "idle" };
+const CHECKING: VerifierStatus = { kind: "checking" };
+const UNAVAILABLE: VerifierStatus = { kind: "unavailable" };
 
 const KIND_OPTIONS: readonly Readonly<{ value: EvidenceKind; label: string }>[] = [
   { value: "receipt", label: copyEntry("explorer.verify.kind.receipt").message },
   { value: "state-inclusion", label: copyEntry("explorer.verify.kind.state").message },
 ];
 
+function overloadedMessage(retryAfter: ExplorerVerifierRetryAfter): string {
+  return retryAfter.kind === "known"
+    ? formatCopy("explorer.verify.overloaded", { seconds: retryAfter.seconds })
+    : copyEntry("explorer.verify.overloaded.unknown_wait").message;
+}
+
 export function EvidenceVerifier() {
   const [kind, setKind] = useState<EvidenceKind>("receipt");
   const [evidence, setEvidence] = useState("");
-  const [status, setStatus] = useState<"idle" | "checking" | "refused" | "unavailable" | "divergent">("idle");
+  const [status, setStatus] = useState<VerifierStatus>(IDLE);
   const [report, setReport] = useState<EvidenceVerificationReport | undefined>(undefined);
 
-  const verify = async (event: SyntheticEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (status === "checking" || evidence.trim().length === 0) {
+  const verify = async () => {
+    const trimmed = evidence.trim();
+    if (status.kind === "checking" || trimmed.length === 0) {
       return;
     }
-    setStatus("checking");
+    setStatus(CHECKING);
     setReport(undefined);
     try {
       const response = await fetch("/api/explorer/verify", {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({ kind, evidence: evidence.trim() }),
+        body: JSON.stringify({ kind, evidence: trimmed }),
       });
       if (!response.ok) {
-        setStatus(response.status === 503 ? "unavailable" : response.status===409?"divergent":"refused");
+        setStatus(explorerVerifierFailure(response.status, response.headers.get("Retry-After")));
         return;
       }
       setReport(decodeVerificationReport(await response.json()));
-      setStatus("idle");
+      setStatus(IDLE);
     } catch {
-      setStatus("unavailable");
+      setStatus(UNAVAILABLE);
     }
+  };
+
+  const submit = (event: SyntheticEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    void verify();
   };
 
   return (
     <ExplorerPanel title={copyEntry("explorer.verify.form.title").message}>
-      <form className="flex flex-col gap-3" onSubmit={(event) => { void verify(event); }}>
+      <form className="flex flex-col gap-3" data-verifier-state={status.kind} onSubmit={submit}>
         <SettingsSegmentedControl
           aria-label={copyEntry("explorer.verify.kind.label").message}
           options={KIND_OPTIONS.map((option) => ({ ...option }))}
@@ -77,7 +100,7 @@ export function EvidenceVerifier() {
         </label>
         <KitButton
           type="submit"
-          loading={status === "checking"}
+          loading={status.kind === "checking"}
           {...(evidence.trim().length === 0
             ? {
                 disabled: true as const,
@@ -88,13 +111,23 @@ export function EvidenceVerifier() {
           {copyEntry("explorer.verify.action").message}
         </KitButton>
       </form>
-      {status === "refused" ? (
+      {status.kind === "refused" ? (
         <InlineNotice tone="danger" role="alert">{copyEntry("explorer.verify.refused").message}</InlineNotice>
       ) : null}
-      {status === "unavailable" ? (
+      {status.kind === "unavailable" ? (
         <InlineNotice tone="warning" role="status">{copyEntry("explorer.verify.unavailable").message}</InlineNotice>
       ) : null}
-      {status === "divergent" ? (<InlineNotice tone="danger" role="alert">{copyEntry("explorer.verify.divergent").message}</InlineNotice>) : null}
+      {status.kind === "divergent" ? (<InlineNotice tone="danger" role="alert">{copyEntry("explorer.verify.divergent").message}</InlineNotice>) : null}
+      {status.kind === "overloaded" ? (
+        <div className="flex flex-col gap-2">
+          <InlineNotice tone="warning" role="status">{overloadedMessage(status.retryAfter)}</InlineNotice>
+          <div>
+            <KitButton type="button" variant="secondary" onClick={() => { void verify(); }}>
+              {copyEntry("explorer.verify.retry").message}
+            </KitButton>
+          </div>
+        </div>
+      ) : null}
       {report === undefined ? null : (
         <div className="flex flex-col gap-3">
           {report.mirror === undefined

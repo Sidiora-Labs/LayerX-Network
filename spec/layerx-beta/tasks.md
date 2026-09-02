@@ -77,7 +77,7 @@ Two points need owner confirmation before the corresponding task starts, and one
     - Make the verification-status type constructible only from the verifier's result path by restricting its constructor to the export module, and apply the same path to custody evidence rows and exported bundles.
     - Add activity and export tests for an altered row, a foreign-principal row, a foreign-settlement-domain row and a wrong-authority row each returning unverified with the correct reason, and a genuine row returning verified.
     - _Requirements: 5.1, 5.2, 5.3, 5.4, 5.5_
-  - [ ] 2.4 Carry the structured error in the envelope and type the overload state
+  - [-] 2.4 Carry the structured error in the envelope and type the overload state
     - Add the ApiError member to record.ResponseEnvelope in human/schema/human-api/v1.kvx and add failed-response golden vectors carrying it for every operation.
     - Regenerate the TypeScript client and every other projection from the schema; leave the drift gate as the proof that nothing generated is stale.
     - In the explorer verifier client, map HTTP 429 to an explicit retryable overloaded state that preserves Retry-After and renders the wait and a Retry action; keep the verify route returning 429 with Retry-After.

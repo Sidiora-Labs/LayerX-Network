@@ -11,3 +11,8 @@ web_app = "0.1.x"
 schema = "1.1"
 service = "0.1.x"
 web_app = "0.1.x"
+
+[compatibility.row.3]
+schema = "1.2"
+service = "0.1.x"
+web_app = "0.1.x"
