@@ -156,13 +156,13 @@ The reached rung of a surface is raised only by a `[gate.*]` record in the evide
 
 | Ecosystem | Registry | Surface | Packages | Publication job |
 | --- | --- | --- | --- | --- |
-| crates-io | https://crates.io | sdk-rust | | absent |
-| npm | https://registry.npmjs.org | sdk-typescript | @sidiora/layerx-agent-middleware, @sidiora/layerx-buyer-middleware, @sidiora/layerx-merchant-middleware, @sidiora/layerx-seller-middleware | present |
-| pypi | https://pypi.org | sdk-python | | absent |
-| go-modules | https://proxy.golang.org | sdk-go | | absent |
-| maven-central | https://repo1.maven.org/maven2 | sdk-jvm | | absent |
-| swiftpm | https://github.com | sdk-swift | | absent |
-| nuget | https://www.nuget.org | sdk-dotnet | | absent |
+| crates-io | https://crates.io | sdk-rust | layerx-agent-api, layerx-client, layerx-crypto, layerx-mirror, layerx-programs-runtime, layerx-proof, layerx-sdk, layerx-types, layerx-wire | present |
+| npm | https://registry.npmjs.org | sdk-typescript | @sidiora/layerx-agent-integrations, @sidiora/layerx-agent-middleware, @sidiora/layerx-buyer-middleware, @sidiora/layerx-express, @sidiora/layerx-merchant-middleware, @sidiora/layerx-next, @sidiora/layerx-sdk, @sidiora/layerx-seller-middleware | present |
+| pypi | https://pypi.org | sdk-python | layerx-fastapi, layerx-sdk | present |
+| go-modules | https://proxy.golang.org | sdk-go | github.com/Sidiora-Labs/LayerX-Protocol/platform/sdk/go | present |
+| maven-central | https://repo1.maven.org/maven2 | sdk-jvm | com.sidiora.layerx:layerx-android, com.sidiora.layerx:layerx-sdk, com.sidiora.layerx:layerx-spring-boot-starter | present |
+| swiftpm | https://github.com | sdk-swift | LayerXSDK | present |
+| nuget | https://www.nuget.org | sdk-dotnet | LayerX.Sdk | present |
 
 | Key | Value |
 | --- | --- |
@@ -171,7 +171,7 @@ The reached rung of a surface is raised only by a `[gate.*]` record in the evide
 | release_tag_format | sdk-v{version} |
 | source_digest | git-archive-sha256 |
 
-The artifact set of the beta is exactly the content of the artifact manifest at `platform/release/artifact-manifest.json`, emitted by the release tool for every artifact the release workflow publishes with its name, version, registry, immutable digest, signature, SBOM and attestation references, source revision and rollback identity. The manifest is not yet emitted: the release tool does not produce it and the release workflow publishes only the four npm middleware packages. Until the manifest exists, no artifact is part of the beta artifact set.
+The artifact set of the beta is exactly the content of the artifact manifest at `platform/release/artifact-manifest.json`, emitted by the release tool for every artifact the release workflow publishes with its name, version, registry, immutable digest, signature, SBOM and attestation references, source revision and rollback identity. The manifest is not yet emitted: the release tool does not produce it. The release workflow publishes every ecosystem above through its `publish-<ecosystem>` job only after the release gates pass on the release revision, under the beta pre-release version the tagged revision declares, with an immutable digest, a signature, an SBOM, a provenance attestation and an install check from the registry per artifact; `make platform-release-check` refuses any ecosystem declared without a publication job and any publication job without a declaration. Until the manifest exists, no artifact is part of the beta artifact set.
 
 ### Install coordinates
 
@@ -251,7 +251,7 @@ The native C17 core (`src/`, `include/`) implements the ledger transition, check
 | Pending-release in-cluster services (core, core-admin, identity, receipt authority, agent boundary) | production deployments of the same services | the same services on the beta cluster, addressed by testnet_core_url, testnet_core_admin_url, gateway_identity_url, gateway_authority_url and gateway_component_url; their manifests are not in the repository | declared by the beta cluster bring-up of task 3.7 |
 | Beta Kubernetes cluster | production cluster | owner-designated beta cluster or a disposable local cluster running the real manifests and images | KUBECONFIG |
 | Ramp provider, compliance and KMS contracts | production layerx-ramp-provider-v1, layerx-ramp-compliance-v1 and KMS signature boundary | provider sandboxes | RAMP_URL, RAMP_OPERATOR_URL, RAMP_CA_PEM_B, RAMP_CUSTOMER_TOKEN, RAMP_OPERATOR_TOKEN, RAMP_ON_QUOTE_ID, RAMP_OFF_QUOTE_ID, RAMP_OFF_GRANT_JSON, RAMP_ON_ACCOUNT_SEQUENCE, RAMP_OFF_RECEIVER_SEQUENCE |
-| Package registries | crates.io, npm, PyPI, Go module proxy, Maven Central, SwiftPM tags, NuGet | the same registries with beta pre-release versions, or owner-designated beta registries | npm: OIDC trusted publishing (id-token: write); other ecosystems: publish token secret names declared by task 4.1 |
+| Package registries | crates.io, npm, PyPI, Go module proxy, Maven Central, SwiftPM tags, NuGet | the same registries with beta pre-release versions, or owner-designated beta registries | secrets LAYERX_RELEASE_CRATES_IO_TOKEN, LAYERX_RELEASE_NPM_TOKEN (empty selects npm OIDC trusted publishing), LAYERX_RELEASE_GO_TAG_TOKEN, LAYERX_RELEASE_MAVEN_CENTRAL_TOKEN, LAYERX_RELEASE_NUGET_API_KEY, LAYERX_RELEASE_SWIFTPM_REMOTE, LAYERX_RELEASE_GPG_PRIVATE_KEY, LAYERX_RELEASE_GPG_PASSPHRASE; a PyPI trusted publisher for platform.yml; beta registry overrides LAYERX_RELEASE_CRATES_IO_INDEX, LAYERX_RELEASE_NPM_REGISTRY, LAYERX_RELEASE_PYPI_REPOSITORY_URL, LAYERX_RELEASE_PYPI_INDEX_URL, LAYERX_RELEASE_GO_PROXY, LAYERX_RELEASE_MAVEN_UPLOAD_URL, LAYERX_RELEASE_MAVEN_REPOSITORY_URL, LAYERX_RELEASE_SWIFTPM_URL, LAYERX_RELEASE_NUGET_SOURCE |
 | Real agent-framework services | production RPC, budget, signer, receipt and A2A services | scheduled beta services | LAYERX_SCHEDULED_AGENT_RPC_URL, LAYERX_SCHEDULED_BUDGET_SERVICE_URL, LAYERX_SCHEDULED_SIGNER_SERVICE_URL, LAYERX_SCHEDULED_RECEIPT_SERVICE_URL, LAYERX_SCHEDULED_A2A_URL, LAYERX_SCHEDULED_AGENT_TOKEN, LAYERX_SCHEDULED_SPEND_TOOL_INPUT_JSON |
 | Webhook delivery fixture | production webhook service | scheduled beta webhook service | LAYERX_SCHEDULED_WEBHOOK_FIXTURE_URL, LAYERX_SCHEDULED_WEBHOOK_FIXTURE_TOKEN |
 | Hosted testnet CA | production CA | beta CA under the names in the Beta CA table | LAYERX_SCHEDULED_TESTNET_CA_BASE64 |
@@ -280,6 +280,6 @@ The native C17 core (`src/`, `include/`) implements the ledger transition, check
 | protocol_network_id | 402 | platform/hosted/gateway/deployment.yaml LAYERX_GATEWAY_PROTOCOL_NETWORK_ID | 1 | 3.6 |
 | placeholder_hostname | layerx.network | platform/hosted/webhooks/deployment.yaml Ingress layerx-developer and layerx-developer-web host | developers.layerx.example | 3.7 |
 | testnet_gateway_url_port | 443 | platform/hosted/testnet/deployment.yaml LAYERX_TESTNET_GATEWAY_URL port versus platform/hosted/gateway/deployment.yaml Service layerx-gateway port | 9443 | 3.6 |
-| install_package_unlisted | @sidiora/layerx-agent-middleware, @sidiora/layerx-buyer-middleware, @sidiora/layerx-merchant-middleware, @sidiora/layerx-seller-middleware | platform/docs/content/install.md npm install coordinate not listed in platform/release/registries.kvx [registry.npm] packages | @sidiora/layerx-sdk | 4.1 |
+| install_package_unlisted | com.sidiora.layerx:layerx-android, com.sidiora.layerx:layerx-sdk, com.sidiora.layerx:layerx-spring-boot-starter | platform/docs/content/install.md Java and Kotlin install coordinate carries the version and is not listed verbatim in platform/release/registries.kvx [registry.maven-central] packages | com.sidiora.layerx:layerx-sdk:0.1.0 | 4.2 |
 
 Each row records a value that a source carries today and that disagrees with the canonical value. The contract check recomputes every row from the sources; a row that disappears from the sources must be removed here, a disagreement that is not listed here fails the build, and the readiness claim cannot become `true` while any row remains.

@@ -2,6 +2,11 @@
   "name": "@sidiora/layerx-sdk",
   "version": "0.1.0",
   "description": "Production TypeScript SDK for the LayerX Agent and Human APIs",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Sidiora-Labs/LayerX-Protocol.git",
+    "directory": "agent/sdk/typescript"
+  },
   "type": "module",
   "private": false,
   "license": "SEE LICENSE IN LICENSE",

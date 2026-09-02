@@ -2,6 +2,11 @@
   "name": "@sidiora/layerx-seller-middleware",
   "version": "0.1.0",
   "description": "Receipt-gated LayerX x402 seller middleware",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Sidiora-Labs/LayerX-Protocol.git",
+    "directory": "platform/middleware/seller"
+  },
   "type": "module",
   "private": false,
   "license": "SEE LICENSE IN LICENSE",

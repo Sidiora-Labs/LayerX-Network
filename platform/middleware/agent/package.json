@@ -2,6 +2,11 @@
   "name": "@sidiora/layerx-agent-middleware",
   "version": "0.1.0",
   "description": "Budget-aware receipt-verifying LayerX agent middleware",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Sidiora-Labs/LayerX-Protocol.git",
+    "directory": "platform/middleware/agent"
+  },
   "type": "module",
   "private": false,
   "license": "SEE LICENSE IN LICENSE",

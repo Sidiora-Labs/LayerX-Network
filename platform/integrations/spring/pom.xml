@@ -8,6 +8,17 @@
   <version>0.1.0</version>
   <name>LayerX Spring Boot starter</name>
   <description>Receipt-gated x402 auto-configuration for Spring Boot services</description>
+  <url>https://github.com/Sidiora-Labs/LayerX-Protocol/tree/main/platform/integrations/spring</url>
+  <licenses>
+    <license><name>LayerX Protocol License</name><url>https://github.com/Sidiora-Labs/LayerX-Protocol/blob/main/LICENSE</url></license>
+  </licenses>
+  <developers><developer><organization>Sidiora Labs</organization></developer></developers>
+  <scm>
+    <connection>scm:git:https://github.com/Sidiora-Labs/LayerX-Protocol.git</connection>
+    <developerConnection>scm:git:ssh://git@github.com/Sidiora-Labs/LayerX-Protocol.git</developerConnection>
+    <url>https://github.com/Sidiora-Labs/LayerX-Protocol</url>
+    <tag>HEAD</tag>
+  </scm>
   <properties>
     <maven.compiler.release>21</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
@@ -75,6 +86,18 @@
         <configuration>
           <outputTimestamp>2024-01-01T00:00:00Z</outputTimestamp>
         </configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-source-plugin</artifactId>
+        <version>3.3.1</version>
+        <executions><execution><id>attach-sources</id><goals><goal>jar-no-fork</goal></goals></execution></executions>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-javadoc-plugin</artifactId>
+        <version>3.8.0</version>
+        <executions><execution><id>attach-javadocs</id><goals><goal>jar</goal></goals></execution></executions>
       </plugin>
     </plugins>
   </build>

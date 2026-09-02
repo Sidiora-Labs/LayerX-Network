@@ -2,6 +2,11 @@
   "name": "@sidiora/layerx-express",
   "version": "0.1.0",
   "description": "One-call LayerX x402 mount for Express applications",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Sidiora-Labs/LayerX-Protocol.git",
+    "directory": "platform/integrations/express"
+  },
   "type": "module",
   "private": false,
   "license": "SEE LICENSE IN LICENSE",

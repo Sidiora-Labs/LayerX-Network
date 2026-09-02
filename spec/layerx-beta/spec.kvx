@@ -440,7 +440,7 @@ status = "pending"
 
 [task.4.1]
 title = "Make the release manifest and the release workflow agree"
-status = "pending"
+status = "in_progress"
 wave = 4
 requires = ["1.1"]
 do_1 = "Make platform-release-check compare the ecosystems declared in registries.kvx with the publication jobs in the release workflow in both directions and fail on any declared-but-unpublished or published-but-undeclared artifact."
@@ -448,7 +448,7 @@ do_2 = "Add a publication job for every ecosystem registries.kvx declares - crat
 do_3 = "Promote the aggregate Programs acceptance, the sanitizer jobs, the committed long-fuzz corpus and supported-architecture replay to required jobs on the release revision - remove the schedule-only and opt-in gating - and record each as a gate entry when run."
 verify_cmd = "make platform-release-check"
 symbols = ["release_pipeline","registries declarations","release-pipeline workflow job"]
-touches = ["platform/release/registries.kvx","platform/release/src/main.rs",".github/workflows/platform.yml",".github/workflows/agent.yml",".github/workflows/programs-conformance.yml","tools/ci/replay-matrix.sh"]
+touches = ["platform/release/registries.kvx","platform/release/src/main.rs","platform/release/src/workflow.rs","platform/release/tests/registries.rs",".github/workflows/platform.yml",".github/workflows/agent.yml",".github/workflows/programs-conformance.yml","tools/ci/replay-matrix.sh","tools/ci/release-gate.sh","tools/ci/release-version.py","platform/docs/content/beta.md","agent/sdk/typescript/package.json","platform/middleware/agent/package.json","platform/middleware/buyer/package.json","platform/middleware/merchant/package.json","platform/middleware/seller/package.json","platform/integrations/agents/package.json","platform/integrations/express/package.json","platform/integrations/next/package.json","platform/integrations/spring/pom.xml","platform/integrations/android/pom.xml"]
 reqs = ["8.1","8.2","8.5","8.6"]
 
 [task.4.2]

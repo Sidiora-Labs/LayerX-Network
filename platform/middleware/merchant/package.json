@@ -2,6 +2,11 @@
   "name": "@sidiora/layerx-merchant-middleware",
   "version": "0.1.0",
   "description": "Receipt-backed LayerX merchant checkout middleware",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Sidiora-Labs/LayerX-Protocol.git",
+    "directory": "platform/middleware/merchant"
+  },
   "type": "module",
   "private": false,
   "license": "SEE LICENSE IN LICENSE",

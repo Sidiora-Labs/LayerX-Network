@@ -289,4 +289,34 @@ file = "human/crates/layerx-human-service/src/activity/export.rs"
 symbol = "EvidenceBundle::verify"
 observed = "cg spec done 2.3 ran verify_cmd (make human-test-activity) to pass (activity, detail and export suites plus three doctests including two compile_fail guards) and every touch check to pass, then failed its graph symbol check for EvidenceBundle::verify, which is the impl method at human/crates/layerx-human-service/src/activity/export.rs:347 inside impl EvidenceBundle (line 81); the Codify graph does not resolve path-qualified impl methods."
 assumption = "The task was marked done with --force solely to override the one graph symbol check for an impl-qualified method; the verify_cmd was executed and passed and no gate was skipped, consistent with observation.1.1.7 and observation.3.5.2."
+[observation.4.1.1]
+task = "4.1"
+file = "platform/docs/content/install.md"
+symbol = "Install coordinates com.sidiora.layerx:layerx-sdk:0.1.0"
+observed = "tools/ci/beta-contract-check.sh computes install_package_unlisted for the Java and Kotlin coordinate com.sidiora.layerx:layerx-sdk:0.1.0 because install.md carries the version inside the coordinate while platform/release/registries.kvx [registry.maven-central] packages lists the versionless com.sidiora.layerx:layerx-sdk. The former npm install_package_unlisted contradiction is resolved because @sidiora/layerx-sdk and the seven other npm packages are now declared and published."
+assumption = "The contradiction row in platform/docs/content/beta.md was rewritten to the Maven coordinate and assigned to task 4.2, which owns the artifact manifest and its install-coordinate verification; task 4.1 did not edit install.md."
+severity = "note"
+
+[observation.4.1.2]
+task = "4.1"
+file = "tools/ci/release-version.py"
+symbol = "release-version --tag"
+observed = "The release revision declares the published version: every Cargo workspace, package.json, pyproject.toml, pom.xml and LayerX.Sdk.csproj carries 0.1.0 and the Cargo path dependencies between the nine published crates carry no version. Run locally, tools/ci/release-version.py printed version=0.1.0, and tools/ci/release-version.py --tag sdk-v0.1.0-beta.1 exited 1 listing 57 manifests that must carry 0.1.0-beta.1 with exact internal pins before a beta tag can publish."
+assumption = "Tagging sdk-v<version>-beta.<n> is an owner action on a revision whose manifests already declare that pre-release version with exact internal pins; the pipeline refuses to rewrite manifests at publish time so the published bytes stay byte-comparable to the tagged source. Cargo and npm caret ranges do not match pre-release versions, so the pins are required rather than cosmetic."
+severity = "note"
+
+[observation.4.1.3]
+task = "4.1"
+file = ".github/workflows/platform.yml"
+symbol = "publish-crates-io publish-npm publish-pypi publish-go-modules publish-maven-central publish-swiftpm publish-nuget"
+observed = "The seven publication jobs and release-promotion were verified structurally by make platform-release-check, the 37 layerx-platform-release tests and a PyYAML parse, but no publication was executed: cosign and syft are not installed on the qualification host and no publish token, signing key, trusted publisher or beta registry override exists here. Owner inputs are referenced by name only: secrets LAYERX_RELEASE_CRATES_IO_TOKEN, LAYERX_RELEASE_NPM_TOKEN (optional; empty selects npm OIDC trusted publishing), LAYERX_RELEASE_GO_TAG_TOKEN, LAYERX_RELEASE_MAVEN_CENTRAL_TOKEN, LAYERX_RELEASE_NUGET_API_KEY, LAYERX_RELEASE_SWIFTPM_REMOTE, LAYERX_RELEASE_GPG_PRIVATE_KEY, LAYERX_RELEASE_GPG_PASSPHRASE; a PyPI trusted publisher registered for platform.yml; repository variables LAYERX_RELEASE_CRATES_IO_INDEX, LAYERX_RELEASE_NPM_REGISTRY, LAYERX_RELEASE_PYPI_REPOSITORY_URL, LAYERX_RELEASE_PYPI_INDEX_URL, LAYERX_RELEASE_GO_PROXY, LAYERX_RELEASE_MAVEN_UPLOAD_URL, LAYERX_RELEASE_MAVEN_REPOSITORY_URL, LAYERX_RELEASE_SWIFTPM_URL, LAYERX_RELEASE_NUGET_SOURCE."
+assumption = "The first tagged run under owner inputs is the executed evidence for req 8.2 and 8.6; until it runs, publication is blocked on the named inputs, not passed. Two override limits are known: publishing to an alternative Cargo registry through LAYERX_RELEASE_CRATES_IO_INDEX additionally requires registry = \"beta\" on the internal dependencies of the release revision, and npm --provenance is accepted only by registries that implement npm provenance, so a private LAYERX_RELEASE_NPM_REGISTRY without it fails the publish step rather than silently publishing without an attestation."
+severity = "blocker"
+
+[observation.4.1.4]
+task = "4.1"
+file = ".github/workflows/platform.yml"
+symbol = "programs-acceptance agent-sanitizers agent-fuzz-corpus replay-matrix tools/ci/release-gate.sh"
+observed = "The four release gates are required jobs of release-pipeline and run only under the release condition (workflow_dispatch or an sdk-v tag), each through tools/ci/release-gate.sh, which writes a [gate.4.1.<ordinal>] record and command log under spec/layerx-beta/evidence/<revision>/release-gates/<job>/ and uploads them as a workflow artifact. The runner was exercised locally on make platform-release-check (outcome pass, exit 0) and on a missing make target (outcome fail, note 'make no-such-target-xyz exited 2', exit 2); both trial records were deleted because they were not release-gate runs. .github/workflows/agent.yml now runs the sanitizer and long-fuzz jobs on every trigger and .github/workflows/programs-conformance.yml carries the aggregate acceptance job; tools/ci/replay-matrix.sh refuses unsupported architectures and a machine that differs from LXP_REPLAY_MACHINE instead of the former LXP_REQUIRE_NON_X86 opt-in."
+assumption = "Gate records produced in CI are workflow artifacts on the release revision; merging them into spec/layerx-beta/qualification.kvx is the release-candidate step owned by wave 5, since a workflow that pushes to the repository would need write permission the release jobs deliberately do not hold. The gates were not run on this host: make programs-test, make agent-test-sanitize, make agent-fuzz-long and make test-replay-golden on aarch64 need the wasm target, nightly-2025-11-10, an arm64 runner and roughly six hours of shared build capacity that the brief reserves for the release revision."
 severity = "note"

@@ -11,7 +11,8 @@ distribution = "https://crates.io"
 signing = "sigstore-keyless"
 provenance = "github-actions-attestation"
 verification = "byte-compare-against-tagged-source"
-status = "skeleton"
+packages = ["layerx-agent-api","layerx-client","layerx-crypto","layerx-mirror","layerx-programs-runtime","layerx-proof","layerx-sdk","layerx-types","layerx-wire"]
+status = "active"
 
 [registry.npm]
 ecosystem = "typescript"
@@ -20,17 +21,18 @@ distribution = "https://registry.npmjs.org"
 signing = "sigstore-keyless"
 provenance = "npm-provenance-attestation"
 verification = "byte-compare-against-tagged-source"
-packages = ["@sidiora/layerx-agent-middleware","@sidiora/layerx-buyer-middleware","@sidiora/layerx-merchant-middleware","@sidiora/layerx-seller-middleware"]
-status = "skeleton"
+packages = ["@sidiora/layerx-agent-integrations","@sidiora/layerx-agent-middleware","@sidiora/layerx-buyer-middleware","@sidiora/layerx-express","@sidiora/layerx-merchant-middleware","@sidiora/layerx-next","@sidiora/layerx-sdk","@sidiora/layerx-seller-middleware"]
+status = "active"
 
 [registry.pypi]
 ecosystem = "python"
-artifact = "sdist-and-wheel"
+artifact = "wheel"
 distribution = "https://pypi.org"
 signing = "sigstore-keyless"
 provenance = "pypi-trusted-publisher-attestation"
 verification = "byte-compare-against-tagged-source"
-status = "skeleton"
+packages = ["layerx-fastapi","layerx-sdk"]
+status = "active"
 
 [registry.go-modules]
 ecosystem = "go"
@@ -39,7 +41,8 @@ distribution = "https://proxy.golang.org"
 signing = "git-tag-signature"
 provenance = "go-checksum-database"
 verification = "byte-compare-against-tagged-source"
-status = "skeleton"
+packages = ["github.com/Sidiora-Labs/LayerX-Protocol/platform/sdk/go"]
+status = "active"
 
 [registry.maven-central]
 ecosystem = "jvm"
@@ -51,7 +54,8 @@ distribution = "https://repo1.maven.org/maven2"
 signing = "pgp-detached-signature"
 provenance = "github-actions-attestation"
 verification = "byte-compare-against-tagged-source"
-status = "skeleton"
+packages = ["com.sidiora.layerx:layerx-android","com.sidiora.layerx:layerx-sdk","com.sidiora.layerx:layerx-spring-boot-starter"]
+status = "active"
 
 [registry.swiftpm]
 ecosystem = "swift"
@@ -60,7 +64,8 @@ distribution = "https://github.com"
 signing = "git-tag-signature"
 provenance = "github-actions-attestation"
 verification = "byte-compare-against-tagged-source"
-status = "skeleton"
+packages = ["LayerXSDK"]
+status = "active"
 
 [registry.nuget]
 ecosystem = "dotnet"
@@ -69,4 +74,5 @@ distribution = "https://www.nuget.org"
 signing = "nuget-repository-signature"
 provenance = "github-actions-attestation"
 verification = "byte-compare-against-tagged-source"
-status = "skeleton"
+packages = ["LayerX.Sdk"]
+status = "active"
