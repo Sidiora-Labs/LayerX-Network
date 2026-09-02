@@ -109,7 +109,7 @@ Two points need owner confirmation before the corresponding task starts, and one
     - Make startup load complete units, quarantine incomplete units with a typed per-unit report, and never reject the whole journal for one incomplete unit.
     - Add a platform-test-registry target running the registry crate suite, with fault-injection tests that interrupt every write step and prove restart recovery and replay equivalence.
     - _Requirements: 9.1, 9.2, 9.5_
-  - [ ] 3.5 Stage ramp callback validation before durable append
+  - [-] 3.5 Stage ramp callback validation before durable append
     - In the ramp Journal::append path, validate a provider callback completely against a staged view - transition legality, evidence, provider sequence - before any sync, and only then append the event and apply the callback and provider-sequence index mutations in one step.
     - On apply failure after validation, retain no event and leave every index unchanged; make a retry of the same callback identity produce the same outcome.
     - Add fault-injection tests interrupting every write step and proving restart recovery without operator repair, replay equivalence and callback idempotency.

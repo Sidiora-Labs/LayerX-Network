@@ -63,7 +63,7 @@ impl TransitionEvidence {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Event {
     OrderCreated {
         order: RampOrder,
@@ -194,97 +194,23 @@ impl OrderSnapshot {
     }
 }
 
-pub struct Journal {
-    _lock: LockClaim,
-    file: File,
-    next_sequence: u64,
-    head: [u8; 32],
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CallbackIdentity {
+    pub order_digest: [u8; 32],
+    pub provider_sequence: u64,
+    pub evidence_digest: [u8; 32],
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Projection {
     orders: BTreeMap<[u8; 32], OrderSnapshot>,
     order_ids: BTreeMap<String, [u8; 32]>,
-    callbacks: BTreeMap<String, ([u8; 32], u64, [u8; 32])>,
+    callbacks: BTreeMap<String, CallbackIdentity>,
     provider_sequences: BTreeMap<[u8; 32], u64>,
     paxeer: BTreeMap<[u8; 32], PaxeerSnapshot>,
 }
 
-impl Journal {
-    pub fn open(path: impl AsRef<Path>) -> Result<Self, RampError> {
-        let path = path.as_ref();
-        let lock = LockClaim::acquire(path)?;
-        let reader = open_journal(path)?;
-        require_private_file(&reader)?;
-        let mut journal = Self {
-            _lock: lock,
-            file: reader.try_clone().map_err(|_| RampError::Journal)?,
-            next_sequence: 0,
-            head: [0; 32],
-            orders: BTreeMap::new(),
-            order_ids: BTreeMap::new(),
-            callbacks: BTreeMap::new(),
-            provider_sequences: BTreeMap::new(),
-            paxeer: BTreeMap::new(),
-        };
-        let mut reader = BufReader::new(reader);
-        loop {
-            let mut line = Vec::new();
-            let read = reader
-                .by_ref()
-                .take((MAX_JOURNAL_RECORD_BYTES + 1) as u64)
-                .read_until(b'\n', &mut line)
-                .map_err(|_| RampError::Journal)?;
-            if read == 0 {
-                break;
-            }
-            if line.len() > MAX_JOURNAL_RECORD_BYTES || line.last() != Some(&b'\n') {
-                return Err(RampError::Journal);
-            }
-            line.pop();
-            if line.is_empty() {
-                return Err(RampError::Journal);
-            }
-            let record: Record = serde_json::from_slice(&line).map_err(|_| RampError::Journal)?;
-            if record.sequence != journal.next_sequence || record.previous_hash != journal.head {
-                return Err(RampError::Journal);
-            }
-            let body = RecordBody {
-                sequence: record.sequence,
-                previous_hash: record.previous_hash,
-                recorded_at: record.recorded_at,
-                event: record.event.clone(),
-            };
-            if record.record_hash != record_digest(&body)? {
-                return Err(RampError::Journal);
-            }
-            journal.apply(&record.event)?;
-            journal.next_sequence = journal
-                .next_sequence
-                .checked_add(1)
-                .ok_or(RampError::Journal)?;
-            journal.head = record.record_hash;
-        }
-        Ok(journal)
-    }
-
-    pub fn create_order(&mut self, order: RampOrder, now: u64) -> Result<OrderSnapshot, RampError> {
-        order.validate_bound()?;
-        if let Some(existing) = self.order_ids.get(&order.order_id) {
-            return if *existing == order.order_digest {
-                self.orders.get(existing).cloned().ok_or(RampError::Journal)
-            } else {
-                Err(RampError::Conflict)
-            };
-        }
-        self.append(
-            Event::OrderCreated {
-                order: order.clone(),
-            },
-            now,
-        )?;
-        self.orders
-            .get(&order.order_digest)
-            .cloned()
-            .ok_or(RampError::Journal)
-    }
-
+impl Projection {
     #[must_use]
     pub fn order(&self, digest: &[u8; 32]) -> Option<&OrderSnapshot> {
         self.orders.get(digest)
@@ -298,8 +224,540 @@ impl Journal {
     }
 
     #[must_use]
+    pub const fn orders(&self) -> &BTreeMap<[u8; 32], OrderSnapshot> {
+        &self.orders
+    }
+
+    #[must_use]
+    pub fn callback(&self, callback_id: &str) -> Option<CallbackIdentity> {
+        self.callbacks.get(callback_id).copied()
+    }
+
+    #[must_use]
+    pub const fn callbacks(&self) -> &BTreeMap<String, CallbackIdentity> {
+        &self.callbacks
+    }
+
+    #[must_use]
+    pub fn provider_sequence(&self, order_digest: &[u8; 32]) -> Option<u64> {
+        self.provider_sequences.get(order_digest).copied()
+    }
+
+    #[must_use]
+    pub const fn provider_sequences(&self) -> &BTreeMap<[u8; 32], u64> {
+        &self.provider_sequences
+    }
+
+    #[must_use]
+    pub fn paxeer(&self, idempotency_key: &[u8; 32]) -> Option<&PaxeerSnapshot> {
+        self.paxeer.get(idempotency_key)
+    }
+
+    fn stage(&self, event: &Event) -> Result<StagedMutation, RampError> {
+        match event {
+            Event::OrderCreated { order } => self.stage_order_created(order),
+            Event::LeaseAcquired {
+                order_digest,
+                worker_id,
+                expires_at,
+            } => self.stage_lease(order_digest, worker_id, *expires_at),
+            Event::Transition {
+                order_digest,
+                expected,
+                next,
+                evidence,
+            } => self.stage_transition(order_digest, *expected, *next, evidence),
+            Event::ProviderCallbackApplied {
+                order_digest,
+                callback_id,
+                provider_sequence,
+                evidence_digest,
+                expected,
+                next,
+                evidence,
+            } => StagedCallback::stage(
+                self,
+                *order_digest,
+                callback_id,
+                *provider_sequence,
+                *evidence_digest,
+                *expected,
+                *next,
+                evidence,
+            )
+            .map(StagedMutation::Callback),
+            Event::PaxeerPlanned {
+                idempotency_key,
+                asset,
+                amount,
+            } => self.stage_paxeer_planned(*idempotency_key, *asset, *amount),
+            Event::PaxeerObserved {
+                idempotency_key,
+                operation_id,
+                transaction_hash,
+                stage,
+                block_hash,
+                confirmations,
+            } => self.stage_paxeer_observed(
+                idempotency_key,
+                operation_id,
+                *transaction_hash,
+                stage,
+                *block_hash,
+                *confirmations,
+            ),
+        }
+    }
+
+    fn stage_order_created(&self, order: &RampOrder) -> Result<StagedMutation, RampError> {
+        order.validate_bound()?;
+        if self.orders.contains_key(&order.order_digest)
+            || self.order_ids.contains_key(&order.order_id)
+        {
+            return Err(RampError::Conflict);
+        }
+        Ok(StagedMutation::CreateOrder(OrderSnapshot {
+            order: order.clone(),
+            stage: WorkflowStage::CompliancePending,
+            evidence: TransitionEvidence::empty(),
+            lease: None,
+        }))
+    }
+
+    fn stage_lease(
+        &self,
+        order_digest: &[u8; 32],
+        worker_id: &str,
+        expires_at: u64,
+    ) -> Result<StagedMutation, RampError> {
+        if !safe_identifier(worker_id) || expires_at == 0 {
+            return Err(RampError::InvalidOrder);
+        }
+        let mut snapshot = self
+            .orders
+            .get(order_digest)
+            .cloned()
+            .ok_or(RampError::InvalidOrder)?;
+        snapshot.lease = Some((worker_id.to_owned(), expires_at));
+        Ok(StagedMutation::UpdateOrder(snapshot))
+    }
+
+    fn stage_transition(
+        &self,
+        order_digest: &[u8; 32],
+        expected: WorkflowStage,
+        next: WorkflowStage,
+        evidence: &TransitionEvidence,
+    ) -> Result<StagedMutation, RampError> {
+        if !allowed(expected, next) {
+            return Err(RampError::IllegalTransition);
+        }
+        let mut snapshot = self
+            .orders
+            .get(order_digest)
+            .cloned()
+            .ok_or(RampError::InvalidOrder)?;
+        if snapshot.stage != expected {
+            return Err(RampError::Conflict);
+        }
+        validate_resulting_evidence(next, &snapshot.evidence, evidence)?;
+        if evidence_conflicts(&snapshot.evidence, evidence) {
+            return Err(RampError::Conflict);
+        }
+        merge_evidence(&mut snapshot.evidence, evidence);
+        if next == WorkflowStage::Done && completion_missing(&snapshot.evidence) {
+            return Err(RampError::IllegalTransition);
+        }
+        snapshot.stage = next;
+        Ok(StagedMutation::UpdateOrder(snapshot))
+    }
+
+    fn stage_paxeer_planned(
+        &self,
+        idempotency_key: [u8; 32],
+        asset: [u8; 32],
+        amount: u128,
+    ) -> Result<StagedMutation, RampError> {
+        if idempotency_key == [0; 32] || asset == [0; 32] || amount == 0 {
+            return Err(RampError::Paxeer);
+        }
+        if self.paxeer.contains_key(&idempotency_key) {
+            return Err(RampError::Conflict);
+        }
+        Ok(StagedMutation::Paxeer(PaxeerSnapshot {
+            idempotency_key,
+            asset,
+            amount,
+            operation_id: None,
+            transaction_hash: None,
+            stage: "submission_planned".to_owned(),
+            block_hash: None,
+            confirmations: 0,
+        }))
+    }
+
+    fn stage_paxeer_observed(
+        &self,
+        idempotency_key: &[u8; 32],
+        operation_id: &str,
+        transaction_hash: [u8; 32],
+        stage: &str,
+        block_hash: Option<[u8; 32]>,
+        confirmations: u64,
+    ) -> Result<StagedMutation, RampError> {
+        if !safe_identifier(operation_id) || !safe_identifier(stage) || transaction_hash == [0; 32]
+        {
+            return Err(RampError::Paxeer);
+        }
+        let mut snapshot = self
+            .paxeer
+            .get(idempotency_key)
+            .cloned()
+            .ok_or(RampError::Paxeer)?;
+        if snapshot
+            .operation_id
+            .as_deref()
+            .is_some_and(|value| value != operation_id)
+            || snapshot
+                .transaction_hash
+                .is_some_and(|value| value != transaction_hash)
+        {
+            return Err(RampError::Conflict);
+        }
+        snapshot.operation_id = Some(operation_id.to_owned());
+        snapshot.transaction_hash = Some(transaction_hash);
+        stage.clone_into(&mut snapshot.stage);
+        snapshot.block_hash = block_hash;
+        snapshot.confirmations = confirmations;
+        Ok(StagedMutation::Paxeer(snapshot))
+    }
+
+    fn commit(&mut self, staged: StagedMutation) {
+        match staged {
+            StagedMutation::CreateOrder(snapshot) => {
+                self.order_ids
+                    .insert(snapshot.order.order_id.clone(), snapshot.order.order_digest);
+                self.orders.insert(snapshot.order.order_digest, snapshot);
+            }
+            StagedMutation::UpdateOrder(snapshot) => {
+                self.orders.insert(snapshot.order.order_digest, snapshot);
+            }
+            StagedMutation::Callback(staged) => {
+                let identity = staged.identity;
+                self.callbacks.insert(staged.callback_id, identity);
+                self.provider_sequences
+                    .insert(identity.order_digest, identity.provider_sequence);
+                self.orders.insert(identity.order_digest, staged.order);
+            }
+            StagedMutation::Paxeer(snapshot) => {
+                self.paxeer.insert(snapshot.idempotency_key, snapshot);
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StagedCallback {
+    callback_id: String,
+    identity: CallbackIdentity,
+    order: OrderSnapshot,
+}
+
+impl StagedCallback {
+    #[allow(clippy::too_many_arguments)]
+    fn stage(
+        projection: &Projection,
+        order_digest: [u8; 32],
+        callback_id: &str,
+        provider_sequence: u64,
+        evidence_digest: [u8; 32],
+        expected: WorkflowStage,
+        next: WorkflowStage,
+        evidence: &TransitionEvidence,
+    ) -> Result<Self, RampError> {
+        if !safe_identifier(callback_id) || provider_sequence == 0 || evidence_digest == [0; 32] {
+            return Err(RampError::Provider);
+        }
+        if projection.callbacks.contains_key(callback_id) {
+            return Err(RampError::Conflict);
+        }
+        if projection
+            .provider_sequences
+            .get(&order_digest)
+            .is_some_and(|latest| provider_sequence <= *latest)
+        {
+            return Err(RampError::Conflict);
+        }
+        if !allowed(expected, next) {
+            return Err(RampError::IllegalTransition);
+        }
+        let mut order = projection
+            .orders
+            .get(&order_digest)
+            .cloned()
+            .ok_or(RampError::InvalidOrder)?;
+        if order.stage != expected {
+            return Err(RampError::Conflict);
+        }
+        validate_resulting_evidence(next, &order.evidence, evidence)?;
+        if evidence_conflicts(&order.evidence, evidence) {
+            return Err(RampError::Conflict);
+        }
+        order.stage = next;
+        merge_evidence(&mut order.evidence, evidence);
+        Ok(Self {
+            callback_id: callback_id.to_owned(),
+            identity: CallbackIdentity {
+                order_digest,
+                provider_sequence,
+                evidence_digest,
+            },
+            order,
+        })
+    }
+
+    #[must_use]
+    pub fn callback_id(&self) -> &str {
+        &self.callback_id
+    }
+
+    #[must_use]
+    pub const fn identity(&self) -> CallbackIdentity {
+        self.identity
+    }
+
+    #[must_use]
+    pub const fn order(&self) -> &OrderSnapshot {
+        &self.order
+    }
+}
+
+enum StagedMutation {
+    CreateOrder(OrderSnapshot),
+    UpdateOrder(OrderSnapshot),
+    Callback(StagedCallback),
+    Paxeer(PaxeerSnapshot),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WriteStep {
+    BeforeRecord,
+    DuringRecord,
+    BeforeTerminator,
+    AfterRecord,
+    AfterSync,
+}
+
+impl WriteStep {
+    pub const ALL: [Self; 5] = [
+        Self::BeforeRecord,
+        Self::DuringRecord,
+        Self::BeforeTerminator,
+        Self::AfterRecord,
+        Self::AfterSync,
+    ];
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WriteFault {
+    Fail,
+    Interrupt,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TornTail {
+    pub offset: u64,
+    pub bytes: u64,
+}
+
+enum WriteFailure {
+    Failed,
+    Interrupted,
+}
+
+pub struct Journal {
+    _lock: LockClaim,
+    file: File,
+    durable_len: u64,
+    next_sequence: u64,
+    head: [u8; 32],
+    projection: Projection,
+    recovery: Option<TornTail>,
+    fault: Option<(WriteStep, WriteFault)>,
+    halted: bool,
+}
+
+impl Journal {
+    pub fn open(path: impl AsRef<Path>) -> Result<Self, RampError> {
+        let path = path.as_ref();
+        let lock = LockClaim::acquire(path)?;
+        let reader = open_journal(path)?;
+        require_private_file(&reader)?;
+        let mut journal = Self {
+            _lock: lock,
+            file: reader.try_clone().map_err(|_| RampError::Journal)?,
+            durable_len: 0,
+            next_sequence: 0,
+            head: [0; 32],
+            projection: Projection::default(),
+            recovery: None,
+            fault: None,
+            halted: false,
+        };
+        let mut reader = BufReader::new(reader);
+        let mut line = Vec::new();
+        loop {
+            line.clear();
+            let read = reader
+                .by_ref()
+                .take((MAX_JOURNAL_RECORD_BYTES + 1) as u64)
+                .read_until(b'\n', &mut line)
+                .map_err(|_| RampError::Journal)?;
+            if read == 0 {
+                break;
+            }
+            if line.len() > MAX_JOURNAL_RECORD_BYTES {
+                return Err(RampError::Journal);
+            }
+            if line.last() != Some(&b'\n') {
+                journal.recovery = Some(TornTail {
+                    offset: journal.durable_len,
+                    bytes: read as u64,
+                });
+                break;
+            }
+            line.pop();
+            if line.is_empty() {
+                return Err(RampError::Journal);
+            }
+            let Record {
+                sequence,
+                previous_hash,
+                recorded_at,
+                event,
+                record_hash,
+            } = serde_json::from_slice(&line).map_err(|_| RampError::Journal)?;
+            if sequence != journal.next_sequence || previous_hash != journal.head {
+                return Err(RampError::Journal);
+            }
+            let body = RecordBody {
+                sequence,
+                previous_hash,
+                recorded_at,
+                event,
+            };
+            if record_hash != record_digest(&body)? {
+                return Err(RampError::Journal);
+            }
+            let staged = journal
+                .projection
+                .stage(&body.event)
+                .map_err(|_| RampError::Journal)?;
+            journal.projection.commit(staged);
+            journal.next_sequence = journal
+                .next_sequence
+                .checked_add(1)
+                .ok_or(RampError::Journal)?;
+            journal.head = record_hash;
+            journal.durable_len = journal
+                .durable_len
+                .checked_add(read as u64)
+                .ok_or(RampError::Journal)?;
+        }
+        if journal.recovery.is_some() {
+            journal
+                .file
+                .set_len(journal.durable_len)
+                .map_err(|_| RampError::Journal)?;
+            journal.file.sync_all().map_err(|_| RampError::Journal)?;
+        }
+        Ok(journal)
+    }
+
+    pub fn create_order(&mut self, order: RampOrder, now: u64) -> Result<OrderSnapshot, RampError> {
+        order.validate_bound()?;
+        if let Some(existing) = self.projection.order_ids.get(&order.order_id) {
+            return if *existing == order.order_digest {
+                self.projection
+                    .orders
+                    .get(existing)
+                    .cloned()
+                    .ok_or(RampError::Journal)
+            } else {
+                Err(RampError::Conflict)
+            };
+        }
+        let order_digest = order.order_digest;
+        self.append(Event::OrderCreated { order }, now)?;
+        self.projection
+            .orders
+            .get(&order_digest)
+            .cloned()
+            .ok_or(RampError::Journal)
+    }
+
+    #[must_use]
+    pub fn order(&self, digest: &[u8; 32]) -> Option<&OrderSnapshot> {
+        self.projection.order(digest)
+    }
+
+    #[must_use]
+    pub fn order_by_id(&self, order_id: &str) -> Option<&OrderSnapshot> {
+        self.projection.order_by_id(order_id)
+    }
+
+    #[must_use]
     pub fn orders(&self) -> Vec<OrderSnapshot> {
-        self.orders.values().cloned().collect()
+        self.projection.orders.values().cloned().collect()
+    }
+
+    #[must_use]
+    pub const fn projection(&self) -> &Projection {
+        &self.projection
+    }
+
+    #[must_use]
+    pub fn callback(&self, callback_id: &str) -> Option<CallbackIdentity> {
+        self.projection.callback(callback_id)
+    }
+
+    #[must_use]
+    pub fn provider_sequence(&self, order_digest: &[u8; 32]) -> Option<u64> {
+        self.projection.provider_sequence(order_digest)
+    }
+
+    #[must_use]
+    pub const fn head(&self) -> [u8; 32] {
+        self.head
+    }
+
+    #[must_use]
+    pub const fn record_count(&self) -> u64 {
+        self.next_sequence
+    }
+
+    #[must_use]
+    pub const fn durable_len(&self) -> u64 {
+        self.durable_len
+    }
+
+    #[must_use]
+    pub const fn recovery(&self) -> Option<TornTail> {
+        self.recovery
+    }
+
+    #[must_use]
+    pub const fn halted(&self) -> bool {
+        self.halted
+    }
+
+    pub fn arm_write_fault(&mut self, step: WriteStep, fault: WriteFault) {
+        self.fault = Some((step, fault));
+    }
+
+    #[must_use]
+    pub const fn armed_write_fault(&self) -> Option<(WriteStep, WriteFault)> {
+        self.fault
     }
 
     pub fn acquire_lease(
@@ -313,6 +771,7 @@ impl Journal {
             return Err(RampError::InvalidOrder);
         }
         let snapshot = self
+            .projection
             .orders
             .get(&order_digest)
             .ok_or(RampError::InvalidOrder)?;
@@ -346,6 +805,7 @@ impl Journal {
             return Err(RampError::IllegalTransition);
         }
         let snapshot = self
+            .projection
             .orders
             .get(&order_digest)
             .ok_or(RampError::InvalidOrder)?;
@@ -359,17 +819,6 @@ impl Journal {
         {
             return Err(RampError::LeaseHeld);
         }
-        validate_resulting_evidence(next, &snapshot.evidence, &evidence)?;
-        if evidence_conflicts(&snapshot.evidence, &evidence) {
-            return Err(RampError::Conflict);
-        }
-        if next == WorkflowStage::Done {
-            let mut complete = snapshot.evidence.clone();
-            merge_evidence(&mut complete, &evidence);
-            if completion_missing(&complete) {
-                return Err(RampError::IllegalTransition);
-            }
-        }
         self.append(
             Event::Transition {
                 order_digest,
@@ -381,6 +830,7 @@ impl Journal {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn apply_provider_callback(
         &mut self,
         order_digest: [u8; 32],
@@ -395,33 +845,17 @@ impl Journal {
         if !safe_identifier(callback_id) || provider_sequence == 0 || evidence_digest == [0; 32] {
             return Err(RampError::Provider);
         }
-        if let Some(existing) = self.callbacks.get(callback_id) {
-            return if existing == &(order_digest, provider_sequence, evidence_digest) {
+        let identity = CallbackIdentity {
+            order_digest,
+            provider_sequence,
+            evidence_digest,
+        };
+        if let Some(existing) = self.projection.callbacks.get(callback_id) {
+            return if *existing == identity {
                 Ok(false)
             } else {
                 Err(RampError::Conflict)
             };
-        }
-        if self
-            .provider_sequences
-            .get(&order_digest)
-            .is_some_and(|latest| provider_sequence <= *latest)
-        {
-            return Err(RampError::Conflict);
-        }
-        if !allowed(expected, next) {
-            return Err(RampError::IllegalTransition);
-        }
-        let snapshot = self
-            .orders
-            .get(&order_digest)
-            .ok_or(RampError::InvalidOrder)?;
-        if snapshot.stage != expected {
-            return Err(RampError::Conflict);
-        }
-        validate_resulting_evidence(next, &snapshot.evidence, &evidence)?;
-        if evidence_conflicts(&snapshot.evidence, &evidence) {
-            return Err(RampError::Conflict);
         }
         self.append(
             Event::ProviderCallbackApplied {
@@ -452,7 +886,11 @@ impl Journal {
         {
             return Err(RampError::Paxeer);
         }
-        let existing = self.paxeer.get(&idempotency_key).ok_or(RampError::Paxeer)?;
+        let existing = self
+            .projection
+            .paxeer
+            .get(&idempotency_key)
+            .ok_or(RampError::Paxeer)?;
         if existing
             .operation_id
             .as_ref()
@@ -486,7 +924,7 @@ impl Journal {
         if idempotency_key == [0; 32] || asset == [0; 32] || amount == 0 {
             return Err(RampError::Paxeer);
         }
-        if let Some(existing) = self.paxeer.get(&idempotency_key) {
+        if let Some(existing) = self.projection.paxeer.get(&idempotency_key) {
             return if existing.asset == asset && existing.amount == amount {
                 Ok(())
             } else {
@@ -505,10 +943,14 @@ impl Journal {
 
     #[must_use]
     pub fn paxeer(&self, idempotency_key: &[u8; 32]) -> Option<&PaxeerSnapshot> {
-        self.paxeer.get(idempotency_key)
+        self.projection.paxeer(idempotency_key)
     }
 
     fn append(&mut self, event: Event, recorded_at: u64) -> Result<(), RampError> {
+        if self.halted {
+            return Err(RampError::Journal);
+        }
+        let staged = self.projection.stage(&event)?;
         let next_sequence = self
             .next_sequence
             .checked_add(1)
@@ -517,7 +959,7 @@ impl Journal {
             sequence: self.next_sequence,
             previous_hash: self.head,
             recorded_at,
-            event: event.clone(),
+            event,
         };
         let record_hash = record_digest(&body)?;
         let record = Record {
@@ -532,189 +974,83 @@ impl Journal {
             return Err(RampError::Journal);
         }
         bytes.push(b'\n');
-        self.file
-            .write_all(&bytes)
-            .map_err(|_| RampError::Journal)?;
-        self.file.sync_data().map_err(|_| RampError::Journal)?;
-        self.apply(&event)?;
+        let durable_len = self
+            .durable_len
+            .checked_add(bytes.len() as u64)
+            .ok_or(RampError::Journal)?;
+        match self.write_record(&bytes) {
+            Ok(()) => {}
+            Err(WriteFailure::Failed) => {
+                self.rollback();
+                return Err(RampError::Journal);
+            }
+            Err(WriteFailure::Interrupted) => {
+                self.halted = true;
+                return Err(RampError::Journal);
+            }
+        }
+        self.projection.commit(staged);
         self.next_sequence = next_sequence;
         self.head = record_hash;
+        self.durable_len = durable_len;
         Ok(())
     }
 
-    fn apply(&mut self, event: &Event) -> Result<(), RampError> {
-        match event {
-            Event::OrderCreated { order } => {
-                order.validate_bound().map_err(|_| RampError::Journal)?;
-                if self.orders.contains_key(&order.order_digest)
-                    || self.order_ids.contains_key(&order.order_id)
-                {
-                    return Err(RampError::Journal);
-                }
-                self.order_ids
-                    .insert(order.order_id.clone(), order.order_digest);
-                self.orders.insert(
-                    order.order_digest,
-                    OrderSnapshot {
-                        order: order.clone(),
-                        stage: WorkflowStage::CompliancePending,
-                        evidence: TransitionEvidence::empty(),
-                        lease: None,
-                    },
-                );
+    fn write_record(&mut self, bytes: &[u8]) -> Result<(), WriteFailure> {
+        self.checkpoint(WriteStep::BeforeRecord)?;
+        let terminator = bytes.len().saturating_sub(1);
+        let written = match self.fault {
+            Some((step @ WriteStep::DuringRecord, _)) => {
+                self.write_prefix(bytes, terminator / 2, step)?
             }
-            Event::LeaseAcquired {
-                order_digest,
-                worker_id,
-                expires_at,
-            } => {
-                if !safe_identifier(worker_id) || *expires_at == 0 {
-                    return Err(RampError::Journal);
-                }
-                let snapshot = self
-                    .orders
-                    .get_mut(order_digest)
-                    .ok_or(RampError::Journal)?;
-                snapshot.lease = Some((worker_id.clone(), *expires_at));
+            Some((step @ WriteStep::BeforeTerminator, _)) => {
+                self.write_prefix(bytes, terminator, step)?
             }
-            Event::Transition {
-                order_digest,
-                expected,
-                next,
-                evidence,
-            } => {
-                let snapshot = self
-                    .orders
-                    .get_mut(order_digest)
-                    .ok_or(RampError::Journal)?;
-                if snapshot.stage != *expected
-                    || !allowed(*expected, *next)
-                    || validate_resulting_evidence(*next, &snapshot.evidence, evidence).is_err()
-                    || evidence_conflicts(&snapshot.evidence, evidence)
-                {
-                    return Err(RampError::Journal);
-                }
-                if *next == WorkflowStage::Done {
-                    let mut complete = snapshot.evidence.clone();
-                    merge_evidence(&mut complete, evidence);
-                    if completion_missing(&complete) {
-                        return Err(RampError::Journal);
-                    }
-                }
-                snapshot.stage = *next;
-                merge_evidence(&mut snapshot.evidence, evidence);
+            _ => 0,
+        };
+        self.file
+            .write_all(&bytes[written..])
+            .map_err(|_| WriteFailure::Failed)?;
+        self.checkpoint(WriteStep::AfterRecord)?;
+        self.file.sync_data().map_err(|_| WriteFailure::Failed)?;
+        self.checkpoint(WriteStep::AfterSync)
+    }
+
+    fn write_prefix(
+        &mut self,
+        bytes: &[u8],
+        cut: usize,
+        step: WriteStep,
+    ) -> Result<usize, WriteFailure> {
+        self.file
+            .write_all(&bytes[..cut])
+            .map_err(|_| WriteFailure::Failed)?;
+        self.checkpoint(step)?;
+        Ok(cut)
+    }
+
+    fn checkpoint(&mut self, step: WriteStep) -> Result<(), WriteFailure> {
+        match self.fault {
+            Some((armed, fault)) if armed == step => {
+                self.fault = None;
+                Err(match fault {
+                    WriteFault::Fail => WriteFailure::Failed,
+                    WriteFault::Interrupt => WriteFailure::Interrupted,
+                })
             }
-            Event::ProviderCallbackApplied {
-                order_digest,
-                callback_id,
-                provider_sequence,
-                evidence_digest,
-                expected,
-                next,
-                evidence,
-            } => {
-                if !safe_identifier(callback_id)
-                    || *provider_sequence == 0
-                    || *evidence_digest == [0; 32]
-                {
-                    return Err(RampError::Journal);
-                }
-                if !self.orders.contains_key(order_digest)
-                    || self
-                        .callbacks
-                        .insert(
-                            callback_id.clone(),
-                            (*order_digest, *provider_sequence, *evidence_digest),
-                        )
-                        .is_some()
-                {
-                    return Err(RampError::Journal);
-                }
-                if self
-                    .provider_sequences
-                    .insert(*order_digest, *provider_sequence)
-                    .is_some_and(|previous| previous >= *provider_sequence)
-                {
-                    return Err(RampError::Journal);
-                }
-                let snapshot = self
-                    .orders
-                    .get_mut(order_digest)
-                    .ok_or(RampError::Journal)?;
-                if snapshot.stage != *expected
-                    || !allowed(*expected, *next)
-                    || validate_resulting_evidence(*next, &snapshot.evidence, evidence).is_err()
-                    || evidence_conflicts(&snapshot.evidence, evidence)
-                {
-                    return Err(RampError::Journal);
-                }
-                snapshot.stage = *next;
-                merge_evidence(&mut snapshot.evidence, evidence);
-            }
-            Event::PaxeerPlanned {
-                idempotency_key,
-                asset,
-                amount,
-            } => {
-                if *idempotency_key == [0; 32] || *asset == [0; 32] || *amount == 0 {
-                    return Err(RampError::Journal);
-                }
-                if self
-                    .paxeer
-                    .insert(
-                        *idempotency_key,
-                        PaxeerSnapshot {
-                            idempotency_key: *idempotency_key,
-                            asset: *asset,
-                            amount: *amount,
-                            operation_id: None,
-                            transaction_hash: None,
-                            stage: "submission_planned".to_owned(),
-                            block_hash: None,
-                            confirmations: 0,
-                        },
-                    )
-                    .is_some()
-                {
-                    return Err(RampError::Journal);
-                }
-            }
-            Event::PaxeerObserved {
-                idempotency_key,
-                operation_id,
-                transaction_hash,
-                stage,
-                block_hash,
-                confirmations,
-            } => {
-                if !safe_identifier(operation_id)
-                    || !safe_identifier(stage)
-                    || *transaction_hash == [0; 32]
-                {
-                    return Err(RampError::Journal);
-                }
-                let snapshot = self
-                    .paxeer
-                    .get_mut(idempotency_key)
-                    .ok_or(RampError::Journal)?;
-                if snapshot
-                    .operation_id
-                    .as_ref()
-                    .is_some_and(|value| value != operation_id)
-                    || snapshot
-                        .transaction_hash
-                        .is_some_and(|value| value != *transaction_hash)
-                {
-                    return Err(RampError::Journal);
-                }
-                snapshot.operation_id = Some(operation_id.clone());
-                snapshot.transaction_hash = Some(*transaction_hash);
-                snapshot.stage.clone_from(stage);
-                snapshot.block_hash = *block_hash;
-                snapshot.confirmations = *confirmations;
-            }
+            _ => Ok(()),
         }
-        Ok(())
+    }
+
+    fn rollback(&mut self) {
+        if self
+            .file
+            .set_len(self.durable_len)
+            .and_then(|()| self.file.sync_all())
+            .is_err()
+        {
+            self.halted = true;
+        }
     }
 }
 

@@ -394,7 +394,7 @@ reqs = ["9.1","9.2","9.5"]
 
 [task.3.5]
 title = "Stage ramp callback validation before durable append"
-status = "pending"
+status = "in_progress"
 wave = 3
 requires = ["1.1"]
 do_1 = "In the ramp Journal::append path, validate a provider callback completely against a staged view - transition legality, evidence, provider sequence - before any sync, and only then append the event and apply the callback and provider-sequence index mutations in one step."
@@ -402,7 +402,7 @@ do_2 = "On apply failure after validation, retain no event and leave every index
 do_3 = "Add fault-injection tests interrupting every write step and proving restart recovery without operator repair, replay equivalence and callback idempotency."
 verify_cmd = "make interop-test-ramps"
 symbols = ["Journal::append","ProviderCallbackApplied","StagedCallback"]
-touches = ["platform/ramps/toolkit/src/journal.rs","platform/ramps/toolkit/tests/contracts.rs"]
+touches = ["platform/ramps/toolkit/src/journal.rs","platform/ramps/toolkit/tests/contracts.rs","spec/layerx-beta/qualification.kvx"]
 reqs = ["9.3","9.4","9.5"]
 
 [task.3.6]
