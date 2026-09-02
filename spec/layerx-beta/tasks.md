@@ -99,7 +99,7 @@ Two points need owner confirmation before the corresponding task starts, and one
     - Create one cross-language checkpoint vector set under tests/vectors covering fresh, too-early, too-late and boundary attestation times with expected digests and outcomes, and consume it from the C protocol test, the Rust wire and proof tests, the Foundry registry test and the mirror verifier test.
     - Source the settlement domain layerx-proof verifies against from the declared configuration the beta contract names, and prove the Solidity and native header encodings agree byte for byte through the vectors.
     - _Requirements: 6.1, 6.2, 6.3, 6.4, 6.5, 6.6_
-  - [-] 3.3 Bind withdrawal settlement to the recorded asset
+  - [x] 3.3 Bind withdrawal settlement to the recorded asset
     - In custody settlement, compare the supplied asset identity with the asset recorded by the withdrawal request and refuse with a typed mismatch result before any transfer or state mutation.
     - In bridge finalization, derive the settlement asset from the withdrawal record located by nullifier, validate any caller-supplied asset for equality, and refuse on mismatch before settlement is reached.
     - Extend the asset withdraw and bridge withdraw tests with cross-asset mismatch at both boundaries asserting no transfer, no settlement, state-root equality and a still-claimable record, and extend the conservation property across request, settle and refused-settle per asset.
