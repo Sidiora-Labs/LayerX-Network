@@ -402,6 +402,36 @@ file = "platform/hosted/testnet/src/lib.rs"
 symbol = "cargo clippy --offline --manifest-path platform/Cargo.toml --locked -p layerx-platform-testnet --all-targets"
 observed = "Under the workspace deny-level lints the testnet crate fails clippy on one pre-existing finding outside the task's touches: lib.rs:26 fn validate returns Result without a # Errors doc section (missing_errors_doc, unchanged since 093d2b90). The task-owned platform/hosted/testnet/src/main.rs lints clean once the four findings that existed in it on main (two ToOwned assignments in client_request, two needless pass-by-value parameters of serve) were rewritten; verified by a diagnostic run allowing only clippy::missing_errors_doc, which reported no findings."
 assumption = "The crate's clippy gate is left failing on lib.rs for its owner rather than silenced under task 3.6; the task verify_cmd does not include platform-lint. See observation.1.2.5 for the same pattern in the CLI and emulator crates."
+[observation.3.4.1]
+task = "3.4"
+file = "platform/hosted/registry/src/main.rs"
+symbol = "tests::deployment_contract_keeps_https_mtls_and_bearer_roles_aligned"
+observed = "make platform-test-registry runs the whole layerx-platform-registry crate and exits 101 in the layerx-program-registry bin unit tests before the journal integration target is reached: the source-contract case at main.rs:855-863 requires BUILDER_SOURCE to contain the call environment_digest(&root.join(<environment>), Some(deadline)) while builder.rs:221 spells that call environment_digest(&workspace.root.join(<environment>), Some(deadline)). builder.rs and that test block are byte-identical to main 15267435; the failure reproduces in the earlier agent's log before any journal change compiled. With --no-fail-fast the same cargo test invocation reports lib 5 passed, bin 2 passed 1 failed (this case) and then runs the journal integration target, whose outcome is recorded by the task report."
+assumption = "The contract string and the builder both stay exactly as written; the owner of the registry build boundary (platform task 38.5 lineage) reconciles them. Task 3.4 leaves both intact and claims only the executed lib and journal outcomes; the verify_cmd cannot exit 0 until that pre-existing case is repaired."
+severity = "blocker"
+
+[observation.3.4.2]
+task = "3.4"
+file = "programs/crates/layerx-programs-registry/tests/support/mod.rs"
+symbol = "encode_activity"
+observed = "The shared protocol fixture builder still wrote the activity envelope with encoder.structure_header(0x1001) (structure version 1) followed by protocol version 2, while agent/crates/layerx-wire activity.rs decode_internal has required a version-carrying header equal to the protocol version since 093d2b90 (later than the fixture's last change 4e58d6b0). Every verified-evidence fixture therefore refused with WireError { result: ResultCode(-101), offset: 8 }: at baseline the crate's own registry suite failed 4 of 8 (cd programs && cargo test --offline --locked -p layerx-programs-registry --test registry) and the new platform journal suite failed 5 of 6 in the same fixture line. Changing that one call to structure_header_version(0x1001, 2), matching encode_internal, made registry 8 of 8, interface 4 of 4 and winddown 11 of 11 pass and unblocked the journal suite; the receipt and batch-header fixtures already used the versioned header."
+assumption = "Task 3.4 extends its touches to the shared fixture because its tests are the first consumer under the platform workspace and the repair is the single encoder call the real encoder already uses. No Makefile target runs cargo test for layerx-programs-registry, which is why the drift stayed invisible; the programs surface owner should add that crate's tests to a gate."
+severity = "note"
+
+[observation.3.4.3]
+task = "3.4"
+file = "platform/hosted/registry/src/journal.rs"
+symbol = "classify_unit read_legacy"
+observed = "No deployment journal fixture in the old two-file layout (<digest>.deployment plus <digest>.admission) exists anywhere in the repository (find over tracked paths for *.deployment, *.admission, *.envelope returned nothing), so the loader could not be exercised against a shipped fixture. The loader still admits a complete old-layout pair as one unit, quarantines a lone record as Missing(Proof), a lone proof as Missing(Record) and a stale legacy temporary as Interrupted(Record), and the journal suite constructs those layouts from the same canonical encodings the old append wrote."
+assumption = "Hosted journals written before this change load unchanged and are superseded in place by the envelope on the next append of the same digest; nothing migrates them eagerly."
+severity = "note"
+
+[observation.3.4.4]
+task = "3.4"
+file = "platform/hosted/registry/src/builder.rs"
+symbol = "cargo clippy -p layerx-platform-registry --all-targets"
+observed = "Under the workspace deny-level lints the registry crate reports pre-existing clippy errors in files task 3.4 does not touch: auth.rs:45, builder.rs:70,71,73,148,173,230,428,723, node_state.rs:57,108,118,127,131,140,177, program_state.rs:21,31,48,86,114, routes.rs:257 and the unused fn field at routes.rs:1010, plus unused_mut warnings at main.rs:609 and 689. cargo fmt --check also reports pre-existing drift in platform/hosted/registry/src/http.rs and in programs/crates/layerx-programs-registry/src/resolver.rs and tests/winddown.rs. journal.rs, tests/journal.rs, lib.rs and the task's edits in routes.rs and main.rs lint and format clean."
+assumption = "Same standing as observation.1.2.5: platform-lint cannot pass on main for this crate today; the findings belong to the tasks owning those files and are left intact rather than silenced under task 3.4."
 severity = "note"
 
 [observation.3.6.4]

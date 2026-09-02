@@ -24,7 +24,7 @@ use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
 
 use crate::builder::HermeticBuilder;
-use crate::journal::FileDeploymentJournal;
+use crate::journal::{FileDeploymentJournal, QuarantinedUnit};
 use crate::mirror::{MirrorRefusal, SourceMirror};
 use crate::node_state::NodeProgramStateSource;
 use crate::program_state::FileProgramStateJournal;
@@ -78,6 +78,7 @@ pub struct Registrar {
     interfaces: BTreeMap<(ProgramId, u32), ProgramInterface>,
     current_head: Option<AccountStateHead>,
     idempotency: BTreeMap<String, Completed>,
+    quarantined: Vec<QuarantinedUnit>,
 }
 
 impl Registrar {
@@ -137,10 +138,18 @@ impl Registrar {
             interfaces: BTreeMap::new(),
             current_head: None,
             idempotency: BTreeMap::new(),
+            quarantined: Vec::new(),
         };
         registrar.rebuild()?;
         registrar.synchronize_protocol_state(None, now)?;
         Ok(registrar)
+    }
+
+    /// Reports every incomplete deployment unit the journal quarantined when
+    /// the projection was last rebuilt.
+    #[must_use]
+    pub fn quarantined_units(&self) -> &[QuarantinedUnit] {
+        &self.quarantined
     }
 
     /// Answers one request at the supplied wall-clock millisecond.
@@ -671,8 +680,9 @@ impl Registrar {
     fn rebuild(&mut self) -> Result<(), String> {
         let mut registry = Registry::new();
         let mut interfaces = BTreeMap::new();
-        for proof in self.journal.proofs()? {
-            let evidence = self.node_state.verify_stored_deployment(&proof)?;
+        let loaded = self.journal.load()?;
+        for unit in &loaded.units {
+            let evidence = self.node_state.verify_stored_deployment(unit.proof())?;
             self.journal.audit_projection(&evidence)?;
             if let Some(interface) = evidence.interface() {
                 interfaces.insert((evidence.program(), evidence.version()), interface.clone());
@@ -703,6 +713,7 @@ impl Registrar {
         self.balance_reads.clear();
         self.interfaces = interfaces;
         self.current_head = None;
+        self.quarantined = loaded.quarantined;
         Ok(())
     }
 

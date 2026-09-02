@@ -4,7 +4,7 @@ PLATFORM_MANIFEST := platform/Cargo.toml
 .PHONY: platform-js-install platform-build platform-build-all platform-lint platform-test platform-sdk-check \
 	platform-sdk-generate platform-receipt-fixture platform-verify-sdks platform-test-sdks platform-release-check platform-release-plan \
 	platform-test-tooling platform-emulator-conformance platform-test-middleware \
-	platform-test-cli-production-credential-refusal \
+	platform-test-cli-production-credential-refusal platform-test-registry \
 	platform-test-reference-apps platform-test-mobile-artifacts \
 	platform-test-android-artifact platform-test-ios-artifact \
 	platform-real-agent-integration \
@@ -124,6 +124,9 @@ platform-test-tooling: platform-test-cli-production-credential-refusal
 
 platform-test-cli-production-credential-refusal:
 	bash platform/cli/tests/production-credential-refusal.sh
+
+platform-test-registry:
+	$(PLATFORM_CARGO) test --offline --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-registry
 
 platform-hosted-smoke:
 	@test -n "$${LAYERX_TESTNET_URL:-}"

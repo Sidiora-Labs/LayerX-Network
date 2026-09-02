@@ -544,7 +544,7 @@ fn state_fixture_with_key(
 
 fn encode_activity(payload: &[u8], ordinal: u16) -> Vec<u8> {
     let mut encoder = Encoder::new(1_048_576);
-    assert_eq!(encoder.structure_header(0x1001), Ok(()));
+    assert_eq!(encoder.structure_header_version(0x1001, 2), Ok(()));
     assert_eq!(encoder.u8(12), Ok(()));
     assert_eq!(encoder.tag(1, 12), Ok(()));
     assert_eq!(encoder.u16(2), Ok(()));

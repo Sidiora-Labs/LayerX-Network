@@ -31,5 +31,10 @@ subtle.workspace = true
 ureq.workspace = true
 zeroize.workspace = true
 
+[dev-dependencies]
+ed25519-dalek.workspace = true
+layerx-programs-runtime = { path = "../../../programs/crates/layerx-programs-runtime" }
+layerx-types.workspace = true
+
 [lints]
 workspace = true

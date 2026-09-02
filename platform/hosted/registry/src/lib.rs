@@ -21,7 +21,10 @@ use std::sync::Arc;
 pub use auth::{Authorization, RegistryAuthority};
 pub use builder::HermeticBuilder;
 pub use http::{parse_request, write_response};
-pub use journal::FileDeploymentJournal;
+pub use journal::{
+    DeploymentEnvelope, FileDeploymentJournal, JournalLoad, QuarantinedUnit, UnitDefect, UnitPart,
+    WriteStep,
+};
 pub use mirror::{MirrorRefusal, MirroredSource, SourceMirror};
 pub use node_state::{NodeProgramStateSource, ProgramStateCursor};
 pub use program_state::FileProgramStateJournal;

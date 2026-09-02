@@ -1423,9 +1423,12 @@ version = "0.1.0"
 name = "layerx-platform-registry"
 version = "0.1.0"
 dependencies = [
+ "ed25519-dalek",
  "layerx-programs-protocol-adapter",
  "layerx-programs-registry",
+ "layerx-programs-runtime",
  "layerx-proof",
+ "layerx-types",
  "layerx-wire",
  "rustix",
  "rustls",

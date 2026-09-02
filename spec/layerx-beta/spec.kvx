@@ -381,7 +381,7 @@ reqs = ["10.1","10.2","10.3","10.4","10.5"]
 
 [task.3.4]
 title = "Make hosted registry publication one commit unit"
-status = "pending"
+status = "in_progress"
 wave = 3
 requires = ["1.1"]
 do_1 = "Replace the separate record and proof replacements in FileDeploymentJournal::append with one canonical envelope written to a temporary file, fsynced and renamed atomically, or a two-phase write with a commit marker written last."
@@ -389,7 +389,7 @@ do_2 = "Make startup load complete units, quarantine incomplete units with a typ
 do_3 = "Add a platform-test-registry target running the registry crate suite, with fault-injection tests that interrupt every write step and prove restart recovery and replay equivalence."
 verify_cmd = "make platform-test-registry"
 symbols = ["FileDeploymentJournal::append","FileDeploymentJournal::proofs","DeploymentEnvelope"]
-touches = ["platform/hosted/registry/src/journal.rs","platform/hosted/registry/tests/journal.rs","platform/Makefile.inc"]
+touches = ["platform/hosted/registry/src/journal.rs","platform/hosted/registry/tests/journal.rs","platform/Makefile.inc","platform/hosted/registry/src/lib.rs","platform/hosted/registry/src/routes.rs","platform/hosted/registry/src/main.rs","platform/hosted/registry/Cargo.toml","platform/Cargo.lock","programs/crates/layerx-programs-registry/tests/support/mod.rs"]
 reqs = ["9.1","9.2","9.5"]
 
 [task.3.5]

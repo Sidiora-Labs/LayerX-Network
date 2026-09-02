@@ -664,7 +664,11 @@ fn isolated_route(
 
 fn serve(config: &Config) -> Result<(), String> {
     reclaim_worker_cgroups()?;
-    Registrar::open(config, now())?;
+    let registrar = Registrar::open(config, now())?;
+    for unit in registrar.quarantined_units() {
+        eprintln!("layerx-program-registry: {unit}");
+    }
+    drop(registrar);
     let service = Arc::new(Service {
         registrar_gate: Mutex::new(()),
         request_authority: config.request_authority.clone(),
