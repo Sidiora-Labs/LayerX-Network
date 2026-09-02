@@ -335,3 +335,11 @@ symbol = "committed_baseline_matches_regeneration real_schema_passes_with_fresh_
 observed = "cargo test --manifest-path human/tools/schema-check/Cargo.toml --locked, the exact command behind make human-check (Makefile line 1924) and therefore behind human-qualify, human-qualify-functional and beta-qualify, exits 101 with 5 failed and 39 passed: committed_baseline_matches_regeneration panics at tests/conformance.rs:138 because the committed human/schema/human-api/baseline.kvx no longer matches regeneration, real_schema_passes_with_fresh_baseline panics at tests/conformance.rs:129 with additions_beyond_baseline 88 instead of 0, and added_declaration_passes_beyond_the_baseline, appended_enum_variant_is_additive and adding_a_settlement_domain_variant_is_additive_by_construction fail on the same stale baseline. human/ is byte-unchanged in the task 4.3 worktree from base 15267435, so the failure predates the task. The beta driver's surfaces/one-ledger case runs this command as its schema-conformance step and therefore reports failed with that reason; its schema-check and settlement-domain-rejections steps exit 0."
 assumption = "Task 4.3 does not regenerate the baseline (human/schema/human-api is outside its touches and refreshing a compatibility baseline is an owner decision). The driver and its test report the executed outcome rather than asserting the case passes; once the owner regenerates baseline.kvx from the current schema the same case passes unchanged. Until then make human-check and beta-qualify fail at this step."
 severity = "blocker"
+
+[observation.4.3.2]
+task = "4.3"
+file = "tools/qualification/release_runner.py"
+symbol = "LOCAL_COMMANDS EXTERNAL_GATES"
+observed = "cg spec done 4.3 ran verify_cmd (make beta-driver-test) to pass (Ran 12 tests, OK, against a real emulator) and every touch check to pass, then failed its graph symbol check for LOCAL_COMMANDS and EXTERNAL_GATES, which are module-level dict constants in tools/qualification/release_runner.py; the Codify graph indexes Python classes and functions but not module-level assignments."
+assumption = "The task was marked done with --force solely to override the two graph checks for Python module constants; the verify_cmd was executed and passed and no gate was skipped, consistent with observation.1.1.7."
+severity = "note"
