@@ -66,7 +66,7 @@ Two points need owner confirmation before the corresponding task starts, and one
     - Run verification outside the queue lock and add a per-peer authentication-refusal counter to the daemon observability surface.
     - Add tests/test_daemon_lni_admission.c with a test-daemon-lni-admission target proving invalid signature refused with zero occupancy, wrong authority refused, valid activity acknowledged only after insertion, and full capacity available to a valid submitter after a flood of invalid ones.
     - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5_
-  - [ ] 2.2 Bind agent tokens to a durable revocation generation
+  - [-] 2.2 Bind agent tokens to a durable revocation generation
     - Add a revocation generation to the persisted session record, incremented on close, on apply_revocation and on scope change, and stamp every minted token with the generation it was issued under.
     - Make Token::authorize take the current SessionRegistry view and require open state and generation equality beside the existing tenant, agent, scope and expiry checks, returning a typed revoked error distinct from expired; route tenant::resolve through it so every operation inherits the check.
     - Reload generations from the store before the daemon accepts any token on boot, and terminate in-flight subscriptions for a closed or revoked session at the next boundary with a typed revoked event.
@@ -109,7 +109,7 @@ Two points need owner confirmation before the corresponding task starts, and one
     - Make startup load complete units, quarantine incomplete units with a typed per-unit report, and never reject the whole journal for one incomplete unit.
     - Add a platform-test-registry target running the registry crate suite, with fault-injection tests that interrupt every write step and prove restart recovery and replay equivalence.
     - _Requirements: 9.1, 9.2, 9.5_
-  - [-] 3.5 Stage ramp callback validation before durable append
+  - [x] 3.5 Stage ramp callback validation before durable append
     - In the ramp Journal::append path, validate a provider callback completely against a staged view - transition legality, evidence, provider sequence - before any sync, and only then append the event and apply the callback and provider-sequence index mutations in one step.
     - On apply failure after validation, retain no event and leave every index unchanged; make a retry of the same callback identity produce the same outcome.
     - Add fault-injection tests interrupting every write step and proving restart recovery without operator repair, replay equivalence and callback idempotency.
