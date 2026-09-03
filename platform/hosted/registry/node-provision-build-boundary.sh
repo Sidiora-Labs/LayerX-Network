@@ -19,8 +19,8 @@ done
 printf '+cpu +memory +pids +io' > "$CGROUP_PARENT/cgroup.subtree_control"
 mkdir -p "$CGROUP_ROOT"
 test -z "$(cat "$CGROUP_ROOT/cgroup.procs")"
+test "$(stat -c %a "$CGROUP_ROOT")" = 700 || chmod 0700 "$CGROUP_ROOT"
 chown 4030:4030 "$CGROUP_ROOT" "$CGROUP_ROOT/cgroup.procs" "$CGROUP_ROOT/cgroup.threads" "$CGROUP_ROOT/cgroup.subtree_control"
-chmod 0700 "$CGROUP_ROOT"
 printf '+cpu +memory +pids +io' > "$CGROUP_ROOT/cgroup.subtree_control"
 test "$(stat -c %u:%g "$CGROUP_ROOT")" = 4030:4030
 for controller in cpu memory pids io; do
@@ -53,8 +53,10 @@ while [ "$slot" -lt "$SLOTS" ]; do
             mv -T "$temporary" "$image"
             trap - EXIT HUP INT TERM
         fi
-        loop="$(losetup --find --show --autoclear "$image")"
+        loop="$(losetup --find --show "$image")"
         mount -t ext4 -o nosuid,nodev,noatime "$loop" "$mountpoint"
+        losetup -d "$loop"
+        test "$(losetup -n -O AUTOCLEAR "$loop" | tr -d '[:space:]')" = 1
     fi
     tune="$(dumpe2fs -h "$image" 2>/dev/null)"
     blocks="$(printf '%s\n' "$tune" | awk -F: '/^Block count:/{gsub(/ /,"",$2);print $2}')"
@@ -62,8 +64,8 @@ while [ "$slot" -lt "$SLOTS" ]; do
     inode_count="$(printf '%s\n' "$tune" | awk -F: '/^Inode count:/{gsub(/ /,"",$2);print $2}')"
     test "$((blocks * block_size))" -le "$BYTES"
     test "$inode_count" -le "$INODES"
+    test "$(stat -c %a "$mountpoint")" = 700 || chmod 0700 "$mountpoint"
     chown 4030:4030 "$mountpoint"
-    chmod 0700 "$mountpoint"
     test "$(stat -c %u:%g "$mountpoint")" = 4030:4030
     slot=$((slot + 1))
 done

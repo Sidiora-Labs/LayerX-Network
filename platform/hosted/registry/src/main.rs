@@ -890,7 +890,7 @@ mod tests {
             "cgroup.subtree_control",
             "mkfs.ext4",
             "-N",
-            "--autoclear",
+            "-O AUTOCLEAR",
             "mountpoint -q",
             "e2fsck -p",
         ] {
@@ -921,7 +921,7 @@ mod tests {
             "e2fsck -p",
             "mkfs.ext4",
             "-N",
-            "--autoclear",
+            "-O AUTOCLEAR",
             "stat -c %u:%g",
         ] {
             assert!(PROVISIONER_SOURCE.contains(boundary));
