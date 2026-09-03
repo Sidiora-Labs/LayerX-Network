@@ -28,6 +28,9 @@ for controller in cpu memory pids io; do
 done
 
 mkdir -p "$QUOTA_ROOT"
+groups=$(( (BYTES + 32768 * 4096 - 1) / (32768 * 4096) ))
+inodes_per_group=$(( INODES / groups / 16 * 16 ))
+test "$inodes_per_group" -ge 16 || exit 64
 slot=0
 while [ "$slot" -lt "$SLOTS" ]; do
     image="$QUOTA_ROOT/slot-$slot.ext4"
@@ -49,7 +52,7 @@ while [ "$slot" -lt "$SLOTS" ]; do
             temporary="$image.new.$$"
             trap 'rm -f "$temporary"' EXIT HUP INT TERM
             truncate -s "$BYTES" "$temporary"
-            mkfs.ext4 -q -F -N "$INODES" "$temporary"
+            mkfs.ext4 -q -F -b 4096 -g 32768 -I 256 -N "$((inodes_per_group * groups))" "$temporary"
             mv -T "$temporary" "$image"
             trap - EXIT HUP INT TERM
         fi
