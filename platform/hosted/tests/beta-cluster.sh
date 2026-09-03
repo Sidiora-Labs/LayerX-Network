@@ -627,17 +627,23 @@ manifests_apply() {
 }
 
 port_forward() {
-    local name=$1 namespace=$2 service=$3 port=$4 target=$5 pidfile attempt
+    local name=$1 namespace=$2 service=$3 port=$4 target=$5 pidfile attempt launch
     pidfile="$WORK_DIR/port-forward-$name.pid"
     if [ -f "$pidfile" ] && kill -0 "$(cat "$pidfile")" 2>/dev/null; then kill "$(cat "$pidfile")" || true; fi
-    kube -n "$namespace" port-forward --address 127.0.0.1 "service/$service" "$port:$target" > "$LOG_DIR/port-forward-$name.log" 2>&1 &
-    printf '%s' "$!" > "$pidfile"
-    for attempt in $(seq 1 50); do
-        if grep -q "Forwarding from 127.0.0.1:$port" "$LOG_DIR/port-forward-$name.log" 2>/dev/null; then return 0; fi
-        kill -0 "$(cat "$pidfile")" 2>/dev/null || { cat "$LOG_DIR/port-forward-$name.log" >&2; fail "port-forward to $namespace/$service failed"; }
-        sleep 0.2
+    for launch in $(seq 1 90); do
+        kube -n "$namespace" port-forward --address 127.0.0.1 "service/$service" "$port:$target" > "$LOG_DIR/port-forward-$name.log" 2>&1 &
+        printf '%s' "$!" > "$pidfile"
+        for attempt in $(seq 1 50); do
+            if grep -q "Forwarding from 127.0.0.1:$port" "$LOG_DIR/port-forward-$name.log" 2>/dev/null; then return 0; fi
+            kill -0 "$(cat "$pidfile")" 2>/dev/null || break
+            sleep 0.2
+        done
+        if kill -0 "$(cat "$pidfile")" 2>/dev/null; then fail "port-forward to $namespace/$service did not report readiness"; fi
+        grep -q 'pod is not running' "$LOG_DIR/port-forward-$name.log" 2>/dev/null \
+            || { cat "$LOG_DIR/port-forward-$name.log" >&2; fail "port-forward to $namespace/$service failed"; }
+        sleep 2
     done
-    fail "port-forward to $namespace/$service did not report readiness"
+    fail "port-forward to $namespace/$service found no running pod within 180s"
 }
 
 port_forwards_stop() {
