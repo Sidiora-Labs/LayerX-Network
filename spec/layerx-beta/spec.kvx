@@ -231,12 +231,27 @@ ac_3 = "THE beta-versus-production differences SHALL be limited to polish - UI p
 ac_4 = "THE contract SHALL state each surface's reached evidence rung exactly as the go/no-go report records it, and the consistency check SHALL fail when the contract and the report disagree."
 ac_5 = "THE docs SHALL describe every journey the contract names as available exactly as the beta stack provides it, and SHALL describe nothing the report has not proven, enforced by the same check."
 
+[req.14]
+title = "Trusted-Boundary Services Built From the Repository"
+register_item = "Owner instruction 2026-09-05: the pending-release services are built here, not supplied externally"
+audit_finding = "W4-L48-F007"
+story = "As the operator standing the beta up, I want every service the hosted manifests address - the pending-release core and its admin plane, identity, the receipt authority, the agent boundary and the Paxeer boundary - to be built from this repository with real code paths behind them, so that the beta cluster comes up from the repository alone and every journey exercises the real core, the real daemon and a real Paxeer chain."
+ac_1 = "THE repository SHALL build a layerx-node image from cmd/layerxd, cmd/layerx-genesis and cmd/layerxctl, and a node StatefulSet in namespace layerx-testnet that runs the sequencer daemon, the independent receipt-authority replica and the boundary processes in one pod with the pod label layerx-plane: trusted-boundary, bootstrapped from a genesis manifest the bring-up generates, holding a treasury account whose key the admin plane controls, on a persistent volume, with the LNI socket and the loopback listeners reachable only inside the pod."
+ac_2 = "THE layerx-pending-core Service on port 9443 SHALL answer an unauthenticated GET /readyz with 200 and the body {ready, network_id, wire_version, synchronous_receipts, state_snapshot} the gateway parses, only when the daemon handshake, the receipt-authority replica and the durable log are live, and SHALL serve the protocol surface the CLI and the SDKs address at a node endpoint - sequencer identity, activity submission, receipt lookup, state and account reads, program call, simulate, activity status and registry reads - by submitting canonical bytes over the LNI and relaying reads to the daemon, never by executing a transition in-process."
+ac_3 = "THE layerx-pending-core-admin Service on port 9444 SHALL require the backend admin bearer token and an Idempotency-Key on every request, SHALL fund by building, signing with the treasury key and submitting a real SEND over the LNI and answering {funding_id, state: funded, transaction_id} only from the resulting receipt, SHALL reset by stopping the daemons, discarding the data volume contents, rebuilding genesis and restarting, answering {state: reset, reset_id}, SHALL answer refusals with 4xx and never with 5xx, and SHALL make a repeated Idempotency-Key return the first outcome without a second economic effect."
+ac_4 = "THE layerx-receipt-authority Service on port 9443 SHALL serve GET /v1/authorized-batches/by-activity/{activity_id} with exactly {activity_id, batch_id, asset, previous_state_root, resulting_state_root, sequencer_public_key, network_id, wire_version}, deriving batch_id, both roots and the sequencer key from the replica's verified batch evidence and the receipt exactly as layerx-agentd's protocol_evidence does, SHALL relay GET /v1/batches/{batch_id}/receipt-authority to the replica unchanged, SHALL answer GET /readyz with {ready, network_id, wire_version} for the gateway and with 200 for an unauthenticated probe, and SHALL never answer from the sequencer daemon's own store."
+ac_5 = "THE layerx-agent-boundary Service on port 9443 SHALL serve the component contract the gateway and the registry consume - /readyz, POST /v1/activities, POST /v1/programs/call, POST /v1/programs/simulate, GET /v1/programs/activities/{id}, GET /v1/receipts/{id} with result-wrapped bodies and the five account-state read routes relayed to the daemon - over TLS that accepts the gateway's client certificate and two distinct bearer tokens, SHALL submit canonical bytes over the LNI exactly once per idempotency key and answer 202 when the outcome is unknown, SHALL map a typed daemon refusal to 4xx and unavailability to 503, and SHALL answer a request the LNI cannot serve with a typed 503 rather than an invented result."
+ac_6 = "THE layerx-identity Service on port 9443 SHALL hold principals and sessions in a durable store, SHALL mint sessions only through an authenticated provisioning route, SHALL introspect on POST /v1/sessions/introspect and POST /v1/introspect returning per calling service exactly the body that caller parses - the gateway's {active, sub, allowed_signer_public_keys}, the developer plane's {active, sub, csrf_token}, the faucet's {active, sub} and the ramp's audience-bound body - selected by the presented service token, SHALL revoke sessions so that a revoked or expired token introspects inactive, and SHALL answer an unauthenticated GET /readyz with 200 only when the store is writable."
+ac_7 = "THE paxeer-boundary Service on port 9443 SHALL front a real paxd node running the Paxeer EVM chain in the cluster, SHALL answer GET /readyz with 200 only when eth_chainId succeeds against the node and equals the configured chain id, SHALL relay Ethereum JSON-RPC posted to its root to that single node with bounded bodies and the request id preserved, SHALL present a certificate chaining to the beta CA, and the bring-up SHALL deploy the settlement contracts to that chain and record the chain id and the GuarantorBond address in contracts/config/checkpoint-settlement.json as the beta settlement domain."
+ac_8 = "THE bring-up script SHALL build every one of these images from the repository, issue their certificates and tokens from the beta CA, apply their manifests before the existing ones, and remove LAYERX_BETA_EXTERNAL_MANIFESTS as an owner input; the static topology check SHALL check their Services and NetworkPolicies as in-repository edges; the beta contract SHALL list each as a hosted surface; and the qualification URL exports SHALL point at the surfaces the in-repository driver actually exercises."
+
 # --------------------------------------------------------------------------
 # TASKS - five waves in the audit's ordering, widened to the full surface:
 #   1 freeze, contract, bootstrap   2 admission, revocation, evidence, API
 #   3 durability, settlement identity, hosted topology, beta cluster bring-up
 #   4 artifact truth for every ecosystem; runner gate and in-repo driver
 #   5 whole stack on beta infra, every gate on one revision, go/no-go record
+#   6 trusted-boundary services built here   7 bring-up, developer plane, LNI simulate
 # --------------------------------------------------------------------------
 
 [task.1]
@@ -423,7 +438,7 @@ reqs = ["7.1","7.2","7.3","7.4","7.6"]
 title = "Stand the hosted stack up on a beta cluster from the repository"
 status = "in_progress"
 wave = 3
-requires = ["3.6"]
+requires = ["3.6","6.7"]
 do_1 = "Write platform/hosted/tests/beta-cluster.sh: build the testnet, gateway, faucet, webhooks and dashboard images from their Dockerfiles at the current revision, add the missing platform/hosted/registry/Dockerfile so the layerx-program-registry image the StatefulSet references is built from source rather than pulled, create a disposable local cluster or target the owner-designated beta cluster from an environment variable, install the registry node boundary unit and node-provision-build-boundary.sh on every node that schedules the registry, generate a beta CA and beta secrets by secret name, apply the real hosted manifests for every service, and wait until every journey reports ready through the readiness endpoint from task 3.6."
 do_2 = "Export the values the hosted smoke and the qualification runner consume - LAYERX_TESTNET_URL, LAYERX_GATEWAY_URL, LAYERX_FAUCET_URL, LAYERX_TEST_AUTH_TOKEN_FILE, LAYERX_TEST_CA_FILE, LAYERX_TEST_SOURCE_DID and the runner component URLs - to an environment file under the build directory, and print the cluster identity for the gate record."
 do_3 = "Run the existing hosted boundary, webhook fault-injection and registry node-provision boundary scripts against the stood-up cluster from the same script under a flag, so the unexecuted platform observations have an executable path."
@@ -534,3 +549,126 @@ verify_cmd = "make beta-report beta-ledger-check beta-contract-check"
 symbols = ["beta_report","stop conditions"]
 touches = ["tools/ci/beta-report.sh","Makefile","spec/layerx-beta/report.md","platform/docs/content/beta.md","tools/ci/beta-contract-check.sh"]
 reqs = ["12.3","12.6","13.3","13.4","13.5"]
+
+[task.6]
+section = "Wave 6 - Trusted-Boundary Services Built From the Repository"
+title = "Build the pending-release core, identity, receipt authority, agent boundary and Paxeer boundary here"
+status = "pending"
+
+[task.6.1]
+title = "Build the layerx-node image and the genesis-bootstrapped node pod"
+status = "pending"
+wave = 6
+requires = ["3.6"]
+do_1 = "Add platform/hosted/node/Dockerfile building build/bin/layerxd, layerx-genesis and layerxctl with the root Makefile on a pinned Debian bookworm builder and runtime (libcrypto, libsqlite3), uid 4020, and add platform/hosted/node/bootstrap.sh that, given a data directory, a network id, a sequencer key pair and a treasury key pair, generates the genesis manifest and snapshot with layerx-genesis carrying the treasury account balances for every beta asset, writes the eight-line layerxd config for the sequencer and for the replica, and starts the sequencer under a supervisor that answers a reset request on a pod-local unix socket by stopping the daemons, discarding the data directory contents, re-running bootstrap and restarting."
+do_2 = "Write platform/hosted/node/deployment.yaml: the layerx-node StatefulSet in layerx-testnet with pod label layerx-plane: trusted-boundary, a data PersistentVolumeClaim, a shared emptyDir for the LNI socket and the supervisor socket, containers layerxd (sequencer, LNI on the shared socket, program listener 127.0.0.1:9401, authority publish to 127.0.0.1:9402) and layerxd-authority (--authority-replica on 127.0.0.1:9402), the four boundary containers of tasks 6.2 to 6.4 with container ports 9443, 9444, 9445, 9446, and the Services layerx-pending-core (9443 -> 9443), layerx-pending-core-admin (9444 -> 9444), layerx-receipt-authority (9443 -> 9445) and layerx-agent-boundary (9443 -> 9446), with ingress NetworkPolicies admitting testnet-control, the gateway, the registry and the faucet on exactly those ports and egress limited to DNS."
+do_3 = "Add a real-process test under platform/hosted/node/tests that runs bootstrap.sh against a temporary directory, starts layerxd and the replica from build/bin, proves the LNI handshake succeeds with layerx-client, proves the treasury balance is readable, exercises the supervisor reset, and stops everything; wire it as make platform-test-node."
+verify_cmd = "make layerxd platform-test-node && docker build --file platform/hosted/node/Dockerfile --tag layerx-node:verify ."
+symbols = ["layerx-node image","bootstrap.sh","node supervisor reset"]
+touches = ["platform/hosted/node/Dockerfile","platform/hosted/node/bootstrap.sh","platform/hosted/node/supervisor.sh","platform/hosted/node/deployment.yaml","platform/hosted/node/tests","platform/Makefile.inc"]
+reqs = ["14.1","7.1","7.2"]
+
+[task.6.2]
+title = "Implement the layerx-pending-core boundary and its admin plane"
+status = "pending"
+wave = 6
+requires = ["3.6"]
+do_1 = "Add the crate platform/hosted/core (package layerx-platform-core, binary layerx-core-boundary) in the hosted house style - std TcpListener, rustls server TLS from DER cert and PKCS#8 DER key, hand-framed HTTP/1.1, no tokio - opening two listeners: LAYERX_CORE_LISTEN (default 0.0.0.0:9443) and LAYERX_CORE_ADMIN_LISTEN (default 0.0.0.0:9444), each with its own certificate, the core listener accepting an optional client certificate chaining to LAYERX_CORE_CLIENT_CA_DER."
+do_2 = "Back the core listener with layerx-client over the LNI socket named by LAYERX_CORE_LNI_SOCKET and with the daemon's loopback program listener named by LAYERX_CORE_NODE_URL and LAYERX_CORE_NODE_BEARER_TOKEN_FILE: serve GET /readyz (unauthenticated, 200 with {ready, network_id, wire_version, synchronous_receipts, state_snapshot} only when the handshake, the replica and the durable log are live), GET /livez, GET /v1/sequencer, POST /v1/activities (application/octet-stream canonical bytes or {activity: hex}, submit over the LNI once per idempotency key, answer {state, activity_id, batch_id, global_sequence, result_code, state_root, receipt} from the returned receipt, 202 on unknown outcome), GET /v1/receipts/{activity_id}, GET /v1/state, GET /v1/accounts, POST /v1/programs/call, POST /v1/programs/simulate, GET /v1/programs/activities/{id}, GET /v1/programs/receipts/by-idempotency/{key}, GET /v1/programs/registry and /v1/programs/registry/{id}[/interface], and relay the five daemon account-state GET routes unchanged; when the LNI advertises no capability for a route answer 503 {error: {code: capability_unavailable}} and never execute a transition in-process."
+do_3 = "Back the admin listener with LAYERX_CORE_ADMIN_TOKEN_FILE, LAYERX_CORE_TREASURY_KEY_FILE and the supervisor socket LAYERX_CORE_SUPERVISOR_SOCKET: POST /admin/v1/testnet/fund validates {funding_id, did, public_key, amount}, resolves the account, builds and signs a SEND from the treasury with layerx-intents and layerx-crypto, submits it over the LNI, answers 200 {funding_id, state: funded, transaction_id} from the receipt and 4xx with a typed code for every refusal; POST /admin/v1/testnet/reset with body {} sends reset to the supervisor and answers 200 {state: reset, reset_id}; both require Idempotency-Key and return the first outcome for a repeated key from a durable idempotency journal under LAYERX_CORE_STATE_DIR."
+do_4 = "Write tests under platform/hosted/core/tests that start a real layerxd and replica from build/bin through platform/hosted/node/bootstrap.sh, drive every route over TLS with the beta CA shape, prove funding produces a receipt-verified balance, prove the repeated Idempotency-Key does not move value twice, prove /readyz is 503 while the daemon is down, and add platform/hosted/core/Dockerfile from the faucet template."
+verify_cmd = "make layerxd && cargo test --manifest-path platform/Cargo.toml -p layerx-platform-core && cargo clippy --manifest-path platform/Cargo.toml -p layerx-platform-core --all-targets -- -D warnings"
+symbols = ["layerx-core-boundary","core admin fund","core admin reset"]
+touches = ["platform/hosted/core","platform/Cargo.toml","platform/Cargo.lock","platform/hosted/node/bootstrap.sh"]
+reqs = ["14.2","14.3","7.3","7.4"]
+
+[task.6.3]
+title = "Implement the layerx-receipt-authority service over the independent replica"
+status = "pending"
+wave = 6
+requires = ["3.6"]
+do_1 = "Add the crate platform/hosted/authority (package layerx-platform-authority, binary layerx-receipt-authority) in the hosted house style listening on LAYERX_AUTHORITY_LISTEN (default 0.0.0.0:9445) with rustls server TLS accepting an optional client certificate, authenticating the gateway, registry and webhooks bearer tokens from LAYERX_AUTHORITY_TOKEN_FILES, and dialing only the replica at LAYERX_AUTHORITY_REPLICA_URL (loopback) with LAYERX_AUTHORITY_REPLICA_BEARER_TOKEN_FILE and LAYERX_AUTHORITY_REPLICA_ID, plus the receipt source at LAYERX_AUTHORITY_RECEIPT_URL for receipt bytes by activity id."
+do_2 = "Serve GET /v1/authorized-batches/by-activity/{activity_id} and GET /internal/v1/activities/{activity_id}/authority: fetch the canonical receipt for the activity, compute its digest, fetch the replica's batch evidence, verify the header signature and the Merkle inclusion with layerx-proof, re-derive batch_id with layerx_wire::hash::execution_batch_id and require it to equal the receipt's, and answer exactly {activity_id, batch_id, asset, previous_state_root, resulting_state_root, sequencer_public_key, network_id, wire_version} with Content-Type application/json and no charset; relay GET /v1/batches/{batch_id}/receipt-authority?receipt_digest= to the replica unchanged; serve GET /readyz with {ready, network_id, wire_version} and 200 for an unauthenticated probe only when the replica answers; 404 for an unknown activity, 503 with a typed code when the replica or receipt source is unavailable."
+do_3 = "Write tests under platform/hosted/authority/tests against a real layerxd sequencer and replica from build/bin, proving a submitted activity's facts are served and verify with layerx-proof, that a tampered header signature or mismatched batch_id is refused, and that /readyz reflects replica loss; add platform/hosted/authority/Dockerfile from the faucet template; record the ramps toolkit six-field AuthorityBody conflict in qualification.kvx and align it to the eight-field contract."
+verify_cmd = "make layerxd && cargo test --manifest-path platform/Cargo.toml -p layerx-platform-authority && cargo clippy --manifest-path platform/Cargo.toml -p layerx-platform-authority --all-targets -- -D warnings"
+symbols = ["layerx-receipt-authority","authorized_batch_by_activity"]
+touches = ["platform/hosted/authority","platform/Cargo.toml","platform/Cargo.lock","platform/ramps/toolkit/src/clients.rs","spec/layerx-beta/qualification.kvx"]
+reqs = ["14.4","7.3"]
+
+[task.6.4]
+title = "Implement the layerx-agent-boundary component service over the LNI"
+status = "pending"
+wave = 6
+requires = ["3.6"]
+do_1 = "Add the crate platform/hosted/agent-boundary (package layerx-platform-agent-boundary, binary layerx-agent-boundary) in the hosted house style listening on LAYERX_AGENT_BOUNDARY_LISTEN (default 0.0.0.0:9446) with rustls server TLS that accepts an optional client certificate chaining to LAYERX_AGENT_BOUNDARY_CLIENT_CA_DER, two distinct bearer tokens from LAYERX_AGENT_BOUNDARY_GATEWAY_TOKEN_FILE and LAYERX_AGENT_BOUNDARY_REGISTRY_TOKEN_FILE with per-token route entitlement, an LNI client over LAYERX_AGENT_BOUNDARY_LNI_SOCKET and the daemon program listener at LAYERX_AGENT_BOUNDARY_NODE_URL."
+do_2 = "Serve the component contract exactly as the gateway parses it: GET /readyz (bearer or unauthenticated, {ready, network_id, wire_version, synchronous_receipts, state_snapshot}), POST /v1/activities and POST /v1/programs/call taking application/octet-stream canonical bytes with Idempotency-Key, submitting over the LNI exactly once per key from a durable journal under LAYERX_AGENT_BOUNDARY_STATE_DIR, answering 200 {result: {state, activity_id, receipt, terminal_payload, call_graph}} from the receipt, 202 when the outcome is unknown, 4xx carrying the typed refusal; POST /v1/programs/simulate answering {result: {execution, simulation_evidence}} when the LNI provides simulation and a typed 503 capability_unavailable otherwise; GET /v1/programs/activities/{id} with program_id; GET /v1/receipts/{id} as {result: {activity_id, receipt}} and 404 when unknown; GET /internal/v1/receipts/{id} for the developer plane; and the five account-state GET routes relayed to the daemon for the registry token."
+do_3 = "Write tests under platform/hosted/agent-boundary/tests against a real layerxd and replica from build/bin covering every route, the exactly-once journal across a restart, refusal mapping, the entitlement split between the two tokens, and readiness under daemon loss; add platform/hosted/agent-boundary/Dockerfile from the faucet template."
+verify_cmd = "make layerxd && cargo test --manifest-path platform/Cargo.toml -p layerx-platform-agent-boundary && cargo clippy --manifest-path platform/Cargo.toml -p layerx-platform-agent-boundary --all-targets -- -D warnings"
+symbols = ["layerx-agent-boundary","component submit journal"]
+touches = ["platform/hosted/agent-boundary","platform/Cargo.toml","platform/Cargo.lock"]
+reqs = ["14.5","7.3"]
+
+[task.6.5]
+title = "Implement the layerx-identity principal and session service"
+status = "pending"
+wave = 6
+requires = ["3.6"]
+do_1 = "Add the crate platform/hosted/identity (package layerx-platform-identity, binary layerx-identity) in the hosted house style listening on LAYERX_IDENTITY_LISTEN (default 0.0.0.0:9443) with rustls server TLS, a durable fsync-backed store under LAYERX_IDENTITY_STATE_DIR holding principals {sub, allowed_signer_public_keys, account, audiences} and sessions {session_id, principal, token_digest, csrf_digest, csrf_token sealed at rest with the store key, expires_at, revoked_at}, and service tokens from LAYERX_IDENTITY_SERVICE_TOKENS_DIR where each file name is the calling service (gateway, webhooks, dashboard, faucet, testnet, ramp, provisioning) and the content its token."
+do_2 = "Serve POST /v1/principals and POST /v1/sessions (provisioning token only; create a principal, mint an opaque session token of the form ses_<id>.<secret>, return the token and csrf_token once), DELETE /v1/sessions/{id}, POST /v1/sessions/introspect and POST /v1/introspect answering per presented service token exactly the shape that caller parses with Content-Type application/json and no charset - gateway {active, sub, allowed_signer_public_keys}, webhooks and dashboard {active, sub, csrf_token}, faucet and testnet {active, sub}, ramp with audience {active, principal_id, account, audience, expires_at} - inactive for unknown, expired or revoked tokens, constant-time digest comparison, and GET /readyz unauthenticated 200 only when the store is writable, GET /livez."
+do_3 = "Write in-crate and platform/hosted/identity/tests coverage for every introspection shape, revocation, expiry, wrong-service-token refusal and store restart; add platform/hosted/identity/Dockerfile from the faucet template and platform/hosted/identity/deployment.yaml (Deployment in layerx-testnet with pod label layerx-plane: trusted-boundary, Service layerx-identity 9443 -> 9443, a state PersistentVolumeClaim, ingress from testnet-control, the faucet, the gateway and the developer namespace, egress DNS only)."
+verify_cmd = "cargo test --manifest-path platform/Cargo.toml -p layerx-platform-identity && cargo clippy --manifest-path platform/Cargo.toml -p layerx-platform-identity --all-targets -- -D warnings"
+symbols = ["layerx-identity","session introspection shapes"]
+touches = ["platform/hosted/identity","platform/Cargo.toml","platform/Cargo.lock"]
+reqs = ["14.6","7.3"]
+
+[task.6.6]
+title = "Run Paxeer in the cluster behind the paxeer-boundary and deploy the settlement contracts"
+status = "pending"
+wave = 6
+requires = ["3.6"]
+do_1 = "Add the crate platform/hosted/paxeer (package layerx-platform-paxeer-boundary, binary layerx-paxeer-boundary) in the hosted house style listening on LAYERX_PAXEER_BOUNDARY_LISTEN (default 0.0.0.0:9443) with rustls server TLS, relaying POST / Ethereum JSON-RPC bodies up to 2 MiB to the single node at LAYERX_PAXEER_NODE_URL (loopback http) with the id preserved and a 200 for RPC-level errors, serving GET /readyz with 200 only when eth_chainId against the node equals LAYERX_PAXEER_CHAIN_ID, GET /livez, and refusing any other method or path."
+do_2 = "Write platform/hosted/paxeer/deployment.yaml: a paxeer StatefulSet in layerx-testnet with pod label layerx-plane: trusted-boundary running the paxd image built from paxeer-network/Dockerfile as a single-validator chain initialised by platform/hosted/paxeer/init-chain.sh (genesis with the beta EVM chain id 125, a funded deployer account, EVM JSON-RPC on 127.0.0.1:8545 only) beside the boundary container, a data PersistentVolumeClaim, the Service paxeer-boundary 9443 -> 9443, ingress from testnet-control and the human plane, egress DNS only."
+do_3 = "Add platform/hosted/paxeer/deploy-contracts.sh that deploys GuarantorBond, CheckpointRegistry, LayerXCustody, WithdrawalClaims and EmergencyExit from contracts/ to the running chain through the boundary with pinned Foundry, seeds the beta guarantor set, and writes the chain id, settlement contract and GuarantorBond addresses into contracts/config/checkpoint-settlement.json under a beta domain without altering the vectors domain; extend the checkpoint vector generation and tests to read the new domain."
+do_4 = "Write tests under platform/hosted/paxeer/tests that start paxd from the built image or binary, prove eth_chainId through the boundary equals the configured id, prove readiness flips when the node stops, and run cargo test -p layerx-paxeer-client --test finality against the boundary; add platform/hosted/paxeer/Dockerfile from the faucet template."
+verify_cmd = "cargo test --manifest-path platform/Cargo.toml -p layerx-platform-paxeer-boundary && cargo clippy --manifest-path platform/Cargo.toml -p layerx-platform-paxeer-boundary --all-targets -- -D warnings && bash -n platform/hosted/paxeer/init-chain.sh platform/hosted/paxeer/deploy-contracts.sh"
+symbols = ["layerx-paxeer-boundary","init-chain.sh","deploy-contracts.sh"]
+touches = ["platform/hosted/paxeer","platform/Cargo.toml","platform/Cargo.lock","contracts/config/checkpoint-settlement.json","tests/vectors/checkpoint"]
+reqs = ["14.7","6.4"]
+
+[task.6.7]
+title = "Bring the trusted-boundary services up from the repository and rerun the beta cluster gate"
+status = "pending"
+wave = 7
+requires = ["6.1","6.2","6.3","6.4","6.5","6.6"]
+do_1 = "Extend platform/hosted/tests/beta-cluster.sh: build and load the layerx-node, layerx-core-boundary, layerx-receipt-authority, layerx-agent-boundary, layerx-identity, layerx-paxeer-boundary and paxd images; issue beta CA certificates with the Service DNS SANs for each; generate the sequencer, treasury and deployer keys, the replica id, the node bearer tokens, the identity service tokens and the identity provisioning call that mints the smoke test session for LAYERX_TEST_SOURCE_DID with its signer key; render and apply platform/hosted/node, identity and paxeer manifests before the existing ones; run deploy-contracts.sh; drop LAYERX_BETA_EXTERNAL_MANIFESTS and the EXTERNAL_SERVICES absence branch; export LAYERX_QUALIFICATION_NODE_URL, _AGENT_URL, _HUMAN_URL and _PAXEER_URL to the surfaces tools/qualification/beta_driver.py actually exercises, verified by reading its cases, and LAYERX_TEST_SOURCE_PUBLIC_KEY, _DESTINATION_DID, _ASSET and _AMOUNT from the minted identities."
+do_2 = "Register the new services everywhere the repository enumerates hosted surfaces: platform/hosted/tests/topology-check.sh default manifests and the removal of the corresponding SEPARATELY_OPERATED entries, the NetworkPolicies on both ends for every edge including the developer namespace's identity, component and authority aliases, platform/Makefile.inc platform-test-tooling and the new per-crate test targets, tools/ci/beta-contract-check.sh and the hosted surface and endpoint rows in platform/docs/content/beta.md, the external dependencies table, and the testnet README."
+do_3 = "Run make platform-hosted-topology-check --strict, then the 3.7 verify chain make platform-test-tooling platform-beta-cluster-up platform-hosted-smoke platform-beta-cluster-down with LAYERX_BETA_BUILDER_ENVIRONMENT_DIR set to the builder root delivered on 2026-09-05, record a gate entry with the cluster identity, and close observation 3.7.9 with the outcome; then mark 3.7 done only if the chain passes."
+verify_cmd = "make platform-test-tooling platform-hosted-topology-check platform-beta-cluster-up platform-hosted-smoke platform-beta-cluster-down"
+symbols = ["beta_cluster_up","topology-check.sh","beta-contract-check.sh"]
+touches = ["platform/hosted/tests/beta-cluster.sh","platform/hosted/tests/topology-check.sh","platform/Makefile.inc","tools/ci/beta-contract-check.sh","platform/docs/content/beta.md","platform/hosted/testnet/README.md","platform/hosted/testnet/deployment.yaml","platform/hosted/gateway/deployment.yaml","platform/hosted/registry/deployment.yaml","platform/hosted/webhooks/deployment.yaml","spec/layerx-beta/qualification.kvx"]
+reqs = ["14.8","7.1","7.2","7.5","7.7","12.5"]
+
+[task.6.8]
+title = "Provide the developer-plane internal services the webhooks and dashboard dial"
+status = "pending"
+wave = 7
+requires = ["6.5","6.3","6.4"]
+do_1 = "From platform/hosted/webhooks/src and platform/hosted/dashboard/src, enumerate every layerx-internal Service the developer plane dials - redis, kms, identity, component, authority, journeys, payments, approvals, programs - with the exact routes, bodies and readiness dependencies each imposes, and record the enumeration in spec/layerx-beta/qualification.kvx as an observation before implementing."
+do_2 = "Provide each as a real in-repository service: a Redis StatefulSet with TLS and ACLs in namespace layerx-internal, ExternalName or selector Services aliasing identity, component and authority to the layerx-testnet Services of tasks 6.3 to 6.5 where the contract matches, a KMS signature boundary backed by the existing production KMS crate if one exists and otherwise recorded blocked with the input named, and event sources for journeys, payments, approvals and programs backed by the human service, the gateway and the registry through their existing routes; never a stub that answers ready without the real dependency."
+do_3 = "Add the manifests and beta-cluster.sh steps, extend the topology check, and prove every Deployment in layerx-developer reaches ready in the bring-up of task 6.7."
+verify_cmd = "make platform-hosted-topology-check platform-beta-cluster-up platform-beta-cluster-down"
+symbols = ["layerx-internal services","developer plane readiness"]
+touches = ["platform/hosted/webhooks/deployment.yaml","platform/hosted/internal","platform/hosted/tests/beta-cluster.sh","platform/hosted/tests/topology-check.sh","spec/layerx-beta/qualification.kvx"]
+reqs = ["7.1","7.2","7.5"]
+
+[task.6.9]
+title = "Serve program simulation over the LNI if the boundary recorded the gap"
+status = "pending"
+wave = 7
+requires = ["6.4"]
+do_1 = "If task 6.4 recorded that the LNI advertises no simulation capability, add a Simulate capability to the LNI schema in agent/crates/layerx-client/src/lni/schema.rs and to cmd/layerxd/lxp_daemon_lni.c that executes a program call against the current head through the programs runtime without committing, returning the execution {activity_id, receipt, terminal_payload, call_graph} and simulation evidence {boundary_id, activity_id, previous_state_root, hypothetical_state_root, observed_sequence, observed_at, public_key} signed by the sequencer, and serve it from the agent boundary and the core boundary; otherwise close this task as no change needed with the evidence."
+do_2 = "Extend agent/tests/boundary with the simulate conformance case against a real node and run make agent-test-boundary."
+verify_cmd = "make agent-test-boundary && cargo test --manifest-path platform/Cargo.toml -p layerx-platform-agent-boundary"
+symbols = ["Capability::Simulate","lxp_daemon_lni simulate"]
+touches = ["agent/crates/layerx-client/src/lni/schema.rs","cmd/layerxd/lxp_daemon_lni.c","agent/tests/boundary","platform/hosted/agent-boundary","platform/hosted/core"]
+reqs = ["14.2","14.5"]
