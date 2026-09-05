@@ -10,7 +10,7 @@ use crate::execute::ExecutionFault;
 use super::memory::validate_output;
 use super::{linker_fault, RuntimeState, STATUS_BOUNDS, STATUS_DENIED, STATUS_INVALID};
 
-pub(super) fn register_candidate(linker: &mut Linker<RuntimeState>) -> Result<(), ExecutionFault> {
+pub(super) fn register_v2(linker: &mut Linker<RuntimeState>) -> Result<(), ExecutionFault> {
     linker
         .func_wrap(
             CANDIDATE_ABI_MODULE,

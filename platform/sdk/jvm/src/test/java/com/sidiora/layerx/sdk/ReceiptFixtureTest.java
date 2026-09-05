@@ -11,6 +11,41 @@ import java.nio.file.Paths;
 import static org.junit.jupiter.api.Assertions.*;
 
 public final class ReceiptFixtureTest {
+    @Test
+    void nativeLifecycleCFixtures() throws Exception {
+        for (String name : new String[]{"deploy", "upgrade", "wind-down-route", "wind-down-deprecate", "wind-down-tombstone", "wind-down-exit"}) {
+            JsonNode fixture = JSON.readTree(Files.readString(FIXTURE_ROOT.resolve("native-program-" + name + "-v3.json")));
+            assertEquals(3, fixture.get("protocol_version").intValue()); assertEquals(9, fixture.get("module").intValue());
+            int ordinal = fixture.get("ordinal").intValue(); byte[] payload = hexDecode(fixture.get("payload_hex").asText());
+            byte[] signed = hexDecode(fixture.get("signed_activity_hex").asText());
+            NativeProgramLifecycle value = NativeProgramLifecycle.decode(ordinal, payload); assertArrayEquals(payload, value.encode());
+            var request = new NativeProgramLifecycleRequest(value, signed);
+            assertArrayEquals(hexDecode(fixture.get("activity_id_hex").asText()), request.activityId());
+            assertEquals(fixture.get("idempotency_key_hex").asText(), request.idempotencyKey());
+            for (int length = 0; length < payload.length; length++) {
+                byte[] prefix = java.util.Arrays.copyOf(payload, length);
+                assertThrows(IllegalArgumentException.class, () -> NativeProgramLifecycle.decode(ordinal, prefix));
+            }
+            assertThrows(IllegalArgumentException.class, () -> NativeProgramLifecycle.decode(ordinal, java.util.Arrays.copyOf(payload, payload.length + 1)));
+            byte[] changedPayload = payload.clone(); changedPayload[0] ^= 1;
+            assertThrows(IllegalArgumentException.class, () -> new NativeProgramLifecycleRequest(NativeProgramLifecycle.decode(ordinal, changedPayload), signed));
+            for (int offset : new int[]{1, 7, 17}) {
+                byte[] changed = signed.clone(); changed[offset] ^= 1;
+                assertThrows(IllegalArgumentException.class, () -> new NativeProgramLifecycleRequest(value, changed));
+            }
+            for (int length = 0; length < signed.length; length++) {
+                byte[] prefix = java.util.Arrays.copyOf(signed, length);
+                assertThrows(IllegalArgumentException.class, () -> new NativeProgramLifecycleRequest(value, prefix));
+            }
+            if (ordinal == 1 || ordinal == 2) {
+                for (int offset : new int[]{35, 68, payload.length - 1}) {
+                    byte[] changed = payload.clone(); changed[offset] ^= 1;
+                    assertThrows(IllegalArgumentException.class, () -> NativeProgramLifecycle.decode(ordinal, changed));
+                }
+            }
+        }
+    }
+
     private static final String PROGRAM_OUTCOME_V3 = "505247330100000000000100010000000700000001000000000000000b000000000000000c000000000000000d000000000000000e00000001000000000000000f0000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000020000000000000003000000000000000400000000000000050000000000000006000000000000000700000020000000000000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000201111111111111111111111111111111111111111111111111111111111111111000000202222222222222222222222222222222222222222222222222222222222222222000000200000000000000000000000000000000000000000000000000000000000000000";
 
     @Test
@@ -41,6 +76,7 @@ public final class ReceiptFixtureTest {
             assertThrows(PlatformSdkException.class, () -> LocalVerifier.verifyReceipt(canonical, authority));
             var verified = LocalVerifier.verifyReceipt(canonical, authority, 3);
             assertEquals(3, verified.receipt().protocolVersion());
+            assertThrows(PlatformSdkException.class, () -> LocalVerifier.verifyProgramLifecycleReceipt(canonical, verified.receipt().activityId(), authority.sequencerPublicKey()));
             assertArrayEquals(hexDecode(fixture.get("expected").get("receipt_digest_hex").asText()), verified.receiptDigest());
             canonical[canonical.length - 1] ^= 1;
             assertThrows(PlatformSdkException.class, () -> LocalVerifier.verifyReceipt(canonical, authority, 3));

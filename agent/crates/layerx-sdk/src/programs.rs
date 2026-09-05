@@ -17,6 +17,11 @@ pub const MAX_SIGNED_ACTIVITY_BYTES: usize = 1_048_576;
 #[path = "program_http.rs"]
 mod http;
 
+pub use crate::program_lifecycle::{
+    programs_module_registry, verify_lifecycle_receipt, NativeProgramDeployRequest,
+    NativeProgramLifecycleRequest, NativeProgramUpgradeRequest, NativeProgramWindDownRequest,
+    ProgramLifecycleSubmission,
+};
 pub use http::{HttpProgramTransport, LayerXKeyCredential};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -241,6 +246,11 @@ pub enum ProgramOperationError {
     IdentityMismatch,
     UnknownOutcome,
     Service(ProgramServiceError),
+    Boundary {
+        status: u16,
+        code: String,
+        retry_after_seconds: Option<u64>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -438,6 +448,33 @@ impl VerifiedProgramSimulation {
 }
 
 pub trait ProgramTransport {
+    /// # Errors
+    /// Refuses lookup failures or receipts not bound to the retained lifecycle request.
+    fn lifecycle_receipt(
+        &self,
+        request: &NativeProgramLifecycleRequest,
+    ) -> Result<layerx_wire::receipt::Receipt, ProgramOperationError>;
+    /// # Errors
+    /// Refuses mismatched deployment requests, transport errors, or invalid receipts.
+    fn deploy(
+        &self,
+        request: &crate::program_lifecycle::NativeProgramLifecycleRequest,
+        idempotency_key: [u8; 32],
+    ) -> Result<crate::program_lifecycle::ProgramLifecycleSubmission, ProgramOperationError>;
+    /// # Errors
+    /// Refuses mismatched upgrade requests, transport errors, or invalid receipts.
+    fn upgrade(
+        &self,
+        request: &crate::program_lifecycle::NativeProgramLifecycleRequest,
+        idempotency_key: [u8; 32],
+    ) -> Result<crate::program_lifecycle::ProgramLifecycleSubmission, ProgramOperationError>;
+    /// # Errors
+    /// Refuses mismatched wind-down requests, transport errors, or invalid receipts.
+    fn wind_down(
+        &self,
+        request: &crate::program_lifecycle::NativeProgramLifecycleRequest,
+        idempotency_key: [u8; 32],
+    ) -> Result<crate::program_lifecycle::ProgramLifecycleSubmission, ProgramOperationError>;
     fn discover(
         &self,
         program: [u8; 32],
@@ -468,6 +505,41 @@ pub struct ProgramOperations<T> {
 }
 
 impl<T: ProgramTransport> ProgramOperations<T> {
+    /// # Errors
+    /// Refuses lookup failures or invalid lifecycle receipt signatures and bindings.
+    pub fn lifecycle_receipt(
+        &self,
+        request: &NativeProgramLifecycleRequest,
+    ) -> Result<layerx_wire::receipt::Receipt, ProgramOperationError> {
+        self.transport.lifecycle_receipt(request)
+    }
+    /// # Errors
+    /// Propagates lifecycle binding, transport, or receipt verification refusals.
+    pub fn deploy(
+        &self,
+        request: &crate::program_lifecycle::NativeProgramLifecycleRequest,
+        key: [u8; 32],
+    ) -> Result<crate::program_lifecycle::ProgramLifecycleSubmission, ProgramOperationError> {
+        self.transport.deploy(request, key)
+    }
+    /// # Errors
+    /// Propagates lifecycle binding, transport, or receipt verification refusals.
+    pub fn upgrade(
+        &self,
+        request: &crate::program_lifecycle::NativeProgramLifecycleRequest,
+        key: [u8; 32],
+    ) -> Result<crate::program_lifecycle::ProgramLifecycleSubmission, ProgramOperationError> {
+        self.transport.upgrade(request, key)
+    }
+    /// # Errors
+    /// Propagates lifecycle binding, transport, or receipt verification refusals.
+    pub fn wind_down(
+        &self,
+        request: &crate::program_lifecycle::NativeProgramLifecycleRequest,
+        key: [u8; 32],
+    ) -> Result<crate::program_lifecycle::ProgramLifecycleSubmission, ProgramOperationError> {
+        self.transport.wind_down(request, key)
+    }
     #[must_use]
     pub const fn new(transport: T) -> Self {
         Self { transport }

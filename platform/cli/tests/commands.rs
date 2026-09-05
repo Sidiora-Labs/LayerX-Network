@@ -307,6 +307,16 @@ fn program_deploy_reports_a_missing_artifact() {
         &missing_text,
         "--idempotency-key",
         "idem-1111111111111111",
+        "--program-id",
+        "1111111111111111111111111111111111111111111111111111111111111111",
+        "--account-sequence",
+        "0",
+        "--not-before-ms",
+        "1",
+        "--expires-at-ms",
+        "100",
+        "--previous-state-root",
+        "2222222222222222222222222222222222222222222222222222222222222222",
     ]);
     assert_command_failed(&output);
 }

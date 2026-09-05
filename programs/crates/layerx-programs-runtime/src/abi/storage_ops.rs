@@ -1,13 +1,13 @@
 //! Namespaced storage operations exposed by the ABI transaction.
 
 use crate::meter::Meter;
-use crate::AccessMode;
 use crate::storage::{metered_bytes, NamespaceDrop, ScanLimits, StorageNamespace, StorageScan};
+use crate::AccessMode;
 
 use super::capability::CapabilityKey;
 use super::{Abi, AbiError};
 
-/// Frozen selector used by candidate namespace-aware storage operations.
+/// Frozen selector used by ABI-v2 namespace-aware storage operations.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(i32)]
 pub enum StorageSelector {
@@ -41,7 +41,7 @@ impl Abi {
         self.storage_read_selected(meter, StorageSelector::Principal, key)
     }
 
-    /// Reads from one host-fixed namespace selected by the candidate ABI.
+    /// Reads from one host-fixed namespace selected by the frozen ABI v2.
     ///
     /// # Errors
     ///
@@ -76,7 +76,7 @@ impl Abi {
         self.storage_write_selected(meter, StorageSelector::Principal, key, value)
     }
 
-    /// Writes to one host-fixed namespace selected by the candidate ABI.
+    /// Writes to one host-fixed namespace selected by the frozen ABI v2.
     ///
     /// # Errors
     ///
@@ -108,7 +108,7 @@ impl Abi {
         self.storage_delete_selected(meter, StorageSelector::Principal, key)
     }
 
-    /// Deletes from one host-fixed namespace selected by the candidate ABI.
+    /// Deletes from one host-fixed namespace selected by the frozen ABI v2.
     ///
     /// # Errors
     ///
@@ -129,8 +129,8 @@ impl Abi {
         Ok(())
     }
 
-    /// Drops every cell in one host-fixed namespace selected by the candidate
-    /// ABI and records provisional exact released-occupancy facts for the
+    /// Drops every cell in one host-fixed namespace selected by ABI v2
+    /// and records provisional exact released-occupancy facts for the
     /// committed activity.
     ///
     /// # Errors

@@ -14,8 +14,8 @@ use crate::engine::WasmEngine;
 use crate::entrypoint::EntrypointRefusal;
 use crate::execute::{fault_from_error, ExecutionFault, ProgramInstance};
 use crate::host::{self, RuntimeState};
-use crate::meter::Meter;
 use crate::meter::inject::{FuelSchedule, InjectionRefusal, MeterInjection};
+use crate::meter::Meter;
 
 /// Explicitly selected ABI surface used to validate and instantiate a module.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -28,7 +28,9 @@ pub enum AbiRevision {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ValidationRefusal {
     /// The deployment names an ABI revision this runtime cannot replay.
-    UnsupportedAbiVersion { abi_version: u16 },
+    UnsupportedAbiVersion {
+        abi_version: u16,
+    },
     /// The module exceeds the declared byte-size limit.
     ModuleTooLarge {
         /// The byte size of the refused module.
@@ -51,11 +53,18 @@ pub enum ValidationRefusal {
         import_name: String,
     },
     /// A module imports the same ABI function more than once.
-    DuplicateImport { import_module: String, import_name: String },
+    DuplicateImport {
+        import_module: String,
+        import_name: String,
+    },
     /// A declared ABI name was imported as a non-function item.
-    WrongImportKind { import_name: String },
+    WrongImportKind {
+        import_name: String,
+    },
     /// A declared ABI function was imported with the wrong type.
-    WrongImportSignature { import_name: String },
+    WrongImportSignature {
+        import_name: String,
+    },
     /// The module declares a floating-point type.
     ForbiddenFloatType,
     /// The module contains a floating-point instruction.
@@ -72,7 +81,9 @@ pub enum ValidationRefusal {
         /// The engine's reason for refusing the module.
         reason: String,
     },
-    MeterInjection { reason: String },
+    MeterInjection {
+        reason: String,
+    },
 }
 
 impl Display for ValidationRefusal {
@@ -102,7 +113,10 @@ impl Display for ValidationRefusal {
             } => {
                 write!(f, "forbidden import {import_module}::{import_name}")
             }
-            Self::DuplicateImport { import_module, import_name } => {
+            Self::DuplicateImport {
+                import_module,
+                import_name,
+            } => {
                 write!(f, "duplicate import {import_module}::{import_name}")
             }
             Self::WrongImportKind { import_name } => {
@@ -167,7 +181,9 @@ impl ValidatedModule {
 
     #[must_use]
     pub fn required_interface_capability_mask(&self, entrypoint: &str) -> Option<u16> {
-        self.interface_entry_capability_masks.get(entrypoint).copied()
+        self.interface_entry_capability_masks
+            .get(entrypoint)
+            .copied()
     }
 
     #[must_use]
@@ -210,10 +226,14 @@ impl ValidatedModule {
     }
 
     #[must_use]
-    pub const fn meter_injection(&self) -> &MeterInjection { &self.meter_injection }
+    pub const fn meter_injection(&self) -> &MeterInjection {
+        &self.meter_injection
+    }
 
     #[must_use]
-    pub const fn code_hash(&self) -> [u8; 32] { self.meter_injection.original_code_hash() }
+    pub const fn code_hash(&self) -> [u8; 32] {
+        self.meter_injection.original_code_hash()
+    }
 
     #[must_use]
     pub const fn metering_schedule_version(&self) -> u32 {
@@ -273,9 +293,12 @@ impl ValidatedModule {
     }
 
     pub fn instantiate_sandbox(
-        &self, meter: Meter, abi: Abi,
+        &self,
+        meter: Meter,
+        abi: Abi,
     ) -> Result<ProgramInstance, ExecutionFault> {
-        self.instantiate_state(RuntimeState::sandbox(meter, abi)).map_err(|(fault, _)| fault)
+        self.instantiate_state(RuntimeState::sandbox(meter, abi))
+            .map_err(|(fault, _)| fault)
     }
 
     pub(crate) fn instantiate_metered(
@@ -320,13 +343,7 @@ impl ValidatedModule {
         Result<ProgramInstance, Box<(ExecutionFault, RuntimeState)>>,
         crate::abi::response::ResponseRefusal,
     > {
-        self.instantiate_composed_response_context_retained(
-            meter,
-            abi,
-            composition,
-            capacity,
-            None,
-        )
+        self.instantiate_composed_response_context_retained(meter, abi, composition, capacity, None)
     }
 
     pub(crate) fn instantiate_composed_response_context_retained(
@@ -421,12 +438,17 @@ pub(crate) fn validate_module_metered(
 ) -> Result<ValidatedModule, ValidationRefusal> {
     let limits = engine.limits();
     let original = validate_original_module(engine.inner(), limits, wasm, revision)?;
-    let meter_injection = MeterInjection::instrument(wasm, schedule)
-        .map_err(|refusal: InjectionRefusal| ValidationRefusal::MeterInjection {
-            reason: refusal.to_string(),
+    let meter_injection =
+        MeterInjection::instrument(wasm, schedule).map_err(|refusal: InjectionRefusal| {
+            ValidationRefusal::MeterInjection {
+                reason: refusal.to_string(),
+            }
         })?;
-    let module = wasmi::Module::new(engine.inner(), meter_injection.instrumented_wasm())
-        .map_err(|error| ValidationRefusal::RejectedByEngine { reason: error.to_string() })?;
+    let module = wasmi::Module::new(engine.inner(), meter_injection.instrumented_wasm()).map_err(
+        |error| ValidationRefusal::RejectedByEngine {
+            reason: error.to_string(),
+        },
+    )?;
     let linker = engine.host_linker();
     Ok(ValidatedModule {
         module,
@@ -523,7 +545,10 @@ fn validate_original_module(
                     if entry.kind == wasmparser_nostd::ExternalKind::Func {
                         exported_functions.insert(entry.name.to_string(), entry.index);
                     } else if entry.kind == wasmparser_nostd::ExternalKind::Global {
-                        exported_globals.entry(entry.index).or_default().push(entry.name.to_string());
+                        exported_globals
+                            .entry(entry.index)
+                            .or_default()
+                            .push(entry.name.to_string());
                     }
                 }
             }
@@ -545,13 +570,14 @@ fn validate_original_module(
     }
     // Only after the original guest has passed the public ABI and deterministic
     // subset checks may the runtime-private import be introduced.
-    let module = wasmi::Module::new(engine, wasm).map_err(|error| {
-        ValidationRefusal::RejectedByEngine {
+    let module =
+        wasmi::Module::new(engine, wasm).map_err(|error| ValidationRefusal::RejectedByEngine {
             reason: error.to_string(),
-        }
-    })?;
+        })?;
     let imported_function_count = u32::try_from(imported_function_masks.len()).map_err(|_| {
-        ValidationRefusal::MalformedModule { reason: "imported function count exceeds u32".into() }
+        ValidationRefusal::MalformedModule {
+            reason: "imported function count exceeds u32".into(),
+        }
     })?;
     let interface_entry_capability_masks = exported_functions
         .into_iter()
@@ -569,7 +595,9 @@ fn validate_original_module(
     let mut resumable_globals = Vec::new();
     let mut complete = true;
     for (index, mutable) in mutable_globals.into_iter().enumerate() {
-        if !mutable { continue; }
+        if !mutable {
+            continue;
+        }
         let names = exported_globals.get(&(index as u32));
         if let Some(names) = names.filter(|names| names.len() == 1) {
             resumable_globals.push(names[0].clone());
@@ -590,9 +618,11 @@ fn validate_original_module(
 fn interface_calls(body: &FunctionBody<'_>) -> Result<(Vec<u32>, bool), ValidationRefusal> {
     let mut direct = Vec::new();
     let mut ambiguous_indirect = false;
-    let reader = body.get_operators_reader().map_err(|error| ValidationRefusal::MalformedModule {
-        reason: error.to_string(),
-    })?;
+    let reader =
+        body.get_operators_reader()
+            .map_err(|error| ValidationRefusal::MalformedModule {
+                reason: error.to_string(),
+            })?;
     for operator in reader {
         match operator.map_err(|error| ValidationRefusal::MalformedModule {
             reason: error.to_string(),
@@ -627,8 +657,8 @@ fn reachable_interface_capabilities(
             required |= imported_masks[function_index as usize];
             continue;
         }
-        let Some((calls, ambiguous_indirect)) = defined_calls
-            .get((function_index - imported_count) as usize)
+        let Some((calls, ambiguous_indirect)) =
+            defined_calls.get((function_index - imported_count) as usize)
         else {
             // A malformed index is rejected by the engine below; fail closed here too.
             required |= all_imported_mask;
@@ -651,7 +681,9 @@ fn interface_capability_for_import(name: &str) -> u16 {
         "storage_read" => 1 << 0,
         "storage_write" | "storage_delete" => 1 << 1,
         "storage_read_scoped" | "storage_scan_scoped" => (1 << 0) | (1 << 2),
-        "storage_write_scoped" | "storage_delete_scoped" | "storage_drop_scoped" => (1 << 1) | (1 << 3),
+        "storage_write_scoped" | "storage_delete_scoped" | "storage_drop_scoped" => {
+            (1 << 1) | (1 << 3)
+        }
         "event_emit" => 1 << 4,
         "program_call" | "program_call_response" => 1 << 5,
         "transfer_402" | "fund_program_402" => 1 << 6,
@@ -680,15 +712,11 @@ fn refuse_import(
         AbiRevision::V1 => crate::abi::manifest::ABI_V1_VERSION,
         AbiRevision::V2 => crate::abi::manifest::ABI_V2_VERSION,
     };
-    let declaration = crate::abi::manifest::permitted_import(
-        version,
-        import.module,
-        import.name,
-    )
-    .ok_or_else(|| ValidationRefusal::ForbiddenImport {
-            import_module: import.module.to_string(),
-            import_name: import.name.to_string(),
-        })?;
+    let declaration = crate::abi::manifest::permitted_import(version, import.module, import.name)
+        .ok_or_else(|| ValidationRefusal::ForbiddenImport {
+        import_module: import.module.to_string(),
+        import_name: import.name.to_string(),
+    })?;
     let TypeRef::Func(type_index) = import.ty else {
         return Err(ValidationRefusal::WrongImportKind {
             import_name: import.name.to_string(),
@@ -876,8 +904,20 @@ mod linker_invariant_tests {
             func_body(
                 &[],
                 &[
-                    OP_I32_CONST, 0, OP_I32_CONST, 0, OP_I32_CONST, 0, OP_I32_CONST, 0,
-                    OP_CALL, import, OP_DROP, OP_I32_CONST, 0, OP_END,
+                    OP_I32_CONST,
+                    0,
+                    OP_I32_CONST,
+                    0,
+                    OP_I32_CONST,
+                    0,
+                    OP_I32_CONST,
+                    0,
+                    OP_CALL,
+                    import,
+                    OP_DROP,
+                    OP_I32_CONST,
+                    0,
+                    OP_END,
                 ],
             )
         };
@@ -895,7 +935,15 @@ mod linker_invariant_tests {
                 func_body(
                     &[],
                     &[
-                        OP_LOCAL_GET, 0, OP_LOCAL_GET, 1, OP_CALL, 2, OP_DROP, OP_I32_CONST, 0,
+                        OP_LOCAL_GET,
+                        0,
+                        OP_LOCAL_GET,
+                        1,
+                        OP_CALL,
+                        2,
+                        OP_DROP,
+                        OP_I32_CONST,
+                        0,
                         OP_END,
                     ],
                 ),
@@ -907,8 +955,14 @@ mod linker_invariant_tests {
             .validate(&wasm)
             .unwrap_or_else(|error| panic!("reachability module refused: {error}"));
 
-        assert_eq!(validated.required_interface_capability_mask("read"), Some(1 << 0));
-        assert_eq!(validated.required_interface_capability_mask("emit"), Some(1 << 4));
+        assert_eq!(
+            validated.required_interface_capability_mask("read"),
+            Some(1 << 0)
+        );
+        assert_eq!(
+            validated.required_interface_capability_mask("emit"),
+            Some(1 << 4)
+        );
         assert_eq!(
             validated.required_interface_capability_mask("transitive"),
             Some(1 << 0)
@@ -942,8 +996,7 @@ mod linker_invariant_tests {
         assert_eq!(engine.host_linker_construction_count(), 1);
         assert_eq!(
             engine.host_function_registration_count(),
-            crate::abi::HOST_FUNCTIONS.len()
-                + crate::abi::manifest::ABI_V2_HOST_FUNCTIONS.len()
+            crate::abi::HOST_FUNCTIONS.len() + crate::abi::manifest::ABI_V2_HOST_FUNCTIONS.len()
         );
 
         let wasm = add_module();
@@ -953,9 +1006,9 @@ mod linker_invariant_tests {
         let child = engine
             .validate(&wasm)
             .unwrap_or_else(|error| panic!("child validation refused: {error}"));
-        let candidate = engine
+        let version_two = engine
             .validate_v2(&wasm)
-            .unwrap_or_else(|error| panic!("candidate validation refused: {error}"));
+            .unwrap_or_else(|error| panic!("ABI-v2 validation refused: {error}"));
         let child_program = ProgramId::new([0x42; 32])
             .unwrap_or_else(|error| panic!("child program refused: {error}"));
         let mut catalog = ProgramCatalog::new();
@@ -966,7 +1019,7 @@ mod linker_invariant_tests {
         };
 
         assert!(Arc::ptr_eq(&root.linker, &resolved.linker));
-        assert!(Arc::ptr_eq(&root.linker, &candidate.linker));
+        assert!(Arc::ptr_eq(&root.linker, &version_two.linker));
         root.instantiate_for_qualification()
             .unwrap_or_else(|error| panic!("root instantiation refused: {error}"));
         resolved

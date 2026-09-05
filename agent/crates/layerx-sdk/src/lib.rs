@@ -32,7 +32,9 @@ use layerx_types::result::ResultCode;
 
 pub mod approval;
 pub mod mirror_generated;
+pub mod native_capabilities;
 pub mod production;
+pub mod program_lifecycle;
 pub mod programs;
 mod receipt_generated;
 

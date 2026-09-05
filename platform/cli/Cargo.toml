@@ -32,6 +32,7 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 subtle.workspace = true
+toml_edit = "=0.25.13"
 ureq.workspace = true
 zeroize.workspace = true
 

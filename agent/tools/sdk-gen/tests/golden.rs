@@ -74,6 +74,9 @@ fn golden_schema_generation_is_byte_deterministic() {
         "program.interface",
         "program.simulate",
         "program.call",
+        "program.deploy",
+        "program.upgrade",
+        "program.wind-down",
         "program.receipt",
         "program.activity",
     ] {
@@ -99,6 +102,9 @@ fn golden_schema_generation_is_byte_deterministic() {
     assert!(python.contains("program.interface"));
     assert!(python.contains("program.simulate"));
     assert!(python.contains("program.call"));
+    assert!(python.contains("program.deploy"));
+    assert!(python.contains("program.upgrade"));
+    assert!(python.contains("program.wind-down"));
     assert!(python.contains("program.receipt"));
     assert!(python.contains("program.activity"));
     let python_stub = first
@@ -142,6 +148,40 @@ fn programs_golden_is_generated_from_the_canonical_schema() {
     .unwrap_or_else(|error| panic!("replace Programs golden: {error}"));
     assert!(programs_golden_drift_gate(&root).is_err());
     let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn lifecycle_schema_operations_and_mutation_contract_are_required() {
+    for operation in ["deploy", "upgrade", "wind-down"] {
+        let root = directory("lifecycle-schema");
+        copy_schema(&root);
+        let path = root.join("programs.kvx");
+        let source = fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("read Programs schema: {error}"));
+        let missing = source.replace(
+            &format!("[operation.program.{operation}]"),
+            &format!("[removed.program.{operation}]"),
+        );
+        assert_ne!(source, missing);
+        fs::write(&path, missing)
+            .unwrap_or_else(|error| panic!("write missing operation: {error}"));
+        assert!(agent_sdk_generator(&root).is_err());
+        let request = match operation {
+            "deploy" => "NativeProgramDeployRequest",
+            "upgrade" => "NativeProgramUpgradeRequest",
+            _ => "NativeProgramWindDownRequest",
+        };
+        let mutation = format!("request = \"{request}\"\nrequired = [\"idempotency_key\"]");
+        let missing_mutation = source.replace(
+            &mutation,
+            &format!("request = \"{request}\"\nrequired = []"),
+        );
+        assert_ne!(source, missing_mutation);
+        fs::write(&path, missing_mutation)
+            .unwrap_or_else(|error| panic!("write missing mutation: {error}"));
+        assert!(agent_sdk_generator(&root).is_err());
+        let _ = fs::remove_dir_all(root);
+    }
 }
 
 #[test]

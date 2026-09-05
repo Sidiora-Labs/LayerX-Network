@@ -3,7 +3,80 @@ import XCTest
 @testable import LayerXSDK
 
 final class ReceiptFixtureTests: XCTestCase {
-    private static let programOutcomeV3 = "505247330100000000000100010000000700000001000000000000000b000000000000000c000000000000000d000000000000000e00000001000000000000000f0000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000020000000000000003000000000000000400000000000000050000000000000006000000000000000700000020000000000000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000201111111111111111111111111111111111111111111111111111111111111111000000202222222222222222222222222222222222222222222222222222222222222222000000200000000000000000000000000000000000000000000000000000000000000000"
+    func testNativeLifecycleCFixtures() throws {
+    let token = try AccessToken(Data("fixture-bearer".utf8))
+    defer { token.destroy() }
+    let transport = try AgentHTTPTransport(
+      baseURL: URL(string: "http://127.0.0.1:8080")!, accessToken: token)
+    for name in [
+      "deploy", "upgrade", "wind-down-route", "wind-down-deprecate", "wind-down-tombstone",
+      "wind-down-exit",
+    ] {
+      let raw = try Data(contentsOf: fixtureURL("native-program-\(name)-v3.json"))
+      let fixture = try XCTUnwrap(JSONSerialization.jsonObject(with: raw) as? [String: Any])
+      XCTAssertEqual(fixture["protocol_version"] as? Int, 3)
+      XCTAssertEqual(fixture["module"] as? Int, 9)
+      let ordinal = UInt16(try XCTUnwrap(fixture["ordinal"] as? Int))
+      let payload = try hexField(fixture, "payload_hex")
+      let signed = try hexField(fixture, "signed_activity_hex")
+      let value = try decodeNativeProgramLifecycle(ordinal, payload)
+      XCTAssertEqual(value.encode(), payload)
+      let request = try NativeProgramLifecycleRequest(operation: value, signedActivity: signed)
+      XCTAssertEqual(request.activityID, try hexField(fixture, "activity_id_hex"))
+      XCTAssertEqual(request.idempotencyKey, try hexField(fixture, "idempotency_key_hex"))
+      let operation =
+        ordinal == 1 ? "program.deploy" : ordinal == 2 ? "program.upgrade" : "program.wind-down"
+      let path =
+        ordinal == 1
+        ? "/v1/programs/deploy" : ordinal == 2 ? "/v1/programs/upgrade" : "/v1/programs/wind-down"
+      let hex: (Data) -> String = { $0.map { String(format: "%02x", $0) }.joined() }
+      let body: JSONValue = .object([
+        "payload": .string(hex(payload)), "signed_activity": .string(hex(signed)),
+      ])
+      let http = try transport.programRequest(
+        .init(
+          operation: operation, request: body,
+          idempotencyKey: IdempotencyKey(hex(request.idempotencyKey))))
+      XCTAssertEqual(http.url?.path, path)
+      XCTAssertEqual(http.httpMethod, "POST")
+      XCTAssertEqual(http.httpBody, signed)
+      XCTAssertEqual(http.value(forHTTPHeaderField: "Content-Type"), "application/octet-stream")
+      XCTAssertEqual(http.value(forHTTPHeaderField: "Idempotency-Key"), hex(request.idempotencyKey))
+      XCTAssertEqual(http.value(forHTTPHeaderField: "Authorization"), "Bearer fixture-bearer")
+      XCTAssertThrowsError(try transport.programRequest(.init(operation: operation, request: body)))
+      for length in 0..<payload.count {
+        XCTAssertThrowsError(try decodeNativeProgramLifecycle(ordinal, payload.prefix(length)))
+      }
+      var trailing = payload
+      trailing.append(0)
+      XCTAssertThrowsError(try decodeNativeProgramLifecycle(ordinal, trailing))
+      var changedPayload = payload
+      changedPayload[0] ^= 1
+      XCTAssertThrowsError(
+        try NativeProgramLifecycleRequest(
+          operation: decodeNativeProgramLifecycle(ordinal, changedPayload), signedActivity: signed))
+      for offset in [1, 7, 17] {
+        var changed = signed
+        changed[offset] ^= 1
+        XCTAssertThrowsError(
+          try NativeProgramLifecycleRequest(operation: value, signedActivity: changed))
+      }
+      for length in 0..<signed.count {
+        XCTAssertThrowsError(
+          try NativeProgramLifecycleRequest(operation: value, signedActivity: signed.prefix(length))
+        )
+      }
+      if ordinal == 1 || ordinal == 2 {
+        for offset in [35, 68, payload.count - 1] {
+          var changed = payload
+          changed[offset] ^= 1
+          XCTAssertThrowsError(try decodeNativeProgramLifecycle(ordinal, changed))
+        }
+      }
+    }
+  }
+
+  private static let programOutcomeV3 = "505247330100000000000100010000000700000001000000000000000b000000000000000c000000000000000d000000000000000e00000001000000000000000f0000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000020000000000000003000000000000000400000000000000050000000000000006000000000000000700000020000000000000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000201111111111111111111111111111111111111111111111111111111111111111000000202222222222222222222222222222222222222222222222222222222222222222000000200000000000000000000000000000000000000000000000000000000000000000"
 
     func testNativeSignedBinding() throws {
         let raw = try Data(contentsOf: fixtureURL("native-program-call-v3.json"))
@@ -26,6 +99,10 @@ final class ReceiptFixtureTests: XCTestCase {
             let fixture = try loadFixture(name)
             do { _ = try await LocalVerifier.verifyReceipt(fixture.canonicalReceipt, authorized: fixture.batch); XCTFail("default accepted protocol 3") } catch {}
             let verified = try await LocalVerifier.verifyReceipt(fixture.canonicalReceipt, authorized: fixture.batch, protocolVersion: 3)
+      XCTAssertThrowsError(
+        try LocalVerifier.verifyProgramLifecycleReceipt(
+          fixture.canonicalReceipt, expectedActivity: verified.receipt.activityID,
+          sequencer: fixture.batch.sequencerPublicKey))
             XCTAssertEqual(verified.receipt.protocolVersion, 3)
             XCTAssertEqual(verified.receiptDigest, try hexField(fixture.expected, "receipt_digest_hex"))
             var corrupted = fixture.canonicalReceipt; corrupted[corrupted.count - 1] ^= 1

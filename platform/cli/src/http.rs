@@ -77,6 +77,28 @@ impl Client {
         decode(response, "GET", path)
     }
 
+    pub fn get_with_body(&self, path: &str, selector: &Value) -> Result<Value, String> {
+        let url = self.url(path)?;
+        let encoded = serde_json::to_vec(selector)
+            .map_err(|error| format!("GET {path} selector encoding failed: {error}"))?;
+        if encoded.is_empty() || encoded.len() > 1024 {
+            return Err("program read selector exceeds its 1024-byte bound".into());
+        }
+        let mut request = self
+            .agent
+            .get(&url)
+            .header("Content-Type", "application/json");
+        let authorization = self.authorization_header();
+        if let Some(value) = &authorization {
+            request = request.header("Authorization", value.as_str());
+        }
+        let response = request
+            .force_send_body()
+            .send(encoded.as_slice())
+            .map_err(|error| format!("GET {path} failed: {error}"))?;
+        decode(response, "GET", path)
+    }
+
     pub fn post(
         &self,
         path: &str,
@@ -120,6 +142,41 @@ impl Client {
             }
         };
         decode_stateful(response, "POST", path)
+    }
+
+    pub fn post_activity(
+        &self,
+        path: &str,
+        body: &[u8],
+        idempotency: Option<&str>,
+    ) -> Result<Value, String> {
+        let url = self.url(path)?;
+        let mut request = self
+            .agent
+            .post(&url)
+            .header("Content-Type", "application/octet-stream");
+        let authorization = self.authorization_header();
+        if let Some(value) = &authorization {
+            request = request.header("Authorization", value.as_str());
+        }
+        if let Some(key) = idempotency {
+            request = request.header("Idempotency-Key", key);
+        }
+        let response = match request.send(body) {
+            Ok(response) => response,
+            Err(error) if idempotency.is_some() => {
+                return Ok(json!({
+                    "state": "unknown",
+                    "failure": {"code": "gateway_transport_unavailable", "detail": error.to_string()},
+                }));
+            }
+            Err(error) => return Err(format!("POST {path} failed: {error}")),
+        };
+        if idempotency.is_some() {
+            decode_stateful(response, "POST", path)
+        } else {
+            decode(response, "POST", path)
+        }
     }
 
     pub fn post_sensitive<T: DeserializeOwned>(

@@ -1,4 +1,4 @@
-//! Bounded successful response transport for the candidate ABI revision.
+//! Bounded successful response transport for the frozen ABI v2 revision.
 
 use core::fmt::{self, Display};
 
@@ -6,13 +6,12 @@ use crate::meter::MeterRefusal;
 
 use super::HostFunction;
 
-/// Explicitly non-current module carrying candidate response operations.
+/// Compatibility aliases for the frozen ABI-v2 response operations.
 pub const CANDIDATE_ABI_MODULE: &str = super::manifest::ABI_V2_MODULE;
 pub const CANDIDATE_ABI_MANIFEST: &str = super::manifest::ABI_V2_MANIFEST;
 
 /// Compatibility alias for the complete frozen ABI-v2 host table.
-pub const CANDIDATE_HOST_FUNCTIONS: [HostFunction; 19] =
-    super::manifest::ABI_V2_HOST_FUNCTIONS;
+pub const CANDIDATE_HOST_FUNCTIONS: [HostFunction; 19] = super::manifest::ABI_V2_HOST_FUNCTIONS;
 
 /// Maximum successful response payload crossing one call boundary.
 pub const MAX_CALL_RESPONSE_BYTES: usize = 1_048_576;
@@ -74,20 +73,46 @@ pub(crate) struct ResponseRegion {
 
 impl ResponseRegion {
     pub(crate) fn canonical_state_len(&self) -> Result<u64, ()> {
-        let payload = self.published.as_ref().map_or(0, |response| response.bytes.len());
-        let refusal = self.refusal.as_ref().map_or(0, ResponseRefusal::canonical_len);
-        8_u64.checked_add(1).and_then(|value| value.checked_add(if self.published.is_some() { 12_u64.checked_add(u64::try_from(payload).ok()?)? } else { 0 }))
+        let payload = self
+            .published
+            .as_ref()
+            .map_or(0, |response| response.bytes.len());
+        let refusal = self
+            .refusal
+            .as_ref()
+            .map_or(0, ResponseRefusal::canonical_len);
+        8_u64
+            .checked_add(1)
+            .and_then(|value| {
+                value.checked_add(if self.published.is_some() {
+                    12_u64.checked_add(u64::try_from(payload).ok()?)?
+                } else {
+                    0
+                })
+            })
             .and_then(|value| value.checked_add(1))
-            .and_then(|value| value.checked_add(u64::try_from(refusal).ok()?)).ok_or(())
+            .and_then(|value| value.checked_add(u64::try_from(refusal).ok()?))
+            .ok_or(())
     }
 
     pub(crate) fn canonical_state_write(&self, mut write: impl FnMut(&[u8])) {
         write(&(self.capacity as u64).to_be_bytes());
         match &self.published {
             None => write(&[0]),
-            Some(response) => { write(&[1]); write(&response.code.to_be_bytes()); write(&(response.bytes.len() as u64).to_be_bytes()); write(&response.bytes); }
+            Some(response) => {
+                write(&[1]);
+                write(&response.code.to_be_bytes());
+                write(&(response.bytes.len() as u64).to_be_bytes());
+                write(&response.bytes);
+            }
         }
-        match &self.refusal { None => write(&[0]), Some(refusal) => { write(&[1]); refusal.canonical_write(write); } }
+        match &self.refusal {
+            None => write(&[0]),
+            Some(refusal) => {
+                write(&[1]);
+                refusal.canonical_write(write);
+            }
+        }
     }
 
     pub(crate) fn canonical_state_bytes(&self) -> Vec<u8> {
@@ -165,18 +190,74 @@ impl ResponseRegion {
 }
 
 impl ResponseRefusal {
-    pub(crate) fn canonical_len(&self) -> usize { match self { Self::TooLarge { .. } | Self::CapacityExceeded { .. } => 17, Self::CodeMismatch { .. } => 9, Self::Meter(refusal) => 1 + meter_len(refusal), _ => 1 } }
+    pub(crate) fn canonical_len(&self) -> usize {
+        match self {
+            Self::TooLarge { .. } | Self::CapacityExceeded { .. } => 17,
+            Self::CodeMismatch { .. } => 9,
+            Self::Meter(refusal) => 1 + meter_len(refusal),
+            _ => 1,
+        }
+    }
     pub(crate) fn canonical_write(&self, mut write: impl FnMut(&[u8])) {
         match self {
-            Self::TooLarge { bytes, limit } => { write(&[0]); write(&(*bytes as u64).to_be_bytes()); write(&(*limit as u64).to_be_bytes()); }
-            Self::CapacityExceeded { bytes, capacity } => { write(&[1]); write(&(*bytes as u64).to_be_bytes()); write(&(*capacity as u64).to_be_bytes()); }
-            Self::DuplicatePublication => write(&[2]), Self::InvalidPublication => write(&[3]),
-            Self::CodeMismatch { published, returned } => { write(&[4]); write(&published.to_be_bytes()); write(&returned.to_be_bytes()); }
-            Self::Meter(refusal) => { write(&[5]); meter_write(refusal, write); }
+            Self::TooLarge { bytes, limit } => {
+                write(&[0]);
+                write(&(*bytes as u64).to_be_bytes());
+                write(&(*limit as u64).to_be_bytes());
+            }
+            Self::CapacityExceeded { bytes, capacity } => {
+                write(&[1]);
+                write(&(*bytes as u64).to_be_bytes());
+                write(&(*capacity as u64).to_be_bytes());
+            }
+            Self::DuplicatePublication => write(&[2]),
+            Self::InvalidPublication => write(&[3]),
+            Self::CodeMismatch {
+                published,
+                returned,
+            } => {
+                write(&[4]);
+                write(&published.to_be_bytes());
+                write(&returned.to_be_bytes());
+            }
+            Self::Meter(refusal) => {
+                write(&[5]);
+                meter_write(refusal, write);
+            }
         }
     }
 }
 
-fn resource_code(resource: crate::meter::ResourceKind) -> u8 { match resource { crate::meter::ResourceKind::Cpu => 0, crate::meter::ResourceKind::Memory => 1, crate::meter::ResourceKind::StorageRead => 2, crate::meter::ResourceKind::StorageWrite => 3, crate::meter::ResourceKind::StorageOccupancy => 4, crate::meter::ResourceKind::Output => 5, crate::meter::ResourceKind::OutputBytes => 6 } }
-fn meter_len(refusal: &MeterRefusal) -> usize { match refusal { MeterRefusal::BudgetExceeded { .. } => 18, MeterRefusal::CounterOverflow { .. } => 2, MeterRefusal::FeeOverflow => 1 } }
-fn meter_write(refusal: &MeterRefusal, mut write: impl FnMut(&[u8])) { match refusal { MeterRefusal::BudgetExceeded { resource, limit, attempted } => { write(&[0, resource_code(*resource)]); write(&limit.to_be_bytes()); write(&attempted.to_be_bytes()); }, MeterRefusal::CounterOverflow { resource } => write(&[1, resource_code(*resource)]), MeterRefusal::FeeOverflow => write(&[2]) } }
+fn resource_code(resource: crate::meter::ResourceKind) -> u8 {
+    match resource {
+        crate::meter::ResourceKind::Cpu => 0,
+        crate::meter::ResourceKind::Memory => 1,
+        crate::meter::ResourceKind::StorageRead => 2,
+        crate::meter::ResourceKind::StorageWrite => 3,
+        crate::meter::ResourceKind::StorageOccupancy => 4,
+        crate::meter::ResourceKind::Output => 5,
+        crate::meter::ResourceKind::OutputBytes => 6,
+    }
+}
+fn meter_len(refusal: &MeterRefusal) -> usize {
+    match refusal {
+        MeterRefusal::BudgetExceeded { .. } => 18,
+        MeterRefusal::CounterOverflow { .. } => 2,
+        MeterRefusal::FeeOverflow => 1,
+    }
+}
+fn meter_write(refusal: &MeterRefusal, mut write: impl FnMut(&[u8])) {
+    match refusal {
+        MeterRefusal::BudgetExceeded {
+            resource,
+            limit,
+            attempted,
+        } => {
+            write(&[0, resource_code(*resource)]);
+            write(&limit.to_be_bytes());
+            write(&attempted.to_be_bytes());
+        }
+        MeterRefusal::CounterOverflow { resource } => write(&[1, resource_code(*resource)]),
+        MeterRefusal::FeeOverflow => write(&[2]),
+    }
+}

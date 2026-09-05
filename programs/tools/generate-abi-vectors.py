@@ -79,8 +79,8 @@ def audit_surface(runtime_source):
     validate = (RUNTIME / "validate.rs").read_text()
     if "manifest::permitted_import" not in validate or "pub(crate) fn permitted_import" not in runtime_source: raise ValueError("validator does not derive its allowlist from the frozen table")
     sdk = SDK_ABI.read_text()
-    if rust_string(sdk, "CANDIDATE_ABI_MANIFEST") != v2_manifest: raise ValueError("Rust SDK ABI v2 manifest diverges")
-    if table(sdk, "CANDIDATE_HOST_FUNCTIONS") != v2: raise ValueError("Rust SDK ABI v2 table diverges")
+    if rust_string(sdk, "V2_ABI_MANIFEST") != v2_manifest: raise ValueError("Rust SDK ABI v2 manifest diverges")
+    if table(sdk, "V2_HOST_FUNCTIONS") != v2: raise ValueError("Rust SDK ABI v2 table diverges")
     return {1: v1_manifest, current_version: v2_manifest}
 
 def main():

@@ -1,4 +1,4 @@
-//! Frozen version-one ABI vocabulary shared with the programs runtime.
+//! Frozen ABI-v1 and ABI-v2 vocabulary shared with the programs runtime.
 //!
 //! Every constant here mirrors `layerx-programs-runtime` exactly. The
 //! determinism lint compares the two surfaces and fails a build the moment
@@ -42,21 +42,21 @@ pub const MAX_EVENT_DATA_BYTES: usize = 65_536;
 pub const MAX_EVENTS_PER_ACTIVITY: usize = 64;
 /// Maximum call input length admitted by the version-one ABI.
 pub const MAX_CALL_INPUT_BYTES: usize = 1_048_576;
-/// Explicitly non-current candidate host module for response operations.
-pub const CANDIDATE_ABI_MODULE: &str = "layerx_v2";
-/// Maximum candidate successful response payload.
+/// Frozen ABI-v2 host module for response operations.
+pub const V2_ABI_MODULE: &str = "layerx_v2";
+/// Maximum ABI-v2 successful response payload.
 pub const MAX_CALL_RESPONSE_BYTES: usize = 1_048_576;
-/// Maximum seed length for a candidate program-owned account.
+/// Maximum seed length for an ABI-v2 program-owned account.
 pub const MAX_PROGRAM_ACCOUNT_SEED_BYTES: usize = 128;
-/// Maximum candidate program-refusal reason payload.
+/// Maximum ABI-v2 program-refusal reason payload.
 pub const MAX_REFUSAL_REASON_BYTES: usize = 4_096;
-/// Candidate-only entry return for a published refusal.
-pub const CANDIDATE_REFUSAL_SENTINEL: i32 = -64;
-/// Exact qualification-only candidate manifest.
-pub const CANDIDATE_ABI_MANIFEST: &str = "layerx_v1\0storage_read(i32,i32,i32,i32)->i32\0storage_write(i32,i32,i32,i32)->i32\0storage_delete(i32,i32)->i32\0event_emit(i32,i32,i32,i32)->i32\0program_call(i32,i32,i32,i32,i32,i32)->i32\0transfer_402(i64,i64,i32,i32,i32,i32)->i32\0receipt_read(i32,i32,i32,i32)->i32\0layerx_v2\0response_write(i32,i32,i32)->i32\0program_call_response(i32,i32,i32,i32,i32,i32,i32,i32)->i64\0refusal_write(i32,i32,i32)->i32\0storage_read_scoped(i32,i32,i32,i32,i32)->i32\0storage_write_scoped(i32,i32,i32,i32,i32)->i32\0storage_delete_scoped(i32,i32,i32)->i32\0storage_drop_scoped(i32)->i32\0storage_scan_scoped(i32,i32,i32,i32,i32,i32,i32,i32,i32)->i32\0transfer_program_402(i64,i64,i32,i32,i32,i32,i32,i32,i32,i32)->i32\0fund_program_402(i64,i64,i32,i32,i32,i32,i32,i32)->i32\0context_read(i32,i32,i32)->i32\0balance_read(i32,i32,i32,i32,i32,i32)->i32\0hash(i32,i32,i32,i32)->i32\0signature_verify(i32,i32,i32,i32,i32,i32,i32)->i32\0signature_recover(i32,i32,i32,i32,i32,i32,i32)->i32\0bigint_mul_256(i32,i32,i32,i32,i32,i32)->i32\0bigint_div_256(i32,i32,i32,i32,i32,i32)->i32\0bigint_rem_256(i32,i32,i32,i32,i32,i32)->i32\0bigint_modexp_256(i32,i32,i32,i32,i32,i32,i32,i32)->i32\0";
-pub const ABI_MANIFEST: &str = CANDIDATE_ABI_MANIFEST;
-/// Exact qualification-only response extension table.
-pub const CANDIDATE_HOST_FUNCTIONS: [HostFunction; 19] = [
+/// ABI-v2 entry return for a published refusal.
+pub const V2_REFUSAL_SENTINEL: i32 = -64;
+/// Exact frozen ABI-v2 manifest.
+pub const V2_ABI_MANIFEST: &str = "layerx_v1\0storage_read(i32,i32,i32,i32)->i32\0storage_write(i32,i32,i32,i32)->i32\0storage_delete(i32,i32)->i32\0event_emit(i32,i32,i32,i32)->i32\0program_call(i32,i32,i32,i32,i32,i32)->i32\0transfer_402(i64,i64,i32,i32,i32,i32)->i32\0receipt_read(i32,i32,i32,i32)->i32\0layerx_v2\0response_write(i32,i32,i32)->i32\0program_call_response(i32,i32,i32,i32,i32,i32,i32,i32)->i64\0refusal_write(i32,i32,i32)->i32\0storage_read_scoped(i32,i32,i32,i32,i32)->i32\0storage_write_scoped(i32,i32,i32,i32,i32)->i32\0storage_delete_scoped(i32,i32,i32)->i32\0storage_drop_scoped(i32)->i32\0storage_scan_scoped(i32,i32,i32,i32,i32,i32,i32,i32,i32)->i32\0transfer_program_402(i64,i64,i32,i32,i32,i32,i32,i32,i32,i32)->i32\0fund_program_402(i64,i64,i32,i32,i32,i32,i32,i32)->i32\0context_read(i32,i32,i32)->i32\0balance_read(i32,i32,i32,i32,i32,i32)->i32\0hash(i32,i32,i32,i32)->i32\0signature_verify(i32,i32,i32,i32,i32,i32,i32)->i32\0signature_recover(i32,i32,i32,i32,i32,i32,i32)->i32\0bigint_mul_256(i32,i32,i32,i32,i32,i32)->i32\0bigint_div_256(i32,i32,i32,i32,i32,i32)->i32\0bigint_rem_256(i32,i32,i32,i32,i32,i32)->i32\0bigint_modexp_256(i32,i32,i32,i32,i32,i32,i32,i32)->i32\0";
+pub const ABI_MANIFEST: &str = V2_ABI_MANIFEST;
+/// Exact frozen ABI-v2 response extension table.
+pub const V2_HOST_FUNCTIONS: [HostFunction; 19] = [
     HostFunction {
         name: "response_write",
         signature: "(i32,i32,i32)->i32",
@@ -97,15 +97,42 @@ pub const CANDIDATE_HOST_FUNCTIONS: [HostFunction; 19] = [
         name: "fund_program_402",
         signature: "(i64,i64,i32,i32,i32,i32,i32,i32)->i32",
     },
-    HostFunction { name: "context_read", signature: "(i32,i32,i32)->i32" },
-    HostFunction { name: "balance_read", signature: "(i32,i32,i32,i32,i32,i32)->i32" },
-    HostFunction { name: "hash", signature: "(i32,i32,i32,i32)->i32" },
-    HostFunction { name: "signature_verify", signature: "(i32,i32,i32,i32,i32,i32,i32)->i32" },
-    HostFunction { name: "signature_recover", signature: "(i32,i32,i32,i32,i32,i32,i32)->i32" },
-    HostFunction { name: "bigint_mul_256", signature: "(i32,i32,i32,i32,i32,i32)->i32" },
-    HostFunction { name: "bigint_div_256", signature: "(i32,i32,i32,i32,i32,i32)->i32" },
-    HostFunction { name: "bigint_rem_256", signature: "(i32,i32,i32,i32,i32,i32)->i32" },
-    HostFunction { name: "bigint_modexp_256", signature: "(i32,i32,i32,i32,i32,i32,i32,i32)->i32" },
+    HostFunction {
+        name: "context_read",
+        signature: "(i32,i32,i32)->i32",
+    },
+    HostFunction {
+        name: "balance_read",
+        signature: "(i32,i32,i32,i32,i32,i32)->i32",
+    },
+    HostFunction {
+        name: "hash",
+        signature: "(i32,i32,i32,i32)->i32",
+    },
+    HostFunction {
+        name: "signature_verify",
+        signature: "(i32,i32,i32,i32,i32,i32,i32)->i32",
+    },
+    HostFunction {
+        name: "signature_recover",
+        signature: "(i32,i32,i32,i32,i32,i32,i32)->i32",
+    },
+    HostFunction {
+        name: "bigint_mul_256",
+        signature: "(i32,i32,i32,i32,i32,i32)->i32",
+    },
+    HostFunction {
+        name: "bigint_div_256",
+        signature: "(i32,i32,i32,i32,i32,i32)->i32",
+    },
+    HostFunction {
+        name: "bigint_rem_256",
+        signature: "(i32,i32,i32,i32,i32,i32)->i32",
+    },
+    HostFunction {
+        name: "bigint_modexp_256",
+        signature: "(i32,i32,i32,i32,i32,i32,i32,i32)->i32",
+    },
 ];
 /// Maximum number of grants in one capability set.
 pub const MAX_CAPABILITY_ENCODING_HEADER_BYTES: usize = 2;
@@ -116,8 +143,8 @@ pub const MAX_CAPABILITY_ENCODING_BYTES: usize = 65_535;
 pub const MAX_CAPABILITIES: usize = (MAX_CAPABILITY_ENCODING_BYTES
     - MAX_CAPABILITY_ENCODING_HEADER_BYTES)
     / MAX_CAPABILITY_ENCODING_GRANT_BYTES;
-pub const MAX_CANONICAL_CAPABILITY_SET_BYTES: usize = MAX_CAPABILITY_ENCODING_HEADER_BYTES
-    + MAX_CAPABILITIES * MAX_CAPABILITY_ENCODING_GRANT_BYTES;
+pub const MAX_CANONICAL_CAPABILITY_SET_BYTES: usize =
+    MAX_CAPABILITY_ENCODING_HEADER_BYTES + MAX_CAPABILITIES * MAX_CAPABILITY_ENCODING_GRANT_BYTES;
 /// Exact length of the encoded receipt view returned by `receipt_read`.
 pub const RECEIPT_ENCODING_BYTES: usize = 116;
 
@@ -162,12 +189,33 @@ pub const HOST_FUNCTIONS: [HostFunction; 7] = [
     },
 ];
 
+/// Compatibility spelling retained for one release.
+pub const CANDIDATE_ABI_MODULE: &str = V2_ABI_MODULE;
+/// Compatibility spelling retained for one release.
+pub const CANDIDATE_REFUSAL_SENTINEL: i32 = V2_REFUSAL_SENTINEL;
+/// Compatibility spelling retained for one release.
+pub const CANDIDATE_ABI_MANIFEST: &str = V2_ABI_MANIFEST;
+/// Compatibility spelling retained for one release.
+pub const CANDIDATE_HOST_FUNCTIONS: [HostFunction; 19] = V2_HOST_FUNCTIONS;
+
 #[cfg(test)]
 mod tests {
-    use super::CANDIDATE_HOST_FUNCTIONS;
+    use super::V2_HOST_FUNCTIONS;
 
     #[test]
-    fn candidate_response_table_has_exact_names_and_signatures() {
+    fn compatibility_constants_preserve_frozen_v2_bytes() {
+        assert_eq!(super::CANDIDATE_ABI_MODULE, super::V2_ABI_MODULE);
+        assert_eq!(super::CANDIDATE_ABI_MANIFEST, super::V2_ABI_MANIFEST);
+        assert_eq!(super::ABI_MANIFEST, super::V2_ABI_MANIFEST);
+        assert_eq!(
+            super::CANDIDATE_REFUSAL_SENTINEL,
+            super::V2_REFUSAL_SENTINEL
+        );
+        assert_eq!(super::CANDIDATE_HOST_FUNCTIONS, super::V2_HOST_FUNCTIONS);
+    }
+
+    #[test]
+    fn v2_response_table_has_exact_names_and_signatures() {
         let expected = [
             ("response_write", "(i32,i32,i32)->i32"),
             (
@@ -196,10 +244,13 @@ mod tests {
             ("bigint_mul_256", "(i32,i32,i32,i32,i32,i32)->i32"),
             ("bigint_div_256", "(i32,i32,i32,i32,i32,i32)->i32"),
             ("bigint_rem_256", "(i32,i32,i32,i32,i32,i32)->i32"),
-            ("bigint_modexp_256", "(i32,i32,i32,i32,i32,i32,i32,i32)->i32"),
+            (
+                "bigint_modexp_256",
+                "(i32,i32,i32,i32,i32,i32,i32,i32)->i32",
+            ),
         ];
-        assert_eq!(CANDIDATE_HOST_FUNCTIONS.len(), expected.len());
-        for (actual, expected) in CANDIDATE_HOST_FUNCTIONS.iter().zip(expected) {
+        assert_eq!(V2_HOST_FUNCTIONS.len(), expected.len());
+        for (actual, expected) in V2_HOST_FUNCTIONS.iter().zip(expected) {
             assert_eq!((actual.name, actual.signature), expected);
         }
     }

@@ -53,6 +53,9 @@ typedef struct platform_emulator_program {
 platform_emulator *platform_emulator_create(uint32_t network_id,
                                              uint64_t timestamp_ms,
                                              const uint8_t sequencer_seed[32]);
+platform_emulator *platform_emulator_create_for_protocol(
+    uint32_t network_id, uint64_t timestamp_ms,
+    const uint8_t sequencer_seed[32], uint16_t protocol_version);
 void platform_emulator_destroy(platform_emulator *emulator);
 const char *platform_emulator_error_name(int32_t result);
 int32_t platform_emulator_set_time(platform_emulator *emulator,
@@ -91,6 +94,8 @@ int32_t platform_emulator_account(const platform_emulator *emulator,
 int32_t platform_emulator_identity_sequence(
     const platform_emulator *emulator, const uint8_t *did,
     size_t did_length, uint64_t *next_sequence);
+int32_t platform_emulator_owner_account_count(
+    const platform_emulator *emulator, size_t *count);
 int32_t platform_emulator_snapshot_export(platform_emulator *emulator,
                                           const uint8_t **bytes,
                                           size_t *length);

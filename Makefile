@@ -1058,6 +1058,18 @@ $(BUILD_DIR)/tests/test_bridge_deposit: tests/test_bridge_deposit.c $(LIBRARY)
 test-bridge-deposit: $(BUILD_DIR)/tests/test_bridge_deposit test-contracts
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_bridge_deposit
 
+$(BUILD_DIR)/tests/bridge/sign-credit: tests/bridge/sign_credit.c tests/bridge/files.h \
+		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
+		$(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
+
+$(BUILD_DIR)/tests/bridge/test-credit: tests/bridge/test_credit.c tests/bridge/files.h \
+		$(TEST_LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -DLXP_TESTING $< $(TEST_LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
+		$(TEST_LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
+
 $(BUILD_DIR)/tests/test_bridge_withdraw: tests/test_bridge_withdraw.c \
 		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
@@ -2876,6 +2888,18 @@ programs-abi-drift:
 	programs/tools/check-abi-drift.sh
 	cd programs && $(PROGRAMS_CARGO) test --locked -p layerx-programs-runtime --test abi_linker
 
+.PHONY: programs-generate-capability-fixture programs-check-capability-fixture
+
+programs-generate-capability-fixture:
+	@temporary=$$(mktemp); trap 'rm -f "$$temporary"' EXIT; \
+		(cd programs && $(PROGRAMS_CARGO) run --locked -p layerx-programs-runtime --example capability_fixture) > "$$temporary" && \
+		cp "$$temporary" platform/sdk/conformance/fixtures/native-program-capabilities-v2.json
+
+programs-check-capability-fixture:
+	@temporary=$$(mktemp); trap 'rm -f "$$temporary"' EXIT; \
+		(cd programs && $(PROGRAMS_CARGO) run --locked -p layerx-programs-runtime --example capability_fixture) > "$$temporary" && \
+		cmp "$$temporary" platform/sdk/conformance/fixtures/native-program-capabilities-v2.json
+
 $(BUILD_DIR)/tests/programs_registration: tests/programs/test_registration.c \
 		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
@@ -2899,6 +2923,20 @@ $(BUILD_DIR)/tests/programs_call_activity: tests/programs/test_call_activity.c \
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
 		$(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
+
+.PHONY: programs-native-lifecycle-fixtures programs-check-native-lifecycle-fixtures
+programs-native-lifecycle-fixtures: $(BUILD_DIR)/tests/programs_call_activity
+	python3 platform/sdk/conformance/fixtures/generate_native_lifecycle_fixtures.py --encoder $<
+
+programs-check-native-lifecycle-fixtures: $(BUILD_DIR)/tests/programs_call_activity
+	python3 platform/sdk/conformance/fixtures/generate_native_lifecycle_fixtures.py --encoder $< --check
+
+.PHONY: programs-executed-fixture programs-check-executed-fixture
+programs-executed-fixture: $(BUILD_DIR)/tests/programs_call_activity
+	python3 platform/sdk/conformance/fixtures/generate_executed_program_fixture.py --encoder $<
+
+programs-check-executed-fixture: $(BUILD_DIR)/tests/programs_call_activity
+	python3 platform/sdk/conformance/fixtures/generate_executed_program_fixture.py --encoder $< --check
 
 $(BUILD_DIR)/tests/programs_occupancy_batch: tests/programs/test_occupancy_batch.c \
 		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build

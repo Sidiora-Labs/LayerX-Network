@@ -99,7 +99,73 @@ public struct ProgramSubmission: Sendable {
 }
 
 public struct ProgramsClient: Sendable {
-    public static let receiptModuleID: UInt16 = 9
+    public func lifecycleReceipt(_ request: NativeProgramLifecycleRequest) async throws
+    -> ReceiptVerification
+  {
+    guard protocolVersion == 3 else { throw programInvalid() }
+    let key = request.idempotencyKey.hex
+    let response = try await client.program(
+      "program.receipt",
+      request: .object([
+        "idempotency_key": .string(key), "expected_activity_id": .string(request.activityID.hex),
+        "requested_verification_level": .string("sequencer-signed"),
+      ]), pathParameters: ["idempotency_key": key])
+    guard let map = response.objectValue, Set(map.keys) == Set(["activity_id", "receipt"]),
+      map["activity_id"]?.stringValue == request.activityID.hex
+    else { throw programVerification() }
+    return try LocalVerifier.verifyProgramLifecycleReceipt(
+      nativeTransportHex(map["receipt"]?.stringValue), expectedActivity: request.activityID,
+      sequencer: sequencerPublicKey)
+  }
+
+  public func deploy(
+    _ operation: NativeProgramDeploy, signedActivity: Data, idempotencyKey: IdempotencyKey
+  ) async throws -> ReceiptVerification {
+    try await lifecycle(operation, signedActivity: signedActivity, key: idempotencyKey)
+  }
+  public func upgrade(
+    _ operation: NativeProgramUpgrade, signedActivity: Data, idempotencyKey: IdempotencyKey
+  ) async throws -> ReceiptVerification {
+    try await lifecycle(operation, signedActivity: signedActivity, key: idempotencyKey)
+  }
+  public func windDown(
+    _ operation: NativeProgramWindDown, signedActivity: Data, idempotencyKey: IdempotencyKey
+  ) async throws -> ReceiptVerification {
+    try await lifecycle(operation, signedActivity: signedActivity, key: idempotencyKey)
+  }
+  private func lifecycle(
+    _ operation: any NativeProgramLifecycle, signedActivity: Data, key: IdempotencyKey
+  ) async throws -> ReceiptVerification {
+    let request = try NativeProgramLifecycleRequest(
+      operation: operation, signedActivity: signedActivity)
+    guard protocolVersion == 3, key.rawValue == request.idempotencyKey.hex,
+      let name = ProgramLifecycleRoutes.ordinals.first(where: { $0.value == request.ordinal })?.key
+    else { throw programInvalid() }
+    let response = try await client.program(
+      name,
+      request: .object([
+        "payload": .string(request.payload.hex),
+        "signed_activity": .string(request.signedActivity.hex),
+      ]), idempotencyKey: key)
+    do {
+      guard let map = response.objectValue,
+        Set(map.keys)
+          == Set(["state", "activity_id", "receipt", "terminal_payload", "call_graph"]),
+        let state = map["state"]?.stringValue, ["executed", "refused"].contains(state),
+        map["terminal_payload"]?.stringValue == "", map["call_graph"]?.stringValue == "",
+        map["activity_id"]?.stringValue == request.activityID.hex
+      else { throw programVerification() }
+      let verified = try LocalVerifier.verifyProgramLifecycleReceipt(
+        nativeTransportHex(map["receipt"]?.stringValue), expectedActivity: request.activityID,
+        sequencer: sequencerPublicKey)
+      guard (state == "executed") == (verified.receipt.resultCode == 0) else {
+        throw programVerification()
+      }
+      return verified
+    } catch { throw PlatformSDKError(code: .unknownOutcome, retry: .unknownOutcome) }
+  }
+
+  public static let receiptModuleID: UInt16 = 9
     public static let callOperation: UInt8 = 3
     fileprivate static let maximumCallGraphBytes = Data("LayerX/programs/call-graph/v1\0".utf8).count + 32 + 16 + 8 + 64 * 68
     private let client: PlatformClient
@@ -211,11 +277,6 @@ private struct TerminalUsage {
 
 private struct TerminalAttachments {
     let inner: Data; let occupancy: Data?; let authorization: Data?; let transferRoot: Data?
-}
-
-private struct CapabilityKey {
-    let order: Int
-    let fields: [Data]
 }
 
 private struct ProgramAuthorityBinding {
@@ -761,55 +822,14 @@ private func decodeFrame(_ cursor: inout TerminalCursor) throws -> Data {
     return concatenated([path, Data([depth])])
 }
 
-private func decodeCapabilitySet(_ encoded: Data, candidate: Bool) throws {
-    guard encoded.count >= 2, encoded.count <= 65_535 else { throw programVerification() }
-    var cursor = try TerminalCursor(encoded, offset: 0); let count = try cursor.u16()
-    guard count <= 269 else { throw programVerification() }
-    var prior: CapabilityKey?; var balanceViews = 0
-    for _ in 0..<Int(count) {
-        let key: CapabilityKey
-        switch try cursor.u8() {
-        case 1: key = .init(order: 0, fields: [])
-        case 2: key = .init(order: 1, fields: [])
-        case 3: key = .init(order: 2, fields: [])
-        case 4:
-            let program = try cursor.take(32); try requireNonzero(program); key = .init(order: 3, fields: [program])
-        case 5:
-            let asset = try cursor.take(32); let destination = try cursor.take(32); let maximum = try cursor.u128()
-            try requireNonzero(asset); try requireNonzero(destination); guard !isZero(maximum) else { throw programVerification() }
-            key = .init(order: 4, fields: [asset, destination])
-        case 9 where candidate:
-            let owner = try cursor.take(32); try requireNonzero(owner); let seedLength = try cursor.u16()
-            guard seedLength <= 128 else { throw programVerification() }
-            let seed = try cursor.take(Int(seedLength)); let source = try cursor.take(32); let asset = try cursor.take(32)
-            let destination = try cursor.take(32); let maximum = try cursor.u128()
-            try requireNonzero(asset); try requireNonzero(destination); guard !isZero(maximum), deriveProgramAccount(owner: owner, seed: seed) == source else {
-                throw programVerification()
-            }
-            key = .init(order: 5, fields: [owner, seed, source, asset, destination])
-        case 6:
-            let receipt = try cursor.take(32); try requireNonzero(receipt); key = .init(order: 6, fields: [receipt])
-        case 10 where candidate:
-            let account = try cursor.take(32); let asset = try cursor.take(32); let receipt = try cursor.take(32)
-            try requireNonzero(account); try requireNonzero(asset); try requireNonzero(receipt)
-            balanceViews += 1; guard balanceViews <= 32 else { throw programVerification() }
-            key = .init(order: 7, fields: [account, asset])
-        case 7: key = .init(order: 8, fields: [])
-        case 8: key = .init(order: 9, fields: [])
-        default: throw programVerification()
+private func decodeCapabilitySet(_ encoded: Data, candidate v2: Bool) throws {
+    for grant in try NativeCapabilitySet.decode(encoded) {
+        switch grant {
+        case .programSpend, .balanceView:
+            guard v2 else { throw programVerification() }
+        default: break
         }
-        if let prior { guard compareCapabilityKeys(prior, key) < 0 else { throw programVerification() } }
-        prior = key
     }
-    try cursor.finish()
-}
-
-private func compareCapabilityKeys(_ left: CapabilityKey, _ right: CapabilityKey) -> Int {
-    if left.order != right.order { return left.order - right.order }
-    for index in 0..<min(left.fields.count, right.fields.count) {
-        let order = compareData(left.fields[index], right.fields[index]); if order != 0 { return order }
-    }
-    return left.fields.count - right.fields.count
 }
 
 private func decodeOccupancySettlement(_ encoded: Data) throws -> OccupancySettlementBinding {
@@ -1312,11 +1332,9 @@ private struct TerminalCursor {
     }
 }
 
-private func encode(_ call: ProgramCall) -> JSONValue {
+private func encode(_ call: ProgramCall) throws -> JSONValue {
     if let n = call.nativeCall {
-        return .object(["payload_encoding": .string("native-v1"), "program_id": .string(call.programID.hex), "calldata": .string(call.calldata.hex),
-            "budget": .object(["fuel": .string(String(call.budget.fuel)), "fee_limit": .string(call.budget.feeLimit.decimal)]), "signed_activity": .string(call.signedActivity.hex),
-            "native_call": .object(["guest_abi": .integer(Int64(n.guestABI)), "entrypoint": .string(n.entrypoint), "capabilities_hex": .string(n.capabilities.hex), "access_declaration_hex": .string(n.accessDeclaration.hex), "response_capacity": .integer(Int64(n.responseCapacity)), "resources": .array(n.resources.map { .string(String($0)) })])])
+        return .object(["payload": .string(try n.encode().hex), "signed_activity": .string(call.signedActivity.hex)])
     }
     return .object(["program_id": .string(call.programID.hex), "calldata": .string(call.calldata.hex),
         "budget": .object(["fuel": .string(String(call.budget.fuel)), "fee_limit": .string(call.budget.feeLimit.decimal)]),

@@ -15,8 +15,11 @@ public enum ProgramCapability { StorageRead, StorageWrite, Transfer, EmitEvent, 
 public sealed record ProgramCall
 {
     public NativeProgramCall? NativeCall { get; }
-    public byte[] ProgramId { get; } public byte[] Calldata { get; }
-    public ProgramBudget Budget { get; } public IReadOnlyList<ProgramCapability> Capabilities { get; } public byte[] SignedActivity { get; }
+    public byte[] ProgramId { get; }
+    public byte[] Calldata { get; }
+    public ProgramBudget Budget { get; }
+    public IReadOnlyList<ProgramCapability> Capabilities { get; }
+    public byte[] SignedActivity { get; }
 
     public ProgramCall(byte[] programId, byte[] calldata, ProgramBudget budget,
         IEnumerable<ProgramCapability> capabilities, byte[] signedActivity)
@@ -69,9 +72,13 @@ public sealed class VerifiedProgramExecution
 public sealed record ProgramSimulation(JsonValue Value, VerifiedProgramExecution Execution);
 public sealed class ProgramSubmission
 {
-    public JsonValue Value { get; } public string State { get; } public bool IsUnknown => State == "unknown";
-    public byte[] ActivityId { get; } public string IdempotencyKey { get; }
-    public byte[]? RetainedSignedActivity { get; } public VerifiedProgramExecution? Execution { get; }
+    public JsonValue Value { get; }
+    public string State { get; }
+    public bool IsUnknown => State == "unknown";
+    public byte[] ActivityId { get; }
+    public string IdempotencyKey { get; }
+    public byte[]? RetainedSignedActivity { get; }
+    public VerifiedProgramExecution? Execution { get; }
     internal ProgramSubmission(JsonValue value, string state, byte[] activityId, string idempotencyKey,
         byte[]? retainedSignedActivity, VerifiedProgramExecution? execution)
     {
@@ -82,6 +89,46 @@ public sealed class ProgramSubmission
 
 public sealed class ProgramsClient
 {
+    public async Task<ReceiptVerification> LifecycleReceiptAsync(NativeProgramLifecycleRequest request, CancellationToken cancellationToken = default)
+    {
+        if (_protocolVersion != 3) throw Invalid();
+        var response = await _client.ProgramAsync("program.receipt", JsonValue.Object(new Dictionary<string, JsonValue>
+        {
+            ["idempotency_key"] = JsonValue.String(request.IdempotencyKey),
+            ["expected_activity_id"] = JsonValue.String(Identifier(request.ActivityId)),
+            ["requested_verification_level"] = JsonValue.String("sequencer-signed")
+        }), pathParameters: new Dictionary<string, string> { ["idempotency_key"] = request.IdempotencyKey }, cancellationToken: cancellationToken).ConfigureAwait(false);
+        var map = Map(response); RequireFields(map, ["activity_id", "receipt"]);
+        if (!Fixed(Bytes(map, "activity_id", 32, true), request.ActivityId)) throw Verify();
+        return LocalVerifier.VerifyProgramLifecycleReceipt(Bytes(map, "receipt", MaximumProgramBytes), request.ActivityId, _sequencerPublicKey);
+    }
+
+    public Task<ReceiptVerification> DeployAsync(NativeProgramDeploy value, byte[] signedActivity, IdempotencyKey key, CancellationToken cancellationToken = default) => LifecycleAsync(value, signedActivity, key, cancellationToken);
+    public Task<ReceiptVerification> UpgradeAsync(NativeProgramUpgrade value, byte[] signedActivity, IdempotencyKey key, CancellationToken cancellationToken = default) => LifecycleAsync(value, signedActivity, key, cancellationToken);
+    public Task<ReceiptVerification> WindDownAsync(NativeProgramWindDown value, byte[] signedActivity, IdempotencyKey key, CancellationToken cancellationToken = default) => LifecycleAsync(value, signedActivity, key, cancellationToken);
+
+    private async Task<ReceiptVerification> LifecycleAsync(INativeProgramLifecycle operation, byte[] signedActivity, IdempotencyKey key, CancellationToken cancellationToken)
+    {
+        var request = new NativeProgramLifecycleRequest(operation, signedActivity);
+        if (_protocolVersion != 3 || !key.IsValid || key.Value != request.IdempotencyKey) throw Invalid();
+        var name = ProgramLifecycleRoutes.Ordinals.Single(entry => entry.Value == request.Ordinal).Key;
+        var response = await _client.ProgramAsync(name, JsonValue.Object(new Dictionary<string, JsonValue>
+        {
+            ["payload"] = JsonValue.String(Convert.ToHexString(request.Payload).ToLowerInvariant()),
+            ["signed_activity"] = JsonValue.String(Convert.ToHexString(request.SignedActivity).ToLowerInvariant())
+        }), key, cancellationToken: cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var map = Map(response); RequireFields(map, ["state", "activity_id", "receipt", "terminal_payload", "call_graph"]);
+            var state = Text(map, "state");
+            if (state is not ("executed" or "refused") || Text(map, "terminal_payload") != "" || Text(map, "call_graph") != "" || !Fixed(Bytes(map, "activity_id", 32, true), request.ActivityId)) throw Verify();
+            var verified = LocalVerifier.VerifyProgramLifecycleReceipt(Bytes(map, "receipt", MaximumProgramBytes), request.ActivityId, _sequencerPublicKey);
+            if ((state == "executed") != (verified.Receipt.ResultCode == 0)) throw Verify();
+            return verified;
+        }
+        catch { throw new PlatformSdkException(SdkErrorCode.UnknownOutcome, RetryClass.UnknownOutcome); }
+    }
+
     public const ushort ReceiptModuleId = 9; public const byte CallOperation = 3;
     private const int MaximumProgramBytes = 1_048_576;
     private const int MaximumInterfaceBytes = 952;
@@ -95,7 +142,6 @@ public sealed class ProgramsClient
     private sealed record TerminalUsage(ulong Cpu, ulong Memory, ulong Read, ulong Write,
         uint Values, ulong OutputBytes, BigInteger Fee);
     private sealed record TerminalAttachments(byte[] Inner, byte[]? Occupancy, byte[]? Authorization, byte[]? TransferRoot);
-    private sealed record CapabilityKey(int Order, IReadOnlyList<byte[]> Fields);
     private sealed record ProgramAuthorityBinding(byte[] Owner, byte[] Frame, byte[] Source, byte[] Asset,
         byte[] Destination, BigInteger Amount);
     private sealed record ProgramFundingBinding(byte[] Owner, byte[] Destination, byte[] Asset);
@@ -127,7 +173,7 @@ public sealed class ProgramsClient
     public async Task<ProgramDiscovery> DiscoverAsync(byte[] programId, string verificationLevel, CancellationToken cancellationToken = default)
     {
         var id = Identifier(programId); var value = await _client.ProgramAsync("program.discover", JsonValue.Object(new Dictionary<string, JsonValue>
-            { ["program_id"] = JsonValue.String(id), ["requested_verification_level"] = JsonValue.String(Level(verificationLevel)) }),
+        { ["program_id"] = JsonValue.String(id), ["requested_verification_level"] = JsonValue.String(Level(verificationLevel)) }),
             pathParameters: new Dictionary<string, string> { ["program_id"] = id }, cancellationToken: cancellationToken).ConfigureAwait(false);
         return (ProgramDiscovery)VerifyDiscovery(value, id, false, NowMilliseconds());
     }
@@ -135,7 +181,7 @@ public sealed class ProgramsClient
     {
         var id = Identifier(programId);
         var value = await _client.ProgramAsync("program.interface", JsonValue.Object(new Dictionary<string, JsonValue>
-            { ["program_id"] = JsonValue.String(id), ["requested_verification_level"] = JsonValue.String(Level(verificationLevel)) }),
+        { ["program_id"] = JsonValue.String(id), ["requested_verification_level"] = JsonValue.String(Level(verificationLevel)) }),
             pathParameters: new Dictionary<string, string> { ["program_id"] = id }, cancellationToken: cancellationToken).ConfigureAwait(false);
         return (ProgramInterface)VerifyDiscovery(value, id, true, NowMilliseconds());
     }
@@ -177,8 +223,11 @@ public sealed class ProgramsClient
     {
         if (!Hex32(idempotencyKey.Value)) throw Invalid(); var activity = Identifier(expectedActivityId);
         var value = await _client.ProgramAsync("program.receipt", JsonValue.Object(new Dictionary<string, JsonValue>
-            { ["idempotency_key"] = JsonValue.String(idempotencyKey.Value), ["expected_activity_id"] = JsonValue.String(activity),
-              ["requested_verification_level"] = JsonValue.String(Level(verificationLevel)) }),
+        {
+            ["idempotency_key"] = JsonValue.String(idempotencyKey.Value),
+            ["expected_activity_id"] = JsonValue.String(activity),
+            ["requested_verification_level"] = JsonValue.String(Level(verificationLevel))
+        }),
             pathParameters: new Dictionary<string, string> { ["idempotency_key"] = idempotencyKey.Value }, cancellationToken: cancellationToken).ConfigureAwait(false);
         return await VerifySubmissionAsync(value, null, expectedActivityId, idempotencyKey.Value, null, cancellationToken).ConfigureAwait(false);
     }
@@ -186,7 +235,7 @@ public sealed class ProgramsClient
     {
         var id = Identifier(activityId);
         var value = await _client.ProgramAsync("program.activity", JsonValue.Object(new Dictionary<string, JsonValue>
-            { ["activity_id"] = JsonValue.String(id), ["requested_verification_level"] = JsonValue.String(Level(verificationLevel)) }),
+        { ["activity_id"] = JsonValue.String(id), ["requested_verification_level"] = JsonValue.String(Level(verificationLevel)) }),
             pathParameters: new Dictionary<string, string> { ["activity_id"] = id }, cancellationToken: cancellationToken).ConfigureAwait(false);
         return await VerifySubmissionAsync(value, null, activityId, null, null, cancellationToken).ConfigureAwait(false);
     }
@@ -240,9 +289,23 @@ public sealed class ProgramsClient
         string state, bool idempotent, byte[]? expectedProgramId, byte[]? expectedActivityId,
         string? expectedIdempotencyKey, CancellationToken cancellationToken)
     {
-        string[] fields = ["state", "activity_id", "program_id", "guest_abi_version", "module_version",
-            "batch_id", "global_sequence", "result_code", "state_root", "receipt", "receipt_digest",
-            "terminal_payload", "call_graph", "authority", "usage", "outcome", "verification"];
+        string[] fields = ["state",
+            "activity_id",
+            "program_id",
+            "guest_abi_version",
+            "module_version",
+            "batch_id",
+            "global_sequence",
+            "result_code",
+            "state_root",
+            "receipt",
+            "receipt_digest",
+            "terminal_payload",
+            "call_graph",
+            "authority",
+            "usage",
+            "outcome",
+            "verification"];
         if (idempotent) fields = [.. fields, "idempotency_key"];
         RequireFields(map, fields);
         var activity = Bytes(map, "activity_id", 32, true); var program = Bytes(map, "program_id", 32, true);
@@ -260,8 +323,13 @@ public sealed class ProgramsClient
             !Fixed(authority.ResultingStateRoot, Bytes(map, "state_root", 32, true)) ||
             !Fixed(authority.SequencerPublicKey, _sequencerPublicKey)) throw Verify();
         var usage = Map(Field(map, "usage"));
-        RequireFields(usage, ["cpu_fuel", "memory_bytes", "storage_read_bytes", "storage_write_bytes",
-            "output_values", "output_bytes", "fee_units"]);
+        RequireFields(usage, ["cpu_fuel",
+            "memory_bytes",
+            "storage_read_bytes",
+            "storage_write_bytes",
+            "output_values",
+            "output_bytes",
+            "fee_units"]);
         var cpu = DecimalUInt64(usage, "cpu_fuel"); var memory = DecimalUInt64(usage, "memory_bytes");
         var read = DecimalUInt64(usage, "storage_read_bytes"); var write = DecimalUInt64(usage, "storage_write_bytes");
         var outputValues = UInt32Integer(usage, "output_values"); var outputBytes = DecimalUInt64(usage, "output_bytes");
@@ -298,8 +366,15 @@ public sealed class ProgramsClient
         var execution = await VerifyExecutionAsync(executionMap, "simulated", false, expectedProgramId,
             binding.ActivityId, null, cancellationToken).ConfigureAwait(false);
         var evidence = Map(Field(map, "simulation_evidence"));
-        RequireFields(evidence, ["boundary_id", "activity_id", "previous_state_root", "hypothetical_state_root",
-            "observed_sequence", "observed_at", "committed", "public_key", "signature"]);
+        RequireFields(evidence, ["boundary_id",
+            "activity_id",
+            "previous_state_root",
+            "hypothetical_state_root",
+            "observed_sequence",
+            "observed_at",
+            "committed",
+            "public_key",
+            "signature"]);
         if (Field(evidence, "committed") is not JsonValue.BooleanValue { Value: false }) throw Verify();
         var authority = Map(Field(executionMap, "authority")); var boundary = Bytes(evidence, "boundary_id", 32, true);
         var publicKey = Bytes(evidence, "public_key", 32, true); var activity = Bytes(evidence, "activity_id", 32, true);
@@ -328,10 +403,30 @@ public sealed class ProgramsClient
     {
         var map = Map(value);
         string[] fields = @interface
-            ? ["program_id", "version", "code_hash", "abi_version", "interface", "interface_digest",
-                "receipt_digest", "state_root", "observed_sequence", "observed_at", "valid_through", "source", "verification"]
-            : ["program_id", "lifecycle", "version", "code_hash", "abi_version", "receipt_digest", "state_root",
-                "observed_sequence", "observed_at", "valid_through", "verification"];
+            ? ["program_id",
+                "version",
+                "code_hash",
+                "abi_version",
+                "interface",
+                "interface_digest",
+                "receipt_digest",
+                "state_root",
+                "observed_sequence",
+                "observed_at",
+                "valid_through",
+                "source",
+                "verification"]
+            : ["program_id",
+                "lifecycle",
+                "version",
+                "code_hash",
+                "abi_version",
+                "receipt_digest",
+                "state_root",
+                "observed_sequence",
+                "observed_at",
+                "valid_through",
+                "verification"];
         RequireFields(map, fields);
         var observedAt = DecimalUInt64(map, "observed_at"); var validThrough = DecimalUInt64(map, "valid_through");
         var version = UInt32Integer(map, "version"); var abi = UInt16Integer(map, "abi_version");
@@ -353,8 +448,10 @@ public sealed class ProgramsClient
         }
         var lifecycle = Text(map, "lifecycle") switch
         {
-            "active" => ProgramLifecycle.Active, "deprecated" => ProgramLifecycle.Deprecated,
-            "tombstoned" => ProgramLifecycle.Tombstoned, _ => throw Decode()
+            "active" => ProgramLifecycle.Active,
+            "deprecated" => ProgramLifecycle.Deprecated,
+            "tombstoned" => ProgramLifecycle.Tombstoned,
+            _ => throw Decode()
         };
         return new ProgramDiscovery(program, lifecycle, version, codeHash, abi, receiptDigest, stateRoot,
             observedSequence, observedAt, validThrough, "server-side-receipt-verification-only");
@@ -404,7 +501,8 @@ public sealed class ProgramsClient
         var kind = Text(outcome, "kind");
         switch (kind)
         {
-            case "completed": RequireFields(outcome, ["kind", "code", "response"]);
+            case "completed":
+                RequireFields(outcome, ["kind", "code", "response"]);
                 _ = Integer32(outcome, "code"); _ = Bytes(outcome, "response", MaximumProgramBytes, empty: true); break;
             case "legacy_completed":
                 RequireFields(outcome, ["kind", "code", "values"]); _ = Integer32(outcome, "code");
@@ -428,9 +526,15 @@ public sealed class ProgramsClient
     {
         switch (Text(failure, "kind"))
         {
-            case "unknown_program": case "reentrancy": case "authority": case "resource": case "response": case "fault":
+            case "unknown_program":
+            case "reentrancy":
+            case "authority":
+            case "resource":
+            case "response":
+            case "fault":
                 RequireFields(failure, ["kind"]); break;
-            case "depth_exceeded": case "fanout_exceeded":
+            case "depth_exceeded":
+            case "fanout_exceeded":
                 RequireFields(failure, ["kind", "limit", "attempted"]);
                 _ = UInt32Integer(failure, "limit"); _ = UInt32Integer(failure, "attempted"); break;
             case "guest_refused": RequireFields(failure, ["kind", "code"]); _ = Integer32(failure, "code"); break;
@@ -475,7 +579,8 @@ public sealed class ProgramsClient
                 var countValue = cursor.U64(); if (countValue > (ulong)(cursor.Remaining / 5)) throw new InvalidDataException();
                 for (var index = 0; index < (int)countValue; index++)
                 {
-                    var tag = cursor.U8(); if (tag == 1) _ = cursor.I32(); else if (tag == 2) _ = cursor.I64();
+                    var tag = cursor.U8(); if (tag == 1) _ = cursor.I32();
+                    else if (tag == 2) _ = cursor.I64();
                     else throw new InvalidDataException();
                 }
                 var usage = new TerminalUsage(cursor.U64(), cursor.U64(), cursor.U64(), cursor.U64(), cursor.U32(),
@@ -710,55 +815,13 @@ public sealed class ProgramsClient
         return Concatenate(path, [depth]);
     }
 
-    private static void DecodeCapabilitySet(byte[] encoded, bool candidate)
+    private static void DecodeCapabilitySet(byte[] encoded, bool v2)
     {
-        if (encoded.Length < 2 || encoded.Length > 65_535) throw new InvalidDataException();
-        var cursor = new TerminalCursor(encoded, 0); var count = cursor.U16(); if (count > 269) throw new InvalidDataException();
-        CapabilityKey? prior = null; var balanceViews = 0;
-        for (var index = 0; index < count; index++)
+        foreach (var grant in NativeCapabilitySet.Decode(encoded))
         {
-            CapabilityKey key;
-            switch (cursor.U8())
-            {
-                case 1: key = new(0, []); break;
-                case 2: key = new(1, []); break;
-                case 3: key = new(2, []); break;
-                case 4:
-                    var program = cursor.Take(32); RequireNonzero(program); key = new(3, [program]); break;
-                case 5:
-                    var asset = cursor.Take(32); var destination = cursor.Take(32); var maximum = cursor.U128();
-                    RequireNonzero(asset); RequireNonzero(destination); if (maximum == 0) throw new InvalidDataException();
-                    key = new(4, [asset, destination]); break;
-                case 9 when candidate:
-                    var owner = cursor.Take(32); RequireNonzero(owner); var seedLength = cursor.U16();
-                    if (seedLength > 128) throw new InvalidDataException(); var seed = cursor.Take(seedLength);
-                    var source = cursor.Take(32); var spendAsset = cursor.Take(32); var spendDestination = cursor.Take(32);
-                    var spendMaximum = cursor.U128(); RequireNonzero(spendAsset); RequireNonzero(spendDestination);
-                    if (spendMaximum == 0 || !Fixed(DeriveProgramAccount(owner, seed), source)) throw new InvalidDataException();
-                    key = new(5, [owner, seed, source, spendAsset, spendDestination]); break;
-                case 6:
-                    var receipt = cursor.Take(32); RequireNonzero(receipt); key = new(6, [receipt]); break;
-                case 10 when candidate:
-                    var account = cursor.Take(32); var balanceAsset = cursor.Take(32); var balanceReceipt = cursor.Take(32);
-                    RequireNonzero(account); RequireNonzero(balanceAsset); RequireNonzero(balanceReceipt);
-                    if (++balanceViews > 32) throw new InvalidDataException(); key = new(7, [account, balanceAsset]); break;
-                case 7: key = new(8, []); break;
-                case 8: key = new(9, []); break;
-                default: throw new InvalidDataException();
-            }
-            if (prior is not null && CompareCapabilityKeys(prior, key) >= 0) throw new InvalidDataException(); prior = key;
+            if (!v2 && (grant is NativeCapabilitySet.ProgramSpend or NativeCapabilitySet.BalanceView))
+                throw new InvalidDataException("ABI v2 capability required");
         }
-        cursor.Finish();
-    }
-
-    private static int CompareCapabilityKeys(CapabilityKey left, CapabilityKey right)
-    {
-        if (left.Order != right.Order) return left.Order.CompareTo(right.Order);
-        for (var index = 0; index < Math.Min(left.Fields.Count, right.Fields.Count); index++)
-        {
-            var order = CompareBytes(left.Fields[index], right.Fields[index]); if (order != 0) return order;
-        }
-        return left.Fields.Count.CompareTo(right.Fields.Count);
     }
 
     private static OccupancySettlementBinding DecodeOccupancySettlement(byte[] encoded)
@@ -911,7 +974,8 @@ public sealed class ProgramsClient
     private static byte[] Concatenate(params byte[][] values)
     {
         var length = values.Sum(value => value.Length); var result = new byte[length]; var offset = 0;
-        foreach (var value in values) { value.CopyTo(result, offset); offset += value.Length; } return result;
+        foreach (var value in values) { value.CopyTo(result, offset); offset += value.Length; }
+        return result;
     }
 
     private static int CompareBytes(byte[] left, byte[] right)
@@ -1032,8 +1096,14 @@ public sealed class ProgramsClient
 
     private static ulong CandidateUsage(TerminalUsage usage, int resource) => resource switch
     {
-        0 => usage.Cpu, 1 => usage.Memory, 2 => usage.Read, 3 => usage.Write,
-        4 => usage.Values, 5 => usage.OutputBytes, 6 => 0, _ => throw new InvalidDataException(),
+        0 => usage.Cpu,
+        1 => usage.Memory,
+        2 => usage.Read,
+        3 => usage.Write,
+        4 => usage.Values,
+        5 => usage.OutputBytes,
+        6 => 0,
+        _ => throw new InvalidDataException(),
     };
 
     private static void ValidateLegacyResource(TerminalCursor cursor)
@@ -1093,8 +1163,10 @@ public sealed class ProgramsClient
     {
         var value = JsonValue.Object(new Dictionary<string, JsonValue>
         {
-            ["state"] = JsonValue.String("unknown"), ["activity_id"] = JsonValue.String(Convert.ToHexString(activity).ToLowerInvariant()),
-            ["idempotency_key"] = JsonValue.String(key), ["retained_signed_activity"] =
+            ["state"] = JsonValue.String("unknown"),
+            ["activity_id"] = JsonValue.String(Convert.ToHexString(activity).ToLowerInvariant()),
+            ["idempotency_key"] = JsonValue.String(key),
+            ["retained_signed_activity"] =
                 JsonValue.String(Convert.ToHexString(retained).ToLowerInvariant()),
         });
         return new(value, "unknown", activity, key, retained, null);
@@ -1178,17 +1250,20 @@ public sealed class ProgramsClient
         ArgumentNullException.ThrowIfNull(call);
         if (call.NativeCall is { } n)
         {
-            return JsonValue.Object(new Dictionary<string, JsonValue> {
-                ["payload_encoding"] = JsonValue.String("native-v1"), ["program_id"] = JsonValue.String(Identifier(call.ProgramId)), ["calldata"] = JsonValue.String(Convert.ToHexString(call.Calldata).ToLowerInvariant()),
-                ["budget"] = JsonValue.Object(new Dictionary<string, JsonValue> { ["fuel"] = JsonValue.String(call.Budget.Fuel.ToString(CultureInfo.InvariantCulture)), ["fee_limit"] = JsonValue.String(call.Budget.FeeLimit.ToString()) }),
-                ["signed_activity"] = JsonValue.String(Convert.ToHexString(call.SignedActivity).ToLowerInvariant()),
-                ["native_call"] = JsonValue.Object(new Dictionary<string, JsonValue> { ["guest_abi"] = JsonValue.Integer(n.GuestAbi), ["entrypoint"] = JsonValue.String(n.Entrypoint), ["capabilities_hex"] = JsonValue.String(Convert.ToHexString(n.Capabilities).ToLowerInvariant()), ["access_declaration_hex"] = JsonValue.String(Convert.ToHexString(n.AccessDeclaration).ToLowerInvariant()), ["response_capacity"] = JsonValue.Integer(n.ResponseCapacity), ["resources"] = JsonValue.Array(n.Resources.Select(value => JsonValue.String(value.ToString(CultureInfo.InvariantCulture)))) }) });
+            return JsonValue.Object(new Dictionary<string, JsonValue>
+            {
+                ["payload"] = JsonValue.String(Convert.ToHexString(n.Encode()).ToLowerInvariant()),
+                ["signed_activity"] = JsonValue.String(Convert.ToHexString(call.SignedActivity).ToLowerInvariant())
+            });
         }
-        return JsonValue.Object(new Dictionary<string, JsonValue> {
-            ["program_id"] = JsonValue.String(Convert.ToHexString(call.ProgramId).ToLowerInvariant()), ["calldata"] = JsonValue.String(Convert.ToHexString(call.Calldata).ToLowerInvariant()),
+        return JsonValue.Object(new Dictionary<string, JsonValue>
+        {
+            ["program_id"] = JsonValue.String(Convert.ToHexString(call.ProgramId).ToLowerInvariant()),
+            ["calldata"] = JsonValue.String(Convert.ToHexString(call.Calldata).ToLowerInvariant()),
             ["budget"] = JsonValue.Object(new Dictionary<string, JsonValue> { ["fuel"] = JsonValue.String(call.Budget.Fuel.ToString(CultureInfo.InvariantCulture)), ["fee_limit"] = JsonValue.String(call.Budget.FeeLimit.ToString()) }),
             ["capabilities"] = JsonValue.Array(call.Capabilities.Select(value => JsonValue.String(Capability(value)))),
-            ["signed_activity"] = JsonValue.String(Convert.ToHexString(call.SignedActivity).ToLowerInvariant()) });
+            ["signed_activity"] = JsonValue.String(Convert.ToHexString(call.SignedActivity).ToLowerInvariant())
+        });
     }
     private static string Capability(ProgramCapability value) => value switch { ProgramCapability.StorageRead => "storage_read", ProgramCapability.StorageWrite => "storage_write", ProgramCapability.Transfer => "transfer", ProgramCapability.EmitEvent => "emit_event", ProgramCapability.Compose => "compose", _ => throw Invalid() };
     private static string Identifier(byte[] value) => value?.Length == 32 ? Convert.ToHexString(value).ToLowerInvariant() : throw Invalid();

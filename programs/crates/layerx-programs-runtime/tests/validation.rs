@@ -18,6 +18,23 @@ fn declared_engine() -> WasmEngine {
     engine_with(ValidationLimits::declared())
 }
 
+#[test]
+fn frozen_v2_validation_retains_compatibility_spelling() {
+    let engine = declared_engine();
+    let wasm = add_module();
+    assert!(engine.validate_v2(&wasm).is_ok());
+    assert!(engine.validate_candidate_v2(&wasm).is_ok());
+    let invalid = b"not a wasm module";
+    assert_eq!(
+        engine.validate_v2(invalid).err(),
+        engine.validate_candidate_v2(invalid).err()
+    );
+    assert_eq!(
+        layerx_programs_runtime::programs_wasm_engine(),
+        "wasmi 0.31.2 vendored at programs/vendor/wasmi-0.31.2"
+    );
+}
+
 fn limits(
     max_module_bytes: u64,
     max_functions: u32,
@@ -206,17 +223,7 @@ fn float_instruction_is_refused() {
         export_section(&[("float", 0)]),
         code_section(&[func_body(
             &[],
-            &[
-                OP_F32_CONST,
-                0,
-                0,
-                0,
-                0,
-                OP_DROP,
-                OP_I32_CONST,
-                0,
-                OP_END,
-            ],
+            &[OP_F32_CONST, 0, 0, 0, 0, OP_DROP, OP_I32_CONST, 0, OP_END],
         )]),
     ]);
     assert_eq!(

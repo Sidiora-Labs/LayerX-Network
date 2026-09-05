@@ -1,4 +1,5 @@
 from __future__ import annotations
+from .native_capabilities import decode_native_capability_set, NativeProgramSpend, NativeBalanceView
 
 from .native_program_call import encode_native_program_call
 
@@ -53,6 +54,40 @@ class DecodedSignedProgramCall:
 class DecodedProgramTerminal:
     outcome: Mapping[str, object]
     usage: Mapping[str, object]
+
+
+def bind_signed_program_lifecycle(canonical: bytes, payload: bytes | None, ordinal: int, expected_idempotency_key: str | None = None) -> DecodedSignedProgramCall:
+    canonical = bytes(canonical)
+    payload = None if payload is None else bytes(payload)
+    if not 0 < len(canonical) <= 1_048_576 or type(ordinal) is not int or ordinal not in (1, 2, 7):
+        _fail("activity bounds")
+    reader = _Reader(canonical)
+    if reader.u16() != 3 or reader.u16() != 0x1001 or reader.byte() != 12:
+        _fail("signed activity header")
+    _field(reader, 1)
+    if reader.u16() != 3:
+        _fail("signed activity protocol")
+    _field(reader, 2); reader.u32()
+    _field(reader, 3)
+    if reader.u32() != 0x0009_0000 + ordinal:
+        _fail("signed activity type")
+    _field(reader, 4); reader.sized_u32(255)
+    _field(reader, 5); reader.sized_u32(524_288)
+    _field(reader, 6); reader.u64()
+    _field(reader, 7); not_before = reader.u64(); not_after = reader.u64()
+    _field(reader, 8); key = reader.sized_u32(32, 32).hex()
+    _field(reader, 9); reader.u128()
+    _field(reader, 10); digest = reader.sized_u32(32, 32)
+    _field(reader, 11); retained_payload = reader.sized_u32(524_288)
+    _field(reader, 12); reader.sized_u32(128); reader.end()
+    if payload is None:
+        from .program_lifecycle import NativeProgramDeploy, NativeProgramUpgrade, NativeProgramWindDown
+        decoders = {1: NativeProgramDeploy.decode, 2: NativeProgramUpgrade.decode, 7: NativeProgramWindDown.decode}
+        payload = decoders[ordinal](retained_payload).encode()
+    if (not_after < not_before or retained_payload != payload or digest != sha256(_PAYLOAD_DOMAIN + payload).digest()
+            or expected_idempotency_key is not None and key != expected_idempotency_key):
+        _fail("lifecycle binding")
+    return DecodedSignedProgramCall(sha256(_ACTIVITY_DOMAIN + canonical).hexdigest(), key, not_before, not_after, bytes(canonical))
 
 
 def decode_signed_program_call(call: object, expected_idempotency_key: str | None = None) -> DecodedSignedProgramCall:
@@ -543,48 +578,10 @@ def _decode_frame(reader: _Reader) -> bytes:
     return path + bytes((depth,))
 
 
-def _decode_capability_set(encoded: bytes, candidate: bool) -> None:
-    if len(encoded) < 2 or len(encoded) > 65_535:
-        _fail("capability encoding length")
-    reader = _Reader(encoded); count = reader.u16()
-    if count > 269:
-        _fail("capability count")
-    prior: tuple[int, tuple[bytes, ...]] | None = None
-    balance_views = 0
-    for _ in range(count):
-        tag = reader.byte()
-        if tag == 1: key = (0, ())
-        elif tag == 2: key = (1, ())
-        elif tag == 3: key = (2, ())
-        elif tag == 4:
-            program = reader.fixed(32); _nonzero(program, "call capability program"); key = (3, (program,))
-        elif tag == 5:
-            asset = reader.fixed(32); to = reader.fixed(32); maximum = reader.u128()
-            _nonzero(asset, "transfer capability asset"); _nonzero(to, "transfer capability destination")
-            if not maximum: _fail("transfer capability amount")
-            key = (4, (asset, to))
-        elif tag == 9 and candidate:
-            owner = reader.fixed(32); _nonzero(owner, "program spend owner"); seed_length = reader.u16()
-            if seed_length > 128: _fail("program spend seed")
-            seed = reader.fixed(seed_length); source = reader.fixed(32); asset = reader.fixed(32); to = reader.fixed(32); maximum = reader.u128()
-            _nonzero(asset, "program spend asset"); _nonzero(to, "program spend destination")
-            if not maximum or _derive_program_account(owner, seed) != source: _fail("program spend account")
-            key = (5, (owner, seed, source, asset, to))
-        elif tag == 6:
-            digest = reader.fixed(32); _nonzero(digest, "receipt capability"); key = (6, (digest,))
-        elif tag == 10 and candidate:
-            account = reader.fixed(32); asset = reader.fixed(32); digest = reader.fixed(32)
-            _nonzero(account, "balance capability account"); _nonzero(asset, "balance capability asset"); _nonzero(digest, "balance capability receipt")
-            balance_views += 1
-            if balance_views > 32: _fail("balance capability count")
-            key = (7, (account, asset))
-        elif tag == 7: key = (8, ())
-        elif tag == 8: key = (9, ())
-        else: _fail("capability tag")
-        if prior is not None and prior >= key:
-            _fail("capability canonical order")
-        prior = key
-    reader.end()
+def _decode_capability_set(encoded: bytes, v2: bool) -> None:
+    grants = decode_native_capability_set(encoded)
+    if not v2 and any(isinstance(grant, (NativeProgramSpend, NativeBalanceView)) for grant in grants):
+        _fail("capability tag")
 
 
 def _decode_occupancy_settlement(encoded: bytes) -> Mapping[str, object]:

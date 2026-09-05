@@ -1335,84 +1335,20 @@ func validProgramEvents(encoded []byte) bool {
 	}
 	return !cursor.failed && cursor.finished()
 }
-func validProgramCapabilities(encoded []byte, candidate bool) bool {
-	if len(encoded) < 2 || len(encoded) > 65_535 {
+func validProgramCapabilities(encoded []byte, v2 bool) bool {
+	grants, err := DecodeNativeCapabilities(encoded)
+	if err != nil {
 		return false
 	}
-	cursor := programTerminalCursor{value: encoded}
-	count := cursor.u16()
-	if count > 238 {
-		return false
-	}
-	priorRank := -1
-	var prior [][]byte
-	for index := uint16(0); index < count; index++ {
-		tag := cursor.byte()
-		rank := byte(255)
-		var key [][]byte
-		switch tag {
-		case 1:
-			rank = 0
-		case 2:
-			rank = 1
-		case 3:
-			rank = 2
-		case 4:
-			rank = 3
-			program := cursor.array32()
-			if program == ([32]byte{}) {
+	for _, grant := range grants {
+		switch grant.(type) {
+		case NativeProgramSpend, NativeBalanceView:
+			if !v2 {
 				return false
 			}
-			key = [][]byte{program[:]}
-		case 5:
-			rank = 4
-			asset, to := cursor.array32(), cursor.array32()
-			if asset == ([32]byte{}) || to == ([32]byte{}) || cursor.u128() == (Uint128{}) {
-				return false
-			}
-			key = [][]byte{asset[:], to[:]}
-		case 9:
-			if !candidate {
-				return false
-			}
-			rank = 5
-			owner := cursor.array32()
-			seed := append([]byte(nil), cursor.take(int(cursor.u16()))...)
-			source, asset, to := cursor.array32(), cursor.array32(), cursor.array32()
-			if owner == ([32]byte{}) || len(seed) > 128 || source != deriveProgramAccount(owner, seed) || asset == ([32]byte{}) || to == ([32]byte{}) || cursor.u128() == (Uint128{}) {
-				return false
-			}
-			key = [][]byte{owner[:], seed, source[:], asset[:], to[:]}
-		case 6:
-			rank = 6
-			receipt := cursor.array32()
-			if receipt == ([32]byte{}) {
-				return false
-			}
-			key = [][]byte{receipt[:]}
-		case 10:
-			if !candidate {
-				return false
-			}
-			rank = 7
-			account, asset, receipt := cursor.array32(), cursor.array32(), cursor.array32()
-			if account == ([32]byte{}) || asset == ([32]byte{}) || receipt == ([32]byte{}) {
-				return false
-			}
-			key = [][]byte{account[:], asset[:]}
-		case 7:
-			rank = 8
-		case 8:
-			rank = 9
-		default:
-			return false
 		}
-		if priorRank > int(rank) || priorRank == int(rank) && compareProgramCapabilityKey(prior, key) >= 0 {
-			return false
-		}
-		priorRank, prior = int(rank), key
 	}
-	return !cursor.failed && cursor.finished()
+	return true
 }
 func compareProgramCapabilityKey(left, right [][]byte) int {
 	for index := 0; index < len(left) && index < len(right); index++ {

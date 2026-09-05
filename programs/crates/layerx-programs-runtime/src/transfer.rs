@@ -6,9 +6,7 @@
 use core::fmt::{self, Display};
 use std::collections::BTreeMap;
 
-use crate::abi::{
-    AbiEffects, AuthorizationContext, CallFrameId, CapabilitySet, TransferRequest,
-};
+use crate::abi::{AbiEffects, AuthorizationContext, CallFrameId, CapabilitySet, TransferRequest};
 use crate::abi::{MAX_EVENT_DATA_BYTES, MAX_EVENT_TOPIC_BYTES};
 use crate::accounts::{derive_program_account, MAX_PROGRAM_ACCOUNT_SEED_BYTES};
 use crate::calls::CallGraph;
@@ -19,8 +17,7 @@ const SET_DOMAIN_V1: &[u8] = b"LayerX/programs/402LXP/transfer-set/v1\0";
 const SET_DOMAIN_V2: &[u8] = b"LayerX/programs/402LXP/transfer-set/v2\0";
 const PROGRAM_AUTHORITY_DOMAIN: &[u8] = b"LayerX/programs/402LXP/program-authority/v1\0";
 const PROGRAM_FUNDING_DOMAIN: &[u8] = b"LayerX/programs/402LXP/program-funding/v1\0";
-const SANDBOX_ESCROW_CHARGE_DOMAIN: &[u8] =
-    b"LayerX/programs/402LXP/sandbox-escrow-charge/v1\0";
+const SANDBOX_ESCROW_CHARGE_DOMAIN: &[u8] = b"LayerX/programs/402LXP/sandbox-escrow-charge/v1\0";
 const MERKLE_LEAF_DOMAIN: &[u8] = b"LXP/v1/merkle-leaf\0";
 const MERKLE_INTERNAL_DOMAIN: &[u8] = b"LXP/v1/merkle-internal\0";
 const SOURCE_PRINCIPAL: u8 = 1;
@@ -104,8 +101,8 @@ impl ProgramFundingBinding {
         self.asset
     }
     fn canonical_encoding(&self) -> Result<Vec<u8>, TransferLawError> {
-        let length = u16::try_from(self.seed.len())
-            .map_err(|_| TransferLawError::InvalidProgramFunding)?;
+        let length =
+            u16::try_from(self.seed.len()).map_err(|_| TransferLawError::InvalidProgramFunding)?;
         let capacity = PROGRAM_FUNDING_DOMAIN
             .len()
             .checked_add(98)
@@ -137,14 +134,7 @@ impl ProgramAuthority {
         to: [u8; 32],
         amount: u128,
     ) -> Result<(), TransferLawError> {
-        Self::for_owner_frame(
-            owner_program,
-            seed,
-            source_account,
-            asset,
-            to,
-            amount,
-        )?;
+        Self::for_owner_frame(owner_program, seed, source_account, asset, to, amount)?;
         Ok(())
     }
 
@@ -337,25 +327,18 @@ impl TransferCapability {
             return Err(TransferLawError::InvalidTransferSet);
         }
         let frames = self.authorized_frames(effects)?;
-        let candidate_v2 = self.root_capabilities.has_program_spend()
+        let v2 = self.root_capabilities.has_program_spend()
             || effects
                 .calls
                 .iter()
                 .any(|call| call.capabilities.has_program_spend())
-            || effects
-                .transfers
-                .iter()
-                .any(|transfer| {
-                    matches!(
-                        &transfer.source,
-                        TransferSource::Program(_) | TransferSource::ProgramFunding { .. }
-                    )
-                });
-        let set_domain = if candidate_v2 {
-            SET_DOMAIN_V2
-        } else {
-            SET_DOMAIN_V1
-        };
+            || effects.transfers.iter().any(|transfer| {
+                matches!(
+                    &transfer.source,
+                    TransferSource::Program(_) | TransferSource::ProgramFunding { .. }
+                )
+            });
+        let set_domain = if v2 { SET_DOMAIN_V2 } else { SET_DOMAIN_V1 };
         let mut total = 0u128;
         let mut canonical = Vec::with_capacity(
             set_domain.len()
@@ -414,7 +397,9 @@ impl TransferCapability {
                 .ok_or(TransferLawError::AmountOverflow)?;
             match &transfer.source {
                 TransferSource::Principal(source)
-                | TransferSource::ProgramFunding { principal: source, .. } => {
+                | TransferSource::ProgramFunding {
+                    principal: source, ..
+                } => {
                     if *source != self.principal {
                         return Err(TransferLawError::UnverifiedAuthority);
                     }
@@ -425,7 +410,8 @@ impl TransferCapability {
                             || binding.asset != transfer.asset
                             || derive_program_account(binding.owner_program, &binding.seed)
                                 .map_err(|_| TransferLawError::InvalidProgramFunding)?
-                                .bytes() != binding.destination_account
+                                .bytes()
+                                != binding.destination_account
                         {
                             return Err(TransferLawError::InvalidProgramFunding);
                         }
@@ -531,7 +517,7 @@ impl TransferCapability {
             let (path, depth) = transfer.frame.canonical_bytes();
             canonical.extend_from_slice(&path);
             canonical.push(depth);
-            if candidate_v2 {
+            if v2 {
                 match &transfer.source {
                     TransferSource::Principal(source) => {
                         canonical.push(SOURCE_PRINCIPAL);
@@ -572,7 +558,7 @@ impl TransferCapability {
             kernel_root,
             total_amount: total,
             legs: effects.transfers.clone(),
-            candidate_v2,
+            v2,
         })
     }
 
@@ -664,12 +650,12 @@ pub struct AtomicTransferSet {
     kernel_root: [u8; 32],
     total_amount: u128,
     legs: Vec<TransferRequest>,
-    candidate_v2: bool,
+    v2: bool,
 }
 
 impl AtomicTransferSet {
     fn retarget_sandbox_escrow_charge(&mut self, amount: u128) -> Result<(), TransferLawError> {
-        if !self.candidate_v2 || self.legs.len() != 1 || amount == 0 {
+        if !self.v2 || self.legs.len() != 1 || amount == 0 {
             return Err(TransferLawError::InvalidTransferSet);
         }
         self.total_amount = amount;
@@ -683,9 +669,13 @@ impl AtomicTransferSet {
         }
         self.kernel_canonical[97..113].copy_from_slice(&amount.to_be_bytes());
         let mut leaf = [0u8; 160];
-        let length = MERKLE_LEAF_DOMAIN.len().checked_add(115)
+        let length = MERKLE_LEAF_DOMAIN
+            .len()
+            .checked_add(115)
             .ok_or(TransferLawError::InvariantViolation)?;
-        if length > leaf.len() { return Err(TransferLawError::InvariantViolation); }
+        if length > leaf.len() {
+            return Err(TransferLawError::InvariantViolation);
+        }
         leaf[..MERKLE_LEAF_DOMAIN.len()].copy_from_slice(MERKLE_LEAF_DOMAIN);
         leaf[MERKLE_LEAF_DOMAIN.len()..length].copy_from_slice(&self.kernel_canonical);
         self.kernel_root = hash_bytes(HashAlgorithm::Sha256, &leaf[..length])
@@ -700,8 +690,7 @@ impl AtomicTransferSet {
         self.authorization_evidence[root_offset..root_offset + 32]
             .copy_from_slice(&self.kernel_root);
         let authority_amount = self.authorization_evidence.len() - 16;
-        self.authorization_evidence[authority_amount..]
-            .copy_from_slice(&amount.to_be_bytes());
+        self.authorization_evidence[authority_amount..].copy_from_slice(&amount.to_be_bytes());
         Ok(())
     }
     /// Seals the protocol-owned fee leg for one metered sandbox activity.
@@ -776,7 +765,7 @@ impl AtomicTransferSet {
             kernel_root,
             total_amount: amount,
             legs,
-            candidate_v2: true,
+            v2: true,
         })
     }
 
@@ -832,26 +821,28 @@ impl AtomicTransferSet {
         &self.legs
     }
 
+    /// Compatibility spelling retained for one release; use [`Self::is_v2`].
     #[must_use]
     pub const fn is_candidate_v2(&self) -> bool {
-        self.candidate_v2
+        self.is_v2()
+    }
+
+    #[must_use]
+    pub const fn is_v2(&self) -> bool {
+        self.v2
     }
 
     /// Strictly decodes and validates a persisted authorisation artifact.
     fn canonical_decode(encoded: &[u8]) -> Result<Self, TransferLawError> {
         let mut cursor = TransferCursor::new(encoded);
-        let candidate_v2 = if encoded.starts_with(SET_DOMAIN_V1) {
+        let v2 = if encoded.starts_with(SET_DOMAIN_V1) {
             false
         } else if encoded.starts_with(SET_DOMAIN_V2) {
             true
         } else {
             return Err(TransferLawError::InvalidTransferSet);
         };
-        let set_domain = if candidate_v2 {
-            SET_DOMAIN_V2
-        } else {
-            SET_DOMAIN_V1
-        };
+        let set_domain = if v2 { SET_DOMAIN_V2 } else { SET_DOMAIN_V1 };
         if cursor.take(set_domain.len())? != set_domain {
             return Err(TransferLawError::InvalidTransferSet);
         }
@@ -895,8 +886,8 @@ impl AtomicTransferSet {
             let callee_frame = frame_from_cursor(&mut cursor)?;
             let grant_length = u32::from_be_bytes(cursor.array()?) as usize;
             let grants = cursor.take(grant_length)?;
-            let grants = if candidate_v2 {
-                CapabilitySet::decode_candidate_canonical(grants)
+            let grants = if v2 {
+                CapabilitySet::decode_v2_canonical(grants)
             } else {
                 CapabilitySet::decode_canonical(grants)
             }
@@ -928,7 +919,7 @@ impl AtomicTransferSet {
         let mut legs = Vec::with_capacity(leg_count);
         for _ in 0..leg_count {
             let frame = frame_from_cursor(&mut cursor)?;
-            let source = if candidate_v2 {
+            let source = if v2 {
                 match cursor.take(1)?[0] {
                     SOURCE_PRINCIPAL => {
                         let source = PrincipalId::new(cursor.array()?)
@@ -1001,7 +992,7 @@ impl AtomicTransferSet {
             let (path, depth) = frame.canonical_bytes();
             canonical.extend_from_slice(&path);
             canonical.push(depth);
-            if candidate_v2 {
+            if v2 {
                 match source {
                     TransferSource::Principal(source) => {
                         canonical.push(SOURCE_PRINCIPAL);
@@ -1045,26 +1036,43 @@ impl AtomicTransferSet {
             kernel_root,
             total_amount: total,
             legs,
-            candidate_v2,
+            v2,
         })
     }
 }
 
-pub struct ReservedSandboxEscrowCharge { set: AtomicTransferSet }
+pub struct ReservedSandboxEscrowCharge {
+    set: AtomicTransferSet,
+}
 
 pub fn reserve_host_sandbox_escrow_charge(
-    host_program: ProgramId, execution_principal: PrincipalId,
-    invocation_authority: [u8; 32], lease_id: [u8; 32],
-    expected_lease_digest: [u8; 32], escrow_account: [u8; 32], asset: [u8; 32],
-    fee_destination: [u8; 32], maximum_fee: u128,
+    host_program: ProgramId,
+    execution_principal: PrincipalId,
+    invocation_authority: [u8; 32],
+    lease_id: [u8; 32],
+    expected_lease_digest: [u8; 32],
+    escrow_account: [u8; 32],
+    asset: [u8; 32],
+    fee_destination: [u8; 32],
+    maximum_fee: u128,
 ) -> Result<ReservedSandboxEscrowCharge, TransferLawError> {
-    AtomicTransferSet::sandbox_escrow_charge(host_program, execution_principal,
-        invocation_authority, lease_id, expected_lease_digest, escrow_account, asset,
-        fee_destination, maximum_fee).map(|set| ReservedSandboxEscrowCharge { set })
+    AtomicTransferSet::sandbox_escrow_charge(
+        host_program,
+        execution_principal,
+        invocation_authority,
+        lease_id,
+        expected_lease_digest,
+        escrow_account,
+        asset,
+        fee_destination,
+        maximum_fee,
+    )
+    .map(|set| ReservedSandboxEscrowCharge { set })
 }
 
 pub(crate) fn settle_reserved_sandbox_escrow_charge(
-    reserved: &mut ReservedSandboxEscrowCharge, exact_fee: u128,
+    reserved: &mut ReservedSandboxEscrowCharge,
+    exact_fee: u128,
     kernel: &mut impl KernelTransferPrimitive,
 ) -> Result<VerifiedProgramSettlement, TransferLawError> {
     reserved.set.retarget_sandbox_escrow_charge(exact_fee)?;
@@ -1103,9 +1111,14 @@ pub fn sandbox_escrow_charge_root(
     .map(|set| set.kernel_root())
 }
 
-pub fn verify_authorization_root(encoded:&[u8],expected:[u8;32])->Result<(),TransferLawError>{
-    let decoded=AtomicTransferSet::canonical_decode(encoded)?;
-    if decoded.kernel_root()!=expected{return Err(TransferLawError::ReceiptMismatch)}
+pub fn verify_authorization_root(
+    encoded: &[u8],
+    expected: [u8; 32],
+) -> Result<(), TransferLawError> {
+    let decoded = AtomicTransferSet::canonical_decode(encoded)?;
+    if decoded.kernel_root() != expected {
+        return Err(TransferLawError::ReceiptMismatch);
+    }
     Ok(())
 }
 fn decode_program_authority(encoded: &[u8]) -> Result<ProgramAuthority, TransferLawError> {
@@ -1148,8 +1161,8 @@ fn decode_program_funding(encoded: &[u8]) -> Result<ProgramFundingBinding, Trans
     if cursor.take(PROGRAM_FUNDING_DOMAIN.len())? != PROGRAM_FUNDING_DOMAIN {
         return Err(TransferLawError::InvalidProgramFunding);
     }
-    let owner = ProgramId::new(cursor.array()?)
-        .map_err(|_| TransferLawError::InvalidProgramFunding)?;
+    let owner =
+        ProgramId::new(cursor.array()?).map_err(|_| TransferLawError::InvalidProgramFunding)?;
     let seed_length = usize::from(u16::from_be_bytes(cursor.array()?));
     if seed_length > MAX_PROGRAM_ACCOUNT_SEED_BYTES {
         return Err(TransferLawError::InvalidProgramFunding);
@@ -1380,7 +1393,9 @@ impl Display for TransferLawError {
             Self::InvalidProgramAuthority => {
                 formatter.write_str("program transfer authority is invalid")
             }
-            Self::InvalidProgramFunding => formatter.write_str("program funding destination is invalid"),
+            Self::InvalidProgramFunding => {
+                formatter.write_str("program funding destination is invalid")
+            }
             Self::InvalidTransfer => formatter.write_str("402LXP transfer request is invalid"),
             Self::InvalidTransferSet => formatter.write_str("402LXP transfer set is invalid"),
             Self::AmountOverflow => formatter.write_str("402LXP transfer total overflowed"),
@@ -1885,7 +1900,7 @@ mod tests {
         let set = program_capability(owner, principal, seed, source, 12)
             .authorize(&effects)
             .unwrap_or_else(|error| panic!("mixed set: {error}"));
-        assert!(set.is_candidate_v2());
+        assert!(set.is_v2());
         assert!(set.canonical().starts_with(SET_DOMAIN_V2));
         assert_eq!(set.legs()[0].source.account(), principal.bytes());
         assert_eq!(set.legs()[1].source.account(), source);
@@ -1989,15 +2004,7 @@ mod tests {
             .unwrap_or_else(|error| panic!("escrow: {error}"))
             .bytes();
         let set = AtomicTransferSet::sandbox_escrow_charge(
-            host,
-            principal,
-            [4; 32],
-            lease,
-            [5; 32],
-            escrow,
-            [6; 32],
-            [7; 32],
-            11,
+            host, principal, [4; 32], lease, [5; 32], escrow, [6; 32], [7; 32], 11,
         )
         .unwrap_or_else(|error| panic!("charge: {error}"));
         assert_eq!(set.legs().len(), 1);

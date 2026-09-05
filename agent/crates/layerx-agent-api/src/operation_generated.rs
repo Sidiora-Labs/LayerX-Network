@@ -21,10 +21,13 @@ pub enum Operation {
     Prepare,
     ProgramActivity,
     ProgramCall,
+    ProgramDeploy,
     ProgramDiscover,
     ProgramInterface,
     ProgramReceipt,
     ProgramSimulate,
+    ProgramUpgrade,
+    ProgramWindDown,
     Project,
     ReadAccount,
     ReadBalance,
@@ -71,10 +74,13 @@ impl Operation {
         Self::Prepare,
         Self::ProgramActivity,
         Self::ProgramCall,
+        Self::ProgramDeploy,
         Self::ProgramDiscover,
         Self::ProgramInterface,
         Self::ProgramReceipt,
         Self::ProgramSimulate,
+        Self::ProgramUpgrade,
+        Self::ProgramWindDown,
         Self::Project,
         Self::ReadAccount,
         Self::ReadBalance,
@@ -122,10 +128,13 @@ impl Operation {
             Self::Prepare => "prepare",
             Self::ProgramActivity => "program.activity",
             Self::ProgramCall => "program.call",
+            Self::ProgramDeploy => "program.deploy",
             Self::ProgramDiscover => "program.discover",
             Self::ProgramInterface => "program.interface",
             Self::ProgramReceipt => "program.receipt",
             Self::ProgramSimulate => "program.simulate",
+            Self::ProgramUpgrade => "program.upgrade",
+            Self::ProgramWindDown => "program.wind-down",
             Self::Project => "project",
             Self::ReadAccount => "read.account",
             Self::ReadBalance => "read.balance",
@@ -167,6 +176,9 @@ impl Operation {
                 | Self::CapabilityRevoke
                 | Self::Prepare
                 | Self::ProgramCall
+                | Self::ProgramDeploy
+                | Self::ProgramUpgrade
+                | Self::ProgramWindDown
                 | Self::SessionClose
                 | Self::SessionOpen
                 | Self::SessionRefresh

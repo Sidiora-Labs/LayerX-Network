@@ -24,10 +24,13 @@ public enum PlatformOperation
     AgentPrepare,
     AgentProgramActivity,
     AgentProgramCall,
+    AgentProgramDeploy,
     AgentProgramDiscover,
     AgentProgramInterface,
     AgentProgramReceipt,
     AgentProgramSimulate,
+    AgentProgramUpgrade,
+    AgentProgramWindDown,
     AgentProject,
     AgentReadAccount,
     AgentReadBalance,
@@ -154,10 +157,13 @@ public static class GeneratedOperationCatalog
             PlatformOperation.AgentPrepare => new(PlatformPlane.Agent, "prepare", SdkHttpMethod.Post, "", "PrepareRequest", "Prepared", true, false),
             PlatformOperation.AgentProgramActivity => new(PlatformPlane.Agent, "program.activity", SdkHttpMethod.Get, "/v1/programs/activities/{activity_id}", "ProgramActivitySelector", "ProgramSubmission", false, false),
             PlatformOperation.AgentProgramCall => new(PlatformPlane.Agent, "program.call", SdkHttpMethod.Post, "/v1/programs/call", "ProgramCallRequest", "ProgramSubmission", true, false),
+            PlatformOperation.AgentProgramDeploy => new(PlatformPlane.Agent, "program.deploy", SdkHttpMethod.Post, "/v1/programs/deploy", "NativeProgramDeployRequest", "ProgramLifecycleResponse", true, false),
             PlatformOperation.AgentProgramDiscover => new(PlatformPlane.Agent, "program.discover", SdkHttpMethod.Get, "/v1/programs/registry/{program_id}", "ProgramSelector", "VerifiedProgramDiscovery", false, false),
             PlatformOperation.AgentProgramInterface => new(PlatformPlane.Agent, "program.interface", SdkHttpMethod.Get, "/v1/programs/registry/{program_id}/interface", "ProgramSelector", "VerifiedProgramInterface", false, false),
-            PlatformOperation.AgentProgramReceipt => new(PlatformPlane.Agent, "program.receipt", SdkHttpMethod.Get, "/v1/programs/receipts/by-idempotency/{idempotency_key}", "ProgramReceiptSelector", "ProgramSubmission", false, false),
+            PlatformOperation.AgentProgramReceipt => new(PlatformPlane.Agent, "program.receipt", SdkHttpMethod.Get, "/v1/programs/receipts/by-idempotency/{idempotency_key}", "ProgramReceiptSelector", "ProgramReceiptResponse", false, false),
             PlatformOperation.AgentProgramSimulate => new(PlatformPlane.Agent, "program.simulate", SdkHttpMethod.Post, "/v1/programs/simulate", "ProgramCallRequest", "ProgramSimulation", false, false),
+            PlatformOperation.AgentProgramUpgrade => new(PlatformPlane.Agent, "program.upgrade", SdkHttpMethod.Post, "/v1/programs/upgrade", "NativeProgramUpgradeRequest", "ProgramLifecycleResponse", true, false),
+            PlatformOperation.AgentProgramWindDown => new(PlatformPlane.Agent, "program.wind-down", SdkHttpMethod.Post, "/v1/programs/wind-down", "NativeProgramWindDownRequest", "ProgramLifecycleResponse", true, false),
             PlatformOperation.AgentProject => new(PlatformPlane.Agent, "project", SdkHttpMethod.Post, "", "object", "ProjectionResult", false, false),
             PlatformOperation.AgentReadAccount => new(PlatformPlane.Agent, "read.account", SdkHttpMethod.Post, "", "object", "VerifiedRead<AccountValue>", false, false),
             PlatformOperation.AgentReadBalance => new(PlatformPlane.Agent, "read.balance", SdkHttpMethod.Post, "", "object", "VerifiedRead<BalanceValue>", false, false),
@@ -264,7 +270,7 @@ public static class GeneratedOperationCatalog
 
     public static SdkMetadata platform_sdk_dotnet()
     {
-        return new("LayerX.Sdk", "0.1.0", 46, 78);
+        return new("LayerX.Sdk", "0.1.0", 49, 78);
     }
 }
 
@@ -308,6 +314,8 @@ public static class GeneratedPlatformClientExtensions
         client.ReadAsync(PlatformOperation.AgentProgramActivity, request, pathParameters, cancellationToken);
     public static Task<JsonValue> AgentProgramCallAsync(this PlatformClient client, JsonValue request, IdempotencyKey idempotencyKey, IReadOnlyDictionary<string, string>? pathParameters = null, CancellationToken cancellationToken = default) =>
         client.MutateAsync(PlatformOperation.AgentProgramCall, request, idempotencyKey, pathParameters, cancellationToken);
+    public static Task<JsonValue> AgentProgramDeployAsync(this PlatformClient client, JsonValue request, IdempotencyKey idempotencyKey, IReadOnlyDictionary<string, string>? pathParameters = null, CancellationToken cancellationToken = default) =>
+        client.MutateAsync(PlatformOperation.AgentProgramDeploy, request, idempotencyKey, pathParameters, cancellationToken);
     public static Task<JsonValue> AgentProgramDiscoverAsync(this PlatformClient client, JsonValue request, IReadOnlyDictionary<string, string>? pathParameters = null, CancellationToken cancellationToken = default) =>
         client.ReadAsync(PlatformOperation.AgentProgramDiscover, request, pathParameters, cancellationToken);
     public static Task<JsonValue> AgentProgramInterfaceAsync(this PlatformClient client, JsonValue request, IReadOnlyDictionary<string, string>? pathParameters = null, CancellationToken cancellationToken = default) =>
@@ -316,6 +324,10 @@ public static class GeneratedPlatformClientExtensions
         client.ReadAsync(PlatformOperation.AgentProgramReceipt, request, pathParameters, cancellationToken);
     public static Task<JsonValue> AgentProgramSimulateAsync(this PlatformClient client, JsonValue request, IReadOnlyDictionary<string, string>? pathParameters = null, CancellationToken cancellationToken = default) =>
         client.ReadAsync(PlatformOperation.AgentProgramSimulate, request, pathParameters, cancellationToken);
+    public static Task<JsonValue> AgentProgramUpgradeAsync(this PlatformClient client, JsonValue request, IdempotencyKey idempotencyKey, IReadOnlyDictionary<string, string>? pathParameters = null, CancellationToken cancellationToken = default) =>
+        client.MutateAsync(PlatformOperation.AgentProgramUpgrade, request, idempotencyKey, pathParameters, cancellationToken);
+    public static Task<JsonValue> AgentProgramWindDownAsync(this PlatformClient client, JsonValue request, IdempotencyKey idempotencyKey, IReadOnlyDictionary<string, string>? pathParameters = null, CancellationToken cancellationToken = default) =>
+        client.MutateAsync(PlatformOperation.AgentProgramWindDown, request, idempotencyKey, pathParameters, cancellationToken);
     public static Task<JsonValue> AgentProjectAsync(this PlatformClient client, JsonValue request, IReadOnlyDictionary<string, string>? pathParameters = null, CancellationToken cancellationToken = default) =>
         client.ReadAsync(PlatformOperation.AgentProject, request, pathParameters, cancellationToken);
     public static Task<JsonValue> AgentReadAccountAsync(this PlatformClient client, JsonValue request, IReadOnlyDictionary<string, string>? pathParameters = null, CancellationToken cancellationToken = default) =>

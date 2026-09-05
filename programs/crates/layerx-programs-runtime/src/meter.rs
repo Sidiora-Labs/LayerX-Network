@@ -1252,7 +1252,7 @@ impl Meter {
         self.finish_bounded_usage(self.cpu_fuel)
     }
 
-    /// Finalises a published candidate failure after that same guest frame
+    /// Finalises a published ABI-v2 failure after that same guest frame
     /// consumed its complete CPU allowance.
     pub(crate) fn finish_published_failure(&self) -> Result<MeteredUsage, MeterRefusal> {
         match self.exhaustion() {

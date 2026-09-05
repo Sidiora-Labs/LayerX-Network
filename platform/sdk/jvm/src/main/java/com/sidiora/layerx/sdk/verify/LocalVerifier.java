@@ -318,6 +318,17 @@ public final class LocalVerifier {
             canonicalReceipt.clone(), digest);
     }
 
+    public static ReceiptVerification verifyProgramLifecycleReceipt(byte[] canonical, byte[] expectedActivity, byte[] sequencer) {
+        DecodedReceipt decoded = decodeProtocolReceipt(canonical);
+        ProtocolReceipt receipt = decoded.receipt();
+        if (receipt.protocolVersion() != 3 || receipt.moduleId() != 9 || receipt.moduleVersion() != 4
+                || receipt.operation() != 0 || receipt.programOutcome() != null || allZero(exact(expectedActivity, 32))
+                || !equal(receipt.activityId(), expectedActivity) || allZero(exact(sequencer, 32))) fail(ReceiptCheck.RECEIPT_SHAPE);
+        byte[] digest = sha256(RECEIPT_DOMAIN, decoded.unsignedBytes());
+        if (!verifyEd25519(sequencer, receipt.sequencerSignature(), digest)) fail(ReceiptCheck.SEQUENCER_SIGNATURE);
+        return new ReceiptVerification(VerificationLevel.SEQUENCER_SIGNED, receipt, canonical.clone(), digest);
+    }
+
     public static ReceiptVerification verifyReceipt(byte[] canonicalReceipt, AuthorizedReceiptBatch authorized, int... selectedProtocol) {
         ReceiptVerification verified = verifyReceiptOutcome(canonicalReceipt, authorized, selectedProtocol);
         if (verified.receipt().resultCode() != 0) fail(ReceiptCheck.RESULT_CODE);

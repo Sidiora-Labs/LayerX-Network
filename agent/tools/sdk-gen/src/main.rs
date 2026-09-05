@@ -172,6 +172,7 @@ fn read_schema(schema_root: &Path) -> Result<Model, String> {
                 .map(|(key, value)| (key.clone(), value.clone()))
         })
         .collect::<BTreeMap<_, _>>();
+    validate_lifecycle_schema(&combined)?;
     let levels = quoted_list(required(&combined, "type.Level.variants")?)?;
     let errors = quoted_list(required(&combined, "type.ErrorClass.variants")?)?;
     let protocol = unquote(required(
@@ -294,6 +295,9 @@ fn validate_model(model: &Model) -> Result<(), String> {
         "program.interface",
         "program.simulate",
         "program.call",
+        "program.deploy",
+        "program.upgrade",
+        "program.wind-down",
         "program.receipt",
         "program.activity",
     ] {
@@ -305,12 +309,69 @@ fn validate_model(model: &Model) -> Result<(), String> {
             return Err(format!("Programs SDK operation missing {operation}"));
         }
     }
+    if model
+        .operations
+        .iter()
+        .filter(|operation| operation.starts_with("program."))
+        .count()
+        != 9
+    {
+        return Err("Programs SDK must declare exactly nine operations".to_owned());
+    }
     if model.approval.states.is_empty()
         || model.approval.outcomes.is_empty()
         || model.approval.events.is_empty()
         || !model.approval.introduced_contract.contains('.')
     {
         return Err("approval SDK vocabulary or introducing contract is incomplete".to_owned());
+    }
+    Ok(())
+}
+
+fn validate_lifecycle_schema(entries: &BTreeMap<String, String>) -> Result<(), String> {
+    for (operation, request, ordinal) in [
+        ("deploy", "NativeProgramDeployRequest", "1"),
+        ("upgrade", "NativeProgramUpgradeRequest", "2"),
+        ("wind-down", "NativeProgramWindDownRequest", "7"),
+    ] {
+        let prefix = format!("operation.program.{operation}");
+        for (field, expected) in [
+            ("method", "POST"),
+            ("path", &format!("/v1/programs/{operation}")),
+            ("request", request),
+            ("response", "ProgramLifecycleResponse"),
+            ("scope", &format!("program:{operation}")),
+            ("content_type", "application/octet-stream"),
+        ] {
+            if unquote(required(entries, &format!("{prefix}.{field}"))?)? != expected {
+                return Err(format!("invalid lifecycle schema {prefix}.{field}"));
+            }
+        }
+        if quoted_list(required(entries, &format!("{prefix}.required"))?)? != ["idempotency_key"] {
+            return Err(format!(
+                "missing lifecycle mutation classification {prefix}"
+            ));
+        }
+        let request = format!("type.{request}");
+        if quoted_list(required(entries, &format!("{request}.required"))?)? != ["signed_activity"]
+            || required(entries, &format!("{request}.protocol_version"))? != "3"
+            || required(entries, &format!("{request}.module_id"))? != "9"
+            || required(entries, &format!("{request}.ordinal"))? != ordinal
+        {
+            return Err(format!("invalid lifecycle request binding {request}"));
+        }
+    }
+    for name in [
+        "NativeProgramDeploy",
+        "NativeProgramUpgrade",
+        "NativeProgramWindDown",
+        "ProgramLifecycleResultEnvelope",
+        "ProgramLifecycleResult",
+        "ProgramLifecycleUnknown",
+        "ProgramLifecycleErrorEnvelope",
+        "ProgramLifecycleError",
+    ] {
+        required(entries, &format!("type.{name}.required"))?;
     }
     Ok(())
 }

@@ -211,7 +211,7 @@ impl KernelTransferPrimitive for WindDownKernel {
         &mut self,
         transfers: &AtomicTransferSet,
     ) -> Result<KernelTransferEvidence, TransferLawError> {
-        if transfers.legs().len() != 1 || !transfers.is_candidate_v2() {
+        if transfers.legs().len() != 1 || !transfers.is_v2() {
             return Err(TransferLawError::InvalidTransferSet);
         }
         let leg = &transfers.legs()[0];

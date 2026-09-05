@@ -37,15 +37,15 @@ public final class LayerXKeyCredential: @unchecked Sendable, CustomStringConvert
     public init(keyID: String, secret: Data) throws {
         let validID = !keyID.isEmpty && keyID.utf8.count <= 64 && keyID.utf8.allSatisfy {
             ($0 >= 48 && $0 <= 57) || ($0 >= 65 && $0 <= 90) || ($0 >= 97 && $0 <= 122) || $0 == 45 || $0 == 95
-        }
-        guard validID else { throw PlatformSDKError(code: .invalidArgument, retry: .never) }
-        self.keyID = keyID
-        self.secret = try SecretBytes(secret)
-    }
+      }
+    guard validID else { throw PlatformSDKError(code: .invalidArgument, retry: .never) }
+    self.keyID = keyID
+    self.secret = try SecretBytes(secret)
+  }
 
-    fileprivate func authorize(_ request: inout URLRequest) throws {
-        try secret.withBytes { bytes in
-            guard let value = String(data: bytes, encoding: .ascii), value.hasPrefix("lxp_live_"), value.utf8.count == 73,
+  fileprivate func authorize(_ request: inout URLRequest) throws {
+    try secret.withBytes { bytes in
+      guard let value = String(data: bytes, encoding: .ascii), value.hasPrefix("lxp_live_"), value.utf8.count == 73,
                   value.dropFirst(9).utf8.allSatisfy({ ($0 >= 48 && $0 <= 57) || ($0 >= 97 && $0 <= 102) }) else {
                 throw PlatformSDKError(code: .invalidArgument, retry: .never)
             }
@@ -59,19 +59,30 @@ public final class LayerXKeyCredential: @unchecked Sendable, CustomStringConvert
 
 public final class AgentHTTPTransport: PlatformTransport, @unchecked Sendable {
     private static let operations: Set<String> = [
-        "program.discover", "program.interface", "program.simulate",
-        "program.call", "program.receipt", "program.activity",
-    ]
-    private let baseURL: URL
+    "program.discover", "program.interface", "program.simulate",
+    "program.call", "program.receipt", "program.activity",
+    "program.deploy", "program.upgrade", "program.wind-down",
+  ]
+  private let baseURL: URL
     private let session: URLSession
     private let credential: LayerXKeyCredential?
-    private struct ProgramRoute {
+    private let accessToken: AccessToken?
+  private struct ProgramRoute {
         let method: String
         let path: String
         let pathParameters: Set<String>
         let idempotent: Bool
     }
     private static let programRoutes: [String: ProgramRoute] = [
+    "program.deploy": .init(
+      method: "POST", path: ProgramLifecycleRoutes.paths["program.deploy"]!, pathParameters: [],
+      idempotent: true),
+    "program.upgrade": .init(
+      method: "POST", path: ProgramLifecycleRoutes.paths["program.upgrade"]!, pathParameters: [],
+      idempotent: true),
+    "program.wind-down": .init(
+      method: "POST", path: ProgramLifecycleRoutes.paths["program.wind-down"]!, pathParameters: [],
+      idempotent: true),
         "program.discover": .init(method: "GET", path: "/v1/programs/registry/{program_id}",
             pathParameters: ["program_id"], idempotent: false),
         "program.interface": .init(method: "GET", path: "/v1/programs/registry/{program_id}/interface",
@@ -86,10 +97,17 @@ public final class AgentHTTPTransport: PlatformTransport, @unchecked Sendable {
             pathParameters: ["activity_id"], idempotent: false),
     ]
 
-    public init(baseURL: URL, session: URLSession = .shared, credential: LayerXKeyCredential? = nil) throws {
-        guard baseURL.user == nil, baseURL.password == nil, baseURL.host != nil,
-              baseURL.query == nil, baseURL.fragment == nil,
-              baseURL.scheme == "https" || (baseURL.scheme == "http" && Self.isLoopback(baseURL.host)) else {
+    public init(
+    baseURL: URL, session: URLSession = .shared, credential: LayerXKeyCredential? = nil,
+    accessToken: AccessToken? = nil
+  ) throws {
+    guard credential == nil || accessToken == nil else {
+      throw PlatformSDKError(code: .invalidArgument, retry: .never)
+    }
+    self.accessToken = accessToken
+    guard baseURL.user == nil, baseURL.password == nil, baseURL.host != nil,
+      baseURL.query == nil, baseURL.fragment == nil,
+      baseURL.scheme == "https" || (baseURL.scheme == "http" && Self.isLoopback(baseURL.host)) else {
             throw PlatformSDKError(code: .invalidArgument, retry: .never)
         }
         self.baseURL = baseURL
@@ -106,7 +124,7 @@ public final class AgentHTTPTransport: PlatformTransport, @unchecked Sendable {
             pathParameters: call.pathParameters, idempotencyKey: call.idempotencyKey))
     }
 
-    public func sendProgram(_ call: ProgramTransportCall) async throws -> JSONValue {
+    func programRequest(_ call: ProgramTransportCall) throws -> URLRequest {
         guard let route = Self.programRoutes[call.operation], route.pathParameters == Set(call.pathParameters.keys) else {
             throw PlatformSDKError(code: .invalidArgument, retry: .never)
         }
@@ -118,7 +136,10 @@ public final class AgentHTTPTransport: PlatformTransport, @unchecked Sendable {
             throw PlatformSDKError(code: .invalidArgument, retry: .never)
         }
         try Self.validateProgramRequest(call)
-        let encoded = try JSONEncoder().encode(call.request)
+        let encoded =
+      route.method == "POST"
+      ? try nativeTransportHex(call.request.objectValue?["signed_activity"]?.stringValue)
+      : try JSONEncoder().encode(call.request)
         guard !encoded.isEmpty, encoded.count <= maximumProgramsRequestBytes else {
             throw PlatformSDKError(code: .invalidArgument, retry: .never)
         }
@@ -137,19 +158,32 @@ public final class AgentHTTPTransport: PlatformTransport, @unchecked Sendable {
         request.httpMethod = route.method
         request.httpBody = encoded
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(
+      route.method == "POST" ? "application/octet-stream" : "application/json",
+      forHTTPHeaderField: "Content-Type")
         request.setValue("layerx-swift/0.1.0", forHTTPHeaderField: "User-Agent")
         if let key = call.idempotencyKey { request.setValue(key.rawValue, forHTTPHeaderField: "Idempotency-Key") }
-        guard let credential else {
-            throw PlatformSDKError(code: .capabilityRefusal, retry: .never)
-        }
-        try credential.authorize(&request)
-        let data: Data
+        if let accessToken {
+      try accessToken.authorize(&request)
+        } else if let credential {
+      try credential.authorize(&request)
+    } else {
+      throw PlatformSDKError(code: .capabilityRefusal, retry: .never)
+    }
+    return request
+  }
+
+  public func sendProgram(_ call: ProgramTransportCall) async throws -> JSONValue {
+    let request = try programRequest(call)
+    let data: Data
         let response: URLResponse
         do {
             (data, response) = try await session.data(for: request, delegate: NoRedirectDelegate.shared)
         } catch {
-            if call.operation == "program.call" { throw Self.unknownOutcome() }
+            if call.operation == "program.call" || ProgramLifecycleRoutes.ordinals[call.operation] != nil
+      {
+        throw Self.unknownOutcome()
+      }
             throw PlatformSDKError(code: .transportFailure, retry: .safe)
         }
         do {
@@ -157,7 +191,7 @@ public final class AgentHTTPTransport: PlatformTransport, @unchecked Sendable {
                   Self.jsonContentType(http) else { throw Self.decode() }
             return try Self.decodeProgramEnvelope(call.operation, status: http.statusCode, data: data)
         } catch let error as PlatformSDKError {
-            if call.operation == "program.call",
+            if call.operation == "program.call" || ProgramLifecycleRoutes.ordinals[call.operation] != nil,
                (error.code == .decodeFailure || error.code == .verificationFailure) {
                 throw Self.unknownOutcome()
             }
@@ -170,12 +204,44 @@ public final class AgentHTTPTransport: PlatformTransport, @unchecked Sendable {
         do { document = try JSONDecoder().decode(JSONValue.self, from: data) }
         catch { throw decode() }
         guard let envelope = document.objectValue else { throw decode() }
-        if envelope["class"] != nil {
-            guard !(200..<300).contains(status), exact(envelope,
-                ["class", "protocol_result_code", "retriability", "request_id", "reason"]) else { throw decode() }
-            throw try serviceError(envelope)
+        if ProgramLifecycleRoutes.ordinals[operation] != nil || operation == "program.receipt",
+      (200..<300).contains(status), exact(envelope, ["result"]), let result = envelope["result"]
+    {
+      return result
+    }
+    if ProgramLifecycleRoutes.ordinals[operation] != nil, (400..<500).contains(status),
+      exact(envelope, ["error"]), let refusal = envelope["error"]?.objectValue
+    {
+      var retryAfter: UInt64?
+      guard let code = refusal["code"]?.stringValue, !code.isEmpty, code.count <= 256,
+        let retry = refusal["retry"]?.stringValue, exact(refusal, ["code", "retry"])
+          || exact(refusal, ["code", "retry", "retry_after_seconds"])
+      else { throw decode() }
+      if retry == "after" {
+        guard case .integer(let seconds)? = refusal["retry_after_seconds"], seconds > 0 else {
+          throw decode()
         }
-        guard (200..<300).contains(status), exact(envelope, ["request_id", "value", "verification_status"]),
+        guard UInt64(seconds) <= UInt64.max / 1000 else { throw decode() }
+        retryAfter = UInt64(seconds) * 1000
+      } else {
+        guard retry == "never", exact(refusal, ["code", "retry"]) else { throw decode() }
+      }
+      let error: SDKErrorCode =
+        status == 401 || status == 403
+        ? .capabilityRefusal
+        : status == 409 ? .idempotencyConflict : status == 429 ? .rateLimit : .coreRejection
+      throw PlatformSDKError(
+        code: error, retry: retry == "after" ? .after : .never, retryAfterMilliseconds: retryAfter)
+    }
+    if envelope["class"] != nil {
+      guard !(200..<300).contains(status),
+        exact(
+          envelope,
+          ["class", "protocol_result_code", "retriability", "request_id", "reason"])
+      else { throw decode() }
+      throw try serviceError(envelope)
+    }
+    guard (200..<300).contains(status), exact(envelope, ["request_id", "value", "verification_status"]),
               let requestID = envelope["request_id"]?.stringValue, validRequestID(requestID),
               let value = envelope["value"], value != .null,
               validVerification(operation, value: value, status: envelope["verification_status"]) else {
@@ -186,6 +252,18 @@ public final class AgentHTTPTransport: PlatformTransport, @unchecked Sendable {
 
     private static func validateProgramRequest(_ call: ProgramTransportCall) throws {
         guard let object = call.request.objectValue else { throw invalid() }
+    if let ordinal = ProgramLifecycleRoutes.ordinals[call.operation] {
+      guard exact(object, ["payload", "signed_activity"]) else { throw invalid() }
+      let payload = try nativeTransportHex(object["payload"]?.stringValue)
+      let signed = try nativeTransportHex(object["signed_activity"]?.stringValue)
+      let bound = try NativeProgramLifecycleRequest(
+        operation: decodeNativeProgramLifecycle(ordinal, payload), signedActivity: signed)
+      guard
+        call.idempotencyKey?.rawValue
+          == bound.idempotencyKey.map({ String(format: "%02x", $0) }).joined()
+      else { throw invalid() }
+      return
+    }
         switch call.operation {
         case "program.discover", "program.interface":
             guard exact(object, ["program_id", "requested_verification_level"]),
@@ -200,13 +278,25 @@ public final class AgentHTTPTransport: PlatformTransport, @unchecked Sendable {
             guard exact(object, ["activity_id", "requested_verification_level"]),
                   canonicalHex(object["activity_id"], bytes: 32, empty: false),
                   object["requested_verification_level"]?.stringValue == "sequencer-signed" else { throw invalid() }
-        case "program.simulate", "program.call":
-            try validateProgramCall(object)
-        default: throw invalid()
+    case "program.simulate", "program.call":
+      if exact(object, ["payload", "signed_activity"]) {
+        let payload = try NativeProgramCall.decode(
+          nativeTransportHex(object["payload"]?.stringValue)
+        ).encode()
+        let key = try bindNativeProgramActivity(
+          3, payload, nativeTransportHex(object["signed_activity"]?.stringValue))
+        if call.operation == "program.call" {
+          guard call.idempotencyKey?.rawValue == key.map({ String(format: "%02x", $0) }).joined()
+          else { throw invalid() }
         }
+      } else {
+        try validateProgramCall(object)
+      }
+    default: throw invalid()
     }
+  }
 
-    private static func validateProgramCall(_ object: [String: JSONValue]) throws {
+  private static func validateProgramCall(_ object: [String: JSONValue]) throws {
         guard exact(object, ["program_id", "calldata", "budget", "capabilities", "signed_activity"]),
               canonicalProgram(object["program_id"]),
               boundedHex(object["calldata"], maximum: maximumProgramBytes, empty: true),

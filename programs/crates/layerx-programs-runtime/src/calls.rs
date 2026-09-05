@@ -361,7 +361,11 @@ impl CallGraph {
         evidence.extend_from_slice(&self.rules.edges.to_be_bytes());
         evidence.extend_from_slice(&self.rules.fanout.to_be_bytes());
         evidence.extend_from_slice(&self.rules.visits.to_be_bytes());
-        evidence.extend_from_slice(&u64::try_from(self.edges.len()).unwrap_or(u64::MAX).to_be_bytes());
+        evidence.extend_from_slice(
+            &u64::try_from(self.edges.len())
+                .unwrap_or(u64::MAX)
+                .to_be_bytes(),
+        );
         for edge in &self.edges {
             evidence.extend_from_slice(&edge.caller.bytes());
             evidence.extend_from_slice(&edge.callee.bytes());
@@ -660,7 +664,7 @@ pub enum CompositionRefusal {
         /// The negative result code the callee returned.
         code: i32,
     },
-    /// Candidate program refusal with host-authenticated leaf identity.
+    /// ABI-v2 program refusal with host-authenticated leaf identity.
     Program(ProgramFailure),
     /// The call was refused by the capability ABI, including every attempt to
     /// widen authority across an edge.
@@ -693,7 +697,8 @@ impl Display for CompositionRefusal {
                 "composition ABI revision {actual:?} differs from root {expected:?}"
             ),
             Self::MeteringPlanMismatch { expected, actual } => {
-                let expected_version = u32::from_be_bytes(expected[..4].try_into().unwrap_or([0; 4]));
+                let expected_version =
+                    u32::from_be_bytes(expected[..4].try_into().unwrap_or([0; 4]));
                 let actual_version = u32::from_be_bytes(actual[..4].try_into().unwrap_or([0; 4]));
                 write!(formatter, "composition metering schedule {actual_version} differs from root schedule {expected_version}")
             }
@@ -1000,7 +1005,7 @@ fn execute_nested(
                 .or_else(|| returned.refusal().cloned())
                 .or_else(|| returned.failure().cloned().map(CompositionRefusal::Program))
                 .unwrap_or_else(|| {
-                    if candidate_runtime_fault(&fault) {
+                    if v2_runtime_fault(&fault) {
                         CompositionRefusal::Program(runtime_failure(callee))
                     } else {
                         instantiation_refusal(fault, returned.meter().exhaustion())
@@ -1186,9 +1191,10 @@ fn entry_refusal(
         EntrypointRefusal::MissingEntry => CompositionRefusal::MissingEntry,
         EntrypointRefusal::AllocationRefused { .. }
             if instance.meter().is_activity()
-                && instance.state().composition().is_some_and(|composition| {
-                    composition.revision() == AbiRevision::V2
-                }) =>
+                && instance
+                    .state()
+                    .composition()
+                    .is_some_and(|composition| composition.revision() == AbiRevision::V2) =>
         {
             legacy_failure(program)
         }
@@ -1223,7 +1229,7 @@ fn entry_refusal(
                 .state()
                 .composition()
                 .is_some_and(|composition| composition.revision() == AbiRevision::V2)
-                && candidate_runtime_fault(&fault) =>
+                && v2_runtime_fault(&fault) =>
         {
             instance.state().failure().cloned().map_or_else(
                 || CompositionRefusal::Program(runtime_failure(program)),
@@ -1243,7 +1249,7 @@ fn entry_refusal(
                     .state()
                     .failure()
                     .cloned()
-                    .unwrap_or_else(|| unreachable!("guarded candidate failure")),
+                    .unwrap_or_else(|| unreachable!("guarded ABI-v2 failure")),
             )
         }
         EntrypointRefusal::Resource(refusal) => CompositionRefusal::Resource(refusal),
@@ -1262,7 +1268,7 @@ fn runtime_failure(program: ProgramId) -> ProgramFailure {
     ProgramFailure::authenticated(program, RefusalClass::RuntimeFault, RefusalReason::empty())
 }
 
-fn candidate_runtime_fault(fault: &ExecutionFault) -> bool {
+fn v2_runtime_fault(fault: &ExecutionFault) -> bool {
     !matches!(
         fault,
         ExecutionFault::EngineFault { .. }

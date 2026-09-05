@@ -67,16 +67,48 @@ Replay is first-class: a recorded execution can be replayed and any divergence r
 
 ## Building and deploying
 
+ABI 2 is the current frozen guest ABI. ABI 1 remains supported for legacy programs;
+ProgramSpend and BalanceView grants require ABI 2.
+
+**Funding prerequisite:** Ordinary genesis starts with zero balances. Program calls require an authenticated custody-funded actor with the required fee asset. Follow the [custody profile and real-deposit workflow](../../../../docs/wiki/Custody.md#reproducible-local-funding), using the genesis/fee asset, and verify the funding receipt before spending. A custody profile does not preallocate balances; do not substitute prefunding or state injection. Local funding qualification does not establish production finality.
+
+**Escrow account prerequisite:** After deployment and before `OPEN`, register the escrow's derived value account through a real Programs account-registration activity (module 9, ordinal 6). Submit the canonical signed protocol-3 activity to authenticated `POST /v1/activities` as `application/octet-stream`, with its `Idempotency-Key`, and verify the receipt before calling `OPEN`. The payload is `program_id(32) ‖ "LXPA1"(5) ‖ asset_id(32) ‖ seed_length(u32 big-endian) ‖ seed`: exactly `73 + seed_length` bytes, with seed length at most 128. Use the same program, asset and seed as the escrow call, signed by an authorized registration principal. Deployment does not automatically register this account; there is no dedicated registration CLI command.
+
 ```
 layerx program build --manifest-path ./Cargo.toml
-layerx program deploy ./target/program.wasm --idempotency-key <key> --upgrade-authority <id> --source-uri <uri>
+layerx program deploy ./target/program.wasm --program-id <hex32> --upgrade-authority <hex32> --interface ./interface.bin --idempotency-key <hex32> --account-sequence <n> --not-before-ms <start> --expires-at-ms <end> --previous-state-root <verified-hex32>
+layerx program upgrade ./target/program.wasm --program-id <hex32> --old-hash <hex32> --migration-hook ./migration.bin --idempotency-key <hex32> --account-sequence <n> --not-before-ms <start> --expires-at-ms <end> --previous-state-root <verified-hex32>
+layerx program wind-down route --program-id <hex32> --account <hex32> --asset <hex32> --destination <hex32> --seed <hex> --idempotency-key <hex32> --account-sequence <n> --not-before-ms <start> --expires-at-ms <end> --previous-state-root <verified-hex32>
+layerx program wind-down deprecate --program-id <hex32> --exit-program <hex32> --deadline-batch <batch> --idempotency-key <hex32> --account-sequence <n> --not-before-ms <start> --expires-at-ms <end> --previous-state-root <verified-hex32>
+layerx program wind-down tombstone --program-id <hex32> --idempotency-key <hex32> --account-sequence <n> --not-before-ms <start> --expires-at-ms <end> --previous-state-root <verified-hex32>
+layerx program wind-down exit --program-id <hex32> --account <hex32> --idempotency-key <hex32> --account-sequence <n> --not-before-ms <start> --expires-at-ms <end> --previous-state-root <verified-hex32>
+layerx program call <hex32> --entrypoint layerx_call --abi-version 2 --calldata <hex> --fuel <units> --fee-limit <units> --idempotency-key <hex32> --account-sequence <n> --not-before-ms <start> --expires-at-ms <end>
+layerx program simulate <hex32> --entrypoint layerx_call --abi-version 2 --calldata <hex> --fuel <units> --fee-limit <units> --idempotency-key <hex32> --account-sequence <n> --not-before-ms <start> --expires-at-ms <end>
 layerx program registry get <program-id>
-layerx program registry verify-source <program-id> --source-uri <uri> --source-digest <hex> --idempotency-key <key>
 ```
 
 `build` compiles to WASM and enforces the deterministic runtime policy locally, before anything is submitted - so a policy violation is a local failure, not a rejected deployment.
 
-`deploy` validates the artifact and submits it for receipt-backed deployment. It takes an idempotency key, because deploying is a money-adjacent state change and deploying twice by accident is not acceptable.
+`deploy`, `upgrade`, `wind-down`, `call`, and `simulate` construct and sign canonical protocol-3 activities locally, then send their exact bytes as `application/octet-stream`. Select the local signing key with `--key`, or use the configured default. The environment must have a pinned sequencer trust anchor. Idempotency keys and program identifiers are 32-byte hex values. Use a distinct key and the current account sequence for each mutation; validity intervals must be nonempty and at most 300000 milliseconds.
+
+Deployment and upgrade read `abi_version` (or the existing `abi` spelling) from the nearest enclosing `LayerX.toml` and `layerx-program.json`, defaulting to ABI 2. Conflicting declarations are refused. Omitting `--upgrade-authority` makes deployment immutable. The program identifier is chosen by the caller and signed into the payload, not invented by the server.
+
+`--interface` takes canonical binary interface encoding, **not** `interface.kvx` source. Its digest-bound code hash and ABI must match the artifact. Upgrade preserves the existing interface unless supplied a replacement or `--clear-interface`; clearing and replacing are mutually exclusive. The optional migration-hook file contains the exact hook bytes. Route seeds are hex, at most 128 bytes; the default is empty.
+
+Lifecycle verification requires `--previous-state-root` from independently verified committed state. The CLI checks the canonical receipt signature, protocol/module version, prior root, and exact signed activity ID. Lifecycle receipts carry state operation 0; the activity ID binds the deploy, upgrade, or wind-down ordinal. Refusals remain refusals. An unknown submission result retains signed bytes for reconciliation, rather than claiming completion. Calls additionally verify terminal and call-graph commitments against receipt evidence.
+
+Call and simulation verification require an authenticated current program head; unsigned registry metadata is not a substitute. When a call acknowledgement contains only its activity ID and receipt, the CLI retrieves execution material from `/v1/programs/activities/{activity_id}`, binds it to that same receipt, and then verifies the terminal commitments. Program GET requests carry the bounded identity and verification-level selector required by the emulator.
+
+Calls accept repeated `--capability` grants using the native capability set:
+
+- `storage-read`, `storage-write`, `shared-storage-read`, `shared-storage-write`, `emit-event`
+- `call:<program-hex32>`
+- `transfer402:<asset-hex32>:<to-hex32>:<maximum-u128>`
+- `receipt-read:<receipt-digest-hex32>`
+- `program-spend:<owner-program-hex32>:<seed-hex>:<source-account-hex32>:<asset-hex32>:<to-hex32>:<maximum-u128>`
+- `balance-view:<account-hex32>:<asset-hex32>:<receipt-digest-hex32>`
+
+Unscoped legacy `transfer` and `compose` grants are refused. `--access-declaration` accepts canonical declaration hex; omission encodes an explicit absence marker, not an empty access set. Resource ceilings are configurable with `--memory-bytes`, `--storage-read-bytes`, `--storage-write-bytes`, `--output-values`, `--output-bytes`, `--table-elements`, and `--response-capacity`. Registry listing is not a production route and has no CLI command.
 
 ## Interpret or compile
 
@@ -97,7 +129,7 @@ thresholds, not observed results. Protocol fee is the economic comparison an
 agent uses; wall-clock time is an operator performance signal and is never
 presented as protocol price. `make programs-bench` builds the
 real interpreter and its real compiled ABI-v2 equivalents, executes both
-through the production candidate executor, reports median integer nanoseconds
+through the production ABI-v2 executor, reports median integer nanoseconds
 and every metered resource and fee class, and refuses the release if either
 aggregate ratio exceeds its gate. Human qualification records observed results
 and the fixed hardware and software conditions; this guide does not invent

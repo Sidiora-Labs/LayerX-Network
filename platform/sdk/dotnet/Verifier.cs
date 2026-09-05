@@ -378,6 +378,17 @@ public static class LocalVerifier
         return ValueTask.FromResult(new ReceiptVerification("sequencer-signed", receipt, canonicalReceipt.ToArray(), receiptDigest));
     }
 
+    public static ReceiptVerification VerifyProgramLifecycleReceipt(byte[] canonical, byte[] expectedActivity, byte[] sequencer)
+    {
+        var decoded = DecodeProtocolReceipt(canonical); var receipt = decoded.Receipt;
+        if (receipt.ProtocolVersion != 3 || receipt.ModuleId != 9 || receipt.ModuleVersion != 4 || receipt.Operation != 0 ||
+            receipt.ProgramOutcome is not null || AllZero(Exact(expectedActivity, 32)) || !Equal(receipt.ActivityId, expectedActivity) ||
+            AllZero(Exact(sequencer, 32))) throw VerificationFailure(ReceiptCheck.ReceiptShape);
+        var digest = Digest(ReceiptDomain, decoded.UnsignedBytes);
+        if (!VerifyEd25519(sequencer, receipt.SequencerSignature, digest)) throw VerificationFailure(ReceiptCheck.SequencerSignature);
+        return new ReceiptVerification("sequencer-signed", receipt, canonical.ToArray(), digest);
+    }
+
     public static async ValueTask<ReceiptVerification> VerifyReceiptAsync(ReadOnlyMemory<byte> canonicalReceipt, AuthorizedReceiptBatch authorized, CancellationToken cancellationToken = default, ushort protocolVersion = 2)
     {
         var verified = await VerifyReceiptOutcomeAsync(canonicalReceipt, authorized, cancellationToken, protocolVersion).ConfigureAwait(false);

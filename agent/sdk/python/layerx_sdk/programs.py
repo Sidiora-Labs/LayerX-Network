@@ -7,6 +7,7 @@ from time import time_ns
 from typing import Callable, Literal, Mapping, cast
 
 from .native_program_call import NativeProgramCall, encode_native_program_call
+from .program_lifecycle import NativeProgramLifecycleRequest
 from .production import IdempotencyKey, PlatformSdkError, ProductionClient, SdkErrorCode
 from .program_wire import (
     DecodedSignedProgramCall,
@@ -14,7 +15,7 @@ from .program_wire import (
     decode_and_verify_program_terminal,
     decode_signed_program_call,
 )
-from .verifier import AuthorizedReceiptBatch, LocalSignatureVerifier, ReceiptVerification, verify_receipt_outcome
+from .verifier import AuthorizedReceiptBatch, LocalSignatureVerifier, ReceiptVerification, verify_receipt_outcome, verify_program_lifecycle_receipt, programs_module_version_for_protocol
 
 ProgramCapability = Literal["storage_read", "storage_write", "transfer", "emit_event", "compose"]
 _CAPABILITY_ORDER: Mapping[str, int] = {"storage_read": 1, "storage_write": 2, "transfer": 3, "emit_event": 4, "compose": 5}
@@ -173,7 +174,7 @@ def verify_program_receipt(
     module_version = execution.get("module_version")
     guest_abi = execution.get("guest_abi_version")
     result_code = execution.get("result_code")
-    if not isinstance(activity_id, str) or not _hex32(activity_id) or not isinstance(module_version, int) or module_version not in ((4,) if trust.protocol_version == 3 else (1, 2, 3)) or guest_abi not in (1, 2) or not isinstance(result_code, int):
+    if not isinstance(activity_id, str) or not _hex32(activity_id) or not programs_module_version_for_protocol(trust.protocol_version, module_version) or type(guest_abi) is not int or guest_abi not in (1, 2) or type(result_code) is not int:
         raise ValueError("invalid program execution evidence")
     receipt = _evidence_bytes(execution, "receipt")
     terminal_payload = _evidence_bytes(execution, "terminal_payload")
@@ -192,7 +193,76 @@ def verify_program_receipt(
     return VerifiedProgramReceipt(verification, terminal_payload, call_graph)
 
 
+def verify_lifecycle_recovery(result: object, expected_activity: str, sequencer: bytes, signatures: LocalSignatureVerifier) -> ReceiptVerification:
+    if not isinstance(result, dict) or set(result) != {"activity_id", "receipt"} or result.get("activity_id") != expected_activity:
+        raise ValueError("lifecycle recovery binding")
+    receipt = result["receipt"]
+    if not isinstance(receipt, str) or not 0 < len(receipt) <= 2_097_152 or len(receipt) % 2 or any(character not in "0123456789abcdef" for character in receipt):
+        raise ValueError("lifecycle recovery receipt")
+    return verify_program_lifecycle_receipt(bytes.fromhex(receipt), bytes.fromhex(expected_activity), sequencer, signatures)
+
+
+def _unknown_lifecycle_submission(binding: DecodedSignedProgramCall) -> Mapping[str, str | int]:
+    return {"state": "unknown", "activity_id": binding.activity_id, "idempotency_key": binding.idempotency_key, "retained_signed_activity": binding.canonical_bytes.hex()}
+
+
+def resolve_lifecycle_response(result: object, binding: DecodedSignedProgramCall, sequencer: bytes, signatures: LocalSignatureVerifier) -> Mapping[str, str | int]:
+    try:
+        return _verify_lifecycle_submission(result, binding, sequencer, signatures)
+    except (ValueError, TypeError, PlatformSdkError):
+        return _unknown_lifecycle_submission(binding)
+
+
+def resolve_lifecycle_failure(error: PlatformSdkError, binding: DecodedSignedProgramCall) -> Mapping[str, str | int]:
+    if error.code in (SdkErrorCode.UNKNOWN_OUTCOME, SdkErrorCode.DECODE_FAILURE, SdkErrorCode.VERIFICATION_FAILURE):
+        return _unknown_lifecycle_submission(binding)
+    raise error
+
+
+def _verify_lifecycle_submission(result: object, binding: DecodedSignedProgramCall, sequencer: bytes, signatures: LocalSignatureVerifier) -> Mapping[str, str | int]:
+    if isinstance(result, dict) and result.get("state") == "unknown":
+        if set(result) != {"state", "activity_id", "retry", "retry_after_seconds"} or result.get("activity_id") != binding.activity_id or result.get("retry") != "after" or type(result.get("retry_after_seconds")) is not int or result.get("retry_after_seconds") != 2:
+            raise ValueError("unknown lifecycle binding")
+        return _unknown_lifecycle_submission(binding)
+    if not isinstance(result, dict) or set(result) != {"state", "activity_id", "receipt", "terminal_payload", "call_graph"} or result.get("activity_id") != binding.activity_id or result.get("terminal_payload") != "" or result.get("call_graph") != "":
+        raise ValueError("lifecycle acknowledgement binding")
+    receipt = result["receipt"]
+    if not isinstance(receipt, str) or not 0 < len(receipt) <= 2_097_152 or len(receipt) % 2 or any(character not in "0123456789abcdef" for character in receipt):
+        raise ValueError("lifecycle receipt")
+    verified = verify_program_lifecycle_receipt(bytes.fromhex(receipt), bytes.fromhex(binding.activity_id), sequencer, signatures)
+    if result["state"] != ("executed" if verified.receipt.result_code == 0 else "refused"):
+        raise ValueError("lifecycle result binding")
+    return {"state": "acknowledged", "activity_id": binding.activity_id, "receipt": receipt, "result_code": verified.receipt.result_code}
+
+
 class ProgramOperations:
+    def lifecycle_receipt(self, request: NativeProgramLifecycleRequest) -> ReceiptVerification:
+        if self._trust.protocol_version != 3:
+            raise ValueError("lifecycle scope")
+        binding = request.bind()
+        result = self._client.agent("program.receipt", {"idempotency_key": binding.idempotency_key, "expected_activity_id": binding.activity_id, "requested_verification_level": "sequencer-signed"})
+        return verify_lifecycle_recovery(result, binding.activity_id, self._trust.sequencer_public_key, self._signatures)
+
+    def deploy(self, request: NativeProgramLifecycleRequest, key: IdempotencyKey) -> Mapping[str, str | int]:
+        return self._lifecycle(request, key, 1, "program.deploy")
+
+    def upgrade(self, request: NativeProgramLifecycleRequest, key: IdempotencyKey) -> Mapping[str, str | int]:
+        return self._lifecycle(request, key, 2, "program.upgrade")
+
+    def wind_down(self, request: NativeProgramLifecycleRequest, key: IdempotencyKey) -> Mapping[str, str | int]:
+        return self._lifecycle(request, key, 7, "program.wind-down")
+
+    def _lifecycle(self, request: NativeProgramLifecycleRequest, key: IdempotencyKey, ordinal: int, operation: Literal["program.deploy", "program.upgrade", "program.wind-down"]) -> Mapping[str, str | int]:
+        if request.ordinal != ordinal or self._trust.protocol_version != 3:
+            raise ValueError("lifecycle scope")
+        binding = request.bind(str(key))
+        retained = request.signed_activity.hex()
+        try:
+            result = self._client.agent(operation, {"signed_activity": retained}, idempotency_key=key)
+        except PlatformSdkError as error:
+            return resolve_lifecycle_failure(error, binding)
+        return resolve_lifecycle_response(result, binding, self._trust.sequencer_public_key, self._signatures)
+
     def __init__(self, client: ProductionClient, signatures: LocalSignatureVerifier, trust: ProgramTrustContext) -> None:
         self._client = client
         self._signatures = signatures

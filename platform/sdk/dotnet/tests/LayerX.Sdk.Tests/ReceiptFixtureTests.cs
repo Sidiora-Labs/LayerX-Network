@@ -7,6 +7,52 @@ namespace LayerX.Sdk.Tests;
 
 public sealed class ReceiptFixtureTests
 {
+    [Fact]
+    public async Task NativeLifecycleCFixtures()
+    {
+        using var token = new AccessToken(System.Text.Encoding.ASCII.GetBytes("fixture-bearer"));
+        var transport = new AgentHttpTransport(new Uri("http://127.0.0.1:8080"), accessToken: token);
+        var build = typeof(AgentHttpTransport).GetMethod("ProgramRequest", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+        foreach (var name in new[] { "deploy", "upgrade", "wind-down-route", "wind-down-deprecate", "wind-down-tombstone", "wind-down-exit" })
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(FixturePath("native-program-" + name + "-v3.json")));
+            var fixture = document.RootElement; Assert.Equal(3, fixture.GetProperty("protocol_version").GetInt32()); Assert.Equal(9, fixture.GetProperty("module").GetInt32());
+            var ordinal = fixture.GetProperty("ordinal").GetInt32(); var payload = HexField(fixture, "payload_hex"); var signed = HexField(fixture, "signed_activity_hex");
+            INativeProgramLifecycle Decode(byte[] bytes) => ordinal switch { 1 => NativeProgramDeploy.Decode(bytes), 2 => NativeProgramUpgrade.Decode(bytes), 7 => NativeProgramWindDown.Decode(bytes), _ => throw new ArgumentException() };
+            var value = Decode(payload); Assert.Equal(payload, value.Encode()); var request = new NativeProgramLifecycleRequest(value, signed);
+            Assert.Equal(HexField(fixture, "activity_id_hex"), request.ActivityId); Assert.Equal(fixture.GetProperty("idempotency_key_hex").GetString(), request.IdempotencyKey);
+            var operation = ordinal switch { 1 => "program.deploy", 2 => "program.upgrade", _ => "program.wind-down" };
+            var path = ordinal switch { 1 => "/v1/programs/deploy", 2 => "/v1/programs/upgrade", _ => "/v1/programs/wind-down" };
+            var call = new ProgramTransportCall(operation, JsonValue.Object(new Dictionary<string, JsonValue>
+            {
+                ["payload"] = JsonValue.String(Convert.ToHexString(payload).ToLowerInvariant()),
+                ["signed_activity"] = JsonValue.String(Convert.ToHexString(signed).ToLowerInvariant())
+            }), new Dictionary<string, string>(), new IdempotencyKey(request.IdempotencyKey));
+            using var http = (HttpRequestMessage)build.Invoke(transport, new object[] { call })!;
+            Assert.Equal(path, http.RequestUri!.AbsolutePath); Assert.Equal(HttpMethod.Post, http.Method);
+            Assert.Equal("application/octet-stream", http.Content!.Headers.ContentType!.MediaType); Assert.Equal(signed, await http.Content.ReadAsByteArrayAsync());
+            Assert.Equal(request.IdempotencyKey, Assert.Single(http.Headers.GetValues("Idempotency-Key"))); Assert.Equal("Bearer fixture-bearer", http.Headers.Authorization!.ToString());
+            Assert.Throws<System.Reflection.TargetInvocationException>(() => build.Invoke(transport, new object[] { call with { IdempotencyKey = null } }));
+            for (var length = 0; length < payload.Length; length++) Assert.Throws<ArgumentException>(() => Decode(payload[..length]));
+            Assert.Throws<ArgumentException>(() => Decode([.. payload, 0]));
+            var changedPayload = payload.ToArray(); changedPayload[0] ^= 1;
+            Assert.Throws<ArgumentException>(() => new NativeProgramLifecycleRequest(Decode(changedPayload), signed));
+            foreach (var offset in new[] { 1, 7, 17 })
+            {
+                var changed = signed.ToArray(); changed[offset] ^= 1;
+                Assert.Throws<ArgumentException>(() => new NativeProgramLifecycleRequest(value, changed));
+            }
+            for (var length = 0; length < signed.Length; length++) Assert.Throws<ArgumentException>(() => new NativeProgramLifecycleRequest(value, signed[..length]));
+            if (ordinal is 1 or 2)
+            {
+                foreach (var offset in new[] { 35, 68, payload.Length - 1 })
+                {
+                    var changed = payload.ToArray(); changed[offset] ^= 1; Assert.Throws<ArgumentException>(() => Decode(changed));
+                }
+            }
+        }
+    }
+
     private const string ProgramOutcomeV3 = "505247330100000000000100010000000700000001000000000000000b000000000000000c000000000000000d000000000000000e00000001000000000000000f0000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000020000000000000003000000000000000400000000000000050000000000000006000000000000000700000020000000000000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000201111111111111111111111111111111111111111111111111111111111111111000000202222222222222222222222222222222222222222222222222222222222222222000000200000000000000000000000000000000000000000000000000000000000000000";
 
     [Fact]
@@ -31,6 +77,7 @@ public sealed class ReceiptFixtureTests
             var fixture = LoadFixture(name);
             await Assert.ThrowsAsync<PlatformSdkException>(async () => await LocalVerifier.VerifyReceiptAsync(fixture.CanonicalReceipt, fixture.Batch));
             var verified = await LocalVerifier.VerifyReceiptAsync(fixture.CanonicalReceipt, fixture.Batch, protocolVersion: 3);
+            Assert.Throws<PlatformSdkException>(() => LocalVerifier.VerifyProgramLifecycleReceipt(fixture.CanonicalReceipt, verified.Receipt.ActivityId, fixture.Batch.SequencerPublicKey));
             Assert.Equal((ushort)3, verified.Receipt.ProtocolVersion);
             Assert.Equal(HexField(fixture.Expected, "receipt_digest_hex"), verified.ReceiptDigest);
             var corrupted = (byte[])fixture.CanonicalReceipt.Clone(); corrupted[^1] ^= 1;

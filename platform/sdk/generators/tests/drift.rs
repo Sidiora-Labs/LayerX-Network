@@ -31,6 +31,11 @@ fn repo_fixture(label: &str) -> PathBuf {
     let root = directory(label);
     place(
         &root,
+        "platform/sdk/generators/generate_lifecycle.py",
+        include_str!("../generate_lifecycle.py"),
+    );
+    place(
+        &root,
         "platform/sdk/generators/receipt.kvx",
         "[receipt]\nprogram_outcome = \"optional\"\nprograms_module_id = 9\nprogram_outcome_tags = [\"50524731\", \"50524732\", \"50524733\"]\nrequired_nonzero = [\"global-sequence\", \"module-id\", \"module-version\", \"timestamp\", \"activity-id\", \"resulting-state-root\"]\nfailure_checks = [\"decode\", \"canonical-encoding\", \"receipt-shape\", \"missing-signature\", \"protocol-version\", \"result-code\", \"operation\", \"activity-id\", \"global-sequence\", \"module-id\", \"module-version\", \"timestamp\", \"batch-id\", \"asset\", \"previous-state-root\", \"resulting-state-root\", \"debit-balance\", \"credit-balance\", \"program-outcome\", \"sequencer-signature\"]\n",
     );
@@ -164,7 +169,30 @@ fn repo_fixture(label: &str) -> PathBuf {
         "platform/sdk/conformance/operations.json",
         "{\"schema\":1,\"operations\":[]}\n",
     );
+    place(
+        &root,
+        "platform/sdk/generators/receipt.kvx",
+        include_str!("../receipt.kvx"),
+    );
     root
+}
+
+#[test]
+fn lifecycle_sources_participate_in_normal_drift_check() {
+    let root = repo_fixture("lifecycle-drift");
+    let lock = lock_path(&root);
+    write_lock(&root, &lock).unwrap_or_else(|error| panic!("generate lifecycle: {error}"));
+    check(&root, &lock).unwrap_or_else(|error| panic!("initial lifecycle check: {error}"));
+    place(
+        &root,
+        "platform/sdk/go/program_lifecycle_generated.go",
+        "package layerx\n",
+    );
+    let error = check(&root, &lock)
+        .err()
+        .unwrap_or_else(|| panic!("lifecycle drift must fail the normal gate"));
+    assert!(error.contains("Lifecycle SDK drift"), "{error}");
+    fs::remove_dir_all(root).unwrap_or_else(|error| panic!("remove lifecycle fixture: {error}"));
 }
 
 fn lock_path(root: &Path) -> PathBuf {

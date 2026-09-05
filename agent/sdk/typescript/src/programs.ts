@@ -1,6 +1,7 @@
 import { encodeNativeProgramCall, type NativeProgramCall } from "./native-program-call.js";
+import { NativeProgramLifecycleRequest, type ProgramLifecycleSubmission } from "./program-lifecycle.js";
 import type { AuthorizedReceiptBatch, ReceiptVerification, SelectableProtocolVersion } from "./verifier.js";
-import { DEFAULT_PROTOCOL_VERSION, isSelectableProtocolVersion, programsModuleVersionForProtocol,
+import { DEFAULT_PROTOCOL_VERSION, isSelectableProtocolVersion, programsModuleVersionForProtocol, verifyProgramLifecycleReceipt,
   supportedProgramGuestAbi, verifyReceiptOutcome } from "./verifier.js";
 import { PlatformSdkError, type IdempotencyKey, type ProductionClient } from "./production.js";
 import { assertFreshSimulationObservation, decodeAndVerifyProgramTerminal, decodeSignedProgramCall,
@@ -144,6 +145,29 @@ export async function verifyProgramReceipt(
 }
 
 export class ProgramOperations {
+  public async lifecycleReceipt(request: NativeProgramLifecycleRequest): Promise<ReceiptVerification> {
+    if (this.trust.protocolVersion() !== 3) throw new TypeError("lifecycle scope");
+    const binding = await request.bind();
+    const result = await this.client.agent<unknown, unknown>("program.receipt", {
+      idempotency_key: binding.idempotencyKey, expected_activity_id: binding.activityId, requested_verification_level: "sequencer-signed",
+    });
+    return verifyLifecycleRecovery(result, binding.activityId, this.trust.sequencerPublicKey());
+  }
+  public deploy(request: NativeProgramLifecycleRequest, key: IdempotencyKey): Promise<ProgramLifecycleSubmission> { return this.lifecycle(request, key, 1, "program.deploy"); }
+  public upgrade(request: NativeProgramLifecycleRequest, key: IdempotencyKey): Promise<ProgramLifecycleSubmission> { return this.lifecycle(request, key, 2, "program.upgrade"); }
+  public windDown(request: NativeProgramLifecycleRequest, key: IdempotencyKey): Promise<ProgramLifecycleSubmission> { return this.lifecycle(request, key, 7, "program.wind-down"); }
+
+  private async lifecycle(request: NativeProgramLifecycleRequest, key: IdempotencyKey, ordinal: 1 | 2 | 7, operation: "program.deploy" | "program.upgrade" | "program.wind-down"): Promise<ProgramLifecycleSubmission> {
+    if (request.ordinal !== ordinal || this.trust.protocolVersion() !== 3) throw new TypeError("lifecycle scope");
+    const binding = await request.bind(String(key));
+    const retained = hex(binding.canonicalBytes);
+    let result: unknown;
+    try { result = await this.client.agent(operation, { signed_activity: retained }, { idempotencyKey: key }); }
+    catch (error) {
+      return resolveLifecycleFailure(error, binding);
+    }
+    return resolveLifecycleResponse(result, binding, this.trust.sequencerPublicKey());
+  }
   readonly #heads = new Map<string, ProgramHeadObservation>();
 
   public constructor(private readonly client: ProductionClient, private readonly trust: ProgramTrustContext) {}
@@ -231,6 +255,42 @@ export class ProgramOperations {
   }
 }
 
+function unknownLifecycleSubmission(binding: DecodedSignedProgramCall): ProgramLifecycleSubmission {
+  return Object.freeze({ state: "unknown", activity_id: binding.activityId, idempotency_key: binding.idempotencyKey, retained_signed_activity: hex(binding.canonicalBytes) });
+}
+
+export function resolveLifecycleFailure(error: unknown, binding: DecodedSignedProgramCall): ProgramLifecycleSubmission {
+  if (error instanceof PlatformSdkError && ["unknown-outcome", "decode-failure", "verification-failure"].includes(error.code)) return unknownLifecycleSubmission(binding);
+  throw error;
+}
+
+export async function resolveLifecycleResponse(result: unknown, binding: DecodedSignedProgramCall, sequencer: Uint8Array): Promise<ProgramLifecycleSubmission> {
+  try {
+    const value = object(result);
+    if (value.state === "unknown") {
+      exactKeys(value, ["state", "activity_id", "retry", "retry_after_seconds"]);
+      if (value.activity_id !== binding.activityId || value.retry !== "after" || value.retry_after_seconds !== 2) throw new TypeError("unknown lifecycle binding");
+      return unknownLifecycleSubmission(binding);
+    }
+    exactKeys(value, ["state", "activity_id", "receipt", "terminal_payload", "call_graph"]);
+    if (value.terminal_payload !== "" || value.call_graph !== "") throw new TypeError("unexpected lifecycle artifacts");
+    if (value.activity_id !== binding.activityId || typeof value.receipt !== "string" || !/^(?:[0-9a-f]{2})+$/u.test(value.receipt) || value.receipt.length > 2_097_152) throw new TypeError("lifecycle receipt binding");
+    const verified = await verifyProgramLifecycleReceipt(decodeHex(value.receipt, 1_048_576), decodeHex(binding.activityId, 32), sequencer);
+    if (value.state !== (verified.receipt.resultCode === 0 ? "executed" : "refused")) throw new TypeError("lifecycle result binding");
+    return Object.freeze({ state: "acknowledged", activity_id: binding.activityId, receipt: value.receipt, result_code: verified.receipt.resultCode });
+  } catch {
+    return unknownLifecycleSubmission(binding);
+  }
+}
+
+export async function verifyLifecycleRecovery(result: unknown, expectedActivity: string, sequencer: Uint8Array): Promise<ReceiptVerification> {
+  if (result === null || typeof result !== "object" || Array.isArray(result)) throw new TypeError("lifecycle recovery response");
+  const value = result as Readonly<Record<string, unknown>>;
+  exactKeys(value, ["activity_id", "receipt"]);
+  if (value.activity_id !== expectedActivity || typeof value.receipt !== "string" || !/^(?:[0-9a-f]{2})+$/u.test(value.receipt) || value.receipt.length > 2_097_152) throw new TypeError("lifecycle recovery binding");
+  return verifyProgramLifecycleReceipt(decodeHex(value.receipt, 1_048_576), decodeHex(expectedActivity, 32), sequencer);
+}
+
 interface SubmissionExpectation { readonly programId?: string; readonly activityId?: string; readonly idempotencyKey?: string; readonly retainedSignedActivity?: string }
 interface ProgramHeadObservation { readonly stateRoot: string; readonly sequence: bigint; readonly observedAt: bigint; readonly validThrough: bigint }
 
@@ -281,6 +341,12 @@ function simulationDocument(value: unknown, expectedProgramId: string, expectedA
   return Object.freeze({ committed: false, execution, simulation_evidence: evidence });
 }
 
+export function parseProgramExecutionDocument(value: unknown): ProgramExecutionDocument {
+  const candidate = object(value);
+  if (candidate.state !== "executed" && candidate.state !== "refused" && candidate.state !== "simulated") throw new TypeError("invalid program execution state");
+  return executionDocument(candidate, candidate.state);
+}
+
 function executionDocument(candidate: Readonly<Record<string, unknown>>, state: "executed" | "refused" | "simulated"): ProgramExecutionDocument {
   if (candidate.state !== state) throw new TypeError("invalid program execution state");
   exactKeys(candidate, ["state", "activity_id", "program_id", "guest_abi_version", "module_version", "batch_id",
@@ -295,7 +361,7 @@ function executionDocument(candidate: Readonly<Record<string, unknown>>, state: 
     activity_id: requiredHex32(candidate, "activity_id"),
     program_id: requiredHex32(candidate, "program_id"),
     guest_abi_version: exactInteger(candidate.guest_abi_version, 1, 2),
-    module_version: exactInteger(candidate.module_version, 1, 3),
+    module_version: exactInteger(candidate.module_version, 1, 4),
     batch_id: requiredHex32(candidate, "batch_id"),
     global_sequence: decimal(candidate.global_sequence),
     result_code: exactInteger(candidate.result_code, -2147483648, 2147483647),

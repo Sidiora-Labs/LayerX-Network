@@ -89,6 +89,104 @@ pub struct HttpProgramTransport {
 }
 
 impl HttpProgramTransport {
+    fn submit_lifecycle(
+        &self,
+        request: &crate::program_lifecycle::NativeProgramLifecycleRequest,
+        key: [u8; 32],
+        ordinal: u16,
+        operation: &'static str,
+        route: &str,
+    ) -> Result<crate::program_lifecycle::ProgramLifecycleSubmission, ProgramOperationError> {
+        if request.ordinal() != ordinal || request.bound_idempotency_key() != key {
+            return Err(ProgramOperationError::IdentityMismatch);
+        }
+        self.endpoint(route)?;
+        if let Some(credential) = &self.credential {
+            let _ = credential.authorization()?;
+        }
+        let attempt = self
+            .dispatch(
+                operation,
+                Method::Post,
+                route,
+                &json!({"signed_activity": hex(request.signed_activity())}),
+                Some(key),
+            )
+            .and_then(|value| {
+                Self::decode_lifecycle_submission(
+                    &value,
+                    request,
+                    self.trusted_sequencer_public_key,
+                )
+            });
+        resolve_lifecycle_submission(request, attempt)
+    }
+
+    fn decode_lifecycle_submission(
+        value: &Value,
+        request: &crate::program_lifecycle::NativeProgramLifecycleRequest,
+        sequencer: [u8; 32],
+    ) -> Result<crate::program_lifecycle::ProgramLifecycleSubmission, ProgramOperationError> {
+        use crate::program_lifecycle::ProgramLifecycleSubmission;
+        let value = object(value)?;
+        if value.get("state").and_then(Value::as_str) == Some("unknown") {
+            if !exact_fields(
+                value,
+                &["state", "activity_id", "retry", "retry_after_seconds"],
+            ) || fixed(value, "activity_id")? != request.bound_activity_id()
+                || required_string(value, "retry")? != "after"
+                || value.get("retry_after_seconds").and_then(Value::as_u64) != Some(2)
+            {
+                return Err(ProgramOperationError::IdentityMismatch);
+            }
+            return Ok(ProgramLifecycleSubmission::Unknown {
+                activity_id: request.bound_activity_id(),
+                idempotency_key: request.bound_idempotency_key(),
+                retained_signed_activity: request.signed_activity().to_vec(),
+            });
+        }
+        if !exact_fields(
+            value,
+            &[
+                "state",
+                "activity_id",
+                "receipt",
+                "terminal_payload",
+                "call_graph",
+            ],
+        ) || fixed(value, "activity_id")? != request.bound_activity_id()
+            || !required_string(value, "terminal_payload")?.is_empty()
+            || !required_string(value, "call_graph")?.is_empty()
+        {
+            return Err(ProgramOperationError::IdentityMismatch);
+        }
+        let receipt = bounded_hex(value, "receipt", MAX_SIGNED_ACTIVITY_BYTES, None)?;
+        if receipt.is_empty() {
+            return Err(ProgramOperationError::Decode);
+        }
+        let verified = crate::program_lifecycle::verify_lifecycle_receipt(
+            &receipt,
+            request.bound_activity_id(),
+            sequencer,
+        )?;
+        let protocol = verified
+            .protocol()
+            .ok_or(ProgramOperationError::Verification)?;
+        if required_string(value, "state")?
+            != if protocol.result_code() == 0 {
+                "executed"
+            } else {
+                "refused"
+            }
+        {
+            return Err(ProgramOperationError::Verification);
+        }
+        Ok(ProgramLifecycleSubmission::Acknowledged {
+            activity_id: request.bound_activity_id(),
+            receipt,
+            result_code: protocol.result_code(),
+        })
+    }
     fn submit_bound(
         &self,
         request: &impl BoundProgramRequest,
@@ -186,7 +284,15 @@ impl HttpProgramTransport {
         idempotency_key: Option<[u8; 32]>,
     ) -> Result<Value, ProgramOperationError> {
         let endpoint = self.endpoint(route)?;
-        let encoded = serde_json::to_vec(body).map_err(|_| ProgramOperationError::Decode)?;
+        let encoded = match method {
+            Method::Post => bounded_hex(
+                object(body)?,
+                "signed_activity",
+                MAX_SIGNED_ACTIVITY_BYTES,
+                None,
+            )?,
+            Method::Get => serde_json::to_vec(body).map_err(|_| ProgramOperationError::Decode)?,
+        };
         if encoded.is_empty() || encoded.len() > MAX_HTTP_REQUEST_BYTES {
             return Err(ProgramOperationError::Bounds);
         }
@@ -219,7 +325,7 @@ impl HttpProgramTransport {
                     .agent
                     .post(endpoint.as_str())
                     .header("Accept", "application/json")
-                    .header("Content-Type", "application/json")
+                    .header("Content-Type", "application/octet-stream")
                     .header(
                         "User-Agent",
                         concat!("layerx-rust/", env!("CARGO_PKG_VERSION")),
@@ -239,6 +345,46 @@ impl HttpProgramTransport {
 }
 
 impl ProgramTransport for HttpProgramTransport {
+    fn lifecycle_receipt(
+        &self,
+        request: &crate::program_lifecycle::NativeProgramLifecycleRequest,
+    ) -> Result<layerx_wire::receipt::Receipt, ProgramOperationError> {
+        let key = request.bound_idempotency_key();
+        let value = self.dispatch("program.receipt", Method::Get, &format!("/v1/programs/receipts/by-idempotency/{}", hex(&key)),
+            &json!({"idempotency_key":hex(&key),"expected_activity_id":hex(&request.bound_activity_id()),"requested_verification_level":"sequencer-signed"}), None)?;
+        decode_lifecycle_recovery(
+            &value,
+            request.bound_activity_id(),
+            self.trusted_sequencer_public_key,
+        )
+    }
+    fn deploy(
+        &self,
+        request: &crate::program_lifecycle::NativeProgramLifecycleRequest,
+        key: [u8; 32],
+    ) -> Result<crate::program_lifecycle::ProgramLifecycleSubmission, ProgramOperationError> {
+        self.submit_lifecycle(request, key, 1, "program.deploy", "/v1/programs/deploy")
+    }
+    fn upgrade(
+        &self,
+        request: &crate::program_lifecycle::NativeProgramLifecycleRequest,
+        key: [u8; 32],
+    ) -> Result<crate::program_lifecycle::ProgramLifecycleSubmission, ProgramOperationError> {
+        self.submit_lifecycle(request, key, 2, "program.upgrade", "/v1/programs/upgrade")
+    }
+    fn wind_down(
+        &self,
+        request: &crate::program_lifecycle::NativeProgramLifecycleRequest,
+        key: [u8; 32],
+    ) -> Result<crate::program_lifecycle::ProgramLifecycleSubmission, ProgramOperationError> {
+        self.submit_lifecycle(
+            request,
+            key,
+            7,
+            "program.wind-down",
+            "/v1/programs/wind-down",
+        )
+    }
     fn discover(
         &self,
         program: [u8; 32],
@@ -435,6 +581,14 @@ fn decode_agent_response(
         .map_err(|_| ProgramOperationError::Decode)?;
     let document: Value =
         serde_json::from_slice(&encoded).map_err(|_| ProgramOperationError::Decode)?;
+    decode_agent_document(status, document, operation)
+}
+
+fn decode_agent_document(
+    status: u16,
+    document: Value,
+    operation: &str,
+) -> Result<Value, ProgramOperationError> {
     let envelope = object(&document)?;
     if envelope.contains_key("class") {
         if !exact_fields(
@@ -453,6 +607,29 @@ fn decode_agent_response(
             status, envelope,
         )?));
     }
+    if matches!(
+        operation,
+        "program.deploy" | "program.upgrade" | "program.wind-down"
+    ) || (operation == "program.receipt"
+        && (envelope.contains_key("result") || envelope.contains_key("error")))
+    {
+        if envelope.contains_key("error") {
+            if !(400..600).contains(&status) || !exact_fields(envelope, &["error"]) {
+                return Err(ProgramOperationError::Decode);
+            }
+            return Err(decode_boundary_error(status, object(&envelope["error"])?)?);
+        }
+        if status == 202 && envelope.get("state").and_then(Value::as_str) == Some("unknown") {
+            return Ok(document);
+        }
+        if !(200..300).contains(&status) || !exact_fields(envelope, &["result"]) {
+            return Err(ProgramOperationError::Decode);
+        }
+        return envelope
+            .get("result")
+            .cloned()
+            .ok_or(ProgramOperationError::Decode);
+    }
     if !exact_fields(envelope, &["request_id", "value", "verification_status"]) {
         return Err(ProgramOperationError::Decode);
     }
@@ -465,6 +642,83 @@ fn decode_agent_response(
         return Err(ProgramOperationError::Verification);
     }
     Ok(value.clone())
+}
+
+fn resolve_lifecycle_submission(
+    request: &crate::program_lifecycle::NativeProgramLifecycleRequest,
+    attempt: Result<crate::program_lifecycle::ProgramLifecycleSubmission, ProgramOperationError>,
+) -> Result<crate::program_lifecycle::ProgramLifecycleSubmission, ProgramOperationError> {
+    match attempt {
+        Ok(value) => Ok(value),
+        Err(
+            error @ (ProgramOperationError::Boundary {
+                status: 400..=499, ..
+            }
+            | ProgramOperationError::Authentication
+            | ProgramOperationError::InvalidEndpoint),
+        ) => Err(error),
+        Err(ProgramOperationError::Service(error))
+            if error.retriability == Retriability::Terminal =>
+        {
+            Err(ProgramOperationError::Service(error))
+        }
+        Err(_) => Ok(
+            crate::program_lifecycle::ProgramLifecycleSubmission::Unknown {
+                activity_id: request.bound_activity_id(),
+                idempotency_key: request.bound_idempotency_key(),
+                retained_signed_activity: request.signed_activity().to_vec(),
+            },
+        ),
+    }
+}
+
+fn decode_lifecycle_recovery(
+    value: &Value,
+    expected_activity: [u8; 32],
+    sequencer: [u8; 32],
+) -> Result<layerx_wire::receipt::Receipt, ProgramOperationError> {
+    let value = object(value)?;
+    if !exact_fields(value, &["activity_id", "receipt"])
+        || fixed(value, "activity_id")? != expected_activity
+    {
+        return Err(ProgramOperationError::IdentityMismatch);
+    }
+    let receipt = bounded_hex(value, "receipt", MAX_SIGNED_ACTIVITY_BYTES, None)?;
+    crate::program_lifecycle::verify_lifecycle_receipt(&receipt, expected_activity, sequencer)
+}
+
+fn decode_boundary_error(
+    status: u16,
+    error: &Map<String, Value>,
+) -> Result<ProgramOperationError, ProgramOperationError> {
+    if !(400..600).contains(&status) {
+        return Err(ProgramOperationError::Decode);
+    }
+    let code = required_string(error, "code")?;
+    if code.is_empty()
+        || code.len() > MAX_REASON_BYTES
+        || !code
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+    {
+        return Err(ProgramOperationError::Decode);
+    }
+    let retry_after_seconds = match required_string(error, "retry")? {
+        "never" if exact_fields(error, &["code", "retry"]) => None,
+        "after" if exact_fields(error, &["code", "retry", "retry_after_seconds"]) => Some(
+            error
+                .get("retry_after_seconds")
+                .and_then(Value::as_u64)
+                .filter(|seconds| *seconds > 0)
+                .ok_or(ProgramOperationError::Decode)?,
+        ),
+        _ => return Err(ProgramOperationError::Decode),
+    };
+    Ok(ProgramOperationError::Boundary {
+        status,
+        code: code.to_owned(),
+        retry_after_seconds,
+    })
 }
 
 fn decode_service_error(
@@ -1129,6 +1383,142 @@ mod source_contract {
     use serde_json::json;
 
     use super::{accepted_program_verification, decode_service_error, exact_fields, object};
+
+    #[test]
+    fn corrupt_lifecycle_boundary_responses_retain_c_signed_request() -> Result<(), String> {
+        use crate::program_lifecycle::{
+            programs_module_registry, NativeProgramLifecycleRequest, ProgramLifecycleSubmission,
+        };
+        use layerx_types::program_lifecycle::NativeProgramDeploy;
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../platform/sdk/conformance/fixtures/native-program-deploy-v3.json"
+        ))
+        .map_err(|error| error.to_string())?;
+        let fields = object(&fixture).map_err(|error| format!("{error:?}"))?;
+        let payload = super::bounded_hex(fields, "payload_hex", 524_288, None)
+            .map_err(|error| format!("{error:?}"))?;
+        let signed = super::bounded_hex(fields, "signed_activity_hex", 1_048_576, None)
+            .map_err(|error| format!("{error:?}"))?;
+        let registry = programs_module_registry().map_err(|error| format!("{error:?}"))?;
+        let request = NativeProgramLifecycleRequest::deploy(
+            &registry,
+            NativeProgramDeploy::decode(&payload).map_err(|error| format!("{error:?}"))?,
+            &signed,
+        )
+        .map_err(|error| format!("{error:?}"))?;
+        let receipt_fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../platform/sdk/conformance/fixtures/receipt-programs-positive-v3.json"
+        ))
+        .map_err(|error| error.to_string())?;
+        let mut receipt = super::bounded_hex(
+            object(&receipt_fixture).map_err(|error| format!("{error:?}"))?,
+            "canonical_receipt_hex",
+            1_048_576,
+            None,
+        )
+        .map_err(|error| format!("{error:?}"))?;
+        *receipt.last_mut().ok_or("missing receipt signature")? ^= 1;
+        let expected = ProgramLifecycleSubmission::Unknown {
+            activity_id: request.bound_activity_id(),
+            idempotency_key: request.bound_idempotency_key(),
+            retained_signed_activity: signed,
+        };
+        for document in [
+            json!({"result":{"state":"executed", "activity_id":fixture["activity_id_hex"], "receipt":super::hex(&receipt), "terminal_payload":"", "call_graph":""}}),
+            json!({"result":{"state":"refused", "activity_id":fixture["activity_id_hex"], "receipt":"00", "terminal_payload":"", "call_graph":""}}),
+            json!({"result":{},"extra":true}),
+            json!({"state":"unknown", "activity_id":"00".repeat(32), "retry":"after", "retry_after_seconds":2}),
+        ] {
+            let attempt =
+                super::decode_agent_document(200, document, "program.deploy").and_then(|value| {
+                    super::HttpProgramTransport::decode_lifecycle_submission(
+                        &value, &request, [1; 32],
+                    )
+                });
+            assert_eq!(
+                super::resolve_lifecycle_submission(&request, attempt)
+                    .map_err(|error| format!("{error:?}"))?,
+                expected
+            );
+        }
+        let malformed = serde_json::from_slice::<serde_json::Value>(b"{\"result\":")
+            .map_err(|_| super::ProgramOperationError::Decode)
+            .and_then(|value| {
+                super::HttpProgramTransport::decode_lifecycle_submission(&value, &request, [1; 32])
+            });
+        assert_eq!(
+            super::resolve_lifecycle_submission(&request, malformed)
+                .map_err(|error| format!("{error:?}"))?,
+            expected
+        );
+        let refusal = super::decode_agent_document(
+            400,
+            json!({"error":{"code":"invalid_program_payload","retry":"never"}}),
+            "program.deploy",
+        )
+        .and_then(|value| {
+            super::HttpProgramTransport::decode_lifecycle_submission(&value, &request, [1; 32])
+        });
+        assert!(matches!(
+            super::resolve_lifecycle_submission(&request, refusal),
+            Err(super::ProgramOperationError::Boundary { status: 400, .. })
+        ));
+        let transport = super::HttpProgramTransport::connect("http://127.0.0.1:1", None, [1; 32])
+            .map_err(|error| format!("{error:?}"))?;
+        assert!(matches!(
+            transport.submit_lifecycle(
+                &request,
+                [0; 32],
+                1,
+                "program.deploy",
+                "/v1/programs/deploy"
+            ),
+            Err(super::ProgramOperationError::IdentityMismatch)
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn lifecycle_recovery_requires_exact_identity_and_state_receipt() {
+        let activity = [0x41; 32];
+        let response = json!({"activity_id":super::hex(&activity),"receipt":"00"});
+        assert!(super::decode_lifecycle_recovery(&response, [0x42; 32], [1; 32]).is_err());
+        assert!(super::decode_lifecycle_recovery(&response, activity, [1; 32]).is_err());
+        let mut widened = response;
+        widened["program_id"] = json!("11".repeat(32));
+        assert!(super::decode_lifecycle_recovery(&widened, activity, [1; 32]).is_err());
+    }
+
+    #[test]
+    fn lifecycle_boundary_errors_preserve_exact_refusals(
+    ) -> Result<(), super::ProgramOperationError> {
+        let refusal = json!({"code":"invalid_program_payload","retry":"never"});
+        assert_eq!(
+            super::decode_boundary_error(400, object(&refusal)?)?,
+            super::ProgramOperationError::Boundary {
+                status: 400,
+                code: "invalid_program_payload".into(),
+                retry_after_seconds: None
+            }
+        );
+        let retry = json!({"code":"node_unavailable","retry":"after","retry_after_seconds":2});
+        assert_eq!(
+            super::decode_boundary_error(503, object(&retry)?)?,
+            super::ProgramOperationError::Boundary {
+                status: 503,
+                code: "node_unavailable".into(),
+                retry_after_seconds: Some(2)
+            }
+        );
+        for malformed in [
+            json!({"code":"invalid_program_payload","retry":"never","extra":0}),
+            json!({"code":"node_unavailable","retry":"after","retry_after_seconds":true}),
+        ] {
+            assert!(super::decode_boundary_error(400, object(&malformed)?).is_err());
+        }
+        assert!(super::decode_boundary_error(200, object(&refusal)?).is_err());
+        Ok(())
+    }
 
     #[test]
     fn programs_verification_status_matrix_is_closed() {

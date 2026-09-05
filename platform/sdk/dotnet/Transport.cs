@@ -75,15 +75,20 @@ public sealed class AgentHttpTransport : IPlatformTransport
     {
         "program.discover", "program.interface", "program.simulate",
         "program.call", "program.receipt", "program.activity",
+        "program.deploy", "program.upgrade", "program.wind-down",
     };
     private readonly Uri _baseUri;
     private readonly HttpClient _httpClient;
     private readonly LayerXKeyCredential? _credential;
+    private readonly AccessToken? _accessToken;
     private sealed record ProgramRoute(HttpMethod Method, string Path,
         IReadOnlySet<string> PathParameters, bool Idempotent);
     private static readonly IReadOnlyDictionary<string, ProgramRoute> ProgramRoutes =
         new Dictionary<string, ProgramRoute>(StringComparer.Ordinal)
         {
+            ["program.deploy"] = new(HttpMethod.Post, ProgramLifecycleRoutes.Paths["program.deploy"], new HashSet<string>(StringComparer.Ordinal), true),
+            ["program.upgrade"] = new(HttpMethod.Post, ProgramLifecycleRoutes.Paths["program.upgrade"], new HashSet<string>(StringComparer.Ordinal), true),
+            ["program.wind-down"] = new(HttpMethod.Post, ProgramLifecycleRoutes.Paths["program.wind-down"], new HashSet<string>(StringComparer.Ordinal), true),
             ["program.discover"] = new(HttpMethod.Get, "/v1/programs/registry/{program_id}",
                 new HashSet<string>(["program_id"], StringComparer.Ordinal), false),
             ["program.interface"] = new(HttpMethod.Get, "/v1/programs/registry/{program_id}/interface",
@@ -98,8 +103,10 @@ public sealed class AgentHttpTransport : IPlatformTransport
                 new HashSet<string>(["activity_id"], StringComparer.Ordinal), false),
         };
 
-    public AgentHttpTransport(Uri baseUri, HttpClient? httpClient = null, LayerXKeyCredential? credential = null)
+    public AgentHttpTransport(Uri baseUri, HttpClient? httpClient = null, LayerXKeyCredential? credential = null, AccessToken? accessToken = null)
     {
+        if (credential is not null && accessToken is not null) throw new PlatformSdkException(SdkErrorCode.InvalidArgument, RetryClass.Never);
+        _accessToken = accessToken;
         if (!baseUri.IsAbsoluteUri || !string.IsNullOrEmpty(baseUri.UserInfo) || string.IsNullOrEmpty(baseUri.Host) ||
             !string.IsNullOrEmpty(baseUri.Query) || !string.IsNullOrEmpty(baseUri.Fragment) ||
             (baseUri.Scheme != Uri.UriSchemeHttps && (baseUri.Scheme != Uri.UriSchemeHttp || !IsLoopback(baseUri.Host))))
@@ -120,7 +127,7 @@ public sealed class AgentHttpTransport : IPlatformTransport
             call.PathParameters, call.IdempotencyKey), cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task<JsonValue> SendProgramAsync(ProgramTransportCall call, CancellationToken cancellationToken = default)
+    internal HttpRequestMessage ProgramRequest(ProgramTransportCall call)
     {
         if (!ProgramRoutes.TryGetValue(call.Operation, out var route) ||
             !route.PathParameters.SetEquals(call.PathParameters.Keys)) throw Invalid();
@@ -132,7 +139,9 @@ public sealed class AgentHttpTransport : IPlatformTransport
         else if (call.IdempotencyKey is not null)
             throw Invalid();
         ValidateProgramRequest(call);
-        var encodedRequest = JsonSerializer.SerializeToUtf8Bytes(call.Request, JsonOptions);
+        var encodedRequest = route.Method == HttpMethod.Post
+            ? Convert.FromHexString(Text(ProgramMap(call.Request), "signed_activity"))
+            : JsonSerializer.SerializeToUtf8Bytes(call.Request, JsonOptions);
         if (encodedRequest.Length == 0 || encodedRequest.Length > MaximumProgramsRequestBytes) throw Invalid();
         var path = route.Path;
         foreach (var name in route.PathParameters)
@@ -144,22 +153,29 @@ public sealed class AgentHttpTransport : IPlatformTransport
             path = path.Replace("{" + name + "}", Uri.EscapeDataString(value), StringComparison.Ordinal);
         }
         var target = RootEndpoint(_baseUri, path);
-        using var request = new HttpRequestMessage(route.Method, target);
+        var request = new HttpRequestMessage(route.Method, target);
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         request.Headers.UserAgent.ParseAdd("layerx-dotnet/0.1.0");
         request.Content = new ByteArrayContent(encodedRequest);
-        request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+        request.Content.Headers.ContentType = new MediaTypeHeaderValue(route.Method == HttpMethod.Post ? "application/octet-stream" : "application/json");
         if (call.IdempotencyKey is { } idempotency)
             request.Headers.TryAddWithoutValidation("Idempotency-Key", idempotency.Value);
-        if (_credential is null) throw new PlatformSdkException(SdkErrorCode.CapabilityRefusal, RetryClass.Never);
-        _credential.Authorize(request);
+        if (_accessToken is not null) _accessToken.Authorize(request);
+        else if (_credential is not null) _credential.Authorize(request);
+        else throw new PlatformSdkException(SdkErrorCode.CapabilityRefusal, RetryClass.Never);
+        return request;
+    }
+
+    public async Task<JsonValue> SendProgramAsync(ProgramTransportCall call, CancellationToken cancellationToken = default)
+    {
+        using var request = ProgramRequest(call);
         HttpResponseMessage response;
         try
         {
             response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead,
                 cancellationToken).ConfigureAwait(false);
         }
-        catch when (call.Operation == "program.call") { throw UnknownOutcome(); }
+        catch when (call.Operation == "program.call" || ProgramLifecycleRoutes.Ordinals.ContainsKey(call.Operation)) { throw UnknownOutcome(); }
         catch (OperationCanceledException) { throw new PlatformSdkException(SdkErrorCode.Deadline, RetryClass.Safe); }
         catch { throw new PlatformSdkException(SdkErrorCode.TransportFailure, RetryClass.Safe); }
         using (response)
@@ -171,7 +187,7 @@ public sealed class AgentHttpTransport : IPlatformTransport
                 var encoded = await ReadBoundedAsync(response.Content, cancellationToken).ConfigureAwait(false);
                 return DecodeProgramEnvelope(call.Operation, (int)response.StatusCode, encoded);
             }
-            catch (PlatformSdkException error) when (call.Operation == "program.call" &&
+            catch (PlatformSdkException error) when ((call.Operation == "program.call" || ProgramLifecycleRoutes.Ordinals.ContainsKey(call.Operation)) &&
                 error.Code is SdkErrorCode.DecodeFailure or SdkErrorCode.VerificationFailure)
             {
                 throw UnknownOutcome();
@@ -185,6 +201,22 @@ public sealed class AgentHttpTransport : IPlatformTransport
         try { document = JsonSerializer.Deserialize<JsonValue>(encoded, JsonOptions); }
         catch (JsonException) { throw Decode(); }
         var envelope = ResponseMap(document ?? throw Decode());
+        if ((ProgramLifecycleRoutes.Ordinals.ContainsKey(operation) || operation == "program.receipt") && status is >= 200 and < 300 && Exact(envelope, "result"))
+            return envelope["result"];
+        if (ProgramLifecycleRoutes.Ordinals.ContainsKey(operation) && status is >= 400 and < 500 && Exact(envelope, "error"))
+        {
+            var refusal = ResponseMap(envelope["error"]); var code = Text(refusal, "code"); var retry = Text(refusal, "retry");
+            ulong? retryAfter = null;
+            if (code.Length is 0 or > 256 || !(Exact(refusal, "code", "retry") || Exact(refusal, "code", "retry", "retry_after_seconds"))) throw Decode();
+            if (retry == "after")
+            {
+                if (refusal.GetValueOrDefault("retry_after_seconds") is not JsonValue.IntegerValue seconds || seconds.Value <= 0) throw Decode();
+                if ((ulong)seconds.Value > ulong.MaxValue / 1000) throw Decode();
+                retryAfter = (ulong)seconds.Value * 1000;
+            }
+            else if (retry != "never" || !Exact(refusal, "code", "retry")) throw Decode();
+            throw new PlatformSdkException(status switch { 401 or 403 => SdkErrorCode.CapabilityRefusal, 409 => SdkErrorCode.IdempotencyConflict, 429 => SdkErrorCode.RateLimit, _ => SdkErrorCode.CoreRejection }, retry == "after" ? RetryClass.After : RetryClass.Never, retryAfterMilliseconds: retryAfter);
+        }
         if (envelope.ContainsKey("class"))
         {
             if (status is >= 200 and < 300 || !Exact(envelope,
@@ -231,18 +263,25 @@ public sealed class AgentHttpTransport : IPlatformTransport
         };
         var code = Text(envelope, "class") switch
         {
-            "TransportFailure" => SdkErrorCode.TransportFailure, "Deadline" => SdkErrorCode.Deadline,
+            "TransportFailure" => SdkErrorCode.TransportFailure,
+            "Deadline" => SdkErrorCode.Deadline,
             "ProtocolIncompatibility" => SdkErrorCode.ProtocolIncompatibility,
             "UnavailableCapability" => SdkErrorCode.UnavailableCapability,
-            "CoreRejection" => SdkErrorCode.CoreRejection, "VerificationFailure" => SdkErrorCode.VerificationFailure,
-            "PolicyRefusal" => SdkErrorCode.PolicyRefusal, "CapabilityRefusal" => SdkErrorCode.CapabilityRefusal,
-            "BudgetRefusal" => SdkErrorCode.BudgetRefusal, "RateLimit" => SdkErrorCode.RateLimit,
-            "IdempotencyConflict" => SdkErrorCode.IdempotencyConflict, "InternalFault" => SdkErrorCode.InternalFault,
+            "CoreRejection" => SdkErrorCode.CoreRejection,
+            "VerificationFailure" => SdkErrorCode.VerificationFailure,
+            "PolicyRefusal" => SdkErrorCode.PolicyRefusal,
+            "CapabilityRefusal" => SdkErrorCode.CapabilityRefusal,
+            "BudgetRefusal" => SdkErrorCode.BudgetRefusal,
+            "RateLimit" => SdkErrorCode.RateLimit,
+            "IdempotencyConflict" => SdkErrorCode.IdempotencyConflict,
+            "InternalFault" => SdkErrorCode.InternalFault,
             _ => throw Decode(requestId),
         };
         var retry = Text(envelope, "retriability") switch
         {
-            "Terminal" => RetryClass.Never, "Retriable" => RetryClass.Safe, _ => throw Decode(requestId),
+            "Terminal" => RetryClass.Never,
+            "Retriable" => RetryClass.Safe,
+            _ => throw Decode(requestId),
         };
         return new PlatformSdkException(code, retry, requestId, resultCode);
     }
@@ -250,9 +289,18 @@ public sealed class AgentHttpTransport : IPlatformTransport
     private static void ValidateProgramRequest(ProgramTransportCall call)
     {
         var value = ProgramMap(call.Request);
+        if (ProgramLifecycleRoutes.Ordinals.TryGetValue(call.Operation, out var ordinal))
+        {
+            if (!Exact(value, "payload", "signed_activity") || !BoundedHex(value.GetValueOrDefault("payload"), MaximumProgramBytes, false) ||
+                !BoundedHex(value.GetValueOrDefault("signed_activity"), MaximumProgramBytes, false)) throw Invalid();
+            var bound = new NativeProgramLifecycleRequest(LifecycleWire.Decode(ordinal, Convert.FromHexString(Text(value, "payload"))), Convert.FromHexString(Text(value, "signed_activity")));
+            if (call.IdempotencyKey?.Value != bound.IdempotencyKey) throw Invalid();
+            return;
+        }
         switch (call.Operation)
         {
-            case "program.discover": case "program.interface":
+            case "program.discover":
+            case "program.interface":
                 if (!Exact(value, "program_id", "requested_verification_level") ||
                     !CanonicalProgram(value.GetValueOrDefault("program_id")) ||
                     TryText(value, "requested_verification_level") != "sequencer-signed") throw Invalid();
@@ -268,7 +316,17 @@ public sealed class AgentHttpTransport : IPlatformTransport
                     !CanonicalHex(value.GetValueOrDefault("activity_id"), 32, false) ||
                     TryText(value, "requested_verification_level") != "sequencer-signed") throw Invalid();
                 break;
-            case "program.simulate": case "program.call": ValidateProgramCall(value); break;
+            case "program.simulate":
+            case "program.call":
+                if (Exact(value, "payload", "signed_activity"))
+                {
+                    if (!BoundedHex(value.GetValueOrDefault("payload"), MaximumProgramBytes, false) || !BoundedHex(value.GetValueOrDefault("signed_activity"), MaximumProgramBytes, false)) throw Invalid();
+                    var payload = NativeProgramCall.Decode(Convert.FromHexString(Text(value, "payload"))).Encode();
+                    var key = LifecycleWire.Bind(3, payload, Convert.FromHexString(Text(value, "signed_activity")));
+                    if (call.Operation == "program.call" && call.IdempotencyKey?.Value != Convert.ToHexString(key).ToLowerInvariant()) throw Invalid();
+                }
+                else ValidateProgramCall(value);
+                break;
             default: throw Invalid();
         }
     }
@@ -397,9 +455,12 @@ public sealed class AgentHttpTransport : IPlatformTransport
 
     private static HttpMethod ToHttpMethod(SdkHttpMethod method) => method switch
     {
-        SdkHttpMethod.Get => HttpMethod.Get, SdkHttpMethod.Post => HttpMethod.Post,
-        SdkHttpMethod.Put => HttpMethod.Put, SdkHttpMethod.Patch => HttpMethod.Patch,
-        SdkHttpMethod.Delete => HttpMethod.Delete, _ => throw new PlatformSdkException(SdkErrorCode.InvalidArgument, RetryClass.Never),
+        SdkHttpMethod.Get => HttpMethod.Get,
+        SdkHttpMethod.Post => HttpMethod.Post,
+        SdkHttpMethod.Put => HttpMethod.Put,
+        SdkHttpMethod.Patch => HttpMethod.Patch,
+        SdkHttpMethod.Delete => HttpMethod.Delete,
+        _ => throw new PlatformSdkException(SdkErrorCode.InvalidArgument, RetryClass.Never),
     };
 
     private static bool IsLoopback(string host) => string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase) ||

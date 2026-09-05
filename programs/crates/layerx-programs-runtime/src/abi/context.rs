@@ -1,4 +1,4 @@
-//! Frozen field-addressed execution context for the candidate ABI.
+//! Field-addressed execution context for the frozen ABI v2.
 //!
 //! Program and principal identifiers are their exact 32 canonical bytes.
 //! Unsigned integers are fixed-width big-endian. The immediate caller is
@@ -13,7 +13,7 @@ pub const CONTEXT_FUEL_PER_BYTE: u64 = 1;
 /// Largest encoded context field: the optional caller tag and program id.
 pub const MAX_CONTEXT_FIELD_BYTES: usize = 33;
 
-/// Frozen candidate-v2 execution-context field identifiers.
+/// Frozen ABI-v2 execution-context field identifiers.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
 pub enum ContextField {
@@ -67,7 +67,7 @@ pub enum ContextRefusal {
     FrameMismatch,
 }
 
-/// Protocol-owned facts fixed before any candidate-v2 guest executes.
+/// Protocol-owned facts fixed before any ABI-v2 guest executes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ExecutionContext {
     activity_sequence: u64,

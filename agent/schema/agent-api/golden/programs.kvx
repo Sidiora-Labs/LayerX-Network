@@ -2,7 +2,7 @@
 name = "programs"
 contract_major = 1
 compatibility = "additive_only"
-source_of_truth = "The canonical ProgramCall payload and authenticated Programs receipt grammar define this operation family."
+source_of_truth = "Canonical signed Programs activity payloads and authenticated Programs receipts define this operation family."
 
 [limit]
 program_id_bytes = 32
@@ -11,6 +11,150 @@ receipt_bytes = 1048576
 terminal_payload_bytes = 1048576
 call_graph_bytes = 1048576
 capabilities = 5
+
+[type.NativeProgramDeployRequest]
+required = ["signed_activity"]
+signed_activity = "canonical_signed_activity_bytes_at_most_1048576"
+protocol_version = 3
+module_id = 9
+ordinal = 1
+payload = "NativeProgramDeploy"
+identity_binding = "exact_reencoded_payload_and_HTTP_Idempotency_Key_equals_signed_idempotency_key"
+
+[type.NativeProgramUpgradeRequest]
+required = ["signed_activity"]
+signed_activity = "canonical_signed_activity_bytes_at_most_1048576"
+protocol_version = 3
+module_id = 9
+ordinal = 2
+payload = "NativeProgramUpgrade"
+identity_binding = "exact_reencoded_payload_and_HTTP_Idempotency_Key_equals_signed_idempotency_key"
+
+[type.NativeProgramWindDownRequest]
+required = ["signed_activity"]
+signed_activity = "canonical_signed_activity_bytes_at_most_1048576"
+protocol_version = 3
+module_id = 9
+ordinal = 7
+payload = "NativeProgramWindDown"
+identity_binding = "exact_reencoded_payload_and_HTTP_Idempotency_Key_equals_signed_idempotency_key"
+
+[type.NativeProgramDeploy]
+required = ["program_id","guest_abi","policy","authority","new_hash","wasm"]
+optional = ["interface"]
+program_id = "nonzero_bytes32"
+guest_abi = "u16_inclusive_1_3"
+policy = "0_immutable_or_1_authority"
+authority = "bytes32_zero_if_and_only_if_policy_immutable"
+new_hash = "sha256_of_wasm"
+wasm = "nonempty_wasm_v1_bytes_at_most_1048576"
+interface = "nonempty_bytes_at_most_952_when_present"
+encoding = "program_id32_u16be_abi_u8_policy_reserved_zero_authority32_hash32_u32be_wasm_length_optional_u32be_interface_length_interface_wasm"
+fixed_bytes = [104,108]
+
+[type.NativeProgramUpgrade]
+required = ["program_id","guest_abi","old_hash","new_hash","migration_hook","clear_interface","wasm"]
+optional = ["interface"]
+program_id = "nonzero_bytes32"
+guest_abi = "u16_inclusive_1_3"
+old_hash = "bytes32"
+new_hash = "sha256_of_wasm"
+migration_hook = "bytes_at_most_65535"
+clear_interface = "boolean_requires_interface_frame"
+interface = "bytes_at_most_952_empty_only_when_clear_interface"
+wasm = "nonempty_wasm_v1_bytes_at_most_1048576"
+flags = "bit0_if_and_only_if_nonempty_hook_bit1_clear_interface_bits2_through7_zero"
+encoding = "program_id32_u16be_abi_u8_flags_reserved_zero_old_hash32_new_hash32_u16be_hook_length_u32be_wasm_length_optional_u32be_interface_length_hook_interface_wasm"
+fixed_bytes = [106,110]
+
+[type.NativeProgramWindDown]
+required = ["program_id","operation"]
+program_id = "nonzero_bytes32"
+variants = ["route","deprecate","tombstone","exit"]
+tags = [1,2,3,4]
+route = "account32_asset32_destination32_u16be_seed_length_seed_at_most_128"
+deprecate = "exit_program32_u64be_deadline_batch"
+tombstone = "no_additional_fields"
+exit = "account32"
+exact_lengths = ["131_plus_seed_length","73","33","65"]
+
+[type.ProgramLifecycleResponse]
+variants = ["ProgramLifecycleResultEnvelope","ProgramLifecycleUnknown","ProgramLifecycleErrorEnvelope"]
+transport_outcome = "never_authoritative"
+verification = "local_canonical_sequencer_signature_protocol3_module9_module_version4_operation0_activity_id_binding_no_call_outcome"
+
+[type.ProgramLifecycleResultEnvelope]
+required = ["result"]
+result = "ProgramLifecycleResult"
+http_status = 200
+
+[type.ProgramLifecycleResult]
+required = ["state","activity_id","receipt","terminal_payload","call_graph"]
+states = ["executed","refused"]
+activity_id = "bytes32_equal_to_bound_signed_activity_id"
+receipt = "bounded_canonical_signed_Programs_state_receipt"
+terminal_payload = "empty_string"
+call_graph = "empty_string"
+state_binding = "executed_if_receipt_result_code_zero_otherwise_refused"
+proof = "signature_under_pinned_sequencer_key_no_call_artifacts_or_program_id_field"
+sdk_result_code = "derived_from_verified_receipt_not_a_wire_result_field"
+
+[type.ProgramLifecycleUnknown]
+required = ["state","activity_id","retry","retry_after_seconds"]
+http_status = 202
+state = "unknown"
+activity_id = "bytes32_equal_to_bound_signed_activity_id"
+retry = "after"
+retry_after_seconds = 2
+retention = "SDK_retains_exact_signed_bytes_and_signed_idempotency_key_never_synthesizes_receipt"
+
+[type.ProgramLifecycleErrorEnvelope]
+required = ["error"]
+error = "ProgramLifecycleError"
+http_status = "400_through_599"
+
+[type.ProgramLifecycleError]
+required = ["code","retry"]
+optional = ["retry_after_seconds"]
+code = "bounded_lowercase_ascii_code"
+retry = ["never","after"]
+retry_after_seconds = "positive_u64_present_if_and_only_if_retry_after"
+
+[operation.program.deploy]
+method = "POST"
+path = "/v1/programs/deploy"
+request = "NativeProgramDeployRequest"
+required = ["idempotency_key"]
+response = "ProgramLifecycleResponse"
+scope = "program:deploy"
+content_type = "application/octet-stream"
+idempotency_header = "Idempotency-Key"
+idempotency_binding = "canonical_lowercase_hex_of_signed_activity_idempotency_key"
+unknown_outcome = "retain_signed_activity_and_signed_idempotency_key"
+
+[operation.program.upgrade]
+method = "POST"
+path = "/v1/programs/upgrade"
+request = "NativeProgramUpgradeRequest"
+required = ["idempotency_key"]
+response = "ProgramLifecycleResponse"
+scope = "program:upgrade"
+content_type = "application/octet-stream"
+idempotency_header = "Idempotency-Key"
+idempotency_binding = "canonical_lowercase_hex_of_signed_activity_idempotency_key"
+unknown_outcome = "retain_signed_activity_and_signed_idempotency_key"
+
+[operation.program.wind-down]
+method = "POST"
+path = "/v1/programs/wind-down"
+request = "NativeProgramWindDownRequest"
+required = ["idempotency_key"]
+response = "ProgramLifecycleResponse"
+scope = "program:wind-down"
+content_type = "application/octet-stream"
+idempotency_header = "Idempotency-Key"
+idempotency_binding = "canonical_lowercase_hex_of_signed_activity_idempotency_key"
+unknown_outcome = "retain_signed_activity_and_signed_idempotency_key"
 
 [type.ProgramSelector]
 required = ["program_id","requested_verification_level"]
@@ -80,6 +224,20 @@ required = ["idempotency_key","expected_activity_id","requested_verification_lev
 idempotency_key = "bytes32"
 expected_activity_id = "bytes32"
 
+[type.ProgramReceiptResponse]
+variants = ["ProgramSubmission","ProgramLifecycleReceiptEnvelope"]
+
+[type.ProgramLifecycleReceiptEnvelope]
+required = ["result"]
+result = "ProgramLifecycleReceipt"
+
+[type.ProgramLifecycleReceipt]
+required = ["activity_id","receipt"]
+activity_id = "bytes32_equal_to_retained_signed_activity_id"
+receipt = "bounded_canonical_signed_Programs_state_receipt"
+verification = "local_pinned_sequencer_signature_protocol3_module9_module_version4_operation0_no_call_outcome"
+lookup_binding = "URL_key_is_retained_signed_idempotency_key"
+
 [type.ProgramActivitySelector]
 required = ["activity_id","requested_verification_level"]
 activity_id = "bytes32"
@@ -145,7 +303,7 @@ method = "GET"
 path = "/v1/programs/receipts/by-idempotency/{idempotency_key}"
 request = "ProgramReceiptSelector"
 request_required = ["idempotency_key","expected_activity_id","requested_verification_level"]
-response = "ProgramSubmission"
+response = "ProgramReceiptResponse"
 scope = "program:read"
 
 [operation.program.activity]

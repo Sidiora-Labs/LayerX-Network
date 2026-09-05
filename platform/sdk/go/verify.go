@@ -219,6 +219,23 @@ func VerifyReceiptOutcome(canonicalReceipt []byte, authorized AuthorizedBatch, s
 	}, nil
 }
 
+func VerifyProgramLifecycleReceipt(canonical []byte, expectedActivity [32]byte, sequencer [32]byte) (VerifiedReceipt, error) {
+	decoded, err := decodeProtocolReceipt(canonical)
+	if err != nil {
+		return VerifiedReceipt{}, err
+	}
+	receipt := decoded.protocol
+	if receipt.ProtocolVersion != 3 || receipt.ModuleID != 9 || receipt.ModuleVersion != 4 || receipt.Operation != 0 || receipt.ProgramOutcome != nil || receipt.ActivityID != expectedActivity || zero32(expectedActivity) || zero32(sequencer) {
+		return VerifiedReceipt{}, receiptFailure(ReceiptCheckReceiptShape)
+	}
+	digest := domainDigest(receiptDomain, decoded.unsigned)
+	if !ed25519.Verify(sequencer[:], digest[:], decoded.signature[:]) {
+		return VerifiedReceipt{}, receiptFailure(ReceiptCheckSequencerSignature)
+	}
+	return VerifiedReceipt{Level: "sequencer-signed", Receipt: receipt, CanonicalBytes: append([]byte{}, canonical...), ReceiptDigest: digest,
+		Facts: ProtocolReceiptFacts{ResultCode: receipt.ResultCode, Asset: receipt.Asset, Amount: receipt.Amount, FeeCharged: receipt.FeeCharged}}, nil
+}
+
 func VerifyReceipt(canonicalReceipt []byte, authorized AuthorizedBatch, selectedProtocol ...uint16) (VerifiedReceipt, error) {
 	verified, err := VerifyReceiptOutcome(canonicalReceipt, authorized, selectedProtocol...)
 	if err != nil {

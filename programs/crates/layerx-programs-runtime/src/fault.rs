@@ -1,15 +1,15 @@
-//! Candidate-only typed program failure payloads.
+//! Frozen ABI-v2 typed program failure payloads.
 
 use core::fmt::{self, Display};
 
 use crate::storage::ProgramId;
 
-/// Maximum opaque reason carried by one candidate program refusal.
+/// Maximum opaque reason carried by one ABI-v2 program refusal.
 pub const MAX_REFUSAL_REASON_BYTES: usize = 4_096;
 
-/// Candidate entry return reserved for a successfully published refusal.
+/// Compatibility spelling for the ABI-v2 published-refusal entry return.
 pub const CANDIDATE_REFUSAL_SENTINEL: i32 = -64;
-/// Canonical class vocabulary mirrored by candidate SDK parity checks.
+/// Canonical class vocabulary mirrored by ABI-v2 SDK parity checks.
 pub const REFUSAL_CLASS_MANIFEST: &str = "Rejected=1\0InvalidInput=2\0Unauthorized=3\0Conflict=4\0NotFound=5\0RuntimeFault=254\0Legacy=255\0";
 
 /// Stable receipt refusal vocabulary.
@@ -121,7 +121,7 @@ impl RefusalReason {
     }
 }
 
-/// Host-authenticated candidate program failure.
+/// Host-authenticated ABI-v2 program failure.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProgramFailure {
     program: ProgramId,
@@ -189,8 +189,11 @@ impl ProgramFailure {
     pub(crate) fn append_canonical(&self, encoded: &mut Vec<u8>) {
         encoded.extend_from_slice(&self.program.bytes());
         encoded.extend_from_slice(&self.class.code().to_be_bytes());
-        encoded.extend_from_slice(&u32::try_from(self.reason.bytes().len())
-            .unwrap_or(u32::MAX).to_be_bytes());
+        encoded.extend_from_slice(
+            &u32::try_from(self.reason.bytes().len())
+                .unwrap_or(u32::MAX)
+                .to_be_bytes(),
+        );
         encoded.extend_from_slice(self.reason.bytes());
     }
 

@@ -1,3 +1,5 @@
+mod program_lifecycle;
+
 use layerx_client::client::{Client, ClientConfig, ReconnectPolicy};
 use layerx_client::lni::handshake::{perform, Handshake, HandshakeConfig};
 use layerx_client::lni::refusal::decode_core_refusal;
@@ -571,6 +573,17 @@ fn receipt_facts(bytes: &[u8], sequencer_key: [u8; 32]) -> Result<ReceiptFacts, 
         protocol.resulting_state_root(),
         sequencer_key,
     );
+    if protocol.module_id() == 9 && protocol.operation() == 0 {
+        program_lifecycle::verify_receipt(bytes, &authorised, protocol.activity_id())?;
+        return Ok(ReceiptFacts {
+            activity_id: protocol.activity_id(),
+            batch_id: protocol.batch_id(),
+            global_sequence: protocol.global_sequence(),
+            result_code: protocol.result_code(),
+            state_root: protocol.resulting_state_root(),
+            canonical: bytes.to_vec(),
+        });
+    }
     let verified = verify_outcome(bytes, &authorised)
         .map_err(|error| format!("receipt verification failed: {error:?}"))?;
     let receipt = verified
@@ -636,11 +649,14 @@ fn signer_key(authority: &[u8]) -> Option<[u8; 32]> {
 fn submission_registry() -> Result<ModuleRegistry, String> {
     let send = ActivityType::new(ModuleId::Asset, layerx_platform_core::SEND_ACTIVITY)
         .map_err(|error| format!("send activity: {error:?}"))?;
-    let call = ActivityType::new(ModuleId::Programs, 3)
-        .map_err(|error| format!("program call activity: {error:?}"))?;
+    let operations = [1, 2, 3, 7]
+        .map(|ordinal| ActivityType::new(ModuleId::Programs, ordinal))
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("program activity: {error:?}"))?;
     let asset = ModuleRegistration::new(ModuleId::Asset, &[send])
         .map_err(|error| format!("asset registration: {error:?}"))?;
-    let programs = ModuleRegistration::new(ModuleId::Programs, &[call])
+    let programs = ModuleRegistration::new(ModuleId::Programs, &operations)
         .map_err(|error| format!("program registration: {error:?}"))?;
     ModuleRegistry::new(&[asset, programs]).map_err(|error| format!("module registry: {error:?}"))
 }
@@ -648,20 +664,28 @@ fn submission_registry() -> Result<ModuleRegistry, String> {
 fn submit_activity(
     config: &Config,
     canonical: &[u8],
-    program_call: bool,
+    program_ordinal: Option<u16>,
 ) -> Result<Response, Response> {
     let registry =
         submission_registry().map_err(|_| refusal(503, "registry_unavailable", Some(5)))?;
     let activity = layerx_wire::activity::decode_signed(canonical, &registry)
         .map_err(|_| refusal(400, "invalid_activity", None))?;
-    if program_call {
+    if let Some(ordinal) = program_ordinal {
         if activity.activity_type().module() != ModuleId::Programs
-            || activity.activity_type().ordinal() != 3
+            || activity.activity_type().ordinal() != ordinal
+            || activity.protocol_version() != 3
         {
-            return Err(refusal(400, "not_program_call", None));
+            return Err(refusal(400, "program_route_mismatch", None));
         }
-        NativeProgramCall::decode(activity.payload())
-            .map_err(|_| refusal(400, "invalid_program_call", None))?;
+    }
+    if activity.activity_type().module() == ModuleId::Programs {
+        if activity.activity_type().ordinal() == 3 {
+            NativeProgramCall::decode(activity.payload())
+                .map_err(|_| refusal(400, "invalid_program_call", None))?;
+        } else {
+            program_lifecycle::validate(canonical, &registry, activity.activity_type().ordinal())
+                .map_err(|_| refusal(400, "invalid_program_lifecycle", None))?;
+        }
     }
     let signer = signer_key(activity.authority())
         .ok_or_else(|| refusal(400, "authority_unsupported", None))?;
@@ -689,7 +713,17 @@ fn submit_activity(
         Submission::Unknown(unknown) => unknown.activity_id(),
     };
     match await_receipt(config, activity_id, config.receipt_deadline) {
-        Ok(Some(facts)) => Ok(success(&receipt_result(&facts))),
+        Ok(Some(facts)) => {
+            if program_ordinal.is_some_and(|ordinal| matches!(ordinal, 1 | 2 | 7)) {
+                Ok(success(&serde_json::json!({
+                    "state": if facts.result_code == 0 { "completed" } else { "refused" },
+                    "activity_id": hex_encode(&facts.activity_id), "receipt": hex_encode(&facts.canonical),
+                    "terminal_payload": "", "call_graph": "",
+                })))
+            } else {
+                Ok(success(&receipt_result(&facts)))
+            }
+        }
         Ok(None) => Ok(json_response(
             202,
             &serde_json::json!({
@@ -815,6 +849,14 @@ fn simulate_route(config: &Config, request: &Request) -> Response {
 }
 
 fn activities_route(config: &Config, request: &Request) -> Response {
+    let ordinal = program_lifecycle::ordinal(&request.path)
+        .or_else(|| (request.path == "/v1/programs/call").then_some(3));
+    if program_lifecycle::ordinal(&request.path).is_some()
+        && request.headers.get("content-type").map(String::as_str)
+            != Some("application/octet-stream")
+    {
+        return refusal(415, "activity_content_type_required", None);
+    }
     let canonical = match request.headers.get("content-type").map(String::as_str) {
         Some("application/octet-stream") => request.body.clone(),
         Some("application/json") => {
@@ -828,10 +870,24 @@ fn activities_route(config: &Config, request: &Request) -> Response {
         }
         _ => return refusal(400, "content_type_required", None),
     };
-    if canonical.is_empty() || canonical.len() > LNI_FRAME_BYTES {
+    if canonical.is_empty() || canonical.len() > 1_048_576 {
         return refusal(400, "invalid_argument", None);
     }
-    match submit_activity(config, &canonical, request.path == "/v1/programs/call") {
+    if ordinal.is_some() {
+        let Some(key) = request.headers.get("idempotency-key") else {
+            return refusal(400, "idempotency_key_required", None);
+        };
+        let Ok(registry) = submission_registry() else {
+            return refusal(503, "registry_unavailable", Some(5));
+        };
+        let Ok(activity) = layerx_wire::activity::decode_signed(&canonical, &registry) else {
+            return refusal(400, "invalid_activity", None);
+        };
+        if key != &hex_encode(&activity.idempotency_key()) {
+            return refusal(409, "protocol_idempotency_mismatch", None);
+        }
+    }
+    match submit_activity(config, &canonical, ordinal) {
         Ok(response) | Err(response) => response,
     }
 }
@@ -857,6 +913,62 @@ fn receipt_route(config: &Config, activity_hex: &str) -> Response {
             refusal(503, "node_unavailable", Some(5))
         }
     }
+}
+
+fn program_idempotency_receipt(config: &Config, key: &str) -> Response {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Document {
+        activity_id: String,
+        receipt: String,
+    }
+    if key.len() != 64
+        || key
+            .bytes()
+            .any(|byte| !byte.is_ascii_digit() && !(b'a'..=b'f').contains(&byte))
+    {
+        return refusal(400, "invalid_idempotency_key", None);
+    }
+    let target = format!("/v1/programs/receipts/by-idempotency/{key}");
+    let body = match node_get(&config.node, &config.node_token, &target) {
+        Ok((200, body)) => body,
+        Ok((404, _)) => return refusal(404, "receipt_not_found", None),
+        _ => return refusal(503, "receipt_unavailable", Some(5)),
+    };
+    let document: Document = match serde_json::from_slice(&body) {
+        Ok(value) => value,
+        Err(_) => return refusal(502, "receipt_invalid", None),
+    };
+    let bytes = match hex_decode(&document.receipt) {
+        Ok(value)
+            if !value.is_empty()
+                && value.len() <= 1_048_576
+                && hex_encode(&value) == document.receipt =>
+        {
+            value
+        }
+        _ => return refusal(502, "receipt_invalid", None),
+    };
+    let Ok((_, handshake)) = connect_raw(config) else {
+        return refusal(503, "node_unavailable", Some(5));
+    };
+    let Ok(receipt) = layerx_proof::receipt::verify_sequencer_signature(
+        &bytes,
+        handshake.node().authorised_sequencer_key,
+    ) else {
+        return refusal(502, "receipt_invalid", None);
+    };
+    let Some(protocol) = receipt.protocol() else {
+        return refusal(502, "receipt_invalid", None);
+    };
+    if protocol.protocol_version() != 3
+        || protocol.module_id() != 9
+        || protocol.module_version() != 4
+        || document.activity_id != hex_encode(&protocol.activity_id())
+    {
+        return refusal(502, "receipt_invalid", None);
+    }
+    success(&serde_json::json!({"activity_id": document.activity_id, "receipt": document.receipt}))
 }
 
 fn readiness(config: &Config) -> Response {
@@ -1046,6 +1158,15 @@ fn unavailable_capability(path: &str) -> bool {
 fn core_route(config: &Config, request: &Request) -> Response {
     let method = request.method.as_str();
     let path = request.path.as_str();
+    if let Some(key) = path.strip_prefix("/v1/programs/receipts/by-idempotency/") {
+        return if method != "GET" {
+            refusal(405, "method_not_allowed", None)
+        } else if request.query.is_some() {
+            refusal(400, "invalid_request", None)
+        } else {
+            program_idempotency_receipt(config, key)
+        };
+    }
     if unavailable_capability(path) {
         return refusal(503, "capability_unavailable", Some(3600));
     }
@@ -1063,7 +1184,43 @@ fn core_route(config: &Config, request: &Request) -> Response {
         ("GET", "/livez") => json_response(200, &serde_json::json!({ "live": true })),
         ("GET", "/readyz") => readiness(config),
         ("GET", "/v1/sequencer") => sequencer_route(config),
-        ("POST", "/v1/activities" | "/v1/programs/call") => {
+        (
+            "POST",
+            "/v1/activities"
+            | "/v1/programs/call"
+            | "/v1/programs/deploy"
+            | "/v1/programs/upgrade"
+            | "/v1/programs/wind-down",
+        ) => {
+            if let Some(ordinal) = program_lifecycle::ordinal(path) {
+                if request.headers.get("content-type").map(String::as_str)
+                    != Some("application/octet-stream")
+                {
+                    return refusal(415, "activity_content_type_required", None);
+                }
+                let Some(key) = request.headers.get("idempotency-key") else {
+                    return refusal(400, "idempotency_key_required", None);
+                };
+                let Ok(registry) = submission_registry() else {
+                    return refusal(503, "registry_unavailable", Some(5));
+                };
+                let Ok(activity) = layerx_wire::activity::decode_signed(&request.body, &registry)
+                else {
+                    return refusal(400, "invalid_activity", None);
+                };
+                if activity.activity_type().module() != ModuleId::Programs
+                    || activity.activity_type().ordinal() != ordinal
+                    || activity.protocol_version() != 3
+                {
+                    return refusal(400, "program_route_mismatch", None);
+                }
+                if program_lifecycle::validate(&request.body, &registry, ordinal).is_err() {
+                    return refusal(400, "invalid_program_lifecycle", None);
+                }
+                if key != &hex_encode(&activity.idempotency_key()) {
+                    return refusal(409, "protocol_idempotency_mismatch", None);
+                }
+            }
             stateful(config, "activities", request, || {
                 activities_route(config, request)
             })
@@ -1089,6 +1246,9 @@ fn core_route(config: &Config, request: &Request) -> Response {
             | "/v1/sequencer"
             | "/v1/activities"
             | "/v1/programs/call"
+            | "/v1/programs/deploy"
+            | "/v1/programs/upgrade"
+            | "/v1/programs/wind-down"
             | "/v1/programs/simulate"
             | "/v1/state",
         ) => refusal(405, "method_not_allowed", None),
@@ -1179,6 +1339,23 @@ fn stateful(
     let digest = request_digest(request);
     match journal_read(&path) {
         Ok(Some(entry)) if entry.request_digest == digest => {
+            if entry.status == 202 && program_lifecycle::ordinal(&request.path).is_some() {
+                let response = execute();
+                if journal_write(
+                    &path,
+                    &JournalEntry {
+                        request_digest: digest,
+                        status: response.status,
+                        body: response.body.clone(),
+                        retry_after: response.retry_after,
+                    },
+                )
+                .is_err()
+                {
+                    return refusal(503, "journal_unavailable", Some(5));
+                }
+                return response;
+            }
             return Response {
                 status: entry.status,
                 body: entry.body,

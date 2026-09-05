@@ -24,6 +24,7 @@ zeroize.workspace = true
 [dev-dependencies]
 ed25519-dalek.workspace = true
 getrandom.workspace = true
+layerx-programs-runtime = { path = "../../../programs/crates/layerx-programs-runtime" }
 native-tls.workspace = true
 
 [lints]

@@ -1,3 +1,10 @@
+from .program_lifecycle import NativeProgramDeploy, NativeProgramUpgrade, NativeProgramWindDown, NativeProgramLifecycleRequest
+from .native_capabilities import (
+    NativeCapability, NativeStorageRead, NativeStorageWrite, NativeEmitEvent, NativeCall,
+    NativeTransfer402, NativeProgramSpend, NativeReceiptRead, NativeBalanceView,
+    NativeSharedStorageRead, NativeSharedStorageWrite, encode_native_capability_set,
+    decode_native_capability_set, narrow_native_capability_set, derive_native_program_account,
+)
 from .generated.client import (
     APPROVAL_CONTRACT_INTRODUCED,
     APPROVAL_DECISION_OUTCOMES,
@@ -56,7 +63,7 @@ from .production import (
     SecretBytes,
     platform_sdk_python,
 )
-from .agent_http import AgentHttpTransport, LayerXKeyCredential
+from .agent_http import AgentHttpTransport, LayerXKeyCredential, ProgramBoundaryError
 from .programs import (ProgramCall, ProgramDiscovery, ProgramInterface, ProgramOperations,
     ProgramSource, ProgramTrustContext, VerifiedProgramReceipt, platform_sdk_programs,
     verify_program_receipt)
@@ -91,6 +98,11 @@ from .native_program_call import NativeProgramCall, encode_native_program_call, 
 from .programs import NativeProgramRequest
 
 __all__ = [
+    "NativeCapability", "NativeStorageRead", "NativeStorageWrite", "NativeEmitEvent", "NativeCall",
+    "NativeTransfer402", "NativeProgramSpend", "NativeReceiptRead", "NativeBalanceView",
+    "NativeSharedStorageRead", "NativeSharedStorageWrite", "encode_native_capability_set",
+    "decode_native_capability_set", "narrow_native_capability_set", "derive_native_program_account",
+    "NativeProgramDeploy", "NativeProgramUpgrade", "NativeProgramWindDown", "NativeProgramLifecycleRequest",
     "NativeProgramCall",
     "NativeProgramRequest",
     "encode_native_program_call",
@@ -138,6 +150,7 @@ __all__ = [
     "require_verified",
     "AGENT_OPERATIONS",
     "AgentHttpTransport",
+    "ProgramBoundaryError",
     "HUMAN_OPERATIONS",
     "IdempotencyKey",
     "LayerXKeyCredential",

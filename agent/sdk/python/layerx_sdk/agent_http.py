@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+from http.client import HTTPException
 from typing import Mapping, cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlparse, urlunparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
+from .program_wire import bind_signed_program_lifecycle
 
 from .production import (
     IdempotencyKey,
@@ -43,6 +45,9 @@ class _Route:
 
 
 _ROUTES: Mapping[str, _Route] = {
+    "program.deploy": _Route("POST", "/v1/programs/deploy"),
+    "program.upgrade": _Route("POST", "/v1/programs/upgrade"),
+    "program.wind-down": _Route("POST", "/v1/programs/wind-down"),
     "program.discover": _Route("GET", "/v1/programs/registry/{program_id}", "program_id"),
     "program.interface": _Route("GET", "/v1/programs/registry/{program_id}/interface", "program_id"),
     "program.simulate": _Route("POST", "/v1/programs/simulate"),
@@ -122,7 +127,7 @@ class AgentHttpTransport(ProductionTransport):
             if not isinstance(value, str) or not _hex32(value):
                 raise _invalid_argument()
             path = path.replace("{" + route.path_field + "}", quote(value, safe=""))
-        if operation == "program.call":
+        if operation in {"program.call", "program.deploy", "program.upgrade", "program.wind-down"}:
             if idempotency_key is None or not _hex32(str(idempotency_key)):
                 raise _invalid_argument()
         elif idempotency_key is not None:
@@ -131,14 +136,23 @@ class AgentHttpTransport(ProductionTransport):
             raise _invalid_argument()
         _require_exact_request(operation, request)
         try:
-            body = json.dumps(request, ensure_ascii=True, allow_nan=False, separators=(",", ":")).encode("utf-8")
+            if route.method == "POST":
+                body = _encode_program_mutation_body(request.get("signed_activity"))
+            else:
+                body = json.dumps(request, ensure_ascii=True, allow_nan=False, separators=(",", ":")).encode("utf-8")
         except (TypeError, ValueError, OverflowError):
             raise _invalid_argument() from None
         if len(body) > _MAX_REQUEST_BYTES:
             raise _invalid_argument()
+        if operation in {"program.deploy", "program.upgrade", "program.wind-down"}:
+            ordinal = {"program.deploy": 1, "program.upgrade": 2, "program.wind-down": 7}[operation]
+            try:
+                bind_signed_program_lifecycle(body, None, ordinal, str(idempotency_key))
+            except (TypeError, ValueError, OverflowError):
+                raise _invalid_argument() from None
         headers = {
             "Accept": "application/json",
-            "Content-Type": "application/json",
+            "Content-Type": "application/octet-stream" if route.method == "POST" else "application/json",
             "Content-Length": str(len(body)),
             "User-Agent": "layerx-python/0.1.0",
         }
@@ -163,8 +177,14 @@ class AgentHttpTransport(ProductionTransport):
                 error.close()
         except PlatformSdkError:
             raise
-        except (TimeoutError, URLError, OSError):
+        except (TimeoutError, URLError, OSError, HTTPException):
             raise _transport_failure(operation) from None
+
+
+def _encode_program_mutation_body(signed: object) -> bytes:
+    if not isinstance(signed, str) or not 0 < len(signed) <= 2_097_152 or len(signed) % 2 or any(character not in _HEX for character in signed):
+        raise _invalid_argument()
+    return bytes.fromhex(signed)
 
 
 def _validated_endpoint(value: str) -> str:
@@ -197,6 +217,9 @@ def _route_endpoint(base: str, path: str) -> str:
 
 def _require_exact_request(operation: str, request: Mapping[str, object]) -> None:
     fields: Mapping[str, frozenset[str]] = {
+        "program.deploy": frozenset(("signed_activity",)),
+        "program.upgrade": frozenset(("signed_activity",)),
+        "program.wind-down": frozenset(("signed_activity",)),
         "program.discover": frozenset(("program_id", "requested_verification_level")),
         "program.interface": frozenset(("program_id", "requested_verification_level")),
         "program.simulate": frozenset(("program_id", "calldata", "budget", "capabilities", "signed_activity")),
@@ -204,7 +227,10 @@ def _require_exact_request(operation: str, request: Mapping[str, object]) -> Non
         "program.receipt": frozenset(("idempotency_key", "expected_activity_id", "requested_verification_level")),
         "program.activity": frozenset(("activity_id", "requested_verification_level")),
     }
-    if frozenset(request) != fields[operation]:
+    expected = fields[operation]
+    if operation in {"program.call", "program.simulate"} and request.get("payload_encoding") == "native-v1":
+        expected = frozenset(("payload_encoding", "program_id", "calldata", "budget", "signed_activity", "native_call"))
+    if frozenset(request) != expected:
         raise _invalid_argument()
 
 
@@ -212,7 +238,10 @@ def _bounded_read(response: object, maximum: int) -> bytes:
     reader = getattr(response, "read", None)
     if not callable(reader):
         raise _decode_failure()
-    encoded = cast(bytes, reader(maximum + 1))
+    try:
+        encoded = cast(bytes, reader(maximum + 1))
+    except (OSError, HTTPException):
+        raise _decode_failure() from None
     if len(encoded) > maximum:
         raise _decode_failure()
     return encoded
@@ -228,6 +257,16 @@ def _decode_envelope(status: int, encoded: bytes, operation: str) -> object:
     if "class" in envelope:
         _exact(envelope, ("class", "protocol_result_code", "retriability", "reason", "request_id"))
         raise _service_error(status, envelope)
+    if operation in {"program.deploy", "program.upgrade", "program.wind-down"} or operation == "program.receipt" and ("result" in envelope or "error" in envelope):
+        if "error" in envelope:
+            _exact(envelope, ("error",))
+            raise _decode_program_boundary_error(status, envelope["error"])
+        if status == 202 and envelope.get("state") == "unknown":
+            return envelope
+        _exact(envelope, ("result",))
+        if not 200 <= status < 300:
+            raise _decode_failure()
+        return envelope["result"]
     _exact(envelope, ("request_id", "value", "verification_status"))
     request_id = envelope.get("request_id")
     if not 200 <= status < 300 or not _valid_request_id(request_id) or "value" not in envelope:
@@ -235,6 +274,30 @@ def _decode_envelope(status: int, encoded: bytes, operation: str) -> object:
     if not _accepted_program_verification(operation, envelope.get("value"), envelope.get("verification_status")):
         raise PlatformSdkError(SdkErrorCode.VERIFICATION_FAILURE, "never", request_id=request_id)
     return envelope["value"]
+
+
+class ProgramBoundaryError(PlatformSdkError):
+    def __init__(self, status: int, boundary_code: str, retry_after_ms: int | None = None) -> None:
+        super().__init__(SdkErrorCode.IDEMPOTENCY_CONFLICT if status == 409 else SdkErrorCode.RATE_LIMIT if status == 429 else SdkErrorCode.CORE_REJECTION,
+                         "never" if retry_after_ms is None else "safe", retry_after_ms=retry_after_ms)
+        self.status = status
+        self.boundary_code = boundary_code
+
+
+def _decode_program_boundary_error(status: int, value: object) -> ProgramBoundaryError:
+    if type(status) is not int or not 400 <= status < 600 or not isinstance(value, dict):
+        raise _decode_failure()
+    code = value.get("code")
+    if not isinstance(code, str) or not 0 < len(code) <= 128 or any(character not in "abcdefghijklmnopqrstuvwxyz0123456789_" for character in code):
+        raise _decode_failure()
+    if value.get("retry") == "never":
+        _exact(value, ("code", "retry"))
+        return ProgramBoundaryError(status, code)
+    _exact(value, ("code", "retry", "retry_after_seconds"))
+    seconds = value.get("retry_after_seconds")
+    if value.get("retry") != "after" or type(seconds) is not int or not 0 < seconds < 1 << 64:
+        raise _decode_failure()
+    return ProgramBoundaryError(status, code, seconds * 1000)
 
 
 def _accepted_program_verification(operation: str, result: object, value: object) -> bool:
@@ -289,7 +352,7 @@ class _NoRedirect(HTTPRedirectHandler):
 
 
 def _transport_failure(operation: str) -> PlatformSdkError:
-    if operation == "program.call":
+    if operation in {"program.call", "program.deploy", "program.upgrade", "program.wind-down"}:
         return PlatformSdkError(SdkErrorCode.UNKNOWN_OUTCOME, "unknown-outcome")
     return PlatformSdkError(SdkErrorCode.TRANSPORT_FAILURE, "safe")
 

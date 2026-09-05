@@ -45,7 +45,7 @@ pub(super) fn register(linker: &mut Linker<RuntimeState>) -> Result<(), Executio
     Ok(())
 }
 
-pub(super) fn register_candidate(linker: &mut Linker<RuntimeState>) -> Result<(), ExecutionFault> {
+pub(super) fn register_v2(linker: &mut Linker<RuntimeState>) -> Result<(), ExecutionFault> {
     linker
         .func_wrap(
             crate::abi::response::CANDIDATE_ABI_MODULE,
@@ -119,14 +119,11 @@ pub(super) fn register_candidate(linker: &mut Linker<RuntimeState>) -> Result<()
                     Ok(value) => value,
                     Err(status) => return status,
                 };
-                let destination = match read_fixed::<32>(
-                    &caller,
-                    destination_pointer,
-                    destination_length,
-                ) {
-                    Ok(value) => value,
-                    Err(status) => return status,
-                };
+                let destination =
+                    match read_fixed::<32>(&caller, destination_pointer, destination_length) {
+                        Ok(value) => value,
+                        Err(status) => return status,
+                    };
                 let asset = match read_fixed::<32>(&caller, asset_pointer, asset_length) {
                     Ok(value) => value,
                     Err(status) => return status,

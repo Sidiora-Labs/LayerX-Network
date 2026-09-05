@@ -11,9 +11,7 @@ const BALANCE_RESULT_BYTES: usize = 16;
 const BALANCE_RESULT_BYTES_I32: i32 = 16;
 const BALANCE_READ_METER_BYTES: u64 = 16;
 
-pub(super) fn register_candidate(
-    linker: &mut Linker<RuntimeState>,
-) -> Result<(), ExecutionFault> {
+pub(super) fn register_v2(linker: &mut Linker<RuntimeState>) -> Result<(), ExecutionFault> {
     linker
         .func_wrap(
             crate::abi::response::CANDIDATE_ABI_MODULE,
@@ -49,7 +47,8 @@ pub(super) fn register_candidate(
                     Ok(value) => value,
                     Err(error) => return error_status(error),
                 };
-                if let Err(status) = write_guest(&mut caller, output_pointer, &balance.to_be_bytes())
+                if let Err(status) =
+                    write_guest(&mut caller, output_pointer, &balance.to_be_bytes())
                 {
                     return status;
                 }

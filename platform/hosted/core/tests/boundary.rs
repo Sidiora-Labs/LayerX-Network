@@ -295,14 +295,6 @@ fn account_sequence(socket: &Path, did: &str) -> u64 {
 }
 
 fn signed_program_call(seed: &[u8; 32], did: &str, sequence: u64, program_id: [u8; 32]) -> Vec<u8> {
-    let signing_key = SigningKey::from_bytes(seed);
-    let public_key = signing_key.verifying_key().to_bytes();
-    let activity_type = must(ActivityType::new(ModuleId::Programs, 3), "ProgramCall type");
-    let registration = must(
-        ModuleRegistration::new(ModuleId::Programs, &[activity_type]),
-        "programs registration",
-    );
-    let registry = must(ModuleRegistry::new(&[registration]), "programs registry");
     let call = NativeProgramCall {
         program_id: ProgramId::new(program_id),
         guest_abi: 1,
@@ -315,12 +307,29 @@ fn signed_program_call(seed: &[u8; 32], did: &str, sequence: u64, program_id: [u
             1_000_000, 16_777_216, 1_048_576, 1_048_576, 64, 1_048_576, 4096,
         ]),
     };
+    signed_program_activity(seed, did, sequence, 3, &must(call.encode(), "native call"))
+}
+
+fn signed_program_activity(
+    seed: &[u8; 32],
+    did: &str,
+    sequence: u64,
+    ordinal: u16,
+    bytes: &[u8],
+) -> Vec<u8> {
+    let signing_key = SigningKey::from_bytes(seed);
+    let public_key = signing_key.verifying_key().to_bytes();
+    let activity_type = must(
+        ActivityType::new(ModuleId::Programs, ordinal),
+        "Programs type",
+    );
+    let registration = must(
+        ModuleRegistration::new(ModuleId::Programs, &[activity_type]),
+        "Programs registration",
+    );
+    let registry = must(ModuleRegistry::new(&[registration]), "Programs registry");
     let payload = must(
-        Payload::new(
-            &registry,
-            activity_type,
-            &must(call.encode(), "native call"),
-        ),
+        Payload::new(&registry, activity_type, bytes),
         "call payload",
     );
     let payload_hash = must(
@@ -361,6 +370,267 @@ fn signed_program_call(seed: &[u8; 32], did: &str, sequence: u64, program_id: [u
         ),
         "signed ProgramCall",
     )
+}
+
+#[test]
+fn lifecycle_routes_submit_real_signed_activities_and_verify_state_receipts() {
+    use layerx_types::program_lifecycle::{
+        NativeProgramDeploy, NativeProgramUpgrade, NativeProgramWindDown, ProgramUpgradePolicy,
+        ProgramWindDownOperation,
+    };
+    let cluster = start_cluster(true);
+    let certificates = certificates(&cluster.root);
+    let boundary = start_boundary(&cluster, &certificates);
+    establish_receipt_head(&boundary, &cluster);
+    let fixture: serde_json::Value = must(
+        serde_json::from_slice(&must(
+            fs::read(
+                repository_root()
+                    .join("platform/sdk/conformance/fixtures/native-program-deploy-v3.json"),
+            ),
+            "C lifecycle fixture",
+        )),
+        "C fixture JSON",
+    );
+    let encoded = must(
+        layerx_platform_core::hex_decode(
+            fixture["payload_hex"]
+                .as_str()
+                .unwrap_or_else(|| panic!("C payload missing")),
+        ),
+        "C payload",
+    );
+    let original = must(NativeProgramDeploy::decode(&encoded), "native deploy");
+    let program = ProgramId::new(random32());
+    let owner_account = must(
+        layerx_types::account::AccountId::parse(&format!("agent:{}:main", cluster.treasury_did)),
+        "treasury account",
+    );
+    let deploy = NativeProgramDeploy {
+        program_id: program,
+        policy: ProgramUpgradePolicy::Authority(must(
+            layerx_wire::hash::account_id_for_protocol(&owner_account, PROTOCOL_VERSION),
+            "principal",
+        )),
+        ..original
+    };
+    let mut upgraded_wasm = deploy.wasm.to_vec();
+    upgraded_wasm.extend_from_slice(b"\0\x08\x07upgrade");
+    let prior_interface = must(
+        layerx_programs::ProgramInterface::decode(
+            deploy
+                .interface
+                .unwrap_or_else(|| panic!("C fixture interface missing")),
+        ),
+        "prior interface",
+    );
+    let upgraded_interface = must(
+        layerx_programs::ProgramInterface::bind_upgrade(
+            &upgraded_wasm,
+            deploy.guest_abi,
+            prior_interface.entries().to_vec(),
+            &prior_interface,
+            false,
+        ),
+        "upgraded interface",
+    );
+    let upgrade = NativeProgramUpgrade {
+        program_id: program,
+        guest_abi: 2,
+        old_hash: deploy.new_hash,
+        new_hash: Sha256::digest(&upgraded_wasm).into(),
+        migration_hook: &[],
+        clear_interface: false,
+        interface: Some(upgraded_interface.canonical_encoding()),
+        wasm: &upgraded_wasm,
+    };
+    let deprecate = NativeProgramWindDown {
+        program_id: program,
+        operation: ProgramWindDownOperation::Deprecate {
+            exit_program: program.bytes(),
+            deadline_batch: u64::MAX,
+        },
+    };
+    for (ordinal, path, payload) in [
+        (
+            1,
+            "/v1/programs/deploy",
+            must(deploy.encode(), "deploy encode"),
+        ),
+        (
+            2,
+            "/v1/programs/upgrade",
+            must(upgrade.encode(), "upgrade encode"),
+        ),
+        (
+            7,
+            "/v1/programs/wind-down",
+            must(deprecate.encode(), "deprecate encode"),
+        ),
+    ] {
+        assert_lifecycle_operation(&cluster, &boundary, ordinal, path, &payload);
+    }
+}
+
+fn assert_lifecycle_operation(
+    cluster: &Cluster,
+    boundary: &Boundary,
+    ordinal: u16,
+    path: &str,
+    payload: &[u8],
+) {
+    let sequence = account_sequence(&cluster.lni_socket, &cluster.treasury_did);
+    let signed = signed_program_activity(
+        &cluster.treasury_seed,
+        &cluster.treasury_did,
+        sequence,
+        ordinal,
+        payload,
+    );
+    let kind = must(ActivityType::new(ModuleId::Programs, ordinal), "kind");
+    let registry = must(
+        ModuleRegistry::new(&[must(
+            ModuleRegistration::new(ModuleId::Programs, &[kind]),
+            "registration",
+        )]),
+        "registry",
+    );
+    let activity = must(
+        layerx_wire::activity::decode_signed(&signed, &registry),
+        "signed activity",
+    );
+    let key = hex_encode(&activity.idempotency_key());
+    let headers = [
+        ("Content-Type", "application/octet-stream"),
+        ("Idempotency-Key", key.as_str()),
+    ];
+    if ordinal == 1 {
+        assert_refusal(
+            &boundary
+                .core
+                .request("POST", "/v1/programs/upgrade", &headers, &signed),
+            400,
+            "program_route_mismatch",
+        );
+        assert_lifecycle_hash_refusal(cluster, boundary, sequence, payload, &registry);
+    }
+    let answer = boundary.core.request("POST", path, &headers, &signed);
+    assert_eq!(answer.status, 200, "{}", answer.body);
+    let result = json(&answer);
+    let lookup = boundary
+        .core
+        .get(&format!("/v1/programs/receipts/by-idempotency/{key}"));
+    assert_eq!(lookup.status, 200, "{}", lookup.body);
+    assert_eq!(
+        json(&lookup)["result"]["receipt"],
+        result["result"]["receipt"]
+    );
+    assert_eq!(
+        json(&lookup)["result"]["activity_id"],
+        result["result"]["activity_id"]
+    );
+    assert_eq!(
+        result["result"]["activity_id"],
+        hex_encode(&must(
+            layerx_wire::hash::activity_id(&activity),
+            "activity ID"
+        ))
+    );
+    assert!(result["result"].get("program_id").is_none());
+    assert_lifecycle_state_receipt(cluster, &result, ordinal);
+    let replay = boundary.core.request("POST", path, &headers, &signed);
+    assert_eq!(replay.status, 200, "{}", replay.body);
+    assert_eq!(json(&replay)["result"], result["result"]);
+}
+
+fn assert_lifecycle_hash_refusal(
+    cluster: &Cluster,
+    boundary: &Boundary,
+    sequence: u64,
+    payload: &[u8],
+    registry: &ModuleRegistry,
+) {
+    let before = chain_head(&cluster.lni_socket).unwrap_or_else(|| panic!("head"));
+    let mut corrupted = payload.to_vec();
+    corrupted[68] ^= 1;
+    let bad = signed_program_activity(
+        &cluster.treasury_seed,
+        &cluster.treasury_did,
+        sequence,
+        1,
+        &corrupted,
+    );
+    let decoded = must(
+        layerx_wire::activity::decode_signed(&bad, registry),
+        "bad-hash envelope",
+    );
+    let bad_key = hex_encode(&decoded.idempotency_key());
+    assert_refusal(
+        &boundary.core.request(
+            "POST",
+            "/v1/programs/deploy",
+            &[
+                ("Content-Type", "application/octet-stream"),
+                ("Idempotency-Key", &bad_key),
+            ],
+            &bad,
+        ),
+        400,
+        "invalid_program_lifecycle",
+    );
+    assert_eq!(
+        chain_head(&cluster.lni_socket).unwrap_or_else(|| panic!("head")),
+        before
+    );
+}
+
+fn assert_lifecycle_state_receipt(cluster: &Cluster, result: &serde_json::Value, ordinal: u16) {
+    let bytes = must(
+        layerx_platform_core::hex_decode(
+            result["result"]["receipt"]
+                .as_str()
+                .unwrap_or_else(|| panic!("receipt missing")),
+        ),
+        "receipt hex",
+    );
+    let (_, sequencer) = chain_head(&cluster.lni_socket).unwrap_or_else(|| panic!("head"));
+    let receipt = must(
+        layerx_proof::receipt::verify_sequencer_signature(&bytes, sequencer),
+        "signature",
+    );
+    let protocol = receipt
+        .protocol()
+        .unwrap_or_else(|| panic!("protocol receipt"));
+    assert_eq!(
+        protocol.result_code(),
+        0,
+        "ordinal={ordinal} activity={:02x?}",
+        protocol.activity_id()
+    );
+    assert!(protocol.program_outcome().is_none());
+    assert_eq!(
+        (
+            protocol.module_id(),
+            protocol.module_version(),
+            protocol.operation()
+        ),
+        (9, 4, 0)
+    );
+    let authority = layerx_proof::receipt::AuthorizedBatch::new(
+        protocol.batch_id(),
+        protocol.asset(),
+        protocol.previous_state_root(),
+        protocol.resulting_state_root(),
+        sequencer,
+    );
+    must(
+        layerx_proof::receipt::verify_program_state(&bytes, &authority),
+        "state receipt",
+    );
+    let mut corrupted = bytes;
+    let last = corrupted.len() - 1;
+    corrupted[last] ^= 1;
+    assert!(layerx_proof::receipt::verify_program_state(&corrupted, &authority).is_err());
 }
 
 fn assert_program_simulation(boundary: &Boundary, cluster: &Cluster) {
@@ -1187,6 +1457,28 @@ fn assert_readiness_shape(answer: &HttpAnswer) {
 }
 
 fn assert_unavailable_public_routes(core: &Http, admin: &Http) {
+    for path in [
+        "/v1/programs/deploy",
+        "/v1/programs/upgrade",
+        "/v1/programs/wind-down",
+    ] {
+        assert_refusal(&core.get(path), 405, "method_not_allowed");
+        assert_refusal(
+            &core.request("POST", path, &[("Content-Type", "application/json")], b"{}"),
+            415,
+            "activity_content_type_required",
+        );
+        assert_refusal(
+            &core.request(
+                "POST",
+                path,
+                &[("Content-Type", "application/octet-stream")],
+                &[1],
+            ),
+            400,
+            "idempotency_key_required",
+        );
+    }
     assert_eq!(core.get("/livez").status, 200);
     assert_eq!(admin.get("/livez").status, 200);
     assert_refusal(&core.get("/readyz"), 503, "node_unavailable");

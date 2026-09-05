@@ -87,6 +87,13 @@ static lxp_result materialize_snapshot(
     if (status == LXP_OK &&
         manifest->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT)
         status = lxp_kernel_register_module(kernel, lx_asset_module_iface());
+    if (status == LXP_OK) {
+        lxp_bridge_profile bridge;
+        bool present = false;
+        status = lxp_bridge_genesis_profile(manifest, &bridge, &present);
+        if (status == LXP_OK && present)
+            status = lxp_kernel_register_module(kernel, lxp_bridge_module_iface());
+    }
     if (status == LXP_OK)
         status = lxp_genesis_materialize(manifest, arena, kernel);
     if (status == LXP_OK) status = lxp_state_root(kernel, canonical_root);
@@ -122,10 +129,11 @@ done:
     return status;
 }
 
-lxp_result lxp_genesis_build_fresh_empty(
+static lxp_result build_fresh(
     const lxp_genesis_manifest *draft, const uint8_t asset_id[32],
     const lx_programs_metering_schedule *metering,
     const lx_programs_fee_genesis_parameters *fees,
+    const lxp_bridge_profile *profile,
     const uint8_t signer_private_key[32], lxp_arena *arena,
     lxp_genesis_manifest *signed_manifest,
     lxp_snapshot_manifest_record *snapshot_manifest,
@@ -169,6 +177,8 @@ lxp_result lxp_genesis_build_fresh_empty(
                                                        &prepared_metering);
     if (status == LXP_OK)
         status = lxp_programs_fee_genesis_append(candidate, fees);
+    if (status == LXP_OK && profile != NULL)
+        status = lxp_bridge_genesis_append(candidate, profile);
     if (status == LXP_OK)
         status = lxp_genesis_state_root(
             candidate, arena, candidate->genesis_state_root);
@@ -205,4 +215,33 @@ lxp_result lxp_genesis_build_fresh_empty(
     lxp_secure_zero(&prepared_metering, sizeof(prepared_metering));
     free(candidate);
     return status;
+}
+
+lxp_result lxp_genesis_build_fresh_empty(
+    const lxp_genesis_manifest *draft, const uint8_t asset_id[32],
+    const lx_programs_metering_schedule *metering,
+    const lx_programs_fee_genesis_parameters *fees,
+    const uint8_t signer_private_key[32], lxp_arena *arena,
+    lxp_genesis_manifest *signed_manifest,
+    lxp_snapshot_manifest_record *snapshot_manifest,
+    lxp_byte_span *encoded_manifest, lxp_byte_span *snapshot)
+{
+    return build_fresh(draft, asset_id, metering, fees, NULL, signer_private_key,
+                        arena, signed_manifest, snapshot_manifest, encoded_manifest, snapshot);
+}
+
+lxp_result lxp_genesis_build_fresh_custody(
+    const lxp_genesis_manifest *draft, const uint8_t asset_id[32],
+    const lx_programs_metering_schedule *metering,
+    const lx_programs_fee_genesis_parameters *fees,
+    const lxp_bridge_profile *profile,
+    const uint8_t signer_private_key[32], lxp_arena *arena,
+    lxp_genesis_manifest *signed_manifest,
+    lxp_snapshot_manifest_record *snapshot_manifest,
+    lxp_byte_span *encoded_manifest, lxp_byte_span *snapshot)
+{
+    if (lxp_bridge_profile_validate(profile) != LXP_OK)
+        return LXP_ERR_NON_CANONICAL;
+    return build_fresh(draft, asset_id, metering, fees, profile, signer_private_key,
+                        arena, signed_manifest, snapshot_manifest, encoded_manifest, snapshot);
 }

@@ -85,6 +85,9 @@ See Payments and Fees.
 
 **bridge.** Deposits and withdrawals against Paxeer custody. The reserve mirror is an ordinary account so conservation still holds.
 
+The opt-in [authenticated custody credit profile](Custody.md) binds real external
+deposits to atomic issuance and beneficiary credit while keeping fresh genesis empty.
+
 ---
 
 ## Programs: the first-class execution surface

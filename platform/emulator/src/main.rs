@@ -1,4 +1,5 @@
 mod native_call;
+mod program_lifecycle;
 
 use std::collections::{HashMap, VecDeque};
 use std::ffi::{c_char, c_int, c_uchar, c_uint, c_ulonglong, c_void, CStr};
@@ -116,10 +117,11 @@ struct CoreProgram {
 }
 
 unsafe extern "C" {
-    fn platform_emulator_create(
+    fn platform_emulator_create_for_protocol(
         network_id: c_uint,
         timestamp_ms: c_ulonglong,
         sequencer_seed: *const c_uchar,
+        protocol_version: u16,
     ) -> *mut c_void;
     fn platform_emulator_destroy(emulator: *mut c_void);
     fn platform_emulator_error_name(result: c_int) -> *const c_char;
@@ -180,6 +182,7 @@ unsafe extern "C" {
         did_length: usize,
         next_sequence: *mut c_ulonglong,
     ) -> c_int;
+    fn platform_emulator_owner_account_count(emulator: *const c_void, count: *mut usize) -> c_int;
     fn platform_emulator_snapshot_export(
         emulator: *mut c_void,
         bytes: *mut *const c_uchar,
@@ -273,6 +276,7 @@ impl Drop for Emulator {
 struct Config {
     listen: SocketAddr,
     network_id: u32,
+    protocol_version: u16,
     timestamp_ms: u64,
     prefunds: Vec<Prefund>,
     sequencer_seed: Option<[u8; 32]>,
@@ -770,7 +774,14 @@ fn core_response(trace: u64, code: i32) -> Response {
 
 fn programs_route(method: &str, path: &str) -> bool {
     match (method, path) {
-        ("POST", "/v1/programs/call") | ("POST", "/v1/programs/simulate") => true,
+        (
+            "POST",
+            "/v1/programs/call"
+            | "/v1/programs/simulate"
+            | "/v1/programs/deploy"
+            | "/v1/programs/upgrade"
+            | "/v1/programs/wind-down",
+        ) => true,
         ("GET", path) if path.starts_with("/v1/programs/registry/") => {
             let tail = &path[22..];
             canonical_hex32_text(tail.strip_suffix("/interface").unwrap_or(tail))
@@ -1224,19 +1235,7 @@ fn write_response(stream: &mut TcpStream, response: &Response) -> std::io::Resul
 }
 
 fn submit(emulator: &mut Emulator, request: &Request, trace: u64) -> Response {
-    let media_type = request
-        .content_type
-        .split(';')
-        .next()
-        .unwrap_or_default()
-        .trim();
-    let activity = if media_type == "application/octet-stream" {
-        Ok(request.body.clone())
-    } else if media_type == "application/json" {
-        decode_json::<ActivityBody>(request).and_then(|value| hex_decode(&value.activity))
-    } else {
-        Err("activity content type is not supported".into())
-    };
+    let activity = decode_activity(request);
     let activity = match activity {
         Ok(activity) if !activity.is_empty() => activity,
         Ok(_) => return refusal(trace, 400, "invalid_argument", "activity must not be empty"),
@@ -1303,14 +1302,19 @@ fn decode_activity(request: &Request) -> Result<Vec<u8>, String> {
     } else if media_type == "application/json" {
         decode_json::<ActivityBody>(request).and_then(|value| hex_decode(&value.activity))
     } else {
-        Err("program-call content type is not supported".into())
+        Err("activity content type is not supported".into())
     }
 }
 
 fn programs_registry() -> Result<(ActivityType, ModuleRegistry), String> {
     let call_type = ActivityType::new(ModuleId::Programs, 3)
         .map_err(|_| "Programs CALL activity type is unavailable".to_owned())?;
-    let registration = ModuleRegistration::new(ModuleId::Programs, &[call_type])
+    let operations = [1, 2, 3, 7]
+        .map(|ordinal| ActivityType::new(ModuleId::Programs, ordinal))
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| "Programs activity types are unavailable".to_owned())?;
+    let registration = ModuleRegistration::new(ModuleId::Programs, &operations)
         .map_err(|_| "Programs module registration is unavailable".to_owned())?;
     let registry = ModuleRegistry::new(&[registration])
         .map_err(|_| "Programs module registry is unavailable".to_owned())?;
@@ -1382,6 +1386,22 @@ fn decode_program_activity(request: &Request) -> Result<DecodedProgramActivity, 
         .unwrap_or_default()
         .trim();
     let (call_type, registry) = programs_registry()?;
+    if let Some(ordinal) = program_lifecycle::ordinal(&request.path) {
+        if media_type != "application/octet-stream" {
+            return Err("program lifecycle requires application/octet-stream".to_owned());
+        }
+        let program_id = program_lifecycle::validate(&request.body, &registry, ordinal)?;
+        let activity = decode_signed(&request.body, &registry)
+            .map_err(|_| "invalid signed lifecycle activity".to_owned())?;
+        return Ok(DecodedProgramActivity {
+            activity_id: derive_activity_id(&activity)
+                .map_err(|_| "invalid lifecycle activity identity".to_owned())?,
+            idempotency_key: activity.idempotency_key(),
+            protocol_version: activity.protocol_version(),
+            program_id,
+            signed: request.body.clone(),
+        });
+    }
     if media_type == "application/json" {
         if let Some((signed, program_id)) = native_call::parse_json(&request.body, &registry)? {
             let activity = decode_signed(&signed, &registry)
@@ -1702,7 +1722,8 @@ fn verified_program_document(
 }
 
 fn stored_program_operation_response(trace: u64, operation: &ProgramOperation) -> Response {
-    let mut response = success(trace, &operation.response);
+    let public = lifecycle_public_response(operation).unwrap_or_else(|| operation.response.clone());
+    let mut response = success(trace, &public);
     if serde_json::from_str::<serde_json::Value>(&operation.response)
         .ok()
         .and_then(|value| {
@@ -1718,7 +1739,27 @@ fn stored_program_operation_response(trace: u64, operation: &ProgramOperation) -
     response
 }
 
+fn lifecycle_public_response(operation: &ProgramOperation) -> Option<String> {
+    let signed = hex_decode(operation.retained_signed_activity.as_deref()?).ok()?;
+    let (_, registry) = programs_registry().ok()?;
+    let activity = decode_signed(&signed, &registry).ok()?;
+    let lifecycle = [1, 2, 7].into_iter().any(|ordinal| {
+        ActivityType::new(ModuleId::Programs, ordinal).ok() == Some(activity.activity_type())
+    });
+    if !lifecycle || hex_encode(&derive_activity_id(&activity).ok()?) != operation.activity_id {
+        return None;
+    }
+    let key = hex_encode(&activity.idempotency_key());
+    if !canonical_program_response(&operation.response, &operation.activity_id, &key) {
+        return None;
+    }
+    let mut document: serde_json::Value = serde_json::from_str(&operation.response).ok()?;
+    document.as_object_mut()?.remove("idempotency_key");
+    Some(document.to_string())
+}
+
 fn program_call(emulator: &mut Emulator, request: &Request, trace: u64) -> Response {
+    let lifecycle = program_lifecycle::ordinal(&request.path).is_some();
     let request_idempotency = match request.idempotency_key.as_deref() {
         Some(value) if canonical_hex32_text(value) => value,
         _ => {
@@ -1738,6 +1779,7 @@ fn program_call(emulator: &mut Emulator, request: &Request, trace: u64) -> Respo
         .trim();
     if request.body.is_empty()
         || !matches!(media_type, "application/json" | "application/octet-stream")
+        || (lifecycle && media_type != "application/octet-stream")
     {
         return refusal(
             trace,
@@ -1748,7 +1790,7 @@ fn program_call(emulator: &mut Emulator, request: &Request, trace: u64) -> Respo
     }
     let decoded = match decode_program_activity(request) {
         Ok(activity) => activity,
-        Err(error) => return refusal(trace, 400, "invalid_program_call", &error),
+        Err(error) => return refusal(trace, 400, "invalid_program_activity", &error),
     };
     let protocol_idempotency = hex_encode(&decoded.idempotency_key);
     if request_idempotency != protocol_idempotency {
@@ -1780,7 +1822,11 @@ fn program_call(emulator: &mut Emulator, request: &Request, trace: u64) -> Respo
         );
     }
     let program_id = decoded.program_id;
-    let head = match active_program_head(emulator, program_id, trace) {
+    let head = match if lifecycle {
+        Ok(None)
+    } else {
+        active_program_head(emulator, program_id, trace).map(Some)
+    } {
         Ok(head) => head,
         Err(response) => return response,
     };
@@ -1841,9 +1887,72 @@ fn program_call(emulator: &mut Emulator, request: &Request, trace: u64) -> Respo
     if code != 0 {
         return core_response(trace, code);
     }
+    let lifecycle_authority = if lifecycle {
+        Some(AuthorizedBatch::new(
+            receipt.batch_id,
+            receipt.asset,
+            before.receipt_state_root,
+            receipt.state_root,
+            emulator.signing_key.verifying_key().to_bytes(),
+        ))
+    } else {
+        None
+    };
+    let lifecycle_result_code = receipt.result_code;
     let material = match take_core_receipt(&mut receipt) {
         Ok(material) => material,
         Err(error) => return refusal(trace, 503, "core_invalid_output", &error),
+    };
+    if lifecycle {
+        let Some(authority) = lifecycle_authority else {
+            return refusal(
+                trace,
+                503,
+                "program_receipt_verification_failed",
+                "missing lifecycle authority",
+            );
+        };
+        let valid =
+            program_lifecycle::verify_receipt(&material.receipt, &authority, decoded.activity_id)
+                .is_ok();
+        if !valid || material.activity_id != decoded.activity_id {
+            return refusal(
+                trace,
+                503,
+                "program_receipt_verification_failed",
+                "lifecycle receipt does not bind the submitted activity and state",
+            );
+        }
+        let receipt_hex = hex_encode(&material.receipt);
+        let response = serde_json::json!({
+            "activity_id": activity_id, "receipt": receipt_hex,
+            "idempotency_key": protocol_idempotency,
+            "state": if lifecycle_result_code == 0 { "completed" } else { "refused" },
+            "terminal_payload": "", "call_graph": "",
+        })
+        .to_string();
+        remember_receipt(emulator, activity_id.clone(), receipt_hex);
+        emulator
+            .program_activity_operations
+            .insert(activity_id.clone(), protocol_idempotency.clone());
+        let operation = ProgramOperation {
+            activity_id,
+            response: response.clone(),
+            retained_signed_activity: Some(hex_encode(&decoded.signed)),
+        };
+        let response = stored_program_operation_response(trace, &operation);
+        emulator
+            .program_operations
+            .insert(protocol_idempotency, operation);
+        return response;
+    }
+    let Some(head) = head else {
+        return refusal(
+            trace,
+            503,
+            "program_head_unavailable",
+            "call requires a verified program head",
+        );
     };
     let verified = match verify_program_execution(
         &material.receipt,
@@ -3365,11 +3474,25 @@ fn import_snapshot(emulator: &mut Emulator, body: &[u8], trace: u64) -> Response
         )
     };
     if code != 0 {
+        let rollback = unsafe {
+            platform_emulator_snapshot_import(emulator.core, prior_core.as_ptr(), prior_core.len())
+        };
+        if rollback != 0 {
+            return refusal(
+                trace,
+                503,
+                "snapshot_rollback_failed",
+                "prior canonical state could not be restored",
+            );
+        }
         return core_response(trace, code);
     }
-    let recovered_accounts_match = inspect_state(emulator)
-        .ok()
-        .is_some_and(|state| state.account_count == recovered.accounts.len())
+    let mut owner_account_count = 0_usize;
+    let owner_account_status = unsafe {
+        platform_emulator_owner_account_count(emulator.core, &raw mut owner_account_count)
+    };
+    let recovered_accounts_match = owner_account_status == 0
+        && owner_account_count == recovered.accounts.len()
         && recovered.accounts.iter().all(|(name, expected)| {
             core_account(emulator, name)
                 .ok()
@@ -3518,7 +3641,13 @@ fn route(emulator: &mut Emulator, request: &Request) -> Response {
         ("POST", "/v1/activities") => submit(emulator, request, trace),
         ("POST", "/v1/moves/quote") => move_quote(emulator, request, trace),
         ("POST", "/v1/moves") => move_commit(emulator, request, trace),
-        ("POST", "/v1/programs/call") => program_call(emulator, request, trace),
+        (
+            "POST",
+            "/v1/programs/call"
+            | "/v1/programs/deploy"
+            | "/v1/programs/upgrade"
+            | "/v1/programs/wind-down",
+        ) => program_call(emulator, request, trace),
         ("POST", "/v1/programs/simulate") => program_simulate(emulator, request, trace),
         ("GET", path)
             if programs_route("GET", path)
@@ -3582,7 +3711,12 @@ fn route(emulator: &mut Emulator, request: &Request) -> Response {
         ),
         _ => refusal(trace, 404, "not_found", "route does not exist"),
     };
-    if program_request {
+    if program_request
+        && !(request.method == "POST"
+            && (request.path == "/v1/programs/call"
+                || program_lifecycle::ordinal(&request.path).is_some())
+            && (200..300).contains(&result.status))
+    {
         agent_response(trace, result)
     } else {
         result
@@ -3897,11 +4031,12 @@ fn parse_prefund(value: &str) -> Result<Prefund, String> {
 fn parse_config(arguments: impl IntoIterator<Item = String>) -> Result<Config, String> {
     let mut arguments = arguments.into_iter();
     if arguments.next().as_deref() != Some("up") {
-        return Err("usage: layerx emulator up [--listen ADDRESS] [--network-id ID] [--time-ms MS] [--sequencer-seed-file PATH] [--prefund DID,PUBLIC_KEY,AMOUNT]".into());
+        return Err("usage: layerx emulator up [--listen ADDRESS] [--network-id ID] [--protocol-version 2|3] [--time-ms MS] [--sequencer-seed-file PATH] [--prefund DID,PUBLIC_KEY,AMOUNT]".into());
     }
     let mut config = Config {
         listen: SocketAddr::from(([127, 0, 0, 1], DEFAULT_PORT)),
         network_id: DEFAULT_NETWORK_ID,
+        protocol_version: layerx_wire::limits::PROTOCOL_VERSION,
         timestamp_ms: DEFAULT_TIME_MS,
         prefunds: Vec::new(),
         sequencer_seed: None,
@@ -3922,6 +4057,13 @@ fn parse_config(arguments: impl IntoIterator<Item = String>) -> Result<Config, S
             }
             "--network-id" => {
                 config.network_id = value.parse().map_err(|_| "network id must be an integer")?;
+            }
+            "--protocol-version" => {
+                config.protocol_version = match value.as_str() {
+                    "2" => 2,
+                    "3" => 3,
+                    _ => return Err("protocol version must be 2 or 3".into()),
+                };
             }
             "--time-ms" => {
                 config.timestamp_ms = value.parse().map_err(|_| "time must be an integer")?;
@@ -3961,8 +4103,14 @@ fn platform_emulator(config: Config) -> Result<(), String> {
     if seed == [0; 32] {
         return Err("sequencer seed must not be zero".to_owned());
     }
-    let core =
-        unsafe { platform_emulator_create(config.network_id, config.timestamp_ms, seed.as_ptr()) };
+    let core = unsafe {
+        platform_emulator_create_for_protocol(
+            config.network_id,
+            config.timestamp_ms,
+            seed.as_ptr(),
+            config.protocol_version,
+        )
+    };
     if core.is_null() {
         return Err("could not initialize the LayerX core".into());
     }
@@ -4154,6 +4302,28 @@ mod boundary_tests {
         assert_eq!(advance_trace(&mut trace), Some(u64::MAX));
         assert_eq!(advance_trace(&mut trace), None);
         assert_eq!(trace, u64::MAX);
+    }
+
+    #[test]
+    fn emulator_protocol_profiles_are_explicit_and_closed() -> Result<(), String> {
+        assert_eq!(parse_config(["up".to_owned()])?.protocol_version, 2);
+        for protocol in ["2", "3"] {
+            let config = parse_config([
+                "up".to_owned(),
+                "--protocol-version".to_owned(),
+                protocol.to_owned(),
+            ])?;
+            assert_eq!(config.protocol_version.to_string(), protocol);
+        }
+        for invalid in ["0", "1", "4", "03", "-1"] {
+            assert!(parse_config([
+                "up".to_owned(),
+                "--protocol-version".to_owned(),
+                invalid.to_owned()
+            ])
+            .is_err());
+        }
+        Ok(())
     }
 }
 
@@ -4548,6 +4718,16 @@ mod program_call_tests {
 
     #[test]
     fn emulator_exposes_only_the_six_program_operation_routes() {
+        for path in [
+            "/v1/programs/deploy",
+            "/v1/programs/upgrade",
+            "/v1/programs/wind-down",
+        ] {
+            assert!(programs_route("POST", path));
+            assert!(!programs_route("GET", path));
+            assert!(!programs_route("PUT", path));
+            assert!(!programs_route("POST", &format!("{path}/")));
+        }
         let id = "a".repeat(64);
         assert!(programs_route("POST", "/v1/programs/call"));
         assert!(programs_route("POST", "/v1/programs/simulate"));

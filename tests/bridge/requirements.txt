@@ -1,0 +1,2 @@
+cryptography>=42
+pycryptodome>=3.20

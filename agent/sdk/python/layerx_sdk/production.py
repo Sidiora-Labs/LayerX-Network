@@ -8,6 +8,7 @@ from typing import Literal, Mapping, Protocol, TypeVar, cast
 from .generated.client import Operation
 
 AGENT_OPERATIONS: tuple[Operation, ...] = (
+    "program.deploy", "program.upgrade", "program.wind-down",
     "agent.register", "approval.approve", "approval.get", "approval.list", "approval.reject",
     "availability.fetch", "budget.create", "budget.fund", "budget.list", "budget.reconciliation",
     "budget.revoke", "capability.attenuate", "capability.create", "capability.list",
@@ -203,6 +204,7 @@ class SdkTelemetry(Protocol):
 
 
 _AGENT_IDEMPOTENT = frozenset({
+    "program.deploy", "program.upgrade", "program.wind-down",
     "agent.register", "approval.approve", "approval.reject", "budget.create", "budget.fund",
     "budget.revoke", "capability.attenuate", "capability.create", "capability.revoke", "prepare", "program.call",
     "session.close", "session.open", "session.refresh", "sign", "submit",

@@ -34,6 +34,13 @@ const MODULE_GOVERNANCE: u16 = 7;
 const METERING_AUTHORITY_GENESIS: u8 = 1;
 const BOUNDARY_UID: u32 = 65534;
 const BOUNDARY_GID: u32 = 65534;
+const CUSTODY_PROFILE_BYTES: usize = 207;
+
+#[path = "real_node/lifecycle.rs"]
+mod lifecycle;
+
+#[path = "real_node/custody.rs"]
+mod custody;
 
 fn must<T, E: Debug>(result: Result<T, E>, what: &str) -> T {
     result.unwrap_or_else(|error| panic!("{what}: {error:?}"))
@@ -250,10 +257,21 @@ fn genesis_guarantor_key(directory: &Path) -> [u8; 33] {
     )
 }
 
-fn build_genesis(root: &Path, builder: &Path) -> Genesis {
+fn build_genesis(root: &Path, builder: &Path, custody_profile: Option<&Path>) -> Genesis {
     let directory = root.join("genesis");
     make_dir(&directory, 0o755);
-    let asset = random32();
+    let asset = custody_profile.map_or_else(random32, |path| {
+        let profile = must(fs::read(path), "custody profile");
+        assert_eq!(
+            profile.len(),
+            CUSTODY_PROFILE_BYTES,
+            "native custody profile length"
+        );
+        assert_eq!(&profile[..5], b"LXBC1");
+        assert_eq!(&profile[201..205], &NETWORK_ID.to_be_bytes());
+        assert_eq!(&profile[205..207], &PROTOCOL_VERSION.to_be_bytes());
+        must(profile[97..129].try_into(), "custody profile asset")
+    });
     let guarantor_key = genesis_guarantor_key(&directory);
     write(
         &directory.join("request.lxgb"),
@@ -262,13 +280,17 @@ fn build_genesis(root: &Path, builder: &Path) -> Genesis {
     );
     write(&directory.join("signer.key"), &random32(), 0o600);
     let artifacts = directory.join("artifacts");
+    let mut arguments = vec![
+        text(&directory.join("request.lxgb")),
+        text(&directory.join("signer.key")),
+        text(&artifacts),
+    ];
+    if let Some(profile) = custody_profile {
+        arguments.extend(["--custody-profile".to_owned(), text(profile)]);
+    }
     command(
         &text(builder),
-        &[
-            &text(&directory.join("request.lxgb")),
-            &text(&directory.join("signer.key")),
-            &text(&artifacts),
-        ],
+        &arguments.iter().map(String::as_str).collect::<Vec<_>>(),
     );
     let request = must(
         fs::read(artifacts.join("paxeer-registration-request.lxrr")),
@@ -1003,6 +1025,7 @@ struct Cluster {
     registry_token: String,
     state_dir: PathBuf,
     asset: [u8; 32],
+    genesis_receipt_state_root: [u8; 32],
     sequencer_key: [u8; 32],
     actor: Actor,
     tls: TlsMaterial,
@@ -1157,6 +1180,7 @@ fn start_sequencer(
     repository: &Path,
     genesis: &Genesis,
     setup: &NodeSetup,
+    actor: Actor,
 ) -> (Daemon, Actor, PathBuf) {
     let node_dir = root.join("node");
     let checkpoints = node_dir.join("checkpoints");
@@ -1172,7 +1196,6 @@ fn start_sequencer(
         &registration(&genesis.receipt_state_root),
         0o600,
     );
-    let actor = actor();
     let identities = format!(
         "{}:{}:1\n",
         hex(actor.did.as_bytes()),
@@ -1297,7 +1320,16 @@ fn start_boundary(root: &Path, socket: &Path, setup: &NodeSetup) -> BoundarySetu
     }
 }
 
+struct CustodySetup {
+    profile_path: PathBuf,
+    actor: Actor,
+}
+
 fn start_cluster() -> Cluster {
+    start_cluster_with_custody(None)
+}
+
+fn start_cluster_with_custody(custody: Option<CustodySetup>) -> Cluster {
     assert_eq!(
         effective_uid(),
         0,
@@ -1315,7 +1347,12 @@ fn start_cluster() -> Cluster {
         hex(&random32()[..8])
     ));
     make_dir(&root, 0o755);
-    let genesis = build_genesis(&root, &builder);
+    let genesis = build_genesis(
+        &root,
+        &builder,
+        custody.as_ref().map(|setup| setup.profile_path.as_path()),
+    );
+    let actor = custody.map_or_else(actor, |setup| setup.actor);
 
     let sequencer_seed = random32();
     let sequencer_signing = SigningKey::from_bytes(&sequencer_seed);
@@ -1333,7 +1370,7 @@ fn start_cluster() -> Cluster {
     };
     let replica = start_replica(&root, &layerxd, &setup);
     let (sequencer, actor, socket) =
-        start_sequencer(&root, &layerxd, &repository, &genesis, &setup);
+        start_sequencer(&root, &layerxd, &repository, &genesis, &setup, actor);
     let boundary = start_boundary(&root, &socket, &setup);
     Cluster {
         root,
@@ -1347,6 +1384,7 @@ fn start_cluster() -> Cluster {
         registry_token: boundary.registry_token,
         state_dir: boundary.state_dir,
         asset: genesis.asset,
+        genesis_receipt_state_root: genesis.receipt_state_root,
         sequencer_key: setup.sequencer_key,
         actor,
         tls: boundary.tls,
@@ -2080,8 +2118,18 @@ fn signed_program_call(actor: &Actor, program_id: [u8; 32]) -> Vec<u8> {
 }
 
 fn signed_program_payload(actor: &Actor, bytes: &[u8]) -> Vec<u8> {
+    signed_program_operation(actor, 3, 1, 0, bytes)
+}
+
+fn signed_program_operation(
+    actor: &Actor,
+    ordinal: u16,
+    sequence: u64,
+    fee_limit: u128,
+    bytes: &[u8],
+) -> Vec<u8> {
     let activity_type = must(
-        ActivityType::new(ModuleId::Programs, 3),
+        ActivityType::new(ModuleId::Programs, ordinal),
         "program activity type",
     );
     let registration = must(
@@ -2103,7 +2151,7 @@ fn signed_program_payload(actor: &Actor, bytes: &[u8]) -> Vec<u8> {
             .and_then(|value| value.activity_type(activity_type))
             .and_then(|value| value.actor_did(must(Did::new(actor.did.as_bytes()), "actor DID")))
             .and_then(|value| value.authority(must(Authority::owner(&key), "owner")))
-            .and_then(|value| value.account_sequence(1))
+            .and_then(|value| value.account_sequence(sequence))
             .and_then(|value| {
                 value.timestamp_bound(must(
                     TimestampBound::new(now_ms().saturating_sub(30_000), now_ms() + 120_000),
@@ -2111,7 +2159,7 @@ fn signed_program_payload(actor: &Actor, bytes: &[u8]) -> Vec<u8> {
                 ))
             })
             .and_then(|value| value.idempotency_key(IdempotencyKey::new(random32())))
-            .and_then(|value| value.fee_limit(Amount::from_u128(0)))
+            .and_then(|value| value.fee_limit(Amount::from_u128(fee_limit)))
             .and_then(|value| value.payload_hash(payload_hash))
             .and_then(|value| value.payload(payload))
             .map(|_| ()),

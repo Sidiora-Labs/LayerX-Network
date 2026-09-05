@@ -105,7 +105,7 @@ pub(super) fn register(linker: &mut Linker<RuntimeState>) -> Result<(), Executio
     Ok(())
 }
 
-pub(super) fn register_candidate(linker: &mut Linker<RuntimeState>) -> Result<(), ExecutionFault> {
+pub(super) fn register_v2(linker: &mut Linker<RuntimeState>) -> Result<(), ExecutionFault> {
     linker
         .func_wrap(
             CANDIDATE_ABI_MODULE,

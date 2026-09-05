@@ -4,6 +4,13 @@
 #include "layerx/lxp_kernel.h"
 
 #include <string.h>
+#include <stdio.h>
+
+static int wind_down_failure(int line)
+{
+    (void)fprintf(stderr, "Programs wind-down fixture failed at line=%d\n", line);
+    return 1;
+}
 
 enum {
     ROUTE_OPERATION = 1,
@@ -41,7 +48,7 @@ static int activity_dispatch(lxp_kernel *kernel,
                              const uint8_t *payload, size_t payload_length,
                              lxp_result expected, uint16_t expected_event)
 {
-    uint8_t arena_bytes[65536];
+    static uint8_t arena_bytes[LXP_MAX_ACTIVITY_BYTES + 65536U];
     lxp_arena arena;
     lxp_module_ctx ctx;
     lxp_effect_buffer effects;
@@ -51,6 +58,7 @@ static int activity_dispatch(lxp_kernel *kernel,
     lx_account *sequence_account;
     lxp_result module_result = LXP_OK;
     uint64_t sequence = kernel->state->next_sequence;
+    uint64_t ledger_before;
     if (lxp_state_journal_open(kernel->state, sequence, kernel->journal) !=
             LXP_OK ||
         lxp_arena_init(&arena, arena_bytes, sizeof(arena_bytes)) != LXP_OK ||
@@ -60,32 +68,146 @@ static int activity_dispatch(lxp_kernel *kernel,
         lxp_module_ctx_bind_effects(&ctx, &effects) != LXP_OK ||
         lxp_kernel_module_for_activity(kernel, LX_PROGRAMS_WIND_DOWN, 1U,
                                        &registration) != LXP_OK)
-        return 1;
+        return wind_down_failure(__LINE__);
     ctx.protocol_version = LXP_PROTOCOL_VERSION_OCCUPANCY;
     runtime = (lx_programs_transfer_runtime *)
         kernel->module_runtime[LXP_MODULE_PROGRAMS];
     sequence_account = runtime == NULL ? NULL :
         account_by_id(runtime->accounts, authority->principal);
-    if (sequence_account == NULL) return 1;
+    if (sequence_account == NULL) return wind_down_failure(__LINE__);
+    ledger_before = sequence_account->next_sequence;
     (void)memset(&activity, 0, sizeof(activity));
     activity.activity_type = LX_PROGRAMS_WIND_DOWN;
     activity.account_sequence = sequence_account->next_sequence;
     activity.payload = (lxp_byte_span){payload, payload_length};
+    if (registration->abi_version == LX_PROGRAMS_SANDBOX_DESTROY_ABI_VERSION) {
+        lxp_byte_span encoded;
+        uint64_t captured;
+        lxp_ledger_admission_facts saved;
+        ctx.protocol_version = LXP_PROTOCOL_VERSION_STATE_COMMITMENT;
+        activity.protocol_version = ctx.protocol_version;
+        activity.account_sequence = sequence + 100U;
+        activity.actor_did = (lxp_byte_span){
+            (const uint8_t *)"did:lxp:wind-owner",
+            sizeof("did:lxp:wind-owner") - 1U};
+        if (lxp_activity_encode(&activity, &arena, &encoded) != LXP_OK ||
+            lxp_activity_id(encoded.bytes, encoded.length, ctx.activity_id) != LXP_OK ||
+            lxp_kernel_bind_ledger_admission(&ctx, authority, activity.activity_type) != LXP_OK ||
+            ctx.call_admission.present ||
+            lxp_ctx_ledger_execution_sequence(
+                &ctx, authority->principal, activity.account_sequence,
+                &captured) != LXP_OK || captured != sequence_account->next_sequence ||
+            captured == activity.account_sequence || captured == sequence ||
+            lxp_kernel_bind_ledger_admission(&ctx, authority, activity.activity_type) != LXP_ERR_CONTEXT_MISMATCH)
+            return wind_down_failure(__LINE__);
+        saved = ctx.ledger_admission;
+        ctx.ledger_admission.bound = false;
+        if (lxp_ctx_ledger_execution_sequence(
+                &ctx, authority->principal, activity.account_sequence,
+                &captured) != LXP_ERR_CONTEXT_MISMATCH)
+            return wind_down_failure(__LINE__);
+        ctx.ledger_admission = saved;
+        ctx.ledger_admission.account_id[0] ^= 1U;
+        if (lxp_ctx_ledger_execution_sequence(
+                &ctx, authority->principal, activity.account_sequence,
+                &captured) != LXP_ERR_CONTEXT_MISMATCH)
+            return wind_down_failure(__LINE__);
+        ctx.ledger_admission = saved;
+        ctx.ledger_admission.next_sequence++;
+        if (lxp_ctx_ledger_execution_sequence(
+                &ctx, authority->principal, activity.account_sequence,
+                &captured) != LXP_ERR_CONTEXT_MISMATCH)
+            return wind_down_failure(__LINE__);
+        ctx.ledger_admission = saved;
+        ctx.ledger_admission.account_present = false;
+        if (lxp_ctx_ledger_execution_sequence(
+                &ctx, authority->principal, activity.account_sequence,
+                &captured) != LXP_ERR_CONTEXT_MISMATCH)
+            return wind_down_failure(__LINE__);
+        ctx.ledger_admission = saved;
+        ctx.ledger_admission.activity_binding[0] ^= 1U;
+        if (lxp_ctx_ledger_execution_sequence(
+                &ctx, authority->principal, activity.account_sequence,
+                &captured) != LXP_ERR_CONTEXT_MISMATCH)
+            return wind_down_failure(__LINE__);
+        ctx.ledger_admission = saved;
+    }
     if (lxp_kernel_dispatch(registration, &ctx, &activity, authority,
                             &effects, &module_result) != LXP_OK ||
         module_result != expected)
-        return 1;
+        return wind_down_failure(__LINE__);
     if (expected != LXP_OK) {
-        if (effects.count != 0U) return 1;
+        if (effects.count != 0U || sequence_account->next_sequence != ledger_before)
+            return wind_down_failure(__LINE__);
         lxp_module_ctx_rollback(&ctx);
         return lxp_state_journal_rollback(kernel->journal) == LXP_OK ? 0 : 1;
     }
+    if (sequence_account->next_sequence != ledger_before +
+            (payload[32] == EXIT_OPERATION ? 1U : 0U))
+        return wind_down_failure(__LINE__);
+    if (registration->abi_version == LX_PROGRAMS_SANDBOX_DESTROY_ABI_VERSION &&
+        payload[32] == EXIT_OPERATION) {
+        lxp_prepared_module_transition *prepared = NULL;
+        lxp_module_account_snapshot before[LXP_MAX_TRANSFER_SET_LEGS * 2U + 1U];
+        size_t count = ctx.transfer_snapshot_count;
+        uint8_t token[32], activity_id[32];
+        size_t index;
+        (void)memcpy(token, ctx.activity_id, 32U);
+        (void)memcpy(activity_id, ctx.activity_id, 32U);
+        (void)memcpy(before, ctx.transfer_snapshots, count * sizeof(before[0]));
+        if (lxp_module_ctx_export_prepared(&ctx, &effects, token, &prepared) != LXP_OK)
+            return wind_down_failure(__LINE__);
+        lxp_module_ctx_rollback(&ctx);
+        if (lxp_state_journal_rollback(kernel->journal) != LXP_OK ||
+            sequence_account->next_sequence != ledger_before ||
+            kernel->state->next_sequence != sequence)
+            return wind_down_failure(__LINE__);
+        for (index = 0U; index < count; ++index)
+            if (lxp_u128_cmp(before[index].account->balance, before[index].balance) != 0 ||
+                before[index].account->next_sequence != before[index].next_sequence)
+                return wind_down_failure(__LINE__);
+        if (lxp_state_journal_open(kernel->state, sequence, kernel->journal) != LXP_OK ||
+            lxp_module_ctx_init(&ctx, kernel, LXP_MODULE_PROGRAMS, sequence, 1U,
+                                sequence, 100000U, &arena, true) != LXP_OK ||
+            lxp_effect_buffer_init(&effects) != LXP_OK ||
+            lxp_module_ctx_bind_effects(&ctx, &effects) != LXP_OK)
+            return wind_down_failure(__LINE__);
+        ctx.protocol_version = LXP_PROTOCOL_VERSION_STATE_COMMITMENT;
+        (void)memcpy(ctx.activity_id, activity_id, 32U);
+        if (lxp_kernel_bind_ledger_admission(&ctx, authority, activity.activity_type) != LXP_OK)
+            return wind_down_failure(__LINE__);
+        ctx.ledger_admission.next_sequence++;
+        if (lxp_module_ctx_import_prepared(&ctx, prepared, token, &effects) !=
+                LXP_ERR_CONTEXT_MISMATCH || sequence_account->next_sequence != ledger_before)
+            return wind_down_failure(__LINE__);
+        ctx.ledger_admission.next_sequence--;
+        sequence_account->next_sequence++;
+        if (lxp_module_ctx_import_prepared(&ctx, prepared, token, &effects) !=
+                LXP_ERR_CONTEXT_MISMATCH)
+            return wind_down_failure(__LINE__);
+        sequence_account->next_sequence--;
+        token[0] ^= 1U;
+        if (lxp_module_ctx_import_prepared(&ctx, prepared, token, &effects) !=
+                LXP_ERR_CONTEXT_MISMATCH)
+            return wind_down_failure(__LINE__);
+        token[0] ^= 1U;
+        if (lxp_module_ctx_import_prepared(&ctx, prepared, token, &effects) != LXP_OK ||
+            sequence_account->next_sequence != ledger_before + 1U || ctx.call_admission.present)
+            return wind_down_failure(__LINE__);
+        lxp_prepared_module_transition_destroy(prepared);
+    }
     if (effects.count != 1U ||
-        effects.effects[0].event_type != expected_event ||
-        lxp_module_ctx_prepare_commit(&ctx) != LXP_OK ||
-        lxp_state_journal_commit(kernel->journal) != LXP_OK ||
+        effects.effects[0].event_type != expected_event)
+        return wind_down_failure(__LINE__);
+    if (registration->abi_version == LX_PROGRAMS_SANDBOX_DESTROY_ABI_VERSION &&
+        payload[32] == EXIT_OPERATION) {
+        if (!ctx.commit_prepared) return wind_down_failure(__LINE__);
+    } else if (lxp_module_ctx_prepare_commit(&ctx) != LXP_OK) {
+        return wind_down_failure(__LINE__);
+    }
+    if (lxp_state_journal_commit(kernel->journal) != LXP_OK ||
         lxp_module_ctx_commit(&ctx) != LXP_OK)
-        return 1;
+        return wind_down_failure(__LINE__);
     return 0;
 }
 
@@ -227,17 +349,17 @@ static int malformed_program_spend_tables_refused(
     (void)memset(&receipt, 0, sizeof(receipt));
     if (lxp_kernel_apply_transfer_set(kernel, &set, &receipt) !=
             LXP_ERR_NON_CANONICAL)
-        return 1;
+        return wind_down_failure(__LINE__);
     set.leg_count = 2U;
     set.context.source_authority_count = 2U;
     if (lxp_kernel_apply_transfer_set(kernel, &set, &receipt) !=
             LXP_ERR_UNAUTHORIZED_DEBIT)
-        return 1;
+        return wind_down_failure(__LINE__);
     set.context.source_authorities = NULL;
     set.context.source_authority_count = 0U;
     if (lxp_kernel_apply_transfer_set(kernel, &set, &receipt) !=
             LXP_ERR_NON_CANONICAL)
-        return 1;
+        return wind_down_failure(__LINE__);
     return lxp_u128_cmp(source->balance, source_before) == 0 &&
                    lxp_u128_cmp(destination->balance,
                                 destination_before) == 0 &&
@@ -245,7 +367,7 @@ static int malformed_program_spend_tables_refused(
                0 : 1;
 }
 
-int main(void)
+static int wind_down_lifecycle(bool separate_counters)
 {
     static const uint8_t program_prefix[] = "program\0";
     static const uint8_t owner_prefix[] = "program-owner\0";
@@ -288,7 +410,7 @@ int main(void)
     (void)memset(assets[1].asset_id, 0x22, 32U);
     assets[0].registered = true;
     assets[1].registered = true;
-    if (lx_account_registry_init(&accounts) != LXP_OK) return 1;
+    if (lx_account_registry_init(&accounts) != LXP_OK) return wind_down_failure(__LINE__);
     for (index = 0U; index < 3U; ++index)
         if (lx_account_id_from_string((const uint8_t *)names[index],
                                       strlen(names[index]), ids[index]) !=
@@ -297,14 +419,14 @@ int main(void)
                             strlen(names[index]), ids[index], 7U,
                             LX_ACCOUNT_OPEN_CREDIT, NULL, &opened[index]) !=
                 LXP_OK)
-            return 1;
+            return wind_down_failure(__LINE__);
     if (lxp_ledger_bootstrap_balance(opened[0], assets[0].asset_id,
                                      (lxp_u128){0U, 0U}, 7U) != LXP_OK ||
         lxp_ledger_bootstrap_balance(opened[1], assets[0].asset_id,
                                      (lxp_u128){0U, 0U}, 0U) != LXP_OK ||
         lxp_ledger_bootstrap_balance(opened[2], assets[1].asset_id,
                                      (lxp_u128){0U, 0U}, 0U) != LXP_OK)
-        return 1;
+        return wind_down_failure(__LINE__);
     runtime.accounts = &accounts;
     runtime.assets = assets;
     runtime.asset_count = 2U;
@@ -315,13 +437,14 @@ int main(void)
             LXP_OK ||
         lxp_kernel_set_epoch(&kernel, 1U) != LXP_OK ||
         lxp_kernel_register_module(&kernel,
+                                   separate_counters ? programs_module_registration_v4() :
                                    programs_module_registration_v2()) !=
             LXP_OK ||
         lxp_kernel_bind_module_runtime(&kernel, LXP_MODULE_PROGRAMS,
                                        &runtime) != LXP_OK ||
         lxp_kernel_set_capabilities(
             &kernel, NULL, lxp_kernel_canonical_ledger_apply) != LXP_OK)
-        return 1;
+        return wind_down_failure(__LINE__);
     (void)memcpy(authority.principal, ids[0], 32U);
     (void)memset(authority.authority_hash, 0x51, 32U);
     (void)memcpy(program_key, program_prefix, sizeof(program_prefix) - 1U);
@@ -346,7 +469,7 @@ int main(void)
                        sizeof(owner_record)) != LXP_OK ||
         lxp_state_journal_commit(&journal) != LXP_OK ||
         lxp_module_ctx_commit(&ctx) != LXP_OK)
-        return 1;
+        return wind_down_failure(__LINE__);
 
     if (lxp_state_journal_open(&state, 8U, &journal) != LXP_OK ||
         lxp_arena_init(&arena, arena_bytes, sizeof(arena_bytes)) != LXP_OK ||
@@ -354,8 +477,9 @@ int main(void)
                             100000U, &arena, true) != LXP_OK ||
         lxp_effect_buffer_init(&effects) != LXP_OK ||
         lxp_module_ctx_bind_effects(&ctx, &effects) != LXP_OK)
-        return 1;
-    ctx.protocol_version = LXP_PROTOCOL_VERSION_OCCUPANCY;
+        return wind_down_failure(__LINE__);
+    ctx.protocol_version = separate_counters ? LXP_PROTOCOL_VERSION_STATE_COMMITMENT :
+                                             LXP_PROTOCOL_VERSION_OCCUPANCY;
     for (index = 0U; index < 2U; ++index)
         if (lxp_programs_account_register(
                 &ctx, program, seeds[index], sizeof(seeds[index]),
@@ -364,11 +488,11 @@ int main(void)
             lxp_programs_account_derive(program, seeds[index],
                                         sizeof(seeds[index]),
                                         program_accounts[index]) != LXP_OK)
-            return 1;
+            return wind_down_failure(__LINE__);
     if (lxp_module_ctx_prepare_commit(&ctx) != LXP_OK ||
         lxp_state_journal_commit(&journal) != LXP_OK ||
         lxp_module_ctx_commit(&ctx) != LXP_OK)
-        return 1;
+        return wind_down_failure(__LINE__);
     program_account = account_by_id(&accounts, program_accounts[0]);
     if (program_account == NULL ||
         lxp_ledger_bootstrap_balance(program_account, assets[0].asset_id,
@@ -377,7 +501,7 @@ int main(void)
             NULL ||
         lxp_ledger_bootstrap_balance(program_account, assets[1].asset_id,
                                      (lxp_u128){0U, 60U}, 0U) != LXP_OK)
-        return 1;
+        return wind_down_failure(__LINE__);
     program_account = account_by_id(&accounts, program_accounts[0]);
     if (program_account == NULL ||
         forged_program_spend_refused(opened[0], program_account, opened[1],
@@ -385,7 +509,7 @@ int main(void)
         malformed_program_spend_tables_refused(
             &kernel, opened[0], program_account, opened[1],
             assets, 2U) != 0)
-        return 1;
+        return wind_down_failure(__LINE__);
 
     if (activity_dispatch(
             &kernel, &authority,
@@ -393,7 +517,7 @@ int main(void)
                                  assets[0].asset_id, ids[1], seeds[0],
                                  (uint16_t)sizeof(seeds[0])),
             LXP_OK, LX_PROGRAMS_EVENT_EXIT_ROUTE) != 0)
-        return 1;
+        return wind_down_failure(__LINE__);
     deadline = state.next_sequence + 1U;
     if (activity_dispatch(
             &kernel, &authority, transition,
@@ -401,21 +525,21 @@ int main(void)
                                deadline),
             LXP_ERR_UNKNOWN_FIELD, 0U) != 0 ||
         lxp_programs_wind_down_read(&ctx, program, &status_view) == LXP_OK)
-        return 1;
+        return wind_down_failure(__LINE__);
     if (activity_dispatch(
             &kernel, &authority,
             route, route_payload(route, program, program_accounts[1],
                                  assets[1].asset_id, ids[2], seeds[1],
                                  (uint16_t)sizeof(seeds[1])),
             LXP_OK, LX_PROGRAMS_EVENT_EXIT_ROUTE) != 0)
-        return 1;
+        return wind_down_failure(__LINE__);
     deadline = state.next_sequence + 1U;
     if (activity_dispatch(
             &kernel, &authority, transition,
             transition_payload(transition, program, DEPRECATE_OPERATION,
                                deadline),
             LXP_OK, LX_PROGRAMS_EVENT_DEPRECATED) != 0)
-        return 1;
+        return wind_down_failure(__LINE__);
 
     if (lxp_state_journal_open(&state, state.next_sequence, &journal) != LXP_OK ||
         lxp_arena_init(&arena, arena_bytes, sizeof(arena_bytes)) != LXP_OK ||
@@ -429,28 +553,28 @@ int main(void)
         lxp_programs_exit_route_iter(&ctx, program, count_route, &routes) !=
             LXP_OK ||
         routes != 2U)
-        return 1;
+        return wind_down_failure(__LINE__);
     lxp_module_ctx_rollback(&ctx);
-    if (lxp_state_journal_rollback(&journal) != LXP_OK) return 1;
+    if (lxp_state_journal_rollback(&journal) != LXP_OK) return wind_down_failure(__LINE__);
 
     if (activity_dispatch(
             &kernel, &authority, exit,
             exit_payload(exit, program, program_accounts[0]), LXP_OK,
             LX_PROGRAMS_EVENT_VALUE_EXITED) != 0 ||
         opened[1]->balance.lo != 40U)
-        return 1;
+        return wind_down_failure(__LINE__);
     if (activity_dispatch(
             &kernel, &authority, transition,
             transition_payload(transition, program, TOMBSTONE_OPERATION, 0U),
             LXP_OK, LX_PROGRAMS_EVENT_TOMBSTONED) != 0)
-        return 1;
+        return wind_down_failure(__LINE__);
     if (state.next_sequence <= deadline ||
         activity_dispatch(
             &kernel, &authority, exit,
             exit_payload(exit, program, program_accounts[1]), LXP_OK,
             LX_PROGRAMS_EVENT_VALUE_EXITED) != 0 ||
         opened[2]->balance.lo != 60U)
-        return 1;
+        return wind_down_failure(__LINE__);
 
     routes = 0U;
     if (lxp_state_journal_open(&state, state.next_sequence, &journal) != LXP_OK ||
@@ -466,10 +590,15 @@ int main(void)
         lxp_programs_exit_route_iter(&ctx, program, count_route, &routes) !=
             LXP_OK ||
         routes != 2U)
-        return 1;
+        return wind_down_failure(__LINE__);
     lxp_module_ctx_rollback(&ctx);
     if (lxp_state_journal_rollback(&journal) != LXP_OK ||
         lxp_state_store_destroy(&state) != LXP_OK)
-        return 1;
+        return wind_down_failure(__LINE__);
     return 0;
+}
+
+int main(void)
+{
+    return wind_down_lifecycle(false) != 0 || wind_down_lifecycle(true) != 0;
 }

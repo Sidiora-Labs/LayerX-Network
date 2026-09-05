@@ -1,6 +1,7 @@
 import type { Operation as AgentOperation } from "./generated/client.js";
 
 export const AGENT_OPERATIONS = [
+  "program.deploy", "program.upgrade", "program.wind-down",
   "agent.register",
   "approval.approve",
   "approval.get",
@@ -292,6 +293,7 @@ const AGENT_IDEMPOTENT = new Set<AgentOperation>([
   "capability.revoke",
   "prepare",
   "program.call",
+  "program.deploy", "program.upgrade", "program.wind-down",
   "session.close",
   "session.open",
   "session.refresh",

@@ -19,6 +19,9 @@ import (
 
 func TestProgramHTTPRoutesMatchSchema(t *testing.T) {
 	expected := map[string]programHTTPRoute{
+		"program.deploy":    {method: http.MethodPost, path: "/v1/programs/deploy", idempotencyOnly: true},
+		"program.upgrade":   {method: http.MethodPost, path: "/v1/programs/upgrade", idempotencyOnly: true},
+		"program.wind-down": {method: http.MethodPost, path: "/v1/programs/wind-down", idempotencyOnly: true},
 		"program.discover":  {method: http.MethodGet, path: "/v1/programs/registry/{program_id}", pathParameters: []string{"program_id"}},
 		"program.interface": {method: http.MethodGet, path: "/v1/programs/registry/{program_id}/interface", pathParameters: []string{"program_id"}},
 		"program.simulate":  {method: http.MethodPost, path: "/v1/programs/simulate"},
@@ -30,7 +33,7 @@ func TestProgramHTTPRoutesMatchSchema(t *testing.T) {
 		t.Fatalf("Programs HTTP routes diverged from the schema: %#v", programHTTPRoutes)
 	}
 	for operation, route := range programHTTPRoutes {
-		if route.idempotencyOnly != (operation == "program.call") {
+		if route.idempotencyOnly != (operation == "program.call" || operation == "program.deploy" || operation == "program.upgrade" || operation == "program.wind-down") {
 			t.Fatalf("unexpected Programs idempotency route: %s", operation)
 		}
 	}
