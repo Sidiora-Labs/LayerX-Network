@@ -968,10 +968,15 @@ impl LayerxClient {
             previous_state_root: String,
             resulting_state_root: String,
             sequencer_public_key: String,
+            network_id: String,
+            wire_version: String,
         }
         let facts: AuthorityBody =
             serde_json::from_slice(&authority.body).map_err(|_| RampError::Layerx)?;
-        if facts.activity_id != id {
+        if facts.activity_id != id
+            || facts.network_id.is_empty()
+            || facts.wire_version != self.activity.protocol_version.to_string()
+        {
             return Err(RampError::Layerx);
         }
         let evidence = ReceiptEvidence {

@@ -584,7 +584,7 @@ reqs = ["14.2","14.3","7.3","7.4"]
 
 [task.6.3]
 title = "Implement the layerx-receipt-authority service over the independent replica"
-status = "pending"
+status = "in_progress"
 wave = 6
 requires = ["3.6"]
 do_1 = "Add the crate platform/hosted/authority (package layerx-platform-authority, binary layerx-receipt-authority) in the hosted house style listening on LAYERX_AUTHORITY_LISTEN (default 0.0.0.0:9445) with rustls server TLS accepting an optional client certificate, authenticating the gateway, registry and webhooks bearer tokens from LAYERX_AUTHORITY_TOKEN_FILES, and dialing only the replica at LAYERX_AUTHORITY_REPLICA_URL (loopback) with LAYERX_AUTHORITY_REPLICA_BEARER_TOKEN_FILE and LAYERX_AUTHORITY_REPLICA_ID, plus the receipt source at LAYERX_AUTHORITY_RECEIPT_URL for receipt bytes by activity id."
