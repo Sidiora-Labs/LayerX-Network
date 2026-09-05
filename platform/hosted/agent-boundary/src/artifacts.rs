@@ -4,7 +4,7 @@ use layerx_proof::program::{
     verify_authorized_program_execution, AuthorizedProgramExecutionExpectation,
 };
 use layerx_proof::receipt::{verify_program_outcome, verify_sequencer_signature, AuthorizedBatch};
-use layerx_wire::hash::{execution_batch_id, receipt_digest, Domain};
+use layerx_wire::hash::{receipt_digest, receipt_execution_batch_id, Domain};
 use layerx_wire::receipt::{decode, decode_batch_header, decode_merkle_proof, encode_unsigned};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -132,13 +132,7 @@ pub(super) fn verify(
     )
     .map_err(error)?;
     let header = included.header().header();
-    let batch_id = execution_batch_id(
-        header.previous_state_root(),
-        activity_id,
-        protocol.global_sequence(),
-        header.batch_number(),
-    )
-    .map_err(error)?;
+    let batch_id = receipt_execution_batch_id(protocol, header).map_err(error)?;
     if protocol.batch_id() != batch_id
         || protocol.previous_state_root() != header.previous_state_root()
         || protocol.resulting_state_root() != header.resulting_state_root()

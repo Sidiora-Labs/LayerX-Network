@@ -373,9 +373,10 @@ def verify_batch_inclusion(
     header_signature: bytes,
     authorization: SequencerAuthorization,
     signatures: LocalSignatureVerifier,
+    *, protocol_version: int = _CURRENT_PROTOCOL_VERSION,
 ) -> InclusionVerification:
     header = decode_batch_header(canonical_header)
-    if header.protocol_version != _CURRENT_PROTOCOL_VERSION:
+    if protocol_version not in (2, 3) or header.protocol_version != protocol_version:
         _failure()
     if (
         header.batch_number < authorization.first_batch_number
@@ -505,12 +506,13 @@ def _attestation_message(attestation: CheckpointAttestation) -> bytes:
 def verify_checkpoint(
     verification: CheckpointVerificationInput,
     signatures: LocalSignatureVerifier,
+    *, protocol_version: int = _CURRENT_PROTOCOL_VERSION,
 ) -> CheckpointVerification:
     certificate = verification.certificate
     if not verification.availability_obtained or len(certificate.validity_proof) > 0xFFFF_FFFF:
         _failure()
     header = decode_batch_header(certificate.canonical_header)
-    if header.protocol_version != _CURRENT_PROTOCOL_VERSION:
+    if protocol_version not in (2, 3) or header.protocol_version != protocol_version:
         _failure()
     checkpoint_id = _digest(
         _CHECKPOINT_DOMAIN,
@@ -654,7 +656,7 @@ def _decode_program_receipt_outcome_from(
         or (terminal_kind != 1 and not _all_zero(transfer_root))
         or not (
             (protocol_version == 1 and encoding_version in (1, 3))
-            or (protocol_version == 2 and encoding_version in (2, 3))
+            or (protocol_version in (2, 3) and encoding_version in (2, 3))
         )
         or (encoding_version == 1 and not occupancy_zero)
         or (encoding_version >= 2 and terminal_kind != 1 and not occupancy_zero)
@@ -669,7 +671,7 @@ def _decode_program_receipt_outcome_from(
         )
         or (protocol_version == 1 and encoding_version == 3 and not occupancy_zero)
         or (
-            protocol_version == 2
+            protocol_version in (2, 3)
             and encoding_version == 3
             and terminal_kind == 1
             and (_all_zero(occupancy_asset_id) or _all_zero(occupancy_evidence_digest))
@@ -724,7 +726,7 @@ def _decode_protocol_receipt(canonical_receipt: bytes) -> tuple[ProtocolReceipt,
         _receipt_failure(ReceiptFailureCode.RECEIPT_SHAPE)
     decoder = _Decoder(canonical_receipt)
     envelope_version = decoder.u16()
-    if envelope_version not in (1, 2) or decoder.u16() != 0x5201:
+    if envelope_version not in (1, 2, 3) or decoder.u16() != 0x5201:
         _receipt_failure(ReceiptFailureCode.DECODE)
     protocol_version = decoder.u16()
     if protocol_version != envelope_version:
@@ -852,6 +854,7 @@ def verify_receipt_outcome(
     canonical_receipt: bytes,
     authorized: AuthorizedReceiptBatch,
     signatures: LocalSignatureVerifier,
+    *, protocol_version: int = _CURRENT_PROTOCOL_VERSION,
 ) -> ReceiptVerification:
     try:
         receipt, unsigned_receipt = _decode_protocol_receipt(canonical_receipt)
@@ -859,23 +862,38 @@ def verify_receipt_outcome(
         raise
     except PlatformSdkError:
         _receipt_failure(ReceiptFailureCode.DECODE)
-    if receipt.protocol_version != _CURRENT_PROTOCOL_VERSION:
+    if protocol_version not in (2, 3) or receipt.protocol_version != protocol_version:
         _receipt_failure(ReceiptFailureCode.PROTOCOL_VERSION)
-    if receipt.operation == 0:
+    _exact(authorized.asset, 32)
+    program = receipt.module_id == PROGRAMS_MODULE_ID and receipt.operation in (0, 3)
+    if program:
+        valid_modules = (4,) if protocol_version == 3 else ((2, 3) if receipt.operation == 0 else (1, 2, 3))
+        if receipt.module_version not in valid_modules:
+            _receipt_failure(ReceiptFailureCode.MODULE_VERSION)
+        if receipt.operation == 0 and receipt.result_code != 0:
+            _receipt_failure(ReceiptFailureCode.RESULT_CODE)
+        if receipt.operation == 3:
+            outcome = receipt.program_outcome
+            if outcome is None:
+                _receipt_failure(ReceiptFailureCode.RECEIPT_SHAPE)
+            assert outcome is not None
+            if outcome.abi_version not in (1, 2) or outcome.runtime_version != 1:
+                _receipt_failure(ReceiptFailureCode.PROTOCOL_VERSION)
+    if not program and receipt.operation == 0:
         _receipt_failure(ReceiptFailureCode.OPERATION)
     if _all_zero(receipt.activity_id):
         _receipt_failure(ReceiptFailureCode.ACTIVITY_ID)
-    if _all_zero(receipt.asset):
+    if not program and _all_zero(receipt.asset):
         _receipt_failure(ReceiptFailureCode.ASSET)
     if not _equal(receipt.batch_id, _exact(authorized.batch_id, 32)):
         _receipt_failure(ReceiptFailureCode.BATCH_ID)
-    if not _equal(receipt.asset, _exact(authorized.asset, 32)):
+    if not program and not _equal(receipt.asset, _exact(authorized.asset, 32)):
         _receipt_failure(ReceiptFailureCode.ASSET)
     if not _equal(receipt.previous_state_root, _exact(authorized.previous_state_root, 32)):
         _receipt_failure(ReceiptFailureCode.PREVIOUS_STATE_ROOT)
     if not _equal(receipt.resulting_state_root, _exact(authorized.resulting_state_root, 32)):
         _receipt_failure(ReceiptFailureCode.RESULTING_STATE_ROOT)
-    if receipt.result_code == 0:
+    if not program and receipt.result_code == 0:
         if (
             receipt.from_balance_before < receipt.amount
             or receipt.from_balance_before - receipt.amount != receipt.from_balance_after
@@ -905,8 +923,9 @@ def verify_receipt(
     canonical_receipt: bytes,
     authorized: AuthorizedReceiptBatch,
     signatures: LocalSignatureVerifier,
+    *, protocol_version: int = _CURRENT_PROTOCOL_VERSION,
 ) -> ReceiptVerification:
-    verified = verify_receipt_outcome(canonical_receipt, authorized, signatures)
+    verified = verify_receipt_outcome(canonical_receipt, authorized, signatures, protocol_version=protocol_version)
     if verified.receipt.result_code != 0:
         _receipt_failure(ReceiptFailureCode.RESULT_CODE)
     return verified

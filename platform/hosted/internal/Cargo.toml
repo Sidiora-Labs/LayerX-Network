@@ -24,11 +24,10 @@ rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+ring.workspace = true
+layerx-wire.workspace = true
 subtle.workspace = true
 zeroize.workspace = true
-
-[dev-dependencies]
-layerx-platform-webhooks = { path = "../webhooks" }
 
 [lints]
 workspace = true

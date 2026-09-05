@@ -1682,17 +1682,20 @@ static lxp_result publish_canonical_batch(
                 canonical_header.bytes, canonical_header.length,
                 header_signature, &receipt_proof);
     }
-    if (status == LXP_OK)
+    if (status == LXP_OK && process->protocol_version ==
+                                LXP_PROTOCOL_VERSION_STATE_COMMITMENT)
         status = lxp_daemon_account_evidence_publish_batch(
             &process->evidence_store, &process->kernel,
             receipts[activity_count - 1U], &head_receipt_proof,
             &process->sequencer_authorization, canonical_header,
             header_signature, &process->execution_arena);
-    if (status == LXP_OK)
+    if (status == LXP_OK) {
+        process->owner.latest_sealed_timestamp = timestamp;
         process->next_batch = process->next_batch ==
                                       process->sequencer_authorization
                                           .last_batch_number ?
                                   0U : process->next_batch + 1U;
+    }
     return status;
 }
 
@@ -2633,7 +2636,8 @@ static lxp_result recover_ranged_batch_authority(
             &process->sequencer_authorization,
             (lxp_byte_span){canonical_header, header_length}, signature,
             &process->owner_scratch);
-    if (status == LXP_OK)
+    if (status == LXP_OK && process->protocol_version ==
+                                LXP_PROTOCOL_VERSION_STATE_COMMITMENT)
         status = recover_batch_account_evidence(
             process, header,
             (lxp_byte_span){canonical_header, header_length}, signature,

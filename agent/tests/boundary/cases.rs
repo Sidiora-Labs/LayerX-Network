@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use ed25519_dalek::{Signer, SigningKey};
 use layerx_client::lni::handshake::{perform, Handshake, HandshakeConfig};
@@ -18,17 +18,16 @@ use layerx_types::activity::{Authority, EnvelopeBuilder, Signature, TimestampBou
 use layerx_types::amount::Amount;
 use layerx_types::error::LayerError;
 use layerx_types::ids::{Did, IdempotencyKey};
-use layerx_types::intent::{CallBudget, Calldata, ProgramCall, ProgramId, RequestedCapabilities};
-use layerx_types::payload::{
-    ActivityType, ModuleId, ModuleRegistration, ModuleRegistry, Payload,
-};
+use layerx_types::intent::ProgramId;
+use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry, Payload};
+use layerx_types::program_call::{NativeProgramCall, Resources};
 use layerx_wire::activity::{decode_signed, encode_signed_envelope};
 use layerx_wire::hash::{activity_id, batch_header_digest, checkpoint_id, payload_hash_for};
-use layerx_wire::sign::preimage_unsigned;
 use layerx_wire::receipt::{
     decode as decode_receipt, decode_batch_header, decode_checkpoint, encode as encode_receipt,
     encode_batch_header, encode_checkpoint,
 };
+use layerx_wire::sign::preimage_unsigned;
 
 static NEXT_DIRECTORY: AtomicUsize = AtomicUsize::new(0);
 
@@ -249,34 +248,38 @@ fn program_registry() -> Result<(ModuleRegistry, ActivityType), String> {
     Ok((registry, activity))
 }
 
-fn now_ms() -> Result<u64, String> {
-    let elapsed = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|error| format!("wall clock failed: {error}"))?;
-    u64::try_from(elapsed.as_millis()).map_err(|_| "wall clock overflow".to_owned())
-}
-
 fn signed_program_call(
     registry: &ModuleRegistry,
     activity_type: ActivityType,
     account_sequence: u64,
     program_id: [u8; 32],
+    protocol_timestamp: u64,
 ) -> Result<(Vec<u8>, [u8; 32]), String> {
     let signing_key = SigningKey::from_bytes(&SIMULATION_ACTOR_SEED);
     let public_key = signing_key.verifying_key().to_bytes();
-    let call = ProgramCall::new(
-        ProgramId::new(program_id),
-        Calldata::new(&[]).map_err(|error| format!("calldata failed: {error:?}"))?,
-        CallBudget::new(1000, Amount::from_u128(0))
-            .map_err(|error| format!("call budget failed: {error:?}"))?,
-        RequestedCapabilities::new(&[])
-            .map_err(|error| format!("capabilities failed: {error:?}"))?,
-    );
-    let payload = Payload::new(registry, activity_type, &call.canonical_payload())
-        .map_err(|error| format!("call payload failed: {error:?}"))?;
+    let call = NativeProgramCall {
+        program_id: ProgramId::new(program_id),
+        guest_abi: 1,
+        entrypoint: b"layerx_call",
+        calldata: &[],
+        capabilities: &[0, 0],
+        access_declaration: b"LayerX/programs/access-declaration/v1\0\0",
+        response_capacity: 16,
+        resources: Resources([
+            1_000_000, 16_777_216, 1_048_576, 1_048_576, 64, 1_048_576, 4096,
+        ]),
+    };
+    let payload = Payload::new(
+        registry,
+        activity_type,
+        &call
+            .encode()
+            .map_err(|error| format!("native call: {error:?}"))?,
+    )
+    .map_err(|error| format!("call payload failed: {error:?}"))?;
     let payload_hash =
         payload_hash_for(&payload).map_err(|error| format!("payload hash failed: {error:?}"))?;
-    let now = now_ms()?;
+    let now = protocol_timestamp;
     let mut builder = EnvelopeBuilder::new();
     builder
         .protocol_version(layerx_wire::limits::PROTOCOL_VERSION)
@@ -313,11 +316,9 @@ fn signed_program_call(
     let digest = preimage_unsigned(&unsigned)
         .map_err(|error| format!("signing preimage failed: {error:?}"))?;
     let signature = signing_key.sign(digest.as_bytes()).to_bytes();
-    let signed = encode_signed_envelope(
-        &unsigned.attach_signature(
-            Signature::new(&signature).map_err(|error| format!("signature failed: {error:?}"))?,
-        ),
-    )
+    let signed = encode_signed_envelope(&unsigned.attach_signature(
+        Signature::new(&signature).map_err(|error| format!("signature failed: {error:?}"))?,
+    ))
     .map_err(|error| format!("signed program call encoding failed: {error:?}"))?;
     let decoded = decode_signed(&signed, registry)
         .map_err(|error| format!("signed program call is not canonical: {error:?}"))?;
@@ -349,8 +350,13 @@ fn exercise_simulation(
     }
     let mut program_id = [0x5a_u8; 32];
     program_id[31] = 0x69;
-    let (signed, expected_activity_id) =
-        signed_program_call(&registry, activity_type, before.account_sequence, program_id)?;
+    let (signed, expected_activity_id) = signed_program_call(
+        &registry,
+        activity_type,
+        before.account_sequence,
+        program_id,
+        before.protocol_timestamp,
+    )?;
     let sequencer_public_key = handshake.node().authorised_sequencer_key;
     let simulation = simulate(
         transport,
@@ -368,8 +374,9 @@ fn exercise_simulation(
     {
         return Err("simulation answered a different activity".to_owned());
     }
-    let receipt = verify_sequencer_signature(&simulation.execution.receipt, sequencer_public_key)
-        .map_err(|error| format!("simulated receipt is not sequencer-signed: {error:?}"))?;
+    let receipt =
+        verify_sequencer_signature(&simulation.execution.receipt, sequencer_public_key)
+            .map_err(|error| format!("simulated receipt is not sequencer-signed: {error:?}"))?;
     let protocol = receipt
         .protocol()
         .ok_or_else(|| "simulated receipt is not a protocol receipt".to_owned())?;
@@ -406,12 +413,10 @@ fn exercise_simulation(
     {
         return Err("simulation committed state or consumed the account sequence".to_owned());
     }
-    let (replay, replay_id) =
-        signed_program_call(&registry, activity_type, after.account_sequence, program_id)?;
     let again = simulate(
         transport,
         &registry,
-        &replay,
+        &signed,
         SimulateContext {
             interface_version: Version::V1_4,
             sequencer_public_key,
@@ -419,7 +424,7 @@ fn exercise_simulation(
         },
     )
     .map_err(|error| format!("repeated simulation failed: {error:?}"))?;
-    if replay_id != expected_activity_id
+    if again.execution.activity_id != expected_activity_id
         || again.execution.receipt != simulation.execution.receipt
         || again.evidence.hypothetical_state_root != simulation.evidence.hypothetical_state_root
     {

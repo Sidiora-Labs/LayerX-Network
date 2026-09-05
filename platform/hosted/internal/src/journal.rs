@@ -5,7 +5,8 @@
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::fs::{self, File, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 const JOURNAL_FILE: &str = "journal.log";
@@ -33,21 +34,51 @@ impl Journal {
         mut apply: impl FnMut(T),
     ) -> Result<Self, String> {
         fs::create_dir_all(directory).map_err(|error| format!("state directory: {error}"))?;
+        fs::set_permissions(directory, fs::Permissions::from_mode(0o700))
+            .map_err(|error| error.to_string())?;
         let path = directory.join(JOURNAL_FILE);
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .append(true)
+            .mode(0o600)
+            .open(&path)
+            .map_err(|error| error.to_string())?;
+        file.try_lock()
+            .map_err(|error| format!("journal lock: {error}"))?;
+        sync_directory(directory)?;
         let mut records = 0_usize;
         if path.exists() {
-            let reader = BufReader::new(
+            let mut reader = BufReader::new(
                 File::open(&path).map_err(|error| format!("journal open: {error}"))?,
             );
-            for (index, line) in reader.lines().enumerate() {
-                let line = line.map_err(|error| format!("journal read: {error}"))?;
+            loop {
+                let index = records;
+                let mut bytes = Vec::new();
+                let count = reader
+                    .by_ref()
+                    .take(
+                        u64::try_from(MAX_RECORD_BYTES + 1)
+                            .map_err(|_| "invalid journal bound".to_owned())?,
+                    )
+                    .read_until(b'\n', &mut bytes)
+                    .map_err(|error| error.to_string())?;
+                if count == 0 {
+                    break;
+                }
+                if bytes.last() != Some(&b'\n') {
+                    return Err("truncated or oversized journal record".to_owned());
+                }
+                let line = std::str::from_utf8(&bytes)
+                    .map_err(|error| error.to_string())?
+                    .trim_end_matches('\n');
                 if line.is_empty() {
                     continue;
                 }
                 if line.len() > MAX_RECORD_BYTES {
                     return Err(format!("journal line {index} exceeds its bound"));
                 }
-                let record: T = serde_json::from_str(&line)
+                let record: T = serde_json::from_str(line)
                     .map_err(|error| format!("journal line {index}: {error}"))?;
                 apply(record);
                 records += 1;
@@ -56,11 +87,6 @@ impl Journal {
                 }
             }
         }
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .map_err(|error| format!("journal append open: {error}"))?;
         Ok(Self {
             directory: directory.to_path_buf(),
             file,
@@ -157,7 +183,8 @@ mod tests {
     }
 
     fn temporary_directory(name: &str) -> PathBuf {
-        let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        let directory = std::env::temp_dir()
+            .join("layerx-internal-tests")
             .join("journal")
             .join(format!("{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&directory);
@@ -170,7 +197,9 @@ mod tests {
         let mut journal = Journal::open::<Entry>(&directory, |_| {})
             .unwrap_or_else(|error| panic!("open: {error}"));
         assert!(journal.is_empty());
-        journal.probe_writable().unwrap_or_else(|error| panic!("{error}"));
+        journal
+            .probe_writable()
+            .unwrap_or_else(|error| panic!("{error}"));
         for sequence in 1..=3 {
             journal
                 .append(&Entry {
@@ -210,8 +239,11 @@ mod tests {
     fn corrupt_lines_refuse_to_open() {
         let directory = temporary_directory("corrupt");
         fs::create_dir_all(&directory).unwrap_or_else(|error| panic!("{error}"));
-        fs::write(directory.join(JOURNAL_FILE), b"{\"id\":\"e1\",\"sequence\":1}\nnot json\n")
-            .unwrap_or_else(|error| panic!("{error}"));
+        fs::write(
+            directory.join(JOURNAL_FILE),
+            b"{\"id\":\"e1\",\"sequence\":1}\nnot json\n",
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
         assert!(Journal::open::<Entry>(&directory, |_| {}).is_err());
         let _ = fs::remove_dir_all(&directory);
     }

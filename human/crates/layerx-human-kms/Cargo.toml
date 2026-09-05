@@ -1,0 +1,27 @@
+[package]
+name = "layerx-human-kms"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+getrandom.workspace = true
+layerx-client.workspace = true
+layerx-crypto.workspace = true
+layerx-types.workspace = true
+layerx-wire.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+zeroize.workspace = true
+ring = "=0.17.14"
+rustls = { version = "0.23.32", default-features = false, features = ["ring", "std", "tls12"] }
+rustix = { workspace = true, features = ["fs"] }
+
+[dev-dependencies]
+layerx-human-service = { path = "../layerx-human-service" }
+layerx-intents.workspace = true
+
+[lints]
+workspace = true

@@ -155,6 +155,15 @@ fn deposit_verifier(
     required_confirmations: u64,
     authority: &SigningKey,
 ) -> DepositProofVerifier {
+    deposit_verifier_for_protocol(anvil, required_confirmations, authority, PROTOCOL_VERSION)
+}
+
+fn deposit_verifier_for_protocol(
+    anvil: &Anvil,
+    required_confirmations: u64,
+    authority: &SigningKey,
+    protocol_version: u16,
+) -> DepositProofVerifier {
     DepositProofVerifier::new(DepositProofConfig {
         endpoints: vec![anvil.endpoint.clone()],
         minimum_endpoint_agreement: 1,
@@ -163,7 +172,7 @@ fn deposit_verifier(
         paxeer_checkpoint_authority: authority.verifying_key().to_bytes(),
         custody_reference: CUSTODY_REFERENCE,
         layerx_network_id: CORE_NETWORK,
-        layerx_protocol_version: layerx_wire::limits::PROTOCOL_VERSION,
+        layerx_protocol_version: protocol_version,
     })
     .unwrap_or_else(|error| panic!("deposit proof verifier: {error:?}"))
 }
@@ -350,9 +359,8 @@ fn deposit_id_from_receipt(
         "eth_getTransactionReceipt",
         &[Json::Text(transaction.to_hex())],
     );
-    let logs = match receipt.member("logs") {
-        Some(Json::Array(logs)) => logs,
-        _ => panic!("receipt logs are missing"),
+    let Some(Json::Array(logs)) = receipt.member("logs") else {
+        panic!("receipt logs are missing");
     };
     for log in logs {
         let Some(address) = log.member("address").and_then(Json::as_text) else {
@@ -361,9 +369,8 @@ fn deposit_id_from_receipt(
         if parse_address(address) != vault {
             continue;
         }
-        let topics = match log.member("topics") {
-            Some(Json::Array(topics)) => topics,
-            _ => panic!("custody log topics are missing"),
+        let Some(Json::Array(topics)) = log.member("topics") else {
+            panic!("custody log topics are missing");
         };
         let topic = topics
             .get(1)
@@ -381,6 +388,16 @@ fn published_proof(
     vault: EvmAddress,
     authority: &SigningKey,
 ) -> PublishedDepositProof {
+    published_proof_for_protocol(anvil, transaction, vault, authority, PROTOCOL_VERSION)
+}
+
+fn published_proof_for_protocol(
+    anvil: &Anvil,
+    transaction: TransactionHash,
+    vault: EvmAddress,
+    authority: &SigningKey,
+    protocol_version: u16,
+) -> PublishedDepositProof {
     let deposit_id = deposit_id_from_receipt(anvil, transaction, vault);
     let checkpoint_id = hex_array(CHECKPOINT_ID_HEX);
     let leaf_bytes = deposit_leaf_bytes(
@@ -390,7 +407,7 @@ fn published_proof(
         Amount::from_u128(AMOUNT),
         checkpoint_id,
         CORE_NETWORK,
-        layerx_wire::limits::PROTOCOL_VERSION,
+        protocol_version,
     )
     .unwrap_or_else(|error| panic!("deposit leaf: {error:?}"));
     let deposit_root =
@@ -401,7 +418,7 @@ fn published_proof(
         deposit_root,
         custody_reference: CUSTODY_REFERENCE,
         network_id: CORE_NETWORK,
-        protocol_version: layerx_wire::limits::PROTOCOL_VERSION,
+        protocol_version,
         signature: [0; 64],
     };
     let message = deposit_root_registration_message(&registration)
@@ -526,7 +543,7 @@ fn signed_receipt(fields: &ReceiptFields, signing: &SigningKey) -> (Vec<u8>, Aut
     assert_eq!(
         protocol
             .program_outcome()
-            .map(|outcome| outcome.abi_version()),
+            .map(layerx_wire::receipt::ProgramOutcome::abi_version),
         None
     );
     (receipt_bytes, batch)
@@ -545,7 +562,7 @@ fn legacy_credit_receipt_remains_explicitly_protocol_v1() {
     assert_eq!(
         protocol
             .program_outcome()
-            .map(|outcome| outcome.abi_version()),
+            .map(layerx_wire::receipt::ProgramOutcome::abi_version),
         None
     );
 }
@@ -763,9 +780,216 @@ fn deposit_failures_remain_typed_at_each_boundary() {
     let unavailable = confirming.poll();
     let deeper_verifier = deposit_verifier(&anvil, required.saturating_add(1), &authority);
     assert!(matches!(
+        deeper_verifier.admit_custody(&unavailable, vault, &recipient),
+        Err(DepositFailure::ProofUnavailable(
+            ProofFault::NotFinal { .. }
+        ))
+    ));
+    assert!(matches!(
         deeper_verifier.obtain(&unavailable, vault, published),
         Err(DepositFailure::ProofUnavailable(
             ProofFault::NotFinal { .. }
         ))
+    ));
+}
+
+#[test]
+fn protocol_three_custody_proof_binds_native_beneficiary_and_selected_version() {
+    let anvil = Anvil::launch();
+    let (_, vault) = deploy_custody(&anvil);
+    let recipient = AccountId::parse("agent:did:layerx:deposit-recipient:main")
+        .unwrap_or_else(|error| panic!("protocol-three custody: {error:?}"));
+    let reserve = AccountId::parse("system:paxeer-reserve")
+        .unwrap_or_else(|error| panic!("protocol-three custody: {error:?}"));
+    let beneficiary = layerx_paxeer_client::account_address_for_protocol(&recipient, 3)
+        .unwrap_or_else(|error| panic!("protocol-three custody: {error:?}"));
+    assert_ne!(beneficiary, account_address(&recipient));
+    assert_eq!(
+        layerx_paxeer_client::account_address_for_protocol(&recipient, 2),
+        Ok(account_address(&recipient))
+    );
+    let mut native = Sha256::new();
+    native.update(b"LX:ACCOUNT:v1");
+    native.update(
+        u32::try_from(recipient.canonical().len())
+            .unwrap_or_else(|error| panic!("protocol-three custody: {error:?}"))
+            .to_be_bytes(),
+    );
+    native.update(recipient.canonical().as_bytes());
+    assert_eq!(beneficiary, <[u8; 32]>::from(native.finalize()));
+    assert!(layerx_paxeer_client::account_address_for_protocol(&recipient, 4).is_err());
+    let transaction = anvil.send(
+        Some(vault),
+        &calldata("0x8a9e532c", &[ASSET, u128_word(AMOUNT), beneficiary]),
+    );
+    let report = final_report(&anvil, transaction);
+    let authority = SigningKey::from_bytes(&[11; 32]);
+    let published = published_proof_for_protocol(&anvil, transaction, vault, &authority, 3);
+    assert!(deposit_verifier(&anvil, 1, &authority)
+        .obtain(&report, vault, published.clone())
+        .is_err());
+    let verifier = deposit_verifier_for_protocol(&anvil, 1, &authority, 3);
+    let proof = verifier
+        .obtain(&report, vault, published.clone())
+        .unwrap_or_else(|error| panic!("protocol-three custody: {error:?}"));
+    assert_eq!(proof.protocol_version(), 3);
+    assert_eq!(proof.custody().beneficiary, beneficiary);
+    assert_eq!(
+        proof.credit_intent(&reserve, &recipient),
+        Err(DepositFailure::CreditRefused(
+            CreditFault::BridgeProofIngressUnavailable
+        ))
+    );
+    let mut wrong_signature = published;
+    wrong_signature.registration.signature[0] ^= 1;
+    assert!(verifier.obtain(&report, vault, wrong_signature).is_err());
+}
+
+#[test]
+fn recipient_derivation_failure_roundtrips_with_exact_protocol_and_rejects_truncation() {
+    let failure = DepositFailure::CreditRefused(CreditFault::RecipientNotDerivable {
+        protocol_version: 3,
+    });
+    let encoded = layerx_paxeer_client::wire::encode_deposit_failure(&failure, 64)
+        .unwrap_or_else(|error| panic!("encode recipient failure: {error:?}"));
+    assert_eq!(
+        layerx_paxeer_client::wire::decode_deposit_failure(&encoded, 64),
+        Ok(failure)
+    );
+    for end in 0..encoded.len() {
+        assert!(layerx_paxeer_client::wire::decode_deposit_failure(&encoded[..end], 64).is_err());
+    }
+}
+
+#[test]
+fn admitted_custody_matches_real_event_without_checkpoint_registration() {
+    for protocol in [2, 3] {
+        let anvil = Anvil::launch();
+        let (_, vault) = deploy_custody(&anvil);
+        let recipient = AccountId::parse("agent:did:layerx:deposit-recipient:main")
+            .unwrap_or_else(|error| panic!("recipient: {error:?}"));
+        let beneficiary = layerx_paxeer_client::account_address_for_protocol(&recipient, protocol)
+            .unwrap_or_else(|error| panic!("beneficiary: {error:?}"));
+        let transaction = anvil.send(
+            Some(vault),
+            &calldata("0x8a9e532c", &[ASSET, u128_word(AMOUNT), beneficiary]),
+        );
+        let report = final_report(&anvil, transaction);
+        let authority = SigningKey::from_bytes(&[11; 32]);
+        let verifier = deposit_verifier_for_protocol(&anvil, 1, &authority, protocol);
+        let admitted = verifier
+            .admit_custody(&report, vault, &recipient)
+            .unwrap_or_else(|error| panic!("admit real custody: {error:?}"));
+        let (inclusion, logs) = client(&anvil)
+            .transaction_logs(transaction)
+            .unwrap_or_else(|error| panic!("receipt: {error:?}"))
+            .unwrap_or_else(|| panic!("missing receipt"));
+        let event = logs
+            .iter()
+            .find(|log| log.address == vault)
+            .unwrap_or_else(|| panic!("missing vault event"));
+        assert_eq!(admitted.transaction(), transaction);
+        assert_eq!(admitted.inclusion(), inclusion);
+        assert_eq!(admitted.confirmations(), 1);
+        assert_eq!(admitted.required_confirmations(), 1);
+        assert_eq!(admitted.chain_id(), 31_337);
+        assert_eq!(admitted.vault(), vault);
+        assert_eq!(admitted.recipient(), &recipient);
+        assert_eq!(admitted.custody_reference(), CUSTODY_REFERENCE);
+        assert_eq!(admitted.network_id(), CORE_NETWORK);
+        assert_eq!(admitted.protocol_version(), protocol);
+        let custody = admitted.custody();
+        assert_eq!(custody.deposit_id, event.topics[1]);
+        assert_eq!(custody.asset.bytes(), event.topics[2]);
+        assert_eq!(address_word(custody.payer), event.topics[3]);
+        assert_eq!(custody.payer, parse_address(FUNDED));
+        assert_eq!(custody.beneficiary, beneficiary);
+        assert_eq!(custody.amount, Amount::from_u128(AMOUNT));
+        assert_eq!(custody.nonce, 1);
+        assert_eq!(&event.data[..32], custody.beneficiary.as_slice());
+        assert_eq!(
+            &event.data[32..64],
+            u128_word(custody.amount.value()).as_slice()
+        );
+        assert_eq!(
+            &event.data[64..96],
+            u128_word(u128::from(custody.nonce)).as_slice()
+        );
+    }
+}
+
+#[test]
+fn admitted_custody_rejects_foreign_policy_beneficiary_and_non_deposit_receipts() {
+    let anvil = Anvil::launch();
+    let (token, vault) = deploy_custody(&anvil);
+    let recipient = AccountId::parse("agent:did:layerx:deposit-recipient:main")
+        .unwrap_or_else(|error| panic!("recipient: {error:?}"));
+    let other = AccountId::parse("agent:did:layerx:foreign-recipient:main")
+        .unwrap_or_else(|error| panic!("recipient: {error:?}"));
+    let beneficiary = layerx_paxeer_client::account_address_for_protocol(&recipient, 3)
+        .unwrap_or_else(|error| panic!("beneficiary: {error:?}"));
+    let transaction = anvil.send(
+        Some(vault),
+        &calldata("0x8a9e532c", &[ASSET, u128_word(AMOUNT), beneficiary]),
+    );
+    let report = final_report(&anvil, transaction);
+    let authority = SigningKey::from_bytes(&[11; 32]);
+    let verifier = deposit_verifier_for_protocol(&anvil, 1, &authority, 3);
+    assert!(matches!(
+        verifier.admit_custody(&report, vault, &other),
+        Err(DepositFailure::CreditRefused(
+            CreditFault::BeneficiaryMismatch { .. }
+        ))
+    ));
+    assert!(matches!(
+        deposit_verifier(&anvil, 1, &authority).admit_custody(&report, vault, &recipient),
+        Err(DepositFailure::CreditRefused(
+            CreditFault::BeneficiaryMismatch { .. }
+        ))
+    ));
+    assert_eq!(
+        verifier.admit_custody(&report, token, &recipient),
+        Err(DepositFailure::ProofUnavailable(
+            ProofFault::MissingCustodyEvent { vault: token }
+        ))
+    );
+    let deeper = deposit_verifier_for_protocol(&anvil, 2, &authority, 3);
+    assert_eq!(
+        deeper.admit_custody(&report, vault, &recipient),
+        Err(DepositFailure::ProofUnavailable(
+            ProofFault::ConfirmationPolicyMismatch {
+                expected: 2,
+                reported: 1,
+            }
+        ))
+    );
+    let separate_chain = Anvil::launch();
+    let foreign = deposit_verifier_for_protocol(&separate_chain, 1, &authority, 3);
+    assert_eq!(
+        foreign.admit_custody(&report, vault, &recipient),
+        Err(DepositFailure::ProofUnavailable(
+            ProofFault::EvidenceSourceMismatch
+        ))
+    );
+    let unrelated = anvil.send(
+        Some(token),
+        &calldata(
+            "0xa9059cbb",
+            &[address_word(parse_address(EMERGENCY)), u128_word(1)],
+        ),
+    );
+    assert_eq!(
+        verifier.admit_custody(&final_report(&anvil, unrelated), vault, &recipient),
+        Err(DepositFailure::ProofUnavailable(
+            ProofFault::MissingCustodyEvent { vault }
+        ))
+    );
+    let reverted = anvil.send(
+        Some(vault),
+        &calldata("0x8a9e532c", &[ASSET, u128_word(0), beneficiary]),
+    );
+    assert!(matches!(
+        verifier.admit_custody(&final_report(&anvil, reverted), vault, &recipient),
+        Err(DepositFailure::CustodyFailed(CustodyFault::Reverted { .. }))
     ));
 }

@@ -40,9 +40,12 @@ pub fn decode(value: &str) -> Option<Vec<u8>> {
         return None;
     }
     let mut out = Vec::with_capacity(bytes.len() / 4 * 3);
-    for chunk in bytes.chunks(4) {
+    for (index, chunk) in bytes.chunks(4).enumerate() {
         let padding = chunk.iter().rev().take_while(|byte| **byte == b'=').count();
-        if padding > 2 || chunk[..4 - padding].contains(&b'=') {
+        if padding > 2
+            || (padding != 0 && index + 1 != bytes.len() / 4)
+            || chunk[..4 - padding].contains(&b'=')
+        {
             return None;
         }
         let mut accumulator = 0_u32;

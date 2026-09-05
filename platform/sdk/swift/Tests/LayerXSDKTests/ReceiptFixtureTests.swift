@@ -5,6 +5,34 @@ import XCTest
 final class ReceiptFixtureTests: XCTestCase {
     private static let programOutcomeV3 = "505247330100000000000100010000000700000001000000000000000b000000000000000c000000000000000d000000000000000e00000001000000000000000f0000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000020000000000000003000000000000000400000000000000050000000000000006000000000000000700000020000000000000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000201111111111111111111111111111111111111111111111111111111111111111000000202222222222222222222222222222222222222222222222222222222222222222000000200000000000000000000000000000000000000000000000000000000000000000"
 
+    func testNativeSignedBinding() throws {
+        let raw = try Data(contentsOf: fixtureURL("native-program-call-v3.json"))
+        let fixture = try XCTUnwrap(JSONSerialization.jsonObject(with: raw) as? [String: Any])
+        let payload = try hexField(fixture, "payload_hex")
+        let native = try NativeProgramCall.decode(payload)
+        XCTAssertEqual(try native.encode(), payload)
+        let signed = try hexField(fixture, "signed_activity_hex")
+        let call = try ProgramCall(nativeCall: native, feeLimit: ProtocolAmount("1000"), signedActivity: signed)
+        XCTAssertEqual(try decodeSignedCall(call).activityID, try hexField(fixture, "activity_id_hex"))
+        let wrongFee = try ProgramCall(nativeCall: native, feeLimit: ProtocolAmount("999"), signedActivity: signed)
+        XCTAssertThrowsError(try decodeSignedCall(wrongFee))
+        let changed = NativeProgramCall(programID: native.programID, guestABI: native.guestABI, entrypoint: native.entrypoint, calldata: native.calldata, capabilities: native.capabilities, accessDeclaration: native.accessDeclaration, responseCapacity: 17, resources: native.resources)
+        XCTAssertThrowsError(try decodeSignedCall(ProgramCall(nativeCall: changed, feeLimit: ProtocolAmount("1000"), signedActivity: signed)))
+        for length in 0..<payload.count { XCTAssertThrowsError(try NativeProgramCall.decode(payload.prefix(length))) }
+    }
+
+    func testExplicitProtocolThree() async throws {
+        for name in ["receipt-positive-v3.json", "receipt-programs-positive-v3.json"] {
+            let fixture = try loadFixture(name)
+            do { _ = try await LocalVerifier.verifyReceipt(fixture.canonicalReceipt, authorized: fixture.batch); XCTFail("default accepted protocol 3") } catch {}
+            let verified = try await LocalVerifier.verifyReceipt(fixture.canonicalReceipt, authorized: fixture.batch, protocolVersion: 3)
+            XCTAssertEqual(verified.receipt.protocolVersion, 3)
+            XCTAssertEqual(verified.receiptDigest, try hexField(fixture.expected, "receipt_digest_hex"))
+            var corrupted = fixture.canonicalReceipt; corrupted[corrupted.count - 1] ^= 1
+            do { _ = try await LocalVerifier.verifyReceipt(corrupted, authorized: fixture.batch, protocolVersion: 3); XCTFail("corrupt signature accepted") } catch {}
+        }
+    }
+
     func testProgramOutcomeV3Vector() throws {
         let hex = Self.programOutcomeV3
         let encoded = Data(stride(from: 0, to: hex.count, by: 2).map {

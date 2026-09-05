@@ -58,6 +58,31 @@ def _authorized(fixture: dict) -> AuthorizedReceiptBatch:
 
 
 class ReceiptFixtureTest(unittest.TestCase):
+    def test_explicit_protocol_three(self) -> None:
+        for name in ("receipt-positive-v3.json", "receipt-programs-positive-v3.json"):
+            fixture = _load_shared_fixture(name)
+            canonical = bytes.fromhex(fixture["canonical_receipt_hex"])
+            authority = _authorized(fixture)
+            with self.assertRaises(ReceiptVerificationError):
+                verify_receipt(canonical, authority, LayerXSignatureVerifier())
+            verified = verify_receipt(canonical, authority, LayerXSignatureVerifier(), protocol_version=3)
+            self.assertEqual(verified.receipt.protocol_version, 3)
+            self.assertEqual(verified.receipt_digest.hex(), fixture["expected"]["receipt_digest_hex"])
+            corrupted = canonical[:-1] + bytes([canonical[-1] ^ 1])
+            with self.assertRaises(ReceiptVerificationError):
+                verify_receipt(corrupted, authority, LayerXSignatureVerifier(), protocol_version=3)
+            with self.assertRaises(ReceiptVerificationError):
+                verify_receipt(canonical, authority, LayerXSignatureVerifier(), protocol_version=4)
+
+    def test_protocol_three_refusal_taxonomy(self) -> None:
+        fixture = _load_shared_fixture("receipt-refusals-v3.json")
+        for vector in fixture["vectors"]:
+            with self.subTest(vector=vector["name"]):
+                with self.assertRaises(ReceiptVerificationError) as refused:
+                    verify_receipt(bytes.fromhex(vector["canonical_receipt_hex"]),
+                                   _authorized(fixture), LayerXSignatureVerifier(), protocol_version=3)
+                self.assertEqual(refused.exception.check.value, vector["expected_check"])
+
     def test_program_outcome_v3_vector(self) -> None:
         outcome = decode_program_receipt_outcome(bytes.fromhex(_PROGRAM_OUTCOME_V3), 1)
         self.assertEqual(outcome.encoding_version, 3)

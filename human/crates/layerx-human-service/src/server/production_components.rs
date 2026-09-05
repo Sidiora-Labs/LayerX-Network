@@ -206,6 +206,7 @@ pub struct ProductionComponentsConfig {
     kms_client_private_key: PathBuf,
     kms_limits: Limits,
     network_id: u32,
+    protocol_version: u16,
     signing_limits: SigningLimits,
     agent_actor: AgentDid,
     agent_authority: AuthorityRef,
@@ -295,6 +296,7 @@ impl ProductionComponentsConfig {
             kms_client_private_key: absolute("LAYERX_HUMAN_KMS_CLIENT_PRIVATE_KEY_DER")?,
             kms_limits: bounded_limits("LAYERX_HUMAN_KMS")?,
             network_id: number("LAYERX_HUMAN_NETWORK_ID")?,
+            protocol_version: configured_protocol()?,
             signing_limits: SigningLimits::new(
                 number("LAYERX_HUMAN_SIGNING_RATE_MAXIMUM")?,
                 number("LAYERX_HUMAN_SIGNING_RATE_WINDOW_SECONDS")?,
@@ -448,19 +450,24 @@ impl ProductionComponents {
             .map_err(|_| "security provider configuration was refused".to_owned())?;
         let identity = RemoteIdentityProvider::new(config.identity)
             .map_err(|_| "identity provider configuration was refused".to_owned())?;
-        let withdrawal_boundary =
-            layerx_paxeer_client::WithdrawalBoundary::new(layerx_paxeer_client::WithdrawalConfig {
+        let withdrawal_boundary = layerx_paxeer_client::WithdrawalBoundary::new_for_protocol(
+            layerx_paxeer_client::WithdrawalConfig {
                 endpoints: vec![config.paxeer_endpoint.clone()],
                 minimum_endpoint_agreement: 1,
                 claims_contract: config.withdrawal_claims_contract,
                 required_confirmations: config.exit_required_confirmations,
                 poll_cadence: config.exit_poll_cadence,
                 delayed_after_polls: config.exit_delayed_after_polls,
-            })
-            .map_err(|_| "Paxeer withdrawal boundary refused startup".to_owned())?;
+            },
+            config.protocol_version,
+        )
+        .map_err(|_| "Paxeer withdrawal boundary refused startup".to_owned())?;
         let movement = UnixMovementProvider::new(
             config.movement,
-            Arc::new(NativeMovementCodec::new()),
+            Arc::new(
+                NativeMovementCodec::for_protocol(config.protocol_version)
+                    .map_err(|_| "unsupported Human protocol version".to_owned())?,
+            ),
             withdrawal_boundary,
         )
         .map_err(|_| "movement provider refused startup".to_owned())?;
@@ -4363,4 +4370,39 @@ fn hex20(name: &str) -> Result<[u8; 20], String> {
         *slot = u8::from_str_radix(pair, 16).map_err(|_| format!("{name} is invalid"))?;
     }
     Ok(output)
+}
+
+fn selected_protocol(value: Option<&str>) -> Result<u16, String> {
+    let protocol = value.map_or(Ok(layerx_wire::limits::PROTOCOL_VERSION), |value| {
+        value
+            .parse::<u16>()
+            .map_err(|_| "LAYERX_HUMAN_PROTOCOL_VERSION is invalid".to_owned())
+    })?;
+    NativeMovementCodec::for_protocol(protocol)
+        .map_err(|_| "LAYERX_HUMAN_PROTOCOL_VERSION is unsupported".to_owned())?;
+    Ok(protocol)
+}
+
+#[cfg(test)]
+mod protocol_tests {
+    use super::selected_protocol;
+    #[test]
+    fn explicit_beta_protocol_preserves_legacy_default_and_refuses_unknown_versions() {
+        assert_eq!(selected_protocol(None), Ok(2));
+        assert_eq!(selected_protocol(Some("2")), Ok(2));
+        assert_eq!(selected_protocol(Some("3")), Ok(3));
+        for invalid in ["", "0", "1", "4", "65536", "three"] {
+            assert!(selected_protocol(Some(invalid)).is_err());
+        }
+    }
+}
+
+fn configured_protocol() -> Result<u16, String> {
+    match env::var("LAYERX_HUMAN_PROTOCOL_VERSION") {
+        Ok(value) => selected_protocol(Some(&value)),
+        Err(env::VarError::NotPresent) => selected_protocol(None),
+        Err(env::VarError::NotUnicode(_)) => {
+            Err("LAYERX_HUMAN_PROTOCOL_VERSION is invalid".to_owned())
+        }
+    }
 }

@@ -103,28 +103,12 @@ impl DebitExpectation {
     /// consensus binding. This is the owner-side ingress used by bounded wire
     /// decoders; callers cannot accidentally admit the less strict test
     /// literal representation.
-    pub fn validated(
-        activity_id: [u8; 32],
-        network_id: u32,
-        withdrawal_id: [u8; 32],
-        account: [u8; 32],
-        withdrawals_account: [u8; 32],
-        asset_id: [u8; 32],
-        amount: u128,
-        recipient: EvmAddress,
-    ) -> Result<Self, DebitFault> {
-        let value = Self {
-            activity_id,
-            network_id,
-            withdrawal_id,
-            account,
-            withdrawals_account,
-            asset_id,
-            amount,
-            recipient,
-        };
-        validate_debit_expectation(&value)?;
-        Ok(value)
+    ///
+    /// # Errors
+    /// Refuses empty consensus bindings.
+    pub fn validated(self) -> Result<Self, DebitFault> {
+        validate_debit_expectation(&self)?;
+        Ok(self)
     }
 }
 
@@ -266,26 +250,20 @@ impl CheckpointProof {
     /// boundary. Debit-specific root and attestation-domain checks remain in
     /// `WithdrawalBoundary`, where the verified debit and configured chain
     /// domain are available.
-    pub fn validated(
-        checkpoint_hash: [u8; 32],
-        state_root: [u8; 32],
-        epoch: u64,
-        batch_number: u64,
-        data_availability_root: [u8; 32],
-        leaf_index: u64,
-        siblings: Vec<[u8; 32]>,
-        attestations: Vec<WithdrawalAttestation>,
-    ) -> Result<Self, ClaimRefusal> {
+    ///
+    /// # Errors
+    /// Refuses empty fields, invalid proof bounds, and mismatched attestations.
+    pub fn validated(self) -> Result<Self, ClaimRefusal> {
         Self::validated_for_protocol(
             layerx_wire::limits::PROTOCOL_VERSION,
-            checkpoint_hash,
-            state_root,
-            epoch,
-            batch_number,
-            data_availability_root,
-            leaf_index,
-            siblings,
-            attestations,
+            self.checkpoint_hash,
+            self.state_root,
+            self.epoch,
+            self.batch_number,
+            self.data_availability_root,
+            self.leaf_index,
+            self.siblings,
+            self.attestations,
         )
     }
 
@@ -700,6 +678,28 @@ pub struct WithdrawalBoundary {
 }
 
 impl WithdrawalBoundary {
+    fn validate_debit_protocol(
+        &self,
+        debit: &CommittedWithdrawalDebit,
+    ) -> Result<(), WithdrawalError> {
+        if self.protocol_version == layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION {
+            let found = debit
+                .verified
+                .receipt()
+                .protocol()
+                .map_or(0, layerx_wire::receipt::ProtocolReceipt::protocol_version);
+            if found != self.protocol_version {
+                return Err(WithdrawalError::Refused(
+                    ClaimRefusal::DebitProtocolMismatch {
+                        expected: self.protocol_version,
+                        found,
+                    },
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Validates and adopts a declared Paxeer withdrawal boundary.
     ///
     /// # Errors
@@ -777,21 +777,7 @@ impl WithdrawalBoundary {
         debit: CommittedWithdrawalDebit,
         proof: CheckpointProof,
     ) -> Result<WithdrawalClaim, WithdrawalError> {
-        if self.protocol_version == layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION {
-            let found = debit
-                .verified
-                .receipt()
-                .protocol()
-                .map_or(0, layerx_wire::receipt::ProtocolReceipt::protocol_version);
-            if found != self.protocol_version {
-                return Err(WithdrawalError::Refused(
-                    ClaimRefusal::DebitProtocolMismatch {
-                        expected: self.protocol_version,
-                        found,
-                    },
-                ));
-            }
-        }
+        self.validate_debit_protocol(&debit)?;
         validate_checkpoint_proof(&debit, &proof, self.protocol_version)?;
         let paxeer_network = self.u32_view(
             self.claims_contract,
@@ -1570,7 +1556,8 @@ struct ClaimQueuedEvent {
 pub(crate) const fn supported_protocol_version(protocol_version: u16) -> bool {
     matches!(
         protocol_version,
-        layerx_wire::limits::PROTOCOL_VERSION | layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION
+        layerx_wire::limits::PROTOCOL_VERSION
+            | layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION
     )
 }
 
@@ -1598,11 +1585,7 @@ fn validate_debit_expectation(expectation: &DebitExpectation) -> Result<(), Debi
     Ok(())
 }
 
-fn validate_checkpoint_proof(
-    debit: &CommittedWithdrawalDebit,
-    proof: &CheckpointProof,
-    protocol_version: u16,
-) -> Result<(), WithdrawalError> {
+fn validate_checkpoint_fields(proof: &CheckpointProof) -> Result<(), WithdrawalError> {
     for (name, value) in [
         ("checkpoint_hash", proof.checkpoint_hash),
         ("state_root", proof.state_root),
@@ -1619,6 +1602,15 @@ fn validate_checkpoint_proof(
             ClaimRefusal::EmptyCheckpointField("epoch_or_batch"),
         ));
     }
+    Ok(())
+}
+
+fn validate_checkpoint_proof(
+    debit: &CommittedWithdrawalDebit,
+    proof: &CheckpointProof,
+    protocol_version: u16,
+) -> Result<(), WithdrawalError> {
+    validate_checkpoint_fields(proof)?;
     let depth = proof.siblings.len();
     if depth > MAX_PROOF_DEPTH {
         return Err(WithdrawalError::Refused(ClaimRefusal::ProofTooDeep {

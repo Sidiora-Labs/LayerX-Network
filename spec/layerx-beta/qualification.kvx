@@ -946,3 +946,99 @@ symbol = "LayerXBetaTimelock deployImmediateBetaForProtocol phase_bootstrap"
 observed = "The beta deployment now has an explicit immediate-beta input profile with zero governance delay, selected prediction and deployment entrypoints, and a separate chain-125-only timelock artifact. The standard constructor and validator still enforce the one-day minimum. Scheduling, proposer/executor authorization, target-selector permission, execution replay protection, grace period, economic input validation, real bond deposits and blueprint finalization remain enforced. The bootstrap command runs the existing deploy, permissions, activate, bond and finalize phases in order without advancing block time. Six executed profile checks accepted the new profile and standard inputs and refused nonzero immediate delay, unknown profile, profile mismatch with an existing standard record and another chain; /tmp/layerx-immediate-beta-profile-tests.log. Shell syntax passed. Contract qualification passed 52 tests with zero failures and zero skipped, including same-block immediate-beta operation, unauthorized and replay rejection, wrong-chain rejection, standard delay enforcement, deployment validation and existing manager/integration suites; /tmp/layerx-immediate-beta-contract-tests.log. The full bootstrap passed on a fresh real Paxeer chain through the TLS boundary: deploy, permissions, activate, bond and finalize all recorded, blueprint seal checked on-chain, 1 boundary unit and 2 real-chain/domain integration tests passed, real-chain suite elapsed 634.88 seconds; /tmp/layerx-immediate-beta-real-chain.log. Strict boundary all-target clippy passed in /tmp/layerx-immediate-beta-boundary-clippy.log; Solidity formatting and shell syntax passed. No existing owner chain or deployed contract was changed by these source edits."
 assumption = "This implements the explicitly requested beta deployment timing change. An existing deployed standard timelock keeps its original delay; changing the selected source profile does not alter its runtime or reinterpret its deployment record. This closes the requested timing change; task 6.6 remains in_progress for its remaining image and cluster integration requirements."
 severity = "note"
+
+[observation.6.4.5]
+task = "6.4"
+file = "platform/hosted/agent-boundary/src/artifacts.rs"
+symbol = "receipt_execution_batch_id real_program_simulation_executes_without_committing"
+observed = "Native ProgramCall decoding now matches the 106-byte native header in Rust and rejects malformed signed payloads before they can poison the sequencer. Native prepared refusals restore writable staging, reset temporary allocation before settlement, and project the canonical empty event sequence; canonical publication advances the owner snapshot timestamp after successful publication. Receipt verification now selects the native Programs batch identifier over previous root, activity Merkle root, first sequence, last sequence and batch number; scalar identifiers and all signature, inclusion, domain and root checks are preserved. Final real agent-boundary test run passed all 5 cases and its artifact unit test, including committed refusal replay after restart, malformed admission followed by a usable sequencer, simulation without state change, exact idempotent replay and a different activity reusing the consumed sequence; /tmp/layerx-resume-final-boundaries-test.log. Wire hashing passed 8 tests and strict all-target clippy; /tmp/layerx-resume-native-batch-hash.log and /tmp/layerx-resume-native-batch-clippy.log. Core/authority/agent-boundary strict clippy passed; /tmp/layerx-resume-final-boundaries-clippy.log. Native full check, aggregate, durable LNI admission, ASan artifacts and ASan differential passed in /tmp/layerx-native-final-{check,qualification,lni-admission,artifacts-asan,differential-asan2}.log; snapshot timestamp repair is additionally exercised by the final real boundary suite."
+assumption = "These are bounded real refusal, simulation and verification results. They do not prove a funded hosted Programs execution, the cluster image, or all remaining beta requirements. No old assertion was removed; exact replay and reused sequence now have distinct negative cases."
+severity = "note"
+
+[observation.6.5.3]
+task = "6.5"
+file = "platform/hosted/identity/tests/service.rs"
+symbol = "every_introspection_shape_matches_its_consumer readiness_fails_when_the_store_is_not_writable"
+observed = "Current identity qualification passes 15 unit tests and 7 real TLS service tests, including exact consumer response shapes, expiry, revocation, wrong token, durable restart and lost/replaced-directory refusal with real restart recovery; strict all-target clippy passes. The normal cg spec done 6.5 command reran those passing gates but exited 1: literal symbols layerx-identity and session introspection shapes are not graph definitions, and the tool found no matching Cargo.lock change or task-tagged historical commit. Evidence /tmp/layerx-resume-identity-cg-done.log, /tmp/layerx-resume-identity-final-test.log and /tmp/layerx-resume-identity-final-clippy.log."
+assumption = "The requested test/spec reconciliation is authorized by the owner. Source qualification is proven; graph completion is not. No force option was used and task status remains in_progress."
+severity = "blocker"
+
+[observation.6.11.1]
+task = "6.11"
+file = "agent/crates/layerx-agentd/tests/support/mod.rs"
+symbol = "evidence_authority_with_sequencer"
+observed = "All six language SDK receipt/native-call suites and generators passed; standalone Rust SDK passed 43 tests, and the final gateway/emulator run passed 43 tests including strict native JSON binding and original signed-byte routing. Evidence /tmp/sdk-native-qualified.md and /tmp/sdk-rust-native-qualified.md. The aggregate agentd test gate fails because its existing UnixListener fixture manufactures a Version::V1_0 handshake advertising only submit, then requires AuthenticatedDurableSubmit. Merely advertising that capability would fabricate authority. Strict lint gates also expose 18 existing/cross-task client diagnostics, 45 gateway library diagnostics, and existing emulator main diagnostics; exact logs and touched paths are recorded in the evidence memo."
+assumption = "The successful bounded SDK and native transport gates do not qualify the failed aggregate or strict lint gates. Synthetic authority was not upgraded by adding a claimed capability, and no test, bound or lint was disabled."
+severity = "blocker"
+
+[observation.6.8.1]
+task = "6.8"
+file = "platform/hosted/internal/src/events.rs"
+symbol = "layerx-kms layerx-event-source"
+observed = "Internal KMS and event adapters are implemented with durable state, authenticated TLS, actual upstream principal binding and immutable per-subject event ordering. Internal qualification passes 15 unit tests, real KMS TLS/signature/restart coverage and strict all-target clippy. Human real session principal and explicit protocol 2/3 tests pass. The Paxeer client passes 41 tests and strict clippy. Exact commands, logs and paths: /tmp/layerx-human-client-internal-handoff.txt. Event sources still need actual Human/gateway principal credentials, the full production Human provider stack, and an observation/trigger producer wired into the cluster. Empty credentials do not become readiness."
+assumption = "Local KMS and client qualification is not proof of Human, webhook or dashboard cluster journeys. A read-only deposit-root producer design at /tmp/layerx-deposit-root-producer-design.txt also identifies missing admitted-custody API, trusted checkpoint binding, native Bridge issuance and legitimate first-deposit anchoring; no arbitrary signed root or invented funded genesis was implemented."
+severity = "blocker"
+
+[observation.6.2.4]
+task = "6.2"
+file = "platform/hosted/core/tests/boundary.rs"
+symbol = "establish_receipt_head boundary_serves_the_real_sequencer_over_the_lni"
+observed = "The current core suite passes 4 of 5 real tests, including authenticated admin refusal and supervisor reset/restart. The receipt-head SEND test still fails: POST /v1/activities returns 202 pending instead of the expected 200 signed terminal refusal. Actual sequencer stderr reports activity kernel execution failed with result -602 and execution failed at sequence 1 with result -602 (FeeUnpayable). Evidence /tmp/layerx-resume-authority-core-final.log and /tmp/layerx-core-217584-1788621067229-2/sequencer.stderr. Real authority tests pass 2 of 2 after eliminating executable-copy races with links to stable built binaries."
+assumption = "Fee and conservation checks, receipt assertions and zero-supply genesis remain unchanged. Native scalar admission/execution is being inspected to stop an unfunded request from poisoning the sequencer. Passing readiness or accepting the request is not funded-success evidence."
+severity = "blocker"
+
+[observation.6.6.4]
+task = "6.6"
+file = "platform/hosted/paxeer/Dockerfile.paxd-node"
+symbol = "image_source"
+observed = "The beta image source selected by beta-cluster.sh copied local Wasm shared libraries and generated a checksum manifest from those same bytes without comparing the repository pins. The image now verifies all three copied x86_64 libraries against paxeer-network/wasm-runtime/libwasmvm-linux.sha256 before compiling. Executing the Dockerfile verification shell against the actual local libraries rejects libwasmvm.x86_64.so and accepts v152 and v155; /tmp/layerx-beta-paxd-pin-check.log. The main local library hashes 6106b3d9c1e05310292fae5bd3db07bdc98a9cec083f9f6d1fdf71c25d00683e, whereas the unchanged required pin is 19752407884017899539bf5f1040f8381504c2e135d47223085a4e28f081402c."
+assumption = "The beta image is not qualified until the required artifact is supplied and the full image build passes. No checksum pin was changed, and recording the hash of supplied bytes is not verification of their expected provenance."
+severity = "blocker"
+
+[observation.6.8.2]
+task = "6.8"
+file = "human/crates/layerx-paxeer-client/src/deposit.rs"
+symbol = "AdmittedCustody admit_custody"
+observed = "DepositProofVerifier now exposes opaque admitted custody facts after the existing configured chain, endpoint quorum, confirmation depth, receipt status, exact vault event and derived deposit ID checks, plus protocol-selected recipient binding. Read-only facts contain no checkpoint registration, root publication or signing capability. The existing obtain path shares the same private validation without weakening its registration checks. Actual Anvil tests cover protocol 2 and 3 event facts and reject another recipient, incompatible protocol/policy, another vault, unrelated transaction receipt, reverted custody and insufficient finality. Focused deposit tests pass 7 cases; full client tests and strict all-target clippy pass in /tmp/layerx-admitted-custody-test.log, /tmp/layerx-admitted-custody-full.log and /tmp/layerx-admitted-custody-clippy.log."
+assumption = "This supplies a validated custody input for future producer integration. It does not implement or qualify checkpoint/root publication, native Bridge issuance, a funded genesis, or the hosted funding journey."
+severity = "note"
+
+[observation.6.2.5]
+task = "6.2"
+file = "cmd/layerxd/lxp_daemon_main.c"
+symbol = "lxp_daemon_submit send_submit establish_receipt_head"
+observed = "Two independent scalar failures are repaired. Protocol-3 SEND admission now rejects an already-unpayable signed fee limit before durable queue admission, preserving known replay handling and the kernel fee policy. Enqueue and recovered-queue restoration now broadcast queue_changed because the executor and auxiliary workers share the condition; signaling one waiter could wake an auxiliary worker and strand the executor with acknowledged work. The real multiworker core regression proves fee 1000 from an empty account returns HTTP 422 and exact LNI class 4/result -602, leaves the chain head unchanged and remains ready; a fee-zero request using the same account sequence then produces the original verified signed terminal refusal receipt. The full core, authority and agent-boundary test command passes: 5 core boundary tests, 1 native SEND test, 2 authority real-node tests, 5 agent-boundary real-node tests and 1 artifact unit test. Strict all-target clippy for all three packages passes. Logs /tmp/layerx-core-queue-wake-all-test.log and /tmp/layerx-core-queue-wake-clippy.log. Native daemon and durable admission gates also pass: make --no-print-directory -s -j2 test-layerxd test-daemon-lni-admission, /tmp/layerx-native-queue-wake-daemon-tests.log, exit 0. Production daemon a328570021e0754dc79a4c5055da02fb04a7da6fb7e709fc789b49ca1d4a49b3 contains no temporary stage diagnostics."
+assumption = "This supersedes observation 6.2.4 for the scalar receipt failure. A genuine first refused batch can now bootstrap checkpoint production without funded execution, but the live guarantor batch producer, finalized-custody deposit-root publisher and native issuance activity remain absent. Admission checks current balance, not reservations against all future queued spends. Treasury funding and full beta readiness are not qualified by these passing refusal and lifecycle gates."
+severity = "note"
+
+[observation.6.7.1]
+task = "6.7"
+file = "human/crates/layerx-human-service/src/server/production_components.rs"
+symbol = "ProductionComponents UnixMovementProvider RemoteHumanAuthority"
+observed = "Source-grounded launch inspection identifies missing complete runnable Human provider hosts: LXIP identity assignment, LXSP authenticator/recovery verification, LXKP production custody lifecycle and disclosure signing, and the 14-operation MovementProviderService implementation. The actual Agent Human Unix owner also requires eight independent authority HTTP routes whose server handlers are absent. Existing IdentityServices is explicitly partial; EnvelopeKms is explicitly DevelopmentOnly and rejected by production. The installed immutable tenancy map and one-UID-to-one-principal Agent peer mapping require a valid multi-principal composition. The qualification first-payment samples use bearer authentication while Human authenticates its real session cookie; pointing those samples at Human does not reconcile the contracts. Exact source locations, required operations, durable state, authentication constraints and smallest complete work units are in /tmp/layerx-human-production-launch-design.txt."
+assumption = "No provider stubs, success probes, development-provider relabeling or expanded token acceptance were introduced. This is missing implementation and integration, not a completed deployment or a task qualification result. The whole cluster cannot be reported beta-ready from the bounded service and client gates."
+severity = "blocker"
+
+[observation.6.6.5]
+task = "6.6"
+file = "paxeer-network/wasm-runtime/internal/api/libwasmvm.x86_64.so"
+symbol = "build_images"
+observed = "The exact original main library was found at /usr/lib/x86_64-linux-gnu/libwasmvm.x86_64.so. Its independently computed SHA-256 is 19752407884017899539bf5f1040f8381504c2e135d47223085a4e28f081402c, matching the unchanged repository pin. The tracked beta image source library was atomically restored from those verified bytes; the system library and running owner processes were untouched. Executing the actual selected Dockerfile verification shell now accepts all three libraries and exits 0; /tmp/layerx-beta-paxd-pin-restored-check.log."
+assumption = "This resolves the artifact-availability portion of observation 6.6.4 and the corresponding pending owner question. The image build is a separate gate and is being run with this exact restored input; no image or cluster success is claimed from the hash check alone."
+severity = "note"
+
+[observation.6.6.6]
+task = "6.6"
+file = "platform/hosted/paxeer/Dockerfile.paxd-node"
+symbol = "build_images"
+observed = "The selected node image built successfully from the restored pinned library and tracked Paxeer source. Its actual Docker build accepted all three unchanged expected WASM hashes before Go compilation and ran paxd version v6.1.12 in the final runtime layer. Command: docker build --file /tmp/layerx-paxd-pinned-build-context/platform/hosted/paxeer/Dockerfile.paxd-node --tag layerx-paxd-node:pin-qualified-20260905 --build-arg PAX_CHAIN_REF=22731162-worktree /tmp/layerx-paxd-pinned-build-context. Exit 0; /tmp/layerx-paxd-pinned-image-build.log; image sha256:2d5e8667956450d2f037c0188e54c38707c0d9521128cfe4e838d677a8d8c36a. The temporary context contained tracked inputs with environment files excluded and was removed after the successful build."
+assumption = "The image-build part of observation 6.6.4 is resolved. Source contains uncommitted fixes, so this is a bounded development observation, not an immutable-revision release gate. Container real-chain bootstrap and cluster qualification are separate pending gates."
+severity = "note"
+
+[observation.6.11.2]
+task = "6.11"
+file = "cmd/layerxd/lxp_daemon_process.c"
+symbol = "lxp_daemon_process_batch"
+observed = "Protocol-2 NativeProgramCall publication attempted composite account-evidence validation against the legacy receipt-transition root and could terminate after publishing a genuine batch. Live and recovery publication now gate composite account evidence on explicit protocol 3. Protocol 2 advertises no account_read capability and returns typed ModuleDisabled for account reads and account proof bundles; canonical receipt and batch evidence remain available. Native build, make check and test-layerxd plus test-daemon-lni-admission exit 0: /tmp/layerx-native-protocol2-evidence-build.log, /tmp/layerx-native-protocol2-evidence-check.log and /tmp/layerx-native-protocol2-evidence-daemon-tests.log. Stable daemon SHA256 d0056c4ac48f0f68c834b93ec41ee5cf97422c9d9e95c58a803024e760a8965c. The protocol-3 recheck passes five real Programs boundary tests, one artifact unit test, two authority tests and four of five core tests. One core receipt lookup failed with handshake PeerShutdown under concurrent compilation; rerunning exactly boundary_serves_the_real_sequencer_over_the_lni after the image compilation passes unchanged, 1/1 in 24.84 seconds. Logs /tmp/layerx-protocol-profile-boundaries-test.log and /tmp/layerx-core-stable-profile-rerun.log."
+assumption = "No assertion, timeout, signature or state-proof rule was weakened. The transient handshake failure is retained; load as its cause is unconfirmed. Protocol-2 restart evidence and full agentd aggregate qualification are still pending."
+severity = "note"

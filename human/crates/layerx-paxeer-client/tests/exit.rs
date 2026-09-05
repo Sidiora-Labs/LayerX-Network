@@ -238,7 +238,7 @@ struct Topology {
 }
 
 impl Topology {
-    fn deploy(anvil: &Anvil) -> Self {
+    fn deploy_asset(anvil: &Anvil) -> (EvmAddress, EvmAddress) {
         let token_template = anvil.deploy("IntegrationToken", &[address_word(GOVERNANCE)]);
         anvil.install_code(token_template, USDL_TOKEN);
         let token = USDL_TOKEN;
@@ -251,6 +251,11 @@ impl Topology {
                 quantity_word(1),
             ],
         );
+        (token, registry)
+    }
+
+    fn deploy(anvil: &Anvil) -> Self {
+        let (token, registry) = Self::deploy_asset(anvil);
         let vault = anvil.deploy(
             "LayerXVault",
             &[
@@ -762,7 +767,11 @@ fn forge_bytecode(name: &str) -> Vec<u8> {
         .stderr(Stdio::inherit())
         .output()
         .unwrap_or_else(|error| panic!("forge inspect {name}: {error}"));
-    assert!(output.status.success(), "forge inspect {name} failed");
+    assert!(
+        output.status.success(),
+        "forge inspect {name} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let text = std::str::from_utf8(&output.stdout)
         .unwrap_or_else(|error| panic!("forge inspect {name} utf-8: {error}"));
     decode_hex(text.trim()).unwrap_or_else(|error| panic!("forge inspect {name}: {error}"))

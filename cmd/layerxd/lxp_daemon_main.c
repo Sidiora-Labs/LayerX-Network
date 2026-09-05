@@ -296,7 +296,7 @@ lxp_result lxp_daemon_submit(
         daemon->persist_admission != NULL;
     ++daemon->queue_count;
     daemon->queue_bytes += activity_length;
-    if (pthread_cond_signal(&daemon->queue_changed) != 0) {
+    if (pthread_cond_broadcast(&daemon->queue_changed) != 0) {
         daemon->failure = LXP_FATAL_INVARIANT;
         daemon->accepting = false;
         daemon->stop_requested = true;

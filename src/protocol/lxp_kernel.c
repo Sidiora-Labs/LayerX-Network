@@ -2219,6 +2219,8 @@ lxp_result lxp_kernel_prepare_activity(
             lxp_module_ctx_rollback(&module_ctx);
             status = lxp_effect_buffer_init(&effects);
             module_ctx.next_effect_ordinal = 0U;
+            if (status == LXP_OK)
+                status = lxp_module_ctx_set_mutable(&module_ctx, true);
         }
     }
     if (status == LXP_OK && module_ctx_initialized)
@@ -2428,11 +2430,9 @@ lxp_result lxp_kernel_snapshot_apply_prepared(
                                   execution->arena);
     if (status == LXP_OK)
         status = receipt_store(candidate->kernel.journal, activity, receipt);
-    if (status == LXP_OK && module_ctx_initialized &&
-        receipt->program_outcome.terminal_kind ==
-            LXP_PROGRAM_TERMINAL_SUCCESS && canonical_events != NULL)
-        status = lxp_programs_project_committed_events(
-            &effects, execution->arena, &projected);
+    if (status == LXP_OK && canonical_events != NULL)
+        status = lxp_programs_project_receipt_events(
+            receipt, execution->arena, &projected);
     if (status == LXP_OK)
         status = lxp_state_journal_commit(candidate->kernel.journal);
     if (status == LXP_OK && module_ctx_initialized)
@@ -2792,6 +2792,25 @@ static lxp_result kernel_prepared_batch_digest(
     return status;
 }
 
+static bool program_planning_refusal(lxp_result status)
+{
+    switch (status) {
+    case LXP_ERR_TRUNCATED:
+    case LXP_ERR_TRAILING_BYTES:
+    case LXP_ERR_NON_CANONICAL:
+    case LXP_ERR_UNSORTED_SEQUENCE:
+    case LXP_ERR_INVALID_TAG:
+    case LXP_ERR_UNKNOWN_FIELD:
+    case LXP_ERR_VERSION_UNSUPPORTED:
+    case LXP_ERR_AUTH_SCOPE:
+    case LXP_ERR_PROGRAM_REFUSED:
+    case LXP_ERR_GAS_EXHAUSTED:
+        return true;
+    default:
+        return false;
+    }
+}
+
 lxp_result lxp_kernel_prepare_activity_batch(
     lxp_kernel *kernel, const lxp_activity *activities,
     const lxp_kernel_execution *executions, size_t offered_count,
@@ -2821,6 +2840,7 @@ lxp_result lxp_kernel_prepare_activity_batch(
     bool suffix_is_semantic = false;
     bool status_is_semantic = false;
     bool stop_after_prefix = false;
+    bool planning_refusal = false;
     lxp_result status = LXP_OK;
     if (kernel == NULL || activities == NULL || executions == NULL ||
         batch_out == NULL || retry_prefix_count == NULL ||
@@ -2897,11 +2917,50 @@ lxp_result lxp_kernel_prepare_activity_batch(
         status = lxp_kernel_batch_schedule_item(
             base, &activities[index], &normalized[index],
             executions[index].arena, &items[index]);
+        planning_refusal = program_planning_refusal(status);
         {
             lxp_result reset_status = lxp_arena_reset(
                 executions[index].arena, arena_mark);
-            if (status == LXP_OK) status = reset_status;
+            if (reset_status != LXP_OK) {
+                status = reset_status;
+                planning_refusal = false;
+            }
         }
+        if (status != LXP_OK && planning_refusal) {
+            if (index != 0U || count != 1U) {
+                *retry_prefix_count = index != 0U ? index : 1U;
+                goto done;
+            }
+            break;
+        }
+    }
+    if (status != LXP_OK && planning_refusal && count == 1U) {
+        status = lxp_kernel_batch_snapshot_clone(base, &settled);
+        if (status == LXP_OK) {
+            status = lxp_kernel_batch_snapshot_begin_level(settled);
+        }
+        if (status == LXP_OK) {
+            status = lxp_kernel_prepare_activity(
+                settled, &activities[0], &normalized[0],
+                normalized[0].arena, &prepared[0]);
+        }
+        if (status == LXP_OK)
+            status = lxp_arena_reset(normalized[0].arena, 0U);
+        if (status == LXP_OK) {
+            status = lxp_kernel_snapshot_apply_prepared(
+                settled, &activities[0], &normalized[0], prepared[0],
+                &staged_receipts[0], &staged_events[0]);
+        }
+        if (status == LXP_OK &&
+            (staged_receipts[0].result_code == LXP_OK ||
+             staged_receipts[0].effects.count != 0U))
+            status = LXP_FATAL_INVARIANT;
+        if (status == LXP_OK) {
+            status = lxp_state_snapshot_seal_level(settled->state);
+        }
+        if (status != LXP_OK) goto done;
+        settled_count = 1U;
+        goto assemble_batch;
     }
     if (status == LXP_OK)
         status = layerx_programs_schedule_plan(items, count, levels,
@@ -3042,6 +3101,7 @@ lxp_result lxp_kernel_prepare_activity_batch(
     } else if (status == LXP_OK && settled_count < count) {
         status = LXP_FATAL_INVARIANT;
     }
+assemble_batch:
     if (status == LXP_OK) {
         batch = (lxp_kernel_prepared_batch *)calloc(1U, sizeof(*batch));
         if (batch == NULL) status = LXP_ERR_ARENA_EXHAUSTED;

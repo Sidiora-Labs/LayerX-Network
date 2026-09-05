@@ -138,7 +138,13 @@ impl<B: HumanApiComponents> Router<B> {
                 Err(failure) => error_response(&trace, failure),
             };
         }
-        let matched = match self.schema.route(&request.method, &request.path) {
+        let introspection = request.method == "GET" && request.path == "/internal/v1/principal";
+        let schema_path = if introspection {
+            "/v1/sessions"
+        } else {
+            &request.path
+        };
+        let matched = match self.schema.route(&request.method, schema_path) {
             Ok(Some(matched)) => matched,
             Ok(None) => return error_response(&trace, ApiFailure::not_found()),
             Err(_) => return error_response(&trace, ApiFailure::invalid_request(None)),
@@ -247,6 +253,13 @@ impl<B: HumanApiComponents> Router<B> {
             }
             Some(context)
         };
+        let introspection_principal = introspection
+            .then(|| {
+                principal
+                    .as_ref()
+                    .map(|context| context.principal.as_str().to_owned())
+            })
+            .flatten();
         let clear_session =
             should_clear_session(operation, principal.as_ref(), &matched.path_parameters);
         let response = self.backend.execute(ScopedRequest {
@@ -261,6 +274,14 @@ impl<B: HumanApiComponents> Router<B> {
             Ok(BackendResponse { result, session }) => {
                 if self.schema.encode_response(operation, &result).is_err() {
                     return error_response(&trace, ApiFailure::upstream_degraded());
+                }
+                if let Some(sub) = introspection_principal {
+                    return success_response(
+                        200,
+                        &trace,
+                        json!({"active": true, "sub": sub}),
+                        Vec::new(),
+                    );
                 }
                 let mut headers = session.map_or_else(Vec::new, session_cookie_headers);
                 if clear_session {

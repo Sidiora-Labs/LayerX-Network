@@ -270,3 +270,26 @@ func TestReceiptRefusalVectorsExposeSharedTaxonomy(t *testing.T) {
 		})
 	}
 }
+
+func TestExplicitProtocolThree(t *testing.T) {
+	for _, name := range []string{"receipt-positive-v3.json", "receipt-programs-positive-v3.json"} {
+		fixture := loadReceiptFixtureNamed(t, name)
+		canonical := fixtureBytes(t, fixture.CanonicalReceiptHex)
+		a := fixture.AuthorizedBatch
+		authority := AuthorizedBatch{BatchID: fixture32(t, a.BatchIDHex), Asset: fixture32(t, a.AssetHex), PreviousStateRoot: fixture32(t, a.PreviousStateRootHex), ResultingStateRoot: fixture32(t, a.ResultingStateRootHex), SequencerPublicKey: fixture32(t, a.SequencerPublicKeyHex)}
+		if _, err := VerifyReceipt(canonical, authority); err == nil {
+			t.Fatal("default accepted protocol 3")
+		}
+		verified, err := VerifyReceipt(canonical, authority, 3)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if verified.Receipt.ProtocolVersion != 3 || hex.EncodeToString(verified.ReceiptDigest[:]) != fixture.Expected.ReceiptDigestHex {
+			t.Fatal("protocol 3 evidence mismatch")
+		}
+		canonical[len(canonical)-1] ^= 1
+		if _, err := VerifyReceipt(canonical, authority, 3); err == nil {
+			t.Fatal("corrupt signature accepted")
+		}
+	}
+}

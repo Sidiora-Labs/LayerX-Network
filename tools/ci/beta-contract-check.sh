@@ -761,11 +761,14 @@ for documents, relative, name in (
         violation(f"{relative}: {name} is not set")
     else:
         expect("Wire protocol version", wire, "wire_protocol_version", value, f"{relative} {name}")
-wire_constant = re.search(r"pub const PROTOCOL_VERSION:\s*u16\s*=\s*(\d+);", wire_limits)
+wire_constant = re.search(r"pub const STATE_COMMITMENT_PROTOCOL_VERSION:\s*u16\s*=\s*(\d+);", wire_limits)
 if wire_constant is None:
-    violation("agent/crates/layerx-wire/src/limits.rs: PROTOCOL_VERSION is missing")
+    violation("agent/crates/layerx-wire/src/limits.rs: STATE_COMMITMENT_PROTOCOL_VERSION is missing")
 else:
-    expect("Wire protocol version", wire, "wire_protocol_version", wire_constant.group(1), "agent/crates/layerx-wire/src/limits.rs PROTOCOL_VERSION")
+    expect("Wire protocol version", wire, "wire_protocol_version", wire_constant.group(1), "agent/crates/layerx-wire/src/limits.rs STATE_COMMITMENT_PROTOCOL_VERSION")
+legacy_default = re.search(r"pub const PROTOCOL_VERSION:\s*u16\s*=\s*(\d+);", wire_limits)
+if legacy_default is None or legacy_default.group(1) != "2":
+    violation("agent/crates/layerx-wire/src/limits.rs: default protocol compatibility must remain 2")
 if docs_wire is None:
     violation("platform/docs/testnet.md: LXP wire protocol version is missing")
 elif docs_wire.group(1) != wire.get("wire_protocol_version"):

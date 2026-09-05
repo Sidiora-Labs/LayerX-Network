@@ -138,6 +138,7 @@ pub struct Upstream {
     ca: Certificate,
     identity: Option<Identity>,
     token: Option<Zeroizing<String>>,
+    cookie: Option<Zeroizing<String>>,
 }
 
 impl Upstream {
@@ -164,10 +165,9 @@ impl Upstream {
         let identity = match env::var(format!("{prefix}_UPSTREAM_CLIENT_IDENTITY_PKCS12")) {
             Ok(path) => {
                 let password_path =
-                    env::var(format!("{prefix}_UPSTREAM_CLIENT_IDENTITY_PASSWORD_FILE"))
-                        .map_err(|_| {
-                            format!("{prefix}_UPSTREAM_CLIENT_IDENTITY_PASSWORD_FILE is required")
-                        })?;
+                    env::var(format!("{prefix}_UPSTREAM_CLIENT_IDENTITY_PASSWORD_FILE")).map_err(
+                        |_| format!("{prefix}_UPSTREAM_CLIENT_IDENTITY_PASSWORD_FILE is required"),
+                    )?;
                 let password = read_secret_file(std::path::Path::new(&password_path))?;
                 let bundle = fs::read(path).map_err(|error| error.to_string())?;
                 Some(
@@ -182,6 +182,10 @@ impl Upstream {
             ca,
             identity,
             token,
+            cookie: env::var(format!("{prefix}_UPSTREAM_COOKIE_FILE"))
+                .ok()
+                .map(|path| read_secret_file(std::path::Path::new(&path)))
+                .transpose()?,
         })
     }
 
@@ -197,7 +201,27 @@ impl Upstream {
     /// Returns [`UpstreamFailure::Unavailable`] when no well-formed response
     /// arrives.
     pub fn get(&self, path: &str) -> Result<UpstreamResponse, UpstreamFailure> {
-        self.request("GET", path, &[])
+        self.request("GET", path, &[], None)
+    }
+
+    /// Performs a GET with an explicit principal credential.
+    /// # Errors
+    /// Refuses malformed credentials and TLS or HTTP failures.
+    pub fn get_as(
+        &self,
+        path: &str,
+        header: &str,
+        credential: &str,
+    ) -> Result<UpstreamResponse, UpstreamFailure> {
+        if !matches!(header, "Cookie" | "Authorization")
+            || credential.bytes().any(|byte| byte.is_ascii_control())
+            || credential.len() > 4096
+        {
+            return Err(UpstreamFailure::Unavailable(
+                "invalid principal credential".to_owned(),
+            ));
+        }
+        self.request("GET", path, &[], Some((header, credential)))
     }
 
     fn request(
@@ -205,6 +229,7 @@ impl Upstream {
         method: &str,
         path: &str,
         body: &[u8],
+        credential: Option<(&str, &str)>,
     ) -> Result<UpstreamResponse, UpstreamFailure> {
         if !path.starts_with('/') || path.contains(['?', '#', ' ', '\r', '\n']) || path.len() > 1024
         {
@@ -214,6 +239,7 @@ impl Upstream {
         }
         let mut builder = TlsConnector::builder();
         builder
+            .disable_built_in_roots(true)
             .add_root_certificate(self.ca.clone())
             .min_protocol_version(Some(native_tls::Protocol::Tlsv12));
         if let Some(identity) = &self.identity {
@@ -242,6 +268,17 @@ impl Upstream {
             let authorization = self.token.as_ref().map_or_else(String::new, |token| {
                 format!("Authorization: Bearer {}\r\n", token.as_str())
             });
+            let cookie = self.cookie.as_ref().map_or_else(String::new, |cookie| {
+                format!("Cookie: __Host-layerx_access={}\r\n", cookie.as_str())
+            });
+            let principal = credential.map_or_else(String::new, |(header, value)| {
+                format!("{header}: {value}\r\n")
+            });
+            let (authorization, cookie) = if credential.is_some() {
+                (String::new(), String::new())
+            } else {
+                (authorization, cookie)
+            };
             let host = if self.origin.port == 443 {
                 self.origin.host.clone()
             } else {
@@ -249,7 +286,7 @@ impl Upstream {
             };
             write!(
                 stream,
-                "{method} {path} HTTP/1.1\r\nHost: {host}\r\nAccept: application/json\r\nContent-Type: application/json\r\nUser-Agent: LayerX-Internal/1\r\n{authorization}Content-Length: {}\r\nConnection: close\r\n\r\n",
+                "{method} {path} HTTP/1.1\r\nHost: {host}\r\nAccept: application/json\r\nContent-Type: application/json\r\nUser-Agent: LayerX-Internal/1\r\n{authorization}{cookie}{principal}Content-Length: {}\r\nConnection: close\r\n\r\n",
                 body.len()
             )
             .map_err(|error| UpstreamFailure::Unavailable(error.to_string()))?;
@@ -279,8 +316,8 @@ fn resolve(origin: &Origin) -> Result<Vec<SocketAddr>, UpstreamFailure> {
 }
 
 fn read_response(stream: &mut impl Read) -> Result<UpstreamResponse, UpstreamFailure> {
-    let message = read_http_message(stream, MAX_UPSTREAM_BYTES)
-        .map_err(UpstreamFailure::Unavailable)?;
+    let message =
+        read_http_message(stream, MAX_UPSTREAM_BYTES).map_err(UpstreamFailure::Unavailable)?;
     let status_line = message
         .headers
         .get("")

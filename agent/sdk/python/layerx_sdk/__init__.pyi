@@ -107,3 +107,6 @@ from .verifier import (
     verify_receipt as verify_receipt,
     verify_receipt_outcome as verify_receipt_outcome,
 )
+from .native_program_call import NativeProgramCall as NativeProgramCall, encode_native_program_call as encode_native_program_call, decode_native_program_call as decode_native_program_call
+
+from .programs import NativeProgramRequest as NativeProgramRequest

@@ -14,6 +14,40 @@ public final class ReceiptFixtureTest {
     private static final String PROGRAM_OUTCOME_V3 = "505247330100000000000100010000000700000001000000000000000b000000000000000c000000000000000d000000000000000e00000001000000000000000f0000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000020000000000000003000000000000000400000000000000050000000000000006000000000000000700000020000000000000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000201111111111111111111111111111111111111111111111111111111111111111000000202222222222222222222222222222222222222222222222222222222222222222000000200000000000000000000000000000000000000000000000000000000000000000";
 
     @Test
+    void nativeSignedBinding() throws Exception {
+        JsonNode fixture = JSON.readTree(Files.readString(FIXTURE_ROOT.resolve("native-program-call-v3.json")));
+        byte[] payload = hexDecode(fixture.get("payload_hex").asText());
+        NativeProgramCall nativeCall = NativeProgramCall.decode(payload);
+        assertArrayEquals(payload, nativeCall.encode());
+        byte[] signed = hexDecode(fixture.get("signed_activity_hex").asText());
+        var method = ProgramsClient.class.getDeclaredMethod("decodeSignedCall", ProgramsClient.Call.class);
+        method.setAccessible(true);
+        method.invoke(null, new ProgramsClient.Call(nativeCall, BigInteger.valueOf(1000), signed));
+        assertThrows(java.lang.reflect.InvocationTargetException.class, () -> method.invoke(null, new ProgramsClient.Call(nativeCall, BigInteger.valueOf(999), signed)));
+        NativeProgramCall changed = new NativeProgramCall(nativeCall.programId(), nativeCall.guestAbi(), nativeCall.entrypoint(), nativeCall.calldata(), nativeCall.capabilities(), nativeCall.accessDeclaration(), 17, nativeCall.resources());
+        assertThrows(java.lang.reflect.InvocationTargetException.class, () -> method.invoke(null, new ProgramsClient.Call(changed, BigInteger.valueOf(1000), signed)));
+        for (int length = 0; length < payload.length; length++) {
+            byte[] truncated = java.util.Arrays.copyOf(payload, length);
+            assertThrows(IllegalArgumentException.class, () -> NativeProgramCall.decode(truncated));
+        }
+    }
+
+    @Test
+    void explicitProtocolThree() throws Exception {
+        for (String name : new String[]{"receipt-positive-v3.json", "receipt-programs-positive-v3.json"}) {
+            JsonNode fixture = JSON.readTree(Files.readString(FIXTURE_ROOT.resolve(name)));
+            byte[] canonical = hexDecode(fixture.get("canonical_receipt_hex").asText());
+            var authority = authorizedBatch(fixture);
+            assertThrows(PlatformSdkException.class, () -> LocalVerifier.verifyReceipt(canonical, authority));
+            var verified = LocalVerifier.verifyReceipt(canonical, authority, 3);
+            assertEquals(3, verified.receipt().protocolVersion());
+            assertArrayEquals(hexDecode(fixture.get("expected").get("receipt_digest_hex").asText()), verified.receiptDigest());
+            canonical[canonical.length - 1] ^= 1;
+            assertThrows(PlatformSdkException.class, () -> LocalVerifier.verifyReceipt(canonical, authority, 3));
+        }
+    }
+
+    @Test
     void programOutcomeV3VectorDecodes() {
         var outcome = LocalVerifier.decodeProgramReceiptOutcome(hexDecode(PROGRAM_OUTCOME_V3), 1);
         assertEquals(3, outcome.encodingVersion());

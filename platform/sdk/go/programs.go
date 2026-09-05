@@ -42,6 +42,7 @@ type ProgramBudget struct {
 }
 
 type ProgramCall struct {
+	NativeCall     *NativeProgramCall
 	ProgramID      [32]byte
 	Calldata       []byte
 	Budget         ProgramBudget
@@ -316,7 +317,7 @@ func bindSignedProgramCall(call ProgramCall) (programCallBinding, error) {
 	}
 	decoder := wireDecoder{value: call.SignedActivity}
 	envelopeVersion := decoder.u16()
-	if envelopeVersion != 1 && envelopeVersion != 2 || decoder.u16() != 0x1001 || decoder.u8() != 12 {
+	if envelopeVersion != 1 && envelopeVersion != 2 && envelopeVersion != 3 || decoder.u16() != 0x1001 || decoder.u8() != 12 {
 		return programCallBinding{}, newSDKError(ErrorInvalidArgument, RetryNever)
 	}
 	field := func(expected byte) bool { return decoder.u8() == expected && !decoder.failed }
@@ -352,7 +353,10 @@ func bindSignedProgramCall(call ProgramCall) (programCallBinding, error) {
 	if !field(9) {
 		return programCallBinding{}, newSDKError(ErrorInvalidArgument, RetryNever)
 	}
-	_ = decoder.u128()
+	envelopeFeeLimit := decoder.u128()
+	if call.NativeCall != nil && (protocolVersion != 3 || envelopeFeeLimit != call.Budget.FeeLimit) {
+		return programCallBinding{}, newSDKError(ErrorInvalidArgument, RetryNever)
+	}
 	if !field(10) {
 		return programCallBinding{}, newSDKError(ErrorInvalidArgument, RetryNever)
 	}
@@ -372,6 +376,12 @@ func bindSignedProgramCall(call ProgramCall) (programCallBinding, error) {
 }
 
 func programPayloadMatchesCall(payload []byte, call ProgramCall) bool {
+	if call.NativeCall != nil {
+		native := call.NativeCall
+		encoded, err := EncodeNativeProgramCall(*native)
+		return err == nil && native.ProgramID == call.ProgramID && bytes.Equal(native.Calldata, call.Calldata) && native.Resources[0] == call.Budget.Fuel && len(call.Capabilities) == 0 && bytes.Equal(payload, encoded)
+	}
+
 	domain := []byte("LayerX/programs/call/v1\x00")
 	if !bytes.HasPrefix(payload, domain) {
 		return false
@@ -400,8 +410,8 @@ func programPayloadMatchesCall(payload []byte, call ProgramCall) bool {
 	return true
 }
 
-func VerifyProgramReceipt(execution ProgramExecutionDocument, authority AuthorizedBatch) (VerifiedProgramReceipt, error) {
-	if execution.ActivityID == "" || execution.ModuleVersion < 1 || execution.ModuleVersion > 3 || execution.GuestABIVersion != 1 && execution.GuestABIVersion != 2 {
+func VerifyProgramReceipt(execution ProgramExecutionDocument, authority AuthorizedBatch, selectedProtocol ...uint16) (VerifiedProgramReceipt, error) {
+	if execution.ActivityID == "" || execution.ModuleVersion < 1 || execution.ModuleVersion > 4 || execution.GuestABIVersion != 1 && execution.GuestABIVersion != 2 {
 		return VerifiedProgramReceipt{}, verificationFailure()
 	}
 	activity, err := programHex32(execution.ActivityID)
@@ -420,7 +430,7 @@ func VerifyProgramReceipt(execution ProgramExecutionDocument, authority Authoriz
 	if err != nil {
 		return VerifiedProgramReceipt{}, verificationFailure()
 	}
-	verified, err := VerifyReceiptOutcome(receipt, authority)
+	verified, err := VerifyReceiptOutcome(receipt, authority, selectedProtocol...)
 	if err != nil {
 		return VerifiedProgramReceipt{}, verificationFailure()
 	}
@@ -473,7 +483,7 @@ func verifyProgramTerminal(execution ProgramExecutionDocument, receipt ProtocolR
 	if projection.Candidate && !bytes.Equal(projection.EmbeddedGraph, graph) {
 		return errors.New("Programs embedded call graph mismatch")
 	}
-	occupancyRequired := receipt.ProtocolVersion == 2 && projection.Successful
+	occupancyRequired := (receipt.ProtocolVersion == 2 || receipt.ProtocolVersion == 3) && projection.Successful
 	if occupancyRequired != (projection.Occupancy != nil) {
 		return errors.New("Programs occupancy attachment mismatch")
 	}
@@ -1586,6 +1596,15 @@ func decodeProgramHex(value string) ([]byte, error) {
 }
 
 func programCallWire(call ProgramCall) map[string]any {
+	if call.NativeCall != nil {
+		n := call.NativeCall
+		resources := make([]string, 7)
+		for i, v := range n.Resources {
+			resources[i] = strconv.FormatUint(v, 10)
+		}
+		return map[string]any{"payload_encoding": "native-v1", "program_id": hex.EncodeToString(call.ProgramID[:]), "calldata": hex.EncodeToString(call.Calldata), "budget": map[string]string{"fuel": strconv.FormatUint(call.Budget.Fuel, 10), "fee_limit": call.Budget.FeeLimit.String()}, "signed_activity": hex.EncodeToString(call.SignedActivity), "native_call": map[string]any{"guest_abi": n.GuestABI, "entrypoint": n.Entrypoint, "capabilities_hex": hex.EncodeToString(n.Capabilities), "access_declaration_hex": hex.EncodeToString(n.AccessDeclaration), "response_capacity": n.ResponseCapacity, "resources": resources}}
+	}
+
 	return map[string]any{
 		"program_id":      hex.EncodeToString(call.ProgramID[:]),
 		"calldata":        hex.EncodeToString(call.Calldata),
@@ -1602,6 +1621,7 @@ func canonicalProgramKey(key IdempotencyKey) bool {
 }
 
 type Programs struct {
+	protocolVersion           uint16
 	client                    *Client
 	trustedSequencerPublicKey [32]byte
 	clockMilliseconds         func() uint64
@@ -1618,6 +1638,7 @@ type programHeadObservation struct {
 }
 
 type ProgramTrustOptions struct {
+	ProtocolVersion                  uint16
 	ClockMilliseconds                func() uint64
 	MaximumSimulationAgeMilliseconds uint64
 }
@@ -1633,8 +1654,15 @@ func NewProgramsWithTrustOptions(client *Client, trustedSequencerPublicKey [32]b
 	if client == nil || trustedSequencerPublicKey == ([32]byte{}) || options.ClockMilliseconds == nil || options.MaximumSimulationAgeMilliseconds == 0 {
 		return nil, newSDKError(ErrorInvalidArgument, RetryNever)
 	}
+	if options.ProtocolVersion == 0 {
+		options.ProtocolVersion = 2
+	}
+	if options.ProtocolVersion != 2 && options.ProtocolVersion != 3 {
+		return nil, newSDKError(ErrorInvalidArgument, RetryNever)
+	}
 	return &Programs{
-		client: client, trustedSequencerPublicKey: trustedSequencerPublicKey,
+		protocolVersion: options.ProtocolVersion,
+		client:          client, trustedSequencerPublicKey: trustedSequencerPublicKey,
 		clockMilliseconds:    options.ClockMilliseconds,
 		maximumSimulationAge: options.MaximumSimulationAgeMilliseconds,
 		heads:                make(map[[32]byte]programHeadObservation),
@@ -1684,6 +1712,9 @@ func (programs *Programs) Interface(ctx context.Context, program [32]byte) (Prog
 }
 
 func (programs *Programs) Simulate(ctx context.Context, call ProgramCall) (ProgramSimulation, error) {
+	if call.NativeCall != nil && programs.protocolVersion != 3 {
+		return ProgramSimulation{}, newSDKError(ErrorInvalidArgument, RetryNever)
+	}
 	binding, err := bindSignedProgramCall(call)
 	if err != nil {
 		return ProgramSimulation{}, err
@@ -1704,7 +1735,7 @@ func (programs *Programs) Simulate(ctx context.Context, call ProgramCall) (Progr
 		return ProgramSimulation{}, newSDKError(ErrorVerificationFailure, RetryNever)
 	}
 	result, decodeError := decodeProgramSimulation(raw, call.ProgramID, binding, prior, programs.trustedSequencerPublicKey,
-		now, programs.maximumSimulationAge)
+		now, programs.maximumSimulationAge, programs.protocolVersion)
 	if decodeError != nil {
 		return ProgramSimulation{}, decodeError
 	}
@@ -1715,6 +1746,9 @@ func (programs *Programs) Simulate(ctx context.Context, call ProgramCall) (Progr
 }
 
 func (programs *Programs) Submit(ctx context.Context, call ProgramCall, key IdempotencyKey) (ProgramSubmission, error) {
+	if call.NativeCall != nil && programs.protocolVersion != 3 {
+		return ProgramSubmission{}, newSDKError(ErrorInvalidArgument, RetryNever)
+	}
 	binding, err := bindSignedProgramCall(call)
 	if err != nil {
 		return ProgramSubmission{}, err
@@ -1729,7 +1763,7 @@ func (programs *Programs) Submit(ctx context.Context, call ProgramCall, key Idem
 		}
 		return ProgramSubmission{}, err
 	}
-	submission, decodeError := decodeProgramSubmission(raw, &call.ProgramID, &binding.ActivityID, key.String(), call.SignedActivity, programs.trustedSequencerPublicKey)
+	submission, decodeError := decodeProgramSubmission(raw, &call.ProgramID, &binding.ActivityID, key.String(), call.SignedActivity, programs.trustedSequencerPublicKey, programs.protocolVersion)
 	if decodeError != nil {
 		return ProgramSubmission{State: ProgramSubmissionUnknown, ActivityID: binding.ActivityID, IdempotencyKey: key.String(), RetainedSignedActivity: append([]byte(nil), call.SignedActivity...)}, nil
 	}
@@ -1745,7 +1779,7 @@ func (programs *Programs) Receipt(ctx context.Context, key IdempotencyKey, expec
 	if err != nil {
 		return ProgramSubmission{}, err
 	}
-	return decodeProgramSubmission(raw, nil, &expectedActivity, key.String(), nil, programs.trustedSequencerPublicKey)
+	return decodeProgramSubmission(raw, nil, &expectedActivity, key.String(), nil, programs.trustedSequencerPublicKey, programs.protocolVersion)
 }
 
 func (programs *Programs) Activity(ctx context.Context, activity [32]byte) (ProgramSubmission, error) {
@@ -1754,7 +1788,7 @@ func (programs *Programs) Activity(ctx context.Context, activity [32]byte) (Prog
 	if err != nil {
 		return ProgramSubmission{}, err
 	}
-	return decodeProgramSubmission(raw, nil, &activity, "", nil, programs.trustedSequencerPublicKey)
+	return decodeProgramSubmission(raw, nil, &activity, "", nil, programs.trustedSequencerPublicKey, programs.protocolVersion)
 }
 
 func (programs *Programs) raw(ctx context.Context, operation string, requiresKey bool, request any, options CallOptions) (json.RawMessage, error) {
@@ -1790,7 +1824,7 @@ func (programs *Programs) headIsCurrent(program [32]byte, expected programHeadOb
 }
 
 func decodeProgramSimulation(raw json.RawMessage, expectedProgram [32]byte, binding programCallBinding,
-	prior programHeadObservation, trustedSequencerPublicKey [32]byte, now uint64, maximumAge uint64) (ProgramSimulation, error) {
+	prior programHeadObservation, trustedSequencerPublicKey [32]byte, now uint64, maximumAge uint64, selectedProtocol ...uint16) (ProgramSimulation, error) {
 	var document struct {
 		Committed          bool                      `json:"committed"`
 		Execution          ProgramExecutionDocument  `json:"execution"`
@@ -1804,7 +1838,7 @@ func decodeProgramSimulation(raw json.RawMessage, expectedProgram [32]byte, bind
 	if err != nil || activityError != nil || programID != expectedProgram || activityID != binding.ActivityID {
 		return ProgramSimulation{}, newSDKError(ErrorVerificationFailure, RetryNever)
 	}
-	verified, verifyError := verifyExecutionAuthority(document.Execution, trustedSequencerPublicKey)
+	verified, verifyError := verifyExecutionAuthority(document.Execution, trustedSequencerPublicKey, selectedProtocol...)
 	if verifyError != nil || verifySimulationEvidence(document.Execution, document.SimulationEvidence, binding,
 		prior, trustedSequencerPublicKey, now, maximumAge) != nil {
 		return ProgramSimulation{}, newSDKError(ErrorVerificationFailure, RetryNever)
@@ -1812,7 +1846,7 @@ func decodeProgramSimulation(raw json.RawMessage, expectedProgram [32]byte, bind
 	return ProgramSimulation{Committed: false, Execution: document.Execution, SimulationEvidence: document.SimulationEvidence, Verification: verified}, nil
 }
 
-func decodeProgramSubmission(raw json.RawMessage, expectedProgram *[32]byte, expectedActivity *[32]byte, expectedKey string, expectedSigned []byte, trustedSequencerPublicKey [32]byte) (ProgramSubmission, error) {
+func decodeProgramSubmission(raw json.RawMessage, expectedProgram *[32]byte, expectedActivity *[32]byte, expectedKey string, expectedSigned []byte, trustedSequencerPublicKey [32]byte, selectedProtocol ...uint16) (ProgramSubmission, error) {
 	fields, err := exactObject(raw)
 	if err != nil {
 		return ProgramSubmission{}, newSDKError(ErrorDecodeFailure, RetryNever)
@@ -1862,14 +1896,14 @@ func decodeProgramSubmission(raw json.RawMessage, expectedProgram *[32]byte, exp
 	if state == ProgramSubmissionRefused && execution.Outcome.Kind != "refused" || state == ProgramSubmissionExecuted && execution.Outcome.Kind != "completed" && execution.Outcome.Kind != "legacy_completed" {
 		return ProgramSubmission{}, newSDKError(ErrorVerificationFailure, RetryNever)
 	}
-	verified, verifyError := verifyExecutionAuthority(execution, trustedSequencerPublicKey)
+	verified, verifyError := verifyExecutionAuthority(execution, trustedSequencerPublicKey, selectedProtocol...)
 	if verifyError != nil {
 		return ProgramSubmission{}, newSDKError(ErrorVerificationFailure, RetryNever)
 	}
 	return ProgramSubmission{State: state, ActivityID: activity, IdempotencyKey: execution.IdempotencyKey, Execution: &execution, Verification: &verified}, nil
 }
 
-func verifyExecutionAuthority(execution ProgramExecutionDocument, trustedSequencerPublicKey [32]byte) (VerifiedProgramReceipt, error) {
+func verifyExecutionAuthority(execution ProgramExecutionDocument, trustedSequencerPublicKey [32]byte, selectedProtocol ...uint16) (VerifiedProgramReceipt, error) {
 	authority, err := execution.Authority.authorizedBatch()
 	if err != nil {
 		return VerifiedProgramReceipt{}, err
@@ -1882,7 +1916,7 @@ func verifyExecutionAuthority(execution ProgramExecutionDocument, trustedSequenc
 	if rootError != nil || batchError != nil || stateRoot != authority.ResultingStateRoot || batchID != authority.BatchID || execution.Verification != "receipt-terminal-and-call-graph-verified" || !canonicalUnsigned(execution.GlobalSequence, 64) || !validProgramUsage(execution.Usage) {
 		return VerifiedProgramReceipt{}, errors.New("invalid Programs execution authority")
 	}
-	verified, verifyError := VerifyProgramReceipt(execution, authority)
+	verified, verifyError := VerifyProgramReceipt(execution, authority, selectedProtocol...)
 	if verifyError != nil {
 		return VerifiedProgramReceipt{}, verifyError
 	}

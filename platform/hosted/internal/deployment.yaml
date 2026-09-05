@@ -1,0 +1,457 @@
+apiVersion: v1
+kind: Namespace
+metadata: {name: layerx-internal, labels: {layerx.internal-events: "true"}}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: default-deny, namespace: layerx-internal}
+spec: {podSelector: {}, policyTypes: [Ingress, Egress]}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: redis-config, namespace: layerx-internal}
+data:
+  redis.conf: |
+    bind 0.0.0.0
+    port 0
+    tls-port 6379
+    tls-cert-file /run/layerx/server.pem
+    tls-key-file /run/layerx/server.key
+    tls-ca-cert-file /run/layerx/ca.pem
+    tls-auth-clients no
+    aclfile /run/layerx/users.acl
+    appendonly yes
+    appendfsync always
+    dir /data
+    protected-mode yes
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: {name: redis, namespace: layerx-internal}
+spec:
+  serviceName: redis
+  replicas: 1
+  selector: {matchLabels: {app: layerx-internal-redis}}
+  template:
+    metadata: {labels: {app: layerx-internal-redis}}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsUser: 999, runAsGroup: 999, fsGroup: 999}
+      containers:
+        - name: redis
+          image: redis:8.2.1-alpine
+          command: [redis-server, /etc/redis/redis.conf]
+          ports: [{name: redis-tls, containerPort: 6379}]
+          readinessProbe: {tcpSocket: {port: redis-tls}, periodSeconds: 5}
+          livenessProbe: {tcpSocket: {port: redis-tls}, periodSeconds: 15}
+          resources: {requests: {cpu: 100m, memory: 128Mi}, limits: {cpu: "1", memory: 512Mi}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+            - {name: config, mountPath: /etc/redis, readOnly: true}
+            - {name: runtime, mountPath: /run/layerx, readOnly: true}
+      volumes:
+        - {name: config, configMap: {name: redis-config}}
+        - {name: runtime, secret: {secretName: layerx-internal-redis-runtime, defaultMode: 288}}
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec: {accessModes: [ReadWriteOnce], resources: {requests: {storage: 2Gi}}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: redis, namespace: layerx-internal}
+spec: {selector: {app: layerx-internal-redis}, ports: [{name: redis-tls, port: 6379, targetPort: redis-tls}]}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: redis, namespace: layerx-internal}
+spec:
+  podSelector: {matchLabels: {app: layerx-internal-redis}}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: layerx-developer}}
+          podSelector: {matchExpressions: [{key: app, operator: In, values: [layerx-webhooks, layerx-dashboard-api]}]}
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: layerx-testnet}}
+          podSelector: {matchLabels: {app: layerx-gateway}}
+      ports: [{protocol: TCP, port: 6379}]
+  egress: []
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: kms-state, namespace: layerx-internal}
+spec: {accessModes: [ReadWriteOnce], resources: {requests: {storage: 1Gi}}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: kms, namespace: layerx-internal}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: layerx-internal-kms}}
+  template:
+    metadata: {labels: {app: layerx-internal-kms}}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsUser: 4020, runAsGroup: 4020, fsGroup: 4020}
+      containers:
+        - name: kms
+          image: ghcr.io/centra-ai/layerx-internal:0.1.0
+          command: [/usr/local/bin/layerx-kms]
+          env:
+            - {name: LAYERX_KMS_LISTEN, value: "0.0.0.0:9443"}
+            - {name: LAYERX_KMS_STATE_DIR, value: "/var/lib/layerx/state"}
+            - {name: LAYERX_KMS_TOKEN_FILE, value: "/run/layerx/token"}
+            - {name: LAYERX_KMS_TLS_CERT_DER, value: "/run/layerx/server.der"}
+            - {name: LAYERX_KMS_TLS_KEY_DER, value: "/run/layerx/server-key.der"}
+            - {name: LAYERX_KMS_CLIENT_CA_DER, value: "/run/layerx/ca.der"}
+            - {name: LAYERX_KMS_SEAL_SECRET_FILE, value: "/run/layerx/seal-secret"}
+          ports: [{name: https, containerPort: 9443}]
+          readinessProbe: {httpGet: {scheme: HTTPS, path: /readyz, port: https}, timeoutSeconds: 30, periodSeconds: 10}
+          livenessProbe: {httpGet: {scheme: HTTPS, path: /livez, port: https}, periodSeconds: 20}
+          resources: {requests: {cpu: 100m, memory: 128Mi}, limits: {cpu: "1", memory: 512Mi}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts:
+            - {name: state, mountPath: /var/lib/layerx}
+            - {name: runtime, mountPath: /run/layerx, readOnly: true}
+      volumes:
+        - {name: state, persistentVolumeClaim: {claimName: kms-state}}
+        - {name: runtime, secret: {secretName: layerx-internal-kms-runtime, defaultMode: 288}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: kms, namespace: layerx-internal}
+spec: {selector: {app: layerx-internal-kms}, ports: [{name: https, port: 443, targetPort: https}]}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: kms, namespace: layerx-internal}
+spec:
+  podSelector: {matchLabels: {app: layerx-internal-kms}}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: layerx-developer}}
+          podSelector: {matchLabels: {app: layerx-webhooks}}
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: layerx-testnet}}
+          podSelector: {matchLabels: {app: layerx-testnet-control}}
+      ports: [{protocol: TCP, port: 9443}]
+  egress: []
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: journeys-state, namespace: layerx-internal}
+spec: {accessModes: [ReadWriteOnce], resources: {requests: {storage: 1Gi}}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: journeys, namespace: layerx-internal}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: layerx-internal-journeys}}
+  template:
+    metadata: {labels: {app: layerx-internal-journeys}}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsUser: 4020, runAsGroup: 4020, fsGroup: 4020}
+      containers:
+        - name: journeys
+          image: ghcr.io/centra-ai/layerx-internal:0.1.0
+          command: [/usr/local/bin/layerx-event-source]
+          env:
+            - {name: LAYERX_EVENTS_LISTEN, value: "0.0.0.0:9443"}
+            - {name: LAYERX_EVENTS_STATE_DIR, value: "/var/lib/layerx/state"}
+            - {name: LAYERX_EVENTS_TOKEN_FILE, value: "/run/layerx/token"}
+            - {name: LAYERX_EVENTS_TLS_CERT_DER, value: "/run/layerx/server.der"}
+            - {name: LAYERX_EVENTS_TLS_KEY_DER, value: "/run/layerx/server-key.der"}
+            - {name: LAYERX_EVENTS_CLIENT_CA_DER, value: "/run/layerx/ca.der"}
+            - {name: LAYERX_EVENTS_KIND, value: "journeys"}
+            - {name: LAYERX_EVENTS_UPSTREAM_URL, value: "https://layerx-human.layerx-testnet.svc:9443"}
+            - {name: LAYERX_EVENTS_UPSTREAM_CA_DER, value: "/run/layerx/upstream-ca.der"}
+            - {name: LAYERX_EVENTS_CREDENTIALS_FILE, value: "/run/layerx/credentials.json"}
+          ports: [{name: https, containerPort: 9443}]
+          readinessProbe: {httpGet: {scheme: HTTPS, path: /readyz, port: https}, timeoutSeconds: 30, periodSeconds: 10}
+          livenessProbe: {httpGet: {scheme: HTTPS, path: /livez, port: https}, periodSeconds: 20}
+          resources: {requests: {cpu: 100m, memory: 128Mi}, limits: {cpu: "1", memory: 512Mi}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts:
+            - {name: state, mountPath: /var/lib/layerx}
+            - {name: runtime, mountPath: /run/layerx, readOnly: true}
+      volumes:
+        - {name: state, persistentVolumeClaim: {claimName: journeys-state}}
+        - {name: runtime, secret: {secretName: layerx-internal-journeys-runtime, defaultMode: 288}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: journeys, namespace: layerx-internal}
+spec: {selector: {app: layerx-internal-journeys}, ports: [{name: https, port: 443, targetPort: https}]}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: journeys, namespace: layerx-internal}
+spec:
+  podSelector: {matchLabels: {app: layerx-internal-journeys}}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: layerx-developer}}
+          podSelector: {matchLabels: {app: layerx-webhooks}}
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: layerx-testnet}}
+          podSelector: {matchLabels: {app: layerx-testnet-control}}
+      ports: [{protocol: TCP, port: 9443}]
+  egress:
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}
+          podSelector: {matchLabels: {k8s-app: kube-dns}}
+      ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: layerx-testnet}}
+          podSelector: {matchExpressions: [{key: app, operator: In, values: [layerx-human, layerx-gateway]}]}
+      ports: [{protocol: TCP, port: 9443}, {protocol: TCP, port: 443}]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: payments-state, namespace: layerx-internal}
+spec: {accessModes: [ReadWriteOnce], resources: {requests: {storage: 1Gi}}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: payments, namespace: layerx-internal}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: layerx-internal-payments}}
+  template:
+    metadata: {labels: {app: layerx-internal-payments}}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsUser: 4020, runAsGroup: 4020, fsGroup: 4020}
+      containers:
+        - name: payments
+          image: ghcr.io/centra-ai/layerx-internal:0.1.0
+          command: [/usr/local/bin/layerx-event-source]
+          env:
+            - {name: LAYERX_EVENTS_LISTEN, value: "0.0.0.0:9443"}
+            - {name: LAYERX_EVENTS_STATE_DIR, value: "/var/lib/layerx/state"}
+            - {name: LAYERX_EVENTS_TOKEN_FILE, value: "/run/layerx/token"}
+            - {name: LAYERX_EVENTS_TLS_CERT_DER, value: "/run/layerx/server.der"}
+            - {name: LAYERX_EVENTS_TLS_KEY_DER, value: "/run/layerx/server-key.der"}
+            - {name: LAYERX_EVENTS_CLIENT_CA_DER, value: "/run/layerx/ca.der"}
+            - {name: LAYERX_EVENTS_KIND, value: "payments"}
+            - {name: LAYERX_EVENTS_UPSTREAM_URL, value: "https://layerx-gateway.layerx-testnet.svc"}
+            - {name: LAYERX_EVENTS_UPSTREAM_CA_DER, value: "/run/layerx/upstream-ca.der"}
+            - {name: LAYERX_EVENTS_CREDENTIALS_FILE, value: "/run/layerx/credentials.json"}
+          ports: [{name: https, containerPort: 9443}]
+          readinessProbe: {httpGet: {scheme: HTTPS, path: /readyz, port: https}, timeoutSeconds: 30, periodSeconds: 10}
+          livenessProbe: {httpGet: {scheme: HTTPS, path: /livez, port: https}, periodSeconds: 20}
+          resources: {requests: {cpu: 100m, memory: 128Mi}, limits: {cpu: "1", memory: 512Mi}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts:
+            - {name: state, mountPath: /var/lib/layerx}
+            - {name: runtime, mountPath: /run/layerx, readOnly: true}
+      volumes:
+        - {name: state, persistentVolumeClaim: {claimName: payments-state}}
+        - {name: runtime, secret: {secretName: layerx-internal-payments-runtime, defaultMode: 288}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: payments, namespace: layerx-internal}
+spec: {selector: {app: layerx-internal-payments}, ports: [{name: https, port: 443, targetPort: https}]}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: payments, namespace: layerx-internal}
+spec:
+  podSelector: {matchLabels: {app: layerx-internal-payments}}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: layerx-developer}}
+          podSelector: {matchLabels: {app: layerx-webhooks}}
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: layerx-testnet}}
+          podSelector: {matchLabels: {app: layerx-testnet-control}}
+      ports: [{protocol: TCP, port: 9443}]
+  egress:
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}
+          podSelector: {matchLabels: {k8s-app: kube-dns}}
+      ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: layerx-testnet}}
+          podSelector: {matchExpressions: [{key: app, operator: In, values: [layerx-human, layerx-gateway]}]}
+      ports: [{protocol: TCP, port: 9443}, {protocol: TCP, port: 443}]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: approvals-state, namespace: layerx-internal}
+spec: {accessModes: [ReadWriteOnce], resources: {requests: {storage: 1Gi}}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: approvals, namespace: layerx-internal}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: layerx-internal-approvals}}
+  template:
+    metadata: {labels: {app: layerx-internal-approvals}}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsUser: 4020, runAsGroup: 4020, fsGroup: 4020}
+      containers:
+        - name: approvals
+          image: ghcr.io/centra-ai/layerx-internal:0.1.0
+          command: [/usr/local/bin/layerx-event-source]
+          env:
+            - {name: LAYERX_EVENTS_LISTEN, value: "0.0.0.0:9443"}
+            - {name: LAYERX_EVENTS_STATE_DIR, value: "/var/lib/layerx/state"}
+            - {name: LAYERX_EVENTS_TOKEN_FILE, value: "/run/layerx/token"}
+            - {name: LAYERX_EVENTS_TLS_CERT_DER, value: "/run/layerx/server.der"}
+            - {name: LAYERX_EVENTS_TLS_KEY_DER, value: "/run/layerx/server-key.der"}
+            - {name: LAYERX_EVENTS_CLIENT_CA_DER, value: "/run/layerx/ca.der"}
+            - {name: LAYERX_EVENTS_KIND, value: "approvals"}
+            - {name: LAYERX_EVENTS_UPSTREAM_URL, value: "https://layerx-human.layerx-testnet.svc:9443"}
+            - {name: LAYERX_EVENTS_UPSTREAM_CA_DER, value: "/run/layerx/upstream-ca.der"}
+            - {name: LAYERX_EVENTS_CREDENTIALS_FILE, value: "/run/layerx/credentials.json"}
+          ports: [{name: https, containerPort: 9443}]
+          readinessProbe: {httpGet: {scheme: HTTPS, path: /readyz, port: https}, timeoutSeconds: 30, periodSeconds: 10}
+          livenessProbe: {httpGet: {scheme: HTTPS, path: /livez, port: https}, periodSeconds: 20}
+          resources: {requests: {cpu: 100m, memory: 128Mi}, limits: {cpu: "1", memory: 512Mi}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts:
+            - {name: state, mountPath: /var/lib/layerx}
+            - {name: runtime, mountPath: /run/layerx, readOnly: true}
+      volumes:
+        - {name: state, persistentVolumeClaim: {claimName: approvals-state}}
+        - {name: runtime, secret: {secretName: layerx-internal-approvals-runtime, defaultMode: 288}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: approvals, namespace: layerx-internal}
+spec: {selector: {app: layerx-internal-approvals}, ports: [{name: https, port: 443, targetPort: https}]}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: approvals, namespace: layerx-internal}
+spec:
+  podSelector: {matchLabels: {app: layerx-internal-approvals}}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: layerx-developer}}
+          podSelector: {matchLabels: {app: layerx-webhooks}}
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: layerx-testnet}}
+          podSelector: {matchLabels: {app: layerx-testnet-control}}
+      ports: [{protocol: TCP, port: 9443}]
+  egress:
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}
+          podSelector: {matchLabels: {k8s-app: kube-dns}}
+      ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: layerx-testnet}}
+          podSelector: {matchExpressions: [{key: app, operator: In, values: [layerx-human, layerx-gateway]}]}
+      ports: [{protocol: TCP, port: 9443}, {protocol: TCP, port: 443}]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: programs-state, namespace: layerx-internal}
+spec: {accessModes: [ReadWriteOnce], resources: {requests: {storage: 1Gi}}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: programs, namespace: layerx-internal}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: layerx-internal-programs}}
+  template:
+    metadata: {labels: {app: layerx-internal-programs}}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsUser: 4020, runAsGroup: 4020, fsGroup: 4020}
+      containers:
+        - name: programs
+          image: ghcr.io/centra-ai/layerx-internal:0.1.0
+          command: [/usr/local/bin/layerx-event-source]
+          env:
+            - {name: LAYERX_EVENTS_LISTEN, value: "0.0.0.0:9443"}
+            - {name: LAYERX_EVENTS_STATE_DIR, value: "/var/lib/layerx/state"}
+            - {name: LAYERX_EVENTS_TOKEN_FILE, value: "/run/layerx/token"}
+            - {name: LAYERX_EVENTS_TLS_CERT_DER, value: "/run/layerx/server.der"}
+            - {name: LAYERX_EVENTS_TLS_KEY_DER, value: "/run/layerx/server-key.der"}
+            - {name: LAYERX_EVENTS_CLIENT_CA_DER, value: "/run/layerx/ca.der"}
+            - {name: LAYERX_EVENTS_KIND, value: "programs"}
+            - {name: LAYERX_EVENTS_UPSTREAM_URL, value: "https://layerx-gateway.layerx-testnet.svc"}
+            - {name: LAYERX_EVENTS_UPSTREAM_CA_DER, value: "/run/layerx/upstream-ca.der"}
+            - {name: LAYERX_EVENTS_CREDENTIALS_FILE, value: "/run/layerx/credentials.json"}
+          ports: [{name: https, containerPort: 9443}]
+          readinessProbe: {httpGet: {scheme: HTTPS, path: /readyz, port: https}, timeoutSeconds: 30, periodSeconds: 10}
+          livenessProbe: {httpGet: {scheme: HTTPS, path: /livez, port: https}, periodSeconds: 20}
+          resources: {requests: {cpu: 100m, memory: 128Mi}, limits: {cpu: "1", memory: 512Mi}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts:
+            - {name: state, mountPath: /var/lib/layerx}
+            - {name: runtime, mountPath: /run/layerx, readOnly: true}
+      volumes:
+        - {name: state, persistentVolumeClaim: {claimName: programs-state}}
+        - {name: runtime, secret: {secretName: layerx-internal-programs-runtime, defaultMode: 288}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: programs, namespace: layerx-internal}
+spec: {selector: {app: layerx-internal-programs}, ports: [{name: https, port: 443, targetPort: https}]}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: programs, namespace: layerx-internal}
+spec:
+  podSelector: {matchLabels: {app: layerx-internal-programs}}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: layerx-developer}}
+          podSelector: {matchLabels: {app: layerx-webhooks}}
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: layerx-testnet}}
+          podSelector: {matchLabels: {app: layerx-testnet-control}}
+      ports: [{protocol: TCP, port: 9443}]
+  egress:
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}
+          podSelector: {matchLabels: {k8s-app: kube-dns}}
+      ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: layerx-testnet}}
+          podSelector: {matchExpressions: [{key: app, operator: In, values: [layerx-human, layerx-gateway]}]}
+      ports: [{protocol: TCP, port: 9443}, {protocol: TCP, port: 443}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: internal-identity, namespace: layerx-testnet}
+spec: {selector: {app: layerx-identity}, ports: [{name: https, port: 443, targetPort: https}]}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: identity, namespace: layerx-internal}
+spec: {type: ExternalName, externalName: internal-identity.layerx-testnet.svc.cluster.local, ports: [{name: https, port: 443}]}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: internal-component, namespace: layerx-testnet}
+spec: {selector: {app: layerx-node}, ports: [{name: https, port: 443, targetPort: agent-tls}]}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: component, namespace: layerx-internal}
+spec: {type: ExternalName, externalName: internal-component.layerx-testnet.svc.cluster.local, ports: [{name: https, port: 443}]}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: internal-authority, namespace: layerx-testnet}
+spec: {selector: {app: layerx-node}, ports: [{name: https, port: 443, targetPort: authority-tls}]}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: authority, namespace: layerx-internal}
+spec: {type: ExternalName, externalName: internal-authority.layerx-testnet.svc.cluster.local, ports: [{name: https, port: 443}]}

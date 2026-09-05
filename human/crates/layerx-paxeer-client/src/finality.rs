@@ -244,9 +244,9 @@ impl FinalityTracker {
         if config.delayed_after_polls == 0 {
             return Err(TrackerConfigError::ZeroDelayedAfterPolls);
         }
-        let client =
-            PaxeerClient::new(config.endpoints.clone()).map_err(TrackerConfigError::Endpoints)?;
-        validate_endpoint_agreement(&config.endpoints, config.minimum_endpoint_agreement)?;
+        let endpoints = config.endpoints;
+        let client = PaxeerClient::new(endpoints.clone()).map_err(TrackerConfigError::Endpoints)?;
+        validate_endpoint_agreement(&endpoints, config.minimum_endpoint_agreement)?;
         Ok(Self {
             client,
             transaction,
@@ -617,14 +617,18 @@ mod tests {
         let mut zero = deposit_config(&endpoints);
         zero.paxeer_chain_id = 0;
         assert_eq!(
-            DepositProofVerifier::new(zero).unwrap_err(),
+            DepositProofVerifier::new(zero)
+                .err()
+                .unwrap_or_else(|| panic!("expected configuration refusal")),
             DepositProofConfigError::ZeroPaxeerChainId
         );
 
         let mut mismatched = deposit_config(&endpoints);
         mismatched.paxeer_chain_id = 1;
         assert_eq!(
-            DepositProofVerifier::new(mismatched).unwrap_err(),
+            DepositProofVerifier::new(mismatched)
+                .err()
+                .unwrap_or_else(|| panic!("expected configuration refusal")),
             DepositProofConfigError::EndpointChainIdMismatch {
                 expected: 1,
                 found: 31_337,

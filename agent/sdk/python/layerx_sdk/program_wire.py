@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .native_program_call import encode_native_program_call
+
 from dataclasses import dataclass
 from hashlib import sha256
 from typing import Literal, Mapping, cast
@@ -57,7 +59,7 @@ def decode_signed_program_call(call: object, expected_idempotency_key: str | Non
     canonical = bytes(getattr(call, "signed_activity"))
     reader = _Reader(canonical)
     envelope_version = reader.u16()
-    if envelope_version not in (1, 2) or reader.u16() != 0x1001 or reader.byte() != 12:
+    if envelope_version not in (1, 2, 3) or reader.u16() != 0x1001 or reader.byte() != 12:
         _fail("signed activity header")
     _field(reader, 1)
     if reader.u16() != envelope_version:
@@ -71,7 +73,7 @@ def decode_signed_program_call(call: object, expected_idempotency_key: str | Non
     _field(reader, 6); reader.u64()
     _field(reader, 7); not_before = reader.u64(); not_after = reader.u64()
     _field(reader, 8); idempotency = reader.sized_u32(32, 32)
-    _field(reader, 9); reader.u128()
+    _field(reader, 9); envelope_fee_limit = reader.u128()
     _field(reader, 10); payload_hash = reader.sized_u32(32, 32)
     _field(reader, 11); payload = reader.sized_u32(524_288)
     _field(reader, 12); signature = reader.sized_u32(128)
@@ -80,7 +82,15 @@ def decode_signed_program_call(call: object, expected_idempotency_key: str | Non
         _fail("signed activity bounds")
     if payload_hash != sha256(_PAYLOAD_DOMAIN + payload).digest():
         _fail("signed activity payload hash")
-    _decode_call_payload(payload, call)
+    native = getattr(call, "native_call", None)
+    if native is not None:
+        if (envelope_version != 3 or envelope_fee_limit != getattr(call, "fee_limit")
+                or native.program_id.hex() != getattr(call, "program_id") or native.calldata != getattr(call, "calldata")
+                or native.resources[0] != getattr(call, "fuel") or getattr(call, "capabilities")
+                or payload != encode_native_program_call(native)):
+            _fail("native signed activity binding")
+    else:
+        _decode_call_payload(payload, call)
     key = idempotency.hex()
     if expected_idempotency_key is not None and key != expected_idempotency_key:
         _fail("signed activity idempotency")
@@ -191,7 +201,7 @@ def decode_and_verify_program_terminal(
     else:
         _fail("unknown terminal domain")
 
-    occupancy_required = protocol_version == 2 and successful
+    occupancy_required = protocol_version in (2, 3) and successful
     if (occupancy is not None) != occupancy_required:
         _fail("occupancy attachment presence")
     if occupancy is not None:
@@ -215,7 +225,7 @@ def decode_and_verify_program_terminal(
         if not authorization or authority_root != receipt.transfer_root:
             _fail("transfer authority root")
         _verify_authorization_root(authorization, cast(bytes, authority_root))
-    if protocol_version not in (1, 2):
+    if protocol_version not in (1, 2, 3):
         _fail("program receipt protocol")
     return DecodedProgramTerminal(outcome, usage if usage is not None else _receipt_usage(receipt))
 

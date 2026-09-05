@@ -14,6 +14,7 @@ public enum ProgramCapability { StorageRead, StorageWrite, Transfer, EmitEvent, 
 
 public sealed record ProgramCall
 {
+    public NativeProgramCall? NativeCall { get; }
     public byte[] ProgramId { get; } public byte[] Calldata { get; }
     public ProgramBudget Budget { get; } public IReadOnlyList<ProgramCapability> Capabilities { get; } public byte[] SignedActivity { get; }
 
@@ -26,6 +27,11 @@ public sealed record ProgramCall
             signedActivity is null || signedActivity.Length == 0 || signedActivity.Length > 1_048_576) throw Invalid();
         ProgramId = programId.ToArray(); Calldata = calldata.ToArray(); Budget = budget; Capabilities = Array.AsReadOnly(bounded);
         SignedActivity = signedActivity.ToArray();
+    }
+    public ProgramCall(NativeProgramCall nativeCall, ProtocolAmount feeLimit, byte[] signedActivity)
+        : this(nativeCall.ProgramId, nativeCall.Calldata, new ProgramBudget(nativeCall.Resources[0], feeLimit), Array.Empty<ProgramCapability>(), signedActivity)
+    {
+        _ = nativeCall.Encode(); NativeCall = nativeCall;
     }
     private static PlatformSdkException Invalid() => new(SdkErrorCode.InvalidArgument, RetryClass.Never);
 }
@@ -82,6 +88,7 @@ public sealed class ProgramsClient
     private static readonly int MaximumCallGraphBytes = Encoding.UTF8.GetByteCount("LayerX/programs/call-graph/v1\0") + 32 + 16 + 8 + 64 * 68;
     private readonly PlatformClient _client;
     private readonly byte[] _sequencerPublicKey;
+    private readonly ushort _protocolVersion;
     private readonly TimeProvider _timeProvider;
     private readonly ulong _maximumSimulationAgeMilliseconds;
     private sealed record ActivityBinding(byte[] ActivityId, byte[] IdempotencyKey, ulong NotBefore, ulong NotAfter);
@@ -105,8 +112,10 @@ public sealed class ProgramsClient
     }
 
     public ProgramsClient(PlatformClient client, byte[] sequencerPublicKey,
-        TimeProvider? timeProvider = null, TimeSpan? maximumSimulationAge = null)
+        TimeProvider? timeProvider = null, TimeSpan? maximumSimulationAge = null, ushort protocolVersion = 2)
     {
+        if (protocolVersion != 2 && protocolVersion != 3) throw Invalid();
+        _protocolVersion = protocolVersion;
         _client = client ?? throw Invalid();
         if (sequencerPublicKey?.Length != 32 || sequencerPublicKey.All(value => value == 0)) throw Invalid();
         _sequencerPublicKey = sequencerPublicKey.ToArray(); _timeProvider = timeProvider ?? TimeProvider.System;
@@ -132,7 +141,8 @@ public sealed class ProgramsClient
     }
     public async Task<ProgramSimulation> SimulateAsync(ProgramCall call, CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(call); var binding = DecodeSignedCall(call);
+        ArgumentNullException.ThrowIfNull(call); if (call.NativeCall is not null && _protocolVersion != 3) throw Invalid();
+        var binding = DecodeSignedCall(call);
         var value = await _client.ProgramAsync("program.simulate", Encode(call), cancellationToken: cancellationToken).ConfigureAwait(false);
         var execution = await VerifySimulationAsync(value, call.ProgramId, binding, cancellationToken).ConfigureAwait(false);
         return new(value, execution);
@@ -140,6 +150,7 @@ public sealed class ProgramsClient
     public async Task<ProgramSubmission> SubmitAsync(ProgramCall call, IdempotencyKey idempotencyKey, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(call); if (!Hex32(idempotencyKey.Value)) throw Invalid();
+        if (call.NativeCall is not null && _protocolVersion != 3) throw Invalid();
         var binding = DecodeSignedCall(call); var key = Convert.FromHexString(idempotencyKey.Value);
         if (!CryptographicOperations.FixedTimeEquals(binding.IdempotencyKey, key)) throw Invalid();
         JsonValue value;
@@ -182,14 +193,14 @@ public sealed class ProgramsClient
 
     public static async ValueTask<ReceiptVerification> VerifyReceiptAsync(byte[] canonicalReceipt, AuthorizedReceiptBatch authorized,
         byte[] expectedActivityId, ushort expectedGuestAbiVersion, byte[] terminalPayload, byte[] callGraph,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, ushort protocolVersion = 2)
     {
         if (expectedActivityId?.Length != 32 || expectedGuestAbiVersion is not (1 or 2)) throw Invalid();
-        var verified = await LocalVerifier.VerifyReceiptOutcomeAsync(canonicalReceipt, authorized, cancellationToken).ConfigureAwait(false);
+        var verified = await LocalVerifier.VerifyReceiptOutcomeAsync(canonicalReceipt, authorized, cancellationToken, protocolVersion).ConfigureAwait(false);
         var receipt = verified.Receipt;
         var outcome = receipt.ProgramOutcome;
         if (receipt.ProtocolVersion == 0 || receipt.ModuleId != ReceiptModuleId || receipt.Operation != CallOperation ||
-            receipt.ModuleVersion is < 1 or > 3 || !receipt.ActivityId.SequenceEqual(expectedActivityId) ||
+            receipt.ModuleVersion is < 1 or > 4 || !receipt.ActivityId.SequenceEqual(expectedActivityId) ||
             outcome is null || outcome.AbiVersion != expectedGuestAbiVersion || terminalPayload is null ||
             terminalPayload.Length > MaximumProgramBytes || callGraph is null || callGraph.Length == 0 ||
             callGraph.Length > MaximumCallGraphBytes ||
@@ -240,7 +251,7 @@ public sealed class ProgramsClient
             expectedIdempotencyKey is not null && Text(map, "idempotency_key") != expectedIdempotencyKey) throw Verify();
         var guestAbi = Integer(map, "guest_abi_version"); var moduleVersion = Integer(map, "module_version");
         var resultCode = Integer32(map, "result_code"); var globalSequence = DecimalUInt64(map, "global_sequence");
-        if (guestAbi is not (1 or 2) || moduleVersion is < 1 or > 3 ||
+        if (guestAbi is not (1 or 2) || moduleVersion is < 1 or > 4 ||
             Text(map, "verification") != "receipt-terminal-and-call-graph-verified") throw Decode();
         var authorityMap = Map(Field(map, "authority"));
         RequireFields(authorityMap, ["batch_id", "asset", "previous_state_root", "resulting_state_root", "sequencer_public_key"]);
@@ -259,7 +270,7 @@ public sealed class ProgramsClient
         var receiptBytes = Bytes(map, "receipt", MaximumProgramBytes); var terminal = Bytes(map, "terminal_payload", MaximumProgramBytes, empty: true);
         var graph = Bytes(map, "call_graph", MaximumProgramBytes); var receiptDigest = Bytes(map, "receipt_digest", 32, true);
         var verified = await VerifyReceiptAsync(receiptBytes, authority, activity, checked((ushort)guestAbi), terminal,
-            graph, cancellationToken).ConfigureAwait(false);
+            graph, cancellationToken, _protocolVersion).ConfigureAwait(false);
         var receipt = verified.Receipt; var receiptOutcome = receipt.ProgramOutcome!;
         VerifyTerminal(terminal, graph, program, outcomeDocument, receipt.ProtocolVersion, receiptOutcome);
         var kindMatches = outcomeKind switch
@@ -560,8 +571,8 @@ public sealed class ProgramsClient
     private static void VerifyTerminalAttachments(TerminalAttachments attachments, bool candidate, bool successful,
         ushort protocolVersion, ProgramReceiptOutcome receipt)
     {
-        if (protocolVersion is not (1 or 2)) throw new InvalidDataException();
-        var occupancyRequired = protocolVersion == 2 && successful;
+        if (protocolVersion is not (1 or 2 or 3)) throw new InvalidDataException();
+        var occupancyRequired = (protocolVersion == 2 || protocolVersion == 3) && successful;
         if (occupancyRequired != (attachments.Occupancy is not null)) throw new InvalidDataException();
         if (attachments.Occupancy is { } occupancy)
         {
@@ -1043,14 +1054,15 @@ public sealed class ProgramsClient
         {
             var signed = call.SignedActivity; var cursor = new BinaryCursor(signed);
             var envelopeVersion = cursor.U16();
-            if (envelopeVersion is not (1 or 2) || cursor.U16() != 0x1001 || cursor.U8() != 12) throw new InvalidDataException();
+            if (envelopeVersion is not (1 or 2 or 3) || cursor.U16() != 0x1001 || cursor.U8() != 12) throw new InvalidDataException();
             cursor.Tag(1); var protocol = cursor.U16(); if (protocol != envelopeVersion) throw new InvalidDataException();
             cursor.Tag(2); _ = cursor.U32(); cursor.Tag(3);
             if (cursor.U32() != ((uint)ReceiptModuleId << 16 | CallOperation)) throw new InvalidDataException();
             cursor.Tag(4); _ = cursor.Bounded(255, true); cursor.Tag(5); _ = cursor.Bounded(524_288, true);
             cursor.Tag(6); _ = cursor.U64(); cursor.Tag(7); var notBefore = cursor.U64(); var notAfter = cursor.U64();
             if (notAfter < notBefore) throw new InvalidDataException(); cursor.Tag(8); var idempotency = cursor.Bounded(32, false);
-            if (idempotency.Length != 32) throw new InvalidDataException(); cursor.Tag(9); _ = cursor.Take(16);
+            if (idempotency.Length != 32) throw new InvalidDataException(); cursor.Tag(9); var envelopeFee = new BigInteger(cursor.Take(16), true, true);
+            if (call.NativeCall is not null && (protocol != 3 || envelopeFee != call.Budget.FeeLimit.Value)) throw new InvalidDataException();
             cursor.Tag(10); var payloadHash = cursor.Bounded(32, false); if (payloadHash.Length != 32) throw new InvalidDataException();
             cursor.Tag(11); var payload = cursor.Bounded(524_288, true); cursor.Tag(12); _ = cursor.Bounded(128, true); cursor.Finish();
             var expected = CanonicalCallPayload(call);
@@ -1063,6 +1075,11 @@ public sealed class ProgramsClient
 
     private static byte[] CanonicalCallPayload(ProgramCall call)
     {
+        if (call.NativeCall is { } n)
+        {
+            if (!n.ProgramId.SequenceEqual(call.ProgramId) || !n.Calldata.SequenceEqual(call.Calldata) || n.Resources[0] != call.Budget.Fuel || call.Capabilities.Count != 0) throw Invalid();
+            return n.Encode();
+        }
         var domain = Encoding.UTF8.GetBytes("LayerX/programs/call/v1\0"); using var stream = new MemoryStream();
         stream.Write(domain); stream.Write(call.ProgramId); var word = new byte[8]; BinaryPrimitives.WriteUInt64BigEndian(word, call.Budget.Fuel);
         stream.Write(word); stream.Write(UInt128Bytes(call.Budget.FeeLimit.Value));
@@ -1159,6 +1176,14 @@ public sealed class ProgramsClient
     private static JsonValue Encode(ProgramCall call)
     {
         ArgumentNullException.ThrowIfNull(call);
+        if (call.NativeCall is { } n)
+        {
+            return JsonValue.Object(new Dictionary<string, JsonValue> {
+                ["payload_encoding"] = JsonValue.String("native-v1"), ["program_id"] = JsonValue.String(Identifier(call.ProgramId)), ["calldata"] = JsonValue.String(Convert.ToHexString(call.Calldata).ToLowerInvariant()),
+                ["budget"] = JsonValue.Object(new Dictionary<string, JsonValue> { ["fuel"] = JsonValue.String(call.Budget.Fuel.ToString(CultureInfo.InvariantCulture)), ["fee_limit"] = JsonValue.String(call.Budget.FeeLimit.ToString()) }),
+                ["signed_activity"] = JsonValue.String(Convert.ToHexString(call.SignedActivity).ToLowerInvariant()),
+                ["native_call"] = JsonValue.Object(new Dictionary<string, JsonValue> { ["guest_abi"] = JsonValue.Integer(n.GuestAbi), ["entrypoint"] = JsonValue.String(n.Entrypoint), ["capabilities_hex"] = JsonValue.String(Convert.ToHexString(n.Capabilities).ToLowerInvariant()), ["access_declaration_hex"] = JsonValue.String(Convert.ToHexString(n.AccessDeclaration).ToLowerInvariant()), ["response_capacity"] = JsonValue.Integer(n.ResponseCapacity), ["resources"] = JsonValue.Array(n.Resources.Select(value => JsonValue.String(value.ToString(CultureInfo.InvariantCulture)))) }) });
+        }
         return JsonValue.Object(new Dictionary<string, JsonValue> {
             ["program_id"] = JsonValue.String(Convert.ToHexString(call.ProgramId).ToLowerInvariant()), ["calldata"] = JsonValue.String(Convert.ToHexString(call.Calldata).ToLowerInvariant()),
             ["budget"] = JsonValue.Object(new Dictionary<string, JsonValue> { ["fuel"] = JsonValue.String(call.Budget.Fuel.ToString(CultureInfo.InvariantCulture)), ["fee_limit"] = JsonValue.String(call.Budget.FeeLimit.ToString()) }),

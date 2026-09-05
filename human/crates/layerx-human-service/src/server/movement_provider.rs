@@ -284,12 +284,31 @@ pub trait MovementProviderCodec: Send + Sync {
 
 /// Canonical native codec. Every nested economic object delegates to its
 /// owner module's validated wire representation.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct NativeMovementCodec;
+#[derive(Clone, Copy, Debug)]
+pub struct NativeMovementCodec {
+    protocol_version: u16,
+}
+
+impl Default for NativeMovementCodec {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 impl NativeMovementCodec {
     #[must_use]
     pub const fn new() -> Self {
-        Self
+        Self {
+            protocol_version: layerx_wire::limits::PROTOCOL_VERSION,
+        }
+    }
+    /// Selects the exact LayerX protocol for nested checkpoint attestations.
+    /// # Errors
+    /// Refuses versions other than legacy 2 and composite-state 3.
+    pub fn for_protocol(protocol_version: u16) -> Result<Self, MovementProviderError> {
+        if !matches!(protocol_version, 2 | 3) {
+            return Err(MovementProviderError::ContractViolation);
+        }
+        Ok(Self { protocol_version })
     }
 }
 
@@ -491,8 +510,12 @@ impl MovementProviderCodec for NativeMovementCodec {
                     Some(p) => {
                         w.u8(1);
                         w.blob(
-                            &layerx_paxeer_client::wire::encode_checkpoint_proof(p, 1_048_576)
-                                .map_err(|_| MovementProviderError::ContractViolation)?,
+                            &layerx_paxeer_client::wire::encode_checkpoint_proof_for_protocol(
+                                p,
+                                1_048_576,
+                                self.protocol_version,
+                            )
+                            .map_err(|_| MovementProviderError::ContractViolation)?,
                             1_048_576,
                         )?
                     }
@@ -583,9 +606,10 @@ impl MovementProviderCodec for NativeMovementCodec {
             10 => MovementProviderResponse::CheckpointProof(match r.u8()? {
                 0 => None,
                 1 => Some(
-                    layerx_paxeer_client::wire::decode_checkpoint_proof(
+                    layerx_paxeer_client::wire::decode_checkpoint_proof_for_protocol(
                         r.blob(1_048_576)?,
                         1_048_576,
+                        self.protocol_version,
                     )
                     .map_err(|_| MovementProviderError::ContractViolation)?,
                 ),
@@ -1398,5 +1422,103 @@ fn exit_error(error: MovementProviderError) -> ExitBoundaryError {
     match error {
         MovementProviderError::Unavailable => ExitBoundaryError::Unavailable,
         _ => ExitBoundaryError::ContractViolation,
+    }
+}
+
+#[cfg(test)]
+mod protocol_tests {
+    use super::*;
+    use k256::ecdsa::SigningKey;
+    use layerx_paxeer_client::WithdrawalAttestation;
+    use layerx_types::intent::EvmAddress;
+    use sha2::{Digest, Sha256};
+    use sha3::Keccak256;
+
+    fn signed_proof(protocol_version: u16) -> CheckpointProof {
+        let key = SigningKey::from_slice(&[7; 32]).expect("test signing key");
+        let public = key.verifying_key().to_encoded_point(false);
+        let public_hash = Keccak256::digest(&public.as_bytes()[1..]);
+        let signer = EvmAddress::new(public_hash[12..].try_into().unwrap());
+        let mut attestation = WithdrawalAttestation {
+            protocol_version,
+            network_id: 42,
+            paxeer_chain_id: 31337,
+            settlement_contract: EvmAddress::new([8; 20]),
+            epoch: 1,
+            checkpoint_id: [1; 32],
+            checkpoint_hash: [1; 32],
+            guarantor_id: [2; 32],
+            batch_number: 1,
+            data_availability_root: [3; 32],
+            replayed: true,
+            data_available: true,
+            availability_class_mask: 31,
+            attested_at: 1,
+            signer,
+            signature_r: [0; 32],
+            signature_s: [0; 32],
+            signature_v: 27,
+        };
+        let mut message = Vec::new();
+        message.extend(protocol_version.to_be_bytes());
+        message.extend(attestation.network_id.to_be_bytes());
+        message.extend(attestation.paxeer_chain_id.to_be_bytes());
+        message.extend(attestation.settlement_contract.bytes());
+        message.extend(attestation.epoch.to_be_bytes());
+        message.extend(attestation.checkpoint_id);
+        message.extend(attestation.checkpoint_hash);
+        message.extend(attestation.guarantor_id);
+        message.extend(attestation.batch_number.to_be_bytes());
+        message.extend(attestation.data_availability_root);
+        message.extend([1, 1, 31]);
+        message.extend(attestation.attested_at.to_be_bytes());
+        let mut hash = Sha256::new();
+        hash.update(b"LXP/v2/guarantor-attestation\0");
+        hash.update(message);
+        let (signature, recovery) = key.sign_prehash_recoverable(&hash.finalize()).unwrap();
+        attestation
+            .signature_r
+            .copy_from_slice(&signature.to_bytes()[..32]);
+        attestation
+            .signature_s
+            .copy_from_slice(&signature.to_bytes()[32..]);
+        attestation.signature_v = recovery.to_byte() + 27;
+        CheckpointProof::validated_for_protocol(
+            protocol_version,
+            [1; 32],
+            [4; 32],
+            1,
+            1,
+            [3; 32],
+            0,
+            Vec::new(),
+            vec![attestation],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn selected_checkpoint_codec_roundtrips_signed_proofs_and_refuses_cross_version() {
+        for protocol in [2, 3] {
+            let codec = NativeMovementCodec::for_protocol(protocol).unwrap();
+            let other =
+                NativeMovementCodec::for_protocol(if protocol == 2 { 3 } else { 2 }).unwrap();
+            let response = MovementProviderResponse::CheckpointProof(Some(signed_proof(protocol)));
+            let encoded = codec.encode_response(&response).unwrap();
+            assert_eq!(codec.decode_response(&encoded).unwrap(), response);
+            assert!(other.encode_response(&response).is_err());
+            assert!(other.decode_response(&encoded).is_err());
+            if protocol == 2 {
+                assert_eq!(
+                    NativeMovementCodec::default()
+                        .encode_response(&response)
+                        .unwrap(),
+                    encoded
+                );
+            }
+        }
+        for unsupported in [0, 1, 4, u16::MAX] {
+            assert!(NativeMovementCodec::for_protocol(unsupported).is_err());
+        }
     }
 }

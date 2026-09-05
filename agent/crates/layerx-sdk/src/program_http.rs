@@ -13,9 +13,10 @@ use zeroize::Zeroizing;
 use crate::production::SecretBytes;
 
 use super::{
-    verify_program_evidence, AgentErrorClass, ProgramCallRequest, ProgramExecutionEvidence,
-    ProgramLifecycle, ProgramOperationError, ProgramServiceError, ProgramSimulationEvidence,
-    ProgramSource, ProgramSubmission, ProgramTransport, Retriability, VerifiedProgramDiscovery,
+    verify_program_evidence, AgentErrorClass, BoundProgramRequest, NativeProgramCallRequest,
+    NativeProgramTransport, ProgramCallRequest, ProgramExecutionEvidence, ProgramLifecycle,
+    ProgramOperationError, ProgramServiceError, ProgramSimulationEvidence, ProgramSource,
+    ProgramSubmission, ProgramTransport, Retriability, VerifiedProgramDiscovery,
     VerifiedProgramInterface, VerifiedProgramSimulation, MAX_SIGNED_ACTIVITY_BYTES,
 };
 
@@ -88,6 +89,57 @@ pub struct HttpProgramTransport {
 }
 
 impl HttpProgramTransport {
+    fn submit_bound(
+        &self,
+        request: &impl BoundProgramRequest,
+        wire: Value,
+        idempotency_key: [u8; 32],
+    ) -> Result<ProgramSubmission, ProgramOperationError> {
+        if idempotency_key != request.bound_idempotency_key() {
+            return Err(ProgramOperationError::IdentityMismatch);
+        }
+        if let Some(credential) = &self.credential {
+            let _ = credential.authorization()?;
+        }
+        let encoded = serde_json::to_vec(&wire).map_err(|_| ProgramOperationError::Decode)?;
+        if encoded.is_empty() || encoded.len() > MAX_HTTP_REQUEST_BYTES {
+            return Err(ProgramOperationError::Bounds);
+        }
+        let attempt = self
+            .dispatch(
+                "program.call",
+                Method::Post,
+                "/v1/programs/call",
+                &wire,
+                Some(idempotency_key),
+            )
+            .and_then(|value| {
+                decode_submission(
+                    &value,
+                    SubmissionExpectation {
+                        program_id: Some(request.request_program()),
+                        activity_id: Some(request.bound_activity_id()),
+                        idempotency_key: Some(idempotency_key),
+                        retained_signed_activity: Some(request.signed_activity()),
+                        trusted_sequencer_public_key: self.trusted_sequencer_public_key,
+                    },
+                )
+            });
+        match attempt {
+            Ok(submission) => Ok(submission),
+            Err(ProgramOperationError::Service(error))
+                if error.retriability == Retriability::Terminal =>
+            {
+                Err(ProgramOperationError::Service(error))
+            }
+            Err(_) => Ok(ProgramSubmission::Unknown {
+                activity_id: request.bound_activity_id(),
+                idempotency_key,
+                retained_signed_activity: Some(request.signed_activity().to_vec()),
+            }),
+        }
+    }
+
     /// Connects the exact hosted/emulator Programs route set.
     ///
     /// # Errors
@@ -242,50 +294,7 @@ impl ProgramTransport for HttpProgramTransport {
         request: &ProgramCallRequest,
         idempotency_key: [u8; 32],
     ) -> Result<ProgramSubmission, ProgramOperationError> {
-        if idempotency_key != request.bound_idempotency_key() {
-            return Err(ProgramOperationError::IdentityMismatch);
-        }
-        if let Some(credential) = &self.credential {
-            let _ = credential.authorization()?;
-        }
-        let encoded =
-            serde_json::to_vec(&wire_call(request)).map_err(|_| ProgramOperationError::Decode)?;
-        if encoded.is_empty() || encoded.len() > MAX_HTTP_REQUEST_BYTES {
-            return Err(ProgramOperationError::Bounds);
-        }
-        let attempt = self
-            .dispatch(
-                "program.call",
-                Method::Post,
-                "/v1/programs/call",
-                &wire_call(request),
-                Some(idempotency_key),
-            )
-            .and_then(|value| {
-                decode_submission(
-                    &value,
-                    SubmissionExpectation {
-                        program_id: Some(request.call().callee().bytes()),
-                        activity_id: Some(request.bound_activity_id()),
-                        idempotency_key: Some(idempotency_key),
-                        retained_signed_activity: Some(request.signed_activity()),
-                        trusted_sequencer_public_key: self.trusted_sequencer_public_key,
-                    },
-                )
-            });
-        match attempt {
-            Ok(submission) => Ok(submission),
-            Err(ProgramOperationError::Service(error))
-                if error.retriability == Retriability::Terminal =>
-            {
-                Err(ProgramOperationError::Service(error))
-            }
-            Err(_) => Ok(ProgramSubmission::Unknown {
-                activity_id: request.bound_activity_id(),
-                idempotency_key,
-                retained_signed_activity: Some(request.signed_activity().to_vec()),
-            }),
-        }
+        self.submit_bound(request, wire_call(request), idempotency_key)
     }
 
     fn receipt(
@@ -657,7 +666,7 @@ fn decode_source(value: Option<&Value>) -> Result<ProgramSource, ProgramOperatio
 
 fn decode_simulation(
     value: &Value,
-    request: &ProgramCallRequest,
+    request: &impl BoundProgramRequest,
     trusted_sequencer_public_key: [u8; 32],
 ) -> Result<VerifiedProgramSimulation, ProgramOperationError> {
     let value = object(value)?;
@@ -672,7 +681,7 @@ fn decode_simulation(
         trusted_sequencer_public_key,
     )?;
     if decoded.activity_id != request.bound_activity_id()
-        || decoded.program_id != request.call().callee().bytes()
+        || decoded.program_id != request.request_program()
     {
         return Err(ProgramOperationError::IdentityMismatch);
     }
@@ -820,7 +829,7 @@ fn decode_execution(
     let activity_id = fixed(value, "activity_id")?;
     let program_id = fixed(value, "program_id")?;
     let guest_abi_version = bounded_u16(value, "guest_abi_version", 1, 2)?;
-    let module_version = bounded_u32(value, "module_version", 1, 3)?;
+    let module_version = bounded_u32(value, "module_version", 1, 4)?;
     let batch_id = fixed(value, "batch_id")?;
     let global_sequence = decimal_u64(value, "global_sequence")?;
     let result_code = exact_i32(value, "result_code")?;
@@ -1204,4 +1213,63 @@ mod source_contract {
             ],
         ));
     }
+}
+
+impl NativeProgramTransport for HttpProgramTransport {
+    fn simulate_native(
+        &self,
+        request: &NativeProgramCallRequest,
+    ) -> Result<VerifiedProgramSimulation, ProgramOperationError> {
+        let value = self.dispatch(
+            "program.simulate",
+            Method::Post,
+            "/v1/programs/simulate",
+            &wire_native_call(request)?,
+            None,
+        )?;
+        let verified = decode_simulation(&value, request, self.trusted_sequencer_public_key)?;
+        require_native_execution(verified.execution())?;
+        Ok(verified)
+    }
+    fn submit_native(
+        &self,
+        request: &NativeProgramCallRequest,
+        idempotency_key: [u8; 32],
+    ) -> Result<ProgramSubmission, ProgramOperationError> {
+        let submission = self.submit_bound(request, wire_native_call(request)?, idempotency_key)?;
+        match &submission {
+            ProgramSubmission::Executed(verified) | ProgramSubmission::Refused(verified) => {
+                require_native_execution(verified)?
+            }
+            ProgramSubmission::Unknown { .. } => {}
+        }
+        Ok(submission)
+    }
+}
+
+fn wire_native_call(request: &NativeProgramCallRequest) -> Result<Value, ProgramOperationError> {
+    let native = layerx_types::program_call::NativeProgramCall::decode(&request.payload)
+        .map_err(|_| ProgramOperationError::Decode)?;
+    Ok(json!({
+        "payload_encoding": "native-v1", "program_id": hex(&request.program_id), "calldata": hex(native.calldata),
+        "budget": { "fuel": native.resources.0[0].to_string(), "fee_limit": request.fee_limit.to_string() },
+        "signed_activity": hex(request.signed_activity()),
+        "native_call": { "guest_abi": native.guest_abi, "entrypoint": std::str::from_utf8(native.entrypoint).map_err(|_| ProgramOperationError::Decode)?,
+            "capabilities_hex": hex(native.capabilities), "access_declaration_hex": hex(native.access_declaration),
+            "response_capacity": native.response_capacity, "resources": native.resources.0.map(|value| value.to_string()) }
+    }))
+}
+
+fn require_native_execution(
+    verified: &layerx_proof::program::VerifiedProgramExecution,
+) -> Result<(), ProgramOperationError> {
+    let protocol = verified
+        .receipt()
+        .receipt()
+        .protocol()
+        .ok_or(ProgramOperationError::Verification)?;
+    if protocol.protocol_version() != 3 {
+        return Err(ProgramOperationError::Verification);
+    }
+    Ok(())
 }

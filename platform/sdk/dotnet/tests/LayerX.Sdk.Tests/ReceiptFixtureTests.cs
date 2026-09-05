@@ -10,6 +10,35 @@ public sealed class ReceiptFixtureTests
     private const string ProgramOutcomeV3 = "505247330100000000000100010000000700000001000000000000000b000000000000000c000000000000000d000000000000000e00000001000000000000000f0000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000020000000000000003000000000000000400000000000000050000000000000006000000000000000700000020000000000000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000201111111111111111111111111111111111111111111111111111111111111111000000202222222222222222222222222222222222222222222222222222222222222222000000200000000000000000000000000000000000000000000000000000000000000000";
 
     [Fact]
+    public void NativeSignedBinding()
+    {
+        using var document = JsonDocument.Parse(File.ReadAllText(FixturePath("native-program-call-v3.json")));
+        var root = document.RootElement;
+        var payload = HexField(root, "payload_hex"); var nativeCall = NativeProgramCall.Decode(payload);
+        Assert.Equal(payload, nativeCall.Encode()); var signed = HexField(root, "signed_activity_hex");
+        var method = typeof(ProgramsClient).GetMethod("DecodeSignedCall", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
+        method.Invoke(null, new object[] { new ProgramCall(nativeCall, new ProtocolAmount("1000"), signed) });
+        Assert.Throws<System.Reflection.TargetInvocationException>(() => method.Invoke(null, new object[] { new ProgramCall(nativeCall, new ProtocolAmount("999"), signed) }));
+        Assert.Throws<System.Reflection.TargetInvocationException>(() => method.Invoke(null, new object[] { new ProgramCall(nativeCall with { ResponseCapacity = 17 }, new ProtocolAmount("1000"), signed) }));
+        for (var length = 0; length < payload.Length; length++) Assert.Throws<ArgumentException>(() => NativeProgramCall.Decode(payload[..length]));
+    }
+
+    [Fact]
+    public async Task ExplicitProtocolThree()
+    {
+        foreach (var name in new[] { "receipt-positive-v3.json", "receipt-programs-positive-v3.json" })
+        {
+            var fixture = LoadFixture(name);
+            await Assert.ThrowsAsync<PlatformSdkException>(async () => await LocalVerifier.VerifyReceiptAsync(fixture.CanonicalReceipt, fixture.Batch));
+            var verified = await LocalVerifier.VerifyReceiptAsync(fixture.CanonicalReceipt, fixture.Batch, protocolVersion: 3);
+            Assert.Equal((ushort)3, verified.Receipt.ProtocolVersion);
+            Assert.Equal(HexField(fixture.Expected, "receipt_digest_hex"), verified.ReceiptDigest);
+            var corrupted = (byte[])fixture.CanonicalReceipt.Clone(); corrupted[^1] ^= 1;
+            await Assert.ThrowsAsync<PlatformSdkException>(async () => await LocalVerifier.VerifyReceiptAsync(corrupted, fixture.Batch, protocolVersion: 3));
+        }
+    }
+
+    [Fact]
     public void ProgramOutcomeV3VectorDecodes()
     {
         var outcome = LocalVerifier.DecodeProgramReceiptOutcome(Convert.FromHexString(ProgramOutcomeV3), 1);

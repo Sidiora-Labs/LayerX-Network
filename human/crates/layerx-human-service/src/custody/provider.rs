@@ -383,6 +383,19 @@ pub trait KmsProvider: Debug + Send + Sync {
         reference: &ProviderKeyReference,
     ) -> Result<ProviderKeyDescription, KmsError>;
 
+    /// Rotates a stable handle only from the expected current public key.
+    ///
+    /// # Errors
+    /// Refuses providers without compare-and-swap rotation support.
+    fn rotate_key_if_current(
+        &self,
+        _binding: &PrincipalKeyBinding,
+        _reference: &ProviderKeyReference,
+        _expected_public_key: [u8; 32],
+    ) -> Result<ProviderKeyDescription, KmsError> {
+        Err(KmsError::Refused)
+    }
+
     /// Destroys a provider key. No key bytes are returned.
     ///
     /// # Errors
@@ -539,6 +552,15 @@ impl RemoteKmsProvider {
     }
 
     fn call(&self, operation: u8, request: Vec<u8>) -> Result<Vec<u8>, KmsError> {
+        self.call_version(operation, PROVIDER_VERSION, request)
+    }
+
+    fn call_version(
+        &self,
+        operation: u8,
+        version: u16,
+        request: Vec<u8>,
+    ) -> Result<Vec<u8>, KmsError> {
         if request.len() > self.limits.maximum_frame_bytes {
             return Err(KmsError::InvalidConfiguration);
         }
@@ -557,7 +579,7 @@ impl RemoteKmsProvider {
         .map_err(map_transport)?;
         transport.send(&request).map_err(map_transport)?;
         let response = transport.receive().map_err(map_transport)?;
-        decode_response(operation, &response)
+        decode_response(operation, version, &response)
     }
 
     fn key_operation(
@@ -624,6 +646,24 @@ impl KmsProvider for RemoteKmsProvider {
         reference: &ProviderKeyReference,
     ) -> Result<ProviderKeyDescription, KmsError> {
         self.key_operation(OP_ROTATE, binding, Some(reference))
+    }
+
+    fn rotate_key_if_current(
+        &self,
+        binding: &PrincipalKeyBinding,
+        reference: &ProviderKeyReference,
+        expected_public_key: [u8; 32],
+    ) -> Result<ProviderKeyDescription, KmsError> {
+        let mut request = encode_key_request(
+            OP_ROTATE,
+            &self.provider_reference,
+            binding,
+            Some(reference),
+        )?;
+        request[4..6].copy_from_slice(&2_u16.to_be_bytes());
+        request.extend_from_slice(&expected_public_key);
+        let response = self.call_version(OP_ROTATE, 2, request)?;
+        decode_description(&response, binding)
     }
 
     fn destroy_key(
@@ -887,12 +927,9 @@ fn encode_disclosure(disclosure: &Disclosure) -> Result<Vec<u8>, CustodyError> {
     Ok(writer.finish())
 }
 
-fn decode_response(operation: u8, bytes: &[u8]) -> Result<Vec<u8>, KmsError> {
+fn decode_response(operation: u8, version: u16, bytes: &[u8]) -> Result<Vec<u8>, KmsError> {
     let mut reader = WireReader::new(bytes);
-    if reader.fixed(4)? != PROVIDER_MAGIC
-        || reader.u16()? != PROVIDER_VERSION
-        || reader.u8()? != operation
-    {
+    if reader.fixed(4)? != PROVIDER_MAGIC || reader.u16()? != version || reader.u8()? != operation {
         return Err(KmsError::InvalidResponse);
     }
     let status = reader.u8()?;

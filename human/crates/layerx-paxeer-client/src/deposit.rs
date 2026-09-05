@@ -232,7 +232,7 @@ impl DepositFailure {
         match self {
             Self::CustodyFailed(fault) => {
                 out.push(0);
-                encode_custody_fault(&mut out, fault)?;
+                encode_custody_fault(&mut out, fault);
             }
             Self::ProofUnavailable(fault) => {
                 out.push(1);
@@ -321,7 +321,7 @@ fn get_inclusion(
     })
 }
 
-fn encode_custody_fault(out: &mut Vec<u8>, fault: &CustodyFault) -> Result<(), DepositNativeError> {
+fn encode_custody_fault(out: &mut Vec<u8>, fault: &CustodyFault) {
     match fault {
         CustodyFault::Reverted { inclusion } => {
             out.push(0);
@@ -338,7 +338,6 @@ fn encode_custody_fault(out: &mut Vec<u8>, fault: &CustodyFault) -> Result<(), D
             out.push(u8::from(*requeued));
         }
     }
-    Ok(())
 }
 
 fn decode_custody_fault(
@@ -861,6 +860,10 @@ fn encode_credit_fault(out: &mut Vec<u8>, fault: &CreditFault) -> Result<(), Dep
             out.extend_from_slice(beneficiary);
             out.extend_from_slice(recipient);
         }
+        CreditFault::RecipientNotDerivable { protocol_version } => {
+            out.push(4);
+            out.extend_from_slice(&protocol_version.to_be_bytes());
+        }
         CreditFault::ReserveNamespace => out.push(1),
         CreditFault::BridgeProofIngressUnavailable => out.push(2),
         CreditFault::AgentContract(error) => {
@@ -946,6 +949,81 @@ pub struct DepositProofVerifier {
     layerx_protocol_version: u16,
 }
 
+/// Custody facts admitted from actual quorum evidence for one expected recipient.
+/// This records admission at the report's observation; it does not attest a
+/// checkpoint, register a deposit root, or authorize native credit.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AdmittedCustody {
+    transaction: TransactionHash,
+    inclusion: TransactionInclusion,
+    confirmations: u64,
+    required_confirmations: u64,
+    chain_id: u64,
+    vault: EvmAddress,
+    custody: CustodyDeposit,
+    custody_reference: [u8; 32],
+    network_id: u32,
+    protocol_version: u16,
+    recipient: AccountId,
+}
+
+impl AdmittedCustody {
+    #[must_use]
+    pub const fn transaction(&self) -> TransactionHash {
+        self.transaction
+    }
+
+    #[must_use]
+    pub const fn inclusion(&self) -> TransactionInclusion {
+        self.inclusion
+    }
+
+    #[must_use]
+    pub const fn confirmations(&self) -> u64 {
+        self.confirmations
+    }
+
+    #[must_use]
+    pub const fn required_confirmations(&self) -> u64 {
+        self.required_confirmations
+    }
+
+    #[must_use]
+    pub const fn chain_id(&self) -> u64 {
+        self.chain_id
+    }
+
+    #[must_use]
+    pub const fn vault(&self) -> EvmAddress {
+        self.vault
+    }
+
+    #[must_use]
+    pub const fn custody(&self) -> CustodyDeposit {
+        self.custody
+    }
+
+    #[must_use]
+    pub const fn custody_reference(&self) -> [u8; 32] {
+        self.custody_reference
+    }
+
+    #[must_use]
+    pub const fn network_id(&self) -> u32 {
+        self.network_id
+    }
+
+    #[must_use]
+    pub const fn protocol_version(&self) -> u16 {
+        self.protocol_version
+    }
+
+    #[must_use]
+    pub const fn recipient(&self) -> &AccountId {
+        &self.recipient
+    }
+}
+
 struct AdmittedFinality<'a> {
     inclusion: TransactionInclusion,
     confirmations: u64,
@@ -1014,6 +1092,53 @@ impl DepositProofVerifier {
         })
     }
 
+    /// Admits finalized custody before any checkpoint registration is signed.
+    /// The vault and recipient are the caller's expected custody destination;
+    /// neither can replace the event facts in the configured quorum evidence.
+    ///
+    /// # Errors
+    ///
+    /// Refuses non-final, reverted, displaced, or policy-mismatched evidence,
+    /// malformed or unbound vault events, and a recipient whose protocol-selected
+    /// account address does not equal the emitted beneficiary.
+    pub fn admit_custody(
+        &self,
+        report: &FinalityReport,
+        vault: EvmAddress,
+        recipient: &AccountId,
+    ) -> Result<AdmittedCustody, DepositFailure> {
+        let (admitted, custody) = self.admit_custody_event(report, vault)?;
+        let recipient_address =
+            account_address_for_protocol(recipient, self.layerx_protocol_version).map_err(
+                |_| {
+                    DepositFailure::CreditRefused(CreditFault::RecipientNotDerivable {
+                        protocol_version: self.layerx_protocol_version,
+                    })
+                },
+            )?;
+        if custody.beneficiary != recipient_address {
+            return Err(DepositFailure::CreditRefused(
+                CreditFault::BeneficiaryMismatch {
+                    beneficiary: custody.beneficiary,
+                    recipient: recipient_address,
+                },
+            ));
+        }
+        Ok(AdmittedCustody {
+            transaction: report.transaction(),
+            inclusion: admitted.inclusion,
+            confirmations: admitted.confirmations,
+            required_confirmations: self.required_confirmations,
+            chain_id: admitted.chain_id,
+            vault,
+            custody,
+            custody_reference: self.custody_reference,
+            network_id: self.layerx_network_id,
+            protocol_version: self.layerx_protocol_version,
+            recipient: recipient.clone(),
+        })
+    }
+
     /// Constructs a finalized custody proof from one tracked transaction and
     /// the exact signed Paxeer custody-root registration and index-aware path.
     ///
@@ -1028,17 +1153,7 @@ impl DepositProofVerifier {
         vault: EvmAddress,
         published: PublishedDepositProof,
     ) -> Result<DepositProof, DepositFailure> {
-        let admitted = self.admit_finality(report)?;
-        let custody = custody_event(admitted.logs, vault)?;
-        let derived = derive_deposit_id(admitted.chain_id, vault, &custody);
-        if derived != custody.deposit_id {
-            return Err(DepositFailure::ProofUnavailable(
-                ProofFault::UnboundDeposit {
-                    emitted: custody.deposit_id,
-                    derived,
-                },
-            ));
-        }
+        let (admitted, custody) = self.admit_custody_event(report, vault)?;
         self.verify_registration(&published.registration)?;
         let leaf_bytes = deposit_leaf_bytes(
             custody.deposit_id,
@@ -1077,6 +1192,25 @@ impl DepositProofVerifier {
             leaf_hash: leaf,
             nullifier,
         })
+    }
+
+    fn admit_custody_event<'a>(
+        &self,
+        report: &'a FinalityReport,
+        vault: EvmAddress,
+    ) -> Result<(AdmittedFinality<'a>, CustodyDeposit), DepositFailure> {
+        let admitted = self.admit_finality(report)?;
+        let custody = custody_event(admitted.logs, vault)?;
+        let derived = derive_deposit_id(admitted.chain_id, vault, &custody);
+        if derived != custody.deposit_id {
+            return Err(DepositFailure::ProofUnavailable(
+                ProofFault::UnboundDeposit {
+                    emitted: custody.deposit_id,
+                    derived,
+                },
+            ));
+        }
+        Ok((admitted, custody))
     }
 
     fn verify_registration(
@@ -1119,34 +1253,8 @@ impl DepositProofVerifier {
         &self,
         report: &'a FinalityReport,
     ) -> Result<AdmittedFinality<'a>, DepositFailure> {
-        let (inclusion, reported_confirmations, reported_required) = match report.stage() {
-            FinalityStage::Final {
-                inclusion,
-                confirmations,
-                required,
-            } => (inclusion, confirmations, required),
-            FinalityStage::Displaced {
-                lost,
-                head,
-                requeued,
-            } => {
-                return Err(DepositFailure::CustodyFailed(CustodyFault::Displaced {
-                    lost,
-                    head,
-                    requeued,
-                }));
-            }
-            stage => {
-                return Err(DepositFailure::ProofUnavailable(ProofFault::NotFinal {
-                    stage,
-                }));
-            }
-        };
-        if inclusion.execution == ExecutionOutcome::Reverted {
-            return Err(DepositFailure::CustodyFailed(CustodyFault::Reverted {
-                inclusion,
-            }));
-        }
+        let (inclusion, reported_confirmations, reported_required) =
+            final_custody_inclusion(report)?;
         let evidence = report.evidence().ok_or(DepositFailure::ProofUnavailable(
             ProofFault::MissingQuorumEvidence,
         ))?;
@@ -1237,6 +1345,68 @@ impl DepositProofVerifier {
     }
 }
 
+fn decode_native_inclusion(
+    reader: &mut DepositReader<'_>,
+) -> Result<TransactionInclusion, DepositNativeError> {
+    let block = BlockRef {
+        number: reader.u64()?,
+        hash: reader.array()?,
+    };
+    let transaction_index = reader.u64()?;
+    let execution = match reader.u8()? {
+        1 => ExecutionOutcome::Succeeded,
+        0 => ExecutionOutcome::Reverted,
+        _ => return Err(DepositNativeError::Encoding),
+    };
+    let deployed = reader.u8()?;
+    let deployed_bytes = reader.array()?;
+    let deployed_contract = match deployed {
+        0 if deployed_bytes == [0; 20] => None,
+        1 => Some(EvmAddress::new(deployed_bytes)),
+        _ => return Err(DepositNativeError::Encoding),
+    };
+    Ok(TransactionInclusion {
+        block,
+        transaction_index,
+        execution,
+        deployed_contract,
+    })
+}
+
+fn final_custody_inclusion(
+    report: &FinalityReport,
+) -> Result<(TransactionInclusion, u64, u64), DepositFailure> {
+    let (inclusion, confirmations, required) = match report.stage() {
+        FinalityStage::Final {
+            inclusion,
+            confirmations,
+            required,
+        } => (inclusion, confirmations, required),
+        FinalityStage::Displaced {
+            lost,
+            head,
+            requeued,
+        } => {
+            return Err(DepositFailure::CustodyFailed(CustodyFault::Displaced {
+                lost,
+                head,
+                requeued,
+            }));
+        }
+        stage => {
+            return Err(DepositFailure::ProofUnavailable(ProofFault::NotFinal {
+                stage,
+            }));
+        }
+    };
+    if inclusion.execution == ExecutionOutcome::Reverted {
+        return Err(DepositFailure::CustodyFailed(CustodyFault::Reverted {
+            inclusion,
+        }));
+    }
+    Ok((inclusion, confirmations, required))
+}
+
 /// The finalized custody proof in the exact form consumed by
 /// `lx_bridge_verify_deposit`.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1286,16 +1456,14 @@ impl DepositProof {
             ExecutionOutcome::Succeeded => 1,
             ExecutionOutcome::Reverted => 0,
         });
-        match self.inclusion.deployed_contract {
-            Some(address) => {
-                out.push(1);
-                out.extend_from_slice(&address.bytes());
-            }
-            None => {
-                out.push(0);
-                out.extend_from_slice(&[0; 20]);
-            }
+        if let Some(address) = self.inclusion.deployed_contract {
+            out.push(1);
+            out.extend_from_slice(&address.bytes());
+        } else {
+            out.push(0);
+            out.extend_from_slice(&[0; 20]);
         }
+
         out.extend_from_slice(&self.confirmations.to_be_bytes());
         out.extend_from_slice(&self.required.to_be_bytes());
         out.extend_from_slice(&self.chain_id.to_be_bytes());
@@ -1325,23 +1493,7 @@ impl DepositProof {
         }
         let mut reader = DepositReader::new(bytes);
         let transaction = TransactionHash::new(reader.array()?);
-        let block = BlockRef {
-            number: reader.u64()?,
-            hash: reader.array()?,
-        };
-        let transaction_index = reader.u64()?;
-        let execution = match reader.u8()? {
-            1 => ExecutionOutcome::Succeeded,
-            0 => ExecutionOutcome::Reverted,
-            _ => return Err(DepositNativeError::Encoding),
-        };
-        let deployed = reader.u8()?;
-        let deployed_bytes = reader.array()?;
-        let deployed_contract = match deployed {
-            0 if deployed_bytes == [0; 20] => None,
-            1 => Some(EvmAddress::new(deployed_bytes)),
-            _ => return Err(DepositNativeError::Encoding),
-        };
+        let inclusion = decode_native_inclusion(&mut reader)?;
         let confirmations = reader.u64()?;
         let required = reader.u64()?;
         let chain_id = reader.u64()?;
@@ -1368,14 +1520,9 @@ impl DepositProof {
         let inclusion_proof =
             decode_proof(reader.take(proof_length)?).map_err(DepositNativeError::Merkle)?;
         reader.finish()?;
-        if execution == ExecutionOutcome::Reverted {
+        if inclusion.execution == ExecutionOutcome::Reverted {
             return Err(DepositNativeError::Custody(CustodyFault::Reverted {
-                inclusion: TransactionInclusion {
-                    block,
-                    transaction_index,
-                    execution,
-                    deployed_contract,
-                },
+                inclusion,
             }));
         }
         if required == 0 || confirmations < required || chain_id == 0 {
@@ -1414,12 +1561,7 @@ impl DepositProof {
         let nullifier = deposit_nullifier(custody.deposit_id);
         Ok(Self {
             transaction,
-            inclusion: TransactionInclusion {
-                block,
-                transaction_index,
-                execution,
-                deployed_contract,
-            },
+            inclusion,
             confirmations,
             required,
             chain_id,
@@ -1551,7 +1693,12 @@ impl DepositProof {
         if reserve.namespace() != AccountNamespace::SystemPaxeerReserve {
             return Err(DepositFailure::CreditRefused(CreditFault::ReserveNamespace));
         }
-        let recipient_address = account_address(recipient);
+        let recipient_address = account_address_for_protocol(recipient, self.protocol_version)
+            .map_err(|_| {
+                DepositFailure::CreditRefused(CreditFault::RecipientNotDerivable {
+                    protocol_version: self.protocol_version,
+                })
+            })?;
         if recipient_address != self.custody.beneficiary {
             return Err(DepositFailure::CreditRefused(
                 CreditFault::BeneficiaryMismatch {
@@ -1578,11 +1725,10 @@ impl DepositProof {
         registry: &ModuleRegistry,
     ) -> Result<CompiledIntent, DepositFailure> {
         let _ = registry;
-        self.credit_intent(reserve, recipient).and_then(|_| {
-            Err(DepositFailure::CreditRefused(
+        self.credit_intent(reserve, recipient)
+            .and(Err(DepositFailure::CreditRefused(
                 CreditFault::BridgeProofIngressUnavailable,
-            ))
-        })
+            )))
     }
 
     /// Refuses receipt acceptance until Core exposes a complete-proof activity
@@ -1604,7 +1750,12 @@ impl DepositProof {
         if reserve.namespace() != AccountNamespace::SystemPaxeerReserve {
             return Err(DepositFailure::CreditRefused(CreditFault::ReserveNamespace));
         }
-        let recipient_address = account_address(recipient);
+        let recipient_address = account_address_for_protocol(recipient, self.protocol_version)
+            .map_err(|_| {
+                DepositFailure::CreditRefused(CreditFault::RecipientNotDerivable {
+                    protocol_version: self.protocol_version,
+                })
+            })?;
         if recipient_address != self.custody.beneficiary {
             return Err(DepositFailure::CreditRefused(
                 CreditFault::BeneficiaryMismatch {

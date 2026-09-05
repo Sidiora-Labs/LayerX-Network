@@ -244,3 +244,58 @@ fn exact_pending_retry_survives_reconstruction_but_altered_nonce_reuse_is_replay
         Some(record)
     );
 }
+
+#[test]
+fn principal_binding_comes_only_from_the_authenticated_durable_key_record() {
+    use layerx_platform_gateway::store::KeyRecord;
+    use layerx_platform_gateway::{authenticate_gateway_key, gateway_digest, PrincipalId};
+    let redis = RedisProcess::start();
+    let store = redis.store();
+    let principal = PrincipalId::new("principal-one".to_owned())
+        .unwrap_or_else(|error| panic!("principal: {error:?}"));
+    let foreign = PrincipalId::new("principal-two".to_owned())
+        .unwrap_or_else(|error| panic!("principal: {error:?}"));
+    let digest = |principal: &PrincipalId| {
+        principal
+            .audit_digest()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    };
+    let secret = format!("lxp_live_{}", "a".repeat(64));
+    let record = KeyRecord {
+        key_id: "principal-key-one".to_owned(),
+        principal_digest: digest(&principal),
+        salt: "salt-one".to_owned(),
+        secret_digest: gateway_digest(&[b"gateway-key-v1", b"salt-one", secret.as_bytes()]),
+        signer_public_key: "11".repeat(32),
+        scopes: "receipt:read".to_owned(),
+        quota_requests: 100,
+        quota_window_seconds: 60,
+        epoch: 1,
+        disabled: false,
+    };
+    store
+        .issue_key(&record, "principal-key-issued")
+        .unwrap_or_else(|error| panic!("issue: {error}"));
+    let credential = format!("LayerX-Key {}:{secret}", record.key_id);
+    let authenticated = authenticate_gateway_key(&store, &credential)
+        .unwrap_or_else(|error| panic!("authenticate: {error:?}"));
+    assert_eq!(authenticated.principal_digest, digest(&principal));
+    assert_ne!(authenticated.principal_digest, digest(&foreign));
+    assert!(authenticate_gateway_key(&store, "").is_err());
+    assert!(authenticate_gateway_key(&store, &format!("Bearer {secret}")).is_err());
+    assert!(authenticate_gateway_key(
+        &store,
+        &format!("LayerX-Key {}:lxp_live_{}", record.key_id, "b".repeat(64))
+    )
+    .is_err());
+    assert!(store
+        .revoke_key(
+            &record.key_id,
+            &record.principal_digest,
+            "principal-key-revoked"
+        )
+        .unwrap_or_else(|error| panic!("revoke: {error}")));
+    assert!(authenticate_gateway_key(&store, &credential).is_err());
+}

@@ -86,7 +86,15 @@ from .verifier import (
     verify_receipt_outcome,
 )
 
+from .native_program_call import NativeProgramCall, encode_native_program_call, decode_native_program_call
+
+from .programs import NativeProgramRequest
+
 __all__ = [
+    "NativeProgramCall",
+    "NativeProgramRequest",
+    "encode_native_program_call",
+    "decode_native_program_call",
     "APPROVAL_CONTRACT_INTRODUCED",
     "APPROVAL_DECISION_OUTCOMES",
     "APPROVAL_ENFORCEMENT_NOTICE",

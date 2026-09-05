@@ -98,10 +98,8 @@ fn validate(v: &FinalityReport) -> Result<(), NativeWireError> {
         return Err(NativeWireError::Encoding);
     }
     match v.stage {
-        FinalityStage::Announced if v.progress.confirmed != 0 => {
-            return Err(NativeWireError::Encoding)
-        }
-        FinalityStage::Missing { .. }
+        FinalityStage::Announced
+        | FinalityStage::Missing { .. }
         | FinalityStage::Pooled { .. }
         | FinalityStage::Displaced { .. }
             if v.progress.confirmed != 0 =>
@@ -162,8 +160,8 @@ fn validate(v: &FinalityReport) -> Result<(), NativeWireError> {
                 TransactionView::Included(actual),
             ) if inclusion == actual => {}
             (FinalityStage::Missing { .. }, TransactionView::Unknown)
-            | (FinalityStage::Pooled { .. }, TransactionView::Pending) => {}
-            (
+            | (FinalityStage::Pooled { .. }, TransactionView::Pending)
+            | (
                 FinalityStage::Displaced { .. },
                 TransactionView::Unknown | TransactionView::Pending | TransactionView::Included(_),
             ) => {}
@@ -185,12 +183,16 @@ fn validate(v: &FinalityReport) -> Result<(), NativeWireError> {
             }
         }
     }
+    validate_signal(&v.signal)
+}
+
+fn validate_signal(signal: &ChainSignal) -> Result<(), NativeWireError> {
     if let ChainSignal::Delayed {
         stalled_polls,
         threshold,
         stalled_for,
         delayed_after,
-    } = &v.signal
+    } = signal
     {
         if *threshold == 0
             || stalled_polls < threshold
@@ -396,7 +398,7 @@ fn evidence(w: &mut Writer, e: &FinalityEvidence) -> Result<(), NativeWireError>
             EndpointTransport::LocalEmulator => w.u8(0)?,
             EndpointTransport::PinnedTls { trust_anchor_der } => {
                 w.u8(1)?;
-                w.blob(trust_anchor_der, MAX_TRUST_ANCHOR)?
+                w.blob(trust_anchor_der, MAX_TRUST_ANCHOR)?;
             }
         }
     }
@@ -414,9 +416,9 @@ fn evidence(w: &mut Writer, e: &FinalityEvidence) -> Result<(), NativeWireError>
                 w.bytes(&l.address.bytes())?;
                 w.count(l.topics.len(), MAX_TOPICS)?;
                 for t in &l.topics {
-                    w.bytes(t)?
+                    w.bytes(t)?;
                 }
-                w.blob(&l.data, MAX_BLOB)?
+                w.blob(&l.data, MAX_BLOB)?;
             }
             Ok(())
         }
@@ -452,7 +454,7 @@ fn read_evidence(r: &mut Reader<'_>) -> Result<FinalityEvidence, NativeWireError
                 let m = r.count(MAX_TOPICS)?;
                 let mut topics = Vec::with_capacity(m);
                 for _ in 0..m {
-                    topics.push(r.array()?)
+                    topics.push(r.array()?);
                 }
                 let data = r.blob(MAX_BLOB)?;
                 logs.push(LogRecord {
@@ -524,7 +526,7 @@ fn failures(w: &mut Writer, v: &[EndpointFailure]) -> Result<(), NativeWireError
             return Err(NativeWireError::Encoding);
         }
         w.string(&f.url)?;
-        fault(w, &f.fault)?
+        fault(w, &f.fault)?;
     }
     Ok(())
 }
@@ -542,7 +544,7 @@ fn read_failures(r: &mut Reader<'_>) -> Result<Vec<EndpointFailure>, NativeWireE
         v.push(EndpointFailure {
             url,
             fault: read_fault(r)?,
-        })
+        });
     }
     Ok(v)
 }

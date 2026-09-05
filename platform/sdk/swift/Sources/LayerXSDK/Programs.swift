@@ -26,19 +26,27 @@ public enum ProgramCapability: String, Sendable {
 }
 
 public struct ProgramCall: Sendable {
+    public let nativeCall: NativeProgramCall?
     public let programID: Data; public let calldata: Data; public let budget: ProgramBudget
     public let capabilities: [ProgramCapability]; public let signedActivity: Data
 
     public init(programID: Data, calldata: Data, budget: ProgramBudget,
-                capabilities: [ProgramCapability], signedActivity: Data) throws {
+                capabilities: [ProgramCapability], signedActivity: Data, nativeCall: NativeProgramCall? = nil) throws {
         guard programID.count == 32, budget.fuel > 0, calldata.count <= 1_048_576,
               programID.contains(where: { $0 != 0 }),
               capabilities.count <= 5,
               zip(capabilities, capabilities.dropFirst()).allSatisfy({ $0.order < $1.order }),
               !signedActivity.isEmpty, signedActivity.count <= 1_048_576 else { throw programInvalid() }
+        self.nativeCall = nativeCall
         self.programID = programID; self.calldata = calldata; self.budget = budget
         self.capabilities = capabilities; self.signedActivity = signedActivity
     }
+    public init(nativeCall: NativeProgramCall, feeLimit: ProtocolAmount, signedActivity: Data) throws {
+        _ = try nativeCall.encode()
+        try self.init(programID: nativeCall.programID, calldata: nativeCall.calldata,
+            budget: ProgramBudget(fuel: nativeCall.resources[0], feeLimit: feeLimit), capabilities: [], signedActivity: signedActivity, nativeCall: nativeCall)
+    }
+
 }
 
 public enum ProgramLifecycle: String, Sendable { case active, deprecated, tombstoned }
@@ -96,14 +104,17 @@ public struct ProgramsClient: Sendable {
     fileprivate static let maximumCallGraphBytes = Data("LayerX/programs/call-graph/v1\0".utf8).count + 32 + 16 + 8 + 64 * 68
     private let client: PlatformClient
     private let sequencerPublicKey: Data
+    private let protocolVersion: UInt16
     private let nowMilliseconds: @Sendable () -> UInt64
     private let maximumSimulationAgeMilliseconds: UInt64
 
     public init(client: PlatformClient, sequencerPublicKey: Data,
-                maximumSimulationAgeMilliseconds: UInt64 = 300_000,
+                protocolVersion: UInt16 = 2, maximumSimulationAgeMilliseconds: UInt64 = 300_000,
                 nowMilliseconds: @escaping @Sendable () -> UInt64 = {
                     UInt64(Date().timeIntervalSince1970 * 1_000)
                 }) throws {
+        guard protocolVersion == 2 || protocolVersion == 3 else { throw programInvalid() }
+        self.protocolVersion = protocolVersion
         guard sequencerPublicKey.count == 32, sequencerPublicKey.contains(where: { $0 != 0 }),
               maximumSimulationAgeMilliseconds > 0 else { throw programInvalid() }
         self.client = client; self.sequencerPublicKey = Data(sequencerPublicKey)
@@ -125,15 +136,17 @@ public struct ProgramsClient: Sendable {
         return try verifiedDiscovery(value, programID: id, interface: true, now: nowMilliseconds()).interface!
     }
     public func simulate(_ call: ProgramCall) async throws -> ProgramSimulation {
+        guard call.nativeCall == nil || protocolVersion == 3 else { throw programInvalid() }
         let binding = try decodeSignedCall(call)
         let value = try await client.program("program.simulate", request: encode(call))
         let execution = try await verifiedSimulation(value, expectedProgramID: call.programID,
             binding: binding, pinnedKey: sequencerPublicKey, now: nowMilliseconds(),
-            maximumAge: maximumSimulationAgeMilliseconds)
+            maximumAge: maximumSimulationAgeMilliseconds, protocolVersion: protocolVersion)
         return .init(value: value, execution: execution)
     }
     public func submit(_ call: ProgramCall, idempotencyKey: IdempotencyKey) async throws -> ProgramSubmission {
         guard hex32(idempotencyKey.rawValue) else { throw programInvalid() }
+        guard call.nativeCall == nil || protocolVersion == 3 else { throw programInvalid() }
         let binding = try decodeSignedCall(call)
         guard binding.idempotencyKey == Data(hex: idempotencyKey.rawValue) else { throw programInvalid() }
         let value: JSONValue
@@ -144,7 +157,7 @@ public struct ProgramsClient: Sendable {
         do {
             return try await verifiedSubmission(value, expectedProgramID: call.programID,
                 expectedActivityID: binding.activityID, expectedIdempotencyKey: idempotencyKey.rawValue,
-                retainedSignedActivity: call.signedActivity, pinnedKey: sequencerPublicKey)
+                retainedSignedActivity: call.signedActivity, pinnedKey: sequencerPublicKey, protocolVersion: protocolVersion)
         } catch let error as PlatformSDKError where error.code == .decodeFailure || error.code == .verificationFailure {
             return unknownSubmission(activity: binding.activityID, key: idempotencyKey.rawValue, retained: call.signedActivity)
         }
@@ -156,25 +169,25 @@ public struct ProgramsClient: Sendable {
             "expected_activity_id": .string(activity), "requested_verification_level": .string(try level(verificationLevel))]),
             pathParameters: ["idempotency_key": idempotencyKey.rawValue])
         return try await verifiedSubmission(value, expectedProgramID: nil, expectedActivityID: expectedActivityID,
-            expectedIdempotencyKey: idempotencyKey.rawValue, retainedSignedActivity: nil, pinnedKey: sequencerPublicKey)
+            expectedIdempotencyKey: idempotencyKey.rawValue, retainedSignedActivity: nil, pinnedKey: sequencerPublicKey, protocolVersion: protocolVersion)
     }
     public func activity(activityID: Data, verificationLevel: String) async throws -> ProgramSubmission {
         let id = try identifier(activityID)
         let value = try await client.program("program.activity", request: .object(["activity_id": .string(id),
             "requested_verification_level": .string(try level(verificationLevel))]), pathParameters: ["activity_id": id])
         return try await verifiedSubmission(value, expectedProgramID: nil, expectedActivityID: activityID,
-            expectedIdempotencyKey: nil, retainedSignedActivity: nil, pinnedKey: sequencerPublicKey)
+            expectedIdempotencyKey: nil, retainedSignedActivity: nil, pinnedKey: sequencerPublicKey, protocolVersion: protocolVersion)
     }
 
     public static func verifyReceipt(_ canonicalReceipt: Data, authorized: AuthorizedReceiptBatch,
                                      expectedActivityID: Data, expectedGuestABIVersion: UInt16,
-                                     terminalPayload: Data, callGraph: Data) async throws -> ReceiptVerification {
+                                     terminalPayload: Data, callGraph: Data, protocolVersion: UInt16 = 2) async throws -> ReceiptVerification {
         guard expectedActivityID.count == 32, expectedGuestABIVersion == 1 || expectedGuestABIVersion == 2 else { throw programInvalid() }
-        let verified = try await LocalVerifier.verifyReceiptOutcome(canonicalReceipt, authorized: authorized)
+        let verified = try await LocalVerifier.verifyReceiptOutcome(canonicalReceipt, authorized: authorized, protocolVersion: protocolVersion)
         let receipt = verified.receipt
         let outcome = receipt.programOutcome
         guard receipt.protocolVersion > 0, receipt.moduleID == receiptModuleID, receipt.operation == callOperation,
-              (1...3).contains(receipt.moduleVersion),
+              (1...4).contains(receipt.moduleVersion),
               receipt.activityID == expectedActivityID, let outcome,
               outcome.abiVersion == expectedGuestABIVersion, terminalPayload.count <= 1_048_576,
               !callGraph.isEmpty, callGraph.count <= maximumCallGraphBytes,
@@ -184,7 +197,7 @@ public struct ProgramsClient: Sendable {
     }
 }
 
-private struct ActivityBinding {
+struct ActivityBinding {
     let activityID: Data
     let idempotencyKey: Data
     let notBefore: UInt64
@@ -227,7 +240,7 @@ private struct StorageNamespaceBinding {
 
 private func verifiedSubmission(_ value: JSONValue, expectedProgramID: Data?, expectedActivityID: Data?,
                                 expectedIdempotencyKey: String?, retainedSignedActivity: Data?,
-                                pinnedKey: Data) async throws -> ProgramSubmission {
+                                pinnedKey: Data, protocolVersion: UInt16 = 2) async throws -> ProgramSubmission {
     guard let object = value.objectValue, let state = object["state"]?.stringValue else { throw programVerification() }
     if state == "unknown" {
         let retainedPresent = object["retained_signed_activity"] != nil
@@ -246,7 +259,7 @@ private func verifiedSubmission(_ value: JSONValue, expectedProgramID: Data?, ex
     guard state == "executed" || state == "refused" else { throw programDecode() }
     let execution = try await verifiedExecution(object, state: state, idempotent: true,
         expectedProgramID: expectedProgramID, expectedActivityID: expectedActivityID,
-        expectedIdempotencyKey: expectedIdempotencyKey, pinnedKey: pinnedKey)
+        expectedIdempotencyKey: expectedIdempotencyKey, pinnedKey: pinnedKey, protocolVersion: protocolVersion)
     let outcomeKind = try objectValue(object, "outcome")["kind"]?.stringValue
     guard state == "refused" && outcomeKind == "refused" || state == "executed"
             && (outcomeKind == "completed" || outcomeKind == "legacy_completed") else { throw programVerification() }
@@ -256,7 +269,7 @@ private func verifiedSubmission(_ value: JSONValue, expectedProgramID: Data?, ex
 
 private func verifiedExecution(_ object: [String: JSONValue], state: String, idempotent: Bool,
                                expectedProgramID: Data?, expectedActivityID: Data?,
-                               expectedIdempotencyKey: String?, pinnedKey: Data) async throws -> VerifiedProgramExecution {
+                               expectedIdempotencyKey: String?, pinnedKey: Data, protocolVersion: UInt16 = 2) async throws -> VerifiedProgramExecution {
     var fields: Set<String> = ["state", "activity_id", "program_id", "guest_abi_version", "module_version",
         "batch_id", "global_sequence", "result_code", "state_root", "receipt", "receipt_digest",
         "terminal_payload", "call_graph", "authority", "usage", "outcome", "verification"]
@@ -269,7 +282,7 @@ private func verifiedExecution(_ object: [String: JSONValue], state: String, ide
           expectedActivityID == nil || activity == expectedActivityID,
           expectedIdempotencyKey == nil || object["idempotency_key"]?.stringValue == expectedIdempotencyKey,
           let guestABI = object["guest_abi_version"]?.integerValue, guestABI == 1 || guestABI == 2,
-          let moduleVersion = object["module_version"]?.integerValue, (1...3).contains(moduleVersion),
+          let moduleVersion = object["module_version"]?.integerValue, (1...4).contains(moduleVersion),
           try text(object, "verification") == "receipt-terminal-and-call-graph-verified" else { throw programVerification() }
     let resultCode = try integer32(object, "result_code")
     let globalSequence = try decimalUInt64Field(object, "global_sequence")
@@ -298,7 +311,7 @@ private func verifiedExecution(_ object: [String: JSONValue], state: String, ide
     let graph = try hexData(object, "call_graph", maximumBytes: 1_048_576)
     let verified = try await ProgramsClient.verifyReceipt(receipt, authorized: authority,
         expectedActivityID: activity, expectedGuestABIVersion: UInt16(guestABI),
-        terminalPayload: terminal, callGraph: graph)
+        terminalPayload: terminal, callGraph: graph, protocolVersion: protocolVersion)
     guard let receiptOutcome = verified.receipt.programOutcome else { throw programVerification() }
     try verifyTerminal(terminal, availableGraph: graph, expectedProgram: program,
         documentOutcome: outcomeDocument, protocolVersion: verified.receipt.protocolVersion, receipt: receiptOutcome)
@@ -323,13 +336,13 @@ private func verifiedExecution(_ object: [String: JSONValue], state: String, ide
 }
 
 private func verifiedSimulation(_ value: JSONValue, expectedProgramID: Data, binding: ActivityBinding,
-                                pinnedKey: Data, now: UInt64, maximumAge: UInt64) async throws -> VerifiedProgramExecution {
+                                pinnedKey: Data, now: UInt64, maximumAge: UInt64, protocolVersion: UInt16 = 2) async throws -> VerifiedProgramExecution {
     guard let object = value.objectValue else { throw programVerification() }
     try requireFields(object, ["committed", "execution", "simulation_evidence"])
     guard object["committed"] == .boolean(false), let execution = object["execution"]?.objectValue else { throw programVerification() }
     let verified = try await verifiedExecution(execution, state: "simulated", idempotent: false,
         expectedProgramID: expectedProgramID, expectedActivityID: binding.activityID,
-        expectedIdempotencyKey: nil, pinnedKey: pinnedKey)
+        expectedIdempotencyKey: nil, pinnedKey: pinnedKey, protocolVersion: protocolVersion)
     guard let evidence = object["simulation_evidence"]?.objectValue else { throw programVerification() }
     try requireFields(evidence, ["boundary_id", "activity_id", "previous_state_root", "hypothetical_state_root",
         "observed_sequence", "observed_at", "committed", "public_key", "signature"])
@@ -606,9 +619,9 @@ private func unwrapTerminal(_ encoded: Data) throws -> TerminalAttachments {
 
 private func verifyTerminalAttachments(_ attachments: TerminalAttachments, candidate: Bool, successful: Bool,
                                        protocolVersion: UInt16, receipt: ProgramReceiptOutcome) throws {
-    guard protocolVersion == 1 || protocolVersion == 2 else { throw programVerification() }
+    guard protocolVersion == 1 || protocolVersion == 2 || protocolVersion == 3 else { throw programVerification() }
     let zero = UInt128Value(high: 0, low: 0)
-    let occupancyRequired = protocolVersion == 2 && successful
+    let occupancyRequired = (protocolVersion == 2 || protocolVersion == 3) && successful
     guard occupancyRequired == (attachments.occupancy != nil) else { throw programVerification() }
     if let occupancy = attachments.occupancy {
         if occupancy.isEmpty {
@@ -1091,11 +1104,11 @@ private func requireNonzero(_ value: Data) throws {
     guard value.contains(where: { $0 != 0 }) else { throw programVerification() }
 }
 
-private func decodeSignedCall(_ call: ProgramCall) throws -> ActivityBinding {
+func decodeSignedCall(_ call: ProgramCall) throws -> ActivityBinding {
     do {
         var cursor = BinaryCursor(call.signedActivity)
         let envelopeVersion = try cursor.u16()
-        guard envelopeVersion == 1 || envelopeVersion == 2, try cursor.u16() == 0x1001, try cursor.u8() == 12 else { throw programInvalid() }
+        guard envelopeVersion == 1 || envelopeVersion == 2 || envelopeVersion == 3, try cursor.u16() == 0x1001, try cursor.u8() == 12 else { throw programInvalid() }
         try cursor.tag(1); let version = try cursor.u16(); guard version == envelopeVersion else { throw programInvalid() }
         try cursor.tag(2); _ = try cursor.u32(); try cursor.tag(3)
         guard try cursor.u32() == ((UInt32(ProgramsClient.receiptModuleID) << 16) | UInt32(ProgramsClient.callOperation)) else {
@@ -1106,7 +1119,9 @@ private func decodeSignedCall(_ call: ProgramCall) throws -> ActivityBinding {
         try cursor.tag(6); _ = try cursor.u64(); try cursor.tag(7)
         let notBefore = try cursor.u64(); let notAfter = try cursor.u64(); guard notAfter >= notBefore else { throw programInvalid() }
         try cursor.tag(8); let idempotency = try cursor.bounded(maximum: 32, empty: false); guard idempotency.count == 32 else { throw programInvalid() }
-        try cursor.tag(9); _ = try cursor.take(16); try cursor.tag(10)
+        try cursor.tag(9); let envelopeFee = UInt128Value(high: try cursor.u64(), low: try cursor.u64());
+        if call.nativeCall != nil { guard version == 3, envelopeFee == (try decimalUInt128(call.budget.feeLimit.decimal)) else { throw programInvalid() } }
+        try cursor.tag(10)
         let payloadHash = try cursor.bounded(maximum: 32, empty: false); guard payloadHash.count == 32 else { throw programInvalid() }
         try cursor.tag(11); let payload = try cursor.bounded(maximum: 524_288, empty: true)
         try cursor.tag(12); _ = try cursor.bounded(maximum: 128, empty: true); try cursor.finish()
@@ -1118,6 +1133,11 @@ private func decodeSignedCall(_ call: ProgramCall) throws -> ActivityBinding {
 }
 
 private func canonicalCallPayload(_ call: ProgramCall) throws -> Data {
+    if let native = call.nativeCall {
+        guard native.programID == call.programID, native.calldata == call.calldata, native.resources[0] == call.budget.fuel, call.capabilities.isEmpty else { throw programInvalid() }
+        return try native.encode()
+    }
+
     var value = Data("LayerX/programs/call/v1\0".utf8); value.append(call.programID)
     value.append(bigEndian(call.budget.fuel)); value.append(bigEndian128(try decimalUInt128(call.budget.feeLimit.decimal)))
     value.append(bigEndian(UInt16(call.capabilities.count)))
@@ -1293,7 +1313,12 @@ private struct TerminalCursor {
 }
 
 private func encode(_ call: ProgramCall) -> JSONValue {
-    .object(["program_id": .string(call.programID.hex), "calldata": .string(call.calldata.hex),
+    if let n = call.nativeCall {
+        return .object(["payload_encoding": .string("native-v1"), "program_id": .string(call.programID.hex), "calldata": .string(call.calldata.hex),
+            "budget": .object(["fuel": .string(String(call.budget.fuel)), "fee_limit": .string(call.budget.feeLimit.decimal)]), "signed_activity": .string(call.signedActivity.hex),
+            "native_call": .object(["guest_abi": .integer(Int64(n.guestABI)), "entrypoint": .string(n.entrypoint), "capabilities_hex": .string(n.capabilities.hex), "access_declaration_hex": .string(n.accessDeclaration.hex), "response_capacity": .integer(Int64(n.responseCapacity)), "resources": .array(n.resources.map { .string(String($0)) })])])
+    }
+    return .object(["program_id": .string(call.programID.hex), "calldata": .string(call.calldata.hex),
         "budget": .object(["fuel": .string(String(call.budget.fuel)), "fee_limit": .string(call.budget.feeLimit.decimal)]),
         "capabilities": .array(call.capabilities.map { .string($0.rawValue) }),
         "signed_activity": .string(call.signedActivity.hex)])

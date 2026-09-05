@@ -33,6 +33,8 @@ pub enum NativeWireError {
     Deposit(DepositFailure),
 }
 
+/// # Errors
+/// Refuses invalid wire material and values exceeding the declared bounds.
 pub fn encode_deposit_proof(
     value: &DepositProof,
     maximum_bytes: usize,
@@ -53,6 +55,8 @@ pub fn encode_deposit_proof(
     bounded(out, maximum_bytes.min(MAX_DEPOSIT_PROOF_BYTES))
 }
 
+/// # Errors
+/// Refuses invalid wire material and values exceeding the declared bounds.
 pub fn decode_deposit_proof(
     bytes: &[u8],
     maximum_bytes: usize,
@@ -83,6 +87,8 @@ fn map_deposit_error(error: DepositNativeError) -> NativeWireError {
     }
 }
 
+/// # Errors
+/// Refuses invalid wire material and values exceeding the declared bounds.
 pub fn encode_deposit_failure(
     value: &DepositFailure,
     maximum_bytes: usize,
@@ -99,6 +105,8 @@ pub fn encode_deposit_failure(
     bounded(out, maximum_bytes.min(MAX_DEPOSIT_FAILURE_BYTES))
 }
 
+/// # Errors
+/// Refuses invalid wire material and values exceeding the declared bounds.
 pub fn decode_deposit_failure(
     bytes: &[u8],
     maximum_bytes: usize,
@@ -112,6 +120,8 @@ pub fn decode_deposit_failure(
     DepositFailure::decode_failure_native(&bytes[2..]).map_err(map_deposit_error)
 }
 
+/// # Errors
+/// Refuses invalid wire material and values exceeding the declared bounds.
 pub fn encode_finality_report(
     value: &crate::FinalityReport,
     maximum_bytes: usize,
@@ -119,6 +129,8 @@ pub fn encode_finality_report(
     crate::finality::encode_wire(value, maximum_bytes, VERSION, FINALITY_TAG)
 }
 
+/// # Errors
+/// Refuses invalid wire material and values exceeding the declared bounds.
 pub fn decode_finality_report(
     bytes: &[u8],
     maximum_bytes: usize,
@@ -126,6 +138,8 @@ pub fn decode_finality_report(
     crate::finality::decode_wire(bytes, maximum_bytes, VERSION, FINALITY_TAG)
 }
 
+/// # Errors
+/// Refuses invalid wire material and values exceeding the declared bounds.
 pub fn encode_debit_expectation(
     value: &DebitExpectation,
     maximum_bytes: usize,
@@ -143,6 +157,8 @@ pub fn encode_debit_expectation(
     bounded(out, maximum_bytes)
 }
 
+/// # Errors
+/// Refuses invalid wire material and values exceeding the declared bounds.
 pub fn decode_debit_expectation(
     bytes: &[u8],
     maximum_bytes: usize,
@@ -154,21 +170,24 @@ pub fn decode_debit_expectation(
         return Err(NativeWireError::Encoding);
     }
     let mut r = Reader::new(&bytes[2..]);
-    let value = DebitExpectation::validated(
-        r.array()?,
-        r.u32()?,
-        r.array()?,
-        r.array()?,
-        r.array()?,
-        r.array()?,
-        r.u128()?,
-        EvmAddress::new(r.array()?),
-    )
+    let value = DebitExpectation {
+        activity_id: r.array()?,
+        network_id: r.u32()?,
+        withdrawal_id: r.array()?,
+        account: r.array()?,
+        withdrawals_account: r.array()?,
+        asset_id: r.array()?,
+        amount: r.u128()?,
+        recipient: EvmAddress::new(r.array()?),
+    }
+    .validated()
     .map_err(NativeWireError::Debit)?;
     r.finish()?;
     Ok(value)
 }
 
+/// # Errors
+/// Refuses invalid wire material and values exceeding the declared bounds.
 pub fn encode_checkpoint_proof(
     value: &CheckpointProof,
     maximum_bytes: usize,
@@ -218,17 +237,27 @@ pub fn encode_checkpoint_proof_for_protocol(
     out.extend_from_slice(&value.batch_number.to_be_bytes());
     out.extend_from_slice(&value.data_availability_root);
     out.extend_from_slice(&value.leaf_index.to_be_bytes());
-    out.extend_from_slice(&(value.siblings.len() as u16).to_be_bytes());
+    out.extend_from_slice(
+        &u16::try_from(value.siblings.len())
+            .map_err(|_| NativeWireError::Limit)?
+            .to_be_bytes(),
+    );
     for sibling in &value.siblings {
         out.extend_from_slice(sibling);
     }
-    out.extend_from_slice(&(value.attestations.len() as u32).to_be_bytes());
+    out.extend_from_slice(
+        &u32::try_from(value.attestations.len())
+            .map_err(|_| NativeWireError::Limit)?
+            .to_be_bytes(),
+    );
     for value in &value.attestations {
         encode_attestation(&mut out, value);
     }
     bounded(out, maximum_bytes)
 }
 
+/// # Errors
+/// Refuses invalid wire material and values exceeding the declared bounds.
 pub fn decode_checkpoint_proof(
     bytes: &[u8],
     maximum_bytes: usize,
@@ -268,7 +297,7 @@ pub fn decode_checkpoint_proof_for_protocol(
     }
     let mut siblings = Vec::with_capacity(sibling_count);
     for _ in 0..sibling_count {
-        siblings.push(r.array()?)
+        siblings.push(r.array()?);
     }
     let attestation_count = usize::try_from(r.u32()?).map_err(|_| NativeWireError::Limit)?;
     if attestation_count > MAX_CHECKPOINT_ATTESTATIONS {
@@ -282,7 +311,7 @@ pub fn decode_checkpoint_proof_for_protocol(
     }
     let mut attestations = Vec::with_capacity(attestation_count);
     for _ in 0..attestation_count {
-        attestations.push(decode_attestation(&mut r)?)
+        attestations.push(decode_attestation(&mut r)?);
     }
     r.finish()?;
     CheckpointProof::validated_for_protocol(
@@ -317,7 +346,7 @@ fn encode_attestation(out: &mut Vec<u8>, v: &WithdrawalAttestation) {
     out.extend_from_slice(&v.signer.bytes());
     out.extend_from_slice(&v.signature_r);
     out.extend_from_slice(&v.signature_s);
-    out.push(v.signature_v)
+    out.push(v.signature_v);
 }
 fn decode_attestation(r: &mut Reader<'_>) -> Result<WithdrawalAttestation, NativeWireError> {
     Ok(WithdrawalAttestation {

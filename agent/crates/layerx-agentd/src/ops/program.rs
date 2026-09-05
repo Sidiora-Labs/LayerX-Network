@@ -11,6 +11,7 @@ use layerx_programs_runtime::{BudgetMeterRefusal, ProgramFailure};
 use layerx_proof::program::{verify_program_execution, ProgramExecutionExpectation};
 use layerx_types::intent::{CapabilityRequest, ProgramCall, ProgramCallOutcome};
 use layerx_types::payload::{ModuleId, ModuleRegistry};
+use layerx_types::program_call::NativeProgramCall;
 use layerx_wire::activity::decode_signed;
 use layerx_wire::hash::activity_id;
 use sha2::{Digest as _, Sha256};
@@ -227,11 +228,29 @@ impl ProgramSimulationTransport for EmulatorProgramSimulationTransport {
         call: &ProgramCall,
         signed_activity: &[u8],
     ) -> Result<RawProgramSimulation, ProgramOperationError> {
+        self.simulate_document(program_call_request(call, signed_activity))
+    }
+}
+
+pub trait NativeProgramSimulationTransport {
+    fn simulate_native_exact(
+        &mut self,
+        call: NativeProgramCall<'_>,
+        fee_limit: u128,
+        signed_activity: &[u8],
+    ) -> Result<RawProgramSimulation, ProgramOperationError>;
+}
+
+impl EmulatorProgramSimulationTransport {
+    fn simulate_document(
+        &mut self,
+        request: serde_json::Value,
+    ) -> Result<RawProgramSimulation, ProgramOperationError> {
         let url = format!("{}/v1/programs/simulate", self.endpoint);
         let mut response = self
             .agent
             .post(&url)
-            .send_json(program_call_request(call, signed_activity))
+            .send_json(request)
             .map_err(|_| ProgramOperationError::InvalidRequest)?;
         if !response.status().is_success() {
             return Err(ProgramOperationError::InvalidRequest);
@@ -290,6 +309,25 @@ impl ProgramSimulationTransport for EmulatorProgramSimulationTransport {
             },
             evidence_signature: decode_fixed_json(evidence, "signature")?,
         })
+    }
+}
+
+impl NativeProgramSimulationTransport for EmulatorProgramSimulationTransport {
+    fn simulate_native_exact(
+        &mut self,
+        call: NativeProgramCall<'_>,
+        fee_limit: u128,
+        signed_activity: &[u8],
+    ) -> Result<RawProgramSimulation, ProgramOperationError> {
+        call.encode()
+            .map_err(|_| ProgramOperationError::InvalidRequest)?;
+        self.simulate_document(serde_json::json!({
+            "payload_encoding":"native-v1", "program_id":encode_hex(&call.program_id.bytes()), "calldata":encode_hex(call.calldata),
+            "budget":{"fuel":call.resources.0[0].to_string(),"fee_limit":fee_limit.to_string()}, "signed_activity":encode_hex(signed_activity),
+            "native_call":{"guest_abi":call.guest_abi,"entrypoint":std::str::from_utf8(call.entrypoint).map_err(|_| ProgramOperationError::InvalidRequest)?,
+                "capabilities_hex":encode_hex(call.capabilities),"access_declaration_hex":encode_hex(call.access_declaration),
+                "response_capacity":call.response_capacity,"resources":call.resources.0.map(|value|value.to_string())}
+        }))
     }
 }
 
@@ -417,6 +455,16 @@ impl<T: ProgramSimulationTransport> ProgramSimulationBoundary
         signed_activity: &[u8],
     ) -> Result<ProgramExecution, ProgramOperationError> {
         let raw = self.transport.simulate_exact(call, signed_activity)?;
+        self.verify_simulation(raw, signed_activity)
+    }
+}
+
+impl<T> ReceiptVerifiedProgramSimulator<T> {
+    fn verify_simulation(
+        &self,
+        raw: RawProgramSimulation,
+        signed_activity: &[u8],
+    ) -> Result<ProgramExecution, ProgramOperationError> {
         if raw.receipt.is_empty() {
             return Err(ProgramOperationError::UnverifiedReceipt);
         }
@@ -441,6 +489,9 @@ impl<T: ProgramSimulationTransport> ProgramSimulationBoundary
             .receipt()
             .protocol()
             .ok_or(ProgramOperationError::UnverifiedReceipt)?;
+        if protocol.protocol_version() != activity.protocol_version() {
+            return Err(ProgramOperationError::UnverifiedReceipt);
+        }
         if !raw.evidence.matches_context(
             self.boundary_id,
             expected,
@@ -649,6 +700,68 @@ impl ProgramOperations {
             )
             .map_err(ProgramOperationError::Submit)
     }
+    pub fn simulate_native(
+        &mut self,
+        boundary: &mut ReceiptVerifiedProgramSimulator<
+            impl ProgramSimulationTransport + NativeProgramSimulationTransport,
+        >,
+        call: NativeProgramCall<'_>,
+        fee_limit: u128,
+        signed_activity: &[u8],
+        now: u64,
+        head: &VerifiedProgramHead,
+    ) -> Result<ProgramExecution, ProgramOperationError> {
+        let program = ProgramId::new(call.program_id.bytes())
+            .map_err(|_| ProgramOperationError::InvalidRequest)?;
+        let discovery = self.discover(program, now, head)?;
+        if boundary.trusted_previous_state_root != discovery.state_root
+            || boundary.expected_abi_version != discovery.abi_version
+            || boundary.expected_program != discovery.program
+            || boundary.expected_version != discovery.version
+            || boundary.expected_code_hash != discovery.code_hash
+            || boundary.observed_sequence != discovery.observed_sequence
+            || boundary.observed_at != discovery.observed_at
+        {
+            return Err(ProgramOperationError::UnverifiedReceipt);
+        }
+        validate_native_call_activity(boundary.registry(), call, fee_limit, signed_activity)?;
+        let raw = boundary
+            .transport
+            .simulate_native_exact(call, fee_limit, signed_activity)?;
+        let execution = boundary.verify_simulation(raw, signed_activity)?;
+        if execution.committed() || execution.receipt().is_empty() {
+            return Err(ProgramOperationError::UnverifiedReceipt);
+        }
+        Ok(execution)
+    }
+
+    pub fn submit_native(
+        &mut self,
+        client: &mut layerx_client::Client,
+        registry: &ModuleRegistry,
+        call: NativeProgramCall<'_>,
+        fee_limit: u128,
+        signer_public_key: [u8; 32],
+        correlation_id: u64,
+        attempt: u32,
+        signed_activity: &[u8],
+        now: u64,
+        head: &VerifiedProgramHead,
+    ) -> Result<Submission, ProgramOperationError> {
+        let program = ProgramId::new(call.program_id.bytes())
+            .map_err(|_| ProgramOperationError::InvalidRequest)?;
+        self.discover(program, now, head)?;
+        validate_native_call_activity(registry, call, fee_limit, signed_activity)?;
+        client
+            .submit_signed(
+                registry,
+                signer_public_key,
+                correlation_id,
+                attempt,
+                signed_activity,
+            )
+            .map_err(ProgramOperationError::Submit)
+    }
 }
 
 impl<T> ReceiptVerifiedProgramSimulator<T> {
@@ -672,4 +785,63 @@ fn validate_call_activity(
         return Err(ProgramOperationError::InvalidRequest);
     }
     Ok(())
+}
+
+fn validate_native_call_activity(
+    registry: &ModuleRegistry,
+    call: NativeProgramCall<'_>,
+    fee_limit: u128,
+    signed_activity: &[u8],
+) -> Result<(), ProgramOperationError> {
+    let activity = decode_signed(signed_activity, registry)
+        .map_err(|_| ProgramOperationError::InvalidRequest)?;
+    let payload = call
+        .encode()
+        .map_err(|_| ProgramOperationError::InvalidRequest)?;
+    if activity.protocol_version() != 3
+        || activity.activity_type().module() != ModuleId::Programs
+        || activity.activity_type().ordinal() != 3
+        || activity.fee_limit() != fee_limit
+        || activity.payload() != payload
+    {
+        return Err(ProgramOperationError::InvalidRequest);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod native_call_tests {
+    use super::*;
+    use layerx_types::payload::{ActivityType, ModuleRegistration};
+
+    #[test]
+    fn native_binding_preserves_fee_and_payload() -> Result<(), Box<dyn std::error::Error>> {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../../platform/sdk/conformance/fixtures/native-program-call-v3.json"
+        ))?;
+        let signed = decode_hex_json(&fixture, "signed_activity_hex")
+            .map_err(|_| "signed fixture missing")?;
+        let payload =
+            decode_hex_json(&fixture, "payload_hex").map_err(|_| "payload fixture missing")?;
+        let native = NativeProgramCall::decode(&payload).map_err(|_| "invalid fixture")?;
+        let registry = ModuleRegistry::new(&[ModuleRegistration::new(
+            ModuleId::Programs,
+            &[ActivityType::new(ModuleId::Programs, 3).map_err(|_| "activity type invalid")?],
+        )
+        .map_err(|_| "registration invalid")?])
+        .map_err(|_| "registry invalid")?;
+        assert!(validate_native_call_activity(&registry, native, 1000, &signed).is_ok());
+        assert!(validate_native_call_activity(&registry, native, 999, &signed).is_err());
+        assert!(validate_native_call_activity(
+            &registry,
+            NativeProgramCall {
+                response_capacity: 17,
+                ..native
+            },
+            1000,
+            &signed
+        )
+        .is_err());
+        Ok(())
+    }
 }

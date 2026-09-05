@@ -36,3 +36,9 @@ jq -er --arg id "$activity_id" '.ok == true and .result.activity_id == $id and (
 test "$(curl --silent --output /dev/null --write-out '%{http_code}' --cacert "$LAYERX_GATEWAY_CA_FILE" "$LAYERX_GATEWAY_URL/__emulator/reset")" = 404
 test "$(curl --silent --output /dev/null --write-out '%{http_code}' --cacert "$LAYERX_GATEWAY_CA_FILE" -H "Authorization: Bearer ${LAYERX_GATEWAY_KEY_SECRET}" "$LAYERX_GATEWAY_URL/v1/state")" = 401
 test "$(curl --silent --output /dev/null --write-out '%{http_code}' --cacert "$LAYERX_GATEWAY_CA_FILE" -H "Authorization: $authorization" -H "Idempotency-Key: $idempotency" -H 'Content-Type: application/octet-stream' --data-binary "@$LAYERX_GATEWAY_CONFLICT_ACTIVITY_FILE" "$LAYERX_GATEWAY_URL/v1/activities")" = 409
+
+principal_status=$(curl --silent --output "$request_dir/principal.json" --write-out '%{http_code}' --cacert "$LAYERX_GATEWAY_CA_FILE" -H "Authorization: $authorization" "$LAYERX_GATEWAY_URL/internal/v1/principal")
+test "$principal_status" = 200
+jq -er '.ok == true and (.result.principal_digest | test("^[0-9a-f]{64}$"))' "$request_dir/principal.json" >/dev/null
+test "$(curl --silent --output /dev/null --write-out '%{http_code}' --cacert "$LAYERX_GATEWAY_CA_FILE" "$LAYERX_GATEWAY_URL/internal/v1/principal")" = 401
+test "$(curl --silent --output /dev/null --write-out '%{http_code}' --cacert "$LAYERX_GATEWAY_CA_FILE" -H "Authorization: $authorization" -H 'X-LayerX-Principal: foreign-principal' "$LAYERX_GATEWAY_URL/internal/v1/principal")" = 400

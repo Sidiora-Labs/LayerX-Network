@@ -689,9 +689,16 @@ impl Keystore {
         let record = self.read_record(principal, key)?;
         let binding = self.binding(principal, key, record.class)?;
         self.require_record_binding(&binding, &record)?;
-        let description = self
-            .provider
-            .rotate_key(&binding, &record.provider_reference)?;
+        let description = if self.provider.deployment() == ProviderDeployment::Production {
+            self.provider.rotate_key_if_current(
+                &binding,
+                &record.provider_reference,
+                record.public_key,
+            )?
+        } else {
+            self.provider
+                .rotate_key(&binding, &record.provider_reference)?
+        };
         require_description(&binding, record.class, None, &description)?;
         if self.provider.deployment() == ProviderDeployment::Production
             && description.reference() != &record.provider_reference

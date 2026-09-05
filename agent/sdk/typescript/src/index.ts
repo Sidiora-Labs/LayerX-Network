@@ -8,3 +8,4 @@ export * from "./production.js";
 export * from "./programs.js";
 export * from "./stream.js";
 export * from "./verifier.js";
+export * from "./native-program-call.js";

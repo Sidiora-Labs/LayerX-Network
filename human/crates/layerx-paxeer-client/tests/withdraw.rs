@@ -465,20 +465,6 @@ fn final_report(
 }
 
 #[allow(clippy::too_many_lines)]
-fn deploy_suite(
-    anvil: &Anvil,
-) -> (
-    EvmAddress,
-    EvmAddress,
-    EvmAddress,
-    EvmAddress,
-    EvmAddress,
-    EvmAddress,
-) {
-    deploy_suite_for_protocol(anvil, PROTOCOL_VERSION)
-}
-
-#[allow(clippy::too_many_lines)]
 fn deploy_suite_for_protocol(
     anvil: &Anvil,
     protocol_version: u16,
@@ -711,6 +697,13 @@ fn debit_expectation(recipient: EvmAddress) -> DebitExpectation {
 }
 
 fn committed_debit(expectation: DebitExpectation) -> CommittedWithdrawalDebit {
+    committed_debit_for_protocol(expectation, PROTOCOL_VERSION)
+}
+
+fn committed_debit_for_protocol(
+    expectation: DebitExpectation,
+    protocol_version: u16,
+) -> CommittedWithdrawalDebit {
     assert_eq!(expectation.activity_id, [0x31; 32]);
     assert_eq!(expectation.asset_id, ASSET);
     assert_eq!(expectation.amount, AMOUNT);
@@ -724,12 +717,12 @@ fn committed_debit(expectation: DebitExpectation) -> CommittedWithdrawalDebit {
         [0x42; 32],
         signer.verifying_key().to_bytes(),
     );
-    CommittedWithdrawalDebit::verify(&withdraw_receipt(), &batch, expectation)
-        .unwrap_or_else(|error| panic!("committed debit: {error:?}"))
-}
-
-fn withdraw_receipt() -> Vec<u8> {
-    withdraw_receipt_for_protocol(PROTOCOL_VERSION)
+    CommittedWithdrawalDebit::verify(
+        &withdraw_receipt_for_protocol(protocol_version),
+        &batch,
+        expectation,
+    )
+    .unwrap_or_else(|error| panic!("committed debit: {error:?}"))
 }
 
 fn withdraw_receipt_for_protocol(protocol_version: u16) -> Vec<u8> {
@@ -833,7 +826,8 @@ fn checkpoint_header(state_root: [u8; 32], timestamp: u64) -> Header {
 }
 
 fn encoded_header(header: &Header) -> Vec<u8> {
-    let mut bytes = vec![0x00, 0x02, 0x17, 0x01, 0x0f];
+    let mut bytes = header.protocol_version.to_be_bytes().to_vec();
+    bytes.extend_from_slice(&[0x17, 0x01, 0x0f]);
     bytes.push(1);
     bytes.extend_from_slice(&header.protocol_version.to_be_bytes());
     bytes.push(2);
@@ -1012,18 +1006,50 @@ fn register_checkpoint_calldata(header: &Header, attestation: &WithdrawalAttesta
     call_data(REGISTER_CHECKPOINT, &words)
 }
 
+fn verify_checkpoint_codec(proof: &CheckpointProof, protocol_version: u16) {
+    let encoded_proof = layerx_paxeer_client::wire::encode_checkpoint_proof_for_protocol(
+        proof,
+        65_536,
+        protocol_version,
+    )
+    .unwrap_or_else(|error| panic!("encode checkpoint proof: {error:?}"));
+    assert_eq!(
+        layerx_paxeer_client::wire::decode_checkpoint_proof_for_protocol(
+            &encoded_proof,
+            65_536,
+            protocol_version,
+        ),
+        Ok(proof.clone())
+    );
+    let other_version = if protocol_version == 3 { 2 } else { 3 };
+    assert!(
+        layerx_paxeer_client::wire::decode_checkpoint_proof_for_protocol(
+            &encoded_proof,
+            65_536,
+            other_version,
+        )
+        .is_err()
+    );
+}
+
 fn fixture() -> Fixture {
+    fixture_for_protocol(PROTOCOL_VERSION)
+}
+
+fn fixture_for_protocol(protocol_version: u16) -> Fixture {
     let anvil = Anvil::launch();
-    let (token, vault, bond, checkpoint_registry, challenge_manager, claims) = deploy_suite(&anvil);
+    let (token, vault, bond, checkpoint_registry, challenge_manager, claims) =
+        deploy_suite_for_protocol(&anvil, protocol_version);
     let recipient = parse_address(RECIPIENT);
     let expectation = debit_expectation(recipient);
-    let debit = committed_debit(expectation);
+    let debit = committed_debit_for_protocol(expectation, protocol_version);
     let leaf = withdrawal_leaf(expectation);
     let timestamp_ms = anvil
         .latest_timestamp()
         .checked_mul(1_000)
         .unwrap_or_else(|| panic!("latest block timestamp exceeds canonical milliseconds"));
-    let header = checkpoint_header(leaf, timestamp_ms);
+    let mut header = checkpoint_header(leaf, timestamp_ms);
+    header.protocol_version = protocol_version;
     let checkpoint_hash = checkpoint_hash(&header);
     let attestation = signed_attestation(&header, checkpoint_hash, bond);
     anvil.send_checked(
@@ -1032,14 +1058,17 @@ fn fixture() -> Fixture {
         &register_checkpoint_calldata(&header, &attestation),
         0,
     );
-    let boundary = WithdrawalBoundary::new(WithdrawalConfig {
-        endpoints: vec![anvil.endpoint.clone()],
-        minimum_endpoint_agreement: 1,
-        claims_contract: claims,
-        required_confirmations: 2,
-        poll_cadence: Duration::from_millis(20),
-        delayed_after_polls: 100,
-    })
+    let boundary = WithdrawalBoundary::new_for_protocol(
+        WithdrawalConfig {
+            endpoints: vec![anvil.endpoint.clone()],
+            minimum_endpoint_agreement: 1,
+            claims_contract: claims,
+            required_confirmations: 2,
+            poll_cadence: Duration::from_millis(20),
+            delayed_after_polls: 100,
+        },
+        protocol_version,
+    )
     .unwrap_or_else(|error| panic!("withdrawal boundary: {error:?}"));
     let proof = CheckpointProof {
         checkpoint_hash,
@@ -1051,6 +1080,7 @@ fn fixture() -> Fixture {
         siblings: Vec::new(),
         attestations: vec![attestation],
     };
+    verify_checkpoint_codec(&proof, protocol_version);
     let mut wrong = proof.clone();
     wrong.state_root[0] ^= 0xff;
     assert!(matches!(
@@ -1059,6 +1089,19 @@ fn fixture() -> Fixture {
             layerx_paxeer_client::ClaimRefusal::RootMismatch { .. }
         ))
     ));
+    let mut wrong_version = proof.clone();
+    wrong_version.attestations[0].protocol_version = if protocol_version == 3 { 2 } else { 3 };
+    assert!(boundary
+        .construct_claim(debit.clone(), wrong_version)
+        .is_err());
+    if protocol_version == 3 {
+        assert!(matches!(
+            boundary.construct_claim(committed_debit(expectation), proof.clone()),
+            Err(WithdrawalError::Refused(
+                layerx_paxeer_client::ClaimRefusal::DebitProtocolMismatch { .. }
+            ))
+        ));
+    }
     let claim = boundary
         .construct_claim(debit, proof)
         .unwrap_or_else(|error| panic!("construct claim: {error:?}"));
@@ -1084,7 +1127,15 @@ fn fixture() -> Fixture {
 
 #[test]
 fn real_claim_waits_then_verifies_the_actual_vault_and_token_payout() {
-    let fixture = fixture();
+    verify_real_payout(&fixture());
+}
+
+#[test]
+fn protocol_three_real_claim_verifies_vault_payout_and_rejects_legacy_debit() {
+    verify_real_payout(&fixture_for_protocol(3));
+}
+
+fn verify_real_payout(fixture: &Fixture) {
     assert_eq!(
         fixture
             .anvil

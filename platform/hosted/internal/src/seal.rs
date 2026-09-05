@@ -1,21 +1,17 @@
-//! Authenticated sealing for private material at rest: SHA-256 counter-mode
-//! keystream under an encryption key and an HMAC-SHA-256 tag under a separate
-//! authentication key, both derived from the operator's seal secret.
+//! Authenticated AES-256-GCM sealing for private material at rest.
 
 use crate::secret::{hex, unhex};
+use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, AES_256_GCM};
 use sha2::{Digest, Sha256};
-use subtle::ConstantTimeEq;
 use zeroize::{Zeroize, Zeroizing};
 
-const NONCE_BYTES: usize = 16;
-const TAG_BYTES: usize = 32;
-const BLOCK_BYTES: usize = 32;
+const NONCE_BYTES: usize = 12;
+const TAG_BYTES: usize = 16;
 const MAX_PLAINTEXT_BYTES: usize = 4096;
 
 /// The derived seal keys.
 pub struct SealKey {
     encryption: Zeroizing<[u8; 32]>,
-    authentication: Zeroizing<[u8; 32]>,
 }
 
 impl SealKey {
@@ -24,7 +20,6 @@ impl SealKey {
     pub fn derive(label: &[u8], secret: &[u8]) -> Self {
         Self {
             encryption: Zeroizing::new(labelled_digest(label, b"encryption", secret)),
-            authentication: Zeroizing::new(labelled_digest(label, b"authentication", secret)),
         }
     }
 
@@ -40,12 +35,16 @@ impl SealKey {
         let mut nonce = [0_u8; NONCE_BYTES];
         getrandom::fill(&mut nonce).map_err(|_| "entropy is unavailable".to_owned())?;
         let mut ciphertext = plaintext.to_vec();
-        self.apply_keystream(&nonce, &mut ciphertext);
-        let tag = self.tag(&nonce, &ciphertext);
-        let mut sealed = Vec::with_capacity(NONCE_BYTES + ciphertext.len() + TAG_BYTES);
+        self.aead()?
+            .seal_in_place_append_tag(
+                Nonce::assume_unique_for_key(nonce),
+                Aad::empty(),
+                &mut ciphertext,
+            )
+            .map_err(|_| "sealing failed".to_owned())?;
+        let mut sealed = Vec::with_capacity(NONCE_BYTES + ciphertext.len());
         sealed.extend_from_slice(&nonce);
         sealed.extend_from_slice(&ciphertext);
-        sealed.extend_from_slice(&tag);
         Ok(hex(&sealed))
     }
 
@@ -62,33 +61,26 @@ impl SealKey {
         {
             return Err("sealed value has an invalid length".to_owned());
         }
-        let (nonce, rest) = bytes.split_at(NONCE_BYTES);
-        let (ciphertext, tag) = rest.split_at(rest.len() - TAG_BYTES);
-        let expected = self.tag(nonce, ciphertext);
-        if expected.ct_eq(tag).unwrap_u8() != 1 {
-            return Err("sealed value failed authentication".to_owned());
-        }
+        let (nonce, ciphertext) = bytes.split_at(NONCE_BYTES);
+        let nonce: [u8; NONCE_BYTES] = nonce.try_into().map_err(|_| "invalid nonce".to_owned())?;
         let mut plaintext = Zeroizing::new(ciphertext.to_vec());
-        self.apply_keystream(nonce, &mut plaintext);
+        let length = self
+            .aead()?
+            .open_in_place(
+                Nonce::assume_unique_for_key(nonce),
+                Aad::empty(),
+                &mut plaintext,
+            )
+            .map_err(|_| "sealed value failed authentication".to_owned())?
+            .len();
+        plaintext.truncate(length);
         Ok(plaintext)
     }
 
-    fn apply_keystream(&self, nonce: &[u8], buffer: &mut [u8]) {
-        for (index, block) in buffer.chunks_mut(BLOCK_BYTES).enumerate() {
-            let mut digest = Sha256::new();
-            digest.update(self.encryption.as_slice());
-            digest.update(nonce);
-            digest.update((index as u64).to_be_bytes());
-            let mut keystream: [u8; 32] = digest.finalize().into();
-            for (byte, key) in block.iter_mut().zip(keystream.iter()) {
-                *byte ^= key;
-            }
-            keystream.zeroize();
-        }
-    }
-
-    fn tag(&self, nonce: &[u8], ciphertext: &[u8]) -> [u8; TAG_BYTES] {
-        hmac_sha256(&self.authentication, &[nonce, ciphertext])
+    fn aead(&self) -> Result<LessSafeKey, String> {
+        UnboundKey::new(&AES_256_GCM, self.encryption.as_slice())
+            .map(LessSafeKey::new)
+            .map_err(|_| "invalid seal key".to_owned())
     }
 }
 
@@ -140,16 +132,12 @@ mod tests {
             .open(&sealed)
             .unwrap_or_else(|error| panic!("open: {error}"));
         assert_eq!(opened.as_slice(), b"ed25519 seed");
-        assert!(
-            SealKey::derive(b"layerx-kms", b"seal secret two")
-                .open(&sealed)
-                .is_err()
-        );
-        assert!(
-            SealKey::derive(b"other-label", b"seal secret one")
-                .open(&sealed)
-                .is_err()
-        );
+        assert!(SealKey::derive(b"layerx-kms", b"seal secret two")
+            .open(&sealed)
+            .is_err());
+        assert!(SealKey::derive(b"other-label", b"seal secret one")
+            .open(&sealed)
+            .is_err());
     }
 
     #[test]

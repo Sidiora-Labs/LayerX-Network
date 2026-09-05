@@ -17,7 +17,8 @@ static lxp_u128 observed_call_limit;
 
 typedef enum differential_workload {
     DIFFERENTIAL_LOW_CONFLICT,
-    DIFFERENTIAL_ALL_CONFLICTING
+    DIFFERENTIAL_ALL_CONFLICTING,
+    DIFFERENTIAL_PLANNING_REFUSAL
 } differential_workload;
 
 typedef struct differential_fixture {
@@ -90,7 +91,8 @@ static lxp_result persist_differential_checkpoint(
     if (status == LXP_OK)
         status = lxp_snapshot_manifest(
             snapshot.bytes, snapshot.length, sequence,
-            settled->receipt_state_root, &manifest);
+            settled->canonical_state_root, settled->receipt_state_root,
+            &manifest);
     if (status == LXP_OK)
         status = lxp_snapshot_store_write(
             checkpoint->directory, &manifest,
@@ -819,7 +821,15 @@ static int execute_workload(differential_fixture *fixture,
             (void)memcpy(run->event_storage[index], run->events[index].bytes,
                          run->events[index].length);
         run->events[index].bytes = run->event_storage[index];
-        if (run->events[index].length <= 4U ||
+        if (workload == DIFFERENTIAL_PLANNING_REFUSAL) {
+            if (run->receipts[index].result_code != LXP_ERR_UNKNOWN_FIELD ||
+                run->events[index].length != 4U ||
+                memcmp(run->events[index].bytes, "\0\0\0\0", 4U) != 0) {
+                cleanup_differential_directory(
+                    directory, &checkpoint, wal_record, prepared);
+                return 1;
+            }
+        } else if (run->events[index].length <= 4U ||
             (index != 0U &&
              run->events[index].length == run->events[index - 1U].length &&
              memcmp(run->events[index].bytes,
@@ -854,6 +864,20 @@ static int execute_workload(differential_fixture *fixture,
                directory, &checkpoint, wal_record, prepared) ? 0 : 1;
 }
 
+static lxp_result differential_fixture_destroy(differential_fixture *fixture)
+{
+    size_t index;
+    lxp_result status = lxp_state_store_destroy(&fixture->state);
+    if (status != LXP_OK) return status;
+    for (index = 0U; index < fixture->kernel.blob_count; ++index) {
+        free(fixture->kernel.blobs[index].bytes);
+        fixture->kernel.blobs[index].bytes = NULL;
+    }
+    fixture->kernel.blob_count = 0U;
+    fixture->kernel.blob_total_bytes = 0U;
+    return LXP_OK;
+}
+
 static int qualify_zero_prefix_fee_limit(void)
 {
     static differential_fixture serial_fixture;
@@ -879,8 +903,8 @@ static int qualify_zero_prefix_fee_limit(void)
         serial_status == LXP_OK || serial_status != parallel_status ||
         serial_prefix != 0U || parallel_prefix != 0U)
         return 1;
-    return lxp_state_store_destroy(&serial_fixture.state) == LXP_OK &&
-           lxp_state_store_destroy(&parallel_fixture.state) == LXP_OK ? 0 : 1;
+    return differential_fixture_destroy(&serial_fixture) == LXP_OK &&
+           differential_fixture_destroy(&parallel_fixture) == LXP_OK ? 0 : 1;
 }
 
 static int exact_runs_equal(const differential_run *serial,
@@ -976,8 +1000,8 @@ static int qualify_workload(differential_workload workload)
                   "all-conflicting",
                   (unsigned long long)serial.elapsed_ns,
                   (unsigned long long)parallel.elapsed_ns);
-    return lxp_state_store_destroy(&serial_fixture.state) == LXP_OK &&
-           lxp_state_store_destroy(&parallel_fixture.state) == LXP_OK ? 0 : 1;
+    return differential_fixture_destroy(&serial_fixture) == LXP_OK &&
+           differential_fixture_destroy(&parallel_fixture) == LXP_OK ? 0 : 1;
 }
 
 static int execute_scalar_prefix(differential_fixture *fixture,
@@ -1125,9 +1149,9 @@ static int qualify_retry_balance_case(lxp_u128 actor_balance,
         exact_runs_equal(&serial_run, &parallel_run) != 0 ||
         exact_runs_equal(&serial_run, &scalar_run) != 0)
         return 1;
-    return lxp_state_store_destroy(&serial_refusal.state) == LXP_OK &&
-           lxp_state_store_destroy(&parallel_refusal.state) == LXP_OK &&
-           lxp_state_store_destroy(&scalar_prefix.state) == LXP_OK ? 0 : 1;
+    return differential_fixture_destroy(&serial_refusal) == LXP_OK &&
+           differential_fixture_destroy(&parallel_refusal) == LXP_OK &&
+           differential_fixture_destroy(&scalar_prefix) == LXP_OK ? 0 : 1;
 }
 
 static int qualify_retry_contract(void)
@@ -1157,10 +1181,55 @@ static int qualify_retry_contract(void)
     return 0;
 }
 
+static int qualify_planning_refusal(void)
+{
+    static differential_fixture serial_fixture;
+    static differential_fixture parallel_fixture;
+    static differential_run serial_run;
+    static differential_run parallel_run;
+    if (differential_fixture_init(&serial_fixture) != 0 ||
+        differential_fixture_init(&parallel_fixture) != 0)
+        return 1;
+    serial_fixture.program_id[0] ^= 0x80U;
+    parallel_fixture.program_id[0] ^= 0x80U;
+    if (execute_workload(
+            &serial_fixture, DIFFERENTIAL_PLANNING_REFUSAL, 1U, 1U,
+            observed_call_limit, false, false, NULL, NULL, &serial_run) != 0 ||
+        execute_workload(
+            &parallel_fixture, DIFFERENTIAL_PLANNING_REFUSAL, 1U,
+            DIFFERENTIAL_WORKERS, observed_call_limit, false, false,
+            NULL, NULL, &parallel_run) != 0 ||
+        serial_run.receipts[0].result_code != LXP_ERR_UNKNOWN_FIELD ||
+        parallel_run.receipts[0].result_code != LXP_ERR_UNKNOWN_FIELD ||
+        serial_run.receipts[0].effects.count != 0U ||
+        parallel_run.receipts[0].effects.count != 0U ||
+        exact_runs_equal(&serial_run, &parallel_run) != 0)
+        return 1;
+    return differential_fixture_destroy(&serial_fixture) == LXP_OK &&
+           differential_fixture_destroy(&parallel_fixture) == LXP_OK ? 0 : 1;
+}
+
 int main(void)
 {
-    return qualify_workload(DIFFERENTIAL_LOW_CONFLICT) != 0 ||
-           qualify_workload(DIFFERENTIAL_ALL_CONFLICTING) != 0 ||
-           qualify_retry_contract() != 0 ||
-           qualify_zero_prefix_fee_limit() != 0 ? 1 : 0;
+    if (qualify_workload(DIFFERENTIAL_LOW_CONFLICT) != 0) {
+        (void)fputs("low-conflict differential failed\n", stderr);
+        return 1;
+    }
+    if (qualify_workload(DIFFERENTIAL_ALL_CONFLICTING) != 0) {
+        (void)fputs("all-conflicting differential failed\n", stderr);
+        return 1;
+    }
+    if (qualify_retry_contract() != 0) {
+        (void)fputs("retry differential failed\n", stderr);
+        return 1;
+    }
+    if (qualify_zero_prefix_fee_limit() != 0) {
+        (void)fputs("zero-prefix differential failed\n", stderr);
+        return 1;
+    }
+    if (qualify_planning_refusal() != 0) {
+        (void)fputs("planning-refusal differential failed\n", stderr);
+        return 1;
+    }
+    return 0;
 }

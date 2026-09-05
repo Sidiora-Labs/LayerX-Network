@@ -13,8 +13,9 @@ use layerx_platform_core::{build_send, hex_encode, treasury_did, SendRequest};
 use layerx_types::activity::{Authority, EnvelopeBuilder, Signature, TimestampBound};
 use layerx_types::amount::Amount;
 use layerx_types::ids::{Did, IdempotencyKey};
-use layerx_types::intent::{CallBudget, Calldata, ProgramCall, ProgramId, RequestedCapabilities};
+use layerx_types::intent::ProgramId;
 use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry, Payload};
+use layerx_types::program_call::{NativeProgramCall, Resources};
 use native_tls::{Certificate, Identity, TlsConnector};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -302,14 +303,24 @@ fn signed_program_call(seed: &[u8; 32], did: &str, sequence: u64, program_id: [u
         "programs registration",
     );
     let registry = must(ModuleRegistry::new(&[registration]), "programs registry");
-    let call = ProgramCall::new(
-        ProgramId::new(program_id),
-        must(Calldata::new(&[]), "calldata"),
-        must(CallBudget::new(1000, Amount::from_u128(0)), "call budget"),
-        must(RequestedCapabilities::new(&[]), "capabilities"),
-    );
+    let call = NativeProgramCall {
+        program_id: ProgramId::new(program_id),
+        guest_abi: 1,
+        entrypoint: b"layerx_call",
+        calldata: &[],
+        capabilities: &[0, 0],
+        access_declaration: b"LayerX/programs/access-declaration/v1\0\0",
+        response_capacity: 16,
+        resources: Resources([
+            1_000_000, 16_777_216, 1_048_576, 1_048_576, 64, 1_048_576, 4096,
+        ]),
+    };
     let payload = must(
-        Payload::new(&registry, activity_type, &call.canonical_payload()),
+        Payload::new(
+            &registry,
+            activity_type,
+            &must(call.encode(), "native call"),
+        ),
         "call payload",
     );
     let payload_hash = must(
@@ -402,6 +413,32 @@ fn assert_program_simulation(boundary: &Boundary, cluster: &Cluster) {
         serde_json::json!(hex_encode(&protocol.activity_id()))
     );
     let evidence = &result["simulation_evidence"];
+    assert_simulation_signature(evidence, protocol, sequencer_key, head_before);
+    let (head_after, _) = chain_head(&cluster.lni_socket).unwrap_or_else(|| panic!("LNI head"));
+    assert_eq!(
+        head_before, head_after,
+        "simulation must not commit a batch"
+    );
+    assert_eq!(
+        account_sequence(&cluster.lni_socket, &cluster.treasury_did),
+        sequence_before,
+        "simulation must not consume the account sequence"
+    );
+    let not_program = core.request(
+        "POST",
+        "/v1/programs/simulate",
+        &[("Content-Type", "text/plain")],
+        b"zz",
+    );
+    assert_refusal(&not_program, 400, "content_type_required");
+}
+
+fn assert_simulation_signature(
+    evidence: &serde_json::Value,
+    protocol: &layerx_wire::receipt::ProtocolReceipt,
+    sequencer_key: [u8; 32],
+    head_before: u64,
+) {
     let field = |name: &str| -> Vec<u8> {
         must(
             layerx_platform_core::hex_decode(
@@ -455,23 +492,6 @@ fn assert_program_simulation(boundary: &Boundary, cluster: &Cluster) {
         ),
         "simulation evidence signature",
     );
-    let (head_after, _) = chain_head(&cluster.lni_socket).unwrap_or_else(|| panic!("LNI head"));
-    assert_eq!(
-        head_before, head_after,
-        "simulation must not commit a batch"
-    );
-    assert_eq!(
-        account_sequence(&cluster.lni_socket, &cluster.treasury_did),
-        sequence_before,
-        "simulation must not consume the account sequence"
-    );
-    let not_program = core.request(
-        "POST",
-        "/v1/programs/simulate",
-        &[("Content-Type", "text/plain")],
-        b"zz",
-    );
-    assert_refusal(&not_program, 400, "content_type_required");
 }
 
 fn chain_head(socket: &Path) -> Option<(u64, [u8; 32])> {
@@ -1166,14 +1186,7 @@ fn assert_readiness_shape(answer: &HttpAnswer) {
     );
 }
 
-#[test]
-fn boundary_refuses_typed_and_journals_while_the_daemon_is_down() {
-    let cluster = start_cluster(false);
-    let certificates = certificates(&cluster.root);
-    let boundary = start_boundary(&cluster, &certificates);
-    let core = &boundary.core;
-    let admin = &boundary.admin;
-
+fn assert_unavailable_public_routes(core: &Http, admin: &Http) {
     assert_eq!(core.get("/livez").status, 200);
     assert_eq!(admin.get("/livez").status, 200);
     assert_refusal(&core.get("/readyz"), 503, "node_unavailable");
@@ -1238,6 +1251,17 @@ fn boundary_refuses_typed_and_journals_while_the_daemon_is_down() {
         400,
         "invalid_argument",
     );
+}
+
+#[test]
+fn boundary_refuses_typed_and_journals_while_the_daemon_is_down() {
+    let cluster = start_cluster(false);
+    let certificates = certificates(&cluster.root);
+    let boundary = start_boundary(&cluster, &certificates);
+    let core = &boundary.core;
+    let admin = &boundary.admin;
+
+    assert_unavailable_public_routes(core, admin);
     let signed = must(
         build_send(
             &cluster.treasury_seed,
@@ -1611,11 +1635,7 @@ fn cluster_artifacts() -> (PathBuf, PathBuf, PathBuf, PathBuf) {
     ));
     make_dir(&root, 0o755);
     let layerxd = root.join("layerxd");
-    must(fs::copy(&layerxd_source, &layerxd), "copy layerxd");
-    must(
-        fs::set_permissions(&layerxd, fs::Permissions::from_mode(0o755)),
-        "chmod layerxd",
-    );
+    must(fs::hard_link(&layerxd_source, &layerxd), "link layerxd");
     let migrations = root.join("0007_history_index.sql");
     must(
         fs::copy(
@@ -1847,8 +1867,8 @@ fn supervised_files(root: &Path, builder: &Path, keys: [&[u8; 32]; 2], tokens: [
         write(&root.join(name), &bytes, 0o755);
     }
     must(
-        fs::copy(builder, root.join("layerx-genesis-build")),
-        "copy genesis builder",
+        fs::hard_link(builder, root.join("layerx-genesis-build")),
+        "link genesis builder",
     );
     write(&root.join("bootstrap-sequencer.key"), keys[0], 0o600);
     write(&root.join("bootstrap-treasury.key"), keys[1], 0o600);
@@ -2061,22 +2081,50 @@ fn wait_for_supervisor(socket: &Path, supervisor: &mut Daemon) {
 }
 
 fn establish_receipt_head(boundary: &Boundary, cluster: &Cluster) {
-    let signed = must(
-        build_send(
-            &cluster.treasury_seed,
-            &SendRequest {
-                network_id: NETWORK_ID,
-                source_did: cluster.treasury_did.clone(),
-                destination_did: recipient().0,
-                asset: cluster.asset,
-                amount: 1,
-                account_sequence: 0,
-                idempotency_key: random32(),
-                not_before_ms: now_ms() - 1_000,
-                expires_at_ms: now_ms() + 60_000,
-                fee_limit: 1_000,
-            },
+    let mut request = SendRequest {
+        network_id: NETWORK_ID,
+        source_did: cluster.treasury_did.clone(),
+        destination_did: recipient().0,
+        asset: cluster.asset,
+        amount: 1,
+        account_sequence: 0,
+        idempotency_key: random32(),
+        not_before_ms: now_ms() - 1_000,
+        expires_at_ms: now_ms() + 60_000,
+        fee_limit: 1_000,
+    };
+    let unaffordable = must(
+        build_send(&cluster.treasury_seed, &request),
+        "unaffordable SEND",
+    );
+    let (before, _) = chain_head(&cluster.lni_socket).unwrap_or_else(|| panic!("LNI head"));
+    assert_refusal(
+        &boundary.core.request(
+            "POST",
+            "/v1/activities",
+            &[("Content-Type", "application/octet-stream")],
+            &unaffordable.canonical,
         ),
+        422,
+        "submission_refused",
+    );
+    let (after, _) = chain_head(&cluster.lni_socket).unwrap_or_else(|| panic!("LNI head"));
+    assert_eq!(
+        before, after,
+        "fee admission refusal must not advance the chain"
+    );
+    assert!(
+        boundary
+            .process
+            .diagnostics()
+            .contains("submission refused class 4 result -602"),
+        "the real LNI must report FeeUnpayable"
+    );
+    assert_eq!(boundary.core.get("/readyz").status, 200);
+    request.fee_limit = 0;
+    request.idempotency_key = random32();
+    let signed = must(
+        build_send(&cluster.treasury_seed, &request),
         "receipt head SEND",
     );
     let answer = boundary.core.request(

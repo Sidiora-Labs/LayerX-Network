@@ -3,17 +3,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::os::unix::fs::PermissionsExt;
-use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
 use std::pin::pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
-use std::thread;
-use std::time::Duration;
 
 use ed25519_dalek::{Signer as _, SigningKey};
-use layerx_agentd::boot::{handshake_gate, Gate, GateError};
+use layerx_agentd::boot::{Gate, GateError};
 use layerx_agentd::config::StartupConfig;
 use layerx_agentd::prepare::{
     prepare_activity, CorePreparationBoundary, CorePreparationState, CoreStateError,
@@ -22,10 +19,6 @@ use layerx_agentd::prepare::{
 use layerx_agentd::protocol_evidence::{EvidenceAuthority, RawReceiptEvidence, RawStateEvidence};
 use layerx_agentd::sign::{attach_external_signature, verify_before_submit, VerifiedSubmission};
 use layerx_agentd::store::TenantId;
-use layerx_client::lni::framing::{read_frame, write_frame};
-use layerx_client::lni::handshake::{encode_node_info, NodeInfo, NodeRole};
-use layerx_client::lni::schema::{decode_envelope, encode_envelope, Envelope, Version};
-use layerx_client::lni::transport::{ConnectionGate, Limits, Uds};
 use layerx_crypto::local::LocalSigner;
 use layerx_crypto::signer::{sign_disclosed, Signer};
 use layerx_programs::hex;
@@ -37,6 +30,8 @@ use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRe
 use layerx_types::verify::VerificationLevel;
 use layerx_wire::encode::Encoder;
 use layerx_wire::hash::{batch_header_digest, execution_batch_id, receipt_digest};
+
+mod real_authority;
 
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(1);
 
@@ -276,66 +271,7 @@ fn try_evidence_authority_with_sequencer(
         sequencer_authority_source: authority_path,
     };
     let mut gate = Gate::new(&config)?;
-    let handshake_key = SigningKey::from_bytes(&policy.handshake_signing_seed)
-        .verifying_key()
-        .to_bytes();
-    let socket_path = directory("evidence-handshake").with_extension("sock");
-    let listener = UnixListener::bind(&socket_path)
-        .unwrap_or_else(|error| panic!("bind evidence handshake: {error}"));
-    let node = NodeInfo {
-        interface_version: Version::V1_0,
-        protocol_version: policy.protocol_version,
-        network_id: policy.network_id,
-        role: NodeRole::Sequencer,
-        chain_head_sequence: 50,
-        latest_sealed_batch: policy.handshake_batch,
-        latest_finalised_checkpoint: [0x91; 32],
-        authorised_sequencer_key: handshake_key,
-        advertised_capabilities: vec!["submit".to_owned()],
-    };
-    let server = thread::spawn(move || {
-        let (mut stream, _) = listener
-            .accept()
-            .unwrap_or_else(|error| panic!("accept evidence handshake: {error}"));
-        let request = read_frame(&mut stream, 1_048_576)
-            .unwrap_or_else(|error| panic!("read evidence handshake: {error:?}"));
-        let request = decode_envelope(&request)
-            .unwrap_or_else(|error| panic!("decode evidence handshake: {error:?}"));
-        assert_eq!(request.message_tag, 1);
-        assert_eq!(request.correlation_id, 0);
-        assert!(request.canonical_payload.is_empty());
-        assert!(request.proof_material.is_empty());
-        let payload = encode_node_info(&node)
-            .unwrap_or_else(|error| panic!("encode evidence node information: {error:?}"));
-        let response = encode_envelope(Envelope {
-            version: node.interface_version,
-            message_tag: 2,
-            correlation_id: 0,
-            canonical_payload: &payload,
-            proof_material: &[],
-        })
-        .unwrap_or_else(|error| panic!("encode evidence handshake response: {error:?}"));
-        write_frame(&mut stream, &response, 1_048_576)
-            .unwrap_or_else(|error| panic!("write evidence handshake: {error:?}"));
-    });
-    let mut transport = Uds::connect(
-        &socket_path,
-        &ConnectionGate::new(1),
-        Limits {
-            maximum_frame_bytes: 1_048_576,
-            maximum_connections: 1,
-            maximum_streams: 1,
-            maximum_queued_bytes: 1_048_576,
-            deadline: Duration::from_secs(2),
-        },
-    )
-    .unwrap_or_else(|error| panic!("connect evidence handshake: {error:?}"));
-    let handshake = handshake_gate(&mut gate, &mut transport).map(|_| ());
-    server
-        .join()
-        .unwrap_or_else(|_| panic!("evidence handshake server panicked"));
-    let _ = std::fs::remove_file(socket_path);
-    handshake?;
+    real_authority::authorize(&mut gate, policy, sequencer_id)?;
     Ok(gate
         .evidence_authority()
         .unwrap_or_else(|error| panic!("write-ready evidence authority: {error:?}"))

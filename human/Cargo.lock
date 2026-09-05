@@ -834,6 +834,7 @@ dependencies = [
  "layerx-types",
  "layerx-wire",
  "rustls",
+ "sha2",
 ]
 
 [[package]]
@@ -870,6 +871,26 @@ dependencies = [
  "layerx-wire",
  "serde_json",
  "sha2",
+]
+
+[[package]]
+name = "layerx-human-kms"
+version = "0.1.0"
+dependencies = [
+ "getrandom 0.3.4",
+ "layerx-client",
+ "layerx-crypto",
+ "layerx-human-service",
+ "layerx-intents",
+ "layerx-types",
+ "layerx-wire",
+ "ring",
+ "rustix",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2",
+ "zeroize",
 ]
 
 [[package]]

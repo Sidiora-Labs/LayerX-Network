@@ -95,6 +95,133 @@ impl ProgramCallRequest {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NativeProgramCallRequest {
+    payload: Vec<u8>,
+    fee_limit: u128,
+    program_id: [u8; 32],
+    signed_activity: Vec<u8>,
+    activity_id: [u8; 32],
+    idempotency_key: [u8; 32],
+}
+
+impl NativeProgramCallRequest {
+    /// Binds the native payload and fee ceiling to one canonical protocol-3 activity.
+    ///
+    /// # Errors
+    /// Refuses malformed, oversized, wrong-scope or mismatched activity bytes.
+    pub fn new(
+        registry: &ModuleRegistry,
+        call: layerx_types::program_call::NativeProgramCall<'_>,
+        fee_limit: u128,
+        signed_activity: &[u8],
+    ) -> Result<Self, ProgramOperationError> {
+        if signed_activity.is_empty() || signed_activity.len() > MAX_SIGNED_ACTIVITY_BYTES {
+            return Err(ProgramOperationError::Bounds);
+        }
+        if call.resources.0[0] == 0 {
+            return Err(ProgramOperationError::Bounds);
+        }
+        let payload = call.encode().map_err(|_| ProgramOperationError::Decode)?;
+        let activity =
+            decode_signed(signed_activity, registry).map_err(|_| ProgramOperationError::Decode)?;
+        if activity.protocol_version() != 3
+            || activity.activity_type().module() != ModuleId::Programs
+            || activity.activity_type().ordinal() != 3
+            || activity.fee_limit() != fee_limit
+            || activity.payload() != payload
+        {
+            return Err(ProgramOperationError::IdentityMismatch);
+        }
+        Ok(Self {
+            payload,
+            fee_limit,
+            program_id: call.program_id.bytes(),
+            signed_activity: signed_activity.to_vec(),
+            activity_id: activity_id(&activity).map_err(|_| ProgramOperationError::Decode)?,
+            idempotency_key: activity.idempotency_key(),
+        })
+    }
+
+    #[must_use]
+    pub fn signed_activity(&self) -> &[u8] {
+        &self.signed_activity
+    }
+    #[must_use]
+    pub const fn bound_activity_id(&self) -> [u8; 32] {
+        self.activity_id
+    }
+    #[must_use]
+    pub const fn bound_idempotency_key(&self) -> [u8; 32] {
+        self.idempotency_key
+    }
+}
+
+trait BoundProgramRequest {
+    fn request_program(&self) -> [u8; 32];
+    fn bound_activity_id(&self) -> [u8; 32];
+    fn bound_idempotency_key(&self) -> [u8; 32];
+    fn signed_activity(&self) -> &[u8];
+}
+
+impl BoundProgramRequest for ProgramCallRequest {
+    fn request_program(&self) -> [u8; 32] {
+        self.call.callee().bytes()
+    }
+    fn bound_activity_id(&self) -> [u8; 32] {
+        self.activity_id
+    }
+    fn bound_idempotency_key(&self) -> [u8; 32] {
+        self.idempotency_key
+    }
+    fn signed_activity(&self) -> &[u8] {
+        &self.signed_activity
+    }
+}
+
+impl BoundProgramRequest for NativeProgramCallRequest {
+    fn request_program(&self) -> [u8; 32] {
+        self.program_id
+    }
+    fn bound_activity_id(&self) -> [u8; 32] {
+        self.activity_id
+    }
+    fn bound_idempotency_key(&self) -> [u8; 32] {
+        self.idempotency_key
+    }
+    fn signed_activity(&self) -> &[u8] {
+        &self.signed_activity
+    }
+}
+
+pub trait NativeProgramTransport {
+    fn simulate_native(
+        &self,
+        request: &NativeProgramCallRequest,
+    ) -> Result<VerifiedProgramSimulation, ProgramOperationError>;
+    fn submit_native(
+        &self,
+        request: &NativeProgramCallRequest,
+        idempotency_key: [u8; 32],
+    ) -> Result<ProgramSubmission, ProgramOperationError>;
+}
+
+impl<T: NativeProgramTransport> ProgramOperations<T> {
+    pub fn simulate_native(
+        &self,
+        request: &NativeProgramCallRequest,
+    ) -> Result<VerifiedProgramSimulation, ProgramOperationError> {
+        self.transport.simulate_native(request)
+    }
+    pub fn submit_native(
+        &self,
+        request: &NativeProgramCallRequest,
+        idempotency_key: [u8; 32],
+    ) -> Result<ProgramSubmission, ProgramOperationError> {
+        self.transport.submit_native(request, idempotency_key)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProgramServiceError {
     pub class: AgentErrorClass,
     pub retriability: Retriability,

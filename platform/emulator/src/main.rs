@@ -1,3 +1,5 @@
+mod native_call;
+
 use std::collections::{HashMap, VecDeque};
 use std::ffi::{c_char, c_int, c_uchar, c_uint, c_ulonglong, c_void, CStr};
 use std::fmt::Write as _;
@@ -249,7 +251,8 @@ struct CoreAccountView {
 
 struct DecodedProgramActivity {
     signed: Vec<u8>,
-    call: ProgramCall,
+    program_id: [u8; 32],
+    protocol_version: u16,
     activity_id: [u8; 32],
     idempotency_key: [u8; 32],
 }
@@ -1314,6 +1317,63 @@ fn programs_registry() -> Result<(ActivityType, ModuleRegistry), String> {
     Ok((call_type, registry))
 }
 
+fn legacy_program_request(request: &Request) -> Result<(Vec<u8>, ProgramCall), String> {
+    let body = decode_json::<ProgramCallBody>(request)?;
+    if !canonical_hex32_text(&body.program_id) {
+        return Err("program id must be canonical 32-byte hexadecimal".to_owned());
+    }
+    let program_bytes = hex_decode(&body.program_id)?;
+    let program_id: [u8; 32] = program_bytes
+        .try_into()
+        .map_err(|_| "program id must be 32-byte hexadecimal".to_owned())?;
+    let program = ProgramId::new(program_id);
+    if program.is_zero() {
+        return Err("program id is reserved".to_owned());
+    }
+    let calldata_bytes = hex_decode(&body.calldata)?;
+    let calldata = Calldata::new(&calldata_bytes)
+        .map_err(|_| "program calldata exceeds its bound".to_owned())?;
+    let fuel = body
+        .budget
+        .fuel
+        .parse::<u64>()
+        .map_err(|_| "program fuel budget is invalid".to_owned())?;
+    if fuel.to_string() != body.budget.fuel {
+        return Err("program fuel budget is not canonical".to_owned());
+    }
+    let fee_limit = body
+        .budget
+        .fee_limit
+        .parse::<u128>()
+        .map_err(|_| "program fee limit is invalid".to_owned())?;
+    if fee_limit.to_string() != body.budget.fee_limit {
+        return Err("program fee limit is not canonical".to_owned());
+    }
+    let budget = CallBudget::new(fuel, Amount::from_u128(fee_limit))
+        .map_err(|_| "program budget is invalid".to_owned())?;
+    let requested = body
+        .capabilities
+        .iter()
+        .map(|capability| match capability.as_str() {
+            "storage_read" => Ok(CapabilityRequest::StorageRead),
+            "storage_write" => Ok(CapabilityRequest::StorageWrite),
+            "transfer" => Ok(CapabilityRequest::Transfer),
+            "emit_event" => Ok(CapabilityRequest::EmitEvent),
+            "compose" => Ok(CapabilityRequest::Compose),
+            _ => Err("program capability is invalid".to_owned()),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let capabilities = RequestedCapabilities::new(&requested)
+        .map_err(|_| "program capabilities are not canonical".to_owned())?;
+    if body.signed_activity.len() % 2 != 0 || body.signed_activity.len() / 2 > MAX_RECEIPT_BYTES {
+        return Err("signed program activity exceeds its bound".to_owned());
+    }
+    Ok((
+        hex_decode(&body.signed_activity)?,
+        ProgramCall::new(program, calldata, budget, capabilities),
+    ))
+}
+
 fn decode_program_activity(request: &Request) -> Result<DecodedProgramActivity, String> {
     let media_type = request
         .content_type
@@ -1321,78 +1381,53 @@ fn decode_program_activity(request: &Request) -> Result<DecodedProgramActivity, 
         .next()
         .unwrap_or_default()
         .trim();
+    let (call_type, registry) = programs_registry()?;
+    if media_type == "application/json" {
+        if let Some((signed, program_id)) = native_call::parse_json(&request.body, &registry)? {
+            let activity = decode_signed(&signed, &registry)
+                .map_err(|_| "signed native activity is invalid".to_owned())?;
+            return Ok(DecodedProgramActivity {
+                activity_id: derive_activity_id(&activity)
+                    .map_err(|_| "signed native activity identity is invalid".to_owned())?,
+                idempotency_key: activity.idempotency_key(),
+                protocol_version: activity.protocol_version(),
+                program_id,
+                signed,
+            });
+        }
+    }
     let (signed, expected_call) = if media_type == "application/octet-stream" {
         if request.body.len() > MAX_RECEIPT_BYTES {
             return Err("signed program activity exceeds its bound".to_owned());
         }
         (request.body.clone(), None)
     } else if media_type == "application/json" {
-        let body = decode_json::<ProgramCallBody>(request)?;
-        if !canonical_hex32_text(&body.program_id) {
-            return Err("program id must be canonical 32-byte hexadecimal".to_owned());
-        }
-        let program_bytes = hex_decode(&body.program_id)?;
-        let program_id: [u8; 32] = program_bytes
-            .try_into()
-            .map_err(|_| "program id must be 32-byte hexadecimal".to_owned())?;
-        let program = ProgramId::new(program_id);
-        if program.is_zero() {
-            return Err("program id is reserved".to_owned());
-        }
-        let calldata_bytes = hex_decode(&body.calldata)?;
-        let calldata = Calldata::new(&calldata_bytes)
-            .map_err(|_| "program calldata exceeds its bound".to_owned())?;
-        let fuel = body
-            .budget
-            .fuel
-            .parse::<u64>()
-            .map_err(|_| "program fuel budget is invalid".to_owned())?;
-        if fuel.to_string() != body.budget.fuel {
-            return Err("program fuel budget is not canonical".to_owned());
-        }
-        let fee_limit = body
-            .budget
-            .fee_limit
-            .parse::<u128>()
-            .map_err(|_| "program fee limit is invalid".to_owned())?;
-        if fee_limit.to_string() != body.budget.fee_limit {
-            return Err("program fee limit is not canonical".to_owned());
-        }
-        let budget = CallBudget::new(fuel, Amount::from_u128(fee_limit))
-            .map_err(|_| "program budget is invalid".to_owned())?;
-        let requested = body
-            .capabilities
-            .iter()
-            .map(|capability| match capability.as_str() {
-                "storage_read" => Ok(CapabilityRequest::StorageRead),
-                "storage_write" => Ok(CapabilityRequest::StorageWrite),
-                "transfer" => Ok(CapabilityRequest::Transfer),
-                "emit_event" => Ok(CapabilityRequest::EmitEvent),
-                "compose" => Ok(CapabilityRequest::Compose),
-                _ => Err("program capability is invalid".to_owned()),
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let capabilities = RequestedCapabilities::new(&requested)
-            .map_err(|_| "program capabilities are not canonical".to_owned())?;
-        if body.signed_activity.len() % 2 != 0 || body.signed_activity.len() / 2 > MAX_RECEIPT_BYTES
-        {
-            return Err("signed program activity exceeds its bound".to_owned());
-        }
-        (
-            hex_decode(&body.signed_activity)?,
-            Some(ProgramCall::new(program, calldata, budget, capabilities)),
-        )
+        let (signed, call) = legacy_program_request(request)?;
+        (signed, Some(call))
     } else {
         return Err("program call content type is not supported".to_owned());
     };
     if signed.is_empty() {
         return Err("program call activity must not be empty".to_owned());
     }
-    let (call_type, registry) = programs_registry()?;
     let activity = decode_signed(&signed, &registry)
         .map_err(|_| "signed program activity is invalid".to_owned())?;
     if activity.activity_type() != call_type {
         return Err("signed activity is not a Programs CALL".to_owned());
+    }
+    if activity.protocol_version() == 3 {
+        if expected_call.is_some() {
+            return Err("native protocol requires the native request model".to_owned());
+        }
+        let program_id = native_call::from_activity(&activity)?;
+        return Ok(DecodedProgramActivity {
+            activity_id: derive_activity_id(&activity)
+                .map_err(|_| "signed native activity identity is invalid".to_owned())?,
+            idempotency_key: activity.idempotency_key(),
+            protocol_version: activity.protocol_version(),
+            program_id,
+            signed,
+        });
     }
     let call = ProgramCall::from_canonical_payload(activity.payload())
         .map_err(|_| "signed program payload is not canonical".to_owned())?;
@@ -1406,7 +1441,8 @@ fn decode_program_activity(request: &Request) -> Result<DecodedProgramActivity, 
         .map_err(|_| "signed program activity identity is invalid".to_owned())?;
     Ok(DecodedProgramActivity {
         signed,
-        call,
+        program_id: call.callee().bytes(),
+        protocol_version: activity.protocol_version(),
         activity_id,
         idempotency_key: activity.idempotency_key(),
     })
@@ -1743,7 +1779,7 @@ fn program_call(emulator: &mut Emulator, request: &Request, trace: u64) -> Respo
             "program recovery index reached its bounded capacity",
         );
     }
-    let program_id = decoded.call.callee().bytes();
+    let program_id = decoded.program_id;
     let head = match active_program_head(emulator, program_id, trace) {
         Ok(head) => head,
         Err(response) => return response,
@@ -1821,8 +1857,18 @@ fn program_call(emulator: &mut Emulator, request: &Request, trace: u64) -> Respo
             guest_abi_version: head.abi_version,
         },
     ) {
-        Ok(verified) => verified,
-        Err(_) => {
+        Ok(verified)
+            if verified
+                .receipt()
+                .receipt()
+                .protocol()
+                .is_some_and(|protocol| {
+                    protocol.protocol_version() == decoded.protocol_version
+                }) =>
+        {
+            verified
+        }
+        Ok(_) | Err(_) => {
             return refusal(
                 trace,
                 503,
@@ -3686,7 +3732,7 @@ fn program_simulate(emulator: &mut Emulator, request: &Request, trace: u64) -> R
         Ok(activity) => activity,
         Err(error) => return refusal(trace, 400, "invalid_program_call", &error),
     };
-    let program_id = decoded.call.callee().bytes();
+    let program_id = decoded.program_id;
     let head = match active_program_head(emulator, program_id, trace) {
         Ok(head) => head,
         Err(response) => return response,
@@ -3741,8 +3787,18 @@ fn program_simulate(emulator: &mut Emulator, request: &Request, trace: u64) -> R
             guest_abi_version: head.abi_version,
         },
     ) {
-        Ok(verified) => verified,
-        Err(_) => {
+        Ok(verified)
+            if verified
+                .receipt()
+                .receipt()
+                .protocol()
+                .is_some_and(|protocol| {
+                    protocol.protocol_version() == decoded.protocol_version
+                }) =>
+        {
+            verified
+        }
+        Ok(_) | Err(_) => {
             return refusal(
                 trace,
                 503,

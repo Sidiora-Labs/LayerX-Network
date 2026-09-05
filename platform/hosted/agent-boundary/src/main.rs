@@ -7,8 +7,8 @@ use layerx_client::lni::simulate::{simulate, SimulateContext, SimulateError};
 use layerx_client::lni::transport::{ConnectionGate, FrameTransport, Limits, Uds};
 use layerx_client::submit::{submit_signed, Submission, SubmissionContext, SubmitError};
 use layerx_proof::receipt::verify_sequencer_signature;
-use layerx_types::intent::ProgramCall;
 use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
+use layerx_types::program_call::NativeProgramCall;
 use layerx_types::result::{ResultCode, Retriability};
 use layerx_wire::activity::{decode_signed, encode_signed, Activity};
 use layerx_wire::hash::activity_id;
@@ -752,7 +752,7 @@ fn decode_activity(config: &Config, route: Route, body: &[u8]) -> Result<Decoded
         return Err(refusal(400, "not_program_call", None));
     }
     let program_id = if is_program_call {
-        let call = ProgramCall::from_canonical_payload(activity.payload())
+        let call = NativeProgramCall::decode(activity.payload())
             .map_err(|_| refusal(400, "malformed_program_call", None))?;
         Some(call.callee().bytes())
     } else {
@@ -894,7 +894,7 @@ fn completed_response(config: &Config, record: &JournalRecord) -> Response {
                 decode_signed(&signed, &config.registry).map_err(|error| format!("{error:?}"))?;
             let actual_id =
                 layerx_wire::hash::activity_id(&activity).map_err(|error| format!("{error:?}"))?;
-            let call = ProgramCall::from_canonical_payload(activity.payload())
+            let call = NativeProgramCall::decode(activity.payload())
                 .map_err(|error| format!("{error:?}"))?;
             if actual_id != activity_id || call.callee().bytes() != program_id {
                 return Err("journal program identity mismatch".into());
@@ -1129,14 +1129,23 @@ fn simulate_route(config: &Config, request: &Request) -> Response {
     } else {
         "refused"
     };
+    simulation_response(&simulation, &program_id, protocol.result_code(), state)
+}
+
+fn simulation_response(
+    simulation: &layerx_client::lni::simulate::Simulation,
+    program_id: &[u8; 32],
+    result_code: i32,
+    state: &str,
+) -> Response {
     let document = serde_json::json!({
         "result": {
             "committed": false,
             "execution": {
                 "state": state,
                 "activity_id": hex(&simulation.execution.activity_id),
-                "program_id": hex(&program_id),
-                "result_code": protocol.result_code(),
+                "program_id": hex(program_id),
+                "result_code": result_code,
                 "receipt": hex(&simulation.execution.receipt),
                 "terminal_payload": hex(&simulation.execution.terminal_payload),
                 "call_graph": hex(&simulation.execution.call_graph),
@@ -1235,16 +1244,19 @@ fn submit_route(config: &Config, request: &Request, route: Route) -> Response {
     resolve_record(config, &key_digest, &mut record, &decoded, &request.body)
 }
 
-fn receipt_route(config: &Config, activity_text: &str) -> Response {
+fn receipt_route(config: &Config, activity_text: &str, plane: Plane) -> Response {
     let Some(activity) = parse_hex32(activity_text) else {
         return refusal(400, "invalid_activity_id", None);
     };
     match with_session(config, |session| lookup_receipt(session, activity)) {
-        Ok(Lookup::Present { receipt, .. }) => ok(format!(
-            "{{\"activity_id\":\"{}\",\"receipt\":\"{}\"}}",
-            hex(&activity),
-            hex(&receipt)
-        )),
+        Ok(Lookup::Present { receipt, .. }) => {
+            let body = serde_json::json!({"activity_id": hex(&activity), "receipt": hex(&receipt)});
+            if plane == Plane::Gateway {
+                ok(serde_json::json!({"result": body}).to_string())
+            } else {
+                ok(body.to_string())
+            }
+        }
         Ok(Lookup::Absent) => refusal(404, "receipt_not_found", None),
         Err(failure) => failure.response(),
     }
@@ -1496,7 +1508,7 @@ fn route(config: &Config, request: &Request) -> Response {
         if request.method != "GET" || query.is_some() {
             return refusal(404, "not_found", None);
         }
-        return receipt_route(config, activity);
+        return receipt_route(config, activity, plane);
     }
     if !path.starts_with("/v1/") || query.is_some() {
         return refusal(404, "not_found", None);
@@ -1520,7 +1532,7 @@ fn route(config: &Config, request: &Request) -> Response {
         ("POST", "/v1/programs/simulate") => simulate_route(config, request),
         ("GET", target) => {
             if let Some(activity) = target.strip_prefix("/v1/receipts/") {
-                receipt_route(config, activity)
+                receipt_route(config, activity, plane)
             } else if let Some(activity) = target.strip_prefix("/v1/programs/activities/") {
                 program_activity_route(config, activity)
             } else {

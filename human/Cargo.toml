@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/layerx-human-service",
+    "crates/layerx-human-kms",
     "crates/layerx-intents",
     "crates/layerx-paxeer-client",
     "crates/layerx-explorer-index",

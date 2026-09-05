@@ -10,8 +10,12 @@ RUN set -eu; \
     cp wasm-runtime/internal/api/libwasmvm.x86_64.so /go/lib/; \
     cp wasm/x/wasm/artifacts/v152/api/libwasmvm152.x86_64.so /go/lib/; \
     cp wasm/x/wasm/artifacts/v155/api/libwasmvm155.x86_64.so /go/lib/; \
-    (cd /go/lib && sha256sum libwasmvm.x86_64.so libwasmvm152.x86_64.so libwasmvm155.x86_64.so) > /go/lib/libwasmvm.sha256; \
-    cat /go/lib/libwasmvm.sha256
+    for library in libwasmvm.x86_64.so libwasmvm152.x86_64.so libwasmvm155.x86_64.so; do \
+        expected=$(awk -v name="${library}" '$2 == name { print $1 }' wasm-runtime/libwasmvm-linux.sha256); \
+        test "${#expected}" -eq 64; \
+        printf '%s  %s\n' "${expected}" "${library}" >> /go/lib/libwasmvm.sha256; \
+    done; \
+    (cd /go/lib && sha256sum --check --strict libwasmvm.sha256)
 ENV CGO_ENABLED=1
 ARG PAX_CHAIN_REF=""
 RUN --mount=type=cache,target=/go/pkg/mod \

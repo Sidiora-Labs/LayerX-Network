@@ -82,12 +82,12 @@ public sealed record CheckpointVerification(string Level, byte[] CheckpointId, u
 
 public interface ILocalSignatureVerifier
 {
-    ValueTask<bool> VerifyRecoverableSecp256k1Async(ReadOnlyMemory<byte> publicKey, ReadOnlyMemory<byte> signature, byte signatureV, ReadOnlyMemory<byte> signer, ReadOnlyMemory<byte> digest, CancellationToken cancellationToken = default);
+    ValueTask<bool> VerifyRecoverableSecp256k1Async(ReadOnlyMemory<byte> publicKey, ReadOnlyMemory<byte> signature, byte signatureV, ReadOnlyMemory<byte> signer, ReadOnlyMemory<byte> digest, CancellationToken cancellationToken = default, ushort protocolVersion = 2);
 }
 
 public sealed class BouncyCastleSignatureVerifier : ILocalSignatureVerifier
 {
-    public ValueTask<bool> VerifyRecoverableSecp256k1Async(ReadOnlyMemory<byte> publicKey, ReadOnlyMemory<byte> signature, byte signatureV, ReadOnlyMemory<byte> signer, ReadOnlyMemory<byte> digest, CancellationToken cancellationToken = default)
+    public ValueTask<bool> VerifyRecoverableSecp256k1Async(ReadOnlyMemory<byte> publicKey, ReadOnlyMemory<byte> signature, byte signatureV, ReadOnlyMemory<byte> signer, ReadOnlyMemory<byte> digest, CancellationToken cancellationToken = default, ushort protocolVersion = 2)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (publicKey.Length != 33 || signature.Length != 64 || signer.Length != 20 || digest.Length != 32 || (signatureV != 27 && signatureV != 28)) return ValueTask.FromResult(false);
@@ -261,11 +261,11 @@ public static class LocalVerifier
         return new(protocolVersion, networkId, epoch, batchNumber, firstSequence, lastSequence, previousStateRoot, resultingStateRoot, activityMerkleRoot, receiptMerkleRoot, eventMerkleRoot, dataAvailabilityRoot, oracleRoot, timestampMilliseconds, sequencerId);
     }
 
-    public static ValueTask<InclusionVerification> VerifyBatchInclusionAsync(InclusionKind kind, ReadOnlyMemory<byte> canonicalLeaf, MerkleProof proof, ReadOnlyMemory<byte> canonicalHeader, ReadOnlyMemory<byte> headerSignature, SequencerAuthorization authorization, CancellationToken cancellationToken = default)
+    public static ValueTask<InclusionVerification> VerifyBatchInclusionAsync(InclusionKind kind, ReadOnlyMemory<byte> canonicalLeaf, MerkleProof proof, ReadOnlyMemory<byte> canonicalHeader, ReadOnlyMemory<byte> headerSignature, SequencerAuthorization authorization, CancellationToken cancellationToken = default, ushort protocolVersion = 2)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var header = DecodeBatchHeader(canonicalHeader.Span);
-        if (header.ProtocolVersion != CurrentProtocolVersion) throw VerificationFailure();
+        if ((protocolVersion != 2 && protocolVersion != 3) || header.ProtocolVersion != protocolVersion) throw VerificationFailure();
         if (header.BatchNumber < authorization.FirstBatchNumber || header.BatchNumber > authorization.LastBatchNumber || !Equal(header.SequencerId, Exact(authorization.SequencerId, 32)))
             throw VerificationFailure();
         var headerDigest = Digest(BatchHeaderDomain, canonicalHeader.ToArray());
@@ -282,7 +282,7 @@ public static class LocalVerifier
         return ValueTask.FromResult(new InclusionVerification(kind == InclusionKind.State ? "state-proven" : "batch-included", header, headerDigest, root.ToArray()));
     }
 
-    public static async ValueTask<CheckpointVerification> VerifyCheckpointAsync(CheckpointVerificationInput input, ILocalSignatureVerifier signatures, CancellationToken cancellationToken = default)
+    public static async ValueTask<CheckpointVerification> VerifyCheckpointAsync(CheckpointVerificationInput input, ILocalSignatureVerifier signatures, CancellationToken cancellationToken = default, ushort protocolVersion = 2)
     {
         ArgumentNullException.ThrowIfNull(input);
         ArgumentNullException.ThrowIfNull(signatures);
@@ -290,7 +290,7 @@ public static class LocalVerifier
         if (!input.AvailabilityObtained || certificate.Threshold == 0 || certificate.ValidityProof is null || certificate.Attestations is null || certificate.ValidityProof.LongLength > uint.MaxValue)
             throw VerificationFailure();
         var header = DecodeBatchHeader(certificate.CanonicalHeader);
-        if (header.ProtocolVersion != CurrentProtocolVersion) throw VerificationFailure();
+        if ((protocolVersion != 2 && protocolVersion != 3) || header.ProtocolVersion != protocolVersion) throw VerificationFailure();
         var checkpointId = Digest(CheckpointDomain, certificate.CanonicalHeader, EncodeUInt32((uint)certificate.ValidityProof.Length), certificate.ValidityProof);
         var expectedSettlementContract = Exact(input.ExpectedSettlementContract, 20);
         if (!Equal(checkpointId, Exact(input.RegisteredCheckpointId, 32)) || input.ExpectedPaxeerChainId == 0 || AllZero(expectedSettlementContract)) throw VerificationFailure();
@@ -335,22 +335,37 @@ public static class LocalVerifier
         return new(level, checkpointId, achieved, certificate.Threshold, header);
     }
 
-    public static ValueTask<ReceiptVerification> VerifyReceiptOutcomeAsync(ReadOnlyMemory<byte> canonicalReceipt, AuthorizedReceiptBatch authorized, CancellationToken cancellationToken = default)
+    public static ValueTask<ReceiptVerification> VerifyReceiptOutcomeAsync(ReadOnlyMemory<byte> canonicalReceipt, AuthorizedReceiptBatch authorized, CancellationToken cancellationToken = default, ushort protocolVersion = 2)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var decoded = DecodeProtocolReceipt(canonicalReceipt.Span);
         var receipt = decoded.Receipt;
-        if (receipt.ProtocolVersion != CurrentProtocolVersion) throw VerificationFailure(ReceiptCheck.ProtocolVersion);
-        if (receipt.Operation == 0) throw VerificationFailure(ReceiptCheck.Operation);
+        if ((protocolVersion != 2 && protocolVersion != 3) || receipt.ProtocolVersion != protocolVersion) throw VerificationFailure(ReceiptCheck.ProtocolVersion);
+        _ = Exact(authorized.Asset, 32);
+        var program = receipt.ModuleId == 9 && (receipt.Operation == 0 || receipt.Operation == 3);
+        if (program)
+        {
+            var module = receipt.ModuleVersion;
+            var validModule = receipt.ProtocolVersion == 3 ? module == 4 : module == 2 || module == 3 || receipt.Operation == 3 && module == 1;
+            if (!validModule) throw VerificationFailure(ReceiptCheck.ModuleVersion);
+            if (receipt.Operation == 0 && receipt.ResultCode != 0) throw VerificationFailure(ReceiptCheck.ResultCode);
+            if (receipt.Operation == 3)
+            {
+                var outcome = receipt.ProgramOutcome;
+                if (outcome is null) throw VerificationFailure(ReceiptCheck.ReceiptShape);
+                if ((outcome.AbiVersion != 1 && outcome.AbiVersion != 2) || outcome.RuntimeVersion != 1) throw VerificationFailure(ReceiptCheck.ProtocolVersion);
+            }
+        }
+        if (!program && receipt.Operation == 0) throw VerificationFailure(ReceiptCheck.Operation);
         if (AllZero(receipt.ActivityId)) throw VerificationFailure(ReceiptCheck.ActivityId);
-        if (AllZero(receipt.Asset)) throw VerificationFailure(ReceiptCheck.Asset);
+        if (!program && AllZero(receipt.Asset)) throw VerificationFailure(ReceiptCheck.Asset);
         if (!Equal(receipt.BatchId, Exact(authorized.BatchId, 32))) throw VerificationFailure(ReceiptCheck.BatchId);
-        if (!Equal(receipt.Asset, Exact(authorized.Asset, 32))) throw VerificationFailure(ReceiptCheck.Asset);
+        if (!program && !Equal(receipt.Asset, Exact(authorized.Asset, 32))) throw VerificationFailure(ReceiptCheck.Asset);
         if (!Equal(receipt.PreviousStateRoot, Exact(authorized.PreviousStateRoot, 32)))
             throw VerificationFailure(ReceiptCheck.PreviousStateRoot);
         if (!Equal(receipt.ResultingStateRoot, Exact(authorized.ResultingStateRoot, 32)))
             throw VerificationFailure(ReceiptCheck.ResultingStateRoot);
-        if (receipt.ResultCode == 0)
+        if (!program && receipt.ResultCode == 0)
         {
             if (!receipt.FromBalanceBefore.TrySubtract(receipt.Amount, out var debitAfter) || debitAfter != receipt.FromBalanceAfter)
                 throw VerificationFailure(ReceiptCheck.DebitBalance);
@@ -363,9 +378,9 @@ public static class LocalVerifier
         return ValueTask.FromResult(new ReceiptVerification("sequencer-signed", receipt, canonicalReceipt.ToArray(), receiptDigest));
     }
 
-    public static async ValueTask<ReceiptVerification> VerifyReceiptAsync(ReadOnlyMemory<byte> canonicalReceipt, AuthorizedReceiptBatch authorized, CancellationToken cancellationToken = default)
+    public static async ValueTask<ReceiptVerification> VerifyReceiptAsync(ReadOnlyMemory<byte> canonicalReceipt, AuthorizedReceiptBatch authorized, CancellationToken cancellationToken = default, ushort protocolVersion = 2)
     {
-        var verified = await VerifyReceiptOutcomeAsync(canonicalReceipt, authorized, cancellationToken).ConfigureAwait(false);
+        var verified = await VerifyReceiptOutcomeAsync(canonicalReceipt, authorized, cancellationToken, protocolVersion).ConfigureAwait(false);
         if (verified.Receipt.ResultCode != 0) throw VerificationFailure(ReceiptCheck.ResultCode);
         return verified;
     }
@@ -383,7 +398,7 @@ public static class LocalVerifier
             throw VerificationFailure(ReceiptCheck.ReceiptShape);
         var decoder = new WireDecoder(canonicalReceipt.ToArray());
         var envelopeVersion = decoder.U16();
-        if (envelopeVersion is not (1 or 2) || decoder.U16() != 0x5201)
+        if (envelopeVersion is not (1 or 2 or 3) || decoder.U16() != 0x5201)
             throw VerificationFailure(ReceiptCheck.Decode);
         var protocolVersion = decoder.U16();
         if (protocolVersion != envelopeVersion) throw VerificationFailure(ReceiptCheck.ProtocolVersion);
@@ -485,7 +500,7 @@ public static class LocalVerifier
         var occupancyZero = occupancyByteBatches == default(UInt128Value) && occupancyFeeUnits == default(UInt128Value) &&
             AllZero(occupancyAssetId) && AllZero(occupancyEvidenceDigest) && AllZero(occupancyTransferRoot);
         var validVersion = protocolVersion == 1 && encodingVersion is 1 or 3 ||
-            protocolVersion == 2 && encodingVersion is 2 or 3;
+            (protocolVersion == 2 || protocolVersion == 3) && encodingVersion is 2 or 3;
         if (terminalKind is < 1 or > 3 || runtimeVersion == 0 || abiVersion == 0 ||
             feeScheduleVersion == 0 || meteringScheduleVersion != 1 || AllZero(terminalPayloadRoot) ||
             terminalKind == 1 && resultCode != 0 ||
@@ -496,7 +511,7 @@ public static class LocalVerifier
             encodingVersion == 2 && terminalKind == 1 && (AllZero(occupancyAssetId) || AllZero(occupancyEvidenceDigest)) ||
             encodingVersion == 3 && AllZero(occupancyAssetId) != AllZero(occupancyEvidenceDigest) ||
             protocolVersion == 1 && encodingVersion == 3 && !occupancyZero ||
-            protocolVersion == 2 && encodingVersion == 3 && terminalKind == 1 && (AllZero(occupancyAssetId) || AllZero(occupancyEvidenceDigest)))
+            (protocolVersion == 2 || protocolVersion == 3) && encodingVersion == 3 && terminalKind == 1 && (AllZero(occupancyAssetId) || AllZero(occupancyEvidenceDigest)))
             throw VerificationFailure();
         return new(encodingVersion, terminalKind, resultCode, runtimeVersion, abiVersion,
             feeScheduleVersion, meteringScheduleVersion, cpuFuel, memoryBytes, storageReadBytes,

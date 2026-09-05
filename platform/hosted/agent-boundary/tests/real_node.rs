@@ -1234,12 +1234,8 @@ fn start_boundary(root: &Path, socket: &Path, setup: &NodeSetup) -> BoundarySetu
     make_dir(&bin_dir, 0o755);
     let binary = bin_dir.join("layerx-agent-boundary");
     must(
-        fs::copy(env!("CARGO_BIN_EXE_layerx-agent-boundary"), &binary),
-        "copy boundary binary",
-    );
-    must(
-        fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)),
-        "boundary binary permissions",
+        fs::hard_link(env!("CARGO_BIN_EXE_layerx-agent-boundary"), &binary),
+        "link boundary binary",
     );
     let mut environment = BTreeMap::new();
     environment.insert(
@@ -1549,7 +1545,7 @@ fn check_receipt_routes(cluster: &Cluster, submitted: &Submitted) {
     assert_eq!(
         receipt.text(),
         format!(
-            "{{\"activity_id\":\"{}\",\"receipt\":\"{}\"}}",
+            "{{\"result\":{{\"activity_id\":\"{}\",\"receipt\":\"{}\"}}}}",
             submitted.activity_id,
             hex(&submitted.receipt)
         )
@@ -1567,7 +1563,7 @@ fn check_receipt_routes(cluster: &Cluster, submitted: &Submitted) {
         Some(&cluster.registry_token),
     );
     assert_eq!(internal.status, 200, "{}", internal.text());
-    assert_eq!(internal.text(), receipt.text());
+    assert_eq!(internal.json(), receipt.json()["result"]);
     let unknown = client.get(
         &format!("/v1/receipts/{}", hex(&random32())),
         Some(&cluster.gateway_token),
@@ -1635,6 +1631,53 @@ fn simulate_program_call(cluster: &Cluster, signed: &[u8]) -> HttpAnswer {
     })
 }
 
+fn verify_simulation_evidence(
+    evidence: &serde_json::Value,
+    protocol: &layerx_wire::receipt::ProtocolReceipt,
+    sequencer_key: [u8; 32],
+) {
+    let boundary_id = must(
+        <[u8; 32]>::try_from(unhex(field(evidence, "boundary_id"))),
+        "boundary identifier",
+    );
+    assert_eq!(
+        boundary_id,
+        layerx_client::lni::simulate::simulation_boundary_id(&sequencer_key)
+    );
+    let observed_sequence: u64 = must(
+        field(evidence, "observed_sequence").parse(),
+        "observed sequence",
+    );
+    let observed_at: u64 = must(field(evidence, "observed_at").parse(), "observed at");
+    let signature = must(
+        <[u8; 64]>::try_from(unhex(field(evidence, "signature"))),
+        "evidence signature",
+    );
+    let decoded_evidence = layerx_client::lni::simulate::SimulationEvidence {
+        boundary_id,
+        activity_id: protocol.activity_id(),
+        previous_state_root: protocol.previous_state_root(),
+        hypothetical_state_root: protocol.resulting_state_root(),
+        observed_sequence,
+        observed_at,
+        public_key: sequencer_key,
+        signature,
+    };
+    let evidence_digest =
+        layerx_client::lni::simulate::simulation_evidence_digest(&decoded_evidence);
+    must(
+        must(
+            ed25519_dalek::VerifyingKey::from_bytes(&sequencer_key),
+            "sequencer verifying key",
+        )
+        .verify_strict(
+            &evidence_digest,
+            &ed25519_dalek::Signature::from_bytes(&signature),
+        ),
+        "simulation evidence signature",
+    );
+}
+
 #[test]
 fn real_program_simulation_executes_without_committing() {
     let cluster = start_cluster();
@@ -1692,46 +1735,7 @@ fn real_program_simulation_executes_without_committing() {
         unhex(field(evidence, "hypothetical_state_root")),
         protocol.resulting_state_root().to_vec()
     );
-    let boundary_id = must(
-        <[u8; 32]>::try_from(unhex(field(evidence, "boundary_id"))),
-        "boundary identifier",
-    );
-    assert_eq!(
-        boundary_id,
-        layerx_client::lni::simulate::simulation_boundary_id(&cluster.sequencer_key)
-    );
-    let observed_sequence: u64 = must(
-        field(evidence, "observed_sequence").parse(),
-        "observed sequence",
-    );
-    let observed_at: u64 = must(field(evidence, "observed_at").parse(), "observed at");
-    let signature = must(
-        <[u8; 64]>::try_from(unhex(field(evidence, "signature"))),
-        "evidence signature",
-    );
-    let decoded_evidence = layerx_client::lni::simulate::SimulationEvidence {
-        boundary_id,
-        activity_id: protocol.activity_id(),
-        previous_state_root: protocol.previous_state_root(),
-        hypothetical_state_root: protocol.resulting_state_root(),
-        observed_sequence,
-        observed_at,
-        public_key: cluster.sequencer_key,
-        signature,
-    };
-    let evidence_digest =
-        layerx_client::lni::simulate::simulation_evidence_digest(&decoded_evidence);
-    must(
-        must(
-            ed25519_dalek::VerifyingKey::from_bytes(&cluster.sequencer_key),
-            "sequencer verifying key",
-        )
-        .verify_strict(
-            &evidence_digest,
-            &ed25519_dalek::Signature::from_bytes(&signature),
-        ),
-        "simulation evidence signature",
-    );
+    verify_simulation_evidence(evidence, protocol, cluster.sequencer_key);
     let again = simulate_program_call(&cluster, &signed);
     assert_eq!(again.status, 200, "{}", again.text());
     assert_eq!(again.text(), simulated.text());
@@ -1766,7 +1770,11 @@ fn real_program_simulation_executes_without_committing() {
     let committed = submitted.json();
     assert_eq!(committed["result"]["state"], "refused");
     assert_eq!(committed["result"]["activity_id"], execution["activity_id"]);
-    let consumed = simulate_program_call(&cluster, &signed);
+    let replay = simulate_program_call(&cluster, &signed);
+    assert_refusal(&replay, 422, "idempotent_replay");
+    let reused_sequence = signed_program_call(&cluster.actor, random32());
+    assert_ne!(reused_sequence, signed);
+    let consumed = simulate_program_call(&cluster, &reused_sequence);
     assert_refusal(&consumed, 422, "sequence_reused");
 }
 
@@ -2055,7 +2063,23 @@ fn check_daemon_loss(cluster: &mut Cluster, submitted: &Submitted, first: &[u8])
 
 fn signed_program_call(actor: &Actor, program_id: [u8; 32]) -> Vec<u8> {
     use layerx_types::intent::ProgramId;
-    use layerx_types::intent::{CallBudget, Calldata, ProgramCall, RequestedCapabilities};
+    use layerx_types::program_call::{NativeProgramCall, Resources};
+    let call = NativeProgramCall {
+        program_id: ProgramId::new(program_id),
+        guest_abi: 1,
+        entrypoint: b"layerx_call",
+        calldata: &[],
+        capabilities: &[0, 0],
+        access_declaration: b"LayerX/programs/access-declaration/v1\0\0",
+        response_capacity: 16,
+        resources: Resources([
+            1_000_000, 16_777_216, 1_048_576, 1_048_576, 64, 1_048_576, 4096,
+        ]),
+    };
+    signed_program_payload(actor, &must(call.encode(), "native call"))
+}
+
+fn signed_program_payload(actor: &Actor, bytes: &[u8]) -> Vec<u8> {
     let activity_type = must(
         ActivityType::new(ModuleId::Programs, 3),
         "program activity type",
@@ -2065,14 +2089,8 @@ fn signed_program_call(actor: &Actor, program_id: [u8; 32]) -> Vec<u8> {
         "program registration",
     );
     let registry = must(ModuleRegistry::new(&[registration]), "program registry");
-    let call = ProgramCall::new(
-        ProgramId::new(program_id),
-        must(Calldata::new(&[]), "calldata"),
-        must(CallBudget::new(1000, Amount::from_u128(0)), "call budget"),
-        must(RequestedCapabilities::new(&[]), "capabilities"),
-    );
     let payload = must(
-        Payload::new(&registry, activity_type, &call.canonical_payload()),
+        Payload::new(&registry, activity_type, bytes),
         "call payload",
     );
     let payload_hash = domain_hash(Domain::PayloadHash, payload.as_bytes());
@@ -2111,6 +2129,26 @@ fn signed_program_call(actor: &Actor, program_id: [u8; 32]) -> Vec<u8> {
         ),
         "signed ProgramCall",
     )
+}
+
+#[test]
+fn malformed_program_call_is_refused_before_a_following_send() {
+    let cluster = start_cluster();
+    check_readiness(&cluster);
+    let malformed = signed_program_payload(&cluster.actor, &[0x11; 32]);
+    let answer = cluster.client.call(&Call::submit(
+        "/v1/programs/call",
+        &cluster.gateway_token,
+        "malformed-native-call",
+        &malformed,
+    ));
+    assert_refusal(&answer, 400, "malformed_program_call");
+    let sent = submit_send(
+        &cluster,
+        &signed_send(&cluster.actor, cluster.asset, 1),
+        "after-malformed-call",
+    );
+    check_receipt_routes(&cluster, &sent);
 }
 
 #[test]

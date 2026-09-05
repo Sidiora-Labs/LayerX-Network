@@ -299,7 +299,7 @@ pub fn batch_header_digest(header: &[u8]) -> Result<[u8; 32], WireError> {
     )
 }
 
-/// Computes the execution identifier placed in receipts by the current C producer.
+/// Computes the scalar execution identifier used for non-Programs-call receipts.
 ///
 /// The fixed preimage is `previous_state_root || activity_id ||
 /// global_sequence_be || batch_number_be` under the protocol context-hash domain.
@@ -324,6 +324,58 @@ pub fn execution_batch_id(
         Domain::ContextHash,
         &CanonicalBytes::from_wire(preimage.to_vec()),
     )
+}
+
+/// Computes the native Programs batch identifier from its committed activity tree.
+///
+/// # Errors
+/// Returns a hash length failure if the fixed preimage cannot be represented.
+pub fn program_execution_batch_id(
+    previous_state_root: [u8; 32],
+    activity_merkle_root: [u8; 32],
+    first_sequence: u64,
+    last_sequence: u64,
+    batch_number: u64,
+) -> Result<[u8; 32], WireError> {
+    let mut preimage = [0_u8; 88];
+    preimage[..32].copy_from_slice(&previous_state_root);
+    preimage[32..64].copy_from_slice(&activity_merkle_root);
+    preimage[64..72].copy_from_slice(&first_sequence.to_be_bytes());
+    preimage[72..80].copy_from_slice(&last_sequence.to_be_bytes());
+    preimage[80..].copy_from_slice(&batch_number.to_be_bytes());
+    domain(
+        Domain::ContextHash,
+        &CanonicalBytes::from_wire(preimage.to_vec()),
+    )
+}
+
+/// Selects the native execution identifier for an included receipt.
+///
+/// # Errors
+/// Refuses a Programs activity-root mismatch or an unrepresentable hash preimage.
+pub fn receipt_execution_batch_id(
+    receipt: &crate::receipt::ProtocolReceipt,
+    header: &crate::receipt::BatchHeader,
+) -> Result<[u8; 32], WireError> {
+    if receipt.module_id() == 9 && receipt.operation() == 3 {
+        if receipt.activity_root() != header.activity_merkle_root() {
+            return Err(WireError::known(KnownResult::NonCanonical, 0));
+        }
+        program_execution_batch_id(
+            header.previous_state_root(),
+            header.activity_merkle_root(),
+            header.first_sequence(),
+            header.last_sequence(),
+            header.batch_number(),
+        )
+    } else {
+        execution_batch_id(
+            header.previous_state_root(),
+            receipt.activity_id(),
+            receipt.global_sequence(),
+            header.batch_number(),
+        )
+    }
 }
 
 /// Computes the exact checkpoint identifier over canonical header bytes,

@@ -45,7 +45,7 @@
 enum {
     NETWORK_ID = 77,
     LNI_MAJOR = 1,
-    LNI_MINOR = 3,
+    LNI_MINOR = 4,
     NODE_INFO_REQUEST = 1,
     NODE_INFO_RESPONSE = 2,
     SUBMIT_REQUEST = 3,
@@ -574,6 +574,7 @@ static int fixture_start(admission_fixture *fixture,
     fixture->history.log = &fixture->canonical_log;
     fixture->owner.identities = &fixture->identities;
     fixture->owner.network_id = NETWORK_ID;
+    fixture->owner.protocol_version = LXP_PROTOCOL_VERSION;
     fixture->owner.history = &fixture->history;
     fixture->owner.receipt_authority = &fixture->receipt_authority;
     fixture->owner.scratch = &fixture->scratch;

@@ -1,3 +1,4 @@
+import { encodeNativeProgramCall } from "./native-program-call.js";
 import type { ProgramCall, ProgramOutcome, ProgramUsage } from "./programs.js";
 import type { ProgramReceiptOutcome } from "./verifier.js";
 
@@ -54,7 +55,7 @@ export async function decodeSignedProgramCall(
   const canonical = new Uint8Array(call.signedActivity);
   const reader = new Reader(canonical);
   const envelopeVersion = reader.u16();
-  if ((envelopeVersion !== 1 && envelopeVersion !== 2) || reader.u16() !== 0x1001 || reader.byte() !== 12) fail("signed activity header");
+  if ((envelopeVersion !== 1 && envelopeVersion !== 2 && envelopeVersion !== 3) || reader.u16() !== 0x1001 || reader.byte() !== 12) fail("signed activity header");
   field(reader, 1); const protocolVersion = reader.u16();
   if (protocolVersion !== envelopeVersion) fail("signed activity protocol");
   field(reader, 2); reader.u32();
@@ -64,14 +65,19 @@ export async function decodeSignedProgramCall(
   field(reader, 6); reader.u64();
   field(reader, 7); const notBefore = reader.u64(); const notAfter = reader.u64();
   field(reader, 8); const idempotency = reader.sizedU32(32, 32);
-  field(reader, 9); reader.u128();
+  field(reader, 9); const envelopeFeeLimit = reader.u128();
   field(reader, 10); const payloadHash = reader.sizedU32(32, 32);
   field(reader, 11); const payload = reader.sizedU32(524_288);
   field(reader, 12); const signature = reader.sizedU32(128);
   reader.end();
   if (notAfter < notBefore) fail("signed activity bounds");
   if (!equal(payloadHash, await sha256(PAYLOAD_DOMAIN, payload))) fail("signed activity payload hash");
-  decodeCallPayload(payload, call);
+  if (call.nativeCall !== undefined) {
+    if (protocolVersion !== 3 || envelopeFeeLimit !== call.budget.feeLimit
+      || hex(call.nativeCall.programId) !== call.programId || !equal(call.nativeCall.calldata, call.calldata)
+      || call.nativeCall.resources[0] !== call.budget.fuel || call.capabilities.length !== 0
+      || !equal(payload, encodeNativeProgramCall(call.nativeCall))) fail("native signed activity binding");
+  } else decodeCallPayload(payload, call);
   const idempotencyKey = hex(idempotency);
   if (expectedIdempotencyKey !== undefined && idempotencyKey !== expectedIdempotencyKey) fail("signed activity idempotency");
   return Object.freeze({
@@ -170,7 +176,7 @@ export async function decodeAndVerifyProgramTerminal(
   }
 
   const zero = new Uint8Array(32);
-  const occupancyRequired = protocolVersion === 2 && successfulExecution;
+  const occupancyRequired = (protocolVersion === 2 || protocolVersion === 3) && successfulExecution;
   if ((occupancy !== undefined) !== occupancyRequired) fail("occupancy attachment presence");
   if (occupancy !== undefined) {
     if (occupancy.length === 0) {
@@ -194,7 +200,7 @@ export async function decodeAndVerifyProgramTerminal(
     if (authorization.length === 0 || authorityRoot === undefined || !equal(authorityRoot, receipt.transferRoot)) fail("transfer authority root");
     await verifyAuthorizationRoot(authorization, authorityRoot);
   }
-  if (protocolVersion !== 1 && protocolVersion !== 2) fail("program receipt protocol");
+  if (protocolVersion !== 1 && protocolVersion !== 2 && protocolVersion !== 3) fail("program receipt protocol");
   const boundUsage = usage ?? receiptUsage(receipt);
   return Object.freeze({ outcome, usage: boundUsage });
 }

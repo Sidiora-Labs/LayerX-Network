@@ -8,7 +8,7 @@
 use layerx_proof::inclusion::{verify_receipt, InclusionError, SequencerAuthorization};
 use layerx_proof::merkle::{decode_proof, encode_proof, Proof};
 use layerx_proof::receipt::{verify_outcome, AuthorizedBatch, ReceiptCheck};
-use layerx_wire::hash::{execution_batch_id, receipt_digest};
+use layerx_wire::hash::{receipt_digest, receipt_execution_batch_id};
 use layerx_wire::receipt::{decode, decode_merkle_proof, encode_unsigned};
 use serde::Deserialize;
 
@@ -287,13 +287,8 @@ pub fn authorized_batch_by_activity(
     {
         return Err(EvidenceRefusal::SequenceRange);
     }
-    let expected = execution_batch_id(
-        header.previous_state_root(),
-        protocol.activity_id(),
-        protocol.global_sequence(),
-        header.batch_number(),
-    )
-    .map_err(|_| EvidenceRefusal::BatchIdentity)?;
+    let expected =
+        receipt_execution_batch_id(protocol, header).map_err(|_| EvidenceRefusal::BatchIdentity)?;
     if protocol.batch_id() != expected {
         return Err(EvidenceRefusal::BatchIdentity);
     }

@@ -108,7 +108,13 @@ public final class ProgramsClient {
     }
 
     public record Call(byte[] programId, byte[] calldata, Budget budget,
-                       List<Capability> capabilities, byte[] signedActivity) {
+                       List<Capability> capabilities, byte[] signedActivity, NativeProgramCall nativeCall) {
+        public Call(byte[] programId, byte[] calldata, Budget budget, List<Capability> capabilities, byte[] signedActivity) {
+            this(programId, calldata, budget, capabilities, signedActivity, null);
+        }
+        public Call(NativeProgramCall nativeCall, BigInteger feeLimit, byte[] signedActivity) {
+            this(nativeCall.programId(), nativeCall.calldata(), new Budget(new BigInteger(Long.toUnsignedString(nativeCall.resources()[0])), feeLimit), List.of(), signedActivity, nativeCall);
+        }
         public Call {
             programId = exactArgument(programId, 32);
             if (calldata == null || calldata.length > MAX_CALLDATA_BYTES || budget == null
@@ -219,6 +225,7 @@ public final class ProgramsClient {
 
     private final ProductionClient client;
     private final byte[] sequencerPublicKey;
+    private final int protocolVersion;
     private final Clock clock;
     private final BigInteger maximumSimulationAgeMillis;
 
@@ -227,7 +234,10 @@ public final class ProgramsClient {
     }
 
     public ProgramsClient(ProductionClient client, byte[] sequencerPublicKey, Clock clock,
-                          Duration maximumSimulationAge) {
+                          Duration maximumSimulationAge, int... selectedProtocol) {
+        if (selectedProtocol.length > 1) invalid();
+        this.protocolVersion = selectedProtocol.length == 0 ? 2 : selectedProtocol[0];
+        if (protocolVersion != 2 && protocolVersion != 3) invalid();
         this.client = Objects.requireNonNull(client, "client");
         this.sequencerPublicKey = exactArgument(sequencerPublicKey, 32);
         if (allZero(this.sequencerPublicKey)) invalid();
@@ -265,6 +275,7 @@ public final class ProgramsClient {
 
     public CompletionStage<Simulation> simulate(Call call) {
         Objects.requireNonNull(call, "call");
+        if (call.nativeCall() != null && protocolVersion != 3) invalid();
         ActivityBinding activity = decodeSignedCall(call);
         return raw("program.simulate", encode(call), Map.of(), null)
             .thenApply(value -> decodeSimulation(value, call.programId(), activity, sequencerPublicKey,
@@ -277,6 +288,7 @@ public final class ProgramsClient {
         if (!canonicalLowerHex(key.value(), 32)) throw new PlatformSdkException(
             PlatformSdkException.Code.IDEMPOTENCY_REQUIRED, PlatformSdkException.Retry.NEVER,
             null, null, null);
+        if (call.nativeCall() != null && protocolVersion != 3) invalid();
         ActivityBinding activity = decodeSignedCall(call);
         if (!MessageDigest.isEqual(activity.idempotencyKey(), HexFormat.of().parseHex(key.value()))) invalid();
         return raw("program.call", encode(call), Map.of(), key).handle((value, error) -> {
@@ -330,14 +342,14 @@ public final class ProgramsClient {
 
     public static LocalVerifier.ReceiptVerification verifyReceipt(byte[] canonicalReceipt,
             LocalVerifier.AuthorizedReceiptBatch authorized, byte[] expectedActivityId,
-            int expectedGuestAbiVersion, byte[] terminalPayload, byte[] callGraph) {
+            int expectedGuestAbiVersion, byte[] terminalPayload, byte[] callGraph, int... selectedProtocol) {
         if (expectedGuestAbiVersion != 1 && expectedGuestAbiVersion != 2) invalid();
-        LocalVerifier.ReceiptVerification verified = LocalVerifier.verifyReceiptOutcome(canonicalReceipt, authorized);
+        LocalVerifier.ReceiptVerification verified = LocalVerifier.verifyReceiptOutcome(canonicalReceipt, authorized, selectedProtocol);
         LocalVerifier.ProtocolReceipt receipt = verified.receipt();
         LocalVerifier.ProgramReceiptOutcome outcome = receipt.programOutcome();
         if (receipt.protocolVersion() == 0 || receipt.moduleId() != PROGRAMS_RECEIPT_MODULE_ID
                 || receipt.operation() != CALL_OPERATION || receipt.moduleVersion() < 1
-                || receipt.moduleVersion() > 3
+                || receipt.moduleVersion() > 4
                 || !Arrays.equals(receipt.activityId(), exactArgument(expectedActivityId, 32))
                 || outcome == null || outcome.abiVersion() != expectedGuestAbiVersion
                 || callGraph == null || callGraph.length == 0 || callGraph.length > MAX_CALLDATA_BYTES
@@ -442,7 +454,7 @@ public final class ProgramsClient {
 
     private static byte[] cloneNullable(byte[] value) { return value == null ? null : value.clone(); }
 
-    private static Simulation decodeSimulation(ObjectNode value, byte[] expectedProgram,
+    private Simulation decodeSimulation(ObjectNode value, byte[] expectedProgram,
                                                 ActivityBinding activity, byte[] pinnedKey,
                                                 BigInteger now, BigInteger maximumAge) {
         requireFields(value, "committed", "execution", "simulation_evidence");
@@ -457,7 +469,7 @@ public final class ProgramsClient {
         return new Simulation(value, execution);
     }
 
-    private static Submission decodeSubmission(ObjectNode value, byte[] expectedProgram,
+    private Submission decodeSubmission(ObjectNode value, byte[] expectedProgram,
             byte[] expectedActivity, String expectedKey, byte[] expectedSignedActivity, byte[] pinnedKey) {
         SubmissionState state = SubmissionState.parse(text(value, "state"));
         if (state == SubmissionState.UNKNOWN) {
@@ -496,7 +508,7 @@ public final class ProgramsClient {
         return new Submission(state, hex32(text(value, "activity_id")), key, null, execution, value);
     }
 
-    private static VerifiedExecution verifyExecution(ObjectNode document, String expectedState,
+    private VerifiedExecution verifyExecution(ObjectNode document, String expectedState,
             boolean idempotent, byte[] expectedProgram, byte[] expectedActivity, String expectedKey,
             byte[] pinnedKey) {
         String[] base = {"state", "activity_id", "program_id", "guest_abi_version", "module_version",
@@ -521,7 +533,7 @@ public final class ProgramsClient {
         long moduleVersion = requiredU32(document.get("module_version"));
         int resultCode = requiredI32(document.get("result_code"));
         BigInteger globalSequence = unsigned(document.get("global_sequence"), 64);
-        if ((guestAbi != 1 && guestAbi != 2) || moduleVersion < 1 || moduleVersion > 3
+        if ((guestAbi != 1 && guestAbi != 2) || moduleVersion < 1 || moduleVersion > 4
                 || !EXECUTION_VERIFICATION.equals(text(document, "verification"))) throw decodeFailure();
         ObjectNode authority = object(document, "authority");
         requireFields(authority, "batch_id", "asset", "previous_state_root", "resulting_state_root",
@@ -555,7 +567,7 @@ public final class ProgramsClient {
         LocalVerifier.AuthorizedReceiptBatch authorized = new LocalVerifier.AuthorizedReceiptBatch(
             batchId, asset, previousRoot, resultingRoot, sequencerKey);
         LocalVerifier.ReceiptVerification verified = verifyReceipt(receiptBytes, authorized, activity,
-            guestAbi, terminalPayload, callGraph);
+            guestAbi, terminalPayload, callGraph, protocolVersion);
         LocalVerifier.ProtocolReceipt receipt = verified.receipt();
         LocalVerifier.ProgramReceiptOutcome receiptOutcome = receipt.programOutcome();
         verifyTerminal(terminalPayload, callGraph, program, outcomeDocument, receipt.protocolVersion(),
@@ -915,7 +927,7 @@ public final class ProgramsClient {
 
     private static void verifyTerminalAttachments(TerminalAttachments attachments, boolean candidate,
             boolean successful, int protocolVersion, LocalVerifier.ProgramReceiptOutcome receipt) {
-        boolean occupancyRequired = protocolVersion == 2 && successful;
+        boolean occupancyRequired = (protocolVersion == 2 || protocolVersion == 3) && successful;
         if (occupancyRequired != (attachments.occupancy() != null)) throw new IllegalArgumentException();
         if (attachments.occupancy() != null) {
             byte[] occupancy = attachments.occupancy();
@@ -947,7 +959,7 @@ public final class ProgramsClient {
             }
             verifyAuthorizationRoot(attachments.authorization(), attachments.transferRoot());
         }
-        if (protocolVersion != 1 && protocolVersion != 2) throw new IllegalArgumentException();
+        if (protocolVersion != 1 && protocolVersion != 2 && protocolVersion != 3) throw new IllegalArgumentException();
     }
 
     static TerminalAttachments unwrapTerminal(byte[] encoded) {
@@ -1583,6 +1595,13 @@ public final class ProgramsClient {
             .put("calldata", hex(call.calldata())).put("signed_activity", hex(call.signedActivity()));
         value.set("budget", object().put("fuel", call.budget().fuel().toString())
             .put("fee_limit", call.budget().feeLimit().toString()));
+        if (call.nativeCall() != null) {
+            NativeProgramCall n = call.nativeCall(); value.put("payload_encoding", "native-v1");
+            ObjectNode nativeValue = object().put("guest_abi", n.guestAbi()).put("entrypoint", n.entrypoint())
+                .put("capabilities_hex", hex(n.capabilities())).put("access_declaration_hex", hex(n.accessDeclaration())).put("response_capacity", n.responseCapacity());
+            ArrayNode resources = nativeValue.putArray("resources"); for (long resource : n.resources()) resources.add(Long.toUnsignedString(resource));
+            value.set("native_call", nativeValue); return value;
+        }
         ArrayNode capabilities = value.putArray("capabilities");
         call.capabilities().forEach(item -> capabilities.add(item.wire()));
         return value;
@@ -1593,7 +1612,7 @@ public final class ProgramsClient {
             byte[] signed = call.signedActivity();
             BinaryCursor cursor = new BinaryCursor(signed);
             int envelopeVersion = cursor.u16();
-            if ((envelopeVersion != 1 && envelopeVersion != 2) || cursor.u16() != 0x1001 || cursor.u8() != 12) {
+            if ((envelopeVersion != 1 && envelopeVersion != 2 && envelopeVersion != 3) || cursor.u16() != 0x1001 || cursor.u8() != 12) {
                 throw new IllegalArgumentException();
             }
             cursor.tag(1);
@@ -1619,7 +1638,8 @@ public final class ProgramsClient {
             byte[] idempotency = cursor.bounded(32, false);
             if (idempotency.length != 32) throw new IllegalArgumentException();
             cursor.tag(9);
-            cursor.integer(16);
+            BigInteger envelopeFee = cursor.integer(16);
+            if (call.nativeCall() != null && (envelopeVersion != 3 || !envelopeFee.equals(call.budget().feeLimit()))) throw new IllegalArgumentException();
             cursor.tag(10);
             byte[] payloadHash = cursor.bounded(32, false);
             if (payloadHash.length != 32) throw new IllegalArgumentException();
@@ -1642,6 +1662,13 @@ public final class ProgramsClient {
     }
 
     private static byte[] canonicalCallPayload(Call call) {
+        if (call.nativeCall() != null) {
+            NativeProgramCall n = call.nativeCall();
+            if (!Arrays.equals(n.programId(), call.programId()) || !Arrays.equals(n.calldata(), call.calldata())
+                || !new BigInteger(Long.toUnsignedString(n.resources()[0])).equals(call.budget().fuel()) || !call.capabilities().isEmpty()) invalid();
+            return n.encode();
+        }
+
         byte[] calldata = call.calldata();
         byte[] program = call.programId();
         byte[] fuel = fixedUnsigned(call.budget().fuel(), 8);

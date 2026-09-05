@@ -3,6 +3,8 @@ import { fileURLToPath } from "node:url";
 
 import {
   decodeProgramReceiptOutcome,
+  encodeNativeProgramCall,
+  decodeNativeProgramCall,
   ReceiptFailureCode,
   ReceiptVerificationError,
   verifyReceipt,
@@ -172,3 +174,52 @@ export async function verifyReceiptFixture(): Promise<void> {
 }
 
 await verifyReceiptFixture();
+
+for (const name of ["receipt-positive-v3.json", "receipt-programs-positive-v3.json"]) {
+  const fixture = loadFixture(name);
+  const canonical = hexBytes(fixture.canonical_receipt_hex);
+  const authority = authorizedBatch(fixture);
+  let rejectedDefault = false;
+  try { await verifyReceipt(canonical, authority); } catch (error) { rejectedDefault = error instanceof ReceiptVerificationError; }
+  assert(rejectedDefault, "default verifier accepted protocol 3");
+  const verified = await verifyReceipt(canonical, authority, { protocolVersion: 3 });
+  assert(verified.receipt.protocolVersion === 3, "explicit protocol 3 rejected");
+  hexEqual(verified.receiptDigest, fixture.expected.receipt_digest_hex, "protocol 3 digest");
+  canonical[canonical.length - 1] = canonical[canonical.length - 1]! ^ 1;
+  let rejectedSignature = false;
+  try { await verifyReceipt(canonical, authority, { protocolVersion: 3 }); } catch (error) { rejectedSignature = error instanceof ReceiptVerificationError; }
+  assert(rejectedSignature, "corrupt protocol 3 signature accepted");
+}
+
+const native = encodeNativeProgramCall({
+  programId: new Uint8Array(32).fill(0x11), guestAbi: 1, entrypoint: "layerx_call", calldata: new Uint8Array(),
+  capabilities: new Uint8Array([0, 0]), accessDeclaration: new TextEncoder().encode("LayerX/programs/access-declaration/v1\0\0"),
+  responseCapacity: 16, resources: [1_000_000n, 16_777_216n, 1_048_576n, 1_048_576n, 64n, 1_048_576n, 4096n],
+});
+hexEqual(native.slice(32, 50), "0001000b0000000000020000002700000010", "native header");
+assert(decodeNativeProgramCall(native).entrypoint === "layerx_call", "native decode");
+for (let length = 0; length < native.length; length++) {
+  let rejected = false;
+  try { decodeNativeProgramCall(native.slice(0, length)); } catch { rejected = true; }
+  assert(rejected, "truncated native call accepted");
+}
+
+const nativeFixture = JSON.parse(readFileSync(fileURLToPath(new URL("../../../../../platform/sdk/conformance/fixtures/native-program-call-v3.json", import.meta.url)), "utf8")) as { payload_hex: string; signed_activity_hex: string; activity_id_hex: string };
+const { NativeProgramRequest } = await import("../src/programs.js");
+const { decodeSignedProgramCall } = await import("../src/program-wire.js");
+const nativeModel = decodeNativeProgramCall(hexBytes(nativeFixture.payload_hex));
+const nativeRequest = new NativeProgramRequest(nativeModel, 1000n, hexBytes(nativeFixture.signed_activity_hex));
+assert((await decodeSignedProgramCall(nativeRequest)).activityId === nativeFixture.activity_id_hex, "native signed binding");
+for (const changed of [
+  { ...nativeModel, programId: new Uint8Array(32).fill(0x22) }, { ...nativeModel, guestAbi: 2 as const },
+  { ...nativeModel, entrypoint: "other" }, { ...nativeModel, calldata: new Uint8Array([1]) },
+  { ...nativeModel, capabilities: new Uint8Array([0, 1]) }, { ...nativeModel, accessDeclaration: new Uint8Array([1]) },
+  { ...nativeModel, responseCapacity: 17 }, { ...nativeModel, resources: [999n, ...nativeModel.resources.slice(1)] as unknown as typeof nativeModel.resources },
+]) {
+  let rejected = false;
+  try { await decodeSignedProgramCall(new NativeProgramRequest(changed, 1000n, nativeRequest.signedActivity)); } catch { rejected = true; }
+  assert(rejected, "mismatched native field accepted");
+}
+let rejectedNativeFee = false;
+try { await decodeSignedProgramCall(new NativeProgramRequest(nativeModel, 999n, nativeRequest.signedActivity)); } catch { rejectedNativeFee = true; }
+assert(rejectedNativeFee, "native envelope fee mismatch accepted");

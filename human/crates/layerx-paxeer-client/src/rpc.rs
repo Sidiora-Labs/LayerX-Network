@@ -291,9 +291,9 @@ fn exchange(
     let loopback_only = matches!(&endpoint.transport, EndpointTransport::LocalEmulator);
     let mut tcp = connect(target, endpoint.request_timeout, loopback_only)?;
     tcp.set_read_timeout(Some(endpoint.request_timeout))
-        .map_err(transport)?;
+        .map_err(|error| transport(&error))?;
     tcp.set_write_timeout(Some(endpoint.request_timeout))
-        .map_err(transport)?;
+        .map_err(|error| transport(&error))?;
     match &endpoint.transport {
         EndpointTransport::LocalEmulator => exchange_stream(&mut tcp, target, body),
         EndpointTransport::PinnedTls { trust_anchor_der } => {
@@ -315,7 +315,7 @@ fn exchange(
     }
 }
 
-fn transport(error: std::io::Error) -> EndpointFault {
+fn transport(error: &std::io::Error) -> EndpointFault {
     EndpointFault::Transport {
         detail: error.to_string(),
     }
@@ -334,12 +334,14 @@ fn exchange_stream<S: Read + Write>(
         body.len(),
         body
     );
-    stream.write_all(request.as_bytes()).map_err(transport)?;
-    stream.flush().map_err(transport)?;
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|error| transport(&error))?;
+    stream.flush().map_err(|error| transport(&error))?;
     let mut response = Vec::new();
     let mut block = [0_u8; 8_192];
     loop {
-        let read = stream.read(&mut block).map_err(transport)?;
+        let read = stream.read(&mut block).map_err(|error| transport(&error))?;
         if read == 0 {
             break;
         }

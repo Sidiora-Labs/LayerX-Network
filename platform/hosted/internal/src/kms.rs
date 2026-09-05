@@ -32,6 +32,7 @@ const MAX_KEYS: usize = 100_000;
 const MAX_PURPOSE_BYTES: usize = 64;
 
 #[derive(Serialize, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 struct KeyRecord {
     key_id: String,
     handle: String,
@@ -121,6 +122,12 @@ impl KeyStore {
             by_key_id: BTreeMap::new(),
         };
         for record in records {
+            if store.by_handle.contains_key(&record.handle)
+                || store.by_scope.contains_key(&record.scope)
+                || store.by_key_id.contains_key(&record.key_id)
+            {
+                return Err("duplicate key identity in journal".to_owned());
+            }
             let signing = store.open_key(&record)?;
             if signing.verifying_key().to_bytes() != decode_public(&record.public_key)? {
                 return Err(format!(
@@ -207,7 +214,8 @@ impl KeyStore {
             sealed_seed: self.seal.seal(seed.as_slice())?,
             created_at: unix_seconds()?,
         };
-        if self.by_key_id.contains_key(&record.key_id) || self.by_handle.contains_key(&record.handle)
+        if self.by_key_id.contains_key(&record.key_id)
+            || self.by_handle.contains_key(&record.handle)
         {
             return Err("generated identifiers collided".to_owned());
         }
@@ -221,7 +229,9 @@ impl KeyStore {
     #[must_use]
     pub fn lookup(&self, key_id: &str) -> Option<KeyView> {
         let handle = self.by_key_id.get(key_id)?;
-        self.by_handle.get(handle).and_then(|record| view(record).ok())
+        self.by_handle
+            .get(handle)
+            .and_then(|record| view(record).ok())
     }
 
     /// Signs `message` under the key behind `handle`.
@@ -296,7 +306,7 @@ impl Service {
         let ready = self
             .store
             .lock()
-            .map_or(false, |store| store.probe_writable().is_ok());
+            .is_ok_and(|store| store.probe_writable().is_ok());
         json(
             if ready { 200 } else { 503 },
             &Readiness {
@@ -434,7 +444,8 @@ mod tests {
     use std::path::PathBuf;
 
     fn temporary_directory(name: &str) -> PathBuf {
-        let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        let directory = std::env::temp_dir()
+            .join("layerx-internal-tests")
             .join("kms")
             .join(format!("{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&directory);
@@ -445,9 +456,14 @@ mod tests {
     fn keys_are_idempotent_sealed_and_durable() {
         let directory = temporary_directory("durable");
         let seal = || SealKey::derive(SEAL_LABEL, b"seal secret");
-        let mut store = KeyStore::open(&directory, seal()).unwrap_or_else(|error| panic!("{error}"));
+        let mut store =
+            KeyStore::open(&directory, seal()).unwrap_or_else(|error| panic!("{error}"));
         let Created::Fresh(first) = store
-            .create("layerx-webhook-v1:register:abc", "layerx-webhook-v1", "digest-a")
+            .create(
+                "layerx-webhook-v1:register:abc",
+                "layerx-webhook-v1",
+                "digest-a",
+            )
             .unwrap_or_else(|error| panic!("{error}"))
         else {
             panic!("first create must be fresh");
@@ -455,14 +471,22 @@ mod tests {
         assert!(first.key_id.starts_with(KEY_ID_PREFIX));
         assert!(first.handle.starts_with(HANDLE_PREFIX));
         let Created::Existing(again) = store
-            .create("layerx-webhook-v1:register:abc", "layerx-webhook-v1", "digest-a")
+            .create(
+                "layerx-webhook-v1:register:abc",
+                "layerx-webhook-v1",
+                "digest-a",
+            )
             .unwrap_or_else(|error| panic!("{error}"))
         else {
             panic!("repeat must return the existing key");
         };
         assert_eq!(first, again);
         assert!(matches!(
-            store.create("layerx-webhook-v1:register:abc", "layerx-webhook-v1", "digest-b"),
+            store.create(
+                "layerx-webhook-v1:register:abc",
+                "layerx-webhook-v1",
+                "digest-b"
+            ),
             Ok(Created::Conflict)
         ));
         let signature = store
@@ -471,7 +495,10 @@ mod tests {
             .unwrap_or_else(|| panic!("handle must sign"));
         VerifyingKey::from_bytes(&first.public_key)
             .unwrap_or_else(|error| panic!("{error}"))
-            .verify(b"message", &ed25519_dalek::Signature::from_bytes(&signature))
+            .verify(
+                b"message",
+                &ed25519_dalek::Signature::from_bytes(&signature),
+            )
             .unwrap_or_else(|error| panic!("{error}"));
         assert_eq!(
             store
@@ -488,7 +515,11 @@ mod tests {
         let reopened = KeyStore::open(&directory, seal()).unwrap_or_else(|error| panic!("{error}"));
         assert_eq!(reopened.len(), 1);
         assert_eq!(reopened.lookup(&first.key_id), Some(first.clone()));
-        assert!(KeyStore::open(&directory, SealKey::derive(SEAL_LABEL, b"other secret")).is_err());
+        drop(reopened);
+        let refused = KeyStore::open(&directory, SealKey::derive(SEAL_LABEL, b"other secret"))
+            .err()
+            .unwrap_or_else(|| panic!("wrong seal secret accepted"));
+        assert!(refused.contains("failed authentication"));
         let _ = fs::remove_dir_all(&directory);
     }
 }

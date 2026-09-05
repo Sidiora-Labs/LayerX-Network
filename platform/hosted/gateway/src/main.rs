@@ -1,3 +1,5 @@
+mod native_call;
+
 use layerx_crypto::ed25519;
 use layerx_platform_gateway::http::{
     self, Client, Endpoint, IncomingRequest, OutgoingResponse, UpstreamResponse,
@@ -294,6 +296,11 @@ fn program_call_bytes(
     request: &IncomingRequest,
     registry: &ModuleRegistry,
 ) -> Result<(Vec<u8>, [u8; 32]), String> {
+    if media_type_is(request, "application/json") {
+        if let Some(native) = native_call::parse_json(&request.body, registry)? {
+            return Ok(native);
+        }
+    }
     let (signed_activity, expected_call) = if media_type_is(request, "application/octet-stream") {
         if request.body.len() > 1_048_576 {
             return Err("signed program activity exceeds its bound".to_owned());
@@ -356,6 +363,13 @@ fn program_call_bytes(
         || activity.activity_type().ordinal() != 3
     {
         return Err("signed activity is not a Programs CALL".to_owned());
+    }
+    if activity.protocol_version() == 3 {
+        if expected_call.is_some() {
+            return Err("native protocol requires the native request model".to_owned());
+        }
+        let program = native_call::from_activity(&activity)?;
+        return Ok((signed_activity, program));
     }
     let call = ProgramCall::from_canonical_payload(activity.payload())
         .map_err(|_| "signed program payload is not canonical".to_owned())?;
@@ -2622,6 +2636,16 @@ fn route(config: &Config, request: &IncomingRequest) -> OutgoingResponse {
         } else {
             result
         };
+    }
+    if request.method == "GET" && request.path == "/internal/v1/principal" {
+        return authenticate_key(config, request).map_or_else(
+            |refused| refused,
+            |record| json_response(200, serde_json::json!({
+                "ok": true,
+                "result": { "principal_digest": record.principal_digest },
+                "trace": trace_id,
+            })),
+        );
     }
     if request.method == "GET" && request.path == "/livez" {
         return json_response(

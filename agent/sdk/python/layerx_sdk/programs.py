@@ -6,6 +6,7 @@ from threading import RLock
 from time import time_ns
 from typing import Callable, Literal, Mapping, cast
 
+from .native_program_call import NativeProgramCall, encode_native_program_call
 from .production import IdempotencyKey, PlatformSdkError, ProductionClient, SdkErrorCode
 from .program_wire import (
     DecodedSignedProgramCall,
@@ -31,6 +32,29 @@ class ProgramCall:
     fee_limit: int
     capabilities: tuple[ProgramCapability, ...]
     signed_activity: bytes
+
+
+@dataclass(frozen=True)
+class NativeProgramRequest:
+    native_call: NativeProgramCall
+    fee_limit: int
+    signed_activity: bytes
+
+    @property
+    def program_id(self) -> str:
+        return self.native_call.program_id.hex()
+
+    @property
+    def calldata(self) -> bytes:
+        return self.native_call.calldata
+
+    @property
+    def fuel(self) -> int:
+        return self.native_call.resources[0]
+
+    @property
+    def capabilities(self) -> tuple[ProgramCapability, ...]:
+        return ()
 
 
 ProgramLifecycle = Literal["active", "deprecated", "tombstoned"]
@@ -85,9 +109,12 @@ class ProgramTrustContext:
     clock_milliseconds: Callable[[], int] = lambda: time_ns() // 1_000_000
     maximum_simulation_age_milliseconds: int = _DEFAULT_MAXIMUM_SIMULATION_AGE_MILLISECONDS
 
+    protocol_version: int = 2
+
     def __post_init__(self) -> None:
         if (
-            not isinstance(self.sequencer_public_key, bytes)
+            self.protocol_version not in (2, 3)
+            or not isinstance(self.sequencer_public_key, bytes)
             or len(self.sequencer_public_key) != 32
             or self.sequencer_public_key == bytes(32)
             or not callable(self.clock_milliseconds)
@@ -116,7 +143,7 @@ def _hex32(value: str) -> bool:
     return len(value) == 64 and all(character in "0123456789abcdef" for character in value)
 
 
-def _validate(call: ProgramCall) -> None:
+def _validate(call: ProgramCall | NativeProgramRequest) -> None:
     if not _hex32(call.program_id) or call.program_id == "0" * 64 or not 0 < call.fuel <= _MAX_U64 or not 0 <= call.fee_limit <= _MAX_U128:
         raise ValueError("invalid bounded program call")
     if len(call.calldata) > _MAX_CALLDATA or len(call.capabilities) > 5 or not 0 < len(call.signed_activity) <= _MAX_CALLDATA:
@@ -146,14 +173,14 @@ def verify_program_receipt(
     module_version = execution.get("module_version")
     guest_abi = execution.get("guest_abi_version")
     result_code = execution.get("result_code")
-    if not isinstance(activity_id, str) or not _hex32(activity_id) or not isinstance(module_version, int) or module_version not in (1, 2, 3) or guest_abi not in (1, 2) or not isinstance(result_code, int):
+    if not isinstance(activity_id, str) or not _hex32(activity_id) or not isinstance(module_version, int) or module_version not in ((4,) if trust.protocol_version == 3 else (1, 2, 3)) or guest_abi not in (1, 2) or not isinstance(result_code, int):
         raise ValueError("invalid program execution evidence")
     receipt = _evidence_bytes(execution, "receipt")
     terminal_payload = _evidence_bytes(execution, "terminal_payload")
     call_graph = _evidence_bytes(execution, "call_graph")
     if authority.sequencer_public_key != trust.sequencer_public_key or _mapping(execution.get("authority")).get("sequencer_public_key") != trust.sequencer_public_key.hex():
         raise ValueError("program sequencer authority mismatch")
-    verification = verify_receipt_outcome(receipt, authority, signatures)
+    verification = verify_receipt_outcome(receipt, authority, signatures, protocol_version=trust.protocol_version)
     protocol = verification.receipt
     outcome = protocol.program_outcome
     authority_document = _mapping(execution.get("authority"))
@@ -187,8 +214,10 @@ class ProgramOperations:
         self._remember_head(program_id, _head(result))
         return result
 
-    def simulate(self, call: ProgramCall) -> Mapping[str, object]:
+    def simulate(self, call: ProgramCall | NativeProgramRequest) -> Mapping[str, object]:
         _validate(call)
+        if isinstance(call, NativeProgramRequest) and self._trust.protocol_version != 3:
+            raise ValueError("native call requires selected protocol 3")
         signed = decode_signed_program_call(call)
         head = self._remembered_head(call.program_id)
         if head is None:
@@ -240,8 +269,10 @@ class ProgramOperations:
             if self._heads.get(program_id) != expected:
                 raise ValueError("program head changed during simulation")
 
-    def submit(self, call: ProgramCall, idempotency_key: IdempotencyKey) -> Mapping[str, object]:
+    def submit(self, call: ProgramCall | NativeProgramRequest, idempotency_key: IdempotencyKey) -> Mapping[str, object]:
         _validate(call)
+        if isinstance(call, NativeProgramRequest) and self._trust.protocol_version != 3:
+            raise ValueError("native call requires selected protocol 3")
         if not _hex32(str(idempotency_key)):
             raise ValueError("invalid program idempotency key")
         signed = decode_signed_program_call(call, str(idempotency_key))
@@ -316,7 +347,7 @@ def _execution(value: object, expected_state: Literal["executed", "refused", "si
     _hex_field(execution, "call_graph", _MAX_CALLDATA)
     for field in ("global_sequence",):
         _decimal(execution.get(field), (1 << 64) - 1)
-    if not isinstance(execution.get("module_version"), int) or isinstance(execution.get("module_version"), bool) or execution["module_version"] not in (1, 2, 3) or not isinstance(execution.get("guest_abi_version"), int) or isinstance(execution.get("guest_abi_version"), bool) or execution.get("guest_abi_version") not in (1, 2) or not isinstance(execution.get("result_code"), int) or isinstance(execution.get("result_code"), bool):
+    if not isinstance(execution.get("module_version"), int) or isinstance(execution.get("module_version"), bool) or execution["module_version"] not in (1, 2, 3, 4) or not isinstance(execution.get("guest_abi_version"), int) or isinstance(execution.get("guest_abi_version"), bool) or execution.get("guest_abi_version") not in (1, 2) or not isinstance(execution.get("result_code"), int) or isinstance(execution.get("result_code"), bool):
         raise ValueError("invalid program execution metadata")
     if execution.get("verification") != "receipt-terminal-and-call-graph-verified":
         raise ValueError("invalid program verification status")
@@ -578,7 +609,15 @@ def _decimal(value: object, maximum: int) -> int:
     return parsed
 
 
-def _wire(call: ProgramCall) -> Mapping[str, object]:
+def _wire(call: ProgramCall | NativeProgramRequest) -> Mapping[str, object]:
+    if isinstance(call, NativeProgramRequest):
+        native = call.native_call
+        encode_native_program_call(native)
+        return {"payload_encoding": "native-v1", "program_id": call.program_id, "calldata": call.calldata.hex(),
+                "budget": {"fuel": str(call.fuel), "fee_limit": str(call.fee_limit)}, "signed_activity": call.signed_activity.hex(),
+                "native_call": {"guest_abi": native.guest_abi, "entrypoint": native.entrypoint,
+                                "capabilities_hex": native.capabilities.hex(), "access_declaration_hex": native.access_declaration.hex(),
+                                "response_capacity": native.response_capacity, "resources": [str(value) for value in native.resources]}}
     return {"program_id": call.program_id, "calldata": call.calldata.hex(), "budget": {"fuel": str(call.fuel), "fee_limit": str(call.fee_limit)}, "capabilities": call.capabilities, "signed_activity": call.signed_activity.hex()}
 
 

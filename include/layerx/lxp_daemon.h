@@ -345,6 +345,8 @@ typedef struct lxp_daemon_lni_server {
     uint64_t connection_generation;
     uint64_t expected_admission_sequence;
     uint8_t expected_admission_activity_id[32];
+    uint8_t sequencer_private_key[32];
+    bool sequencer_private_key_loaded;
     pthread_t expected_admission_submitter;
     uint64_t evicted_peers;
     uint64_t evicted_authentication_refusals;
@@ -436,6 +438,12 @@ lxp_result lxp_daemon_lni_preparation_state(
     size_t request_length,
     uint8_t *response, size_t response_capacity,
     size_t *response_length);
+lxp_result lxp_daemon_lni_simulate(
+    lxp_daemon_protocol_owner *owner,
+    const uint8_t sequencer_private_key[32],
+    const uint8_t *request, size_t request_length,
+    uint8_t *response, size_t response_capacity, size_t *response_length,
+    uint8_t *evidence, size_t evidence_capacity, size_t *evidence_length);
 
 typedef enum lxp_daemon_role_kind {
     LXP_DAEMON_SEQUENCER = 1,

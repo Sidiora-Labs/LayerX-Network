@@ -85,9 +85,6 @@ static const uint8_t LNI_PARAMETER_VERSION_KEY[32] = {
     'p','a','r','a','m','e','t','e','r','-','v','e','r','s','i','o','n'
 };
 
-static uint8_t lni_sequencer_private_key[32];
-static bool lni_sequencer_private_key_loaded;
-
 typedef struct lni_envelope {
     uint16_t major;
     uint16_t minor;
@@ -579,7 +576,7 @@ static lxp_result admission_journal_recover(
             server->daemon->queue_bytes = recovered_bytes;
             server->journal_entry_count = recovered_count;
             if (recovered_count != 0U)
-                (void)pthread_cond_signal(&server->daemon->queue_changed);
+                (void)pthread_cond_broadcast(&server->daemon->queue_changed);
         }
         if (pthread_mutex_unlock(&server->daemon->mutex) != 0)
             status = LXP_FATAL_INVARIANT;
@@ -1201,20 +1198,21 @@ static bool simulation_available(const lxp_daemon_lni_server *server)
         server->daemon->config.role == LXP_DAEMON_SEQUENCER &&
         server->owner != NULL && server->owner->scratch != NULL &&
         server->owner->programs_runtime != NULL &&
-        lni_sequencer_private_key_loaded;
+        server->sequencer_private_key_loaded;
 }
 
 static lxp_result load_sequencer_private_key(
-    const lxp_daemon_protocol_owner *owner)
+    lxp_daemon_lni_server *server)
 {
+    const lxp_daemon_protocol_owner *owner = server->owner;
     const char *text = getenv(LNI_SEQUENCER_PRIVATE_KEY_ENVIRONMENT);
     uint8_t key[32];
     uint8_t public_key[32];
     size_t index;
     lxp_result status;
-    lni_sequencer_private_key_loaded = false;
-    lxp_secure_zero(lni_sequencer_private_key,
-                    sizeof(lni_sequencer_private_key));
+    server->sequencer_private_key_loaded = false;
+    lxp_secure_zero(server->sequencer_private_key,
+                    sizeof(server->sequencer_private_key));
     if (text == NULL || strlen(text) != 64U ||
         owner == NULL || owner->receipt_authority == NULL)
         return LXP_OK;
@@ -1229,7 +1227,10 @@ static lxp_result load_sequencer_private_key(
                 part = (unsigned int)(digit - 'a') + 10U;
             else if (digit >= 'A' && digit <= 'F')
                 part = (unsigned int)(digit - 'A') + 10U;
-            else return LXP_OK;
+            else {
+                lxp_secure_zero(key, sizeof(key));
+                return LXP_OK;
+            }
             value = (value << 4U) | part;
         }
         key[index] = (uint8_t)value;
@@ -1239,8 +1240,8 @@ static lxp_result load_sequencer_private_key(
         lxp_ct_memcmp(public_key,
                       owner->receipt_authority->authorization.public_key,
                       32U) == 0) {
-        (void)memcpy(lni_sequencer_private_key, key, 32U);
-        lni_sequencer_private_key_loaded = true;
+        (void)memcpy(server->sequencer_private_key, key, 32U);
+        server->sequencer_private_key_loaded = true;
     }
     lxp_secure_zero(key, sizeof(key));
     return LXP_OK;
@@ -1311,6 +1312,10 @@ static lxp_result send_node_info(lxp_daemon_lni_server *server,
     if (base_count + 1U > sizeof(capabilities) / sizeof(capabilities[0]))
         return LXP_ERR_LENGTH_LIMIT;
     for (index = 0U; index < base_count; ++index) {
+        if (server->owner->protocol_version !=
+                LXP_PROTOCOL_VERSION_STATE_COMMITMENT &&
+            strcmp(base_capabilities[index], "account_read") == 0)
+            continue;
         if (simulate && strcmp(base_capabilities[index],
                                simulate_capability) > 0) {
             capabilities[capability_count++] = simulate_capability;
@@ -1555,6 +1560,71 @@ static lxp_result fail_stop_submit_daemon(lxp_daemon *daemon,
     return failure;
 }
 
+static lxp_result lni_principal(
+    const lx_account_registry *accounts, const lxp_activity *activity,
+    uint8_t principal_id[32], lxp_u128 *fee_balance)
+{
+    static const uint8_t prefix[] = "agent:";
+    static const uint8_t suffix[] = ":main";
+    uint8_t name[LX_ACCOUNT_NAME_MAX];
+    size_t length;
+    size_t index;
+    lxp_result status;
+    if (accounts == NULL || activity == NULL || principal_id == NULL ||
+        fee_balance == NULL || activity->actor_did.bytes == NULL ||
+        activity->actor_did.length == 0U ||
+        activity->authority.length != 32U ||
+        activity->actor_did.length >
+            sizeof(name) - sizeof(prefix) - sizeof(suffix) + 2U)
+        return LXP_ERR_NON_CANONICAL;
+    length = sizeof(prefix) - 1U;
+    (void)memcpy(name, prefix, length);
+    (void)memcpy(name + length, activity->actor_did.bytes,
+                 activity->actor_did.length);
+    length += activity->actor_did.length;
+    (void)memcpy(name + length, suffix, sizeof(suffix) - 1U);
+    length += sizeof(suffix) - 1U;
+    status = lx_account_id_from_string(name, length, principal_id);
+    if (status != LXP_OK) return status;
+    *fee_balance = (lxp_u128){0U, 0U};
+    for (index = 0U; index < accounts->count; ++index) {
+        const lx_account *account = &accounts->accounts[index];
+        if (lxp_ct_memcmp(account->id, principal_id, 32U) != 0) continue;
+        if (account->kind != LX_ACCOUNT_AGENT_MAIN ||
+            !account->has_authority_key ||
+            lxp_ct_memcmp(account->authority_key,
+                          activity->authority.bytes, 32U) != 0)
+            return LXP_ERR_BAD_SIGNATURE;
+        *fee_balance = account->balance;
+        return LXP_OK;
+    }
+    return LXP_OK;
+}
+
+static lxp_result program_call_admission_decode(
+    lxp_daemon_protocol_owner *owner, const lxp_activity *activity)
+{
+    lxp_module_ctx ctx;
+    void *decoded = NULL;
+    size_t mark;
+    lxp_result status;
+    lxp_result reset_status;
+    if (activity->activity_type != LX_PROGRAMS_CALL) return LXP_OK;
+    if (owner->kernel == NULL || owner->scratch == NULL)
+        return LXP_ERR_MODULE_DISABLED;
+    mark = lxp_arena_mark(owner->scratch);
+    status = lxp_module_ctx_init(
+        &ctx, owner->kernel, LXP_MODULE_PROGRAMS, 0U,
+        owner->kernel->epoch, 0U, 0U, owner->scratch, false);
+    if (status == LXP_OK) {
+        ctx.protocol_version = activity->protocol_version;
+        status = lxp_programs_call_decode(
+            &ctx, activity->payload.bytes, activity->payload.length, &decoded);
+    }
+    reset_status = lxp_arena_reset(owner->scratch, mark);
+    return reset_status == LXP_OK ? status : reset_status;
+}
+
 static lxp_result send_submit(lxp_daemon_lni_server *server, int descriptor,
                               const lni_envelope *request,
                               const struct ucred *credential,
@@ -1606,6 +1676,13 @@ static lxp_result send_submit(lxp_daemon_lni_server *server, int descriptor,
                                 request->correlation_id, 4U, status, deadline);
     }
     if (pthread_mutex_lock(&server->owner->mutex) != 0) return LXP_ERR_IO;
+    status = program_call_admission_decode(server->owner, &activity);
+    if (status != LXP_OK) {
+        if (pthread_mutex_unlock(&server->owner->mutex) != 0)
+            return LXP_FATAL_INVARIANT;
+        return send_refusal(descriptor, server->frame_bytes,
+                            request->correlation_id, 4U, status, deadline);
+    }
     status = admission_journal_contains(server, activity_id, &known);
     if (status == LXP_OK && !known)
         status = committed_activity_present(server->owner, activity_id,
@@ -1652,6 +1729,31 @@ static lxp_result send_submit(lxp_daemon_lni_server *server, int descriptor,
                              LNI_SUBMIT_RESPONSE, request->correlation_id,
                              request->payload, request->payload_length,
                              activity_id, sizeof(activity_id), deadline);
+    }
+    if (activity.protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT &&
+        activity.activity_type == LX_ASSET_SEND) {
+        uint8_t principal_id[32];
+        lxp_u128 fee_balance;
+        if (server->owner->kernel == NULL ||
+            server->owner->kernel->state == NULL ||
+            server->owner->kernel->state->accounts == NULL)
+            status = LXP_ERR_MODULE_DISABLED;
+        else
+            status = lni_principal(
+                server->owner->kernel->state->accounts, &activity,
+                principal_id, &fee_balance);
+        if (status == LXP_OK &&
+            lxp_u128_cmp(fee_balance, activity.fee_limit) < 0)
+            status = LXP_ERR_FEE_UNPAYABLE;
+        if (status != LXP_OK) {
+            if (pthread_mutex_unlock(&server->owner->mutex) != 0)
+                return LXP_FATAL_INVARIANT;
+            if (status == LXP_ERR_BAD_SIGNATURE)
+                return authentication_refusal(
+                    server, descriptor, request, credential, status, deadline);
+            return send_refusal(descriptor, server->frame_bytes,
+                                request->correlation_id, 4U, status, deadline);
+        }
     }
     if (pthread_mutex_lock(&server->mutex) != 0) {
         status = LXP_ERR_IO;
@@ -2042,47 +2144,6 @@ static lxp_result simulation_batch_number(
     return LXP_OK;
 }
 
-static lxp_result simulation_principal(
-    const lx_account_registry *accounts, const lxp_activity *activity,
-    uint8_t principal_id[32], lxp_u128 *fee_balance)
-{
-    static const uint8_t prefix[] = "agent:";
-    static const uint8_t suffix[] = ":main";
-    uint8_t name[LX_ACCOUNT_NAME_MAX];
-    size_t length;
-    size_t index;
-    lxp_result status;
-    if (accounts == NULL || activity == NULL || principal_id == NULL ||
-        fee_balance == NULL || activity->actor_did.bytes == NULL ||
-        activity->actor_did.length == 0U ||
-        activity->authority.length != 32U ||
-        activity->actor_did.length >
-            sizeof(name) - sizeof(prefix) - sizeof(suffix) + 2U)
-        return LXP_ERR_NON_CANONICAL;
-    length = sizeof(prefix) - 1U;
-    (void)memcpy(name, prefix, length);
-    (void)memcpy(name + length, activity->actor_did.bytes,
-                 activity->actor_did.length);
-    length += activity->actor_did.length;
-    (void)memcpy(name + length, suffix, sizeof(suffix) - 1U);
-    length += sizeof(suffix) - 1U;
-    status = lx_account_id_from_string(name, length, principal_id);
-    if (status != LXP_OK) return status;
-    *fee_balance = (lxp_u128){0U, 0U};
-    for (index = 0U; index < accounts->count; ++index) {
-        const lx_account *account = &accounts->accounts[index];
-        if (lxp_ct_memcmp(account->id, principal_id, 32U) != 0) continue;
-        if (account->kind != LX_ACCOUNT_AGENT_MAIN ||
-            !account->has_authority_key ||
-            lxp_ct_memcmp(account->authority_key,
-                          activity->authority.bytes, 32U) != 0)
-            return LXP_ERR_BAD_SIGNATURE;
-        *fee_balance = account->balance;
-        return LXP_OK;
-    }
-    return LXP_OK;
-}
-
 static lxp_result simulation_evidence_sign(
     const uint8_t sequencer_private_key[32],
     const uint8_t sequencer_public_key[32],
@@ -2235,6 +2296,8 @@ lxp_result lxp_daemon_lni_simulate(
     uint64_t batch_number = 0U;
     uint64_t timestamp = 0U;
     uint64_t global_sequence;
+    pthread_t prior_writer;
+    bool writer_bound = false;
     size_t retry_prefix_count = 0U;
     size_t mark = 0U;
     bool locked = false;
@@ -2274,11 +2337,17 @@ lxp_result lxp_daemon_lni_simulate(
     if (pthread_mutex_lock(&owner->mutex) != 0) return LXP_ERR_IO;
     locked = true;
     mark = lxp_arena_mark(owner->scratch);
-    if (lxp_ct_memcmp(sequencer_public_key,
+    status = program_call_admission_decode(owner, &activity);
+    if (status == LXP_OK && lxp_ct_memcmp(sequencer_public_key,
                       owner->receipt_authority->authorization.public_key,
                       32U) != 0)
         status = LXP_ERR_AUTH_SCOPE;
     if (status == LXP_OK) status = preparation_snapshot_valid(owner);
+    if (status == LXP_OK) {
+        prior_writer = owner->kernel->state->writer;
+        owner->kernel->state->writer = pthread_self();
+        writer_bound = true;
+    }
     if (status == LXP_OK) status = wall_clock_milliseconds(&timestamp);
     if (status == LXP_OK) {
         global_sequence = owner->kernel->state->next_sequence;
@@ -2292,7 +2361,7 @@ lxp_result lxp_daemon_lni_simulate(
                                  timestamp, global_sequence)))
         status = LXP_ERR_BAD_SIGNATURE;
     if (status == LXP_OK)
-        status = simulation_principal(owner->programs_runtime->accounts,
+        status = lni_principal(owner->programs_runtime->accounts,
                                       &activity, principal_id, &fee_balance);
     if (status == LXP_OK)
         status = simulation_schedule(owner->kernel, &parameter_version,
@@ -2322,7 +2391,7 @@ lxp_result lxp_daemon_lni_simulate(
         (void)memset(&execution, 0, sizeof(execution));
         execution.network_id = owner->network_id;
         execution.batch_number = batch_number;
-        execution.batch_timestamp_ms = timestamp;
+        execution.batch_timestamp_ms = owner->latest_sealed_timestamp;
         execution.maximum_timestamp_window = UINT64_C(300000);
         execution.epoch = owner->kernel->epoch;
         execution.global_sequence = global_sequence;
@@ -2375,6 +2444,7 @@ lxp_result lxp_daemon_lni_simulate(
             global_sequence - 1U, owner->latest_sealed_timestamp, evidence);
     if (status == LXP_OK) *evidence_length = LNI_SIMULATION_EVIDENCE_BYTES;
     lxp_kernel_prepared_batch_destroy(prepared);
+    if (writer_bound) owner->kernel->state->writer = prior_writer;
     if (lxp_arena_reset(owner->scratch, mark) != LXP_OK &&
         status == LXP_OK)
         status = LXP_FATAL_INVARIANT;
@@ -2415,7 +2485,7 @@ static lxp_result send_simulate(
     payload = (uint8_t *)malloc(server->frame_bytes);
     if (payload == NULL) return LXP_ERR_IO;
     status = lxp_daemon_lni_simulate(
-        server->owner, lni_sequencer_private_key,
+        server->owner, server->sequencer_private_key,
         request->payload, request->payload_length,
         payload, server->frame_bytes, &payload_length, evidence,
         sizeof(evidence), &evidence_length);
@@ -2638,7 +2708,9 @@ static lxp_result send_account_read(
     if (status != LXP_OK)
         return send_refusal(descriptor, server->frame_bytes,
                             request->correlation_id, 1U, status, deadline);
-    if (server->owner->evidence_store == NULL || requested_rank > 4U ||
+    if (server->owner->protocol_version !=
+            LXP_PROTOCOL_VERSION_STATE_COMMITMENT ||
+        server->owner->evidence_store == NULL || requested_rank > 4U ||
         ((selector_kind == 1U || selector_kind == 2U) &&
          requested_rank > 3U))
         return send_refusal(descriptor, server->frame_bytes,
@@ -2767,7 +2839,9 @@ static lxp_result send_proof_bundle(
         return send_refusal(descriptor, server->frame_bytes,
                             request->correlation_id, 1U,
                             LXP_ERR_MALFORMED_ENVELOPE, deadline);
-    if (server->owner->evidence_store == NULL)
+    if (server->owner->evidence_store == NULL ||
+        (kind == 2U && server->owner->protocol_version !=
+                           LXP_PROTOCOL_VERSION_STATE_COMMITMENT))
         return send_refusal(descriptor, server->frame_bytes,
                             request->correlation_id, 3U,
                             LXP_ERR_MODULE_DISABLED, deadline);
@@ -3164,7 +3238,7 @@ lxp_result lxp_daemon_lni_serve(
     (void)memset(server, 0, sizeof(*server));
     server->daemon = daemon;
     server->owner = owner;
-    status = load_sequencer_private_key(owner);
+    status = load_sequencer_private_key(server);
     if (status != LXP_OK) return status;
     server->listener_descriptor = -1;
     server->connection_descriptor = -1;
@@ -3172,7 +3246,12 @@ lxp_result lxp_daemon_lni_serve(
     server->admission_parent_descriptor = -1;
     server->lifetime_lock_descriptor = -1;
     server->journal_descriptor = -1;
-    if (pthread_mutex_init(&server->mutex, NULL) != 0) return LXP_ERR_IO;
+    if (pthread_mutex_init(&server->mutex, NULL) != 0) {
+        lxp_secure_zero(server->sequencer_private_key,
+                        sizeof(server->sequencer_private_key));
+        server->sequencer_private_key_loaded = false;
+        return LXP_ERR_IO;
+    }
     server->mutex_initialized = true;
     server->allowed_peer_uid = configuration->allowed_peer_uid;
     server->allowed_peer_gid = configuration->allowed_peer_gid;
@@ -3268,6 +3347,8 @@ fail:
     if (server->admission_parent_descriptor >= 0)
         (void)close(server->admission_parent_descriptor);
     (void)pthread_mutex_destroy(&server->mutex);
+    lxp_secure_zero(server->sequencer_private_key,
+                    sizeof(server->sequencer_private_key));
     (void)memset(server, 0, sizeof(*server));
     server->listener_descriptor = -1;
     server->connection_descriptor = -1;
@@ -3338,9 +3419,9 @@ lxp_result lxp_daemon_lni_stop(lxp_daemon_lni_server *server)
     server->admission_parent_descriptor = -1;
     server->lifetime_lock_descriptor = -1;
     server->journal_descriptor = -1;
-    lni_sequencer_private_key_loaded = false;
-    lxp_secure_zero(lni_sequencer_private_key,
-                    sizeof(lni_sequencer_private_key));
+    server->sequencer_private_key_loaded = false;
+    lxp_secure_zero(server->sequencer_private_key,
+                    sizeof(server->sequencer_private_key));
     if (pthread_mutex_destroy(&server->mutex) != 0 && status == LXP_OK)
         status = LXP_ERR_IO;
     server->mutex_initialized = false;

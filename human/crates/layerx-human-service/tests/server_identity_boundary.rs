@@ -420,10 +420,69 @@ fn real_component_boundary_registers_asserts_opens_and_authorizes_session() {
     );
     assert_eq!(listed.result["sessions"][0]["current"], true);
 
+    verify_principal_route(&socket_path, &session.access_token);
+
     shutdown.request();
     let served = server
         .join()
         .unwrap_or_else(|_| panic!("component server panicked"));
     required(served, "component server");
     thread::sleep(Duration::from_millis(1));
+}
+
+fn verify_principal_route(socket: &std::path::Path, access_token: &str) {
+    use layerx_human_service::server::{HttpConfig, PrincipalLimits, Router};
+    use std::io::{Read as _, Write as _};
+    let backend = Arc::new(required(
+        UnixComponents::new(socket, default_component_limits()),
+        "principal client",
+    ));
+    let router = Arc::new(required(
+        Router::new(
+            backend,
+            required(PrincipalLimits::new(100, 60, 100), "limits"),
+            HttpConfig {
+                maximum_header_bytes: 32768,
+                maximum_body_bytes: 1048576,
+                allowed_origin: ORIGIN.to_owned(),
+                service_version: "test".to_owned(),
+            },
+        ),
+        "principal router",
+    ));
+    for (credential, expected_status) in [(access_token, 200), ("invalid-session", 401), ("", 401)]
+    {
+        let (mut client, mut server) =
+            required(std::os::unix::net::UnixStream::pair(), "HTTP pair");
+        let shared = Arc::clone(&router);
+        let worker = thread::spawn(move || {
+            required(
+                shared.serve_one(&mut server, "principal-test"),
+                "route principal",
+            )
+        });
+        let cookie = if credential.is_empty() {
+            String::new()
+        } else {
+            format!("Cookie: __Host-layerx_access={credential}\r\n")
+        };
+        required(write!(client, "GET /internal/v1/principal HTTP/1.1\r\nHost: id.layerx.example\r\n{cookie}X-LayerX-Principal: another-principal\r\nContent-Length: 0\r\n\r\n"), "principal request");
+        let mut response = String::new();
+        required(client.read_to_string(&mut response), "principal response");
+        worker.join().unwrap_or_else(|_| panic!("principal worker"));
+        assert!(
+            response.starts_with(&format!("HTTP/1.1 {expected_status}")),
+            "{response}"
+        );
+        assert!(response
+            .to_ascii_lowercase()
+            .contains("cache-control: no-store"));
+        if expected_status == 200 {
+            let (_, body) = response
+                .split_once("\r\n\r\n")
+                .unwrap_or_else(|| panic!("HTTP body"));
+            let body: Value = required(serde_json::from_str(body), "principal JSON");
+            assert_eq!(body["result"], json!({"active":true,"sub":ACCOUNT_ID}));
+        }
+    }
 }

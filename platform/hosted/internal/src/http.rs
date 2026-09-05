@@ -300,7 +300,7 @@ where
 pub fn serve<H>(
     name: &'static str,
     listen: SocketAddr,
-    tls: Arc<ServerConfig>,
+    tls: &Arc<ServerConfig>,
     handler: H,
 ) -> Result<(), String>
 where
@@ -316,7 +316,7 @@ where
                 let Some(permit) = ConnectionPermit::acquire() else {
                     continue;
                 };
-                let tls = Arc::clone(&tls);
+                let tls = Arc::clone(tls);
                 let handler = Arc::clone(&handler);
                 thread::spawn(move || {
                     let _permit = permit;
@@ -357,9 +357,8 @@ mod tests {
             b"POST /v1 HTTP/1.1\r\nHost: kms\r\nTransfer-Encoding: chunked\r\n\r\n".to_vec(),
         );
         assert!(parse_client_request(&mut chunked).is_err());
-        let mut duplicate = Cursor::new(
-            b"GET /readyz HTTP/1.1\r\nHost: kms\r\nHost: other\r\n\r\n".to_vec(),
-        );
+        let mut duplicate =
+            Cursor::new(b"GET /readyz HTTP/1.1\r\nHost: kms\r\nHost: other\r\n\r\n".to_vec());
         assert!(parse_client_request(&mut duplicate).is_err());
         let mut no_host = Cursor::new(b"GET /readyz HTTP/1.1\r\n\r\n".to_vec());
         assert!(parse_client_request(&mut no_host).is_err());

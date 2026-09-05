@@ -163,9 +163,9 @@ public final class LocalVerifier {
     }
 
     public static InclusionVerification verifyBatchInclusion(InclusionKind kind, byte[] canonicalLeaf,
-        MerkleProof proof, byte[] canonicalHeader, byte[] headerSignature, SequencerAuthorization authorization) {
+        MerkleProof proof, byte[] canonicalHeader, byte[] headerSignature, SequencerAuthorization authorization, int... selectedProtocol) {
         BatchHeader header = decodeBatchHeader(canonicalHeader);
-        if (header.protocolVersion() != CURRENT_PROTOCOL_VERSION) fail();
+        if (!selectedProtocolMatches(header.protocolVersion(), selectedProtocol)) fail();
         if (header.batchNumber().compareTo(authorization.firstBatchNumber()) < 0
                 || header.batchNumber().compareTo(authorization.lastBatchNumber()) > 0
                 || !equal(header.sequencerId(), exact(authorization.sequencerId(), 32))) fail();
@@ -183,12 +183,12 @@ public final class LocalVerifier {
     }
 
     public static CheckpointVerification verifyCheckpoint(CheckpointVerificationInput input,
-                                                            LocalSignatureVerifier signatures) {
+                                                            LocalSignatureVerifier signatures, int... selectedProtocol) {
         Objects.requireNonNull(input, "input"); Objects.requireNonNull(signatures, "signatures");
         CheckpointCertificate certificate = input.certificate();
         if (!input.availabilityObtained() || certificate.validityProof().length > 0xffff_ffffL) fail();
         BatchHeader header = decodeBatchHeader(certificate.canonicalHeader());
-        if (header.protocolVersion() != CURRENT_PROTOCOL_VERSION) fail();
+        if (!selectedProtocolMatches(header.protocolVersion(), selectedProtocol)) fail();
         byte[] checkpointId = sha256(CHECKPOINT_DOMAIN, certificate.canonicalHeader(),
             u32(certificate.validityProof().length), certificate.validityProof());
         byte[] expectedSettlementContract = exact(input.expectedSettlementContract(), 20);
@@ -275,20 +275,35 @@ public final class LocalVerifier {
     }
 
     public static ReceiptVerification verifyReceiptOutcome(byte[] canonicalReceipt,
-                                                              AuthorizedReceiptBatch authorized) {
+                                                              AuthorizedReceiptBatch authorized, int... selectedProtocol) {
         DecodedReceipt decoded = decodeProtocolReceipt(canonicalReceipt);
         ProtocolReceipt receipt = decoded.receipt();
-        if (receipt.protocolVersion() != CURRENT_PROTOCOL_VERSION) fail(ReceiptCheck.PROTOCOL_VERSION);
-        if (receipt.operation() == 0) fail(ReceiptCheck.OPERATION);
+        if (!selectedProtocolMatches(receipt.protocolVersion(), selectedProtocol)) fail(ReceiptCheck.PROTOCOL_VERSION);
+        exact(authorized.asset(), 32);
+        boolean program = receipt.moduleId() == 9 && (receipt.operation() == 0 || receipt.operation() == 3);
+        if (program) {
+            long module = receipt.moduleVersion();
+            boolean validModule = receipt.protocolVersion() == 3 ? module == 4
+                : module == 2 || module == 3 || receipt.operation() == 3 && module == 1;
+            if (!validModule) fail(ReceiptCheck.MODULE_VERSION);
+            if (receipt.operation() == 0 && receipt.resultCode() != 0) fail(ReceiptCheck.RESULT_CODE);
+            if (receipt.operation() == 3) {
+                ProgramReceiptOutcome outcome = receipt.programOutcome();
+                if (outcome == null) fail(ReceiptCheck.RECEIPT_SHAPE);
+                if ((outcome.abiVersion() != 1 && outcome.abiVersion() != 2) || outcome.runtimeVersion() != 1)
+                    fail(ReceiptCheck.PROTOCOL_VERSION);
+            }
+        }
+        if (!program && receipt.operation() == 0) fail(ReceiptCheck.OPERATION);
         if (allZero(receipt.activityId())) fail(ReceiptCheck.ACTIVITY_ID);
-        if (allZero(receipt.asset())) fail(ReceiptCheck.ASSET);
+        if (!program && allZero(receipt.asset())) fail(ReceiptCheck.ASSET);
         if (!equal(receipt.batchId(), exact(authorized.batchId(), 32))) fail(ReceiptCheck.BATCH_ID);
-        if (!equal(receipt.asset(), exact(authorized.asset(), 32))) fail(ReceiptCheck.ASSET);
+        if (!program && !equal(receipt.asset(), exact(authorized.asset(), 32))) fail(ReceiptCheck.ASSET);
         if (!equal(receipt.previousStateRoot(), exact(authorized.previousStateRoot(), 32)))
             fail(ReceiptCheck.PREVIOUS_STATE_ROOT);
         if (!equal(receipt.resultingStateRoot(), exact(authorized.resultingStateRoot(), 32)))
             fail(ReceiptCheck.RESULTING_STATE_ROOT);
-        if (receipt.resultCode() == 0) {
+        if (!program && receipt.resultCode() == 0) {
             BigInteger expectedFrom = receipt.fromBalanceBefore().subtract(receipt.amount());
             BigInteger expectedTo = receipt.toBalanceBefore().add(receipt.amount());
             if (receipt.fromBalanceBefore().compareTo(receipt.amount()) < 0
@@ -303,18 +318,18 @@ public final class LocalVerifier {
             canonicalReceipt.clone(), digest);
     }
 
-    public static ReceiptVerification verifyReceipt(byte[] canonicalReceipt, AuthorizedReceiptBatch authorized) {
-        ReceiptVerification verified = verifyReceiptOutcome(canonicalReceipt, authorized);
+    public static ReceiptVerification verifyReceipt(byte[] canonicalReceipt, AuthorizedReceiptBatch authorized, int... selectedProtocol) {
+        ReceiptVerification verified = verifyReceiptOutcome(canonicalReceipt, authorized, selectedProtocol);
         if (verified.receipt().resultCode() != 0) fail(ReceiptCheck.RESULT_CODE);
         return verified;
     }
 
     public static ReceiptInclusionVerification verifyReceiptInBatch(byte[] canonicalReceipt,
         AuthorizedReceiptBatch authorizedReceipt, MerkleProof proof, byte[] canonicalHeader,
-        byte[] headerSignature, SequencerAuthorization sequencerAuthorization) {
-        ReceiptVerification receipt = verifyReceipt(canonicalReceipt, authorizedReceipt);
+        byte[] headerSignature, SequencerAuthorization sequencerAuthorization, int... selectedProtocol) {
+        ReceiptVerification receipt = verifyReceipt(canonicalReceipt, authorizedReceipt, selectedProtocol);
         InclusionVerification inclusion = verifyBatchInclusion(InclusionKind.RECEIPT, canonicalReceipt,
-            proof, canonicalHeader, headerSignature, sequencerAuthorization);
+            proof, canonicalHeader, headerSignature, sequencerAuthorization, selectedProtocol);
         if (!equal(inclusion.header().previousStateRoot(), authorizedReceipt.previousStateRoot())
                 || !equal(inclusion.header().resultingStateRoot(), authorizedReceipt.resultingStateRoot())
                 || !equal(inclusion.header().sequencerId(), sequencerAuthorization.sequencerId())) fail();
@@ -335,7 +350,7 @@ public final class LocalVerifier {
             fail(ReceiptCheck.RECEIPT_SHAPE);
         Decoder d = new Decoder(canonicalReceipt);
         int envelopeVersion = d.u16();
-        if ((envelopeVersion != 1 && envelopeVersion != 2) || d.u16() != 0x5201)
+        if ((envelopeVersion != 1 && envelopeVersion != 2 && envelopeVersion != 3) || d.u16() != 0x5201)
             fail(ReceiptCheck.DECODE);
         int protocolVersion = d.u16();
         if (protocolVersion != envelopeVersion) fail(ReceiptCheck.PROTOCOL_VERSION);
@@ -417,7 +432,7 @@ public final class LocalVerifier {
         boolean occupancyZero = occupancyByteBatches.signum() == 0 && occupancyFeeUnits.signum() == 0
             && allZero(occupancyAssetId) && allZero(occupancyEvidenceDigest) && allZero(occupancyTransferRoot);
         boolean validVersion = protocolVersion == 1 && (encodingVersion == 1 || encodingVersion == 3)
-            || protocolVersion == 2 && (encodingVersion == 2 || encodingVersion == 3);
+            || (protocolVersion == 2 || protocolVersion == 3) && (encodingVersion == 2 || encodingVersion == 3);
         if (terminalKind < 1 || terminalKind > 3 || runtimeVersion == 0 || abiVersion == 0
                 || feeScheduleVersion == 0 || meteringScheduleVersion != 1 || allZero(terminalPayloadRoot)
                 || terminalKind == 1 && resultCode != 0
@@ -429,7 +444,7 @@ public final class LocalVerifier {
                     && (allZero(occupancyAssetId) || allZero(occupancyEvidenceDigest))
                 || encodingVersion == 3 && allZero(occupancyAssetId) != allZero(occupancyEvidenceDigest)
                 || protocolVersion == 1 && encodingVersion == 3 && !occupancyZero
-                || protocolVersion == 2 && encodingVersion == 3 && terminalKind == 1
+                || (protocolVersion == 2 || protocolVersion == 3) && encodingVersion == 3 && terminalKind == 1
                     && (allZero(occupancyAssetId) || allZero(occupancyEvidenceDigest))) fail();
         return new ProgramReceiptOutcome(encodingVersion, terminalKind, resultCode, runtimeVersion,
             abiVersion, feeScheduleVersion, meteringScheduleVersion, cpuFuel, memoryBytes,
@@ -521,5 +536,10 @@ public final class LocalVerifier {
         byte[] boundedAtMost(int maximum) { long length = u32(); if (length > maximum) fail(); return fixed((int) length); }
         BigInteger integer(int length) { return new BigInteger(1, fixed(length)); }
         void finish() { if (offset != bytes.length) fail(); }
+    }
+    private static boolean selectedProtocolMatches(int actual, int[] selected) {
+        if (selected.length > 1) return false;
+        int version = selected.length == 0 ? CURRENT_PROTOCOL_VERSION : selected[0];
+        return (version == 2 || version == 3) && actual == version;
     }
 }

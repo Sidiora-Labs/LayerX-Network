@@ -388,3 +388,28 @@ fn protocol_three_account_ids_match_native_ledger_vectors() {
         assert!(account_id_for_protocol(&account, 2).is_ok());
     }
 }
+
+#[test]
+fn native_program_batch_identity_binds_tree_and_entire_sequence_range() {
+    use layerx_wire::hash::{execution_batch_id, program_execution_batch_id};
+    let expected = [
+        0x68, 0xc8, 0x78, 0x01, 0x57, 0x45, 0xe7, 0xbf, 0x88, 0xd2, 0xaf, 0x83, 0x42, 0xfd, 0xca,
+        0x4d, 0x0c, 0x53, 0x6f, 0x37, 0xe8, 0xab, 0xcb, 0x12, 0xbe, 0x89, 0x88, 0x43, 0xc7, 0x04,
+        0xa5, 0xf5,
+    ];
+    assert_eq!(
+        program_execution_batch_id([1; 32], [2; 32], 7, 9, 11),
+        Ok(expected)
+    );
+    for actual in [
+        program_execution_batch_id([3; 32], [2; 32], 7, 9, 11),
+        program_execution_batch_id([1; 32], [3; 32], 7, 9, 11),
+        program_execution_batch_id([1; 32], [2; 32], 8, 9, 11),
+        program_execution_batch_id([1; 32], [2; 32], 7, 10, 11),
+        program_execution_batch_id([1; 32], [2; 32], 7, 9, 12),
+        execution_batch_id([1; 32], [2; 32], 7, 11),
+    ] {
+        assert!(actual.is_ok());
+        assert_ne!(actual, Ok(expected));
+    }
+}

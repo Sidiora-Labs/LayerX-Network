@@ -187,6 +187,26 @@ pub struct PaxeerClient {
     endpoint_sources: Vec<(String, crate::rpc::EndpointTransport)>,
 }
 
+fn finality_anchor(
+    endpoint: &EndpointConfig,
+    head: u64,
+    anchor_parameters: &[Json],
+) -> Result<BlockRef, EndpointFailure> {
+    let anchor_before = raw_call(endpoint, "eth_getBlockByNumber", anchor_parameters)
+        .and_then(|value| {
+            block_reference(&value).map_err(|detail| EndpointFailure {
+                url: endpoint.url.clone(),
+                fault: EndpointFault::UnexpectedValue { detail },
+            })
+        })?
+        .filter(|anchor| anchor.number == head)
+        .ok_or_else(|| EndpointFailure {
+            url: endpoint.url.clone(),
+            fault: EndpointFault::InconsistentObservation,
+        })?;
+    Ok(anchor_before)
+}
+
 impl PaxeerClient {
     /// Validates and adopts the declared endpoint configuration.
     ///
@@ -567,18 +587,7 @@ impl PaxeerClient {
             })
         })?;
         let anchor_parameters = [Json::Text(format!("0x{head:x}")), Json::Bool(false)];
-        let anchor_before = raw_call(endpoint, "eth_getBlockByNumber", &anchor_parameters)
-            .and_then(|value| {
-                block_reference(&value).map_err(|detail| EndpointFailure {
-                    url: endpoint.url.clone(),
-                    fault: EndpointFault::UnexpectedValue { detail },
-                })
-            })?
-            .filter(|anchor| anchor.number == head)
-            .ok_or_else(|| EndpointFailure {
-                url: endpoint.url.clone(),
-                fault: EndpointFault::InconsistentObservation,
-            })?;
+        let anchor_before = finality_anchor(endpoint, head, &anchor_parameters)?;
         let receipt = raw_call(
             endpoint,
             "eth_getTransactionReceipt",

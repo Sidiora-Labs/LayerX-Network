@@ -1,3 +1,4 @@
+import { encodeNativeProgramCall, type NativeProgramCall } from "./native-program-call.js";
 import type { AuthorizedReceiptBatch, ReceiptVerification, SelectableProtocolVersion } from "./verifier.js";
 import { DEFAULT_PROTOCOL_VERSION, isSelectableProtocolVersion, programsModuleVersionForProtocol,
   supportedProgramGuestAbi, verifyReceiptOutcome } from "./verifier.js";
@@ -22,11 +23,24 @@ const CAPABILITY_ORDER = Object.freeze({
 export interface ProgramBudget { readonly fuel: bigint; readonly feeLimit: bigint }
 export type ProgramCapability = keyof typeof CAPABILITY_ORDER;
 export interface ProgramCall {
+  readonly nativeCall?: NativeProgramCall;
   readonly programId: string;
   readonly calldata: Uint8Array;
   readonly budget: ProgramBudget;
   readonly capabilities: readonly ProgramCapability[];
   readonly signedActivity: Uint8Array;
+}
+
+export class NativeProgramRequest implements ProgramCall {
+  readonly programId: string;
+  readonly calldata: Uint8Array;
+  readonly budget: ProgramBudget;
+  readonly capabilities: readonly ProgramCapability[] = [];
+  constructor(readonly nativeCall: NativeProgramCall, feeLimit: bigint, readonly signedActivity: Uint8Array) {
+    encodeNativeProgramCall(nativeCall);
+    this.programId = hex(nativeCall.programId); this.calldata = nativeCall.calldata;
+    this.budget = { fuel: nativeCall.resources[0], feeLimit };
+  }
 }
 
 export interface ProgramDiscovery { readonly program_id: string; readonly lifecycle: "active" | "deprecated" | "tombstoned"; readonly version: number; readonly code_hash: string; readonly abi_version: number; readonly receipt_digest: string; readonly state_root: string; readonly observed_sequence: string; readonly observed_at: string; readonly valid_through: string; readonly verification: "server-side-receipt-verification-only" }
@@ -152,6 +166,7 @@ export class ProgramOperations {
 
   public async simulate(call: ProgramCall): Promise<ProgramSimulation> {
     validateCall(call);
+    if (call.nativeCall !== undefined && this.trust.protocolVersion() !== 3) throw new TypeError("native call requires selected protocol 3");
     const signed = await decodeSignedProgramCall(call);
     const prior = this.#heads.get(call.programId);
     if (prior === undefined) throw new TypeError("a fresh discovered program head is required before simulation");
@@ -186,6 +201,7 @@ export class ProgramOperations {
 
   public async submit(call: ProgramCall, idempotencyKey: IdempotencyKey): Promise<ProgramSubmission> {
     validateCall(call);
+    if (call.nativeCall !== undefined && this.trust.protocolVersion() !== 3) throw new TypeError("native call requires selected protocol 3");
     if (!HEX32.test(idempotencyKey)) throw new TypeError("invalid program idempotency key");
     const signed = await decodeSignedProgramCall(call, idempotencyKey);
     const retained = hex(signed.canonicalBytes);
@@ -382,6 +398,14 @@ async function verifySimulationEvidence(simulation: ProgramSimulation, verified:
 function wireCall(call: ProgramCall): Readonly<Record<string, unknown>> {
   const feeLimit = call.budget.feeLimit.toString();
   if (!DECIMAL_U128.test(feeLimit)) throw new TypeError("invalid fee limit");
+  if (call.nativeCall !== undefined) {
+    const native = call.nativeCall;
+    return Object.freeze({ payload_encoding: "native-v1", program_id: call.programId, calldata: hex(call.calldata),
+      budget: { fuel: call.budget.fuel.toString(), fee_limit: feeLimit }, signed_activity: hex(call.signedActivity),
+      native_call: { guest_abi: native.guestAbi, entrypoint: native.entrypoint, capabilities_hex: hex(native.capabilities),
+        access_declaration_hex: hex(native.accessDeclaration), response_capacity: native.responseCapacity,
+        resources: native.resources.map(value => value.toString()) } });
+  }
   return Object.freeze({ program_id: call.programId, calldata: hex(call.calldata), budget: Object.freeze({ fuel: call.budget.fuel.toString(), fee_limit: feeLimit }), capabilities: call.capabilities, signed_activity: hex(call.signedActivity) });
 }
 

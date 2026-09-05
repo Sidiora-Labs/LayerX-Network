@@ -13,8 +13,8 @@ use layerx_platform_core::{
 use layerx_proof::inclusion::SequencerAuthorization;
 use layerx_proof::receipt::{verify_outcome, AuthorizedBatch};
 use layerx_proof::state::decode_account_value;
-use layerx_types::intent::ProgramCall;
 use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
+use layerx_types::program_call::NativeProgramCall;
 use layerx_types::verify::VerificationLevel;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use rustls::server::WebPkiClientVerifier;
@@ -660,7 +660,7 @@ fn submit_activity(
         {
             return Err(refusal(400, "not_program_call", None));
         }
-        ProgramCall::from_canonical_payload(activity.payload())
+        NativeProgramCall::decode(activity.payload())
             .map_err(|_| refusal(400, "invalid_program_call", None))?;
     }
     let signer = signer_key(activity.authority())
@@ -715,7 +715,7 @@ fn simulate_activity(config: &Config, canonical: &[u8]) -> Result<Response, Resp
     {
         return Err(refusal(400, "not_program_call", None));
     }
-    let call = ProgramCall::from_canonical_payload(activity.payload())
+    let call = NativeProgramCall::decode(activity.payload())
         .map_err(|_| refusal(400, "invalid_program_call", None))?;
     let expected_activity_id = layerx_wire::hash::activity_id(&activity)
         .map_err(|_| refusal(400, "invalid_activity", None))?;

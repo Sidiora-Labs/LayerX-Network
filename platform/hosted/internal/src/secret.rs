@@ -2,7 +2,8 @@
 
 use sha2::{Digest, Sha256};
 use std::env;
-use std::fs;
+use std::fs::File;
+use std::io::Read;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 use zeroize::{Zeroize, Zeroizing};
@@ -18,8 +19,10 @@ pub const MIN_TOKEN_BYTES: usize = 16;
 /// Returns a description when the file is unreadable, empty, oversized or
 /// carries control bytes.
 pub fn read_secret_file(path: &Path) -> Result<Zeroizing<String>, String> {
-    let mut value =
-        fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))?;
+    let mut value = String::new();
+    File::open(path)
+        .and_then(|file| file.take(4097).read_to_string(&mut value))
+        .map_err(|error| format!("{}: {error}", path.display()))?;
     while matches!(value.as_bytes().last(), Some(b'\n' | b'\r')) {
         value.pop();
     }

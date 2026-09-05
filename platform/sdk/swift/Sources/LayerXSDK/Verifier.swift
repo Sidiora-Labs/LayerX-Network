@@ -325,9 +325,9 @@ public enum LocalVerifier {
         return BatchHeader(protocolVersion: protocolVersion, networkID: networkID, epoch: epoch, batchNumber: batchNumber, firstSequence: firstSequence, lastSequence: lastSequence, previousStateRoot: previousStateRoot, resultingStateRoot: resultingStateRoot, activityMerkleRoot: activityMerkleRoot, receiptMerkleRoot: receiptMerkleRoot, eventMerkleRoot: eventMerkleRoot, dataAvailabilityRoot: dataAvailabilityRoot, oracleRoot: oracleRoot, timestampMilliseconds: timestampMilliseconds, sequencerID: sequencerID)
     }
 
-    public static func verifyBatchInclusion(kind: InclusionKind, canonicalLeaf: Data, proof: MerkleProof, canonicalHeader: Data, headerSignature: Data, authorization: SequencerAuthorization) async throws -> InclusionVerification {
+    public static func verifyBatchInclusion(kind: InclusionKind, canonicalLeaf: Data, proof: MerkleProof, canonicalHeader: Data, headerSignature: Data, authorization: SequencerAuthorization, protocolVersion: UInt16 = 2) async throws -> InclusionVerification {
         let header = try decodeBatchHeader(canonicalHeader)
-        guard header.protocolVersion == currentProtocolVersion else { throw verificationFailure() }
+        guard (protocolVersion == 2 || protocolVersion == 3) && header.protocolVersion == protocolVersion else { throw verificationFailure() }
         let authorizedSequencerID = try exact(authorization.sequencerID, 32)
         guard header.batchNumber >= authorization.firstBatchNumber,
               header.batchNumber <= authorization.lastBatchNumber,
@@ -345,12 +345,12 @@ public enum LocalVerifier {
         return InclusionVerification(level: kind == .state ? "state-proven" : "batch-included", header: header, headerDigest: headerDigest, root: root)
     }
 
-    public static func verifyCheckpoint(_ input: CheckpointVerificationInput, signatures: LocalSignatureVerifier) async throws -> CheckpointVerification {
+    public static func verifyCheckpoint(_ input: CheckpointVerificationInput, signatures: LocalSignatureVerifier, protocolVersion: UInt16 = 2) async throws -> CheckpointVerification {
         let certificate = input.certificate
         guard input.availabilityObtained, certificate.threshold > 0,
               UInt64(certificate.validityProof.count) <= UInt64(UInt32.max) else { throw verificationFailure() }
         let header = try decodeBatchHeader(certificate.canonicalHeader)
-        guard header.protocolVersion == currentProtocolVersion else { throw verificationFailure() }
+        guard (protocolVersion == 2 || protocolVersion == 3) && header.protocolVersion == protocolVersion else { throw verificationFailure() }
         let checkpointID = digest(checkpointDomain, certificate.canonicalHeader, encodeUInt32(UInt32(certificate.validityProof.count)), certificate.validityProof)
         let registeredCheckpointID = try exact(input.registeredCheckpointID, 32)
         let expectedSettlementContract = try exact(input.expectedSettlementContract, 20)
@@ -409,22 +409,33 @@ public enum LocalVerifier {
         return CheckpointVerification(level: level, checkpointID: checkpointID, achieved: achieved, required: certificate.threshold, header: header)
     }
 
-    public static func verifyReceiptOutcome(_ canonicalReceipt: Data, authorized: AuthorizedReceiptBatch) async throws -> ReceiptVerification {
+    public static func verifyReceiptOutcome(_ canonicalReceipt: Data, authorized: AuthorizedReceiptBatch, protocolVersion: UInt16 = 2) async throws -> ReceiptVerification {
         let decoded = try decodeProtocolReceipt(canonicalReceipt)
         let receipt = decoded.receipt
-        guard receipt.protocolVersion == currentProtocolVersion else { throw receiptFailure(.protocolVersion) }
+        guard (protocolVersion == 2 || protocolVersion == 3) && receipt.protocolVersion == protocolVersion else { throw receiptFailure(.protocolVersion) }
         let batchID = try exact(authorized.batchID, 32)
         let asset = try exact(authorized.asset, 32)
         let previousStateRoot = try exact(authorized.previousStateRoot, 32)
         let resultingStateRoot = try exact(authorized.resultingStateRoot, 32)
-        guard receipt.operation != 0 else { throw receiptFailure(.operation) }
+        let program = receipt.moduleID == 9 && (receipt.operation == 0 || receipt.operation == 3)
+        if program {
+            let module = receipt.moduleVersion
+            let validModule = receipt.protocolVersion == 3 ? module == 4 : module == 2 || module == 3 || receipt.operation == 3 && module == 1
+            guard validModule else { throw receiptFailure(.moduleVersion) }
+            if receipt.operation == 0 && receipt.resultCode != 0 { throw receiptFailure(.resultCode) }
+            if receipt.operation == 3 {
+                guard let outcome = receipt.programOutcome else { throw receiptFailure(.receiptShape) }
+                guard (outcome.abiVersion == 1 || outcome.abiVersion == 2) && outcome.runtimeVersion == 1 else { throw receiptFailure(.protocolVersion) }
+            }
+        }
+        guard program || receipt.operation != 0 else { throw receiptFailure(.operation) }
         guard !allZero(receipt.activityID) else { throw receiptFailure(.activityId) }
-        guard !allZero(receipt.asset) else { throw receiptFailure(.asset) }
+        guard program || !allZero(receipt.asset) else { throw receiptFailure(.asset) }
         guard receipt.batchID == batchID else { throw receiptFailure(.batchId) }
-        guard receipt.asset == asset else { throw receiptFailure(.asset) }
+        guard program || receipt.asset == asset else { throw receiptFailure(.asset) }
         guard receipt.previousStateRoot == previousStateRoot else { throw receiptFailure(.previousStateRoot) }
         guard receipt.resultingStateRoot == resultingStateRoot else { throw receiptFailure(.resultingStateRoot) }
-        if receipt.resultCode == 0 {
+        if !program && receipt.resultCode == 0 {
             guard receipt.fromBalanceBefore.subtracting(receipt.amount) == receipt.fromBalanceAfter else {
                 throw receiptFailure(.debitBalance)
             }
@@ -439,8 +450,8 @@ public enum LocalVerifier {
         return ReceiptVerification(level: "sequencer-signed", receipt: receipt, canonicalBytes: canonicalReceipt, receiptDigest: receiptDigest)
     }
 
-    public static func verifyReceipt(_ canonicalReceipt: Data, authorized: AuthorizedReceiptBatch) async throws -> ReceiptVerification {
-        let verified = try await verifyReceiptOutcome(canonicalReceipt, authorized: authorized)
+    public static func verifyReceipt(_ canonicalReceipt: Data, authorized: AuthorizedReceiptBatch, protocolVersion: UInt16 = 2) async throws -> ReceiptVerification {
+        let verified = try await verifyReceiptOutcome(canonicalReceipt, authorized: authorized, protocolVersion: protocolVersion)
         guard verified.receipt.resultCode == 0 else { throw receiptFailure(.resultCode) }
         return verified
     }
@@ -467,7 +478,7 @@ private func decodeProtocolReceiptInner(_ canonicalReceipt: Data) throws -> Deco
     }
     var decoder = WireDecoder(canonicalReceipt)
     let envelopeVersion = try decoder.u16()
-    guard (envelopeVersion == 1 || envelopeVersion == 2), try decoder.u16() == 0x5201 else {
+    guard (envelopeVersion == 1 || envelopeVersion == 2 || envelopeVersion == 3), try decoder.u16() == 0x5201 else {
         throw receiptFailure(.decode)
     }
     let protocolVersion = try decoder.u16()
@@ -577,7 +588,7 @@ private func decodeProgramReceiptOutcomeFrom(_ decoder: inout WireDecoder,
     let occupancyZero = occupancyByteBatches == zero128 && occupancyFeeUnits == zero128
         && allZero(occupancyAssetID) && allZero(occupancyEvidenceDigest) && allZero(occupancyTransferRoot)
     let validVersion = protocolVersion == 1 && (encodingVersion == 1 || encodingVersion == 3)
-        || protocolVersion == 2 && (encodingVersion == 2 || encodingVersion == 3)
+        || (protocolVersion == 2 || protocolVersion == 3) && (encodingVersion == 2 || encodingVersion == 3)
     guard (1...3).contains(terminalKind), runtimeVersion != 0, abiVersion != 0,
           feeScheduleVersion != 0, meteringScheduleVersion == 1, !allZero(terminalPayloadRoot),
           terminalKind != 1 || resultCode == 0,
@@ -588,7 +599,7 @@ private func decodeProgramReceiptOutcomeFrom(_ decoder: inout WireDecoder,
           encodingVersion != 2 || terminalKind != 1 || (!allZero(occupancyAssetID) && !allZero(occupancyEvidenceDigest)),
           encodingVersion != 3 || allZero(occupancyAssetID) == allZero(occupancyEvidenceDigest),
           protocolVersion != 1 || encodingVersion != 3 || occupancyZero,
-          protocolVersion != 2 || encodingVersion != 3 || terminalKind != 1
+          (protocolVersion != 2 && protocolVersion != 3) || encodingVersion != 3 || terminalKind != 1
             || (!allZero(occupancyAssetID) && !allZero(occupancyEvidenceDigest))
     else { throw verificationFailure() }
     return ProgramReceiptOutcome(encodingVersion: encodingVersion, terminalKind: terminalKind,

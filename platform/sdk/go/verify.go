@@ -145,15 +145,35 @@ type decodedReceipt struct {
 	protocol           ProtocolReceipt
 }
 
-func VerifyReceiptOutcome(canonicalReceipt []byte, authorized AuthorizedBatch) (VerifiedReceipt, error) {
+func VerifyReceiptOutcome(canonicalReceipt []byte, authorized AuthorizedBatch, selectedProtocol ...uint16) (VerifiedReceipt, error) {
 	receipt, err := decodeProtocolReceipt(canonicalReceipt)
 	if err != nil {
 		return VerifiedReceipt{}, err
 	}
-	if receipt.protocolVersion != currentProtocolVersion {
+	if !selectedProtocolMatches(receipt.protocolVersion, selectedProtocol) {
 		return VerifiedReceipt{}, receiptFailure(ReceiptCheckProtocolVersion)
 	}
-	if receipt.operation == 0 {
+	program := receipt.protocol.ModuleID == ProgramsModuleID && (receipt.operation == 0 || receipt.operation == 3)
+	if program {
+		module := receipt.protocol.ModuleVersion
+		validModule := receipt.protocolVersion == 3 && module == 4 || receipt.protocolVersion == 2 && (module == 2 || module == 3 || receipt.operation == 3 && module == 1)
+		if !validModule {
+			return VerifiedReceipt{}, receiptFailure(ReceiptCheckModuleVersion)
+		}
+		if receipt.operation == 0 && receipt.resultCode != 0 {
+			return VerifiedReceipt{}, receiptFailure(ReceiptCheckResultCode)
+		}
+		if receipt.operation == 3 {
+			outcome := receipt.protocol.ProgramOutcome
+			if outcome == nil {
+				return VerifiedReceipt{}, receiptFailure(ReceiptCheckReceiptShape)
+			}
+			if (outcome.ABIVersion != 1 && outcome.ABIVersion != 2) || outcome.RuntimeVersion != 1 {
+				return VerifiedReceipt{}, receiptFailure(ReceiptCheckProtocolVersion)
+			}
+		}
+	}
+	if !program && receipt.operation == 0 {
 		return VerifiedReceipt{}, receiptFailure(ReceiptCheckOperation)
 	}
 	if zero32(receipt.activityID) {
@@ -162,7 +182,7 @@ func VerifyReceiptOutcome(canonicalReceipt []byte, authorized AuthorizedBatch) (
 	if receipt.batchID != authorized.BatchID {
 		return VerifiedReceipt{}, receiptFailure(ReceiptCheckBatchID)
 	}
-	if receipt.asset != authorized.Asset || zero32(receipt.asset) {
+	if !program && (receipt.asset != authorized.Asset || zero32(receipt.asset)) {
 		return VerifiedReceipt{}, receiptFailure(ReceiptCheckAsset)
 	}
 	if receipt.previousStateRoot != authorized.PreviousStateRoot {
@@ -171,7 +191,7 @@ func VerifyReceiptOutcome(canonicalReceipt []byte, authorized AuthorizedBatch) (
 	if receipt.resultingStateRoot != authorized.ResultingStateRoot {
 		return VerifiedReceipt{}, receiptFailure(ReceiptCheckResultingStateRoot)
 	}
-	if receipt.resultCode == 0 {
+	if !program && receipt.resultCode == 0 {
 		debitAfter, ok := receipt.debitBefore.Sub(receipt.amount)
 		if !ok || !debitAfter.Equal(receipt.debitAfter) {
 			return VerifiedReceipt{}, receiptFailure(ReceiptCheckDebitBalance)
@@ -199,8 +219,8 @@ func VerifyReceiptOutcome(canonicalReceipt []byte, authorized AuthorizedBatch) (
 	}, nil
 }
 
-func VerifyReceipt(canonicalReceipt []byte, authorized AuthorizedBatch) (VerifiedReceipt, error) {
-	verified, err := VerifyReceiptOutcome(canonicalReceipt, authorized)
+func VerifyReceipt(canonicalReceipt []byte, authorized AuthorizedBatch, selectedProtocol ...uint16) (VerifiedReceipt, error) {
+	verified, err := VerifyReceiptOutcome(canonicalReceipt, authorized, selectedProtocol...)
 	if err != nil {
 		return VerifiedReceipt{}, err
 	}
@@ -211,12 +231,12 @@ func VerifyReceipt(canonicalReceipt []byte, authorized AuthorizedBatch) (Verifie
 }
 
 func decodeProtocolReceipt(value []byte) (decodedReceipt, error) {
-	if len(value) > maximumMessageBytes || len(value) < 4 || !(bytes.Equal(value[:4], []byte{0, 1, 0x52, 1}) || bytes.Equal(value[:4], []byte{0, 2, 0x52, 1})) {
+	if len(value) > maximumMessageBytes || len(value) < 4 || !(bytes.Equal(value[:4], []byte{0, 1, 0x52, 1}) || bytes.Equal(value[:4], []byte{0, 2, 0x52, 1}) || bytes.Equal(value[:4], []byte{0, 3, 0x52, 1})) {
 		return decodedReceipt{}, receiptFailure(ReceiptCheckReceiptShape)
 	}
 	decoder := wireDecoder{value: value}
 	envelopeVersion := decoder.u16()
-	if (envelopeVersion != 1 && envelopeVersion != 2) || decoder.u16() != 0x5201 {
+	if (envelopeVersion != 1 && envelopeVersion != 2 && envelopeVersion != 3) || decoder.u16() != 0x5201 {
 		return decodedReceipt{}, receiptFailure(ReceiptCheckDecode)
 	}
 	receipt := decodedReceipt{protocolVersion: decoder.u16()}
@@ -376,8 +396,8 @@ func decodeProgramReceiptOutcomeFrom(decoder *wireDecoder, protocolVersion uint1
 	outcome.TerminalPayloadRoot = decoder.array32()
 	outcome.TransferRoot = decoder.array32()
 	occupancyZero := outcome.OccupancyByteBatches == (Uint128{}) && outcome.OccupancyFeeUnits == (Uint128{}) && outcome.OccupancyAssetID == [32]byte{} && outcome.OccupancyEvidenceDigest == [32]byte{} && outcome.OccupancyTransferRoot == [32]byte{}
-	validVersion := protocolVersion == 1 && (outcome.EncodingVersion == 1 || outcome.EncodingVersion == 3) || protocolVersion == 2 && (outcome.EncodingVersion == 2 || outcome.EncodingVersion == 3)
-	if decoder.failed || outcome.TerminalKind < 1 || outcome.TerminalKind > 3 || outcome.RuntimeVersion == 0 || outcome.ABIVersion == 0 || outcome.FeeScheduleVersion == 0 || outcome.MeteringScheduleVersion != 1 || outcome.TerminalPayloadRoot == [32]byte{} || outcome.TerminalKind == 1 && outcome.ResultCode != 0 || outcome.TerminalKind != 1 && (outcome.ResultCode == 0 || outcome.ResultCode <= -1000) || outcome.TerminalKind != 1 && outcome.TransferRoot != [32]byte{} || !validVersion || outcome.EncodingVersion == 1 && !occupancyZero || outcome.EncodingVersion >= 2 && outcome.TerminalKind != 1 && !occupancyZero || outcome.EncodingVersion == 2 && outcome.TerminalKind == 1 && (outcome.OccupancyAssetID == [32]byte{} || outcome.OccupancyEvidenceDigest == [32]byte{}) || outcome.EncodingVersion == 3 && (outcome.OccupancyAssetID == [32]byte{}) != (outcome.OccupancyEvidenceDigest == [32]byte{}) || protocolVersion == 1 && outcome.EncodingVersion == 3 && !occupancyZero || protocolVersion == 2 && outcome.EncodingVersion == 3 && outcome.TerminalKind == 1 && (outcome.OccupancyAssetID == [32]byte{} || outcome.OccupancyEvidenceDigest == [32]byte{}) {
+	validVersion := protocolVersion == 1 && (outcome.EncodingVersion == 1 || outcome.EncodingVersion == 3) || (protocolVersion == 2 || protocolVersion == 3) && (outcome.EncodingVersion == 2 || outcome.EncodingVersion == 3)
+	if decoder.failed || outcome.TerminalKind < 1 || outcome.TerminalKind > 3 || outcome.RuntimeVersion == 0 || outcome.ABIVersion == 0 || outcome.FeeScheduleVersion == 0 || outcome.MeteringScheduleVersion != 1 || outcome.TerminalPayloadRoot == [32]byte{} || outcome.TerminalKind == 1 && outcome.ResultCode != 0 || outcome.TerminalKind != 1 && (outcome.ResultCode == 0 || outcome.ResultCode <= -1000) || outcome.TerminalKind != 1 && outcome.TransferRoot != [32]byte{} || !validVersion || outcome.EncodingVersion == 1 && !occupancyZero || outcome.EncodingVersion >= 2 && outcome.TerminalKind != 1 && !occupancyZero || outcome.EncodingVersion == 2 && outcome.TerminalKind == 1 && (outcome.OccupancyAssetID == [32]byte{} || outcome.OccupancyEvidenceDigest == [32]byte{}) || outcome.EncodingVersion == 3 && (outcome.OccupancyAssetID == [32]byte{}) != (outcome.OccupancyEvidenceDigest == [32]byte{}) || protocolVersion == 1 && outcome.EncodingVersion == 3 && !occupancyZero || (protocolVersion == 2 || protocolVersion == 3) && outcome.EncodingVersion == 3 && outcome.TerminalKind == 1 && (outcome.OccupancyAssetID == [32]byte{} || outcome.OccupancyEvidenceDigest == [32]byte{}) {
 		return ProgramReceiptOutcome{}, false
 	}
 	return outcome, true
@@ -552,12 +572,12 @@ type InclusionVerification struct {
 	Root         [32]byte
 }
 
-func VerifyBatchInclusion(kind InclusionKind, canonicalLeaf []byte, proof MerkleProof, canonicalHeader []byte, headerSignature []byte, authorization SequencerAuthorization) (InclusionVerification, error) {
+func VerifyBatchInclusion(kind InclusionKind, canonicalLeaf []byte, proof MerkleProof, canonicalHeader []byte, headerSignature []byte, authorization SequencerAuthorization, selectedProtocol ...uint16) (InclusionVerification, error) {
 	header, err := DecodeBatchHeader(canonicalHeader)
 	if err != nil {
 		return InclusionVerification{}, err
 	}
-	if header.ProtocolVersion != currentProtocolVersion {
+	if !selectedProtocolMatches(header.ProtocolVersion, selectedProtocol) {
 		return InclusionVerification{}, verificationFailure()
 	}
 	if header.BatchNumber < authorization.FirstBatchNumber || header.BatchNumber > authorization.LastBatchNumber || header.SequencerID != authorization.SequencerID || len(headerSignature) != ed25519.SignatureSize {
@@ -644,7 +664,7 @@ type CheckpointVerification struct {
 	Header       BatchHeader
 }
 
-func VerifyCheckpoint(ctx context.Context, input CheckpointVerificationInput, signatures Secp256k1Verifier) (CheckpointVerification, error) {
+func VerifyCheckpoint(ctx context.Context, input CheckpointVerificationInput, signatures Secp256k1Verifier, selectedProtocol ...uint16) (CheckpointVerification, error) {
 	certificate := input.Certificate
 	if ctx == nil || signatures == nil || !input.AvailabilityObtained || uint64(len(certificate.ValidityProof)) > uint64(^uint32(0)) || certificate.Threshold == 0 ||
 		input.ExpectedPaxeerChainID == 0 || input.ExpectedSettlementContract == ([20]byte{}) {
@@ -654,7 +674,7 @@ func VerifyCheckpoint(ctx context.Context, input CheckpointVerificationInput, si
 	if err != nil {
 		return CheckpointVerification{}, err
 	}
-	if header.ProtocolVersion != currentProtocolVersion {
+	if !selectedProtocolMatches(header.ProtocolVersion, selectedProtocol) {
 		return CheckpointVerification{}, verificationFailure()
 	}
 	length := make([]byte, 4)
@@ -833,4 +853,15 @@ func boolByte(value bool) byte {
 		return 1
 	}
 	return 0
+}
+
+func selectedProtocolMatches(actual uint16, selected []uint16) bool {
+	version := currentProtocolVersion
+	if len(selected) > 1 {
+		return false
+	}
+	if len(selected) == 1 {
+		version = selected[0]
+	}
+	return (version == 2 || version == 3) && actual == version
 }

@@ -15,7 +15,8 @@ pub use client::{
     TransactionHash, TransactionHashError, TransactionInclusion, TransactionView,
 };
 pub use deposit::{
-    account_address, deposit_leaf_bytes, deposit_root_registration_message, AgentCreditContext,
+    account_address, account_address_for_protocol, deposit_leaf_bytes,
+    deposit_root_registration_message, AccountAddressError, AdmittedCustody, AgentCreditContext,
     CreditFault, CreditPath, CustodyDeposit, CustodyFault, DepositFailure, DepositProof,
     DepositProofConfig, DepositProofConfigError, DepositProofVerifier, DepositRootRegistration,
     ProofFault, PublishedDepositProof,
