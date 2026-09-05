@@ -557,7 +557,7 @@ status = "pending"
 
 [task.6.1]
 title = "Build the layerx-node image and the genesis-bootstrapped node pod"
-status = "pending"
+status = "in_progress"
 wave = 6
 requires = ["3.6"]
 do_1 = "Add platform/hosted/node/Dockerfile building build/bin/layerxd, layerx-genesis and layerxctl with the root Makefile on a pinned Debian bookworm builder and runtime (libcrypto, libsqlite3), uid 4020, and add platform/hosted/node/bootstrap.sh that, given a data directory, a network id, a sequencer key pair and a treasury key pair, generates the genesis manifest and snapshot with layerx-genesis carrying the treasury account balances for every beta asset, writes the eight-line layerxd config for the sequencer and for the replica, and starts the sequencer under a supervisor that answers a reset request on a pod-local unix socket by stopping the daemons, discarding the data directory contents, re-running bootstrap and restarting."
@@ -570,7 +570,7 @@ reqs = ["14.1","7.1","7.2"]
 
 [task.6.2]
 title = "Implement the layerx-pending-core boundary and its admin plane"
-status = "pending"
+status = "in_progress"
 wave = 6
 requires = ["3.6"]
 do_1 = "Add the crate platform/hosted/core (package layerx-platform-core, binary layerx-core-boundary) in the hosted house style - std TcpListener, rustls server TLS from DER cert and PKCS#8 DER key, hand-framed HTTP/1.1, no tokio - opening two listeners: LAYERX_CORE_LISTEN (default 0.0.0.0:9443) and LAYERX_CORE_ADMIN_LISTEN (default 0.0.0.0:9444), each with its own certificate, the core listener accepting an optional client certificate chaining to LAYERX_CORE_CLIENT_CA_DER."
@@ -597,7 +597,7 @@ reqs = ["14.4","7.3"]
 
 [task.6.4]
 title = "Implement the layerx-agent-boundary component service over the LNI"
-status = "pending"
+status = "in_progress"
 wave = 6
 requires = ["3.6"]
 do_1 = "Add the crate platform/hosted/agent-boundary (package layerx-platform-agent-boundary, binary layerx-agent-boundary) in the hosted house style listening on LAYERX_AGENT_BOUNDARY_LISTEN (default 0.0.0.0:9446) with rustls server TLS that accepts an optional client certificate chaining to LAYERX_AGENT_BOUNDARY_CLIENT_CA_DER, two distinct bearer tokens from LAYERX_AGENT_BOUNDARY_GATEWAY_TOKEN_FILE and LAYERX_AGENT_BOUNDARY_REGISTRY_TOKEN_FILE with per-token route entitlement, an LNI client over LAYERX_AGENT_BOUNDARY_LNI_SOCKET and the daemon program listener at LAYERX_AGENT_BOUNDARY_NODE_URL."
@@ -610,7 +610,7 @@ reqs = ["14.5","7.3"]
 
 [task.6.5]
 title = "Implement the layerx-identity principal and session service"
-status = "pending"
+status = "in_progress"
 wave = 6
 requires = ["3.6"]
 do_1 = "Add the crate platform/hosted/identity (package layerx-platform-identity, binary layerx-identity) in the hosted house style listening on LAYERX_IDENTITY_LISTEN (default 0.0.0.0:9443) with rustls server TLS, a durable fsync-backed store under LAYERX_IDENTITY_STATE_DIR holding principals {sub, allowed_signer_public_keys, account, audiences} and sessions {session_id, principal, token_digest, csrf_digest, csrf_token sealed at rest with the store key, expires_at, revoked_at}, and service tokens from LAYERX_IDENTITY_SERVICE_TOKENS_DIR where each file name is the calling service (gateway, webhooks, dashboard, faucet, testnet, ramp, provisioning) and the content its token."
@@ -623,7 +623,7 @@ reqs = ["14.6","7.3"]
 
 [task.6.6]
 title = "Run Paxeer in the cluster behind the paxeer-boundary and deploy the settlement contracts"
-status = "pending"
+status = "in_progress"
 wave = 6
 requires = ["3.6"]
 do_1 = "Add the crate platform/hosted/paxeer (package layerx-platform-paxeer-boundary, binary layerx-paxeer-boundary) in the hosted house style listening on LAYERX_PAXEER_BOUNDARY_LISTEN (default 0.0.0.0:9443) with rustls server TLS, relaying POST / Ethereum JSON-RPC bodies up to 2 MiB to the single node at LAYERX_PAXEER_NODE_URL (loopback http) with the id preserved and a 200 for RPC-level errors, serving GET /readyz with 200 only when eth_chainId against the node equals LAYERX_PAXEER_CHAIN_ID, GET /livez, and refusing any other method or path."
@@ -672,3 +672,16 @@ verify_cmd = "make agent-test-boundary && cargo test --manifest-path platform/Ca
 symbols = ["Capability::Simulate","lxp_daemon_lni simulate"]
 touches = ["agent/crates/layerx-client/src/lni/schema.rs","cmd/layerxd/lxp_daemon_lni.c","agent/tests/boundary","platform/hosted/agent-boundary","platform/hosted/core"]
 reqs = ["14.2","14.5"]
+
+[task.6.10]
+title = "Bind a real finality-authority verifier in layerxd so the sequencer bootstraps"
+status = "pending"
+wave = 6
+requires = ["3.6"]
+do_1 = "Add cmd/layerxd/lxp_daemon_finality_authority.c implementing lxp_daemon_finality_authority_verify_fn for the sequencer: hash the certificate checkpoint with lxp_checkpoint_certificate_hash and require it to equal the registration's checkpoint_id; require the certificate attestations' paxeer_chain_id and paxeer_settlement_contract to equal the registration and the daemon's configured LAYERX_NODE_PAXEER_CHAIN_ID and LAYERX_NODE_SETTLEMENT_CONTRACT; run lxp_checkpoint_finalisable against the evidence store's finalisation state, bonded set and requirements; then independently confirm the registration on the Paxeer chain through a loopback JSON-RPC endpoint LAYERX_NODE_PAXEER_RPC_ADDRESS/PORT (127.0.0.1 only, reusing the daemon's loopback HTTP client conventions) with eth_chainId, eth_getTransactionReceipt(transaction_id) - status 1, to equals the settlement contract, blockNumber equals observed_block_number, a log from the settlement contract carrying the checkpoint_id - and eth_blockNumber at or beyond the observed block; bind it in open_process with lxp_daemon_evidence_open so LXP_ERR_MODULE_DISABLED can no longer occur; no environment variable may disable verification."
+do_2 = "Fix every other defect that stops layerxd --serve bootstrapping from a fresh layerx-genesis-build genesis with absent log files, including log creation capacity in path_empty_or_absent/lxp_log_open and the replica's log growth, so that the sequencer and --authority-replica start, accept a SEND over the LNI, and publish batch evidence to the replica; keep bootstrap_storage_empty and verify_bootstrap_genesis strict."
+do_3 = "Add tests/daemon/lxp_test_finality_authority.c wired into the Makefile test list: a real anvil (pinned Foundry at /root/.foundry/bin) chain with the settlement contracts deployed, a registered checkpoint, and proofs that a genuine registration verifies, that a mismatched chain id, contract, checkpoint id, block number, or reverted transaction is refused, and that an unreachable chain returns an unavailability error rather than success; add a shell test that boots layerxd --serve and the replica end to end from genesis and submits one activity."
+verify_cmd = "make layerxd test-daemon-finality-authority && make -s check 2>&1 | tail -20"
+symbols = ["lxp_daemon_finality_authority_verify","open_process","path_empty_or_absent"]
+touches = ["cmd/layerxd","include/layerx/lxp_daemon.h","src/storage/lxp_log.c","tests/daemon","Makefile"]
+reqs = ["14.1","14.2"]
