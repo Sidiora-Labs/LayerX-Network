@@ -1328,6 +1328,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "layerx-platform-agent-boundary"
+version = "0.1.0"
+dependencies = [
+ "native-tls",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2",
+ "subtle",
+ "zeroize",
+]
+
+[[package]]
+name = "layerx-platform-authority"
+version = "0.1.0"
+dependencies = [
+ "native-tls",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2",
+ "subtle",
+ "zeroize",
+]
+
+[[package]]
 name = "layerx-platform-cli"
 version = "0.1.0"
 dependencies = [
@@ -1351,6 +1377,19 @@ dependencies = [
  "sha2",
  "subtle",
  "ureq",
+ "zeroize",
+]
+
+[[package]]
+name = "layerx-platform-core"
+version = "0.1.0"
+dependencies = [
+ "native-tls",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2",
+ "subtle",
  "zeroize",
 ]
 
@@ -1416,8 +1455,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "layerx-platform-identity"
+version = "0.1.0"
+dependencies = [
+ "native-tls",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2",
+ "subtle",
+ "zeroize",
+]
+
+[[package]]
 name = "layerx-platform-kvx"
 version = "0.1.0"
+
+[[package]]
+name = "layerx-platform-paxeer-boundary"
+version = "0.1.0"
+dependencies = [
+ "native-tls",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2",
+ "subtle",
+ "zeroize",
+]
 
 [[package]]
 name = "layerx-platform-registry"

@@ -5,6 +5,11 @@ members = [
     "cli",
     "emulator",
     "hosted/faucet",
+    "hosted/core",
+    "hosted/authority",
+    "hosted/agent-boundary",
+    "hosted/identity",
+    "hosted/paxeer",
     "hosted/gateway",
     "hosted/registry",
     "hosted/webhooks",
@@ -34,6 +39,7 @@ rustix = { version = "=1.1.4", features = ["fs", "process"] }
 layerx-fiat = { path = "../interop/crates/layerx-fiat" }
 layerx-proof = { path = "../agent/crates/layerx-proof" }
 layerx-sdk = { path = "../agent/crates/layerx-sdk" }
+layerx-client = { path = "../agent/crates/layerx-client" }
 layerx-crypto = { path = "../agent/crates/layerx-crypto" }
 layerx-types = { path = "../agent/crates/layerx-types" }
 layerx-wire = { path = "../agent/crates/layerx-wire" }
