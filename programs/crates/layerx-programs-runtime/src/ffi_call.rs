@@ -360,6 +360,10 @@ const MODULE_DISABLED: i32 = -103;
 const INSUFFICIENT_BALANCE: i32 = -400;
 const FATAL_INVARIANT: i32 = -1001;
 const ABI_V1_VERSION: u16 = 1;
+const ABI_V2_VERSION: u16 = 2;
+const PROTOCOL_LEGACY: u16 = 1;
+const PROTOCOL_OCCUPANCY: u16 = 2;
+const PROTOCOL_STATE_COMMITMENT: u16 = 3;
 const WASM: u16 = 1;
 const ENTRYPOINT: u16 = 3;
 const CALLDATA: u16 = 4;
@@ -480,6 +484,25 @@ fn put_text(out: &mut Vec<u8>, value: &str) -> Result<(), i32> {
     out.extend_from_slice(value.as_bytes());
     Ok(())
 }
+const fn protocol_supported(protocol_version: u16) -> bool {
+    matches!(
+        protocol_version,
+        PROTOCOL_LEGACY | PROTOCOL_OCCUPANCY | PROTOCOL_STATE_COMMITMENT
+    )
+}
+
+const fn protocol_uses_occupancy(protocol_version: u16) -> bool {
+    matches!(protocol_version, PROTOCOL_OCCUPANCY | PROTOCOL_STATE_COMMITMENT)
+}
+
+const fn protocol_admits_abi(protocol_version: u16, abi_version: u16) -> bool {
+    match abi_version {
+        ABI_V1_VERSION => protocol_supported(protocol_version),
+        ABI_V2_VERSION => protocol_uses_occupancy(protocol_version),
+        _ => false,
+    }
+}
+
 const fn revision_tag(value: AbiRevision) -> u8 {
     match value {
         AbiRevision::V1 => 1,
@@ -2246,14 +2269,11 @@ pub extern "C" fn layerx_programs_call_begin(
             || occupancy_token == 0
             || batch_number == 0
             || activity_sequence == 0
-            || !matches!(protocol_version, 1 | 2)
+            || !protocol_supported(protocol_version)
             || parameter_version == 0
             || fee_schedule_version == 0
             || metering_schedule_version == 0
-            || !matches!(
-                (protocol_version, abi_version),
-                (1 | 2, ABI_V1_VERSION) | (2, 2)
-            )
+            || !protocol_admits_abi(protocol_version, abi_version)
             || entrypoint_length == 0
             || entrypoint_length > 128
             || calldata_length > 1_048_576
@@ -2264,7 +2284,7 @@ pub extern "C" fn layerx_programs_call_begin(
             return Err(NON_CANONICAL);
         }
         if unsafe { layerx_programs_call_sandbox_context(token) } == OK
-            && (protocol_version != 2 || abi_version != 2)
+            && (!protocol_uses_occupancy(protocol_version) || abi_version != ABI_V2_VERSION)
         {
             return Err(NON_CANONICAL);
         }
@@ -2363,7 +2383,7 @@ pub extern "C" fn layerx_programs_call_begin(
         c_ok(unsafe { layerx_programs_call_terminal_reserve(
             token, 65_536, 70_000_000, 5_242_880,
         ) })?;
-        let occupancy_authority = if protocol_version == 2
+        let occupancy_authority = if protocol_uses_occupancy(protocol_version)
             && !sandbox
         {
             Some(
@@ -2427,11 +2447,9 @@ pub extern "C" fn layerx_programs_call_begin(
             if entry_program == program && wasm != root_wasm {
                 return Err(NON_CANONICAL);
             }
-            match catalog_abi {
-                ABI_V1_VERSION => {}
-                2 if protocol_version == 2 => {}
-                _ => return Err(NON_CANONICAL),
-            };
+            if !protocol_admits_abi(protocol_version, catalog_abi) {
+                return Err(NON_CANONICAL);
+            }
             if entry_program == program && catalog_abi != abi_version {
                 return Err(NON_CANONICAL);
             }
@@ -2476,7 +2494,7 @@ pub extern "C" fn layerx_programs_call_begin(
             return Err(NON_CANONICAL);
         }
         storage.clear_access_log();
-        let mut occupancy_ledger = if protocol_version == 2 {
+        let mut occupancy_ledger = if protocol_uses_occupancy(protocol_version) {
             let mut ledger = occupancy_ledger(occupancy_token, batch_number)?;
             ledger
                 .import_activation_positions(&storage, &program_owners)
@@ -2915,7 +2933,7 @@ pub extern "C" fn layerx_programs_call_begin(
                 }
                 record.call_graph.write_canonical_evidence(&mut terminal_graph);
                 record.execution.write_canonical_evidence(&mut terminal_detail);
-                if protocol_version == 2 {
+                if protocol_uses_occupancy(protocol_version) {
                     wrap_reserved_evidence(&mut terminal_detail,
                         b"LXP/programs/execution-occupancy/v1\0", &occupancy_evidence, &[])?;
                 }
