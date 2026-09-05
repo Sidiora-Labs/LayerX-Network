@@ -10,6 +10,7 @@ name = "layerx-identity"
 path = "src/main.rs"
 
 [dependencies]
+getrandom.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 rustls.workspace = true

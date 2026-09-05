@@ -5,18 +5,31 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[lib]
+name = "layerx_platform_core"
+path = "src/lib.rs"
+
 [[bin]]
 name = "layerx-core-boundary"
 path = "src/main.rs"
 
 [dependencies]
+ed25519-dalek.workspace = true
+layerx-client.workspace = true
+layerx-crypto.workspace = true
+layerx-intents.workspace = true
+layerx-proof.workspace = true
+layerx-types.workspace = true
+layerx-wire.workspace = true
+rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-rustls.workspace = true
-native-tls.workspace = true
 sha2.workspace = true
 subtle.workspace = true
 zeroize.workspace = true
+
+[dev-dependencies]
+native-tls.workspace = true
 
 [lints]
 workspace = true

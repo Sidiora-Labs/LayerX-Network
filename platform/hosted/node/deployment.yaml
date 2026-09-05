@@ -1,0 +1,241 @@
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: layerx-node-config, namespace: layerx-testnet}
+data:
+  network-id: "4020"
+  asset-id: "b5a32b12029f8ddfb905f90f280f664b46390de0fc62770fc197dd87b18cd898"
+  replica-id: "6c61796572782d626574612d726563656970742d617574686f726974792d3031"
+---
+apiVersion: v1
+kind: Service
+metadata: {name: layerx-node, namespace: layerx-testnet}
+spec: {clusterIP: None, selector: {app: layerx-node}, ports: [{name: core-tls, port: 9443, targetPort: core-tls}]}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: {name: layerx-node, namespace: layerx-testnet}
+spec:
+  serviceName: layerx-node
+  replicas: 1
+  selector: {matchLabels: {app: layerx-node}}
+  template:
+    metadata: {labels: {app: layerx-node, layerx-plane: trusted-boundary}}
+    spec:
+      securityContext: {runAsNonRoot: true, runAsUser: 4020, runAsGroup: 4020, fsGroup: 4020}
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: layerxd
+          image: ghcr.io/sidiora-labs/layerx-node:0.1.0
+          imagePullPolicy: Always
+          command: [/opt/layerx/supervisor.sh]
+          args:
+            - --role
+            - sequencer
+            - --data-dir
+            - /var/lib/layerx/node
+            - --run-dir
+            - /run/layerx/node
+            - --
+            - --network-id
+            - $(LAYERX_NODE_NETWORK_ID)
+            - --asset
+            - $(LAYERX_NODE_ASSET_ID)
+            - --replica-id
+            - $(LAYERX_NODE_REPLICA_ID)
+            - --sequencer-key
+            - /run/layerx/keys/sequencer.key
+            - --treasury-key
+            - /run/layerx/keys/treasury.key
+            - --program-token-file
+            - /run/layerx/tokens/program-token
+            - --replica-token-file
+            - /run/layerx/tokens/replica-token
+            - --program-port
+            - "9401"
+            - --replica-port
+            - "9402"
+            - --lni-uid
+            - "4021"
+            - --lni-gid
+            - "4020"
+          env:
+            - {name: LAYERX_NODE_NETWORK_ID, valueFrom: {configMapKeyRef: {name: layerx-node-config, key: network-id}}}
+            - {name: LAYERX_NODE_ASSET_ID, valueFrom: {configMapKeyRef: {name: layerx-node-config, key: asset-id}}}
+            - {name: LAYERX_NODE_REPLICA_ID, valueFrom: {configMapKeyRef: {name: layerx-node-config, key: replica-id}}}
+          resources: {requests: {cpu: 500m, memory: 512Mi}, limits: {cpu: "2", memory: 2Gi}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/layerx}
+            - {name: run, mountPath: /run/layerx}
+            - {name: keys, mountPath: /run/layerx/keys, readOnly: true}
+            - {name: tokens, mountPath: /run/layerx/tokens, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+        - name: layerxd-authority
+          image: ghcr.io/sidiora-labs/layerx-node:0.1.0
+          imagePullPolicy: Always
+          command: [/opt/layerx/supervisor.sh]
+          args: [--role, replica, --data-dir, /var/lib/layerx/node, --run-dir, /run/layerx/node]
+          resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/layerx}
+            - {name: run, mountPath: /run/layerx}
+            - {name: tmp, mountPath: /tmp}
+        - name: core-boundary
+          image: ghcr.io/sidiora-labs/layerx-core-boundary:0.1.0
+          imagePullPolicy: Always
+          securityContext: {runAsUser: 4021, runAsGroup: 4020, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          env:
+            - {name: LAYERX_CORE_LISTEN, value: "0.0.0.0:9443"}
+            - {name: LAYERX_CORE_ADMIN_LISTEN, value: "0.0.0.0:9444"}
+            - {name: LAYERX_CORE_NETWORK_ID, valueFrom: {configMapKeyRef: {name: layerx-node-config, key: network-id}}}
+            - {name: LAYERX_CORE_ASSET_ID, valueFrom: {configMapKeyRef: {name: layerx-node-config, key: asset-id}}}
+            - {name: LAYERX_CORE_TLS_CERT_DER, value: /run/layerx/core-tls/server.crt.der}
+            - {name: LAYERX_CORE_TLS_KEY_DER, value: /run/layerx/core-tls/server.key.der}
+            - {name: LAYERX_CORE_ADMIN_TLS_CERT_DER, value: /run/layerx/core-admin-tls/server.crt.der}
+            - {name: LAYERX_CORE_ADMIN_TLS_KEY_DER, value: /run/layerx/core-admin-tls/server.key.der}
+            - {name: LAYERX_CORE_CLIENT_CA_DER, value: /run/layerx/trust/ca.crt.der}
+            - {name: LAYERX_CORE_LNI_SOCKET, value: /run/layerx/node/layerxd.lni.sock}
+            - {name: LAYERX_CORE_SUPERVISOR_SOCKET, value: /run/layerx/node/supervisor.sock}
+            - {name: LAYERX_CORE_NODE_URL, value: "http://127.0.0.1:9401"}
+            - {name: LAYERX_CORE_NODE_BEARER_TOKEN_FILE, value: /run/layerx/tokens/program-token}
+            - {name: LAYERX_CORE_REPLICA_URL, value: "http://127.0.0.1:9402"}
+            - {name: LAYERX_CORE_REPLICA_BEARER_TOKEN_FILE, value: /run/layerx/tokens/replica-token}
+            - {name: LAYERX_CORE_ADMIN_TOKEN_FILE, value: /run/layerx/backend-admin/token}
+            - {name: LAYERX_CORE_TREASURY_KEY_FILE, value: /run/layerx/keys/treasury.key}
+            - {name: LAYERX_CORE_STATE_DIR, value: /var/lib/layerx/core}
+          ports: [{name: core-tls, containerPort: 9443}, {name: core-admin-tls, containerPort: 9444}]
+          readinessProbe: {httpGet: {scheme: HTTPS, path: /readyz, port: core-tls}, periodSeconds: 5}
+          livenessProbe: {httpGet: {scheme: HTTPS, path: /livez, port: core-tls}, periodSeconds: 15}
+          resources: {requests: {cpu: 250m, memory: 128Mi}, limits: {cpu: "1", memory: 512Mi}}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/layerx}
+            - {name: run, mountPath: /run/layerx}
+            - {name: keys, mountPath: /run/layerx/keys, readOnly: true}
+            - {name: tokens, mountPath: /run/layerx/tokens, readOnly: true}
+            - {name: backend-admin, mountPath: /run/layerx/backend-admin, readOnly: true}
+            - {name: core-tls, mountPath: /run/layerx/core-tls, readOnly: true}
+            - {name: core-admin-tls, mountPath: /run/layerx/core-admin-tls, readOnly: true}
+            - {name: trust, mountPath: /run/layerx/trust, readOnly: true}
+        - name: receipt-authority
+          image: ghcr.io/sidiora-labs/layerx-receipt-authority:0.1.0
+          imagePullPolicy: Always
+          securityContext: {runAsUser: 4021, runAsGroup: 4020, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          env:
+            - {name: LAYERX_AUTHORITY_LISTEN, value: "0.0.0.0:9445"}
+            - {name: LAYERX_AUTHORITY_NETWORK_ID, valueFrom: {configMapKeyRef: {name: layerx-node-config, key: network-id}}}
+            - {name: LAYERX_AUTHORITY_TLS_CERT_DER, value: /run/layerx/authority-tls/server.crt.der}
+            - {name: LAYERX_AUTHORITY_TLS_KEY_DER, value: /run/layerx/authority-tls/server.key.der}
+            - {name: LAYERX_AUTHORITY_CLIENT_CA_DER, value: /run/layerx/trust/ca.crt.der}
+            - {name: LAYERX_AUTHORITY_TOKEN_FILES, value: /run/layerx/gateway-authority/token:/run/layerx/registry-authority/token:/run/layerx/webhooks-authority/token}
+            - {name: LAYERX_AUTHORITY_REPLICA_URL, value: "http://127.0.0.1:9402"}
+            - {name: LAYERX_AUTHORITY_REPLICA_BEARER_TOKEN_FILE, value: /run/layerx/tokens/replica-token}
+            - {name: LAYERX_AUTHORITY_REPLICA_ID, valueFrom: {configMapKeyRef: {name: layerx-node-config, key: replica-id}}}
+            - {name: LAYERX_AUTHORITY_RECEIPT_URL, value: "http://127.0.0.1:9401"}
+            - {name: LAYERX_AUTHORITY_RECEIPT_BEARER_TOKEN_FILE, value: /run/layerx/tokens/program-token}
+          ports: [{name: authority-tls, containerPort: 9445}]
+          readinessProbe: {httpGet: {scheme: HTTPS, path: /readyz, port: authority-tls}, periodSeconds: 5}
+          livenessProbe: {httpGet: {scheme: HTTPS, path: /livez, port: authority-tls}, periodSeconds: 15}
+          resources: {requests: {cpu: 200m, memory: 128Mi}, limits: {cpu: "1", memory: 512Mi}}
+          volumeMounts:
+            - {name: tokens, mountPath: /run/layerx/tokens, readOnly: true}
+            - {name: authority-tls, mountPath: /run/layerx/authority-tls, readOnly: true}
+            - {name: trust, mountPath: /run/layerx/trust, readOnly: true}
+            - {name: gateway-authority, mountPath: /run/layerx/gateway-authority, readOnly: true}
+            - {name: registry-authority, mountPath: /run/layerx/registry-authority, readOnly: true}
+            - {name: webhooks-authority, mountPath: /run/layerx/webhooks-authority, readOnly: true}
+        - name: agent-boundary
+          image: ghcr.io/sidiora-labs/layerx-agent-boundary:0.1.0
+          imagePullPolicy: Always
+          securityContext: {runAsUser: 4021, runAsGroup: 4020, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          env:
+            - {name: LAYERX_AGENT_BOUNDARY_LISTEN, value: "0.0.0.0:9446"}
+            - {name: LAYERX_AGENT_BOUNDARY_NETWORK_ID, valueFrom: {configMapKeyRef: {name: layerx-node-config, key: network-id}}}
+            - {name: LAYERX_AGENT_BOUNDARY_TLS_CERT_DER, value: /run/layerx/agent-tls/server.crt.der}
+            - {name: LAYERX_AGENT_BOUNDARY_TLS_KEY_DER, value: /run/layerx/agent-tls/server.key.der}
+            - {name: LAYERX_AGENT_BOUNDARY_CLIENT_CA_DER, value: /run/layerx/trust/ca.crt.der}
+            - {name: LAYERX_AGENT_BOUNDARY_GATEWAY_TOKEN_FILE, value: /run/layerx/gateway-component/token}
+            - {name: LAYERX_AGENT_BOUNDARY_REGISTRY_TOKEN_FILE, value: /run/layerx/registry-component/token}
+            - {name: LAYERX_AGENT_BOUNDARY_LNI_SOCKET, value: /run/layerx/node/layerxd.lni.sock}
+            - {name: LAYERX_AGENT_BOUNDARY_NODE_URL, value: "http://127.0.0.1:9401"}
+            - {name: LAYERX_AGENT_BOUNDARY_NODE_BEARER_TOKEN_FILE, value: /run/layerx/tokens/program-token}
+            - {name: LAYERX_AGENT_BOUNDARY_STATE_DIR, value: /var/lib/layerx/agent-boundary}
+          ports: [{name: agent-tls, containerPort: 9446}]
+          readinessProbe: {httpGet: {scheme: HTTPS, path: /readyz, port: agent-tls}, periodSeconds: 5}
+          livenessProbe: {httpGet: {scheme: HTTPS, path: /livez, port: agent-tls}, periodSeconds: 15}
+          resources: {requests: {cpu: 250m, memory: 128Mi}, limits: {cpu: "1", memory: 512Mi}}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/layerx}
+            - {name: run, mountPath: /run/layerx}
+            - {name: tokens, mountPath: /run/layerx/tokens, readOnly: true}
+            - {name: agent-tls, mountPath: /run/layerx/agent-tls, readOnly: true}
+            - {name: trust, mountPath: /run/layerx/trust, readOnly: true}
+            - {name: gateway-component, mountPath: /run/layerx/gateway-component, readOnly: true}
+            - {name: registry-component, mountPath: /run/layerx/registry-component, readOnly: true}
+      volumes:
+        - {name: run, emptyDir: {medium: Memory, sizeLimit: 16Mi}}
+        - {name: tmp, emptyDir: {medium: Memory, sizeLimit: 64Mi}}
+        - {name: keys, secret: {secretName: layerx-node-keys, defaultMode: 0440}}
+        - {name: tokens, secret: {secretName: layerx-node-tokens, defaultMode: 0440}}
+        - {name: backend-admin, secret: {secretName: layerx-testnet-backend-admin}}
+        - {name: trust, secret: {secretName: layerx-internal-ca}}
+        - {name: core-tls, secret: {secretName: layerx-pending-core-tls}}
+        - {name: core-admin-tls, secret: {secretName: layerx-pending-core-admin-tls}}
+        - {name: authority-tls, secret: {secretName: layerx-receipt-authority-tls}}
+        - {name: agent-tls, secret: {secretName: layerx-agent-boundary-tls}}
+        - {name: gateway-authority, secret: {secretName: layerx-gateway-authority-client}}
+        - {name: registry-authority, secret: {secretName: layerx-program-registry-authority-client}}
+        - {name: webhooks-authority, secret: {secretName: layerx-webhooks-authority-client}}
+        - {name: gateway-component, secret: {secretName: layerx-gateway-component-client}}
+        - {name: registry-component, secret: {secretName: layerx-program-registry-component-client}}
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec: {accessModes: [ReadWriteOnce], resources: {requests: {storage: 50Gi}}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: layerx-pending-core, namespace: layerx-testnet}
+spec: {type: ClusterIP, selector: {app: layerx-node}, ports: [{name: https, port: 9443, targetPort: core-tls}]}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: layerx-pending-core-admin, namespace: layerx-testnet}
+spec: {type: ClusterIP, selector: {app: layerx-node}, ports: [{name: https, port: 9444, targetPort: core-admin-tls}]}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: layerx-receipt-authority, namespace: layerx-testnet}
+spec: {type: ClusterIP, selector: {app: layerx-node}, ports: [{name: https, port: 9443, targetPort: authority-tls}]}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: layerx-agent-boundary, namespace: layerx-testnet}
+spec: {type: ClusterIP, selector: {app: layerx-node}, ports: [{name: https, port: 9443, targetPort: agent-tls}]}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: layerx-node-ingress, namespace: layerx-testnet}
+spec:
+  podSelector: {matchLabels: {app: layerx-node}}
+  policyTypes: [Ingress]
+  ingress:
+    - from: [{podSelector: {matchLabels: {app: layerx-testnet-control}}}]
+      ports: [{protocol: TCP, port: 9443}, {protocol: TCP, port: 9444}, {protocol: TCP, port: 9445}]
+    - from: [{podSelector: {matchLabels: {app: layerx-gateway}}}]
+      ports: [{protocol: TCP, port: 9443}, {protocol: TCP, port: 9445}, {protocol: TCP, port: 9446}]
+    - from: [{podSelector: {matchLabels: {app: layerx-program-registry}}}]
+      ports: [{protocol: TCP, port: 9445}, {protocol: TCP, port: 9446}]
+    - from: [{podSelector: {matchLabels: {app: layerx-faucet}}}]
+      ports: [{protocol: TCP, port: 9443}]
+    - from: [{podSelector: {matchLabels: {app: layerx-webhooks}}}]
+      ports: [{protocol: TCP, port: 9445}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: layerx-node-egress, namespace: layerx-testnet}
+spec:
+  podSelector: {matchLabels: {app: layerx-node}}
+  policyTypes: [Egress]
+  egress:
+    - to: [{namespaceSelector: {}}]
+      ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]

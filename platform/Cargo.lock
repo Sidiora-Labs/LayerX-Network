@@ -1331,6 +1331,12 @@ dependencies = [
 name = "layerx-platform-agent-boundary"
 version = "0.1.0"
 dependencies = [
+ "ed25519-dalek",
+ "getrandom 0.3.4",
+ "layerx-client",
+ "layerx-proof",
+ "layerx-types",
+ "layerx-wire",
  "native-tls",
  "rustls",
  "serde",
@@ -1390,6 +1396,13 @@ dependencies = [
 name = "layerx-platform-core"
 version = "0.1.0"
 dependencies = [
+ "ed25519-dalek",
+ "layerx-client",
+ "layerx-crypto",
+ "layerx-intents",
+ "layerx-proof",
+ "layerx-types",
+ "layerx-wire",
  "native-tls",
  "rustls",
  "serde",
@@ -1464,6 +1477,7 @@ dependencies = [
 name = "layerx-platform-identity"
 version = "0.1.0"
 dependencies = [
+ "getrandom 0.3.4",
  "native-tls",
  "rustls",
  "serde",
@@ -1481,12 +1495,11 @@ version = "0.1.0"
 name = "layerx-platform-paxeer-boundary"
 version = "0.1.0"
 dependencies = [
- "native-tls",
+ "layerx-paxeer-client",
+ "layerx-proof",
+ "layerx-types",
  "rustls",
- "serde",
  "serde_json",
- "sha2",
- "subtle",
  "zeroize",
 ]
 

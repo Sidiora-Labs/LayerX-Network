@@ -675,7 +675,7 @@ reqs = ["14.2","14.5"]
 
 [task.6.10]
 title = "Bind a real finality-authority verifier in layerxd so the sequencer bootstraps"
-status = "pending"
+status = "in_progress"
 wave = 6
 requires = ["3.6"]
 do_1 = "Add cmd/layerxd/lxp_daemon_finality_authority.c implementing lxp_daemon_finality_authority_verify_fn for the sequencer: hash the certificate checkpoint with lxp_checkpoint_certificate_hash and require it to equal the registration's checkpoint_id; require the certificate attestations' paxeer_chain_id and paxeer_settlement_contract to equal the registration and the daemon's configured LAYERX_NODE_PAXEER_CHAIN_ID and LAYERX_NODE_SETTLEMENT_CONTRACT; run lxp_checkpoint_finalisable against the evidence store's finalisation state, bonded set and requirements; then independently confirm the registration on the Paxeer chain through a loopback JSON-RPC endpoint LAYERX_NODE_PAXEER_RPC_ADDRESS/PORT (127.0.0.1 only, reusing the daemon's loopback HTTP client conventions) with eth_chainId, eth_getTransactionReceipt(transaction_id) - status 1, to equals the settlement contract, blockNumber equals observed_block_number, a log from the settlement contract carrying the checkpoint_id - and eth_blockNumber at or beyond the observed block; bind it in open_process with lxp_daemon_evidence_open so LXP_ERR_MODULE_DISABLED can no longer occur; no environment variable may disable verification."

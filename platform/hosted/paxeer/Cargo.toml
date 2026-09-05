@@ -10,13 +10,14 @@ name = "layerx-paxeer-boundary"
 path = "src/main.rs"
 
 [dependencies]
-serde.workspace = true
-serde_json.workspace = true
 rustls.workspace = true
-native-tls.workspace = true
-sha2.workspace = true
-subtle.workspace = true
+serde_json.workspace = true
 zeroize.workspace = true
+
+[dev-dependencies]
+layerx-paxeer-client.workspace = true
+layerx-proof.workspace = true
+layerx-types.workspace = true
 
 [lints]
 workspace = true

@@ -1,0 +1,11 @@
+.git
+.worktrees
+build
+build-repro-a
+build-repro-b
+node_modules
+**/node_modules
+**/target
+paxeer-network
+human/apps
+tools/qualification/output

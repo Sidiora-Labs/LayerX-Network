@@ -1,0 +1,68 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: layerx-identity-state, namespace: layerx-testnet}
+spec: {accessModes: [ReadWriteOnce], resources: {requests: {storage: 5Gi}}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: layerx-identity, namespace: layerx-testnet}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: layerx-identity}}
+  template:
+    metadata: {labels: {app: layerx-identity, layerx-plane: trusted-boundary}}
+    spec:
+      securityContext: {runAsNonRoot: true, runAsUser: 4020, runAsGroup: 4020, fsGroup: 4020}
+      containers:
+        - name: identity
+          image: ghcr.io/sidiora-labs/layerx-identity:0.1.0
+          imagePullPolicy: Always
+          ports: [{name: https, containerPort: 9443}]
+          env:
+            - {name: LAYERX_IDENTITY_LISTEN, value: "0.0.0.0:9443"}
+            - {name: LAYERX_IDENTITY_TLS_CERT_DER, value: /run/layerx/server/server.crt.der}
+            - {name: LAYERX_IDENTITY_TLS_KEY_DER, value: /run/layerx/server/server.key.der}
+            - {name: LAYERX_IDENTITY_STATE_DIR, value: /var/lib/layerx/identity}
+            - {name: LAYERX_IDENTITY_SERVICE_TOKENS_DIR, value: /run/layerx/service-tokens}
+            - {name: LAYERX_IDENTITY_STORE_KEY_FILE, value: /run/layerx/store/key}
+            - {name: LAYERX_IDENTITY_SESSION_TTL_SECONDS, value: "86400"}
+          readinessProbe: {httpGet: {scheme: HTTPS, path: /readyz, port: https}, periodSeconds: 5, failureThreshold: 3}
+          livenessProbe: {httpGet: {scheme: HTTPS, path: /livez, port: https}, periodSeconds: 15}
+          resources: {requests: {cpu: 100m, memory: 64Mi}, limits: {cpu: "1", memory: 256Mi}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts:
+            - {name: state, mountPath: /var/lib/layerx/identity}
+            - {name: server, mountPath: /run/layerx/server, readOnly: true}
+            - {name: service-tokens, mountPath: /run/layerx/service-tokens, readOnly: true}
+            - {name: store, mountPath: /run/layerx/store, readOnly: true}
+      volumes:
+        - {name: state, persistentVolumeClaim: {claimName: layerx-identity-state}}
+        - {name: server, secret: {secretName: layerx-identity-server-tls}}
+        - {name: service-tokens, secret: {secretName: layerx-identity-service-tokens}}
+        - {name: store, secret: {secretName: layerx-identity-store-key}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: layerx-identity, namespace: layerx-testnet}
+spec: {selector: {app: layerx-identity}, ports: [{name: https, port: 9443, targetPort: https}]}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: layerx-identity-ingress, namespace: layerx-testnet}
+spec:
+  podSelector: {matchLabels: {app: layerx-identity}}
+  policyTypes: [Ingress]
+  ingress:
+    - from: [{podSelector: {matchLabels: {app: layerx-testnet-control}}}, {podSelector: {matchLabels: {app: layerx-faucet}}}, {podSelector: {matchLabels: {app: layerx-gateway}}}, {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: layerx-developer}}}]
+      ports: [{protocol: TCP, port: 9443}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: layerx-identity-egress, namespace: layerx-testnet}
+spec:
+  podSelector: {matchLabels: {app: layerx-identity}}
+  policyTypes: [Egress]
+  egress:
+    - to: [{namespaceSelector: {}}]
+      ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]

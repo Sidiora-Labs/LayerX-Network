@@ -1,0 +1,376 @@
+#!/usr/bin/env bash
+# Deploys the LayerX settlement suite to the Paxeer beta chain through the paxeer-boundary and
+# records the beta settlement domain in contracts/config/checkpoint-settlement.json.
+#
+# The deployment is the phased runner in scripts/PaxeerBetaDeploy.s.sol, driven with a pinned
+# Foundry through the boundary. Governance operations are timelocked by at least one day
+# (PaxeerBetaDeploymentValidator.validateInput), so the phases are separate invocations:
+#
+#   deploy       fund and approve the guarantor bond controllers, deploy the suite, schedule the
+#                timelock permissions and write the beta settlement domain
+#   permissions  execute the permission grants and schedule the genesis activation
+#   activate     execute the genesis activation (asset, vault bond, guarantor activation)
+#   bond         every bond controller deposits its genesis bond
+#   finalize     execute the remaining genesis calls, seal the blueprint
+#   status       print the recorded deployment and the on-chain view
+#
+# Environment:
+#   LAYERX_PAXEER_BOUNDARY_URL         https URL of the paxeer-boundary (required)
+#   LAYERX_PAXEER_BOUNDARY_CA_DER      DER certificate that issued the boundary certificate (required)
+#   LAYERX_PAXEER_CHAIN_ID             expected EVM chain id (default 125)
+#   LAYERX_PAXEER_DEPLOYER_KEY_FILE    file holding the deployer private key as 0x hex (required)
+#   LAYERX_PAXEER_GENESIS_DIR          directory with paxeer-deployment-descriptor.lxgd and
+#                                      paxeer-registration-request.lxrr from layerx-genesis-build (required)
+#   LAYERX_PAXEER_DEPLOYMENT_INPUT     JSON with the PaxeerBetaDeploymentValidator.Input fields
+#                                      (default platform/hosted/paxeer/deployment-input.beta.json)
+#   LAYERX_PAXEER_GUARANTORS           JSON list of the beta guarantors (default platform/hosted/paxeer/guarantors.beta.json)
+#   LAYERX_PAXEER_GUARANTOR_KEYS_DIR   directory holding <guarantor_id>.controller.key files (required
+#                                      for deploy and bond)
+#   LAYERX_PAXEER_DEPLOYMENT_RECORD    JSON file the phases share (default platform/hosted/paxeer/deployments/beta.json)
+#   LAYERX_PAXEER_SETTLEMENT_JSON      settlement document to update (default contracts/config/checkpoint-settlement.json)
+#   LAYERX_PAXEER_SETTLEMENT_DOMAIN    domain name to write (default beta)
+#   LAYERX_PAXEER_FOUNDRY_BIN          directory holding the pinned forge and cast (default /root/.foundry/bin)
+set -euo pipefail
+
+PHASE=${1:-}
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+ROOT=$(cd "$SCRIPT_DIR/../../.." && pwd)
+FOUNDRY_BIN=${LAYERX_PAXEER_FOUNDRY_BIN:-/root/.foundry/bin}
+FORGE="$FOUNDRY_BIN/forge"
+CAST="$FOUNDRY_BIN/cast"
+FOUNDRY_VERSION_PIN="1.7.1"
+HELPER="$SCRIPT_DIR/settlement-domain.py"
+BOUNDARY_URL=${LAYERX_PAXEER_BOUNDARY_URL:-}
+BOUNDARY_CA=${LAYERX_PAXEER_BOUNDARY_CA_DER:-}
+CHAIN_ID=${LAYERX_PAXEER_CHAIN_ID:-125}
+DEPLOYER_KEY_FILE=${LAYERX_PAXEER_DEPLOYER_KEY_FILE:-}
+GENESIS_DIR=${LAYERX_PAXEER_GENESIS_DIR:-}
+INPUT_JSON=${LAYERX_PAXEER_DEPLOYMENT_INPUT:-$SCRIPT_DIR/deployment-input.beta.json}
+GUARANTORS_JSON=${LAYERX_PAXEER_GUARANTORS:-$SCRIPT_DIR/guarantors.beta.json}
+KEYS_DIR=${LAYERX_PAXEER_GUARANTOR_KEYS_DIR:-}
+RECORD=${LAYERX_PAXEER_DEPLOYMENT_RECORD:-$SCRIPT_DIR/deployments/beta.json}
+SETTLEMENT_JSON=${LAYERX_PAXEER_SETTLEMENT_JSON:-$ROOT/contracts/config/checkpoint-settlement.json}
+DOMAIN=${LAYERX_PAXEER_SETTLEMENT_DOMAIN:-beta}
+USDL=0x85FcD13735F4309833A503EE804ea32395851479
+CONTROLLER_GAS_WEI=${LAYERX_PAXEER_CONTROLLER_GAS_WEI:-1000000000000000000}
+ROLE_TIMELOCK=0x882ca54e3fbb5601bb5d18d749550c4b6d4a84f96dfd996f640028bfc365ab3c
+ROLE_ASSET_REGISTRY=0x85641de10e592bbf135935b0aed98d49b29315d11199416b4818e2b455e665d9
+ROLE_VAULT=0x84b428c6b55e2f5a70e06d5961a4c843cc6f7128586f555a85383930972fbe1c
+ROLE_GUARANTOR_BOND=0xb253bc90569ff9fcdf15b6fefdc8d88d343a5da7b5a7958f451df8acd114a914
+ROLE_CHECKPOINT_REGISTRY=0xc4b5d3b3f2bc8c3b3a8989c50bd1c087c1fcd3ac72c7f2f4c52b0fed090429c5
+ROLE_CHALLENGE_MANAGER=0x3441e1370109e8708eaf43ee011be00e3ff454aec3878e497a4a4acb467031f0
+ROLE_NULLIFIER_REGISTRY=0xe0944a9bb1c9ed276147cd0223b7a6eda7301d069189855a4c24abac301c2528
+ROLE_WITHDRAWAL_CLAIMS=0xfbb97d030be67176f3ad2df7a8bf88f31644e6827ea11bd0ad600a21c35e0e1e
+ROLE_EMERGENCY_EXIT=0xc5b500352f2acea00a7d2c573c1740bd4e2676679e0324f5e6b29d8e40e1c994
+ROLE_RESERVE_RECONCILER=0xf3eb0ae5f48866d95054c5b4035a8a6e75c44b4b1d1207fce950d6bbf80d4f86
+ROLE_CONTRACTS_MANAGER=0xf76c437f23a8d6ad4443698a64907bee47fa3eb97ed040a15f86ee4733b45073
+ROLE_MANAGER_MIGRATOR=0xf7d1ddfa1cfae6c41a22c763b97c6162c3ffd0bbba7a73d4071645ee61d35dd6
+ROLE_CUSTODY_TOPOLOGY=0xabbf00985b2eb8b64cfb182c7cc824ad713a84165e9fac0d386d932f52633e1c
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+
+fail() {
+    echo "deploy-contracts: $*" >&2
+    exit 1
+}
+
+usage() {
+    sed -n '2,32p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
+    exit 2
+}
+
+require_tools() {
+    [ -x "$FORGE" ] && [ -x "$CAST" ] || fail "pinned Foundry $FOUNDRY_VERSION_PIN is not installed at $FOUNDRY_BIN"
+    local version
+    version=$("$FORGE" --version 2>/dev/null | sed -n 's/^forge Version: \([0-9.]*\).*/\1/p')
+    [ "$version" = "$FOUNDRY_VERSION_PIN" ] || fail "forge $version is installed; the beta deployment pins forge $FOUNDRY_VERSION_PIN"
+    command -v python3 >/dev/null 2>&1 || fail "python3 is required"
+    command -v jq >/dev/null 2>&1 || fail "jq is required"
+    command -v openssl >/dev/null 2>&1 || fail "openssl is required"
+}
+
+require_endpoint() {
+    [ -n "$BOUNDARY_URL" ] || fail "LAYERX_PAXEER_BOUNDARY_URL is required"
+    case "$BOUNDARY_URL" in
+        https://*) ;;
+        *) fail "LAYERX_PAXEER_BOUNDARY_URL must be an https URL" ;;
+    esac
+    [ -r "$BOUNDARY_CA" ] || fail "LAYERX_PAXEER_BOUNDARY_CA_DER must name the issuing certificate"
+    openssl x509 -inform DER -in "$BOUNDARY_CA" -out "$WORK/ca.pem" >/dev/null 2>&1 || fail "boundary CA is not a DER certificate"
+    export SSL_CERT_FILE="$WORK/ca.pem"
+    local observed
+    observed=$("$CAST" chain-id --rpc-url "$BOUNDARY_URL") || fail "the boundary did not answer eth_chainId"
+    [ "$observed" = "$CHAIN_ID" ] || fail "the boundary serves chain $observed, expected $CHAIN_ID"
+}
+
+require_deployer() {
+    [ -n "$DEPLOYER_KEY_FILE" ] && [ -r "$DEPLOYER_KEY_FILE" ] || fail "LAYERX_PAXEER_DEPLOYER_KEY_FILE is required"
+    DEPLOYER_KEY=$(tr -d '\r\n' < "$DEPLOYER_KEY_FILE")
+    case "$DEPLOYER_KEY" in
+        0x????????????????????????????????????????????????????????????????) ;;
+        *) fail "deployer key must be 0x-prefixed 32-byte hex" ;;
+    esac
+    DEPLOYER=$("$CAST" wallet address --private-key "$DEPLOYER_KEY")
+    export EVM_WALLET_PRIVATE_KEY="$DEPLOYER_KEY"
+}
+
+require_record() {
+    [ -r "$RECORD" ] || fail "deployment record $RECORD does not exist; run the deploy phase first"
+    jq -e '.chain_id and .addresses and .blueprint' "$RECORD" >/dev/null || fail "deployment record $RECORD is malformed"
+    [ "$(jq -r '.chain_id' "$RECORD")" = "$CHAIN_ID" ] || fail "deployment record was produced for another chain"
+}
+
+load_inputs() {
+    [ -r "$INPUT_JSON" ] || fail "deployment input $INPUT_JSON is not readable"
+    [ -r "$GUARANTORS_JSON" ] || fail "guarantor list $GUARANTORS_JSON is not readable"
+    [ -n "$GENESIS_DIR" ] || fail "LAYERX_PAXEER_GENESIS_DIR is required"
+    DESCRIPTOR_FILE="$GENESIS_DIR/paxeer-deployment-descriptor.lxgd"
+    REGISTRATION_FILE="$GENESIS_DIR/paxeer-registration-request.lxrr"
+    [ -r "$DESCRIPTOR_FILE" ] && [ -r "$REGISTRATION_FILE" ] || fail "genesis artifacts are missing from $GENESIS_DIR"
+    DESCRIPTOR_HEX=0x$(od -An -v -tx1 "$DESCRIPTOR_FILE" | tr -d ' \n')
+    REGISTRATION_HEX=0x$(od -An -v -tx1 "$REGISTRATION_FILE" | tr -d ' \n')
+    [ ${#DESCRIPTOR_HEX} -eq $((2 + 105 * 2)) ] || fail "deployment descriptor must be 105 bytes"
+    [ ${#REGISTRATION_HEX} -eq $((2 + 73 * 2)) ] || fail "registration request must be 73 bytes"
+    [ "${DESCRIPTOR_HEX:2:10}" = "4c58474401" ] || fail "deployment descriptor magic is not LXGD v1"
+    NETWORK_ID=$((16#${DESCRIPTOR_HEX:12:8}))
+    [ "$NETWORK_ID" -gt 0 ] || fail "deployment descriptor network id is zero"
+    GUARANTOR_COUNT=$(jq 'length' "$GUARANTORS_JSON")
+    [ "$GUARANTOR_COUNT" -gt 0 ] || fail "the guarantor list is empty"
+    GUARANTOR_SET=$(jq -c '
+        to_entries | map(.value + {
+            joined_epoch: (.value.joined_epoch // 1),
+            governance_sequence: (.value.governance_sequence // (.key + 1))
+        })' "$GUARANTORS_JSON")
+    local index
+    for index in $(seq 0 $((GUARANTOR_COUNT - 1))); do
+        local public_key signer expected
+        public_key=$(printf '%s' "$GUARANTOR_SET" | jq -r ".[$index].public_key")
+        signer=$(printf '%s' "$GUARANTOR_SET" | jq -r ".[$index].signer")
+        expected=$(python3 "$HELPER" signer "$public_key")
+        [ "$(printf '%s' "$signer" | tr 'A-F' 'a-f')" = "$expected" ] || fail "guarantor $index signer does not match its public key"
+    done
+    INPUT_TUPLE=$(jq -r --arg deployer "$DEPLOYER" '
+        "(\"\(.release)\",\($deployer),\(.final_proposer),\(.final_executor),\(.emergency_council),"
+        + "\(.timelock_delay),\(.timelock_grace_period),\(.timelock_maximum_call_value),"
+        + "\(.usdl_minimum_deposit),\(.usdl_custody_cap),\(.challenge_window),\(.checkpoint_liveness_bound),"
+        + "\(.minimum_bond_bps),\(.unbonding_delay),\(.checkpoint_threshold_numerator),\(.checkpoint_threshold_denominator),"
+        + "\(.checkpoint_maximum_age),\(.checkpoint_future_drift),\(.challenge_bond),\(.emergency_delay),"
+        + "\(.migration_delay),\(.migration_expiry),\(.migration_gas_limit),\(.migration_maximum_call_value),\(.enabled_features))"
+    ' "$INPUT_JSON")
+    GUARANTOR_TUPLES=$(printf '%s' "$GUARANTOR_SET" | jq -r '
+        "[" + (map("(\(.guarantor_id),\(.signer),\(.bond_controller),\(.joined_epoch),\(.governance_sequence),\(.bond_amount))") | join(",")) + "]"')
+}
+
+controller_key() {
+    local guarantor_id=$1 path
+    [ -n "$KEYS_DIR" ] || fail "LAYERX_PAXEER_GUARANTOR_KEYS_DIR is required for this phase"
+    path="$KEYS_DIR/$guarantor_id.controller.key"
+    [ -r "$path" ] || fail "controller key $path is missing"
+    tr -d '\r\n' < "$path"
+}
+
+call() {
+    "$CAST" call --rpc-url "$BOUNDARY_URL" "$@"
+}
+
+send() {
+    local key=$1
+    shift
+    "$CAST" send --rpc-url "$BOUNDARY_URL" --private-key "$key" --json "$@" > "$WORK/receipt.json"
+    [ "$(jq -r '.status' "$WORK/receipt.json")" = "0x1" ] || fail "transaction failed: $(jq -c . "$WORK/receipt.json")"
+}
+
+fund_controllers() {
+    local index
+    for index in $(seq 0 $((GUARANTOR_COUNT - 1))); do
+        local guarantor_id controller bond key balance allowance gas
+        guarantor_id=$(printf '%s' "$GUARANTOR_SET" | jq -r ".[$index].guarantor_id")
+        controller=$(printf '%s' "$GUARANTOR_SET" | jq -r ".[$index].bond_controller")
+        bond=$(printf '%s' "$GUARANTOR_SET" | jq -r ".[$index].bond_amount")
+        key=$(controller_key "$guarantor_id")
+        [ "$("$CAST" wallet address --private-key "$key")" = "$controller" ] || fail "controller key for $guarantor_id does not match $controller"
+        gas=$("$CAST" balance --rpc-url "$BOUNDARY_URL" "$controller")
+        if [ "$(printf '%s\n' "$gas" "$CONTROLLER_GAS_WEI" | sort -n | head -1)" != "$CONTROLLER_GAS_WEI" ]; then
+            send "$DEPLOYER_KEY" --value "$CONTROLLER_GAS_WEI" "$controller"
+        fi
+        balance=$(call "$USDL" "balanceOf(address)(uint256)" "$controller" | cut -d' ' -f1)
+        if [ "$(printf '%s\n' "$balance" "$bond" | sort -n | head -1)" != "$bond" ]; then
+            send "$DEPLOYER_KEY" "$USDL" "mint(address,uint256)" "$controller" "$bond"
+        fi
+        allowance=$(call "$USDL" "allowance(address,address)(uint256)" "$controller" "$GUARANTOR_BOND" | cut -d' ' -f1)
+        if [ "$(printf '%s\n' "$allowance" "$bond" | sort -n | head -1)" != "$bond" ]; then
+            send "$key" "$USDL" "approve(address,uint256)" "$GUARANTOR_BOND" "$bond"
+        fi
+    done
+}
+
+run_script() {
+    local signature=$1
+    shift
+    (cd "$ROOT" && "$FORGE" script scripts/PaxeerBetaDeploy.s.sol:PaxeerBetaDeploy \
+        --rpc-url "$BOUNDARY_URL" --broadcast --slow --sig "$signature" "$@") > "$WORK/forge.log" 2>&1 \
+        || { cat "$WORK/forge.log" >&2; fail "forge script $signature failed"; }
+}
+
+addresses_tuple() {
+    jq -r '.addresses | "(\(.blueprint),\(.timelock),\(.asset_registry),\(.vault),\(.guarantor_bond),\(.checkpoint_registry),\(.challenge_manager),\(.nullifier_registry),\(.withdrawal_claims),\(.emergency_exit),\(.reserve_reconciler),\(.manager_container),\(.manager_migrator),\(.custody_topology))"' "$RECORD"
+}
+
+component() {
+    call "$1" "deploymentForRole(bytes32)(address)" "$2"
+}
+
+timelock_nonce() {
+    call "$1" "operationNonce()(uint256)" | cut -d' ' -f1
+}
+
+phase_deploy() {
+    require_tools
+    require_endpoint
+    require_deployer
+    load_inputs
+    [ ! -e "$RECORD" ] || fail "deployment record $RECORD already exists"
+    [ "$(call "$USDL" "decimals()(uint8)")" = "6" ] || fail "USDL token at $USDL is not the 6-decimal beta token"
+    local nonce
+    nonce=$("$CAST" nonce --rpc-url "$BOUNDARY_URL" "$DEPLOYER")
+    GUARANTOR_BOND=$(cd "$ROOT" && "$FORGE" script scripts/PaxeerBetaDeploy.s.sol:PaxeerBetaDeploy \
+        --rpc-url "$BOUNDARY_URL" --sig "predictGuarantorBond(address,uint64)(address)" "$DEPLOYER" "$nonce" 2>/dev/null \
+        | sed -n 's/^.*\(0x[0-9a-fA-F]\{40\}\).*$/\1/p' | tail -1)
+    [ -n "$GUARANTOR_BOND" ] || fail "could not predict the GuarantorBond address"
+    fund_controllers
+    [ "$("$CAST" nonce --rpc-url "$BOUNDARY_URL" "$DEPLOYER")" = "$nonce" ] || {
+        nonce=$("$CAST" nonce --rpc-url "$BOUNDARY_URL" "$DEPLOYER")
+        GUARANTOR_BOND=$(cd "$ROOT" && "$FORGE" script scripts/PaxeerBetaDeploy.s.sol:PaxeerBetaDeploy \
+            --rpc-url "$BOUNDARY_URL" --sig "predictGuarantorBond(address,uint64)(address)" "$DEPLOYER" "$nonce" 2>/dev/null \
+            | sed -n 's/^.*\(0x[0-9a-fA-F]\{40\}\).*$/\1/p' | tail -1)
+        fund_controllers
+    }
+    run_script "deploy((string,address,address,address,address,uint64,uint64,uint256,uint128,uint128,uint64,uint64,uint32,uint64,uint16,uint16,uint64,uint64,uint128,uint64,uint64,uint64,uint64,uint256,uint256),(bytes32,address,address,uint64,uint64,uint256)[],bytes,bytes)" \
+        "$INPUT_TUPLE" "$GUARANTOR_TUPLES" "$DESCRIPTOR_HEX" "$REGISTRATION_HEX"
+    local broadcast blueprint
+    broadcast="$ROOT/broadcast/PaxeerBetaDeploy.s.sol/$CHAIN_ID/deploy-latest.json"
+    [ -r "$broadcast" ] || fail "forge did not write $broadcast"
+    blueprint=$(jq -r '[.transactions[] | select(.contractName == "Blueprint" and .transactionType == "CREATE")][0].contractAddress' "$broadcast")
+    case "$blueprint" in
+        0x????????????????????????????????????????) ;;
+        *) fail "the Blueprint creation is missing from the broadcast" ;;
+    esac
+    [ "$(call "$blueprint" "manager()(address)")" = "$DEPLOYER" ] || fail "blueprint manager is not the deployer"
+    local timelock
+    timelock=$(call "$blueprint" "governanceTimelock()(address)")
+    local bond registry
+    bond=$(component "$blueprint" "$ROLE_GUARANTOR_BOND")
+    registry=$(component "$blueprint" "$ROLE_CHECKPOINT_REGISTRY")
+    [ "$(printf '%s' "$bond" | tr 'A-F' 'a-f')" = "$(printf '%s' "$GUARANTOR_BOND" | tr 'A-F' 'a-f')" ] || fail "GuarantorBond $bond differs from the predicted $GUARANTOR_BOND"
+    [ "$(call "$registry" "networkId()(uint32)")" = "$NETWORK_ID" ] || fail "CheckpointRegistry network id differs from the genesis descriptor"
+    mkdir -p "$(dirname "$RECORD")"
+    jq -n --arg chain "$CHAIN_ID" --arg network "$NETWORK_ID" --arg deployer "$DEPLOYER" --arg blueprint "$blueprint" \
+        --arg timelock "$timelock" --arg asset_registry "$(component "$blueprint" "$ROLE_ASSET_REGISTRY")" \
+        --arg vault "$(component "$blueprint" "$ROLE_VAULT")" --arg bond "$bond" --arg registry "$registry" \
+        --arg challenge "$(component "$blueprint" "$ROLE_CHALLENGE_MANAGER")" \
+        --arg nullifier "$(component "$blueprint" "$ROLE_NULLIFIER_REGISTRY")" \
+        --arg claims "$(component "$blueprint" "$ROLE_WITHDRAWAL_CLAIMS")" \
+        --arg exit "$(component "$blueprint" "$ROLE_EMERGENCY_EXIT")" \
+        --arg reconciler "$(component "$blueprint" "$ROLE_RESERVE_RECONCILER")" \
+        --arg manager "$(component "$blueprint" "$ROLE_CONTRACTS_MANAGER")" \
+        --arg migrator "$(component "$blueprint" "$ROLE_MANAGER_MIGRATOR")" \
+        --arg topology "$(component "$blueprint" "$ROLE_CUSTODY_TOPOLOGY")" \
+        --arg descriptor "$DESCRIPTOR_HEX" --arg registration "$REGISTRATION_HEX" \
+        --arg permission_nonce "0" --arg genesis_nonce "$(timelock_nonce "$timelock")" \
+        --argjson guarantors "$GUARANTOR_SET" --slurpfile input "$INPUT_JSON" '{
+            chain_id: ($chain | tonumber), network_id: ($network | tonumber), deployer: $deployer, blueprint: $blueprint,
+            addresses: {blueprint: $blueprint, timelock: $timelock, asset_registry: $asset_registry, vault: $vault,
+                guarantor_bond: $bond, checkpoint_registry: $registry, challenge_manager: $challenge,
+                nullifier_registry: $nullifier, withdrawal_claims: $claims, emergency_exit: $exit,
+                reserve_reconciler: $reconciler, manager_container: $manager, manager_migrator: $migrator,
+                custody_topology: $topology},
+            genesis: {descriptor: $descriptor, registration_request: $registration},
+            timelock: {permission_start_nonce: ($permission_nonce | tonumber), genesis_start_nonce: ($genesis_nonce | tonumber)},
+            input: $input[0], guarantors: $guarantors, phases: ["deploy"]
+        }' > "$RECORD"
+    printf '%s' "$GUARANTOR_SET" | jq -c --arg chain "$CHAIN_ID" --arg network "$NETWORK_ID" --arg registry "$registry" --arg bond "$bond" '{
+        paxeer_chain_id: ($chain | tonumber), network_id: ($network | tonumber), settlement_contract: $registry,
+        guarantor_bond: $bond, guarantor_set: map({guarantor_id, signer, public_key})
+    }' | python3 "$HELPER" write "$SETTLEMENT_JSON" "$DOMAIN"
+    echo "deploy-contracts: deployed blueprint $blueprint, CheckpointRegistry $registry, GuarantorBond $bond; $DOMAIN domain written to $SETTLEMENT_JSON" >&2
+}
+
+phase_permissions() {
+    require_tools
+    require_endpoint
+    require_deployer
+    require_record
+    load_inputs
+    local start
+    start=$(jq -r '.timelock.permission_start_nonce' "$RECORD")
+    run_script "executePermissionsAndScheduleGenesis((address,address,address,address,address,address,address,address,address,address,address,address,address,address),(string,address,address,address,address,uint64,uint64,uint256,uint128,uint128,uint64,uint64,uint32,uint64,uint16,uint16,uint64,uint64,uint128,uint64,uint64,uint64,uint64,uint256,uint256),(bytes32,address,address,uint64,uint64,uint256)[],uint256)" \
+        "$(addresses_tuple)" "$INPUT_TUPLE" "$GUARANTOR_TUPLES" "$start"
+    jq '.phases += ["permissions"]' "$RECORD" > "$WORK/record.json" && mv "$WORK/record.json" "$RECORD"
+    echo "deploy-contracts: permissions executed and genesis scheduled from timelock nonce $(jq -r '.timelock.genesis_start_nonce' "$RECORD")" >&2
+}
+
+phase_activate() {
+    require_tools
+    require_endpoint
+    require_deployer
+    require_record
+    load_inputs
+    run_script "executeGenesisActivation((address,address,address,address,address,address,address,address,address,address,address,address,address,address),(string,address,address,address,address,uint64,uint64,uint256,uint128,uint128,uint64,uint64,uint32,uint64,uint16,uint16,uint64,uint64,uint128,uint64,uint64,uint64,uint64,uint256,uint256),(bytes32,address,address,uint64,uint64,uint256)[],uint256)" \
+        "$(addresses_tuple)" "$INPUT_TUPLE" "$GUARANTOR_TUPLES" "$(jq -r '.timelock.genesis_start_nonce' "$RECORD")"
+    jq '.phases += ["activate"]' "$RECORD" > "$WORK/record.json" && mv "$WORK/record.json" "$RECORD"
+    echo "deploy-contracts: genesis activation executed" >&2
+}
+
+phase_bond() {
+    require_tools
+    require_endpoint
+    require_deployer
+    require_record
+    load_inputs
+    local bond index
+    bond=$(jq -r '.addresses.guarantor_bond' "$RECORD")
+    for index in $(seq 0 $((GUARANTOR_COUNT - 1))); do
+        local guarantor_id amount key
+        guarantor_id=$(printf '%s' "$GUARANTOR_SET" | jq -r ".[$index].guarantor_id")
+        amount=$(printf '%s' "$GUARANTOR_SET" | jq -r ".[$index].bond_amount")
+        key=$(controller_key "$guarantor_id")
+        EVM_WALLET_PRIVATE_KEY="$key" run_script "depositGenesisBond(address,bytes32,uint256)" "$bond" "$guarantor_id" "$amount"
+    done
+    jq '.phases += ["bond"]' "$RECORD" > "$WORK/record.json" && mv "$WORK/record.json" "$RECORD"
+    echo "deploy-contracts: genesis bonds deposited for $GUARANTOR_COUNT guarantors" >&2
+}
+
+phase_finalize() {
+    require_tools
+    require_endpoint
+    require_deployer
+    require_record
+    load_inputs
+    run_script "finalize((address,address,address,address,address,address,address,address,address,address,address,address,address,address),(string,address,address,address,address,uint64,uint64,uint256,uint128,uint128,uint64,uint64,uint32,uint64,uint16,uint16,uint64,uint64,uint128,uint64,uint64,uint64,uint64,uint256,uint256),(bytes32,address,address,uint64,uint64,uint256)[],uint256)" \
+        "$(addresses_tuple)" "$INPUT_TUPLE" "$GUARANTOR_TUPLES" "$(jq -r '.timelock.genesis_start_nonce' "$RECORD")"
+    [ "$(call "$(jq -r '.blueprint' "$RECORD")" "deploymentsSealed()(bool)")" = "true" ] || fail "blueprint is not sealed"
+    jq '.phases += ["finalize"]' "$RECORD" > "$WORK/record.json" && mv "$WORK/record.json" "$RECORD"
+    echo "deploy-contracts: deployment finalized and sealed" >&2
+}
+
+phase_status() {
+    require_tools
+    require_endpoint
+    require_record
+    local blueprint
+    blueprint=$(jq -r '.blueprint' "$RECORD")
+    jq -c '{chain_id, network_id, deployer, phases, addresses}' "$RECORD"
+    printf 'blueprint sealed: %s\n' "$(call "$blueprint" "deploymentsSealed()(bool)")"
+    printf 'timelock operation nonce: %s\n' "$(timelock_nonce "$(jq -r '.addresses.timelock' "$RECORD")")"
+    printf 'checkpoint registry network id: %s\n' "$(call "$(jq -r '.addresses.checkpoint_registry' "$RECORD")" "networkId()(uint32)")"
+}
+
+case "$PHASE" in
+    deploy) phase_deploy ;;
+    permissions) phase_permissions ;;
+    activate) phase_activate ;;
+    bond) phase_bond ;;
+    finalize) phase_finalize ;;
+    status) phase_status ;;
+    *) usage ;;
+esac

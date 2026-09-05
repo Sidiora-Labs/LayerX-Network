@@ -5,7 +5,7 @@ PLATFORM_BETA_CLUSTER_ENV ?= build/beta-cluster/env
 .PHONY: platform-js-install platform-build platform-build-all platform-lint platform-test platform-sdk-check \
 	platform-sdk-generate platform-receipt-fixture platform-verify-sdks platform-test-sdks platform-release-check platform-release-plan platform-release-test \
 	platform-test-tooling platform-emulator-conformance platform-test-middleware \
-	platform-test-cli-production-credential-refusal platform-test-registry \
+	platform-test-cli-production-credential-refusal platform-test-registry platform-test-node \
 	platform-test-reference-apps platform-test-mobile-artifacts \
 	platform-test-android-artifact platform-test-ios-artifact \
 	platform-real-agent-integration \
@@ -130,6 +130,10 @@ platform-test-cli-production-credential-refusal:
 
 platform-test-registry:
 	$(PLATFORM_CARGO) test --offline --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-registry
+
+platform-test-node:
+	bash -n platform/hosted/node/bootstrap.sh platform/hosted/node/supervisor.sh platform/hosted/node/tests/node-test.sh
+	PLATFORM_CARGO="$(PLATFORM_CARGO)" bash platform/hosted/node/tests/node-test.sh
 
 platform-hosted-smoke:
 	@set -e; \
