@@ -8,6 +8,7 @@
 #include "layerx/lxp_fee.h"
 #include "layerx/lxp_hash.h"
 #include "layerx/lxp_genesis.h"
+#include "layerx/lxp_bridge_credit.h"
 #include "layerx/lxp_snapshot.h"
 #include "lxp_daemon_artifact.h"
 #include "lxp_daemon_batch_wal.h"
@@ -38,6 +39,7 @@ typedef struct lxp_daemon_process {
     lxp_state_journal journal;
     lxp_kernel kernel;
     uint16_t protocol_version;
+    bool custody_credit_enabled;
     lx_account_registry accounts;
     lxp_transfer_asset_state assets[LX_ACCOUNT_REGISTRY_CAPACITY];
     lx_asset_record send_assets[LX_ASSET_REGISTRY_CAPACITY];
@@ -768,7 +770,8 @@ static lxp_result replay_execute_activity(
         expected->global_sequence != global_sequence)
         return LXP_ERR_SEQUENCE_GAP;
     if ((expected->module_id != LXP_MODULE_PROGRAMS &&
-         expected->module_id != LXP_MODULE_ASSET) ||
+         expected->module_id != LXP_MODULE_ASSET &&
+         !(process->custody_credit_enabled && expected->module_id == LXP_MODULE_BRIDGE)) ||
         expected->module_version == 0U ||
         expected->parameter_version != process->parameter_version ||
         process->fees.version != expected->parameter_version ||
@@ -785,12 +788,14 @@ static lxp_result replay_execute_activity(
     if (status == LXP_OK) status = lxp_activity_verify_signature(activity);
     if (status == LXP_OK &&
         lxp_activity_module_id(activity->activity_type) != LXP_MODULE_PROGRAMS &&
-        activity->activity_type != LX_ASSET_SEND)
+        activity->activity_type != LX_ASSET_SEND &&
+        !(process->custody_credit_enabled && activity->activity_type == LXP_BRIDGE_CREDIT))
         status = LXP_ERR_UNKNOWN_ACTIVITY;
     if (status == LXP_OK &&
         (expected->module_id != lxp_activity_module_id(activity->activity_type) ||
          (activity->activity_type == LX_ASSET_SEND &&
-          expected->module_version != lx_asset_module_iface()->abi_version)))
+          expected->module_version != lx_asset_module_iface()->abi_version) ||
+         (activity->activity_type == LXP_BRIDGE_CREDIT && expected->module_version != 1U)))
         status = LXP_ERR_VERSION_UNSUPPORTED;
     if (status == LXP_OK)
         status = lxp_identity_resolve(&process->identities,
@@ -810,7 +815,8 @@ static lxp_result replay_execute_activity(
     (void)memset(&scope, 0, sizeof(scope));
     scope.module_mask = UINT64_C(1) << lxp_activity_module_id(activity->activity_type);
     scope.activity_ordinal_min = activity->activity_type == LX_ASSET_SEND ? 5U : 1U;
-    scope.activity_ordinal_max = activity->activity_type == LX_ASSET_SEND ? 5U : 10U;
+    scope.activity_ordinal_max = activity->activity_type == LXP_BRIDGE_CREDIT ? 1U :
+        (activity->activity_type == LX_ASSET_SEND ? 5U : 10U);
     scope.maximum_per_activity = (lxp_u128){UINT64_MAX, UINT64_MAX};
     scope.maximum_total = (lxp_u128){UINT64_MAX, UINT64_MAX};
     scope.maximum_per_period = (lxp_u128){UINT64_MAX, UINT64_MAX};
@@ -1744,7 +1750,8 @@ static lxp_result apply_canonical_activity(
     if (status == LXP_OK) status = lxp_activity_verify_signature(&activity);
     if (status == LXP_OK &&
         lxp_activity_module_id(activity.activity_type) != LXP_MODULE_PROGRAMS &&
-        activity.activity_type != LX_ASSET_SEND)
+        activity.activity_type != LX_ASSET_SEND &&
+        !(process->custody_credit_enabled && activity.activity_type == LXP_BRIDGE_CREDIT))
         status = LXP_ERR_UNKNOWN_ACTIVITY;
     if (status == LXP_OK) status = current_time_ms(&timestamp);
     if (status == LXP_OK)
@@ -1766,7 +1773,8 @@ static lxp_result apply_canonical_activity(
     (void)memset(&scope, 0, sizeof(scope));
     scope.module_mask = UINT64_C(1) << lxp_activity_module_id(activity.activity_type);
     scope.activity_ordinal_min = activity.activity_type == LX_ASSET_SEND ? 5U : 1U;
-    scope.activity_ordinal_max = activity.activity_type == LX_ASSET_SEND ? 5U : 10U;
+    scope.activity_ordinal_max = activity.activity_type == LXP_BRIDGE_CREDIT ? 1U :
+        (activity.activity_type == LX_ASSET_SEND ? 5U : 10U);
     scope.maximum_per_activity = (lxp_u128){UINT64_MAX, UINT64_MAX};
     scope.maximum_total = (lxp_u128){UINT64_MAX, UINT64_MAX};
     scope.maximum_per_period = (lxp_u128){UINT64_MAX, UINT64_MAX};
@@ -1794,8 +1802,9 @@ static lxp_result apply_canonical_activity(
     execution.maximum_timestamp_window = UINT64_C(300000);
     execution.epoch = process->kernel.epoch;
     execution.global_sequence = global_sequence;
-    execution.recorded_module_version = activity.activity_type == LX_ASSET_SEND ?
-        lx_asset_module_iface()->abi_version : LX_PROGRAMS_SANDBOX_DESTROY_ABI_VERSION;
+    execution.recorded_module_version = activity.activity_type == LXP_BRIDGE_CREDIT ?
+        1U : (activity.activity_type == LX_ASSET_SEND ?
+        lx_asset_module_iface()->abi_version : LX_PROGRAMS_SANDBOX_DESTROY_ABI_VERSION);
     execution.recorded_fee_schedule_version = 0U;
     execution.parameter_version = process->parameter_version;
     execution.signature_valid = true;
@@ -3033,6 +3042,9 @@ static lxp_result load_genesis_settlement_anchor(
         status = LXP_ERR_CONTEXT_MISMATCH;
     if (status == LXP_OK) {
         process->protocol_version = genesis->protocol_version;
+        lxp_bridge_profile profile;
+        status = lxp_bridge_genesis_profile(genesis, &profile,
+                                             &process->custody_credit_enabled);
         (void)memcpy(settlement_anchor,
                      genesis->genesis_receipt_state_root, 32U);
     }
@@ -3141,6 +3153,8 @@ static lxp_result open_process(lxp_daemon_process *process,
         process->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT)
         status = lxp_kernel_register_module(
             &process->kernel, lx_asset_module_iface());
+    if (status == LXP_OK && process->custody_credit_enabled)
+        status = lxp_kernel_register_module(&process->kernel, lxp_bridge_module_iface());
     if (status == LXP_OK)
         status = lxp_kernel_set_capabilities(
             &process->kernel, NULL, lxp_kernel_canonical_ledger_apply);

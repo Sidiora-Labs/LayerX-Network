@@ -81,6 +81,10 @@ public final class ProductionClient {
         Objects.requireNonNull(request, "request");
         Objects.requireNonNull(responseType, "responseType");
         Options safeOptions = options == null ? Options.none() : options;
+        var catalog = OperationCatalog.agent(operation);
+        if (catalog.idempotencyRequired() && safeOptions.idempotencyKey() == null) {
+            throw new PlatformSdkException(PlatformSdkException.Code.IDEMPOTENCY_REQUIRED, PlatformSdkException.Retry.NEVER, null, null, null);
+        }
         try {
             return transport.<T>callPrograms(new ProductionTransport.ProgramsCall(operation,
                     SchemaTypes.canonicalBody(request), SchemaTypes.PathParameters.of(safeOptions.pathParameters()),

@@ -47,6 +47,10 @@ fn main() {
             "-Iinclude",
             "-c",
         ])
+        .arg(format!(
+            "-DLAYERX_EMULATOR_HISTORY_SCHEMA=\"{}\"",
+            root.join("migrations/0007_history_index.sql").display()
+        ))
         .arg(manifest.join("core/emulator_core.c"))
         .arg("-o")
         .arg(&object);
@@ -65,6 +69,10 @@ fn main() {
         manifest.join("core/emulator_core.h").display()
     );
     println!("cargo:rerun-if-changed={}", root.join("include").display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        root.join("migrations/0007_history_index.sql").display()
+    );
     println!("cargo:rustc-link-search=native={}", out.display());
     println!(
         "cargo:rustc-link-search=native={}",
@@ -73,5 +81,6 @@ fn main() {
     println!("cargo:rustc-link-lib=static=layerx_emulator_core");
     println!("cargo:rustc-link-lib=static=layerx");
     println!("cargo:rustc-link-lib=crypto");
+    println!("cargo:rustc-link-lib=sqlite3");
     println!("cargo:rustc-link-lib=pthread");
 }

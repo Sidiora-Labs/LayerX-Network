@@ -25,3 +25,6 @@ zeroize.workspace = true
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+ed25519-dalek.workspace = true

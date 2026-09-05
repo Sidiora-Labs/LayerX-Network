@@ -9,3 +9,5 @@ export * from "./programs.js";
 export * from "./stream.js";
 export * from "./verifier.js";
 export * from "./native-program-call.js";
+export * from "./program-lifecycle.js";
+export * from "./native-capabilities.js";

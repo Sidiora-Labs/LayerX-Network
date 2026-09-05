@@ -5,6 +5,18 @@ including Go, Java/Kotlin, Swift, and .NET plus the Agent SDK implementations.
 
 ## Test Coverage
 
+### Native Programs lifecycle
+
+`native-program-deploy-v3.json`, `native-program-upgrade-v3.json`, and the four
+`native-program-wind-down-*-v3.json` fixtures contain payloads and signed
+protocol-3 activities produced by `tests/programs/test_call_activity.c`. SDK
+tests decode and re-encode the C bytes and bind the activity identifiers and
+idempotency keys. These are wire-layout vectors, not execution evidence;
+execution qualification uses the real-node lifecycle tests.
+
+Regenerate with `make programs-native-lifecycle-fixtures`; check byte-for-byte
+drift with `make programs-check-native-lifecycle-fixtures`.
+
 ### Secret Hygiene (`secret-hygiene.test.*`)
 
 Proves that SDKs enforce secret hygiene by construction:
@@ -77,6 +89,29 @@ Every published SDK must:
 3. **Integer-Only Money**: Enforce `ProtocolAmount` validation rejecting floating-point representation
 4. **Required Idempotency Keys**: Enforce idempotency key presence on mutations
 5. **Local Verification**: Ship receipt, batch-inclusion, and checkpoint verification paths requiring no trust in hosted surfaces
+
+## Frozen ABI 2 Capability Fixture
+
+`fixtures/native-program-capabilities-v2.json` comes from the Rust runtime's
+`capability_fixture` example, not from an SDK encoder. Generate it with
+`make programs-generate-capability-fixture`; check reproducibility with
+`make programs-check-capability-fixture` (also required by `platform-verify-sdks`).
+
+Each SDK constructs the logical grants from the fixture and compares its encoded
+bytes with the runtime output. The fixture covers all ten tags, equal and
+amount-decreasing narrowing, amount escalation refusal, and refusal to substitute
+a BalanceView receipt digest. Canonical order is `1,2,3,4,5,9,6,10,7,8`, not
+numeric tag order. ProgramSpend encodes its bounded seed length as `u16be`; the
+separate derived-account hash uses `u32be`. Neither layout changes with freezing.
+
+The historical `receipt-programs-positive-v3.json` remains a receipt-codec
+vector re-enveloped from v2. It must not be described as runtime execution
+evidence. `receipt-programs-executed-v3.json` instead comes from the real native
+CALL transition and Rust Wasm runtime. Run `make programs-executed-fixture` to
+generate it and `make programs-check-executed-fixture` to check drift. Its Python
+packager requires `cryptography`, verifies the original signed evidence, and
+does not re-sign or alter receipt fields. The fixture is deterministic local
+transition evidence, not external finality or checkpoint-inclusion evidence.
 
 ## Adding New Conformance Tests
 

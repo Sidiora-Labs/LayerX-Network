@@ -9,8 +9,10 @@ use crate::execute::ExecutionFault;
 use crate::storage::ProgramId;
 
 use super::memory::{read_fixed, read_guest, validate_output};
-use super::{error_status, linker_fault, RuntimeState, ABI_MODULE, COMPOSITION_REFUSED,
-    STATUS_BOUNDS, STATUS_DENIED, STATUS_INVALID};
+use super::{
+    error_status, linker_fault, RuntimeState, ABI_MODULE, COMPOSITION_REFUSED, STATUS_BOUNDS,
+    STATUS_DENIED, STATUS_INVALID,
+};
 
 pub(super) fn register(linker: &mut Linker<RuntimeState>) -> Result<(), ExecutionFault> {
     linker
@@ -36,16 +38,15 @@ pub(super) fn register(linker: &mut Linker<RuntimeState>) -> Result<(), Executio
                     Ok(input) => input,
                     Err(status) => return Ok(status),
                 };
-                let encoded =
-                    match read_guest(
-                        &caller,
-                        capabilities_pointer,
-                        capabilities_length,
-                        crate::abi::MAX_CAPABILITY_ENCODING_BYTES,
-                    ) {
-                        Ok(encoded) => encoded,
-                        Err(status) => return Ok(status),
-                    };
+                let encoded = match read_guest(
+                    &caller,
+                    capabilities_pointer,
+                    capabilities_length,
+                    crate::abi::MAX_CAPABILITY_ENCODING_BYTES,
+                ) {
+                    Ok(encoded) => encoded,
+                    Err(status) => return Ok(status),
+                };
                 let capabilities = match CapabilitySet::decode_canonical(&encoded) {
                     Ok(capabilities) => capabilities,
                     Err(error) => return Ok(error_status(error)),
@@ -58,9 +59,10 @@ pub(super) fn register(linker: &mut Linker<RuntimeState>) -> Result<(), Executio
                 if super::charge_host_cpu(&mut caller, crate::calls::CALL_ADMISSION_FUEL).is_err() {
                     return Err(Trap::from(TrapCode::OutOfFuel));
                 }
-                let consumed = caller.data().frame_cpu_consumed().map_err(|_| {
-                    Trap::from(TrapCode::OutOfFuel)
-                })?;
+                let consumed = caller
+                    .data()
+                    .frame_cpu_consumed()
+                    .map_err(|_| Trap::from(TrapCode::OutOfFuel))?;
                 let outcome = runtime_calls::execute_nested_call(
                     caller.data_mut(),
                     consumed,
@@ -83,7 +85,7 @@ pub(super) fn register(linker: &mut Linker<RuntimeState>) -> Result<(), Executio
 }
 
 #[allow(clippy::too_many_lines)]
-pub(super) fn register_candidate(linker: &mut Linker<RuntimeState>) -> Result<(), ExecutionFault> {
+pub(super) fn register_v2(linker: &mut Linker<RuntimeState>) -> Result<(), ExecutionFault> {
     linker
         .func_wrap(
             crate::abi::response::CANDIDATE_ABI_MODULE,
@@ -160,17 +162,16 @@ pub(super) fn register_candidate(linker: &mut Linker<RuntimeState>) -> Result<()
                     Ok(input) => input,
                     Err(status) => return Ok(i64::from(status)),
                 };
-                let encoded =
-                    match read_guest(
-                        &caller,
-                        capabilities_pointer,
-                        capabilities_length,
-                        crate::abi::MAX_CAPABILITY_ENCODING_BYTES,
-                    ) {
-                        Ok(encoded) => encoded,
-                        Err(status) => return Ok(i64::from(status)),
-                    };
-                let capabilities = match CapabilitySet::decode_candidate_canonical(&encoded) {
+                let encoded = match read_guest(
+                    &caller,
+                    capabilities_pointer,
+                    capabilities_length,
+                    crate::abi::MAX_CAPABILITY_ENCODING_BYTES,
+                ) {
+                    Ok(encoded) => encoded,
+                    Err(status) => return Ok(i64::from(status)),
+                };
+                let capabilities = match CapabilitySet::decode_v2_canonical(&encoded) {
                     Ok(capabilities) => capabilities,
                     Err(error) => return Ok(i64::from(error_status(error))),
                 };
@@ -182,9 +183,10 @@ pub(super) fn register_candidate(linker: &mut Linker<RuntimeState>) -> Result<()
                 if super::charge_host_cpu(&mut caller, crate::calls::CALL_ADMISSION_FUEL).is_err() {
                     return Err(Trap::from(TrapCode::OutOfFuel));
                 }
-                let consumed = caller.data().frame_cpu_consumed().map_err(|_| {
-                    Trap::from(TrapCode::OutOfFuel)
-                })?;
+                let consumed = caller
+                    .data()
+                    .frame_cpu_consumed()
+                    .map_err(|_| Trap::from(TrapCode::OutOfFuel))?;
                 let outcome = runtime_calls::execute_nested_call_response(
                     caller.data_mut(),
                     consumed,

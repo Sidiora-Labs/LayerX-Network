@@ -67,6 +67,10 @@ typedef struct lx_account_registration {
     size_t expected_count;
 } lx_account_registration;
 
+lxp_result lx_account_credit_registration_commit(
+    lx_account_registry *registry, const lx_account_registration *registration,
+    lx_account **account);
+
 enum {
     LXP_SEND_MAX_CONDITIONS = 8,
     LXP_SEND_STORE_CAPACITY = 64,

@@ -2,6 +2,7 @@
 
 #include "layerx/programs.h"
 #include "layerx/lx_asset.h"
+#include "layerx/lxp_bridge_credit.h"
 
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_hash.h"
@@ -45,6 +46,8 @@ static int keyed_compare(
 
 static lxp_result validate(const lxp_genesis_manifest *manifest)
 {
+    lxp_bridge_profile bridge;
+    bool bridge_present;
     size_t i;
     bool fees = false;
     bool reserve = false;
@@ -114,6 +117,10 @@ static lxp_result validate(const lxp_genesis_manifest *manifest)
         }
     }
     if (!fees || !reserve || !withdrawals) return LXP_ERR_UNKNOWN_FIELD;
+    if (lxp_bridge_genesis_profile(manifest, &bridge, &bridge_present) != LXP_OK ||
+        (bridge_present && memcmp(bridge.bytes + 97U,
+                                  manifest->accounts[0].asset_id, 32U) != 0))
+        return LXP_ERR_NON_CANONICAL;
     for (i = 0U; i < manifest->module_value_count; ++i) {
         if (manifest->module_values[i].module_id == 0U ||
             manifest->module_values[i].module_id > LXP_MODULE_RESERVED_COUNT ||
@@ -488,20 +495,26 @@ lxp_result lxp_genesis_parameter_version(
 lxp_result lxp_genesis_materialize(const lxp_genesis_manifest *manifest,
                                    lxp_arena *arena, lxp_kernel *kernel)
 {
+    lxp_bridge_profile bridge;
+    bool bridge_present = false;
     lx_account_registry *accounts;
     uint8_t commitment[32];
     uint32_t parameter_version;
     size_t index;
     lxp_result status = validate(manifest);
+    if (status == LXP_OK)
+        status = lxp_bridge_genesis_profile(manifest, &bridge, &bridge_present);
     if (status != LXP_OK || arena == NULL || kernel == NULL ||
         kernel->state == NULL || kernel->journal == NULL ||
         kernel->module_count != (manifest->protocol_version ==
-            LXP_PROTOCOL_VERSION_STATE_COMMITMENT ? 2U : 1U) ||
+            LXP_PROTOCOL_VERSION_STATE_COMMITMENT ? (bridge_present ? 3U : 2U) : 1U) ||
         kernel->modules[0].module_id != LXP_MODULE_PROGRAMS ||
         kernel->modules[0].abi_version != programs_module_registration_v4()->abi_version ||
         (manifest->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT &&
          (kernel->modules[1].module_id != LXP_MODULE_ASSET ||
           kernel->modules[1].abi_version != lx_asset_module_iface()->abi_version)) ||
+        (bridge_present && (kernel->modules[2].module_id != LXP_MODULE_BRIDGE ||
+                            kernel->modules[2].abi_version != 1U)) ||
         kernel->state->count != 0U || kernel->state->idempotency_count != 0U ||
         kernel->state->next_sequence != 1U ||
         kernel->module_kv_count != 0U || kernel->blob_count != 0U ||
@@ -532,6 +545,13 @@ lxp_result lxp_genesis_materialize(const lxp_genesis_manifest *manifest,
          index < manifest->module_value_count; ++index)
         status = module_value_materialize(&manifest->module_values[index],
                                           kernel);
+    if (status == LXP_OK && bridge_present) {
+        uint8_t supply_key[47] = "custody-issued:";
+        const uint8_t zero[16] = {0};
+        (void)memcpy(supply_key + 15U, bridge.bytes + 97U, 32U);
+        status = kernel_insert(kernel, LXP_MODULE_BRIDGE, supply_key,
+                               sizeof(supply_key), zero, sizeof(zero));
+    }
     if (status == LXP_OK)
         status = lxp_genesis_manifest_commitment(manifest, arena, commitment);
     if (status == LXP_OK)
@@ -576,6 +596,13 @@ lxp_result lxp_genesis_state_root(
     if (status == LXP_OK &&
         manifest->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT)
         status = lxp_kernel_register_module(kernel, lx_asset_module_iface());
+    if (status == LXP_OK) {
+        lxp_bridge_profile bridge;
+        bool present = false;
+        status = lxp_bridge_genesis_profile(manifest, &bridge, &present);
+        if (status == LXP_OK && present)
+            status = lxp_kernel_register_module(kernel, lxp_bridge_module_iface());
+    }
     if (status == LXP_OK) status = lxp_genesis_materialize(manifest, arena, kernel);
     if (status == LXP_OK) status = lxp_state_root(kernel, state_root);
     if (state_open) {

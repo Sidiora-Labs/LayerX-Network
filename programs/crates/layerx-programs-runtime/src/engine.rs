@@ -116,17 +116,20 @@ impl WasmEngine {
         validate::validate_module(self, wasm, AbiRevision::V1)
     }
 
-    /// Compatibility spelling for callers developed while v2 was a candidate.
+    /// Compatibility spelling retained for one release; use [`Self::validate_v2`].
     ///
     /// # Errors
     ///
-    /// Returns the same deterministic validation refusals as [`Self::validate`].
+    /// Returns the same deterministic validation refusals as [`Self::validate_v2`].
     pub fn validate_candidate_v2(&self, wasm: &[u8]) -> Result<ValidatedModule, ValidationRefusal> {
         self.validate_v2(wasm)
     }
 
     /// Validates the frozen version-two ABI for qualification under historical
     /// metering schedule one. Consensus admission supplies its schedule explicitly.
+    ///
+    /// # Errors
+    /// Returns deterministic validation refusals for violations of the frozen ABI-v2 rules.
     pub fn validate_v2(&self, wasm: &[u8]) -> Result<ValidatedModule, ValidationRefusal> {
         validate::validate_module(self, wasm, AbiRevision::V2)
     }

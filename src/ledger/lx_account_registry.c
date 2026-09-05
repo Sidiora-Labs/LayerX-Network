@@ -1,4 +1,5 @@
 #include "layerx/lxp_ledger.h"
+#include "layerx/lxp_crypto.h"
 
 #include <string.h>
 
@@ -312,6 +313,36 @@ lxp_result lx_account_registration_commit(
     registry->accounts[registry->count] = registration->account;
     *account = &registry->accounts[registry->count];
     ++registry->count;
+    return LXP_OK;
+}
+
+lxp_result lx_account_credit_registration_commit(
+    lx_account_registry *registry, const lx_account_registration *registration,
+    lx_account **account)
+{
+    uint8_t derived[32];
+    lx_account_name name;
+    if (registry == NULL || registration == NULL || account == NULL ||
+        registry->count != registration->expected_count ||
+        registry->count >= LX_ACCOUNT_REGISTRY_CAPACITY ||
+        registration->account.kind != LX_ACCOUNT_AGENT_MAIN ||
+        !registration->account.has_asset ||
+        bytes_zero(registration->account.asset_id, 32U) ||
+        !registration->account.has_authority_key ||
+        !lxp_ed25519_pubkey_is_canonical(registration->account.authority_key) ||
+        registration->account.frozen || registration->account.has_open_reference ||
+        lx_account_name_parse(registration->account.name,
+            registration->account.name_length, &name) != LXP_OK ||
+        name.kind != LX_ACCOUNT_AGENT_MAIN ||
+        lx_account_id_from_string(registration->account.name,
+            registration->account.name_length, derived) != LXP_OK ||
+        memcmp(derived, registration->account.id, 32U) != 0)
+        return LXP_FATAL_INVARIANT;
+    for (size_t index = 0U; index < registry->count; ++index)
+        if (memcmp(registry->accounts[index].id, derived, 32U) == 0)
+            return LXP_FATAL_INVARIANT;
+    registry->accounts[registry->count] = registration->account;
+    *account = &registry->accounts[registry->count++];
     return LXP_OK;
 }
 

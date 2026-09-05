@@ -47,7 +47,7 @@ arithmetic are denied across the tree.
 | `crates/layerx-programs-runtime` | Deterministic WASM runtime: validation, metering, the ABI/capability boundary, cross-program calls, transfers, occupancy accounting, and the FFI bridge into the C kernel |
 | `crates/layerx-programs-registry` | Receipt-bound registry: deployment journal, program value-account bindings, real-balance proofs, and wind-down/deprecation |
 | `crates/layerx-programs-protocol-adapter` | Thin C↔Rust adapter exposing receipt-verified program state reads to the rest of the protocol |
-| `sdk/rust`, `sdk/c`, `sdk/assemblyscript` | Guest program SDKs for the version-one programs ABI, each with a `paid-counter` example |
+| `sdk/rust`, `sdk/c`, `sdk/assemblyscript` | Guest program SDKs; Rust ships `escrow` and `vault`, while C and AssemblyScript ship `paid-counter` |
 | `porting/evm`, `porting/solana`, `porting/cosmwasm` | Migration crates and `MIGRATION.md` guides mapping Solidity / Anchor / CosmWasm vocabulary onto the programs ABI |
 | `fuzz` | Structure-aware fuzz target and corpus for the runtime |
 | `tools` | Boundary scripts: `dependency-policy.sh`, `runtime-module-boundaries.sh` |
@@ -194,17 +194,18 @@ transfer primitive… a balance change outside a 402LXP transfer aborts the tran
 
 ## SDKs and porting kits
 
-Guest program SDKs target the version-one programs ABI:
+ABI 2 is the current frozen guest ABI; ABI 1 remains supported for legacy programs.
+Guest program SDKs include:
 
 - **`sdk/rust`** (`layerx-program-sdk`) — the Rust guest SDK.
 - **`sdk/c`** — a C guest SDK with headers, sources, and a toolchain manifest.
 - **`sdk/assemblyscript`** — an AssemblyScript SDK (`abi`, `capability`, `transfer`,
   `storage`, `event`, `call`, `receipt` bindings) with a determinism lint.
 
-Each SDK ships a `paid-counter` example: the smallest program that charges for the work it
-does and returns a receipt. Note that the newer program-spend capability tag is a
-candidate-ABI addition and is not yet mirrored into every SDK; the runtime crate is the
-authoritative implementation.
+The Rust SDK ships `escrow` and `vault` examples; the C and AssemblyScript SDKs
+ship `paid-counter` examples. ProgramSpend (tag 9) and BalanceView (tag 10) are
+part of frozen ABI 2; the runtime crate defines their canonical encoding and
+amount-monotone narrowing rules. ABI 1 does not admit these grants.
 
 The porting kits map familiar contract vocabularies onto the programs ABI and are explicit
 about what does not carry over:

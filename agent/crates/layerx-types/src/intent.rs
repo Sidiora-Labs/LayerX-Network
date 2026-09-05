@@ -459,11 +459,13 @@ impl Calldata {
     }
 }
 
-/// The program-call operation carried by the agent-layer contract: which
-/// program to enter, the calldata to hand it, the declared budget it may spend
-/// and the capabilities it requests. The operation is compiled to a canonical
-/// module payload that every surface — agent layer, CLI and emulator — encodes
-/// identically, so the same call yields the same receipt regardless of surface.
+/// Legacy interaction-layer program call retained for protocol-1/2 decoding.
+///
+/// Deprecated for protocol 3: construct
+/// [`NativeProgramCall`](crate::program_call::NativeProgramCall) instead. Its
+/// canonical signed activity is the native server, CLI and SDK contract and
+/// carries the complete capability set. This legacy type deliberately retains
+/// its original five capability tags so historical payloads remain decodable.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProgramCall {
     callee: ProgramId,

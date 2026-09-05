@@ -296,6 +296,19 @@ lxp_result lxp_programs_project_receipt_events(
         receipt->result_code != LXP_OK)
         return lxp_programs_project_committed_events(
             &empty_effects, arena, canonical_events);
+    if (receipt->operation == 0U && !receipt->program_outcome.present) {
+        if (receipt->effects.count > LXP_MAX_EFFECTS)
+            return LXP_ERR_NON_CANONICAL;
+        for (size_t index = 0U; index < receipt->effects.count; ++index) {
+            const lxp_effect *effect = &receipt->effects.effects[index];
+            if (effect->module_id == LXP_MODULE_PROGRAMS &&
+                (effect->event_type == LX_PROGRAMS_EVENT_GUEST_ENVELOPE ||
+                 effect->event_type == LX_PROGRAMS_EVENT_CALL_OUTCOME))
+                return LXP_ERR_NON_CANONICAL;
+        }
+        return lxp_programs_project_committed_events(
+            &empty_effects, arena, canonical_events);
+    }
     if (!receipt->program_outcome.present ||
         receipt->program_outcome.terminal_kind != LXP_PROGRAM_TERMINAL_SUCCESS)
         return LXP_ERR_NON_CANONICAL;

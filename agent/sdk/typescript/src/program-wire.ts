@@ -1,4 +1,5 @@
 import { encodeNativeProgramCall } from "./native-program-call.js";
+import { decodeNativeCapabilitySet } from "./native-capabilities.js";
 import type { ProgramCall, ProgramOutcome, ProgramUsage } from "./programs.js";
 import type { ProgramReceiptOutcome } from "./verifier.js";
 
@@ -46,6 +47,35 @@ export interface DecodedSignedProgramCall {
 export interface DecodedProgramTerminal {
   readonly outcome: ProgramOutcome;
   readonly usage: ProgramUsage;
+}
+
+export async function bindSignedProgramLifecycle(canonical: Uint8Array, payload: Uint8Array | undefined, ordinal: 1 | 2 | 7, expectedIdempotencyKey?: string): Promise<DecodedSignedProgramCall> {
+  canonical = new Uint8Array(canonical);
+  payload = payload === undefined ? undefined : new Uint8Array(payload);
+  if (canonical.length === 0 || canonical.length > 1_048_576 || ![1, 2, 7].includes(ordinal)) fail("activity bounds");
+  const reader = new Reader(canonical);
+  if (reader.u16() !== 3 || reader.u16() !== 0x1001 || reader.byte() !== 12) fail("signed activity header");
+  field(reader, 1); if (reader.u16() !== 3) fail("signed activity protocol");
+  field(reader, 2); reader.u32();
+  field(reader, 3); if (reader.u32() !== 0x0009_0000 + ordinal) fail("signed activity type");
+  field(reader, 4); reader.sizedU32(255);
+  field(reader, 5); reader.sizedU32(524_288);
+  field(reader, 6); reader.u64();
+  field(reader, 7); const notBefore = reader.u64(), notAfter = reader.u64();
+  field(reader, 8); const idempotencyKey = hex(reader.sizedU32(32, 32));
+  field(reader, 9); reader.u128();
+  field(reader, 10); const digest = reader.sizedU32(32, 32);
+  field(reader, 11); const retainedPayload = reader.sizedU32(524_288);
+  field(reader, 12); reader.sizedU32(128); reader.end();
+  if (payload === undefined) {
+    const codecs = await import("./program-lifecycle.js");
+    payload = ordinal === 1 ? codecs.encodeNativeProgramDeploy(codecs.decodeNativeProgramDeploy(retainedPayload))
+      : ordinal === 2 ? codecs.encodeNativeProgramUpgrade(codecs.decodeNativeProgramUpgrade(retainedPayload))
+      : codecs.encodeNativeProgramWindDown(codecs.decodeNativeProgramWindDown(retainedPayload));
+  }
+  if (notAfter < notBefore || !equal(payload, retainedPayload) || !equal(digest, await sha256(PAYLOAD_DOMAIN, payload))
+    || expectedIdempotencyKey !== undefined && expectedIdempotencyKey !== idempotencyKey) fail("lifecycle binding");
+  return Object.freeze({ activityId: hex(await sha256(ACTIVITY_DOMAIN, canonical)), idempotencyKey, notBefore, notAfter, canonicalBytes: canonical.slice() });
 }
 
 export async function decodeSignedProgramCall(
@@ -424,7 +454,6 @@ function sameUsage(left: ProgramUsage, right: ProgramUsage): boolean {
     && left.output_values === right.output_values && left.output_bytes === right.output_bytes && left.fee_units === right.fee_units;
 }
 
-interface CapabilityKey { readonly order: number; readonly fields: readonly Uint8Array[] }
 interface ProgramAuthorityBinding {
   readonly owner: Uint8Array; readonly frame: Uint8Array; readonly source: Uint8Array;
   readonly asset: Uint8Array; readonly to: Uint8Array; readonly amount: bigint;
@@ -534,48 +563,9 @@ function decodeFrame(reader: Reader): Uint8Array {
   return concatenate(path, Uint8Array.of(depth));
 }
 
-async function decodeCapabilitySet(encoded: Uint8Array, candidate: boolean): Promise<void> {
-  if (encoded.length < 2 || encoded.length > 65_535) fail("capability encoding length");
-  const reader = new Reader(encoded); const count = reader.u16();
-  if (count > 269) fail("capability count");
-  let prior: CapabilityKey | undefined; let balanceViews = 0;
-  for (let index = 0; index < count; index += 1) {
-    const tag = reader.byte(); let key: CapabilityKey;
-    if (tag === 1) key = { order: 0, fields: [] };
-    else if (tag === 2) key = { order: 1, fields: [] };
-    else if (tag === 3) key = { order: 2, fields: [] };
-    else if (tag === 4) { const program = reader.fixed(32); nonzero(program, "call capability program"); key = { order: 3, fields: [program] }; }
-    else if (tag === 5) {
-      const asset = reader.fixed(32); const to = reader.fixed(32); const maximum = reader.u128();
-      nonzero(asset, "transfer capability asset"); nonzero(to, "transfer capability destination"); if (maximum === 0n) fail("transfer capability amount");
-      key = { order: 4, fields: [asset, to] };
-    } else if (tag === 9 && candidate) {
-      const owner = reader.fixed(32); nonzero(owner, "program spend owner"); const seedLength = reader.u16();
-      if (seedLength > 128) fail("program spend seed");
-      const seed = reader.fixed(seedLength); const source = reader.fixed(32); const asset = reader.fixed(32); const to = reader.fixed(32); const maximum = reader.u128();
-      nonzero(asset, "program spend asset"); nonzero(to, "program spend destination"); if (maximum === 0n) fail("program spend amount");
-      if (!equal(await deriveProgramAccount(owner, seed), source)) fail("program spend account");
-      key = { order: 5, fields: [owner, seed, source, asset, to] };
-    } else if (tag === 6) { const digest = reader.fixed(32); nonzero(digest, "receipt capability"); key = { order: 6, fields: [digest] }; }
-    else if (tag === 10 && candidate) {
-      const account = reader.fixed(32); const asset = reader.fixed(32); const digest = reader.fixed(32);
-      nonzero(account, "balance capability account"); nonzero(asset, "balance capability asset"); nonzero(digest, "balance capability receipt");
-      balanceViews += 1; if (balanceViews > 32) fail("balance capability count"); key = { order: 7, fields: [account, asset] };
-    } else if (tag === 7) key = { order: 8, fields: [] };
-    else if (tag === 8) key = { order: 9, fields: [] };
-    else fail("capability tag");
-    if (prior !== undefined && compareCapabilityKeys(prior, key) >= 0) fail("capability canonical order");
-    prior = key;
-  }
-  reader.end();
-}
-
-function compareCapabilityKeys(left: CapabilityKey, right: CapabilityKey): number {
-  if (left.order !== right.order) return left.order - right.order;
-  for (let index = 0; index < Math.min(left.fields.length, right.fields.length); index += 1) {
-    const order = compareBytes(left.fields[index] ?? new Uint8Array(), right.fields[index] ?? new Uint8Array()); if (order !== 0) return order;
-  }
-  return left.fields.length - right.fields.length;
+async function decodeCapabilitySet(encoded: Uint8Array, v2: boolean): Promise<void> {
+  const grants = await decodeNativeCapabilitySet(encoded);
+  if (!v2 && grants.some((grant) => grant.kind === "program_spend" || grant.kind === "balance_view")) fail("capability tag");
 }
 
 async function decodeOccupancySettlement(encoded: Uint8Array): Promise<OccupancySettlementBinding> {

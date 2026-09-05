@@ -696,7 +696,8 @@ static int registry_boundaries(void)
     return 0;
 }
 
-static int registration_law(void)
+static int registration_law(const lxp_module_iface *module,
+                             uint16_t protocol_version)
 {
     static const uint8_t program_prefix[] = "program\0";
     static const uint8_t owner_prefix[] = "program-owner\0";
@@ -776,6 +777,7 @@ static int registration_law(void)
     activity.activity_type = LX_PROGRAMS_ACCOUNT;
     activity.payload = (lxp_byte_span){registration_payload,
                                        sizeof(registration_payload)};
+    activity.protocol_version = protocol_version;
     (void)memset(authority.principal, 0x44, 32U);
     deploy_record[0] = 1U;
     (void)memcpy(deploy_record + 1U, authority.principal, 32U);
@@ -796,7 +798,7 @@ static int registration_law(void)
             LXP_OK ||
         lxp_kernel_set_epoch(&kernel, 1U) != LXP_OK ||
         lxp_kernel_register_module(&kernel,
-                                   programs_module_registration_v3()) !=
+                                   module) !=
             LXP_OK ||
         lxp_kernel_bind_module_runtime(&kernel, LXP_MODULE_PROGRAMS,
                                        &runtime) != LXP_OK ||
@@ -812,7 +814,7 @@ static int registration_law(void)
         lxp_module_ctx_init(&legacy_ctx, &kernel, LXP_MODULE_PROGRAMS,
                             2U, 1U, 7U, 10000U, &arena, false) != LXP_OK)
         return 1;
-    legacy_ctx.protocol_version = LXP_PROTOCOL_VERSION_OCCUPANCY;
+    legacy_ctx.protocol_version = protocol_version;
     if (lxp_effect_buffer_init(&effects) != LXP_OK ||
         lxp_module_ctx_bind_effects(&legacy_ctx, &effects) != LXP_OK ||
         lxp_kernel_module_for_activity(&kernel, LX_PROGRAMS_REGISTRY, 1U,
@@ -845,7 +847,17 @@ static int registration_law(void)
         account_ctx.staged_account_count != 0U ||
         account_ctx.staged_count != 0U || effects.count != 0U)
         return 1;
-    account_ctx.protocol_version = LXP_PROTOCOL_VERSION_OCCUPANCY;
+    if (module->abi_version == LX_PROGRAMS_SANDBOX_DESTROY_ABI_VERSION) {
+        account_ctx.protocol_version = LXP_PROTOCOL_VERSION_OCCUPANCY;
+        module_result = LXP_OK;
+        if (lxp_kernel_dispatch(registration, &account_ctx, &activity,
+                                &authority, &effects, &module_result) != LXP_OK ||
+            module_result != LXP_ERR_VERSION_UNSUPPORTED ||
+            account_ctx.staged_account_count != 0U ||
+            account_ctx.staged_count != 0U || effects.count != 0U)
+            return 1;
+    }
+    account_ctx.protocol_version = protocol_version;
     (void)memset(authority.principal, 0x45, 32U);
     module_result = LXP_OK;
     if (lxp_kernel_dispatch(registration, &account_ctx, &activity, &authority,
@@ -891,7 +903,7 @@ static int registration_law(void)
         lxp_module_ctx_init(&account_ctx, &kernel, LXP_MODULE_PROGRAMS,
                             4U, 1U, 8U, 10000U, &arena, true) != LXP_OK)
         return 1;
-    account_ctx.protocol_version = LXP_PROTOCOL_VERSION_OCCUPANCY;
+    account_ctx.protocol_version = protocol_version;
     receipt_index.count = 1U;
     (void)memset(receipt_index.entries[0].receipt_digest, 0x77, 32U);
     receipt_index.entries[0].global_sequence = 7U;
@@ -947,6 +959,17 @@ static int registration_law(void)
             assets[1].asset_id, &account, &created) !=
                 LXP_ERR_ASSET_MISMATCH)
         return 1;
+    for (uint8_t guest_abi = 1U; guest_abi <= 3U; guest_abi += 2U) {
+        deploy_record[66] = guest_abi;
+        if (lxp_ctx_kv_put(&account_ctx, deploy_key, sizeof(deploy_key),
+                           deploy_record, sizeof(deploy_record)) != LXP_OK ||
+            lxp_programs_account_register(
+                &account_ctx, program_id, (const uint8_t *)"vault", 5U,
+                assets[0].asset_id, &account, &created) != LXP_ERR_VERSION_UNSUPPORTED ||
+            account_ctx.staged_account_count != 0U || accounts.count != 1U ||
+            effects.count != 0U)
+            return 1;
+    }
     lxp_module_ctx_rollback(&account_ctx);
     if (lxp_state_journal_rollback(&journal) != LXP_OK ||
         accounts.count != 1U || kernel.module_kv_count != 4U)
@@ -964,7 +987,7 @@ static int registration_law(void)
                                    programs_module_registration()) != LXP_OK ||
         lxp_kernel_set_epoch(&restored_kernel, 1U) != LXP_OK ||
         lxp_kernel_register_module(&restored_kernel,
-                                   programs_module_registration_v3()) !=
+                                   module) !=
             LXP_OK)
         return 1;
     restored_runtime = runtime;
@@ -990,5 +1013,10 @@ int main(void)
     if (registry_boundaries() != 0) return 1;
     if (feed_group_pairing_replay() != 0) return 1;
     if (feed_runtime_bindings() != 0) return 1;
-    return registration_law();
+    if (registration_law(programs_module_registration_v2(),
+                          LXP_PROTOCOL_VERSION_OCCUPANCY) != 0) return 1;
+    if (registration_law(programs_module_registration_v3(),
+                          LXP_PROTOCOL_VERSION_OCCUPANCY) != 0) return 1;
+    return registration_law(programs_module_registration_v4(),
+                             LXP_PROTOCOL_VERSION_STATE_COMMITMENT);
 }

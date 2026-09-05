@@ -1,6 +1,7 @@
 #include "layerx/lxp_kernel.h"
 
 #include "layerx/lxp_admission.h"
+#include "layerx/lxp_bridge_credit.h"
 #include "layerx/lx_asset.h"
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_hash.h"
@@ -57,10 +58,43 @@ struct lxp_kernel_prepared_batch {
     bool committed;
 };
 
+lxp_result lxp_kernel_bind_ledger_admission(
+    lxp_module_ctx *ctx, const lxp_authority_resolved *authority,
+    uint32_t activity_type)
+{
+    const lxp_module_registration *registration;
+    lx_account *account = NULL;
+    lxp_result status;
+    if (ctx == NULL || ctx->kernel == NULL || authority == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    if (ctx->ledger_admission.bound) return LXP_ERR_CONTEXT_MISMATCH;
+    if (ctx->module_id != LXP_MODULE_PROGRAMS ||
+        ctx->protocol_version != LXP_PROTOCOL_VERSION_STATE_COMMITMENT)
+        return LXP_OK;
+    status = lxp_kernel_module_by_id(ctx->kernel, ctx->module_id,
+                                     ctx->epoch, &registration);
+    if (status != LXP_OK) return status;
+    if (registration->abi_version != LX_PROGRAMS_SANDBOX_DESTROY_ABI_VERSION)
+        return LXP_OK;
+    ctx->ledger_admission.activity_type = activity_type;
+    if (activity_type != LX_PROGRAMS_CALL && activity_type != LX_PROGRAMS_WIND_DOWN)
+        return LXP_OK;
+    status = lxp_ctx_account_find(ctx, authority->principal, &account);
+    if (status != LXP_OK && status != LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE)
+        return status;
+    (void)memcpy(ctx->ledger_admission.activity_binding, ctx->activity_id, 32U);
+    (void)memcpy(ctx->ledger_admission.account_id, authority->principal, 32U);
+    ctx->ledger_admission.account_present = account != NULL;
+    ctx->ledger_admission.next_sequence = account == NULL ? 0U :
+                                                        account->next_sequence;
+    ctx->ledger_admission.bound = true;
+    return LXP_OK;
+}
+
 static lxp_result snapshot_bind_call_admission(
     lxp_module_ctx *ctx, const lxp_kernel_batch_snapshot *snapshot,
     const lxp_kernel_execution *execution, const uint8_t activity_id[32],
-    lxp_u128 signed_fee_limit)
+    lxp_u128 signed_fee_limit, uint32_t activity_type)
 {
     if (ctx == NULL || snapshot == NULL || execution == NULL ||
         execution->authority == NULL || activity_id == NULL)
@@ -93,7 +127,7 @@ static lxp_result snapshot_bind_call_admission(
         snapshot->fee_schedule.occupancy_byte_batch;
     ctx->call_admission.parameter_version = execution->parameter_version;
     ctx->call_admission.present = true;
-    return LXP_OK;
+    return lxp_kernel_bind_ledger_admission(ctx, execution->authority, activity_type);
 }
 
 static lxp_result snapshot_metering_schedule(
@@ -623,7 +657,8 @@ lxp_result lxp_kernel_batch_schedule_item(
         ctx.batch_number = execution->batch_number;
         ctx.verified_receipts = &view->verified_receipts;
         status = snapshot_bind_call_admission(
-            &ctx, view, execution, activity_id, activity->fee_limit);
+            &ctx, view, execution, activity_id, activity->fee_limit,
+            activity->activity_type);
     }
     if (status == LXP_OK)
         status = registration->iface->decode(
@@ -1235,6 +1270,133 @@ static lxp_result receipt_state_root(const lxp_kernel *kernel,
     (void)memcpy(input + offset, module_root, sizeof(module_root));
     offset += sizeof(module_root);
     return lxp_hash_domain(LXP_DOMAIN_RECEIPT, input, offset, root);
+}
+
+lxp_result lxp_bridge_credit_bind_receipt(
+    lxp_receipt *receipt, const lxp_module_ctx *ctx)
+{
+    lxp_u128 before;
+    lxp_u128 after;
+    lxp_u128 expected;
+    lxp_u128 amount;
+    lxp_u128 reserve_before;
+    lxp_u128 reserve_after;
+    lxp_u128 recipient_before;
+    lxp_u128 recipient_after;
+    const lxp_effect *event;
+    const lxp_effect *balances;
+    const lx_account *reserve = NULL;
+    const lx_account *recipient = NULL;
+    bool recipient_bound = false;
+    bool supply_bound = false;
+    const uint8_t *stored = NULL;
+    size_t stored_length = 0U;
+    uint8_t supply_key[47] = "custody-issued:";
+    uint8_t previous_supply[16] = {0};
+    if (receipt == NULL || ctx == NULL || receipt->protocol_version != 3U ||
+        receipt->module_id != LXP_MODULE_BRIDGE || ctx->module_id != LXP_MODULE_BRIDGE ||
+        receipt->module_version != 1U || ctx->kernel == NULL || ctx->ledger_receipt_present ||
+        receipt->operation != 0U || !lxp_u128_is_zero(receipt->amount) ||
+        !lxp_ct_is_zero(receipt->asset, 32U) || !lxp_ct_is_zero(receipt->from, 32U) ||
+        !lxp_ct_is_zero(receipt->to, 32U) || receipt->from_sequence != 0U ||
+        !lxp_u128_is_zero(receipt->from_balance_before) ||
+        !lxp_u128_is_zero(receipt->from_balance_after) ||
+        !lxp_u128_is_zero(receipt->to_balance_before) ||
+        !lxp_u128_is_zero(receipt->to_balance_after) ||
+        !lxp_ct_is_zero(receipt->authorization_hash, 32U) ||
+        !lxp_ct_is_zero(receipt->context_hash, 32U) ||
+        !lxp_ct_is_zero(receipt->transfer_set_root, 32U))
+        return LXP_FATAL_INVARIANT;
+    if (receipt->result_code != LXP_OK)
+        return !ctx->ledger_receipt_present && receipt->effects.count == 0U ?
+            LXP_OK : LXP_FATAL_INVARIANT;
+    if (ctx->effects == NULL || ctx->effects->count != 3U || receipt->effects.count != 3U ||
+        !ctx->transfer_applied || ctx->transfer_snapshot_count == 0U ||
+        ctx->effects->effects[0].kind != LXP_EFFECT_TRANSFER ||
+        !ctx->effects->effects[0].monetary ||
+        ctx->effects->effects[0].module_id != LXP_MODULE_BRIDGE ||
+        lxp_ct_is_zero(ctx->effects->effects[0].transfer_set_root, 32U) ||
+        ctx->global_sequence != receipt->global_sequence ||
+        lxp_ct_memcmp(ctx->activity_id, receipt->activity_id, 32U) != 0)
+        return LXP_FATAL_INVARIANT;
+    for (size_t index = 0U; index < 3U; ++index)
+        if (memcmp(&receipt->effects.effects[index], &ctx->effects->effects[index],
+                   sizeof(lxp_effect)) != 0) return LXP_FATAL_INVARIANT;
+    event = &ctx->effects->effects[1];
+    balances = &ctx->effects->effects[2];
+    if (event->module_id != LXP_MODULE_BRIDGE || event->kind != LXP_EFFECT_EVENT ||
+        event->event_type != 1U || event->body_length != 208U ||
+        balances->module_id != LXP_MODULE_BRIDGE || balances->kind != LXP_EFFECT_EVENT ||
+        balances->event_type != 2U || balances->body_length != 112U ||
+        lxp_u128_from_be(event->body + 96U, &amount) != LXP_OK || lxp_u128_is_zero(amount) ||
+        lxp_u128_from_be(event->body + 176U, &before) != LXP_OK ||
+        lxp_u128_from_be(event->body + 192U, &after) != LXP_OK ||
+        lxp_u128_add(before, amount, &expected) != LXP_OK ||
+        lxp_u128_cmp(expected, after) != 0 ||
+        lxp_u128_from_be(balances->body + 32U, &reserve_before) != LXP_OK ||
+        lxp_u128_from_be(balances->body + 48U, &reserve_after) != LXP_OK ||
+        lxp_u128_cmp(reserve_before, reserve_after) != 0 ||
+        lxp_u128_from_be(balances->body + 64U, &recipient_before) != LXP_OK ||
+        lxp_u128_from_be(balances->body + 80U, &recipient_after) != LXP_OK ||
+        lxp_u128_add(recipient_before, amount, &expected) != LXP_OK ||
+        lxp_u128_cmp(expected, recipient_after) != 0)
+        return LXP_FATAL_SUPPLY_MISMATCH;
+    for (size_t index = 0U; index < ctx->transfer_snapshot_count; ++index) {
+        const lxp_module_account_snapshot *snapshot = &ctx->transfer_snapshots[index];
+        if (memcmp(snapshot->account->id, balances->body, 32U) == 0) {
+            reserve = snapshot->account;
+            if (lxp_u128_cmp(snapshot->balance, reserve_before) != 0 ||
+                snapshot->next_sequence == UINT64_MAX ||
+                reserve->next_sequence != snapshot->next_sequence + 1U)
+                return LXP_FATAL_INVARIANT;
+            for (size_t byte = 0U; byte < 8U; ++byte)
+                if (balances->body[96U + byte] != (uint8_t)(snapshot->next_sequence >> (56U - byte * 8U)) ||
+                    balances->body[104U + byte] != (uint8_t)(reserve->next_sequence >> (56U - byte * 8U)))
+                    return LXP_FATAL_INVARIANT;
+        }
+        if (memcmp(snapshot->account->id, event->body + 64U, 32U) == 0) {
+            recipient = snapshot->account;
+            recipient_bound = lxp_u128_cmp(snapshot->balance, recipient_before) == 0;
+        }
+    }
+    if (recipient == NULL) {
+        for (size_t index = 0U; index < ctx->staged_account_count; ++index) {
+            const lx_account *account = &ctx->staged_accounts[index].account;
+            if (memcmp(account->id, event->body + 64U, 32U) == 0) {
+                recipient = account;
+                recipient_bound = lxp_u128_is_zero(recipient_before) &&
+                    account->created_at_sequence == ctx->global_sequence;
+            }
+        }
+    }
+    if (reserve == NULL || recipient == NULL || !recipient_bound ||
+        lxp_u128_cmp(reserve->balance, reserve_after) != 0 ||
+        lxp_u128_cmp(recipient->balance, recipient_after) != 0 ||
+        memcmp(reserve->asset_id, event->body + 32U, 32U) != 0 ||
+        memcmp(recipient->asset_id, event->body + 32U, 32U) != 0)
+        return LXP_FATAL_INVARIANT;
+    (void)memcpy(supply_key + 15U, event->body + 32U, 32U);
+    for (size_t index = 0U; index < ctx->kernel->module_kv_count; ++index) {
+        const lxp_module_kv_entry *entry = &ctx->kernel->module_kv[index];
+        if (entry->module_id == LXP_MODULE_BRIDGE && entry->key_length == sizeof(supply_key) &&
+            memcmp(entry->key, supply_key, sizeof(supply_key)) == 0) {
+            if (entry->value_length != 16U) return LXP_FATAL_INVARIANT;
+            (void)memcpy(previous_supply, entry->value, 16U);
+            supply_bound = true;
+        }
+    }
+    for (size_t index = 0U; index < ctx->staged_count; ++index) {
+        const lxp_module_kv_change *change = &ctx->staged[index];
+        if (!change->deleted && change->key_length == sizeof(supply_key) &&
+            memcmp(change->key, supply_key, sizeof(supply_key)) == 0) {
+            stored = change->value;
+            stored_length = change->value_length;
+        }
+    }
+    if (!supply_bound || memcmp(previous_supply, event->body + 176U, 16U) != 0 || stored == NULL ||
+        stored_length != 16U || memcmp(stored, event->body + 192U, 16U) != 0)
+        return LXP_FATAL_SUPPLY_MISMATCH;
+    return LXP_OK;
 }
 
 static lxp_result receipt_bind_ledger_projection(
@@ -2169,7 +2331,7 @@ lxp_result lxp_kernel_prepare_activity(
             module_ctx.verified_receipts = &work->verified_receipts;
             status = snapshot_bind_call_admission(
                 &module_ctx, work, execution, prepared->activity_id,
-                activity->fee_limit);
+                activity->fee_limit, activity->activity_type);
             if (status == LXP_OK)
                 status = lxp_module_ctx_bind_effects(&module_ctx, &effects);
         }
@@ -2355,7 +2517,7 @@ lxp_result lxp_kernel_snapshot_apply_prepared(
             module_ctx.verified_receipts = &candidate->verified_receipts;
             status = snapshot_bind_call_admission(
                 &module_ctx, candidate, execution, prepared->activity_id,
-                activity->fee_limit);
+                activity->fee_limit, activity->activity_type);
             if (status == LXP_OK)
                 status = lxp_module_ctx_bind_effects(&module_ctx, &effects);
         }
@@ -2404,7 +2566,9 @@ lxp_result lxp_kernel_snapshot_apply_prepared(
             receipt->module_version, receipt->parameter_version);
     if (status == LXP_OK) receipt->timestamp = execution->batch_timestamp_ms;
     if (status == LXP_OK && module_ctx_initialized)
-        status = receipt_bind_ledger_projection(receipt, &module_ctx);
+        status = receipt->module_id == LXP_MODULE_BRIDGE ?
+            lxp_bridge_credit_bind_receipt(receipt, &module_ctx) :
+            receipt_bind_ledger_projection(receipt, &module_ctx);
     if (status == LXP_OK)
         status = receipt_bind_program_operation(activity, receipt);
     if (status == LXP_OK && module_ctx_initialized) {
@@ -2412,6 +2576,12 @@ lxp_result lxp_kernel_snapshot_apply_prepared(
             lxp_ctx_program_outcome(&module_ctx);
         if (outcome == NULL) status = LXP_FATAL_INVARIANT;
         else {
+            if (activity->activity_type == LX_PROGRAMS_CALL &&
+                receipt->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT &&
+                receipt->module_version == LX_PROGRAMS_SANDBOX_DESTROY_ABI_VERSION &&
+                outcome->terminal_kind == LXP_PROGRAM_TERMINAL_SUCCESS)
+                (void)memcpy(receipt->transfer_set_root,
+                             outcome->transfer_root, 32U);
             status = lxp_receipt_bind_program_outcome(receipt, outcome);
             if (status == LXP_OK &&
                 outcome->terminal_kind == LXP_PROGRAM_TERMINAL_SUCCESS)
@@ -3737,6 +3907,11 @@ lxp_result lxp_kernel_execute_activity(lxp_kernel *kernel,
             module_ctx.verified_receipts = execution->verified_receipts;
         if (status == LXP_OK)
             (void)memcpy(module_ctx.activity_id, canonical_activity_id, 32U);
+        if (status == LXP_OK &&
+            (activity->activity_type == LX_PROGRAMS_CALL ||
+             activity->activity_type == LX_PROGRAMS_WIND_DOWN))
+            status = lxp_kernel_bind_ledger_admission(
+                &module_ctx, execution->authority, activity->activity_type);
         if (status == LXP_OK && programs_call) {
             (void)memcpy(module_ctx.call_admission.activity_binding,
                          canonical_activity_id, 32U);
@@ -3888,7 +4063,9 @@ lxp_result lxp_kernel_execute_activity(lxp_kernel *kernel,
     if (status == LXP_OK)
         receipt->timestamp = execution->batch_timestamp_ms;
     if (status == LXP_OK && module_ctx_initialized)
-        status = receipt_bind_ledger_projection(receipt, &module_ctx);
+        status = receipt->module_id == LXP_MODULE_BRIDGE ?
+            lxp_bridge_credit_bind_receipt(receipt, &module_ctx) :
+            receipt_bind_ledger_projection(receipt, &module_ctx);
     if (status == LXP_OK)
         status = receipt_bind_program_operation(activity, receipt);
     if (status == LXP_OK && programs_call &&

@@ -4,7 +4,7 @@ outputs = ["agent-api-rust", "agent-rust", "agent-typescript", "agent-python", "
 
 [source.agent-api]
 root = "agent/schema/agent-api"
-digest = "5a96edc827e890fe6c95219e39201c0994d8e3488519fcc80fc6f4c40745609e"
+digest = "3fd1d5e3eab80db91d419ab5e5fd215a3ea596d063f5bf8c697d552b9958177f"
 
 [source.human-api]
 root = "human/schema/human-api"
@@ -19,7 +19,7 @@ language = "rust"
 root = "agent/crates/layerx-agent-api/src"
 
 [files.agent-api-rust]
-"operation_generated.rs" = "15d0fb4d427a7feb91f036f3e49a00a297a948314b98f47b55ecf6cff75ff07b"
+"operation_generated.rs" = "b59951110d1cb938a486fdc063ef24b2ba9d3899d1fe9e8f92f3563f2ed9dfbf"
 
 [output.agent-rust]
 language = "rust"
@@ -34,7 +34,7 @@ language = "typescript"
 root = "agent/sdk/typescript/src/generated"
 
 [files.agent-typescript]
-"client.ts" = "8819e4be601bbaa7443c436b4a2e3b7ddf8b93d969d1948dc99fcf7e875967ca"
+"client.ts" = "968f428ab50d2a33ddf805ddfe08793d266c39b52889bdbc7c80250ebc878990"
 "guarantees.md" = "16a010803f8a34b36a0101965f577d7884c6f05b6d5713054fb33e50ab9fff86"
 "mirror.ts" = "6f7c1968e536eec01b9a9fe91bd4f9f70fc5e9973ea0b4c908ae56af170e0b79"
 "receipt.ts" = "5ab22834d888c225291915392b0d7a3c7a79004ac56e86729fc42729e235bdf3"
@@ -45,8 +45,8 @@ root = "agent/sdk/python/layerx_sdk/generated"
 
 [files.agent-python]
 "__init__.py" = "5542bf19c9f1b61d1a0a9cb748dc1f0062a9a8df1a3db4b1e525cb8dbd1f6e34"
-"client.py" = "9ef06c8b9971aa1c867297c7318143288448f4f2182ebf1fda02d7107ad1dbce"
-"client.pyi" = "a6e55e151861f78826ce37b648b1765b24bbe64b04cd85a92ded3b807ebefce7"
+"client.py" = "14c6b213149e80b59b433be5c1b21ee57d0774931757bc01e86b57cc1463d74a"
+"client.pyi" = "ec9ee367ccd09961ac6402bb0059367d0c5c5e4da9fe1ef022c9bf7b8f6ad87d"
 "guarantees.md" = "16a010803f8a34b36a0101965f577d7884c6f05b6d5713054fb33e50ab9fff86"
 "mirror.py" = "03af926da7d418275b407896b98966ad87eea3dc1ea140afdc2376c17d575ed3"
 "mirror.pyi" = "ac018d858e019b806197a32b2b5c6b85b290018831c3fa638a20df89e3db2771"
@@ -73,9 +73,10 @@ language = "go"
 root = "platform/sdk/go"
 
 [files.platform-go]
-"generated.go" = "a4d8bbd0d75253c6972f439776a6f7a31f35f703d81d222f3670f5285d33fa8f"
+"generated.go" = "4baccff4f8c472eb9f1f1dc0c4e74d9074bd4a8034fa5b4513c2ab96a82c7b52"
 "mirror_generated.go" = "50e24c574ac570b429db96116f52b4279e66a5e92f2fb273d847988067c45876"
 "receipt_generated.go" = "9f85988f797c7dc6a9fdb214c420718d4438a87b2df7593e5d831b7f9a97bc72"
+"program_lifecycle_generated.go" = "67423319c2900714f1e8be16e64b251237a641753c2541cbcf12ad6de38261f7"
 
 [output.platform-jvm]
 language = "jvm"
@@ -83,22 +84,23 @@ root = "platform/sdk/jvm"
 
 [files.platform-jvm]
 "pom.xml" = "43d9af46728bf4507ea4eaa2ba6b6cc779559085f27862b78f26d01a09e975a1"
-"src/main/java/com/sidiora/layerx/sdk/HttpProductionTransport.java" = "c9901b3857b493015aae029729ab30e785e66deaa3e3db2226b6ed06fbeea39b"
-"src/main/java/com/sidiora/layerx/sdk/GeneratedContract.java" = "b8a2850616d22ea0270e7952827d6e4edba6168d2a63ac759f89e470c01118c0"
-"src/main/java/com/sidiora/layerx/sdk/GeneratedSchema.java" = "6f01325886a0cc03880a01abf3bba0dd4bc4838e344727e67667fa2afaf64ba3"
+"src/main/java/com/sidiora/layerx/sdk/HttpProductionTransport.java" = "d9bc0cebf33f5658b68ddbe0cbec467eb87c82753e5d46039efa995e3500dfc5"
+"src/main/java/com/sidiora/layerx/sdk/ProgramLifecycleRoutes.java" = "037a8b228781e81ba7490a8db5a59a6990597827084fa5771f420ce420cc8636"
+"src/main/java/com/sidiora/layerx/sdk/GeneratedContract.java" = "9585af576199f88b772114a61e0247f29ee10fa8603321ae7cc026eb558c6bb1"
+"src/main/java/com/sidiora/layerx/sdk/GeneratedSchema.java" = "ccc622d4cd8dcf303a0af1a9d6b32449a7d07ed766a0b91245fa768f99dca2e7"
 "src/main/java/com/sidiora/layerx/sdk/GeneratedMirror.java" = "facf45b2da6828d41371b36bc0f2119f643d7b45003dead0c9590a9b0f0b6b8f"
 "src/main/java/com/sidiora/layerx/sdk/IdempotencyKey.java" = "2cfba7826e4bb7a6f0d4af63530f43c7aece547cf9f64ff1664b781cc431f6a4"
 "src/main/java/com/sidiora/layerx/sdk/OperationCatalog.java" = "477843c32935ffbc9ecff6dd6a35b78693b059c3d29a59aa021349b4a868e8e3"
 "src/main/java/com/sidiora/layerx/sdk/PlatformSdk.java" = "6ce450c76565bea84a68704cc89a65bbafec9adb4ebb28d1d2392cd8ee97db48"
 "src/main/java/com/sidiora/layerx/sdk/PlatformSdkException.java" = "a1324a3f0be42e84e44f6203b284de92936b9bae2289e4e38e038c20ba800953"
-"src/main/java/com/sidiora/layerx/sdk/ProductionClient.java" = "83fede5d0ac860acac280f5197ccefa480b68cc6f60032b8bf6a72242f44cbd4"
+"src/main/java/com/sidiora/layerx/sdk/ProductionClient.java" = "e090de414d0845549fc5db1621aa0a97210e3eeac581fa6c1d9c6feb92d23e03"
 "src/main/java/com/sidiora/layerx/sdk/ProductionTransport.java" = "0a9297bb04cc34b82cc969fa1535cc371b60af761ea95a04a5a831b407387f1b"
 "src/main/java/com/sidiora/layerx/sdk/ProtocolAmount.java" = "8462ed22f102ad077bc3da2947dcae180a78787708eac9c487b4940a14a5c92e"
 "src/main/java/com/sidiora/layerx/sdk/ResumableStream.java" = "634606acf7724164edda10a0a4d0cf464a85c61d1a059c341862a90790c9792e"
 "src/main/java/com/sidiora/layerx/sdk/SchemaErrors.java" = "90a11904638f91609e6c4ce7ca7e98244323b799799d9a6f1f5b0345d78ffa8f"
 "src/main/java/com/sidiora/layerx/sdk/SchemaTypes.java" = "2fe1eb340835d7df1ce84b8664b0f837e6010a21fcc577553e6ba821af957780"
 "src/main/java/com/sidiora/layerx/sdk/SecretBytes.java" = "c651515a3541ee6d2fbbee0c348bf480844b33124ee4a40b0a4688a3e9da5ee5"
-"src/main/java/com/sidiora/layerx/sdk/verify/LocalVerifier.java" = "55110e540542e45b8e9838745fe4ca28ae50babc141f32dac5dcf42d0db92044"
+"src/main/java/com/sidiora/layerx/sdk/verify/LocalVerifier.java" = "12b3ad158676ef563c0b640e677938c087e633274784cd9e48ad34592d12018c"
 "src/main/java/com/sidiora/layerx/sdk/verify/GeneratedReceiptContract.java" = "23368a29361e567777b2f386a2e9a76c86b5fafa7ca897aa892db76ce59f430d"
 "src/conformance/java/com/sidiora/layerx/sdk/ConformanceMain.java" = "53f616fd55957f24eb3e4dd373a1b6409776ca26d6a9ba3ffc2cc4b71c509d15"
 "src/main/kotlin/com/sidiora/layerx/sdk/LayerX.kt" = "4557618f74dd11d88c9615e915b3377f9c41fab1187a735ab36a9a3d359df4a3"
@@ -109,7 +111,7 @@ language = "kvx"
 root = "platform/sdk/conformance"
 
 [files.platform-conformance]
-"jvm.kvx" = "b09ef27f7e3d1be77737ac27310a55a7a31e49ac190d04b7eb18d61ff2b71380"
+"jvm.kvx" = "acb09cb6ec2d590d48efd95e901794afb8df96af180a7e2db1e0dce8d8e5a85b"
 "run-jvm.sh" = "d0d7af078a37f823bf65745680479a10a89c90a77043b7359db9bc591ef59c3d"
 "mirror-v2.json" = "030c9b16aa72eec19aee23fcc2a79b2828112b238194f0cc31b50046bcd6bfdb"
 
@@ -118,22 +120,24 @@ language = "swift"
 root = "platform/sdk/swift/Sources/LayerXSDK/Generated"
 
 [files.platform-swift]
-"OperationCatalog.swift" = "83d948526ef33590cd67770c3c6c6d94293f4eafabaf162e6c8315abdee6ece9"
+"OperationCatalog.swift" = "5b7c99716562117d327b0860e0a25c2e275b6b4eef3b504928d3d04faa46df92"
 "MirrorSchema.swift" = "422548e15055091d839d085c9115343774125d83a7a6c986ce2f4803164db1a1"
 "ReceiptContract.swift" = "00482fdaf04a26a008f664472742964707e1ba5dfa7f439f85c5d67dc3ef00a6"
+"ProgramLifecycleRoutes.swift" = "431e7e3a0d7118742963ab2b36826511f72429efacf3a771bfd1e84f98c1073b"
 
 [output.platform-dotnet]
 language = "csharp"
 root = "platform/sdk/dotnet/Generated"
 
 [files.platform-dotnet]
-"OperationCatalog.cs" = "063e80e647cc27df5b7cbae2f53afc9f7ce74f79fb0794655237fe9ec7330199"
+"OperationCatalog.cs" = "94e04c60b5cb66400926d7c55efce6e06cc433858a386087f4bcca21c293502c"
 "MirrorSchema.cs" = "16cf74fc85cd4a93cd9b394dddc59ef3bdd73a9ab2e23ee83879ae3a529f81ce"
 "ReceiptContract.cs" = "839ed8af3a44c5eadaabefb484ca47839a9ac0ca1297369c50715cfca27cb6bf"
+"ProgramLifecycleRoutes.cs" = "f925a1354cbc8fd985f60d614a6898eb4ef25cbd2ffc54e629eeebbb9f32b2c8"
 
 [output.platform-portable-conformance]
 language = "json"
 root = "platform/sdk/conformance"
 
 [files.platform-portable-conformance]
-"operations.json" = "9c036480e285749281a53d582b091fa83681bd65f875d93b4d54a520f08664a4"
+"operations.json" = "34cc6a86c37b1b2d3a85aec4757702232f0f489a2d51d9b0aea4ebb40e01dce2"

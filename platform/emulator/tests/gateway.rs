@@ -116,6 +116,10 @@ fn parse_reply(raw: &[u8]) -> Result<Reply, String> {
 /// Boots the emulator on a private port and returns its loopback address once
 /// the real core reports readiness on `/healthz`.
 fn boot() -> Result<String, String> {
+    boot_protocol(2)
+}
+
+fn boot_protocol(protocol_version: u16) -> Result<String, String> {
     let port = free_port()?;
     let address = format!("127.0.0.1:{port}");
     let listen = address.clone();
@@ -132,6 +136,8 @@ fn boot() -> Result<String, String> {
             listen,
             "--sequencer-seed-file".to_string(),
             seed_argument,
+            "--protocol-version".to_string(),
+            protocol_version.to_string(),
         ]);
     });
     let deadline = Instant::now() + Duration::from_secs(15);
@@ -390,6 +396,532 @@ fn gateway_surface_matches_production_verbs() -> Result<(), String> {
     let unknown_route = request(&address, "GET", "/v1/does-not-exist", "", &[])?;
     assert_eq!(unknown_route.status, 404);
     assert_eq!(error_code(&unknown_route).as_deref(), Some("not_found"));
+    Ok(())
+}
+
+fn lifecycle_echo_guest() -> Vec<u8> {
+    use layerx_programs_runtime::test_support::{
+        code_section, func_body, function_section, import_section, module, raw_section,
+        type_section, unsigned_leb, TYPE_I32,
+    };
+    let mut exports = unsigned_leb(3);
+    for (name, kind, index) in [
+        ("layerx_reserve", 0_u8, 1_u8),
+        ("layerx_call", 0, 2),
+        ("memory", 2, 0),
+    ] {
+        exports.extend(unsigned_leb(
+            u64::try_from(name.len()).unwrap_or_else(|error| panic!("{error}")),
+        ));
+        exports.extend_from_slice(name.as_bytes());
+        exports.extend_from_slice(&[kind, index]);
+    }
+    module(&[
+        type_section(&[
+            (&[TYPE_I32, TYPE_I32, TYPE_I32], &[TYPE_I32]),
+            (&[TYPE_I32], &[TYPE_I32]),
+            (&[TYPE_I32, TYPE_I32], &[TYPE_I32]),
+        ]),
+        import_section(&[("layerx_v2", "response_write", 0)]),
+        function_section(&[1, 2]),
+        raw_section(5, &[1, 1, 1, 1]),
+        raw_section(7, &exports),
+        code_section(&[
+            func_body(&[], &[0x41, 0, 0x0b]),
+            func_body(
+                &[],
+                &[0x41, 7, 0x20, 0, 0x20, 1, 0x10, 0, 0x1a, 0x41, 7, 0x0b],
+            ),
+        ]),
+    ])
+}
+
+fn lifecycle_signed_activity(
+    ordinal: u16,
+    payload_bytes: &[u8],
+    sequence: u64,
+) -> Result<(Vec<u8>, String, [u8; 32]), String> {
+    lifecycle_signed_activity_for_protocol(ordinal, payload_bytes, sequence, 3)
+}
+
+fn lifecycle_signed_activity_for_protocol(
+    ordinal: u16,
+    payload_bytes: &[u8],
+    sequence: u64,
+    protocol: u16,
+) -> Result<(Vec<u8>, String, [u8; 32]), String> {
+    use ed25519_dalek::{Signer, SigningKey};
+    use layerx_types::activity::{Authority, EnvelopeBuilder, Signature, TimestampBound};
+    use layerx_types::amount::Amount;
+    use layerx_types::ids::{Did, IdempotencyKey};
+    use layerx_types::payload::{
+        ActivityType, ModuleId, ModuleRegistration, ModuleRegistry, Payload,
+    };
+    fn checked<T, E: std::fmt::Debug>(result: Result<T, E>) -> Result<T, String> {
+        result.map_err(|error| format!("{error:?}"))
+    }
+    let key = SigningKey::from_bytes(&EMULATOR_SEED);
+    let kind = checked(ActivityType::new(ModuleId::Programs, ordinal))?;
+    let registry = checked(ModuleRegistry::new(&[checked(ModuleRegistration::new(
+        ModuleId::Programs,
+        &[kind],
+    ))?]))?;
+    let payload = checked(Payload::new(&registry, kind, payload_bytes))?;
+    let hash = checked(layerx_wire::hash::payload_hash_for(&payload))?;
+    let mut idempotency = [7; 32];
+    idempotency[24..].copy_from_slice(&sequence.to_be_bytes());
+    let mut builder = EnvelopeBuilder::new();
+    checked(builder.protocol_version(protocol))?;
+    checked(builder.network_id(402))?;
+    checked(builder.activity_type(kind))?;
+    checked(builder.actor_did(checked(Did::new(b"did:layerx:lifecycle"))?))?;
+    checked(builder.authority(checked(Authority::owner(&key.verifying_key().to_bytes()))?))?;
+    checked(builder.account_sequence(sequence))?;
+    checked(builder.timestamp_bound(checked(TimestampBound::new(
+        1_699_999_970_000,
+        1_700_000_120_000,
+    ))?))?;
+    checked(builder.idempotency_key(IdempotencyKey::new(idempotency)))?;
+    checked(builder.fee_limit(Amount::from_u128(1_000_000)))?;
+    checked(builder.payload_hash(hash))?;
+    checked(builder.payload(payload))?;
+    let unsigned = checked(builder.build())?;
+    let preimage = checked(layerx_wire::sign::preimage_unsigned(&unsigned))?;
+    let signature = key.sign(preimage.as_bytes()).to_bytes();
+    let bytes = checked(layerx_wire::activity::encode_signed_envelope(
+        &unsigned.attach_signature(checked(Signature::new(&signature))?),
+    ))?;
+    let activity = checked(layerx_wire::activity::decode_signed(&bytes, &registry))?;
+    let id = checked(layerx_wire::hash::activity_id(&activity))?;
+    let key = idempotency
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    Ok((bytes, key, id))
+}
+
+#[test]
+fn lifecycle_routes_execute_and_replay_real_native_state_receipts() -> Result<(), String> {
+    use layerx_types::intent::ProgramId;
+    use layerx_types::program_lifecycle::{
+        NativeProgramDeploy, NativeProgramUpgrade, NativeProgramWindDown, ProgramUpgradePolicy,
+        ProgramWindDownOperation,
+    };
+    use sha2::{Digest, Sha256};
+    let address = boot_protocol(3)?;
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&EMULATOR_SEED);
+    let public = signing_key.verifying_key().to_bytes();
+    let public_hex = public
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let prefund = format!("{{\"did\":\"did:layerx:lifecycle\",\"public_key\":\"{public_hex}\",\"amount_lo\":100000000}}");
+    assert_eq!(
+        post_json(&address, "/__emulator/accounts/prefund", &prefund)?.status,
+        200
+    );
+    let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../sdk/conformance/fixtures/native-program-deploy-v3.json");
+    let fixture: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(fixture_path).map_err(|error| error.to_string())?)
+            .map_err(|error| error.to_string())?;
+    let encoded = hex_decode(fixture["payload_hex"].as_str().ok_or("missing C payload")?)?;
+    let original = NativeProgramDeploy::decode(&encoded).map_err(|error| format!("{error:?}"))?;
+    let account = layerx_types::account::AccountId::parse("agent:did:layerx:lifecycle:main")
+        .map_err(|error| format!("{error:?}"))?;
+    let principal = layerx_wire::hash::account_id_for_protocol(&account, 3)
+        .map_err(|error| format!("{error:?}"))?;
+    let program = ProgramId::new([0x71; 32]);
+    let wasm = lifecycle_echo_guest();
+    assert_eq!(
+        original.encode().map_err(|error| format!("{error:?}"))?,
+        encoded
+    );
+    let deploy = NativeProgramDeploy {
+        program_id: program,
+        guest_abi: 2,
+        policy: ProgramUpgradePolicy::Authority(principal),
+        wasm: &wasm,
+        new_hash: Sha256::digest(&wasm).into(),
+        interface: None,
+    };
+    let call = layerx_types::program_call::NativeProgramCall {
+        program_id: program,
+        guest_abi: 2,
+        entrypoint: b"layerx_call",
+        calldata: b"echo",
+        capabilities: &[0, 0],
+        access_declaration: b"LayerX/programs/access-declaration/v1\0\0",
+        response_capacity: 4096,
+        resources: layerx_types::program_call::Resources([100_000, 65_536, 0, 0, 2, 4096, 0]),
+    };
+    let mut upgraded_wasm = deploy.wasm.to_vec();
+    upgraded_wasm.extend_from_slice(b"\0\x08\x07upgrade");
+    let upgrade = NativeProgramUpgrade {
+        program_id: program,
+        guest_abi: 2,
+        old_hash: deploy.new_hash,
+        new_hash: Sha256::digest(&upgraded_wasm).into(),
+        migration_hook: &[],
+        clear_interface: false,
+        interface: deploy.interface,
+        wasm: &upgraded_wasm,
+    };
+    let deprecate = NativeProgramWindDown {
+        program_id: program,
+        operation: ProgramWindDownOperation::Deprecate {
+            exit_program: program.bytes(),
+            deadline_batch: 1000,
+        },
+    };
+    for (sequence, (ordinal, path, payload)) in [
+        (
+            1,
+            "/v1/programs/deploy",
+            deploy.encode().map_err(|error| format!("{error:?}"))?,
+        ),
+        (
+            3,
+            "/v1/programs/call",
+            call.encode().map_err(|error| format!("{error:?}"))?,
+        ),
+        (
+            2,
+            "/v1/programs/upgrade",
+            upgrade.encode().map_err(|error| format!("{error:?}"))?,
+        ),
+        (
+            3,
+            "/v1/programs/call",
+            call.encode().map_err(|error| format!("{error:?}"))?,
+        ),
+        (
+            7,
+            "/v1/programs/wind-down",
+            deprecate.encode().map_err(|error| format!("{error:?}"))?,
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let (bytes, key, expected_id) = lifecycle_signed_activity(
+            ordinal,
+            &payload,
+            u64::try_from(sequence).map_err(|error| error.to_string())?,
+        )?;
+        assert_eq!(
+            request(&address, "POST", path, "application/octet-stream", &bytes)?.status,
+            400
+        );
+        if ordinal != 3 {
+            assert_eq!(
+                request_with_idempotency(
+                    &address,
+                    "POST",
+                    path,
+                    "application/json",
+                    &bytes,
+                    Some(&key)
+                )?
+                .status,
+                415
+            );
+        }
+        if ordinal == 1 {
+            assert_eq!(
+                request_with_idempotency(
+                    &address,
+                    "POST",
+                    "/v1/programs/upgrade",
+                    "application/octet-stream",
+                    &bytes,
+                    Some(&key)
+                )?
+                .status,
+                400
+            );
+            let mut corrupt = payload.clone();
+            corrupt[68] ^= 1;
+            let (corrupt, corrupt_key, _) = lifecycle_signed_activity(ordinal, &corrupt, 0)?;
+            assert_eq!(
+                request_with_idempotency(
+                    &address,
+                    "POST",
+                    path,
+                    "application/octet-stream",
+                    &corrupt,
+                    Some(&corrupt_key)
+                )?
+                .status,
+                400
+            );
+        }
+        let reply = request_with_idempotency(
+            &address,
+            "POST",
+            path,
+            "application/octet-stream",
+            &bytes,
+            Some(&key),
+        )?;
+        assert_eq!(reply.status, 200, "{}", reply.text());
+        let document: serde_json::Value =
+            serde_json::from_slice(&reply.body).map_err(|error| error.to_string())?;
+        let result = &document["result"];
+        if ordinal != 3 {
+            assert!(result.get("program_id").is_none());
+            assert!(result.get("idempotency_key").is_none());
+        } else {
+            assert_eq!(result["idempotency_key"], key);
+        }
+        let receipt = hex_decode(result["receipt"].as_str().ok_or("receipt missing")?)?;
+        let verified = layerx_proof::receipt::verify_sequencer_signature(&receipt, public)
+            .map_err(|error| format!("{error:?}"))?;
+        let protocol = verified.protocol().ok_or("protocol receipt missing")?;
+        assert_eq!(protocol.activity_id(), expected_id);
+        assert_eq!(
+            (
+                protocol.module_id(),
+                protocol.module_version(),
+                protocol.operation()
+            ),
+            (9, 4, if ordinal == 3 { 3 } else { 0 })
+        );
+        let execution_detail = if ordinal == 3 {
+            let terminal = hex_decode(
+                result["terminal_payload"]
+                    .as_str()
+                    .ok_or("terminal missing")?,
+            )?;
+            let graph = hex_decode(result["call_graph"].as_str().ok_or("graph missing")?)?;
+            let execution = layerx_proof::program::verify_program_execution(
+                &receipt,
+                &terminal,
+                &graph,
+                layerx_proof::program::ProgramExecutionExpectation {
+                    sequencer_public_key: public,
+                    previous_state_root: protocol.previous_state_root(),
+                    activity_id: expected_id,
+                    program_id: program.bytes(),
+                    guest_abi_version: 2,
+                },
+            )
+            .map_err(|error| format!("{error:?}"))?;
+            format!(
+                "resource={:?} failure={:?} terminal={:?}",
+                execution.authenticated_resource(),
+                execution.authenticated_failure(),
+                execution.terminal()
+            )
+        } else {
+            String::new()
+        };
+        assert_eq!(
+            protocol.result_code(),
+            0,
+            "ordinal={ordinal} sequence={sequence} activity={expected_id:02x?} {execution_detail}"
+        );
+        let authority = layerx_proof::receipt::AuthorizedBatch::new(
+            protocol.batch_id(),
+            protocol.asset(),
+            protocol.previous_state_root(),
+            protocol.resulting_state_root(),
+            public,
+        );
+        if ordinal == 3 {
+            let terminal = hex_decode(
+                result["terminal_payload"]
+                    .as_str()
+                    .ok_or("terminal missing")?,
+            )?;
+            let graph = hex_decode(result["call_graph"].as_str().ok_or("graph missing")?)?;
+            let execution = layerx_proof::program::verify_program_execution(
+                &receipt,
+                &terminal,
+                &graph,
+                layerx_proof::program::ProgramExecutionExpectation {
+                    sequencer_public_key: public,
+                    previous_state_root: protocol.previous_state_root(),
+                    activity_id: expected_id,
+                    program_id: program.bytes(),
+                    guest_abi_version: 2,
+                },
+            )
+            .map_err(|error| format!("{error:?}"))?;
+            assert!(execution.fee_units() > 0);
+            assert!(execution.cpu_fuel() > 0);
+            assert!(execution.memory_bytes() >= 65_536);
+            assert_eq!(execution.output_values(), 2);
+        } else {
+            assert!(protocol.program_outcome().is_none());
+            layerx_proof::receipt::verify_program_state(&receipt, &authority)
+                .map_err(|error| format!("{error:?}"))?;
+        }
+        let mut corrupt = receipt;
+        let last = corrupt.len() - 1;
+        corrupt[last] ^= 1;
+        assert!(layerx_proof::receipt::verify_sequencer_signature(&corrupt, public).is_err());
+        if ordinal != 3 {
+            assert!(layerx_proof::receipt::verify_program_state(&corrupt, &authority).is_err());
+        }
+        let replay = request_with_idempotency(
+            &address,
+            "POST",
+            path,
+            "application/octet-stream",
+            &bytes,
+            Some(&key),
+        )?;
+        assert_eq!(replay.status, 200, "{}", replay.text());
+        let replay: serde_json::Value =
+            serde_json::from_slice(&replay.body).map_err(|error| error.to_string())?;
+        assert_eq!(replay["result"], *result);
+        if ordinal == 3 {
+            let snapshot = request(&address, "GET", "/__emulator/snapshot", "", &[])?;
+            assert_eq!(
+                snapshot.status,
+                200,
+                "snapshot export after sequence={sequence}: {}",
+                snapshot.text()
+            );
+            let imported = request(
+                &address,
+                "PUT",
+                "/__emulator/snapshot",
+                "application/octet-stream",
+                &snapshot.body,
+            )?;
+            assert_eq!(
+                imported.status,
+                200,
+                "snapshot import after sequence={sequence}: {}",
+                imported.text()
+            );
+        }
+        if ordinal == 1 {
+            let mut conflict = payload;
+            conflict[0] ^= 1;
+            let (conflict, conflict_key, _) = lifecycle_signed_activity(ordinal, &conflict, 0)?;
+            assert_eq!(
+                request_with_idempotency(
+                    &address,
+                    "POST",
+                    path,
+                    "application/octet-stream",
+                    &conflict,
+                    Some(&conflict_key)
+                )?
+                .status,
+                409
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn native_and_legacy_profiles_keep_snapshot_and_module_versions_separate() -> Result<(), String> {
+    use layerx_types::program_lifecycle::{NativeProgramDeploy, ProgramUpgradePolicy};
+    let legacy = boot_protocol(2)?;
+    let native = boot_protocol(3)?;
+    for address in [&legacy, &native] {
+        let public = ed25519_dalek::SigningKey::from_bytes(&EMULATOR_SEED)
+            .verifying_key()
+            .to_bytes();
+        let public = public
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let body = format!("{{\"did\":\"did:layerx:lifecycle\",\"public_key\":\"{public}\",\"amount_lo\":1000000}}");
+        assert_eq!(
+            post_json(address, "/__emulator/accounts/prefund", &body)?.status,
+            200
+        );
+    }
+    let legacy_snapshot = request(&legacy, "GET", "/__emulator/snapshot", "", &[])?;
+    let native_snapshot = request(&native, "GET", "/__emulator/snapshot", "", &[])?;
+    assert_eq!(legacy_snapshot.status, 200);
+    assert_eq!(native_snapshot.status, 200);
+    for (target, snapshot) in [(&legacy, &native_snapshot), (&native, &legacy_snapshot)] {
+        assert_eq!(
+            request(
+                target,
+                "PUT",
+                "/__emulator/snapshot",
+                "application/octet-stream",
+                &snapshot.body
+            )?
+            .status,
+            400
+        );
+    }
+    for (target, snapshot) in [(&legacy, &legacy_snapshot), (&native, &native_snapshot)] {
+        assert_eq!(
+            request(
+                target,
+                "PUT",
+                "/__emulator/snapshot",
+                "application/octet-stream",
+                &snapshot.body
+            )?
+            .status,
+            200
+        );
+    }
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../sdk/conformance/fixtures/native-program-deploy-v3.json");
+    let fixture: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(path).map_err(|error| error.to_string())?)
+            .map_err(|error| error.to_string())?;
+    let encoded = hex_decode(fixture["payload_hex"].as_str().ok_or("missing C payload")?)?;
+    let original = NativeProgramDeploy::decode(&encoded).map_err(|error| format!("{error:?}"))?;
+    let deploy = NativeProgramDeploy {
+        guest_abi: 1,
+        policy: ProgramUpgradePolicy::Immutable,
+        interface: None,
+        ..original
+    };
+    let payload = deploy.encode().map_err(|error| format!("{error:?}"))?;
+    for (protocol, own, other, expected_module) in
+        [(2, &legacy, &native, 1), (3, &native, &legacy, 4)]
+    {
+        let (signed, _, _) = lifecycle_signed_activity_for_protocol(1, &payload, 0, protocol)?;
+        assert_eq!(
+            request(
+                other,
+                "POST",
+                "/v1/activities",
+                "application/octet-stream",
+                &signed
+            )?
+            .status,
+            400
+        );
+        let reply = request(
+            own,
+            "POST",
+            "/v1/activities",
+            "application/octet-stream",
+            &signed,
+        )?;
+        assert_eq!(reply.status, 200, "{}", reply.text());
+        let body: serde_json::Value =
+            serde_json::from_slice(&reply.body).map_err(|error| error.to_string())?;
+        let bytes = hex_decode(
+            body["result"]["receipt"]
+                .as_str()
+                .ok_or("missing receipt")?,
+        )?;
+        let public = ed25519_dalek::SigningKey::from_bytes(&EMULATOR_SEED)
+            .verifying_key()
+            .to_bytes();
+        let receipt = layerx_proof::receipt::verify_sequencer_signature(&bytes, public)
+            .map_err(|error| format!("{error:?}"))?;
+        let protocol_receipt = receipt.protocol().ok_or("missing protocol receipt")?;
+        assert_eq!(protocol_receipt.protocol_version(), protocol);
+        assert_eq!(protocol_receipt.module_version(), expected_module);
+        assert_eq!(protocol_receipt.result_code(), 0);
+    }
     Ok(())
 }
 

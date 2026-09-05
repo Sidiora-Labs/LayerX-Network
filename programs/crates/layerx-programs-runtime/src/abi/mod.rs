@@ -1,4 +1,4 @@
-//! Version-one capability ABI. Every operation checks an explicit grant from
+//! Frozen ABI-v1 and ABI-v2 capabilities. Every operation checks an explicit grant from
 //! the invoking activity before touching namespaced storage or producing an
 //! effect for the kernel to apply.
 
@@ -9,12 +9,12 @@ pub mod balance;
 pub(crate) mod capability;
 pub mod codec;
 pub mod context;
+#[cfg(test)]
+mod event_tests;
+mod host_state;
 pub mod manifest;
 pub mod response;
 mod storage_ops;
-mod host_state;
-#[cfg(test)]
-mod event_tests;
 
 pub use balance::{BalanceView, MAX_BALANCE_VIEW_GRANTS};
 use capability::CapabilityKey;
@@ -23,9 +23,9 @@ pub use codec::{
     Calldata, CodecError, EncodingConvention, TypeTag, DECODED_SIZE_LIMIT, MAX_CALLDATA_BYTES,
     MAX_NESTING_DEPTH,
 };
+pub(crate) use host_state::{abi_error_bytes, HostStateCommitment, HostStateIdentity};
 pub use response::{CallResponse, ResponseRefusal, MAX_CALL_RESPONSE_BYTES};
 pub use storage_ops::StorageSelector;
-pub(crate) use host_state::{abi_error_bytes, HostStateCommitment, HostStateIdentity};
 
 use crate::meter::MeterRefusal;
 use crate::storage::{
@@ -50,8 +50,8 @@ pub const MAX_CAPABILITY_ENCODING_GRANT_BYTES: usize =
 pub const MAX_CAPABILITIES: usize = (MAX_CAPABILITY_ENCODING_BYTES
     - MAX_CAPABILITY_ENCODING_HEADER_BYTES)
     / MAX_CAPABILITY_ENCODING_GRANT_BYTES;
-pub const MAX_CANONICAL_CAPABILITY_SET_BYTES: usize = MAX_CAPABILITY_ENCODING_HEADER_BYTES
-    + MAX_CAPABILITIES * MAX_CAPABILITY_ENCODING_GRANT_BYTES;
+pub const MAX_CANONICAL_CAPABILITY_SET_BYTES: usize =
+    MAX_CAPABILITY_ENCODING_HEADER_BYTES + MAX_CAPABILITIES * MAX_CAPABILITY_ENCODING_GRANT_BYTES;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct HostFunction {
@@ -385,26 +385,40 @@ impl AbiEffects {
     }
 
     pub(crate) fn write_canonical_program_event_envelope(
-        &self, encoded: &mut Vec<u8>,
+        &self,
+        encoded: &mut Vec<u8>,
     ) -> Result<(), AbiError> {
-        if self.events.len() > MAX_EVENTS_PER_ACTIVITY { return Err(AbiError::EventBounds); }
+        if self.events.len() > MAX_EVENTS_PER_ACTIVITY {
+            return Err(AbiError::EventBounds);
+        }
         encoded.clear();
         encoded.extend_from_slice(b"LayerX/programs/events/v1\0");
-        encoded.extend_from_slice(&u32::try_from(self.events.len())
-            .map_err(|_| AbiError::EventBounds)?.to_be_bytes());
+        encoded.extend_from_slice(
+            &u32::try_from(self.events.len())
+                .map_err(|_| AbiError::EventBounds)?
+                .to_be_bytes(),
+        );
         for event in &self.events {
-            if event.topic.len() > MAX_EVENT_TOPIC_BYTES || event.data.len() > MAX_EVENT_DATA_BYTES {
+            if event.topic.len() > MAX_EVENT_TOPIC_BYTES || event.data.len() > MAX_EVENT_DATA_BYTES
+            {
                 return Err(AbiError::EventBounds);
             }
             encoded.extend_from_slice(&event.program.bytes());
             encoded.extend_from_slice(&event.principal.bytes());
             let (path, depth) = event.frame.canonical_bytes();
-            encoded.extend_from_slice(&path); encoded.push(depth);
-            encoded.extend_from_slice(&u32::try_from(event.topic.len())
-                .map_err(|_| AbiError::EventBounds)?.to_be_bytes());
+            encoded.extend_from_slice(&path);
+            encoded.push(depth);
+            encoded.extend_from_slice(
+                &u32::try_from(event.topic.len())
+                    .map_err(|_| AbiError::EventBounds)?
+                    .to_be_bytes(),
+            );
             encoded.extend_from_slice(&event.topic);
-            encoded.extend_from_slice(&u32::try_from(event.data.len())
-                .map_err(|_| AbiError::EventBounds)?.to_be_bytes());
+            encoded.extend_from_slice(
+                &u32::try_from(event.data.len())
+                    .map_err(|_| AbiError::EventBounds)?
+                    .to_be_bytes(),
+            );
             encoded.extend_from_slice(&event.data);
         }
         Ok(())
@@ -457,7 +471,9 @@ impl Display for AbiError {
             Self::InvalidEncoding => formatter.write_str("program ABI input encoding is invalid"),
             Self::Storage(error) => write!(formatter, "storage refusal: {error}"),
             Self::Meter(error) => write!(formatter, "meter refusal: {error}"),
-            Self::AccessDeclaration => formatter.write_str("access falls outside the activity declaration"),
+            Self::AccessDeclaration => {
+                formatter.write_str("access falls outside the activity declaration")
+            }
         }
     }
 }
@@ -509,9 +525,7 @@ impl Abi {
         if manifest::manifest(version).is_none() {
             return Err(AbiError::WrongVersion);
         }
-        if version == manifest::ABI_V1_VERSION
-            && authorization.capabilities().has_v2_only_grant()
-        {
+        if version == manifest::ABI_V1_VERSION && authorization.capabilities().has_v2_only_grant() {
             return Err(AbiError::InvalidCapability);
         }
         if !authorization
@@ -574,9 +588,7 @@ impl Abi {
         if manifest::manifest(version).is_none() {
             return Err(AbiError::WrongVersion);
         }
-        if version == manifest::ABI_V1_VERSION
-            && authorization.capabilities().has_v2_only_grant()
-        {
+        if version == manifest::ABI_V1_VERSION && authorization.capabilities().has_v2_only_grant() {
             return Err(AbiError::InvalidCapability);
         }
         let principal_namespace = StorageNamespace::principal(program, authorization.principal());
@@ -642,13 +654,9 @@ impl Abi {
         self.storage.clone()
     }
 
-    pub(crate) fn for_each_storage_commitment_entry(
-        &self,
-        visit: impl FnMut(Vec<u8>, &[u8]),
-    ) {
+    pub(crate) fn for_each_storage_commitment_entry(&self, visit: impl FnMut(Vec<u8>, &[u8])) {
         self.storage.for_each_commitment_entry(visit);
     }
-
 
     pub(crate) fn for_each_storage_commitment_delta(
         &self,
@@ -679,15 +687,11 @@ impl Abi {
         self.balances.clone()
     }
 
-    pub(crate) fn v2_host_state_commitment(
-        &self,
-    ) -> Result<HostStateCommitment, AbiError> {
+    pub(crate) fn v2_host_state_commitment(&self) -> Result<HostStateCommitment, AbiError> {
         host_state::commit(self, true)
     }
 
-    pub(crate) fn v2_host_state_measurement(
-        &self,
-    ) -> Result<HostStateCommitment, AbiError> {
+    pub(crate) fn v2_host_state_measurement(&self) -> Result<HostStateCommitment, AbiError> {
         host_state::commit(self, false)
     }
 
@@ -862,8 +866,15 @@ impl Abi {
             return Err(AbiError::CapabilityEscalation);
         }
         self.access_declaration
-            .enforce_account(self.authorization.principal().bytes(), asset, crate::AccessMode::Write)
-            .and_then(|()| self.access_declaration.enforce_account(to, asset, crate::AccessMode::Write))
+            .enforce_account(
+                self.authorization.principal().bytes(),
+                asset,
+                crate::AccessMode::Write,
+            )
+            .and_then(|()| {
+                self.access_declaration
+                    .enforce_account(to, asset, crate::AccessMode::Write)
+            })
             .map_err(|_| AbiError::AccessDeclaration)?;
         self.effects.transfers.push(TransferRequest {
             program: self.program,
@@ -906,8 +917,18 @@ impl Abi {
         let binding = ProgramFundingBinding::issue(self.program, seed, destination_account, asset)
             .map_err(|_| AbiError::CapabilityDenied)?;
         self.access_declaration
-            .enforce_account(self.authorization.principal().bytes(), asset, crate::AccessMode::Write)
-            .and_then(|()| self.access_declaration.enforce_account(destination_account, asset, crate::AccessMode::Write))
+            .enforce_account(
+                self.authorization.principal().bytes(),
+                asset,
+                crate::AccessMode::Write,
+            )
+            .and_then(|()| {
+                self.access_declaration.enforce_account(
+                    destination_account,
+                    asset,
+                    crate::AccessMode::Write,
+                )
+            })
             .map_err(|_| AbiError::AccessDeclaration)?;
         self.effects.transfers.push(TransferRequest {
             program: self.program,
@@ -924,7 +945,7 @@ impl Abi {
         Ok(())
     }
 
-    /// Requests a candidate-v2 402LXP transfer from an account derived by the
+    /// Requests an ABI-v2 402LXP transfer from an account derived by the
     /// currently executing program. The opaque authority token is issued only
     /// after the exact source derivation and cumulative ProgramSpend grant are
     /// checked at this host-fixed frame.
@@ -985,7 +1006,10 @@ impl Abi {
         })?;
         self.access_declaration
             .enforce_account(source_account, asset, crate::AccessMode::Write)
-            .and_then(|()| self.access_declaration.enforce_account(to, asset, crate::AccessMode::Write))
+            .and_then(|()| {
+                self.access_declaration
+                    .enforce_account(to, asset, crate::AccessMode::Write)
+            })
             .map_err(|_| AbiError::AccessDeclaration)?;
         self.effects.transfers.push(TransferRequest {
             program: self.program,

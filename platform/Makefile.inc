@@ -238,7 +238,7 @@ platform-receipt-fixture: $(BUILD_DIR)/tools/generate_receipt_fixture \
 		platform/sdk/conformance/fixtures/receipt-programs-positive-v2.json \
 		platform/sdk/conformance/fixtures/receipt-refusals-v2.json
 
-platform-verify-sdks: platform-sdk-check platform-sample-dependencies-ready platform-js-install
+platform-verify-sdks: programs-check-native-lifecycle-fixtures programs-check-capability-fixture programs-check-executed-fixture platform-sdk-check platform-sample-dependencies-ready platform-js-install
 	@python3 -c 'import pytest' || { echo "pytest is required for Python SDK conformance" >&2; exit 1; }
 	npm run build --workspace @sidiora/layerx-sdk
 	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-sdk --tests

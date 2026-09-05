@@ -759,6 +759,15 @@ lxp_result layerx_programs_wind_down_transfer_apply(uint64_t token)
         return LXP_ERR_MODULE_DISABLED;
     sequence_account = account_by_id(runtime->accounts,
                                      settlement->authority->principal);
+    {
+        uint64_t sequence;
+        status = lxp_ctx_ledger_execution_sequence(
+            settlement->ctx, settlement->authority->principal,
+            settlement->account_sequence, &sequence);
+        if (status != LXP_OK) return status;
+        if (sequence != settlement->account_sequence)
+            return LXP_ERR_CONTEXT_MISMATCH;
+    }
     if (sequence_account == NULL ||
         sequence_account->kind != LX_ACCOUNT_AGENT_MAIN ||
         settlement->account_sequence != sequence_account->next_sequence)
@@ -832,6 +841,10 @@ static lxp_result exit_execute(lxp_module_ctx *ctx, const lxp_activity *activity
     settlement.source = source;
     settlement.destination = destination;
     settlement.account_sequence = activity->account_sequence;
+    status = lxp_ctx_ledger_execution_sequence(
+        ctx, authority->principal, activity->account_sequence,
+        &settlement.account_sequence);
+    if (status != LXP_OK) return status;
     for (index = 0U; index < 4U; ++index) {
         program[index] = read_u64(route.program_id + index * 8U);
         principal[index] = read_u64(authority->principal + index * 8U);

@@ -1335,6 +1335,7 @@ dependencies = [
  "ed25519-dalek",
  "getrandom 0.3.4",
  "layerx-client",
+ "layerx-programs-runtime",
  "layerx-proof",
  "layerx-types",
  "layerx-wire",
@@ -1389,6 +1390,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "subtle",
+ "toml_edit",
  "ureq",
  "zeroize",
 ]
@@ -1401,6 +1403,7 @@ dependencies = [
  "layerx-client",
  "layerx-crypto",
  "layerx-intents",
+ "layerx-programs-registry",
  "layerx-proof",
  "layerx-types",
  "layerx-wire",
@@ -1460,6 +1463,7 @@ dependencies = [
 name = "layerx-platform-gateway"
 version = "0.1.0"
 dependencies = [
+ "ed25519-dalek",
  "getrandom 0.3.4",
  "layerx-crypto",
  "layerx-proof",
@@ -2551,6 +2555,7 @@ dependencies = [
  "indexmap",
  "toml_datetime",
  "toml_parser",
+ "toml_writer",
  "winnow",
 ]
 
@@ -2562,6 +2567,12 @@ checksum = "1d38ac1cf9b95face32296c0a3ede1fdc270627c9d9c02a7274dd6d960dc4d56"
 dependencies = [
  "winnow",
 ]
+
+[[package]]
+name = "toml_writer"
+version = "1.1.2+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d56353a2a665ad0f41a421187180aab746c8c325620617ad883a99a1cbe66d2"
 
 [[package]]
 name = "tracing"

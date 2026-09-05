@@ -1035,6 +1035,18 @@ function verifyProgramStateOutcome(receipt: ProtocolReceipt, authority: Authoriz
   verifyStateChain(receipt, authority);
 }
 
+export async function verifyProgramLifecycleReceipt(canonicalReceipt: Uint8Array, expectedActivity: Uint8Array, sequencerPublicKey: Uint8Array): Promise<ReceiptVerification> {
+  const canonical = new Uint8Array(canonicalReceipt);
+  expectedActivity = new Uint8Array(expectedActivity);
+  sequencerPublicKey = new Uint8Array(sequencerPublicKey);
+  const { receipt, unsignedBytes } = decodeProtocolReceipt(canonical);
+  if (receipt.protocolVersion !== 3 || receipt.moduleId !== 9 || receipt.moduleVersion !== 4 || receipt.operation !== 0 || receipt.programOutcome !== undefined) return receiptFailure(ReceiptFailureCode.Operation);
+  if (!equal(receipt.activityId, exactBytes(expectedActivity, 32))) return receiptFailure(ReceiptFailureCode.ActivityId);
+  const receiptDigest = await sha256(RECEIPT_DOMAIN, unsignedBytes);
+  if (!await verifyEd25519(exactBytes(sequencerPublicKey, 32), receipt.sequencerSignature, receiptDigest)) return receiptFailure(ReceiptFailureCode.SequencerSignature);
+  return Object.freeze({ level: "sequencer-signed", receipt, canonicalBytes: canonical, receiptDigest });
+}
+
 export async function verifyReceiptOutcome(
   canonicalReceipt: Uint8Array,
   authorized: AuthorizedReceiptBatch,

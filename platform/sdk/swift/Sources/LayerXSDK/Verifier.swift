@@ -450,7 +450,28 @@ public enum LocalVerifier {
         return ReceiptVerification(level: "sequencer-signed", receipt: receipt, canonicalBytes: canonicalReceipt, receiptDigest: receiptDigest)
     }
 
-    public static func verifyReceipt(_ canonicalReceipt: Data, authorized: AuthorizedReceiptBatch, protocolVersion: UInt16 = 2) async throws -> ReceiptVerification {
+    public static func verifyProgramLifecycleReceipt(
+    _ canonical: Data, expectedActivity: Data, sequencer: Data
+  ) throws -> ReceiptVerification {
+    let decoded = try decodeProtocolReceipt(canonical)
+    let receipt = decoded.receipt
+    guard receipt.protocolVersion == 3, receipt.moduleID == 9, receipt.moduleVersion == 4,
+      receipt.operation == 0,
+      receipt.programOutcome == nil, expectedActivity.count == 32, !allZero(expectedActivity),
+      receipt.activityID == expectedActivity,
+      sequencer.count == 32, !allZero(sequencer)
+    else { throw receiptFailure(.receiptShape) }
+    let receiptDigest = digest(receiptDomain, decoded.unsignedBytes)
+    guard
+      verifyEd25519(
+        publicKey: sequencer, signature: receipt.sequencerSignature, message: receiptDigest)
+    else { throw receiptFailure(.sequencerSignature) }
+    return ReceiptVerification(
+      level: "sequencer-signed", receipt: receipt, canonicalBytes: canonical,
+      receiptDigest: receiptDigest)
+  }
+
+  public static func verifyReceipt(_ canonicalReceipt: Data, authorized: AuthorizedReceiptBatch, protocolVersion: UInt16 = 2) async throws -> ReceiptVerification {
         let verified = try await verifyReceiptOutcome(canonicalReceipt, authorized: authorized, protocolVersion: protocolVersion)
         guard verified.receipt.resultCode == 0 else { throw receiptFailure(.resultCode) }
         return verified

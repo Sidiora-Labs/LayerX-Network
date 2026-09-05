@@ -37,6 +37,7 @@ const SOURCES: [(&str, &str); 3] = [
 pub const JVM_FILES: &[&str] = &[
     "pom.xml",
     "src/main/java/com/sidiora/layerx/sdk/HttpProductionTransport.java",
+    "src/main/java/com/sidiora/layerx/sdk/ProgramLifecycleRoutes.java",
     "src/main/java/com/sidiora/layerx/sdk/GeneratedContract.java",
     "src/main/java/com/sidiora/layerx/sdk/GeneratedSchema.java",
     "src/main/java/com/sidiora/layerx/sdk/GeneratedMirror.java",
@@ -103,6 +104,7 @@ const OUTPUTS: [(&str, &str, &str, Option<&[&str]>); 12] = [
             "generated.go",
             "mirror_generated.go",
             "receipt_generated.go",
+            "program_lifecycle_generated.go",
         ]),
     ),
     ("platform-jvm", "jvm", "platform/sdk/jvm", Some(JVM_FILES)),
@@ -120,6 +122,7 @@ const OUTPUTS: [(&str, &str, &str, Option<&[&str]>); 12] = [
             "OperationCatalog.swift",
             "MirrorSchema.swift",
             "ReceiptContract.swift",
+            "ProgramLifecycleRoutes.swift",
         ]),
     ),
     (
@@ -130,6 +133,7 @@ const OUTPUTS: [(&str, &str, &str, Option<&[&str]>); 12] = [
             "OperationCatalog.cs",
             "MirrorSchema.cs",
             "ReceiptContract.cs",
+            "ProgramLifecycleRoutes.cs",
         ]),
     ),
     (
@@ -1705,6 +1709,7 @@ pub fn check(repo_root: &Path, lock_path: &Path) -> Result<(), String> {
         )
     })?;
     let committed = parse_lock(&committed)?;
+    lifecycle_sources(repo_root, true)?;
     let live = capture(repo_root)?;
     drift_gate(&committed, &live)?;
     check_rust_operation_catalog(repo_root)?;
@@ -1720,6 +1725,7 @@ pub fn check(repo_root: &Path, lock_path: &Path) -> Result<(), String> {
 ///
 /// Fails when a tree is unreadable or the lock cannot be written.
 pub fn write_lock(repo_root: &Path, lock_path: &Path) -> Result<(), String> {
+    lifecycle_sources(repo_root, false)?;
     write_rust_operation_catalog(repo_root)?;
     write_go(repo_root)?;
     write_jvm_contract(repo_root)?;
@@ -1732,6 +1738,25 @@ pub fn write_lock(repo_root: &Path, lock_path: &Path) -> Result<(), String> {
             .map_err(|error| format!("create {}: {error}", parent.display()))?;
     }
     fs::write(lock_path, text).map_err(|error| format!("write {}: {error}", lock_path.display()))
+}
+
+fn lifecycle_sources(repo_root: &Path, check: bool) -> Result<(), String> {
+    let mut command = Command::new("python3");
+    command.arg(repo_root.join("platform/sdk/generators/generate_lifecycle.py"));
+    command.arg(repo_root);
+    if check {
+        command.arg("--check");
+    }
+    let output = command
+        .output()
+        .map_err(|error| format!("lifecycle generator: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "lifecycle generator failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    Ok(())
 }
 
 fn run() -> Result<(), String> {

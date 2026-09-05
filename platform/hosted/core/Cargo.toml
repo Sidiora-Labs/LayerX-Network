@@ -29,6 +29,7 @@ subtle.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+layerx-programs-registry = { path = "../../../programs/crates/layerx-programs-registry" }
 native-tls.workspace = true
 
 [lints]

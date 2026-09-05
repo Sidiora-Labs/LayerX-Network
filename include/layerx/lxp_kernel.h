@@ -60,6 +60,15 @@ typedef struct lxp_module_account_snapshot {
     uint64_t next_sequence;
 } lxp_module_account_snapshot;
 
+typedef struct lxp_ledger_admission_facts {
+    uint8_t activity_binding[32];
+    uint8_t account_id[32];
+    uint32_t activity_type;
+    uint64_t next_sequence;
+    bool account_present;
+    bool bound;
+} lxp_ledger_admission_facts;
+
 typedef struct lxp_call_admission_facts {
     uint8_t activity_binding[32];
     uint8_t payer[32];
@@ -129,12 +138,16 @@ struct lxp_module_ctx {
     size_t transfer_snapshot_count;
     bool transfer_applied;
     bool commit_prepared;
+#ifdef LXP_TESTING
+    unsigned int bridge_credit_fail_stage;
+#endif
     void *activity_state;
     lxp_activity_state_release_fn activity_state_release;
     lxp_program_outcome program_outcome;
     lxp_ledger_receipt_input ledger_receipt;
     bool ledger_receipt_present;
     lxp_call_admission_facts call_admission;
+    lxp_ledger_admission_facts ledger_admission;
     const lxp_verified_receipt_index *verified_receipts;
     lxp_module_blob staged_blobs[LXP_KERNEL_MAX_STAGED_BLOBS];
     size_t staged_blob_count;
@@ -250,6 +263,12 @@ lxp_result lxp_ctx_bind_activity_state(lxp_module_ctx *ctx, void *state,
 void *lxp_ctx_activity_state(const lxp_module_ctx *ctx);
 void *lxp_ctx_take_activity_state(lxp_module_ctx *ctx);
 const uint8_t *lxp_ctx_activity_id(const lxp_module_ctx *ctx);
+lxp_result lxp_kernel_bind_ledger_admission(
+    lxp_module_ctx *ctx, const lxp_authority_resolved *authority,
+    uint32_t activity_type);
+lxp_result lxp_ctx_ledger_execution_sequence(
+    lxp_module_ctx *ctx, const uint8_t principal[32],
+    uint64_t legacy_sequence, uint64_t *sequence);
 const lxp_call_admission_facts *lxp_ctx_call_admission(
     const lxp_module_ctx *ctx);
 lxp_result lxp_ctx_bind_program_outcome(

@@ -15,7 +15,7 @@ fn selector(raw: i32) -> Result<StorageSelector, i32> {
 }
 
 /// Registers `storage_scan_scoped` without changing the frozen V1 ABI.
-pub(super) fn register_candidate(linker: &mut Linker<RuntimeState>) -> Result<(), ExecutionFault> {
+pub(super) fn register_v2(linker: &mut Linker<RuntimeState>) -> Result<(), ExecutionFault> {
     linker
         .func_wrap(
             CANDIDATE_ABI_MODULE,

@@ -2,6 +2,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "layerx/lxp_daemon.h"
+#include "layerx/lxp_bridge_credit.h"
 
 #include "layerx/lxp_activity.h"
 #include "layerx/lx_asset.h"
@@ -1609,6 +1610,38 @@ static lxp_result program_call_admission_decode(
     size_t mark;
     lxp_result status;
     lxp_result reset_status;
+    if (activity->activity_type == LXP_BRIDGE_CREDIT) {
+        lxp_bridge_profile profile;
+        lxp_bridge_credit credit;
+        const uint8_t *value;
+        size_t length;
+        uint8_t nullifier[32];
+        uint8_t principal[32];
+        lxp_u128 balance;
+        if (owner->kernel == NULL || owner->scratch == NULL ||
+            owner->kernel->state == NULL || owner->kernel->state->accounts == NULL ||
+            activity->payload.length != sizeof(credit.bytes) ||
+            activity->authority.length != 32U)
+            return LXP_ERR_NON_CANONICAL;
+        status = lxp_module_ctx_init(&ctx, owner->kernel, LXP_MODULE_BRIDGE, 0U,
+                                     owner->kernel->epoch, 0U, 0U, owner->scratch, false);
+        if (status == LXP_OK)
+            status = lxp_ctx_kv_get(&ctx, lxp_bridge_profile_key, 32U, &value, &length);
+        if (status != LXP_OK) return status;
+        if (length != sizeof(profile.bytes)) return LXP_ERR_NON_CANONICAL;
+        (void)memcpy(profile.bytes, value, length);
+        (void)memcpy(credit.bytes, activity->payload.bytes, sizeof(credit.bytes));
+        status = lxp_bridge_credit_verify(&profile, &credit, owner->network_id,
+                                          activity->protocol_version, nullifier);
+        if (status == LXP_OK)
+            status = lni_principal(owner->kernel->state->accounts, activity, principal, &balance);
+        if (status == LXP_OK &&
+            (lxp_ct_memcmp(nullifier, activity->idempotency_key, 32U) != 0 ||
+             lxp_ct_memcmp(principal, credit.bytes + 107U, 32U) != 0 ||
+             lxp_ct_memcmp(activity->authority.bytes, credit.bytes + 139U, 32U) != 0))
+            status = LXP_ERR_CONTEXT_MISMATCH;
+        return status;
+    }
     if (activity->activity_type != LX_PROGRAMS_CALL) return LXP_OK;
     if (owner->kernel == NULL || owner->scratch == NULL)
         return LXP_ERR_MODULE_DISABLED;

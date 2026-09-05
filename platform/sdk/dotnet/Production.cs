@@ -240,6 +240,9 @@ public sealed class PlatformClient
     internal async Task<JsonValue> ProgramAsync(string operation, JsonValue request, IdempotencyKey? idempotencyKey = null,
         IReadOnlyDictionary<string, string>? pathParameters = null, CancellationToken cancellationToken = default)
     {
+        var catalog = Enum.GetValues<PlatformOperation>().Select(value => value.Descriptor()).SingleOrDefault(value => value.Plane == PlatformPlane.Agent && value.Name == operation)
+            ?? throw new PlatformSdkException(SdkErrorCode.InvalidArgument, RetryClass.Never);
+        if (catalog.RequiresIdempotency && idempotencyKey is null) throw new PlatformSdkException(SdkErrorCode.IdempotencyRequired, RetryClass.Never);
         try
         {
             var response = await _transport.SendProgramAsync(new ProgramTransportCall(operation,
@@ -257,7 +260,7 @@ public sealed class PlatformClient
         }
         catch
         {
-            var error = operation == "program.call"
+            var error = operation == "program.call" || ProgramLifecycleRoutes.Ordinals.ContainsKey(operation)
                 ? new PlatformSdkException(SdkErrorCode.UnknownOutcome, RetryClass.UnknownOutcome)
                 : new PlatformSdkException(SdkErrorCode.TransportFailure, RetryClass.Safe);
             _telemetry?.Invoke(new(PlatformPlane.Agent, operation, "refused", error.Code));

@@ -202,7 +202,13 @@ public final class PlatformClient: @unchecked Sendable {
 
     func program(_ operation: String, request: JSONValue, idempotencyKey: IdempotencyKey? = nil,
                  pathParameters: [String: String] = [:]) async throws -> JSONValue {
-        do {
+        guard let catalog = PlatformOperation(rawValue: "agent:\(operation)") else {
+      throw PlatformSDKError(code: .invalidArgument, retry: .never)
+    }
+    if catalog.descriptor.requiresIdempotency && idempotencyKey == nil {
+      throw PlatformSDKError(code: .idempotencyRequired, retry: .never)
+    }
+    do {
             let response = try await transport.sendProgram(.init(operation: operation, request: request,
                 pathParameters: pathParameters, idempotencyKey: idempotencyKey))
             telemetry?(.init(plane: .agent, operation: operation, outcome: .completed, code: nil))
@@ -211,8 +217,10 @@ public final class PlatformClient: @unchecked Sendable {
             telemetry?(.init(plane: .agent, operation: operation, outcome: .refused, code: error.code))
             throw error
         } catch {
-            let code: SDKErrorCode = operation == "program.call" ? .unknownOutcome : .transportFailure
-            let retry: RetryClass = operation == "program.call" ? .unknownOutcome : .safe
+            let mutation =
+        operation == "program.call" || ProgramLifecycleRoutes.ordinals[operation] != nil
+      let code: SDKErrorCode = mutation ? .unknownOutcome : .transportFailure
+            let retry: RetryClass = mutation ? .unknownOutcome : .safe
             telemetry?(.init(plane: .agent, operation: operation, outcome: .refused, code: code))
             throw PlatformSDKError(code: code, retry: retry)
         }

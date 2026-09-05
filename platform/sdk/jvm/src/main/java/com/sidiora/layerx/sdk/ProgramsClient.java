@@ -223,6 +223,39 @@ public final class ProgramsClient {
         public boolean unknown() { return state == SubmissionState.UNKNOWN; }
     }
 
+    public CompletionStage<LocalVerifier.ReceiptVerification> lifecycleReceipt(NativeProgramLifecycleRequest request) {
+        if (protocolVersion != 3) invalid();
+        return raw("program.receipt", object().put("idempotency_key", request.idempotencyKey()).put("expected_activity_id", hex(request.activityId()))
+            .put("requested_verification_level", "sequencer-signed"), Map.of("idempotency_key", request.idempotencyKey()), null).thenApply(value -> {
+                requireFields(value, "activity_id", "receipt");
+                if (!text(value, "activity_id").equals(hex(request.activityId()))) invalidVerification();
+                return LocalVerifier.verifyProgramLifecycleReceipt(boundedHex(text(value, "receipt"), false), request.activityId(), sequencerPublicKey);
+            });
+    }
+
+    public CompletionStage<LocalVerifier.ReceiptVerification> deploy(NativeProgramDeploy operation, byte[] signedActivity, IdempotencyKey key) { return lifecycle(operation, signedActivity, key); }
+    public CompletionStage<LocalVerifier.ReceiptVerification> upgrade(NativeProgramUpgrade operation, byte[] signedActivity, IdempotencyKey key) { return lifecycle(operation, signedActivity, key); }
+    public CompletionStage<LocalVerifier.ReceiptVerification> windDown(NativeProgramWindDown operation, byte[] signedActivity, IdempotencyKey key) { return lifecycle(operation, signedActivity, key); }
+
+    private CompletionStage<LocalVerifier.ReceiptVerification> lifecycle(NativeProgramLifecycle operation, byte[] signedActivity, IdempotencyKey key) {
+        NativeProgramLifecycleRequest request = new NativeProgramLifecycleRequest(operation, signedActivity);
+        if (protocolVersion != 3 || key == null || !request.idempotencyKey().equals(key.value())) invalid();
+        String name = ProgramLifecycleRoutes.ORDINALS.entrySet().stream().filter(entry -> entry.getValue() == request.ordinal()).findFirst().orElseThrow().getKey();
+        return raw(name, object().put("payload", hex(request.payload())).put("signed_activity", hex(request.signedActivity())), Map.of(), key).thenApply(value -> {
+            try {
+                requireFields(value, "state", "activity_id", "receipt", "terminal_payload", "call_graph");
+                String state = text(value, "state");
+                if (!Set.of("executed", "refused").contains(state) || !text(value, "terminal_payload").isEmpty() || !text(value, "call_graph").isEmpty()
+                        || !text(value, "activity_id").equals(hex(request.activityId()))) invalidVerification();
+                var verified = LocalVerifier.verifyProgramLifecycleReceipt(boundedHex(text(value, "receipt"), false), request.activityId(), sequencerPublicKey);
+                if (state.equals("executed") != (verified.receipt().resultCode() == 0)) invalidVerification();
+                return verified;
+            } catch (RuntimeException error) {
+                throw new PlatformSdkException(PlatformSdkException.Code.UNKNOWN_OUTCOME, PlatformSdkException.Retry.UNKNOWN_OUTCOME, null, null, null);
+            }
+        });
+    }
+
     private final ProductionClient client;
     private final byte[] sequencerPublicKey;
     private final int protocolVersion;
@@ -603,7 +636,6 @@ public final class ProgramsClient {
 
     private record ProgramFundingBinding(byte[] owner, byte[] destination, byte[] asset) {}
 
-    private record CapabilityKey(int order, List<byte[]> fields) {}
 
     private record OccupancyCharge(byte[] payer, BigInteger amountDue, boolean paid,
                                    BigInteger arrearsAfter) {}
@@ -1148,81 +1180,12 @@ public final class ProgramsClient {
         return concatenate(path, new byte[] {(byte) depth});
     }
 
-    private static void decodeCapabilitySet(byte[] encoded, boolean candidate) {
-        if (encoded.length < 2 || encoded.length > 65_535) throw new IllegalArgumentException();
-        TerminalCursor cursor = new TerminalCursor(encoded, 0);
-        int count = cursor.u16();
-        if (count > 269) throw new IllegalArgumentException();
-        CapabilityKey prior = null;
-        int balanceViews = 0;
-        for (int index = 0; index < count; index++) {
-            int tag = cursor.u8();
-            CapabilityKey key;
-            if (tag == 1) key = new CapabilityKey(0, List.of());
-            else if (tag == 2) key = new CapabilityKey(1, List.of());
-            else if (tag == 3) key = new CapabilityKey(2, List.of());
-            else if (tag == 4) {
-                byte[] program = cursor.take(32);
-                requireNonzero(program);
-                key = new CapabilityKey(3, List.of(program));
-            } else if (tag == 5) {
-                byte[] asset = cursor.take(32);
-                byte[] destination = cursor.take(32);
-                BigInteger maximum = cursor.integer(16);
-                requireNonzero(asset);
-                requireNonzero(destination);
-                if (maximum.signum() == 0) throw new IllegalArgumentException();
-                key = new CapabilityKey(4, List.of(asset, destination));
-            } else if (tag == 9 && candidate) {
-                byte[] owner = cursor.take(32);
-                requireNonzero(owner);
-                int seedLength = cursor.u16();
-                if (seedLength > 128) throw new IllegalArgumentException();
-                byte[] seed = cursor.take(seedLength);
-                byte[] source = cursor.take(32);
-                byte[] asset = cursor.take(32);
-                byte[] destination = cursor.take(32);
-                BigInteger maximum = cursor.integer(16);
-                requireNonzero(asset);
-                requireNonzero(destination);
-                if (maximum.signum() == 0
-                        || !MessageDigest.isEqual(deriveProgramAccount(owner, seed), source)) {
-                    throw new IllegalArgumentException();
-                }
-                key = new CapabilityKey(5, List.of(owner, seed, source, asset, destination));
-            } else if (tag == 6) {
-                byte[] digest = cursor.take(32);
-                requireNonzero(digest);
-                key = new CapabilityKey(6, List.of(digest));
-            } else if (tag == 10 && candidate) {
-                byte[] account = cursor.take(32);
-                byte[] asset = cursor.take(32);
-                byte[] digest = cursor.take(32);
-                requireNonzero(account);
-                requireNonzero(asset);
-                requireNonzero(digest);
-                balanceViews++;
-                if (balanceViews > 32) throw new IllegalArgumentException();
-                key = new CapabilityKey(7, List.of(account, asset));
-            } else if (tag == 7) key = new CapabilityKey(8, List.of());
-            else if (tag == 8) key = new CapabilityKey(9, List.of());
-            else throw new IllegalArgumentException();
-            if (prior != null && compareCapabilityKeys(prior, key) >= 0) {
-                throw new IllegalArgumentException();
+    private static void decodeCapabilitySet(byte[] encoded, boolean v2) {
+        for (var grant : NativeCapabilitySet.decode(encoded)) {
+            if (!v2 && (grant instanceof NativeCapabilitySet.ProgramSpend || grant instanceof NativeCapabilitySet.BalanceView)) {
+                throw new IllegalArgumentException("ABI v2 capability required");
             }
-            prior = key;
         }
-        cursor.finish();
-    }
-
-    private static int compareCapabilityKeys(CapabilityKey left, CapabilityKey right) {
-        if (left.order() != right.order()) return Integer.compare(left.order(), right.order());
-        int length = Math.min(left.fields().size(), right.fields().size());
-        for (int index = 0; index < length; index++) {
-            int order = compareBytes(left.fields().get(index), right.fields().get(index));
-            if (order != 0) return order;
-        }
-        return Integer.compare(left.fields().size(), right.fields().size());
     }
 
     static void verifyOccupancyBinding(byte[] encoded, byte[] asset, BigInteger expectedByteBatches,
@@ -1596,11 +1559,7 @@ public final class ProgramsClient {
         value.set("budget", object().put("fuel", call.budget().fuel().toString())
             .put("fee_limit", call.budget().feeLimit().toString()));
         if (call.nativeCall() != null) {
-            NativeProgramCall n = call.nativeCall(); value.put("payload_encoding", "native-v1");
-            ObjectNode nativeValue = object().put("guest_abi", n.guestAbi()).put("entrypoint", n.entrypoint())
-                .put("capabilities_hex", hex(n.capabilities())).put("access_declaration_hex", hex(n.accessDeclaration())).put("response_capacity", n.responseCapacity());
-            ArrayNode resources = nativeValue.putArray("resources"); for (long resource : n.resources()) resources.add(Long.toUnsignedString(resource));
-            value.set("native_call", nativeValue); return value;
+            return object().put("payload", hex(call.nativeCall().encode())).put("signed_activity", hex(call.signedActivity()));
         }
         ArrayNode capabilities = value.putArray("capabilities");
         call.capabilities().forEach(item -> capabilities.add(item.wire()));

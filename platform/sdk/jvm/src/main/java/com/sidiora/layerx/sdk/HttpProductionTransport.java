@@ -28,6 +28,9 @@ public final class HttpProductionTransport implements ProductionTransport {
     private record ProgramRoute(String method, String path, List<String> pathParameters,
                                 boolean idempotency) {}
     private static final Map<String, ProgramRoute> PROGRAM_ROUTES = Map.of(
+        "program.deploy", new ProgramRoute("POST", ProgramLifecycleRoutes.PATHS.get("program.deploy"), List.of(), true),
+        "program.upgrade", new ProgramRoute("POST", ProgramLifecycleRoutes.PATHS.get("program.upgrade"), List.of(), true),
+        "program.wind-down", new ProgramRoute("POST", ProgramLifecycleRoutes.PATHS.get("program.wind-down"), List.of(), true),
         "program.discover", new ProgramRoute("GET", "/v1/programs/registry/{program_id}",
             List.of("program_id"), false),
         "program.interface", new ProgramRoute("GET", "/v1/programs/registry/{program_id}/interface",
@@ -50,6 +53,14 @@ public final class HttpProductionTransport implements ProductionTransport {
             });
         }
         @Override public void close() { token.close(); }
+        @Override public String toString() { return "[REDACTED]"; }
+    }
+
+    public static final class ProgramsBearerCredential implements Credential, AutoCloseable {
+        private final BearerCredential credential;
+        public ProgramsBearerCredential(SecretBytes token) { credential = new BearerCredential(token); }
+        @Override public void apply(HttpRequest.Builder request) { credential.apply(request); }
+        @Override public void close() { credential.close(); }
         @Override public String toString() { return "[REDACTED]"; }
     }
 
@@ -157,7 +168,7 @@ public final class HttpProductionTransport implements ProductionTransport {
             } catch (IOException error) {
                 throw new CompletionException(programTransportFailure(call.operation()));
             } catch (PlatformSdkException error) {
-                if ("program.call".equals(call.operation())
+                if (("program.call".equals(call.operation()) || ProgramLifecycleRoutes.ORDINALS.containsKey(call.operation()))
                         && error.code() == PlatformSdkException.Code.DECODE_FAILURE) {
                     throw new CompletionException(unknownOutcome());
                 }
@@ -201,7 +212,7 @@ public final class HttpProductionTransport implements ProductionTransport {
             throw PlatformSdkException.invalidArgument();
         }
         validateProgramRequest(call);
-        byte[] body = mapper.writeValueAsBytes(call.request());
+        byte[] body = "POST".equals(route.method()) ? java.util.HexFormat.of().parseHex(call.request().path("signed_activity").asText()) : mapper.writeValueAsBytes(call.request());
         if (body.length == 0 || body.length > MAXIMUM_PROGRAMS_REQUEST_BYTES) {
             throw PlatformSdkException.invalidArgument();
         }
@@ -214,13 +225,16 @@ public final class HttpProductionTransport implements ProductionTransport {
             path = path.replace("{" + parameter + "}", encodePath(value));
         }
         var builder = HttpRequest.newBuilder(rootEndpoint(agentEndpoint, path)).timeout(timeout)
-            .header("Accept", "application/json").header("Content-Type", "application/json")
+            .header("Accept", "application/json").header("Content-Type", "POST".equals(route.method()) ? "application/octet-stream" : "application/json")
             .header("User-Agent", "layerx-jvm/0.1.0");
         if (route.idempotency()) builder.header("Idempotency-Key", call.idempotencyKey().value());
         if (credential != null) credential.apply(builder);
         HttpRequest request = builder.method(route.method(), HttpRequest.BodyPublishers.ofByteArray(body)).build();
         List<String> authorization = request.headers().allValues("Authorization");
-        if (authorization.size() != 1 || !validLayerXAuthorization(authorization.get(0))) {
+        boolean bearer = credential instanceof ProgramsBearerCredential && authorization.size() == 1
+            && authorization.get(0).startsWith("Bearer ") && authorization.get(0).length() > 7
+            && authorization.get(0).substring(7).chars().allMatch(value -> value >= 0x21 && value <= 0x7e);
+        if (authorization.size() != 1 || !(bearer || validLayerXAuthorization(authorization.get(0)))) {
             throw new PlatformSdkException(PlatformSdkException.Code.CAPABILITY_REFUSAL,
                 PlatformSdkException.Retry.NEVER, null, null, null);
         }
@@ -228,6 +242,15 @@ public final class HttpProductionTransport implements ProductionTransport {
     }
 
     private static void validateProgramRequest(ProgramsCall call) {
+        Integer ordinal = ProgramLifecycleRoutes.ORDINALS.get(call.operation());
+        if (ordinal != null) {
+            if (!exactFields(call.request(), "payload", "signed_activity") || !canonicalBoundedHex(call.request().get("payload"), MAXIMUM_PROGRAM_BYTES, false)
+                    || !canonicalBoundedHex(call.request().get("signed_activity"), MAXIMUM_PROGRAM_BYTES, false)) throw PlatformSdkException.invalidArgument();
+            var hex = java.util.HexFormat.of();
+            var bound = new NativeProgramLifecycleRequest(NativeProgramLifecycle.decode(ordinal, hex.parseHex(call.request().path("payload").asText())), hex.parseHex(call.request().path("signed_activity").asText()));
+            if (call.idempotencyKey() == null || !bound.idempotencyKey().equals(call.idempotencyKey().value())) throw PlatformSdkException.invalidArgument();
+            return;
+        }
         JsonNode request = call.request();
         switch (call.operation()) {
             case "program.discover", "program.interface" -> {
@@ -253,7 +276,15 @@ public final class HttpProductionTransport implements ProductionTransport {
                     throw PlatformSdkException.invalidArgument();
                 }
             }
-            case "program.simulate", "program.call" -> validateProgramCall(request);
+            case "program.simulate", "program.call" -> {
+                if (exactFields(request, "payload", "signed_activity")) {
+                    if (!canonicalBoundedHex(request.get("payload"), MAXIMUM_PROGRAM_BYTES, false) || !canonicalBoundedHex(request.get("signed_activity"), MAXIMUM_PROGRAM_BYTES, false)) throw PlatformSdkException.invalidArgument();
+                    var hex = java.util.HexFormat.of();
+                    byte[] payload = NativeProgramCall.decode(hex.parseHex(request.path("payload").asText())).encode();
+                    byte[] key = NativeProgramLifecycleRequest.bind(3, payload, hex.parseHex(request.path("signed_activity").asText()));
+                    if ("program.call".equals(call.operation()) && (call.idempotencyKey() == null || !call.idempotencyKey().value().equals(hex.formatHex(key)))) throw PlatformSdkException.invalidArgument();
+                } else validateProgramCall(request);
+            }
             default -> throw PlatformSdkException.invalidArgument();
         }
     }
@@ -370,6 +401,18 @@ public final class HttpProductionTransport implements ProductionTransport {
         try {
             JsonNode envelope = mapper.readTree(encoded);
             if (envelope == null || !envelope.isObject()) throw decodeFailure(null);
+            if ((ProgramLifecycleRoutes.ORDINALS.containsKey(operation) || operation.equals("program.receipt")) && status >= 200 && status < 300 && exactFields(envelope, "result")) return mapper.convertValue(envelope.get("result"), type);
+            if (ProgramLifecycleRoutes.ORDINALS.containsKey(operation) && status >= 400 && status < 500 && exactFields(envelope, "error")) {
+                JsonNode refusal = envelope.get("error"); String code = requiredText(refusal.get("code")); String retry = requiredText(refusal.get("retry"));
+                Long retryAfter = null;
+                if (code.length() > 256 || !(exactFields(refusal, "code", "retry") || exactFields(refusal, "code", "retry", "retry_after_seconds"))) throw decodeFailure(null);
+                if (retry.equals("after")) {
+                    JsonNode seconds = refusal.get("retry_after_seconds"); if (seconds == null || !seconds.isIntegralNumber() || !seconds.canConvertToLong() || seconds.longValue() <= 0) throw decodeFailure(null);
+                    if (seconds.longValue() > Long.MAX_VALUE / 1000) throw decodeFailure(null); retryAfter = seconds.longValue() * 1000;
+                } else if (!retry.equals("never") || !exactFields(refusal, "code", "retry")) throw decodeFailure(null);
+                var error = switch (status) { case 401, 403 -> PlatformSdkException.Code.CAPABILITY_REFUSAL; case 409 -> PlatformSdkException.Code.IDEMPOTENCY_CONFLICT; case 429 -> PlatformSdkException.Code.RATE_LIMIT; default -> PlatformSdkException.Code.CORE_REJECTION; };
+                throw new PlatformSdkException(error, retry.equals("after") ? PlatformSdkException.Retry.AFTER : PlatformSdkException.Retry.NEVER, null, null, retryAfter);
+            }
             if (envelope.has("class")) {
                 if (status >= 200 && status < 300 || !exactFields(envelope,
                         "class", "protocol_result_code", "retriability", "request_id", "reason")) {
@@ -606,7 +649,7 @@ public final class HttpProductionTransport implements ProductionTransport {
         return trace;
     }
     private static PlatformSdkException programTransportFailure(String operation) {
-        return "program.call".equals(operation) ? unknownOutcome() : new PlatformSdkException(
+        return ("program.call".equals(operation) || ProgramLifecycleRoutes.ORDINALS.containsKey(operation)) ? unknownOutcome() : new PlatformSdkException(
             PlatformSdkException.Code.TRANSPORT_FAILURE, PlatformSdkException.Retry.SAFE, null, null, null);
     }
     private static PlatformSdkException programDecodeFailure(String operation, String requestId) {

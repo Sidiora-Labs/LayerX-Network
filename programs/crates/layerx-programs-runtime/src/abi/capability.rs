@@ -190,29 +190,80 @@ impl CapabilitySet {
         for capability in self.0.values() {
             match capability {
                 Capability::StorageRead => {
-                    for reachable in &reachable_programs { storage.insert(crate::StorageAccess::new(crate::StorageNamespace::principal(*reachable, principal), crate::AccessMode::Read, crate::KeyAccess::prefix([])?)?); }
+                    for reachable in &reachable_programs {
+                        storage.insert(crate::StorageAccess::new(
+                            crate::StorageNamespace::principal(*reachable, principal),
+                            crate::AccessMode::Read,
+                            crate::KeyAccess::prefix([])?,
+                        )?);
+                    }
                 }
                 Capability::StorageWrite => {
-                    for reachable in &reachable_programs { storage.insert(crate::StorageAccess::new(crate::StorageNamespace::principal(*reachable, principal), crate::AccessMode::Write, crate::KeyAccess::prefix([])?)?); }
+                    for reachable in &reachable_programs {
+                        storage.insert(crate::StorageAccess::new(
+                            crate::StorageNamespace::principal(*reachable, principal),
+                            crate::AccessMode::Write,
+                            crate::KeyAccess::prefix([])?,
+                        )?);
+                    }
                 }
                 Capability::SharedStorageRead => {
-                    for reachable in &reachable_programs { storage.insert(crate::StorageAccess::new(crate::StorageNamespace::shared(*reachable), crate::AccessMode::Read, crate::KeyAccess::prefix([])?)?); }
+                    for reachable in &reachable_programs {
+                        storage.insert(crate::StorageAccess::new(
+                            crate::StorageNamespace::shared(*reachable),
+                            crate::AccessMode::Read,
+                            crate::KeyAccess::prefix([])?,
+                        )?);
+                    }
                 }
                 Capability::SharedStorageWrite => {
-                    for reachable in &reachable_programs { storage.insert(crate::StorageAccess::new(crate::StorageNamespace::shared(*reachable), crate::AccessMode::Write, crate::KeyAccess::prefix([])?)?); }
+                    for reachable in &reachable_programs {
+                        storage.insert(crate::StorageAccess::new(
+                            crate::StorageNamespace::shared(*reachable),
+                            crate::AccessMode::Write,
+                            crate::KeyAccess::prefix([])?,
+                        )?);
+                    }
                 }
                 Capability::Transfer402 { asset, to, .. } => {
-                    accounts.insert(crate::AccountAccess::new(principal.bytes(), *asset, crate::AccessMode::Write)?);
-                    accounts.insert(crate::AccountAccess::new(*to, *asset, crate::AccessMode::Write)?);
+                    accounts.insert(crate::AccountAccess::new(
+                        principal.bytes(),
+                        *asset,
+                        crate::AccessMode::Write,
+                    )?);
+                    accounts.insert(crate::AccountAccess::new(
+                        *to,
+                        *asset,
+                        crate::AccessMode::Write,
+                    )?);
                 }
-                Capability::ProgramSpend { source_account, asset, to, .. } => {
-                    accounts.insert(crate::AccountAccess::new(*source_account, *asset, crate::AccessMode::Write)?);
-                    accounts.insert(crate::AccountAccess::new(*to, *asset, crate::AccessMode::Write)?);
+                Capability::ProgramSpend {
+                    source_account,
+                    asset,
+                    to,
+                    ..
+                } => {
+                    accounts.insert(crate::AccountAccess::new(
+                        *source_account,
+                        *asset,
+                        crate::AccessMode::Write,
+                    )?);
+                    accounts.insert(crate::AccountAccess::new(
+                        *to,
+                        *asset,
+                        crate::AccessMode::Write,
+                    )?);
                 }
                 Capability::BalanceView { account, asset, .. } => {
-                    accounts.insert(crate::AccountAccess::new(*account, *asset, crate::AccessMode::Read)?);
+                    accounts.insert(crate::AccountAccess::new(
+                        *account,
+                        *asset,
+                        crate::AccessMode::Read,
+                    )?);
                 }
-                Capability::Call { program } => { callees.insert(*program); }
+                Capability::Call { program } => {
+                    callees.insert(*program);
+                }
                 Capability::EmitEvent | Capability::ReceiptRead { .. } => {}
             }
         }
@@ -520,14 +571,15 @@ impl CapabilitySet {
         Self::decode_versioned_canonical(bytes, false)
     }
 
-    pub(crate) fn decode_candidate_canonical(bytes: &[u8]) -> Result<Vec<Capability>, AbiError> {
+    /// Decodes the frozen ABI-v2 capability set, requiring exact canonical bytes.
+    ///
+    /// # Errors
+    /// Refuses unknown tags, invalid grants, bounds violations and noncanonical encoding.
+    pub fn decode_v2_canonical(bytes: &[u8]) -> Result<Vec<Capability>, AbiError> {
         Self::decode_versioned_canonical(bytes, true)
     }
 
-    fn decode_versioned_canonical(
-        bytes: &[u8],
-        candidate_v2: bool,
-    ) -> Result<Vec<Capability>, AbiError> {
+    fn decode_versioned_canonical(bytes: &[u8], abi_v2: bool) -> Result<Vec<Capability>, AbiError> {
         if bytes.len() < 2 || bytes.len() > MAX_CAPABILITY_ENCODING_BYTES {
             return Err(AbiError::InvalidEncoding);
         }
@@ -557,7 +609,7 @@ impl CapabilitySet {
                 6 => Capability::ReceiptRead {
                     receipt_digest: take_array::<32>(bytes, &mut cursor)?,
                 },
-                9 if candidate_v2 => {
+                9 if abi_v2 => {
                     let owner_program = ProgramId::new(take_array::<32>(bytes, &mut cursor)?)?;
                     let seed_length =
                         usize::from(u16::from_be_bytes(take_array::<2>(bytes, &mut cursor)?));
@@ -574,7 +626,7 @@ impl CapabilitySet {
                         maximum_amount: u128::from_be_bytes(take_array::<16>(bytes, &mut cursor)?),
                     }
                 }
-                10 if candidate_v2 => Capability::BalanceView {
+                10 if abi_v2 => Capability::BalanceView {
                     account: take_array::<32>(bytes, &mut cursor)?,
                     asset: take_array::<32>(bytes, &mut cursor)?,
                     receipt_digest: take_array::<32>(bytes, &mut cursor)?,
@@ -674,30 +726,26 @@ mod tests {
     }
 
     #[test]
-    fn balance_sight_count_and_candidate_encoding_are_bounded() {
+    fn balance_sight_count_and_v2_encoding_are_bounded() {
         assert_eq!(super::super::MAX_BALANCE_VIEW_GRANTS, 32);
-        let grants = (1_u8..=32).map(|index| {
-            Capability::BalanceView {
-                account: [index; 32],
-                asset: [100; 32],
-                receipt_digest: [101; 32],
-            }
+        let grants = (1_u8..=32).map(|index| Capability::BalanceView {
+            account: [index; 32],
+            asset: [100; 32],
+            receipt_digest: [101; 32],
         });
         let bounded = CapabilitySet::new(grants)
             .unwrap_or_else(|error| panic!("bounded sight grants: {error}"));
         let encoded = bounded.canonical_encoding();
-        assert!(CapabilitySet::decode_candidate_canonical(&encoded).is_ok());
+        assert!(CapabilitySet::decode_v2_canonical(&encoded).is_ok());
         assert_eq!(
             CapabilitySet::decode_canonical(&encoded),
             Err(AbiError::InvalidEncoding)
         );
-        let over_limit = (1_u8..=33).map(
-            |index| Capability::BalanceView {
-                account: [index; 32],
-                asset: [102; 32],
-                receipt_digest: [103; 32],
-            },
-        );
+        let over_limit = (1_u8..=33).map(|index| Capability::BalanceView {
+            account: [index; 32],
+            asset: [102; 32],
+            receipt_digest: [103; 32],
+        });
         assert_eq!(
             CapabilitySet::new(over_limit),
             Err(AbiError::InvalidCapability)
@@ -740,7 +788,7 @@ mod tests {
     }
 
     #[test]
-    fn frozen_v1_encoding_remains_exact_and_refuses_the_candidate_tag() {
+    fn frozen_v1_encoding_remains_exact_and_refuses_the_v2_tag() {
         let frozen = CapabilitySet::new([Capability::StorageRead])
             .unwrap_or_else(|error| panic!("frozen grant: {error}"));
         assert_eq!(frozen.canonical_encoding(), [0, 1, 1]);
@@ -764,7 +812,7 @@ mod tests {
             Err(AbiError::InvalidEncoding)
         );
         assert_eq!(
-            CapabilitySet::decode_candidate_canonical(&encoded)
+            CapabilitySet::decode_v2_canonical(&encoded)
                 .and_then(CapabilitySet::new)
                 .map(|decoded| decoded.canonical_encoding()),
             Ok(encoded)
@@ -772,9 +820,9 @@ mod tests {
     }
 
     #[test]
-    fn candidate_decoder_rejects_unknown_noncanonical_and_unbound_grants() {
+    fn v2_decoder_rejects_unknown_noncanonical_and_unbound_grants() {
         assert_eq!(
-            CapabilitySet::decode_candidate_canonical(&[0, 1, 0xff]),
+            CapabilitySet::decode_v2_canonical(&[0, 1, 0xff]),
             Err(AbiError::InvalidEncoding)
         );
         let owner = program(4);

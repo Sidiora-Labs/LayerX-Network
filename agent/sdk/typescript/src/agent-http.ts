@@ -1,5 +1,6 @@
 import * as http from "node:http";
 import * as https from "node:https";
+import { bindSignedProgramLifecycle } from "./program-wire.js";
 
 import type { Operation as AgentOperation } from "./generated/client.js";
 import {
@@ -23,6 +24,9 @@ interface AgentRoute {
 }
 
 const PROGRAM_ROUTES: Readonly<Partial<Record<AgentOperation, AgentRoute>>> = Object.freeze({
+  "program.deploy": Object.freeze({ method: "POST", path: "/v1/programs/deploy" }),
+  "program.upgrade": Object.freeze({ method: "POST", path: "/v1/programs/upgrade" }),
+  "program.wind-down": Object.freeze({ method: "POST", path: "/v1/programs/wind-down" }),
   "program.discover": Object.freeze({ method: "GET", path: "/v1/programs/registry/{program_id}", pathField: "program_id" }),
   "program.interface": Object.freeze({ method: "GET", path: "/v1/programs/registry/{program_id}/interface", pathField: "program_id" }),
   "program.simulate": Object.freeze({ method: "POST", path: "/v1/programs/simulate" }),
@@ -98,7 +102,7 @@ export class AgentHttpTransport implements ProductionTransport {
     const path = route.pathField === undefined
       ? route.path
       : route.path.replace(`{${route.pathField}}`, encodeURIComponent(hex32Field(request, route.pathField)));
-    if (call.operation === "program.call") {
+    if (isMutation(call.operation)) {
       if (call.idempotencyKey === undefined || !HEX32.test(call.idempotencyKey)) throw invalidArgument();
     } else if (call.idempotencyKey !== undefined) {
       throw invalidArgument();
@@ -106,13 +110,22 @@ export class AgentHttpTransport implements ProductionTransport {
     requireRequestedVerification(call.operation as AgentOperation, request);
     requireExactRequest(call.operation as AgentOperation, request);
     let body: Buffer;
-    try { body = Buffer.from(JSON.stringify(request), "utf8"); }
+    try {
+      if (route.method === "POST") {
+        body = encodeProgramMutationBody(request.signed_activity);
+      } else body = Buffer.from(JSON.stringify(request), "utf8");
+    }
     catch { throw invalidArgument(); }
     if (body.length > MAX_REQUEST_BYTES) throw invalidArgument();
+    if (isLifecycle(call.operation)) {
+      const ordinal = call.operation === "program.deploy" ? 1 : call.operation === "program.upgrade" ? 2 : 7;
+      try { await bindSignedProgramLifecycle(body, undefined, ordinal, call.idempotencyKey); }
+      catch { throw invalidArgument(); }
+    }
     const endpoint = routeEndpoint(this.#endpoint, path);
     const headers: http.OutgoingHttpHeaders = {
       Accept: "application/json",
-      "Content-Type": "application/json",
+      "Content-Type": route.method === "POST" ? "application/octet-stream" : "application/json",
       "Content-Length": body.length,
       "User-Agent": "layerx-typescript/0.1.0",
     };
@@ -169,6 +182,11 @@ export class AgentHttpTransport implements ProductionTransport {
   }
 }
 
+export function encodeProgramMutationBody(signed: unknown): Buffer {
+  if (typeof signed !== "string" || !/^(?:[0-9a-f]{2})+$/u.test(signed) || signed.length > 2_097_152) throw invalidArgument();
+  return Buffer.from(signed, "hex");
+}
+
 function record(value: unknown): Readonly<Record<string, unknown>> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) throw invalidArgument();
   return value as Readonly<Record<string, unknown>>;
@@ -189,6 +207,9 @@ function requireRequestedVerification(operation: AgentOperation, request: Readon
 
 function requireExactRequest(operation: AgentOperation, request: Readonly<Record<string, unknown>>): void {
   const fields: Readonly<Partial<Record<AgentOperation, readonly string[]>>> = {
+    "program.deploy": ["signed_activity"],
+    "program.upgrade": ["signed_activity"],
+    "program.wind-down": ["signed_activity"],
     "program.discover": ["program_id", "requested_verification_level"],
     "program.interface": ["program_id", "requested_verification_level"],
     "program.simulate": ["program_id", "calldata", "budget", "capabilities", "signed_activity"],
@@ -196,7 +217,8 @@ function requireExactRequest(operation: AgentOperation, request: Readonly<Record
     "program.receipt": ["idempotency_key", "expected_activity_id", "requested_verification_level"],
     "program.activity": ["activity_id", "requested_verification_level"],
   };
-  const expected = fields[operation];
+  const expected = (operation === "program.call" || operation === "program.simulate") && request.payload_encoding === "native-v1"
+    ? ["payload_encoding", "program_id", "calldata", "budget", "signed_activity", "native_call"] : fields[operation];
   if (expected === undefined || Object.keys(request).length !== expected.length || expected.some((field) => !(field in request))) throw invalidArgument();
 }
 
@@ -227,13 +249,23 @@ function exactPositive(value: number): number {
   return value;
 }
 
-function decodeEnvelope(status: number, encoded: Buffer, operation: AgentOperation): unknown {
+export function decodeEnvelope(status: number, encoded: Buffer, operation: AgentOperation): unknown {
   let envelope: Readonly<Record<string, unknown>>;
   try { envelope = record(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(encoded)) as unknown); }
   catch { throw decodeFailure(); }
   if ("class" in envelope) {
     exactKeys(envelope, ["class", "protocol_result_code", "retriability", "reason", "request_id"]);
     throw serviceError(status, envelope);
+  }
+  if (isLifecycle(operation) || operation === "program.receipt" && ("result" in envelope || "error" in envelope)) {
+    if ("error" in envelope) {
+      exactKeys(envelope, ["error"]);
+      throw decodeProgramBoundaryError(status, envelope.error);
+    }
+    if (status === 202 && envelope.state === "unknown") return envelope;
+    exactKeys(envelope, ["result"]);
+    if (status < 200 || status >= 300) throw decodeFailure();
+    return envelope.result;
   }
   exactKeys(envelope, ["request_id", "value", "verification_status"]);
   const requestId = envelope.request_id;
@@ -294,9 +326,30 @@ function validRequestId(value: unknown): value is string {
 
 function transportFailure(operation: AgentOperation): PlatformSdkError {
   return new PlatformSdkError({
-    code: operation === "program.call" ? "unknown-outcome" : "transport-failure",
-    retry: operation === "program.call" ? "unknown-outcome" : "safe",
+    code: isMutation(operation) ? "unknown-outcome" : "transport-failure",
+    retry: isMutation(operation) ? "unknown-outcome" : "safe",
   });
+}
+
+function isLifecycle(operation: string): boolean { return operation === "program.deploy" || operation === "program.upgrade" || operation === "program.wind-down"; }
+function isMutation(operation: string): boolean { return operation === "program.call" || isLifecycle(operation); }
+
+export class ProgramBoundaryError extends PlatformSdkError {
+  constructor(readonly status: number, readonly boundaryCode: string, retryAfterMs?: number) {
+    super({ code: status === 409 ? "idempotency-conflict" : status === 429 ? "rate-limit" : "core-rejection",
+      retry: retryAfterMs === undefined ? "never" : "safe", ...(retryAfterMs === undefined ? {} : { retryAfterMs }) });
+  }
+}
+
+export function decodeProgramBoundaryError(status: number, value: unknown): ProgramBoundaryError {
+  if (!Number.isInteger(status) || status < 400 || status >= 600 || value === null || typeof value !== "object" || Array.isArray(value)) throw decodeFailure();
+  const error = value as Readonly<Record<string, unknown>>;
+  if (typeof error.code !== "string" || !/^[a-z0-9_]{1,128}$/u.test(error.code)) throw decodeFailure();
+  if (error.retry === "never") { exactKeys(error, ["code", "retry"]); return new ProgramBoundaryError(status, error.code); }
+  exactKeys(error, ["code", "retry", "retry_after_seconds"]);
+  const seconds = error.retry_after_seconds;
+  if (error.retry !== "after" || typeof seconds !== "number" || !Number.isSafeInteger(seconds) || seconds <= 0 || !Number.isSafeInteger(seconds * 1000)) throw decodeFailure();
+  return new ProgramBoundaryError(status, error.code, seconds * 1000);
 }
 
 function invalidArgument(): PlatformSdkError {

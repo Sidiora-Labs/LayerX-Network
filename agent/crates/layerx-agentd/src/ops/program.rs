@@ -228,7 +228,7 @@ impl ProgramSimulationTransport for EmulatorProgramSimulationTransport {
         call: &ProgramCall,
         signed_activity: &[u8],
     ) -> Result<RawProgramSimulation, ProgramOperationError> {
-        self.simulate_document(program_call_request(call, signed_activity))
+        self.simulate_document(&program_call_request(call, signed_activity))
     }
 }
 
@@ -244,13 +244,18 @@ pub trait NativeProgramSimulationTransport {
 impl EmulatorProgramSimulationTransport {
     fn simulate_document(
         &mut self,
-        request: serde_json::Value,
+        request: &serde_json::Value,
     ) -> Result<RawProgramSimulation, ProgramOperationError> {
         let url = format!("{}/v1/programs/simulate", self.endpoint);
+        let signed = decode_hex_json(request, "signed_activity")?;
+        if signed.is_empty() || signed.len() > 1_048_576 {
+            return Err(ProgramOperationError::InvalidRequest);
+        }
         let mut response = self
             .agent
             .post(&url)
-            .send_json(request)
+            .header("Content-Type", "application/octet-stream")
+            .send(signed.as_slice())
             .map_err(|_| ProgramOperationError::InvalidRequest)?;
         if !response.status().is_success() {
             return Err(ProgramOperationError::InvalidRequest);
@@ -321,7 +326,7 @@ impl NativeProgramSimulationTransport for EmulatorProgramSimulationTransport {
     ) -> Result<RawProgramSimulation, ProgramOperationError> {
         call.encode()
             .map_err(|_| ProgramOperationError::InvalidRequest)?;
-        self.simulate_document(serde_json::json!({
+        self.simulate_document(&serde_json::json!({
             "payload_encoding":"native-v1", "program_id":encode_hex(&call.program_id.bytes()), "calldata":encode_hex(call.calldata),
             "budget":{"fuel":call.resources.0[0].to_string(),"fee_limit":fee_limit.to_string()}, "signed_activity":encode_hex(signed_activity),
             "native_call":{"guest_abi":call.guest_abi,"entrypoint":std::str::from_utf8(call.entrypoint).map_err(|_| ProgramOperationError::InvalidRequest)?,
@@ -787,6 +792,89 @@ fn validate_call_activity(
     Ok(())
 }
 
+/// # Errors
+/// Refuses invalid code hashes, payloads, or signed lifecycle activity bindings.
+pub fn validate_deploy_activity(
+    registry: &ModuleRegistry,
+    value: layerx_types::program_lifecycle::NativeProgramDeploy<'_>,
+    signed: &[u8],
+) -> Result<(), ProgramOperationError> {
+    let digest: [u8; 32] = Sha256::digest(value.wasm).into();
+    if digest != value.new_hash {
+        return Err(ProgramOperationError::InvalidRequest);
+    }
+    validate_lifecycle_activity(
+        registry,
+        1,
+        &value
+            .encode()
+            .map_err(|_| ProgramOperationError::InvalidRequest)?,
+        signed,
+    )
+}
+
+/// # Errors
+/// Refuses invalid code hashes, upgrade flags, or signed activity bindings.
+pub fn validate_upgrade_activity(
+    registry: &ModuleRegistry,
+    value: layerx_types::program_lifecycle::NativeProgramUpgrade<'_>,
+    signed: &[u8],
+) -> Result<(), ProgramOperationError> {
+    let digest: [u8; 32] = Sha256::digest(value.wasm).into();
+    if digest != value.new_hash {
+        return Err(ProgramOperationError::InvalidRequest);
+    }
+    validate_lifecycle_activity(
+        registry,
+        2,
+        &value
+            .encode()
+            .map_err(|_| ProgramOperationError::InvalidRequest)?,
+        signed,
+    )
+}
+
+/// # Errors
+/// Refuses invalid wind-down payloads or signed activity bindings.
+pub fn validate_wind_down_activity(
+    registry: &ModuleRegistry,
+    value: layerx_types::program_lifecycle::NativeProgramWindDown<'_>,
+    signed: &[u8],
+) -> Result<(), ProgramOperationError> {
+    validate_lifecycle_activity(
+        registry,
+        7,
+        &value
+            .encode()
+            .map_err(|_| ProgramOperationError::InvalidRequest)?,
+        signed,
+    )
+}
+
+fn validate_lifecycle_activity(
+    registry: &ModuleRegistry,
+    ordinal: u16,
+    payload: &[u8],
+    signed: &[u8],
+) -> Result<(), ProgramOperationError> {
+    if signed.is_empty() || signed.len() > 1_048_576 {
+        return Err(ProgramOperationError::InvalidRequest);
+    }
+    let activity =
+        decode_signed(signed, registry).map_err(|_| ProgramOperationError::InvalidRequest)?;
+    if activity.protocol_version() != 3
+        || activity.activity_type().module() != ModuleId::Programs
+        || activity.activity_type().ordinal() != ordinal
+        || activity.payload() != payload
+        || activity.payload_hash()
+            != layerx_wire::hash::payload_hash(&activity)
+                .map_err(|_| ProgramOperationError::InvalidRequest)?
+    {
+        return Err(ProgramOperationError::InvalidRequest);
+    }
+    Ok(())
+}
+
 fn validate_native_call_activity(
     registry: &ModuleRegistry,
     call: NativeProgramCall<'_>,
@@ -813,6 +901,79 @@ fn validate_native_call_activity(
 mod native_call_tests {
     use super::*;
     use layerx_types::payload::{ActivityType, ModuleRegistration};
+
+    #[test]
+    fn lifecycle_bindings_consume_c_signed_fixtures() -> Result<(), String> {
+        use layerx_types::program_lifecycle::{
+            NativeProgramDeploy, NativeProgramUpgrade, NativeProgramWindDown,
+        };
+        let activities = [1, 2, 3, 7]
+            .map(|ordinal| ActivityType::new(ModuleId::Programs, ordinal))
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("{error:?}"))?;
+        let registration = ModuleRegistration::new(ModuleId::Programs, &activities)
+            .map_err(|error| format!("{error:?}"))?;
+        let registry =
+            ModuleRegistry::new(&[registration]).map_err(|error| format!("{error:?}"))?;
+        for (name, ordinal) in [
+            ("deploy", 1),
+            ("upgrade", 2),
+            ("wind-down-route", 7),
+            ("wind-down-deprecate", 7),
+            ("wind-down-tombstone", 7),
+            ("wind-down-exit", 7),
+        ] {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../../platform/sdk/conformance/fixtures")
+                .join(format!("native-program-{name}-v3.json"));
+            let fixture: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(path).map_err(|error| error.to_string())?)
+                    .map_err(|error| error.to_string())?;
+            let payload =
+                decode_hex_json(&fixture, "payload_hex").map_err(|error| format!("{error:?}"))?;
+            let signed = decode_hex_json(&fixture, "signed_activity_hex")
+                .map_err(|error| format!("{error:?}"))?;
+            let result = match ordinal {
+                1 => validate_deploy_activity(
+                    &registry,
+                    NativeProgramDeploy::decode(&payload).map_err(|error| format!("{error:?}"))?,
+                    &signed,
+                ),
+                2 => validate_upgrade_activity(
+                    &registry,
+                    NativeProgramUpgrade::decode(&payload).map_err(|error| format!("{error:?}"))?,
+                    &signed,
+                ),
+                _ => validate_wind_down_activity(
+                    &registry,
+                    NativeProgramWindDown::decode(&payload)
+                        .map_err(|error| format!("{error:?}"))?,
+                    &signed,
+                ),
+            };
+            assert!(result.is_ok());
+            let mut wrong_hash = signed.clone();
+            let hash_offset = signed.len() - 69 - payload.len() - 5 - 32;
+            wrong_hash[hash_offset] ^= 1;
+            assert!(decode_signed(&wrong_hash, &registry).is_ok());
+            assert!(
+                validate_lifecycle_activity(&registry, ordinal, &payload, &wrong_hash).is_err()
+            );
+            assert!(validate_lifecycle_activity(
+                &registry,
+                ordinal,
+                &payload,
+                &signed[..signed.len() - 1]
+            )
+            .is_err());
+            assert!(validate_lifecycle_activity(&registry, 3, &payload, &signed).is_err());
+            let mut altered = payload;
+            altered[0] ^= 1;
+            assert!(validate_lifecycle_activity(&registry, ordinal, &altered, &signed).is_err());
+        }
+        Ok(())
+    }
 
     #[test]
     fn native_binding_preserves_fee_and_payload() -> Result<(), Box<dyn std::error::Error>> {

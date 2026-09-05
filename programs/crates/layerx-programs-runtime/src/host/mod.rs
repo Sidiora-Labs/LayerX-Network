@@ -20,8 +20,8 @@ use crate::calls::{CallGraph, Composition, CompositionRefusal};
 use crate::crypto::bigint;
 use crate::execute::ExecutionFault;
 use crate::fault::{ProgramFailure, RefusalClass, RefusalReason};
-use crate::meter::Meter;
 use crate::meter::inject::{PRIVATE_CHARGE_FUNCTION, PRIVATE_CHECK_FUNCTION, PRIVATE_METER_MODULE};
+use crate::meter::Meter;
 use crate::AbiRevision;
 
 use self::memory::{nonnegative, read_fixed, write_guest};
@@ -37,7 +37,8 @@ pub(super) const COMPOSITION_REFUSED: &str = "program composition refused the ca
 fn storage_overlay_entry_bytes(key: &[u8], value: Option<&[u8]>) -> Option<u64> {
     let key_bytes = u64::try_from(key.len()).ok()?;
     match value {
-        Some(value) => 9_u64.checked_add(key_bytes)?
+        Some(value) => 9_u64
+            .checked_add(key_bytes)?
             .checked_add(u64::try_from(value.len()).ok()?),
         None => 5_u64.checked_add(key_bytes),
     }
@@ -64,7 +65,7 @@ pub(crate) struct RuntimeState {
     abi: Option<Abi>,
     composition: Option<Composition>,
     refusal: Option<CompositionRefusal>,
-    outcome: Option<CandidateOutcomeRegion>,
+    outcome: Option<V2OutcomeRegion>,
     failure_subtree_fuel: Option<u64>,
     failure_graph: Option<CallGraph>,
     protocol_context: Option<ExecutionContext>,
@@ -76,7 +77,7 @@ pub(crate) struct RuntimeState {
 }
 
 #[derive(Debug)]
-enum CandidateOutcomeRegion {
+enum V2OutcomeRegion {
     Response(ResponseRegion),
     Failure(ProgramFailure),
 }
@@ -112,8 +113,24 @@ fn write_execution_fault(
     write: &mut dyn FnMut(&[u8]) -> Result<(), AbiError>,
 ) -> Result<(), AbiError> {
     match fault {
-        ExecutionFault::UnknownExport { name } => { write(&[0])?; write(&u32::try_from(name.len()).map_err(|_| AbiError::InvalidEncoding)?.to_be_bytes())?; write(name.as_bytes())?; }
-        ExecutionFault::NotAFunction { name } => { write(&[1])?; write(&u32::try_from(name.len()).map_err(|_| AbiError::InvalidEncoding)?.to_be_bytes())?; write(name.as_bytes())?; }
+        ExecutionFault::UnknownExport { name } => {
+            write(&[0])?;
+            write(
+                &u32::try_from(name.len())
+                    .map_err(|_| AbiError::InvalidEncoding)?
+                    .to_be_bytes(),
+            )?;
+            write(name.as_bytes())?;
+        }
+        ExecutionFault::NotAFunction { name } => {
+            write(&[1])?;
+            write(
+                &u32::try_from(name.len())
+                    .map_err(|_| AbiError::InvalidEncoding)?
+                    .to_be_bytes(),
+            )?;
+            write(name.as_bytes())?;
+        }
         ExecutionFault::UnreachableExecuted => write(&[2])?,
         ExecutionFault::MemoryOutOfBounds => write(&[3])?,
         ExecutionFault::TableOutOfBounds => write(&[4])?,
@@ -125,7 +142,10 @@ fn write_execution_fault(
         ExecutionFault::BadSignature => write(&[10])?,
         ExecutionFault::OutOfFuel => write(&[11])?,
         ExecutionFault::GrowthLimited => write(&[12])?,
-        ExecutionFault::Resource { refusal } => { write(&[13])?; write(&crate::abi::abi_error_bytes(&AbiError::Meter(*refusal)))?; }
+        ExecutionFault::Resource { refusal } => {
+            write(&[13])?;
+            write(&crate::abi::abi_error_bytes(&AbiError::Meter(*refusal)))?;
+        }
         ExecutionFault::NonIntegerValue => write(&[14])?,
         ExecutionFault::EngineFault { .. } => return Err(AbiError::InvalidEncoding),
     }
@@ -136,42 +156,124 @@ fn write_composition_refusal(
     refusal: &CompositionRefusal,
     write: &mut dyn FnMut(&[u8]) -> Result<(), AbiError>,
 ) -> Result<(), AbiError> {
-    let revision = |revision: AbiRevision| match revision { AbiRevision::V1 => 1_u8, AbiRevision::V2 => 2_u8 };
+    let revision = |revision: AbiRevision| match revision {
+        AbiRevision::V1 => 1_u8,
+        AbiRevision::V2 => 2_u8,
+    };
     match refusal {
         CompositionRefusal::NotComposable => write(&[0])?,
         CompositionRefusal::ActivityEvidenceRequired => write(&[1])?,
         CompositionRefusal::ActivityEvidenceMismatch => write(&[2])?,
         CompositionRefusal::ActivityEvidenceReused => write(&[3])?,
-        CompositionRefusal::WrongVersion { expected, actual } => write(&[4, revision(*expected), revision(*actual)])?,
-        CompositionRefusal::MeteringPlanMismatch { expected, actual } => { write(&[5])?; write(expected)?; write(actual)?; }
-        CompositionRefusal::UnknownProgram { program } => { write(&[6])?; write(&program.bytes())?; }
-        CompositionRefusal::Reentrancy { program } => { write(&[7])?; write(&program.bytes())?; }
-        CompositionRefusal::DepthExceeded { limit, attempted } => { write(&[8])?; write(&limit.to_be_bytes())?; write(&attempted.to_be_bytes())?; }
-        CompositionRefusal::EdgesExceeded { limit, attempted } => { write(&[9])?; write(&limit.to_be_bytes())?; write(&attempted.to_be_bytes())?; }
-        CompositionRefusal::FanoutExceeded { limit, attempted } => { write(&[10])?; write(&limit.to_be_bytes())?; write(&attempted.to_be_bytes())?; }
-        CompositionRefusal::VisitsExceeded { program, limit, attempted } => { write(&[11])?; write(&program.bytes())?; write(&limit.to_be_bytes())?; write(&attempted.to_be_bytes())?; }
+        CompositionRefusal::WrongVersion { expected, actual } => {
+            write(&[4, revision(*expected), revision(*actual)])?
+        }
+        CompositionRefusal::MeteringPlanMismatch { expected, actual } => {
+            write(&[5])?;
+            write(expected)?;
+            write(actual)?;
+        }
+        CompositionRefusal::UnknownProgram { program } => {
+            write(&[6])?;
+            write(&program.bytes())?;
+        }
+        CompositionRefusal::Reentrancy { program } => {
+            write(&[7])?;
+            write(&program.bytes())?;
+        }
+        CompositionRefusal::DepthExceeded { limit, attempted } => {
+            write(&[8])?;
+            write(&limit.to_be_bytes())?;
+            write(&attempted.to_be_bytes())?;
+        }
+        CompositionRefusal::EdgesExceeded { limit, attempted } => {
+            write(&[9])?;
+            write(&limit.to_be_bytes())?;
+            write(&attempted.to_be_bytes())?;
+        }
+        CompositionRefusal::FanoutExceeded { limit, attempted } => {
+            write(&[10])?;
+            write(&limit.to_be_bytes())?;
+            write(&attempted.to_be_bytes())?;
+        }
+        CompositionRefusal::VisitsExceeded {
+            program,
+            limit,
+            attempted,
+        } => {
+            write(&[11])?;
+            write(&program.bytes())?;
+            write(&limit.to_be_bytes())?;
+            write(&attempted.to_be_bytes())?;
+        }
         CompositionRefusal::MissingEntry => write(&[12])?,
         CompositionRefusal::MissingAllocator => write(&[13])?,
         CompositionRefusal::MissingMemory => write(&[14])?,
-        CompositionRefusal::AllocationRefused { code } => { write(&[15])?; write(&code.to_be_bytes())?; }
-        CompositionRefusal::InputTooLarge { bytes, limit } => { write(&[16])?; write(&u64::try_from(*bytes).map_err(|_| AbiError::InvalidEncoding)?.to_be_bytes())?; write(&u64::try_from(*limit).map_err(|_| AbiError::InvalidEncoding)?.to_be_bytes())?; }
-        CompositionRefusal::GuestRefused { program, code } => { write(&[17])?; write(&program.bytes())?; write(&code.to_be_bytes())?; }
-        CompositionRefusal::Program(failure) => { write(&[18])?; let failure = failure.canonical_encode(); write(&u32::try_from(failure.len()).map_err(|_| AbiError::InvalidEncoding)?.to_be_bytes())?; write(&failure)?; }
-        CompositionRefusal::Authority(error) => { write(&[19])?; write(&crate::abi::abi_error_bytes(error))?; }
-        CompositionRefusal::Fault(fault) => { write(&[20])?; write_execution_fault(fault, write)?; }
-        CompositionRefusal::Resource(refusal) => { write(&[21])?; write(&crate::abi::abi_error_bytes(&AbiError::Meter(*refusal)))?; }
+        CompositionRefusal::AllocationRefused { code } => {
+            write(&[15])?;
+            write(&code.to_be_bytes())?;
+        }
+        CompositionRefusal::InputTooLarge { bytes, limit } => {
+            write(&[16])?;
+            write(
+                &u64::try_from(*bytes)
+                    .map_err(|_| AbiError::InvalidEncoding)?
+                    .to_be_bytes(),
+            )?;
+            write(
+                &u64::try_from(*limit)
+                    .map_err(|_| AbiError::InvalidEncoding)?
+                    .to_be_bytes(),
+            )?;
+        }
+        CompositionRefusal::GuestRefused { program, code } => {
+            write(&[17])?;
+            write(&program.bytes())?;
+            write(&code.to_be_bytes())?;
+        }
+        CompositionRefusal::Program(failure) => {
+            write(&[18])?;
+            let failure = failure.canonical_encode();
+            write(
+                &u32::try_from(failure.len())
+                    .map_err(|_| AbiError::InvalidEncoding)?
+                    .to_be_bytes(),
+            )?;
+            write(&failure)?;
+        }
+        CompositionRefusal::Authority(error) => {
+            write(&[19])?;
+            write(&crate::abi::abi_error_bytes(error))?;
+        }
+        CompositionRefusal::Fault(fault) => {
+            write(&[20])?;
+            write_execution_fault(fault, write)?;
+        }
+        CompositionRefusal::Resource(refusal) => {
+            write(&[21])?;
+            write(&crate::abi::abi_error_bytes(&AbiError::Meter(*refusal)))?;
+        }
         CompositionRefusal::Response(refusal) => {
             write(&[22])?;
             let mut failed = false;
-            refusal.canonical_write(|bytes| { if write(bytes).is_err() { failed = true; } });
-            if failed { return Err(AbiError::InvalidEncoding) }
+            refusal.canonical_write(|bytes| {
+                if write(bytes).is_err() {
+                    failed = true;
+                }
+            });
+            if failed {
+                return Err(AbiError::InvalidEncoding);
+            }
         }
     }
     Ok(())
 }
 
 impl RuntimeState {
-    fn v2_identity(abi: &Abi, baseline: &crate::storage::Storage) -> Option<crate::abi::HostStateIdentity> {
+    fn v2_identity(
+        abi: &Abi,
+        baseline: &crate::storage::Storage,
+    ) -> Option<crate::abi::HostStateIdentity> {
         abi.v2_host_state_identity(baseline).ok()
     }
 
@@ -179,10 +281,7 @@ impl RuntimeState {
         abi.storage_snapshot()
     }
 
-    fn v2_host_state(
-        &self,
-        hash: bool,
-    ) -> Result<crate::abi::HostStateCommitment, AbiError> {
+    fn v2_host_state(&self, hash: bool) -> Result<crate::abi::HostStateCommitment, AbiError> {
         use sha2::{Digest, Sha256};
         let abi_state = self.abi.as_ref().ok_or(AbiError::WrongVersion)?;
         let abi = if hash {
@@ -190,78 +289,137 @@ impl RuntimeState {
         } else {
             abi_state.v2_host_state_measurement()?
         };
-        let write_state = |write: &mut dyn FnMut(&[u8]) -> Result<(), AbiError>| -> Result<(), AbiError> {
-            write(b"LayerX/programs/v2/runtime-host-state\0")?;
-            write(&abi.root)?;
-            write(&abi.canonical_bytes.to_be_bytes())?;
-            let usage = self.meter.execution_trace_usage()?;
-            write(&usage.cpu_fuel.to_be_bytes())?;
-            write(&usage.memory_bytes.to_be_bytes())?;
-            write(&usage.storage_read_bytes.to_be_bytes())?;
-            write(&usage.storage_write_bytes.to_be_bytes())?;
-            write(&usage.output_values.to_be_bytes())?;
-            write(&usage.output_bytes.to_be_bytes())?;
-            write(&usage.occupancy_byte_batches.to_be_bytes())?;
-            write(&usage.occupancy_fee_units.to_be_bytes())?;
-            write(&usage.fee_units.to_be_bytes())?;
-            write(&self.meter.cpu_remaining().to_be_bytes())?;
-            match self.failure_subtree_fuel { None => write(&[0])?, Some(value) => { write(&[1])?; write(&value.to_be_bytes())?; } }
-            write(&self.legacy_reference_engine_committed.to_be_bytes())?;
-            write(&self.metering_schedule.canonical_bytes())?;
-            write(&[u8::from(self.legacy_reference_fuel)])?;
-            match self.protocol_context { None => write(&[0])?, Some(context) => { write(&[1])?; write(&context.canonical_bytes())?; } }
-            for graph in [self.composition.as_ref().map(Composition::graph), self.failure_graph.as_ref()] {
-                match graph {
+        let write_state =
+            |write: &mut dyn FnMut(&[u8]) -> Result<(), AbiError>| -> Result<(), AbiError> {
+                write(b"LayerX/programs/v2/runtime-host-state\0")?;
+                write(&abi.root)?;
+                write(&abi.canonical_bytes.to_be_bytes())?;
+                let usage = self.meter.execution_trace_usage()?;
+                write(&usage.cpu_fuel.to_be_bytes())?;
+                write(&usage.memory_bytes.to_be_bytes())?;
+                write(&usage.storage_read_bytes.to_be_bytes())?;
+                write(&usage.storage_write_bytes.to_be_bytes())?;
+                write(&usage.output_values.to_be_bytes())?;
+                write(&usage.output_bytes.to_be_bytes())?;
+                write(&usage.occupancy_byte_batches.to_be_bytes())?;
+                write(&usage.occupancy_fee_units.to_be_bytes())?;
+                write(&usage.fee_units.to_be_bytes())?;
+                write(&self.meter.cpu_remaining().to_be_bytes())?;
+                match self.failure_subtree_fuel {
                     None => write(&[0])?,
-                    Some(graph) => { let graph = graph.canonical_evidence(); write(&[1])?; write(&u64::try_from(graph.len()).map_err(|_| AbiError::InvalidEncoding)?.to_be_bytes())?; write(&graph)?; }
+                    Some(value) => {
+                        write(&[1])?;
+                        write(&value.to_be_bytes())?;
+                    }
                 }
-            }
-            match &self.refusal {
-                None => write(&[0])?,
-                Some(refusal) => { write(&[1])?; write_composition_refusal(refusal, write)?; }
-            }
-            match &self.outcome {
-                None => write(&[0])?,
-                Some(CandidateOutcomeRegion::Response(response)) => {
-                    write(&[1])?;
-                    write(&response.canonical_state_len().map_err(|_| AbiError::InvalidEncoding)?.to_be_bytes())?;
-                    let mut failed = false;
-                    response.canonical_state_write(|bytes| { if write(bytes).is_err() { failed = true; } });
-                    if failed { return Err(AbiError::InvalidEncoding) }
+                write(&self.legacy_reference_engine_committed.to_be_bytes())?;
+                write(&self.metering_schedule.canonical_bytes())?;
+                write(&[u8::from(self.legacy_reference_fuel)])?;
+                match self.protocol_context {
+                    None => write(&[0])?,
+                    Some(context) => {
+                        write(&[1])?;
+                        write(&context.canonical_bytes())?;
+                    }
                 }
-                Some(CandidateOutcomeRegion::Failure(failure)) => {
-                    let failure = failure.canonical_encode();
-                    write(&[2])?; write(&u64::try_from(failure.len()).map_err(|_| AbiError::InvalidEncoding)?.to_be_bytes())?; write(&failure)?;
+                for graph in [
+                    self.composition.as_ref().map(Composition::graph),
+                    self.failure_graph.as_ref(),
+                ] {
+                    match graph {
+                        None => write(&[0])?,
+                        Some(graph) => {
+                            let graph = graph.canonical_evidence();
+                            write(&[1])?;
+                            write(
+                                &u64::try_from(graph.len())
+                                    .map_err(|_| AbiError::InvalidEncoding)?
+                                    .to_be_bytes(),
+                            )?;
+                            write(&graph)?;
+                        }
+                    }
                 }
-            }
-            Ok(())
-        };
+                match &self.refusal {
+                    None => write(&[0])?,
+                    Some(refusal) => {
+                        write(&[1])?;
+                        write_composition_refusal(refusal, write)?;
+                    }
+                }
+                match &self.outcome {
+                    None => write(&[0])?,
+                    Some(V2OutcomeRegion::Response(response)) => {
+                        write(&[1])?;
+                        write(
+                            &response
+                                .canonical_state_len()
+                                .map_err(|_| AbiError::InvalidEncoding)?
+                                .to_be_bytes(),
+                        )?;
+                        let mut failed = false;
+                        response.canonical_state_write(|bytes| {
+                            if write(bytes).is_err() {
+                                failed = true;
+                            }
+                        });
+                        if failed {
+                            return Err(AbiError::InvalidEncoding);
+                        }
+                    }
+                    Some(V2OutcomeRegion::Failure(failure)) => {
+                        let failure = failure.canonical_encode();
+                        write(&[2])?;
+                        write(
+                            &u64::try_from(failure.len())
+                                .map_err(|_| AbiError::InvalidEncoding)?
+                                .to_be_bytes(),
+                        )?;
+                        write(&failure)?;
+                    }
+                }
+                Ok(())
+            };
         let mut runtime_bytes = 0_u64;
         write_state(&mut |bytes| {
-            runtime_bytes = runtime_bytes.checked_add(u64::try_from(bytes.len()).map_err(|_| AbiError::InvalidEncoding)?)
+            runtime_bytes = runtime_bytes
+                .checked_add(u64::try_from(bytes.len()).map_err(|_| AbiError::InvalidEncoding)?)
                 .ok_or(AbiError::InvalidEncoding)?;
-            if runtime_bytes > crate::MAX_ARBITRATION_HOST_STATE_BYTES as u64 { return Err(AbiError::InvalidEncoding) }
+            if runtime_bytes > crate::MAX_ARBITRATION_HOST_STATE_BYTES as u64 {
+                return Err(AbiError::InvalidEncoding);
+            }
             Ok(())
         })?;
         if !hash {
             return Ok(crate::abi::HostStateCommitment {
                 root: [0; 32],
-                canonical_bytes: abi.canonical_bytes.checked_add(runtime_bytes).ok_or(AbiError::InvalidEncoding)?,
+                canonical_bytes: abi
+                    .canonical_bytes
+                    .checked_add(runtime_bytes)
+                    .ok_or(AbiError::InvalidEncoding)?,
             });
         }
         let mut written = 0_u64;
         let mut hasher = Sha256::new();
         write_state(&mut |bytes| {
-            written = written.checked_add(u64::try_from(bytes.len()).map_err(|_| AbiError::InvalidEncoding)?)
+            written = written
+                .checked_add(u64::try_from(bytes.len()).map_err(|_| AbiError::InvalidEncoding)?)
                 .ok_or(AbiError::InvalidEncoding)?;
-            if written > runtime_bytes { return Err(AbiError::InvalidEncoding) }
+            if written > runtime_bytes {
+                return Err(AbiError::InvalidEncoding);
+            }
             hasher.update(bytes);
             Ok(())
         })?;
-        if written != runtime_bytes { return Err(AbiError::InvalidEncoding) }
+        if written != runtime_bytes {
+            return Err(AbiError::InvalidEncoding);
+        }
         Ok(crate::abi::HostStateCommitment {
             root: hasher.finalize().into(),
-            canonical_bytes: abi.canonical_bytes.checked_add(runtime_bytes).ok_or(AbiError::InvalidEncoding)?,
+            canonical_bytes: abi
+                .canonical_bytes
+                .checked_add(runtime_bytes)
+                .ok_or(AbiError::InvalidEncoding)?,
         })
     }
 
@@ -277,11 +435,8 @@ impl RuntimeState {
         self.v2_host_state(false)
     }
 
-    pub(crate) fn v2_host_state_identity(
-        &self,
-    ) -> Result<crate::abi::HostStateIdentity, AbiError> {
-        self.abi.as_ref().ok_or(AbiError::WrongVersion)?
-            .version();
+    pub(crate) fn v2_host_state_identity(&self) -> Result<crate::abi::HostStateIdentity, AbiError> {
+        self.abi.as_ref().ok_or(AbiError::WrongVersion)?.version();
         self.v2_host_identity.ok_or(AbiError::WrongVersion)
     }
 
@@ -292,7 +447,9 @@ impl RuntimeState {
         remaining_work: u64,
     ) -> Result<wasmi::ExecutionSupplement, wasmi::ExecutionObserverError> {
         if !charge.collect {
-            let meter = self.meter.execution_trace_usage()
+            let meter = self
+                .meter
+                .execution_trace_usage()
                 .map_err(|_| wasmi::ExecutionObserverError::SupplementRejected)?;
             return Ok(wasmi::ExecutionSupplement {
                 storage_overlay: Vec::new(),
@@ -315,14 +472,21 @@ impl RuntimeState {
             abi.storage_commitment_delta_metrics(&self.trace_storage_baseline)
                 .ok_or(wasmi::ExecutionObserverError::SupplementRejected)?
         } else {
-            crate::storage::Storage::new().commitment_delta_metrics(&self.trace_storage_baseline)
+            crate::storage::Storage::new()
+                .commitment_delta_metrics(&self.trace_storage_baseline)
                 .ok_or(wasmi::ExecutionObserverError::SupplementRejected)?
         };
         charge.storage_overlay_bytes = overlay_bytes;
         let (host_state_bytes, host_identity, isolated_host_state) = if self.abi.is_some() {
-            let state = self.v2_host_state_measurement().map_err(|_| wasmi::ExecutionObserverError::SupplementRejected)?;
-            let identity = self.v2_host_state_identity().map_err(|_| wasmi::ExecutionObserverError::SupplementRejected)?;
-            charge.host_state_bytes = state.canonical_bytes.checked_mul(3)
+            let state = self
+                .v2_host_state_measurement()
+                .map_err(|_| wasmi::ExecutionObserverError::SupplementRejected)?;
+            let identity = self
+                .v2_host_state_identity()
+                .map_err(|_| wasmi::ExecutionObserverError::SupplementRejected)?;
+            charge.host_state_bytes = state
+                .canonical_bytes
+                .checked_mul(3)
                 .ok_or(wasmi::ExecutionObserverError::SupplementRejected)?;
             (state.canonical_bytes, Some(identity), None)
         } else {
@@ -331,22 +495,28 @@ impl RuntimeState {
                 root: Sha256::digest(b"LayerX/programs/v2/isolated-host-state\0").into(),
                 canonical_bytes: b"LayerX/programs/v2/isolated-host-state\0".len() as u64,
             };
-            let identity = self.v2_host_identity
+            let identity = self
+                .v2_host_identity
                 .ok_or(wasmi::ExecutionObserverError::SupplementRejected)?;
-            charge.host_state_bytes = state.canonical_bytes.checked_mul(3)
+            charge.host_state_bytes = state
+                .canonical_bytes
+                .checked_mul(3)
                 .ok_or(wasmi::ExecutionObserverError::SupplementRejected)?;
             (state.canonical_bytes, Some(identity), Some(state))
         };
         let retained_instruction_bytes = charge.retained_instruction_bytes;
         let arbitration_instance_retained_bytes = charge.instance_state_bytes;
-        let engine_bytes = charge.total_bytes()
+        let engine_bytes = charge
+            .total_bytes()
             .and_then(|bytes| bytes.checked_sub(retained_instruction_bytes))
             .and_then(|bytes| bytes.checked_sub(charge.host_state_bytes))
             .and_then(|bytes| bytes.checked_sub(arbitration_instance_retained_bytes))
             .ok_or(wasmi::ExecutionObserverError::SupplementRejected)?;
-        let snapshot_bytes = 214_u64.checked_add(engine_bytes)
+        let snapshot_bytes = 214_u64
+            .checked_add(engine_bytes)
             .ok_or(wasmi::ExecutionObserverError::SupplementRejected)?;
-        let retained_bytes = snapshot_bytes.checked_add(retained_instruction_bytes)
+        let retained_bytes = snapshot_bytes
+            .checked_add(retained_instruction_bytes)
             .and_then(|bytes| bytes.checked_add(arbitration_instance_retained_bytes))
             .and_then(|bytes| bytes.checked_add(charge.host_state_bytes))
             .and_then(|bytes| bytes.checked_add(charge.arbitration_engine_canonical_bytes))
@@ -362,23 +532,27 @@ impl RuntimeState {
             arbitration_engine_bytes,
             host_state_bytes,
         )
-            .map_err(|_| wasmi::ExecutionObserverError::SupplementRejected)?;
-        let total_fuel = snapshot_fuel.checked_add(arbitration_fuel)
+        .map_err(|_| wasmi::ExecutionObserverError::SupplementRejected)?;
+        let total_fuel = snapshot_fuel
+            .checked_add(arbitration_fuel)
             .ok_or(wasmi::ExecutionObserverError::SupplementRejected)?;
-        self.meter.charge_cpu(total_fuel)
+        self.meter
+            .charge_cpu(total_fuel)
             .map_err(|_| wasmi::ExecutionObserverError::SupplementRejected)?;
         let host_state = match isolated_host_state {
             Some(state) => state,
             None => {
-                let state = self.v2_host_state_commitment()
+                let state = self
+                    .v2_host_state_commitment()
                     .map_err(|_| wasmi::ExecutionObserverError::SupplementRejected)?;
                 if state.canonical_bytes != host_state_bytes {
-                    return Err(wasmi::ExecutionObserverError::SupplementRejected)
+                    return Err(wasmi::ExecutionObserverError::SupplementRejected);
                 }
                 state
             }
         };
-        charge.value_bytes = snapshot_bytes.checked_add(retained_instruction_bytes)
+        charge.value_bytes = snapshot_bytes
+            .checked_add(retained_instruction_bytes)
             .ok_or(wasmi::ExecutionObserverError::SupplementRejected)?;
         charge.frame_bytes = 0;
         charge.local_bytes = 0;
@@ -387,7 +561,9 @@ impl RuntimeState {
         charge.storage_overlay_bytes = 0;
         charge.instruction_bytes = 0;
         charge.retained_instruction_bytes = 0;
-        let meter = self.meter.execution_trace_usage()
+        let meter = self
+            .meter
+            .execution_trace_usage()
             .map_err(|_| wasmi::ExecutionObserverError::SupplementRejected)?;
         let mut storage_overlay = Vec::with_capacity(overlay_entries);
         if let Some(abi) = self.abi.as_ref() {
@@ -395,10 +571,10 @@ impl RuntimeState {
                 storage_overlay.push((key, value.map(<[u8]>::to_vec)));
             });
         } else {
-            crate::storage::Storage::new().for_each_commitment_delta(
-                &self.trace_storage_baseline,
-                |key, value| storage_overlay.push((key, value.map(<[u8]>::to_vec))),
-            );
+            crate::storage::Storage::new()
+                .for_each_commitment_delta(&self.trace_storage_baseline, |key, value| {
+                    storage_overlay.push((key, value.map(<[u8]>::to_vec)))
+                });
         }
         storage_overlay.sort_by(|left, right| left.0.cmp(&right.0));
         Ok(wasmi::ExecutionSupplement {
@@ -409,12 +585,19 @@ impl RuntimeState {
             commitment_fuel: snapshot_fuel,
             arbitration_host_state_root: host_state.root,
             arbitration_host_state_bytes: host_state.canonical_bytes,
-            arbitration_base_state_root: host_identity.map_or([0; 32], |identity| identity.base_state_root),
-            arbitration_receipt_oracle_root: host_identity.map_or([0; 32], |identity| identity.receipt_oracle_root),
-            arbitration_balance_oracle_root: host_identity.map_or([0; 32], |identity| identity.balance_oracle_root),
+            arbitration_base_state_root: host_identity
+                .map_or([0; 32], |identity| identity.base_state_root),
+            arbitration_receipt_oracle_root: host_identity
+                .map_or([0; 32], |identity| identity.receipt_oracle_root),
+            arbitration_balance_oracle_root: host_identity
+                .map_or([0; 32], |identity| identity.balance_oracle_root),
             arbitration_engine_canonical_bytes: arbitration_engine_bytes,
             arbitration_instance_retained_bytes,
-            arbitration_canonical_state_bytes: crate::arbitration_step_state_bytes(snapshot_bytes, arbitration_engine_bytes).map_err(|_| wasmi::ExecutionObserverError::SupplementRejected)?,
+            arbitration_canonical_state_bytes: crate::arbitration_step_state_bytes(
+                snapshot_bytes,
+                arbitration_engine_bytes,
+            )
+            .map_err(|_| wasmi::ExecutionObserverError::SupplementRejected)?,
             arbitration_commitment_fuel: arbitration_fuel,
         })
     }
@@ -436,8 +619,14 @@ impl RuntimeState {
             trace_storage_baseline: crate::storage::Storage::new(),
             v2_host_identity: Some(crate::abi::HostStateIdentity {
                 base_state_root: Sha256::digest(b"LayerX/programs/v2/isolated-base-state\0").into(),
-                receipt_oracle_root: Sha256::digest(b"LayerX/programs/v2/isolated-receipt-oracle\0").into(),
-                balance_oracle_root: Sha256::digest(b"LayerX/programs/v2/isolated-balance-oracle\0").into(),
+                receipt_oracle_root: Sha256::digest(
+                    b"LayerX/programs/v2/isolated-receipt-oracle\0",
+                )
+                .into(),
+                balance_oracle_root: Sha256::digest(
+                    b"LayerX/programs/v2/isolated-balance-oracle\0",
+                )
+                .into(),
             }),
         }
     }
@@ -483,9 +672,7 @@ impl RuntimeState {
             abi: Some(abi),
             composition: Some(composition),
             refusal: None,
-            outcome: Some(CandidateOutcomeRegion::Response(ResponseRegion::new(
-                capacity,
-            )?)),
+            outcome: Some(V2OutcomeRegion::Response(ResponseRegion::new(capacity)?)),
             failure_subtree_fuel: None,
             failure_graph: None,
             protocol_context: None,
@@ -521,10 +708,8 @@ impl RuntimeState {
     ) -> Result<(), ResponseRefusal> {
         let bytes = response.bytes.len();
         let region = match self.outcome.as_mut() {
-            Some(CandidateOutcomeRegion::Response(region)) => region,
-            Some(CandidateOutcomeRegion::Failure(_)) => {
-                return Err(ResponseRefusal::DuplicatePublication)
-            }
+            Some(V2OutcomeRegion::Response(region)) => region,
+            Some(V2OutcomeRegion::Failure(_)) => return Err(ResponseRefusal::DuplicatePublication),
             None => return Err(ResponseRefusal::CapacityExceeded { bytes, capacity: 0 }),
         };
         region.publish(response)?;
@@ -542,13 +727,11 @@ impl RuntimeState {
         reason: RefusalReason,
     ) -> Result<(), ResponseRefusal> {
         match self.outcome.as_ref() {
-            Some(CandidateOutcomeRegion::Failure(_)) => {
+            Some(V2OutcomeRegion::Failure(_)) => return Err(ResponseRefusal::DuplicatePublication),
+            Some(V2OutcomeRegion::Response(region)) if region.has_publication() => {
                 return Err(ResponseRefusal::DuplicatePublication)
             }
-            Some(CandidateOutcomeRegion::Response(region)) if region.has_publication() => {
-                return Err(ResponseRefusal::DuplicatePublication)
-            }
-            Some(CandidateOutcomeRegion::Response(_)) => {}
+            Some(V2OutcomeRegion::Response(_)) => {}
             None => return Err(ResponseRefusal::InvalidPublication),
         }
         let program = self
@@ -559,9 +742,9 @@ impl RuntimeState {
         self.meter
             .charge_output_bytes(reason.bytes().len())
             .map_err(ResponseRefusal::Meter)?;
-        self.outcome = Some(CandidateOutcomeRegion::Failure(
-            ProgramFailure::authenticated(program, class, reason),
-        ));
+        self.outcome = Some(V2OutcomeRegion::Failure(ProgramFailure::authenticated(
+            program, class, reason,
+        )));
         Ok(())
     }
 
@@ -586,7 +769,7 @@ impl RuntimeState {
 
     pub(crate) fn failure(&self) -> Option<&ProgramFailure> {
         match self.outcome.as_ref() {
-            Some(CandidateOutcomeRegion::Failure(failure)) => Some(failure),
+            Some(V2OutcomeRegion::Failure(failure)) => Some(failure),
             _ => None,
         }
     }
@@ -611,17 +794,11 @@ impl RuntimeState {
         self.failure_graph.as_ref()
     }
 
-    pub(crate) fn authenticate_protocol_context(
-        &mut self,
-        context: ExecutionContext,
-    ) {
+    pub(crate) fn authenticate_protocol_context(&mut self, context: ExecutionContext) {
         self.protocol_context = Some(context);
     }
 
-    pub(crate) fn context_field(
-        &self,
-        field: ContextField,
-    ) -> Result<Vec<u8>, ContextRefusal> {
+    pub(crate) fn context_field(&self, field: ContextField) -> Result<Vec<u8>, ContextRefusal> {
         let context = self
             .protocol_context
             .ok_or(ContextRefusal::Unauthenticated)?;
@@ -670,14 +847,14 @@ impl RuntimeState {
                 })
             },
             |outcome| match outcome {
-                CandidateOutcomeRegion::Response(region) => region.finish(code),
-                CandidateOutcomeRegion::Failure(_) => Err(ResponseRefusal::DuplicatePublication),
+                V2OutcomeRegion::Response(region) => region.finish(code),
+                V2OutcomeRegion::Failure(_) => Err(ResponseRefusal::DuplicatePublication),
             },
         )
     }
 
     pub(crate) fn refuse_response(&mut self, refusal: ResponseRefusal) {
-        if let Some(CandidateOutcomeRegion::Response(region)) = self.outcome.as_mut() {
+        if let Some(V2OutcomeRegion::Response(region)) = self.outcome.as_mut() {
             region.refuse(refusal);
         }
     }
@@ -691,11 +868,12 @@ impl RuntimeState {
     }
 
     pub(crate) fn frame_cpu_consumed(&self) -> Result<u64, crate::meter::MeterRefusal> {
-        self.meter.cpu_total().checked_sub(self.meter.cpu_carried()).ok_or(
-            crate::meter::MeterRefusal::CounterOverflow {
+        self.meter
+            .cpu_total()
+            .checked_sub(self.meter.cpu_carried())
+            .ok_or(crate::meter::MeterRefusal::CounterOverflow {
                 resource: crate::meter::ResourceKind::Cpu,
-            },
-        )
+            })
     }
 
     pub(crate) fn set_meter(&mut self, meter: Meter) {
@@ -780,7 +958,9 @@ pub(crate) fn charge_host_cpu(
         }
         caller.data_mut().meter_mut().charge_cpu(fuel)?;
         let consumed = caller.fuel_consumed().unwrap_or_else(|| unreachable!());
-        caller.data_mut().set_legacy_reference_engine_committed(consumed);
+        caller
+            .data_mut()
+            .set_legacy_reference_engine_committed(consumed);
         return Ok(());
     }
     caller.data_mut().meter_mut().charge_cpu(fuel)
@@ -794,20 +974,21 @@ pub(crate) fn reconcile_reference_guest_cpu(
     }
     let consumed = caller.fuel_consumed().unwrap_or(0);
     let committed = caller.data().legacy_reference_engine_committed();
-    let guest = consumed.checked_sub(committed).ok_or(
-        crate::meter::MeterRefusal::CounterOverflow {
-            resource: crate::meter::ResourceKind::Cpu,
-        },
-    )?;
+    let guest =
+        consumed
+            .checked_sub(committed)
+            .ok_or(crate::meter::MeterRefusal::CounterOverflow {
+                resource: crate::meter::ResourceKind::Cpu,
+            })?;
     caller.data_mut().meter_mut().charge_cpu(guest)?;
-    caller.data_mut().set_legacy_reference_engine_committed(consumed);
+    caller
+        .data_mut()
+        .set_legacy_reference_engine_committed(consumed);
     Ok(())
 }
 
 #[allow(clippy::too_many_lines)]
-pub(crate) fn linker(
-    engine: &Engine,
-) -> Result<HostLinker, ExecutionFault> {
+pub(crate) fn linker(engine: &Engine) -> Result<HostLinker, ExecutionFault> {
     let mut linker = Linker::new(engine);
     linker
         .func_wrap(
@@ -828,7 +1009,9 @@ pub(crate) fn linker(
         .func_wrap(
             PRIVATE_METER_MODULE,
             PRIVATE_CHARGE_FUNCTION,
-            |mut caller: Caller<'_, RuntimeState>, raw_charge: i64| -> Result<(), wasmi::core::Trap> {
+            |mut caller: Caller<'_, RuntimeState>,
+             raw_charge: i64|
+             -> Result<(), wasmi::core::Trap> {
                 let charge = u64::try_from(raw_charge)
                     .map_err(|_| wasmi::core::Trap::from(wasmi::core::TrapCode::OutOfFuel))?;
                 caller
@@ -845,12 +1028,12 @@ pub(crate) fn linker(
     crypto::register(&mut linker)?;
     signature::register(&mut linker)?;
     bigint::register(&mut linker)?;
-    calls::register_candidate(&mut linker)?;
-    context::register_candidate(&mut linker)?;
-    scan::register_candidate(&mut linker)?;
-    storage::register_candidate(&mut linker)?;
-    transfer::register_candidate(&mut linker)?;
-    balance::register_candidate(&mut linker)?;
+    calls::register_v2(&mut linker)?;
+    context::register_v2(&mut linker)?;
+    scan::register_v2(&mut linker)?;
+    storage::register_v2(&mut linker)?;
+    transfer::register_v2(&mut linker)?;
+    balance::register_v2(&mut linker)?;
     transfer::register(&mut linker)?;
     linker
         .func_wrap(

@@ -4,7 +4,7 @@
 //!
 //! Caller-declared activity ceilings and their consumed admission token live in
 //! [`budget`]. The [`abi`] transaction boundary lives in `abi/mod.rs`; capability grants,
-//! encoding, and narrowing live in `abi/capability.rs`; candidate response and
+//! encoding, and narrowing live in `abi/capability.rs`; ABI-v2 response and
 //! refusal transport lives in `abi/response.rs`; and namespaced storage
 //! operations live in `abi/storage_ops.rs`. The private `host/mod.rs` owns
 //! linker orchestration and `RuntimeState`, while `host/memory.rs` owns guest
@@ -17,9 +17,9 @@ pub mod abi;
 #[deny(unsafe_code)]
 pub mod abi_policy;
 #[deny(unsafe_code)]
-pub mod accounts;
-#[deny(unsafe_code)]
 pub mod access;
+#[deny(unsafe_code)]
+pub mod accounts;
 #[deny(unsafe_code)]
 pub mod budget;
 #[deny(unsafe_code)]
@@ -45,14 +45,13 @@ mod ffi;
 #[allow(unsafe_code)]
 mod ffi_call;
 #[cfg(feature = "host-ffi")]
-pub use ffi_call::{settle_host_sandbox_escrow_charge,
-    settle_reserved_host_sandbox_escrow_charge};
-#[cfg(feature = "host-ffi")]
-#[allow(unsafe_code)]
-mod ffi_transfer;
+pub use ffi_call::{settle_host_sandbox_escrow_charge, settle_reserved_host_sandbox_escrow_charge};
 #[cfg(feature = "host-ffi")]
 #[allow(unsafe_code)]
 mod ffi_interface;
+#[cfg(feature = "host-ffi")]
+#[allow(unsafe_code)]
+mod ffi_transfer;
 
 #[cfg(feature = "host-ffi")]
 #[inline(never)]
@@ -115,17 +114,17 @@ pub const fn current_abi_manifest() -> &'static str {
 }
 
 pub use abi::context::{ContextField, ContextRefusal, ExecutionContext};
-pub use abi_policy::{admit_abi_upgrade, admit_abi_version, AbiVersionRefusal};
 pub use abi::response::{CallResponse, ResponseRefusal, MAX_CALL_RESPONSE_BYTES};
-pub use accounts::{
-    derive_program_account, program_account_preimage, ProgramAccount, ProgramAccountError,
-    MAX_PROGRAM_ACCOUNT_SEED_BYTES, PROGRAM_ACCOUNT_BYTES, PROGRAM_ACCOUNT_DOMAIN,
-};
+pub use abi_policy::{admit_abi_upgrade, admit_abi_version, AbiVersionRefusal};
 pub use access::{
     AccessCharge, AccessDeclaration, AccessMode, AccessRefusal, AccessSet, AccessSetBuilder,
     AccountAccess, KeyAccess, StorageAccess, ACCESS_DECLARATION_DOMAIN, ACCESS_SET_DOMAIN,
-    MAX_ACCESS_ACCOUNT_ENTRIES, MAX_ACCESS_DECLARATION_BYTES, MAX_ACCESS_SET_BYTES,
-    MAX_ACCESS_STORAGE_ENTRIES, MAX_ACCESS_CALLEE_ENTRIES,
+    MAX_ACCESS_ACCOUNT_ENTRIES, MAX_ACCESS_CALLEE_ENTRIES, MAX_ACCESS_DECLARATION_BYTES,
+    MAX_ACCESS_SET_BYTES, MAX_ACCESS_STORAGE_ENTRIES,
+};
+pub use accounts::{
+    derive_program_account, program_account_preimage, ProgramAccount, ProgramAccountError,
+    MAX_PROGRAM_ACCOUNT_SEED_BYTES, PROGRAM_ACCOUNT_BYTES, PROGRAM_ACCOUNT_DOMAIN,
 };
 pub use budget::{
     ActivityBudgetBinding, AdmittedBudget, BudgetAdmissionRefusal, BudgetDimension, DeclaredBudget,
@@ -134,8 +133,8 @@ pub use budget::{
 pub use cache::{
     CompiledModule, CompiledModuleRefusal, ModuleCache, ModuleCacheKey, ModuleCacheLimits,
     ModuleCacheLimitsRefusal, RuntimeArtifactOwner, RuntimeArtifactOwnerRefusal,
-    COMPILED_FUNCTION_WEIGHT_BYTES, COMPILED_MODULE_BASE_WEIGHT_BYTES,
-    DEFAULT_MAX_CACHED_MODULE_BYTES, DEFAULT_MAX_CACHED_MODULES,
+    COMPILED_FUNCTION_WEIGHT_BYTES, COMPILED_MODULE_BASE_WEIGHT_BYTES, DEFAULT_MAX_CACHED_MODULES,
+    DEFAULT_MAX_CACHED_MODULE_BYTES,
 };
 pub use calls::{
     call_admission_fuel, CallEdge, CallFrame, CallGraph, CompositionContext, CompositionRefusal,
@@ -145,16 +144,14 @@ pub use calls::{
 };
 pub use commit::{
     arbitration_step_commitment_fuel, arbitration_step_commitment_fuel_with_host,
-    arbitration_step_state_bytes, step_commitment_fuel,
-    ArbitrationExecutionIdentity, ArbitrationExecutionState,
-    ArbitrationExecutionStep, ArbitrationStepCommitment, CommitmentError, ExecutionControlFrame,
-    ExecutionFrame, ExecutionGlobal, ExecutionState, ExecutionStep, ExecutionTrace,
-    ExecutionTraceIdentity, ExecutionValue, StepCommitment,
-    StorageOverlayEntry, TracePolicy,
-    ARBITRATION_STEP_COMMITMENT_DOMAIN, ARBITRATION_STEP_COMMITMENT_VERSION,
-    MAX_ARBITRATION_ENGINE_STATE_BYTES, MAX_ARBITRATION_HOST_STATE_BYTES,
-    MAX_ARBITRATION_STATE_BYTES, MAX_STEP_INSTRUCTION_BYTES, MAX_STEP_STATE_BYTES,
-    MAX_TRACE_COMMITMENTS, MAX_TRACE_STATE_BYTES, STEP_COMMITMENT_BASE_FUEL,
+    arbitration_step_state_bytes, step_commitment_fuel, ArbitrationExecutionIdentity,
+    ArbitrationExecutionState, ArbitrationExecutionStep, ArbitrationStepCommitment,
+    CommitmentError, ExecutionControlFrame, ExecutionFrame, ExecutionGlobal, ExecutionState,
+    ExecutionStep, ExecutionTrace, ExecutionTraceIdentity, ExecutionValue, StepCommitment,
+    StorageOverlayEntry, TracePolicy, ARBITRATION_STEP_COMMITMENT_DOMAIN,
+    ARBITRATION_STEP_COMMITMENT_VERSION, MAX_ARBITRATION_ENGINE_STATE_BYTES,
+    MAX_ARBITRATION_HOST_STATE_BYTES, MAX_ARBITRATION_STATE_BYTES, MAX_STEP_INSTRUCTION_BYTES,
+    MAX_STEP_STATE_BYTES, MAX_TRACE_COMMITMENTS, MAX_TRACE_STATE_BYTES, STEP_COMMITMENT_BASE_FUEL,
     STEP_COMMITMENT_DOMAIN, STEP_COMMITMENT_FUEL_PER_BYTE, STEP_COMMITMENT_VERSION,
 };
 pub use crypto::{hash_bytes, HashAlgorithm};
@@ -167,11 +164,10 @@ pub use execute::{
     CandidateAuthorizedExecutionRecord, CandidateExecutionRecord, CandidateReceiptOutcome,
     ExecutionError, ExecutionFault, ExecutionRecord, Executor, PreparedAuthorizedActivity,
     PreparedAuthorizedActivityOutcome, PreparedMonetarySummary, PreparedTransferLegSummary,
-    ProgramInstance, ProtocolStateCas, ProtocolStateCasRefusal, RuntimeContinuation,
-    RuntimeGlobal, SettlementFailure, TracedExecutionRecord, VerifiedStorageAssignment,
+    ProgramInstance, ProtocolStateCas, ProtocolStateCasRefusal, RuntimeContinuation, RuntimeGlobal,
+    SettlementFailure, TracedExecutionRecord, V2ActivityOutcome, V2ActivityReceipt,
+    V2AuthorizedExecutionRecord, V2ExecutionRecord, V2ReceiptOutcome, VerifiedStorageAssignment,
     WasmValue, RUNTIME_VERSION,
-    V2ActivityOutcome, V2ActivityReceipt, V2AuthorizedExecutionRecord,
-    V2ExecutionRecord, V2ReceiptOutcome,
 };
 pub use fault::{
     FailureEncodingError, ProgramFailure, RefusalClass, RefusalReason, CANDIDATE_REFUSAL_SENTINEL,
@@ -182,12 +178,12 @@ pub use lifecycle::{
     Migration, ProgramVersion, Upgrade, UpgradePolicy,
 };
 pub use limits::{DeclaredLimit, LimitsRefusal, ValidationLimits};
+pub use meter::inject::{FuelSchedule, InjectionRefusal, MeterInjection};
 pub use meter::{
     BudgetMeterRefusal, BudgetResourceKind, DemandPriceAdjustment, DemandPricePolicy,
-    FeeGovernance, FeeSchedule, FeeScheduleError, FeeScheduleHistory, Meter, MeterRefusal, MeteredUsage,
-    ResourceBudget, ResourceKind,
+    FeeGovernance, FeeSchedule, FeeScheduleError, FeeScheduleHistory, Meter, MeterRefusal,
+    MeteredUsage, ResourceBudget, ResourceKind,
 };
-pub use meter::inject::{FuelSchedule, InjectionRefusal, MeterInjection};
 pub use occupancy::{
     OccupancyCharge, OccupancyDisposition, OccupancyError, OccupancyLedger,
     OccupancyResponsibility, OccupancySettlement, OccupancyUsage, PreparedOccupancySettlement,
@@ -209,10 +205,10 @@ pub use storage::{
     StorageNamespace, StorageScan,
 };
 pub use transfer::{
-    AtomicTransferSet, KernelTransferEvidence, KernelTransferPrimitive, ProgramAuthority,
-    ProgramFundingBinding, TransferCapability, TransferLawError, TransferSource,
-    reserve_host_sandbox_escrow_charge, sandbox_escrow_charge_root,
-    ReservedSandboxEscrowCharge, VerifiedProgramSettlement,
+    reserve_host_sandbox_escrow_charge, sandbox_escrow_charge_root, AtomicTransferSet,
+    KernelTransferEvidence, KernelTransferPrimitive, ProgramAuthority, ProgramFundingBinding,
+    ReservedSandboxEscrowCharge, TransferCapability, TransferLawError, TransferSource,
+    VerifiedProgramSettlement,
 };
 pub use validate::{AbiRevision, ValidatedModule, ValidationRefusal};
 
@@ -225,17 +221,16 @@ pub const fn programs_workspace_manifest() -> &'static str {
 /// Identifies the vendored deterministic WASM engine and its pinned revision.
 #[must_use]
 pub const fn programs_wasm_engine() -> &'static str {
-    "wasmi 0.31.2 vendored at programs/vendor/wasmi"
+    "wasmi 0.31.2 vendored at programs/vendor/wasmi-0.31.2"
 }
-pub use abi::{
-    Abi, AbiCommit, AbiEffects, AbiError, AuthorizationContext, BalanceView, CallFrameId,
-    Capability, CapabilitySet, HostFunction, ProgramCall, ProgramEvent, ReceiptOracle,
-    ReceiptView, StorageSelector, TransferRequest, UnavailableReceiptOracle, ABI_MODULE,
-    HOST_FUNCTIONS,
-};
 pub use abi::manifest::{
     manifest as abi_manifest, ABI_V1_MANIFEST, ABI_V1_MODULE, ABI_V1_VERSION,
     ABI_V2_HOST_FUNCTIONS, ABI_V2_MANIFEST, ABI_V2_MODULE, ABI_V2_VERSION,
+};
+pub use abi::{
+    Abi, AbiCommit, AbiEffects, AbiError, AuthorizationContext, BalanceView, CallFrameId,
+    Capability, CapabilitySet, HostFunction, ProgramCall, ProgramEvent, ReceiptOracle, ReceiptView,
+    StorageSelector, TransferRequest, UnavailableReceiptOracle, ABI_MODULE, HOST_FUNCTIONS,
 };
 pub use crypto::bigint::{WideIntegerOp, WideIntegerRefusal, WideIntegerRefusalReason};
 pub use crypto::{

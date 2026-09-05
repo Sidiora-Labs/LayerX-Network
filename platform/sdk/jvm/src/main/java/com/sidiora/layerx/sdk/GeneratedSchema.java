@@ -208,6 +208,55 @@ public final class GeneratedSchema {
                 throw new IllegalArgumentException("unknown schema variant");
             }
         }
+        public record NativeProgramDeploy(JsonNode program_id, JsonNode guest_abi, JsonNode policy, JsonNode authority, JsonNode new_hash, JsonNode wasm, @JsonProperty("interface") JsonNode interface_) implements SchemaTypes.GeneratedResponse {
+            public NativeProgramDeploy {
+                Objects.requireNonNull(program_id, "program_id");
+                Objects.requireNonNull(guest_abi, "guest_abi");
+                Objects.requireNonNull(policy, "policy");
+                Objects.requireNonNull(authority, "authority");
+                Objects.requireNonNull(new_hash, "new_hash");
+                Objects.requireNonNull(wasm, "wasm");
+            }
+        }
+        public record NativeProgramDeployRequest(JsonNode signed_activity) implements SchemaTypes.GeneratedResponse {
+            public NativeProgramDeployRequest {
+                Objects.requireNonNull(signed_activity, "signed_activity");
+            }
+        }
+        public record NativeProgramUpgrade(JsonNode program_id, JsonNode guest_abi, JsonNode old_hash, JsonNode new_hash, JsonNode migration_hook, JsonNode clear_interface, JsonNode wasm, @JsonProperty("interface") JsonNode interface_) implements SchemaTypes.GeneratedResponse {
+            public NativeProgramUpgrade {
+                Objects.requireNonNull(program_id, "program_id");
+                Objects.requireNonNull(guest_abi, "guest_abi");
+                Objects.requireNonNull(old_hash, "old_hash");
+                Objects.requireNonNull(new_hash, "new_hash");
+                Objects.requireNonNull(migration_hook, "migration_hook");
+                Objects.requireNonNull(clear_interface, "clear_interface");
+                Objects.requireNonNull(wasm, "wasm");
+            }
+        }
+        public record NativeProgramUpgradeRequest(JsonNode signed_activity) implements SchemaTypes.GeneratedResponse {
+            public NativeProgramUpgradeRequest {
+                Objects.requireNonNull(signed_activity, "signed_activity");
+            }
+        }
+        public enum NativeProgramWindDown {
+            ROUTE("route"),
+            DEPRECATE("deprecate"),
+            TOMBSTONE("tombstone"),
+            EXIT("exit");
+            private final String wire;
+            NativeProgramWindDown(String wire) { this.wire = wire; }
+            @JsonValue public String wire() { return wire; }
+            @JsonCreator public static NativeProgramWindDown fromWire(String wire) {
+                for (NativeProgramWindDown value : values()) if (value.wire.equals(wire)) return value;
+                throw new IllegalArgumentException("unknown schema variant");
+            }
+        }
+        public record NativeProgramWindDownRequest(JsonNode signed_activity) implements SchemaTypes.GeneratedResponse {
+            public NativeProgramWindDownRequest {
+                Objects.requireNonNull(signed_activity, "signed_activity");
+            }
+        }
         public record ProgramActivitySelector(JsonNode activity_id, JsonNode requested_verification_level) implements SchemaTypes.GeneratedResponse {
             public ProgramActivitySelector {
                 Objects.requireNonNull(activity_id, "activity_id");
@@ -270,6 +319,62 @@ public final class GeneratedSchema {
                 throw new IllegalArgumentException("unknown schema variant");
             }
         }
+        public record ProgramLifecycleError(JsonNode code, JsonNode retry, JsonNode retry_after_seconds) implements SchemaTypes.GeneratedResponse {
+            public ProgramLifecycleError {
+                Objects.requireNonNull(code, "code");
+                Objects.requireNonNull(retry, "retry");
+            }
+        }
+        public record ProgramLifecycleErrorEnvelope(AgentModels.ProgramLifecycleError error) implements SchemaTypes.GeneratedResponse {
+            public ProgramLifecycleErrorEnvelope {
+                Objects.requireNonNull(error, "error");
+            }
+        }
+        public record ProgramLifecycleReceipt(JsonNode activity_id, JsonNode receipt) implements SchemaTypes.GeneratedResponse {
+            public ProgramLifecycleReceipt {
+                Objects.requireNonNull(activity_id, "activity_id");
+                Objects.requireNonNull(receipt, "receipt");
+            }
+        }
+        public record ProgramLifecycleReceiptEnvelope(AgentModels.ProgramLifecycleReceipt result) implements SchemaTypes.GeneratedResponse {
+            public ProgramLifecycleReceiptEnvelope {
+                Objects.requireNonNull(result, "result");
+            }
+        }
+        public enum ProgramLifecycleResponse {
+            PROGRAMLIFECYCLERESULTENVELOPE("ProgramLifecycleResultEnvelope"),
+            PROGRAMLIFECYCLEUNKNOWN("ProgramLifecycleUnknown"),
+            PROGRAMLIFECYCLEERRORENVELOPE("ProgramLifecycleErrorEnvelope");
+            private final String wire;
+            ProgramLifecycleResponse(String wire) { this.wire = wire; }
+            @JsonValue public String wire() { return wire; }
+            @JsonCreator public static ProgramLifecycleResponse fromWire(String wire) {
+                for (ProgramLifecycleResponse value : values()) if (value.wire.equals(wire)) return value;
+                throw new IllegalArgumentException("unknown schema variant");
+            }
+        }
+        public record ProgramLifecycleResult(JsonNode state, JsonNode activity_id, JsonNode receipt, JsonNode terminal_payload, JsonNode call_graph) implements SchemaTypes.GeneratedResponse {
+            public ProgramLifecycleResult {
+                Objects.requireNonNull(state, "state");
+                Objects.requireNonNull(activity_id, "activity_id");
+                Objects.requireNonNull(receipt, "receipt");
+                Objects.requireNonNull(terminal_payload, "terminal_payload");
+                Objects.requireNonNull(call_graph, "call_graph");
+            }
+        }
+        public record ProgramLifecycleResultEnvelope(AgentModels.ProgramLifecycleResult result) implements SchemaTypes.GeneratedResponse {
+            public ProgramLifecycleResultEnvelope {
+                Objects.requireNonNull(result, "result");
+            }
+        }
+        public record ProgramLifecycleUnknown(JsonNode state, JsonNode activity_id, JsonNode retry, JsonNode retry_after_seconds) implements SchemaTypes.GeneratedResponse {
+            public ProgramLifecycleUnknown {
+                Objects.requireNonNull(state, "state");
+                Objects.requireNonNull(activity_id, "activity_id");
+                Objects.requireNonNull(retry, "retry");
+                Objects.requireNonNull(retry_after_seconds, "retry_after_seconds");
+            }
+        }
         public enum ProgramOutcome {
             COMPLETED("completed"),
             LEGACY_COMPLETED("legacy_completed"),
@@ -279,6 +384,17 @@ public final class GeneratedSchema {
             @JsonValue public String wire() { return wire; }
             @JsonCreator public static ProgramOutcome fromWire(String wire) {
                 for (ProgramOutcome value : values()) if (value.wire.equals(wire)) return value;
+                throw new IllegalArgumentException("unknown schema variant");
+            }
+        }
+        public enum ProgramReceiptResponse {
+            PROGRAMSUBMISSION("ProgramSubmission"),
+            PROGRAMLIFECYCLERECEIPTENVELOPE("ProgramLifecycleReceiptEnvelope");
+            private final String wire;
+            ProgramReceiptResponse(String wire) { this.wire = wire; }
+            @JsonValue public String wire() { return wire; }
+            @JsonCreator public static ProgramReceiptResponse fromWire(String wire) {
+                for (ProgramReceiptResponse value : values()) if (value.wire.equals(wire)) return value;
                 throw new IllegalArgumentException("unknown schema variant");
             }
         }
@@ -1882,6 +1998,19 @@ public final class GeneratedSchema {
             }
         }
         public static final SchemaTypes.TypedOperation<ProgramCallRequest, ProgramCallResponse> PROGRAM_CALL = new SchemaTypes.TypedOperation<>(OperationCatalog.Plane.AGENT, "program.call", true, ProgramCallRequest.class, ProgramCallResponse.class);
+        public record ProgramDeployRequest(JsonNode signed_activity) implements SchemaTypes.GeneratedRequest {
+            public ProgramDeployRequest {
+                Objects.requireNonNull(signed_activity, "signed_activity");
+            }
+        }
+        public record ProgramDeployResponse(AgentModels.ProgramLifecycleResponse value) implements SchemaTypes.GeneratedResponse {
+            @JsonCreator(mode = JsonCreator.Mode.DELEGATING)
+            public ProgramDeployResponse {
+                Objects.requireNonNull(value, "value");
+            }
+            @JsonValue public AgentModels.ProgramLifecycleResponse wireValue() { return value; }
+        }
+        public static final SchemaTypes.TypedOperation<ProgramDeployRequest, ProgramDeployResponse> PROGRAM_DEPLOY = new SchemaTypes.TypedOperation<>(OperationCatalog.Plane.AGENT, "program.deploy", true, ProgramDeployRequest.class, ProgramDeployResponse.class);
         public record ProgramDiscoverRequest(JsonNode program_id, JsonNode requested_verification_level) implements SchemaTypes.GeneratedRequest {
             public ProgramDiscoverRequest {
                 Objects.requireNonNull(program_id, "program_id");
@@ -1935,12 +2064,12 @@ public final class GeneratedSchema {
                 Objects.requireNonNull(requested_verification_level, "requested_verification_level");
             }
         }
-        public record ProgramReceiptResponse(JsonNode state, JsonNode activity_id, JsonNode idempotency_key) implements SchemaTypes.GeneratedResponse {
+        public record ProgramReceiptResponse(AgentModels.ProgramReceiptResponse value) implements SchemaTypes.GeneratedResponse {
+            @JsonCreator(mode = JsonCreator.Mode.DELEGATING)
             public ProgramReceiptResponse {
-                Objects.requireNonNull(state, "state");
-                Objects.requireNonNull(activity_id, "activity_id");
-                Objects.requireNonNull(idempotency_key, "idempotency_key");
+                Objects.requireNonNull(value, "value");
             }
+            @JsonValue public AgentModels.ProgramReceiptResponse wireValue() { return value; }
         }
         public static final SchemaTypes.TypedOperation<ProgramReceiptRequest, ProgramReceiptResponse> PROGRAM_RECEIPT = new SchemaTypes.TypedOperation<>(OperationCatalog.Plane.AGENT, "program.receipt", false, ProgramReceiptRequest.class, ProgramReceiptResponse.class);
         public record ProgramSimulateRequest(JsonNode program_id, JsonNode calldata, AgentModels.ProgramCallBudget budget, JsonNode capabilities, JsonNode signed_activity) implements SchemaTypes.GeneratedRequest {
@@ -1960,6 +2089,32 @@ public final class GeneratedSchema {
             }
         }
         public static final SchemaTypes.TypedOperation<ProgramSimulateRequest, ProgramSimulateResponse> PROGRAM_SIMULATE = new SchemaTypes.TypedOperation<>(OperationCatalog.Plane.AGENT, "program.simulate", false, ProgramSimulateRequest.class, ProgramSimulateResponse.class);
+        public record ProgramUpgradeRequest(JsonNode signed_activity) implements SchemaTypes.GeneratedRequest {
+            public ProgramUpgradeRequest {
+                Objects.requireNonNull(signed_activity, "signed_activity");
+            }
+        }
+        public record ProgramUpgradeResponse(AgentModels.ProgramLifecycleResponse value) implements SchemaTypes.GeneratedResponse {
+            @JsonCreator(mode = JsonCreator.Mode.DELEGATING)
+            public ProgramUpgradeResponse {
+                Objects.requireNonNull(value, "value");
+            }
+            @JsonValue public AgentModels.ProgramLifecycleResponse wireValue() { return value; }
+        }
+        public static final SchemaTypes.TypedOperation<ProgramUpgradeRequest, ProgramUpgradeResponse> PROGRAM_UPGRADE = new SchemaTypes.TypedOperation<>(OperationCatalog.Plane.AGENT, "program.upgrade", true, ProgramUpgradeRequest.class, ProgramUpgradeResponse.class);
+        public record ProgramWindDownRequest(JsonNode signed_activity) implements SchemaTypes.GeneratedRequest {
+            public ProgramWindDownRequest {
+                Objects.requireNonNull(signed_activity, "signed_activity");
+            }
+        }
+        public record ProgramWindDownResponse(AgentModels.ProgramLifecycleResponse value) implements SchemaTypes.GeneratedResponse {
+            @JsonCreator(mode = JsonCreator.Mode.DELEGATING)
+            public ProgramWindDownResponse {
+                Objects.requireNonNull(value, "value");
+            }
+            @JsonValue public AgentModels.ProgramLifecycleResponse wireValue() { return value; }
+        }
+        public static final SchemaTypes.TypedOperation<ProgramWindDownRequest, ProgramWindDownResponse> PROGRAM_WIND_DOWN = new SchemaTypes.TypedOperation<>(OperationCatalog.Plane.AGENT, "program.wind-down", true, ProgramWindDownRequest.class, ProgramWindDownResponse.class);
         public record ProjectRequest() implements SchemaTypes.GeneratedRequest {
         }
         public record ProjectResponse(JsonNode value) implements SchemaTypes.GeneratedResponse {
@@ -3342,10 +3497,13 @@ public final class GeneratedSchema {
         Map.entry("prepare", AgentOperations.PREPARE ),
         Map.entry("program.activity", AgentOperations.PROGRAM_ACTIVITY ),
         Map.entry("program.call", AgentOperations.PROGRAM_CALL ),
+        Map.entry("program.deploy", AgentOperations.PROGRAM_DEPLOY ),
         Map.entry("program.discover", AgentOperations.PROGRAM_DISCOVER ),
         Map.entry("program.interface", AgentOperations.PROGRAM_INTERFACE ),
         Map.entry("program.receipt", AgentOperations.PROGRAM_RECEIPT ),
         Map.entry("program.simulate", AgentOperations.PROGRAM_SIMULATE ),
+        Map.entry("program.upgrade", AgentOperations.PROGRAM_UPGRADE ),
+        Map.entry("program.wind-down", AgentOperations.PROGRAM_WIND_DOWN ),
         Map.entry("project", AgentOperations.PROJECT ),
         Map.entry("read.account", AgentOperations.READ_ACCOUNT ),
         Map.entry("read.balance", AgentOperations.READ_BALANCE ),

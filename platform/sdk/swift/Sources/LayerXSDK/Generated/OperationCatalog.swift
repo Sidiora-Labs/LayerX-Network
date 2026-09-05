@@ -20,10 +20,13 @@ public enum PlatformOperation: String, CaseIterable, Sendable {
     case agentPrepare = "agent:prepare"
     case agentProgramActivity = "agent:program.activity"
     case agentProgramCall = "agent:program.call"
+    case agentProgramDeploy = "agent:program.deploy"
     case agentProgramDiscover = "agent:program.discover"
     case agentProgramInterface = "agent:program.interface"
     case agentProgramReceipt = "agent:program.receipt"
     case agentProgramSimulate = "agent:program.simulate"
+    case agentProgramUpgrade = "agent:program.upgrade"
+    case agentProgramWindDown = "agent:program.wind-down"
     case agentProject = "agent:project"
     case agentReadAccount = "agent:read.account"
     case agentReadBalance = "agent:read.balance"
@@ -147,10 +150,13 @@ public enum PlatformOperation: String, CaseIterable, Sendable {
         case .agentPrepare: return OperationDescriptor(plane: .agent, name: "prepare", method: .post, path: "", requestType: "PrepareRequest", responseType: "Prepared", requiresIdempotency: true, bodyless: false)
         case .agentProgramActivity: return OperationDescriptor(plane: .agent, name: "program.activity", method: .get, path: "/v1/programs/activities/{activity_id}", requestType: "ProgramActivitySelector", responseType: "ProgramSubmission", requiresIdempotency: false, bodyless: false)
         case .agentProgramCall: return OperationDescriptor(plane: .agent, name: "program.call", method: .post, path: "/v1/programs/call", requestType: "ProgramCallRequest", responseType: "ProgramSubmission", requiresIdempotency: true, bodyless: false)
+        case .agentProgramDeploy: return OperationDescriptor(plane: .agent, name: "program.deploy", method: .post, path: "/v1/programs/deploy", requestType: "NativeProgramDeployRequest", responseType: "ProgramLifecycleResponse", requiresIdempotency: true, bodyless: false)
         case .agentProgramDiscover: return OperationDescriptor(plane: .agent, name: "program.discover", method: .get, path: "/v1/programs/registry/{program_id}", requestType: "ProgramSelector", responseType: "VerifiedProgramDiscovery", requiresIdempotency: false, bodyless: false)
         case .agentProgramInterface: return OperationDescriptor(plane: .agent, name: "program.interface", method: .get, path: "/v1/programs/registry/{program_id}/interface", requestType: "ProgramSelector", responseType: "VerifiedProgramInterface", requiresIdempotency: false, bodyless: false)
-        case .agentProgramReceipt: return OperationDescriptor(plane: .agent, name: "program.receipt", method: .get, path: "/v1/programs/receipts/by-idempotency/{idempotency_key}", requestType: "ProgramReceiptSelector", responseType: "ProgramSubmission", requiresIdempotency: false, bodyless: false)
+        case .agentProgramReceipt: return OperationDescriptor(plane: .agent, name: "program.receipt", method: .get, path: "/v1/programs/receipts/by-idempotency/{idempotency_key}", requestType: "ProgramReceiptSelector", responseType: "ProgramReceiptResponse", requiresIdempotency: false, bodyless: false)
         case .agentProgramSimulate: return OperationDescriptor(plane: .agent, name: "program.simulate", method: .post, path: "/v1/programs/simulate", requestType: "ProgramCallRequest", responseType: "ProgramSimulation", requiresIdempotency: false, bodyless: false)
+        case .agentProgramUpgrade: return OperationDescriptor(plane: .agent, name: "program.upgrade", method: .post, path: "/v1/programs/upgrade", requestType: "NativeProgramUpgradeRequest", responseType: "ProgramLifecycleResponse", requiresIdempotency: true, bodyless: false)
+        case .agentProgramWindDown: return OperationDescriptor(plane: .agent, name: "program.wind-down", method: .post, path: "/v1/programs/wind-down", requestType: "NativeProgramWindDownRequest", responseType: "ProgramLifecycleResponse", requiresIdempotency: true, bodyless: false)
         case .agentProject: return OperationDescriptor(plane: .agent, name: "project", method: .post, path: "", requestType: "object", responseType: "ProjectionResult", requiresIdempotency: false, bodyless: false)
         case .agentReadAccount: return OperationDescriptor(plane: .agent, name: "read.account", method: .post, path: "", requestType: "object", responseType: "VerifiedRead<AccountValue>", requiresIdempotency: false, bodyless: false)
         case .agentReadBalance: return OperationDescriptor(plane: .agent, name: "read.balance", method: .post, path: "", requestType: "object", responseType: "VerifiedRead<BalanceValue>", requiresIdempotency: false, bodyless: false)
@@ -314,6 +320,9 @@ public extension PlatformClient {
     func agentProgramCall(_ request: JSONValue, idempotencyKey: IdempotencyKey, pathParameters: [String: String] = [:]) async throws -> JSONValue {
         try await mutate(.agentProgramCall, request: request, idempotencyKey: idempotencyKey, pathParameters: pathParameters)
     }
+    func agentProgramDeploy(_ request: JSONValue, idempotencyKey: IdempotencyKey, pathParameters: [String: String] = [:]) async throws -> JSONValue {
+        try await mutate(.agentProgramDeploy, request: request, idempotencyKey: idempotencyKey, pathParameters: pathParameters)
+    }
     func agentProgramDiscover(_ request: JSONValue, pathParameters: [String: String] = [:]) async throws -> JSONValue {
         try await read(.agentProgramDiscover, request: request, pathParameters: pathParameters)
     }
@@ -325,6 +334,12 @@ public extension PlatformClient {
     }
     func agentProgramSimulate(_ request: JSONValue, pathParameters: [String: String] = [:]) async throws -> JSONValue {
         try await read(.agentProgramSimulate, request: request, pathParameters: pathParameters)
+    }
+    func agentProgramUpgrade(_ request: JSONValue, idempotencyKey: IdempotencyKey, pathParameters: [String: String] = [:]) async throws -> JSONValue {
+        try await mutate(.agentProgramUpgrade, request: request, idempotencyKey: idempotencyKey, pathParameters: pathParameters)
+    }
+    func agentProgramWindDown(_ request: JSONValue, idempotencyKey: IdempotencyKey, pathParameters: [String: String] = [:]) async throws -> JSONValue {
+        try await mutate(.agentProgramWindDown, request: request, idempotencyKey: idempotencyKey, pathParameters: pathParameters)
     }
     func agentProject(_ request: JSONValue, pathParameters: [String: String] = [:]) async throws -> JSONValue {
         try await read(.agentProject, request: request, pathParameters: pathParameters)
@@ -631,6 +646,6 @@ public extension PlatformClient {
     }
 }
 
-private let sdkMetadata = SDKMetadata(name: "LayerXSDK", version: "0.1.0", agentOperations: 46, humanOperations: 78)
+private let sdkMetadata = SDKMetadata(name: "LayerXSDK", version: "0.1.0", agentOperations: 49, humanOperations: 78)
 
 public func platform_sdk_swift() -> SDKMetadata { sdkMetadata }

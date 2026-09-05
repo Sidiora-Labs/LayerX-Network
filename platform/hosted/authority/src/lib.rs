@@ -7,7 +7,7 @@
 
 use layerx_proof::inclusion::{verify_receipt, InclusionError, SequencerAuthorization};
 use layerx_proof::merkle::{decode_proof, encode_proof, Proof};
-use layerx_proof::receipt::{verify_outcome, AuthorizedBatch, ReceiptCheck};
+use layerx_proof::receipt::{verify_outcome, verify_program_state, AuthorizedBatch, ReceiptCheck};
 use layerx_wire::hash::{receipt_digest, receipt_execution_batch_id};
 use layerx_wire::receipt::{decode, decode_merkle_proof, encode_unsigned};
 use serde::Deserialize;
@@ -299,8 +299,7 @@ pub fn authorized_batch_by_activity(
         header.resulting_state_root(),
         authorization.public_key(),
     );
-    verify_outcome(receipt_bytes, &authorised)
-        .map_err(|failure| EvidenceRefusal::Receipt(failure.check))?;
+    verify_authorized_receipt(receipt_bytes, &authorised)?;
     Ok(AuthorityFacts {
         activity_id,
         batch_id: expected,
@@ -312,3 +311,26 @@ pub fn authorized_batch_by_activity(
         batch_number: header.batch_number(),
     })
 }
+
+fn verify_authorized_receipt(
+    receipt_bytes: &[u8],
+    authorised: &AuthorizedBatch,
+) -> Result<(), EvidenceRefusal> {
+    let receipt = decode(receipt_bytes).map_err(|_| EvidenceRefusal::ReceiptDecode)?;
+    let protocol = receipt.protocol().ok_or(EvidenceRefusal::ReceiptShape)?;
+    if protocol.module_id() == 9 && protocol.operation() == 0 {
+        if protocol.program_outcome().is_some() {
+            return Err(EvidenceRefusal::Receipt(ReceiptCheck::ReceiptShape));
+        }
+        verify_program_state(receipt_bytes, authorised)
+            .map_err(|failure| EvidenceRefusal::Receipt(failure.check))?;
+    } else {
+        verify_outcome(receipt_bytes, authorised)
+            .map_err(|failure| EvidenceRefusal::Receipt(failure.check))?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+#[path = "../tests/support/lifecycle_dispatch.rs"]
+mod lifecycle_dispatch;

@@ -1622,6 +1622,12 @@ lxp_result layerx_programs_call_transfer_apply(uint64_t token)
     set->context.asset_count = runtime->asset_count;
     (void)memcpy(set->context.authorized_from, value->authority->principal, 32U);
     set->context.actor_sequence = lxp_ctx_global_sequence(value->ctx);
+    {
+        lxp_result status = lxp_ctx_ledger_execution_sequence(
+            value->ctx, value->authority->principal,
+            set->context.actor_sequence, &set->context.actor_sequence);
+        if (status != LXP_OK) return status;
+    }
     set->context.batch_timestamp = lxp_ctx_batch_timestamp_ms(value->ctx);
     set->context.sequence_account = sequence_account;
     set->context.debit_authority_kind = LXP_AUTH_OWNER;

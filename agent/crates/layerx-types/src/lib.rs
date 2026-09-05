@@ -13,6 +13,7 @@ pub mod limits;
 pub mod payload;
 pub mod policy;
 pub mod program_call;
+pub mod program_lifecycle;
 pub mod receipt;
 pub mod result;
 pub mod settlement;

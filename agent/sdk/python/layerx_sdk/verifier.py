@@ -11,6 +11,11 @@ from .generated.receipt import (
     ReceiptFailureCode,
 )
 
+def programs_module_version_for_protocol(protocol: object, module: object, account_state: bool = False) -> bool:
+    if type(protocol) is not int or type(module) is not int or type(account_state) is not bool or protocol not in (2, 3):
+        return False
+    return module in ((4,) if protocol == 3 else ((2, 3) if account_state else (1, 2, 3)))
+
 _MERKLE_LEAF_DOMAIN = b"LXP/v1/merkle-leaf\0"
 _MERKLE_INTERNAL_DOMAIN = b"LXP/v1/merkle-internal\0"
 _BATCH_HEADER_DOMAIN = b"LXP/v1/batch-header\0"
@@ -850,6 +855,19 @@ def _decode_protocol_receipt(canonical_receipt: bytes) -> tuple[ProtocolReceipt,
     )
 
 
+def verify_program_lifecycle_receipt(canonical_receipt: bytes, expected_activity: bytes, sequencer_public_key: bytes, signatures: LocalSignatureVerifier) -> ReceiptVerification:
+    receipt, unsigned = _decode_protocol_receipt(canonical_receipt)
+    if (receipt.protocol_version != 3 or receipt.module_id != 9 or receipt.module_version != 4
+            or receipt.operation != 0 or receipt.program_outcome is not None):
+        _receipt_failure(ReceiptFailureCode.OPERATION)
+    if not _equal(receipt.activity_id, _exact(expected_activity, 32)):
+        _receipt_failure(ReceiptFailureCode.ACTIVITY_ID)
+    digest = _digest(_RECEIPT_DOMAIN, unsigned)
+    if not signatures.verify_ed25519(_exact(sequencer_public_key, 32), receipt.sequencer_signature, digest):
+        _receipt_failure(ReceiptFailureCode.SEQUENCER_SIGNATURE)
+    return ReceiptVerification(level="sequencer-signed", receipt=receipt, canonical_bytes=bytes(canonical_receipt), receipt_digest=digest)
+
+
 def verify_receipt_outcome(
     canonical_receipt: bytes,
     authorized: AuthorizedReceiptBatch,
@@ -867,8 +885,7 @@ def verify_receipt_outcome(
     _exact(authorized.asset, 32)
     program = receipt.module_id == PROGRAMS_MODULE_ID and receipt.operation in (0, 3)
     if program:
-        valid_modules = (4,) if protocol_version == 3 else ((2, 3) if receipt.operation == 0 else (1, 2, 3))
-        if receipt.module_version not in valid_modules:
+        if not programs_module_version_for_protocol(protocol_version, receipt.module_version, receipt.operation == 0):
             _receipt_failure(ReceiptFailureCode.MODULE_VERSION)
         if receipt.operation == 0 and receipt.result_code != 0:
             _receipt_failure(ReceiptFailureCode.RESULT_CODE)

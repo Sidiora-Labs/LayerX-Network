@@ -150,6 +150,9 @@ impl OperationClass {
             | Operation::CapabilityCreate
             | Operation::CapabilityRevoke
             | Operation::ProgramCall
+            | Operation::ProgramDeploy
+            | Operation::ProgramUpgrade
+            | Operation::ProgramWindDown
             | Operation::SessionClose
             | Operation::SessionRefresh
             | Operation::Sign
@@ -172,6 +175,9 @@ impl OperationClass {
             Operation::ProgramReceipt => &["read", "program:read", "read:receipt"],
             Operation::ProgramSimulate => &["read", "program:simulate"],
             Operation::ProgramCall => &["write", "program:call"],
+            Operation::ProgramDeploy => &["write", "program:deploy"],
+            Operation::ProgramUpgrade => &["write", "program:upgrade"],
+            Operation::ProgramWindDown => &["write", "program:wind-down"],
             Operation::ReadCheckpoint => &["read", "read:checkpoint"],
             Operation::ReadProofBundle => &["read", "read:proof"],
             Operation::AvailabilityFetch => &["read", "read:availability"],
@@ -442,5 +448,30 @@ pub fn require_owner(
         Err(AuthorizationError::NotAuthorized)
     } else {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_scope_tests {
+    use super::{Operation, OperationClass};
+
+    #[test]
+    fn lifecycle_operations_have_explicit_write_scopes() {
+        for (operation, scope) in [
+            (Operation::ProgramDeploy, "program:deploy"),
+            (Operation::ProgramUpgrade, "program:upgrade"),
+            (Operation::ProgramWindDown, "program:wind-down"),
+        ] {
+            assert_eq!(
+                OperationClass::for_operation(operation),
+                Some(OperationClass::Write)
+            );
+            assert_eq!(
+                OperationClass::authorized_scopes(operation),
+                &["write", scope]
+            );
+            assert!(!OperationClass::authorized_scopes(operation).contains(&"read"));
+            assert!(!OperationClass::authorized_scopes(operation).contains(&"program:call"));
+        }
     }
 }

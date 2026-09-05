@@ -193,6 +193,16 @@
     },
     {
       "plane": "agent",
+      "name": "program.deploy",
+      "method": "POST",
+      "path": "/v1/programs/deploy",
+      "request": "NativeProgramDeployRequest",
+      "response": "ProgramLifecycleResponse",
+      "idempotency": true,
+      "bodyless": false
+    },
+    {
+      "plane": "agent",
       "name": "program.discover",
       "method": "GET",
       "path": "/v1/programs/registry/{program_id}",
@@ -217,7 +227,7 @@
       "method": "GET",
       "path": "/v1/programs/receipts/by-idempotency/{idempotency_key}",
       "request": "ProgramReceiptSelector",
-      "response": "ProgramSubmission",
+      "response": "ProgramReceiptResponse",
       "idempotency": false,
       "bodyless": false
     },
@@ -229,6 +239,26 @@
       "request": "ProgramCallRequest",
       "response": "ProgramSimulation",
       "idempotency": false,
+      "bodyless": false
+    },
+    {
+      "plane": "agent",
+      "name": "program.upgrade",
+      "method": "POST",
+      "path": "/v1/programs/upgrade",
+      "request": "NativeProgramUpgradeRequest",
+      "response": "ProgramLifecycleResponse",
+      "idempotency": true,
+      "bodyless": false
+    },
+    {
+      "plane": "agent",
+      "name": "program.wind-down",
+      "method": "POST",
+      "path": "/v1/programs/wind-down",
+      "request": "NativeProgramWindDownRequest",
+      "response": "ProgramLifecycleResponse",
+      "idempotency": true,
       "bodyless": false
     },
     {

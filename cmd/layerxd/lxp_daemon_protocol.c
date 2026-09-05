@@ -393,6 +393,45 @@ static lxp_result artifacts_route(lxp_daemon_protocol_owner *owner,
     return writer->status;
 }
 
+static lxp_result idempotency_receipt_route(
+    lxp_daemon_protocol_owner *owner, const uint8_t key[32],
+    lxp_arena *arena, json_writer *writer)
+{
+    lxp_receipt_query query;
+    lxp_byte_span canonical = {NULL, 0U};
+    lxp_receipt receipt;
+    lxp_daemon_receipt_evidence evidence;
+    uint8_t digest[32];
+    lxp_result status;
+    if (owner->history == NULL || owner->receipt_authority == NULL)
+        return LXP_ERR_PROJECTION_STALE;
+    (void)memset(&query, 0, sizeof(query));
+    query.kind = LXP_RECEIPT_BY_IDEMPOTENCY_KEY;
+    query.maximum_response_bytes = LXP_MAX_ACTIVITY_BYTES;
+    (void)memcpy(query.identifier, key, 32U);
+    status = lxp_receipt_lookup(owner->history, &query, arena, &canonical);
+    if (status == LXP_OK)
+        status = lxp_receipt_decode(canonical.bytes, canonical.length, true, &receipt);
+    if (status == LXP_OK && receipt.module_id != LXP_MODULE_PROGRAMS)
+        status = LXP_ERR_UNKNOWN_ACTIVITY;
+    if (status == LXP_OK) status = lxp_receipt_digest(&receipt, arena, digest);
+    if (status == LXP_OK)
+        status = lxp_daemon_receipt_authority_lookup(
+            owner->receipt_authority, digest, arena, &evidence);
+    if (status == LXP_OK &&
+        (evidence.canonical_receipt.length != canonical.length ||
+         lxp_ct_memcmp(evidence.canonical_receipt.bytes, canonical.bytes,
+                       canonical.length) != 0))
+        status = LXP_ERR_CONTEXT_MISMATCH;
+    if (status != LXP_OK) return status;
+    json_text(writer, "{\"activity_id\":\"");
+    json_hex(writer, receipt.activity_id, 32U);
+    json_text(writer, "\",\"receipt\":\"");
+    json_hex(writer, canonical.bytes, canonical.length);
+    json_text(writer, "\"}");
+    return writer->status;
+}
+
 static lxp_result batch_route(lxp_daemon_protocol_owner *owner,
                               const uint8_t batch_id[32],
                               const uint8_t receipt_digest[32],
@@ -437,6 +476,22 @@ static lxp_result route_inner(lxp_daemon_protocol_owner *owner,
     }
     if (strncmp(path, program_prefix, sizeof(program_prefix) - 1U) == 0) {
         const char *suffix = path + sizeof(program_prefix) - 1U;
+        static const char idempotency_prefix[] = "receipts/by-idempotency/";
+        if (strncmp(suffix, idempotency_prefix, sizeof(idempotency_prefix) - 1U) == 0) {
+            const char *key_text = suffix + sizeof(idempotency_prefix) - 1U;
+            uint8_t key[32];
+            size_t index;
+            if (strlen(key_text) != 64U) return LXP_ERR_NON_CANONICAL;
+            for (index = 0U; index < 64U; ++index) {
+                if (hex_nibble(key_text[index]) < 0 ||
+                    (key_text[index] >= 'A' && key_text[index] <= 'F'))
+                    return LXP_ERR_NON_CANONICAL;
+            }
+            for (index = 0U; index < 32U; ++index)
+                key[index] = (uint8_t)((unsigned int)hex_nibble(key_text[index * 2U]) << 4U |
+                                      (unsigned int)hex_nibble(key_text[index * 2U + 1U]));
+            return idempotency_receipt_route(owner, key, arena, writer);
+        }
         if (strncmp(suffix, "activities/", 11U) == 0) {
             static const char tail[] = "/artifacts?receipt_digest=";
             char activity_text[65];

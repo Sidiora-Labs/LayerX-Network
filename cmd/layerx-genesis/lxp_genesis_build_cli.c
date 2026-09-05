@@ -317,9 +317,9 @@ lxp_result lxp_genesis_deployment_descriptor_encode(
     return LXP_OK;
 }
 
-lxp_result lxp_genesis_build_artifacts(
+static lxp_result build_artifacts(
     const char *request_path, const char *signer_key_path,
-    const char *output_directory)
+    const char *output_directory, const char *profile_path)
 {
     static const char manifest_name[] = "genesis.manifest";
     static const char snapshot_name[] = "00000000000000000000.lxs";
@@ -332,6 +332,9 @@ lxp_result lxp_genesis_build_artifacts(
     uint8_t deployment_descriptor[LXP_GENESIS_DEPLOYMENT_DESCRIPTOR_BYTES];
     uint8_t asset_id[32];
     uint8_t *request_bytes = NULL;
+    uint8_t *profile_bytes = NULL;
+    size_t profile_length = 0U;
+    lxp_bridge_profile profile;
     uint8_t *signer_key = NULL;
     uint8_t *arena_bytes = NULL;
     size_t request_length = 0U;
@@ -357,6 +360,16 @@ lxp_result lxp_genesis_build_artifacts(
         return LXP_ERR_NON_CANONICAL;
     status = read_regular_file(request_path, GENESIS_BUILD_REQUEST_MAX_BYTES,
                                false, &request_bytes, &request_length);
+    if (status == LXP_OK && profile_path != NULL)
+        status = read_regular_file(profile_path, LXP_BRIDGE_PROFILE_BYTES, false,
+                                    &profile_bytes, &profile_length);
+    if (status == LXP_OK && profile_path != NULL) {
+        if (profile_length != sizeof(profile.bytes)) status = LXP_ERR_NON_CANONICAL;
+        else {
+            (void)memcpy(profile.bytes, profile_bytes, sizeof(profile.bytes));
+            status = lxp_bridge_profile_validate(&profile);
+        }
+    }
     if (status == LXP_OK)
         status = read_regular_file(signer_key_path, 32U, true,
                                    &signer_key, &signer_key_length);
@@ -374,9 +387,13 @@ lxp_result lxp_genesis_build_artifacts(
     if (status == LXP_OK)
         status = lxp_arena_init(&arena, arena_bytes,
                                 GENESIS_BUILD_ARENA_BYTES);
-    if (status == LXP_OK)
+    if (status == LXP_OK && profile_path == NULL)
         status = lxp_genesis_build_fresh_empty(
             draft, asset_id, &metering, &fees, signer_key, &arena, manifest,
+            &snapshot_manifest, &encoded_manifest, &snapshot);
+    if (status == LXP_OK && profile_path != NULL)
+        status = lxp_genesis_build_fresh_custody(
+            draft, asset_id, &metering, &fees, &profile, signer_key, &arena, manifest,
             &snapshot_manifest, &encoded_manifest, &snapshot);
     if (status == LXP_OK)
         status = lxp_genesis_registration_request_encode(
@@ -458,13 +475,22 @@ lxp_result lxp_genesis_build_artifacts(
     free(draft);
     free(manifest);
     free(arena_bytes);
+    free(profile_bytes);
     return status;
+}
+
+lxp_result lxp_genesis_build_artifacts(
+    const char *request_path, const char *signer_key_path,
+    const char *output_directory)
+{
+    return build_artifacts(request_path, signer_key_path, output_directory, NULL);
 }
 
 int lxp_genesis_builder_cli_main(int argc, char **argv)
 {
-    if (argc != 4 || argv == NULL)
+    if (argv == NULL || (argc != 4 && argc != 6) ||
+        (argc == 6 && strcmp(argv[4], "--custody-profile") != 0))
         return 2;
-    return lxp_genesis_build_artifacts(argv[1], argv[2], argv[3]) == LXP_OK ?
+    return build_artifacts(argv[1], argv[2], argv[3], argc == 6 ? argv[5] : NULL) == LXP_OK ?
         0 : 1;
 }

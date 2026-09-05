@@ -277,7 +277,8 @@ impl AuthorityFacts {
         self.sequencer_public_key
     }
 
-    fn authorized(self) -> AuthorizedBatch {
+    #[must_use]
+    pub fn authorized(self) -> AuthorizedBatch {
         AuthorizedBatch::new(
             self.batch_id,
             self.asset,
@@ -763,13 +764,19 @@ pub enum ProductionRoute<'a> {
     ProgramInterface(&'a str),
     ProgramSimulation,
     ProgramCall,
+    ProgramDeploy,
+    ProgramUpgrade,
+    ProgramWindDown,
     ProgramActivity(&'a str),
     ProgramReceiptByIdempotency(&'a str),
 }
 
-const PLATFORM_GATEWAY_PROGRAM_ROUTES: [&str; 6] = [
+const PLATFORM_GATEWAY_PROGRAM_ROUTES: [&str; 9] = [
     "POST /v1/programs/call",
     "POST /v1/programs/simulate",
+    "POST /v1/programs/deploy",
+    "POST /v1/programs/upgrade",
+    "POST /v1/programs/wind-down",
     "GET /v1/programs/registry/{program_id}",
     "GET /v1/programs/registry/{program_id}/interface",
     "GET /v1/programs/activities/{activity_id}",
@@ -777,7 +784,7 @@ const PLATFORM_GATEWAY_PROGRAM_ROUTES: [&str; 6] = [
 ];
 
 #[must_use]
-pub const fn platform_gateway_program_routes() -> &'static [&'static str; 6] {
+pub const fn platform_gateway_program_routes() -> &'static [&'static str; 9] {
     &PLATFORM_GATEWAY_PROGRAM_ROUTES
 }
 
@@ -794,6 +801,9 @@ pub fn production_route<'a>(
         ("POST", "/v1/activities") => Ok(ProductionRoute::Activity),
         ("POST", "/v1/programs/simulate") => Ok(ProductionRoute::ProgramSimulation),
         ("POST", "/v1/programs/call") => Ok(ProductionRoute::ProgramCall),
+        ("POST", "/v1/programs/deploy") => Ok(ProductionRoute::ProgramDeploy),
+        ("POST", "/v1/programs/upgrade") => Ok(ProductionRoute::ProgramUpgrade),
+        ("POST", "/v1/programs/wind-down") => Ok(ProductionRoute::ProgramWindDown),
         ("GET", "/v1/state") => Ok(ProductionRoute::State),
         ("GET", path) if path.starts_with("/v1/programs/activities/") => {
             let id = path
@@ -952,6 +962,9 @@ mod tests {
             &[
                 "POST /v1/programs/call",
                 "POST /v1/programs/simulate",
+                "POST /v1/programs/deploy",
+                "POST /v1/programs/upgrade",
+                "POST /v1/programs/wind-down",
                 "GET /v1/programs/registry/{program_id}",
                 "GET /v1/programs/registry/{program_id}/interface",
                 "GET /v1/programs/activities/{activity_id}",
@@ -959,6 +972,16 @@ mod tests {
             ]
         );
         let identifier = "a".repeat(64);
+        for (path, expected) in [
+            ("/v1/programs/deploy", ProductionRoute::ProgramDeploy),
+            ("/v1/programs/upgrade", ProductionRoute::ProgramUpgrade),
+            ("/v1/programs/wind-down", ProductionRoute::ProgramWindDown),
+        ] {
+            assert_eq!(production_route("POST", path), Ok(expected));
+            assert!(production_route("GET", path).is_err());
+            assert!(production_route("PUT", path).is_err());
+            assert!(production_route("POST", &format!("{path}/")).is_err());
+        }
         assert!(matches!(
             production_route("POST", "/v1/programs/call"),
             Ok(ProductionRoute::ProgramCall)
