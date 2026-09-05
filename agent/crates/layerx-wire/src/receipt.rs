@@ -883,6 +883,8 @@ pub fn encode_unsigned(receipt: &Receipt) -> Result<Vec<u8>, WireError> {
 
 #[cfg(test)]
 mod program_outcome_vectors {
+    use std::fmt::Write as _;
+
     use super::*;
 
     #[test]
@@ -958,11 +960,14 @@ mod program_outcome_vectors {
         };
         let mut encoder = Encoder::new(MAX_MESSAGE_BYTES);
         encode_program_outcome(&mut encoder, &outcome, 1)?;
-        let encoded = encoder.finish();
-        let encoded_hex: String = encoded.iter().map(|byte| format!("{byte:02x}")).collect();
-        assert_eq!(encoded_hex, C_VECTOR);
-        assert_eq!(&encoded[..4], &PROGRAM_OUTCOME_V3.to_be_bytes());
-        let mut decoder = Decoder::new(&encoded, MAX_MESSAGE_BYTES);
+        let bytes = encoder.finish();
+        let hex = bytes.iter().fold(String::new(), |mut text, byte| {
+            let _ = write!(text, "{byte:02x}");
+            text
+        });
+        assert_eq!(hex, C_VECTOR);
+        assert_eq!(&bytes[..4], &PROGRAM_OUTCOME_V3.to_be_bytes());
+        let mut decoder = Decoder::new(&bytes, MAX_MESSAGE_BYTES);
         assert_eq!(decode_program_outcome(&mut decoder, 1)?, outcome);
         decoder.finish()
     }

@@ -279,7 +279,9 @@ fn protocol_v2_checkpoint_header_matches_the_c_and_solidity_vector() {
     let header = protocol_v2_checkpoint_vector_header();
     assert_eq!(header.len(), 354);
     assert_eq!(&header[..2], &[0, 2]);
-    let decoded = decode_batch_header(&header).expect("v2 checkpoint header");
+    let Ok(decoded) = decode_batch_header(&header) else {
+        panic!("v2 checkpoint header rejected");
+    };
     assert_eq!(decoded.protocol_version(), 2);
     assert_eq!(encode_batch_header(&decoded), Ok(header.clone()));
 
@@ -317,9 +319,11 @@ fn unknown_version_activity_and_field_are_deterministic_rejections() {
     };
     let registry = registry();
     let template = &corpus.replay.canonical_activities[0];
+    assert_eq!(&template[..2], &[0, 1]);
+    assert_eq!(&template[6..8], &[0, 1]);
 
     let mut version = template.clone();
-    version[1] = 3;
+    version[1] = 4;
     assert_eq!(
         decode_signed(&version, &registry).map(|_| ()),
         Err(layerx_wire::WireError {
@@ -327,6 +331,27 @@ fn unknown_version_activity_and_field_are_deterministic_rejections() {
             offset: 0,
         })
     );
+
+    let mut envelope_only = template.clone();
+    envelope_only[1] = 3;
+    assert_eq!(
+        decode_signed(&envelope_only, &registry).map(|_| ()),
+        Err(layerx_wire::WireError {
+            result: KnownResult::VersionUnsupported.into(),
+            offset: 8,
+        })
+    );
+
+    let mut state_commitment = template.clone();
+    state_commitment[1] = 3;
+    state_commitment[7] = 3;
+    let decoded = decode_signed(&state_commitment, &registry)
+        .unwrap_or_else(|error| panic!("explicit protocol 3 activity rejected: {error:?}"));
+    assert_eq!(
+        decoded.protocol_version(),
+        layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION
+    );
+    assert_eq!(encode_signed(&decoded), Ok(state_commitment));
 
     let mut activity_type = template.clone();
     activity_type[14..18].copy_from_slice(&0x000a_0001_u32.to_be_bytes());
@@ -351,7 +376,9 @@ fn unknown_version_activity_and_field_are_deterministic_rejections() {
 fn state_commitment_header_round_trips_without_changing_default_version() {
     assert_eq!(layerx_wire::limits::PROTOCOL_VERSION, 2);
     let bytes = batch_bytes_for_version(layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION);
-    let header = decode_batch_header(&bytes).expect("explicit state commitment header");
+    let Ok(header) = decode_batch_header(&bytes) else {
+        panic!("explicit state commitment header rejected");
+    };
     assert_eq!(header.protocol_version(), 3);
     assert_eq!(encode_batch_header(&header), Ok(bytes));
     let mut future = batch_bytes_for_version(3);

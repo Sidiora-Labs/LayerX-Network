@@ -6,7 +6,9 @@ use k256::ecdsa::{
 use layerx_crypto::{ct, ed25519, secp256k1, SignatureMessage, VerifyError};
 use layerx_types::result::KnownResult;
 use layerx_wire::hash::Domain;
-use layerx_wire::limits::{LEGACY_PROTOCOL_VERSION, PROTOCOL_VERSION};
+use layerx_wire::limits::{
+    LEGACY_PROTOCOL_VERSION, PROTOCOL_VERSION, STATE_COMMITMENT_PROTOCOL_VERSION,
+};
 
 const ED25519_SEED: [u8; 32] = [
     0x9d, 0x61, 0xb1, 0x9d, 0xef, 0xfd, 0x5a, 0x60, 0xba, 0x84, 0x4a, 0xf4, 0x92, 0xec, 0x2c, 0xc4,
@@ -164,8 +166,19 @@ fn protocol_and_canonical_network_bytes_cannot_reuse_signatures() {
         CORE_MESSAGE,
     )
     .is_ok());
+    assert!(SignatureMessage::new(
+        Domain::SignaturePreimage,
+        STATE_COMMITMENT_PROTOCOL_VERSION,
+        17,
+        CORE_MESSAGE,
+    )
+    .is_ok());
     assert_eq!(
-        SignatureMessage::new(Domain::SignaturePreimage, 3, 17, CORE_MESSAGE).err(),
+        SignatureMessage::new(Domain::SignaturePreimage, 4, 17, CORE_MESSAGE).err(),
+        Some(VerifyError::VersionUnsupported)
+    );
+    assert_eq!(
+        SignatureMessage::new(Domain::SignaturePreimage, 0, 17, CORE_MESSAGE).err(),
         Some(VerifyError::VersionUnsupported)
     );
     assert_eq!(
@@ -188,19 +201,22 @@ fn comparison_is_exact_for_digests_and_secret_bytes() {
 #[test]
 fn state_commitment_signatures_bind_exact_canonical_bytes() {
     let key = Ed25519SigningKey::from_bytes(&ED25519_SEED);
-    let version = layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION;
+    let version = STATE_COMMITMENT_PROTOCOL_VERSION;
     let mut canonical = version.to_be_bytes().to_vec();
     canonical.extend_from_slice(CORE_MESSAGE);
-    let message = SignatureMessage::new(Domain::SignaturePreimage, version, 17, &canonical)
-        .expect("explicit version three signature message");
+    let Ok(message) = SignatureMessage::new(Domain::SignaturePreimage, version, 17, &canonical)
+    else {
+        panic!("explicit version three signature message rejected");
+    };
     let signature = key.sign(&message.digest()).to_bytes();
     assert_eq!(
         ed25519::verify(&key.verifying_key().to_bytes(), &signature, message),
         Ok(())
     );
     canonical[1] = 2;
-    let altered = SignatureMessage::new(Domain::SignaturePreimage, 2, 17, &canonical)
-        .expect("legacy version remains supported");
+    let Ok(altered) = SignatureMessage::new(Domain::SignaturePreimage, 2, 17, &canonical) else {
+        panic!("legacy version two signature message rejected");
+    };
     assert_eq!(
         ed25519::verify(&key.verifying_key().to_bytes(), &signature, altered),
         Err(VerifyError::BadSignature)

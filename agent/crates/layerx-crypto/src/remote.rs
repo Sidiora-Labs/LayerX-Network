@@ -7,7 +7,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use ed25519_dalek::VerifyingKey;
-use openssl::ssl::{SslConnector, SslFiletype, SslMethod, SslVerifyMode};
+use openssl::ssl::{HandshakeError, SslConnector, SslFiletype, SslMethod, SslVerifyMode};
 
 use crate::ed25519;
 use crate::signer::{AgentSignature, SignError, SignFuture, Signer, SigningRequest};
@@ -127,7 +127,7 @@ impl RemoteSigner {
         let mut tls = self
             .connector
             .connect(&self.server_name, stream)
-            .map_err(|_| SignRefusal::Authentication)?;
+            .map_err(|error| handshake_refusal(&error))?;
         let length = u32::try_from(body.len()).map_err(|_| SignRefusal::MalformedResponse)?;
         tls.write_all(&length.to_be_bytes())
             .and_then(|()| tls.write_all(&body))
@@ -192,6 +192,21 @@ fn io_refusal(error: &std::io::Error) -> SignRefusal {
     match error.kind() {
         ErrorKind::TimedOut | ErrorKind::WouldBlock => SignRefusal::Timeout,
         _ => SignRefusal::Unavailable,
+    }
+}
+
+fn handshake_refusal(error: &HandshakeError<TcpStream>) -> SignRefusal {
+    let deadline_exceeded = match error {
+        HandshakeError::Failure(mid) | HandshakeError::WouldBlock(mid) => mid
+            .error()
+            .io_error()
+            .is_some_and(|io| matches!(io.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock)),
+        HandshakeError::SetupFailure(_) => false,
+    };
+    if deadline_exceeded {
+        SignRefusal::Timeout
+    } else {
+        SignRefusal::Authentication
     }
 }
 

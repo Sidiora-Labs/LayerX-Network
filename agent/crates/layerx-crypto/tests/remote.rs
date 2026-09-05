@@ -366,3 +366,24 @@ fn unreachable_signer_is_a_typed_refusal_without_artifact() {
     let signer = remote(&certificates, address, Duration::from_millis(100));
     assert_eq!(sign(&signer), Err(SignError::RemoteUnavailable));
 }
+
+#[test]
+fn handshake_exceeding_the_deadline_is_a_timeout_not_an_authentication_refusal() {
+    let certificates = Certificates::create();
+    let Ok(listener) = TcpListener::bind("127.0.0.1:0") else {
+        panic!("silent endpoint could not bind");
+    };
+    let Ok(address) = listener.local_addr() else {
+        panic!("silent endpoint address unavailable");
+    };
+    let handle = thread::spawn(move || {
+        let Ok((stream, _)) = listener.accept() else {
+            return;
+        };
+        thread::sleep(Duration::from_millis(400));
+        drop(stream);
+    });
+    let signer = remote(&certificates, address, Duration::from_millis(100));
+    assert_eq!(sign(&signer), Err(SignError::RemoteTimeout));
+    assert!(handle.join().is_ok());
+}

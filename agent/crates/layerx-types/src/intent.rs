@@ -708,6 +708,12 @@ pub struct ProgramLegacyCallResponse {
 }
 
 impl ProgramLegacyCallResponse {
+    /// Constructs a legacy typed-value response, refusing a negative code.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProgramCallError::NegativeResponseCode`] for a negative code,
+    /// which the failure taxonomy carries instead.
     pub fn new(code: i32, values: Vec<ProgramLegacyValue>) -> Result<Self, ProgramCallError> {
         if code < 0 {
             return Err(ProgramCallError::NegativeResponseCode(code));

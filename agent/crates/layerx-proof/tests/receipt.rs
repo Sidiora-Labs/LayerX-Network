@@ -145,7 +145,7 @@ fn verifies_current_occupancy_protocol_receipts() {
         verified
             .receipt()
             .protocol()
-            .map(|receipt| receipt.protocol_version()),
+            .map(layerx_wire::receipt::ProtocolReceipt::protocol_version),
         Some(PROTOCOL_VERSION)
     );
 }
@@ -276,8 +276,9 @@ fn verifies_state_commitment_receipt_and_keeps_root_and_signature_checks() {
     let fields = fields();
     let version = layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION;
     let bytes = sign_version(&fields, &signing_key, version);
-    let verified =
-        verify(&bytes, &authorised(&fields, &signing_key)).expect("version three signed receipt");
+    let Ok(verified) = verify(&bytes, &authorised(&fields, &signing_key)) else {
+        panic!("version three signed receipt rejected");
+    };
     assert_eq!(verified.canonical_bytes(), bytes);
     let mut wrong_root = fields.clone();
     wrong_root.resulting_state_root[0] ^= 1;

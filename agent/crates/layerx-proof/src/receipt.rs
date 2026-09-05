@@ -539,20 +539,38 @@ pub fn canonical_protocol_facts(
 #[cfg(test)]
 mod programs_version_contract {
     use super::{
-        supported_program_guest_abi, supported_programs_module_version, supported_protocol_version,
+        programs_version_for_protocol, supported_program_guest_abi,
+        supported_programs_module_version, supported_protocol_version,
         supports_program_account_state,
     };
 
     #[test]
     fn module_and_guest_versions_are_independent() {
+        assert!(!supported_protocol_version(0));
         assert!(!supported_protocol_version(1));
         assert!(supported_protocol_version(2));
-        assert!(!supported_protocol_version(3));
+        assert!(supported_protocol_version(3));
+        assert!(!supported_protocol_version(4));
         assert!(supported_programs_module_version(3));
         assert!(supports_program_account_state(3));
         assert!(supported_program_guest_abi(2));
         assert!(!supported_program_guest_abi(3));
         assert!(!supported_programs_module_version(4));
         assert!(!supports_program_account_state(1));
+    }
+
+    #[test]
+    fn state_commitment_protocol_selects_exactly_programs_module_four() {
+        assert!(programs_version_for_protocol(3, 4, false));
+        assert!(programs_version_for_protocol(3, 4, true));
+        assert!(!programs_version_for_protocol(3, 3, false));
+        assert!(!programs_version_for_protocol(3, 3, true));
+        assert!(!programs_version_for_protocol(3, 5, false));
+        assert!(!programs_version_for_protocol(2, 4, false));
+        assert!(!programs_version_for_protocol(2, 4, true));
+        assert!(programs_version_for_protocol(2, 3, false));
+        assert!(programs_version_for_protocol(2, 1, false));
+        assert!(!programs_version_for_protocol(2, 1, true));
+        assert!(programs_version_for_protocol(2, 2, true));
     }
 }
