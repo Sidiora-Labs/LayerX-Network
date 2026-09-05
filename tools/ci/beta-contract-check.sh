@@ -597,6 +597,10 @@ testnet = load_manifest("platform/hosted/testnet/deployment.yaml")
 gateway = load_manifest("platform/hosted/gateway/deployment.yaml")
 webhooks = load_manifest("platform/hosted/webhooks/deployment.yaml")
 ramps = load_manifest("platform/ramps/deployment.yaml")
+node = load_manifest("platform/hosted/node/deployment.yaml")
+identity_manifest = load_manifest("platform/hosted/identity/deployment.yaml")
+paxeer = load_manifest("platform/hosted/paxeer/deployment.yaml")
+registry_manifest = load_manifest("platform/hosted/registry/deployment.yaml")
 install = read("platform/docs/content/install.md")
 emulator_doc = read("platform/docs/content/environments/emulator.md")
 docs_testnet = read("platform/docs/testnet.md")
@@ -807,16 +811,37 @@ for host in all_ingress_hosts:
     if beta_domain and host != beta_domain and not host.endswith("." + beta_domain):
         contradiction("placeholder_hostname", beta_domain, host)
 service_ports = {}
-for facts in testnet + gateway + webhooks + ramps:
+for facts in testnet + gateway + webhooks + ramps + node + identity_manifest + paxeer + registry_manifest:
     if facts.kind == "Service" and facts.name:
         service_ports.setdefault(facts.name, []).extend(facts.ports)
-for key in ("testnet_core_url", "testnet_core_admin_url", "testnet_gateway_url", "testnet_paxeer_url"):
+for service, relative in (
+    ("layerx-pending-core", "platform/hosted/node/deployment.yaml"),
+    ("layerx-pending-core-admin", "platform/hosted/node/deployment.yaml"),
+    ("layerx-receipt-authority", "platform/hosted/node/deployment.yaml"),
+    ("layerx-agent-boundary", "platform/hosted/node/deployment.yaml"),
+    ("layerx-identity", "platform/hosted/identity/deployment.yaml"),
+    ("paxeer-boundary", "platform/hosted/paxeer/deployment.yaml"),
+):
+    if service not in service_ports:
+        violation(f"{relative}: Service {service} is missing")
+for key in (
+    "testnet_core_url",
+    "testnet_core_admin_url",
+    "testnet_gateway_url",
+    "testnet_paxeer_url",
+    "gateway_component_url",
+    "gateway_authority_url",
+    "gateway_identity_url",
+    "gateway_program_registry_url",
+):
     value = endpoints.get(key)
     if not value:
         continue
     service = (urlsplit(value).hostname or "").split(".", 1)[0]
     ports = service_ports.get(service)
-    if ports and url_port(value) not in ports:
+    if not ports:
+        contradiction(f"{key}_service", service, "(no Service in the hosted manifests)")
+    elif url_port(value) not in ports:
         contradiction(f"{key}_port", "/".join(ports), url_port(value))
 
 release = registries.get("release", {})

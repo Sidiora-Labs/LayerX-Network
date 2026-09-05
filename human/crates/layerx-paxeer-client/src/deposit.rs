@@ -17,6 +17,7 @@ use layerx_types::amount::Amount;
 use layerx_types::ids::{AssetId, CheckpointId, IdempotencyKey};
 use layerx_types::intent::{DepositProofId, EvmAddress};
 use layerx_types::payload::ModuleRegistry;
+use layerx_wire::WireError;
 use sha2::{Digest as _, Sha256};
 
 use crate::client::{
@@ -39,13 +40,46 @@ const DEPOSIT_ROOT_DOMAIN: &[u8] = b"LX:PAXEER:DEPOSIT:ROOT:v1";
 const DEPOSIT_LEAF_DOMAIN: &[u8] = b"LX:PAXEER:DEPOSIT:LEAF:v1";
 const DEPOSIT_NULLIFIER_DOMAIN: &[u8] = b"LX:DEPOSIT:NULLIFIER:v1";
 
-/// Derives the exact 32-byte account address custody names as beneficiary.
+/// Derives the exact 32-byte account address custody names as beneficiary
+/// under the legacy default protocol: `SHA256("LXP/v1/account-id\0" || name)`.
 #[must_use]
 pub fn account_address(account: &AccountId) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(ACCOUNT_ID_DOMAIN);
     hasher.update(account.canonical().as_bytes());
     hasher.finalize().into()
+}
+
+/// Why a custody beneficiary address could not be derived for an explicitly
+/// selected protocol version.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AccountAddressError {
+    UnsupportedProtocolVersion { protocol_version: u16 },
+    NonCanonicalAccount(WireError),
+}
+
+/// Derives the custody beneficiary address for an explicitly selected
+/// `LayerX` protocol version. The legacy default protocol keeps
+/// [`account_address`] byte for byte; the state-commitment protocol uses the
+/// native ledger derivation `SHA256("LX:ACCOUNT:v1" || u32be(len) || name)`
+/// with the native canonical-name rules.
+///
+/// # Errors
+///
+/// Refuses a protocol version the client does not support and a name the
+/// native protocol-3 ledger rejects.
+pub fn account_address_for_protocol(
+    account: &AccountId,
+    protocol_version: u16,
+) -> Result<[u8; 32], AccountAddressError> {
+    match protocol_version {
+        layerx_wire::limits::PROTOCOL_VERSION => Ok(account_address(account)),
+        layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION => {
+            layerx_wire::hash::account_id_for_protocol(account, protocol_version)
+                .map_err(AccountAddressError::NonCanonicalAccount)
+        }
+        _ => Err(AccountAddressError::UnsupportedProtocolVersion { protocol_version }),
+    }
 }
 
 /// One `CustodyDeposit` event exactly as the vault emitted it.
@@ -168,6 +202,11 @@ pub enum CreditFault {
     /// Core exposes no activity ingress carrying the complete C custody proof.
     BridgeProofIngressUnavailable,
     AgentContract(ContractError),
+    /// The recipient name has no beneficiary address under the protocol
+    /// version the signed custody registration binds.
+    RecipientNotDerivable {
+        protocol_version: u16,
+    },
 }
 
 /// The three deposit failure classes the journey engine consumes.
@@ -856,6 +895,9 @@ fn decode_credit_fault(reader: &mut DepositReader<'_>) -> Result<CreditFault, De
             2 => ContractError::DaemonLimitFunding,
             _ => return Err(DepositNativeError::Encoding),
         })),
+        4 => Ok(CreditFault::RecipientNotDerivable {
+            protocol_version: reader.u16()?,
+        }),
         _ => Err(DepositNativeError::Encoding),
     }
 }
@@ -945,7 +987,7 @@ impl DepositProofVerifier {
         if config.layerx_protocol_version == 0 {
             return Err(DepositProofConfigError::ZeroProtocolVersion);
         }
-        if !matches!(config.layerx_protocol_version, layerx_wire::limits::PROTOCOL_VERSION | layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION) {
+        if !crate::withdraw::supported_protocol_version(config.layerx_protocol_version) {
             return Err(DepositProofConfigError::UnsupportedProtocolVersion);
         }
         let checkpoint_authority = VerifyingKey::from_bytes(&config.paxeer_checkpoint_authority)

@@ -1610,7 +1610,164 @@ fn check_program_routes(cluster: &Cluster, submitted: &Submitted, signed: &[u8])
         body: b"{}",
         identity: None,
     });
-    assert_refusal(&simulate, 503, "capability_unavailable");
+    assert_refusal(&simulate, 400, "content_type_required");
+    let not_program_simulation = client.call(&Call {
+        method: "POST",
+        path: "/v1/programs/simulate",
+        bearer: Some(&cluster.gateway_token),
+        idempotency: None,
+        content_type: Some("application/octet-stream"),
+        body: signed,
+        identity: None,
+    });
+    assert_refusal(&not_program_simulation, 400, "not_program_call");
+}
+
+fn simulate_program_call(cluster: &Cluster, signed: &[u8]) -> HttpAnswer {
+    cluster.client.call(&Call {
+        method: "POST",
+        path: "/v1/programs/simulate",
+        bearer: Some(&cluster.gateway_token),
+        idempotency: None,
+        content_type: Some("application/octet-stream"),
+        body: signed,
+        identity: None,
+    })
+}
+
+#[test]
+fn real_program_simulation_executes_without_committing() {
+    let cluster = start_cluster();
+    check_readiness(&cluster);
+    let program_id = random32();
+    let signed = signed_program_call(&cluster.actor, program_id);
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let simulated = loop {
+        let answer = simulate_program_call(&cluster, &signed);
+        if answer.status == 200 || Instant::now() >= deadline {
+            break answer;
+        }
+        assert_eq!(answer.status, 503, "{}", answer.text());
+        thread::sleep(Duration::from_millis(100));
+    };
+    assert_eq!(simulated.status, 200, "{}", simulated.text());
+    let document = simulated.json();
+    let result = &document["result"];
+    assert_eq!(result["committed"], false);
+    let execution = &result["execution"];
+    assert_eq!(execution["state"], "refused");
+    assert_eq!(execution["program_id"], hex(&program_id));
+    assert_eq!(execution["terminal_payload"], "");
+    assert_eq!(execution["call_graph"], "");
+    let receipt_bytes = unhex(field(execution, "receipt"));
+    let receipt = must(
+        verify_sequencer_signature(&receipt_bytes, cluster.sequencer_key),
+        "simulated ProgramCall receipt",
+    );
+    let protocol = receipt
+        .protocol()
+        .unwrap_or_else(|| panic!("protocol receipt"));
+    assert_eq!(protocol.module_id(), 9);
+    assert!(protocol.result_code() < 0);
+    assert_eq!(
+        execution["result_code"],
+        serde_json::json!(protocol.result_code())
+    );
+    assert_eq!(
+        hex(&protocol.activity_id()),
+        field(execution, "activity_id")
+    );
+    let evidence = &result["simulation_evidence"];
+    assert_eq!(evidence["committed"], false);
+    assert_eq!(
+        field(evidence, "activity_id"),
+        field(execution, "activity_id")
+    );
+    assert_eq!(field(evidence, "public_key"), hex(&cluster.sequencer_key));
+    assert_eq!(
+        unhex(field(evidence, "previous_state_root")),
+        protocol.previous_state_root().to_vec()
+    );
+    assert_eq!(
+        unhex(field(evidence, "hypothetical_state_root")),
+        protocol.resulting_state_root().to_vec()
+    );
+    let boundary_id = must(
+        <[u8; 32]>::try_from(unhex(field(evidence, "boundary_id"))),
+        "boundary identifier",
+    );
+    assert_eq!(
+        boundary_id,
+        layerx_client::lni::simulate::simulation_boundary_id(&cluster.sequencer_key)
+    );
+    let observed_sequence: u64 = must(
+        field(evidence, "observed_sequence").parse(),
+        "observed sequence",
+    );
+    let observed_at: u64 = must(field(evidence, "observed_at").parse(), "observed at");
+    let signature = must(
+        <[u8; 64]>::try_from(unhex(field(evidence, "signature"))),
+        "evidence signature",
+    );
+    let decoded_evidence = layerx_client::lni::simulate::SimulationEvidence {
+        boundary_id,
+        activity_id: protocol.activity_id(),
+        previous_state_root: protocol.previous_state_root(),
+        hypothetical_state_root: protocol.resulting_state_root(),
+        observed_sequence,
+        observed_at,
+        public_key: cluster.sequencer_key,
+        signature,
+    };
+    let evidence_digest =
+        layerx_client::lni::simulate::simulation_evidence_digest(&decoded_evidence);
+    must(
+        must(
+            ed25519_dalek::VerifyingKey::from_bytes(&cluster.sequencer_key),
+            "sequencer verifying key",
+        )
+        .verify_strict(
+            &evidence_digest,
+            &ed25519_dalek::Signature::from_bytes(&signature),
+        ),
+        "simulation evidence signature",
+    );
+    let again = simulate_program_call(&cluster, &signed);
+    assert_eq!(again.status, 200, "{}", again.text());
+    assert_eq!(again.text(), simulated.text());
+    let unknown = cluster.client.get(
+        &format!(
+            "/v1/programs/activities/{}",
+            field(execution, "activity_id")
+        ),
+        Some(&cluster.gateway_token),
+    );
+    assert_refusal(&unknown, 404, "activity_not_journaled");
+    let key = format!("program-after-simulation-{}", token());
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let submitted = loop {
+        let answer = cluster.client.call(&Call::submit(
+            "/v1/programs/call",
+            &cluster.gateway_token,
+            &key,
+            &signed,
+        ));
+        if answer.status == 200 || Instant::now() >= deadline {
+            break answer;
+        }
+        assert!(
+            answer.status == 202 || answer.status == 503,
+            "{}",
+            answer.text()
+        );
+        thread::sleep(Duration::from_millis(100));
+    };
+    assert_eq!(submitted.status, 200, "{}", submitted.text());
+    let committed = submitted.json();
+    assert_eq!(committed["result"]["state"], "refused");
+    assert_eq!(committed["result"]["activity_id"], execution["activity_id"]);
+    let consumed = simulate_program_call(&cluster, &signed);
+    assert_refusal(&consumed, 422, "sequence_reused");
 }
 
 fn check_refusals(cluster: &Cluster, valid: &[u8]) -> (String, String) {

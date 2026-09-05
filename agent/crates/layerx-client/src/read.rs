@@ -268,13 +268,13 @@ pub fn balance(
     )?;
     let canonical =
         decode_account_value(account, value.canonical_bytes()).map_err(ReadError::Account)?;
-    if !canonical.has_asset || canonical.asset_id != asset {
+    let Some(held) = canonical.asset.filter(|held| held.asset_id == asset) else {
         return Err(ReadError::SelectorMismatch);
-    }
+    };
     Ok(Balance {
         account,
         asset,
-        amount: Amount::from_u128(canonical.balance),
+        amount: Amount::from_u128(held.balance),
         value,
     })
 }

@@ -17,8 +17,52 @@ const MAX_EFFECTS = 512;
 const MAX_EFFECT_BODY = 256;
 const MAX_U128 = 0xffff_ffff_ffff_ffff_ffff_ffff_ffff_ffffn;
 const ALL_AVAILABILITY_CLASSES = 0x1f;
-const CURRENT_PROTOCOL_VERSION = 2;
+export const LEGACY_PROTOCOL_VERSION = 1;
+export const DEFAULT_PROTOCOL_VERSION = 2;
+export const STATE_COMMITMENT_PROTOCOL_VERSION = 3;
+const PROGRAMS_STATE_OPERATION = 0;
+const PROGRAMS_CALL_OPERATION = 3;
 const [PROGRAM_OUTCOME_V1, PROGRAM_OUTCOME_V2, PROGRAM_OUTCOME_V3] = PROGRAM_OUTCOME_TAGS;
+
+export type SelectableProtocolVersion = typeof DEFAULT_PROTOCOL_VERSION | typeof STATE_COMMITMENT_PROTOCOL_VERSION;
+
+export interface ProtocolSelection {
+  readonly protocolVersion?: SelectableProtocolVersion;
+}
+
+export function isSelectableProtocolVersion(version: number): version is SelectableProtocolVersion {
+  return version === DEFAULT_PROTOCOL_VERSION || version === STATE_COMMITMENT_PROTOCOL_VERSION;
+}
+
+export function protocolVersionUsesOccupancy(version: number): boolean {
+  return isSelectableProtocolVersion(version);
+}
+
+export function selectedProtocolVersion(selection?: ProtocolSelection): SelectableProtocolVersion {
+  const version = selection?.protocolVersion ?? DEFAULT_PROTOCOL_VERSION;
+  if (!isSelectableProtocolVersion(version)) {
+    return receiptFailure(ReceiptFailureCode.ProtocolVersion);
+  }
+  return version;
+}
+
+export function programsModuleVersionForProtocol(
+  protocolVersion: number,
+  moduleVersion: number,
+  accountState: boolean,
+): boolean {
+  if (protocolVersion === STATE_COMMITMENT_PROTOCOL_VERSION) {
+    return moduleVersion === 4;
+  }
+  if (accountState) {
+    return moduleVersion === 2 || moduleVersion === 3;
+  }
+  return moduleVersion === 1 || moduleVersion === 2 || moduleVersion === 3;
+}
+
+export function supportedProgramGuestAbi(abiVersion: number): boolean {
+  return abiVersion === 1 || abiVersion === 2;
+}
 
 export interface MerkleProof {
   readonly leafIndex: number;
@@ -506,9 +550,11 @@ export async function verifyBatchInclusion(
   canonicalHeader: Uint8Array,
   headerSignature: Uint8Array,
   authorization: SequencerAuthorization,
+  selection?: ProtocolSelection,
 ): Promise<InclusionVerification> {
+  const selected = selectedProtocolVersion(selection);
   const header = decodeBatchHeader(canonicalHeader);
-  if (header.protocolVersion !== CURRENT_PROTOCOL_VERSION) return verificationFailure();
+  if (header.protocolVersion !== selected) return verificationFailure();
   if (
     header.batchNumber < authorization.firstBatchNumber
     || header.batchNumber > authorization.lastBatchNumber
@@ -581,13 +627,15 @@ function attestationMessage(attestation: CheckpointAttestation): Uint8Array {
 export async function verifyCheckpoint(
   input: CheckpointVerificationInput,
   signatures: LocalSignatureVerifier,
+  selection?: ProtocolSelection,
 ): Promise<CheckpointVerification> {
+  const selected = selectedProtocolVersion(selection);
   const { certificate } = input;
   if (!input.availabilityObtained || certificate.validityProof.length > 0xffff_ffff) {
     return verificationFailure();
   }
   const header = decodeBatchHeader(certificate.canonicalHeader);
-  if (header.protocolVersion !== CURRENT_PROTOCOL_VERSION) return verificationFailure();
+  if (header.protocolVersion !== selected) return verificationFailure();
   const checkpointId = await sha256(
     CHECKPOINT_DOMAIN,
     certificate.canonicalHeader,
@@ -732,15 +780,15 @@ function decodeProgramReceiptOutcomeFrom(decoder: Decoder, protocolVersion: numb
     || (terminalKind === 1 && resultCode !== 0)
     || (terminalKind !== 1 && (resultCode === 0 || resultCode <= -1000))
     || (terminalKind !== 1 && !allZero(transferRoot))
-    || !((protocolVersion === 1 && (encodingVersion === 1 || encodingVersion === 3))
-      || (protocolVersion === 2 && (encodingVersion === 2 || encodingVersion === 3)))
+    || !((protocolVersion === LEGACY_PROTOCOL_VERSION && (encodingVersion === 1 || encodingVersion === 3))
+      || (protocolVersionUsesOccupancy(protocolVersion) && (encodingVersion === 2 || encodingVersion === 3)))
     || (encodingVersion === 1 && !occupancyZero)
     || (encodingVersion >= 2 && terminalKind !== 1 && !occupancyZero)
     || (encodingVersion === 2 && terminalKind === 1
       && (allZero(occupancyAssetId) || allZero(occupancyEvidenceDigest)))
     || (encodingVersion === 3 && allZero(occupancyAssetId) !== allZero(occupancyEvidenceDigest))
-    || (protocolVersion === 1 && encodingVersion === 3 && !occupancyZero)
-    || (protocolVersion === 2 && encodingVersion === 3 && terminalKind === 1
+    || (protocolVersion === LEGACY_PROTOCOL_VERSION && encodingVersion === 3 && !occupancyZero)
+    || (protocolVersionUsesOccupancy(protocolVersion) && encodingVersion === 3 && terminalKind === 1
       && (allZero(occupancyAssetId) || allZero(occupancyEvidenceDigest)))
   ) {
     return receiptFailure(ReceiptFailureCode.ProgramOutcome);
@@ -793,7 +841,10 @@ function decodeProtocolReceipt(canonicalReceipt: Uint8Array): DecodedReceipt {
   }
   const decoder = new Decoder(canonicalReceipt);
   const envelopeVersion = decoder.u16();
-  if ((envelopeVersion !== 1 && envelopeVersion !== 2) || decoder.u16() !== 0x5201) {
+  if (
+    (envelopeVersion !== LEGACY_PROTOCOL_VERSION && !isSelectableProtocolVersion(envelopeVersion))
+    || decoder.u16() !== 0x5201
+  ) {
     return receiptFailure(ReceiptFailureCode.Decode);
   }
   const protocolVersion = decoder.u16();
@@ -923,27 +974,17 @@ function decodeProtocolReceipt(canonicalReceipt: Uint8Array): DecodedReceipt {
   });
 }
 
-export async function verifyReceiptOutcome(
-  canonicalReceipt: Uint8Array,
-  authorized: AuthorizedReceiptBatch,
-): Promise<ReceiptVerification> {
-  const canonical = canonicalReceipt.slice();
-  const authority = Object.freeze({
-    batchId: exactBytes(authorized.batchId, 32).slice(),
-    asset: exactBytes(authorized.asset, 32).slice(),
-    previousStateRoot: exactBytes(authorized.previousStateRoot, 32).slice(),
-    resultingStateRoot: exactBytes(authorized.resultingStateRoot, 32).slice(),
-    sequencerPublicKey: exactBytes(authorized.sequencerPublicKey, 32).slice(),
-  });
-  let decoded: DecodedReceipt;
-  try {
-    decoded = decodeProtocolReceipt(canonical);
-  } catch (error) {
-    if (error instanceof ReceiptVerificationError) throw error;
-    return receiptFailure(ReceiptFailureCode.Decode);
+function verifyStateChain(receipt: ProtocolReceipt, authority: AuthorizedReceiptBatch): void {
+  if (!equal(receipt.batchId, authority.batchId)) return receiptFailure(ReceiptFailureCode.BatchId);
+  if (!equal(receipt.previousStateRoot, authority.previousStateRoot)) {
+    return receiptFailure(ReceiptFailureCode.PreviousStateRoot);
   }
-  const { receipt, unsignedBytes } = decoded;
-  if (receipt.protocolVersion !== CURRENT_PROTOCOL_VERSION) return receiptFailure(ReceiptFailureCode.ProtocolVersion);
+  if (!equal(receipt.resultingStateRoot, authority.resultingStateRoot)) {
+    return receiptFailure(ReceiptFailureCode.ResultingStateRoot);
+  }
+}
+
+function verifyTransferOutcome(receipt: ProtocolReceipt, authority: AuthorizedReceiptBatch): void {
   if (receipt.operation === 0) return receiptFailure(ReceiptFailureCode.Operation);
   if (allZero(receipt.activityId)) return receiptFailure(ReceiptFailureCode.ActivityId);
   if (allZero(receipt.asset)) return receiptFailure(ReceiptFailureCode.Asset);
@@ -970,6 +1011,60 @@ export async function verifyReceiptOutcome(
       );
     }
   }
+}
+
+function verifyProgramCallOutcome(receipt: ProtocolReceipt, authority: AuthorizedReceiptBatch): void {
+  if (!programsModuleVersionForProtocol(receipt.protocolVersion, receipt.moduleVersion, false)) {
+    return receiptFailure(ReceiptFailureCode.ModuleVersion);
+  }
+  const outcome = receipt.programOutcome;
+  if (outcome === undefined) return receiptFailure(ReceiptFailureCode.ReceiptShape);
+  if (!supportedProgramGuestAbi(outcome.abiVersion) || outcome.runtimeVersion !== 1) {
+    return receiptFailure(ReceiptFailureCode.ProtocolVersion);
+  }
+  if (allZero(receipt.activityId)) return receiptFailure(ReceiptFailureCode.ActivityId);
+  verifyStateChain(receipt, authority);
+}
+
+function verifyProgramStateOutcome(receipt: ProtocolReceipt, authority: AuthorizedReceiptBatch): void {
+  if (!programsModuleVersionForProtocol(receipt.protocolVersion, receipt.moduleVersion, true)) {
+    return receiptFailure(ReceiptFailureCode.ModuleVersion);
+  }
+  if (receipt.resultCode !== 0) return receiptFailure(ReceiptFailureCode.ResultCode);
+  if (allZero(receipt.activityId)) return receiptFailure(ReceiptFailureCode.ActivityId);
+  verifyStateChain(receipt, authority);
+}
+
+export async function verifyReceiptOutcome(
+  canonicalReceipt: Uint8Array,
+  authorized: AuthorizedReceiptBatch,
+  selection?: ProtocolSelection,
+): Promise<ReceiptVerification> {
+  const selected = selectedProtocolVersion(selection);
+  const canonical = canonicalReceipt.slice();
+  const authority = Object.freeze({
+    batchId: exactBytes(authorized.batchId, 32).slice(),
+    asset: exactBytes(authorized.asset, 32).slice(),
+    previousStateRoot: exactBytes(authorized.previousStateRoot, 32).slice(),
+    resultingStateRoot: exactBytes(authorized.resultingStateRoot, 32).slice(),
+    sequencerPublicKey: exactBytes(authorized.sequencerPublicKey, 32).slice(),
+  });
+  let decoded: DecodedReceipt;
+  try {
+    decoded = decodeProtocolReceipt(canonical);
+  } catch (error) {
+    if (error instanceof ReceiptVerificationError) throw error;
+    return receiptFailure(ReceiptFailureCode.Decode);
+  }
+  const { receipt, unsignedBytes } = decoded;
+  if (receipt.protocolVersion !== selected) return receiptFailure(ReceiptFailureCode.ProtocolVersion);
+  if (receipt.moduleId === PROGRAMS_MODULE_ID && receipt.operation === PROGRAMS_CALL_OPERATION) {
+    verifyProgramCallOutcome(receipt, authority);
+  } else if (receipt.moduleId === PROGRAMS_MODULE_ID && receipt.operation === PROGRAMS_STATE_OPERATION) {
+    verifyProgramStateOutcome(receipt, authority);
+  } else {
+    verifyTransferOutcome(receipt, authority);
+  }
   const receiptDigest = await sha256(RECEIPT_DOMAIN, unsignedBytes);
   if (!await verifyEd25519(
     authority.sequencerPublicKey,
@@ -989,8 +1084,9 @@ export async function verifyReceiptOutcome(
 export async function verifyReceipt(
   canonicalReceipt: Uint8Array,
   authorized: AuthorizedReceiptBatch,
+  selection?: ProtocolSelection,
 ): Promise<ReceiptVerification> {
-  const verified = await verifyReceiptOutcome(canonicalReceipt, authorized);
+  const verified = await verifyReceiptOutcome(canonicalReceipt, authorized, selection);
   if (verified.receipt.resultCode !== 0) {
     return receiptFailure(ReceiptFailureCode.ResultCode);
   }

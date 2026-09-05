@@ -2520,7 +2520,7 @@ fn move_commit(emulator: &mut Emulator, request: &Request, trace: u64) -> Respon
                 && value.debit_balance_after() == expected_source_after
                 && value.credit_balance_before() == destination.balance
                 && value.credit_balance_after() == expected_destination_after
-                && value.from_sequence() == quote.source_sequence
+                && value.debit_sequence() == quote.source_sequence
                 && value.previous_state_root() == state.receipt_state_root
                 && value.resulting_state_root() != value.previous_state_root()
                 && value.context_hash() == expected_context_hash

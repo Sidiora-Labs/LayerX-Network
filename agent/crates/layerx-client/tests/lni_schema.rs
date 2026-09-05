@@ -23,7 +23,7 @@ fn hex(value: &str) -> Vec<u8> {
 #[test]
 fn lni_schema_and_document_cover_every_declared_message() {
     let schema = lni_schema_v1();
-    assert_eq!(schema.version, Version::V1_3);
+    assert_eq!(schema.version, Version::V1_4);
     assert_eq!(schema.messages.len(), lni_golden_vectors().len());
     let mut tags = BTreeSet::new();
     for message in schema.messages {
@@ -66,6 +66,9 @@ fn version_and_capability_rules_are_checked_against_the_schema_source() {
     assert!(LNI_V1_SOURCE.contains("historical_proofs"));
     assert!(LNI_V1_SOURCE.contains("preparation_state"));
     assert!(LNI_V1_SOURCE.contains("authenticated_durable_submit"));
+    assert!(LNI_V1_SOURCE.contains("simulate"));
+    assert!(Version::V1_4.is_compatible_with(Version::V1_0));
+    assert_eq!(Capability::Simulate.name(), "simulate");
     assert!(Version::V1_3.is_compatible_with(Version::V1_0));
     assert_eq!(
         Capability::AuthenticatedDurableSubmit.name(),

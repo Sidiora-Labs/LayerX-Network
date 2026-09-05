@@ -4,18 +4,27 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use ed25519_dalek::{Signer, SigningKey};
 use layerx_client::lni::handshake::{perform, Handshake, HandshakeConfig};
 use layerx_client::lni::preparation::{preparation_state, PreparationStateContext};
 use layerx_client::lni::schema::{encode_envelope, Capability, Envelope, Version};
+use layerx_client::lni::simulate::{simulate, simulation_boundary_id, SimulateContext};
 use layerx_client::lni::transport::{ConnectionGate, FrameTransport, Limits, Uds};
 use layerx_proof::merkle::leaf_hash;
+use layerx_proof::receipt::verify_sequencer_signature;
+use layerx_types::activity::{Authority, EnvelopeBuilder, Signature, TimestampBound};
+use layerx_types::amount::Amount;
 use layerx_types::error::LayerError;
-use layerx_types::ids::Did;
-use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
-use layerx_wire::activity::decode_signed;
-use layerx_wire::hash::{activity_id, batch_header_digest, checkpoint_id};
+use layerx_types::ids::{Did, IdempotencyKey};
+use layerx_types::intent::{CallBudget, Calldata, ProgramCall, ProgramId, RequestedCapabilities};
+use layerx_types::payload::{
+    ActivityType, ModuleId, ModuleRegistration, ModuleRegistry, Payload,
+};
+use layerx_wire::activity::{decode_signed, encode_signed_envelope};
+use layerx_wire::hash::{activity_id, batch_header_digest, checkpoint_id, payload_hash_for};
+use layerx_wire::sign::preimage_unsigned;
 use layerx_wire::receipt::{
     decode as decode_receipt, decode_batch_header, decode_checkpoint, encode as encode_receipt,
     encode_batch_header, encode_checkpoint,
@@ -108,7 +117,7 @@ pub(crate) fn connect(socket: &Path) -> Result<Uds, String> {
 
 fn config() -> HandshakeConfig {
     HandshakeConfig {
-        built_interface_version: Version::V1_3,
+        built_interface_version: Version::V1_4,
         expected_protocol_version: layerx_wire::limits::PROTOCOL_VERSION,
         expected_network_id: 77,
     }
@@ -121,7 +130,7 @@ fn request(
     payload: &[u8],
 ) -> Result<(), String> {
     let encoded = encode_envelope(Envelope {
-        version: Version::V1_3,
+        version: Version::V1_4,
         message_tag: tag,
         correlation_id,
         canonical_payload: payload,
@@ -190,7 +199,7 @@ fn decode_response(bytes: &[u8]) -> Result<Response, String> {
 }
 
 fn expect(response: &Response, tag: u16, correlation_id: u64) -> Result<(), String> {
-    if response.version != Version::V1_3
+    if response.version != Version::V1_4
         || response.tag != tag
         || response.correlation_id != correlation_id
     {
@@ -223,6 +232,202 @@ fn registry() -> Result<ModuleRegistry, String> {
         .map_err(|error| format!("module registry failed: {error:?}"))
 }
 
+const SIMULATION_ACTOR: &[u8] = b"did:layerx:simulation-boundary";
+const SIMULATION_ACTOR_SEED: [u8; 32] = {
+    let mut seed = [0_u8; 32];
+    seed[0] = 21;
+    seed
+};
+
+fn program_registry() -> Result<(ModuleRegistry, ActivityType), String> {
+    let activity = ActivityType::new(ModuleId::Programs, 3)
+        .map_err(|error| format!("program activity type failed: {error:?}"))?;
+    let registration = ModuleRegistration::new(ModuleId::Programs, &[activity])
+        .map_err(|error| format!("program registration failed: {error:?}"))?;
+    let registry = ModuleRegistry::new(&[registration])
+        .map_err(|error| format!("program registry failed: {error:?}"))?;
+    Ok((registry, activity))
+}
+
+fn now_ms() -> Result<u64, String> {
+    let elapsed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| format!("wall clock failed: {error}"))?;
+    u64::try_from(elapsed.as_millis()).map_err(|_| "wall clock overflow".to_owned())
+}
+
+fn signed_program_call(
+    registry: &ModuleRegistry,
+    activity_type: ActivityType,
+    account_sequence: u64,
+    program_id: [u8; 32],
+) -> Result<(Vec<u8>, [u8; 32]), String> {
+    let signing_key = SigningKey::from_bytes(&SIMULATION_ACTOR_SEED);
+    let public_key = signing_key.verifying_key().to_bytes();
+    let call = ProgramCall::new(
+        ProgramId::new(program_id),
+        Calldata::new(&[]).map_err(|error| format!("calldata failed: {error:?}"))?,
+        CallBudget::new(1000, Amount::from_u128(0))
+            .map_err(|error| format!("call budget failed: {error:?}"))?,
+        RequestedCapabilities::new(&[])
+            .map_err(|error| format!("capabilities failed: {error:?}"))?,
+    );
+    let payload = Payload::new(registry, activity_type, &call.canonical_payload())
+        .map_err(|error| format!("call payload failed: {error:?}"))?;
+    let payload_hash =
+        payload_hash_for(&payload).map_err(|error| format!("payload hash failed: {error:?}"))?;
+    let now = now_ms()?;
+    let mut builder = EnvelopeBuilder::new();
+    builder
+        .protocol_version(layerx_wire::limits::PROTOCOL_VERSION)
+        .and_then(|value| value.network_id(77))
+        .and_then(|value| value.activity_type(activity_type))
+        .and_then(|value| {
+            value.actor_did(
+                Did::new(SIMULATION_ACTOR)
+                    .map_err(|error| format!("simulation actor failed: {error:?}"))?,
+            )
+        })
+        .and_then(|value| {
+            value.authority(
+                Authority::owner(&public_key)
+                    .map_err(|error| format!("owner authority failed: {error:?}"))?,
+            )
+        })
+        .and_then(|value| value.account_sequence(account_sequence))
+        .and_then(|value| {
+            value.timestamp_bound(
+                TimestampBound::new(now.saturating_sub(30_000), now.saturating_add(120_000))
+                    .map_err(|error| format!("validity failed: {error:?}"))?,
+            )
+        })
+        .and_then(|value| value.idempotency_key(IdempotencyKey::new(program_id)))
+        .and_then(|value| value.fee_limit(Amount::from_u128(0)))
+        .and_then(|value| value.payload_hash(payload_hash))
+        .and_then(|value| value.payload(payload))
+        .map(|_| ())
+        .map_err(|error| format!("program envelope failed: {error:?}"))?;
+    let unsigned = builder
+        .build()
+        .map_err(|error| format!("program envelope build failed: {error:?}"))?;
+    let digest = preimage_unsigned(&unsigned)
+        .map_err(|error| format!("signing preimage failed: {error:?}"))?;
+    let signature = signing_key.sign(digest.as_bytes()).to_bytes();
+    let signed = encode_signed_envelope(
+        &unsigned.attach_signature(
+            Signature::new(&signature).map_err(|error| format!("signature failed: {error:?}"))?,
+        ),
+    )
+    .map_err(|error| format!("signed program call encoding failed: {error:?}"))?;
+    let decoded = decode_signed(&signed, registry)
+        .map_err(|error| format!("signed program call is not canonical: {error:?}"))?;
+    let identifier = activity_id(&decoded)
+        .map_err(|error| format!("program activity identifier failed: {error:?}"))?;
+    Ok((signed, identifier))
+}
+
+fn exercise_simulation(
+    transport: &mut impl FrameTransport,
+    handshake: &Handshake,
+) -> Result<(), String> {
+    let (registry, activity_type) = program_registry()?;
+    let actor = Did::new(SIMULATION_ACTOR)
+        .map_err(|error| format!("simulation actor failed: {error:?}"))?;
+    let before = preparation_state(
+        transport,
+        &actor,
+        PreparationStateContext {
+            interface_version: Version::V1_4,
+            expected_network_id: 77,
+            minimum_observed_head: 0,
+            correlation_id: 28,
+        },
+    )
+    .map_err(|error| format!("simulation preparation snapshot failed: {error:?}"))?;
+    if !before.module_registry.declares(activity_type) {
+        return Err("simulation node does not declare ProgramCall".to_owned());
+    }
+    let mut program_id = [0x5a_u8; 32];
+    program_id[31] = 0x69;
+    let (signed, expected_activity_id) =
+        signed_program_call(&registry, activity_type, before.account_sequence, program_id)?;
+    let sequencer_public_key = handshake.node().authorised_sequencer_key;
+    let simulation = simulate(
+        transport,
+        &registry,
+        &signed,
+        SimulateContext {
+            interface_version: Version::V1_4,
+            sequencer_public_key,
+            correlation_id: 31,
+        },
+    )
+    .map_err(|error| format!("real node simulation failed: {error:?}"))?;
+    if simulation.execution.activity_id != expected_activity_id
+        || simulation.evidence.activity_id != expected_activity_id
+    {
+        return Err("simulation answered a different activity".to_owned());
+    }
+    let receipt = verify_sequencer_signature(&simulation.execution.receipt, sequencer_public_key)
+        .map_err(|error| format!("simulated receipt is not sequencer-signed: {error:?}"))?;
+    let protocol = receipt
+        .protocol()
+        .ok_or_else(|| "simulated receipt is not a protocol receipt".to_owned())?;
+    if protocol.result_code() >= 0 {
+        return Err("simulating a call to an unregistered program did not refuse".to_owned());
+    }
+    if protocol.previous_state_root() != before.observed_state_root
+        || simulation.evidence.previous_state_root != before.observed_state_root
+    {
+        return Err("simulation did not execute against the observed head".to_owned());
+    }
+    if simulation.evidence.boundary_id != simulation_boundary_id(&sequencer_public_key)
+        || simulation.evidence.public_key != sequencer_public_key
+        || simulation.evidence.observed_sequence != before.observed_head_sequence
+        || simulation.evidence.observed_at != before.protocol_timestamp
+    {
+        return Err("simulation evidence is not bound to the observed head".to_owned());
+    }
+    let after = preparation_state(
+        transport,
+        &actor,
+        PreparationStateContext {
+            interface_version: Version::V1_4,
+            expected_network_id: 77,
+            minimum_observed_head: before.observed_head_sequence,
+            correlation_id: 32,
+        },
+    )
+    .map_err(|error| format!("post-simulation preparation snapshot failed: {error:?}"))?;
+    if after.account_sequence != before.account_sequence
+        || after.observed_head_sequence != before.observed_head_sequence
+        || after.observed_state_root != before.observed_state_root
+        || after.protocol_timestamp != before.protocol_timestamp
+    {
+        return Err("simulation committed state or consumed the account sequence".to_owned());
+    }
+    let (replay, replay_id) =
+        signed_program_call(&registry, activity_type, after.account_sequence, program_id)?;
+    let again = simulate(
+        transport,
+        &registry,
+        &replay,
+        SimulateContext {
+            interface_version: Version::V1_4,
+            sequencer_public_key,
+            correlation_id: 33,
+        },
+    )
+    .map_err(|error| format!("repeated simulation failed: {error:?}"))?;
+    if replay_id != expected_activity_id
+        || again.execution.receipt != simulation.execution.receipt
+        || again.evidence.hypothetical_state_root != simulation.evidence.hypothetical_state_root
+    {
+        return Err("repeated simulation against an unchanged head diverged".to_owned());
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_lines)]
 fn exercise_live_messages(
     transport: &mut impl FrameTransport,
@@ -240,6 +445,7 @@ fn exercise_live_messages(
         Capability::AvailabilityFetch,
         Capability::EventSubscribe,
         Capability::PreparationState,
+        Capability::Simulate,
     ] {
         handshake
             .capabilities()
@@ -403,7 +609,7 @@ fn exercise_live_messages(
         transport,
         &actor,
         PreparationStateContext {
-            interface_version: Version::V1_3,
+            interface_version: Version::V1_4,
             expected_network_id: 77,
             minimum_observed_head: handshake.node().chain_head_sequence,
             correlation_id: 27,
@@ -424,6 +630,10 @@ fn exercise_live_messages(
     }
     covered.insert(26);
     covered.insert(27);
+
+    exercise_simulation(transport, handshake)?;
+    covered.insert(30);
+    covered.insert(31);
 
     let incompatible = encode_envelope(Envelope {
         version: Version { major: 2, minor: 0 },
@@ -498,7 +708,7 @@ pub fn agent_boundary_conformance_suite(
         .map_err(|error| format!("normal handshake failed: {error:?}"))?;
     let capability_qualification = crate::gaps::verify_and_render(&accepted)?;
     let covered = exercise_live_messages(&mut connection, &accepted)?;
-    if covered != (1_u16..=27).collect() {
+    if covered != (1_u16..=27).chain([30, 31]).collect() {
         return Err(format!("incomplete live message coverage: {covered:?}"));
     }
     drop(connection);
@@ -543,6 +753,6 @@ pub fn agent_boundary_conformance_suite(
     fs::remove_dir_all(&directory)
         .map_err(|error| format!("could not clean boundary directory: {error}"))?;
     Ok(format!(
-        "agent boundary conformance suite passed: real node, 27 messages, restart, behind, unreachable, degraded\n{capability_qualification}"
+        "agent boundary conformance suite passed: real node, 29 messages, restart, behind, unreachable, degraded\n{capability_qualification}"
     ))
 }

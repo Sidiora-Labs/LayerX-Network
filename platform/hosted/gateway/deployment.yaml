@@ -168,7 +168,7 @@ spec:
     - to: [{podSelector: {matchLabels: {app: layerx-program-registry}}}]
       ports: [{protocol: TCP, port: 9420}]
     - to: [{podSelector: {matchLabels: {layerx-plane: trusted-boundary}}}]
-      ports: [{protocol: TCP, port: 9443}]
+      ports: [{protocol: TCP, port: 9443}, {protocol: TCP, port: 9445}, {protocol: TCP, port: 9446}]
     - to: [{namespaceSelector: {}}]
       ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]
 ---

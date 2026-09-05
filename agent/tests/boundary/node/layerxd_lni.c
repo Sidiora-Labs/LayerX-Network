@@ -7,6 +7,8 @@
 #include "layerx/lxp_hash.h"
 #include "layerx/lxp_receipt.h"
 
+#include "../../../../cmd/layerxd/lxp_daemon_lni_internal.h"
+
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -26,7 +28,10 @@ enum {
     ARENA_BYTES = 8 * 1024 * 1024,
     ACTIVITY_BYTES = 4096,
     RECEIPT_BYTES = 4096,
-    CHECKPOINT_BYTES = 8192
+    CHECKPOINT_BYTES = 8192,
+    SIMULATION_SCRATCH_BYTES = LXP_DAEMON_PROTOCOL_SCRATCH_MIN_BYTES,
+    SIMULATION_RESPONSE_BYTES = 65536,
+    SIMULATION_EVIDENCE_BYTES = 266
 };
 
 typedef enum node_mode {
@@ -69,6 +74,26 @@ typedef struct preparation_fixture {
     lxp_daemon_protocol_owner owner;
     bool initialized;
 } preparation_fixture;
+
+typedef struct simulation_fixture {
+    lx_account_registry accounts;
+    lxp_transfer_asset_state assets[LX_ASSET_REGISTRY_CAPACITY];
+    size_t asset_count;
+    lxp_state_store state;
+    lxp_state_journal journal;
+    lxp_kernel kernel;
+    lxp_identity_store identities;
+    lxp_daemon_receipt_authority_store authority;
+    lx_programs_transfer_runtime runtime;
+    lxp_arena scratch;
+    lxp_daemon_protocol_owner owner;
+    uint8_t sequencer_private_key[32];
+    bool initialized;
+} simulation_fixture;
+
+static const uint8_t SIMULATION_SEQUENCER_PRIVATE_KEY[32] = {11U};
+static const uint8_t SIMULATION_ACTOR[] = "did:layerx:simulation-boundary";
+static const uint8_t SIMULATION_ACTOR_SEED[32] = {21U};
 
 static volatile sig_atomic_t running = 1;
 
@@ -158,7 +183,7 @@ static int send_envelope(
     if (frame == NULL) return 1;
     store_u32(frame, (uint32_t)body_length);
     store_u16(frame + cursor, 1U); cursor += 2U;
-    store_u16(frame + cursor, 3U); cursor += 2U;
+    store_u16(frame + cursor, 4U); cursor += 2U;
     store_u16(frame + cursor, message_tag); cursor += 2U;
     store_u64(frame + cursor, correlation_id); cursor += 8U;
     store_u32(frame + cursor, (uint32_t)payload_length); cursor += 4U;
@@ -394,7 +419,8 @@ static int fixture_init(node_fixture *fixture, lxp_arena *arena)
     fixture->state_leaf[1] = 0x20U;
     fixture->state_leaf[2] = 0x19U;
     (void)memcpy(fixture->event, "EVENT", sizeof(fixture->event));
-    fixture->sequencer_key[0] = 9U;
+    if (public_key_for(SIMULATION_SEQUENCER_PRIVATE_KEY,
+                       fixture->sequencer_key) != 0) return 1;
     (void)memset(&activity, 0, sizeof(activity));
     activity.protocol_version = LXP_PROTOCOL_VERSION;
     activity.network_id = 77U;
@@ -493,20 +519,163 @@ static int fixture_init(node_fixture *fixture, lxp_arena *arena)
         fixture->checkpoint_id) == LXP_OK ? 0 : 1;
 }
 
+static lxp_result simulation_occupancy_parameters(
+    void *context, uint32_t recorded_fee_schedule_version,
+    lx_programs_fee_schedule *schedule, uint8_t occupancy_asset_id[32])
+{
+    lxp_kernel *kernel = (lxp_kernel *)context;
+    if (kernel == NULL) return LXP_ERR_NON_CANONICAL;
+    return lxp_programs_fee_governance_resolve_runtime(
+        kernel, recorded_fee_schedule_version, schedule, occupancy_asset_id);
+}
+
+static int simulation_collect_assets(simulation_fixture *simulation)
+{
+    size_t account_index;
+    simulation->asset_count = 0U;
+    for (account_index = 0U; account_index < simulation->accounts.count;
+         ++account_index) {
+        const lx_account *account =
+            &simulation->accounts.accounts[account_index];
+        size_t asset_index;
+        if (!account->has_asset) continue;
+        for (asset_index = 0U; asset_index < simulation->asset_count;
+             ++asset_index)
+            if (memcmp(simulation->assets[asset_index].asset_id,
+                       account->asset_id, 32U) == 0)
+                break;
+        if (asset_index != simulation->asset_count) continue;
+        if (simulation->asset_count == LX_ASSET_REGISTRY_CAPACITY) return 1;
+        (void)memcpy(simulation->assets[simulation->asset_count].asset_id,
+                     account->asset_id, 32U);
+        simulation->assets[simulation->asset_count].registered = true;
+        simulation->assets[simulation->asset_count].paused = false;
+        ++simulation->asset_count;
+    }
+    return simulation->asset_count == 0U ? 1 : 0;
+}
+
+static int simulation_init(
+    simulation_fixture *simulation, const lxp_genesis_manifest *genesis,
+    lxp_arena *arena)
+{
+    static uint8_t scratch_storage[SIMULATION_SCRATCH_BYTES];
+    uint8_t canonical_root[32];
+    uint8_t receipt_root[32];
+    uint8_t actor_key[32];
+    lxp_identity *identity = NULL;
+    (void)memset(simulation, 0, sizeof(*simulation));
+    (void)memcpy(simulation->sequencer_private_key,
+                 SIMULATION_SEQUENCER_PRIVATE_KEY, 32U);
+    if (public_key_for(simulation->sequencer_private_key,
+                       simulation->authority.authorization.public_key) != 0 ||
+        public_key_for(SIMULATION_ACTOR_SEED, actor_key) != 0) {
+        (void)fputs("boundary simulation key derivation failed\n", stderr);
+        return 1;
+    }
+    if (lx_account_registry_init(&simulation->accounts) != LXP_OK ||
+        lxp_state_store_init(&simulation->state, 1U) != LXP_OK) {
+        (void)fputs("boundary simulation state initialization failed\n", stderr);
+        return 1;
+    }
+    simulation->initialized = true;
+    if (lxp_state_store_bind_accounts(
+            &simulation->state, &simulation->accounts) != LXP_OK ||
+        lxp_kernel_create(
+            &simulation->kernel, &simulation->state,
+            &simulation->journal, genesis, 1U) != LXP_OK ||
+        lxp_kernel_register_module(
+            &simulation->kernel,
+            programs_module_registration_v4()) != LXP_OK ||
+        lxp_kernel_set_capabilities(
+            &simulation->kernel, NULL,
+            lxp_kernel_canonical_ledger_apply) != LXP_OK) {
+        (void)fputs("boundary simulation kernel creation failed\n", stderr);
+        return 1;
+    }
+    if (lxp_genesis_materialize(
+            genesis, arena, &simulation->kernel) != LXP_OK ||
+        lxp_state_root(&simulation->kernel, canonical_root) != LXP_OK ||
+        memcmp(canonical_root, genesis->genesis_state_root, 32U) != 0 ||
+        lxp_genesis_receipt_state_root(
+            genesis->network_id, canonical_root, receipt_root) != LXP_OK ||
+        memcmp(receipt_root, genesis->genesis_receipt_state_root, 32U) != 0 ||
+        lxp_arena_reset(arena, 0U) != LXP_OK) {
+        (void)fputs("boundary simulation genesis materialization failed\n", stderr);
+        return 1;
+    }
+    (void)memcpy(simulation->kernel.current_state_root, receipt_root, 32U);
+    if (simulation_collect_assets(simulation) != 0) {
+        (void)fputs("boundary simulation asset collection failed\n", stderr);
+        return 1;
+    }
+    simulation->runtime.accounts = &simulation->accounts;
+    simulation->runtime.assets = simulation->assets;
+    simulation->runtime.asset_count = simulation->asset_count;
+    simulation->runtime.resolve_occupancy_parameters =
+        simulation_occupancy_parameters;
+    simulation->runtime.occupancy_parameter_context = &simulation->kernel;
+    simulation->runtime.resolve_metering_schedule =
+        lxp_programs_metering_resolve_runtime;
+    simulation->runtime.metering_schedule_context = &simulation->kernel;
+    if (lxp_kernel_bind_module_runtime(
+            &simulation->kernel, LXP_MODULE_PROGRAMS,
+            &simulation->runtime) != LXP_OK) {
+        (void)fputs("boundary simulation runtime binding failed\n", stderr);
+        return 1;
+    }
+    if (lxp_identity_register(
+            &simulation->identities, SIMULATION_ACTOR,
+            sizeof(SIMULATION_ACTOR) - 1U, actor_key, &identity) != LXP_OK ||
+        identity == NULL) {
+        (void)fputs("boundary simulation identity registration failed\n", stderr);
+        return 1;
+    }
+    identity->next_sequence = 1U;
+    if (lxp_arena_init(&simulation->scratch, scratch_storage,
+                       sizeof(scratch_storage)) != LXP_OK ||
+        pthread_mutex_init(&simulation->owner.mutex, NULL) != 0) {
+        (void)fputs("boundary simulation owner initialization failed\n", stderr);
+        return 1;
+    }
+    simulation->authority.authorization.sequencer_id[0] = 9U;
+    simulation->authority.authorization.first_batch_number = 1U;
+    simulation->authority.authorization.last_batch_number = 1000U;
+    simulation->authority.authorization.authorized = 1U;
+    simulation->authority.record_count = 0U;
+    simulation->owner.kernel = &simulation->kernel;
+    simulation->owner.identities = &simulation->identities;
+    simulation->owner.programs_runtime = &simulation->runtime;
+    simulation->owner.receipt_authority = &simulation->authority;
+    simulation->owner.scratch = &simulation->scratch;
+    simulation->owner.network_id = genesis->network_id;
+    simulation->owner.protocol_version = genesis->protocol_version;
+    simulation->owner.latest_sealed_timestamp = genesis->genesis_timestamp_ms;
+    simulation->owner.feed_store.scanned_through_sequence = 0U;
+    simulation->owner.feed_store.baseline_next_sequence =
+        simulation->state.next_sequence;
+    (void)memcpy(simulation->owner.feed_store.baseline_state_root,
+                 simulation->kernel.current_state_root, 32U);
+    simulation->owner.feed_store.baseline_present = true;
+    simulation->owner.attached = true;
+    return 0;
+}
+
 static size_t node_info_payload(
     uint8_t *output, const node_fixture *fixture, node_mode mode)
 {
     static const char *capabilities[] = {
         "account_read", "availability_fetch", "batch_header", "checkpoint",
         "event_subscribe", "history_range", "node_info",
-        "preparation_state", "proof_bundle", "receipt_lookup", "submit"
+        "preparation_state", "proof_bundle", "receipt_lookup", "simulate",
+        "submit"
     };
     size_t count = mode == NODE_DEGRADED ? 1U :
         sizeof(capabilities) / sizeof(capabilities[0]);
     size_t cursor = 0U;
     size_t index;
     store_u16(output + cursor, 1U); cursor += 2U;
-    store_u16(output + cursor, 3U); cursor += 2U;
+    store_u16(output + cursor, 4U); cursor += 2U;
     store_u16(output + cursor, LXP_PROTOCOL_VERSION); cursor += 2U;
     store_u32(output + cursor, 77U); cursor += 4U;
     output[cursor++] = 1U;
@@ -533,7 +702,7 @@ static int send_error(int descriptor, uint64_t correlation_id, uint8_t code)
 static int handle_request(
     int descriptor, const uint8_t *request, size_t length,
     node_fixture *fixture, preparation_fixture *preparation,
-    lxp_daemon *daemon, node_mode mode)
+    simulation_fixture *simulation, lxp_daemon *daemon, node_mode mode)
 {
     uint16_t major;
     uint16_t minor;
@@ -552,7 +721,7 @@ static int handle_request(
     if ((size_t)payload_length + 22U > length)
         return send_error(descriptor, correlation_id, 1U);
     payload = request + 18U;
-    if (major != 1U || (tag == 1U ? minor != 0U : minor > 3U))
+    if (major != 1U || (tag == 1U ? minor != 0U : minor > 4U))
         return send_error(descriptor, correlation_id, 2U);
     if (tag == 1U) {
         size_t info_length = node_info_payload(info, fixture, mode);
@@ -636,11 +805,34 @@ static int handle_request(
         lxp_result status = lxp_daemon_lni_preparation_state(
             &preparation->owner, payload, payload_length,
             snapshot, sizeof(snapshot), &snapshot_length);
+        if (status == LXP_ERR_UNKNOWN_DID)
+            status = lxp_daemon_lni_preparation_state(
+                &simulation->owner, payload, payload_length,
+                snapshot, sizeof(snapshot), &snapshot_length);
         if (status != LXP_OK)
             return send_error(descriptor, correlation_id, 4U);
         return send_envelope(
             descriptor, 27U, correlation_id,
             snapshot, snapshot_length, NULL, 0U);
+    }
+    case 30U: {
+        static uint8_t response[SIMULATION_RESPONSE_BYTES];
+        uint8_t evidence[SIMULATION_EVIDENCE_BYTES];
+        size_t response_length = 0U;
+        size_t evidence_length = 0U;
+        lxp_result status;
+        if (minor < 4U)
+            return send_error(descriptor, correlation_id, 3U);
+        status = lxp_daemon_lni_simulate(
+            &simulation->owner, simulation->sequencer_private_key,
+            payload, payload_length,
+            response, sizeof(response), &response_length,
+            evidence, sizeof(evidence), &evidence_length);
+        if (status != LXP_OK)
+            return send_error(descriptor, correlation_id, 4U);
+        return send_envelope(
+            descriptor, 31U, correlation_id,
+            response, response_length, evidence, evidence_length);
     }
     default:
         return send_error(descriptor, correlation_id, 1U);
@@ -649,7 +841,8 @@ static int handle_request(
 
 static int serve_connection(
     int descriptor, node_fixture *fixture,
-    preparation_fixture *preparation, lxp_daemon *daemon, node_mode mode)
+    preparation_fixture *preparation, simulation_fixture *simulation,
+    lxp_daemon *daemon, node_mode mode)
 {
     uint8_t prefix[4];
     while (running) {
@@ -665,7 +858,7 @@ static int serve_connection(
         }
         if (handle_request(
                 descriptor, frame, length,
-                fixture, preparation, daemon, mode) != 0) {
+                fixture, preparation, simulation, daemon, mode) != 0) {
             free(frame);
             return 1;
         }
@@ -681,6 +874,7 @@ static int serve_node(
     static lxp_genesis_manifest genesis;
     static node_fixture fixture;
     static preparation_fixture preparation;
+    static simulation_fixture simulation;
     static lxp_daemon daemon;
     lxp_daemon_configuration configuration;
     daemon_apply_state apply_state = {10U};
@@ -766,6 +960,12 @@ static int serve_node(
         preparation.owner.attached = true;
         preparation.initialized = true;
     }
+    if (simulation_init(&simulation, &genesis, &arena) != 0) {
+        (void)fputs("boundary node simulation fixture failed\n", stderr);
+        if (simulation.initialized)
+            (void)lxp_state_store_destroy(&simulation.state);
+        return 1;
+    }
     (void)memset(&configuration, 0, sizeof(configuration));
     configuration.role = LXP_DAEMON_SEQUENCER;
     configuration.network_id = genesis.network_id;
@@ -792,7 +992,7 @@ static int serve_node(
         int connection = accept(listener, NULL, NULL);
         if (connection >= 0) {
             if (serve_connection(
-                    connection, &fixture, &preparation,
+                    connection, &fixture, &preparation, &simulation,
                     &daemon, mode) != 0) result = 1;
             (void)close(connection);
         } else if (errno != EINTR) {
@@ -810,6 +1010,12 @@ shutdown:
             lxp_state_store_destroy(&preparation.state) != LXP_OK)
             result = 1;
         preparation.initialized = false;
+    }
+    if (simulation.initialized) {
+        if (pthread_mutex_destroy(&simulation.owner.mutex) != 0 ||
+            lxp_state_store_destroy(&simulation.state) != LXP_OK)
+            result = 1;
+        simulation.initialized = false;
     }
     return result;
 }

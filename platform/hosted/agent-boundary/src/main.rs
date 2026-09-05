@@ -3,6 +3,7 @@ mod artifacts;
 use layerx_client::lni::handshake::{perform, Handshake, HandshakeConfig};
 use layerx_client::lni::refusal::decode_core_refusal;
 use layerx_client::lni::schema::{decode_envelope, encode_envelope, Capability, Envelope, Version};
+use layerx_client::lni::simulate::{simulate, SimulateContext, SimulateError};
 use layerx_client::lni::transport::{ConnectionGate, FrameTransport, Limits, Uds};
 use layerx_client::submit::{submit_signed, Submission, SubmissionContext, SubmitError};
 use layerx_proof::receipt::verify_sequencer_signature;
@@ -475,7 +476,7 @@ fn open_session(config: &Config) -> Result<Session, LniFailure> {
     let mut transport = Uds::connect(&config.lni_socket, &config.gate, lni_limits(config))
         .map_err(|error| LniFailure::Unavailable(format!("{error:?}")))?;
     let expected = HandshakeConfig {
-        built_interface_version: Version::V1_3,
+        built_interface_version: Version::V1_4,
         expected_protocol_version: PROTOCOL_VERSION,
         expected_network_id: config.protocol_network_id,
     };
@@ -531,7 +532,7 @@ fn lookup_receipt(session: &mut Session, activity: [u8; 32]) -> Result<Lookup, L
     selector.push(1);
     selector.extend_from_slice(&activity);
     let request = encode_envelope(Envelope {
-        version: Version::V1_3,
+        version: Version::V1_4,
         message_tag: RECEIPT_LOOKUP_REQUEST_TAG,
         correlation_id,
         canonical_payload: &selector,
@@ -624,7 +625,7 @@ fn submit_activity(
 ) -> Result<SubmitOutcome, LniFailure> {
     let node = session.handshake.node();
     let context = SubmissionContext {
-        interface_version: Version::V1_3,
+        interface_version: Version::V1_4,
         protocol_version: node.protocol_version,
         network_id: node.network_id,
         correlation_id: session.correlation(),
@@ -1051,6 +1052,111 @@ fn resolve_record(
     }
 }
 
+fn simulate_route(config: &Config, request: &Request) -> Response {
+    if request.headers.get("content-type").map(String::as_str) != Some("application/octet-stream") {
+        return refusal(400, "content_type_required", None);
+    }
+    if request.body.is_empty() || request.body.len() > MAX_ACTIVITY_BYTES {
+        return refusal(400, "invalid_activity_length", None);
+    }
+    let decoded = match decode_activity(config, Route::ProgramCall, &request.body) {
+        Ok(decoded) => decoded,
+        Err(response) => return response,
+    };
+    let Some(program_id) = decoded.program_id else {
+        return refusal(400, "not_program_call", None);
+    };
+    let outcome = with_session(config, |session| {
+        if !session
+            .handshake
+            .capabilities()
+            .contains(Capability::Simulate)
+        {
+            return Ok(Err(refusal(503, "capability_unavailable", Some(60))));
+        }
+        let context = SimulateContext {
+            interface_version: session.handshake.node().interface_version,
+            sequencer_public_key: session.handshake.node().authorised_sequencer_key,
+            correlation_id: session.correlation(),
+        };
+        match simulate(
+            &mut session.transport,
+            &config.registry,
+            &request.body,
+            context,
+        ) {
+            Ok(simulation) => Ok(Ok(simulation)),
+            Err(SimulateError::Transport(error)) => {
+                Err(LniFailure::Transport(format!("{error:?}")))
+            }
+            Err(SimulateError::CoreRefusal { class, result }) => {
+                if class == 3 {
+                    return Ok(Err(refusal(503, "capability_unavailable", Some(60))));
+                }
+                Ok(Err(refusal_response(&result_refusal(result))))
+            }
+            Err(SimulateError::MalformedRequest) => {
+                Ok(Err(refusal(400, "malformed_activity", None)))
+            }
+            Err(SimulateError::UnavailableCapability | SimulateError::InterfaceVersion(_)) => {
+                Ok(Err(refusal(503, "capability_unavailable", Some(60))))
+            }
+            Err(error) => Err(LniFailure::Transport(format!("{error:?}"))),
+        }
+    });
+    let simulation = match outcome {
+        Ok(Ok(simulation)) => simulation,
+        Ok(Err(response)) => return response,
+        Err(failure) => return failure.response(),
+    };
+    if simulation.execution.activity_id != decoded.activity_id {
+        return LniFailure::Transport("simulation names a different activity".to_owned())
+            .response();
+    }
+    let Ok(receipt) = verify_sequencer_signature(
+        &simulation.execution.receipt,
+        simulation.evidence.public_key,
+    ) else {
+        return LniFailure::Transport("simulated receipt is not sequencer-signed".to_owned())
+            .response();
+    };
+    let Some(protocol) = receipt.protocol() else {
+        return LniFailure::Transport("simulated receipt is not a protocol receipt".to_owned())
+            .response();
+    };
+    let state = if protocol.result_code() == 0 {
+        "simulated"
+    } else {
+        "refused"
+    };
+    let document = serde_json::json!({
+        "result": {
+            "committed": false,
+            "execution": {
+                "state": state,
+                "activity_id": hex(&simulation.execution.activity_id),
+                "program_id": hex(&program_id),
+                "result_code": protocol.result_code(),
+                "receipt": hex(&simulation.execution.receipt),
+                "terminal_payload": hex(&simulation.execution.terminal_payload),
+                "call_graph": hex(&simulation.execution.call_graph),
+            },
+            "simulation_evidence": {
+                "boundary_id": hex(&simulation.evidence.boundary_id),
+                "activity_id": hex(&simulation.evidence.activity_id),
+                "previous_state_root": hex(&simulation.evidence.previous_state_root),
+                "hypothetical_state_root": hex(&simulation.evidence.hypothetical_state_root),
+                "observed_sequence": simulation.evidence.observed_sequence.to_string(),
+                "observed_at": simulation.evidence.observed_at.to_string(),
+                "committed": false,
+                "public_key": hex(&simulation.evidence.public_key),
+                "signature": hex(&simulation.evidence.signature),
+            }
+        }
+    });
+    ok(document.to_string())
+}
+
 fn submit_route(config: &Config, request: &Request, route: Route) -> Response {
     if request.headers.get("content-type").map(String::as_str) != Some("application/octet-stream") {
         return refusal(400, "content_type_required", None);
@@ -1411,7 +1517,7 @@ fn route(config: &Config, request: &Request) -> Response {
     match (request.method.as_str(), path) {
         ("POST", "/v1/activities") => submit_route(config, request, Route::Activities),
         ("POST", "/v1/programs/call") => submit_route(config, request, Route::ProgramCall),
-        ("POST", "/v1/programs/simulate") => refusal(503, "capability_unavailable", Some(60)),
+        ("POST", "/v1/programs/simulate") => simulate_route(config, request),
         ("GET", target) => {
             if let Some(activity) = target.strip_prefix("/v1/receipts/") {
                 receipt_route(config, activity)

@@ -10,6 +10,7 @@ layerx-crypto = { path = "../layerx-crypto" }
 layerx-types = { path = "../layerx-types" }
 layerx-wire = { path = "../layerx-wire" }
 layerx-proof = { path = "../layerx-proof" }
+sha2 = "=0.10.9"
 rustls = { version = "0.23.32", default-features = false, features = ["ring", "std", "tls12"] }
 
 [dev-dependencies]

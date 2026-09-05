@@ -173,9 +173,21 @@ pub fn encode_checkpoint_proof(
     value: &CheckpointProof,
     maximum_bytes: usize,
 ) -> Result<Vec<u8>, NativeWireError> {
-    encode_checkpoint_proof_for_protocol(value, maximum_bytes, layerx_wire::limits::PROTOCOL_VERSION)
+    encode_checkpoint_proof_for_protocol(
+        value,
+        maximum_bytes,
+        layerx_wire::limits::PROTOCOL_VERSION,
+    )
 }
 
+/// Encodes checkpoint material whose attestations declare exactly the
+/// explicitly selected `LayerX` protocol version. The byte layout is identical
+/// across versions; only the validation the codec applies is selected.
+///
+/// # Errors
+///
+/// Returns a limit refusal for oversized material, and the checkpoint
+/// refusal of [`CheckpointProof::validated_for_protocol`].
 pub fn encode_checkpoint_proof_for_protocol(
     value: &CheckpointProof,
     maximum_bytes: usize,
@@ -221,9 +233,20 @@ pub fn decode_checkpoint_proof(
     bytes: &[u8],
     maximum_bytes: usize,
 ) -> Result<CheckpointProof, NativeWireError> {
-    decode_checkpoint_proof_for_protocol(bytes, maximum_bytes, layerx_wire::limits::PROTOCOL_VERSION)
+    decode_checkpoint_proof_for_protocol(
+        bytes,
+        maximum_bytes,
+        layerx_wire::limits::PROTOCOL_VERSION,
+    )
 }
 
+/// Decodes checkpoint material and admits it only when every attestation
+/// declares exactly the explicitly selected `LayerX` protocol version.
+///
+/// # Errors
+///
+/// Returns an encoding or limit refusal for malformed bytes, and the
+/// checkpoint refusal of [`CheckpointProof::validated_for_protocol`].
 pub fn decode_checkpoint_proof_for_protocol(
     bytes: &[u8],
     maximum_bytes: usize,

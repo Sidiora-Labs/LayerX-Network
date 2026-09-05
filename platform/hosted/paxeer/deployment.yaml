@@ -75,6 +75,7 @@ spec:
   ingress:
     - from:
         - podSelector: {matchLabels: {app: layerx-testnet-control}}
+        - podSelector: {matchLabels: {app: layerx-node}}
         - namespaceSelector: {}
           podSelector: {matchLabels: {layerx-plane: human}}
       ports: [{protocol: TCP, port: 9443}]

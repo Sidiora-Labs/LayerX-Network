@@ -27,6 +27,12 @@
 #   reset.<id>.stop-replica    sequencer side asks the replica side to stop
 #   reset.<id>.replica-stopped replica side has stopped its daemon
 #
+# When bootstrap.sh ran with --settlement-env FILE, sequencer.env names FILE
+# as LAYERX_NODE_SETTLEMENT_ENV; the sequencer supervisor waits for FILE
+# (logging every 30 seconds, up to LAYERX_NODE_SETTLEMENT_WAIT_SECONDS,
+# default 3600), validates it with bootstrap.sh --check-settlement and exports
+# its five values to `layerxd --serve` before starting it.
+#
 # A daemon that exits on its own ends the supervisor with status 1 so the pod
 # restarts it against the retained data directory.
 set -euo pipefail
@@ -148,16 +154,48 @@ publish_core_environment() {
     mv "$temporary" "$RUN_DIR/core.env"
 }
 
+settlement_env_file() {
+    sed -n 's/^LAYERX_NODE_SETTLEMENT_ENV=//p' "$1" | tail -n 1
+}
+
+wait_for_settlement() {
+    # wait_for_settlement ENV_FILE -> the validated settlement lines in SETTLEMENT_LINES
+    local env_file=$1 file waited=0 limit
+    SETTLEMENT_LINES=""
+    file=$(settlement_env_file "$env_file")
+    [ -n "$file" ] || return 0
+    limit=${LAYERX_NODE_SETTLEMENT_WAIT_SECONDS:-3600}
+    [[ $limit =~ ^[0-9]+$ ]] || fail "LAYERX_NODE_SETTLEMENT_WAIT_SECONDS must be decimal"
+    while [ ! -e "$file" ]; do
+        if [ "$waited" -ge "$limit" ]; then
+            fail "settlement environment $file did not appear within ${limit}s"
+        fi
+        if [ $((waited % 30)) -eq 0 ]; then
+            log "waiting for the settlement environment $file (deployed contract addresses)"
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+    SETTLEMENT_LINES=$("$SCRIPT_DIR/bootstrap.sh" --check-settlement "$file") || fail "settlement environment $file was refused"
+    log "settlement environment $file validated"
+}
+
 start_daemon() {
     # start_daemon ENV_FILE MODE CONFIG
     local env_file=$1 mode=$2 config=$3
     [ -r "$env_file" ] || fail "environment file missing: $env_file"
     [ -r "$config" ] || fail "configuration missing: $config"
-    if [ "$mode" = --serve ]; then publish_core_environment; fi
+    if [ "$mode" = --serve ]; then
+        publish_core_environment
+        wait_for_settlement "$env_file"
+    fi
     (
         set -a
         # shellcheck disable=SC1090
         . "$env_file"
+        if [ -n "${SETTLEMENT_LINES:-}" ]; then
+            eval "$SETTLEMENT_LINES"
+        fi
         set +a
         exec "$LAYERXD" "$mode" "$config"
     ) &

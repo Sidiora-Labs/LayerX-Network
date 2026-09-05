@@ -26,6 +26,7 @@ use crate::lni::preparation::{
 };
 use crate::lni::report::capability_report;
 use crate::lni::schema::Capability;
+use crate::lni::simulate::{simulate, SimulateContext, SimulateError, Simulation};
 use crate::lni::transport::{ConnectionGate, Limits, TransportError, Uds};
 use crate::read::{
     account, balance, history, module_state, Balance, HistoryCursor, HistoryPage, ReadContext,
@@ -309,6 +310,32 @@ impl Client {
             self.state = ConnectionState::Unreachable;
         }
         Ok(submission)
+    }
+
+    /// Executes one signed program call against the node's current head
+    /// without committing it and verifies the sequencer-signed execution and
+    /// simulation evidence.
+    ///
+    /// # Errors
+    ///
+    /// Refuses an unavailable simulation capability, a disconnected client,
+    /// every typed core refusal, and any unverifiable or mismatched response.
+    pub fn simulate(
+        &mut self,
+        registry: &ModuleRegistry,
+        signed_bytes: &[u8],
+        correlation_id: u64,
+    ) -> Result<Simulation, SimulateError> {
+        if !self.handshake.capabilities().contains(Capability::Simulate) {
+            return Err(SimulateError::UnavailableCapability);
+        }
+        let context = SimulateContext {
+            interface_version: self.handshake.node().interface_version,
+            sequencer_public_key: self.handshake.node().authorised_sequencer_key,
+            correlation_id,
+        };
+        let transport = self.transport.as_mut().ok_or(SimulateError::Disconnected)?;
+        simulate(transport, registry, signed_bytes, context)
     }
 
     /// Retrieves and verifies one receipt through the active boundary.

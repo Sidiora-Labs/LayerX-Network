@@ -17,7 +17,7 @@ const fn supported_protocol_version(version: u16) -> bool {
 }
 
 const fn supported_programs_module_version(version: u32) -> bool {
-    matches!(version, 1 | 2 | 3)
+    matches!(version, 1..=3)
 }
 
 const fn supports_program_account_state(version: u32) -> bool {
@@ -420,6 +420,12 @@ pub fn verify_program_state(
 
 /// Verifies a sequencer-signed Programs execution receipt, preserving both
 /// successful and refused outcomes without imposing 402LXP transfer fields.
+///
+/// # Errors
+///
+/// Returns the exact decode, canonical-encoding, receipt-shape, protocol
+/// version, module, guest ABI, activity, batch, root-chain or sequencer
+/// signature check which refused the receipt.
 pub fn verify_program_outcome(
     receipt_bytes: &[u8],
     authorised: &AuthorizedBatch,
@@ -484,6 +490,11 @@ pub fn verify_program_outcome(
 /// Verifies a Programs call against a separately pinned sequencer and prior
 /// state root. Batch identifiers and the resulting root remain signed receipt
 /// facts; they are not accepted from a sibling transport document.
+///
+/// # Errors
+///
+/// Returns the previous-state-root check when the receipt does not chain from
+/// the pinned root, otherwise the exact [`verify_program_outcome`] failure.
 pub fn verify_program_outcome_at_root(
     receipt_bytes: &[u8],
     sequencer_public_key: [u8; 32],

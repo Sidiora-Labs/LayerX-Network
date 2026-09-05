@@ -91,6 +91,6 @@ spec:
       ports: [{protocol: TCP, port: 9420}]
   egress:
     - to: [{podSelector: {matchLabels: {layerx-plane: trusted-boundary}}}]
-      ports: [{protocol: TCP, port: 9443}]
+      ports: [{protocol: TCP, port: 9445}, {protocol: TCP, port: 9446}]
     - to: [{namespaceSelector: {}}]
       ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]

@@ -538,7 +538,7 @@ fn move_quote_commit_replay_recovery_and_lost_ack_use_the_real_transition() -> R
     assert_eq!(protocol.debit_balance_after(), 750);
     assert_eq!(protocol.credit_balance_before(), 0);
     assert_eq!(protocol.credit_balance_after(), 250);
-    assert_eq!(protocol.from_sequence(), 0);
+    assert_eq!(protocol.debit_sequence(), 0);
     assert_eq!(
         protocol.previous_state_root().as_slice(),
         hex_decode(&before_receipt_root)?.as_slice()

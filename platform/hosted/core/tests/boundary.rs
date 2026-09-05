@@ -1,11 +1,20 @@
 //! Drives the core boundary over TLS against a real `layerxd` sequencer and
 //! authority replica started from `build/bin`.
 
-use ed25519_dalek::SigningKey;
+use ed25519_dalek::{Signer, SigningKey};
 use layerx_client::lni::handshake::{perform, HandshakeConfig};
+use layerx_client::lni::preparation::{preparation_state, PreparationStateContext};
 use layerx_client::lni::schema::Version;
+use layerx_client::lni::simulate::{
+    simulation_boundary_id, simulation_evidence_digest, SimulationEvidence,
+};
 use layerx_client::lni::transport::{ConnectionGate, Limits, Uds};
 use layerx_platform_core::{build_send, hex_encode, treasury_did, SendRequest};
+use layerx_types::activity::{Authority, EnvelopeBuilder, Signature, TimestampBound};
+use layerx_types::amount::Amount;
+use layerx_types::ids::{Did, IdempotencyKey};
+use layerx_types::intent::{CallBudget, Calldata, ProgramCall, ProgramId, RequestedCapabilities};
+use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry, Payload};
 use native_tls::{Certificate, Identity, TlsConnector};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -254,10 +263,215 @@ fn lni_limits() -> Limits {
 
 fn handshake_config() -> HandshakeConfig {
     HandshakeConfig {
-        built_interface_version: Version::V1_3,
+        built_interface_version: Version::V1_4,
         expected_protocol_version: PROTOCOL_VERSION,
         expected_network_id: NETWORK_ID,
     }
+}
+
+fn account_sequence(socket: &Path, did: &str) -> u64 {
+    let gate = ConnectionGate::new(1);
+    let mut transport = must(Uds::connect(socket, &gate, lni_limits()), "LNI connect");
+    let handshake = must(
+        perform(&mut transport, &handshake_config(), None),
+        "LNI handshake",
+    );
+    let actor = must(Did::new(did.as_bytes()), "treasury DID");
+    let snapshot = must(
+        preparation_state(
+            &mut transport,
+            &actor,
+            PreparationStateContext {
+                interface_version: handshake.node().interface_version,
+                expected_network_id: NETWORK_ID,
+                minimum_observed_head: 0,
+                correlation_id: 3,
+            },
+        ),
+        "treasury preparation state",
+    );
+    snapshot.account_sequence
+}
+
+fn signed_program_call(seed: &[u8; 32], did: &str, sequence: u64, program_id: [u8; 32]) -> Vec<u8> {
+    let signing_key = SigningKey::from_bytes(seed);
+    let public_key = signing_key.verifying_key().to_bytes();
+    let activity_type = must(ActivityType::new(ModuleId::Programs, 3), "ProgramCall type");
+    let registration = must(
+        ModuleRegistration::new(ModuleId::Programs, &[activity_type]),
+        "programs registration",
+    );
+    let registry = must(ModuleRegistry::new(&[registration]), "programs registry");
+    let call = ProgramCall::new(
+        ProgramId::new(program_id),
+        must(Calldata::new(&[]), "calldata"),
+        must(CallBudget::new(1000, Amount::from_u128(0)), "call budget"),
+        must(RequestedCapabilities::new(&[]), "capabilities"),
+    );
+    let payload = must(
+        Payload::new(&registry, activity_type, &call.canonical_payload()),
+        "call payload",
+    );
+    let payload_hash = must(
+        layerx_wire::hash::payload_hash_for(&payload),
+        "payload hash",
+    );
+    let mut builder = EnvelopeBuilder::new();
+    must(
+        builder
+            .protocol_version(PROTOCOL_VERSION)
+            .and_then(|value| value.network_id(NETWORK_ID))
+            .and_then(|value| value.activity_type(activity_type))
+            .and_then(|value| value.actor_did(must(Did::new(did.as_bytes()), "actor DID")))
+            .and_then(|value| value.authority(must(Authority::owner(&public_key), "owner")))
+            .and_then(|value| value.account_sequence(sequence))
+            .and_then(|value| {
+                value.timestamp_bound(must(
+                    TimestampBound::new(now_ms() - 30_000, now_ms() + 120_000),
+                    "validity",
+                ))
+            })
+            .and_then(|value| value.idempotency_key(IdempotencyKey::new(random32())))
+            .and_then(|value| value.fee_limit(Amount::from_u128(0)))
+            .and_then(|value| value.payload_hash(payload_hash))
+            .and_then(|value| value.payload(payload))
+            .map(|_| ()),
+        "program envelope",
+    );
+    let unsigned = must(builder.build(), "program envelope build");
+    let digest = must(
+        layerx_wire::sign::preimage_unsigned(&unsigned),
+        "signing preimage",
+    );
+    let signature = signing_key.sign(digest.as_bytes()).to_bytes();
+    must(
+        layerx_wire::activity::encode_signed_envelope(
+            &unsigned.attach_signature(must(Signature::new(&signature), "signature")),
+        ),
+        "signed ProgramCall",
+    )
+}
+
+fn assert_program_simulation(boundary: &Boundary, cluster: &Cluster) {
+    let core = &boundary.core;
+    let (head_before, sequencer_key) =
+        chain_head(&cluster.lni_socket).unwrap_or_else(|| panic!("LNI head"));
+    let sequence_before = account_sequence(&cluster.lni_socket, &cluster.treasury_did);
+    let program_id = random32();
+    let signed = signed_program_call(
+        &cluster.treasury_seed,
+        &cluster.treasury_did,
+        sequence_before,
+        program_id,
+    );
+    let body = serde_json::json!({ "activity": hex_encode(&signed) }).to_string();
+    let simulated = core.request(
+        "POST",
+        "/v1/programs/simulate",
+        &[("Content-Type", "application/json")],
+        body.as_bytes(),
+    );
+    assert_eq!(simulated.status, 200, "{}", simulated.body);
+    let outcome = json(&simulated);
+    assert_eq!(outcome["ok"], serde_json::Value::Bool(true));
+    let result = &outcome["result"];
+    assert_eq!(result["committed"], serde_json::Value::Bool(false));
+    let execution = &result["execution"];
+    assert_eq!(execution["state"], serde_json::json!("refused"));
+    assert_eq!(
+        execution["program_id"],
+        serde_json::json!(hex_encode(&program_id))
+    );
+    assert_eq!(execution["terminal_payload"], serde_json::json!(""));
+    assert_eq!(execution["call_graph"], serde_json::json!(""));
+    let receipt_hex = execution["receipt"]
+        .as_str()
+        .unwrap_or_else(|| panic!("receipt hex"));
+    let receipt_bytes = must(layerx_platform_core::hex_decode(receipt_hex), "receipt hex");
+    let receipt = must(
+        layerx_proof::receipt::verify_sequencer_signature(&receipt_bytes, sequencer_key),
+        "simulated receipt",
+    );
+    let protocol = receipt
+        .protocol()
+        .unwrap_or_else(|| panic!("protocol receipt"));
+    assert!(protocol.result_code() < 0);
+    assert_eq!(protocol.module_id(), 9);
+    assert_eq!(
+        execution["activity_id"],
+        serde_json::json!(hex_encode(&protocol.activity_id()))
+    );
+    let evidence = &result["simulation_evidence"];
+    let field = |name: &str| -> Vec<u8> {
+        must(
+            layerx_platform_core::hex_decode(
+                evidence[name]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("evidence field {name}")),
+            ),
+            name,
+        )
+    };
+    let text = |name: &str| -> u64 {
+        must(
+            evidence[name]
+                .as_str()
+                .unwrap_or_else(|| panic!("evidence field {name}"))
+                .parse::<u64>(),
+            name,
+        )
+    };
+    assert_eq!(evidence["committed"], serde_json::Value::Bool(false));
+    assert_eq!(field("activity_id"), protocol.activity_id().to_vec());
+    assert_eq!(field("public_key"), sequencer_key.to_vec());
+    assert_eq!(
+        field("boundary_id"),
+        simulation_boundary_id(&sequencer_key).to_vec()
+    );
+    assert_eq!(
+        field("previous_state_root"),
+        protocol.previous_state_root().to_vec()
+    );
+    assert_eq!(
+        field("hypothetical_state_root"),
+        protocol.resulting_state_root().to_vec()
+    );
+    let decoded = SimulationEvidence {
+        boundary_id: must(<[u8; 32]>::try_from(field("boundary_id")), "boundary id"),
+        activity_id: protocol.activity_id(),
+        previous_state_root: protocol.previous_state_root(),
+        hypothetical_state_root: protocol.resulting_state_root(),
+        observed_sequence: text("observed_sequence"),
+        observed_at: text("observed_at"),
+        public_key: sequencer_key,
+        signature: must(<[u8; 64]>::try_from(field("signature")), "signature"),
+    };
+    assert_eq!(decoded.observed_sequence, head_before);
+    must(
+        layerx_crypto::ed25519::verify_digest(
+            &sequencer_key,
+            &decoded.signature,
+            &simulation_evidence_digest(&decoded),
+        ),
+        "simulation evidence signature",
+    );
+    let (head_after, _) = chain_head(&cluster.lni_socket).unwrap_or_else(|| panic!("LNI head"));
+    assert_eq!(
+        head_before, head_after,
+        "simulation must not commit a batch"
+    );
+    assert_eq!(
+        account_sequence(&cluster.lni_socket, &cluster.treasury_did),
+        sequence_before,
+        "simulation must not consume the account sequence"
+    );
+    let not_program = core.request(
+        "POST",
+        "/v1/programs/simulate",
+        &[("Content-Type", "text/plain")],
+        b"zz",
+    );
+    assert_refusal(&not_program, 400, "content_type_required");
 }
 
 fn chain_head(socket: &Path) -> Option<(u64, [u8; 32])> {
@@ -941,7 +1155,7 @@ fn assert_readiness_shape(answer: &HttpAnswer) {
         value["network_id"],
         serde_json::json!(NETWORK_ID.to_string())
     );
-    assert_eq!(value["wire_version"], serde_json::json!("1.3"));
+    assert_eq!(value["wire_version"], serde_json::json!("3"));
     assert_eq!(value["synchronous_receipts"], serde_json::Value::Bool(true));
     assert_eq!(value["state_snapshot"], serde_json::Value::Bool(true));
     let object = value.as_object().unwrap_or_else(|| panic!("object"));
@@ -984,8 +1198,13 @@ fn boundary_refuses_typed_and_journals_while_the_daemon_is_down() {
             &[("Content-Type", "application/json")],
             b"{}",
         ),
-        503,
-        "capability_unavailable",
+        400,
+        "invalid_argument",
+    );
+    assert_refusal(
+        &core.request("DELETE", "/v1/programs/simulate", &[], &[]),
+        405,
+        "method_not_allowed",
     );
     assert_refusal(
         &core.get("/v1/programs/registry"),
@@ -1070,6 +1289,7 @@ fn boundary_serves_the_real_sequencer_over_the_lni() {
 
     establish_receipt_head(&boundary, &cluster);
     assert_public_reads(&boundary, &cluster);
+    assert_program_simulation(&boundary, &cluster);
     let (before, key) = chain_head(&cluster.lni_socket).unwrap_or_else(|| panic!("LNI head"));
     assert_eq!(key, cluster.sequencer_key);
     let (did, public_key) = recipient();
@@ -1275,7 +1495,7 @@ fn assert_admin_refusals(boundary: &Boundary) {
     assert!(!boundary.supervisor_socket.exists());
     assert_refusal(
         &boundary.admin_post("/admin/v1/testnet/reset", "reset-1", "{}"),
-        503,
+        422,
         "supervisor_unavailable",
     );
     assert_refusal(
@@ -1324,9 +1544,9 @@ fn assert_public_reads(boundary: &Boundary, cluster: &Cluster) {
 
 fn assert_funding_refusals(boundary: &Boundary, valid: &str, did: &str, public_key: &str) {
     let unavailable = boundary.admin_post("/admin/v1/testnet/fund", "fund-down-1", valid);
-    assert_refusal(&unavailable, 503, "node_unavailable");
+    assert_refusal(&unavailable, 422, "node_unavailable");
     let again = boundary.admin_post("/admin/v1/testnet/fund", "fund-down-1", valid);
-    assert_refusal(&again, 503, "node_unavailable");
+    assert_refusal(&again, 422, "node_unavailable");
 
     let invalid = funding_body(did, public_key, 0);
     let refused = boundary.admin_post("/admin/v1/testnet/fund", "fund-invalid-1", &invalid);

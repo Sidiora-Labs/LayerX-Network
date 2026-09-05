@@ -16,21 +16,58 @@ const ACCOUNT_TREE_KEY: &[u8] = b"account-tree";
 const MAX_ACCOUNT_NAME_BYTES: usize = 512;
 const MIN_ACCOUNT_VALUE_BYTES: usize = 103;
 
+/// The asset an account holds together with its committed balance; an account
+/// without an asset commits a zero asset identifier and a zero balance.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AccountAsset {
+    pub asset_id: [u8; 32],
+    pub balance: u128,
+}
+
 /// Exact canonical account value committed by `lx_account_registry_root`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CanonicalAccount {
     pub account_id: [u8; 32],
     pub name: Vec<u8>,
     pub kind: u8,
-    pub balance: u128,
-    pub asset_id: [u8; 32],
-    pub has_asset: bool,
+    pub asset: Option<AccountAsset>,
     pub next_sequence: u64,
     pub created_at_sequence: u64,
     pub frozen: bool,
     pub has_open_reference: bool,
-    pub authority_key: [u8; 32],
-    pub has_authority_key: bool,
+    pub authority_key: Option<[u8; 32]>,
+}
+
+impl CanonicalAccount {
+    /// Reports whether the account holds an asset.
+    #[must_use]
+    pub const fn has_asset(&self) -> bool {
+        self.asset.is_some()
+    }
+
+    /// Returns the committed asset identifier, zero when no asset is held.
+    #[must_use]
+    pub const fn asset_id(&self) -> [u8; 32] {
+        match self.asset {
+            Some(asset) => asset.asset_id,
+            None => [0; 32],
+        }
+    }
+
+    /// Returns the committed balance, zero when no asset is held.
+    #[must_use]
+    pub const fn balance(&self) -> u128 {
+        match self.asset {
+            Some(asset) => asset.balance,
+            None => 0,
+        }
+    }
+
+    /// Reports whether an authority key is bound to the account.
+    #[must_use]
+    pub const fn has_authority_key(&self) -> bool {
+        self.authority_key.is_some()
+    }
 }
 
 /// Exact three-link account proof produced by the core state implementation.
@@ -148,15 +185,12 @@ pub fn decode_account_value(
         account_id,
         name,
         kind,
-        balance,
-        asset_id,
-        has_asset,
+        asset: has_asset.then_some(AccountAsset { asset_id, balance }),
         next_sequence,
         created_at_sequence,
         frozen,
         has_open_reference,
-        authority_key,
-        has_authority_key,
+        authority_key: has_authority_key.then_some(authority_key),
     })
 }
 
@@ -179,7 +213,7 @@ pub fn verify_nested_account(
         return Err(AccountProofError::AccountIdentity);
     }
     let account = decode_account_value(expected_account, account_value)?;
-    if expected_asset.is_some_and(|asset| !account.has_asset || account.asset_id != asset) {
+    if expected_asset.is_some_and(|asset| account.asset.is_none_or(|held| held.asset_id != asset)) {
         return Err(AccountProofError::AssetIdentity);
     }
     let mut account_key = [0_u8; 33];

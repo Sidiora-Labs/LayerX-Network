@@ -271,7 +271,7 @@ spec:
   policyTypes: [Egress]
   egress:
     - to: [{podSelector: {matchLabels: {layerx-plane: trusted-boundary}}}]
-      ports: [{protocol: TCP, port: 9443}, {protocol: TCP, port: 9444}]
+      ports: [{protocol: TCP, port: 9443}, {protocol: TCP, port: 9444}, {protocol: TCP, port: 9445}]
     - to: [{podSelector: {matchLabels: {app: layerx-gateway}}}]
       ports: [{protocol: TCP, port: 9443}]
     - to: [{podSelector: {matchLabels: {app: layerx-faucet}}}]

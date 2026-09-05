@@ -269,9 +269,9 @@ fn decodes_exact_c_account_leaf_and_refuses_identity_asset_and_value_swaps() {
     let account = decode_account_value(account_id, &value)
         .unwrap_or_else(|error| panic!("C account value refused: {error:?}"));
     assert_eq!(account.account_id, account_id);
-    assert_eq!(account.asset_id, asset_id);
-    assert_eq!(account.balance, 0x12_34_56);
-    assert!(account.has_asset);
+    assert_eq!(account.asset_id(), asset_id);
+    assert_eq!(account.balance(), 0x12_34_56);
+    assert!(account.has_asset());
     assert_eq!(account.next_sequence, 7);
     assert_eq!(account.created_at_sequence, 3);
 
@@ -287,14 +287,14 @@ fn decodes_exact_c_account_leaf_and_refuses_identity_asset_and_value_swaps() {
     swapped_asset[asset_offset] ^= 1;
     let decoded = decode_account_value(account_id, &swapped_asset)
         .unwrap_or_else(|error| panic!("canonical swapped asset refused too early: {error:?}"));
-    assert_ne!(decoded.asset_id, asset_id);
+    assert_ne!(decoded.asset_id(), asset_id);
 
     let mut swapped_balance = value.clone();
     let balance_offset = 2 + account.name.len() + 1;
     swapped_balance[balance_offset + 15] ^= 1;
     let decoded = decode_account_value(account_id, &swapped_balance)
         .unwrap_or_else(|error| panic!("canonical swapped balance refused too early: {error:?}"));
-    assert_ne!(decoded.balance, account.balance);
+    assert_ne!(decoded.balance(), account.balance());
 
     let mut bad_boolean = value.clone();
     let has_asset_offset = asset_offset + 32;
@@ -312,8 +312,7 @@ fn decodes_exact_c_account_leaf_and_refuses_identity_asset_and_value_swaps() {
     );
 }
 
-#[test]
-fn verifies_the_exact_nested_state_domains_and_receipt_authority() {
+fn program_account_vectors() -> ([u8; 32], [u8; 32], Vec<u8>) {
     let entries = vectors(PROGRAM_ACCOUNT_VECTORS);
     let account_id = fixed::<32>(
         entries
@@ -328,6 +327,12 @@ fn verifies_the_exact_nested_state_domains_and_receipt_authority() {
     let account_value = hex(entries
         .get("account_value")
         .unwrap_or_else(|| panic!("missing account value vector")));
+    (account_id, asset_id, account_value)
+}
+
+#[test]
+fn verifies_the_exact_nested_state_domains() {
+    let (account_id, asset_id, account_value) = program_account_vectors();
     let sequencer = SigningKey::from_bytes(&[0x51; 32]);
     let (proof, authorization, resulting_state_root) =
         nested_fixture(account_id, &account_value, Some(&sequencer));
@@ -340,7 +345,7 @@ fn verifies_the_exact_nested_state_domains_and_receipt_authority() {
     )
     .unwrap_or_else(|error| panic!("exact nested proof failed: {error:?}"));
     assert_eq!(verified.account().account_id, account_id);
-    assert_eq!(verified.account().asset_id, asset_id);
+    assert_eq!(verified.account().asset_id(), asset_id);
     assert_eq!(
         verified.header().header().resulting_state_root(),
         resulting_state_root
@@ -426,8 +431,15 @@ fn verifies_the_exact_nested_state_domains_and_receipt_authority() {
         ),
         Err(AccountProofError::StateRoot)
     );
+}
 
-    changed = proof.clone();
+#[test]
+fn rejects_swapped_header_authority_receipt_binding_and_signature() {
+    let (account_id, asset_id, account_value) = program_account_vectors();
+    let sequencer = SigningKey::from_bytes(&[0x51; 32]);
+    let (proof, authorization, _) = nested_fixture(account_id, &account_value, Some(&sequencer));
+
+    let mut changed = proof.clone();
     let (_, receipt_root) = build_proof(&[changed.receipt_bytes.as_slice()], 0)
         .unwrap_or_else(|error| panic!("receipt root: {error:?}"));
     changed.header_bytes = header_bytes(
@@ -491,11 +503,18 @@ fn verifies_the_exact_nested_state_domains_and_receipt_authority() {
         ),
         Err(AccountProofError::ReceiptBinding)
     );
+}
+
+#[test]
+fn rejects_generic_leaf_domains_and_receipt_signature_failures() {
+    let (account_id, asset_id, account_value) = program_account_vectors();
+    let sequencer = SigningKey::from_bytes(&[0x51; 32]);
+    let (proof, authorization, _) = nested_fixture(account_id, &account_value, Some(&sequencer));
 
     let mut account_key = [0_u8; 33];
     account_key[0] = 4;
     account_key[1..].copy_from_slice(&account_id);
-    changed = proof.clone();
+    let mut changed = proof.clone();
     changed.account_root = generic_node(
         state_leaf(&account_key, &account_value),
         proof.account_proof.siblings()[0],

@@ -52,7 +52,23 @@
 #   --layerxd PATH          layerxd binary. Default: build/bin/layerxd or
 #                           /usr/local/bin/layerxd.
 #   --genesis-build PATH    layerx-genesis-build binary. Same lookup.
+#   --settlement-env FILE   Defer the Paxeer settlement binding: the five
+#                           LAYERX_NODE_PAXEER_CHAIN_ID, LAYERX_NODE_SETTLEMENT_CONTRACT,
+#                           LAYERX_NODE_CHECKPOINT_REGISTRY, LAYERX_NODE_PAXEER_RPC_ADDRESS
+#                           and LAYERX_NODE_PAXEER_RPC_PORT values are read from FILE
+#                           when the sequencer starts (the supervisor validates FILE
+#                           with --check-settlement first) instead of from the
+#                           bootstrap environment, because the settlement contracts
+#                           are deployed from the genesis artifacts this bootstrap
+#                           produces. sequencer.env then carries
+#                           LAYERX_NODE_SETTLEMENT_ENV=FILE in place of the five values.
 #   --force                 Discard the data directory contents first.
+#
+# Validation mode:
+#   bootstrap.sh --check-settlement FILE
+#                           Validate a settlement environment file holding exactly the
+#                           five KEY=VALUE lines above under the same rules the
+#                           bootstrap applies to its environment and print them.
 #
 # Outputs under DATA_DIR:
 #   genesis/genesis.manifest, genesis/00000000000000000000.lxs,
@@ -63,7 +79,7 @@
 set -euo pipefail
 
 usage() {
-    sed -n '2,60p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,78p' "$0" | sed 's/^# \{0,1\}//'
     exit 2
 }
 
@@ -71,6 +87,56 @@ fail() {
     printf 'bootstrap: %s\n' "$*" >&2
     exit 1
 }
+
+validate_settlement() {
+    # validate_settlement CHAIN_ID SETTLEMENT_CONTRACT CHECKPOINT_REGISTRY RPC_ADDRESS RPC_PORT
+    local chain_id=$1 settlement_contract=$2 checkpoint_registry=$3 rpc_address=$4 rpc_port=$5 contract_name contract_value
+    [[ $chain_id =~ ^[1-9][0-9]{0,19}$ ]] || fail "LAYERX_NODE_PAXEER_CHAIN_ID must be a positive decimal uint64"
+    if [ ${#chain_id} -eq 20 ] && [[ $chain_id > 18446744073709551615 ]]; then
+        fail "LAYERX_NODE_PAXEER_CHAIN_ID exceeds uint64"
+    fi
+    for contract_name in SETTLEMENT_CONTRACT CHECKPOINT_REGISTRY; do
+        case "$contract_name" in
+            SETTLEMENT_CONTRACT) contract_value=$settlement_contract ;;
+            CHECKPOINT_REGISTRY) contract_value=$checkpoint_registry ;;
+        esac
+        [[ $contract_value =~ ^0x[0-9a-fA-F]{40}$ ]] || fail "LAYERX_NODE_$contract_name must be a 0x-prefixed address"
+        [[ $contract_value =~ [1-9a-fA-F] ]] || fail "LAYERX_NODE_$contract_name must not be zero"
+    done
+    [ "$rpc_address" = 127.0.0.1 ] || fail "LAYERX_NODE_PAXEER_RPC_ADDRESS must be 127.0.0.1"
+    [[ $rpc_port =~ ^[1-9][0-9]{0,4}$ ]] && [ "$rpc_port" -le 65535 ] || fail "LAYERX_NODE_PAXEER_RPC_PORT must be in 1..65535"
+}
+
+check_settlement_file() {
+    local file=$1 line key value
+    local chain_id="" settlement_contract="" checkpoint_registry="" rpc_address="" rpc_port=""
+    [ -r "$file" ] || fail "settlement environment file is not readable: $file"
+    [ -f "$file" ] || fail "settlement environment file is not a regular file: $file"
+    [ "$(stat -c %s "$file")" -le 4096 ] || fail "settlement environment file exceeds 4096 bytes: $file"
+    while IFS= read -r line || [ -n "$line" ]; do
+        [ -n "$line" ] || continue
+        [[ $line =~ ^([A-Z_]+)=([^[:space:]]*)$ ]] || fail "settlement environment line is not KEY=VALUE: ${line%%=*}"
+        key=${BASH_REMATCH[1]}
+        value=${BASH_REMATCH[2]}
+        case "$key" in
+            LAYERX_NODE_PAXEER_CHAIN_ID) [ -z "$chain_id" ] || fail "$key repeated"; chain_id=$value ;;
+            LAYERX_NODE_SETTLEMENT_CONTRACT) [ -z "$settlement_contract" ] || fail "$key repeated"; settlement_contract=$value ;;
+            LAYERX_NODE_CHECKPOINT_REGISTRY) [ -z "$checkpoint_registry" ] || fail "$key repeated"; checkpoint_registry=$value ;;
+            LAYERX_NODE_PAXEER_RPC_ADDRESS) [ -z "$rpc_address" ] || fail "$key repeated"; rpc_address=$value ;;
+            LAYERX_NODE_PAXEER_RPC_PORT) [ -z "$rpc_port" ] || fail "$key repeated"; rpc_port=$value ;;
+            *) fail "settlement environment file carries an unexpected key $key" ;;
+        esac
+    done < "$file"
+    validate_settlement "$chain_id" "$settlement_contract" "$checkpoint_registry" "$rpc_address" "$rpc_port"
+    printf 'LAYERX_NODE_PAXEER_CHAIN_ID=%s\nLAYERX_NODE_SETTLEMENT_CONTRACT=%s\nLAYERX_NODE_CHECKPOINT_REGISTRY=%s\nLAYERX_NODE_PAXEER_RPC_ADDRESS=%s\nLAYERX_NODE_PAXEER_RPC_PORT=%s\n' \
+        "$chain_id" "$settlement_contract" "$checkpoint_registry" "$rpc_address" "$rpc_port"
+}
+
+if [ "${1:-}" = --check-settlement ]; then
+    [ $# -eq 2 ] || fail "--check-settlement takes exactly one file argument"
+    check_settlement_file "$2"
+    exit 0
+fi
 
 DATA_DIR=""
 RUN_DIR=""
@@ -90,6 +156,7 @@ GENESIS_TIMESTAMP_MS=""
 MIGRATIONS=""
 LAYERXD=""
 GENESIS_BUILD=""
+SETTLEMENT_ENV=""
 FORCE=0
 
 while [ $# -gt 0 ]; do
@@ -112,6 +179,7 @@ while [ $# -gt 0 ]; do
         --migrations) MIGRATIONS=$2; shift 2 ;;
         --layerxd) LAYERXD=$2; shift 2 ;;
         --genesis-build) GENESIS_BUILD=$2; shift 2 ;;
+        --settlement-env) SETTLEMENT_ENV=$2; shift 2 ;;
         --force) FORCE=1; shift ;;
         -h|--help) usage ;;
         *) fail "unknown argument $1" ;;
@@ -146,17 +214,13 @@ SETTLEMENT_CONTRACT=${LAYERX_NODE_SETTLEMENT_CONTRACT:-}
 CHECKPOINT_REGISTRY=${LAYERX_NODE_CHECKPOINT_REGISTRY:-}
 PAXEER_RPC_ADDRESS=${LAYERX_NODE_PAXEER_RPC_ADDRESS:-}
 PAXEER_RPC_PORT=${LAYERX_NODE_PAXEER_RPC_PORT:-}
-[[ $PAXEER_CHAIN_ID =~ ^[1-9][0-9]{0,19}$ ]] || fail "LAYERX_NODE_PAXEER_CHAIN_ID must be a positive decimal uint64"
-if [ ${#PAXEER_CHAIN_ID} -eq 20 ] && [[ $PAXEER_CHAIN_ID > 18446744073709551615 ]]; then
-    fail "LAYERX_NODE_PAXEER_CHAIN_ID exceeds uint64"
+if [ -n "$SETTLEMENT_ENV" ]; then
+    [[ $SETTLEMENT_ENV = /* ]] || fail "--settlement-env must be an absolute path"
+    [ -z "$PAXEER_CHAIN_ID$SETTLEMENT_CONTRACT$CHECKPOINT_REGISTRY$PAXEER_RPC_ADDRESS$PAXEER_RPC_PORT" ] \
+        || fail "--settlement-env excludes the LAYERX_NODE_PAXEER_* and LAYERX_NODE_SETTLEMENT_CONTRACT/CHECKPOINT_REGISTRY environment"
+else
+    validate_settlement "$PAXEER_CHAIN_ID" "$SETTLEMENT_CONTRACT" "$CHECKPOINT_REGISTRY" "$PAXEER_RPC_ADDRESS" "$PAXEER_RPC_PORT"
 fi
-for contract_name in SETTLEMENT_CONTRACT CHECKPOINT_REGISTRY; do
-    contract_value=${!contract_name}
-    [[ $contract_value =~ ^0x[0-9a-fA-F]{40}$ ]] || fail "LAYERX_NODE_$contract_name must be a 0x-prefixed address"
-    [[ $contract_value =~ [1-9a-fA-F] ]] || fail "LAYERX_NODE_$contract_name must not be zero"
-done
-[ "$PAXEER_RPC_ADDRESS" = 127.0.0.1 ] || fail "LAYERX_NODE_PAXEER_RPC_ADDRESS must be 127.0.0.1"
-[[ $PAXEER_RPC_PORT =~ ^[1-9][0-9]{0,4}$ ]] && [ "$PAXEER_RPC_PORT" -le 65535 ] || fail "LAYERX_NODE_PAXEER_RPC_PORT must be in 1..65535"
 
 DAEMON_UID=$(id -u)
 DAEMON_GID=$(id -g)
@@ -376,12 +440,13 @@ write_config replica "$DATA_DIR/replica.conf"
 "$LAYERXD" --check-config "$DATA_DIR/replica.conf" || fail "layerxd refused the replica configuration"
 
 LAST_BATCH=18446744073709551615
-cat > "$DATA_DIR/sequencer.env" <<EOF
-LAYERX_NODE_PAXEER_CHAIN_ID=$PAXEER_CHAIN_ID
-LAYERX_NODE_SETTLEMENT_CONTRACT=$SETTLEMENT_CONTRACT
-LAYERX_NODE_CHECKPOINT_REGISTRY=$CHECKPOINT_REGISTRY
-LAYERX_NODE_PAXEER_RPC_ADDRESS=$PAXEER_RPC_ADDRESS
-LAYERX_NODE_PAXEER_RPC_PORT=$PAXEER_RPC_PORT
+if [ -n "$SETTLEMENT_ENV" ]; then
+    printf 'LAYERX_NODE_SETTLEMENT_ENV=%s\n' "$SETTLEMENT_ENV" > "$DATA_DIR/sequencer.env"
+else
+    printf 'LAYERX_NODE_PAXEER_CHAIN_ID=%s\nLAYERX_NODE_SETTLEMENT_CONTRACT=%s\nLAYERX_NODE_CHECKPOINT_REGISTRY=%s\nLAYERX_NODE_PAXEER_RPC_ADDRESS=%s\nLAYERX_NODE_PAXEER_RPC_PORT=%s\n' \
+        "$PAXEER_CHAIN_ID" "$SETTLEMENT_CONTRACT" "$CHECKPOINT_REGISTRY" "$PAXEER_RPC_ADDRESS" "$PAXEER_RPC_PORT" > "$DATA_DIR/sequencer.env"
+fi
+cat >> "$DATA_DIR/sequencer.env" <<EOF
 LAYERX_NODE_CHECKPOINT_DIRECTORY=$DATA_DIR/checkpoints
 LAYERX_NODE_SNAPSHOT=$SNAPSHOT
 LAYERX_NODE_GENESIS_MANIFEST=$MANIFEST

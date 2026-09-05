@@ -11,15 +11,13 @@
 #   LAYERX_BETA_CLUSTER_NAME            kind cluster name (default layerx-beta)
 #   LAYERX_BETA_IMAGE_REGISTRY          registry prefix images are pushed to for an owner cluster; unset loads
 #                                       the locally built images into the kind nodes
-#   LAYERX_BETA_EXTERNAL_MANIFESTS      directory of owner manifests providing the separately operated
-#                                       trusted-boundary Services (layerx-pending-core, layerx-pending-core-admin,
-#                                       paxeer-boundary, layerx-identity, layerx-receipt-authority,
-#                                       layerx-agent-boundary in layerx-testnet) and the layerx-internal services
-#                                       the developer plane dials (redis, kms, identity, component, authority,
-#                                       journeys, payments, approvals, programs)
 #   LAYERX_BETA_BUILDER_ENVIRONMENT_DIR owner hermetic builder root filesystem (regular files and directories only,
 #                                       entrypoint bin/layerx-build) published into the registry builder release PVC
-#   LAYERX_BETA_SEQUENCER_KEY_FILE      PEM ed25519 private key of the beta sequencer; generated when unset
+#   LAYERX_BETA_SEQUENCER_KEY_FILE      PEM ed25519 private key of the beta sequencer; generated when unset. Its
+#                                       32-byte seed is the node's sequencer key, so the node, the receipt
+#                                       authority, the gateway and the registry share one sequencer identity
+#   LAYERX_BETA_FOUNDRY_BIN             directory holding the pinned forge and cast that
+#                                       platform/hosted/paxeer/deploy-contracts.sh requires (default /root/.foundry/bin)
 #   LAYERX_BETA_FAUCET_HOST             public faucet hostname (default faucet.testnet.layerx.network)
 #   LAYERX_BETA_DEVELOPER_HOST          public developer hostname (default developers.testnet.layerx.network)
 #   LAYERX_BETA_KIND_CNI                calico (default, enforces NetworkPolicy) or kindnet
@@ -28,14 +26,25 @@
 #   LAYERX_BETA_TESTNET_PORT            host ports of the testnet, gateway and faucet port-forwards
 #   LAYERX_BETA_GATEWAY_PORT            (defaults 19443, 19444, 19445)
 #   LAYERX_BETA_FAUCET_PORT
-#   LAYERX_BETA_TEST_AUTH_TOKEN_FILE    identity token accepted by the owner identity service for the smoke
-#                                       source; a locally generated token file is exported when unset
+#   LAYERX_BETA_TEST_AUTH_TOKEN_FILE    identity session token for the smoke source; when unset the bring-up
+#                                       provisions a principal for the source DID in the identity service with
+#                                       a generated ed25519 signer key and mints its session
 #   LAYERX_BETA_TEST_SOURCE_DID         smoke source DID (default did:layerx:beta:<random>)
+#   LAYERX_BETA_TEST_DESTINATION_DID    smoke destination DID (default did:layerx:beta:<random>, provisioned too)
+#   LAYERX_BETA_TEST_AMOUNT             smoke move amount in the node asset (default 1)
 #   LAYERX_BETA_QUALIFICATION_NODE_URL  overrides for the qualification runner component URLs
 #   LAYERX_BETA_QUALIFICATION_AGENT_URL
 #   LAYERX_BETA_QUALIFICATION_HUMAN_URL
 #   LAYERX_BETA_QUALIFICATION_PAXEER_URL
 #   LAYERX_BETA_KEEP_TOOLS              set to 1 to keep the pinned kind/kubectl downloads on teardown
+#
+# The trusted-boundary services (node with core boundary, receipt authority and agent boundary; identity;
+# Paxeer chain with its boundary) are built from the repository, applied before the testnet, gateway,
+# registry and developer manifests, and bound together in this order: the Paxeer chain starts with the
+# generated deployer address, the node bootstraps its genesis, deploy-contracts.sh deploys the settlement
+# contracts from the node's genesis artifacts through the Paxeer boundary, and the resulting GuarantorBond
+# and CheckpointRegistry addresses are published to the node as the layerx-node-settlement ConfigMap the
+# sequencer supervisor waits for before starting layerxd --serve.
 #
 # Boundary checks (--boundary-checks) additionally read the inputs of
 # platform/hosted/gateway/tests/hosted-boundary.sh and platform/hosted/webhooks/tests/fault-injection.sh.
@@ -77,8 +86,17 @@ DEVELOPER_NAMESPACE=layerx-developer
 IMAGE_LABEL=io.layerx.beta-cluster
 BOUNDARY_LABEL=layerx.io/program-registry-boundary
 
-IMAGE_NAMES=(layerx-testnet-control layerx-gateway layerx-faucet layerx-program-registry layerx-webhooks layerx-dashboard layerx-dashboard-web)
-EXTERNAL_SERVICES=(layerx-pending-core layerx-pending-core-admin paxeer-boundary layerx-identity layerx-receipt-authority layerx-agent-boundary)
+IMAGE_NAMES=(layerx-testnet-control layerx-gateway layerx-faucet layerx-program-registry layerx-webhooks layerx-dashboard layerx-dashboard-web
+    layerx-node layerx-core-boundary layerx-receipt-authority layerx-agent-boundary layerx-identity layerx-paxeer-boundary paxd-node paxd)
+TRUSTED_BOUNDARY_SERVICES=(layerx-pending-core layerx-pending-core-admin paxeer-boundary layerx-identity layerx-receipt-authority layerx-agent-boundary)
+INTERNAL_NAMESPACE=layerx-internal
+FOUNDRY_BIN=${LAYERX_BETA_FOUNDRY_BIN:-/root/.foundry/bin}
+IDENTITY_PORT=19451
+PAXEER_CHAIN_ID=125
+NODE_MANIFEST="$REPO_ROOT/platform/hosted/node/deployment.yaml"
+NODE_NETWORK_ID=$(sed -n 's/^  network-id: "\([0-9]*\)"$/\1/p' "$NODE_MANIFEST")
+NODE_ASSET_ID=$(sed -n 's/^  asset-id: "\([0-9a-f]*\)"$/\1/p' "$NODE_MANIFEST")
+PAXEER_RELAY_PORT=$(sed -n 's/^  paxeer-relay-port: "\([0-9]*\)"$/\1/p' "$NODE_MANIFEST")
 
 log() { printf 'beta-cluster: %s\n' "$*" >&2; }
 fail() { printf 'beta-cluster: error: %s\n' "$*" >&2; exit 1; }
@@ -99,6 +117,14 @@ image_source() {
         layerx-webhooks) printf 'ghcr.io/centra-ai/layerx-webhooks:0.1.0 platform/hosted/webhooks/Dockerfile' ;;
         layerx-dashboard) printf 'ghcr.io/centra-ai/layerx-dashboard:0.1.0 platform/hosted/dashboard/Dockerfile' ;;
         layerx-dashboard-web) printf 'ghcr.io/centra-ai/layerx-dashboard-web:0.1.0 platform/hosted/dashboard/web/Dockerfile' ;;
+        layerx-node) printf 'ghcr.io/sidiora-labs/layerx-node:0.1.0 platform/hosted/node/Dockerfile' ;;
+        layerx-core-boundary) printf 'ghcr.io/sidiora-labs/layerx-core-boundary:0.1.0 platform/hosted/core/Dockerfile' ;;
+        layerx-receipt-authority) printf 'ghcr.io/sidiora-labs/layerx-receipt-authority:0.1.0 platform/hosted/authority/Dockerfile' ;;
+        layerx-agent-boundary) printf 'ghcr.io/sidiora-labs/layerx-agent-boundary:0.1.0 platform/hosted/agent-boundary/Dockerfile' ;;
+        layerx-identity) printf 'ghcr.io/sidiora-labs/layerx-identity:0.1.0 platform/hosted/identity/Dockerfile' ;;
+        layerx-paxeer-boundary) printf 'ghcr.io/sidiora-labs/layerx-paxeer-boundary:0.1.0 platform/hosted/paxeer/Dockerfile' ;;
+        paxd-node) printf 'ghcr.io/sidiora-labs/paxd-node:0.1.0 platform/hosted/paxeer/Dockerfile.paxd-node' ;;
+        paxd) printf 'ghcr.io/sidiora-labs/paxd:0.1.0 platform/hosted/paxeer/Dockerfile.paxd' ;;
         *) fail "unknown image $1" ;;
     esac
 }
@@ -184,19 +210,32 @@ tools_install() {
 
 build_context() {
     log "packing the build context from the tracked and unignored files of $REPO_ROOT"
-    (cd "$REPO_ROOT" && git ls-files -z --cached --others --exclude-standard | tar --null --files-from - -cf "$WORK_DIR/context.tar")
+    (cd "$REPO_ROOT" && git ls-files -z --cached --others --exclude-standard \
+        | while IFS= read -r -d '' path; do [ -e "$path" ] && printf '%s\0' "$path"; done \
+        | tar --null --files-from - -cf "$WORK_DIR/context.tar")
+}
+
+image_build_args() {
+    case "$1" in
+        layerx-node) printf -- '--build-arg LXP_REVISION=%s' "$REVISION" ;;
+        paxd-node) printf -- '--build-arg PAX_CHAIN_REF=%s' "$REVISION" ;;
+        paxd) printf -- '--build-arg PAXD_IMAGE=%s' "$(image_ref paxd-node)" ;;
+        *) ;;
+    esac
 }
 
 build_images() {
     local name canonical dockerfile ref id
+    local -a build_args
     mkdir -p "$LOG_DIR"
     : > "$WORK_DIR/images"
     build_context
     for name in "${IMAGE_NAMES[@]}"; do
         read -r canonical dockerfile <<<"$(image_source "$name")"
         ref=$(image_ref "$name")
+        read -r -a build_args <<<"$(image_build_args "$name")"
         log "building $ref from $dockerfile"
-        docker build --file "$dockerfile" --tag "$ref" --label "$IMAGE_LABEL=$CLUSTER_NAME" - < "$WORK_DIR/context.tar" \
+        docker build --file "$dockerfile" --tag "$ref" --label "$IMAGE_LABEL=$CLUSTER_NAME" "${build_args[@]}" - < "$WORK_DIR/context.tar" \
             > "$LOG_DIR/build-$name.log" 2>&1 || { tail -n 40 "$LOG_DIR/build-$name.log" >&2; fail "image build failed for $name (log $LOG_DIR/build-$name.log)"; }
         id=$(docker image inspect --format '{{.Id}}' "$ref")
         printf '%s %s %s %s\n' "$name" "$canonical" "$ref" "$id" >> "$WORK_DIR/images"
@@ -334,6 +373,19 @@ ca_generate() {
     issue_cert gateway-redis layerx-gateway-redis serverAuth "DNS:layerx-gateway-redis.$svc,DNS:layerx-gateway-redis"
     issue_cert developer layerx-developer serverAuth \
         "DNS:layerx-webhooks.$dev,DNS:layerx-dashboard-api.$dev,DNS:layerx-webhooks,DNS:layerx-dashboard-api,DNS:$DEVELOPER_HOST,DNS:localhost,IP:127.0.0.1"
+    local internal="$INTERNAL_NAMESPACE.svc.cluster.local"
+    issue_cert pending-core layerx-pending-core serverAuth \
+        "DNS:layerx-pending-core.$svc,DNS:layerx-pending-core.$TESTNET_NAMESPACE.svc,DNS:layerx-pending-core,DNS:localhost,IP:127.0.0.1"
+    issue_cert pending-core-admin layerx-pending-core-admin serverAuth \
+        "DNS:layerx-pending-core-admin.$svc,DNS:layerx-pending-core-admin.$TESTNET_NAMESPACE.svc,DNS:layerx-pending-core-admin"
+    issue_cert receipt-authority layerx-receipt-authority serverAuth \
+        "DNS:layerx-receipt-authority.$svc,DNS:layerx-receipt-authority.$TESTNET_NAMESPACE.svc,DNS:layerx-receipt-authority,DNS:authority.$internal,DNS:authority.$INTERNAL_NAMESPACE.svc"
+    issue_cert agent-boundary layerx-agent-boundary serverAuth \
+        "DNS:layerx-agent-boundary.$svc,DNS:layerx-agent-boundary.$TESTNET_NAMESPACE.svc,DNS:layerx-agent-boundary,DNS:component.$internal,DNS:component.$INTERNAL_NAMESPACE.svc,DNS:localhost,IP:127.0.0.1"
+    issue_cert identity layerx-identity serverAuth \
+        "DNS:layerx-identity.$svc,DNS:layerx-identity.$TESTNET_NAMESPACE.svc,DNS:layerx-identity,DNS:identity.$internal,DNS:identity.$INTERNAL_NAMESPACE.svc,DNS:localhost,IP:127.0.0.1"
+    issue_cert paxeer-boundary paxeer-boundary serverAuth \
+        "DNS:paxeer-boundary.$svc,DNS:paxeer-boundary.$TESTNET_NAMESPACE.svc,DNS:paxeer-boundary,DNS:paxeer.$svc,DNS:localhost,IP:127.0.0.1"
     issue_client_identity gateway-client layerx-gateway
     issue_client_identity developer-client layerx-developer
     if [ -n "${LAYERX_BETA_SEQUENCER_KEY_FILE:-}" ]; then
@@ -346,14 +398,32 @@ ca_generate() {
     fi
     openssl pkey -in "$CA_DIR/sequencer.key" -pubout -outform DER 2>/dev/null | tail -c 32 | od -An -v -tx1 | tr -d ' \n' > "$CA_DIR/sequencer.pub.hex"
     [ "$(wc -c < "$CA_DIR/sequencer.pub.hex")" -eq 64 ] || fail "sequencer key is not an ed25519 key"
-    SEQUENCER_ID=$(printf 'LayerX beta sequencer %s' "$(cat "$CA_DIR/sequencer.pub.hex")" | sha256sum | cut -d ' ' -f 1)
+    (umask 077; openssl pkey -in "$CA_DIR/sequencer.key" -outform DER 2>/dev/null | tail -c 32 | od -An -v -tx1 | tr -d ' \n' > "$CA_DIR/sequencer.seed.hex")
+    [ "$(wc -c < "$CA_DIR/sequencer.seed.hex")" -eq 64 ] || fail "sequencer key seed is not 32 bytes"
+    SEQUENCER_ID=$(printf 'layerx-sequencer:%s' "$(cat "$CA_DIR/sequencer.pub.hex")" | sha256sum | cut -d ' ' -f 1)
+}
+
+ed25519_public_hex() {
+    openssl pkey -in "$1" -pubout -outform DER 2>/dev/null | tail -c 32 | od -An -v -tx1 | tr -d ' \n'
+}
+
+evm_key_generate() {
+    # evm_key_generate NAME -> SECRETS_DIR/NAME.key (0x-prefixed secp256k1 secret) and SECRETS_DIR/NAME.address
+    local name=$1 key address
+    while :; do
+        key=0x$(random_hex 32)
+        address=$("$FOUNDRY_BIN/cast" wallet address --private-key "$key" 2>/dev/null) || continue
+        [[ $address =~ ^0x[0-9a-fA-F]{40}$ ]] && break
+    done
+    (umask 077; printf '%s' "$key" > "$SECRETS_DIR/$name.key")
+    printf '%s' "$address" > "$SECRETS_DIR/$name.address"
 }
 
 encode_trust_history() {
-    python3 - "$1" "$2" "$3" <<'PY'
+    python3 - "$1" "$2" "$3" "$NODE_NETWORK_ID" <<'PY'
 import struct, sys
 out, sequencer_id, public_key = sys.argv[1], bytes.fromhex(sys.argv[2]), bytes.fromhex(sys.argv[3])
-entry = struct.pack(">HIQ", 2, 402, 1) + sequencer_id + public_key + struct.pack(">QQBQ", 1, 1 << 40, 0, 0)
+entry = struct.pack(">HIQ", 2, int(sys.argv[4]), 1) + sequencer_id + public_key + struct.pack(">QQBQ", 1, 1 << 40, 0, 0)
 assert len(entry) == 103
 payload = b"LayerX/sequencer-trust-history/v1\0" + struct.pack(">HH", 1, 0) + entry
 with open(out, "wb") as handle:
@@ -435,15 +505,42 @@ secrets_generate() {
     (umask 077; encode_trust_history "$d/trust-history" "$SEQUENCER_ID" "$(cat "$CA_DIR/sequencer.pub.hex")")
     random_hex 32 > "$d/receipt-authority-replica-id"
     cp "$REPO_ROOT/interop/deploy/gateway/module-registry.example.json" "$d/module-registry.json"
+    (umask 077; cp "$CA_DIR/sequencer.seed.hex" "$d/node-sequencer.key")
+    (umask 077; random_hex 32 > "$d/node-treasury.key")
+    write_token "$d/node-program.token"
+    write_token "$d/node-replica.token"
+    mkdir -p "$d/identity-tokens"
+    chmod 0700 "$d/identity-tokens"
+    cp "$d/gateway-identity.token" "$d/identity-tokens/gateway"
+    cp "$d/developer-identity.token" "$d/identity-tokens/webhooks"
+    cp "$d/identity-client.token" "$d/identity-tokens/faucet"
+    local service
+    for service in dashboard testnet ramp provisioning; do
+        write_token "$d/identity-tokens/$service"
+    done
+    write_token "$d/identity-store.key"
+    evm_key_generate paxeer-deployer
+    evm_key_generate paxeer-final-proposer
+    evm_key_generate paxeer-final-executor
+    evm_key_generate paxeer-emergency-council
+    evm_key_generate paxeer-guarantor-controller
     if [ -n "${LAYERX_BETA_TEST_AUTH_TOKEN_FILE:-}" ]; then
         [ -r "$LAYERX_BETA_TEST_AUTH_TOKEN_FILE" ] || fail "LAYERX_BETA_TEST_AUTH_TOKEN_FILE=$LAYERX_BETA_TEST_AUTH_TOKEN_FILE is not readable"
         (umask 077; cp "$LAYERX_BETA_TEST_AUTH_TOKEN_FILE" "$d/test-auth.token")
         TEST_AUTH_SOURCE=LAYERX_BETA_TEST_AUTH_TOKEN_FILE
     else
-        write_token "$d/test-auth.token"
-        TEST_AUTH_SOURCE=generated
+        TEST_AUTH_SOURCE=identity-provisioning
     fi
+    (umask 077; openssl genpkey -algorithm ed25519 -out "$d/test-source-signer.key" 2>/dev/null)
+    ed25519_public_hex "$d/test-source-signer.key" > "$d/test-source-signer.pub.hex"
+    [ "$(wc -c < "$d/test-source-signer.pub.hex")" -eq 64 ] || fail "test source signer key is not an ed25519 key"
+    (umask 077; openssl genpkey -algorithm ed25519 -out "$d/test-destination-signer.key" 2>/dev/null)
+    ed25519_public_hex "$d/test-destination-signer.key" > "$d/test-destination-signer.pub.hex"
     TEST_SOURCE_DID=${LAYERX_BETA_TEST_SOURCE_DID:-did:layerx:beta:$(random_hex 16)}
+    TEST_DESTINATION_DID=${LAYERX_BETA_TEST_DESTINATION_DID:-did:layerx:beta:$(random_hex 16)}
+    [ "$TEST_SOURCE_DID" != "$TEST_DESTINATION_DID" ] || fail "the smoke source and destination DIDs must differ"
+    TEST_AMOUNT=${LAYERX_BETA_TEST_AMOUNT:-1}
+    [[ $TEST_AMOUNT =~ ^[1-9][0-9]*$ ]] || fail "LAYERX_BETA_TEST_AMOUNT must be a positive decimal"
 }
 
 apply_secret() {
@@ -498,6 +595,18 @@ secrets_apply() {
     apply_secret "$ns" layerx-program-registry-authority-client --from-file=token="$s/registry-authority.token"
     apply_secret "$ns" layerx-sequencer-trust-history --from-file=history="$s/trust-history"
     apply_configmap "$ns" layerx-receipt-authority --from-file=replica-id="$s/receipt-authority-replica-id"
+    apply_secret "$ns" layerx-node-keys --from-file=sequencer.key="$s/node-sequencer.key" --from-file=treasury.key="$s/node-treasury.key"
+    apply_secret "$ns" layerx-node-tokens --from-file=program-token="$s/node-program.token" --from-file=replica-token="$s/node-replica.token"
+    apply_secret "$ns" layerx-pending-core-tls --from-file=server.crt.der="$c/pending-core/cert.der" --from-file=server.key.der="$c/pending-core/key.der"
+    apply_secret "$ns" layerx-pending-core-admin-tls --from-file=server.crt.der="$c/pending-core-admin/cert.der" --from-file=server.key.der="$c/pending-core-admin/key.der"
+    apply_secret "$ns" layerx-receipt-authority-tls --from-file=server.crt.der="$c/receipt-authority/cert.der" --from-file=server.key.der="$c/receipt-authority/key.der"
+    apply_secret "$ns" layerx-agent-boundary-tls --from-file=server.crt.der="$c/agent-boundary/cert.der" --from-file=server.key.der="$c/agent-boundary/key.der"
+    apply_secret "$ns" layerx-webhooks-authority-client --from-file=token="$s/developer-authority.token"
+    apply_secret "$ns" layerx-identity-server-tls --from-file=server.crt.der="$c/identity/cert.der" --from-file=server.key.der="$c/identity/key.der"
+    apply_secret "$ns" layerx-identity-service-tokens --from-file="$s/identity-tokens"
+    apply_secret "$ns" layerx-identity-store-key --from-file=key="$s/identity-store.key"
+    apply_secret "$ns" paxeer-boundary-tls --from-file=server.crt.der="$c/paxeer-boundary/cert.der" --from-file=server.key.der="$c/paxeer-boundary/key.der"
+    apply_secret "$ns" paxeer-deployer-address --from-file=address="$s/paxeer-deployer.address"
     apply_tls_secret "$ns" layerx-testnet-ingress-tls testnet-control
     apply_tls_secret "$ns" layerx-gateway-ingress-tls gateway
     apply_tls_secret "$ns" layerx-faucet-ingress-tls faucet
@@ -582,6 +691,12 @@ render_manifest() {
 
 manifests_render() {
     mkdir -p "$MANIFESTS_DIR"
+    render_manifest "$NODE_MANIFEST" "$MANIFESTS_DIR/node.yaml"
+    sed -i "s|^  replica-id: \"[0-9a-f]*\"$|  replica-id: \"$(cat "$SECRETS_DIR/receipt-authority-replica-id")\"|" "$MANIFESTS_DIR/node.yaml"
+    grep -q "^  replica-id: \"$(cat "$SECRETS_DIR/receipt-authority-replica-id")\"$" "$MANIFESTS_DIR/node.yaml" \
+        || fail "the node manifest replica-id could not be bound to the generated receipt authority replica id"
+    render_manifest "$REPO_ROOT/platform/hosted/identity/deployment.yaml" "$MANIFESTS_DIR/identity.yaml"
+    render_manifest "$REPO_ROOT/platform/hosted/paxeer/deployment.yaml" "$MANIFESTS_DIR/paxeer.yaml"
     render_manifest "$REPO_ROOT/platform/hosted/testnet/deployment.yaml" "$MANIFESTS_DIR/testnet.yaml"
     render_manifest "$REPO_ROOT/platform/hosted/gateway/deployment.yaml" "$MANIFESTS_DIR/gateway.yaml"
     render_manifest "$REPO_ROOT/platform/hosted/registry/deployment.yaml" "$MANIFESTS_DIR/registry.yaml"
@@ -607,23 +722,145 @@ spec:
 EOF
 }
 
-manifests_apply() {
+trusted_boundary_apply() {
     local ns="$TESTNET_NAMESPACE" service
-    if [ -n "${LAYERX_BETA_EXTERNAL_MANIFESTS:-}" ]; then
-        [ -d "$LAYERX_BETA_EXTERNAL_MANIFESTS" ] || fail "LAYERX_BETA_EXTERNAL_MANIFESTS=$LAYERX_BETA_EXTERNAL_MANIFESTS is not a directory"
-        kube apply -f "$LAYERX_BETA_EXTERNAL_MANIFESTS" > /dev/null
-    fi
+    kube apply -f "$MANIFESTS_DIR/paxeer.yaml" > /dev/null
+    kube apply -f "$MANIFESTS_DIR/identity.yaml" > /dev/null
+    kube apply -f "$MANIFESTS_DIR/node.yaml" > /dev/null
+    for service in "${TRUSTED_BOUNDARY_SERVICES[@]}"; do
+        kube -n "$ns" get service "$service" > /dev/null 2>&1 || fail "trusted-boundary Service $ns/$service was not created by the repository manifests"
+    done
+}
+
+manifests_apply() {
     kube apply -f "$MANIFESTS_DIR/testnet.yaml" > /dev/null
     kube apply -f "$MANIFESTS_DIR/gateway.yaml" > /dev/null
     kube apply -f "$MANIFESTS_DIR/registry.yaml" > /dev/null
     kube -n "$DEVELOPER_NAMESPACE" apply -f "$MANIFESTS_DIR/developer.yaml" > /dev/null
-    local absent=()
-    for service in "${EXTERNAL_SERVICES[@]}"; do
-        kube -n "$ns" get service "$service" > /dev/null 2>&1 || absent+=("$service")
+}
+
+node_exec() {
+    kube -n "$TESTNET_NAMESPACE" exec layerx-node-0 -c layerxd -- "$@"
+}
+
+node_file_fetch() {
+    # node_file_fetch REMOTE LOCAL
+    node_exec base64 -w0 "$1" | base64 -d > "$2"
+    [ -s "$2" ] || fail "node file $1 is empty"
+}
+
+wait_for_node_genesis() {
+    local deadline=$((SECONDS + 600)) data=/var/lib/layerx/node
+    log "waiting for the node bootstrap to produce its genesis artifacts"
+    while :; do
+        if node_exec sh -c "test -r $data/node.env && test -s $data/genesis/paxeer-deployment-descriptor.lxgd && test -s $data/genesis/paxeer-registration-request.lxrr" > /dev/null 2>&1; then
+            break
+        fi
+        if [ "$SECONDS" -ge "$deadline" ]; then
+            kube -n "$TESTNET_NAMESPACE" get pod layerx-node-0 -o wide >&2 || true
+            kube -n "$TESTNET_NAMESPACE" logs layerx-node-0 -c layerxd --tail=40 >&2 || true
+            fail "the node did not bootstrap its genesis within 600s"
+        fi
+        sleep 5
     done
-    if [ "${#absent[@]}" -gt 0 ]; then
-        MISSING_INPUTS+=("LAYERX_BETA_EXTERNAL_MANIFESTS (separately operated trusted-boundary Services absent from $ns: ${absent[*]})")
+    mkdir -p "$WORK_DIR/genesis"
+    node_file_fetch "$data/genesis/paxeer-deployment-descriptor.lxgd" "$WORK_DIR/genesis/paxeer-deployment-descriptor.lxgd"
+    node_file_fetch "$data/genesis/paxeer-registration-request.lxrr" "$WORK_DIR/genesis/paxeer-registration-request.lxrr"
+    node_file_fetch "$data/node.env" "$WORK_DIR/genesis/node.env"
+    NODE_GUARANTOR_ID=$(sed -n 's/^LAYERX_NODE_GENESIS_GUARANTOR_ID=//p' "$WORK_DIR/genesis/node.env")
+    NODE_GUARANTOR_PUBLIC_KEY=$(sed -n 's/^LAYERX_NODE_GENESIS_GUARANTOR_PUBLIC_KEY=//p' "$WORK_DIR/genesis/node.env")
+    NODE_SEQUENCER_ID=$(sed -n 's/^LAYERX_NODE_SEQUENCER_ID=//p' "$WORK_DIR/genesis/node.env")
+    NODE_SEQUENCER_PUBLIC_KEY=$(sed -n 's/^LAYERX_NODE_SEQUENCER_PUBLIC_KEY=//p' "$WORK_DIR/genesis/node.env")
+    [[ $NODE_GUARANTOR_ID =~ ^[0-9a-f]{64}$ ]] || fail "node.env carries no genesis guarantor id"
+    [[ $NODE_GUARANTOR_PUBLIC_KEY =~ ^0[23][0-9a-f]{64}$ ]] || fail "node.env carries no compressed genesis guarantor public key"
+    [ "$NODE_SEQUENCER_ID" = "$SEQUENCER_ID" ] || fail "the node derived sequencer id $NODE_SEQUENCER_ID but the registry trust history carries $SEQUENCER_ID"
+    [ "$NODE_SEQUENCER_PUBLIC_KEY" = "$(cat "$CA_DIR/sequencer.pub.hex")" ] || fail "the node sequencer public key differs from the generated sequencer key"
+}
+
+paxeer_contracts_deploy() {
+    local dir="$WORK_DIR/paxeer" signer bond_amount
+    mkdir -p "$dir/guarantor-keys"
+    chmod 0700 "$dir/guarantor-keys"
+    signer=$(python3 "$REPO_ROOT/platform/hosted/paxeer/settlement-domain.py" signer "0x$NODE_GUARANTOR_PUBLIC_KEY") || fail "guarantor signer derivation failed"
+    bond_amount=$(jq -r '((.usdl_custody_cap | tonumber) * .minimum_bond_bps / 10000 | floor) | tostring' "$REPO_ROOT/platform/hosted/paxeer/deployment-input.beta.json")
+    [[ $bond_amount =~ ^[1-9][0-9]*$ ]] || fail "the beta deployment input yields no positive minimum guarantor bond"
+    jq -n --arg id "0x$NODE_GUARANTOR_ID" --arg signer "$signer" --arg public_key "0x$NODE_GUARANTOR_PUBLIC_KEY" \
+        --arg controller "$(cat "$SECRETS_DIR/paxeer-guarantor-controller.address")" --arg bond "$bond_amount" \
+        '[{guarantor_id: $id, signer: $signer, public_key: $public_key, bond_controller: $controller, joined_epoch: 1, governance_sequence: 1, bond_amount: $bond}]' \
+        > "$dir/guarantors.json"
+    (umask 077; cp "$SECRETS_DIR/paxeer-guarantor-controller.key" "$dir/guarantor-keys/0x$NODE_GUARANTOR_ID.controller.key")
+    jq --arg proposer "$(cat "$SECRETS_DIR/paxeer-final-proposer.address")" --arg executor "$(cat "$SECRETS_DIR/paxeer-final-executor.address")" \
+        --arg council "$(cat "$SECRETS_DIR/paxeer-emergency-council.address")" \
+        '. + {protocol_version: 3, final_proposer: $proposer, final_executor: $executor, emergency_council: $council}' \
+        "$REPO_ROOT/platform/hosted/paxeer/deployment-input.beta.json" > "$dir/deployment-input.json"
+    cp "$REPO_ROOT/contracts/config/checkpoint-settlement.json" "$dir/checkpoint-settlement.json"
+    log "deploying the settlement contracts from the node genesis through the Paxeer boundary"
+    if ! LAYERX_PAXEER_BOUNDARY_URL="$PAXEER_URL" LAYERX_PAXEER_BOUNDARY_CA_DER="$CA_DIR/ca.der" LAYERX_PAXEER_CHAIN_ID="$PAXEER_CHAIN_ID" \
+        LAYERX_PAXEER_DEPLOYER_KEY_FILE="$SECRETS_DIR/paxeer-deployer.key" LAYERX_PAXEER_GENESIS_DIR="$WORK_DIR/genesis" \
+        LAYERX_PAXEER_DEPLOYMENT_INPUT="$dir/deployment-input.json" LAYERX_PAXEER_GUARANTORS="$dir/guarantors.json" \
+        LAYERX_PAXEER_GUARANTOR_KEYS_DIR="$dir/guarantor-keys" LAYERX_PAXEER_DEPLOYMENT_RECORD="$dir/deployment.json" \
+        LAYERX_PAXEER_SETTLEMENT_JSON="$dir/checkpoint-settlement.json" LAYERX_PAXEER_SETTLEMENT_DOMAIN=beta \
+        LAYERX_PAXEER_FOUNDRY_BIN="$FOUNDRY_BIN" \
+        bash "$REPO_ROOT/platform/hosted/paxeer/deploy-contracts.sh" deploy > "$LOG_DIR/deploy-contracts.log" 2>&1; then
+        tail -n 40 "$LOG_DIR/deploy-contracts.log" >&2
+        fail "deploy-contracts.sh deploy failed (log $LOG_DIR/deploy-contracts.log)"
     fi
+    GUARANTOR_BOND=$(jq -r '.addresses.guarantor_bond' "$dir/deployment.json")
+    CHECKPOINT_REGISTRY=$(jq -r '.addresses.checkpoint_registry' "$dir/deployment.json")
+    [[ $GUARANTOR_BOND =~ ^0x[0-9a-fA-F]{40}$ ]] && [[ $CHECKPOINT_REGISTRY =~ ^0x[0-9a-fA-F]{40}$ ]] || fail "the deployment record lacks the GuarantorBond and CheckpointRegistry addresses"
+    [ "$(jq -r '.network_id' "$dir/deployment.json")" = "$NODE_NETWORK_ID" ] || fail "the deployed CheckpointRegistry network id differs from the node network id $NODE_NETWORK_ID"
+    log "settlement contracts deployed: GuarantorBond $GUARANTOR_BOND, CheckpointRegistry $CHECKPOINT_REGISTRY"
+}
+
+settlement_publish() {
+    local ns="$TESTNET_NAMESPACE"
+    printf 'LAYERX_NODE_PAXEER_CHAIN_ID=%s\nLAYERX_NODE_SETTLEMENT_CONTRACT=%s\nLAYERX_NODE_CHECKPOINT_REGISTRY=%s\nLAYERX_NODE_PAXEER_RPC_ADDRESS=127.0.0.1\nLAYERX_NODE_PAXEER_RPC_PORT=%s\n' \
+        "$PAXEER_CHAIN_ID" "$GUARANTOR_BOND" "$CHECKPOINT_REGISTRY" "$PAXEER_RELAY_PORT" > "$WORK_DIR/paxeer/settlement.env"
+    bash "$REPO_ROOT/platform/hosted/node/bootstrap.sh" --check-settlement "$WORK_DIR/paxeer/settlement.env" > /dev/null \
+        || fail "the settlement environment was refused by bootstrap.sh --check-settlement"
+    apply_configmap "$ns" layerx-node-settlement --from-file=settlement.env="$WORK_DIR/paxeer/settlement.env"
+    log "settlement environment published as ConfigMap $ns/layerx-node-settlement"
+}
+
+wait_for_pod_ready() {
+    # wait_for_pod_ready NAMESPACE SELECTOR SECONDS
+    local namespace=$1 selector=$2 seconds=$3
+    if ! kube -n "$namespace" wait --for=condition=Ready pod -l "$selector" --timeout="${seconds}s" > /dev/null 2>&1; then
+        kube -n "$namespace" get pods -l "$selector" -o wide >&2 || true
+        fail "pods $namespace/$selector did not become ready within ${seconds}s"
+    fi
+}
+
+identity_request() {
+    # identity_request METHOD PATH BODY_FILE OUT_FILE -> status code
+    curl --silent --show-error --max-time 30 --cacert "$CA_DIR/ca.crt" \
+        --header "Authorization: Bearer $(cat "$SECRETS_DIR/identity-tokens/provisioning")" \
+        --header 'Content-Type: application/json' --request "$1" --data-binary "@$3" \
+        --output "$4" --write-out '%{http_code}' "$IDENTITY_URL$2"
+}
+
+identity_provision() {
+    local dir="$WORK_DIR/identity" status
+    mkdir -p "$dir"
+    chmod 0700 "$dir"
+    jq -n --arg sub "$TEST_SOURCE_DID" --arg key "$(cat "$SECRETS_DIR/test-source-signer.pub.hex")" \
+        '{sub: $sub, allowed_signer_public_keys: [$key]}' > "$dir/source-principal.json"
+    status=$(identity_request POST /v1/principals "$dir/source-principal.json" "$dir/source-principal.response.json")
+    [ "$status" = 201 ] || [ "$status" = 200 ] || fail "identity refused the smoke source principal with status $status: $(cat "$dir/source-principal.response.json")"
+    jq -n --arg sub "$TEST_DESTINATION_DID" --arg key "$(cat "$SECRETS_DIR/test-destination-signer.pub.hex")" \
+        '{sub: $sub, allowed_signer_public_keys: [$key]}' > "$dir/destination-principal.json"
+    status=$(identity_request POST /v1/principals "$dir/destination-principal.json" "$dir/destination-principal.response.json")
+    [ "$status" = 201 ] || [ "$status" = 200 ] || fail "identity refused the smoke destination principal with status $status: $(cat "$dir/destination-principal.response.json")"
+    if [ "$TEST_AUTH_SOURCE" = identity-provisioning ]; then
+        jq -n --arg sub "$TEST_SOURCE_DID" '{sub: $sub}' > "$dir/source-session.json"
+        (umask 077; : > "$dir/source-session.response.json")
+        status=$(identity_request POST /v1/sessions "$dir/source-session.json" "$dir/source-session.response.json")
+        [ "$status" = 201 ] || [ "$status" = 200 ] || fail "identity refused the smoke source session with status $status"
+        (umask 077; jq -r '.token' "$dir/source-session.response.json" > "$SECRETS_DIR/test-auth.token")
+        grep -Eq '^ses_[0-9a-f]{32}\.[0-9a-f]{64}$' "$SECRETS_DIR/test-auth.token" || fail "identity returned no session token for the smoke source"
+        rm -f "$dir/source-session.response.json"
+    fi
+    log "identity provisioned $TEST_SOURCE_DID and $TEST_DESTINATION_DID (session token source: $TEST_AUTH_SOURCE)"
 }
 
 port_forward() {
@@ -694,18 +931,14 @@ wait_ready() {
 }
 
 qualification_url() {
-    local variable=$1 override=$2 service=$3 port=$4 host_port=$5 value
+    # qualification_url VARIABLE OVERRIDE URL SURFACE
+    local variable=$1 override=$2 url=$3 surface=$4 value
     value=${!override:-}
     if [ -n "$value" ]; then
         printf 'export %s=%s\n' "$variable" "$value" >> "$ENV_FILE"
         return 0
     fi
-    if kube -n "$TESTNET_NAMESPACE" get service "$service" > /dev/null 2>&1; then
-        port_forward "$service" "$TESTNET_NAMESPACE" "$service" "$host_port" "$port"
-        printf 'export %s=https://localhost:%s\n' "$variable" "$host_port" >> "$ENV_FILE"
-    else
-        printf '# %s not exported: Service %s/%s is absent (owner input LAYERX_BETA_EXTERNAL_MANIFESTS) and %s is unset\n' "$variable" "$TESTNET_NAMESPACE" "$service" "$override" >> "$ENV_FILE"
-    fi
+    printf '# %s: %s\nexport %s=%s\n' "$variable" "$surface" "$variable" "$url" >> "$ENV_FILE"
 }
 
 env_write() {
@@ -718,14 +951,28 @@ env_write() {
         printf 'export LAYERX_TEST_AUTH_TOKEN_FILE=%s\n' "$SECRETS_DIR/test-auth.token"
         printf 'export LAYERX_TEST_CA_FILE=%s\n' "$CA_DIR/ca.crt"
         printf 'export LAYERX_TEST_SOURCE_DID=%s\n' "$TEST_SOURCE_DID"
+        printf 'export LAYERX_TEST_SOURCE_PUBLIC_KEY=%s\n' "$(cat "$SECRETS_DIR/test-source-signer.pub.hex")"
+        printf 'export LAYERX_TEST_SOURCE_KEY_FILE=%s\n' "$SECRETS_DIR/test-source-signer.key"
+        printf 'export LAYERX_TEST_DESTINATION_DID=%s\n' "$TEST_DESTINATION_DID"
+        printf 'export LAYERX_TEST_ASSET=%s\n' "$NODE_ASSET_ID"
+        printf 'export LAYERX_TEST_AMOUNT=%s\n' "$TEST_AMOUNT"
         printf 'export LAYERX_GATEWAY_CA_FILE=%s\n' "$CA_DIR/ca.crt"
         printf 'export WEBHOOKS_URL=%s\n' "$DEVELOPER_URL"
+        printf 'export LAYERX_IDENTITY_URL=%s\n' "$IDENTITY_URL"
+        printf 'export LAYERX_PAXEER_BOUNDARY_URL=%s\n' "$PAXEER_URL"
+        printf 'export LAYERX_PAXEER_SETTLEMENT_CONTRACT=%s\n' "$GUARANTOR_BOND"
+        printf 'export LAYERX_PAXEER_CHECKPOINT_REGISTRY=%s\n' "$CHECKPOINT_REGISTRY"
+        printf 'export LAYERX_PAXEER_DEPLOYMENT_RECORD=%s\n' "$WORK_DIR/paxeer/deployment.json"
         printf 'export KUBECONFIG=%s\n' "$KUBECONFIG_FILE"
     } >> "$ENV_FILE"
-    qualification_url LAYERX_QUALIFICATION_NODE_URL LAYERX_BETA_QUALIFICATION_NODE_URL layerx-pending-core 9443 19446
-    qualification_url LAYERX_QUALIFICATION_AGENT_URL LAYERX_BETA_QUALIFICATION_AGENT_URL layerx-agent-boundary 9443 19447
-    qualification_url LAYERX_QUALIFICATION_HUMAN_URL LAYERX_BETA_QUALIFICATION_HUMAN_URL layerx-identity 9443 19448
-    qualification_url LAYERX_QUALIFICATION_PAXEER_URL LAYERX_BETA_QUALIFICATION_PAXEER_URL paxeer-boundary 9443 19449
+    qualification_url LAYERX_QUALIFICATION_NODE_URL LAYERX_BETA_QUALIFICATION_NODE_URL "$NODE_URL" \
+        "beta_driver.py --node-url: the core boundary Service layerx-pending-core (node readiness, state and receipts)"
+    qualification_url LAYERX_QUALIFICATION_AGENT_URL LAYERX_BETA_QUALIFICATION_AGENT_URL "$AGENT_URL" \
+        "beta_driver.py --agentd-url: the agent boundary Service layerx-agent-boundary (LNI submissions for agents)"
+    qualification_url LAYERX_QUALIFICATION_HUMAN_URL LAYERX_BETA_QUALIFICATION_HUMAN_URL "$GATEWAY_URL" \
+        "beta_driver.py --human-service-url (LAYERX_API_URL of the SDK samples and the CLI): the gateway is the only hosted surface serving /v1 routes to humans; no in-cluster human service exists"
+    qualification_url LAYERX_QUALIFICATION_PAXEER_URL LAYERX_BETA_QUALIFICATION_PAXEER_URL "$PAXEER_URL" \
+        "beta_driver.py --paxeer-testnet-url: the Paxeer boundary Service paxeer-boundary (JSON-RPC relay to the chain $PAXEER_CHAIN_ID node)"
 }
 
 identity_write() {
@@ -743,7 +990,18 @@ identity_write() {
         printf 'sequencer_key_source=%s\n' "$SEQUENCER_KEY_SOURCE"
         printf 'sequencer_public_key=%s\n' "$(cat "$CA_DIR/sequencer.pub.hex")"
         printf 'sequencer_id=%s\n' "$SEQUENCER_ID"
+        printf 'receipt_authority_replica_id=%s\n' "$(cat "$SECRETS_DIR/receipt-authority-replica-id")"
+        printf 'node_network_id=%s\n' "$NODE_NETWORK_ID"
+        printf 'node_asset_id=%s\n' "$NODE_ASSET_ID"
+        printf 'genesis_guarantor_id=%s\n' "$NODE_GUARANTOR_ID"
+        printf 'paxeer_chain_id=%s\n' "$PAXEER_CHAIN_ID"
+        printf 'paxeer_deployer=%s\n' "$(cat "$SECRETS_DIR/paxeer-deployer.address")"
+        printf 'paxeer_guarantor_bond=%s\n' "$GUARANTOR_BOND"
+        printf 'paxeer_checkpoint_registry=%s\n' "$CHECKPOINT_REGISTRY"
+        printf 'paxeer_blueprint=%s\n' "$(jq -r '.blueprint' "$WORK_DIR/paxeer/deployment.json")"
         printf 'test_auth_token_source=%s\n' "$TEST_AUTH_SOURCE"
+        printf 'test_source_did=%s\n' "$TEST_SOURCE_DID"
+        printf 'test_destination_did=%s\n' "$TEST_DESTINATION_DID"
         printf 'faucet_host=%s\n' "$FAUCET_HOST"
         printf 'developer_host=%s\n' "$DEVELOPER_HOST"
         while read -r name canonical ref id; do printf 'image %s=%s %s\n' "$name" "$ref" "$id"; done < "$WORK_DIR/images"
@@ -796,9 +1054,14 @@ boundary_checks() {
     log "boundary checks passed ($script exercised on every registry node)"
 }
 
+require_foundry() {
+    [ -x "$FOUNDRY_BIN/forge" ] && [ -x "$FOUNDRY_BIN/cast" ] || fail "pinned forge and cast are not installed at $FOUNDRY_BIN (LAYERX_BETA_FOUNDRY_BIN); deploy-contracts.sh needs them"
+}
+
 beta_cluster_up() {
     local run_boundary_checks=$1
-    require_tool docker curl openssl jq python3 git sha256sum tar
+    require_tool docker curl openssl jq python3 git sha256sum tar base64
+    require_foundry
     MISSING_INPUTS=()
     REVISION=$(revision)
     mkdir -p "$WORK_DIR" "$LOG_DIR"
@@ -815,15 +1078,30 @@ beta_cluster_up() {
     secrets_apply
     manifests_render
     builder_release_publish
-    manifests_apply
+    trusted_boundary_apply
     TESTNET_URL="https://localhost:$TESTNET_PORT"
     GATEWAY_URL="https://localhost:$GATEWAY_PORT"
     FAUCET_URL="https://localhost:$FAUCET_PORT"
     DEVELOPER_URL="https://localhost:19450"
+    NODE_URL="https://localhost:19446"
+    AGENT_URL="https://localhost:19447"
+    PAXEER_URL="https://localhost:19449"
+    IDENTITY_URL="https://localhost:$IDENTITY_PORT"
+    wait_for_pod_ready "$TESTNET_NAMESPACE" app=paxeer 600
+    port_forward paxeer-boundary "$TESTNET_NAMESPACE" paxeer-boundary 19449 9443
+    wait_for_node_genesis
+    paxeer_contracts_deploy
+    settlement_publish
+    wait_for_pod_ready "$TESTNET_NAMESPACE" app=layerx-identity 300
+    port_forward identity "$TESTNET_NAMESPACE" layerx-identity "$IDENTITY_PORT" 9443
+    identity_provision
+    manifests_apply
     port_forward testnet "$TESTNET_NAMESPACE" layerx-testnet-public "$TESTNET_PORT" 443
     port_forward gateway "$TESTNET_NAMESPACE" layerx-gateway "$GATEWAY_PORT" 443
     port_forward faucet "$TESTNET_NAMESPACE" layerx-faucet-public "$FAUCET_PORT" 443
     port_forward developer "$DEVELOPER_NAMESPACE" layerx-webhooks 19450 443
+    port_forward pending-core "$TESTNET_NAMESPACE" layerx-pending-core 19446 9443
+    port_forward agent-boundary "$TESTNET_NAMESPACE" layerx-agent-boundary 19447 9443
     env_write
     identity_write
     wait_ready || fail "beta cluster did not reach journey readiness; see the missing owner inputs above"
@@ -862,6 +1140,7 @@ beta_cluster_down() {
 
 beta_cluster_render() {
     require_tool openssl jq python3 git
+    require_foundry
     MISSING_INPUTS=()
     REVISION=$(revision)
     PULL_POLICY=IfNotPresent

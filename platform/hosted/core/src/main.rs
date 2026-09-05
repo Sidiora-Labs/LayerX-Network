@@ -2,6 +2,7 @@ use layerx_client::client::{Client, ClientConfig, ReconnectPolicy};
 use layerx_client::lni::handshake::{perform, Handshake, HandshakeConfig};
 use layerx_client::lni::refusal::decode_core_refusal;
 use layerx_client::lni::schema::{decode_envelope, encode_envelope, Capability, Envelope, Version};
+use layerx_client::lni::simulate::SimulateError;
 use layerx_client::lni::transport::{ConnectionGate, FrameTransport, Limits, Uds};
 use layerx_client::read::ReadError;
 use layerx_client::submit::{Submission, SubmitError};
@@ -478,7 +479,7 @@ fn lni_limits() -> Limits {
 
 fn handshake_config(config: &Config) -> HandshakeConfig {
     HandshakeConfig {
-        built_interface_version: Version::V1_3,
+        built_interface_version: Version::V1_4,
         expected_protocol_version: layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION,
         expected_network_id: config.network_id,
     }
@@ -701,6 +702,115 @@ fn submit_activity(
             eprintln!("layerx-core-boundary: {error}");
             Err(refusal(503, "receipt_unavailable", Some(5)))
         }
+    }
+}
+
+fn simulate_activity(config: &Config, canonical: &[u8]) -> Result<Response, Response> {
+    let registry =
+        submission_registry().map_err(|_| refusal(503, "registry_unavailable", Some(5)))?;
+    let activity = layerx_wire::activity::decode_signed(canonical, &registry)
+        .map_err(|_| refusal(400, "invalid_activity", None))?;
+    if activity.activity_type().module() != ModuleId::Programs
+        || activity.activity_type().ordinal() != 3
+    {
+        return Err(refusal(400, "not_program_call", None));
+    }
+    let call = ProgramCall::from_canonical_payload(activity.payload())
+        .map_err(|_| refusal(400, "invalid_program_call", None))?;
+    let expected_activity_id = layerx_wire::hash::activity_id(&activity)
+        .map_err(|_| refusal(400, "invalid_activity", None))?;
+    let mut client = connect_client(config).map_err(|error| {
+        eprintln!("layerx-core-boundary: {error}");
+        refusal(503, "node_unavailable", Some(5))
+    })?;
+    let sequencer_key = client.handshake().node().authorised_sequencer_key;
+    let simulation = client
+        .simulate(&registry, canonical, 1)
+        .map_err(|error| match error {
+            SimulateError::CoreRefusal { class, result } => {
+                eprintln!(
+                    "layerx-core-boundary: simulation refused class {class} result {}",
+                    result.raw()
+                );
+                if class == 3 {
+                    refusal(503, "capability_unavailable", Some(30))
+                } else {
+                    refusal(422, "simulation_refused", None)
+                }
+            }
+            SimulateError::UnavailableCapability | SimulateError::InterfaceVersion(_) => {
+                refusal(503, "capability_unavailable", Some(30))
+            }
+            SimulateError::Disconnected | SimulateError::Transport(_) => {
+                refusal(503, "node_unavailable", Some(5))
+            }
+            SimulateError::MalformedRequest => refusal(400, "invalid_activity", None),
+            other => {
+                eprintln!("layerx-core-boundary: simulation unverifiable: {other:?}");
+                refusal(503, "node_unavailable", Some(5))
+            }
+        })?;
+    drop(client);
+    if simulation.execution.activity_id != expected_activity_id {
+        return Err(refusal(503, "node_unavailable", Some(5)));
+    }
+    let receipt = layerx_proof::receipt::verify_sequencer_signature(
+        &simulation.execution.receipt,
+        sequencer_key,
+    )
+    .map_err(|_| refusal(503, "node_unavailable", Some(5)))?;
+    let protocol = receipt
+        .protocol()
+        .ok_or_else(|| refusal(503, "node_unavailable", Some(5)))?;
+    let state = if protocol.result_code() == 0 {
+        "simulated"
+    } else {
+        "refused"
+    };
+    Ok(success(&serde_json::json!({
+        "committed": false,
+        "execution": {
+            "state": state,
+            "activity_id": hex_encode(&simulation.execution.activity_id),
+            "program_id": hex_encode(&call.callee().bytes()),
+            "result_code": protocol.result_code(),
+            "receipt": hex_encode(&simulation.execution.receipt),
+            "terminal_payload": hex_encode(&simulation.execution.terminal_payload),
+            "call_graph": hex_encode(&simulation.execution.call_graph),
+        },
+        "simulation_evidence": {
+            "boundary_id": hex_encode(&simulation.evidence.boundary_id),
+            "activity_id": hex_encode(&simulation.evidence.activity_id),
+            "previous_state_root": hex_encode(&simulation.evidence.previous_state_root),
+            "hypothetical_state_root": hex_encode(&simulation.evidence.hypothetical_state_root),
+            "observed_sequence": simulation.evidence.observed_sequence.to_string(),
+            "observed_at": simulation.evidence.observed_at.to_string(),
+            "committed": false,
+            "public_key": hex_encode(&simulation.evidence.public_key),
+            "signature": hex_encode(&simulation.evidence.signature),
+        }
+    })))
+}
+
+fn simulate_route(config: &Config, request: &Request) -> Response {
+    let canonical = match request.headers.get("content-type").map(String::as_str) {
+        Some("application/octet-stream") => request.body.clone(),
+        Some("application/json") => {
+            let Ok(body) = serde_json::from_slice::<ActivityBody>(&request.body) else {
+                return refusal(400, "invalid_argument", None);
+            };
+            match hex_decode(&body.activity) {
+                Ok(bytes) => bytes,
+                Err(_) => return refusal(400, "invalid_argument", None),
+            }
+        }
+        _ => return refusal(400, "content_type_required", None),
+    };
+    if canonical.is_empty() || canonical.len() > LNI_FRAME_BYTES {
+        return refusal(400, "invalid_argument", None);
+    }
+    match simulate_activity(config, &canonical) {
+        Ok(response) | Err(response) => response,
     }
 }
 
@@ -927,7 +1037,6 @@ fn relay_target(path: &str) -> bool {
 
 fn unavailable_capability(path: &str) -> bool {
     path == "/v1/accounts"
-        || path == "/v1/programs/simulate"
         || path == "/v1/programs/registry"
         || path.starts_with("/v1/programs/registry/")
         || path.starts_with("/v1/programs/activities/")
@@ -959,6 +1068,7 @@ fn core_route(config: &Config, request: &Request) -> Response {
                 activities_route(config, request)
             })
         }
+        ("POST", "/v1/programs/simulate") => simulate_route(config, request),
         ("GET", "/v1/state") => wrapped_relay_route(
             config,
             &Request {
@@ -972,9 +1082,16 @@ fn core_route(config: &Config, request: &Request) -> Response {
         ("GET", other) if other.starts_with("/v1/receipts/") => {
             receipt_route(config, &other["/v1/receipts/".len()..])
         }
-        (_, "/livez" | "/readyz" | "/v1/sequencer" | "/v1/activities" | "/v1/state") => {
-            refusal(405, "method_not_allowed", None)
-        }
+        (
+            _,
+            "/livez"
+            | "/readyz"
+            | "/v1/sequencer"
+            | "/v1/activities"
+            | "/v1/programs/call"
+            | "/v1/programs/simulate"
+            | "/v1/state",
+        ) => refusal(405, "method_not_allowed", None),
         _ => refusal(404, "not_found", None),
     }
 }
@@ -1165,7 +1282,10 @@ fn treasury_sequence(config: &Config, client: &mut Client, amount: u128) -> Resu
         })?;
     let account = decode_account_value(treasury, value.canonical_bytes())
         .map_err(|_| refusal(422, "treasury_account_unavailable", Some(60)))?;
-    if !account.has_asset || account.asset_id != config.treasury_asset || account.balance < amount {
+    let holds_amount = account
+        .asset
+        .is_some_and(|held| held.asset_id == config.treasury_asset && held.balance >= amount);
+    if !holds_amount {
         return Err(refusal(422, "insufficient_treasury_balance", Some(60)));
     }
     Ok(account.next_sequence)

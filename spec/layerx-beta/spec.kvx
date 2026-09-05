@@ -637,7 +637,7 @@ reqs = ["14.7","6.4"]
 
 [task.6.7]
 title = "Bring the trusted-boundary services up from the repository and rerun the beta cluster gate"
-status = "pending"
+status = "in_progress"
 wave = 7
 requires = ["6.1","6.2","6.3","6.4","6.5","6.6"]
 do_1 = "Extend platform/hosted/tests/beta-cluster.sh: build and load the layerx-node, layerx-core-boundary, layerx-receipt-authority, layerx-agent-boundary, layerx-identity, layerx-paxeer-boundary and paxd images; issue beta CA certificates with the Service DNS SANs for each; generate the sequencer, treasury and deployer keys, the replica id, the node bearer tokens, the identity service tokens and the identity provisioning call that mints the smoke test session for LAYERX_TEST_SOURCE_DID with its signer key; render and apply platform/hosted/node, identity and paxeer manifests before the existing ones; run deploy-contracts.sh; drop LAYERX_BETA_EXTERNAL_MANIFESTS and the EXTERNAL_SERVICES absence branch; export LAYERX_QUALIFICATION_NODE_URL, _AGENT_URL, _HUMAN_URL and _PAXEER_URL to the surfaces tools/qualification/beta_driver.py actually exercises, verified by reading its cases, and LAYERX_TEST_SOURCE_PUBLIC_KEY, _DESTINATION_DID, _ASSET and _AMOUNT from the minted identities."
@@ -650,7 +650,7 @@ reqs = ["14.8","7.1","7.2","7.5","7.7","12.5"]
 
 [task.6.8]
 title = "Provide the developer-plane internal services the webhooks and dashboard dial"
-status = "pending"
+status = "in_progress"
 wave = 7
 requires = ["6.5","6.3","6.4"]
 do_1 = "From platform/hosted/webhooks/src and platform/hosted/dashboard/src, enumerate every layerx-internal Service the developer plane dials - redis, kms, identity, component, authority, journeys, payments, approvals, programs - with the exact routes, bodies and readiness dependencies each imposes, and record the enumeration in spec/layerx-beta/qualification.kvx as an observation before implementing."
@@ -663,7 +663,7 @@ reqs = ["7.1","7.2","7.5"]
 
 [task.6.9]
 title = "Serve program simulation over the LNI if the boundary recorded the gap"
-status = "pending"
+status = "in_progress"
 wave = 7
 requires = ["6.4"]
 do_1 = "If task 6.4 recorded that the LNI advertises no simulation capability, add a Simulate capability to the LNI schema in agent/crates/layerx-client/src/lni/schema.rs and to cmd/layerxd/lxp_daemon_lni.c that executes a program call against the current head through the programs runtime without committing, returning the execution {activity_id, receipt, terminal_payload, call_graph} and simulation evidence {boundary_id, activity_id, previous_state_root, hypothetical_state_root, observed_sequence, observed_at, public_key} signed by the sequencer, and serve it from the agent boundary and the core boundary; otherwise close this task as no change needed with the evidence."

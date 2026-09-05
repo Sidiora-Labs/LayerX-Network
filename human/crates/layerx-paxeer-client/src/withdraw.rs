@@ -276,17 +276,43 @@ impl CheckpointProof {
         siblings: Vec<[u8; 32]>,
         attestations: Vec<WithdrawalAttestation>,
     ) -> Result<Self, ClaimRefusal> {
-        Self::validated_for_protocol(layerx_wire::limits::PROTOCOL_VERSION, checkpoint_hash, state_root, epoch, batch_number, data_availability_root, leaf_index, siblings, attestations)
+        Self::validated_for_protocol(
+            layerx_wire::limits::PROTOCOL_VERSION,
+            checkpoint_hash,
+            state_root,
+            epoch,
+            batch_number,
+            data_availability_root,
+            leaf_index,
+            siblings,
+            attestations,
+        )
     }
 
+    /// Constructs structurally canonical checkpoint material whose guarantor
+    /// attestations declare exactly the explicitly selected `LayerX` protocol
+    /// version. [`Self::validated`] is this constructor bound to the legacy
+    /// default version.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a protocol version the client does not support, and otherwise
+    /// the same empty-field, depth, index, and attestation refusals as
+    /// [`Self::validated`].
+    #[allow(clippy::too_many_arguments)]
     pub fn validated_for_protocol(
         protocol_version: u16,
-        checkpoint_hash: [u8; 32], state_root: [u8; 32], epoch: u64,
-        batch_number: u64, data_availability_root: [u8; 32], leaf_index: u64,
-        siblings: Vec<[u8; 32]>, attestations: Vec<WithdrawalAttestation>,
+        checkpoint_hash: [u8; 32],
+        state_root: [u8; 32],
+        epoch: u64,
+        batch_number: u64,
+        data_availability_root: [u8; 32],
+        leaf_index: u64,
+        siblings: Vec<[u8; 32]>,
+        attestations: Vec<WithdrawalAttestation>,
     ) -> Result<Self, ClaimRefusal> {
-        if !matches!(protocol_version, layerx_wire::limits::PROTOCOL_VERSION | layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION) {
-            return Err(ClaimRefusal::InvalidAttestation { index: 0, field: "protocol_version" });
+        if !supported_protocol_version(protocol_version) {
+            return Err(ClaimRefusal::UnsupportedProtocolVersion { protocol_version });
         }
         for (field, value) in [
             ("checkpoint_hash", checkpoint_hash),
@@ -384,6 +410,13 @@ impl CheckpointProof {
 /// Why a claim was refused before a wallet transaction could be requested.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ClaimRefusal {
+    UnsupportedProtocolVersion {
+        protocol_version: u16,
+    },
+    DebitProtocolMismatch {
+        expected: u16,
+        found: u16,
+    },
     NetworkMismatch {
         debit: u32,
         paxeer: u32,
@@ -676,8 +709,20 @@ impl WithdrawalBoundary {
         Self::new_for_protocol(config, layerx_wire::limits::PROTOCOL_VERSION)
     }
 
-    pub fn new_for_protocol(config: WithdrawalConfig, protocol_version: u16) -> Result<Self, WithdrawalConfigError> {
-        if !matches!(protocol_version, layerx_wire::limits::PROTOCOL_VERSION | layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION) {
+    /// Validates and adopts a declared Paxeer withdrawal boundary bound to one
+    /// explicitly selected `LayerX` protocol version. Every attestation, the
+    /// registry's declared version, and for the state-commitment protocol the
+    /// verified debit receipt itself must carry exactly that version.
+    ///
+    /// # Errors
+    ///
+    /// Refuses an unsupported protocol version before every refusal of
+    /// [`Self::new`].
+    pub fn new_for_protocol(
+        config: WithdrawalConfig,
+        protocol_version: u16,
+    ) -> Result<Self, WithdrawalConfigError> {
+        if !supported_protocol_version(protocol_version) {
             return Err(WithdrawalConfigError::UnsupportedProtocolVersion);
         }
         if config.claims_contract.bytes() == [0; 20] {
@@ -716,6 +761,11 @@ impl WithdrawalBoundary {
         self.claims_contract
     }
 
+    #[must_use]
+    pub const fn protocol_version(&self) -> u16 {
+        self.protocol_version
+    }
+
     /// Constructs exact `queueClaim` bytes only after local proof checks and live Paxeer
     /// finalised-root/certificate checks agree.
     ///
@@ -727,9 +777,20 @@ impl WithdrawalBoundary {
         debit: CommittedWithdrawalDebit,
         proof: CheckpointProof,
     ) -> Result<WithdrawalClaim, WithdrawalError> {
-        if self.protocol_version == layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION
-            && debit.verified.receipt().protocol().map(layerx_wire::receipt::ProtocolReceipt::protocol_version) != Some(self.protocol_version) {
-            return Err(WithdrawalError::Refused(ClaimRefusal::InvalidAttestation { index: 0, field: "debit_protocol_version" }));
+        if self.protocol_version == layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION {
+            let found = debit
+                .verified
+                .receipt()
+                .protocol()
+                .map_or(0, layerx_wire::receipt::ProtocolReceipt::protocol_version);
+            if found != self.protocol_version {
+                return Err(WithdrawalError::Refused(
+                    ClaimRefusal::DebitProtocolMismatch {
+                        expected: self.protocol_version,
+                        found,
+                    },
+                ));
+            }
         }
         validate_checkpoint_proof(&debit, &proof, self.protocol_version)?;
         let paxeer_network = self.u32_view(
@@ -1504,6 +1565,13 @@ struct ClaimQueuedEvent {
     recipient: EvmAddress,
     amount: u128,
     available_at: u64,
+}
+
+pub(crate) const fn supported_protocol_version(protocol_version: u16) -> bool {
+    matches!(
+        protocol_version,
+        layerx_wire::limits::PROTOCOL_VERSION | layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION
+    )
 }
 
 fn validate_debit_expectation(expectation: &DebitExpectation) -> Result<(), DebitFault> {

@@ -262,18 +262,23 @@ fn verify_program_execution_receipt(
     })
 }
 
+type TerminalOutcome = (
+    ProgramCallOutcome,
+    Option<ProgramFailure>,
+    Option<BudgetMeterRefusal>,
+);
+
+fn guest_refused(outcome: &ProgramOutcome) -> ProgramCallOutcome {
+    ProgramCallOutcome::Refused(layerx_types::intent::ProgramCallFailure::GuestRefused {
+        code: outcome.result_code(),
+    })
+}
+
 fn verified_terminal_outcome(
     terminal: &DecodedTerminal,
     expected_program: [u8; 32],
     outcome: &ProgramOutcome,
-) -> Result<
-    (
-        ProgramCallOutcome,
-        Option<ProgramFailure>,
-        Option<BudgetMeterRefusal>,
-    ),
-    ProgramExecutionVerificationFailure,
-> {
+) -> Result<TerminalOutcome, ProgramExecutionVerificationFailure> {
     match &terminal.detail {
         TerminalDetail::Execution(ExecutionTerminal::CandidateV4 {
             program,
@@ -282,85 +287,36 @@ fn verified_terminal_outcome(
             fee_schedule_version,
             metering_schedule_version,
             usage,
-            outcome: CandidateTerminalOutcome::Success { code, response },
+            outcome: candidate_outcome,
             ..
         }) => {
-            if !candidate_matches(
-                *program,
-                *abi_version,
-                *runtime_version,
-                *fee_schedule_version,
-                *metering_schedule_version,
-                *usage,
-                expected_program,
-                outcome,
-            ) {
+            let candidate = CandidateIdentity {
+                program: *program,
+                abi: *abi_version,
+                runtime: *runtime_version,
+                fee: *fee_schedule_version,
+                metering: *metering_schedule_version,
+                usage: *usage,
+            };
+            if !candidate_matches(&candidate, expected_program, outcome) {
                 return terminal_failure();
             }
-            let response = ProgramCallResponse::new(*code, response).map_err(|_| {
-                ProgramExecutionVerificationFailure::at(ProgramExecutionCheck::Terminal)
-            })?;
-            Ok((ProgramCallOutcome::Completed(response), None, None))
-        }
-        TerminalDetail::Execution(ExecutionTerminal::CandidateV4 {
-            program,
-            abi_version,
-            runtime_version,
-            fee_schedule_version,
-            metering_schedule_version,
-            usage,
-            outcome: CandidateTerminalOutcome::Failure(failure),
-            ..
-        }) => {
-            if !candidate_matches(
-                *program,
-                *abi_version,
-                *runtime_version,
-                *fee_schedule_version,
-                *metering_schedule_version,
-                *usage,
-                expected_program,
-                outcome,
-            ) {
-                return terminal_failure();
+            match candidate_outcome {
+                CandidateTerminalOutcome::Success { code, response } => {
+                    let response = ProgramCallResponse::new(*code, response).map_err(|_| {
+                        ProgramExecutionVerificationFailure::at(ProgramExecutionCheck::Terminal)
+                    })?;
+                    Ok((ProgramCallOutcome::Completed(response), None, None))
+                }
+                CandidateTerminalOutcome::Failure(failure) => {
+                    Ok((guest_refused(outcome), Some(failure.clone()), None))
+                }
+                CandidateTerminalOutcome::Resource(resource) => Ok((
+                    ProgramCallOutcome::Refused(layerx_types::intent::ProgramCallFailure::Resource),
+                    None,
+                    Some(*resource),
+                )),
             }
-            Ok((
-                ProgramCallOutcome::Refused(
-                    layerx_types::intent::ProgramCallFailure::GuestRefused {
-                        code: outcome.result_code(),
-                    },
-                ),
-                Some(failure.clone()),
-                None,
-            ))
-        }
-        TerminalDetail::Execution(ExecutionTerminal::CandidateV4 {
-            program,
-            abi_version,
-            runtime_version,
-            fee_schedule_version,
-            metering_schedule_version,
-            usage,
-            outcome: CandidateTerminalOutcome::Resource(resource),
-            ..
-        }) => {
-            if !candidate_matches(
-                *program,
-                *abi_version,
-                *runtime_version,
-                *fee_schedule_version,
-                *metering_schedule_version,
-                *usage,
-                expected_program,
-                outcome,
-            ) {
-                return terminal_failure();
-            }
-            Ok((
-                ProgramCallOutcome::Refused(layerx_types::intent::ProgramCallFailure::Resource),
-                None,
-                Some(*resource),
-            ))
         }
         TerminalDetail::Execution(ExecutionTerminal::Legacy {
             runtime_version,
@@ -396,20 +352,8 @@ fn verified_terminal_outcome(
         }
         TerminalDetail::Failure(layerx_programs_runtime::terminal::FailureTerminal::Program(
             failure,
-        )) => Ok((
-            ProgramCallOutcome::Refused(layerx_types::intent::ProgramCallFailure::GuestRefused {
-                code: outcome.result_code(),
-            }),
-            Some(failure.clone()),
-            None,
-        )),
-        TerminalDetail::Failure(_) => Ok((
-            ProgramCallOutcome::Refused(layerx_types::intent::ProgramCallFailure::GuestRefused {
-                code: outcome.result_code(),
-            }),
-            None,
-            None,
-        )),
+        )) => Ok((guest_refused(outcome), Some(failure.clone()), None)),
+        TerminalDetail::Failure(_) => Ok((guest_refused(outcome), None, None)),
         TerminalDetail::Resource(resource) => Ok((
             ProgramCallOutcome::Refused(layerx_types::intent::ProgramCallFailure::Resource),
             None,
@@ -480,60 +424,18 @@ fn verify_terminal_commitments(
                     ));
                 }
                 occupancy_seen = true;
-                if bytes.is_empty() {
-                    if outcome.occupancy_evidence_digest() != [0; 32]
-                        || outcome.occupancy_transfer_root() != [0; 32]
-                        || outcome.occupancy_byte_batches() != 0
-                        || outcome.occupancy_fee_units() != 0
-                    {
-                        return Err(ProgramExecutionVerificationFailure::at(
-                            ProgramExecutionCheck::Occupancy,
-                        ));
-                    }
-                    continue;
-                }
-                occupancy_present = true;
-                if <[u8; 32]>::from(Sha256::digest(bytes)) != outcome.occupancy_evidence_digest() {
-                    return Err(ProgramExecutionVerificationFailure::at(
-                        ProgramExecutionCheck::Occupancy,
-                    ));
-                }
-                let settlement = OccupancySettlement::canonical_decode(bytes).map_err(|_| {
-                    ProgramExecutionVerificationFailure::at(ProgramExecutionCheck::Occupancy)
-                })?;
-                if settlement.usage().byte_batches != outcome.occupancy_byte_batches()
-                    || settlement.usage().fee_units != outcome.occupancy_fee_units()
-                    || settlement
-                        .transfer_root(outcome.occupancy_asset_id())
-                        .map_err(|_| {
-                            ProgramExecutionVerificationFailure::at(
-                                ProgramExecutionCheck::Occupancy,
-                            )
-                        })?
-                        != outcome.occupancy_transfer_root()
-                {
-                    return Err(ProgramExecutionVerificationFailure::at(
-                        ProgramExecutionCheck::Occupancy,
-                    ));
-                }
+                occupancy_present = verify_occupancy_attachment(bytes, outcome)?;
             }
             layerx_programs_runtime::terminal::TerminalAttachment::TransferAuthority {
                 authorization,
                 transfer_root,
             } => {
-                if !candidate
-                    || authority_seen
-                    || *transfer_root != outcome.transfer_root()
-                    || layerx_programs_runtime::transfer::verify_authorization_root(
-                        authorization,
-                        *transfer_root,
-                    )
-                    .is_err()
-                {
+                if !candidate || authority_seen {
                     return Err(ProgramExecutionVerificationFailure::at(
                         ProgramExecutionCheck::TransferAuthority,
                     ));
                 }
+                verify_transfer_authority_attachment(authorization, *transfer_root, outcome)?;
                 authority_seen = true;
             }
         }
@@ -553,6 +455,58 @@ fn verify_terminal_commitments(
     Ok(())
 }
 
+fn verify_occupancy_attachment(
+    bytes: &[u8],
+    outcome: &ProgramOutcome,
+) -> Result<bool, ProgramExecutionVerificationFailure> {
+    let occupancy_failure =
+        || ProgramExecutionVerificationFailure::at(ProgramExecutionCheck::Occupancy);
+    if bytes.is_empty() {
+        if outcome.occupancy_evidence_digest() != [0; 32]
+            || outcome.occupancy_transfer_root() != [0; 32]
+            || outcome.occupancy_byte_batches() != 0
+            || outcome.occupancy_fee_units() != 0
+        {
+            return Err(occupancy_failure());
+        }
+        return Ok(false);
+    }
+    if <[u8; 32]>::from(Sha256::digest(bytes)) != outcome.occupancy_evidence_digest() {
+        return Err(occupancy_failure());
+    }
+    let settlement =
+        OccupancySettlement::canonical_decode(bytes).map_err(|_| occupancy_failure())?;
+    if settlement.usage().byte_batches != outcome.occupancy_byte_batches()
+        || settlement.usage().fee_units != outcome.occupancy_fee_units()
+        || settlement
+            .transfer_root(outcome.occupancy_asset_id())
+            .map_err(|_| occupancy_failure())?
+            != outcome.occupancy_transfer_root()
+    {
+        return Err(occupancy_failure());
+    }
+    Ok(true)
+}
+
+fn verify_transfer_authority_attachment(
+    authorization: &[u8],
+    transfer_root: [u8; 32],
+    outcome: &ProgramOutcome,
+) -> Result<(), ProgramExecutionVerificationFailure> {
+    if transfer_root != outcome.transfer_root()
+        || layerx_programs_runtime::transfer::verify_authorization_root(
+            authorization,
+            transfer_root,
+        )
+        .is_err()
+    {
+        return Err(ProgramExecutionVerificationFailure::at(
+            ProgramExecutionCheck::TransferAuthority,
+        ));
+    }
+    Ok(())
+}
+
 fn usage_matches(usage: layerx_programs_runtime::MeteredUsage, outcome: &ProgramOutcome) -> bool {
     usage.cpu_fuel == outcome.cpu_fuel()
         && usage.memory_bytes == outcome.memory_bytes()
@@ -563,20 +517,24 @@ fn usage_matches(usage: layerx_programs_runtime::MeteredUsage, outcome: &Program
         && usage.fee_units == outcome.fee_units()
 }
 
-fn candidate_matches(
+struct CandidateIdentity {
     program: [u8; 32],
     abi: u16,
     runtime: u16,
     fee: u32,
     metering: u32,
     usage: layerx_programs_runtime::MeteredUsage,
+}
+
+fn candidate_matches(
+    candidate: &CandidateIdentity,
     expected_program: [u8; 32],
     outcome: &ProgramOutcome,
 ) -> bool {
-    program == expected_program
-        && abi == outcome.abi_version()
-        && runtime == outcome.runtime_version()
-        && fee == outcome.fee_schedule_version()
-        && metering == outcome.metering_schedule_version()
-        && usage_matches(usage, outcome)
+    candidate.program == expected_program
+        && candidate.abi == outcome.abi_version()
+        && candidate.runtime == outcome.runtime_version()
+        && candidate.fee == outcome.fee_schedule_version()
+        && candidate.metering == outcome.metering_schedule_version()
+        && usage_matches(candidate.usage, outcome)
 }

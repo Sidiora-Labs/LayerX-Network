@@ -25,6 +25,9 @@ impl Version {
     /// Additive authenticated durable admission capability revision.
     pub const V1_3: Self = Self { major: 1, minor: 3 };
 
+    /// Additive noncommitting program simulation capability revision.
+    pub const V1_4: Self = Self { major: 1, minor: 4 };
+
     /// Returns whether the two peers can interpret the same stable message set.
     #[must_use]
     pub const fn is_compatible_with(self, peer: Self) -> bool {
@@ -60,6 +63,7 @@ pub enum Capability {
     HistoricalProofs,
     PreparationState,
     FinalityEvidenceRegister,
+    Simulate,
 }
 
 impl Capability {
@@ -81,6 +85,7 @@ impl Capability {
             Self::HistoricalProofs => "historical_proofs",
             Self::PreparationState => "preparation_state",
             Self::FinalityEvidenceRegister => "finality_evidence_register",
+            Self::Simulate => "simulate",
         }
     }
 }
@@ -104,7 +109,7 @@ pub struct Schema {
     pub capabilities: &'static [Capability],
 }
 
-const CAPABILITIES: [Capability; 14] = [
+const CAPABILITIES: [Capability; 15] = [
     Capability::NodeInfo,
     Capability::Submit,
     Capability::AuthenticatedDurableSubmit,
@@ -119,6 +124,7 @@ const CAPABILITIES: [Capability; 14] = [
     Capability::HistoricalProofs,
     Capability::PreparationState,
     Capability::FinalityEvidenceRegister,
+    Capability::Simulate,
 ];
 
 const fn message(
@@ -139,7 +145,7 @@ const fn message(
     }
 }
 
-const MESSAGES: [MessageDescriptor; 29] = [
+const MESSAGES: [MessageDescriptor; 31] = [
     message(
         "NodeInfoRequest",
         1,
@@ -372,10 +378,26 @@ const MESSAGES: [MessageDescriptor; 29] = [
         true,
         false,
     ),
+    message(
+        "SimulateRequest",
+        30,
+        MessageKind::Request,
+        Capability::Simulate,
+        true,
+        false,
+    ),
+    message(
+        "SimulateResponse",
+        31,
+        MessageKind::Response,
+        Capability::Simulate,
+        true,
+        true,
+    ),
 ];
 
 const SCHEMA: Schema = Schema {
-    version: Version::V1_3,
+    version: Version::V1_4,
     messages: &MESSAGES,
     capabilities: &CAPABILITIES,
 };
@@ -398,7 +420,7 @@ pub struct GoldenVector {
 const NO_PROOF: &[u8] = &[];
 const PROOF: &[u8] = &[0xa5];
 
-const GOLDENS: [GoldenVector; 29] = [
+const GOLDENS: [GoldenVector; 31] = [
     GoldenVector {
         message: "NodeInfoRequest",
         payload: &[1],
@@ -573,13 +595,27 @@ const GOLDENS: [GoldenVector; 29] = [
         proof_material: NO_PROOF,
         encoded_hex: "00010002001d0000000000000000000000011d00000000",
     },
+    GoldenVector {
+        message: "SimulateRequest",
+        payload: &[30],
+        proof_material: NO_PROOF,
+        encoded_hex: "00010004001e0000000000000000000000011e00000000",
+    },
+    GoldenVector {
+        message: "SimulateResponse",
+        payload: &[31],
+        proof_material: PROOF,
+        encoded_hex: "00010004001f0000000000000000000000011f00000001a5",
+    },
 ];
 
 impl GoldenVector {
     /// Interface revision frozen into this literal vector.
     #[must_use]
     pub const fn version(self) -> Version {
-        if self.payload[0] >= 28 {
+        if self.payload[0] >= 30 {
+            Version::V1_4
+        } else if self.payload[0] >= 28 {
             Version::V1_2
         } else if self.payload[0] >= 26 {
             Version::V1_1

@@ -1,5 +1,6 @@
-import type { AuthorizedReceiptBatch, ReceiptVerification } from "./verifier.js";
-import { verifyReceiptOutcome } from "./verifier.js";
+import type { AuthorizedReceiptBatch, ReceiptVerification, SelectableProtocolVersion } from "./verifier.js";
+import { DEFAULT_PROTOCOL_VERSION, isSelectableProtocolVersion, programsModuleVersionForProtocol,
+  supportedProgramGuestAbi, verifyReceiptOutcome } from "./verifier.js";
 import { PlatformSdkError, type IdempotencyKey, type ProductionClient } from "./production.js";
 import { assertFreshSimulationObservation, decodeAndVerifyProgramTerminal, decodeSignedProgramCall,
   type DecodedSignedProgramCall } from "./program-wire.js";
@@ -46,22 +47,27 @@ export class ProgramTrustContext {
   readonly #sequencerPublicKey: Uint8Array;
   readonly #clockMilliseconds: () => bigint;
   readonly #maximumSimulationAgeMilliseconds: bigint;
+  readonly #protocolVersion: SelectableProtocolVersion;
 
   public constructor(
     sequencerPublicKey: Uint8Array,
     clockMilliseconds: () => bigint = () => BigInt(Date.now()),
     maximumSimulationAgeMilliseconds: bigint = DEFAULT_MAXIMUM_SIMULATION_AGE_MILLISECONDS,
+    protocolVersion: SelectableProtocolVersion = DEFAULT_PROTOCOL_VERSION,
   ) {
     if (sequencerPublicKey.length !== 32 || sequencerPublicKey.every((value) => value === 0)
       || maximumSimulationAgeMilliseconds <= 0n
-      || maximumSimulationAgeMilliseconds > 18446744073709551615n) throw new TypeError("invalid Programs trust context");
+      || maximumSimulationAgeMilliseconds > 18446744073709551615n
+      || !isSelectableProtocolVersion(protocolVersion)) throw new TypeError("invalid Programs trust context");
     this.#sequencerPublicKey = new Uint8Array(sequencerPublicKey);
     this.#clockMilliseconds = clockMilliseconds;
     this.#maximumSimulationAgeMilliseconds = maximumSimulationAgeMilliseconds;
+    this.#protocolVersion = protocolVersion;
     Object.freeze(this);
   }
 
   public sequencerPublicKey(): Uint8Array { return new Uint8Array(this.#sequencerPublicKey); }
+  public protocolVersion(): SelectableProtocolVersion { return this.#protocolVersion; }
   public nowMilliseconds(): bigint {
     const value = this.#clockMilliseconds();
     if (value < 0n || value > 18446744073709551615n) throw new TypeError("invalid trust clock");
@@ -88,19 +94,22 @@ export async function verifyProgramReceipt(
   authority: AuthorizedReceiptBatch,
   trust: ProgramTrustContext,
 ): Promise<VerifiedProgramReceipt> {
-  if (!HEX32.test(execution.activity_id) || execution.module_version < 1 || execution.module_version > 3
-    || ![1, 2].includes(execution.guest_abi_version)) throw new TypeError("invalid program execution evidence");
+  const protocolVersion = trust.protocolVersion();
+  if (!HEX32.test(execution.activity_id)
+    || !programsModuleVersionForProtocol(protocolVersion, execution.module_version, false)
+    || !supportedProgramGuestAbi(execution.guest_abi_version)) throw new TypeError("invalid program execution evidence");
   const receipt = decodeHex(execution.receipt, 1_048_576);
   const terminalPayload = decodeHex(execution.terminal_payload, 1_048_576);
   const callGraph = decodeHex(execution.call_graph, 1_048_576);
   const pinnedKey = trust.sequencerPublicKey();
   if (!equal(authority.sequencerPublicKey, pinnedKey)
     || execution.authority.sequencer_public_key !== hex(pinnedKey)) throw new TypeError("program sequencer authority mismatch");
-  const verification = await verifyReceiptOutcome(receipt, authority);
+  const verification = await verifyReceiptOutcome(receipt, authority, { protocolVersion });
   const protocol = verification.receipt;
   const outcome = protocol.programOutcome;
-  if (protocol.moduleId !== 9 || protocol.operation !== 3 || protocol.moduleVersion < 1
-    || protocol.moduleVersion > 3 || protocol.moduleVersion !== execution.module_version
+  if (protocol.moduleId !== 9 || protocol.operation !== 3 || protocol.protocolVersion !== protocolVersion
+    || !programsModuleVersionForProtocol(protocol.protocolVersion, protocol.moduleVersion, false)
+    || protocol.moduleVersion !== execution.module_version
     || hex(protocol.activityId) !== execution.activity_id || outcome === undefined
     || outcome.abiVersion !== execution.guest_abi_version
     || outcome.resultCode !== execution.result_code

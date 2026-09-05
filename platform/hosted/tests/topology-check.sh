@@ -15,13 +15,19 @@ port, any Service that selects no workload and any policy that does not admit
 the edge fails the check.
 
 Default manifests:
+  platform/hosted/node/deployment.yaml
+  platform/hosted/identity/deployment.yaml
+  platform/hosted/paxeer/deployment.yaml
   platform/hosted/testnet/deployment.yaml
   platform/hosted/gateway/deployment.yaml
   platform/hosted/registry/deployment.yaml
 
-Services that platform/hosted/testnet/README.md names as separately operated
-have no manifest in this repository. Their edges are reported as `external`
-with the caller's side checked; --strict fails them.
+The trusted-boundary Services (node core boundary, receipt authority, agent
+boundary, identity and Paxeer boundary) are declared by the node, identity and
+paxeer manifests, so their edges are checked on both ends. Only the status
+publisher that platform/hosted/testnet/README.md names as separately operated
+has no manifest in this repository; its edge is reported as `external` with
+the caller's side checked, and --strict fails it.
 EOF
 }
 
@@ -73,6 +79,9 @@ topology_check() {
     local root
     root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
     manifests=(
+      "$root/platform/hosted/node/deployment.yaml"
+      "$root/platform/hosted/identity/deployment.yaml"
+      "$root/platform/hosted/paxeer/deployment.yaml"
       "$root/platform/hosted/testnet/deployment.yaml"
       "$root/platform/hosted/gateway/deployment.yaml"
       "$root/platform/hosted/registry/deployment.yaml"
@@ -98,12 +107,6 @@ STRICT = os.environ.get("TOPOLOGY_STRICT", "0") == "1"
 MANIFESTS = sys.argv[1:]
 
 SEPARATELY_OPERATED = {
-    ("layerx-testnet", "layerx-pending-core"): {"port": "9443", "labels": {"layerx-plane": "trusted-boundary"}},
-    ("layerx-testnet", "layerx-pending-core-admin"): {"port": "9444", "labels": {"layerx-plane": "trusted-boundary"}},
-    ("layerx-testnet", "paxeer-boundary"): {"port": "9443", "labels": {"layerx-plane": "trusted-boundary"}},
-    ("layerx-testnet", "layerx-identity"): {"port": "9443", "labels": {"layerx-plane": "trusted-boundary"}},
-    ("layerx-testnet", "layerx-receipt-authority"): {"port": "9443", "labels": {"layerx-plane": "trusted-boundary"}},
-    ("layerx-testnet", "layerx-agent-boundary"): {"port": "9443", "labels": {"layerx-plane": "trusted-boundary"}},
     ("layerx-status", "status-publisher"): {"port": "443", "labels": None},
 }
 DEFAULT_PORTS = {"https": "443", "http": "80", "rediss": "6379", "redis": "6379"}

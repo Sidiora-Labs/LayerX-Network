@@ -1,7 +1,7 @@
 [schema]
 name = "LayerX Node Interface"
 major = 1
-minor = 3
+minor = 4
 encoding = "major:u16be minor:u16be message_tag:u16be correlation_id:u64be canonical_payload:bytes32 proof_material:bytes32"
 compatibility = "Within major version 1, minor releases may add only new message tags, optional trailing fields, and capabilities; removal, reuse, reordering, or changed meaning requires a new major version."
 protocol_payload = "Any protocol datum is opaque canonical LayerX bytes. It is never expanded into an LNI-specific activity, receipt, state, batch, checkpoint, proof, or event layout."
@@ -9,7 +9,7 @@ transport = "Length-prefixed canonical frames over Unix sockets by default, mutu
 handshake = "NodeInfo is the first exchange and carries LNI version, protocol version, network id, node role, chain head, latest sealed batch, latest finalised checkpoint, authorised sequencer key, and capabilities."
 
 [capabilities]
-values = ["node_info","submit","authenticated_durable_submit","receipt_lookup","account_read","history_range","batch_header","checkpoint","proof_bundle","availability_fetch","event_subscribe","historical_proofs","preparation_state","finality_evidence_register"]
+values = ["node_info","submit","authenticated_durable_submit","receipt_lookup","account_read","history_range","batch_header","checkpoint","proof_bundle","availability_fetch","event_subscribe","historical_proofs","preparation_state","finality_evidence_register","simulate"]
 
 [message.1]
 name = "NodeInfoRequest"
@@ -242,3 +242,18 @@ capability = "finality_evidence_register"
 canonical_payload = "version:u16be=1 checkpoint_id:bytes32 batch_number:u64be durable_record_digest:bytes32; returned only after append and fsync; identical retry returns the same digest and conflicting retry is refused"
 proof_material = "empty"
 golden = "00010002001d0000000000000000000000011d00000000"
+
+[message.30]
+name = "SimulateRequest"
+kind = "request"
+capability = "simulate"
+canonical_payload = "canonical signed LX_PROGRAMS_CALL activity bytes; executed against the current head through the programs runtime without any commit, journal, or queue mutation"
+proof_material = "empty"
+golden = "00010004001e0000000000000000000000011e00000000"
+
+[message.31]
+name = "SimulateResponse"
+kind = "response"
+capability = "simulate"
+canonical_payload = "version:u16be=1 activity_id:bytes32 receipt_length:u32be receipt:bytes terminal_payload_length:u32be terminal_payload:bytes call_graph_length:u32be call_graph:bytes; the receipt is the sequencer-signed receipt of the noncommitted execution"
+proof_material = "version:u16be=1 boundary_id:bytes32 activity_id:bytes32 previous_state_root:bytes32 hypothetical_state_root:bytes32 observed_sequence:u64be observed_at:u64be public_key:bytes32 signature:bytes64; boundary_id is sha256 of the domain LayerX/emulator/simulation-boundary/v1 with a NUL terminator followed by public_key; signature is the sequencer ed25519 signature over sha256 of the domain LayerX/agent/program-simulation-evidence/v1 with a NUL terminator followed by boundary_id, activity_id, previous_state_root, hypothetical_state_root, observed_sequence, observed_at and one zero byte"

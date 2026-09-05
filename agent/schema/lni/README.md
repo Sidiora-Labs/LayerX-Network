@@ -12,6 +12,12 @@ version returned by `NodeInfoResponse` against the version it implements.
 Minor releases within major version 1 are additive. Version 1.3 adds the
 `authenticated_durable_submit` capability; its absence keeps the beta write
 gate closed while preserving compatible read and legacy capability discovery.
+Version 1.4 adds the `simulate` capability: `SimulateRequest` carries one
+canonical signed program-call activity, the sequencer executes it against the
+current head through the programs runtime without committing anything, and
+`SimulateResponse` returns the execution (activity id, sequencer-signed
+receipt, terminal payload, call graph) with sequencer-signed simulation
+evidence as proof material.
 
 ## Authenticated durable submission
 
@@ -79,3 +85,5 @@ authentication-and-durability guarantee only when
 | 27 | `PreparationStateResponse` | response | `preparation_state` |
 | 28 | `FinalityEvidenceRegisterRequest` | request | `finality_evidence_register` |
 | 29 | `FinalityEvidenceRegisterResponse` | response | `finality_evidence_register` |
+| 30 | `SimulateRequest` | request | `simulate` |
+| 31 | `SimulateResponse` | response | `simulate` |

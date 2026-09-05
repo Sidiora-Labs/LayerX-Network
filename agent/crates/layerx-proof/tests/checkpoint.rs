@@ -256,8 +256,8 @@ fn transported_registration_never_invents_paxeer_chain_finality() {
 }
 
 #[test]
-fn rejects_threshold_duplicate_membership_signature_and_identifier_failures() {
-    let (certificate, keys, identifier) = fixture();
+fn rejects_threshold_duplicate_membership_and_signature_failures() {
+    let (_, keys, identifier) = fixture();
     let (signing, _, first_id) = key(1);
     let duplicate = attestation(identifier, first_id, &signing);
     let duplicate_certificate = Certificate::new(
@@ -343,7 +343,11 @@ fn rejects_threshold_duplicate_membership_signature_and_identifier_failures() {
         ),
         Err(CheckpointError::Signature(first_id))
     );
+}
 
+#[test]
+fn rejects_checkpoint_identifier_and_settlement_domain_failures() {
+    let (certificate, keys, identifier) = fixture();
     assert_eq!(
         verify_certificate(&certificate, &keys, &[99; 32], settlement_domain(), None),
         Err(CheckpointError::CheckpointIdentifier)

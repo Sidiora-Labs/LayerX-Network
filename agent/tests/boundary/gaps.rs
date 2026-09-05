@@ -5,7 +5,7 @@ use layerx_types::error::LayerError;
 
 pub fn verify_and_render(handshake: &Handshake) -> Result<String, String> {
     let report = capability_report(handshake.capabilities());
-    if report.entries().len() != 14 {
+    if report.entries().len() != 15 {
         return Err("capability report omitted schema requirements".to_owned());
     }
     if report.daemon_status() != report.cli_output()

@@ -1,0 +1,36 @@
+FROM docker.io/golang:1.25.6-bookworm@sha256:2f768d462dbffbb0f0b3a5171009f162945b086f326e0b2a8fd5d29c3219ff14 AS builder
+WORKDIR /go/src/pax-chain
+COPY paxeer-network/go.mod paxeer-network/go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    go mod download
+COPY paxeer-network/ ./
+RUN set -eu; \
+    mkdir -p /go/lib; \
+    cp wasm-runtime/internal/api/libwasmvm.x86_64.so /go/lib/; \
+    cp wasm/x/wasm/artifacts/v152/api/libwasmvm152.x86_64.so /go/lib/; \
+    cp wasm/x/wasm/artifacts/v155/api/libwasmvm155.x86_64.so /go/lib/; \
+    (cd /go/lib && sha256sum libwasmvm.x86_64.so libwasmvm152.x86_64.so libwasmvm155.x86_64.so) > /go/lib/libwasmvm.sha256; \
+    cat /go/lib/libwasmvm.sha256
+ENV CGO_ENABLED=1
+ARG PAX_CHAIN_REF=""
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    set -eu; \
+    BUILD_TAGS="netgo ledger"; \
+    VERSION_PKG="github.com/sidiora-labs/paxeer-network/sdk/version"; \
+    PAX_CHAIN_VERSION=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' version.json); \
+    test -n "${PAX_CHAIN_VERSION}"; \
+    go build -tags "${BUILD_TAGS}" -ldflags "-checklinkname=0 -X ${VERSION_PKG}.Name=paxeer -X ${VERSION_PKG}.AppName=paxd -X ${VERSION_PKG}.Version=${PAX_CHAIN_VERSION} -X ${VERSION_PKG}.Commit=${PAX_CHAIN_REF:-unknown} -X ${VERSION_PKG}.BuildTags=netgo,ledger" \
+        -o /go/bin/paxd ./daemon/paxd; \
+    test -x /go/bin/paxd
+
+FROM docker.io/ubuntu:24.04@sha256:104ae83764a5119017b8e8d6218fa0832b09df65aae7d5a6de29a85d813da2fb
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+COPY --from=builder /go/bin/paxd /usr/bin/paxd
+COPY --from=builder /go/lib/libwasmvm.x86_64.so /go/lib/libwasmvm152.x86_64.so /go/lib/libwasmvm155.x86_64.so /usr/lib/
+COPY --from=builder /go/lib/libwasmvm.sha256 /usr/lib/libwasmvm.sha256
+RUN /usr/bin/paxd version
+ENTRYPOINT ["/usr/bin/paxd"]

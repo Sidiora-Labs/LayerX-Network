@@ -2,9 +2,11 @@ apiVersion: v1
 kind: ConfigMap
 metadata: {name: layerx-node-config, namespace: layerx-testnet}
 data:
-  network-id: "4020"
+  network-id: "402"
+  network-name: layerx-testnet
   asset-id: "b5a32b12029f8ddfb905f90f280f664b46390de0fc62770fc197dd87b18cd898"
   replica-id: "6c61796572782d626574612d726563656970742d617574686f726974792d3031"
+  paxeer-relay-port: "18545"
 ---
 apiVersion: v1
 kind: Service
@@ -58,6 +60,8 @@ spec:
             - "4021"
             - --lni-gid
             - "4020"
+            - --settlement-env
+            - /run/layerx/settlement/settlement.env
           env:
             - {name: LAYERX_NODE_NETWORK_ID, valueFrom: {configMapKeyRef: {name: layerx-node-config, key: network-id}}}
             - {name: LAYERX_NODE_ASSET_ID, valueFrom: {configMapKeyRef: {name: layerx-node-config, key: asset-id}}}
@@ -69,7 +73,25 @@ spec:
             - {name: run, mountPath: /run/layerx}
             - {name: keys, mountPath: /run/layerx/keys, readOnly: true}
             - {name: tokens, mountPath: /run/layerx/tokens, readOnly: true}
+            - {name: settlement, mountPath: /run/layerx/settlement, readOnly: true}
             - {name: tmp, mountPath: /tmp}
+        - name: paxeer-relay
+          image: ghcr.io/sidiora-labs/layerx-node:0.1.0
+          imagePullPolicy: Always
+          command: [/bin/sh, -ec]
+          args:
+            - |
+              : "${LAYERX_NODE_PAXEER_RELAY_PORT:?relay port is required}"
+              : "${LAYERX_NODE_PAXEER_BOUNDARY:?boundary host is required}"
+              exec socat -T 120 "TCP4-LISTEN:${LAYERX_NODE_PAXEER_RELAY_PORT},bind=127.0.0.1,reuseaddr,fork" \
+                "OPENSSL:${LAYERX_NODE_PAXEER_BOUNDARY}:9443,cafile=/run/layerx/trust/ca.crt,verify=1,commonname=${LAYERX_NODE_PAXEER_BOUNDARY}"
+          env:
+            - {name: LAYERX_NODE_PAXEER_RELAY_PORT, valueFrom: {configMapKeyRef: {name: layerx-node-config, key: paxeer-relay-port}}}
+            - {name: LAYERX_NODE_PAXEER_BOUNDARY, value: paxeer-boundary.layerx-testnet.svc.cluster.local}
+          resources: {requests: {cpu: 50m, memory: 32Mi}, limits: {cpu: 500m, memory: 128Mi}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts:
+            - {name: trust, mountPath: /run/layerx/trust, readOnly: true}
         - name: layerxd-authority
           image: ghcr.io/sidiora-labs/layerx-node:0.1.0
           imagePullPolicy: Always
@@ -131,9 +153,21 @@ spec:
           image: ghcr.io/sidiora-labs/layerx-receipt-authority:0.1.0
           imagePullPolicy: Always
           securityContext: {runAsUser: 4021, runAsGroup: 4020, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          command: [/bin/sh, -ec]
+          args:
+            - |
+              while [ ! -r /run/layerx/node/core.env ]; do sleep 1; done
+              set -a
+              . /run/layerx/node/core.env
+              set +a
+              : "${LAYERX_CORE_SEQUENCER_ID:?generated sequencer identity is required}"
+              export LAYERX_AUTHORITY_SEQUENCER_ID="$LAYERX_CORE_SEQUENCER_ID"
+              export LAYERX_AUTHORITY_SEQUENCER_PUBLIC_KEY="$(tr -d '\r\n' < /run/layerx/gateway-authority/sequencer-public-key)"
+              exec /usr/local/bin/layerx-receipt-authority
           env:
             - {name: LAYERX_AUTHORITY_LISTEN, value: "0.0.0.0:9445"}
-            - {name: LAYERX_AUTHORITY_NETWORK_ID, valueFrom: {configMapKeyRef: {name: layerx-node-config, key: network-id}}}
+            - {name: LAYERX_AUTHORITY_NETWORK_ID, valueFrom: {configMapKeyRef: {name: layerx-node-config, key: network-name}}}
+            - {name: LAYERX_AUTHORITY_PROTOCOL_NETWORK_ID, valueFrom: {configMapKeyRef: {name: layerx-node-config, key: network-id}}}
             - {name: LAYERX_AUTHORITY_TLS_CERT_DER, value: /run/layerx/authority-tls/server.crt.der}
             - {name: LAYERX_AUTHORITY_TLS_KEY_DER, value: /run/layerx/authority-tls/server.key.der}
             - {name: LAYERX_AUTHORITY_CLIENT_CA_DER, value: /run/layerx/trust/ca.crt.der}
@@ -141,13 +175,15 @@ spec:
             - {name: LAYERX_AUTHORITY_REPLICA_URL, value: "http://127.0.0.1:9402"}
             - {name: LAYERX_AUTHORITY_REPLICA_BEARER_TOKEN_FILE, value: /run/layerx/tokens/replica-token}
             - {name: LAYERX_AUTHORITY_REPLICA_ID, valueFrom: {configMapKeyRef: {name: layerx-node-config, key: replica-id}}}
-            - {name: LAYERX_AUTHORITY_RECEIPT_URL, value: "http://127.0.0.1:9401"}
-            - {name: LAYERX_AUTHORITY_RECEIPT_BEARER_TOKEN_FILE, value: /run/layerx/tokens/program-token}
+            - {name: LAYERX_AUTHORITY_LNI_SOCKET, value: /run/layerx/node/layerxd.lni.sock}
+            - {name: LAYERX_AUTHORITY_FIRST_BATCH, value: "1"}
+            - {name: LAYERX_AUTHORITY_LAST_BATCH, value: "18446744073709551615"}
           ports: [{name: authority-tls, containerPort: 9445}]
           readinessProbe: {httpGet: {scheme: HTTPS, path: /readyz, port: authority-tls}, periodSeconds: 5}
           livenessProbe: {httpGet: {scheme: HTTPS, path: /livez, port: authority-tls}, periodSeconds: 15}
           resources: {requests: {cpu: 200m, memory: 128Mi}, limits: {cpu: "1", memory: 512Mi}}
           volumeMounts:
+            - {name: run, mountPath: /run/layerx}
             - {name: tokens, mountPath: /run/layerx/tokens, readOnly: true}
             - {name: authority-tls, mountPath: /run/layerx/authority-tls, readOnly: true}
             - {name: trust, mountPath: /run/layerx/trust, readOnly: true}
@@ -160,7 +196,7 @@ spec:
           securityContext: {runAsUser: 4021, runAsGroup: 4020, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
           env:
             - {name: LAYERX_AGENT_BOUNDARY_LISTEN, value: "0.0.0.0:9446"}
-            - {name: LAYERX_AGENT_BOUNDARY_NETWORK_ID, valueFrom: {configMapKeyRef: {name: layerx-node-config, key: network-id}}}
+            - {name: LAYERX_AGENT_BOUNDARY_NETWORK_ID, valueFrom: {configMapKeyRef: {name: layerx-node-config, key: network-name}}}
             - {name: LAYERX_AGENT_BOUNDARY_PROTOCOL_NETWORK_ID, valueFrom: {configMapKeyRef: {name: layerx-node-config, key: network-id}}}
             - {name: LAYERX_AGENT_BOUNDARY_TLS_CERT_DER, value: /run/layerx/agent-tls/server.crt.der}
             - {name: LAYERX_AGENT_BOUNDARY_TLS_KEY_DER, value: /run/layerx/agent-tls/server.key.der}
@@ -188,6 +224,7 @@ spec:
         - {name: tmp, emptyDir: {medium: Memory, sizeLimit: 64Mi}}
         - {name: keys, secret: {secretName: layerx-node-keys, defaultMode: 0440}}
         - {name: tokens, secret: {secretName: layerx-node-tokens, defaultMode: 0440}}
+        - {name: settlement, configMap: {name: layerx-node-settlement, optional: true}}
         - {name: backend-admin, secret: {secretName: layerx-testnet-backend-admin}}
         - {name: trust, secret: {secretName: layerx-internal-ca}}
         - {name: core-tls, secret: {secretName: layerx-pending-core-tls}}
@@ -198,7 +235,7 @@ spec:
         - {name: registry-authority, secret: {secretName: layerx-program-registry-authority-client}}
         - {name: webhooks-authority, secret: {secretName: layerx-webhooks-authority-client}}
         - {name: gateway-component, secret: {secretName: layerx-gateway-component-client}}
-        - {name: registry-component, secret: {secretName: layerx-program-registry-component-client}}
+        - {name: registry-component, secret: {secretName: layerx-program-registry-node-client}}
   volumeClaimTemplates:
     - metadata: {name: data}
       spec: {accessModes: [ReadWriteOnce], resources: {requests: {storage: 50Gi}}}
@@ -238,8 +275,10 @@ spec:
       ports: [{protocol: TCP, port: 9445}, {protocol: TCP, port: 9446}]
     - from: [{podSelector: {matchLabels: {app: layerx-faucet}}}]
       ports: [{protocol: TCP, port: 9443}]
-    - from: [{podSelector: {matchLabels: {app: layerx-webhooks}}}]
+    - from: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: layerx-developer}}, podSelector: {matchLabels: {app: layerx-webhooks}}}]
       ports: [{protocol: TCP, port: 9445}]
+    - from: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: layerx-developer}}, podSelector: {matchLabels: {app: layerx-dashboard-api}}}]
+      ports: [{protocol: TCP, port: 9445}, {protocol: TCP, port: 9446}]
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -250,3 +289,5 @@ spec:
   egress:
     - to: [{namespaceSelector: {}}]
       ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]
+    - to: [{podSelector: {matchLabels: {app: paxeer}}}]
+      ports: [{protocol: TCP, port: 9443}]

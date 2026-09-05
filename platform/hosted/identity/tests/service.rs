@@ -521,12 +521,22 @@ fn readiness_fails_when_the_store_is_not_writable() {
         Some("5")
     );
     fs::create_dir_all(&state).unwrap_or_else(|error| panic!("recreate state: {error}"));
+    let replaced = fixture.request(&server, "GET", "/readyz", None, None);
+    assert_eq!(replaced.status, 503);
+    assert_eq!(replaced.body, broken.body);
     assert_eq!(
-        fixture
-            .request(&server, "GET", "/readyz", None, None)
-            .status,
-        200
+        replaced.headers.get("retry-after").map(String::as_str),
+        Some("5")
     );
+    drop(server);
+    let restarted = fixture.spawn(&state);
+    let recovered = fixture.request(&restarted, "GET", "/readyz", None, None);
+    assert_eq!(recovered.status, 200);
+    assert_eq!(
+        recovered.body,
+        "{\"status\":\"ready\",\"service\":\"identity\"}"
+    );
+    assert!(restarted.state_dir.join("ready.marker").exists());
 }
 
 #[test]

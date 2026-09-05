@@ -5,12 +5,17 @@
 
 #include "layerx/lxp_activity.h"
 #include "layerx/lx_asset.h"
+#include "layerx/lxp_authority.h"
 #include "layerx/lxp_crypto.h"
+#include "layerx/lxp_hash.h"
 #include "layerx/lxp_identity.h"
 #include "layerx/lxp_protocol.h"
 #include "layerx/lxp_receipt.h"
 
+#include "lxp_daemon_batch_wal.h"
 #include "lxp_daemon_lni_internal.h"
+
+#include <openssl/evp.h>
 
 #include <errno.h>
 #include <fcntl.h>
@@ -28,7 +33,7 @@
 
 enum {
     LNI_VERSION_MAJOR = 1,
-    LNI_VERSION_MINOR = 3,
+    LNI_VERSION_MINOR = 4,
     LNI_NODE_INFO_REQUEST = 1,
     LNI_NODE_INFO_RESPONSE = 2,
     LNI_SUBMIT_REQUEST = 3,
@@ -48,9 +53,15 @@ enum {
     LNI_PREPARATION_STATE_RESPONSE = 27,
     LNI_FINALITY_EVIDENCE_REGISTER_REQUEST = 28,
     LNI_FINALITY_EVIDENCE_REGISTER_RESPONSE = 29,
+    LNI_SIMULATE_REQUEST = 30,
+    LNI_SIMULATE_RESPONSE = 31,
     LNI_ENVELOPE_FIXED_BYTES = 22,
     LNI_NODE_INFO_FIXED_BYTES = 93,
     LNI_PREPARATION_STATE_MAX_BYTES = 4096,
+    LNI_SIMULATION_PAYLOAD_VERSION = 1,
+    LNI_SIMULATION_EVIDENCE_VERSION = 1,
+    LNI_SIMULATION_FIXED_BYTES = 2 + 32 + 4 + 4 + 4,
+    LNI_SIMULATION_EVIDENCE_BYTES = 2 + 32 * 4 + 8 + 8 + 32 + 64,
     LNI_BACKLOG = 16,
     LNI_ADMISSION_JOURNAL_SUPERBLOCK_BYTES = 32,
     LNI_ADMISSION_JOURNAL_RECORD_BYTES = 64,
@@ -64,6 +75,18 @@ static const char LNI_ADMISSION_JOURNAL_TEMP_NAME[] =
     ".layerxd-lni-admission.tmp";
 static const uint32_t LNI_ADMISSION_JOURNAL_MAGIC = UINT32_C(0x4c58414a);
 static const uint32_t LNI_ADMISSION_RECORD_MAGIC = UINT32_C(0x4c584152);
+static const char LNI_SEQUENCER_PRIVATE_KEY_ENVIRONMENT[] =
+    "LAYERX_NODE_SEQUENCER_PRIVATE_KEY";
+static const uint8_t LNI_SIMULATION_BOUNDARY_DOMAIN[] =
+    "LayerX/emulator/simulation-boundary/v1";
+static const uint8_t LNI_SIMULATION_EVIDENCE_DOMAIN[] =
+    "LayerX/agent/program-simulation-evidence/v1";
+static const uint8_t LNI_PARAMETER_VERSION_KEY[32] = {
+    'p','a','r','a','m','e','t','e','r','-','v','e','r','s','i','o','n'
+};
+
+static uint8_t lni_sequencer_private_key[32];
+static bool lni_sequencer_private_key_loaded;
 
 typedef struct lni_envelope {
     uint16_t major;
@@ -1155,6 +1178,74 @@ static lxp_result receipt_refusal(int descriptor, uint32_t maximum,
                                   uint64_t correlation_id, lxp_result status,
                                   int64_t deadline);
 
+static lxp_result sequencer_public_key_derive(
+    const uint8_t private_key[32], uint8_t public_key[32])
+{
+    EVP_PKEY *key;
+    size_t length = 32U;
+    bool derived;
+    if (private_key == NULL || public_key == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    key = EVP_PKEY_new_raw_private_key(EVP_PKEY_ED25519, NULL, private_key,
+                                       32U);
+    derived = key != NULL &&
+        EVP_PKEY_get_raw_public_key(key, public_key, &length) == 1 &&
+        length == 32U;
+    EVP_PKEY_free(key);
+    return derived ? LXP_OK : LXP_ERR_BAD_SIGNATURE;
+}
+
+static bool simulation_available(const lxp_daemon_lni_server *server)
+{
+    return server != NULL && server->daemon != NULL &&
+        server->daemon->config.role == LXP_DAEMON_SEQUENCER &&
+        server->owner != NULL && server->owner->scratch != NULL &&
+        server->owner->programs_runtime != NULL &&
+        lni_sequencer_private_key_loaded;
+}
+
+static lxp_result load_sequencer_private_key(
+    const lxp_daemon_protocol_owner *owner)
+{
+    const char *text = getenv(LNI_SEQUENCER_PRIVATE_KEY_ENVIRONMENT);
+    uint8_t key[32];
+    uint8_t public_key[32];
+    size_t index;
+    lxp_result status;
+    lni_sequencer_private_key_loaded = false;
+    lxp_secure_zero(lni_sequencer_private_key,
+                    sizeof(lni_sequencer_private_key));
+    if (text == NULL || strlen(text) != 64U ||
+        owner == NULL || owner->receipt_authority == NULL)
+        return LXP_OK;
+    for (index = 0U; index < 32U; ++index) {
+        unsigned int value = 0U;
+        size_t nibble;
+        for (nibble = 0U; nibble < 2U; ++nibble) {
+            char digit = text[index * 2U + nibble];
+            unsigned int part;
+            if (digit >= '0' && digit <= '9') part = (unsigned int)(digit - '0');
+            else if (digit >= 'a' && digit <= 'f')
+                part = (unsigned int)(digit - 'a') + 10U;
+            else if (digit >= 'A' && digit <= 'F')
+                part = (unsigned int)(digit - 'A') + 10U;
+            else return LXP_OK;
+            value = (value << 4U) | part;
+        }
+        key[index] = (uint8_t)value;
+    }
+    status = sequencer_public_key_derive(key, public_key);
+    if (status == LXP_OK &&
+        lxp_ct_memcmp(public_key,
+                      owner->receipt_authority->authorization.public_key,
+                      32U) == 0) {
+        (void)memcpy(lni_sequencer_private_key, key, 32U);
+        lni_sequencer_private_key_loaded = true;
+    }
+    lxp_secure_zero(key, sizeof(key));
+    return LXP_OK;
+}
+
 static lxp_result send_node_info(lxp_daemon_lni_server *server,
                                  int descriptor, uint64_t correlation_id,
                                  int64_t deadline)
@@ -1182,22 +1273,25 @@ static lxp_result send_node_info(lxp_daemon_lni_server *server,
         "account_read", "batch_header", "checkpoint", "historical_proofs",
         "node_info", "proof_bundle", "receipt_lookup"
     };
+    static const char simulate_capability[] = "simulate";
     bool evidence_available = server->owner->evidence_store != NULL;
     bool finalizer = server->daemon->config.role == LXP_DAEMON_SEQUENCER &&
         evidence_available &&
         server->owner->evidence_store->verify_finality_authority != NULL;
-    const char *const *capabilities = finalizer ? finalizer_capabilities :
+    const char *const *base_capabilities = finalizer ?
+        finalizer_capabilities :
         server->daemon->config.role == LXP_DAEMON_SEQUENCER ?
             (evidence_available ? evidence_capabilities :
                                   sequencer_capabilities) :
             (evidence_available ? evidence_reader_capabilities :
                                   reader_capabilities);
+    const char *capabilities[16];
     uint8_t payload[512];
     uint64_t head;
     uint64_t batch;
     size_t cursor = 0U;
     size_t index;
-    size_t capability_count = finalizer ?
+    size_t base_count = finalizer ?
             sizeof(finalizer_capabilities) /
                 sizeof(finalizer_capabilities[0]) :
         server->daemon->config.role == LXP_DAEMON_SEQUENCER ?
@@ -1211,7 +1305,20 @@ static lxp_result send_node_info(lxp_daemon_lni_server *server,
                     sizeof(evidence_reader_capabilities[0]) :
                 sizeof(reader_capabilities) /
                     sizeof(reader_capabilities[0]));
+    size_t capability_count = 0U;
+    bool simulate = simulation_available(server);
     lxp_result status = LXP_OK;
+    if (base_count + 1U > sizeof(capabilities) / sizeof(capabilities[0]))
+        return LXP_ERR_LENGTH_LIMIT;
+    for (index = 0U; index < base_count; ++index) {
+        if (simulate && strcmp(base_capabilities[index],
+                               simulate_capability) > 0) {
+            capabilities[capability_count++] = simulate_capability;
+            simulate = false;
+        }
+        capabilities[capability_count++] = base_capabilities[index];
+    }
+    if (simulate) capabilities[capability_count++] = simulate_capability;
     for (index = 0U; index < capability_count; ++index) {
         size_t length = strlen(capabilities[index]);
         if (length > UINT16_MAX || length + 2U > sizeof(payload) - cursor)
@@ -1877,6 +1984,471 @@ static lxp_result send_preparation_state(
                          NULL, 0U, deadline);
 }
 
+static lxp_result simulation_schedule(const lxp_kernel *kernel,
+                                      uint32_t *parameter_version,
+                                      lxp_fee_params *fees)
+{
+    const lxp_module_kv_entry *parameter = NULL;
+    uint32_t version;
+    size_t index;
+    if (kernel == NULL || parameter_version == NULL || fees == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    for (index = 0U; index < kernel->module_kv_count; ++index) {
+        const lxp_module_kv_entry *entry = &kernel->module_kv[index];
+        if (entry->module_id == LXP_MODULE_GOVERNANCE &&
+            entry->key_length == sizeof(LNI_PARAMETER_VERSION_KEY) &&
+            memcmp(entry->key, LNI_PARAMETER_VERSION_KEY,
+                   sizeof(LNI_PARAMETER_VERSION_KEY)) == 0) {
+            if (parameter != NULL) return LXP_ERR_SEQUENCE_REUSED;
+            parameter = entry;
+        }
+    }
+    if (parameter == NULL || parameter->value_length != 32U ||
+        !lxp_ct_is_zero(parameter->value, 28U))
+        return LXP_ERR_VERSION_UNSUPPORTED;
+    version = ((uint32_t)parameter->value[28] << 24U) |
+        ((uint32_t)parameter->value[29] << 16U) |
+        ((uint32_t)parameter->value[30] << 8U) | parameter->value[31];
+    if (version == 0U || version > UINT16_MAX)
+        return LXP_ERR_VERSION_UNSUPPORTED;
+    *parameter_version = version;
+    *fees = (lxp_fee_params){
+        (uint16_t)version, {0U, 0U}, {0U, 0U}, {0U, 0U},
+        {0U, 0U}, {0U, 0U}, 10000U
+    };
+    return LXP_OK;
+}
+
+static lxp_result simulation_batch_number(
+    const lxp_daemon_receipt_authority_store *authority, uint64_t *number)
+{
+    uint64_t candidate;
+    if (authority == NULL || number == NULL) return LXP_ERR_NON_CANONICAL;
+    if (authority->record_count == 0U) {
+        candidate = authority->authorization.first_batch_number;
+        if (candidate == 0U) candidate = 1U;
+    } else if (authority->last_batch_number == UINT64_MAX ||
+               authority->last_batch_number >=
+                   authority->authorization.last_batch_number) {
+        return LXP_ERR_SEQUENCE_GAP;
+    } else {
+        candidate = authority->last_batch_number + 1U;
+    }
+    if (candidate == 0U ||
+        candidate < authority->authorization.first_batch_number ||
+        candidate > authority->authorization.last_batch_number)
+        return LXP_ERR_SEQUENCE_GAP;
+    *number = candidate;
+    return LXP_OK;
+}
+
+static lxp_result simulation_principal(
+    const lx_account_registry *accounts, const lxp_activity *activity,
+    uint8_t principal_id[32], lxp_u128 *fee_balance)
+{
+    static const uint8_t prefix[] = "agent:";
+    static const uint8_t suffix[] = ":main";
+    uint8_t name[LX_ACCOUNT_NAME_MAX];
+    size_t length;
+    size_t index;
+    lxp_result status;
+    if (accounts == NULL || activity == NULL || principal_id == NULL ||
+        fee_balance == NULL || activity->actor_did.bytes == NULL ||
+        activity->actor_did.length == 0U ||
+        activity->authority.length != 32U ||
+        activity->actor_did.length >
+            sizeof(name) - sizeof(prefix) - sizeof(suffix) + 2U)
+        return LXP_ERR_NON_CANONICAL;
+    length = sizeof(prefix) - 1U;
+    (void)memcpy(name, prefix, length);
+    (void)memcpy(name + length, activity->actor_did.bytes,
+                 activity->actor_did.length);
+    length += activity->actor_did.length;
+    (void)memcpy(name + length, suffix, sizeof(suffix) - 1U);
+    length += sizeof(suffix) - 1U;
+    status = lx_account_id_from_string(name, length, principal_id);
+    if (status != LXP_OK) return status;
+    *fee_balance = (lxp_u128){0U, 0U};
+    for (index = 0U; index < accounts->count; ++index) {
+        const lx_account *account = &accounts->accounts[index];
+        if (lxp_ct_memcmp(account->id, principal_id, 32U) != 0) continue;
+        if (account->kind != LX_ACCOUNT_AGENT_MAIN ||
+            !account->has_authority_key ||
+            lxp_ct_memcmp(account->authority_key,
+                          activity->authority.bytes, 32U) != 0)
+            return LXP_ERR_BAD_SIGNATURE;
+        *fee_balance = account->balance;
+        return LXP_OK;
+    }
+    return LXP_OK;
+}
+
+static lxp_result simulation_evidence_sign(
+    const uint8_t sequencer_private_key[32],
+    const uint8_t sequencer_public_key[32],
+    const uint8_t activity_id[32],
+    const uint8_t previous_state_root[32],
+    const uint8_t hypothetical_state_root[32],
+    uint64_t observed_sequence, uint64_t observed_at,
+    uint8_t evidence[LNI_SIMULATION_EVIDENCE_BYTES])
+{
+    uint8_t boundary_input[sizeof(LNI_SIMULATION_BOUNDARY_DOMAIN) + 32U];
+    uint8_t boundary_id[32];
+    uint8_t digest_input[sizeof(LNI_SIMULATION_EVIDENCE_DOMAIN) +
+                         32U * 4U + 8U + 8U + 1U];
+    uint8_t digest[32];
+    size_t offset = 0U;
+    size_t cursor = 0U;
+    size_t signature_length = 64U;
+    EVP_PKEY *key;
+    EVP_MD_CTX *context;
+    bool signed_ok;
+    lxp_result status;
+    (void)memcpy(boundary_input, LNI_SIMULATION_BOUNDARY_DOMAIN,
+                 sizeof(LNI_SIMULATION_BOUNDARY_DOMAIN));
+    (void)memcpy(boundary_input + sizeof(LNI_SIMULATION_BOUNDARY_DOMAIN),
+                 sequencer_public_key, 32U);
+    status = lxp_hash_sha256(boundary_input, sizeof(boundary_input),
+                             boundary_id);
+    if (status != LXP_OK) return status;
+    (void)memcpy(digest_input + offset, LNI_SIMULATION_EVIDENCE_DOMAIN,
+                 sizeof(LNI_SIMULATION_EVIDENCE_DOMAIN));
+    offset += sizeof(LNI_SIMULATION_EVIDENCE_DOMAIN);
+    (void)memcpy(digest_input + offset, boundary_id, 32U); offset += 32U;
+    (void)memcpy(digest_input + offset, activity_id, 32U); offset += 32U;
+    (void)memcpy(digest_input + offset, previous_state_root, 32U);
+    offset += 32U;
+    (void)memcpy(digest_input + offset, hypothetical_state_root, 32U);
+    offset += 32U;
+    store_u64(digest_input + offset, observed_sequence); offset += 8U;
+    store_u64(digest_input + offset, observed_at); offset += 8U;
+    digest_input[offset++] = 0U;
+    status = lxp_hash_sha256(digest_input, offset, digest);
+    if (status != LXP_OK) return status;
+    store_u16(evidence + cursor, LNI_SIMULATION_EVIDENCE_VERSION);
+    cursor += 2U;
+    (void)memcpy(evidence + cursor, boundary_id, 32U); cursor += 32U;
+    (void)memcpy(evidence + cursor, activity_id, 32U); cursor += 32U;
+    (void)memcpy(evidence + cursor, previous_state_root, 32U); cursor += 32U;
+    (void)memcpy(evidence + cursor, hypothetical_state_root, 32U);
+    cursor += 32U;
+    store_u64(evidence + cursor, observed_sequence); cursor += 8U;
+    store_u64(evidence + cursor, observed_at); cursor += 8U;
+    (void)memcpy(evidence + cursor, sequencer_public_key, 32U);
+    cursor += 32U;
+    key = EVP_PKEY_new_raw_private_key(EVP_PKEY_ED25519, NULL,
+                                       sequencer_private_key, 32U);
+    context = key == NULL ? NULL : EVP_MD_CTX_new();
+    signed_ok = context != NULL &&
+        EVP_DigestSignInit(context, NULL, NULL, NULL, key) == 1 &&
+        EVP_DigestSign(context, evidence + cursor, &signature_length,
+                       digest, sizeof(digest)) == 1 &&
+        signature_length == 64U;
+    EVP_MD_CTX_free(context);
+    EVP_PKEY_free(key);
+    status = signed_ok ? lxp_ed25519_verify_raw(sequencer_public_key,
+                                                evidence + cursor, digest,
+                                                sizeof(digest)) :
+        LXP_ERR_BAD_SIGNATURE;
+    cursor += 64U;
+    lxp_secure_zero(digest, sizeof(digest));
+    if (status != LXP_OK) return status;
+    return cursor == LNI_SIMULATION_EVIDENCE_BYTES ? LXP_OK :
+        LXP_FATAL_INVARIANT;
+}
+
+static lxp_result simulation_encode_response(
+    const lxp_receipt *receipt, const lxp_byte_span *encoded_receipt,
+    const uint8_t activity_id[32], uint8_t *response,
+    size_t response_capacity, size_t *response_length)
+{
+    const lxp_byte_span *terminal =
+        receipt->program_outcome.present ?
+            &receipt->program_outcome.terminal_payload : NULL;
+    const lxp_byte_span *call_graph =
+        receipt->program_outcome.present ?
+            &receipt->program_outcome.call_graph_payload : NULL;
+    size_t terminal_length = terminal == NULL ? 0U : terminal->length;
+    size_t call_graph_length = call_graph == NULL ? 0U : call_graph->length;
+    size_t cursor = 0U;
+    if (encoded_receipt->bytes == NULL || encoded_receipt->length == 0U ||
+        encoded_receipt->length > UINT32_MAX ||
+        terminal_length > LXP_MAX_ACTIVITY_BYTES ||
+        call_graph_length > LXP_MAX_ACTIVITY_BYTES ||
+        (terminal_length != 0U && terminal->bytes == NULL) ||
+        (call_graph_length != 0U && call_graph->bytes == NULL))
+        return LXP_ERR_LENGTH_LIMIT;
+    if (response_capacity < LNI_SIMULATION_FIXED_BYTES ||
+        encoded_receipt->length >
+            response_capacity - LNI_SIMULATION_FIXED_BYTES ||
+        terminal_length > response_capacity - LNI_SIMULATION_FIXED_BYTES -
+            encoded_receipt->length ||
+        call_graph_length > response_capacity - LNI_SIMULATION_FIXED_BYTES -
+            encoded_receipt->length - terminal_length)
+        return LXP_ERR_LENGTH_LIMIT;
+    store_u16(response + cursor, LNI_SIMULATION_PAYLOAD_VERSION);
+    cursor += 2U;
+    (void)memcpy(response + cursor, activity_id, 32U); cursor += 32U;
+    store_u32(response + cursor, (uint32_t)encoded_receipt->length);
+    cursor += 4U;
+    (void)memcpy(response + cursor, encoded_receipt->bytes,
+                 encoded_receipt->length);
+    cursor += encoded_receipt->length;
+    store_u32(response + cursor, (uint32_t)terminal_length); cursor += 4U;
+    if (terminal_length != 0U)
+        (void)memcpy(response + cursor, terminal->bytes, terminal_length);
+    cursor += terminal_length;
+    store_u32(response + cursor, (uint32_t)call_graph_length); cursor += 4U;
+    if (call_graph_length != 0U)
+        (void)memcpy(response + cursor, call_graph->bytes, call_graph_length);
+    cursor += call_graph_length;
+    *response_length = cursor;
+    return LXP_OK;
+}
+
+lxp_result lxp_daemon_lni_simulate(
+    lxp_daemon_protocol_owner *owner,
+    const uint8_t sequencer_private_key[32],
+    const uint8_t *request, size_t request_length,
+    uint8_t *response, size_t response_capacity, size_t *response_length,
+    uint8_t *evidence, size_t evidence_capacity, size_t *evidence_length)
+{
+    lxp_activity activity;
+    lxp_kernel_execution execution;
+    lxp_authority_scope scope;
+    lxp_authority_resolved authority;
+    lxp_byte_span canonical_activity;
+    lxp_byte_span encoded_receipt = {NULL, 0U};
+    lxp_batch_roots roots;
+    lxp_kernel_prepared_batch *prepared = NULL;
+    const lxp_receipt *receipts = NULL;
+    lxp_identity *identity = NULL;
+    lxp_fee_params fees;
+    uint8_t activity_id[32];
+    uint8_t sequencer_public_key[32];
+    uint8_t principal_id[32];
+    uint8_t batch_id[32] = {0};
+    uint8_t grant_id[32] = {0};
+    uint8_t previous_state_root[32];
+    lxp_u128 fee_balance = {0U, 0U};
+    uint32_t parameter_version = 0U;
+    uint64_t batch_number = 0U;
+    uint64_t timestamp = 0U;
+    uint64_t global_sequence;
+    size_t retry_prefix_count = 0U;
+    size_t mark = 0U;
+    bool locked = false;
+    lxp_result status;
+    if (response_length == NULL || evidence_length == NULL)
+        return LXP_ERR_MALFORMED_ENVELOPE;
+    *response_length = 0U;
+    *evidence_length = 0U;
+    if (owner == NULL || sequencer_private_key == NULL || request == NULL ||
+        response == NULL || evidence == NULL || request_length == 0U ||
+        request_length > LXP_MAX_ACTIVITY_BYTES)
+        return LXP_ERR_MALFORMED_ENVELOPE;
+    if (evidence_capacity < LNI_SIMULATION_EVIDENCE_BYTES)
+        return LXP_ERR_LENGTH_LIMIT;
+    if (owner->scratch == NULL || owner->programs_runtime == NULL ||
+        owner->programs_runtime->accounts == NULL ||
+        owner->receipt_authority == NULL)
+        return LXP_ERR_MODULE_DISABLED;
+    status = lxp_activity_decode(request, request_length, &activity);
+    if (status == LXP_OK &&
+        activity.protocol_version != owner->protocol_version)
+        status = LXP_ERR_VERSION_UNSUPPORTED;
+    if (status == LXP_OK)
+        status = lxp_activity_check_envelope(&activity, owner->network_id);
+    if (status == LXP_OK)
+        status = lxp_activity_verify_payload_hash(&activity);
+    if (status == LXP_OK)
+        status = lxp_activity_id(request, request_length, activity_id);
+    if (status == LXP_OK)
+        status = lxp_activity_verify_signature(&activity);
+    if (status == LXP_OK && activity.activity_type != LX_PROGRAMS_CALL)
+        status = LXP_ERR_UNKNOWN_ACTIVITY;
+    if (status != LXP_OK) return status;
+    status = sequencer_public_key_derive(sequencer_private_key,
+                                         sequencer_public_key);
+    if (status != LXP_OK) return status;
+    if (pthread_mutex_lock(&owner->mutex) != 0) return LXP_ERR_IO;
+    locked = true;
+    mark = lxp_arena_mark(owner->scratch);
+    if (lxp_ct_memcmp(sequencer_public_key,
+                      owner->receipt_authority->authorization.public_key,
+                      32U) != 0)
+        status = LXP_ERR_AUTH_SCOPE;
+    if (status == LXP_OK) status = preparation_snapshot_valid(owner);
+    if (status == LXP_OK) status = wall_clock_milliseconds(&timestamp);
+    if (status == LXP_OK) {
+        global_sequence = owner->kernel->state->next_sequence;
+        status = lxp_identity_resolve(owner->identities,
+                                      activity.actor_did.bytes,
+                                      activity.actor_did.length, &identity);
+    }
+    if (status == LXP_OK &&
+        (activity.authority.length != 32U ||
+         !lxp_identity_key_valid(identity, activity.authority.bytes,
+                                 timestamp, global_sequence)))
+        status = LXP_ERR_BAD_SIGNATURE;
+    if (status == LXP_OK)
+        status = simulation_principal(owner->programs_runtime->accounts,
+                                      &activity, principal_id, &fee_balance);
+    if (status == LXP_OK)
+        status = simulation_schedule(owner->kernel, &parameter_version,
+                                     &fees);
+    if (status == LXP_OK)
+        status = simulation_batch_number(owner->receipt_authority,
+                                         &batch_number);
+    if (status == LXP_OK) {
+        (void)memset(&scope, 0, sizeof(scope));
+        scope.module_mask = UINT64_C(1) << LXP_MODULE_PROGRAMS;
+        scope.activity_ordinal_min = 1U;
+        scope.activity_ordinal_max = 10U;
+        scope.maximum_per_activity = (lxp_u128){UINT64_MAX, UINT64_MAX};
+        scope.maximum_total = (lxp_u128){UINT64_MAX, UINT64_MAX};
+        scope.maximum_per_period = (lxp_u128){UINT64_MAX, UINT64_MAX};
+        (void)memset(&authority, 0, sizeof(authority));
+        (void)memcpy(authority.actor, identity->did_id, 32U);
+        (void)memcpy(authority.principal, principal_id, 32U);
+        authority.kind = LXP_AUTHORITY_OWNER;
+        (void)memcpy(authority.verified_key, activity.authority.bytes, 32U);
+        authority.scope = &scope;
+        status = lxp_authority_hash(authority.kind, grant_id,
+                                    authority.verified_key,
+                                    authority.authority_hash);
+    }
+    if (status == LXP_OK) {
+        (void)memset(&execution, 0, sizeof(execution));
+        execution.network_id = owner->network_id;
+        execution.batch_number = batch_number;
+        execution.batch_timestamp_ms = timestamp;
+        execution.maximum_timestamp_window = UINT64_C(300000);
+        execution.epoch = owner->kernel->epoch;
+        execution.global_sequence = global_sequence;
+        execution.recorded_module_version =
+            LX_PROGRAMS_SANDBOX_DESTROY_ABI_VERSION;
+        execution.parameter_version = parameter_version;
+        execution.signature_valid = true;
+        execution.identities = owner->identities;
+        execution.authority = &authority;
+        execution.fee_parameters = &fees;
+        execution.fee_balance = fee_balance;
+        execution.gas_limit = UINT64_MAX;
+        execution.arena = owner->scratch;
+        execution.sequencer_private_key = sequencer_private_key;
+        execution.verified_receipts = owner->verified_receipts;
+        (void)memcpy(previous_state_root, owner->kernel->current_state_root,
+                     32U);
+        canonical_activity = (lxp_byte_span){request, request_length};
+        status = lxp_daemon_batch_bind_prefix(
+            &canonical_activity, 1U, owner->kernel->current_state_root,
+            global_sequence, batch_number, owner->scratch, &execution,
+            &roots, batch_id);
+    }
+    if (status == LXP_OK)
+        status = lxp_kernel_prepare_activity_batch(
+            owner->kernel, &activity, &execution, 1U, 1U, &prepared,
+            &retry_prefix_count);
+    if (status == LXP_OK) {
+        receipts = lxp_kernel_prepared_batch_receipts(prepared);
+        if (lxp_kernel_prepared_batch_count(prepared) != 1U ||
+            receipts == NULL)
+            status = LXP_FATAL_INVARIANT;
+    }
+    if (status == LXP_OK &&
+        (lxp_ct_memcmp(receipts[0].activity_id, activity_id, 32U) != 0 ||
+         lxp_ct_memcmp(receipts[0].previous_state_root,
+                       previous_state_root, 32U) != 0))
+        status = LXP_FATAL_INVARIANT;
+    if (status == LXP_OK)
+        status = lxp_receipt_encode(&receipts[0], true, owner->scratch,
+                                    &encoded_receipt);
+    if (status == LXP_OK)
+        status = simulation_encode_response(
+            &receipts[0], &encoded_receipt, activity_id, response,
+            response_capacity, response_length);
+    if (status == LXP_OK)
+        status = simulation_evidence_sign(
+            sequencer_private_key, sequencer_public_key, activity_id,
+            previous_state_root, receipts[0].resulting_state_root,
+            global_sequence - 1U, owner->latest_sealed_timestamp, evidence);
+    if (status == LXP_OK) *evidence_length = LNI_SIMULATION_EVIDENCE_BYTES;
+    lxp_kernel_prepared_batch_destroy(prepared);
+    if (lxp_arena_reset(owner->scratch, mark) != LXP_OK &&
+        status == LXP_OK)
+        status = LXP_FATAL_INVARIANT;
+    if (locked && pthread_mutex_unlock(&owner->mutex) != 0 &&
+        status == LXP_OK)
+        status = LXP_FATAL_INVARIANT;
+    if (status != LXP_OK) {
+        *response_length = 0U;
+        *evidence_length = 0U;
+        lxp_secure_zero(evidence, LNI_SIMULATION_EVIDENCE_BYTES);
+    }
+    return status;
+}
+
+static lxp_result send_simulate(
+    lxp_daemon_lni_server *server, int descriptor,
+    const lni_envelope *request, int64_t deadline)
+{
+    uint8_t evidence[LNI_SIMULATION_EVIDENCE_BYTES];
+    uint8_t *payload;
+    size_t payload_length = 0U;
+    size_t evidence_length = 0U;
+    lxp_result status;
+    if (request->minor < 4U)
+        return send_refusal(descriptor, server->frame_bytes,
+                            request->correlation_id, 3U,
+                            LXP_ERR_VERSION_UNSUPPORTED, deadline);
+    if (request->correlation_id == 0U || request->proof_length != 0U ||
+        request->payload_length == 0U ||
+        request->payload_length > LXP_MAX_ACTIVITY_BYTES)
+        return send_refusal(descriptor, server->frame_bytes,
+                            request->correlation_id, 1U,
+                            LXP_ERR_MALFORMED_ENVELOPE, deadline);
+    if (!simulation_available(server))
+        return send_refusal(descriptor, server->frame_bytes,
+                            request->correlation_id, 3U,
+                            LXP_ERR_MODULE_DISABLED, deadline);
+    payload = (uint8_t *)malloc(server->frame_bytes);
+    if (payload == NULL) return LXP_ERR_IO;
+    status = lxp_daemon_lni_simulate(
+        server->owner, lni_sequencer_private_key,
+        request->payload, request->payload_length,
+        payload, server->frame_bytes, &payload_length, evidence,
+        sizeof(evidence), &evidence_length);
+    if (status == LXP_OK && evidence_length != sizeof(evidence))
+        status = LXP_FATAL_INVARIANT;
+    if (status == LXP_OK)
+        status = send_envelope(descriptor, server->frame_bytes,
+                               LNI_SIMULATE_RESPONSE,
+                               request->correlation_id, payload,
+                               payload_length, evidence, evidence_length,
+                               deadline);
+    else if (status == LXP_ERR_IO || status == LXP_FATAL_INVARIANT)
+        status = send_refusal(descriptor, server->frame_bytes,
+                              request->correlation_id, 4U,
+                              LXP_ERR_MODULE_DISABLED, deadline);
+    else if (status == LXP_ERR_BAD_SIGNATURE ||
+             status == LXP_ERR_UNKNOWN_DID ||
+             status == LXP_ERR_IDENTITY_FROZEN)
+        status = send_refusal(descriptor, server->frame_bytes,
+                              request->correlation_id, 6U, status,
+                              deadline);
+    else
+        status = send_refusal(descriptor, server->frame_bytes,
+                              request->correlation_id,
+                              status == LXP_ERR_MALFORMED_ENVELOPE ? 1U :
+                                  4U,
+                              status, deadline);
+    lxp_secure_zero(payload, server->frame_bytes);
+    free(payload);
+    lxp_secure_zero(evidence, sizeof(evidence));
+    return status;
+}
+
 static lxp_result evidence_refusal(
     lxp_daemon_lni_server *server, int descriptor,
     uint64_t correlation_id, lxp_result status, int64_t deadline)
@@ -2478,6 +3050,8 @@ static lxp_result serve_connection(lxp_daemon_lni_server *server,
         } else if (request.tag == LNI_FINALITY_EVIDENCE_REGISTER_REQUEST) {
             status = send_finality_evidence_register(
                 server, descriptor, &request, deadline);
+        } else if (request.tag == LNI_SIMULATE_REQUEST) {
+            status = send_simulate(server, descriptor, &request, deadline);
         } else {
             status = send_refusal(descriptor, server->frame_bytes,
                                   request.correlation_id, 3U,
@@ -2590,6 +3164,8 @@ lxp_result lxp_daemon_lni_serve(
     (void)memset(server, 0, sizeof(*server));
     server->daemon = daemon;
     server->owner = owner;
+    status = load_sequencer_private_key(owner);
+    if (status != LXP_OK) return status;
     server->listener_descriptor = -1;
     server->connection_descriptor = -1;
     server->parent_descriptor = -1;
@@ -2762,6 +3338,9 @@ lxp_result lxp_daemon_lni_stop(lxp_daemon_lni_server *server)
     server->admission_parent_descriptor = -1;
     server->lifetime_lock_descriptor = -1;
     server->journal_descriptor = -1;
+    lni_sequencer_private_key_loaded = false;
+    lxp_secure_zero(lni_sequencer_private_key,
+                    sizeof(lni_sequencer_private_key));
     if (pthread_mutex_destroy(&server->mutex) != 0 && status == LXP_OK)
         status = LXP_ERR_IO;
     server->mutex_initialized = false;

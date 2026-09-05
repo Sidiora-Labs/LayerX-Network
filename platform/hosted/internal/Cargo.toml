@@ -1,0 +1,34 @@
+[package]
+name = "layerx-platform-internal"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "layerx-kms"
+path = "src/bin/layerx-kms.rs"
+
+[[bin]]
+name = "layerx-event-source"
+path = "src/bin/layerx-event-source.rs"
+
+[dependencies]
+ed25519-dalek.workspace = true
+getrandom.workspace = true
+native-tls.workspace = true
+rustls.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+subtle.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+layerx-platform-webhooks = { path = "../webhooks" }
+
+[lints]
+workspace = true

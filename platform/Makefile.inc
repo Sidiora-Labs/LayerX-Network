@@ -6,6 +6,8 @@ PLATFORM_BETA_CLUSTER_ENV ?= build/beta-cluster/env
 	platform-sdk-generate platform-receipt-fixture platform-verify-sdks platform-test-sdks platform-release-check platform-release-plan platform-release-test \
 	platform-test-tooling platform-emulator-conformance platform-test-middleware \
 	platform-test-cli-production-credential-refusal platform-test-registry platform-test-node \
+	platform-test-core platform-test-authority platform-test-agent-boundary platform-test-identity platform-test-paxeer-boundary \
+	platform-test-trusted-boundary \
 	platform-test-reference-apps platform-test-mobile-artifacts \
 	platform-test-android-artifact platform-test-ios-artifact \
 	platform-real-agent-integration \
@@ -116,11 +118,15 @@ platform-test-tooling: platform-test-cli-production-credential-refusal
 	$(PLATFORM_CARGO) test --offline --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-faucet
 	$(PLATFORM_CARGO) test --offline --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-testnet
 	sh -n platform/hosted/testnet/run-testnet.sh platform/hosted/testnet/reset-testnet.sh \
-		platform/hosted/testnet/render-status.sh platform/hosted/testnet/tests/hosted-smoke.sh
+		platform/hosted/testnet/render-status.sh platform/hosted/testnet/tests/hosted-smoke.sh \
+		platform/hosted/paxeer/init-chain.sh
 	bash -n platform/cli/tests/install-journey.sh \
 		platform/examples/agent-program-call/walkthrough.sh \
 		platform/hosted/tests/topology-check.sh \
-		platform/hosted/tests/beta-cluster.sh
+		platform/hosted/tests/beta-cluster.sh \
+		platform/hosted/node/bootstrap.sh platform/hosted/node/supervisor.sh \
+		platform/hosted/paxeer/deploy-contracts.sh tools/ci/beta-contract-check.sh
+	python3 -m py_compile platform/hosted/paxeer/settlement-domain.py platform/hosted/paxeer/prepare-beta.py
 	bash -n platform/cli/tests/clean-bootstrap.sh
 	$(PLATFORM_CARGO) build --offline --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-cli
 	bash platform/cli/tests/clean-bootstrap.sh
@@ -135,6 +141,23 @@ platform-test-node: test-layerxctl
 	bash -n platform/hosted/node/bootstrap.sh platform/hosted/node/supervisor.sh platform/hosted/node/tests/node-test.sh
 	PLATFORM_CARGO="$(PLATFORM_CARGO)" bash platform/hosted/node/tests/node-test.sh
 
+platform-test-core:
+	$(PLATFORM_CARGO) test --offline --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-core
+
+platform-test-authority:
+	$(PLATFORM_CARGO) test --offline --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-authority
+
+platform-test-agent-boundary:
+	$(PLATFORM_CARGO) test --offline --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-agent-boundary
+
+platform-test-identity:
+	$(PLATFORM_CARGO) test --offline --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-identity
+
+platform-test-paxeer-boundary:
+	$(PLATFORM_CARGO) test --offline --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-paxeer-boundary
+
+platform-test-trusted-boundary: platform-test-core platform-test-authority platform-test-agent-boundary platform-test-identity platform-test-paxeer-boundary
+
 platform-hosted-smoke:
 	@set -e; \
 	if [ -r "$(PLATFORM_BETA_CLUSTER_ENV)" ]; then . "$(PLATFORM_BETA_CLUSTER_ENV)"; fi; \
@@ -144,10 +167,15 @@ platform-hosted-smoke:
 		eval "value=\$${$$variable:-}"; \
 		if [ -z "$$value" ]; then echo "platform-hosted-smoke: missing input $$variable" >&2; exit 1; fi; \
 	done; \
+	if [ -z "$${LAYERX_BIN:-}" ] && [ -x "$${CARGO_TARGET_DIR:-$(CURDIR)/platform/target}/debug/layerx" ]; then \
+		export LAYERX_BIN="$${CARGO_TARGET_DIR:-$(CURDIR)/platform/target}/debug/layerx"; \
+	fi; \
 	sh platform/hosted/testnet/tests/hosted-smoke.sh
 
+PLATFORM_TOPOLOGY_CHECK_FLAGS ?=
+
 platform-hosted-topology-check:
-	bash platform/hosted/tests/topology-check.sh
+	bash platform/hosted/tests/topology-check.sh $(PLATFORM_TOPOLOGY_CHECK_FLAGS)
 
 platform-beta-cluster-up:
 	bash platform/hosted/tests/beta-cluster.sh up $(PLATFORM_BETA_CLUSTER_FLAGS)

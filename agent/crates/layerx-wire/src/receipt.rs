@@ -310,7 +310,7 @@ impl ProtocolReceipt {
 
     /// Returns the debit account sequence consumed by execution.
     #[must_use]
-    pub const fn from_sequence(&self) -> u64 {
+    pub const fn debit_sequence(&self) -> u64 {
         self.from_sequence
     }
 
