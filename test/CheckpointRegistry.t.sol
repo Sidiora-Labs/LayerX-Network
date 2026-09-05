@@ -494,6 +494,71 @@ contract CheckpointRegistryTest {
         registry.registerCheckpoint(header, "", attestations);
     }
 
+    function testProtocolThreeRejectsLegacyHeaderAndBindsCertificateVersion() public {
+        CheckpointRegistry legacyRegistry = registry;
+        bond = new GuarantorBond(
+            address(this),
+            address(this),
+            Constants.USDL_TOKEN,
+            address(this),
+            Constants.USDL_ASSET_ID,
+            3,
+            42,
+            100,
+            7 days,
+            CONFIG,
+            RELEASE
+        );
+        CheckpointToken token = CheckpointToken(Constants.USDL_TOKEN);
+        for (uint256 i = 0; i < keys.length; ++i) {
+            address signer = vm.addr(keys[i]);
+            bond.activateGuarantor(bytes32(i + 1), signer, signer, 1, uint64(i + 1));
+            token.mint(signer, 2 ether);
+            vm.prank(signer);
+            token.approve(address(bond), 2 ether);
+            vm.prank(signer);
+            bond.depositBond(bytes32(i + 1), 2 ether);
+        }
+        registry = new CheckpointRegistry(
+            bond,
+            3,
+            42,
+            declaredThreshold,
+            4,
+            declaredDelaySeconds,
+            5 minutes,
+            GENESIS_MANIFEST_DIGEST,
+            GENESIS_CANONICAL_STATE_ROOT,
+            GENESIS_RECEIPT_ROOT,
+            CONFIG,
+            RELEASE
+        );
+        CanonicalCheckpoint.HeaderCommitments memory header = _header();
+        bytes32 legacyDigest = legacyRegistry.checkpointHash(header, "");
+        CanonicalCheckpoint.GuarantorAttestation[] memory empty = new CanonicalCheckpoint.GuarantorAttestation[](0);
+        vm.expectRevert(CheckpointRegistry.InvalidHeader.selector);
+        registry.registerCheckpoint(header, "", empty);
+        header.protocolVersion = 3;
+        vm.expectRevert(CheckpointRegistry.InvalidHeader.selector);
+        legacyRegistry.registerCheckpoint(header, "", empty);
+        bytes32 digest = registry.checkpointHash(header, "");
+        require(digest != legacyDigest, "header versions alias");
+        bytes memory encoded = registry.canonicalHeader(header);
+        require(encoded.length == 354 && uint8(encoded[0]) == 0 && uint8(encoded[1]) == 3, "versioned header prefix");
+        CanonicalCheckpoint.GuarantorAttestation[] memory attestations = _attestations(header, digest, 2);
+        bytes32 selectedAttestation = CanonicalCheckpoint.attestationHash(attestations[0]);
+        attestations[0].protocolVersion = 2;
+        require(
+            CanonicalCheckpoint.attestationHash(attestations[0]) != selectedAttestation, "attestation versions alias"
+        );
+        vm.expectRevert(CheckpointRegistry.InvalidCertificate.selector);
+        registry.registerCheckpoint(header, "", attestations);
+        attestations[0].protocolVersion = 3;
+        registry.registerCheckpoint(header, "", attestations);
+        require(registry.latestFinalisedStateRoot() == header.resultingStateRoot, "version3 root not advanced");
+        require(registry.protocolVersion() == 3 && bond.protocolVersion() == 3, "immutable version mismatch");
+    }
+
     function testRegistersThresholdCertificate() public {
         CanonicalCheckpoint.HeaderCommitments memory header = _header();
         bytes32 digest = registry.checkpointHash(header, "");

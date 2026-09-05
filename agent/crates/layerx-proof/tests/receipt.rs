@@ -269,3 +269,31 @@ fn names_balance_asset_and_state_chain_failures() {
         })
     );
 }
+
+#[test]
+fn verifies_state_commitment_receipt_and_keeps_root_and_signature_checks() {
+    let signing_key = SigningKey::from_bytes(&[3; 32]);
+    let fields = fields();
+    let version = layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION;
+    let bytes = sign_version(&fields, &signing_key, version);
+    let verified =
+        verify(&bytes, &authorised(&fields, &signing_key)).expect("version three signed receipt");
+    assert_eq!(verified.canonical_bytes(), bytes);
+    let mut wrong_root = fields.clone();
+    wrong_root.resulting_state_root[0] ^= 1;
+    assert_eq!(
+        verify(&bytes, &authorised(&wrong_root, &signing_key)),
+        Err(VerificationFailure {
+            check: ReceiptCheck::ResultingStateRoot
+        })
+    );
+    let mut altered = bytes;
+    let last = altered.len() - 1;
+    altered[last] ^= 1;
+    assert_eq!(
+        verify(&altered, &authorised(&fields, &signing_key)),
+        Err(VerificationFailure {
+            check: ReceiptCheck::SequencerSignature
+        })
+    );
+}

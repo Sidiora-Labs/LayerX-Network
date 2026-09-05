@@ -74,11 +74,22 @@ library StaticConfig {
     }
 
     function validate(Config memory config, uint256 actualChainId) internal pure {
+        validateForProtocol(config, actualChainId, Constants.PROTOCOL_VERSION);
+    }
+
+    function validateForProtocol(Config memory config, uint256 actualChainId, uint16 selectedProtocolVersion)
+        internal
+        pure
+    {
         if (config.chainId != actualChainId) {
             revert StaticConfigWrongChain(config.chainId, actualChainId);
         }
         if (
-            config.chainId == 0 || config.protocolVersion != Constants.PROTOCOL_VERSION || config.releaseVersion == 0
+            (selectedProtocolVersion != Constants.PROTOCOL_VERSION && selectedProtocolVersion != 3)
+                || config.protocolVersion != selectedProtocolVersion
+        ) revert InvalidStaticConfig();
+        if (
+            config.chainId == 0 || config.protocolVersion != selectedProtocolVersion || config.releaseVersion == 0
                 || config.governanceTimelock == address(0) || config.emergencyCouncil == address(0)
                 || config.governanceTimelock == config.emergencyCouncil || config.genesisManifestDigest == bytes32(0)
                 || config.genesisCanonicalStateRoot == bytes32(0) || config.genesisReceiptRoot == bytes32(0)
@@ -107,7 +118,15 @@ library StaticConfig {
     }
 
     function hash(Config memory config, uint256 actualChainId) internal pure returns (bytes32) {
-        validate(config, actualChainId);
+        return hashForProtocol(config, actualChainId, Constants.PROTOCOL_VERSION);
+    }
+
+    function hashForProtocol(Config memory config, uint256 actualChainId, uint16 selectedProtocolVersion)
+        internal
+        pure
+        returns (bytes32)
+    {
+        validateForProtocol(config, actualChainId, selectedProtocolVersion);
         return keccak256(
             abi.encode(
                 "LXP/Paxeer/static-config/v2",

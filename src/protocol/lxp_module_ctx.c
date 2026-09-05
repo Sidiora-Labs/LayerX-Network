@@ -908,6 +908,33 @@ const lxp_call_admission_facts *lxp_ctx_call_admission(
            &ctx->call_admission : NULL;
 }
 
+static lxp_result outcome_copy_artifacts(lxp_program_outcome *target,
+                                          const lxp_program_outcome *source,
+                                          lxp_arena *arena)
+{
+    lxp_program_outcome copy = *source;
+    lxp_byte_span *destinations[2] = {
+        &copy.terminal_payload, &copy.call_graph_payload};
+    const lxp_byte_span sources[2] = {
+        source->terminal_payload, source->call_graph_payload};
+    size_t index;
+    for (index = 0U; index < 2U; ++index) {
+        void *bytes = NULL;
+        lxp_result status;
+        destinations[index]->bytes = NULL;
+        if (sources[index].length == 0U) continue;
+        if (sources[index].bytes == NULL ||
+            sources[index].length > LXP_MAX_ACTIVITY_BYTES)
+            return LXP_ERR_LENGTH_LIMIT;
+        status = lxp_arena_alloc(arena, sources[index].length, 1U, &bytes);
+        if (status != LXP_OK) return status;
+        (void)memcpy(bytes, sources[index].bytes, sources[index].length);
+        destinations[index]->bytes = bytes;
+    }
+    *target = copy;
+    return LXP_OK;
+}
+
 lxp_result lxp_ctx_bind_program_outcome(
     lxp_module_ctx *ctx, const lxp_program_outcome *outcome)
 {
@@ -925,8 +952,7 @@ lxp_result lxp_ctx_bind_program_outcome(
         outcome->metering_schedule_version !=
             ctx->call_admission.metering_schedule_version)
         return LXP_FATAL_INVARIANT;
-    ctx->program_outcome = *outcome;
-    return LXP_OK;
+    return outcome_copy_artifacts(&ctx->program_outcome, outcome, ctx->arena);
 }
 
 const lxp_program_outcome *lxp_ctx_program_outcome(
@@ -1168,6 +1194,8 @@ void lxp_prepared_module_transition_destroy(
 {
     size_t i;
     if (prepared == NULL) return;
+    free((void *)prepared->program_outcome.terminal_payload.bytes);
+    free((void *)prepared->program_outcome.call_graph_payload.bytes);
     for (i = 0U; i < prepared->blob_count; ++i)
         free(prepared->blobs[i].bytes);
     (void)memset(prepared, 0, sizeof(*prepared));
@@ -1218,6 +1246,27 @@ lxp_result lxp_module_ctx_export_prepared(
     result->gas_used = ctx->gas_used;
     result->effects = *effects;
     result->program_outcome = ctx->program_outcome;
+    result->program_outcome.terminal_payload.bytes = NULL;
+    result->program_outcome.call_graph_payload.bytes = NULL;
+    {
+        lxp_byte_span *destinations[2] = {
+            &result->program_outcome.terminal_payload,
+            &result->program_outcome.call_graph_payload};
+        const lxp_byte_span sources[2] = {
+            ctx->program_outcome.terminal_payload,
+            ctx->program_outcome.call_graph_payload};
+        for (i = 0U; i < 2U; ++i) {
+            uint8_t *bytes;
+            if (sources[i].length == 0U) continue;
+            bytes = (uint8_t *)malloc(sources[i].length);
+            if (bytes == NULL) {
+                lxp_prepared_module_transition_destroy(result);
+                return LXP_ERR_ARENA_EXHAUSTED;
+            }
+            (void)memcpy(bytes, sources[i].bytes, sources[i].length);
+            destinations[i]->bytes = bytes;
+        }
+    }
     result->ledger_receipt = ctx->ledger_receipt;
     result->ledger_receipt_present = ctx->ledger_receipt_present;
     result->staged_count = ctx->staged_count;
@@ -1344,6 +1393,11 @@ lxp_result lxp_module_ctx_import_prepared(
             !account_equal(accounts[i], &prepared->accounts[i].before))
             return LXP_ERR_CONTEXT_MISMATCH;
     }
+    {
+        lxp_result status = outcome_copy_artifacts(
+            &ctx->program_outcome, &prepared->program_outcome, ctx->arena);
+        if (status != LXP_OK) return status;
+    }
     for (i = 0U; i < prepared->blob_count; ++i) {
         size_t location = committed_blob_find(ctx, prepared->blobs[i].key);
         if ((!prepared->blobs[i].deleted &&
@@ -1389,7 +1443,6 @@ lxp_result lxp_module_ctx_import_prepared(
     }
     ctx->staged_blob_count = prepared->blob_count;
     ctx->gas_used = prepared->gas_used;
-    ctx->program_outcome = prepared->program_outcome;
     ctx->ledger_receipt = prepared->ledger_receipt;
     ctx->ledger_receipt_present = prepared->ledger_receipt_present;
     {

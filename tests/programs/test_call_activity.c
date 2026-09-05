@@ -2,6 +2,7 @@
 
 #include "../../src/modules/programs/artifact.h"
 #include "layerx/lxp_crypto.h"
+#include "layerx/lxp_batch.h"
 #include "layerx/lxp_hash.h"
 #include "layerx/lxp_kernel.h"
 #include "layerx/lxp_snapshot.h"
@@ -27,6 +28,9 @@ static lxp_result occupancy_parameters(
 enum {
     CALL_FIXED_BYTES = 32 + 2 + 2 + 4 + 2 + 4 + 4 +
                        LX_PROGRAMS_CALL_BUDGET_FIELDS * 8,
+    STAGED_CALL_CAPABILITIES_BYTES = 2 + 3 + 32 + 32 + 16,
+    STAGED_CALL_FIXTURE_BYTES = CALL_FIXED_BYTES + sizeof("layerx_call") - 1 +
+        STAGED_CALL_CAPABILITIES_BYTES + sizeof("LayerX/programs/access-declaration/v1\0"),
     DEPLOY_FIXED_BYTES = 108,
     UPGRADE_FIXED_BYTES = 110,
     INTERFACE_MAX_FIXTURE_BYTES = 256,
@@ -314,7 +318,7 @@ static size_t call_payload(uint8_t *out, const uint8_t program_id[32])
 
 static size_t staged_call_payload(uint8_t *out, const uint8_t program_id[32])
 {
-    uint8_t capabilities[85] = {0U};
+    uint8_t capabilities[STAGED_CALL_CAPABILITIES_BYTES] = {0U};
     size_t cursor = 0U;
     size_t index;
     capabilities[cursor++] = 0U;
@@ -664,8 +668,113 @@ static int call_access_declaration_is_activity_bound(void)
     return 0;
 }
 
-static int deploy_and_upgrade_persist_exact_artifacts(void)
+static int verify_retained_program_artifacts(const lxp_receipt *source)
 {
+    static uint8_t arena_bytes[4U * LXP_MAX_ACTIVITY_BYTES];
+    static uint8_t terminal_bytes[LXP_MAX_ACTIVITY_BYTES];
+    static uint8_t graph_bytes[LXP_MAX_ACTIVITY_BYTES];
+    lxp_arena arena;
+    lxp_receipt decoded;
+    lxp_byte_span encoded;
+    lxp_byte_span rebound;
+    lxp_byte_span terminal = source->program_outcome.terminal_payload;
+    lxp_byte_span graph = source->program_outcome.call_graph_payload;
+    lxp_byte_span empty = {0};
+    if (terminal.length == 0U || graph.length == 0U ||
+        terminal.length > sizeof(terminal_bytes) ||
+        graph.length > sizeof(graph_bytes) ||
+        terminal.bytes == NULL || graph.bytes == NULL)
+        return 1;
+    (void)memcpy(terminal_bytes, terminal.bytes, terminal.length);
+    (void)memcpy(graph_bytes, graph.bytes, graph.length);
+    terminal.bytes = terminal_bytes;
+    graph.bytes = graph_bytes;
+    if (lxp_arena_init(&arena, arena_bytes, sizeof(arena_bytes)) != LXP_OK ||
+        lxp_receipt_encode(source, true, &arena, &encoded) != LXP_OK ||
+        lxp_receipt_decode(encoded.bytes, encoded.length, true, &decoded) != LXP_OK ||
+        decoded.program_outcome.terminal_payload.length != 0U ||
+        decoded.program_outcome.call_graph_payload.length != 0U ||
+        lxp_receipt_bind_program_artifacts(&decoded, empty, empty) != LXP_ERR_NON_CANONICAL ||
+        lxp_receipt_bind_program_artifacts(&decoded, terminal, empty) != LXP_ERR_NON_CANONICAL ||
+        lxp_receipt_bind_program_artifacts(&decoded, terminal, graph) != LXP_OK)
+        return 1;
+    terminal_bytes[0] ^= 1U;
+    if (lxp_receipt_bind_program_artifacts(&decoded, terminal, graph) != LXP_ERR_NON_CANONICAL)
+        return 1;
+    terminal_bytes[0] ^= 1U;
+    graph_bytes[0] ^= 1U;
+    if (lxp_receipt_bind_program_artifacts(&decoded, terminal, graph) != LXP_ERR_NON_CANONICAL)
+        return 1;
+    graph_bytes[0] ^= 1U;
+    --terminal.length;
+    if (lxp_receipt_bind_program_artifacts(&decoded, terminal, graph) != LXP_ERR_NON_CANONICAL)
+        return 1;
+    ++terminal.length;
+    if (lxp_receipt_bind_program_artifacts(&decoded, terminal, graph) != LXP_OK ||
+        lxp_receipt_encode(&decoded, true, &arena, &rebound) != LXP_OK ||
+        rebound.length != encoded.length ||
+        memcmp(rebound.bytes, encoded.bytes, encoded.length) != 0)
+        return 1;
+    return 0;
+}
+
+static lxp_result execute_artifact_fixture_activity(
+    lxp_kernel *kernel, const lxp_activity *activity,
+    lxp_kernel_execution *execution, lxp_receipt *receipt)
+{
+    lxp_byte_span encoded;
+    lxp_batch_roots roots;
+    uint8_t preimage[88];
+    size_t mark = lxp_arena_mark(execution->arena);
+    lxp_result reset_status;
+    lxp_result status = lxp_activity_encode(activity, execution->arena, &encoded);
+    if (status == LXP_OK)
+        status = lxp_batch_roots_compute(
+            &(lxp_batch_root_inputs){&encoded, 1U, NULL, 0U, NULL, 0U,
+                                     NULL, 0U, NULL, 0U},
+            execution->arena, &roots);
+    if (status == LXP_OK) {
+        (void)memcpy(preimage, kernel->current_state_root, 32U);
+        (void)memcpy(preimage + 32U, roots.activity_merkle_root, 32U);
+        write_u64(preimage + 64U, execution->global_sequence);
+        write_u64(preimage + 72U, execution->global_sequence);
+        write_u64(preimage + 80U, execution->batch_number);
+        status = lxp_hash_context_value(preimage, sizeof(preimage), execution->batch_id);
+    }
+    if (status == LXP_OK)
+        (void)memcpy(execution->activity_root, roots.activity_merkle_root, 32U);
+    reset_status = lxp_arena_reset(execution->arena, mark);
+    if (status == LXP_OK) status = reset_status;
+    if (status != LXP_OK) {
+        (void)fprintf(stderr, "Programs fixture binding protocol=%u sequence=%llu status=%d\n",
+                      (unsigned)activity->protocol_version,
+                      (unsigned long long)execution->global_sequence, (int)status);
+        return status;
+    }
+    status = lxp_kernel_execute_activity(kernel, activity, execution, receipt);
+    if (status != LXP_OK || receipt->result_code != LXP_OK)
+        (void)fprintf(stderr,
+                      "Programs fixture execution protocol=%u sequence=%llu status=%d receipt=%d\n",
+                      (unsigned)activity->protocol_version,
+                      (unsigned long long)execution->global_sequence,
+                      (int)status, (int)receipt->result_code);
+    return status;
+}
+
+static int artifact_fixture_failure(uint16_t protocol_version, int line)
+{
+    (void)fprintf(stderr, "Programs artifact fixture protocol=%u failed at line=%d\n",
+                  (unsigned)protocol_version, line);
+    return 1;
+}
+
+static int deploy_and_upgrade_persist_exact_artifacts_version(uint16_t protocol_version)
+{
+    const bool composite = protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT;
+    const uint32_t module_version = composite ?
+        LX_PROGRAMS_SANDBOX_DESTROY_ABI_VERSION : LX_PROGRAMS_ACCOUNT_ABI_VERSION;
+    const lxp_module_iface *module = composite ?
+        programs_module_registration_v4() : programs_module_registration_v2();
     static const uint8_t success_entry[] = {0x41U, 0U, 0x0bU};
     static const uint8_t upgraded_entry[] = {0x41U, 7U, 0x0bU};
     static const uint8_t did[] = "did:lxp:program-call";
@@ -679,12 +788,14 @@ static int deploy_and_upgrade_persist_exact_artifacts(void)
     uint8_t resource_wasm[1024];
     uint8_t payload[UPGRADE_FIXED_BYTES + INTERFACE_MAX_FIXTURE_BYTES +
                     sizeof(failure_wasm)];
-    uint8_t call[CALL_FIXED_BYTES + 128U];
+    uint8_t call[STAGED_CALL_FIXTURE_BYTES];
     uint8_t code_hash[32];
     uint8_t upgraded_hash[32];
     uint8_t failure_hash[32];
     uint8_t resource_hash[32];
     uint8_t first_terminal_root[32];
+    static uint8_t first_terminal_bytes[LXP_MAX_ACTIVITY_BYTES];
+    static uint8_t first_graph_bytes[LXP_MAX_ACTIVITY_BYTES];
     uint8_t actor_id[32];
     uint8_t treasury_id[32];
     uint8_t fee_asset[32] = {9U};
@@ -755,7 +866,7 @@ static int deploy_and_upgrade_persist_exact_artifacts(void)
                                      (lxp_u128){0U, UINT64_MAX}, 1U) != LXP_OK ||
         lxp_ledger_bootstrap_balance(treasury, fee_asset,
                                      (lxp_u128){0U, 0U}, 0U) != LXP_OK)
-        return 1;
+        return artifact_fixture_failure(protocol_version, __LINE__);
     (void)memcpy(authority.principal, actor_id, sizeof(actor_id));
     (void)memset(authority.authority_hash, 0x55, 32U);
     (void)memset(&fee_asset_state, 0, sizeof(fee_asset_state));
@@ -780,6 +891,7 @@ static int deploy_and_upgrade_persist_exact_artifacts(void)
                                     INTERFACE_CAPABILITIES_NONE);
     fill_activity(&activity, LX_PROGRAMS_DEPLOY, payload, payload_length,
                   did, sizeof(did) - 1U, primary_key);
+    activity.protocol_version = protocol_version;
     fees.version = 1U;
     fees.multiplier_basis_points = 10000U;
     if (lxp_state_store_init(&state, 1U) != LXP_OK ||
@@ -787,20 +899,25 @@ static int deploy_and_upgrade_persist_exact_artifacts(void)
                               primary_key, &identity) != LXP_OK ||
         lxp_kernel_create(&kernel, &state, &journal, &parameters, 0U) != LXP_OK ||
         install_metering_v1(&kernel) != LXP_OK ||
-        lxp_kernel_register_module(&kernel, programs_module_registration_v2()) !=
+        lxp_kernel_register_module(&kernel, module) !=
             LXP_OK ||
         lxp_kernel_bind_module_runtime(&kernel, LXP_MODULE_PROGRAMS, &runtime) !=
             LXP_OK ||
         lxp_programs_bind_fee_transaction(&kernel) != LXP_OK ||
         lxp_arena_init(&arena, arena_bytes, sizeof(arena_bytes)) != LXP_OK)
-        return 1;
+        return artifact_fixture_failure(protocol_version, __LINE__);
+    if (protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT &&
+        (lxp_kernel_set_capabilities(&kernel, NULL,
+                                     lxp_kernel_canonical_ledger_apply) != LXP_OK ||
+         lxp_state_root(&kernel, kernel.current_state_root) != LXP_OK))
+        return artifact_fixture_failure(protocol_version, __LINE__);
     (void)memset(&execution, 0, sizeof(execution));
     execution.network_id = 7U;
     execution.batch_number = 1U;
     execution.batch_timestamp_ms = 10U;
     execution.maximum_timestamp_window = 100U;
     execution.global_sequence = 1U;
-    execution.recorded_module_version = LX_PROGRAMS_ACCOUNT_ABI_VERSION;
+    execution.recorded_module_version = module_version;
     execution.parameter_version = 1U;
     execution.signature_valid = true;
     execution.identities = &identities;
@@ -808,11 +925,11 @@ static int deploy_and_upgrade_persist_exact_artifacts(void)
     execution.fee_parameters = &fees;
     execution.gas_limit = 1000000U;
     execution.arena = &arena;
-    if (lxp_kernel_execute_activity(&kernel, &activity, &execution, &receipt) !=
+    if (execute_artifact_fixture_activity(&kernel, &activity, &execution, &receipt) !=
             LXP_OK ||
         receipt.result_code != LXP_OK ||
         receipt.module_id != LXP_MODULE_PROGRAMS ||
-        receipt.module_version != LX_PROGRAMS_ACCOUNT_ABI_VERSION ||
+        receipt.module_version != module_version ||
         receipt.effects.count != 1U ||
         receipt.effects.effects[0].event_type != LX_PROGRAMS_EVENT_DEPLOYED ||
         receipt.effects.effects[0].body_length != 32U ||
@@ -823,10 +940,13 @@ static int deploy_and_upgrade_persist_exact_artifacts(void)
         memcmp(kernel.blobs[0].key, code_hash, 32U) != 0 ||
         kernel.blobs[0].length != wasm_length ||
         memcmp(kernel.blobs[0].bytes, wasm, wasm_length) != 0)
-        return 1;
+        return artifact_fixture_failure(protocol_version, __LINE__);
     payload_length = staged_call_payload(call, program_id);
+    if (payload_length != sizeof(call))
+        return artifact_fixture_failure(protocol_version, __LINE__);
     fill_activity(&activity, LX_PROGRAMS_CALL, call, payload_length,
                   did, sizeof(did) - 1U, primary_key);
+    activity.protocol_version = protocol_version;
     activity.account_sequence = 1U;
     activity.idempotency_key[31] = 2U;
     activity.fee_limit = (lxp_u128){0U, UINT64_MAX};
@@ -835,7 +955,7 @@ static int deploy_and_upgrade_persist_exact_artifacts(void)
     actor_before = actor->balance;
     treasury_before = treasury->balance;
     if (lxp_arena_reset(&arena, 0U) != LXP_OK ||
-        lxp_kernel_execute_activity(&kernel, &activity, &execution, &receipt) !=
+        execute_artifact_fixture_activity(&kernel, &activity, &execution, &receipt) !=
             LXP_OK || receipt.result_code != LXP_OK ||
         !receipt.program_outcome.present ||
         receipt.program_outcome.terminal_kind != LXP_PROGRAM_TERMINAL_SUCCESS ||
@@ -861,10 +981,42 @@ static int deploy_and_upgrade_persist_exact_artifacts(void)
         memcmp(receipt.previous_state_root, receipt.resulting_state_root, 32U) == 0 ||
         exact_fee_applied(actor_before, treasury_before, actor, treasury,
                           receipt.fee_charged) != 0)
-        return 1;
+    {
+        (void)fprintf(stderr,
+            "Programs first Call protocol=%u receipt=%d present=%u terminal=%u encoding=%u runtime=%u abi=%u effects=%zu identity_sequence=%llu state_sequence=%llu terminal_bytes=%zu graph_bytes=%zu\n",
+            (unsigned)protocol_version, (int)receipt.result_code,
+            (unsigned)receipt.program_outcome.present,
+            (unsigned)receipt.program_outcome.terminal_kind,
+            (unsigned)receipt.program_outcome.encoding_version,
+            (unsigned)receipt.program_outcome.runtime_version,
+            (unsigned)receipt.program_outcome.abi_version,
+            (size_t)receipt.effects.count,
+            (unsigned long long)identity->next_sequence,
+            (unsigned long long)state.next_sequence,
+            receipt.program_outcome.terminal_payload.length,
+            receipt.program_outcome.call_graph_payload.length);
+        return artifact_fixture_failure(protocol_version, __LINE__);
+    }
     (void)memcpy(first_terminal_root,
                  receipt.program_outcome.terminal_payload_root, 32U);
+    if (receipt.protocol_version != protocol_version ||
+        (protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT &&
+         receipt.operation != lxp_activity_type_ordinal(LX_PROGRAMS_CALL)))
+        return artifact_fixture_failure(protocol_version, __LINE__);
     first_call_receipt = receipt;
+    if (receipt.program_outcome.terminal_payload.length > sizeof(first_terminal_bytes) ||
+        receipt.program_outcome.call_graph_payload.length > sizeof(first_graph_bytes))
+        return artifact_fixture_failure(protocol_version, __LINE__);
+    (void)memcpy(first_terminal_bytes, receipt.program_outcome.terminal_payload.bytes,
+                 receipt.program_outcome.terminal_payload.length);
+    (void)memcpy(first_graph_bytes, receipt.program_outcome.call_graph_payload.bytes,
+                 receipt.program_outcome.call_graph_payload.length);
+    first_call_receipt.program_outcome.terminal_payload.bytes = first_terminal_bytes;
+    first_call_receipt.program_outcome.call_graph_payload.bytes = first_graph_bytes;
+    if (verify_retained_program_artifacts(&receipt) != 0) return artifact_fixture_failure(protocol_version, __LINE__);
+#ifdef LXP_TEST_PROGRAM_ARTIFACT_OBSERVER
+    if (LXP_TEST_PROGRAM_ARTIFACT_OBSERVER(&receipt) != 0) return artifact_fixture_failure(protocol_version, __LINE__);
+#endif
     if (lxp_arena_init(&snapshot_arena, snapshot_storage,
                        sizeof(snapshot_storage)) != LXP_OK ||
         lxp_state_root(&kernel, original_root) != LXP_OK ||
@@ -892,14 +1044,18 @@ static int deploy_and_upgrade_persist_exact_artifacts(void)
                           &parameters, 0U) != LXP_OK ||
         install_metering_v1(&restored) != LXP_OK ||
         lxp_kernel_register_module(&restored,
-                                   programs_module_registration_v2()) !=
+                                   module) !=
             LXP_OK)
-        return 1;
+        return artifact_fixture_failure(protocol_version, __LINE__);
     restored_runtime = runtime;
     restored_runtime.accounts = &restored_accounts;
     restored_runtime.metering_schedule_context = &restored;
     restored_runtime.occupancy_parameter_context = &restored_runtime;
     restored_identities = identities;
+    if (protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT &&
+        lxp_kernel_set_capabilities(&restored, NULL,
+                                    lxp_kernel_canonical_ledger_apply) != LXP_OK)
+        return artifact_fixture_failure(protocol_version, __LINE__);
     if (lxp_kernel_bind_module_runtime(&restored, LXP_MODULE_PROGRAMS,
                                        &restored_runtime) != LXP_OK ||
         lxp_programs_bind_fee_transaction(&restored) != LXP_OK ||
@@ -920,13 +1076,13 @@ static int deploy_and_upgrade_persist_exact_artifacts(void)
         memcmp(restored.current_state_root, kernel.current_state_root,
                32U) != 0 ||
         lxp_snapshot_verify_root(&restored, &manifest) != LXP_OK)
-        return 1;
+        return artifact_fixture_failure(protocol_version, __LINE__);
     if (lxp_arena_reset(&arena, 0U) != LXP_OK ||
         lxp_module_ctx_init(&original_ctx, &kernel, LXP_MODULE_PROGRAMS,
                             10U, 0U, 3U, 1000000U, &arena, false) != LXP_OK ||
         lxp_module_ctx_init(&restored_ctx, &restored, LXP_MODULE_PROGRAMS,
                             10U, 0U, 3U, 1000000U, &arena, false) != LXP_OK)
-        return 1;
+        return artifact_fixture_failure(protocol_version, __LINE__);
     if (lxp_programs_artifact_open(&original_ctx, program_id, code_hash,
                                    &original_artifact,
                                    &original_artifact_length) != LXP_OK ||
@@ -947,13 +1103,16 @@ static int deploy_and_upgrade_persist_exact_artifacts(void)
             LXP_ERR_VERSION_UNSUPPORTED) {
         lxp_module_ctx_rollback(&original_ctx);
         lxp_module_ctx_rollback(&restored_ctx);
-        return 1;
+        return artifact_fixture_failure(protocol_version, __LINE__);
     }
     lxp_module_ctx_rollback(&original_ctx);
     lxp_module_ctx_rollback(&restored_ctx);
     payload_length = staged_call_payload(call, program_id);
+    if (payload_length != sizeof(call))
+        return artifact_fixture_failure(protocol_version, __LINE__);
     fill_activity(&activity, LX_PROGRAMS_CALL, call, payload_length,
                   did, sizeof(did) - 1U, primary_key);
+    activity.protocol_version = protocol_version;
     activity.account_sequence = 2U;
     activity.idempotency_key[31] = 0x21U;
     activity.fee_limit = (lxp_u128){0U, UINT64_MAX};
@@ -964,7 +1123,7 @@ static int deploy_and_upgrade_persist_exact_artifacts(void)
     actor_before = restored_actor->balance;
     treasury_before = restored_treasury->balance;
     if (lxp_arena_reset(&arena, 0U) != LXP_OK ||
-        lxp_kernel_execute_activity(&restored, &activity, &restored_execution,
+        execute_artifact_fixture_activity(&restored, &activity, &restored_execution,
                                     &restored_receipt) != LXP_OK ||
         restored_receipt.result_code != LXP_OK ||
         !restored_receipt.program_outcome.present ||
@@ -1005,11 +1164,11 @@ static int deploy_and_upgrade_persist_exact_artifacts(void)
         exact_fee_applied(actor_before, treasury_before, restored_actor,
                           restored_treasury,
                           restored_receipt.fee_charged) != 0)
-        return 1;
+        return artifact_fixture_failure(protocol_version, __LINE__);
     while (restored.blob_count != 0U)
         free(restored.blobs[--restored.blob_count].bytes);
     restored.blob_total_bytes = 0U;
-    if (lxp_state_store_destroy(&restored_state) != LXP_OK) return 1;
+    if (lxp_state_store_destroy(&restored_state) != LXP_OK) return artifact_fixture_failure(protocol_version, __LINE__);
     payload_length = upgrade_payload(payload, program_id, code_hash,
                                      upgraded_wasm, upgraded_wasm_length,
                                      upgraded_hash,
@@ -1017,16 +1176,17 @@ static int deploy_and_upgrade_persist_exact_artifacts(void)
                                      INTERFACE_CAPABILITIES_NONE, false);
     fill_activity(&activity, LX_PROGRAMS_UPGRADE, payload, payload_length,
                   did, sizeof(did) - 1U, primary_key);
+    activity.protocol_version = protocol_version;
     activity.account_sequence = 2U;
     activity.idempotency_key[31] = 3U;
     activity.fee_limit = (lxp_u128){0U, 0U};
     execution.global_sequence = 3U;
     if (lxp_arena_reset(&arena, 0U) != LXP_OK ||
-        lxp_kernel_execute_activity(&kernel, &activity, &execution, &receipt) !=
+        execute_artifact_fixture_activity(&kernel, &activity, &execution, &receipt) !=
             LXP_OK ||
         receipt.result_code != LXP_OK ||
         receipt.module_id != LXP_MODULE_PROGRAMS ||
-        receipt.module_version != LX_PROGRAMS_ACCOUNT_ABI_VERSION ||
+        receipt.module_version != module_version ||
         receipt.effects.count != 1U ||
         receipt.effects.effects[0].event_type != LX_PROGRAMS_EVENT_UPGRADED ||
         receipt.effects.effects[0].body_length != 64U ||
@@ -1043,10 +1203,13 @@ static int deploy_and_upgrade_persist_exact_artifacts(void)
         kernel.blobs[1].length != upgraded_wasm_length ||
         memcmp(kernel.blobs[1].bytes, upgraded_wasm,
                upgraded_wasm_length) != 0)
-        return 1;
+        return artifact_fixture_failure(protocol_version, __LINE__);
     payload_length = staged_call_payload(call, program_id);
+    if (payload_length != sizeof(call))
+        return artifact_fixture_failure(protocol_version, __LINE__);
     fill_activity(&activity, LX_PROGRAMS_CALL, call, payload_length,
                   did, sizeof(did) - 1U, primary_key);
+    activity.protocol_version = protocol_version;
     activity.account_sequence = 3U;
     activity.idempotency_key[31] = 4U;
     activity.fee_limit = actor->balance;
@@ -1055,7 +1218,7 @@ static int deploy_and_upgrade_persist_exact_artifacts(void)
     actor_before = actor->balance;
     treasury_before = treasury->balance;
     if (lxp_arena_reset(&arena, 0U) != LXP_OK ||
-        lxp_kernel_execute_activity(&kernel, &activity, &execution, &receipt) !=
+        execute_artifact_fixture_activity(&kernel, &activity, &execution, &receipt) !=
             LXP_OK || receipt.result_code != LXP_OK ||
         !receipt.program_outcome.present ||
         receipt.program_outcome.terminal_kind != LXP_PROGRAM_TERMINAL_SUCCESS ||
@@ -1067,7 +1230,14 @@ static int deploy_and_upgrade_persist_exact_artifacts(void)
         identity->next_sequence != 4U || state.next_sequence != 5U ||
         exact_fee_applied(actor_before, treasury_before, actor, treasury,
                           receipt.fee_charged) != 0)
-        return 1;
+        return artifact_fixture_failure(protocol_version, __LINE__);
+    if (lxp_receipt_bind_program_artifacts(&first_call_receipt,
+            first_call_receipt.program_outcome.terminal_payload,
+            first_call_receipt.program_outcome.call_graph_payload) != LXP_OK ||
+        lxp_receipt_bind_program_artifacts(&receipt,
+            first_call_receipt.program_outcome.terminal_payload,
+            first_call_receipt.program_outcome.call_graph_payload) != LXP_ERR_NON_CANONICAL)
+        return artifact_fixture_failure(protocol_version, __LINE__);
     payload_length = upgrade_payload(payload, program_id, upgraded_hash,
                                      failure_wasm, failure_wasm_length,
                                      failure_hash,
@@ -1076,17 +1246,21 @@ static int deploy_and_upgrade_persist_exact_artifacts(void)
                                      true);
     fill_activity(&activity, LX_PROGRAMS_UPGRADE, payload, payload_length,
                   did, sizeof(did) - 1U, primary_key);
+    activity.protocol_version = protocol_version;
     activity.account_sequence = 4U;
     activity.idempotency_key[31] = 5U;
     execution.global_sequence = 5U;
     if (lxp_arena_reset(&arena, 0U) != LXP_OK ||
-        lxp_kernel_execute_activity(&kernel, &activity, &execution, &receipt) !=
+        execute_artifact_fixture_activity(&kernel, &activity, &execution, &receipt) !=
             LXP_OK || receipt.result_code != LXP_OK)
-        return 1;
+        return artifact_fixture_failure(protocol_version, __LINE__);
     payload_length = staged_call_payload(call, program_id);
+    if (payload_length != sizeof(call))
+        return artifact_fixture_failure(protocol_version, __LINE__);
     write_u16(call + 32U, LX_PROGRAMS_ACCOUNT_ABI_VERSION);
     fill_activity(&activity, LX_PROGRAMS_CALL, call, payload_length,
                   did, sizeof(did) - 1U, primary_key);
+    activity.protocol_version = protocol_version;
     activity.account_sequence = 5U;
     activity.idempotency_key[31] = 6U;
     activity.fee_limit = actor->balance;
@@ -1096,7 +1270,7 @@ static int deploy_and_upgrade_persist_exact_artifacts(void)
     actor_before = actor->balance;
     treasury_before = treasury->balance;
     if (lxp_arena_reset(&arena, 0U) != LXP_OK ||
-        lxp_kernel_execute_activity(&kernel, &activity, &execution, &receipt) !=
+        execute_artifact_fixture_activity(&kernel, &activity, &execution, &receipt) !=
             LXP_OK || receipt.result_code != LXP_ERR_PROGRAM_REFUSED ||
         !receipt.program_outcome.present ||
         receipt.program_outcome.terminal_kind != LXP_PROGRAM_TERMINAL_FAILURE ||
@@ -1109,7 +1283,7 @@ static int deploy_and_upgrade_persist_exact_artifacts(void)
         memcmp(receipt.previous_state_root, receipt.resulting_state_root, 32U) == 0 ||
         exact_fee_applied(actor_before, treasury_before, actor, treasury,
                           receipt.fee_charged) != 0)
-        return 1;
+        return artifact_fixture_failure(protocol_version, __LINE__);
     payload_length = upgrade_payload(payload, program_id, failure_hash,
                                      resource_wasm, resource_wasm_length,
                                      resource_hash,
@@ -1118,19 +1292,23 @@ static int deploy_and_upgrade_persist_exact_artifacts(void)
                                      false);
     fill_activity(&activity, LX_PROGRAMS_UPGRADE, payload, payload_length,
                   did, sizeof(did) - 1U, primary_key);
+    activity.protocol_version = protocol_version;
     activity.account_sequence = 6U;
     activity.idempotency_key[31] = 7U;
     activity.fee_limit = (lxp_u128){0U, 0U};
     execution.global_sequence = 7U;
     if (lxp_arena_reset(&arena, 0U) != LXP_OK ||
-        lxp_kernel_execute_activity(&kernel, &activity, &execution, &receipt) !=
+        execute_artifact_fixture_activity(&kernel, &activity, &execution, &receipt) !=
             LXP_OK || receipt.result_code != LXP_OK)
-        return 1;
+        return artifact_fixture_failure(protocol_version, __LINE__);
     payload_length = staged_call_payload(call, program_id);
+    if (payload_length != sizeof(call))
+        return artifact_fixture_failure(protocol_version, __LINE__);
     write_u16(call + 32U, LX_PROGRAMS_ACCOUNT_ABI_VERSION);
     write_u64(call + 50U, 1000U);
     fill_activity(&activity, LX_PROGRAMS_CALL, call, payload_length,
                   did, sizeof(did) - 1U, primary_key);
+    activity.protocol_version = protocol_version;
     activity.account_sequence = 7U;
     activity.idempotency_key[31] = 8U;
     activity.fee_limit = actor->balance;
@@ -1140,7 +1318,7 @@ static int deploy_and_upgrade_persist_exact_artifacts(void)
     actor_before = actor->balance;
     treasury_before = treasury->balance;
     if (lxp_arena_reset(&arena, 0U) != LXP_OK ||
-        lxp_kernel_execute_activity(&kernel, &activity, &execution, &receipt) !=
+        execute_artifact_fixture_activity(&kernel, &activity, &execution, &receipt) !=
             LXP_OK || receipt.result_code != LXP_ERR_GAS_EXHAUSTED ||
         !receipt.program_outcome.present ||
         receipt.program_outcome.terminal_kind != LXP_PROGRAM_TERMINAL_RESOURCE ||
@@ -1154,8 +1332,15 @@ static int deploy_and_upgrade_persist_exact_artifacts(void)
         memcmp(receipt.previous_state_root, receipt.resulting_state_root, 32U) == 0 ||
         exact_fee_applied(actor_before, treasury_before, actor, treasury,
                           receipt.fee_charged) != 0)
-        return 1;
+        return artifact_fixture_failure(protocol_version, __LINE__);
+    while (kernel.blob_count != 0U)
+        free(kernel.blobs[--kernel.blob_count].bytes);
     return lxp_state_store_destroy(&state) == LXP_OK ? 0 : 1;
+}
+
+static int deploy_and_upgrade_persist_exact_artifacts(void)
+{
+    return deploy_and_upgrade_persist_exact_artifacts_version(LXP_PROTOCOL_VERSION);
 }
 
 static int qualify_porting_reference(const char *path, uint8_t marker)
@@ -1361,6 +1546,8 @@ int main(int argc, char **argv)
     if (maximum_capability_transport_only_boundary() != 0) return 1;
     if (call_access_declaration_is_activity_bound() != 0) return 1;
     if (deploy_and_upgrade_persist_exact_artifacts() != 0) return 1;
+    if (deploy_and_upgrade_persist_exact_artifacts_version(
+            LXP_PROTOCOL_VERSION_STATE_COMMITMENT) != 0) return 1;
     if (argc == 1) return 0;
     if (argc != 4) return 1;
     if (qualify_porting_reference(argv[1], 0x41U) != 0) {

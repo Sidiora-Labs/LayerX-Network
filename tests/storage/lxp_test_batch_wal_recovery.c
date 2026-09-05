@@ -20,6 +20,8 @@ struct lxp_daemon_batch_wal_record {
     lxp_byte_span activities[LXP_DAEMON_BATCH_WAL_MAX_ITEMS];
     lxp_byte_span receipts[LXP_DAEMON_BATCH_WAL_MAX_ITEMS];
     lxp_byte_span events[LXP_DAEMON_BATCH_WAL_MAX_ITEMS];
+    lxp_byte_span terminal_payloads[LXP_DAEMON_BATCH_WAL_MAX_ITEMS];
+    lxp_byte_span call_graphs[LXP_DAEMON_BATCH_WAL_MAX_ITEMS];
     lxp_merkle_proof proofs[LXP_DAEMON_BATCH_WAL_MAX_ITEMS];
     uint8_t *owned;
     size_t owned_length;
@@ -377,6 +379,74 @@ static int write_exact(int descriptor, const uint8_t *bytes, size_t length)
     return 0;
 }
 
+static int recover_both_schemas(void)
+{
+    canonical_batch_fixture fixture;
+    lxp_byte_span empty_artifacts[1] = {{0}};
+    uint8_t digest[32];
+    char directory[] = "/tmp/lxp-batch-wal-schemas-XXXXXX";
+    char path[160];
+    if (build_canonical_batch(&fixture, false) != 0 ||
+        mkdtemp(directory) == NULL ||
+        snprintf(path, sizeof(path), "%s/prepared-batch.lxw", directory) < 0)
+        return 1;
+    for (unsigned version = 1U; version <= 2U; ++version) {
+        lxp_daemon_batch_wal_record *record = NULL;
+        const lxp_daemon_batch_wal_input *view;
+        uint8_t prefix[12];
+        bool present = false;
+        int descriptor;
+        if (version == 2U) {
+            fixture.input.terminal_payloads = empty_artifacts;
+            if (lxp_daemon_batch_wal_write_prepared(directory, &fixture.input, digest) == LXP_OK)
+                return 1;
+            fixture.input.call_graphs = empty_artifacts;
+        }
+        if (lxp_daemon_batch_wal_write_prepared(directory, &fixture.input, digest) != LXP_OK ||
+            lxp_daemon_batch_wal_load(directory, &fixture.input.authorization,
+                                      &record, &present) != LXP_OK ||
+            !present || record == NULL)
+            return 1;
+        view = lxp_daemon_batch_wal_view(record);
+        if (view == NULL ||
+            view->activities[0].length != fixture.activities[0].length ||
+            memcmp(view->activities[0].bytes, fixture.activities[0].bytes,
+                   fixture.activities[0].length) != 0 ||
+            view->receipts[0].length != fixture.receipts[0].length ||
+            memcmp(view->receipts[0].bytes, fixture.receipts[0].bytes,
+                   fixture.receipts[0].length) != 0 ||
+            (version == 1U && (view->terminal_payloads != NULL || view->call_graphs != NULL)) ||
+            (version == 2U && (view->terminal_payloads == NULL || view->call_graphs == NULL ||
+                              view->terminal_payloads[0].length != 0U ||
+                              view->call_graphs[0].length != 0U)))
+            return 1;
+        lxp_daemon_batch_wal_destroy(record);
+        record = NULL;
+        descriptor = open(path, O_RDWR | O_CLOEXEC);
+        if (descriptor < 0 || read(descriptor, prefix, sizeof(prefix)) != (ssize_t)sizeof(prefix) ||
+            prefix[8] != 0U || prefix[9] != version)
+            return 1;
+        if (version == 2U) {
+            off_t length = lseek(descriptor, 0, SEEK_END);
+            uint8_t last;
+            uint8_t corrupt;
+            if (length <= 1 || pread(descriptor, &last, 1U, length - 1) != 1)
+                return 1;
+            corrupt = (uint8_t)(last ^ 1U);
+            if (pwrite(descriptor, &corrupt, 1U, length - 1) != 1 ||
+                lxp_daemon_batch_wal_load(directory, &fixture.input.authorization,
+                                          &record, &present) != LXP_ERR_LOG_CORRUPT ||
+                record != NULL || pwrite(descriptor, &last, 1U, length - 1) != 1 ||
+                ftruncate(descriptor, length - 1) != 0 ||
+                lxp_daemon_batch_wal_load(directory, &fixture.input.authorization,
+                                          &record, &present) == LXP_OK || record != NULL)
+                return 1;
+        }
+        if (close(descriptor) != 0 || unlink(path) != 0) return 1;
+    }
+    return rmdir(directory) != 0;
+}
+
 static int refuse_malformed_record(void)
 {
     enum { MINIMUM_WAL_BYTES = 794 };
@@ -429,7 +499,8 @@ static int sweep_interrupted_replacement(void)
 
 int main(void)
 {
-    return refuse_invalid_canonical_activity_signature() != 0 ||
+    return recover_both_schemas() != 0 ||
+        refuse_invalid_canonical_activity_signature() != 0 ||
         classify_recovery_matrix() != 0 ||
         refuse_malformed_record() != 0 ||
         sweep_interrupted_replacement() != 0 ? 1 : 0;

@@ -26,6 +26,47 @@ bool lxp_program_metering_schedule_available(uint32_t schedule_version)
     return schedule_version == LXP_PROGRAM_METERING_SCHEDULE_VERSION_V1;
 }
 
+lxp_result lxp_program_empty_call_graph_root(uint8_t root[32])
+{
+    static const uint8_t graph_domain[] = "LXP/programs/empty-call-graph/v1";
+    return lxp_hash_domain(LXP_DOMAIN_CONTEXT_HASH, graph_domain,
+                          sizeof(graph_domain), root);
+}
+
+lxp_result lxp_receipt_bind_program_artifacts(
+    lxp_receipt *receipt, lxp_byte_span terminal_payload,
+    lxp_byte_span call_graph_payload)
+{
+    lxp_program_outcome outcome;
+    lxp_result status;
+    if (receipt == NULL ||
+        terminal_payload.length > LXP_MAX_ACTIVITY_BYTES ||
+        call_graph_payload.length > LXP_MAX_ACTIVITY_BYTES ||
+        (terminal_payload.length == 0U) != (call_graph_payload.length == 0U))
+        return LXP_ERR_NON_CANONICAL;
+    if (!receipt->program_outcome.present)
+        return terminal_payload.length == 0U ? LXP_OK : LXP_ERR_NON_CANONICAL;
+    if (receipt->module_id != LXP_MODULE_PROGRAMS) return LXP_ERR_NON_CANONICAL;
+    outcome = receipt->program_outcome;
+    if (outcome.terminal_kind == LXP_PROGRAM_TERMINAL_SUCCESS &&
+        terminal_payload.length == 0U)
+        return LXP_ERR_NON_CANONICAL;
+    if (terminal_payload.length == 0U) {
+        uint8_t empty_graph[32];
+        if (outcome.terminal_kind != LXP_PROGRAM_TERMINAL_FAILURE ||
+            outcome.result_code == LXP_OK ||
+            lxp_program_empty_call_graph_root(empty_graph) != LXP_OK ||
+            lxp_ct_memcmp(empty_graph, outcome.call_graph_root, 32U) != 0)
+            return LXP_ERR_NON_CANONICAL;
+    }
+    outcome.terminal_payload = terminal_payload;
+    outcome.call_graph_payload = call_graph_payload;
+    status = lxp_program_outcome_validate_for_protocol(
+        &outcome, receipt->protocol_version);
+    if (status == LXP_OK) receipt->program_outcome = outcome;
+    return status;
+}
+
 lxp_result lxp_program_outcome_validate(const lxp_program_outcome *outcome)
 {
     uint8_t terminal_payload_root[32];
@@ -114,7 +155,7 @@ lxp_result lxp_program_outcome_validate_for_protocol(
     if (status != LXP_OK) return status;
     if (!lxp_protocol_version_supported(protocol_version))
         return LXP_ERR_VERSION_UNSUPPORTED;
-    if ((protocol_version == LXP_PROTOCOL_VERSION_OCCUPANCY &&
+    if ((lxp_protocol_version_uses_occupancy(protocol_version) &&
          outcome->encoding_version != 2U &&
          outcome->encoding_version != 3U) ||
         (protocol_version == LXP_PROTOCOL_VERSION_LEGACY &&
@@ -122,7 +163,7 @@ lxp_result lxp_program_outcome_validate_for_protocol(
          outcome->encoding_version != 3U))
         return LXP_ERR_VERSION_UNSUPPORTED;
     if (outcome->encoding_version == 3U &&
-        protocol_version == LXP_PROTOCOL_VERSION_OCCUPANCY &&
+        lxp_protocol_version_uses_occupancy(protocol_version) &&
         outcome->terminal_kind == LXP_PROGRAM_TERMINAL_SUCCESS &&
         (lxp_ct_is_zero(outcome->occupancy_asset_id, 32U) ||
          lxp_ct_is_zero(outcome->occupancy_evidence_digest, 32U)))

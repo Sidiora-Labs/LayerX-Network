@@ -141,6 +141,23 @@ if [ "$TREASURY_BALANCE" != 0 ]; then
     fail "treasury_balance_unsupported: the protocol genesis manifest (src/protocol/lxp_genesis.c validate) admits only the three system accounts at balance zero; the treasury is funded after genesis, not in it"
 fi
 
+PAXEER_CHAIN_ID=${LAYERX_NODE_PAXEER_CHAIN_ID:-}
+SETTLEMENT_CONTRACT=${LAYERX_NODE_SETTLEMENT_CONTRACT:-}
+CHECKPOINT_REGISTRY=${LAYERX_NODE_CHECKPOINT_REGISTRY:-}
+PAXEER_RPC_ADDRESS=${LAYERX_NODE_PAXEER_RPC_ADDRESS:-}
+PAXEER_RPC_PORT=${LAYERX_NODE_PAXEER_RPC_PORT:-}
+[[ $PAXEER_CHAIN_ID =~ ^[1-9][0-9]{0,19}$ ]] || fail "LAYERX_NODE_PAXEER_CHAIN_ID must be a positive decimal uint64"
+if [ ${#PAXEER_CHAIN_ID} -eq 20 ] && [[ $PAXEER_CHAIN_ID > 18446744073709551615 ]]; then
+    fail "LAYERX_NODE_PAXEER_CHAIN_ID exceeds uint64"
+fi
+for contract_name in SETTLEMENT_CONTRACT CHECKPOINT_REGISTRY; do
+    contract_value=${!contract_name}
+    [[ $contract_value =~ ^0x[0-9a-fA-F]{40}$ ]] || fail "LAYERX_NODE_$contract_name must be a 0x-prefixed address"
+    [[ $contract_value =~ [1-9a-fA-F] ]] || fail "LAYERX_NODE_$contract_name must not be zero"
+done
+[ "$PAXEER_RPC_ADDRESS" = 127.0.0.1 ] || fail "LAYERX_NODE_PAXEER_RPC_ADDRESS must be 127.0.0.1"
+[[ $PAXEER_RPC_PORT =~ ^[1-9][0-9]{0,4}$ ]] && [ "$PAXEER_RPC_PORT" -le 65535 ] || fail "LAYERX_NODE_PAXEER_RPC_PORT must be in 1..65535"
+
 DAEMON_UID=$(id -u)
 DAEMON_GID=$(id -g)
 [ -n "$LNI_GID" ] || LNI_GID=$DAEMON_GID
@@ -224,7 +241,6 @@ SEQUENCER_PUBLIC=$(public_key_hex "$SEQUENCER_PRIVATE")
 TREASURY_PUBLIC=$(public_key_hex "$TREASURY_PRIVATE")
 [ "$SEQUENCER_PUBLIC" != "$TREASURY_PUBLIC" ] || fail "sequencer and treasury keys must differ"
 SEQUENCER_ID=$(printf 'layerx-sequencer:%s' "$SEQUENCER_PUBLIC" | sha256_hex)
-GUARANTOR_ID=$(printf 'layerx-beta-guarantor:%s' "$SEQUENCER_PUBLIC" | sha256_hex)
 if [ -z "$REPLICA_ID" ]; then
     REPLICA_ID=$(printf 'layerx-authority-replica:%s' "$SEQUENCER_PUBLIC" | sha256_hex)
 fi
@@ -272,6 +288,11 @@ SUPERVISOR_SOCKET="$RUN_DIR/supervisor.sock"
 
 umask 077
 mkdir -p "$DATA_DIR/checkpoints" "$DATA_DIR/logs" "$DATA_DIR/replica" "$DATA_DIR/secrets" "$DATA_DIR/work"
+GUARANTOR_KEY_FILE="$DATA_DIR/secrets/guarantor-key.pem"
+openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:secp256k1 -out "$GUARANTOR_KEY_FILE"
+GUARANTOR_PUBLIC=$(openssl ec -in "$GUARANTOR_KEY_FILE" -pubout -conv_form compressed -outform DER 2>/dev/null | tail -c 33 | bin_to_hex)
+[[ $GUARANTOR_PUBLIC =~ ^0[23][0-9a-f]{64}$ ]] || fail "could not derive a compressed secp256k1 guarantor public key"
+GUARANTOR_ID=$(printf 'layerx-beta-guarantor:%s' "$GUARANTOR_PUBLIC" | sha256_hex)
 
 # --- genesis request (LXGB v1) -------------------------------------------
 PARAMETER_KEY=$(printf 'parameter-version' | bin_to_hex)
@@ -281,7 +302,7 @@ REQUEST="$DATA_DIR/work/genesis-request.lxgb"
 {
     printf 'LXGB'
     hex_to_bin 01
-    hex_to_bin "$(be_hex 2 2)"
+    hex_to_bin "$(be_hex 3 2)"
     hex_to_bin "$(be_hex "$NETWORK_ID" 4)"
     hex_to_bin "$(be_hex "$GENESIS_TIMESTAMP_MS" 8)"
     hex_to_bin "$(be_hex 1 2)"
@@ -290,7 +311,7 @@ REQUEST="$DATA_DIR/work/genesis-request.lxgb"
     hex_to_bin "$PARAMETER_VALUE"
     hex_to_bin "$(be_hex 1 2)"
     hex_to_bin "$GUARANTOR_ID"
-    hex_to_bin "02$SEQUENCER_PUBLIC"
+    hex_to_bin "$GUARANTOR_PUBLIC"
     hex_to_bin "$(be_hex 0 16)"
     hex_to_bin "$ASSET_ID"
     hex_to_bin "$(be_hex 1 4)"
@@ -356,6 +377,11 @@ write_config replica "$DATA_DIR/replica.conf"
 
 LAST_BATCH=18446744073709551615
 cat > "$DATA_DIR/sequencer.env" <<EOF
+LAYERX_NODE_PAXEER_CHAIN_ID=$PAXEER_CHAIN_ID
+LAYERX_NODE_SETTLEMENT_CONTRACT=$SETTLEMENT_CONTRACT
+LAYERX_NODE_CHECKPOINT_REGISTRY=$CHECKPOINT_REGISTRY
+LAYERX_NODE_PAXEER_RPC_ADDRESS=$PAXEER_RPC_ADDRESS
+LAYERX_NODE_PAXEER_RPC_PORT=$PAXEER_RPC_PORT
 LAYERX_NODE_CHECKPOINT_DIRECTORY=$DATA_DIR/checkpoints
 LAYERX_NODE_SNAPSHOT=$SNAPSHOT
 LAYERX_NODE_GENESIS_MANIFEST=$MANIFEST
@@ -383,7 +409,7 @@ LAYERX_NODE_PROGRAM_BEARER_TOKEN=$PROGRAM_TOKEN
 LAYERX_NODE_LNI_SOCKET=$LNI_SOCKET
 LAYERX_NODE_LNI_ALLOWED_UID=$LNI_UID
 LAYERX_NODE_LNI_ALLOWED_GID=$LNI_GID
-LAYERX_NODE_LNI_FRAME_BYTES=1146902
+LAYERX_NODE_LNI_FRAME_BYTES=1212416
 LAYERX_NODE_LNI_DEADLINE_MS=2000
 EOF
 
@@ -414,6 +440,10 @@ LAYERX_NODE_SEQUENCER_PUBLIC_KEY=$SEQUENCER_PUBLIC
 LAYERX_NODE_REPLICA_ID=$REPLICA_ID
 LAYERX_NODE_GENESIS_STATE_ROOT=$GENESIS_STATE_ROOT
 LAYERX_NODE_GENESIS_RECEIPT_STATE_ROOT=$GENESIS_RECEIPT_STATE_ROOT
+LAYERX_NODE_GENESIS_GUARANTOR_ID=$GUARANTOR_ID
+LAYERX_NODE_GENESIS_GUARANTOR_PUBLIC_KEY=$GUARANTOR_PUBLIC
+LAYERX_NODE_GENESIS_GUARANTOR_KEY_FILE=$GUARANTOR_KEY_FILE
+LAYERX_PAXEER_GENESIS_DIR=$GENESIS_DIR
 LAYERX_NODE_TREASURY_DID=$TREASURY_DID
 LAYERX_NODE_TREASURY_PUBLIC_KEY=$TREASURY_PUBLIC
 LAYERX_NODE_TREASURY_ACCOUNT=$TREASURY_ACCOUNT
@@ -425,6 +455,10 @@ LAYERX_NODE_SEQUENCER_ENV=$DATA_DIR/sequencer.env
 LAYERX_NODE_REPLICA_ENV=$DATA_DIR/replica.env
 EOF
 chmod 0644 "$DATA_DIR/node.env"
+printf 'LAYERX_CORE_SEQUENCER_ID=%s\nLAYERX_CORE_TREASURY_ASSET=%s\n' \
+    "$SEQUENCER_ID" "$ASSET_ID" > "$RUN_DIR/core.env.tmp"
+chmod 0644 "$RUN_DIR/core.env.tmp"
+mv "$RUN_DIR/core.env.tmp" "$RUN_DIR/core.env"
 
 cat > "$DATA_DIR/treasury.json" <<EOF
 {"did":"$TREASURY_DID","public_key":"$TREASURY_PUBLIC","account":"$TREASURY_ACCOUNT","asset":"$ASSET_ID","genesis_balance":"$TREASURY_BALANCE","network_id":$NETWORK_ID}

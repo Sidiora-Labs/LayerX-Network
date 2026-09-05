@@ -24,7 +24,7 @@
 #include <pthread.h>
 
 enum {
-    WAL_VERSION = 1,
+    WAL_VERSION = 2,
     WAL_FIXED_BYTES = 762,
     WAL_PROOF_BYTES = 1033,
     WAL_DIGEST_BYTES = 32,
@@ -47,6 +47,8 @@ struct lxp_daemon_batch_wal_record {
     lxp_byte_span activities[LXP_DAEMON_BATCH_WAL_MAX_ITEMS];
     lxp_byte_span receipts[LXP_DAEMON_BATCH_WAL_MAX_ITEMS];
     lxp_byte_span events[LXP_DAEMON_BATCH_WAL_MAX_ITEMS];
+    lxp_byte_span terminal_payloads[LXP_DAEMON_BATCH_WAL_MAX_ITEMS];
+    lxp_byte_span call_graphs[LXP_DAEMON_BATCH_WAL_MAX_ITEMS];
     lxp_merkle_proof proofs[LXP_DAEMON_BATCH_WAL_MAX_ITEMS];
     uint8_t *owned;
     size_t owned_length;
@@ -239,6 +241,10 @@ static lxp_result validate_canonical_items(
         if(status==LXP_OK)status=lxp_receipt_decode(in->receipts[i].bytes,
                                                     in->receipts[i].length,
                                                     true,&receipt);
+        if (status == LXP_OK && in->terminal_payloads != NULL &&
+            in->call_graphs != NULL)
+            status = lxp_receipt_bind_program_artifacts(
+                &receipt, in->terminal_payloads[i], in->call_graphs[i]);
         if(status==LXP_OK)status=lxp_arena_init(&arena,scratch,WAL_MAX_BYTES);
         if(status==LXP_OK)status=lxp_activity_encode(&activity,&arena,&reencoded);
         if(status==LXP_OK &&
@@ -304,10 +310,12 @@ static lxp_result validate_input(const lxp_daemon_batch_wal_input *in)
     lxp_arena signature_arena;
     uint8_t signature_storage[512];
     size_t i,j;
+    size_t payload_bytes = 0U;
     uint8_t activity_root[32],event_root[32],empty_root[32],publication[32];
     lxp_result status;
     if (in==NULL || in->count==0U || in->count>LXP_DAEMON_BATCH_WAL_MAX_ITEMS ||
         in->activities==NULL || in->receipts==NULL || in->events==NULL ||
+        ((in->terminal_payloads == NULL) != (in->call_graphs == NULL)) ||
         in->receipt_proofs==NULL || in->canonical_header.bytes==NULL ||
         in->canonical_header.length!=LXP_BATCH_HEADER_ENCODED_SIZE ||
         in->protocol_version==0U || in->network_id==0U || in->epoch==0U ||
@@ -349,6 +357,17 @@ static lxp_result validate_input(const lxp_daemon_batch_wal_input *in)
     for (i=0U;i<in->count;++i) {
         uint8_t leaf[32];
         const lxp_merkle_proof *proof=&in->receipt_proofs[i];
+        const lxp_byte_span spans[5] = {
+            in->activities[i], in->receipts[i], in->events[i],
+            in->terminal_payloads == NULL ? (lxp_byte_span){NULL, 0U} : in->terminal_payloads[i],
+            in->call_graphs == NULL ? (lxp_byte_span){NULL, 0U} : in->call_graphs[i]};
+        size_t span_index;
+        for (span_index = 0U; span_index < 5U; ++span_index) {
+            if ((spans[span_index].length != 0U && spans[span_index].bytes == NULL) ||
+                spans[span_index].length > LXP_MAX_BATCH_BODY_BYTES - payload_bytes)
+                return LXP_ERR_LENGTH_LIMIT;
+            payload_bytes += spans[span_index].length;
+        }
         if ((in->activities[i].length!=0U && in->activities[i].bytes==NULL) ||
             in->activities[i].length==0U ||
             (in->receipts[i].length!=0U && in->receipts[i].bytes==NULL) ||
@@ -392,11 +411,29 @@ static lxp_result encode_record(const lxp_daemon_batch_wal_input *in,
     size_t length=WAL_FIXED_BYTES+WAL_DIGEST_BYTES, body_length=0U;
     size_t offset=0U, i, j;
     uint8_t *bytes, digest[32];
+    uint16_t version = in != NULL && in->terminal_payloads != NULL ? WAL_VERSION : 1U;
     lxp_result status=validate_input(in);
     if (status!=LXP_OK || (state!=LXP_DAEMON_BATCH_WAL_PREPARED &&
         state!=LXP_DAEMON_BATCH_WAL_ABORTED &&
         state!=LXP_DAEMON_BATCH_WAL_COMMITTED)) return status;
+    if ((in->terminal_payloads == NULL) != (in->call_graphs == NULL))
+        return LXP_ERR_NON_CANONICAL;
     for(i=0U;i<in->count;++i) {
+        size_t terminal_length = in->terminal_payloads == NULL ? 0U :
+            in->terminal_payloads[i].length;
+        size_t graph_length = in->call_graphs == NULL ? 0U :
+            in->call_graphs[i].length;
+        if (terminal_length > LXP_MAX_ACTIVITY_BYTES ||
+            graph_length > LXP_MAX_ACTIVITY_BYTES ||
+            !add_size(&length, version == WAL_VERSION ? 8U : 0U) ||
+            !add_size(&length, terminal_length) ||
+            !add_size(&length, graph_length) ||
+            terminal_length > LXP_MAX_BATCH_BODY_BYTES - body_length)
+            return LXP_ERR_LENGTH_LIMIT;
+        body_length += terminal_length;
+        if (graph_length > LXP_MAX_BATCH_BODY_BYTES - body_length)
+            return LXP_ERR_LENGTH_LIMIT;
+        body_length += graph_length;
         if(body_length>SIZE_MAX-in->activities[i].length ||
            body_length+in->activities[i].length>
                LXP_MAX_BATCH_BODY_BYTES)
@@ -421,7 +458,7 @@ static lxp_result encode_record(const lxp_daemon_batch_wal_input *in,
     bytes=(uint8_t *)calloc(1U,length);
     if(bytes==NULL)return LXP_ERR_IO;
 #define COPY(src,n) do { (void)memcpy(bytes+offset,(src),(n)); offset+=(n); } while(0)
-    COPY(wal_magic,8U); put_u16(bytes+offset,WAL_VERSION); offset+=2U;
+    COPY(wal_magic,8U); put_u16(bytes+offset,version); offset+=2U;
     bytes[offset++]=(uint8_t)state; bytes[offset++]=0U;
     put_u64(bytes+offset,(uint64_t)length); offset+=8U;
     put_u16(bytes+offset,in->protocol_version); offset+=2U;
@@ -452,6 +489,16 @@ static lxp_result encode_record(const lxp_daemon_batch_wal_input *in,
         COPY(in->activities[i].bytes,in->activities[i].length);
         COPY(in->receipts[i].bytes,in->receipts[i].length);
         COPY(in->events[i].bytes,in->events[i].length);
+        if (version == WAL_VERSION) {
+            lxp_byte_span terminal = in->terminal_payloads == NULL ?
+                (lxp_byte_span){NULL, 0U} : in->terminal_payloads[i];
+            lxp_byte_span graph = in->call_graphs == NULL ?
+                (lxp_byte_span){NULL, 0U} : in->call_graphs[i];
+            put_u32(bytes+offset,(uint32_t)terminal.length); offset+=4U;
+            if (terminal.length != 0U) COPY(terminal.bytes,terminal.length);
+            put_u32(bytes+offset,(uint32_t)graph.length); offset+=4U;
+            if (graph.length != 0U) COPY(graph.bytes,graph.length);
+        }
         put_u32(bytes+offset,in->receipt_proofs[i].leaf_index); offset+=4U;
         put_u32(bytes+offset,in->receipt_proofs[i].leaf_count); offset+=4U;
         bytes[offset++]=in->receipt_proofs[i].depth;
@@ -722,7 +769,7 @@ lxp_result lxp_daemon_batch_wal_load(const char *directory,
     if(authorization==NULL||out==NULL||present==NULL)return LXP_ERR_NON_CANONICAL;
     *out=NULL; *present=false; status=read_record(directory,&bytes,&length,present);
     if(status!=LXP_OK||!*present)return status;
-    if(memcmp(bytes,wal_magic,8U)!=0 || get_u16(bytes+8U)!=WAL_VERSION ||
+    if(memcmp(bytes,wal_magic,8U)!=0 || (get_u16(bytes+8U)!=1U && get_u16(bytes+8U)!=WAL_VERSION) ||
        bytes[11U]!=0U ||
        get_u64(bytes+12U)!=(uint64_t)length ||
        wal_digest(bytes,length-32U,digest)!=LXP_OK ||
@@ -770,12 +817,35 @@ lxp_result lxp_daemon_batch_wal_load(const char *directory,
         if((size_t)al>length-32U-offset){status=LXP_ERR_LOG_TRUNCATED;goto fail;}r->activities[i].bytes=r->owned+offset;r->activities[i].length=al;offset+=al;
         if((size_t)rl>length-32U-offset){status=LXP_ERR_LOG_TRUNCATED;goto fail;}r->receipts[i].bytes=r->owned+offset;r->receipts[i].length=rl;offset+=rl;
         if((size_t)el>length-32U-offset){status=LXP_ERR_LOG_TRUNCATED;goto fail;}r->events[i].bytes=r->owned+offset;r->events[i].length=el;offset+=el;
+        if (get_u16(r->owned + 8U) == WAL_VERSION) {
+            lxp_byte_span *artifacts[2] = {
+                &r->terminal_payloads[i], &r->call_graphs[i]};
+            size_t artifact;
+            for (artifact = 0U; artifact < 2U; ++artifact) {
+                uint32_t artifact_length;
+                if (length - 32U - offset < 4U) {
+                    status = LXP_ERR_LOG_TRUNCATED; goto fail;
+                }
+                artifact_length = get_u32(r->owned + offset); offset += 4U;
+                if (artifact_length > LXP_MAX_ACTIVITY_BYTES ||
+                    artifact_length > length - 32U - offset) {
+                    status = LXP_ERR_LENGTH_LIMIT; goto fail;
+                }
+                *artifacts[artifact] = (lxp_byte_span){
+                    r->owned + offset, artifact_length};
+                offset += artifact_length;
+            }
+        }
         if(length-32U-offset<WAL_PROOF_BYTES){status=LXP_ERR_LOG_TRUNCATED;goto fail;}
         r->proofs[i].leaf_index=get_u32(r->owned+offset);offset+=4U;r->proofs[i].leaf_count=get_u32(r->owned+offset);offset+=4U;r->proofs[i].depth=r->owned[offset++];
         for(j=0U;j<LXP_MERKLE_MAX_DEPTH;++j){(void)memcpy(r->proofs[i].siblings[j],r->owned+offset,32U);offset+=32U;}
     }
     if(offset!=length-32U){status=LXP_ERR_TRAILING_BYTES;goto fail;}
     r->view.activities=r->activities;r->view.receipts=r->receipts;r->view.events=r->events;r->view.receipt_proofs=r->proofs;
+    if (get_u16(r->owned + 8U) == WAL_VERSION) {
+        r->view.terminal_payloads = r->terminal_payloads;
+        r->view.call_graphs = r->call_graphs;
+    }
     status=validate_input(&r->view);if(status!=LXP_OK)goto fail;*out=r;return LXP_OK;
 fail:
     if(r!=NULL)lxp_daemon_batch_wal_destroy(r);

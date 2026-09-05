@@ -379,8 +379,15 @@ static lxp_result universal_leaves(const lxp_kernel *kernel,
         uint8_t key[33];
         key[0] = 2U;
         (void)memcpy(key + 1U, entry->key_hash, 32U);
-        status = leaf_set(&leaves[(*count)++], key, sizeof(key),
-                          entry->receipt, entry->receipt_length);
+        {
+            uint8_t committed_value[LXP_STATE_MAX_RECEIPT_BYTES];
+            status = lxp_kernel_idempotency_state_value(
+                entry->receipt, entry->receipt_length,
+                committed_value, sizeof(committed_value));
+            if (status == LXP_OK)
+                status = leaf_set(&leaves[(*count)++], key, sizeof(key),
+                                  committed_value, entry->receipt_length);
+        }
         if (status != LXP_OK) return status;
     }
     for (i = 0U; i < kernel->module_count; ++i) {

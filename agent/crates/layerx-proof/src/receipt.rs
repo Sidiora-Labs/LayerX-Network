@@ -2,7 +2,7 @@
 
 use layerx_crypto::ed25519;
 use layerx_wire::hash::receipt_digest;
-use layerx_wire::limits::PROTOCOL_VERSION;
+use layerx_wire::limits::protocol_version_uses_occupancy;
 use layerx_wire::receipt::{decode, encode, encode_unsigned, Receipt};
 
 use crate::evidence::Evidence;
@@ -13,7 +13,7 @@ const PROGRAMS_STATE_OPERATION: u16 = 0;
 const PROGRAMS_CALL_OPERATION: u16 = 3;
 
 const fn supported_protocol_version(version: u16) -> bool {
-    version == PROTOCOL_VERSION
+    protocol_version_uses_occupancy(version)
 }
 
 const fn supported_programs_module_version(version: u32) -> bool {
@@ -22,6 +22,16 @@ const fn supported_programs_module_version(version: u32) -> bool {
 
 const fn supports_program_account_state(version: u32) -> bool {
     matches!(version, 2 | 3)
+}
+
+const fn programs_version_for_protocol(protocol: u16, module: u32, account_state: bool) -> bool {
+    if protocol == layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION {
+        module == 4
+    } else if account_state {
+        supports_program_account_state(module)
+    } else {
+        supported_programs_module_version(module)
+    }
 }
 
 const fn supported_program_guest_abi(version: u16) -> bool {
@@ -364,11 +374,15 @@ pub fn verify_program_state(
     let protocol = receipt
         .protocol()
         .ok_or_else(|| VerificationFailure::at(ReceiptCheck::ReceiptShape))?;
-    if protocol.protocol_version() != 2 {
+    if !supported_protocol_version(protocol.protocol_version()) {
         return Err(VerificationFailure::at(ReceiptCheck::ProtocolVersion));
     }
     if u32::from(protocol.module_id()) != PROGRAMS_MODULE_ID
-        || !supports_program_account_state(protocol.module_version())
+        || !programs_version_for_protocol(
+            protocol.protocol_version(),
+            protocol.module_version(),
+            true,
+        )
         || u16::from(protocol.operation()) != PROGRAMS_STATE_OPERATION
     {
         return Err(VerificationFailure::at(ReceiptCheck::Module));
@@ -424,7 +438,11 @@ pub fn verify_program_outcome(
         return Err(VerificationFailure::at(ReceiptCheck::ProtocolVersion));
     }
     if u32::from(protocol.module_id()) != PROGRAMS_MODULE_ID
-        || !supported_programs_module_version(protocol.module_version())
+        || !programs_version_for_protocol(
+            protocol.protocol_version(),
+            protocol.module_version(),
+            false,
+        )
         || u16::from(protocol.operation()) != PROGRAMS_CALL_OPERATION
     {
         return Err(VerificationFailure::at(ReceiptCheck::Module));

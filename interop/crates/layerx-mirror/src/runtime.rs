@@ -716,7 +716,9 @@ fn validate_runtime(config: &RuntimeConfig) -> Result<(), RuntimeError> {
         || !matches!(config.status_listen.ip(), IpAddr::V4(_) | IpAddr::V6(_))
         || !config.status_listen.ip().is_loopback()
         || config.status_listen.port() == 0
-        || config.node.expected_protocol_version != layerx_wire::limits::PROTOCOL_VERSION
+        || !layerx_wire::limits::protocol_version_uses_occupancy(
+            config.node.expected_protocol_version,
+        )
         || !(100..=120_000).contains(&config.node.deadline_ms)
         || !(1024..=64 * 1024 * 1024).contains(&config.node.maximum_frame_bytes)
         || !(1..=64).contains(&config.node.maximum_connections)

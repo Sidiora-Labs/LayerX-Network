@@ -1,0 +1,9 @@
+ARG PAXD_IMAGE=ghcr.io/sidiora-labs/paxd-node:0.1.0
+FROM ${PAXD_IMAGE}
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends bash jq coreutils && rm -rf /var/lib/apt/lists/*
+COPY platform/hosted/paxeer/init-chain.sh /opt/layerx/init-chain.sh
+COPY platform/hosted/paxeer/contracts/BetaUsdl.runtime.hex /opt/layerx/contracts/BetaUsdl.runtime.hex
+ENV HOME=/var/lib/paxeer
+USER 4020:4020
+ENTRYPOINT ["/usr/bin/paxd"]

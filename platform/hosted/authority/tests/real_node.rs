@@ -20,7 +20,7 @@ use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRe
 use layerx_wire::activity::{decode_signed, encode_signed_envelope, encode_unsigned_envelope};
 use layerx_wire::encode::Encoder;
 use layerx_wire::hash::{activity_id, execution_batch_id, Domain};
-use layerx_wire::limits::PROTOCOL_VERSION;
+use layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION as PROTOCOL_VERSION;
 use native_tls::{Certificate, TlsConnector};
 use sha2::{Digest as _, Sha256};
 use std::collections::BTreeMap;
@@ -39,7 +39,7 @@ const NETWORK_ID: u32 = 7331;
 const NETWORK_NAME: &str = "layerx-authority-test";
 const FIRST_BATCH: u64 = 1;
 const LAST_BATCH: u64 = 1_000_000;
-const LNI_FRAME_BYTES: usize = 1_146_902;
+const LNI_FRAME_BYTES: usize = 1_212_416;
 const LOG_BYTES: u64 = 64 * 1024 * 1024;
 const SEND_ACTIVITY: u16 = 5;
 const MODULE_GOVERNANCE: u16 = 7;
@@ -85,11 +85,27 @@ fn write(path: &Path, bytes: &[u8], mode: u32) {
 }
 
 fn preallocate_log(path: &Path) {
+    let mode =
+        std::env::var("LAYERX_TEST_BOOTSTRAP_LOG_MODE").unwrap_or_else(|_| "absent".to_owned());
+    assert!(
+        !path.exists(),
+        "fresh log already exists: {}",
+        path.display()
+    );
+    if mode == "absent" {
+        return;
+    }
+    assert!(
+        mode == "empty" || mode == "preallocated",
+        "unsupported bootstrap log mode: {mode}"
+    );
     let file = must(
         fs::File::create(path),
         &format!("create {}", path.display()),
     );
-    must(file.set_len(LOG_BYTES), &format!("size {}", path.display()));
+    let size = if mode == "empty" { 0 } else { LOG_BYTES };
+    must(file.set_len(size), &format!("size {}", path.display()));
+    assert_eq!(must(file.metadata(), "initial log metadata").len(), size);
     must(
         fs::set_permissions(path, fs::Permissions::from_mode(0o600)),
         &format!("chmod {}", path.display()),
@@ -163,7 +179,7 @@ struct Genesis {
     receipt_state_root: [u8; 32],
 }
 
-fn genesis_request(asset: &[u8; 32]) -> Vec<u8> {
+fn genesis_request(asset: &[u8; 32], guarantor_key: &[u8; 33]) -> Vec<u8> {
     let mut request = Vec::with_capacity(512);
     request.extend_from_slice(b"LXGB");
     request.push(1);
@@ -182,9 +198,7 @@ fn genesis_request(asset: &[u8; 32]) -> Vec<u8> {
     let mut guarantor_id = [0_u8; 32];
     guarantor_id[0] = 1;
     request.extend_from_slice(&guarantor_id);
-    let mut guarantor_key = [0_u8; 33];
-    guarantor_key[0] = 2;
-    request.extend_from_slice(&guarantor_key);
+    request.extend_from_slice(guarantor_key);
     request.extend_from_slice(&[0_u8; 16]);
     request.extend_from_slice(asset);
     request.extend_from_slice(&1_u32.to_be_bytes());
@@ -203,13 +217,55 @@ fn genesis_request(asset: &[u8; 32]) -> Vec<u8> {
     request
 }
 
+fn genesis_guarantor_key(directory: &Path) -> [u8; 33] {
+    let private = directory.join("guarantor-key.pem");
+    let public = directory.join("guarantor-public.der");
+    write(&private, &[], 0o600);
+    command(
+        "openssl",
+        &[
+            "genpkey",
+            "-algorithm",
+            "EC",
+            "-pkeyopt",
+            "ec_paramgen_curve:secp256k1",
+            "-out",
+            &private.to_string_lossy(),
+        ],
+    );
+    command(
+        "openssl",
+        &[
+            "ec",
+            "-in",
+            &private.to_string_lossy(),
+            "-pubout",
+            "-conv_form",
+            "compressed",
+            "-outform",
+            "DER",
+            "-out",
+            &public.to_string_lossy(),
+        ],
+    );
+    let encoded = must(fs::read(&public), "guarantor public key");
+    let compressed = encoded
+        .get(encoded.len().saturating_sub(33)..)
+        .unwrap_or_else(|| panic!("compressed guarantor public key missing"));
+    must(
+        compressed.try_into(),
+        "compressed guarantor public key length",
+    )
+}
+
 fn build_genesis(root: &Path, builder: &Path) -> Genesis {
     let directory = root.join("genesis");
     make_dir(&directory, 0o755);
     let asset = random32();
+    let guarantor_key = genesis_guarantor_key(&directory);
     write(
         &directory.join("request.lxgb"),
-        &genesis_request(&asset),
+        &genesis_request(&asset, &guarantor_key),
         0o600,
     );
     write(&directory.join("signer.key"), &random32(), 0o600);
@@ -353,7 +409,20 @@ fn lni_limits() -> Limits {
 }
 
 fn connect_lni(socket: &Path, gate: &ConnectionGate) -> Uds {
-    must(Uds::connect(socket, gate, lni_limits()), "LNI connect")
+    let mut transport = must(Uds::connect(socket, gate, lni_limits()), "LNI connect");
+    must(
+        perform(
+            &mut transport,
+            &HandshakeConfig {
+                built_interface_version: Version::V1_3,
+                expected_protocol_version: PROTOCOL_VERSION,
+                expected_network_id: NETWORK_ID,
+            },
+            None,
+        ),
+        "LNI handshake",
+    );
+    transport
 }
 
 fn wait_for_lni(socket: &Path, gate: &ConnectionGate, daemon: &mut Daemon) {
@@ -499,10 +568,34 @@ fn send_payload(
 
 struct Actor {
     signing_key: SigningKey,
+    did: String,
     source: [u8; 32],
 }
 
+fn actor() -> Actor {
+    let signing_key = SigningKey::from_bytes(&random32());
+    let did = format!(
+        "did:layerx:{}",
+        hex::encode(&signing_key.verifying_key().to_bytes())
+    );
+    let name = format!("agent:{did}:main");
+    let length = must(u32::try_from(name.len()), "account name length");
+    let mut digest = Sha256::new();
+    digest.update(b"LX:ACCOUNT:v1");
+    digest.update(length.to_be_bytes());
+    digest.update(name.as_bytes());
+    Actor {
+        signing_key,
+        did,
+        source: digest.finalize().into(),
+    }
+}
+
 fn signed_send(actor: &Actor, asset: [u8; 32], sequence: u64) -> Vec<u8> {
+    signed_send_payload(actor, asset, sequence, false)
+}
+
+fn signed_send_payload(actor: &Actor, asset: [u8; 32], sequence: u64, truncated: bool) -> Vec<u8> {
     let destination = random32();
     let idempotency = random32();
     let amount = 1_u128;
@@ -515,7 +608,7 @@ fn signed_send(actor: &Actor, asset: [u8; 32], sequence: u64) -> Vec<u8> {
     context_material.extend_from_slice(&amount.to_be_bytes());
     context_material.extend_from_slice(&idempotency);
     let context = domain_hash(Domain::ContextHash, &context_material);
-    let payload_bytes = send_payload(
+    let mut payload_bytes = send_payload(
         &actor.signing_key,
         actor.source,
         destination,
@@ -526,6 +619,9 @@ fn signed_send(actor: &Actor, asset: [u8; 32], sequence: u64) -> Vec<u8> {
         expires_at,
         context,
     );
+    if truncated {
+        assert!(payload_bytes.pop().is_some());
+    }
     let activity_type = must(
         ActivityType::new(ModuleId::Asset, SEND_ACTIVITY),
         "activity type",
@@ -542,7 +638,7 @@ fn signed_send(actor: &Actor, asset: [u8; 32], sequence: u64) -> Vec<u8> {
             .protocol_version(PROTOCOL_VERSION)
             .and_then(|value| value.network_id(NETWORK_ID))
             .and_then(|value| value.activity_type(activity_type))
-            .and_then(|value| value.actor_did(must(Did::new(&actor.source), "did")))
+            .and_then(|value| value.actor_did(must(Did::new(actor.did.as_bytes()), "did")))
             .and_then(|value| value.authority(must(Authority::owner(&public_key), "authority")))
             .and_then(|value| value.account_sequence(sequence))
             .and_then(|value| {
@@ -739,9 +835,10 @@ fn start_cluster(with_sequencer: bool) -> Cluster {
     assert!(layerxd.is_file(), "{} is not built", layerxd.display());
     assert!(builder.is_file(), "{} is not built", builder.display());
     let root = std::env::temp_dir().join(format!(
-        "layerx-authority-{}-{}",
+        "layerx-authority-{}-{}-{}",
         std::process::id(),
-        now_ms()
+        now_ms(),
+        hex::encode(&random32()[..8])
     ));
     make_dir(&root, 0o755);
     let genesis = build_genesis(&root, &builder);
@@ -818,6 +915,15 @@ fn start_cluster(with_sequencer: bool) -> Cluster {
         root.join("replica.stderr"),
     );
     wait_for_port(replica_port, &mut replica, "authority replica");
+    assert!(
+        must(
+            fs::metadata(replica_dir.join("replica.log")),
+            "replica log metadata"
+        )
+        .len()
+            > 0,
+        "replica did not grow its fresh log"
+    );
 
     let node_dir = root.join("node");
     let checkpoints = node_dir.join("checkpoints");
@@ -832,14 +938,10 @@ fn start_cluster(with_sequencer: bool) -> Cluster {
         &registration(&genesis.receipt_state_root),
         0o600,
     );
-    let actor_seed = random32();
-    let actor = Actor {
-        signing_key: SigningKey::from_bytes(&actor_seed),
-        source: random32(),
-    };
+    let actor = actor();
     let identities = format!(
         "{}:{}:1\n",
-        hex::encode(&actor.source),
+        hex::encode(actor.did.as_bytes()),
         hex::encode(&actor.signing_key.verifying_key().to_bytes())
     );
     write(
@@ -867,6 +969,17 @@ fn start_cluster(with_sequencer: bool) -> Cluster {
     let socket = run_dir.join("layerxd.sock");
     let text = |path: PathBuf| path.to_string_lossy().into_owned();
     let mut node_env = BTreeMap::new();
+    node_env.insert("LAYERX_NODE_PAXEER_CHAIN_ID", "31337".to_owned());
+    node_env.insert("LAYERX_NODE_PAXEER_RPC_ADDRESS", "127.0.0.1".to_owned());
+    node_env.insert("LAYERX_NODE_PAXEER_RPC_PORT", free_port().to_string());
+    node_env.insert(
+        "LAYERX_NODE_SETTLEMENT_CONTRACT",
+        format!("0x{}", "11".repeat(20)),
+    );
+    node_env.insert(
+        "LAYERX_NODE_CHECKPOINT_REGISTRY",
+        format!("0x{}", "22".repeat(20)),
+    );
     node_env.insert(
         "LAYERX_NODE_CHECKPOINT_DIRECTORY",
         text(checkpoints.clone()),
@@ -902,7 +1015,10 @@ fn start_cluster(with_sequencer: bool) -> Cluster {
         "LAYERX_NODE_HISTORY_DATABASE",
         text(node_dir.join("history.db")),
     );
-    node_env.insert("LAYERX_NODE_HISTORY_MIGRATIONS", text(migrations.clone()));
+    node_env.insert(
+        "LAYERX_NODE_HISTORY_MIGRATIONS",
+        text(migrations.join("0007_history_index.sql")),
+    );
     node_env.insert("LAYERX_NODE_SEQUENCER_ID", hex::encode(&sequencer_id));
     node_env.insert(
         "LAYERX_NODE_SEQUENCER_PUBLIC_KEY",
@@ -952,6 +1068,18 @@ fn start_cluster(with_sequencer: bool) -> Cluster {
             root.join("sequencer.stderr"),
         );
         wait_for_lni(&socket, &gate, &mut sequencer);
+        for name in [
+            "feed.log",
+            "canonical.log",
+            "receipt-authority.log",
+            "batch.log",
+            "evidence.log",
+        ] {
+            assert!(
+                must(fs::metadata(logs.join(name)), "sequencer log metadata").len() > 0,
+                "sequencer did not grow fresh log {name}"
+            );
+        }
         Some(sequencer)
     } else {
         None
@@ -1154,6 +1282,24 @@ fn authority_facts(answer: &HttpAnswer) -> AuthorizedBatch {
 fn real_node_authority_serves_verified_facts_and_reflects_replica_loss() {
     let mut cluster = start_cluster(true);
     let mut transport = connect_lni(&cluster.socket, &cluster.gate);
+    let admission_log = cluster
+        .root
+        .join("node/checkpoints/.layerxd-lni-admission.log");
+    let admission_before = must(fs::metadata(&admission_log), "admission log").len();
+    let malformed = signed_send_payload(&cluster.actor, cluster.asset, 1, true);
+    let (tag, refusal, proof) = exchange(&mut transport, 3, 9000, &malformed);
+    assert_eq!(tag, 25);
+    assert!(proof.is_empty());
+    let refusal = decode_core_refusal(&refusal).unwrap_or_else(|| panic!("typed decode refusal"));
+    assert_eq!(refusal.class, 4);
+    assert_eq!(
+        refusal.result.raw(),
+        layerx_types::result::KnownResult::MalformedSend.raw()
+    );
+    assert_eq!(
+        must(fs::metadata(&admission_log), "admission log after refusal").len(),
+        admission_before
+    );
     let signed = signed_send(&cluster.actor, cluster.asset, 1);
     let submitted = submit_and_wait(&mut transport, &signed, 10_000);
     let signed_second = signed_send(&cluster.actor, cluster.asset, 2);

@@ -82,6 +82,7 @@ pub enum WithdrawalConfigError {
     ZeroRequiredConfirmations,
     ZeroPollCadence,
     ZeroDelayedAfterPolls,
+    UnsupportedProtocolVersion,
 }
 
 /// Exact facts the verified `LayerX` debit receipt must establish.
@@ -275,6 +276,18 @@ impl CheckpointProof {
         siblings: Vec<[u8; 32]>,
         attestations: Vec<WithdrawalAttestation>,
     ) -> Result<Self, ClaimRefusal> {
+        Self::validated_for_protocol(layerx_wire::limits::PROTOCOL_VERSION, checkpoint_hash, state_root, epoch, batch_number, data_availability_root, leaf_index, siblings, attestations)
+    }
+
+    pub fn validated_for_protocol(
+        protocol_version: u16,
+        checkpoint_hash: [u8; 32], state_root: [u8; 32], epoch: u64,
+        batch_number: u64, data_availability_root: [u8; 32], leaf_index: u64,
+        siblings: Vec<[u8; 32]>, attestations: Vec<WithdrawalAttestation>,
+    ) -> Result<Self, ClaimRefusal> {
+        if !matches!(protocol_version, layerx_wire::limits::PROTOCOL_VERSION | layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION) {
+            return Err(ClaimRefusal::InvalidAttestation { index: 0, field: "protocol_version" });
+        }
         for (field, value) in [
             ("checkpoint_hash", checkpoint_hash),
             ("state_root", state_root),
@@ -310,7 +323,7 @@ impl CheckpointProof {
         for (index, attestation) in attestations.iter().enumerate() {
             for (valid, field) in [
                 (
-                    attestation.protocol_version == layerx_wire::limits::PROTOCOL_VERSION,
+                    attestation.protocol_version == protocol_version,
                     "protocol_version",
                 ),
                 (attestation.network_id != 0, "network_id"),
@@ -643,6 +656,7 @@ pub struct CancellationEvidence {
 /// Real Paxeer withdrawal boundary: contract reads, claim construction and evidence verification.
 #[derive(Clone, Debug)]
 pub struct WithdrawalBoundary {
+    protocol_version: u16,
     client: PaxeerClient,
     endpoints: Vec<EndpointConfig>,
     claims_contract: EvmAddress,
@@ -659,6 +673,13 @@ impl WithdrawalBoundary {
     ///
     /// Refuses missing endpoints, zero contract/depth/cadence/stall bounds, or invalid URLs.
     pub fn new(config: WithdrawalConfig) -> Result<Self, WithdrawalConfigError> {
+        Self::new_for_protocol(config, layerx_wire::limits::PROTOCOL_VERSION)
+    }
+
+    pub fn new_for_protocol(config: WithdrawalConfig, protocol_version: u16) -> Result<Self, WithdrawalConfigError> {
+        if !matches!(protocol_version, layerx_wire::limits::PROTOCOL_VERSION | layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION) {
+            return Err(WithdrawalConfigError::UnsupportedProtocolVersion);
+        }
         if config.claims_contract.bytes() == [0; 20] {
             return Err(WithdrawalConfigError::ZeroClaimsContract);
         }
@@ -679,6 +700,7 @@ impl WithdrawalBoundary {
         let client = PaxeerClient::new(config.endpoints.clone())
             .map_err(WithdrawalConfigError::Endpoints)?;
         Ok(Self {
+            protocol_version,
             client,
             endpoints: config.endpoints,
             claims_contract: config.claims_contract,
@@ -705,7 +727,11 @@ impl WithdrawalBoundary {
         debit: CommittedWithdrawalDebit,
         proof: CheckpointProof,
     ) -> Result<WithdrawalClaim, WithdrawalError> {
-        validate_checkpoint_proof(&debit, &proof)?;
+        if self.protocol_version == layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION
+            && debit.verified.receipt().protocol().map(layerx_wire::receipt::ProtocolReceipt::protocol_version) != Some(self.protocol_version) {
+            return Err(WithdrawalError::Refused(ClaimRefusal::InvalidAttestation { index: 0, field: "debit_protocol_version" }));
+        }
+        validate_checkpoint_proof(&debit, &proof, self.protocol_version)?;
         let paxeer_network = self.u32_view(
             self.claims_contract,
             &call_data(SELECTOR_NETWORK_ID, &[]),
@@ -1507,6 +1533,7 @@ fn validate_debit_expectation(expectation: &DebitExpectation) -> Result<(), Debi
 fn validate_checkpoint_proof(
     debit: &CommittedWithdrawalDebit,
     proof: &CheckpointProof,
+    protocol_version: u16,
 ) -> Result<(), WithdrawalError> {
     for (name, value) in [
         ("checkpoint_hash", proof.checkpoint_hash),
@@ -1559,7 +1586,7 @@ fn validate_checkpoint_proof(
     for (index, attestation) in proof.attestations.iter().enumerate() {
         for (valid, field) in [
             (
-                attestation.protocol_version == layerx_wire::limits::PROTOCOL_VERSION,
+                attestation.protocol_version == protocol_version,
                 "protocol_version",
             ),
             (

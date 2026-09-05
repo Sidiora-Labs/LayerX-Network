@@ -1,6 +1,7 @@
 #include "layerx/lxp_genesis.h"
 
 #include "layerx/programs.h"
+#include "layerx/lx_asset.h"
 
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_hash.h"
@@ -494,9 +495,13 @@ lxp_result lxp_genesis_materialize(const lxp_genesis_manifest *manifest,
     lxp_result status = validate(manifest);
     if (status != LXP_OK || arena == NULL || kernel == NULL ||
         kernel->state == NULL || kernel->journal == NULL ||
-        kernel->module_count != 1U ||
+        kernel->module_count != (manifest->protocol_version ==
+            LXP_PROTOCOL_VERSION_STATE_COMMITMENT ? 2U : 1U) ||
         kernel->modules[0].module_id != LXP_MODULE_PROGRAMS ||
         kernel->modules[0].abi_version != programs_module_registration_v4()->abi_version ||
+        (manifest->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT &&
+         (kernel->modules[1].module_id != LXP_MODULE_ASSET ||
+          kernel->modules[1].abi_version != lx_asset_module_iface()->abi_version)) ||
         kernel->state->count != 0U || kernel->state->idempotency_count != 0U ||
         kernel->state->next_sequence != 1U ||
         kernel->module_kv_count != 0U || kernel->blob_count != 0U ||
@@ -568,6 +573,9 @@ lxp_result lxp_genesis_state_root(
     if (status == LXP_OK)
         status = lxp_kernel_register_module(kernel,
                                             programs_module_registration_v4());
+    if (status == LXP_OK &&
+        manifest->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT)
+        status = lxp_kernel_register_module(kernel, lx_asset_module_iface());
     if (status == LXP_OK) status = lxp_genesis_materialize(manifest, arena, kernel);
     if (status == LXP_OK) status = lxp_state_root(kernel, state_root);
     if (state_open) {
@@ -756,7 +764,8 @@ lxp_result lxp_genesis_bootstrap_verify(
         kernel == NULL || arena == NULL || activities_enabled == NULL)
         return LXP_ERR_NON_CANONICAL;
     *activities_enabled = false;
-    if (manifest->protocol_version != LXP_PROTOCOL_VERSION ||
+    if ((manifest->protocol_version != LXP_PROTOCOL_VERSION &&
+         manifest->protocol_version != LXP_PROTOCOL_VERSION_STATE_COMMITMENT) ||
         !lxp_network_id_matches(configured_network_id,
                                 manifest->network_id) ||
         snapshot->global_sequence != 0U || !storage_empty ||

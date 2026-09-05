@@ -1,0 +1,24 @@
+[package]
+name = "layerxctl"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.91.1"
+license = "LicenseRef-Centra-ai-Protocol"
+publish = false
+
+[dependencies]
+libc = "0.2"
+layerx-client = { path = "../../agent/crates/layerx-client" }
+layerx-types = { path = "../../agent/crates/layerx-types" }
+layerx-wire = { path = "../../agent/crates/layerx-wire" }
+
+[workspace]
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"

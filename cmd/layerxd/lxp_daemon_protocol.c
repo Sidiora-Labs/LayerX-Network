@@ -358,6 +358,41 @@ static lxp_result changes_route(lxp_daemon_protocol_owner *owner,
     return status;
 }
 
+static lxp_result artifacts_route(lxp_daemon_protocol_owner *owner,
+                                   const uint8_t activity_id[32],
+                                   const uint8_t receipt_digest[32],
+                                   lxp_arena *arena, json_writer *writer)
+{
+    lxp_daemon_receipt_evidence evidence;
+    lxp_receipt receipt;
+    lxp_result status;
+    if (owner->receipt_authority == NULL) return LXP_ERR_PROJECTION_STALE;
+    status = lxp_daemon_receipt_authority_lookup(
+        owner->receipt_authority, receipt_digest, arena, &evidence);
+    if (status == LXP_OK)
+        status = lxp_receipt_decode(evidence.canonical_receipt.bytes,
+            evidence.canonical_receipt.length, true, &receipt);
+    if (status == LXP_OK &&
+        (lxp_ct_memcmp(receipt.activity_id, activity_id, 32U) != 0 ||
+         receipt.module_id != LXP_MODULE_PROGRAMS ||
+         !receipt.program_outcome.present))
+        status = LXP_ERR_CONTEXT_MISMATCH;
+    if (status == LXP_OK)
+        status = lxp_receipt_bind_program_artifacts(
+            &receipt, evidence.terminal_payload, evidence.call_graph);
+    if (status != LXP_OK) return status;
+    json_text(writer, "{\"activity_id\":\"");
+    json_hex(writer, activity_id, 32U);
+    json_text(writer, "\",\"receipt_digest\":\"");
+    json_hex(writer, receipt_digest, 32U);
+    json_text(writer, "\",\"terminal_payload\":\"");
+    json_hex(writer, evidence.terminal_payload.bytes, evidence.terminal_payload.length);
+    json_text(writer, "\",\"call_graph\":\"");
+    json_hex(writer, evidence.call_graph.bytes, evidence.call_graph.length);
+    json_text(writer, "\"}");
+    return writer->status;
+}
+
 static lxp_result batch_route(lxp_daemon_protocol_owner *owner,
                               const uint8_t batch_id[32],
                               const uint8_t receipt_digest[32],
@@ -402,6 +437,22 @@ static lxp_result route_inner(lxp_daemon_protocol_owner *owner,
     }
     if (strncmp(path, program_prefix, sizeof(program_prefix) - 1U) == 0) {
         const char *suffix = path + sizeof(program_prefix) - 1U;
+        if (strncmp(suffix, "activities/", 11U) == 0) {
+            static const char tail[] = "/artifacts?receipt_digest=";
+            char activity_text[65];
+            uint8_t activity_id[32], receipt_digest[32];
+            const char *activity = suffix + 11U;
+            if (strlen(activity) != 64U + sizeof(tail) - 1U + 64U ||
+                memcmp(activity + 64U, tail, sizeof(tail) - 1U) != 0)
+                return LXP_ERR_NON_CANONICAL;
+            (void)memcpy(activity_text, activity, 64U);
+            activity_text[64] = '\0';
+            if (parse_hex32(activity_text, activity_id) != LXP_OK ||
+                parse_hex32(activity + 64U + sizeof(tail) - 1U,
+                            receipt_digest) != LXP_OK)
+                return LXP_ERR_NON_CANONICAL;
+            return artifacts_route(owner, activity_id, receipt_digest, arena, writer);
+        }
         if (strcmp(suffix, "account-state/changes") == 0)
             return LXP_ERR_NON_CANONICAL;
         if (strncmp(suffix, "account-state/changes?after_sequence=", 37U) == 0) {
@@ -457,6 +508,7 @@ lxp_result lxp_daemon_protocol_owner_attach(
     lxp_result status;
     pthread_mutexattr_t mutex_attributes;
     bool mutex_initialized = false;
+    const char *stage = "input validation";
     if (owner == NULL || kernel == NULL || identities == NULL ||
         network_id == 0U ||
         programs_runtime == NULL ||
@@ -471,8 +523,12 @@ lxp_result lxp_daemon_protocol_owner_attach(
         (kernel->module_runtime[LXP_MODULE_PROGRAMS] != NULL &&
          kernel->module_runtime[LXP_MODULE_PROGRAMS] != programs_runtime) ||
         history->log != canonical_log || receipt_authority->log == feed_log ||
-        receipt_authority->log == canonical_log || feed_log == canonical_log)
+        receipt_authority->log == canonical_log || feed_log == canonical_log) {
+        (void)fprintf(stderr, "layerxd: protocol owner input invalid (scratch available %zu)\n",
+                      scratch != NULL && scratch->offset <= scratch->capacity ?
+                      scratch->capacity - scratch->offset : 0U);
         return LXP_ERR_NON_CANONICAL;
+    }
     for (index = 0U; index < bearer_token_length; ++index)
         if (bearer_token[index] < 0x21U || bearer_token[index] > 0x7eU)
             return LXP_ERR_NON_CANONICAL;
@@ -480,6 +536,7 @@ lxp_result lxp_daemon_protocol_owner_attach(
     owner->kernel = kernel;
     owner->identities = identities;
     owner->network_id = network_id;
+    owner->protocol_version = LXP_PROTOCOL_VERSION;
     owner->programs_runtime = programs_runtime;
     owner->history = history;
     owner->verified_receipts = verified_receipts;
@@ -502,18 +559,19 @@ lxp_result lxp_daemon_protocol_owner_attach(
     status = lxp_verified_receipt_index_bind_fallback(
         verified_receipts, durable_receipt_facts, owner);
     if (status != LXP_OK) goto fail;
+    stage = "feed store open";
     status = lxp_programs_state_feed_store_open(
         &owner->feed_store, feed_log, canonical_log, history, scratch,
         &owner->mutex);
     if (status == LXP_OK) {
+        stage = "module runtime binding";
         programs_runtime->state_feed = &owner->feed_store.feed;
         status = lxp_kernel_bind_module_runtime(
             kernel, LXP_MODULE_PROGRAMS, programs_runtime);
     }
-    if (status == LXP_OK)
-        status = lxp_programs_bind_state_feed(
-            kernel, &owner->feed_store.feed);
+    if (status == LXP_OK) stage = "canonical replay";
     if (status == LXP_OK) status = replay(replay_context, owner);
+    if (status == LXP_OK) stage = "feed recovery";
     if (status == LXP_OK)
         status = lxp_programs_state_feed_store_recover(
             &owner->feed_store, kernel);
@@ -590,6 +648,7 @@ lxp_result lxp_daemon_protocol_owner_attach(
     if (status == LXP_OK) owner->attached = true;
     else {
 fail:
+        (void)fprintf(stderr, "layerxd: protocol owner %s failed with result %d\n", stage, (int)status);
         programs_runtime->state_feed = NULL;
         if (kernel->commit_observer_context == &owner->feed_store.feed) {
             kernel->observe_commit = NULL;

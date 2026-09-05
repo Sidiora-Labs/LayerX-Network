@@ -383,7 +383,7 @@ static lxp_result catalog_count_visit(const uint8_t *key, size_t key_length,
         read_u16(record + 65U) == 0U ||
         read_u16(record + 65U) > LX_PROGRAMS_ACCOUNT_ABI_VERSION ||
         (read_u16(record + 65U) == LX_PROGRAMS_ACCOUNT_ABI_VERSION &&
-         value->ctx->protocol_version != LXP_PROTOCOL_VERSION_OCCUPANCY) ||
+         !lxp_protocol_version_uses_occupancy(value->ctx->protocol_version)) ||
         lxp_ct_is_zero(record + 33U, 32U) || value->catalog_count == UINT32_MAX)
         return LXP_FATAL_INVARIANT;
     lifecycle = lxp_programs_program_active(value->ctx, key + 8U);
@@ -924,7 +924,7 @@ lxp_result layerx_programs_call_terminal_begin(
         terminal_length > value->terminal.terminal_capacity ||
         events_length > value->terminal.events_capacity)
         return LXP_ERR_NON_CANONICAL;
-    if (value->ctx->protocol_version == LXP_PROTOCOL_VERSION_OCCUPANCY &&
+    if (lxp_protocol_version_uses_occupancy(value->ctx->protocol_version) &&
         terminal_kind == LXP_PROGRAM_TERMINAL_SUCCESS &&
         (value->occupancy == NULL || !value->occupancy->applied))
         return LXP_FATAL_INVARIANT;
@@ -1062,8 +1062,7 @@ lxp_result layerx_programs_call_terminal_publish(uint64_t token)
     }
     (void)memcpy(outcome.call_graph_root, graph_root, sizeof(graph_root));
     (void)memcpy(outcome.terminal_payload_root, terminal_root, sizeof(terminal_root));
-    if (value->ctx->kernel->journal != NULL &&
-        value->ctx->kernel->journal->open) {
+    {
         outcome.call_graph_payload = (lxp_byte_span){
             value->terminal.graph, value->terminal.graph_length
         };
@@ -1698,7 +1697,7 @@ lxp_result lxp_programs_call_decode(lxp_module_ctx *ctx,
     if (value->abi_version > registration->abi_version ||
         value->abi_version > LX_PROGRAMS_ACCOUNT_ABI_VERSION ||
         (value->abi_version == LX_PROGRAMS_ACCOUNT_ABI_VERSION &&
-         ctx->protocol_version != LXP_PROTOCOL_VERSION_OCCUPANCY))
+         !lxp_protocol_version_uses_occupancy(ctx->protocol_version)))
         return LXP_ERR_VERSION_UNSUPPORTED;
     if ((size_t)value->entrypoint_length > SIZE_MAX - cursor)
         return LXP_ERR_LENGTH_LIMIT;
@@ -1909,7 +1908,7 @@ lxp_result lxp_programs_call_execute(
     value->occupancy = (lxp_programs_occupancy_bridge *)allocation;
     status = lxp_programs_occupancy_bridge_init(value->occupancy, ctx);
     if (status == LXP_OK &&
-        ctx->protocol_version == LXP_PROTOCOL_VERSION_OCCUPANCY)
+        lxp_protocol_version_uses_occupancy(ctx->protocol_version))
         status = lxp_programs_occupancy_bind_call(
             value->occupancy, value->program_id, value->budget);
     if (status != LXP_OK) return status;

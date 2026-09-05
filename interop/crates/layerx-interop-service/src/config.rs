@@ -221,7 +221,7 @@ pub fn load() -> Result<Config, String> {
     let protocol_version = wire_version
         .parse::<u16>()
         .map_err(|_| "interop LXP wire version must be numeric".to_owned())?;
-    if protocol_version != layerx_wire::limits::PROTOCOL_VERSION {
+    if !layerx_wire::limits::protocol_version_uses_occupancy(protocol_version) {
         return Err("interop LXP wire version is not the current beta protocol".to_owned());
     }
     let protocol_network_id = env::var("LAYERX_INTEROP_PROTOCOL_NETWORK_ID")

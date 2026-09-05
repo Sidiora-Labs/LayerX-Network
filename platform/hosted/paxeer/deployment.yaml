@@ -1,0 +1,85 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: {name: paxeer, namespace: layerx-testnet}
+spec:
+  serviceName: paxeer
+  replicas: 1
+  selector: {matchLabels: {app: paxeer}}
+  template:
+    metadata: {labels: {app: paxeer, layerx-plane: trusted-boundary}}
+    spec:
+      securityContext: {runAsNonRoot: true, runAsUser: 4020, runAsGroup: 4020, fsGroup: 4020}
+      initContainers:
+        - name: genesis
+          image: ghcr.io/sidiora-labs/paxd:0.1.0
+          imagePullPolicy: Always
+          command: [bash, /opt/layerx/init-chain.sh]
+          env:
+            - {name: LAYERX_PAXEER_HOME, value: /var/lib/paxeer}
+            - {name: LAYERX_PAXEER_DEPLOYER_ADDRESS_FILE, value: /run/layerx/deployer/address}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/paxeer}
+            - {name: deployer, mountPath: /run/layerx/deployer, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+      containers:
+        - name: paxd
+          image: ghcr.io/sidiora-labs/paxd:0.1.0
+          imagePullPolicy: Always
+          args: [start, --home, /var/lib/paxeer]
+          resources: {requests: {cpu: "1", memory: 2Gi}, limits: {cpu: "4", memory: 8Gi}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/paxeer}
+            - {name: tmp, mountPath: /tmp}
+        - name: boundary
+          image: ghcr.io/sidiora-labs/layerx-paxeer-boundary:0.1.0
+          imagePullPolicy: Always
+          env:
+            - {name: LAYERX_PAXEER_BOUNDARY_LISTEN, value: "0.0.0.0:9443"}
+            - {name: LAYERX_PAXEER_NODE_URL, value: "http://127.0.0.1:8545"}
+            - {name: LAYERX_PAXEER_CHAIN_ID, value: "125"}
+            - {name: LAYERX_PAXEER_BOUNDARY_TLS_CERT_DER, value: /run/layerx/tls/server.crt.der}
+            - {name: LAYERX_PAXEER_BOUNDARY_TLS_KEY_DER, value: /run/layerx/tls/server.key.der}
+          ports: [{name: https, containerPort: 9443}]
+          readinessProbe: {httpGet: {path: /readyz, port: https, scheme: HTTPS}, periodSeconds: 5}
+          livenessProbe: {httpGet: {path: /livez, port: https, scheme: HTTPS}, periodSeconds: 10}
+          resources: {requests: {cpu: 100m, memory: 64Mi}, limits: {cpu: "1", memory: 512Mi}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts:
+            - {name: tls, mountPath: /run/layerx/tls, readOnly: true}
+      volumes:
+        - {name: tls, secret: {secretName: paxeer-boundary-tls}}
+        - {name: deployer, secret: {secretName: paxeer-deployer-address}}
+        - {name: tmp, emptyDir: {}}
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec: {accessModes: [ReadWriteOnce], resources: {requests: {storage: 40Gi}}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: paxeer, namespace: layerx-testnet}
+spec: {clusterIP: None, selector: {app: paxeer}, ports: [{name: https, port: 9443, targetPort: https}]}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: paxeer-boundary, namespace: layerx-testnet}
+spec: {selector: {app: paxeer}, ports: [{name: https, port: 9443, targetPort: https}]}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: paxeer-boundary, namespace: layerx-testnet}
+spec:
+  podSelector: {matchLabels: {app: paxeer}}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector: {matchLabels: {app: layerx-testnet-control}}
+        - namespaceSelector: {}
+          podSelector: {matchLabels: {layerx-plane: human}}
+      ports: [{protocol: TCP, port: 9443}]
+  egress:
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}
+          podSelector: {matchLabels: {k8s-app: kube-dns}}
+      ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]

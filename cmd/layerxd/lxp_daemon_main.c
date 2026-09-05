@@ -2,6 +2,7 @@
 #include "layerx/lxp_crypto.h"
 
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
 static void release_queue_locked(lxp_daemon *daemon)
@@ -77,6 +78,8 @@ static void *executor_run(void *argument)
             (consumed_count == 0U || consumed_count > activity_count))
             status = LXP_FATAL_INVARIANT;
         if (status != LXP_OK) {
+            (void)fprintf(stderr, "layerxd: execution failed at sequence %llu with result %d\n",
+                          (unsigned long long)sequence, (int)status);
             daemon->failure = status;
             daemon->accepting = false;
             daemon->stop_requested = true;

@@ -169,6 +169,9 @@ TEST_LIBRARY := $(BUILD_DIR)/liblayerx-testing.a
 
 all: build
 
+.PHONY: check
+check: test
+
 mirror-live:
 	$(INTEROP_CARGO) build --locked --release --manifest-path $(INTEROP_MANIFEST) \
 		--package layerx-mirror --bin layerx-mirror-publisher
@@ -261,7 +264,7 @@ test-harness: $(BUILD_DIR)/tests/lxp_test_harness
 list-tests: $(BUILD_DIR)/tests/lxp_test_harness
 	$(BUILD_DIR)/tests/lxp_test_harness --list
 
-test: test-result test-protocol test-arena test-harness test-codec \
+test: test-result test-protocol test-state-commitment-transition test-program-artifacts test-arena test-harness test-codec \
 	test-codec-limits test-codec-version test-codec-vectors fuzz-codec-smoke \
 	test-crypto-suite test-arith-u128 test-arith-u256 test-arith-rounding \
 	test-arith-property test-arith-nofloat test-log test-log-durability \
@@ -390,6 +393,16 @@ $(BUILD_DIR)/tests/test_asset_registry: tests/modules/test_asset_registry.c \
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(EXTRA_LDFLAGS) \
 		-lcrypto -pthread -o $@
+
+$(BUILD_DIR)/tests/test_state_commitment_transition: tests/test_state_commitment_transition.c \
+		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
+		$(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
+
+.PHONY: test-state-commitment-transition
+test-state-commitment-transition: $(BUILD_DIR)/tests/test_state_commitment_transition
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_state_commitment_transition
 
 test-asset-registry: $(BUILD_DIR)/tests/test_asset_registry
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_asset_registry
@@ -1135,16 +1148,20 @@ LAYERXD_SOURCES = \
 	cmd/layerxd/lxp_daemon_listener.c \
 	cmd/layerxd/lxp_daemon_lni.c \
 	cmd/layerxd/lxp_daemon_evidence.c \
+	cmd/layerxd/lxp_daemon_finality_authority.c \
 	cmd/layerxd/lxp_daemon_batch_wal.c \
 	cmd/layerxd/lxp_daemon_artifact.c \
 	cmd/layerxd/lxp_daemon_process.c \
 	cmd/layerxd/lxp_daemon_authority_replica.c \
 	cmd/layerxd/lxp_daemon_cli.c
 
-$(BUILD_DIR)/bin/layerxd: cmd/layerxd/main.c $(LAYERXD_SOURCES) $(LIBRARY) \
+LAYERXD_OBJECTS = $(patsubst %.c,$(BUILD_DIR)/obj/%.o,cmd/layerxd/main.c $(LAYERXD_SOURCES))
+-include $(LAYERXD_OBJECTS:.o=.d)
+
+$(BUILD_DIR)/bin/layerxd: $(LAYERXD_OBJECTS) $(LIBRARY) \
 		$(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(CFLAGS) cmd/layerxd/main.c $(LAYERXD_SOURCES) \
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LAYERXD_OBJECTS) \
 		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) $(EXTRA_LDFLAGS) \
 		-lcrypto -lsqlite3 -pthread -ldl -lm -o $@
 
@@ -1193,6 +1210,15 @@ TOOL_SOURCES = \
 	cmd/layerx-verify/lxp_verify_main.c \
 	cmd/layerx-verify/lxp_verify_fetch.c \
 	cmd/layerx-genesis/lxp_genesis_cli.c
+
+.PHONY: layerxctl test-layerxctl
+layerxctl:
+	cargo build --locked --release --manifest-path cmd/layerxctl/Cargo.toml
+	@mkdir -p $(BUILD_DIR)/bin
+	cp cmd/layerxctl/target/release/layerxctl $(BUILD_DIR)/bin/layerxctl
+
+test-layerxctl: layerxctl
+	cargo test --locked --release --manifest-path cmd/layerxctl/Cargo.toml
 
 $(BUILD_DIR)/tests/test_tools: tests/test_tools.c $(TOOL_SOURCES) $(LIBRARY)
 	@mkdir -p $(@D)
@@ -1623,6 +1649,43 @@ $(BUILD_DIR)/tests/lxp_test_finality_evidence: \
 test-finality-evidence: $(BUILD_DIR)/tests/lxp_test_finality_evidence
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_finality_evidence
 
+$(BUILD_DIR)/tests/lxp_test_daemon_finality_authority: \
+		tests/daemon/lxp_test_finality_authority.c \
+		cmd/layerxd/lxp_daemon_finality_authority.c \
+		cmd/layerxd/lxp_daemon_finality_authority.h $(LIBRARY)
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) -Icmd/layerxd $(CFLAGS) \
+		tests/daemon/lxp_test_finality_authority.c \
+		cmd/layerxd/lxp_daemon_finality_authority.c $(LIBRARY) \
+		$(EXTRA_LDFLAGS) -lcrypto -pthread -o $@
+
+.PHONY: test-daemon-finality-authority
+.PHONY: test-program-artifacts
+$(BUILD_DIR)/tests/lxp_test_program_artifacts: \
+		tests/daemon/lxp_test_program_artifacts.c tests/programs/test_call_activity.c \
+		cmd/layerxd/lxp_daemon_receipt_authority.c cmd/layerxd/lxp_daemon_protocol.c \
+		cmd/layerxd/lxp_daemon_evidence.c $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) tests/daemon/lxp_test_program_artifacts.c \
+		cmd/layerxd/lxp_daemon_receipt_authority.c cmd/layerxd/lxp_daemon_protocol.c \
+		cmd/layerxd/lxp_daemon_evidence.c $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
+		$(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -lsqlite3 -pthread -ldl -lm -o $@
+
+test-program-artifacts: $(BUILD_DIR)/tests/lxp_test_program_artifacts
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_program_artifacts
+
+$(BUILD_DIR)/tests/lxp_test_finality_json: tests/daemon/lxp_test_finality_json.c \
+		cmd/layerxd/lxp_daemon_finality_authority.c \
+		cmd/layerxd/lxp_daemon_finality_authority.h $(LIBRARY)
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) -Icmd/layerxd $(CFLAGS) $< $(LIBRARY) \
+		$(EXTRA_LDFLAGS) -lcrypto -pthread -o $@
+
+test-daemon-finality-authority: $(BUILD_DIR)/tests/lxp_test_daemon_finality_authority $(BUILD_DIR)/tests/lxp_test_finality_json layerxd layerx-genesis-build
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_finality_json
+	PATH="/root/.foundry/bin:$$PATH" bash tests/daemon/finality-authority-chain.sh $(BUILD_DIR)/tests/lxp_test_daemon_finality_authority
+	bash tests/daemon/bootstrap-send.sh
+
 test-storage-order:
 	sh tests/storage/check_daemon_recovery_order.sh
 
@@ -1638,6 +1701,9 @@ $(BUILD_DIR)/tests/lxp_test_journal_tsan: tests/state/lxp_test_journal.c \
 		src/state/lxp_journal.c src/crypto/lxp_hash.c \
 		src/state/lxp_idempotency.c \
 		src/crypto/lxp_ct.c \
+		src/ledger/lx_account_registry.c src/ledger/lx_account_id.c \
+		src/storage/lxp_log.c src/storage/lxp_fault_hooks.c \
+		src/protocol/lxp_u128.c \
 		src/protocol/lxp_protocol.c src/protocol/lxp_result.c
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(SANITIZER_CFLAGS) -fsanitize=thread \

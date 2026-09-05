@@ -12,6 +12,8 @@ use layerx_platform_core::{
 use layerx_proof::inclusion::SequencerAuthorization;
 use layerx_proof::receipt::{verify_outcome, AuthorizedBatch};
 use layerx_proof::state::decode_account_value;
+use layerx_types::intent::ProgramCall;
+use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
 use layerx_types::verify::VerificationLevel;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use rustls::server::WebPkiClientVerifier;
@@ -38,10 +40,10 @@ const MAX_RELAY_BYTES: usize = 4 * 1024 * 1024;
 const IO_TIMEOUT: Duration = Duration::from_secs(8);
 const RESET_TIMEOUT: Duration = Duration::from_secs(180);
 const MAX_CONNECTIONS: usize = 128;
-const LNI_FRAME_BYTES: usize = 1_146_902;
+const LNI_FRAME_BYTES: usize = 1_212_416;
 const LNI_DEADLINE: Duration = Duration::from_secs(5);
 const RECEIPT_POLL: Duration = Duration::from_millis(200);
-const WIRE_VERSION: &str = "1.3";
+const WIRE_VERSION: &str = "3";
 const RECEIPT_LOOKUP_REQUEST_TAG: u16 = 5;
 const RECEIPT_LOOKUP_RESPONSE_TAG: u16 = 6;
 const ERROR_RESPONSE_TAG: u16 = 25;
@@ -64,6 +66,8 @@ struct Config {
     network_id: u32,
     node: NodeEndpoint,
     node_token: Zeroizing<String>,
+    replica: NodeEndpoint,
+    replica_token: Zeroizing<String>,
     admin_token: Zeroizing<String>,
     treasury_seed: Zeroizing<[u8; 32]>,
     treasury_did: String,
@@ -74,6 +78,7 @@ struct Config {
     fee_limit: u128,
     receipt_deadline: Duration,
     admin_lock: Mutex<()>,
+    journal_lock: Mutex<()>,
 }
 
 #[derive(Clone)]
@@ -271,6 +276,8 @@ fn config() -> Result<Config, String> {
         network_id,
         node: parse_node_url(&required("LAYERX_CORE_NODE_URL")?)?,
         node_token: read_secret("LAYERX_CORE_NODE_BEARER_TOKEN_FILE")?,
+        replica: parse_node_url(&required("LAYERX_CORE_REPLICA_URL")?)?,
+        replica_token: read_secret("LAYERX_CORE_REPLICA_BEARER_TOKEN_FILE")?,
         admin_token: read_secret("LAYERX_CORE_ADMIN_TOKEN_FILE")?,
         treasury_did: treasury_did(&treasury_seed),
         treasury_seed,
@@ -284,6 +291,7 @@ fn config() -> Result<Config, String> {
             15_000,
         )?),
         admin_lock: Mutex::new(()),
+        journal_lock: Mutex::new(()),
     })
 }
 
@@ -366,10 +374,10 @@ fn parse_client_request(stream: &mut impl Read) -> Result<Request, String> {
         .remove("")
         .ok_or_else(|| "request line is missing".to_owned())?;
     let mut parts = start.split_whitespace();
-    request.method = parts
+    parts
         .next()
         .ok_or_else(|| "request method is missing".to_owned())?
-        .to_owned();
+        .clone_into(&mut request.method);
     let target = parts
         .next()
         .ok_or_else(|| "request target is missing".to_owned())?
@@ -382,7 +390,7 @@ fn parse_client_request(stream: &mut impl Read) -> Result<Request, String> {
             if !valid_query(query) {
                 return Err("request query is invalid".to_owned());
             }
-            request.path = path.to_owned();
+            path.clone_into(&mut request.path);
             request.query = Some(query.to_owned());
         }
         None => request.path = target,
@@ -425,7 +433,7 @@ fn next_trace() -> String {
     format!("core-{}", TRACE.fetch_add(1, Ordering::AcqRel))
 }
 
-fn success(result: serde_json::Value) -> Response {
+fn success(result: &serde_json::Value) -> Response {
     json_response(
         200,
         &serde_json::json!({ "ok": true, "result": result, "trace": next_trace() }),
@@ -471,7 +479,7 @@ fn lni_limits() -> Limits {
 fn handshake_config(config: &Config) -> HandshakeConfig {
     HandshakeConfig {
         built_interface_version: Version::V1_3,
-        expected_protocol_version: layerx_wire::limits::PROTOCOL_VERSION,
+        expected_protocol_version: layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION,
         expected_network_id: config.network_id,
     }
 }
@@ -624,11 +632,36 @@ fn signer_key(authority: &[u8]) -> Option<[u8; 32]> {
     }
 }
 
-fn submit_activity(config: &Config, canonical: &[u8]) -> Result<Response, Response> {
-    let (registry, _) =
-        asset_registry().map_err(|_| refusal(503, "registry_unavailable", Some(5)))?;
+fn submission_registry() -> Result<ModuleRegistry, String> {
+    let send = ActivityType::new(ModuleId::Asset, layerx_platform_core::SEND_ACTIVITY)
+        .map_err(|error| format!("send activity: {error:?}"))?;
+    let call = ActivityType::new(ModuleId::Programs, 3)
+        .map_err(|error| format!("program call activity: {error:?}"))?;
+    let asset = ModuleRegistration::new(ModuleId::Asset, &[send])
+        .map_err(|error| format!("asset registration: {error:?}"))?;
+    let programs = ModuleRegistration::new(ModuleId::Programs, &[call])
+        .map_err(|error| format!("program registration: {error:?}"))?;
+    ModuleRegistry::new(&[asset, programs]).map_err(|error| format!("module registry: {error:?}"))
+}
+
+fn submit_activity(
+    config: &Config,
+    canonical: &[u8],
+    program_call: bool,
+) -> Result<Response, Response> {
+    let registry =
+        submission_registry().map_err(|_| refusal(503, "registry_unavailable", Some(5)))?;
     let activity = layerx_wire::activity::decode_signed(canonical, &registry)
         .map_err(|_| refusal(400, "invalid_activity", None))?;
+    if program_call {
+        if activity.activity_type().module() != ModuleId::Programs
+            || activity.activity_type().ordinal() != 3
+        {
+            return Err(refusal(400, "not_program_call", None));
+        }
+        ProgramCall::from_canonical_payload(activity.payload())
+            .map_err(|_| refusal(400, "invalid_program_call", None))?;
+    }
     let signer = signer_key(activity.authority())
         .ok_or_else(|| refusal(400, "authority_unsupported", None))?;
     let mut client = connect_client(config).map_err(|error| {
@@ -655,7 +688,7 @@ fn submit_activity(config: &Config, canonical: &[u8]) -> Result<Response, Respon
         Submission::Unknown(unknown) => unknown.activity_id(),
     };
     match await_receipt(config, activity_id, config.receipt_deadline) {
-        Ok(Some(facts)) => Ok(success(receipt_result(&facts))),
+        Ok(Some(facts)) => Ok(success(&receipt_result(&facts))),
         Ok(None) => Ok(json_response(
             202,
             &serde_json::json!({
@@ -688,7 +721,7 @@ fn activities_route(config: &Config, request: &Request) -> Response {
     if canonical.is_empty() || canonical.len() > LNI_FRAME_BYTES {
         return refusal(400, "invalid_argument", None);
     }
-    match submit_activity(config, &canonical) {
+    match submit_activity(config, &canonical, request.path == "/v1/programs/call") {
         Ok(response) | Err(response) => response,
     }
 }
@@ -704,7 +737,7 @@ fn receipt_route(config: &Config, activity_hex: &str) -> Response {
         lookup_receipt_bytes(&mut transport, &handshake, activity_id, 1)
     });
     match lookup {
-        Ok(Some(bytes)) => success(serde_json::json!({
+        Ok(Some(bytes)) => success(&serde_json::json!({
             "activity_id": activity_hex,
             "receipt": hex_encode(&bytes),
         })),
@@ -719,6 +752,30 @@ fn receipt_route(config: &Config, activity_hex: &str) -> Response {
 fn readiness(config: &Config) -> Response {
     match connect_client(config) {
         Ok(client) => {
+            let zero = "0".repeat(64);
+            let target = format!("/v1/batches/{zero}/receipt-authority?receipt_digest={zero}");
+            if !matches!(
+                node_get(&config.replica, &config.replica_token, &target),
+                Ok((200 | 404, _))
+            ) {
+                return refusal(503, "replica_unavailable", Some(5));
+            }
+            let Ok(_guard) = config.journal_lock.lock() else {
+                return refusal(503, "journal_unavailable", Some(5));
+            };
+            if journal_write(
+                &config.state_dir.join("journal/ready.json"),
+                &JournalEntry {
+                    request_digest: String::new(),
+                    status: 200,
+                    body: String::new(),
+                    retry_after: None,
+                },
+            )
+            .is_err()
+            {
+                return refusal(503, "journal_unavailable", Some(5));
+            }
             let node = client.handshake().node();
             json_response(
                 200,
@@ -742,7 +799,7 @@ fn sequencer_route(config: &Config) -> Response {
     match connect_client(config) {
         Ok(client) => {
             let node = client.handshake().node();
-            success(serde_json::json!({
+            success(&serde_json::json!({
                 "network_id": node.network_id,
                 "sequencer_public_key": hex_encode(&node.authorised_sequencer_key),
                 "chain_head_sequence": node.chain_head_sequence,
@@ -798,35 +855,36 @@ fn read_relay_response(stream: &mut TcpStream) -> Result<(u16, Vec<u8>), String>
     Ok((status, body))
 }
 
+fn node_get(node: &NodeEndpoint, token: &str, target: &str) -> Result<(u16, Vec<u8>), String> {
+    TcpStream::connect((node.host.as_str(), node.port))
+        .and_then(|mut stream| {
+            stream.set_read_timeout(Some(IO_TIMEOUT))?;
+            stream.set_write_timeout(Some(IO_TIMEOUT))?;
+            write!(stream, "GET {target} HTTP/1.1\r\nHost: {}:{}\r\nAuthorization: Bearer {token}\r\nAccept: application/json\r\nConnection: close\r\n\r\n", node.host, node.port)?;
+            Ok(stream)
+        })
+        .map_err(|error| error.to_string())
+        .and_then(|mut stream| read_relay_response(&mut stream))
+}
+
 fn relay_route(config: &Config, request: &Request) -> Response {
     let target = request.query.as_ref().map_or_else(
         || request.path.clone(),
         |query| format!("{}?{query}", request.path),
     );
-    let relayed = TcpStream::connect((config.node.host.as_str(), config.node.port))
-        .and_then(|mut stream| {
-            stream.set_read_timeout(Some(IO_TIMEOUT))?;
-            stream.set_write_timeout(Some(IO_TIMEOUT))?;
-            write!(
-                stream,
-                "GET {target} HTTP/1.1\r\nHost: {}:{}\r\nAuthorization: Bearer {}\r\nAccept: application/json\r\nConnection: close\r\n\r\n",
-                config.node.host,
-                config.node.port,
-                config.node_token.as_str()
-            )?;
-            Ok(stream)
-        })
-        .map_err(|error| error.to_string())
-        .and_then(|mut stream| read_relay_response(&mut stream));
+    let relayed = node_get(&config.node, &config.node_token, &target);
     match relayed {
         Ok((status @ (200 | 404 | 503), body)) => {
-            let Ok(value) = serde_json::from_slice::<serde_json::Value>(&body) else {
+            let Ok(body) = String::from_utf8(body) else {
                 return refusal(503, "node_unavailable", Some(5));
             };
-            if status == 200 {
-                success(value)
-            } else {
-                json_response(status, &value)
+            if serde_json::from_str::<serde_json::Value>(&body).is_err() {
+                return refusal(503, "node_unavailable", Some(5));
+            }
+            Response {
+                status,
+                body,
+                retry_after: None,
             }
         }
         Ok((status, _)) => {
@@ -840,6 +898,18 @@ fn relay_route(config: &Config, request: &Request) -> Response {
     }
 }
 
+fn wrapped_relay_route(config: &Config, request: &Request) -> Response {
+    let response = relay_route(config, request);
+    if response.status == 200 {
+        serde_json::from_str(&response.body).map_or_else(
+            |_| refusal(503, "node_unavailable", Some(5)),
+            |value| success(&value),
+        )
+    } else {
+        response
+    }
+}
+
 fn is_hex64(value: &str) -> bool {
     value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
@@ -849,15 +919,14 @@ fn relay_target(path: &str) -> bool {
     match segments.as_slice() {
         ["v1", "protocol", "account-state", "head"]
         | ["v1", "programs", "account-state", "changes"] => true,
-        ["v1", "receipts", id, "account-state"]
-        | ["v1", "programs", id, "account-state"]
+        ["v1", "receipts" | "programs", id, "account-state"]
         | ["v1", "batches", id, "receipt-authority"] => is_hex64(id),
         _ => false,
     }
 }
 
 fn unavailable_capability(path: &str) -> bool {
-    path == "/v1/programs/call"
+    path == "/v1/accounts"
         || path == "/v1/programs/simulate"
         || path == "/v1/programs/registry"
         || path.starts_with("/v1/programs/registry/")
@@ -885,10 +954,12 @@ fn core_route(config: &Config, request: &Request) -> Response {
         ("GET", "/livez") => json_response(200, &serde_json::json!({ "live": true })),
         ("GET", "/readyz") => readiness(config),
         ("GET", "/v1/sequencer") => sequencer_route(config),
-        ("POST", "/v1/activities") => stateful(config, "activities", request, || {
-            activities_route(config, request)
-        }),
-        ("GET", "/v1/state") => relay_route(
+        ("POST", "/v1/activities" | "/v1/programs/call") => {
+            stateful(config, "activities", request, || {
+                activities_route(config, request)
+            })
+        }
+        ("GET", "/v1/state") => wrapped_relay_route(
             config,
             &Request {
                 method: "GET".to_owned(),
@@ -984,6 +1055,9 @@ fn stateful(
     if !valid_key(key) {
         return refusal(400, "invalid_idempotency_key", None);
     }
+    let Ok(_guard) = config.journal_lock.lock() else {
+        return refusal(503, "journal_unavailable", Some(5));
+    };
     let path = journal_path(config, scope, key);
     let digest = request_digest(request);
     match journal_read(&path) {
@@ -1001,20 +1075,39 @@ fn stateful(
             return refusal(503, "journal_unavailable", Some(5));
         }
     }
+    let pending = if scope == "activities" {
+        json_response(
+            202,
+            &serde_json::json!({"ok": true, "result": {"state": "pending"}}),
+        )
+    } else {
+        refusal(409, "outcome_unknown", Some(5))
+    };
+    if journal_write(
+        &path,
+        &JournalEntry {
+            request_digest: digest.clone(),
+            status: pending.status,
+            body: pending.body,
+            retry_after: pending.retry_after,
+        },
+    )
+    .is_err()
+    {
+        return refusal(503, "journal_unavailable", Some(5));
+    }
     let response = execute();
-    if response.status == 200 || response.status == 202 || (400..500).contains(&response.status) {
-        if let Err(error) = journal_write(
-            &path,
-            &JournalEntry {
-                request_digest: digest,
-                status: response.status,
-                body: response.body.clone(),
-                retry_after: response.retry_after,
-            },
-        ) {
-            eprintln!("layerx-core-boundary: journal: {error}");
-            return refusal(503, "journal_unavailable", Some(5));
-        }
+    if let Err(error) = journal_write(
+        &path,
+        &JournalEntry {
+            request_digest: digest,
+            status: response.status,
+            body: response.body.clone(),
+            retry_after: response.retry_after,
+        },
+    ) {
+        eprintln!("layerx-core-boundary: journal: {error}");
+        return refusal(503, "journal_unavailable", Some(5));
     }
     response
 }
@@ -1086,6 +1179,7 @@ fn fund(config: &Config, request: &Request, key: &str) -> Response {
         || !command.did.starts_with("did:")
         || command.did.len() > 512
         || !is_hex64(&command.public_key)
+        || command.did != format!("did:layerx:{}", command.public_key.to_ascii_lowercase())
         || command.amount == 0
         || command.did == config.treasury_did
         || main_account(&command.did).is_err()
@@ -1248,6 +1342,13 @@ fn reset(config: &Config) -> Response {
     }
 }
 
+fn admin_result(mut response: Response) -> Response {
+    if response.status >= 500 {
+        response.status = 422;
+    }
+    response
+}
+
 fn admin_route(config: &Config, request: &Request) -> Response {
     match (request.method.as_str(), request.path.as_str()) {
         ("GET", "/livez") => return json_response(200, &serde_json::json!({ "live": true })),
@@ -1281,14 +1382,14 @@ fn admin_route(config: &Config, request: &Request) -> Response {
         return refusal(503, "admin_unavailable", Some(5));
     };
     match request.path.as_str() {
-        "/admin/v1/testnet/fund" => {
-            stateful(config, "fund", request, || fund(config, request, &key))
-        }
+        "/admin/v1/testnet/fund" => stateful(config, "fund", request, || {
+            admin_result(fund(config, request, &key))
+        }),
         "/admin/v1/testnet/reset" => {
             if request.body != b"{}" {
                 return refusal(400, "invalid_argument", None);
             }
-            stateful(config, "reset", request, || reset(config))
+            stateful(config, "reset", request, || admin_result(reset(config)))
         }
         _ => refusal(404, "not_found", None),
     }
@@ -1309,7 +1410,13 @@ fn handle_connection(config: &Arc<Config>, plane: Plane, tcp: TcpStream) -> Resu
         |_| refusal(400, "invalid_request", None),
         |request| match plane {
             Plane::Core => core_route(config, &request),
-            Plane::Admin => admin_route(config, &request),
+            Plane::Admin => {
+                let mut response = admin_route(config, &request);
+                if response.status >= 500 && request.path != "/readyz" && request.path != "/livez" {
+                    response.status = 422;
+                }
+                response
+            }
         },
     );
     write_response(&mut stream, &response)?;
@@ -1337,14 +1444,14 @@ impl Drop for ConnectionPermit {
     }
 }
 
-fn serve(config: Arc<Config>, plane: Plane, listener: TcpListener) {
+fn serve(config: &Arc<Config>, plane: Plane, listener: &TcpListener) {
     for connection in listener.incoming() {
         match connection {
             Ok(stream) => {
                 let Some(permit) = ConnectionPermit::acquire() else {
                     continue;
                 };
-                let shared = Arc::clone(&config);
+                let shared = Arc::clone(config);
                 thread::spawn(move || {
                     let _permit = permit;
                     if let Err(error) = handle_connection(&shared, plane, stream) {
@@ -1363,8 +1470,8 @@ fn platform_core(config: Config) -> Result<(), String> {
     let config = Arc::new(config);
     eprintln!("layerx-core-boundary listening with TLS on the core and admin planes");
     let admin_config = Arc::clone(&config);
-    let admin_thread = thread::spawn(move || serve(admin_config, Plane::Admin, admin));
-    serve(config, Plane::Core, listener);
+    let admin_thread = thread::spawn(move || serve(&admin_config, Plane::Admin, &admin));
+    serve(&config, Plane::Core, &listener);
     admin_thread
         .join()
         .map_err(|_| "admin listener thread panicked".to_owned())

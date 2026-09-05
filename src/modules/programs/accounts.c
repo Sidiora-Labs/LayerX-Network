@@ -508,7 +508,7 @@ lxp_result lxp_programs_account_state_head_read(
     if (ctx == NULL || program_id == NULL || receipt_digest == NULL ||
         head == NULL || lxp_ct_is_zero(program_id, 32U) ||
         lxp_ct_is_zero(receipt_digest, 32U) ||
-        ctx->protocol_version != LXP_PROTOCOL_VERSION_OCCUPANCY ||
+        !lxp_protocol_version_uses_occupancy(ctx->protocol_version) ||
         ctx->staged_account_count != 0U || ctx->staged_count != 0U ||
         ctx->transfer_applied)
         return LXP_ERR_NON_CANONICAL;
@@ -577,7 +577,7 @@ static lxp_result value_account_fill(
     lxp_result status;
     if (ctx == NULL || binding == NULL || receipt_digest == NULL ||
         view == NULL || lxp_ct_is_zero(receipt_digest, 32U) ||
-        ctx->protocol_version != LXP_PROTOCOL_VERSION_OCCUPANCY ||
+        !lxp_protocol_version_uses_occupancy(ctx->protocol_version) ||
         ctx->staged_account_count != 0U || ctx->staged_count != 0U ||
         ctx->transfer_applied)
         return LXP_ERR_NON_CANONICAL;
@@ -733,7 +733,7 @@ lxp_result lxp_programs_account_register(
         account == NULL || created == NULL ||
         (seed == NULL && seed_length != 0U) ||
         seed_length > LX_PROGRAMS_ACCOUNT_MAX_SEED_BYTES ||
-        ctx->protocol_version != LXP_PROTOCOL_VERSION_OCCUPANCY)
+        !lxp_protocol_version_uses_occupancy(ctx->protocol_version))
         return LXP_ERR_NON_CANONICAL;
     status = account_module_required(ctx);
     if (status == LXP_OK) status = deployed_program(ctx, program_id);
@@ -814,7 +814,7 @@ lxp_result lxp_programs_account_decode(lxp_module_ctx *ctx,
     lxp_result status;
     if (ctx == NULL || payload == NULL || decoded == NULL)
         return LXP_ERR_NON_CANONICAL;
-    if (ctx->protocol_version != LXP_PROTOCOL_VERSION_OCCUPANCY)
+    if (!lxp_protocol_version_uses_occupancy(ctx->protocol_version))
         return LXP_ERR_VERSION_UNSUPPORTED;
     status = account_module_required(ctx);
     if (status != LXP_OK) return status;
@@ -850,7 +850,7 @@ lxp_result lxp_programs_account_validate(
     uint8_t account_id[32];
     lxp_result status;
     if (ctx == NULL || activity == NULL || authority == NULL || value == NULL ||
-        ctx->protocol_version != LXP_PROTOCOL_VERSION_OCCUPANCY ||
+        !lxp_protocol_version_uses_occupancy(ctx->protocol_version) ||
         lxp_ct_is_zero(authority->principal, 32U) ||
         lxp_ct_is_zero(value->program_id, 32U) ||
         lxp_ct_is_zero(value->asset_id, 32U))

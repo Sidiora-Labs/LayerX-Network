@@ -125,11 +125,13 @@ sed -i "/^\[grpc-web\]/,/^\[/ s|^enable = .*|enable = false|" "$APP"
 sed -i "/^\[grpc-web\]/,/^\[/ s|^address = .*|address = \"127.0.0.1:${GRPC_WEB_PORT}\"|" "$APP"
 sed -i "/^\[evm\]/,/^\[/ s|^http_enabled = .*|http_enabled = true|" "$APP"
 sed -i "/^\[evm\]/,/^\[/ s|^http_port = .*|http_port = ${EVM_PORT}|" "$APP"
+sed -i "/^\[evm\]/,/^\[/ s|^http_address = .*|http_address = \"127.0.0.1\"|" "$APP"
 sed -i "/^\[evm\]/,/^\[/ s|^ws_enabled = .*|ws_enabled = false|" "$APP"
 sed -i "/^\[evm\]/,/^\[/ s|^ws_port = .*|ws_port = ${EVM_WS_PORT}|" "$APP"
 sed -i "/^\[evm\]/,/^\[/ s|^enable_test_api = .*|enable_test_api = false|" "$APP"
 sed -i "s|^minimum-gas-prices = .*|minimum-gas-prices = \"0.01uhpx\"|" "$APP"
 
+grep -q '^http_address = "127.0.0.1"' "$APP" || fail "paxd lacks the loopback RPC bind setting; rebuild the current source"
 grep -q '^mode = "validator"' "$CONFIG" || fail "config.toml mode was not set"
 grep -q "^http_port = ${EVM_PORT}$" "$APP" || fail "app.toml evm http_port was not set"
 "$JQ" -e --arg usdl "$USDL_ADDRESS" '.app_state.evm.codes[0].address == $usdl and (.validators | length) == 1' "$GENESIS" >/dev/null \

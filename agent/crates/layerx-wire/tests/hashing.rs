@@ -331,3 +331,60 @@ fn checkpoint_vectors_pin_header_encoding_and_identities() {
         }
     }
 }
+
+#[test]
+fn protocol_three_account_ids_match_native_ledger_vectors() {
+    use layerx_types::account::AccountId;
+    use layerx_wire::hash::{account_id, account_id_for_protocol};
+    for (name, expected) in [
+        (
+            "agent:did:key:alice:main",
+            "efc9802f76722dfc48ebfed35bfd8b20dbc2775fe2f027d6cbd595aff1307454",
+        ),
+        (
+            "agent:did:key:alice:budget:daily",
+            "6f27c8a878c055eeb4056e5bf32864cbf113748af82e6b72e2060c39b4a18829",
+        ),
+        (
+            "system:fees",
+            "dbf940aa4c1f587b73f3b65da0dec92760e0bd0187f1f33c659ea043caebdcdf",
+        ),
+        (
+            "system:paxeer-reserve",
+            "6e0e5cca5cfaa1b20ddd1c6174321eeaf00dd74bce2adcd78b61e15aa9e26f7c",
+        ),
+    ] {
+        let account = AccountId::parse(name).unwrap_or_else(|error| panic!("{error:?}"));
+        let actual =
+            account_id_for_protocol(&account, 3).unwrap_or_else(|error| panic!("{error:?}"));
+        let mut encoded = String::new();
+        for byte in actual {
+            use std::fmt::Write as _;
+            write!(&mut encoded, "{byte:02x}").unwrap_or_else(|error| panic!("{error}"));
+        }
+        assert_eq!(encoded, expected);
+        for version in [1, 2] {
+            assert_eq!(
+                account_id_for_protocol(&account, version),
+                account_id(&account)
+            );
+        }
+        assert_ne!(account_id_for_protocol(&account, 3), account_id(&account));
+        assert!(account_id_for_protocol(&account, 4).is_err());
+    }
+    for name in ["agent:budget:x:budget:y", "agent:did:budget:x:escrow:y"] {
+        let account = AccountId::parse(name).unwrap_or_else(|error| panic!("{error:?}"));
+        assert!(account_id_for_protocol(&account, 3).is_ok());
+    }
+    for name in [
+        "agent:ALICE:main",
+        "agent:did::alice:main",
+        "agent:did:alice:budget:x:y",
+        "agent:did:alice:budget:x:budget:y",
+        "system:liquidity:x:y",
+    ] {
+        let account = AccountId::parse(name).unwrap_or_else(|error| panic!("{error:?}"));
+        assert!(account_id_for_protocol(&account, 3).is_err());
+        assert!(account_id_for_protocol(&account, 2).is_ok());
+    }
+}

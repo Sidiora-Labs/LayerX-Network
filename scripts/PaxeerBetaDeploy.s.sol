@@ -64,16 +64,81 @@ contract PaxeerBetaDeploy {
     event BetaDeploymentComplete(bytes32 indexed deploymentId, address indexed blueprint, Addresses addresses);
     event BetaBondFunded(bytes32 indexed guarantorId, address indexed controller, uint256 amount);
 
+    function predictGuarantorBond(
+        PaxeerBetaDeploymentValidator.Input calldata input,
+        bytes calldata descriptor,
+        bytes calldata registrationRequest
+    ) external returns (address) {
+        return _predictGuarantorBond(input, descriptor, registrationRequest, Constants.PROTOCOL_VERSION);
+    }
+
+    function predictGuarantorBondForProtocol(
+        PaxeerBetaDeploymentValidator.Input calldata input,
+        bytes calldata descriptor,
+        bytes calldata registrationRequest,
+        uint16 selectedProtocolVersion
+    ) external returns (address) {
+        return _predictGuarantorBond(input, descriptor, registrationRequest, selectedProtocolVersion);
+    }
+
+    function _predictGuarantorBond(
+        PaxeerBetaDeploymentValidator.Input calldata input,
+        bytes calldata descriptor,
+        bytes calldata registrationRequest,
+        uint16 selectedProtocolVersion
+    ) private returns (address) {
+        PaxeerBetaDeploymentValidator.GenesisArtifacts memory genesis =
+            PaxeerBetaDeploymentValidator.decodeAndCrossCheckGenesis(descriptor, registrationRequest);
+        (uint192 release, StaticConfig.Config memory config) =
+            PaxeerBetaDeploymentValidator.validateInputForProtocol(input, genesis, selectedProtocolVersion);
+        uint256 key = vm.envUint("EVM_WALLET_PRIVATE_KEY");
+        if (vm.addr(key) != input.bootstrapOperator) revert InvalidDeploymentState();
+        vm.startBroadcast(key);
+        broadcastKey = key;
+        Blueprint blueprint = new Blueprint(input.bootstrapOperator, config);
+        Addresses memory addresses;
+        addresses.blueprint = address(blueprint);
+        addresses.timelock = address(_deployTimelock(blueprint, input, release));
+        config.governanceTimelock = addresses.timelock;
+        bytes32 configHash = StaticConfig.hashForProtocol(config, block.chainid, selectedProtocolVersion);
+        addresses.assetRegistry = _assetRegistry(blueprint, addresses, input, configHash, release);
+        addresses.vault = _vault(blueprint, addresses, input, configHash, release);
+        addresses.guarantorBond =
+            _bond(blueprint, addresses, input, genesis.networkId, configHash, release, selectedProtocolVersion);
+        vm.stopBroadcast();
+        return addresses.guarantorBond;
+    }
+
     function deploy(
         PaxeerBetaDeploymentValidator.Input calldata input,
         PaxeerBetaDeploymentValidator.GuarantorInput[] calldata guarantors,
         bytes calldata descriptor,
         bytes calldata registrationRequest
     ) external returns (Addresses memory addresses) {
+        return _deploySuite(input, guarantors, descriptor, registrationRequest, Constants.PROTOCOL_VERSION);
+    }
+
+    function deployForProtocol(
+        PaxeerBetaDeploymentValidator.Input calldata input,
+        PaxeerBetaDeploymentValidator.GuarantorInput[] calldata guarantors,
+        bytes calldata descriptor,
+        bytes calldata registrationRequest,
+        uint16 selectedProtocolVersion
+    ) external returns (Addresses memory addresses) {
+        return _deploySuite(input, guarantors, descriptor, registrationRequest, selectedProtocolVersion);
+    }
+
+    function _deploySuite(
+        PaxeerBetaDeploymentValidator.Input calldata input,
+        PaxeerBetaDeploymentValidator.GuarantorInput[] calldata guarantors,
+        bytes calldata descriptor,
+        bytes calldata registrationRequest,
+        uint16 selectedProtocolVersion
+    ) private returns (Addresses memory addresses) {
         PaxeerBetaDeploymentValidator.GenesisArtifacts memory genesis =
             PaxeerBetaDeploymentValidator.decodeAndCrossCheckGenesis(descriptor, registrationRequest);
         (uint192 release, StaticConfig.Config memory config) =
-            PaxeerBetaDeploymentValidator.validateInput(input, genesis);
+            PaxeerBetaDeploymentValidator.validateInputForProtocol(input, genesis, selectedProtocolVersion);
         uint256 key = vm.envUint("EVM_WALLET_PRIVATE_KEY");
         if (vm.addr(key) != input.bootstrapOperator) revert InvalidDeploymentState();
         vm.startBroadcast(key);
@@ -82,11 +147,13 @@ contract PaxeerBetaDeploy {
         addresses.blueprint = address(blueprint);
         addresses.timelock = address(_deployTimelock(blueprint, input, release));
         config.governanceTimelock = addresses.timelock;
-        bytes32 configHash = StaticConfig.hash(config, block.chainid);
+        bytes32 configHash = StaticConfig.hashForProtocol(config, block.chainid, selectedProtocolVersion);
         addresses.assetRegistry = _assetRegistry(blueprint, addresses, input, configHash, release);
         addresses.vault = _vault(blueprint, addresses, input, configHash, release);
-        addresses.guarantorBond = _bond(blueprint, addresses, input, genesis.networkId, configHash, release);
-        addresses.checkpointRegistry = _checkpoint(blueprint, addresses, input, genesis, configHash, release);
+        addresses.guarantorBond =
+            _bond(blueprint, addresses, input, genesis.networkId, configHash, release, selectedProtocolVersion);
+        addresses.checkpointRegistry =
+            _checkpoint(blueprint, addresses, input, genesis, configHash, release, selectedProtocolVersion);
         addresses.challengeManager = _challenge(blueprint, addresses, input, configHash, release);
         addresses.nullifierRegistry = _nullifier(blueprint, input, configHash, release);
         addresses.withdrawalClaims = _claims(blueprint, addresses, configHash, release);
@@ -280,7 +347,8 @@ contract PaxeerBetaDeploy {
         PaxeerBetaDeploymentValidator.Input calldata input,
         uint32 networkId,
         bytes32 hash,
-        uint192 release
+        uint192 release,
+        uint16 selectedProtocolVersion
     ) private returns (address) {
         bytes memory args = abi.encode(
             a.timelock,
@@ -288,7 +356,7 @@ contract PaxeerBetaDeploy {
             Constants.USDL_TOKEN,
             a.vault,
             Constants.USDL_ASSET_ID,
-            Constants.PROTOCOL_VERSION,
+            selectedProtocolVersion,
             networkId,
             input.minimumBondBps,
             input.unbondingDelay,
@@ -302,7 +370,7 @@ contract PaxeerBetaDeploy {
             Constants.USDL_TOKEN,
             a.vault,
             Constants.USDL_ASSET_ID,
-            Constants.PROTOCOL_VERSION,
+            selectedProtocolVersion,
             networkId,
             input.minimumBondBps,
             input.unbondingDelay,
@@ -324,11 +392,12 @@ contract PaxeerBetaDeploy {
         PaxeerBetaDeploymentValidator.Input calldata input,
         PaxeerBetaDeploymentValidator.GenesisArtifacts memory g,
         bytes32 hash,
-        uint192 release
+        uint192 release,
+        uint16 selectedProtocolVersion
     ) private returns (address) {
         bytes memory args = abi.encode(
             GuarantorBond(payable(a.guarantorBond)),
-            Constants.PROTOCOL_VERSION,
+            selectedProtocolVersion,
             g.networkId,
             input.checkpointThresholdNumerator,
             input.checkpointThresholdDenominator,
@@ -343,7 +412,7 @@ contract PaxeerBetaDeploy {
         vm.stopBroadcast();
         CheckpointRegistry ref = new CheckpointRegistry(
             GuarantorBond(payable(a.guarantorBond)),
-            Constants.PROTOCOL_VERSION,
+            selectedProtocolVersion,
             g.networkId,
             input.checkpointThresholdNumerator,
             input.checkpointThresholdDenominator,
@@ -806,6 +875,10 @@ contract PaxeerBetaDeploy {
                 || Blueprint(a.blueprint).manager() != input.bootstrapOperator
                 || Blueprint(a.blueprint).governanceTimelock() != a.timelock
                 || Blueprint(a.blueprint).deploymentsSealed()
+                || (GuarantorBond(payable(a.guarantorBond)).protocolVersion() != 2
+                    && GuarantorBond(payable(a.guarantorBond)).protocolVersion() != 3)
+                || GuarantorBond(payable(a.guarantorBond)).protocolVersion()
+                    != CheckpointRegistry(a.checkpointRegistry).protocolVersion()
         ) revert InvalidDeploymentState();
         for (uint256 i = 0; i < Predeploys.COUNT; ++i) {
             if (Blueprint(a.blueprint).deploymentForRole(Predeploys.roleAt(i)) != _component(a, Predeploys.roleAt(i))) {

@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use store::{Principal, Session, Store};
+use store::{Principal, Store, StoredSession};
 use subtle::ConstantTimeEq;
 use zeroize::{Zeroize, Zeroizing};
 
@@ -434,14 +434,14 @@ fn parse_client_request(stream: &mut impl Read) -> Result<Request, String> {
         .remove("")
         .ok_or_else(|| "request line is missing".to_owned())?;
     let mut parts = start.split_whitespace();
-    request.method = parts
+    parts
         .next()
         .ok_or_else(|| "request method is missing".to_owned())?
-        .to_owned();
-    request.path = parts
+        .clone_into(&mut request.method);
+    parts
         .next()
         .ok_or_else(|| "request target is missing".to_owned())?
-        .to_owned();
+        .clone_into(&mut request.path);
     if parts.next() != Some("HTTP/1.1") || parts.next().is_some() || request.path.contains('?') {
         return Err("request line is invalid".to_owned());
     }
@@ -502,7 +502,10 @@ fn lookup_session(
         .store
         .lock()
         .map_err(|_| refusal(503, "store_unavailable", Some(5)))?;
-    let placeholder = Session {
+    store
+        .check_available()
+        .map_err(|_| refusal(503, "store_unavailable", Some(5)))?;
+    let placeholder = StoredSession {
         session_id: String::new(),
         principal: String::new(),
         token_digest: "0".repeat(64),
@@ -538,7 +541,12 @@ fn lookup_session(
     let csrf_token = Zeroizing::new(
         String::from_utf8(csrf.to_vec()).map_err(|_| refusal(503, "store_unavailable", Some(5)))?,
     );
-    if sha256_hex(csrf_token.as_bytes()) != session.csrf_digest {
+    if sha256_hex(csrf_token.as_bytes())
+        .as_bytes()
+        .ct_eq(session.csrf_digest.as_bytes())
+        .unwrap_u8()
+        != 1
+    {
         return Err(refusal(503, "store_unavailable", Some(5)));
     }
     Ok(Some(ActiveSession {
@@ -578,14 +586,21 @@ fn introspect(shared: &Shared, service: Service, request: &Request) -> Response 
     if body.is_empty() || body.len() > 4096 {
         return refusal(400, "invalid_argument", None);
     }
-    let now = match unix_seconds() {
-        Ok(now) => now,
-        Err(_) => return refusal(503, "clock_unavailable", Some(5)),
+    let Ok(now) = unix_seconds() else {
+        return refusal(503, "clock_unavailable", Some(5));
     };
     let session = match lookup_session(shared, &body, now) {
         Ok(session) => session,
         Err(response) => return response,
     };
+    introspection_shape(service, session.as_ref(), audience)
+}
+
+fn introspection_shape(
+    service: Service,
+    session: Option<&ActiveSession>,
+    audience: Option<String>,
+) -> Response {
     match service {
         Service::Gateway => session.as_ref().map_or_else(
             || {
@@ -736,9 +751,8 @@ fn create_session(shared: &Shared, request: &Request) -> Response {
     if !valid_sub(&body.sub) || ttl == 0 || ttl > MAX_SESSION_TTL_SECONDS {
         return refusal(400, "invalid_argument", None);
     }
-    let now = match unix_seconds() {
-        Ok(now) => now,
-        Err(_) => return refusal(503, "clock_unavailable", Some(5)),
+    let Ok(now) = unix_seconds() else {
+        return refusal(503, "clock_unavailable", Some(5));
     };
     let (Ok(session_id), Ok(secret), Ok(csrf_token)) = (
         random_hex(SESSION_ID_BYTES),
@@ -750,7 +764,7 @@ fn create_session(shared: &Shared, request: &Request) -> Response {
     let Ok(csrf_sealed) = shared.config.store_key.seal(csrf_token.as_bytes()) else {
         return refusal(503, "entropy_unavailable", Some(5));
     };
-    let session = Session {
+    let session = StoredSession {
         session_id: session_id.to_string(),
         principal: body.sub.clone(),
         token_digest: sha256_hex(secret.as_bytes()),
@@ -788,9 +802,8 @@ fn revoke_session(shared: &Shared, session_id: &str) -> Response {
     if !valid_hex(session_id, SESSION_ID_BYTES) {
         return refusal(404, "session_not_found", None);
     }
-    let now = match unix_seconds() {
-        Ok(now) => now,
-        Err(_) => return refusal(503, "clock_unavailable", Some(5)),
+    let Ok(now) = unix_seconds() else {
+        return refusal(503, "clock_unavailable", Some(5));
     };
     let Ok(mut store) = shared.store.lock() else {
         return refusal(503, "store_unavailable", Some(5));
@@ -1153,8 +1166,7 @@ mod tests {
         let mut query = &b"GET /livez?x=1 HTTP/1.1\r\nHost: a\r\n\r\n"[..];
         assert!(parse_client_request(&mut query).is_err());
         let oversized = format!(
-            "POST /v1/introspect HTTP/1.1\r\nHost: a\r\nContent-Length: {}\r\n\r\n",
-            MAX_REQUEST_BYTES
+            "POST /v1/introspect HTTP/1.1\r\nHost: a\r\nContent-Length: {MAX_REQUEST_BYTES}\r\n\r\n"
         );
         let mut oversized = oversized.as_bytes();
         assert!(parse_client_request(&mut oversized).is_err());

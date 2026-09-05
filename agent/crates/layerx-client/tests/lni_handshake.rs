@@ -138,3 +138,21 @@ fn node_info_encoding_is_canonical_and_complete() {
         Err(HandshakeError::MalformedNodeInfo)
     );
 }
+
+#[test]
+fn explicit_state_commitment_handshake_keeps_exact_version_pin() {
+    let mut peer = node(Version::V1_3);
+    peer.protocol_version = layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION;
+    let mut expected = config(Version::V1_3);
+    expected.expected_protocol_version = peer.protocol_version;
+    let bytes = encode_node_info(&peer).expect("encode explicit version three");
+    let decoded = decode_node_info(&bytes).expect("decode explicit version three");
+    assert!(validate(decoded.clone(), &expected, None).is_ok());
+    assert_eq!(
+        validate(decoded, &config(Version::V1_3), None),
+        Err(HandshakeError::ProtocolVersion {
+            expected: 2,
+            peer: 3
+        })
+    );
+}

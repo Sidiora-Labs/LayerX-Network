@@ -658,3 +658,211 @@ symbol = "start_cluster identity preallocate_log"
 observed = "The harness must run as root: layerxd refuses an LNI allowed uid equal to its own euid, so the daemons run as uid 65534 while the test client stays uid 0; because /root is mode 0700 the harness copies build/bin/layerxd and migrations/ into a world-traversable directory under the system temp dir and generates the TLS material with openssl (P-256, PKCS#8 DER). CommandExt::groups is unstable on rustc 1.91.1, so the daemons run with primary gid 0 (the LNI allowed gid) instead of a supplementary group. Three test functions carry #[allow(clippy::too_many_lines)] for the pedantic length lint. platform/cli/src/toolset.rs:331 and :358 end the SEND authorization and payload with u16(1) while src/ledger/lxp_send.c:261 requires authorization.protocol_version == environment->protocol_version (2); the harness encodes PROTOCOL_VERSION."
 assumption = "The CLI protocol-version literal is recorded for the CLI owner; it could not be confirmed against the daemon because of observation 6.3.1."
 severity = "note"
+
+[observation.6.10.1]
+task = "6.10"
+file = "contracts/CheckpointRegistry.sol"
+symbol = "registerCheckpoint"
+observed = "The handoff and original task used settlement_contract both for the attestation domain and the transaction destination. The canonical registerCheckpoint verifier compares attestation.settlementContract to address(guarantorEligibility), which is GuarantorBond, while the transaction destination and CheckpointRegistered log emitter are CheckpointRegistry. They are distinct deployed contracts."
+assumption = "Preserve canonical contract checks. Configure CHECKPOINT_REGISTRY separately, verify its guarantorEligibility() binding to SETTLEMENT_CONTRACT, and verify the registration receipt and exact event against the registry. The task description now names both addresses."
+severity = "note"
+
+[observation.6.5.1]
+task = "6.5"
+file = "platform/hosted/identity/tests/service.rs"
+symbol = "readiness_fails_when_the_store_is_not_writable"
+observed = "Qualification exposed a store durability defect: after deletion and replacement of the state directory, the open journal descriptor references an unlinked file. The repaired store refuses readiness and operations when directory or journal identity changes. The existing final assertion still expects HTTP 200 after empty directory recreation; actual HTTP 503 now fails it. This assertion is retained unchanged under the workflow conflict rule. Fifteen unit tests and six other integration tests pass; independent strict all-targets Clippy passes. The exact task verify chain fails at the retained assertion and never reaches its chained Clippy command."
+assumption = "Task remains in_progress. Reconcile the existing assertion with the durable-store readiness requirement without permitting acknowledged writes to an unlinked journal."
+severity = "blocker"
+
+[observation.6.10.2]
+task = "6.10"
+file = "cmd/layerxd/lxp_daemon_process.c"
+symbol = "open_process"
+observed = "Source inspection and real-process qualification confirm additional bootstrap defects beyond the missing finality callback: daemon log open only accepted existing files and retained zero capacity for empty files; genesis verification retained temporary owner-scratch allocations while protocol owner attachment requires the full empty scratch minimum; authority test supplied a migration directory rather than the SQL file read by lxp_history_open. Repairs preserve bootstrap_storage_empty, genesis signature/root checks and the owner scratch minimum. The task verify command also named a missing make check target; check now invokes the existing native test aggregate."
+assumption = "Only actual focused and aggregate command outcomes establish qualification; intermediate source repairs or sequencer startup do not prove a funded transfer."
+severity = "note"
+
+[observation.6.10.3]
+task = "6.10"
+file = ".codegraph"
+symbol = "cg sync"
+observed = "cg sync waited 30000ms for the graph database writer and reported index stalled, zero files written, synchronization not applied. Fifty pre-existing cg processes were observed on the host. Unrelated editor/runtime processes were preserved."
+assumption = "Graph qualification cannot be claimed from the stale index; use an isolated graph or retry after lock contention clears."
+severity = "blocker"
+
+[observation.6.10.4]
+task = "6.10"
+file = "cmd/layerxd/lxp_daemon_protocol.c"
+symbol = "lxp_daemon_protocol_owner_attach"
+observed = "Real fresh-genesis smoke isolated startup result -3 to a duplicate state-feed binding. lxp_kernel_bind_module_runtime already binds the supplied Programs state_feed; owner_attach attempted the same binding again, and lxp_kernel_set_commit_observer correctly rejected an existing observer. Removed the redundant call while preserving the kernel rejection."
+assumption = "The real bootstrap SEND gate must pass before this repair is qualified."
+severity = "note"
+
+[observation.6.10.5]
+task = "6.10"
+file = "Makefile"
+symbol = "lxp_test_journal_tsan"
+observed = "make -j4 -s check failed linking the existing journal TSan target: src/state/lxp_journal.c references lx_account_validate_canonical and lx_account_registry_snapshot but its explicit source list omitted their implementations. Added the actual account registry, account ID, log, fault hooks and u128 dependency sources to the sanitizer compilation. make -j4 test-journal then passed both native and TSan executions, exit 0; raw outputs are /tmp/layerx-610-native-check.log and /tmp/layerx-610-journal-gate.log. No journal assertions or sanitizer checks were changed."
+assumption = "The focused journal gate is repaired; the aggregate check still requires a complete rerun."
+severity = "note"
+
+[observation.6.2.1]
+task = "6.2"
+file = "platform/hosted/core/tests/boundary.rs"
+symbol = "admin dependency response contract"
+observed = "Strict core Clippy and a real TLS admin refusal/restart test pass. An existing assertion expects HTTP 503 for unavailable admin dependencies while the task requires dependency failures to be 4xx; the implementation returns 422 and that original assertion remains unchanged. Real bootstrap and supervisor reset tests are implemented but hit the shared daemon recovery crash before readiness. Raw outputs are /tmp/layerx-core-admin-final.log and /tmp/layerx-core-supervised-test.log."
+assumption = "Do not claim positive reset or funded treasury behavior from refusal tests. Preserve the original contradictory assertion pending reconciliation."
+severity = "blocker"
+
+[observation.6.10.6]
+task = "6.10"
+file = "cmd/layerxd/lxp_daemon_process.c"
+symbol = "recover_prepared_batch_wal recover_ranged_batch_authority"
+observed = "Fresh-genesis runtime reached recovery and crashed because fixed 64-receipt local arrays occupy roughly ten megabytes, exceeding the default eight-megabyte stack. Recovery now allocates exact validated counts on the heap and frees them on every exit. Fresh smoke then reached live authenticated LNI admission. Hosted frame configuration and the raw test transport handshake were also aligned with the existing strict LNI contract."
+assumption = "Admission alone does not prove durable execution or receipt publication."
+severity = "note"
+
+[observation.6.10.7]
+task = "6.10"
+file = "src/protocol/lxp_genesis.c"
+symbol = "lxp_genesis_materialize apply_canonical_activity replay_canonical_activity"
+observed = "The admitted SEND stalled because live and replay execution supported only Programs and no Asset runtime was bound. SEND now uses the existing Asset implementation with exact Asset ABI and owner ordinal scope. Its asset-ID projection comes from validated snapshot accounts; no custody metadata, reserve funding or balances are fabricated. Canonical genesis root construction, strict materialization and snapshot generation now require the exact Programs V4 plus Asset V1 module table, matching daemon registration. Snapshot module matching and genesis root/signature checks remain strict. This produces new genesis roots; old Programs-only snapshots are not silently accepted."
+assumption = "Fresh genesis artifacts must be regenerated. Qualify native genesis tests, real SEND receipts, replica publication and restart replay before claiming task completion."
+severity = "note"
+
+[observation.6.10.8]
+task = "6.10"
+file = "tests/test_genesis_manifest.c"
+symbol = "genesis module table qualification"
+observed = "make -j4 test-genesis passes after the exact Asset plus Programs genesis alignment. The real snapshot-load fixture now registers both production modules and adds an explicit rejection check with Asset missing; existing root, signature, zero-supply and tamper assertions remain unchanged. Raw output is /tmp/layerx-610-native-genesis-rerun.log. Owner principal resolution now derives agent:<verified DID>:main canonically, reads existing account fee balance when present and leaves absent accounts absent with zero fee balance. No signed fee limit or balance is modified to manufacture a receipt."
+assumption = "Real fresh-genesis SEND and restart evidence still determine daemon qualification; native genesis checks do not prove funded transfers."
+severity = "note"
+
+[observation.6.10.9]
+task = "6.10"
+file = "cmd/layerxd/lxp_daemon_evidence.c"
+symbol = "lxp_daemon_account_evidence_construct verify_account_evidence"
+observed = "Fresh SEND execution now reaches receipt-authority and independent replica log publication, then returns FATAL_INVARIANT. Account-evidence construction requires the canonical composite lxp_state_root to equal kernel.current_state_root, while kernel receipt_state_root derives the receipt chain from previous receipt root, activity, sequence, result, fee, module version and module subtree root. These roots are intentionally distinct. Account-proof verification also expects its state-tree path to end at the signed receipt root. The equality and proof checks remain intact pending a secure commitment-binding repair; receipt publication alone does not qualify this path."
+assumption = "Do not skip account-evidence checks, substitute one root for the other, or label the whole node qualified from receipt-only progress."
+severity = "blocker"
+
+[observation.6.11.1]
+task = "6.11"
+file = "src/protocol/lxp_kernel.c"
+symbol = "receipt_composite_state_root lxp_kernel_idempotency_state_value"
+observed = "Protocol 3 implementation uses the real prepared module and journal preview to sign the post-commit composite state root and verifies equality before publication. Its compact idempotency state projection omits only the self-referential resulting root; the full stored receipt and signature remain unchanged. Protocols 1 and 2 retain their receipt algorithms and raw idempotency values. Genesis 2 retains its original Programs-only module table; genesis 3 explicitly selects Programs V4 plus Asset V1. This supersedes the unversioned genesis-table implementation described in observation 6.10.7. Daemon admission and replay pin the protocol to signed genesis; beta clients and settlement configuration explicitly select 3 while library defaults remain 2."
+assumption = "Implementation is not qualification. Native, Rust, contract, fresh-node proof and replay gates must pass before completion; historical protocol-2 results do not qualify this revision."
+severity = "note"
+
+[observation.6.11.2]
+task = "6.11"
+file = "tests/test_state_commitment_transition.c"
+symbol = "transition check_version"
+observed = "make -s test-state-commitment-transition passes: unchanged legacy root algorithms, protocol-3 real Asset SEND success and fee refusal, exact prepared/committed roots, canonical signed receipt roundtrip, signature/root/state tampering and malformed compact entries. The fixture required the same canonical ledger capability binding used by the daemon; no success or balance assertion changed. make -j2 test-genesis passes manifest reconstruction for both protocols 2 and 3, builder CLI and daemon bootstrap artifacts. Logs: /tmp/layerx-611-native-transition.log and /tmp/layerx-611-genesis.log."
+assumption = "The real-node authority smoke still fails at real_node.rs:1339 with replica_evidence_unavailable 503 instead of 200; raw log /tmp/layerx-611-bootstrap-send.log. This does not establish complete SEND proof publication or task completion."
+severity = "note"
+
+[observation.6.11.3]
+task = "6.11"
+file = "agent/crates/layerx-proof/src/receipt.rs"
+symbol = "supported_protocol_version verify_outcome"
+observed = "Rust qualification passes 55 client tests, 26 proof integration tests including exact account-root proofs and protocol-3 signed receipt/root/signature tampering, plus agentd and interop all-target compilation. Three existing assertions explicitly rejecting version 3 remain unchanged and red (wire structures.rs:323, crypto tests/verify.rs:167, proof src/receipt.rs:550); user reconciliation requested. A separate remote crypto test expects RemoteTimeout but observes RemoteAuthentication, and strict clippy stops on untouched layerx-types/src/intent.rs:711 missing Errors documentation. Logs are /tmp/layerx-v3-*.log."
+assumption = "Full Rust gates are not passing. New positive coverage does not cancel retained failures."
+severity = "blocker"
+
+[observation.6.11.4]
+task = "6.11"
+file = "contracts/CheckpointRegistry.sol"
+symbol = "selected protocol settlement qualification"
+observed = "Focused Solidity qualification passes 51 tests, zero failures or skips, across CheckpointRegistry, PaxeerBetaDeploymentValidator and ContractManager. Version-3 signed certificate acceptance, cross-version rejection, explicit configuration pinning and legacy compatibility pass. Python domain separation, preparation helper and shell syntax checks pass; all five legacy checkpoint vectors regenerate byte exactly. Logs: /tmp/layerx-611-contract-tests.log, /tmp/layerx-611-domain-tests.log, /tmp/layerx-611-legacy-vectors.log and /tmp/layerx-611-prepare-tests.log."
+assumption = "These local gates do not establish persistent deployment, timelock activation or independently observed finality."
+severity = "note"
+
+[observation.6.11.5]
+task = "6.11"
+file = "tests/daemon/bootstrap-send.sh"
+symbol = "combined transition and bootstrap qualification"
+observed = "The complete command make -j4 layerxd layerx-genesis-build test-state-commitment-transition test-genesis test-daemon-finality-authority followed by make -j4 -s check passes, exit 0; raw output /tmp/layerx-611-combined-verify.log. This includes genuine on-chain finality registration positives/negatives, both genesis versions, native successful SEND and refusal transitions, and real fresh absent/empty-log daemon/replica/authority smoke. Refusal metadata is bound from strictly decoded signed SEND intent and actual balances before preview/signature; malformed signed payloads are refused before durable admission. Replica JSON uses exact output sizing; authority explicitly converts the canonical native Merkle representation through strict typed decoding."
+assumption = "Fresh-node smoke proves honest fee-refusal receipts and replicated proofs, not a funded successful transfer. Full Rust assertion reconciliation, graph checks and dependent service gates remain incomplete."
+severity = "note"
+
+[observation.6.6.1]
+task = "6.6"
+file = "platform/hosted/paxeer/deploy-contracts.sh"
+symbol = "persistent protocol-3 deployment and real timelocks"
+observed = "The real owned native Paxeer chain and TLS boundary are running on loopback; chain id 125, USDL owner/decimals and advancing blocks were verified. All 35 deployment transactions were re-read with status 1 and matching block hashes. All 21 permission schedules were checked against live readyAt values and scheduling timestamps with delays of at least 86400 seconds. Permissions become eligible 2026-09-06 09:58:49 UTC; activation is not scheduled and requires another unchanged timelock after permission execution. Boot persistence was installed and verified without restarting the live chain. Evidence is under /root/layerx-beta-runtime/paxeer/evidence; private runtime-status.json contains the next command and exact time."
+assumption = "No permission/activation calls or idle waiters were started. This native runtime evidence does not satisfy canonical image qualification: the exact pinned main WASM library remains unavailable from its configured host and was not found in inspected official artifacts; no digest or verification check was changed."
+severity = "note"
+
+[observation.6.11.6]
+task = "6.11"
+file = "spec/layerx-beta/spec.kvx"
+symbol = "foundation and integration qualification dependencies"
+observed = "Resolved a definition cycle: task 6.10 requires foundation 6.11, but foundation verification invoked the daemon integration target introduced by 6.10. Foundation now explicitly requires native/genesis/aggregate, Rust wire/crypto/proof, intent golden-vector and selected-version contract gates. The full genuine chain verifier and fresh daemon/replica/authority gate remains mandatory in task 6.10. Removed its output-only tail pipeline so an aggregate make failure cannot be masked by tail success."
+assumption = "No completion inferred: foundation retains the red protocol-version assertions pending user reconciliation, and integration remains in_progress. The previously completed combined run remains evidence of that exact working-tree run, not clean-prefix publication qualification."
+severity = "note"
+
+[observation.6.11.7]
+task = "6.11"
+file = "agent/crates/layerx-wire/src/hash.rs"
+symbol = "account_id_for_protocol"
+observed = "Explicit protocol-3 account derivation now matches native LX:ACCOUNT:v1 name hashing and native name validation; legacy derivation remains unchanged. SEND intent compilation, SEND disclosure verification and core treasury SEND construction select the activity protocol; other intent families are not claimed qualified for this derivation change. Focused real checks pass: wire hashing 7, intent compile 5, differential legacy vectors 4 and core SEND 1. Focused wire, intents and core strict clippy pass. Raw logs: /tmp/layerx-v3-account-wire-final.log, /tmp/layerx-v3-account-intent-final.log, /tmp/layerx-v3-account-intent-differential.log and /tmp/layerx-v3-account-core-final.log."
+assumption = "Canonical account IDs do not create or fund accounts. Fresh-genesis custody-backed funding and the full retained Rust gates remain incomplete."
+severity = "note"
+
+[observation.6.4.1]
+task = "6.4"
+file = "src/modules/programs/call.c"
+symbol = "call_activity_release outcome_response program_activity_route"
+observed = "The prior boundary real-node suite passes both tests and strict clippy (/tmp/layerx-64-v3-runtime-qualified.log and /tmp/layerx-64-v3-clippy-qualified.log), but source inspection found a missing required successful ProgramCall path. Runtime graph and terminal bytes are hashed into signed receipt commitments, yet direct execution retains borrowed spans released by call_activity_release, prepared execution does not retain those artifacts, and publication WAL/receipt-authority records persist roots without the corresponding bytes. Boundary responses consequently return empty artifacts. Task 6.4 implementation now covers owned bytes, versioned durable records, authenticated retrieval bound to activity and receipt digest, cryptographic boundary verification and completed-result replay."
+assumption = "The earlier passing tests do not qualify artifact restoration. Native and boundary artifact implementation must finish before its qualification; a successful real ProgramCall with nonempty verified artifacts and restart/tamper coverage remains required."
+severity = "blocker"
+
+[observation.6.1.1]
+task = "6.1"
+file = "src/modules/asset/lx_asset_custody.c"
+symbol = "lx_asset_deposit_credit lxp_bridge_deposit_credit lxp_genesis_materialize"
+observed = "Fresh signed genesis has zero supply and no funded treasury. Existing custody credit conserves reserve-to-main value; Bridge credit also requires total_before equal total_after. Neither can issue externally backed value. The existing BridgeDepositCredit intent uses module 8 ordinal 1, but the daemon has no registered native Bridge decoder/module and protocol-3 genesis reconstructs exactly Programs V4 plus Asset V1. Current Vault CustodyDeposit binds beneficiary through depositId; native deposit proof does not carry and reconstruct that event preimage. Its separate signed deposit-root producer authority is not supplied by CheckpointRegistry. Account opening helpers mutate live state and do not atomically bind a new main account to the authenticated owner key."
+assumption = "Genuine funding requires a strictly versioned, independently verified custody ingress, atomic backed issuance plus conserving credit, staged account authority, and an unconsumed deposit nullifier in the same replayable kernel transition. Preserve existing conservation, finality quorum and genesis checks. An explicitly signed additional-module genesis profile would require a new genesis and settlement deployment; the already deployed marker-free protocol-3 genesis cannot acquire Bridge retroactively. No live bootstrap balance assignment or fabricated funding is authorized by this observation."
+severity = "blocker"
+
+[observation.6.1.2]
+task = "6.1"
+file = "platform/hosted/node/Dockerfile.dockerignore"
+symbol = "node image source context"
+observed = "A frozen pre-artifact source snapshot builds the real node image successfully, exit 0, image sha256:fd2971793a2a18126dba22a262c762661ba5a1750dfa2ec34f2d4ec10eb24661. Its daemon and genesis builder resolve all shared libraries under configured uid 4020 with read-only filesystem, no network and all capabilities dropped; required bootstrap, supervisor and migration files are accessible. Logs: /tmp/layerx-61-node-image-vendor-rerun.log and /tmp/layerx-61-node-image-runtime-check.log. Fixed a real ignore-rule defect: **/target removed vendored cc/src/target source files; the exception now preserves only that vendored source directory. Context preparation also restores tracked tools/build source files while excluding root build outputs and environment files."
+assumption = "This image predates the new native artifact changes and operator executable and is not the final same-revision image. The added operator and changed native source must be built into a fresh image and the full real node gate must pass before task completion. A separate unused vendored binaryen checksum manifest names a missing llvm/Config/config.h file; this frozen node build does not exercise that optional dependency."
+severity = "note"
+
+[observation.6.1.3]
+task = "6.1"
+file = "cmd/layerxctl/src/main.rs"
+symbol = "operator LNI executable"
+observed = "The required operator executable was absent: cmd/layerxctl/lxp_ctl_main.c exposed library callbacks without a process entry point. Added a Rust executable using the existing canonical LNI client and the node's authenticated preparation registry. It reads state, validates actor/protocol/signature before one transmission, reports acknowledgement separately from unknown outcome, and never retries automatically. The node Dockerfile now includes the executable. Operator strict all-target Clippy and release build pass (/tmp/layerx-61-ctl-clippy-final.log, /tmp/layerx-61-ctl-build.log), as do updated probe check, strict Clippy and release build (/tmp/layerx-61-probe-check.log, /tmp/layerx-61-probe-clippy.log, /tmp/layerx-61-probe-build.log). Probe account IDs now follow the advertised protocol. No previously locked probe dependency version was removed during the added real core SEND-builder dependency resolution."
+assumption = "The real node test now exercises operator state reads and actual signed SEND admission/repeated identity, but has not yet run against stable rebuilt native artifacts. Acknowledgement is not an execution receipt or funded transfer. The final image including this executable is not built yet."
+severity = "note"
+
+[observation.6.1.4]
+task = "6.1"
+file = "cmd/layerxctl/src/main.rs"
+symbol = "activity_file"
+observed = "Operator activity input and the test probe's generated seed input use nonblocking no-follow opens, regular-file checks and bounded reads. The probe creates its signed output exclusively with mode 0600 and fsync. Strict all-target Clippy and release qualification pass for both latest sources; the operator's real FIFO regression passes without a writer. Logs: /tmp/layerx-61-ctl-bounded-clippy.log, /tmp/layerx-61-ctl-bounded-test.log, /tmp/layerx-61-probe-bounded-clippy.log and /tmp/layerx-61-probe-bounded-build.log. Node Docker base images now use the exact digests obtained from the official registry manifests."
+assumption = "Native artifact qualification is still underway, so real operator/node runtime and the final source image have not yet been qualified. Isolated cg guard --strict selects in-progress integration task 3.7 rather than task 6.1 and fails both operator/image paths as outside that task; raw log /tmp/layerx-61-isolated-guard.log. Task scope was not broadened to silence this result."
+severity = "note"
+
+[observation.6.6.2]
+task = "6.6"
+file = "human/crates/layerx-paxeer-client/src/deposit.rs"
+symbol = "DepositProofVerifier CheckpointProof"
+observed = "Source review found production protocol-2-only checks in deposit.rs:948 and withdraw.rs:313,1562 that prevent explicitly configured protocol-3 use before the existing exact registration/domain checks. Existing finality tests send real ETH transfers; they do not qualify protocol-3 settlement contracts. Explicit version-specific client paths and separate real protocol-3 tests are being implemented, preserving legacy defaults and exact domain checks. A trusted read-only builder VM search found no canonical pinned WASM library in the builder image, builder directory, Go cache or system library paths; the broader filesystem scan was stopped due to slow I/O and does not prove whole-host absence."
+assumption = "Client version acceptance cannot supply the missing custody credit ingress. Canonical WASM pin and persistent settlement timelocks remain unchanged; neither deployment activation nor funded success is inferred."
+severity = "note"
+
+[observation.6.4.2]
+task = "6.4"
+file = "tests/programs/test_call_activity.c"
+symbol = "call_payload_with_access"
+observed = "At the owner's explicit checkpoint-push request, all agent edits were frozen. Isolated AddressSanitizer found a real fixture stack overflow: the canonical staged Call occupies 241 bytes but its buffer held 234. The fixture now derives its exact allocation from the encoded fields and asserts every encoded length. Protocol-2 artifact execution proceeds after this repair. Success-path fixture blob cleanup is written but has not been rerun. Explicit protocol-3 deployment accepts the configured module ABI 4, but the first real Call still fails because programs/crates/layerx-programs-runtime/src/ffi_call.rs retains legacy-only version and occupancy guards. Raw diagnostics: /tmp/layerx-64-artifact-asan.log and /tmp/layerx-64-artifact-asan-rerun.log."
+assumption = "This is an unqualified accumulated-work checkpoint, not task completion. The Programs FFI repair is not started. The human Paxeer client's explicit-version source/helpers are partial and have not been formatted, compiled or tested; separate protocol-3 tests remain unwritten. Full Rust gates retain the previously recorded assertion conflicts. Current node image/runtime, custody-backed funding, cluster integration and same-revision wave-5 qualification remain incomplete."
+severity = "blocker"

@@ -160,8 +160,19 @@ impl DisclosureCheck {
             }
             IntentKind::LxpSend(value) => {
                 round_trip.header(0x5301, 10)?;
-                let from = round_trip.account(&value.from, DisclosureField::From)?;
-                round_trip.account(&value.to, DisclosureField::To)?;
+                let from =
+                    hash::account_id_for_protocol(&value.from, value.protocol_version.value())
+                        .map_err(|error| DisclosureCheckError::Wire {
+                            field: DisclosureField::From,
+                            error,
+                        })?;
+                let to = hash::account_id_for_protocol(&value.to, value.protocol_version.value())
+                    .map_err(|error| DisclosureCheckError::Wire {
+                    field: DisclosureField::To,
+                    error,
+                })?;
+                round_trip.fixed(&from, DisclosureField::From)?;
+                round_trip.fixed(&to, DisclosureField::To)?;
                 round_trip.fixed(&value.asset.bytes(), DisclosureField::Asset)?;
                 round_trip.u128(value.amount.value(), DisclosureField::Amount)?;
                 round_trip.u64(value.account_sequence.value(), DisclosureField::Sequence)?;
@@ -329,14 +340,17 @@ impl DisclosureCheck {
             disclosure.activity_type == expected_type,
             DisclosureField::ActivityType,
         )?;
-        let from = hash::account_id(&send.from).map_err(|error| DisclosureCheckError::Wire {
-            field: DisclosureField::From,
-            error,
-        })?;
-        let to = hash::account_id(&send.to).map_err(|error| DisclosureCheckError::Wire {
-            field: DisclosureField::To,
-            error,
-        })?;
+        let from = hash::account_id_for_protocol(&send.from, send.protocol_version.value())
+            .map_err(|error| DisclosureCheckError::Wire {
+                field: DisclosureField::From,
+                error,
+            })?;
+        let to = hash::account_id_for_protocol(&send.to, send.protocol_version.value()).map_err(
+            |error| DisclosureCheckError::Wire {
+                field: DisclosureField::To,
+                error,
+            },
+        )?;
         require(
             disclosure.counterparties.len() == 2
                 && disclosure.counterparties[0].role == CounterpartyRole::Payer

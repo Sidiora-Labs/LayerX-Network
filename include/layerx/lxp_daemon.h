@@ -233,6 +233,9 @@ typedef struct lxp_daemon_receipt_authority_store {
 } lxp_daemon_receipt_authority_store;
 
 typedef struct lxp_daemon_receipt_evidence {
+    uint8_t format_version;
+    lxp_byte_span terminal_payload;
+    lxp_byte_span call_graph;
     lxp_byte_span canonical_receipt;
     lxp_byte_span canonical_header;
     uint8_t header_signature[64];
@@ -255,6 +258,7 @@ typedef struct lxp_daemon_protocol_owner {
     uint8_t bearer_token[LXP_DAEMON_BEARER_MAX_BYTES];
     size_t bearer_token_length;
     uint32_t network_id;
+    uint16_t protocol_version;
     uint64_t latest_sealed_timestamp;
     pthread_mutex_t mutex;
     pthread_cond_t listener_changed;
@@ -372,6 +376,13 @@ lxp_result lxp_daemon_receipt_authority_append(
     const uint8_t *canonical_header, size_t header_length,
     const uint8_t header_signature[64],
     const lxp_merkle_proof *receipt_proof, lxp_arena *arena);
+lxp_result lxp_daemon_receipt_authority_append_artifacts(
+    lxp_daemon_receipt_authority_store *store,
+    const uint8_t *canonical_receipt, size_t receipt_length,
+    const uint8_t *canonical_header, size_t header_length,
+    const uint8_t header_signature[64],
+    const lxp_merkle_proof *receipt_proof, lxp_arena *arena,
+    lxp_byte_span terminal_payload, lxp_byte_span call_graph);
 lxp_result lxp_daemon_receipt_authority_lookup(
     const lxp_daemon_receipt_authority_store *store,
     const uint8_t receipt_digest[32], lxp_arena *arena,

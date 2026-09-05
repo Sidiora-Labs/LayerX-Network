@@ -76,7 +76,7 @@ lxp_result lxp_replay_engine_register(lxp_replay_engine *engine,
     if (engine == NULL || !lxp_protocol_version_supported(version) ||
         transition == NULL)
         return LXP_ERR_NON_CANONICAL;
-    if (version == (uint16_t)LXP_PROTOCOL_VERSION_OCCUPANCY &&
+    if (lxp_protocol_version_uses_occupancy(version) &&
         engine->batch_finalize == NULL)
         return LXP_ERR_MODULE_DISABLED;
     for (i = 0U; i < engine->transition_count; ++i)
@@ -217,8 +217,7 @@ lxp_result lxp_replay_batch(lxp_replay_engine *engine,
         return LXP_ERR_VERSION_UNSUPPORTED;
     if (body->header.last_sequence < body->header.first_sequence)
         return LXP_ERR_BATCH_GAP;
-    if (body->header.protocol_version ==
-            (uint16_t)LXP_PROTOCOL_VERSION_OCCUPANCY) {
+    if (lxp_protocol_version_uses_occupancy(body->header.protocol_version)) {
         if (engine->batch_finalize == NULL || activity_count == SIZE_MAX ||
             activity_count >= LXP_MAX_BATCH_ACTIVITIES ||
             body->header.last_sequence - body->header.first_sequence !=
@@ -269,8 +268,7 @@ lxp_result lxp_replay_batch(lxp_replay_engine *engine,
         (void)memcpy(current_root,
                      result->outputs[i].resulting_state_root, 32U);
     }
-    if (body->header.protocol_version ==
-            (uint16_t)LXP_PROTOCOL_VERSION_OCCUPANCY) {
+    if (lxp_protocol_version_uses_occupancy(body->header.protocol_version)) {
         status = engine->batch_finalize(
             engine->batch_finalize_context, &body->header,
             parameter_version, body->header.last_sequence, current_root,

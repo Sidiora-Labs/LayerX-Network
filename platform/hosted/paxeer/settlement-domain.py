@@ -3,6 +3,8 @@
 checkpoint settlement document update for one settlement domain."""
 
 import json
+import os
+import tempfile
 import pathlib
 import subprocess
 import sys
@@ -81,11 +83,16 @@ def write_domain(path, name, domain):
         raise SystemExit("the settlement document must keep its vectors domain")
     before = json.dumps(domains["vectors"], sort_keys=True)
     validate_guarantors(domain["guarantor_set"])
+    if len(domain["guarantor_set"]) < document["finality_policy"]["certificate_threshold"]:
+        raise SystemExit("guarantor set cannot meet the certificate threshold")
     if int(domain["paxeer_chain_id"]) == 0 or int(domain["network_id"]) == 0:
         raise SystemExit("chain id and network id must be positive")
     for key in ("settlement_contract", "guarantor_bond"):
         if len(unhex(domain[key])) != 20 or unhex(domain[key]) == bytes(20):
             raise SystemExit(f"{key} must be a non-zero address")
+    protocol_version = domain.get("protocol_version", document["protocol_version"])
+    if type(protocol_version) is not int or protocol_version not in (2, 3):
+        raise SystemExit("unsupported settlement protocol version")
     domains[name] = {
         "paxeer_chain_id": int(domain["paxeer_chain_id"]),
         "network_id": int(domain["network_id"]),
@@ -100,9 +107,23 @@ def write_domain(path, name, domain):
             for entry in domain["guarantor_set"]
         ],
     }
+    if "protocol_version" in domain:
+        domains[name]["protocol_version"] = protocol_version
+        domains[name]["header_encoding_prefix"] = "0x" + protocol_version.to_bytes(2, "big").hex() + "17010f"
     if json.dumps(domains["vectors"], sort_keys=True) != before:
         raise SystemExit("the vectors domain changed")
-    path.write_text(json.dumps(document, indent=2) + "\n")
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', dir=path.parent, delete=False) as output:
+            temporary = pathlib.Path(output.name)
+            output.write(json.dumps(document, indent=2) + "\n")
+            output.flush()
+            os.fsync(output.fileno())
+        os.chmod(temporary, path.stat().st_mode & 0o777)
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def main(argv):

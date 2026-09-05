@@ -172,6 +172,10 @@ lxp_result lxp_receipt_build(lxp_receipt *receipt,
                              uint32_t parameter_version);
 lxp_result lxp_receipt_bind_program_outcome(
     lxp_receipt *receipt, const lxp_program_outcome *outcome);
+lxp_result lxp_program_empty_call_graph_root(uint8_t root[32]);
+lxp_result lxp_receipt_bind_program_artifacts(
+    lxp_receipt *receipt, lxp_byte_span terminal_payload,
+    lxp_byte_span call_graph_payload);
 lxp_result lxp_program_outcome_validate(const lxp_program_outcome *outcome);
 lxp_result lxp_program_outcome_validate_for_protocol(
     const lxp_program_outcome *outcome, uint16_t protocol_version);

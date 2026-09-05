@@ -1,6 +1,7 @@
 #include "layerx/lxp_genesis_builder.h"
 
 #include "layerx/lxp_crypto.h"
+#include "layerx/lx_asset.h"
 #include "layerx/lxp_kernel.h"
 #include "layerx/lxp_ledger.h"
 #include "layerx/lxp_state.h"
@@ -83,6 +84,9 @@ static lxp_result materialize_snapshot(
     if (status == LXP_OK)
         status = lxp_kernel_register_module(
             kernel, programs_module_registration_v4());
+    if (status == LXP_OK &&
+        manifest->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT)
+        status = lxp_kernel_register_module(kernel, lx_asset_module_iface());
     if (status == LXP_OK)
         status = lxp_genesis_materialize(manifest, arena, kernel);
     if (status == LXP_OK) status = lxp_state_root(kernel, canonical_root);
@@ -136,7 +140,8 @@ lxp_result lxp_genesis_build_fresh_empty(
         fees == NULL || signer_private_key == NULL || arena == NULL ||
         signed_manifest == NULL || snapshot_manifest == NULL ||
         encoded_manifest == NULL || snapshot == NULL ||
-        draft->protocol_version != LXP_PROTOCOL_VERSION ||
+        (draft->protocol_version != LXP_PROTOCOL_VERSION &&
+         draft->protocol_version != LXP_PROTOCOL_VERSION_STATE_COMMITMENT) ||
         draft->account_count != 0U || draft->module_value_count != 0U ||
         !lxp_ct_is_zero(draft->genesis_state_root, 32U) ||
         !lxp_ct_is_zero(draft->genesis_receipt_state_root, 32U) ||

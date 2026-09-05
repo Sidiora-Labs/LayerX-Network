@@ -164,7 +164,7 @@ fn start_human_owner() -> Result<mpsc::Receiver<Result<(), String>>, String> {
     let human_protocol_version = required("LAYERX_AGENT_HUMAN_PROTOCOL_VERSION")?
         .parse()
         .map_err(|_| "human protocol version is invalid")?;
-    if human_protocol_version != layerx_wire::limits::PROTOCOL_VERSION {
+    if !layerx_wire::limits::protocol_version_uses_occupancy(human_protocol_version) {
         return Err("human protocol version is not the current beta protocol".to_owned());
     }
     let node = Client::connect(ClientConfig {

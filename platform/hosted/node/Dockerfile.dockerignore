@@ -1,4 +1,10 @@
 .git
+.codegraph
+.codex
+.env
+.env.*
+**/.env
+**/.env.*
 .worktrees
 build
 build-repro-a
@@ -6,6 +12,8 @@ build-repro-b
 node_modules
 **/node_modules
 **/target
+!programs/vendor/cc/src/target
+!programs/vendor/cc/src/target/**
 paxeer-network
 human/apps
 tools/qualification/output

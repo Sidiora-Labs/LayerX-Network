@@ -4,7 +4,8 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -18,7 +19,7 @@ use layerx_proof::inclusion::SequencerAuthorization;
 use layerx_types::account::AccountId;
 use layerx_types::verify::VerificationLevel;
 
-const FRAME_BYTES: usize = 1_146_902;
+const FRAME_BYTES: usize = 1_212_416;
 
 fn usage() -> ExitCode {
     eprintln!(
@@ -76,7 +77,7 @@ fn connect(socket: &str, network_id: u32) -> Result<Client, String> {
         endpoint: PathBuf::from(socket),
         handshake: HandshakeConfig {
             built_interface_version: Version::V1_3,
-            expected_protocol_version: layerx_wire::limits::PROTOCOL_VERSION,
+            expected_protocol_version: layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION,
             expected_network_id: network_id,
         },
         limits: Limits {
@@ -135,11 +136,11 @@ fn balance(parsed: &BTreeMap<String, String>) -> Result<String, String> {
         .map_err(|error| format!("--network-id: {error}"))?;
     let account = AccountId::parse(required(parsed, "account")?)
         .map_err(|error| format!("--account: {error:?}"))?;
-    let account_id = layerx_wire::hash::account_id(&account)
-        .map_err(|error| format!("account id: {error:?}"))?;
     let asset = hex32(required(parsed, "asset")?)?;
     let mut client = connect(socket, network_id)?;
     let node = client.handshake().node();
+    let account_id = layerx_wire::hash::account_id_for_protocol(&account, node.protocol_version)
+        .map_err(|error| format!("account id: {error:?}"))?;
     let sequencer_key = node.authorised_sequencer_key;
     let sealed = node.latest_sealed_batch.max(1);
     let authorization = SequencerAuthorization::new(sequencer_key, sequencer_key, 1, sealed);
@@ -188,6 +189,68 @@ fn supervisor(parsed: &BTreeMap<String, String>) -> Result<String, String> {
     Ok(reply)
 }
 
+fn write_send(parsed: &BTreeMap<String, String>) -> Result<String, String> {
+    let network_id = required(parsed, "network-id")?
+        .parse::<u32>()
+        .map_err(|error| error.to_string())?;
+    let seed_file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW)
+        .open(required(parsed, "seed-file")?)
+        .map_err(|error| error.to_string())?;
+    let metadata = seed_file.metadata().map_err(|error| error.to_string())?;
+    if !metadata.is_file() || metadata.len() != 32 {
+        return Err("test seed must be a 32-byte regular file".to_owned());
+    }
+    let mut seed_bytes = Vec::new();
+    seed_file
+        .take(33)
+        .read_to_end(&mut seed_bytes)
+        .map_err(|error| error.to_string())?;
+    let seed: [u8; 32] = seed_bytes
+        .try_into()
+        .map_err(|_| "test seed must be 32 bytes".to_owned())?;
+    let source_did = layerx_platform_core::treasury_did(&seed);
+    let actor = layerx_types::ids::Did::new(source_did.as_bytes())
+        .map_err(|error| format!("actor: {error:?}"))?;
+    let mut client = connect(required(parsed, "socket")?, network_id)?;
+    let state = client
+        .preparation_state(&actor, 1)
+        .map_err(|error| format!("preparation: {error:?}"))?;
+    let signed = layerx_platform_core::build_send(
+        &seed,
+        &layerx_platform_core::SendRequest {
+            network_id,
+            source_did,
+            destination_did: required(parsed, "destination-did")?.to_owned(),
+            asset: hex32(required(parsed, "asset")?)?,
+            amount: 1,
+            account_sequence: state
+                .account_sequence
+                .checked_add(1)
+                .ok_or("sequence exhausted")?,
+            idempotency_key: [0x61; 32],
+            not_before_ms: state.protocol_timestamp,
+            expires_at_ms: state
+                .protocol_timestamp
+                .checked_add(300_000)
+                .ok_or("timestamp exhausted")?,
+            fee_limit: 1000,
+        },
+    )?;
+    let mut output = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(required(parsed, "output")?)
+        .map_err(|error| error.to_string())?;
+    output
+        .write_all(&signed.canonical)
+        .map_err(|error| error.to_string())?;
+    output.sync_all().map_err(|error| error.to_string())?;
+    Ok(hex(&signed.activity_id))
+}
+
 fn main() -> ExitCode {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     let Some(command) = arguments.first() else {
@@ -204,6 +267,7 @@ fn main() -> ExitCode {
         "handshake" => handshake(&parsed),
         "balance" => balance(&parsed),
         "supervisor" => supervisor(&parsed),
+        "write-send" => write_send(&parsed),
         _ => return usage(),
     };
     match outcome {

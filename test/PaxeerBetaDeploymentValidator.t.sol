@@ -4,6 +4,8 @@ pragma solidity ^0.8.24;
 import {PaxeerBetaDeploymentValidator} from "../contracts/deployment/PaxeerBetaDeploymentValidator.sol";
 import {StaticConfig} from "../contracts/config/StaticConfig.sol";
 import {Features} from "../contracts/config/Features.sol";
+import {Blueprint} from "../contracts/deployment/Blueprint.sol";
+import {ManagerContainer} from "../contracts/manager/ManagerContainer.sol";
 import {PaxeerBetaDeploy} from "../scripts/PaxeerBetaDeploy.s.sol";
 
 interface BetaDeploymentVm {
@@ -49,6 +51,22 @@ contract PaxeerBetaDeploymentValidatorHarness {
         PaxeerBetaDeploymentValidator.GenesisArtifacts calldata genesis
     ) external view returns (uint192 release, StaticConfig.Config memory config) {
         return PaxeerBetaDeploymentValidator.validateInput(input, genesis);
+    }
+
+    function validateForProtocol(
+        PaxeerBetaDeploymentValidator.Input calldata input,
+        PaxeerBetaDeploymentValidator.GenesisArtifacts calldata genesis,
+        uint16 version
+    ) external view returns (uint192 release, StaticConfig.Config memory config) {
+        return PaxeerBetaDeploymentValidator.validateInputForProtocol(input, genesis, version);
+    }
+
+    function hashForProtocol(StaticConfig.Config memory config, uint16 version) external view returns (bytes32) {
+        return StaticConfig.hashForProtocol(config, block.chainid, version);
+    }
+
+    function legacyHash(StaticConfig.Config memory config) external view returns (bytes32) {
+        return StaticConfig.hash(config, block.chainid);
     }
 
     function validateGuarantors(
@@ -116,6 +134,30 @@ contract PaxeerBetaDeploymentValidatorTest {
         require(config.governanceTimelock == address(0), "blueprint timelock must derive");
         require(config.usdlToken == USDL && config.usdlDecimals == 6, "USDL");
         require(config.genesisReceiptRoot == bytes32(uint256(3)), "receipt");
+    }
+
+    function testExplicitProtocolThreePinsConfigBlueprintAndManager() public {
+        (, StaticConfig.Config memory config) = harness.validateForProtocol(_input(), _genesis(), 3);
+        require(config.protocolVersion == 3, "selected protocol");
+        Blueprint blueprint = new Blueprint(address(this), config);
+        config.governanceTimelock = blueprint.governanceTimelock();
+        bytes32 selectedHash = harness.hashForProtocol(config, 3);
+        ManagerContainer manager = new ManagerContainer(config);
+        require(blueprint.protocolVersion() == 3 && manager.protocolVersion() == 3, "immutable protocol");
+        require(
+            blueprint.staticConfigHash() == selectedHash && manager.staticConfigHash() == selectedHash, "config binding"
+        );
+        vm.expectPartialRevert(StaticConfig.InvalidStaticConfig.selector);
+        harness.legacyHash(config);
+        vm.expectPartialRevert(StaticConfig.InvalidStaticConfig.selector);
+        harness.hashForProtocol(config, 2);
+        config.protocolVersion = 2;
+        require(harness.hashForProtocol(config, 2) == harness.legacyHash(config), "legacy hash changed");
+        require(harness.legacyHash(config) != selectedHash, "versions alias");
+        vm.expectPartialRevert(StaticConfig.InvalidStaticConfig.selector);
+        harness.hashForProtocol(config, 3);
+        vm.expectPartialRevert(PaxeerBetaDeploymentValidator.InvalidBetaDeploymentInput.selector);
+        harness.validateForProtocol(_input(), _genesis(), 4);
     }
 
     function testRejectsInvalidAuthorityEconomicAndReleaseInputs() public {

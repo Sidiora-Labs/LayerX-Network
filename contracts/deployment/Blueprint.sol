@@ -15,6 +15,7 @@ contract Blueprint is UUPSNotUpgradeable {
     error BlueprintSealed();
 
     address public immutable manager;
+    uint16 public immutable protocolVersion;
     address public immutable governanceTimelock;
     address public immutable emergencyCouncil;
     bytes32 public immutable staticConfigHash;
@@ -32,9 +33,10 @@ contract Blueprint is UUPSNotUpgradeable {
         if (deploymentManager == address(0) || config.governanceTimelock != address(0)) revert InvalidBlueprint();
         address predictedTimelock = _firstCreateAddress(address(this));
         config.governanceTimelock = predictedTimelock;
-        bytes32 configHash = StaticConfig.hash(config, block.chainid);
+        bytes32 configHash = StaticConfig.hashForProtocol(config, block.chainid, config.protocolVersion);
         manager = deploymentManager;
         governanceTimelock = predictedTimelock;
+        protocolVersion = config.protocolVersion;
         emergencyCouncil = config.emergencyCouncil;
         staticConfigHash = configHash;
         releaseVersion = config.releaseVersion;

@@ -6,10 +6,10 @@
 //! Nothing in this module reads the sequencer daemon's own store.
 
 use layerx_proof::inclusion::{verify_receipt, InclusionError, SequencerAuthorization};
-use layerx_proof::merkle::decode_proof;
+use layerx_proof::merkle::{decode_proof, encode_proof, Proof};
 use layerx_proof::receipt::{verify_outcome, AuthorizedBatch, ReceiptCheck};
 use layerx_wire::hash::{execution_batch_id, receipt_digest};
-use layerx_wire::receipt::{decode, encode_unsigned};
+use layerx_wire::receipt::{decode, decode_merkle_proof, encode_unsigned};
 use serde::Deserialize;
 
 /// Lower-case hexadecimal helpers shared by the service and its tests.
@@ -232,10 +232,18 @@ pub fn parse_replica_evidence(
     if header.is_empty() || receipt_proof.is_empty() {
         return Err(EvidenceRefusal::EvidenceEncoding);
     }
+    let canonical_proof =
+        decode_merkle_proof(&receipt_proof).map_err(|_| EvidenceRefusal::EvidenceEncoding)?;
+    let proof = Proof::new(
+        canonical_proof.leaf_index(),
+        canonical_proof.leaf_count(),
+        canonical_proof.siblings().to_vec(),
+    )
+    .map_err(|_| EvidenceRefusal::EvidenceEncoding)?;
     Ok(BatchEvidence {
         header,
         header_signature,
-        receipt_proof,
+        receipt_proof: encode_proof(&proof),
     })
 }
 

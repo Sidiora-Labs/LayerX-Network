@@ -4,7 +4,7 @@ use layerx_types::result::KnownResult;
 
 use crate::decode::Decoder;
 use crate::encode::Encoder;
-use crate::limits::MAX_MESSAGE_BYTES;
+use crate::limits::{protocol_version_uses_occupancy, MAX_MESSAGE_BYTES};
 use crate::WireError;
 
 const RECEIPT_TAG: u16 = 0x5201;
@@ -493,7 +493,7 @@ fn validate_program_outcome(
     }
     if !matches!(
         (protocol, outcome.encoding_version),
-        (1, 1 | 3) | (2, 2 | 3)
+        (1, 1 | 3) | (2 | 3, 2 | 3)
     ) {
         return Err(WireError::known(KnownResult::VersionUnsupported, offset));
     }
@@ -510,7 +510,7 @@ fn validate_program_outcome(
         || outcome.encoding_version == 3
             && ((outcome.occupancy_asset_id == zero) != (outcome.occupancy_evidence_digest == zero))
         || protocol == 1 && outcome.encoding_version == 3 && !occupancy_zero
-        || protocol == 2
+        || protocol_version_uses_occupancy(protocol)
             && outcome.encoding_version == 3
             && outcome.terminal_kind == 1
             && (outcome.occupancy_asset_id == zero || outcome.occupancy_evidence_digest == zero)
@@ -737,7 +737,11 @@ fn decode_replay(bytes: &[u8]) -> Result<Receipt, WireError> {
 ///
 /// Returns a typed canonical rejection with no panic path.
 pub fn decode(bytes: &[u8]) -> Result<Receipt, WireError> {
-    if bytes.len() >= 4 && (bytes[..4] == [0, 1, 0x52, 1] || bytes[..4] == [0, 2, 0x52, 1]) {
+    if bytes.len() >= 4
+        && (bytes[..4] == [0, 1, 0x52, 1]
+            || bytes[..4] == [0, 2, 0x52, 1]
+            || bytes[..4] == [0, 3, 0x52, 1])
+    {
         decode_protocol(bytes)
     } else {
         decode_replay(bytes)
@@ -880,6 +884,49 @@ pub fn encode_unsigned(receipt: &Receipt) -> Result<Vec<u8>, WireError> {
 #[cfg(test)]
 mod program_outcome_vectors {
     use super::*;
+
+    #[test]
+    fn state_commitment_preserves_occupancy_layout_and_rejections() -> Result<(), WireError> {
+        let mut outcome = ProgramOutcome {
+            encoding_version: 2,
+            terminal_kind: 1,
+            result_code: 0,
+            runtime_version: 1,
+            abi_version: 2,
+            fee_schedule_version: 1,
+            metering_schedule_version: 1,
+            cpu_fuel: 1,
+            memory_bytes: 1,
+            storage_read_bytes: 0,
+            storage_write_bytes: 0,
+            output_values: 0,
+            output_bytes: 0,
+            occupancy_byte_batches: 1,
+            occupancy_fee_units: 1,
+            fee_schedule_prices: [0; 7],
+            occupancy_asset_id: [1; 32],
+            occupancy_evidence_digest: [2; 32],
+            occupancy_transfer_root: [3; 32],
+            fee_units: 1,
+            call_graph_root: [4; 32],
+            terminal_payload_root: [5; 32],
+            transfer_root: [6; 32],
+        };
+        let mut legacy = Encoder::new(MAX_MESSAGE_BYTES);
+        encode_program_outcome(&mut legacy, &outcome, 2)?;
+        let mut composite = Encoder::new(MAX_MESSAGE_BYTES);
+        encode_program_outcome(&mut composite, &outcome, 3)?;
+        let bytes = composite.finish();
+        assert_eq!(legacy.finish(), bytes);
+        let mut decoder = Decoder::new(&bytes, MAX_MESSAGE_BYTES);
+        assert_eq!(decode_program_outcome(&mut decoder, 3)?, outcome);
+        decoder.finish()?;
+        outcome.occupancy_evidence_digest = [0; 32];
+        assert!(validate_program_outcome(&outcome, 3, 0).is_err());
+        outcome.encoding_version = 1;
+        assert!(validate_program_outcome(&outcome, 3, 0).is_err());
+        Ok(())
+    }
 
     #[test]
     fn c_v3_program_outcome_layout_round_trips_byte_exactly() -> Result<(), WireError> {

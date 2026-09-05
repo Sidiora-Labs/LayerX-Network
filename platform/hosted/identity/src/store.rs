@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 const SNAPSHOT_FILE: &str = "snapshot.json";
@@ -21,7 +22,7 @@ pub struct Principal {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Session {
+pub struct StoredSession {
     pub session_id: String,
     pub principal: String,
     pub token_digest: String,
@@ -36,7 +37,7 @@ pub struct Session {
 #[serde(deny_unknown_fields)]
 enum Record {
     Principal(Principal),
-    Session(Session),
+    Session(StoredSession),
     Revoke { session_id: String, revoked_at: u64 },
 }
 
@@ -44,14 +45,16 @@ enum Record {
 #[serde(deny_unknown_fields)]
 struct Snapshot {
     principals: BTreeMap<String, Principal>,
-    sessions: BTreeMap<String, Session>,
+    sessions: BTreeMap<String, StoredSession>,
 }
 
 pub struct Store {
     directory: PathBuf,
     journal: File,
+    directory_identity: (u64, u64),
+    failed: bool,
     principals: BTreeMap<String, Principal>,
-    sessions: BTreeMap<String, Session>,
+    sessions: BTreeMap<String, StoredSession>,
 }
 
 impl Store {
@@ -80,7 +83,10 @@ impl Store {
             .sync_all()
             .map_err(|error| format!("journal sync: {error}"))?;
         sync_directory(directory)?;
+        let metadata = fs::metadata(directory).map_err(|error| error.to_string())?;
         Ok(Self {
+            directory_identity: (metadata.dev(), metadata.ino()),
+            failed: false,
             directory: directory.to_path_buf(),
             journal,
             principals: state.principals,
@@ -94,7 +100,7 @@ impl Store {
     }
 
     #[must_use]
-    pub fn session(&self, session_id: &str) -> Option<&Session> {
+    pub fn session(&self, session_id: &str) -> Option<&StoredSession> {
         self.sessions.get(session_id)
     }
 
@@ -104,7 +110,7 @@ impl Store {
         Ok(())
     }
 
-    pub fn put_session(&mut self, session: Session) -> Result<(), String> {
+    pub fn put_session(&mut self, session: StoredSession) -> Result<(), String> {
         if !self.principals.contains_key(&session.principal) {
             return Err("session principal is unknown".to_owned());
         }
@@ -147,7 +153,24 @@ impl Store {
         Ok(Some(revoked_at))
     }
 
+    pub fn check_available(&self) -> Result<(), String> {
+        if self.failed {
+            return Err("journal write failed; restart required".to_owned());
+        }
+        let directory = fs::metadata(&self.directory).map_err(|error| error.to_string())?;
+        let journal =
+            fs::metadata(self.directory.join(JOURNAL_FILE)).map_err(|error| error.to_string())?;
+        let open_journal = self.journal.metadata().map_err(|error| error.to_string())?;
+        if (directory.dev(), directory.ino()) != self.directory_identity
+            || (journal.dev(), journal.ino()) != (open_journal.dev(), open_journal.ino())
+        {
+            return Err("state directory or journal was replaced; restart required".to_owned());
+        }
+        Ok(())
+    }
+
     pub fn probe_writable(&self) -> Result<(), String> {
+        self.check_available()?;
         let temporary = self.directory.join(format!("{READY_MARKER_FILE}.tmp"));
         let marker = self.directory.join(READY_MARKER_FILE);
         let mut file = OpenOptions::new()
@@ -164,15 +187,21 @@ impl Store {
     }
 
     fn append(&mut self, record: &Record) -> Result<(), String> {
+        self.check_available()?;
         let mut line = serde_json::to_vec(record).map_err(|error| error.to_string())?;
         if line.len() >= MAX_RECORD_BYTES {
             return Err("journal record exceeds its bound".to_owned());
         }
         line.push(b'\n');
-        self.journal
+        if let Err(error) = self
+            .journal
             .write_all(&line)
             .and_then(|()| self.journal.sync_all())
-            .map_err(|error| format!("journal append: {error}"))
+        {
+            self.failed = true;
+            return Err(format!("journal append: {error}"));
+        }
+        Ok(())
     }
 }
 
@@ -273,8 +302,8 @@ mod tests {
         }
     }
 
-    fn session(id: &str, sub: &str, expires_at: u64) -> Session {
-        Session {
+    fn session(id: &str, sub: &str, expires_at: u64) -> StoredSession {
+        StoredSession {
             session_id: id.to_owned(),
             principal: sub.to_owned(),
             token_digest: "11".repeat(32),
@@ -363,7 +392,8 @@ mod tests {
         let journal = root.join(JOURNAL_FILE);
         let complete = serde_json::to_vec(&Record::Session(session("s9", "did:key:beta", 5)))
             .unwrap_or_default();
-        let mut bytes = complete.clone();
+        let mut bytes = fs::read(&journal).unwrap_or_else(|error| panic!("read journal: {error}"));
+        bytes.extend_from_slice(&complete);
         bytes.push(b'\n');
         bytes.extend_from_slice(&complete[..complete.len() / 2]);
         fs::write(&journal, &bytes).unwrap_or_else(|error| panic!("write: {error}"));
@@ -379,6 +409,35 @@ mod tests {
         assert!(Store::open(&root).is_err());
         fs::write(&journal, b"not json\n").unwrap_or_else(|error| panic!("write: {error}"));
         assert!(Store::open(&root).is_err());
+    }
+
+    #[test]
+    fn replaced_journal_refuses_readiness_and_writes() {
+        let root = directory("replaced");
+        let mut store = Store::open(&root).unwrap_or_else(|error| panic!("open: {error}"));
+        fs::remove_file(root.join(JOURNAL_FILE)).unwrap_or_else(|error| panic!("unlink: {error}"));
+        fs::write(root.join(JOURNAL_FILE), b"").unwrap_or_else(|error| panic!("replace: {error}"));
+        assert!(store.probe_writable().is_err());
+        assert!(store.put_principal(principal("did:key:alpha")).is_err());
+        assert!(store.principal("did:key:alpha").is_none());
+    }
+
+    #[test]
+    fn failed_journal_write_requires_restart() {
+        let root = directory("write-failure");
+        let mut store = Store::open(&root).unwrap_or_else(|error| panic!("open: {error}"));
+        store.journal = File::open(root.join(JOURNAL_FILE))
+            .unwrap_or_else(|error| panic!("read-only journal: {error}"));
+        assert!(store.put_principal(principal("did:key:alpha")).is_err());
+        store.journal = OpenOptions::new()
+            .append(true)
+            .open(root.join(JOURNAL_FILE))
+            .unwrap_or_else(|error| panic!("writable journal: {error}"));
+        assert!(store.probe_writable().is_err());
+        assert!(store.put_principal(principal("did:key:alpha")).is_err());
+        drop(store);
+        let mut store = Store::open(&root).unwrap_or_else(|error| panic!("restart: {error}"));
+        assert!(store.put_principal(principal("did:key:alpha")).is_ok());
     }
 
     #[test]

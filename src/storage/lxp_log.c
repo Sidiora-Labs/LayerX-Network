@@ -259,6 +259,32 @@ lxp_result lxp_log_segment_create(lxp_log *log, const char *directory,
     return LXP_OK;
 }
 
+static lxp_result log_open_descriptor(lxp_log *log, int descriptor,
+                                      uint64_t physical_size)
+{
+    log->descriptor = descriptor;
+    log->segment_sequence = 0U;
+    log->capacity = physical_size;
+    log->write_offset = 0U;
+    log->previous_record_offset = 0U;
+    log->next_sequence = 0U;
+    log->durable_offset = 0U;
+    log->durable_previous_record_offset = 0U;
+    log->durable_next_sequence = 0U;
+    log->durable_generation = 0U;
+    log->has_durable_marker = false;
+    {
+        lxp_result status = durable_marker_load(
+            log, physical_size);
+        if (status != LXP_OK) {
+            (void)close(descriptor);
+            log->descriptor = -1;
+            return status;
+        }
+    }
+    return LXP_OK;
+}
+
 lxp_result lxp_log_open(lxp_log *log, const char *path)
 {
     struct stat information;
@@ -270,27 +296,60 @@ lxp_result lxp_log_open(lxp_log *log, const char *path)
         if (descriptor >= 0) (void)close(descriptor);
         return LXP_ERR_IO;
     }
-    log->descriptor = descriptor;
-    log->segment_sequence = 0U;
-    log->capacity = (uint64_t)information.st_size;
-    log->write_offset = 0U;
-    log->previous_record_offset = 0U;
-    log->next_sequence = 0U;
-    log->durable_offset = 0U;
-    log->durable_previous_record_offset = 0U;
-    log->durable_next_sequence = 0U;
-    log->durable_generation = 0U;
-    log->has_durable_marker = false;
-    {
-        lxp_result status = durable_marker_load(
-            log, (uint64_t)information.st_size);
-        if (status != LXP_OK) {
-            (void)close(descriptor);
-            log->descriptor = -1;
-            return status;
+    return log_open_descriptor(log, descriptor,
+                                (uint64_t)information.st_size);
+}
+
+lxp_result lxp_log_open_or_create(lxp_log *log, const char *path,
+                                  uint64_t initial_size)
+{
+    char parent[4096];
+    char *slash;
+    struct stat information;
+    int descriptor;
+    int directory;
+    lxp_result status;
+    size_t length;
+    if (log == NULL || path == NULL ||
+        initial_size < LXP_LOG_HEADER_BYTES + LXP_LOG_DURABLE_MARKER_BYTES ||
+        initial_size > INT64_MAX)
+        return LXP_ERR_NON_CANONICAL;
+    length = strlen(path);
+    if (length == 0U || length >= sizeof(parent)) return LXP_ERR_LENGTH_LIMIT;
+    (void)memcpy(parent, path, length + 1U);
+    slash = strrchr(parent, '/');
+    if (slash == NULL) (void)strcpy(parent, ".");
+    else if (slash == parent) slash[1] = '\0';
+    else *slash = '\0';
+    directory = open(parent, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (directory < 0) return LXP_ERR_IO;
+    descriptor = open(path, O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0600);
+    if (descriptor < 0 || fstat(descriptor, &information) != 0 ||
+        information.st_size < 0 || !S_ISREG(information.st_mode) ||
+        information.st_nlink != 1 || information.st_uid != geteuid() ||
+        (information.st_mode & 0777U) != 0600U) {
+        if (descriptor >= 0) (void)close(descriptor);
+        (void)close(directory);
+        return LXP_ERR_IO;
+    }
+    status = log_open_descriptor(log, descriptor,
+                                  (uint64_t)information.st_size);
+    if (status == LXP_OK && information.st_size == 0) {
+        if (posix_fallocate(descriptor, 0, (off_t)initial_size) != 0)
+            status = LXP_ERR_IO;
+        if (status == LXP_OK) {
+            log->capacity = initial_size - LXP_LOG_DURABLE_MARKER_BYTES;
+            log->has_durable_marker = true;
+            status = durable_marker_store(log, 0U);
         }
     }
-    return LXP_OK;
+    if (status == LXP_OK && fsync(directory) != 0) status = LXP_ERR_IO;
+    (void)close(directory);
+    if (status != LXP_OK && log->descriptor >= 0) {
+        (void)close(log->descriptor);
+        log->descriptor = -1;
+    }
+    return status;
 }
 
 lxp_result lxp_log_append(lxp_log *log, lxp_log_record_kind kind,

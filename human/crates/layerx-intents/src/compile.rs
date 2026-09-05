@@ -212,8 +212,12 @@ pub fn compile(intent: &Intent, registry: &ModuleRegistry) -> Result<CompiledInt
         IntentKind::LxpSend(value) => {
             wire(CompileField::Header, encoder.u16(ASSET_SEND_TAG))?;
             wire(CompileField::Header, encoder.u16(ASSET_SEND_FIELD_COUNT))?;
-            let from = account(&mut encoder, &value.from, CompileField::From)?;
-            account(&mut encoder, &value.to, CompileField::To)?;
+            let from = hash::account_id_for_protocol(&value.from, value.protocol_version.value())
+                .map_err(|error| CompileError::wire(CompileField::From, error))?;
+            let to = hash::account_id_for_protocol(&value.to, value.protocol_version.value())
+                .map_err(|error| CompileError::wire(CompileField::To, error))?;
+            fixed(&mut encoder, &from, CompileField::From)?;
+            fixed(&mut encoder, &to, CompileField::To)?;
             fixed(&mut encoder, &value.asset.bytes(), CompileField::Asset)?;
             wire(CompileField::Amount, encoder.u128(value.amount.value()))?;
             wire(

@@ -122,6 +122,10 @@ fn issue_certificates(root: &Path) {
         "-out",
         &ca_der.to_string_lossy(),
     ]);
+    issue_server_certificate(root, &ca_key, &ca_crt);
+}
+
+fn issue_server_certificate(root: &Path, ca_key: &Path, ca_crt: &Path) {
     let key = root.join("server.key");
     let csr = root.join("server.csr");
     let crt = root.join("server.crt");

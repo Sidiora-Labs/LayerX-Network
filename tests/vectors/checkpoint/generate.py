@@ -3,6 +3,7 @@
 checkpoint settlement configuration. Signatures are produced with
 `cast wallet sign --no-hash` over the v2 guarantor-attestation digest."""
 
+import argparse
 import hashlib
 import json
 import pathlib
@@ -110,18 +111,33 @@ def sign(value, digest):
 
 
 def main():
-    settlement = json.loads(SETTLEMENT.read_text())
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--domain', default='vectors')
+    parser.add_argument('--settlement', type=pathlib.Path, default=SETTLEMENT)
+    parser.add_argument('--output', type=pathlib.Path)
+    parser.add_argument('--keys-file', type=pathlib.Path)
+    args = parser.parse_args()
+    if args.domain != 'vectors' and (args.keys_file is None or args.output is None):
+        parser.error('non-vector domains require --keys-file and a separate --output')
+    output = args.output or OUTPUT
+    if args.domain != 'vectors' and output.resolve() == OUTPUT.resolve():
+        parser.error('non-vector domains must not overwrite the canonical vectors')
+    keys = PRIVATE_KEYS if args.keys_file is None else [int(value, 16) for value in json.loads(args.keys_file.read_text())]
+    output.mkdir(parents=True, exist_ok=True)
+    settlement = json.loads(args.settlement.read_text())
     assert settlement["schema"] == "layerx/checkpoint-settlement/1"
-    protocol_version = settlement["protocol_version"]
+    domain = settlement["settlement_domains"][args.domain]
+    protocol_version = domain.get("protocol_version", settlement["protocol_version"])
+    assert protocol_version in (2, 3)
     checkpoint_domain = settlement["checkpoint_certificate_domain"].encode() + b"\0"
     attestation_domain = settlement["guarantor_attestation_domain"].encode() + b"\0"
-    prefix = unhex(settlement["header_encoding_prefix"])
+    prefix = unhex(domain.get("header_encoding_prefix", settlement["header_encoding_prefix"]))
     delay_ms = settlement["finality_policy"]["maximum_attestation_delay_seconds"] * 1000
     threshold = settlement["finality_policy"]["certificate_threshold"]
-    domain = settlement["settlement_domains"]["vectors"]
+    domain = settlement["settlement_domains"][args.domain]
     guarantors = domain["guarantor_set"]
-    assert len(guarantors) == len(PRIVATE_KEYS)
-    for value, guarantor in zip(PRIVATE_KEYS, guarantors):
+    assert len(guarantors) == len(keys)
+    for value, guarantor in zip(keys, guarantors):
         assert unhex(guarantor["signer"]) == unhex(cast("wallet", "address", "--private-key", private_key_hex(value)))
         assert unhex(guarantor["public_key"]) == compressed_public_key(value)
 
@@ -141,7 +157,7 @@ def main():
     ]
     for name, attested_at_ms, outcome, rejection in cases:
         attestations = []
-        for value, guarantor in zip(PRIVATE_KEYS, guarantors):
+        for value, guarantor in zip(keys, guarantors):
             guarantor_id = unhex(guarantor["guarantor_id"])
             message = attestation_message(settlement, domain, protocol_version, checkpoint_id, guarantor_id, attested_at_ms)
             digest = hashlib.sha256(attestation_domain + message).digest()
@@ -161,7 +177,7 @@ def main():
         vector = {
             "schema": "layerx/checkpoint-vector/1",
             "case": name,
-            "settlement_domain": "vectors",
+            "settlement_domain": args.domain,
             "expected_outcome": outcome,
             "expected_rejection": rejection,
             "header": {
@@ -189,7 +205,7 @@ def main():
             "expected_digest": hexstr(checkpoint_id),
             "attestations": attestations,
         }
-        (OUTPUT / f"{name}.json").write_text(json.dumps(vector, indent=2) + "\n")
+        (output / f"{name}.json").write_text(json.dumps(vector, indent=2) + "\n")
         print(name, outcome, rejection, attested_at_ms)
     return 0
 

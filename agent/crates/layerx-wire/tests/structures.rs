@@ -346,3 +346,15 @@ fn unknown_version_activity_and_field_are_deterministic_rejections() {
         Err(KnownResult::UnknownField.into())
     );
 }
+
+#[test]
+fn state_commitment_header_round_trips_without_changing_default_version() {
+    assert_eq!(layerx_wire::limits::PROTOCOL_VERSION, 2);
+    let bytes = batch_bytes_for_version(layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION);
+    let header = decode_batch_header(&bytes).expect("explicit state commitment header");
+    assert_eq!(header.protocol_version(), 3);
+    assert_eq!(encode_batch_header(&header), Ok(bytes));
+    let mut future = batch_bytes_for_version(3);
+    future[..2].copy_from_slice(&4_u16.to_be_bytes());
+    assert!(decode_batch_header(&future).is_err());
+}

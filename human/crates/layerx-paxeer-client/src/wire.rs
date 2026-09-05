@@ -173,12 +173,21 @@ pub fn encode_checkpoint_proof(
     value: &CheckpointProof,
     maximum_bytes: usize,
 ) -> Result<Vec<u8>, NativeWireError> {
+    encode_checkpoint_proof_for_protocol(value, maximum_bytes, layerx_wire::limits::PROTOCOL_VERSION)
+}
+
+pub fn encode_checkpoint_proof_for_protocol(
+    value: &CheckpointProof,
+    maximum_bytes: usize,
+    protocol_version: u16,
+) -> Result<Vec<u8>, NativeWireError> {
     if value.siblings.len() > MAX_CHECKPOINT_SIBLINGS
         || value.attestations.len() > MAX_CHECKPOINT_ATTESTATIONS
     {
         return Err(NativeWireError::Limit);
     }
-    CheckpointProof::validated(
+    CheckpointProof::validated_for_protocol(
+        protocol_version,
         value.checkpoint_hash,
         value.state_root,
         value.epoch,
@@ -211,6 +220,14 @@ pub fn encode_checkpoint_proof(
 pub fn decode_checkpoint_proof(
     bytes: &[u8],
     maximum_bytes: usize,
+) -> Result<CheckpointProof, NativeWireError> {
+    decode_checkpoint_proof_for_protocol(bytes, maximum_bytes, layerx_wire::limits::PROTOCOL_VERSION)
+}
+
+pub fn decode_checkpoint_proof_for_protocol(
+    bytes: &[u8],
+    maximum_bytes: usize,
+    protocol_version: u16,
 ) -> Result<CheckpointProof, NativeWireError> {
     if bytes.len() > maximum_bytes || bytes.len() < 96 || bytes[..2] != [VERSION, CHECKPOINT_TAG] {
         return Err(NativeWireError::Encoding);
@@ -245,7 +262,8 @@ pub fn decode_checkpoint_proof(
         attestations.push(decode_attestation(&mut r)?)
     }
     r.finish()?;
-    CheckpointProof::validated(
+    CheckpointProof::validated_for_protocol(
+        protocol_version,
         checkpoint_hash,
         state_root,
         epoch,

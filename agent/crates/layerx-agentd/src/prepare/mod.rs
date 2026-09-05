@@ -257,6 +257,20 @@ pub fn prepare_activity(
     defaults: PreparationDefaults,
     request: PrepareRequest,
 ) -> Result<Prepared, PrepareError> {
+    prepare_activity_for_protocol(boundary, defaults, request, PROTOCOL_VERSION)
+}
+
+/// Prepares an activity for the explicitly selected node protocol.
+///
+/// # Errors
+///
+/// Returns the same preparation errors as `prepare_activity`, including unsupported wire versions.
+pub fn prepare_activity_for_protocol(
+    boundary: &mut dyn CorePreparationBoundary,
+    defaults: PreparationDefaults,
+    request: PrepareRequest,
+    protocol_version: u16,
+) -> Result<Prepared, PrepareError> {
     if defaults.timestamp_span == 0 || defaults.maximum_payload_bytes == 0 {
         return Err(PrepareError::InvalidDefaults);
     }
@@ -309,7 +323,7 @@ pub fn prepare_activity(
     let payload_hash = payload_hash_for(&payload).map_err(PrepareError::Wire)?;
     let mut builder = EnvelopeBuilder::new();
     builder
-        .protocol_version(PROTOCOL_VERSION)
+        .protocol_version(protocol_version)
         .and_then(|builder| builder.network_id(state.network_id))
         .and_then(|builder| builder.activity_type(request.activity_type))
         .and_then(|builder| builder.actor_did(request.actor))

@@ -81,7 +81,7 @@ func NewEVMHTTPServer(
 		IdleTimeout:       config.IdleTimeout,
 	})
 	methodTimeout := tmutils.Some(httpServer.timeouts.WriteTimeout)
-	if err := httpServer.SetListenAddr(LocalAddress, config.HTTPPort); err != nil {
+	if err := httpServer.SetListenAddr(config.HTTPAddress, config.HTTPPort); err != nil {
 		return nil, err
 	}
 	simulateConfig := &SimulateConfig{

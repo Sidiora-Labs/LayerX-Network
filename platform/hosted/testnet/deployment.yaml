@@ -7,7 +7,7 @@ kind: ConfigMap
 metadata: {name: layerx-testnet-release, namespace: layerx-testnet}
 data:
   package-semver: "0.1.0"
-  lxp-wire-protocol-version: "2"
+  lxp-wire-protocol-version: "3"
   reset-schedule: "0 9 * * 2; operator executes only on days 1-7"
 ---
 apiVersion: v1

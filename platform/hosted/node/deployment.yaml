@@ -84,12 +84,22 @@ spec:
         - name: core-boundary
           image: ghcr.io/sidiora-labs/layerx-core-boundary:0.1.0
           imagePullPolicy: Always
+          command: [/bin/sh, -ec]
+          args:
+            - |
+              while [ ! -r /run/layerx/node/core.env ]; do sleep 1; done
+              set -a
+              . /run/layerx/node/core.env
+              set +a
+              : "${LAYERX_CORE_SEQUENCER_ID:?generated sequencer identity is required}"
+              : "${LAYERX_CORE_TREASURY_ASSET:?generated treasury asset is required}"
+              exec /usr/local/bin/layerx-core-boundary
           securityContext: {runAsUser: 4021, runAsGroup: 4020, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
           env:
             - {name: LAYERX_CORE_LISTEN, value: "0.0.0.0:9443"}
             - {name: LAYERX_CORE_ADMIN_LISTEN, value: "0.0.0.0:9444"}
             - {name: LAYERX_CORE_NETWORK_ID, valueFrom: {configMapKeyRef: {name: layerx-node-config, key: network-id}}}
-            - {name: LAYERX_CORE_ASSET_ID, valueFrom: {configMapKeyRef: {name: layerx-node-config, key: asset-id}}}
+            - {name: LAYERX_CORE_TREASURY_ASSET, valueFrom: {configMapKeyRef: {name: layerx-node-config, key: asset-id}}}
             - {name: LAYERX_CORE_TLS_CERT_DER, value: /run/layerx/core-tls/server.crt.der}
             - {name: LAYERX_CORE_TLS_KEY_DER, value: /run/layerx/core-tls/server.key.der}
             - {name: LAYERX_CORE_ADMIN_TLS_CERT_DER, value: /run/layerx/core-admin-tls/server.crt.der}
@@ -151,6 +161,7 @@ spec:
           env:
             - {name: LAYERX_AGENT_BOUNDARY_LISTEN, value: "0.0.0.0:9446"}
             - {name: LAYERX_AGENT_BOUNDARY_NETWORK_ID, valueFrom: {configMapKeyRef: {name: layerx-node-config, key: network-id}}}
+            - {name: LAYERX_AGENT_BOUNDARY_PROTOCOL_NETWORK_ID, valueFrom: {configMapKeyRef: {name: layerx-node-config, key: network-id}}}
             - {name: LAYERX_AGENT_BOUNDARY_TLS_CERT_DER, value: /run/layerx/agent-tls/server.crt.der}
             - {name: LAYERX_AGENT_BOUNDARY_TLS_KEY_DER, value: /run/layerx/agent-tls/server.key.der}
             - {name: LAYERX_AGENT_BOUNDARY_CLIENT_CA_DER, value: /run/layerx/trust/ca.crt.der}

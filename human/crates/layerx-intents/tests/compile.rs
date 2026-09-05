@@ -354,3 +354,42 @@ fn every_v1_intent_compiles_through_the_registered_module() {
         .zip(intents.iter())
         .all(|(compiled, intent)| compiled.activity_type().module() == intent.module()));
 }
+
+#[test]
+fn protocol_three_send_compilation_and_disclosure_use_native_account_ids() {
+    let legacy = send_intent([4; 32]);
+    let IntentKind::LxpSend(send) = legacy.kind() else {
+        panic!("SEND");
+    };
+    let (_, _, asset, amount, sequence, idempotency, expiry, context, authorization, network, _) =
+        send.to_wire_parts();
+    for version in [1, 2, 3] {
+        let from = account("agent:did:key:alice:main");
+        let to = account("system:fees");
+        let intent = Intent::v1(IntentKind::LxpSend(
+            LxpSend::new(
+                from.clone(),
+                to.clone(),
+                asset,
+                amount,
+                sequence,
+                idempotency,
+                expiry,
+                context,
+                authorization,
+                network,
+                ProtocolVersion::new(version).unwrap_or_else(|error| panic!("{error:?}")),
+            )
+            .unwrap_or_else(|error| panic!("{error:?}")),
+        ));
+        let compiled = compile(&intent, &registry()).unwrap_or_else(|error| panic!("{error:?}"));
+        let source = hash::account_id_for_protocol(&from, version)
+            .unwrap_or_else(|error| panic!("{error:?}"));
+        let destination =
+            hash::account_id_for_protocol(&to, version).unwrap_or_else(|error| panic!("{error:?}"));
+        assert_eq!(&compiled.payload().as_bytes()[4..36], source);
+        assert_eq!(&compiled.payload().as_bytes()[36..68], destination);
+        assert_eq!(&compiled.payload().as_bytes()[198..230], source);
+        DisclosureCheck::verify(&intent, &compiled).unwrap_or_else(|error| panic!("{error:?}"));
+    }
+}

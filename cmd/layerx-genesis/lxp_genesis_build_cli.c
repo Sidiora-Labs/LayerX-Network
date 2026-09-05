@@ -115,7 +115,8 @@ static lxp_result parse_request(
         status = LXP_ERR_VERSION_UNSUPPORTED;
     if (status == LXP_OK)
         status = reader_u16(&reader, &draft->protocol_version);
-    if (status == LXP_OK && draft->protocol_version != LXP_PROTOCOL_VERSION)
+    if (status == LXP_OK && draft->protocol_version != LXP_PROTOCOL_VERSION &&
+        draft->protocol_version != LXP_PROTOCOL_VERSION_STATE_COMMITMENT)
         status = LXP_ERR_VERSION_UNSUPPORTED;
     if (status == LXP_OK) status = reader_u32(&reader, &draft->network_id);
     if (status == LXP_OK)

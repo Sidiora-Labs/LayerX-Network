@@ -1,6 +1,8 @@
 package config
 
 import (
+	"fmt"
+	"net"
 	"runtime"
 	"time"
 
@@ -35,8 +37,9 @@ const (
 // EVMRPC Config defines configurations for EVM RPC server on this node
 type Config struct {
 	// controls whether an HTTP EVM server is enabled
-	HTTPEnabled bool `mapstructure:"http_enabled"`
-	HTTPPort    int  `mapstructure:"http_port"`
+	HTTPAddress string `mapstructure:"http_address"`
+	HTTPEnabled bool   `mapstructure:"http_enabled"`
+	HTTPPort    int    `mapstructure:"http_port"`
 
 	// controls whether a websocket server is enabled
 	WSEnabled bool `mapstructure:"ws_enabled"`
@@ -171,6 +174,7 @@ type Config struct {
 }
 
 var DefaultConfig = Config{
+	HTTPAddress:                  "0.0.0.0",
 	HTTPEnabled:                  true,
 	HTTPPort:                     8545,
 	WSEnabled:                    true,
@@ -218,6 +222,7 @@ var DefaultConfig = Config{
 }
 
 const (
+	flagHTTPAddress                  = "evm.http_address"
 	flagHTTPEnabled                  = "evm.http_enabled"
 	flagHTTPPort                     = "evm.http_port"
 	flagWSEnabled                    = "evm.ws_enabled"
@@ -263,6 +268,15 @@ const (
 func ReadConfig(opts servertypes.AppOptions) (Config, error) {
 	cfg := DefaultConfig // copy
 	var err error
+	if v := opts.Get(flagHTTPAddress); v != nil {
+		cfg.HTTPAddress, err = cast.ToStringE(v)
+		if err != nil {
+			return cfg, err
+		}
+		if net.ParseIP(cfg.HTTPAddress) == nil {
+			return cfg, fmt.Errorf("evm.http_address must be a literal IP address")
+		}
+	}
 	if v := opts.Get(flagHTTPEnabled); v != nil {
 		if cfg.HTTPEnabled, err = cast.ToBoolE(v); err != nil {
 			return cfg, err
@@ -476,6 +490,7 @@ const ConfigTemplate = `
 # controls whether an HTTP EVM server is enabled
 http_enabled = {{ .EVM.HTTPEnabled }}
 http_port = {{ .EVM.HTTPPort }}
+http_address = "{{ .EVM.HTTPAddress }}"
 
 # controls whether a websocket server is enabled
 ws_enabled = {{ .EVM.WSEnabled }}

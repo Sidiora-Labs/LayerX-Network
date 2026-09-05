@@ -35,7 +35,7 @@ static const domain_tag_entry domain_tags[LXP_DOMAIN_TAG_COUNT] = {
 bool lxp_protocol_version_supported(uint16_t protocol_version)
 {
     return protocol_version == (uint16_t)LXP_PROTOCOL_VERSION_LEGACY ||
-           protocol_version == (uint16_t)LXP_PROTOCOL_VERSION_OCCUPANCY;
+           lxp_protocol_version_uses_occupancy(protocol_version);
 }
 
 bool lxp_network_id_matches(uint32_t configured_network_id,
@@ -52,4 +52,10 @@ const uint8_t *lxp_domain_tag(lxp_domain_tag_id id, size_t *length)
     }
     *length = domain_tags[id].length;
     return domain_tags[id].bytes;
+}
+
+bool lxp_protocol_version_uses_occupancy(uint16_t protocol_version)
+{
+    return protocol_version == (uint16_t)LXP_PROTOCOL_VERSION_OCCUPANCY ||
+           protocol_version == (uint16_t)LXP_PROTOCOL_VERSION_STATE_COMMITMENT;
 }

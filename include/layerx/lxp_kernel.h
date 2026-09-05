@@ -238,6 +238,8 @@ lxp_result lxp_module_ctx_bind_effects(lxp_module_ctx *ctx,
 lxp_result lxp_module_ctx_prepare_commit(lxp_module_ctx *ctx);
 lxp_result lxp_module_ctx_preview_root(const lxp_module_ctx *ctx,
                                        uint8_t root[32]);
+lxp_result lxp_kernel_idempotency_state_value(
+    const uint8_t *bytes, size_t length, uint8_t *output, size_t capacity);
 lxp_result lxp_module_ctx_preview_state_root(
     const lxp_module_ctx *ctx, const lxp_state_journal *journal,
     uint8_t root[32]);

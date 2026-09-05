@@ -1225,7 +1225,7 @@ lxp_result lxp_programs_replay_finalize(
     lxp_result status;
     if (kernel == NULL || header == NULL || previous_state_root == NULL ||
         arena == NULL || output == NULL ||
-        header->protocol_version != LXP_PROTOCOL_VERSION_OCCUPANCY)
+        !lxp_protocol_version_uses_occupancy(header->protocol_version))
         return LXP_ERR_NON_CANONICAL;
     if (lxp_ct_memcmp(kernel->current_state_root,
                       previous_state_root, 32U) != 0)

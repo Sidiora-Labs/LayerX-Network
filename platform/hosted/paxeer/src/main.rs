@@ -160,7 +160,11 @@ fn config() -> Result<Config, String> {
     })
 }
 
-fn read_http_message(stream: &mut impl Read, maximum: usize) -> Result<Request, String> {
+fn read_http_message(
+    stream: &mut impl Read,
+    maximum: usize,
+    allow_chunked: bool,
+) -> Result<Request, String> {
     let mut bytes = Vec::with_capacity(4096);
     let mut chunk = [0_u8; 8192];
     let header_end = loop {
@@ -176,6 +180,9 @@ fn read_http_message(stream: &mut impl Read, maximum: usize) -> Result<Request, 
             return Err("HTTP headers exceed their bound".to_owned());
         }
     };
+    if header_end > MAX_HEADER_BYTES {
+        return Err("HTTP headers exceed their bound".to_owned());
+    }
     let source = std::str::from_utf8(&bytes[..header_end])
         .map_err(|_| "HTTP headers are not UTF-8".to_owned())?;
     let mut lines = source.split("\r\n");
@@ -186,6 +193,7 @@ fn read_http_message(stream: &mut impl Read, maximum: usize) -> Result<Request, 
     let mut headers = BTreeMap::new();
     headers.insert(String::new(), first);
     let mut content_length = 0_usize;
+    let mut chunked = false;
     for line in lines.filter(|line| !line.is_empty()) {
         let (name, value) = line
             .split_once(':')
@@ -196,7 +204,10 @@ fn read_http_message(stream: &mut impl Read, maximum: usize) -> Result<Request, 
             return Err("duplicate HTTP header".to_owned());
         }
         if name == "transfer-encoding" {
-            return Err("transfer-encoded messages are not accepted".to_owned());
+            if !allow_chunked || value != "chunked" {
+                return Err("transfer-encoded message is not accepted".to_owned());
+            }
+            chunked = true;
         }
         if name == "content-length" {
             content_length = value
@@ -204,6 +215,27 @@ fn read_http_message(stream: &mut impl Read, maximum: usize) -> Result<Request, 
                 .map_err(|_| "content length is invalid".to_owned())?;
         }
         headers.insert(name, value);
+    }
+    if chunked {
+        if headers.contains_key("content-length") {
+            return Err("ambiguous HTTP framing".to_owned());
+        }
+        loop {
+            let count = stream.read(&mut chunk).map_err(|error| error.to_string())?;
+            if count == 0 {
+                break;
+            }
+            if bytes.len().saturating_add(count) > maximum {
+                return Err("chunked response exceeds its bound".to_owned());
+            }
+            bytes.extend_from_slice(&chunk[..count]);
+        }
+        return Ok(Request {
+            method: String::new(),
+            path: String::new(),
+            headers,
+            body: decode_chunks(&bytes[header_end..])?,
+        });
     }
     if header_end.saturating_add(content_length) > maximum {
         return Err("HTTP body exceeds its bound".to_owned());
@@ -226,21 +258,50 @@ fn read_http_message(stream: &mut impl Read, maximum: usize) -> Result<Request, 
     })
 }
 
+fn decode_chunks(mut bytes: &[u8]) -> Result<Vec<u8>, String> {
+    let mut body = Vec::new();
+    for _ in 0..4096 {
+        let end = bytes
+            .windows(2)
+            .position(|pair| pair == b"\r\n")
+            .ok_or_else(|| "missing chunk size".to_owned())?;
+        let size =
+            std::str::from_utf8(&bytes[..end]).map_err(|_| "invalid chunk size".to_owned())?;
+        if size.is_empty() || !size.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err("invalid chunk size".to_owned());
+        }
+        let size = usize::from_str_radix(size, 16).map_err(|_| "invalid chunk size".to_owned())?;
+        bytes = &bytes[end + 2..];
+        if size == 0 {
+            if bytes != b"\r\n" {
+                return Err("unexpected chunk trailers".to_owned());
+            }
+            return Ok(body);
+        }
+        if size > bytes.len().saturating_sub(2) || &bytes[size..size + 2] != b"\r\n" {
+            return Err("truncated chunk".to_owned());
+        }
+        body.extend_from_slice(&bytes[..size]);
+        bytes = &bytes[size + 2..];
+    }
+    Err("too many chunks".to_owned())
+}
+
 fn parse_client_request(stream: &mut impl Read) -> Result<Request, String> {
-    let mut request = read_http_message(stream, MAX_REQUEST_BYTES)?;
+    let mut request = read_http_message(stream, MAX_REQUEST_BYTES, false)?;
     let start = request
         .headers
         .remove("")
         .ok_or_else(|| "request line is missing".to_owned())?;
     let mut parts = start.split_whitespace();
-    request.method = parts
+    parts
         .next()
         .ok_or_else(|| "request method is missing".to_owned())?
-        .to_owned();
-    request.path = parts
+        .clone_into(&mut request.method);
+    parts
         .next()
         .ok_or_else(|| "request target is missing".to_owned())?
-        .to_owned();
+        .clone_into(&mut request.path);
     if parts.next() != Some("HTTP/1.1") || parts.next().is_some() || request.path.contains('?') {
         return Err("request line is invalid".to_owned());
     }
@@ -271,8 +332,8 @@ fn node_request(node: &NodeEndpoint, body: &[u8]) -> Result<(u16, Vec<u8>), Node
         .write_all(body)
         .map_err(|_| NodeFailure::Unreachable)?;
     stream.flush().map_err(|_| NodeFailure::Unreachable)?;
-    let mut response =
-        read_http_message(&mut stream, MAX_NODE_RESPONSE_BYTES).map_err(|_| NodeFailure::Invalid)?;
+    let mut response = read_http_message(&mut stream, MAX_NODE_RESPONSE_BYTES, true)
+        .map_err(|_| NodeFailure::Invalid)?;
     let first = response.headers.get("").ok_or(NodeFailure::Invalid)?;
     let mut parts = first.split_whitespace();
     if parts.next() != Some("HTTP/1.1") {
@@ -337,9 +398,9 @@ fn relay(config: &Config, request: &Request) -> Response {
         || !members
             .get("params")
             .is_none_or(|params| params.is_array() || params.is_object())
-        || members.keys().any(|key| {
-            !matches!(key.as_str(), "jsonrpc" | "id" | "method" | "params")
-        })
+        || members
+            .keys()
+            .any(|key| !matches!(key.as_str(), "jsonrpc" | "id" | "method" | "params"))
     {
         return rpc_error(&id, -32600, "invalid request");
     }
@@ -364,9 +425,8 @@ fn relay(config: &Config, request: &Request) -> Response {
             }
             _ => refusal(502, "node_response_invalid", Some(5)),
         },
-        Ok(_) => refusal(502, "node_response_invalid", Some(5)),
+        Ok(_) | Err(NodeFailure::Invalid) => refusal(502, "node_response_invalid", Some(5)),
         Err(NodeFailure::Unreachable) => refusal(503, "node_unavailable", Some(5)),
-        Err(NodeFailure::Invalid) => refusal(502, "node_response_invalid", Some(5)),
     }
 }
 
@@ -529,5 +589,34 @@ fn main() {
     if let Err(error) = config().and_then(paxeer_boundary) {
         eprintln!("layerx-paxeer-boundary: {error}");
         std::process::exit(2);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{decode_chunks, read_http_message};
+
+    #[test]
+    fn node_chunk_framing_is_bounded_and_unambiguous() {
+        assert_eq!(
+            decode_chunks(b"3\r\nabc\r\n2\r\nde\r\n0\r\n\r\n"),
+            Ok(b"abcde".to_vec())
+        );
+        for invalid in [
+            b"4\r\nabc\r\n0\r\n\r\n".as_slice(),
+            b"0\r\n\r\nextra",
+            b"ff\r\nx",
+            b"+1\r\nx\r\n0\r\n\r\n",
+        ] {
+            assert!(decode_chunks(invalid).is_err());
+        }
+        let message =
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Length: 0\r\n\r\n0\r\n\r\n";
+        assert!(read_http_message(&mut message.as_slice(), 4096, true).is_err());
+        let message = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n0\r\n\r\n";
+        assert!(read_http_message(&mut message.as_slice(), 4096, false).is_err());
+        let decoded = read_http_message(&mut message.as_slice(), 4096, true)
+            .unwrap_or_else(|error| panic!("decode node framing: {error}"));
+        assert_eq!(decoded.body, b"abc");
     }
 }

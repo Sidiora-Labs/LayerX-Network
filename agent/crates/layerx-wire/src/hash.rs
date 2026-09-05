@@ -183,6 +183,53 @@ pub fn account_id(account: &AccountId) -> Result<[u8; 32], WireError> {
     )
 }
 
+/// Derives an account identifier for the explicitly selected protocol.
+///
+/// # Errors
+///
+/// Rejects unsupported protocols and names rejected by the native ledger.
+pub fn account_id_for_protocol(account: &AccountId, protocol: u16) -> Result<[u8; 32], WireError> {
+    match protocol {
+        1 | 2 => account_id(account),
+        crate::limits::STATE_COMMITMENT_PROTOCOL_VERSION => {
+            let name = account.canonical().as_bytes();
+            let valid_bytes = name.iter().all(|byte| {
+                byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"._-:".contains(byte)
+            });
+            let valid_tail = if let Some(agent) = account.canonical().strip_prefix("agent:") {
+                agent.ends_with(":main")
+                    || [":budget:", ":escrow:", ":stream:", ":margin:"]
+                        .iter()
+                        .any(|marker| {
+                            agent.split_once(marker).is_some_and(|(did, tail)| {
+                                !did.is_empty() && !tail.is_empty() && !tail.contains(':')
+                            })
+                        })
+            } else if let Some(tail) = account.canonical().strip_prefix("system:liquidity:") {
+                !tail.contains(':')
+            } else {
+                true
+            };
+            if !valid_bytes
+                || !valid_tail
+                || name.starts_with(b":")
+                || name.ends_with(b":")
+                || name.windows(2).any(|pair| pair == b"::")
+            {
+                return Err(WireError::known(KnownResult::UnknownAccountNamespace, 0));
+            }
+            let length = u32::try_from(name.len())
+                .map_err(|_| WireError::known(KnownResult::LengthLimit, 0))?;
+            let mut input = Vec::with_capacity(12 + 4 + name.len());
+            input.extend_from_slice(b"LX:ACCOUNT:v1");
+            input.extend_from_slice(&length.to_be_bytes());
+            input.extend_from_slice(name);
+            sha256(&input)
+        }
+        _ => Err(WireError::known(KnownResult::VersionUnsupported, 0)),
+    }
+}
+
 /// Derives the exact core DID identifier from a bounded DID.
 ///
 /// # Errors

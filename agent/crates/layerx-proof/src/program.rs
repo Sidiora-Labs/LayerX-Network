@@ -8,7 +8,7 @@ use layerx_programs_runtime::{BudgetMeterRefusal, OccupancySettlement, ProgramFa
 use layerx_types::intent::{
     ProgramCallOutcome, ProgramCallResponse, ProgramLegacyCallResponse, ProgramLegacyValue,
 };
-use layerx_wire::limits::PROTOCOL_VERSION;
+use layerx_wire::limits::protocol_version_uses_occupancy;
 use layerx_wire::receipt::ProgramOutcome;
 use sha2::{Digest as _, Sha256};
 
@@ -461,12 +461,13 @@ fn verify_terminal_commitments(
                     }
             )
         );
-    if protocol_version != PROTOCOL_VERSION {
+    if !protocol_version_uses_occupancy(protocol_version) {
         return Err(ProgramExecutionVerificationFailure::at(
             ProgramExecutionCheck::Receipt,
         ));
     }
-    let occupancy_required = protocol_version == 2 && successful_execution;
+    let occupancy_required =
+        protocol_version_uses_occupancy(protocol_version) && successful_execution;
     let mut occupancy_seen = false;
     let mut occupancy_present = false;
     let mut authority_seen = false;

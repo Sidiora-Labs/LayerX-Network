@@ -10,7 +10,7 @@ use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRe
 use layerx_wire::activity::{decode_signed, encode_signed_envelope, encode_unsigned_envelope};
 use layerx_wire::encode::Encoder;
 use layerx_wire::hash::{activity_id, Domain};
-use layerx_wire::limits::PROTOCOL_VERSION;
+use layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION as PROTOCOL_VERSION;
 use native_tls::{Certificate, Identity, TlsConnector};
 use sha2::{Digest as _, Sha256};
 use std::collections::BTreeMap;
@@ -19,7 +19,6 @@ use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::os::unix::fs::PermissionsExt;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread;
@@ -29,7 +28,7 @@ const NETWORK_ID: u32 = 7446;
 const NETWORK_NAME: &str = "layerx-boundary-test";
 const FIRST_BATCH: u64 = 1;
 const LAST_BATCH: u64 = 1_000_000;
-const LNI_FRAME_BYTES: usize = 1_146_902;
+const LNI_FRAME_BYTES: usize = 1_212_416;
 const SEND_ACTIVITY: u16 = 5;
 const MODULE_GOVERNANCE: u16 = 7;
 const METERING_AUTHORITY_GENESIS: u8 = 1;
@@ -55,11 +54,20 @@ fn now_ms() -> u64 {
 }
 
 fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        encoded.push(char::from(DIGITS[usize::from(byte >> 4)]));
+        encoded.push(char::from(DIGITS[usize::from(byte & 15)]));
+    }
+    encoded
 }
 
 fn unhex(text: &str) -> Vec<u8> {
-    assert!(text.len() % 2 == 0, "hex text {text} has odd length");
+    assert!(
+        text.len().is_multiple_of(2),
+        "hex text {text} has odd length"
+    );
     (0..text.len())
         .step_by(2)
         .map(|index| must(u8::from_str_radix(&text[index..index + 2], 16), "hex digit"))
@@ -68,11 +76,10 @@ fn unhex(text: &str) -> Vec<u8> {
 
 fn repository_root() -> PathBuf {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    manifest
-        .ancestors()
-        .nth(3)
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| panic!("repository root above {}", manifest.display()))
+    manifest.ancestors().nth(3).map_or_else(
+        || panic!("repository root above {}", manifest.display()),
+        Path::to_path_buf,
+    )
 }
 
 fn free_port() -> u16 {
@@ -164,7 +171,7 @@ struct Genesis {
     receipt_state_root: [u8; 32],
 }
 
-fn genesis_request(asset: &[u8; 32]) -> Vec<u8> {
+fn genesis_request(asset: &[u8; 32], guarantor_key: &[u8; 33]) -> Vec<u8> {
     let mut request = Vec::with_capacity(512);
     request.extend_from_slice(b"LXGB");
     request.push(1);
@@ -183,9 +190,7 @@ fn genesis_request(asset: &[u8; 32]) -> Vec<u8> {
     let mut guarantor_id = [0_u8; 32];
     guarantor_id[0] = 1;
     request.extend_from_slice(&guarantor_id);
-    let mut guarantor_key = [0_u8; 33];
-    guarantor_key[0] = 2;
-    request.extend_from_slice(&guarantor_key);
+    request.extend_from_slice(guarantor_key);
     request.extend_from_slice(&[0_u8; 16]);
     request.extend_from_slice(asset);
     request.extend_from_slice(&1_u32.to_be_bytes());
@@ -204,13 +209,55 @@ fn genesis_request(asset: &[u8; 32]) -> Vec<u8> {
     request
 }
 
+fn genesis_guarantor_key(directory: &Path) -> [u8; 33] {
+    let private = directory.join("guarantor-key.pem");
+    let public = directory.join("guarantor-public.der");
+    write(&private, &[], 0o600);
+    command(
+        "openssl",
+        &[
+            "genpkey",
+            "-algorithm",
+            "EC",
+            "-pkeyopt",
+            "ec_paramgen_curve:secp256k1",
+            "-out",
+            &private.to_string_lossy(),
+        ],
+    );
+    command(
+        "openssl",
+        &[
+            "ec",
+            "-in",
+            &private.to_string_lossy(),
+            "-pubout",
+            "-conv_form",
+            "compressed",
+            "-outform",
+            "DER",
+            "-out",
+            &public.to_string_lossy(),
+        ],
+    );
+    let encoded = must(fs::read(&public), "guarantor public key");
+    let compressed = encoded
+        .get(encoded.len().saturating_sub(33)..)
+        .unwrap_or_else(|| panic!("compressed guarantor public key missing"));
+    must(
+        compressed.try_into(),
+        "compressed guarantor public key length",
+    )
+}
+
 fn build_genesis(root: &Path, builder: &Path) -> Genesis {
     let directory = root.join("genesis");
     make_dir(&directory, 0o755);
     let asset = random32();
+    let guarantor_key = genesis_guarantor_key(&directory);
     write(
         &directory.join("request.lxgb"),
-        &genesis_request(&asset),
+        &genesis_request(&asset, &guarantor_key),
         0o600,
     );
     write(&directory.join("signer.key"), &random32(), 0o600);
@@ -408,13 +455,26 @@ fn send_payload(
 
 struct Actor {
     signing_key: SigningKey,
+    did: String,
     source: [u8; 32],
 }
 
 fn actor() -> Actor {
+    let signing_key = SigningKey::from_bytes(&random32());
+    let did = format!(
+        "did:layerx:{}",
+        hex(&signing_key.verifying_key().to_bytes())
+    );
+    let name = format!("agent:{did}:main");
+    let length = must(u32::try_from(name.len()), "account name length");
+    let mut digest = Sha256::new();
+    digest.update(b"LX:ACCOUNT:v1");
+    digest.update(length.to_be_bytes());
+    digest.update(name.as_bytes());
     Actor {
-        signing_key: SigningKey::from_bytes(&random32()),
-        source: random32(),
+        signing_key,
+        did,
+        source: digest.finalize().into(),
     }
 }
 
@@ -458,7 +518,7 @@ fn signed_send(actor: &Actor, asset: [u8; 32], sequence: u64) -> Vec<u8> {
             .protocol_version(PROTOCOL_VERSION)
             .and_then(|value| value.network_id(NETWORK_ID))
             .and_then(|value| value.activity_type(activity_type))
-            .and_then(|value| value.actor_did(must(Did::new(&actor.source), "did")))
+            .and_then(|value| value.actor_did(must(Did::new(actor.did.as_bytes()), "did")))
             .and_then(|value| value.authority(must(Authority::owner(&public_key), "authority")))
             .and_then(|value| value.account_sequence(sequence))
             .and_then(|value| {
@@ -497,9 +557,7 @@ struct HttpAnswer {
 
 impl HttpAnswer {
     fn content_type(&self) -> &str {
-        self.headers
-            .get("content-type")
-            .map_or("", String::as_str)
+        self.headers.get("content-type").map_or("", String::as_str)
     }
 
     fn json(&self) -> serde_json::Value {
@@ -609,7 +667,8 @@ impl Client {
             builder.identity(identity.clone());
         }
         let connector = must(builder.build(), "TLS connector");
-        let tcp = TcpStream::connect(("127.0.0.1", self.port)).map_err(|error| error.to_string())?;
+        let tcp =
+            TcpStream::connect(("127.0.0.1", self.port)).map_err(|error| error.to_string())?;
         must(
             tcp.set_read_timeout(Some(Duration::from_secs(60))),
             "read timeout",
@@ -620,12 +679,12 @@ impl Client {
         let authorization = call.bearer.map_or(String::new(), |token| {
             format!("Authorization: Bearer {token}\r\n")
         });
-        let idempotency = call.idempotency.map_or(String::new(), |key| {
-            format!("Idempotency-Key: {key}\r\n")
-        });
-        let content_type = call.content_type.map_or(String::new(), |value| {
-            format!("Content-Type: {value}\r\n")
-        });
+        let idempotency = call
+            .idempotency
+            .map_or(String::new(), |key| format!("Idempotency-Key: {key}\r\n"));
+        let content_type = call
+            .content_type
+            .map_or(String::new(), |value| format!("Content-Type: {value}\r\n"));
         let request = format!(
             "{} {} HTTP/1.1\r\nHost: localhost\r\n{authorization}Accept: application/json\r\n{content_type}{idempotency}Content-Length: {}\r\nConnection: close\r\n\r\n",
             call.method,
@@ -639,6 +698,9 @@ impl Client {
             .map_err(|error| error.to_string())?;
         let mut raw = Vec::new();
         let _ = stream.read_to_end(&mut raw);
+        if raw.is_empty() {
+            return Err("TLS peer closed without an HTTP response".to_owned());
+        }
         Ok(parse_http(&raw))
     }
 
@@ -885,17 +947,22 @@ struct Boundary {
 
 impl Boundary {
     fn start(&mut self) {
-        let mut command = Command::new(&self.binary);
+        let mut command = Command::new("/usr/bin/setpriv");
         command
+            .arg("--reuid")
+            .arg(BOUNDARY_UID.to_string())
+            .arg("--regid")
+            .arg(BOUNDARY_GID.to_string())
+            .arg("--groups")
+            .arg(BOUNDARY_GID.to_string())
+            .arg("--")
+            .arg(&self.binary)
             .env_clear()
             .envs(
                 self.environment
                     .iter()
                     .map(|(key, value)| (*key, value.as_str())),
             )
-            .uid(BOUNDARY_UID)
-            .gid(BOUNDARY_GID)
-            .groups(&[BOUNDARY_GID])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::from(must(
@@ -941,36 +1008,19 @@ struct Cluster {
     tls: TlsMaterial,
 }
 
-fn start_cluster() -> Cluster {
-    assert_eq!(
-        effective_uid(),
-        0,
-        "the real-node harness must run as root so the boundary can run under uid {BOUNDARY_UID}"
-    );
-    let repository = repository_root();
-    let layerxd = repository.join("build/bin/layerxd");
-    let builder = repository.join("build/bin/layerx-genesis-build");
-    assert!(layerxd.is_file(), "{} is not built", layerxd.display());
-    assert!(builder.is_file(), "{} is not built", builder.display());
-    let root = std::env::temp_dir().join(format!(
-        "layerx-agent-boundary-{}-{}",
-        std::process::id(),
-        now_ms()
-    ));
-    make_dir(&root, 0o755);
-    let genesis = build_genesis(&root, &builder);
+struct NodeSetup {
+    sequencer_seed: [u8; 32],
+    sequencer_key: [u8; 32],
+    sequencer_id: [u8; 32],
+    replica_id: [u8; 32],
+    replica_token: String,
+    program_token: String,
+    replica_port: u16,
+    program_port: u16,
+    boundary_port: u16,
+}
 
-    let sequencer_seed = random32();
-    let sequencer_signing = SigningKey::from_bytes(&sequencer_seed);
-    let sequencer_key = sequencer_signing.verifying_key().to_bytes();
-    let sequencer_id = random32();
-    let replica_id = random32();
-    let replica_token = token();
-    let program_token = token();
-    let replica_port = free_port();
-    let program_port = free_port();
-    let boundary_port = free_port();
-
+fn start_replica(root: &Path, layerxd: &Path, setup: &NodeSetup) -> Daemon {
     let replica_dir = root.join("replica");
     make_dir(&replica_dir, 0o700);
     write(
@@ -983,55 +1033,50 @@ fn start_cluster() -> Cluster {
         "LAYERX_AUTHORITY_REPLICA_LOG",
         text(&replica_dir.join("replica.log")),
     );
-    replica_env.insert("LAYERX_AUTHORITY_REPLICA_ID", hex(&replica_id));
-    replica_env.insert("LAYERX_AUTHORITY_SEQUENCER_ID", hex(&sequencer_id));
-    replica_env.insert("LAYERX_AUTHORITY_SEQUENCER_PUBLIC_KEY", hex(&sequencer_key));
+    replica_env.insert("LAYERX_AUTHORITY_REPLICA_ID", hex(&setup.replica_id));
+    replica_env.insert("LAYERX_AUTHORITY_SEQUENCER_ID", hex(&setup.sequencer_id));
+    replica_env.insert(
+        "LAYERX_AUTHORITY_SEQUENCER_PUBLIC_KEY",
+        hex(&setup.sequencer_key),
+    );
     replica_env.insert("LAYERX_AUTHORITY_FIRST_BATCH", FIRST_BATCH.to_string());
     replica_env.insert("LAYERX_AUTHORITY_LAST_BATCH", LAST_BATCH.to_string());
-    replica_env.insert("LAYERX_AUTHORITY_BEARER_TOKEN", replica_token.clone());
+    replica_env.insert("LAYERX_AUTHORITY_BEARER_TOKEN", setup.replica_token.clone());
     replica_env.insert("LAYERX_AUTHORITY_ADDRESS", "127.0.0.1".to_owned());
-    replica_env.insert("LAYERX_AUTHORITY_PORT", replica_port.to_string());
+    replica_env.insert("LAYERX_AUTHORITY_PORT", setup.replica_port.to_string());
     let mut replica = spawn_daemon(
-        &layerxd,
+        layerxd,
         "--authority-replica",
         &replica_dir.join("config.txt"),
         &replica_env,
         root.join("replica.stderr"),
     );
-    wait_for_port(replica_port, &mut replica, "authority replica");
+    wait_for_port(setup.replica_port, &mut replica, "authority replica");
 
-    let node_dir = root.join("node");
+    replica
+}
+
+fn sequencer_environment(
+    repository: &Path,
+    genesis: &Genesis,
+    node_dir: &Path,
+    socket: &Path,
+    setup: &NodeSetup,
+) -> BTreeMap<&'static str, String> {
     let checkpoints = node_dir.join("checkpoints");
     let logs = node_dir.join("logs");
-    let run_dir = root.join("run");
-    make_dir(&node_dir, 0o700);
-    make_dir(&checkpoints, 0o700);
-    make_dir(&logs, 0o700);
-    make_dir(&run_dir, 0o750);
-    chown(&run_dir, 0, BOUNDARY_GID);
-    write(
-        &node_dir.join("registration.lxgr"),
-        &registration(&genesis.receipt_state_root),
-        0o600,
-    );
-    let actor = actor();
-    let identities = format!(
-        "{}:{}:1\n",
-        hex(&actor.source),
-        hex(&actor.signing_key.verifying_key().to_bytes())
-    );
-    write(
-        &node_dir.join("identities.txt"),
-        identities.as_bytes(),
-        0o600,
-    );
-    write(
-        &node_dir.join("config.txt"),
-        node_config("sequencer").as_bytes(),
-        0o600,
-    );
-    let socket = run_dir.join("layerxd.sock");
     let mut node_env = BTreeMap::new();
+    node_env.insert("LAYERX_NODE_PAXEER_CHAIN_ID", "31337".to_owned());
+    node_env.insert("LAYERX_NODE_PAXEER_RPC_ADDRESS", "127.0.0.1".to_owned());
+    node_env.insert("LAYERX_NODE_PAXEER_RPC_PORT", free_port().to_string());
+    node_env.insert(
+        "LAYERX_NODE_SETTLEMENT_CONTRACT",
+        format!("0x{}", "11".repeat(20)),
+    );
+    node_env.insert(
+        "LAYERX_NODE_CHECKPOINT_REGISTRY",
+        format!("0x{}", "22".repeat(20)),
+    );
     node_env.insert("LAYERX_NODE_CHECKPOINT_DIRECTORY", text(&checkpoints));
     node_env.insert(
         "LAYERX_NODE_SNAPSHOT",
@@ -1066,11 +1111,17 @@ fn start_cluster() -> Cluster {
     );
     node_env.insert(
         "LAYERX_NODE_HISTORY_MIGRATIONS",
-        text(&repository.join("migrations")),
+        text(&repository.join("migrations/0007_history_index.sql")),
     );
-    node_env.insert("LAYERX_NODE_SEQUENCER_ID", hex(&sequencer_id));
-    node_env.insert("LAYERX_NODE_SEQUENCER_PUBLIC_KEY", hex(&sequencer_key));
-    node_env.insert("LAYERX_NODE_SEQUENCER_PRIVATE_KEY", hex(&sequencer_seed));
+    node_env.insert("LAYERX_NODE_SEQUENCER_ID", hex(&setup.sequencer_id));
+    node_env.insert(
+        "LAYERX_NODE_SEQUENCER_PUBLIC_KEY",
+        hex(&setup.sequencer_key),
+    );
+    node_env.insert(
+        "LAYERX_NODE_SEQUENCER_PRIVATE_KEY",
+        hex(&setup.sequencer_seed),
+    );
     node_env.insert("LAYERX_NODE_FIRST_BATCH", FIRST_BATCH.to_string());
     node_env.insert("LAYERX_NODE_LAST_BATCH", LAST_BATCH.to_string());
     node_env.insert(
@@ -1079,29 +1130,90 @@ fn start_cluster() -> Cluster {
     );
     node_env.insert(
         "LAYERX_NODE_AUTHORITY_REPLICA_PORT",
-        replica_port.to_string(),
+        setup.replica_port.to_string(),
     );
-    node_env.insert("LAYERX_NODE_AUTHORITY_REPLICA_ID", hex(&replica_id));
-    node_env.insert("LAYERX_NODE_AUTHORITY_REPLICA_BEARER_TOKEN", replica_token);
-    node_env.insert("LAYERX_NODE_PROGRAM_BEARER_TOKEN", program_token.clone());
+    node_env.insert("LAYERX_NODE_AUTHORITY_REPLICA_ID", hex(&setup.replica_id));
+    node_env.insert(
+        "LAYERX_NODE_AUTHORITY_REPLICA_BEARER_TOKEN",
+        setup.replica_token.clone(),
+    );
+    node_env.insert(
+        "LAYERX_NODE_PROGRAM_BEARER_TOKEN",
+        setup.program_token.clone(),
+    );
     node_env.insert("LAYERX_NODE_PROGRAM_ADDRESS", "127.0.0.1".to_owned());
-    node_env.insert("LAYERX_NODE_PROGRAM_PORT", program_port.to_string());
-    node_env.insert("LAYERX_NODE_LNI_SOCKET", text(&socket));
+    node_env.insert("LAYERX_NODE_PROGRAM_PORT", setup.program_port.to_string());
+    node_env.insert("LAYERX_NODE_LNI_SOCKET", text(socket));
     node_env.insert("LAYERX_NODE_LNI_ALLOWED_UID", BOUNDARY_UID.to_string());
     node_env.insert("LAYERX_NODE_LNI_ALLOWED_GID", BOUNDARY_GID.to_string());
     node_env.insert("LAYERX_NODE_LNI_FRAME_BYTES", LNI_FRAME_BYTES.to_string());
     node_env.insert("LAYERX_NODE_LNI_DEADLINE_MS", "10000".to_owned());
+    node_env
+}
+
+fn start_sequencer(
+    root: &Path,
+    layerxd: &Path,
+    repository: &Path,
+    genesis: &Genesis,
+    setup: &NodeSetup,
+) -> (Daemon, Actor, PathBuf) {
+    let node_dir = root.join("node");
+    let checkpoints = node_dir.join("checkpoints");
+    let logs = node_dir.join("logs");
+    let run_dir = root.join("run");
+    make_dir(&node_dir, 0o700);
+    make_dir(&checkpoints, 0o700);
+    make_dir(&logs, 0o700);
+    make_dir(&run_dir, 0o750);
+    chown(&run_dir, 0, BOUNDARY_GID);
+    write(
+        &node_dir.join("registration.lxgr"),
+        &registration(&genesis.receipt_state_root),
+        0o600,
+    );
+    let actor = actor();
+    let identities = format!(
+        "{}:{}:1\n",
+        hex(actor.did.as_bytes()),
+        hex(&actor.signing_key.verifying_key().to_bytes())
+    );
+    write(
+        &node_dir.join("identities.txt"),
+        identities.as_bytes(),
+        0o600,
+    );
+    write(
+        &node_dir.join("config.txt"),
+        node_config("sequencer").as_bytes(),
+        0o600,
+    );
+    let socket = run_dir.join("layerxd.sock");
+    let node_env = sequencer_environment(repository, genesis, &node_dir, &socket, setup);
     let mut sequencer = spawn_daemon(
-        &layerxd,
+        layerxd,
         "--serve",
         &node_dir.join("config.txt"),
         &node_env,
         root.join("sequencer.stderr"),
     );
     wait_for_socket(&socket, &mut sequencer);
-    wait_for_port(program_port, &mut sequencer, "program listener");
+    wait_for_port(setup.program_port, &mut sequencer, "program listener");
 
-    let tls = tls_material(&root);
+    (sequencer, actor, socket)
+}
+
+struct BoundarySetup {
+    boundary: Boundary,
+    client: Client,
+    gateway_token: String,
+    registry_token: String,
+    state_dir: PathBuf,
+    tls: TlsMaterial,
+}
+
+fn start_boundary(root: &Path, socket: &Path, setup: &NodeSetup) -> BoundarySetup {
+    let tls = tls_material(root);
     let tokens_dir = root.join("tokens");
     make_dir(&tokens_dir, 0o755);
     let gateway_token = token();
@@ -1109,7 +1221,7 @@ fn start_cluster() -> Cluster {
     for (name, value) in [
         ("gateway.token", format!("{gateway_token}\n")),
         ("registry.token", registry_token.clone()),
-        ("node.token", format!("{program_token}\r\n")),
+        ("node.token", format!("{}\r\n", setup.program_token)),
     ] {
         let path = tokens_dir.join(name);
         write(&path, value.as_bytes(), 0o600);
@@ -1132,7 +1244,7 @@ fn start_cluster() -> Cluster {
     let mut environment = BTreeMap::new();
     environment.insert(
         "LAYERX_AGENT_BOUNDARY_LISTEN",
-        format!("127.0.0.1:{boundary_port}"),
+        format!("127.0.0.1:{}", setup.boundary_port),
     );
     environment.insert("LAYERX_AGENT_BOUNDARY_TLS_CERT_DER", text(&tls.server_der));
     environment.insert(
@@ -1151,10 +1263,10 @@ fn start_cluster() -> Cluster {
         "LAYERX_AGENT_BOUNDARY_REGISTRY_TOKEN_FILE",
         text(&tokens_dir.join("registry.token")),
     );
-    environment.insert("LAYERX_AGENT_BOUNDARY_LNI_SOCKET", text(&socket));
+    environment.insert("LAYERX_AGENT_BOUNDARY_LNI_SOCKET", text(socket));
     environment.insert(
         "LAYERX_AGENT_BOUNDARY_NODE_URL",
-        format!("http://127.0.0.1:{program_port}"),
+        format!("http://127.0.0.1:{}", setup.program_port),
     );
     environment.insert(
         "LAYERX_AGENT_BOUNDARY_NODE_BEARER_TOKEN_FILE",
@@ -1172,28 +1284,76 @@ fn start_cluster() -> Cluster {
         environment,
         stderr: root.join("boundary.stderr"),
         process: None,
-        port: boundary_port,
+        port: setup.boundary_port,
     };
     boundary.start();
     let client = Client {
-        port: boundary_port,
+        port: setup.boundary_port,
         certificate: tls.server_certificate.clone(),
     };
+    BoundarySetup {
+        boundary,
+        client,
+        gateway_token,
+        registry_token,
+        state_dir,
+        tls,
+    }
+}
+
+fn start_cluster() -> Cluster {
+    assert_eq!(
+        effective_uid(),
+        0,
+        "the real-node harness must run as root so the boundary can run under uid {BOUNDARY_UID}"
+    );
+    let repository = repository_root();
+    let layerxd = repository.join("build/bin/layerxd");
+    let builder = repository.join("build/bin/layerx-genesis-build");
+    assert!(layerxd.is_file(), "{} is not built", layerxd.display());
+    assert!(builder.is_file(), "{} is not built", builder.display());
+    let root = std::env::temp_dir().join(format!(
+        "layerx-agent-boundary-{}-{}-{}",
+        std::process::id(),
+        now_ms(),
+        hex(&random32()[..8])
+    ));
+    make_dir(&root, 0o755);
+    let genesis = build_genesis(&root, &builder);
+
+    let sequencer_seed = random32();
+    let sequencer_signing = SigningKey::from_bytes(&sequencer_seed);
+    let sequencer_key = sequencer_signing.verifying_key().to_bytes();
+    let setup = NodeSetup {
+        sequencer_seed,
+        sequencer_key,
+        sequencer_id: random32(),
+        replica_id: random32(),
+        replica_token: token(),
+        program_token: token(),
+        replica_port: free_port(),
+        program_port: free_port(),
+        boundary_port: free_port(),
+    };
+    let replica = start_replica(&root, &layerxd, &setup);
+    let (sequencer, actor, socket) =
+        start_sequencer(&root, &layerxd, &repository, &genesis, &setup);
+    let boundary = start_boundary(&root, &socket, &setup);
     Cluster {
         root,
         sequencer,
         replica,
-        boundary,
-        client,
-        program_port,
-        program_token,
-        gateway_token,
-        registry_token,
-        state_dir,
+        boundary: boundary.boundary,
+        client: boundary.client,
+        program_port: setup.program_port,
+        program_token: setup.program_token,
+        gateway_token: boundary.gateway_token,
+        registry_token: boundary.registry_token,
+        state_dir: boundary.state_dir,
         asset: genesis.asset,
-        sequencer_key,
+        sequencer_key: setup.sequencer_key,
         actor,
-        tls,
+        tls: boundary.tls,
     }
 }
 
@@ -1214,7 +1374,10 @@ impl Drop for Cluster {
 
 fn journal_record(cluster: &Cluster, key: &str) -> serde_json::Value {
     let digest = format!("{:x}", Sha256::digest(key.as_bytes()));
-    let path = cluster.state_dir.join("journal").join(format!("{digest}.json"));
+    let path = cluster
+        .state_dir
+        .join("journal")
+        .join(format!("{digest}.json"));
     must(
         serde_json::from_slice(&must(fs::read(&path), "journal record")),
         "journal JSON",
@@ -1261,9 +1424,7 @@ fn check_readiness(cluster: &Cluster) {
             "{{\"ready\":true,\"network_id\":\"{NETWORK_NAME}\",\"wire_version\":\"{PROTOCOL_VERSION}\",\"synchronous_receipts\":true,\"state_snapshot\":true}}"
         )
     );
-    let with_bearer = cluster
-        .client
-        .get("/readyz", Some(&cluster.gateway_token));
+    let with_bearer = cluster.client.get("/readyz", Some(&cluster.gateway_token));
     assert_eq!(with_bearer.text(), ready.text());
 }
 
@@ -1394,7 +1555,10 @@ fn check_receipt_routes(cluster: &Cluster, submitted: &Submitted) {
         )
     );
     let uppercase = client.get(
-        &format!("/v1/receipts/{}", submitted.activity_id.to_ascii_uppercase()),
+        &format!(
+            "/v1/receipts/{}",
+            submitted.activity_id.to_ascii_uppercase()
+        ),
         Some(&cluster.gateway_token),
     );
     assert_eq!(uppercase.text(), receipt.text());
@@ -1566,7 +1730,7 @@ fn check_client_certificates(cluster: &Cluster) {
     rogue.identity = Some(&cluster.tls.rogue_identity);
     let outcome = cluster.client.try_call(&rogue);
     assert!(
-        matches!(&outcome, Err(_)) || outcome.as_ref().is_ok_and(|answer| answer.body.is_empty()),
+        outcome.is_err() || outcome.as_ref().is_ok_and(|answer| answer.body.is_empty()),
         "a client certificate outside the configured CA must not be served"
     );
 }
@@ -1637,6 +1801,57 @@ fn real_node_boundary_serves_the_component_contract() {
     assert_ne!(second_submitted.activity_id, submitted.activity_id);
     check_receipt_routes(&cluster, &second_submitted);
 
+    check_daemon_loss(&mut cluster, &submitted, &first);
+}
+
+#[test]
+fn persisted_submission_attempt_is_not_repeated_after_connectivity_returns() {
+    let mut cluster = start_cluster();
+    cluster.boundary.stop();
+    let run_directory = cluster.root.join("run");
+    must(
+        fs::set_permissions(&run_directory, fs::Permissions::from_mode(0o700)),
+        "deny boundary access to the real node socket",
+    );
+    cluster.boundary.start();
+    let signed = signed_send(&cluster.actor, cluster.asset, 1);
+    let key = format!("uncertain-{}", token());
+    let unavailable = cluster.client.call(&Call::submit(
+        "/v1/activities",
+        &cluster.gateway_token,
+        &key,
+        &signed,
+    ));
+    assert_refusal(&unavailable, 503, "node_unavailable");
+    let pending = journal_record(&cluster, &key);
+    assert_eq!(pending["attempts"], 1);
+    assert_eq!(pending["state"], "submitting");
+    cluster.boundary.stop();
+    must(
+        fs::set_permissions(&run_directory, fs::Permissions::from_mode(0o750)),
+        "restore boundary access to the real node socket",
+    );
+    cluster.boundary.start();
+    check_readiness(&cluster);
+    let retry = cluster.client.call(&Call::submit(
+        "/v1/activities",
+        &cluster.gateway_token,
+        &key,
+        &signed,
+    ));
+    assert_eq!(retry.status, 202, "{}", retry.text());
+    assert_eq!(retry.json()["state"], "unknown");
+    assert_eq!(journal_record(&cluster, &key)["attempts"], 1);
+    assert_eq!(journal_record(&cluster, &key)["state"], "submitting");
+    let activity = field(&pending, "activity_id");
+    let lookup = cluster.client.get(
+        &format!("/v1/receipts/{activity}"),
+        Some(&cluster.gateway_token),
+    );
+    assert_eq!(lookup.status, 404, "{}", lookup.text());
+}
+
+fn check_daemon_loss(cluster: &mut Cluster, submitted: &Submitted, first: &[u8]) {
     cluster.sequencer.stop();
     let deadline = Instant::now() + Duration::from_secs(30);
     let lost = loop {
@@ -1668,7 +1883,7 @@ fn real_node_boundary_serves_the_component_contract() {
         "/v1/activities",
         &cluster.gateway_token,
         &submitted.key,
-        &first,
+        first,
     ));
     assert_eq!(journaled.status, 200);
     assert_eq!(journaled.text(), submitted.body);
@@ -1679,4 +1894,210 @@ fn real_node_boundary_serves_the_component_contract() {
     assert_refusal(&relay_lost, 503, "node_unavailable");
     let live = cluster.client.get("/livez", None);
     assert_eq!(live.status, 200);
+}
+
+fn signed_program_call(actor: &Actor, program_id: [u8; 32]) -> Vec<u8> {
+    use layerx_types::intent::ProgramId;
+    use layerx_types::intent::{CallBudget, Calldata, ProgramCall, RequestedCapabilities};
+    let activity_type = must(
+        ActivityType::new(ModuleId::Programs, 3),
+        "program activity type",
+    );
+    let registration = must(
+        ModuleRegistration::new(ModuleId::Programs, &[activity_type]),
+        "program registration",
+    );
+    let registry = must(ModuleRegistry::new(&[registration]), "program registry");
+    let call = ProgramCall::new(
+        ProgramId::new(program_id),
+        must(Calldata::new(&[]), "calldata"),
+        must(CallBudget::new(1000, Amount::from_u128(0)), "call budget"),
+        must(RequestedCapabilities::new(&[]), "capabilities"),
+    );
+    let payload = must(
+        Payload::new(&registry, activity_type, &call.canonical_payload()),
+        "call payload",
+    );
+    let payload_hash = domain_hash(Domain::PayloadHash, payload.as_bytes());
+    let key = actor.signing_key.verifying_key().to_bytes();
+    let mut builder = EnvelopeBuilder::new();
+    must(
+        builder
+            .protocol_version(PROTOCOL_VERSION)
+            .and_then(|value| value.network_id(NETWORK_ID))
+            .and_then(|value| value.activity_type(activity_type))
+            .and_then(|value| value.actor_did(must(Did::new(actor.did.as_bytes()), "actor DID")))
+            .and_then(|value| value.authority(must(Authority::owner(&key), "owner")))
+            .and_then(|value| value.account_sequence(1))
+            .and_then(|value| {
+                value.timestamp_bound(must(
+                    TimestampBound::new(now_ms().saturating_sub(30_000), now_ms() + 120_000),
+                    "validity",
+                ))
+            })
+            .and_then(|value| value.idempotency_key(IdempotencyKey::new(random32())))
+            .and_then(|value| value.fee_limit(Amount::from_u128(0)))
+            .and_then(|value| value.payload_hash(payload_hash))
+            .and_then(|value| value.payload(payload))
+            .map(|_| ()),
+        "program envelope",
+    );
+    let unsigned = must(builder.build(), "program envelope build");
+    let digest = domain_hash(
+        Domain::SignaturePreimage,
+        &must(encode_unsigned_envelope(&unsigned), "signing bytes"),
+    );
+    let signature = actor.signing_key.sign(&digest).to_bytes();
+    must(
+        encode_signed_envelope(
+            &unsigned.attach_signature(must(Signature::new(&signature), "signature")),
+        ),
+        "signed ProgramCall",
+    )
+}
+
+#[test]
+fn real_program_call_refusal_artifacts_are_bound_and_replay_after_restart() {
+    let mut cluster = start_cluster();
+    check_readiness(&cluster);
+    let program_id = random32();
+    let signed = signed_program_call(&cluster.actor, program_id);
+    let key = format!("program-refusal-{}", token());
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let submitted = loop {
+        let answer = cluster.client.call(&Call::submit(
+            "/v1/programs/call",
+            &cluster.gateway_token,
+            &key,
+            &signed,
+        ));
+        if answer.status == 200 || Instant::now() >= deadline {
+            break answer;
+        }
+        assert!(
+            answer.status == 202 || answer.status == 503,
+            "{}",
+            answer.text()
+        );
+        thread::sleep(Duration::from_millis(100));
+    };
+    assert_eq!(submitted.status, 200, "{}", submitted.text());
+    let document = submitted.json();
+    let result = &document["result"];
+    assert_eq!(result["state"], "refused");
+    assert_eq!(result["terminal_payload"], "");
+    assert_eq!(result["call_graph"], "");
+    check_program_refusal_artifact_endpoint(&cluster, result);
+    let lookup_path = format!("/v1/programs/activities/{}", field(result, "activity_id"));
+    let lookup = cluster
+        .client
+        .get(&lookup_path, Some(&cluster.gateway_token));
+    assert_eq!(lookup.status, 200, "{}", lookup.text());
+    assert_eq!(lookup.json()["result"]["program_id"], hex(&program_id));
+    assert_eq!(journal_record(&cluster, &key)["attempts"], 1);
+    let key_digest = format!("{:x}", Sha256::digest(key.as_bytes()));
+    let journal = cluster
+        .state_dir
+        .join("journal")
+        .join(format!("{key_digest}.json"));
+    let original = must(fs::read(&journal), "completed journal");
+    let mut corrupted: serde_json::Value = must(serde_json::from_slice(&original), "journal JSON");
+    corrupted["program_execution"]["call_graph"] = serde_json::json!("00");
+    must(
+        fs::write(
+            &journal,
+            must(serde_json::to_vec(&corrupted), "corrupt journal encoding"),
+        ),
+        "corrupt artifact",
+    );
+    let refused = cluster.client.call(&Call::submit(
+        "/v1/programs/call",
+        &cluster.gateway_token,
+        &key,
+        &signed,
+    ));
+    assert_refusal(&refused, 503, "program_artifacts_invalid");
+    must(fs::write(&journal, &original), "restore verified artifacts");
+    cluster.boundary.stop();
+    cluster.sequencer.stop();
+    cluster.replica.stop();
+    cluster.boundary.start();
+    let replay = cluster.client.call(&Call::submit(
+        "/v1/programs/call",
+        &cluster.gateway_token,
+        &key,
+        &signed,
+    ));
+    assert_eq!(replay.status, 200, "{}", replay.text());
+    assert_eq!(replay.text(), submitted.text());
+    let replay_lookup = cluster
+        .client
+        .get(&lookup_path, Some(&cluster.gateway_token));
+    assert_eq!(replay_lookup.status, 200, "{}", replay_lookup.text());
+    assert_eq!(replay_lookup.text(), lookup.text());
+    assert_eq!(journal_record(&cluster, &key)["attempts"], 1);
+}
+
+fn check_program_refusal_artifact_endpoint(cluster: &Cluster, result: &serde_json::Value) {
+    let receipt_bytes = unhex(field(result, "receipt"));
+    let receipt = must(
+        verify_sequencer_signature(&receipt_bytes, cluster.sequencer_key),
+        "real ProgramCall receipt",
+    );
+    let protocol = receipt
+        .protocol()
+        .unwrap_or_else(|| panic!("protocol receipt"));
+    assert_eq!(protocol.module_id(), 9);
+    assert!(protocol.result_code() < 0);
+    assert_eq!(hex(&protocol.activity_id()), field(result, "activity_id"));
+    let digest = must(
+        layerx_wire::hash::receipt_digest(&must(
+            layerx_wire::receipt::encode_unsigned(&receipt),
+            "unsigned receipt",
+        )),
+        "receipt digest",
+    );
+    let artifact_path = format!(
+        "/v1/programs/activities/{}/artifacts?receipt_digest={}",
+        field(result, "activity_id"),
+        hex(&digest)
+    );
+    let artifacts = http_get(cluster.program_port, &artifact_path, &cluster.program_token);
+    if protocol.program_outcome().is_some() {
+        assert_eq!(artifacts.status, 200, "{}", artifacts.text());
+        let artifacts = artifacts.json();
+        assert_eq!(artifacts["activity_id"], result["activity_id"]);
+        assert_eq!(artifacts["receipt_digest"], hex(&digest));
+        assert_eq!(artifacts["terminal_payload"], "");
+        assert_eq!(artifacts["call_graph"], "");
+    } else {
+        assert_ne!(artifacts.status, 200);
+    }
+    assert_ne!(
+        http_get(cluster.program_port, &artifact_path, &token()).status,
+        200
+    );
+    let wrong_activity = format!(
+        "/v1/programs/activities/{}/artifacts?receipt_digest={}",
+        hex(&random32()),
+        hex(&digest)
+    );
+    assert_ne!(
+        http_get(
+            cluster.program_port,
+            &wrong_activity,
+            &cluster.program_token
+        )
+        .status,
+        200
+    );
+    let wrong_digest = format!(
+        "/v1/programs/activities/{}/artifacts?receipt_digest={}",
+        field(result, "activity_id"),
+        hex(&random32())
+    );
+    assert_ne!(
+        http_get(cluster.program_port, &wrong_digest, &cluster.program_token).status,
+        200
+    );
 }

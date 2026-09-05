@@ -184,3 +184,25 @@ fn comparison_is_exact_for_digests_and_secret_bytes() {
     assert!(!ct::eq(&[7; 32], &[7; 31]));
     assert!(!ct::eq_fixed(&[7; 32], &[6; 32]));
 }
+
+#[test]
+fn state_commitment_signatures_bind_exact_canonical_bytes() {
+    let key = Ed25519SigningKey::from_bytes(&ED25519_SEED);
+    let version = layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION;
+    let mut canonical = version.to_be_bytes().to_vec();
+    canonical.extend_from_slice(CORE_MESSAGE);
+    let message = SignatureMessage::new(Domain::SignaturePreimage, version, 17, &canonical)
+        .expect("explicit version three signature message");
+    let signature = key.sign(&message.digest()).to_bytes();
+    assert_eq!(
+        ed25519::verify(&key.verifying_key().to_bytes(), &signature, message),
+        Ok(())
+    );
+    canonical[1] = 2;
+    let altered = SignatureMessage::new(Domain::SignaturePreimage, 2, 17, &canonical)
+        .expect("legacy version remains supported");
+    assert_eq!(
+        ed25519::verify(&key.verifying_key().to_bytes(), &signature, altered),
+        Err(VerifyError::BadSignature)
+    );
+}

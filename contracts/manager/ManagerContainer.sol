@@ -20,6 +20,7 @@ import {
 } from "./BlockErrors.sol";
 
 contract ManagerContainer is LayerXComponent {
+    uint16 public immutable protocolVersion;
     address public immutable governanceTimelock;
     address public immutable emergencyCouncil;
     bytes32 public immutable genesisManifestDigest;
@@ -54,9 +55,14 @@ contract ManagerContainer is LayerXComponent {
     );
 
     constructor(StaticConfig.Config memory config)
-        LayerXComponent(Predeploys.CONTRACTS_MANAGER, StaticConfig.hash(config, block.chainid), config.releaseVersion)
+        LayerXComponent(
+            Predeploys.CONTRACTS_MANAGER,
+            StaticConfig.hashForProtocol(config, block.chainid, config.protocolVersion),
+            config.releaseVersion
+        )
     {
         governanceTimelock = config.governanceTimelock;
+        protocolVersion = config.protocolVersion;
         emergencyCouncil = config.emergencyCouncil;
         genesisManifestDigest = config.genesisManifestDigest;
         genesisCanonicalStateRoot = config.genesisCanonicalStateRoot;
@@ -164,7 +170,7 @@ contract ManagerContainer is LayerXComponent {
                 || bondedSetVersion != bondComponent.membershipVersion() || bondComponent.slashedBalance() != 0
                 || SafeTransfer.balanceOf(usdlToken, bondAddress) != bondComponent.totalBonded()
                 || bondComponent.custodiedValue() != vaultComponent.totalCustodied(usdlAssetId)
-                || checkpointComponent.protocolVersion() != Constants.PROTOCOL_VERSION
+                || checkpointComponent.protocolVersion() != protocolVersion
                 || checkpointComponent.genesisManifestDigest() != genesisManifestDigest
                 || checkpointComponent.genesisCanonicalStateRoot() != genesisCanonicalStateRoot
                 || checkpointComponent.genesisReceiptRoot() != genesisReceiptRoot || genesisCheckpoint == bytes32(0)

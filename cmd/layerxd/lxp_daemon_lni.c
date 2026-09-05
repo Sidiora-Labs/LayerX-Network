@@ -4,6 +4,7 @@
 #include "layerx/lxp_daemon.h"
 
 #include "layerx/lxp_activity.h"
+#include "layerx/lx_asset.h"
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_identity.h"
 #include "layerx/lxp_protocol.h"
@@ -464,12 +465,22 @@ static lxp_result admission_journal_recover(
             lxp_activity_check_envelope(
                 &decoded, server->daemon->config.network_id) != LXP_OK)
             status = LXP_ERR_LOG_CORRUPT;
+        if (status == LXP_OK && decoded.protocol_version != server->owner->protocol_version)
+            status = LXP_ERR_LOG_CORRUPT;
         if (status == LXP_OK &&
             lxp_activity_verify_payload_hash(&decoded) != LXP_OK)
             status = LXP_ERR_LOG_CORRUPT;
         if (status == LXP_OK &&
             lxp_activity_verify_signature(&decoded) != LXP_OK)
             status = LXP_ERR_LOG_CORRUPT;
+        if (status == LXP_OK &&
+            decoded.protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT &&
+            decoded.activity_type == LX_ASSET_SEND) {
+            lxp_send send;
+            if (lxp_send_decode(decoded.payload.bytes, decoded.payload.length,
+                                 &send) != LXP_OK)
+                status = LXP_ERR_LOG_CORRUPT;
+        }
         if (status != LXP_OK) {
             lxp_secure_zero(activity, length);
             free(activity);
@@ -1219,7 +1230,7 @@ static lxp_result send_node_info(lxp_daemon_lni_server *server,
     batch = server->owner->receipt_authority->last_batch_number;
     store_u16(payload + cursor, LNI_VERSION_MAJOR); cursor += 2U;
     store_u16(payload + cursor, LNI_VERSION_MINOR); cursor += 2U;
-    store_u16(payload + cursor, LXP_PROTOCOL_VERSION); cursor += 2U;
+    store_u16(payload + cursor, server->owner->protocol_version); cursor += 2U;
     store_u32(payload + cursor, server->daemon->config.network_id); cursor += 4U;
     payload[cursor++] = role_tag(server->daemon->config.role);
     store_u64(payload + cursor, head); cursor += 8U;
@@ -1461,6 +1472,8 @@ static lxp_result send_submit(lxp_daemon_lni_server *server, int descriptor,
                             LXP_ERR_MODULE_DISABLED, deadline);
     status = lxp_activity_decode(request->payload, request->payload_length,
                                  &activity);
+    if (status == LXP_OK && activity.protocol_version != server->owner->protocol_version)
+        status = LXP_ERR_VERSION_UNSUPPORTED;
     if (status == LXP_OK)
         status = lxp_activity_check_envelope(
             &activity, server->daemon->config.network_id);
@@ -1477,6 +1490,14 @@ static lxp_result send_submit(lxp_daemon_lni_server *server, int descriptor,
         return authentication_refusal(
             server, descriptor, request, credential,
             status, deadline);
+    if (activity.protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT &&
+        activity.activity_type == LX_ASSET_SEND) {
+        lxp_send send;
+        status = lxp_send_decode(activity.payload.bytes, activity.payload.length, &send);
+        if (status != LXP_OK)
+            return send_refusal(descriptor, server->frame_bytes,
+                                request->correlation_id, 4U, status, deadline);
+    }
     if (pthread_mutex_lock(&server->owner->mutex) != 0) return LXP_ERR_IO;
     status = admission_journal_contains(server, activity_id, &known);
     if (status == LXP_OK && !known)

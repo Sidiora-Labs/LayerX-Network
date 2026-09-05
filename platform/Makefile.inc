@@ -131,7 +131,7 @@ platform-test-cli-production-credential-refusal:
 platform-test-registry:
 	$(PLATFORM_CARGO) test --offline --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-registry
 
-platform-test-node:
+platform-test-node: test-layerxctl
 	bash -n platform/hosted/node/bootstrap.sh platform/hosted/node/supervisor.sh platform/hosted/node/tests/node-test.sh
 	PLATFORM_CARGO="$(PLATFORM_CARGO)" bash platform/hosted/node/tests/node-test.sh
 

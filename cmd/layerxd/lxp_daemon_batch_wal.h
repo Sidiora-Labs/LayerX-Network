@@ -45,6 +45,8 @@ typedef struct lxp_daemon_batch_wal_input {
     const lxp_byte_span *activities;
     const lxp_byte_span *receipts;
     const lxp_byte_span *events;
+    const lxp_byte_span *terminal_payloads;
+    const lxp_byte_span *call_graphs;
     const lxp_merkle_proof *receipt_proofs;
 } lxp_daemon_batch_wal_input;
 

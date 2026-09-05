@@ -475,6 +475,21 @@ fn deploy_suite(
     EvmAddress,
     EvmAddress,
 ) {
+    deploy_suite_for_protocol(anvil, PROTOCOL_VERSION)
+}
+
+#[allow(clippy::too_many_lines)]
+fn deploy_suite_for_protocol(
+    anvil: &Anvil,
+    protocol_version: u16,
+) -> (
+    EvmAddress,
+    EvmAddress,
+    EvmAddress,
+    EvmAddress,
+    EvmAddress,
+    EvmAddress,
+) {
     let owner = parse_address(FUNDED);
     let challenger = parse_address(CHALLENGER);
     let token_template = anvil.deploy("IntegrationToken", &[address_word(owner)]);
@@ -507,7 +522,7 @@ fn deploy_suite(
             address_word(token),
             address_word(vault),
             ASSET,
-            quantity_word(&PROTOCOL_VERSION.to_be_bytes()),
+            quantity_word(&protocol_version.to_be_bytes()),
             quantity_word(&NETWORK_ID.to_be_bytes()),
             quantity_word(&100_u32.to_be_bytes()),
             quantity_word(&86_400_u64.to_be_bytes()),
@@ -519,7 +534,7 @@ fn deploy_suite(
         "CheckpointRegistry",
         &[
             address_word(bond),
-            quantity_word(&PROTOCOL_VERSION.to_be_bytes()),
+            quantity_word(&protocol_version.to_be_bytes()),
             quantity_word(&NETWORK_ID.to_be_bytes()),
             quantity_word(&1_u16.to_be_bytes()),
             quantity_word(&1_u16.to_be_bytes()),
@@ -714,14 +729,18 @@ fn committed_debit(expectation: DebitExpectation) -> CommittedWithdrawalDebit {
 }
 
 fn withdraw_receipt() -> Vec<u8> {
+    withdraw_receipt_for_protocol(PROTOCOL_VERSION)
+}
+
+fn withdraw_receipt_for_protocol(protocol_version: u16) -> Vec<u8> {
     let signer = SigningKey::from_bytes(&[0x51; 32]);
     let encode = |signature: Option<[u8; 64]>| {
         let mut encoder = Encoder::new(4_096);
         assert_eq!(
-            encoder.structure_header_version(0x5201, PROTOCOL_VERSION),
+            encoder.structure_header_version(0x5201, protocol_version),
             Ok(())
         );
-        assert_eq!(encoder.u16(PROTOCOL_VERSION), Ok(()));
+        assert_eq!(encoder.u16(protocol_version), Ok(()));
         assert_eq!(encoder.bytes(&[0x31; 32], 32), Ok(()));
         assert_eq!(encoder.u64(1), Ok(()));
         assert_eq!(encoder.bytes(&[0x41; 32], 32), Ok(()));

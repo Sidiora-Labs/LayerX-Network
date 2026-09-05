@@ -51,7 +51,7 @@ library CanonicalCheckpoint {
 
     function encodeHeader(HeaderCommitments calldata header) internal pure returns (bytes memory encoded) {
         encoded = bytes.concat(
-            hex"000217010f",
+            header.protocolVersion == 3 ? bytes5(hex"000317010f") : bytes5(hex"000217010f"),
             abi.encodePacked(
                 uint8(1),
                 header.protocolVersion,

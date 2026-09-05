@@ -128,12 +128,32 @@ resolve_binary() {
 LAYERXD=$(resolve_binary "$LAYERXD" layerxd)
 
 DAEMON_PID=""
+SOCAT=${SOCAT:-$(command -v socat || true)}
+[ -n "$SOCAT" ] && [ -x "$SOCAT" ] || fail "socat is required for daemon readiness and the supervisor socket"
+
+publish_core_environment() {
+    local sequencer_id asset_id lni_gid temporary
+    sequencer_id=$(sed -n 's/^LAYERX_NODE_SEQUENCER_ID=//p' "$DATA_DIR/node.env")
+    asset_id=$(sed -n 's/^LAYERX_NODE_ASSET_ID=//p' "$DATA_DIR/node.env")
+    [[ $sequencer_id =~ ^[0-9a-f]{64}$ ]] || fail "invalid generated sequencer identity"
+    [[ $asset_id =~ ^[0-9a-f]{64}$ ]] || fail "invalid generated treasury asset"
+    lni_gid=$(sed -n 's/^LAYERX_NODE_LNI_ALLOWED_GID=//p' "$DATA_DIR/sequencer.env")
+    [[ $lni_gid =~ ^[0-9]+$ ]] || fail "invalid generated LNI group"
+    chgrp "$lni_gid" "$RUN_DIR"
+    chmod 0750 "$RUN_DIR"
+    temporary="$RUN_DIR/core.env.$$"
+    printf 'LAYERX_CORE_SEQUENCER_ID=%s\nLAYERX_CORE_TREASURY_ASSET=%s\n' \
+        "$sequencer_id" "$asset_id" > "$temporary"
+    chmod 0644 "$temporary"
+    mv "$temporary" "$RUN_DIR/core.env"
+}
 
 start_daemon() {
     # start_daemon ENV_FILE MODE CONFIG
     local env_file=$1 mode=$2 config=$3
     [ -r "$env_file" ] || fail "environment file missing: $env_file"
     [ -r "$config" ] || fail "configuration missing: $config"
+    if [ "$mode" = --serve ]; then publish_core_environment; fi
     (
         set -a
         # shellcheck disable=SC1090
@@ -173,6 +193,48 @@ wait_for_file() {
     done
 }
 
+wait_for_daemon_ready() (
+    local env_file=$1 mode=$2 seconds=$3 address port bearer path expected response deadline unknown body record page
+    . "$env_file"
+    if [ "$mode" = --serve ]; then
+        address=$LAYERX_NODE_PROGRAM_ADDRESS
+        port=$LAYERX_NODE_PROGRAM_PORT
+        bearer=$LAYERX_NODE_PROGRAM_BEARER_TOKEN
+        path=/v1/programs/account-state/changes?after_sequence=0
+        expected='HTTP/1.1 200 '
+    else
+        address=$LAYERX_AUTHORITY_ADDRESS
+        port=$LAYERX_AUTHORITY_PORT
+        bearer=$LAYERX_AUTHORITY_BEARER_TOKEN
+        unknown=$(printf '%064d' 0)
+        path="/v1/batches/$unknown/receipt-authority?receipt_digest=$unknown"
+        expected='HTTP/1.1 404 '
+    fi
+    [ "$address" = 127.0.0.1 ] || return 1
+    record='\{"sequence":[0-9]+,"ordinal":[0-9]+,"program_id":"[0-9a-f]{64}","activity_type":[0-9]+,"event_type":[0-9]+,"receipt_digest":"[0-9a-f]{64}"\}'
+    page='^\{"records":\[('
+    page+="$record(,$record)*"
+    page+=')?\],"complete_through":\{"sequence":[0-9]+,"ordinal":0\},"scanned_through_sequence":[0-9]+,"caught_up":(true|false)\}$'
+    deadline=$(( $(date +%s) + seconds ))
+    while [ "$(date +%s)" -lt "$deadline" ]; do
+        daemon_alive || return 1
+        if [ "$mode" = --serve ] && [ ! -S "$LAYERX_NODE_LNI_SOCKET" ]; then
+            sleep 0.2
+            continue
+        fi
+        if response=$(printf 'GET %s HTTP/1.1\r\nHost: 127.0.0.1:%s\r\nAuthorization: Bearer %s\r\nConnection: close\r\n\r\n' \
+            "$path" "$port" "$bearer" | "$SOCAT" -T 2 - "TCP4:127.0.0.1:$port,connect-timeout=2" 2>/dev/null); then
+            if [[ $response == "$expected"* ]] && daemon_alive; then
+                if [ "$mode" != --serve ]; then return 0; fi
+                body=${response#*$'\r\n\r\n'}
+                if [[ $body =~ $page ]]; then return 0; fi
+            fi
+        fi
+        sleep 0.2
+    done
+    return 1
+)
+
 # --- replica role -----------------------------------------------------------
 if [ "$ROLE" = replica ]; then
     trap 'stop_daemon; exit 0' TERM INT
@@ -186,6 +248,10 @@ if [ "$ROLE" = replica ]; then
         fi
         wait_for_file "$DATA_DIR/replica.env" 60 || fail "replica.env missing for generation $generation"
         start_daemon "$DATA_DIR/replica.env" --authority-replica "$DATA_DIR/replica.conf"
+        if ! wait_for_daemon_ready "$DATA_DIR/replica.env" --authority-replica 120; then
+            stop_daemon
+            fail "replica listener did not become ready for generation $generation"
+        fi
         current=$generation
         : > "$RUN_DIR/replica-ready.$generation"
         while :; do
@@ -209,8 +275,6 @@ if [ "$ROLE" = replica ]; then
 fi
 
 # --- sequencer role ---------------------------------------------------------
-SOCAT=${SOCAT:-$(command -v socat || true)}
-[ -n "$SOCAT" ] && [ -x "$SOCAT" ] || fail "socat is required for the supervisor socket"
 [ -x "$SCRIPT_DIR/bootstrap.sh" ] || fail "bootstrap.sh missing next to supervisor.sh"
 
 RESET_PENDING=0
@@ -247,6 +311,7 @@ fi
 GENERATION=$((GENERATION + 1))
 publish_generation "$GENERATION"
 start_daemon "$DATA_DIR/sequencer.env" --serve "$DATA_DIR/sequencer.conf"
+wait_for_daemon_ready "$DATA_DIR/sequencer.env" --serve 120 || fail "sequencer did not become ready"
 
 printf '%s' "$$" > "$PID_FILE"
 rm -f "$SUPERVISOR_SOCKET"
@@ -276,6 +341,10 @@ perform_reset() {
     GENERATION=$((GENERATION + 1))
     publish_generation "$GENERATION"
     start_daemon "$DATA_DIR/sequencer.env" --serve "$DATA_DIR/sequencer.conf"
+    if ! wait_for_daemon_ready "$DATA_DIR/sequencer.env" --serve 120; then
+        : > "$RUN_DIR/reset-failed.$id"
+        fail "reset $id: sequencer did not become ready"
+    fi
     : > "$RUN_DIR/reset-done.$id"
     log "reset $id: complete at generation $GENERATION"
 }

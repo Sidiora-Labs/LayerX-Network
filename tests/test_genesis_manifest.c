@@ -1,6 +1,7 @@
 #include "layerx/lxp_genesis_builder.h"
 
 #include "layerx/lxp_crypto.h"
+#include "layerx/lx_asset.h"
 #include "layerx/lxp_hash.h"
 #include "layerx/lxp_kernel.h"
 #include "layerx/lxp_ledger.h"
@@ -29,7 +30,7 @@ static void draft_manifest(lxp_genesis_manifest *draft)
         'p','a','r','a','m','e','t','e','r','-','v','e','r','s','i','o','n'
     };
     (void)memset(draft, 0, sizeof(*draft));
-    draft->protocol_version = LXP_PROTOCOL_VERSION;
+    draft->protocol_version = LXP_PROTOCOL_VERSION_STATE_COMMITMENT;
     draft->network_id = 42U;
     draft->genesis_timestamp_ms = UINT64_C(1700000000000);
     draft->parameter_count = 1U;
@@ -106,7 +107,7 @@ static int zero_supply_accounts(const lxp_genesis_manifest *manifest,
     return has_fees && has_reserve && has_withdrawals ? 0 : 1;
 }
 
-int main(void)
+static int check_version(uint16_t protocol_version)
 {
     static const uint8_t signer_private_key[32] = {7U};
     static uint8_t arena_bytes[8388608U];
@@ -135,6 +136,7 @@ int main(void)
 
     REQUIRE(public_key_for(signer_private_key, signer_public_key) == 0);
     draft_manifest(&draft);
+    draft.protocol_version = protocol_version;
     programs_parameters(signer_public_key, asset_id, &metering,
                         &fee_parameters);
     REQUIRE(lxp_arena_init(&arena, arena_bytes, sizeof(arena_bytes)) == LXP_OK);
@@ -171,6 +173,11 @@ int main(void)
             LXP_OK);
     REQUIRE(lxp_kernel_register_module(
         &kernel, programs_module_registration_v4()) == LXP_OK);
+    if (protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT) {
+        REQUIRE(lxp_snapshot_load(snapshot.bytes, snapshot.length,
+                                  &snapshot_manifest, &kernel) != LXP_OK);
+        REQUIRE(lxp_kernel_register_module(&kernel, lx_asset_module_iface()) == LXP_OK);
+    }
     REQUIRE(lxp_snapshot_load(snapshot.bytes, snapshot.length,
                               &snapshot_manifest, &kernel) == LXP_OK);
     REQUIRE(accounts.count == LXP_GENESIS_FRESH_SYSTEM_ACCOUNT_COUNT);
@@ -235,5 +242,12 @@ int main(void)
         registration_bytes, sizeof(registration_bytes),
         &decoded_registration) != LXP_OK);
     REQUIRE(lxp_state_store_destroy(&state) == LXP_OK);
+    return 0;
+}
+
+int main(void)
+{
+    REQUIRE(check_version(LXP_PROTOCOL_VERSION_OCCUPANCY) == 0);
+    REQUIRE(check_version(LXP_PROTOCOL_VERSION_STATE_COMMITMENT) == 0);
     return 0;
 }

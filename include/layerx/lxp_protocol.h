@@ -8,6 +8,7 @@
 enum {
     LXP_PROTOCOL_VERSION_LEGACY = 1,
     LXP_PROTOCOL_VERSION_OCCUPANCY = 2,
+    LXP_PROTOCOL_VERSION_STATE_COMMITMENT = 3,
     LXP_PROTOCOL_VERSION = LXP_PROTOCOL_VERSION_OCCUPANCY,
     LXP_MAX_ACTIVITY_BYTES = 1048576,
     LXP_MAX_PAYLOAD_BYTES = 524288,
@@ -46,6 +47,7 @@ enum {
 };
 
 bool lxp_protocol_version_supported(uint16_t protocol_version);
+bool lxp_protocol_version_uses_occupancy(uint16_t protocol_version);
 bool lxp_network_id_matches(uint32_t configured_network_id,
                             uint32_t presented_network_id);
 const uint8_t *lxp_domain_tag(lxp_domain_tag_id id, size_t *length);

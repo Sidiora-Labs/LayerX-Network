@@ -537,7 +537,7 @@ lxp_result lxp_programs_wind_down_validate(
     uint16_t abi_version;
     lxp_result status;
     if (ctx == NULL || activity == NULL || authority == NULL || value == NULL ||
-        ctx->protocol_version != LXP_PROTOCOL_VERSION_OCCUPANCY)
+        !lxp_protocol_version_uses_occupancy(ctx->protocol_version))
         return LXP_ERR_NON_CANONICAL;
     status = lxp_programs_program_abi(ctx, value->program_id, &abi_version);
     if (status != LXP_OK) return status;

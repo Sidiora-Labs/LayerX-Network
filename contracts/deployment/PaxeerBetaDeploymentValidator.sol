@@ -99,6 +99,17 @@ library PaxeerBetaDeploymentValidator {
         view
         returns (uint192 releaseVersion, StaticConfig.Config memory config)
     {
+        return validateInputForProtocol(input, genesis, Constants.PROTOCOL_VERSION);
+    }
+
+    function validateInputForProtocol(
+        Input memory input,
+        GenesisArtifacts memory genesis,
+        uint16 selectedProtocolVersion
+    ) internal view returns (uint192 releaseVersion, StaticConfig.Config memory config) {
+        if (selectedProtocolVersion != Constants.PROTOCOL_VERSION && selectedProtocolVersion != 3) {
+            revert InvalidBetaDeploymentInput();
+        }
         if (block.chainid != PAXEER_EVM_CHAIN_ID) revert WrongPaxeerChain(block.chainid);
         _validateUsdl();
         releaseVersion = SemverComp.parseRelease(input.release);
@@ -129,7 +140,7 @@ library PaxeerBetaDeploymentValidator {
         });
         config = StaticConfig.Config({
             chainId: PAXEER_EVM_CHAIN_ID,
-            protocolVersion: Constants.PROTOCOL_VERSION,
+            protocolVersion: selectedProtocolVersion,
             releaseVersion: releaseVersion,
             governanceTimelock: address(0),
             emergencyCouncil: input.emergencyCouncil,

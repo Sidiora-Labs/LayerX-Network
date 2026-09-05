@@ -945,7 +945,7 @@ impl DepositProofVerifier {
         if config.layerx_protocol_version == 0 {
             return Err(DepositProofConfigError::ZeroProtocolVersion);
         }
-        if config.layerx_protocol_version != layerx_wire::limits::PROTOCOL_VERSION {
+        if !matches!(config.layerx_protocol_version, layerx_wire::limits::PROTOCOL_VERSION | layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION) {
             return Err(DepositProofConfigError::UnsupportedProtocolVersion);
         }
         let checkpoint_authority = VerifyingKey::from_bytes(&config.paxeer_checkpoint_authority)

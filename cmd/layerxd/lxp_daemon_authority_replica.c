@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <time.h>
@@ -337,7 +338,14 @@ static lxp_result evidence_json(authority_replica *replica,
                                          &evidence.receipt_proof);
     if (status == LXP_OK) {
         proof_hex = (char *)malloc(proof_writer.length * 2U + 1U);
-        capacity = 1024U + proof_writer.length * 2U;
+        capacity = sizeof("{\"authority_replica_id\":\"\","
+                          "\"sequencer_public_key\":\"\","
+                          "\"batch_evidence\":{\"header_hex\":\"\","
+                          "\"header_signature\":\"\","
+                          "\"receipt_proof_hex\":\"\"}}") +
+                   sizeof(replica_hex) - 1U + sizeof(key_hex) - 1U +
+                   sizeof(header_hex) - 1U + sizeof(signature_hex) - 1U +
+                   proof_writer.length * 2U;
         response = (char *)malloc(capacity);
         if (proof_hex == NULL || response == NULL) {
             free(proof_hex); free(response); status = LXP_ERR_IO;
@@ -370,19 +378,76 @@ static lxp_result evidence_json(authority_replica *replica,
     return status;
 }
 
+static bool header_value(const char *request, const char *header_end,
+                          const char *name, const char **value,
+                          size_t *length)
+{
+    const char *line = strstr(request, "\r\n");
+    size_t name_length = strlen(name);
+    bool found = false;
+    if (line == NULL) return false;
+    line += 2U;
+    while (line < header_end) {
+        const char *end = strstr(line, "\r\n");
+        if (end == NULL || end > header_end) return false;
+        if ((size_t)(end - line) > name_length &&
+            line[name_length] == ':' &&
+            strncasecmp(line, name, name_length) == 0) {
+            const char *start = line + name_length + 1U;
+            const char *finish = end;
+            if (found) return false;
+            while (start < finish && (*start == ' ' || *start == '\t')) ++start;
+            while (finish > start &&
+                   (finish[-1] == ' ' || finish[-1] == '\t')) --finish;
+            *value = start;
+            *length = (size_t)(finish - start);
+            found = true;
+        }
+        line = end + 2U;
+    }
+    return found;
+}
+
 static bool authorized(const authority_replica *replica,
                        const char *request, const char *header_end)
 {
-    static const char prefix[] = "Authorization: Bearer ";
-    const char *line = strstr(request, prefix);
-    const char *end;
-    if (line == NULL || line >= header_end) return false;
-    line += sizeof(prefix) - 1U;
-    end = strstr(line, "\r\n");
-    return end != NULL && end <= header_end &&
-           (size_t)(end - line) == replica->bearer_token_length &&
-           lxp_ct_memcmp(line, replica->bearer_token,
+    const char *value = NULL;
+    size_t length = 0U;
+    return header_value(request, header_end, "Authorization", &value, &length) &&
+           length == 7U + replica->bearer_token_length &&
+           strncasecmp(value, "Bearer ", 7U) == 0 &&
+           lxp_ct_memcmp(value + 7U, replica->bearer_token,
                          replica->bearer_token_length) == 0;
+}
+
+static bool request_length(const char *request, const char *header_end,
+                            size_t *length)
+{
+    const char *value = NULL;
+    const char *line = strstr(request, "\r\n");
+    size_t count = 0U;
+    size_t index;
+    size_t parsed = 0U;
+    if (line == NULL) return false;
+    line += 2U;
+    while (line < header_end) {
+        const char *end = strstr(line, "\r\n");
+        if (end == NULL || end > header_end ||
+            ((size_t)(end - line) >= 18U &&
+             strncasecmp(line, "Transfer-Encoding:", 18U) == 0))
+            return false;
+        line = end + 2U;
+    }
+    if (!header_value(request, header_end, "Content-Length", &value, &count) ||
+        count == 0U) return false;
+    for (index = 0U; index < count; ++index) {
+        unsigned digit = (unsigned)((unsigned char)value[index] - '0');
+        if (digit > 9U || parsed > (REPLICA_REQUEST_MAX - digit) / 10U)
+            return false;
+        parsed = parsed * 10U + digit;
+    }
+    *length = parsed;
+    return true;
 }
 
 static lxp_result serve_connection(authority_replica *replica, int descriptor)
@@ -416,12 +481,10 @@ static lxp_result serve_connection(authority_replica *replica, int descriptor)
         http_status = 401U;
     } else if (strcmp(method, "POST") == 0 &&
                strcmp(path, "/v1/receipt-authority/ingest") == 0) {
-        const char *length_header = strstr(headers, "Content-Length: ");
         uint8_t *body;
         size_t header_bytes = (size_t)(header_end + 4U - headers);
         size_t buffered = used - header_bytes;
-        if (length_header == NULL ||
-            sscanf(length_header, "Content-Length: %zu", &content_length) != 1 ||
+        if (!request_length(headers, header_end, &content_length) ||
             content_length == 0U || content_length > REPLICA_REQUEST_MAX ||
             buffered > content_length) {
             status = LXP_ERR_LENGTH_LIMIT;
@@ -644,8 +707,9 @@ lxp_result lxp_daemon_authority_replica_serve(
         status = lxp_arena_init(&replica.scratch, replica.scratch_bytes,
                                 REPLICA_SCRATCH_BYTES);
     if (status == LXP_OK)
-        status = lxp_log_open(&replica.log,
-                              required("LAYERX_AUTHORITY_REPLICA_LOG"));
+        status = lxp_log_open_or_create(&replica.log,
+            required("LAYERX_AUTHORITY_REPLICA_LOG"),
+            UINT64_C(64) * 1024U * 1024U);
     replica.log_open = status == LXP_OK;
     if (status == LXP_OK)
         status = decode_hex32(required("LAYERX_AUTHORITY_REPLICA_ID"),

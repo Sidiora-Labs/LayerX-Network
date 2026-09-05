@@ -45,7 +45,7 @@ impl<'a> SignatureMessage<'a> {
         network_id: u32,
         canonical: &'a [u8],
     ) -> Result<Self, VerifyError> {
-        if !matches!(protocol_version, 1 | 2) {
+        if !layerx_wire::limits::protocol_version_supported(protocol_version) {
             return Err(VerifyError::VersionUnsupported);
         }
         if network_id == 0 {

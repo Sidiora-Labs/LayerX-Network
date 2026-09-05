@@ -1,3 +1,5 @@
+mod artifacts;
+
 use layerx_client::lni::handshake::{perform, Handshake, HandshakeConfig};
 use layerx_client::lni::refusal::decode_core_refusal;
 use layerx_client::lni::schema::{decode_envelope, encode_envelope, Capability, Envelope, Version};
@@ -9,7 +11,7 @@ use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRe
 use layerx_types::result::{ResultCode, Retriability};
 use layerx_wire::activity::{decode_signed, encode_signed, Activity};
 use layerx_wire::hash::activity_id;
-use layerx_wire::limits::PROTOCOL_VERSION;
+use layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION as PROTOCOL_VERSION;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use rustls::server::WebPkiClientVerifier;
 use rustls::{RootCertStore, ServerConfig, ServerConnection, StreamOwned};
@@ -32,10 +34,11 @@ const SERVICE: &str = "agent-boundary";
 const MAX_ACTIVITY_BYTES: usize = 1_048_576;
 const MAX_REQUEST_BYTES: usize = MAX_ACTIVITY_BYTES + 16 * 1024;
 const MAX_RELAY_BYTES: usize = 4 * 1024 * 1024;
+const MAX_ARTIFACT_RESPONSE_BYTES: usize = 4 * MAX_ACTIVITY_BYTES + 16 * 1024;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const IO_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_CONNECTIONS: usize = 128;
-const LNI_FRAME_BYTES: usize = 1_146_902;
+const LNI_FRAME_BYTES: usize = 1_212_416;
 const LNI_CONNECTIONS: usize = 4;
 const RECEIPT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const RECEIPT_LOOKUP_REQUEST_TAG: u16 = 5;
@@ -145,6 +148,8 @@ struct JournalRecord {
     refusal: Option<Refusal>,
     receipt: Option<String>,
     result_code: Option<i32>,
+    #[serde(default)]
+    program_execution: Option<artifacts::StoredExecution>,
 }
 
 struct Request {
@@ -177,8 +182,14 @@ enum LniFailure {
 impl LniFailure {
     fn response(&self) -> Response {
         match self {
-            Self::Unavailable(_) => refusal(503, "node_unavailable", Some(5)),
-            Self::Transport(_) => refusal(503, "node_transport_lost", Some(5)),
+            Self::Unavailable(detail) => {
+                eprintln!("{SERVICE}: node unavailable: {detail}");
+                refusal(503, "node_unavailable", Some(5))
+            }
+            Self::Transport(detail) => {
+                eprintln!("{SERVICE}: node transport lost: {detail}");
+                refusal(503, "node_transport_lost", Some(5))
+            }
         }
     }
 }
@@ -189,13 +200,13 @@ enum Lookup {
         receipt: Vec<u8>,
         result_code: i32,
         module_id: u16,
+        sequencer_public_key: [u8; 32],
     },
 }
 
 enum SubmitOutcome {
     Acknowledged,
     Refused(Refusal),
-    Unknown,
 }
 
 struct Decoded {
@@ -205,15 +216,17 @@ struct Decoded {
 }
 
 fn hex(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
     let mut text = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
-        text.push_str(&format!("{byte:02x}"));
+        text.push(char::from(DIGITS[usize::from(byte >> 4)]));
+        text.push(char::from(DIGITS[usize::from(byte & 15)]));
     }
     text
 }
 
 fn decode_hex(text: &str, maximum: usize) -> Result<Vec<u8>, String> {
-    if text.len() % 2 != 0 || text.len() / 2 > maximum {
+    if !text.len().is_multiple_of(2) || text.len() / 2 > maximum {
         return Err("hex text has an invalid length".to_owned());
     }
     let mut bytes = Vec::with_capacity(text.len() / 2);
@@ -325,10 +338,9 @@ fn server_tls_config() -> Result<Arc<ServerConfig>, String> {
 fn module_registry() -> Result<ModuleRegistry, String> {
     let declarations = match env::var("LAYERX_AGENT_BOUNDARY_MODULE_REGISTRY_FILE") {
         Ok(path) => {
-            let file: ModuleFile = serde_json::from_slice(
-                &fs::read(path).map_err(|error| error.to_string())?,
-            )
-            .map_err(|error| format!("module registry file is invalid: {error}"))?;
+            let file: ModuleFile =
+                serde_json::from_slice(&fs::read(path).map_err(|error| error.to_string())?)
+                    .map_err(|error| format!("module registry file is invalid: {error}"))?;
             file.modules
         }
         Err(_) => (1..=9)
@@ -346,7 +358,10 @@ fn module_registry() -> Result<ModuleRegistry, String> {
         let module = ModuleId::from_u16(declaration.module)
             .map_err(|_| format!("module {} is unknown", declaration.module))?;
         if declaration.ordinals.is_empty() || declaration.ordinals.len() > MAX_ORDINALS {
-            return Err(format!("module {} declares no ordinals", declaration.module));
+            return Err(format!(
+                "module {} declares no ordinals",
+                declaration.module
+            ));
         }
         let mut types = Vec::with_capacity(declaration.ordinals.len());
         for ordinal in declaration.ordinals {
@@ -364,9 +379,9 @@ fn module_registry() -> Result<ModuleRegistry, String> {
 }
 
 fn node_endpoint(value: &str) -> Result<NodeEndpoint, String> {
-    let rest = value
-        .strip_prefix("http://127.0.0.1:")
-        .ok_or_else(|| "LAYERX_AGENT_BOUNDARY_NODE_URL must be http://127.0.0.1:<port>".to_owned())?;
+    let rest = value.strip_prefix("http://127.0.0.1:").ok_or_else(|| {
+        "LAYERX_AGENT_BOUNDARY_NODE_URL must be http://127.0.0.1:<port>".to_owned()
+    })?;
     let port = rest
         .strip_suffix('/')
         .unwrap_or(rest)
@@ -569,6 +584,7 @@ fn lookup_receipt(session: &mut Session, activity: [u8; 32]) -> Result<Lookup, L
         receipt: response.canonical_payload.to_vec(),
         result_code: protocol.result_code(),
         module_id: protocol.module_id(),
+        sequencer_public_key: sequencer_key,
     })
 }
 
@@ -652,7 +668,10 @@ fn submit_activity(
 }
 
 fn journal_path(config: &Config, key_digest: &str) -> PathBuf {
-    config.state_dir.join("journal").join(format!("{key_digest}.json"))
+    config
+        .state_dir
+        .join("journal")
+        .join(format!("{key_digest}.json"))
 }
 
 fn activity_index_path(config: &Config, activity: &str) -> PathBuf {
@@ -724,19 +743,19 @@ fn decode_activity(config: &Config, route: Route, body: &[u8]) -> Result<Decoded
         .authority()
         .try_into()
         .map_err(|_| refusal(422, "unsupported_authority", None))?;
-    let activity_id = activity_id(&activity).map_err(|_| refusal(400, "malformed_activity", None))?;
-    let program_id = match route {
-        Route::Activities => None,
-        Route::ProgramCall => {
-            if activity.activity_type().module() != ModuleId::Programs
-                || activity.activity_type().ordinal() != 3
-            {
-                return Err(refusal(400, "not_program_call", None));
-            }
-            let call = ProgramCall::from_canonical_payload(activity.payload())
-                .map_err(|_| refusal(400, "malformed_program_call", None))?;
-            Some(call.callee().bytes())
-        }
+    let activity_id =
+        activity_id(&activity).map_err(|_| refusal(400, "malformed_activity", None))?;
+    let is_program_call = activity.activity_type().module() == ModuleId::Programs
+        && activity.activity_type().ordinal() == 3;
+    if route == Route::ProgramCall && !is_program_call {
+        return Err(refusal(400, "not_program_call", None));
+    }
+    let program_id = if is_program_call {
+        let call = ProgramCall::from_canonical_payload(activity.payload())
+            .map_err(|_| refusal(400, "malformed_program_call", None))?;
+        Some(call.callee().bytes())
+    } else {
+        None
     };
     Ok(Decoded {
         activity_id,
@@ -747,6 +766,16 @@ fn decode_activity(config: &Config, route: Route, body: &[u8]) -> Result<Decoded
 
 fn outcome_response(record: &JournalRecord) -> Response {
     let receipt = record.receipt.clone().unwrap_or_default();
+    let (terminal_payload, call_graph) =
+        record
+            .program_execution
+            .as_ref()
+            .map_or(("", ""), |execution| {
+                (
+                    execution.terminal_payload.as_str(),
+                    execution.call_graph.as_str(),
+                )
+            });
     let route = if record.route == Route::ProgramCall.name() {
         Route::ProgramCall
     } else {
@@ -758,7 +787,7 @@ fn outcome_response(record: &JournalRecord) -> Response {
         "refused"
     };
     ok(format!(
-        "{{\"result\":{{\"state\":\"{state}\",\"activity_id\":\"{}\",\"receipt\":\"{receipt}\",\"terminal_payload\":\"\",\"call_graph\":\"\"}}}}",
+        "{{\"result\":{{\"state\":\"{state}\",\"activity_id\":\"{}\",\"receipt\":\"{receipt}\",\"terminal_payload\":\"{terminal_payload}\",\"call_graph\":\"{call_graph}\"}}}}",
         record.activity_id
     ))
 }
@@ -777,14 +806,150 @@ fn unknown_response(activity: &str) -> Response {
     }
 }
 
+fn fetch_program_execution(
+    config: &Config,
+    receipt: &[u8],
+    activity_id: [u8; 32],
+    program_id: [u8; 32],
+    sequencer_key: [u8; 32],
+) -> Result<artifacts::StoredExecution, Response> {
+    let invalid = || refusal(503, "program_artifacts_invalid", Some(5));
+    let (batch_id, digest) = artifacts::locator(receipt).map_err(|_| invalid())?;
+    let evidence = relay_route(
+        config,
+        &format!(
+            "/v1/batches/{}/receipt-authority?receipt_digest={}",
+            hex(&batch_id),
+            hex(&digest)
+        ),
+    );
+    if evidence.status != 200 {
+        return Err(refusal(503, "program_artifacts_unavailable", Some(5)));
+    }
+    let authority: artifacts::AuthorityDocument =
+        serde_json::from_str(&evidence.body).map_err(|_| invalid())?;
+    if authority.sequencer_public_key != hex(&sequencer_key) {
+        return Err(invalid());
+    }
+    let decoded = layerx_wire::receipt::decode(receipt).map_err(|_| invalid())?;
+    let protocol = decoded.protocol().ok_or_else(invalid)?;
+    let (terminal_payload, call_graph) =
+        if protocol.result_code() < 0 && protocol.program_outcome().is_none() {
+            (String::new(), String::new())
+        } else {
+            let answer = relay_bounded(
+                config,
+                &format!(
+                    "/v1/programs/activities/{}/artifacts?receipt_digest={}",
+                    hex(&activity_id),
+                    hex(&digest)
+                ),
+                MAX_ARTIFACT_RESPONSE_BYTES,
+            );
+            if answer.status != 200 {
+                return Err(refusal(503, "program_artifacts_unavailable", Some(5)));
+            }
+            let document =
+                artifacts::document(&answer.body, activity_id, digest).map_err(|_| invalid())?;
+            (document.terminal_payload, document.call_graph)
+        };
+    let stored = artifacts::StoredExecution {
+        version: 1,
+        sequencer_public_key: hex(&sequencer_key),
+        evidence: authority.batch_evidence,
+        terminal_payload,
+        call_graph,
+    };
+    artifacts::verify(
+        &stored,
+        receipt,
+        activity_id,
+        program_id,
+        config.protocol_network_id,
+    )
+    .map_err(|detail| {
+        eprintln!("{SERVICE}: {detail}");
+        invalid()
+    })?;
+    Ok(stored)
+}
+
+fn completed_response(config: &Config, record: &JournalRecord) -> Response {
+    if let Some(program_id) = &record.program_id {
+        let checked = (|| {
+            let stored = record
+                .program_execution
+                .as_ref()
+                .ok_or_else(|| "missing artifacts".to_owned())?;
+            let receipt = artifacts::canonical_hex(
+                record.receipt.as_deref().unwrap_or_default(),
+                MAX_ACTIVITY_BYTES,
+            )?;
+            let activity_id =
+                parse_hex32(&record.activity_id).ok_or_else(|| "invalid activity".to_owned())?;
+            let program_id = parse_hex32(program_id).ok_or_else(|| "invalid program".to_owned())?;
+            let signed = artifacts::canonical_hex(&record.signed_activity, MAX_ACTIVITY_BYTES)?;
+            let activity =
+                decode_signed(&signed, &config.registry).map_err(|error| format!("{error:?}"))?;
+            let actual_id =
+                layerx_wire::hash::activity_id(&activity).map_err(|error| format!("{error:?}"))?;
+            let call = ProgramCall::from_canonical_payload(activity.payload())
+                .map_err(|error| format!("{error:?}"))?;
+            if actual_id != activity_id || call.callee().bytes() != program_id {
+                return Err("journal program identity mismatch".into());
+            }
+            let decoded =
+                layerx_wire::receipt::decode(&receipt).map_err(|error| format!("{error:?}"))?;
+            if decoded
+                .protocol()
+                .map(layerx_wire::receipt::ProtocolReceipt::result_code)
+                != record.result_code
+            {
+                return Err("journal result mismatch".to_owned());
+            }
+            artifacts::verify(
+                stored,
+                &receipt,
+                activity_id,
+                program_id,
+                config.protocol_network_id,
+            )
+        })();
+        if let Err(detail) = checked {
+            eprintln!("{SERVICE}: {detail}");
+            return refusal(503, "program_artifacts_invalid", Some(5));
+        }
+    }
+    outcome_response(record)
+}
+
 fn complete_record(
     config: &Config,
     key_digest: &str,
     record: &mut JournalRecord,
     receipt: &[u8],
     result_code: i32,
+    sequencer_public_key: [u8; 32],
 ) -> Response {
-    record.state = "completed".to_owned();
+    if let Some(program_text) = record.program_id.as_deref() {
+        let Some(program_id) = parse_hex32(program_text) else {
+            return refusal(503, "persistence_invalid", Some(5));
+        };
+        let Some(activity_id) = parse_hex32(&record.activity_id) else {
+            return refusal(503, "persistence_invalid", Some(5));
+        };
+        match fetch_program_execution(
+            config,
+            receipt,
+            activity_id,
+            program_id,
+            sequencer_public_key,
+        ) {
+            Ok(execution) => record.program_execution = Some(execution),
+            Err(response) => return response,
+        }
+    }
+    "completed".clone_into(&mut record.state);
     record.receipt = Some(hex(receipt));
     record.result_code = Some(result_code);
     if store_record(config, key_digest, record).is_err() {
@@ -825,17 +990,23 @@ fn resolve_record(
             Ok(Lookup::Present {
                 receipt,
                 result_code,
+                sequencer_public_key,
                 ..
-            }) => return complete_record(config, key_digest, record, &receipt, result_code),
-            Ok(Lookup::Absent) => {
-                if record.state == "acknowledged" {
-                    return unknown_response(&record.activity_id);
-                }
+            }) => {
+                return complete_record(
+                    config,
+                    key_digest,
+                    record,
+                    &receipt,
+                    result_code,
+                    sequencer_public_key,
+                )
             }
+            Ok(Lookup::Absent) => return unknown_response(&record.activity_id),
             Err(failure) => return failure.response(),
         }
     }
-    record.state = "submitting".to_owned();
+    "submitting".clone_into(&mut record.state);
     record.attempts = record.attempts.saturating_add(1);
     let attempt = record.attempts;
     if store_record(config, key_digest, record).is_err() {
@@ -846,7 +1017,7 @@ fn resolve_record(
     });
     match outcome {
         Ok(SubmitOutcome::Acknowledged) => {
-            record.state = "acknowledged".to_owned();
+            "acknowledged".clone_into(&mut record.state);
             if store_record(config, key_digest, record).is_err() {
                 return refusal(503, "persistence_unavailable", Some(5));
             }
@@ -854,29 +1025,34 @@ fn resolve_record(
                 Ok(Lookup::Present {
                     receipt,
                     result_code,
+                    sequencer_public_key,
                     ..
-                }) => complete_record(config, key_digest, record, &receipt, result_code),
+                }) => complete_record(
+                    config,
+                    key_digest,
+                    record,
+                    &receipt,
+                    result_code,
+                    sequencer_public_key,
+                ),
                 Ok(Lookup::Absent) | Err(_) => unknown_response(&record.activity_id),
             }
         }
         Ok(SubmitOutcome::Refused(stored)) => {
-            record.state = "refused".to_owned();
+            "refused".clone_into(&mut record.state);
             record.refusal = Some(stored.clone());
             if store_record(config, key_digest, record).is_err() {
                 return refusal(503, "persistence_unavailable", Some(5));
             }
             refusal_response(&stored)
         }
-        Ok(SubmitOutcome::Unknown) | Err(LniFailure::Transport(_)) => {
-            unknown_response(&record.activity_id)
-        }
+        Err(LniFailure::Transport(_)) => unknown_response(&record.activity_id),
         Err(failure @ LniFailure::Unavailable(_)) => failure.response(),
     }
 }
 
 fn submit_route(config: &Config, request: &Request, route: Route) -> Response {
-    if request.headers.get("content-type").map(String::as_str) != Some("application/octet-stream")
-    {
+    if request.headers.get("content-type").map(String::as_str) != Some("application/octet-stream") {
         return refusal(400, "content_type_required", None);
     }
     if request.body.is_empty() || request.body.len() > MAX_ACTIVITY_BYTES {
@@ -896,12 +1072,11 @@ fn submit_route(config: &Config, request: &Request, route: Route) -> Response {
     let request_digest = sha256_hex(&request.body);
     let lock = key_lock(config, &key_digest);
     let _guard = lock.lock().unwrap_or_else(PoisonError::into_inner);
-    let existing = match load_record(config, &key_digest) {
-        Ok(existing) => existing,
-        Err(_) => return refusal(503, "persistence_unavailable", Some(5)),
+    let Ok(existing) = load_record(config, &key_digest) else {
+        return refusal(503, "persistence_unavailable", Some(5));
     };
     let mut record = match existing {
-        Some(record) => {
+        Some(mut record) => {
             if record
                 .request_digest
                 .as_bytes()
@@ -912,13 +1087,26 @@ fn submit_route(config: &Config, request: &Request, route: Route) -> Response {
             {
                 return refusal(409, "idempotency_conflict", None);
             }
+            if record.activity_id != hex(&decoded.activity_id)
+                || record.signed_activity != hex(&request.body)
+            {
+                return refusal(503, "persistence_invalid", Some(5));
+            }
+            record.program_id = decoded.program_id.map(|id| hex(&id));
             match record.state.as_str() {
-                "completed" => return outcome_response(&record),
+                "completed"
+                    if record.program_id.is_none() || record.program_execution.is_some() =>
+                {
+                    return completed_response(config, &record);
+                }
+                "completed" if record.attempts == 0 => {
+                    return refusal(503, "persistence_invalid", Some(5))
+                }
                 "refused" => {
-                    return record
-                        .refusal
-                        .as_ref()
-                        .map_or_else(|| refusal(503, "persistence_invalid", Some(5)), refusal_response)
+                    return record.refusal.as_ref().map_or_else(
+                        || refusal(503, "persistence_invalid", Some(5)),
+                        refusal_response,
+                    )
                 }
                 _ => record,
             }
@@ -935,6 +1123,7 @@ fn submit_route(config: &Config, request: &Request, route: Route) -> Response {
             refusal: None,
             receipt: None,
             result_code: None,
+            program_execution: None,
         },
     };
     resolve_record(config, &key_digest, &mut record, &decoded, &request.body)
@@ -961,38 +1150,76 @@ fn program_activity_route(config: &Config, activity_text: &str) -> Response {
     };
     let activity_hex = hex(&activity);
     let key_digest = match fs::read_to_string(activity_index_path(config, &activity_hex)) {
-        Ok(digest) => digest,
+        Ok(digest) if is_hex32(&digest) => digest,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return refusal(404, "activity_not_journaled", None)
         }
-        Err(_) => return refusal(503, "persistence_unavailable", Some(5)),
+        _ => return refusal(503, "persistence_unavailable", Some(5)),
     };
-    let record = match load_record(config, &key_digest) {
-        Ok(Some(record)) => record,
+    let lock = key_lock(config, &key_digest);
+    let _guard = lock.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut record = match load_record(config, &key_digest) {
+        Ok(Some(record)) if record.activity_id == activity_hex => record,
         Ok(None) => return refusal(404, "activity_not_journaled", None),
-        Err(_) => return refusal(503, "persistence_unavailable", Some(5)),
+        _ => return refusal(503, "persistence_unavailable", Some(5)),
     };
-    let Some(program_id) = record.program_id.clone() else {
+    let Ok(signed) = artifacts::canonical_hex(&record.signed_activity, MAX_ACTIVITY_BYTES) else {
+        return refusal(503, "persistence_invalid", Some(5));
+    };
+    let decoded = match decode_activity(config, Route::ProgramCall, &signed) {
+        Ok(decoded) => decoded,
+        Err(response) => return response,
+    };
+    let Some(program_id) = decoded.program_id.map(|id| hex(&id)) else {
         return refusal(400, "not_program_call", None);
     };
-    match with_session(config, |session| lookup_receipt(session, activity)) {
-        Ok(Lookup::Present {
-            receipt,
-            result_code,
-            module_id,
-        }) => {
-            if module_id != 9 {
-                return refusal(400, "not_program_call", None);
-            }
-            let state = if result_code == 0 { "executed" } else { "refused" };
-            ok(format!(
-                "{{\"result\":{{\"state\":\"{state}\",\"activity_id\":\"{activity_hex}\",\"receipt\":\"{}\",\"terminal_payload\":\"\",\"call_graph\":\"\",\"program_id\":\"{program_id}\"}}}}",
-                hex(&receipt)
-            ))
-        }
-        Ok(Lookup::Absent) => refusal(404, "receipt_not_found", None),
-        Err(failure) => failure.response(),
+    if decoded.activity_id != activity
+        || record
+            .program_id
+            .as_ref()
+            .is_some_and(|stored| stored != &program_id)
+    {
+        return refusal(503, "persistence_invalid", Some(5));
     }
+    record.program_id = Some(program_id.clone());
+    let response = if record.state == "completed" && record.program_execution.is_some() {
+        completed_response(config, &record)
+    } else {
+        match with_session(config, |session| lookup_receipt(session, activity)) {
+            Ok(Lookup::Present {
+                receipt,
+                result_code,
+                module_id,
+                sequencer_public_key,
+            }) => {
+                if module_id != 9 {
+                    return refusal(400, "not_program_call", None);
+                }
+                complete_record(
+                    config,
+                    &key_digest,
+                    &mut record,
+                    &receipt,
+                    result_code,
+                    sequencer_public_key,
+                )
+            }
+            Ok(Lookup::Absent) => return refusal(404, "receipt_not_found", None),
+            Err(failure) => return failure.response(),
+        }
+    };
+    if response.status != 200 {
+        return response;
+    }
+    let mut document: serde_json::Value = match serde_json::from_str(&response.body) {
+        Ok(document) => document,
+        Err(_) => return refusal(503, "persistence_invalid", Some(5)),
+    };
+    document["result"]["program_id"] = serde_json::Value::String(program_id);
+    if record.result_code == Some(0) {
+        document["result"]["state"] = serde_json::Value::String("executed".into());
+    }
+    ok(document.to_string())
 }
 
 fn relay_path_allowed(path: &str, query: Option<&str>) -> bool {
@@ -1001,10 +1228,7 @@ fn relay_path_allowed(path: &str, query: Option<&str>) -> bool {
         return query.is_none();
     }
     if let Some(rest) = path.strip_prefix("/v1/receipts/") {
-        return query.is_none()
-            && rest
-                .strip_suffix("/account-state")
-                .is_some_and(is_hex32);
+        return query.is_none() && rest.strip_suffix("/account-state").is_some_and(is_hex32);
     }
     if path == "/v1/programs/account-state/changes" {
         return query
@@ -1012,9 +1236,7 @@ fn relay_path_allowed(path: &str, query: Option<&str>) -> bool {
             .is_some_and(digits);
     }
     if let Some(rest) = path.strip_prefix("/v1/programs/") {
-        return rest
-            .strip_suffix("/account-state")
-            .is_some_and(is_hex32)
+        return rest.strip_suffix("/account-state").is_some_and(is_hex32)
             && query
                 .and_then(|query| query.strip_prefix("at="))
                 .is_some_and(digits);
@@ -1031,6 +1253,10 @@ fn relay_path_allowed(path: &str, query: Option<&str>) -> bool {
 }
 
 fn relay_route(config: &Config, target: &str) -> Response {
+    relay_bounded(config, target, MAX_RELAY_BYTES)
+}
+
+fn relay_bounded(config: &Config, target: &str, maximum: usize) -> Response {
     let address = SocketAddr::from(([127, 0, 0, 1], config.node.port));
     let Ok(mut stream) = TcpStream::connect_timeout(&address, CONNECT_TIMEOUT) else {
         return refusal(503, "node_unavailable", Some(5));
@@ -1050,7 +1276,7 @@ fn relay_route(config: &Config, target: &str) -> Response {
     if written.is_err() {
         return refusal(503, "node_unavailable", Some(5));
     }
-    let Ok(mut upstream) = read_http_message(&mut stream, MAX_RELAY_BYTES) else {
+    let Ok(mut upstream) = read_http_message(&mut stream, maximum) else {
         return refusal(503, "node_invalid", Some(5));
     };
     let status = upstream
@@ -1079,7 +1305,13 @@ fn relay_route(config: &Config, target: &str) -> Response {
 fn readiness(config: &Config) -> Response {
     let session = match open_session(config) {
         Ok(session) => session,
-        Err(failure) => return failure.response(),
+        Err(failure) => {
+            *config
+                .session
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) = None;
+            return failure.response();
+        }
     };
     let node = session.handshake.node();
     if node.network_id != config.protocol_network_id {
@@ -1161,6 +1393,16 @@ fn route(config: &Config, request: &Request) -> Response {
         return receipt_route(config, activity);
     }
     if !path.starts_with("/v1/") || query.is_some() {
+        return refusal(404, "not_found", None);
+    }
+    let gateway_path = matches!(
+        path,
+        "/v1/activities" | "/v1/programs/call" | "/v1/programs/simulate"
+    ) || path
+        .strip_prefix("/v1/receipts/")
+        .or_else(|| path.strip_prefix("/v1/programs/activities/"))
+        .is_some_and(|activity| !activity.contains('/'));
+    if !gateway_path {
         return refusal(404, "not_found", None);
     }
     if plane != Plane::Gateway {
@@ -1275,14 +1517,14 @@ fn parse_client_request(stream: &mut impl Read) -> Result<Request, String> {
         .remove("")
         .ok_or_else(|| "request line is missing".to_owned())?;
     let mut parts = start.split_whitespace();
-    request.method = parts
+    parts
         .next()
         .ok_or_else(|| "request method is missing".to_owned())?
-        .to_owned();
-    request.path = parts
+        .clone_into(&mut request.method);
+    parts
         .next()
         .ok_or_else(|| "request target is missing".to_owned())?
-        .to_owned();
+        .clone_into(&mut request.path);
     if parts.next() != Some("HTTP/1.1")
         || parts.next().is_some()
         || !request.path.starts_with('/')

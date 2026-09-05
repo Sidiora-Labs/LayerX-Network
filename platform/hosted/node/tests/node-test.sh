@@ -39,7 +39,9 @@ PROBE="$NODE_DIR/tests/probe/target/release/layerx-node-probe"
 WORK=$(mktemp -d /tmp/layerx-node-test.XXXXXX)
 chmod 0755 "$WORK"
 cp "$PROBE" "$WORK/probe"
+cp "$ROOT/build/bin/layerxctl" "$WORK/layerxctl"
 chmod 0755 "$WORK/probe"
+chmod 0755 "$WORK/layerxctl"
 DATA="$WORK/data"
 RUN="$WORK/run"
 SEQUENCER_PID=""
@@ -136,12 +138,37 @@ expect_contains "$HANDSHAKE" '"role":"Sequencer"'
 expect_contains "$HANDSHAKE" "\"sequencer_public_key\":\"$LAYERX_NODE_SEQUENCER_PUBLIC_KEY\""
 expect_contains "$HANDSHAKE" 'AccountRead'
 
+log "operator state read over the real LNI"
+OPERATOR_STATE=$(as_client "$WORK/layerxctl" read-state --socket "$LAYERX_NODE_LNI_SOCKET" \
+    --network-id "$NETWORK_ID" --protocol-version 3 --actor "$LAYERX_NODE_TREASURY_DID")
+expect_contains "$OPERATOR_STATE" "\"network_id\":$NETWORK_ID"
+expect_contains "$OPERATOR_STATE" '"global_sequence":0'
+expect_contains "$OPERATOR_STATE" '"evidence":"authenticated_node_snapshot"'
+
 log "treasury balance read"
 BALANCE=$(as_client "$WORK/probe" balance --socket "$LAYERX_NODE_LNI_SOCKET" --network-id "$NETWORK_ID" \
     --account "$LAYERX_NODE_TREASURY_ACCOUNT" --asset "$LAYERX_NODE_ASSET_ID")
 log "$BALANCE"
 expect_contains "$BALANCE" "\"balance\":\"$LAYERX_NODE_TREASURY_BALANCE\""
 expect_contains "$BALANCE" "\"asset\":\"$LAYERX_NODE_ASSET_ID\""
+
+log "operator submits a real signed SEND once and preserves its idempotency key"
+chown "$CLIENT_UID:$CLIENT_GID" "$WORK/treasury.key"
+mkdir "$WORK/operator"
+chown "$CLIENT_UID:$CLIENT_GID" "$WORK/operator"
+ACTIVITY_ID=$(as_client "$WORK/probe" write-send --socket "$LAYERX_NODE_LNI_SOCKET" \
+    --network-id "$NETWORK_ID" --seed-file "$WORK/treasury.key" \
+    --destination-did "did:layerx:$LAYERX_NODE_SEQUENCER_PUBLIC_KEY" \
+    --asset "$LAYERX_NODE_ASSET_ID" --output "$WORK/operator/send.bin")
+ADMISSION=$(as_client "$WORK/layerxctl" submit --socket "$LAYERX_NODE_LNI_SOCKET" \
+    --network-id "$NETWORK_ID" --protocol-version 3 --actor "$LAYERX_NODE_TREASURY_DID" \
+    --public-key "$LAYERX_NODE_TREASURY_PUBLIC_KEY" --activity "$WORK/operator/send.bin")
+expect_contains "$ADMISSION" '"state":"acknowledged"'
+expect_contains "$ADMISSION" "\"activity_id\":\"$ACTIVITY_ID\""
+REPEATED_ADMISSION=$(as_client "$WORK/layerxctl" submit --socket "$LAYERX_NODE_LNI_SOCKET" \
+    --network-id "$NETWORK_ID" --protocol-version 3 --actor "$LAYERX_NODE_TREASURY_DID" \
+    --public-key "$LAYERX_NODE_TREASURY_PUBLIC_KEY" --activity "$WORK/operator/send.bin")
+[ "$ADMISSION" = "$REPEATED_ADMISSION" ] || fail "repeated canonical submission changed identity"
 
 log "supervisor status"
 STATUS=$(as_client "$WORK/probe" supervisor --socket "$LAYERX_NODE_SUPERVISOR_SOCKET" --request status)

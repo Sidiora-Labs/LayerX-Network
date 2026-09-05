@@ -9,6 +9,7 @@ import (
 )
 
 type opts struct {
+	httpAddress                  interface{}
 	httpEnabled                  interface{}
 	httpPort                     interface{}
 	wsEnabled                    interface{}
@@ -45,6 +46,9 @@ type opts struct {
 }
 
 func (o *opts) Get(k string) interface{} {
+	if k == "evm.http_address" {
+		return o.httpAddress
+	}
 	if k == "evm.http_enabled" {
 		return o.httpEnabled
 	}
@@ -162,6 +166,7 @@ func (o *opts) Get(k string) interface{} {
 // getDefaultOpts returns a valid opts struct with all required fields set
 func getDefaultOpts() opts {
 	return opts{
+		"0.0.0.0",
 		true,
 		1,
 		true,

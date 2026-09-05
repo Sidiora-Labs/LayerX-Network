@@ -13,7 +13,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 
 use layerx_types::verify::VerificationLevel;
-use layerx_wire::limits::PROTOCOL_VERSION;
+use layerx_wire::limits::protocol_version_uses_occupancy;
 
 use crate::store::TenantId;
 
@@ -290,7 +290,7 @@ pub fn validate(values: &BTreeMap<String, String>) -> Result<StartupConfig, Conf
 
     let network_id = parse_nonzero::<u32>(values, "network_id")?;
     let expected_protocol_version = parse_nonzero::<u16>(values, "expected_protocol_version")?;
-    if expected_protocol_version != PROTOCOL_VERSION {
+    if !protocol_version_uses_occupancy(expected_protocol_version) {
         return Err(error(
             "expected_protocol_version",
             RejectionReason::UnsupportedProtocol,

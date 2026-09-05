@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-pub const LXP_WIRE_PROTOCOL_VERSION: u16 = layerx_wire::limits::PROTOCOL_VERSION;
+pub const LXP_WIRE_PROTOCOL_VERSION: u16 = layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION;
 pub const TESTNET_NETWORK_ID: u32 = 402;
 
 #[derive(Clone, Debug, Eq, PartialEq)]

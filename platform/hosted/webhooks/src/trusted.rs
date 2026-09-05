@@ -153,7 +153,7 @@ impl TrustedSources {
         }
         let trusted = read_secret("LAYERX_WEBHOOKS_SEQUENCER_PUBLIC_KEY_FILE")?;
         let wire_version = bounded_env("LAYERX_WEBHOOKS_LXP_WIRE_VERSION", 32)?;
-        if wire_version.parse::<u16>().ok() != Some(layerx_wire::limits::PROTOCOL_VERSION) {
+        if wire_version.parse::<u16>().ok() != Some(layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION) {
             return Err("webhook LXP wire version is not the current beta protocol".to_owned());
         }
         let verifier = ReceiptVerifier {

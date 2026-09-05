@@ -53,8 +53,11 @@ pub struct SignedSend {
 pub fn main_account(did: &str) -> Result<[u8; 32], String> {
     let account = AccountId::parse(&format!("agent:{did}:main"))
         .map_err(|error| format!("account name for {did} is invalid: {error:?}"))?;
-    layerx_wire::hash::account_id(&account)
-        .map_err(|error| format!("account id for {did} cannot be derived: {error:?}"))
+    layerx_wire::hash::account_id_for_protocol(
+        &account,
+        layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION,
+    )
+    .map_err(|error| format!("account id for {did} cannot be derived: {error:?}"))
 }
 
 /// Builds the asset module registry that declares SEND.
@@ -127,7 +130,7 @@ pub fn build_send(seed: &[u8; 32], request: &SendRequest) -> Result<SignedSend, 
         .map_err(|error| format!("source account is invalid: {error:?}"))?;
     let to = AccountId::parse(&format!("agent:{}:main", request.destination_did))
         .map_err(|error| format!("destination account is invalid: {error:?}"))?;
-    let send = LxpSend::new(
+    let intent = LxpSend::new(
         from,
         to,
         AssetId::new(request.asset),
@@ -143,12 +146,12 @@ pub fn build_send(seed: &[u8; 32], request: &SendRequest) -> Result<SignedSend, 
         ),
         NetworkId::new(request.network_id)
             .map_err(|error| format!("network id is invalid: {error:?}"))?,
-        ProtocolVersion::new(layerx_wire::limits::PROTOCOL_VERSION)
+        ProtocolVersion::new(layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION)
             .map_err(|error| format!("protocol version is invalid: {error:?}"))?,
     )
     .map_err(|error| format!("send intent is invalid: {error:?}"))?;
     let (registry, activity_type) = asset_registry()?;
-    let compiled = compile(&Intent::v1(IntentKind::LxpSend(send)), &registry)
+    let compiled = compile(&Intent::v1(IntentKind::LxpSend(intent)), &registry)
         .map_err(|error| format!("send intent does not compile: {error:?}"))?;
     if compiled.activity_type() != activity_type {
         return Err("compiled intent is not an asset send".into());
@@ -161,7 +164,7 @@ pub fn build_send(seed: &[u8; 32], request: &SendRequest) -> Result<SignedSend, 
         .map_err(|error| format!("timestamp bound is invalid: {error:?}"))?;
     let mut builder = EnvelopeBuilder::new();
     builder
-        .protocol_version(layerx_wire::limits::PROTOCOL_VERSION)
+        .protocol_version(layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION)
         .and_then(|value| value.network_id(request.network_id))
         .and_then(|value| value.activity_type(activity_type))
         .and_then(|value| value.actor_did(actor))
@@ -225,7 +228,7 @@ fn send_authorization(
         .and_then(|()| authorization.fixed(source))
         .and_then(|()| authorization.fixed(context))
         .and_then(|()| authorization.u32(request.network_id))
-        .and_then(|()| authorization.u16(layerx_wire::limits::PROTOCOL_VERSION))
+        .and_then(|()| authorization.u16(layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION))
         .map_err(|error| format!("send authorization is too large: {error:?}"))?;
     let digest = domain_hash(Domain::SignaturePreimage, &authorization.finish());
     Ok(signing_key.sign(&digest).to_bytes())

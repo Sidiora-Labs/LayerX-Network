@@ -91,7 +91,7 @@ static lxp_result validate_send(lxp_module_ctx *ctx,
         runtime->assets == NULL || runtime->asset_count == 0U ||
         runtime->transfer_assets == NULL || runtime->transfer_asset_count == 0U ||
         runtime->network_id == 0U ||
-        runtime->protocol_version != LXP_PROTOCOL_VERSION_OCCUPANCY ||
+        !lxp_protocol_version_uses_occupancy(runtime->protocol_version) ||
         ctx->kernel == NULL || ctx->kernel->state == NULL ||
         lxp_ctx_activity_id(ctx) == NULL ||
         lxp_ct_is_zero(lxp_ctx_activity_id(ctx), 32U) ||

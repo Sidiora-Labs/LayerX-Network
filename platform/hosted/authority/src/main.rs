@@ -6,7 +6,7 @@ use layerx_platform_authority::{
     authorized_batch_by_activity, hex, parse_replica_evidence, receipt_locator, EvidenceRefusal,
 };
 use layerx_proof::inclusion::SequencerAuthorization;
-use layerx_wire::limits::PROTOCOL_VERSION;
+use layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION as PROTOCOL_VERSION;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::server::WebPkiClientVerifier;
 use rustls::{RootCertStore, ServerConfig, ServerConnection, StreamOwned};
@@ -30,7 +30,7 @@ const IO_TIMEOUT: Duration = Duration::from_secs(8);
 const REPLICA_TIMEOUT: Duration = Duration::from_secs(8);
 const MAX_CONNECTIONS: usize = 128;
 const MAX_LNI_CONNECTIONS: usize = 16;
-const LNI_FRAME_BYTES: usize = 1_146_902;
+const LNI_FRAME_BYTES: usize = 1_212_416;
 const RECEIPT_LOOKUP_REQUEST: u16 = 5;
 const RECEIPT_LOOKUP_RESPONSE: u16 = 6;
 const ERROR_RESPONSE: u16 = 25;
@@ -61,7 +61,7 @@ Environment:
                                              this service takes receipt bytes from the LNI and never an HTTP receipt URL
   LAYERX_AUTHORITY_PROTOCOL_NETWORK_ID       numeric protocol network id expected in the LNI handshake
   LAYERX_AUTHORITY_NETWORK_ID                deployment network identifier echoed in every answer
-  LAYERX_AUTHORITY_WIRE_VERSION              wire version echoed in every answer, must be the built protocol version (default 2)
+  LAYERX_AUTHORITY_WIRE_VERSION              wire version echoed in every answer, must be the built protocol version (default 3)
   LAYERX_AUTHORITY_SEQUENCER_ID              64-hex sequencer identity pinned for header verification
   LAYERX_AUTHORITY_SEQUENCER_PUBLIC_KEY      64-hex sequencer public key pinned for header and receipt signatures
   LAYERX_AUTHORITY_FIRST_BATCH               first authorised batch number

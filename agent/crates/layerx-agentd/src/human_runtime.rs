@@ -38,7 +38,7 @@ use crate::outbox::{Outbox, SubmissionState, SubmissionStatus};
 use crate::policy::approval::{ApprovalRegistry, ApprovalState, ApproverId};
 use crate::prepare::PreparationLifecycle;
 use crate::prepare::{
-    prepare_activity, CoreStateError, PreparationDefaults, PrepareRequest, Prepared,
+    prepare_activity_for_protocol, CoreStateError, PreparationDefaults, PrepareRequest, Prepared,
     ProductionCorePreparationBoundary,
 };
 use crate::session::{self, OpenRequest, SessionId, SessionRegistry};
@@ -2496,10 +2496,11 @@ impl<A: HumanAuthorityBoundary> HumanOperations for ProductionHumanOperations<A>
         let timestamp =
             TimestampBound::new(request.operation.not_before, request.operation.not_after)
                 .map_err(|_| HumanOperationError::Refused)?;
+        let protocol_version = self.node.handshake().node().protocol_version;
         let mut boundary =
             ProductionCorePreparationBoundary::new(&mut self.node, request.request_id)
                 .map_err(map_core)?;
-        let prepared = prepare_activity(
+        let prepared = prepare_activity_for_protocol(
             &mut boundary,
             PreparationDefaults {
                 timestamp_span: self.timestamp_span,
@@ -2520,6 +2521,7 @@ impl<A: HumanAuthorityBoundary> HumanOperations for ProductionHumanOperations<A>
                 payload: request.operation.payload,
                 declared_payload_limit: self.maximum_payload_bytes,
             },
+            protocol_version,
         )
         .map_err(|_| HumanOperationError::Refused)?;
         let registry = boundary
