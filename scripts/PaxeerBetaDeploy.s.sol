@@ -10,7 +10,8 @@ import {CheckpointChallengeManager} from "../contracts/challenge/CheckpointChall
 import {WithdrawalNullifierRegistry} from "../contracts/storage/WithdrawalNullifierRegistry.sol";
 import {WithdrawalClaims} from "../contracts/WithdrawalClaims.sol";
 import {EmergencyExit} from "../contracts/EmergencyExit.sol";
-import {LayerXTimelock} from "../contracts/governance/LayerXTimelock.sol";
+import {LayerXTimelock, LayerXTimelockCore} from "../contracts/governance/LayerXTimelock.sol";
+import {LayerXBetaTimelock} from "../contracts/governance/LayerXBetaTimelock.sol";
 import {LayerXCustody} from "../contracts/LayerXCustody.sol";
 import {Blueprint} from "../contracts/deployment/Blueprint.sol";
 import {Predeploys} from "../contracts/deployment/Predeploys.sol";
@@ -69,7 +70,7 @@ contract PaxeerBetaDeploy {
         bytes calldata descriptor,
         bytes calldata registrationRequest
     ) external returns (address) {
-        return _predictGuarantorBond(input, descriptor, registrationRequest, Constants.PROTOCOL_VERSION);
+        return _predictGuarantorBond(input, descriptor, registrationRequest, Constants.PROTOCOL_VERSION, false);
     }
 
     function predictGuarantorBondForProtocol(
@@ -78,19 +79,29 @@ contract PaxeerBetaDeploy {
         bytes calldata registrationRequest,
         uint16 selectedProtocolVersion
     ) external returns (address) {
-        return _predictGuarantorBond(input, descriptor, registrationRequest, selectedProtocolVersion);
+        return _predictGuarantorBond(input, descriptor, registrationRequest, selectedProtocolVersion, false);
+    }
+
+    function predictImmediateBetaGuarantorBondForProtocol(
+        PaxeerBetaDeploymentValidator.Input calldata input,
+        bytes calldata descriptor,
+        bytes calldata registrationRequest,
+        uint16 selectedProtocolVersion
+    ) external returns (address) {
+        return _predictGuarantorBond(input, descriptor, registrationRequest, selectedProtocolVersion, true);
     }
 
     function _predictGuarantorBond(
         PaxeerBetaDeploymentValidator.Input calldata input,
         bytes calldata descriptor,
         bytes calldata registrationRequest,
-        uint16 selectedProtocolVersion
+        uint16 selectedProtocolVersion,
+        bool immediateBeta
     ) private returns (address) {
         PaxeerBetaDeploymentValidator.GenesisArtifacts memory genesis =
             PaxeerBetaDeploymentValidator.decodeAndCrossCheckGenesis(descriptor, registrationRequest);
         (uint192 release, StaticConfig.Config memory config) =
-            PaxeerBetaDeploymentValidator.validateInputForProtocol(input, genesis, selectedProtocolVersion);
+            _validateDeploymentInput(input, genesis, selectedProtocolVersion, immediateBeta);
         uint256 key = vm.envUint("EVM_WALLET_PRIVATE_KEY");
         if (vm.addr(key) != input.bootstrapOperator) revert InvalidDeploymentState();
         vm.startBroadcast(key);
@@ -98,7 +109,7 @@ contract PaxeerBetaDeploy {
         Blueprint blueprint = new Blueprint(input.bootstrapOperator, config);
         Addresses memory addresses;
         addresses.blueprint = address(blueprint);
-        addresses.timelock = address(_deployTimelock(blueprint, input, release));
+        addresses.timelock = address(_deployTimelock(blueprint, input, release, immediateBeta));
         config.governanceTimelock = addresses.timelock;
         bytes32 configHash = StaticConfig.hashForProtocol(config, block.chainid, selectedProtocolVersion);
         addresses.assetRegistry = _assetRegistry(blueprint, addresses, input, configHash, release);
@@ -115,7 +126,7 @@ contract PaxeerBetaDeploy {
         bytes calldata descriptor,
         bytes calldata registrationRequest
     ) external returns (Addresses memory addresses) {
-        return _deploySuite(input, guarantors, descriptor, registrationRequest, Constants.PROTOCOL_VERSION);
+        return _deploySuite(input, guarantors, descriptor, registrationRequest, Constants.PROTOCOL_VERSION, false);
     }
 
     function deployForProtocol(
@@ -125,7 +136,17 @@ contract PaxeerBetaDeploy {
         bytes calldata registrationRequest,
         uint16 selectedProtocolVersion
     ) external returns (Addresses memory addresses) {
-        return _deploySuite(input, guarantors, descriptor, registrationRequest, selectedProtocolVersion);
+        return _deploySuite(input, guarantors, descriptor, registrationRequest, selectedProtocolVersion, false);
+    }
+
+    function deployImmediateBetaForProtocol(
+        PaxeerBetaDeploymentValidator.Input calldata input,
+        PaxeerBetaDeploymentValidator.GuarantorInput[] calldata guarantors,
+        bytes calldata descriptor,
+        bytes calldata registrationRequest,
+        uint16 selectedProtocolVersion
+    ) external returns (Addresses memory addresses) {
+        return _deploySuite(input, guarantors, descriptor, registrationRequest, selectedProtocolVersion, true);
     }
 
     function _deploySuite(
@@ -133,19 +154,20 @@ contract PaxeerBetaDeploy {
         PaxeerBetaDeploymentValidator.GuarantorInput[] calldata guarantors,
         bytes calldata descriptor,
         bytes calldata registrationRequest,
-        uint16 selectedProtocolVersion
+        uint16 selectedProtocolVersion,
+        bool immediateBeta
     ) private returns (Addresses memory addresses) {
         PaxeerBetaDeploymentValidator.GenesisArtifacts memory genesis =
             PaxeerBetaDeploymentValidator.decodeAndCrossCheckGenesis(descriptor, registrationRequest);
         (uint192 release, StaticConfig.Config memory config) =
-            PaxeerBetaDeploymentValidator.validateInputForProtocol(input, genesis, selectedProtocolVersion);
+            _validateDeploymentInput(input, genesis, selectedProtocolVersion, immediateBeta);
         uint256 key = vm.envUint("EVM_WALLET_PRIVATE_KEY");
         if (vm.addr(key) != input.bootstrapOperator) revert InvalidDeploymentState();
         vm.startBroadcast(key);
         broadcastKey = key;
         Blueprint blueprint = new Blueprint(input.bootstrapOperator, config);
         addresses.blueprint = address(blueprint);
-        addresses.timelock = address(_deployTimelock(blueprint, input, release));
+        addresses.timelock = address(_deployTimelock(blueprint, input, release, immediateBeta));
         config.governanceTimelock = addresses.timelock;
         bytes32 configHash = StaticConfig.hashForProtocol(config, block.chainid, selectedProtocolVersion);
         addresses.assetRegistry = _assetRegistry(blueprint, addresses, input, configHash, release);
@@ -182,7 +204,7 @@ contract PaxeerBetaDeploy {
         (address[] memory targets, bytes4[] memory selectors) = _permissions(addresses);
         LayerXTimelock timelock = LayerXTimelock(payable(addresses.timelock));
         for (uint256 i = 0; i < targets.length; ++i) {
-            bytes memory data = abi.encodeCall(LayerXTimelock.setCallPermission, (targets[i], selectors[i], true));
+            bytes memory data = abi.encodeCall(LayerXTimelockCore.setCallPermission, (targets[i], selectors[i], true));
             _execute(
                 timelock,
                 addresses.timelock,
@@ -264,10 +286,24 @@ contract PaxeerBetaDeploy {
         emit BetaBondFunded(guarantorId, controller, amount);
     }
 
-    function _deployTimelock(Blueprint blueprint, PaxeerBetaDeploymentValidator.Input calldata input, uint192 release)
-        private
-        returns (LayerXTimelock deployed)
-    {
+    function _validateDeploymentInput(
+        PaxeerBetaDeploymentValidator.Input calldata input,
+        PaxeerBetaDeploymentValidator.GenesisArtifacts memory genesis,
+        uint16 protocol,
+        bool immediateBeta
+    ) private view returns (uint192, StaticConfig.Config memory) {
+        if (immediateBeta) {
+            return PaxeerBetaDeploymentValidator.validateImmediateBetaInputForProtocol(input, genesis, protocol);
+        }
+        return PaxeerBetaDeploymentValidator.validateInputForProtocol(input, genesis, protocol);
+    }
+
+    function _deployTimelock(
+        Blueprint blueprint,
+        PaxeerBetaDeploymentValidator.Input calldata input,
+        uint192 release,
+        bool immediateBeta
+    ) private returns (LayerXTimelockCore deployed) {
         bytes memory arguments = abi.encode(
             input.timelockDelay,
             input.timelockGracePeriod,
@@ -278,22 +314,38 @@ contract PaxeerBetaDeploy {
             blueprint.staticConfigHash(),
             release
         );
+        bytes memory creationCode =
+            immediateBeta ? type(LayerXBetaTimelock).creationCode : type(LayerXTimelock).creationCode;
         vm.stopBroadcast();
-        LayerXTimelock runtimeReference = new LayerXTimelock(
-            input.timelockDelay,
-            input.timelockGracePeriod,
-            input.bootstrapOperator,
-            input.bootstrapOperator,
-            input.bootstrapOperator,
-            input.timelockMaximumCallValue,
-            blueprint.staticConfigHash(),
-            release
-        );
+        bytes32 runtimeHash;
+        if (immediateBeta) {
+            LayerXBetaTimelock runtimeReference = new LayerXBetaTimelock(
+                input.timelockDelay,
+                input.timelockGracePeriod,
+                input.bootstrapOperator,
+                input.bootstrapOperator,
+                input.bootstrapOperator,
+                input.timelockMaximumCallValue,
+                blueprint.staticConfigHash(),
+                release
+            );
+            runtimeHash = address(runtimeReference).codehash;
+        } else {
+            LayerXTimelock runtimeReference = new LayerXTimelock(
+                input.timelockDelay,
+                input.timelockGracePeriod,
+                input.bootstrapOperator,
+                input.bootstrapOperator,
+                input.bootstrapOperator,
+                input.timelockMaximumCallValue,
+                blueprint.staticConfigHash(),
+                release
+            );
+            runtimeHash = address(runtimeReference).codehash;
+        }
         vm.startBroadcast(broadcastKey);
-        deployed = LayerXTimelock(
-            payable(blueprint.deployTimelock(
-                    abi.encodePacked(type(LayerXTimelock).creationCode, arguments), address(runtimeReference).codehash
-                ))
+        deployed = LayerXTimelockCore(
+            payable(blueprint.deployTimelock(abi.encodePacked(creationCode, arguments), runtimeHash))
         );
     }
 
@@ -711,7 +763,7 @@ contract PaxeerBetaDeploy {
         (address[] memory targets, bytes4[] memory selectors) = _permissions(a);
         LayerXTimelock timelock = LayerXTimelock(payable(a.timelock));
         for (uint256 i = 0; i < targets.length; ++i) {
-            bytes memory data = abi.encodeCall(LayerXTimelock.setCallPermission, (targets[i], selectors[i], true));
+            bytes memory data = abi.encodeCall(LayerXTimelockCore.setCallPermission, (targets[i], selectors[i], true));
             timelock.schedule(a.timelock, 0, data, _salt("PERMISSION", i, a.timelock, data), delay);
         }
     }
@@ -785,27 +837,39 @@ contract PaxeerBetaDeploy {
         calls[i] = _call("GENESIS", i, a.managerContainer, abi.encodeCall(ManagerContainer.finalizeGenesis, ()));
         ++i;
         calls[i] = _call(
-            "GENESIS", i, a.timelock, abi.encodeCall(LayerXTimelock.setRole, (uint8(1), input.finalProposer, true))
+            "GENESIS", i, a.timelock, abi.encodeCall(LayerXTimelockCore.setRole, (uint8(1), input.finalProposer, true))
         );
         ++i;
         calls[i] = _call(
-            "GENESIS", i, a.timelock, abi.encodeCall(LayerXTimelock.setRole, (uint8(2), input.finalExecutor, true))
+            "GENESIS", i, a.timelock, abi.encodeCall(LayerXTimelockCore.setRole, (uint8(2), input.finalExecutor, true))
         );
         ++i;
         calls[i] = _call(
-            "GENESIS", i, a.timelock, abi.encodeCall(LayerXTimelock.setRole, (uint8(3), input.emergencyCouncil, true))
+            "GENESIS",
+            i,
+            a.timelock,
+            abi.encodeCall(LayerXTimelockCore.setRole, (uint8(3), input.emergencyCouncil, true))
         );
         ++i;
         calls[i] = _call(
-            "GENESIS", i, a.timelock, abi.encodeCall(LayerXTimelock.setRole, (uint8(1), input.bootstrapOperator, false))
+            "GENESIS",
+            i,
+            a.timelock,
+            abi.encodeCall(LayerXTimelockCore.setRole, (uint8(1), input.bootstrapOperator, false))
         );
         ++i;
         calls[i] = _call(
-            "GENESIS", i, a.timelock, abi.encodeCall(LayerXTimelock.setRole, (uint8(3), input.bootstrapOperator, false))
+            "GENESIS",
+            i,
+            a.timelock,
+            abi.encodeCall(LayerXTimelockCore.setRole, (uint8(3), input.bootstrapOperator, false))
         );
         ++i;
         calls[i] = _call(
-            "GENESIS", i, a.timelock, abi.encodeCall(LayerXTimelock.setRole, (uint8(2), input.bootstrapOperator, false))
+            "GENESIS",
+            i,
+            a.timelock,
+            abi.encodeCall(LayerXTimelockCore.setRole, (uint8(2), input.bootstrapOperator, false))
         );
         ++i;
         if (i != calls.length) revert InvalidDeploymentState();

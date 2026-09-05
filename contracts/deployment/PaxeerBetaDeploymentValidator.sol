@@ -107,6 +107,23 @@ library PaxeerBetaDeploymentValidator {
         GenesisArtifacts memory genesis,
         uint16 selectedProtocolVersion
     ) internal view returns (uint192 releaseVersion, StaticConfig.Config memory config) {
+        return _validateInput(input, genesis, selectedProtocolVersion, false);
+    }
+
+    function validateImmediateBetaInputForProtocol(
+        Input memory input,
+        GenesisArtifacts memory genesis,
+        uint16 selectedProtocolVersion
+    ) internal view returns (uint192 releaseVersion, StaticConfig.Config memory config) {
+        return _validateInput(input, genesis, selectedProtocolVersion, true);
+    }
+
+    function _validateInput(
+        Input memory input,
+        GenesisArtifacts memory genesis,
+        uint16 selectedProtocolVersion,
+        bool immediateBeta
+    ) private view returns (uint192 releaseVersion, StaticConfig.Config memory config) {
         if (selectedProtocolVersion != Constants.PROTOCOL_VERSION && selectedProtocolVersion != 3) {
             revert InvalidBetaDeploymentInput();
         }
@@ -118,12 +135,12 @@ library PaxeerBetaDeploymentValidator {
                 || input.finalProposer == address(0) || input.finalExecutor == address(0)
                 || input.emergencyCouncil == address(0) || input.bootstrapOperator == input.finalProposer
                 || input.bootstrapOperator == input.finalExecutor || input.bootstrapOperator == input.emergencyCouncil
-                || input.timelockDelay < 1 days || input.timelockGracePeriod < 1 days
-                || input.timelockMaximumCallValue > 100 ether || input.usdlMinimumDeposit == 0
-                || input.usdlCustodyCap < input.usdlMinimumDeposit || input.challengeWindow < 1 hours
-                || input.checkpointLivenessBound < 1 hours || input.minimumBondBps == 0 || input.minimumBondBps > 10_000
-                || input.unbondingDelay < 1 days || input.checkpointThresholdNumerator == 0
-                || input.checkpointThresholdDenominator == 0
+                || (immediateBeta ? input.timelockDelay != 0 : input.timelockDelay < 1 days)
+                || input.timelockGracePeriod < 1 days || input.timelockMaximumCallValue > 100 ether
+                || input.usdlMinimumDeposit == 0 || input.usdlCustodyCap < input.usdlMinimumDeposit
+                || input.challengeWindow < 1 hours || input.checkpointLivenessBound < 1 hours
+                || input.minimumBondBps == 0 || input.minimumBondBps > 10_000 || input.unbondingDelay < 1 days
+                || input.checkpointThresholdNumerator == 0 || input.checkpointThresholdDenominator == 0
                 || input.checkpointThresholdNumerator > input.checkpointThresholdDenominator
                 || input.checkpointMaximumAge == 0 || input.checkpointFutureDrift == 0 || input.challengeBond == 0
                 || input.emergencyDelay < 1 days || input.migrationDelay < 1 days || input.migrationExpiry < 1 days

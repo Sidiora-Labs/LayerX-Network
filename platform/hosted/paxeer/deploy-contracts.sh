@@ -3,15 +3,17 @@
 # records the beta settlement domain in contracts/config/checkpoint-settlement.json.
 #
 # The deployment is the phased runner in scripts/PaxeerBetaDeploy.s.sol, driven with a pinned
-# Foundry through the boundary. Governance operations are timelocked by at least one day
-# (PaxeerBetaDeploymentValidator.validateInput), so the phases are separate invocations:
+# Foundry through the boundary. The immediate-beta input selects a separate zero-delay
+# artifact; standard inputs retain their minimum one-day governance delay.
 #
+#   bootstrap    run deploy, permissions, activate, bond and finalize for immediate-beta
 #   deploy       fund and approve the guarantor bond controllers, deploy the suite, schedule the
 #                timelock permissions and write the beta settlement domain
 #   permissions  execute the permission grants and schedule the genesis activation
 #   activate     execute the genesis activation (asset, vault bond, guarantor activation)
 #   bond         every bond controller deposits its genesis bond
 #   finalize     execute the remaining genesis calls, seal the blueprint
+#   check-profile validate the selected profile against any existing deployment record
 #   status       print the recorded deployment and the on-chain view
 #
 # Environment:
@@ -121,6 +123,27 @@ require_record() {
     [ "$(jq -r '.chain_id' "$RECORD")" = "$CHAIN_ID" ] || fail "deployment record was produced for another chain"
 }
 
+load_timelock_profile() {
+    [ -n "$INPUT_JSON" ] && [ -r "$INPUT_JSON" ] || fail "deployment input is required"
+    TIMELOCK_PROFILE=$(jq -r '.timelock_profile // "standard"' "$INPUT_JSON")
+    case "$TIMELOCK_PROFILE" in
+        standard)
+            PREDICT_FUNCTION=predictGuarantorBondForProtocol
+            DEPLOY_FUNCTION=deployForProtocol
+            ;;
+        immediate-beta)
+            [ "$CHAIN_ID" = 125 ] || fail "immediate-beta deployment requires chain 125"
+            [ "$(jq -r '.timelock_delay' "$INPUT_JSON")" = 0 ] || fail "immediate-beta delay must be exactly zero"
+            PREDICT_FUNCTION=predictImmediateBetaGuarantorBondForProtocol
+            DEPLOY_FUNCTION=deployImmediateBetaForProtocol
+            ;;
+        *) fail "unknown timelock profile" ;;
+    esac
+    if [ -e "$RECORD" ]; then
+        [ "$(jq -r '.input.timelock_profile // "standard"' "$RECORD")" = "$TIMELOCK_PROFILE" ] || fail "deployment timelock profile differs from selected input"
+    fi
+}
+
 load_inputs() {
     [ -n "$INPUT_JSON" ] && [ -r "$INPUT_JSON" ] || fail "LAYERX_PAXEER_DEPLOYMENT_INPUT must name the owned input from prepare-beta.py"
     [ -r "$GUARANTORS_JSON" ] || fail "guarantor list $GUARANTORS_JSON is not readable"
@@ -136,6 +159,7 @@ load_inputs() {
     NETWORK_ID=$((16#${DESCRIPTOR_HEX:12:8}))
     [ "$NETWORK_ID" -gt 0 ] || fail "deployment descriptor network id is zero"
     PROTOCOL_VERSION=$(jq -r '.protocol_version // 2' "$INPUT_JSON")
+    load_timelock_profile
     case "$PROTOCOL_VERSION" in 2|3) ;; *) fail "unsupported settlement protocol version" ;; esac
     if [ -e "$RECORD" ]; then
         [ "$(jq -r '.protocol_version // 2' "$RECORD")" = "$PROTOCOL_VERSION" ] || fail "deployment protocol differs from the selected input"
@@ -247,7 +271,7 @@ timelock_nonce() {
 
 predict_bond() {
     if ! (cd "$ROOT" && "$FORGE" script scripts/PaxeerBetaDeploy.s.sol:PaxeerBetaDeploy \
-        --rpc-url "$BOUNDARY_URL" --sig "predictGuarantorBondForProtocol((string,address,address,address,address,uint64,uint64,uint256,uint128,uint128,uint64,uint64,uint32,uint64,uint16,uint16,uint64,uint64,uint128,uint64,uint64,uint64,uint64,uint256,uint256),bytes,bytes,uint16)(address)" \
+        --rpc-url "$BOUNDARY_URL" --sig "${PREDICT_FUNCTION}((string,address,address,address,address,uint64,uint64,uint256,uint128,uint128,uint64,uint64,uint32,uint64,uint16,uint16,uint64,uint64,uint128,uint64,uint64,uint64,uint64,uint256,uint256),bytes,bytes,uint16)(address)" \
         "$INPUT_TUPLE" "$DESCRIPTOR_HEX" "$REGISTRATION_HEX" "$PROTOCOL_VERSION") > "$WORK/prediction.log" 2>&1; then
         sed -n '/^Error:/p' "$WORK/prediction.log" >&2
         fail "GuarantorBond prediction failed"
@@ -266,10 +290,10 @@ phase_deploy() {
     GUARANTOR_BOND=$(predict_bond)
     [ -n "$GUARANTOR_BOND" ] || fail "could not predict the GuarantorBond address"
     approve_controllers
-    run_script "deployForProtocol((string,address,address,address,address,uint64,uint64,uint256,uint128,uint128,uint64,uint64,uint32,uint64,uint16,uint16,uint64,uint64,uint128,uint64,uint64,uint64,uint64,uint256,uint256),(bytes32,address,address,uint64,uint64,uint256)[],bytes,bytes,uint16)" \
+    run_script "${DEPLOY_FUNCTION}((string,address,address,address,address,uint64,uint64,uint256,uint128,uint128,uint64,uint64,uint32,uint64,uint16,uint16,uint64,uint64,uint128,uint64,uint64,uint64,uint64,uint256,uint256),(bytes32,address,address,uint64,uint64,uint256)[],bytes,bytes,uint16)" \
         "$INPUT_TUPLE" "$GUARANTOR_TUPLES" "$DESCRIPTOR_HEX" "$REGISTRATION_HEX" "$PROTOCOL_VERSION"
     local broadcast blueprint
-    broadcast="$ROOT/broadcast/PaxeerBetaDeploy.s.sol/$CHAIN_ID/deployForProtocol-latest.json"
+    broadcast="$ROOT/broadcast/PaxeerBetaDeploy.s.sol/$CHAIN_ID/${DEPLOY_FUNCTION}-latest.json"
     [ -r "$broadcast" ] || fail "forge did not write $broadcast"
     blueprint=$(jq -r '[.transactions[] | select(.contractName == "Blueprint" and .transactionType == "CREATE")][0].contractAddress' "$broadcast")
     case "$blueprint" in
@@ -377,6 +401,17 @@ phase_finalize() {
     echo "deploy-contracts: deployment finalized and sealed" >&2
 }
 
+phase_bootstrap() {
+    require_tools
+    [ -n "$INPUT_JSON" ] && [ -r "$INPUT_JSON" ] || fail "deployment input is required"
+    [ "$(jq -r '.timelock_profile // "standard"' "$INPUT_JSON")" = immediate-beta ] || fail "bootstrap requires the explicit immediate-beta profile"
+    phase_deploy
+    phase_permissions
+    phase_activate
+    phase_bond
+    phase_finalize
+}
+
 phase_status() {
     require_tools
     require_endpoint
@@ -390,6 +425,8 @@ phase_status() {
 }
 
 case "$PHASE" in
+    check-profile) load_timelock_profile; printf '%s\n' "$TIMELOCK_PROFILE" ;;
+    bootstrap) phase_bootstrap ;;
     deploy) phase_deploy ;;
     permissions) phase_permissions ;;
     activate) phase_activate ;;

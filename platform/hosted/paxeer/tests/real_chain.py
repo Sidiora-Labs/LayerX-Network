@@ -148,11 +148,17 @@ with tempfile.TemporaryDirectory(prefix='layerx-paxeer-real-') as work:
                 'LAYERX_PAXEER_GUARANTOR_KEYS_DIR': str(inputs/'keys'),
                 'LAYERX_PAXEER_DEPLOYMENT_RECORD': str(inputs/'deployment.json'),
                 'LAYERX_PAXEER_SETTLEMENT_JSON': str(settlement)}
+            immediate = json.loads((inputs/'deployment-input.json').read_text()).get('timelock_profile') == 'immediate-beta'
+            phase = 'bootstrap' if immediate else 'deploy'
             try:
-                run('bash', str(ROOT/'platform/hosted/paxeer/deploy-contracts.sh'), 'deploy', env=deploy_env)
+                run('bash', str(ROOT/'platform/hosted/paxeer/deploy-contracts.sh'), phase, env=deploy_env)
             except subprocess.CalledProcessError as error:
                 sys.stderr.buffer.write(error.stderr)
                 raise
+            if immediate:
+                deployment = json.loads((inputs/'deployment.json').read_text())
+                assert deployment['phases'] == ['deploy', 'permissions', 'activate', 'bond', 'finalize'], deployment['phases']
+                run('bash', str(ROOT/'platform/hosted/paxeer/deploy-contracts.sh'), 'status', env=deploy_env)
             domain = json.loads(settlement.read_text())['settlement_domains']['beta']
             assert domain['paxeer_chain_id'] == 125
             assert domain['guarantor_set'] == [{key: row[key].lower() for key in ['guarantor_id', 'signer', 'public_key']}

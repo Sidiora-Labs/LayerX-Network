@@ -9,13 +9,14 @@ import {Arithmetic} from "../libraries/Arithmetic.sol";
 import {Constants} from "../libraries/Constants.sol";
 import {Error} from "../libraries/Error.sol";
 
-contract LayerXTimelock is ReentrancyLock, LayerXComponent {
+abstract contract LayerXTimelockCore is ReentrancyLock, LayerXComponent {
     error Unauthorized();
     error InvalidOperation();
     error OperationNotReady();
     error CallFailed(bytes4 selector, bytes32 commitment, bytes returnData);
 
     uint64 public minDelay;
+    uint64 public immutable delayFloor;
     uint64 public immutable gracePeriod;
     uint256 public immutable maximumCallValue;
     mapping(address => bool) public proposer;
@@ -41,14 +42,16 @@ contract LayerXTimelock is ReentrancyLock, LayerXComponent {
         address initialGuardian,
         uint256 callValueLimit,
         bytes32 componentConfigHash,
-        uint192 componentRelease
+        uint192 componentRelease,
+        uint64 minimumDelayFloor
     ) LayerXComponent(Predeploys.TIMELOCK, componentConfigHash, componentRelease) {
         if (
-            minimumDelay < 1 days || executionGracePeriod < 1 days || initialProposer == address(0)
+            minimumDelay < minimumDelayFloor || executionGracePeriod < 1 days || initialProposer == address(0)
                 || initialExecutor == address(0) || initialGuardian == address(0) || callValueLimit > 100 ether
         ) {
             revert InvalidOperation();
         }
+        delayFloor = minimumDelayFloor;
         minDelay = minimumDelay;
         gracePeriod = executionGracePeriod;
         maximumCallValue = callValueLimit;
@@ -135,7 +138,7 @@ contract LayerXTimelock is ReentrancyLock, LayerXComponent {
     }
 
     function updateMinDelay(uint64 newDelay) external {
-        if (msg.sender != address(this) || newDelay < 1 days) {
+        if (msg.sender != address(this) || newDelay < delayFloor) {
             revert Unauthorized();
         }
         minDelay = newDelay;
@@ -159,4 +162,29 @@ contract LayerXTimelock is ReentrancyLock, LayerXComponent {
         if (data.length < 4) revert InvalidOperation();
         assembly ("memory-safe") { selector := calldataload(data.offset) }
     }
+}
+
+contract LayerXTimelock is LayerXTimelockCore {
+    constructor(
+        uint64 minimumDelay,
+        uint64 executionGracePeriod,
+        address initialProposer,
+        address initialExecutor,
+        address initialGuardian,
+        uint256 callValueLimit,
+        bytes32 componentConfigHash,
+        uint192 componentRelease
+    )
+        LayerXTimelockCore(
+            minimumDelay,
+            executionGracePeriod,
+            initialProposer,
+            initialExecutor,
+            initialGuardian,
+            callValueLimit,
+            componentConfigHash,
+            componentRelease,
+            1 days
+        )
+    {}
 }

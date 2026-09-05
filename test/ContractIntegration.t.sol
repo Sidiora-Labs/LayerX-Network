@@ -11,7 +11,7 @@ import {CheckpointChallengeManager} from "../contracts/challenge/CheckpointChall
 import {WithdrawalNullifierRegistry} from "../contracts/storage/WithdrawalNullifierRegistry.sol";
 import {WithdrawalClaims} from "../contracts/WithdrawalClaims.sol";
 import {EmergencyExit} from "../contracts/EmergencyExit.sol";
-import {LayerXTimelock} from "../contracts/governance/LayerXTimelock.sol";
+import {LayerXTimelock, LayerXTimelockCore} from "../contracts/governance/LayerXTimelock.sol";
 import {LayerXCustody} from "../contracts/LayerXCustody.sol";
 import {Blueprint} from "../contracts/deployment/Blueprint.sol";
 import {Predeploys} from "../contracts/deployment/Predeploys.sol";
@@ -316,23 +316,24 @@ contract ContractIntegrationTest {
 
         GovernanceTarget target = new GovernanceTarget();
         bytes memory targetCall = abi.encodeCall(GovernanceTarget.setValue, (uint256(77)));
-        vm.expectPartialRevert(LayerXTimelock.InvalidOperation.selector);
+        vm.expectPartialRevert(LayerXTimelockCore.InvalidOperation.selector);
         vm.prank(FINAL_PROPOSER);
         timelock.schedule(address(target), 0, targetCall, keccak256("blocked"), 2 days);
         bytes memory permissionCall = abi.encodeCall(
-            LayerXTimelock.setCallPermission, (address(target), GovernanceTarget.setValue.selector, true)
+            LayerXTimelockCore.setCallPermission, (address(target), GovernanceTarget.setValue.selector, true)
         );
         _governanceCall(address(timelock), permissionCall);
         _governanceCall(address(target), targetCall);
         require(target.value() == 77, "allowed governance call failed");
 
-        bytes memory failurePermission =
-            abi.encodeCall(LayerXTimelock.setCallPermission, (address(target), GovernanceTarget.fail.selector, true));
+        bytes memory failurePermission = abi.encodeCall(
+            LayerXTimelockCore.setCallPermission, (address(target), GovernanceTarget.fail.selector, true)
+        );
         _governanceCall(address(timelock), failurePermission);
         bytes memory failureCall = abi.encodeCall(GovernanceTarget.fail, ());
         ScheduledCall memory failure = _schedule(address(target), failureCall);
         vm.warp(block.timestamp + timelock.minDelay());
-        vm.expectPartialRevert(LayerXTimelock.CallFailed.selector);
+        vm.expectPartialRevert(LayerXTimelockCore.CallFailed.selector);
         vm.prank(FINAL_EXECUTOR);
         timelock.execute(failure.target, 0, failure.data, failure.salt, failure.nonce);
 
@@ -347,17 +348,17 @@ contract ContractIntegrationTest {
         );
         GovernanceTarget target = new GovernanceTarget();
         bytes memory permission = abi.encodeCall(
-            LayerXTimelock.setCallPermission, (address(target), GovernanceTarget.setValue.selector, true)
+            LayerXTimelockCore.setCallPermission, (address(target), GovernanceTarget.setValue.selector, true)
         );
         isolated.schedule(address(isolated), 0, permission, keccak256("first-delay"), isolated.minDelay());
-        vm.expectPartialRevert(LayerXTimelock.OperationNotReady.selector);
+        vm.expectPartialRevert(LayerXTimelockCore.OperationNotReady.selector);
         isolated.execute(address(isolated), 0, permission, keccak256("first-delay"), 0);
         vm.warp(block.timestamp + isolated.minDelay());
         isolated.execute(address(isolated), 0, permission, keccak256("first-delay"), 0);
 
         bytes memory callData = abi.encodeCall(GovernanceTarget.setValue, (uint256(91)));
         isolated.schedule(address(target), 0, callData, keccak256("second-delay"), isolated.minDelay());
-        vm.expectPartialRevert(LayerXTimelock.OperationNotReady.selector);
+        vm.expectPartialRevert(LayerXTimelockCore.OperationNotReady.selector);
         isolated.execute(address(target), 0, callData, keccak256("second-delay"), 1);
         vm.warp(block.timestamp + isolated.minDelay());
         isolated.execute(address(target), 0, callData, keccak256("second-delay"), 1);
@@ -424,7 +425,7 @@ contract ContractIntegrationTest {
         ScheduledCall memory scheduled =
             _schedule(address(managerContainer), abi.encodeCall(ManagerContainer.finalizeGenesis, ()));
         vm.warp(block.timestamp + timelock.minDelay());
-        vm.expectPartialRevert(LayerXTimelock.CallFailed.selector);
+        vm.expectPartialRevert(LayerXTimelockCore.CallFailed.selector);
         vm.prank(FINAL_EXECUTOR);
         timelock.execute(scheduled.target, 0, scheduled.data, scheduled.salt, scheduled.nonce);
         require(managerContainer.genesisFinalized(), "finalized state lost");
@@ -964,10 +965,11 @@ contract ContractIntegrationTest {
         ScheduledCall[] memory permissionCalls = new ScheduledCall[](targets.length);
         for (uint256 i = 0; i < targets.length; ++i) {
             permissionCalls[i] = _schedule(
-                address(timelock), abi.encodeCall(LayerXTimelock.setCallPermission, (targets[i], selectors[i], true))
+                address(timelock),
+                abi.encodeCall(LayerXTimelockCore.setCallPermission, (targets[i], selectors[i], true))
             );
         }
-        vm.expectPartialRevert(LayerXTimelock.OperationNotReady.selector);
+        vm.expectPartialRevert(LayerXTimelockCore.OperationNotReady.selector);
         timelock.execute(
             permissionCalls[0].target, 0, permissionCalls[0].data, permissionCalls[0].salt, permissionCalls[0].nonce
         );
@@ -1014,23 +1016,25 @@ contract ContractIntegrationTest {
         initializationCalls[6] =
             _schedule(address(managerContainer), abi.encodeCall(ManagerContainer.finalizeGenesis, ()));
         initializationCalls[7] =
-            _schedule(address(timelock), abi.encodeCall(LayerXTimelock.setRole, (uint8(1), FINAL_PROPOSER, true)));
+            _schedule(address(timelock), abi.encodeCall(LayerXTimelockCore.setRole, (uint8(1), FINAL_PROPOSER, true)));
         initializationCalls[8] =
-            _schedule(address(timelock), abi.encodeCall(LayerXTimelock.setRole, (uint8(2), FINAL_EXECUTOR, true)));
-        initializationCalls[9] =
-            _schedule(address(timelock), abi.encodeCall(LayerXTimelock.setRole, (uint8(3), EMERGENCY_COUNCIL, true)));
+            _schedule(address(timelock), abi.encodeCall(LayerXTimelockCore.setRole, (uint8(2), FINAL_EXECUTOR, true)));
+        initializationCalls[9] = _schedule(
+            address(timelock), abi.encodeCall(LayerXTimelockCore.setRole, (uint8(3), EMERGENCY_COUNCIL, true))
+        );
         initializationCalls[10] =
-            _schedule(address(timelock), abi.encodeCall(LayerXTimelock.setRole, (uint8(1), address(this), false)));
+            _schedule(address(timelock), abi.encodeCall(LayerXTimelockCore.setRole, (uint8(1), address(this), false)));
         initializationCalls[11] =
-            _schedule(address(timelock), abi.encodeCall(LayerXTimelock.setRole, (uint8(3), address(this), false)));
+            _schedule(address(timelock), abi.encodeCall(LayerXTimelockCore.setRole, (uint8(3), address(this), false)));
         initializationCalls[12] =
-            _schedule(address(timelock), abi.encodeCall(LayerXTimelock.setRole, (uint8(2), address(this), false)));
+            _schedule(address(timelock), abi.encodeCall(LayerXTimelockCore.setRole, (uint8(2), address(this), false)));
         ScheduledCall memory failingRoleCall;
         if (injectRoleTransitionFailure) {
-            failingRoleCall =
-                _schedule(address(timelock), abi.encodeCall(LayerXTimelock.setRole, (uint8(0), FINAL_PROPOSER, true)));
+            failingRoleCall = _schedule(
+                address(timelock), abi.encodeCall(LayerXTimelockCore.setRole, (uint8(0), FINAL_PROPOSER, true))
+            );
         }
-        vm.expectPartialRevert(LayerXTimelock.OperationNotReady.selector);
+        vm.expectPartialRevert(LayerXTimelockCore.OperationNotReady.selector);
         timelock.execute(
             initializationCalls[0].target,
             0,
@@ -1050,7 +1054,7 @@ contract ContractIntegrationTest {
             token.mint(address(this), 1);
             token.approve(address(guarantorBond), 1);
             guarantorBond.depositBond(GENESIS_GUARANTOR_ID, 1);
-            vm.expectPartialRevert(LayerXTimelock.CallFailed.selector);
+            vm.expectPartialRevert(LayerXTimelockCore.CallFailed.selector);
             timelock.execute(
                 initializationCalls[6].target,
                 0,
@@ -1075,7 +1079,7 @@ contract ContractIntegrationTest {
         _execute(initializationCalls[6]);
         if (injectRoleTransitionFailure) {
             _execute(initializationCalls[7]);
-            vm.expectPartialRevert(LayerXTimelock.CallFailed.selector);
+            vm.expectPartialRevert(LayerXTimelockCore.CallFailed.selector);
             timelock.execute(
                 failingRoleCall.target, 0, failingRoleCall.data, failingRoleCall.salt, failingRoleCall.nonce
             );

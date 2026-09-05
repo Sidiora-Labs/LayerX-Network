@@ -61,6 +61,14 @@ contract PaxeerBetaDeploymentValidatorHarness {
         return PaxeerBetaDeploymentValidator.validateInputForProtocol(input, genesis, version);
     }
 
+    function validateImmediateBeta(
+        PaxeerBetaDeploymentValidator.Input calldata input,
+        PaxeerBetaDeploymentValidator.GenesisArtifacts calldata genesis,
+        uint16 version
+    ) external view returns (uint192 release, StaticConfig.Config memory config) {
+        return PaxeerBetaDeploymentValidator.validateImmediateBetaInputForProtocol(input, genesis, version);
+    }
+
     function hashForProtocol(StaticConfig.Config memory config, uint16 version) external view returns (bytes32) {
         return StaticConfig.hashForProtocol(config, block.chainid, version);
     }
@@ -173,6 +181,26 @@ contract PaxeerBetaDeploymentValidatorTest {
         input.release = "01.0.0";
         vm.expectPartialRevert(bytes4(keccak256("InvalidSemanticVersion()")));
         harness.validate(input, _genesis());
+    }
+
+    function testImmediateBetaIsExplicitAndPreservesEconomicAndAuthorityChecks() public {
+        PaxeerBetaDeploymentValidator.Input memory input = _input();
+        input.timelockDelay = 0;
+        (, StaticConfig.Config memory config) = harness.validateImmediateBeta(input, _genesis(), 3);
+        require(config.protocolVersion == 3 && config.chainId == 125, "beta domain");
+        vm.expectPartialRevert(PaxeerBetaDeploymentValidator.InvalidBetaDeploymentInput.selector);
+        harness.validateForProtocol(input, _genesis(), 3);
+        input.finalExecutor = input.bootstrapOperator;
+        vm.expectPartialRevert(PaxeerBetaDeploymentValidator.InvalidBetaDeploymentInput.selector);
+        harness.validateImmediateBeta(input, _genesis(), 3);
+        input = _input();
+        input.timelockDelay = 0;
+        input.usdlCustodyCap = input.usdlMinimumDeposit - 1;
+        vm.expectPartialRevert(PaxeerBetaDeploymentValidator.InvalidBetaDeploymentInput.selector);
+        harness.validateImmediateBeta(input, _genesis(), 3);
+        input = _input();
+        vm.expectPartialRevert(PaxeerBetaDeploymentValidator.InvalidBetaDeploymentInput.selector);
+        harness.validateImmediateBeta(input, _genesis(), 3);
     }
 
     function testGuarantorsMustBeSortedUniqueFundedAndApproved() public {

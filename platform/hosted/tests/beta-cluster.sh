@@ -801,9 +801,9 @@ paxeer_contracts_deploy() {
         LAYERX_PAXEER_GUARANTOR_KEYS_DIR="$dir/guarantor-keys" LAYERX_PAXEER_DEPLOYMENT_RECORD="$dir/deployment.json" \
         LAYERX_PAXEER_SETTLEMENT_JSON="$dir/checkpoint-settlement.json" LAYERX_PAXEER_SETTLEMENT_DOMAIN=beta \
         LAYERX_PAXEER_FOUNDRY_BIN="$FOUNDRY_BIN" \
-        bash "$REPO_ROOT/platform/hosted/paxeer/deploy-contracts.sh" deploy > "$LOG_DIR/deploy-contracts.log" 2>&1; then
+        bash "$REPO_ROOT/platform/hosted/paxeer/deploy-contracts.sh" bootstrap > "$LOG_DIR/deploy-contracts.log" 2>&1; then
         tail -n 40 "$LOG_DIR/deploy-contracts.log" >&2
-        fail "deploy-contracts.sh deploy failed (log $LOG_DIR/deploy-contracts.log)"
+        fail "deploy-contracts.sh bootstrap failed (log $LOG_DIR/deploy-contracts.log)"
     fi
     GUARANTOR_BOND=$(jq -r '.addresses.guarantor_bond' "$dir/deployment.json")
     CHECKPOINT_REGISTRY=$(jq -r '.addresses.checkpoint_registry' "$dir/deployment.json")
