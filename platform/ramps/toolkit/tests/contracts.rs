@@ -3,8 +3,8 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use layerx_ramp_toolkit::journal::{
-    CallbackIdentity, Journal, OrderSnapshot, TornTail, TransitionEvidence, WorkflowStage,
-    WriteFault, WriteStep,
+    CallbackIdentity, Journal, OrderSnapshot, PaxeerObservation, ProviderCallbackWrite, TornTail,
+    TransitionEvidence, WorkflowStage, WriteFault, WriteStep,
 };
 use layerx_ramp_toolkit::{
     operator_send_authorization_message, AggregateStatus, AuthenticatedPrincipal, CreateOrder,
@@ -137,15 +137,38 @@ fn settled_evidence() -> TransitionEvidence {
     evidence
 }
 
+fn callback_write<'a>(
+    digest: [u8; 32],
+    callback_id: &'a str,
+    provider_sequence: u64,
+    evidence_digest: [u8; 32],
+    expected: WorkflowStage,
+    next: WorkflowStage,
+    evidence: &'a TransitionEvidence,
+) -> ProviderCallbackWrite<'a> {
+    ProviderCallbackWrite {
+        order_digest: digest,
+        callback_id,
+        provider_sequence,
+        evidence_digest,
+        expected,
+        next,
+        evidence,
+    }
+}
+
 fn settle_callback(journal: &mut Journal, digest: [u8; 32]) -> Result<bool, RampError> {
+    let evidence = settled_evidence();
     journal.apply_provider_callback(
-        digest,
-        CALLBACK_ID,
-        1,
-        CALLBACK_EVIDENCE_DIGEST,
-        WorkflowStage::AwaitingExternalCredit,
-        WorkflowStage::ProviderSettled,
-        settled_evidence(),
+        callback_write(
+            digest,
+            CALLBACK_ID,
+            1,
+            CALLBACK_EVIDENCE_DIGEST,
+            WorkflowStage::AwaitingExternalCredit,
+            WorkflowStage::ProviderSettled,
+            &evidence,
+        ),
         CALLBACK_AT,
     )
 }
@@ -252,58 +275,70 @@ fn callback_validation_is_staged_before_any_durable_append() {
     let head_before = journal.head();
     let count_before = journal.record_count();
 
+    let settled = settled_evidence();
+    let empty = TransitionEvidence::empty();
     let illegal_transition = journal.apply_provider_callback(
-        digest,
-        CALLBACK_ID,
-        1,
-        CALLBACK_EVIDENCE_DIGEST,
-        WorkflowStage::AwaitingExternalCredit,
-        WorkflowStage::LayerxVerified,
-        settled_evidence(),
+        callback_write(
+            digest,
+            CALLBACK_ID,
+            1,
+            CALLBACK_EVIDENCE_DIGEST,
+            WorkflowStage::AwaitingExternalCredit,
+            WorkflowStage::LayerxVerified,
+            &settled,
+        ),
         CALLBACK_AT,
     );
     assert_eq!(illegal_transition, Err(RampError::IllegalTransition));
     let missing_evidence = journal.apply_provider_callback(
-        digest,
-        CALLBACK_ID,
-        1,
-        CALLBACK_EVIDENCE_DIGEST,
-        WorkflowStage::AwaitingExternalCredit,
-        WorkflowStage::ProviderSettled,
-        TransitionEvidence::empty(),
+        callback_write(
+            digest,
+            CALLBACK_ID,
+            1,
+            CALLBACK_EVIDENCE_DIGEST,
+            WorkflowStage::AwaitingExternalCredit,
+            WorkflowStage::ProviderSettled,
+            &empty,
+        ),
         CALLBACK_AT,
     );
     assert_eq!(missing_evidence, Err(RampError::IllegalTransition));
     let stale_stage = journal.apply_provider_callback(
-        digest,
-        CALLBACK_ID,
-        1,
-        CALLBACK_EVIDENCE_DIGEST,
-        WorkflowStage::CompliancePending,
-        WorkflowStage::AwaitingExternalCredit,
-        TransitionEvidence::empty(),
+        callback_write(
+            digest,
+            CALLBACK_ID,
+            1,
+            CALLBACK_EVIDENCE_DIGEST,
+            WorkflowStage::CompliancePending,
+            WorkflowStage::AwaitingExternalCredit,
+            &empty,
+        ),
         CALLBACK_AT,
     );
     assert_eq!(stale_stage, Err(RampError::Conflict));
     let unknown_order = journal.apply_provider_callback(
-        [2; 32],
-        CALLBACK_ID,
-        1,
-        CALLBACK_EVIDENCE_DIGEST,
-        WorkflowStage::AwaitingExternalCredit,
-        WorkflowStage::ProviderSettled,
-        settled_evidence(),
+        callback_write(
+            [2; 32],
+            CALLBACK_ID,
+            1,
+            CALLBACK_EVIDENCE_DIGEST,
+            WorkflowStage::AwaitingExternalCredit,
+            WorkflowStage::ProviderSettled,
+            &settled,
+        ),
         CALLBACK_AT,
     );
     assert_eq!(unknown_order, Err(RampError::InvalidOrder));
     let zero_sequence = journal.apply_provider_callback(
-        digest,
-        CALLBACK_ID,
-        0,
-        CALLBACK_EVIDENCE_DIGEST,
-        WorkflowStage::AwaitingExternalCredit,
-        WorkflowStage::ProviderSettled,
-        settled_evidence(),
+        callback_write(
+            digest,
+            CALLBACK_ID,
+            0,
+            CALLBACK_EVIDENCE_DIGEST,
+            WorkflowStage::AwaitingExternalCredit,
+            WorkflowStage::ProviderSettled,
+            &settled,
+        ),
         CALLBACK_AT,
     );
     assert_eq!(zero_sequence, Err(RampError::Provider));
@@ -340,25 +375,30 @@ fn applied_callback_identity_is_idempotent_and_forged_retries_conflict() {
     let count_applied = journal.record_count();
 
     assert_eq!(settle_callback(&mut journal, digest), Ok(false));
+    let settled = settled_evidence();
     let forged_identity = journal.apply_provider_callback(
-        digest,
-        CALLBACK_ID,
-        2,
-        [10; 32],
-        WorkflowStage::ProviderSettled,
-        WorkflowStage::ProviderReversed,
-        settled_evidence(),
+        callback_write(
+            digest,
+            CALLBACK_ID,
+            2,
+            [10; 32],
+            WorkflowStage::ProviderSettled,
+            WorkflowStage::ProviderReversed,
+            &settled,
+        ),
         CALLBACK_AT,
     );
     assert_eq!(forged_identity, Err(RampError::Conflict));
     let stale_sequence = journal.apply_provider_callback(
-        digest,
-        "provider-callback-0",
-        1,
-        [11; 32],
-        WorkflowStage::ProviderSettled,
-        WorkflowStage::ProviderReversed,
-        settled_evidence(),
+        callback_write(
+            digest,
+            "provider-callback-0",
+            1,
+            [11; 32],
+            WorkflowStage::ProviderSettled,
+            WorkflowStage::ProviderReversed,
+            &settled,
+        ),
         CALLBACK_AT,
     );
     assert_eq!(stale_sequence, Err(RampError::Conflict));
@@ -539,11 +579,13 @@ fn replaying_the_journal_reproduces_identical_projection() {
     journal
         .observe_paxeer(
             [5; 32],
-            "paxeer-op-1",
-            [6; 32],
-            "broadcast_unknown",
-            None,
-            0,
+            PaxeerObservation {
+                operation_id: "paxeer-op-1",
+                transaction_hash: [6; 32],
+                stage: "broadcast_unknown",
+                block_hash: None,
+                confirmations: 0,
+            },
             1_006,
         )
         .unwrap_or_else(|error| panic!("observe paxeer: {error:?}"));

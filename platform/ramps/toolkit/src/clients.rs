@@ -34,6 +34,8 @@ const MAX_HEADER_BYTES: usize = 32 * 1024;
 pub struct SecretFile(PathBuf);
 
 impl SecretFile {
+    /// # Errors
+    /// Returns [`RampError::Configuration`] when the path is not a private file within the size bound.
     pub fn new(path: impl Into<PathBuf>) -> Result<Self, RampError> {
         let path = path.into();
         let metadata = fs::metadata(&path).map_err(|_| RampError::Configuration)?;
@@ -44,6 +46,8 @@ impl SecretFile {
         Ok(Self(path))
     }
 
+    /// # Errors
+    /// Returns [`RampError::Configuration`] when the file cannot be read within the size bound.
     pub fn read(&self) -> Result<Vec<u8>, RampError> {
         let file = File::open(&self.0).map_err(|_| RampError::Configuration)?;
         let mut bytes = Vec::new();
@@ -77,6 +81,8 @@ pub struct Endpoint {
 }
 
 impl Endpoint {
+    /// # Errors
+    /// Returns [`RampError::Configuration`] when the value is not a canonical HTTPS DNS endpoint.
     pub fn parse(value: &str) -> Result<Self, RampError> {
         let rest = value
             .strip_prefix("https://")
@@ -120,12 +126,24 @@ impl Endpoint {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct HttpRequest<'a> {
+    pub endpoint: &'a Endpoint,
+    pub method: &'a str,
+    pub path: &'a str,
+    pub authorization: Option<&'a str>,
+    pub idempotency: Option<&'a str>,
+    pub contract: Option<&'a str>,
+}
+
 pub struct MutualTlsClient {
     connector: TlsConnector,
     timeout: Duration,
 }
 
 impl MutualTlsClient {
+    /// # Errors
+    /// Returns [`RampError::Configuration`] when the timeout, CA or client identity cannot be used.
     pub fn new(files: &MutualTlsFiles, timeout: Duration) -> Result<Self, RampError> {
         if timeout.is_zero() {
             return Err(RampError::Configuration);
@@ -157,14 +175,12 @@ impl MutualTlsClient {
         Ok(Self { connector, timeout })
     }
 
+    /// # Errors
+    /// Returns [`RampError::Configuration`] when the request exceeds its bound and
+    /// [`RampError::Provider`] when transport or the HTTP response is refused.
     pub fn json<T: Serialize>(
         &self,
-        endpoint: &Endpoint,
-        method: &str,
-        path: &str,
-        authorization: Option<&str>,
-        idempotency: Option<&str>,
-        contract: Option<&str>,
+        request: HttpRequest<'_>,
         body: Option<&T>,
     ) -> Result<HttpResponse, RampError> {
         let body = body
@@ -172,30 +188,26 @@ impl MutualTlsClient {
             .transpose()
             .map_err(|_| RampError::Configuration)?
             .unwrap_or_default();
-        self.request(
+        self.request(request, "application/json", &body)
+    }
+
+    /// # Errors
+    /// Returns [`RampError::Configuration`] when the request exceeds its bound and
+    /// [`RampError::Provider`] when transport or the HTTP response is refused.
+    pub fn request(
+        &self,
+        request: HttpRequest<'_>,
+        content_type: &str,
+        body: &[u8],
+    ) -> Result<HttpResponse, RampError> {
+        let HttpRequest {
             endpoint,
             method,
             path,
             authorization,
             idempotency,
             contract,
-            "application/json",
-            &body,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn request(
-        &self,
-        endpoint: &Endpoint,
-        method: &str,
-        path: &str,
-        authorization: Option<&str>,
-        idempotency: Option<&str>,
-        contract: Option<&str>,
-        content_type: &str,
-        body: &[u8],
-    ) -> Result<HttpResponse, RampError> {
+        } = request;
         if !matches!(method, "GET" | "POST")
             || !path.starts_with('/')
             || path.contains(['?', '#', '\\'])
@@ -229,13 +241,19 @@ impl MutualTlsClient {
             body.len()
         );
         if let Some(value) = authorization {
-            headers.push_str(&format!("Authorization: {value}\r\n"));
+            headers.push_str("Authorization: ");
+            headers.push_str(value);
+            headers.push_str("\r\n");
         }
         if let Some(value) = idempotency {
-            headers.push_str(&format!("Idempotency-Key: {value}\r\n"));
+            headers.push_str("Idempotency-Key: ");
+            headers.push_str(value);
+            headers.push_str("\r\n");
         }
         if let Some(value) = contract {
-            headers.push_str(&format!("LayerX-Ramp-Contract: {value}\r\n"));
+            headers.push_str("LayerX-Ramp-Contract: ");
+            headers.push_str(value);
+            headers.push_str("\r\n");
         }
         headers.push_str("\r\n");
         tls.write_all(headers.as_bytes())
@@ -293,10 +311,10 @@ fn parse_response(bytes: &[u8]) -> Result<HttpResponse, RampError> {
                 return Err(RampError::Provider);
             }
             chunked = true;
-        } else if name.eq_ignore_ascii_case("content-type") {
-            if content_type.replace(value.trim()).is_some() {
-                return Err(RampError::Provider);
-            }
+        } else if name.eq_ignore_ascii_case("content-type")
+            && content_type.replace(value.trim()).is_some()
+        {
+            return Err(RampError::Provider);
         }
     }
     if chunked && content_length.is_some() {
@@ -397,6 +415,8 @@ pub enum ComplianceOutcome {
 }
 
 impl ComplianceDecision {
+    /// # Errors
+    /// Returns [`RampError::Compliance`] when the decision does not bind the order or fail signature verification.
     pub fn verify(
         &self,
         order: &RampOrder,
@@ -415,7 +435,7 @@ impl ComplianceDecision {
             return Err(RampError::Compliance);
         }
         verify_detached(public_key, &canonical_compliance(self), &self.signature)
-            .map_err(|_| RampError::Compliance)
+            .map_err(|()| RampError::Compliance)
     }
 }
 
@@ -455,6 +475,8 @@ pub struct IdentityClient {
 }
 
 impl IdentityClient {
+    /// # Errors
+    /// Returns [`RampError::InvalidPrincipal`] when introspection refuses the presented credential.
     pub fn authenticate(
         &self,
         authorization: &str,
@@ -478,13 +500,16 @@ impl IdentityClient {
             .strip_prefix("Bearer ")
             .filter(|value| !invalid_header(value))
             .ok_or(RampError::InvalidPrincipal)?;
+        let authorization = format!("Bearer {}", self.service_token);
         let response = self.http.json(
-            &self.endpoint,
-            "POST",
-            "/v1/introspect",
-            Some(&format!("Bearer {}", self.service_token)),
-            None,
-            Some("layerx-identity-introspection-v1"),
+            HttpRequest {
+                endpoint: &self.endpoint,
+                method: "POST",
+                path: "/v1/introspect",
+                authorization: Some(&authorization),
+                idempotency: None,
+                contract: Some("layerx-identity-introspection-v1"),
+            },
             Some(&Request {
                 token,
                 audience: &self.audience,
@@ -508,19 +533,25 @@ impl IdentityClient {
 }
 
 impl ComplianceClient {
+    /// # Errors
+    /// Returns [`RampError::Compliance`] when the decision is refused or fails verification.
     pub fn evaluate(&self, order: &RampOrder, now: u64) -> Result<ComplianceDecision, RampError> {
         #[derive(Serialize)]
         struct Request<'a> {
             contract: &'static str,
             order: &'a RampOrder,
         }
+        let authorization = format!("Bearer {}", self.service_token);
+        let idempotency = hex(&order.order_digest);
         let response = self.http.json(
-            &self.endpoint,
-            "POST",
-            "/v1/decisions",
-            Some(&format!("Bearer {}", self.service_token)),
-            Some(&hex(&order.order_digest)),
-            Some(COMPLIANCE_CONTRACT_VERSION),
+            HttpRequest {
+                endpoint: &self.endpoint,
+                method: "POST",
+                path: "/v1/decisions",
+                authorization: Some(&authorization),
+                idempotency: Some(&idempotency),
+                contract: Some(COMPLIANCE_CONTRACT_VERSION),
+            },
             Some(&Request {
                 contract: COMPLIANCE_CONTRACT_VERSION,
                 order,
@@ -614,6 +645,8 @@ pub struct ProviderClient {
 }
 
 impl ProviderClient {
+    /// # Errors
+    /// Returns [`RampError::Provider`] when the provider refuses or returns a result that does not bind the order.
     pub fn submit(&self, order: &RampOrder) -> Result<ProviderResult, RampError> {
         #[derive(Serialize)]
         struct Request<'a> {
@@ -646,18 +679,24 @@ impl ProviderClient {
             currency: &order.quote.external_currency,
             expires_at: order.quote.expires_at,
         };
+        let authorization = format!("Bearer {}", self.credential);
+        let idempotency = hex(&order.order_digest);
         let response = self.http.json(
-            &self.endpoint,
-            "POST",
-            &self.settlement_path,
-            Some(&format!("Bearer {}", self.credential)),
-            Some(&hex(&order.order_digest)),
-            Some(PROVIDER_CONTRACT_VERSION),
+            HttpRequest {
+                endpoint: &self.endpoint,
+                method: "POST",
+                path: &self.settlement_path,
+                authorization: Some(&authorization),
+                idempotency: Some(&idempotency),
+                contract: Some(PROVIDER_CONTRACT_VERSION),
+            },
             Some(&body),
         )?;
-        self.decode(order, response)
+        Self::decode(order, &response)
     }
 
+    /// # Errors
+    /// Returns [`RampError::Provider`] when the operation identifier is invalid or the provider result does not bind the order.
     pub fn reconcile(
         &self,
         order: &RampOrder,
@@ -682,23 +721,22 @@ impl ProviderClient {
                 )
             },
         );
+        let authorization = format!("Bearer {}", self.credential);
         let response = self.http.json::<serde_json::Value>(
-            &self.endpoint,
-            "GET",
-            &path,
-            Some(&format!("Bearer {}", self.credential)),
-            None,
-            Some(PROVIDER_CONTRACT_VERSION),
+            HttpRequest {
+                endpoint: &self.endpoint,
+                method: "GET",
+                path: &path,
+                authorization: Some(&authorization),
+                idempotency: None,
+                contract: Some(PROVIDER_CONTRACT_VERSION),
+            },
             None,
         )?;
-        self.decode(order, response)
+        Self::decode(order, &response)
     }
 
-    fn decode(
-        &self,
-        order: &RampOrder,
-        response: HttpResponse,
-    ) -> Result<ProviderResult, RampError> {
+    fn decode(order: &RampOrder, response: &HttpResponse) -> Result<ProviderResult, RampError> {
         if !matches!(response.status, 200 | 202 | 409 | 422) {
             return Err(RampError::Provider);
         }
@@ -719,6 +757,8 @@ pub struct ProviderCallback {
 }
 
 impl ProviderCallback {
+    /// # Errors
+    /// Returns [`RampError::Provider`] when the callback identity, signature or bound result is refused.
     pub fn verify(&self, order: &RampOrder, public_key: &[u8; 32]) -> Result<(), RampError> {
         if !safe_segment(&self.callback_id) || self.provider_sequence == 0 {
             return Err(RampError::Provider);
@@ -731,7 +771,7 @@ impl ProviderCallback {
         ))
         .map_err(|_| RampError::Provider)?;
         verify_detached(public_key, &canonical, &self.signature)
-            .map_err(|_| RampError::Provider)?;
+            .map_err(|()| RampError::Provider)?;
         self.result.validate(order)
     }
 }
@@ -796,6 +836,8 @@ impl PreparedLayerx {
 }
 
 impl LayerxClient {
+    /// # Errors
+    /// Returns [`RampError::InvalidOrder`], [`RampError::Intent`] or [`RampError::Layerx`] when compilation, encoding or signing fails.
     pub fn prepare_payment(
         &self,
         order: &RampOrder,
@@ -839,83 +881,110 @@ impl LayerxClient {
         })
     }
 
-    pub fn submit_prepared(
-        &self,
-        order: &RampOrder,
-        prepared: PreparedLayerx,
-    ) -> Result<LayerxSubmission, RampError> {
+    #[must_use]
+    pub fn submit_prepared(&self, order: &RampOrder, prepared: PreparedLayerx) -> LayerxSubmission {
         let identifier = prepared.activity_id;
         let signed_bytes = prepared.canonical_activity;
-        let response = match self.http.request(
-            &self.gateway,
-            "POST",
-            "/v1/activities",
-            Some(&format!("LayerX-Key {}", self.gateway_key)),
-            Some(&hex(&order.order_digest)),
-            None,
+        let authorization = format!("LayerX-Key {}", self.gateway_key);
+        let idempotency = hex(&order.order_digest);
+        let Ok(response) = self.http.request(
+            HttpRequest {
+                endpoint: &self.gateway,
+                method: "POST",
+                path: "/v1/activities",
+                authorization: Some(&authorization),
+                idempotency: Some(&idempotency),
+                contract: None,
+            },
             "application/octet-stream",
             &signed_bytes,
-        ) {
-            Ok(response) => response,
-            Err(_) => {
-                return Ok(LayerxSubmission::Unknown {
-                    activity_id: identifier,
-                    canonical_activity: Some(signed_bytes),
-                });
-            }
-        };
-        if response.status == 202 {
-            return Ok(LayerxSubmission::Pending {
+        ) else {
+            return LayerxSubmission::Unknown {
                 activity_id: identifier,
                 canonical_activity: Some(signed_bytes),
-            });
+            };
+        };
+        if response.status == 202 {
+            return LayerxSubmission::Pending {
+                activity_id: identifier,
+                canonical_activity: Some(signed_bytes),
+            };
         }
         if matches!(response.status, 400 | 401 | 403 | 404 | 422) {
-            return Ok(LayerxSubmission::Refused {
+            return LayerxSubmission::Refused {
                 activity_id: identifier,
                 canonical_activity: signed_bytes,
                 code: format!("gateway_http_{}", response.status),
-            });
+            };
         }
         if response.status != 200 {
-            return Ok(LayerxSubmission::Unknown {
+            return LayerxSubmission::Unknown {
                 activity_id: identifier,
                 canonical_activity: Some(signed_bytes),
-            });
+            };
         }
         match self.resolve(order, identifier) {
-            Ok(LayerxSubmission::Unknown { activity_id, .. }) => Ok(LayerxSubmission::Unknown {
+            Ok(LayerxSubmission::Unknown { activity_id, .. }) => LayerxSubmission::Unknown {
                 activity_id,
                 canonical_activity: Some(signed_bytes),
-            }),
-            Ok(LayerxSubmission::Pending { activity_id, .. }) => Ok(LayerxSubmission::Pending {
+            },
+            Ok(LayerxSubmission::Pending { activity_id, .. }) => LayerxSubmission::Pending {
                 activity_id,
                 canonical_activity: Some(signed_bytes),
-            }),
-            Ok(LayerxSubmission::Verified { leg, .. }) => Ok(LayerxSubmission::Verified {
+            },
+            Ok(LayerxSubmission::Verified { leg, .. }) => LayerxSubmission::Verified {
                 leg,
                 canonical_activity: Some(signed_bytes),
-            }),
-            Ok(LayerxSubmission::Refused { .. }) | Err(_) => Ok(LayerxSubmission::Unknown {
+            },
+            Ok(LayerxSubmission::Refused { .. }) | Err(_) => LayerxSubmission::Unknown {
                 activity_id: identifier,
                 canonical_activity: Some(signed_bytes),
-            }),
+            },
         }
     }
 
+    /// # Errors
+    /// Returns [`RampError::Layerx`] when receipt or authority facts cannot be verified against the order.
     pub fn resolve(
         &self,
         order: &RampOrder,
         activity: [u8; 32],
     ) -> Result<LayerxSubmission, RampError> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct ResultBody {
+            result: ReceiptBody,
+        }
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct ReceiptBody {
+            activity_id: String,
+            receipt: String,
+        }
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct AuthorityBody {
+            activity_id: String,
+            batch_id: String,
+            asset: String,
+            previous_state_root: String,
+            resulting_state_root: String,
+            sequencer_public_key: String,
+            network_id: String,
+            wire_version: String,
+        }
         let id = hex(&activity);
+        let gateway_authorization = format!("LayerX-Key {}", self.gateway_key);
+        let receipt_path = format!("/v1/receipts/{id}");
         let response = self.http.json::<serde_json::Value>(
-            &self.gateway,
-            "GET",
-            &format!("/v1/receipts/{id}"),
-            Some(&format!("LayerX-Key {}", self.gateway_key)),
-            None,
-            None,
+            HttpRequest {
+                endpoint: &self.gateway,
+                method: "GET",
+                path: &receipt_path,
+                authorization: Some(&gateway_authorization),
+                idempotency: None,
+                contract: None,
+            },
             None,
         )?;
         if response.status == 404 {
@@ -930,46 +999,27 @@ impl LayerxClient {
                 canonical_activity: None,
             });
         }
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct ResultBody {
-            result: ReceiptBody,
-        }
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct ReceiptBody {
-            activity_id: String,
-            receipt: String,
-        }
         let receipt: ResultBody =
             serde_json::from_slice(&response.body).map_err(|_| RampError::Layerx)?;
         if receipt.result.activity_id != id {
             return Err(RampError::Layerx);
         }
         let canonical_receipt = decode_hex(&receipt.result.receipt, 256 * 1024)?;
+        let authority_authorization = format!("Bearer {}", self.authority_token);
+        let authority_path = format!("/v1/authorized-batches/by-activity/{id}");
         let authority = self.http.json::<serde_json::Value>(
-            &self.receipt_authority,
-            "GET",
-            &format!("/v1/authorized-batches/by-activity/{id}"),
-            Some(&format!("Bearer {}", self.authority_token)),
-            None,
-            None,
+            HttpRequest {
+                endpoint: &self.receipt_authority,
+                method: "GET",
+                path: &authority_path,
+                authorization: Some(&authority_authorization),
+                idempotency: None,
+                contract: None,
+            },
             None,
         )?;
         if authority.status != 200 {
             return Err(RampError::Layerx);
-        }
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct AuthorityBody {
-            activity_id: String,
-            batch_id: String,
-            asset: String,
-            previous_state_root: String,
-            resulting_state_root: String,
-            sequencer_public_key: String,
-            network_id: String,
-            wire_version: String,
         }
         let facts: AuthorityBody =
             serde_json::from_slice(&authority.body).map_err(|_| RampError::Layerx)?;
@@ -1051,13 +1101,16 @@ impl LayerxClient {
         )
         .map_err(|_| RampError::Layerx)?;
         let digest = message.digest();
+        let authorization = format!("Bearer {}", self.signer_token);
         let response = self.http.json(
-            &self.signer,
-            "POST",
-            "/v1/signatures",
-            Some(&format!("Bearer {}", self.signer_token)),
-            None,
-            None,
+            HttpRequest {
+                endpoint: &self.signer,
+                method: "POST",
+                path: "/v1/signatures",
+                authorization: Some(&authorization),
+                idempotency: None,
+                contract: None,
+            },
             Some(&Request {
                 key_handle: &order.operator.signer_key_handle,
                 algorithm: "ed25519",
@@ -1103,6 +1156,8 @@ pub struct PaxeerCustodyClient {
 }
 
 impl PaxeerCustodyClient {
+    /// # Errors
+    /// Returns [`RampError::Paxeer`] when the custody broadcast is refused or does not bind the requested transfer.
     pub fn broadcast(
         &self,
         asset: [u8; 32],
@@ -1123,13 +1178,17 @@ impl PaxeerCustodyClient {
         if asset == [0; 32] || amount == 0 || idempotency_key == [0; 32] {
             return Err(RampError::Paxeer);
         }
+        let authorization = format!("Bearer {}", self.credential);
+        let idempotency = hex(&idempotency_key);
         let response = self.http.json(
-            &self.endpoint,
-            "POST",
-            &self.broadcast_path,
-            Some(&format!("Bearer {}", self.credential)),
-            Some(&hex(&idempotency_key)),
-            Some(PAXEER_CONTRACT_VERSION),
+            HttpRequest {
+                endpoint: &self.endpoint,
+                method: "POST",
+                path: &self.broadcast_path,
+                authorization: Some(&authorization),
+                idempotency: Some(&idempotency),
+                contract: Some(PAXEER_CONTRACT_VERSION),
+            },
             Some(&Request {
                 contract: PAXEER_CONTRACT_VERSION,
                 operator_account: &self.operator_account,
@@ -1141,34 +1200,40 @@ impl PaxeerCustodyClient {
                 idempotency_key,
             }),
         )?;
-        self.decode(response, asset, amount, idempotency_key)
+        self.decode(&response, asset, amount, idempotency_key)
     }
 
+    /// # Errors
+    /// Returns [`RampError::Paxeer`] when custody status is refused or does not bind the requested transfer.
     pub fn reconcile(
         &self,
         asset: [u8; 32],
         amount: u128,
         idempotency_key: [u8; 32],
     ) -> Result<PaxeerSubmission, RampError> {
+        let authorization = format!("Bearer {}", self.credential);
+        let path = format!(
+            "{}/by-idempotency/{}",
+            self.status_path.trim_end_matches('/'),
+            hex(&idempotency_key)
+        );
         let response = self.http.json::<serde_json::Value>(
-            &self.endpoint,
-            "GET",
-            &format!(
-                "{}/by-idempotency/{}",
-                self.status_path.trim_end_matches('/'),
-                hex(&idempotency_key)
-            ),
-            Some(&format!("Bearer {}", self.credential)),
-            None,
-            Some(PAXEER_CONTRACT_VERSION),
+            HttpRequest {
+                endpoint: &self.endpoint,
+                method: "GET",
+                path: &path,
+                authorization: Some(&authorization),
+                idempotency: None,
+                contract: Some(PAXEER_CONTRACT_VERSION),
+            },
             None,
         )?;
-        self.decode(response, asset, amount, idempotency_key)
+        self.decode(&response, asset, amount, idempotency_key)
     }
 
     fn decode(
         &self,
-        response: HttpResponse,
+        response: &HttpResponse,
         asset: [u8; 32],
         amount: u128,
         idempotency_key: [u8; 32],
@@ -1220,15 +1285,19 @@ pub fn hex(bytes: &[u8]) -> String {
     output
 }
 
+/// # Errors
+/// Returns [`RampError::Configuration`] when the value is not 32 hexadecimal bytes.
 pub fn parse_hex32(value: &str) -> Result<[u8; 32], RampError> {
     decode_hex(value, 32)?
         .try_into()
         .map_err(|_| RampError::Configuration)
 }
 
+/// # Errors
+/// Returns [`RampError::Configuration`] when the value is not even-length hexadecimal within `maximum` bytes.
 pub fn decode_hex(value: &str, maximum: usize) -> Result<Vec<u8>, RampError> {
     let value = value.strip_prefix("0x").unwrap_or(value);
-    if value.len() % 2 != 0 || value.len() / 2 > maximum {
+    if !value.len().is_multiple_of(2) || value.len() / 2 > maximum {
         return Err(RampError::Configuration);
     }
     value
@@ -1328,7 +1397,8 @@ fn require_private(_metadata: &fs::Metadata) -> Result<(), RampError> {
     Ok(())
 }
 
-#[must_use]
+/// # Errors
+/// Returns [`RampError::Provider`] when the callback cannot be encoded.
 pub fn callback_evidence_digest(callback: &ProviderCallback) -> Result<[u8; 32], RampError> {
     let bytes = serde_json::to_vec(callback).map_err(|_| RampError::Provider)?;
     let mut hasher = Sha256::new();

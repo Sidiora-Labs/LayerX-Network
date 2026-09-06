@@ -47,6 +47,26 @@ pub struct TransitionEvidence {
     pub retry_at: Option<u64>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProviderCallbackWrite<'a> {
+    pub order_digest: [u8; 32],
+    pub callback_id: &'a str,
+    pub provider_sequence: u64,
+    pub evidence_digest: [u8; 32],
+    pub expected: WorkflowStage,
+    pub next: WorkflowStage,
+    pub evidence: &'a TransitionEvidence,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PaxeerObservation<'a> {
+    pub operation_id: &'a str,
+    pub transaction_hash: [u8; 32],
+    pub stage: &'a str,
+    pub block_hash: Option<[u8; 32]>,
+    pub confirmations: u64,
+}
+
 impl TransitionEvidence {
     #[must_use]
     pub const fn empty() -> Self {
@@ -66,7 +86,7 @@ impl TransitionEvidence {
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Event {
     OrderCreated {
-        order: RampOrder,
+        order: Box<RampOrder>,
     },
     LeaseAcquired {
         order_digest: [u8; 32],
@@ -119,7 +139,8 @@ struct Record {
     previous_hash: [u8; 32],
     recorded_at: u64,
     event: Event,
-    record_hash: [u8; 32],
+    #[serde(rename = "record_hash")]
+    hash: [u8; 32],
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -150,12 +171,10 @@ impl OrderSnapshot {
             WorkflowStage::ComplianceRefused
             | WorkflowStage::ProviderRefused
             | WorkflowStage::LayerxRefused => AggregateStatus::Refused,
-            WorkflowStage::ProviderSubmittedUnknown | WorkflowStage::LayerxSubmittedUnknown => {
-                AggregateStatus::Unknown
-            }
-            WorkflowStage::ProviderSubmissionPlanned | WorkflowStage::LayerxSubmissionPlanned => {
-                AggregateStatus::Unknown
-            }
+            WorkflowStage::ProviderSubmittedUnknown
+            | WorkflowStage::LayerxSubmittedUnknown
+            | WorkflowStage::ProviderSubmissionPlanned
+            | WorkflowStage::LayerxSubmissionPlanned => AggregateStatus::Unknown,
             WorkflowStage::ProviderReversed
             | WorkflowStage::ReversalPending
             | WorkflowStage::Reversed => AggregateStatus::Reversed,
@@ -277,13 +296,15 @@ impl Projection {
                 evidence,
             } => StagedCallback::stage(
                 self,
-                *order_digest,
-                callback_id,
-                *provider_sequence,
-                *evidence_digest,
-                *expected,
-                *next,
-                evidence,
+                ProviderCallbackWrite {
+                    order_digest: *order_digest,
+                    callback_id,
+                    provider_sequence: *provider_sequence,
+                    evidence_digest: *evidence_digest,
+                    expected: *expected,
+                    next: *next,
+                    evidence,
+                },
             )
             .map(StagedMutation::Callback),
             Event::PaxeerPlanned {
@@ -464,17 +485,16 @@ pub struct StagedCallback {
 }
 
 impl StagedCallback {
-    #[allow(clippy::too_many_arguments)]
-    fn stage(
-        projection: &Projection,
-        order_digest: [u8; 32],
-        callback_id: &str,
-        provider_sequence: u64,
-        evidence_digest: [u8; 32],
-        expected: WorkflowStage,
-        next: WorkflowStage,
-        evidence: &TransitionEvidence,
-    ) -> Result<Self, RampError> {
+    fn stage(projection: &Projection, write: ProviderCallbackWrite<'_>) -> Result<Self, RampError> {
+        let ProviderCallbackWrite {
+            order_digest,
+            callback_id,
+            provider_sequence,
+            evidence_digest,
+            expected,
+            next,
+            evidence,
+        } = write;
         if !safe_identifier(callback_id) || provider_sequence == 0 || evidence_digest == [0; 32] {
             return Err(RampError::Provider);
         }
@@ -588,6 +608,8 @@ pub struct Journal {
 }
 
 impl Journal {
+    /// # Errors
+    /// Returns [`RampError::Journal`] when the file cannot be locked, read, decoded or truncated to a durable prefix.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, RampError> {
         let path = path.as_ref();
         let lock = LockClaim::acquire(path)?;
@@ -635,7 +657,7 @@ impl Journal {
                 previous_hash,
                 recorded_at,
                 event,
-                record_hash,
+                hash: record_hash,
             } = serde_json::from_slice(&line).map_err(|_| RampError::Journal)?;
             if sequence != journal.next_sequence || previous_hash != journal.head {
                 return Err(RampError::Journal);
@@ -674,6 +696,10 @@ impl Journal {
         Ok(journal)
     }
 
+    /// # Errors
+    /// Returns [`RampError::InvalidOrder`] or [`RampError::OrderBinding`] when the order is unbound,
+    /// [`RampError::Conflict`] when the identifier is reused with different content, and
+    /// [`RampError::Journal`] when the durable append cannot complete.
     pub fn create_order(&mut self, order: RampOrder, now: u64) -> Result<OrderSnapshot, RampError> {
         order.validate_bound()?;
         if let Some(existing) = self.projection.order_ids.get(&order.order_id) {
@@ -688,7 +714,12 @@ impl Journal {
             };
         }
         let order_digest = order.order_digest;
-        self.append(Event::OrderCreated { order }, now)?;
+        self.append(
+            Event::OrderCreated {
+                order: Box::new(order),
+            },
+            now,
+        )?;
         self.projection
             .orders
             .get(&order_digest)
@@ -760,6 +791,10 @@ impl Journal {
         self.fault
     }
 
+    /// # Errors
+    /// Returns [`RampError::InvalidOrder`] for an unknown order or invalid worker,
+    /// [`RampError::LeaseHeld`] when another worker still holds the lease, and
+    /// [`RampError::Journal`] when the durable append cannot complete.
     pub fn acquire_lease(
         &mut self,
         order_digest: [u8; 32],
@@ -792,6 +827,11 @@ impl Journal {
         )
     }
 
+    /// # Errors
+    /// Returns [`RampError::IllegalTransition`] or [`RampError::Conflict`] when the stage is not admitted,
+    /// [`RampError::LeaseHeld`] when the worker does not hold a live lease,
+    /// [`RampError::InvalidOrder`] when the order is absent, and
+    /// [`RampError::Journal`] when the durable append cannot complete.
     pub fn transition(
         &mut self,
         order_digest: [u8; 32],
@@ -830,27 +870,28 @@ impl Journal {
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
+    /// # Errors
+    /// Returns [`RampError::Provider`] for an invalid callback identity,
+    /// [`RampError::Conflict`] when the callback or sequence disagrees with prior facts,
+    /// [`RampError::IllegalTransition`] or [`RampError::InvalidOrder`] when the stage cannot be applied, and
+    /// [`RampError::Journal`] when the durable append cannot complete.
     pub fn apply_provider_callback(
         &mut self,
-        order_digest: [u8; 32],
-        callback_id: &str,
-        provider_sequence: u64,
-        evidence_digest: [u8; 32],
-        expected: WorkflowStage,
-        next: WorkflowStage,
-        evidence: TransitionEvidence,
+        write: ProviderCallbackWrite<'_>,
         now: u64,
     ) -> Result<bool, RampError> {
-        if !safe_identifier(callback_id) || provider_sequence == 0 || evidence_digest == [0; 32] {
+        if !safe_identifier(write.callback_id)
+            || write.provider_sequence == 0
+            || write.evidence_digest == [0; 32]
+        {
             return Err(RampError::Provider);
         }
         let identity = CallbackIdentity {
-            order_digest,
-            provider_sequence,
-            evidence_digest,
+            order_digest: write.order_digest,
+            provider_sequence: write.provider_sequence,
+            evidence_digest: write.evidence_digest,
         };
-        if let Some(existing) = self.projection.callbacks.get(callback_id) {
+        if let Some(existing) = self.projection.callbacks.get(write.callback_id) {
             return if *existing == identity {
                 Ok(false)
             } else {
@@ -859,30 +900,32 @@ impl Journal {
         }
         self.append(
             Event::ProviderCallbackApplied {
-                order_digest,
-                callback_id: callback_id.to_owned(),
-                provider_sequence,
-                evidence_digest,
-                expected,
-                next,
-                evidence,
+                order_digest: write.order_digest,
+                callback_id: write.callback_id.to_owned(),
+                provider_sequence: write.provider_sequence,
+                evidence_digest: write.evidence_digest,
+                expected: write.expected,
+                next: write.next,
+                evidence: write.evidence.clone(),
             },
             now,
         )?;
         Ok(true)
     }
 
+    /// # Errors
+    /// Returns [`RampError::Paxeer`] when the observation or planned transfer is absent or invalid,
+    /// [`RampError::Conflict`] when identifiers disagree with prior facts, and
+    /// [`RampError::Journal`] when the durable append cannot complete.
     pub fn observe_paxeer(
         &mut self,
         idempotency_key: [u8; 32],
-        operation_id: &str,
-        transaction_hash: [u8; 32],
-        stage: &str,
-        block_hash: Option<[u8; 32]>,
-        confirmations: u64,
+        observation: PaxeerObservation<'_>,
         now: u64,
     ) -> Result<(), RampError> {
-        if !safe_identifier(operation_id) || transaction_hash == [0; 32] || !safe_identifier(stage)
+        if !safe_identifier(observation.operation_id)
+            || observation.transaction_hash == [0; 32]
+            || !safe_identifier(observation.stage)
         {
             return Err(RampError::Paxeer);
         }
@@ -894,26 +937,30 @@ impl Journal {
         if existing
             .operation_id
             .as_ref()
-            .is_some_and(|value| value != operation_id)
+            .is_some_and(|value| value != observation.operation_id)
             || existing
                 .transaction_hash
-                .is_some_and(|value| value != transaction_hash)
+                .is_some_and(|value| value != observation.transaction_hash)
         {
             return Err(RampError::Conflict);
         }
         self.append(
             Event::PaxeerObserved {
                 idempotency_key,
-                operation_id: operation_id.to_owned(),
-                transaction_hash,
-                stage: stage.to_owned(),
-                block_hash,
-                confirmations,
+                operation_id: observation.operation_id.to_owned(),
+                transaction_hash: observation.transaction_hash,
+                stage: observation.stage.to_owned(),
+                block_hash: observation.block_hash,
+                confirmations: observation.confirmations,
             },
             now,
         )
     }
 
+    /// # Errors
+    /// Returns [`RampError::Paxeer`] for a zero key, asset or amount,
+    /// [`RampError::Conflict`] when the key is reused with different terms, and
+    /// [`RampError::Journal`] when the durable append cannot complete.
     pub fn plan_paxeer(
         &mut self,
         idempotency_key: [u8; 32],
@@ -967,7 +1014,7 @@ impl Journal {
             previous_hash: body.previous_hash,
             recorded_at: body.recorded_at,
             event: body.event,
-            record_hash,
+            hash: record_hash,
         };
         let mut bytes = serde_json::to_vec(&record).map_err(|_| RampError::Journal)?;
         if bytes.len().saturating_add(1) > MAX_JOURNAL_RECORD_BYTES {
@@ -1090,6 +1137,7 @@ fn claim_lock(path: &Path) -> Result<File, RampError> {
         .create(true)
         .read(true)
         .write(true)
+        .truncate(false)
         .mode(0o600)
         .open(path)
         .map_err(|_| RampError::Journal)?;
@@ -1307,15 +1355,12 @@ const fn allowed(from: WorkflowStage, to: WorkflowStage) -> bool {
                 | S::ManualReview
         ) | (
             S::ProviderSettled,
-            S::LayerxSubmissionPlanned | S::LayerxPending | S::ProviderReversed
+            S::LayerxSubmissionPlanned | S::LayerxPending | S::ProviderReversed | S::Done
         ) | (
             S::AwaitingLayerxPayment,
             S::LayerxSubmissionPlanned | S::LayerxPending | S::LayerxVerified | S::LayerxRefused
         ) | (
-            S::LayerxSubmissionPlanned,
-            S::LayerxSubmittedUnknown | S::LayerxPending | S::LayerxVerified | S::LayerxRefused
-        ) | (
-            S::LayerxSubmittedUnknown,
+            S::LayerxSubmissionPlanned | S::LayerxSubmittedUnknown,
             S::LayerxSubmittedUnknown | S::LayerxPending | S::LayerxVerified | S::LayerxRefused
         ) | (
             S::LayerxPending,
@@ -1327,10 +1372,11 @@ const fn allowed(from: WorkflowStage, to: WorkflowStage) -> bool {
                 | S::ProviderSettled
                 | S::ProviderRefused
                 | S::Done
-        ) | (S::ProviderSettled, S::Done)
-            | (S::Done, S::ProviderReversed | S::ReversalPending)
-            | (S::ProviderReversed, S::ReversalPending | S::Reversed)
-            | (S::ReversalPending, S::ReversalPending | S::Reversed)
+        ) | (S::Done, S::ProviderReversed | S::ReversalPending)
+            | (
+                S::ProviderReversed | S::ReversalPending,
+                S::ReversalPending | S::Reversed
+            )
     )
 }
 
