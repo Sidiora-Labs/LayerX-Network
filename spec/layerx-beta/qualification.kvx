@@ -1533,4 +1533,26 @@ file = "contracts/GuarantorBond.sol"
 symbol = "constructor Constants.USDL_TOKEN BetaUsdl"
 observed = "The constructor rejects usdlToken unequal to 0x85FcD13735F4309833A503EE804ea32395851479 as well as absent code and assets unequal to keccak256(USDL). LayerXVault and StaticConfig also pin that address. Deploying a token at another address and passing it cannot satisfy these checks. The available token source platform/hosted/paxeer/contracts/BetaUsdl.sol has no constructor or initializer setting owner; ordinary deployment leaves owner zero and mint requires owner. No USDL implementation exists under root contracts."
 assumption = "Provide an owner-approved disposable token deployment/configuration interface or genuine fixed-address genesis allocation. Preserve all constructor and custody checks. No bond deployment, usable disposable USDL deployment or settlement completion is claimed."
+[observation.6.11.21]
+task = "6.11"
+file = "platform/hosted/webhooks/src/boundary.rs"
+symbol = "Client::request OutboundRequest"
+observed = "Owned webhook boundary requests are grouped into OutboundRequest; hosted and trusted callers construct that struct. Hosted public Result methods document error contracts; ready and policy accessors are must_use; CAS_SCRIPT drops unnecessary raw-string hashes. rustfmt --check on the touched webhook and ramp files exits 0. cargo clippy --offline --locked --manifest-path platform/Cargo.toml -p layerx-ramp-toolkit --all-targets -- -D warnings exits 0. cargo test --offline --locked --manifest-path platform/Cargo.toml -p layerx-platform-webhooks -p layerx-ramp-toolkit exits 0: 2 webhook unit tests and 9 ramp contract tests. Logs: qual-logs/clippy-ramps.log and qual-logs/test-owned.log."
+assumption = "Focused webhook Clippy still cannot use -D warnings because layerx-platform-gateway is a path dependency with existing deny-level diagnostics; with --cap-lints=warn the owned boundary.rs and hosted.rs emit no diagnostics."
+severity = "note"
+
+[observation.6.11.22]
+task = "6.11"
+file = "platform/ramps/toolkit/src/clients.rs"
+symbol = "HttpRequest ProviderCallbackWrite PaxeerObservation"
+observed = "Ramp toolkit groups MutualTlsClient JSON/HTTP arguments into HttpRequest, journal callback application into ProviderCallbackWrite, and Paxeer observations into PaxeerObservation. Public Result methods document error contracts. Event::OrderCreated boxes RampOrder. Record.hash serializes as record_hash. Unix lock File::open sets truncate(false). LayerxClient::submit_prepared returns LayerxSubmission because every path already mapped transport failure into that enum. allowed() nests equivalent or-patterns. No assertion, bound, or durability check was changed. cargo clippy -p layerx-ramp-toolkit --all-targets -- -D warnings and the package tests above exit 0."
+assumption = "JSON record_hash bytes and journal append/truncate/sync behavior are unchanged."
+severity = "note"
+
+[observation.6.11.23]
+task = "6.11"
+file = "platform/sdk/generators/src/main.rs"
+symbol = "generate_python_contract generate_jvm_contract repo_fixture"
+observed = "make platform-lint exits 2 with cargo clippy --workspace --all-targets -- -D warnings exiting 101 before later recipe steps. First compile failures are outside ownership in layerx-platform-sdkgen: sdk/generators/src/main.rs:534 if_not_else, sdk/generators/src/main.rs:1277 too_many_lines, and sdk/generators/tests/drift.rs:30 too_many_lines. Evidence: qual-logs/make-platform-lint.log."
+assumption = "Owned webhook and ramp diagnostics are not the aborting crate. Unowned webhook trusted.rs still has missing_errors_doc and must_use_candidate; unowned webhook main.rs still has manual_let_else and needless_pass_by_value; unowned gateway still has eight-parameter request grouping, missing error docs, must_use, needless_continue, and raw-string hashes. Those crates were not modified."
 severity = "blocker"
