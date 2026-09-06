@@ -1153,3 +1153,27 @@ symbol = "proof_bundle decode_bonds verify_submission SignatureMessage"
 observed = "Strict all-target all-feature Clippy passes for wire, crypto, proof, types, client and identity. Full tests pass for wire, crypto, proof, types and identity, including protocol 3 acceptance, protocol 4 refusal and real identity restart recovery. The complete no-fail-fast client test run fails only lni_schema's missing SimulateResponse schema golden; all later suites execute. Client handshake and batch tests pass after replacing expect calls with explicit diagnostic panics, preserving assertions. Crypto digest and debug output use the existing accessors so proof's no-custody dependency configuration passes strict lint. Logs: qual-logs/clippy-wire.log, clippy-crypto-final.log, clippy-proof-final.log, clippy-types.log, clippy-client-qualified.log, clippy-identity.log; qual-logs/test-wire.log, test-crypto-final.log, test-proof-final.log, test-types.log, test-client-final.log, test-identity.log, test-client-handshake.log and test-client-batch.log."
 assumption = "The recorded owner decision requires every gate to pass before completion. Observations 6.11.13 and 6.11.14 remain external blockers; passing crate lint does not establish a passing client test gate or make agent-lint."
 severity = "note"
+
+[observation.6.11.16]
+task = "6.11"
+file = "agent/crates/layerx-agentd/src/human.rs"
+symbol = "agent-lint"
+observed = "After repairing the SimulateResponse schema golden and generated API module documentation, make agent-lint exits 2 with Cargo exit 101 on existing strict lint failures in layerx-agentd and layerx-sdk. Diagnostics include missing error documentation, excessive function length and argument counts, generated receipt literals, and items after a test module. Exact locations: qual-logs/lint-errors.txt. Raw output: qual-logs/agent-lint-second.log. The subsequent dependency-policy recipe is not reached; running sh agent/tools/dependency-policy.sh independently exits 0, including unsafe policy checks, in qual-logs/dependency-policy-second.log."
+assumption = "Repairs to layerx-agentd and layerx-sdk require their owners. Keep checks intact and rerun the full agent-lint target after repairs; the independent policy pass is not an aggregate lint pass."
+severity = "blocker"
+
+[observation.6.11.17]
+task = "6.11"
+file = "platform/sdk/pipeline.kvx"
+symbol = "files.agent-api-rust operation_generated.rs"
+observed = "The corrected API generator emits operation_generated.rs with LayerX backticked in its module documentation. Repository generation and platform-sdk-check pass in the isolated qual-logs/regen tree. The required generated pipeline digest is b4f5d901ed269bfaa5437e6767f1fb4aa6c9b69795df7b359f5228f18c10b168. Exact generated change: qual-logs/pipeline-regeneration.patch; logs: qual-logs/sdk-generate-second-final.log and qual-logs/sdk-check-snapshot.log."
+assumption = "The pipeline lock is outside the repair ownership and remains unchanged in the branch. Its owner must apply the generated digest update and run platform-sdk-check on the integrated tree. Snapshot drift validation does not establish branch drift validation."
+severity = "blocker"
+
+[observation.6.11.18]
+task = "6.11"
+file = "agent/crates/layerx-agentd/tests/protocol2_restart.rs"
+symbol = "support::try_evidence_authority_after_restart"
+observed = "make agent-test exits 2 with Cargo exit 101 and E0425 at protocol2_restart.rs:20 because tests/support/mod.rs does not define try_evidence_authority_after_restart. Workspace test execution is blocked at compilation. Raw output: qual-logs/agent-test-second.log."
+assumption = "The test and its support module are outside repair ownership. Supply the real restart helper without weakening the existing test, then rerun make agent-test. The separate full layerx-client test exits 0 with all schema and encoder assertions unchanged; strict all-target layerx-agent-api Clippy exits 0. Logs: qual-logs/test-client-second.log and qual-logs/clippy-api-second.log."
+severity = "blocker"
