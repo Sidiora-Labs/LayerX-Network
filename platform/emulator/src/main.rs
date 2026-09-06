@@ -1235,6 +1235,14 @@ fn write_response(stream: &mut TcpStream, response: &Response) -> std::io::Resul
 }
 
 fn submit(emulator: &mut Emulator, request: &Request, trace: u64) -> Response {
+    if request.content_type != "application/octet-stream" {
+        return refusal(
+            trace,
+            415,
+            "activity_content_type_required",
+            "signed activity requires application/octet-stream",
+        );
+    }
     let activity = decode_activity(request);
     let activity = match activity {
         Ok(activity) if !activity.is_empty() => activity,
@@ -1771,21 +1779,12 @@ fn program_call(emulator: &mut Emulator, request: &Request, trace: u64) -> Respo
             )
         }
     };
-    let media_type = request
-        .content_type
-        .split(';')
-        .next()
-        .unwrap_or_default()
-        .trim();
-    if request.body.is_empty()
-        || !matches!(media_type, "application/json" | "application/octet-stream")
-        || (lifecycle && media_type != "application/octet-stream")
-    {
+    if request.body.is_empty() || request.content_type != "application/octet-stream" {
         return refusal(
             trace,
             415,
             "activity_content_type_required",
-            "program call requires bounded JSON or octet-stream content",
+            "signed program activity requires application/octet-stream",
         );
     }
     let decoded = match decode_program_activity(request) {

@@ -251,12 +251,24 @@ fn prefunded_accounts_appear_in_state() -> Result<(), String> {
 #[test]
 fn invalid_activity_is_refused_by_the_real_transition() -> Result<(), String> {
     let address = boot()?;
-    let reply = post_json(&address, "/v1/activities", "{\"activity\":\"00\"}")?;
+    let reply = request(
+        &address,
+        "POST",
+        "/v1/activities",
+        "application/octet-stream",
+        &[0],
+    )?;
     assert_eq!(reply.status, 400, "unexpected status: {}", reply.text());
     assert!(reply.text().contains("\"ok\":false"));
     assert!(error_code(&reply).is_some(), "missing typed error code");
 
-    let empty = post_json(&address, "/v1/activities", "{\"activity\":\"\"}")?;
+    let empty = request(
+        &address,
+        "POST",
+        "/v1/activities",
+        "application/octet-stream",
+        &[],
+    )?;
     assert_eq!(empty.status, 400);
     assert_eq!(error_code(&empty).as_deref(), Some("invalid_argument"));
     Ok(())
@@ -265,7 +277,13 @@ fn invalid_activity_is_refused_by_the_real_transition() -> Result<(), String> {
 #[test]
 fn fault_injection_changes_transition_behaviour() -> Result<(), String> {
     let address = boot()?;
-    let baseline = post_json(&address, "/v1/activities", "{\"activity\":\"00\"}")?;
+    let baseline = request(
+        &address,
+        "POST",
+        "/v1/activities",
+        "application/octet-stream",
+        &[0],
+    )?;
     assert_eq!(baseline.status, 400);
     let baseline_code = error_code(&baseline).ok_or("baseline had no error code")?;
 
@@ -282,7 +300,13 @@ fn fault_injection_changes_transition_behaviour() -> Result<(), String> {
     );
     assert!(configured.text().contains("\"configured\":true"));
 
-    let injected = post_json(&address, "/v1/activities", "{\"activity\":\"00\"}")?;
+    let injected = request(
+        &address,
+        "POST",
+        "/v1/activities",
+        "application/octet-stream",
+        &[0],
+    )?;
     assert_eq!(
         injected.status, 503,
         "reject fault surfaces as service unavailable"
@@ -1451,5 +1475,44 @@ fn move_quote_commit_replay_recovery_and_lost_ack_use_the_real_transition() -> R
             .and_then(serde_json::Value::as_u64),
         Some(400)
     );
+    Ok(())
+}
+
+#[test]
+fn mutations_require_octet_stream_bodies() -> Result<(), String> {
+    let address = boot()?;
+    for path in [
+        "/v1/activities",
+        "/v1/programs/call",
+        "/v1/programs/deploy",
+        "/v1/programs/upgrade",
+        "/v1/programs/wind-down",
+    ] {
+        for content_type in [
+            "application/json",
+            "text/plain",
+            "application/octet-stream; charset=utf-8",
+        ] {
+            let reply = request_with_idempotency(
+                &address,
+                "POST",
+                path,
+                content_type,
+                b"{}",
+                Some(&"11".repeat(32)),
+            )?;
+            assert_eq!(reply.status, 415, "{}", reply.text());
+            if path.starts_with("/v1/programs/") {
+                let document: serde_json::Value =
+                    serde_json::from_slice(&reply.body).map_err(|error| error.to_string())?;
+                assert_eq!(document["reason"], "activity_content_type_required");
+            } else {
+                assert_eq!(
+                    error_code(&reply).as_deref(),
+                    Some("activity_content_type_required")
+                );
+            }
+        }
+    }
     Ok(())
 }

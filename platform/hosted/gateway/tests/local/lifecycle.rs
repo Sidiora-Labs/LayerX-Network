@@ -473,21 +473,21 @@ fn issue_local_key(
         &gateway_http,
         "/v1/keys",
         session_token,
-        &serde_json::json!({"signer_public_key":hex_encode(&SigningKey::from_bytes(&random32()).verifying_key().to_bytes()),"scopes":["program:call"],"quota_requests":1000,"quota_window_seconds":60}),
+        &serde_json::json!({"signer_public_key":hex_encode(&SigningKey::from_bytes(&random32()).verifying_key().to_bytes()),"scopes":["activity:write","program:call"],"quota_requests":1000,"quota_window_seconds":60}),
         403,
     );
     let key = local_json(
         &gateway_http,
         "/v1/keys",
         session_token,
-        &serde_json::json!({"signer_public_key":signer,"scopes":["program:call"],"quota_requests":1000,"quota_window_seconds":60}),
+        &serde_json::json!({"signer_public_key":signer,"scopes":["activity:write","program:call"],"quota_requests":1000,"quota_window_seconds":60}),
         201,
     );
     let replayed_key = local_json(
         &gateway_http,
         "/v1/keys",
         session_token,
-        &serde_json::json!({"signer_public_key":signer,"scopes":["program:call"],"quota_requests":1000,"quota_window_seconds":60}),
+        &serde_json::json!({"signer_public_key":signer,"scopes":["activity:write","program:call"],"quota_requests":1000,"quota_window_seconds":60}),
         200,
     );
     assert!(

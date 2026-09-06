@@ -22,6 +22,16 @@ jq -c '.[]' "$LAYERX_LIFECYCLE_MANIFEST" | while IFS= read -r operation; do
   activity_id=$(printf '%s' "$operation" | jq -er '.activity_id')
   url="$LAYERX_GATEWAY_URL/v1/programs/$route"
   test -s "$file"
+  for mutation_path in activities programs/call programs/deploy programs/upgrade programs/wind-down; do
+    for media_type in application/json text/plain 'application/octet-stream; charset=utf-8'; do
+      status=$(curl --silent --show-error --cacert "$LAYERX_GATEWAY_CA_FILE" -o "$directory/media.json" -w '%{http_code}' \
+        -H "Authorization: $authorization" -H "Content-Type: $media_type" -H "Idempotency-Key: $key" --data-binary "@$file" "$LAYERX_GATEWAY_URL/v1/$mutation_path")
+      if test "$status" != 415; then
+        printf 'media-type refusal failed for %s at %s: HTTP %s\n' "$media_type" "$mutation_path" "$status" >&2
+        exit 1
+      fi
+    done
+  done
   test "$(curl --silent --show-error --cacert "$LAYERX_GATEWAY_CA_FILE" -o "$directory/unauthorized.json" -w '%{http_code}' \
     -H 'Content-Type: application/octet-stream' -H "Idempotency-Key: $key" --data-binary "@$file" "$url")" = 401
   test "$(curl --silent --show-error --cacert "$LAYERX_GATEWAY_CA_FILE" -o "$directory/content.json" -w '%{http_code}' \

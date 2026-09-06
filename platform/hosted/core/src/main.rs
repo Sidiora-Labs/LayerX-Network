@@ -851,25 +851,10 @@ fn simulate_route(config: &Config, request: &Request) -> Response {
 fn activities_route(config: &Config, request: &Request) -> Response {
     let ordinal = program_lifecycle::ordinal(&request.path)
         .or_else(|| (request.path == "/v1/programs/call").then_some(3));
-    if program_lifecycle::ordinal(&request.path).is_some()
-        && request.headers.get("content-type").map(String::as_str)
-            != Some("application/octet-stream")
-    {
+    if request.headers.get("content-type").map(String::as_str) != Some("application/octet-stream") {
         return refusal(415, "activity_content_type_required", None);
     }
-    let canonical = match request.headers.get("content-type").map(String::as_str) {
-        Some("application/octet-stream") => request.body.clone(),
-        Some("application/json") => {
-            let Ok(body) = serde_json::from_slice::<ActivityBody>(&request.body) else {
-                return refusal(400, "invalid_argument", None);
-            };
-            match hex_decode(&body.activity) {
-                Ok(bytes) => bytes,
-                Err(_) => return refusal(400, "invalid_argument", None),
-            }
-        }
-        _ => return refusal(400, "content_type_required", None),
-    };
+    let canonical = request.body.clone();
     if canonical.is_empty() || canonical.len() > 1_048_576 {
         return refusal(400, "invalid_argument", None);
     }
@@ -1192,12 +1177,12 @@ fn core_route(config: &Config, request: &Request) -> Response {
             | "/v1/programs/upgrade"
             | "/v1/programs/wind-down",
         ) => {
+            if request.headers.get("content-type").map(String::as_str)
+                != Some("application/octet-stream")
+            {
+                return refusal(415, "activity_content_type_required", None);
+            }
             if let Some(ordinal) = program_lifecycle::ordinal(path) {
-                if request.headers.get("content-type").map(String::as_str)
-                    != Some("application/octet-stream")
-                {
-                    return refusal(415, "activity_content_type_required", None);
-                }
                 let Some(key) = request.headers.get("idempotency-key") else {
                     return refusal(400, "idempotency_key_required", None);
                 };

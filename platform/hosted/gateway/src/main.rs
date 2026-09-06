@@ -155,12 +155,6 @@ struct ModuleDeclaration {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct JsonActivity {
-    activity: String,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct ProgramCallBudgetBody {
     fuel: String,
     fee_limit: String,
@@ -1756,17 +1750,7 @@ fn activity(
         .get("content-type")
         .map(String::as_str)
         .unwrap_or("");
-    let supported_content_type = if lifecycle_ordinal.is_some() {
-        media_type_is(request, "application/octet-stream")
-    } else if program_call {
-        media_type_is(request, "application/json")
-            || media_type_is(request, "application/octet-stream")
-    } else {
-        matches!(
-            content_type,
-            "application/json" | "application/octet-stream"
-        )
-    };
+    let supported_content_type = content_type == "application/octet-stream";
     if !supported_content_type || request.body.is_empty() {
         return response(415, "activity_content_type_required", None);
     }
@@ -1780,17 +1764,8 @@ fn activity(
             Ok((activity, program)) => (activity, Some(program)),
             Err(_) => return response(400, "invalid_program_call", None),
         }
-    } else if content_type == "application/octet-stream" {
-        (request.body.clone(), None)
     } else {
-        let body: JsonActivity = match serde_json::from_slice(&request.body) {
-            Ok(value) => value,
-            Err(_) => return response(400, "invalid_activity", None),
-        };
-        match decode_hex(&body.activity, 512 * 1024) {
-            Ok(value) => (value, None),
-            Err(_) => return response(400, "invalid_activity", None),
-        }
+        (request.body.clone(), None)
     };
     let retained_signed_activity = hex(&canonical);
     let signer_public_key = match parse_hex32(&record.signer_public_key) {

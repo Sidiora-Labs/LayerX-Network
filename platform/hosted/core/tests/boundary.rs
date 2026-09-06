@@ -1523,26 +1523,25 @@ fn assert_unavailable_public_routes(core: &Http, admin: &Http) {
         "method_not_allowed",
     );
     assert_refusal(&core.get("/livez?x=<script>"), 400, "invalid_request");
-    assert_refusal(
-        &core.request(
-            "POST",
-            "/v1/activities",
-            &[("Content-Type", "text/plain")],
-            b"zz",
-        ),
-        400,
-        "content_type_required",
-    );
-    assert_refusal(
-        &core.request(
-            "POST",
-            "/v1/activities",
-            &[("Content-Type", "application/json")],
-            b"{\"activity\":\"zz\"}",
-        ),
-        400,
-        "invalid_argument",
-    );
+    for path in [
+        "/v1/activities",
+        "/v1/programs/call",
+        "/v1/programs/deploy",
+        "/v1/programs/upgrade",
+        "/v1/programs/wind-down",
+    ] {
+        for content_type in [
+            "application/json",
+            "text/plain",
+            "application/octet-stream; charset=utf-8",
+        ] {
+            assert_refusal(
+                &core.request("POST", path, &[("Content-Type", content_type)], b"{}"),
+                415,
+                "activity_content_type_required",
+            );
+        }
+    }
 }
 
 #[test]
@@ -1572,13 +1571,12 @@ fn boundary_refuses_typed_and_journals_while_the_daemon_is_down() {
         ),
         "treasury send",
     );
-    let body = serde_json::json!({ "activity": hex_encode(&signed.canonical) }).to_string();
     assert_refusal(
         &core.request(
             "POST",
             "/v1/activities",
-            &[("Content-Type", "application/json")],
-            body.as_bytes(),
+            &[("Content-Type", "application/octet-stream")],
+            &signed.canonical,
         ),
         503,
         "node_unavailable",
@@ -1654,15 +1652,14 @@ fn boundary_serves_the_real_sequencer_over_the_lni() {
         ),
         "treasury send",
     );
-    let activity = serde_json::json!({ "activity": hex_encode(&signed.canonical) }).to_string();
     let submitted = core.request(
         "POST",
         "/v1/activities",
         &[
-            ("Content-Type", "application/json"),
+            ("Content-Type", "application/octet-stream"),
             ("Idempotency-Key", "act-1"),
         ],
-        activity.as_bytes(),
+        &signed.canonical,
     );
     let outcome = json(&submitted);
     let refused_receipt =

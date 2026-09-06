@@ -1856,16 +1856,30 @@ fn check_refusals(cluster: &Cluster, valid: &[u8]) -> (String, String) {
         b"not an activity",
     ));
     assert_refusal(&garbage, 400, "malformed_activity");
-    let wrong_type = client.call(&Call {
-        method: "POST",
-        path: "/v1/activities",
-        bearer: Some(&cluster.gateway_token),
-        idempotency: Some("wrong-type"),
-        content_type: Some("application/json"),
-        body: valid,
-        identity: None,
-    });
-    assert_refusal(&wrong_type, 400, "content_type_required");
+    for path in [
+        "/v1/activities",
+        "/v1/programs/call",
+        "/v1/programs/deploy",
+        "/v1/programs/upgrade",
+        "/v1/programs/wind-down",
+    ] {
+        for content_type in [
+            "application/json",
+            "text/plain",
+            "application/octet-stream; charset=utf-8",
+        ] {
+            let wrong_type = client.call(&Call {
+                method: "POST",
+                path,
+                bearer: Some(&cluster.gateway_token),
+                idempotency: Some("wrong-type"),
+                content_type: Some(content_type),
+                body: valid,
+                identity: None,
+            });
+            assert_refusal(&wrong_type, 400, "content_type_required");
+        }
+    }
     let no_key = client.call(&Call {
         method: "POST",
         path: "/v1/activities",
