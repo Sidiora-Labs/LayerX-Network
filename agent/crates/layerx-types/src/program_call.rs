@@ -156,6 +156,56 @@ mod tests {
     use super::*;
 
     #[test]
+    fn native_c_fixture_pins_calldata_capabilities_and_access() -> Result<(), InvalidNativeCall> {
+        let mut capabilities = vec![0, 1, 5];
+        capabilities.extend_from_slice(&[0x22; 32]);
+        capabilities.extend_from_slice(&[0x33; 32]);
+        capabilities.extend_from_slice(&7_u128.to_be_bytes());
+        let mut access = b"LayerX/programs/access-declaration/v1\0\x01".to_vec();
+        access.extend_from_slice(&101_u32.to_be_bytes());
+        access.extend_from_slice(b"LayerX/programs/access-set/v1\0\0\0\0\x01");
+        access.extend_from_slice(&[0x33; 32]);
+        access.extend_from_slice(&[0x22; 32]);
+        access.extend_from_slice(&[1, 0, 0]);
+        let call = NativeProgramCall {
+            program_id: ProgramId::new([0x11; 32]),
+            guest_abi: 2,
+            entrypoint: b"layerx_call",
+            calldata: &[0, 0x61, 0xff, 0x10],
+            capabilities: &capabilities,
+            access_declaration: &access,
+            response_capacity: 16,
+            resources: Resources([
+                1_000_000, 16_777_216, 1_048_576, 1_048_576, 64, 1_048_576, 4096,
+            ]),
+        };
+        let expected_hex = concat!(
+            "1111111111111111111111111111111111111111111111111111111111111111",
+            "0002000b000000040053000000900000001000000000000f4240000000000100",
+            "0000000000000010000000000000001000000000000000000040000000000010",
+            "000000000000000010006c61796572785f63616c6c0061ff1000010522222222",
+            "2222222222222222222222222222222222222222222222222222222233333333",
+            "3333333333333333333333333333333333333333333333333333333300000000",
+            "0000000000000000000000074c61796572582f70726f6772616d732f61636365",
+            "73732d6465636c61726174696f6e2f76310001000000654c61796572582f7072",
+            "6f6772616d732f6163636573732d7365742f7631000000000133333333333333",
+            "3333333333333333333333333333333333333333333333333322222222222222",
+            "22222222222222222222222222222222222222222222222222010000",
+        );
+        let expected = (0..expected_hex.len())
+            .step_by(2)
+            .map(|offset| {
+                u8::from_str_radix(&expected_hex[offset..offset + 2], 16)
+                    .map_err(|_| InvalidNativeCall)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        assert_eq!(expected.len(), 348);
+        assert_eq!(call.encode()?, expected);
+        assert_eq!(NativeProgramCall::decode(&expected)?, call);
+        Ok(())
+    }
+
+    #[test]
     fn staged_c_call_encoding_is_byte_exact() -> Result<(), InvalidNativeCall> {
         let mut capabilities = vec![0, 3, 2, 3, 5];
         capabilities.extend_from_slice(&[9; 32]);
