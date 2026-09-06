@@ -1239,3 +1239,43 @@ symbol = "check_simulation_receipt simulate_activity cluster_artifacts"
 observed = "The boundary simulation transport and receipt assertions were extracted into helpers without removing checks. Boundary and core harnesses accept LAYERX_TEST_NATIVE_BIN_DIR and retain their worktree build/bin default. Strict all-target all-feature boundary/core clippy exits 0, qual-logs/boundary-core-clippy.log. Core tests against /root/Layerx-protocol/build/bin pass 6 of 6, qual-logs/core-original.log. The complete boundary suite with the existing-source escrow guest passes 8 and fails 2 because custody Python dependencies are absent, qual-logs/real-node-with-guest.log. Repository-declared bridge Python dependencies were then installed locally, and native sign-credit/test-credit helpers built without source edits; qual-logs/bridge-dependencies.log and qual-logs/bridge-helper-build.log, each exit 0. The two funded escrow tests pass against the supplied native binaries after those prerequisites, qual-logs/funded-escrow-with-helpers.log, exit 0. The final complete boundary suite passes all 10 tests with those prerequisites, qual-logs/real-node-qualified-original.log, exit 0."
 assumption = "These bounded results do not complete strict lint across every requested crate or the full requested lifecycle. The simulation refusal/replay and public/internal receipt-wrapper assertions remain intact."
 severity = "note"
+
+[observation.6.4.20]
+task = "6.4"
+file = "platform/hosted/agent-boundary/tests/real_node/lifecycle/post_upgrade.rs"
+symbol = "calls_execute_before_and_after_upgrade_then_exit"
+observed = "The funded real-node regression submits DEPLOY, a successful CALL and a successful UPGRADE, then the post-upgrade CALL returns result -736 at global and account sequence 5. Its authenticated terminal is callback stage 5/status -3. The unchanged success assertion fails. The full boundary gate passes 5 unit tests and 10 integration tests and fails this new integration test; qual-logs/owner-decisions-boundary-tests.log, exit 101, with LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin. Emulator's existing lifecycle regression also returns -736 and callback stage 5/status -3 at CALL sequence 3; qual-logs/media-real-tests.log, exit 101."
+assumption = "The native runtime and C fixture owners must reconcile the post-upgrade execution failure. No success assertion or execution check was relaxed. The boundary regression does not reach registration or exit after its failed CALL, and complete cross-surface lifecycle qualification remains blocked."
+severity = "blocker"
+
+[observation.6.4.21]
+task = "6.4"
+file = "platform/hosted/gateway/tests/local/lifecycle.rs"
+symbol = "start_local_gateway program_head deployment_ingress_unavailable"
+observed = "The local gateway harness configures its Programs registry endpoint as the core. Core unavailable_capability explicitly refuses /v1/programs/registry and its children, while gateway program_head requires a receipt-verified version and current state head. The actual registry still routes POST /__registry/deployments to deployment_ingress_unavailable because canonical node deployment proof production is absent."
+assumption = "Positive gateway CALL requires real canonical deployment ingestion and a launched verified registry projection. Registry changes are restricted to lint in this worktree. No fabricated registry response, unchecked head or alternate verification path was introduced."
+severity = "blocker"
+
+[observation.6.4.22]
+task = "6.4"
+file = "platform/hosted/agent-boundary/src/main.rs"
+symbol = "receipt_route result_refusal disabled_module_is_a_typed_conflict"
+observed = "The recorded owner decisions require readiness wire_version string 3, daemon-down core admin HTTP 422 with unchanged typed codes, and boundary receipts wrapped as result containing activity_id and receipt. Current core readiness and admin assertions already implement these decisions and all six core tests pass in qual-logs/media-real-tests.log. Boundary receipt_route now wraps both public and internal receipt results, and its real-node contract test passes. The exact ModuleDisabled mapping is pinned to HTTP 409 module_disabled with retry_after 5 by a passing unit test."
+assumption = "req.14 ac_5 maps typed daemon refusals to 4xx and absent LNI functionality to 503; it specifies no different status for ModuleDisabled. Task 6.5 concerns identity and adds no simulation status override. Existing successful noncommitting simulation coverage is preserved. The internal receipt consumer in platform/hosted/webhooks/src/trusted.rs must adopt the wrapped response through its owner."
+severity = "note"
+
+[observation.6.4.23]
+task = "6.4"
+file = "platform/hosted/registry/tests/journal.rs"
+symbol = "fixture fixture_in_epoch state_fixture state_fixture_with_key platform-lint"
+observed = "Registry strict all-target lint exposes argument-count, borrowed-payload and function-length diagnostics in the included programs/crates/layerx-programs-registry/tests/support/mod.rs at lines 312, 338, 383 and 411. The shared support file is outside registry lint ownership. make platform-lint exits 2 on unowned testnet missing Errors documentation at platform/hosted/testnet/src/lib.rs:26 and SDK generator conditional/function-length diagnostics at platform/sdk/generators/src/main.rs:531 and 1274 and platform/sdk/generators/tests/drift.rs:30; qual-logs/platform-lint-second-pass.log. Gateway request argument grouping also requires interop HTTP call-site changes outside lane ownership."
+assumption = "The affected owners must repair the shared helpers and aggregate diagnostics without suppression or weakened checks. Full emulator, gateway and CLI lint remains unfinished. Retained boundary helpers and partial registry/media-type repairs are not globally qualified."
+severity = "blocker"
+
+[observation.6.4.24]
+task = "6.4"
+file = "platform/hosted/gateway/tests/lifecycle-boundary.sh"
+symbol = "mutations_require_octet_stream_bodies activities_route activity submit_route"
+observed = "Core, boundary, emulator and gateway mutation routes reject JSON, plain text and octet-stream with charset parameters. Core enforces the media type before journal replay and new submission; all 6 final core tests pass, qual-logs/core-final-tests.log. Boundary's real component contract test passes within the run recorded in observation 6.4.20. The focused real emulator media-type test passes, qual-logs/media-emulator-rerun.log. The real gateway local lifecycle test passes after its test key requests canonical activity:write and program:call scopes, qual-logs/gateway-local-canonical-scopes.log; its existing DEPLOY, UPGRADE and DEPRECATE receipts and offline replay checks remain intact. Core and boundary strict all-target all-feature clippy pass, qual-logs/boundary-core-final-clippy.log. Registry tests pass 14 tests, qual-logs/registry-tests.log; its final strict all-target gate fails only on the six shared-support diagnostics described in observation 6.4.23, qual-logs/registry-clippy-qualified-scope.log. make platform-sample-dependencies-ready exits 2 because the local Python sample environment is absent, qual-logs/sample-dependencies-second-pass.log."
+assumption = "The media-type and registry repairs remain uncommitted pending the required complete lint qualification. Gateway positive CALL and exit coverage remain incomplete, and the new boundary post-upgrade regression remains red. Passing these bounded gates does not qualify the complete Programs lifecycle, emulator conformance or platform-test-sdks."
+severity = "note"
