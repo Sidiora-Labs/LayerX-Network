@@ -53,5 +53,5 @@ for ((attempt=0; attempt<200; attempt++)); do
 done
 cp "$build_dir/tests/lxp_test_program_admission" "$work/client"
 chmod 0755 "$work/client"
-setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$work/run/layerxd.lni.sock"
+setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$work/run/layerxd.lni.sock" "${@:2}"
 kill -0 "$sequencer_pid"
