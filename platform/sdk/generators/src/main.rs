@@ -967,7 +967,7 @@ fn generate_rust_operation_catalog(repo_root: &Path) -> Result<String, String> {
     }
 
     let mut output = String::from(
-        "//! Code generated from the LayerX Agent API schema. DO NOT EDIT.\n\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub enum Operation {\n",
+        "//! Code generated from the `LayerX` Agent API schema. DO NOT EDIT.\n\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub enum Operation {\n",
     );
     for operation in &operations {
         writeln!(output, "    {},", rust_identifier(operation))

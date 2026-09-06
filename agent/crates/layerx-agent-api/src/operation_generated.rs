@@ -1,4 +1,4 @@
-//! Code generated from the LayerX Agent API schema. DO NOT EDIT.
+//! Code generated from the `LayerX` Agent API schema. DO NOT EDIT.
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Operation {
