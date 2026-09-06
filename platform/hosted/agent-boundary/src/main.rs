@@ -1964,3 +1964,18 @@ fn main() {
         std::process::exit(2);
     }
 }
+
+#[cfg(test)]
+mod refusal_tests {
+    use super::*;
+
+    #[test]
+    fn disabled_module_is_a_typed_conflict() {
+        let refusal = result_refusal(ResultCode::from_raw(
+            layerx_types::result::KnownResult::ModuleDisabled.raw(),
+        ));
+        assert_eq!(refusal.status, 409);
+        assert_eq!(refusal.code, "module_disabled");
+        assert_eq!(refusal.retry_after, Some(5));
+    }
+}
