@@ -55,3 +55,32 @@ cp "$build_dir/tests/lxp_test_program_admission" "$work/client"
 chmod 0755 "$work/client"
 setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$work/run/layerxd.lni.sock" "${@:2}"
 kill -0 "$sequencer_pid"
+
+if [[ ${2:-} == --maintenance ]]; then
+    kill -KILL "$sequencer_pid"
+    wait "$sequencer_pid" || true
+    sequencer_pid=
+    kill -KILL "$replica_pid"
+    wait "$replica_pid" || true
+    replica_pid=
+    (set -a; source "$work/data/replica.env"; exec "$root/$build_dir/bin/layerxd" --authority-replica "$work/data/replica.conf") >> "$work/replica.log" 2>&1 &
+    replica_pid=$!
+    (set -a; source "$work/data/sequencer.env"; exec "$root/$build_dir/bin/layerxd" --serve "$work/data/sequencer.conf") >> "$work/sequencer.log" 2>&1 &
+    sequencer_pid=$!
+    python3 - "$work/run/layerxd.lni.sock" "$sequencer_pid" <<'PYWAIT'
+import os, socket, sys, time
+for attempt in range(200):
+    os.kill(int(sys.argv[2]), 0)
+    try:
+        with socket.socket(socket.AF_UNIX) as connection:
+            connection.connect(sys.argv[1])
+        break
+    except OSError:
+        time.sleep(0.1)
+else:
+    raise SystemExit("restarted daemon did not accept LNI connections")
+PYWAIT
+    setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$work/run/layerxd.lni.sock" --maintenance-recovered
+    kill -0 "$sequencer_pid"
+    kill -0 "$replica_pid"
+fi

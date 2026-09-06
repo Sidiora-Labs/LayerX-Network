@@ -1585,3 +1585,27 @@ symbol = "verify_nested_account lxp_daemon_account_evidence_publish_batch"
 observed = "Account-state verification requires a sequencer-signed ordinary Receipt::Protocol whose global sequence equals the signed batch header last_sequence and whose resulting root equals the account proof root. Native account-evidence publication enforces the same final ordinary receipt contract. A raw lxp_programs_occupancy_receipt at the final sequence cannot satisfy that decoder and signature contract; retaining the last activity receipt after maintenance would instead bind the pre-maintenance root. Source evidence is retained in qual-logs/pass2-occupancy-consumers.log. The existing checks are unchanged."
 assumption = "A versioned maintenance proof variant must be implemented in the Rust account-state verifier and native evidence publisher before combined occupancy publication can provide valid account reads. The maintenance bytes, authorized signed header, final-leaf inclusion, batch and sequence binding, schedule commitment, settlement evidence digest and final state root must be verified without weakening the activity-only proof variant."
 severity = "blocker"
+
+[observation.6.4.9]
+task = "6.4"
+file = "agent/crates/layerx-client/src/evidence.rs"
+symbol = "decode_nested_evidence decode_receipt_bytes verify_nested_account"
+observed = "The account evidence client accepts only WIRE_VERSION 1, decodes receipt bytes with MAX_RECEIPT_BYTES 4096, and agent/crates/layerx-client/src/read.rs unconditionally invokes the ordinary verify_nested_account verifier. A versioned account proof carrying the final occupancy maintenance leaf therefore requires an explicitly selected client decoding and verification path before consumers can use it. The ordinary format, receipt bound, signature verification and exact final-sequence/root checks must remain unchanged. Source evidence is retained in qual-logs/pass3-integration-dependencies.log."
+assumption = "The account evidence client must retain the maintenance discriminator through decoding, apply the maintenance-specific canonical record bound, and call verify_nested_account_maintenance with the committed activity count and authenticated parameter context. Hosted route changes alone do not update this lower-level consumer."
+severity = "blocker"
+
+[observation.6.4.31]
+task = "6.4"
+file = "agent/crates/layerx-crypto/src/lib.rs"
+symbol = "SignatureMessage::protocol_version SignatureMessage::network_id SignatureMessage::canonical"
+observed = "cargo clippy --locked --manifest-path agent/Cargo.toml -p layerx-proof -p layerx-wire --all-targets -- -D warnings exits 101 because the three crate-private methods at lines 71-79 are unused. The exact output is retained in qual-logs/pass5-clippy-2.log. cargo test --locked --manifest-path agent/Cargo.toml -p layerx-proof -p layerx-wire exits 0 in qual-logs/pass5-rust-tests-2.log; the passing tests do not satisfy the failed strict lint gate."
+assumption = "The crypto crate requires a source repair within its ownership while preserving the strict warnings check. No lint allowance or suppression is authorized."
+severity = "blocker"
+
+[observation.6.4.32]
+task = "6.4"
+file = "tests/programs/test_call_activity.c"
+symbol = "artifact_lifecycle_fixture execute_artifact_fixture_activity"
+observed = "build/tests/programs_call_activity --post-upgrade-batch exits 1 at the protocol-3 post-upgrade assertion, recorded in qual-logs/pass5-post-upgrade-2.log. This direct-activity fixture changes execution.batch_number to 2 for UPGRADE and 3 for CALL without finalizing either preceding batch. Its unchanged global sequence assertions require 4 after UPGRADE and 5 after CALL, leaving no maintenance sequence. The separate real prepared-batch lifecycle with maintenance and maximum 64-activity publication passes in qual-logs/pass5-max-confirm.log."
+assumption = "The direct-activity regression and durable batch-maintenance contract require reconciliation. Maintenance must remain a signed batch leaf with its own sequence; neither the occupancy cursor check nor the existing sequence assertions may be weakened to make this direct-activity fixture pass."
+severity = "blocker"
