@@ -239,7 +239,7 @@ fn write_only_scope_cannot_construct_a_read_only_server() {
     session.request.scopes = BTreeSet::from(["write:submit".to_owned()]);
     let (control, credential) = control(&root, &session, &capability);
     assert!(matches!(
-        ReadOnly::bind(control, credential, capability.id, 50, &root.join("audit")),
+        ReadOnly::bind(control, credential, capability.id, 50, root.join("audit")),
         Err(ServerError::NoScope)
     ));
     let _ = fs::remove_dir_all(root);
@@ -287,7 +287,7 @@ fn read_only_server_refuses_every_read_once_its_session_is_closed() {
         Some(2 + reads.len())
     );
     assert!(matches!(
-        ReadOnly::bind(control, credential, capability.id, 50, &root.join("rebind")),
+        ReadOnly::bind(control, credential, capability.id, 50, root.join("rebind")),
         Err(ServerError::RevokedSession)
     ));
     let _ = fs::remove_dir_all(root);
