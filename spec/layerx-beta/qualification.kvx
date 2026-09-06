@@ -1066,3 +1066,19 @@ symbol = "real_weth_protocol_three_custody_evidence"
 observed = "A fresh chain 31337 wraps actual ETH in the repository WETH contract and deposits the resulting tokens in the real LayerXVault, configured through the real timelock and AssetRegistry. A second Anvil forks the exact deposited chain state. custody_credit.py verifies both origins, header ancestry, eth_getProof runtime accounts and complete receipt/transaction trie reconstruction, emits a 207-byte profile and 427-byte attestor credit, and test_evidence.py passes its real-evidence tamper and divergent-finality checks. The Rust integration independently checks the attestor signature and native beneficiary derivation. Final complete package tests including the WETH integration pass with the worktree Python virtual environment on PATH; qual-logs/final-test.log. Package formatting and strict all-target clippy pass; qual-logs/final-fmt-check.log and qual-logs/final-clippy.log. make human-test-unit passes; qual-logs/human-unit.log."
 assumption = "The fork observer shares its upstream trust source; distinct origins are local replication evidence, not independent production quorum or production finality. Generated actor and attestor seeds and chain artifacts remain untracked. Local-chain deployment refuses chain 125 and port 18545. The aggregate human-lint dependency failure remains open."
 severity = "info"
+
+[observation.custody.genesis_and_funded_send_gap]
+task = "6.1"
+file = "tests/bridge/custody_genesis.py"
+symbol = "lxp_genesis_build_fresh_custody"
+observed = "custody_genesis.py builds a canonical 395-byte protocol-3 request from the produced custody profile with a fresh sequencer key. The supplied /root/Layerx-protocol/build/bin/layerx-genesis-build accepts the profile and emits signed genesis artifacts; exit 0 in qual-logs/item3-genesis-final.log. The guide delegates external registration to the normal external registration flow. deploy_local_custody.py deploys WETH, LayerXVault, AssetRegistry and LayerXTimelock, but no GuarantorBond or CheckpointRegistry. platform/hosted/node/bootstrap.sh generates ordinary genesis and has no custody-profile input. No local daemon credit submission, funded SEND, Rust SEND receipt verification or binary-path-gated funded integration test has been completed. Observation 6.1.1 remains open for funded execution."
+assumption = "Complete a real isolated settlement registration and daemon bootstrap for the exact signed custody genesis before submitting credit and SEND. Do not fabricate registration confirmation, substitute ordinary genesis or interpret an acknowledgement as a receipt. The native-ready artifact handoff is absent; only the existing genesis builder was exercised."
+severity = "blocker"
+
+[observation.custody.persistent_chain_requirements]
+task = "6.1"
+file = "tests/bridge/custody_genesis.py"
+symbol = "custody-credit-profile/v1"
+observed = "The produced profile pins local chain 31337 and its genesis hash, a locally deployed vault runtime, and a freshly generated custody attestor. It cannot authorize credit on the persistent Paxeer chain. No persistent-chain deposit or transaction was performed."
+assumption = "Persistent funding requires a real Paxeer deposit, the owner-authorized custody attestor key, matching external chain identity and vault pins, and a newly signed custody-enabled genesis with matching settlement registration. The existing marker-free genesis cannot acquire Bridge retroactively. Activation must satisfy the selected deployment's governance and finalization conditions; local time advancement is not evidence of persistent activation."
+severity = "blocker"
