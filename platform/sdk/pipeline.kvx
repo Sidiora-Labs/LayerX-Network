@@ -19,7 +19,7 @@ language = "rust"
 root = "agent/crates/layerx-agent-api/src"
 
 [files.agent-api-rust]
-"operation_generated.rs" = "b59951110d1cb938a486fdc063ef24b2ba9d3899d1fe9e8f92f3563f2ed9dfbf"
+"operation_generated.rs" = "b4f5d901ed269bfaa5437e6767f1fb4aa6c9b69795df7b359f5228f18c10b168"
 
 [output.agent-rust]
 language = "rust"
