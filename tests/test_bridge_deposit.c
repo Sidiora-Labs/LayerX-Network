@@ -101,6 +101,7 @@ int main(void)
     uint8_t paxeer_public_key[32];
     uint64_t parameters = 1U;
     lxp_u128 total;
+    lxp_transfer_source_authority authority = {0};
     const char *reserve_name = "system:paxeer-reserve";
     const char *agent_name = "agent:did:key:a:main";
 
@@ -199,6 +200,12 @@ int main(void)
     transfer.context.assets = &asset_state;
     transfer.context.asset_count = 1U;
     transfer.context.protocol_system_capability = true;
+    (void)memcpy(authority.authorized_from, reserve->id, 32U);
+    authority.debit_authority_kind = LXP_AUTH_PROTOCOL_MODULE;
+    authority.protocol_system_capability = true;
+    transfer.context.debit_authority_kind = LXP_AUTH_PROTOCOL_MODULE;
+    transfer.context.source_authorities = &authority;
+    transfer.context.source_authority_count = 1U;
     bridge = (lxp_bridge_deposit_context){
         &module_ctx, &assets, &accounts, checkpoints, 7U,
         LXP_PROTOCOL_VERSION
