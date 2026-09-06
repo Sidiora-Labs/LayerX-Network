@@ -310,7 +310,7 @@ fn binding_refuses_unlinked_cross_tenant_expired_empty_and_unloaded_authority() 
             credential,
             capability.id,
             50,
-            &root.join("unlinked-audit")
+            root.join("unlinked-audit")
         ),
         Err(ServerError::CapabilityMismatch)
     ));
@@ -323,7 +323,7 @@ fn binding_refuses_unlinked_cross_tenant_expired_empty_and_unloaded_authority() 
             credential,
             cross_tenant.id,
             50,
-            &root.join("cross-audit")
+            root.join("cross-audit")
         ),
         Err(ServerError::MissingCapability)
     ));
@@ -334,7 +334,7 @@ fn binding_refuses_unlinked_cross_tenant_expired_empty_and_unloaded_authority() 
             credential,
             capability.id,
             150,
-            &root.join("expired-audit")
+            root.join("expired-audit")
         ),
         Err(ServerError::ExpiredAuthority)
     ));
@@ -346,7 +346,7 @@ fn binding_refuses_unlinked_cross_tenant_expired_empty_and_unloaded_authority() 
             credential,
             capability.id,
             50,
-            &root.join("empty-audit")
+            root.join("empty-audit")
         ),
         Err(ServerError::NoScope)
     ));
@@ -364,7 +364,7 @@ fn binding_refuses_unlinked_cross_tenant_expired_empty_and_unloaded_authority() 
             credential,
             capability.id,
             50,
-            &root.join("unloaded-audit")
+            root.join("unloaded-audit")
         ),
         Err(ServerError::RevokedSession)
     ));
@@ -434,7 +434,7 @@ fn bound_server_refuses_every_tool_once_its_session_is_closed_or_revoked() {
             credential.clone(),
             capability.id,
             50,
-            &root.join("rebind")
+            root.join("rebind")
         ),
         Err(ServerError::RevokedSession)
     ));
@@ -463,7 +463,7 @@ fn bound_server_refuses_every_tool_once_its_session_is_closed_or_revoked() {
             credential,
             capability.id,
             50,
-            &root.join("restart")
+            root.join("restart")
         ),
         Err(ServerError::RevokedSession)
     ));
@@ -498,7 +498,7 @@ fn authority_revocation_refuses_the_bound_server_and_leaves_a_sibling_session_li
         sibling_credential,
         capability.id,
         50,
-        &root.join("sibling"),
+        root.join("sibling"),
     )
     .unwrap_or_else(|error| panic!("sibling bind: {error:?}"));
     let revoking = control.clone();
