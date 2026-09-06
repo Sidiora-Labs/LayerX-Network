@@ -108,6 +108,7 @@ def main():
     parsed = urllib.parse.urlsplit(args.rpc)
     require(parsed.hostname in ("127.0.0.1", "::1") and parsed.port != 18545, "isolated loopback chain only")
     require("anvil" in rpc.call("web3_clientVersion", []).lower(), "Anvil required")
+    require(quantity(rpc.call("eth_chainId", [])) != 125, "persistent chain ID refused")
     require(0 < args.amount < 2 ** 128, "amount bound")
     unhex(args.asset, 32)
     unhex(args.beneficiary, 32)
