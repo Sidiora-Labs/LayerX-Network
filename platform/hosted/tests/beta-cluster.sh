@@ -1232,6 +1232,12 @@ main() {
     local command=${1:-} boundary=0
     shift || true
     case "$command" in
+        images)
+            require_tool docker git tar
+            REVISION=$(revision)
+            preflight_disk
+            build_images
+            ;;
         up)
             for argument in "$@"; do
                 case "$argument" in
