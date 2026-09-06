@@ -380,10 +380,11 @@ static const uint64_t call_budget[LX_PROGRAMS_CALL_BUDGET_FIELDS] = {
     1000000U, 16777216U, 1048576U, 1048576U, 64U, 1048576U, 4096U
 };
 
-static size_t call_payload_with_access(
+static size_t call_payload_with_data(
     uint8_t *out, const uint8_t program_id[32],
     const uint8_t *capabilities, size_t capabilities_length,
-    const uint8_t *access_declaration, size_t access_declaration_length)
+    const uint8_t *access_declaration, size_t access_declaration_length,
+    const uint8_t *calldata, size_t calldata_length)
 {
     static const uint8_t entrypoint[] = "layerx_call";
     size_t cursor = 0U;
@@ -394,7 +395,7 @@ static size_t call_payload_with_access(
     cursor += 2U;
     write_u16(out + cursor, (uint16_t)(sizeof(entrypoint) - 1U));
     cursor += 2U;
-    write_u32(out + cursor, 0U);
+    write_u32(out + cursor, (uint32_t)calldata_length);
     cursor += 4U;
     write_u16(out + cursor, (uint16_t)capabilities_length);
     cursor += 2U;
@@ -408,10 +409,23 @@ static size_t call_payload_with_access(
     }
     (void)memcpy(out + cursor, entrypoint, sizeof(entrypoint) - 1U);
     cursor += sizeof(entrypoint) - 1U;
+    if (calldata_length != 0U)
+        (void)memcpy(out + cursor, calldata, calldata_length);
+    cursor += calldata_length;
     (void)memcpy(out + cursor, capabilities, capabilities_length);
     cursor += capabilities_length;
     (void)memcpy(out + cursor, access_declaration, access_declaration_length);
     return cursor + access_declaration_length;
+}
+
+static size_t call_payload_with_access(
+    uint8_t *out, const uint8_t program_id[32],
+    const uint8_t *capabilities, size_t capabilities_length,
+    const uint8_t *access_declaration, size_t access_declaration_length)
+{
+    return call_payload_with_data(out, program_id, capabilities,
+                                  capabilities_length, access_declaration,
+                                  access_declaration_length, NULL, 0U);
 }
 
 static size_t call_payload_with_capabilities(
@@ -1916,6 +1930,14 @@ static int dump_lifecycle_payload(const char *name, uint16_t ordinal,
         printf("\",\"idempotency_key_hex\":\"") < 0 ||
         lifecycle_vector_hex(activity.idempotency_key, sizeof(activity.idempotency_key)) != 0)
         return 1;
+    if (ordinal == 3U) {
+        size_t index;
+        if (printf("\",\"fee_limit\":\"1000\",\"resources\":[") < 0) return 1;
+        for (index = 0U; index < LX_PROGRAMS_CALL_BUDGET_FIELDS; ++index)
+            if (printf("%s\"%llu\"", index == 0U ? "" : ",",
+                       (unsigned long long)call_budget[index]) < 0) return 1;
+        return puts("]}") < 0 ? 1 : 0;
+    }
     return puts("\"}") < 0 ? 1 : 0;
 }
 
@@ -1942,6 +1964,58 @@ static int dump_lifecycle_vectors(void)
                              INTERFACE_CAPABILITIES_NONE, false);
     if (dump_lifecycle_payload("native-program-upgrade-v3", 2U, payload, length) != 0)
         return 1;
+    {
+        static const uint8_t calldata[] = {0U, 0x61U, 0xffU, 0x10U};
+        static const uint8_t declaration_domain[] = "LayerX/programs/access-declaration/v1";
+        static const uint8_t set_domain[] = "LayerX/programs/access-set/v1";
+        uint8_t capabilities[83] = {0U, 1U, 5U};
+        uint8_t access[sizeof(declaration_domain) + 5U + sizeof(set_domain) + 71U];
+        static uint8_t decode_storage[LXP_MAX_ACTIVITY_BYTES];
+        lxp_state_store state;
+        lxp_state_journal journal;
+        lxp_kernel kernel;
+        lxp_module_ctx ctx;
+        lxp_arena arena;
+        uint64_t parameters = 1U;
+        void *decoded = NULL;
+        size_t cursor = 0U;
+        (void)memset(capabilities + 3U, 0x22, 32U);
+        (void)memset(capabilities + 35U, 0x33, 32U);
+        capabilities[82U] = 7U;
+        append_bytes(access, &cursor, declaration_domain, sizeof(declaration_domain));
+        access[cursor++] = 1U;
+        write_u32(access + cursor, (uint32_t)(sizeof(set_domain) + 71U));
+        cursor += 4U;
+        append_bytes(access, &cursor, set_domain, sizeof(set_domain));
+        write_u16(access + cursor, 0U);
+        cursor += 2U;
+        write_u16(access + cursor, 1U);
+        cursor += 2U;
+        (void)memset(access + cursor, 0x33, 32U);
+        cursor += 32U;
+        (void)memset(access + cursor, 0x22, 32U);
+        cursor += 32U;
+        access[cursor++] = 1U;
+        write_u16(access + cursor, 0U);
+        cursor += 2U;
+        if (cursor != sizeof(access)) return 1;
+        length = call_payload_with_data(payload, program_id, capabilities,
+                                        sizeof(capabilities), access, cursor,
+                                        calldata, sizeof(calldata));
+        write_u16(payload + 32U, LX_PROGRAMS_ACCOUNT_ABI_VERSION);
+        if (lxp_state_store_init(&state, 0U) != LXP_OK ||
+            lxp_kernel_create(&kernel, &state, &journal, &parameters, 0U) != LXP_OK ||
+            lxp_kernel_register_module(&kernel, programs_module_registration_v4()) != LXP_OK ||
+            lxp_arena_init(&arena, decode_storage, sizeof(decode_storage)) != LXP_OK ||
+            lxp_module_ctx_init(&ctx, &kernel, LXP_MODULE_PROGRAMS, 1U, 0U, 1U,
+                                1000000U, &arena, false) != LXP_OK) return 1;
+        ctx.protocol_version = LXP_PROTOCOL_VERSION_STATE_COMMITMENT;
+        if (lxp_programs_call_decode(&ctx, payload, length, &decoded) != LXP_OK ||
+            decoded == NULL ||
+            lxp_state_store_destroy(&state) != LXP_OK ||
+            dump_lifecycle_payload("native-program-call-v3", 3U, payload, length) != 0)
+            return 1;
+    }
     (void)memcpy(payload, program_id, 32U);
     payload[32U] = 1U;
     (void)memset(payload + 33U, 0x33, 32U);
