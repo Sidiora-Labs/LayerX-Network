@@ -119,12 +119,11 @@ fn public_ip(address: IpAddr) -> bool {
             let segments = value.segments();
             let ipv4_compatible = segments[..6].iter().all(|segment| *segment == 0);
             let translation = segments[0] == 0x0064 && segments[1] == 0xff9b;
-            let discard_only = segments[0] == 0x0100
-                && segments[1..4].iter().all(|segment| *segment == 0);
+            let discard_only =
+                segments[0] == 0x0100 && segments[1..4].iter().all(|segment| *segment == 0);
             let teredo = segments[0] == 0x2001 && segments[1] == 0;
             let benchmarking = segments[0] == 0x2001 && segments[1] == 2;
-            let orchid = segments[0] == 0x2001
-                && matches!(segments[1] & 0xfff0, 0x0010 | 0x0020);
+            let orchid = segments[0] == 0x2001 && matches!(segments[1] & 0xfff0, 0x0010 | 0x0020);
             let six_to_four = segments[0] == 0x2002;
             let documentation = (segments[0] == 0x2001 && segments[1] == 0x0db8)
                 || (segments[0] == 0x3fff && segments[1] & 0xf000 == 0);
@@ -180,6 +179,17 @@ pub(crate) struct Response {
     pub(crate) body: Vec<u8>,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct OutboundRequest<'a> {
+    pub(crate) endpoint: &'a Endpoint,
+    pub(crate) method: &'a str,
+    pub(crate) path: &'a str,
+    pub(crate) bearer: Option<&'a str>,
+    pub(crate) idempotency: Option<&'a str>,
+    pub(crate) headers: &'a [(String, String)],
+    pub(crate) body: &'a [u8],
+}
+
 pub(crate) struct Client {
     identity: ClientIdentity,
     public_only: bool,
@@ -204,16 +214,16 @@ impl Client {
         resolve(endpoint, self.public_only).map(|_| ())
     }
 
-    pub(crate) fn request(
-        &self,
-        endpoint: &Endpoint,
-        method: &str,
-        path: &str,
-        bearer: Option<&str>,
-        idempotency: Option<&str>,
-        headers: &[(String, String)],
-        body: &[u8],
-    ) -> Result<Response, String> {
+    pub(crate) fn request(&self, request: &OutboundRequest<'_>) -> Result<Response, String> {
+        let OutboundRequest {
+            endpoint,
+            method,
+            path,
+            bearer,
+            idempotency,
+            headers,
+            body,
+        } = *request;
         if body.len() > MAX_BODY
             || !matches!(method, "GET" | "POST" | "DELETE")
             || bearer.is_some_and(|value| value.is_empty() || value.len() > 4096)
