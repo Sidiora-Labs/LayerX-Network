@@ -1369,18 +1369,14 @@ fn submit_route(config: &Config, request: &Request, route: Route) -> Response {
     resolve_record(config, &key_digest, &mut record, &decoded, &request.body)
 }
 
-fn receipt_route(config: &Config, activity_text: &str, plane: Plane) -> Response {
+fn receipt_route(config: &Config, activity_text: &str) -> Response {
     let Some(activity) = parse_hex32(activity_text) else {
         return refusal(400, "invalid_activity_id", None);
     };
     match with_session(config, |session| lookup_receipt(session, activity)) {
         Ok(Lookup::Present { receipt, .. }) => {
             let body = serde_json::json!({"activity_id": hex(&activity), "receipt": hex(&receipt)});
-            if plane == Plane::Gateway {
-                ok(serde_json::json!({"result": body}).to_string())
-            } else {
-                ok(body.to_string())
-            }
+            ok(serde_json::json!({"result": body}).to_string())
         }
         Ok(Lookup::Absent) => refusal(404, "receipt_not_found", None),
         Err(failure) => failure.response(),
@@ -1715,7 +1711,7 @@ fn route(config: &Config, request: &Request) -> Response {
         if request.method != "GET" || query.is_some() {
             return refusal(404, "not_found", None);
         }
-        return receipt_route(config, activity, plane);
+        return receipt_route(config, activity);
     }
     if !path.starts_with("/v1/") || query.is_some() {
         return refusal(404, "not_found", None);
@@ -1753,7 +1749,7 @@ fn route(config: &Config, request: &Request) -> Response {
             if let Some(key) = target.strip_prefix("/v1/programs/receipts/by-idempotency/") {
                 idempotency_receipt_route(config, key)
             } else if let Some(activity) = target.strip_prefix("/v1/receipts/") {
-                receipt_route(config, activity, plane)
+                receipt_route(config, activity)
             } else if let Some(activity) = target.strip_prefix("/v1/programs/activities/") {
                 program_activity_route(config, activity)
             } else {

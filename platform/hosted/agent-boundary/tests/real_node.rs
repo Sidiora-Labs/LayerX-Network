@@ -1601,7 +1601,7 @@ fn check_receipt_routes(cluster: &Cluster, submitted: &Submitted) {
         Some(&cluster.registry_token),
     );
     assert_eq!(internal.status, 200, "{}", internal.text());
-    assert_eq!(internal.json(), receipt.json()["result"]);
+    assert_eq!(internal.json(), receipt.json());
     let unknown = client.get(
         &format!("/v1/receipts/{}", hex(&random32())),
         Some(&cluster.gateway_token),

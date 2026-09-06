@@ -94,6 +94,12 @@ struct SourceFact {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct ComponentReceiptResponse {
+    result: ComponentReceipt,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ComponentReceipt {
     activity_id: String,
     receipt: String,
@@ -153,7 +159,9 @@ impl TrustedSources {
         }
         let trusted = read_secret("LAYERX_WEBHOOKS_SEQUENCER_PUBLIC_KEY_FILE")?;
         let wire_version = bounded_env("LAYERX_WEBHOOKS_LXP_WIRE_VERSION", 32)?;
-        if wire_version.parse::<u16>().ok() != Some(layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION) {
+        if wire_version.parse::<u16>().ok()
+            != Some(layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION)
+        {
             return Err("webhook LXP wire version is not the current beta protocol".to_owned());
         }
         let verifier = ReceiptVerifier {
@@ -483,8 +491,9 @@ impl ReceiptVerifier {
         {
             return Err(WebhookError::VerificationRequired);
         }
-        let receipt: ComponentReceipt = serde_json::from_slice(&receipt_response.body)
+        let receipt: ComponentReceiptResponse = serde_json::from_slice(&receipt_response.body)
             .map_err(|_| WebhookError::VerificationRequired)?;
+        let receipt = receipt.result;
         let authority: AuthorityResponse = serde_json::from_slice(&authority_response.body)
             .map_err(|_| WebhookError::VerificationRequired)?;
         if receipt.activity_id != activity
