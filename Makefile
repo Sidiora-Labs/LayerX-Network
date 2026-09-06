@@ -1689,6 +1689,21 @@ $(BUILD_DIR)/tests/lxp_test_batch_wal_recovery: \
 		$(PROGRAMS_RUNTIME_LIB) $(LIBRARY) \
 		$(EXTRA_LDFLAGS) -lcrypto -pthread -o $@
 
+$(BUILD_DIR)/tests/lxp_test_maintenance_publication: \
+		tests/storage/lxp_test_maintenance_publication.c \
+		tests/programs/test_call_activity.c cmd/layerxd/lxp_daemon_batch_wal.c \
+		cmd/layerxd/lxp_daemon_receipt_authority.c cmd/layerxd/lxp_daemon_evidence.c \
+		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) -Icmd/layerxd $(CFLAGS) \
+		tests/storage/lxp_test_maintenance_publication.c \
+		cmd/layerxd/lxp_daemon_batch_wal.c cmd/layerxd/lxp_daemon_receipt_authority.c \
+		cmd/layerxd/lxp_daemon_evidence.c $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) $(LIBRARY) \
+		$(EXTRA_LDFLAGS) -lcrypto -pthread -lsqlite3 -ldl -lm -o $@
+
+test-maintenance-publication: $(BUILD_DIR)/tests/lxp_test_maintenance_publication
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_maintenance_publication
+
 test-batch-wal-recovery: $(BUILD_DIR)/tests/lxp_test_batch_wal_recovery
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_batch_wal_recovery
 
@@ -3150,3 +3165,7 @@ BRIDGE_PYTHON ?= python3
 .PHONY: test-bridge-credit
 test-bridge-credit: $(BUILD_DIR)/tests/bridge/sign-credit $(BUILD_DIR)/tests/bridge/test-credit build/bin/layerx-genesis-build
 	$(BRIDGE_PYTHON) tests/bridge/qualify_credit.py --build-dir $(BUILD_DIR)
+
+.PHONY: test-daemon-maintenance-publication test-maintenance-publication
+test-daemon-maintenance-publication: $(BUILD_DIR)/tests/lxp_test_program_admission $(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build
+	bash tests/daemon/program-admission.sh $(BUILD_DIR) --maintenance
