@@ -1050,10 +1050,11 @@ test-paxeer-bond: $(BUILD_DIR)/tests/test_paxeer_bond \
 		$(BUILD_DIR)/contracts/.paxeer-built
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_paxeer_bond
 
-$(BUILD_DIR)/tests/test_bridge_deposit: tests/test_bridge_deposit.c $(LIBRARY)
+$(BUILD_DIR)/tests/test_bridge_deposit: tests/test_bridge_deposit.c \
+		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(EXTRA_LDFLAGS) \
-		-lcrypto -pthread -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
+		$(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
 
 test-bridge-deposit: $(BUILD_DIR)/tests/test_bridge_deposit test-contracts
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_bridge_deposit
@@ -3098,3 +3099,8 @@ test-program-admission: $(BUILD_DIR)/tests/lxp_test_program_admission $(BUILD_DI
 .PHONY: test-program-simulate
 test-program-simulate: $(BUILD_DIR)/tests/lxp_test_program_admission $(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build
 	bash tests/daemon/program-admission.sh $(BUILD_DIR) simulate
+
+BRIDGE_PYTHON ?= python3
+.PHONY: test-bridge-credit
+test-bridge-credit: $(BUILD_DIR)/tests/bridge/sign-credit $(BUILD_DIR)/tests/bridge/test-credit build/bin/layerx-genesis-build
+	$(BRIDGE_PYTHON) tests/bridge/qualify_credit.py --build-dir $(BUILD_DIR)
