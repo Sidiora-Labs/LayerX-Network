@@ -52,6 +52,8 @@ struct lxp_kernel_prepared_batch {
     uint8_t **event_bytes;
     uint8_t **artifact_bytes;
     uint8_t publication_digest[32];
+    uint8_t *maintenance_storage;
+    lxp_byte_span maintenance;
     lxp_kernel_batch_boundary base_boundary;
     lxp_kernel_batch_boundary final_boundary;
     size_t count;
@@ -217,6 +219,7 @@ static lxp_result kernel_snapshot_finish(
     snapshot->kernel.apply_transfer_set = lxp_kernel_canonical_ledger_apply;
     snapshot->kernel.check_supply = NULL;
     snapshot->kernel.observe_commit = NULL;
+    snapshot->kernel.observe_maintenance = NULL;
     snapshot->kernel.commit_observer_context = NULL;
     snapshot->kernel.publication_poisoned = false;
     snapshot->kernel.poisoned_sequence = 0U;
@@ -2908,6 +2911,36 @@ lxp_result lxp_kernel_batch_publication_digest(
     return status;
 }
 
+lxp_result lxp_kernel_batch_publication_digest_maintenance(
+    const lxp_kernel_batch_boundary *base,
+    const lxp_kernel_batch_boundary *final,
+    const lxp_byte_span *activities, const lxp_byte_span *receipts,
+    const lxp_byte_span *events, size_t activity_count,
+    lxp_byte_span maintenance, uint8_t digest[32])
+{
+    static const uint8_t domain[] = "LXP/kernel/prepared-maintenance/v1";
+    lxp_programs_occupancy_receipt record;
+    lxp_result status;
+    if (maintenance.bytes == NULL || maintenance.length == 0U)
+        return LXP_ERR_NON_CANONICAL;
+    status = lxp_programs_occupancy_receipt_decode(
+        maintenance.bytes, maintenance.length, &record);
+    if (status != LXP_OK) return status;
+    if (base == NULL || final == NULL ||
+        activity_count > UINT64_MAX - base->next_sequence ||
+        record.global_sequence != base->next_sequence + activity_count ||
+        record.global_sequence == UINT64_MAX ||
+        final->next_sequence != record.global_sequence + 1U ||
+        lxp_ct_memcmp(record.resulting_state_root, final->receipt_state_root, 32U) != 0)
+        return LXP_ERR_CONTEXT_MISMATCH;
+    status = lxp_kernel_batch_publication_digest(
+        base, final, activities, receipts, events, activity_count, digest);
+    if (status == LXP_OK) status = level_token_mix(digest, domain, sizeof(domain));
+    if (status == LXP_OK)
+        status = level_token_mix(digest, maintenance.bytes, maintenance.length);
+    return status;
+}
+
 static lxp_result kernel_prepared_batch_digest(
     const lxp_activity *activities,
     const lxp_kernel_execution *executions,
@@ -2949,17 +2982,81 @@ static lxp_result kernel_prepared_batch_digest(
                                         &receipt_bytes[index]);
         if (status != LXP_OK) break;
     }
-    if (status == LXP_OK)
-        status = lxp_kernel_batch_publication_digest(
-            &batch->base_boundary, &batch->final_boundary, activity_bytes,
-            receipt_bytes, batch->events, batch->count,
-            batch->publication_digest);
+    if (status == LXP_OK) {
+        if (batch->maintenance.length != 0U)
+            status = lxp_kernel_batch_publication_digest_maintenance(
+                &batch->base_boundary, &batch->final_boundary, activity_bytes,
+                receipt_bytes, batch->events, batch->count, batch->maintenance,
+                batch->publication_digest);
+        else
+            status = lxp_kernel_batch_publication_digest(
+                &batch->base_boundary, &batch->final_boundary, activity_bytes,
+                receipt_bytes, batch->events, batch->count,
+                batch->publication_digest);
+    }
     for (index = 0U; index < batch->count; ++index) {
         lxp_result reset_status =
             lxp_arena_reset(executions[index].arena, marks[index]);
         if (status == LXP_OK) status = reset_status;
     }
     return status;
+}
+
+lxp_result lxp_kernel_prepare_batch_maintenance(
+    lxp_kernel_prepared_batch *batch, const lxp_activity *activities,
+    const lxp_kernel_execution *executions)
+{
+    lxp_arena arena;
+    lxp_programs_occupancy_receipt record;
+    lxp_kernel_batch_snapshot *candidate = NULL;
+    lxp_kernel_batch_snapshot *previous;
+    uint8_t *storage;
+    lxp_byte_span encoded = {NULL, 0U};
+    lxp_result status;
+    if (batch == NULL || activities == NULL || executions == NULL ||
+        batch->committed || batch->count == 0U || batch->maintenance.length != 0U ||
+        !lxp_protocol_version_uses_occupancy(activities[0].protocol_version))
+        return LXP_ERR_NON_CANONICAL;
+    storage = malloc(LXP_MAX_BATCH_BODY_BYTES);
+    if (storage == NULL) return LXP_ERR_ARENA_EXHAUSTED;
+    status = lxp_arena_init(&arena, storage, LXP_MAX_BATCH_BODY_BYTES);
+    if (status == LXP_OK)
+        status = lxp_kernel_batch_snapshot_clone(batch->settled, &candidate);
+    if (status == LXP_OK)
+        status = lxp_kernel_batch_snapshot_begin_level(candidate);
+    if (status == LXP_OK)
+        status = lxp_programs_finalize_occupancy_batch(
+            &candidate->kernel, executions[0].batch_number,
+            executions[0].batch_timestamp_ms, candidate->kernel.state->next_sequence,
+            executions[0].parameter_version, &arena, &record, &encoded);
+    if (status == LXP_OK)
+        status = lxp_state_snapshot_seal_level(candidate->state);
+    if (status == LXP_OK) {
+        previous = batch->settled;
+        batch->settled = candidate;
+        batch->maintenance_storage = storage;
+        batch->maintenance = encoded;
+        status = kernel_prepared_batch_digest(activities, executions, batch);
+        if (status == LXP_OK) {
+            candidate = previous;
+            storage = NULL;
+        } else {
+            batch->settled = previous;
+            batch->maintenance_storage = NULL;
+            batch->maintenance = (lxp_byte_span){NULL, 0U};
+            if (kernel_prepared_batch_digest(activities, executions, batch) != LXP_OK)
+                status = LXP_FATAL_INVARIANT;
+        }
+    }
+    lxp_kernel_batch_snapshot_destroy(candidate);
+    free(storage);
+    return status;
+}
+
+lxp_byte_span lxp_kernel_prepared_batch_maintenance(
+    const lxp_kernel_prepared_batch *batch)
+{
+    return batch == NULL ? (lxp_byte_span){NULL, 0U} : batch->maintenance;
 }
 
 static bool program_planning_refusal(lxp_result status)
@@ -3444,16 +3541,23 @@ lxp_result lxp_kernel_commit_prepared_batch(
                      batch->base_boundary.receipt_state_root, 32U);
         kernel->pending_batch_first_sequence =
             batch->receipts[0].global_sequence;
-        kernel->pending_batch_last_sequence =
-            batch->receipts[batch->count - 1U].global_sequence;
+        kernel->pending_batch_last_sequence = batch->final_boundary.next_sequence - 1U;
         kernel->pending_batch_publication_index = 0U;
         kernel->poisoned_sequence = kernel->pending_batch_first_sequence;
         (void)memcpy(kernel->poisoned_activity_id,
                      batch->receipts[0].activity_id, 32U);
         (void)memcpy(kernel->poisoned_state_root,
                      batch->final_boundary.receipt_state_root, 32U);
-        status = receipt_committed_state_check(
-            kernel, &batch->receipts[batch->count - 1U]);
+        if (batch->maintenance.length != 0U) {
+            uint8_t root[32];
+            status = lxp_state_root(kernel, root);
+            if (status == LXP_OK &&
+                lxp_ct_memcmp(root, batch->final_boundary.canonical_state_root, 32U) != 0)
+                status = LXP_FATAL_INVARIANT;
+        } else {
+            status = receipt_committed_state_check(
+                kernel, &batch->receipts[batch->count - 1U]);
+        }
     }
     return status;
 }
@@ -3473,20 +3577,24 @@ lxp_result lxp_kernel_finalize_prepared_batch_publication(
                       batch->publication_digest, 32U) != 0 ||
         kernel->pending_batch_first_sequence !=
             batch->receipts[0].global_sequence ||
-        kernel->pending_batch_last_sequence !=
-            batch->receipts[batch->count - 1U].global_sequence)
+        kernel->pending_batch_last_sequence != batch->final_boundary.next_sequence - 1U)
         return LXP_ERR_CONTEXT_MISMATCH;
+    if (batch->maintenance.length != 0U)
+        return lxp_kernel_finalize_batch_publication_maintenance(
+            kernel, activities, batch->receipts, batch->count,
+            batch->maintenance, fsynced_publication_digest);
     return lxp_kernel_finalize_batch_publication_records(
         kernel, activities, batch->receipts, batch->count,
         fsynced_publication_digest);
 }
 
-lxp_result lxp_kernel_restore_batch_publication_pending(
+static lxp_result restore_batch_publication_pending(
     lxp_kernel *kernel, const uint8_t fsynced_publication_digest[32],
     const uint8_t batch_id[32],
     const uint8_t base_receipt_state_root[32],
     const uint8_t final_receipt_state_root[32], uint64_t first_sequence,
-    uint64_t last_sequence, uint32_t next_publication_index)
+    uint64_t last_sequence, uint32_t next_publication_index,
+    bool maintenance)
 {
     if (kernel == NULL || fsynced_publication_digest == NULL ||
         batch_id == NULL || base_receipt_state_root == NULL ||
@@ -3495,7 +3603,7 @@ lxp_result lxp_kernel_restore_batch_publication_pending(
         lxp_ct_is_zero(batch_id, 32U) ||
         first_sequence == 0U || last_sequence < first_sequence ||
         last_sequence - first_sequence >=
-            LXP_PROGRAMS_SCHEDULE_MAX_ACTIVITIES ||
+            LXP_PROGRAMS_SCHEDULE_MAX_ACTIVITIES + (maintenance ? 1U : 0U) ||
         (uint64_t)next_publication_index >
             last_sequence - first_sequence + 1U ||
         lxp_ct_memcmp(kernel->current_state_root,
@@ -3517,9 +3625,32 @@ lxp_result lxp_kernel_restore_batch_publication_pending(
     return LXP_OK;
 }
 
-lxp_result lxp_kernel_finalize_batch_publication_records(
+lxp_result lxp_kernel_restore_batch_publication_pending(
+    lxp_kernel *kernel, const uint8_t fsynced_publication_digest[32],
+    const uint8_t batch_id[32], const uint8_t base_receipt_state_root[32],
+    const uint8_t final_receipt_state_root[32], uint64_t first_sequence,
+    uint64_t last_sequence, uint32_t next_publication_index)
+{
+    return restore_batch_publication_pending(kernel, fsynced_publication_digest,
+        batch_id, base_receipt_state_root, final_receipt_state_root,
+        first_sequence, last_sequence, next_publication_index, false);
+}
+
+lxp_result lxp_kernel_restore_batch_publication_pending_maintenance(
+    lxp_kernel *kernel, const uint8_t fsynced_publication_digest[32],
+    const uint8_t batch_id[32], const uint8_t base_receipt_state_root[32],
+    const uint8_t final_receipt_state_root[32], uint64_t first_sequence,
+    uint64_t last_sequence, uint32_t next_publication_index)
+{
+    return restore_batch_publication_pending(kernel, fsynced_publication_digest,
+        batch_id, base_receipt_state_root, final_receipt_state_root,
+        first_sequence, last_sequence, next_publication_index, true);
+}
+
+static lxp_result finalize_publication_records(
     lxp_kernel *kernel, const lxp_activity *activities,
     const lxp_receipt *receipts, size_t activity_count,
+    const lxp_programs_occupancy_receipt *maintenance, lxp_byte_span encoded_maintenance,
     const uint8_t fsynced_publication_digest[32])
 {
     size_t index;
@@ -3534,14 +3665,16 @@ lxp_result lxp_kernel_finalize_batch_publication_records(
                       kernel->pending_batch_publication_digest, 32U) != 0 ||
         receipts[0].global_sequence !=
             kernel->pending_batch_first_sequence ||
-        receipts[activity_count - 1U].global_sequence !=
-            kernel->pending_batch_last_sequence ||
+        (maintenance == NULL ? receipts[activity_count - 1U].global_sequence :
+             maintenance->global_sequence) != kernel->pending_batch_last_sequence ||
         kernel->pending_batch_last_sequence -
                 kernel->pending_batch_first_sequence + 1U !=
-            activity_count ||
+            activity_count + (maintenance != NULL ? 1U : 0U) ||
         kernel->pending_batch_first_sequence >
             UINT64_MAX - (activity_count - 1U) ||
-        lxp_ct_memcmp(receipts[activity_count - 1U].resulting_state_root,
+        lxp_ct_memcmp(maintenance == NULL ?
+                          receipts[activity_count - 1U].resulting_state_root :
+                          maintenance->resulting_state_root,
                       kernel->poisoned_state_root, 32U) != 0)
         return LXP_ERR_CONTEXT_MISMATCH;
     if (lxp_ct_memcmp(receipts[0].previous_state_root,
@@ -3578,12 +3711,23 @@ lxp_result lxp_kernel_finalize_batch_publication_records(
         }
     }
     free(verification_bytes);
-    if (kernel->pending_batch_publication_index > activity_count)
+    if (kernel->pending_batch_publication_index > activity_count + (maintenance != NULL ? 1U : 0U))
         return LXP_FATAL_INVARIANT;
-    {
+    if (maintenance == NULL) {
         lxp_result status = receipt_committed_state_check(
             kernel, &receipts[activity_count - 1U]);
         if (status != LXP_OK) return status;
+    } else {
+        uint8_t root[32];
+        lxp_result status = lxp_state_root(kernel, root);
+        if (status != LXP_OK) return status;
+        if (lxp_ct_memcmp(root, maintenance->resulting_state_root, 32U) != 0 ||
+            lxp_ct_memcmp(receipts[activity_count - 1U].resulting_state_root,
+                          maintenance->previous_state_root, 32U) != 0 ||
+            maintenance->global_sequence == 0U ||
+            receipts[activity_count - 1U].global_sequence != maintenance->global_sequence - 1U ||
+            maintenance->parameter_version != receipts[0].parameter_version)
+            return LXP_ERR_CONTEXT_MISMATCH;
     }
     if (kernel->observe_commit != NULL)
         for (index = kernel->pending_batch_publication_index;
@@ -3594,6 +3738,19 @@ lxp_result lxp_kernel_finalize_batch_publication_records(
             if (status != LXP_OK) return LXP_FATAL_INVARIANT;
             kernel->pending_batch_publication_index = (uint32_t)(index + 1U);
         }
+    if (kernel->observe_commit == NULL &&
+        kernel->pending_batch_publication_index < activity_count)
+        kernel->pending_batch_publication_index = (uint32_t)activity_count;
+    if (maintenance != NULL && kernel->pending_batch_publication_index == activity_count) {
+        if (kernel->observe_commit != NULL && kernel->observe_maintenance == NULL)
+            return LXP_ERR_MODULE_DISABLED;
+        if (kernel->observe_maintenance != NULL) {
+            lxp_result status = kernel->observe_maintenance(
+                kernel->commit_observer_context, kernel, encoded_maintenance, receipts[0].timestamp);
+            if (status != LXP_OK) return status;
+        }
+        kernel->pending_batch_publication_index = (uint32_t)(activity_count + 1U);
+    }
     kernel->publication_poisoned = false;
     kernel->batch_publication_pending = false;
     kernel->poisoned_sequence = 0U;
@@ -3606,6 +3763,31 @@ lxp_result lxp_kernel_finalize_batch_publication_records(
     (void)memset(kernel->poisoned_activity_id, 0, 32U);
     (void)memset(kernel->poisoned_state_root, 0, 32U);
     return LXP_OK;
+}
+
+lxp_result lxp_kernel_finalize_batch_publication_records(
+    lxp_kernel *kernel, const lxp_activity *activities,
+    const lxp_receipt *receipts, size_t activity_count,
+    const uint8_t fsynced_publication_digest[32])
+{
+    return finalize_publication_records(kernel, activities, receipts, activity_count,
+        NULL, (lxp_byte_span){NULL, 0U}, fsynced_publication_digest);
+}
+
+lxp_result lxp_kernel_finalize_batch_publication_maintenance(
+    lxp_kernel *kernel, const lxp_activity *activities,
+    const lxp_receipt *receipts, size_t activity_count,
+    lxp_byte_span maintenance, const uint8_t fsynced_publication_digest[32])
+{
+    lxp_programs_occupancy_receipt record;
+    lxp_result status = lxp_programs_occupancy_receipt_decode(
+        maintenance.bytes, maintenance.length, &record);
+    if (status != LXP_OK) return status;
+    if (receipts == NULL || activity_count == 0U ||
+        !lxp_protocol_version_uses_occupancy(receipts[0].protocol_version))
+        return LXP_ERR_NON_CANONICAL;
+    return finalize_publication_records(kernel, activities, receipts, activity_count,
+        &record, maintenance, fsynced_publication_digest);
 }
 
 uint32_t lxp_kernel_batch_publication_next_index(const lxp_kernel *kernel)
@@ -3624,6 +3806,7 @@ void lxp_kernel_prepared_batch_destroy(lxp_kernel_prepared_batch *batch)
     if (batch->artifact_bytes != NULL)
         for (index = 0U; index < batch->count * 2U; ++index)
             free(batch->artifact_bytes[index]);
+    free(batch->maintenance_storage);
     free(batch->artifact_bytes);
     free(batch->event_bytes);
     free(batch->events);

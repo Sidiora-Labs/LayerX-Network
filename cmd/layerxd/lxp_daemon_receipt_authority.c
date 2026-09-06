@@ -1,6 +1,9 @@
 #include "layerx/lxp_daemon.h"
 
 #include "layerx/lxp_crypto.h"
+#include "layerx/programs.h"
+#include "layerx/lxp_hash.h"
+#include "layerx/lxp_protocol.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -112,6 +115,75 @@ static lxp_result validate_evidence(
     return status;
 }
 
+typedef struct publication_metadata {
+    uint8_t batch_id[32];
+    uint64_t global_sequence;
+} publication_metadata;
+
+static lxp_result validate_publication(
+    const lxp_daemon_receipt_authority_store *store, uint8_t format_version,
+    const uint8_t *receipt_bytes, size_t receipt_length,
+    const uint8_t *header_bytes, size_t header_length,
+    const uint8_t header_signature[64], const lxp_merkle_proof *proof,
+    lxp_arena *arena, publication_metadata *metadata,
+    lxp_batch_header *header, uint8_t digest[32])
+{
+    lxp_result status;
+    if (format_version == 1U || format_version == 2U) {
+        lxp_receipt receipt;
+        status = validate_evidence(store, receipt_bytes, receipt_length,
+            header_bytes, header_length, header_signature, proof, arena,
+            &receipt, header, digest);
+        if (status == LXP_OK) {
+            metadata->global_sequence = receipt.global_sequence;
+            (void)memcpy(metadata->batch_id, receipt.batch_id, 32U);
+        }
+        return status;
+    }
+    if (format_version == 3U) {
+        lxp_programs_occupancy_receipt maintenance;
+        uint8_t leaf[32], preimage[88];
+        if (store == NULL || proof == NULL || arena == NULL ||
+            metadata == NULL || header == NULL || digest == NULL)
+            return LXP_ERR_NON_CANONICAL;
+        status = lxp_programs_occupancy_receipt_decode(
+            receipt_bytes, receipt_length, &maintenance);
+        if (status == LXP_OK)
+            status = lxp_batch_header_decode(header_bytes, header_length, header);
+        if (status == LXP_OK)
+            status = lxp_batch_verify_signature(header, header_signature, 64U,
+                &store->authorization, arena);
+        if (status == LXP_OK &&
+            (!lxp_protocol_version_uses_occupancy(header->protocol_version) ||
+             header->first_sequence == 0U || header->last_sequence <= header->first_sequence ||
+             header->last_sequence - header->first_sequence >= UINT32_MAX ||
+             maintenance.batch_number != header->batch_number ||
+             maintenance.global_sequence != header->last_sequence ||
+             proof->leaf_index != header->last_sequence - header->first_sequence ||
+             proof->leaf_count != proof->leaf_index + 1U ||
+             lxp_ct_memcmp(maintenance.resulting_state_root,
+                           header->resulting_state_root, 32U) != 0))
+            status = LXP_ERR_CONTEXT_MISMATCH;
+        if (status == LXP_OK)
+            status = lxp_merkle_leaf_hash(receipt_bytes, receipt_length, leaf);
+        if (status == LXP_OK)
+            status = lxp_merkle_proof_verify(leaf, proof, header->receipt_merkle_root);
+        if (status == LXP_OK)
+            status = lxp_hash_sha256(receipt_bytes, receipt_length, digest);
+        if (status == LXP_OK) {
+            metadata->global_sequence = maintenance.global_sequence;
+            (void)memcpy(preimage, header->previous_state_root, 32U);
+            (void)memcpy(preimage + 32U, header->activity_merkle_root, 32U);
+            write_u64(preimage + 64U, header->first_sequence);
+            write_u64(preimage + 72U, header->last_sequence - 1U);
+            write_u64(preimage + 80U, header->batch_number);
+            status = lxp_hash_context_value(preimage, sizeof(preimage), metadata->batch_id);
+        }
+        return status;
+    }
+    return LXP_ERR_VERSION_UNSUPPORTED;
+}
+
 static lxp_result decode_body(
     const uint8_t *body, size_t length, lxp_daemon_receipt_evidence *evidence)
 {
@@ -125,7 +197,7 @@ static lxp_result decode_body(
     if (body == NULL || evidence == NULL || length < AUTHORITY_FIXED_BYTES ||
         length > AUTHORITY_MAX_BYTES ||
         (memcmp(body, authority_magic, 4U) != 0 ||
-         (body[4] != '1' && body[4] != '2')))
+         (body[4] != '1' && body[4] != '2' && body[4] != '3')))
         return LXP_ERR_LOG_CORRUPT;
     (void)memset(evidence, 0, sizeof(*evidence));
     evidence->format_version = (uint8_t)(body[4] - '0');
@@ -242,12 +314,12 @@ static lxp_result replay_authority(void *context,
     {
         uint8_t *scratch = (uint8_t *)malloc(LXP_MAX_ACTIVITY_BYTES * 2U);
         lxp_arena arena;
-        lxp_receipt receipt;
+        publication_metadata receipt;
         uint8_t digest[32];
         if (scratch == NULL) return LXP_ERR_ARENA_EXHAUSTED;
         status = lxp_arena_init(&arena, scratch, LXP_MAX_ACTIVITY_BYTES * 2U);
         if (status == LXP_OK)
-            status = validate_evidence(store,
+            status = validate_publication(store, evidence.format_version,
                 evidence.canonical_receipt.bytes, evidence.canonical_receipt.length,
                 evidence.canonical_header.bytes, evidence.canonical_header.length,
                 evidence.header_signature, &evidence.receipt_proof,
@@ -334,7 +406,7 @@ static lxp_result append_authority(
     uint8_t format_version, lxp_byte_span terminal_payload, lxp_byte_span call_graph)
 {
     lxp_daemon_receipt_evidence evidence;
-    lxp_receipt receipt;
+    publication_metadata receipt;
     lxp_batch_header header;
     uint8_t *body;
     uint64_t record_offset;
@@ -343,13 +415,16 @@ static lxp_result append_authority(
     lxp_result status;
     if (store == NULL || store->log == NULL || receipt_proof == NULL)
         return LXP_ERR_NON_CANONICAL;
-    status = validate_evidence(
-        store, canonical_receipt, receipt_length, canonical_header,
+    status = validate_publication(
+        store, format_version, canonical_receipt, receipt_length, canonical_header,
         header_length, header_signature, receipt_proof, arena, &receipt,
         &header, evidence.receipt_digest);
-    if (status == LXP_OK && format_version == 2U)
-        status = lxp_receipt_bind_program_artifacts(
-            &receipt, terminal_payload, call_graph);
+    if (status == LXP_OK && format_version == 2U) {
+        lxp_receipt ordinary;
+        status = lxp_receipt_decode(canonical_receipt, receipt_length, true, &ordinary);
+        if (status == LXP_OK)
+            status = lxp_receipt_bind_program_artifacts(&ordinary, terminal_payload, call_graph);
+    }
     if (status != LXP_OK) return status;
     evidence.format_version = format_version;
     evidence.terminal_payload = terminal_payload;
@@ -422,7 +497,7 @@ static lxp_result append_authority(
     body = (uint8_t *)malloc(body_length);
     if (body == NULL) return LXP_ERR_IO;
     (void)memcpy(body + offset, authority_magic, sizeof(authority_magic));
-    body[4] = format_version == 2U ? '2' : '1';
+    body[4] = (uint8_t)('0' + format_version);
     offset += sizeof(authority_magic);
     (void)memcpy(body + offset, evidence.receipt_digest, 32U); offset += 32U;
     (void)memcpy(body + offset, evidence.batch_id, 32U); offset += 32U;
@@ -508,6 +583,18 @@ lxp_result lxp_daemon_receipt_authority_append_artifacts(
         arena, 2U, terminal_payload, call_graph);
 }
 
+lxp_result lxp_daemon_receipt_authority_append_maintenance(
+    lxp_daemon_receipt_authority_store *store,
+    const uint8_t *canonical_receipt, size_t receipt_length,
+    const uint8_t *canonical_header, size_t header_length,
+    const uint8_t header_signature[64],
+    const lxp_merkle_proof *receipt_proof, lxp_arena *arena)
+{
+    return append_authority(store, canonical_receipt, receipt_length,
+        canonical_header, header_length, header_signature, receipt_proof, arena,
+        3U, (lxp_byte_span){NULL, 0U}, (lxp_byte_span){NULL, 0U});
+}
+
 lxp_result lxp_daemon_receipt_authority_lookup(
     const lxp_daemon_receipt_authority_store *store,
     const uint8_t receipt_digest[32], lxp_arena *arena,
@@ -533,11 +620,11 @@ lxp_result lxp_daemon_receipt_authority_lookup(
                 status = decode_body((const uint8_t *)body,
                                      entry->body_length, evidence);
             if (status == LXP_OK) {
-                lxp_receipt receipt;
+                publication_metadata receipt;
                 lxp_batch_header batch;
                 uint8_t digest[32];
-                status = validate_evidence(
-                    store, evidence->canonical_receipt.bytes,
+                status = validate_publication(
+                    store, evidence->format_version, evidence->canonical_receipt.bytes,
                     evidence->canonical_receipt.length,
                     evidence->canonical_header.bytes,
                     evidence->canonical_header.length,
@@ -583,7 +670,7 @@ lxp_result lxp_daemon_receipt_authority_scan(
     bool *present)
 {
     lxp_log_record_header record;
-    lxp_receipt receipt;
+    publication_metadata receipt;
     lxp_batch_header batch;
     uint8_t digest[32];
     void *body = NULL;
@@ -608,8 +695,8 @@ lxp_result lxp_daemon_receipt_authority_scan(
         status = decode_body((const uint8_t *)body, record.body_length,
                              evidence);
     if (status == LXP_OK)
-        status = validate_evidence(
-            store, evidence->canonical_receipt.bytes,
+        status = validate_publication(
+            store, evidence->format_version, evidence->canonical_receipt.bytes,
             evidence->canonical_receipt.length,
             evidence->canonical_header.bytes,
             evidence->canonical_header.length, evidence->header_signature,

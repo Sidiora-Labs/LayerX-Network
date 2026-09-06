@@ -260,7 +260,7 @@ static lxp_result append_wire(authority_replica *replica,
     lxp_merkle_proof proof;
     lxp_result status;
     if (replica == NULL || body == NULL || length < 5U + 2U + 64U + 9U + 4U ||
-        memcmp(body, replica_magic, sizeof(replica_magic)) != 0)
+        (memcmp(body, replica_magic, 4U) != 0 || (body[4] != '1' && body[4] != '2')))
         return LXP_ERR_NON_CANONICAL;
     offset += sizeof(replica_magic);
     header_length = read_u16(body + offset); offset += 2U;
@@ -294,9 +294,13 @@ static lxp_result append_wire(authority_replica *replica,
         if (pthread_mutex_lock(&replica->mutex) != 0) return LXP_ERR_IO;
         {
             size_t mark = lxp_arena_mark(&replica->scratch);
-            status = lxp_daemon_receipt_authority_append(
-                &replica->store, receipt, receipt_length, header,
-                header_length, signature, &proof, &replica->scratch);
+            status = body[4] == '2' ?
+                lxp_daemon_receipt_authority_append_maintenance(
+                    &replica->store, receipt, receipt_length, header,
+                    header_length, signature, &proof, &replica->scratch) :
+                lxp_daemon_receipt_authority_append(
+                    &replica->store, receipt, receipt_length, header,
+                    header_length, signature, &proof, &replica->scratch);
             (void)lxp_arena_reset(&replica->scratch, mark);
         }
         if (pthread_mutex_unlock(&replica->mutex) != 0 && status == LXP_OK)
@@ -823,8 +827,8 @@ lxp_result lxp_daemon_authority_replica_serve(
     return status;
 }
 
-lxp_result lxp_daemon_authority_replica_publish(
-    const char *loopback_address, uint16_t port,
+static lxp_result authority_replica_publish(
+    uint8_t format_version, const char *loopback_address, uint16_t port,
     const uint8_t *bearer_token, size_t bearer_token_length,
     const uint8_t expected_replica_id[32],
     const uint8_t *canonical_receipt, size_t receipt_length,
@@ -867,6 +871,7 @@ lxp_result lxp_daemon_authority_replica_publish(
         free(body); free(request); return LXP_ERR_IO;
     }
     (void)memcpy(body + offset, replica_magic, sizeof(replica_magic));
+    body[4] = (uint8_t)('0' + format_version);
     offset += sizeof(replica_magic);
     write_u16(body + offset, (uint16_t)header_length); offset += 2U;
     (void)memcpy(body + offset, canonical_header, header_length);
@@ -936,4 +941,30 @@ lxp_result lxp_daemon_authority_replica_publish(
     free(request);
     free(body);
     return status;
+}
+
+lxp_result lxp_daemon_authority_replica_publish(
+    const char *loopback_address, uint16_t port,
+    const uint8_t *bearer_token, size_t bearer_token_length,
+    const uint8_t expected_replica_id[32],
+    const uint8_t *canonical_receipt, size_t receipt_length,
+    const uint8_t *canonical_header, size_t header_length,
+    const uint8_t header_signature[64], const lxp_merkle_proof *receipt_proof)
+{
+    return authority_replica_publish(1U, loopback_address, port,
+        bearer_token, bearer_token_length, expected_replica_id, canonical_receipt,
+        receipt_length, canonical_header, header_length, header_signature, receipt_proof);
+}
+
+lxp_result lxp_daemon_authority_replica_publish_maintenance(
+    const char *loopback_address, uint16_t port,
+    const uint8_t *bearer_token, size_t bearer_token_length,
+    const uint8_t expected_replica_id[32],
+    const uint8_t *canonical_receipt, size_t receipt_length,
+    const uint8_t *canonical_header, size_t header_length,
+    const uint8_t header_signature[64], const lxp_merkle_proof *receipt_proof)
+{
+    return authority_replica_publish(2U, loopback_address, port,
+        bearer_token, bearer_token_length, expected_replica_id, canonical_receipt,
+        receipt_length, canonical_header, header_length, header_signature, receipt_proof);
 }

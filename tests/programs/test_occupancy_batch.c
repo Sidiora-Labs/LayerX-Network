@@ -132,6 +132,79 @@ static lxp_result seed_principal_storage(lxp_kernel *kernel, lxp_arena *arena)
     return status;
 }
 
+static int replay_publication(lxp_byte_span canonical_maintenance, bool mutate)
+{
+    static uint8_t bytes[524288];
+    lxp_arena arena;
+    lxp_state_store state;
+    lxp_state_journal journal;
+    lxp_kernel kernel;
+    lxp_replay_engine engine;
+    lxp_replay_batch_result result;
+    lx_account_registry accounts;
+    lxp_transfer_asset_state asset = {{0x41U}, true, false};
+    lx_programs_transfer_runtime runtime;
+    lxp_programs_occupancy_receipt record;
+    lxp_batch_body body;
+    lxp_batch_roots roots;
+    lxp_byte_span encoded;
+    uint32_t parameters = 1U;
+    lxp_result status;
+    (void)memset(&runtime, 0, sizeof(runtime));
+    (void)memset(&body, 0, sizeof(body));
+    runtime.accounts = &accounts;
+    runtime.assets = &asset;
+    runtime.asset_count = 1U;
+    runtime.fee_schedule = (lx_programs_fee_schedule){1U, 1U, 1U, 2U, 4U, 1U, 1U, 1U};
+    (void)memcpy(runtime.occupancy_asset_id, asset.asset_id, 32U);
+    runtime.resolve_occupancy_parameters = occupancy_parameters;
+    runtime.occupancy_parameter_context = &kernel;
+    if (lx_account_registry_init(&accounts) != LXP_OK ||
+        lxp_state_store_init(&state, 0U) != LXP_OK ||
+        lxp_kernel_create(&kernel, &state, &journal, &parameters, 0U) != LXP_OK ||
+        lxp_kernel_register_module(&kernel, programs_module_registration()) != LXP_OK ||
+        lxp_kernel_bind_module_runtime(&kernel, LXP_MODULE_PROGRAMS, &runtime) != LXP_OK ||
+        seed_fee_governance(&kernel, &runtime) != LXP_OK ||
+        lxp_arena_init(&arena, bytes, sizeof(bytes)) != LXP_OK ||
+        seed_principal_storage(&kernel, &arena) != LXP_OK ||
+        lxp_replay_engine_init(&engine, parameter_version, &parameters) != LXP_OK ||
+        lxp_programs_replay_engine_bind(&engine, &kernel) != LXP_OK ||
+        lxp_programs_occupancy_receipt_decode(canonical_maintenance.bytes,
+            canonical_maintenance.length, &record) != LXP_OK)
+        return 1;
+    if (mutate) record.ledger_root[0] ^= 1U;
+    if (lxp_programs_occupancy_receipt_encode(&record, &arena, &encoded) != LXP_OK)
+        return 1;
+    body.header.protocol_version = LXP_PROTOCOL_VERSION_OCCUPANCY;
+    body.header.network_id = 1U;
+    body.header.epoch = kernel.epoch;
+    body.header.batch_number = 1U;
+    body.header.timestamp_ms = 1000U;
+    (void)memcpy(body.header.previous_state_root, kernel.current_state_root, 32U);
+    (void)memcpy(body.header.resulting_state_root, record.resulting_state_root, 32U);
+    if (lxp_replay_section_encode(NULL, 0U, &arena, &body.activities) != LXP_OK ||
+        lxp_replay_section_encode(NULL, 0U, &arena, &body.events) != LXP_OK ||
+        lxp_replay_section_encode(NULL, 0U, &arena, &body.oracle_inputs) != LXP_OK ||
+        lxp_replay_section_encode(&encoded, 1U, &arena, &body.receipts) != LXP_OK ||
+        lxp_batch_roots_compute(&(lxp_batch_root_inputs){NULL, 0U, &encoded, 1U,
+            NULL, 0U, NULL, 0U, NULL, 0U}, &arena, &roots) != LXP_OK)
+        return 1;
+    (void)memcpy(body.header.activity_merkle_root, roots.activity_merkle_root, 32U);
+    (void)memcpy(body.header.receipt_merkle_root, roots.receipt_merkle_root, 32U);
+    (void)memcpy(body.header.event_merkle_root, roots.event_merkle_root, 32U);
+    (void)memcpy(body.header.oracle_root, roots.oracle_root, 32U);
+    (void)memcpy(body.header.data_availability_root, roots.data_availability_root, 32U);
+    status = lxp_replay_batch_publication(&engine, &body,
+        body.header.previous_state_root, &arena, &result);
+    if (mutate) return status == LXP_FATAL_REPLAY_DIVERGENCE ? 0 : 1;
+    return status == LXP_OK && state.next_sequence == 1U &&
+        result.receipt_count == 1U &&
+        memcmp(kernel.current_state_root, record.resulting_state_root, 32U) == 0 &&
+        result.encoded_batch_maintenance_receipt.length == canonical_maintenance.length &&
+        memcmp(result.encoded_batch_maintenance_receipt.bytes,
+            canonical_maintenance.bytes, canonical_maintenance.length) == 0 ? 0 : 1;
+}
+
 int main(void)
 {
     static uint8_t arena_bytes[524288];
@@ -193,6 +266,9 @@ int main(void)
             &kernel, 0U, &selected, selected_asset) != LXP_OK ||
         selected.version != 1U || selected.occupancy_byte_batch != 1U ||
         memcmp(selected_asset, asset.asset_id, 32U) != 0)
+        return 1;
+    if (replay_publication(first.batch_maintenance_output.canonical_receipt, false) != 0 ||
+        replay_publication(first.batch_maintenance_output.canonical_receipt, true) != 0)
         return 1;
     if (engine.batch_finalize(
             engine.batch_finalize_context, &(lxp_batch_header){
