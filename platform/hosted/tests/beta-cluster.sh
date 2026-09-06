@@ -677,7 +677,7 @@ EOF
     kube apply -f "$MANIFESTS_DIR/builder-release.yaml" > /dev/null
     kube -n "$ns" wait --for=condition=Ready pod/layerx-program-builder-loader --timeout=300s > /dev/null
     kube -n "$ns" exec layerx-program-builder-loader -- sh -c 'rm -rf /opt/layerx-builder/rootfs && mkdir -p /opt/layerx-builder/rootfs'
-    tar -C "$LAYERX_BETA_BUILDER_ENVIRONMENT_DIR" -cf - . | kube -n "$ns" exec -i layerx-program-builder-loader -- tar -C /opt/layerx-builder/rootfs -xf -
+    tar --mode=u+w -C "$LAYERX_BETA_BUILDER_ENVIRONMENT_DIR" -cf - . | kube -n "$ns" exec -i layerx-program-builder-loader -- tar -C /opt/layerx-builder/rootfs -xf -
     kube -n "$ns" exec layerx-program-builder-loader -- sh -c 'chmod -R a-w /opt/layerx-builder/rootfs && touch /opt/layerx-builder/.sealed'
     kube -n "$ns" wait --for=jsonpath='{.status.phase}'=Succeeded pod/layerx-program-builder-loader --timeout=120s > /dev/null
     kube -n "$ns" delete pod layerx-program-builder-loader --wait=true > /dev/null
