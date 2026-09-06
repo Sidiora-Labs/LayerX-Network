@@ -1,13 +1,14 @@
 //! In-process integration coverage for the local emulator gateway.
 //!
 //! These tests boot the real `layerx_platform_emulator::run` listener, which
-//! links the production LayerX core transition and receipt machinery through
+//! links the production `LayerX` core transition and receipt machinery through
 //! the C bridge, and drive it over its HTTP surface exactly as an SDK or the
 //! middleware would. They assert the production gateway surface
 //! (`/v1/activities`, `/v1/state`, `/v1/receipts/<id>`) and the emulator-only
 //! control hooks (`/__emulator/*`) that live clearly outside the deterministic
 //! transition path.
 
+use std::fmt::Write as _;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
@@ -65,10 +66,10 @@ fn request_with_idempotency(
         body.len()
     );
     if !content_type.is_empty() {
-        head.push_str(&format!("Content-Type: {content_type}\r\n"));
+        write!(head, "Content-Type: {content_type}\r\n").map_err(|error| error.to_string())?;
     }
     if let Some(value) = idempotency_key {
-        head.push_str(&format!("Idempotency-Key: {value}\r\n"));
+        write!(head, "Idempotency-Key: {value}\r\n").map_err(|error| error.to_string())?;
     }
     head.push_str("\r\n");
     stream
@@ -177,7 +178,7 @@ fn error_code(reply: &Reply) -> Option<String> {
 }
 
 fn hex_decode(value: &str) -> Result<Vec<u8>, String> {
-    if value.len() % 2 != 0 {
+    if !value.len().is_multiple_of(2) {
         return Err("hex value has odd length".to_string());
     }
     value
@@ -517,169 +518,29 @@ fn lifecycle_signed_activity_for_protocol(
     ))?;
     let activity = checked(layerx_wire::activity::decode_signed(&bytes, &registry))?;
     let id = checked(layerx_wire::hash::activity_id(&activity))?;
-    let key = idempotency
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
+    let key = hex_encode(&idempotency);
     Ok((bytes, key, id))
 }
 
 #[test]
 fn lifecycle_routes_execute_and_replay_real_native_state_receipts() -> Result<(), String> {
-    use layerx_types::intent::ProgramId;
-    use layerx_types::program_lifecycle::{
-        NativeProgramDeploy, NativeProgramUpgrade, NativeProgramWindDown, ProgramUpgradePolicy,
-        ProgramWindDownOperation,
-    };
-    use sha2::{Digest, Sha256};
     let address = boot_protocol(3)?;
     let signing_key = ed25519_dalek::SigningKey::from_bytes(&EMULATOR_SEED);
     let public = signing_key.verifying_key().to_bytes();
-    let public_hex = public
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
+    let public_hex = hex_encode(&public);
     let prefund = format!("{{\"did\":\"did:layerx:lifecycle\",\"public_key\":\"{public_hex}\",\"amount_lo\":100000000}}");
     assert_eq!(
         post_json(&address, "/__emulator/accounts/prefund", &prefund)?.status,
         200
     );
-    let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../sdk/conformance/fixtures/native-program-deploy-v3.json");
-    let fixture: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(fixture_path).map_err(|error| error.to_string())?)
-            .map_err(|error| error.to_string())?;
-    let encoded = hex_decode(fixture["payload_hex"].as_str().ok_or("missing C payload")?)?;
-    let original = NativeProgramDeploy::decode(&encoded).map_err(|error| format!("{error:?}"))?;
-    let account = layerx_types::account::AccountId::parse("agent:did:layerx:lifecycle:main")
-        .map_err(|error| format!("{error:?}"))?;
-    let principal = layerx_wire::hash::account_id_for_protocol(&account, 3)
-        .map_err(|error| format!("{error:?}"))?;
-    let program = ProgramId::new([0x71; 32]);
-    let wasm = lifecycle_echo_guest();
-    assert_eq!(
-        original.encode().map_err(|error| format!("{error:?}"))?,
-        encoded
-    );
-    let deploy = NativeProgramDeploy {
-        program_id: program,
-        guest_abi: 2,
-        policy: ProgramUpgradePolicy::Authority(principal),
-        wasm: &wasm,
-        new_hash: Sha256::digest(&wasm).into(),
-        interface: None,
-    };
-    let call = layerx_types::program_call::NativeProgramCall {
-        program_id: program,
-        guest_abi: 2,
-        entrypoint: b"layerx_call",
-        calldata: b"echo",
-        capabilities: &[0, 0],
-        access_declaration: b"LayerX/programs/access-declaration/v1\0\0",
-        response_capacity: 4096,
-        resources: layerx_types::program_call::Resources([100_000, 65_536, 0, 0, 2, 4096, 0]),
-    };
-    let mut upgraded_wasm = deploy.wasm.to_vec();
-    upgraded_wasm.extend_from_slice(b"\0\x08\x07upgrade");
-    let upgrade = NativeProgramUpgrade {
-        program_id: program,
-        guest_abi: 2,
-        old_hash: deploy.new_hash,
-        new_hash: Sha256::digest(&upgraded_wasm).into(),
-        migration_hook: &[],
-        clear_interface: false,
-        interface: deploy.interface,
-        wasm: &upgraded_wasm,
-    };
-    let deprecate = NativeProgramWindDown {
-        program_id: program,
-        operation: ProgramWindDownOperation::Deprecate {
-            exit_program: program.bytes(),
-            deadline_batch: 1000,
-        },
-    };
-    for (sequence, (ordinal, path, payload)) in [
-        (
-            1,
-            "/v1/programs/deploy",
-            deploy.encode().map_err(|error| format!("{error:?}"))?,
-        ),
-        (
-            3,
-            "/v1/programs/call",
-            call.encode().map_err(|error| format!("{error:?}"))?,
-        ),
-        (
-            2,
-            "/v1/programs/upgrade",
-            upgrade.encode().map_err(|error| format!("{error:?}"))?,
-        ),
-        (
-            3,
-            "/v1/programs/call",
-            call.encode().map_err(|error| format!("{error:?}"))?,
-        ),
-        (
-            7,
-            "/v1/programs/wind-down",
-            deprecate.encode().map_err(|error| format!("{error:?}"))?,
-        ),
-    ]
-    .into_iter()
-    .enumerate()
-    {
+    let (program, payloads) = lifecycle_payloads()?;
+    for (sequence, (ordinal, path, payload)) in payloads.into_iter().enumerate() {
         let (bytes, key, expected_id) = lifecycle_signed_activity(
             ordinal,
             &payload,
             u64::try_from(sequence).map_err(|error| error.to_string())?,
         )?;
-        assert_eq!(
-            request(&address, "POST", path, "application/octet-stream", &bytes)?.status,
-            400
-        );
-        if ordinal != 3 {
-            assert_eq!(
-                request_with_idempotency(
-                    &address,
-                    "POST",
-                    path,
-                    "application/json",
-                    &bytes,
-                    Some(&key)
-                )?
-                .status,
-                415
-            );
-        }
-        if ordinal == 1 {
-            assert_eq!(
-                request_with_idempotency(
-                    &address,
-                    "POST",
-                    "/v1/programs/upgrade",
-                    "application/octet-stream",
-                    &bytes,
-                    Some(&key)
-                )?
-                .status,
-                400
-            );
-            let mut corrupt = payload.clone();
-            corrupt[68] ^= 1;
-            let (corrupt, corrupt_key, _) = lifecycle_signed_activity(ordinal, &corrupt, 0)?;
-            assert_eq!(
-                request_with_idempotency(
-                    &address,
-                    "POST",
-                    path,
-                    "application/octet-stream",
-                    &corrupt,
-                    Some(&corrupt_key)
-                )?
-                .status,
-                400
-            );
-        }
+        reject_lifecycle_mutations(&address, ordinal, path, &payload, &bytes, &key)?;
         let reply = request_with_idempotency(
             &address,
             "POST",
@@ -692,103 +553,14 @@ fn lifecycle_routes_execute_and_replay_real_native_state_receipts() -> Result<()
         let document: serde_json::Value =
             serde_json::from_slice(&reply.body).map_err(|error| error.to_string())?;
         let result = &document["result"];
-        if ordinal != 3 {
+        if ordinal == 3 {
+            assert_eq!(result["idempotency_key"], key);
+        } else {
             assert!(result.get("program_id").is_none());
             assert!(result.get("idempotency_key").is_none());
-        } else {
-            assert_eq!(result["idempotency_key"], key);
         }
-        let receipt = hex_decode(result["receipt"].as_str().ok_or("receipt missing")?)?;
-        let verified = layerx_proof::receipt::verify_sequencer_signature(&receipt, public)
-            .map_err(|error| format!("{error:?}"))?;
-        let protocol = verified.protocol().ok_or("protocol receipt missing")?;
-        assert_eq!(protocol.activity_id(), expected_id);
-        assert_eq!(
-            (
-                protocol.module_id(),
-                protocol.module_version(),
-                protocol.operation()
-            ),
-            (9, 4, if ordinal == 3 { 3 } else { 0 })
-        );
-        let execution_detail = if ordinal == 3 {
-            let terminal = hex_decode(
-                result["terminal_payload"]
-                    .as_str()
-                    .ok_or("terminal missing")?,
-            )?;
-            let graph = hex_decode(result["call_graph"].as_str().ok_or("graph missing")?)?;
-            let execution = layerx_proof::program::verify_program_execution(
-                &receipt,
-                &terminal,
-                &graph,
-                layerx_proof::program::ProgramExecutionExpectation {
-                    sequencer_public_key: public,
-                    previous_state_root: protocol.previous_state_root(),
-                    activity_id: expected_id,
-                    program_id: program.bytes(),
-                    guest_abi_version: 2,
-                },
-            )
-            .map_err(|error| format!("{error:?}"))?;
-            format!(
-                "resource={:?} failure={:?} terminal={:?}",
-                execution.authenticated_resource(),
-                execution.authenticated_failure(),
-                execution.terminal()
-            )
-        } else {
-            String::new()
-        };
-        assert_eq!(
-            protocol.result_code(),
-            0,
-            "ordinal={ordinal} sequence={sequence} activity={expected_id:02x?} {execution_detail}"
-        );
-        let authority = layerx_proof::receipt::AuthorizedBatch::new(
-            protocol.batch_id(),
-            protocol.asset(),
-            protocol.previous_state_root(),
-            protocol.resulting_state_root(),
-            public,
-        );
-        if ordinal == 3 {
-            let terminal = hex_decode(
-                result["terminal_payload"]
-                    .as_str()
-                    .ok_or("terminal missing")?,
-            )?;
-            let graph = hex_decode(result["call_graph"].as_str().ok_or("graph missing")?)?;
-            let execution = layerx_proof::program::verify_program_execution(
-                &receipt,
-                &terminal,
-                &graph,
-                layerx_proof::program::ProgramExecutionExpectation {
-                    sequencer_public_key: public,
-                    previous_state_root: protocol.previous_state_root(),
-                    activity_id: expected_id,
-                    program_id: program.bytes(),
-                    guest_abi_version: 2,
-                },
-            )
-            .map_err(|error| format!("{error:?}"))?;
-            assert!(execution.fee_units() > 0);
-            assert!(execution.cpu_fuel() > 0);
-            assert!(execution.memory_bytes() >= 65_536);
-            assert_eq!(execution.output_values(), 2);
-        } else {
-            assert!(protocol.program_outcome().is_none());
-            layerx_proof::receipt::verify_program_state(&receipt, &authority)
-                .map_err(|error| format!("{error:?}"))?;
-        }
-        let mut corrupt = receipt;
-        let last = corrupt.len() - 1;
-        corrupt[last] ^= 1;
-        assert!(layerx_proof::receipt::verify_sequencer_signature(&corrupt, public).is_err());
-        if ordinal != 3 {
-            assert!(layerx_proof::receipt::verify_program_state(&corrupt, &authority).is_err());
-        }
-        let replay = request_with_idempotency(
+        verify_lifecycle_receipt(result, public, program, expected_id, ordinal, sequence)?;
+        let repeated = request_with_idempotency(
             &address,
             "POST",
             path,
@@ -796,10 +568,10 @@ fn lifecycle_routes_execute_and_replay_real_native_state_receipts() -> Result<()
             &bytes,
             Some(&key),
         )?;
-        assert_eq!(replay.status, 200, "{}", replay.text());
-        let replay: serde_json::Value =
-            serde_json::from_slice(&replay.body).map_err(|error| error.to_string())?;
-        assert_eq!(replay["result"], *result);
+        assert_eq!(repeated.status, 200, "{}", repeated.text());
+        let repeated: serde_json::Value =
+            serde_json::from_slice(&repeated.body).map_err(|error| error.to_string())?;
+        assert_eq!(repeated["result"], *result);
         if ordinal == 3 {
             let snapshot = request(&address, "GET", "/__emulator/snapshot", "", &[])?;
             assert_eq!(
@@ -852,10 +624,7 @@ fn native_and_legacy_profiles_keep_snapshot_and_module_versions_separate() -> Re
         let public = ed25519_dalek::SigningKey::from_bytes(&EMULATOR_SEED)
             .verifying_key()
             .to_bytes();
-        let public = public
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
+        let public = hex_encode(&public);
         let body = format!("{{\"did\":\"did:layerx:lifecycle\",\"public_key\":\"{public}\",\"amount_lo\":1000000}}");
         assert_eq!(
             post_json(address, "/__emulator/accounts/prefund", &body)?.status,
@@ -952,55 +721,8 @@ fn native_and_legacy_profiles_keep_snapshot_and_module_versions_separate() -> Re
 #[test]
 fn move_quote_commit_replay_recovery_and_lost_ack_use_the_real_transition() -> Result<(), String> {
     let address = boot()?;
-    let source_public = ed25519_dalek::SigningKey::from_bytes(&EMULATOR_SEED)
-        .verifying_key()
-        .to_bytes();
-    let source_public = source_public
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    let destination_public = "24".repeat(32);
-    let source = "agent:did:layerx:move-source:main";
-    let destination = "agent:did:layerx:move-destination:main";
-    let source_prefund = format!(
-        "{{\"did\":\"did:layerx:move-source\",\"public_key\":\"{source_public}\",\"amount_lo\":1000}}"
-    );
-    let destination_prefund = format!(
-        "{{\"did\":\"did:layerx:move-destination\",\"public_key\":\"{destination_public}\",\"amount_lo\":0}}"
-    );
-    assert_eq!(
-        post_json(&address, "/__emulator/accounts/prefund", &source_prefund)?.status,
-        200
-    );
-    assert_eq!(
-        post_json(
-            &address,
-            "/__emulator/accounts/prefund",
-            &destination_prefund
-        )?
-        .status,
-        200
-    );
-    let before_reply = request(&address, "GET", "/v1/state", "", &[])?;
-    let before_state = response_result(&before_reply)?;
-    let before_root = before_state
-        .get("state_root")
-        .and_then(serde_json::Value::as_str)
-        .ok_or("pre-move state omitted state_root")?
-        .to_owned();
-    assert_eq!(
-        before_state
-            .get("canonical_state_root")
-            .and_then(serde_json::Value::as_str),
-        Some(before_root.as_str())
-    );
-    let before_receipt_root = before_state
-        .get("receipt_state_root")
-        .and_then(serde_json::Value::as_str)
-        .ok_or("pre-move state omitted receipt_state_root")?
-        .to_owned();
-    assert_ne!(before_receipt_root, before_root);
-
+    let (source, destination) = prefund_move_accounts(&address)?;
+    let (before_state, before_root, before_receipt_root) = move_before_state(&address)?;
     let quote_body = format!(
         "{{\"source\":\"{source}\",\"destination\":\"{destination}\",\"money\":{{\"currency\":\"LXP\",\"amount\":\"250\"}}}}"
     );
@@ -1040,11 +762,390 @@ fn move_quote_commit_replay_recovery_and_lost_ack_use_the_real_transition() -> R
             .and_then(serde_json::Value::as_str),
         Some("done")
     );
+    let resulting_root = verify_move_receipt(
+        &address,
+        &committed_result,
+        &before_state,
+        (source, destination),
+        &before_receipt_root,
+    )?;
+    let (committed_root, committed_receipt_root) = verify_move_replay(
+        &address,
+        &commit_body,
+        idempotency,
+        &committed,
+        (source, destination),
+        (&before_root, resulting_root),
+    )?;
+    verify_move_snapshot(
+        &address,
+        &commit_body,
+        idempotency,
+        &committed,
+        (&committed_root, &committed_receipt_root),
+    )?;
+    verify_move_refusal(
+        &address,
+        &quote_body,
+        (&committed_root, &committed_receipt_root),
+    )?;
+    let second_commit = verify_move_conflict(
+        &address,
+        &quote_body,
+        idempotency,
+        (&committed_root, &committed_receipt_root),
+    )?;
+    verify_move_lost_ack(&address, &second_commit)?;
+    verify_move_final_balances(&address, source, destination, &committed_root)?;
+    let race_state = verify_move_race(&address, &quote_body)?;
+    verify_move_race_balances(&race_state, source, destination)?;
+    Ok(())
+}
+
+#[test]
+fn mutations_require_octet_stream_bodies() -> Result<(), String> {
+    let address = boot()?;
+    for path in [
+        "/v1/activities",
+        "/v1/programs/call",
+        "/v1/programs/deploy",
+        "/v1/programs/upgrade",
+        "/v1/programs/wind-down",
+    ] {
+        for content_type in [
+            "application/json",
+            "text/plain",
+            "application/octet-stream; charset=utf-8",
+        ] {
+            let reply = request_with_idempotency(
+                &address,
+                "POST",
+                path,
+                content_type,
+                b"{}",
+                Some(&"11".repeat(32)),
+            )?;
+            assert_eq!(reply.status, 415, "{}", reply.text());
+            if path.starts_with("/v1/programs/") {
+                let document: serde_json::Value =
+                    serde_json::from_slice(&reply.body).map_err(|error| error.to_string())?;
+                assert_eq!(document["reason"], "activity_content_type_required");
+            } else {
+                assert_eq!(
+                    error_code(&reply).as_deref(),
+                    Some("activity_content_type_required")
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    bytes.iter().fold(String::new(), |mut output, byte| {
+        write!(output, "{byte:02x}")
+            .unwrap_or_else(|error| panic!("hex formatting failed: {error}"));
+        output
+    })
+}
+
+type LifecyclePayload = (u16, &'static str, Vec<u8>);
+fn lifecycle_payloads() -> Result<(layerx_types::intent::ProgramId, Vec<LifecyclePayload>), String>
+{
+    use layerx_types::intent::ProgramId;
+    use layerx_types::program_lifecycle::{
+        NativeProgramDeploy, NativeProgramUpgrade, NativeProgramWindDown, ProgramUpgradePolicy,
+        ProgramWindDownOperation,
+    };
+    use sha2::{Digest, Sha256};
+    let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../sdk/conformance/fixtures/native-program-deploy-v3.json");
+    let fixture: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(fixture_path).map_err(|error| error.to_string())?)
+            .map_err(|error| error.to_string())?;
+    let encoded = hex_decode(fixture["payload_hex"].as_str().ok_or("missing C payload")?)?;
+    let original = NativeProgramDeploy::decode(&encoded).map_err(|error| format!("{error:?}"))?;
+    let account = layerx_types::account::AccountId::parse("agent:did:layerx:lifecycle:main")
+        .map_err(|error| format!("{error:?}"))?;
+    let principal = layerx_wire::hash::account_id_for_protocol(&account, 3)
+        .map_err(|error| format!("{error:?}"))?;
+    let program = ProgramId::new([0x71; 32]);
+    let wasm = lifecycle_echo_guest();
+    assert_eq!(
+        original.encode().map_err(|error| format!("{error:?}"))?,
+        encoded
+    );
+    let deploy = NativeProgramDeploy {
+        program_id: program,
+        guest_abi: 2,
+        policy: ProgramUpgradePolicy::Authority(principal),
+        wasm: &wasm,
+        new_hash: Sha256::digest(&wasm).into(),
+        interface: None,
+    };
+    let call = layerx_types::program_call::NativeProgramCall {
+        program_id: program,
+        guest_abi: 2,
+        entrypoint: b"layerx_call",
+        calldata: b"echo",
+        capabilities: &[0, 0],
+        access_declaration: b"LayerX/programs/access-declaration/v1\0\0",
+        response_capacity: 4096,
+        resources: layerx_types::program_call::Resources([100_000, 65_536, 0, 0, 2, 4096, 0]),
+    };
+    let mut upgraded_wasm = deploy.wasm.to_vec();
+    upgraded_wasm.extend_from_slice(b"\0\x08\x07upgrade");
+    let upgrade = NativeProgramUpgrade {
+        program_id: program,
+        guest_abi: 2,
+        old_hash: deploy.new_hash,
+        new_hash: Sha256::digest(&upgraded_wasm).into(),
+        migration_hook: &[],
+        clear_interface: false,
+        interface: deploy.interface,
+        wasm: &upgraded_wasm,
+    };
+    let deprecate = NativeProgramWindDown {
+        program_id: program,
+        operation: ProgramWindDownOperation::Deprecate {
+            exit_program: program.bytes(),
+            deadline_batch: 1000,
+        },
+    };
+    let payloads = vec![
+        (
+            1,
+            "/v1/programs/deploy",
+            deploy.encode().map_err(|error| format!("{error:?}"))?,
+        ),
+        (
+            3,
+            "/v1/programs/call",
+            call.encode().map_err(|error| format!("{error:?}"))?,
+        ),
+        (
+            2,
+            "/v1/programs/upgrade",
+            upgrade.encode().map_err(|error| format!("{error:?}"))?,
+        ),
+        (
+            3,
+            "/v1/programs/call",
+            call.encode().map_err(|error| format!("{error:?}"))?,
+        ),
+        (
+            7,
+            "/v1/programs/wind-down",
+            deprecate.encode().map_err(|error| format!("{error:?}"))?,
+        ),
+    ];
+    Ok((program, payloads))
+}
+
+fn reject_lifecycle_mutations(
+    address: &str,
+    ordinal: u16,
+    path: &str,
+    payload: &[u8],
+    bytes: &[u8],
+    key: &str,
+) -> Result<(), String> {
+    assert_eq!(
+        request(address, "POST", path, "application/octet-stream", bytes)?.status,
+        400
+    );
+    if ordinal != 3 {
+        assert_eq!(
+            request_with_idempotency(address, "POST", path, "application/json", bytes, Some(key))?
+                .status,
+            415
+        );
+    }
+    if ordinal == 1 {
+        assert_eq!(
+            request_with_idempotency(
+                address,
+                "POST",
+                "/v1/programs/upgrade",
+                "application/octet-stream",
+                bytes,
+                Some(key)
+            )?
+            .status,
+            400
+        );
+        let mut corrupt = payload.to_vec();
+        corrupt[68] ^= 1;
+        let (corrupt, corrupt_key, _) = lifecycle_signed_activity(ordinal, &corrupt, 0)?;
+        assert_eq!(
+            request_with_idempotency(
+                address,
+                "POST",
+                path,
+                "application/octet-stream",
+                &corrupt,
+                Some(&corrupt_key)
+            )?
+            .status,
+            400
+        );
+    }
+    Ok(())
+}
+
+fn verify_lifecycle_receipt(
+    result: &serde_json::Value,
+    public: [u8; 32],
+    program: layerx_types::intent::ProgramId,
+    expected_id: [u8; 32],
+    ordinal: u16,
+    sequence: usize,
+) -> Result<(), String> {
+    let receipt = hex_decode(result["receipt"].as_str().ok_or("receipt missing")?)?;
+    let verified = layerx_proof::receipt::verify_sequencer_signature(&receipt, public)
+        .map_err(|error| format!("{error:?}"))?;
+    let protocol = verified.protocol().ok_or("protocol receipt missing")?;
+    assert_eq!(protocol.activity_id(), expected_id);
+    assert_eq!(
+        (
+            protocol.module_id(),
+            protocol.module_version(),
+            protocol.operation()
+        ),
+        (9, 4, if ordinal == 3 { 3 } else { 0 })
+    );
+    let execution_detail = if ordinal == 3 {
+        let terminal = hex_decode(
+            result["terminal_payload"]
+                .as_str()
+                .ok_or("terminal missing")?,
+        )?;
+        let graph = hex_decode(result["call_graph"].as_str().ok_or("graph missing")?)?;
+        let execution = layerx_proof::program::verify_program_execution(
+            &receipt,
+            &terminal,
+            &graph,
+            layerx_proof::program::ProgramExecutionExpectation {
+                sequencer_public_key: public,
+                previous_state_root: protocol.previous_state_root(),
+                activity_id: expected_id,
+                program_id: program.bytes(),
+                guest_abi_version: 2,
+            },
+        )
+        .map_err(|error| format!("{error:?}"))?;
+        format!(
+            "resource={:?} failure={:?} terminal={:?}",
+            execution.authenticated_resource(),
+            execution.authenticated_failure(),
+            execution.terminal()
+        )
+    } else {
+        String::new()
+    };
+    assert_eq!(
+        protocol.result_code(),
+        0,
+        "ordinal={ordinal} sequence={sequence} activity={expected_id:02x?} {execution_detail}"
+    );
+    verify_lifecycle_execution(result, &receipt, public, program, expected_id, ordinal)?;
+    Ok(())
+}
+
+fn verify_lifecycle_execution(
+    result: &serde_json::Value,
+    receipt: &[u8],
+    public: [u8; 32],
+    program: layerx_types::intent::ProgramId,
+    expected_id: [u8; 32],
+    ordinal: u16,
+) -> Result<(), String> {
+    let verified = layerx_proof::receipt::verify_sequencer_signature(receipt, public)
+        .map_err(|error| format!("{error:?}"))?;
+    let protocol = verified.protocol().ok_or("protocol receipt missing")?;
+    let authority = layerx_proof::receipt::AuthorizedBatch::new(
+        protocol.batch_id(),
+        protocol.asset(),
+        protocol.previous_state_root(),
+        protocol.resulting_state_root(),
+        public,
+    );
+    if ordinal == 3 {
+        let terminal = hex_decode(
+            result["terminal_payload"]
+                .as_str()
+                .ok_or("terminal missing")?,
+        )?;
+        let graph = hex_decode(result["call_graph"].as_str().ok_or("graph missing")?)?;
+        let execution = layerx_proof::program::verify_program_execution(
+            receipt,
+            &terminal,
+            &graph,
+            layerx_proof::program::ProgramExecutionExpectation {
+                sequencer_public_key: public,
+                previous_state_root: protocol.previous_state_root(),
+                activity_id: expected_id,
+                program_id: program.bytes(),
+                guest_abi_version: 2,
+            },
+        )
+        .map_err(|error| format!("{error:?}"))?;
+        assert!(execution.fee_units() > 0);
+        assert!(execution.cpu_fuel() > 0);
+        assert!(execution.memory_bytes() >= 65_536);
+        assert_eq!(execution.output_values(), 2);
+    } else {
+        assert!(protocol.program_outcome().is_none());
+        layerx_proof::receipt::verify_program_state(receipt, &authority)
+            .map_err(|error| format!("{error:?}"))?;
+    }
+    let mut corrupt = receipt.to_vec();
+    let last = corrupt.len() - 1;
+    corrupt[last] ^= 1;
+    assert!(layerx_proof::receipt::verify_sequencer_signature(&corrupt, public).is_err());
+    if ordinal != 3 {
+        assert!(layerx_proof::receipt::verify_program_state(&corrupt, &authority).is_err());
+    }
+    Ok(())
+}
+
+fn move_before_state(address: &str) -> Result<(serde_json::Value, String, String), String> {
+    let before_reply = request(address, "GET", "/v1/state", "", &[])?;
+    let before_state = response_result(&before_reply)?;
+    let before_root = before_state
+        .get("state_root")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("pre-move state omitted state_root")?
+        .to_owned();
+    assert_eq!(
+        before_state
+            .get("canonical_state_root")
+            .and_then(serde_json::Value::as_str),
+        Some(before_root.as_str())
+    );
+    let before_receipt_root = before_state
+        .get("receipt_state_root")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("pre-move state omitted receipt_state_root")?
+        .to_owned();
+    assert_ne!(before_receipt_root, before_root);
+
+    Ok((before_state, before_root, before_receipt_root))
+}
+
+fn verify_move_receipt(
+    address: &str,
+    committed_result: &serde_json::Value,
+    before_state: &serde_json::Value,
+    accounts: (&str, &str),
+    before_receipt_root: &str,
+) -> Result<[u8; 32], String> {
+    let (source, destination) = accounts;
     let receipt_path = committed_result
         .pointer("/evidence/0/source_ref")
         .and_then(serde_json::Value::as_str)
         .ok_or("move journey omitted receipt source_ref")?;
-    let receipt_reply = request(&address, "GET", receipt_path, "", &[])?;
+    let receipt_reply = request(address, "GET", receipt_path, "", &[])?;
     assert_eq!(receipt_reply.status, 200);
     let receipt_result = response_result(&receipt_reply)?;
     let receipt_hex = receipt_result
@@ -1097,7 +1198,7 @@ fn move_quote_commit_replay_recovery_and_lost_ack_use_the_real_transition() -> R
     assert_eq!(protocol.debit_sequence(), 0);
     assert_eq!(
         protocol.previous_state_root().as_slice(),
-        hex_decode(&before_receipt_root)?.as_slice()
+        hex_decode(before_receipt_root)?.as_slice()
     );
     assert_ne!(
         protocol.previous_state_root(),
@@ -1112,8 +1213,22 @@ fn move_quote_commit_replay_recovery_and_lost_ack_use_the_real_transition() -> R
         protocol.transfer_set_root()
     );
 
+    let resulting_root = protocol.resulting_state_root();
+    Ok(resulting_root)
+}
+
+fn verify_move_replay(
+    address: &str,
+    commit_body: &str,
+    idempotency: &str,
+    committed: &Reply,
+    accounts: (&str, &str),
+    roots: (&str, [u8; 32]),
+) -> Result<(String, String), String> {
+    let (source, destination) = accounts;
+    let (before_root, resulting_root) = roots;
     let replayed = request_with_idempotency(
-        &address,
+        address,
         "POST",
         "/v1/moves",
         "application/json",
@@ -1122,7 +1237,7 @@ fn move_quote_commit_replay_recovery_and_lost_ack_use_the_real_transition() -> R
     )?;
     assert_eq!(replayed.status, 200);
     assert_eq!(replayed.body, committed.body);
-    let state_reply = request(&address, "GET", "/v1/state", "", &[])?;
+    let state_reply = request(address, "GET", "/v1/state", "", &[])?;
     let state = response_result(&state_reply)?;
     let committed_root = state
         .get("state_root")
@@ -1136,7 +1251,7 @@ fn move_quote_commit_replay_recovery_and_lost_ack_use_the_real_transition() -> R
         .to_owned();
     assert_eq!(
         hex_decode(&committed_receipt_root)?.as_slice(),
-        protocol.resulting_state_root().as_slice()
+        resulting_root.as_slice()
     );
     assert_ne!(
         committed_root, before_root,
@@ -1181,10 +1296,21 @@ fn move_quote_commit_replay_recovery_and_lost_ack_use_the_real_transition() -> R
         Some(0)
     );
 
-    let snapshot = request(&address, "GET", "/__emulator/snapshot", "", &[])?;
+    Ok((committed_root, committed_receipt_root))
+}
+
+fn verify_move_snapshot(
+    address: &str,
+    commit_body: &str,
+    idempotency: &str,
+    committed: &Reply,
+    roots: (&str, &str),
+) -> Result<(), String> {
+    let (committed_root, committed_receipt_root) = roots;
+    let snapshot = request(address, "GET", "/__emulator/snapshot", "", &[])?;
     assert_eq!(snapshot.status, 200);
     let imported = request(
-        &address,
+        address,
         "PUT",
         "/__emulator/snapshot",
         "application/octet-stream",
@@ -1197,7 +1323,7 @@ fn move_quote_commit_replay_recovery_and_lost_ack_use_the_real_transition() -> R
         imported.text()
     );
     let recovered_replay = request_with_idempotency(
-        &address,
+        address,
         "POST",
         "/v1/moves",
         "application/json",
@@ -1206,49 +1332,64 @@ fn move_quote_commit_replay_recovery_and_lost_ack_use_the_real_transition() -> R
     )?;
     assert_eq!(recovered_replay.status, 200);
     assert_eq!(recovered_replay.body, committed.body);
-    let recovered_state_reply = request(&address, "GET", "/v1/state", "", &[])?;
+    let recovered_state_reply = request(address, "GET", "/v1/state", "", &[])?;
     let recovered_state = response_result(&recovered_state_reply)?;
     assert_eq!(
         recovered_state
             .get("state_root")
             .and_then(serde_json::Value::as_str),
-        Some(committed_root.as_str()),
+        Some(committed_root),
         "snapshot recovery changed the committed account root"
     );
     assert_eq!(
         recovered_state
             .get("receipt_state_root")
             .and_then(serde_json::Value::as_str),
-        Some(committed_receipt_root.as_str()),
+        Some(committed_receipt_root),
         "snapshot recovery changed the committed receipt root"
     );
 
+    Ok(())
+}
+
+fn verify_move_refusal(address: &str, quote_body: &str, roots: (&str, &str)) -> Result<(), String> {
+    let (committed_root, committed_receipt_root) = roots;
     let insufficient = quote_body.replace("\"250\"", "\"9999\"");
-    let insufficient_reply = post_json(&address, "/v1/moves/quote", &insufficient)?;
+    let insufficient_reply = post_json(address, "/v1/moves/quote", &insufficient)?;
     assert_eq!(insufficient_reply.status, 409);
     assert_eq!(
         error_code(&insufficient_reply).as_deref(),
         Some("move_balance_unavailable")
     );
-    let after_refusal_reply = request(&address, "GET", "/v1/state", "", &[])?;
+    let after_refusal_reply = request(address, "GET", "/v1/state", "", &[])?;
     let after_refusal = response_result(&after_refusal_reply)?;
     assert_eq!(
         after_refusal
             .get("state_root")
             .and_then(serde_json::Value::as_str),
-        Some(committed_root.as_str()),
+        Some(committed_root),
         "refused quote changed canonical state"
     );
     assert_eq!(
         after_refusal
             .get("receipt_state_root")
             .and_then(serde_json::Value::as_str),
-        Some(committed_receipt_root.as_str()),
+        Some(committed_receipt_root),
         "refused quote changed receipt state"
     );
 
+    Ok(())
+}
+
+fn verify_move_conflict(
+    address: &str,
+    quote_body: &str,
+    idempotency: &str,
+    roots: (&str, &str),
+) -> Result<String, String> {
+    let (committed_root, committed_receipt_root) = roots;
     let second_quote_body = quote_body.replace("\"250\"", "\"100\"");
-    let second_quote_reply = post_json(&address, "/v1/moves/quote", &second_quote_body)?;
+    let second_quote_reply = post_json(address, "/v1/moves/quote", &second_quote_body)?;
     assert_eq!(second_quote_reply.status, 200);
     let second_quote = response_result(&second_quote_reply)?;
     let second_quote_id = second_quote
@@ -1257,7 +1398,7 @@ fn move_quote_commit_replay_recovery_and_lost_ack_use_the_real_transition() -> R
         .ok_or("second quote omitted quote_id")?;
     let second_commit = format!("{{\"quote_id\":\"{second_quote_id}\"}}");
     let conflicting = request_with_idempotency(
-        &address,
+        address,
         "POST",
         "/v1/moves",
         "application/json",
@@ -1269,25 +1410,29 @@ fn move_quote_commit_replay_recovery_and_lost_ack_use_the_real_transition() -> R
         error_code(&conflicting).as_deref(),
         Some("idempotency_conflict")
     );
-    let after_conflict_reply = request(&address, "GET", "/v1/state", "", &[])?;
+    let after_conflict_reply = request(address, "GET", "/v1/state", "", &[])?;
     let after_conflict = response_result(&after_conflict_reply)?;
     assert_eq!(
         after_conflict
             .get("state_root")
             .and_then(serde_json::Value::as_str),
-        Some(committed_root.as_str()),
+        Some(committed_root),
         "idempotency conflict caused a second debit"
     );
     assert_eq!(
         after_conflict
             .get("receipt_state_root")
             .and_then(serde_json::Value::as_str),
-        Some(committed_receipt_root.as_str()),
+        Some(committed_receipt_root),
         "idempotency conflict changed receipt state"
     );
+    Ok(second_commit)
+}
+
+fn verify_move_lost_ack(address: &str, second_commit: &str) -> Result<(), String> {
     assert_eq!(
         post_json(
-            &address,
+            address,
             "/__emulator/faults",
             "{\"kind\":\"drop_receipt\",\"count\":1}"
         )?
@@ -1296,7 +1441,7 @@ fn move_quote_commit_replay_recovery_and_lost_ack_use_the_real_transition() -> R
     );
     let second_key = "move-payment-test-0002";
     let lost_ack = request_with_idempotency(
-        &address,
+        address,
         "POST",
         "/v1/moves",
         "application/json",
@@ -1309,7 +1454,7 @@ fn move_quote_commit_replay_recovery_and_lost_ack_use_the_real_transition() -> R
         Some("move_acknowledgement_lost")
     );
     let resolved = request_with_idempotency(
-        &address,
+        address,
         "POST",
         "/v1/moves",
         "application/json",
@@ -1322,7 +1467,16 @@ fn move_quote_commit_replay_recovery_and_lost_ack_use_the_real_transition() -> R
         "lost acknowledgement did not resolve: {}",
         resolved.text()
     );
-    let final_state_reply = request(&address, "GET", "/v1/state", "", &[])?;
+    Ok(())
+}
+
+fn verify_move_final_balances(
+    address: &str,
+    source: &str,
+    destination: &str,
+    committed_root: &str,
+) -> Result<(), String> {
+    let final_state_reply = request(address, "GET", "/v1/state", "", &[])?;
     let final_state = response_result(&final_state_reply)?;
     let final_root = final_state
         .get("state_root")
@@ -1368,35 +1522,39 @@ fn move_quote_commit_replay_recovery_and_lost_ack_use_the_real_transition() -> R
         Some(0)
     );
 
-    let competing_a_reply = post_json(
-        &address,
+    Ok(())
+}
+
+fn verify_move_race(address: &str, quote_body: &str) -> Result<serde_json::Value, String> {
+    let first_quote_reply = post_json(
+        address,
         "/v1/moves/quote",
         &quote_body.replace("\"250\"", "\"50\""),
     )?;
-    let competing_b_reply = post_json(
-        &address,
+    let second_quote_reply = post_json(
+        address,
         "/v1/moves/quote",
         &quote_body.replace("\"250\"", "\"60\""),
     )?;
-    assert_eq!(competing_a_reply.status, 200);
-    assert_eq!(competing_b_reply.status, 200);
-    let competing_a = response_result(&competing_a_reply)?;
-    let competing_b = response_result(&competing_b_reply)?;
-    let competing_a_id = competing_a
+    assert_eq!(first_quote_reply.status, 200);
+    assert_eq!(second_quote_reply.status, 200);
+    let first_quote = response_result(&first_quote_reply)?;
+    let second_quote = response_result(&second_quote_reply)?;
+    let first_quote_id = first_quote
         .get("quote_id")
         .and_then(serde_json::Value::as_str)
         .ok_or("first competing quote omitted quote_id")?;
-    let competing_b_id = competing_b
+    let second_quote_id = second_quote
         .get("quote_id")
         .and_then(serde_json::Value::as_str)
         .ok_or("second competing quote omitted quote_id")?;
-    assert_ne!(competing_a_id, competing_b_id);
+    assert_ne!(first_quote_id, second_quote_id);
     let winner = request_with_idempotency(
-        &address,
+        address,
         "POST",
         "/v1/moves",
         "application/json",
-        format!("{{\"quote_id\":\"{competing_a_id}\"}}").as_bytes(),
+        format!("{{\"quote_id\":\"{first_quote_id}\"}}").as_bytes(),
         Some("move-payment-race-0003"),
     )?;
     assert_eq!(
@@ -1405,7 +1563,7 @@ fn move_quote_commit_replay_recovery_and_lost_ack_use_the_real_transition() -> R
         "winning quote failed: {}",
         winner.text()
     );
-    let winner_state_reply = request(&address, "GET", "/v1/state", "", &[])?;
+    let winner_state_reply = request(address, "GET", "/v1/state", "", &[])?;
     let winner_state = response_result(&winner_state_reply)?;
     let winner_root = winner_state
         .get("state_root")
@@ -1418,16 +1576,16 @@ fn move_quote_commit_replay_recovery_and_lost_ack_use_the_real_transition() -> R
         .ok_or("winner state omitted receipt_state_root")?
         .to_owned();
     let loser = request_with_idempotency(
-        &address,
+        address,
         "POST",
         "/v1/moves",
         "application/json",
-        format!("{{\"quote_id\":\"{competing_b_id}\"}}").as_bytes(),
+        format!("{{\"quote_id\":\"{second_quote_id}\"}}").as_bytes(),
         Some("move-payment-race-0004"),
     )?;
     assert_eq!(loser.status, 409);
     assert_eq!(error_code(&loser).as_deref(), Some("move_quote_stale"));
-    let race_state_reply = request(&address, "GET", "/v1/state", "", &[])?;
+    let race_state_reply = request(address, "GET", "/v1/state", "", &[])?;
     let race_state = response_result(&race_state_reply)?;
     assert_eq!(
         race_state
@@ -1443,6 +1601,14 @@ fn move_quote_commit_replay_recovery_and_lost_ack_use_the_real_transition() -> R
         Some(winner_receipt_root.as_str()),
         "losing same-sequence quote changed post-winner receipt root"
     );
+    Ok(race_state)
+}
+
+fn verify_move_race_balances(
+    race_state: &serde_json::Value,
+    source: &str,
+    destination: &str,
+) -> Result<(), String> {
     let race_accounts = race_state
         .get("accounts")
         .and_then(serde_json::Value::as_array)
@@ -1478,41 +1644,32 @@ fn move_quote_commit_replay_recovery_and_lost_ack_use_the_real_transition() -> R
     Ok(())
 }
 
-#[test]
-fn mutations_require_octet_stream_bodies() -> Result<(), String> {
-    let address = boot()?;
-    for path in [
-        "/v1/activities",
-        "/v1/programs/call",
-        "/v1/programs/deploy",
-        "/v1/programs/upgrade",
-        "/v1/programs/wind-down",
-    ] {
-        for content_type in [
-            "application/json",
-            "text/plain",
-            "application/octet-stream; charset=utf-8",
-        ] {
-            let reply = request_with_idempotency(
-                &address,
-                "POST",
-                path,
-                content_type,
-                b"{}",
-                Some(&"11".repeat(32)),
-            )?;
-            assert_eq!(reply.status, 415, "{}", reply.text());
-            if path.starts_with("/v1/programs/") {
-                let document: serde_json::Value =
-                    serde_json::from_slice(&reply.body).map_err(|error| error.to_string())?;
-                assert_eq!(document["reason"], "activity_content_type_required");
-            } else {
-                assert_eq!(
-                    error_code(&reply).as_deref(),
-                    Some("activity_content_type_required")
-                );
-            }
-        }
-    }
-    Ok(())
+fn prefund_move_accounts(address: &str) -> Result<(&'static str, &'static str), String> {
+    let source_public = ed25519_dalek::SigningKey::from_bytes(&EMULATOR_SEED)
+        .verifying_key()
+        .to_bytes();
+    let source_public = hex_encode(&source_public);
+    let destination_public = "24".repeat(32);
+    let source = "agent:did:layerx:move-source:main";
+    let destination = "agent:did:layerx:move-destination:main";
+    let source_prefund = format!(
+        "{{\"did\":\"did:layerx:move-source\",\"public_key\":\"{source_public}\",\"amount_lo\":1000}}"
+    );
+    let destination_prefund = format!(
+        "{{\"did\":\"did:layerx:move-destination\",\"public_key\":\"{destination_public}\",\"amount_lo\":0}}"
+    );
+    assert_eq!(
+        post_json(address, "/__emulator/accounts/prefund", &source_prefund)?.status,
+        200
+    );
+    assert_eq!(
+        post_json(
+            address,
+            "/__emulator/accounts/prefund",
+            &destination_prefund
+        )?
+        .status,
+        200
+    );
+    Ok((source, destination))
 }
