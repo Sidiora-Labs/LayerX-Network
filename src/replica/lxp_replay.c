@@ -1,6 +1,7 @@
 #include "layerx/lxp_replica.h"
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_protocol.h"
+#include "layerx/programs.h"
 
 #include <string.h>
 
@@ -179,7 +180,7 @@ static lxp_replay_transition_fn transition_for(lxp_replay_engine *engine,
     return NULL;
 }
 
-lxp_result lxp_replay_batch(lxp_replay_engine *engine,
+static lxp_result replay_batch(lxp_replay_engine *engine, bool publication,
                             const lxp_batch_body *body,
                             const uint8_t starting_state_root[32],
                             lxp_arena *arena,
@@ -192,6 +193,9 @@ lxp_result lxp_replay_batch(lxp_replay_engine *engine,
     size_t activity_count;
     size_t receipt_count;
     size_t oracle_count;
+    size_t published_count = 0U;
+    lxp_byte_span *published_receipts = NULL;
+    bool maintenance_present;
     size_t i;
     void *memory;
     uint32_t parameter_version;
@@ -217,7 +221,28 @@ lxp_result lxp_replay_batch(lxp_replay_engine *engine,
         return LXP_ERR_VERSION_UNSUPPORTED;
     if (body->header.last_sequence < body->header.first_sequence)
         return LXP_ERR_BATCH_GAP;
-    if (lxp_protocol_version_uses_occupancy(body->header.protocol_version)) {
+    maintenance_present = lxp_protocol_version_uses_occupancy(body->header.protocol_version);
+    if (publication) {
+        status = lxp_replay_section_decode(&body->receipts, arena,
+            &published_receipts, &published_count);
+        if (status != LXP_OK) return status;
+        if (published_count != activity_count && published_count != activity_count + 1U)
+            return LXP_ERR_BATCH_GAP;
+        maintenance_present = published_count == activity_count + 1U;
+        if (maintenance_present) {
+            lxp_programs_occupancy_receipt record;
+            status = lxp_programs_occupancy_receipt_decode(
+                published_receipts[activity_count].bytes,
+                published_receipts[activity_count].length, &record);
+            if (status != LXP_OK) return status;
+            if (!lxp_protocol_version_uses_occupancy(body->header.protocol_version) ||
+                record.batch_number != body->header.batch_number ||
+                record.global_sequence != body->header.last_sequence ||
+                record.parameter_version != parameter_version)
+                return LXP_ERR_CONTEXT_MISMATCH;
+        }
+    }
+    if (maintenance_present) {
         if (engine->batch_finalize == NULL || activity_count == SIZE_MAX ||
             activity_count >= LXP_MAX_BATCH_ACTIVITIES ||
             body->header.last_sequence - body->header.first_sequence !=
@@ -261,14 +286,19 @@ lxp_result lxp_replay_batch(lxp_replay_engine *engine,
                             body->header.first_sequence + i, activities[i],
                             current_root, arena, &result->outputs[i]);
         if (status != LXP_OK) return status;
-        status = record_encode(&result->outputs[i], arena,
-                               &result->encoded_receipts[i]);
+        if (publication) {
+            result->encoded_receipts[i] = result->outputs[i].canonical_receipt;
+            status = result->encoded_receipts[i].length != 0U ? LXP_OK : LXP_ERR_NON_CANONICAL;
+        } else {
+            status = record_encode(&result->outputs[i], arena,
+                                   &result->encoded_receipts[i]);
+        }
         if (status != LXP_OK) return status;
         result->encoded_events[i] = result->outputs[i].canonical_events;
         (void)memcpy(current_root,
                      result->outputs[i].resulting_state_root, 32U);
     }
-    if (lxp_protocol_version_uses_occupancy(body->header.protocol_version)) {
+    if (maintenance_present) {
         status = engine->batch_finalize(
             engine->batch_finalize_context, &body->header,
             parameter_version, body->header.last_sequence, current_root,
@@ -276,8 +306,14 @@ lxp_result lxp_replay_batch(lxp_replay_engine *engine,
         if (status != LXP_OK) return status;
         if (result->batch_maintenance_output.canonical_events.length != 0U)
             return LXP_FATAL_INVARIANT;
-        status = record_encode(&result->batch_maintenance_output, arena,
-                               &result->encoded_batch_maintenance_receipt);
+        if (publication) {
+            result->encoded_batch_maintenance_receipt =
+                result->batch_maintenance_output.canonical_receipt;
+            status = result->encoded_batch_maintenance_receipt.length != 0U ? LXP_OK : LXP_ERR_NON_CANONICAL;
+        } else {
+            status = record_encode(&result->batch_maintenance_output, arena,
+                                   &result->encoded_batch_maintenance_receipt);
+        }
         if (status != LXP_OK) return status;
         result->encoded_receipts[activity_count] =
             result->encoded_batch_maintenance_receipt;
@@ -307,9 +343,25 @@ lxp_result lxp_replay_batch(lxp_replay_engine *engine,
         result->encoded_receipts, receipt_count,
         result->encoded_events, activity_count,
         oracles, oracle_count,
-        availability, 5U
+        publication ? NULL : availability, publication ? 0U : 5U
     };
     return lxp_batch_roots_compute(&root_inputs, arena, &result->roots);
+}
+
+lxp_result lxp_replay_batch(lxp_replay_engine *engine,
+    const lxp_batch_body *body, const uint8_t starting_state_root[32],
+    lxp_arena *arena, lxp_replay_batch_result *result)
+{
+    return replay_batch(engine, false, body, starting_state_root, arena, result);
+}
+
+lxp_result lxp_replay_batch_publication(lxp_replay_engine *engine,
+    const lxp_batch_body *body, const uint8_t starting_state_root[32],
+    lxp_arena *arena, lxp_replay_batch_result *result)
+{
+    lxp_result status = replay_batch(engine, true, body, starting_state_root, arena, result);
+    if (status == LXP_OK) status = lxp_replay_verify_roots(result, body);
+    return status;
 }
 
 lxp_result lxp_replay_verify_roots(const lxp_replay_batch_result *recomputed,

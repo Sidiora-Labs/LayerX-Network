@@ -5,6 +5,7 @@ pub mod decode;
 pub mod encode;
 pub mod hash;
 pub mod limits;
+pub mod maintenance;
 pub mod receipt;
 pub mod sign;
 
