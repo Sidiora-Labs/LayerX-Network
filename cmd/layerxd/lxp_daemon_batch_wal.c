@@ -25,6 +25,7 @@
 
 enum {
     WAL_VERSION = 2,
+    WAL_MAINTENANCE_VERSION = 3,
     WAL_FIXED_BYTES = 762,
     WAL_PROOF_BYTES = 1033,
     WAL_DIGEST_BYTES = 32,
@@ -214,7 +215,7 @@ static lxp_result validate_canonical_items(
     (void)memcpy(batch_preimage,in->base.receipt_state_root,32U);
     (void)memcpy(batch_preimage+32U,header->activity_merkle_root,32U);
     put_u64(batch_preimage+64U,in->first_sequence);
-    put_u64(batch_preimage+72U,in->last_sequence);
+    put_u64(batch_preimage+72U,in->first_sequence + in->count - 1U);
     put_u64(batch_preimage+80U,in->batch_number);
     status=lxp_hash_context_value(batch_preimage,sizeof(batch_preimage),
                                   expected_batch_id);
@@ -292,7 +293,21 @@ static lxp_result validate_canonical_items(
         if(status==LXP_OK)previous=receipt;
         lxp_secure_zero(scratch,WAL_MAX_BYTES);
     }
-    if(status==LXP_OK &&
+    if (status == LXP_OK && in->maintenance.length != 0U) {
+        lxp_programs_occupancy_receipt maintenance;
+        status = lxp_programs_occupancy_receipt_decode(
+            in->maintenance.bytes, in->maintenance.length, &maintenance);
+        if (status == LXP_OK &&
+            (!lxp_protocol_version_uses_occupancy(in->protocol_version) ||
+             maintenance.batch_number != in->batch_number ||
+             maintenance.global_sequence != in->last_sequence ||
+             maintenance.parameter_version != in->parameter_version ||
+             lxp_ct_memcmp(maintenance.previous_state_root,
+                           previous.resulting_state_root, 32U) != 0 ||
+             lxp_ct_memcmp(maintenance.resulting_state_root,
+                           in->settled.receipt_state_root, 32U) != 0))
+            status = LXP_FATAL_REPLAY_DIVERGENCE;
+    } else if(status==LXP_OK &&
        lxp_ct_memcmp(previous.resulting_state_root,
                      in->settled.receipt_state_root,32U)!=0)
         status=LXP_FATAL_REPLAY_DIVERGENCE;
@@ -325,7 +340,8 @@ static lxp_result validate_input(const lxp_daemon_batch_wal_input *in)
         in->first_sequence==0U || in->last_sequence<in->first_sequence ||
         in->last_sequence==UINT64_MAX ||
         in->count-1U>UINT64_MAX-in->first_sequence ||
-        in->last_sequence!=in->first_sequence+(uint64_t)in->count-1U ||
+        in->last_sequence - in->first_sequence !=
+            (uint64_t)in->count - 1U + (in->maintenance.length != 0U ? 1U : 0U) ||
         in->base.next_sequence!=in->first_sequence ||
         in->settled.next_sequence==0U ||
         in->settled.next_sequence!=in->last_sequence+1U ||
@@ -376,7 +392,7 @@ static lxp_result validate_input(const lxp_daemon_batch_wal_input *in)
             in->activities[i].length>UINT32_MAX ||
             in->receipts[i].length>UINT32_MAX ||
             in->events[i].length>UINT32_MAX || proof->depth>LXP_MERKLE_MAX_DEPTH ||
-            proof->leaf_index!=(uint32_t)i || proof->leaf_count!=in->count ||
+            proof->leaf_index!=(uint32_t)i || proof->leaf_count!=in->count + (in->maintenance.length != 0U ? 1U : 0U) ||
             lxp_merkle_leaf_hash(in->receipts[i].bytes,
                                  in->receipts[i].length,leaf)!=LXP_OK ||
             lxp_merkle_proof_verify(leaf,proof,
@@ -385,6 +401,19 @@ static lxp_result validate_input(const lxp_daemon_batch_wal_input *in)
         for(j=proof->depth;j<LXP_MERKLE_MAX_DEPTH;++j)
             if(!lxp_ct_is_zero(proof->siblings[j],32U))
                 return LXP_ERR_NON_CANONICAL;
+    }
+    if (in->maintenance.length != 0U) {
+        uint8_t leaf[32];
+        const lxp_merkle_proof *proof = &in->maintenance_proof;
+        if (in->maintenance.bytes == NULL ||
+            in->maintenance.length > LXP_MAX_BATCH_BODY_BYTES - payload_bytes ||
+            proof->leaf_index != in->count || proof->leaf_count != in->count + 1U ||
+            proof->depth > LXP_MERKLE_MAX_DEPTH ||
+            lxp_merkle_leaf_hash(in->maintenance.bytes, in->maintenance.length, leaf) != LXP_OK ||
+            lxp_merkle_proof_verify(leaf, proof, header.receipt_merkle_root) != LXP_OK)
+            return LXP_ERR_NON_CANONICAL;
+        for (j = proof->depth; j < LXP_MERKLE_MAX_DEPTH; ++j)
+            if (!lxp_ct_is_zero(proof->siblings[j], 32U)) return LXP_ERR_NON_CANONICAL;
     }
     if(spans_root(in->activities,in->count,activity_root)!=LXP_OK ||
        spans_root(in->events,in->count,event_root)!=LXP_OK ||
@@ -396,9 +425,14 @@ static lxp_result validate_input(const lxp_daemon_batch_wal_input *in)
         return LXP_ERR_ROOT_MISMATCH;
     status=validate_canonical_items(in,&header);
     if(status!=LXP_OK)return status;
-    if(lxp_kernel_batch_publication_digest(
-           &in->base,&in->settled,in->activities,in->receipts,in->events,
-           in->count,publication)!=LXP_OK ||
+    status = in->maintenance.length != 0U ?
+        lxp_kernel_batch_publication_digest_maintenance(
+            &in->base, &in->settled, in->activities, in->receipts, in->events,
+            in->count, in->maintenance, publication) :
+        lxp_kernel_batch_publication_digest(
+            &in->base, &in->settled, in->activities, in->receipts, in->events,
+            in->count, publication);
+    if(status != LXP_OK ||
        lxp_ct_memcmp(publication,in->publication_digest,32U)!=0)
         return LXP_ERR_CONTEXT_MISMATCH;
     return LXP_OK;
@@ -411,7 +445,9 @@ static lxp_result encode_record(const lxp_daemon_batch_wal_input *in,
     size_t length=WAL_FIXED_BYTES+WAL_DIGEST_BYTES, body_length=0U;
     size_t offset=0U, i, j;
     uint8_t *bytes, digest[32];
-    uint16_t version = in != NULL && in->terminal_payloads != NULL ? WAL_VERSION : 1U;
+    uint16_t version = in != NULL && in->maintenance.length != 0U ?
+        WAL_MAINTENANCE_VERSION :
+        (in != NULL && in->terminal_payloads != NULL ? WAL_VERSION : 1U);
     lxp_result status=validate_input(in);
     if (status!=LXP_OK || (state!=LXP_DAEMON_BATCH_WAL_PREPARED &&
         state!=LXP_DAEMON_BATCH_WAL_ABORTED &&
@@ -425,7 +461,7 @@ static lxp_result encode_record(const lxp_daemon_batch_wal_input *in,
             in->call_graphs[i].length;
         if (terminal_length > LXP_MAX_ACTIVITY_BYTES ||
             graph_length > LXP_MAX_ACTIVITY_BYTES ||
-            !add_size(&length, version == WAL_VERSION ? 8U : 0U) ||
+            !add_size(&length, version >= WAL_VERSION ? 8U : 0U) ||
             !add_size(&length, terminal_length) ||
             !add_size(&length, graph_length) ||
             terminal_length > LXP_MAX_BATCH_BODY_BYTES - body_length)
@@ -455,6 +491,9 @@ static lxp_result encode_record(const lxp_daemon_batch_wal_input *in,
             !add_size(&length,in->events[i].length) ||
             !add_size(&length,WAL_PROOF_BYTES)) return LXP_ERR_LENGTH_LIMIT;
     }
+    if (version == WAL_MAINTENANCE_VERSION &&
+        (!add_size(&length, 4U + WAL_PROOF_BYTES) ||
+         !add_size(&length, in->maintenance.length))) return LXP_ERR_LENGTH_LIMIT;
     bytes=(uint8_t *)calloc(1U,length);
     if(bytes==NULL)return LXP_ERR_IO;
 #define COPY(src,n) do { (void)memcpy(bytes+offset,(src),(n)); offset+=(n); } while(0)
@@ -489,7 +528,7 @@ static lxp_result encode_record(const lxp_daemon_batch_wal_input *in,
         COPY(in->activities[i].bytes,in->activities[i].length);
         COPY(in->receipts[i].bytes,in->receipts[i].length);
         COPY(in->events[i].bytes,in->events[i].length);
-        if (version == WAL_VERSION) {
+        if (version >= WAL_VERSION) {
             lxp_byte_span terminal = in->terminal_payloads == NULL ?
                 (lxp_byte_span){NULL, 0U} : in->terminal_payloads[i];
             lxp_byte_span graph = in->call_graphs == NULL ?
@@ -503,6 +542,15 @@ static lxp_result encode_record(const lxp_daemon_batch_wal_input *in,
         put_u32(bytes+offset,in->receipt_proofs[i].leaf_count); offset+=4U;
         bytes[offset++]=in->receipt_proofs[i].depth;
         for(j=0U;j<LXP_MERKLE_MAX_DEPTH;++j) COPY(in->receipt_proofs[i].siblings[j],32U);
+    }
+    if (version == WAL_MAINTENANCE_VERSION) {
+        put_u32(bytes + offset, (uint32_t)in->maintenance.length); offset += 4U;
+        COPY(in->maintenance.bytes, in->maintenance.length);
+        put_u32(bytes + offset, in->maintenance_proof.leaf_index); offset += 4U;
+        put_u32(bytes + offset, in->maintenance_proof.leaf_count); offset += 4U;
+        bytes[offset++] = in->maintenance_proof.depth;
+        for (j = 0U; j < LXP_MERKLE_MAX_DEPTH; ++j)
+            COPY(in->maintenance_proof.siblings[j], 32U);
     }
 #undef COPY
     if(offset+WAL_DIGEST_BYTES!=length || wal_digest(bytes,offset,digest)!=LXP_OK) {
@@ -769,7 +817,7 @@ lxp_result lxp_daemon_batch_wal_load(const char *directory,
     if(authorization==NULL||out==NULL||present==NULL)return LXP_ERR_NON_CANONICAL;
     *out=NULL; *present=false; status=read_record(directory,&bytes,&length,present);
     if(status!=LXP_OK||!*present)return status;
-    if(memcmp(bytes,wal_magic,8U)!=0 || (get_u16(bytes+8U)!=1U && get_u16(bytes+8U)!=WAL_VERSION) ||
+    if(memcmp(bytes,wal_magic,8U)!=0 || (get_u16(bytes+8U)!=1U && get_u16(bytes+8U)!=WAL_VERSION && get_u16(bytes+8U)!=WAL_MAINTENANCE_VERSION) ||
        bytes[11U]!=0U ||
        get_u64(bytes+12U)!=(uint64_t)length ||
        wal_digest(bytes,length-32U,digest)!=LXP_OK ||
@@ -817,7 +865,7 @@ lxp_result lxp_daemon_batch_wal_load(const char *directory,
         if((size_t)al>length-32U-offset){status=LXP_ERR_LOG_TRUNCATED;goto fail;}r->activities[i].bytes=r->owned+offset;r->activities[i].length=al;offset+=al;
         if((size_t)rl>length-32U-offset){status=LXP_ERR_LOG_TRUNCATED;goto fail;}r->receipts[i].bytes=r->owned+offset;r->receipts[i].length=rl;offset+=rl;
         if((size_t)el>length-32U-offset){status=LXP_ERR_LOG_TRUNCATED;goto fail;}r->events[i].bytes=r->owned+offset;r->events[i].length=el;offset+=el;
-        if (get_u16(r->owned + 8U) == WAL_VERSION) {
+        if (get_u16(r->owned + 8U) >= WAL_VERSION) {
             lxp_byte_span *artifacts[2] = {
                 &r->terminal_payloads[i], &r->call_graphs[i]};
             size_t artifact;
@@ -840,9 +888,29 @@ lxp_result lxp_daemon_batch_wal_load(const char *directory,
         r->proofs[i].leaf_index=get_u32(r->owned+offset);offset+=4U;r->proofs[i].leaf_count=get_u32(r->owned+offset);offset+=4U;r->proofs[i].depth=r->owned[offset++];
         for(j=0U;j<LXP_MERKLE_MAX_DEPTH;++j){(void)memcpy(r->proofs[i].siblings[j],r->owned+offset,32U);offset+=32U;}
     }
+    if (get_u16(r->owned + 8U) == WAL_MAINTENANCE_VERSION) {
+        uint32_t maintenance_length;
+        if (length - 32U - offset < 4U + WAL_PROOF_BYTES) {
+            status = LXP_ERR_LOG_TRUNCATED; goto fail;
+        }
+        maintenance_length = get_u32(r->owned + offset); offset += 4U;
+        if (maintenance_length == 0U ||
+            maintenance_length > length - 32U - offset - WAL_PROOF_BYTES) {
+            status = LXP_ERR_LOG_TRUNCATED; goto fail;
+        }
+        r->view.maintenance = (lxp_byte_span){r->owned + offset, maintenance_length};
+        offset += maintenance_length;
+        r->view.maintenance_proof.leaf_index = get_u32(r->owned + offset); offset += 4U;
+        r->view.maintenance_proof.leaf_count = get_u32(r->owned + offset); offset += 4U;
+        r->view.maintenance_proof.depth = r->owned[offset++];
+        for (j = 0U; j < LXP_MERKLE_MAX_DEPTH; ++j) {
+            (void)memcpy(r->view.maintenance_proof.siblings[j], r->owned + offset, 32U);
+            offset += 32U;
+        }
+    }
     if(offset!=length-32U){status=LXP_ERR_TRAILING_BYTES;goto fail;}
     r->view.activities=r->activities;r->view.receipts=r->receipts;r->view.events=r->events;r->view.receipt_proofs=r->proofs;
-    if (get_u16(r->owned + 8U) == WAL_VERSION) {
+    if (get_u16(r->owned + 8U) >= WAL_VERSION) {
         r->view.terminal_payloads = r->terminal_payloads;
         r->view.call_graphs = r->call_graphs;
     }
