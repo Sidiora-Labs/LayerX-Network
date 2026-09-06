@@ -7,13 +7,13 @@ wiki page. Do not commit this note to the wiki.
 
 # Modules
 
-Eight economic modules on a kernel that owns identity and authority.
+Eight economic modules (`0x01`–`0x08`) plus Programs (`0x09`) on a kernel that owns identity and authority.
 
-Programs and oracle intake are separate surfaces — not extra module IDs.
+Oracle intake remains an outside adapter, not a module ID. Programs is module ID `9` (`LXP_MODULE_PROGRAMS`); it is the guest-execution module, not a ninth `402LXP` writer. See [Programs](Programs.md).
 
 ---
 
-## The registered set (0x01–0x08)
+## The registered set (0x01–0x09)
 
 | ID | Module | What it does |
 | --- | --- | --- |
@@ -25,10 +25,11 @@ Programs and oracle intake are separate surfaces — not extra module IDs.
 | `0x06` | perps | Leveraged positions and their margin accounts |
 | `0x07` | governance | Changing protocol settings, on a timelock |
 | `0x08` | bridge | Custody on Paxeer L1, and withdrawal claims |
+| `0x09` | programs | Guest WASM execution. Emits transfer sets; does not write balances. |
 
-Module IDs are stable and never reused. They occupy the high 16 bits of `activity_type`. An unknown or epoch-disabled module is refused — not best-effort decoded.
+Module IDs are stable and never reused. They occupy the high 16 bits of `activity_type` (`include/layerx/lxp_module.h`). An unknown or epoch-disabled module is refused — not best-effort decoded.
 
-Runtime sources live under `src/modules/` (`asset`, `escrow`, `budget`, `stream`, `service`, `perps`, `governance`, `bridge`, plus `programs` as a separate surface). Since the monorepo integration, the Paxeer settlement stack these modules checkpoint to lives in the same repository under `paxeer-network/` (EVM chain ID `125`).
+Runtime sources live under `src/modules/` (`asset`, `escrow`, `budget`, `stream`, `service`, `perps`, `governance`, `bridge`, `programs`). Protocol-3 genesis registers Programs v4 plus Asset v1. Since the monorepo integration, the Paxeer settlement stack these modules checkpoint to lives in the same repository under `paxeer-network/` (EVM chain ID `125`).
 
 ---
 
@@ -59,11 +60,11 @@ See Payments and Fees.
 
 ## Not modules
 
-| Surface | Where it lives | Why it is not `0x09` / `0x0A` |
+| Surface | Where it lives | Module ID |
 | --- | --- | --- |
-| Identity & authority | Kernel | DIDs, keys, grants, rotation, recovery — universal to every activity |
-| Oracle / Crossverse | Outside adapter | Signed oracle activities enter the ordered history; execution never dials out |
-| Programs | Separate runtime (`src/modules/programs`, `programs/`) | Guest execution and program-owned accounts — a first-class surface, not a ninth economic module ID on this table |
+| Identity & authority | Kernel | None — DIDs, keys, grants, rotation, recovery — universal to every activity |
+| Oracle / Crossverse | Outside adapter | None — signed oracle activities enter the ordered history; execution never dials out |
+| Programs | `src/modules/programs`, `programs/` | `0x09` (`LXP_MODULE_PROGRAMS`) — guest execution and program-owned accounts. Not a ninth `402LXP` writer. [Programs](Programs.md) |
 
 ---
 
@@ -90,16 +91,16 @@ deposits to atomic issuance and beneficiary credit while keeping fresh genesis e
 
 ---
 
-## Programs: the first-class execution surface
+## Programs: module `0x09`
 
-Programs run untrusted guest code on a deterministic WASM runtime under the authority of the activity that invoked them. A program is a first-class surface, not a ninth economic module, and it never gains balance-writing authority — every monetary effect it produces compiles to a `402LXP` transfer set the kernel applies. The runtime, registry, SDKs, and porting kits live under `programs/`.
+Programs run untrusted guest code on a deterministic WASM runtime under the authority of the activity that invoked them. The kernel registers it as `LXP_MODULE_PROGRAMS = 9` (`include/layerx/lxp_module.h:22`). It never gains balance-writing authority — every monetary effect it produces compiles to a `402LXP` transfer set the kernel applies. The runtime, registry, SDKs, and porting kits live under `programs/`. Full activity, ABI, occupancy, receipt, and event detail is in [Programs](Programs.md).
 
 - **Program-owned accounts.** Derived deterministically from `(program_id, seed)` under a domain-separated hash that is disjoint from principal account ids. No principal can claim or sign for a program account; deriving one conveys no spending authority. A principal can fund a program account but can never authorize debits from it. Program value accounts appear on the money map as `module:programs:value:<account-id>`.
 - **Downward-only spending grants.** A program-to-program call can convey a bounded spending grant over the caller's own derived accounts. It narrows only — asset, destination, source, and amount may shrink, never grow. Any widening is refused with the same typed escalation error principal grants use, and no partial transfer set survives.
 - **Occupancy settlement.** State that persists is paid for as long as it persists. Occupancy meters namespace bytes held across protocol batches, priced by the fee schedule and charged to the account declared responsible for that namespace, settled as `402LXP` legs and bound into the batch receipt.
 - **Protocol-backed balances.** A program's balance is real protocol state, read from the account tree through Merkle proofs — not a registry counter. `402LXP` stays the only writer; programs emit transfer sets and never call `set_balance`.
 
-See `programs/README.md`.
+See [Programs](Programs.md) and `programs/README.md`.
 
 ---
 
@@ -114,6 +115,7 @@ Each module implements `genesis`, `decode`, `validate` (read-only), `execute` (e
 ## Start here
 
 - Home
-- Protocol — LXC envelope and the three rules
+- Protocol — LXC envelope, protocol 3, and the three rules
+- Programs — module `0x09`, CALL vs simulate, guest ABI 2
 - Finality — L0 → L4
 - Design § modules
