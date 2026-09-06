@@ -49,6 +49,46 @@ fn array(reader: &mut Decoder<'_>) -> Result<[u8; 32], WireError> {
     reader.fixed(32)?.try_into().map_err(|_| invalid())
 }
 
+fn decode_payers(reader: &mut Decoder<'_>) -> Result<(Vec<OccupancyPayer>, u128, u128), WireError> {
+    let count = usize::from(reader.u16()?);
+    if count > MAX_PAYERS {
+        return Err(invalid());
+    }
+    let mut payers: Vec<OccupancyPayer> = Vec::with_capacity(count);
+    let mut paid_total = 0_u128;
+    let mut arrears_total = 0_u128;
+    for _ in 0..count {
+        let principal = array(reader)?;
+        let due = reader.u128()?;
+        let paid = reader.u128()?;
+        let arrears = reader.u128()?;
+        let frozen = match reader.u8()? {
+            0 => false,
+            1 => true,
+            _ => return Err(invalid()),
+        };
+        if principal == [0; 32]
+            || payers
+                .last()
+                .is_some_and(|prior| prior.principal >= principal)
+            || paid.checked_add(arrears) != Some(due)
+            || frozen != (arrears != 0)
+        {
+            return Err(invalid());
+        }
+        paid_total = paid_total.checked_add(paid).ok_or_else(invalid)?;
+        arrears_total = arrears_total.checked_add(arrears).ok_or_else(invalid)?;
+        payers.push(OccupancyPayer {
+            principal,
+            due,
+            paid,
+            arrears,
+            frozen,
+        });
+    }
+    Ok((payers, paid_total, arrears_total))
+}
+
 /// Decodes the native occupancy-receipt/v2 record and checks its commitments.
 ///
 /// # Errors
@@ -73,34 +113,7 @@ pub fn decode_occupancy_maintenance(bytes: &[u8]) -> Result<OccupancyMaintenance
     let fee_units = reader.u128()?;
     let paid_fee_units = reader.u128()?;
     let arrears_fee_units = reader.u128()?;
-    let count = usize::from(reader.u16()?);
-    if count > MAX_PAYERS {
-        return Err(invalid());
-    }
-    let mut payers: Vec<OccupancyPayer> = Vec::with_capacity(count);
-    let mut paid_total = 0_u128;
-    let mut arrears_total = 0_u128;
-    for _ in 0..count {
-        let principal = array(&mut reader)?;
-        let due = reader.u128()?;
-        let paid = reader.u128()?;
-        let arrears = reader.u128()?;
-        let frozen = match reader.u8()? {
-            0 => false,
-            1 => true,
-            _ => return Err(invalid()),
-        };
-        if principal == [0; 32]
-            || payers.last().is_some_and(|prior| prior.principal >= principal)
-            || paid.checked_add(arrears) != Some(due)
-            || frozen != (arrears != 0)
-        {
-            return Err(invalid());
-        }
-        paid_total = paid_total.checked_add(paid).ok_or_else(invalid)?;
-        arrears_total = arrears_total.checked_add(arrears).ok_or_else(invalid)?;
-        payers.push(OccupancyPayer { principal, due, paid, arrears, frozen });
-    }
+    let (payers, paid_total, arrears_total) = decode_payers(&mut reader)?;
     let schedule_commitment = array(&mut reader)?;
     let settlement_evidence = reader.bytes(MAX_EVIDENCE)?;
     let settlement_evidence_digest = array(&mut reader)?;
@@ -109,10 +122,15 @@ pub fn decode_occupancy_maintenance(bytes: &[u8]) -> Result<OccupancyMaintenance
     let previous_state_root = array(&mut reader)?;
     let resulting_state_root = array(&mut reader)?;
     reader.finish()?;
-    if batch_number == 0 || parameter_version == 0 || schedule_version == 0
-        || occupancy_asset_id == [0; 32] || ledger_root == [0; 32]
-        || resulting_state_root == [0; 32] || settlement_evidence.is_empty()
-        || paid_total != paid_fee_units || arrears_total != arrears_fee_units
+    if batch_number == 0
+        || parameter_version == 0
+        || schedule_version == 0
+        || occupancy_asset_id == [0; 32]
+        || ledger_root == [0; 32]
+        || resulting_state_root == [0; 32]
+        || settlement_evidence.is_empty()
+        || paid_total != paid_fee_units
+        || arrears_total != arrears_fee_units
         || (paid_total == 0) != (transfer_set_root == [0; 32])
     {
         return Err(invalid());
@@ -128,9 +146,24 @@ pub fn decode_occupancy_maintenance(bytes: &[u8]) -> Result<OccupancyMaintenance
     {
         return Err(invalid());
     }
-    Ok(OccupancyMaintenance { batch_number, global_sequence, parameter_version,
-        schedule_version, schedule_prices, occupancy_asset_id, byte_batches,
-        fee_units, paid_fee_units, arrears_fee_units, payers, schedule_commitment,
-        settlement_evidence, settlement_evidence_digest, ledger_root,
-        transfer_set_root, previous_state_root, resulting_state_root })
+    Ok(OccupancyMaintenance {
+        batch_number,
+        global_sequence,
+        parameter_version,
+        schedule_version,
+        schedule_prices,
+        occupancy_asset_id,
+        byte_batches,
+        fee_units,
+        paid_fee_units,
+        arrears_fee_units,
+        payers,
+        schedule_commitment,
+        settlement_evidence,
+        settlement_evidence_digest,
+        ledger_root,
+        transfer_set_root,
+        previous_state_root,
+        resulting_state_root,
+    })
 }
