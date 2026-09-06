@@ -156,6 +156,7 @@ GENESIS_TIMESTAMP_MS=""
 MIGRATIONS=""
 LAYERXD=""
 GENESIS_BUILD=""
+CUSTODY_PROFILE=""
 SETTLEMENT_ENV=""
 FORCE=0
 
@@ -179,6 +180,7 @@ while [ $# -gt 0 ]; do
         --migrations) MIGRATIONS=$2; shift 2 ;;
         --layerxd) LAYERXD=$2; shift 2 ;;
         --genesis-build) GENESIS_BUILD=$2; shift 2 ;;
+        --custody-profile) CUSTODY_PROFILE=$2; shift 2 ;;
         --settlement-env) SETTLEMENT_ENV=$2; shift 2 ;;
         --force) FORCE=1; shift ;;
         -h|--help) usage ;;
@@ -191,6 +193,13 @@ done
 [ -n "$NETWORK_ID" ] || fail "--network-id is required"
 [ -n "$SEQUENCER_KEY_FILE" ] || fail "--sequencer-key is required"
 [ -n "$TREASURY_KEY_FILE" ] || fail "--treasury-key is required"
+if [ -n "$CUSTODY_PROFILE" ]; then
+    [ -f "$CUSTODY_PROFILE" ] && [ ! -L "$CUSTODY_PROFILE" ] && [ -r "$CUSTODY_PROFILE" ] \
+        || fail "--custody-profile must name a readable regular file, not a symlink"
+    [ "$(stat -c %s "$CUSTODY_PROFILE")" -eq 207 ] \
+        || fail "--custody-profile must contain exactly 207 bytes"
+    CUSTODY_PROFILE=$(readlink -f "$CUSTODY_PROFILE")
+fi
 
 is_decimal() { [[ $1 =~ ^[0-9]+$ ]]; }
 is_hex64() { [[ $1 =~ ^[0-9a-f]{64}$ ]]; }
@@ -392,7 +401,11 @@ SIGNER_KEY="$DATA_DIR/work/genesis-signer.key"
 hex_to_bin "$SEQUENCER_PRIVATE" > "$SIGNER_KEY"
 chmod 0600 "$SIGNER_KEY" "$REQUEST"
 GENESIS_DIR="$DATA_DIR/genesis"
-"$GENESIS_BUILD" "$REQUEST" "$SIGNER_KEY" "$GENESIS_DIR" || fail "layerx-genesis-build refused the genesis request"
+GENESIS_ARGS=("$REQUEST" "$SIGNER_KEY" "$GENESIS_DIR")
+if [ -n "$CUSTODY_PROFILE" ]; then
+    GENESIS_ARGS+=(--custody-profile "$CUSTODY_PROFILE")
+fi
+"$GENESIS_BUILD" "${GENESIS_ARGS[@]}" || fail "layerx-genesis-build refused the genesis request"
 rm -f "$SIGNER_KEY"
 MANIFEST="$GENESIS_DIR/genesis.manifest"
 SNAPSHOT="$GENESIS_DIR/00000000000000000000.lxs"
@@ -407,16 +420,18 @@ GENESIS_RECEIPT_STATE_ROOT=$(tail -c 32 "$REGISTRATION_REQUEST" | bin_to_hex)
 # Bootstrap registration (LXGR v1): the beta anchors genesis to its own
 # receipt state root, the same self-registration the conformance node performs.
 REGISTRATION="$GENESIS_DIR/genesis.registration"
-{
-    printf 'LXGR'
-    hex_to_bin 01
-    hex_to_bin "$(be_hex "$NETWORK_ID" 4)"
-    hex_to_bin "$(be_hex 0 8)"
-    hex_to_bin "$GENESIS_RECEIPT_STATE_ROOT"
-    hex_to_bin "$GENESIS_RECEIPT_STATE_ROOT"
-    hex_to_bin 01
-} > "$REGISTRATION"
-[ "$(stat -c %s "$REGISTRATION")" -eq 82 ] || fail "bootstrap registration has an unexpected length"
+if [ -z "$CUSTODY_PROFILE" ]; then
+    {
+        printf 'LXGR'
+        hex_to_bin 01
+        hex_to_bin "$(be_hex "$NETWORK_ID" 4)"
+        hex_to_bin "$(be_hex 0 8)"
+        hex_to_bin "$GENESIS_RECEIPT_STATE_ROOT"
+        hex_to_bin "$GENESIS_RECEIPT_STATE_ROOT"
+        hex_to_bin 01
+    } > "$REGISTRATION"
+    [ "$(stat -c %s "$REGISTRATION")" -eq 82 ] || fail "bootstrap registration has an unexpected length"
+fi
 
 # --- identities, tokens, configurations ------------------------------------
 IDENTITIES="$DATA_DIR/identities.txt"

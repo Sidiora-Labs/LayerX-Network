@@ -91,6 +91,7 @@ IMAGE_NAMES=(layerx-testnet-control layerx-gateway layerx-faucet layerx-program-
 TRUSTED_BOUNDARY_SERVICES=(layerx-pending-core layerx-pending-core-admin paxeer-boundary layerx-identity layerx-receipt-authority layerx-agent-boundary)
 INTERNAL_NAMESPACE=layerx-internal
 FOUNDRY_BIN=${LAYERX_BETA_FOUNDRY_BIN:-/root/.foundry/bin}
+CUSTODY_PROFILE=${LAYERX_BETA_CUSTODY_PROFILE:-}
 IDENTITY_PORT=19451
 PAXEER_CHAIN_ID=125
 NODE_MANIFEST="$REPO_ROOT/platform/hosted/node/deployment.yaml"
@@ -596,6 +597,9 @@ secrets_apply() {
     apply_secret "$ns" layerx-sequencer-trust-history --from-file=history="$s/trust-history"
     apply_configmap "$ns" layerx-receipt-authority --from-file=replica-id="$s/receipt-authority-replica-id"
     apply_secret "$ns" layerx-node-keys --from-file=sequencer.key="$s/node-sequencer.key" --from-file=treasury.key="$s/node-treasury.key"
+    if [ -n "$CUSTODY_PROFILE" ]; then
+        apply_configmap "$ns" layerx-node-custody-profile --from-file=profile="$CUSTODY_PROFILE"
+    fi
     apply_secret "$ns" layerx-node-tokens --from-file=program-token="$s/node-program.token" --from-file=replica-token="$s/node-replica.token"
     apply_secret "$ns" layerx-pending-core-tls --from-file=server.crt.der="$c/pending-core/cert.der" --from-file=server.key.der="$c/pending-core/key.der"
     apply_secret "$ns" layerx-pending-core-admin-tls --from-file=server.crt.der="$c/pending-core-admin/cert.der" --from-file=server.key.der="$c/pending-core-admin/key.der"
@@ -695,6 +699,25 @@ manifests_render() {
     sed -i "s|^  replica-id: \"[0-9a-f]*\"$|  replica-id: \"$(cat "$SECRETS_DIR/receipt-authority-replica-id")\"|" "$MANIFESTS_DIR/node.yaml"
     grep -q "^  replica-id: \"$(cat "$SECRETS_DIR/receipt-authority-replica-id")\"$" "$MANIFESTS_DIR/node.yaml" \
         || fail "the node manifest replica-id could not be bound to the generated receipt authority replica id"
+    if [ -n "$CUSTODY_PROFILE" ]; then
+        python3 - "$MANIFESTS_DIR/node.yaml" <<'PY'
+import sys
+import yaml
+path = sys.argv[1]
+with open(path) as source:
+    documents = list(yaml.safe_load_all(source))
+for document in documents:
+    if document.get("kind") != "StatefulSet":
+        continue
+    pod = document["spec"]["template"]["spec"]
+    daemon = next(container for container in pod["containers"] if container["name"] == "layerxd")
+    daemon["args"] += ["--custody-profile", "/run/layerx/custody.profile"]
+    daemon["volumeMounts"].append({"name": "custody-profile", "mountPath": "/run/layerx/custody.profile", "subPath": "profile", "readOnly": True})
+    pod["volumes"].append({"name": "custody-profile", "configMap": {"name": "layerx-node-custody-profile"}})
+with open(path, "w") as output:
+    yaml.safe_dump_all(documents, output, sort_keys=False)
+PY
+    fi
     render_manifest "$REPO_ROOT/platform/hosted/identity/deployment.yaml" "$MANIFESTS_DIR/identity.yaml"
     render_manifest "$REPO_ROOT/platform/hosted/paxeer/deployment.yaml" "$MANIFESTS_DIR/paxeer.yaml"
     render_manifest "$REPO_ROOT/platform/hosted/testnet/deployment.yaml" "$MANIFESTS_DIR/testnet.yaml"
@@ -814,12 +837,45 @@ paxeer_contracts_deploy() {
 
 settlement_publish() {
     local ns="$TESTNET_NAMESPACE"
+    if [ -n "$CUSTODY_PROFILE" ]; then
+        custody_registration_publish
+    fi
     printf 'LAYERX_NODE_PAXEER_CHAIN_ID=%s\nLAYERX_NODE_SETTLEMENT_CONTRACT=%s\nLAYERX_NODE_CHECKPOINT_REGISTRY=%s\nLAYERX_NODE_PAXEER_RPC_ADDRESS=127.0.0.1\nLAYERX_NODE_PAXEER_RPC_PORT=%s\n' \
         "$PAXEER_CHAIN_ID" "$GUARANTOR_BOND" "$CHECKPOINT_REGISTRY" "$PAXEER_RELAY_PORT" > "$WORK_DIR/paxeer/settlement.env"
     bash "$REPO_ROOT/platform/hosted/node/bootstrap.sh" --check-settlement "$WORK_DIR/paxeer/settlement.env" > /dev/null \
         || fail "the settlement environment was refused by bootstrap.sh --check-settlement"
     apply_configmap "$ns" layerx-node-settlement --from-file=settlement.env="$WORK_DIR/paxeer/settlement.env"
     log "settlement environment published as ConfigMap $ns/layerx-node-settlement"
+}
+
+custody_registration_publish() {
+    local field
+    local -a roots=()
+    for field in genesisManifestDigest genesisCanonicalStateRoot genesisReceiptRoot; do
+        roots+=("$(SSL_CERT_FILE="$CA_DIR/ca.crt" "$FOUNDRY_BIN/cast" call --rpc-url "$PAXEER_URL" \
+            "$CHECKPOINT_REGISTRY" "$field()(bytes32)")")
+    done
+    python3 - "$WORK_DIR/genesis/paxeer-deployment-descriptor.lxgd" \
+        "$WORK_DIR/genesis/paxeer-registration-request.lxrr" \
+        "$WORK_DIR/genesis/genesis.registration" "${roots[@]}" <<'PY'
+import pathlib
+import sys
+descriptor = pathlib.Path(sys.argv[1]).read_bytes()
+request = pathlib.Path(sys.argv[2]).read_bytes()
+roots = [bytes.fromhex(value.removeprefix("0x")) for value in sys.argv[4:]]
+if (len(descriptor) != 105 or descriptor[:5] != b"LXGD\x01" or
+        len(request) != 73 or request[:5] != b"LXRR\x01" or
+        request[5:9] != descriptor[5:9] or
+        any(len(root) != 32 for root in roots) or
+        descriptor[9:] != b"".join(roots) or request[9:] != b"".join(roots[1:])):
+    raise SystemExit("custody genesis differs from the deployed CheckpointRegistry")
+registration = b"LXGR\x01" + request[5:9] + bytes(8) + roots[2] + roots[2] + b"\x01"
+with open(sys.argv[3], "xb") as output:
+    output.write(registration)
+PY
+    kube -n "$TESTNET_NAMESPACE" exec -i layerx-node-0 -c layerxd -- sh -ec \
+        'umask 077; cat > /var/lib/layerx/node/genesis/genesis.registration.tmp; mv /var/lib/layerx/node/genesis/genesis.registration.tmp /var/lib/layerx/node/genesis/genesis.registration' \
+        < "$WORK_DIR/genesis/genesis.registration"
 }
 
 wait_for_pod_ready() {
@@ -1054,6 +1110,15 @@ boundary_checks() {
     log "boundary checks passed ($script exercised on every registry node)"
 }
 
+custody_profile_validate() {
+    [ -n "$CUSTODY_PROFILE" ] || return 0
+    [ -f "$CUSTODY_PROFILE" ] && [ ! -L "$CUSTODY_PROFILE" ] && [ -r "$CUSTODY_PROFILE" ] \
+        || fail "LAYERX_BETA_CUSTODY_PROFILE must name a readable regular file, not a symlink"
+    [ "$(stat -c %s "$CUSTODY_PROFILE")" -eq 207 ] \
+        || fail "LAYERX_BETA_CUSTODY_PROFILE must contain exactly 207 bytes"
+    CUSTODY_PROFILE=$(readlink -f "$CUSTODY_PROFILE")
+}
+
 require_foundry() {
     [ -x "$FOUNDRY_BIN/forge" ] && [ -x "$FOUNDRY_BIN/cast" ] || fail "pinned forge and cast are not installed at $FOUNDRY_BIN (LAYERX_BETA_FOUNDRY_BIN); deploy-contracts.sh needs them"
 }
@@ -1062,6 +1127,7 @@ beta_cluster_up() {
     local run_boundary_checks=$1
     require_tool docker curl openssl jq python3 git sha256sum tar base64
     require_foundry
+    custody_profile_validate
     MISSING_INPUTS=()
     REVISION=$(revision)
     mkdir -p "$WORK_DIR" "$LOG_DIR"
@@ -1141,6 +1207,7 @@ beta_cluster_down() {
 beta_cluster_render() {
     require_tool openssl jq python3 git
     require_foundry
+    custody_profile_validate
     MISSING_INPUTS=()
     REVISION=$(revision)
     PULL_POLICY=IfNotPresent
