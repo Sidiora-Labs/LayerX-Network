@@ -9,7 +9,7 @@ wiki page. Do not commit this note to the wiki.
 
 One signed record per action. One doorway for money. One result anyone can replay.
 
-LayerX is the activity, execution, and accounting layer for autonomous agents. Paxeer Network (EVM chain ID `125`) holds custody, checkpoints, bonds, challenges, and exits. A normal payment or agent action does not require a Paxeer transaction.
+LayerX is the activity, execution, and accounting layer for autonomous agents. Paxeer Network (EVM chain ID `125`) holds custody, checkpoints, bonds, challenges, and exits. A normal payment or agent action does not require a Paxeer transaction. Beta envelopes use protocol 3 (`LXP_PROTOCOL_VERSION_STATE_COMMITMENT` in `include/layerx/lxp_protocol.h`); occupancy accounting is used by protocol 2 and 3. The C header default `LXP_PROTOCOL_VERSION` remains 2.
 
 LayerX and the Paxeer settlement stack now live in one monorepo. Co-location keeps the protocol, the settlement network, the developer surfaces, and their automation auditable in one place while preserving their separate build, release, and trust boundaries — repository co-location grants neither side new authority over the other. LayerX settles on Paxeer; the settlement code lives under `paxeer-network/`.
 
@@ -45,7 +45,7 @@ Typical envelope fields (illustrative names; see the design for encodings):
 
 | Field | Role |
 | --- | --- |
-| `protocol_version` | Must be enabled for the batch epoch |
+| `protocol_version` | Must be enabled for the batch epoch. Supported: 1 (legacy), 2 (occupancy), 3 (state commitment). Beta selects 3. |
 | `network_id` | Exact match; blocks cross-network replay |
 | `activity_type` | High 16 bits = module id, low 16 = type ordinal |
 | `actor_did` | Who is acting |
@@ -81,9 +81,9 @@ Oracle prices enter as signed activities through a Crossverse adapter — outsid
 
 ---
 
-## Programs: a first-class execution surface
+## Programs: module `0x09`
 
-Programs are where untrusted guest code runs. They are a first-class surface alongside the eight economic modules — not a ninth economic module ID. A program executes inside the authority of the activity that invoked it, on a deterministic WASM runtime, and it never gains balance-writing authority: every monetary effect it produces compiles to a `402LXP` transfer set applied by the kernel. The runtime, registry, SDKs, and porting kits live under `programs/`.
+Programs are where untrusted guest code runs. The kernel registers them as module ID `9` (`LXP_MODULE_PROGRAMS` in `include/layerx/lxp_module.h:22`; activity types `0x0009xxxx` in `include/layerx/programs.h`). They sit alongside the eight economic modules (`0x01`–`0x08`) and are not a ninth `402LXP` writer. A program executes inside the authority of the activity that invoked it, on a deterministic WASM runtime, and every monetary effect it produces compiles to a `402LXP` transfer set applied by the kernel. The runtime, registry, SDKs, and porting kits live under `programs/`. See [Programs](Programs.md).
 
 Four rules define the programs money story:
 
@@ -92,7 +92,7 @@ Four rules define the programs money story:
 - **Occupancy settlement.** Storage that persists is paid for as long as it persists. Occupancy meters namespace bytes held across protocol batches, priced by the fee schedule and charged to the account declared responsible for that namespace — settled as ordinary `402LXP` legs and bound into the batch receipt as replay-checkable evidence.
 - **Protocol-backed balances.** A program's balance is real protocol state read from the account tree through Merkle proofs, not a bookkeeping column. `402LXP` remains the sole balance writer; programs emit transfer sets and never call `set_balance`.
 
-See Modules and `programs/README.md`.
+See [Modules](Modules.md), [Programs](Programs.md), and `programs/README.md`.
 
 ---
 
@@ -127,6 +127,7 @@ Limited beta opens September 7. Source is open for inspection while the public l
 ## Start here
 
 - Home
-- Modules — the eight economic modules and the programs surface
+- Modules — `0x01`–`0x08` economic modules and Programs `0x09`
+- Programs — DEPLOY / UPGRADE / CALL, simulate, guest ABI 2, occupancy
 - Finality — L0 → L4
 - Design § protocol
