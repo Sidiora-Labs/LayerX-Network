@@ -1602,7 +1602,7 @@ static lxp_result lni_principal(
     return LXP_OK;
 }
 
-static lxp_result program_call_admission_decode(
+static lxp_result program_admission_decode(
     lxp_daemon_protocol_owner *owner, const lxp_activity *activity)
 {
     lxp_module_ctx ctx;
@@ -1642,7 +1642,9 @@ static lxp_result program_call_admission_decode(
             status = LXP_ERR_CONTEXT_MISMATCH;
         return status;
     }
-    if (activity->activity_type != LX_PROGRAMS_CALL) return LXP_OK;
+    if (activity->activity_type != LX_PROGRAMS_CALL &&
+        activity->activity_type != LX_PROGRAMS_DEPLOY &&
+        activity->activity_type != LX_PROGRAMS_UPGRADE) return LXP_OK;
     if (owner->kernel == NULL || owner->scratch == NULL)
         return LXP_ERR_MODULE_DISABLED;
     mark = lxp_arena_mark(owner->scratch);
@@ -1651,8 +1653,13 @@ static lxp_result program_call_admission_decode(
         owner->kernel->epoch, 0U, 0U, owner->scratch, false);
     if (status == LXP_OK) {
         ctx.protocol_version = activity->protocol_version;
-        status = lxp_programs_call_decode(
-            &ctx, activity->payload.bytes, activity->payload.length, &decoded);
+        if (activity->activity_type == LX_PROGRAMS_CALL)
+            status = lxp_programs_call_decode(
+                &ctx, activity->payload.bytes, activity->payload.length, &decoded);
+        else
+            status = lxp_programs_lifecycle_decode(
+                &ctx, lxp_activity_type_ordinal(activity->activity_type),
+                activity->payload.bytes, activity->payload.length, &decoded);
     }
     reset_status = lxp_arena_reset(owner->scratch, mark);
     return reset_status == LXP_OK ? status : reset_status;
@@ -1709,7 +1716,7 @@ static lxp_result send_submit(lxp_daemon_lni_server *server, int descriptor,
                                 request->correlation_id, 4U, status, deadline);
     }
     if (pthread_mutex_lock(&server->owner->mutex) != 0) return LXP_ERR_IO;
-    status = program_call_admission_decode(server->owner, &activity);
+    status = program_admission_decode(server->owner, &activity);
     if (status != LXP_OK) {
         if (pthread_mutex_unlock(&server->owner->mutex) != 0)
             return LXP_FATAL_INVARIANT;
@@ -2370,7 +2377,7 @@ lxp_result lxp_daemon_lni_simulate(
     if (pthread_mutex_lock(&owner->mutex) != 0) return LXP_ERR_IO;
     locked = true;
     mark = lxp_arena_mark(owner->scratch);
-    status = program_call_admission_decode(owner, &activity);
+    status = program_admission_decode(owner, &activity);
     if (status == LXP_OK && lxp_ct_memcmp(sequencer_public_key,
                       owner->receipt_authority->authorization.public_key,
                       32U) != 0)
