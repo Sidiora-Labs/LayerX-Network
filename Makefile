@@ -3094,3 +3094,7 @@ $(BUILD_DIR)/tests/lxp_test_program_admission: tests/daemon/lxp_test_program_adm
 .PHONY: test-program-admission
 test-program-admission: $(BUILD_DIR)/tests/lxp_test_program_admission $(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build
 	bash tests/daemon/program-admission.sh $(BUILD_DIR)
+
+.PHONY: test-program-simulate
+test-program-simulate: $(BUILD_DIR)/tests/lxp_test_program_admission $(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build
+	bash tests/daemon/program-admission.sh $(BUILD_DIR) simulate
