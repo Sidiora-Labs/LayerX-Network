@@ -166,7 +166,6 @@ impl Drop for Daemon {
 
 struct Genesis {
     directory: PathBuf,
-    asset: [u8; 32],
     receipt_state_root: [u8; 32],
 }
 
@@ -279,7 +278,6 @@ fn build_genesis(scope: Scope, root: &Path, builder: &Path) -> Genesis {
     receipt_state_root.copy_from_slice(&request[41..73]);
     Genesis {
         directory: artifacts,
-        asset,
         receipt_state_root,
     }
 }
@@ -317,7 +315,7 @@ fn identity() -> Identity {
         "the real-node harness must run as root so layerxd can run under a distinct uid"
     );
     Identity {
-        daemon_uid: 65534,
+        daemon_uid: 65_534,
         daemon_gid: 0,
         client_uid,
         client_gid: 0,
@@ -614,16 +612,8 @@ fn submit_and_wait(
     }
 }
 
-fn verify_replica_receipt(
-    port: u16,
-    bearer: &str,
-    replica: [u8; 32],
-    sequencer: [u8; 32],
-    key: [u8; 32],
-    last_batch: u64,
-    scope: Scope,
-    submitted: &Submitted,
-) {
+fn verify_replica_receipt(fixture: &Fixture, submitted: &Submitted) {
+    let scope = fixture.scope;
     let decoded = must(
         layerx_wire::receipt::decode(&submitted.receipt),
         "real receipt decoding",
@@ -641,9 +631,23 @@ fn verify_replica_receipt(
         layerx_wire::hash::receipt_digest(&unsigned),
         "real receipt digest",
     );
+    let body = fetch_replica_receipt(fixture, protocol.batch_id(), digest);
+    let inclusion = verify_replica_inclusion(fixture, submitted, &body);
+    assert_replica_receipt(fixture, submitted, protocol, &inclusion);
+}
+
+fn fetch_replica_receipt(
+    fixture: &Fixture,
+    batch_id: [u8; 32],
+    digest: [u8; 32],
+) -> serde_json::Value {
+    let replica_port = fixture.replica_port;
+    let replica_token = &fixture.replica_token;
+    let port = replica_port;
+    let bearer = replica_token;
     let url = format!(
         "http://127.0.0.1:{port}/v1/batches/{}/receipt-authority?receipt_digest={}",
-        hex::encode(&protocol.batch_id()),
+        hex::encode(&batch_id),
         hex::encode(&digest)
     );
     let client: ureq::Agent = ureq::Agent::config_builder()
@@ -657,10 +661,24 @@ fn verify_replica_receipt(
             .call(),
         "real replica evidence",
     );
-    let body: serde_json::Value = must(
+    must(
         response.body_mut().read_json(),
         "real replica evidence JSON",
-    );
+    )
+}
+
+fn verify_replica_inclusion(
+    fixture: &Fixture,
+    submitted: &Submitted,
+    body: &serde_json::Value,
+) -> layerx_proof::inclusion::InclusionEvidence {
+    let replica_id = fixture.replica_id;
+    let sequencer_id = fixture.sequencer_id;
+    let sequencer_key = fixture.sequencer_key;
+    let last_batch = fixture.last_batch;
+    let replica = replica_id;
+    let sequencer = sequencer_id;
+    let key = sequencer_key;
     assert_eq!(
         body["authority_replica_id"].as_str(),
         Some(hex::encode(&replica).as_str())
@@ -698,7 +716,7 @@ fn verify_replica_receipt(
     );
     let authorization =
         layerx_proof::inclusion::SequencerAuthorization::new(sequencer, key, 1, last_batch);
-    let inclusion = must(
+    must(
         layerx_proof::inclusion::verify_receipt(
             &submitted.receipt,
             &proof,
@@ -707,7 +725,18 @@ fn verify_replica_receipt(
             &authorization,
         ),
         "real replica signature and inclusion",
-    );
+    )
+}
+
+fn assert_replica_receipt(
+    fixture: &Fixture,
+    submitted: &Submitted,
+    protocol: &layerx_wire::receipt::ProtocolReceipt,
+    inclusion: &layerx_proof::inclusion::InclusionEvidence,
+) {
+    let scope = fixture.scope;
+    let sequencer_key = fixture.sequencer_key;
+    let key = sequencer_key;
     let committed = inclusion.header().header();
     assert_eq!(committed.network_id(), scope.network_id);
     assert_eq!(committed.protocol_version(), scope.protocol_version);
@@ -767,22 +796,38 @@ fn verify_replica_receipt(
     );
 }
 
-pub(super) fn authorize(
-    authority_gate: &mut Gate,
+struct Fixture {
+    scope: Scope,
+    identity: Identity,
+    root: PathBuf,
+    genesis: Genesis,
+    layerxd: PathBuf,
+    migrations: PathBuf,
+    sequencer_seed: [u8; 32],
+    sequencer_key: [u8; 32],
+    sequencer_id: [u8; 32],
+    replica_id: [u8; 32],
+    replica_token: String,
+    program_token: String,
+    replica_port: u16,
+    program_port: u16,
+    last_batch: u64,
+}
+
+fn fixture(
     policy: super::TestAuthorityPolicy<'_>,
     expected_sequencer_id: Option<[u8; 32]>,
-) -> Result<(), GateError> {
-    let _guard = FIXTURE_LOCK
-        .lock()
-        .unwrap_or_else(|_| panic!("real authority fixture lock poisoned"));
+) -> Fixture {
     let scope = Scope {
         protocol_version: policy.protocol_version,
         network_id: policy.network_id,
     };
     let identity = identity();
     let repository = repository_root();
-    let layerxd = repository.join("build/bin/layerxd");
-    let builder = repository.join("build/bin/layerx-genesis-build");
+    let binaries = std::env::var_os("LAYERX_TEST_NATIVE_BIN_DIR")
+        .map_or_else(|| repository.join("build/bin"), PathBuf::from);
+    let layerxd = binaries.join("layerxd");
+    let builder = binaries.join("layerx-genesis-build");
     assert!(layerxd.is_file(), "{} is not built", layerxd.display());
     assert!(builder.is_file(), "{} is not built", builder.display());
     let root = std::env::temp_dir().join(format!(
@@ -828,6 +873,42 @@ pub(super) fn authorize(
         .checked_add(1)
         .unwrap_or_else(|| panic!("fixture batch range overflow"));
 
+    Fixture {
+        scope,
+        identity,
+        root,
+        genesis,
+        layerxd,
+        migrations,
+        sequencer_seed,
+        sequencer_key,
+        sequencer_id,
+        replica_id,
+        replica_token,
+        program_token,
+        replica_port,
+        program_port,
+        last_batch,
+    }
+}
+
+struct Replica {
+    directory: PathBuf,
+    environment: BTreeMap<&'static str, String>,
+    daemon: Daemon,
+}
+
+fn start_replica(fixture: &Fixture) -> Replica {
+    let root = &fixture.root;
+    let scope = fixture.scope;
+    let identity = &fixture.identity;
+    let layerxd = &fixture.layerxd;
+    let replica_id = fixture.replica_id;
+    let sequencer_id = fixture.sequencer_id;
+    let sequencer_key = fixture.sequencer_key;
+    let last_batch = fixture.last_batch;
+    let replica_token = &fixture.replica_token;
+    let replica_port = fixture.replica_port;
     let replica_dir = root.join("replica");
     make_dir(&replica_dir, 0o700);
     write(
@@ -857,11 +938,11 @@ pub(super) fn authorize(
     replica_env.insert("LAYERX_AUTHORITY_ADDRESS", "127.0.0.1".to_owned());
     replica_env.insert("LAYERX_AUTHORITY_PORT", replica_port.to_string());
     let mut replica = spawn_daemon(
-        &layerxd,
+        layerxd,
         "--authority-replica",
         &replica_dir.join("config.txt"),
         &replica_env,
-        &identity,
+        identity,
         root.join("replica.stderr"),
     );
     wait_for_port(replica_port, &mut replica, "authority replica");
@@ -875,6 +956,26 @@ pub(super) fn authorize(
         "replica did not grow its fresh log"
     );
 
+    Replica {
+        directory: replica_dir,
+        environment: replica_env,
+        daemon: replica,
+    }
+}
+
+struct NodePaths {
+    directory: PathBuf,
+    checkpoints: PathBuf,
+    logs: PathBuf,
+    socket: PathBuf,
+    actor: Actor,
+}
+
+fn prepare_node(fixture: &Fixture) -> NodePaths {
+    let root = &fixture.root;
+    let scope = fixture.scope;
+    let genesis = &fixture.genesis;
+    let identity = &fixture.identity;
     let node_dir = root.join("node");
     let checkpoints = node_dir.join("checkpoints");
     let logs = node_dir.join("logs");
@@ -917,6 +1018,24 @@ pub(super) fn authorize(
     chown_tree(&node_dir, identity.daemon_uid, identity.daemon_gid);
     chown_tree(&run_dir, identity.daemon_uid, identity.client_gid);
     let socket = run_dir.join("layerxd.sock");
+    NodePaths {
+        directory: node_dir,
+        checkpoints,
+        logs,
+        socket,
+        actor,
+    }
+}
+
+fn node_storage_environment(
+    fixture: &Fixture,
+    paths: &NodePaths,
+) -> BTreeMap<&'static str, String> {
+    let genesis = &fixture.genesis;
+    let migrations = &fixture.migrations;
+    let node_dir = &paths.directory;
+    let checkpoints = &paths.checkpoints;
+    let logs = &paths.logs;
     let text = |path: PathBuf| path.to_string_lossy().into_owned();
     let mut node_env = BTreeMap::new();
     node_env.insert("LAYERX_NODE_PAXEER_CHAIN_ID", "31337".to_owned());
@@ -969,6 +1088,23 @@ pub(super) fn authorize(
         "LAYERX_NODE_HISTORY_MIGRATIONS",
         text(migrations.join("0007_history_index.sql")),
     );
+    node_env
+}
+
+fn node_environment(fixture: &Fixture, paths: &NodePaths) -> BTreeMap<&'static str, String> {
+    let identity = &fixture.identity;
+    let sequencer_id = fixture.sequencer_id;
+    let sequencer_key = fixture.sequencer_key;
+    let sequencer_seed = fixture.sequencer_seed;
+    let last_batch = fixture.last_batch;
+    let replica_port = fixture.replica_port;
+    let replica_id = fixture.replica_id;
+    let replica_token = &fixture.replica_token;
+    let program_token = &fixture.program_token;
+    let program_port = fixture.program_port;
+    let socket = &paths.socket;
+    let text = |path: &Path| path.to_string_lossy().into_owned();
+    let mut node_env = node_storage_environment(fixture, paths);
     node_env.insert("LAYERX_NODE_SEQUENCER_ID", hex::encode(&sequencer_id));
     node_env.insert(
         "LAYERX_NODE_SEQUENCER_PUBLIC_KEY",
@@ -993,10 +1129,10 @@ pub(super) fn authorize(
         "LAYERX_NODE_AUTHORITY_REPLICA_BEARER_TOKEN",
         replica_token.clone(),
     );
-    node_env.insert("LAYERX_NODE_PROGRAM_BEARER_TOKEN", program_token);
+    node_env.insert("LAYERX_NODE_PROGRAM_BEARER_TOKEN", program_token.clone());
     node_env.insert("LAYERX_NODE_PROGRAM_ADDRESS", "127.0.0.1".to_owned());
     node_env.insert("LAYERX_NODE_PROGRAM_PORT", program_port.to_string());
-    node_env.insert("LAYERX_NODE_LNI_SOCKET", text(socket.clone()));
+    node_env.insert("LAYERX_NODE_LNI_SOCKET", text(socket));
     node_env.insert(
         "LAYERX_NODE_LNI_ALLOWED_UID",
         identity.client_uid.to_string(),
@@ -1007,46 +1143,180 @@ pub(super) fn authorize(
     );
     node_env.insert("LAYERX_NODE_LNI_FRAME_BYTES", LNI_FRAME_BYTES.to_string());
     node_env.insert("LAYERX_NODE_LNI_DEADLINE_MS", "10000".to_owned());
+    node_env
+}
+
+fn start_sequencer(
+    fixture: &Fixture,
+    paths: &NodePaths,
+    node_env: &BTreeMap<&str, String>,
+) -> (ConnectionGate, Daemon, Uds) {
+    let scope = fixture.scope;
+    let layerxd = &fixture.layerxd;
+    let identity = &fixture.identity;
+    let root = &fixture.root;
+    let node_dir = &paths.directory;
+    let socket = &paths.socket;
     let gate = ConnectionGate::new(8);
     let mut sequencer = spawn_daemon(
-        &layerxd,
+        layerxd,
         "--serve",
         &node_dir.join("config.txt"),
-        &node_env,
-        &identity,
+        node_env,
+        identity,
         root.join("sequencer.stderr"),
     );
-    wait_for_lni(scope, &socket, &gate, &mut sequencer);
-    let mut transport = connect_lni(scope, &socket, &gate);
+    wait_for_lni(scope, socket, &gate, &mut sequencer);
+    let transport = connect_lni(scope, socket, &gate);
+    (gate, sequencer, transport)
+}
+
+fn submit_calls(
+    fixture: &Fixture,
+    paths: &NodePaths,
+    transport: &mut Uds,
+    policy: super::TestAuthorityPolicy<'_>,
+) -> Vec<(Vec<u8>, Submitted)> {
+    let scope = fixture.scope;
+    let mut retained = Vec::new();
     for sequence in 1..=policy.handshake_batch {
-        let signed = signed_program_call(scope, &actor, sequence);
-        let submitted = submit_and_wait(&mut transport, &signed, sequence * 10_000);
-        verify_replica_receipt(
-            replica_port,
-            &replica_token,
-            replica_id,
-            sequencer_id,
-            sequencer_key,
-            last_batch,
-            scope,
-            &submitted,
-        );
+        let signed = signed_program_call(scope, &paths.actor, sequence);
+        let submitted = submit_and_wait(transport, &signed, sequence * 10_000);
+        verify_replica_receipt(fixture, &submitted);
+        retained.push((signed, submitted));
+    }
+    retained
+}
+
+struct RestartContext<'a> {
+    paths: &'a NodePaths,
+    environment: &'a BTreeMap<&'static str, String>,
+    gate: &'a ConnectionGate,
+    retained: &'a [(Vec<u8>, Submitted)],
+    policy: super::TestAuthorityPolicy<'a>,
+}
+
+fn restart_authority(
+    fixture: &Fixture,
+    authority_gate: &mut Gate,
+    config: &layerx_agentd::config::StartupConfig,
+    replica: &mut Replica,
+    sequencer: &mut Daemon,
+    context: &RestartContext<'_>,
+) -> Result<(), GateError> {
+    let layerxd = &fixture.layerxd;
+    let identity = &fixture.identity;
+    let root = &fixture.root;
+    let scope = fixture.scope;
+    let replica_port = fixture.replica_port;
+    let sequencer_key = fixture.sequencer_key;
+    let paths = context.paths;
+    let node_dir = &paths.directory;
+    let socket = &paths.socket;
+    let node_env = context.environment;
+    let gate = context.gate;
+    let retained = context.retained;
+    let policy = context.policy;
+    authority_gate.disconnected();
+    assert!(authority_gate.evidence_authority().is_err());
+    sequencer.stop();
+    replica.daemon.stop();
+    *authority_gate = Gate::new(config)?;
+    assert!(authority_gate.evidence_authority().is_err());
+    replica.daemon = spawn_daemon(
+        layerxd,
+        "--authority-replica",
+        &replica.directory.join("config.txt"),
+        &replica.environment,
+        identity,
+        root.join("replica-restart.stderr"),
+    );
+    wait_for_port(
+        replica_port,
+        &mut replica.daemon,
+        "restarted authority replica",
+    );
+    *sequencer = spawn_daemon(
+        layerxd,
+        "--serve",
+        &node_dir.join("config.txt"),
+        node_env,
+        identity,
+        root.join("sequencer-restart.stderr"),
+    );
+    wait_for_lni(scope, socket, gate, sequencer);
+    let mut transport = connect_lni(scope, socket, gate);
+    for (index, (signed, original)) in retained.iter().enumerate() {
+        let correlation = u64::try_from(index).unwrap_or_else(|_| panic!("correlation overflow"))
+            * 10_000
+            + 100_000;
+        let recovered = submit_and_wait(&mut transport, signed, correlation);
+        assert_eq!(recovered.activity_id, original.activity_id);
+        assert_eq!(recovered.receipt, original.receipt);
+        verify_replica_receipt(fixture, &recovered);
     }
     drop(transport);
     let mut transport = must(
-        Uds::connect(&socket, &gate, lni_limits()),
+        Uds::connect(socket, gate, lni_limits()),
+        "restart authority transport",
+    );
+    let status = handshake_gate(authority_gate, &mut transport)?;
+    assert_eq!(status.protocol_version, scope.protocol_version);
+    assert_eq!(status.network_id, scope.network_id);
+    assert_eq!(status.latest_sealed_batch, policy.handshake_batch);
+    assert_eq!(status.authorised_sequencer_key, sequencer_key);
+    assert!(status.writes_ready);
+    assert!(authority_gate.evidence_authority().is_ok());
+    Ok(())
+}
+
+pub(super) fn authorize(
+    authority_gate: &mut Gate,
+    policy: super::TestAuthorityPolicy<'_>,
+    expected_sequencer_id: Option<[u8; 32]>,
+    restart_config: Option<&layerx_agentd::config::StartupConfig>,
+) -> Result<(), GateError> {
+    let _guard = FIXTURE_LOCK
+        .lock()
+        .unwrap_or_else(|_| panic!("real authority fixture lock poisoned"));
+    let fixture = fixture(policy, expected_sequencer_id);
+    let mut replica = start_replica(&fixture);
+    let paths = prepare_node(&fixture);
+    let node_env = node_environment(&fixture, &paths);
+    let (gate, mut sequencer, mut transport) = start_sequencer(&fixture, &paths, &node_env);
+    let retained = submit_calls(&fixture, &paths, &mut transport, policy);
+    drop(transport);
+    let mut transport = must(
+        Uds::connect(&paths.socket, &gate, lni_limits()),
         "fresh authority handshake transport",
     );
     let result = handshake_gate(authority_gate, &mut transport).map(|status| {
-        assert_eq!(status.protocol_version, scope.protocol_version);
-        assert_eq!(status.network_id, scope.network_id);
+        assert_eq!(status.protocol_version, fixture.scope.protocol_version);
+        assert_eq!(status.network_id, fixture.scope.network_id);
         assert_eq!(status.latest_sealed_batch, policy.handshake_batch);
-        assert_eq!(status.authorised_sequencer_key, sequencer_key);
+        assert_eq!(status.authorised_sequencer_key, fixture.sequencer_key);
         assert!(status.writes_ready);
     });
     drop(transport);
+    if let Some(config) = restart_config {
+        result?;
+        restart_authority(
+            &fixture,
+            authority_gate,
+            config,
+            &mut replica,
+            &mut sequencer,
+            &RestartContext {
+                paths: &paths,
+                environment: &node_env,
+                gate: &gate,
+                retained: &retained,
+                policy,
+            },
+        )?;
+    }
     sequencer.stop();
-    replica.stop();
-    let _ = fs::remove_dir_all(&root);
+    replica.daemon.stop();
+    let _ = fs::remove_dir_all(&fixture.root);
     result
 }
