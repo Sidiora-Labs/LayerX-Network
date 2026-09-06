@@ -1796,3 +1796,11 @@ symbol = "SignatureMessage"
 observed = "After integration of upstream crypto repairs, cargo clippy --locked --manifest-path agent/Cargo.toml -p layerx-proof -p layerx-wire --all-targets -- -D warnings exits 0 in qual-logs/pass5-rebased-clippy.log. This resolves the strict-lint dependency recorded in observation.6.4.31 without modifying the crypto crate in this change."
 assumption = "Passing strict lint does not qualify daemon restart or the direct-activity post-upgrade regression."
 severity = "info"
+
+[observation.6.4.34]
+task = "6.4"
+file = "tests/programs/test_call_activity.c; agent/crates/layerx-client/src/evidence.rs; agent/crates/layerx-client/src/read.rs"
+symbol = "deploy_and_upgrade_artifacts_case decode_nested_evidence verify_nested_account"
+observed = "On source 4c1aa59642189b8373a4fb5c5e6cc057992a15eb, make build/tests/programs_call_activity exits 0 and build/tests/programs_call_activity --post-upgrade-batch exits 1: protocol 3 sequence 4 returns receipt -736 and fails line 1553. Logs: qual-logs/pass6-regression-build.log and qual-logs/pass6-post-upgrade.log. The fixture still advances batch numbers without maintenance and asserts activity-only next sequences. Client decode_nested_evidence still requires WIRE_VERSION 1 at evidence.rs:657 and read.rs:408 still selects ordinary verify_nested_account. The client has no selected maintenance-v2 path. make test-maintenance-publication test-daemon-maintenance-publication exits 0, including real lifecycle, 64-activity publication and daemon restart, in qual-logs/pass6-occupancy.log. Proof/wire tests and strict all-target clippy exit 0 in qual-logs/pass6-proof-wire-tests.log and qual-logs/pass6-proof-wire-clippy.log."
+assumption = "Occupancy qualification remains blocked by the preserved regression contract and missing client integration. Reconcile the regression sequence contract explicitly and implement the maintenance-v2 client decoder and verifier selection without changing the ordinary receipt bound, signature checks or final-sequence/root bindings. Passing the independent native and proof/wire tests does not close either dependency or establish exhaustive mixed-batch crash coverage."
+severity = "blocker"
