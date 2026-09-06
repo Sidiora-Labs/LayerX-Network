@@ -1708,10 +1708,10 @@ test-storage: test-storage-order test-log test-log-durability test-recovery \
 
 $(BUILD_DIR)/tests/lxp_test_journal: tests/state/lxp_test_journal.c $(LIBRARY)
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(EXTRA_LDFLAGS) -pthread -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -pthread -o $@
 
 $(BUILD_DIR)/tests/lxp_test_journal_tsan: tests/state/lxp_test_journal.c \
-		src/state/lxp_journal.c src/crypto/lxp_hash.c \
+		src/state/lxp_journal.c src/crypto/lxp_hash.c src/crypto/lxp_ed25519.c \
 		src/state/lxp_idempotency.c \
 		src/crypto/lxp_ct.c \
 		src/ledger/lx_account_registry.c src/ledger/lx_account_id.c \
@@ -1720,7 +1720,7 @@ $(BUILD_DIR)/tests/lxp_test_journal_tsan: tests/state/lxp_test_journal.c \
 		src/protocol/lxp_protocol.c src/protocol/lxp_result.c
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(SANITIZER_CFLAGS) -fsanitize=thread \
-		$^ -fsanitize=thread -pthread -o $@
+		$^ -fsanitize=thread -lcrypto -pthread -o $@
 
 test-journal: $(BUILD_DIR)/tests/lxp_test_journal \
 		$(BUILD_DIR)/tests/lxp_test_journal_tsan
@@ -1777,7 +1777,7 @@ test-admission: $(BUILD_DIR)/tests/lxp_test_admission
 $(BUILD_DIR)/tests/lxp_test_idempotency: tests/state/lxp_test_idempotency.c \
 		$(LIBRARY)
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(EXTRA_LDFLAGS) -pthread -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -pthread -o $@
 
 test-idempotency: $(BUILD_DIR)/tests/lxp_test_idempotency
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_idempotency
