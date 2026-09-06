@@ -13,6 +13,7 @@
 #include <openssl/evp.h>
 
 static bool dump_executed_v3;
+static bool post_upgrade_batch_regression;
 static const uint8_t executed_sequencer_seed[32] = {0x45U};
 static int lifecycle_vector_signature(lxp_activity *activity,
                                       uint8_t public_key[32], uint8_t signature[64]);
@@ -1482,6 +1483,7 @@ static int deploy_and_upgrade_artifacts_case(uint16_t protocol_version,
     activity.protocol_version = protocol_version;
     activity.account_sequence = 2U;
     activity.idempotency_key[31] = 3U;
+    if (post_upgrade_batch_regression) execution.batch_number = 2U;
     activity.fee_limit = (lxp_u128){0U, 0U};
     execution.global_sequence = 3U;
     if (lxp_arena_reset(&arena, 0U) != LXP_OK ||
@@ -1515,6 +1517,7 @@ static int deploy_and_upgrade_artifacts_case(uint16_t protocol_version,
     activity.protocol_version = protocol_version;
     activity.account_sequence = 3U;
     activity.idempotency_key[31] = 4U;
+    if (post_upgrade_batch_regression) execution.batch_number = 3U;
     activity.fee_limit = actor->balance;
     execution.fee_balance = actor->balance;
     execution.global_sequence = 4U;
@@ -1968,6 +1971,11 @@ static int dump_lifecycle_vectors(void)
 
 int main(int argc, char **argv)
 {
+    if (argc == 2 && strcmp(argv[1], "--post-upgrade-batch") == 0) {
+        post_upgrade_batch_regression = true;
+        return deploy_and_upgrade_artifacts_case(
+            LXP_PROTOCOL_VERSION_STATE_COMMITMENT, false);
+    }
     if (argc == 2 && strcmp(argv[1], "--dump-executed-v3") == 0) {
         dump_executed_v3 = true;
         return deploy_and_upgrade_artifacts_case(LXP_PROTOCOL_VERSION_STATE_COMMITMENT, true);

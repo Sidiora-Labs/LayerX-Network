@@ -1081,6 +1081,20 @@ file = "tests/bridge/custody_genesis.py"
 symbol = "custody-credit-profile/v1"
 observed = "The produced profile pins local chain 31337 and its genesis hash, a locally deployed vault runtime, and a freshly generated custody attestor. It cannot authorize credit on the persistent Paxeer chain. No persistent-chain deposit or transaction was performed."
 assumption = "Persistent funding requires a real Paxeer deposit, the owner-authorized custody attestor key, matching external chain identity and vault pins, and a newly signed custody-enabled genesis with matching settlement registration. The existing marker-free genesis cannot acquire Bridge retroactively. Activation must satisfy the selected deployment's governance and finalization conditions; local time advancement is not evidence of persistent activation."
+[observation.6.4.20]
+task = "6.4"
+file = "programs/crates/layerx-programs-runtime/src/ffi_call.rs"
+symbol = "settle_call_occupancy"
+observed = "A real protocol-3 deploy/call/upgrade/call sequence fails after crossing occupancy batch boundaries. build/tests/programs_call_activity --post-upgrade-batch exits 1 with sequence 4 receipt -736; the original same-batch fixture and make programs-core-test exit 0. The regression preserves the success assertions and exact upgraded artifact checks. LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin cargo test --locked --manifest-path platform/Cargo.toml -p layerx-platform-emulator --test gateway lifecycle_routes_execute_and_replay_real_native_state_receipts exits 101 at sequence 3 with authenticated Failure(Callback { stage: 5, status: -3 }). Logs: qual-logs/post-upgrade-native.log, qual-logs/programs-core.log, qual-logs/emulator-before.log. OccupancyLedger::prepare_positions requires batch == last_finalized_batch + 1; CALL settlement does not finalize that cursor, and the daemon does not invoke batch occupancy finalization."
+assumption = "Completion requires native-owned atomic maintenance preparation, signed receipt-tree inclusion, durable sequence reservation, WAL recovery and replica publication for every applicable batch. Calling finalization after publication or relaxing the runtime batch check would violate the existing state-root and sequence contracts. The reduced native regression uses the existing generated guest; SDK escrow guest execution is not established by this evidence."
+severity = "blocker"
+
+[observation.6.4.21]
+task = "6.4"
+file = "programs/vendor/binaryen-sys-0.12.0/binaryen/third_party/llvm-project/include/llvm/Config/config.h"
+symbol = "programs-test"
+observed = "make programs-test exits 2 after its prerequisites reach the cargo test --locked --workspace recipe. Cargo exits 101 because the vendored Binaryen config.h file is absent and its checksum cannot be calculated. Log: qual-logs/programs-test-rerun.log. The initial aggregate run also encountered an absent asc executable; installing the locked AssemblyScript dependencies resolves that setup failure and make programs-sdk-assemblyscript exits 0, qual-logs/assemblyscript-gate.log. make programs-core-test and the address-sanitized test-program-artifacts gate exit 0, qual-logs/programs-core.log and qual-logs/program-artifacts-asan.log."
+assumption = "Restore the exact vendor input under its existing checksum contract before rerunning the workspace aggregate. No vendor file or checksum was changed. Passing prerequisite gates do not establish an aggregate pass."
 severity = "blocker"
 [observation.6.11.11]
 task = "6.11"
