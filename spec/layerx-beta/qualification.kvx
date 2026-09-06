@@ -1784,7 +1784,15 @@ severity = "blocker"
 [observation.6.4.32]
 task = "6.4"
 file = "tests/programs/test_call_activity.c"
-symbol = "artifact_lifecycle_fixture execute_artifact_fixture_activity"
+symbol = "deploy_and_upgrade_artifacts_case execute_artifact_fixture_activity"
 observed = "build/tests/programs_call_activity --post-upgrade-batch exits 1 at the protocol-3 post-upgrade assertion, recorded in qual-logs/pass5-post-upgrade-2.log. This direct-activity fixture changes execution.batch_number to 2 for UPGRADE and 3 for CALL without finalizing either preceding batch. Its unchanged global sequence assertions require 4 after UPGRADE and 5 after CALL, leaving no maintenance sequence. The separate real prepared-batch lifecycle with maintenance and maximum 64-activity publication passes in qual-logs/pass5-max-confirm.log."
 assumption = "The direct-activity regression and durable batch-maintenance contract require reconciliation. Maintenance must remain a signed batch leaf with its own sequence; neither the occupancy cursor check nor the existing sequence assertions may be weakened to make this direct-activity fixture pass."
 severity = "blocker"
+
+[observation.6.4.33]
+task = "6.4"
+file = "agent/crates/layerx-crypto/src/lib.rs"
+symbol = "SignatureMessage"
+observed = "After integration of upstream crypto repairs, cargo clippy --locked --manifest-path agent/Cargo.toml -p layerx-proof -p layerx-wire --all-targets -- -D warnings exits 0 in qual-logs/pass5-rebased-clippy.log. This resolves the strict-lint dependency recorded in observation.6.4.31 without modifying the crypto crate in this change."
+assumption = "Passing strict lint does not qualify daemon restart or the direct-activity post-upgrade regression."
+severity = "info"
