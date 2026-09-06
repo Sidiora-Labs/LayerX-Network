@@ -1042,3 +1042,19 @@ symbol = "lxp_daemon_process_batch"
 observed = "Protocol-2 NativeProgramCall publication attempted composite account-evidence validation against the legacy receipt-transition root and could terminate after publishing a genuine batch. Live and recovery publication now gate composite account evidence on explicit protocol 3. Protocol 2 advertises no account_read capability and returns typed ModuleDisabled for account reads and account proof bundles; canonical receipt and batch evidence remain available. Native build, make check and test-layerxd plus test-daemon-lni-admission exit 0: /tmp/layerx-native-protocol2-evidence-build.log, /tmp/layerx-native-protocol2-evidence-check.log and /tmp/layerx-native-protocol2-evidence-daemon-tests.log. Stable daemon SHA256 d0056c4ac48f0f68c834b93ec41ee5cf97422c9d9e95c58a803024e760a8965c. The protocol-3 recheck passes five real Programs boundary tests, one artifact unit test, two authority tests and four of five core tests. One core receipt lookup failed with handshake PeerShutdown under concurrent compilation; rerunning exactly boundary_serves_the_real_sequencer_over_the_lni after the image compilation passes unchanged, 1/1 in 24.84 seconds. Logs /tmp/layerx-protocol-profile-boundaries-test.log and /tmp/layerx-core-stable-profile-rerun.log."
 assumption = "No assertion, timeout, signature or state-proof rule was weakened. The transient handshake failure is retained; load as its cause is unconfirmed. Protocol-2 restart evidence and full agentd aggregate qualification are still pending."
 severity = "note"
+
+[observation.custody.protocol3_account_vectors]
+task = "6.1"
+file = "human/crates/layerx-paxeer-client/tests/account_vectors.rs"
+symbol = "account_address_for_protocol lx_account_id_from_string"
+observed = "Protocol 3 derives beneficiary accounts through the native LX:ACCOUNT:v1 domain, a four-byte big-endian name length and the canonical name. Fixed C suite vectors from tests/ledger/test_account_id.c for agent:did:key:alice:main, system:paxeer-reserve and system:paxeer-withdrawals are cross-checked by the Rust client. The legacy LXP/v1/account-id\\0 derivation is superseded for protocol 3 only; the explicit protocol-2 result remains unchanged. cargo check -p layerx-paxeer-client, package cargo fmt --check, package all-target clippy with -D warnings and the original complete package test suite pass; logs are qual-logs/item1-check.log, item1-fmt-check.log, item1-clippy-final.log and item1-test.log."
+assumption = "The existing signed-root proof is not the 427-byte authenticated custody credit; its complete-proof ingress refusal remains intact. Account derivation qualification does not establish funded execution."
+severity = "info"
+
+[observation.custody.human_qualification_dependency]
+task = "6.1"
+file = "human/apps/web/package.json"
+symbol = "human-lint-copy"
+observed = "make human-lint human-test-unit reaches npm --prefix human/apps/web run typecheck and fails because tsc is not installed, with command exit 127 at Makefile:2001. Evidence is qual-logs/item1-human-gates.log."
+assumption = "Install the locked web dependencies in the qualification environment and rerun the unchanged aggregate gate. No assertion, dependency policy or lint is disabled."
+severity = "blocker"
