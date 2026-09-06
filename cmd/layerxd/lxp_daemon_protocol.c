@@ -653,11 +653,11 @@ lxp_result lxp_daemon_protocol_owner_attach(
             status = lxp_daemon_receipt_authority_scan(
                 receipt_authority, &authority_offset, scratch,
                 &evidence, &present);
-            if (status == LXP_OK && present)
+            if (status == LXP_OK && present && evidence.format_version != 3U)
                 status = lxp_receipt_decode(
                     evidence.canonical_receipt.bytes,
                     evidence.canonical_receipt.length, true, &receipt);
-            if (status == LXP_OK && present)
+            if (status == LXP_OK && present && evidence.format_version != 3U)
                 status = lxp_verified_receipt_index_add(
                     verified_receipts, &receipt,
                     receipt_authority->authorization.public_key, scratch);
@@ -672,16 +672,28 @@ lxp_result lxp_daemon_protocol_owner_attach(
         status = lxp_daemon_receipt_authority_lookup(
             receipt_authority, owner->feed_store.head_receipt_digest,
             scratch, &evidence);
-        if (status == LXP_OK)
-            status = lxp_receipt_decode(
-                evidence.canonical_receipt.bytes,
-                evidence.canonical_receipt.length, true, &receipt);
-        if (status == LXP_OK &&
-            (receipt.global_sequence !=
-                 owner->feed_store.scanned_through_sequence ||
-             lxp_ct_memcmp(receipt.resulting_state_root,
-                           owner->feed_store.head_state_root, 32U) != 0))
-            status = LXP_ERR_PROJECTION_STALE;
+        if (status == LXP_OK && evidence.format_version == 3U) {
+            lxp_programs_occupancy_receipt maintenance;
+            status = lxp_programs_occupancy_receipt_decode(
+                evidence.canonical_receipt.bytes, evidence.canonical_receipt.length,
+                &maintenance);
+            if (status == LXP_OK &&
+                (maintenance.global_sequence != owner->feed_store.scanned_through_sequence ||
+                 lxp_ct_memcmp(maintenance.resulting_state_root,
+                               owner->feed_store.head_state_root, 32U) != 0))
+                status = LXP_ERR_PROJECTION_STALE;
+        } else {
+            if (status == LXP_OK)
+                status = lxp_receipt_decode(
+                    evidence.canonical_receipt.bytes,
+                    evidence.canonical_receipt.length, true, &receipt);
+            if (status == LXP_OK &&
+                (receipt.global_sequence !=
+                     owner->feed_store.scanned_through_sequence ||
+                 lxp_ct_memcmp(receipt.resulting_state_root,
+                               owner->feed_store.head_state_root, 32U) != 0))
+                status = LXP_ERR_PROJECTION_STALE;
+        }
         (void)lxp_arena_reset(scratch, mark);
     }
     if (status == LXP_OK && receipt_authority->record_count != 0U) {
