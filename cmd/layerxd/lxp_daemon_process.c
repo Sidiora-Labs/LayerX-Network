@@ -665,7 +665,7 @@ static lxp_result recover_batch_account_evidence(
         return LXP_ERR_LENGTH_LIMIT;
     state = (lxp_state_store *)malloc(sizeof(*state));
     journal = (lxp_state_journal *)malloc(sizeof(*journal));
-    kernel = (lxp_kernel *)malloc(sizeof(*kernel));
+    kernel = (lxp_kernel *)calloc(1U, sizeof(*kernel));
     accounts = (lx_account_registry *)malloc(sizeof(*accounts));
     if (state == NULL || journal == NULL || kernel == NULL ||
         accounts == NULL) {
@@ -684,6 +684,9 @@ static lxp_result recover_batch_account_evidence(
         *kernel = process->kernel;
         kernel->state = state;
         kernel->journal = journal;
+        (void)memset(kernel->blobs, 0, sizeof(kernel->blobs));
+        kernel->blob_count = 0U;
+        kernel->blob_total_bytes = 0U;
     }
     mark = lxp_arena_mark(&process->checkpoint_arena);
     if (status == LXP_OK)
@@ -705,6 +708,8 @@ static lxp_result recover_batch_account_evidence(
             head_receipt_proof, &process->sequencer_authorization,
             canonical_header, header_signature,
             &process->checkpoint_arena);
+    while (kernel->blob_count != 0U)
+        free(kernel->blobs[--kernel->blob_count].bytes);
     (void)lxp_arena_reset(&process->checkpoint_arena, mark);
 done:
     if (state_open) {
