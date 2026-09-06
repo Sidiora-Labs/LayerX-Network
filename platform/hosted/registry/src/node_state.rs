@@ -54,6 +54,9 @@ struct BatchEvidence {
 }
 
 impl NodeProgramStateSource {
+    ///
+    /// # Errors
+    /// Rejects missing authorities and endpoints that are insecure or not independent.
     pub fn connect(
         endpoint: &str,
         authorization: String,
@@ -105,6 +108,9 @@ impl NodeProgramStateSource {
             .is_some_and(|deadline| Instant::now() >= deadline)
     }
 
+    ///
+    /// # Errors
+    /// Refuses deployment evidence rejected by the configured protocol verifier.
     pub fn verify_deployment(
         &self,
         proof: &DeploymentProof,
@@ -115,6 +121,9 @@ impl NodeProgramStateSource {
             .map_err(|error| format!("protocol deployment evidence refused: {error}"))
     }
 
+    ///
+    /// # Errors
+    /// Refuses historical evidence rejected by the configured protocol verifier.
     pub fn verify_stored_deployment(
         &self,
         proof: &DeploymentProof,
@@ -124,10 +133,16 @@ impl NodeProgramStateSource {
             .map_err(|error| format!("stored protocol deployment evidence refused: {error}"))
     }
 
+    ///
+    /// # Errors
+    /// Refuses unavailable, malformed, stale or unverifiable node heads.
     pub fn current_head(&self, now_ms: u64) -> Result<AccountStateHead, String> {
         self.parse_head(&self.get("/v1/protocol/account-state/head")?, Some(now_ms))
     }
 
+    ///
+    /// # Errors
+    /// Refuses unavailable or invalid heads and mismatched receipt digests.
     pub fn receipt_head(&self, digest: [u8; 32]) -> Result<AccountStateHead, String> {
         let path = format!("/v1/receipts/{}/account-state", hex::encode(&digest));
         let head = self.parse_head(&self.get(&path)?, None)?;
@@ -137,6 +152,9 @@ impl NodeProgramStateSource {
         Ok(head)
     }
 
+    ///
+    /// # Errors
+    /// Refuses unavailable, malformed or digest-mismatched records and head binding failures.
     pub fn program_state(
         &self,
         program: ProgramId,
@@ -174,6 +192,9 @@ impl NodeProgramStateSource {
         })
     }
 
+    ///
+    /// # Errors
+    /// Refuses invalid cursors, unavailable feeds and malformed or inconsistent change records.
     pub fn changes(
         &self,
         after: ProgramStateCursor,

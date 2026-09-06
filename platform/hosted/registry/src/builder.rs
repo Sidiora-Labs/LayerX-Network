@@ -60,6 +60,22 @@ pub struct HermeticBuilder {
     request_deadline: std::sync::Arc<Mutex<Option<Instant>>>,
 }
 
+pub struct BuilderConfig {
+    pub workspace: PathBuf,
+    pub builder_image_digest: [u8; 32],
+    pub environment_root: PathBuf,
+    pub entrypoint: String,
+    pub isolation_runtime: PathBuf,
+    pub isolation_runtime_digest: [u8; 32],
+    pub job_supervisor: PathBuf,
+    pub job_supervisor_digest: [u8; 32],
+    pub cgroup_root: PathBuf,
+    pub timeout_seconds: u64,
+    pub memory_bytes: u64,
+    pub process_limit: u32,
+    pub file_size_bytes: u64,
+}
+
 impl HermeticBuilder {
     /// Binds the sandbox to the builder image this host is pinned to.
     ///
@@ -67,21 +83,22 @@ impl HermeticBuilder {
     ///
     /// Refuses unpinned environment or isolation bytes, invalid resource
     /// bounds, and unusable environment or workspace paths.
-    pub fn new(
-        workspace: PathBuf,
-        builder_image_digest: [u8; 32],
-        environment_root: PathBuf,
-        entrypoint: String,
-        isolation_runtime: PathBuf,
-        isolation_runtime_digest: [u8; 32],
-        job_supervisor: PathBuf,
-        job_supervisor_digest: [u8; 32],
-        cgroup_root: PathBuf,
-        timeout_seconds: u64,
-        memory_bytes: u64,
-        process_limit: u32,
-        file_size_bytes: u64,
-    ) -> Result<Self, String> {
+    pub fn new(config: BuilderConfig) -> Result<Self, String> {
+        let BuilderConfig {
+            workspace,
+            builder_image_digest,
+            environment_root,
+            entrypoint,
+            isolation_runtime,
+            isolation_runtime_digest,
+            job_supervisor,
+            job_supervisor_digest,
+            cgroup_root,
+            timeout_seconds,
+            memory_bytes,
+            process_limit,
+            file_size_bytes,
+        } = config;
         if builder_image_digest == [0; 32] {
             return Err("the pinned builder image digest is required".to_owned());
         }
@@ -145,6 +162,9 @@ impl HermeticBuilder {
     }
 
     /// Binds subsequent attempts to the monotonic ingress deadline.
+    ///
+    /// # Errors
+    /// Returns an error if the deadline lock is poisoned.
     pub fn set_request_deadline(&self, deadline: Instant) -> Result<(), String> {
         self.request_deadline
             .lock()
@@ -171,6 +191,7 @@ impl HermeticBuilder {
                 let lock = slot.join(".layerx-build-lock");
                 let file = fs::OpenOptions::new()
                     .create(true)
+                    .truncate(false)
                     .read(true)
                     .write(true)
                     .open(&lock)
@@ -271,7 +292,32 @@ impl HermeticBuilder {
             .ok_or_else(|| BuildRefusal::BuilderFailed {
                 reason: "request deadline expired before cgroup admission".to_owned(),
             })?;
-        let mut child = Command::new(format!("/proc/self/fd/{}", job_supervisor.as_raw_fd()))
+        let mut child = self
+            .build_command(
+                attempt,
+                (&source, &environment),
+                (&job_supervisor, &isolation_runtime),
+                remaining,
+                log,
+            )
+            .spawn()
+            .map_err(unavailable)?;
+        self.wait_for_build(&mut child, &mut log_reader, request_deadline)
+    }
+
+    fn build_command(
+        &self,
+        attempt: &BuildAttempt<'_>,
+        paths: (&Path, &Path),
+        executables: (&File, &File),
+        remaining: Duration,
+        log: File,
+    ) -> Command {
+        let (source, environment) = paths;
+        let (job_supervisor, isolation_runtime) = executables;
+        let arguments = &attempt.plan.environment.command;
+        let mut command = Command::new(format!("/proc/self/fd/{}", job_supervisor.as_raw_fd()));
+        command
             .arg("--cgroup-v2")
             .arg("--cgroup-root")
             .arg(&self.cgroup_root)
@@ -285,7 +331,7 @@ impl HermeticBuilder {
             .arg(format!("--pids-max={}", self.process_limit))
             .arg(format!("--io-write-max={}", self.file_size_bytes))
             .arg("--workspace-device-path")
-            .arg(&source)
+            .arg(source)
             .arg(format!("--wall-time-max-ms={}", remaining.as_millis()))
             .arg("--")
             .arg(format!("/proc/self/fd/{}", isolation_runtime.as_raw_fd()))
@@ -299,10 +345,10 @@ impl HermeticBuilder {
                 "--clearenv",
                 "--ro-bind",
             ])
-            .arg(&environment)
+            .arg(environment)
             .arg("/")
             .args(["--dir", "/build", "--bind"])
-            .arg(&source)
+            .arg(source)
             .arg("/build")
             .args([
                 "--dir", "/tmp", "--tmpfs", "/tmp", "--proc", "/proc", "--dev", "/dev",
@@ -339,9 +385,16 @@ impl HermeticBuilder {
             .env_clear()
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::from(log))
-            .spawn()
-            .map_err(unavailable)?;
+            .stderr(Stdio::from(log));
+        command
+    }
+
+    fn wait_for_build(
+        &self,
+        child: &mut std::process::Child,
+        log_reader: &mut File,
+        request_deadline: Instant,
+    ) -> Result<(), BuildRefusal> {
         let build_deadline = Instant::now()
             .checked_add(Duration::from_secs(self.timeout_seconds))
             .ok_or_else(|| BuildRefusal::SandboxUnavailable {
@@ -371,7 +424,7 @@ impl HermeticBuilder {
             Ok(())
         } else {
             Err(BuildRefusal::BuilderFailed {
-                reason: format!("{status}: {}", tail_open(&mut log_reader)?),
+                reason: format!("{status}: {}", tail_open(log_reader)?),
             })
         }
     }
@@ -426,6 +479,7 @@ fn validate_build_boundary(workspace: &Path, cgroup: &Path) -> Result<PathBuf, S
         let slot = entry.path();
         let lock = fs::OpenOptions::new()
             .create(true)
+            .truncate(false)
             .read(true)
             .write(true)
             .open(slot.join(".layerx-build-lock"))
@@ -720,7 +774,7 @@ fn read_beneath(root: &Path, relative: &Path, maximum: u64) -> Result<Vec<u8>, i
             "sandbox output is not a bounded regular file",
         ));
     }
-    let mut file = File::from(descriptor);
+    let file = File::from(descriptor);
     let mut bytes = Vec::with_capacity(usize::try_from(stat.st_size).unwrap_or(0));
     file.take(maximum.saturating_add(1))
         .read_to_end(&mut bytes)?;

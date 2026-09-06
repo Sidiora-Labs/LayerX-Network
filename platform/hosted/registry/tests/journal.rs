@@ -150,10 +150,10 @@ fn project(mut evidence: Vec<VerifiedDeploymentEvidence>, records: Vec<Vec<u8>>)
     let resolved = ordered
         .into_iter()
         .map(|(evidence, _)| {
-            registry
-                .resolve_deployment(evidence)
-                .map(|resolved| resolved.receipt_digest())
-                .unwrap_or_else(|error| panic!("resolve deployment: {error}"))
+            registry.resolve_deployment(evidence).map_or_else(
+                |error| panic!("resolve deployment: {error}"),
+                |resolved| resolved.receipt_digest(),
+            )
         })
         .collect();
     Projection {
@@ -180,18 +180,18 @@ fn replay(journal: &FileDeploymentJournal, verifier: &ProtocolDeploymentVerifier
         .proofs()
         .unwrap_or_else(|error| panic!("replay proofs: {error}"))
     {
-        let verified = verifier
+        let authenticated = verifier
             .verify_historical_deployment(&proof)
             .unwrap_or_else(|error| panic!("replay verification: {error}"));
         journal
-            .audit_projection(&verified)
+            .audit_projection(&authenticated)
             .unwrap_or_else(|error| panic!("replay audit: {error}"));
         records.push(
             journal
-                .canonical_record(verified.receipt_digest())
+                .canonical_record(authenticated.receipt_digest())
                 .unwrap_or_else(|error| panic!("replay record: {error}")),
         );
-        evidence.push(verified);
+        evidence.push(authenticated);
     }
     project(evidence, records)
 }
@@ -420,6 +420,49 @@ fn envelope_encoding_round_trips_and_names_the_missing_part() {
     );
 }
 
+fn assert_partial_envelope(
+    root: &Path,
+    evidence: &Evidence,
+    first: [u8; 32],
+    second: [u8; 32],
+    envelope: &DeploymentEnvelope,
+    second_path: &Path,
+    whole: &[u8],
+) {
+    write(second_path, &whole[..record_frame_end(envelope) + 3]);
+    let loaded = load(&open(root));
+    assert_eq!(digests(&loaded), BTreeSet::from([first]));
+    assert_eq!(
+        quarantine(&loaded),
+        BTreeMap::from([(
+            second,
+            (
+                vec![second_path.to_path_buf()],
+                UnitDefect::Missing(UnitPart::Proof)
+            )
+        )])
+    );
+    assert_eq!(open(root).proofs(), Err(UNEQUAL_SETS.to_owned()));
+    assert_eq!(
+        open(root).canonical_record(second),
+        Err(RegistryError::JournalUnavailable)
+    );
+    assert!(open(root)
+        .audit_projection(&evidence.upgrade)
+        .is_err_and(|error| error.contains("is corrupt")));
+
+    write(second_path, &whole[..whole.len() - 32]);
+    let loaded = load(&open(root));
+    assert_eq!(digests(&loaded), BTreeSet::from([first]));
+    assert_eq!(
+        quarantine(&loaded).get(&second).map(|(_, defect)| defect),
+        Some(&UnitDefect::Missing(UnitPart::Seal))
+    );
+    assert!(open(root)
+        .proofs()
+        .is_err_and(|error| error.contains("ends before its seal")));
+}
+
 #[test]
 fn startup_quarantines_defective_units_and_loads_the_rest() {
     let evidence = evidence();
@@ -431,38 +474,15 @@ fn startup_quarantines_defective_units_and_loads_the_rest() {
     let second_path = unit_path(&root, second, "envelope");
     let whole = read(&second_path);
 
-    write(&second_path, &whole[..record_frame_end(&envelope) + 3]);
-    let loaded = load(&open(&root));
-    assert_eq!(digests(&loaded), BTreeSet::from([first]));
-    assert_eq!(
-        quarantine(&loaded),
-        BTreeMap::from([(
-            second,
-            (
-                vec![second_path.clone()],
-                UnitDefect::Missing(UnitPart::Proof)
-            )
-        )])
+    assert_partial_envelope(
+        &root,
+        &evidence,
+        first,
+        second,
+        &envelope,
+        &second_path,
+        &whole,
     );
-    assert_eq!(open(&root).proofs(), Err(UNEQUAL_SETS.to_owned()));
-    assert_eq!(
-        open(&root).canonical_record(second),
-        Err(RegistryError::JournalUnavailable)
-    );
-    assert!(open(&root)
-        .audit_projection(&evidence.upgrade)
-        .is_err_and(|error| error.contains("is corrupt")));
-
-    write(&second_path, &whole[..whole.len() - 32]);
-    let loaded = load(&open(&root));
-    assert_eq!(digests(&loaded), BTreeSet::from([first]));
-    assert_eq!(
-        quarantine(&loaded).get(&second).map(|(_, defect)| defect),
-        Some(&UnitDefect::Missing(UnitPart::Seal))
-    );
-    assert!(open(&root)
-        .proofs()
-        .is_err_and(|error| error.contains("ends before its seal")));
 
     assert_eq!(append(&open(&root), &evidence.upgrade), second);
     assert_eq!(
@@ -543,6 +563,44 @@ fn startup_quarantines_defective_units_and_loads_the_rest() {
     fs::remove_dir_all(&root).unwrap_or_else(|error| panic!("cleanup: {error}"));
 }
 
+fn assert_incomplete_legacy(root: &Path, evidence: &Evidence, first: [u8; 32], second: [u8; 32]) {
+    let lone_record = unit_path(root, second, "deployment");
+    write(
+        &lone_record,
+        &evidence.upgrade.record().canonical_encoding(),
+    );
+    let loaded = load(&open(root));
+    assert_eq!(digests(&loaded), BTreeSet::from([first]));
+    assert_eq!(
+        quarantine(&loaded),
+        BTreeMap::from([(
+            second,
+            (
+                vec![lone_record.clone()],
+                UnitDefect::Missing(UnitPart::Proof)
+            )
+        )])
+    );
+    assert_eq!(open(root).proofs(), Err(UNEQUAL_SETS.to_owned()));
+    fs::remove_file(&lone_record).unwrap_or_else(|error| panic!("remove: {error}"));
+
+    let lone_proof = unit_path(root, second, "admission");
+    write(&lone_proof, &evidence.upgrade.proof().canonical_encoding());
+    let loaded = load(&open(root));
+    assert_eq!(
+        quarantine(&loaded),
+        BTreeMap::from([(
+            second,
+            (
+                vec![lone_proof.clone()],
+                UnitDefect::Missing(UnitPart::Record)
+            )
+        )])
+    );
+    assert_eq!(open(root).proofs(), Err(UNEQUAL_SETS.to_owned()));
+    fs::remove_file(&lone_proof).unwrap_or_else(|error| panic!("remove: {error}"));
+}
+
 #[test]
 fn legacy_two_file_units_load_when_complete_and_quarantine_when_not() {
     let evidence = evidence();
@@ -568,41 +626,7 @@ fn legacy_two_file_units_load_when_complete_and_quarantine_when_not() {
         .unwrap_or_else(|error| panic!("legacy audit: {error}"));
     assert_eq!(journal.proofs(), Ok(vec![evidence.deploy.proof().clone()]));
 
-    let lone_record = unit_path(&root, second, "deployment");
-    write(
-        &lone_record,
-        &evidence.upgrade.record().canonical_encoding(),
-    );
-    let loaded = load(&open(&root));
-    assert_eq!(digests(&loaded), BTreeSet::from([first]));
-    assert_eq!(
-        quarantine(&loaded),
-        BTreeMap::from([(
-            second,
-            (
-                vec![lone_record.clone()],
-                UnitDefect::Missing(UnitPart::Proof)
-            )
-        )])
-    );
-    assert_eq!(open(&root).proofs(), Err(UNEQUAL_SETS.to_owned()));
-    fs::remove_file(&lone_record).unwrap_or_else(|error| panic!("remove: {error}"));
-
-    let lone_proof = unit_path(&root, second, "admission");
-    write(&lone_proof, &evidence.upgrade.proof().canonical_encoding());
-    let loaded = load(&open(&root));
-    assert_eq!(
-        quarantine(&loaded),
-        BTreeMap::from([(
-            second,
-            (
-                vec![lone_proof.clone()],
-                UnitDefect::Missing(UnitPart::Record)
-            )
-        )])
-    );
-    assert_eq!(open(&root).proofs(), Err(UNEQUAL_SETS.to_owned()));
-    fs::remove_file(&lone_proof).unwrap_or_else(|error| panic!("remove: {error}"));
+    assert_incomplete_legacy(&root, &evidence, first, second);
 
     let interrupted = unit_path(&root, second, "admission.tmp");
     write(&interrupted, b"partial");

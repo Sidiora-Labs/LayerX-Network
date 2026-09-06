@@ -514,27 +514,21 @@ fn isolated_route(
             )
         }
     };
-    let executable = match env::current_exe() {
-        Ok(executable) => executable,
-        Err(_) => {
-            return refusal(
-                503,
-                "worker_unavailable",
-                "the request worker executable is unavailable",
-            )
-        }
+    let Ok(executable) = env::current_exe() else {
+        return refusal(
+            503,
+            "worker_unavailable",
+            "the request worker executable is unavailable",
+        );
     };
-    let worker_group = match WorkerCgroup::create() {
-        Ok(group) => group,
-        Err(_) => {
-            return refusal(
-                503,
-                "worker_unavailable",
-                "the request worker cgroup is unavailable",
-            )
-        }
+    let Ok(worker_group) = WorkerCgroup::create() else {
+        return refusal(
+            503,
+            "worker_unavailable",
+            "the request worker cgroup is unavailable",
+        );
     };
-    let mut child = match Command::new(executable)
+    let Ok(mut child) = Command::new(executable)
         .arg("--stopped-request-worker")
         .arg(remaining.as_millis().to_string())
         .env(
@@ -545,15 +539,12 @@ fn isolated_route(
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
-    {
-        Ok(child) => child,
-        Err(_) => {
-            return refusal(
-                503,
-                "worker_unavailable",
-                "the request worker could not start",
-            )
-        }
+    else {
+        return refusal(
+            503,
+            "worker_unavailable",
+            "the request worker could not start",
+        );
     };
     let pid = child.id();
     while !process_stopped(pid) {
@@ -577,15 +568,12 @@ fn isolated_route(
             "the request worker could not be attached",
         );
     }
-    let raw_pid = match i32::try_from(pid).ok().and_then(Pid::from_raw) {
-        Some(pid) => pid,
-        None => {
-            return refusal(
-                503,
-                "worker_unavailable",
-                "the request worker pid is invalid",
-            )
-        }
+    let Some(raw_pid) = i32::try_from(pid).ok().and_then(Pid::from_raw) else {
+        return refusal(
+            503,
+            "worker_unavailable",
+            "the request worker pid is invalid",
+        );
     };
     if kill_process(raw_pid, Signal::CONT).is_err() {
         let _ = child.kill();
@@ -596,25 +584,28 @@ fn isolated_route(
             "the request worker could not continue",
         );
     }
-    let mut input = match child.stdin.take() {
-        Some(input) => input,
-        None => {
-            return refusal(
-                503,
-                "worker_unavailable",
-                "the request worker input is unavailable",
-            )
-        }
+    exchange_worker(&mut child, &worker_group, encoded, deadline)
+}
+
+fn exchange_worker(
+    child: &mut std::process::Child,
+    worker_group: &WorkerCgroup,
+    encoded: Vec<u8>,
+    deadline: Instant,
+) -> layerx_platform_registry::Response {
+    let Some(mut input) = child.stdin.take() else {
+        return refusal(
+            503,
+            "worker_unavailable",
+            "the request worker input is unavailable",
+        );
     };
-    let mut output = match child.stdout.take() {
-        Some(output) => output,
-        None => {
-            return refusal(
-                503,
-                "worker_unavailable",
-                "the request worker output is unavailable",
-            )
-        }
+    let Some(output) = child.stdout.take() else {
+        return refusal(
+            503,
+            "worker_unavailable",
+            "the request worker output is unavailable",
+        );
     };
     let writer = thread::spawn(move || input.write_all(&encoded));
     let reader = thread::spawn(move || {
@@ -686,7 +677,7 @@ fn serve(config: &Config) -> Result<(), String> {
     );
     for connection in listener.incoming() {
         match connection {
-            Ok(mut stream) => {
+            Ok(stream) => {
                 if ACTIVE_CONNECTIONS.fetch_add(1, Ordering::AcqRel) >= config.max_connections {
                     ACTIVE_CONNECTIONS.fetch_sub(1, Ordering::AcqRel);
                     let _ = stream.shutdown(std::net::Shutdown::Both);
@@ -699,97 +690,116 @@ fn serve(config: &Config) -> Result<(), String> {
                     continue;
                 };
                 thread::spawn(move || {
-                    let _connection = ConnectionGuard;
-                    let watchdog_socket = match stream.try_clone() {
-                        Ok(socket) => socket,
-                        Err(_) => return,
-                    };
-                    let (completed, completion) = mpsc::channel();
-                    let watchdog_wait = deadline.saturating_duration_since(Instant::now());
-                    thread::spawn(move || {
-                        if completion.recv_timeout(watchdog_wait).is_err() {
-                            let _ = watchdog_socket.shutdown(std::net::Shutdown::Both);
-                        }
-                    });
-                    let _watchdog = WatchdogCompletion(completed);
-                    let connection = match ServerConnection::new(tls) {
-                        Ok(connection) => connection,
-                        Err(_) => return,
-                    };
-                    let mut stream = DeadlineStream {
-                        inner: StreamOwned::new(connection, stream),
-                        deadline,
-                    };
-                    let response = parse_request(&mut stream).map_or_else(
-                        |_| refusal(400, "invalid_request", "request could not be parsed"),
-                        |request| {
-                            let header = request.headers.get("authorization").map(String::as_str);
-                            let authenticated = if request.path == "/healthz" {
-                                true
-                            } else if request.path == "/__registry/sources" {
-                                service.publication_authority.verifies(header)
-                            } else {
-                                service.request_authority.verifies(header)
-                            };
-                            if !authenticated {
-                                return refusal(401, "authentication_required", "a valid registry authority is required");
-                            }
-                            let is_build = request.method == "POST"
-                                && request.path.starts_with("/v1/programs/registry/")
-                                && request.path.ends_with("/source");
-                            let _build = if is_build {
-                                if service.active_builds.fetch_add(1, Ordering::AcqRel) >= service.max_builds {
-                                    service.active_builds.fetch_sub(1, Ordering::AcqRel);
-                                    return refusal(503, "build_queue_full", "the bounded build queue is full");
-                                }
-                                Some(BuildGuard(&service.active_builds))
-                            } else {
-                                None
-                            };
-                            let _registrar_gate = loop {
-                                match service.registrar_gate.try_lock() {
-                                    Ok(gate) => break gate,
-                                    Err(TryLockError::Poisoned(_)) => {
-                                        return refusal(503, "registry_unavailable", "registry state lock is unavailable");
-                                    }
-                                    Err(TryLockError::WouldBlock) => {
-                                        if Instant::now() >= deadline {
-                                            return refusal(503, "request_deadline_exceeded", "the registry request deadline expired in the bounded queue");
-                                        }
-                                        thread::sleep(Duration::from_millis(1));
-                                    }
-                                }
-                            };
-                            isolated_route(&request, deadline)
-                        },
-                    );
-                    let response = if Instant::now() >= deadline {
-                        refusal(
-                            503,
-                            "request_deadline_exceeded",
-                            "the registry request deadline expired",
-                        )
-                    } else {
-                        response
-                    };
-                    let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
-                        return;
-                    };
-                    if stream
-                        .inner
-                        .sock
-                        .set_write_timeout(Some(remaining))
-                        .is_err()
-                    {
-                        return;
-                    }
-                    let _ = write_response(&mut stream, &response);
+                    serve_connection(stream, &service, tls, deadline);
                 });
             }
             Err(error) => eprintln!("program registry accept error: {error}"),
         }
     }
     Ok(())
+}
+
+fn serve_connection(
+    stream: std::net::TcpStream,
+    service: &Service,
+    tls: Arc<rustls::ServerConfig>,
+    deadline: Instant,
+) {
+    let _connection = ConnectionGuard;
+    let Ok(watchdog_socket) = stream.try_clone() else {
+        return;
+    };
+    let (completed, completion) = mpsc::channel();
+    let watchdog_wait = deadline.saturating_duration_since(Instant::now());
+    thread::spawn(move || {
+        if completion.recv_timeout(watchdog_wait).is_err() {
+            let _ = watchdog_socket.shutdown(std::net::Shutdown::Both);
+        }
+    });
+    let _watchdog = WatchdogCompletion(completed);
+    let Ok(connection) = ServerConnection::new(tls) else {
+        return;
+    };
+    let mut stream = DeadlineStream {
+        inner: StreamOwned::new(connection, stream),
+        deadline,
+    };
+    let response = parse_request(&mut stream).map_or_else(
+        |_| refusal(400, "invalid_request", "request could not be parsed"),
+        |request| {
+            let header = request.headers.get("authorization").map(String::as_str);
+            let authenticated = if request.path == "/healthz" {
+                true
+            } else if request.path == "/__registry/sources" {
+                service.publication_authority.verifies(header)
+            } else {
+                service.request_authority.verifies(header)
+            };
+            if !authenticated {
+                return refusal(
+                    401,
+                    "authentication_required",
+                    "a valid registry authority is required",
+                );
+            }
+            let is_build = request.method == "POST"
+                && request.path.starts_with("/v1/programs/registry/")
+                && request.path.ends_with("/source");
+            let _build = if is_build {
+                if service.active_builds.fetch_add(1, Ordering::AcqRel) >= service.max_builds {
+                    service.active_builds.fetch_sub(1, Ordering::AcqRel);
+                    return refusal(503, "build_queue_full", "the bounded build queue is full");
+                }
+                Some(BuildGuard(&service.active_builds))
+            } else {
+                None
+            };
+            let _registrar_gate = loop {
+                match service.registrar_gate.try_lock() {
+                    Ok(gate) => break gate,
+                    Err(TryLockError::Poisoned(_)) => {
+                        return refusal(
+                            503,
+                            "registry_unavailable",
+                            "registry state lock is unavailable",
+                        );
+                    }
+                    Err(TryLockError::WouldBlock) => {
+                        if Instant::now() >= deadline {
+                            return refusal(
+                                503,
+                                "request_deadline_exceeded",
+                                "the registry request deadline expired in the bounded queue",
+                            );
+                        }
+                        thread::sleep(Duration::from_millis(1));
+                    }
+                }
+            };
+            isolated_route(&request, deadline)
+        },
+    );
+    let response = if Instant::now() >= deadline {
+        refusal(
+            503,
+            "request_deadline_exceeded",
+            "the registry request deadline expired",
+        )
+    } else {
+        response
+    };
+    let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+        return;
+    };
+    if stream
+        .inner
+        .sock
+        .set_write_timeout(Some(remaining))
+        .is_err()
+    {
+        return;
+    }
+    let _ = write_response(&mut stream, &response);
 }
 
 fn main() {
