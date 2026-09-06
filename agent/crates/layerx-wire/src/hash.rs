@@ -577,7 +577,7 @@ fn compress(block: &[u8], state: &mut [u32; 8]) {
     }
 }
 
-fn sha256(input: &[u8]) -> Result<[u8; 32], WireError> {
+pub(crate) fn sha256(input: &[u8]) -> Result<[u8; 32], WireError> {
     let bit_length = u64::try_from(input.len())
         .ok()
         .and_then(|length| length.checked_mul(8))
