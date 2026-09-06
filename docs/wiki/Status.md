@@ -24,7 +24,7 @@ This repository contains both LayerX and Paxeer Network as a unified ecosystem m
 
 - **LayerX** builds, releases, and qualifies independently at the repository root
 - **Paxeer Network** builds, releases, and qualifies independently under `paxeer-network/`
-- **Protocol 3**: beta envelopes use `LXP_PROTOCOL_VERSION_STATE_COMMITMENT` (`include/layerx/lxp_protocol.h`). Occupancy is used by protocol 2 and 3. The C header default `LXP_PROTOCOL_VERSION` remains 2. Protocol-3 genesis registers Programs v4 plus Asset v1; custody credit (Bridge `0x08` ordinal 1) is protocol-3-only. See [Programs](Programs.md) and [Custody](Custody.md).
+- **Protocol 3**: beta envelopes use `LXP_PROTOCOL_VERSION_STATE_COMMITMENT` (`include/layerx/lxp_protocol.h`). Occupancy is used by protocol 2 and 3. The C header default `LXP_PROTOCOL_VERSION` remains 2. Genesis registers Programs v4 for every accepted protocol version; only Asset v1 is protocol-3-conditional (`src/protocol/lxp_genesis.c:594-598`). Custody credit (Bridge `0x08` ordinal 1) is protocol-3-only. See [Programs](Programs.md) and [Custody](Custody.md).
 - See `docs/MONOREPO.md` for details on build boundaries, release tags, and trust separation
 
 ## What is not yet available
