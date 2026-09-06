@@ -48,6 +48,8 @@ typedef struct lxp_daemon_batch_wal_input {
     const lxp_byte_span *terminal_payloads;
     const lxp_byte_span *call_graphs;
     const lxp_merkle_proof *receipt_proofs;
+    lxp_byte_span maintenance;
+    lxp_merkle_proof maintenance_proof;
 } lxp_daemon_batch_wal_input;
 
 typedef struct lxp_daemon_batch_wal_record
