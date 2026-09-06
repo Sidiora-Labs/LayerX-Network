@@ -9,7 +9,7 @@ use std::fs;
 use subtle::ConstantTimeEq;
 use zeroize::{Zeroize, Zeroizing};
 
-use crate::boundary::{Client, ClientIdentity, Endpoint};
+use crate::boundary::{Client, ClientIdentity, Endpoint, OutboundRequest};
 use crate::encoding::{fixed_hex, hex_decode, hex_encode};
 use crate::error::WebhookError;
 use crate::events::{
@@ -153,7 +153,9 @@ impl TrustedSources {
         }
         let trusted = read_secret("LAYERX_WEBHOOKS_SEQUENCER_PUBLIC_KEY_FILE")?;
         let wire_version = bounded_env("LAYERX_WEBHOOKS_LXP_WIRE_VERSION", 32)?;
-        if wire_version.parse::<u16>().ok() != Some(layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION) {
+        if wire_version.parse::<u16>().ok()
+            != Some(layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION)
+        {
             return Err("webhook LXP wire version is not the current beta protocol".to_owned());
         }
         let verifier = ReceiptVerifier {
@@ -184,15 +186,15 @@ impl TrustedSources {
         self.verifier.ready()
             && self.sources.values().all(|source| {
                 self.client
-                    .request(
-                        &source.endpoint,
-                        "GET",
-                        "/readyz",
-                        Some(source.token.as_str()),
-                        None,
-                        &[],
-                        &[],
-                    )
+                    .request(&OutboundRequest {
+                        endpoint: &source.endpoint,
+                        method: "GET",
+                        path: "/readyz",
+                        bearer: Some(source.token.as_str()),
+                        idempotency: None,
+                        headers: &[],
+                        body: &[],
+                    })
                     .is_ok_and(|response| response.status == 200)
             })
     }
@@ -212,15 +214,15 @@ impl TrustedSources {
         let path = format!("/internal/v1/events/{source_event_id}");
         let response = self
             .client
-            .request(
-                &source.endpoint,
-                "GET",
-                &path,
-                Some(source.token.as_str()),
-                None,
-                &[],
-                &[],
-            )
+            .request(&OutboundRequest {
+                endpoint: &source.endpoint,
+                method: "GET",
+                path: &path,
+                bearer: Some(source.token.as_str()),
+                idempotency: None,
+                headers: &[],
+                body: &[],
+            })
             .map_err(|_| WebhookError::Unavailable)?;
         if response.status != 200 || !response.content_type.starts_with("application/json") {
             return Err(WebhookError::Unavailable);
@@ -376,15 +378,15 @@ impl DeveloperIdentity {
         );
         let response = self
             .client
-            .request(
-                &self.endpoint,
-                "POST",
-                "/v1/sessions/introspect",
-                Some(self.token.as_str()),
-                None,
-                &[],
-                &body,
-            )
+            .request(&OutboundRequest {
+                endpoint: &self.endpoint,
+                method: "POST",
+                path: "/v1/sessions/introspect",
+                bearer: Some(self.token.as_str()),
+                idempotency: None,
+                headers: &[],
+                body: &body,
+            })
             .map_err(|_| WebhookError::Unavailable)?;
         if response.status != 200 || !response.content_type.starts_with("application/json") {
             return Err(WebhookError::InvalidRequest);
@@ -441,36 +443,46 @@ impl ReceiptVerifier {
         .into_iter()
         .all(|(endpoint, token)| {
             self.client
-                .request(endpoint, "GET", "/readyz", Some(token), None, &[], &[])
+                .request(&OutboundRequest {
+                    endpoint,
+                    method: "GET",
+                    path: "/readyz",
+                    bearer: Some(token),
+                    idempotency: None,
+                    headers: &[],
+                    body: &[],
+                })
                 .is_ok_and(|response| response.status == 200)
         })
     }
 
     fn verify(&self, activity: &str) -> Result<VerifiedOperation, WebhookError> {
         let expected = fixed_hex::<32>(activity)?;
+        let receipt_path = format!("/internal/v1/receipts/{activity}");
+        let authority_path = format!("/internal/v1/activities/{activity}/authority");
         let receipt_response = self
             .client
-            .request(
-                &self.component,
-                "GET",
-                &format!("/internal/v1/receipts/{activity}"),
-                Some(self.component_token.as_str()),
-                None,
-                &[],
-                &[],
-            )
+            .request(&OutboundRequest {
+                endpoint: &self.component,
+                method: "GET",
+                path: &receipt_path,
+                bearer: Some(self.component_token.as_str()),
+                idempotency: None,
+                headers: &[],
+                body: &[],
+            })
             .map_err(|_| WebhookError::Unavailable)?;
         let authority_response = self
             .client
-            .request(
-                &self.authority,
-                "GET",
-                &format!("/internal/v1/activities/{activity}/authority"),
-                Some(self.authority_token.as_str()),
-                None,
-                &[],
-                &[],
-            )
+            .request(&OutboundRequest {
+                endpoint: &self.authority,
+                method: "GET",
+                path: &authority_path,
+                bearer: Some(self.authority_token.as_str()),
+                idempotency: None,
+                headers: &[],
+                body: &[],
+            })
             .map_err(|_| WebhookError::Unavailable)?;
         if receipt_response.status != 200
             || authority_response.status != 200
