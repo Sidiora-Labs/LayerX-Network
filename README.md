@@ -72,7 +72,7 @@ LayerX is intentionally split across trust boundaries. Each part can be tested a
 | `agent/` | Rust agent interface, SDK, daemon, MCP server, canonical encoding, cryptography, and proof verification |
 | `human/` | Human control plane, typed intent compiler, custody-boundary client, explorer index, and web application |
 | `platform/` | Developer platform, hosted services, middleware, SDKs, emulator, and release tooling |
-| `programs/` | Programmable LayerX runtime and program tooling |
+| `programs/` | Programmable LayerX runtime and program tooling. Wiki: [Programs](docs/wiki/Programs.md). |
 | `interop/` | Agent-commerce and cross-network interoperability surfaces |
 | `contracts/` | Solidity contracts for Paxeer custody, checkpoints, guarantor bonding, claims, disputes, and exits |
 | `paxeer-network/` | Paxeer Network node, EVM/RPC compatibility, storage engines, modules, contracts, Docker environments, and subsystem-local build manifests |

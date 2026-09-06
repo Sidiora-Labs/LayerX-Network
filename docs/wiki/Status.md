@@ -15,7 +15,7 @@ LayerX is under active development and release qualification.
 
 - **Source code**: Open for inspection and security review under temporary source-available terms
 - **Repository**: Full LayerX + Paxeer monorepo at [github.com/Sidiora-Labs/LayerX-Protocol](https://github.com/Sidiora-Labs/LayerX-Protocol)
-- **Documentation**: Protocol specifications, design documents, contributing guidelines, and qualification evidence
+- **Documentation**: Protocol specifications, design documents, contributing guidelines, qualification evidence, and the [Programs](Programs.md) wiki (module `0x09`, protocol 3 CALL/simulate)
 - **Build system**: Complete build, test, and qualification infrastructure
 
 ## Monorepo layout
@@ -24,6 +24,7 @@ This repository contains both LayerX and Paxeer Network as a unified ecosystem m
 
 - **LayerX** builds, releases, and qualifies independently at the repository root
 - **Paxeer Network** builds, releases, and qualifies independently under `paxeer-network/`
+- **Protocol 3**: beta envelopes use `LXP_PROTOCOL_VERSION_STATE_COMMITMENT` (`include/layerx/lxp_protocol.h`). Occupancy is used by protocol 2 and 3. The C header default `LXP_PROTOCOL_VERSION` remains 2. Protocol-3 genesis registers Programs v4 plus Asset v1; custody credit (Bridge `0x08` ordinal 1) is protocol-3-only. See [Programs](Programs.md) and [Custody](Custody.md).
 - See `docs/MONOREPO.md` for details on build boundaries, release tags, and trust separation
 
 ## What is not yet available

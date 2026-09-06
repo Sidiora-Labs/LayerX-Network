@@ -10,7 +10,7 @@ Ordinary agent activity is executed and ordered inside LayerX. Periodic checkpoi
 
 This is the canonical Sidiora Labs monorepo for LayerX and the Paxeer Network. The Paxeer settlement node source lives under `paxeer-network/` with independent build, release tags (`paxeer-network/vX.Y.Z`), and trust boundaries. Co-location keeps the protocol, settlement network, and their automation auditable in one place while preserving separate deployment authority.
 
-LayerX Programs is a programmable surface—not a separate module ID—where guest code runs inside the `programs` module's namespace. Every monetary effect is forced through 402LXP; no program ever holds direct balance-writing authority.
+LayerX Programs is kernel module ID `9` (`LXP_MODULE_PROGRAMS` in `include/layerx/lxp_module.h`). Guest code runs in that module's namespace. Every monetary effect is forced through 402LXP; no program ever holds direct balance-writing authority. See [Programs](Programs.md). Protocol 3 (`LXP_PROTOCOL_VERSION_STATE_COMMITMENT`) is the beta wire; the C header default `LXP_PROTOCOL_VERSION` remains occupancy protocol 2 (`include/layerx/lxp_protocol.h`).
 
 ## What is Paxeer?
 
@@ -49,6 +49,7 @@ See `docs/MONOREPO.md` for build boundaries, workflow naming, and tag convention
 - [Security policy](https://github.com/Sidiora-Labs/LayerX-Protocol/blob/main/SECURITY.md)
 - [Qualification documentation](https://github.com/Sidiora-Labs/LayerX-Protocol/blob/main/docs/QUALIFICATION.md)
 - [Monorepo layout](https://github.com/Sidiora-Labs/LayerX-Protocol/blob/main/docs/MONOREPO.md)
+- [Programs](Programs.md)
 
 ---
 
