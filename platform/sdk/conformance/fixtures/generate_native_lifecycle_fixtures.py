@@ -16,6 +16,7 @@ def main():
         text=True,
     )
     expected = {
+        "native-program-call-v3": 3,
         "native-program-deploy-v3": 1,
         "native-program-upgrade-v3": 2,
         "native-program-wind-down-route-v3": 7,
@@ -39,6 +40,13 @@ def main():
         documents[name] = json.dumps(document, indent=2) + "\n"
     if set(documents) != set(expected):
         raise ValueError("native encoder omitted a lifecycle vector")
+    executed = subprocess.run(
+        [str(arguments.encoder.resolve()), "--dump-executed-v3"],
+        check=True, capture_output=True, text=True, timeout=120,
+    )
+    documents["receipt-programs-executed-v3"] = json.dumps(
+        json.loads(executed.stdout), indent=2
+    ) + "\n"
     for name, contents in documents.items():
         destination = Path(__file__).with_name(name + ".json")
         if arguments.check:
