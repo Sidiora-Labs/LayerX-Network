@@ -82,98 +82,7 @@ fn repo_fixture(label: &str) -> PathBuf {
         "human/schema/human-api/golden/account.create.request.json",
         "{}\n",
     );
-    place(
-        &root,
-        "agent/sdk/typescript/src/generated/client.ts",
-        "export const generated = true;\n",
-    );
-    place(
-        &root,
-        "agent/sdk/typescript/src/generated/guarantees.md",
-        "guarantees\n",
-    );
-    place(
-        &root,
-        "agent/sdk/python/layerx_sdk/generated/client.py",
-        "GENERATED = True\n",
-    );
-    place(
-        &root,
-        "agent/sdk/python/layerx_sdk/generated/client.pyi",
-        "GENERATED: bool\n",
-    );
-    place(
-        &root,
-        "agent/sdk/python/layerx_sdk/generated/guarantees.md",
-        "guarantees\n",
-    );
-    place(&root, "agent/sdk/COMPATIBILITY.md", "compatibility\n");
-    place(
-        &root,
-        "human/apps/web/src/api/generated/index.ts",
-        "export const humanApi = true;\n",
-    );
-    place(
-        &root,
-        "agent/crates/layerx-agent-api/src/operation_generated.rs",
-        "// generated Rust operations\n",
-    );
-    place(
-        &root,
-        "agent/crates/layerx-sdk/src/mirror_generated.rs",
-        "// generated Rust mirror\n",
-    );
-    place(&root, "platform/sdk/go/generated.go", "package layerx\n");
-    place(
-        &root,
-        "platform/sdk/go/mirror_generated.go",
-        "package layerx\n",
-    );
-    for relative in pipeline::JVM_FILES {
-        place(&root, &format!("platform/sdk/jvm/{relative}"), "jvm\n");
-    }
-    place(
-        &root,
-        "platform/sdk/conformance/jvm.kvx",
-        "[sdk]\nname = \"jvm\"\n",
-    );
-    place(&root, "platform/sdk/conformance/run-jvm.sh", "#!/bin/sh\n");
-    place(&root, "platform/sdk/conformance/mirror-v2.json", "{}\n");
-    place(
-        &root,
-        "platform/sdk/schema/mirror-v2.kvx",
-        "[schema]\nversion = 2\n",
-    );
-    place(
-        &root,
-        "platform/sdk/swift/Sources/LayerXSDK/Generated/OperationCatalog.swift",
-        "// generated Swift\n",
-    );
-    place(
-        &root,
-        "platform/sdk/swift/Sources/LayerXSDK/Generated/MirrorSchema.swift",
-        "// generated Swift mirror\n",
-    );
-    place(
-        &root,
-        "platform/sdk/dotnet/Generated/OperationCatalog.cs",
-        "// generated C#\n",
-    );
-    place(
-        &root,
-        "platform/sdk/dotnet/Generated/MirrorSchema.cs",
-        "// generated C# mirror\n",
-    );
-    place(
-        &root,
-        "platform/sdk/conformance/operations.json",
-        "{\"schema\":1,\"operations\":[]}\n",
-    );
-    place(
-        &root,
-        "platform/sdk/generators/receipt.kvx",
-        include_str!("../receipt.kvx"),
-    );
+    place_generated_files(&root);
     root
 }
 
@@ -355,4 +264,99 @@ fn lock_missing_an_output_fails_the_gate() {
     fs::write(&path, tampered).unwrap_or_else(|error| panic!("tamper lock: {error}"));
     expect_failure(&root, "does not match the wired pipeline");
     cleanup(&root);
+}
+
+fn place_generated_files(root: &Path) {
+    place(
+        root,
+        "agent/sdk/typescript/src/generated/client.ts",
+        "export const generated = true;\n",
+    );
+    place(
+        root,
+        "agent/sdk/typescript/src/generated/guarantees.md",
+        "guarantees\n",
+    );
+    place(
+        root,
+        "agent/sdk/python/layerx_sdk/generated/client.py",
+        "GENERATED = True\n",
+    );
+    place(
+        root,
+        "agent/sdk/python/layerx_sdk/generated/client.pyi",
+        "GENERATED: bool\n",
+    );
+    place(
+        root,
+        "agent/sdk/python/layerx_sdk/generated/guarantees.md",
+        "guarantees\n",
+    );
+    place(root, "agent/sdk/COMPATIBILITY.md", "compatibility\n");
+    place(
+        root,
+        "human/apps/web/src/api/generated/index.ts",
+        "export const humanApi = true;\n",
+    );
+    place(
+        root,
+        "agent/crates/layerx-agent-api/src/operation_generated.rs",
+        "// generated Rust operations\n",
+    );
+    place(
+        root,
+        "agent/crates/layerx-sdk/src/mirror_generated.rs",
+        "// generated Rust mirror\n",
+    );
+    place(root, "platform/sdk/go/generated.go", "package layerx\n");
+    place(
+        root,
+        "platform/sdk/go/mirror_generated.go",
+        "package layerx\n",
+    );
+    for relative in pipeline::JVM_FILES {
+        place(root, &format!("platform/sdk/jvm/{relative}"), "jvm\n");
+    }
+    place(
+        root,
+        "platform/sdk/conformance/jvm.kvx",
+        "[sdk]\nname = \"jvm\"\n",
+    );
+    place(root, "platform/sdk/conformance/run-jvm.sh", "#!/bin/sh\n");
+    place(root, "platform/sdk/conformance/mirror-v2.json", "{}\n");
+    place(
+        root,
+        "platform/sdk/schema/mirror-v2.kvx",
+        "[schema]\nversion = 2\n",
+    );
+    place(
+        root,
+        "platform/sdk/swift/Sources/LayerXSDK/Generated/OperationCatalog.swift",
+        "// generated Swift\n",
+    );
+    place(
+        root,
+        "platform/sdk/swift/Sources/LayerXSDK/Generated/MirrorSchema.swift",
+        "// generated Swift mirror\n",
+    );
+    place(
+        root,
+        "platform/sdk/dotnet/Generated/OperationCatalog.cs",
+        "// generated C#\n",
+    );
+    place(
+        root,
+        "platform/sdk/dotnet/Generated/MirrorSchema.cs",
+        "// generated C# mirror\n",
+    );
+    place(
+        root,
+        "platform/sdk/conformance/operations.json",
+        "{\"schema\":1,\"operations\":[]}\n",
+    );
+    place(
+        root,
+        "platform/sdk/generators/receipt.kvx",
+        include_str!("../receipt.kvx"),
+    );
 }

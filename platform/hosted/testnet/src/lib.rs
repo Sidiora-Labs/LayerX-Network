@@ -23,6 +23,8 @@ pub struct TestnetConfig {
 }
 
 impl TestnetConfig {
+    /// # Errors
+    /// Rejects mismatched releases or protocol versions and invalid operational configuration.
     pub fn validate(&self, pending: &PendingRelease) -> Result<(), &'static str> {
         if self.package_semver != pending.package_semver {
             return Err("testnet package release does not match pending release");
