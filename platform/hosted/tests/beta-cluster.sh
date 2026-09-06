@@ -210,9 +210,12 @@ tools_install() {
 }
 
 build_context() {
-    log "packing the build context from the tracked and unignored files of $REPO_ROOT"
-    (cd "$REPO_ROOT" && git ls-files -z --cached --others --exclude-standard \
-        | while IFS= read -r -d '' path; do [ -e "$path" ] && printf '%s\0' "$path"; done \
+    log "packing the build context from the tracked source files of $REPO_ROOT"
+    (cd "$REPO_ROOT" && git ls-files -z --cached \
+        | while IFS= read -r -d '' path; do
+            case "/$path" in */.env|*/.env.*|/qual-logs/*|/NEEDS.md|/STATUS.md) continue ;; esac
+            [ -e "$path" ] && printf '%s\0' "$path"
+        done \
         | tar --null --files-from - -cf "$WORK_DIR/context.tar")
 }
 
