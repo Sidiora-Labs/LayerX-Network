@@ -18,6 +18,8 @@ pub struct Endpoint {
 }
 
 impl Endpoint {
+    /// # Errors
+    /// Rejects noncanonical endpoints or endpoints without HTTPS and a DNS name.
     pub fn parse(value: &str) -> Result<Self, String> {
         let rest = value
             .strip_prefix("https://")
@@ -71,10 +73,13 @@ pub struct Client {
 }
 
 impl Client {
+    #[must_use]
     pub fn new(ca: Certificate, identity: Identity) -> Self {
         Self { ca, identity }
     }
 
+    /// # Errors
+    /// Rejects invalid request bounds, TLS or connection failures and malformed responses.
     pub fn request(
         &self,
         endpoint: &Endpoint,
@@ -82,8 +87,7 @@ impl Client {
         path: &str,
         bearer: &str,
         idempotency: Option<&str>,
-        content_type: &str,
-        body: &[u8],
+        content: (&str, &[u8]),
     ) -> Result<UpstreamResponse, String> {
         self.request_authorized(
             endpoint,
@@ -91,14 +95,15 @@ impl Client {
             path,
             &format!("Bearer {bearer}"),
             idempotency,
-            content_type,
-            body,
+            content,
         )
     }
 
     /// Sends one bounded request with an already validated authorization
     /// value. This is used when another hosted ingress forwards the exact
     /// `LayerX-Key` credential to the gateway authentication boundary.
+    /// # Errors
+    /// Rejects invalid authorization, request bounds, transport failures and malformed responses.
     pub fn request_authorized(
         &self,
         endpoint: &Endpoint,
@@ -106,8 +111,7 @@ impl Client {
         path: &str,
         authorization: &str,
         idempotency: Option<&str>,
-        content_type: &str,
-        body: &[u8],
+        content: (&str, &[u8]),
     ) -> Result<UpstreamResponse, String> {
         self.request_authorized_traced(
             endpoint,
@@ -115,8 +119,8 @@ impl Client {
             path,
             authorization,
             idempotency,
-            content_type,
-            body,
+            content.0,
+            content.1,
             None,
         )
     }
@@ -124,6 +128,8 @@ impl Client {
     /// Sends one bounded authorized request while propagating the ingress
     /// trace identifier unchanged across the service boundary.
     #[allow(clippy::too_many_arguments)]
+    /// # Errors
+    /// Rejects invalid authorization or trace bounds, transport failures and malformed responses.
     pub fn request_authorized_traced(
         &self,
         endpoint: &Endpoint,
@@ -228,6 +234,8 @@ pub struct UpstreamResponse {
     pub body: Vec<u8>,
 }
 
+/// # Errors
+/// Rejects malformed, truncated or oversized HTTP requests.
 pub fn read_request(stream: &mut impl Read, maximum: usize) -> Result<IncomingRequest, String> {
     let (start, headers, body) = read_message(stream, maximum)?;
     let mut parts = start.split_whitespace();
@@ -272,10 +280,9 @@ fn read_response(stream: &mut impl Read) -> Result<UpstreamResponse, String> {
     })
 }
 
-fn read_message(
-    stream: &mut impl Read,
-    maximum: usize,
-) -> Result<(String, BTreeMap<String, String>, Vec<u8>), String> {
+type HttpMessage = (String, BTreeMap<String, String>, Vec<u8>);
+
+fn read_message(stream: &mut impl Read, maximum: usize) -> Result<HttpMessage, String> {
     let mut bytes = Vec::with_capacity(2048);
     let mut chunk = [0_u8; 2048];
     let header_end = loop {
@@ -336,6 +343,8 @@ fn read_message(
     ))
 }
 
+/// # Errors
+/// Returns stream write or flush failures.
 pub fn write_response(stream: &mut impl Write, response: &OutgoingResponse) -> Result<(), String> {
     let reason = match response.status {
         200 => "OK",

@@ -119,6 +119,8 @@ struct AuthorityResponse {
 }
 
 impl TrustedSources {
+    /// # Errors
+    /// Returns missing configuration, credential-file, endpoint or TLS configuration errors.
     pub fn from_environment() -> Result<Self, String> {
         let ca = Certificate::from_der(
             &fs::read(
@@ -188,6 +190,7 @@ impl TrustedSources {
         })
     }
 
+    #[must_use]
     pub fn ready(&self) -> bool {
         self.verifier.ready()
             && self.sources.values().all(|source| {
@@ -205,6 +208,8 @@ impl TrustedSources {
             })
     }
 
+    /// # Errors
+    /// Rejects invalid event bindings, unavailable sources and unverified receipts.
     pub fn fetch(
         &self,
         kind: EventKind,
@@ -300,6 +305,8 @@ impl TrustedSources {
 }
 
 impl DeveloperIdentity {
+    /// # Errors
+    /// Returns missing configuration, credential-file, endpoint or TLS configuration errors.
     pub fn from_environment() -> Result<Self, String> {
         let ca = Certificate::from_der(
             &fs::read(
@@ -329,6 +336,8 @@ impl DeveloperIdentity {
         })
     }
 
+    /// # Errors
+    /// Returns missing dashboard configuration, credential-file, endpoint or TLS configuration errors.
     pub fn from_dashboard_environment() -> Result<Self, String> {
         let ca = Certificate::from_der(
             &fs::read(
@@ -358,6 +367,8 @@ impl DeveloperIdentity {
         })
     }
 
+    /// # Errors
+    /// Rejects invalid credentials, session responses and mutation authorization.
     pub fn authenticate(
         &self,
         authorization: Option<&str>,
@@ -421,18 +432,23 @@ impl DeveloperIdentity {
 }
 
 impl SourceTrigger {
+    /// # Errors
+    /// Returns missing or unreadable source-trigger credential errors.
     pub fn from_environment() -> Result<Self, String> {
         Ok(Self {
             token: read_secret("LAYERX_WEBHOOKS_SOURCE_TRIGGER_TOKEN_FILE")?,
         })
     }
 
+    /// # Errors
+    /// Returns missing or unreadable operator credential errors.
     pub fn operator_from_environment() -> Result<Self, String> {
         Ok(Self {
             token: read_secret("LAYERX_WEBHOOKS_OPERATOR_TOKEN_FILE")?,
         })
     }
 
+    #[must_use]
     pub fn authorizes(&self, authorization: Option<&str>) -> bool {
         authorization
             .and_then(|value| value.strip_prefix("Bearer "))

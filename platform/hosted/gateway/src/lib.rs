@@ -294,6 +294,7 @@ impl AuthorityFacts {
 /// construct one from a status word and non-empty bytes.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VerifiedOperation {
+    verification_level: &'static str,
     response: Vec<u8>,
     receipt: Vec<u8>,
     receipt_digest: [u8; 32],
@@ -489,7 +490,7 @@ impl VerifiedOperation {
 
     #[must_use]
     pub const fn verification_level(&self) -> &'static str {
-        "receipt-verified"
+        self.verification_level
     }
 }
 
@@ -546,6 +547,7 @@ pub fn verify_activity_operation(
     })
     .map_err(|_| GatewayError::Encoding)?;
     Ok(VerifiedOperation {
+        verification_level: "receipt-verified",
         response,
         receipt: verified.canonical_bytes().to_vec(),
         receipt_digest,
@@ -563,15 +565,14 @@ pub fn verify_activity_operation(
 /// Refuses untrusted sequencers and every receipt, activity, program, ABI,
 /// terminal, graph, occupancy, or transfer-authority mismatch.
 pub fn verify_program_operation(
-    receipt_bytes: &[u8],
-    terminal_payload: &[u8],
-    call_graph: &[u8],
+    artifacts: (&[u8], &[u8], &[u8]),
     authority: AuthorityFacts,
     trusted_sequencer_key: &[u8; 32],
     expected_activity_id: [u8; 32],
     expected_program_id: [u8; 32],
     expected_guest_abi_version: u16,
 ) -> Result<VerifiedOperation, GatewayError> {
+    let (receipt_bytes, terminal_payload, call_graph) = artifacts;
     if authority
         .sequencer_public_key()
         .ct_eq(trusted_sequencer_key)
@@ -593,7 +594,7 @@ pub fn verify_program_operation(
     )
     .map_err(|_| GatewayError::VerificationRequired)?;
     render_verified_program_operation(
-        verified,
+        &verified,
         terminal_payload,
         call_graph,
         expected_program_id,
@@ -611,15 +612,14 @@ pub fn verify_program_operation(
 /// Refuses every receipt or terminal mismatch without returning a partial
 /// simulation result.
 pub fn verify_program_simulation_operation(
-    receipt_bytes: &[u8],
-    terminal_payload: &[u8],
-    call_graph: &[u8],
+    artifacts: (&[u8], &[u8], &[u8]),
     trusted_previous_state_root: [u8; 32],
     trusted_sequencer_key: [u8; 32],
     expected_activity_id: [u8; 32],
     expected_program_id: [u8; 32],
     expected_guest_abi_version: u16,
 ) -> Result<VerifiedOperation, GatewayError> {
+    let (receipt_bytes, terminal_payload, call_graph) = artifacts;
     let verified = verify_program_execution(
         receipt_bytes,
         terminal_payload,
@@ -634,7 +634,7 @@ pub fn verify_program_simulation_operation(
     )
     .map_err(|_| GatewayError::VerificationRequired)?;
     render_verified_program_operation(
-        verified,
+        &verified,
         terminal_payload,
         call_graph,
         expected_program_id,
@@ -645,7 +645,7 @@ pub fn verify_program_simulation_operation(
 }
 
 fn render_verified_program_operation(
-    verified: VerifiedProgramExecution,
+    verified: &VerifiedProgramExecution,
     terminal_payload: &[u8],
     call_graph: &[u8],
     expected_program_id: [u8; 32],
@@ -704,6 +704,7 @@ fn render_verified_program_operation(
     }))
     .map_err(|_| GatewayError::Encoding)?;
     Ok(VerifiedOperation {
+        verification_level: "receipt-verified",
         response,
         receipt: verified.receipt().canonical_bytes().to_vec(),
         receipt_digest,

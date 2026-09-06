@@ -271,7 +271,7 @@ fn parse_hex32(value: &str) -> Result<[u8; 32], String> {
 }
 
 fn decode_hex(value: &str, maximum: usize) -> Result<Vec<u8>, String> {
-    if value.len() % 2 != 0 || value.len() / 2 > maximum {
+    if !value.len().is_multiple_of(2) || value.len() / 2 > maximum {
         return Err("hexadecimal payload exceeds its bound".to_owned());
     }
     value
@@ -396,8 +396,7 @@ fn program_head(
             &format!("/v1/programs/registry/{program}"),
             config.registry_token.as_str(),
             None,
-            "application/json",
-            &[],
+            ("application/json", &[]),
         )
         .map_err(|_| response(503, "program_registry_unavailable", Some(5)))?;
     if upstream.status == 404 {
@@ -408,95 +407,7 @@ fn program_head(
     }
     let document: serde_json::Value = serde_json::from_slice(&upstream.body)
         .map_err(|_| response(503, "program_registry_invalid", Some(5)))?;
-    let value = document.get("result").unwrap_or(&document);
-    if value.get("program_id").and_then(serde_json::Value::as_str) != Some(program.as_str())
-        || value
-            .pointer("/receipt/verification")
-            .and_then(serde_json::Value::as_str)
-            != Some("receipt-verified")
-    {
-        return Err(response(503, "program_registry_unverified", Some(5)));
-    }
-    let lifecycle = match value.get("lifecycle").and_then(serde_json::Value::as_str) {
-        Some("active") => ProgramLifecycle::Active,
-        Some("deprecated") => ProgramLifecycle::Deprecated,
-        Some("tombstoned") => ProgramLifecycle::Tombstoned,
-        _ => return Err(response(503, "program_registry_invalid", Some(5))),
-    };
-    let latest = value
-        .get("latest_version")
-        .and_then(serde_json::Value::as_u64)
-        .and_then(|number| u32::try_from(number).ok())
-        .filter(|number| *number != 0)
-        .ok_or_else(|| response(503, "program_registry_invalid", Some(5)))?;
-    let version = value
-        .get("versions")
-        .and_then(serde_json::Value::as_array)
-        .and_then(|versions| {
-            versions.iter().find(|version| {
-                version.get("version").and_then(serde_json::Value::as_u64)
-                    == Some(u64::from(latest))
-            })
-        })
-        .ok_or_else(|| response(503, "program_registry_invalid", Some(5)))?;
-    let abi_version = version
-        .get("abi_version")
-        .and_then(serde_json::Value::as_u64)
-        .and_then(|abi| u16::try_from(abi).ok())
-        .filter(|abi| matches!(abi, 1 | 2))
-        .ok_or_else(|| response(503, "program_registry_invalid", Some(5)))?;
-    let code_hash = version
-        .get("code_hash")
-        .and_then(serde_json::Value::as_str)
-        .and_then(|value| parse_hex32(value).ok())
-        .ok_or_else(|| response(503, "program_registry_invalid", Some(5)))?;
-    let deployment_receipt = version
-        .get("deployment_receipt_digest")
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| response(503, "program_registry_invalid", Some(5)))?;
-    let receipt_digest = parse_hex32(deployment_receipt)
-        .map_err(|_| response(503, "program_registry_invalid", Some(5)))?;
-    let balance_receipt = value.pointer("/value_accounts/receipt");
-    let state_root = value
-        .get("state_root")
-        .or_else(|| balance_receipt.and_then(|receipt| receipt.get("state_root")))
-        .and_then(serde_json::Value::as_str)
-        .and_then(|root| parse_hex32(root).ok());
-    let observed_sequence = value
-        .get("observed_sequence")
-        .or_else(|| balance_receipt.and_then(|receipt| receipt.get("observed_sequence")))
-        .and_then(canonical_u64);
-    let observed_at = value
-        .get("observed_at")
-        .or_else(|| balance_receipt.and_then(|receipt| receipt.get("observed_at")))
-        .and_then(canonical_u64);
-    let valid_through = value
-        .get("valid_through")
-        .and_then(canonical_u64)
-        .ok_or_else(|| response(503, "program_registry_invalid", Some(5)))?;
-    let current_time_ms =
-        now_millis().map_err(|_| response(503, "program_state_unverified", Some(5)))?;
-    if state_root.is_none()
-        || observed_sequence.is_none()
-        || observed_at.is_none()
-        || observed_at.is_some_and(|observed| {
-            !program_head_is_current(observed, valid_through, current_time_ms)
-        })
-    {
-        return Err(response(503, "program_state_unverified", Some(5)));
-    }
-    Ok(ProgramHead {
-        program_id: expected_program,
-        lifecycle,
-        version: latest,
-        code_hash,
-        abi_version,
-        receipt_digest,
-        state_root,
-        observed_sequence,
-        observed_at,
-        valid_through,
-    })
+    parse_program_head(&document, expected_program)
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -597,45 +508,7 @@ fn config() -> Result<Config, String> {
         .map_err(|_| "gateway protocol network identifier is required")?
         .parse::<u32>()
         .map_err(|_| "gateway protocol network identifier is invalid".to_owned())?;
-    let module_file: ModuleFile = serde_json::from_slice(
-        &fs::read(
-            env::var("LAYERX_GATEWAY_MODULE_REGISTRY_FILE")
-                .map_err(|_| "gateway module registry is required")?,
-        )
-        .map_err(|error| error.to_string())?,
-    )
-    .map_err(|_| "gateway module registry is invalid".to_owned())?;
-    if module_file.modules.is_empty() || module_file.modules.len() > 8 {
-        return Err("gateway module registry is outside its bound".to_owned());
-    }
-    let mut registrations = Vec::with_capacity(module_file.modules.len());
-    for declaration in module_file.modules {
-        let module = ModuleId::from_u16(declaration.module)
-            .map_err(|_| "gateway module registry names an unknown module".to_owned())?;
-        let mut activity_types = declaration
-            .ordinals
-            .into_iter()
-            .map(|ordinal| ActivityType::new(module, ordinal))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|_| "gateway module registry contains an invalid ordinal".to_owned())?;
-        ModuleRegistration::new(module, &activity_types)
-            .map_err(|_| "gateway module registry declaration is invalid".to_owned())?;
-        if module == ModuleId::Programs {
-            for ordinal in [1, 2, 7] {
-                let operation = ActivityType::new(module, ordinal)
-                    .map_err(|_| "invalid Programs ordinal".to_owned())?;
-                if !activity_types.contains(&operation) {
-                    activity_types.push(operation);
-                }
-            }
-            activity_types.sort_unstable();
-        }
-        let registration = ModuleRegistration::new(module, &activity_types)
-            .map_err(|_| "gateway module registry declaration is invalid".to_owned())?;
-        registrations.push(registration);
-    }
-    let modules = ModuleRegistry::new(&registrations)
-        .map_err(|_| "gateway module registry contains duplicates".to_owned())?;
+    let modules = configured_modules()?;
     Ok(Config {
         listen: env::var("LAYERX_GATEWAY_LISTEN")
             .unwrap_or_else(|_| "0.0.0.0:9443".to_owned())
@@ -693,7 +566,7 @@ fn response(status: u16, code: &str, retry_after: Option<u64>) -> OutgoingRespon
     }
 }
 
-fn json_response(status: u16, value: serde_json::Value) -> OutgoingResponse {
+fn json_response(status: u16, value: &serde_json::Value) -> OutgoingResponse {
     OutgoingResponse {
         status,
         body: value.to_string().into_bytes(),
@@ -1010,11 +883,7 @@ fn program_activity_selector(request: &IncomingRequest, expected_activity: &str)
 }
 
 fn trace(request: &IncomingRequest) -> String {
-    let supplied = request
-        .headers
-        .get("x-trace-id")
-        .map(String::as_str)
-        .unwrap_or("");
+    let supplied = request.headers.get("x-trace-id").map_or("", String::as_str);
     if supplied.strip_prefix("trc_").is_some_and(|digits| {
         digits.len() == 32
             && digits
@@ -1053,8 +922,7 @@ fn upstream_json(
             path,
             token,
             idempotency,
-            "application/json",
-            body,
+            ("application/json", body),
         )
         .map_err(|_| response(503, "component_unavailable", Some(5)))
 }
@@ -1195,111 +1063,10 @@ fn manage_keys(config: &Config, request: &IncomingRequest) -> OutgoingResponse {
     };
     let principal_hash = principal_digest(&principal);
     if request.method == "POST" && request.path == "/v1/keys" {
-        let issuance_idempotency = match request.headers.get("idempotency-key") {
-            Some(value) if valid_identifier(value, 128) => value,
-            _ => return response(400, "idempotency_key_required", None),
-        };
-        let issue: IssueRequest = match serde_json::from_slice(&request.body) {
-            Ok(value) => value,
-            Err(_) => return response(400, "invalid_key_request", None),
-        };
-        if !session
-            .allowed_signer_public_keys
-            .iter()
-            .any(|key| key.eq_ignore_ascii_case(&issue.signer_public_key))
-        {
-            return response(403, "signer_not_owned", None);
-        }
-        let quota = match Quota::new(issue.quota_requests, issue.quota_window_seconds) {
-            Ok(value) => value,
-            Err(_) => return response(400, "invalid_quota", None),
-        };
-        let scopes = match canonical_scopes(&issue.scopes) {
-            Ok(value) => value,
-            Err(()) => return response(400, "invalid_scopes", None),
-        };
-        let context = digest(&[
-            b"gateway-key-issuance-v1",
-            principal_hash.as_bytes(),
-            issuance_idempotency.as_bytes(),
-        ]);
-        let issued = IssuedKey::derive(&config.key_provisioning_key, context.as_bytes());
-        let record = key_record(
-            &issued,
-            &principal,
-            &issue.signer_public_key,
-            &scopes,
-            quota,
-            1,
-        );
-        let written = config
-            .store
-            .issue_key(
-                &record,
-                &audit_event(&principal_hash, "key_issue", &record.key_id, "issued"),
-            )
-            .is_ok();
-        let existing = if written {
-            Ok(None)
-        } else {
-            config.store.key(&record.key_id)
-        };
-        let replayed = matches!(&existing, Ok(Some(value)) if value == &record);
-        if !written && !replayed {
-            return match existing {
-                Ok(Some(_)) => response(409, "idempotency_conflict", None),
-                _ => response(503, "persistence_unavailable", Some(5)),
-            };
-        }
-        return json_response(
-            if written { 201 } else { 200 },
-            serde_json::json!({
-                "ok": true,
-                "key": {
-                    "id": issued.id(),
-                    "secret": issued.secret(),
-                    "authorization_scheme": "LayerX-Key",
-                    "signer_public_key": record.signer_public_key,
-                    "scopes": record_scopes(&record),
-                    "quota_requests": record.quota_requests,
-                    "quota_window_seconds": record.quota_window_seconds
-                }
-            }),
-        );
+        return issue_key(config, request, &principal, &session, &principal_hash);
     }
     if request.method == "GET" && request.path == "/v1/keys" {
-        let ids = match config.store.list_keys(&principal_hash) {
-            Ok(value) => value,
-            Err(_) => return response(503, "persistence_unavailable", Some(5)),
-        };
-        let mut records = Vec::with_capacity(ids.len());
-        for id in ids {
-            let Some(record) = config.store.key(&id).ok().flatten() else {
-                return response(503, "persistence_unavailable", Some(5));
-            };
-            if record
-                .principal_digest
-                .as_bytes()
-                .ct_eq(principal_hash.as_bytes())
-                .unwrap_u8()
-                != 1
-            {
-                return response(503, "persistence_unavailable", Some(5));
-            }
-            let public_scopes = record_scopes(&record)
-                .into_iter()
-                .map(str::to_owned)
-                .collect();
-            records.push(PublicKeyRecord {
-                id: record.key_id,
-                signer_public_key: record.signer_public_key,
-                scopes: public_scopes,
-                quota_requests: record.quota_requests,
-                quota_window_seconds: record.quota_window_seconds,
-                state: if record.disabled { "revoked" } else { "active" },
-            });
-        }
-        return json_response(200, serde_json::json!({ "ok": true, "keys": records }));
+        return list_keys(config, &principal_hash);
     }
     let Some(suffix) = request.path.strip_prefix("/v1/keys/") else {
         return response(404, "not_found", None);
@@ -1330,75 +1097,22 @@ fn manage_keys(config: &Config, request: &IncomingRequest) -> OutgoingResponse {
         ) {
             Ok(true) => json_response(
                 200,
-                serde_json::json!({ "ok": true, "id": key_id, "state": "revoked" }),
+                &serde_json::json!({ "ok": true, "id": key_id, "state": "revoked" }),
             ),
             Ok(false) => response(404, "not_found", None),
             Err(_) => response(503, "persistence_unavailable", Some(5)),
         };
     }
     if request.method == "POST" && rotate {
-        if !session
-            .allowed_signer_public_keys
-            .iter()
-            .any(|key| key.eq_ignore_ascii_case(&old.signer_public_key))
-        {
-            return response(403, "signer_not_owned", None);
-        }
-        let rotation_idempotency = match request.headers.get("idempotency-key") {
-            Some(value) if valid_identifier(value, 128) => value,
-            _ => return response(400, "idempotency_key_required", None),
-        };
-        let context = digest(&[
-            b"gateway-key-rotation-v1",
-            principal_hash.as_bytes(),
-            key_id.as_bytes(),
-            rotation_idempotency.as_bytes(),
-        ]);
-        let issued = IssuedKey::derive(&config.key_provisioning_key, context.as_bytes());
-        let quota = match Quota::new(old.quota_requests, old.quota_window_seconds) {
-            Ok(value) => value,
-            Err(_) => return response(503, "persistence_unavailable", Some(5)),
-        };
-        let replacement = key_record(
-            &issued,
+        return rotate_key(
+            config,
+            request,
             &principal,
-            &old.signer_public_key,
-            &old.scopes,
-            quota,
-            1,
+            &session,
+            &principal_hash,
+            key_id,
+            &old,
         );
-        let written = config
-            .store
-            .rotate_key(
-                &old,
-                &replacement,
-                &audit_event(&principal_hash, "key_rotate", key_id, "rotated"),
-            )
-            .is_ok();
-        let replayed = !written
-            && config
-                .store
-                .key(&replacement.key_id)
-                .ok()
-                .flatten()
-                .is_some_and(|existing| existing == replacement);
-        return if written || replayed {
-            json_response(
-                if written { 201 } else { 200 },
-                serde_json::json!({
-                    "ok": true,
-                    "key": {
-                        "id": issued.id(),
-                        "secret": issued.secret(),
-                        "authorization_scheme": "LayerX-Key",
-                        "scopes": record_scopes(&replacement),
-                        "replaces": key_id
-                    }
-                }),
-            )
-        } else {
-            response(409, "rotation_conflict", None)
-        };
     }
     response(404, "not_found", None)
 }
@@ -1492,9 +1206,7 @@ fn verified_program_result(
         .map_err(|_| response(503, "component_invalid", Some(5)))?;
     let facts = authority(config, activity_id)?;
     let verified = verify_program_operation(
-        &receipt,
-        &terminal_payload,
-        &call_graph,
+        (&receipt, &terminal_payload, &call_graph),
         facts,
         &config.trusted_sequencer_key,
         expected_activity,
@@ -1515,23 +1227,20 @@ fn program_simulation(
     record: &KeyRecord,
     trace_id: &str,
 ) -> OutgoingResponse {
-    let (canonical, program_id) = match program_call_bytes(request, &config.modules) {
-        Ok(value) => value,
-        Err(_) => return response(400, "invalid_program_call", None),
+    let Ok((canonical, program_id)) = program_call_bytes(request, &config.modules) else {
+        return response(400, "invalid_program_call", None);
     };
-    let signer_public_key = match parse_hex32(&record.signer_public_key) {
-        Ok(value) => value,
-        Err(_) => return response(503, "persistence_unavailable", Some(5)),
+    let Ok(signer_public_key) = parse_hex32(&record.signer_public_key) else {
+        return response(503, "persistence_unavailable", Some(5));
     };
-    let submission = match verify_submission(
+    let Ok(submission) = verify_submission(
         &canonical,
         &config.modules,
         config.protocol_version,
         config.protocol_network_id,
         &signer_public_key,
-    ) {
-        Ok(value) => value,
-        Err(_) => return response(403, "activity_authorization_refused", None),
+    ) else {
+        return response(403, "activity_authorization_refused", None);
     };
     let head = match program_head(config, program_id) {
         Ok(value) => value,
@@ -1559,17 +1268,15 @@ fn program_simulation(
         Ok(Some(retry)) => return response(429, "quota_exceeded", Some(retry)),
         Err(_) => return response(503, "persistence_unavailable", Some(5)),
     }
-    let upstream = match config.client.request(
+    let Ok(upstream) = config.client.request(
         &config.component,
         "POST",
         "/v1/programs/simulate",
         config.component_token.as_str(),
         None,
-        "application/octet-stream",
-        &canonical,
-    ) {
-        Ok(value) => value,
-        Err(_) => return response(503, "component_unavailable", Some(5)),
+        ("application/octet-stream", &canonical),
+    ) else {
+        return response(503, "component_unavailable", Some(5));
     };
     if upstream.status != 200 || upstream.content_type != "application/json" {
         return response(503, "component_invalid", Some(5));
@@ -1578,55 +1285,1262 @@ fn program_simulation(
         Ok(value) => value,
         Err(_) => return response(503, "component_invalid", Some(5)),
     };
-    let value = document.get("result").unwrap_or(&document);
+    render_program_simulation(
+        config,
+        &document,
+        submission.activity_id(),
+        head,
+        (state_root, observed_sequence, observed_at),
+        trace_id,
+    )
+}
+
+fn activity(
+    config: &Config,
+    request: &IncomingRequest,
+    record: &KeyRecord,
+    trace_id: &str,
+    program_call: bool,
+) -> OutgoingResponse {
+    let context = match prepare_activity(config, request, record, program_call) {
+        Ok(context) => context,
+        Err(response) => return response,
+    };
+    if let Err(response) = reserve_activity(config, record, trace_id, &context) {
+        return response;
+    }
+    let canonical = &context.canonical;
+    let retained_signed_activity = &context.retained_signed_activity;
+    let protocol_idempotency = &context.protocol_idempotency;
+    let submitted_activity_id = &context.submitted_activity_id;
+    let request_digest = &context.request_digest;
+    let scope = &context.scope;
+    let program_mutation = context.program_mutation;
+    let lifecycle_ordinal = context.lifecycle_ordinal;
+    let Ok(upstream) = config.client.request(
+        &config.component,
+        "POST",
+        if program_mutation {
+            &request.path
+        } else {
+            "/v1/activities"
+        },
+        config.component_token.as_str(),
+        Some(protocol_idempotency),
+        ("application/octet-stream", canonical),
+    ) else {
+        return submitted_unknown_response(
+            submitted_activity_id,
+            protocol_idempotency,
+            retained_signed_activity,
+            trace_id,
+        );
+    };
+    if upstream.status == 202 {
+        return submitted_unknown_response(
+            submitted_activity_id,
+            protocol_idempotency,
+            retained_signed_activity,
+            trace_id,
+        );
+    }
+    if upstream.status != 200 || upstream.content_type != "application/json" {
+        return if (400..500).contains(&upstream.status) {
+            let refusal = response(upstream.status, "activity_refused", None);
+            if config
+                .store
+                .complete(layerx_platform_gateway::store::Completion {
+                    idempotency_scope: scope,
+                    request_digest,
+                    state: &format!("refused_{}", upstream.status),
+                    response_hex: &hex(&refusal.body),
+                    receipt_hex: "",
+                    activity_id: None,
+                    principal_digest: &record.principal_digest,
+                    audit_event: &audit_event(
+                        &record.principal_digest,
+                        "activity",
+                        &record.key_id,
+                        "refused",
+                    ),
+                })
+                .is_err()
+            {
+                response(503, "persistence_unavailable", Some(5))
+            } else {
+                refusal
+            }
+        } else {
+            submitted_unknown_response(
+                submitted_activity_id,
+                protocol_idempotency,
+                retained_signed_activity,
+                trace_id,
+            )
+        };
+    }
+    let component_document: serde_json::Value = match serde_json::from_slice(&upstream.body) {
+        Ok(value) => value,
+        Err(_) => return response(503, "component_invalid", Some(5)),
+    };
+    let component_value = component_document
+        .get("result")
+        .unwrap_or(&component_document)
+        .clone();
+    if lifecycle_ordinal.is_some() {
+        return finish_lifecycle_activity(config, record, trace_id, &context, component_value);
+    }
+    finish_activity(config, record, trace_id, &context, component_value)
+}
+
+fn submitted_unknown_response(
+    activity_id: &str,
+    idempotency_key: &str,
+    retained_signed_activity: &str,
+    trace_id: &str,
+) -> OutgoingResponse {
+    json_response(
+        202,
+        &serde_json::json!({
+            "ok": true,
+            "result": {
+                "state": "unknown",
+                "activity_id": activity_id,
+                "idempotency_key": idempotency_key,
+                "retained_signed_activity": retained_signed_activity,
+            },
+            "trace": trace_id,
+        }),
+    )
+}
+
+fn pending_program_response(operation: &OperationRecord, trace_id: &str) -> OutgoingResponse {
+    if !operation.continuation.is_empty()
+        && decode_hex(&operation.continuation, 1024 * 1024).is_err()
+    {
+        return response(503, "persistence_unavailable", Some(5));
+    }
+    let mut result = serde_json::json!({
+        "state": "unknown",
+        "activity_id": operation.activity_id,
+        "idempotency_key": operation.idempotency_key,
+    });
+    if !operation.continuation.is_empty() {
+        if let Some(object) = result.as_object_mut() {
+            object.insert(
+                "retained_signed_activity".to_owned(),
+                serde_json::Value::String(operation.continuation.clone()),
+            );
+        }
+    }
+    json_response(
+        202,
+        &serde_json::json!({
+            "ok": true,
+            "result": result,
+            "trace": trace_id,
+        }),
+    )
+}
+
+fn resolve_pending_lifecycle(
+    config: &Config,
+    record: &KeyRecord,
+    operation: &OperationRecord,
+    trace_id: &str,
+) -> OutgoingResponse {
+    let Ok(canonical) = decode_hex(&operation.continuation, 1_048_576) else {
+        return response(503, "persistence_unavailable", Some(5));
+    };
+    let Ok(signer) = parse_hex32(&record.signer_public_key) else {
+        return response(503, "persistence_unavailable", Some(5));
+    };
+    let binding = match verify_submission(
+        &canonical,
+        &config.modules,
+        config.protocol_version,
+        config.protocol_network_id,
+        &signer,
+    ) {
+        Ok(value)
+            if hex(&value.activity_id()) == operation.activity_id
+                && hex(&value.idempotency_key()) == operation.idempotency_key =>
+        {
+            value
+        }
+        _ => return response(502, "lifecycle_binding_invalid", None),
+    };
+    let Ok(upstream) = config.client.request(
+        &config.component,
+        "GET",
+        &format!(
+            "/v1/programs/receipts/by-idempotency/{}",
+            operation.idempotency_key
+        ),
+        config.component_token.as_str(),
+        None,
+        ("application/json", &[]),
+    ) else {
+        return pending_program_response(operation, trace_id);
+    };
+    if matches!(upstream.status, 202 | 404) {
+        return pending_program_response(operation, trace_id);
+    }
+    if upstream.status != 200 || upstream.content_type != "application/json" {
+        return response(502, "component_invalid", None);
+    }
+    let document: serde_json::Value = match serde_json::from_slice(&upstream.body) {
+        Ok(value) => value,
+        Err(_) => return response(502, "component_invalid", None),
+    };
+    let component: LifecycleActivity =
+        match serde_json::from_value::<LifecycleActivity>(document["result"].clone()) {
+            Ok(value) if value.activity_id == operation.activity_id => value,
+            _ => return response(502, "lifecycle_binding_invalid", None),
+        };
+    let Ok(receipt) = decode_hex(&component.receipt, 1_048_576) else {
+        return response(502, "component_invalid", None);
+    };
+    let facts = match authority(config, &operation.activity_id) {
+        Ok(value) => value,
+        Err(error) => return error,
+    };
+    if facts.sequencer_public_key() != config.trusted_sequencer_key
+        || program_lifecycle::verify_receipt(&receipt, &facts.authorized(), binding.activity_id())
+            .is_err()
+    {
+        return response(502, "receipt_verification_failed", None);
+    }
+    let Ok(decoded) = layerx_wire::receipt::decode(&receipt) else {
+        return response(502, "receipt_verification_failed", None);
+    };
+    let Some(protocol) = decoded.protocol() else {
+        return response(502, "receipt_verification_failed", None);
+    };
+    let result = serde_json::json!({
+        "activity_id": operation.activity_id, "receipt": hex(&receipt),
+        "state": if protocol.result_code() == 0 { "completed" } else { "refused" },
+        "terminal_payload": "", "call_graph": "",
+    });
+    if config
+        .store
+        .complete(layerx_platform_gateway::store::Completion {
+            idempotency_scope: &operation.scope,
+            request_digest: &operation.digest,
+            state: "completed",
+            response_hex: &hex(result.to_string().as_bytes()),
+            receipt_hex: &hex(&receipt),
+            activity_id: Some(&operation.activity_id),
+            principal_digest: &record.principal_digest,
+            audit_event: &audit_event(
+                &record.principal_digest,
+                "program_reconcile",
+                &record.key_id,
+                "receipt_verified",
+            ),
+        })
+        .is_err()
+    {
+        return response(503, "persistence_unavailable", Some(5));
+    }
+    json_response(
+        200,
+        &serde_json::json!({"ok": true, "result": result, "trace": trace_id}),
+    )
+}
+
+fn resolve_pending_program(
+    config: &Config,
+    record: &KeyRecord,
+    operation: &OperationRecord,
+    trace_id: &str,
+) -> OutgoingResponse {
+    if !operation.continuation.is_empty() {
+        let Ok(canonical) = decode_hex(&operation.continuation, 1_048_576) else {
+            return response(503, "persistence_unavailable", Some(5));
+        };
+        let Ok(activity) = decode_signed(&canonical, &config.modules) else {
+            return response(503, "persistence_unavailable", Some(5));
+        };
+        let ordinal = activity.activity_type().ordinal();
+        if activity.activity_type().module() == ModuleId::Programs && matches!(ordinal, 1 | 2 | 7) {
+            if program_lifecycle::validate(&canonical, &config.modules, ordinal).is_err() {
+                return response(502, "lifecycle_binding_invalid", None);
+            }
+            return resolve_pending_lifecycle(config, record, operation, trace_id);
+        }
+    }
+    let Ok(upstream) = config.client.request(
+        &config.component,
+        "GET",
+        &format!("/v1/programs/activities/{}", operation.activity_id),
+        config.component_token.as_str(),
+        None,
+        ("application/json", &[]),
+    ) else {
+        return pending_program_response(operation, trace_id);
+    };
+    if matches!(upstream.status, 202 | 404) {
+        return pending_program_response(operation, trace_id);
+    }
+    if upstream.status != 200 || upstream.content_type != "application/json" {
+        return response(503, "component_invalid", Some(5));
+    }
+    let document: serde_json::Value = match serde_json::from_slice(&upstream.body) {
+        Ok(value) => value,
+        Err(_) => return response(503, "component_invalid", Some(5)),
+    };
+    complete_pending_program(config, record, operation, trace_id, &document)
+}
+
+fn read_route(
+    config: &Config,
+    request: &IncomingRequest,
+    record: &KeyRecord,
+    route: &ProductionRoute<'_>,
+    trace_id: &str,
+) -> OutgoingResponse {
+    if matches!(route, ProductionRoute::State) {
+        return response(503, "principal_state_proof_unavailable", Some(30));
+    }
+    let expected_receipt_activity = match route {
+        ProductionRoute::ProgramRegistry(program) | ProductionRoute::ProgramInterface(program) => {
+            if program_selector(request, program).is_err() {
+                return response(400, "invalid_program_selector", None);
+            }
+            None
+        }
+        ProductionRoute::ProgramReceiptByIdempotency(idempotency) => {
+            match program_receipt_selector(request, idempotency) {
+                Ok(activity_id) => Some(activity_id),
+                Err(()) => return response(400, "invalid_program_receipt_selector", None),
+            }
+        }
+        ProductionRoute::ProgramActivity(activity_id) => {
+            if program_activity_selector(request, activity_id).is_err() {
+                return response(400, "invalid_program_activity_selector", None);
+            }
+            None
+        }
+        _ => None,
+    };
+    match config.store.consume_read(
+        record,
+        now().unwrap_or(0),
+        &audit_event(
+            &record.principal_digest,
+            "read",
+            &record.key_id,
+            "attempted",
+        ),
+    ) {
+        Ok(None) => {}
+        Ok(Some(retry)) => return response(429, "quota_exceeded", Some(retry)),
+        Err(_) => return response(503, "persistence_unavailable", Some(5)),
+    }
+    match route {
+        ProductionRoute::State => response(503, "principal_state_proof_unavailable", Some(30)),
+        ProductionRoute::Receipt(activity_id) => {
+            read_receipt(config, activity_id, record, trace_id)
+        }
+        ProductionRoute::ProgramRegistry(program) => {
+            read_program_registry(config, program, trace_id)
+        }
+        ProductionRoute::ProgramInterface(program) => {
+            read_program_interface(config, program, trace_id)
+        }
+        ProductionRoute::ProgramReceiptByIdempotency(idempotency) => read_program_receipt(
+            config,
+            idempotency,
+            record,
+            trace_id,
+            expected_receipt_activity.as_deref(),
+        ),
+        ProductionRoute::ProgramActivity(activity_id) => {
+            read_program_activity(config, activity_id, record, trace_id)
+        }
+        ProductionRoute::Activity
+        | ProductionRoute::ProgramCall
+        | ProductionRoute::ProgramDeploy
+        | ProductionRoute::ProgramUpgrade
+        | ProductionRoute::ProgramWindDown
+        | ProductionRoute::ProgramSimulation => response(404, "not_found", None),
+    }
+}
+
+fn dependency_ready(
+    config: &Config,
+    endpoint: &Endpoint,
+    token: &str,
+    require_routes: bool,
+) -> bool {
+    let Ok(upstream) = config.client.request(
+        endpoint,
+        "GET",
+        "/readyz",
+        token,
+        None,
+        ("application/json", &[]),
+    ) else {
+        return false;
+    };
+    let Ok(readiness) = serde_json::from_slice::<ReadinessResponse>(&upstream.body) else {
+        return false;
+    };
+    upstream.status == 200
+        && upstream.content_type == "application/json"
+        && readiness.ready
+        && readiness.network_id == config.network_id
+        && readiness.wire_version == config.wire_version
+        && (!require_routes || (readiness.synchronous_receipts && readiness.state_snapshot))
+}
+
+fn program_registry_ready(config: &Config) -> bool {
+    let Ok(upstream) = config.client.request(
+        &config.registry,
+        "GET",
+        "/healthz",
+        config.registry_token.as_str(),
+        None,
+        ("application/json", &[]),
+    ) else {
+        return false;
+    };
+    let Ok(status) = serde_json::from_slice::<serde_json::Value>(&upstream.body) else {
+        return false;
+    };
+    upstream.status == 200
+        && upstream.content_type == "application/json"
+        && status["status"].as_str() == Some("ready")
+        && status["service"].as_str() == Some("program-registry")
+}
+
+fn route(config: &Config, request: &IncomingRequest) -> OutgoingResponse {
+    let program_request = programs_request_path(&request.method, &request.path);
+    let trace_id = trace(request);
+    if request.headers.contains_key("x-layerx-principal")
+        || request.headers.contains_key("x-layerx-api-key")
+    {
+        let result = response(400, "untrusted_identity_header", None);
+        return if program_request {
+            agent_response(&trace_id, result)
+        } else {
+            result
+        };
+    }
+    if request.method == "GET" && request.path == "/internal/v1/principal" {
+        return authenticate_key(config, request).map_or_else(
+            |refused| refused,
+            |record| {
+                json_response(
+                    200,
+                    &serde_json::json!({
+                        "ok": true,
+                        "result": { "principal_digest": record.principal_digest },
+                        "trace": trace_id,
+                    }),
+                )
+            },
+        );
+    }
+    if request.method == "GET" && request.path == "/livez" {
+        return json_response(
+            200,
+            &serde_json::json!({
+                "status": "live",
+                "service": "layerx-gateway",
+                "package_semver": env!("CARGO_PKG_VERSION")
+            }),
+        );
+    }
+    if request.method == "GET" && request.path == "/readyz" {
+        return readiness_response(config);
+    }
+    if request.method == "GET" && request.path == "/v1/status" {
+        return status_response(config);
+    }
+    if request.path == "/v1/keys" || request.path.starts_with("/v1/keys/") {
+        return manage_keys(config, request);
+    }
+    let Ok(parsed) = production_route(&request.method, &request.path) else {
+        let result = response(404, "not_found", None);
+        return if program_request {
+            agent_response(&trace_id, result)
+        } else {
+            result
+        };
+    };
+    let record = match authenticate_key(config, request) {
+        Ok(value) => value,
+        Err(error) => {
+            return if program_request {
+                agent_response(&trace_id, error)
+            } else {
+                error
+            };
+        }
+    };
+    if !permits(&record, &parsed) {
+        let result = response(403, "insufficient_scope", None);
+        return if program_request {
+            agent_response(&trace_id, result)
+        } else {
+            result
+        };
+    }
+    let result = match parsed {
+        ProductionRoute::ProgramCall => activity(config, request, &record, &trace_id, true),
+        ProductionRoute::Activity
+        | ProductionRoute::ProgramDeploy
+        | ProductionRoute::ProgramUpgrade
+        | ProductionRoute::ProgramWindDown => activity(config, request, &record, &trace_id, false),
+        ProductionRoute::ProgramSimulation => {
+            program_simulation(config, request, &record, &trace_id)
+        }
+        read => read_route(config, request, &record, &read, &trace_id),
+    };
+    if program_request
+        && !(request.method == "POST"
+            && (request.path == "/v1/programs/call"
+                || program_lifecycle::ordinal(&request.path).is_some())
+            && (200..300).contains(&result.status))
+    {
+        agent_response(&trace_id, result)
+    } else {
+        result
+    }
+}
+
+struct ConnectionGuard;
+
+impl Drop for ConnectionGuard {
+    fn drop(&mut self) {
+        ACTIVE_CONNECTIONS.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+fn serve(config: &Arc<Config>, tcp: TcpStream) -> Result<(), String> {
+    tcp.set_read_timeout(Some(Duration::from_secs(10)))
+        .map_err(|error| error.to_string())?;
+    tcp.set_write_timeout(Some(Duration::from_secs(10)))
+        .map_err(|error| error.to_string())?;
+    let connection =
+        ServerConnection::new(Arc::clone(&config.tls)).map_err(|error| error.to_string())?;
+    let mut stream = StreamOwned::new(connection, tcp);
+    let Ok(request) = http::read_request(&mut stream, MAX_REQUEST) else {
+        return http::write_response(&mut stream, &response(400, "invalid_http_request", None));
+    };
+    http::write_response(&mut stream, &route(config, &request))
+}
+
+fn run() -> Result<(), String> {
+    let config = Arc::new(config()?);
+    let listener = TcpListener::bind(config.listen).map_err(|error| error.to_string())?;
+    for incoming in listener.incoming() {
+        let tcp = incoming.map_err(|error| error.to_string())?;
+        if ACTIVE_CONNECTIONS.fetch_add(1, Ordering::AcqRel) >= MAX_CONNECTIONS {
+            ACTIVE_CONNECTIONS.fetch_sub(1, Ordering::AcqRel);
+            let _ = tcp.shutdown(std::net::Shutdown::Both);
+            continue;
+        }
+        let config = Arc::clone(&config);
+        thread::spawn(move || {
+            let _guard = ConnectionGuard;
+            let _ = serve(&config, tcp);
+        });
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(error) = run() {
+        let _ = writeln!(std::io::stderr(), "layerx-gateway refused startup: {error}");
+        std::process::exit(1);
+    }
+}
+
+fn render_program_simulation(
+    config: &Config,
+    document: &serde_json::Value,
+    activity: [u8; 32],
+    head: ProgramHead,
+    observed: ([u8; 32], u64, u64),
+    trace_id: &str,
+) -> OutgoingResponse {
+    let (state_root, _, _) = observed;
+    let program_id = head.program_id;
+    let value = document.get("result").unwrap_or(document);
     let execution = value.get("execution").unwrap_or(value);
     let activity_id = execution
         .get("activity_id")
         .and_then(serde_json::Value::as_str)
         .and_then(|value| parse_hex32(value).ok());
-    if activity_id != Some(submission.activity_id()) {
+    if activity_id != Some(activity) {
         return response(503, "component_invalid", Some(5));
     }
-    let receipt = match execution
+    let Some(receipt) = execution
         .get("receipt")
         .and_then(serde_json::Value::as_str)
         .and_then(|value| decode_hex(value, 1_048_576).ok())
-    {
-        Some(value) => value,
-        None => return response(503, "component_invalid", Some(5)),
+    else {
+        return response(503, "component_invalid", Some(5));
     };
-    let terminal_payload = match execution
+    let Some(terminal_payload) = execution
         .get("terminal_payload")
         .and_then(serde_json::Value::as_str)
         .and_then(|value| decode_hex(value, 1_048_576).ok())
-    {
-        Some(value) => value,
-        None => return response(503, "component_invalid", Some(5)),
+    else {
+        return response(503, "component_invalid", Some(5));
     };
-    let call_graph = match execution
+    let Some(call_graph) = execution
         .get("call_graph")
         .and_then(serde_json::Value::as_str)
         .and_then(|value| decode_hex(value, 1_048_576).ok())
-    {
-        Some(value) => value,
-        None => return response(503, "component_invalid", Some(5)),
+    else {
+        return response(503, "component_invalid", Some(5));
     };
-    let verified = match verify_program_simulation_operation(
-        &receipt,
-        &terminal_payload,
-        &call_graph,
+    let Ok(verified) = verify_program_simulation_operation(
+        (&receipt, &terminal_payload, &call_graph),
         state_root,
         config.trusted_sequencer_key,
-        submission.activity_id(),
+        activity,
         program_id,
         head.abi_version,
-    ) {
-        Ok(value) => value,
-        Err(_) => return response(503, "program_simulation_unverified", Some(5)),
+    ) else {
+        return response(503, "program_simulation_unverified", Some(5));
     };
-    let evidence = match value.get("simulation_evidence") {
-        Some(value) => value,
-        None => return response(503, "program_simulation_unverified", Some(5)),
+    render_simulation_evidence(config, value, &verified, activity, observed, trace_id)
+}
+
+fn parse_program_head(
+    document: &serde_json::Value,
+    expected_program: [u8; 32],
+) -> Result<ProgramHead, OutgoingResponse> {
+    let program = hex(&expected_program);
+    let value = document.get("result").unwrap_or(document);
+    if value.get("program_id").and_then(serde_json::Value::as_str) != Some(program.as_str())
+        || value
+            .pointer("/receipt/verification")
+            .and_then(serde_json::Value::as_str)
+            != Some("receipt-verified")
+    {
+        return Err(response(503, "program_registry_unverified", Some(5)));
+    }
+    let lifecycle = match value.get("lifecycle").and_then(serde_json::Value::as_str) {
+        Some("active") => ProgramLifecycle::Active,
+        Some("deprecated") => ProgramLifecycle::Deprecated,
+        Some("tombstoned") => ProgramLifecycle::Tombstoned,
+        _ => return Err(response(503, "program_registry_invalid", Some(5))),
+    };
+    let latest = value
+        .get("latest_version")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|number| u32::try_from(number).ok())
+        .filter(|number| *number != 0)
+        .ok_or_else(|| response(503, "program_registry_invalid", Some(5)))?;
+    let version = value
+        .get("versions")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|versions| {
+            versions.iter().find(|version| {
+                version.get("version").and_then(serde_json::Value::as_u64)
+                    == Some(u64::from(latest))
+            })
+        })
+        .ok_or_else(|| response(503, "program_registry_invalid", Some(5)))?;
+    let abi_version = version
+        .get("abi_version")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|abi| u16::try_from(abi).ok())
+        .filter(|abi| matches!(abi, 1 | 2))
+        .ok_or_else(|| response(503, "program_registry_invalid", Some(5)))?;
+    let code_hash = version
+        .get("code_hash")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|value| parse_hex32(value).ok())
+        .ok_or_else(|| response(503, "program_registry_invalid", Some(5)))?;
+    let deployment_receipt = version
+        .get("deployment_receipt_digest")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| response(503, "program_registry_invalid", Some(5)))?;
+    let receipt_digest = parse_hex32(deployment_receipt)
+        .map_err(|_| response(503, "program_registry_invalid", Some(5)))?;
+    let balance_receipt = value.pointer("/value_accounts/receipt");
+    let state_root = value
+        .get("state_root")
+        .or_else(|| balance_receipt.and_then(|receipt| receipt.get("state_root")))
+        .and_then(serde_json::Value::as_str)
+        .and_then(|root| parse_hex32(root).ok());
+    let observed_sequence = value
+        .get("observed_sequence")
+        .or_else(|| balance_receipt.and_then(|receipt| receipt.get("observed_sequence")))
+        .and_then(canonical_u64);
+    let observed_at = value
+        .get("observed_at")
+        .or_else(|| balance_receipt.and_then(|receipt| receipt.get("observed_at")))
+        .and_then(canonical_u64);
+    let valid_through = value
+        .get("valid_through")
+        .and_then(canonical_u64)
+        .ok_or_else(|| response(503, "program_registry_invalid", Some(5)))?;
+    let current_time_ms =
+        now_millis().map_err(|_| response(503, "program_state_unverified", Some(5)))?;
+    if state_root.is_none()
+        || observed_sequence.is_none()
+        || observed_at.is_none()
+        || observed_at.is_some_and(|observed| {
+            !program_head_is_current(observed, valid_through, current_time_ms)
+        })
+    {
+        return Err(response(503, "program_state_unverified", Some(5)));
+    }
+    Ok(ProgramHead {
+        program_id: expected_program,
+        lifecycle,
+        version: latest,
+        code_hash,
+        abi_version,
+        receipt_digest,
+        state_root,
+        observed_sequence,
+        observed_at,
+        valid_through,
+    })
+}
+
+fn configured_modules() -> Result<ModuleRegistry, String> {
+    let module_file: ModuleFile = serde_json::from_slice(
+        &fs::read(
+            env::var("LAYERX_GATEWAY_MODULE_REGISTRY_FILE")
+                .map_err(|_| "gateway module registry is required")?,
+        )
+        .map_err(|error| error.to_string())?,
+    )
+    .map_err(|_| "gateway module registry is invalid".to_owned())?;
+    if module_file.modules.is_empty() || module_file.modules.len() > 8 {
+        return Err("gateway module registry is outside its bound".to_owned());
+    }
+    let mut registrations = Vec::with_capacity(module_file.modules.len());
+    for declaration in module_file.modules {
+        let module = ModuleId::from_u16(declaration.module)
+            .map_err(|_| "gateway module registry names an unknown module".to_owned())?;
+        let mut activity_types = declaration
+            .ordinals
+            .into_iter()
+            .map(|ordinal| ActivityType::new(module, ordinal))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| "gateway module registry contains an invalid ordinal".to_owned())?;
+        ModuleRegistration::new(module, &activity_types)
+            .map_err(|_| "gateway module registry declaration is invalid".to_owned())?;
+        if module == ModuleId::Programs {
+            for ordinal in [1, 2, 7] {
+                let operation = ActivityType::new(module, ordinal)
+                    .map_err(|_| "invalid Programs ordinal".to_owned())?;
+                if !activity_types.contains(&operation) {
+                    activity_types.push(operation);
+                }
+            }
+            activity_types.sort_unstable();
+        }
+        let registration = ModuleRegistration::new(module, &activity_types)
+            .map_err(|_| "gateway module registry declaration is invalid".to_owned())?;
+        registrations.push(registration);
+    }
+    let modules = ModuleRegistry::new(&registrations)
+        .map_err(|_| "gateway module registry contains duplicates".to_owned())?;
+    Ok(modules)
+}
+
+fn issue_key(
+    config: &Config,
+    request: &IncomingRequest,
+    principal: &PrincipalId,
+    session: &SessionResponse,
+    principal_hash: &str,
+) -> OutgoingResponse {
+    let issuance_idempotency = match request.headers.get("idempotency-key") {
+        Some(value) if valid_identifier(value, 128) => value,
+        _ => return response(400, "idempotency_key_required", None),
+    };
+    let issue: IssueRequest = match serde_json::from_slice(&request.body) {
+        Ok(value) => value,
+        Err(_) => return response(400, "invalid_key_request", None),
+    };
+    if !session
+        .allowed_signer_public_keys
+        .iter()
+        .any(|key| key.eq_ignore_ascii_case(&issue.signer_public_key))
+    {
+        return response(403, "signer_not_owned", None);
+    }
+    let Ok(quota) = Quota::new(issue.quota_requests, issue.quota_window_seconds) else {
+        return response(400, "invalid_quota", None);
+    };
+    let Ok(scopes) = canonical_scopes(&issue.scopes) else {
+        return response(400, "invalid_scopes", None);
+    };
+    let context = digest(&[
+        b"gateway-key-issuance-v1",
+        principal_hash.as_bytes(),
+        issuance_idempotency.as_bytes(),
+    ]);
+    let issued = IssuedKey::derive(&config.key_provisioning_key, context.as_bytes());
+    let record = key_record(
+        &issued,
+        principal,
+        &issue.signer_public_key,
+        &scopes,
+        quota,
+        1,
+    );
+    let written = config
+        .store
+        .issue_key(
+            &record,
+            &audit_event(principal_hash, "key_issue", &record.key_id, "issued"),
+        )
+        .is_ok();
+    let existing = if written {
+        Ok(None)
+    } else {
+        config.store.key(&record.key_id)
+    };
+    let replayed = matches!(&existing, Ok(Some(value)) if value == &record);
+    if !written && !replayed {
+        return match existing {
+            Ok(Some(_)) => response(409, "idempotency_conflict", None),
+            _ => response(503, "persistence_unavailable", Some(5)),
+        };
+    }
+    json_response(
+        if written { 201 } else { 200 },
+        &serde_json::json!({
+            "ok": true,
+            "key": {
+                "id": issued.id(),
+                "secret": issued.secret(),
+                "authorization_scheme": "LayerX-Key",
+                "signer_public_key": record.signer_public_key,
+                "scopes": record_scopes(&record),
+                "quota_requests": record.quota_requests,
+                "quota_window_seconds": record.quota_window_seconds
+            }
+        }),
+    )
+}
+
+fn list_keys(config: &Config, principal_hash: &str) -> OutgoingResponse {
+    let Ok(ids) = config.store.list_keys(principal_hash) else {
+        return response(503, "persistence_unavailable", Some(5));
+    };
+    let mut records = Vec::with_capacity(ids.len());
+    for id in ids {
+        let Some(record) = config.store.key(&id).ok().flatten() else {
+            return response(503, "persistence_unavailable", Some(5));
+        };
+        if record
+            .principal_digest
+            .as_bytes()
+            .ct_eq(principal_hash.as_bytes())
+            .unwrap_u8()
+            != 1
+        {
+            return response(503, "persistence_unavailable", Some(5));
+        }
+        let public_scopes = record_scopes(&record)
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        records.push(PublicKeyRecord {
+            id: record.key_id,
+            signer_public_key: record.signer_public_key,
+            scopes: public_scopes,
+            quota_requests: record.quota_requests,
+            quota_window_seconds: record.quota_window_seconds,
+            state: if record.disabled { "revoked" } else { "active" },
+        });
+    }
+    json_response(200, &serde_json::json!({ "ok": true, "keys": records }))
+}
+
+fn rotate_key(
+    config: &Config,
+    request: &IncomingRequest,
+    principal: &PrincipalId,
+    session: &SessionResponse,
+    principal_hash: &str,
+    key_id: &str,
+    old: &KeyRecord,
+) -> OutgoingResponse {
+    if !session
+        .allowed_signer_public_keys
+        .iter()
+        .any(|key| key.eq_ignore_ascii_case(&old.signer_public_key))
+    {
+        return response(403, "signer_not_owned", None);
+    }
+    let rotation_idempotency = match request.headers.get("idempotency-key") {
+        Some(value) if valid_identifier(value, 128) => value,
+        _ => return response(400, "idempotency_key_required", None),
+    };
+    let context = digest(&[
+        b"gateway-key-rotation-v1",
+        principal_hash.as_bytes(),
+        key_id.as_bytes(),
+        rotation_idempotency.as_bytes(),
+    ]);
+    let issued = IssuedKey::derive(&config.key_provisioning_key, context.as_bytes());
+    let Ok(quota) = Quota::new(old.quota_requests, old.quota_window_seconds) else {
+        return response(503, "persistence_unavailable", Some(5));
+    };
+    let replacement = key_record(
+        &issued,
+        principal,
+        &old.signer_public_key,
+        &old.scopes,
+        quota,
+        1,
+    );
+    let written = config
+        .store
+        .rotate_key(
+            old,
+            &replacement,
+            &audit_event(principal_hash, "key_rotate", key_id, "rotated"),
+        )
+        .is_ok();
+    let replayed = !written
+        && config
+            .store
+            .key(&replacement.key_id)
+            .ok()
+            .flatten()
+            .is_some_and(|existing| existing == replacement);
+    if written || replayed {
+        json_response(
+            if written { 201 } else { 200 },
+            &serde_json::json!({
+                "ok": true,
+                "key": {
+                    "id": issued.id(),
+                    "secret": issued.secret(),
+                    "authorization_scheme": "LayerX-Key",
+                    "scopes": record_scopes(&replacement),
+                    "replaces": key_id
+                }
+            }),
+        )
+    } else {
+        response(409, "rotation_conflict", None)
+    }
+}
+
+fn readiness_response(config: &Config) -> OutgoingResponse {
+    let store = config.store.ready();
+    let component = dependency_ready(
+        config,
+        &config.component,
+        config.component_token.as_str(),
+        true,
+    );
+    let authority = dependency_ready(
+        config,
+        &config.authority,
+        config.authority_token.as_str(),
+        false,
+    );
+    let registry = program_registry_ready(config);
+    let ready = store && component && authority && registry;
+    json_response(
+        if ready { 200 } else { 503 },
+        &serde_json::json!({
+            "status": if ready { "ready" } else { "degraded" },
+            "service": "layerx-gateway",
+            "package_semver": env!("CARGO_PKG_VERSION"),
+            "lxp_wire_version": config.wire_version,
+            "network_id": config.network_id,
+            "components": {
+                "durable_store": if store { "ready" } else { "unavailable" },
+                "core_agent_boundary": if component { "ready" } else { "unavailable" },
+                "independent_receipt_authority": if authority { "ready" } else { "unavailable" },
+                "program_registry": if registry { "ready" } else { "unavailable" },
+                "principal_state_boundary": "unavailable"
+            }
+        }),
+    )
+}
+
+fn status_response(config: &Config) -> OutgoingResponse {
+    let gateway = config.store.ready();
+    let core = dependency_ready(
+        config,
+        &config.component,
+        config.component_token.as_str(),
+        true,
+    );
+    let authority = dependency_ready(
+        config,
+        &config.authority,
+        config.authority_token.as_str(),
+        false,
+    );
+    json_response(
+        200,
+        &serde_json::json!({
+            "ok": true,
+            "services": {
+                "hosted_gateway": if gateway { "degraded" } else { "unavailable" },
+                "testnet_core": if core { "available" } else { "unavailable" },
+                "receipt_authority": if authority { "available" } else { "unavailable" },
+                "paxeer": "not_configured"
+            },
+            "lxp_wire_version": config.wire_version,
+            "package_semver": env!("CARGO_PKG_VERSION")
+        }),
+    )
+}
+
+fn read_receipt(
+    config: &Config,
+    activity_id: &str,
+    record: &KeyRecord,
+    trace_id: &str,
+) -> OutgoingResponse {
+    let owner = match config
+        .store
+        .activity_owner(&activity_id.to_ascii_lowercase())
+    {
+        Ok(Some(value)) => value,
+        Ok(None) => return response(404, "receipt_not_found", None),
+        Err(_) => return response(503, "persistence_unavailable", Some(5)),
+    };
+    if owner
+        .as_bytes()
+        .ct_eq(record.principal_digest.as_bytes())
+        .unwrap_u8()
+        != 1
+    {
+        return response(404, "receipt_not_found", None);
+    }
+    let Ok(upstream) = config.client.request(
+        &config.component,
+        "GET",
+        &format!("/v1/receipts/{activity_id}"),
+        config.component_token.as_str(),
+        None,
+        ("application/json", &[]),
+    ) else {
+        return response(503, "component_unavailable", Some(5));
+    };
+    if upstream.status == 404 {
+        return response(404, "receipt_not_found", None);
+    }
+    let component: ComponentReceipt = match serde_json::from_slice(&upstream.body) {
+        Ok(value) if upstream.status == 200 && upstream.content_type == "application/json" => value,
+        _ => return response(503, "component_invalid", Some(5)),
+    };
+    if !component.activity_id.eq_ignore_ascii_case(activity_id) {
+        return response(503, "component_invalid", Some(5));
+    }
+    let (_, receipt, _) = match verified_result(config, activity_id, &component.receipt) {
+        Ok(value) => value,
+        Err(error) => return error,
+    };
+    json_response(
+        200,
+        &serde_json::json!({
+            "ok": true,
+            "result": { "activity_id": activity_id.to_ascii_lowercase(), "receipt": hex(&receipt) },
+            "trace": trace_id
+        }),
+    )
+}
+
+fn read_program_registry(config: &Config, program: &str, trace_id: &str) -> OutgoingResponse {
+    let Ok(expected) = parse_hex32(program) else {
+        return response(400, "invalid_program_id", None);
+    };
+    let head = match program_head(config, expected) {
+        Ok(value) => value,
+        Err(error) => return error,
+    };
+    let (Some(state_root), Some(observed_sequence), Some(observed_at)) =
+        (head.state_root, head.observed_sequence, head.observed_at)
+    else {
+        return response(503, "program_state_unverified", Some(5));
+    };
+    json_response(
+        200,
+        &serde_json::json!({
+            "ok": true,
+            "result": {
+                "program_id": hex(&head.program_id),
+                "lifecycle": head.lifecycle.name(),
+                "version": head.version,
+                "code_hash": hex(&head.code_hash),
+                "abi_version": head.abi_version,
+                "receipt_digest": hex(&head.receipt_digest),
+                "state_root": hex(&state_root),
+                "observed_sequence": observed_sequence.to_string(),
+                "observed_at": observed_at.to_string(),
+                "valid_through": head.valid_through.to_string(),
+                "verification": "registry-receipt-and-current-head-verified",
+            },
+            "trace": trace_id,
+        }),
+    )
+}
+
+fn read_program_interface(config: &Config, program: &str, trace_id: &str) -> OutgoingResponse {
+    let Ok(expected) = parse_hex32(program) else {
+        return response(400, "invalid_program_id", None);
+    };
+    let head = match program_head(config, expected) {
+        Ok(value) => value,
+        Err(error) => return error,
+    };
+    let Ok(upstream) = config.client.request(
+        &config.registry,
+        "GET",
+        &format!("/v1/programs/registry/{program}/interface"),
+        config.registry_token.as_str(),
+        None,
+        ("application/json", &[]),
+    ) else {
+        return response(503, "program_registry_unavailable", Some(5));
+    };
+    if upstream.status == 404 {
+        return response(404, "program_interface_absent", None);
+    }
+    if upstream.status != 200 || upstream.content_type != "application/json" {
+        return response(503, "program_registry_invalid", Some(5));
+    }
+    let document: serde_json::Value = match serde_json::from_slice(&upstream.body) {
+        Ok(value) => value,
+        Err(_) => return response(503, "program_registry_invalid", Some(5)),
+    };
+    render_program_interface(head, trace_id, &document)
+}
+
+fn read_program_receipt(
+    config: &Config,
+    idempotency: &str,
+    record: &KeyRecord,
+    trace_id: &str,
+    expected_receipt_activity: Option<&str>,
+) -> OutgoingResponse {
+    let idempotency = idempotency.to_owned();
+    let scope = digest(&[record.principal_digest.as_bytes(), idempotency.as_bytes()]);
+    let operation = match config.store.operation(&scope) {
+        Ok(Some(value))
+            if value
+                .principal
+                .as_bytes()
+                .ct_eq(record.principal_digest.as_bytes())
+                .unwrap_u8()
+                == 1 =>
+        {
+            value
+        }
+        Ok(Some(_) | None) => return response(404, "program_receipt_not_found", None),
+        Err(_) => return response(503, "persistence_unavailable", Some(5)),
+    };
+    if operation.idempotency_key != idempotency {
+        return response(404, "program_receipt_not_found", None);
+    }
+    if expected_receipt_activity != Some(operation.activity_id.as_str()) {
+        return response(409, "program_receipt_selector_mismatch", None);
+    }
+    if operation.state == "pending" {
+        return resolve_pending_program(config, record, &operation, trace_id);
+    }
+    if operation.state != "completed" {
+        return response(409, "program_call_refused", None);
+    }
+    let Ok(body) = decode_hex(&operation.response, MAX_REQUEST) else {
+        return response(503, "persistence_unavailable", Some(5));
+    };
+    let mut value: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(value) => value,
+        Err(_) => return response(503, "persistence_unavailable", Some(5)),
+    };
+    if let Some(object) = value.as_object_mut() {
+        object.insert(
+            "idempotency_key".to_owned(),
+            serde_json::Value::String(idempotency),
+        );
+    }
+    json_response(
+        200,
+        &serde_json::json!({"ok":true,"result":value,"trace":trace_id}),
+    )
+}
+
+fn read_program_activity(
+    config: &Config,
+    activity_id: &str,
+    record: &KeyRecord,
+    trace_id: &str,
+) -> OutgoingResponse {
+    let activity_id = activity_id.to_owned();
+    let owner = match config.store.activity_owner(&activity_id) {
+        Ok(Some(value)) => value,
+        Ok(None) => return response(404, "program_activity_not_found", None),
+        Err(_) => return response(503, "persistence_unavailable", Some(5)),
+    };
+    if owner
+        .as_bytes()
+        .ct_eq(record.principal_digest.as_bytes())
+        .unwrap_u8()
+        != 1
+    {
+        return response(404, "program_activity_not_found", None);
+    }
+    let operation = match config.store.activity_operation(&activity_id) {
+        Ok(Some(value)) => value,
+        Ok(None) => return response(404, "program_activity_not_found", None),
+        Err(_) => return response(503, "persistence_unavailable", Some(5)),
+    };
+    if operation.activity_id != activity_id
+        || operation
+            .principal
+            .as_bytes()
+            .ct_eq(record.principal_digest.as_bytes())
+            .unwrap_u8()
+            != 1
+    {
+        return response(404, "program_activity_not_found", None);
+    }
+    if operation.state == "pending" {
+        return resolve_pending_program(config, record, &operation, trace_id);
+    }
+    if operation.state != "completed" {
+        return response(409, "program_call_refused", None);
+    }
+    let Ok(body) = decode_hex(&operation.response, MAX_REQUEST) else {
+        return response(503, "persistence_unavailable", Some(5));
+    };
+    let value: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(value) => value,
+        Err(_) => return response(503, "persistence_unavailable", Some(5)),
+    };
+    json_response(
+        200,
+        &serde_json::json!({"ok":true,"result":value,"trace":trace_id}),
+    )
+}
+
+fn render_simulation_evidence(
+    config: &Config,
+    value: &serde_json::Value,
+    verified: &layerx_platform_gateway::VerifiedOperation,
+    activity: [u8; 32],
+    observed: ([u8; 32], u64, u64),
+    trace_id: &str,
+) -> OutgoingResponse {
+    let (state_root, observed_sequence, observed_at) = observed;
+    let Some(evidence) = value.get("simulation_evidence") else {
+        return response(503, "program_simulation_unverified", Some(5));
     };
     let boundary_id = evidence
         .get("boundary_id")
@@ -1668,7 +2582,7 @@ fn program_simulation(
         .and_then(serde_json::Value::as_bool)
         != Some(false)
         || previous != Some(state_root)
-        || evidence_activity != Some(submission.activity_id())
+        || evidence_activity != Some(activity)
         || evidence_sequence != Some(observed_sequence)
         || evidence_at != Some(observed_at)
         || public_key != Some(config.trusted_sequencer_key)
@@ -1689,7 +2603,7 @@ fn program_simulation(
     }
     let mut signed = b"LayerX/agent/program-simulation-evidence/v1\0".to_vec();
     signed.extend_from_slice(&boundary_id);
-    signed.extend_from_slice(&submission.activity_id());
+    signed.extend_from_slice(&activity);
     signed.extend_from_slice(&state_root);
     signed.extend_from_slice(&hypothetical);
     signed.extend_from_slice(&observed_sequence.to_be_bytes());
@@ -1702,14 +2616,14 @@ fn program_simulation(
     }
     json_response(
         200,
-        serde_json::json!({
+        &serde_json::json!({
             "ok": true,
             "result": {
                 "committed": false,
                 "execution": verified_document,
                 "simulation_evidence": {
                     "boundary_id": hex(&boundary_id),
-                    "activity_id": hex(&submission.activity_id()),
+                    "activity_id": hex(&activity),
                     "previous_state_root": hex(&state_root),
                     "hypothetical_state_root": hex(&hypothetical),
                     "observed_sequence": observed_sequence.to_string(),
@@ -1724,13 +2638,26 @@ fn program_simulation(
     )
 }
 
-fn activity(
+struct ActivityContext {
+    canonical: Vec<u8>,
+    retained_signed_activity: String,
+    verified_submission: layerx_platform_gateway::VerifiedSubmission,
+    program_head: Option<ProgramHead>,
+    protocol_idempotency: String,
+    submitted_activity_id: String,
+    request_digest: String,
+    scope: String,
+    program_mutation: bool,
+    program_call: bool,
+    lifecycle_ordinal: Option<u16>,
+}
+
+fn prepare_activity(
     config: &Config,
     request: &IncomingRequest,
     record: &KeyRecord,
-    trace_id: &str,
     program_call: bool,
-) -> OutgoingResponse {
+) -> Result<ActivityContext, OutgoingResponse> {
     let lifecycle_ordinal = program_lifecycle::ordinal(&request.path);
     let program_mutation = program_call || lifecycle_ordinal.is_some();
     let idempotency = match request.headers.get("idempotency-key") {
@@ -1743,53 +2670,50 @@ fn activity(
         {
             value
         }
-        _ => return response(400, "idempotency_key_required", None),
+        _ => return Err(response(400, "idempotency_key_required", None)),
     };
     let content_type = request
         .headers
         .get("content-type")
-        .map(String::as_str)
-        .unwrap_or("");
+        .map_or("", String::as_str);
     let supported_content_type = content_type == "application/octet-stream";
     if !supported_content_type || request.body.is_empty() {
-        return response(415, "activity_content_type_required", None);
+        return Err(response(415, "activity_content_type_required", None));
     }
     let (canonical, expected_program) = if let Some(ordinal) = lifecycle_ordinal {
         if program_lifecycle::validate(&request.body, &config.modules, ordinal).is_err() {
-            return response(400, "invalid_program_lifecycle", None);
+            return Err(response(400, "invalid_program_lifecycle", None));
         }
         (request.body.clone(), None)
     } else if program_call {
         match program_call_bytes(request, &config.modules) {
             Ok((activity, program)) => (activity, Some(program)),
-            Err(_) => return response(400, "invalid_program_call", None),
+            Err(_) => return Err(response(400, "invalid_program_call", None)),
         }
     } else {
         (request.body.clone(), None)
     };
     let retained_signed_activity = hex(&canonical);
-    let signer_public_key = match parse_hex32(&record.signer_public_key) {
-        Ok(value) => value,
-        Err(_) => return response(503, "persistence_unavailable", Some(5)),
+    let Ok(signer_public_key) = parse_hex32(&record.signer_public_key) else {
+        return Err(response(503, "persistence_unavailable", Some(5)));
     };
-    let verified_submission = match verify_submission(
+    let Ok(verified_submission) = verify_submission(
         &canonical,
         &config.modules,
         config.protocol_version,
         config.protocol_network_id,
         &signer_public_key,
-    ) {
-        Ok(value) => value,
-        Err(_) => return response(403, "activity_authorization_refused", None),
+    ) else {
+        return Err(response(403, "activity_authorization_refused", None));
     };
     if idempotency != &hex(&verified_submission.idempotency_key()) {
-        return response(409, "protocol_idempotency_mismatch", None);
+        return Err(response(409, "protocol_idempotency_mismatch", None));
     }
     let program_head = match expected_program {
         Some(program) => match program_head(config, program) {
             Ok(head) if head.lifecycle == ProgramLifecycle::Active => Some(head),
-            Ok(_) => return response(409, "program_not_active", None),
-            Err(error) => return error,
+            Ok(_) => return Err(response(409, "program_not_active", None)),
+            Err(error) => return Err(error),
         },
         None => None,
     };
@@ -1805,36 +2729,64 @@ fn activity(
         record.principal_digest.as_bytes(),
         protocol_idempotency.as_bytes(),
     ]);
+    Ok(ActivityContext {
+        canonical,
+        retained_signed_activity,
+        verified_submission,
+        program_head,
+        protocol_idempotency,
+        submitted_activity_id,
+        request_digest,
+        scope,
+        program_mutation,
+        program_call,
+        lifecycle_ordinal,
+    })
+}
+
+fn reserve_activity(
+    config: &Config,
+    record: &KeyRecord,
+    trace_id: &str,
+    context: &ActivityContext,
+) -> Result<(), OutgoingResponse> {
+    let retained_signed_activity = &context.retained_signed_activity;
+    let protocol_idempotency = &context.protocol_idempotency;
+    let submitted_activity_id = &context.submitted_activity_id;
+    let request_digest = &context.request_digest;
+    let scope = &context.scope;
+    let program_mutation = context.program_mutation;
     let audit = audit_event(
         &record.principal_digest,
         "activity",
         &record.key_id,
         "attempted",
     );
-    let reservation = match config.store.reserve(
+    let Ok(reservation) = config.store.reserve(
         record,
-        &scope,
-        &request_digest,
-        now().unwrap_or(0),
-        config.idempotency_seconds,
-        &submitted_activity_id,
-        &protocol_idempotency,
-        &record.principal_digest,
-        &audit,
-        if program_mutation {
-            retained_signed_activity.as_str()
-        } else {
-            ""
+        layerx_platform_gateway::store::ReservationRequest {
+            idempotency_scope: scope,
+            request_digest,
+            now: now().unwrap_or(0),
+            retention_seconds: config.idempotency_seconds,
+            activity_id: submitted_activity_id,
+            protocol_idempotency_key: protocol_idempotency,
+            principal_digest: &record.principal_digest,
+            audit_event: &audit,
+            continuation: if program_mutation {
+                retained_signed_activity.as_str()
+            } else {
+                ""
+            },
         },
-    ) {
-        Ok(value) => value,
-        Err(_) => return response(503, "persistence_unavailable", Some(5)),
+    ) else {
+        return Err(response(503, "persistence_unavailable", Some(5)));
     };
     match reservation {
-        Reservation::Revoked => return response(401, "api_key_required", None),
+        Reservation::Revoked => return Err(response(401, "api_key_required", None)),
         Reservation::RateLimited {
             retry_after_seconds,
-        } => return response(429, "quota_exceeded", Some(retry_after_seconds)),
+        } => return Err(response(429, "quota_exceeded", Some(retry_after_seconds))),
         Reservation::Existing {
             digest: existing,
             state,
@@ -1847,7 +2799,7 @@ fn activity(
                 .unwrap_u8()
                 != 1
             {
-                return response(409, "idempotency_conflict", None);
+                return Err(response(409, "idempotency_conflict", None));
             }
             if state == "completed" {
                 let limit = if program_mutation {
@@ -1856,173 +2808,126 @@ fn activity(
                     512 * 1024
                 };
                 let Ok(result) = decode_hex(&stored, limit) else {
-                    return response(503, "persistence_unavailable", Some(5));
+                    return Err(response(503, "persistence_unavailable", Some(5)));
                 };
                 let Ok(result) = serde_json::from_slice::<serde_json::Value>(&result) else {
-                    return response(503, "persistence_unavailable", Some(5));
+                    return Err(response(503, "persistence_unavailable", Some(5)));
                 };
-                return json_response(
+                return Err(json_response(
                     200,
-                    serde_json::json!({ "ok": true, "result": result, "trace": trace_id }),
-                );
+                    &serde_json::json!({ "ok": true, "result": result, "trace": trace_id }),
+                ));
             }
             if let Some(status) = state
                 .strip_prefix("refused_")
                 .and_then(|value| value.parse::<u16>().ok())
             {
                 let Ok(body) = decode_hex(&stored, 64 * 1024) else {
-                    return response(503, "persistence_unavailable", Some(5));
+                    return Err(response(503, "persistence_unavailable", Some(5)));
                 };
-                return OutgoingResponse {
+                return Err(OutgoingResponse {
                     status,
                     body,
                     retry_after: None,
-                };
+                });
             }
             if state != "pending" {
-                return response(503, "operation_state_unknown", Some(5));
+                return Err(response(503, "operation_state_unknown", Some(5)));
             }
         }
         Reservation::Reserved => {}
     }
-    let upstream = match config.client.request(
-        &config.component,
-        "POST",
-        if program_mutation {
-            &request.path
-        } else {
-            "/v1/activities"
-        },
-        config.component_token.as_str(),
-        Some(&protocol_idempotency),
-        "application/octet-stream",
-        &canonical,
-    ) {
-        Ok(value) => value,
-        Err(_) => {
-            return submitted_unknown_response(
-                &submitted_activity_id,
-                &protocol_idempotency,
-                &retained_signed_activity,
-                trace_id,
-            )
-        }
-    };
-    if upstream.status == 202 {
-        return submitted_unknown_response(
-            &submitted_activity_id,
-            &protocol_idempotency,
-            &retained_signed_activity,
-            trace_id,
-        );
-    }
-    if upstream.status != 200 || upstream.content_type != "application/json" {
-        return if (400..500).contains(&upstream.status) {
-            let refusal = response(upstream.status, "activity_refused", None);
-            if config
-                .store
-                .complete(
-                    &scope,
-                    &request_digest,
-                    &format!("refused_{}", upstream.status),
-                    &hex(&refusal.body),
-                    "",
-                    None,
-                    &record.principal_digest,
-                    &audit_event(
-                        &record.principal_digest,
-                        "activity",
-                        &record.key_id,
-                        "refused",
-                    ),
-                )
-                .is_err()
-            {
-                response(503, "persistence_unavailable", Some(5))
-            } else {
-                refusal
-            }
-        } else {
-            submitted_unknown_response(
-                &submitted_activity_id,
-                &protocol_idempotency,
-                &retained_signed_activity,
-                trace_id,
-            )
-        };
-    }
-    let component_document: serde_json::Value = match serde_json::from_slice(&upstream.body) {
+    Ok(())
+}
+
+fn finish_lifecycle_activity(
+    config: &Config,
+    record: &KeyRecord,
+    trace_id: &str,
+    context: &ActivityContext,
+    component_value: serde_json::Value,
+) -> OutgoingResponse {
+    let verified_submission = context.verified_submission;
+    let submitted_activity_id = &context.submitted_activity_id;
+    let request_digest = &context.request_digest;
+    let scope = &context.scope;
+
+    let component: LifecycleActivity = match serde_json::from_value(component_value) {
         Ok(value) => value,
         Err(_) => return response(503, "component_invalid", Some(5)),
     };
-    let component_value = component_document
-        .get("result")
-        .unwrap_or(&component_document)
-        .clone();
-    if lifecycle_ordinal.is_some() {
-        let component: LifecycleActivity = match serde_json::from_value(component_value) {
-            Ok(value) => value,
-            Err(_) => return response(503, "component_invalid", Some(5)),
-        };
-        if component.activity_id != submitted_activity_id || component.receipt.is_empty() {
-            return response(503, "component_invalid", Some(5));
-        }
-        let receipt = match decode_hex(&component.receipt, 1_048_576) {
-            Ok(value) => value,
-            Err(_) => return response(503, "component_invalid", Some(5)),
-        };
-        let facts = match authority(config, &component.activity_id) {
-            Ok(value) => value,
-            Err(error) => return error,
-        };
-        if facts.sequencer_public_key() != config.trusted_sequencer_key
-            || program_lifecycle::verify_receipt(
-                &receipt,
-                &facts.authorized(),
-                verified_submission.activity_id(),
-            )
-            .is_err()
-        {
-            return response(502, "receipt_verification_failed", None);
-        }
-        let decoded = match layerx_wire::receipt::decode(&receipt) {
-            Ok(value) => value,
-            Err(_) => return response(502, "receipt_verification_failed", None),
-        };
-        let Some(protocol) = decoded.protocol() else {
-            return response(502, "receipt_verification_failed", None);
-        };
-        let result = serde_json::json!({
-            "activity_id": submitted_activity_id, "receipt": hex(&receipt),
-            "state": if protocol.result_code() == 0 { "completed" } else { "refused" },
-            "terminal_payload": "", "call_graph": "",
-        });
-        if config
-            .store
-            .complete(
-                &scope,
-                &request_digest,
-                "completed",
-                &hex(result.to_string().as_bytes()),
-                &hex(&receipt),
-                Some(&submitted_activity_id),
-                &record.principal_digest,
-                &audit_event(
-                    &record.principal_digest,
-                    "activity",
-                    &record.key_id,
-                    "receipt_verified",
-                ),
-            )
-            .is_err()
-        {
-            return response(503, "persistence_unavailable", Some(5));
-        }
-        return json_response(
-            200,
-            serde_json::json!({"ok": true, "result": result, "trace": trace_id}),
-        );
+    if component.activity_id != *submitted_activity_id || component.receipt.is_empty() {
+        return response(503, "component_invalid", Some(5));
     }
+    let Ok(receipt) = decode_hex(&component.receipt, 1_048_576) else {
+        return response(503, "component_invalid", Some(5));
+    };
+    let facts = match authority(config, &component.activity_id) {
+        Ok(value) => value,
+        Err(error) => return error,
+    };
+    if facts.sequencer_public_key() != config.trusted_sequencer_key
+        || program_lifecycle::verify_receipt(
+            &receipt,
+            &facts.authorized(),
+            verified_submission.activity_id(),
+        )
+        .is_err()
+    {
+        return response(502, "receipt_verification_failed", None);
+    }
+    let Ok(decoded) = layerx_wire::receipt::decode(&receipt) else {
+        return response(502, "receipt_verification_failed", None);
+    };
+    let Some(protocol) = decoded.protocol() else {
+        return response(502, "receipt_verification_failed", None);
+    };
+    let result = serde_json::json!({
+        "activity_id": submitted_activity_id, "receipt": hex(&receipt),
+        "state": if protocol.result_code() == 0 { "completed" } else { "refused" },
+        "terminal_payload": "", "call_graph": "",
+    });
+    if config
+        .store
+        .complete(layerx_platform_gateway::store::Completion {
+            idempotency_scope: scope,
+            request_digest,
+            state: "completed",
+            response_hex: &hex(result.to_string().as_bytes()),
+            receipt_hex: &hex(&receipt),
+            activity_id: Some(submitted_activity_id),
+            principal_digest: &record.principal_digest,
+            audit_event: &audit_event(
+                &record.principal_digest,
+                "activity",
+                &record.key_id,
+                "receipt_verified",
+            ),
+        })
+        .is_err()
+    {
+        return response(503, "persistence_unavailable", Some(5));
+    }
+    json_response(
+        200,
+        &serde_json::json!({"ok": true, "result": result, "trace": trace_id}),
+    )
+}
+
+fn finish_activity(
+    config: &Config,
+    record: &KeyRecord,
+    trace_id: &str,
+    context: &ActivityContext,
+    component_value: serde_json::Value,
+) -> OutgoingResponse {
+    let verified_submission = context.verified_submission;
+    let program_head = context.program_head;
+    let protocol_idempotency = &context.protocol_idempotency;
+    let request_digest = &context.request_digest;
+    let scope = &context.scope;
+    let program_mutation = context.program_mutation;
+    let program_call = context.program_call;
     let component: ComponentActivity = match serde_json::from_value(component_value) {
         Ok(value) => value,
         Err(_) => return response(503, "component_invalid", Some(5)),
@@ -2057,46 +2962,18 @@ fn activity(
         Err(error) => return error,
     };
     if !program_mutation && verified_result_code != 0 {
-        let refusal = json_response(
-            409,
-            serde_json::json!({
-                "ok": false,
-                "error": {
-                    "code": "activity_refused",
-                    "protocol_result_code": verified_result_code,
-                    "retry": "never",
-                    "activity_id": component.activity_id.to_ascii_lowercase(),
-                    "receipt": hex(&receipt),
-                },
-                "trace": trace_id,
-            }),
+        return finish_refused_activity(
+            config,
+            record,
+            trace_id,
+            context,
+            &component,
+            &receipt,
+            verified_result_code,
         );
-        if config
-            .store
-            .complete(
-                &scope,
-                &request_digest,
-                "refused_409",
-                &hex(&refusal.body),
-                &hex(&receipt),
-                Some(&component.activity_id.to_ascii_lowercase()),
-                &record.principal_digest,
-                &audit_event(
-                    &record.principal_digest,
-                    "activity",
-                    &record.key_id,
-                    "receipt_verified_refusal",
-                ),
-            )
-            .is_err()
-        {
-            return response(503, "persistence_unavailable", Some(5));
-        }
-        return refusal;
     }
-    let mut result = match serde_json::from_slice::<serde_json::Value>(&result) {
-        Ok(value) => value,
-        Err(_) => return response(503, "receipt_encoding_failed", Some(5)),
+    let Ok(mut result) = serde_json::from_slice::<serde_json::Value>(&result) else {
+        return response(503, "receipt_encoding_failed", Some(5));
     };
     if let Some(object) = result.as_object_mut() {
         object.insert(
@@ -2104,245 +2981,94 @@ fn activity(
             serde_json::Value::String(protocol_idempotency.clone()),
         );
     }
-    let stored_result = match serde_json::to_vec(&result) {
-        Ok(value) => value,
-        Err(_) => return response(503, "receipt_encoding_failed", Some(5)),
+    let Ok(stored_result) = serde_json::to_vec(&result) else {
+        return response(503, "receipt_encoding_failed", Some(5));
     };
     if config
         .store
-        .complete(
-            &scope,
-            &request_digest,
-            "completed",
-            &hex(&stored_result),
-            &hex(&receipt),
-            Some(&component.activity_id.to_ascii_lowercase()),
-            &record.principal_digest,
-            &audit_event(
+        .complete(layerx_platform_gateway::store::Completion {
+            idempotency_scope: scope,
+            request_digest,
+            state: "completed",
+            response_hex: &hex(&stored_result),
+            receipt_hex: &hex(&receipt),
+            activity_id: Some(&component.activity_id.to_ascii_lowercase()),
+            principal_digest: &record.principal_digest,
+            audit_event: &audit_event(
                 &record.principal_digest,
                 "activity",
                 &record.key_id,
                 "receipt_verified",
             ),
-        )
+        })
         .is_err()
     {
         return response(503, "persistence_unavailable", Some(5));
     }
     json_response(
         200,
-        serde_json::json!({ "ok": true, "result": result, "trace": trace_id }),
+        &serde_json::json!({ "ok": true, "result": result, "trace": trace_id }),
     )
 }
 
-fn submitted_unknown_response(
-    activity_id: &str,
-    idempotency_key: &str,
-    retained_signed_activity: &str,
+fn finish_refused_activity(
+    config: &Config,
+    record: &KeyRecord,
     trace_id: &str,
+    context: &ActivityContext,
+    component: &ComponentActivity,
+    receipt: &[u8],
+    verified_result_code: i32,
 ) -> OutgoingResponse {
-    json_response(
-        202,
-        serde_json::json!({
-            "ok": true,
-            "result": {
-                "state": "unknown",
-                "activity_id": activity_id,
-                "idempotency_key": idempotency_key,
-                "retained_signed_activity": retained_signed_activity,
+    let request_digest = &context.request_digest;
+    let scope = &context.scope;
+
+    let refusal = json_response(
+        409,
+        &serde_json::json!({
+            "ok": false,
+            "error": {
+                "code": "activity_refused",
+                "protocol_result_code": verified_result_code,
+                "retry": "never",
+                "activity_id": component.activity_id.to_ascii_lowercase(),
+                "receipt": hex(receipt),
             },
             "trace": trace_id,
         }),
-    )
-}
-
-fn pending_program_response(operation: &OperationRecord, trace_id: &str) -> OutgoingResponse {
-    if !operation.continuation.is_empty()
-        && decode_hex(&operation.continuation, 1024 * 1024).is_err()
-    {
-        return response(503, "persistence_unavailable", Some(5));
-    }
-    let mut result = serde_json::json!({
-        "state": "unknown",
-        "activity_id": operation.activity_id,
-        "idempotency_key": operation.idempotency_key,
-    });
-    if !operation.continuation.is_empty() {
-        if let Some(object) = result.as_object_mut() {
-            object.insert(
-                "retained_signed_activity".to_owned(),
-                serde_json::Value::String(operation.continuation.clone()),
-            );
-        }
-    }
-    json_response(
-        202,
-        serde_json::json!({
-            "ok": true,
-            "result": result,
-            "trace": trace_id,
-        }),
-    )
-}
-
-fn resolve_pending_lifecycle(
-    config: &Config,
-    record: &KeyRecord,
-    operation: &OperationRecord,
-    trace_id: &str,
-) -> OutgoingResponse {
-    let canonical = match decode_hex(&operation.continuation, 1_048_576) {
-        Ok(value) => value,
-        Err(_) => return response(503, "persistence_unavailable", Some(5)),
-    };
-    let signer = match parse_hex32(&record.signer_public_key) {
-        Ok(value) => value,
-        Err(_) => return response(503, "persistence_unavailable", Some(5)),
-    };
-    let binding = match verify_submission(
-        &canonical,
-        &config.modules,
-        config.protocol_version,
-        config.protocol_network_id,
-        &signer,
-    ) {
-        Ok(value)
-            if hex(&value.activity_id()) == operation.activity_id
-                && hex(&value.idempotency_key()) == operation.idempotency_key =>
-        {
-            value
-        }
-        _ => return response(502, "lifecycle_binding_invalid", None),
-    };
-    let upstream = match config.client.request(
-        &config.component,
-        "GET",
-        &format!(
-            "/v1/programs/receipts/by-idempotency/{}",
-            operation.idempotency_key
-        ),
-        config.component_token.as_str(),
-        None,
-        "application/json",
-        &[],
-    ) {
-        Ok(value) => value,
-        Err(_) => return pending_program_response(operation, trace_id),
-    };
-    if matches!(upstream.status, 202 | 404) {
-        return pending_program_response(operation, trace_id);
-    }
-    if upstream.status != 200 || upstream.content_type != "application/json" {
-        return response(502, "component_invalid", None);
-    }
-    let document: serde_json::Value = match serde_json::from_slice(&upstream.body) {
-        Ok(value) => value,
-        Err(_) => return response(502, "component_invalid", None),
-    };
-    let component: LifecycleActivity =
-        match serde_json::from_value::<LifecycleActivity>(document["result"].clone()) {
-            Ok(value) if value.activity_id == operation.activity_id => value,
-            _ => return response(502, "lifecycle_binding_invalid", None),
-        };
-    let receipt = match decode_hex(&component.receipt, 1_048_576) {
-        Ok(value) => value,
-        Err(_) => return response(502, "component_invalid", None),
-    };
-    let facts = match authority(config, &operation.activity_id) {
-        Ok(value) => value,
-        Err(error) => return error,
-    };
-    if facts.sequencer_public_key() != config.trusted_sequencer_key
-        || program_lifecycle::verify_receipt(&receipt, &facts.authorized(), binding.activity_id())
-            .is_err()
-    {
-        return response(502, "receipt_verification_failed", None);
-    }
-    let decoded = match layerx_wire::receipt::decode(&receipt) {
-        Ok(value) => value,
-        Err(_) => return response(502, "receipt_verification_failed", None),
-    };
-    let Some(protocol) = decoded.protocol() else {
-        return response(502, "receipt_verification_failed", None);
-    };
-    let result = serde_json::json!({
-        "activity_id": operation.activity_id, "receipt": hex(&receipt),
-        "state": if protocol.result_code() == 0 { "completed" } else { "refused" },
-        "terminal_payload": "", "call_graph": "",
-    });
+    );
     if config
         .store
-        .complete(
-            &operation.scope,
-            &operation.digest,
-            "completed",
-            &hex(result.to_string().as_bytes()),
-            &hex(&receipt),
-            Some(&operation.activity_id),
-            &record.principal_digest,
-            &audit_event(
+        .complete(layerx_platform_gateway::store::Completion {
+            idempotency_scope: scope,
+            request_digest,
+            state: "refused_409",
+            response_hex: &hex(&refusal.body),
+            receipt_hex: &hex(receipt),
+            activity_id: Some(&component.activity_id.to_ascii_lowercase()),
+            principal_digest: &record.principal_digest,
+            audit_event: &audit_event(
                 &record.principal_digest,
-                "program_reconcile",
+                "activity",
                 &record.key_id,
-                "receipt_verified",
+                "receipt_verified_refusal",
             ),
-        )
+        })
         .is_err()
     {
         return response(503, "persistence_unavailable", Some(5));
     }
-    json_response(
-        200,
-        serde_json::json!({"ok": true, "result": result, "trace": trace_id}),
-    )
+    refusal
 }
 
-fn resolve_pending_program(
+fn complete_pending_program(
     config: &Config,
     record: &KeyRecord,
     operation: &OperationRecord,
     trace_id: &str,
+    document: &serde_json::Value,
 ) -> OutgoingResponse {
-    if !operation.continuation.is_empty() {
-        let canonical = match decode_hex(&operation.continuation, 1_048_576) {
-            Ok(value) => value,
-            Err(_) => return response(503, "persistence_unavailable", Some(5)),
-        };
-        let activity = match decode_signed(&canonical, &config.modules) {
-            Ok(value) => value,
-            Err(_) => return response(503, "persistence_unavailable", Some(5)),
-        };
-        let ordinal = activity.activity_type().ordinal();
-        if activity.activity_type().module() == ModuleId::Programs && matches!(ordinal, 1 | 2 | 7) {
-            if program_lifecycle::validate(&canonical, &config.modules, ordinal).is_err() {
-                return response(502, "lifecycle_binding_invalid", None);
-            }
-            return resolve_pending_lifecycle(config, record, operation, trace_id);
-        }
-    }
-    let upstream = match config.client.request(
-        &config.component,
-        "GET",
-        &format!("/v1/programs/activities/{}", operation.activity_id),
-        config.component_token.as_str(),
-        None,
-        "application/json",
-        &[],
-    ) {
-        Ok(value) => value,
-        Err(_) => return pending_program_response(operation, trace_id),
-    };
-    if matches!(upstream.status, 202 | 404) {
-        return pending_program_response(operation, trace_id);
-    }
-    if upstream.status != 200 || upstream.content_type != "application/json" {
-        return response(503, "component_invalid", Some(5));
-    }
-    let document: serde_json::Value = match serde_json::from_slice(&upstream.body) {
-        Ok(value) => value,
-        Err(_) => return response(503, "component_invalid", Some(5)),
-    };
-    let value = document.get("result").unwrap_or(&document);
+    let value = document.get("result").unwrap_or(document);
     let component: ComponentActivity = match serde_json::from_value(value.clone()) {
         Ok(value) => value,
         Err(_) => return response(503, "component_invalid", Some(5)),
@@ -2391,651 +3117,123 @@ fn resolve_pending_program(
             serde_json::Value::String(operation.idempotency_key.clone()),
         );
     }
-    let stored_result = match serde_json::to_vec(&result) {
-        Ok(value) => value,
-        Err(_) => return response(503, "receipt_encoding_failed", Some(5)),
+    let Ok(stored_result) = serde_json::to_vec(&result) else {
+        return response(503, "receipt_encoding_failed", Some(5));
     };
     if config
         .store
-        .complete(
-            &operation.scope,
-            &operation.digest,
-            "completed",
-            &hex(&stored_result),
-            &hex(&receipt),
-            Some(&operation.activity_id),
-            &record.principal_digest,
-            &audit_event(
+        .complete(layerx_platform_gateway::store::Completion {
+            idempotency_scope: &operation.scope,
+            request_digest: &operation.digest,
+            state: "completed",
+            response_hex: &hex(&stored_result),
+            receipt_hex: &hex(&receipt),
+            activity_id: Some(&operation.activity_id),
+            principal_digest: &record.principal_digest,
+            audit_event: &audit_event(
                 &record.principal_digest,
                 "program_reconcile",
                 &record.key_id,
                 "receipt_verified",
             ),
-        )
+        })
         .is_err()
     {
         return response(503, "persistence_unavailable", Some(5));
     }
     json_response(
         200,
-        serde_json::json!({"ok":true,"result":result,"trace":trace_id}),
+        &serde_json::json!({"ok":true,"result":result,"trace":trace_id}),
     )
 }
-
-fn read_route(
-    config: &Config,
-    request: &IncomingRequest,
-    record: &KeyRecord,
-    route: ProductionRoute<'_>,
+fn render_program_interface(
+    head: ProgramHead,
     trace_id: &str,
+    document: &serde_json::Value,
 ) -> OutgoingResponse {
-    if matches!(route, ProductionRoute::State) {
-        return response(503, "principal_state_proof_unavailable", Some(30));
-    }
-    let expected_receipt_activity = match &route {
-        ProductionRoute::ProgramRegistry(program) | ProductionRoute::ProgramInterface(program) => {
-            if program_selector(request, program).is_err() {
-                return response(400, "invalid_program_selector", None);
-            }
-            None
-        }
-        ProductionRoute::ProgramReceiptByIdempotency(idempotency) => {
-            match program_receipt_selector(request, idempotency) {
-                Ok(activity_id) => Some(activity_id),
-                Err(()) => return response(400, "invalid_program_receipt_selector", None),
-            }
-        }
-        ProductionRoute::ProgramActivity(activity_id) => {
-            if program_activity_selector(request, activity_id).is_err() {
-                return response(400, "invalid_program_activity_selector", None);
-            }
-            None
-        }
-        _ => None,
+    let value = document.get("result").unwrap_or(document);
+    let interface = value
+        .get("interface")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|value| decode_hex(value, 952).ok())
+        .filter(|value| !value.is_empty());
+    let interface_digest = value
+        .get("interface_digest")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|value| parse_hex32(value).ok());
+    let state_root = value
+        .get("state_root")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|value| parse_hex32(value).ok());
+    let observed_sequence = value.get("observed_sequence").and_then(canonical_u64);
+    let observed_at = value.get("observed_at").and_then(canonical_u64);
+    let valid_through = value.get("valid_through").and_then(canonical_u64);
+    let version = value
+        .get("version")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok());
+    let abi_version = value
+        .get("abi_version")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| u16::try_from(value).ok());
+    let code_hash = value
+        .get("code_hash")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|value| parse_hex32(value).ok());
+    let receipt_digest = value
+        .get("deployment_receipt_digest")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|value| parse_hex32(value).ok());
+    let source = value.get("source").cloned();
+    let (Some(interface), Some(interface_digest)) = (interface, interface_digest) else {
+        return response(503, "program_registry_unverified", Some(5));
     };
-    match config.store.consume_read(
-        record,
-        now().unwrap_or(0),
-        &audit_event(
-            &record.principal_digest,
-            "read",
-            &record.key_id,
-            "attempted",
-        ),
-    ) {
-        Ok(None) => {}
-        Ok(Some(retry)) => return response(429, "quota_exceeded", Some(retry)),
-        Err(_) => return response(503, "persistence_unavailable", Some(5)),
-    }
-    match route {
-        ProductionRoute::State => response(503, "principal_state_proof_unavailable", Some(30)),
-        ProductionRoute::Receipt(activity_id) => {
-            let owner = match config
-                .store
-                .activity_owner(&activity_id.to_ascii_lowercase())
-            {
-                Ok(Some(value)) => value,
-                Ok(None) => return response(404, "receipt_not_found", None),
-                Err(_) => return response(503, "persistence_unavailable", Some(5)),
-            };
-            if owner
-                .as_bytes()
-                .ct_eq(record.principal_digest.as_bytes())
-                .unwrap_u8()
-                != 1
-            {
-                return response(404, "receipt_not_found", None);
-            }
-            let upstream = match config.client.request(
-                &config.component,
-                "GET",
-                &format!("/v1/receipts/{activity_id}"),
-                config.component_token.as_str(),
-                None,
-                "application/json",
-                &[],
-            ) {
-                Ok(value) => value,
-                Err(_) => return response(503, "component_unavailable", Some(5)),
-            };
-            if upstream.status == 404 {
-                return response(404, "receipt_not_found", None);
-            }
-            let component: ComponentReceipt = match serde_json::from_slice(&upstream.body) {
-                Ok(value)
-                    if upstream.status == 200 && upstream.content_type == "application/json" =>
-                {
-                    value
-                }
-                _ => return response(503, "component_invalid", Some(5)),
-            };
-            if !component.activity_id.eq_ignore_ascii_case(activity_id) {
-                return response(503, "component_invalid", Some(5));
-            }
-            let (_, receipt, _) = match verified_result(config, activity_id, &component.receipt) {
-                Ok(value) => value,
-                Err(error) => return error,
-            };
-            json_response(
-                200,
-                serde_json::json!({
-                    "ok": true,
-                    "result": { "activity_id": activity_id.to_ascii_lowercase(), "receipt": hex(&receipt) },
-                    "trace": trace_id
-                }),
-            )
-        }
-        ProductionRoute::ProgramRegistry(program) => {
-            let expected = match parse_hex32(program) {
-                Ok(value) => value,
-                Err(_) => return response(400, "invalid_program_id", None),
-            };
-            let head = match program_head(config, expected) {
-                Ok(value) => value,
-                Err(error) => return error,
-            };
-            let (Some(state_root), Some(observed_sequence), Some(observed_at)) =
-                (head.state_root, head.observed_sequence, head.observed_at)
-            else {
-                return response(503, "program_state_unverified", Some(5));
-            };
-            json_response(
-                200,
-                serde_json::json!({
-                    "ok": true,
-                    "result": {
-                        "program_id": hex(&head.program_id),
-                        "lifecycle": head.lifecycle.name(),
-                        "version": head.version,
-                        "code_hash": hex(&head.code_hash),
-                        "abi_version": head.abi_version,
-                        "receipt_digest": hex(&head.receipt_digest),
-                        "state_root": hex(&state_root),
-                        "observed_sequence": observed_sequence.to_string(),
-                        "observed_at": observed_at.to_string(),
-                        "valid_through": head.valid_through.to_string(),
-                        "verification": "registry-receipt-and-current-head-verified",
-                    },
-                    "trace": trace_id,
-                }),
-            )
-        }
-        ProductionRoute::ProgramInterface(program) => {
-            let expected = match parse_hex32(program) {
-                Ok(value) => value,
-                Err(_) => return response(400, "invalid_program_id", None),
-            };
-            let head = match program_head(config, expected) {
-                Ok(value) => value,
-                Err(error) => return error,
-            };
-            let upstream = match config.client.request(
-                &config.registry,
-                "GET",
-                &format!("/v1/programs/registry/{program}/interface"),
-                config.registry_token.as_str(),
-                None,
-                "application/json",
-                &[],
-            ) {
-                Ok(value) => value,
-                Err(_) => return response(503, "program_registry_unavailable", Some(5)),
-            };
-            if upstream.status == 404 {
-                return response(404, "program_interface_absent", None);
-            }
-            if upstream.status != 200 || upstream.content_type != "application/json" {
-                return response(503, "program_registry_invalid", Some(5));
-            }
-            let document: serde_json::Value = match serde_json::from_slice(&upstream.body) {
-                Ok(value) => value,
-                Err(_) => return response(503, "program_registry_invalid", Some(5)),
-            };
-            let value = document.get("result").unwrap_or(&document);
-            let interface = value
-                .get("interface")
-                .and_then(serde_json::Value::as_str)
-                .and_then(|value| decode_hex(value, 952).ok())
-                .filter(|value| !value.is_empty());
-            let interface_digest = value
-                .get("interface_digest")
-                .and_then(serde_json::Value::as_str)
-                .and_then(|value| parse_hex32(value).ok());
-            let state_root = value
-                .get("state_root")
-                .and_then(serde_json::Value::as_str)
-                .and_then(|value| parse_hex32(value).ok());
-            let observed_sequence = value.get("observed_sequence").and_then(canonical_u64);
-            let observed_at = value.get("observed_at").and_then(canonical_u64);
-            let valid_through = value.get("valid_through").and_then(canonical_u64);
-            let version = value
-                .get("version")
-                .and_then(serde_json::Value::as_u64)
-                .and_then(|value| u32::try_from(value).ok());
-            let abi_version = value
-                .get("abi_version")
-                .and_then(serde_json::Value::as_u64)
-                .and_then(|value| u16::try_from(value).ok());
-            let code_hash = value
-                .get("code_hash")
-                .and_then(serde_json::Value::as_str)
-                .and_then(|value| parse_hex32(value).ok());
-            let receipt_digest = value
-                .get("deployment_receipt_digest")
-                .and_then(serde_json::Value::as_str)
-                .and_then(|value| parse_hex32(value).ok());
-            let source = value.get("source").cloned();
-            let (Some(interface), Some(interface_digest)) = (interface, interface_digest) else {
-                return response(503, "program_registry_unverified", Some(5));
-            };
-            let expected_interface_digest = <[u8; 32]>::from(Sha256::digest(&interface));
-            if value
-                .get("program_id")
-                .and_then(serde_json::Value::as_str)
-                .and_then(|value| parse_hex32(value).ok())
-                != Some(head.program_id)
-                || version != Some(head.version)
-                || abi_version != Some(head.abi_version)
-                || code_hash != Some(head.code_hash)
-                || receipt_digest != Some(head.receipt_digest)
-                || state_root != head.state_root
-                || observed_sequence != head.observed_sequence
-                || observed_at != head.observed_at
-                || valid_through != Some(head.valid_through)
-                || interface_digest != expected_interface_digest
-                || value
-                    .get("verification")
-                    .and_then(serde_json::Value::as_str)
-                    != Some("deployment-interface-and-current-head-verified")
-                || source.is_none()
-            {
-                return response(503, "program_registry_unverified", Some(5));
-            }
-            json_response(
-                200,
-                serde_json::json!({
-                    "ok": true,
-                    "result": {
-                        "program_id": hex(&head.program_id),
-                        "version": head.version,
-                        "code_hash": hex(&head.code_hash),
-                        "abi_version": head.abi_version,
-                        "interface": hex(&interface),
-                        "interface_digest": hex(&interface_digest),
-                        "receipt_digest": hex(&head.receipt_digest),
-                        "state_root": head.state_root.map(|root| hex(&root)),
-                        "observed_sequence": head.observed_sequence.map(|value| value.to_string()),
-                        "observed_at": head.observed_at.map(|value| value.to_string()),
-                        "valid_through": head.valid_through.to_string(),
-                        "source": source,
-                        "verification": "deployment-interface-and-current-head-verified",
-                    },
-                    "trace": trace_id,
-                }),
-            )
-        }
-        ProductionRoute::ProgramReceiptByIdempotency(idempotency) => {
-            let idempotency = idempotency.to_owned();
-            let scope = digest(&[record.principal_digest.as_bytes(), idempotency.as_bytes()]);
-            let operation = match config.store.operation(&scope) {
-                Ok(Some(value))
-                    if value
-                        .principal
-                        .as_bytes()
-                        .ct_eq(record.principal_digest.as_bytes())
-                        .unwrap_u8()
-                        == 1 =>
-                {
-                    value
-                }
-                Ok(Some(_)) | Ok(None) => return response(404, "program_receipt_not_found", None),
-                Err(_) => return response(503, "persistence_unavailable", Some(5)),
-            };
-            if operation.idempotency_key != idempotency {
-                return response(404, "program_receipt_not_found", None);
-            }
-            if expected_receipt_activity.as_deref() != Some(operation.activity_id.as_str()) {
-                return response(409, "program_receipt_selector_mismatch", None);
-            }
-            if operation.state == "pending" {
-                return resolve_pending_program(config, record, &operation, trace_id);
-            }
-            if operation.state != "completed" {
-                return response(409, "program_call_refused", None);
-            }
-            let body = match decode_hex(&operation.response, MAX_REQUEST) {
-                Ok(value) => value,
-                Err(_) => return response(503, "persistence_unavailable", Some(5)),
-            };
-            let mut value: serde_json::Value = match serde_json::from_slice(&body) {
-                Ok(value) => value,
-                Err(_) => return response(503, "persistence_unavailable", Some(5)),
-            };
-            if let Some(object) = value.as_object_mut() {
-                object.insert(
-                    "idempotency_key".to_owned(),
-                    serde_json::Value::String(idempotency),
-                );
-            }
-            json_response(
-                200,
-                serde_json::json!({"ok":true,"result":value,"trace":trace_id}),
-            )
-        }
-        ProductionRoute::ProgramActivity(activity_id) => {
-            let activity_id = activity_id.to_owned();
-            let owner = match config.store.activity_owner(&activity_id) {
-                Ok(Some(value)) => value,
-                Ok(None) => return response(404, "program_activity_not_found", None),
-                Err(_) => return response(503, "persistence_unavailable", Some(5)),
-            };
-            if owner
-                .as_bytes()
-                .ct_eq(record.principal_digest.as_bytes())
-                .unwrap_u8()
-                != 1
-            {
-                return response(404, "program_activity_not_found", None);
-            }
-            let operation = match config.store.activity_operation(&activity_id) {
-                Ok(Some(value)) => value,
-                Ok(None) => return response(404, "program_activity_not_found", None),
-                Err(_) => return response(503, "persistence_unavailable", Some(5)),
-            };
-            if operation.activity_id != activity_id
-                || operation
-                    .principal
-                    .as_bytes()
-                    .ct_eq(record.principal_digest.as_bytes())
-                    .unwrap_u8()
-                    != 1
-            {
-                return response(404, "program_activity_not_found", None);
-            }
-            if operation.state == "pending" {
-                return resolve_pending_program(config, record, &operation, trace_id);
-            }
-            if operation.state != "completed" {
-                return response(409, "program_call_refused", None);
-            }
-            let body = match decode_hex(&operation.response, MAX_REQUEST) {
-                Ok(value) => value,
-                Err(_) => return response(503, "persistence_unavailable", Some(5)),
-            };
-            let value: serde_json::Value = match serde_json::from_slice(&body) {
-                Ok(value) => value,
-                Err(_) => return response(503, "persistence_unavailable", Some(5)),
-            };
-            json_response(
-                200,
-                serde_json::json!({"ok":true,"result":value,"trace":trace_id}),
-            )
-        }
-        ProductionRoute::Activity
-        | ProductionRoute::ProgramCall
-        | ProductionRoute::ProgramDeploy
-        | ProductionRoute::ProgramUpgrade
-        | ProductionRoute::ProgramWindDown
-        | ProductionRoute::ProgramSimulation => response(404, "not_found", None),
-    }
-}
-
-fn dependency_ready(
-    config: &Config,
-    endpoint: &Endpoint,
-    token: &str,
-    require_routes: bool,
-) -> bool {
-    let Ok(upstream) = config.client.request(
-        endpoint,
-        "GET",
-        "/readyz",
-        token,
-        None,
-        "application/json",
-        &[],
-    ) else {
-        return false;
-    };
-    let Ok(readiness) = serde_json::from_slice::<ReadinessResponse>(&upstream.body) else {
-        return false;
-    };
-    upstream.status == 200
-        && upstream.content_type == "application/json"
-        && readiness.ready
-        && readiness.network_id == config.network_id
-        && readiness.wire_version == config.wire_version
-        && (!require_routes || (readiness.synchronous_receipts && readiness.state_snapshot))
-}
-
-fn program_registry_ready(config: &Config) -> bool {
-    let Ok(upstream) = config.client.request(
-        &config.registry,
-        "GET",
-        "/healthz",
-        config.registry_token.as_str(),
-        None,
-        "application/json",
-        &[],
-    ) else {
-        return false;
-    };
-    let Ok(status) = serde_json::from_slice::<serde_json::Value>(&upstream.body) else {
-        return false;
-    };
-    upstream.status == 200
-        && upstream.content_type == "application/json"
-        && status["status"].as_str() == Some("ready")
-        && status["service"].as_str() == Some("program-registry")
-}
-
-fn route(config: &Config, request: &IncomingRequest) -> OutgoingResponse {
-    let program_request = programs_request_path(&request.method, &request.path);
-    let trace_id = trace(request);
-    if request.headers.contains_key("x-layerx-principal")
-        || request.headers.contains_key("x-layerx-api-key")
+    let expected_interface_digest = <[u8; 32]>::from(Sha256::digest(&interface));
+    if value
+        .get("program_id")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|value| parse_hex32(value).ok())
+        != Some(head.program_id)
+        || version != Some(head.version)
+        || abi_version != Some(head.abi_version)
+        || code_hash != Some(head.code_hash)
+        || receipt_digest != Some(head.receipt_digest)
+        || state_root != head.state_root
+        || observed_sequence != head.observed_sequence
+        || observed_at != head.observed_at
+        || valid_through != Some(head.valid_through)
+        || interface_digest != expected_interface_digest
+        || value
+            .get("verification")
+            .and_then(serde_json::Value::as_str)
+            != Some("deployment-interface-and-current-head-verified")
+        || source.is_none()
     {
-        let result = response(400, "untrusted_identity_header", None);
-        return if program_request {
-            agent_response(&trace_id, result)
-        } else {
-            result
-        };
+        return response(503, "program_registry_unverified", Some(5));
     }
-    if request.method == "GET" && request.path == "/internal/v1/principal" {
-        return authenticate_key(config, request).map_or_else(
-            |refused| refused,
-            |record| {
-                json_response(
-                    200,
-                    serde_json::json!({
-                        "ok": true,
-                        "result": { "principal_digest": record.principal_digest },
-                        "trace": trace_id,
-                    }),
-                )
+    json_response(
+        200,
+        &serde_json::json!({
+            "ok": true,
+            "result": {
+                "program_id": hex(&head.program_id),
+                "version": head.version,
+                "code_hash": hex(&head.code_hash),
+                "abi_version": head.abi_version,
+                "interface": hex(&interface),
+                "interface_digest": hex(&interface_digest),
+                "receipt_digest": hex(&head.receipt_digest),
+                "state_root": head.state_root.map(|root| hex(&root)),
+                "observed_sequence": head.observed_sequence.map(|value| value.to_string()),
+                "observed_at": head.observed_at.map(|value| value.to_string()),
+                "valid_through": head.valid_through.to_string(),
+                "source": source,
+                "verification": "deployment-interface-and-current-head-verified",
             },
-        );
-    }
-    if request.method == "GET" && request.path == "/livez" {
-        return json_response(
-            200,
-            serde_json::json!({
-                "status": "live",
-                "service": "layerx-gateway",
-                "package_semver": env!("CARGO_PKG_VERSION")
-            }),
-        );
-    }
-    if request.method == "GET" && request.path == "/readyz" {
-        let store = config.store.ready();
-        let component = dependency_ready(
-            config,
-            &config.component,
-            config.component_token.as_str(),
-            true,
-        );
-        let authority = dependency_ready(
-            config,
-            &config.authority,
-            config.authority_token.as_str(),
-            false,
-        );
-        let registry = program_registry_ready(config);
-        let ready = store && component && authority && registry;
-        return json_response(
-            if ready { 200 } else { 503 },
-            serde_json::json!({
-                "status": if ready { "ready" } else { "degraded" },
-                "service": "layerx-gateway",
-                "package_semver": env!("CARGO_PKG_VERSION"),
-                "lxp_wire_version": config.wire_version,
-                "network_id": config.network_id,
-                "components": {
-                    "durable_store": if store { "ready" } else { "unavailable" },
-                    "core_agent_boundary": if component { "ready" } else { "unavailable" },
-                    "independent_receipt_authority": if authority { "ready" } else { "unavailable" },
-                    "program_registry": if registry { "ready" } else { "unavailable" },
-                    "principal_state_boundary": "unavailable"
-                }
-            }),
-        );
-    }
-    if request.method == "GET" && request.path == "/v1/status" {
-        let gateway = config.store.ready();
-        let core = dependency_ready(
-            config,
-            &config.component,
-            config.component_token.as_str(),
-            true,
-        );
-        let authority = dependency_ready(
-            config,
-            &config.authority,
-            config.authority_token.as_str(),
-            false,
-        );
-        return json_response(
-            200,
-            serde_json::json!({
-                "ok": true,
-                "services": {
-                    "hosted_gateway": if gateway { "degraded" } else { "unavailable" },
-                    "testnet_core": if core { "available" } else { "unavailable" },
-                    "receipt_authority": if authority { "available" } else { "unavailable" },
-                    "paxeer": "not_configured"
-                },
-                "lxp_wire_version": config.wire_version,
-                "package_semver": env!("CARGO_PKG_VERSION")
-            }),
-        );
-    }
-    if request.path == "/v1/keys" || request.path.starts_with("/v1/keys/") {
-        return manage_keys(config, request);
-    }
-    let parsed = match production_route(&request.method, &request.path) {
-        Ok(value) => value,
-        Err(_) => {
-            let result = response(404, "not_found", None);
-            return if program_request {
-                agent_response(&trace_id, result)
-            } else {
-                result
-            };
-        }
-    };
-    let record = match authenticate_key(config, request) {
-        Ok(value) => value,
-        Err(error) => {
-            return if program_request {
-                agent_response(&trace_id, error)
-            } else {
-                error
-            };
-        }
-    };
-    if !permits(&record, &parsed) {
-        let result = response(403, "insufficient_scope", None);
-        return if program_request {
-            agent_response(&trace_id, result)
-        } else {
-            result
-        };
-    }
-    let result = match parsed {
-        ProductionRoute::Activity => activity(config, request, &record, &trace_id, false),
-        ProductionRoute::ProgramCall => activity(config, request, &record, &trace_id, true),
-        ProductionRoute::ProgramDeploy
-        | ProductionRoute::ProgramUpgrade
-        | ProductionRoute::ProgramWindDown => activity(config, request, &record, &trace_id, false),
-        ProductionRoute::ProgramSimulation => {
-            program_simulation(config, request, &record, &trace_id)
-        }
-        read => read_route(config, request, &record, read, &trace_id),
-    };
-    if program_request
-        && !(request.method == "POST"
-            && (request.path == "/v1/programs/call"
-                || program_lifecycle::ordinal(&request.path).is_some())
-            && (200..300).contains(&result.status))
-    {
-        agent_response(&trace_id, result)
-    } else {
-        result
-    }
+            "trace": trace_id,
+        }),
+    )
 }
-
-struct ConnectionGuard;
-
-impl Drop for ConnectionGuard {
-    fn drop(&mut self) {
-        ACTIVE_CONNECTIONS.fetch_sub(1, Ordering::AcqRel);
-    }
-}
-
-fn serve(config: &Arc<Config>, tcp: TcpStream) -> Result<(), String> {
-    tcp.set_read_timeout(Some(Duration::from_secs(10)))
-        .map_err(|error| error.to_string())?;
-    tcp.set_write_timeout(Some(Duration::from_secs(10)))
-        .map_err(|error| error.to_string())?;
-    let connection =
-        ServerConnection::new(Arc::clone(&config.tls)).map_err(|error| error.to_string())?;
-    let mut stream = StreamOwned::new(connection, tcp);
-    let request = match http::read_request(&mut stream, MAX_REQUEST) {
-        Ok(value) => value,
-        Err(_) => {
-            return http::write_response(&mut stream, &response(400, "invalid_http_request", None));
-        }
-    };
-    http::write_response(&mut stream, &route(config, &request))
-}
-
-fn run() -> Result<(), String> {
-    let config = Arc::new(config()?);
-    let listener = TcpListener::bind(config.listen).map_err(|error| error.to_string())?;
-    for incoming in listener.incoming() {
-        let tcp = incoming.map_err(|error| error.to_string())?;
-        if ACTIVE_CONNECTIONS.fetch_add(1, Ordering::AcqRel) >= MAX_CONNECTIONS {
-            ACTIVE_CONNECTIONS.fetch_sub(1, Ordering::AcqRel);
-            let _ = tcp.shutdown(std::net::Shutdown::Both);
-            continue;
-        }
-        let config = Arc::clone(&config);
-        thread::spawn(move || {
-            let _guard = ConnectionGuard;
-            let _ = serve(&config, tcp);
-        });
-    }
-    Ok(())
-}
-
-fn main() {
-    if let Err(error) = run() {
-        let _ = writeln!(std::io::stderr(), "layerx-gateway refused startup: {error}");
-        std::process::exit(1);
-    }
-}
-
 #[cfg(test)]
 mod programs_wire_tests {
     use super::{
@@ -3047,7 +3245,7 @@ mod programs_wire_tests {
     use layerx_platform_gateway::store::OperationRecord;
     use std::collections::BTreeMap;
 
-    fn selector_request(path: &str, body: serde_json::Value) -> IncomingRequest {
+    fn selector_request(path: &str, body: &serde_json::Value) -> IncomingRequest {
         IncomingRequest {
             method: "GET".to_owned(),
             path: path.to_owned(),
@@ -3067,7 +3265,7 @@ mod programs_wire_tests {
                     } else {
                         200
                     },
-                    serde_json::json!({
+                    &serde_json::json!({
                         "ok":true,
                         "result":{
                             "state":state,
@@ -3077,7 +3275,8 @@ mod programs_wire_tests {
                     }),
                 ),
             );
-            let document: serde_json::Value = serde_json::from_slice(&output.body).unwrap();
+            let document: serde_json::Value = serde_json::from_slice(&output.body)
+                .unwrap_or_else(|error| panic!("test operation failed: {error:?}"));
             let verification_status = if matches!(state, "unknown" | "pending") {
                 serde_json::json!({
                     "state":"Unverified",
@@ -3123,12 +3322,14 @@ mod programs_wire_tests {
 
         let before = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_else(|error| panic!("test operation failed: {error:?}"))
             .as_millis();
-        let observed = u128::from(now_millis().unwrap());
+        let observed = u128::from(
+            now_millis().unwrap_or_else(|error| panic!("test operation failed: {error:?}")),
+        );
         let after = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_else(|error| panic!("test operation failed: {error:?}"))
             .as_millis();
         assert!((before..=after).contains(&observed));
     }
@@ -3139,7 +3340,7 @@ mod programs_wire_tests {
             "gw-contract-test",
             json_response(
                 200,
-                serde_json::json!({
+                &serde_json::json!({
                     "ok":true,
                     "result":{
                         "program_id":"a".repeat(64),
@@ -3148,7 +3349,8 @@ mod programs_wire_tests {
                 }),
             ),
         );
-        let document: serde_json::Value = serde_json::from_slice(&output.body).unwrap();
+        let document: serde_json::Value = serde_json::from_slice(&output.body)
+            .unwrap_or_else(|error| panic!("test operation failed: {error:?}"));
         assert_eq!(
             document["verification_status"],
             serde_json::json!({
@@ -3203,9 +3405,10 @@ mod programs_wire_tests {
         for (operation, status, value, expected) in cases {
             let output = agent_response(
                 operation,
-                json_response(status, serde_json::json!({"ok":true,"result":value})),
+                json_response(status, &serde_json::json!({"ok":true,"result":value})),
             );
-            let document: serde_json::Value = serde_json::from_slice(&output.body).unwrap();
+            let document: serde_json::Value = serde_json::from_slice(&output.body)
+                .unwrap_or_else(|error| panic!("test operation failed: {error:?}"));
             assert_eq!(document["verification_status"], expected, "{operation}");
         }
 
@@ -3236,7 +3439,8 @@ mod programs_wire_tests {
             "gw-contract-test",
             response(409, "idempotency_conflict", None),
         );
-        let document: serde_json::Value = serde_json::from_slice(&output.body).unwrap();
+        let document: serde_json::Value = serde_json::from_slice(&output.body)
+            .unwrap_or_else(|error| panic!("test operation failed: {error:?}"));
         assert_eq!(
             document,
             serde_json::json!({
@@ -3284,7 +3488,8 @@ mod programs_wire_tests {
             continuation: "00ff".to_owned(),
         };
         let output = pending_program_response(&operation, "gw-contract-test");
-        let document: serde_json::Value = serde_json::from_slice(&output.body).unwrap();
+        let document: serde_json::Value = serde_json::from_slice(&output.body)
+            .unwrap_or_else(|error| panic!("test operation failed: {error:?}"));
         assert_eq!(document["result"]["retained_signed_activity"], "00ff");
 
         let legacy = OperationRecord {
@@ -3292,7 +3497,8 @@ mod programs_wire_tests {
             ..operation
         };
         let output = pending_program_response(&legacy, "gw-contract-test");
-        let document: serde_json::Value = serde_json::from_slice(&output.body).unwrap();
+        let document: serde_json::Value = serde_json::from_slice(&output.body)
+            .unwrap_or_else(|error| panic!("test operation failed: {error:?}"));
         assert!(document["result"].get("retained_signed_activity").is_none());
     }
 
@@ -3301,7 +3507,7 @@ mod programs_wire_tests {
         let program = "a".repeat(64);
         let discovery = selector_request(
             &format!("/v1/programs/registry/{program}"),
-            serde_json::json!({
+            &serde_json::json!({
                 "program_id":program.as_str(),
                 "requested_verification_level":"sequencer-signed",
             }),
@@ -3312,7 +3518,7 @@ mod programs_wire_tests {
         let activity = "c".repeat(64);
         let receipt = selector_request(
             &format!("/v1/programs/receipts/by-idempotency/{idempotency}"),
-            serde_json::json!({
+            &serde_json::json!({
                 "idempotency_key":idempotency.as_str(),
                 "expected_activity_id":activity.as_str(),
                 "requested_verification_level":"sequencer-signed",
@@ -3326,7 +3532,7 @@ mod programs_wire_tests {
 
         let lookup = selector_request(
             &format!("/v1/programs/activities/{activity}"),
-            serde_json::json!({
+            &serde_json::json!({
                 "activity_id":activity.as_str(),
                 "requested_verification_level":"sequencer-signed",
             }),

@@ -2261,8 +2261,7 @@ fn dependency_ready(
             "/readyz",
             token,
             None,
-            "application/json",
-            &[],
+            ("application/json", &[]),
         )
         .is_ok_and(|response| response.status == 200 && response.content_type == "application/json")
 }
@@ -2276,8 +2275,7 @@ fn hosted_ready(config: &Config) -> bool {
             "/readyz",
             "readiness",
             None,
-            "application/json",
-            &[],
+            ("application/json", &[]),
         )
         .is_ok_and(|response| response.status == 200 && response.content_type == "application/json")
 }
