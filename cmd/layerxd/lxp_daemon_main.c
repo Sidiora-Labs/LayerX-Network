@@ -5,6 +5,55 @@
 #include <stdio.h>
 #include <string.h>
 
+lxp_result lxp_daemon_queue_sequence_locked(
+    const lxp_daemon *daemon, size_t index, uint64_t *sequence)
+{
+    uint64_t offset = (uint64_t)index;
+    if (daemon == NULL || sequence == NULL || index > LXP_DAEMON_QUEUE_CAPACITY)
+        return LXP_ERR_NON_CANONICAL;
+    if (daemon->reserved_batch_count != 0U && index >= daemon->reserved_batch_count)
+        ++offset;
+    if (offset >= UINT64_MAX - daemon->next_sequence)
+        return LXP_ERR_SEQUENCE_GAP;
+    *sequence = daemon->next_sequence + offset;
+    return LXP_OK;
+}
+
+lxp_result lxp_daemon_reserve_batch_maintenance(lxp_daemon *daemon, size_t count)
+{
+    lxp_result status = LXP_OK;
+    size_t index;
+    uint64_t tail;
+    if (daemon == NULL || count == 0U || count > LXP_DAEMON_MAX_BATCH_ACTIVITIES)
+        return LXP_ERR_NON_CANONICAL;
+    if (pthread_mutex_lock(&daemon->mutex) != 0) return LXP_ERR_IO;
+    if (daemon->reserved_batch_count != 0U) {
+        status = daemon->reserved_batch_count == count ? LXP_OK : LXP_ERR_CONTEXT_MISMATCH;
+        goto done;
+    }
+    if (count > daemon->queue_count || daemon->persist_maintenance_reservation == NULL) {
+        status = LXP_ERR_CONTEXT_MISMATCH;
+        goto done;
+    }
+    status = lxp_daemon_queue_sequence_locked(daemon, daemon->queue_count, &tail);
+    if (status != LXP_OK || tail == UINT64_MAX - 1U) {
+        status = LXP_ERR_SEQUENCE_GAP;
+        goto done;
+    }
+    daemon->reserved_batch_count = count;
+    for (index = count; index < daemon->queue_count; ++index)
+        ++daemon->queue[(daemon->queue_head + index) % LXP_DAEMON_QUEUE_CAPACITY].global_sequence;
+    status = daemon->persist_maintenance_reservation(daemon->persist_admission_context);
+    if (status != LXP_OK) {
+        daemon->accepting = false;
+        daemon->failure = LXP_FATAL_INVARIANT;
+        status = LXP_FATAL_INVARIANT;
+    }
+done:
+    if (pthread_mutex_unlock(&daemon->mutex) != 0) status = LXP_FATAL_INVARIANT;
+    return status;
+}
+
 static void release_queue_locked(lxp_daemon *daemon)
 {
     size_t index;
@@ -25,6 +74,7 @@ static void release_queue_locked(lxp_daemon *daemon)
     daemon->queue_head = 0U;
     daemon->queue_count = 0U;
     daemon->queue_bytes = 0U;
+    daemon->reserved_batch_count = 0U;
 }
 
 static void *executor_run(void *argument)
@@ -48,6 +98,8 @@ static void *executor_run(void *argument)
         activity_count = daemon->apply_batch == NULL ? 1U :
             (daemon->queue_count < LXP_DAEMON_MAX_BATCH_ACTIVITIES ?
                  daemon->queue_count : LXP_DAEMON_MAX_BATCH_ACTIVITIES);
+        if (daemon->reserved_batch_count != 0U)
+            activity_count = daemon->reserved_batch_count;
         if (UINT64_MAX - daemon->next_sequence == 0U) {
             daemon->failure = LXP_ERR_SEQUENCE_GAP;
             daemon->accepting = false;
@@ -75,7 +127,9 @@ static void *executor_run(void *argument)
         if (daemon->apply_batch == NULL) consumed_count = 1U;
         (void)pthread_mutex_lock(&daemon->mutex);
         if (status == LXP_OK &&
-            (consumed_count == 0U || consumed_count > activity_count))
+            (consumed_count == 0U || consumed_count > activity_count ||
+             (daemon->reserved_batch_count != 0U &&
+              daemon->reserved_batch_count != consumed_count)))
             status = LXP_FATAL_INVARIANT;
         if (status != LXP_OK) {
             (void)fprintf(stderr, "layerxd: execution failed at sequence %llu with result %d\n",
@@ -103,6 +157,10 @@ static void *executor_run(void *argument)
                 LXP_DAEMON_QUEUE_CAPACITY;
             daemon->queue_count -= consumed_count;
             daemon->next_sequence += consumed_count;
+            if (daemon->reserved_batch_count != 0U) {
+                ++daemon->next_sequence;
+                daemon->reserved_batch_count = 0U;
+            }
             if (!daemon->accepting) {
                 daemon->stop_requested = true;
                 release_queue_locked(daemon);
@@ -254,11 +312,10 @@ lxp_result lxp_daemon_submit(
         return pthread_mutex_unlock(&daemon->mutex) == 0 ?
             LXP_ERR_LENGTH_LIMIT : LXP_FATAL_INVARIANT;
     }
-    if (daemon->queue_count >= UINT64_MAX - daemon->next_sequence) {
-        return pthread_mutex_unlock(&daemon->mutex) == 0 ?
-            LXP_ERR_SEQUENCE_GAP : LXP_FATAL_INVARIANT;
+    status = lxp_daemon_queue_sequence_locked(daemon, daemon->queue_count, &global_sequence);
+    if (status != LXP_OK) {
+        return pthread_mutex_unlock(&daemon->mutex) == 0 ? status : LXP_FATAL_INVARIANT;
     }
-    global_sequence = daemon->next_sequence + daemon->queue_count;
     retained = (uint8_t *)malloc(activity_length);
     if (retained == NULL) {
         return pthread_mutex_unlock(&daemon->mutex) == 0 ?

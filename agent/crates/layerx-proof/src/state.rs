@@ -210,7 +210,11 @@ pub fn verify_nested_account(
     authorization: &SequencerAuthorization,
 ) -> Result<VerifiedAccountState, AccountProofError> {
     let (account, header) = verify_account_root_chain(
-        account_value, expected_account, expected_asset, proof, authorization,
+        account_value,
+        expected_account,
+        expected_asset,
+        proof,
+        authorization,
     )?;
     verify_receipt(
         &proof.receipt_bytes,
@@ -242,7 +246,6 @@ pub fn verify_nested_account(
         observed_at_ms: receipt.timestamp(),
     })
 }
-
 
 fn verify_account_root_chain(
     account_value: &[u8],
@@ -298,13 +301,19 @@ pub struct VerifiedMaintenanceAccountState {
 
 impl VerifiedMaintenanceAccountState {
     #[must_use]
-    pub const fn account(&self) -> &CanonicalAccount { &self.account }
+    pub const fn account(&self) -> &CanonicalAccount {
+        &self.account
+    }
 
     #[must_use]
-    pub const fn header(&self) -> &VerifiedBatchHeader { &self.header }
+    pub const fn header(&self) -> &VerifiedBatchHeader {
+        &self.header
+    }
 
     #[must_use]
-    pub const fn maintenance_digest(&self) -> [u8; 32] { self.maintenance_digest }
+    pub const fn maintenance_digest(&self) -> [u8; 32] {
+        self.maintenance_digest
+    }
 }
 
 /// Explicitly verifies the final occupancy maintenance leaf and account roots.
@@ -326,14 +335,20 @@ pub fn verify_nested_account_maintenance(
     use layerx_wire::maintenance::decode_occupancy_maintenance;
 
     let (account, header) = verify_account_root_chain(
-        account_value, expected_account, expected_asset, proof, authorization,
+        account_value,
+        expected_account,
+        expected_asset,
+        proof,
+        authorization,
     )?;
     let committed = header.header();
     let record = decode_occupancy_maintenance(&proof.receipt_bytes)
         .map_err(|_| AccountProofError::ReceiptEncoding)?;
     if !protocol_version_uses_occupancy(committed.protocol_version())
         || committed.first_sequence() == 0
-        || committed.first_sequence().checked_add(u64::from(activity_count))
+        || committed
+            .first_sequence()
+            .checked_add(u64::from(activity_count))
             != Some(committed.last_sequence())
         || activity_count.checked_add(1) != Some(proof.receipt_proof.leaf_count())
         || proof.receipt_proof.leaf_index() != activity_count
@@ -346,18 +361,29 @@ pub fn verify_nested_account_maintenance(
     {
         return Err(AccountProofError::ReceiptBinding);
     }
-    verify_receipt(&proof.receipt_bytes, &proof.receipt_proof,
-        &proof.header_bytes, &proof.header_signature, authorization)
-        .map_err(AccountProofError::Header)?;
+    verify_receipt(
+        &proof.receipt_bytes,
+        &proof.receipt_proof,
+        &proof.header_bytes,
+        &proof.header_signature,
+        authorization,
+    )
+    .map_err(AccountProofError::Header)?;
     let settlement = OccupancySettlement::canonical_decode(record.settlement_evidence)
         .map_err(|_| AccountProofError::ReceiptEncoding)?;
     let usage = settlement.usage();
     let schedule = settlement.fee_schedule();
-    let prices = [schedule.cpu_price(), schedule.memory_byte_price(),
-        schedule.storage_read_byte_price(), schedule.storage_write_byte_price(),
-        schedule.output_value_price(), schedule.output_byte_price(),
-        schedule.occupancy_byte_batch_price()];
-    let payers = settlement.payer_dispositions()
+    let prices = [
+        schedule.cpu_price(),
+        schedule.memory_byte_price(),
+        schedule.storage_read_byte_price(),
+        schedule.storage_write_byte_price(),
+        schedule.output_value_price(),
+        schedule.output_byte_price(),
+        schedule.occupancy_byte_batch_price(),
+    ];
+    let payers = settlement
+        .payer_dispositions()
         .map_err(|_| AccountProofError::ReceiptBinding)?;
     if settlement.canonical_evidence() != record.settlement_evidence
         || settlement.batch() != record.batch_number
@@ -367,18 +393,24 @@ pub fn verify_nested_account_maintenance(
         || usage.fee_units != record.fee_units
         || usage.paid_fee_units != record.paid_fee_units
         || usage.arrears_fee_units != record.arrears_fee_units
-        || settlement.transfer_root(record.occupancy_asset_id)
-            .map_err(|_| AccountProofError::ReceiptBinding)? != record.transfer_set_root
+        || settlement
+            .transfer_root(record.occupancy_asset_id)
+            .map_err(|_| AccountProofError::ReceiptBinding)?
+            != record.transfer_set_root
         || payers.len() != record.payers.len()
-        || payers.iter().zip(&record.payers).any(|((principal, amounts), payer)| {
-            principal.bytes() != payer.principal
-                || *amounts != (payer.due, payer.paid, payer.arrears, payer.frozen)
-        })
+        || payers
+            .iter()
+            .zip(&record.payers)
+            .any(|((principal, amounts), payer)| {
+                principal.bytes() != payer.principal
+                    || *amounts != (payer.due, payer.paid, payer.arrears, payer.frozen)
+            })
     {
         return Err(AccountProofError::ReceiptBinding);
     }
     Ok(VerifiedMaintenanceAccountState {
-        account, header,
+        account,
+        header,
         maintenance_digest: Sha256::digest(&proof.receipt_bytes).into(),
     })
 }
