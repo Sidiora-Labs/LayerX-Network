@@ -3145,3 +3145,8 @@ test-program-admission: $(BUILD_DIR)/tests/lxp_test_program_admission $(BUILD_DI
 .PHONY: test-program-simulate
 test-program-simulate: $(BUILD_DIR)/tests/lxp_test_program_admission $(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build
 	bash tests/daemon/program-admission.sh $(BUILD_DIR) simulate
+
+BRIDGE_PYTHON ?= python3
+.PHONY: test-bridge-credit
+test-bridge-credit: $(BUILD_DIR)/tests/bridge/sign-credit $(BUILD_DIR)/tests/bridge/test-credit build/bin/layerx-genesis-build
+	$(BRIDGE_PYTHON) tests/bridge/qualify_credit.py --build-dir $(BUILD_DIR)
