@@ -226,6 +226,20 @@ fn try_evidence_authority_with_sequencer(
     policy: TestAuthorityPolicy<'_>,
     sequencer_id: Option<[u8; 32]>,
 ) -> Result<EvidenceAuthority, GateError> {
+    try_evidence_authority_mode(policy, sequencer_id, false)
+}
+
+pub fn try_evidence_authority_after_restart(
+    policy: TestAuthorityPolicy<'_>,
+) -> Result<EvidenceAuthority, GateError> {
+    try_evidence_authority_mode(policy, None, true)
+}
+
+fn try_evidence_authority_mode(
+    policy: TestAuthorityPolicy<'_>,
+    sequencer_id: Option<[u8; 32]>,
+    restart: bool,
+) -> Result<EvidenceAuthority, GateError> {
     let authority_path = directory("evidence-authority").with_extension("csv");
     let mut authority_source = "layerx-sequencer-authority-v1\n".to_owned();
     for record in policy.records {
@@ -271,7 +285,7 @@ fn try_evidence_authority_with_sequencer(
         sequencer_authority_source: authority_path,
     };
     let mut gate = Gate::new(&config)?;
-    real_authority::authorize(&mut gate, policy, sequencer_id)?;
+    real_authority::authorize(&mut gate, policy, sequencer_id, restart.then_some(&config))?;
     Ok(gate
         .evidence_authority()
         .unwrap_or_else(|error| panic!("write-ready evidence authority: {error:?}"))
