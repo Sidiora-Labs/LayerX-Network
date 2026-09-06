@@ -963,7 +963,7 @@ observed = "Current identity qualification passes 15 unit tests and 7 real TLS s
 assumption = "The requested test/spec reconciliation is authorized by the owner. Source qualification is proven; graph completion is not. No force option was used and task status remains in_progress."
 severity = "blocker"
 
-[observation.6.11.1]
+[observation.6.11.1b]
 task = "6.11"
 file = "agent/crates/layerx-agentd/tests/support/mod.rs"
 symbol = "evidence_authority_with_sequencer"
@@ -971,7 +971,7 @@ observed = "All six language SDK receipt/native-call suites and generators passe
 assumption = "The successful bounded SDK and native transport gates do not qualify the failed aggregate or strict lint gates. Synthetic authority was not upgraded by adding a claimed capability, and no test, bound or lint was disabled."
 severity = "blocker"
 
-[observation.6.8.1]
+[observation.6.8.1b]
 task = "6.8"
 file = "platform/hosted/internal/src/events.rs"
 symbol = "layerx-kms layerx-event-source"
@@ -1035,7 +1035,7 @@ observed = "The selected node image built successfully from the restored pinned 
 assumption = "The image-build part of observation 6.6.4 is resolved. Source contains uncommitted fixes, so this is a bounded development observation, not an immutable-revision release gate. Container real-chain bootstrap and cluster qualification are separate pending gates."
 severity = "note"
 
-[observation.6.11.2]
+[observation.6.11.2b]
 task = "6.11"
 file = "cmd/layerxd/lxp_daemon_process.c"
 symbol = "lxp_daemon_process_batch"
