@@ -1192,4 +1192,50 @@ file = "agent/crates/layerx-agentd/tests/support/real_authority.rs"
 symbol = "try_evidence_authority_after_restart restart_authority"
 observed = "The real protocol-2 restart test exits 0 after restarting the sequencer and authority replica from retained logs, reconstructing the daemon gate, refusing evidence before a fresh handshake, and recovering identical signed ProgramCall receipts with verified replica inclusion. make agent-test exits 0 across the workspace. Final subscription and tenant-resolution refactors also pass their focused rerun. Strict all-target Clippy exits 0 for layerx-agentd and layerx-sdk. The receipt generator emits grouped Rust literals with unchanged numeric values; regenerated receipt output matches the branch byte-for-byte, and make platform-sdk-check exits 0 after the generated API and receipt digest updates. Changed Rust formatting and git diff checks exit 0. Logs: qual-logs/restart-third.log, agent-test-third.log, test-final-refactors-third.log, clippy-owned-third-complete.log, sdk-generate-third.log, sdk-check-third.log, format-third-final.log and diff-third-final.log."
 assumption = "Observations 6.11.16 through 6.11.18 are resolved within the repaired paths. The aggregate make agent-lint target remains blocked solely by observation 6.11.19; the separately passing dependency-policy command does not establish execution of the Make recipe after Clippy. Native evidence uses LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin and disposable local fixture processes."
+[observation.6.4.6]
+task = "6.4"
+file = "agent/crates/layerx-types/src/intent.rs"
+symbol = "ProgramCall::canonical_payload canonical_payload_matches_shared_golden_vector"
+observed = "ProgramCall retains the documented protocol-1/2 legacy domain-prefixed encoding and an exact legacy golden vector. Its fields cannot represent guest ABI, entrypoint, response capacity, all seven resource ceilings, parameterized native capabilities or an access declaration. src/modules/programs/call.c lxp_programs_call_decode consumes these fields in a 106-byte fixed header followed by entrypoint, calldata, capabilities and access declaration. The current boundary signed_program_call already uses layerx_types::program_call::NativeProgramCall and start_boundary hard-links a per-cluster executable rather than copying over an executing binary. The older observation 6.4.4 is not a description of these current harness paths. native-program-call-v3.json is Python struct.pack output, and receipt-programs-executed-v3.json is absent."
+assumption = "Changing the legacy total encoder requires an explicit migration contract for the missing native fields and its existing consumers. The legacy encoder and golden assertion remain intact. A CALL vector emitted by the C encoder, including parameterized capabilities and nonempty calldata, is required for the requested differential qualification."
+severity = "blocker"
+
+[observation.6.4.7]
+task = "6.4"
+file = "platform/hosted/agent-boundary/src/main.rs"
+symbol = "simulate_route receipt_route check_receipt_routes"
+observed = "req.14 ac_5 distinguishes typed daemon refusals mapped to 4xx from unavailable capabilities mapped to 503; task.6.4 do_2 specifies 503 capability_unavailable when LNI cannot simulate. Current simulation code maps absent capability, unsupported interface and core refusal class 3 to 503 capability_unavailable, and other typed refusals through result_refusal. The simulation test retains its retry expectation of 503 before success. Current receipt_route returns result-wrapped public receipts for Plane::Gateway and bare internal receipts for Plane::Registry; check_receipt_routes explicitly asserts both shapes."
+assumption = "Neither the simulation assertion nor the public/internal receipt wrappers were changed. A module_disabled refusal without its native refusal class does not establish whether the 503 retry assertion or typed 4xx mapping is the conflicting side. The public wrapper currently agrees with task.6.4 do_2; a bare public consumer would require a separate consumer contract change."
+severity = "note"
+
+[observation.6.4.8]
+task = "6.4"
+file = "platform/hosted/agent-boundary/tests/real_node/lifecycle.rs"
+symbol = "escrow_operations escrow_wasm local_gateway_lifecycle"
+observed = "The boundary escrow operation list deploys, registers an account, calls, upgrades, routes, deprecates and exits, but does not call after upgrade. The gateway local harness explicitly covers deploy, upgrade and deprecate without CALL occupancy or custody-funded execution. escrow_wasm requires programs/sdk/rust/examples/escrow/target/wasm32-unknown-unknown/release/layerx_reference_escrow.wasm. Its absence caused four failures in qual-logs/real-node-original.log; building the existing guest source with cargo build --offline --locked --manifest-path programs/sdk/rust/examples/escrow/Cargo.toml --target wasm32-unknown-unknown --release passed, qual-logs/escrow-guest-build.log. Gateway submit handling still accepts application/json for ProgramCall and generic activities while requiring application/octet-stream for lifecycle ordinals."
+assumption = "These existing suites do not establish deploy-call-upgrade-call-wind-down-exit across all requested servers or octet-stream-only mutation handling. The complete cross-surface implementation remains required. No missing execution or rejected media-type coverage is claimed."
+severity = "blocker"
+
+[observation.6.4.9]
+task = "6.4"
+file = "platform/emulator/src/main.rs"
+symbol = "program_call move_commit encode_recovery_snapshot decode_recovery_snapshot"
+observed = "Strict all-target all-feature clippy across the owned platform packages exits 101 with 24 emulator library diagnostics, including long functions, argument counts, unchecked narrowing casts and recovery serialization checks; qual-logs/owned-clippy.log. The service and CLI selection also exits 101 with 44 gateway library diagnostics and an additional test unwrap diagnostic, plus emulator diagnostics through the CLI dependency; qual-logs/services-clippy.log. The types/SDK strict all-target all-feature selection exits 101 on 18 layerx-client dependency diagnostics; qual-logs/agent-owned-clippy.log. make agent-lint exits 2 with layerx-client library and test diagnostics; qual-logs/agent-lint.log."
+assumption = "Full strict lint is not qualified. Emulator and gateway repairs remain unfinished within the requested scope. Client dependency changes require its owner. Boundary simulation transport and receipt-assertion extraction do not qualify these other crates, and no lint level or assertion was relaxed."
+severity = "blocker"
+
+[observation.6.4.10]
+task = "6.4"
+file = "agent/sdk/python/layerx_sdk/program_wire.py"
+symbol = "decode_and_verify_program_terminal programs-check-executed-fixture"
+observed = "make programs-check-capability-fixture and make programs-check-native-lifecycle-fixtures each exit 0, with byte-identical generated fixtures; qual-logs/capability-fixture.log and qual-logs/lifecycle-fixtures.log. make programs-check-native-lifecycle-fixtures programs-check-executed-fixture exits 2: the real C encoder runs, but generate_executed_program_fixture.py calls the Python terminal verifier which raises ValueError invalid transfer authority presence at program_wire.py:258; qual-logs/native-fixtures.log. The combined ABI command exits 2 at platform-emulator-conformance because its required URL and activity corpus are unset; qual-logs/abi2-qualification.log. make platform-test-sdks exits 2 at platform-sample-dependencies-ready because build/platform-python/bin/python is absent; qual-logs/platform-test-sdks.log."
+assumption = "The Python verifier/native terminal disagreement requires their owners; neither check was weakened and the executed receipt fixture was not synthesized. Fixture codec parity does not establish guest ABI 2 runtime execution. Emulator conformance needs a real testnet endpoint and activity corpus, and the SDK aggregate needs the declared sample dependency environment."
+severity = "blocker"
+
+[observation.6.4.11]
+task = "6.4"
+file = "platform/hosted/agent-boundary/tests/real_node.rs"
+symbol = "check_simulation_receipt simulate_activity cluster_artifacts"
+observed = "The boundary simulation transport and receipt assertions were extracted into helpers without removing checks. Boundary and core harnesses accept LAYERX_TEST_NATIVE_BIN_DIR and retain their worktree build/bin default. Strict all-target all-feature boundary/core clippy exits 0, qual-logs/boundary-core-clippy.log. Core tests against /root/Layerx-protocol/build/bin pass 6 of 6, qual-logs/core-original.log. The complete boundary suite with the existing-source escrow guest passes 8 and fails 2 because custody Python dependencies are absent, qual-logs/real-node-with-guest.log. Repository-declared bridge Python dependencies were then installed locally, and native sign-credit/test-credit helpers built without source edits; qual-logs/bridge-dependencies.log and qual-logs/bridge-helper-build.log, each exit 0. The two funded escrow tests pass against the supplied native binaries after those prerequisites, qual-logs/funded-escrow-with-helpers.log, exit 0. The final complete boundary suite passes all 10 tests with those prerequisites, qual-logs/real-node-qualified-original.log, exit 0."
+assumption = "These bounded results do not complete strict lint across every requested crate or the full requested lifecycle. The simulation refusal/replay and public/internal receipt-wrapper assertions remain intact."
 severity = "note"
