@@ -229,7 +229,7 @@ pub enum VerifiedProofBundle {
     Account {
         canonical_bytes: Vec<u8>,
         activity_id: [u8; 32],
-        verified: VerifiedAccountState,
+        verified: Box<VerifiedAccountState>,
         signed_header: SignedHeader,
     },
 }
@@ -318,6 +318,10 @@ impl SignedHeader {
     }
 
     /// Returns the batch number from the already verified canonical header.
+    ///
+    /// # Errors
+    ///
+    /// Returns `EvidenceError::Malformed` when the canonical header cannot be decoded.
     pub fn batch_number(&self) -> Result<u64, EvidenceError> {
         decode_batch_header(&self.canonical_bytes)
             .map(|header| header.batch_number())
@@ -365,6 +369,10 @@ impl From<SchemaError> for EvidenceError {
 }
 
 /// Retrieves and independently verifies one durable finalized checkpoint.
+///
+/// # Errors
+///
+/// Refuses malformed selectors, transport failures and invalid checkpoint, bonded-set or settlement evidence.
 pub fn checkpoint(
     transport: &mut dyn FrameTransport,
     selector: CheckpointSelector,
@@ -420,6 +428,10 @@ pub fn checkpoint(
 }
 
 /// Registers one locally verified evidence bundle through additive LNI tags 28/29.
+///
+/// # Errors
+///
+/// Refuses transport failures, malformed acknowledgements and registration mismatches.
 pub fn register_finality_evidence(
     transport: &mut dyn FrameTransport,
     evidence: &FinalityEvidenceCandidate,
@@ -461,7 +473,10 @@ pub fn register_finality_evidence(
 }
 
 /// Retrieves and verifies an activity, receipt, or nested account proof.
-#[allow(clippy::too_many_arguments)]
+///
+/// # Errors
+///
+/// Refuses malformed selectors, transport failures and invalid or mismatched activity, receipt or account proofs.
 pub fn proof_bundle(
     transport: &mut dyn FrameTransport,
     selector: ProofBundleSelector,
@@ -502,38 +517,23 @@ pub fn proof_bundle(
         return Err(EvidenceError::Unavailable);
     }
     if kind == 2 {
-        let account = account_id.ok_or(EvidenceError::Malformed)?;
-        let decoded = decode_nested_evidence(
-            &response.proof,
-            context.expected_protocol_version,
-            context.expected_network_id,
-        )?;
-        if decoded.selector != RootSelector::Latest || decoded.proof.account_id != account {
-            return Err(EvidenceError::SelectorMismatch);
-        }
-        let authorization = decoded.signed_header.pinned_key_authorization(
-            context.handshake_sequencer_key,
-            context.expected_protocol_version,
-            context.expected_network_id,
-        )?;
-        let verified = verify_nested_account(
-            &response.payload,
-            account,
-            None,
-            &decoded.proof,
-            &authorization,
-        )
-        .map_err(EvidenceError::Account)?;
-        if verified.receipt_activity_id() != target_activity_id {
-            return Err(EvidenceError::SelectorMismatch);
-        }
-        return Ok(VerifiedProofBundle::Account {
-            canonical_bytes: response.payload,
-            activity_id: target_activity_id,
-            verified,
-            signed_header: decoded.signed_header,
-        });
+        return account_proof_bundle(
+            response,
+            account_id.ok_or(EvidenceError::Malformed)?,
+            target_activity_id,
+            context,
+        );
     }
+    inclusion_proof_bundle(response, kind, target_activity_id, context, registry)
+}
+
+fn inclusion_proof_bundle(
+    response: Response,
+    kind: u8,
+    target_activity_id: [u8; 32],
+    context: EvidenceContext,
+    registry: &ModuleRegistry,
+) -> Result<VerifiedProofBundle, EvidenceError> {
     let mut reader = Reader::new(&response.proof);
     if reader.u16()? != WIRE_VERSION || reader.u8()? != kind {
         return Err(EvidenceError::Malformed);
@@ -601,6 +601,44 @@ pub fn proof_bundle(
         }
         _ => Err(EvidenceError::Malformed),
     }
+}
+
+fn account_proof_bundle(
+    response: Response,
+    account: [u8; 32],
+    target_activity_id: [u8; 32],
+    context: EvidenceContext,
+) -> Result<VerifiedProofBundle, EvidenceError> {
+    let decoded = decode_nested_evidence(
+        &response.proof,
+        context.expected_protocol_version,
+        context.expected_network_id,
+    )?;
+    if decoded.selector != RootSelector::Latest || decoded.proof.account_id != account {
+        return Err(EvidenceError::SelectorMismatch);
+    }
+    let authorization = decoded.signed_header.pinned_key_authorization(
+        context.handshake_sequencer_key,
+        context.expected_protocol_version,
+        context.expected_network_id,
+    )?;
+    let verified = verify_nested_account(
+        &response.payload,
+        account,
+        None,
+        &decoded.proof,
+        &authorization,
+    )
+    .map_err(EvidenceError::Account)?;
+    if verified.receipt_activity_id() != target_activity_id {
+        return Err(EvidenceError::SelectorMismatch);
+    }
+    Ok(VerifiedProofBundle::Account {
+        canonical_bytes: response.payload,
+        activity_id: target_activity_id,
+        verified: Box::new(verified),
+        signed_header: decoded.signed_header,
+    })
 }
 
 pub(crate) struct DecodedNestedEvidence {
@@ -780,8 +818,8 @@ fn check_checkpoint_bytes(
     expected_protocol_version: u16,
     expected_network_id: u32,
 ) -> Result<CheckedCheckpoint, EvidenceError> {
-    let checkpoint = decode_checkpoint_material(&checkpoint_bytes)?;
-    let context = decode_checkpoint_context(&context_bytes)?;
+    let checkpoint = decode_checkpoint_material(checkpoint_bytes)?;
+    let context = decode_checkpoint_context(context_bytes)?;
     let header = decode_batch_header(checkpoint.certificate.checkpoint().header_bytes())
         .map_err(|_| EvidenceError::Malformed)?;
     if expected_protocol_version == 0
@@ -817,7 +855,7 @@ fn check_checkpoint_bytes(
     {
         return Err(EvidenceError::Settlement);
     }
-    let (keys, timely_eligible) = context.bonded_keys(&checkpoint.certificate)?;
+    let (keys, timely_eligible) = context.bonded_keys(&checkpoint.certificate);
     if timely_eligible < context.requirements.threshold {
         return Err(EvidenceError::Requirements);
     }
@@ -943,7 +981,7 @@ struct SignerAuthorization {
 struct Bond {
     guarantor_id: [u8; 32],
     public_key: [u8; 33],
-    bond: u128,
+    amount: u128,
     joined_epoch: u64,
     removed_epoch: u64,
     ejected_at_version: u64,
@@ -982,10 +1020,7 @@ struct CheckpointContextMaterial {
 }
 
 impl CheckpointContextMaterial {
-    fn bonded_keys(
-        &self,
-        certificate: &Certificate,
-    ) -> Result<(Vec<GuarantorKey>, usize), EvidenceError> {
+    fn bonded_keys(&self, certificate: &Certificate) -> (Vec<GuarantorKey>, usize) {
         let epoch = self.requirements.checkpoint_epoch;
         let mut keys = Vec::with_capacity(self.bonds.len());
         let mut timely_eligible = 0;
@@ -1005,7 +1040,7 @@ impl CheckpointContextMaterial {
                 && bond.ejected_at_version == 0
                 && bond.joined_epoch <= epoch
                 && (bond.removed_epoch == 0 || bond.removed_epoch > epoch)
-                && bond.bond >= self.requirements.minimum_bond;
+                && bond.amount >= self.requirements.minimum_bond;
             keys.push(GuarantorKey::new(
                 bond.guarantor_id,
                 signer.unwrap_or(bond.public_key),
@@ -1021,7 +1056,7 @@ impl CheckpointContextMaterial {
                     && bond.ejected_at_version == 0
                     && bond.joined_epoch <= epoch
                     && (bond.removed_epoch == 0 || bond.removed_epoch > epoch)
-                    && bond.bond >= self.requirements.minimum_bond
+                    && bond.amount >= self.requirements.minimum_bond
                     && bond.signers.iter().any(|authorization| {
                         authorization.active_from_epoch <= epoch
                             && (authorization.active_until_epoch == 0
@@ -1033,7 +1068,7 @@ impl CheckpointContextMaterial {
                 timely_eligible += 1;
             }
         }
-        Ok((keys, timely_eligible))
+        (keys, timely_eligible)
     }
 }
 
@@ -1053,6 +1088,63 @@ fn decode_checkpoint_context(bytes: &[u8]) -> Result<CheckpointContextMaterial, 
     {
         return Err(EvidenceError::BondedSet);
     }
+    let bonds = decode_bonds(&mut reader, count, set_version)?;
+    let checkpoint_epoch = reader.u64()?;
+    let challenge_window_end_ms = reader.u64()?;
+    let checkpoint_deadline_ms = reader.u64()?;
+    let now_ms = reader.u64()?;
+    let threshold = usize::from(reader.u8()?);
+    let minimum_bond = reader.u128()?;
+    let requirement_flags = reader.u8()?;
+    if checkpoint_epoch == 0
+        || threshold == 0
+        || threshold > MAX_GUARANTORS
+        || requirement_flags & !0x03 != 0
+    {
+        return Err(EvidenceError::Requirements);
+    }
+    let checkpoint_id = reader.array()?;
+    let resulting_state_root = reader.array()?;
+    let batch_number = reader.u64()?;
+    let chain_id = reader.u64()?;
+    let contract = reader.array()?;
+    let reference = reader
+        .length_prefixed_u16(MAX_SETTLEMENT_REFERENCE_BYTES)?
+        .to_vec();
+    reader.finish()?;
+    if reference.len() != SETTLEMENT_REFERENCE_BYTES {
+        return Err(EvidenceError::Settlement);
+    }
+    Ok(CheckpointContextMaterial {
+        expected_registration_count,
+        set_version,
+        bonds,
+        requirements: Requirements {
+            checkpoint_epoch,
+            challenge_window_end_ms,
+            checkpoint_deadline_ms,
+            now_ms,
+            threshold,
+            minimum_bond,
+            availability_answered: requirement_flags & 1 != 0,
+            equivocation_detected: requirement_flags & 2 != 0,
+        },
+        registration: Registration {
+            checkpoint_id,
+            resulting_state_root,
+            batch_number,
+            chain_id,
+            contract,
+            reference,
+        },
+    })
+}
+
+fn decode_bonds(
+    reader: &mut Reader<'_>,
+    count: usize,
+    set_version: u64,
+) -> Result<Vec<Bond>, EvidenceError> {
     let mut bonds = Vec::with_capacity(count);
     let mut prior_id = None;
     let mut prior_bond_signer_keys = BTreeSet::new();
@@ -1123,7 +1215,7 @@ fn decode_checkpoint_context(bytes: &[u8]) -> Result<CheckpointContextMaterial, 
         bonds.push(Bond {
             guarantor_id,
             public_key,
-            bond,
+            amount: bond,
             joined_epoch,
             removed_epoch,
             ejected_at_version,
@@ -1135,55 +1227,7 @@ fn decode_checkpoint_context(bytes: &[u8]) -> Result<CheckpointContextMaterial, 
         prior_bond_signer_keys.extend(bond_signer_keys);
         prior_id = Some(guarantor_id);
     }
-    let checkpoint_epoch = reader.u64()?;
-    let challenge_window_end_ms = reader.u64()?;
-    let checkpoint_deadline_ms = reader.u64()?;
-    let now_ms = reader.u64()?;
-    let threshold = usize::from(reader.u8()?);
-    let minimum_bond = reader.u128()?;
-    let requirement_flags = reader.u8()?;
-    if checkpoint_epoch == 0
-        || threshold == 0
-        || threshold > MAX_GUARANTORS
-        || requirement_flags & !0x03 != 0
-    {
-        return Err(EvidenceError::Requirements);
-    }
-    let checkpoint_id = reader.array()?;
-    let resulting_state_root = reader.array()?;
-    let batch_number = reader.u64()?;
-    let chain_id = reader.u64()?;
-    let contract = reader.array()?;
-    let reference = reader
-        .length_prefixed_u16(MAX_SETTLEMENT_REFERENCE_BYTES)?
-        .to_vec();
-    reader.finish()?;
-    if reference.len() != SETTLEMENT_REFERENCE_BYTES {
-        return Err(EvidenceError::Settlement);
-    }
-    Ok(CheckpointContextMaterial {
-        expected_registration_count,
-        set_version,
-        bonds,
-        requirements: Requirements {
-            checkpoint_epoch,
-            challenge_window_end_ms,
-            checkpoint_deadline_ms,
-            now_ms,
-            threshold,
-            minimum_bond,
-            availability_answered: requirement_flags & 1 != 0,
-            equivocation_detected: requirement_flags & 2 != 0,
-        },
-        registration: Registration {
-            checkpoint_id,
-            resulting_state_root,
-            batch_number,
-            chain_id,
-            contract,
-            reference,
-        },
-    })
+    Ok(bonds)
 }
 
 struct SettlementReference {
@@ -1407,12 +1451,10 @@ mod tests {
     ) -> Vec<u8> {
         let set_version = signer_authorizations
             .last()
-            .map(|authorization| authorization.3)
-            .unwrap_or(1);
+            .map_or(1, |authorization| authorization.3);
         let current_key = signer_authorizations
             .last()
-            .map(|authorization| authorization.0)
-            .unwrap_or(GENERATOR_KEY);
+            .map_or(GENERATOR_KEY, |authorization| authorization.0);
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&WIRE_VERSION.to_be_bytes());
         bytes.extend_from_slice(&expected_registration_count.to_be_bytes());

@@ -186,44 +186,7 @@ pub fn submit_signed(
     context: SubmissionContext,
     signed_bytes: &[u8],
 ) -> Result<Submission, SubmitError> {
-    let activity = decode_signed(signed_bytes, registry)?;
-    if activity.protocol_version() != context.protocol_version {
-        return Err(SubmitError::ProtocolVersion {
-            expected: context.protocol_version,
-            actual: activity.protocol_version(),
-        });
-    }
-    if activity.network_id() != context.network_id {
-        return Err(SubmitError::Network {
-            expected: context.network_id,
-            actual: activity.network_id(),
-        });
-    }
-    if encode_signed(&activity)? != signed_bytes {
-        return Err(SubmitError::Wire(WireError {
-            result: layerx_types::result::KnownResult::NonCanonical.into(),
-            offset: 0,
-        }));
-    }
-    let signature_bytes = activity
-        .signature()
-        .ok_or(SubmitError::SignatureLength(0))?;
-    let signature: [u8; 64] = signature_bytes
-        .try_into()
-        .map_err(|_| SubmitError::SignatureLength(signature_bytes.len()))?;
-    let unsigned = encode_unsigned(&activity)?;
-    let message = SignatureMessage::new(
-        Domain::SignaturePreimage,
-        activity.protocol_version(),
-        activity.network_id(),
-        &unsigned,
-    )
-    .map_err(SubmitError::Signature)?;
-    ed25519::verify(&context.signer_public_key, &signature, message)
-        .map_err(SubmitError::Signature)?;
-
-    let idempotency_key = activity.idempotency_key();
-    let activity_id = activity_id(&activity)?;
+    let (idempotency_key, activity_id) = verify_submission(registry, context, signed_bytes)?;
     let request = encode_envelope(Envelope {
         version: context.interface_version,
         message_tag: SUBMIT_REQUEST_TAG,
@@ -338,4 +301,48 @@ fn unknown(
         cause,
         signed_bytes: signed_bytes.to_vec(),
     }
+}
+
+fn verify_submission(
+    registry: &ModuleRegistry,
+    context: SubmissionContext,
+    signed_bytes: &[u8],
+) -> Result<([u8; 32], [u8; 32]), SubmitError> {
+    let activity = decode_signed(signed_bytes, registry)?;
+    if activity.protocol_version() != context.protocol_version {
+        return Err(SubmitError::ProtocolVersion {
+            expected: context.protocol_version,
+            actual: activity.protocol_version(),
+        });
+    }
+    if activity.network_id() != context.network_id {
+        return Err(SubmitError::Network {
+            expected: context.network_id,
+            actual: activity.network_id(),
+        });
+    }
+    if encode_signed(&activity)? != signed_bytes {
+        return Err(SubmitError::Wire(WireError {
+            result: layerx_types::result::KnownResult::NonCanonical.into(),
+            offset: 0,
+        }));
+    }
+    let signature_bytes = activity
+        .signature()
+        .ok_or(SubmitError::SignatureLength(0))?;
+    let signature: [u8; 64] = signature_bytes
+        .try_into()
+        .map_err(|_| SubmitError::SignatureLength(signature_bytes.len()))?;
+    let unsigned = encode_unsigned(&activity)?;
+    let message = SignatureMessage::new(
+        Domain::SignaturePreimage,
+        activity.protocol_version(),
+        activity.network_id(),
+        &unsigned,
+    )
+    .map_err(SubmitError::Signature)?;
+    ed25519::verify(&context.signer_public_key, &signature, message)
+        .map_err(SubmitError::Signature)?;
+
+    Ok((activity.idempotency_key(), activity_id(&activity)?))
 }

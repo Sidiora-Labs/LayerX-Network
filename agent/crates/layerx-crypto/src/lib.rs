@@ -64,7 +64,7 @@ impl<'a> SignatureMessage<'a> {
     pub fn digest(self) -> [u8; 32] {
         let mut hasher = Sha256::new();
         hasher.update(self.domain.tag());
-        hasher.update(self.canonical);
+        hasher.update(self.canonical());
         hasher.finalize().into()
     }
 
@@ -86,8 +86,8 @@ impl std::fmt::Debug for SignatureMessage<'_> {
         formatter
             .debug_struct("SignatureMessage")
             .field("domain", &self.domain)
-            .field("protocol_version", &self.protocol_version)
-            .field("network_id", &self.network_id)
+            .field("protocol_version", &self.protocol_version())
+            .field("network_id", &self.network_id())
             .field("canonical_length", &self.canonical.len())
             .finish()
     }
