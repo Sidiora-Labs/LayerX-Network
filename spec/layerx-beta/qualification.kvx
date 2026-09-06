@@ -1215,4 +1215,18 @@ file = "programs/crates/layerx-programs-runtime/tests/hash_determinism.rs"
 symbol = "blake3_golden_vectors cross_platform_byte_identity_blake3"
 observed = "After binaryen-sys and binaryen compiled, make programs-test failed at Makefile:3033 with cargo exit 101. cargo test --locked --workspace failed only -p layerx-programs-runtime --test hash_determinism: blake3_golden_vectors and cross_platform_byte_identity_blake3 (input length 3). Digests 6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85 versus 6dd3cecad265d56f9204934b11a5eae71ba2d11db4d4d8a566bd488aba02be48. sha256 and keccak256 golden tests in the same file passed (9 passed, 2 failed). That test file is outside programs/vendor. Evidence: qual-logs/programs-test-after-cmake.log."
 assumption = "The blake3 mismatch is unrelated to restoring llvm/Config/config.h. Leave the hash_determinism assertions unchanged. A passing binaryen-sys compile does not establish make programs-test."
+[observation.platform.cargo_deny_disable_fetch]
+task = "platform-lint"
+file = "platform/Makefile.inc"
+symbol = "platform-lint cargo deny"
+observed = "cargo-deny 0.20.2 rejects --disable-fetch both as a top-level flag and as a check subcommand flag, each with exit 2 and unexpected argument. The 0.20 --offline replacement fails cargo metadata because keyring-core is absent from the local index. The platform-lint recipe now runs cargo deny --manifest-path platform/Cargo.toml check advisories bans sources. That command executes advisories, bans and sources and exits 2 because bans reports duplicate base64 0.22.1 and 0.23.1. Evidence: qual-logs/cargo-deny-old-form.log, qual-logs/cargo-deny-new-form.log, qual-logs/cargo-deny-offline.log, qual-logs/item1-cargo-deny.log."
+assumption = "Advisories, bans and sources remain required. No check was removed. --disable-fetch cannot be retained on this cargo-deny binary."
+severity = "note"
+
+[observation.platform.base64_duplicate]
+task = "platform-lint"
+file = "platform/Cargo.lock"
+symbol = "base64"
+observed = "bans multiple-versions=deny fails on base64 0.22.1 and 0.23.1. cargo tree -i base64@0.22.1 shows only layerx-mirror, which takes base64 from the interop workspace pin 0.22.1. cargo tree -i base64@0.23.1 shows ureq 3.4.0 and ureq-proto 0.6.1; platform/Cargo.toml pins ureq 3.4.0 and agent crates pin the same ureq version. No platform crate Cargo.toml declares a base64 dependency line. layerx-mirror already uses base64::Engine and general_purpose::STANDARD, which exist in 0.23.1. Changing ureq off 3.4.0 would duplicate ureq. Unifying the graph requires the interop workspace pin to become 0.23.1, then regenerating platform/Cargo.lock. No skip, skip-tree, or multiple-versions=allow entry was added. Evidence: qual-logs/base64-0.22.1-tree.log, qual-logs/base64-0.23.1-tree.log, qual-logs/item1-cargo-deny.log."
+assumption = "interop/Cargo.toml is outside the owned paths of this repair. After that pin bump, platform/Cargo.lock must resolve a single base64 version without deny exceptions."
 severity = "blocker"
