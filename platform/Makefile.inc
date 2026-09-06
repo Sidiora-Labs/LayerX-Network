@@ -177,6 +177,10 @@ PLATFORM_TOPOLOGY_CHECK_FLAGS ?=
 platform-hosted-topology-check:
 	bash platform/hosted/tests/topology-check.sh $(PLATFORM_TOPOLOGY_CHECK_FLAGS)
 
+ifneq ($(filter platform-beta-cluster-up platform-beta-cluster-down,$(MAKECMDGOALS)),)
+.NOTPARALLEL:
+endif
+
 platform-beta-cluster-up:
 	bash platform/hosted/tests/beta-cluster.sh up $(PLATFORM_BETA_CLUSTER_FLAGS)
 
