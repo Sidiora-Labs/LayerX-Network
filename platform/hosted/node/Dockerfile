@@ -6,7 +6,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 COPY . .
 ARG LXP_REVISION=unknown
-RUN make LXP_REVISION="$LXP_REVISION" layerxd layerx-genesis-build layerxctl \
+RUN rustup show active-toolchain \
+    && make LXP_REVISION="$LXP_REVISION" layerxd layerx-genesis-build layerxctl \
     && test -x build/bin/layerxd && test -x build/bin/layerx-genesis-build && test -x build/bin/layerxctl
 
 FROM debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171
