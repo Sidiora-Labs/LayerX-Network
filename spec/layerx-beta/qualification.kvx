@@ -1058,3 +1058,11 @@ symbol = "human-lint-copy"
 observed = "make human-lint human-test-unit reaches npm --prefix human/apps/web run typecheck and fails because tsc is not installed, with command exit 127 at Makefile:2001. Evidence is qual-logs/item1-human-gates.log."
 assumption = "Install the locked web dependencies in the qualification environment and rerun the unchanged aggregate gate. No assertion, dependency policy or lint is disabled."
 severity = "blocker"
+
+[observation.custody.local_weth_evidence]
+task = "6.1"
+file = "tests/bridge/local_credit_evidence.py"
+symbol = "real_weth_protocol_three_custody_evidence"
+observed = "A fresh chain 31337 wraps actual ETH in the repository WETH contract and deposits the resulting tokens in the real LayerXVault, configured through the real timelock and AssetRegistry. A second Anvil forks the exact deposited chain state. custody_credit.py verifies both origins, header ancestry, eth_getProof runtime accounts and complete receipt/transaction trie reconstruction, emits a 207-byte profile and 427-byte attestor credit, and test_evidence.py passes its real-evidence tamper and divergent-finality checks. The Rust integration independently checks the attestor signature and native beneficiary derivation. Final complete package tests including the WETH integration pass with the worktree Python virtual environment on PATH; qual-logs/final-test.log. Package formatting and strict all-target clippy pass; qual-logs/final-fmt-check.log and qual-logs/final-clippy.log. make human-test-unit passes; qual-logs/human-unit.log."
+assumption = "The fork observer shares its upstream trust source; distinct origins are local replication evidence, not independent production quorum or production finality. Generated actor and attestor seeds and chain artifacts remain untracked. Local-chain deployment refuses chain 125 and port 18545. The aggregate human-lint dependency failure remains open."
+severity = "info"
