@@ -3142,3 +3142,11 @@ beta-qualify:
 
 beta-driver-test:
 	python3 -m unittest tools.qualification.test_release_runner tools.qualification.test_beta_driver
+
+$(BUILD_DIR)/tests/lxp_test_program_admission: tests/daemon/lxp_test_program_admission.c $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) $(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
+
+.PHONY: test-program-admission
+test-program-admission: $(BUILD_DIR)/tests/lxp_test_program_admission $(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build
+	bash tests/daemon/program-admission.sh $(BUILD_DIR)
