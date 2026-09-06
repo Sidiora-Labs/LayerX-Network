@@ -5,7 +5,10 @@ use crate::clients::{
     callback_evidence_digest, ComplianceClient, ComplianceOutcome, LayerxClient, LayerxSubmission,
     PaxeerCustodyClient, ProviderCallback, ProviderClient, ProviderResult, ProviderState,
 };
-use crate::journal::{Journal, OrderSnapshot, TransitionEvidence, WorkflowStage};
+use crate::journal::{
+    Journal, OrderSnapshot, PaxeerObservation, ProviderCallbackWrite, TransitionEvidence,
+    WorkflowStage,
+};
 use crate::{RampDirection, RampError, RampOrder};
 
 pub struct RampEngine<'a> {
@@ -19,6 +22,10 @@ pub struct RampEngine<'a> {
 }
 
 impl RampEngine<'_> {
+    /// # Errors
+    /// Returns [`RampError::IllegalTransition`] when the stage cannot accept a compliance decision,
+    /// [`RampError::LeaseHeld`] when the worker does not hold the order, and
+    /// [`RampError::Compliance`] or [`RampError::Journal`] when evaluation or the durable append fails.
     pub fn evaluate_compliance(
         &mut self,
         order_digest: [u8; 32],
@@ -57,6 +64,10 @@ impl RampEngine<'_> {
             .transition(order_digest, expected, next, evidence, self.worker_id, now)
     }
 
+    /// # Errors
+    /// Returns [`RampError::IllegalTransition`] when provider submission is not admitted,
+    /// [`RampError::LeaseHeld`] when the worker does not hold the order, and
+    /// [`RampError::Provider`] or [`RampError::Journal`] when submission or the durable append fails.
     pub fn submit_provider(&mut self, order_digest: [u8; 32], now: u64) -> Result<(), RampError> {
         self.acquire(order_digest, now)?;
         let snapshot = self.snapshot(order_digest)?;
@@ -99,6 +110,10 @@ impl RampEngine<'_> {
         }
     }
 
+    /// # Errors
+    /// Returns [`RampError::IllegalTransition`] when provider reconciliation is not admitted,
+    /// [`RampError::LeaseHeld`] when the worker does not hold the order, and
+    /// [`RampError::Provider`] or [`RampError::Journal`] when status retrieval or the durable append fails.
     pub fn reconcile_provider(
         &mut self,
         order_digest: [u8; 32],
@@ -124,6 +139,10 @@ impl RampEngine<'_> {
         self.apply_provider_result(&snapshot.order, snapshot.stage, result, now)
     }
 
+    /// # Errors
+    /// Returns [`RampError::Provider`] when the callback does not verify,
+    /// [`RampError::InvalidOrder`] when the order is absent, and
+    /// journal failures from [`Journal::apply_provider_callback`].
     pub fn provider_callback(
         &mut self,
         callback: &ProviderCallback,
@@ -136,13 +155,15 @@ impl RampEngine<'_> {
         let evidence_digest = callback_evidence_digest(callback)?;
         let (next, evidence) = provider_transition(callback.result.clone());
         if !self.journal.apply_provider_callback(
-            digest,
-            &callback.callback_id,
-            callback.provider_sequence,
-            evidence_digest,
-            snapshot.stage,
-            next,
-            evidence,
+            ProviderCallbackWrite {
+                order_digest: digest,
+                callback_id: &callback.callback_id,
+                provider_sequence: callback.provider_sequence,
+                evidence_digest,
+                expected: snapshot.stage,
+                next,
+                evidence: &evidence,
+            },
             now,
         )? {
             return Ok(());
@@ -150,6 +171,10 @@ impl RampEngine<'_> {
         self.finish_if_complete(digest, now)
     }
 
+    /// # Errors
+    /// Returns [`RampError::IllegalTransition`] when `LayerX` submission is not admitted,
+    /// [`RampError::LeaseHeld`] when the worker does not hold the order, and
+    /// [`RampError::Layerx`] or [`RampError::Journal`] when preparation or the durable append fails.
     pub fn submit_layerx(
         &mut self,
         order_digest: [u8; 32],
@@ -182,28 +207,18 @@ impl RampEngine<'_> {
             self.worker_id,
             now,
         )?;
-        match self.layerx.submit_prepared(&order, prepared) {
-            Ok(result) => self.apply_layerx_result(
-                &order,
-                WorkflowStage::LayerxSubmissionPlanned,
-                result,
-                now,
-            ),
-            Err(_) => {
-                let mut evidence = TransitionEvidence::empty();
-                evidence.activity_id = self.snapshot(order_digest)?.evidence.activity_id;
-                self.journal.transition(
-                    order_digest,
-                    WorkflowStage::LayerxSubmissionPlanned,
-                    WorkflowStage::LayerxSubmittedUnknown,
-                    evidence,
-                    self.worker_id,
-                    now,
-                )
-            }
-        }
+        self.apply_layerx_result(
+            &order,
+            WorkflowStage::LayerxSubmissionPlanned,
+            self.layerx.submit_prepared(&order, prepared),
+            now,
+        )
     }
 
+    /// # Errors
+    /// Returns [`RampError::IllegalTransition`] when `LayerX` resolution is not admitted,
+    /// [`RampError::LeaseHeld`] when the worker does not hold the order, and
+    /// [`RampError::Layerx`] or [`RampError::Journal`] when receipt lookup or the durable append fails.
     pub fn resolve_layerx(&mut self, order_digest: [u8; 32], now: u64) -> Result<(), RampError> {
         self.acquire(order_digest, now)?;
         let snapshot = self.snapshot(order_digest)?;
@@ -300,6 +315,9 @@ impl RampEngine<'_> {
         self.finish_if_complete(order.order_digest, now)
     }
 
+    /// # Errors
+    /// Returns [`RampError::LeaseHeld`] when the worker does not hold the order and
+    /// [`RampError::IllegalTransition`] or [`RampError::Journal`] when the completion append is refused.
     pub fn finish_if_complete(
         &mut self,
         order_digest: [u8; 32],
@@ -361,6 +379,10 @@ pub struct InventoryRebalancer<'a> {
 }
 
 impl InventoryRebalancer<'_> {
+    /// # Errors
+    /// Returns [`RampError::Conflict`] when the idempotency key is already planned,
+    /// [`RampError::Paxeer`] when custody broadcast fails, and
+    /// [`RampError::Journal`] when the durable append cannot complete.
     pub fn submit(
         &mut self,
         asset: [u8; 32],
@@ -378,16 +400,22 @@ impl InventoryRebalancer<'_> {
             .map_err(|_| RampError::Paxeer)?;
         self.journal.observe_paxeer(
             idempotency_key,
-            &submission.operation_id,
-            transaction.bytes(),
-            "broadcast_unknown",
-            None,
-            0,
+            PaxeerObservation {
+                operation_id: &submission.operation_id,
+                transaction_hash: transaction.bytes(),
+                stage: "broadcast_unknown",
+                block_hash: None,
+                confirmations: 0,
+            },
             now,
         )?;
         Ok((submission.operation_id, transaction))
     }
 
+    /// # Errors
+    /// Returns [`RampError::Paxeer`] when the planned transfer is absent or custody status fails,
+    /// [`RampError::Conflict`] when an operation is already recorded, and
+    /// [`RampError::Journal`] when the durable append cannot complete.
     pub fn reconcile(
         &mut self,
         idempotency_key: [u8; 32],
@@ -408,16 +436,22 @@ impl InventoryRebalancer<'_> {
             .map_err(|_| RampError::Paxeer)?;
         self.journal.observe_paxeer(
             idempotency_key,
-            &submission.operation_id,
-            transaction.bytes(),
-            "broadcast_unknown",
-            None,
-            0,
+            PaxeerObservation {
+                operation_id: &submission.operation_id,
+                transaction_hash: transaction.bytes(),
+                stage: "broadcast_unknown",
+                block_hash: None,
+                confirmations: 0,
+            },
             now,
         )?;
         Ok((submission.operation_id, transaction))
     }
 
+    /// # Errors
+    /// Returns [`RampError::Paxeer`] when the planned transfer is absent,
+    /// [`RampError::Conflict`] when the recorded operation disagrees, and
+    /// [`RampError::Journal`] when the durable append cannot complete.
     pub fn poll(
         &mut self,
         idempotency_key: [u8; 32],
@@ -456,11 +490,13 @@ impl InventoryRebalancer<'_> {
         }
         self.journal.observe_paxeer(
             idempotency_key,
-            operation_id,
-            report.transaction().bytes(),
-            stage,
-            block_hash,
-            report.progress().confirmed,
+            PaxeerObservation {
+                operation_id,
+                transaction_hash: report.transaction().bytes(),
+                stage,
+                block_hash,
+                confirmations: report.progress().confirmed,
+            },
             now,
         )?;
         Ok(report)

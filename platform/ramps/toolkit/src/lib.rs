@@ -51,6 +51,8 @@ pub struct OperatorIdentity {
 }
 
 impl OperatorIdentity {
+    /// # Errors
+    /// Returns [`RampError::InvalidPrincipal`] or [`RampError::InvalidOrder`] when the operator identity is unbound.
     pub fn validate(&self) -> Result<(), RampError> {
         validate_operator(self)
     }
@@ -76,6 +78,8 @@ pub struct QuoteTerms {
 }
 
 impl QuoteTerms {
+    /// # Errors
+    /// Returns [`RampError::InvalidOrder`] when quote terms exceed their declared bounds.
     pub fn validate(&self, now: u64) -> Result<(), RampError> {
         validate_identifier(&self.quote_id)?;
         if self.layerx_asset == [0; 32]
@@ -121,6 +125,8 @@ pub struct RampOrder {
 }
 
 impl RampOrder {
+    /// # Errors
+    /// Returns [`RampError::InvalidOrder`] or [`RampError::InvalidPrincipal`] when the request, quote or principals are unbound.
     pub fn bind(
         request: CreateOrder,
         quote: QuoteTerms,
@@ -199,6 +205,8 @@ impl RampOrder {
         }
     }
 
+    /// # Errors
+    /// Returns [`RampError::OrderBinding`] when the digest or context does not match the bound quote.
     pub fn validate_bound(&self) -> Result<(), RampError> {
         if self.order_digest != self.digest() || self.context != self.quote.context {
             return Err(RampError::OrderBinding);
@@ -265,6 +273,8 @@ pub struct CompiledPayment {
     pub payload_hash: [u8; 32],
 }
 
+/// # Errors
+/// Returns [`RampError::PayerGrantRequired`], [`RampError::InvalidPrincipal`] or [`RampError::Intent`] when the draw cannot be compiled.
 pub fn compile_payer_grant_draw(
     order: &RampOrder,
     receiver_sequence: u64,
@@ -290,6 +300,8 @@ pub fn compile_payer_grant_draw(
     compile_intent(Intent::v1(IntentKind::LxpReceive(receive)), registry)
 }
 
+/// # Errors
+/// Returns [`RampError::InvalidOrder`], [`RampError::InvalidPrincipal`] or [`RampError::Intent`] when the authorization message cannot be formed.
 pub fn operator_send_authorization_message(
     order: &RampOrder,
     account_sequence: u64,
@@ -331,6 +343,8 @@ pub fn operator_send_authorization_message(
     Ok(message)
 }
 
+/// # Errors
+/// Returns [`RampError::InvalidOrder`], [`RampError::InvalidPrincipal`] or [`RampError::Intent`] when the operator send cannot be compiled.
 pub fn compile_operator_send(
     order: &RampOrder,
     account_sequence: u64,
@@ -389,6 +403,8 @@ pub struct VerifiedLayerxLeg {
     pub resulting_state_root: [u8; 32],
 }
 
+/// # Errors
+/// Returns [`RampError::Receipt`], [`RampError::ReceiptMismatch`] or [`RampError::InvalidPrincipal`] when the receipt does not bind the order.
 pub fn verify_order_receipt(
     order: &RampOrder,
     evidence: &ReceiptEvidence,
