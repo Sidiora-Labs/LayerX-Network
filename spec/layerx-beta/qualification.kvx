@@ -1938,6 +1938,28 @@ file = "tests/test_bridge_deposit.c src/protocol/lxp_kernel.c src/protocol/lxp_m
 symbol = "main lxp_kernel_apply_transfer_set emit_transfer_set lx_asset_deposit_credit"
 observed = "make test-bridge-deposit exits 2 after all 145 Foundry tests pass; direct build/tests/test_bridge_deposit exits 1 with empty stdout and stderr. The first failed check is tests/test_bridge_deposit.c:269-270: lxp_bridge_deposit_credit returns LXP_ERR_NON_CANONICAL (-3) instead of LXP_ERR_INSUFFICIENT_BALANCE (-400) with reserve balance zero. LLDB follows successful nullifier lookup and staging into transfer emission; lxp_kernel_apply_transfer_set returns -3 before apply_capability or lxp_apply_transfer_set runs. The zero-initialized transfer.context has no source_authorities or source_authority_count, which the kernel requires at src/protocol/lxp_kernel.c:1067-1073. Evidence: qual-logs/native-links/bridge-make.log, bridge-direct.log, bridge-debug-3.log, bridge-inner.log and bridge-kernel.log."
 assumption = "The native recipe has empty RUN_PREFIX by default and sets no test-specific environment. The failing path uses in-process data and no prerequisite artifact or environment lookup. Supplying real debit authorization requires test or production changes outside the owned initializer and recipe paths; the assertions and kernel check remain intact."
+[observation.6.4.9]
+task = "6.4"
+file = "agent/crates/layerx-client/src/evidence.rs"
+symbol = "decode_nested_evidence decode_receipt_bytes verify_nested_account"
+observed = "The account evidence client accepts only WIRE_VERSION 1, decodes receipt bytes with MAX_RECEIPT_BYTES 4096, and agent/crates/layerx-client/src/read.rs unconditionally invokes the ordinary verify_nested_account verifier. A versioned account proof carrying the final occupancy maintenance leaf therefore requires an explicitly selected client decoding and verification path before consumers can use it. The ordinary format, receipt bound, signature verification and exact final-sequence/root checks must remain unchanged. Source evidence is retained in qual-logs/pass3-integration-dependencies.log."
+assumption = "The account evidence client must retain the maintenance discriminator through decoding, apply the maintenance-specific canonical record bound, and call verify_nested_account_maintenance with the committed activity count and authenticated parameter context. Hosted route changes alone do not update this lower-level consumer."
+severity = "blocker"
+
+[observation.6.4.31]
+task = "6.4"
+file = "agent/crates/layerx-crypto/src/lib.rs"
+symbol = "SignatureMessage::protocol_version SignatureMessage::network_id SignatureMessage::canonical"
+observed = "cargo clippy --locked --manifest-path agent/Cargo.toml -p layerx-proof -p layerx-wire --all-targets -- -D warnings exits 101 because the three crate-private methods at lines 71-79 are unused. The exact output is retained in qual-logs/pass5-clippy-2.log. cargo test --locked --manifest-path agent/Cargo.toml -p layerx-proof -p layerx-wire exits 0 in qual-logs/pass5-rust-tests-2.log; the passing tests do not satisfy the failed strict lint gate."
+assumption = "The crypto crate requires a source repair within its ownership while preserving the strict warnings check. No lint allowance or suppression is authorized."
+severity = "blocker"
+
+[observation.6.4.32]
+task = "6.4"
+file = "tests/programs/test_call_activity.c"
+symbol = "artifact_lifecycle_fixture execute_artifact_fixture_activity"
+observed = "build/tests/programs_call_activity --post-upgrade-batch exits 1 at the protocol-3 post-upgrade assertion, recorded in qual-logs/pass5-post-upgrade-2.log. This direct-activity fixture changes execution.batch_number to 2 for UPGRADE and 3 for CALL without finalizing either preceding batch. Its unchanged global sequence assertions require 4 after UPGRADE and 5 after CALL, leaving no maintenance sequence. The separate real prepared-batch lifecycle with maintenance and maximum 64-activity publication passes in qual-logs/pass5-max-confirm.log."
+assumption = "The direct-activity regression and durable batch-maintenance contract require reconciliation. Maintenance must remain a signed batch leaf with its own sequence; neither the occupancy cursor check nor the existing sequence assertions may be weakened to make this direct-activity fixture pass."
 severity = "blocker"
 
 [observation.6.4.interop-strict-clippy-qualification]

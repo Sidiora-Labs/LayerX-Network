@@ -182,7 +182,7 @@ typedef struct lxp_kernel {
     lxp_kernel_fee_transaction fee_transaction;
     lxp_kernel_supply_checker check_supply;
     lxp_kernel_commit_observer observe_commit;
-    lxp_result (*observe_maintenance)(void *context, const lxp_kernel *kernel,
+    lxp_result (*observe_maintenance)(void *context, const struct lxp_kernel *kernel,
         lxp_byte_span maintenance, uint64_t timestamp_ms);
     void *commit_observer_context;
     bool publication_poisoned;
@@ -369,6 +369,10 @@ lxp_result lxp_kernel_batch_snapshot_commit(
     const lxp_kernel_batch_snapshot *base,
     const lxp_kernel_batch_snapshot *settled);
 
+lxp_result lxp_kernel_prepare_serial_activity_batch(
+    lxp_kernel *kernel, const lxp_activity *activity,
+    const lxp_kernel_execution *execution, lxp_kernel_prepared_batch **batch_out);
+
 lxp_result lxp_kernel_prepare_activity_batch(
     lxp_kernel *kernel, const lxp_activity *activities,
     const lxp_kernel_execution *executions, size_t offered_count,
@@ -380,6 +384,8 @@ const lxp_receipt *lxp_kernel_prepared_batch_receipts(
     const lxp_kernel_prepared_batch *batch);
 const lxp_byte_span *lxp_kernel_prepared_batch_events(
     const lxp_kernel_prepared_batch *batch);
+uint32_t lxp_kernel_prepared_batch_fee_schedule_version(const lxp_kernel_prepared_batch *batch);
+uint32_t lxp_kernel_prepared_batch_metering_schedule_version(const lxp_kernel_prepared_batch *batch);
 const uint8_t *lxp_kernel_prepared_batch_final_root(
     const lxp_kernel_prepared_batch *batch);
 const uint8_t *lxp_kernel_prepared_batch_publication_digest(
