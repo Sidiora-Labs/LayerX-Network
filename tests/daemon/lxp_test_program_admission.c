@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 
 #include "layerx/lxp_activity.h"
+#include "layerx/lxp_crypto.h"
 #include "layerx/lxp_arena.h"
 #include "layerx/lxp_daemon.h"
 #include "layerx/lxp_hash.h"
@@ -284,7 +285,7 @@ static int sign_raw(const signer *key, const uint8_t *message,
 }
 
 static int build_activity(const signer *key, uint64_t account_sequence,
-                          uint32_t activity_type, const uint8_t *payload, size_t payload_length, uint8_t *output,
+                          uint32_t activity_type, uint64_t timestamp, const uint8_t *payload, size_t payload_length, uint8_t *output,
                           size_t capacity, size_t *length)
 {
     uint8_t *arena_storage;
@@ -305,7 +306,7 @@ static int build_activity(const signer *key, uint64_t account_sequence,
     {
         struct timespec now;
         if (clock_gettime(CLOCK_REALTIME, &now) != 0) return 1;
-        activity.timestamp_bound.not_before = (uint64_t)now.tv_sec * 1000U;
+        activity.timestamp_bound.not_before = timestamp != 0U ? timestamp : (uint64_t)now.tv_sec * 1000U;
         activity.timestamp_bound.not_after = activity.timestamp_bound.not_before + 300000U;
     }
     for (index = 0U; index < 8U; ++index)
@@ -408,6 +409,88 @@ static int expect_ack(int descriptor, uint64_t correlation_id,
 }
 
 
+typedef lxp_result (*simulate_function)(lxp_daemon_protocol_owner *,
+    const uint8_t *, const uint8_t *, size_t, uint8_t *, size_t, size_t *,
+    uint8_t *, size_t, size_t *);
+_Static_assert(_Generic(&lxp_daemon_lni_simulate,
+                        simulate_function: 1, default: 0),
+               "simulation must remain available through the public header");
+
+static int simulate_call(int descriptor, const signer *key)
+{
+    static const uint8_t access[] = "LayerX/programs/access-declaration/v1\0";
+    static const uint8_t domain[] = "LayerX/agent/program-simulation-evidence/v1";
+    static const uint64_t budgets[] = {
+        1000000U, 16777216U, 1048576U, 1048576U, 64U, 1048576U, 4096U
+    };
+    uint8_t payload[118U + sizeof(access)] = {1U};
+    uint8_t encoded[ACTIVITY_CAPACITY], activity_id[32], query[33] = {1U};
+    uint8_t digest_input[sizeof(domain) + 145U], digest[32];
+    wire_envelope response;
+    lxp_receipt receipt;
+    signer sequencer;
+    size_t length;
+    uint32_t receipt_length;
+    uint64_t timestamp;
+    uint8_t preparation[79];
+    store_u16(preparation, 1U);
+    store_u16(preparation + 2U, 75U);
+    memcpy(preparation + 4U, REGISTERED_DID, 75U);
+    REQUIRE(send_request(descriptor, LNI_MINOR, 26U, 19U, preparation, sizeof(preparation)) == 0);
+    REQUIRE(receive_envelope(descriptor, &response) == 0);
+    REQUIRE(response.tag == 27U && response.payload_length >= 99U);
+    timestamp = load_u64(response.payload + 91U);
+    REQUIRE(timestamp != 0U);
+    release_envelope(&response);
+    store_u16(payload + 32U, LX_PROGRAMS_ABI_VERSION);
+    store_u16(payload + 34U, 10U);
+    store_u16(payload + 40U, 2U);
+    store_u32(payload + 42U, (uint32_t)sizeof(access));
+    store_u32(payload + 46U, 16U);
+    for (size_t i = 0U; i < 7U; ++i)
+        store_u64(payload + 50U + i * 8U, budgets[i]);
+    memcpy(payload + 106U, "layerx_call", 10U);
+    memcpy(payload + 118U, access, sizeof(access));
+    REQUIRE(build_activity(key, 0U, LX_PROGRAMS_CALL, timestamp, payload, sizeof(payload),
+                           encoded, sizeof(encoded), &length) == 0);
+    REQUIRE(lxp_activity_id(encoded, length, activity_id) == LXP_OK);
+    REQUIRE(send_request(descriptor, LNI_MINOR, 30U, 20U, encoded, length) == 0);
+    REQUIRE(receive_envelope(descriptor, &response) == 0);
+    if (response.tag == ERROR_RESPONSE && response.payload_length == 5U)
+        fprintf(stderr, "simulation refusal class=%u result=%d\n",
+                response.payload[0], (int32_t)load_u32(response.payload + 1U));
+    REQUIRE(response.tag == 31U && response.correlation_id == 20U);
+    REQUIRE(response.payload_length >= 46U && response.proof_length == 242U);
+    REQUIRE(load_u16(response.payload) == 1U && load_u16(response.proof) == 1U);
+    REQUIRE(memcmp(response.payload + 2U, activity_id, 32U) == 0);
+    REQUIRE(memcmp(response.proof + 34U, activity_id, 32U) == 0);
+    REQUIRE(load_u64(response.proof + 130U) == 0U);
+    receipt_length = load_u32(response.payload + 34U);
+    REQUIRE(receipt_length <= response.payload_length - 46U);
+    REQUIRE(lxp_receipt_decode(response.payload + 38U, receipt_length,
+                               true, &receipt) == LXP_OK);
+    REQUIRE(receipt.global_sequence == 1U);
+    REQUIRE(memcmp(receipt.activity_id, activity_id, 32U) == 0);
+    REQUIRE(signer_init(&sequencer, 0x22U) == 0);
+    REQUIRE(memcmp(response.proof + 146U, sequencer.public_key, 32U) == 0);
+    memcpy(digest_input, domain, sizeof(domain));
+    memcpy(digest_input + sizeof(domain), response.proof + 2U, 144U);
+    digest_input[sizeof(digest_input) - 1U] = 0U;
+    REQUIRE(lxp_hash_sha256(digest_input, sizeof(digest_input), digest) == LXP_OK);
+    REQUIRE(lxp_ed25519_verify_raw(sequencer.public_key, response.proof + 178U,
+                                   digest, sizeof(digest)) == LXP_OK);
+    release_envelope(&response);
+    memcpy(query + 1U, activity_id, 32U);
+    REQUIRE(send_request(descriptor, LNI_MINOR, 5U, 21U, query, sizeof(query)) == 0);
+    REQUIRE(receive_envelope(descriptor, &response) == 0);
+    REQUIRE(response.tag == 6U && response.correlation_id == 21U &&
+            response.payload_length == 0U);
+    release_envelope(&response);
+    puts("simulation route returned signed evidence without publishing a receipt");
+    return 0;
+}
+
+
 int main(int argc, char **argv)
 {
     signer key;
@@ -419,7 +502,7 @@ int main(int argc, char **argv)
     int descriptor;
     static const char digits[] = "0123456789abcdef";
     static const uint32_t types[] = {LX_PROGRAMS_CALL, LX_PROGRAMS_DEPLOY, LX_PROGRAMS_UPGRADE};
-    REQUIRE(argc == 2 && strlen(argv[1]) < sizeof(address.sun_path));
+    REQUIRE((argc == 2 || argc == 3) && strlen(argv[1]) < sizeof(address.sun_path));
     REQUIRE(signer_init(&key, 0x11U) == 0);
     memcpy(REGISTERED_DID, "did:layerx:", 11U);
     for (size_t i = 0U; i < 32U; ++i) {
@@ -431,8 +514,9 @@ int main(int argc, char **argv)
     descriptor = socket(AF_UNIX, SOCK_STREAM, 0);
     REQUIRE(descriptor >= 0 && connect(descriptor, (struct sockaddr *)&address, sizeof(address)) == 0);
     REQUIRE(handshake(descriptor) == 0);
+    if (argc == 3) REQUIRE(simulate_call(descriptor, &key) == 0);
     for (size_t i = 0U; i < sizeof(types) / sizeof(types[0]); ++i) {
-        REQUIRE(build_activity(&key, 0U, types[i], malformed, sizeof(malformed), encoded,
+        REQUIRE(build_activity(&key, 0U, types[i], 0U, malformed, sizeof(malformed), encoded,
                                sizeof(encoded), &length) == 0);
         REQUIRE(send_request(descriptor, LNI_MINOR, SUBMIT_REQUEST, i + 1U, encoded, length) == 0);
         REQUIRE(expect_error(descriptor, i + 1U, 4U, LXP_ERR_TRUNCATED) == 0);
@@ -441,7 +525,7 @@ int main(int argc, char **argv)
     store_u32(deploy + 100U, 8U);
     memcpy(deploy + 104U, "\0asm\1\0\0\0", 8U);
     REQUIRE(lxp_hash_sha256(deploy + 104U, 8U, deploy + 68U) == LXP_OK);
-    REQUIRE(build_activity(&key, 0U, LX_PROGRAMS_DEPLOY, deploy, sizeof(deploy), encoded,
+    REQUIRE(build_activity(&key, 0U, LX_PROGRAMS_DEPLOY, 0U, deploy, sizeof(deploy), encoded,
                            sizeof(encoded), &length) == 0);
     REQUIRE(lxp_activity_id(encoded, length, activity_id) == LXP_OK);
     REQUIRE(send_request(descriptor, LNI_MINOR, SUBMIT_REQUEST, 4U, encoded, length) == 0);
