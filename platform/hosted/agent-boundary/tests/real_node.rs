@@ -1336,8 +1336,10 @@ fn start_cluster_with_custody(custody: Option<CustodySetup>) -> Cluster {
         "the real-node harness must run as root so the boundary can run under uid {BOUNDARY_UID}"
     );
     let repository = repository_root();
-    let layerxd = repository.join("build/bin/layerxd");
-    let builder = repository.join("build/bin/layerx-genesis-build");
+    let binaries = std::env::var_os("LAYERX_TEST_NATIVE_BIN_DIR")
+        .map_or_else(|| repository.join("build/bin"), PathBuf::from);
+    let layerxd = binaries.join("layerxd");
+    let builder = binaries.join("layerx-genesis-build");
     assert!(layerxd.is_file(), "{} is not built", layerxd.display());
     assert!(builder.is_file(), "{} is not built", builder.display());
     let root = std::env::temp_dir().join(format!(
@@ -1716,30 +1718,8 @@ fn verify_simulation_evidence(
     );
 }
 
-#[test]
-fn real_program_simulation_executes_without_committing() {
-    let cluster = start_cluster();
-    check_readiness(&cluster);
-    let program_id = random32();
-    let signed = signed_program_call(&cluster.actor, program_id);
-    let deadline = Instant::now() + Duration::from_secs(30);
-    let simulated = loop {
-        let answer = simulate_program_call(&cluster, &signed);
-        if answer.status == 200 || Instant::now() >= deadline {
-            break answer;
-        }
-        assert_eq!(answer.status, 503, "{}", answer.text());
-        thread::sleep(Duration::from_millis(100));
-    };
-    assert_eq!(simulated.status, 200, "{}", simulated.text());
-    let document = simulated.json();
-    let result = &document["result"];
-    assert_eq!(result["committed"], false);
+fn check_simulation_receipt(cluster: &Cluster, result: &serde_json::Value) {
     let execution = &result["execution"];
-    assert_eq!(execution["state"], "refused");
-    assert_eq!(execution["program_id"], hex(&program_id));
-    assert_eq!(execution["terminal_payload"], "");
-    assert_eq!(execution["call_graph"], "");
     let receipt_bytes = unhex(field(execution, "receipt"));
     let receipt = must(
         verify_sequencer_signature(&receipt_bytes, cluster.sequencer_key),
@@ -1774,6 +1754,33 @@ fn real_program_simulation_executes_without_committing() {
         protocol.resulting_state_root().to_vec()
     );
     verify_simulation_evidence(evidence, protocol, cluster.sequencer_key);
+}
+
+#[test]
+fn real_program_simulation_executes_without_committing() {
+    let cluster = start_cluster();
+    check_readiness(&cluster);
+    let program_id = random32();
+    let signed = signed_program_call(&cluster.actor, program_id);
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let simulated = loop {
+        let answer = simulate_program_call(&cluster, &signed);
+        if answer.status == 200 || Instant::now() >= deadline {
+            break answer;
+        }
+        assert_eq!(answer.status, 503, "{}", answer.text());
+        thread::sleep(Duration::from_millis(100));
+    };
+    assert_eq!(simulated.status, 200, "{}", simulated.text());
+    let document = simulated.json();
+    let result = &document["result"];
+    assert_eq!(result["committed"], false);
+    let execution = &result["execution"];
+    assert_eq!(execution["state"], "refused");
+    assert_eq!(execution["program_id"], hex(&program_id));
+    assert_eq!(execution["terminal_payload"], "");
+    assert_eq!(execution["call_graph"], "");
+    check_simulation_receipt(&cluster, result);
     let again = simulate_program_call(&cluster, &signed);
     assert_eq!(again.status, 200, "{}", again.text());
     assert_eq!(again.text(), simulated.text());

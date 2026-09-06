@@ -1176,21 +1176,11 @@ fn resolve_record(
     }
 }
 
-fn simulate_route(config: &Config, request: &Request) -> Response {
-    if request.headers.get("content-type").map(String::as_str) != Some("application/octet-stream") {
-        return refusal(400, "content_type_required", None);
-    }
-    if request.body.is_empty() || request.body.len() > MAX_ACTIVITY_BYTES {
-        return refusal(400, "invalid_activity_length", None);
-    }
-    let decoded = match decode_activity(config, Route::ProgramCall, &request.body) {
-        Ok(decoded) => decoded,
-        Err(response) => return response,
-    };
-    let Some(program_id) = decoded.program_id else {
-        return refusal(400, "not_program_call", None);
-    };
-    let outcome = with_session(config, |session| {
+fn simulate_activity(
+    config: &Config,
+    body: &[u8],
+) -> Result<Result<layerx_client::lni::simulate::Simulation, Response>, LniFailure> {
+    with_session(config, |session| {
         if !session
             .handshake
             .capabilities()
@@ -1203,12 +1193,7 @@ fn simulate_route(config: &Config, request: &Request) -> Response {
             sequencer_public_key: session.handshake.node().authorised_sequencer_key,
             correlation_id: session.correlation(),
         };
-        match simulate(
-            &mut session.transport,
-            &config.registry,
-            &request.body,
-            context,
-        ) {
+        match simulate(&mut session.transport, &config.registry, body, context) {
             Ok(simulation) => Ok(Ok(simulation)),
             Err(SimulateError::Transport(error)) => {
                 Err(LniFailure::Transport(format!("{error:?}")))
@@ -1227,7 +1212,24 @@ fn simulate_route(config: &Config, request: &Request) -> Response {
             }
             Err(error) => Err(LniFailure::Transport(format!("{error:?}"))),
         }
-    });
+    })
+}
+
+fn simulate_route(config: &Config, request: &Request) -> Response {
+    if request.headers.get("content-type").map(String::as_str) != Some("application/octet-stream") {
+        return refusal(400, "content_type_required", None);
+    }
+    if request.body.is_empty() || request.body.len() > MAX_ACTIVITY_BYTES {
+        return refusal(400, "invalid_activity_length", None);
+    }
+    let decoded = match decode_activity(config, Route::ProgramCall, &request.body) {
+        Ok(decoded) => decoded,
+        Err(response) => return response,
+    };
+    let Some(program_id) = decoded.program_id else {
+        return refusal(400, "not_program_call", None);
+    };
+    let outcome = simulate_activity(config, &request.body);
     let simulation = match outcome {
         Ok(Ok(simulation)) => simulation,
         Ok(Err(response)) => return response,

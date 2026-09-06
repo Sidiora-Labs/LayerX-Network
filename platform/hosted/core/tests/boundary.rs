@@ -1908,8 +1908,10 @@ fn boundary_tls_environment(env: &mut BTreeMap<&str, String>, certificates: &Cer
 
 fn cluster_artifacts() -> (PathBuf, PathBuf, PathBuf, PathBuf) {
     let repository = repository_root();
-    let layerxd_source = repository.join("build/bin/layerxd");
-    let builder = repository.join("build/bin/layerx-genesis-build");
+    let binaries = std::env::var_os("LAYERX_TEST_NATIVE_BIN_DIR")
+        .map_or_else(|| repository.join("build/bin"), PathBuf::from);
+    let layerxd_source = binaries.join("layerxd");
+    let builder = binaries.join("layerx-genesis-build");
     assert!(
         layerxd_source.is_file(),
         "{} is not built",
