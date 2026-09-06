@@ -1749,6 +1749,12 @@ file = "programs/crates/layerx-programs-interpreter/src/lib.rs programs/porting/
 symbol = "Interpreter AbiHost execute_block"
 observed = "Interpreter native cdylib builds use std; Wasm retains no_std. Wasm-only ABI imports, execution helpers and code storage follow the existing ABI host/entrypoint target configuration, retaining the borrowed lifetime on native validation through PhantomData. Strict native library Clippy for interpreter and guest exits 0. Locked touched-crate tests exit 0 with three interpreter tests; the guest defines no tests. Both real-runtime interpreter cases pass. Formatting, ABI drift, dependency policy and both cargo-deny gates exit 0. make programs-lint exits 2; first refusal: crates/layerx-programs-interpreter/tests/conformance.rs:67:51: error: matching over `()` is more explicit. Evidence: qual-logs/fifth-pass/interpreter-guest-final/gates.md, lint-errors.txt, lint-errors.json and qual-logs/fifth-pass/interpreter-guest-clippy.log."
 assumption = "Remaining workspace test lints include unowned interpreter conformance tests and the market compilation inventory spanning lib.rs, settle.rs and attest.rs. Optional market repairs remain deferred; no ownership is inferred for settle.rs or attest.rs. Strict library success does not qualify all targets."
+[observation.6.4.8]
+task = "6.4"
+file = "agent/crates/layerx-proof/src/state.rs"
+symbol = "verify_nested_account lxp_daemon_account_evidence_publish_batch"
+observed = "Account-state verification requires a sequencer-signed ordinary Receipt::Protocol whose global sequence equals the signed batch header last_sequence and whose resulting root equals the account proof root. Native account-evidence publication enforces the same final ordinary receipt contract. A raw lxp_programs_occupancy_receipt at the final sequence cannot satisfy that decoder and signature contract; retaining the last activity receipt after maintenance would instead bind the pre-maintenance root. Source evidence is retained in qual-logs/pass2-occupancy-consumers.log. The existing checks are unchanged."
+assumption = "A versioned maintenance proof variant must be implemented in the Rust account-state verifier and native evidence publisher before combined occupancy publication can provide valid account reads. The maintenance bytes, authorized signed header, final-leaf inclusion, batch and sequence binding, schedule commitment, settlement evidence digest and final state root must be verified without weakening the activity-only proof variant."
 severity = "blocker"
 
 [observation.6.11.44]
