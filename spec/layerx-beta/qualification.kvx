@@ -1279,3 +1279,51 @@ symbol = "mutations_require_octet_stream_bodies activities_route activity submit
 observed = "Core, boundary, emulator and gateway mutation routes reject JSON, plain text and octet-stream with charset parameters. Core enforces the media type before journal replay and new submission; all 6 final core tests pass, qual-logs/core-final-tests.log. Boundary's real component contract test passes within the run recorded in observation 6.4.20. The focused real emulator media-type test passes, qual-logs/media-emulator-rerun.log. The real gateway local lifecycle test passes after its test key requests canonical activity:write and program:call scopes, qual-logs/gateway-local-canonical-scopes.log; its existing DEPLOY, UPGRADE and DEPRECATE receipts and offline replay checks remain intact. Core and boundary strict all-target all-feature clippy pass, qual-logs/boundary-core-final-clippy.log. Registry tests pass 14 tests, qual-logs/registry-tests.log; its final strict all-target gate fails only on the six shared-support diagnostics described in observation 6.4.23, qual-logs/registry-clippy-qualified-scope.log. make platform-sample-dependencies-ready exits 2 because the local Python sample environment is absent, qual-logs/sample-dependencies-second-pass.log."
 assumption = "The media-type and registry repairs remain uncommitted pending the required complete lint qualification. Gateway positive CALL and exit coverage remain incomplete, and the new boundary post-upgrade regression remains red. Passing these bounded gates does not qualify the complete Programs lifecycle, emulator conformance or platform-test-sdks."
 severity = "note"
+
+[observation.6.4.25]
+task = "6.4"
+file = "platform/hosted/gateway/src/main.rs"
+symbol = "complete_pending_program render_program_interface verify_move_receipt program_call"
+observed = "Strict all-target all-feature clippy passes for gateway, emulator, CLI, registry, testnet and SDK generators: cargo clippy --offline --locked --manifest-path platform/Cargo.toml -p layerx-platform-gateway -p layerx-platform-emulator -p layerx-platform-cli -p layerx-platform-registry -p layerx-platform-testnet -p layerx-platform-sdkgen --all-targets --all-features -- -D warnings, exit 0, qual-logs/third-owned-strict-green.log. Registry, testnet and generator tests pass, qual-logs/third-registry-tests.log. Gateway and webhook tests pass, including the real TLS Redis nonce/reconstruction tests, qual-logs/third-gateway-tests.log. Extraction retains all existing test functions and assertions; qual-logs/extraction-review.json is a source review inventory, not runtime qualification."
+assumption = "These bounded gates do not establish a green platform-lint aggregate or successful post-upgrade native execution. No assertion, signed-evidence check, bound or lint policy was weakened."
+severity = "note"
+
+[observation.6.4.26]
+task = "6.4"
+file = "platform/Makefile.inc"
+symbol = "platform-lint"
+observed = "make platform-lint exits 2 in qual-logs/third-platform-lint-final.log. Workspace clippy reports 21 errors in platform/hosted/webhooks/src/hosted.rs and boundary.rs and 67 errors in platform/ramps/toolkit/src/clients.rs, engine.rs, journal.rs and lib.rs. The owned trusted.rs documentation and accessor diagnostics are repaired. Independently, the workspace structural gate and dependency/unsafe policy pass, qual-logs/third-workspace-gate.log and qual-logs/third-dependency-policy.log. The marketplace all-target host clippy command fails with wasm-only SDK exports, duplicate panic_impl, allocator and unwinding errors, qual-logs/third-marketplace-clippy.log. The cargo-deny recipe rejects top-level --disable-fetch, exit 2, qual-logs/third-cargo-deny.log. Its supported check --disable-fetch invocation exits 2 because base64 0.22.1 and 0.23.1 violate the duplicate-version ban; advisories and sources pass, qual-logs/third-cargo-deny-supported-cli.log."
+assumption = "The unowned webhook, ramp, marketplace/SDK, Makefile and dependency graph require their respective repairs. Both the marketplace source and existing check remain intact. No duplicate-version exception, substitute host implementation, test exclusion or lint suppression was introduced."
+severity = "blocker"
+
+[observation.6.4.27]
+task = "6.4"
+file = "platform/docs/samples/verify-receipt-rust/Cargo.lock"
+symbol = "platform-sample-install platform-sample-dependencies-ready"
+observed = "make platform-sample-install exits 2 because the sample Cargo.lock requires an update while cargo fetch uses --locked, qual-logs/third-sample-install-sequential.log. The lock remains unchanged. After the authorized local dependency installation steps, make platform-sample-dependencies-ready exits 0, qual-logs/third-sample-readiness.log."
+assumption = "The sample dependency owner must regenerate and review the lock against its real path dependencies. Readiness passing does not make the failed installation command successful or qualify platform-test-sdks."
+severity = "note"
+
+[observation.6.4.28]
+task = "6.4"
+file = "programs/crates/layerx-programs-registry/src/protocol_evidence.rs"
+symbol = "DeploymentProof ProtocolDeploymentVerifier::verify_deployment decode_trust_history"
+observed = "Authenticated POST /__registry/deployments still dispatches to deployment_ingress_unavailable and returns HTTP 503 deployment_proof_unavailable. Canonical production must provide the signed DEPLOY/UPGRADE activity and activity inclusion, successful receipt and receipt inclusion, signed batch header, resulting Programs root membership, canonical program-record key/value membership, and active lifecycle witness, all bound to one independently authorized batch/state. Interface reads additionally require InterfaceStateWitness at the same root. decode_trust_history currently admits only protocol versions 1 and 2."
+assumption = "Protocol-3 compatibility, historical proof retention, authenticated proof production, verified deployment ingestion and a real gateway registry projection form a separate feature. A receipt alone, caller-provided metadata or account-state head cannot replace these proofs. No registry ingestion implementation or verification bypass was added."
+severity = "blocker"
+
+[observation.6.4.29]
+task = "6.4"
+file = "interop/crates/layerx-interop-service/src/server.rs"
+symbol = "dependency_ready hosted_ready"
+observed = "The two authorized gateway Client::request callers group content type and body into the new content tuple. cargo check --offline --locked --manifest-path interop/Cargo.toml -p layerx-interop-service exits 101 before compiling because interop/Cargo.lock requires updating, qual-logs/third-interop-service-check.log."
+assumption = "The interop lock owner must regenerate and review the lock before full service compilation can be claimed. The lock and locked check remain unchanged; no unowned service code was edited."
+severity = "blocker"
+
+[observation.6.4.30]
+task = "6.4"
+file = "platform/hosted/agent-boundary/tests/real_node/lifecycle/post_upgrade.rs"
+symbol = "calls_execute_before_and_after_upgrade_then_exit lifecycle_routes_execute_and_replay_real_native_state_receipts"
+observed = "Both native binary sets retain the post-upgrade result -736 with authenticated callback stage 5/status -3. Original boundary tests pass 5 unit and 10 integration tests and fail only this regression, qual-logs/third-original-boundary.log. The refreshed source 8645dc0b serialized boundary rerun has the same result, qual-logs/third-final-native-boundary.log. Both final emulator runs pass 21 unit and 11 integration tests and fail only the unchanged lifecycle assertion, qual-logs/third-final-original-emulator.log and third-final-native-emulator.log. Core passes 2 unit and 6 integration tests with original binaries and the refreshed serialized rerun, qual-logs/third-original-core.log and third-final-native-core.log. Rebuilt gateway lifecycle tests pass against both sets, qual-logs/third-final-original-gateway.log and third-final-native-gateway.log. Binary hashes and marker are unchanged; the execution reproducer commit dd7ad9b5 supplies no repair or replacement binaries."
+assumption = "Complete lifecycle qualification still requires the real execution repair; later registration/exit assertions remain unreachable after the failure. Initial refreshed boundary pending/202 and core receipt_unavailable/503 failures remain in third-native-boundary.log and third-native-core.log; affected tests pass when serialized without source or assertion changes, but the cause of the earlier failures is not established. Emulator uses the worktree-linked native bridge, not a replacement bridge selected by LAYERX_TEST_NATIVE_BIN_DIR."
+severity = "blocker"
