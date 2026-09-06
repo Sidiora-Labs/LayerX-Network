@@ -374,7 +374,9 @@ impl Server {
         let registry = registry_handle
             .read()
             .map_err(|_| ServerError::AuthorizationUnavailable)?;
-        let _token = registry.authenticate(&credential).map_err(map_session)?;
+        let _token = registry
+            .authenticate(&credential)
+            .map_err(|error| map_session(&error))?;
         let session = registry
             .get(credential.tenant(), credential.session_id())
             .ok_or(ServerError::MissingSession)?;
@@ -530,6 +532,12 @@ impl Server {
     }
 
     /// Runs a non-mutating tool and reauthorizes at the result-release boundary.
+    ///
+    /// # Errors
+    ///
+    /// Refuses invalid arguments, unavailable or non-read tools, and invalid session or
+    /// capability authority, including authority lost before result release. Returns errors
+    /// on invocation counter overflow or audit persistence failure.
     pub fn execute_read<T, F>(
         &mut self,
         core_sequence: u64,
@@ -555,6 +563,13 @@ impl Server {
 
     /// Runs a write tool only while the shared daemon session read permit linearizes its actual
     /// externally visible effect against close, revocation, and scope restriction.
+    ///
+    /// # Errors
+    ///
+    /// Refuses invalid arguments, unavailable or non-write tools, and invalid session or
+    /// capability authority, including authority lost before commit. Returns errors on
+    /// invocation counter overflow or audit persistence failure; completion audit failure
+    /// can occur after the executor has committed its effect.
     pub fn execute_committed<T, F>(
         &mut self,
         core_sequence: u64,
@@ -659,7 +674,7 @@ fn binding_digest(binding: &ScopeBinding, mode: DeploymentMode) -> [u8; 32] {
     hasher.finalize().into()
 }
 
-const fn map_authorization(error: AuthorizationError) -> ServerError {
+const fn map_authorization(error: &AuthorizationError) -> ServerError {
     match error {
         AuthorizationError::Revoked => ServerError::RevokedSession,
         AuthorizationError::Expired => ServerError::ExpiredAuthority,
@@ -670,7 +685,7 @@ const fn map_authorization(error: AuthorizationError) -> ServerError {
     }
 }
 
-fn map_session(error: SessionError) -> ServerError {
+fn map_session(error: &SessionError) -> ServerError {
     match error {
         SessionError::Expired => ServerError::ExpiredAuthority,
         SessionError::ScopeDenied => ServerError::ToolAbsent,
@@ -690,8 +705,8 @@ fn map_session(error: SessionError) -> ServerError {
 
 fn map_control(error: SessionControlError) -> ServerError {
     match error {
-        SessionControlError::Authorization(error) => map_authorization(error),
-        SessionControlError::Session(error) => map_session(error),
+        SessionControlError::Authorization(error) => map_authorization(&error),
+        SessionControlError::Session(error) => map_session(&error),
         SessionControlError::Lifecycle(_)
         | SessionControlError::Human(_)
         | SessionControlError::Unavailable => ServerError::AuthorizationUnavailable,

@@ -1182,9 +1182,9 @@ severity = "blocker"
 task = "6.11"
 file = "agent/crates/layerx-mcp/src/server.rs"
 symbol = "execute_read execute_committed map_authorization map_session"
-observed = "After the agentd and SDK library lint repairs, make agent-lint exits 2 with Cargo exit 101 on missing error documentation at server.rs:533 and :558 and needless ownership at :662 and :673. These MCP functions are outside the authorized repair paths. Raw diagnostics: qual-logs/agent-lint-third-final.log. The dependency-policy recipe is not reached; sh agent/tools/dependency-policy.sh independently exits 0 in qual-logs/dependency-policy-third.log."
-assumption = "The MCP owner must repair the four diagnostics without suppressing lints or changing authorization and session error semantics, then rerun make agent-lint including its dependency-policy recipe. Independent policy qualification is not an aggregate lint pass."
-severity = "blocker"
+observed = "The four MCP server diagnostics are repaired with error contracts and borrowed authorization/session error parameters plus corresponding callers. Authorization and session error mappings are unchanged. The first aggregate lint rerun exposes ten needless path borrows in MCP readonly and scope tests and exits 2 with Cargo exit 101; those borrows are removed without changing assertions. The final make agent-lint exits 0 and reaches sh agent/tools/dependency-policy.sh, which reports agent dependency and unsafe policies passed. make agent-test exits 0 across the workspace, including real protocol-2 restart evidence and MCP scope/read-only tests. Changed Rust formatting checks exit 0. Logs: qual-logs/agent-lint-fourth.log, qual-logs/agent-lint-fourth-final.log, qual-logs/agent-test-fourth.log and qual-logs/format-fourth-final.log."
+assumption = "The aggregate lint blocker reported here and referenced by observation 6.11.20 is resolved without suppressions or weakened checks. Commands use CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4 and default worktree targets; native fixtures use LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin. The installed native readiness record identifies source 8645dc0b and a separate unresolved occupancy fixture gate; the passing agent gates do not establish that external native gate."
+severity = "note"
 
 [observation.6.11.20]
 task = "6.11"
