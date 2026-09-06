@@ -133,6 +133,11 @@ lxp_result lxp_replay_batch(lxp_replay_engine *engine,
                             const uint8_t starting_state_root[32],
                             lxp_arena *arena,
                             lxp_replay_batch_result *result);
+lxp_result lxp_replay_batch_publication(lxp_replay_engine *engine,
+                            const lxp_batch_body *body,
+                            const uint8_t starting_state_root[32],
+                            lxp_arena *arena,
+                            lxp_replay_batch_result *result);
 lxp_result lxp_replay_verify_roots(const lxp_replay_batch_result *recomputed,
                                    const lxp_batch_body *published);
 lxp_result lxp_divergence_detect(lxp_divergence_state *state,

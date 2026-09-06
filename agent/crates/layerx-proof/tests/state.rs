@@ -579,3 +579,109 @@ fn malformed_state_path_geometry_never_reaches_nested_verification() {
         })
     );
 }
+
+fn maintenance_leaf(resulting_root: [u8; 32]) -> Vec<u8> {
+    use layerx_programs_runtime::{meter::FeeSchedule, occupancy::OccupancyLedger};
+    use layerx_wire::hash::{domain, sha256, CanonicalBytes, Domain};
+
+    let schedule = FeeSchedule::new_complete(1, 1, 2, 3, 4, 5, 6, 7);
+    let prepared = OccupancyLedger::activated_after(6)
+        .prepare_unchanged_batch(7, schedule)
+        .unwrap_or_else(|error| panic!("real settlement failed: {error:?}"));
+    let settlement = prepared.settlement();
+    let evidence = settlement.canonical_evidence();
+    let usage = settlement.usage();
+    let mut schedule_bytes = 1_u32.to_be_bytes().to_vec();
+    for price in 1_u64..=7 {
+        schedule_bytes.extend_from_slice(&price.to_be_bytes());
+    }
+    schedule_bytes.extend_from_slice(&[0x81; 32]);
+    let commitment = domain(Domain::ContextHash, &CanonicalBytes::from_wire(schedule_bytes.clone()))
+        .unwrap_or_else(|error| panic!("schedule hash: {error:?}"));
+    let mut bytes = b"LXP/programs/occupancy-receipt/v2\0".to_vec();
+    bytes.extend_from_slice(&7_u64.to_be_bytes());
+    bytes.extend_from_slice(&10_u64.to_be_bytes());
+    bytes.extend_from_slice(&1_u32.to_be_bytes());
+    bytes.extend_from_slice(&schedule_bytes);
+    for amount in [usage.byte_batches, usage.fee_units, usage.paid_fee_units, usage.arrears_fee_units] {
+        bytes.extend_from_slice(&amount.to_be_bytes());
+    }
+    assert!(settlement.payer_dispositions().unwrap_or_else(|error| panic!("payers: {error:?}")).is_empty());
+    bytes.extend_from_slice(&0_u16.to_be_bytes());
+    bytes.extend_from_slice(&commitment);
+    bytes.extend_from_slice(&u32::try_from(evidence.len()).unwrap_or_else(|_| panic!("evidence length")).to_be_bytes());
+    bytes.extend_from_slice(&evidence);
+    bytes.extend_from_slice(&sha256(&evidence).unwrap_or_else(|error| panic!("evidence hash: {error:?}")));
+    bytes.extend_from_slice(&[0x82; 32]);
+    bytes.extend_from_slice(&settlement.transfer_root([0x81; 32]).unwrap_or_else(|error| panic!("transfer root: {error:?}")));
+    bytes.extend_from_slice(&[0x83; 32]);
+    bytes.extend_from_slice(&resulting_root);
+    bytes
+}
+
+fn sign_maintenance_proof(proof: &mut NestedAccountProof) {
+    let sequencer = SigningKey::from_bytes(&[0x51; 32]);
+    let activity_receipt = receipt_bytes([0x71; 32], [0x83; 32], Some(&sequencer));
+    let (path, root) = build_proof(&[activity_receipt.as_slice(), proof.receipt_bytes.as_slice()], 1)
+        .unwrap_or_else(|error| panic!("combined receipt proof: {error:?}"));
+    proof.receipt_proof = path;
+    proof.header_bytes = header_bytes(proof.resulting_state_root, root, sequencer.verifying_key().to_bytes());
+    proof.header_signature = sequencer.sign(&batch_header_digest(&proof.header_bytes)
+        .unwrap_or_else(|error| panic!("header hash: {error:?}"))).to_bytes();
+}
+
+#[test]
+fn maintenance_account_proof_requires_explicit_variant_and_combined_signed_tree() {
+    use layerx_proof::state::verify_nested_account_maintenance;
+    let (account_id, asset_id, value) = program_account_vectors();
+    let sequencer = SigningKey::from_bytes(&[0x51; 32]);
+    let (mut proof, authorization, root) = nested_fixture(account_id, &value, Some(&sequencer));
+    assert!(verify_nested_account_maintenance(&value, account_id, Some(asset_id), &proof, &authorization, 1, 1).is_err());
+    proof.receipt_bytes = maintenance_leaf(root);
+    sign_maintenance_proof(&mut proof);
+    let verified = verify_nested_account_maintenance(&value, account_id, Some(asset_id), &proof, &authorization, 1, 1)
+        .unwrap_or_else(|error| panic!("maintenance proof: {error:?}"));
+    assert_eq!(verified.account().account_id, account_id);
+    assert_eq!(verified.header().header().resulting_state_root(), root);
+    assert_eq!(verified.maintenance_digest(), <[u8; 32]>::from(Sha256::digest(&proof.receipt_bytes)));
+    assert!(verify_nested_account(&value, account_id, Some(asset_id), &proof, &authorization).is_err());
+    for (count, parameter) in [(0, 1), (2, 1), (1, 2)] {
+        assert!(verify_nested_account_maintenance(&value, account_id, Some(asset_id), &proof, &authorization, count, parameter).is_err());
+    }
+    let mut mutated = proof.clone();
+    mutated.receipt_bytes["LXP/programs/occupancy-receipt/v2\0".len() + 7] ^= 1;
+    assert!(verify_nested_account_maintenance(&value, account_id, Some(asset_id), &mutated, &authorization, 1, 1).is_err());
+    mutated = proof.clone();
+    mutated.header_signature[0] ^= 1;
+    assert!(verify_nested_account_maintenance(&value, account_id, Some(asset_id), &mutated, &authorization, 1, 1).is_err());
+    mutated = proof.clone();
+    let ledger_offset = mutated.receipt_bytes.len() - 128;
+    mutated.receipt_bytes[ledger_offset] ^= 1;
+    assert!(verify_nested_account_maintenance(&value, account_id, Some(asset_id), &mutated, &authorization, 1, 1).is_err());
+    mutated = proof.clone();
+    let fee_offset = "LXP/programs/occupancy-receipt/v2\0".len() + 8 + 8 + 4 + 92 + 16;
+    mutated.receipt_bytes[fee_offset + 15] ^= 1;
+    sign_maintenance_proof(&mut mutated);
+    assert_eq!(verify_nested_account_maintenance(&value, account_id, Some(asset_id), &mutated, &authorization, 1, 1), Err(AccountProofError::ReceiptBinding));
+}
+
+#[test]
+fn maintenance_wire_rejects_truncation_trailing_bytes_and_changed_commitments() {
+    use layerx_wire::maintenance::decode_occupancy_maintenance;
+    let bytes = maintenance_leaf([0x91; 32]);
+    assert!(decode_occupancy_maintenance(&bytes).is_ok());
+    for length in 0..bytes.len() {
+        assert!(decode_occupancy_maintenance(&bytes[..length]).is_err());
+    }
+    let mut changed = bytes.clone();
+    changed.push(0);
+    assert!(decode_occupancy_maintenance(&changed).is_err());
+    let schedule_price_offset = "LXP/programs/occupancy-receipt/v2\0".len() + 8 + 8 + 4 + 4;
+    changed = bytes.clone();
+    changed[schedule_price_offset] ^= 1;
+    assert!(decode_occupancy_maintenance(&changed).is_err());
+    changed = bytes;
+    let evidence_digest_offset = changed.len() - 160;
+    changed[evidence_digest_offset] ^= 1;
+    assert!(decode_occupancy_maintenance(&changed).is_err());
+}
