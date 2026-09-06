@@ -9,19 +9,22 @@ mod common;
 use common::{envelope, error_envelope, string_field, Cli};
 use ed25519_dalek::SigningKey;
 use serde_json::Value;
+use std::fmt::Write as _;
 
 const SEED_HEX: &str = "1111111111111111111111111111111111111111111111111111111111111111";
 const TOKEN: &str = "layerx-testnet-token-abcdef0123456789";
 
 fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    bytes.iter().fold(String::new(), |mut output, byte| {
+        write!(output, "{byte:02x}")
+            .unwrap_or_else(|error| panic!("hex formatting failed: {error}"));
+        output
+    })
 }
 
 fn expected_public_key() -> String {
     let mut seed = [0_u8; 32];
-    for byte in &mut seed {
-        *byte = 0x11;
-    }
+    seed.fill(0x11);
     let signing = SigningKey::from_bytes(&seed);
     hex(&signing.verifying_key().to_bytes())
 }
@@ -60,13 +63,11 @@ fn imported_seed_is_never_written_to_configuration() {
         Ok(value) => value,
         Err(error) => panic!("configuration should be JSON: {error}; config={config}"),
     };
-    let metadata = match parsed.pointer("/keys/alpha") {
-        Some(value) => value,
-        None => panic!("configuration should record key metadata: {config}"),
+    let Some(metadata) = parsed.pointer("/keys/alpha") else {
+        panic!("configuration should record key metadata: {config}");
     };
-    let object = match metadata.as_object() {
-        Some(object) => object,
-        None => panic!("key metadata should be an object: {metadata}"),
+    let Some(object) = metadata.as_object() else {
+        panic!("key metadata should be an object: {metadata}");
     };
     let mut fields: Vec<&String> = object.keys().collect();
     fields.sort();
@@ -123,7 +124,10 @@ fn created_key_reports_its_secret_storage_and_hides_the_secret() {
 fn api_token_is_never_written_to_configuration() {
     let cli = Cli::new();
     // Materialise a configuration file first so the assertion inspects a real file.
-    assert!(cli.run(&["--json", "key", "create", "alpha"]).status.success());
+    assert!(cli
+        .run(&["--json", "key", "create", "alpha"])
+        .status
+        .success());
 
     let output = cli.run_with_stdin(
         &["--json", "auth", "set", "--environment", "testnet"],
@@ -154,7 +158,10 @@ fn api_token_is_never_written_to_configuration() {
 #[test]
 fn duplicate_key_names_are_refused_with_a_machine_readable_error() {
     let cli = Cli::new();
-    assert!(cli.run(&["--json", "key", "create", "alpha"]).status.success());
+    assert!(cli
+        .run(&["--json", "key", "create", "alpha"])
+        .status
+        .success());
 
     let output = cli.run(&["--json", "key", "create", "alpha"]);
     assert!(!output.status.success());

@@ -56,9 +56,8 @@ pub fn platform_install_a2a(
         configuration,
         request.environment.clone(),
         request.key.clone(),
-        "a2a",
+        ("a2a", "a2a"),
         request.token_stdin,
-        "a2a",
         request.read_only,
         request.rotate,
     )?;
@@ -80,93 +79,25 @@ pub fn platform_install_a2a(
     );
     let card_path = directory.join(CARD_FILE);
     let card = agent_card(&selection.environment, &listen, mode, &tools);
-    let registration = Registration {
-        path: directory.join(REGISTRY_FILE),
-        section: REGISTRY_SECTION,
-        name: SERVER_NAME.to_owned(),
-        entry: json!({
-            "url": endpoint_url(&listen),
-            "transport": "JSONRPC",
-            "card": card_path.display().to_string(),
-            "command": command,
-            "args": arguments,
-            "env": variables,
-            "environment": selection.environment,
-            "lifecycle": {
-                "start": [command, "a2a", "start"],
-                "stop": [command, "a2a", "stop"],
-                "status": [command, "a2a", "status"],
-            },
-        }),
-    };
+    let registration = installation_registration(
+        &directory,
+        &card_path,
+        &selection.environment,
+        &listen,
+        &command,
+        &arguments,
+        &variables,
+    );
     let descriptors: Vec<Value> = tools.iter().copied().map(toolset::descriptor).collect();
-    let mut paths = vec![
-        card_path.clone(),
-        registration.path.clone(),
-        authorization_path.clone(),
-    ];
-    if let Some(root) = &request.well_known {
-        paths.push(root.join(".well-known").join(CARD_FILE));
-    }
-    let mut transaction = match FileTransaction::capture(&paths) {
-        Ok(value) => value,
-        Err(error) => return Err(error),
-    };
-    let mut published: Vec<Value> = Vec::new();
-    let applied = (|| {
-        if authorization.changed {
-            transaction.begin_publication(&authorization_path)?;
-            super::write_private(&authorization_path, authorization.value.as_str())?;
-            transaction.finish_publication(&authorization_path, true)?;
-        }
-        transaction.begin_publication(&card_path)?;
-        let card_outcome = publish(&card_path, &card)?;
-        transaction.finish_publication(&card_path, card_outcome.changed)?;
-        transaction.begin_publication(&registration.path)?;
-        let registry_outcome = apply(&registration)?;
-        transaction.finish_publication(&registration.path, registry_outcome.changed)?;
-        let mut changed = authorization.changed || card_outcome.changed || registry_outcome.changed;
-        if let Some(root) = &request.well_known {
-            let path = root.join(".well-known").join(CARD_FILE);
-            transaction.begin_publication(&path)?;
-            let outcome = publish(&path, &card)?;
-            transaction.finish_publication(&path, outcome.changed)?;
-            if outcome.changed {
-                changed = true;
-            }
-            published.push(report(&path, "document", CARD_FILE, &outcome));
-        }
-        Ok::<_, String>((card_outcome, registry_outcome, changed))
-    })();
-    let (card_outcome, registry_outcome, changed) = match applied {
-        Ok(value) => value,
-        Err(error) => {
-            let rollback = transaction.rollback();
-            return match rollback {
-                Ok(()) => Err(error),
-                Err(rollback) => Err(format!("{error}; installation rollback failed: {rollback}")),
-            };
-        }
-    };
-    if selection.rotated_gateway_key || authorization.changed {
-        if let Err(error) = crate::a2a::stop_installed() {
-            let rollback = transaction.rollback();
-            return match rollback {
-                Ok(()) => Err(error),
-                Err(rollback) => Err(format!("{error}; installation rollback failed: {rollback}")),
-            };
-        }
-    }
-    let lifecycle = match crate::a2a::start_installed(&command, &arguments, &variables) {
-        Ok(value) => value,
-        Err(error) => {
-            let rollback = transaction.rollback();
-            return match rollback {
-                Ok(()) => Err(error),
-                Err(rollback) => Err(format!("{error}; installation rollback failed: {rollback}")),
-            };
-        }
-    };
+    let (card_outcome, registry_outcome, changed, published, lifecycle) = publish_installation(
+        request,
+        &selection,
+        &authorization,
+        (&card_path, &authorization_path),
+        &registration,
+        &card,
+        (&command, &arguments, &variables),
+    )?;
     Ok(json!({
         "component": "a2a",
         "transport": "JSONRPC",
@@ -348,7 +279,10 @@ fn prepare_authorization(path: &Path, rotate: bool) -> Result<PreparedAuthorizat
     getrandom::fill(random.as_mut())
         .map_err(|error| format!("operating-system randomness failed: {error}"))?;
     Ok(PreparedAuthorization {
-        value: Zeroizing::new(format!("lxa2a_{}", crate::encoding::hex_encode(random.as_ref()))),
+        value: Zeroizing::new(format!(
+            "lxa2a_{}",
+            crate::encoding::hex_encode(random.as_ref())
+        )),
         changed: true,
     })
 }
@@ -356,17 +290,19 @@ fn prepare_authorization(path: &Path, rotate: bool) -> Result<PreparedAuthorizat
 pub(crate) fn read_authorization(path: &Path) -> Result<Zeroizing<String>, String> {
     let expected = super::private_file_metadata(path)?;
     let mut source = String::new();
-    let file = File::open(path)
-        .map_err(|error| format!("could not read {}: {error}", path.display()))?;
+    let file =
+        File::open(path).map_err(|error| format!("could not read {}: {error}", path.display()))?;
     let opened = file
         .metadata()
         .map_err(|error| format!("could not inspect opened {}: {error}", path.display()))?;
     let current = super::private_file_metadata(path)?;
     if !super::same_file(&expected, &opened) || !super::same_file(&opened, &current) {
-        return Err(format!("{} changed while its credential was opened", path.display()));
+        return Err(format!(
+            "{} changed while its credential was opened",
+            path.display()
+        ));
     }
-    file
-        .take((MAX_AUTHORIZATION_BYTES + 1) as u64)
+    file.take((MAX_AUTHORIZATION_BYTES + 1) as u64)
         .read_to_string(&mut source)
         .map_err(|error| format!("could not read {}: {error}", path.display()))?;
     if source.len() > MAX_AUTHORIZATION_BYTES {
@@ -436,4 +372,119 @@ mod authorization_file_tests {
         assert!(read_authorization(&alias.join("authorization")).is_err());
         fs::remove_dir_all(&root).map_err(|error| error.to_string())
     }
+}
+
+fn publish_installation(
+    request: &Request,
+    selection: &super::Selection,
+    authorization: &PreparedAuthorization,
+    paths: (&Path, &Path),
+    registration: &Registration,
+    card: &Value,
+    launch: (&str, &[String], &std::collections::BTreeMap<String, String>),
+) -> Result<(super::Outcome, super::Outcome, bool, Vec<Value>, Value), String> {
+    let (card_path, authorization_path) = paths;
+    let (command, arguments, variables) = launch;
+    let mut published = Vec::new();
+    let mut paths = vec![
+        card_path.to_path_buf(),
+        registration.path.clone(),
+        authorization_path.to_path_buf(),
+    ];
+    if let Some(root) = &request.well_known {
+        paths.push(root.join(".well-known").join(CARD_FILE));
+    }
+    let mut transaction = FileTransaction::capture(&paths)?;
+    let applied = (|| {
+        if authorization.changed {
+            transaction.begin_publication(authorization_path)?;
+            super::write_private(authorization_path, authorization.value.as_str())?;
+            transaction.finish_publication(authorization_path, true)?;
+        }
+        transaction.begin_publication(card_path)?;
+        let card_outcome = publish(card_path, card)?;
+        transaction.finish_publication(card_path, card_outcome.changed)?;
+        transaction.begin_publication(&registration.path)?;
+        let registry_outcome = apply(registration)?;
+        transaction.finish_publication(&registration.path, registry_outcome.changed)?;
+        let mut changed = authorization.changed || card_outcome.changed || registry_outcome.changed;
+        if let Some(root) = &request.well_known {
+            let path = root.join(".well-known").join(CARD_FILE);
+            transaction.begin_publication(&path)?;
+            let outcome = publish(&path, card)?;
+            transaction.finish_publication(&path, outcome.changed)?;
+            if outcome.changed {
+                changed = true;
+            }
+            published.push(report(&path, "document", CARD_FILE, &outcome));
+        }
+        Ok::<_, String>((card_outcome, registry_outcome, changed))
+    })();
+    let (card_outcome, registry_outcome, changed) = match applied {
+        Ok(value) => value,
+        Err(error) => {
+            let rollback = transaction.rollback();
+            return match rollback {
+                Ok(()) => Err(error),
+                Err(rollback) => Err(format!("{error}; installation rollback failed: {rollback}")),
+            };
+        }
+    };
+    if selection.rotated_gateway_key || authorization.changed {
+        if let Err(error) = crate::a2a::stop_installed() {
+            let rollback = transaction.rollback();
+            return match rollback {
+                Ok(()) => Err(error),
+                Err(rollback) => Err(format!("{error}; installation rollback failed: {rollback}")),
+            };
+        }
+    }
+    let lifecycle = match crate::a2a::start_installed(command, arguments, variables) {
+        Ok(value) => value,
+        Err(error) => {
+            let rollback = transaction.rollback();
+            return match rollback {
+                Ok(()) => Err(error),
+                Err(rollback) => Err(format!("{error}; installation rollback failed: {rollback}")),
+            };
+        }
+    };
+    Ok((
+        card_outcome,
+        registry_outcome,
+        changed,
+        published,
+        lifecycle,
+    ))
+}
+
+fn installation_registration(
+    directory: &Path,
+    card_path: &Path,
+    environment: &str,
+    listen: &str,
+    command: &str,
+    arguments: &[String],
+    variables: &std::collections::BTreeMap<String, String>,
+) -> Registration {
+    let registration = Registration {
+        path: directory.join(REGISTRY_FILE),
+        section: REGISTRY_SECTION,
+        name: SERVER_NAME.to_owned(),
+        entry: json!({
+            "url": endpoint_url(listen),
+            "transport": "JSONRPC",
+            "card": card_path.display().to_string(),
+            "command": command,
+            "args": arguments,
+            "env": variables,
+            "environment": environment,
+            "lifecycle": {
+                "start": [command, "a2a", "start"],
+                "stop": [command, "a2a", "stop"],
+                "status": [command, "a2a", "status"],
+            },
+        }),
+    };
+    registration
 }

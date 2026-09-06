@@ -78,10 +78,7 @@ fn environment_list_reports_the_default_profile() {
     let cli = Cli::new();
     let output = cli.run(&["--json", "environment", "list"]);
     let value = assert_success_envelope(&output, "environment.list");
-    let profiles = match value.pointer("/data").and_then(Value::as_array) {
-        Some(profiles) => profiles,
-        None => panic!("environment list should be an array: {value}"),
-    };
+    let Some(profiles) = value.pointer("/data").and_then(Value::as_array) else { panic!("environment list should be an array: {value}"); };
     assert!(profiles
         .iter()
         .any(|profile| profile.get("name").and_then(Value::as_str) == Some("emulator")));

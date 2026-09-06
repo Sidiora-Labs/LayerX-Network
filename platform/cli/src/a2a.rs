@@ -79,12 +79,12 @@ pub fn serve(
     configuration: &Configuration,
     gateway_credential: &str,
     key: &str,
-    source: Option<&str>,
-    asset: Option<&str>,
+    payment: (Option<&str>, Option<&str>),
     listen: &str,
     authorization_file: &Path,
     mode: DeploymentMode,
 ) -> Result<(), String> {
+    let (source, asset) = payment;
     let address = endpoint(listen)?;
     let tools = toolset::surface(mode)?;
     let runtime = Arc::new(toolset::Runtime::new(
@@ -280,9 +280,8 @@ fn send(
     };
     let outcome = toolset::invoke(runtime, tool, &instruction.arguments);
     let task = build_task(&ids, &context, message, tool.name, &timestamp, outcome);
-    let mut tasks = match tasks.lock() {
-        Ok(tasks) => tasks,
-        Err(_) => return failure(identifier, -32603, "the task ledger is unavailable"),
+    let Ok(mut tasks) = tasks.lock() else {
+        return failure(identifier, -32603, "the task ledger is unavailable");
     };
     if tasks.len() >= MAX_TRACKED_TASKS {
         if let Some(evicted) = tasks.keys().next().cloned() {
@@ -306,7 +305,7 @@ fn build_task(
             let state = match gateway_state(&value) {
                 Some("refused") => "rejected",
                 Some("unknown") => "unknown",
-                Some("acknowledged") | Some("pending") => "submitted",
+                Some("acknowledged" | "pending") => "submitted",
                 _ => "completed",
             };
             json!({
@@ -354,9 +353,8 @@ fn cancel(tasks: &Mutex<BTreeMap<String, Value>>, identifier: Value, parameters:
     let Some(name) = parameters.get("id").and_then(Value::as_str) else {
         return failure(identifier, -32602, "the request did not name a task");
     };
-    let tasks = match tasks.lock() {
-        Ok(tasks) => tasks,
-        Err(_) => return failure(identifier, -32603, "the task ledger is unavailable"),
+    let Ok(tasks) = tasks.lock() else {
+        return failure(identifier, -32603, "the task ledger is unavailable");
     };
     let Some(task) = tasks.get(name) else {
         return failure(identifier, -32001, "the task was not found");
@@ -379,9 +377,8 @@ fn fetch(tasks: &Mutex<BTreeMap<String, Value>>, identifier: Value, parameters: 
     let Some(name) = parameters.get("id").and_then(Value::as_str) else {
         return failure(identifier, -32602, "the request did not name a task");
     };
-    let tasks = match tasks.lock() {
-        Ok(tasks) => tasks,
-        Err(_) => return failure(identifier, -32603, "the task ledger is unavailable"),
+    let Ok(tasks) = tasks.lock() else {
+        return failure(identifier, -32603, "the task ledger is unavailable");
     };
     match tasks.get(name) {
         Some(task) => success(identifier, task.clone()),
@@ -439,91 +436,7 @@ fn read_request(stream: &mut TcpStream) -> Result<Request, String> {
             return Err("the request headers exceed the transport limit".into());
         }
     };
-    let headers = std::str::from_utf8(&bytes[..header_end])
-        .map_err(|_| "the request headers are not UTF-8".to_string())?;
-    let mut lines = headers.split("\r\n");
-    let start = lines
-        .next()
-        .ok_or_else(|| "the request has no start line".to_string())?;
-    let mut start_fields = start.split(' ');
-    let method = start_fields.next().unwrap_or_default();
-    let path = start_fields.next().unwrap_or_default();
-    if method.is_empty()
-        || !method.bytes().all(|byte| byte.is_ascii_uppercase())
-        || path.is_empty()
-        || !path.starts_with('/')
-        || path.starts_with("//")
-        || path.contains(['?', '#', '\\', '\0'])
-        || path.split('/').any(|segment| matches!(segment, "." | ".."))
-        || start_fields.next() != Some("HTTP/1.1")
-        || start_fields.next().is_some()
-    {
-        return Err("the request line is not canonical HTTP/1.1".into());
-    }
-    let mut length = 0_usize;
-    let mut has_length = false;
-    let mut has_host = false;
-    let mut content_type = None;
-    let mut authorization = None;
-    for line in lines.filter(|line| !line.is_empty()) {
-        let (name, value) = line
-            .split_once(':')
-            .ok_or_else(|| "the request contains a malformed header".to_string())?;
-        if name.is_empty()
-            || !name
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-        {
-            return Err("the request contains a malformed header name".into());
-        }
-        let value = value.trim_matches([' ', '\t']);
-        if value
-            .bytes()
-            .any(|byte| byte.is_ascii_control() && byte != b'\t')
-        {
-            return Err("the request contains a malformed header value".into());
-        }
-        if name.eq_ignore_ascii_case("content-length") {
-            if has_length || value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
-                return Err("the request contains an ambiguous content length".into());
-            }
-            length = value
-                .parse()
-                .map_err(|_| "the content length is not a number".to_string())?;
-            has_length = true;
-        } else if name.eq_ignore_ascii_case("host") {
-            if has_host || value.is_empty() {
-                return Err("the request contains an ambiguous host".into());
-            }
-            has_host = true;
-        } else if name.eq_ignore_ascii_case("content-type") {
-            if content_type.is_some() {
-                return Err("the request contains an ambiguous content type".into());
-            }
-            content_type = Some(value);
-        } else if name.eq_ignore_ascii_case("authorization") {
-            if authorization.is_some() || value.len() > 256 {
-                return Err("the request contains ambiguous authorization".into());
-            }
-            authorization = Some(Zeroizing::new(value.to_owned()));
-        } else if name.eq_ignore_ascii_case("transfer-encoding") {
-            return Err("transfer encoding is not supported".into());
-        }
-    }
-    if !has_host {
-        return Err("the request has no host header".into());
-    }
-    if method == "POST" && (!has_length || content_type != Some("application/json")) {
-        return Err("POST requires one application/json body with an explicit length".into());
-    }
-    if method != "POST" && length != 0 {
-        return Err("a non-POST request may not carry a body".into());
-    }
-    if length > MAX_REQUEST_BYTES {
-        return Err("the request body exceeds the transport limit".into());
-    }
-    let method = method.to_owned();
-    let path = path.to_owned();
+    let (method, path, authorization, length) = parse_request_headers(&bytes[..header_end])?;
     while bytes.len() - header_end < length {
         let read = stream
             .read(&mut chunk)
@@ -853,6 +766,96 @@ fn civil_date(days: u64) -> (u64, u64, u64) {
         civil_year
     };
     (year, month, day_of_month)
+}
+
+type RequestHeaders = (String, String, Option<Zeroizing<String>>, usize);
+fn parse_request_headers(bytes: &[u8]) -> Result<RequestHeaders, String> {
+    let headers =
+        std::str::from_utf8(bytes).map_err(|_| "the request headers are not UTF-8".to_string())?;
+    let mut lines = headers.split("\r\n");
+    let start = lines
+        .next()
+        .ok_or_else(|| "the request has no start line".to_string())?;
+    let mut start_fields = start.split(' ');
+    let method = start_fields.next().unwrap_or_default();
+    let path = start_fields.next().unwrap_or_default();
+    if method.is_empty()
+        || !method.bytes().all(|byte| byte.is_ascii_uppercase())
+        || path.is_empty()
+        || !path.starts_with('/')
+        || path.starts_with("//")
+        || path.contains(['?', '#', '\\', '\0'])
+        || path.split('/').any(|segment| matches!(segment, "." | ".."))
+        || start_fields.next() != Some("HTTP/1.1")
+        || start_fields.next().is_some()
+    {
+        return Err("the request line is not canonical HTTP/1.1".into());
+    }
+    let mut length = 0_usize;
+    let mut has_length = false;
+    let mut has_host = false;
+    let mut content_type = None;
+    let mut authorization = None;
+    for line in lines.filter(|line| !line.is_empty()) {
+        let (name, value) = line
+            .split_once(':')
+            .ok_or_else(|| "the request contains a malformed header".to_string())?;
+        if name.is_empty()
+            || !name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        {
+            return Err("the request contains a malformed header name".into());
+        }
+        let value = value.trim_matches([' ', '\t']);
+        if value
+            .bytes()
+            .any(|byte| byte.is_ascii_control() && byte != b'\t')
+        {
+            return Err("the request contains a malformed header value".into());
+        }
+        if name.eq_ignore_ascii_case("content-length") {
+            if has_length || value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+                return Err("the request contains an ambiguous content length".into());
+            }
+            length = value
+                .parse()
+                .map_err(|_| "the content length is not a number".to_string())?;
+            has_length = true;
+        } else if name.eq_ignore_ascii_case("host") {
+            if has_host || value.is_empty() {
+                return Err("the request contains an ambiguous host".into());
+            }
+            has_host = true;
+        } else if name.eq_ignore_ascii_case("content-type") {
+            if content_type.is_some() {
+                return Err("the request contains an ambiguous content type".into());
+            }
+            content_type = Some(value);
+        } else if name.eq_ignore_ascii_case("authorization") {
+            if authorization.is_some() || value.len() > 256 {
+                return Err("the request contains ambiguous authorization".into());
+            }
+            authorization = Some(Zeroizing::new(value.to_owned()));
+        } else if name.eq_ignore_ascii_case("transfer-encoding") {
+            return Err("transfer encoding is not supported".into());
+        }
+    }
+    if !has_host {
+        return Err("the request has no host header".into());
+    }
+    if method == "POST" && (!has_length || content_type != Some("application/json")) {
+        return Err("POST requires one application/json body with an explicit length".into());
+    }
+    if method != "POST" && length != 0 {
+        return Err("a non-POST request may not carry a body".into());
+    }
+    if length > MAX_REQUEST_BYTES {
+        return Err("the request body exceeds the transport limit".into());
+    }
+    let method = method.to_owned();
+    let path = path.to_owned();
+    Ok((method, path, authorization, length))
 }
 
 #[cfg(test)]

@@ -42,9 +42,8 @@ pub fn platform_install_mcp(
         configuration,
         request.environment.clone(),
         request.key.clone(),
-        "mcp",
+        ("mcp", "mcp"),
         request.token_stdin,
-        "mcp",
         request.read_only,
         request.rotate,
     )?;
@@ -60,30 +59,12 @@ pub fn platform_install_mcp(
         request.read_only,
     );
     let descriptors: Vec<Value> = tools.iter().copied().map(toolset::descriptor).collect();
-    let mut pending = Vec::new();
-    for host in selected_hosts {
-        let path = match host.path() {
-            Ok(path) => path,
-            Err(error) => return Err(error),
-        };
-        pending.push((
-            host,
-            Registration {
-                path,
-                section: host.section(),
-                name: SERVER_NAME.to_owned(),
-                entry: host.entry(&command, &arguments, &variables),
-            },
-        ));
-    }
+    let pending = prepare_registrations(selected_hosts, &command, &arguments, &variables)?;
     let paths = pending
         .iter()
         .map(|(_, registration)| registration.path.clone())
         .collect::<Vec<_>>();
-    let mut transaction = match FileTransaction::capture(&paths) {
-        Ok(value) => value,
-        Err(error) => return Err(error),
-    };
+    let mut transaction = FileTransaction::capture(&paths)?;
     let mut registrations = Vec::new();
     let mut changed = false;
     let applied = (|| {
@@ -186,4 +167,26 @@ fn launch_arguments(
         arguments.push("--read-only".to_owned());
     }
     arguments
+}
+
+fn prepare_registrations(
+    selected_hosts: Vec<super::Host>,
+    command: &str,
+    arguments: &[String],
+    variables: &std::collections::BTreeMap<String, String>,
+) -> Result<Vec<(super::Host, Registration)>, String> {
+    let mut pending = Vec::new();
+    for host in selected_hosts {
+        let path = host.path()?;
+        pending.push((
+            host,
+            Registration {
+                path,
+                section: host.section(),
+                name: SERVER_NAME.to_owned(),
+                entry: host.entry(command, arguments, variables),
+            },
+        ));
+    }
+    Ok(pending)
 }

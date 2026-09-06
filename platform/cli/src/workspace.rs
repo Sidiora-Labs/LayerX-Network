@@ -1,6 +1,5 @@
 use std::collections::BTreeSet;
 use std::env;
-use std::ffi::OsStr;
 use std::io::{self, IsTerminal as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -42,7 +41,7 @@ struct SelectionArgs {
     /// Select every declared module.
     #[arg(long)]
     all: bool,
-    /// LayerX environment exposed to builds and tests.
+    /// `LayerX` environment exposed to builds and tests.
     #[arg(long)]
     environment: Option<String>,
 }
@@ -739,7 +738,7 @@ struct StepResult {
 pub fn run(arguments: WorkspaceArgs, machine: bool) -> Result<Option<CommandOutput>, String> {
     match arguments.command {
         None => interactive(machine),
-        Some(WorkspaceCommand::Modules) => list_modules(machine).map(Some),
+        Some(WorkspaceCommand::Modules) => Ok(Some(list_modules(machine))),
         Some(WorkspaceCommand::Doctor(selection)) => doctor(&selection, machine).map(Some),
         Some(WorkspaceCommand::Install(arguments)) => execute(Action::Install, &arguments, machine),
         Some(WorkspaceCommand::Build(arguments)) => execute(Action::Build, &arguments, machine),
@@ -764,7 +763,7 @@ fn interactive(machine: bool) -> Result<Option<CommandOutput>, String> {
             if status.success() {
                 return Ok(None);
             }
-            return Err(format!("workspace dashboard exited with status {}", status));
+            return Err(format!("workspace dashboard exited with status {status}"));
         }
     }
     let color = color_enabled();
@@ -797,16 +796,16 @@ fn interactive(machine: bool) -> Result<Option<CommandOutput>, String> {
     execute(action, &arguments, false)
 }
 
-fn list_modules(machine: bool) -> Result<CommandOutput, String> {
+fn list_modules(machine: bool) -> CommandOutput {
     if !machine {
         print_module_table(MODULES.iter());
     }
     let data = Value::Array(MODULES.iter().map(module_json).collect());
-    Ok(CommandOutput::new(
+    CommandOutput::new(
         "workspace.modules",
         format!("{} LayerX modules", MODULES.len()),
         if machine { data } else { Value::Null },
-    ))
+    )
 }
 
 fn doctor(selection: &SelectionArgs, machine: bool) -> Result<CommandOutput, String> {
@@ -1396,7 +1395,7 @@ fn display_argument(argument: &str) -> String {
     {
         argument.to_owned()
     } else {
-        format!("{:?}", OsStr::new(argument))
+        format!("{argument:?}")
     }
 }
 

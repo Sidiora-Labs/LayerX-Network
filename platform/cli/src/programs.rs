@@ -1371,17 +1371,7 @@ fn verify_terminal_commitments(
     protocol_version: u16,
     receipt: &layerx_wire::receipt::ProgramOutcome,
 ) -> Result<(), String> {
-    if available_graph.is_empty()
-        || <[u8; 32]>::from(Sha256::digest(available_graph)) != receipt.call_graph_root()
-    {
-        return Err("call graph bytes disagree with the signed receipt root".to_owned());
-    }
-    if let TerminalDetail::Execution(ExecutionTerminal::CandidateV4 { graph, .. }) = &detail.detail
-    {
-        if graph != available_graph {
-            return Err("embedded and separately authenticated call graphs disagree".to_owned());
-        }
-    }
+    verify_terminal_graph(detail, available_graph, receipt)?;
     let candidate = matches!(
         &detail.detail,
         TerminalDetail::Execution(ExecutionTerminal::CandidateV4 { .. })
@@ -1678,38 +1668,13 @@ fn verify_simulation_evidence(
     {
         return Err("program simulation evidence disagrees with its verified receipt".to_owned());
     }
-    let mut preimage = SIMULATION_EVIDENCE_DOMAIN.to_vec();
-    preimage.extend_from_slice(&boundary_id);
-    preimage.extend_from_slice(&expected_activity);
-    preimage.extend_from_slice(&head.state_root);
-    preimage.extend_from_slice(&hypothetical_root);
-    preimage.extend_from_slice(&head.observed_sequence.to_be_bytes());
-    preimage.extend_from_slice(&head.observed_at.to_be_bytes());
-    preimage.push(0);
-    let digest: [u8; 32] = Sha256::digest(preimage).into();
-    let declared_key: [u8; 32] = fixed_hex(
-        "simulation evidence public key",
-        evidence
-            .get("public_key")
-            .and_then(Value::as_str)
-            .ok_or_else(|| "program simulation omitted evidence public key".to_owned())?,
-    )?;
-    if declared_key != key {
-        return Err(
-            "simulation evidence authority differs from configured trust anchor".to_owned(),
-        );
-    }
-    let signature: [u8; 64] = hex_decode(
-        "simulation evidence signature",
-        evidence
-            .get("signature")
-            .and_then(Value::as_str)
-            .ok_or_else(|| "program simulation omitted evidence signature".to_owned())?,
-    )?
-    .try_into()
-    .map_err(|_| "simulation evidence signature must be 64 bytes".to_owned())?;
-    ed25519::verify_digest(&key, &signature, &digest)
-        .map_err(|_| "program simulation evidence signature is invalid".to_owned())
+    verify_simulation_signature(
+        evidence,
+        head,
+        boundary_id,
+        expected_activity,
+        hypothetical_root,
+    )
 }
 
 fn canonical_u64(document: &Value, field: &str) -> Result<u64, String> {
@@ -1775,63 +1740,6 @@ fn validate_signed_program(
         return Err("signed activity does not carry this exact native Programs payload".into());
     }
     Ok(activity)
-}
-
-#[cfg(test)]
-fn classify_outcome(result: &Value, result_code: i64) -> Result<Value, String> {
-    let declared = result.get("outcome");
-    let status = declared
-        .and_then(|outcome| outcome.get("status"))
-        .and_then(Value::as_str);
-    match status {
-        Some("completed") => {
-            if result_code < 0 {
-                return Err(
-                    "response reports a completed call but the receipt carries a failure code"
-                        .into(),
-                );
-            }
-            let code = declared
-                .and_then(|outcome| outcome.get("code"))
-                .and_then(Value::as_i64)
-                .unwrap_or(result_code);
-            if code != result_code {
-                return Err("response outcome code disagrees with the receipt result code".into());
-            }
-            Ok(json!({
-                "status": "completed",
-                "code": result_code,
-                "response": declared
-                    .and_then(|outcome| outcome.get("response"))
-                    .cloned()
-                    .unwrap_or(Value::Null),
-            }))
-        }
-        Some("refused") => {
-            if result_code >= 0 {
-                return Err(
-                    "response reports a refused call but the receipt carries a success code".into(),
-                );
-            }
-            Ok(json!({
-                "status": "refused",
-                "failure": declared
-                    .and_then(|outcome| outcome.get("failure"))
-                    .cloned()
-                    .unwrap_or(Value::Null),
-            }))
-        }
-        Some(other) => Err(format!(
-            "response carried an unknown call outcome status {other}"
-        )),
-        None => {
-            if result_code >= 0 {
-                Ok(json!({"status": "completed", "code": result_code, "response": Value::Null}))
-            } else {
-                Ok(json!({"status": "refused", "failure": {"result_code": result_code}}))
-            }
-        }
-    }
 }
 
 fn gate_artifact(path: &Path) -> Result<(String, String), String> {
@@ -1975,6 +1883,124 @@ fn discover_artifact(project: &Path) -> Result<PathBuf, String> {
             directory.display()
         )),
         _ => Err("multiple .wasm artifacts were produced; select one with --artifact".into()),
+    }
+}
+
+fn verify_terminal_graph(
+    detail: &layerx_programs_runtime::terminal::DecodedTerminal,
+    available_graph: &[u8],
+    receipt: &layerx_wire::receipt::ProgramOutcome,
+) -> Result<(), String> {
+    if available_graph.is_empty()
+        || <[u8; 32]>::from(Sha256::digest(available_graph)) != receipt.call_graph_root()
+    {
+        return Err("call graph bytes disagree with the signed receipt root".to_owned());
+    }
+    if let TerminalDetail::Execution(ExecutionTerminal::CandidateV4 { graph, .. }) = &detail.detail
+    {
+        if graph != available_graph {
+            return Err("embedded and separately authenticated call graphs disagree".to_owned());
+        }
+    }
+    Ok(())
+}
+
+fn verify_simulation_signature(
+    evidence: &Value,
+    head: &VerifiedCallHead,
+    boundary_id: [u8; 32],
+    expected_activity: [u8; 32],
+    hypothetical_root: [u8; 32],
+) -> Result<(), String> {
+    let key = head.sequencer_public_key;
+    let mut preimage = SIMULATION_EVIDENCE_DOMAIN.to_vec();
+    preimage.extend_from_slice(&boundary_id);
+    preimage.extend_from_slice(&expected_activity);
+    preimage.extend_from_slice(&head.state_root);
+    preimage.extend_from_slice(&hypothetical_root);
+    preimage.extend_from_slice(&head.observed_sequence.to_be_bytes());
+    preimage.extend_from_slice(&head.observed_at.to_be_bytes());
+    preimage.push(0);
+    let digest: [u8; 32] = Sha256::digest(preimage).into();
+    let declared_key: [u8; 32] = fixed_hex(
+        "simulation evidence public key",
+        evidence
+            .get("public_key")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "program simulation omitted evidence public key".to_owned())?,
+    )?;
+    if declared_key != key {
+        return Err(
+            "simulation evidence authority differs from configured trust anchor".to_owned(),
+        );
+    }
+    let signature: [u8; 64] = hex_decode(
+        "simulation evidence signature",
+        evidence
+            .get("signature")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "program simulation omitted evidence signature".to_owned())?,
+    )?
+    .try_into()
+    .map_err(|_| "simulation evidence signature must be 64 bytes".to_owned())?;
+    ed25519::verify_digest(&key, &signature, &digest)
+        .map_err(|_| "program simulation evidence signature is invalid".to_owned())
+}
+
+#[cfg(test)]
+fn classify_outcome(result: &Value, result_code: i64) -> Result<Value, String> {
+    let declared = result.get("outcome");
+    let status = declared
+        .and_then(|outcome| outcome.get("status"))
+        .and_then(Value::as_str);
+    match status {
+        Some("completed") => {
+            if result_code < 0 {
+                return Err(
+                    "response reports a completed call but the receipt carries a failure code"
+                        .into(),
+                );
+            }
+            let code = declared
+                .and_then(|outcome| outcome.get("code"))
+                .and_then(Value::as_i64)
+                .unwrap_or(result_code);
+            if code != result_code {
+                return Err("response outcome code disagrees with the receipt result code".into());
+            }
+            Ok(json!({
+                "status": "completed",
+                "code": result_code,
+                "response": declared
+                    .and_then(|outcome| outcome.get("response"))
+                    .cloned()
+                    .unwrap_or(Value::Null),
+            }))
+        }
+        Some("refused") => {
+            if result_code >= 0 {
+                return Err(
+                    "response reports a refused call but the receipt carries a success code".into(),
+                );
+            }
+            Ok(json!({
+                "status": "refused",
+                "failure": declared
+                    .and_then(|outcome| outcome.get("failure"))
+                    .cloned()
+                    .unwrap_or(Value::Null),
+            }))
+        }
+        Some(other) => Err(format!(
+            "response carried an unknown call outcome status {other}"
+        )),
+        None => {
+            if result_code >= 0 {
+                Ok(json!({"status": "completed", "code": result_code, "response": Value::Null}))
+            } else {
+                Ok(json!({"status": "refused", "failure": {"result_code": result_code}}))
+            }
+        }
     }
 }
 

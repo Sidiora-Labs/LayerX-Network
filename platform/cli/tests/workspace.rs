@@ -46,10 +46,7 @@ fn module_inventory_covers_every_top_level_surface() {
     let output = run(&["--json", "workspace", "modules"]);
     assert!(output.status.success());
     let value = json_output(&output);
-    let modules = match value.get("data").and_then(Value::as_array) {
-        Some(modules) => modules,
-        None => panic!("module response should contain an array"),
-    };
+    let Some(modules) = value.get("data").and_then(Value::as_array) else { panic!("module response should contain an array"); };
     let ids = modules
         .iter()
         .filter_map(|module| module.get("id").and_then(Value::as_str))

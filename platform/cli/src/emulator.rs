@@ -724,27 +724,6 @@ fn owned_by_current_user(metadata: &fs::Metadata) -> bool {
     metadata.uid() == rustix::process::geteuid().as_raw()
 }
 
-#[cfg(not(unix))]
-const fn owned_by_current_user(_metadata: &fs::Metadata) -> bool {
-    false
-}
-
-#[cfg(test)]
-mod profile_path_tests {
-    use std::path::Path;
-
-    use super::{validate_profile_path, BootstrapError};
-
-    #[test]
-    fn filesystem_root_is_not_a_profile_directory() {
-        let error = match validate_profile_path(Path::new("/")) {
-            Ok(()) => panic!("root must be refused"),
-            Err(error) => error,
-        };
-        assert!(matches!(error, BootstrapError::ProfileUnavailable { .. }));
-    }
-}
-
 pub struct EnvironmentInputs {
     pub endpoint: Option<String>,
     pub network_id: Option<u32>,
@@ -951,4 +930,25 @@ fn endpoint_socket_address(endpoint: &str) -> Result<SocketAddr, BootstrapError>
         .map_err(|error| unavailable(&format!("endpoint authority did not resolve: {error}")))?
         .next();
     resolved.ok_or_else(|| unavailable("endpoint authority resolved to no address"))
+}
+
+#[cfg(not(unix))]
+const fn owned_by_current_user(_metadata: &fs::Metadata) -> bool {
+    false
+}
+
+#[cfg(test)]
+mod profile_path_tests {
+    use std::path::Path;
+
+    use super::{validate_profile_path, BootstrapError};
+
+    #[test]
+    fn filesystem_root_is_not_a_profile_directory() {
+        let error = match validate_profile_path(Path::new("/")) {
+            Ok(()) => panic!("root must be refused"),
+            Err(error) => error,
+        };
+        assert!(matches!(error, BootstrapError::ProfileUnavailable { .. }));
+    }
 }

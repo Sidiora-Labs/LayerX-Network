@@ -605,8 +605,7 @@ fn run(command: Command, machine: bool) -> Result<Option<CommandOutput>, String>
                     &configuration,
                     &gateway_credential,
                     key,
-                    source_account.as_deref(),
-                    asset.as_deref(),
+                    (source_account.as_deref(), asset.as_deref()),
                     &listen,
                     &authorization_file,
                     deployment_mode(read_only),
@@ -1064,41 +1063,10 @@ fn execute_program_lifecycle(
 }
 
 fn program(command: ProgramCommand) -> Result<CommandOutput, String> {
+    let simulate = matches!(&command, ProgramCommand::Simulate { .. });
     match command {
-        ProgramCommand::Discover { program_id } => {
-            let configuration = Configuration::load()?;
-            let (environment, client) = active_client(&configuration)?;
-            Ok(CommandOutput::new(
-                "program.discovered",
-                format!("Discovered program {program_id} on {environment}"),
-                programs::discover(&client, &program_id)?,
-            ))
-        }
-        ProgramCommand::Interface(command) => {
-            let configuration = Configuration::load()?;
-            let (environment, client) = active_client(&configuration)?;
-            match command {
-                ProgramInterfaceCommand::Get { program_id } => Ok(CommandOutput::new(
-                    "program.interface_read",
-                    format!("Read program interface for {program_id} on {environment}"),
-                    programs::interface_get(&client, &program_id)?,
-                )),
-                ProgramInterfaceCommand::Publish {
-                    program_id,
-                    interface,
-                    idempotency_key,
-                } => Ok(CommandOutput::new(
-                    "program.interface_published",
-                    format!("Published program interface for {program_id} on {environment}"),
-                    programs::interface_publish(
-                        &client,
-                        &program_id,
-                        &interface,
-                        &idempotency_key,
-                    )?,
-                )),
-            }
-        }
+        ProgramCommand::Discover { program_id } => program_discover(&program_id),
+        ProgramCommand::Interface(command) => program_interface(command),
         ProgramCommand::Build {
             manifest_path,
             artifact,
@@ -1141,93 +1109,15 @@ fn program(command: ProgramCommand) -> Result<CommandOutput, String> {
             interface,
             clear_interface,
             signing,
-        } => execute_program_lifecycle(&signing, |client, request| {
-            programs::upgrade(
-                client,
-                request,
-                &programs::UpgradeRequest {
-                    artifact: &artifact,
-                    old_hash: &old_hash,
-                    migration_hook: migration_hook.as_deref(),
-                    interface: interface.as_deref(),
-                    clear_interface,
-                },
-                &signing.previous_state_root,
-            )
-        }),
-        ProgramCommand::WindDown(command) => {
-            use layerx_types::program_lifecycle::ProgramWindDownOperation;
-            match command {
-                ProgramWindDownCommand::Route {
-                    account,
-                    asset,
-                    destination,
-                    seed,
-                    signing,
-                } => {
-                    let seed = if seed.is_empty() {
-                        Vec::new()
-                    } else {
-                        encoding::hex_decode("account seed", &seed)?
-                    };
-                    let operation = ProgramWindDownOperation::Route {
-                        account: encoding::fixed_hex("account", &account)?,
-                        asset: encoding::fixed_hex("asset", &asset)?,
-                        destination: encoding::fixed_hex("destination", &destination)?,
-                        seed: &seed,
-                    };
-                    execute_program_lifecycle(&signing, |client, request| {
-                        programs::wind_down(
-                            client,
-                            request,
-                            operation,
-                            &signing.previous_state_root,
-                        )
-                    })
-                }
-                ProgramWindDownCommand::Deprecate {
-                    exit_program,
-                    deadline_batch,
-                    signing,
-                } => {
-                    let operation = ProgramWindDownOperation::Deprecate {
-                        exit_program: encoding::fixed_hex("exit program", &exit_program)?,
-                        deadline_batch,
-                    };
-                    execute_program_lifecycle(&signing, |client, request| {
-                        programs::wind_down(
-                            client,
-                            request,
-                            operation,
-                            &signing.previous_state_root,
-                        )
-                    })
-                }
-                ProgramWindDownCommand::Tombstone { signing } => {
-                    execute_program_lifecycle(&signing, |client, request| {
-                        programs::wind_down(
-                            client,
-                            request,
-                            ProgramWindDownOperation::Tombstone,
-                            &signing.previous_state_root,
-                        )
-                    })
-                }
-                ProgramWindDownCommand::Exit { account, signing } => {
-                    let operation = ProgramWindDownOperation::Exit {
-                        account: encoding::fixed_hex("account", &account)?,
-                    };
-                    execute_program_lifecycle(&signing, |client, request| {
-                        programs::wind_down(
-                            client,
-                            request,
-                            operation,
-                            &signing.previous_state_root,
-                        )
-                    })
-                }
-            }
-        }
+        } => program_upgrade(
+            &signing,
+            &artifact,
+            &old_hash,
+            migration_hook.as_deref(),
+            interface.as_deref(),
+            clear_interface,
+        ),
+        ProgramCommand::WindDown(command) => program_wind_down(command),
         ProgramCommand::Call {
             program_id,
             native,
@@ -1240,43 +1130,8 @@ fn program(command: ProgramCommand) -> Result<CommandOutput, String> {
             account_sequence,
             not_before_ms,
             expires_at_ms,
-        } => {
-            let configuration = Configuration::load()?;
-            let (environment, client) = active_client(&configuration)?;
-            let (_, active) = configuration.active_environment()?;
-            let key_name = serving_key(&configuration, key.as_deref())?;
-            let actor_did = configuration
-                .keys
-                .get(key_name)
-                .ok_or_else(|| format!("key {key_name} does not exist"))?
-                .did
-                .clone();
-            Ok(CommandOutput::new(
-                "program.call_started",
-                format!("Submitted program call to {environment}"),
-                programs::call(
-                    &client,
-                    &programs::CallRequest {
-                        program_id: &program_id,
-                        native,
-                        calldata: calldata.as_deref().unwrap_or(""),
-                        fuel,
-                        fee_limit: &fee_limit,
-                        capabilities: &capabilities,
-                        idempotency_key: &idempotency_key,
-                        network_id: active.network_id,
-                        actor_did: &actor_did,
-                        key_name,
-                        account_sequence,
-                        not_before_ms,
-                        expires_at_ms,
-                        sequencer_public_key: active.sequencer_trust_anchor.as_deref()
-                            .ok_or_else(|| format!("environment {environment} has no configured sequencer trust anchor"))?,
-                    },
-                )?,
-            ))
         }
-        ProgramCommand::Simulate {
+        | ProgramCommand::Simulate {
             program_id,
             native,
             calldata,
@@ -1288,46 +1143,23 @@ fn program(command: ProgramCommand) -> Result<CommandOutput, String> {
             account_sequence,
             not_before_ms,
             expires_at_ms,
-        } => {
-            let configuration = Configuration::load()?;
-            let (environment, client) = active_client(&configuration)?;
-            let (_, active) = configuration.active_environment()?;
-            let key_name = serving_key(&configuration, key.as_deref())?;
-            let actor_did = configuration
-                .keys
-                .get(key_name)
-                .ok_or_else(|| format!("key {key_name} does not exist"))?
-                .did
-                .clone();
-            Ok(CommandOutput::new("program.call_simulated", format!("Simulated program call on {environment}"), programs::simulate(&client, &programs::CallRequest { program_id: &program_id, native, calldata: calldata.as_deref().unwrap_or(""), fuel, fee_limit: &fee_limit, capabilities: &capabilities, idempotency_key: &idempotency_key, network_id: active.network_id, actor_did: &actor_did, key_name, account_sequence, not_before_ms, expires_at_ms, sequencer_public_key: active.sequencer_trust_anchor.as_deref().ok_or_else(|| format!("environment {environment} has no configured sequencer trust anchor"))? })?))
-        }
-        ProgramCommand::Registry(command) => {
-            let configuration = Configuration::load()?;
-            let (environment, client) = active_client(&configuration)?;
-            match command {
-                RegistryCommand::Get { program_id } => Ok(CommandOutput::new(
-                    "program.registry_read",
-                    format!("Read program {program_id} from {environment}"),
-                    programs::registry_get(&client, &program_id)?,
-                )),
-                RegistryCommand::VerifySource {
-                    program_id,
-                    source_uri,
-                    source_digest,
-                    idempotency_key,
-                } => Ok(CommandOutput::new(
-                    "program.source_submitted",
-                    format!("Submitted source verification for {program_id} on {environment}"),
-                    programs::registry_verify_source(
-                        &client,
-                        &program_id,
-                        &source_uri,
-                        &source_digest,
-                        &idempotency_key,
-                    )?,
-                )),
-            }
-        }
+        } => program_call(
+            ProgramCallArguments {
+                program_id,
+                native,
+                calldata,
+                fuel,
+                fee_limit,
+                capabilities,
+                idempotency_key,
+                key,
+                account_sequence,
+                not_before_ms,
+                expires_at_ms,
+            },
+            simulate,
+        ),
+        ProgramCommand::Registry(command) => program_registry(command),
     }
 }
 
@@ -1392,6 +1224,228 @@ fn main() -> ExitCode {
     }
 }
 
+fn program_wind_down(command: ProgramWindDownCommand) -> Result<CommandOutput, String> {
+    use layerx_types::program_lifecycle::ProgramWindDownOperation;
+    match command {
+        ProgramWindDownCommand::Route {
+            account,
+            asset,
+            destination,
+            seed,
+            signing,
+        } => {
+            let seed = if seed.is_empty() {
+                Vec::new()
+            } else {
+                encoding::hex_decode("account seed", &seed)?
+            };
+            let operation = ProgramWindDownOperation::Route {
+                account: encoding::fixed_hex("account", &account)?,
+                asset: encoding::fixed_hex("asset", &asset)?,
+                destination: encoding::fixed_hex("destination", &destination)?,
+                seed: &seed,
+            };
+            execute_program_lifecycle(&signing, |client, request| {
+                programs::wind_down(client, request, operation, &signing.previous_state_root)
+            })
+        }
+        ProgramWindDownCommand::Deprecate {
+            exit_program,
+            deadline_batch,
+            signing,
+        } => {
+            let operation = ProgramWindDownOperation::Deprecate {
+                exit_program: encoding::fixed_hex("exit program", &exit_program)?,
+                deadline_batch,
+            };
+            execute_program_lifecycle(&signing, |client, request| {
+                programs::wind_down(client, request, operation, &signing.previous_state_root)
+            })
+        }
+        ProgramWindDownCommand::Tombstone { signing } => {
+            execute_program_lifecycle(&signing, |client, request| {
+                programs::wind_down(
+                    client,
+                    request,
+                    ProgramWindDownOperation::Tombstone,
+                    &signing.previous_state_root,
+                )
+            })
+        }
+        ProgramWindDownCommand::Exit { account, signing } => {
+            let operation = ProgramWindDownOperation::Exit {
+                account: encoding::fixed_hex("account", &account)?,
+            };
+            execute_program_lifecycle(&signing, |client, request| {
+                programs::wind_down(client, request, operation, &signing.previous_state_root)
+            })
+        }
+    }
+}
+
+fn program_interface(command: ProgramInterfaceCommand) -> Result<CommandOutput, String> {
+    let configuration = Configuration::load()?;
+    let (environment, client) = active_client(&configuration)?;
+    match command {
+        ProgramInterfaceCommand::Get { program_id } => Ok(CommandOutput::new(
+            "program.interface_read",
+            format!("Read program interface for {program_id} on {environment}"),
+            programs::interface_get(&client, &program_id)?,
+        )),
+        ProgramInterfaceCommand::Publish {
+            program_id,
+            interface,
+            idempotency_key,
+        } => Ok(CommandOutput::new(
+            "program.interface_published",
+            format!("Published program interface for {program_id} on {environment}"),
+            programs::interface_publish(&client, &program_id, &interface, &idempotency_key)?,
+        )),
+    }
+}
+
+fn program_registry(command: RegistryCommand) -> Result<CommandOutput, String> {
+    let configuration = Configuration::load()?;
+    let (environment, client) = active_client(&configuration)?;
+    match command {
+        RegistryCommand::Get { program_id } => Ok(CommandOutput::new(
+            "program.registry_read",
+            format!("Read program {program_id} from {environment}"),
+            programs::registry_get(&client, &program_id)?,
+        )),
+        RegistryCommand::VerifySource {
+            program_id,
+            source_uri,
+            source_digest,
+            idempotency_key,
+        } => Ok(CommandOutput::new(
+            "program.source_submitted",
+            format!("Submitted source verification for {program_id} on {environment}"),
+            programs::registry_verify_source(
+                &client,
+                &program_id,
+                &source_uri,
+                &source_digest,
+                &idempotency_key,
+            )?,
+        )),
+    }
+}
+
+struct ProgramCallArguments {
+    program_id: String,
+    native: programs::NativeCallOptions,
+    calldata: Option<String>,
+    fuel: u64,
+    fee_limit: String,
+    capabilities: Vec<String>,
+    idempotency_key: String,
+    key: Option<String>,
+    account_sequence: u64,
+    not_before_ms: u64,
+    expires_at_ms: u64,
+}
+
+fn program_call(arguments: ProgramCallArguments, simulate: bool) -> Result<CommandOutput, String> {
+    let ProgramCallArguments {
+        program_id,
+        native,
+        calldata,
+        fuel,
+        fee_limit,
+        capabilities,
+        idempotency_key,
+        key,
+        account_sequence,
+        not_before_ms,
+        expires_at_ms,
+    } = arguments;
+    let operation = if simulate {
+        programs::simulate
+    } else {
+        programs::call
+    };
+    let configuration = Configuration::load()?;
+    let (environment, client) = active_client(&configuration)?;
+    let (_, active) = configuration.active_environment()?;
+    let key_name = serving_key(&configuration, key.as_deref())?;
+    let actor_did = configuration
+        .keys
+        .get(key_name)
+        .ok_or_else(|| format!("key {key_name} does not exist"))?
+        .did
+        .clone();
+    Ok(CommandOutput::new(
+        if simulate {
+            "program.call_simulated"
+        } else {
+            "program.call_started"
+        },
+        if simulate {
+            format!("Simulated program call on {environment}")
+        } else {
+            format!("Submitted program call to {environment}")
+        },
+        operation(
+            &client,
+            &programs::CallRequest {
+                program_id: &program_id,
+                native,
+                calldata: calldata.as_deref().unwrap_or(""),
+                fuel,
+                fee_limit: &fee_limit,
+                capabilities: &capabilities,
+                idempotency_key: &idempotency_key,
+                network_id: active.network_id,
+                actor_did: &actor_did,
+                key_name,
+                account_sequence,
+                not_before_ms,
+                expires_at_ms,
+                sequencer_public_key: active.sequencer_trust_anchor.as_deref().ok_or_else(
+                    || {
+                        format!(
+                            "environment {environment} has no configured sequencer trust anchor"
+                        )
+                    },
+                )?,
+            },
+        )?,
+    ))
+}
+
+fn program_discover(program_id: &str) -> Result<CommandOutput, String> {
+    let configuration = Configuration::load()?;
+    let (environment, client) = active_client(&configuration)?;
+    Ok(CommandOutput::new(
+        "program.discovered",
+        format!("Discovered program {program_id} on {environment}"),
+        programs::discover(&client, program_id)?,
+    ))
+}
+fn program_upgrade(
+    signing: &ProgramLifecycleArgs,
+    artifact: &std::path::Path,
+    old_hash: &str,
+    migration_hook: Option<&std::path::Path>,
+    interface: Option<&std::path::Path>,
+    clear_interface: bool,
+) -> Result<CommandOutput, String> {
+    execute_program_lifecycle(signing, |client, request| {
+        programs::upgrade(
+            client,
+            request,
+            &programs::UpgradeRequest {
+                artifact,
+                old_hash,
+                migration_hook,
+                interface,
+                clear_interface,
+            },
+            &signing.previous_state_root,
+        )
+    })
+}
 #[cfg(test)]
 mod program_arguments_tests {
     use super::*;

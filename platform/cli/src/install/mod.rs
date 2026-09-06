@@ -543,32 +543,13 @@ pub fn select(
     configuration: &mut Configuration,
     environment: Option<String>,
     key: Option<String>,
-    fallback_key: &str,
+    key_component: (&str, &str),
     token_stdin: bool,
-    component: &str,
     read_only: bool,
     rotate: bool,
 ) -> Result<Selection, String> {
-    let environment = match environment {
-        Some(name) => {
-            Configuration::validate_environment_name(&name)?;
-            name
-        }
-        None => configuration.current_environment.clone(),
-    };
-    let profile = configuration.environments.get(&environment).ok_or_else(|| {
-        format!(
-            "environment {environment} is not configured; run layerx environment use {environment} --endpoint <url> --network-id <id>"
-        )
-    })?;
-    let endpoint = profile.endpoint.clone();
-    let network_id = profile.network_id;
-    if environment == "emulator" {
-        return Err(
-            "MCP and A2A installation require a configured hosted testnet or production gateway; the emulator does not expose self-service scoped keys or the production activity route"
-                .into(),
-        );
-    }
+    let (fallback_key, component) = key_component;
+    let (environment, endpoint, network_id) = installation_environment(configuration, environment)?;
     if token_stdin {
         credential::set_token(&environment)?;
     }
@@ -1105,4 +1086,31 @@ fn code_directory() -> Result<PathBuf, String> {
     } else {
         xdg_config().map(|base| base.join("Code"))
     }
+}
+
+fn installation_environment(
+    configuration: &Configuration,
+    environment: Option<String>,
+) -> Result<(String, String, u32), String> {
+    let environment = match environment {
+        Some(name) => {
+            Configuration::validate_environment_name(&name)?;
+            name
+        }
+        None => configuration.current_environment.clone(),
+    };
+    let profile = configuration.environments.get(&environment).ok_or_else(|| {
+        format!(
+            "environment {environment} is not configured; run layerx environment use {environment} --endpoint <url> --network-id <id>"
+        )
+    })?;
+    let endpoint = profile.endpoint.clone();
+    let network_id = profile.network_id;
+    if environment == "emulator" {
+        return Err(
+            "MCP and A2A installation require a configured hosted testnet or production gateway; the emulator does not expose self-service scoped keys or the production activity route"
+                .into(),
+        );
+    }
+    Ok((environment, endpoint, network_id))
 }

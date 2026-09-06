@@ -117,53 +117,7 @@ fn payment_test_quotes_and_commits_once_through_the_live_emulator() {
     let cli = Cli::new();
     assert!(cli.bind_emulator(emulator.endpoint()).status.success());
 
-    let seed = "42".repeat(32);
-    let imported = cli.run_with_stdin(
-        &[
-            "--json",
-            "key",
-            "import",
-            "move-source",
-            "--did",
-            "did:layerx:move-source",
-        ],
-        &seed,
-    );
-    assert!(
-        imported.status.success(),
-        "source import should succeed: {}",
-        String::from_utf8_lossy(&imported.stderr)
-    );
-    let destination_key = cli.run(&[
-        "--json",
-        "key",
-        "create",
-        "move-destination",
-        "--did",
-        "did:layerx:move-destination",
-    ]);
-    assert!(destination_key.status.success());
-    let source_account = cli.run(&[
-        "--json",
-        "account",
-        "create",
-        "--key",
-        "move-source",
-        "--initial-amount",
-        "1000",
-    ]);
-    assert!(source_account.status.success());
-    let destination_account = cli.run(&[
-        "--json",
-        "account",
-        "create",
-        "--key",
-        "move-destination",
-        "--initial-amount",
-        "0",
-    ]);
-    assert!(destination_account.status.success());
-
+    create_payment_accounts(&cli);
     let payment = cli.run(&[
         "--json",
         "payment",
@@ -1165,4 +1119,53 @@ mod bootstrap {
         assert_current_environment(&profile.root, &endpoint, network_id, &anchor);
         println!("clean_bootstrap elapsed_ms={}", elapsed.as_millis());
     }
+}
+
+fn create_payment_accounts(cli: &Cli) {
+    let seed = "42".repeat(32);
+    let imported = cli.run_with_stdin(
+        &[
+            "--json",
+            "key",
+            "import",
+            "move-source",
+            "--did",
+            "did:layerx:move-source",
+        ],
+        &seed,
+    );
+    assert!(
+        imported.status.success(),
+        "source import should succeed: {}",
+        String::from_utf8_lossy(&imported.stderr)
+    );
+    let destination_key = cli.run(&[
+        "--json",
+        "key",
+        "create",
+        "move-destination",
+        "--did",
+        "did:layerx:move-destination",
+    ]);
+    assert!(destination_key.status.success());
+    let source_account = cli.run(&[
+        "--json",
+        "account",
+        "create",
+        "--key",
+        "move-source",
+        "--initial-amount",
+        "1000",
+    ]);
+    assert!(source_account.status.success());
+    let destination_account = cli.run(&[
+        "--json",
+        "account",
+        "create",
+        "--key",
+        "move-destination",
+        "--initial-amount",
+        "0",
+    ]);
+    assert!(destination_account.status.success());
 }

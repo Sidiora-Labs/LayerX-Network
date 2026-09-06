@@ -124,6 +124,7 @@ fn import_seed(
         return Err("DID must contain between 1 and 255 bytes".into());
     }
     let mut encoded = Zeroizing::new(hex_encode(&seed[..]));
+    drop(seed);
     entry("key", name)?
         .set_password(&encoded)
         .map_err(|error| {
@@ -310,7 +311,12 @@ mod secret_boundary_tests {
 
     #[test]
     fn stdin_secret_refuses_truncation() {
-        let oversized = vec![b'a'; MAX_STDIN_SECRET_BYTES as usize + 1];
+        let oversized = vec![
+            b'a';
+            usize::try_from(MAX_STDIN_SECRET_BYTES).unwrap_or_else(|error| panic!(
+                "secret limit exceeds address space: {error}"
+            )) + 1
+        ];
         assert!(read_secret_from(Cursor::new(oversized)).is_err());
     }
 
