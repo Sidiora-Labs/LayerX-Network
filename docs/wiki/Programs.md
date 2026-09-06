@@ -1,10 +1,3 @@
-<!--
-Draft copy for the GitHub wiki page "Programs".
-The wiki has no PR flow, so this file is the reviewable source. After this PR
-merges, paste the body below (everything under the first `# Programs`) into the
-wiki page. Do not commit this note to the wiki.
--->
-
 # Programs
 
 Programs is kernel module ID `9` (`LXP_MODULE_PROGRAMS`). Activity types occupy
@@ -14,8 +7,9 @@ transfer sets; the module does not call `set_balance`.
 
 The C kernel lives under `src/modules/programs/`. The deterministic WASM
 runtime is `programs/crates/layerx-programs-runtime/`. Receipt-bound registry
-reads live in `programs/crates/layerx-programs-registry/`. Guest SDKs and
-headers live under `programs/sdk/` and `platform/sdk/`.
+reads live in `programs/crates/layerx-programs-registry/`. Guest SDKs live
+under `programs/sdk/`. `platform/sdk/` holds client SDKs (dotnet, go, jvm,
+swift, conformance, generators).
 
 This page is a read of those sources. Where they disagree, both sides are
 cited.
@@ -58,8 +52,10 @@ guest ABI:
 - v3 (`LX_PROGRAMS_SANDBOX_ABI_VERSION = 3`): adds SANDBOX
 - v4 (`LX_PROGRAMS_SANDBOX_DESTROY_ABI_VERSION = 4`): adds SANDBOX_DESTROY
 
-Protocol-3 genesis selects Programs v4 plus Asset v1. Library default
-`LXP_PROTOCOL_VERSION` remains occupancy protocol 2.
+Genesis registers Programs v4 for every accepted protocol version
+(`src/protocol/lxp_genesis.c:594-598`). Asset v1 is registered only when
+`protocol_version` is 3. Library default `LXP_PROTOCOL_VERSION` is occupancy
+protocol 2.
 
 ### DEPLOY
 
@@ -71,16 +67,22 @@ authority), reserved zero, 32-byte upgrade authority (all-zero iff immutable),
 `execute_deploy` refuses an existing program key (`LXP_ERR_SEQUENCE_REUSED`),
 stores the artifact, writes a 71-byte program record, optionally stores the
 interface, and emits event type 1 (`PROGRAM_EVENT_DEPLOYED` / `LX_PROGRAMS_EVENT_DEPLOYED`)
-with the new code hash. Module ABI ≥ 2 (and protocol 3 with module ABI 4) also
-binds the deployer as program owner via `lxp_programs_account_owner_bind`.
+with the new code hash. Module ABI 2 or 3 binds the deployer as owner
+unconditionally; ABI 4 binds only when `protocol_version == 3`. DEPLOY is
+refused with `LXP_ERR_VERSION_UNSUPPORTED` on ABI 4 outside protocol 3
+(`deploy.c:400-409`).
 
 WASM must start with `\0asm` version 1 and SHA-256 to the declared hash
 (`validate_wasm`).
 
 ### UPGRADE
 
-Ordinal 2. Payload carries old hash, new hash, optional migration-hook length,
-wasm length, optional framed interface. `execute_upgrade` requires the stored
+Ordinal 2. Payload: `program_id` (0), `abi_version` u16 (32), flags byte (34;
+bit0 = hook present, bit1 = interface drop), reserved zero byte (35), old
+hash (36), new hash (68), `hook_length` u16 (100, always present, non-zero
+iff bit0), `wasm_length` u32 (102), optional `interface_length` u32 (106),
+then hook bytes, interface bytes, WASM. The length field is fixed; the hook
+bytes are optional. `execute_upgrade` requires the stored
 policy to be authority (`PROGRAM_POLICY_AUTHORITY`), the activity principal to
 match the stored authority, and `old_hash` to match the record. ABI transitions
 must be monotonic (`lxp_programs_abi_transition_validate`). Version counter at
@@ -125,7 +127,8 @@ Sources:
 
 - `include/layerx/programs.h:165-179`
 - `src/modules/programs/registration.c:17-52, 62-199, 216-290`
-- `src/modules/programs/deploy.c` (`decode_deploy`, `decode_upgrade`, `execute_deploy`, `execute_upgrade`)
+- `src/modules/programs/deploy.c` (`decode_deploy`, `decode_upgrade` at 264-306, `execute_deploy` at 400-409, `execute_upgrade`)
+- `src/protocol/lxp_genesis.c:594-598`
 - `src/modules/programs/call.c` (`lxp_programs_call_decode`, `lxp_programs_call_validate`, `lxp_programs_call_execute`)
 - `cmd/layerxd/lxp_daemon_lni.c` (`lxp_daemon_lni_simulate`, `send_simulate`)
 - `agent/schema/lni/README.md` (LNI 1.4 `simulate`)
@@ -145,7 +148,7 @@ Three version numbers are not the same thing.
 
 ### Guest ABI
 
-Current crate-root `ABI_VERSION` is 2. ABI 1 is the frozen `layerx_v1` host
+Crate-root `ABI_VERSION` is 2. ABI 1 is the frozen `layerx_v1` host
 table: `storage_read`, `storage_write`, `storage_delete`, `event_emit`,
 `program_call`, `transfer_402`, `receipt_read`. ABI 2 keeps that namespace and
 adds `layerx_v2`: response/refusal, scoped storage including scan and drop,
@@ -161,7 +164,7 @@ ABI 1 CALL is admitted on protocol 1, 2, or 3. ABI 2 CALL requires occupancy
 protocol 2 or 3 (`protocol_admits_abi` in `ffi_call.rs`; same predicate in
 `lxp_programs_call_decode`).
 
-C guest SDK header `programs/sdk/c/include/layerx/program.h` still defines
+C guest SDK header `programs/sdk/c/include/layerx/program.h` defines
 `LXP_PROGRAM_ABI_VERSION = 1` and `LXP_PROGRAM_ABI_MODULE "layerx_v1"`. ABI 2
 capability tags `ProgramSpend` (9) and `BalanceView` (10) are documented in
 `programs/README.md` as ABI-2-only.
@@ -170,13 +173,18 @@ capability tags `ProgramSpend` (9) and `BalanceView` (10) are documented in
 
 `LXP_PROTOCOL_VERSION_STATE_COMMITMENT = 3`. Occupancy is used by both 2 and 3
 (`lxp_protocol_version_uses_occupancy`). Header default `LXP_PROTOCOL_VERSION`
-is still 2. Beta surfaces and custody credit select 3 explicitly
-(`[req.14]`; Bridge credit `validate_credit` requires
-`activity->protocol_version != 3U` to fail).
+is 2. Hosted testnet pins wire protocol 3
+(`platform/hosted/testnet/deployment.yaml:10`,
+`lxp-wire-protocol-version: "3"`). Beta-cluster genesis writes
+`protocol_version: 3` (`platform/hosted/tests/beta-cluster.sh:794`). Genesis
+builder accepts protocol 2 or 3 and registers Asset v1 when protocol is 3
+(`cmd/layerx-genesis/lxp_genesis_builder.c:88,152`). Bridge credit
+`validate_credit` requires `activity->protocol_version != 3U` to fail.
+`[req.14]` returns `wire_version` from `/readyz`; it does not select protocol 3.
 
 Protocol 3 receipt encoding carries occupancy fields on program outcomes with
-`encoding_version >= 2`. `layerx_programs_call_terminal_publish` currently
-writes `encoding_version = 3`.
+`encoding_version >= 2`. `layerx_programs_call_terminal_publish` writes
+`encoding_version = 3`.
 
 Sources:
 
@@ -190,6 +198,10 @@ Sources:
 - `src/modules/programs/call.c:1703-1707, 1029`
 - `programs/abi-frozen.sha256`
 - `programs/sdk/c/include/layerx/program.h:10-21`
+- `platform/hosted/testnet/deployment.yaml:10`
+- `platform/hosted/tests/beta-cluster.sh:794`
+- `cmd/layerx-genesis/lxp_genesis_builder.c:88,152`
+- `src/protocol/lxp_genesis.c:594-598`
 
 ---
 
@@ -342,17 +354,17 @@ Topic/data are stored as domain-separated SHA-256
 events per CALL (`LXP_PROGRAMS_EVENT_MAX_COUNT`). Principal in the envelope
 must equal the admission payer.
 
-`CALL_OUTCOME` now uses domain `LXMO`, outcome envelope version 2, kind 2,
+`CALL_OUTCOME` uses domain `LXMO`, outcome envelope version 2, kind 2,
 255-byte body (metering schedule version included). Legacy 251-byte `LXCO`
 bodies are still accepted by `envelope_effect_valid`. Emit requires
 `terminal_result == LXP_OK`. Body binds program id, principal, activity id,
 frame, runtime/ABI/fee/metering versions, transfer-set root, call-graph
 digest, terminal-payload digest, event-envelope digest.
 
-`lxp_programs_project_committed_events` projects only these two Programs
-event types, in increasing ordinal, into the canonical event sequence.
-Receipt projection of a successful CALL without `program_outcome.present` is
-non-canonical if those events appear in the effect buffer.
+`lxp_programs_project_committed_events` (`event.c:238-286`) filters those two
+Programs event types and orders them by increasing ordinal.
+`lxp_programs_project_receipt_events` (`event.c:288-317`) treats guest-envelope
+or `CALL_OUTCOME` events without `program_outcome.present` as non-canonical.
 
 DEPLOY/UPGRADE still emit event types 1 and 2 from `deploy.c` (code hashes),
 which are not in this publication seam.
@@ -361,15 +373,18 @@ Sources:
 
 - `include/layerx/programs.h:180-191`
 - `src/modules/programs/event.h`
-- `src/modules/programs/event.c`
+- `src/modules/programs/event.c:238-286` (`lxp_programs_project_committed_events`)
+- `src/modules/programs/event.c:288-317` (`lxp_programs_project_receipt_events`)
 - `src/modules/programs/call.c:1116-1211, 1004-1092`
 
 ---
 
 ## Custody credit and program funding
 
-Ordinary protocol-3 genesis reconstructs Programs v4 plus Asset v1 with zero
-supply. A CALL still needs a funded fee-paying principal.
+Genesis registers Programs v4 on every accepted protocol version; Asset v1 is
+protocol-3-conditional (`src/protocol/lxp_genesis.c:594-598`). A CALL needs a
+funded fee-paying principal. When a bridge profile is present, genesis writes
+a zero `custody-issued:` supply key (`src/protocol/lxp_genesis.c:549-553`).
 
 Custody credit is Bridge module 8 ordinal 1:
 `LXP_BRIDGE_CREDIT = (8U << 16U) | 1U`. It exists only when genesis carries
@@ -379,8 +394,9 @@ bytes `0, 3`). Profile genesis requires protocol 3
 require protocol 3. The activity actor must be `LXP_AUTHORITY_OWNER`.
 
 Credit does not preallocate balances. It issues against a finalized external
-deposit into the pinned vault, then `402LXP` credits the beneficiary main
-account. That account can then pay CALL fees and ABI-2 `PROGRAM_FUNDING`
+deposit into the pinned vault, then `lxp_ctx_bridge_credit`
+(`src/protocol/lxp_module_ctx.c:1215`) credits the beneficiary main account via
+`402LXP`. That account can then pay CALL fees and ABI-2 `PROGRAM_FUNDING`
 legs into `module:programs:value:<account-id>` accounts. A principal can
 fund a program account; it cannot authorize debits from one (ABI-1 has no
 program-source kind; ABI-2 program debits require the deriving program's
@@ -392,6 +408,8 @@ Sources:
 
 - `include/layerx/lxp_bridge_credit.h` (`LXP_BRIDGE_CREDIT`, sizes)
 - `src/modules/bridge/lxp_bridge_credit.c` (`lxp_bridge_profile_key`, `lxp_bridge_genesis_profile`, `validate_credit`, `lxp_bridge_module_iface`)
+- `src/protocol/lxp_module_ctx.c:1215` (`lxp_ctx_bridge_credit`)
+- `src/protocol/lxp_genesis.c:549-553, 594-598`
 - `src/modules/programs/call.c:1520-1565` (`PROGRAM_TRANSFER_SOURCE_PROGRAM_FUNDING`)
 - `src/modules/programs/accounts.c` (program account derivation / lookup)
 - `docs/wiki/Custody.md`
@@ -447,14 +465,26 @@ Disagreements left intact:
    Rust `admit_abi_version`, CALL decode, and `abi-frozen.sha256` admit 1 and
    2 only.
 2. `include/layerx/lxp_protocol.h` default `LXP_PROTOCOL_VERSION` is 2.
-   Beta `[req.14]`, protocol-3 genesis, and custody credit select 3.
-3. Earlier wiki text treated Programs as “not module ID 0x09”. The kernel
+   Hosted testnet pins wire protocol 3
+   (`platform/hosted/testnet/deployment.yaml:10`), beta-cluster genesis uses
+   `protocol_version: 3` (`platform/hosted/tests/beta-cluster.sh:794`), and
+   genesis builder accepts protocol 3
+   (`cmd/layerx-genesis/lxp_genesis_builder.c:88,152`). `[req.14]` returns
+   `wire_version` from `/readyz`; it does not select protocol 3.
+3. `spec/layerx-beta/spec.kvx:57` (decision `checkpoint_v2`) says the hosted
+   testnet pins wire protocol version 2.
+   `platform/hosted/testnet/deployment.yaml:10` pins
+   `lxp-wire-protocol-version: "3"`.
+4. Wiki text treated Programs as “not module ID 0x09”. The kernel
    registers `LXP_MODULE_PROGRAMS = 9` and encodes types as `0x0009xxxx`.
-   It is still not a ninth `402LXP` writer.
+   It is not a ninth `402LXP` writer.
 
 Sources:
 
-- `spec/layerx-beta/spec.kvx` `[req.2]`, `[req.8]`, `[req.12]`, `[req.14]`
+- `spec/layerx-beta/spec.kvx` `[req.2]`, `[req.8]`, `[req.12]`, `[req.14]`, decision `checkpoint_v2` (line 57)
+- `platform/hosted/testnet/deployment.yaml:10`
+- `platform/hosted/tests/beta-cluster.sh:794`
+- `cmd/layerx-genesis/lxp_genesis_builder.c:88,152`
 - `spec/layerx-protocol/spec.kvx` `[req.28]`
 - `src/modules/programs/deploy.c:84-96`
 - `programs/crates/layerx-programs-runtime/src/abi_policy.rs:31-36`
