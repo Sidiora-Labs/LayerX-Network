@@ -182,6 +182,8 @@ typedef struct lxp_kernel {
     lxp_kernel_fee_transaction fee_transaction;
     lxp_kernel_supply_checker check_supply;
     lxp_kernel_commit_observer observe_commit;
+    lxp_result (*observe_maintenance)(void *context, const lxp_kernel *kernel,
+        lxp_byte_span maintenance, uint64_t timestamp_ms);
     void *commit_observer_context;
     bool publication_poisoned;
     uint64_t poisoned_sequence;
@@ -395,6 +397,17 @@ lxp_result lxp_kernel_batch_publication_digest(
     const lxp_byte_span *canonical_receipts,
     const lxp_byte_span *canonical_events, size_t activity_count,
     uint8_t digest[32]);
+lxp_result lxp_kernel_prepare_batch_maintenance(
+    lxp_kernel_prepared_batch *batch, const lxp_activity *activities,
+    const lxp_kernel_execution *executions);
+lxp_byte_span lxp_kernel_prepared_batch_maintenance(
+    const lxp_kernel_prepared_batch *batch);
+lxp_result lxp_kernel_batch_publication_digest_maintenance(
+    const lxp_kernel_batch_boundary *base,
+    const lxp_kernel_batch_boundary *final,
+    const lxp_byte_span *activities, const lxp_byte_span *receipts,
+    const lxp_byte_span *events, size_t activity_count,
+    lxp_byte_span maintenance, uint8_t digest[32]);
 lxp_result lxp_kernel_commit_prepared_batch(
     lxp_kernel *kernel, lxp_identity_store *identities,
     lxp_kernel_prepared_batch *batch,
@@ -409,10 +422,20 @@ lxp_result lxp_kernel_restore_batch_publication_pending(
     const uint8_t base_receipt_state_root[32],
     const uint8_t final_receipt_state_root[32], uint64_t first_sequence,
     uint64_t last_sequence, uint32_t next_publication_index);
+lxp_result lxp_kernel_restore_batch_publication_pending_maintenance(
+    lxp_kernel *kernel, const uint8_t fsynced_publication_digest[32],
+    const uint8_t batch_id[32],
+    const uint8_t base_receipt_state_root[32],
+    const uint8_t final_receipt_state_root[32], uint64_t first_sequence,
+    uint64_t last_sequence, uint32_t next_publication_index);
 lxp_result lxp_kernel_finalize_batch_publication_records(
     lxp_kernel *kernel, const lxp_activity *activities,
     const lxp_receipt *receipts, size_t activity_count,
     const uint8_t fsynced_publication_digest[32]);
+lxp_result lxp_kernel_finalize_batch_publication_maintenance(
+    lxp_kernel *kernel, const lxp_activity *activities,
+    const lxp_receipt *receipts, size_t activity_count,
+    lxp_byte_span maintenance, const uint8_t fsynced_publication_digest[32]);
 /* Observer append is required to be durable and idempotent by canonical
  * activity/receipt identity.  Recovery persists or reconstructs this index;
  * replay after a crash between append and index persistence is therefore a

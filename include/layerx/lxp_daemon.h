@@ -73,6 +73,7 @@ typedef struct lxp_daemon_signed_header_evidence {
 } lxp_daemon_signed_header_evidence;
 
 typedef struct lxp_daemon_account_evidence {
+    uint16_t format_version;
     uint8_t account_id[32];
     uint8_t receipt_digest[32];
     uint64_t observed_sequence;
@@ -146,6 +147,13 @@ lxp_result lxp_daemon_account_evidence_publish(
     const lxp_daemon_account_evidence *evidence, lxp_arena *arena,
     uint8_t record_digest[32]);
 lxp_result lxp_daemon_account_evidence_publish_batch(
+    lxp_daemon_evidence_store *store, const lxp_kernel *kernel,
+    lxp_byte_span canonical_head_receipt,
+    const lxp_merkle_proof *head_receipt_proof,
+    const lxp_sequencer_authorization *authorization,
+    lxp_byte_span canonical_header, const uint8_t header_signature[64],
+    lxp_arena *arena);
+lxp_result lxp_daemon_account_evidence_publish_batch_maintenance(
     lxp_daemon_evidence_store *store, const lxp_kernel *kernel,
     lxp_byte_span canonical_head_receipt,
     const lxp_merkle_proof *head_receipt_proof,
@@ -378,6 +386,12 @@ lxp_result lxp_daemon_receipt_authority_append(
     const uint8_t *canonical_header, size_t header_length,
     const uint8_t header_signature[64],
     const lxp_merkle_proof *receipt_proof, lxp_arena *arena);
+lxp_result lxp_daemon_receipt_authority_append_maintenance(
+    lxp_daemon_receipt_authority_store *store,
+    const uint8_t *canonical_receipt, size_t receipt_length,
+    const uint8_t *canonical_header, size_t header_length,
+    const uint8_t header_signature[64],
+    const lxp_merkle_proof *receipt_proof, lxp_arena *arena);
 lxp_result lxp_daemon_receipt_authority_append_artifacts(
     lxp_daemon_receipt_authority_store *store,
     const uint8_t *canonical_receipt, size_t receipt_length,
@@ -540,6 +554,14 @@ lxp_result lxp_daemon_serve(const char *configuration_path);
 lxp_result lxp_daemon_authority_replica_serve(
     const char *configuration_path);
 lxp_result lxp_daemon_authority_replica_publish(
+    const char *loopback_address, uint16_t port,
+    const uint8_t *bearer_token, size_t bearer_token_length,
+    const uint8_t expected_replica_id[32],
+    const uint8_t *canonical_receipt, size_t receipt_length,
+    const uint8_t *canonical_header, size_t header_length,
+    const uint8_t header_signature[64],
+    const lxp_merkle_proof *receipt_proof);
+lxp_result lxp_daemon_authority_replica_publish_maintenance(
     const char *loopback_address, uint16_t port,
     const uint8_t *bearer_token, size_t bearer_token_length,
     const uint8_t expected_replica_id[32],
