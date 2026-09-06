@@ -160,16 +160,23 @@ pub fn detect(
 
 /// Detects and durably blocks a gap for an exact session-bound subscription after resolving the
 /// current token generation through the common tenant gate.
+///
+/// # Errors
+///
+/// Returns an error if authorization fails, continuity is invalid, or subscription state cannot be persisted.
 pub fn detect_authorized(
     subscriptions: &mut SubscriptionStore,
-    sessions: &SessionRegistry,
-    token: &Token,
-    observability: &mut TenantObservability,
-    core_sequence: u64,
+    authorization: GapAuthorization<'_>,
     target: &SubscriptionTarget,
     expected: u64,
     observed: u64,
 ) -> Result<Option<Gap>, GapError> {
+    let GapAuthorization {
+        sessions,
+        token,
+        observability,
+        core_sequence,
+    } = authorization;
     subscriptions.authorize_target(
         sessions,
         token,
@@ -298,16 +305,23 @@ pub fn apply_backfill(
 
 /// Applies a core backfill report for an exact session-bound subscription only after resolving
 /// its current token generation through the common tenant gate.
+///
+/// # Errors
+///
+/// Returns an error if authorization fails, continuity is invalid, or subscription state cannot be persisted.
 pub fn apply_backfill_authorized(
     subscriptions: &mut SubscriptionStore,
-    sessions: &SessionRegistry,
-    token: &Token,
-    observability: &mut TenantObservability,
-    core_sequence: u64,
+    authorization: GapAuthorization<'_>,
     target: &SubscriptionTarget,
     gap: Gap,
     report: &BackfillReport,
 ) -> Result<BackfillResolution, GapError> {
+    let GapAuthorization {
+        sessions,
+        token,
+        observability,
+        core_sequence,
+    } = authorization;
     subscriptions.authorize_target(
         sessions,
         token,
@@ -392,6 +406,10 @@ pub fn admit(
 
 /// Checks continuity for an exact session-bound subscription after resolving its current token
 /// generation through the common tenant gate.
+///
+/// # Errors
+///
+/// Returns an error if authorization fails, continuity is invalid, or subscription state cannot be persisted.
 pub fn admit_authorized(
     subscriptions: &SubscriptionStore,
     sessions: &SessionRegistry,
@@ -465,17 +483,24 @@ pub fn enforce_retention(
 
 /// Enforces retention for an exact session-bound subscription after resolving its current token
 /// generation through the common tenant gate.
+///
+/// # Errors
+///
+/// Returns an error if authorization fails, continuity is invalid, or subscription state cannot be persisted.
 pub fn enforce_retention_authorized(
     subscriptions: &mut SubscriptionStore,
-    sessions: &SessionRegistry,
-    token: &Token,
-    observability: &mut TenantObservability,
-    core_sequence: u64,
+    authorization: GapAuthorization<'_>,
     target: &SubscriptionTarget,
     head_exclusive: u64,
     core_oldest_available: u64,
     retention: Retention,
 ) -> Result<Option<Truncated>, GapError> {
+    let GapAuthorization {
+        sessions,
+        token,
+        observability,
+        core_sequence,
+    } = authorization;
     subscriptions.authorize_target(
         sessions,
         token,
@@ -521,4 +546,11 @@ fn enforce_retention_inner(
         notice.lost_through,
     )?;
     Ok(Some(notice))
+}
+
+pub struct GapAuthorization<'a> {
+    pub sessions: &'a SessionRegistry,
+    pub token: &'a Token,
+    pub observability: &'a mut TenantObservability,
+    pub core_sequence: u64,
 }

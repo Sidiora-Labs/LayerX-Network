@@ -190,7 +190,7 @@ impl HttpProgramTransport {
     fn submit_bound(
         &self,
         request: &impl BoundProgramRequest,
-        wire: Value,
+        wire: &Value,
         idempotency_key: [u8; 32],
     ) -> Result<ProgramSubmission, ProgramOperationError> {
         if idempotency_key != request.bound_idempotency_key() {
@@ -199,7 +199,7 @@ impl HttpProgramTransport {
         if let Some(credential) = &self.credential {
             let _ = credential.authorization()?;
         }
-        let encoded = serde_json::to_vec(&wire).map_err(|_| ProgramOperationError::Decode)?;
+        let encoded = serde_json::to_vec(wire).map_err(|_| ProgramOperationError::Decode)?;
         if encoded.is_empty() || encoded.len() > MAX_HTTP_REQUEST_BYTES {
             return Err(ProgramOperationError::Bounds);
         }
@@ -208,7 +208,7 @@ impl HttpProgramTransport {
                 "program.call",
                 Method::Post,
                 "/v1/programs/call",
-                &wire,
+                wire,
                 Some(idempotency_key),
             )
             .and_then(|value| {
@@ -440,7 +440,7 @@ impl ProgramTransport for HttpProgramTransport {
         request: &ProgramCallRequest,
         idempotency_key: [u8; 32],
     ) -> Result<ProgramSubmission, ProgramOperationError> {
-        self.submit_bound(request, wire_call(request), idempotency_key)
+        self.submit_bound(request, &wire_call(request), idempotency_key)
     }
 
     fn receipt(
@@ -520,6 +520,7 @@ struct DecodedExecution {
     verified: layerx_proof::program::VerifiedProgramExecution,
 }
 
+#[derive(Clone, Copy)]
 struct SubmissionExpectation<'a> {
     program_id: Option<[u8; 32]>,
     activity_id: Option<[u8; 32]>,
@@ -1063,6 +1064,22 @@ fn decode_submission(
     }
 }
 
+fn decode_execution_authority(
+    value: &Map<String, Value>,
+) -> Result<layerx_proof::receipt::AuthorizedBatch, ProgramOperationError> {
+    let authority_value = value
+        .get("authority")
+        .and_then(Value::as_object)
+        .ok_or(ProgramOperationError::Decode)?;
+    Ok(layerx_proof::receipt::AuthorizedBatch::new(
+        fixed(authority_value, "batch_id")?,
+        fixed(authority_value, "asset")?,
+        fixed(authority_value, "previous_state_root")?,
+        fixed(authority_value, "resulting_state_root")?,
+        fixed(authority_value, "sequencer_public_key")?,
+    ))
+}
+
 fn decode_execution(
     value: &Value,
     expected_state: Option<ExecutionState>,
@@ -1092,17 +1109,7 @@ fn decode_execution(
     let receipt = bounded_hex(value, "receipt", MAX_SIGNED_ACTIVITY_BYTES, None)?;
     let terminal_payload = bounded_hex(value, "terminal_payload", MAX_SIGNED_ACTIVITY_BYTES, None)?;
     let call_graph = bounded_hex(value, "call_graph", MAX_SIGNED_ACTIVITY_BYTES, None)?;
-    let authority_value = value
-        .get("authority")
-        .and_then(Value::as_object)
-        .ok_or(ProgramOperationError::Decode)?;
-    let authority = layerx_proof::receipt::AuthorizedBatch::new(
-        fixed(authority_value, "batch_id")?,
-        fixed(authority_value, "asset")?,
-        fixed(authority_value, "previous_state_root")?,
-        fixed(authority_value, "resulting_state_root")?,
-        fixed(authority_value, "sequencer_public_key")?,
-    );
+    let authority = decode_execution_authority(value)?;
     if authority.sequencer_public_key() != trusted_sequencer_public_key
         || authority.batch_id() != batch_id
         || authority.resulting_state_root() != state_root
@@ -1301,8 +1308,8 @@ fn hex_nibble(byte: u8) -> Option<u8> {
 }
 
 fn hex(bytes: &[u8]) -> String {
-    let mut output = String::with_capacity(bytes.len().saturating_mul(2));
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(bytes.len().saturating_mul(2));
     for byte in bytes {
         output.push(char::from(DIGITS[usize::from(byte >> 4)]));
         output.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
@@ -1376,6 +1383,66 @@ fn exact_i32(value: &Map<String, Value>, field: &str) -> Result<i32, ProgramOper
         .and_then(Value::as_i64)
         .and_then(|value| i32::try_from(value).ok())
         .ok_or(ProgramOperationError::Decode)
+}
+
+impl NativeProgramTransport for HttpProgramTransport {
+    fn simulate_native(
+        &self,
+        request: &NativeProgramCallRequest,
+    ) -> Result<VerifiedProgramSimulation, ProgramOperationError> {
+        let value = self.dispatch(
+            "program.simulate",
+            Method::Post,
+            "/v1/programs/simulate",
+            &wire_native_call(request)?,
+            None,
+        )?;
+        let verified = decode_simulation(&value, request, self.trusted_sequencer_public_key)?;
+        require_native_execution(verified.execution())?;
+        Ok(verified)
+    }
+    fn submit_native(
+        &self,
+        request: &NativeProgramCallRequest,
+        idempotency_key: [u8; 32],
+    ) -> Result<ProgramSubmission, ProgramOperationError> {
+        let submission =
+            self.submit_bound(request, &wire_native_call(request)?, idempotency_key)?;
+        match &submission {
+            ProgramSubmission::Executed(verified) | ProgramSubmission::Refused(verified) => {
+                require_native_execution(verified)?;
+            }
+            ProgramSubmission::Unknown { .. } => {}
+        }
+        Ok(submission)
+    }
+}
+
+fn wire_native_call(request: &NativeProgramCallRequest) -> Result<Value, ProgramOperationError> {
+    let native = layerx_types::program_call::NativeProgramCall::decode(&request.payload)
+        .map_err(|_| ProgramOperationError::Decode)?;
+    Ok(json!({
+        "payload_encoding": "native-v1", "program_id": hex(&request.program_id), "calldata": hex(native.calldata),
+        "budget": { "fuel": native.resources.0[0].to_string(), "fee_limit": request.fee_limit.to_string() },
+        "signed_activity": hex(request.signed_activity()),
+        "native_call": { "guest_abi": native.guest_abi, "entrypoint": std::str::from_utf8(native.entrypoint).map_err(|_| ProgramOperationError::Decode)?,
+            "capabilities_hex": hex(native.capabilities), "access_declaration_hex": hex(native.access_declaration),
+            "response_capacity": native.response_capacity, "resources": native.resources.0.map(|value| value.to_string()) }
+    }))
+}
+
+fn require_native_execution(
+    verified: &layerx_proof::program::VerifiedProgramExecution,
+) -> Result<(), ProgramOperationError> {
+    let protocol = verified
+        .receipt()
+        .receipt()
+        .protocol()
+        .ok_or(ProgramOperationError::Verification)?;
+    if protocol.protocol_version() != 3 {
+        return Err(ProgramOperationError::Verification);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1603,63 +1670,4 @@ mod source_contract {
             ],
         ));
     }
-}
-
-impl NativeProgramTransport for HttpProgramTransport {
-    fn simulate_native(
-        &self,
-        request: &NativeProgramCallRequest,
-    ) -> Result<VerifiedProgramSimulation, ProgramOperationError> {
-        let value = self.dispatch(
-            "program.simulate",
-            Method::Post,
-            "/v1/programs/simulate",
-            &wire_native_call(request)?,
-            None,
-        )?;
-        let verified = decode_simulation(&value, request, self.trusted_sequencer_public_key)?;
-        require_native_execution(verified.execution())?;
-        Ok(verified)
-    }
-    fn submit_native(
-        &self,
-        request: &NativeProgramCallRequest,
-        idempotency_key: [u8; 32],
-    ) -> Result<ProgramSubmission, ProgramOperationError> {
-        let submission = self.submit_bound(request, wire_native_call(request)?, idempotency_key)?;
-        match &submission {
-            ProgramSubmission::Executed(verified) | ProgramSubmission::Refused(verified) => {
-                require_native_execution(verified)?
-            }
-            ProgramSubmission::Unknown { .. } => {}
-        }
-        Ok(submission)
-    }
-}
-
-fn wire_native_call(request: &NativeProgramCallRequest) -> Result<Value, ProgramOperationError> {
-    let native = layerx_types::program_call::NativeProgramCall::decode(&request.payload)
-        .map_err(|_| ProgramOperationError::Decode)?;
-    Ok(json!({
-        "payload_encoding": "native-v1", "program_id": hex(&request.program_id), "calldata": hex(native.calldata),
-        "budget": { "fuel": native.resources.0[0].to_string(), "fee_limit": request.fee_limit.to_string() },
-        "signed_activity": hex(request.signed_activity()),
-        "native_call": { "guest_abi": native.guest_abi, "entrypoint": std::str::from_utf8(native.entrypoint).map_err(|_| ProgramOperationError::Decode)?,
-            "capabilities_hex": hex(native.capabilities), "access_declaration_hex": hex(native.access_declaration),
-            "response_capacity": native.response_capacity, "resources": native.resources.0.map(|value| value.to_string()) }
-    }))
-}
-
-fn require_native_execution(
-    verified: &layerx_proof::program::VerifiedProgramExecution,
-) -> Result<(), ProgramOperationError> {
-    let protocol = verified
-        .receipt()
-        .receipt()
-        .protocol()
-        .ok_or(ProgramOperationError::Verification)?;
-    if protocol.protocol_version() != 3 {
-        return Err(ProgramOperationError::Verification);
-    }
-    Ok(())
 }

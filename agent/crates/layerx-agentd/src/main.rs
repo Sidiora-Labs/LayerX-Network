@@ -121,10 +121,8 @@ fn verified_limit() -> Result<LimitConfig, String> {
     })
 }
 
-fn start_human_owner() -> Result<mpsc::Receiver<Result<(), String>>, String> {
-    let peers = human_peers()?;
-    let deadline = Duration::from_millis(parse_u64("LAYERX_AGENT_HUMAN_DEADLINE_MS")?);
-    let human_limits = Limits {
+fn human_lni_limits(deadline: Duration) -> Result<Limits, String> {
+    Limits {
         maximum_frame_bytes: required("LAYERX_AGENT_HUMAN_MAX_FRAME_BYTES")?
             .parse()
             .map_err(|_| "human max frame is invalid")?,
@@ -140,34 +138,17 @@ fn start_human_owner() -> Result<mpsc::Receiver<Result<(), String>>, String> {
         deadline,
     }
     .validate()
-    .map_err(|_| "human LNI limits are invalid")?;
-    let node_limits = Limits {
-        maximum_frame_bytes: human_limits
-            .maximum_frame_bytes
-            .max(layerx_client::evidence::MINIMUM_FINALITY_FRAME_BYTES),
-        ..human_limits
-    };
-    let node_path = PathBuf::from(required("LAYERX_AGENT_HUMAN_NODE_LNI")?);
-    let store_path = PathBuf::from(required("LAYERX_AGENT_HUMAN_STORE")?);
-    let socket_path = PathBuf::from(required("LAYERX_AGENT_HUMAN_SOCKET")?);
-    let session_key_root = PathBuf::from(required("LAYERX_AGENT_HUMAN_SESSION_KEY_ROOT")?);
-    let session_secret_path =
-        PathBuf::from(required("LAYERX_AGENT_HUMAN_SESSION_OPERATOR_SECRET_FILE")?);
-    if !node_path.is_absolute()
-        || !store_path.is_absolute()
-        || !socket_path.is_absolute()
-        || !session_key_root.is_absolute()
-        || !session_secret_path.is_absolute()
-    {
-        return Err("human daemon paths must be absolute".to_owned());
-    }
+    .map_err(|_| "human LNI limits are invalid".to_owned())
+}
+
+fn connect_human_node(node_path: PathBuf, node_limits: Limits) -> Result<Client, String> {
     let human_protocol_version = required("LAYERX_AGENT_HUMAN_PROTOCOL_VERSION")?
         .parse()
         .map_err(|_| "human protocol version is invalid")?;
     if !layerx_wire::limits::protocol_version_uses_occupancy(human_protocol_version) {
         return Err("human protocol version is not the current beta protocol".to_owned());
     }
-    let node = Client::connect(ClientConfig {
+    Client::connect(ClientConfig {
         endpoint: node_path,
         handshake: HandshakeConfig {
             built_interface_version: Version::V1_3,
@@ -188,7 +169,13 @@ fn start_human_owner() -> Result<mpsc::Receiver<Result<(), String>>, String> {
                 .map_err(|_| "human reconnect jitter is invalid")?,
         },
     })
-    .map_err(|error| format!("human node LNI is unavailable: {error:?}"))?;
+    .map_err(|error| format!("human node LNI is unavailable: {error:?}"))
+}
+
+fn connect_human_authority(
+    deadline: Duration,
+    peers: &BTreeMap<u32, (String, String)>,
+) -> Result<RemoteHumanAuthority, String> {
     let authority = RemoteHumanAuthority::connect(
         &required("LAYERX_AGENT_HUMAN_AUTHORITY_ENDPOINT")?,
         required("LAYERX_AGENT_HUMAN_AUTHORITY_BEARER")?,
@@ -198,7 +185,7 @@ fn start_human_owner() -> Result<mpsc::Receiver<Result<(), String>>, String> {
             .map_err(|_| "human authority bound is invalid")?,
     )
     .map_err(|error| format!("human authority is invalid: {error:?}"))?;
-    for (uid, (principal, tenant)) in &peers {
+    for (uid, (principal, tenant)) in peers {
         authority
             .registry(&HumanPeer {
                 uid: *uid,
@@ -207,6 +194,35 @@ fn start_human_owner() -> Result<mpsc::Receiver<Result<(), String>>, String> {
             })
             .map_err(|error| format!("human authority readiness failed: {error:?}"))?;
     }
+    Ok(authority)
+}
+
+fn start_human_owner() -> Result<mpsc::Receiver<Result<(), String>>, String> {
+    let peers = human_peers()?;
+    let deadline = Duration::from_millis(parse_u64("LAYERX_AGENT_HUMAN_DEADLINE_MS")?);
+    let human_limits = human_lni_limits(deadline)?;
+    let node_limits = Limits {
+        maximum_frame_bytes: human_limits
+            .maximum_frame_bytes
+            .max(layerx_client::evidence::MINIMUM_FINALITY_FRAME_BYTES),
+        ..human_limits
+    };
+    let node_path = PathBuf::from(required("LAYERX_AGENT_HUMAN_NODE_LNI")?);
+    let store_path = PathBuf::from(required("LAYERX_AGENT_HUMAN_STORE")?);
+    let socket_path = PathBuf::from(required("LAYERX_AGENT_HUMAN_SOCKET")?);
+    let session_key_root = PathBuf::from(required("LAYERX_AGENT_HUMAN_SESSION_KEY_ROOT")?);
+    let session_secret_path =
+        PathBuf::from(required("LAYERX_AGENT_HUMAN_SESSION_OPERATOR_SECRET_FILE")?);
+    if !node_path.is_absolute()
+        || !store_path.is_absolute()
+        || !socket_path.is_absolute()
+        || !session_key_root.is_absolute()
+        || !session_secret_path.is_absolute()
+    {
+        return Err("human daemon paths must be absolute".to_owned());
+    }
+    let node = connect_human_node(node_path, node_limits)?;
+    let authority = connect_human_authority(deadline, &peers)?;
     let shared_store =
         Arc::new(Mutex::new(Store::open(store_path).map_err(|error| {
             format!("human store is unavailable: {error}")

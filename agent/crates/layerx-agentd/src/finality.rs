@@ -166,6 +166,10 @@ pub fn augment(
 /// The activity and exact stored receipt must have independently verified
 /// inclusion under byte-identical signed-header evidence. A checkpoint raises
 /// the receipt only when its verified certificate covers that same header.
+///
+/// # Errors
+///
+/// Returns an error if the verified evidence does not match the durable record or persistence fails.
 pub fn augment_verified(
     durable: &mut Store,
     tenant: TenantId,

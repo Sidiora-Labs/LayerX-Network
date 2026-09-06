@@ -355,6 +355,10 @@ impl Store {
     /// Every key is validated before mutation, duplicate keys are refused, and the complete
     /// entries map is persisted once. An encoding or I/O failure restores the exact in-memory
     /// map that preceded the batch.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if record keys or transitions are invalid, or the durable transaction fails.
     pub fn update_local_batch(
         &mut self,
         updates: Vec<(TenantKey, Vec<u8>)>,
@@ -391,6 +395,10 @@ impl Store {
     }
 
     /// Atomically updates existing local records and creates one absent local companion.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if record keys or transitions are invalid, or the durable transaction fails.
     pub fn update_local_batch_with_companion(
         &mut self,
         updates: Vec<(TenantKey, Vec<u8>)>,
@@ -401,6 +409,10 @@ impl Store {
     }
 
     /// Atomically updates existing local records and creates an absent set of local companions.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if record keys or transitions are invalid, or the durable transaction fails.
     pub fn update_local_batch_with_companions(
         &mut self,
         updates: Vec<(TenantKey, Vec<u8>)>,
@@ -486,6 +498,10 @@ impl Store {
     }
 
     /// Atomically replaces one daemon-local record with another.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if record keys or transitions are invalid, or the durable transaction fails.
     pub fn replace_local(
         &mut self,
         previous_key: &TenantKey,
@@ -515,6 +531,10 @@ impl Store {
         Ok(())
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if record keys or transitions are invalid, or the durable transaction fails.
     pub fn replace_local_with_companion(
         &mut self,
         previous_key: &TenantKey,
@@ -559,6 +579,10 @@ impl Store {
     }
 
     /// Atomically updates one local record and creates one absent local companion.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if record keys or transitions are invalid, or the durable transaction fails.
     pub fn update_local_with_companion(
         &mut self,
         key: TenantKey,

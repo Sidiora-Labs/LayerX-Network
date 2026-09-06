@@ -464,6 +464,10 @@ pub fn deliver(
 /// Delivers through the exact durable session binding, reauthorizing both before endpoint I/O and
 /// immediately before accepting the delivery. The registered stop signal also interrupts bounded
 /// I/O after a persist-before-publish revocation.
+///
+/// # Errors
+///
+/// Returns an error if authorization, endpoint validation, or delivery fails.
 pub fn deliver_authorized(
     engine: &mut DeliveryEngine,
     sessions: &crate::session::SessionRegistry,
@@ -486,6 +490,10 @@ pub fn deliver_authorized(
 /// authority revocation, and scope restriction can durably advance the exact session generation.
 /// The registry is read again while the acknowledged item is accepted, making invalidation and
 /// completion mutually ordered.
+///
+/// # Errors
+///
+/// Returns an error if authorization, endpoint validation, or delivery fails.
 pub fn deliver_shared_authorized(
     engine: &mut DeliveryEngine,
     sessions: &RwLock<crate::session::SessionRegistry>,

@@ -139,12 +139,8 @@ impl ProvisionedSessionKey {
                 {
                     return Err(SigningError::Revoked);
                 }
-                let bytes = fs::read(marker).map_err(|_| SigningError::Revoked)?;
-                if bytes == b"LXSRV1" {
-                    Err(SigningError::Revoked)
-                } else {
-                    Err(SigningError::Revoked)
-                }
+                fs::read(marker).map_err(|_| SigningError::Revoked)?;
+                Err(SigningError::Revoked)
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(_) => Err(SigningError::Revoked),
@@ -159,6 +155,10 @@ impl ProvisionedSessionKey {
 /// This function requires the transferred ordinals to equal the canonical
 /// range and then reissues the complete module/ordinal Cartesian scope before
 /// accepting byte-for-byte equality.
+///
+/// # Errors
+///
+/// Returns an error if the registration payload, authority, or permitted session scope is invalid.
 pub fn validate_issued_session(
     registration_payload: &[u8],
     grantor: [u8; 32],

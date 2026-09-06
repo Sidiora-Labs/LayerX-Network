@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::net::UnixListener;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, RwLock};
 use std::thread;
@@ -179,10 +179,10 @@ fn rewrite_as_legacy_unbound(
     id: &SubscriptionId,
 ) {
     let key = subscription_key(tenant, id);
-    let mut bytes = durable
-        .get(&key)
-        .map(|stored| stored.bytes().to_vec())
-        .unwrap_or_else(|| panic!("subscription record missing"));
+    let mut bytes = durable.get(&key).map_or_else(
+        || panic!("subscription record missing"),
+        |stored| stored.bytes().to_vec(),
+    );
     assert_eq!(&bytes[..4], b"LXS2");
     let binding_offset = 4 + [
         id.as_str(),
@@ -314,8 +314,10 @@ fn legacy_subscription_without_a_session_generation_is_durably_quarantined() {
     let migrated = restarted
         .durable()
         .get(&subscription_key(&tenant_id, &id))
-        .map(|stored| stored.bytes().to_vec())
-        .unwrap_or_else(|| panic!("migrated subscription missing"));
+        .map_or_else(
+            || panic!("migrated subscription missing"),
+            |stored| stored.bytes().to_vec(),
+        );
     assert!(migrated.starts_with(b"LXS2"));
     drop(restarted);
 
@@ -524,6 +526,497 @@ fn closed_session_terminates_the_in_flight_stream_with_a_typed_revoked_event() {
     let id = subscription_id("subscription-a");
     let target = subscription_target(&subscription_scope, &id);
 
+    let RevocationSetup {
+        session_store,
+        identity,
+        mut sessions,
+        token,
+        sibling,
+        mut subscriptions,
+        mut observability,
+    } = prepare_revocation(&root, &tenant_id, &subscription_scope, &id);
+    assert_unbound_subscription_refused(&mut subscriptions, &subscription_scope, &id, &target);
+    exercise_authorized_subscription(
+        &mut subscriptions,
+        &sessions,
+        &token,
+        &mut observability,
+        &subscription_scope,
+        &id,
+        &target,
+    );
+    let mut engine = open_authorized_engine(
+        &root,
+        &tenant_id,
+        &target,
+        subscriptions,
+        &mut sessions,
+        &token,
+        &mut observability,
+    );
+    assert_engine_authorization(
+        &mut engine,
+        &sessions,
+        &mut observability,
+        &subscription_scope,
+        &id,
+    );
+    let (endpoint, authenticator, listener) = outbound_receiver(&root, &mut engine);
+    let sessions = Arc::new(RwLock::new(sessions));
+    let (revoker, receiver) = spawn_revocation(listener, &sessions, session_store, &tenant_id);
+    assert!(matches!(
+        deliver_outbound_authorized(
+            &mut engine,
+            &sessions,
+            &endpoint,
+            &authenticator,
+            11,
+            &mut observability,
+            100,
+        ),
+        Err(OutboundError::Stopped(Termination::SessionRevoked))
+    ));
+    assert!(revoker.join().is_ok(), "revoker panicked");
+    assert!(receiver.join().is_ok(), "receiver panicked");
+    assert_revoked_delivery(
+        &mut engine,
+        &sessions,
+        &endpoint,
+        &authenticator,
+        &mut observability,
+    );
+    let sessions = sessions
+        .read()
+        .unwrap_or_else(|error| panic!("session registry: {error}"));
+    assert_eq!(
+        sibling.authorize(&sessions, &tenant_id, identity.did(), "subscribe", 11),
+        Ok(SessionId([2; 32]))
+    );
+    assert_eq!(sessions.generation(&tenant_id, SessionId([2; 32])), Some(1));
+
+    assert_revocation_persisted(
+        engine,
+        &sessions,
+        &target,
+        &root,
+        tenant_id,
+        (&token, &sibling),
+        &mut observability,
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+fn assert_unbound_subscription_refused(
+    subscriptions: &mut SubscriptionStore,
+    subscription_scope: &SubscriptionScope,
+    id: &SubscriptionId,
+    target: &SubscriptionTarget,
+) {
+    assert!(subscriptions.list(subscription_scope).is_empty());
+    assert!(matches!(
+        subscriptions.get(target),
+        Err(SubscriptionError::AuthorizationRequired)
+    ));
+    assert!(matches!(
+        subscriptions.mark_delivered(target, Cursor(1)),
+        Err(SubscriptionError::AuthorizationRequired)
+    ));
+    assert!(matches!(
+        subscriptions.acknowledge(&CursorAcknowledgement {
+            scope: subscription_scope.clone(),
+            subscription_id: id.clone(),
+            cursor: ApiCursor(Sequence(0)),
+        }),
+        Err(SubscriptionError::AuthorizationRequired)
+    ));
+    assert!(matches!(
+        subscriptions.pause(target),
+        Err(SubscriptionError::AuthorizationRequired)
+    ));
+    assert!(matches!(
+        subscriptions.resume(target),
+        Err(SubscriptionError::AuthorizationRequired)
+    ));
+    assert!(matches!(
+        subscriptions.delete(target),
+        Err(SubscriptionError::AuthorizationRequired)
+    ));
+    assert!(matches!(
+        subscriptions.resume_cursor(target),
+        Err(SubscriptionError::AuthorizationRequired)
+    ));
+    assert!(matches!(
+        subscriptions.continuity(target),
+        Err(SubscriptionError::AuthorizationRequired)
+    ));
+    assert!(matches!(
+        subscriptions.block_gap(target, 1, 2),
+        Err(SubscriptionError::AuthorizationRequired)
+    ));
+    assert!(matches!(
+        subscriptions.record_backfill(target, Some(1)),
+        Err(SubscriptionError::AuthorizationRequired)
+    ));
+    assert!(matches!(
+        subscriptions.clear_gap(target),
+        Err(SubscriptionError::AuthorizationRequired)
+    ));
+    assert!(matches!(
+        subscriptions.mark_truncated(target, 0, 1, 0),
+        Err(SubscriptionError::AuthorizationRequired)
+    ));
+}
+
+fn exercise_authorized_subscription(
+    subscriptions: &mut SubscriptionStore,
+    sessions: &SessionRegistry,
+    token: &Token,
+    observability: &mut TenantObservability,
+    subscription_scope: &SubscriptionScope,
+    id: &SubscriptionId,
+    target: &SubscriptionTarget,
+) {
+    assert_eq!(
+        text(
+            subscriptions.list_authorized(sessions, token, observability, 11, subscription_scope,),
+            "authorized list",
+        ),
+        vec![text(
+            subscriptions.health_authorized(sessions, token, observability, 11, target,),
+            "authorized health",
+        )]
+    );
+    text(
+        subscriptions.pause_authorized(sessions, token, observability, 11, target),
+        "authorized pause",
+    );
+    text(
+        subscriptions.resume_authorized(sessions, token, observability, 11, target),
+        "authorized resume",
+    );
+    text(
+        subscriptions.acknowledge_authorized(
+            sessions,
+            token,
+            observability,
+            11,
+            &CursorAcknowledgement {
+                scope: subscription_scope.clone(),
+                subscription_id: id.clone(),
+                cursor: ApiCursor(Sequence(0)),
+            },
+        ),
+        "authorized acknowledgement",
+    );
+    let disposable_id = subscription_id("subscription-disposable");
+    let disposable_target = subscription_target(subscription_scope, &disposable_id);
+    text(
+        subscriptions.create_authorized(
+            sessions,
+            token,
+            observability,
+            11,
+            disposable_id,
+            request(subscription_scope.clone(), filter("tenant-a", "agent-a"), 0),
+        ),
+        "disposable create",
+    );
+    text(
+        subscriptions.delete_authorized(sessions, token, observability, 11, &disposable_target),
+        "authorized delete",
+    );
+}
+
+fn open_authorized_engine(
+    root: &Path,
+    tenant_id: &TenantId,
+    target: &SubscriptionTarget,
+    subscriptions: SubscriptionStore,
+    sessions: &mut SessionRegistry,
+    token: &Token,
+    observability: &mut TenantObservability,
+) -> DeliveryEngine {
+    let retry_policy = RetryPolicy {
+        base_delay_ms: 10,
+        maximum_delay_ms: 100,
+        jitter_percent: 20,
+        maximum_attempts: 4,
+    };
+    assert!(matches!(
+        DeliveryEngine::open(subscriptions, target.clone(), 3, 8, retry_policy,),
+        Err(DeliveryError::AuthorizationRequired)
+    ));
+    let subscriptions = text(
+        SubscriptionStore::open(
+            text(Store::open(root.join("events")), "event store reopen"),
+            tenant_id.clone(),
+        ),
+        "subscription store reopen",
+    );
+    text(
+        DeliveryEngine::open_authorized(
+            subscriptions,
+            target.clone(),
+            layerx_agentd::events::DeliverySettings {
+                live_start: 3,
+                capacity: 8,
+                retry_policy,
+            },
+            sessions,
+            token.clone(),
+            observability,
+            11,
+        ),
+        "engine",
+    )
+}
+
+fn assert_engine_authorization(
+    engine: &mut DeliveryEngine,
+    sessions: &SessionRegistry,
+    observability: &mut TenantObservability,
+    subscription_scope: &SubscriptionScope,
+    id: &SubscriptionId,
+) {
+    assert!(matches!(
+        health(engine),
+        Err(DeliveryError::AuthorizationRequired)
+    ));
+    text(
+        health_authorized(engine, sessions, 11, observability),
+        "authorized delivery health",
+    );
+    assert!(matches!(
+        backfill(engine),
+        Err(DeliveryError::AuthorizationRequired)
+    ));
+    assert!(matches!(
+        deliver(engine),
+        Err(DeliveryError::AuthorizationRequired)
+    ));
+    assert!(matches!(
+        engine.accept_front(1),
+        Err(DeliveryError::AuthorizationRequired)
+    ));
+    assert!(matches!(
+        engine.acknowledge(&CursorAcknowledgement {
+            scope: subscription_scope.clone(),
+            subscription_id: id.clone(),
+            cursor: ApiCursor(Sequence(0)),
+        }),
+        Err(DeliveryError::AuthorizationRequired)
+    ));
+    text(
+        backfill_authorized(engine, sessions, 11, observability),
+        "backfill",
+    );
+    assert_eq!(engine.buffered_len(), 4);
+    assert!(matches!(
+        deliver_authorized(engine, sessions, 11, observability),
+        Ok(Some(_))
+    ));
+    assert!(matches!(
+        engine.authorize_boundary(sessions, Operation::ReadBalance, 11, observability,),
+        Err(DeliveryError::Authorization(
+            AuthorizationError::InvalidRequest
+        ))
+    ));
+    assert_eq!(
+        engine.authorization_stop().and_then(|stop| stop.reason()),
+        None
+    );
+}
+
+fn outbound_receiver(
+    root: &Path,
+    engine: &mut DeliveryEngine,
+) -> (Endpoint, Authenticator, UnixListener) {
+    let metadata = text(
+        fs::metadata(std::env::temp_dir()),
+        "temporary directory metadata",
+    );
+    let socket_path = root.join("receiver.sock");
+    let listener = text(UnixListener::bind(&socket_path), "receiver listener");
+    let endpoint = text(
+        Endpoint::new(
+            socket_path,
+            PeerIdentity {
+                uid: metadata.uid(),
+                gid: metadata.gid(),
+            },
+            4096,
+            Duration::from_millis(500),
+            Duration::from_millis(2),
+        ),
+        "endpoint",
+    );
+    let authenticator = text(
+        Authenticator::new("receiver-key-v1", [0x8a; 32]),
+        "authenticator",
+    );
+    assert!(matches!(
+        deliver_outbound_unbound(engine, &endpoint, &authenticator, &StopSignal::active(), 99,),
+        Err(OutboundError::Delivery(
+            DeliveryError::AuthorizationRequired
+        ))
+    ));
+    (endpoint, authenticator, listener)
+}
+
+fn spawn_revocation(
+    listener: UnixListener,
+    sessions: &Arc<RwLock<SessionRegistry>>,
+    mut session_store: Store,
+    tenant_id: &TenantId,
+) -> (thread::JoinHandle<()>, thread::JoinHandle<()>) {
+    let (received_tx, received_rx) = mpsc::channel();
+    let (closed_tx, closed_rx) = mpsc::channel();
+    let receiver = thread::spawn(move || {
+        let (mut stream, _) = listener
+            .accept()
+            .unwrap_or_else(|error| panic!("receiver accept: {error}"));
+        let frame = read_frame(&mut stream, 4096)
+            .unwrap_or_else(|error| panic!("receiver frame: {error:?}"));
+        assert!(!frame.is_empty());
+        received_tx
+            .send(())
+            .unwrap_or_else(|error| panic!("receiver coordination: {error}"));
+        closed_rx
+            .recv()
+            .unwrap_or_else(|error| panic!("close completion coordination: {error}"));
+    });
+    let revocation_sessions = Arc::clone(sessions);
+    let revocation_tenant = tenant_id.clone();
+    let revoker = thread::spawn(move || {
+        received_rx
+            .recv()
+            .unwrap_or_else(|error| panic!("revocation coordination: {error}"));
+        let mut registry = revocation_sessions
+            .write()
+            .unwrap_or_else(|error| panic!("revocation registry: {error}"));
+        close(
+            &mut session_store,
+            &mut registry,
+            &revocation_tenant,
+            SessionId([1; 32]),
+        )
+        .unwrap_or_else(|error| panic!("close: {error:?}"));
+        drop(registry);
+        closed_tx
+            .send(())
+            .unwrap_or_else(|error| panic!("close completion signal: {error}"));
+    });
+    (revoker, receiver)
+}
+
+fn assert_revoked_delivery(
+    engine: &mut DeliveryEngine,
+    sessions: &Arc<RwLock<SessionRegistry>>,
+    endpoint: &Endpoint,
+    authenticator: &Authenticator,
+    observability: &mut TenantObservability,
+) {
+    assert_eq!(engine.buffered_len(), 0);
+    assert_eq!(
+        engine.authorization_stop().and_then(|stop| stop.reason()),
+        Some(Termination::SessionRevoked)
+    );
+    {
+        let registry = sessions
+            .read()
+            .unwrap_or_else(|error| panic!("session registry: {error}"));
+        assert!(matches!(
+            deliver_authorized(engine, &registry, 11, observability),
+            Err(DeliveryError::Revoked)
+        ));
+    }
+    assert!(matches!(
+        deliver_outbound_authorized(
+            engine,
+            sessions,
+            endpoint,
+            authenticator,
+            11,
+            observability,
+            200,
+        ),
+        Err(OutboundError::Stopped(Termination::SessionRevoked))
+    ));
+    assert_eq!(engine.buffered_len(), 0);
+}
+
+fn assert_revocation_persisted(
+    engine: DeliveryEngine,
+    sessions: &SessionRegistry,
+    target: &SubscriptionTarget,
+    root: &Path,
+    tenant_id: TenantId,
+    tokens: (&Token, &Token),
+    observability: &mut TenantObservability,
+) {
+    let (token, sibling) = tokens;
+    let subscriptions = engine.into_subscriptions();
+    assert_eq!(
+        text(subscriptions.termination(target), "termination"),
+        Some(Termination::SessionRevoked)
+    );
+    assert!(matches!(
+        subscriptions.get(target),
+        Err(SubscriptionError::AuthorizationRequired)
+    ));
+    assert!(matches!(
+        subscriptions.health_authorized(sessions, token, observability, 11, target),
+        Err(SubscriptionError::Authorization(
+            AuthorizationError::Revoked
+        ))
+    ));
+    assert!(matches!(
+        subscriptions.health_authorized(sessions, sibling, observability, 11, target),
+        Err(SubscriptionError::Authorization(
+            AuthorizationError::NotAuthorized
+        ))
+    ));
+    drop(subscriptions);
+
+    let restarted = text(
+        SubscriptionStore::open(
+            text(Store::open(root.join("events")), "event store restart"),
+            tenant_id,
+        ),
+        "subscription store restart",
+    );
+    assert_eq!(
+        text(restarted.termination(target), "termination after restart"),
+        Some(Termination::SessionRevoked)
+    );
+    assert!(matches!(
+        restarted.get(target),
+        Err(SubscriptionError::AuthorizationRequired)
+    ));
+    assert!(matches!(
+        restarted.health_authorized(sessions, token, observability, 11, target),
+        Err(SubscriptionError::Authorization(
+            AuthorizationError::Revoked
+        ))
+    ));
+}
+
+struct RevocationSetup {
+    session_store: Store,
+    identity: IdentityRecord,
+    sessions: SessionRegistry,
+    token: Token,
+    sibling: Token,
+    subscriptions: SubscriptionStore,
+    observability: TenantObservability,
+}
+
+fn prepare_revocation(
+    root: &Path,
+    tenant_id: &TenantId,
+    subscription_scope: &SubscriptionScope,
+    id: &SubscriptionId,
+) -> RevocationSetup {
     let mut session_store = text(Store::open(root.join("sessions")), "session store");
     let identity = session_identity(&mut session_store);
     let mut sessions = SessionRegistry::default();
@@ -554,366 +1047,13 @@ fn closed_session_terminates_the_in_flight_stream_with_a_typed_revoked_event() {
         ),
         "create",
     );
-    assert!(subscriptions.list(&subscription_scope).is_empty());
-    assert!(matches!(
-        subscriptions.get(&target),
-        Err(SubscriptionError::AuthorizationRequired)
-    ));
-    assert!(matches!(
-        subscriptions.mark_delivered(&target, Cursor(1)),
-        Err(SubscriptionError::AuthorizationRequired)
-    ));
-    assert!(matches!(
-        subscriptions.acknowledge(&CursorAcknowledgement {
-            scope: subscription_scope.clone(),
-            subscription_id: id.clone(),
-            cursor: ApiCursor(Sequence(0)),
-        }),
-        Err(SubscriptionError::AuthorizationRequired)
-    ));
-    assert!(matches!(
-        subscriptions.pause(&target),
-        Err(SubscriptionError::AuthorizationRequired)
-    ));
-    assert!(matches!(
-        subscriptions.resume(&target),
-        Err(SubscriptionError::AuthorizationRequired)
-    ));
-    assert!(matches!(
-        subscriptions.delete(&target),
-        Err(SubscriptionError::AuthorizationRequired)
-    ));
-    assert!(matches!(
-        subscriptions.resume_cursor(&target),
-        Err(SubscriptionError::AuthorizationRequired)
-    ));
-    assert!(matches!(
-        subscriptions.continuity(&target),
-        Err(SubscriptionError::AuthorizationRequired)
-    ));
-    assert!(matches!(
-        subscriptions.block_gap(&target, 1, 2),
-        Err(SubscriptionError::AuthorizationRequired)
-    ));
-    assert!(matches!(
-        subscriptions.record_backfill(&target, Some(1)),
-        Err(SubscriptionError::AuthorizationRequired)
-    ));
-    assert!(matches!(
-        subscriptions.clear_gap(&target),
-        Err(SubscriptionError::AuthorizationRequired)
-    ));
-    assert!(matches!(
-        subscriptions.mark_truncated(&target, 0, 1, 0),
-        Err(SubscriptionError::AuthorizationRequired)
-    ));
-    assert_eq!(
-        text(
-            subscriptions.list_authorized(
-                &sessions,
-                &token,
-                &mut observability,
-                11,
-                &subscription_scope,
-            ),
-            "authorized list",
-        ),
-        vec![text(
-            subscriptions.health_authorized(&sessions, &token, &mut observability, 11, &target,),
-            "authorized health",
-        )]
-    );
-    text(
-        subscriptions.pause_authorized(&sessions, &token, &mut observability, 11, &target),
-        "authorized pause",
-    );
-    text(
-        subscriptions.resume_authorized(&sessions, &token, &mut observability, 11, &target),
-        "authorized resume",
-    );
-    text(
-        subscriptions.acknowledge_authorized(
-            &sessions,
-            &token,
-            &mut observability,
-            11,
-            &CursorAcknowledgement {
-                scope: subscription_scope.clone(),
-                subscription_id: id.clone(),
-                cursor: ApiCursor(Sequence(0)),
-            },
-        ),
-        "authorized acknowledgement",
-    );
-    let disposable_id = subscription_id("subscription-disposable");
-    let disposable_target = subscription_target(&subscription_scope, &disposable_id);
-    text(
-        subscriptions.create_authorized(
-            &sessions,
-            &token,
-            &mut observability,
-            11,
-            disposable_id,
-            request(subscription_scope.clone(), filter("tenant-a", "agent-a"), 0),
-        ),
-        "disposable create",
-    );
-    text(
-        subscriptions.delete_authorized(
-            &sessions,
-            &token,
-            &mut observability,
-            11,
-            &disposable_target,
-        ),
-        "authorized delete",
-    );
-    let retry_policy = RetryPolicy {
-        base_delay_ms: 10,
-        maximum_delay_ms: 100,
-        jitter_percent: 20,
-        maximum_attempts: 4,
-    };
-    assert!(matches!(
-        DeliveryEngine::open(subscriptions, target.clone(), 3, 8, retry_policy,),
-        Err(DeliveryError::AuthorizationRequired)
-    ));
-    let subscriptions = text(
-        SubscriptionStore::open(
-            text(Store::open(root.join("events")), "event store reopen"),
-            tenant_id.clone(),
-        ),
-        "subscription store reopen",
-    );
-    let mut engine = text(
-        DeliveryEngine::open_authorized(
-            subscriptions,
-            target.clone(),
-            3,
-            8,
-            retry_policy,
-            &mut sessions,
-            token.clone(),
-            &mut observability,
-            11,
-        ),
-        "engine",
-    );
-    assert!(matches!(
-        health(&engine),
-        Err(DeliveryError::AuthorizationRequired)
-    ));
-    text(
-        health_authorized(&mut engine, &sessions, 11, &mut observability),
-        "authorized delivery health",
-    );
-    assert!(matches!(
-        backfill(&mut engine),
-        Err(DeliveryError::AuthorizationRequired)
-    ));
-    assert!(matches!(
-        deliver(&mut engine),
-        Err(DeliveryError::AuthorizationRequired)
-    ));
-    assert!(matches!(
-        engine.accept_front(1),
-        Err(DeliveryError::AuthorizationRequired)
-    ));
-    assert!(matches!(
-        engine.acknowledge(&CursorAcknowledgement {
-            scope: subscription_scope.clone(),
-            subscription_id: id.clone(),
-            cursor: ApiCursor(Sequence(0)),
-        }),
-        Err(DeliveryError::AuthorizationRequired)
-    ));
-    text(
-        backfill_authorized(&mut engine, &sessions, 11, &mut observability),
-        "backfill",
-    );
-    assert_eq!(engine.buffered_len(), 4);
-    assert!(matches!(
-        deliver_authorized(&mut engine, &sessions, 11, &mut observability),
-        Ok(Some(_))
-    ));
-    assert!(matches!(
-        engine.authorize_boundary(&sessions, Operation::ReadBalance, 11, &mut observability,),
-        Err(DeliveryError::Authorization(
-            AuthorizationError::InvalidRequest
-        ))
-    ));
-    assert_eq!(
-        engine.authorization_stop().and_then(|stop| stop.reason()),
-        None
-    );
-
-    let metadata = text(
-        fs::metadata(std::env::temp_dir()),
-        "temporary directory metadata",
-    );
-    let socket_path = root.join("receiver.sock");
-    let listener = text(UnixListener::bind(&socket_path), "receiver listener");
-    let endpoint = text(
-        Endpoint::new(
-            socket_path,
-            PeerIdentity {
-                uid: metadata.uid(),
-                gid: metadata.gid(),
-            },
-            4096,
-            Duration::from_millis(500),
-            Duration::from_millis(2),
-        ),
-        "endpoint",
-    );
-    let authenticator = text(
-        Authenticator::new("receiver-key-v1", [0x8a; 32]),
-        "authenticator",
-    );
-    assert!(matches!(
-        deliver_outbound_unbound(
-            &mut engine,
-            &endpoint,
-            &authenticator,
-            &StopSignal::active(),
-            99,
-        ),
-        Err(OutboundError::Delivery(
-            DeliveryError::AuthorizationRequired
-        ))
-    ));
-    let (received_tx, received_rx) = mpsc::channel();
-    let (closed_tx, closed_rx) = mpsc::channel();
-    let receiver = thread::spawn(move || {
-        let (mut stream, _) = listener
-            .accept()
-            .unwrap_or_else(|error| panic!("receiver accept: {error}"));
-        let frame = read_frame(&mut stream, 4096)
-            .unwrap_or_else(|error| panic!("receiver frame: {error:?}"));
-        assert!(!frame.is_empty());
-        received_tx
-            .send(())
-            .unwrap_or_else(|error| panic!("receiver coordination: {error}"));
-        closed_rx
-            .recv()
-            .unwrap_or_else(|error| panic!("close completion coordination: {error}"));
-    });
-    let sessions = Arc::new(RwLock::new(sessions));
-    let revocation_sessions = Arc::clone(&sessions);
-    let revocation_tenant = tenant_id.clone();
-    let revoker = thread::spawn(move || {
-        received_rx
-            .recv()
-            .unwrap_or_else(|error| panic!("revocation coordination: {error}"));
-        let mut registry = revocation_sessions
-            .write()
-            .unwrap_or_else(|error| panic!("revocation registry: {error}"));
-        close(
-            &mut session_store,
-            &mut registry,
-            &revocation_tenant,
-            SessionId([1; 32]),
-        )
-        .unwrap_or_else(|error| panic!("close: {error:?}"));
-        drop(registry);
-        closed_tx
-            .send(())
-            .unwrap_or_else(|error| panic!("close completion signal: {error}"));
-    });
-    assert!(matches!(
-        deliver_outbound_authorized(
-            &mut engine,
-            &sessions,
-            &endpoint,
-            &authenticator,
-            11,
-            &mut observability,
-            100,
-        ),
-        Err(OutboundError::Stopped(Termination::SessionRevoked))
-    ));
-    assert!(revoker.join().is_ok(), "revoker panicked");
-    assert!(receiver.join().is_ok(), "receiver panicked");
-    assert_eq!(engine.buffered_len(), 0);
-    assert_eq!(
-        engine.authorization_stop().and_then(|stop| stop.reason()),
-        Some(Termination::SessionRevoked)
-    );
-    {
-        let registry = sessions
-            .read()
-            .unwrap_or_else(|error| panic!("session registry: {error}"));
-        assert!(matches!(
-            deliver_authorized(&mut engine, &registry, 11, &mut observability),
-            Err(DeliveryError::Revoked)
-        ));
+    RevocationSetup {
+        session_store,
+        identity,
+        sessions,
+        token,
+        sibling,
+        subscriptions,
+        observability,
     }
-    assert!(matches!(
-        deliver_outbound_authorized(
-            &mut engine,
-            &sessions,
-            &endpoint,
-            &authenticator,
-            11,
-            &mut observability,
-            200,
-        ),
-        Err(OutboundError::Stopped(Termination::SessionRevoked))
-    ));
-    assert_eq!(engine.buffered_len(), 0);
-
-    let sessions = sessions
-        .read()
-        .unwrap_or_else(|error| panic!("session registry: {error}"));
-    assert_eq!(
-        sibling.authorize(&sessions, &tenant_id, identity.did(), "subscribe", 11),
-        Ok(SessionId([2; 32]))
-    );
-    assert_eq!(sessions.generation(&tenant_id, SessionId([2; 32])), Some(1));
-
-    let subscriptions = engine.into_subscriptions();
-    assert_eq!(
-        text(subscriptions.termination(&target), "termination"),
-        Some(Termination::SessionRevoked)
-    );
-    assert!(matches!(
-        subscriptions.get(&target),
-        Err(SubscriptionError::AuthorizationRequired)
-    ));
-    assert!(matches!(
-        subscriptions.health_authorized(&sessions, &token, &mut observability, 11, &target),
-        Err(SubscriptionError::Authorization(
-            AuthorizationError::Revoked
-        ))
-    ));
-    assert!(matches!(
-        subscriptions.health_authorized(&sessions, &sibling, &mut observability, 11, &target),
-        Err(SubscriptionError::Authorization(
-            AuthorizationError::NotAuthorized
-        ))
-    ));
-    drop(subscriptions);
-
-    let restarted = text(
-        SubscriptionStore::open(
-            text(Store::open(root.join("events")), "event store restart"),
-            tenant_id,
-        ),
-        "subscription store restart",
-    );
-    assert_eq!(
-        text(restarted.termination(&target), "termination after restart"),
-        Some(Termination::SessionRevoked)
-    );
-    assert!(matches!(
-        restarted.get(&target),
-        Err(SubscriptionError::AuthorizationRequired)
-    ));
-    assert!(matches!(
-        restarted.health_authorized(&sessions, &token, &mut observability, 11, &target),
-        Err(SubscriptionError::Authorization(
-            AuthorizationError::Revoked
-        ))
-    ));
-    let _ = fs::remove_dir_all(root);
 }

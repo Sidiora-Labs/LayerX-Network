@@ -94,7 +94,7 @@ pub(crate) fn apply_revocation(
             .generation
             .checked_sub(1)
             .ok_or(SessionError::GenerationExhausted)?;
-        registry.replace(session.clone(), invalidated);
+        registry.replace(&session, invalidated);
         invalidated_generations.push((session.clone(), invalidated_generation));
         invalidated_sessions.push(session);
     }

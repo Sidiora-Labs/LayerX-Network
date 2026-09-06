@@ -266,7 +266,7 @@ impl NativeCapabilitySet {
     }
 
     /// # Errors
-    /// Refuses new authority keys, increased amounts, or changed BalanceView receipt digests.
+    /// Refuses new authority keys, increased amounts, or changed `BalanceView` receipt digests.
     pub fn narrow(&self, requested: Self) -> Result<Self, NativeCapabilityError> {
         for child in &requested.0 {
             let parent = self

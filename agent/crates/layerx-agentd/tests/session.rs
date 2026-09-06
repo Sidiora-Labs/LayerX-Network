@@ -102,10 +102,10 @@ fn session_key(tenant_id: &TenantId, id: u8) -> TenantKey {
 }
 
 fn stored_bytes(store: &Store, tenant_id: &TenantId, id: u8) -> Vec<u8> {
-    store
-        .get(&session_key(tenant_id, id))
-        .map(|value| value.bytes().to_vec())
-        .unwrap_or_else(|| panic!("session {id} record missing"))
+    store.get(&session_key(tenant_id, id)).map_or_else(
+        || panic!("session {id} record missing"),
+        |value| value.bytes().to_vec(),
+    )
 }
 
 fn length(value: usize) -> u16 {
@@ -418,42 +418,7 @@ fn scope_narrowing_advances_the_generation_and_refuses_every_earlier_token() {
     let identity = identity(&mut store, tenant_id.clone(), agent.clone());
     let mut registry = SessionRegistry::default();
     let first = open_session(&mut store, &mut registry, &identity, 1, &tenant_id, &agent);
-    assert_eq!(
-        restrict_scope(
-            &mut store,
-            &mut registry,
-            &tenant_id,
-            SessionId([1; 32]),
-            [31; 32],
-            BTreeSet::from(["prepare".to_owned(), "read".to_owned(), "submit".to_owned()]),
-            BTreeSet::from([7_u16, 9]),
-        ),
-        Err(SessionError::ScopeDenied)
-    );
-    assert_eq!(
-        restrict_scope(
-            &mut store,
-            &mut registry,
-            &tenant_id,
-            SessionId([1; 32]),
-            [31; 32],
-            BTreeSet::new(),
-            BTreeSet::from([7_u16]),
-        ),
-        Err(SessionError::ScopeDenied)
-    );
-    assert_eq!(
-        restrict_scope(
-            &mut store,
-            &mut registry,
-            &tenant_id,
-            SessionId([2; 32]),
-            [31; 32],
-            BTreeSet::from(["read".to_owned()]),
-            BTreeSet::from([7_u16]),
-        ),
-        Err(SessionError::NotFound)
-    );
+    assert_invalid_scope_restrictions(&mut store, &mut registry, &tenant_id);
     assert_eq!(registry.generation(&tenant_id, SessionId([1; 32])), Some(1));
     assert_eq!(
         first.authorize(&registry, &tenant_id, &agent, "prepare", 11),
@@ -762,4 +727,47 @@ fn a_failed_tenant_restore_leaves_every_existing_and_candidate_session_untouched
         .get(&tenant_b, SessionId([1; 32]))
         .is_some_and(|record| record.open));
     let _ = fs::remove_dir_all(root);
+}
+
+fn assert_invalid_scope_restrictions(
+    store: &mut Store,
+    registry: &mut SessionRegistry,
+    tenant_id: &TenantId,
+) {
+    assert_eq!(
+        restrict_scope(
+            store,
+            registry,
+            tenant_id,
+            SessionId([1; 32]),
+            [31; 32],
+            BTreeSet::from(["prepare".to_owned(), "read".to_owned(), "submit".to_owned()]),
+            BTreeSet::from([7_u16, 9]),
+        ),
+        Err(SessionError::ScopeDenied)
+    );
+    assert_eq!(
+        restrict_scope(
+            store,
+            registry,
+            tenant_id,
+            SessionId([1; 32]),
+            [31; 32],
+            BTreeSet::new(),
+            BTreeSet::from([7_u16]),
+        ),
+        Err(SessionError::ScopeDenied)
+    );
+    assert_eq!(
+        restrict_scope(
+            store,
+            registry,
+            tenant_id,
+            SessionId([2; 32]),
+            [31; 32],
+            BTreeSet::from(["read".to_owned()]),
+            BTreeSet::from([7_u16]),
+        ),
+        Err(SessionError::NotFound)
+    );
 }

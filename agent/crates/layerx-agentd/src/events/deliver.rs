@@ -266,17 +266,24 @@ impl DeliveryEngine {
 
     /// Opens a token-gated delivery engine only when the durable subscription binding exactly
     /// matches the current token and registers a generation-specific revocation signal.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if subscription state, session authorization, or delivery state is invalid.
     pub fn open_authorized(
         subscriptions: SubscriptionStore,
         target: SubscriptionTarget,
-        live_start: u64,
-        capacity: usize,
-        retry_policy: RetryPolicy,
+        settings: DeliverySettings,
         sessions: &mut SessionRegistry,
         token: Token,
         observability: &mut TenantObservability,
         core_sequence: u64,
     ) -> Result<Self, DeliveryError> {
+        let DeliverySettings {
+            live_start,
+            capacity,
+            retry_policy,
+        } = settings;
         let binding = subscriptions
             .session_binding(&target)?
             .ok_or(DeliveryError::UnboundSession)?;
@@ -301,6 +308,10 @@ impl DeliveryEngine {
     }
 
     /// Re-resolves an authorized subscription at one pump, delivery, or completion boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if subscription state, session authorization, or delivery state is invalid.
     pub fn authorize_boundary(
         &mut self,
         sessions: &SessionRegistry,
@@ -324,8 +335,9 @@ impl DeliveryEngine {
             observability,
         ) {
             Ok(()) => Ok(()),
-            Err(DeliveryError::Authorization(AuthorizationError::Revoked))
-            | Err(DeliveryError::Revoked) => {
+            Err(
+                DeliveryError::Authorization(AuthorizationError::Revoked) | DeliveryError::Revoked,
+            ) => {
                 if let Some(authorization) = &self.authorization {
                     authorization.stop.stop(Termination::SessionRevoked);
                 }
@@ -466,6 +478,10 @@ impl DeliveryEngine {
     }
 
     /// Reauthorizes and durably acknowledges through the common tenant resolver.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if subscription state, session authorization, or delivery state is invalid.
     pub fn acknowledge_authorized(
         &mut self,
         sessions: &SessionRegistry,
@@ -483,6 +499,10 @@ impl DeliveryEngine {
     }
 
     /// Reauthorizes immediately before accepting the current front delivery.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if subscription state, session authorization, or delivery state is invalid.
     pub fn accept_front_authorized(
         &mut self,
         sessions: &SessionRegistry,
@@ -819,4 +839,11 @@ fn retry_delay(policy: RetryPolicy, subscription_id: &str, attempt: u32) -> u64 
     seed.copy_from_slice(&digest[..8]);
     let jitter = u64::from_be_bytes(seed) % (jitter_bound + 1);
     base.saturating_add(jitter).min(policy.maximum_delay_ms)
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct DeliverySettings {
+    pub live_start: u64,
+    pub capacity: usize,
+    pub retry_policy: RetryPolicy,
 }
