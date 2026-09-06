@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use subtle::ConstantTimeEq;
 use zeroize::{Zeroize, Zeroizing};
 
-use crate::boundary::{Client, ClientIdentity, Endpoint};
+use crate::boundary::{Client, ClientIdentity, Endpoint, OutboundRequest};
 use crate::deliveries::{AttemptRecord, DeliveryRecord, DeliveryState, FailureKind};
 use crate::encoding::{base64_decode, base64_encode, digest, hex_encode};
 use crate::endpoints::{EndpointHealth, RetryPolicy};
@@ -501,15 +501,15 @@ impl KmsClient {
         .map_err(|_| WebhookError::Unavailable)?;
         let response = self
             .client
-            .request(
-                &self.endpoint,
-                "POST",
-                "/v1/signing-keys",
-                Some(self.token.as_str()),
-                Some(idempotency),
-                &[],
-                &body,
-            )
+            .request(&OutboundRequest {
+                endpoint: &self.endpoint,
+                method: "POST",
+                path: "/v1/signing-keys",
+                bearer: Some(self.token.as_str()),
+                idempotency: Some(idempotency),
+                headers: &[],
+                body: &body,
+            })
             .map_err(|_| WebhookError::Unavailable)?;
         if !matches!(response.status, 200 | 201)
             || !response.content_type.starts_with("application/json")
@@ -544,15 +544,15 @@ impl KmsClient {
         .map_err(|_| WebhookError::Unavailable)?;
         let response = self
             .client
-            .request(
-                &self.endpoint,
-                "POST",
-                "/v1/signatures",
-                Some(self.token.as_str()),
-                None,
-                &[],
-                &body,
-            )
+            .request(&OutboundRequest {
+                endpoint: &self.endpoint,
+                method: "POST",
+                path: "/v1/signatures",
+                bearer: Some(self.token.as_str()),
+                idempotency: None,
+                headers: &[],
+                body: &body,
+            })
             .map_err(|_| WebhookError::Unavailable)?;
         if response.status != 200 || !response.content_type.starts_with("application/json") {
             return Err(WebhookError::Unavailable);
@@ -572,15 +572,15 @@ impl KmsClient {
 
     fn ready(&self) -> bool {
         self.client
-            .request(
-                &self.endpoint,
-                "GET",
-                "/readyz",
-                Some(self.token.as_str()),
-                None,
-                &[],
-                &[],
-            )
+            .request(&OutboundRequest {
+                endpoint: &self.endpoint,
+                method: "GET",
+                path: "/readyz",
+                bearer: Some(self.token.as_str()),
+                idempotency: None,
+                headers: &[],
+                body: &[],
+            })
             .ok()
             .filter(|response| {
                 response.status == 200 && response.content_type.starts_with("application/json")
@@ -631,6 +631,8 @@ pub struct HostedReader {
 }
 
 impl HostedReader {
+    /// # Errors
+    /// Returns a description when required environment, TLS material or retry policy is missing or invalid.
     pub fn from_environment() -> Result<Self, String> {
         let ca = Certificate::from_der(&read_required("LAYERX_WEBHOOKS_INTERNAL_CA_DER")?)
             .map_err(|error| error.to_string())?;
@@ -664,10 +666,13 @@ impl HostedReader {
         })
     }
 
+    #[must_use]
     pub fn ready(&self) -> bool {
         self.repository.ready()
     }
 
+    /// # Errors
+    /// Returns [`WebhookError::Unavailable`] or [`WebhookError::CorruptStore`] when the durable shard cannot be loaded.
     pub fn snapshot(
         &self,
         principal: &Principal,
@@ -680,6 +685,8 @@ impl HostedReader {
 }
 
 impl HostedService {
+    /// # Errors
+    /// Returns a description when required environment, TLS identity, KMS endpoint or retry policy is missing or invalid.
     pub fn from_environment() -> Result<Self, String> {
         let shared_ca = Certificate::from_der(&read_required("LAYERX_WEBHOOKS_INTERNAL_CA_DER")?)
             .map_err(|error| error.to_string())?;
@@ -743,10 +750,12 @@ impl HostedService {
         })
     }
 
+    #[must_use]
     pub fn ready(&self) -> bool {
         self.repository.ready() && self.kms.ready()
     }
 
+    #[must_use]
     pub fn policy(&self) -> RetryPolicy {
         self.policy
     }
@@ -769,6 +778,10 @@ impl HostedService {
         Err(WebhookError::Unavailable)
     }
 
+    /// # Errors
+    /// Returns [`WebhookError::InvalidRequest`] for bound or destination violations,
+    /// [`WebhookError::EventConflict`] when the URL is already registered, and
+    /// [`WebhookError::Unavailable`] or [`WebhookError::CorruptStore`] when KMS or the durable store cannot complete the registration.
     pub fn register(
         &self,
         principal: &Principal,
@@ -846,6 +859,11 @@ impl HostedService {
         })
     }
 
+    /// # Errors
+    /// Returns [`WebhookError::InvalidRequest`] for invalid idempotency,
+    /// [`WebhookError::UnknownEndpoint`] when the endpoint is absent,
+    /// [`WebhookError::EventConflict`] when a rotation is already pending, and
+    /// [`WebhookError::Unavailable`] or [`WebhookError::CorruptStore`] when KMS or the durable store cannot complete the rotation.
     pub fn rotate_key(
         &self,
         principal: &Principal,
@@ -894,6 +912,9 @@ impl HostedService {
         })
     }
 
+    /// # Errors
+    /// Returns [`WebhookError::UnknownEndpoint`] when the endpoint is absent and
+    /// [`WebhookError::Unavailable`] or [`WebhookError::CorruptStore`] when the durable shard cannot be loaded.
     pub fn signing_keys(
         &self,
         principal: &Principal,
@@ -932,6 +953,10 @@ impl HostedService {
             .ok_or(WebhookError::UnknownEndpoint)
     }
 
+    /// # Errors
+    /// Returns [`WebhookError::InvalidRequest`] for an empty or oversized reason,
+    /// [`WebhookError::UnknownEndpoint`] when the endpoint is absent, and
+    /// [`WebhookError::Unavailable`] or [`WebhookError::CorruptStore`] when the durable store cannot record the suspension.
     pub fn suspend(
         &self,
         principal: &Principal,
@@ -954,6 +979,9 @@ impl HostedService {
         })
     }
 
+    /// # Errors
+    /// Returns [`WebhookError::UnknownEndpoint`] when the endpoint is absent and
+    /// [`WebhookError::Unavailable`] or [`WebhookError::CorruptStore`] when the durable store cannot record the resume.
     pub fn resume(&self, principal: &Principal, endpoint: &EndpointId) -> Result<(), WebhookError> {
         self.transact(principal, |shard| {
             let record = shard
@@ -967,6 +995,11 @@ impl HostedService {
         })
     }
 
+    /// # Errors
+    /// Returns [`WebhookError::EventConflict`] when an identifier is reused with different content,
+    /// [`WebhookError::OrderViolation`] when the subject sequence does not advance,
+    /// [`WebhookError::InvalidRequest`] when the event fails validation, and
+    /// [`WebhookError::Unavailable`] or [`WebhookError::CorruptStore`] when the durable store cannot admit the event.
     pub fn publish(
         &self,
         trusted: &TrustedEvent,
@@ -1042,6 +1075,8 @@ impl HostedService {
         })
     }
 
+    /// # Errors
+    /// Returns [`WebhookError::Unavailable`] or [`WebhookError::CorruptStore`] when principal enumeration or delivery settlement cannot complete.
     pub fn dispatch(&self, now: u64, budget: u32) -> Result<HostedDispatchReport, WebhookError> {
         let mut report = HostedDispatchReport::default();
         for principal in self.repository.principals()? {
@@ -1188,15 +1223,15 @@ impl HostedService {
             ),
         ];
         let response = client
-            .request(
-                &endpoint,
-                "POST",
-                "",
-                None,
-                None,
-                &headers,
-                &prepared.payload,
-            )
+            .request(&OutboundRequest {
+                endpoint: &endpoint,
+                method: "POST",
+                path: "",
+                bearer: None,
+                idempotency: None,
+                headers: &headers,
+                body: &prepared.payload,
+            })
             .map_err(|error| {
                 if error.contains("timed out") {
                     FailureKind::Timeout
@@ -1301,6 +1336,8 @@ impl HostedService {
         })
     }
 
+    /// # Errors
+    /// Returns [`WebhookError::Unavailable`] or [`WebhookError::CorruptStore`] when the durable shard cannot be loaded.
     pub fn snapshot(
         &self,
         principal: &Principal,
@@ -1311,6 +1348,10 @@ impl HostedService {
         Ok(snapshot_of(&shard, self.policy, now, limit.clamp(1, 200)))
     }
 
+    /// # Errors
+    /// Returns [`WebhookError::UnknownEndpoint`] when the endpoint is absent,
+    /// [`WebhookError::InvalidCursor`] or [`WebhookError::CursorExpired`] for an unusable cursor, and
+    /// [`WebhookError::Unavailable`] or [`WebhookError::CorruptStore`] when the durable shard cannot be loaded.
     pub fn events_since(
         &self,
         principal: &Principal,
@@ -1353,6 +1394,10 @@ impl HostedService {
         })
     }
 
+    /// # Errors
+    /// Returns [`WebhookError::InvalidRequest`] for invalid idempotency,
+    /// cursor and endpoint failures from [`Self::events_since`], and
+    /// [`WebhookError::Unavailable`] or [`WebhookError::CorruptStore`] when the durable store cannot enqueue redelivery.
     pub fn redeliver(
         &self,
         principal: &Principal,
@@ -1405,6 +1450,10 @@ impl HostedService {
         })
     }
 
+    /// # Errors
+    /// Returns [`WebhookError::InvalidRequest`] for invalid idempotency,
+    /// [`WebhookError::UnknownDelivery`] or [`WebhookError::NotDeadLettered`] when the delivery cannot be replayed, and
+    /// [`WebhookError::Unavailable`] or [`WebhookError::CorruptStore`] when the durable store cannot enqueue the replay.
     pub fn replay_dead_letter(
         &self,
         principal: &Principal,
@@ -1457,6 +1506,8 @@ impl HostedService {
         })
     }
 
+    /// # Errors
+    /// Returns [`WebhookError::Unavailable`] or [`WebhookError::CorruptStore`] when the durable store cannot apply retention.
     pub fn prune(&self, principal: &Principal, retain: usize) -> Result<usize, WebhookError> {
         self.transact(principal, |shard| {
             let mut released = 0_usize;
@@ -1504,6 +1555,8 @@ impl HostedService {
         })
     }
 
+    /// # Errors
+    /// Returns [`WebhookError::Unavailable`] or [`WebhookError::CorruptStore`] when principal enumeration or retention cannot complete.
     pub fn prune_all(&self, retain: usize) -> Result<usize, WebhookError> {
         let mut released = 0_usize;
         for principal in self.repository.principals()? {
@@ -1932,7 +1985,7 @@ fn resp_bytes(value: &Resp) -> Option<&[u8]> {
     }
 }
 
-const CAS_SCRIPT: &str = r#"
+const CAS_SCRIPT: &str = r"
 local current = redis.call('HGET', KEYS[1], 'revision')
 if current == false then current = '0' end
 if current ~= ARGV[1] then return 0 end
@@ -1940,4 +1993,4 @@ redis.call('HSET', KEYS[1], 'json', ARGV[2])
 redis.call('HINCRBY', KEYS[1], 'revision', 1)
 redis.call('SADD', KEYS[2], ARGV[3])
 return 1
-"#;
+";
