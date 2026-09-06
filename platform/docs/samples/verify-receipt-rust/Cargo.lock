@@ -649,6 +649,7 @@ dependencies = [
  "layerx-types",
  "layerx-wire",
  "rustls",
+ "sha2",
 ]
 
 [[package]]
