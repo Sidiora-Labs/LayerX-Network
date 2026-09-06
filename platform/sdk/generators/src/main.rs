@@ -452,10 +452,13 @@ fn render_rust_receipt_contract(contract: &ReceiptContract) -> Result<String, St
     .map_err(|error| error.to_string())?;
     writeln!(
         output,
-        "pub const PROGRAM_OUTCOME_TAGS: [u32; 3] = [{:#010x}, {:#010x}, {:#010x}];\n",
-        contract.program_outcome_tags[0],
-        contract.program_outcome_tags[1],
-        contract.program_outcome_tags[2]
+        "pub const PROGRAM_OUTCOME_TAGS: [u32; 3] = [0x{:04x}_{:04x}, 0x{:04x}_{:04x}, 0x{:04x}_{:04x}];\n",
+        contract.program_outcome_tags[0] >> 16,
+        contract.program_outcome_tags[0] & 0xffff,
+        contract.program_outcome_tags[1] >> 16,
+        contract.program_outcome_tags[1] & 0xffff,
+        contract.program_outcome_tags[2] >> 16,
+        contract.program_outcome_tags[2] & 0xffff
     )
     .map_err(|error| error.to_string())?;
     output

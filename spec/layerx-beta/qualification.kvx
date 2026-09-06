@@ -1177,3 +1177,11 @@ symbol = "support::try_evidence_authority_after_restart"
 observed = "make agent-test exits 2 with Cargo exit 101 and E0425 at protocol2_restart.rs:20 because tests/support/mod.rs does not define try_evidence_authority_after_restart. Workspace test execution is blocked at compilation. Raw output: qual-logs/agent-test-second.log."
 assumption = "The test and its support module are outside repair ownership. Supply the real restart helper without weakening the existing test, then rerun make agent-test. The separate full layerx-client test exits 0 with all schema and encoder assertions unchanged; strict all-target layerx-agent-api Clippy exits 0. Logs: qual-logs/test-client-second.log and qual-logs/clippy-api-second.log."
 severity = "blocker"
+
+[observation.6.11.19]
+task = "6.11"
+file = "agent/crates/layerx-mcp/src/server.rs"
+symbol = "execute_read execute_committed map_authorization map_session"
+observed = "After the agentd and SDK library lint repairs, make agent-lint exits 2 with Cargo exit 101 on missing error documentation at server.rs:533 and :558 and needless ownership at :662 and :673. These MCP functions are outside the authorized repair paths. Raw diagnostics: qual-logs/agent-lint-third-final.log. The dependency-policy recipe is not reached; sh agent/tools/dependency-policy.sh independently exits 0 in qual-logs/dependency-policy-third.log."
+assumption = "The MCP owner must repair the four diagnostics without suppressing lints or changing authorization and session error semantics, then rerun make agent-lint including its dependency-policy recipe. Independent policy qualification is not an aggregate lint pass."
+severity = "blocker"

@@ -73,6 +73,10 @@ pub fn release(
 }
 
 /// Restores canonical durable reservations before the limiter is made ready.
+///
+/// # Errors
+///
+/// Returns a limit refusal if a durable reservation cannot be restored.
 pub fn restore(
     limiter: &BudgetLimiter,
     reservations: &[DurableBudgetReservation],

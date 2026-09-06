@@ -27,7 +27,7 @@ root = "agent/crates/layerx-sdk/src"
 
 [files.agent-rust]
 "mirror_generated.rs" = "36c041d89f4cb23a73ea0baec0f7a15e6568763d603716b641e3d99dff2571fa"
-"receipt_generated.rs" = "e9d7bc01d51eaf6588595d7d9807a8d180841bc61e535c8af6985e2a79ba52f4"
+"receipt_generated.rs" = "4dffdcc5edc257a338b0b95b7faa7c3971bef471d0523a8fcb96ea8c464af6de"
 
 [output.agent-typescript]
 language = "typescript"

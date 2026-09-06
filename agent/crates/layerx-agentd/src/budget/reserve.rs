@@ -41,6 +41,10 @@ pub struct BudgetLimiter {
 
 impl BudgetLimiter {
     /// Whether an exact durable approval reservation is present in any configured scope.
+    ///
+    /// # Errors
+    ///
+    /// Returns a limit refusal if the reservation registry lock is unavailable.
     pub fn has_reservation(&self, reservation_id: [u8; 32]) -> Result<bool, LimitRefusal> {
         let limits = self.limits.lock().map_err(|_| LimitRefusal::Poisoned)?;
         Ok(limits

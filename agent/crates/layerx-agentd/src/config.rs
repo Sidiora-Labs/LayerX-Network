@@ -185,6 +185,10 @@ pub enum ProtectedSourceError {
 
 /// Reads one operator-trusted source without accepting indirection or mutable
 /// file metadata at the read boundary.
+///
+/// # Errors
+///
+/// Returns an error if the source is not protected, exceeds the size limit, or cannot be read.
 pub fn read_protected_source(
     path: &Path,
     maximum_bytes: usize,

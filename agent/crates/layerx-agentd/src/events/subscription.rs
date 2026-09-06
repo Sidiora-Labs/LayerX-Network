@@ -301,6 +301,10 @@ impl Store {
 
     /// Lists only subscriptions bound to the exact current session credential after passing the
     /// common resolver.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if authorization fails or the subscription cannot be read or updated.
     pub fn list_authorized(
         &self,
         sessions: &SessionRegistry,
@@ -346,6 +350,10 @@ impl Store {
     }
 
     /// Reads one session-bound subscription after reauthorizing its exact credential.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if authorization fails or the subscription cannot be read or updated.
     pub fn health_authorized(
         &self,
         sessions: &SessionRegistry,
@@ -468,6 +476,10 @@ impl Store {
 
     /// Acknowledges one delivery on an exact session-bound subscription through the common
     /// resolver.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if authorization fails or the subscription cannot be read or updated.
     pub fn acknowledge_authorized(
         &mut self,
         sessions: &SessionRegistry,
@@ -503,6 +515,10 @@ impl Store {
     }
 
     /// Pauses one exact session-bound subscription through the common resolver.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if authorization fails or the subscription cannot be read or updated.
     pub fn pause_authorized(
         &mut self,
         sessions: &SessionRegistry,
@@ -537,6 +553,10 @@ impl Store {
     }
 
     /// Resumes one exact session-bound subscription through the common resolver.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if authorization fails or the subscription cannot be read or updated.
     pub fn resume_authorized(
         &mut self,
         sessions: &SessionRegistry,
@@ -569,6 +589,10 @@ impl Store {
     }
 
     /// Deletes one exact session-bound subscription through the common resolver.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if authorization fails or the subscription cannot be read or updated.
     pub fn delete_authorized(
         &mut self,
         sessions: &SessionRegistry,

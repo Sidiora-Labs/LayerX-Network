@@ -1,7 +1,7 @@
 //! Code generated from platform/sdk/generators/receipt.kvx. DO NOT EDIT.
 
 pub const PROGRAMS_MODULE_ID: u16 = 9;
-pub const PROGRAM_OUTCOME_TAGS: [u32; 3] = [0x50524731, 0x50524732, 0x50524733];
+pub const PROGRAM_OUTCOME_TAGS: [u32; 3] = [0x5052_4731, 0x5052_4732, 0x5052_4733];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ReceiptFailureCode {

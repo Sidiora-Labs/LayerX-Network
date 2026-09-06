@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::Duration;
@@ -158,7 +158,7 @@ fn session_identity(store: &mut Store) -> IdentityRecord {
 }
 
 fn authorized_subscriptions(
-    root: &PathBuf,
+    root: &Path,
     start: u64,
 ) -> (SubscriptionStore, Store, SessionRegistry, Token) {
     let mut session_store = text(Store::open(root.join("sessions")), "session store");
@@ -520,10 +520,12 @@ fn bound_gap_runtime_requires_the_common_resolver_and_refuses_after_revocation()
     ));
     let gap = match detect_authorized(
         &mut subscriptions,
-        &sessions,
-        &token,
-        &mut observability,
-        11,
+        layerx_agentd::events::gap::GapAuthorization {
+            sessions: &sessions,
+            token: &token,
+            observability: &mut observability,
+            core_sequence: 11,
+        },
         &target(),
         11,
         13,
@@ -562,10 +564,12 @@ fn bound_gap_runtime_requires_the_common_resolver_and_refuses_after_revocation()
     assert!(matches!(
         apply_backfill_authorized(
             &mut subscriptions,
-            &sessions,
-            &token,
-            &mut observability,
-            11,
+            layerx_agentd::events::gap::GapAuthorization {
+                sessions: &sessions,
+                token: &token,
+                observability: &mut observability,
+                core_sequence: 11
+            },
             &target(),
             gap,
             &report,
@@ -599,6 +603,11 @@ fn bound_gap_runtime_requires_the_common_resolver_and_refuses_after_revocation()
     ));
     assert_eq!(observability.audit().len(), 4);
 
+    assert_bound_retention(&root);
+    let _ = fs::remove_dir_all(root);
+}
+
+fn assert_bound_retention(root: &Path) {
     let retention_root = root.join("retention");
     let (mut retention, _store, sessions, token) = authorized_subscriptions(&retention_root, 10);
     let mut retention_observability = TenantObservability::default();
@@ -619,10 +628,12 @@ fn bound_gap_runtime_requires_the_common_resolver_and_refuses_after_revocation()
     assert!(matches!(
         enforce_retention_authorized(
             &mut retention,
-            &sessions,
-            &token,
-            &mut retention_observability,
-            11,
+            layerx_agentd::events::gap::GapAuthorization {
+                sessions: &sessions,
+                token: &token,
+                observability: &mut retention_observability,
+                core_sequence: 11
+            },
             &target(),
             31,
             15,
@@ -637,5 +648,4 @@ fn bound_gap_runtime_requires_the_common_resolver_and_refuses_after_revocation()
         }))
     ));
     assert_eq!(retention_observability.audit().len(), 1);
-    let _ = fs::remove_dir_all(root);
 }
