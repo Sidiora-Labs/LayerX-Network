@@ -55,6 +55,12 @@ impl From<SchemaError> for BatchHeaderError {
     }
 }
 
+/// Retrieves a canonical batch header and verifies its pinned sequencer signature.
+///
+/// # Errors
+///
+/// Refuses invalid selectors, transport or envelope failures, missing headers,
+/// noncanonical bytes, mismatched authority and invalid signatures.
 pub fn lookup(
     transport: &mut dyn FrameTransport,
     version: Version,

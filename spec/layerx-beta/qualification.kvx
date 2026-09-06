@@ -1082,3 +1082,74 @@ symbol = "custody-credit-profile/v1"
 observed = "The produced profile pins local chain 31337 and its genesis hash, a locally deployed vault runtime, and a freshly generated custody attestor. It cannot authorize credit on the persistent Paxeer chain. No persistent-chain deposit or transaction was performed."
 assumption = "Persistent funding requires a real Paxeer deposit, the owner-authorized custody attestor key, matching external chain identity and vault pins, and a newly signed custody-enabled genesis with matching settlement registration. The existing marker-free genesis cannot acquire Bridge retroactively. Activation must satisfy the selected deployment's governance and finalization conditions; local time advancement is not evidence of persistent activation."
 severity = "blocker"
+[observation.6.11.11]
+task = "6.11"
+file = "agent/crates/layerx-wire/tests/structures.rs"
+symbol = "protocol_version_supported"
+observed = "The recorded owner decision accepts protocol 3 and rejects protocol 4 as unsupported. Current wire, crypto and proof tests already exercise both outcomes; malformed version fields, signatures and module-version refusals remain intact."
+assumption = "Requalification uses the existing positive and negative assertions."
+severity = "note"
+
+[observation.6.5.4]
+task = "6.5"
+file = "platform/hosted/identity/tests/service.rs"
+symbol = "readiness_fails_when_the_store_is_not_writable"
+observed = "The recorded owner decision requires 503 store_unavailable after the running service loses its state directory, including after directory recreation, and fresh-spawn recovery to 200. Current coverage asserts both 503 responses, exact retry metadata, and 200 with ready.marker after dropping the old process and spawning a fresh service."
+assumption = "The existing real TLS recovery test is preserved."
+severity = "note"
+
+[observation.6.11.12]
+task = "6.11"
+file = "agent/crates/layerx-client/src/evidence.rs"
+symbol = "proof_bundle decode_checkpoint_context submit_signed"
+observed = "The recorded owner decision requires strict lint repairs without suppression or weaker validation. Client changes extract account-proof verification, bonded-set decoding and submission validation; box verified account state; remove infallible Result wrappers and redundant borrows; and document actual public error paths. Existing comparisons, bounds and assertions are preserved."
+assumption = "Strict all-target all-feature Clippy and crate tests must qualify the source changes."
+severity = "note"
+
+[observation.6.2.6]
+task = "6.2"
+file = "platform/hosted/core/tests/boundary.rs"
+symbol = "assert_readiness_shape admin_result"
+observed = "The recorded owner decision sets core readiness wire_version to the string 3 and daemon-down admin refusals to HTTP 422 with the same typed codes."
+assumption = "Implementation belongs to the core owner; no core files are changed here."
+severity = "note"
+
+[observation.6.4.7]
+task = "6.4"
+file = "platform/hosted/agent-boundary/tests/real_node.rs"
+symbol = "receipt response"
+observed = "The recorded owner decision requires the boundary receipt response shape {result:{activity_id,receipt}}."
+assumption = "Implementation belongs to the boundary owner; no boundary files are changed here."
+severity = "note"
+
+[observation.6.6.7]
+task = "6.6"
+file = "platform/hosted/paxeer/Dockerfile.paxd-node"
+symbol = "native libwasmvm digest"
+observed = "The recorded owner decision accepts the verified native libwasmvm digest for beta in place of the unreachable canonical Paxeer WASM pin."
+assumption = "Artifact and image changes belong to the Paxeer owner; this records acceptance without asserting a new digest verification or image build."
+severity = "note"
+
+[observation.6.11.13]
+task = "6.11"
+file = "agent/schema/lni/v1.kvx"
+symbol = "SimulateResponse lni_golden_vectors_are_literal_and_canonical_for_every_message"
+observed = "Client cargo test exits 101 at tests/lni_schema.rs:42 because message.31 lacks the SimulateResponse golden field whose canonical value is 00010004001f0000000000000000000000011f00000001a5. The client encoder vector exists in src/lni/schema.rs:608. Evidence: qual-logs/test-client.log."
+assumption = "The recorded owner decision requires preserving every assertion and recording changes outside owned paths. Add the missing canonical schema golden through its owner; the test and encoder remain intact."
+severity = "blocker"
+
+[observation.6.11.14]
+task = "6.11"
+file = "agent/crates/layerx-agent-api/src/operation_generated.rs"
+symbol = "agent-lint doc_markdown"
+observed = "make agent-lint exits 2 because strict Clippy rejects the generated module documentation at line 1: LayerX lacks Markdown backticks. Cargo exits 101 before the dependency-policy step. Evidence: qual-logs/agent-lint.log."
+assumption = "The recorded owner decision requires strict lint without suppression and records changes outside owned paths. The API generator owner must correct the generated documentation; this failure is outside the foundation and client repair scope."
+severity = "blocker"
+
+[observation.6.11.15]
+task = "6.11"
+file = "agent/crates/layerx-client/src/evidence.rs"
+symbol = "proof_bundle decode_bonds verify_submission SignatureMessage"
+observed = "Strict all-target all-feature Clippy passes for wire, crypto, proof, types, client and identity. Full tests pass for wire, crypto, proof, types and identity, including protocol 3 acceptance, protocol 4 refusal and real identity restart recovery. The complete no-fail-fast client test run fails only lni_schema's missing SimulateResponse schema golden; all later suites execute. Client handshake and batch tests pass after replacing expect calls with explicit diagnostic panics, preserving assertions. Crypto digest and debug output use the existing accessors so proof's no-custody dependency configuration passes strict lint. Logs: qual-logs/clippy-wire.log, clippy-crypto-final.log, clippy-proof-final.log, clippy-types.log, clippy-client-qualified.log, clippy-identity.log; qual-logs/test-wire.log, test-crypto-final.log, test-proof-final.log, test-types.log, test-client-final.log, test-identity.log, test-client-handshake.log and test-client-batch.log."
+assumption = "The recorded owner decision requires every gate to pass before completion. Observations 6.11.13 and 6.11.14 remain external blockers; passing crate lint does not establish a passing client test gate or make agent-lint."
+severity = "note"

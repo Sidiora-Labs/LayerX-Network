@@ -60,7 +60,8 @@ fn header(sequencer: [u8; 32]) -> Vec<u8> {
 fn response(key: &SigningKey, corrupt_signature: bool) -> Vec<u8> {
     let public = key.verifying_key().to_bytes();
     let header = header(public);
-    let digest = batch_header_digest(&header).expect("header digest");
+    let digest =
+        batch_header_digest(&header).unwrap_or_else(|error| panic!("header digest: {error:?}"));
     let mut signature = key.sign(&digest).to_bytes();
     if corrupt_signature {
         signature[0] ^= 1;
@@ -79,7 +80,7 @@ fn response(key: &SigningKey, corrupt_signature: bool) -> Vec<u8> {
         canonical_payload: &header,
         proof_material: &proof,
     })
-    .expect("response")
+    .unwrap_or_else(|error| panic!("response: {error:?}"))
 }
 
 #[test]
@@ -90,9 +91,11 @@ fn verifies_signed_canonical_batch_header_and_selector() {
         sent: Vec::new(),
         responses: VecDeque::from([response(&key, false)]),
     };
-    let result = lookup(&mut transport, Version::V1_1, 7, 44, public).expect("verified header");
+    let result = lookup(&mut transport, Version::V1_1, 7, 44, public)
+        .unwrap_or_else(|error| panic!("verified header: {error:?}"));
     assert_eq!(result.header.batch_number(), 7);
-    let request = decode_envelope(&transport.sent[0]).expect("request");
+    let request =
+        decode_envelope(&transport.sent[0]).unwrap_or_else(|error| panic!("request: {error:?}"));
     assert_eq!(request.message_tag, 12);
     assert_eq!(
         request.canonical_payload,
@@ -120,7 +123,7 @@ fn refuses_invalid_signature_and_absence() {
         canonical_payload: &[],
         proof_material: &[],
     })
-    .expect("absence");
+    .unwrap_or_else(|error| panic!("absence: {error:?}"));
     let mut missing = Scripted {
         sent: Vec::new(),
         responses: VecDeque::from([absent]),
