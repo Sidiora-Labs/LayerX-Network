@@ -145,8 +145,10 @@ fn explicit_state_commitment_handshake_keeps_exact_version_pin() {
     peer.protocol_version = layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION;
     let mut expected = config(Version::V1_3);
     expected.expected_protocol_version = peer.protocol_version;
-    let bytes = encode_node_info(&peer).expect("encode explicit version three");
-    let decoded = decode_node_info(&bytes).expect("decode explicit version three");
+    let bytes = encode_node_info(&peer)
+        .unwrap_or_else(|error| panic!("encode explicit version three: {error:?}"));
+    let decoded = decode_node_info(&bytes)
+        .unwrap_or_else(|error| panic!("decode explicit version three: {error:?}"));
     assert!(validate(decoded.clone(), &expected, None).is_ok());
     assert_eq!(
         validate(decoded, &config(Version::V1_3), None),

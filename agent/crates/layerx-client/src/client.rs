@@ -370,6 +370,10 @@ impl Client {
     }
 
     /// Retrieves and independently verifies one canonical signed batch header.
+    ///
+    /// # Errors
+    ///
+    /// Refuses unavailable capability, disconnection and all batch-header verification errors.
     pub fn batch_header(
         &mut self,
         batch_number: u64,
@@ -558,6 +562,10 @@ impl Client {
     }
 
     /// Retrieves one independently verified activity, receipt, or account proof.
+    ///
+    /// # Errors
+    ///
+    /// Refuses unavailable capability, disconnection and invalid or mismatched proof evidence.
     pub fn proof_bundle(
         &mut self,
         selector: ProofBundleSelector,
@@ -587,6 +595,10 @@ impl Client {
     }
 
     /// Retrieves one independently verified finalized checkpoint.
+    ///
+    /// # Errors
+    ///
+    /// Refuses unavailable capability, disconnection and invalid checkpoint or settlement evidence.
     pub fn checkpoint_evidence(
         &mut self,
         selector: CheckpointSelector,
@@ -615,6 +627,10 @@ impl Client {
 
     /// Registers a locally verified checkpoint evidence bundle and accepts only
     /// the durable idempotent acknowledgement.
+    ///
+    /// # Errors
+    ///
+    /// Refuses unavailable capability, disconnection and malformed or mismatched durable acknowledgements.
     pub fn register_finality_evidence(
         &mut self,
         evidence: &FinalityEvidenceCandidate,

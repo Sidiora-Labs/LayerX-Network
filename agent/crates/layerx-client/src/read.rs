@@ -316,7 +316,7 @@ fn point_read(
     selector: &StateSelector,
     context: ReadContext,
 ) -> Result<ReadValue, ReadError> {
-    let selector_bytes = encode_state_selector(selector, context.root_selector, context.requested)?;
+    let selector_bytes = encode_state_selector(selector, context.root_selector, context.requested);
     let request = encode_envelope(Envelope {
         version: context.interface_version,
         message_tag: ACCOUNT_READ_REQUEST_TAG,
@@ -447,7 +447,7 @@ fn encode_state_selector(
     selector: &StateSelector,
     root_selector: RootSelector,
     requested: Requested,
-) -> Result<Vec<u8>, ReadError> {
+) -> Vec<u8> {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(&1_u16.to_be_bytes());
     match selector {
@@ -463,7 +463,7 @@ fn encode_state_selector(
     }
     root_selector.encode(&mut bytes);
     bytes.push(requested.level().wire_rank());
-    Ok(bytes)
+    bytes
 }
 
 /// Retrieves one strictly ordered bounded history page.
