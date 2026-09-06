@@ -350,6 +350,8 @@ typedef struct lxp_daemon_lni_server {
     uint64_t journal_device;
     uint64_t journal_inode;
     uint64_t journal_end;
+    uint64_t reserved_first_sequence;
+    uint64_t reserved_maintenance_sequence;
     uint64_t connection_generation;
     uint64_t expected_admission_sequence;
     uint8_t expected_admission_activity_id[32];
@@ -498,6 +500,10 @@ typedef lxp_result (*lxp_daemon_apply_batch_fn)(
     const lxp_daemon_activity *activities, size_t offered_count,
     size_t *consumed_count);
 
+lxp_result lxp_daemon_queue_sequence_locked(
+    const lxp_daemon *daemon, size_t index, uint64_t *sequence);
+lxp_result lxp_daemon_reserve_batch_maintenance(lxp_daemon *daemon, size_t count);
+
 struct lxp_daemon {
     lxp_daemon_configuration config;
     lxp_daemon_apply_fn apply;
@@ -515,6 +521,8 @@ struct lxp_daemon {
     size_t queue_bytes;
     lxp_daemon_admission_persist_fn persist_admission;
     void *persist_admission_context;
+    lxp_result (*persist_maintenance_reservation)(void *context);
+    size_t reserved_batch_count;
     uint64_t next_sequence;
     lxp_result failure;
     bool accepting;

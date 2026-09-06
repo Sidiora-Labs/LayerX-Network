@@ -841,8 +841,9 @@ lxp_result layerx_programs_occupancy_output_apply(uint64_t token)
     return status;
 }
 
-lxp_result lxp_programs_finalize_occupancy_batch(
-    lxp_kernel *kernel, uint64_t batch_number, uint64_t batch_timestamp_ms,
+static lxp_result finalize_occupancy_batch(
+    lxp_kernel *kernel, uint16_t protocol_version, uint32_t schedule_version,
+    uint64_t batch_number, uint64_t batch_timestamp_ms,
     uint64_t global_sequence, uint32_t parameter_version, lxp_arena *arena,
     lxp_programs_occupancy_receipt *receipt, lxp_byte_span *encoded)
 {
@@ -858,7 +859,7 @@ lxp_result lxp_programs_finalize_occupancy_batch(
         return LXP_ERR_NON_CANONICAL;
     runtime = (lx_programs_transfer_runtime *)
         kernel->module_runtime[LXP_MODULE_PROGRAMS];
-    status = resolve_parameters(runtime, 0U, &schedule,
+    status = resolve_parameters(runtime, schedule_version, &schedule,
                                 occupancy_asset_id);
     if (status != LXP_OK) return status;
     status = lxp_state_store_bind_accounts(kernel->state, runtime->accounts);
@@ -867,7 +868,7 @@ lxp_result lxp_programs_finalize_occupancy_batch(
                                  batch_timestamp_ms, kernel->epoch,
                                  global_sequence, UINT64_MAX, arena, true);
     if (status != LXP_OK) return status;
-    ctx.protocol_version = LXP_PROTOCOL_VERSION_OCCUPANCY;
+    ctx.protocol_version = protocol_version;
     ctx.batch_number = batch_number;
     status = lxp_programs_occupancy_bridge_init(&bridge, &ctx);
     if (status == LXP_OK && bridge.uninitialized) {
@@ -945,6 +946,29 @@ lxp_result lxp_programs_finalize_occupancy_batch(
                  bridge.receipt.resulting_state_root, 32U);
     *receipt = bridge.receipt;
     return LXP_OK;
+}
+
+lxp_result lxp_programs_finalize_occupancy_batch(
+    lxp_kernel *kernel, uint64_t batch_number, uint64_t batch_timestamp_ms,
+    uint64_t global_sequence, uint32_t parameter_version, lxp_arena *arena,
+    lxp_programs_occupancy_receipt *receipt, lxp_byte_span *encoded)
+{
+    return finalize_occupancy_batch(kernel, LXP_PROTOCOL_VERSION_OCCUPANCY, 0U,
+        batch_number, batch_timestamp_ms, global_sequence, parameter_version,
+        arena, receipt, encoded);
+}
+
+lxp_result lxp_programs_finalize_occupancy_batch_selected(
+    lxp_kernel *kernel, uint16_t protocol_version, uint32_t schedule_version,
+    uint64_t batch_number, uint64_t batch_timestamp_ms,
+    uint64_t global_sequence, uint32_t parameter_version, lxp_arena *arena,
+    lxp_programs_occupancy_receipt *receipt, lxp_byte_span *encoded)
+{
+    if (!lxp_protocol_version_uses_occupancy(protocol_version) || schedule_version == 0U)
+        return LXP_ERR_VERSION_UNSUPPORTED;
+    return finalize_occupancy_batch(kernel, protocol_version, schedule_version,
+        batch_number, batch_timestamp_ms, global_sequence, parameter_version,
+        arena, receipt, encoded);
 }
 
 static lxp_result receipt_length(const lxp_programs_occupancy_receipt *receipt,
@@ -1230,8 +1254,8 @@ lxp_result lxp_programs_replay_finalize(
     if (lxp_ct_memcmp(kernel->current_state_root,
                       previous_state_root, 32U) != 0)
         return LXP_ERR_ROOT_MISMATCH;
-    status = lxp_programs_finalize_occupancy_batch(
-        kernel, header->batch_number, header->timestamp_ms,
+    status = finalize_occupancy_batch(
+        kernel, header->protocol_version, 0U, header->batch_number, header->timestamp_ms,
         system_sequence, parameter_version, arena, &receipt, &encoded);
     if (status != LXP_OK) return status;
     (void)memset(output, 0, sizeof(*output));
