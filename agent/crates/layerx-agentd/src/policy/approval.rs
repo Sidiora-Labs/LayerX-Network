@@ -167,6 +167,10 @@ impl ApprovalRegistry {
     }
 
     /// Reconstructs all durable holds belonging to `tenant`, refusing any malformed record.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if approval state, reservations, registry bindings, or durable storage are invalid.
     pub fn replay_tenant(
         &self,
         tenant: &TenantId,
@@ -255,6 +259,10 @@ impl ApprovalRegistry {
     }
 
     /// Rebinds every replayed canonical preparation to the live negotiated registry.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if approval state, reservations, registry bindings, or durable storage are invalid.
     pub fn validate_registry(
         &self,
         tenant: &TenantId,
@@ -276,6 +284,10 @@ impl ApprovalRegistry {
         Ok(())
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if approval state, reservations, registry bindings, or durable storage are invalid.
     pub fn hold_ids(&self) -> Result<Vec<[u8; 32]>, ApprovalError> {
         Ok(self
             .holds
@@ -449,6 +461,10 @@ pub fn hold(
 }
 
 /// Persists an approval and its exact already-acquired budget reservation in one record.
+///
+/// # Errors
+///
+/// Returns an error if approval state, reservations, registry bindings, or durable storage are invalid.
 pub fn hold_reserved(
     registry: &ApprovalRegistry,
     context: ApprovalContext,
@@ -764,11 +780,11 @@ fn encode_released(
     held: &HeldApproval,
     submission_ref: [u8; 32],
 ) -> Result<Vec<u8>, ApprovalError> {
-    let hold = encode_hold(held)?;
-    let mut bytes = Vec::with_capacity(RELEASED_MAGIC.len() + 32 + hold.len());
+    let encoded_hold = encode_hold(held)?;
+    let mut bytes = Vec::with_capacity(RELEASED_MAGIC.len() + 32 + encoded_hold.len());
     bytes.extend_from_slice(RELEASED_MAGIC);
     bytes.extend_from_slice(&submission_ref);
-    bytes.extend_from_slice(&hold);
+    bytes.extend_from_slice(&encoded_hold);
     if bytes.len() > MAX_HOLD_RECORD_BYTES {
         return Err(ApprovalError::CorruptRecord);
     }
@@ -955,29 +971,7 @@ fn decode_hold(bytes: &[u8]) -> Result<HeldApproval, ApprovalError> {
     };
     let created_at_sequence = r.u64()?;
     let expires_at_sequence = r.u64()?;
-    let reservation_count = r.u32()?;
-    if reservation_count == 0 || reservation_count > MAX_DISCLOSURE_ITEMS {
-        return Err(ApprovalError::CorruptRecord);
-    }
-    let mut budget_reservations = Vec::new();
-    for _ in 0..reservation_count {
-        let reservation_id = r.a32()?;
-        let limit_id = LimitId(r.a16()?);
-        let scope = decode_scope(r.take(1)?[0], r.a32()?)?;
-        let amount = r.u128()?;
-        let ceiling = r.u128()?;
-        let expiry_sequence = r.u64()?;
-        let digest = r.a32()?;
-        budget_reservations.push(DurableBudgetReservation {
-            reservation_id,
-            limit_id,
-            scope,
-            amount,
-            ceiling,
-            expiry_sequence,
-            digest,
-        });
-    }
+    let budget_reservations = decode_reservations(&mut r)?;
     let preparation_ref =
         PreparationRef::new(r.text()?).map_err(|_| ApprovalError::CorruptRecord)?;
     let unsigned_canonical_bytes =
@@ -1075,4 +1069,31 @@ fn decode_scope(tag: u8, id: [u8; 32]) -> Result<LimitScope, ApprovalError> {
         4 => Ok(LimitScope::Counterparty(id)),
         _ => Err(ApprovalError::CorruptRecord),
     }
+}
+
+fn decode_reservations(r: &mut Reader<'_>) -> Result<Vec<DurableBudgetReservation>, ApprovalError> {
+    let reservation_count = r.u32()?;
+    if reservation_count == 0 || reservation_count > MAX_DISCLOSURE_ITEMS {
+        return Err(ApprovalError::CorruptRecord);
+    }
+    let mut budget_reservations = Vec::new();
+    for _ in 0..reservation_count {
+        let reservation_id = r.a32()?;
+        let limit_id = LimitId(r.a16()?);
+        let scope = decode_scope(r.take(1)?[0], r.a32()?)?;
+        let amount = r.u128()?;
+        let ceiling = r.u128()?;
+        let expiry_sequence = r.u64()?;
+        let digest = r.a32()?;
+        budget_reservations.push(DurableBudgetReservation {
+            reservation_id,
+            limit_id,
+            scope,
+            amount,
+            ceiling,
+            expiry_sequence,
+            digest,
+        });
+    }
+    Ok(budget_reservations)
 }

@@ -333,50 +333,7 @@ fn wrong_agent_scope_and_expiry_are_explicit_and_audited() {
     let _ = fs::remove_dir_all(root);
 }
 
-#[test]
-fn every_generated_token_gated_operation_refuses_closed_revoked_and_restarted_sessions() {
-    let root = directory("entry-points");
-    let mut fixture = fixture(&root);
-    let operations = gated_operations();
-    assert_eq!(operations.len(), Operation::ALL.len() - 2);
-    assert_eq!(
-        OperationClass::for_operation(Operation::AgentRegister),
-        None
-    );
-    assert_eq!(OperationClass::for_operation(Operation::SessionOpen), None);
-    for class in OperationClass::ALL {
-        assert!(operations.iter().any(|(_, actual)| *actual == class));
-    }
-    let closed = fixture.open(1, 4);
-    let revoked = fixture.open(2, 5);
-    let restarted = fixture.open(3, 4);
-    let live = fixture.open(4, 4);
-    let mut admitted = TenantObservability::default();
-    for (operation, class) in &operations {
-        for token in [&closed, &revoked, &restarted, &live] {
-            let resolved = resolve(
-                token,
-                &fixture.registry,
-                &operation_request(*operation, *class, fixture.owner()),
-                &mut admitted,
-            )
-            .unwrap_or_else(|error| panic!("{operation:?} before any change: {error:?}"));
-            assert_eq!(resolved.tenant, fixture.tenant);
-        }
-    }
-    assert_eq!(admitted.audit().len(), operations.len() * 4);
-    assert!(admitted
-        .audit()
-        .iter()
-        .all(|entry| entry.outcome == AuthorizationOutcome::Allowed));
-
-    fixture.close(1);
-    assert_eq!(
-        fixture.revoke_authority(5, 30),
-        vec![SessionRef::new(fixture.tenant.clone(), SessionId([2; 32]))]
-    );
-    fixture.close(3);
-    fixture.reload();
+fn assert_reloaded_generations(fixture: &Fixture) {
     assert_eq!(
         fixture
             .registry
@@ -401,6 +358,40 @@ fn every_generated_token_gated_operation_refuses_closed_revoked_and_restarted_se
             .generation(&fixture.tenant, SessionId([4; 32])),
         Some(1)
     );
+}
+
+#[test]
+fn every_generated_token_gated_operation_refuses_closed_revoked_and_restarted_sessions() {
+    let root = directory("entry-points");
+    let mut fixture = fixture(&root);
+    let operations = gated_operations();
+    assert_eq!(operations.len(), Operation::ALL.len() - 2);
+    assert_eq!(
+        OperationClass::for_operation(Operation::AgentRegister),
+        None
+    );
+    assert_eq!(OperationClass::for_operation(Operation::SessionOpen), None);
+    for class in OperationClass::ALL {
+        assert!(operations.iter().any(|(_, actual)| *actual == class));
+    }
+    let closed = fixture.open(1, 4);
+    let revoked = fixture.open(2, 5);
+    let restarted = fixture.open(3, 4);
+    let live = fixture.open(4, 4);
+    assert_operations_admitted(
+        &fixture,
+        &operations,
+        [&closed, &revoked, &restarted, &live],
+    );
+
+    fixture.close(1);
+    assert_eq!(
+        fixture.revoke_authority(5, 30),
+        vec![SessionRef::new(fixture.tenant.clone(), SessionId([2; 32]))]
+    );
+    fixture.close(3);
+    fixture.reload();
+    assert_reloaded_generations(&fixture);
 
     let mut refused = TenantObservability::default();
     for (operation, class) in &operations {
@@ -550,4 +541,29 @@ fn an_unloaded_registry_refuses_every_generated_gated_operation_until_reload() {
     }
     assert_eq!(observability.audit().len(), gated_operations().len() * 2);
     let _ = fs::remove_dir_all(root);
+}
+
+fn assert_operations_admitted(
+    fixture: &Fixture,
+    operations: &[(Operation, OperationClass)],
+    tokens: [&Token; 4],
+) {
+    let mut admitted = TenantObservability::default();
+    for (operation, class) in operations {
+        for token in tokens {
+            let resolved = resolve(
+                token,
+                &fixture.registry,
+                &operation_request(*operation, *class, fixture.owner()),
+                &mut admitted,
+            )
+            .unwrap_or_else(|error| panic!("{operation:?} before any change: {error:?}"));
+            assert_eq!(resolved.tenant, fixture.tenant);
+        }
+    }
+    assert_eq!(admitted.audit().len(), operations.len() * 4);
+    assert!(admitted
+        .audit()
+        .iter()
+        .all(|entry| entry.outcome == AuthorizationOutcome::Allowed));
 }

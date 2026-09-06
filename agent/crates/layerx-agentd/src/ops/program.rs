@@ -197,6 +197,10 @@ impl ProgramSimulationEvidence {
 }
 
 pub trait ProgramSimulationTransport {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the request, program metadata, or execution evidence is invalid, or transport fails.
     fn simulate_exact(
         &mut self,
         call: &ProgramCall,
@@ -233,6 +237,10 @@ impl ProgramSimulationTransport for EmulatorProgramSimulationTransport {
 }
 
 pub trait NativeProgramSimulationTransport {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the request, program metadata, or execution evidence is invalid, or transport fails.
     fn simulate_native_exact(
         &mut self,
         call: NativeProgramCall<'_>,
@@ -337,7 +345,16 @@ impl NativeProgramSimulationTransport for EmulatorProgramSimulationTransport {
 }
 
 fn encode_hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    bytes
+        .iter()
+        .flat_map(|byte| {
+            let digits = b"0123456789abcdef";
+            [
+                char::from(digits[usize::from(byte >> 4)]),
+                char::from(digits[usize::from(byte & 15)]),
+            ]
+        })
+        .collect::<String>()
 }
 fn program_call_request(call: &ProgramCall, signed_activity: &[u8]) -> serde_json::Value {
     serde_json::json!({
@@ -460,14 +477,14 @@ impl<T: ProgramSimulationTransport> ProgramSimulationBoundary
         signed_activity: &[u8],
     ) -> Result<ProgramExecution, ProgramOperationError> {
         let raw = self.transport.simulate_exact(call, signed_activity)?;
-        self.verify_simulation(raw, signed_activity)
+        self.verify_simulation(&raw, signed_activity)
     }
 }
 
 impl<T> ReceiptVerifiedProgramSimulator<T> {
     fn verify_simulation(
         &self,
-        raw: RawProgramSimulation,
+        raw: &RawProgramSimulation,
         signed_activity: &[u8],
     ) -> Result<ProgramExecution, ProgramOperationError> {
         if raw.receipt.is_empty() {
@@ -538,6 +555,14 @@ impl<T> ReceiptVerifiedProgramSimulator<T> {
     }
 }
 
+#[derive(Clone, Copy)]
+pub struct ProgramSubmission<'a> {
+    pub signer_public_key: [u8; 32],
+    pub correlation_id: u64,
+    pub attempt: u32,
+    pub signed_activity: &'a [u8],
+}
+
 #[cfg(test)]
 mod simulation_rejection_vectors {
     use super::ProgramSimulationEvidence;
@@ -582,6 +607,10 @@ impl ProgramOperations {
         Self { reader }
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the request, program metadata, or execution evidence is invalid, or transport fails.
     pub fn discover(
         &mut self,
         program: ProgramId,
@@ -627,6 +656,10 @@ impl ProgramOperations {
         })
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the request, program metadata, or execution evidence is invalid, or transport fails.
     pub fn interface(
         &mut self,
         program: ProgramId,
@@ -650,6 +683,10 @@ impl ProgramOperations {
         })
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the request, program metadata, or execution evidence is invalid, or transport fails.
     pub fn simulate(
         &mut self,
         boundary: &mut ReceiptVerifiedProgramSimulator<impl ProgramSimulationTransport>,
@@ -679,18 +716,25 @@ impl ProgramOperations {
         Ok(execution)
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the request, program metadata, or execution evidence is invalid, or transport fails.
     pub fn submit(
         &mut self,
         client: &mut layerx_client::Client,
         registry: &ModuleRegistry,
         call: &ProgramCall,
-        signer_public_key: [u8; 32],
-        correlation_id: u64,
-        attempt: u32,
-        signed_activity: &[u8],
+        submission: ProgramSubmission<'_>,
         now: u64,
         head: &VerifiedProgramHead,
     ) -> Result<Submission, ProgramOperationError> {
+        let ProgramSubmission {
+            signer_public_key,
+            correlation_id,
+            attempt,
+            signed_activity,
+        } = submission;
         let program = ProgramId::new(call.callee().bytes())
             .map_err(|_| ProgramOperationError::InvalidRequest)?;
         self.discover(program, now, head)?;
@@ -705,6 +749,10 @@ impl ProgramOperations {
             )
             .map_err(ProgramOperationError::Submit)
     }
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the request, program metadata, or execution evidence is invalid, or transport fails.
     pub fn simulate_native(
         &mut self,
         boundary: &mut ReceiptVerifiedProgramSimulator<
@@ -733,26 +781,33 @@ impl ProgramOperations {
         let raw = boundary
             .transport
             .simulate_native_exact(call, fee_limit, signed_activity)?;
-        let execution = boundary.verify_simulation(raw, signed_activity)?;
+        let execution = boundary.verify_simulation(&raw, signed_activity)?;
         if execution.committed() || execution.receipt().is_empty() {
             return Err(ProgramOperationError::UnverifiedReceipt);
         }
         Ok(execution)
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the request, program metadata, or execution evidence is invalid, or transport fails.
     pub fn submit_native(
         &mut self,
         client: &mut layerx_client::Client,
         registry: &ModuleRegistry,
-        call: NativeProgramCall<'_>,
-        fee_limit: u128,
-        signer_public_key: [u8; 32],
-        correlation_id: u64,
-        attempt: u32,
-        signed_activity: &[u8],
+        call_with_fee: (NativeProgramCall<'_>, u128),
+        submission: ProgramSubmission<'_>,
         now: u64,
         head: &VerifiedProgramHead,
     ) -> Result<Submission, ProgramOperationError> {
+        let ProgramSubmission {
+            signer_public_key,
+            correlation_id,
+            attempt,
+            signed_activity,
+        } = submission;
+        let (call, fee_limit) = call_with_fee;
         let program = ProgramId::new(call.program_id.bytes())
             .map_err(|_| ProgramOperationError::InvalidRequest)?;
         self.discover(program, now, head)?;

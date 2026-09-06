@@ -128,6 +128,10 @@ impl PreparationLifecycle {
 
     /// Fails every not-yet-submitted preparation owned by an invalidated exact generation while
     /// preserving submitted/unknown work for honest receipt resolution.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if preparation invalidation or reservation release fails.
     pub fn invalidate_authorizations(
         &self,
         invalidated: &[(SessionRef, u64)],

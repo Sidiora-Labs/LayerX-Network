@@ -11,6 +11,28 @@ use crate::human::{HumanAgentLifecycleSeed, HumanOperationError, HumanResponse};
 use crate::session::{InvalidationReason, RevocationEvent, SessionId, SessionRegistry};
 use crate::store::{key, ObjectKind, StorageClass, Store, TenantId};
 
+pub type SessionRestrictionRequest<'a> = (
+    [u8; 32],
+    [u8; 32],
+    u64,
+    [u8; 32],
+    [u8; 32],
+    u64,
+    u64,
+    &'a BTreeSet<String>,
+    &'a BTreeSet<u16>,
+);
+
+pub type SessionRestrictionUpdate = (
+    HumanResponse,
+    crate::store::TenantKey,
+    Vec<u8>,
+    crate::store::TenantKey,
+    Vec<u8>,
+    crate::store::TenantKey,
+    Vec<u8>,
+);
+
 const PREFIX: &[u8] = b"managed-agent-v1:";
 const VERSION: u8 = 4;
 const LEGACY_VERSION: u8 = 3;
@@ -97,6 +119,8 @@ impl ValidatedAuthorityRevocation {
 }
 
 impl ManagedAgent {
+    /// # Errors
+    /// Returns an error when the request is invalid, authority is refused, or required state is unavailable.
     pub fn from_creation(
         seed: &HumanAgentLifecycleSeed,
         installed_agent: &str,
@@ -117,7 +141,7 @@ impl ManagedAgent {
             || seed.updated_at < seed.created_at
             || seed.verified_evidence.is_empty()
             || seed.verified_evidence.len() > MAX_EVIDENCE
-            || seed.verified_evidence.iter().any(|value| *value == [0; 32])
+            || seed.verified_evidence.contains(&[0; 32])
         {
             return Err(HumanOperationError::Refused);
         }
@@ -165,7 +189,7 @@ impl ManagedAgent {
             || self.spent > self.monthly_limit
             || self.verified_evidence.is_empty()
             || self.verified_evidence.len() > MAX_EVIDENCE
-            || self.verified_evidence.iter().any(|value| *value == [0; 32])
+            || self.verified_evidence.contains(&[0; 32])
             || self.context.agent_id != self.agent_id
         {
             return Err(HumanOperationError::Refused);
@@ -175,34 +199,38 @@ impl ManagedAgent {
     }
 }
 
+/// # Errors
+/// Returns an error when the request is invalid, authority is refused, or required state is unavailable.
 pub fn publish_creation(
     store: &mut Store,
     tenant: &TenantId,
-    agent: ManagedAgent,
+    agent: &ManagedAgent,
 ) -> Result<(), HumanOperationError> {
     agent.validate()?;
     let object_key = agent_key(tenant, &agent.agent_id)?;
     if let Some(existing) = store.get(&object_key) {
-        if existing.class() != StorageClass::LocalOnly || decode(existing.bytes())? != agent {
+        if existing.class() != StorageClass::LocalOnly || decode(existing.bytes())? != *agent {
             return Err(HumanOperationError::Refused);
         }
         return Ok(());
     }
     store
-        .put_local(object_key, encode(&agent)?)
+        .put_local(object_key, encode(agent)?)
         .map_err(|_| HumanOperationError::Unavailable)
 }
+/// # Errors
+/// Returns an error when the request is invalid, authority is refused, or required state is unavailable.
 pub fn publish_creation_with_companion(
     store: &mut Store,
     tenant: &TenantId,
-    agent: ManagedAgent,
+    agent: &ManagedAgent,
     companion: crate::store::TenantKey,
     bytes: Vec<u8>,
 ) -> Result<(), HumanOperationError> {
     agent.validate()?;
     let object_key = agent_key(tenant, &agent.agent_id)?;
     if let Some(existing) = store.get(&object_key) {
-        if existing.class() != StorageClass::LocalOnly || decode(existing.bytes())? != agent {
+        if existing.class() != StorageClass::LocalOnly || decode(existing.bytes())? != *agent {
             return Err(HumanOperationError::Refused);
         }
         store
@@ -210,12 +238,14 @@ pub fn publish_creation_with_companion(
             .map_err(|_| HumanOperationError::Unavailable)?;
     } else {
         store
-            .update_local_with_companion(object_key, encode(&agent)?, companion, bytes)
+            .update_local_with_companion(object_key, encode(agent)?, companion, bytes)
             .map_err(|_| HumanOperationError::Unavailable)?;
     }
     Ok(())
 }
 
+/// # Errors
+/// Returns an error when the request is invalid, authority is refused, or required state is unavailable.
 pub fn validate_tenant(store: &Store, tenant: &TenantId) -> Result<(), HumanOperationError> {
     for object_id in store.list_object_ids(tenant, ObjectKind::Configuration) {
         if !object_id.starts_with(PREFIX) {
@@ -240,6 +270,8 @@ pub fn validate_tenant(store: &Store, tenant: &TenantId) -> Result<(), HumanOper
 /// Validates every durable managed-agent credential against the restored authoritative session
 /// record. Legacy v3 managed records decode at the legacy session generation of one and are
 /// refused if the corresponding restored session has ever advanced.
+/// # Errors
+/// Returns an error when the request is invalid, authority is refused, or required state is unavailable.
 pub fn validate_session_coordinates(
     store: &Store,
     sessions: &SessionRegistry,
@@ -271,6 +303,8 @@ pub fn validate_session_coordinates(
     Ok(())
 }
 
+/// # Errors
+/// Returns an error when the request is invalid, authority is refused, or required state is unavailable.
 pub fn get(
     store: &Store,
     tenant: &TenantId,
@@ -283,6 +317,8 @@ pub fn get(
     }
     response_agent(&decode(value.bytes())?)
 }
+/// # Errors
+/// Returns an error when the request is invalid, authority is refused, or required state is unavailable.
 pub fn context(
     store: &Store,
     tenant: &TenantId,
@@ -310,6 +346,8 @@ pub fn context(
     out.finish()
 }
 
+/// # Errors
+/// Returns an error when the request is invalid, authority is refused, or required state is unavailable.
 pub fn record_observation(
     store: &mut Store,
     tenant: &TenantId,
@@ -402,9 +440,7 @@ fn key_policy_observation(
     digest: [u8; 32],
     did: &str,
     recovery: bool,
-    delay: u64,
-    ready_at: u64,
-    finalized_at: u64,
+    (delay, ready_at, finalized_at): (u64, u64, u64),
 ) -> Result<(), HumanOperationError> {
     let mut id = b"managed-agent-observation-v1:".to_vec();
     id.push(2);
@@ -489,6 +525,8 @@ fn require_session_observation(
     }
     Ok(())
 }
+/// # Errors
+/// Returns an error when the request is invalid, authority is refused, or required state is unavailable.
 pub fn finalize_control(
     store: &mut Store,
     tenant: &TenantId,
@@ -505,9 +543,7 @@ pub fn finalize_control(
         tenant,
         agent_id,
         evidence,
-        ModuleId::Governance,
-        6,
-        &operation,
+        (ModuleId::Governance, 6, &operation),
         |agent| {
             if resume {
                 if agent.state != 2 {
@@ -526,6 +562,8 @@ pub fn finalize_control(
     )
 }
 
+/// # Errors
+/// Returns an error when the request is invalid, authority is refused, or required state is unavailable.
 pub fn finalize_limit(
     store: &mut Store,
     tenant: &TenantId,
@@ -548,9 +586,7 @@ pub fn finalize_limit(
         tenant,
         agent_id,
         evidence,
-        ModuleId::Budget,
-        1,
-        &body,
+        (ModuleId::Budget, 1, &body),
         |agent| {
             if agent.state == 4 || agent.currency != currency || agent.spent > monthly_limit {
                 return Err(HumanOperationError::Refused);
@@ -563,15 +599,13 @@ pub fn finalize_limit(
     )
 }
 
+/// # Errors
+/// Returns an error when the request is invalid, authority is refused, or required state is unavailable.
 pub fn finalize_journey(
     store: &mut Store,
     tenant: &TenantId,
     agent_id: &str,
-    kind: u8,
-    amount: u128,
-    currency: &str,
-    delay: u64,
-    ready_at: u64,
+    (kind, amount, currency, delay, ready_at): (u8, u128, &str, u64, u64),
     pre_observation: [u8; 32],
     post_observation: [u8; 32],
     evidence: FinalizationEvidence,
@@ -606,7 +640,7 @@ pub fn finalize_journey(
             agent.active_budget_id,
             evidence.observed_sequence,
             false,
-        )?
+        )?;
     } else {
         if pre_observation == [0; 32] || post_observation != [0; 32] {
             return Err(HumanOperationError::Refused);
@@ -618,10 +652,8 @@ pub fn finalize_journey(
             pre_observation,
             &agent.agent_did,
             kind == 2,
-            delay,
-            ready_at,
-            evidence.finalized_at,
-        )?
+            (delay, ready_at, evidence.finalized_at),
+        )?;
     }
     let mut body = Vec::new();
     body.push(28);
@@ -637,17 +669,19 @@ pub fn finalize_journey(
         tenant,
         agent_id,
         evidence,
-        match kind {
-            0 => ModuleId::Budget,
-            1 | 2 => ModuleId::Governance,
-            _ => return Err(HumanOperationError::Refused),
-        },
-        match kind {
-            0 => 7,
-            1 | 2 => 2,
-            _ => return Err(HumanOperationError::Refused),
-        },
-        &body,
+        (
+            match kind {
+                0 => ModuleId::Budget,
+                1 | 2 => ModuleId::Governance,
+                _ => return Err(HumanOperationError::Refused),
+            },
+            match kind {
+                0 => 7,
+                1 | 2 => 2,
+                _ => return Err(HumanOperationError::Refused),
+            },
+            &body,
+        ),
         |agent| {
             if agent.state == 4 || (kind == 0 && agent.currency != currency) {
                 return Err(HumanOperationError::Refused);
@@ -666,13 +700,13 @@ pub fn finalize_journey(
 
 /// Verifies the finalized governance evidence that invalidates all sessions under an agent DID.
 /// This performs no session mutation and returns an opaque value for the short ordered commit.
+/// # Errors
+/// Returns an error when the request is invalid, authority is refused, or required state is unavailable.
 pub fn validate_authority_revocation(
     store: &Store,
     tenant: &TenantId,
     agent_id: &str,
-    kind: u8,
-    delay: u64,
-    ready_at: u64,
+    (kind, delay, ready_at): (u8, u64, u64),
     pre_observation: [u8; 32],
     post_observation: [u8; 32],
     evidence: FinalizationEvidence,
@@ -695,9 +729,7 @@ pub fn validate_authority_revocation(
         pre_observation,
         &current.agent_did,
         kind == 2,
-        delay,
-        ready_at,
-        evidence.finalized_at,
+        (delay, ready_at, evidence.finalized_at),
     )?;
     let mut body = Vec::new();
     body.push(28);
@@ -718,7 +750,7 @@ pub fn validate_authority_revocation(
     )?;
     let agent = match source {
         FinalizationSource::Completed(_) => current.clone(),
-        FinalizationSource::Pending { agent, .. } => agent,
+        FinalizationSource::Pending { agent, .. } => *agent,
     };
     if agent.state == 4 || agent.agent_did != current.agent_did {
         return Err(HumanOperationError::Refused);
@@ -739,14 +771,14 @@ pub fn validate_authority_revocation(
     })
 }
 
+/// # Errors
+/// Returns an error when the request is invalid, authority is refused, or required state is unavailable.
 pub fn finalize_archive(
     store: &mut Store,
     tenant: &TenantId,
     agent_id: &str,
     confirm_name: &str,
-    pre_observation: [u8; 32],
-    post_observation: [u8; 32],
-    session_observation: [u8; 32],
+    (pre_observation, post_observation, session_observation): ([u8; 32], [u8; 32], [u8; 32]),
     evidence: FinalizationEvidence,
 ) -> Result<HumanResponse, HumanOperationError> {
     if pre_observation == post_observation {
@@ -781,9 +813,7 @@ pub fn finalize_archive(
         tenant,
         agent_id,
         evidence,
-        ModuleId::Governance,
-        6,
-        &body,
+        (ModuleId::Governance, 6, &body),
         |agent| {
             if agent.state == 4 || agent.name != confirm_name {
                 return Err(HumanOperationError::Refused);
@@ -808,6 +838,8 @@ fn load_agent(
     decode(value.bytes())
 }
 
+/// # Errors
+/// Returns an error when the request is invalid, authority is refused, or required state is unavailable.
 pub fn session_coordinates(
     store: &Store,
     tenant: &TenantId,
@@ -821,6 +853,8 @@ pub fn session_coordinates(
         agent.session_generation,
     ))
 }
+/// # Errors
+/// Returns an error when the request is invalid, authority is refused, or required state is unavailable.
 pub fn protocol_grant(
     store: &Store,
     tenant: &TenantId,
@@ -860,6 +894,8 @@ fn session_bytes(
     out.fixed(&digest);
     Ok((out.finish()?, digest))
 }
+/// # Errors
+/// Returns an error when the request is invalid, authority is refused, or required state is unavailable.
 pub fn record_session_observation(
     store: &mut Store,
     tenant: &TenantId,
@@ -889,6 +925,8 @@ pub fn record_session_observation(
         .map_err(|_| HumanOperationError::Unavailable)?;
     Ok(response)
 }
+/// # Errors
+/// Returns an error when the request is invalid, authority is refused, or required state is unavailable.
 pub fn prepare_session_observation(
     store: &Store,
     tenant: &TenantId,
@@ -910,31 +948,24 @@ pub fn prepare_session_observation(
     Ok((response, record, bytes))
 }
 
+/// # Errors
+/// Returns an error when the request is invalid, authority is refused, or required state is unavailable.
 pub fn prepare_session_token_restriction(
     store: &Store,
     tenant: &TenantId,
     agent_id: &str,
-    session: [u8; 32],
-    previous_token: [u8; 32],
-    previous_generation: u64,
-    replacement_token: [u8; 32],
-    action: [u8; 32],
-    generation: u64,
-    current_sequence: u64,
-    scopes: &BTreeSet<String>,
-    permitted_activity_types: &BTreeSet<u16>,
-) -> Result<
     (
-        HumanResponse,
-        crate::store::TenantKey,
-        Vec<u8>,
-        crate::store::TenantKey,
-        Vec<u8>,
-        crate::store::TenantKey,
-        Vec<u8>,
-    ),
-    HumanOperationError,
-> {
+        session,
+        previous_token,
+        previous_generation,
+        replacement_token,
+        action,
+        generation,
+        current_sequence,
+        scopes,
+        permitted_activity_types,
+    ): SessionRestrictionRequest<'_>,
+) -> Result<SessionRestrictionUpdate, HumanOperationError> {
     if replacement_token == [0; 32] || replacement_token == previous_token || generation == 0 {
         return Err(HumanOperationError::Refused);
     }
@@ -986,6 +1017,8 @@ pub fn prepare_session_token_restriction(
     ))
 }
 
+/// # Errors
+/// Returns an error when the request is invalid, authority is refused, or required state is unavailable.
 pub fn replay_session_token_restriction(
     store: &Store,
     tenant: &TenantId,
@@ -1100,14 +1133,13 @@ fn session_restriction_digest(
     }
     Ok(digest.finalize().into())
 }
+/// # Errors
+/// Returns an error when the request is invalid, authority is refused, or required state is unavailable.
 pub fn bind_session(
     store: &mut Store,
     tenant: &TenantId,
     agent_id: &str,
-    session: [u8; 32],
-    token: [u8; 32],
-    generation: u64,
-    grant: [u8; 32],
+    (session, token, generation, grant): ([u8; 32], [u8; 32], u64, [u8; 32]),
     action: [u8; 32],
 ) -> Result<HumanResponse, HumanOperationError> {
     if session == [0; 32] || token == [0; 32] || generation == 0 {
@@ -1154,9 +1186,7 @@ fn finalize_agent<F, R>(
     tenant: &TenantId,
     agent_id: &str,
     evidence: FinalizationEvidence,
-    expected_module: ModuleId,
-    expected_operation: u8,
-    operation: &[u8],
+    (expected_module, expected_operation, operation): (ModuleId, u8, &[u8]),
     mutate: F,
     response: R,
 ) -> Result<HumanResponse, HumanOperationError>
@@ -1202,7 +1232,7 @@ enum FinalizationSource {
         aggregate_key: crate::store::TenantKey,
         action_key: crate::store::TenantKey,
         request_digest: [u8; 32],
-        agent: ManagedAgent,
+        agent: Box<ManagedAgent>,
     },
 }
 
@@ -1220,7 +1250,7 @@ fn validate_finalization_source(
     }
     let aggregate_key = agent_key(tenant, agent_id)?;
     let action_key = action_record_key(tenant, evidence.action_key)?;
-    let request_digest = finalization_digest(agent_id, operation, evidence);
+    let request_digest = finalization_digest(agent_id, operation, evidence)?;
     if let Some(saved) = store.get(&action_key) {
         if saved.class() != StorageClass::LocalOnly
             || saved.bytes().len() < 32
@@ -1275,7 +1305,7 @@ fn validate_finalization_source(
         aggregate_key,
         action_key,
         request_digest,
-        agent,
+        agent: Box::new(agent),
     })
 }
 
@@ -1306,12 +1336,24 @@ fn action_record_key(
     id.extend_from_slice(&action);
     key(tenant.clone(), ObjectKind::Idempotency, id).map_err(|_| HumanOperationError::Refused)
 }
-fn finalization_digest(agent: &str, operation: &[u8], evidence: FinalizationEvidence) -> [u8; 32] {
+fn finalization_digest(
+    agent: &str,
+    operation: &[u8],
+    evidence: FinalizationEvidence,
+) -> Result<[u8; 32], HumanOperationError> {
     let mut h = Sha256::new();
     h.update(b"layerx-agentd/managed-agent-finalize/v1\0");
-    h.update((agent.len() as u32).to_be_bytes());
+    h.update(
+        u32::try_from(agent.len())
+            .map_err(|_| HumanOperationError::Refused)?
+            .to_be_bytes(),
+    );
     h.update(agent.as_bytes());
-    h.update((operation.len() as u32).to_be_bytes());
+    h.update(
+        u32::try_from(operation.len())
+            .map_err(|_| HumanOperationError::Refused)?
+            .to_be_bytes(),
+    );
     h.update(operation);
     h.update(evidence.action_key);
     h.update(evidence.activity_id);
@@ -1319,7 +1361,7 @@ fn finalization_digest(agent: &str, operation: &[u8], evidence: FinalizationEvid
     h.update(evidence.observed_sequence.to_be_bytes());
     h.update([evidence.verification]);
     h.update(evidence.finalized_at.to_be_bytes());
-    h.finalize().into()
+    Ok(h.finalize().into())
 }
 fn journey_response(
     agent: &ManagedAgent,
@@ -1372,6 +1414,8 @@ fn challenge_response(
     out.finish()
 }
 
+/// # Errors
+/// Returns an error when the request is invalid, authority is refused, or required state is unavailable.
 pub fn list(
     store: &Store,
     tenant: &TenantId,
@@ -1491,7 +1535,7 @@ fn encode(agent: &ManagedAgent) -> Result<Vec<u8>, HumanOperationError> {
     out.u64(agent.updated_at);
     out.u8(u8::try_from(agent.verified_evidence.len()).map_err(|_| HumanOperationError::Refused)?);
     for value in &agent.verified_evidence {
-        out.fixed(value)
+        out.fixed(value);
     }
     encode_context(&mut out, &agent.context)?;
     out.text(&agent.agent_did)?;
@@ -1527,7 +1571,7 @@ fn decode(bytes: &[u8]) -> Result<ManagedAgent, HumanOperationError> {
             }
             let mut values = Vec::with_capacity(count);
             for _ in 0..count {
-                values.push(input.fixed()?)
+                values.push(input.fixed()?);
             }
             values
         },
@@ -1552,22 +1596,22 @@ impl Wire {
         Self(Vec::new())
     }
     fn u8(&mut self, value: u8) {
-        self.0.push(value)
+        self.0.push(value);
     }
     fn u16(&mut self, value: u16) {
-        self.0.extend_from_slice(&value.to_be_bytes())
+        self.0.extend_from_slice(&value.to_be_bytes());
     }
     fn u32(&mut self, value: u32) {
-        self.0.extend_from_slice(&value.to_be_bytes())
+        self.0.extend_from_slice(&value.to_be_bytes());
     }
     fn u64(&mut self, value: u64) {
-        self.0.extend_from_slice(&value.to_be_bytes())
+        self.0.extend_from_slice(&value.to_be_bytes());
     }
     fn u128(&mut self, value: u128) {
-        self.0.extend_from_slice(&value.to_be_bytes())
+        self.0.extend_from_slice(&value.to_be_bytes());
     }
     fn fixed(&mut self, value: &[u8]) {
-        self.0.extend_from_slice(value)
+        self.0.extend_from_slice(value);
     }
     fn text(&mut self, value: &str) -> Result<(), HumanOperationError> {
         if value.is_empty() || value.len() > 4096 {
@@ -1678,7 +1722,7 @@ fn parse_agent_digest(value: &str) -> Result<[u8; 32], HumanOperationError> {
             _ => None,
         };
         out[index] = (digit(pair[0]).ok_or(HumanOperationError::Refused)? << 4)
-            | digit(pair[1]).ok_or(HumanOperationError::Refused)?
+            | digit(pair[1]).ok_or(HumanOperationError::Refused)?;
     }
     if out == [0; 32] {
         return Err(HumanOperationError::Refused);
@@ -1756,6 +1800,8 @@ fn encode_context(out: &mut Wire, c: &HumanAgentLifecycleSeed) -> Result<(), Hum
     out.u32(c.network_id);
     fixeds(out, &c.creation_receipt_roots)
 }
+/// # Errors
+/// Returns an error when the request is invalid, authority is refused, or required state is unavailable.
 pub fn lifecycle_publish_digest(
     c: &HumanAgentLifecycleSeed,
 ) -> Result<[u8; 32], HumanOperationError> {
@@ -1810,21 +1856,21 @@ fn decode_context(i: &mut Input) -> Result<HumanAgentLifecycleSeed, HumanOperati
 fn fixeds(out: &mut Wire, v: &[[u8; 32]]) -> Result<(), HumanOperationError> {
     out.u16(u16::try_from(v.len()).map_err(|_| HumanOperationError::Refused)?);
     for x in v {
-        out.fixed(x)
+        out.fixed(x);
     }
     Ok(())
 }
 fn u32s(out: &mut Wire, v: &[u32]) -> Result<(), HumanOperationError> {
     out.u16(u16::try_from(v.len()).map_err(|_| HumanOperationError::Refused)?);
     for x in v {
-        out.u32(*x)
+        out.u32(*x);
     }
     Ok(())
 }
 fn texts(out: &mut Wire, v: &[String]) -> Result<(), HumanOperationError> {
     out.u16(u16::try_from(v.len()).map_err(|_| HumanOperationError::Refused)?);
     for x in v {
-        out.text(x)?
+        out.text(x)?;
     }
     Ok(())
 }
@@ -1835,7 +1881,7 @@ fn read_fixeds(i: &mut Input, max: usize) -> Result<Vec<[u8; 32]>, HumanOperatio
     }
     let mut v = Vec::with_capacity(n);
     for _ in 0..n {
-        v.push(i.fixed()?)
+        v.push(i.fixed()?);
     }
     Ok(v)
 }
@@ -1846,7 +1892,7 @@ fn read_u32s(i: &mut Input, max: usize) -> Result<Vec<u32>, HumanOperationError>
     }
     let mut v = Vec::with_capacity(n);
     for _ in 0..n {
-        v.push(i.u32()?)
+        v.push(i.u32()?);
     }
     Ok(v)
 }
@@ -1857,7 +1903,7 @@ fn read_texts(i: &mut Input, max: usize) -> Result<Vec<String>, HumanOperationEr
     }
     let mut v = Vec::with_capacity(n);
     for _ in 0..n {
-        v.push(i.text()?)
+        v.push(i.text()?);
     }
     Ok(v)
 }

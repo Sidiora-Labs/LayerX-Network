@@ -77,15 +77,9 @@ impl ProgramCallRequest {
     }
 
     /// Returns the activity identifier derived from the retained signed bytes.
-    ///
-    /// # Errors
-    ///
-    /// Refuses only if the retained canonical activity cannot be hashed.
-    pub fn activity_id(
-        &self,
-        _registry: &ModuleRegistry,
-    ) -> Result<[u8; 32], ProgramOperationError> {
-        Ok(self.activity_id)
+    #[must_use]
+    pub const fn activity_id(&self, _registry: &ModuleRegistry) -> [u8; 32] {
+        self.activity_id
     }
 
     #[must_use]
@@ -199,10 +193,14 @@ impl BoundProgramRequest for NativeProgramCallRequest {
 }
 
 pub trait NativeProgramTransport {
+    /// # Errors
+    /// Refuses invalid simulation evidence, request bindings, or transport failures.
     fn simulate_native(
         &self,
         request: &NativeProgramCallRequest,
     ) -> Result<VerifiedProgramSimulation, ProgramOperationError>;
+    /// # Errors
+    /// Refuses invalid submission evidence, request bindings, or transport failures.
     fn submit_native(
         &self,
         request: &NativeProgramCallRequest,
@@ -211,12 +209,16 @@ pub trait NativeProgramTransport {
 }
 
 impl<T: NativeProgramTransport> ProgramOperations<T> {
+    /// # Errors
+    /// Refuses invalid simulation evidence, request bindings, or transport failures.
     pub fn simulate_native(
         &self,
         request: &NativeProgramCallRequest,
     ) -> Result<VerifiedProgramSimulation, ProgramOperationError> {
         self.transport.simulate_native(request)
     }
+    /// # Errors
+    /// Refuses invalid submission evidence, request bindings, or transport failures.
     pub fn submit_native(
         &self,
         request: &NativeProgramCallRequest,
@@ -475,28 +477,40 @@ pub trait ProgramTransport {
         request: &crate::program_lifecycle::NativeProgramLifecycleRequest,
         idempotency_key: [u8; 32],
     ) -> Result<crate::program_lifecycle::ProgramLifecycleSubmission, ProgramOperationError>;
+    /// # Errors
+    /// Refuses transport failures or invalid discovery evidence.
     fn discover(
         &self,
         program: [u8; 32],
     ) -> Result<VerifiedProgramDiscovery, ProgramOperationError>;
+    /// # Errors
+    /// Refuses transport failures or invalid interface evidence.
     fn interface(
         &self,
         program: [u8; 32],
     ) -> Result<VerifiedProgramInterface, ProgramOperationError>;
+    /// # Errors
+    /// Refuses transport failures, mismatched requests, or invalid simulation evidence.
     fn simulate(
         &self,
         request: &ProgramCallRequest,
     ) -> Result<VerifiedProgramSimulation, ProgramOperationError>;
+    /// # Errors
+    /// Refuses transport failures, mismatched requests, or invalid execution evidence.
     fn submit(
         &self,
         request: &ProgramCallRequest,
         idempotency_key: [u8; 32],
     ) -> Result<ProgramSubmission, ProgramOperationError>;
+    /// # Errors
+    /// Refuses transport failures or receipt evidence with invalid identity bindings.
     fn receipt(
         &self,
         idempotency_key: [u8; 32],
         expected_activity: [u8; 32],
     ) -> Result<ProgramSubmission, ProgramOperationError>;
+    /// # Errors
+    /// Refuses transport failures or invalid activity execution evidence.
     fn activity(&self, activity_id: [u8; 32]) -> Result<ProgramSubmission, ProgramOperationError>;
 }
 
@@ -545,6 +559,8 @@ impl<T: ProgramTransport> ProgramOperations<T> {
         Self { transport }
     }
 
+    /// # Errors
+    /// Refuses transport failures or invalid discovery evidence.
     pub fn discover(
         &self,
         program: [u8; 32],
@@ -552,6 +568,8 @@ impl<T: ProgramTransport> ProgramOperations<T> {
         self.transport.discover(program)
     }
 
+    /// # Errors
+    /// Refuses transport failures or invalid interface evidence.
     pub fn interface(
         &self,
         program: [u8; 32],
@@ -559,6 +577,8 @@ impl<T: ProgramTransport> ProgramOperations<T> {
         self.transport.interface(program)
     }
 
+    /// # Errors
+    /// Refuses transport failures, mismatched requests, or invalid simulation evidence.
     pub fn simulate(
         &self,
         request: &ProgramCallRequest,
@@ -566,6 +586,8 @@ impl<T: ProgramTransport> ProgramOperations<T> {
         self.transport.simulate(request)
     }
 
+    /// # Errors
+    /// Refuses transport failures, mismatched requests, or invalid execution evidence.
     pub fn submit(
         &self,
         request: &ProgramCallRequest,
@@ -574,6 +596,8 @@ impl<T: ProgramTransport> ProgramOperations<T> {
         self.transport.submit(request, idempotency_key)
     }
 
+    /// # Errors
+    /// Refuses transport failures or receipt evidence with invalid identity bindings.
     pub fn receipt(
         &self,
         idempotency_key: [u8; 32],
@@ -582,6 +606,8 @@ impl<T: ProgramTransport> ProgramOperations<T> {
         self.transport.receipt(idempotency_key, expected_activity)
     }
 
+    /// # Errors
+    /// Refuses transport failures or invalid activity execution evidence.
     pub fn activity(
         &self,
         activity_id: [u8; 32],

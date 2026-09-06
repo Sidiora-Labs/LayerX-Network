@@ -225,6 +225,10 @@ impl Outbox {
     }
 
     /// Returns the exact durable signed activity at any later lifecycle state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the submission does not exist or its retained bytes are invalid.
     pub fn exact_signed_bytes(&self, submission_id: [u8; 32]) -> Result<&[u8], OutboxError> {
         self.records
             .get(&submission_id)

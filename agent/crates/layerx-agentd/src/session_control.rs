@@ -64,6 +64,10 @@ impl SessionControl {
 
     /// Authenticates an exact external credential, resolves its generated operation, and arms an
     /// exact-generation stop before any effect is allowed to begin.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if session authorization, durable state, or preparation invalidation fails.
     pub fn authorize(
         &self,
         credential: &SessionCredential,
@@ -109,6 +113,10 @@ impl SessionControl {
 
     /// Closes one session with durable state committed before registry replacement and stop
     /// publication.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if session authorization, durable state, or preparation invalidation fails.
     pub fn close(
         &self,
         tenant: &TenantId,
@@ -137,6 +145,10 @@ impl SessionControl {
         )
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if session authorization, durable state, or preparation invalidation fails.
     pub fn close_with_companion(
         &self,
         tenant: &TenantId,
@@ -176,19 +188,19 @@ impl SessionControl {
 
     /// Atomically rotates an opaque bearer while narrowing scope and updating the Human-managed
     /// agent coordinate that distributes the new bearer.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if session authorization, durable state, or preparation invalidation fails.
     pub fn restrict_with_companion(
         &self,
         tenant: &TenantId,
-        session_id: SessionId,
-        replacement_token: [u8; 32],
-        scopes: BTreeSet<String>,
-        permitted_activity_types: BTreeSet<u16>,
+        restriction: session::ScopeRestriction,
         current_sequence: u64,
-        coordinate_key: TenantKey,
-        coordinate_bytes: Vec<u8>,
-        companion_key: TenantKey,
-        companion_bytes: Vec<u8>,
+        coordinate: (TenantKey, Vec<u8>),
+        companion: (TenantKey, Vec<u8>),
     ) -> Result<(Token, PreparationInvalidationReport), SessionControlError> {
+        let session_id = restriction.session_id;
         let mut registry = self
             .registry
             .write()
@@ -204,14 +216,9 @@ impl SessionControl {
             &mut store,
             &mut registry,
             tenant,
-            session_id,
-            replacement_token,
-            scopes,
-            permitted_activity_types,
-            coordinate_key,
-            coordinate_bytes,
-            companion_key,
-            companion_bytes,
+            restriction,
+            coordinate,
+            companion,
         )
         .map_err(SessionControlError::Session)?;
         let preparations = self.invalidate_preparations(
@@ -226,6 +233,10 @@ impl SessionControl {
 
     /// Human-admin restriction entry point. The replacement bearer is generated inside the
     /// daemon and the session record, managed-agent coordinate, and observation commit together.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if session authorization, durable state, or preparation invalidation fails.
     pub fn restrict_managed_agent(
         &self,
         tenant: &TenantId,
@@ -282,29 +293,8 @@ impl SessionControl {
             let preparations = self.retry_preparation_invalidations()?;
             return Ok((token, preparations, replay.response));
         }
-        let replacement_generation =
-            record
-                .generation
-                .checked_add(1)
-                .ok_or(SessionControlError::Session(
-                    SessionError::GenerationExhausted,
-                ))?;
-        let mut replacement_token = [0_u8; 32];
-        let mut available = false;
-        for _ in 0..8 {
-            getrandom::fill(&mut replacement_token)
-                .map_err(|_| SessionControlError::Unavailable)?;
-            if replacement_token != [0; 32]
-                && replacement_token != current_token
-                && !record.retired_token_ids.contains(&replacement_token)
-            {
-                available = true;
-                break;
-            }
-        }
-        if !available {
-            return Err(SessionControlError::Unavailable);
-        }
+        let (replacement_generation, replacement_token) =
+            replacement_bearer(&record, current_token)?;
         let (
             response,
             coordinate_key,
@@ -317,27 +307,30 @@ impl SessionControl {
             &store,
             tenant,
             agent_id,
-            session_id.0,
-            current_token,
-            coordinate_generation,
-            replacement_token,
-            action_key,
-            replacement_generation,
-            current_sequence,
-            &scopes,
-            &permitted_activity_types,
+            (
+                session_id.0,
+                current_token,
+                coordinate_generation,
+                replacement_token,
+                action_key,
+                replacement_generation,
+                current_sequence,
+                &scopes,
+                &permitted_activity_types,
+            ),
         )
         .map_err(SessionControlError::Human)?;
         let token = session::restrict_scope_with_companions(
             &mut store,
             &mut registry,
             tenant,
-            session_id,
-            replacement_token,
-            scopes,
-            permitted_activity_types,
-            coordinate_key,
-            coordinate_bytes,
+            session::ScopeRestriction {
+                session_id,
+                token_id: replacement_token,
+                scopes,
+                permitted_activity_types,
+            },
+            (coordinate_key, coordinate_bytes),
             vec![(companion_key, companion_bytes), (ledger_key, ledger_bytes)],
         )
         .map_err(SessionControlError::Session)?;
@@ -353,6 +346,10 @@ impl SessionControl {
 
     /// Commits a separately verified finalized authority revocation as one short ordered batch.
     /// The opaque value can only be produced by managed-agent receipt/evidence validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if session authorization, durable state, or preparation invalidation fails.
     pub fn invalidate_finalized(
         &self,
         finalized: &managed_agent::ValidatedAuthorityRevocation,
@@ -397,6 +394,10 @@ impl SessionControl {
 
     /// Retries exact-generation preparation cleanup. Authorization of those preparations never
     /// depends on cleanup succeeding: every transition still requires a current exact permit.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if session authorization, durable state, or preparation invalidation fails.
     pub fn retry_preparation_invalidations(
         &self,
     ) -> Result<PreparationInvalidationReport, SessionControlError> {
@@ -474,6 +475,10 @@ impl OperationPermit {
         }
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if session authorization, durable state, or preparation invalidation fails.
     pub fn register_preparation(
         &self,
         control: &SessionControl,
@@ -498,6 +503,10 @@ impl OperationPermit {
             .map_err(SessionControlError::Lifecycle)
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if session authorization, durable state, or preparation invalidation fails.
     pub fn transition_preparation(
         &self,
         control: &SessionControl,
@@ -536,6 +545,10 @@ impl OperationPermit {
             .map_err(SessionControlError::Lifecycle)
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if session authorization, durable state, or preparation invalidation fails.
     pub fn admit_submission(
         &self,
         control: &SessionControl,
@@ -558,6 +571,10 @@ impl OperationPermit {
             .map_err(SessionControlError::Lifecycle)
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if session authorization, durable state, or preparation invalidation fails.
     pub fn retain_signed_bytes(
         &self,
         control: &SessionControl,
@@ -594,6 +611,10 @@ impl OperationPermit {
 
     /// Re-resolves at a non-mutating boundary. A result computed outside the registry lock must
     /// not be released unless this succeeds afterwards.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if session authorization, durable state, or preparation invalidation fails.
     pub fn boundary(&self, control: &SessionControl) -> Result<(), SessionControlError> {
         let registry = control
             .registry
@@ -606,6 +627,10 @@ impl OperationPermit {
     /// side-effect-free I/O may occur before this method, but transmission, durable approval, or
     /// any other externally visible commit must occur inside it or behind a stop-aware two-phase
     /// boundary that calls it for the actual commit.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if session authorization, durable state, or preparation invalidation fails.
     pub fn commit<T>(
         &self,
         control: &SessionControl,
@@ -647,4 +672,33 @@ pub enum SessionControlError {
     Lifecycle(LifecycleError),
     Human(HumanOperationError),
     Unavailable,
+}
+
+fn replacement_bearer(
+    record: &session::SessionRecord,
+    current_token: [u8; 32],
+) -> Result<(u64, [u8; 32]), SessionControlError> {
+    let replacement_generation =
+        record
+            .generation
+            .checked_add(1)
+            .ok_or(SessionControlError::Session(
+                SessionError::GenerationExhausted,
+            ))?;
+    let mut replacement_token = [0_u8; 32];
+    let mut available = false;
+    for _ in 0..8 {
+        getrandom::fill(&mut replacement_token).map_err(|_| SessionControlError::Unavailable)?;
+        if replacement_token != [0; 32]
+            && replacement_token != current_token
+            && !record.retired_token_ids.contains(&replacement_token)
+        {
+            available = true;
+            break;
+        }
+    }
+    if !available {
+        return Err(SessionControlError::Unavailable);
+    }
+    Ok((replacement_generation, replacement_token))
 }

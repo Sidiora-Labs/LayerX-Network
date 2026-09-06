@@ -10,7 +10,7 @@ pub mod subscription;
 
 pub use delivery::{
     BackfillTransition, DeliveredEvent, DeliveryEngine, DeliveryError, DeliveryHealth,
-    DeliveryItem, DeliveryPhase, PumpReport, RetryPlan, RetryPolicy,
+    DeliveryItem, DeliveryPhase, DeliverySettings, PumpReport, RetryPlan, RetryPolicy,
     CONSUMER_DEDUPLICATION_OBLIGATION,
 };
 pub use ingestion::{CoreEvent, EventAttributes, EventIngestor, IngestError, Watermark};
@@ -54,6 +54,10 @@ pub fn backfill(engine: &mut DeliveryEngine) -> Result<PumpReport, DeliveryError
 }
 
 /// Loads durable history only after reauthorizing the exact bound session generation.
+///
+/// # Errors
+///
+/// Returns an error if authorization, subscription state, or delivery processing fails.
 pub fn backfill_authorized(
     engine: &mut DeliveryEngine,
     sessions: &crate::session::SessionRegistry,
@@ -82,6 +86,10 @@ pub fn deliver(engine: &mut DeliveryEngine) -> Result<Option<DeliveryItem>, Deli
 }
 
 /// Returns a delivery attempt only after reauthorizing the exact bound session generation.
+///
+/// # Errors
+///
+/// Returns an error if authorization, subscription state, or delivery processing fails.
 pub fn deliver_authorized(
     engine: &mut DeliveryEngine,
     sessions: &crate::session::SessionRegistry,
@@ -98,12 +106,20 @@ pub fn deliver_authorized(
 }
 
 /// Returns complete health for an intentionally unbound delivery engine.
+///
+/// # Errors
+///
+/// Returns an error if authorization, subscription state, or delivery processing fails.
 pub fn health(engine: &DeliveryEngine) -> Result<DeliveryHealth, DeliveryError> {
     engine.require_unbound()?;
     Ok(engine.health_snapshot().clone())
 }
 
 /// Returns complete subscription delivery health after reauthorizing the exact bound session.
+///
+/// # Errors
+///
+/// Returns an error if authorization, subscription state, or delivery processing fails.
 pub fn health_authorized(
     engine: &mut DeliveryEngine,
     sessions: &crate::session::SessionRegistry,

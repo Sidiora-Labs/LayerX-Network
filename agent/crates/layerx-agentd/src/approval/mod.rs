@@ -121,7 +121,13 @@ impl ApprovalSubmissionQueue {
     ) -> Result<bool, ApprovalOperationError> {
         let identity = idempotency_key
             .iter()
-            .map(|byte| format!("{byte:02x}"))
+            .flat_map(|byte| {
+                let digits = b"0123456789abcdef";
+                [
+                    char::from(digits[usize::from(byte >> 4)]),
+                    char::from(digits[usize::from(byte & 15)]),
+                ]
+            })
             .collect::<String>();
         let mut queued = self
             .queued
@@ -399,14 +405,7 @@ impl<'a> ApprovalService<'a> {
             .registry
             .get_scoped(tenant, approval_id, current_sequence)
             .map_err(ApprovalOperationError::Registry)?;
-        let digest = canonical_digest(snapshot.prepared.unsigned_canonical_bytes.as_bytes());
-        let intended = if current_prepared != &snapshot.prepared
-            || digest != snapshot.prepared.disclosure.canonical_digest
-        {
-            ApprovalOutcome::Defective
-        } else {
-            ApprovalOutcome::Granted
-        };
+        let intended = approval_intent(current_prepared, &snapshot.prepared);
         let submission_ref = (intended == ApprovalOutcome::Granted)
             .then(|| ApprovalSubmissionQueue::reference(tenant, approval_id, &snapshot.prepared));
         let decision_record = match self
@@ -631,4 +630,13 @@ fn canonical_digest(bytes: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     hasher.finalize().into()
+}
+
+fn approval_intent(current_prepared: &Prepared, held: &Prepared) -> ApprovalOutcome {
+    let digest = canonical_digest(held.unsigned_canonical_bytes.as_bytes());
+    if current_prepared != held || digest != held.disclosure.canonical_digest {
+        ApprovalOutcome::Defective
+    } else {
+        ApprovalOutcome::Granted
+    }
 }

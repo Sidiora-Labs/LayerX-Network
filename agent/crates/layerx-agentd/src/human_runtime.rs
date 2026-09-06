@@ -51,40 +51,48 @@ use crate::store::{key, ObjectKind, StorageClass, Store, TenantId, TenantKey};
 
 const MAX_RESPONSE: usize = 1_048_576;
 
+pub type BalanceContext = (
+    [u8; 32],
+    [u8; 32],
+    String,
+    String,
+    u64,
+    u64,
+    SequencerAuthorization,
+);
+
 /// Independently authenticated authority data. Implementations must obtain
 /// these values from the configured authority peer; no local/static authority
 /// is accepted by this operation owner.
 pub trait HumanAuthorityBoundary {
+    /// # Errors
+    /// Returns an error when the request is invalid, authority is refused, or required state is unavailable.
     fn registry(&self, peer: &HumanPeer) -> Result<ModuleRegistry, CoreStateError>;
+    /// # Errors
+    /// Returns an error when the request is invalid, authority is refused, or required state is unavailable.
     fn authorized_batch(
         &mut self,
         peer: &HumanPeer,
         expected_activity: [u8; 32],
     ) -> Result<AuthorizedBatch, HumanOperationError>;
-    fn balance_context(
-        &mut self,
-        peer: &HumanPeer,
-    ) -> Result<
-        (
-            [u8; 32],
-            [u8; 32],
-            String,
-            String,
-            u64,
-            u64,
-            SequencerAuthorization,
-        ),
-        HumanOperationError,
-    >;
+    /// # Errors
+    /// Returns an error when the request is invalid, authority is refused, or required state is unavailable.
+    fn balance_context(&mut self, peer: &HumanPeer) -> Result<BalanceContext, HumanOperationError>;
+    /// # Errors
+    /// Returns an error when the request is invalid, authority is refused, or required state is unavailable.
     fn core_identity(
         &mut self,
         peer: &HumanPeer,
         agent: &Did,
     ) -> Result<CoreIdentity, IdentityError>;
+    /// # Errors
+    /// Returns an error when the request is invalid, authority is refused, or required state is unavailable.
     fn lease_attestation(
         &mut self,
         peer: &HumanPeer,
     ) -> Result<CoreLeaseAttestation, HumanOperationError>;
+    /// # Errors
+    /// Returns an error when the request is invalid, authority is refused, or required state is unavailable.
     fn capability_scope(
         &mut self,
         peer: &HumanPeer,
@@ -93,11 +101,15 @@ pub trait HumanAuthorityBoundary {
         action_key: [u8; 32],
         capability_id: [u8; 32],
     ) -> Result<CoreCapabilityScope, HumanOperationError>;
+    /// # Errors
+    /// Returns an error when the request is invalid, authority is refused, or required state is unavailable.
     fn budget_state(
         &mut self,
         peer: &HumanPeer,
         active_budget_id: [u8; 32],
     ) -> Result<CoreBudgetState, HumanOperationError>;
+    /// # Errors
+    /// Returns an error when the request is invalid, authority is refused, or required state is unavailable.
     fn key_rotation_policy(
         &mut self,
         peer: &HumanPeer,
@@ -211,6 +223,8 @@ pub struct RemoteHumanAuthority {
 }
 
 impl RemoteHumanAuthority {
+    /// # Errors
+    /// Returns an error when the request is invalid, authority is refused, or required state is unavailable.
     pub fn connect(
         endpoint: &str,
         bearer: String,
@@ -667,6 +681,8 @@ pub struct UnifiedAgentOwner<A> {
 }
 
 impl<A: HumanAuthorityBoundary> UnifiedAgentOwner<A> {
+    /// # Errors
+    /// Returns an error when the request is invalid, authority is refused, or required state is unavailable.
     pub fn new(
         mut operations: ProductionHumanOperations<A>,
         shared_store: Arc<Mutex<Store>>,
@@ -1017,7 +1033,7 @@ impl<A: HumanAuthorityBoundary> HumanOperations for UnifiedAgentOwner<A> {
             .lock_operations()?
             .authority
             .core_identity(peer, &did)
-            .map_err(map_identity_operation)?;
+            .map_err(|error| map_identity_operation(&error))?;
         encode_identity(&identity)
     }
     fn lease_map(
@@ -1055,31 +1071,7 @@ impl<A: HumanAuthorityBoundary> HumanOperations for UnifiedAgentOwner<A> {
         let tenant =
             TenantId::new(peer.tenant.clone()).map_err(|_| HumanOperationError::Refused)?;
         let action = owner_action_key(&tenant, request.key)?;
-        let replay = {
-            let mut store = self
-                .store
-                .lock()
-                .map_err(|_| HumanOperationError::Unavailable)?;
-            match store.get(&action) {
-                Some(value) => Some(
-                    if pending_owner_action(value.bytes(), request.body_digest) {
-                        OwnerAction::Pending
-                    } else {
-                        decode_owner_action(value.bytes(), request.body_digest)?
-                    },
-                ),
-                None => {
-                    let mut pending = Vec::with_capacity(34);
-                    pending.push(1);
-                    pending.push(0);
-                    pending.extend_from_slice(&request.body_digest);
-                    store
-                        .put_local(action.clone(), pending)
-                        .map_err(|_| HumanOperationError::Unavailable)?;
-                    None
-                }
-            }
-        };
+        let replay = self.owner_replay(&action, request.body_digest)?;
         let (validated, allocated_token_id) = match replay {
             Some(OwnerAction::Completed(response)) => return Ok(response),
             Some(OwnerAction::Validated(value, Some(token_id))) => (value, token_id),
@@ -1109,114 +1101,7 @@ impl<A: HumanAuthorityBoundary> HumanOperations for UnifiedAgentOwner<A> {
                 }
             }
         };
-        let did = Did::new(request.operation.agent.as_bytes())
-            .map_err(|_| HumanOperationError::Refused)?;
-        let installed_agent = request.operation.agent.clone();
-        let lifecycle = request.operation.lifecycle.clone();
-        let mut resolver = FixedIdentity(validated.0.clone());
-        let mut sessions = self
-            .sessions
-            .write()
-            .map_err(|_| HumanOperationError::Unavailable)?;
-        let mut store = self
-            .store
-            .lock()
-            .map_err(|_| HumanOperationError::Unavailable)?;
-        let identity = identity::register(&mut store, tenant.clone(), did.clone(), &mut resolver)
-            .map_err(map_identity_operation)?;
-        let issued = validate_issued_session(
-            &request.operation.registration_payload,
-            request.operation.grantor,
-            request.operation.session_public_key,
-            request.operation.grant_not_before,
-            request.operation.grant_expires_at,
-            request.operation.grant_revocation_sequence,
-            &request.operation.permitted_activity_types,
-        )
-        .map_err(|_| HumanOperationError::Refused)?;
-        match self.session_keys.provision(
-            request.operation.authority_id,
-            request
-                .operation
-                .session_secret
-                .as_ref()
-                .ok_or(HumanOperationError::Refused)?
-                .as_seed(),
-            issued.clone(),
-        ) {
-            Ok(()) => {}
-            Err(crate::session_keys::SessionKeyRegistryError::Exists) => {
-                let signer = self
-                    .session_keys
-                    .load(request.operation.authority_id, issued)
-                    .map_err(|_| HumanOperationError::Refused)?;
-                drop(signer)
-            }
-            Err(_) => return Err(HumanOperationError::Unavailable),
-        }
-        let open_request = OpenRequest {
-            session_id: SessionId(request.operation.session_id),
-            token_id: allocated_token_id,
-            tenant: tenant.clone(),
-            agent: did,
-            authority: owner_authority(&request.operation)?,
-            permitted_activity_types: request
-                .operation
-                .permitted_activity_types
-                .iter()
-                .copied()
-                .collect(),
-            scopes: request.operation.scopes.iter().cloned().collect(),
-            expiry_sequence: validated.1,
-            opening_client: request.operation.opening_client,
-            policy_version: request.operation.policy_version,
-        };
-        if let Some(existing) = sessions.get(&tenant, open_request.session_id) {
-            if !existing.open || existing.request != open_request {
-                return Err(HumanOperationError::Refused);
-            }
-        } else {
-            session::open(
-                &mut store,
-                &mut sessions,
-                &identity,
-                open_request,
-                validated.2,
-            )
-            .map_err(|_| HumanOperationError::Refused)?;
-        }
-        let installed_generation = sessions
-            .generation(&tenant, SessionId(request.operation.session_id))
-            .ok_or(HumanOperationError::Unavailable)?;
-        if let Some(seed) = lifecycle.as_ref() {
-            managed_agent::publish_creation(
-                &mut store,
-                &tenant,
-                ManagedAgent::from_creation(
-                    seed,
-                    &installed_agent,
-                    request.operation.session_id,
-                    allocated_token_id,
-                    installed_generation,
-                )?,
-            )?;
-        }
-        let mut out = Encoder::new();
-        out.fixed(&allocated_token_id);
-        out.fixed(&request.operation.session_id);
-        out.u64(installed_generation);
-        out.u64(validated.1);
-        out.u64(validated.2);
-        let response = out.finish()?;
-        let mut completed = Vec::with_capacity(34 + response.bytes().len());
-        completed.push(1);
-        completed.push(2);
-        completed.extend_from_slice(&request.body_digest);
-        completed.extend_from_slice(response.bytes());
-        store
-            .put_local(action, completed)
-            .map_err(|_| HumanOperationError::Unavailable)?;
-        Ok(response)
+        self.install_owner_session(&tenant, action, request, &validated, allocated_token_id)
     }
     fn agent_list(
         &mut self,
@@ -1328,9 +1213,7 @@ impl<A: HumanAuthorityBoundary> HumanOperations for UnifiedAgentOwner<A> {
                     &store,
                     &tenant,
                     agent_id,
-                    kind,
-                    delay,
-                    ready,
+                    (kind, delay, ready),
                     pre_observation,
                     post_observation,
                     evidence,
@@ -1353,11 +1236,7 @@ impl<A: HumanAuthorityBoundary> HumanOperations for UnifiedAgentOwner<A> {
             &mut store,
             &tenant,
             agent_id,
-            kind,
-            amount,
-            &currency,
-            delay,
-            ready,
+            (kind, amount, &currency, delay, ready),
             pre_observation,
             post_observation,
             evidence,
@@ -1368,9 +1247,7 @@ impl<A: HumanAuthorityBoundary> HumanOperations for UnifiedAgentOwner<A> {
         peer: &HumanPeer,
         agent_id: &str,
         confirm_name: &str,
-        pre_observation: [u8; 32],
-        post_observation: [u8; 32],
-        session_observation: [u8; 32],
+        (pre_observation, post_observation, session_observation): ([u8; 32], [u8; 32], [u8; 32]),
         evidence: HumanFinalizationEvidence,
     ) -> Result<HumanResponse, HumanOperationError> {
         let tenant =
@@ -1384,9 +1261,7 @@ impl<A: HumanAuthorityBoundary> HumanOperations for UnifiedAgentOwner<A> {
             &tenant,
             agent_id,
             confirm_name,
-            pre_observation,
-            post_observation,
-            session_observation,
+            (pre_observation, post_observation, session_observation),
             evidence.into(),
         )
     }
@@ -1399,7 +1274,7 @@ impl<A: HumanAuthorityBoundary> HumanOperations for UnifiedAgentOwner<A> {
             &mut self.lock_operations()?.authority,
             &self.store,
             peer,
-            request,
+            &request,
         )
     }
     fn agent_lifecycle_publish(
@@ -1452,7 +1327,7 @@ impl<A: HumanAuthorityBoundary> HumanOperations for UnifiedAgentOwner<A> {
             return HumanResponse::new(vec![1]).map_err(|_| HumanOperationError::Refused);
         }
         managed_agent::publish_creation_with_companion(
-            &mut store, &tenant, agent, companion, completed,
+            &mut store, &tenant, &agent, companion, completed,
         )?;
         HumanResponse::new(vec![1]).map_err(|_| HumanOperationError::Refused)
     }
@@ -1661,21 +1536,17 @@ impl<A: HumanAuthorityBoundary> HumanOperations for UnifiedAgentOwner<A> {
         if token.tenant() != &tenant || token.agent() != &agent {
             return Err(HumanOperationError::Refused);
         }
-        let authority = match sessions
+        let Some(ProtocolAuthority::SessionKey(authority)) = sessions
             .get(&tenant, SessionId(session_id))
             .map(|record| record.request.authority.clone())
-        {
-            Some(ProtocolAuthority::SessionKey(id)) => id,
-            _ => return Err(HumanOperationError::Refused),
+        else {
+            return Err(HumanOperationError::Refused);
         };
         managed_agent::bind_session(
             &mut store,
             &tenant,
             agent_id,
-            session_id,
-            token_id,
-            token.generation(),
-            authority,
+            (session_id, token_id, token.generation(), authority),
             action_key,
         )
     }
@@ -1760,15 +1631,15 @@ fn encode_owner_validated(
         match authority {
             ProtocolAuthority::PrimaryKey(id) => {
                 out.u8(1);
-                out.fixed(id)
+                out.fixed(id);
             }
             ProtocolAuthority::SessionKey(id) => {
                 out.u8(2);
-                out.fixed(id)
+                out.fixed(id);
             }
             ProtocolAuthority::CapabilityGrant(id) => {
                 out.u8(3);
-                out.fixed(id)
+                out.fixed(id);
             }
         }
     }
@@ -1817,7 +1688,7 @@ fn decode_owner_action(bytes: &[u8], body: [u8; 32]) -> Result<OwnerAction, Huma
             2 => ProtocolAuthority::SessionKey(id),
             3 => ProtocolAuthority::CapabilityGrant(id),
             _ => return Err(HumanOperationError::Refused),
-        })
+        });
     }
     let canonical_bytes = input.bytes()?;
     let expiry = input.u64()?;
@@ -1905,6 +1776,157 @@ fn rank(value: u8) -> Result<VerificationLevel, HumanOperationError> {
 }
 
 impl<A: HumanAuthorityBoundary> UnifiedAgentOwner<A> {
+    fn owner_replay(
+        &self,
+        action: &TenantKey,
+        body_digest: [u8; 32],
+    ) -> Result<Option<OwnerAction>, HumanOperationError> {
+        Ok({
+            let mut store = self
+                .store
+                .lock()
+                .map_err(|_| HumanOperationError::Unavailable)?;
+            if let Some(value) = store.get(action) {
+                Some(if pending_owner_action(value.bytes(), body_digest) {
+                    OwnerAction::Pending
+                } else {
+                    decode_owner_action(value.bytes(), body_digest)?
+                })
+            } else {
+                let mut pending = Vec::with_capacity(34);
+                pending.push(1);
+                pending.push(0);
+                pending.extend_from_slice(&body_digest);
+                store
+                    .put_local(action.clone(), pending)
+                    .map_err(|_| HumanOperationError::Unavailable)?;
+                None
+            }
+        })
+    }
+    fn provision_owner_session(
+        &self,
+        request: &HumanOwnerInstall,
+    ) -> Result<(), HumanOperationError> {
+        let issued = validate_issued_session(
+            &request.registration_payload,
+            request.grantor,
+            request.session_public_key,
+            request.grant_not_before,
+            request.grant_expires_at,
+            request.grant_revocation_sequence,
+            &request.permitted_activity_types,
+        )
+        .map_err(|_| HumanOperationError::Refused)?;
+        match self.session_keys.provision(
+            request.authority_id,
+            request
+                .session_secret
+                .as_ref()
+                .ok_or(HumanOperationError::Refused)?
+                .as_seed(),
+            &issued,
+        ) {
+            Ok(()) => {}
+            Err(crate::session_keys::SessionKeyRegistryError::Exists) => {
+                let signer = self
+                    .session_keys
+                    .load(request.authority_id, issued)
+                    .map_err(|_| HumanOperationError::Refused)?;
+                drop(signer);
+            }
+            Err(_) => return Err(HumanOperationError::Unavailable),
+        }
+        Ok(())
+    }
+    fn install_owner_session(
+        &mut self,
+        tenant: &TenantId,
+        action: TenantKey,
+        request: MutationEnvelope<HumanOwnerInstall>,
+        validated: &(CoreIdentity, u64, u64),
+        allocated_token_id: [u8; 32],
+    ) -> Result<HumanResponse, HumanOperationError> {
+        let did = Did::new(request.operation.agent.as_bytes())
+            .map_err(|_| HumanOperationError::Refused)?;
+        let installed_agent = request.operation.agent.clone();
+        let lifecycle = request.operation.lifecycle.clone();
+        let mut resolver = FixedIdentity(validated.0.clone());
+        let mut sessions = self
+            .sessions
+            .write()
+            .map_err(|_| HumanOperationError::Unavailable)?;
+        let mut store = self
+            .store
+            .lock()
+            .map_err(|_| HumanOperationError::Unavailable)?;
+        let identity = identity::register(&mut store, tenant.clone(), did.clone(), &mut resolver)
+            .map_err(|error| map_identity_operation(&error))?;
+        self.provision_owner_session(&request.operation)?;
+        let open_request = OpenRequest {
+            session_id: SessionId(request.operation.session_id),
+            token_id: allocated_token_id,
+            tenant: tenant.clone(),
+            agent: did,
+            authority: owner_authority(&request.operation)?,
+            permitted_activity_types: request
+                .operation
+                .permitted_activity_types
+                .iter()
+                .copied()
+                .collect(),
+            scopes: request.operation.scopes.iter().cloned().collect(),
+            expiry_sequence: validated.1,
+            opening_client: request.operation.opening_client,
+            policy_version: request.operation.policy_version,
+        };
+        if let Some(existing) = sessions.get(tenant, open_request.session_id) {
+            if !existing.open || existing.request != open_request {
+                return Err(HumanOperationError::Refused);
+            }
+        } else {
+            session::open(
+                &mut store,
+                &mut sessions,
+                &identity,
+                open_request,
+                validated.2,
+            )
+            .map_err(|_| HumanOperationError::Refused)?;
+        }
+        let installed_generation = sessions
+            .generation(tenant, SessionId(request.operation.session_id))
+            .ok_or(HumanOperationError::Unavailable)?;
+        if let Some(seed) = lifecycle.as_ref() {
+            managed_agent::publish_creation(
+                &mut store,
+                tenant,
+                &ManagedAgent::from_creation(
+                    seed,
+                    &installed_agent,
+                    request.operation.session_id,
+                    allocated_token_id,
+                    installed_generation,
+                )?,
+            )?;
+        }
+        let mut out = Encoder::new();
+        out.fixed(&allocated_token_id);
+        out.fixed(&request.operation.session_id);
+        out.u64(installed_generation);
+        out.u64(validated.1);
+        out.u64(validated.2);
+        let response = out.finish()?;
+        let mut completed = Vec::with_capacity(34 + response.bytes().len());
+        completed.push(1);
+        completed.push(2);
+        completed.extend_from_slice(&request.body_digest);
+        completed.extend_from_slice(response.bytes());
+        store
+            .put_local(action, completed)
+            .map_err(|_| HumanOperationError::Unavailable)?;
+        Ok(response)
+    }
     fn persist_owner_validation(
         &self,
         tenant: &TenantId,
@@ -2025,7 +2047,7 @@ impl<A: HumanAuthorityBoundary> UnifiedAgentOwner<A> {
             .lock_operations()?
             .authority
             .core_identity(peer, &did)
-            .map_err(map_identity_operation)?;
+            .map_err(|error| map_identity_operation(&error))?;
         if identity.frozen
             || identity.head_sequence == 0
             || identity.revocation_sequence != request.grant_revocation_sequence
@@ -2051,7 +2073,7 @@ fn install_capability<A: HumanAuthorityBoundary>(
     authority: &mut A,
     shared_store: &Arc<Mutex<Store>>,
     peer: &HumanPeer,
-    request: HumanCapabilityInstall,
+    request: &HumanCapabilityInstall,
 ) -> Result<HumanResponse, HumanOperationError> {
     if request.action_key == [0; 32]
         || request.capability_id == [0; 32]
@@ -2070,7 +2092,7 @@ fn install_capability<A: HumanAuthorityBoundary>(
     let tenant = TenantId::new(peer.tenant.clone()).map_err(|_| HumanOperationError::Refused)?;
     let did = Did::new(request.agent.as_bytes()).map_err(|_| HumanOperationError::Refused)?;
     let replay_key = capability_action_key(&tenant, request.action_key)?;
-    let request_digest = capability_request_digest(&request);
+    let request_digest = capability_request_digest(request);
     {
         let store = shared_store
             .lock()
@@ -2094,64 +2116,7 @@ fn install_capability<A: HumanAuthorityBoundary>(
             .put_local(replay_key.clone(), pending)
             .map_err(|_| HumanOperationError::Unavailable)?;
     }
-    let identity = authority
-        .core_identity(peer, &did)
-        .map_err(map_identity_operation)?;
-    if identity.frozen
-        || identity.verification_level == VerificationLevel::UNVERIFIED
-        || !identity
-            .authorities
-            .contains(&ProtocolAuthority::PrimaryKey(request.authority_id))
-    {
-        return Err(HumanOperationError::Refused);
-    }
-    let observed = authority.capability_scope(
-        peer,
-        &did,
-        request.authority_id,
-        request.action_key,
-        request.capability_id,
-    )?;
-    if observed.observed_sequence == 0
-        || observed.verification < 4
-        || observed.verification > 5
-        || observed.evidence_digest == [0; 32]
-        || request.expiry_sequence <= observed.observed_sequence
-    {
-        return Err(HumanOperationError::Refused);
-    }
-    let capability = Capability::new(
-        CapabilityId(request.capability_id),
-        tenant.clone(),
-        CapabilityDimensions {
-            activity_types: request.activity_types.iter().copied().collect(),
-            counterparties: request.counterparties.iter().copied().collect(),
-            assets: request.assets.iter().copied().collect(),
-            amount_ceiling: request.amount_ceiling,
-            rate_ceiling: RateCeiling {
-                maximum_uses: request.rate_maximum_uses,
-                window_sequences: request.rate_window_sequences,
-            },
-            purposes: request.purposes.iter().cloned().collect(),
-            expiry_sequence: request.expiry_sequence,
-        },
-    )
-    .map_err(|_| HumanOperationError::Refused)?;
-    assert_narrowing(
-        &capability,
-        ProtocolAuthority::PrimaryKey(request.authority_id),
-        &observed.scope,
-    )
-    .map_err(|_| HumanOperationError::Refused)?;
-    let expected = agent_evidence_digest(
-        request.action_key,
-        request.capability_id,
-        observed.observed_sequence,
-        observed.verification,
-    );
-    if observed.evidence_digest != expected {
-        return Err(HumanOperationError::Refused);
-    }
+    let (capability, observed) = validate_capability(authority, peer, &tenant, &did, request)?;
     let mut store = shared_store
         .lock()
         .map_err(|_| HumanOperationError::Unavailable)?;
@@ -2292,6 +2257,88 @@ fn agent_evidence_digest(
 }
 
 impl<A: HumanAuthorityBoundary> ProductionHumanOperations<A> {
+    fn augment_receipt_evidence(
+        &mut self,
+        peer: &HumanPeer,
+        idempotency_key: [u8; 32],
+        expected_activity_id: [u8; 32],
+        receipt_bytes: &[u8],
+        tenant: TenantId,
+        mut served: crate::receipt::ServedReceipt,
+    ) -> Result<crate::receipt::ServedReceipt, HumanOperationError> {
+        let registry = self.authority.registry(peer).map_err(map_core)?;
+        let correlation = u64::from_be_bytes(
+            idempotency_key[..8]
+                .try_into()
+                .map_err(|_| HumanOperationError::Refused)?,
+        ) | 1;
+        let activity_evidence = self.node.proof_bundle(
+            ProofBundleSelector::Activity(expected_activity_id),
+            correlation,
+            &registry,
+        );
+        let receipt_evidence = self.node.proof_bundle(
+            ProofBundleSelector::Receipt(expected_activity_id),
+            correlation
+                .checked_add(1)
+                .ok_or(HumanOperationError::Refused)?,
+            &registry,
+        );
+        match (activity_evidence, receipt_evidence) {
+            (Ok(activity_evidence), Ok(receipt_evidence)) => {
+                if activity_evidence.canonical_bytes()
+                    != self
+                        .outbox
+                        .exact_signed_bytes(idempotency_key)
+                        .map_err(|_| HumanOperationError::Refused)?
+                    || receipt_evidence.canonical_bytes() != receipt_bytes
+                {
+                    return Err(HumanOperationError::Refused);
+                }
+                let evidence_batch = activity_evidence
+                    .signed_header()
+                    .batch_number()
+                    .map_err(|_| HumanOperationError::Refused)?;
+                let checkpoint = match self.node.checkpoint_evidence(
+                    CheckpointSelector::Batch(evidence_batch),
+                    correlation
+                        .checked_add(2)
+                        .ok_or(HumanOperationError::Refused)?,
+                ) {
+                    Ok(checkpoint) => Some(checkpoint),
+                    Err(error) if evidence_unavailable(&error) => None,
+                    Err(_) => return Err(HumanOperationError::Refused),
+                };
+                {
+                    let mut store = self
+                        .store
+                        .lock()
+                        .map_err(|_| HumanOperationError::Unavailable)?;
+                    crate::finality::augment_verified(
+                        &mut store,
+                        tenant.clone(),
+                        idempotency_key,
+                        &activity_evidence,
+                        &receipt_evidence,
+                        checkpoint.as_ref(),
+                    )
+                    .map_err(|_| HumanOperationError::Refused)?;
+                    served = crate::receipt::serve(
+                        &store,
+                        tenant,
+                        crate::receipt::ReceiptLookupKey::Idempotency(idempotency_key),
+                    )
+                    .map_err(|_| HumanOperationError::Unavailable)?;
+                }
+            }
+            (Err(error), _) | (_, Err(error)) if evidence_unavailable(&error) => {}
+            (Err(_), _) | (_, Err(_)) => return Err(HumanOperationError::Refused),
+        }
+        Ok(served)
+    }
+
+    /// # Errors
+    /// Returns an error when the request is invalid, authority is refused, or required state is unavailable.
     pub fn new(
         authority: A,
         node: Client,
@@ -2448,11 +2495,11 @@ impl<A: HumanAuthorityBoundary> ProductionHumanOperations<A> {
 }
 
 impl<A: HumanAuthorityBoundary> HumanOperations for ProductionHumanOperations<A> {
-    fn registry(&self, _peer: &HumanPeer) -> Result<HumanResponse, HumanOperationError> {
+    fn registry(&self, peer: &HumanPeer) -> Result<HumanResponse, HumanOperationError> {
         // Mutable authenticated authority access is intentionally required; the
         // listener calls prepare first in normal operation. A readiness owner
         // must probe authority before accepting the socket.
-        Self::registry_response(&self.authority.registry(_peer).map_err(map_core)?)
+        Self::registry_response(&self.authority.registry(peer).map_err(map_core)?)
     }
 
     fn account_sequence(
@@ -2643,7 +2690,7 @@ impl<A: HumanAuthorityBoundary> HumanOperations for ProductionHumanOperations<A>
             .bytes_for_transmission(submission_id)
             .map_err(|_| HumanOperationError::Unavailable)?
             .to_vec();
-        match self.node.submit_signed(
+        let (state, reason) = match self.node.submit_signed(
             &cached.registry,
             request.operation.signer_public_key,
             request.request_id,
@@ -2651,39 +2698,19 @@ impl<A: HumanAuthorityBoundary> HumanOperations for ProductionHumanOperations<A>
             &bytes,
         ) {
             Ok(Submission::Acknowledged(_)) => {
-                self.outbox
-                    .transition(
-                        &mut store,
-                        submission_id,
-                        SubmissionState::Acknowledged,
-                        "core admission acknowledged",
-                        None,
-                    )
-                    .map_err(|_| HumanOperationError::Unavailable)?;
+                (SubmissionState::Acknowledged, "core admission acknowledged")
             }
             Ok(Submission::Unknown(_)) => {
-                self.outbox
-                    .transition(
-                        &mut store,
-                        submission_id,
-                        SubmissionState::Unknown,
-                        "submission outcome indeterminate",
-                        None,
-                    )
-                    .map_err(|_| HumanOperationError::Unavailable)?;
+                (SubmissionState::Unknown, "submission outcome indeterminate")
             }
-            Err(_) => {
-                self.outbox
-                    .transition(
-                        &mut store,
-                        submission_id,
-                        SubmissionState::Unknown,
-                        "node submission boundary unavailable after durable dispatch",
-                        None,
-                    )
-                    .map_err(|_| HumanOperationError::Unavailable)?;
-            }
-        }
+            Err(_) => (
+                SubmissionState::Unknown,
+                "node submission boundary unavailable after durable dispatch",
+            ),
+        };
+        self.outbox
+            .transition(&mut store, submission_id, state, reason, None)
+            .map_err(|_| HumanOperationError::Unavailable)?;
         Self::observation(
             self.outbox
                 .status(submission_id)
@@ -2784,74 +2811,14 @@ impl<A: HumanAuthorityBoundary> HumanOperations for ProductionHumanOperations<A>
                 {
                     return Err(HumanOperationError::Refused);
                 }
-                let registry = self.authority.registry(peer).map_err(map_core)?;
-                let correlation = u64::from_be_bytes(
-                    idempotency_key[..8]
-                        .try_into()
-                        .map_err(|_| HumanOperationError::Refused)?,
-                ) | 1;
-                let activity_evidence = self.node.proof_bundle(
-                    ProofBundleSelector::Activity(expected_activity_id),
-                    correlation,
-                    &registry,
-                );
-                let receipt_evidence = self.node.proof_bundle(
-                    ProofBundleSelector::Receipt(expected_activity_id),
-                    correlation
-                        .checked_add(1)
-                        .ok_or(HumanOperationError::Refused)?,
-                    &registry,
-                );
-                match (activity_evidence, receipt_evidence) {
-                    (Ok(activity_evidence), Ok(receipt_evidence)) => {
-                        if activity_evidence.canonical_bytes()
-                            != self
-                                .outbox
-                                .exact_signed_bytes(idempotency_key)
-                                .map_err(|_| HumanOperationError::Refused)?
-                            || receipt_evidence.canonical_bytes() != receipt.canonical_bytes()
-                        {
-                            return Err(HumanOperationError::Refused);
-                        }
-                        let evidence_batch = activity_evidence
-                            .signed_header()
-                            .batch_number()
-                            .map_err(|_| HumanOperationError::Refused)?;
-                        let checkpoint = match self.node.checkpoint_evidence(
-                            CheckpointSelector::Batch(evidence_batch),
-                            correlation
-                                .checked_add(2)
-                                .ok_or(HumanOperationError::Refused)?,
-                        ) {
-                            Ok(checkpoint) => Some(checkpoint),
-                            Err(error) if evidence_unavailable(&error) => None,
-                            Err(_) => return Err(HumanOperationError::Refused),
-                        };
-                        {
-                            let mut store = self
-                                .store
-                                .lock()
-                                .map_err(|_| HumanOperationError::Unavailable)?;
-                            crate::finality::augment_verified(
-                                &mut store,
-                                tenant.clone(),
-                                idempotency_key,
-                                &activity_evidence,
-                                &receipt_evidence,
-                                checkpoint.as_ref(),
-                            )
-                            .map_err(|_| HumanOperationError::Refused)?;
-                            served = crate::receipt::serve(
-                                &store,
-                                tenant,
-                                crate::receipt::ReceiptLookupKey::Idempotency(idempotency_key),
-                            )
-                            .map_err(|_| HumanOperationError::Unavailable)?;
-                        }
-                    }
-                    (Err(error), _) | (_, Err(error)) if evidence_unavailable(&error) => {}
-                    (Err(_), _) | (_, Err(_)) => return Err(HumanOperationError::Refused),
-                }
+                served = self.augment_receipt_evidence(
+                    peer,
+                    idempotency_key,
+                    expected_activity_id,
+                    receipt.canonical_bytes(),
+                    tenant,
+                    served,
+                )?;
                 self.last_verified_receipt = Some((
                     idempotency_key,
                     served.metadata.result.code.raw(),
@@ -2954,7 +2921,7 @@ impl<A: HumanAuthorityBoundary> HumanOperations for ProductionHumanOperations<A>
         peer: &HumanPeer,
         request: HumanCapabilityInstall,
     ) -> Result<HumanResponse, HumanOperationError> {
-        install_capability(&mut self.authority, &self.store, peer, request)
+        install_capability(&mut self.authority, &self.store, peer, &request)
     }
     fn agent_lifecycle_publish(
         &mut self,
@@ -3011,9 +2978,7 @@ impl<A: HumanAuthorityBoundary> HumanOperations for ProductionHumanOperations<A>
         _: &HumanPeer,
         _: &str,
         _: &str,
-        _: [u8; 32],
-        _: [u8; 32],
-        _: [u8; 32],
+        (_, _, _): ([u8; 32], [u8; 32], [u8; 32]),
         _: HumanFinalizationEvidence,
     ) -> Result<HumanResponse, HumanOperationError> {
         Err(HumanOperationError::Unavailable)
@@ -3130,11 +3095,11 @@ fn owner_digest(request: &HumanOwnerInstall) -> [u8; 32] {
     digest.update(request.grant_revocation_sequence.to_be_bytes());
     count(&mut digest, request.permitted_activity_types.len());
     for x in &request.permitted_activity_types {
-        digest.update(x.to_be_bytes())
+        digest.update(x.to_be_bytes());
     }
     count(&mut digest, request.scopes.len());
     for x in &request.scopes {
-        hash_text(&mut digest, x.as_bytes())
+        hash_text(&mut digest, x.as_bytes());
     }
     digest.update(request.lease_not_before_unix_ms.to_be_bytes());
     digest.update(request.lease_not_after_unix_ms.to_be_bytes());
@@ -3155,7 +3120,7 @@ fn owner_digest(request: &HumanOwnerInstall) -> [u8; 32] {
             digest.update(v.updated_at.to_be_bytes());
             count(&mut digest, v.verified_evidence.len());
             for x in &v.verified_evidence {
-                digest.update(x)
+                digest.update(x);
             }
             hash_text(&mut digest, v.actor.as_bytes());
             hash_text(&mut digest, v.primary_authority.as_bytes());
@@ -3170,27 +3135,27 @@ fn owner_digest(request: &HumanOwnerInstall) -> [u8; 32] {
             digest.update(v.capability_id);
             count(&mut digest, v.activity_types.len());
             for x in &v.activity_types {
-                digest.update(x.to_be_bytes())
+                digest.update(x.to_be_bytes());
             }
             count(&mut digest, v.counterparties.len());
             for x in &v.counterparties {
-                digest.update(x)
+                digest.update(x);
             }
             count(&mut digest, v.assets.len());
             for x in &v.assets {
-                digest.update(x)
+                digest.update(x);
             }
             digest.update(v.amount_ceiling.to_be_bytes());
             digest.update(v.rate_maximum_uses.to_be_bytes());
             digest.update(v.rate_window_sequences.to_be_bytes());
             count(&mut digest, v.purposes.len());
             for x in &v.purposes {
-                hash_text(&mut digest, x.as_bytes())
+                hash_text(&mut digest, x.as_bytes());
             }
             digest.update(v.capability_expiry_sequence.to_be_bytes());
             count(&mut digest, v.session_scopes.len());
             for x in &v.session_scopes {
-                hash_text(&mut digest, x.as_bytes())
+                hash_text(&mut digest, x.as_bytes());
             }
             digest.update(v.session_expiry_unix_seconds.to_be_bytes());
             digest.update(v.protocol_grant_id);
@@ -3200,14 +3165,14 @@ fn owner_digest(request: &HumanOwnerInstall) -> [u8; 32] {
             digest.update(v.network_id.to_be_bytes());
             count(&mut digest, v.creation_receipt_roots.len());
             for x in &v.creation_receipt_roots {
-                digest.update(x)
+                digest.update(x);
             }
         }
     }
     digest.finalize().into()
 }
 fn count(digest: &mut Sha256, value: usize) {
-    digest.update(u16::try_from(value).unwrap_or(u16::MAX).to_be_bytes())
+    digest.update(u16::try_from(value).unwrap_or(u16::MAX).to_be_bytes());
 }
 fn map_identity(error: HumanOperationError) -> IdentityError {
     match error {
@@ -3215,14 +3180,17 @@ fn map_identity(error: HumanOperationError) -> IdentityError {
         HumanOperationError::Refused => IdentityError::Unverified,
     }
 }
-fn map_identity_operation(error: IdentityError) -> HumanOperationError {
+fn map_identity_operation(error: &IdentityError) -> HumanOperationError {
     match error {
         IdentityError::BoundaryUnavailable => HumanOperationError::Unavailable,
         _ => HumanOperationError::Refused,
     }
 }
 fn decode_hex(value: &str) -> Option<Vec<u8>> {
-    if value.is_empty() || value.len() % 2 != 0 || value.len() > MAX_RESPONSE.saturating_mul(2) {
+    if value.is_empty()
+        || !value.len().is_multiple_of(2)
+        || value.len() > MAX_RESPONSE.saturating_mul(2)
+    {
         return None;
     }
     (0..value.len())
@@ -3487,4 +3455,72 @@ impl Encoder {
     fn finish(self) -> Result<HumanResponse, HumanOperationError> {
         HumanResponse::new(self.0).map_err(|_| HumanOperationError::Refused)
     }
+}
+
+fn validate_capability<A: HumanAuthorityBoundary>(
+    authority: &mut A,
+    peer: &HumanPeer,
+    tenant: &TenantId,
+    did: &Did,
+    request: &HumanCapabilityInstall,
+) -> Result<(Capability, CoreCapabilityScope), HumanOperationError> {
+    let identity = authority
+        .core_identity(peer, did)
+        .map_err(|error| map_identity_operation(&error))?;
+    if identity.frozen
+        || identity.verification_level == VerificationLevel::UNVERIFIED
+        || !identity
+            .authorities
+            .contains(&ProtocolAuthority::PrimaryKey(request.authority_id))
+    {
+        return Err(HumanOperationError::Refused);
+    }
+    let observed = authority.capability_scope(
+        peer,
+        did,
+        request.authority_id,
+        request.action_key,
+        request.capability_id,
+    )?;
+    if observed.observed_sequence == 0
+        || observed.verification < 4
+        || observed.verification > 5
+        || observed.evidence_digest == [0; 32]
+        || request.expiry_sequence <= observed.observed_sequence
+    {
+        return Err(HumanOperationError::Refused);
+    }
+    let capability = Capability::new(
+        CapabilityId(request.capability_id),
+        tenant.clone(),
+        CapabilityDimensions {
+            activity_types: request.activity_types.iter().copied().collect(),
+            counterparties: request.counterparties.iter().copied().collect(),
+            assets: request.assets.iter().copied().collect(),
+            amount_ceiling: request.amount_ceiling,
+            rate_ceiling: RateCeiling {
+                maximum_uses: request.rate_maximum_uses,
+                window_sequences: request.rate_window_sequences,
+            },
+            purposes: request.purposes.iter().cloned().collect(),
+            expiry_sequence: request.expiry_sequence,
+        },
+    )
+    .map_err(|_| HumanOperationError::Refused)?;
+    assert_narrowing(
+        &capability,
+        ProtocolAuthority::PrimaryKey(request.authority_id),
+        &observed.scope,
+    )
+    .map_err(|_| HumanOperationError::Refused)?;
+    let expected = agent_evidence_digest(
+        request.action_key,
+        request.capability_id,
+        observed.observed_sequence,
+        observed.verification,
+    );
+    if observed.evidence_digest != expected {
+        return Err(HumanOperationError::Refused);
+    }
+    Ok((capability, observed))
 }

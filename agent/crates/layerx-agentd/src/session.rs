@@ -175,6 +175,10 @@ impl Drop for Token {
 
 impl Token {
     /// Authorizes one operation against a server-owned set of acceptable scope spellings.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the session, token, or scope is invalid, or durable state cannot be read or updated.
     pub fn authorize_any_scope(
         &self,
         sessions: &SessionRegistry,
@@ -259,7 +263,7 @@ impl Token {
     pub(crate) fn audit_correlation(&self) -> [u8; 32] {
         let mut digest = Sha256::new();
         digest.update(TOKEN_CORRELATION_DOMAIN);
-        digest.update(&self.id);
+        digest.update(self.id);
         digest.finalize().into()
     }
 
@@ -285,10 +289,12 @@ impl Token {
         self.session_id
     }
 
+    #[must_use]
     pub const fn tenant(&self) -> &TenantId {
         &self.tenant
     }
 
+    #[must_use]
     pub const fn agent(&self) -> &Did {
         &self.agent
     }
@@ -373,6 +379,10 @@ impl SessionRegistry {
     /// Authenticates a generation-unique opaque bearer identifier at a Human boundary. A bearer
     /// can name only the generation under which it was issued because scope changes permanently
     /// retire the previous identifier.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the session, token, or scope is invalid, or durable state cannot be read or updated.
     pub fn authenticate_bearer(
         &self,
         tenant: &TenantId,
@@ -395,8 +405,8 @@ impl SessionRegistry {
         &self.records
     }
 
-    pub(crate) fn replace(&mut self, key: SessionRef, record: SessionRecord) {
-        let revoked_generation = self.records.get(&key).and_then(|previous| {
+    pub(crate) fn replace(&mut self, key: &SessionRef, record: SessionRecord) {
+        let revoked_generation = self.records.get(key).and_then(|previous| {
             (previous.open
                 && (!record.open
                     || previous.generation != record.generation
@@ -405,7 +415,7 @@ impl SessionRegistry {
         });
         self.records.insert(key.clone(), record);
         if let Some(generation) = revoked_generation {
-            if let Some(stops) = self.revocation_stops.remove(&key) {
+            if let Some(stops) = self.revocation_stops.remove(key) {
                 for (watched_generation, stop) in stops {
                     if watched_generation == generation {
                         stop.stop(Termination::SessionRevoked);
@@ -417,6 +427,10 @@ impl SessionRegistry {
 
     /// Registers an exact-generation stop signal for an authorized long-running operation.
     /// The signal is armed only after a replacement record was durably persisted.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the session, token, or scope is invalid, or durable state cannot be read or updated.
     pub fn revocation_stop(&mut self, token: &Token) -> Result<StopSignal, SessionError> {
         token.boundary(self).map_err(|_| SessionError::Revoked)?;
         let stop = StopSignal::active();
@@ -429,6 +443,10 @@ impl SessionRegistry {
         Ok(stop)
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the session, token, or scope is invalid, or durable state cannot be read or updated.
     pub fn restore_tenant(&mut self, store: &Store, tenant: &TenantId) -> Result<(), SessionError> {
         let mut restored = BTreeMap::new();
         for object_id in store.list_object_ids(tenant, ObjectKind::Session) {
@@ -547,10 +565,14 @@ pub fn close(
     closed.open = false;
     closed.generation = next_generation(&closed)?;
     persist_record(store, &closed)?;
-    registry.replace(session_ref, closed);
+    registry.replace(&session_ref, closed);
     Ok(())
 }
 
+///
+/// # Errors
+///
+/// Returns an error if the session, token, or scope is invalid, or durable state cannot be read or updated.
 pub fn close_with_companion(
     store: &mut Store,
     registry: &mut SessionRegistry,
@@ -578,7 +600,7 @@ pub fn close_with_companion(
         companion_key,
         companion_bytes,
     )?;
-    registry.replace(session_ref, closed);
+    registry.replace(&session_ref, closed);
     Ok(())
 }
 
@@ -611,53 +633,55 @@ pub fn restrict_scope(
     )?;
     persist_record(store, &narrowed)?;
     let token = mint(&narrowed);
-    registry.replace(session_ref, narrowed);
+    registry.replace(&session_ref, narrowed);
     Ok(token)
 }
 
 /// Narrows a session while atomically updating its durable external coordinate and recording one
 /// idempotent administrative observation.
+///
+/// # Errors
+///
+/// Returns an error if the session, token, or scope is invalid, or durable state cannot be read or updated.
 pub fn restrict_scope_with_companion(
     store: &mut Store,
     registry: &mut SessionRegistry,
     tenant: &TenantId,
-    session_id: SessionId,
-    token_id: [u8; 32],
-    scopes: BTreeSet<String>,
-    permitted_activity_types: BTreeSet<u16>,
-    coordinate_key: TenantKey,
-    coordinate_bytes: Vec<u8>,
-    companion_key: TenantKey,
-    companion_bytes: Vec<u8>,
+    restriction: ScopeRestriction,
+    coordinate: (TenantKey, Vec<u8>),
+    companion: (TenantKey, Vec<u8>),
 ) -> Result<Token, SessionError> {
     restrict_scope_with_companions(
         store,
         registry,
         tenant,
-        session_id,
-        token_id,
-        scopes,
-        permitted_activity_types,
-        coordinate_key,
-        coordinate_bytes,
-        vec![(companion_key, companion_bytes)],
+        restriction,
+        coordinate,
+        vec![companion],
     )
 }
 
 /// Narrows a session while atomically updating its durable coordinate and creating all of the
 /// administrative records needed to replay the restriction without another generation advance.
+///
+/// # Errors
+///
+/// Returns an error if the session, token, or scope is invalid, or durable state cannot be read or updated.
 pub fn restrict_scope_with_companions(
     store: &mut Store,
     registry: &mut SessionRegistry,
     tenant: &TenantId,
-    session_id: SessionId,
-    token_id: [u8; 32],
-    scopes: BTreeSet<String>,
-    permitted_activity_types: BTreeSet<u16>,
-    coordinate_key: TenantKey,
-    coordinate_bytes: Vec<u8>,
+    restriction: ScopeRestriction,
+    coordinate: (TenantKey, Vec<u8>),
     companions: Vec<(TenantKey, Vec<u8>)>,
 ) -> Result<Token, SessionError> {
+    let ScopeRestriction {
+        session_id,
+        token_id,
+        scopes,
+        permitted_activity_types,
+    } = restriction;
+    let (coordinate_key, coordinate_bytes) = coordinate;
     let (session_ref, narrowed) = narrowed_record(
         registry,
         tenant,
@@ -674,7 +698,7 @@ pub fn restrict_scope_with_companions(
         companions,
     )?;
     let token = mint(&narrowed);
-    registry.replace(session_ref, narrowed);
+    registry.replace(&session_ref, narrowed);
     Ok(token)
 }
 
@@ -865,137 +889,102 @@ fn encode(record: &SessionRecord) -> Result<Vec<u8>, SessionError> {
     Ok(bytes)
 }
 
-fn decode(bytes: &[u8], tenant: TenantId) -> Result<SessionRecord, SessionError> {
-    let mut at = 0;
-    let take = |at: &mut usize, length: usize| -> Result<&[u8], SessionError> {
-        let end = at
+struct RecordReader<'a> {
+    bytes: &'a [u8],
+    at: usize,
+}
+
+impl<'a> RecordReader<'a> {
+    fn take(&mut self, length: usize) -> Result<&'a [u8], SessionError> {
+        let end = self
+            .at
             .checked_add(length)
             .ok_or(SessionError::MissingField("record"))?;
-        let value = bytes
-            .get(*at..end)
+        let value = self
+            .bytes
+            .get(self.at..end)
             .ok_or(SessionError::MissingField("record"))?;
-        *at = end;
+        self.at = end;
         Ok(value)
-    };
-    let (carries_generation, carries_retired_tokens) = match take(&mut at, 6)? {
+    }
+
+    fn fixed<const N: usize>(&mut self, field: &'static str) -> Result<[u8; N], SessionError> {
+        self.take(N)?
+            .try_into()
+            .map_err(|_| SessionError::MissingField(field))
+    }
+
+    fn text(&mut self) -> Result<String, SessionError> {
+        let length = usize::from(u16::from_be_bytes(self.fixed::<2>("text")?));
+        String::from_utf8(self.take(length)?.to_vec())
+            .map_err(|_| SessionError::MissingField("text"))
+    }
+
+    fn authority(&mut self) -> Result<ProtocolAuthority, SessionError> {
+        let kind = self.take(1)?[0];
+        let id = self.fixed::<32>("authority")?;
+        match kind {
+            1 => Ok(ProtocolAuthority::PrimaryKey(id)),
+            2 => Ok(ProtocolAuthority::SessionKey(id)),
+            3 => Ok(ProtocolAuthority::CapabilityGrant(id)),
+            _ => Err(SessionError::MissingField("authority")),
+        }
+    }
+}
+
+fn decode(bytes: &[u8], tenant: TenantId) -> Result<SessionRecord, SessionError> {
+    let mut reader = RecordReader { bytes, at: 0 };
+    let (carries_generation, carries_retired_tokens) = match reader.take(6)? {
         version if version == RECORD_VERSION => (true, true),
         version if version == LEGACY_RECORD_VERSION => (false, false),
         _ => return Err(SessionError::MissingField("record_version")),
     };
-    let session_id = SessionId(
-        take(&mut at, 32)?
-            .try_into()
-            .map_err(|_| SessionError::MissingField("session_id"))?,
-    );
-    let token_id = take(&mut at, 32)?
-        .try_into()
-        .map_err(|_| SessionError::MissingField("token_id"))?;
-    let expiry_sequence = u64::from_be_bytes(
-        take(&mut at, 8)?
-            .try_into()
-            .map_err(|_| SessionError::MissingField("expiry"))?,
-    );
-    let open = match take(&mut at, 1)?[0] {
+    let session_id = SessionId(reader.fixed::<32>("session_id")?);
+    let token_id = reader.fixed::<32>("token_id")?;
+    let expiry_sequence = u64::from_be_bytes(reader.fixed::<8>("expiry")?);
+    let open = match reader.take(1)?[0] {
         0 => false,
         1 => true,
         _ => return Err(SessionError::MissingField("open")),
     };
-    let sequence = u64::from_be_bytes(
-        take(&mut at, 8)?
-            .try_into()
-            .map_err(|_| SessionError::MissingField("sequence"))?,
-    );
-    let budget_reserved = u128::from_be_bytes(
-        take(&mut at, 16)?
-            .try_into()
-            .map_err(|_| SessionError::MissingField("budget"))?,
-    );
-    let subscription_cursor = u64::from_be_bytes(
-        take(&mut at, 8)?
-            .try_into()
-            .map_err(|_| SessionError::MissingField("cursor"))?,
-    );
+    let sequence = u64::from_be_bytes(reader.fixed::<8>("sequence")?);
+    let budget_reserved = u128::from_be_bytes(reader.fixed::<16>("budget")?);
+    let subscription_cursor = u64::from_be_bytes(reader.fixed::<8>("cursor")?);
     let generation = if carries_generation {
-        u64::from_be_bytes(
-            take(&mut at, 8)?
-                .try_into()
-                .map_err(|_| SessionError::MissingField("generation"))?,
-        )
+        u64::from_be_bytes(reader.fixed::<8>("generation")?)
     } else {
         FIRST_GENERATION
     };
     if generation < FIRST_GENERATION {
         return Err(SessionError::MissingField("generation"));
     }
-    let text = |at: &mut usize| -> Result<String, SessionError> {
-        let length = usize::from(u16::from_be_bytes(
-            take(at, 2)?
-                .try_into()
-                .map_err(|_| SessionError::MissingField("text"))?,
-        ));
-        String::from_utf8(take(at, length)?.to_vec())
-            .map_err(|_| SessionError::MissingField("text"))
-    };
-    let opening_client = text(&mut at)?;
-    let policy_version = text(&mut at)?;
-    let did_len = usize::from(u16::from_be_bytes(
-        take(&mut at, 2)?
-            .try_into()
-            .map_err(|_| SessionError::MissingField("agent"))?,
-    ));
-    let agent =
-        Did::new(take(&mut at, did_len)?).map_err(|_| SessionError::MissingField("agent"))?;
-    let authority_id = {
-        let kind = take(&mut at, 1)?[0];
-        let id = take(&mut at, 32)?
-            .try_into()
-            .map_err(|_| SessionError::MissingField("authority"))?;
-        match kind {
-            1 => ProtocolAuthority::PrimaryKey(id),
-            2 => ProtocolAuthority::SessionKey(id),
-            3 => ProtocolAuthority::CapabilityGrant(id),
-            _ => return Err(SessionError::MissingField("authority")),
-        }
-    };
-    let activity_count = usize::from(u16::from_be_bytes(
-        take(&mut at, 2)?
-            .try_into()
-            .map_err(|_| SessionError::MissingField("activities"))?,
-    ));
+    let opening_client = reader.text()?;
+    let policy_version = reader.text()?;
+    let did_len = usize::from(u16::from_be_bytes(reader.fixed::<2>("agent")?));
+    let agent = Did::new(reader.take(did_len)?).map_err(|_| SessionError::MissingField("agent"))?;
+    let authority_id = reader.authority()?;
+    let activity_count = usize::from(u16::from_be_bytes(reader.fixed::<2>("activities")?));
     let mut permitted_activity_types = BTreeSet::new();
     for _ in 0..activity_count {
-        permitted_activity_types.insert(u16::from_be_bytes(
-            take(&mut at, 2)?
-                .try_into()
-                .map_err(|_| SessionError::MissingField("activities"))?,
-        ));
+        permitted_activity_types.insert(u16::from_be_bytes(reader.fixed::<2>("activities")?));
     }
-    let scope_count = usize::from(u16::from_be_bytes(
-        take(&mut at, 2)?
-            .try_into()
-            .map_err(|_| SessionError::MissingField("scopes"))?,
-    ));
+    let scope_count = usize::from(u16::from_be_bytes(reader.fixed::<2>("scopes")?));
     let mut scopes = BTreeSet::new();
     for _ in 0..scope_count {
-        scopes.insert(text(&mut at)?);
+        scopes.insert(reader.text()?);
     }
     let mut retired_token_ids = BTreeSet::new();
     if carries_retired_tokens {
-        let retired_count = usize::from(u16::from_be_bytes(
-            take(&mut at, 2)?
-                .try_into()
-                .map_err(|_| SessionError::MissingField("retired_token_ids"))?,
-        ));
+        let retired_count =
+            usize::from(u16::from_be_bytes(reader.fixed::<2>("retired_token_ids")?));
         for _ in 0..retired_count {
-            let token_id = take(&mut at, 32)?
-                .try_into()
-                .map_err(|_| SessionError::MissingField("retired_token_ids"))?;
+            let token_id = reader.fixed::<32>("retired_token_ids")?;
             if token_id == [0; 32] || !retired_token_ids.insert(token_id) {
                 return Err(SessionError::MissingField("retired_token_ids"));
             }
         }
     }
-    if at != bytes.len()
+    if reader.at != bytes.len()
         || permitted_activity_types.is_empty()
         || scopes.is_empty()
         || token_id == [0; 32]
@@ -1023,4 +1012,11 @@ fn decode(bytes: &[u8], tenant: TenantId) -> Result<SessionRecord, SessionError>
         generation,
         retired_token_ids,
     })
+}
+
+pub struct ScopeRestriction {
+    pub session_id: SessionId,
+    pub token_id: [u8; 32],
+    pub scopes: BTreeSet<String>,
+    pub permitted_activity_types: BTreeSet<u16>,
 }

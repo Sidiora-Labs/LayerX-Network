@@ -25,6 +25,10 @@ pub enum SessionKeyRegistryError {
 }
 
 impl SessionKeyRegistry {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if key material, protected files, or registry state cannot be validated or accessed.
     pub fn open(
         root: PathBuf,
         operator_secret: Vec<u8>,
@@ -60,16 +64,20 @@ impl SessionKeyRegistry {
             owner_uid,
         })
     }
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if key material, protected files, or registry state cannot be validated or accessed.
     pub fn provision(
         &self,
         grant_id: [u8; 32],
         seed: &[u8; 32],
-        issued: IssuedSessionKey,
+        issued: &IssuedSessionKey,
     ) -> Result<(), SessionKeyRegistryError> {
         if self.revoked_path(grant_id).exists() {
             return Err(SessionKeyRegistryError::Invalid);
         }
-        let identity = identity(grant_id, &issued);
+        let identity = identity(grant_id, issued);
         let mut salt = [0; 16];
         let mut nonce = [0; 24];
         getrandom::fill(&mut salt).map_err(|_| SessionKeyRegistryError::Crypto)?;
@@ -120,6 +128,10 @@ impl SessionKeyRegistry {
             .map_err(|_| SessionKeyRegistryError::Io)?;
         Ok(())
     }
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if key material, protected files, or registry state cannot be validated or accessed.
     pub fn revoke(&self, grant_id: [u8; 32]) -> Result<(), SessionKeyRegistryError> {
         let marker = self.revoked_path(grant_id);
         if marker.exists() {
@@ -153,7 +165,7 @@ impl SessionKeyRegistry {
         match published {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                validate_revocation_marker(&marker, self.owner_uid)?
+                validate_revocation_marker(&marker, self.owner_uid)?;
             }
             Err(_) => return Err(SessionKeyRegistryError::Io),
         }
@@ -162,6 +174,10 @@ impl SessionKeyRegistry {
             .map_err(|_| SessionKeyRegistryError::Io)?;
         Ok(())
     }
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if key material, protected files, or registry state cannot be validated or accessed.
     pub fn load(
         &self,
         grant_id: [u8; 32],
@@ -183,6 +199,10 @@ impl SessionKeyRegistry {
             .map(|key| key.bind_revocation_marker(marker, self.owner_uid))
             .map_err(|_| SessionKeyRegistryError::Crypto)
     }
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if key material, protected files, or registry state cannot be validated or accessed.
     pub fn probe(&self) -> Result<(), SessionKeyRegistryError> {
         let meta = fs::symlink_metadata(&self.root).map_err(|_| SessionKeyRegistryError::Io)?;
         if !meta.file_type().is_dir()

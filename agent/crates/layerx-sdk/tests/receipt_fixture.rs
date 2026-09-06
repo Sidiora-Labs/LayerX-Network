@@ -41,19 +41,25 @@ fn value_authorised(fixture: &serde_json::Value) -> AuthorizedBatch {
     AuthorizedBatch::new(
         value_hex(batch, "batch_id_hex")
             .try_into()
-            .expect("batch id length"),
+            .unwrap_or_else(|bytes: Vec<u8>| panic!("batch id length: got {} bytes", bytes.len())),
         value_hex(batch, "asset_hex")
             .try_into()
-            .expect("asset length"),
+            .unwrap_or_else(|bytes: Vec<u8>| panic!("asset length: got {} bytes", bytes.len())),
         value_hex(batch, "previous_state_root_hex")
             .try_into()
-            .expect("previous root length"),
+            .unwrap_or_else(|bytes: Vec<u8>| {
+                panic!("previous root length: got {} bytes", bytes.len())
+            }),
         value_hex(batch, "resulting_state_root_hex")
             .try_into()
-            .expect("resulting root length"),
+            .unwrap_or_else(|bytes: Vec<u8>| {
+                panic!("resulting root length: got {} bytes", bytes.len())
+            }),
         value_hex(batch, "sequencer_public_key_hex")
             .try_into()
-            .expect("sequencer key length"),
+            .unwrap_or_else(|bytes: Vec<u8>| {
+                panic!("sequencer key length: got {} bytes", bytes.len())
+            }),
     )
 }
 
@@ -210,8 +216,13 @@ fn core_programs_fixture_preserves_the_optional_outcome() {
     let canonical = value_hex(&fixture, "canonical_receipt_hex");
     let verified = verify_receipt(&canonical, &value_authorised(&fixture))
         .unwrap_or_else(|failure| panic!("Programs receipt refused: {failure:?}"));
-    let receipt = verified.receipt().protocol().expect("protocol receipt");
-    let outcome = receipt.program_outcome().expect("Programs outcome");
+    let receipt = verified
+        .receipt()
+        .protocol()
+        .unwrap_or_else(|| panic!("protocol receipt missing"));
+    let outcome = receipt
+        .program_outcome()
+        .unwrap_or_else(|| panic!("Programs outcome missing"));
     assert_eq!(outcome.encoding_version(), 3);
     assert_eq!(outcome.runtime_version(), 1);
     assert_eq!(outcome.abi_version(), 1);
@@ -247,13 +258,19 @@ fn core_programs_fixture_preserves_the_optional_outcome() {
 fn core_refusal_vectors_expose_the_shared_taxonomy() {
     let fixture = shared_fixture("receipt-refusals-v2.json");
     let authorised = value_authorised(&fixture);
-    for vector in fixture["vectors"].as_array().expect("refusal vectors") {
+    for vector in fixture["vectors"]
+        .as_array()
+        .unwrap_or_else(|| panic!("refusal vectors missing"))
+    {
         let canonical = value_hex(vector, "canonical_receipt_hex");
-        let failure =
-            verify_receipt(&canonical, &authorised).expect_err("non-canonical receipt verified");
+        let Err(failure) = verify_receipt(&canonical, &authorised) else {
+            panic!("non-canonical receipt verified");
+        };
         assert_eq!(
             failure.check.as_str(),
-            vector["expected_check"].as_str().expect("expected check")
+            vector["expected_check"]
+                .as_str()
+                .unwrap_or_else(|| panic!("expected check missing"))
         );
     }
 }
