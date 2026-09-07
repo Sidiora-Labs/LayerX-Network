@@ -32,44 +32,45 @@ except Exception as error:
     print('FAIL full-manifest parser parity:', error)
 print('PASS PyYAML resolves the real manifests; only two Human edges fail')
 
-for change, expected in [
-    ('cycle', 'ExternalName cycle'),
-    ('missing', 'ExternalName target Service'),
-    ('offcluster', 'has no declared in-cluster Service'),
-    ('port', 'exposes 444'),
-    ('selector', 'selects no workload'),
-    ('target', 'targetPort missing'),
-    ('ingress', 'ingress NetworkPolicy'),
-    ('egress', 'egress NetworkPolicy'),
-    ('dns', 'does not admit DNS'),
-]:
-    topology = copy.deepcopy(base)
-    alias = topology.services[('layerx-internal', 'component')]
-    target = topology.services[('layerx-testnet', 'internal-component')]
-    if change == 'cycle':
-        alias['externalName'] = 'component.layerx-internal.svc'
-    elif change == 'missing':
-        del topology.services[('layerx-testnet', 'internal-component')]
-    elif change == 'offcluster':
-        alias['externalName'] = 'absent.example'
-    elif change == 'port':
-        target['ports'][0]['port'] = '444'
-    elif change == 'selector':
-        target['selector'] = {'app': 'absent'}
-    elif change == 'target':
-        target['ports'][0]['targetPort'] = 'missing'
-    elif change == 'ingress':
-        policy = next(p for p in topology.policies if p['name'] == 'layerx-node-ingress')
-        policy['ingress'] = []
-    elif change == 'egress':
-        policy = next(p for p in topology.policies if p['name'] == 'layerx-webhooks')
-        policy['egress'] = []
-    else:
-        policy = next(p for p in topology.policies if p['name'] == 'payments')
-        policy['egress'][0]['to'][0]['podSelector']['matchLabels']['k8s-app'] = 'not-dns'
-    result = failures(topology)
-    assert len(result) > 2 and any(expected in row[2] for row in result), (change, result)
-    print('PASS refusal:', change)
+for parser in ('load_pyyaml', 'load_builtin'):
+    for change, expected in [
+        ('cycle', 'ExternalName cycle'),
+        ('missing', 'ExternalName target Service'),
+        ('offcluster', 'has no declared in-cluster Service'),
+        ('port', 'exposes 444'),
+        ('selector', 'selects no workload'),
+        ('target', 'targetPort missing'),
+        ('ingress', 'ingress NetworkPolicy'),
+        ('egress', 'egress NetworkPolicy'),
+        ('dns', 'does not admit DNS'),
+    ]:
+        topology = copy.deepcopy(load(parser))
+        alias = topology.services[('layerx-internal', 'identity')]
+        target = topology.services[('layerx-testnet', 'internal-identity')]
+        if change == 'cycle':
+            alias['externalName'] = 'identity.layerx-internal.svc'
+        elif change == 'missing':
+            del topology.services[('layerx-testnet', 'internal-identity')]
+        elif change == 'offcluster':
+            alias['externalName'] = 'absent.example'
+        elif change == 'port':
+            target['ports'][0]['port'] = '444'
+        elif change == 'selector':
+            target['selector'] = {'app': 'absent'}
+        elif change == 'target':
+            target['ports'][0]['targetPort'] = 'missing'
+        elif change == 'ingress':
+            policy = next(p for p in topology.policies if p['name'] == 'layerx-node-ingress')
+            policy['ingress'] = []
+        elif change == 'egress':
+            policy = next(p for p in topology.policies if p['name'] == 'layerx-webhooks')
+            policy['egress'] = []
+        else:
+            policy = next(p for p in topology.policies if p['name'] == 'payments')
+            policy['egress'][0]['to'][0]['podSelector']['matchLabels']['k8s-app'] = 'not-dns'
+        result = failures(topology)
+        assert len(result) > 2 and any(expected in row[2] for row in result), (change, result)
+        print('PASS refusal:', parser, change)
 
 topology = module['Topology']()
 for document in module['load_pyyaml']((ROOT / 'platform/hosted/node/deployment.yaml').read_text()):
