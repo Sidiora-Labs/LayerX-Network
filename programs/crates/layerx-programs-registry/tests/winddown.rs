@@ -310,16 +310,17 @@ fn snapshot(
         .collect();
 
     let account_tree_leaf = account_tree_commitment(account_root);
-    let sequence_leaf = state_leaf_commitment(b"sequence", &(sequence + 1).to_be_bytes());
+    let sequence_leaf = state_leaf_commitment(b"sequence", &(sequence + 1).to_be_bytes())
+        .unwrap_or_else(|error| panic!("sequence leaf: {error}"));
     let (universal_root, mut universal_proofs) = tree(&[account_tree_leaf, sequence_leaf]);
 
     let universal_leaf = universal_root_commitment(universal_root);
     let mut module_leaves = vec![universal_leaf];
     for module in 1_u16..9 {
-        module_leaves.push(state_leaf_commitment(
-            &module.to_be_bytes(),
-            &[module as u8; 32],
-        ));
+        module_leaves.push(
+            state_leaf_commitment(&module.to_be_bytes(), &[module as u8; 32])
+                .unwrap_or_else(|error| panic!("module leaf: {error}")),
+        );
     }
     module_leaves.push(programs_root_commitment(programs_root));
     let (state_root, state_proofs) = tree(&module_leaves);
@@ -829,11 +830,20 @@ fn shared_c_rust_state_vectors_freeze_leaf_order_odd_duplication_and_bounds() {
     account_key.extend_from_slice(&account_id);
     assert_eq!(
         state_leaf_commitment(&account_key, &vector_bytes("account_value")),
-        vector_hash("account_leaf")
+        Ok(vector_hash("account_leaf"))
     );
-    assert_eq!(state_leaf_commitment(&[0], &[0x10]), vector_hash("leaf0"));
-    assert_eq!(state_leaf_commitment(&[1], &[0x20]), vector_hash("leaf1"));
-    assert_eq!(state_leaf_commitment(&[2], &[0x30]), vector_hash("leaf2"));
+    assert_eq!(
+        state_leaf_commitment(&[0], &[0x10]),
+        Ok(vector_hash("leaf0"))
+    );
+    assert_eq!(
+        state_leaf_commitment(&[1], &[0x20]),
+        Ok(vector_hash("leaf1"))
+    );
+    assert_eq!(
+        state_leaf_commitment(&[2], &[0x30]),
+        Ok(vector_hash("leaf2"))
+    );
     assert_eq!(
         state_node_commitment(vector_hash("leaf0"), vector_hash("leaf1")),
         vector_hash("node01")
@@ -846,11 +856,11 @@ fn shared_c_rust_state_vectors_freeze_leaf_order_odd_duplication_and_bounds() {
     );
     assert_eq!(
         state_leaf_commitment(&0_u16.to_be_bytes(), &vector_hash("tree_root")),
-        vector_hash("outer0_leaf")
+        Ok(vector_hash("outer0_leaf"))
     );
     assert_eq!(
         state_leaf_commitment(&9_u16.to_be_bytes(), &vector_hash("programs_root"),),
-        vector_hash("outer9_leaf")
+        Ok(vector_hash("outer9_leaf"))
     );
     assert_eq!(
         state_node_commitment(vector_hash("outer0_leaf"), vector_hash("outer9_leaf"),),
