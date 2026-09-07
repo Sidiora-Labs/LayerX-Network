@@ -3093,3 +3093,26 @@ symbol = "install_store ensure_store auth_status_reports_no_token_for_a_fresh_en
 observed = "On unchanged base 819c4ed5b82c07f14ca4c196886d7ac45575ed61 with the CLI candidate stashed, cargo test --locked --manifest-path platform/Cargo.toml -p layerx-platform-cli exits 101: 37 unit tests pass, then commands.rs passes 16 tests and fails auth_status_reports_no_token_for_a_fresh_environment and key_lifecycle_metadata_persists_in_configuration. Restoring the candidate reproduces the same test names, outcomes, counts and exact failure envelopes. Each named test also exits 101 independently on both sources. Both panic at commands.rs:35 expecting command success and receive command_failed with detail credential store override mock is unavailable in this binary. Evidence: qual-logs/au20/baseline-full.log, baseline-auth.log, baseline-key.log, candidate-full.log, candidate-auth.log, candidate-key.log and baseline-comparison.log."
 assumption = "The fresh-environment test expects auth.status with configured=false for testnet; the lifecycle test expects key.created for alpha and beta followed by persisted list/default metadata. Cli::command sets LAYERX_CREDENTIAL_STORE=mock and an isolated configuration path. The default build does not enable test-credential-store; install_store refuses the override before any operating-system store access. These failures predate the lint candidate. The production refusal, both test bodies and harness remain unchanged; no fixture or feature workaround is introduced. The exact full command stops at commands.rs, so later integration targets remain unexecuted and complete suite success is not claimed. This supplies the previously missing base comparison for observation.5.2.platform-cli-default-credential-test-boundary."
 severity = "blocker"
+[observation.6.4.agentd-maintenance-fixture]
+task = "6.4"
+file = "agent/crates/layerx-agentd/tests/support/real_authority.rs"
+symbol = "verify_maintenance_attachment"
+observed = "The real-authority fixture authenticates occupancy_maintenance_v2 attachments through authorized_maintained_activity_batch, then derives the activity endpoint for the unchanged strict execution batch identity assertion. The header resulting root equals the maintenance resulting root; the activity resulting root equals the maintenance previous root. Missing attachments retain the historical endpoint and strict identity assertion. Both full real-native Agentd runs pass 259 tests with zero failures and zero ignored tests. Final strict all-target Clippy, touched-file rustfmt check, unchanged proof and wire suites, make check, git diff --check and cg spec lint exit 0. Exact commands, exits and raw logs are retained in qual-logs/r13/results.jsonl."
+assumption = "Native binary provenance and hashes match source 408d36408f535090ee1e58ee65ba5e42f66692f6. No production source, proof or wire implementation, fixture data, dependency or lockfile changes are required. This is fixture qualification only."
+severity = "note"
+
+[observation.6.4.agentd-maintenance-tooling-boundary]
+task = "6.4"
+file = "spec/layerx-beta/spec.kvx AGENTS.md"
+symbol = "cg spec lint"
+observed = "Spec lint exits 0 with nine existing missing-path warnings in qual-logs/r13/spec-lint.log. The advisory guard uses active task 3.7 scope and reports the explicitly assigned fixture path outside that scope; its graph import warnings do not reproduce in strict all-target Clippy. The optional cg review was interrupted without a result. cortex_guard is unavailable with exit 127. Raw records: qual-logs/r13/cg-guard.log, qual-logs/r13/cg-review-interruption.log and qual-logs/r13/cortex-guard.log."
+assumption = "Task metadata remains unchanged. Required executable gates pass independently; no successful optional graph review or cortex guard execution is claimed."
+severity = "note"
+
+[observation.6.4.agentd-maintenance-rebased-qualification]
+task = "6.4"
+file = "agent/crates/layerx-agentd/tests/support/real_authority.rs"
+symbol = "verify_maintenance_attachment"
+observed = "After rebase onto e68e3cf8b7144318a34b475c3843b0a8ba38053e and native binary refresh, all seven required gates rerun with exit 0: rustfmt check, strict all-target Clippy, real-native Agentd all-target tests, unchanged proof and wire suites, make check, git diff --check and cg spec lint. Agentd passes 259 tests with zero failures and zero ignored tests. Exact commands, exits and raw logs: qual-logs/r13-rebased/results.jsonl."
+assumption = "The native base, provenance record and all three binary hashes are unchanged across this qualification, checked in qual-logs/r13-rebased/native-provenance-final.log. This supersedes the earlier-base fixture qualification record for the final source. No production or release certification is claimed."
+severity = "note"
