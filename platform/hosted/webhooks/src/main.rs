@@ -186,9 +186,8 @@ fn endpoints(config: &Config, request: &Request, principal: &Principal, at: u64)
     if request.method != "POST" {
         return Reply::refusal(404, "not_found", None);
     }
-    let idempotency = match request.header("idempotency-key") {
-        Some(value) => value,
-        None => return Reply::refusal(400, "idempotency_key_required", None),
+    let Some(idempotency) = request.header("idempotency-key") else {
+        return Reply::refusal(400, "idempotency_key_required", None);
     };
     let body = match body::<RegisterBody>(request) {
         Ok(value) => value,
@@ -249,20 +248,22 @@ fn endpoint_route(
                 .map_or_else(|error| refusal(&error), |value| encoded(201, &value)),
             None => Reply::refusal(400, "idempotency_key_required", None),
         },
-        ("POST", "redeliveries") => config
-            .service
-            .redeliver(
-                principal,
-                &endpoint,
-                request.parameter("cursor"),
-                page(request),
-                match request.header("idempotency-key") {
-                    Some(value) => value,
-                    None => return Reply::refusal(400, "idempotency_key_required", None),
-                },
-                at,
-            )
-            .map_or_else(|error| refusal(&error), |value| encoded(202, &value)),
+        ("POST", "redeliveries") => {
+            let Some(idempotency) = request.header("idempotency-key") else {
+                return Reply::refusal(400, "idempotency_key_required", None);
+            };
+            config
+                .service
+                .redeliver(
+                    principal,
+                    &endpoint,
+                    request.parameter("cursor"),
+                    page(request),
+                    idempotency,
+                    at,
+                )
+                .map_or_else(|error| refusal(&error), |value| encoded(202, &value))
+        }
         ("POST", "suspensions") => body::<SuspendBody>(request)
             .and_then(|body| {
                 config
@@ -307,9 +308,8 @@ fn owned_route(config: &Config, request: &Request, principal: &Principal, at: u6
                 |value| encoded(200, &value.dead_letters),
             ),
         ("POST", ["v1", "webhooks", "dead-letters", delivery, "replay"]) => {
-            let idempotency = match request.header("idempotency-key") {
-                Some(value) => value,
-                None => return Reply::refusal(400, "idempotency_key_required", None),
+            let Some(idempotency) = request.header("idempotency-key") else {
+                return Reply::refusal(400, "idempotency_key_required", None);
             };
             DeliveryId::new(*delivery)
                 .and_then(|delivery| {
@@ -390,7 +390,8 @@ fn route(config: &Config, request: &Request) -> Reply {
     }
 }
 
-fn serve(config: Arc<Config>) -> Result<(), String> {
+fn serve(config: Config) -> Result<(), String> {
+    let config = Arc::new(config);
     if config.dispatch_interval.is_zero() {
         return Err("webhook dispatch interval must be positive".to_owned());
     }
@@ -446,7 +447,7 @@ fn handle(tcp: TcpStream, config: &Config) -> Result<(), String> {
 }
 
 fn main() {
-    if let Err(error) = config().and_then(|config| serve(Arc::new(config))) {
+    if let Err(error) = config().and_then(serve) {
         eprintln!("layerx-webhooks: {error}");
         std::process::exit(2);
     }
