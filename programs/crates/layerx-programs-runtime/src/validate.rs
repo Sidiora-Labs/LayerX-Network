@@ -1048,9 +1048,8 @@ mod linker_invariant_tests {
             .unwrap_or_else(|error| panic!("child program refused: {error}"));
         let mut catalog = ProgramCatalog::new();
         assert!(catalog.insert(child_program, child).is_none());
-        let resolved = match catalog.program_module(child_program) {
-            Some(module) => module,
-            None => panic!("nested resolver lost the child module"),
+        let Some(resolved) = catalog.program_module(child_program) else {
+            panic!("nested resolver lost the child module");
         };
 
         assert!(Arc::ptr_eq(&root.linker, &resolved.linker));
