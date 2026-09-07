@@ -15,6 +15,9 @@ pub enum HashAlgorithm {
 
 impl HashAlgorithm {
     /// Returns the algorithm for the given identifier, refusing unknown values.
+    ///
+    /// # Errors
+    /// Returns `UnknownAlgorithm` for an unrecognized identifier.
     pub const fn from_identifier(id: u32) -> Result<Self, HashRefusal> {
         match id {
             1 => Ok(Self::Sha256),
@@ -87,10 +90,7 @@ impl core::error::Error for HashRefusal {}
 /// # Errors
 ///
 /// Returns a refusal when the input exceeds the length bound.
-pub fn hash_bytes(
-    algorithm: HashAlgorithm,
-    input: &[u8],
-) -> Result<[u8; 32], HashRefusal> {
+pub fn hash_bytes(algorithm: HashAlgorithm, input: &[u8]) -> Result<[u8; 32], HashRefusal> {
     let length = u64::try_from(input.len()).unwrap_or(u64::MAX);
     if length > MAX_HASH_INPUT_BYTES {
         return Err(HashRefusal::InputTooLong {
@@ -131,7 +131,7 @@ mod tests {
     fn sha256_empty_input() {
         let result = hash_bytes(HashAlgorithm::Sha256, b"");
         assert!(result.is_ok());
-        let digest = result.unwrap();
+        let digest = result.unwrap_or_else(|error| panic!("unexpected hash refusal: {error:?}"));
         assert_eq!(digest.len(), 32);
         assert_eq!(
             &digest[..],
@@ -147,7 +147,7 @@ mod tests {
     fn sha256_abc() {
         let result = hash_bytes(HashAlgorithm::Sha256, b"abc");
         assert!(result.is_ok());
-        let digest = result.unwrap();
+        let digest = result.unwrap_or_else(|error| panic!("unexpected hash refusal: {error:?}"));
         assert_eq!(
             &digest[..],
             &[
@@ -162,7 +162,7 @@ mod tests {
     fn keccak256_empty_input() {
         let result = hash_bytes(HashAlgorithm::Keccak256, b"");
         assert!(result.is_ok());
-        let digest = result.unwrap();
+        let digest = result.unwrap_or_else(|error| panic!("unexpected hash refusal: {error:?}"));
         assert_eq!(digest.len(), 32);
         assert_eq!(
             &digest[..],
@@ -178,7 +178,7 @@ mod tests {
     fn keccak256_abc() {
         let result = hash_bytes(HashAlgorithm::Keccak256, b"abc");
         assert!(result.is_ok());
-        let digest = result.unwrap();
+        let digest = result.unwrap_or_else(|error| panic!("unexpected hash refusal: {error:?}"));
         assert_eq!(
             &digest[..],
             &[
@@ -193,7 +193,7 @@ mod tests {
     fn blake3_empty_input() {
         let result = hash_bytes(HashAlgorithm::Blake3, b"");
         assert!(result.is_ok());
-        let digest = result.unwrap();
+        let digest = result.unwrap_or_else(|error| panic!("unexpected hash refusal: {error:?}"));
         assert_eq!(digest.len(), 32);
         assert_eq!(
             &digest[..],
@@ -209,7 +209,7 @@ mod tests {
     fn blake3_abc() {
         let result = hash_bytes(HashAlgorithm::Blake3, b"abc");
         assert!(result.is_ok());
-        let digest = result.unwrap();
+        let digest = result.unwrap_or_else(|error| panic!("unexpected hash refusal: {error:?}"));
         assert_eq!(
             &digest[..],
             &[
@@ -234,7 +234,11 @@ mod tests {
 
     #[test]
     fn input_length_bound_is_enforced() {
-        let oversized = vec![0u8; (MAX_HASH_INPUT_BYTES + 1) as usize];
+        let oversized = vec![
+            0u8;
+            usize::try_from(MAX_HASH_INPUT_BYTES + 1)
+                .unwrap_or_else(|error| panic!("hash bound does not fit: {error}"))
+        ];
         for algorithm in [
             HashAlgorithm::Sha256,
             HashAlgorithm::Keccak256,
