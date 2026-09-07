@@ -218,7 +218,7 @@ Displayed levels:
 
 (`platform/hosted/webhooks/src/events.rs:18-40`). A fact above
 `unverified` must carry a 64-hex receipt digest
-(`platform/hosted/webhooks/src/events.rs:76-81, 353-361, 426-437`).
+(`platform/hosted/webhooks/src/events.rs:77-81, 353-361, 426-437`).
 
 Publish admits an event into the principal Redis shard, refuses reuse
 of an id with different content (`EventConflict`), refuses a
@@ -451,7 +451,7 @@ Request cap `128 KiB` (`platform/hosted/webhooks/src/http.rs:8-9`).
 | `Gateway` | 422 | `verification_refused` | never |
 
 Additional HTTP codes not in `WebhookError`
-(`platform/hosted/webhooks/src/main.rs:189-191, 244-249, 251-253, 310-312, 334, 347, 389, 149-151, 186-187`):
+(`platform/hosted/webhooks/src/main.rs:189-191, 244-249, 251-253, 310-312, 334, 346, 389, 149-151, 186-187`):
 
 | Status | Code |
 | --- | --- |
