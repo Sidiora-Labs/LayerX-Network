@@ -50,13 +50,13 @@ impl SharedSupplyPort {
 
     /// Returns the storage key for the shared total supply.
     #[must_use]
-    pub fn total_supply_key(&self) -> [u8; 32] {
+    pub fn total_supply_key() -> [u8; 32] {
         shared_key(value_slot(TOTAL_SUPPLY_SLOT))
     }
 
     /// Returns the storage key for one holder's balance.
     #[must_use]
-    pub fn balance_key(&self) -> [u8; 32] {
+    pub fn balance_key() -> [u8; 32] {
         caller_indexed_key(BALANCES_SLOT)
     }
 
@@ -89,7 +89,7 @@ impl SharedSupplyPort {
     /// # Errors
     ///
     /// Refuses invalid capability encoding.
-    pub fn balance_query_capabilities(&self) -> Result<CapabilitySet, PortRefusal> {
+    pub fn balance_query_capabilities() -> Result<CapabilitySet, PortRefusal> {
         CapabilitySet::new([Capability::StorageRead]).map_err(PortRefusal::from)
     }
 
@@ -98,7 +98,7 @@ impl SharedSupplyPort {
     /// # Errors
     ///
     /// Refuses invalid capability encoding.
-    pub fn supply_query_capabilities(&self) -> Result<CapabilitySet, PortRefusal> {
+    pub fn supply_query_capabilities() -> Result<CapabilitySet, PortRefusal> {
         CapabilitySet::new([Capability::SharedStorageRead]).map_err(PortRefusal::from)
     }
 
@@ -107,7 +107,7 @@ impl SharedSupplyPort {
     /// # Errors
     ///
     /// Refuses oversized modules and invalid constructions.
-    pub fn code(&self) -> Result<Vec<u8>, PortRefusal> {
+    pub fn code() -> Result<Vec<u8>, PortRefusal> {
         let mut builder = ModuleBuilder::new(MEMORY_PAGES);
         let host_type = builder.signature(&[I32, I32, I32, I32], &[I32]);
         let load_type = builder.signature(&[I32], &[I64]);
@@ -117,12 +117,18 @@ impl SharedSupplyPort {
         let query_type = builder.signature(&[], &[I64]);
         let storage_read = builder.import(ABI_MODULE, "storage_read", host_type);
         let storage_write = builder.import(ABI_MODULE, "storage_write", host_type);
-        builder.segment(SUPPLY_KEY_POINTER, &self.total_supply_key());
-        builder.segment(BALANCE_KEY_POINTER, &self.balance_key());
+        builder.segment(SUPPLY_KEY_POINTER, &Self::total_supply_key());
+        builder.segment(BALANCE_KEY_POINTER, &Self::balance_key());
         let load_be64 = emit_load_be64(&mut builder, load_type);
         let store_word = emit_store_word(&mut builder, store_type);
         let read_word = emit_read_word(&mut builder, read_type, storage_read, load_be64);
-        let mint = emit_mint(&mut builder, mint_type, storage_write, read_word, store_word);
+        let mint = emit_mint(
+            &mut builder,
+            mint_type,
+            storage_write,
+            read_word,
+            store_word,
+        )?;
         let balance_of = emit_query(&mut builder, query_type, BALANCE_KEY_POINTER, read_word);
         let total_supply = emit_query(&mut builder, query_type, SUPPLY_KEY_POINTER, read_word);
         builder.export_memory(MEMORY_EXPORT);
@@ -224,13 +230,13 @@ fn emit_mint(
     storage_write: u32,
     read_word: u32,
     store_word: u32,
-) -> u32 {
+) -> Result<u32, PortRefusal> {
     let mut code = Code::new();
     code.local_get(0);
     code.i64_const(1);
     code.op(I64_LT_S);
     code.trap_if();
-    code.i32_const(SUPPLY_KEY_POINTER_I32);
+    code.i32_const(i32::try_from(SUPPLY_KEY_POINTER).map_err(|_| PortRefusal::OutOfRange)?);
     code.call(read_word);
     code.local_set(1);
     code.local_get(1);
@@ -238,7 +244,7 @@ fn emit_mint(
     code.op(I64_ADD);
     code.local_set(2);
     code.local_get(2);
-    code.i64_const(MAX_SUPPLY_I64);
+    code.i64_const(i64::try_from(MAX_SUPPLY).map_err(|_| PortRefusal::OutOfRange)?);
     code.op(I64_GT_S);
     code.trap_if();
     code.pointer(VALUE_POINTER);
@@ -250,7 +256,7 @@ fn emit_mint(
     code.i32_const(KEY_LENGTH);
     code.call(storage_write);
     code.trap_unless_ok();
-    code.i32_const(BALANCE_KEY_POINTER_I32);
+    code.i32_const(i32::try_from(BALANCE_KEY_POINTER).map_err(|_| PortRefusal::OutOfRange)?);
     code.call(read_word);
     code.local_set(3);
     code.local_get(3);
@@ -268,21 +274,21 @@ fn emit_mint(
     code.trap_unless_ok();
     code.local_get(2);
     code.end();
-    builder.function(signature, &[(4, I64)], &code)
+    Ok(builder.function(signature, &[(4, I64)], &code))
 }
 
-fn emit_query(builder: &mut ModuleBuilder, signature: u32, key_pointer: u32, read_word: u32) -> u32 {
+fn emit_query(
+    builder: &mut ModuleBuilder,
+    signature: u32,
+    key_pointer: u32,
+    read_word: u32,
+) -> u32 {
     let mut code = Code::new();
     code.pointer(key_pointer);
     code.call(read_word);
     code.end();
     builder.function(signature, &[], &code)
 }
-
-const SUPPLY_KEY_POINTER_I32: i32 = SUPPLY_KEY_POINTER as i32;
-const BALANCE_KEY_POINTER_I32: i32 = BALANCE_KEY_POINTER as i32;
-#[allow(clippy::cast_possible_wrap)]
-const MAX_SUPPLY_I64: i64 = MAX_SUPPLY as i64;
 
 #[cfg(test)]
 mod tests {
@@ -294,10 +300,11 @@ mod tests {
             asset: [1u8; 32],
             price_per_token: 100,
         };
-        let port = SharedSupplyPort::new(terms).unwrap();
-        
+        let _port =
+            SharedSupplyPort::new(terms).unwrap_or_else(|error| panic!("shared supply: {error}"));
+
         // The total supply key uses shared_key, demonstrating shared namespace
-        let supply_key = port.total_supply_key();
+        let supply_key = SharedSupplyPort::total_supply_key();
         assert_eq!(supply_key, shared_key(value_slot(TOTAL_SUPPLY_SLOT)));
     }
 
@@ -307,10 +314,11 @@ mod tests {
             asset: [1u8; 32],
             price_per_token: 100,
         };
-        let port = SharedSupplyPort::new(terms).unwrap();
-        
+        let _port =
+            SharedSupplyPort::new(terms).unwrap_or_else(|error| panic!("shared supply: {error}"));
+
         // Balances remain principal-scoped
-        let balance_key = port.balance_key();
+        let balance_key = SharedSupplyPort::balance_key();
         assert_eq!(balance_key, caller_indexed_key(BALANCES_SLOT));
     }
 
@@ -320,8 +328,11 @@ mod tests {
             asset: [1u8; 32],
             price_per_token: 100,
         };
-        let port = SharedSupplyPort::new(terms).unwrap();
-        let caps = port.mint_capabilities(10).unwrap();
+        let port =
+            SharedSupplyPort::new(terms).unwrap_or_else(|error| panic!("shared supply: {error}"));
+        let caps = port
+            .mint_capabilities(10)
+            .unwrap_or_else(|error| panic!("shared supply: {error}"));
 
         // Mint needs principal-scoped read/write for balances
         // and shared read/write for total supply
@@ -337,7 +348,7 @@ mod tests {
                 maximum_amount: 1_000,
             },
         ])
-        .unwrap();
+        .unwrap_or_else(|error| panic!("shared supply: {error}"));
         assert_eq!(caps, expected);
     }
 
@@ -347,11 +358,14 @@ mod tests {
             asset: [1u8; 32],
             price_per_token: 100,
         };
-        let port = SharedSupplyPort::new(terms).unwrap();
-        let caps = port.supply_query_capabilities().unwrap();
+        let _port =
+            SharedSupplyPort::new(terms).unwrap_or_else(|error| panic!("shared supply: {error}"));
+        let caps = SharedSupplyPort::supply_query_capabilities()
+            .unwrap_or_else(|error| panic!("shared supply: {error}"));
 
         // Total supply query only needs shared read
-        let expected = CapabilitySet::new([Capability::SharedStorageRead]).unwrap();
+        let expected = CapabilitySet::new([Capability::SharedStorageRead])
+            .unwrap_or_else(|error| panic!("shared supply: {error}"));
         assert_eq!(caps, expected);
     }
 }
