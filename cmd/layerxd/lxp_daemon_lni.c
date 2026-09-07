@@ -1910,7 +1910,10 @@ static lxp_result send_receipt(lxp_daemon_lni_server *server, int descriptor,
 {
     lxp_receipt_query query;
     lxp_byte_span receipt;
-    size_t mark;
+    lxp_log published_log;
+    lxp_history history = {0};
+    lxp_arena arena;
+    uint8_t *storage;
     lxp_result status;
     (void)memset(&query, 0, sizeof(query));
     if (request->proof_length != 0U || request->payload_length < 1U)
@@ -1933,10 +1936,16 @@ static lxp_result send_receipt(lxp_daemon_lni_server *server, int descriptor,
     }
     query.maximum_response_bytes = server->frame_bytes -
         LNI_ENVELOPE_FIXED_BYTES;
-    if (pthread_mutex_lock(&server->owner->mutex) != 0) return LXP_ERR_IO;
-    mark = lxp_arena_mark(server->owner->scratch);
-    status = lxp_receipt_lookup(server->owner->history, &query,
-                                server->owner->scratch, &receipt);
+    if (pthread_mutex_lock(&server->owner->receipt_mutex) != 0) return LXP_ERR_IO;
+    published_log = server->owner->published_receipt_log;
+    if (pthread_mutex_unlock(&server->owner->receipt_mutex) != 0)
+        return LXP_FATAL_INVARIANT;
+    history.log = &published_log;
+    storage = malloc(query.maximum_response_bytes);
+    if (storage == NULL) return LXP_ERR_IO;
+    status = lxp_arena_init(&arena, storage, query.maximum_response_bytes);
+    if (status == LXP_OK)
+        status = lxp_receipt_lookup(&history, &query, &arena, &receipt);
     if (status == LXP_ERR_UNKNOWN_ACTIVITY)
         status = send_envelope(descriptor, server->frame_bytes,
                                LNI_RECEIPT_LOOKUP_RESPONSE,
@@ -1951,9 +1960,7 @@ static lxp_result send_receipt(lxp_daemon_lni_server *server, int descriptor,
     else
         status = receipt_refusal(descriptor, server->frame_bytes,
                                  request->correlation_id, status, deadline);
-    (void)lxp_arena_reset(server->owner->scratch, mark);
-    if (pthread_mutex_unlock(&server->owner->mutex) != 0 && status == LXP_OK)
-        status = LXP_FATAL_INVARIANT;
+    free(storage);
     return status;
 }
 
