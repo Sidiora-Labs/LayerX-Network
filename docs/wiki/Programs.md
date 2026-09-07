@@ -9,7 +9,8 @@ The C kernel lives under `src/modules/programs/`. The deterministic WASM
 runtime is `programs/crates/layerx-programs-runtime/`. Receipt-bound registry
 reads live in `programs/crates/layerx-programs-registry/`. Guest SDKs live
 under `programs/sdk/`. `platform/sdk/` holds client SDKs (dotnet, go, jvm,
-swift, conformance, generators).
+swift, conformance, generators). CALL receipt terminal verification for
+those clients is on [SdkTerminalVerification](SdkTerminalVerification.md).
 
 This page is a read of those sources. Where they disagree, both sides are
 cited.
