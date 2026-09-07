@@ -86,4 +86,4 @@ LayerX protocol behavior, including how checkpoints and custody bind to Paxeer, 
 
 ## License
 
-This subtree is published with the rest of the monorepo under the repository [`LICENSE`](../LICENSE): source-available for inspection and security review during qualification, with a broader license after that work completes.
+This subtree is published with the rest of the monorepo under the Apache License, Version 2.0. See [`LICENSE`](../LICENSE).

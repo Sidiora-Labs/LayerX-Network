@@ -244,7 +244,7 @@ Project status is deliberately narrow:
 | Stage | Detail |
 | --- | --- |
 | Availability | Limited beta opens **September 7**. |
-| Source | Source-available during qualification — built for review now; a broader license follows release qualification. |
+| Source | Licensed under the Apache License, Version 2.0. |
 | Public endpoints | None yet for LayerX itself. No public RPC, faucet, or explorer. |
 | Settlement | Checkpoints settle on Paxeer Network (EVM chain ID `125`); the settlement stack is co-located under `paxeer-network/`. |
 
