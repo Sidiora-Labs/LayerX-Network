@@ -24,23 +24,37 @@ impl LeaseCapabilities {
     /// program may access its lease-principal namespace; no shared storage,
     /// transfer, balance, receipt, event, or callee authority is admitted.
     pub fn derive(lease: &Lease) -> Result<Self, SandboxRefusal> {
-        let principal = lease.namespace().execution_principal()
+        let principal = lease
+            .namespace()
+            .execution_principal()
             .map_err(SandboxRefusal::Lease)?;
-        let namespace = lease.namespace().storage_namespace()
+        let namespace = lease
+            .namespace()
+            .storage_namespace()
             .map_err(SandboxRefusal::Lease)?;
         let grants = CapabilitySet::new([Capability::StorageRead, Capability::StorageWrite])
             .map_err(SandboxRefusal::Capability)?;
-        Ok(Self { principal, namespace, grants })
+        Ok(Self {
+            principal,
+            namespace,
+            grants,
+        })
     }
 
     #[must_use]
-    pub const fn principal(&self) -> layerx_programs_runtime::PrincipalId { self.principal }
+    pub const fn principal(&self) -> layerx_programs_runtime::PrincipalId {
+        self.principal
+    }
 
     #[must_use]
-    pub const fn namespace(&self) -> StorageNamespace { self.namespace }
+    pub const fn namespace(&self) -> StorageNamespace {
+        self.namespace
+    }
 
     #[must_use]
-    pub const fn grants(&self) -> &CapabilitySet { &self.grants }
+    pub const fn grants(&self) -> &CapabilitySet {
+        &self.grants
+    }
 
     fn authorization(&self) -> AuthorizationContext {
         AuthorizationContext::new(self.principal, self.grants.clone())
@@ -74,12 +88,26 @@ pub struct SandboxExecutionRecord {
 pub enum SandboxRefusal {
     Lease(LeaseRefusal),
     Capability(AbiError),
-    LeaseNotActive { state: LeaseState },
-    LeaseExpired { expiry: u64, observed: u64 },
-    CeilingExhausted { bound: BoundKind, limit: u128, attempted: u128 },
-    GrowthCeilingExhausted { memory_limit: u64, table_limit: u64 },
+    LeaseNotActive {
+        state: LeaseState,
+    },
+    LeaseExpired {
+        expiry: u64,
+        observed: u64,
+    },
+    CeilingExhausted {
+        bound: BoundKind,
+        limit: u128,
+        attempted: u128,
+    },
+    GrowthCeilingExhausted {
+        memory_limit: u64,
+        table_limit: u64,
+    },
     Program(ExecutionError),
-    AccountingOverflow { bound: BoundKind },
+    AccountingOverflow {
+        bound: BoundKind,
+    },
 }
 
 impl Display for SandboxRefusal {
@@ -100,11 +128,14 @@ pub(crate) fn execute_scoped(
     request: SandboxExecutionRequest<'_>,
 ) -> Result<SandboxExecutionRecord, SandboxRefusal> {
     if lease.state() != LeaseState::Active {
-        return Err(SandboxRefusal::LeaseNotActive { state: lease.state() });
+        return Err(SandboxRefusal::LeaseNotActive {
+            state: lease.state(),
+        });
     }
     if request.observed_batch >= lease.expiry() {
         return Err(SandboxRefusal::LeaseExpired {
-            expiry: lease.expiry(), observed: request.observed_batch,
+            expiry: lease.expiry(),
+            observed: request.observed_batch,
         });
     }
     let capabilities = LeaseCapabilities::derive(lease)?;
@@ -113,13 +144,32 @@ pub(crate) fn execute_scoped(
     let budget = ResourceBudget::new_complete(
         remaining(BoundKind::CpuFuel, limits.cpu_fuel, prior.cpu_fuel)?,
         limits.memory_bytes,
-        remaining(BoundKind::StorageReadBytes, limits.storage_read_bytes, prior.storage_read_bytes)?,
-        remaining(BoundKind::StorageWriteBytes, limits.storage_write_bytes, prior.storage_write_bytes)?,
-        u32::try_from(remaining(BoundKind::OutputValues, limits.output_values, prior.output_values)?)
-            .map_err(|_| SandboxRefusal::AccountingOverflow { bound: BoundKind::OutputValues })?,
-        remaining(BoundKind::OutputBytes, limits.output_bytes, prior.output_bytes)?,
-        u32::try_from(limits.table_elements)
-            .map_err(|_| SandboxRefusal::AccountingOverflow { bound: BoundKind::TableElements })?,
+        remaining(
+            BoundKind::StorageReadBytes,
+            limits.storage_read_bytes,
+            prior.storage_read_bytes,
+        )?,
+        remaining(
+            BoundKind::StorageWriteBytes,
+            limits.storage_write_bytes,
+            prior.storage_write_bytes,
+        )?,
+        u32::try_from(remaining(
+            BoundKind::OutputValues,
+            limits.output_values,
+            prior.output_values,
+        )?)
+        .map_err(|_| SandboxRefusal::AccountingOverflow {
+            bound: BoundKind::OutputValues,
+        })?,
+        remaining(
+            BoundKind::OutputBytes,
+            limits.output_bytes,
+            prior.output_bytes,
+        )?,
+        u32::try_from(limits.table_elements).map_err(|_| SandboxRefusal::AccountingOverflow {
+            bound: BoundKind::TableElements,
+        })?,
     );
     let mut held = storage.clone();
     let runtime_request = AuthorizedExecutionRequest {
@@ -136,8 +186,11 @@ pub(crate) fn execute_scoped(
         .execute_authorized(&mut held, runtime_request)
         .map_err(|error| classify_execution(error, budget))?;
     let metered = execution.execution.usage;
-    let namespace_bytes = held.namespace_persistent_bytes(capabilities.namespace())
-        .map_err(|_| SandboxRefusal::AccountingOverflow { bound: BoundKind::NamespaceBytes })?;
+    let namespace_bytes = held
+        .namespace_persistent_bytes(capabilities.namespace())
+        .map_err(|_| SandboxRefusal::AccountingOverflow {
+            bound: BoundKind::NamespaceBytes,
+        })?;
     if namespace_bytes > limits.namespace_bytes {
         return Err(SandboxRefusal::CeilingExhausted {
             bound: BoundKind::NamespaceBytes,
@@ -158,15 +211,35 @@ pub(crate) fn execute_scoped(
     let cumulative_usage = LeaseUsage {
         cpu_fuel: add(BoundKind::CpuFuel, prior.cpu_fuel, activity_usage.cpu_fuel)?,
         memory_bytes: prior.memory_bytes.max(activity_usage.memory_bytes),
-        storage_read_bytes: add(BoundKind::StorageReadBytes, prior.storage_read_bytes, activity_usage.storage_read_bytes)?,
-        storage_write_bytes: add(BoundKind::StorageWriteBytes, prior.storage_write_bytes, activity_usage.storage_write_bytes)?,
-        output_values: add(BoundKind::OutputValues, prior.output_values, activity_usage.output_values)?,
-        output_bytes: add(BoundKind::OutputBytes, prior.output_bytes, activity_usage.output_bytes)?,
+        storage_read_bytes: add(
+            BoundKind::StorageReadBytes,
+            prior.storage_read_bytes,
+            activity_usage.storage_read_bytes,
+        )?,
+        storage_write_bytes: add(
+            BoundKind::StorageWriteBytes,
+            prior.storage_write_bytes,
+            activity_usage.storage_write_bytes,
+        )?,
+        output_values: add(
+            BoundKind::OutputValues,
+            prior.output_values,
+            activity_usage.output_values,
+        )?,
+        output_bytes: add(
+            BoundKind::OutputBytes,
+            prior.output_bytes,
+            activity_usage.output_bytes,
+        )?,
         table_elements: prior.table_elements,
         namespace_bytes,
     };
-    let cumulative_escrow_consumed = lease.escrow_consumed().checked_add(metered.fee_units)
-        .ok_or(SandboxRefusal::AccountingOverflow { bound: BoundKind::Escrow })?;
+    let cumulative_escrow_consumed = lease
+        .escrow_consumed()
+        .checked_add(metered.fee_units)
+        .ok_or(SandboxRefusal::AccountingOverflow {
+            bound: BoundKind::Escrow,
+        })?;
     if cumulative_escrow_consumed > lease.escrow_amount() {
         return Err(SandboxRefusal::CeilingExhausted {
             bound: BoundKind::Escrow,
@@ -185,32 +258,39 @@ pub(crate) fn execute_scoped(
 }
 
 fn remaining(bound: BoundKind, limit: u64, consumed: u64) -> Result<u64, SandboxRefusal> {
-    limit.checked_sub(consumed).ok_or(SandboxRefusal::CeilingExhausted {
-        bound, limit: u128::from(limit), attempted: u128::from(consumed),
-    })
+    limit
+        .checked_sub(consumed)
+        .ok_or(SandboxRefusal::CeilingExhausted {
+            bound,
+            limit: u128::from(limit),
+            attempted: u128::from(consumed),
+        })
 }
 
 fn add(bound: BoundKind, left: u64, right: u64) -> Result<u64, SandboxRefusal> {
-    left.checked_add(right).ok_or(SandboxRefusal::AccountingOverflow { bound })
+    left.checked_add(right)
+        .ok_or(SandboxRefusal::AccountingOverflow { bound })
 }
 
 fn classify_execution(error: ExecutionError, budget: ResourceBudget) -> SandboxRefusal {
     match error {
-        ExecutionError::Resource(MeterRefusal::BudgetExceeded { resource, limit, attempted }) => {
-            SandboxRefusal::CeilingExhausted {
-                bound: match resource {
-                    ResourceKind::Cpu => BoundKind::CpuFuel,
-                    ResourceKind::Memory => BoundKind::MemoryBytes,
-                    ResourceKind::StorageRead => BoundKind::StorageReadBytes,
-                    ResourceKind::StorageWrite => BoundKind::StorageWriteBytes,
-                    ResourceKind::StorageOccupancy => BoundKind::NamespaceBytes,
-                    ResourceKind::Output => BoundKind::OutputValues,
-                    ResourceKind::OutputBytes => BoundKind::OutputBytes,
-                },
-                limit: u128::from(limit),
-                attempted: u128::from(attempted),
-            }
-        }
+        ExecutionError::Resource(MeterRefusal::BudgetExceeded {
+            resource,
+            limit,
+            attempted,
+        }) => SandboxRefusal::CeilingExhausted {
+            bound: match resource {
+                ResourceKind::Cpu => BoundKind::CpuFuel,
+                ResourceKind::Memory => BoundKind::MemoryBytes,
+                ResourceKind::StorageRead => BoundKind::StorageReadBytes,
+                ResourceKind::StorageWrite => BoundKind::StorageWriteBytes,
+                ResourceKind::StorageOccupancy => BoundKind::NamespaceBytes,
+                ResourceKind::Output => BoundKind::OutputValues,
+                ResourceKind::OutputBytes => BoundKind::OutputBytes,
+            },
+            limit: u128::from(limit),
+            attempted: u128::from(attempted),
+        },
         ExecutionError::Fault(ExecutionFault::OutOfFuel) => SandboxRefusal::CeilingExhausted {
             bound: BoundKind::CpuFuel,
             limit: u128::from(budget.cpu_fuel()),
@@ -265,15 +345,22 @@ mod tests {
             },
             1,
             100,
-        ).expect("lease")
+        )
+        .expect("lease")
     }
 
     #[test]
     fn capabilities_are_derived_and_contain_no_escape_authority() {
         let lease = lease(1);
         let capabilities = LeaseCapabilities::derive(&lease).expect("capabilities");
-        assert_eq!(capabilities.principal(), lease.namespace().execution_principal().expect("principal"));
-        assert_eq!(capabilities.namespace(), lease.namespace().storage_namespace().expect("namespace"));
+        assert_eq!(
+            capabilities.principal(),
+            lease.namespace().execution_principal().expect("principal")
+        );
+        assert_eq!(
+            capabilities.namespace(),
+            lease.namespace().storage_namespace().expect("namespace")
+        );
         assert_eq!(capabilities.grants().canonical_encoding(), vec![0, 2, 1, 2]);
     }
 
@@ -295,7 +382,11 @@ mod tests {
     }
 
     fn exports() -> Vec<u8> {
-        let entries = [("layerx_reserve", 0u8, 1u8), (CALL_ENTRY_EXPORT, 0, 2), ("memory", 2, 0)];
+        let entries = [
+            ("layerx_reserve", 0u8, 1u8),
+            (CALL_ENTRY_EXPORT, 0, 2),
+            ("memory", 2, 0),
+        ];
         let mut payload = unsigned_leb(entries.len() as u64);
         for (name, kind, index) in entries {
             payload.extend(unsigned_leb(name.len() as u64));
@@ -311,7 +402,16 @@ mod tests {
         let entry_params = [TYPE_I32, TYPE_I32];
         let result = [TYPE_I32];
         let mut entry = Vec::new();
-        for _ in 0..arity { entry.extend([OP_I32_CONST, 0]); }
+        let arguments = if function == "program_call" {
+            vec![0, 32, 0, 0, 32, 2]
+        } else {
+            vec![0; arity]
+        };
+        for argument in arguments {
+            entry.extend([OP_I32_CONST, argument]);
+        }
+        let mut data = vec![1, 0, OP_I32_CONST, 0, OP_END, 32];
+        data.extend([8; 32]);
         entry.extend([OP_CALL, 0, OP_END]);
         module(&[
             type_section(&[
@@ -327,6 +427,7 @@ mod tests {
                 func_body(&[], &[OP_I32_CONST, 0, OP_END]),
                 func_body(&[], &entry),
             ]),
+            raw_section(11, &data),
         ])
     }
 
@@ -336,7 +437,18 @@ mod tests {
         let capabilities = LeaseCapabilities::derive(&lease).expect("capabilities");
         let engine = WasmEngine::declared().expect("engine");
         for (function, arity) in [("event_emit", 4usize), ("program_call", 6usize)] {
-            let module = engine.validate(&hostile_host_call_image(function, arity)).expect("image");
+            let module = engine
+                .validate(&hostile_host_call_image(function, arity))
+                .expect("image");
+            let mut catalog = layerx_programs_runtime::ProgramCatalog::new();
+            assert!(catalog
+                .insert(
+                    layerx_programs_runtime::ProgramId::new([8; 32]).expect("callee"),
+                    engine
+                        .validate(&hostile_host_call_image(function, arity))
+                        .expect("callee image")
+                )
+                .is_none());
             let mut storage = Storage::new();
             let before = storage.clone();
             let result = Executor::declared().execute_authorized(
@@ -348,20 +460,23 @@ mod tests {
                     receipts: &NoReceipts,
                     entrypoint: CALL_ENTRY_EXPORT,
                     calldata: &[],
-                    composition: CompositionContext::isolated(),
+                    composition: CompositionContext::catalog(
+                        catalog,
+                        layerx_programs_runtime::CompositionRules::declared(),
+                    ),
                     response_capacity: 0,
                 },
             );
-            match result {
-                Err(ExecutionError::Abi(AbiError::CapabilityDenied)) => {}
-                Ok(record) => {
-                    assert!(record.effects.events.is_empty());
-                    assert!(record.effects.calls.is_empty());
-                    assert!(record.effects.transfers.is_empty());
-                    assert!(matches!(record.execution.outputs.as_slice(), [WasmValue::I32(code)] if *code < 0));
-                }
-                other => panic!("unexpected hostile outcome: {other:?}"),
-            }
+            let expected = if function == "event_emit" {
+                ExecutionError::Entrypoint(
+                    layerx_programs_runtime::EntrypointRefusal::GuestRefused { code: -1 },
+                )
+            } else {
+                ExecutionError::Composition(layerx_programs_runtime::CompositionRefusal::Authority(
+                    AbiError::CapabilityDenied,
+                ))
+            };
+            assert_eq!(result, Err(expected));
             assert_eq!(storage, before);
         }
     }

@@ -2061,3 +2061,11 @@ symbol = "execute"
 observed = "cargo clippy --locked --manifest-path programs/Cargo.toml -p layerx-programs-sandbox --lib --tests --features host-ffi -- -D warnings exits 101 while checking the runtime dependency, with 151 errors beginning at ffi_call.rs:2122 needless_continue. The sandbox lint result is not established. Raw output: qual-logs/sandbox-fixes/clippy.log; diagnostic index: qual-logs/sandbox-fixes/clippy-errors.txt."
 assumption = "Runtime source and lint policy remain unchanged. Runtime diagnostics require repair outside the sandbox ownership boundary. make programs-core-test covers native Programs binaries in Makefile and does not include the sandbox crate, so the conditional sandbox gate does not apply."
 severity = "blocker"
+
+[observation.6.4.sandbox-hostile-refusal-typing]
+task = "6.4"
+file = "programs/crates/layerx-programs-sandbox/src/execute.rs"
+symbol = "hostile_images_cannot_emit_or_call_an_unleased_program hostile_host_call_image"
+observed = "Authority: runtime host/events.rs maps denied ABI-v1 event capability to status -1; entrypoint::invoke maps the returned negative status to GuestRefused. The event case now requires exactly Entrypoint(GuestRefused { code: -1 }). The program_call fixture previously supplied a zero-length program identifier and reached bounds refusal rather than authorization. It now supplies a distinct nonzero program identifier, canonical empty requested capabilities and a real catalog module. Abi::stage_call requires the Call grant, and calls::CompositionRefusal plus execute_authorized preserve exactly Composition(Authority(CapabilityDenied)). This exercises the unauthorized-call requirement in spec/layerx-platform/spec.kvx task.34.7 do_1. Each case accepts one exact result and requires unchanged storage. Full sandbox host-ffi suite: exit 0, 34 tests passed, none ignored; qual-logs/sandbox-fixes/passing-sandbox-test.log. Touched rustfmt --check, interpreter build, ABI drift and diff checks exit 0; exact commands and exits: qual-logs/sandbox-fixes/gates.jsonl."
+assumption = "No runtime refusal mapping changes. The successful-record alternative is removed; arbitrary negative statuses, bounds errors, unknown-program and reentrancy refusals cannot satisfy the capability-denial test. Strict Clippy remains blocked in the separately recorded runtime dependency."
+severity = "note"
