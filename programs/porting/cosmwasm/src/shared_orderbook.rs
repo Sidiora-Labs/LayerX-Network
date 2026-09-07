@@ -1,10 +1,10 @@
-//! Reference port demonstrating shared state: a CosmWasm order book.
+//! Reference port demonstrating shared state: a `CosmWasm` order book.
 //!
 //! The contract tracks open orders that every trader can read and match,
 //! demonstrating shared state mapped onto the program-shared namespace.
 
 use crate::error::PortRefusal;
-use crate::storage::{item_key, map_key, StateBinding};
+use crate::storage::{map_key, StateBinding};
 
 /// The global order count, shared across all traders.
 pub const ORDER_COUNT: &str = "order_count";
@@ -150,24 +150,28 @@ mod tests {
 
     #[test]
     fn order_count_key_derivation() {
-        let key = OrderBook::order_count_key().unwrap();
+        let key = OrderBook::order_count_key()
+            .unwrap_or_else(|error| panic!("shared order book: {error}"));
         // Item key is the namespace verbatim
         assert_eq!(key, ORDER_COUNT.as_bytes());
     }
 
     #[test]
     fn order_key_derivation() {
-        let key = OrderBook::order_key(42).unwrap();
+        let key =
+            OrderBook::order_key(42).unwrap_or_else(|error| panic!("shared order book: {error}"));
         // Map key is length-prefixed namespace + key
         assert!(!key.is_empty());
         // Verify it uses map_key composition
-        let expected = map_key(ORDERS, &42u64.to_le_bytes()).unwrap();
+        let expected = map_key(ORDERS, &42u64.to_le_bytes())
+            .unwrap_or_else(|error| panic!("shared order book: {error}"));
         assert_eq!(key, expected);
     }
 
     #[test]
     fn position_key_collapses() {
-        let key = OrderBook::position_key().unwrap();
+        let key =
+            OrderBook::position_key().unwrap_or_else(|error| panic!("shared order book: {error}"));
         // SenderIndexed collapses onto the map prefix
         // which is length-prefixed namespace
         assert!(!key.is_empty());
@@ -187,9 +191,11 @@ mod tests {
         let binding = StateBinding::Shared;
         assert!(binding.shared());
         assert!(binding.portable());
-        
+
         // And produce valid keys
-        let key = binding.layerx_key(ORDER_COUNT, &[]).unwrap();
+        let key = binding
+            .layerx_key(ORDER_COUNT, &[])
+            .unwrap_or_else(|error| panic!("shared order book: {error}"));
         assert_eq!(key, ORDER_COUNT.as_bytes());
     }
 }

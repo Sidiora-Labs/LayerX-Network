@@ -40,7 +40,7 @@ pub const ARTIFACT_PATH: &str = "build/public-lock.wasm";
 /// The pinned build command, whose last word names the descriptor to compile.
 pub const BUILD_COMMAND: &str = "layerx-porting-evm emit port/public-lock.port";
 
-/// Maps `address(this).balance` custody onto one public, rederivable LayerX account.
+/// Maps `address(this).balance` custody onto one public, rederivable `LayerX` account.
 ///
 /// # Errors
 ///
