@@ -95,7 +95,7 @@ platform-build:
 platform-build-all: platform-build platform-sample-dependencies-ready
 	npm run build --workspaces --if-present
 	cd platform/sdk/go && GOPROXY=off go build ./...
-	cargo build --offline --locked --manifest-path platform/examples/marketplace/program/Cargo.toml --release
+	cargo build --offline --locked --manifest-path platform/examples/marketplace/program/Cargo.toml --target wasm32-unknown-unknown --release
 	mvn -o -q -f platform/sdk/jvm/pom.xml -DskipTests package
 	mvn -o -q -f platform/integrations/spring/example/pom.xml -DskipTests package
 	dotnet build platform/sdk/dotnet/LayerX.Sdk.csproj --no-restore --configuration Release --nologo
@@ -105,7 +105,7 @@ platform-build-all: platform-build platform-sample-dependencies-ready
 platform-lint:
 	$(PLATFORM_CARGO) clippy --offline --manifest-path $(PLATFORM_MANIFEST) --locked --workspace --all-targets -- -D warnings
 	$(PLATFORM_CARGO) run --offline --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-workspace-gate -- platform/workspace.kvx .
-	cargo clippy --offline --locked --manifest-path platform/examples/marketplace/program/Cargo.toml --all-targets -- -D warnings
+	cargo clippy --offline --locked --manifest-path platform/examples/marketplace/program/Cargo.toml --target wasm32-unknown-unknown --lib -- -D warnings
 	sh platform/tools/dependency-policy.sh
 	cargo deny --manifest-path $(PLATFORM_MANIFEST) check advisories bans sources
 
