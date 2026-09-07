@@ -1820,3 +1820,35 @@ symbol = "post_upgrade_maintenance_case publish_artifact_fixture_batch"
 observed = "make build/tests/programs_call_activity exits 0 in qual-logs/build-final.log; build/tests/programs_call_activity --post-upgrade-batch exits 0 in qual-logs/post-upgrade-final.log; build/tests/programs_call_activity exits 0 in qual-logs/all-modes.log; make check exits 0 in qual-logs/make-check.log. The initial maintained CALL exhausted the direct fixture arena with -905 in qual-logs/post-upgrade.log. The maintained path now allocates the same 4 * LXP_MAX_BATCH_BODY_BYTES scratch arena as tests/storage/lxp_test_maintenance_publication.c; the original direct fixture allocation and all protocol bounds remain unchanged."
 assumption = "The maintained CALL after UPGRADE succeeds at global sequence 7, and its maintenance record consumes sequence 8. Existing negative terminal cases still emit their expected -736 and -601 diagnostics in the complete original fixture; those are distinct from the successful post-upgrade CALL. Qualification uses CARGO_BUILD_JOBS=4, MAKEFLAGS=-j4, worktree-local build outputs and LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin. These gates qualify the regression and existing make check suite, not daemon WAL recovery or external runtime certification."
 severity = "note"
+
+[observation.6.4.native-regression-matrix]
+task = "6.4"
+file = "tests/programs/test_call_activity.c; Makefile"
+symbol = "post_upgrade_maintenance_case test-bridge-deposit"
+observed = "Source 4f674892d6099e213b69cf35575eb6217783b24a passes a fresh programs_call_activity build and --post-upgrade-batch execution in qual-logs/pass7-regression-build.log and qual-logs/pass7-post-upgrade.log. make test-bridge-deposit rebuilds, links and exits 0 in qual-logs/pass7-bridge-before.log, including 145 contract tests. Its runtime-library dependency and repeated native archive link are already present from 9293319c; no further link edit was necessary. The full command ledger qual-logs/pass7-full-results.json records passing rebuild, admission, daemon admission/WAL/Programs core, simulation, Bridge credit/withdrawal, ASan credit/deposit/withdrawal/artifacts, occupancy, capability/lifecycle fixtures and make check. Proof/wire tests and strict all-target clippy pass in qual-logs/pass7-proof-wire-tests.log and qual-logs/pass7-proof-wire-clippy.log."
+assumption = "These results qualify the reconciled kernel regression and listed gates only. Finality aggregate and executed-fixture gates fail separately. Rebase to 35fc6abe changes no native C, owned proof/wire, runtime source, tests or root Makefile relative to the tested source; upstream dependency locks and LLVM configuration changed, so the complete matrix is not claimed on the rebased dependency state."
+severity = "info"
+
+[observation.6.4.native-maintenance-read-recurrence]
+task = "6.4"
+file = "tests/daemon/lxp_test_program_admission.c; cmd/layerxd/lxp_daemon_lni.c; cmd/layerxd/lxp_daemon_process.c"
+symbol = "maintenance_receipt send_receipt apply_canonical_batch"
+observed = "make test-maintenance-publication test-daemon-maintenance-publication exits 2 in qual-logs/pass7-occupancy.log after the daemon receipt connection closes at sequence 1. A standalone daemon rerun exits 2 at sequence 3 in qual-logs/pass7-daemon-maintenance-isolated.log. Retained fixture directories are /tmp/lxp-program-admission-9jjufS and /tmp/lxp-program-admission-H5FeMH. After the full native rebuild, bash tests/daemon/program-admission.sh build --maintenance exits 0 in qual-logs/pass7-daemon-maintenance-rebuilt.log, including hard restart and further publication. The native maintenance/max-64 child in the combined gate completes without an error, but the aggregate remains failed."
+assumption = "The passing rebuilt-daemon run does not prove the earlier intermittent disconnect cause resolved. Receipt lookup and batch execution share the owner mutex while request I/O uses a fixed deadline; causal timing has not been instrumented. Preserve deadlines, assertions and failed-read behavior. All non-CALL maintenance integration and exhaustive queued-reservation/mixed-WAL crash boundaries remain unqualified."
+severity = "blocker"
+
+[observation.6.4.native-maintenance-batch-identity]
+task = "6.4"
+file = "cmd/layerxd/lxp_daemon_batch_wal.c; cmd/layerxd/lxp_daemon_process.c; agent/crates/layerx-wire/src/hash.rs; platform/hosted/authority/src/lib.rs; platform/hosted/authority/tests/real_node.rs"
+symbol = "lxp_daemon_batch_bind_prefix receipt_execution_batch_id authorized_batch_by_activity"
+observed = "make test-daemon-finality-authority exits 2 in qual-logs/pass7-full-finality.log. Native finality JSON and isolated-chain registration positive/negative cases pass; bootstrap-send.sh then fails real_node_authority_serves_verified_facts_and_reflects_replica_loss at real_node.rs:1360 with HTTP 502 evidence_refused instead of 200. Authority reports BatchIdentity. Native batch binding hashes previous state root, activity Merkle root, first activity sequence, last activity sequence and batch number for maintained serial and CALL batches. receipt_execution_batch_id selects the activity-id legacy hash for non-CALL receipts and uses header.last_sequence for CALL receipts; the maintained header includes the additional maintenance sequence."
+assumption = "Reconcile maintained batch identity through an explicitly selected and authenticated maintenance format at the authority consumer, with the activity count and exact activity-only sequence range bound to verified inclusion. Preserve historical ordinary-batch selection, signatures, root bindings and batch identity equality; never try both hashes or accept caller-selected labels. Authority consumer integration is outside native ownership and is requested in NEEDS.md."
+severity = "blocker"
+
+[observation.6.4.native-terminal-prerequisite]
+task = "6.4"
+file = "platform/sdk/conformance/fixtures/generate_executed_program_fixture.py; agent/sdk/python/layerx_sdk/program_wire.py"
+symbol = "fixture decode_and_verify_program_terminal"
+observed = "make programs-check-executed-fixture exits 2 in qual-logs/pass7-full-executed.log: program_wire.py:258 rejects transfer authority presence from the native protocol-3 terminal. Capability and native lifecycle fixture checks pass separately. V3 fixture bytes, ABI files and terminal emission are unchanged by this qualification."
+assumption = "The occupancy prerequisite is not fully qualified. Shared native-bin is not refreshed and terminal-evidence implementation, ABI generation and V4 fixtures remain pending. Client maintenance-v2 integration is a separate consumer dependency, not the reason for holding this work."
+severity = "blocker"
