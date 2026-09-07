@@ -14,6 +14,8 @@
 #include "lxp_daemon_batch_wal.h"
 #include "lxp_daemon_finality_authority.h"
 
+#include <openssl/evp.h>
+
 #include <errno.h>
 #include <dirent.h>
 #include <fcntl.h>
@@ -3213,9 +3215,136 @@ static lxp_result load_genesis_registration(
     return status;
 }
 
+static lxp_result initialized_genesis_marker(
+    lxp_daemon_process *process, bool create, bool *present)
+{
+    static const uint8_t domain[] = "LXP/initialized-genesis/v1";
+    static const char *const inputs[] = {
+        "LAYERX_NODE_GENESIS_MANIFEST", "LAYERX_NODE_GENESIS_REGISTRATION",
+        "LAYERX_NODE_SNAPSHOT", "LAYERX_NODE_IDENTITIES"
+    };
+    static const char *const paths[] = {
+        "LAYERX_NODE_CHECKPOINT_DIRECTORY", "LAYERX_NODE_PROGRAM_FEED_LOG",
+        "LAYERX_NODE_CANONICAL_LOG", "LAYERX_NODE_RECEIPT_AUTHORITY_LOG",
+        "LAYERX_NODE_BATCH_LOG", "LAYERX_NODE_EVIDENCE_LOG",
+        "LAYERX_NODE_HISTORY_DATABASE"
+    };
+    uint8_t record[sizeof(domain) + 11U * 32U + 64U];
+    uint8_t public_key[32];
+    uint8_t private_key[32] = {0};
+    uint8_t *stored = NULL;
+    size_t stored_length = 0U;
+    size_t offset = sizeof(domain);
+    const size_t body_length = sizeof(record) - 64U;
+    char final[4096];
+    char temporary[4096];
+    struct stat metadata;
+    int descriptor = -1;
+    int directory_descriptor = -1;
+    int length;
+    size_t index;
+    lxp_result status = LXP_OK;
+    *present = false;
+    length = snprintf(final, sizeof(final), "%s/initialized-genesis.lxg",
+                      process->checkpoint_directory);
+    if (length < 0 || (size_t)length >= sizeof(final))
+        return LXP_ERR_LENGTH_LIMIT;
+    if (!create) {
+        if (lstat(final, &metadata) != 0)
+            return errno == ENOENT ? LXP_OK : LXP_ERR_IO;
+        if (!S_ISREG(metadata.st_mode) || metadata.st_nlink != 1 ||
+            metadata.st_uid != geteuid() ||
+            (metadata.st_mode & 0777U) != 0600U)
+            return LXP_ERR_ROOT_MISMATCH;
+        status = lxp_daemon_artifact_read(final, sizeof(record), sizeof(record),
+                                          &stored, &stored_length);
+    }
+    (void)memcpy(record, domain, sizeof(domain));
+    for (index = 0U; status == LXP_OK &&
+         index < sizeof(inputs) / sizeof(inputs[0]); ++index) {
+        uint8_t *bytes = NULL;
+        size_t count = 0U;
+        const char *path = required_environment(inputs[index]);
+        status = lxp_daemon_artifact_read(path, NODE_SNAPSHOT_ARENA_BYTES,
+                                          0U, &bytes, &count);
+        if (status == LXP_OK)
+            status = lxp_hash_sha256(bytes, count, record + offset);
+        free(bytes);
+        offset += 32U;
+    }
+    for (index = 0U; status == LXP_OK &&
+         index < sizeof(paths) / sizeof(paths[0]); ++index) {
+        const char *path = required_environment(paths[index]);
+        if (path == NULL) status = LXP_ERR_NON_CANONICAL;
+        else status = lxp_hash_sha256(path, strlen(path), record + offset);
+        offset += 32U;
+    }
+    if (status == LXP_OK && offset != body_length)
+        status = LXP_FATAL_INVARIANT;
+    if (status == LXP_OK)
+        status = decode_hex(required_environment("LAYERX_NODE_SEQUENCER_PUBLIC_KEY"),
+                            public_key, sizeof(public_key));
+    if (status == LXP_OK && create) {
+        EVP_PKEY *key = NULL;
+        EVP_MD_CTX *context = NULL;
+        size_t signature_length = 64U;
+        status = decode_hex(required_environment("LAYERX_NODE_SEQUENCER_PRIVATE_KEY"),
+                            private_key, sizeof(private_key));
+        if (status == LXP_OK) {
+            key = EVP_PKEY_new_raw_private_key(EVP_PKEY_ED25519, NULL,
+                                               private_key, sizeof(private_key));
+            context = EVP_MD_CTX_new();
+            if (key == NULL || context == NULL ||
+                EVP_DigestSignInit(context, NULL, NULL, NULL, key) != 1 ||
+                EVP_DigestSign(context, record + body_length, &signature_length,
+                               record, body_length) != 1 || signature_length != 64U)
+                status = LXP_ERR_IO;
+        }
+        EVP_MD_CTX_free(context);
+        EVP_PKEY_free(key);
+        lxp_secure_zero(private_key, sizeof(private_key));
+    }
+    if (status == LXP_OK && !create) {
+        if (stored_length != sizeof(record) ||
+            lxp_ct_memcmp(stored, record, body_length) != 0)
+            status = LXP_ERR_ROOT_MISMATCH;
+        else (void)memcpy(record + body_length, stored + body_length, 64U);
+    }
+    if (status == LXP_OK)
+        status = lxp_ed25519_verify_raw(public_key, record + body_length,
+                                        record, body_length);
+    free(stored);
+    if (status == LXP_OK && create) {
+        length = snprintf(temporary, sizeof(temporary), "%s.tmp", final);
+        if (length < 0 || (size_t)length >= sizeof(temporary))
+            status = LXP_ERR_LENGTH_LIMIT;
+        if (status == LXP_OK) {
+            descriptor = open(temporary,
+                O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
+            if (descriptor < 0) status = LXP_ERR_IO;
+        }
+        if (status == LXP_OK)
+            status = write_file_bytes(descriptor, record, sizeof(record));
+        if (status == LXP_OK && fdatasync(descriptor) != 0) status = LXP_ERR_IO;
+        if (descriptor >= 0 && close(descriptor) != 0 && status == LXP_OK)
+            status = LXP_ERR_IO;
+        if (status == LXP_OK && rename(temporary, final) != 0)
+            status = LXP_ERR_IO;
+        if (status == LXP_OK) {
+            directory_descriptor = open(process->checkpoint_directory,
+                O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+            if (directory_descriptor < 0 || fsync(directory_descriptor) != 0)
+                status = LXP_ERR_IO;
+        }
+        if (directory_descriptor >= 0) (void)close(directory_descriptor);
+    }
+    if (status == LXP_OK) *present = true;
+    return status;
+}
+
 static lxp_result verify_bootstrap_genesis(
     lxp_daemon_process *process, const lxp_snapshot_manifest_record *snapshot,
-    bool storage_empty)
+    bool storage_empty, bool initialized)
 {
     const char *path = required_environment("LAYERX_NODE_GENESIS_MANIFEST");
     lxp_genesis_manifest *genesis = NULL;
@@ -3241,7 +3370,12 @@ static lxp_result verify_bootstrap_genesis(
         status = lxp_genesis_parse(bytes, (size_t)length,
                                    LXP_GENESIS_INPUT_MANIFEST, genesis);
     if (status == LXP_OK) status = load_genesis_registration(&registration);
-    if (status == LXP_OK)
+    if (status == LXP_OK && initialized)
+        status = lxp_genesis_initialized_verify(
+            genesis, &registration, process->network_id,
+            snapshot, &process->kernel, &process->owner_scratch,
+            &activities_enabled);
+    if (status == LXP_OK && !initialized)
         status = lxp_genesis_bootstrap_verify(
             genesis, &registration, process->network_id, storage_empty,
             snapshot, &process->kernel, &process->owner_scratch,
@@ -3360,6 +3494,7 @@ static lxp_result open_process(lxp_daemon_process *process,
     char snapshot_path[4096];
     bool checkpoint_selected = false;
     bool initial_storage_empty = false;
+    bool initialized = false;
     uint64_t value;
     const char *bearer;
     const char *replica_token;
@@ -3427,7 +3562,9 @@ static lxp_result open_process(lxp_daemon_process *process,
             required_environment("LAYERX_NODE_SNAPSHOT"), snapshot_path,
             &checkpoint_selected);
     if (status == LXP_OK) process->checkpoint_selected = checkpoint_selected;
-    if (status == LXP_OK && !checkpoint_selected) {
+    if (status == LXP_OK && !checkpoint_selected)
+        status = initialized_genesis_marker(process, false, &initialized);
+    if (status == LXP_OK && !checkpoint_selected && !initialized) {
         status = bootstrap_storage_empty(process->checkpoint_directory);
         initial_storage_empty = status == LXP_OK;
     }
@@ -3439,7 +3576,7 @@ static lxp_result open_process(lxp_daemon_process *process,
                                    &manifest, &process->kernel);
     if (status == LXP_OK && !checkpoint_selected)
         status = verify_bootstrap_genesis(process, &manifest,
-                                          initial_storage_empty);
+                                          initial_storage_empty, initialized);
     free(snapshot_bytes);
     if (status == LXP_OK &&
         configuration->start_sequence > process->state.next_sequence)
@@ -3475,6 +3612,8 @@ static lxp_result open_process(lxp_daemon_process *process,
         status = identity_checkpoint_load(snapshot_path,
                                            manifest.global_sequence,
                                            &process->identities);
+    if (status == LXP_OK && initial_storage_empty)
+        status = initialized_genesis_marker(process, true, &initialized);
     if (status == LXP_OK) stage = "logs";
     if (status == LXP_OK) status = open_log(
         &process->feed_log, "LAYERX_NODE_PROGRAM_FEED_LOG",
