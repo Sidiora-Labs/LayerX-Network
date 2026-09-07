@@ -1,42 +1,25 @@
 use super::{
     bytecode::{BranchOffset, F64Const32},
     const_pool::ConstRef,
-    CompiledFunc,
-    ConstPoolView,
+    CompiledFunc, ConstPoolView,
 };
 use crate::{
     core::TrapCode,
     engine::{
         bytecode::{
-            AddressOffset,
-            BlockFuel,
-            BranchTableTargets,
-            DataSegmentIdx,
-            ElementSegmentIdx,
-            FuncIdx,
-            GlobalIdx,
-            Instruction,
-            LocalDepth,
-            SignatureIdx,
-            TableIdx,
+            AddressOffset, BlockFuel, BranchTableTargets, DataSegmentIdx, ElementSegmentIdx,
+            FuncIdx, GlobalIdx, Instruction, LocalDepth, SignatureIdx, TableIdx,
         },
         cache::InstanceCache,
         code_map::{CodeMap, InstructionPtr},
         config::FuelCosts,
         stack::{CallStack, ValueStackPtr},
-        DropKeep,
-        FuncFrame,
-        ValueStack,
+        DropKeep, FuncFrame, ValueStack,
     },
     func::FuncEntity,
     store::ResourceLimiterRef,
     table::TableEntity,
-    FuelConsumptionMode,
-    Func,
-    FuncRef,
-    Instance,
-    StoreInner,
-    Table,
+    FuelConsumptionMode, Func, FuncRef, Instance, StoreInner, Table,
 };
 use core::cmp::{self};
 use wasmi_core::{Pages, UntypedValue};
@@ -240,9 +223,9 @@ impl<'ctx, 'engine> Executor<'ctx, 'engine> {
             match *self.ip.get() {
                 Instr::Observe(program_counter) => {
                     if let Some(charge) = self.visit_observe(program_counter)? {
-                        return Ok(WasmOutcome::Observe(charge))
+                        return Ok(WasmOutcome::Observe(charge));
                     }
-                },
+                }
                 Instr::LocalGet(local_depth) => self.visit_local_get(local_depth),
                 Instr::LocalSet(local_depth) => self.visit_local_set(local_depth),
                 Instr::LocalTee(local_depth) => self.visit_local_tee(local_depth),
@@ -461,43 +444,72 @@ impl<'ctx, 'engine> Executor<'ctx, 'engine> {
     }
 
     #[inline]
-    fn visit_observe(&mut self, _program_counter: u64) -> Result<Option<crate::execution_trace::ObservationCharge>, TrapCode> {
+    fn visit_observe(
+        &mut self,
+        _program_counter: u64,
+    ) -> Result<Option<crate::execution_trace::ObservationCharge>, TrapCode> {
         if !self.ctx.execution_boundary_authorized() {
             if !self.ctx.execution_boundary_needs_capture() {
                 self.sync_stack_ptr();
-                self.call_stack.push(FuncFrame::new(self.ip, self.cache.instance(), self.current_func, self.value_base))?;
-                return Ok(Some(crate::execution_trace::ObservationCharge::default()))
+                self.call_stack.push(FuncFrame::new(
+                    self.ip,
+                    self.cache.instance(),
+                    self.current_func,
+                    self.value_base,
+                ))?;
+                return Ok(Some(crate::execution_trace::ObservationCharge::default()));
             }
-            self.ctx.preflight_execution_boundary().map_err(|_| TrapCode::UnreachableCodeReached)?;
+            self.ctx
+                .preflight_execution_boundary()
+                .map_err(|_| TrapCode::UnreachableCodeReached)?;
             let charge = self.preflight_execution_snapshot()?;
             self.sync_stack_ptr();
-            self.call_stack.push(FuncFrame::new(self.ip, self.cache.instance(), self.current_func, self.value_base))?;
-            return Ok(Some(charge))
+            self.call_stack.push(FuncFrame::new(
+                self.ip,
+                self.cache.instance(),
+                self.current_func,
+                self.value_base,
+            ))?;
+            return Ok(Some(charge));
         }
-        let should_record = self.ctx
+        let should_record = self
+            .ctx
             .enter_execution_boundary()
             .map_err(|_| TrapCode::OutOfFuel)?;
         if should_record {
             let snapshot = match self.capture_execution_snapshot() {
                 Ok(snapshot) => snapshot,
                 Err(error) => {
-                    self.ctx.fail_execution_observer(crate::execution_trace::ExecutionObserverError::UnsupportedState);
-                    return Err(error)
+                    self.ctx.fail_execution_observer(
+                        crate::execution_trace::ExecutionObserverError::UnsupportedState,
+                    );
+                    return Err(error);
                 }
             };
-            self.ctx.push_execution_snapshot(snapshot).map_err(|_| TrapCode::UnreachableCodeReached)?;
+            self.ctx
+                .push_execution_snapshot(snapshot)
+                .map_err(|_| TrapCode::UnreachableCodeReached)?;
         }
         self.next_instr();
         Ok(None)
     }
 
-    fn preflight_execution_snapshot(&mut self) -> Result<crate::execution_trace::ObservationCharge, TrapCode> {
+    fn preflight_execution_snapshot(
+        &mut self,
+    ) -> Result<crate::execution_trace::ObservationCharge, TrapCode> {
         use crate::execution_trace::ObservationCharge;
         self.sync_stack_ptr();
-        let metadata = self.code_map.metadata(self.ip).ok_or(TrapCode::UnreachableCodeReached)?;
+        let metadata = self
+            .code_map
+            .metadata(self.ip)
+            .ok_or(TrapCode::UnreachableCodeReached)?;
         let instance = self.ctx.resolve_instance(self.cache.instance());
-        let memory_bytes = instance.get_memory(0).map_or(0, |memory| self.ctx.resolve_memory(&memory).data().len());
-        if instance.get_memory(1).is_some() { return Err(TrapCode::UnreachableCodeReached) }
+        let memory_bytes = instance
+            .get_memory(0)
+            .map_or(0, |memory| self.ctx.resolve_memory(&memory).data().len());
+        if instance.get_memory(1).is_some() {
+            return Err(TrapCode::UnreachableCodeReached);
+        }
         let encoded_value_bytes = |value_type: crate::execution_trace::ExecutionValueType| -> u64 {
             match value_type {
                 crate::execution_trace::ExecutionValueType::I32 => 5,
@@ -506,45 +518,69 @@ impl<'ctx, 'engine> Executor<'ctx, 'engine> {
         };
         let mut globals = 0usize;
         let mut global_bytes = 4_u64;
-        while let Some(global) = instance.get_global(u32::try_from(globals).map_err(|_| TrapCode::UnreachableCodeReached)?) {
+        while let Some(global) = instance
+            .get_global(u32::try_from(globals).map_err(|_| TrapCode::UnreachableCodeReached)?)
+        {
             let entity = self.ctx.resolve_global(&global);
             let value_type = match entity.ty().content() {
                 crate::core::ValueType::I32 => crate::execution_trace::ExecutionValueType::I32,
                 crate::core::ValueType::I64 => crate::execution_trace::ExecutionValueType::I64,
                 _ => return Err(TrapCode::UnreachableCodeReached),
             };
-            global_bytes = global_bytes.checked_add(5).and_then(|bytes| bytes.checked_add(encoded_value_bytes(value_type)))
+            global_bytes = global_bytes
+                .checked_add(5)
+                .and_then(|bytes| bytes.checked_add(encoded_value_bytes(value_type)))
                 .ok_or(TrapCode::UnreachableCodeReached)?;
-            globals = globals.checked_add(1).ok_or(TrapCode::UnreachableCodeReached)?;
+            globals = globals
+                .checked_add(1)
+                .ok_or(TrapCode::UnreachableCodeReached)?;
         }
         let mut frame_bytes = 4_u64;
         let mut value_bytes = 4_u64;
         for frame in self.call_stack.frames() {
             let header = self.code_map.header(frame.function());
-            frame_bytes = frame_bytes.checked_add(17).ok_or(TrapCode::UnreachableCodeReached)?;
+            frame_bytes = frame_bytes
+                .checked_add(17)
+                .ok_or(TrapCode::UnreachableCodeReached)?;
             for &value_type in header.local_types() {
                 let bytes = encoded_value_bytes(value_type);
-                frame_bytes = frame_bytes.checked_add(bytes).ok_or(TrapCode::UnreachableCodeReached)?;
-                value_bytes = value_bytes.checked_add(bytes).ok_or(TrapCode::UnreachableCodeReached)?;
+                frame_bytes = frame_bytes
+                    .checked_add(bytes)
+                    .ok_or(TrapCode::UnreachableCodeReached)?;
+                value_bytes = value_bytes
+                    .checked_add(bytes)
+                    .ok_or(TrapCode::UnreachableCodeReached)?;
             }
             for &value_type in frame.operand_types() {
-                value_bytes = value_bytes.checked_add(encoded_value_bytes(value_type)).ok_or(TrapCode::UnreachableCodeReached)?;
+                value_bytes = value_bytes
+                    .checked_add(encoded_value_bytes(value_type))
+                    .ok_or(TrapCode::UnreachableCodeReached)?;
             }
         }
         let current_header = self.code_map.header(self.current_func);
-        frame_bytes = frame_bytes.checked_add(9).ok_or(TrapCode::UnreachableCodeReached)?;
+        frame_bytes = frame_bytes
+            .checked_add(9)
+            .ok_or(TrapCode::UnreachableCodeReached)?;
         for &value_type in current_header.local_types() {
             let bytes = encoded_value_bytes(value_type);
-            frame_bytes = frame_bytes.checked_add(bytes).ok_or(TrapCode::UnreachableCodeReached)?;
-            value_bytes = value_bytes.checked_add(bytes).ok_or(TrapCode::UnreachableCodeReached)?;
+            frame_bytes = frame_bytes
+                .checked_add(bytes)
+                .ok_or(TrapCode::UnreachableCodeReached)?;
+            value_bytes = value_bytes
+                .checked_add(bytes)
+                .ok_or(TrapCode::UnreachableCodeReached)?;
         }
         for &value_type in &metadata.operand_types {
-            value_bytes = value_bytes.checked_add(encoded_value_bytes(value_type)).ok_or(TrapCode::UnreachableCodeReached)?;
+            value_bytes = value_bytes
+                .checked_add(encoded_value_bytes(value_type))
+                .ok_or(TrapCode::UnreachableCodeReached)?;
         }
-        let instance_state_bytes = self.ctx
+        let instance_state_bytes = self
+            .ctx
             .measure_execution_instance_states(*self.cache.instance())
             .map_err(|_| TrapCode::UnreachableCodeReached)?;
-        let arbitration_engine_canonical_bytes = self.ctx
+        let arbitration_engine_canonical_bytes = self
+            .ctx
             .measure_execution_instance_canonical_bytes(*self.cache.instance())
             .map_err(|_| TrapCode::UnreachableCodeReached)?;
         Ok(ObservationCharge {
@@ -553,43 +589,90 @@ impl<'ctx, 'engine> Executor<'ctx, 'engine> {
             frame_bytes,
             local_bytes: 0,
             global_bytes,
-            memory_bytes: 4_u64.checked_add(u64::try_from(memory_bytes).map_err(|_| TrapCode::UnreachableCodeReached)?).ok_or(TrapCode::UnreachableCodeReached)?,
+            memory_bytes: 4_u64
+                .checked_add(
+                    u64::try_from(memory_bytes).map_err(|_| TrapCode::UnreachableCodeReached)?,
+                )
+                .ok_or(TrapCode::UnreachableCodeReached)?,
             instance_state_bytes,
             arbitration_engine_canonical_bytes,
             host_state_bytes: 0,
             storage_overlay_bytes: 0,
-            instruction_bytes: 4_u64.checked_add(u64::try_from(metadata.control_stack.len()).map_err(|_| TrapCode::UnreachableCodeReached)?.checked_mul(6).ok_or(TrapCode::UnreachableCodeReached)?).ok_or(TrapCode::UnreachableCodeReached)?,
-            retained_instruction_bytes: u64::try_from(metadata.canonical_instruction.len()).map_err(|_| TrapCode::UnreachableCodeReached)?,
+            instruction_bytes: 4_u64
+                .checked_add(
+                    u64::try_from(metadata.control_stack.len())
+                        .map_err(|_| TrapCode::UnreachableCodeReached)?
+                        .checked_mul(6)
+                        .ok_or(TrapCode::UnreachableCodeReached)?,
+                )
+                .ok_or(TrapCode::UnreachableCodeReached)?,
+            retained_instruction_bytes: u64::try_from(metadata.canonical_instruction.len())
+                .map_err(|_| TrapCode::UnreachableCodeReached)?,
         })
     }
 
-    fn capture_execution_snapshot(&mut self) -> Result<crate::execution_trace::ExecutionSnapshot, TrapCode> {
+    fn capture_execution_snapshot(
+        &mut self,
+    ) -> Result<crate::execution_trace::ExecutionSnapshot, TrapCode> {
         use crate::execution_trace::{ExecutionGlobal, ExecutionSnapshot, ExecutionValue};
         self.sync_stack_ptr();
-        let metadata = self.code_map.metadata(self.ip).ok_or(TrapCode::UnreachableCodeReached)?;
+        let metadata = self
+            .code_map
+            .metadata(self.ip)
+            .ok_or(TrapCode::UnreachableCodeReached)?;
         let entries = self.value_stack.entries();
         let mut live_types = alloc::vec::Vec::with_capacity(entries.len());
         let frames = self.call_stack.frames();
         for (position, frame) in frames.iter().enumerate() {
             let header = self.code_map.header(frame.function());
-            let next_base = frames.get(position + 1).map_or(self.value_base, |next| next.value_base());
-            let locals_end = frame.value_base().checked_add(header.local_types().len()).ok_or(TrapCode::UnreachableCodeReached)?;
-            let operand_len = next_base.checked_sub(locals_end).ok_or(TrapCode::UnreachableCodeReached)?;
+            let next_base = frames
+                .get(position + 1)
+                .map_or(self.value_base, FuncFrame::value_base);
+            let locals_end = frame
+                .value_base()
+                .checked_add(header.local_types().len())
+                .ok_or(TrapCode::UnreachableCodeReached)?;
+            let operand_len = next_base
+                .checked_sub(locals_end)
+                .ok_or(TrapCode::UnreachableCodeReached)?;
             live_types.extend_from_slice(header.local_types());
-            if frame.operand_types().len() != operand_len { return Err(TrapCode::UnreachableCodeReached) }
+            if frame.operand_types().len() != operand_len {
+                return Err(TrapCode::UnreachableCodeReached);
+            }
             live_types.extend_from_slice(frame.operand_types());
         }
         let current_header = self.code_map.header(self.current_func);
         live_types.extend_from_slice(current_header.local_types());
-        let current_operands = entries.len().checked_sub(self.value_base.checked_add(current_header.local_types().len()).ok_or(TrapCode::UnreachableCodeReached)?).ok_or(TrapCode::UnreachableCodeReached)?;
-        if current_operands != metadata.operand_types.len() { return Err(TrapCode::UnreachableCodeReached) }
+        let current_operands = entries
+            .len()
+            .checked_sub(
+                self.value_base
+                    .checked_add(current_header.local_types().len())
+                    .ok_or(TrapCode::UnreachableCodeReached)?,
+            )
+            .ok_or(TrapCode::UnreachableCodeReached)?;
+        if current_operands != metadata.operand_types.len() {
+            return Err(TrapCode::UnreachableCodeReached);
+        }
         live_types.extend_from_slice(&metadata.operand_types);
-        if live_types.len() != entries.len() { return Err(TrapCode::UnreachableCodeReached) }
-        let value_stack = live_types.into_iter().zip(entries.iter().copied())
-            .map(|(value_type, value)| ExecutionValue { value_type, bits: u64::from(value) }).collect();
+        if live_types.len() != entries.len() {
+            return Err(TrapCode::UnreachableCodeReached);
+        }
+        let value_stack = live_types
+            .into_iter()
+            .zip(entries.iter().copied())
+            .map(|(value_type, value)| ExecutionValue {
+                value_type,
+                bits: u64::from(value),
+            })
+            .collect();
         let mut call_frames = alloc::vec::Vec::new();
         for frame in self.call_stack.frames() {
-            call_frames.push(self.capture_frame(frame.function(), frame.value_base(), Some(frame.ip()))?);
+            call_frames.push(self.capture_frame(
+                frame.function(),
+                frame.value_base(),
+                Some(frame.ip()),
+            )?);
         }
         call_frames.push(self.capture_frame(self.current_func, self.value_base, None)?);
         let instance = self.ctx.resolve_instance(self.cache.instance());
@@ -597,7 +680,9 @@ impl<'ctx, 'engine> Executor<'ctx, 'engine> {
         if let Some(memory) = instance.get_memory(0) {
             linear_memory.extend_from_slice(self.ctx.resolve_memory(&memory).data());
         }
-        if instance.get_memory(1).is_some() { return Err(TrapCode::UnreachableCodeReached) }
+        if instance.get_memory(1).is_some() {
+            return Err(TrapCode::UnreachableCodeReached);
+        }
         let mut globals = alloc::vec::Vec::new();
         let mut index = 0u32;
         while let Some(global) = instance.get_global(index) {
@@ -608,14 +693,27 @@ impl<'ctx, 'engine> Executor<'ctx, 'engine> {
                     crate::core::ValueType::I64 => crate::execution_trace::ExecutionValueType::I64,
                     _ => return Err(TrapCode::UnreachableCodeReached),
                 };
-                globals.push(ExecutionGlobal { global_index: index, mutable: entity.ty().mutability().is_mut(), value: ExecutionValue { value_type, bits: u64::from(entity.get_untyped()) } });
+                globals.push(ExecutionGlobal {
+                    global_index: index,
+                    mutable: entity.ty().mutability().is_mut(),
+                    value: ExecutionValue {
+                        value_type,
+                        bits: u64::from(entity.get_untyped()),
+                    },
+                });
             }
-            index = index.checked_add(1).ok_or(TrapCode::UnreachableCodeReached)?;
+            index = index
+                .checked_add(1)
+                .ok_or(TrapCode::UnreachableCodeReached)?;
         }
         let root_instance = *self.cache.instance();
-        let instance_state_bytes = self.ctx.measure_execution_instance_states(root_instance)
+        let instance_state_bytes = self
+            .ctx
+            .measure_execution_instance_states(root_instance)
             .map_err(|_| TrapCode::UnreachableCodeReached)?;
-        let arbitration_instances = self.ctx.capture_execution_instance_states(root_instance, instance_state_bytes)
+        let arbitration_instances = self
+            .ctx
+            .capture_execution_instance_states(root_instance, instance_state_bytes)
             .map_err(|_| TrapCode::UnreachableCodeReached)?;
         Ok(ExecutionSnapshot {
             step_index: self.ctx.execution_step_index().saturating_sub(1),
@@ -633,14 +731,39 @@ impl<'ctx, 'engine> Executor<'ctx, 'engine> {
         })
     }
 
-    fn capture_frame(&self, function: CompiledFunc, value_base: usize, return_ip: Option<InstructionPtr>) -> Result<crate::execution_trace::ExecutionFrame, TrapCode> {
+    fn capture_frame(
+        &self,
+        function: CompiledFunc,
+        value_base: usize,
+        return_ip: Option<InstructionPtr>,
+    ) -> Result<crate::execution_trace::ExecutionFrame, TrapCode> {
         use crate::execution_trace::{ExecutionFrame, ExecutionValue};
         let header = self.code_map.header(function);
-        let end = value_base.checked_add(header.local_types().len()).ok_or(TrapCode::UnreachableCodeReached)?;
-        let values = self.value_stack.entries().get(value_base..end).ok_or(TrapCode::UnreachableCodeReached)?;
-        let locals = header.local_types().iter().zip(values).map(|(&value_type, &value)| ExecutionValue { value_type, bits: u64::from(value) }).collect();
-        let return_program_counter = return_ip.and_then(|ip| self.code_map.metadata(ip)).map(|metadata| metadata.program_counter);
-        Ok(ExecutionFrame { function_index: function.to_u32(), return_program_counter, locals })
+        let end = value_base
+            .checked_add(header.local_types().len())
+            .ok_or(TrapCode::UnreachableCodeReached)?;
+        let values = self
+            .value_stack
+            .entries()
+            .get(value_base..end)
+            .ok_or(TrapCode::UnreachableCodeReached)?;
+        let locals = header
+            .local_types()
+            .iter()
+            .zip(values)
+            .map(|(&value_type, &value)| ExecutionValue {
+                value_type,
+                bits: u64::from(value),
+            })
+            .collect();
+        let return_program_counter = return_ip
+            .and_then(|ip| self.code_map.metadata(ip))
+            .map(|metadata| metadata.program_counter);
+        Ok(ExecutionFrame {
+            function_index: function.to_u32(),
+            return_program_counter,
+            locals,
+        })
     }
 
     /// Executes a generic Wasm `store[N_{s|u}]` operation.
@@ -821,8 +944,12 @@ impl<'ctx, 'engine> Executor<'ctx, 'engine> {
         self.next_instr_at(skip);
         self.sync_stack_ptr();
         if matches!(kind, CallKind::Nested) {
-            self.call_stack
-                .push(FuncFrame::new(self.ip, self.cache.instance(), self.current_func, self.value_base))?;
+            self.call_stack.push(FuncFrame::new(
+                self.ip,
+                self.cache.instance(),
+                self.current_func,
+                self.value_base,
+            ))?;
         }
         match self.ctx.resolve_func(func) {
             FuncEntity::Wasm(wasm_func) => {
@@ -859,8 +986,12 @@ impl<'ctx, 'engine> Executor<'ctx, 'engine> {
         });
         self.sync_stack_ptr();
         if matches!(kind, CallKind::Nested) {
-            self.call_stack
-                .push(FuncFrame::new(self.ip, self.cache.instance(), self.current_func, self.value_base))?;
+            self.call_stack.push(FuncFrame::new(
+                self.ip,
+                self.cache.instance(),
+                self.current_func,
+                self.value_base,
+            ))?;
         }
         let header = self.code_map.header(func);
         self.value_stack.prepare_wasm_call(header)?;
@@ -873,15 +1004,28 @@ impl<'ctx, 'engine> Executor<'ctx, 'engine> {
     }
 
     fn retain_suspended_operand_types(&mut self) -> Result<(), TrapCode> {
-        let Some(frame) = self.call_stack.peek() else { return Ok(()) };
+        let Some(frame) = self.call_stack.peek() else {
+            return Ok(());
+        };
         let header = self.code_map.header(frame.function());
-        let locals_end = frame.value_base().checked_add(header.local_types().len()).ok_or(TrapCode::UnreachableCodeReached)?;
-        let operand_len = self.value_base.checked_sub(locals_end).ok_or(TrapCode::UnreachableCodeReached)?;
-        let types = self.code_map.metadata(frame.ip())
+        let locals_end = frame
+            .value_base()
+            .checked_add(header.local_types().len())
+            .ok_or(TrapCode::UnreachableCodeReached)?;
+        let operand_len = self
+            .value_base
+            .checked_sub(locals_end)
+            .ok_or(TrapCode::UnreachableCodeReached)?;
+        let types = self
+            .code_map
+            .metadata(frame.ip())
             .and_then(|metadata| metadata.operand_types.get(..operand_len))
             .ok_or(TrapCode::UnreachableCodeReached)?
             .to_vec();
-        self.call_stack.peek_mut().expect("caller frame exists").set_operand_types(types);
+        self.call_stack
+            .peek_mut()
+            .expect("caller frame exists")
+            .set_operand_types(types);
         Ok(())
     }
 
@@ -911,8 +1055,8 @@ impl<'ctx, 'engine> Executor<'ctx, 'engine> {
     ///
     /// - `delta` is only evaluated if fuel metering is enabled.
     /// - `exec` is only evaluated if the remaining fuel is sufficient
-    ///    for amount of required fuel determined by `delta` or if
-    ///    fuel metering is disabled.
+    ///   for amount of required fuel determined by `delta` or if
+    ///   fuel metering is disabled.
     ///
     /// # Errors
     ///

@@ -1,24 +1,10 @@
 pub(crate) use self::builder::InstanceEntityBuilder;
 pub use self::exports::{Export, ExportsIter, Extern, ExternType};
 use super::{
-    engine::DedupFuncType,
-    AsContext,
-    Func,
-    Global,
-    Memory,
-    Module,
-    StoreContext,
-    Stored,
-    Table,
+    engine::DedupFuncType, AsContext, Func, Global, Memory, Module, StoreContext, Stored, Table,
 };
 use crate::{
-    func::FuncError,
-    memory::DataSegment,
-    ElementSegment,
-    Error,
-    TypedFunc,
-    WasmParams,
-    WasmResults,
+    func::FuncError, memory::DataSegment, ElementSegment, Error, TypedFunc, WasmParams, WasmResults,
 };
 use alloc::{boxed::Box, collections::BTreeMap, sync::Arc};
 use wasmi_arena::ArenaIndex;
@@ -126,7 +112,7 @@ impl InstanceEntity {
     /// Returns an iterator over the exports of the [`Instance`].
     ///
     /// The order of the yielded exports is not specified.
-    pub fn exports(&self) -> ExportsIter {
+    pub fn exports(&self) -> ExportsIter<'_> {
         ExportsIter::new(self.exports.iter())
     }
 }

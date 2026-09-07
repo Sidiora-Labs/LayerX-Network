@@ -1,53 +1,27 @@
 use super::{
     control_frame::{
-        BlockControlFrame,
-        ControlFrame,
-        IfControlFrame,
-        LoopControlFrame,
-        UnreachableControlFrame,
+        BlockControlFrame, ControlFrame, IfControlFrame, LoopControlFrame, UnreachableControlFrame,
     },
     labels::LabelRef,
     locals_registry::LocalsRegistry,
     value_stack::ValueStackHeight,
-    ControlFlowStack,
-    InstructionsBuilder,
-    TranslationError,
+    ControlFlowStack, InstructionsBuilder, TranslationError,
 };
 use crate::{
     engine::{
         bytecode::{
-            self,
-            AddressOffset,
-            BranchOffset,
-            BranchTableTargets,
-            DataSegmentIdx,
-            ElementSegmentIdx,
-            F64Const32,
-            Instruction,
-            SignatureIdx,
-            TableIdx,
+            self, AddressOffset, BranchOffset, BranchTableTargets, DataSegmentIdx,
+            ElementSegmentIdx, F64Const32, Instruction, SignatureIdx, TableIdx,
         },
         config::FuelCosts,
         func_builder::control_frame::ControlFrameKind,
-        CompiledFunc,
-        DropKeep,
-        Instr,
-        RelativeDepth,
+        CompiledFunc, DropKeep, Instr, RelativeDepth,
     },
     module::{
-        BlockType,
-        ConstExpr,
-        FuncIdx,
-        FuncTypeIdx,
-        GlobalIdx,
-        MemoryIdx,
-        ModuleResources,
+        BlockType, ConstExpr, FuncIdx, FuncTypeIdx, GlobalIdx, MemoryIdx, ModuleResources,
         DEFAULT_MEMORY_INDEX,
     },
-    Engine,
-    FuncType,
-    GlobalType,
-    Mutability,
+    Engine, FuncType, GlobalType, Mutability,
 };
 use alloc::vec::Vec;
 use wasmi_core::{UntypedValue, ValueType, F32, F64};
@@ -122,9 +96,10 @@ impl<'parser> FuncTranslator<'parser> {
         let program_counter = u64::try_from(program_counter).map_err(|_| {
             TranslationError::new(super::TranslationErrorInner::BranchOffsetOutOfBounds)
         })?;
-        let instr = self.alloc
-            .inst_builder
-            .push_observe(program_counter, operand_types, control_stack);
+        let instr =
+            self.alloc
+                .inst_builder
+                .push_observe(program_counter, operand_types, control_stack);
         self.last_observe = Some(instr);
         Ok(instr)
     }
@@ -200,8 +175,8 @@ impl<'parser> FuncTranslator<'parser> {
                 ValueType::I64 => crate::execution_trace::ExecutionValueType::I64,
                 unsupported => {
                     self.unsupported_local_type = Some(*unsupported);
-                    continue
-                },
+                    continue;
+                }
             };
             self.local_types.push(value_type);
         }
@@ -212,11 +187,16 @@ impl<'parser> FuncTranslator<'parser> {
     /// # Panics
     ///
     /// If too many local variables have been registered.
-    pub fn register_locals(&mut self, amount: u32, value_type: wasmparser::ValType) -> Result<(), TranslationError> {
+    pub fn register_locals(
+        &mut self,
+        amount: u32,
+        value_type: wasmparser::ValType,
+    ) -> Result<(), TranslationError> {
         self.locals.register_locals(amount);
         let value_type = crate::execution_trace::ExecutionValueType::from_validator(value_type)
             .ok_or_else(|| TranslationError::unsupported_value_type(value_type))?;
-        self.local_types.extend(core::iter::repeat(value_type).take(amount as usize));
+        self.local_types
+            .extend(core::iter::repeat_n(value_type, amount as usize));
         Ok(())
     }
 
@@ -238,7 +218,9 @@ impl<'parser> FuncTranslator<'parser> {
     /// Finishes constructing the function and returns its [`CompiledFunc`].
     pub fn finish(&mut self) -> Result<(), TranslationError> {
         if self.unsupported_local_type.is_some() {
-            return Err(TranslationError::unsupported_value_type(wasmparser::ValType::V128))
+            return Err(TranslationError::unsupported_value_type(
+                wasmparser::ValType::V128,
+            ));
         }
         self.alloc.inst_builder.finish(
             self.res.engine(),

@@ -1580,3 +1580,19 @@ symbol = "elements::module::integration_tests elements::name_section::tests elem
 observed = "The additional cargo test --locked --manifest-path programs/Cargo.toml -p parity-wasm -p wasmi --lib command exits 101 in parity-wasm: 80 tests pass and 23 fail with file-not-found errors for res/cases/v1 fixtures. The fixture directory has no tracked files. Cargo stops before running the wasmi unit binary. Evidence: qual-logs/vendor-tests.log."
 assumption = "Restoring omitted upstream fixtures is separate from lint repair. Preserve every test and assertion; this optional crate-wide test run is not a pass."
 severity = "blocker"
+
+[observation.6.11.27]
+task = "6.11"
+file = "programs/vendor/wasmi-0.31.2/src/module/mod.rs programs/vendor/wasmi-0.31.2/src/store.rs"
+symbol = "Module::imports Module::exports AsContext::as_context AsContextMut::as_context_mut"
+observed = "Focused strict all-target wasmi Clippy exits 101 with four mismatched_lifetime_syntaxes errors: module/mod.rs:195 and :258 return ModuleImportsIter and ModuleExportsIter, and store.rs:1878 and :1884 return StoreContext<Self::UserState> and StoreContextMut<Self::UserState>. All four signatures are exported API and are retained under the public API stop rule. Evidence: qual-logs/clippy-wasmi-final.log. Internal borrow, lifetime, iterator, callback alias, documentation and unreachable private-method repairs preserve existing execution and bounds. A negative WasmRet assertion exercises the existing fallback trait without removing positive assertions. Final replay, determinism and hash_determinism tests pass 33 cases; interpreter conformance passes two cases; ABI drift and both linker cases pass; both focused trait and stack tests pass; all 24 touched Rust files pass rustfmt checks. Logs: qual-logs/runtime-tests-final.log, qual-logs/interpreter-conformance-final.log, qual-logs/abi-drift-final.log, qual-logs/wasmi-trait-test.log, qual-logs/wasmi-stack-test.log and qual-logs/rustfmt-check.log."
+assumption = "An explicit public API decision is required before adding the requested elided lifetime arguments. The exact workspace Clippy recipe exits 101 at the parity-wasm API stop in qual-logs/clippy-qualified.log. Five distinct vendored public API findings remain; dependent workspace targets are not qualified."
+severity = "blocker"
+
+[observation.6.11.28]
+task = "6.11"
+file = "programs/sdk/rust/src/bindgen.rs programs/sdk/rust/build.rs"
+symbol = "BindingGenerator emit_rust_codec_prelude emit_rust_frozen_vectors emit_ts_frozen_vectors"
+observed = "The supplemental workspace Clippy run with --keep-going and unchanged -D warnings exits 101 and exposes 16 additional errors outside vendor ownership. bindgen.rs has needless_raw_string_hashes at 116 and 253, possible_missing_else at 330 and 331, unused interface_digest and code_hash at 85 and 86, match_same_arms at 215 and 218, write_with_newline at 237 and 317, unnecessary_join at 289, 299 and 306, format_push_string at 302, and uninlined_format_args at 328 and 329. build.rs has manual_assert at 55 and 69. Evidence: qual-logs/clippy-keep-going.log."
+assumption = "The SDK owner must preserve generated binding bytes and every schema, hash, length and input check while repairing these diagnostics. Five retained vendor API findings plus sixteen SDK findings are known unresolved errors, not an exhaustive count for targets blocked by those dependencies."
+severity = "blocker"

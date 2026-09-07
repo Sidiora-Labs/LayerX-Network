@@ -107,21 +107,31 @@ pub struct ObservationCharge {
 
 impl ObservationCharge {
     pub fn total_bytes(self) -> Option<u64> {
-        self.value_bytes.checked_add(self.frame_bytes)?
-            .checked_add(self.local_bytes)?.checked_add(self.global_bytes)?
-            .checked_add(self.memory_bytes)?.checked_add(self.instance_state_bytes)?
+        self.value_bytes
+            .checked_add(self.frame_bytes)?
+            .checked_add(self.local_bytes)?
+            .checked_add(self.global_bytes)?
+            .checked_add(self.memory_bytes)?
+            .checked_add(self.instance_state_bytes)?
             .checked_add(self.host_state_bytes)?
             .checked_add(self.storage_overlay_bytes)?
-            .checked_add(self.instruction_bytes)?.checked_add(self.retained_instruction_bytes)
+            .checked_add(self.instruction_bytes)?
+            .checked_add(self.retained_instruction_bytes)
     }
 
     pub fn total_work(self) -> Option<u64> {
-        self.total_bytes()?.checked_add(self.arbitration_engine_canonical_bytes)
+        self.total_bytes()?
+            .checked_add(self.arbitration_engine_canonical_bytes)
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ExecutionControlKind { Block, If, Else, Loop }
+pub enum ExecutionControlKind {
+    Block,
+    If,
+    Else,
+    Loop,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExecutionControlFrame {
@@ -184,23 +194,42 @@ impl ExecutionSnapshot {
         fn vec_bytes<T>(value: &Vec<T>) -> Option<u64> {
             u64::try_from(value.capacity().checked_mul(core::mem::size_of::<T>())?).ok()
         }
-        let mut total = vec_bytes(&self.value_stack)?.checked_add(vec_bytes(&self.call_frames)?)?
-            .checked_add(vec_bytes(&self.linear_memory)?)?.checked_add(vec_bytes(&self.globals)?)?
-            .checked_add(vec_bytes(&self.arbitration_instances)?)?.checked_add(vec_bytes(&self.control_stack)?)?
-            .checked_add(vec_bytes(&self.canonical_instruction)?)?.checked_add(vec_bytes(&self.supplement.storage_overlay)?)?;
-        for frame in &self.call_frames { total = total.checked_add(vec_bytes(&frame.locals)?)?; }
+        let mut total = vec_bytes(&self.value_stack)?
+            .checked_add(vec_bytes(&self.call_frames)?)?
+            .checked_add(vec_bytes(&self.linear_memory)?)?
+            .checked_add(vec_bytes(&self.globals)?)?
+            .checked_add(vec_bytes(&self.arbitration_instances)?)?
+            .checked_add(vec_bytes(&self.control_stack)?)?
+            .checked_add(vec_bytes(&self.canonical_instruction)?)?
+            .checked_add(vec_bytes(&self.supplement.storage_overlay)?)?;
+        for frame in &self.call_frames {
+            total = total.checked_add(vec_bytes(&frame.locals)?)?;
+        }
         for (key, value) in &self.supplement.storage_overlay {
             total = total.checked_add(vec_bytes(key)?)?;
-            if let Some(value) = value { total = total.checked_add(vec_bytes(value)?)?; }
+            if let Some(value) = value {
+                total = total.checked_add(vec_bytes(value)?)?;
+            }
         }
         for instance in &self.arbitration_instances {
-            total = total.checked_add(vec_bytes(&instance.memories)?)?.checked_add(vec_bytes(&instance.globals)?)?
-                .checked_add(vec_bytes(&instance.tables)?)?.checked_add(vec_bytes(&instance.data_segments)?)?
+            total = total
+                .checked_add(vec_bytes(&instance.memories)?)?
+                .checked_add(vec_bytes(&instance.globals)?)?
+                .checked_add(vec_bytes(&instance.tables)?)?
+                .checked_add(vec_bytes(&instance.data_segments)?)?
                 .checked_add(vec_bytes(&instance.element_segments)?)?;
-            for memory in &instance.memories { total = total.checked_add(vec_bytes(&memory.bytes)?)?; }
-            for table in &instance.tables { total = total.checked_add(vec_bytes(&table.elements)?)?; }
-            for data in &instance.data_segments { total = total.checked_add(vec_bytes(&data.bytes)?)?; }
-            for element in &instance.element_segments { total = total.checked_add(vec_bytes(&element.elements)?)?; }
+            for memory in &instance.memories {
+                total = total.checked_add(vec_bytes(&memory.bytes)?)?;
+            }
+            for table in &instance.tables {
+                total = total.checked_add(vec_bytes(&table.elements)?)?;
+            }
+            for data in &instance.data_segments {
+                total = total.checked_add(vec_bytes(&data.bytes)?)?;
+            }
+            for element in &instance.element_segments {
+                total = total.checked_add(vec_bytes(&element.elements)?)?;
+            }
         }
         Some(total)
     }
@@ -263,18 +292,16 @@ pub(crate) struct ExecutionObserver {
 }
 
 impl ExecutionObserver {
-    pub(crate) fn enter_boundary(
-        &mut self,
-    ) -> Result<bool, ExecutionObserverError> {
+    pub(crate) fn enter_boundary(&mut self) -> Result<bool, ExecutionObserverError> {
         if self.interval == 0 {
             self.error = Some(ExecutionObserverError::InvalidInterval);
-            return Err(ExecutionObserverError::InvalidInterval)
+            return Err(ExecutionObserverError::InvalidInterval);
         }
-        self.sampled_current = self.step_index % self.interval == 0;
+        self.sampled_current = self.step_index.is_multiple_of(self.interval);
         let should_record = self.sampled_current || self.pending.is_some();
         if should_record && self.retained_snapshots >= self.maximum_snapshots {
             self.error = Some(ExecutionObserverError::SnapshotLimitExceeded);
-            return Err(ExecutionObserverError::SnapshotLimitExceeded)
+            return Err(ExecutionObserverError::SnapshotLimitExceeded);
         }
         self.step_index = self.step_index.checked_add(1).ok_or_else(|| {
             self.error = Some(ExecutionObserverError::StepCounterOverflow);

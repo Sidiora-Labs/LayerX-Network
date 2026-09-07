@@ -5,10 +5,7 @@ use super::{
 use crate::{
     core::{Trap, ValueType, F32, F64},
     foreach_tuple::for_each_tuple,
-    Caller,
-    ExternRef,
-    FuncRef,
-    FuncType,
+    Caller, ExternRef, FuncRef, FuncType,
 };
 use core::{array, iter::FusedIterator};
 use wasmi_core::{DecodeUntypedSlice, EncodeUntypedSlice, UntypedValue};
@@ -355,6 +352,7 @@ mod tests {
 
     #[test]
     fn into_func_trait_impls() {
+        assert!(!implements_wasm_results!(alloc::string::String));
         assert!(implements_wasm_results!(()));
         assert!(implements_wasm_results!(i32));
         assert!(implements_wasm_results!((i32,)));

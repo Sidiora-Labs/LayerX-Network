@@ -171,7 +171,7 @@ impl LabelRegistry {
     /// # Panics
     ///
     /// If used before all used branching labels have been pinned.
-    pub fn resolved_users(&self) -> ResolvedUserIter {
+    pub fn resolved_users(&self) -> ResolvedUserIter<'_> {
         ResolvedUserIter {
             users: self.users.iter(),
             registry: self,
