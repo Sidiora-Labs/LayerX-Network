@@ -6,7 +6,8 @@ use layerx_platform_gateway::http::{
     self, Client, Endpoint, IncomingRequest, OutgoingResponse, UpstreamResponse,
 };
 use layerx_platform_gateway::store::{
-    KeyRecord, OperationRecord, RedisEndpoint, RedisStore, Reservation,
+    Completion, KeyRecord, OperationRecord, RedisEndpoint, RedisStore, Reservation,
+    ReservationRequest,
 };
 use layerx_platform_gateway::{
     authenticate_gateway_key, production_route, verify_activity_operation,
@@ -1838,18 +1839,20 @@ fn activity(
     );
     let reservation = match config.store.reserve(
         record,
-        &scope,
-        &request_digest,
-        now().unwrap_or(0),
-        config.idempotency_seconds,
-        &submitted_activity_id,
-        &protocol_idempotency,
-        &record.principal_digest,
-        &audit,
-        if program_mutation {
-            retained_signed_activity.as_str()
-        } else {
-            ""
+        ReservationRequest {
+            idempotency_scope: &scope,
+            request_digest: &request_digest,
+            now: now().unwrap_or(0),
+            retention_seconds: config.idempotency_seconds,
+            activity_id: &submitted_activity_id,
+            protocol_idempotency_key: &protocol_idempotency,
+            principal_digest: &record.principal_digest,
+            audit_event: &audit,
+            continuation: if program_mutation {
+                retained_signed_activity.as_str()
+            } else {
+                ""
+            },
         },
     ) {
         Ok(value) => value,
@@ -1946,21 +1949,21 @@ fn activity(
             let refusal = response(upstream.status, "activity_refused", None);
             if config
                 .store
-                .complete(
-                    &scope,
-                    &request_digest,
-                    &format!("refused_{}", upstream.status),
-                    &hex(&refusal.body),
-                    "",
-                    None,
-                    &record.principal_digest,
-                    &audit_event(
+                .complete(Completion {
+                    idempotency_scope: &scope,
+                    request_digest: &request_digest,
+                    state: &format!("refused_{}", upstream.status),
+                    response_hex: &hex(&refusal.body),
+                    receipt_hex: "",
+                    activity_id: None,
+                    principal_digest: &record.principal_digest,
+                    audit_event: &audit_event(
                         &record.principal_digest,
                         "activity",
                         &record.key_id,
                         "refused",
                     ),
-                )
+                })
                 .is_err()
             {
                 response(503, "persistence_unavailable", Some(5))
@@ -2024,21 +2027,21 @@ fn activity(
         });
         if config
             .store
-            .complete(
-                &scope,
-                &request_digest,
-                "completed",
-                &hex(result.to_string().as_bytes()),
-                &hex(&receipt),
-                Some(&submitted_activity_id),
-                &record.principal_digest,
-                &audit_event(
+            .complete(Completion {
+                idempotency_scope: &scope,
+                request_digest: &request_digest,
+                state: "completed",
+                response_hex: &hex(result.to_string().as_bytes()),
+                receipt_hex: &hex(&receipt),
+                activity_id: Some(&submitted_activity_id),
+                principal_digest: &record.principal_digest,
+                audit_event: &audit_event(
                     &record.principal_digest,
                     "activity",
                     &record.key_id,
                     "receipt_verified",
                 ),
-            )
+            })
             .is_err()
         {
             return response(503, "persistence_unavailable", Some(5));
@@ -2098,21 +2101,21 @@ fn activity(
         );
         if config
             .store
-            .complete(
-                &scope,
-                &request_digest,
-                "refused_409",
-                &hex(&refusal.body),
-                &hex(&receipt),
-                Some(&component.activity_id.to_ascii_lowercase()),
-                &record.principal_digest,
-                &audit_event(
+            .complete(Completion {
+                idempotency_scope: &scope,
+                request_digest: &request_digest,
+                state: "refused_409",
+                response_hex: &hex(&refusal.body),
+                receipt_hex: &hex(&receipt),
+                activity_id: Some(&component.activity_id.to_ascii_lowercase()),
+                principal_digest: &record.principal_digest,
+                audit_event: &audit_event(
                     &record.principal_digest,
                     "activity",
                     &record.key_id,
                     "receipt_verified_refusal",
                 ),
-            )
+            })
             .is_err()
         {
             return response(503, "persistence_unavailable", Some(5));
@@ -2135,21 +2138,21 @@ fn activity(
     };
     if config
         .store
-        .complete(
-            &scope,
-            &request_digest,
-            "completed",
-            &hex(&stored_result),
-            &hex(&receipt),
-            Some(&component.activity_id.to_ascii_lowercase()),
-            &record.principal_digest,
-            &audit_event(
+        .complete(Completion {
+            idempotency_scope: &scope,
+            request_digest: &request_digest,
+            state: "completed",
+            response_hex: &hex(&stored_result),
+            receipt_hex: &hex(&receipt),
+            activity_id: Some(&component.activity_id.to_ascii_lowercase()),
+            principal_digest: &record.principal_digest,
+            audit_event: &audit_event(
                 &record.principal_digest,
                 "activity",
                 &record.key_id,
                 "receipt_verified",
             ),
-        )
+        })
         .is_err()
     {
         return response(503, "persistence_unavailable", Some(5));
@@ -2297,21 +2300,21 @@ fn resolve_pending_lifecycle(
     });
     if config
         .store
-        .complete(
-            &operation.scope,
-            &operation.digest,
-            "completed",
-            &hex(result.to_string().as_bytes()),
-            &hex(&receipt),
-            Some(&operation.activity_id),
-            &record.principal_digest,
-            &audit_event(
+        .complete(Completion {
+            idempotency_scope: &operation.scope,
+            request_digest: &operation.digest,
+            state: "completed",
+            response_hex: &hex(result.to_string().as_bytes()),
+            receipt_hex: &hex(&receipt),
+            activity_id: Some(&operation.activity_id),
+            principal_digest: &record.principal_digest,
+            audit_event: &audit_event(
                 &record.principal_digest,
                 "program_reconcile",
                 &record.key_id,
                 "receipt_verified",
             ),
-        )
+        })
         .is_err()
     {
         return response(503, "persistence_unavailable", Some(5));
@@ -2422,21 +2425,21 @@ fn resolve_pending_program(
     };
     if config
         .store
-        .complete(
-            &operation.scope,
-            &operation.digest,
-            "completed",
-            &hex(&stored_result),
-            &hex(&receipt),
-            Some(&operation.activity_id),
-            &record.principal_digest,
-            &audit_event(
+        .complete(Completion {
+            idempotency_scope: &operation.scope,
+            request_digest: &operation.digest,
+            state: "completed",
+            response_hex: &hex(&stored_result),
+            receipt_hex: &hex(&receipt),
+            activity_id: Some(&operation.activity_id),
+            principal_digest: &record.principal_digest,
+            audit_event: &audit_event(
                 &record.principal_digest,
                 "program_reconcile",
                 &record.key_id,
                 "receipt_verified",
             ),
-        )
+        })
         .is_err()
     {
         return response(503, "persistence_unavailable", Some(5));
