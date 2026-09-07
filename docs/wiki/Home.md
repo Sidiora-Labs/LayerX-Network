@@ -50,6 +50,7 @@ See `docs/MONOREPO.md` for build boundaries, workflow naming, and tag convention
 - [Qualification documentation](https://github.com/Sidiora-Labs/LayerX-Protocol/blob/main/docs/QUALIFICATION.md)
 - [Monorepo layout](https://github.com/Sidiora-Labs/LayerX-Protocol/blob/main/docs/MONOREPO.md)
 - [Programs](Programs.md)
+- [Beta cluster](BetaCluster.md)
 
 ---
 
