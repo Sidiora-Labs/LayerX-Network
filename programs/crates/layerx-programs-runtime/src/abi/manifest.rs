@@ -16,14 +16,23 @@ pub const ABI_V2_MANIFEST: &str = crate::ABI_MANIFEST;
 
 pub const ABI_V2_HOST_FUNCTIONS: [HostFunction; 19] = [
     host("response_write", "(i32,i32,i32)->i32"),
-    host("program_call_response", "(i32,i32,i32,i32,i32,i32,i32,i32)->i64"),
+    host(
+        "program_call_response",
+        "(i32,i32,i32,i32,i32,i32,i32,i32)->i64",
+    ),
     host("refusal_write", "(i32,i32,i32)->i32"),
     host("storage_read_scoped", "(i32,i32,i32,i32,i32)->i32"),
     host("storage_write_scoped", "(i32,i32,i32,i32,i32)->i32"),
     host("storage_delete_scoped", "(i32,i32,i32)->i32"),
     host("storage_drop_scoped", "(i32)->i32"),
-    host("storage_scan_scoped", "(i32,i32,i32,i32,i32,i32,i32,i32,i32)->i32"),
-    host("transfer_program_402", "(i64,i64,i32,i32,i32,i32,i32,i32,i32,i32)->i32"),
+    host(
+        "storage_scan_scoped",
+        "(i32,i32,i32,i32,i32,i32,i32,i32,i32)->i32",
+    ),
+    host(
+        "transfer_program_402",
+        "(i64,i64,i32,i32,i32,i32,i32,i32,i32,i32)->i32",
+    ),
     host("fund_program_402", "(i64,i64,i32,i32,i32,i32,i32,i32)->i32"),
     host("context_read", "(i32,i32,i32)->i32"),
     host("balance_read", "(i32,i32,i32,i32,i32,i32)->i32"),
@@ -33,7 +42,10 @@ pub const ABI_V2_HOST_FUNCTIONS: [HostFunction; 19] = [
     host("bigint_mul_256", "(i32,i32,i32,i32,i32,i32)->i32"),
     host("bigint_div_256", "(i32,i32,i32,i32,i32,i32)->i32"),
     host("bigint_rem_256", "(i32,i32,i32,i32,i32,i32)->i32"),
-    host("bigint_modexp_256", "(i32,i32,i32,i32,i32,i32,i32,i32)->i32"),
+    host(
+        "bigint_modexp_256",
+        "(i32,i32,i32,i32,i32,i32,i32,i32)->i32",
+    ),
 ];
 
 const fn host(name: &'static str, signature: &'static str) -> HostFunction {
@@ -93,11 +105,7 @@ pub(crate) fn v2_function_type(name: &str) -> Option<HostFunctionType> {
 
 /// Returns the exact permitted import declaration for a recorded ABI. V2
 /// inherits the immutable v1 namespace and adds only the v2 namespace.
-pub(crate) fn permitted_import(
-    version: u16,
-    module: &str,
-    name: &str,
-) -> Option<HostFunctionType> {
+pub(crate) fn permitted_import(version: u16, module: &str, name: &str) -> Option<HostFunctionType> {
     if module == ABI_V1_MODULE {
         let index = super::HOST_FUNCTIONS
             .iter()
@@ -110,6 +118,7 @@ pub(crate) fn permitted_import(
         .flatten()
 }
 
+#[must_use]
 pub const fn manifest(version: u16) -> Option<&'static str> {
     match version {
         ABI_V1_VERSION => Some(ABI_V1_MANIFEST),

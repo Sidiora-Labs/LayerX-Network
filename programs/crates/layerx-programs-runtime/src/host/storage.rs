@@ -10,7 +10,7 @@ use super::memory::{nonnegative, read_guest, write_guest};
 use super::{error_status, linker_fault, RuntimeState, ABI_MODULE, STATUS_BOUNDS};
 
 fn selector(raw: i32) -> Result<StorageSelector, i32> {
-    StorageSelector::try_from(raw).map_err(error_status)
+    StorageSelector::try_from(raw).map_err(|error| error_status(&error))
 }
 
 pub(super) fn register(linker: &mut Linker<RuntimeState>) -> Result<(), ExecutionFault> {
@@ -33,7 +33,7 @@ pub(super) fn register(linker: &mut Linker<RuntimeState>) -> Result<(), Executio
                     .with_abi(|abi, meter| abi.storage_read(meter, &key))
                 {
                     Ok(value) => value,
-                    Err(error) => return error_status(error),
+                    Err(error) => return error_status(&error),
                 };
                 let Some(value) = value else {
                     return 0;
@@ -78,7 +78,7 @@ pub(super) fn register(linker: &mut Linker<RuntimeState>) -> Result<(), Executio
                     .with_abi(|abi, meter| abi.storage_write(meter, &key, &value))
                 {
                     Ok(()) => 0,
-                    Err(error) => error_status(error),
+                    Err(error) => error_status(&error),
                 }
             },
         )
@@ -97,7 +97,7 @@ pub(super) fn register(linker: &mut Linker<RuntimeState>) -> Result<(), Executio
                     .with_abi(|abi, meter| abi.storage_delete(meter, &key))
                 {
                     Ok(()) => 0,
-                    Err(error) => error_status(error),
+                    Err(error) => error_status(&error),
                 }
             },
         )
@@ -130,7 +130,7 @@ pub(super) fn register_v2(linker: &mut Linker<RuntimeState>) -> Result<(), Execu
                     .with_abi(|abi, meter| abi.storage_read_selected(meter, selected, &key))
                 {
                     Ok(value) => value,
-                    Err(error) => return error_status(error),
+                    Err(error) => return error_status(&error),
                 };
                 let Some(value) = value else {
                     return 0;
@@ -152,6 +152,10 @@ pub(super) fn register_v2(linker: &mut Linker<RuntimeState>) -> Result<(), Execu
             },
         )
         .map_err(|error| linker_fault(&error))?;
+    register_scoped_mutations(linker)
+}
+
+fn register_scoped_mutations(linker: &mut Linker<RuntimeState>) -> Result<(), ExecutionFault> {
     linker
         .func_wrap(
             CANDIDATE_ABI_MODULE,
@@ -179,7 +183,7 @@ pub(super) fn register_v2(linker: &mut Linker<RuntimeState>) -> Result<(), Execu
                     abi.storage_write_selected(meter, selected, &key, &value)
                 }) {
                     Ok(()) => 0,
-                    Err(error) => error_status(error),
+                    Err(error) => error_status(&error),
                 }
             },
         )
@@ -206,7 +210,7 @@ pub(super) fn register_v2(linker: &mut Linker<RuntimeState>) -> Result<(), Execu
                     .with_abi(|abi, meter| abi.storage_delete_selected(meter, selected, &key))
                 {
                     Ok(()) => 0,
-                    Err(error) => error_status(error),
+                    Err(error) => error_status(&error),
                 }
             },
         )
@@ -225,7 +229,7 @@ pub(super) fn register_v2(linker: &mut Linker<RuntimeState>) -> Result<(), Execu
                     .with_abi(|abi, meter| abi.storage_drop_selected(meter, selected))
                 {
                     Ok(_) => 0,
-                    Err(error) => error_status(error),
+                    Err(error) => error_status(&error),
                 }
             },
         )

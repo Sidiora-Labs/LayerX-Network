@@ -34,16 +34,6 @@ pub(super) const STATUS_EVIDENCE: i32 = -5;
 pub(super) const STATUS_ABSENT: i32 = -7;
 pub(super) const COMPOSITION_REFUSED: &str = "program composition refused the call graph";
 
-fn storage_overlay_entry_bytes(key: &[u8], value: Option<&[u8]>) -> Option<u64> {
-    let key_bytes = u64::try_from(key.len()).ok()?;
-    match value {
-        Some(value) => 9_u64
-            .checked_add(key_bytes)?
-            .checked_add(u64::try_from(value.len()).ok()?),
-        None => 5_u64.checked_add(key_bytes),
-    }
-}
-
 fn wasmi_usage(meter: crate::MeteredUsage) -> wasmi::ExecutionMeteredUsage {
     wasmi::ExecutionMeteredUsage {
         cpu_fuel: meter.cpu_fuel,
@@ -152,21 +142,40 @@ fn write_execution_fault(
     Ok(())
 }
 
+fn write_response_refusal(
+    refusal: &crate::abi::ResponseRefusal,
+    write: &mut dyn FnMut(&[u8]) -> Result<(), AbiError>,
+) -> Result<(), AbiError> {
+    let mut failed = false;
+    refusal.canonical_write(|bytes| {
+        if write(bytes).is_err() {
+            failed = true;
+        }
+    });
+    if failed {
+        return Err(AbiError::InvalidEncoding);
+    }
+    Ok(())
+}
+
+fn abi_revision_byte(revision: AbiRevision) -> u8 {
+    match revision {
+        AbiRevision::V1 => 1,
+        AbiRevision::V2 => 2,
+    }
+}
+
 fn write_composition_refusal(
     refusal: &CompositionRefusal,
     write: &mut dyn FnMut(&[u8]) -> Result<(), AbiError>,
 ) -> Result<(), AbiError> {
-    let revision = |revision: AbiRevision| match revision {
-        AbiRevision::V1 => 1_u8,
-        AbiRevision::V2 => 2_u8,
-    };
     match refusal {
         CompositionRefusal::NotComposable => write(&[0])?,
         CompositionRefusal::ActivityEvidenceRequired => write(&[1])?,
         CompositionRefusal::ActivityEvidenceMismatch => write(&[2])?,
         CompositionRefusal::ActivityEvidenceReused => write(&[3])?,
         CompositionRefusal::WrongVersion { expected, actual } => {
-            write(&[4, revision(*expected), revision(*actual)])?
+            write(&[4, abi_revision_byte(*expected), abi_revision_byte(*actual)])?;
         }
         CompositionRefusal::MeteringPlanMismatch { expected, actual } => {
             write(&[5])?;
@@ -255,18 +264,33 @@ fn write_composition_refusal(
         }
         CompositionRefusal::Response(refusal) => {
             write(&[22])?;
-            let mut failed = false;
-            refusal.canonical_write(|bytes| {
-                if write(bytes).is_err() {
-                    failed = true;
-                }
-            });
-            if failed {
-                return Err(AbiError::InvalidEncoding);
-            }
+            write_response_refusal(refusal, write)?;
         }
     }
     Ok(())
+}
+
+fn supplement_snapshot_bytes(
+    charge: &wasmi::ObservationCharge,
+) -> Result<u64, wasmi::ExecutionObserverError> {
+    let engine_bytes = charge
+        .total_bytes()
+        .and_then(|bytes| bytes.checked_sub(charge.retained_instruction_bytes))
+        .and_then(|bytes| bytes.checked_sub(charge.host_state_bytes))
+        .and_then(|bytes| bytes.checked_sub(charge.instance_state_bytes))
+        .ok_or(wasmi::ExecutionObserverError::SupplementRejected)?;
+    let snapshot_bytes = 214_u64
+        .checked_add(engine_bytes)
+        .ok_or(wasmi::ExecutionObserverError::SupplementRejected)?;
+    Ok(snapshot_bytes)
+}
+
+type SupplementOverlay = Vec<(Vec<u8>, Option<Vec<u8>>)>;
+
+struct SupplementHostState {
+    bytes: u64,
+    identity: Option<crate::abi::HostStateIdentity>,
+    isolated: Option<crate::abi::HostStateCommitment>,
 }
 
 impl RuntimeState {
@@ -281,6 +305,101 @@ impl RuntimeState {
         abi.storage_snapshot()
     }
 
+    fn write_v2_runtime_state(
+        &self,
+        abi: &crate::abi::HostStateCommitment,
+        write: &mut dyn FnMut(&[u8]) -> Result<(), AbiError>,
+    ) -> Result<(), AbiError> {
+        write(b"LayerX/programs/v2/runtime-host-state\0")?;
+        write(&abi.root)?;
+        write(&abi.canonical_bytes.to_be_bytes())?;
+        let usage = self.meter.execution_trace_usage()?;
+        write(&usage.cpu_fuel.to_be_bytes())?;
+        write(&usage.memory_bytes.to_be_bytes())?;
+        write(&usage.storage_read_bytes.to_be_bytes())?;
+        write(&usage.storage_write_bytes.to_be_bytes())?;
+        write(&usage.output_values.to_be_bytes())?;
+        write(&usage.output_bytes.to_be_bytes())?;
+        write(&usage.occupancy_byte_batches.to_be_bytes())?;
+        write(&usage.occupancy_fee_units.to_be_bytes())?;
+        write(&usage.fee_units.to_be_bytes())?;
+        write(&self.meter.cpu_remaining().to_be_bytes())?;
+        match self.failure_subtree_fuel {
+            None => write(&[0])?,
+            Some(value) => {
+                write(&[1])?;
+                write(&value.to_be_bytes())?;
+            }
+        }
+        write(&self.legacy_reference_engine_committed.to_be_bytes())?;
+        write(&self.metering_schedule.canonical_bytes())?;
+        write(&[u8::from(self.legacy_reference_fuel)])?;
+        match self.protocol_context {
+            None => write(&[0])?,
+            Some(context) => {
+                write(&[1])?;
+                write(&context.canonical_bytes())?;
+            }
+        }
+        for graph in [
+            self.composition.as_ref().map(Composition::graph),
+            self.failure_graph.as_ref(),
+        ] {
+            match graph {
+                None => write(&[0])?,
+                Some(graph) => {
+                    let graph = graph.canonical_evidence();
+                    write(&[1])?;
+                    write(
+                        &u64::try_from(graph.len())
+                            .map_err(|_| AbiError::InvalidEncoding)?
+                            .to_be_bytes(),
+                    )?;
+                    write(&graph)?;
+                }
+            }
+        }
+        match &self.refusal {
+            None => write(&[0])?,
+            Some(refusal) => {
+                write(&[1])?;
+                write_composition_refusal(refusal, write)?;
+            }
+        }
+        match &self.outcome {
+            None => write(&[0])?,
+            Some(V2OutcomeRegion::Response(response)) => {
+                write(&[1])?;
+                write(
+                    &response
+                        .canonical_state_len()
+                        .map_err(|()| AbiError::InvalidEncoding)?
+                        .to_be_bytes(),
+                )?;
+                let mut failed = false;
+                response.canonical_state_write(|bytes| {
+                    if write(bytes).is_err() {
+                        failed = true;
+                    }
+                });
+                if failed {
+                    return Err(AbiError::InvalidEncoding);
+                }
+            }
+            Some(V2OutcomeRegion::Failure(failure)) => {
+                let failure = failure.canonical_encode();
+                write(&[2])?;
+                write(
+                    &u64::try_from(failure.len())
+                        .map_err(|_| AbiError::InvalidEncoding)?
+                        .to_be_bytes(),
+                )?;
+                write(&failure)?;
+            }
+        }
+        Ok(())
+    }
+
     fn v2_host_state(&self, hash: bool) -> Result<crate::abi::HostStateCommitment, AbiError> {
         use sha2::{Digest, Sha256};
         let abi_state = self.abi.as_ref().ok_or(AbiError::WrongVersion)?;
@@ -289,97 +408,9 @@ impl RuntimeState {
         } else {
             abi_state.v2_host_state_measurement()?
         };
-        let write_state =
-            |write: &mut dyn FnMut(&[u8]) -> Result<(), AbiError>| -> Result<(), AbiError> {
-                write(b"LayerX/programs/v2/runtime-host-state\0")?;
-                write(&abi.root)?;
-                write(&abi.canonical_bytes.to_be_bytes())?;
-                let usage = self.meter.execution_trace_usage()?;
-                write(&usage.cpu_fuel.to_be_bytes())?;
-                write(&usage.memory_bytes.to_be_bytes())?;
-                write(&usage.storage_read_bytes.to_be_bytes())?;
-                write(&usage.storage_write_bytes.to_be_bytes())?;
-                write(&usage.output_values.to_be_bytes())?;
-                write(&usage.output_bytes.to_be_bytes())?;
-                write(&usage.occupancy_byte_batches.to_be_bytes())?;
-                write(&usage.occupancy_fee_units.to_be_bytes())?;
-                write(&usage.fee_units.to_be_bytes())?;
-                write(&self.meter.cpu_remaining().to_be_bytes())?;
-                match self.failure_subtree_fuel {
-                    None => write(&[0])?,
-                    Some(value) => {
-                        write(&[1])?;
-                        write(&value.to_be_bytes())?;
-                    }
-                }
-                write(&self.legacy_reference_engine_committed.to_be_bytes())?;
-                write(&self.metering_schedule.canonical_bytes())?;
-                write(&[u8::from(self.legacy_reference_fuel)])?;
-                match self.protocol_context {
-                    None => write(&[0])?,
-                    Some(context) => {
-                        write(&[1])?;
-                        write(&context.canonical_bytes())?;
-                    }
-                }
-                for graph in [
-                    self.composition.as_ref().map(Composition::graph),
-                    self.failure_graph.as_ref(),
-                ] {
-                    match graph {
-                        None => write(&[0])?,
-                        Some(graph) => {
-                            let graph = graph.canonical_evidence();
-                            write(&[1])?;
-                            write(
-                                &u64::try_from(graph.len())
-                                    .map_err(|_| AbiError::InvalidEncoding)?
-                                    .to_be_bytes(),
-                            )?;
-                            write(&graph)?;
-                        }
-                    }
-                }
-                match &self.refusal {
-                    None => write(&[0])?,
-                    Some(refusal) => {
-                        write(&[1])?;
-                        write_composition_refusal(refusal, write)?;
-                    }
-                }
-                match &self.outcome {
-                    None => write(&[0])?,
-                    Some(V2OutcomeRegion::Response(response)) => {
-                        write(&[1])?;
-                        write(
-                            &response
-                                .canonical_state_len()
-                                .map_err(|_| AbiError::InvalidEncoding)?
-                                .to_be_bytes(),
-                        )?;
-                        let mut failed = false;
-                        response.canonical_state_write(|bytes| {
-                            if write(bytes).is_err() {
-                                failed = true;
-                            }
-                        });
-                        if failed {
-                            return Err(AbiError::InvalidEncoding);
-                        }
-                    }
-                    Some(V2OutcomeRegion::Failure(failure)) => {
-                        let failure = failure.canonical_encode();
-                        write(&[2])?;
-                        write(
-                            &u64::try_from(failure.len())
-                                .map_err(|_| AbiError::InvalidEncoding)?
-                                .to_be_bytes(),
-                        )?;
-                        write(&failure)?;
-                    }
-                }
-                Ok(())
-            };
+        let write_state = |write: &mut dyn FnMut(&[u8]) -> Result<(), AbiError>| {
+            self.write_v2_runtime_state(&abi, write)
+        };
         let mut runtime_bytes = 0_u64;
         write_state(&mut |bytes| {
             runtime_bytes = runtime_bytes
@@ -436,48 +467,40 @@ impl RuntimeState {
     }
 
     pub(crate) fn v2_host_state_identity(&self) -> Result<crate::abi::HostStateIdentity, AbiError> {
-        self.abi.as_ref().ok_or(AbiError::WrongVersion)?.version();
+        let _ = self.abi.as_ref().ok_or(AbiError::WrongVersion)?.version();
         self.v2_host_identity.ok_or(AbiError::WrongVersion)
     }
 
-    pub(crate) fn execution_supplement(
-        &mut self,
-        charge: &mut wasmi::ObservationCharge,
-        remaining_bytes: u64,
-        remaining_work: u64,
+    fn uncollected_supplement(
+        &self,
     ) -> Result<wasmi::ExecutionSupplement, wasmi::ExecutionObserverError> {
-        if !charge.collect {
-            let meter = self
-                .meter
-                .execution_trace_usage()
-                .map_err(|_| wasmi::ExecutionObserverError::SupplementRejected)?;
-            return Ok(wasmi::ExecutionSupplement {
-                storage_overlay: Vec::new(),
-                authoritative_fuel: self.meter.cpu_remaining(),
-                authoritative_usage: wasmi_usage(meter),
-                canonical_state_bytes: 0,
-                commitment_fuel: 0,
-                arbitration_host_state_root: [0; 32],
-                arbitration_host_state_bytes: 0,
-                arbitration_base_state_root: [0; 32],
-                arbitration_receipt_oracle_root: [0; 32],
-                arbitration_balance_oracle_root: [0; 32],
-                arbitration_engine_canonical_bytes: 0,
-                arbitration_instance_retained_bytes: 0,
-                arbitration_canonical_state_bytes: 0,
-                arbitration_commitment_fuel: 0,
-            });
-        }
-        let (overlay_entries, overlay_bytes) = if let Some(abi) = self.abi.as_ref() {
-            abi.storage_commitment_delta_metrics(&self.trace_storage_baseline)
-                .ok_or(wasmi::ExecutionObserverError::SupplementRejected)?
-        } else {
-            crate::storage::Storage::new()
-                .commitment_delta_metrics(&self.trace_storage_baseline)
-                .ok_or(wasmi::ExecutionObserverError::SupplementRejected)?
-        };
-        charge.storage_overlay_bytes = overlay_bytes;
-        let (host_state_bytes, host_identity, isolated_host_state) = if self.abi.is_some() {
+        let meter = self
+            .meter
+            .execution_trace_usage()
+            .map_err(|_| wasmi::ExecutionObserverError::SupplementRejected)?;
+        Ok(wasmi::ExecutionSupplement {
+            storage_overlay: Vec::new(),
+            authoritative_fuel: self.meter.cpu_remaining(),
+            authoritative_usage: wasmi_usage(meter),
+            canonical_state_bytes: 0,
+            commitment_fuel: 0,
+            arbitration_host_state_root: [0; 32],
+            arbitration_host_state_bytes: 0,
+            arbitration_base_state_root: [0; 32],
+            arbitration_receipt_oracle_root: [0; 32],
+            arbitration_balance_oracle_root: [0; 32],
+            arbitration_engine_canonical_bytes: 0,
+            arbitration_instance_retained_bytes: 0,
+            arbitration_canonical_state_bytes: 0,
+            arbitration_commitment_fuel: 0,
+        })
+    }
+
+    fn measure_supplement_host(
+        &self,
+        charge: &mut wasmi::ObservationCharge,
+    ) -> Result<SupplementHostState, wasmi::ExecutionObserverError> {
+        let measured = if self.abi.is_some() {
             let state = self
                 .v2_host_state_measurement()
                 .map_err(|_| wasmi::ExecutionObserverError::SupplementRejected)?;
@@ -488,7 +511,11 @@ impl RuntimeState {
                 .canonical_bytes
                 .checked_mul(3)
                 .ok_or(wasmi::ExecutionObserverError::SupplementRejected)?;
-            (state.canonical_bytes, Some(identity), None)
+            SupplementHostState {
+                bytes: state.canonical_bytes,
+                identity: Some(identity),
+                isolated: None,
+            }
         } else {
             use sha2::{Digest, Sha256};
             let state = crate::abi::HostStateCommitment {
@@ -502,19 +529,59 @@ impl RuntimeState {
                 .canonical_bytes
                 .checked_mul(3)
                 .ok_or(wasmi::ExecutionObserverError::SupplementRejected)?;
-            (state.canonical_bytes, Some(identity), Some(state))
+            SupplementHostState {
+                bytes: state.canonical_bytes,
+                identity: Some(identity),
+                isolated: Some(state),
+            }
         };
+        Ok(measured)
+    }
+
+    fn supplement_storage_overlay(&self, overlay_entries: usize) -> SupplementOverlay {
+        let mut storage_overlay = Vec::with_capacity(overlay_entries);
+        if let Some(abi) = self.abi.as_ref() {
+            abi.for_each_storage_commitment_delta(&self.trace_storage_baseline, |key, value| {
+                storage_overlay.push((key, value.map(<[u8]>::to_vec)));
+            });
+        } else {
+            crate::storage::Storage::new().for_each_commitment_delta(
+                &self.trace_storage_baseline,
+                |key, value| {
+                    storage_overlay.push((key, value.map(<[u8]>::to_vec)));
+                },
+            );
+        }
+        storage_overlay.sort_by(|left, right| left.0.cmp(&right.0));
+        storage_overlay
+    }
+
+    pub(crate) fn execution_supplement(
+        &mut self,
+        charge: &mut wasmi::ObservationCharge,
+        remaining_bytes: u64,
+        remaining_work: u64,
+    ) -> Result<wasmi::ExecutionSupplement, wasmi::ExecutionObserverError> {
+        if !charge.collect {
+            return self.uncollected_supplement();
+        }
+        let (overlay_entries, overlay_bytes) = if let Some(abi) = self.abi.as_ref() {
+            abi.storage_commitment_delta_metrics(&self.trace_storage_baseline)
+                .ok_or(wasmi::ExecutionObserverError::SupplementRejected)?
+        } else {
+            crate::storage::Storage::new()
+                .commitment_delta_metrics(&self.trace_storage_baseline)
+                .ok_or(wasmi::ExecutionObserverError::SupplementRejected)?
+        };
+        charge.storage_overlay_bytes = overlay_bytes;
+        let SupplementHostState {
+            bytes: host_state_bytes,
+            identity: host_identity,
+            isolated: isolated_host_state,
+        } = self.measure_supplement_host(charge)?;
         let retained_instruction_bytes = charge.retained_instruction_bytes;
         let arbitration_instance_retained_bytes = charge.instance_state_bytes;
-        let engine_bytes = charge
-            .total_bytes()
-            .and_then(|bytes| bytes.checked_sub(retained_instruction_bytes))
-            .and_then(|bytes| bytes.checked_sub(charge.host_state_bytes))
-            .and_then(|bytes| bytes.checked_sub(arbitration_instance_retained_bytes))
-            .ok_or(wasmi::ExecutionObserverError::SupplementRejected)?;
-        let snapshot_bytes = 214_u64
-            .checked_add(engine_bytes)
-            .ok_or(wasmi::ExecutionObserverError::SupplementRejected)?;
+        let snapshot_bytes = supplement_snapshot_bytes(charge)?;
         let retained_bytes = snapshot_bytes
             .checked_add(retained_instruction_bytes)
             .and_then(|bytes| bytes.checked_add(arbitration_instance_retained_bytes))
@@ -539,17 +606,16 @@ impl RuntimeState {
         self.meter
             .charge_cpu(total_fuel)
             .map_err(|_| wasmi::ExecutionObserverError::SupplementRejected)?;
-        let host_state = match isolated_host_state {
-            Some(state) => state,
-            None => {
-                let state = self
-                    .v2_host_state_commitment()
-                    .map_err(|_| wasmi::ExecutionObserverError::SupplementRejected)?;
-                if state.canonical_bytes != host_state_bytes {
-                    return Err(wasmi::ExecutionObserverError::SupplementRejected);
-                }
-                state
+        let host_state = if let Some(state) = isolated_host_state {
+            state
+        } else {
+            let state = self
+                .v2_host_state_commitment()
+                .map_err(|_| wasmi::ExecutionObserverError::SupplementRejected)?;
+            if state.canonical_bytes != host_state_bytes {
+                return Err(wasmi::ExecutionObserverError::SupplementRejected);
             }
+            state
         };
         charge.value_bytes = snapshot_bytes
             .checked_add(retained_instruction_bytes)
@@ -565,18 +631,7 @@ impl RuntimeState {
             .meter
             .execution_trace_usage()
             .map_err(|_| wasmi::ExecutionObserverError::SupplementRejected)?;
-        let mut storage_overlay = Vec::with_capacity(overlay_entries);
-        if let Some(abi) = self.abi.as_ref() {
-            abi.for_each_storage_commitment_delta(&self.trace_storage_baseline, |key, value| {
-                storage_overlay.push((key, value.map(<[u8]>::to_vec)));
-            });
-        } else {
-            crate::storage::Storage::new()
-                .for_each_commitment_delta(&self.trace_storage_baseline, |key, value| {
-                    storage_overlay.push((key, value.map(<[u8]>::to_vec)))
-                });
-        }
-        storage_overlay.sort_by(|left, right| left.0.cmp(&right.0));
+        let storage_overlay = self.supplement_storage_overlay(overlay_entries);
         Ok(wasmi::ExecutionSupplement {
             storage_overlay,
             authoritative_fuel: self.meter.cpu_remaining(),
@@ -586,11 +641,11 @@ impl RuntimeState {
             arbitration_host_state_root: host_state.root,
             arbitration_host_state_bytes: host_state.canonical_bytes,
             arbitration_base_state_root: host_identity
-                .map_or([0; 32], |identity| identity.base_state_root),
+                .map_or([0; 32], |identity| identity.base_state),
             arbitration_receipt_oracle_root: host_identity
-                .map_or([0; 32], |identity| identity.receipt_oracle_root),
+                .map_or([0; 32], |identity| identity.receipt_oracle),
             arbitration_balance_oracle_root: host_identity
-                .map_or([0; 32], |identity| identity.balance_oracle_root),
+                .map_or([0; 32], |identity| identity.balance_oracle),
             arbitration_engine_canonical_bytes: arbitration_engine_bytes,
             arbitration_instance_retained_bytes,
             arbitration_canonical_state_bytes: crate::arbitration_step_state_bytes(
@@ -618,15 +673,11 @@ impl RuntimeState {
             legacy_reference_engine_committed: 0,
             trace_storage_baseline: crate::storage::Storage::new(),
             v2_host_identity: Some(crate::abi::HostStateIdentity {
-                base_state_root: Sha256::digest(b"LayerX/programs/v2/isolated-base-state\0").into(),
-                receipt_oracle_root: Sha256::digest(
-                    b"LayerX/programs/v2/isolated-receipt-oracle\0",
-                )
-                .into(),
-                balance_oracle_root: Sha256::digest(
-                    b"LayerX/programs/v2/isolated-balance-oracle\0",
-                )
-                .into(),
+                base_state: Sha256::digest(b"LayerX/programs/v2/isolated-base-state\0").into(),
+                receipt_oracle: Sha256::digest(b"LayerX/programs/v2/isolated-receipt-oracle\0")
+                    .into(),
+                balance_oracle: Sha256::digest(b"LayerX/programs/v2/isolated-balance-oracle\0")
+                    .into(),
             }),
         }
     }
@@ -1054,7 +1105,7 @@ pub(crate) fn linker(engine: &Engine) -> Result<HostLinker, ExecutionFault> {
                     .with_abi(|abi, _| abi.receipt_read(digest))
                 {
                     Ok(view) => view,
-                    Err(error) => return error_status(error),
+                    Err(error) => return error_status(&error),
                 };
                 let encoded = encode_receipt(&view);
                 let capacity = match nonnegative(output_capacity) {
@@ -1090,7 +1141,7 @@ fn encode_receipt(view: &ReceiptView) -> Vec<u8> {
     encoded
 }
 
-pub(crate) const fn error_status(error: AbiError) -> i32 {
+pub(crate) const fn error_status(error: &AbiError) -> i32 {
     match error {
         AbiError::CapabilityDenied
         | AbiError::CapabilityEscalation
@@ -1101,15 +1152,15 @@ pub(crate) const fn error_status(error: AbiError) -> i32 {
         AbiError::Storage(
             crate::storage::StorageError::InvalidScanCursor
             | crate::storage::StorageError::InvalidScanLimits,
-        ) => STATUS_INVALID,
+        )
+        | AbiError::WrongVersion
+        | AbiError::InvalidCapability
+        | AbiError::DuplicateCapability
+        | AbiError::InvalidEncoding => STATUS_INVALID,
         AbiError::EventBounds
         | AbiError::CallBounds
         | AbiError::AmountBounds
         | AbiError::Storage(_) => STATUS_BOUNDS,
-        AbiError::WrongVersion
-        | AbiError::InvalidCapability
-        | AbiError::DuplicateCapability
-        | AbiError::InvalidEncoding => STATUS_INVALID,
     }
 }
 

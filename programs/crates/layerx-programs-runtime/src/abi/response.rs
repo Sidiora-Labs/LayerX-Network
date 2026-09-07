@@ -115,12 +115,6 @@ impl ResponseRegion {
         }
     }
 
-    pub(crate) fn canonical_state_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(self.canonical_state_len().unwrap_or(0) as usize);
-        self.canonical_state_write(|part| bytes.extend_from_slice(part));
-        bytes
-    }
-
     pub(crate) const fn has_publication(&self) -> bool {
         self.published.is_some() || self.refusal.is_some()
     }

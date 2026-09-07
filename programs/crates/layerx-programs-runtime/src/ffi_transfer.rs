@@ -206,6 +206,22 @@ struct WindDownKernel {
     token: u64,
 }
 
+impl WindDownKernel {
+    fn transfer_root(&self) -> Result<[u8; 32], TransferLawError> {
+        let mut root = [0_u8; 32];
+        for (offset, byte) in root.iter_mut().enumerate() {
+            let value = unsafe {
+                layerx_programs_wind_down_transfer_root_byte(
+                    self.token,
+                    u32::try_from(offset).map_err(|_| TransferLawError::ReceiptMismatch)?,
+                )
+            };
+            *byte = u8::try_from(value).map_err(|_| TransferLawError::ReceiptMismatch)?;
+        }
+        Ok(root)
+    }
+}
+
 impl KernelTransferPrimitive for WindDownKernel {
     fn apply_and_verify_402lxp_set(
         &mut self,
@@ -297,16 +313,7 @@ impl KernelTransferPrimitive for WindDownKernel {
         if !program_spend_consumed(program_spend_token) {
             return Err(TransferLawError::KernelRefused);
         }
-        let mut root = [0_u8; 32];
-        for (offset, byte) in root.iter_mut().enumerate() {
-            let value = unsafe {
-                layerx_programs_wind_down_transfer_root_byte(
-                    self.token,
-                    u32::try_from(offset).map_err(|_| TransferLawError::ReceiptMismatch)?,
-                )
-            };
-            *byte = u8::try_from(value).map_err(|_| TransferLawError::ReceiptMismatch)?;
-        }
+        let root = self.transfer_root()?;
         Ok(KernelTransferEvidence {
             transfer_set_root: root,
             leg_count: 1,

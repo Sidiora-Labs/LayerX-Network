@@ -19,13 +19,14 @@ pub(super) fn register(linker: &mut Linker<RuntimeState>) -> Result<(), Executio
              input_length: i32,
              output_pointer: i32|
              -> i32 {
-                let algorithm_id = match nonnegative(algorithm_id) {
-                    Ok(id) => id as u32,
+                let algorithm_id = match nonnegative(algorithm_id)
+                    .and_then(|id| u32::try_from(id).map_err(|_| STATUS_BOUNDS))
+                {
+                    Ok(id) => id,
                     Err(status) => return status,
                 };
-                let algorithm = match HashAlgorithm::from_identifier(algorithm_id) {
-                    Ok(algorithm) => algorithm,
-                    Err(_) => return STATUS_INVALID,
+                let Ok(algorithm) = HashAlgorithm::from_identifier(algorithm_id) else {
+                    return STATUS_INVALID;
                 };
                 let input_length = match nonnegative(input_length) {
                     Ok(length) => length,
@@ -35,17 +36,16 @@ pub(super) fn register(linker: &mut Linker<RuntimeState>) -> Result<(), Executio
                     Ok(input) => input,
                     Err(status) => return status,
                 };
-                let fuel_cost = match u64::try_from(input.len())
+                let Some(fuel_cost) = u64::try_from(input.len())
                     .ok()
                     .and_then(|len| len.checked_mul(algorithm.fuel_per_byte()))
-                {
-                    Some(fuel) => fuel,
-                    None => return STATUS_BOUNDS,
+                else {
+                    return STATUS_BOUNDS;
                 };
                 if let Err(refusal) = super::charge_host_cpu(&mut caller, fuel_cost) {
-                    caller.data_mut().record_refusal(
-                        crate::calls::CompositionRefusal::Resource(refusal),
-                    );
+                    caller
+                        .data_mut()
+                        .record_refusal(crate::calls::CompositionRefusal::Resource(refusal));
                     return STATUS_METER;
                 }
                 let digest = match hash_bytes(algorithm, &input) {

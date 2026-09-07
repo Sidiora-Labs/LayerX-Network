@@ -128,25 +128,33 @@ pub struct Storage {
 
 impl PartialEq for Storage {
     fn eq(&self, other: &Self) -> bool {
-        self.cells == other.cells &&
-            self.frozen_namespaces == other.frozen_namespaces
+        self.cells == other.cells && self.frozen_namespaces == other.frozen_namespaces
     }
 }
 
 impl Eq for Storage {}
 
+type ProtocolEntries = Vec<(Vec<u8>, Vec<u8>)>;
+
 impl Storage {
     fn commitment_key_len(address: &StorageAddress) -> Option<u64> {
         let mut namespace = [0_u8; 65];
         let namespace_len = address.namespace.write_canonical(&mut namespace);
-        u64::try_from(2_usize.checked_add(namespace_len)?.checked_add(address.key.len())?).ok()
+        u64::try_from(
+            2_usize
+                .checked_add(namespace_len)?
+                .checked_add(address.key.len())?,
+        )
+        .ok()
     }
     fn commitment_key(address: &StorageAddress) -> Vec<u8> {
         let namespace = address.namespace.canonical_bytes();
         let namespace_length = u16::try_from(namespace.len())
             .unwrap_or_else(|_| unreachable!("closed storage namespace length is bounded"));
         let mut key = Vec::with_capacity(
-            2_usize.saturating_add(namespace.len()).saturating_add(address.key.len()),
+            2_usize
+                .saturating_add(namespace.len())
+                .saturating_add(address.key.len()),
         );
         key.extend_from_slice(&namespace_length.to_be_bytes());
         key.extend_from_slice(&namespace);
@@ -187,16 +195,7 @@ impl Storage {
         self.accessed_namespaces.borrow().contains(&namespace)
     }
 
-    pub(crate) fn commitment_entries(&self) -> Vec<(Vec<u8>, Vec<u8>)> {
-        self.cells.iter().map(|(address, value)| {
-            (Self::commitment_key(address), value.clone())
-        }).collect()
-    }
-
-    pub(crate) fn for_each_commitment_entry(
-        &self,
-        mut visit: impl FnMut(Vec<u8>, &[u8]),
-    ) {
+    pub(crate) fn for_each_commitment_entry(&self, mut visit: impl FnMut(Vec<u8>, &[u8])) {
         for (address, value) in &self.cells {
             visit(Self::commitment_key(address), value);
         }
@@ -211,16 +210,33 @@ impl Storage {
         let mut baseline = baseline.cells.iter().peekable();
         loop {
             match (current.peek(), baseline.peek()) {
-                (Some((address, value)), Some((baseline_address, baseline_value))) => match address.cmp(baseline_address) {
-                    core::cmp::Ordering::Less => { visit(Self::commitment_key(address), Some(value)); current.next(); }
-                    core::cmp::Ordering::Greater => { visit(Self::commitment_key(baseline_address), None); baseline.next(); }
-                    core::cmp::Ordering::Equal => {
-                        if value.as_slice() != baseline_value.as_slice() { visit(Self::commitment_key(address), Some(value)); }
-                        current.next(); baseline.next();
+                (Some((address, value)), Some((baseline_address, baseline_value))) => {
+                    match address.cmp(baseline_address) {
+                        core::cmp::Ordering::Less => {
+                            visit(Self::commitment_key(address), Some(value));
+                            current.next();
+                        }
+                        core::cmp::Ordering::Greater => {
+                            visit(Self::commitment_key(baseline_address), None);
+                            baseline.next();
+                        }
+                        core::cmp::Ordering::Equal => {
+                            if value.as_slice() != baseline_value.as_slice() {
+                                visit(Self::commitment_key(address), Some(value));
+                            }
+                            current.next();
+                            baseline.next();
+                        }
                     }
-                },
-                (Some((address, value)), None) => { visit(Self::commitment_key(address), Some(value)); current.next(); }
-                (None, Some((address, _))) => { visit(Self::commitment_key(address), None); baseline.next(); }
+                }
+                (Some((address, value)), None) => {
+                    visit(Self::commitment_key(address), Some(value));
+                    current.next();
+                }
+                (None, Some((address, _))) => {
+                    visit(Self::commitment_key(address), None);
+                    baseline.next();
+                }
                 (None, None) => break,
             }
         }
@@ -232,24 +248,64 @@ impl Storage {
         let mut entries = 0_usize;
         let mut bytes = 4_u64;
         loop {
-            let (key_bytes, value_bytes, advance_current, advance_baseline) = match (current.peek(), baseline.peek()) {
-                (Some((address, value)), Some((baseline_address, baseline_value))) => match address.cmp(baseline_address) {
-                    core::cmp::Ordering::Less => (Self::commitment_key_len(address)?, Some(u64::try_from(value.len()).ok()?), true, false),
-                    core::cmp::Ordering::Greater => (Self::commitment_key_len(baseline_address)?, None, false, true),
-                    core::cmp::Ordering::Equal if value.as_slice() != baseline_value.as_slice() => (Self::commitment_key_len(address)?, Some(u64::try_from(value.len()).ok()?), true, true),
-                    core::cmp::Ordering::Equal => { current.next(); baseline.next(); continue },
-                },
-                (Some((address, value)), None) => (Self::commitment_key_len(address)?, Some(u64::try_from(value.len()).ok()?), true, false),
-                (None, Some((baseline_address, _))) => (Self::commitment_key_len(baseline_address)?, None, false, true),
-                (None, None) => break,
-            };
+            let (key_bytes, value_bytes, advance_current, advance_baseline) =
+                match (current.peek(), baseline.peek()) {
+                    (Some((address, value)), Some((baseline_address, baseline_value))) => {
+                        match address.cmp(baseline_address) {
+                            core::cmp::Ordering::Less => (
+                                Self::commitment_key_len(address)?,
+                                Some(u64::try_from(value.len()).ok()?),
+                                true,
+                                false,
+                            ),
+                            core::cmp::Ordering::Greater => (
+                                Self::commitment_key_len(baseline_address)?,
+                                None,
+                                false,
+                                true,
+                            ),
+                            core::cmp::Ordering::Equal
+                                if value.as_slice() != baseline_value.as_slice() =>
+                            {
+                                (
+                                    Self::commitment_key_len(address)?,
+                                    Some(u64::try_from(value.len()).ok()?),
+                                    true,
+                                    true,
+                                )
+                            }
+                            core::cmp::Ordering::Equal => {
+                                current.next();
+                                baseline.next();
+                                continue;
+                            }
+                        }
+                    }
+                    (Some((address, value)), None) => (
+                        Self::commitment_key_len(address)?,
+                        Some(u64::try_from(value.len()).ok()?),
+                        true,
+                        false,
+                    ),
+                    (None, Some((baseline_address, _))) => (
+                        Self::commitment_key_len(baseline_address)?,
+                        None,
+                        false,
+                        true,
+                    ),
+                    (None, None) => break,
+                };
             entries = entries.checked_add(1)?;
             bytes = bytes.checked_add(match value_bytes {
                 Some(value_bytes) => 9_u64.checked_add(key_bytes)?.checked_add(value_bytes)?,
                 None => 5_u64.checked_add(key_bytes)?,
             })?;
-            if advance_current { current.next(); }
-            if advance_baseline { baseline.next(); }
+            if advance_current {
+                current.next();
+            }
+            if advance_baseline {
+                baseline.next();
+            }
         }
         Some((entries, bytes))
     }
@@ -307,6 +363,10 @@ impl Storage {
 
     /// Reads one protocol-owned canonical state cell. This host-side seam is
     /// not linked into either guest ABI and grants no write authority.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage refusal for an invalid namespace or key.
     pub fn protocol_state_value(
         &self,
         namespace: StorageNamespace,
@@ -318,6 +378,10 @@ impl Storage {
     /// Returns every nonempty namespace and its exact persistent bytes in
     /// canonical namespace order. Protocol state transitions use this to prove
     /// that no occupied namespace escaped responsibility accounting.
+    ///
+    /// # Errors
+    ///
+    /// Returns `SizeOverflow` if a namespace size cannot be represented.
     pub fn namespace_sizes(&self) -> Result<Vec<(StorageNamespace, u64)>, StorageError> {
         let mut sizes = BTreeMap::<StorageNamespace, u64>::new();
         for (address, value) in &self.cells {
@@ -329,63 +393,110 @@ impl Storage {
     }
 
     /// Returns canonical copies of every cell in one protocol-owned namespace.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage refusal if namespace entries cannot be retrieved.
     pub fn protocol_namespace_entries(
-        &self, namespace: StorageNamespace,
-    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>, StorageError> {
+        &self,
+        namespace: StorageNamespace,
+    ) -> Result<ProtocolEntries, StorageError> {
         self.ensure_accessible(namespace)?;
         Ok(self.namespace_entries(namespace))
     }
 
     /// Atomically replaces one protocol-owned namespace with an exact canonical cell set.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage refusal if any replacement entry is invalid.
     pub fn replace_protocol_namespace(
-        &mut self, namespace: StorageNamespace, entries: &[(Vec<u8>, Vec<u8>)],
+        &mut self,
+        namespace: StorageNamespace,
+        entries: &[(Vec<u8>, Vec<u8>)],
     ) -> Result<(), StorageError> {
         if entries.windows(2).any(|pair| pair[0].0 >= pair[1].0) {
             return Err(StorageError::PrefixTooLarge);
         }
         let existing = self.protocol_namespace_entries(namespace)?;
         let mut transaction = self.transaction(namespace);
-        for (key, _) in existing { transaction.delete(&key)?; }
-        for (key, value) in entries { transaction.write(key, value)?; }
-        transaction.commit();
+        for (key, _) in existing {
+            transaction.delete(&key)?;
+        }
+        for (key, value) in entries {
+            transaction.write(key, value)?;
+        }
+        let _ = transaction.commit();
         Ok(())
     }
 
     /// Returns canonical copies of cells beneath one protocol-owned key prefix.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage refusal if the namespace or prefix is invalid.
     pub fn protocol_prefix_entries(
-        &self, namespace: StorageNamespace, prefix: &[u8],
-    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>, StorageError> {
+        &self,
+        namespace: StorageNamespace,
+        prefix: &[u8],
+    ) -> Result<ProtocolEntries, StorageError> {
         self.ensure_accessible(namespace)?;
         validate_key(prefix)?;
-        Ok(self.cells.iter()
-            .filter(|(address, _)| address.namespace == namespace && address.key.starts_with(prefix))
-            .map(|(address, value)| (address.key.clone(), value.clone())).collect())
+        Ok(self
+            .cells
+            .iter()
+            .filter(|(address, _)| {
+                address.namespace == namespace && address.key.starts_with(prefix)
+            })
+            .map(|(address, value)| (address.key.clone(), value.clone()))
+            .collect())
     }
 
     /// Returns exact key-plus-value occupancy beneath one protocol-owned prefix.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage refusal for invalid prefix access or byte-count overflow.
     pub fn protocol_prefix_bytes(
-        &self, namespace: StorageNamespace, prefix: &[u8],
+        &self,
+        namespace: StorageNamespace,
+        prefix: &[u8],
     ) -> Result<u64, StorageError> {
-        self.protocol_prefix_entries(namespace, prefix)?.iter().try_fold(0u64,
-            |total, (key, value)| total.checked_add(metered_bytes(key, Some(value))?)
-                .ok_or(StorageError::SizeOverflow))
+        self.protocol_prefix_entries(namespace, prefix)?
+            .iter()
+            .try_fold(0u64, |total, (key, value)| {
+                total
+                    .checked_add(metered_bytes(key, Some(value))?)
+                    .ok_or(StorageError::SizeOverflow)
+            })
     }
 
     /// Atomically replaces one protocol-owned prefix with an exact canonical cell set.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage refusal if the prefix or a replacement entry is invalid.
     pub fn replace_protocol_prefix(
-        &mut self, namespace: StorageNamespace, prefix: &[u8],
+        &mut self,
+        namespace: StorageNamespace,
+        prefix: &[u8],
         entries: &[(Vec<u8>, Vec<u8>)],
     ) -> Result<(), StorageError> {
         validate_key(prefix)?;
         if entries.windows(2).any(|pair| pair[0].0 >= pair[1].0)
-            || entries.iter().any(|(key, _)| !key.starts_with(prefix)) {
+            || entries.iter().any(|(key, _)| !key.starts_with(prefix))
+        {
             return Err(StorageError::PrefixTooLarge);
         }
         let existing = self.protocol_prefix_entries(namespace, prefix)?;
         let mut transaction = self.transaction(namespace);
-        for (key, _) in existing { transaction.delete(&key)?; }
-        for (key, value) in entries { transaction.write(key, value)?; }
-        transaction.commit();
+        for (key, _) in existing {
+            transaction.delete(&key)?;
+        }
+        for (key, value) in entries {
+            transaction.write(key, value)?;
+        }
+        let _ = transaction.commit();
         Ok(())
     }
 

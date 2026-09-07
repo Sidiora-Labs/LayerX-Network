@@ -214,6 +214,10 @@ impl CallFrameId {
 
     /// Derives a child frame for host-side call orchestration. This is never
     /// exposed through the guest ABI.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CallBounds` when the ordinal or available frame depth is invalid.
     pub fn child(self, ordinal: u32) -> Result<Self, AbiError> {
         let depth = usize::from(self.depth);
         let slot = self.path.get(depth).ok_or(AbiError::CallBounds)?;
@@ -221,7 +225,7 @@ impl CallFrameId {
             return Err(AbiError::CallBounds);
         }
         let mut path = self.path;
-        path[depth] = ordinal as u8;
+        path[depth] = ordinal.to_le_bytes()[0];
         Ok(Self {
             path,
             depth: self.depth.saturating_add(1),
@@ -235,16 +239,17 @@ impl CallFrameId {
 
     /// Rebuilds a host-frame identifier from its canonical artifact form.
     pub(crate) fn from_canonical(path: [u8; 8], depth: u8) -> Result<Self, AbiError> {
+        let encoded_depth = depth;
         let depth = usize::from(depth);
         if depth > path.len() || path[depth..].iter().any(|byte| *byte != 0) {
             return Err(AbiError::InvalidEncoding);
         }
-        if path[..depth].iter().any(|byte| *byte == 0) {
+        if path[..depth].contains(&0) {
             return Err(AbiError::InvalidEncoding);
         }
         Ok(Self {
             path,
-            depth: depth as u8,
+            depth: encoded_depth,
         })
     }
 }
@@ -270,6 +275,10 @@ pub trait ReceiptOracle {
 
     /// Returns a balance only after Core has verified the named receipt and
     /// the account proof against its resulting state root.
+    ///
+    /// # Errors
+    ///
+    /// Returns an evidence refusal if the balance cannot be independently verified.
     fn verified_balance(
         &self,
         _account: [u8; 32],
@@ -356,6 +365,10 @@ pub struct AbiEffects {
 impl AbiEffects {
     /// Canonically commits every program event to its producing frame, so an
     /// activity receipt cannot replay an event under another program frame.
+    ///
+    /// # Errors
+    ///
+    /// Returns an encoding or event-bounds refusal if the envelope cannot be encoded.
     pub fn canonical_program_event_envelope(&self) -> Result<Vec<u8>, AbiError> {
         if self.events.len() > MAX_EVENTS_PER_ACTIVITY {
             return Err(AbiError::EventBounds);
@@ -654,10 +667,6 @@ impl Abi {
         self.storage.clone()
     }
 
-    pub(crate) fn for_each_storage_commitment_entry(&self, visit: impl FnMut(Vec<u8>, &[u8])) {
-        self.storage.for_each_commitment_entry(visit);
-    }
-
     pub(crate) fn for_each_storage_commitment_delta(
         &self,
         baseline: &Storage,
@@ -947,7 +956,7 @@ impl Abi {
 
     /// Requests an ABI-v2 402LXP transfer from an account derived by the
     /// currently executing program. The opaque authority token is issued only
-    /// after the exact source derivation and cumulative ProgramSpend grant are
+    /// after the exact source derivation and cumulative `ProgramSpend` grant are
     /// checked at this host-fixed frame.
     pub(crate) fn request_program_transfer(
         &mut self,
@@ -976,7 +985,7 @@ impl Abi {
                 }
                 _ => None,
             })
-            .try_fold(amount, |total, prior| total.checked_add(prior))
+            .try_fold(amount, u128::checked_add)
             .ok_or(AbiError::AmountBounds)?;
         if !self.authorization.capabilities().permits_program_spend(
             capability::ProgramSpendAuthorization {
@@ -1040,6 +1049,10 @@ impl Abi {
 
     /// Reads one proof-bound balance. The sight grant is structurally absent
     /// from both transfer-authority paths.
+    ///
+    /// # Errors
+    ///
+    /// Returns a capability or evidence refusal when the requested balance is unavailable.
     pub fn balance_read(
         &self,
         account: [u8; 32],
