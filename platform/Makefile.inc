@@ -107,7 +107,7 @@ platform-lint:
 	$(PLATFORM_CARGO) run --offline --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-workspace-gate -- platform/workspace.kvx .
 	cargo clippy --offline --locked --manifest-path platform/examples/marketplace/program/Cargo.toml --target wasm32-unknown-unknown --lib -- -D warnings
 	sh platform/tools/dependency-policy.sh
-	cargo deny --manifest-path $(PLATFORM_MANIFEST) check advisories bans sources
+	cargo deny --manifest-path $(PLATFORM_MANIFEST) check --disable-fetch advisories bans sources
 
 platform-test:
 	$(PLATFORM_CARGO) test --offline --manifest-path $(PLATFORM_MANIFEST) --locked --workspace --features layerx-platform-cli/test-credential-store
