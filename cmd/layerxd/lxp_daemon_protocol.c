@@ -563,6 +563,7 @@ lxp_result lxp_daemon_protocol_owner_attach(
     lxp_result status;
     pthread_mutexattr_t mutex_attributes;
     bool mutex_initialized = false;
+    bool receipt_mutex_initialized = false;
     const char *stage = "input validation";
     if (owner == NULL || kernel == NULL || identities == NULL ||
         network_id == 0U ||
@@ -611,6 +612,11 @@ lxp_result lxp_daemon_protocol_owner_attach(
         mutex_initialized = status == LXP_OK;
     }
     if (status != LXP_OK) goto fail;
+    if (pthread_mutex_init(&owner->receipt_mutex, NULL) != 0) {
+        status = LXP_ERR_IO;
+        goto fail;
+    }
+    receipt_mutex_initialized = true;
     status = lxp_verified_receipt_index_bind_fallback(
         verified_receipts, durable_receipt_facts, owner);
     if (status != LXP_OK) goto fail;
@@ -712,7 +718,11 @@ lxp_result lxp_daemon_protocol_owner_attach(
         else
             owner->latest_sealed_timestamp = bootstrap_sealed_timestamp;
     }
-    if (status == LXP_OK) owner->attached = true;
+    if (status == LXP_OK) {
+        owner->published_receipt_log = *canonical_log;
+        owner->published_receipt_log.capacity = canonical_log->write_offset;
+        owner->attached = true;
+    }
     else {
 fail:
         (void)fprintf(stderr, "layerxd: protocol owner %s failed with result %d\n", stage, (int)status);
@@ -725,6 +735,7 @@ fail:
         owner->bearer_token_length = 0U;
         (void)lxp_verified_receipt_index_bind_fallback(
             verified_receipts, NULL, NULL);
+        if (receipt_mutex_initialized) (void)pthread_mutex_destroy(&owner->receipt_mutex);
         if (mutex_initialized) (void)pthread_mutex_destroy(&owner->mutex);
     }
     return status;
@@ -743,6 +754,7 @@ lxp_result lxp_daemon_protocol_owner_detach(
     if (lxp_verified_receipt_index_bind_fallback(
             owner->verified_receipts, NULL, NULL) != LXP_OK)
         return LXP_FATAL_INVARIANT;
+    if (pthread_mutex_destroy(&owner->receipt_mutex) != 0) return LXP_ERR_IO;
     if (pthread_mutex_destroy(&owner->mutex) != 0) return LXP_ERR_IO;
     lxp_secure_zero(owner->bearer_token, sizeof(owner->bearer_token));
     owner->bearer_token_length = 0U;
