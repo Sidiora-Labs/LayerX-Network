@@ -539,23 +539,30 @@ impl Drop for GatewayKey {
     }
 }
 
+pub struct SelectionRequest<'a> {
+    pub environment: Option<String>,
+    pub key: Option<String>,
+    pub fallback_key: &'a str,
+    pub token_stdin: bool,
+    pub component: &'a str,
+    pub read_only: bool,
+    pub rotate: bool,
+}
+
 pub fn select(
     configuration: &mut Configuration,
-    environment: Option<String>,
-    key: Option<String>,
-    fallback_key: &str,
-    token_stdin: bool,
-    component: &str,
-    read_only: bool,
-    rotate: bool,
+    request: SelectionRequest<'_>,
 ) -> Result<Selection, String> {
-    let environment = match environment {
-        Some(name) => {
-            Configuration::validate_environment_name(&name)?;
-            name
-        }
-        None => configuration.current_environment.clone(),
-    };
+    let SelectionRequest {
+        environment,
+        key,
+        fallback_key,
+        token_stdin,
+        component,
+        read_only,
+        rotate,
+    } = request;
+    let environment = installation_environment(configuration, environment)?;
     let profile = configuration.environments.get(&environment).ok_or_else(|| {
         format!(
             "environment {environment} is not configured; run layerx environment use {environment} --endpoint <url> --network-id <id>"
@@ -623,26 +630,14 @@ pub fn select(
         };
         let (status, mut issued): (u16, GatewayEnvelope) =
             client.post_sensitive(&path, &body, &idempotency)?;
-        if !issued.ok
-            || issued.key.authorization_scheme != "LayerX-Key"
-            || issued.key.scopes != gateway_scopes
-        {
-            if existing_id.is_none() {
-                let _ = client.delete(&format!("/v1/keys/{}", issued.key.id));
-            }
-            return Err("gateway returned a key outside the requested installation scope".into());
-        }
-        let mut stored = Zeroizing::new(format!("{}:{}", issued.key.id, issued.key.secret));
-        issued.key.secret.zeroize();
-        if let Err(error) = credential::set_gateway(&gateway_alias, &mut stored) {
-            if status == 201 {
-                let _ = client.delete(&format!("/v1/keys/{}", issued.key.id));
-            }
-            if existing_id.is_some() {
-                let _ = credential::delete_gateway(&gateway_alias);
-            }
-            return Err(error);
-        }
+        validate_issued_key(&client, &issued, &gateway_scopes, existing_id.is_none())?;
+        store_issued_key(
+            &client,
+            &gateway_alias,
+            &mut issued,
+            status,
+            existing_id.is_some(),
+        )?;
         (issued.key.id.clone(), existing_id.is_some())
     };
     Ok(Selection {
@@ -658,6 +653,59 @@ pub fn select(
         gateway_scopes,
         rotated_gateway_key,
     })
+}
+
+fn installation_environment(
+    configuration: &Configuration,
+    environment: Option<String>,
+) -> Result<String, String> {
+    let environment = match environment {
+        Some(name) => {
+            Configuration::validate_environment_name(&name)?;
+            name
+        }
+        None => configuration.current_environment.clone(),
+    };
+    Ok(environment)
+}
+
+fn store_issued_key(
+    client: &Client,
+    gateway_alias: &str,
+    issued: &mut GatewayEnvelope,
+    status: u16,
+    replacement: bool,
+) -> Result<(), String> {
+    let mut stored = Zeroizing::new(format!("{}:{}", issued.key.id, issued.key.secret));
+    issued.key.secret.zeroize();
+    if let Err(error) = credential::set_gateway(gateway_alias, &mut stored) {
+        if status == 201 {
+            let _ = client.delete(&format!("/v1/keys/{}", issued.key.id));
+        }
+        if replacement {
+            let _ = credential::delete_gateway(gateway_alias);
+        }
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn validate_issued_key(
+    client: &Client,
+    issued: &GatewayEnvelope,
+    gateway_scopes: &[String],
+    new_key: bool,
+) -> Result<(), String> {
+    if !issued.ok
+        || issued.key.authorization_scheme != "LayerX-Key"
+        || issued.key.scopes != gateway_scopes
+    {
+        if new_key {
+            let _ = client.delete(&format!("/v1/keys/{}", issued.key.id));
+        }
+        return Err("gateway returned a key outside the requested installation scope".into());
+    }
+    Ok(())
 }
 
 fn provisioning_idempotency(
