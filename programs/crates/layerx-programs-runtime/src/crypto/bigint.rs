@@ -172,6 +172,14 @@ fn read_fixed_256(caller: &Caller<'_, RuntimeState>, ptr: i32, len: i32) -> Resu
 }
 
 pub(crate) fn register(linker: &mut Linker<RuntimeState>) -> Result<(), ExecutionFault> {
+    register_mul(linker)?;
+    register_div(linker)?;
+    register_rem(linker)?;
+    register_modexp(linker)?;
+    Ok(())
+}
+
+fn register_mul(linker: &mut Linker<RuntimeState>) -> Result<(), ExecutionFault> {
     linker
         .func_wrap(
             ABI_V2_MODULE,
@@ -221,8 +229,11 @@ pub(crate) fn register(linker: &mut Linker<RuntimeState>) -> Result<(), Executio
                 64
             },
         )
-        .map_err(|error| linker_fault(&error))?;
+        .map(|_| ())
+        .map_err(|error| linker_fault(&error))
+}
 
+fn register_div(linker: &mut Linker<RuntimeState>) -> Result<(), ExecutionFault> {
     linker
         .func_wrap(
             ABI_V2_MODULE,
@@ -274,8 +285,11 @@ pub(crate) fn register(linker: &mut Linker<RuntimeState>) -> Result<(), Executio
                 32
             },
         )
-        .map_err(|error| linker_fault(&error))?;
+        .map(|_| ())
+        .map_err(|error| linker_fault(&error))
+}
 
+fn register_rem(linker: &mut Linker<RuntimeState>) -> Result<(), ExecutionFault> {
     linker
         .func_wrap(
             ABI_V2_MODULE,
@@ -327,8 +341,11 @@ pub(crate) fn register(linker: &mut Linker<RuntimeState>) -> Result<(), Executio
                 32
             },
         )
-        .map_err(|error| linker_fault(&error))?;
+        .map(|_| ())
+        .map_err(|error| linker_fault(&error))
+}
 
+fn register_modexp(linker: &mut Linker<RuntimeState>) -> Result<(), ExecutionFault> {
     linker
         .func_wrap(
             ABI_V2_MODULE,
@@ -390,9 +407,8 @@ pub(crate) fn register(linker: &mut Linker<RuntimeState>) -> Result<(), Executio
                 32
             },
         )
-        .map_err(|error| linker_fault(&error))?;
-
-    Ok(())
+        .map(|_| ())
+        .map_err(|error| linker_fault(&error))
 }
 
 #[cfg(test)]
@@ -461,7 +477,8 @@ mod golden_vectors {
         let mut one = [0u8; 32];
         one[31] = 1;
 
-        let result = bigint_div_256(&value, &one).unwrap();
+        let result = bigint_div_256(&value, &one)
+            .unwrap_or_else(|error| panic!("unexpected bigint refusal: {error:?}"));
         assert_eq!(result, value);
     }
 
@@ -476,7 +493,10 @@ mod golden_vectors {
         let result = bigint_div_256(&value_bytes, &zero);
         assert!(result.is_err());
         assert_eq!(
-            result.unwrap_err().reason,
+            result
+                .err()
+                .unwrap_or_else(|| panic!("expected bigint refusal"))
+                .reason,
             WideIntegerRefusalReason::DivisionByZero
         );
     }
@@ -489,7 +509,8 @@ mod golden_vectors {
         let mut divisor = [0u8; 32];
         divisor[31] = 10;
 
-        let result = bigint_rem_256(&value, &divisor).unwrap();
+        let result = bigint_rem_256(&value, &divisor)
+            .unwrap_or_else(|error| panic!("unexpected bigint refusal: {error:?}"));
 
         let mut expected = [0u8; 32];
         expected[31] = 2;
@@ -506,7 +527,10 @@ mod golden_vectors {
         let result = bigint_rem_256(&value, &zero);
         assert!(result.is_err());
         assert_eq!(
-            result.unwrap_err().reason,
+            result
+                .err()
+                .unwrap_or_else(|| panic!("expected bigint refusal"))
+                .reason,
             WideIntegerRefusalReason::DivisionByZero
         );
     }
@@ -522,7 +546,8 @@ mod golden_vectors {
         let mut modulus = [0u8; 32];
         modulus[31] = 100;
 
-        let result = bigint_modexp_256(&base, &exp, &modulus).unwrap();
+        let result = bigint_modexp_256(&base, &exp, &modulus)
+            .unwrap_or_else(|error| panic!("unexpected bigint refusal: {error:?}"));
         assert_eq!(result, base);
     }
 
@@ -536,7 +561,8 @@ mod golden_vectors {
         let mut modulus = [0u8; 32];
         modulus[31] = 100;
 
-        let result = bigint_modexp_256(&base, &exp, &modulus).unwrap();
+        let result = bigint_modexp_256(&base, &exp, &modulus)
+            .unwrap_or_else(|error| panic!("unexpected bigint refusal: {error:?}"));
 
         let mut expected = [0u8; 32];
         expected[31] = 1;
@@ -556,7 +582,10 @@ mod golden_vectors {
         let result = bigint_modexp_256(&base, &exp, &zero);
         assert!(result.is_err());
         assert_eq!(
-            result.unwrap_err().reason,
+            result
+                .err()
+                .unwrap_or_else(|| panic!("expected bigint refusal"))
+                .reason,
             WideIntegerRefusalReason::ModulusZero
         );
     }
@@ -571,7 +600,8 @@ mod golden_vectors {
 
         let max_modulus = [0xFFu8; 32];
 
-        let result = bigint_modexp_256(&base, &exp, &max_modulus).unwrap();
+        let result = bigint_modexp_256(&base, &exp, &max_modulus)
+            .unwrap_or_else(|error| panic!("unexpected bigint refusal: {error:?}"));
 
         assert!(result.iter().any(|&b| b != 0));
     }
@@ -586,7 +616,8 @@ mod golden_vectors {
         let mut modulus = [0u8; 32];
         modulus[31] = 100;
 
-        let result = bigint_modexp_256(&max, &exp, &modulus).unwrap();
+        let result = bigint_modexp_256(&max, &exp, &modulus)
+            .unwrap_or_else(|error| panic!("unexpected bigint refusal: {error:?}"));
 
         let mut expected = [0u8; 32];
         expected[31] = 25;
