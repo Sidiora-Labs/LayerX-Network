@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-usage: topology-check.sh [--yaml-parser auto|pyyaml|builtin] [--strict] [manifest ...]
+usage: topology-check.sh [--yaml-parser auto|pyyaml|builtin] [--strict] [--namespace namespace] [manifest ...]
 
 Parses the hosted Kubernetes manifests, resolves every in-cluster URL that a
 workload configures (container env values, ConfigMap-sourced env values and
@@ -24,18 +24,22 @@ Default manifests:
   platform/hosted/internal/deployment.yaml
   platform/hosted/webhooks/deployment.yaml (namespace layerx-developer)
 
+--namespace sets the kubectl apply namespace for subsequent manifests. Explicit
+metadata.namespace values take precedence. ExternalName aliases resolve DNS
+without translating ports, and both policies are checked at the target pod.
+
 The trusted-boundary Services (node core boundary, receipt authority, agent
 boundary, identity and Paxeer boundary) are declared by the node, identity and
-paxeer manifests, so their edges are checked on both ends. Only the status
-publisher that platform/hosted/testnet/README.md names as separately operated
-has no manifest in this repository; its edge is reported as `external` with
-the caller's side checked, and --strict fails it.
+paxeer manifests, so their edges are checked on both ends. The status publisher
+that platform/hosted/testnet/README.md names as separately operated is reported
+as `external` with the caller's side checked, and --strict fails it. Every other
+missing Service, including the Human upstream, fails in both modes.
 EOF
 }
 
 topology_check() {
-  local parser=auto strict=0 manifest
-  local -a manifests=()
+  local parser=auto strict=0 manifest namespace=default
+  local -a manifests=() namespaces=() inputs=()
   while [ $# -gt 0 ]; do
     case "$1" in
       --yaml-parser)
@@ -45,6 +49,10 @@ topology_check() {
       --yaml-parser=*)
         parser="${1#*=}"
         shift
+        ;;
+      --namespace)
+        namespace="${2:?topology-check: --namespace needs a value}"
+        shift 2
         ;;
       --strict)
         strict=1
@@ -56,7 +64,10 @@ topology_check() {
         ;;
       --)
         shift
-        manifests+=("$@")
+        for manifest in "$@"; do
+          manifests+=("$manifest")
+          namespaces+=("$namespace")
+        done
         break
         ;;
       -*)
@@ -66,6 +77,7 @@ topology_check() {
         ;;
       *)
         manifests+=("$1")
+        namespaces+=("$namespace")
         shift
         ;;
     esac
@@ -90,6 +102,7 @@ topology_check() {
       "$root/platform/hosted/internal/deployment.yaml"
       "$root/platform/hosted/webhooks/deployment.yaml"
     )
+    namespaces=(default default default default default default default layerx-developer)
   fi
   if ! command -v python3 >/dev/null 2>&1; then
     printf 'topology-check: python3 is required\n' >&2
@@ -101,14 +114,18 @@ topology_check() {
       return 2
     fi
   done
-  TOPOLOGY_YAML_PARSER="$parser" TOPOLOGY_STRICT="$strict" python3 - "${manifests[@]}" <<'PY'
+  local index
+  for index in "${!manifests[@]}"; do
+    inputs+=("${namespaces[$index]}" "${manifests[$index]}")
+  done
+  TOPOLOGY_YAML_PARSER="$parser" TOPOLOGY_STRICT="$strict" python3 - "${inputs[@]}" <<'PY'
 import os
 import re
 import sys
 
 MODE = os.environ.get("TOPOLOGY_YAML_PARSER", "auto")
 STRICT = os.environ.get("TOPOLOGY_STRICT", "0") == "1"
-MANIFESTS = sys.argv[1:]
+MANIFESTS = list(zip(sys.argv[1::2], sys.argv[2::2]))
 
 SEPARATELY_OPERATED = {
     ("layerx-status", "status-publisher"): {"port": "443", "labels": None},
@@ -485,10 +502,10 @@ class Topology:
         self.problems = []
         self.notes = []
 
-    def add(self, document, source):
+    def add(self, document, source, namespace="default"):
         kind = text(get(document, "kind"))
         name = text(get(document, "metadata", "name"))
-        ns = text(get(document, "metadata", "namespace")) or ("layerx-developer" if source.endswith("/webhooks/deployment.yaml") else "default")
+        ns = text(get(document, "metadata", "namespace")) or namespace
         if kind == "Namespace":
             labels = labels_of(get(document, "metadata", "labels", default={}))
             labels.setdefault("kubernetes.io/metadata.name", name)
@@ -678,13 +695,13 @@ class Topology:
                 peer_ok = not peers or any(self.peer_matches(peer, policy["ns"], callee_ns, callee_labels) for peer in peers)
                 if peer_ok and self.port_matches(get(rule, "ports") or [], protocol, pod_port, pod_port_names):
                     admitted = admitted or policy["name"]
-                dns_peer_ok = not peers or any(get(peer, "namespaceSelector") is not None and label_selector_matches(get(peer, "namespaceSelector"), {"kubernetes.io/metadata.name": "kube-system"}) and get(peer, "podSelector") is None for peer in peers)
+                dns_peer_ok = not peers or any(self.peer_matches(peer, policy["ns"], "kube-system", {"k8s-app": "kube-dns"}) for peer in peers)
                 if dns_peer_ok and self.port_matches(get(rule, "ports") or [], "UDP", "53", {}):
                     dns = dns or policy["name"]
         if admitted is None:
             return False, "egress NetworkPolicy %s does not admit %s/%s to the callee" % (", ".join(policy["name"] for policy in policies), pod_port, protocol)
         if dns is None:
-            return False, "egress NetworkPolicy %s does not admit DNS (UDP 53 to every namespace) so the hostname cannot resolve" % ", ".join(policy["name"] for policy in policies)
+            return False, "egress NetworkPolicy %s does not admit DNS (UDP 53 to kube-system/kube-dns) so the hostname cannot resolve" % ", ".join(policy["name"] for policy in policies)
         return True, "egress admitted by %s (DNS via %s)" % (admitted, dns)
 
 
@@ -776,8 +793,8 @@ def check(topology):
 def main():
     parser_name, load = choose_parser()
     topology = Topology()
-    print("topology-check: parser=%s manifests=%s" % (parser_name, " ".join(MANIFESTS)))
-    for manifest in MANIFESTS:
+    print("topology-check: parser=%s manifests=%s" % (parser_name, " ".join("%s (namespace %s)" % (path, namespace) for namespace, path in MANIFESTS)))
+    for namespace, manifest in MANIFESTS:
         with open(manifest, encoding="utf-8") as handle:
             content = handle.read()
         try:
@@ -789,7 +806,7 @@ def main():
             if not isinstance(document, dict):
                 print("topology-check: FAIL %s: document is not a mapping" % manifest)
                 return 1
-            topology.add(document, manifest)
+            topology.add(document, manifest, namespace)
     results = check(topology)
     for note in topology.notes:
         results.append(("note", note, "not checked"))
