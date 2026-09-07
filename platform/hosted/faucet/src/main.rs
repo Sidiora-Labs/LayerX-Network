@@ -433,14 +433,14 @@ fn parse_client_request(stream: &mut impl Read) -> Result<Request, String> {
         .remove("")
         .ok_or_else(|| "request line is missing".to_owned())?;
     let mut parts = start.split_whitespace();
-    request.method = parts
+    parts
         .next()
         .ok_or_else(|| "request method is missing".to_owned())?
-        .to_owned();
-    request.path = parts
+        .clone_into(&mut request.method);
+    parts
         .next()
         .ok_or_else(|| "request target is missing".to_owned())?
-        .to_owned();
+        .clone_into(&mut request.path);
     if parts.next() != Some("HTTP/1.1") || parts.next().is_some() || request.path.contains('?') {
         return Err("request line is invalid".to_owned());
     }
@@ -615,12 +615,12 @@ fn resp_text(value: &Resp) -> Option<String> {
     }
 }
 
-const NETWORK_ADMISSION_SCRIPT: &str = r#"
+const NETWORK_ADMISSION_SCRIPT: &str = r"
 local used = redis.call('INCR', KEYS[1])
 if used == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end
 if used > tonumber(ARGV[2]) then return {'rate_limited'} end
 return {'admitted'}
-"#;
+";
 
 fn admit_network(config: &Config, peer: IpAddr) -> Result<bool, String> {
     if config.network_request_limit == 0 || config.network_request_window_seconds == 0 {
@@ -646,7 +646,7 @@ fn admit_network(config: &Config, peer: IpAddr) -> Result<bool, String> {
     Ok(values.first().and_then(resp_text).as_deref() == Some("admitted"))
 }
 
-const RESERVE_SCRIPT: &str = r#"
+const RESERVE_SCRIPT: &str = r"
 local current = redis.call('GET', KEYS[6]) or ''
 if current ~= ARGV[10] then return {'audit_retry'} end
 local existing = redis.call('HGET', KEYS[1], 'digest')
@@ -673,7 +673,7 @@ redis.call('EXPIRE', KEYS[1], ARGV[7])
 redis.call('XADD', KEYS[5], '*', 'event', ARGV[9], 'result', 'reserved', 'funding_id', ARGV[8], 'chain', ARGV[11])
 redis.call('SET', KEYS[6], ARGV[11])
 return {'reserved', ARGV[8]}
-"#;
+";
 
 fn reserve(
     config: &Config,
@@ -731,7 +731,7 @@ fn reserve(
         };
         let tag = values.first().and_then(resp_text).unwrap_or_default();
         match tag.as_str() {
-            "audit_retry" => continue,
+            "audit_retry" => {}
             "reserved" => return Ok(Reservation::Reserved { funding_id }),
             "quota" => {
                 return Ok(Reservation::Quota(
@@ -767,15 +767,15 @@ fn reserve(
     Err("audit head remained contended".to_owned())
 }
 
-const COMPLETE_SCRIPT: &str = r#"
+const COMPLETE_SCRIPT: &str = r"
 if redis.call('HGET', KEYS[1], 'digest') ~= ARGV[1] or redis.call('HGET', KEYS[1], 'funding_id') ~= ARGV[2] then return {'conflict'} end
 if redis.call('HGET', KEYS[1], 'state') == 'funded' then return {'funded'} end
 redis.call('HSET', KEYS[1], 'state', 'funded', 'response', ARGV[3])
 redis.call('XADD', KEYS[2], '*', 'event', ARGV[4], 'result', 'funded', 'funding_id', ARGV[2])
 return {'funded'}
-"#;
+";
 
-const ROLLBACK_SCRIPT: &str = r#"
+const ROLLBACK_SCRIPT: &str = r"
 if redis.call('HGET', KEYS[1], 'digest') ~= ARGV[1] or redis.call('HGET', KEYS[1], 'funding_id') ~= ARGV[2] or redis.call('HGET', KEYS[1], 'state') ~= 'reserved' then return {'unchanged'} end
 local amount = tonumber(redis.call('HGET', KEYS[1], 'amount') or '0')
 for index = 3, 5 do
@@ -788,7 +788,7 @@ end
 redis.call('DEL', KEYS[1])
 redis.call('XADD', KEYS[2], '*', 'event', ARGV[6], 'result', 'rejected', 'funding_id', ARGV[2])
 return {'rolled_back'}
-"#;
+";
 
 fn complete(
     config: &Config,
@@ -959,36 +959,37 @@ fn route(config: &Config, request: &Request, peer: IpAddr) -> Response {
         &claim.public_key,
         &config.amount.to_string(),
     ]);
-    let reservation = match reserve(
+    let Ok(reservation) = reserve(
         config,
         idempotency,
         &digest,
         &identity,
         &claim.public_key,
         &peer.to_string(),
-    ) {
-        Ok(reservation) => reservation,
-        Err(_) => return refusal(503, "persistence_unavailable", Some(10)),
+    ) else {
+        return refusal(503, "persistence_unavailable", Some(10));
     };
     match reservation {
         Reservation::Funded { body } => ok(body),
-        Reservation::Pending { funding_id } => match fund(config, &claim, &funding_id) {
-            FundingResult::Funded(body) => {
-                if complete(config, idempotency, &digest, &funding_id, &body).is_ok() {
-                    ok(body)
-                } else {
-                    pending()
+        Reservation::Pending { funding_id } | Reservation::Reserved { funding_id } => {
+            match fund(config, &claim, &funding_id) {
+                FundingResult::Funded(body) => {
+                    if complete(config, idempotency, &digest, &funding_id, &body).is_ok() {
+                        ok(body)
+                    } else {
+                        pending()
+                    }
                 }
-            }
-            FundingResult::Rejected => {
-                if rollback(config, idempotency, &digest, &funding_id).is_ok() {
-                    refusal(503, "funding_rejected", Some(10))
-                } else {
-                    pending()
+                FundingResult::Rejected => {
+                    if rollback(config, idempotency, &digest, &funding_id).is_ok() {
+                        refusal(503, "funding_rejected", Some(10))
+                    } else {
+                        pending()
+                    }
                 }
+                FundingResult::Unknown => pending(),
             }
-            FundingResult::Unknown => pending(),
-        },
+        }
         Reservation::Conflict => refusal(409, "idempotency_conflict", None),
         Reservation::Quota(code) => refusal(
             429,
@@ -997,23 +998,6 @@ fn route(config: &Config, request: &Request, peer: IpAddr) -> Response {
                 .ok()
                 .map(|now| config.window_seconds - now % config.window_seconds),
         ),
-        Reservation::Reserved { funding_id } => match fund(config, &claim, &funding_id) {
-            FundingResult::Funded(body) => {
-                if complete(config, idempotency, &digest, &funding_id, &body).is_ok() {
-                    ok(body)
-                } else {
-                    pending()
-                }
-            }
-            FundingResult::Rejected => {
-                if rollback(config, idempotency, &digest, &funding_id).is_ok() {
-                    refusal(503, "funding_rejected", Some(10))
-                } else {
-                    pending()
-                }
-            }
-            FundingResult::Unknown => pending(),
-        },
     }
 }
 
