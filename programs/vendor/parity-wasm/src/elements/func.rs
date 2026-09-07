@@ -154,8 +154,7 @@ impl Serialize for FuncBody {
 		let mut counted_writer = CountedWriter::new(writer);
 
 		let data = self.locals;
-		let counted_list =
-			CountedListWriter::<Local, _>(data.len(), data.into_iter().map(Into::into));
+		let counted_list = CountedListWriter::<Local, _>(data.len(), data.into_iter());
 		counted_list.serialize(&mut counted_writer)?;
 
 		let code = self.instructions;

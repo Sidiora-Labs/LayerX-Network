@@ -1564,3 +1564,19 @@ symbol = "ReservationRequest Completion RedisStore::reserve RedisStore::complete
 observed = "Gateway store groups eight-plus-parameter reserve and complete paths into ReservationRequest and Completion. Public Result methods document error contracts; new and ready are must_use; audit_retry match arms drop needless continue; Lua scripts use r\"...\". In-crate gateway callers construct those structs. Webhook main.rs uses let-else for required idempotency keys and moves Config by value into serve. rustfmt --check on store.rs, gateway main.rs, and webhooks main.rs exits 0. cargo clippy --locked --manifest-path platform/Cargo.toml -p layerx-platform-gateway --all-targets -- -D warnings exits 101 on unowned http.rs and lib.rs; store.rs and main.rs emit no diagnostics. cargo clippy --locked --manifest-path platform/Cargo.toml -p layerx-platform-webhooks --all-targets -- -D warnings exits 101 on the same gateway path-dependency diagnostics; with --cap-lints=warn, webhooks src/main.rs emits none. cargo test --locked --manifest-path platform/Cargo.toml -p layerx-platform-gateway -p layerx-platform-webhooks exits 101 because tests/tap_nonce.rs cannot spawn redis-server (No such file or directory). Gateway lib and bin unit tests pass (4 + 12). Isolated webhook tests pass (2). Throwaway merge of origin/lane/lifecycle-qual plus webhook main.rs: make platform-lint exits 2 with cargo 101 on unowned hosted/faucet/src/main.rs. Logs: qual-logs/clippy-gateway.log, clippy-gateway-cap.warn.log, clippy-webhooks-deny.log, clippy-webhooks-cap.warn.log, test-owned.log, test-webhooks.log, make-platform-lint-merge.log."
 assumption = "Store schema, Lua scripts, and persistence semantics are unchanged. Interop callers of RedisStore::reserve and complete remain on the previous argument lists. Faucet lint is outside ownership. tap_nonce requires a local redis-server binary that is not present on this host."
 severity = "note"
+
+[observation.6.11.25]
+task = "6.11"
+file = "programs/vendor/parity-wasm/src/elements/index_map.rs"
+symbol = "IndexMap::iter"
+observed = "The strict Programs workspace Clippy command exits 101 with mismatched_lifetime_syntaxes at index_map.rs:133: the exported IndexMap::iter signature returns Iter<T>, and Clippy requests Iter<'_, T>. The signature is retained under the public API stop rule. Identity conversions, redundant borrow syntax, a redundant usize cast and legacy numeric constants are repaired without changing serialized values or bounds. build.rs declares the existing slow_assertions cfg to rustc-check-cfg without enabling, removing or changing its conditional assertions. Evidence: qual-logs/clippy-final.log."
+assumption = "An explicit public API decision is required before changing IndexMap::iter. This crate still blocks dependent workspace targets; the workspace lint gate is not qualified."
+severity = "blocker"
+
+[observation.6.11.26]
+task = "6.11"
+file = "programs/vendor/parity-wasm/res/cases/v1"
+symbol = "elements::module::integration_tests elements::name_section::tests elements::reloc_section::tests elements::section::tests"
+observed = "The additional cargo test --locked --manifest-path programs/Cargo.toml -p parity-wasm -p wasmi --lib command exits 101 in parity-wasm: 80 tests pass and 23 fail with file-not-found errors for res/cases/v1 fixtures. The fixture directory has no tracked files. Cargo stops before running the wasmi unit binary. Evidence: qual-logs/vendor-tests.log."
+assumption = "Restoring omitted upstream fixtures is separate from lint repair. Preserve every test and assertion; this optional crate-wide test run is not a pass."
+severity = "blocker"

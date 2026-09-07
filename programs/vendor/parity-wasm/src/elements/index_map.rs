@@ -43,7 +43,7 @@ impl<T> IndexMap<T> {
 	/// Return the name for the specified index, if it exists.
 	pub fn get(&self, idx: u32) -> Option<&T> {
 		match self.entries.get(idx as usize) {
-			Some(&Some(ref value)) => Some(value),
+			Some(Some(value)) => Some(value),
 			Some(&None) | None => None,
 		}
 	}
@@ -85,7 +85,7 @@ impl<T> IndexMap<T> {
 			existing
 		};
 		if mem::size_of::<usize>() > 4 {
-			debug_assert!(self.entries.len() <= (u32::max_value() as usize) + 1);
+			debug_assert!(self.entries.len() <= (u32::MAX as usize) + 1);
 		}
 		#[cfg(slow_assertions)]
 		debug_assert_eq!(self.len, self.slow_len());
@@ -98,7 +98,7 @@ impl<T> IndexMap<T> {
 			Some(value @ &mut Some(_)) => {
 				self.len -= 1;
 				value.take()
-			},
+			}
 			Some(&mut None) | None => None,
 		};
 		#[cfg(slow_assertions)]
@@ -159,17 +159,17 @@ impl<T> IndexMap<T> {
 		for _ in 0..len {
 			let idx: u32 = VarUint32::deserialize(rdr)?.into();
 			if idx as usize >= max_entry_space {
-				return Err(Error::Other("index is larger than expected"))
+				return Err(Error::Other("index is larger than expected"));
 			}
 			match prev_idx {
 				Some(prev) if prev >= idx => {
 					// Supposedly these names must be "sorted by index", so
 					// let's try enforcing that and seeing what happens.
-					return Err(Error::Other("indices are out of order"))
-				},
+					return Err(Error::Other("indices are out of order"));
+				}
 				_ => {
 					prev_idx = Some(idx);
-				},
+				}
 			}
 			let val = deserialize_value(idx, rdr)?;
 			map.insert(idx, val);
@@ -239,14 +239,14 @@ impl<T> Iterator for IntoIter<T> {
 		// from repeatedly calling `self.iter.next()` once it has been
 		// exhausted, which is not guaranteed to keep returning `None`.
 		if self.remaining_len == 0 {
-			return None
+			return None;
 		}
 		for value_opt in &mut self.iter {
 			let idx = self.next_idx;
 			self.next_idx += 1;
 			if let Some(value) = value_opt {
 				self.remaining_len -= 1;
-				return Some((idx, value))
+				return Some((idx, value));
 			}
 		}
 		debug_assert_eq!(self.remaining_len, 0);
@@ -282,14 +282,14 @@ impl<'a, T: 'static> Iterator for Iter<'a, T> {
 		// from repeatedly calling `self.iter.next()` once it has been
 		// exhausted, which is not guaranteed to keep returning `None`.
 		if self.remaining_len == 0 {
-			return None
+			return None;
 		}
 		for value_opt in &mut self.iter {
 			let idx = self.next_idx;
 			self.next_idx += 1;
 			if let Some(ref value) = *value_opt {
 				self.remaining_len -= 1;
-				return Some((idx, value))
+				return Some((idx, value));
 			}
 		}
 		debug_assert_eq!(self.remaining_len, 0);
