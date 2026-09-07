@@ -12,7 +12,9 @@ use layerx_platform_authority::{
 };
 use layerx_proof::inclusion::{verify_receipt, InclusionError, SequencerAuthorization};
 use layerx_proof::merkle::decode_proof;
-use layerx_proof::receipt::{verify_outcome, AuthorizedBatch};
+use layerx_proof::receipt::{
+    verify_outcome_maintained, AuthorizedBatch, MaintainedOutcomeEvidence,
+};
 use layerx_types::activity::{Authority, EnvelopeBuilder, Signature, TimestampBound};
 use layerx_types::amount::Amount;
 use layerx_types::ids::{Did, IdempotencyKey};
@@ -1375,6 +1377,7 @@ fn real_node_authority_serves_verified_facts_and_reflects_replica_loss() {
         [
             "activity_id",
             "asset",
+            "batch_evidence",
             "batch_id",
             "network_id",
             "previous_state_root",
@@ -1397,8 +1400,44 @@ fn real_node_authority_serves_verified_facts_and_reflects_replica_loss() {
     );
     assert_eq!(field(&facts, "asset"), hex::encode(&cluster.asset));
     let authorised = authority_facts(&gateway_view);
+    let served_document = serde_json::json!({
+        "authority_replica_id": hex::encode(&cluster.replica_id),
+        "sequencer_public_key": hex::encode(&cluster.sequencer_key),
+        "batch_evidence": facts["batch_evidence"],
+    });
+    let served_evidence = must(
+        parse_replica_evidence(
+            &must(serde_json::to_vec(&served_document), "served evidence JSON"),
+            cluster.replica_id,
+            cluster.sequencer_key,
+        ),
+        "served evidence",
+    );
+    let served_proof = must(
+        decode_proof(&served_evidence.receipt_proof),
+        "served activity proof",
+    );
+    let BatchIdentityEvidence::OccupancyMaintenanceV2 {
+        receipt: maintenance_bytes,
+        proof: maintenance_path,
+    } = &served_evidence.batch_identity
+    else {
+        panic!("maintained response")
+    };
+    let maintenance_path = must(decode_proof(maintenance_path), "served maintenance proof");
     let verified = must(
-        verify_outcome(&submitted.receipt, &authorised),
+        verify_outcome_maintained(
+            &submitted.receipt,
+            &authorised,
+            &MaintainedOutcomeEvidence {
+                header: &served_evidence.header,
+                header_signature: &served_evidence.header_signature,
+                activity_proof: &served_proof,
+                maintenance: maintenance_bytes,
+                maintenance_proof: &maintenance_path,
+                authorization: &authorization,
+            },
+        ),
         "receipt verification under the served facts",
     );
     let protocol = verified
@@ -1447,6 +1486,7 @@ fn real_node_authority_serves_verified_facts_and_reflects_replica_loss() {
         parse_replica_evidence(&relayed.body, cluster.replica_id, cluster.sequencer_key),
         "replica evidence",
     );
+    assert_eq!(served_evidence, evidence);
     let proof = must(decode_proof(&evidence.receipt_proof), "receipt proof");
     let inclusion = must(
         verify_receipt(

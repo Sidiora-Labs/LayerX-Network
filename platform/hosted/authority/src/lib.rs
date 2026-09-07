@@ -389,7 +389,7 @@ pub fn authorized_batch_by_activity(
         header.resulting_state_root(),
         authorization.public_key(),
     );
-    verify_authorized_receipt(receipt_bytes, &authorised)?;
+    verify_selected_authorized_receipt(receipt_bytes, &authorised, evidence, authorization)?;
     Ok(AuthorityFacts {
         activity_id,
         batch_id: expected,
@@ -424,3 +424,60 @@ fn verify_authorized_receipt(
 #[cfg(test)]
 #[path = "../tests/support/lifecycle_dispatch.rs"]
 mod lifecycle_dispatch;
+
+fn verify_maintained_receipt(
+    receipt_bytes: &[u8],
+    authorised: &AuthorizedBatch,
+    evidence: &layerx_proof::receipt::MaintainedOutcomeEvidence<'_>,
+) -> Result<(), EvidenceRefusal> {
+    use layerx_proof::receipt::{
+        verify_outcome_maintained, verify_program_state_maintained, MaintainedOutcomeFailure,
+    };
+    let receipt = decode(receipt_bytes).map_err(|_| EvidenceRefusal::ReceiptDecode)?;
+    let protocol = receipt.protocol().ok_or(EvidenceRefusal::ReceiptShape)?;
+    let verified = if protocol.module_id() == 9 && protocol.operation() == 0 {
+        if protocol.program_outcome().is_some() {
+            return Err(EvidenceRefusal::Receipt(ReceiptCheck::ReceiptShape));
+        }
+        verify_program_state_maintained(receipt_bytes, authorised, evidence)
+    } else {
+        verify_outcome_maintained(receipt_bytes, authorised, evidence)
+    };
+    verified.map_err(|failure| match failure {
+        MaintainedOutcomeFailure::Inclusion(error) => EvidenceRefusal::Inclusion(error),
+        MaintainedOutcomeFailure::MaintenanceEncoding => EvidenceRefusal::EvidenceEncoding,
+        MaintainedOutcomeFailure::SequenceRange => EvidenceRefusal::SequenceRange,
+        MaintainedOutcomeFailure::Receipt(check) => EvidenceRefusal::Receipt(check),
+    })?;
+    Ok(())
+}
+
+fn verify_selected_authorized_receipt(
+    receipt_bytes: &[u8],
+    authorised: &AuthorizedBatch,
+    evidence: &BatchEvidence,
+    authorization: &SequencerAuthorization,
+) -> Result<(), EvidenceRefusal> {
+    match &evidence.batch_identity {
+        BatchIdentityEvidence::Historical => verify_authorized_receipt(receipt_bytes, authorised)?,
+        BatchIdentityEvidence::OccupancyMaintenanceV2 {
+            receipt,
+            proof: maintenance_proof,
+        } => {
+            let maintenance_proof =
+                decode_proof(maintenance_proof).map_err(|_| EvidenceRefusal::EvidenceEncoding)?;
+            let proof = decode_proof(&evidence.receipt_proof)
+                .map_err(|_| EvidenceRefusal::EvidenceEncoding)?;
+            let maintained = layerx_proof::receipt::MaintainedOutcomeEvidence {
+                header: &evidence.header,
+                header_signature: &evidence.header_signature,
+                activity_proof: &proof,
+                maintenance: receipt,
+                maintenance_proof: &maintenance_proof,
+                authorization,
+            };
+            verify_maintained_receipt(receipt_bytes, authorised, &maintained)?;
+        }
+    }
+    Ok(())
+}
