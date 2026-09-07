@@ -14,8 +14,10 @@ fn sha256_is_deterministic_across_invocations() {
         &[0xffu8; 4096],
     ];
     for input in inputs {
-        let first = hash_bytes(HashAlgorithm::Sha256, input).unwrap();
-        let second = hash_bytes(HashAlgorithm::Sha256, input).unwrap();
+        let first = hash_bytes(HashAlgorithm::Sha256, input)
+            .unwrap_or_else(|error| panic!("{}: {error:?}", "required value"));
+        let second = hash_bytes(HashAlgorithm::Sha256, input)
+            .unwrap_or_else(|error| panic!("{}: {error:?}", "required value"));
         assert_eq!(
             first,
             second,
@@ -37,8 +39,10 @@ fn keccak256_is_deterministic_across_invocations() {
         &[0xffu8; 4096],
     ];
     for input in inputs {
-        let first = hash_bytes(HashAlgorithm::Keccak256, input).unwrap();
-        let second = hash_bytes(HashAlgorithm::Keccak256, input).unwrap();
+        let first = hash_bytes(HashAlgorithm::Keccak256, input)
+            .unwrap_or_else(|error| panic!("{}: {error:?}", "required value"));
+        let second = hash_bytes(HashAlgorithm::Keccak256, input)
+            .unwrap_or_else(|error| panic!("{}: {error:?}", "required value"));
         assert_eq!(
             first,
             second,
@@ -60,8 +64,10 @@ fn blake3_is_deterministic_across_invocations() {
         &[0xffu8; 4096],
     ];
     for input in inputs {
-        let first = hash_bytes(HashAlgorithm::Blake3, input).unwrap();
-        let second = hash_bytes(HashAlgorithm::Blake3, input).unwrap();
+        let first = hash_bytes(HashAlgorithm::Blake3, input)
+            .unwrap_or_else(|error| panic!("{}: {error:?}", "required value"));
+        let second = hash_bytes(HashAlgorithm::Blake3, input)
+            .unwrap_or_else(|error| panic!("{}: {error:?}", "required value"));
         assert_eq!(
             first,
             second,
@@ -74,7 +80,8 @@ fn blake3_is_deterministic_across_invocations() {
 #[test]
 fn sha256_golden_vectors() {
     assert_eq!(
-        hash_bytes(HashAlgorithm::Sha256, b"").unwrap(),
+        hash_bytes(HashAlgorithm::Sha256, b"")
+            .unwrap_or_else(|error| panic!("{}: {error:?}", "required value")),
         [
             0xe3, 0xb0, 0xc4, 0x42, 0x98, 0xfc, 0x1c, 0x14, 0x9a, 0xfb, 0xf4, 0xc8, 0x99, 0x6f,
             0xb9, 0x24, 0x27, 0xae, 0x41, 0xe4, 0x64, 0x9b, 0x93, 0x4c, 0xa4, 0x95, 0x99, 0x1b,
@@ -82,7 +89,8 @@ fn sha256_golden_vectors() {
         ]
     );
     assert_eq!(
-        hash_bytes(HashAlgorithm::Sha256, b"abc").unwrap(),
+        hash_bytes(HashAlgorithm::Sha256, b"abc")
+            .unwrap_or_else(|error| panic!("{}: {error:?}", "required value")),
         [
             0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea, 0x41, 0x41, 0x40, 0xde, 0x5d, 0xae,
             0x22, 0x23, 0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17, 0x7a, 0x9c, 0xb4, 0x10, 0xff, 0x61,
@@ -94,7 +102,7 @@ fn sha256_golden_vectors() {
             HashAlgorithm::Sha256,
             b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"
         )
-        .unwrap(),
+        .unwrap_or_else(|error| panic!("{}: {error:?}", "required value")),
         [
             0x24, 0x8d, 0x6a, 0x61, 0xd2, 0x06, 0x38, 0xb8, 0xe5, 0xc0, 0x26, 0x93, 0x0c, 0x3e,
             0x60, 0x39, 0xa3, 0x3c, 0xe4, 0x59, 0x64, 0xff, 0x21, 0x67, 0xf6, 0xec, 0xed, 0xd4,
@@ -106,7 +114,8 @@ fn sha256_golden_vectors() {
 #[test]
 fn keccak256_golden_vectors() {
     assert_eq!(
-        hash_bytes(HashAlgorithm::Keccak256, b"").unwrap(),
+        hash_bytes(HashAlgorithm::Keccak256, b"")
+            .unwrap_or_else(|error| panic!("{}: {error:?}", "required value")),
         [
             0xc5, 0xd2, 0x46, 0x01, 0x86, 0xf7, 0x23, 0x3c, 0x92, 0x7e, 0x7d, 0xb2, 0xdc, 0xc7,
             0x03, 0xc0, 0xe5, 0x00, 0xb6, 0x53, 0xca, 0x82, 0x27, 0x3b, 0x7b, 0xfa, 0xd8, 0x04,
@@ -114,7 +123,8 @@ fn keccak256_golden_vectors() {
         ]
     );
     assert_eq!(
-        hash_bytes(HashAlgorithm::Keccak256, b"abc").unwrap(),
+        hash_bytes(HashAlgorithm::Keccak256, b"abc")
+            .unwrap_or_else(|error| panic!("{}: {error:?}", "required value")),
         [
             0x4e, 0x03, 0x65, 0x7a, 0xea, 0x45, 0xa9, 0x4f, 0xc7, 0xd4, 0x7b, 0xa8, 0x26, 0xc8,
             0xd6, 0x67, 0xc0, 0xd1, 0xe6, 0xe3, 0x3a, 0x64, 0xa0, 0x36, 0xec, 0x44, 0xf5, 0x8f,
@@ -126,7 +136,7 @@ fn keccak256_golden_vectors() {
             HashAlgorithm::Keccak256,
             b"The quick brown fox jumps over the lazy dog"
         )
-        .unwrap(),
+        .unwrap_or_else(|error| panic!("{}: {error:?}", "required value")),
         [
             0x4d, 0x74, 0x1b, 0x6f, 0x1e, 0xb2, 0x9c, 0xb2, 0xa9, 0xb9, 0x91, 0x1c, 0x82, 0xf5,
             0x6f, 0xa8, 0xd7, 0x3b, 0x04, 0x95, 0x9d, 0x3d, 0x9d, 0x22, 0x28, 0x95, 0xdf, 0x6c,
@@ -139,7 +149,8 @@ fn keccak256_golden_vectors() {
 fn blake3_golden_vectors() {
     // Text digests independently confirmed by the official 1.5.0 reference below.
     assert_eq!(
-        hash_bytes(HashAlgorithm::Blake3, b"").unwrap(),
+        hash_bytes(HashAlgorithm::Blake3, b"")
+            .unwrap_or_else(|error| panic!("{}: {error:?}", "required value")),
         [
             0xaf, 0x13, 0x49, 0xb9, 0xf5, 0xf9, 0xa1, 0xa6, 0xa0, 0x40, 0x4d, 0xea, 0x36, 0xdc,
             0xc9, 0x49, 0x9b, 0xcb, 0x25, 0xc9, 0xad, 0xc1, 0x12, 0xb7, 0xcc, 0x9a, 0x93, 0xca,
@@ -147,7 +158,8 @@ fn blake3_golden_vectors() {
         ]
     );
     assert_eq!(
-        hash_bytes(HashAlgorithm::Blake3, b"abc").unwrap(),
+        hash_bytes(HashAlgorithm::Blake3, b"abc")
+            .unwrap_or_else(|error| panic!("{}: {error:?}", "required value")),
         [
             0x64, 0x37, 0xb3, 0xac, 0x38, 0x46, 0x51, 0x33, 0xff, 0xb6, 0x3b, 0x75, 0x27, 0x3a,
             0x8d, 0xb5, 0x48, 0xc5, 0x58, 0x46, 0x5d, 0x79, 0xdb, 0x03, 0xfd, 0x35, 0x9c, 0x6c,
@@ -155,7 +167,8 @@ fn blake3_golden_vectors() {
         ]
     );
     assert_eq!(
-        hash_bytes(HashAlgorithm::Blake3, b"hello world").unwrap(),
+        hash_bytes(HashAlgorithm::Blake3, b"hello world")
+            .unwrap_or_else(|error| panic!("{}: {error:?}", "required value")),
         [
             0xd7, 0x49, 0x81, 0xef, 0xa7, 0x0a, 0x0c, 0x88, 0x0b, 0x8d, 0x8c, 0x19, 0x85, 0xd0,
             0x75, 0xdb, 0xcb, 0xf6, 0x79, 0xb9, 0x9a, 0x5f, 0x99, 0x14, 0xe5, 0xaa, 0xf9, 0x6b,
@@ -172,7 +185,8 @@ fn all_algorithms_produce_32_byte_digests() {
         HashAlgorithm::Keccak256,
         HashAlgorithm::Blake3,
     ] {
-        let digest = hash_bytes(algorithm, input).unwrap();
+        let digest = hash_bytes(algorithm, input)
+            .unwrap_or_else(|error| panic!("{}: {error:?}", "required value"));
         assert_eq!(digest.len(), 32, "{algorithm} produced wrong output length");
     }
 }
@@ -180,9 +194,12 @@ fn all_algorithms_produce_32_byte_digests() {
 #[test]
 fn different_algorithms_produce_different_digests() {
     let input = b"test input";
-    let sha256 = hash_bytes(HashAlgorithm::Sha256, input).unwrap();
-    let keccak256 = hash_bytes(HashAlgorithm::Keccak256, input).unwrap();
-    let blake3 = hash_bytes(HashAlgorithm::Blake3, input).unwrap();
+    let sha256 = hash_bytes(HashAlgorithm::Sha256, input)
+        .unwrap_or_else(|error| panic!("{}: {error:?}", "required value"));
+    let keccak256 = hash_bytes(HashAlgorithm::Keccak256, input)
+        .unwrap_or_else(|error| panic!("{}: {error:?}", "required value"));
+    let blake3 = hash_bytes(HashAlgorithm::Blake3, input)
+        .unwrap_or_else(|error| panic!("{}: {error:?}", "required value"));
     assert_ne!(sha256, keccak256);
     assert_ne!(sha256, blake3);
     assert_ne!(keccak256, blake3);
@@ -205,7 +222,8 @@ fn cross_platform_byte_identity_sha256() {
         ),
     ];
     for (input, expected_hex) in test_vectors {
-        let digest = hash_bytes(HashAlgorithm::Sha256, input).unwrap();
+        let digest = hash_bytes(HashAlgorithm::Sha256, input)
+            .unwrap_or_else(|error| panic!("{}: {error:?}", "required value"));
         let hex = format_hex(&digest);
         assert_eq!(
             hex,
@@ -233,7 +251,8 @@ fn cross_platform_byte_identity_keccak256() {
         ),
     ];
     for (input, expected_hex) in test_vectors {
-        let digest = hash_bytes(HashAlgorithm::Keccak256, input).unwrap();
+        let digest = hash_bytes(HashAlgorithm::Keccak256, input)
+            .unwrap_or_else(|error| panic!("{}: {error:?}", "required value"));
         let hex = format_hex(&digest);
         assert_eq!(
             hex,
@@ -261,7 +280,8 @@ fn cross_platform_byte_identity_blake3() {
         ),
     ];
     for (input, expected_hex) in test_vectors {
-        let digest = hash_bytes(HashAlgorithm::Blake3, input).unwrap();
+        let digest = hash_bytes(HashAlgorithm::Blake3, input)
+            .unwrap_or_else(|error| panic!("{}: {error:?}", "required value"));
         let hex = format_hex(&digest);
         assert_eq!(
             hex,
@@ -273,7 +293,7 @@ fn cross_platform_byte_identity_blake3() {
 }
 
 fn format_hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    hex::encode(bytes)
 }
 
 // Authorities: https://github.com/BLAKE3-team/BLAKE3/blob/1.5.0/test_vectors/test_vectors.json
@@ -422,7 +442,7 @@ const BLAKE3_OFFICIAL_VECTORS: [(usize, &str); 35] = [
         "62b6960e1a44bcc1eb1a611a8d6235b6b4b78f32e7abc4fb4c6cdcce94895c47",
     ),
     (
-        102400,
+        102_400,
         "bc3e3d41a1146b069abffad3c0d44860cf664390afce4d9661f7902e7943e085",
     ),
 ];

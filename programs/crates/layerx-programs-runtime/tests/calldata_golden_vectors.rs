@@ -1,6 +1,6 @@
 //! Golden vector tests for calldata encoding.
 //!
-//! This test suite validates the frozen LayerX canonical calldata encoding
+//! This test suite validates the frozen `LayerX` canonical calldata encoding
 //! against comprehensive golden vectors covering every type, boundary case,
 //! rejection scenario, and the empty call.
 
@@ -27,7 +27,10 @@ fn hex_decode(hex: &str) -> Vec<u8> {
     let cleaned = hex.replace(' ', "");
     (0..cleaned.len())
         .step_by(2)
-        .map(|i| u8::from_str_radix(&cleaned[i..i + 2], 16).expect("invalid hex"))
+        .map(|i| {
+            u8::from_str_radix(&cleaned[i..i + 2], 16)
+                .unwrap_or_else(|error| panic!("{}: {error:?}", "invalid hex"))
+        })
         .collect()
 }
 
@@ -62,23 +65,24 @@ fn run_vector(vector: &TestVector) -> bool {
             }
         }
         "reject" => {
-            if result.is_ok() {
-                panic!(
-                    "Vector '{}' expected to reject but passed\nBytes: {:02x?}",
-                    vector.description, bytes
-                );
-            }
+            assert!(
+                result.is_err(),
+                "Vector '{}' expected to reject but passed\nBytes: {:02x?}",
+                vector.description,
+                bytes
+            );
             if let Some(expected_error) = &vector.error {
-                let actual_error = format!("{:?}", result.unwrap_err());
-                if !actual_error.contains(expected_error) {
-                    panic!(
+                let actual_error = format!(
+                    "{:?}",
+                    result.err().unwrap_or_else(|| panic!("expected error"))
+                );
+                assert!(actual_error.contains(expected_error),
                         "Vector '{}' rejected with wrong error\nExpected: {}\nActual: {}\nBytes: {:02x?}",
                         vector.description, expected_error, actual_error, bytes
                     );
-                }
             }
         }
-        other => panic!("Invalid expected value: {}", other),
+        other => panic!("Invalid expected value: {other}"),
     }
 
     true
@@ -88,14 +92,18 @@ fn test_vector_directory(dir: &str, expected_executed: usize, expected_skipped: 
     let base = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/vectors/calldata")
         .join(dir);
-    if !base.exists() {
-        panic!("Vector directory does not exist: {}", base.display());
-    }
+    assert!(
+        base.exists(),
+        "Vector directory does not exist: {}",
+        base.display()
+    );
 
     let mut executed = 0;
     let mut skipped = 0;
-    for entry in fs::read_dir(&base).expect("read directory") {
-        let entry = entry.expect("directory entry");
+    for entry in
+        fs::read_dir(&base).unwrap_or_else(|error| panic!("{}: {error:?}", "read directory"))
+    {
+        let entry = entry.unwrap_or_else(|error| panic!("{}: {error:?}", "directory entry"));
         let path = entry.path();
         if path.extension().and_then(|s| s.to_str()) == Some("json") {
             let vectors = load_vectors(&path);
@@ -148,7 +156,7 @@ fn evm_head_only_layout() {
 
 #[test]
 fn empty_calldata_golden() {
-    let empty = Calldata::from_bytes(&[]).expect("empty");
+    let empty = Calldata::from_bytes(&[]).unwrap_or_else(|error| panic!("{}: {error:?}", "empty"));
     assert!(empty.payload().is_empty());
     assert_eq!(empty.as_bytes(), vec![0x01]);
 }
@@ -156,10 +164,13 @@ fn empty_calldata_golden() {
 #[test]
 fn layerx_convention_frozen() {
     let mut calldata = Calldata::new();
-    calldata.encode_u32(42).expect("encode");
+    calldata
+        .encode_u32(42)
+        .unwrap_or_else(|error| panic!("{}: {error:?}", "encode"));
     let bytes = calldata.as_bytes();
     assert_eq!(bytes, vec![0x01, 0x12, 0x00, 0x00, 0x00, 0x2a]);
-    let decoded = Calldata::from_bytes(&bytes).expect("decode");
+    let decoded =
+        Calldata::from_bytes(&bytes).unwrap_or_else(|error| panic!("{}: {error:?}", "decode"));
     assert_eq!(decoded.payload(), &[0x12, 0x00, 0x00, 0x00, 0x2a]);
 }
 
@@ -176,7 +187,9 @@ fn evm_convention_frozen() {
 fn non_canonical_encoding_is_rejected() {
     let invalid_option = vec![0x01, 0x40, 0x03];
     assert_eq!(
-        Calldata::from_bytes(&invalid_option).unwrap_err(),
+        Calldata::from_bytes(&invalid_option)
+            .err()
+            .unwrap_or_else(|| panic!("expected error")),
         CodecError::InvalidOption
     );
 }
@@ -189,7 +202,9 @@ fn nesting_depth_limit_is_enforced() {
     }
     deep.extend_from_slice(&[0x10, 0xff]);
     assert_eq!(
-        Calldata::from_bytes(&deep).unwrap_err(),
+        Calldata::from_bytes(&deep)
+            .err()
+            .unwrap_or_else(|| panic!("expected error")),
         CodecError::NestingTooDeep
     );
 }
@@ -198,7 +213,9 @@ fn nesting_depth_limit_is_enforced() {
 fn input_size_limit_is_enforced() {
     let oversized = vec![0u8; layerx_programs_runtime::abi::codec::MAX_CALLDATA_BYTES + 1];
     assert_eq!(
-        Calldata::from_bytes(&oversized).unwrap_err(),
+        Calldata::from_bytes(&oversized)
+            .err()
+            .unwrap_or_else(|| panic!("expected error")),
         CodecError::InputTooLarge
     );
 }
@@ -207,7 +224,9 @@ fn input_size_limit_is_enforced() {
 fn truncated_integer_is_rejected() {
     let truncated_u32 = vec![0x01, 0x12, 0x00, 0x00];
     assert_eq!(
-        Calldata::from_bytes(&truncated_u32).unwrap_err(),
+        Calldata::from_bytes(&truncated_u32)
+            .err()
+            .unwrap_or_else(|| panic!("expected error")),
         CodecError::Truncated
     );
 }
@@ -216,7 +235,9 @@ fn truncated_integer_is_rejected() {
 fn invalid_type_tag_is_rejected() {
     let invalid = vec![0x01, 0xff];
     assert_eq!(
-        Calldata::from_bytes(&invalid).unwrap_err(),
+        Calldata::from_bytes(&invalid)
+            .err()
+            .unwrap_or_else(|| panic!("expected error")),
         CodecError::InvalidType
     );
 }
@@ -225,7 +246,9 @@ fn invalid_type_tag_is_rejected() {
 fn invalid_convention_tag_is_rejected() {
     let invalid = vec![0xff, 0x10, 0x42];
     assert_eq!(
-        Calldata::from_bytes(&invalid).unwrap_err(),
+        Calldata::from_bytes(&invalid)
+            .err()
+            .unwrap_or_else(|| panic!("expected error")),
         CodecError::InvalidConvention
     );
 }
@@ -234,7 +257,9 @@ fn invalid_convention_tag_is_rejected() {
 fn evm_misalignment_is_rejected() {
     let misaligned = vec![0x02, 0x42];
     assert_eq!(
-        Calldata::from_bytes(&misaligned).unwrap_err(),
+        Calldata::from_bytes(&misaligned)
+            .err()
+            .unwrap_or_else(|| panic!("expected error")),
         CodecError::NonCanonical
     );
 }
@@ -242,18 +267,24 @@ fn evm_misalignment_is_rejected() {
 #[test]
 fn canonical_u8_roundtrip() {
     let mut calldata = Calldata::new();
-    calldata.encode_u8(255).expect("encode");
+    calldata
+        .encode_u8(255)
+        .unwrap_or_else(|error| panic!("{}: {error:?}", "encode"));
     let bytes = calldata.as_bytes();
-    let decoded = Calldata::from_bytes(&bytes).expect("decode");
+    let decoded =
+        Calldata::from_bytes(&bytes).unwrap_or_else(|error| panic!("{}: {error:?}", "decode"));
     assert_eq!(decoded.payload(), &[0x10, 0xff]);
 }
 
 #[test]
 fn canonical_bytes_roundtrip() {
     let mut calldata = Calldata::new();
-    calldata.encode_bytes(b"test").expect("encode");
+    calldata
+        .encode_bytes(b"test")
+        .unwrap_or_else(|error| panic!("{}: {error:?}", "encode"));
     let bytes = calldata.as_bytes();
-    let decoded = Calldata::from_bytes(&bytes).expect("decode");
+    let decoded =
+        Calldata::from_bytes(&bytes).unwrap_or_else(|error| panic!("{}: {error:?}", "decode"));
     assert_eq!(
         decoded.payload(),
         &[0x20, 0x00, 0x00, 0x00, 0x04, b't', b'e', b's', b't']
@@ -263,29 +294,42 @@ fn canonical_bytes_roundtrip() {
 #[test]
 fn canonical_option_none_roundtrip() {
     let mut calldata = Calldata::new();
-    calldata.encode_option_none().expect("encode");
+    calldata
+        .encode_option_none()
+        .unwrap_or_else(|error| panic!("{}: {error:?}", "encode"));
     let bytes = calldata.as_bytes();
-    let decoded = Calldata::from_bytes(&bytes).expect("decode");
+    let decoded =
+        Calldata::from_bytes(&bytes).unwrap_or_else(|error| panic!("{}: {error:?}", "decode"));
     assert_eq!(decoded.payload(), &[0x40, 0x00]);
 }
 
 #[test]
 fn canonical_option_some_roundtrip() {
     let mut calldata = Calldata::new();
-    calldata.begin_option_some().expect("begin");
-    calldata.encode_u8(42).expect("encode");
+    calldata
+        .begin_option_some()
+        .unwrap_or_else(|error| panic!("{}: {error:?}", "begin"));
+    calldata
+        .encode_u8(42)
+        .unwrap_or_else(|error| panic!("{}: {error:?}", "encode"));
     let bytes = calldata.as_bytes();
-    let decoded = Calldata::from_bytes(&bytes).expect("decode");
+    let decoded =
+        Calldata::from_bytes(&bytes).unwrap_or_else(|error| panic!("{}: {error:?}", "decode"));
     assert_eq!(decoded.payload(), &[0x40, 0x01, 0x10, 0x2a]);
 }
 
 #[test]
 fn canonical_union_roundtrip() {
     let mut calldata = Calldata::new();
-    calldata.begin_union(7).expect("begin");
-    calldata.encode_u32(999).expect("encode");
+    calldata
+        .begin_union(7)
+        .unwrap_or_else(|error| panic!("{}: {error:?}", "begin"));
+    calldata
+        .encode_u32(999)
+        .unwrap_or_else(|error| panic!("{}: {error:?}", "encode"));
     let bytes = calldata.as_bytes();
-    let decoded = Calldata::from_bytes(&bytes).expect("decode");
+    let decoded =
+        Calldata::from_bytes(&bytes).unwrap_or_else(|error| panic!("{}: {error:?}", "decode"));
     assert_eq!(
         decoded.payload(),
         &[0x50, 0x00, 0x00, 0x00, 0x07, 0x12, 0x00, 0x00, 0x03, 0xe7]
@@ -295,11 +339,18 @@ fn canonical_union_roundtrip() {
 #[test]
 fn canonical_fixed_array_roundtrip() {
     let mut calldata = Calldata::new();
-    calldata.begin_fixed_array(2).expect("begin");
-    calldata.encode_u8(1).expect("first");
-    calldata.encode_u8(2).expect("second");
+    calldata
+        .begin_fixed_array(2)
+        .unwrap_or_else(|error| panic!("{}: {error:?}", "begin"));
+    calldata
+        .encode_u8(1)
+        .unwrap_or_else(|error| panic!("{}: {error:?}", "first"));
+    calldata
+        .encode_u8(2)
+        .unwrap_or_else(|error| panic!("{}: {error:?}", "second"));
     let bytes = calldata.as_bytes();
-    let decoded = Calldata::from_bytes(&bytes).expect("decode");
+    let decoded =
+        Calldata::from_bytes(&bytes).unwrap_or_else(|error| panic!("{}: {error:?}", "decode"));
     assert_eq!(
         decoded.payload(),
         &[0x30, 0x00, 0x00, 0x00, 0x02, 0x10, 0x01, 0x10, 0x02]
@@ -309,10 +360,15 @@ fn canonical_fixed_array_roundtrip() {
 #[test]
 fn canonical_variable_array_roundtrip() {
     let mut calldata = Calldata::new();
-    calldata.begin_variable_array(1).expect("begin");
-    calldata.encode_bytes(b"x").expect("element");
+    calldata
+        .begin_variable_array(1)
+        .unwrap_or_else(|error| panic!("{}: {error:?}", "begin"));
+    calldata
+        .encode_bytes(b"x")
+        .unwrap_or_else(|error| panic!("{}: {error:?}", "element"));
     let bytes = calldata.as_bytes();
-    let decoded = Calldata::from_bytes(&bytes).expect("decode");
+    let decoded =
+        Calldata::from_bytes(&bytes).unwrap_or_else(|error| panic!("{}: {error:?}", "decode"));
     assert_eq!(
         decoded.payload(),
         &[0x31, 0x00, 0x00, 0x00, 0x01, 0x20, 0x00, 0x00, 0x00, 0x01, b'x']

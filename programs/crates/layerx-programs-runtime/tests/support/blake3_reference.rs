@@ -33,7 +33,14 @@ const DERIVE_KEY_CONTEXT: u32 = 1 << 5;
 const DERIVE_KEY_MATERIAL: u32 = 1 << 6;
 
 const IV: [u32; 8] = [
-    0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A, 0x510E527F, 0x9B05688C, 0x1F83D9AB, 0x5BE0CD19,
+    0x6A09_E667,
+    0xBB67_AE85,
+    0x3C6E_F372,
+    0xA54F_F53A,
+    0x510E_527F,
+    0x9B05_688C,
+    0x1F83_D9AB,
+    0x5BE0_CD19,
 ];
 
 const MSG_PERMUTATION: [usize; 16] = [2, 6, 3, 10, 7, 0, 4, 13, 1, 11, 12, 5, 9, 14, 15, 8];
@@ -91,8 +98,16 @@ fn compress(
         IV[1],
         IV[2],
         IV[3],
-        counter as u32,
-        (counter >> 32) as u32,
+        u32::from_le_bytes(
+            counter.to_le_bytes()[..4]
+                .try_into()
+                .unwrap_or_else(|error| panic!("counter low: {error}")),
+        ),
+        u32::from_le_bytes(
+            counter.to_le_bytes()[4..]
+                .try_into()
+                .unwrap_or_else(|error| panic!("counter high: {error}")),
+        ),
         block_len,
         flags,
     ];
@@ -120,13 +135,19 @@ fn compress(
 }
 
 fn first_8_words(compression_output: [u32; 16]) -> [u32; 8] {
-    compression_output[0..8].try_into().unwrap()
+    compression_output[0..8]
+        .try_into()
+        .unwrap_or_else(|error| panic!("{}: {error:?}", "required value"))
 }
 
 fn words_from_little_endian_bytes(bytes: &[u8], words: &mut [u32]) {
     debug_assert_eq!(bytes.len(), 4 * words.len());
     for (four_bytes, word) in bytes.chunks_exact(4).zip(words) {
-        *word = u32::from_le_bytes(four_bytes.try_into().unwrap());
+        *word = u32::from_le_bytes(
+            four_bytes
+                .try_into()
+                .unwrap_or_else(|error| panic!("{}: {error:?}", "required value")),
+        );
     }
 }
 
@@ -153,8 +174,7 @@ impl Output {
     }
 
     fn root_output_bytes(&self, out_slice: &mut [u8]) {
-        let mut output_block_counter = 0;
-        for out_block in out_slice.chunks_mut(2 * OUT_LEN) {
+        for (output_block_counter, out_block) in (0_u64..).zip(out_slice.chunks_mut(2 * OUT_LEN)) {
             let words = compress(
                 &self.input_chaining_value,
                 &self.block_words,
@@ -166,7 +186,6 @@ impl Output {
             for (word, out_word) in words.iter().zip(out_block.chunks_mut(4)) {
                 out_word.copy_from_slice(&word.to_le_bytes()[..out_word.len()]);
             }
-            output_block_counter += 1;
         }
     }
 }
@@ -215,7 +234,8 @@ impl ChunkState {
                     &self.chaining_value,
                     &block_words,
                     self.chunk_counter,
-                    BLOCK_LEN as u32,
+                    u32::try_from(BLOCK_LEN)
+                        .unwrap_or_else(|error| panic!("block length: {error}")),
                     self.flags | self.start_flag(),
                 ));
                 self.blocks_compressed += 1;
@@ -227,7 +247,8 @@ impl ChunkState {
             let want = BLOCK_LEN - self.block_len as usize;
             let take = min(want, input.len());
             self.block[self.block_len as usize..][..take].copy_from_slice(&input[..take]);
-            self.block_len += take as u8;
+            self.block_len +=
+                u8::try_from(take).unwrap_or_else(|error| panic!("block input length: {error}"));
             input = &input[take..];
         }
     }
@@ -239,7 +260,7 @@ impl ChunkState {
             input_chaining_value: self.chaining_value,
             block_words,
             counter: self.chunk_counter,
-            block_len: self.block_len as u32,
+            block_len: u32::from(self.block_len),
             flags: self.flags | self.start_flag() | CHUNK_END,
         }
     }
@@ -257,8 +278,8 @@ fn parent_output(
     Output {
         input_chaining_value: key_words,
         block_words,
-        counter: 0,                  // Always 0 for parent nodes.
-        block_len: BLOCK_LEN as u32, // Always BLOCK_LEN (64) for parent nodes.
+        counter: 0, // Always 0 for parent nodes.
+        block_len: u32::try_from(BLOCK_LEN).unwrap_or_else(|error| panic!("block length: {error}")), // Always BLOCK_LEN (64) for parent nodes.
         flags: PARENT | flags,
     }
 }
