@@ -1,20 +1,18 @@
 use ed25519_dalek::{Signer as _, SigningKey};
-use layerx_interop_gateway::adapter::{
-    AdapterDescriptor, AdapterId, ConformanceSuite, PinnedSpec, SpecVersion,
-};
+use layerx_interop_gateway::adapter::{AdapterId, ConformanceSuite, PinnedSpec, SpecVersion};
 use layerx_interop_gateway::principal::PrincipalId;
 use layerx_interop_gateway::trace::TraceId;
 use layerx_interop_gateway::GatewayCore;
-use layerx_proof::merkle::leaf_hash;
-use layerx_proof::receipt::{verify, AuthorizedBatch};
+use layerx_proof::receipt::AuthorizedBatch;
 use layerx_ucp::{
     ucp_adapter_descriptor, Capability, CheckoutStatus, CheckoutSubmission, MerchantProfile,
     NegotiatedCapabilities, OrderMetadata, PaymentHandler, PlatformProfile, StoredOrder,
-    UcpAdapter, UcpError, UcpIdempotencyKey, UcpOrder, UcpPaymentIntent, UcpPaymentPlane,
-    UcpPlaneResult, UCP_CHECKOUT_SPEC_SHA256,
+    UcpAdapter, UcpError, UcpIdempotencyKey, UcpPaymentIntent, UcpPaymentPlane, UcpPlaneResult,
+    UCP_CHECKOUT_SPEC_SHA256,
 };
 use sha2::{Digest as _, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::fmt::Write as _;
 
 const UCP_VERSION: &str = "2026-04-08";
 const CHECKOUT_CAPABILITY: &str = "dev.ucp.shopping.checkout";
@@ -43,20 +41,20 @@ fn registered_gateway(trace: &TraceId) -> GatewayCore {
 }
 
 struct TestPaymentPlane {
-    pending_checkouts: HashMap<[u8; 32], ()>,
+    pending_checkouts: HashSet<[u8; 32]>,
     executed_checkouts: HashMap<[u8; 32], (OrderMetadata, Vec<u8>, AuthorizedBatch)>,
 }
 
 impl TestPaymentPlane {
     fn new() -> Self {
         Self {
-            pending_checkouts: HashMap::new(),
+            pending_checkouts: HashSet::new(),
             executed_checkouts: HashMap::new(),
         }
     }
 
     fn mark_pending(&mut self, idempotency_key: [u8; 32]) {
-        self.pending_checkouts.insert(idempotency_key, ());
+        self.pending_checkouts.insert(idempotency_key);
     }
 
     fn execute_checkout(&mut self, intent: &UcpPaymentIntent, sequencer_seed: [u8; 32]) {
@@ -98,12 +96,12 @@ impl UcpPaymentPlane for TestPaymentPlane {
                 layerx_ucp::ExecutedUcpPayment {
                     metadata: metadata.clone(),
                     canonical_receipt: receipt.clone(),
-                    authorised_batch: batch.clone(),
+                    authorised_batch: *batch,
                 },
             )));
         }
 
-        if self.pending_checkouts.contains_key(&intent.idempotency_key) {
+        if self.pending_checkouts.contains(&intent.idempotency_key) {
             return Ok(UcpPlaneResult::Pending);
         }
 
@@ -112,7 +110,10 @@ impl UcpPaymentPlane for TestPaymentPlane {
 }
 
 fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{:02x}", b)).collect()
+    bytes.iter().fold(String::new(), |mut output, byte| {
+        write!(&mut output, "{byte:02x}").unwrap_or_else(|error| panic!("hex encoding: {error}"));
+        output
+    })
 }
 
 fn signed_receipt(
@@ -140,34 +141,24 @@ fn signed_receipt(
     let batch_id: [u8; 32] = Sha256::digest([b"batch".as_slice(), &activity_id].concat()).into();
 
     let signer = SigningKey::from_bytes(&sequencer_seed);
-    let unsigned = encode_receipt(
-        &activity_id,
+    let fields = ReceiptFields {
+        activity_id: &activity_id,
         sequence,
-        &previous_state_root,
-        &resulting_state_root,
-        &batch_id,
-        &asset,
+        previous_state_root: &previous_state_root,
+        resulting_state_root: &resulting_state_root,
+        batch_id: &batch_id,
+        asset: &asset,
         amount,
-        &recipient,
-        None,
-    );
+        recipient: &recipient,
+    };
+    let unsigned = encode_receipt(&fields, None);
 
     let mut digest = Sha256::new();
     digest.update(b"LXP/v1/receipt\0");
     digest.update(&unsigned);
     let signature = signer.sign(&<[u8; 32]>::from(digest.finalize()));
 
-    let canonical_receipt = encode_receipt(
-        &activity_id,
-        sequence,
-        &previous_state_root,
-        &resulting_state_root,
-        &batch_id,
-        &asset,
-        amount,
-        &recipient,
-        Some(signature.to_bytes()),
-    );
+    let canonical_receipt = encode_receipt(&fields, Some(signature.to_bytes()));
 
     let authorised_batch = AuthorizedBatch::new(
         batch_id,
@@ -180,17 +171,28 @@ fn signed_receipt(
     (canonical_receipt, authorised_batch)
 }
 
-fn encode_receipt(
-    activity_id: &[u8; 32],
+struct ReceiptFields<'a> {
+    activity_id: &'a [u8; 32],
     sequence: u64,
-    previous_state_root: &[u8; 32],
-    resulting_state_root: &[u8; 32],
-    batch_id: &[u8; 32],
-    asset: &[u8; 32],
+    previous_state_root: &'a [u8; 32],
+    resulting_state_root: &'a [u8; 32],
+    batch_id: &'a [u8; 32],
+    asset: &'a [u8; 32],
     amount: u128,
-    recipient: &[u8; 32],
-    signature: Option<[u8; 64]>,
-) -> Vec<u8> {
+    recipient: &'a [u8; 32],
+}
+
+fn encode_receipt(fields: &ReceiptFields<'_>, signature: Option<[u8; 64]>) -> Vec<u8> {
+    let ReceiptFields {
+        activity_id,
+        sequence,
+        previous_state_root,
+        resulting_state_root,
+        batch_id,
+        asset,
+        amount,
+        recipient,
+    } = *fields;
     let sender = [0xa1; 32];
     let debit_before = 50_000_u128;
     let credit_before = 10_000_u128;
@@ -401,7 +403,9 @@ fn checkout_completion_requires_receipt_verification() {
     assert_eq!(outcome.status, CheckoutStatus::Completed);
     assert!(outcome.order.is_some());
 
-    let order = outcome.order.unwrap();
+    let order = outcome
+        .order
+        .unwrap_or_else(|| panic!("completed checkout order is missing"));
     assert_eq!(order.checkout_id, "chk_test123");
     assert_eq!(order.currency, *b"USD");
     assert_eq!(order.total_minor, 9999);
