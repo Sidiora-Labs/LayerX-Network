@@ -54,6 +54,7 @@ See `docs/MONOREPO.md` for build boundaries, workflow naming, and tag convention
 - [Storage scan](StorageScan.md)
 - [SDK terminal verification](SdkTerminalVerification.md)
 - [Portable receipt verifier](PortableVerifier.md)
+- [x402 transport](X402Transport.md)
 - [Programs workspace gates](ProgramsWorkspace.md)
 - [Porting](Porting.md)
 - [Beta cluster](BetaCluster.md)
