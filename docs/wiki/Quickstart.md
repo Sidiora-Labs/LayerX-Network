@@ -2,15 +2,18 @@
 
 At the end of this path a developer has a disposable beta cluster from this
 repository, the env file `up` writes, a local Ed25519 key and a stored hosted
-session token, a faucet claim against that cluster, one payment submitted
-through the CLI command that exists (and the hosted activity HTTP route the
-gateway actually serves), fetched receipt bytes, a local `layerx receipt
-verify` result, and a Paxeer-boundary observation of chain id `125`.
+session token, a faucet claim against that cluster, one Programs deploy
+submitted through the CLI command that exists (and the hosted
+`POST /v1/programs/deploy` route the gateway actually serves), one payment
+submitted through the CLI command that exists (and the hosted activity HTTP
+route the gateway actually serves), fetched receipt bytes, a local `layerx
+receipt verify` result, and a Paxeer-boundary observation of chain id `125`.
 
-This page follows that path. Commands, flags, printed fields, and HTTP routes are
+This page covers that path. Commands, flags, printed fields, and HTTP routes are
 cited to the tree. Related pages: [CLI](Cli.md), [Beta cluster](BetaCluster.md),
 [Hosted gateway](HostedGateway.md), [Hosted identity](HostedIdentity.md),
-[Finality](Finality.md). `docs/wiki-drafts/` is not a source.
+[Programs](Programs.md), [Finality](Finality.md). `docs/wiki-drafts/` is not a
+source.
 
 ---
 
@@ -71,9 +74,18 @@ Default host ports are testnet `19443`, gateway `19444`, faucet `19445`
 `TESTNET_URL=https://localhost:$TESTNET_PORT`,
 `GATEWAY_URL=https://localhost:$GATEWAY_PORT`,
 `FAUCET_URL=https://localhost:$FAUCET_PORT`,
+`DEVELOPER_URL=https://localhost:19450`,
+`NODE_URL=https://localhost:19446`,
+`AGENT_URL=https://localhost:19447`,
 `PAXEER_URL=https://localhost:19449`,
+`PAXEER_OBSERVER_URL=https://localhost:19452`,
 `IDENTITY_URL=https://localhost:19451`
-(`platform/hosted/tests/beta-cluster.sh:1258-1266`).
+(`platform/hosted/tests/beta-cluster.sh:1258-1266`). Port-forwards are
+Paxeer-boundary `19449`, Paxeer-observer-boundary `19452`, identity
+`19451`, testnet, gateway, faucet, developer `19450`, pending-core
+`19446`, and agent-boundary `19447`
+(`platform/hosted/tests/beta-cluster.sh:1268-1283`). There is no
+Human-service port-forward and no agentd port-forward.
 
 The kind cluster name defaults to `layerx-beta`
 (`platform/hosted/tests/beta-cluster.sh:11, 73`). Paxeer EVM chain id is
@@ -115,15 +127,29 @@ separate export step. Source it:
 | `LAYERX_PAXEER_DEPLOYMENT_RECORD` | `build/beta-cluster/paxeer/deployment.json` |
 | `KUBECONFIG` | cluster kubeconfig |
 | `WEBHOOKS_URL` | developer port-forward |
-| `LAYERX_QUALIFICATION_NODE_URL` | pending-core URL unless `LAYERX_BETA_QUALIFICATION_NODE_URL` is set |
-| `LAYERX_QUALIFICATION_AGENT_URL` | agent-boundary URL unless `LAYERX_BETA_QUALIFICATION_AGENT_URL` is set |
-| `LAYERX_QUALIFICATION_HUMAN_URL` | gateway URL unless `LAYERX_BETA_QUALIFICATION_HUMAN_URL` is set |
-| `LAYERX_QUALIFICATION_PAXEER_URL` | Paxeer-boundary URL unless `LAYERX_BETA_QUALIFICATION_PAXEER_URL` is set |
+| `LAYERX_QUALIFICATION_NODE_URL` | `$NODE_URL` (`https://localhost:19446`, pending-core) unless `LAYERX_BETA_QUALIFICATION_NODE_URL` is set. Role: qualification node (`tools/qualification/release_runner.py:24`; `tools/qualification/beta_driver.py:41`). |
+| `LAYERX_QUALIFICATION_AGENT_URL` | `LAYERX_BETA_QUALIFICATION_AGENT_URL` when that agentd override is set; otherwise `$AGENT_URL` (`https://localhost:19447`, agent-boundary). Role: qualification agentd (`tools/qualification/release_runner.py:25`; `tools/qualification/beta_driver.py:42`). Bring-up does not start agentd. No agentd origin is present unless the override is set. |
+| `LAYERX_QUALIFICATION_HUMAN_URL` | `LAYERX_BETA_QUALIFICATION_HUMAN_URL` when set; otherwise `$GATEWAY_URL`. Role: qualification Human service (`tools/qualification/release_runner.py:26`; `tools/qualification/beta_driver.py:43`), not the gateway. Bring-up does not port-forward a Human service. |
+| `LAYERX_QUALIFICATION_PAXEER_URL` | `$PAXEER_URL` unless `LAYERX_BETA_QUALIFICATION_PAXEER_URL` is set. Role: qualification Paxeer testnet (`tools/qualification/release_runner.py:27`; `tools/qualification/beta_driver.py:44`). |
 
-(`platform/hosted/tests/beta-cluster.sh:1114-1141, 554`). `LAYERX_TEST_AMOUNT`
-defaults to `1` (`platform/hosted/tests/beta-cluster.sh:554`). Qualification
-URL comments name the gateway as the only hosted surface serving `/v1` routes
-to humans (`platform/hosted/tests/beta-cluster.sh:1138-1139`).
+(`platform/hosted/tests/beta-cluster.sh:1099-1141, 554, 1261-1266`).
+`LAYERX_TEST_AMOUNT` defaults to `1`
+(`platform/hosted/tests/beta-cluster.sh:554`). `qualification_url` always
+emits those four `export` lines, using the override when it is non-empty
+and the third argument otherwise (`platform/hosted/tests/beta-cluster.sh:1099-1107`).
+`env_write` has no dedicated agent-boundary `export`; the agent-boundary
+origin is the `$AGENT_URL` value currently assigned to
+`LAYERX_QUALIFICATION_AGENT_URL`
+(`platform/hosted/tests/beta-cluster.sh:1110-1142, 1263, 1283`).
+Qualification's agentd variable is `LAYERX_QUALIFICATION_AGENT_URL`
+(`tools/qualification/release_runner.py:25`). Those two surfaces are not
+the same. Qualification's Human variable is
+`LAYERX_QUALIFICATION_HUMAN_URL`
+(`tools/qualification/release_runner.py:26`). `env_write` fills it from
+`$GATEWAY_URL` unless overridden, and the `qualification_url` comment
+names the gateway as the only hosted `/v1` human surface
+(`platform/hosted/tests/beta-cluster.sh:1138-1139`). Those two surfaces
+are not the same.
 
 HTTP against those origins uses the cluster CA. Hosted smoke passes
 `--cacert "$LAYERX_TEST_CA_FILE"` (`platform/hosted/testnet/tests/hosted-smoke.sh:7,
@@ -253,7 +279,100 @@ Testnet control admits the funding journey at `GET /v1/journeys/funding`
 
 ---
 
-## 5. Submit one signed activity through the CLI
+## 5. Deploy a program
+
+There is no `layerx programs` command (`platform/cli/src/main.rs:43-81`).
+The command is `layerx program deploy <artifact>`
+(`platform/cli/src/main.rs:245-254, 1054-1070`;
+`platform/cli/src/programs.rs:245-279`).
+
+From the faucet-funded credential, scaffold and compile a WASM artifact:
+
+```sh
+layerx new quickstart-program
+layerx --json program build --manifest-path quickstart-program/Cargo.toml
+```
+
+`name` is a lowercase Cargo package name, 1–64, digits/`-`, not starting
+with `-` (`platform/cli/src/scaffold.rs:52-62`). `--directory` default `.`
+(`platform/cli/src/main.rs:83-88`). `--json` `kind` is `project.created`
+(`platform/cli/src/main.rs:495-498`). `program build` `--manifest-path`
+default `Cargo.toml`; `--artifact` optional
+(`platform/cli/src/main.rs:223-229, 1036-1043`). Without `--artifact` the
+Rust toolchain must produce exactly one `.wasm` under
+`target/wasm32-unknown-unknown/release`
+(`platform/cli/src/programs.rs:176-213, 1976-1995`). `--json` `kind` is
+`program.built`. Data includes `artifact`, `code_hash`, `byte_size`,
+`function_count`, `abi_version`, `deterministic_validation`
+(`platform/cli/src/programs.rs:216-236`).
+
+The deploy path is the `artifact` field from `program.built`.
+
+```sh
+layerx --json program deploy \
+  quickstart-program/target/wasm32-unknown-unknown/release/quickstart_program.wasm \
+  --program-id <program_id> \
+  --idempotency-key <idempotency_key> \
+  --key quickstart \
+  --account-sequence 0 \
+  --not-before-ms <not_before_ms> \
+  --expires-at-ms <expires_at_ms> \
+  --previous-state-root <previous_state_root>
+```
+
+Required lifecycle flags: `--program-id`, `--idempotency-key`,
+`--account-sequence`, `--not-before-ms`, `--expires-at-ms`,
+`--previous-state-root` (`platform/cli/src/main.rs:279-297, 1409-1475`).
+`--key` optional (else the configured default)
+(`platform/cli/src/main.rs:286, 656-670, 993`). `--fee-limit` default `0`
+(`platform/cli/src/main.rs:293-294`). `--upgrade-authority` and
+`--interface` optional (`platform/cli/src/main.rs:248-251`). Without
+`--upgrade-authority` the policy is immutable
+(`platform/cli/src/programs.rs:263-269`). `--interface` is canonical
+encoded interface bytes, not KVX source
+(`platform/cli/src/programs.rs:349-357`).
+
+`--program-id` and `--previous-state-root` are 32-byte hex
+(`platform/cli/src/programs.rs:261, 429`;
+`platform/cli/src/encoding.rs:29-33`). `--idempotency-key` is 32-byte hex
+at submit time (`platform/cli/src/programs.rs:952`); clap and
+`validate_idempotency_key` also admit 16–128 alnum/`-`/`_`
+(`platform/cli/src/http.rs:366-377`). Hosted `POST /v1/programs/deploy`
+requires `Idempotency-Key` of 64 lowercase hex
+(`platform/hosted/gateway/src/main.rs:1515-1525, 829-833`). Validity
+`expires_at_ms - not_before_ms` must be in `(0, 300000]`
+(`platform/cli/src/programs.rs:944-950`). There is no CLI command that
+reads the current state root (`platform/cli/src/main.rs:43-81`). Hosted
+`GET /v1/state` is `503` `principal_state_proof_unavailable`
+(`platform/hosted/gateway/src/lib.rs:816`;
+`platform/hosted/gateway/src/main.rs:2255`).
+
+The command POSTs canonical signed bytes to `/v1/programs/deploy`
+(`platform/cli/src/programs.rs:436-442`). `--json` `kind` is
+`program.lifecycle`; human text is `Programs lifecycle outcome on
+{environment}` (`platform/cli/src/main.rs:1017-1021`). On a completed
+receipt the data object has `activity_id`, `receipt` (hex), `result_code`,
+`outcome.status` `completed` or `refused`,
+`verified_previous_state_root`, `verified_resulting_state_root`,
+`verification`, and `artifact`
+(`platform/cli/src/programs.rs:519-526, 276-278`). Hosted gateway 200 is
+`{ok: true, result: {activity_id, receipt, state, terminal_payload,
+call_graph}, trace}` (`platform/hosted/gateway/src/main.rs:1863-1891`).
+`state` is `completed` when `result_code == 0`, else `refused`.
+
+`active_client` sends the stored session as `Authorization: Bearer`
+(`platform/cli/src/main.rs:1344-1347`; `platform/cli/src/http.rs:222-228`).
+Hosted `POST /v1/programs/deploy` authenticates `LayerX-Key` with scope
+`program:call` (`platform/hosted/gateway/src/lib.rs:813`;
+`platform/hosted/gateway/src/main.rs:1057-1060, 1144-1153, 2413-2415`).
+Bearer on that route is `401 api_key_required`. Those sources disagree
+on how deploy reaches the gateway. The CLI command that issues a gateway
+key is `layerx install mcp` or `layerx install a2a`
+(`platform/cli/src/install/mod.rs:603-632`).
+
+---
+
+## 6. Submit one signed activity through the CLI
 
 ```sh
 layerx --json payment test \
@@ -316,7 +435,7 @@ success for a completed non-program activity is `{ok: true, result, trace}`
 
 ---
 
-## 6. Fetch the receipt
+## 7. Fetch the receipt
 
 ```sh
 layerx --json receipt get <id>
@@ -352,7 +471,7 @@ than `/livez` and `/readyz` require `Authorization: Bearer`
 
 ---
 
-## 7. Verify the receipt locally
+## 8. Verify the receipt locally
 
 ```sh
 layerx --json receipt verify \
@@ -384,7 +503,7 @@ Failure text is `receipt verification failed at {:?}`
 
 ---
 
-## 8. Observe finality against the Paxeer boundary
+## 9. Observe finality against the Paxeer boundary
 
 There is no CLI command that opens a `layerxd` node RPC. The CLI talks HTTP
 to the active environment endpoint (`platform/cli/src/main.rs:43-81, 1344-1347`;
@@ -447,7 +566,7 @@ Testnet control journey routes are `/v1/journeys/funding`,
 
 ---
 
-## 9. Tear down
+## 10. Tear down
 
 ```sh
 make platform-beta-cluster-down
