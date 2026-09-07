@@ -11,7 +11,7 @@ Ordered instantly in-channel. Anchored to Paxeer on the L0 → L4 ladder.
 
 An activity is not final all at once. Each step names who is on the hook if the claim turns out to be wrong. The guarantee behind a batch is not a validity proof. It is bonded re-execution, a challenge window, and withdrawal limits.
 
-LayerX and the Paxeer settlement stack now live in one monorepo, so the whole path — from the sequencer that orders an activity to the Paxeer contracts that register a checkpoint — is auditable in one place. Paxeer Network is EVM chain ID `125`, and its node and contracts live under `paxeer-network/`. Custody still only moves on the Paxeer side; co-location changes nothing about the trust boundary.
+LayerX and the Paxeer settlement stack now live in one monorepo, so the whole path - from the sequencer that orders an activity to the Paxeer contracts that register a checkpoint - is auditable in one place. Paxeer Network is EVM chain ID `125`, and its node and contracts live under `paxeer-network/`. Custody still only moves on the Paxeer side; co-location changes nothing about the trust boundary.
 
 ---
 
@@ -43,15 +43,15 @@ Those put a price on what a dishonest quorum could cost you. The whitepaper and 
 
 ---
 
-## Everything in the batch replays — including programs
+## Everything in the batch replays - including programs
 
-A batch is not just payments. Program calls, program-owned account transfers, and storage-occupancy settlement all land in the same ordered history and are re-executed the same way. Program execution is deterministic for exactly this reason: guarantors must reach byte-identical results, and every monetary effect a program produces is a `402LXP` transfer set carried in the batch, never a private balance write. Occupancy charges — rent on namespace bytes held across batches — settle into the batch receipt as replay-checkable evidence, so a guarantor can reproduce them from the log alone.
+A batch is not just payments. Program calls, program-owned account transfers, and storage-occupancy settlement all land in the same ordered history and are re-executed the same way. Program execution is deterministic for exactly this reason: guarantors must reach byte-identical results, and every monetary effect a program produces is a `402LXP` transfer set carried in the batch, never a private balance write. Occupancy charges - rent on namespace bytes held across batches - settle into the batch receipt as replay-checkable evidence, so a guarantor can reproduce them from the log alone.
 
 ---
 
 ## Sequencer stall (named, not silent)
 
-If the sequencer stops sealing, the protocol does not pretend otherwise. The security model specifies empty-seal and liveness timers and an exit path onto Paxeer. LayerX is designed so ordinary activity never requires a Paxeer transaction — and so an exit still exists when the fast path is stuck.
+If the sequencer stops sealing, the protocol does not pretend otherwise. The security model specifies empty-seal and liveness timers and an exit path onto Paxeer. LayerX is designed so ordinary activity never requires a Paxeer transaction - and so an exit still exists when the fast path is stuck.
 
 ---
 
@@ -65,13 +65,13 @@ That is why consensus execution forbids floating point, local clocks, and unstab
 
 ## What LayerX is not claiming here
 
-This ladder is how LayerX qualifies a checkpoint onto Paxeer. It is not a public-mainnet RPC, and it is not "final on L0." Receipts at accept are evidence of ordering in-channel. Custody moves on the Paxeer side at L4. Limited beta opens September 7; source is open for inspection while the public lane is qualified, and there is no public RPC, faucet, or explorer for LayerX itself yet.
+This ladder is how LayerX qualifies a checkpoint onto Paxeer. It is not "final on L0." Receipts at accept are evidence of ordering in-channel. Custody moves on the Paxeer side at L4. The public testnet exposes a gateway API and a faucet. There is no LayerX mainnet. Custody and settlement live on Paxeer. Source is open for inspection while the public lane is qualified.
 
 ---
 
 ## Start here
 
 - Home
-- Protocol — LXC envelope and the three rules
-- Modules — the eight economic modules and the programs surface
+- Protocol - LXC envelope and the three rules
+- Modules - the eight economic modules and the programs surface
 - Security

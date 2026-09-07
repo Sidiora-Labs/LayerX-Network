@@ -6,7 +6,7 @@ Paxeer is where LayerX checkpoints, custody, guarantor bonds, challenges, withdr
 
 This directory is that network: the `paxd` node, EVM/RPC surface, chain modules, storage engines, and Paxeer-native contracts. It lives in the [Sidiora-Labs/LayerX-Protocol](https://github.com/Sidiora-Labs/LayerX-Protocol) monorepo next to LayerX so the two can be reviewed together. Co-location does not grant LayerX authority over Paxeer, or the reverse. Each side keeps its own build, release tags, and trust boundary.
 
-LayerX is under active development and release qualification. Limited beta opens September 7. Source is available for inspection while that work finishes.
+LayerX is under active development and release qualification. The public testnet exposes a gateway API and a faucet. There is no LayerX mainnet. Custody and settlement live on Paxeer. Source is available for inspection while that work finishes.
 
 ## How it sits next to LayerX
 
