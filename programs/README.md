@@ -28,7 +28,7 @@ Where the rest of the system fits:
   executes activity; periodic checkpoints settle on Paxeer. Since the monorepo
   integration, the Paxeer settlement stack lives in this same repository under
   [`paxeer-network/`](../paxeer-network) - co-located, but with its own trust and build
-  boundary (see [`docs/MONOREPO.md`](../docs/MONOREPO.md) once published, and the root
+  boundary (see [`docs/MONOREPO.md`](../docs/MONOREPO.md) and the root
   [`README.md`](../README.md)).
 
 Normative behavior lives in [`spec/`](../spec) (KVX first). This document is the human
