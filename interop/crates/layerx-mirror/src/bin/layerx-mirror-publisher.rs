@@ -36,7 +36,7 @@ fn main() {
             std::process::exit(64);
         }
         let address = address.to_string_lossy();
-        std::process::exit(if probe(&address).is_ok() { 0 } else { 1 });
+        std::process::exit(i32::from(probe(&address).is_err()));
     }
     if arguments.next().is_some() {
         eprintln!("usage: layerx-mirror-publisher <config.json>");

@@ -13,7 +13,7 @@ use std::time::Duration;
 use rustls::pki_types::{CertificateDer, ServerName};
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::Value;
 use zeroize::{Zeroize, Zeroizing};
 
 const MAX_ENDPOINTS: usize = 8;
@@ -81,6 +81,9 @@ pub struct RpcCluster {
 }
 
 impl RpcCluster {
+    ///
+    /// # Errors
+    /// Returns an error for invalid bounds, duplicate endpoints or invalid endpoint TLS configuration.
     pub fn new(config: &RpcQuorumConfig) -> Result<Self, RpcError> {
         if config.endpoints.len() < 2
             || config.endpoints.len() > MAX_ENDPOINTS
@@ -121,6 +124,9 @@ impl RpcCluster {
     }
 
     /// Returns one byte-identical strict-majority result.
+    ///
+    /// # Errors
+    /// Returns an error for invalid requests, unavailable quorum, divergent or malformed replies, or rate limiting.
     pub fn call(&self, method: &str, parameters: Value) -> Result<Value, RpcError> {
         validate_method(method)?;
         let request_id = next_id()?;
@@ -179,6 +185,9 @@ impl RpcCluster {
     /// conclusive response is `Unknown`, never permission to replace the
     /// transaction. A strict majority of the same deterministic refusal is
     /// returned as permanent rejection.
+    ///
+    /// # Errors
+    /// Returns an error for invalid requests, mismatched identities or a quorum of deterministic refusals.
     pub fn broadcast(
         &self,
         method: &str,
@@ -388,13 +397,13 @@ fn next_id() -> Result<u64, RpcError> {
 }
 
 fn request_body(method: &str, parameters: Value, request_id: u64) -> Result<Vec<u8>, RpcError> {
-    let body = serde_json::to_vec(&json!({
-        "jsonrpc": "2.0",
-        "id": request_id,
-        "method": method,
-        "params": parameters
-    }))
-    .map_err(|_| RpcError::Configuration)?;
+    let envelope = serde_json::Map::from_iter([
+        ("jsonrpc".to_owned(), Value::String("2.0".to_owned())),
+        ("id".to_owned(), Value::from(request_id)),
+        ("method".to_owned(), Value::String(method.to_owned())),
+        ("params".to_owned(), parameters),
+    ]);
+    let body = serde_json::to_vec(&envelope).map_err(|_| RpcError::Configuration)?;
     if body.len() > MAX_REQUEST_BYTES {
         Err(RpcError::Configuration)
     } else {
@@ -548,7 +557,11 @@ fn read_json_rpc(
             wire_body
         }
     };
-    let envelope: Value = serde_json::from_slice(&body).map_err(|_| RpcError::ResponseMismatch)?;
+    decode_rpc_envelope(&body, request_id)
+}
+
+fn decode_rpc_envelope(body: &[u8], request_id: u64) -> Result<Value, RpcError> {
+    let envelope: Value = serde_json::from_slice(body).map_err(|_| RpcError::ResponseMismatch)?;
     if envelope.get("jsonrpc").and_then(Value::as_str) != Some("2.0")
         || envelope.get("id").and_then(Value::as_u64) != Some(request_id)
     {

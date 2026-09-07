@@ -67,6 +67,9 @@ pub struct EthereumMirrorReader {
 }
 
 impl EthereumMirrorReader {
+    ///
+    /// # Errors
+    /// Returns an error for invalid configuration, RPC failure or a mismatched chain identity.
     pub fn open(config: EthereumMirrorReadConfig) -> Result<Self, EthereumError> {
         if config.chain_id == 0
             || config.genesis_hash == [0; 32]
@@ -85,6 +88,9 @@ impl EthereumMirrorReader {
     /// Retrieves one exact commitment from one finalized chain view. All
     /// contract calls are pinned to the returned block; latest-state results
     /// are never combined with finalized archive bytes.
+    ///
+    /// # Errors
+    /// Returns an error for RPC failure, target mismatch or invalid archive data.
     pub fn retrieve(
         &self,
         commitment: ArchiveCommitment,
@@ -151,10 +157,16 @@ impl EthereumMirrorReader {
 
     /// Rechecks the original coordinate without invalidating the archive's
     /// cryptographic evidence when its publication provenance was reorged.
+    ///
+    /// # Errors
+    /// Returns an error if the canonical block cannot be queried or decoded.
     pub fn is_canonical(&self, observation: &EthereumMirrorRead) -> Result<bool, EthereumError> {
         self.is_coordinate_canonical(observation.block_number, observation.block_hash)
     }
 
+    ///
+    /// # Errors
+    /// Returns an error if the canonical block cannot be queried or decoded.
     pub fn is_coordinate_canonical(
         &self,
         block_number: u64,
@@ -273,6 +285,9 @@ pub struct EthereumArchiveClient {
 }
 
 impl EthereumArchiveClient {
+    ///
+    /// # Errors
+    /// Returns an error for invalid configuration, signer identity, journal or RPC target.
     pub fn open(
         config: EthereumProductionConfig,
         signer: RemoteChainSigner,
@@ -298,6 +313,9 @@ impl EthereumArchiveClient {
 
     /// Advances at most one durable stage. Calling it after a crash first
     /// resolves the exact persisted transaction before creating another.
+    ///
+    /// # Errors
+    /// Returns an error if target verification, signing, publication or journal persistence fails.
     pub fn advance(&mut self, archive: &Archive) -> Result<EthereumProgress, EthereumError> {
         self.verify_target()?;
         let stages = stages(archive, self.config.chunk_bytes)?;
@@ -307,19 +325,18 @@ impl EthereumArchiveClient {
                 .record(archive.commitment(), stage.stage)
                 .cloned();
             match record {
-                None => return self.prepare_and_broadcast(archive, stage),
+                None => return self.prepare_and_broadcast(archive, &stage),
                 Some(record)
                     if (record.phase == PublicationPhase::RetrievedVerified
-                        && stage.stage != PublicationStage::Finalize)
-                        || (record.phase == PublicationPhase::Finalized
-                            && stage.stage != PublicationStage::Finalize) => {}
+                        || record.phase == PublicationPhase::Finalized)
+                        && stage.stage != PublicationStage::Finalize => {}
                 Some(record) if record.phase == PublicationPhase::PermanentRefusal => {
                     return Ok(self.progress(&record));
                 }
                 Some(record) if record.phase == PublicationPhase::PreBroadcastFailure => {
-                    return self.prepare_and_broadcast(archive, stage);
+                    return self.prepare_and_broadcast(archive, &stage);
                 }
-                Some(record) => return self.observe_stage(archive, stage, record),
+                Some(record) => return self.observe_stage(archive, &stage, record),
             }
         }
         let final_record = self
@@ -330,6 +347,9 @@ impl EthereumArchiveClient {
         Ok(self.progress(&final_record))
     }
 
+    ///
+    /// # Errors
+    /// Returns an error for target mismatch, RPC failure or invalid archive data.
     pub fn retrieve(
         &self,
         commitment: ArchiveCommitment,
@@ -380,7 +400,7 @@ impl EthereumArchiveClient {
     fn prepare_and_broadcast(
         &mut self,
         archive: &Archive,
-        stage: StagePayload,
+        stage: &StagePayload,
     ) -> Result<EthereumProgress, EthereumError> {
         let digest: [u8; 32] = Sha256::digest(&stage.call_data).into();
         let base = PublicationRecord {
@@ -423,7 +443,7 @@ impl EthereumArchiveClient {
         };
         let mut persisted = base;
         persisted.phase = PublicationPhase::Signed;
-        persisted.signed_payload = signed.raw.clone();
+        persisted.signed_payload.clone_from(&signed.raw);
         persisted.transaction = TransactionIdentity::Ethereum(signed.hash);
         self.journal.append(persisted.clone())?;
         let result = self.rpc.broadcast(
@@ -448,7 +468,7 @@ impl EthereumArchiveClient {
     fn observe_stage(
         &mut self,
         archive: &Archive,
-        stage: StagePayload,
+        stage: &StagePayload,
         mut record: PublicationRecord,
     ) -> Result<EthereumProgress, EthereumError> {
         let TransactionIdentity::Ethereum(transaction_hash) = record.transaction else {
@@ -476,6 +496,16 @@ impl EthereumArchiveClient {
             };
             self.journal.append(record.clone())?;
         }
+        self.observe_finality(archive, stage, record, transaction_hash)
+    }
+
+    fn observe_finality(
+        &mut self,
+        archive: &Archive,
+        stage: &StagePayload,
+        mut record: PublicationRecord,
+        transaction_hash: [u8; 32],
+    ) -> Result<EthereumProgress, EthereumError> {
         let was_retrieved = record.phase == PublicationPhase::RetrievedVerified;
         if was_retrieved && self.reorg_monitoring_complete(record.position)? {
             return Ok(self.progress(&record));

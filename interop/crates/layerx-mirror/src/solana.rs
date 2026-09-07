@@ -70,6 +70,9 @@ pub struct SolanaMirrorReader {
 }
 
 impl SolanaMirrorReader {
+    ///
+    /// # Errors
+    /// Returns an error for invalid configuration, RPC failure or a mismatched cluster identity.
     pub fn open(config: SolanaMirrorReadConfig) -> Result<Self, SolanaError> {
         if config.genesis_hash == [0; 32]
             || config.archive_program == [0; 32]
@@ -86,6 +89,9 @@ impl SolanaMirrorReader {
         Ok(reader)
     }
 
+    ///
+    /// # Errors
+    /// Returns an error for RPC failure, program mismatch or invalid archive data.
     pub fn retrieve(
         &self,
         commitment: ArchiveCommitment,
@@ -163,10 +169,16 @@ impl SolanaMirrorReader {
         }))
     }
 
+    ///
+    /// # Errors
+    /// Returns an error if the rooted block cannot be queried or decoded.
     pub fn is_canonical(&self, observation: &SolanaMirrorRead) -> Result<bool, SolanaError> {
         self.is_coordinate_canonical(observation.rooted_slot, observation.rooted_blockhash)
     }
 
+    ///
+    /// # Errors
+    /// Returns an error if the rooted block cannot be queried or decoded.
     pub fn is_coordinate_canonical(
         &self,
         rooted_slot: u64,
@@ -324,6 +336,9 @@ pub struct SolanaArchiveClient {
 }
 
 impl SolanaArchiveClient {
+    ///
+    /// # Errors
+    /// Returns an error for invalid configuration, signer identity, journal or RPC target.
     pub fn open(
         config: SolanaProductionConfig,
         signer: RemoteChainSigner,
@@ -350,6 +365,9 @@ impl SolanaArchiveClient {
         Ok(client)
     }
 
+    ///
+    /// # Errors
+    /// Returns an error if target verification, signing, publication or journal persistence fails.
     pub fn advance(&mut self, archive: &Archive) -> Result<SolanaProgress, SolanaError> {
         self.verify_target()?;
         let stages = stages(archive, self.config.chunk_bytes)?;
@@ -359,19 +377,18 @@ impl SolanaArchiveClient {
                 .record(archive.commitment(), stage.stage)
                 .cloned();
             match record {
-                None => return self.prepare_and_broadcast(archive, stage),
+                None => return self.prepare_and_broadcast(archive, &stage),
                 Some(record)
                     if (record.phase == PublicationPhase::RetrievedVerified
-                        && stage.stage != PublicationStage::Finalize)
-                        || (record.phase == PublicationPhase::Finalized
-                            && stage.stage != PublicationStage::Finalize) => {}
+                        || record.phase == PublicationPhase::Finalized)
+                        && stage.stage != PublicationStage::Finalize => {}
                 Some(record) if record.phase == PublicationPhase::PermanentRefusal => {
                     return Ok(self.progress(&record));
                 }
                 Some(record) if record.phase == PublicationPhase::PreBroadcastFailure => {
-                    return self.prepare_and_broadcast(archive, stage);
+                    return self.prepare_and_broadcast(archive, &stage);
                 }
-                Some(record) => return self.observe_stage(archive, stage, record),
+                Some(record) => return self.observe_stage(archive, &stage, record),
             }
         }
         let final_record = self
@@ -382,6 +399,9 @@ impl SolanaArchiveClient {
         Ok(self.progress(&final_record))
     }
 
+    ///
+    /// # Errors
+    /// Returns an error for target mismatch, RPC failure or invalid archive data.
     pub fn retrieve(&self, commitment: ArchiveCommitment) -> Result<Option<Vec<u8>>, SolanaError> {
         self.verify_target()?;
         let (manifest_address, _) =
@@ -421,7 +441,7 @@ impl SolanaArchiveClient {
     fn prepare_and_broadcast(
         &mut self,
         archive: &Archive,
-        stage: StageInstruction,
+        stage: &StageInstruction,
     ) -> Result<SolanaProgress, SolanaError> {
         let digest = Sha256::digest(&stage.data).into();
         let base = PublicationRecord {
@@ -447,7 +467,7 @@ impl SolanaArchiveClient {
         {
             self.journal.append(base.clone())?;
         }
-        let signed = match self.sign_transaction(&stage) {
+        let signed = match self.sign_transaction(stage) {
             Ok(value) => value,
             Err(error @ SolanaError::Signer(SignerError::Refused)) => {
                 let mut refused = base;
@@ -464,7 +484,7 @@ impl SolanaArchiveClient {
         };
         let mut persisted = base;
         persisted.phase = PublicationPhase::Signed;
-        persisted.signed_payload = signed.raw.clone();
+        persisted.signed_payload.clone_from(&signed.raw);
         persisted.transaction = TransactionIdentity::Solana(signed.signature);
         self.journal.append(persisted.clone())?;
         let signature_text = base58(&signed.signature);
@@ -495,7 +515,7 @@ impl SolanaArchiveClient {
     fn observe_stage(
         &mut self,
         archive: &Archive,
-        stage: StageInstruction,
+        stage: &StageInstruction,
         mut record: PublicationRecord,
     ) -> Result<SolanaProgress, SolanaError> {
         let TransactionIdentity::Solana(mut signature) = record.transaction else {
@@ -505,7 +525,7 @@ impl SolanaArchiveClient {
             record.phase,
             PublicationPhase::Reorged | PublicationPhase::BroadcastExpired
         ) {
-            let replacement = self.sign_transaction(&stage)?;
+            let replacement = self.sign_transaction(stage)?;
             record.phase = PublicationPhase::Signed;
             record.signed_payload = replacement.raw;
             record.transaction = TransactionIdentity::Solana(replacement.signature);
@@ -582,6 +602,17 @@ impl SolanaArchiveClient {
             self.journal.append(record.clone())?;
             return Ok(self.progress(&record));
         }
+        self.observe_finality(archive, stage, record, signature, was_retrieved)
+    }
+
+    fn observe_finality(
+        &mut self,
+        archive: &Archive,
+        stage: &StageInstruction,
+        mut record: PublicationRecord,
+        signature: [u8; 64],
+        was_retrieved: bool,
+    ) -> Result<SolanaProgress, SolanaError> {
         let transaction = self.rpc.call(
             "getTransaction",
             json!([base58(&signature), {
@@ -982,12 +1013,17 @@ fn stages(archive: &Archive, chunk_bytes: usize) -> Result<Vec<StageInstruction>
             data,
         });
     }
+    output.push(finalize_stage(commitment, manifest));
+    Ok(output)
+}
+
+fn finalize_stage(commitment: ArchiveCommitment, manifest: [u8; 32]) -> StageInstruction {
     let mut finalize = Vec::new();
     finalize.extend_from_slice(INSTRUCTION_MAGIC);
     finalize.extend_from_slice(&INSTRUCTION_VERSION.to_be_bytes());
     finalize.push(3);
     finalize.extend_from_slice(commitment.as_bytes());
-    output.push(StageInstruction {
+    StageInstruction {
         stage: PublicationStage::Finalize,
         accounts: vec![
             AccountMeta {
@@ -1002,8 +1038,7 @@ fn stages(archive: &Archive, chunk_bytes: usize) -> Result<Vec<StageInstruction>
             },
         ],
         data: finalize,
-    });
-    Ok(output)
+    }
 }
 
 fn compile_message(
@@ -1191,11 +1226,11 @@ fn decode_manifest(
     {
         return Err(SolanaError::Retrieval);
     }
-    let length = u64::from_be_bytes(
-        bytes[116..124]
+    let length = usize::from_be_bytes(
+        bytes[124 - size_of::<usize>()..124]
             .try_into()
             .map_err(|_| SolanaError::Retrieval)?,
-    ) as usize;
+    );
     let chunk_count = u32::from_be_bytes(
         bytes[124..128]
             .try_into()
@@ -1210,11 +1245,11 @@ fn decode_manifest(
     let observed_chain: [u8; 32] = bytes[192..224]
         .try_into()
         .map_err(|_| SolanaError::Retrieval)?;
-    let received = u64::from_be_bytes(
-        bytes[224..232]
+    let received = usize::from_be_bytes(
+        bytes[232 - size_of::<usize>()..232]
             .try_into()
             .map_err(|_| SolanaError::Retrieval)?,
-    ) as usize;
+    );
     let next_chunk = u32::from_be_bytes(
         bytes[232..236]
             .try_into()
@@ -1272,11 +1307,12 @@ fn decode_chunk(
     let digest: [u8; 32] = bytes[44..76]
         .try_into()
         .map_err(|_| SolanaError::Retrieval)?;
-    let length = u32::from_be_bytes(
+    let length = usize::try_from(u32::from_be_bytes(
         bytes[76..80]
             .try_into()
             .map_err(|_| SolanaError::Retrieval)?,
-    ) as usize;
+    ))
+    .map_err(|_| SolanaError::Retrieval)?;
     let data = bytes.get(80..).ok_or(SolanaError::Retrieval)?;
     if length == 0
         || length > maximum

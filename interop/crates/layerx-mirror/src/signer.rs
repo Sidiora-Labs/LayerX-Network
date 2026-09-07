@@ -89,6 +89,9 @@ pub struct RemoteChainSigner {
 impl RemoteChainSigner {
     /// Validates endpoint, handle and public verification identity without
     /// opening a connection or importing any chain private key.
+    ///
+    /// # Errors
+    /// Returns an error for invalid endpoint, handle, timeout, public key or TLS configuration.
     pub fn new(config: RemoteSignerConfig) -> Result<Self, SignerError> {
         if config.key_handle.is_empty()
             || config.key_handle.len() > MAX_HANDLE_BYTES
@@ -153,6 +156,9 @@ impl RemoteChainSigner {
 
     /// Requests a signature under an explicit policy domain and validates the
     /// exact returned signature against both digest and configured key.
+    ///
+    /// # Errors
+    /// Returns an error for invalid policy, transport or authentication failure, refusal or invalid signature.
     pub fn sign_digest(
         &self,
         policy_domain: &[u8],
@@ -198,6 +204,9 @@ impl RemoteChainSigner {
     /// Requests an Ed25519 signature over the exact canonical message bytes.
     /// The digest is included for signer policy indexing but is not substituted
     /// for the message in signature verification (required by Solana).
+    ///
+    /// # Errors
+    /// Returns an error for invalid policy or message, transport or authentication failure, refusal or invalid signature.
     pub fn sign_message(
         &self,
         policy_domain: &[u8],
@@ -273,6 +282,9 @@ impl RemoteChainSigner {
 
     /// Ethereum address derived from the independently configured secp256k1
     /// public key. It is never accepted from the signer response.
+    ///
+    /// # Errors
+    /// Returns an error unless the configured key is a valid secp256k1 public key.
     pub fn ethereum_address(&self) -> Result<[u8; 20], SignerError> {
         if self.config.algorithm != SigningAlgorithm::Secp256k1Recoverable {
             return Err(SignerError::Configuration);

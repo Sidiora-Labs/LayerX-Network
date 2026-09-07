@@ -296,10 +296,6 @@ impl Ethereum {
         self.state.borrow_mut().withhold = true;
     }
 
-    fn tamper(&self) {
-        self.state.borrow_mut().tamper = true;
-    }
-
     fn append_count(&self) -> usize {
         self.state.borrow().appends.len()
     }
@@ -411,7 +407,6 @@ enum SolObserve {
         former_blockhash: [u8; 32],
     },
     Rejected,
-    Fail(ChainFailure),
 }
 
 #[derive(Clone)]
@@ -466,10 +461,6 @@ impl Solana {
             blockhash: [0x22; 32],
             rooted_slots,
         });
-    }
-
-    fn fail_append(&self, failure: ChainFailure) {
-        self.state.borrow_mut().append_failure = Some(failure);
     }
 
     fn tamper(&self) {
@@ -544,7 +535,6 @@ impl SolanaArchiveClient for Solana {
                 former_blockhash,
             }),
             SolObserve::Rejected => Ok(SolanaObservation::Rejected),
-            SolObserve::Fail(failure) => Err(failure),
         }
     }
 
