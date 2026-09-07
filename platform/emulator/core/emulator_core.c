@@ -12,6 +12,7 @@
 #include "layerx/lxp_authority.h"
 #include "layerx/lxp_batch.h"
 #include "layerx/lxp_crypto.h"
+#include "layerx/lxp_daemon.h"
 #include "layerx/lxp_genesis.h"
 #include "layerx/lxp_hash.h"
 #include "layerx/lxp_identity.h"
@@ -287,6 +288,9 @@ static lxp_result open_native_feed(platform_emulator *emulator)
         emulator->programs_runtime.state_feed = &emulator->feed_store.feed;
         status = lxp_programs_bind_state_feed(&emulator->kernel, &emulator->feed_store.feed);
     }
+    if (status == LXP_OK)
+        status = lxp_programs_state_feed_store_bind_maintenance(
+            &emulator->feed_store, &emulator->kernel);
     if (status == LXP_OK) emulator->feed_ready = true;
     else close_native_feed(emulator);
     return status;
@@ -976,7 +980,21 @@ int32_t platform_emulator_execute(platform_emulator *emulator,
         (void)memcpy(emulator->program_receipt_digests[program_index],
                      deployment_receipt_digest, 32U);
     }
-    ++emulator->global_sequence;
+    if (emulator->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT) {
+        lxp_programs_occupancy_receipt maintenance;
+        lxp_byte_span encoded;
+        status = lxp_programs_finalize_occupancy_batch_selected(
+            &emulator->kernel, emulator->protocol_version,
+            execution.recorded_fee_schedule_version, execution.batch_number,
+            execution.batch_timestamp_ms, emulator->state.next_sequence,
+            execution.parameter_version, &emulator->arena, &maintenance, &encoded);
+        if (status == LXP_OK)
+            status = emulator->kernel.observe_maintenance(
+                emulator->kernel.commit_observer_context, &emulator->kernel,
+                encoded, execution.batch_timestamp_ms);
+        if (status != LXP_OK) return status;
+    }
+    emulator->global_sequence = emulator->state.next_sequence;
     ++emulator->batch_number;
     if (emulator->drop_count != 0U) {
         --emulator->drop_count;
