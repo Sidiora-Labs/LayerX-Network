@@ -58,6 +58,7 @@ See `docs/MONOREPO.md` for build boundaries, workflow naming, and tag convention
 - [Agentd](Agentd.md)
 - [CLI](Cli.md)
 - [Hosted core](HostedCore.md)
+- [Hosted authority](HostedAuthority.md)
 - [Programs workspace gates](ProgramsWorkspace.md)
 - [Porting](Porting.md)
 - [Beta cluster](BetaCluster.md)
