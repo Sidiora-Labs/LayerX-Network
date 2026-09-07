@@ -3584,3 +3584,34 @@ file = "platform/Makefile.inc platform/hosted/registry platform/hosted/faucet pl
 symbol = "platform-lint platform-sdk-check"
 observed = "make platform-lint exits 0 on 12655f385f1c0f80b7382ba5bc630fcec387daf1; qual-logs/n33/platform-lint.log. The exact aggregate runs strict workspace Clippy, the workspace gate, marketplace wasm32-unknown-unknown library Clippy, dependency policy and cargo-deny advisories, bans and sources. Only the exit code and final 30 log lines were read. cargo test --locked --manifest-path platform/Cargo.toml -p layerx-platform-registry -p layerx-platform-faucet exits 0 with 14 registry tests passed, zero failed or ignored; faucet discovers zero tests; qual-logs/n33/crate-tests.log. make platform-sdk-check, make check, make beta-ledger-check, git diff --check and cg spec lint exit 0; qual-logs/n33/sdk-check.log, check.log, ledger-check.log, diff-check.log and spec-lint.log. Spec lint reports zero errors and nine warnings. The initial ledger check exits 2 for five nonnumeric imported observation identifiers and missing severity on observation.6.4.149; ledger-initial.log. Identifiers are normalized under observation.1.2 and the missing blocker severity restored, preserving historical observation content. Rebase onto origin/main 81e5ef11 preserves the entire tested committed tree exactly at 775aa1f34139b7d45fe4dcb5ed724dd810639e02; rebase-main.log and rebase-tree-preservation.log."
 assumption = "CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4 LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin. The native base already selects wasm32-unknown-unknown and clippy --lib for the marketplace guest. No further source repair is required. These local gates establish aggregate lint and the named test/check results only; no hosted deployment or whole-beta readiness is asserted. cortex_guard is unavailable, exit 127; qual-logs/n33/cortex-guard.log."
+[observation.6.9.boundary-conformance-typed-error-blocker]
+task = "6.9"
+file = "agent/tests/boundary/cases.rs agent/crates/layerx-types/src/activity.rs"
+symbol = "signed_program_call EnvelopeBuilder ActivityBuildError"
+observed = "The exact task 6.9 command exits 2. Native lni-preparation-state and four locked layerx-client lni_preparation tests pass. The standalone conformance runner then fails to compile with E0277 at cases.rs:291,297,304: inner map_err returns String inside and_then closures returning ActivityBuildError. No conformance case or following platform test executes. Raw log: qual-logs/n26/task-6.9.log."
+assumption = "Both files are byte-identical in both merge parents and the qualification source; qual-logs/n26/failure-source-comparison.log records this source comparison, not a parent test run. The pre-existing error conversion requires its owner to preserve all Did, Authority and TimestampBound validation. No source or check is changed."
+severity = "blocker"
+
+[observation.6.4.merged-native-boundary-evidence-blocker]
+task = "6.4"
+file = "platform/hosted/agent-boundary/src/artifacts.rs platform/hosted/agent-boundary/tests/real_node.rs platform/hosted/agent-boundary/tests/real_node/custody.rs"
+symbol = "receipt_execution_batch_id check_relays"
+observed = "The exact task 6.4 chain exits 101 after native artifact and WAL stages pass. Boundary unit test passes; real_node passes five and fails five. artifacts.rs:135-140 rejects receipt state or batch identity; real_node.rs:1807,2227 observe program_artifacts_invalid HTTP 503 instead of 200. Both escrow tests fail the funding execution batch identity assertion at custody.rs:522. The component contract fails at real_node.rs:1912 with account-state head HTTP 503 and error -101 instead of 200. Raw log: qual-logs/n26/task-6.4.log. The chained Clippy stage does not execute; an identical standalone Clippy command exits 0 in qual-logs/n26/boundary-clippy-supplementary.log."
+assumption = "All three consumer files are byte-identical in both merge parents. Native binaries are freshly built from 43a899ad1a1257449d51fe4b2ca6892c97d511ef. The failure requires consumer/native evidence reconciliation; no unsupported causal attribution or weakened identity, root, signature or inclusion check is introduced. PATH includes the virtualenv with tests/bridge/requirements.txt; escrow and custody prerequisites built successfully."
+severity = "blocker"
+
+[observation.6.11.human-locked-intent-gate-blocker]
+task = "6.11"
+file = "human/Cargo.lock human/Cargo.toml"
+symbol = "layerx-intents compile differential"
+observed = "The exact task 6.11 chain exits 101 after native transition/genesis/check and locked wire, crypto verify and proof stages pass. cargo test --locked --manifest-path human/Cargo.toml -p layerx-intents --test compile --test differential refuses to run because human/Cargo.lock needs updating. No Human test or chained Forge stage executes. Raw log: qual-logs/n26/task-6.11.log. The exact selected Forge command runs separately with 52 passed, zero failed and zero skipped in qual-logs/n26/contracts-supplementary.log."
+assumption = "The Human lockfile remains unchanged and --locked is retained. Lock reconciliation is outside native merge-only ownership. Supplementary contracts do not convert the failed exact chain into a pass."
+severity = "blocker"
+
+[observation.6.4.native-merge-gates-and-lint-exclusion]
+task = "6.4"
+file = "Makefile spec/layerx-beta/qualification.kvx"
+symbol = "check layerx-agentd platform-lint"
+observed = "On 43a899ad1a1257449d51fe4b2ca6892c97d511ef, all 23 prior qualification rows, the forced native refresh, Agentd all-target tests and proof/wire pass: 26 passing requested rows. Agentd has 259 passed, zero failed, zero ignored. Exact tasks 6.9, 6.4 and 6.11 fail as recorded separately. Exact commands, exits and raw logs: qual-logs/n26/gates.jsonl. cg spec lint exits 0 with zero errors and nine warnings. make platform-lint is explicitly not run because of the reported marketplace guest lint contract blocker; qual-logs/n26/platform-lint-skip.log records the exclusion."
+assumption = "No aggregate platform lint pass or current reproduction is claimed. Native build runs first and all three binary copies are byte-verified; provenance: qual-logs/n26/native-refresh.json. CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4 RAYON_NUM_THREADS=4; worktree default targets; LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin. Qualification is local and partial, not whole-beta or release certification."
+severity = "note"
