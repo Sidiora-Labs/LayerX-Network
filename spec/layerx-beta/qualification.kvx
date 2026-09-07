@@ -4461,6 +4461,8 @@ file = "tools/ci/beta-qualify.sh"
 symbol = "beta_qualify_focused"
 observed = "formerly observation.5.1.15. Shellcheck and cortex_guard are unavailable. Bash syntax and make dry-run checks pass. Codify review timed out; its advisory guard used active task 3.7 and does not qualify the focused runner scope. Raw logs: qual-logs/r14/."
 assumption = "Tool absence and advisory graph output do not establish qualification; task status remains unchanged."
+severity = "note"
+
 [observation.6.4.158]
 task = "6.4"
 file = "agent/Cargo.lock; agent/tests/qualify/Cargo.lock; agent/crates/layerx-sdk/src/program_http.rs; agent/crates/layerx-agentd/tests/support/real_authority.rs"
