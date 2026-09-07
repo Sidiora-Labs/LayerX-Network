@@ -2537,3 +2537,122 @@ symbol = "decode_and_verify_program_terminal ExecutionError"
 observed = "On source 76d540916e3610723a0f0d720b1cadc896b1bbec, make programs-check-executed-fixture exits 2 with ValueError: invalid transfer authority presence against the frozen stored V3 receipt. Strict runtime Clippy with --all-targets --features host-ffi -- -D warnings exits 101 with 131 library errors and 368 library-test errors. The diagnostic inventory includes large error results, missing error documentation, function and argument bounds, conversions and retained test lint findings. Raw logs: qual-logs/n14-matrix-executed.log and qual-logs/n14-matrix-runtime-clippy.log; exact locations: qual-logs/n14-clippy-inventory.json. The full runtime test suite with --no-fail-fast exits 0 after the merged signature and storage test reconciliation; log qual-logs/n14-matrix-runtime-test.log."
 assumption = "Historical SDK verification requires an explicitly selected historical contract while preserving current attachment checks and frozen V3 bytes. Runtime lint repairs remain incomplete across owned and external files; passing runtime tests do not qualify strict Clippy. All prior observation sections are retained with their severity fields; preservation evidence is qual-logs/n14-qualification-preservation.json. No assertion, type, bound or lint gate is weakened."
 severity = "blocker"
+[observation.6.11.terminal-v4-legacy-metadata]
+task = "6.11"
+file = "agent/sdk/python/layerx_sdk/program_wire.py"
+symbol = "_decode_legacy _bind_metadata"
+observed = "The authenticated receipt-programs-principal-v4.json vector from native source 9f092ea4847065d334c1c8f01a3fa87c88526b01 fails terminal receipt metadata. Legacy decoding supplies fee zero because legacy terminal bytes contain no fee schedule, but the shared metadata check requires equality with the nonzero receipt fee schedule. Rust verified_terminal_outcome validates ABI, runtime, metering and usage for Legacy and validates fee schedule only for CandidateV4. Both existing Python functions remain intact."
+assumption = "PYTHONPATH=agent/sdk/python python3 platform/sdk/conformance/terminal-v4.test.py exits 1 in qual-logs/python-terminal-v4.log with only the principal-v4 subcase failing. The executed-v4 subcase reconstructs the applied root and verifies the V2 authority attachment; the signed mutated-leg-v4 subcase authenticates then refuses applied transfer root; executed-v3 returns recorded_terminal_root_not_locally_reconstructable. make agent-test-sdk-py passes 34 tests in qual-logs/python-sdk-final.log after packaging original V3 evidence with the existing fixture packager. Full terminal qualification remains blocked by the legacy metadata check conflict; other SDK ports are not implemented."
+severity = "blocker"
+
+[observation.6.11.terminal-v4-python-gates]
+task = "6.11"
+file = "platform/sdk/conformance/terminal-v4.test.py"
+symbol = "TerminalV4"
+observed = "CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4 make agent-test-sdk-py exits 0 with 34 tests in qual-logs/python-sdk-final.log. CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4 make programs-abi-drift exits 0 including both abi_linker tests in qual-logs/terminal-abi-drift.log. CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4 LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin make programs-check-executed-fixture exits 0 in qual-logs/terminal-executed-fixture.log. git diff --check exits 0 in qual-logs/terminal-diff-check.log."
+assumption = "These passing gates do not resolve terminal-v4-legacy-metadata. Python changes remain unqualified and uncommitted, and TypeScript, Go, JVM, Swift and .NET ports remain unimplemented. The V4 fixture regeneration gate was not run because its native producer and Rust proof sources are owned separately and were not imported."
+severity = "note"
+
+[observation.6.11.terminal-v4-legacy-metadata-reconciled]
+task = "6.11"
+file = "agent/sdk/python/layerx_sdk/program_wire.py agent/crates/layerx-proof/src/program.rs"
+symbol = "_bind_metadata verified_terminal_outcome candidate_matches"
+observed = "Python scopes fee-schedule equality to candidate ABI2 terminals, retaining ABI, runtime, metering and usage equality for every execution terminal. This matches Rust program.rs:321-336 for Legacy and program.rs:529-540 for CandidateV4. Legacy bytes encode no fee-schedule field. The fee equality remains enforced for CandidateV4; no receipt signature, usage, root or authority check changes."
+assumption = "The prior legacy metadata conflict is resolved by the reference verifier contract. Executed qualification is recorded separately."
+severity = "note"
+
+[observation.6.11.terminal-v4-python-native-producer-blocked]
+task = "6.11"
+file = "tests/programs/test_call_activity.c agent/crates/layerx-proof/tests/terminal_v4.rs Makefile platform/sdk/conformance/fixtures/generate_executed_program_v4_fixture.py"
+symbol = "TerminalV4 main programs-check-executed-v4-fixture"
+observed = "PYTHONPATH=agent/sdk/python python3 platform/sdk/conformance/terminal-v4.test.py exits 0 in qual-logs/pass4-python-terminal-v4.log, including executed-v4, principal-v4, signed mutated-leg refusal, recorded V3 outcome, truncation and trailing-byte negatives. make agent-test-sdk-py exits 0 with eight generator tests and 34 Python tests plus compileall in qual-logs/pass4-python-sdk.log. LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin make programs-check-executed-fixture exits 0 in qual-logs/pass4-executed-fixture.log. All make gates use CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4. git diff --check exits 0 in qual-logs/pass4-diff-check.log."
+assumption = "LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin make programs-check-executed-fixture programs-check-executed-v4-fixture exits 2 in qual-logs/pass4-executed-fixtures.log. The imported V4 recipe runs programs-build, make build/tests/programs_call_activity, then the generator with --encoder build/tests/programs_call_activity --check. The producer exits 1 on --stored-historical-v1 before V4 generation. Local tests/programs/test_call_activity.c lacks the imported generator's command modes, and agent/crates/layerx-proof/tests/terminal_v4.rs is absent. The generator does not read LAYERX_TEST_NATIVE_BIN_DIR; the supplied directory contains layerxd, layerx-genesis-build and layerxctl only. Native C/Rust dependencies require integration outside this ownership. Python publication and SDK mirrors remain blocked by the required V4 regeneration gate."
+severity = "blocker"
+
+[observation.6.11.terminal-v4-stored-input-qualification]
+task = "6.11"
+file = "platform/sdk/conformance/terminal-v4.test.py platform/sdk/conformance/fixtures/generate_executed_program_v4_fixture.py"
+symbol = "TerminalV4 programs-check-executed-v4-fixture"
+observed = "PYTHONPATH=agent/sdk/python python3 platform/sdk/conformance/terminal-v4.test.py, make agent-test-sdk-py, LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin make programs-check-executed-fixture, make programs-abi-drift and git diff --check each exit 0. Logs: qual-logs/pass5-python-terminal-v4.log, qual-logs/pass5-python-sdk.log, qual-logs/pass5-executed-fixture.log, qual-logs/pass5-abi-drift.log and qual-logs/pass5-diff-check.log. Make commands use CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4."
+assumption = "V4 fixtures are stored authenticated inputs. qual-logs/terminal-native-import.log establishes byte identity of the generator and executed-v4, principal-v4 and mutated-leg-v4 vectors to native 9f092ea4; V3 retains original native fields with existing packaging. programs-check-executed-v4-fixture was not run here: regeneration requires the separately owned C producer and Rust terminal_v4 proof test supplied by PR #94. PR #99 integrates after PR #94. This supersedes the local regeneration prerequisite in terminal-v4-python-native-producer-blocked; it does not assert that regeneration ran or that native qualification passed here."
+severity = "note"
+
+[observation.6.11.terminal-v4-typescript]
+task = "6.11"
+file = "agent/sdk/typescript/src/program-wire.ts agent/sdk/typescript/test/program-executed-v3.test.ts"
+symbol = "decodeAndVerifyProgramTerminal"
+observed = "CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4 make agent-test-sdk-ts exits 0 in qual-logs/pass5-ts-sdk-final.log; git diff --check exits 0 in qual-logs/pass5-ts-diff-check.log. Signed shared V4 and principal-V4 reconstruct, mutated-leg-V4 authenticates then rejects, V3 reports recorded root, and truncated/trailing terminals reject."
+assumption = "Initial SDK gate exits 2 for missing tsc in qual-logs/pass5-ts-sdk.log. npm --prefix agent/sdk/typescript ci --ignore-scripts --no-audit --no-fund exits 0 in qual-logs/pass5-ts-dependencies.log. The subsequent compile exits 2 in qual-logs/pass5-ts-sdk-rerun.log until the existing typed V3 test outcome explicitly supplies its canonical zero applied-leg digest. Stored native vectors and native regeneration scope remain as recorded in terminal-v4-stored-input-qualification."
+severity = "note"
+
+[observation.6.11.terminal-v4-go]
+task = "6.11"
+file = "platform/sdk/go/programs.go platform/sdk/go/terminal_v4_test.go"
+symbol = "VerifyProgramReceipt TestSignedTerminalV4Vectors"
+observed = "CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4 sh platform/sdk/conformance/run-go.sh /root/lx-lanes/terminal exits 0 in qual-logs/pass5-go-sdk.log, including generator drift check, all Go tests and conformance. git diff --check exits 0 in qual-logs/pass5-go-diff-check.log. All four signed shared vectors authenticate; V4 positives reconstruct, mutated-leg rejects, V3 reports recorded root, malformed terminals reject and empty applied legs require zero root."
+assumption = "The Go SDK command is the exact individual recipe exposed by platform-verify-sdks in platform/Makefile.inc. No separate Go SDK Make target exists. Stored native inputs use the provenance and regeneration boundary recorded in terminal-v4-stored-input-qualification."
+severity = "note"
+
+[observation.6.11.terminal-v4-jvm]
+task = "6.11"
+file = "platform/sdk/jvm/src/main/java/com/sidiora/layerx/sdk/ProgramsClient.java platform/sdk/jvm/src/main/java/com/sidiora/layerx/sdk/verify/LocalVerifier.java"
+symbol = "verifyTerminal TerminalV4Test"
+observed = "CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4 sh platform/sdk/conformance/run-jvm.sh /root/lx-lanes/terminal exits 0 in qual-logs/pass6-jvm-sdk-final.log, including generator drift, 33 JVM tests and conformance. All four shared signed vectors authenticate; V4 positives reconstruct, signed mutated-leg rejects, V3 reports recorded root, truncated and trailing terminals reject. git diff --check exits 0 in qual-logs/pass6-jvm-diff-check.log."
+assumption = "The generator refreshed only the JVM verifier digest in platform/sdk/pipeline.kvx. Initial SDK and focused commands exit 1 in qual-logs/pass6-jvm-sdk.log and qual-logs/pass6-jvm-focused.log because the generic nonempty text reader rejects the canonical empty response; response decoding now uses its string type and existing empty-permitted bounded hex contract. Stored vectors and native regeneration scope remain as recorded in terminal-v4-stored-input-qualification."
+severity = "note"
+
+[observation.6.11.terminal-v4-swift]
+task = "6.11"
+file = "platform/sdk/swift/Sources/LayerXSDK/Programs.swift platform/sdk/swift/Sources/LayerXSDK/Verifier.swift platform/sdk/swift/Tests/LayerXSDKTests/ReceiptFixtureTests.swift"
+symbol = "verifyTerminal testSignedTerminalV4Vectors"
+observed = "swift build --disable-automatic-resolution --package-path platform/sdk/swift -j 4 and swift test --disable-automatic-resolution --package-path platform/sdk/swift -j 4 each exit 0 in qual-logs/pass6-swift-build.log and qual-logs/pass6-swift-test.log. All 16 tests pass, including the four signed shared vectors, V4 root reconstruction, authenticated mutated-leg refusal, V3 recorded-root reporting, truncation and trailing-byte refusal, and zero-root empty legs. git diff --check exits 0 in qual-logs/pass6-swift-diff-check.log."
+assumption = "Commands are the individual Swift build and test recipes from platform/Makefile.inc platform-verify-sdks, with four jobs. CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4 are exported. Dependencies and build outputs remain local and untracked. Stored input provenance and native regeneration scope remain as recorded in terminal-v4-stored-input-qualification."
+severity = "note"
+
+[observation.6.11.terminal-v4-dotnet]
+task = "6.11"
+file = "platform/sdk/dotnet/Programs.cs platform/sdk/dotnet/Verifier.cs platform/sdk/dotnet/tests/LayerX.Sdk.Tests/ReceiptFixtureTests.cs"
+symbol = "VerifyTerminal SignedTerminalV4Vectors"
+observed = "dotnet restore platform/sdk/dotnet/tests/LayerX.Sdk.Tests/LayerX.Sdk.Tests.csproj --nologo exits 0 in qual-logs/pass6-dotnet-restore.log. dotnet build platform/sdk/dotnet/LayerX.Sdk.csproj --no-restore --configuration Release --nologo exits 0 with zero warnings and errors in qual-logs/pass6-dotnet-build.log. dotnet test platform/sdk/dotnet/tests/LayerX.Sdk.Tests/LayerX.Sdk.Tests.csproj --no-restore --nologo exits 0 with all 17 tests and no skips in qual-logs/pass6-dotnet-test.log. git diff --check exits 0 in qual-logs/pass6-dotnet-diff-check.log."
+assumption = "The full SDK test suite includes all four signed shared vectors, V4 reconstruction, authenticated mutated-leg transfer-root refusal, V3 recorded-root reporting, truncation and trailing-byte refusal, and zero-root empty legs. Build and test commands are the individual dotnet recipes from platform/Makefile.inc platform-verify-sdks. CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4 are exported. Stored inputs and native regeneration scope remain as recorded in terminal-v4-stored-input-qualification."
+severity = "note"
+
+[observation.6.11.terminal-v4-six-sdk-integration]
+task = "6.11"
+file = "agent/sdk/python/layerx_sdk/program_wire.py agent/sdk/typescript/src/program-wire.ts platform/sdk/go/programs.go platform/sdk/jvm/src/main/java/com/sidiora/layerx/sdk/ProgramsClient.java platform/sdk/swift/Sources/LayerXSDK/Programs.swift platform/sdk/dotnet/Programs.cs"
+symbol = "decode_and_verify_program_terminal decodeAndVerifyProgramTerminal VerifyProgramReceipt verifyTerminal VerifyTerminal"
+observed = "The six SDK mirrors are individually qualified on authenticated shared inputs. JVM has 33 passing tests and conformance in qual-logs/pass6-jvm-sdk-final.log; Swift build and 16 tests pass in qual-logs/pass6-swift-build.log and qual-logs/pass6-swift-test.log; dotnet Release build and 17 tests pass in qual-logs/pass6-dotnet-build.log and qual-logs/pass6-dotnet-test.log. After rebasing on origin/main d63c2fb5, make agent-test-sdk-py, make agent-test-sdk-ts, LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin make programs-check-executed-fixture, make programs-abi-drift and git diff --check each exit 0. Logs are qual-logs/pass6-final-python-sdk.log, qual-logs/pass6-final-typescript-sdk.log, qual-logs/pass6-final-executed-fixture.log, qual-logs/pass6-final-abi-drift.log and qual-logs/pass6-final-diff-check.log. CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4 are exported. Both abi_linker tests pass."
+assumption = "V4 fixtures remain stored authenticated inputs under terminal-v4-stored-input-qualification. programs-check-executed-v4-fixture was not run here; native regeneration belongs to its separately owned producer and proof test. Individual SDK recipes do not assert that the aggregate platform-verify-sdks target ran. Go and JVM source plus the pipeline lock are unchanged from their tested commits across rebase. No task statuses change."
+severity = "note"
+
+[observation.6.11.terminal-v4-integration-compiler-warnings]
+task = "6.11"
+file = "programs/crates/layerx-programs-runtime/src/abi/capability.rs programs/crates/layerx-programs-runtime/src/abi/context.rs programs/crates/layerx-programs-runtime/src/abi/mod.rs programs/crates/layerx-programs-runtime/src/calls.rs programs/crates/layerx-programs-runtime/src/execute.rs programs/crates/layerx-programs-runtime/src/fault.rs programs/crates/layerx-programs-runtime/src/ffi_call.rs programs/crates/layerx-programs-runtime/src/occupancy.rs programs/crates/layerx-programs-runtime/src/schedule.rs programs/crates/layerx-programs-runtime/src/storage/mod.rs programs/crates/layerx-programs-runtime/src/transfer.rs programs/crates/layerx-programs-sandbox/src/escrow.rs programs/crates/layerx-programs-sandbox/src/execute.rs programs/crates/layerx-programs-sandbox/src/usage.rs programs/porting/cosmwasm/src/qualify.rs programs/porting/cosmwasm/src/shared_orderbook.rs programs/porting/evm/src/qualify.rs programs/porting/solana/src/qualify.rs"
+symbol = "programs-check-executed-fixture programs-abi-drift"
+observed = "Passing fixture and ABI gates emit private-interface, unused-import, unused-variable and dead-code warnings from existing Programs runtime, sandbox and porting sources. Exact diagnostics are retained in qual-logs/pass6-final-executed-fixture.log and qual-logs/pass6-final-abi-drift.log."
+assumption = "These sources are outside SDK ownership and were not modified. No warning or assertion was disabled."
+severity = "note"
+
+[observation.6.11.native-terminal-merged-input-contract]
+task = "6.11"
+file = "platform/sdk/conformance/fixtures/generate_executed_program_fixture.py platform/sdk/conformance/fixtures/receipt-programs-executed-v3.json agent/sdk/python/tests/test_native_program_binding.py agent/sdk/typescript/test/receipt-fixture.test.ts"
+symbol = "fixture NativeProgramBindingTest"
+observed = "After merging terminal dd363b46, LAYERX_TEST_NATIVE_BIN_DIR=build/bin make programs-check-executed-fixture exits 2 with ValueError: unexpected native execution fixture fields at packager line 43. The merge retains every prior native historical field exactly and adds the terminal metadata, proven by qual-logs/n15-merge-fixture-preservation.json. make programs-check-executed-v4-fixture exits 0. make agent-test-sdk-py exits 2 because the guest_abi mismatch case does not raise ValueError. After dependency installation, make agent-test-sdk-ts exits 2 with mismatched native field accepted. Raw logs: qual-logs/n15-executed.log, qual-logs/n15-executed-v4.log, qual-logs/n15-sdk-py.log, qual-logs/n15-sdk-ts-rerun.log."
+assumption = "The stored historical evidence and SDK assertions are retained. The producer input-key contract and native guest-ABI mismatch tests require reconciliation by their owners. No SDK source or assertion is changed here."
+severity = "blocker"
+
+[observation.6.11.native-historical-metadata-precheck]
+task = "6.11"
+file = "tests/programs/test_call_activity.c platform/sdk/conformance/fixtures/receipt-programs-executed-v3.json platform/sdk/conformance/fixtures/generate_native_lifecycle_fixtures.py"
+symbol = "stored_fixture_hex stored_historical_receipt"
+observed = "build/tests/programs_call_activity --post-upgrade-batch exits 1 without diagnostic output in qual-logs/n15-post-upgrade.log. make programs-check-native-lifecycle-fixtures exits 2 because --stored-historical-v3 returns 1, in qual-logs/n15-lifecycle.log. The merged fixture contains two receipt_digest_hex markers, retained in qual-logs/n15-historical-field-counts.json; stored_fixture_hex rejects a second marker before receipt decoding."
+assumption = "Both entrypoints execute the same historical precheck. Preserve duplicate-field rejection and all original signed evidence while reconciling the shared fixture representation. Post-upgrade execution is not qualified by the failing precheck."
+severity = "blocker"
+
+[observation.6.11.runtime-strict-transfer-api-coordination]
+task = "6.11"
+file = "programs/crates/layerx-programs-runtime/src/transfer.rs programs/crates/layerx-programs-runtime/src/ffi_transfer.rs programs/crates/layerx-programs-sandbox/src/host_ffi.rs programs/crates/layerx-programs-sandbox/src/usage.rs"
+symbol = "TransferCapability::settle_authorized_set reserve_host_sandbox_escrow_charge sandbox_escrow_charge_root"
+observed = "The strict runtime all-targets host-ffi Clippy location pipeline records cargo exit 101 and grep/sort/uniq exits 0 in qual-logs/n15-clippy-pipeline-exits.txt. The remaining diagnostics within the edited runtime file group are transfer.rs:651 unused_self and transfer.rs:983,1024 too_many_arguments. calls.rs, execute.rs, ffi_call.rs and crypto have no remaining locations. Full location inventory: qual-logs/n15-clippy-locations.log; diagnostic text: qual-logs/n15-runtime-clippy-second.log. The full locked runtime tests with interpreter Wasm, make check, make programs-abi-drift and the artifacts ASan target each exit 0 in qual-logs/n15-runtime-test.log, qual-logs/n15-check.log, qual-logs/n15-abi-drift.log and qual-logs/n15-artifacts-asan.log. Tested source contents are bound by qual-logs/n15-tested-source.json."
+assumption = "The associated settlement call requires its ffi_transfer.rs caller to change. Grouping both public sandbox escrow functions requires the sandbox host_ffi.rs and usage.rs callers to change; the fixed-field SandboxEscrowCharge type now supports that follow-up. Those callers are outside the authorized file split. No assertion, bound or lint check is relaxed. Strict runtime Clippy is not qualified, and remaining locations are not all outside the edited file group."
+severity = "blocker"
