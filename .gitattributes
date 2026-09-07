@@ -3,6 +3,8 @@
 *.c text diff=c
 *.h text diff=c
 *.sol text
+*.rs text diff=rust
+*.go text diff=golang
 *.sh text eol=lf
 Makefile text eol=lf
 *.md text diff=markdown
@@ -13,10 +15,19 @@ Makefile text eol=lf
 *.yaml text
 *.json text
 
+*.png binary
+*.wasm binary
 *.bin binary
 *.lxb binary
 *.lxv binary
 *.vsix binary
+
+Cargo.lock -diff
+**/Cargo.lock -diff
+package-lock.json -diff
+**/package-lock.json -diff
+go.sum -diff
+**/go.sum -diff
 
 programs/vendor/** -text -eol whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab conflict-marker-size=255
 spec/layerx-beta/qualification.kvx merge=union
