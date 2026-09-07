@@ -29,7 +29,7 @@ The Cosmos-style chain identifier used by node distribution is `hyperpax_125-1` 
 | `node/` | Application wiring, genesis, upgrades |
 | `modules/` | Paxeer chain modules (`evm`, `epoch`, `mint`, `oracle`, `tokenfactory`) |
 | `rpc/` | EVM JSON-RPC compatibility |
-| `contracts/` | Paxeer-native Solidity (WPAX, pointers, precompile interfaces) — not the LayerX settlement contracts |
+| `contracts/` | Paxeer-native Solidity (WPAX, pointers, precompile interfaces) - not the LayerX settlement contracts |
 | `consensus/`, `sdk/`, `storage/` | Consensus, Cosmos SDK fork, storage engines |
 | `docker/` | Local single-node and cluster compose |
 | `hpx/` | Native `paxd` distribution and peer registry tooling |
@@ -79,8 +79,8 @@ A successful local run is development evidence. It is not authorization to deplo
 
 Start in [`docs/`](docs/):
 
-- [`docs/README.md`](docs/README.md) — subtree docs index and OpenAPI/Swagger generation
-- [`docs/evm_jsonrpc_unsupported.md`](docs/evm_jsonrpc_unsupported.md) — EVM JSON-RPC methods that return a documented error
+- [`docs/README.md`](docs/README.md) - subtree docs index and OpenAPI/Swagger generation
+- [`docs/evm_jsonrpc_unsupported.md`](docs/evm_jsonrpc_unsupported.md) - EVM JSON-RPC methods that return a documented error
 
 LayerX protocol behavior, including how checkpoints and custody bind to Paxeer, is specified under [`spec/layerx-protocol/`](../spec/layerx-protocol/).
 
