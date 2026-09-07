@@ -280,10 +280,7 @@ fn event_chain_program(event_count: usize, child: Option<(ProgramId, &Capability
             (CALL_ENTRY_EXPORT, 0, 3),
             ("memory", 2, 0),
         ]),
-        code_section(&[
-            func_body(&[], &[0x41, 0, 0x0b]),
-            func_body(&[], &entry),
-        ]),
+        code_section(&[func_body(&[], &[0x41, 0, 0x0b]), func_body(&[], &entry)]),
         data_section(&data),
     ])
 }
@@ -453,8 +450,7 @@ fn execute_unbudgeted_with_output_limit(
     children: &[(ProgramId, Vec<u8>)],
     grants: CapabilitySet,
     rules: CompositionRules,
-    output_values: u32,
-    output_bytes: u64,
+    output_limits: (u32, u64),
     mut storage: Storage,
 ) -> (
     Result<
@@ -463,6 +459,7 @@ fn execute_unbudgeted_with_output_limit(
     >,
     Storage,
 ) {
+    let (output_values, output_bytes) = output_limits;
     let engine = WasmEngine::declared().unwrap_or_else(|error| panic!("engine: {error}"));
     let root = engine
         .validate(root_wasm)
@@ -990,8 +987,7 @@ fn production_edge_boundary_and_one_past_are_independently_typed() {
         &children,
         grants.clone(),
         CompositionRules::declared(),
-        65,
-        1_048_576,
+        (65, 1_048_576),
         Storage::new(),
     );
     let success = outcome.unwrap_or_else(|error| panic!("edge-sixty-four control: {error}"));
@@ -1009,8 +1005,7 @@ fn production_edge_boundary_and_one_past_are_independently_typed() {
         &children,
         grants.clone(),
         CompositionRules::declared(),
-        64,
-        1_048_576,
+        (64, 1_048_576),
         before.clone(),
     );
     assert_eq!(
@@ -1089,11 +1084,8 @@ fn nested_guest_event_aggregate_accepts_sixty_four_and_rolls_back_sixty_five() {
     let child = id(121);
     let delegated = CapabilitySet::new([Capability::EmitEvent])
         .unwrap_or_else(|error| panic!("delegated event capability: {error}"));
-    let grants = CapabilitySet::new([
-        Capability::EmitEvent,
-        Capability::Call { program: child },
-    ])
-    .unwrap_or_else(|error| panic!("root event capabilities: {error}"));
+    let grants = CapabilitySet::new([Capability::EmitEvent, Capability::Call { program: child }])
+        .unwrap_or_else(|error| panic!("root event capabilities: {error}"));
     let root_wasm = event_chain_program(32, Some((child, &delegated)));
 
     let (outcome, _) = execute_unbudgeted_with_output_limit(
@@ -1102,8 +1094,7 @@ fn nested_guest_event_aggregate_accepts_sixty_four_and_rolls_back_sixty_five() {
         &[(child, event_chain_program(32, None))],
         grants.clone(),
         CompositionRules::declared(),
-        64,
-        64,
+        (64, 64),
         Storage::new(),
     );
     let success = outcome.unwrap_or_else(|error| panic!("sixty-four events: {error}"));
@@ -1117,8 +1108,7 @@ fn nested_guest_event_aggregate_accepts_sixty_four_and_rolls_back_sixty_five() {
         &[(child, event_chain_program(33, None))],
         grants,
         CompositionRules::declared(),
-        64,
-        64,
+        (64, 64),
         before.clone(),
     );
     assert_eq!(

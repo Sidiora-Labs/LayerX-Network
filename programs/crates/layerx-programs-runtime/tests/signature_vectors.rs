@@ -149,11 +149,12 @@ fn secp256k1_verify_accepts_compressed_public_key() {
     );
 
     // Wycheproof ecdsa_secp256k1_sha256 tcId 3; signatures/sources.json.
-    let digest =
-        hex::decode("bb5a52f42f9c9261ed4361f59422a1e30036e7c32b270c8807a419feca605023").unwrap();
+    let digest = hex::decode("bb5a52f42f9c9261ed4361f59422a1e30036e7c32b270c8807a419feca605023")
+        .unwrap_or_else(|error| panic!("{}: {error:?}", "required value"));
     let public_key =
-        hex::decode("02782c8ed17e3b2a783b5464f33b09652a71c678e05ec51e84e2bcfc663a3de963").unwrap();
-    let signature = hex::decode("d035ee1f17fdb0b2681b163e33c359932659990af77dca632012b30b27a057b31939d9f3b2858bc13e3474cb50e6a82be44faa71940f876c1cba4c3e989202b6").unwrap();
+        hex::decode("02782c8ed17e3b2a783b5464f33b09652a71c678e05ec51e84e2bcfc663a3de963")
+            .unwrap_or_else(|error| panic!("{}: {error:?}", "required value"));
+    let signature = hex::decode("d035ee1f17fdb0b2681b163e33c359932659990af77dca632012b30b27a057b31939d9f3b2858bc13e3474cb50e6a82be44faa71940f876c1cba4c3e989202b6").unwrap_or_else(|error| panic!("{}: {error:?}", "required value"));
     assert_eq!(verify_secp256k1(&digest, &public_key, &signature), Ok(()));
 }
 
@@ -169,10 +170,10 @@ fn secp256k1_verify_accepts_uncompressed_public_key() {
     );
 
     // Wycheproof ecdsa_secp256k1_sha256 tcId 3; signatures/sources.json.
-    let digest =
-        hex::decode("bb5a52f42f9c9261ed4361f59422a1e30036e7c32b270c8807a419feca605023").unwrap();
-    let public_key = hex::decode("04782c8ed17e3b2a783b5464f33b09652a71c678e05ec51e84e2bcfc663a3de963af9acb4280b8c7f7c42f4ef9aba6245ec1ec1712fd38a0fa96418d8cd6aa6152").unwrap();
-    let signature = hex::decode("d035ee1f17fdb0b2681b163e33c359932659990af77dca632012b30b27a057b31939d9f3b2858bc13e3474cb50e6a82be44faa71940f876c1cba4c3e989202b6").unwrap();
+    let digest = hex::decode("bb5a52f42f9c9261ed4361f59422a1e30036e7c32b270c8807a419feca605023")
+        .unwrap_or_else(|error| panic!("{}: {error:?}", "required value"));
+    let public_key = hex::decode("04782c8ed17e3b2a783b5464f33b09652a71c678e05ec51e84e2bcfc663a3de963af9acb4280b8c7f7c42f4ef9aba6245ec1ec1712fd38a0fa96418d8cd6aa6152").unwrap_or_else(|error| panic!("{}: {error:?}", "required value"));
+    let signature = hex::decode("d035ee1f17fdb0b2681b163e33c359932659990af77dca632012b30b27a057b31939d9f3b2858bc13e3474cb50e6a82be44faa71940f876c1cba4c3e989202b6").unwrap_or_else(|error| panic!("{}: {error:?}", "required value"));
     assert_eq!(verify_secp256k1(&digest, &public_key, &signature), Ok(()));
 }
 
@@ -240,26 +241,29 @@ fn secp256k1_recover_zero_vector_fails() {
 
 #[test]
 fn ed25519_published_test_vector_1() {
-    let message = hex::decode("").unwrap();
+    let message = hex::decode("").unwrap_or_else(|error| panic!("{}: {error:?}", "required value"));
     let public_key =
-        hex::decode("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a").unwrap();
+        hex::decode("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a")
+            .unwrap_or_else(|error| panic!("{}: {error:?}", "required value"));
     let signature = hex::decode(
         "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b",
     )
-    .unwrap();
+    .unwrap_or_else(|error| panic!("{}: {error:?}", "required value"));
 
     assert!(verify_ed25519(&message, &public_key, &signature).is_ok());
 }
 
 #[test]
 fn ed25519_published_test_vector_2() {
-    let message = hex::decode("72").unwrap();
+    let message =
+        hex::decode("72").unwrap_or_else(|error| panic!("{}: {error:?}", "required value"));
     let public_key =
-        hex::decode("3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c").unwrap();
+        hex::decode("3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c")
+            .unwrap_or_else(|error| panic!("{}: {error:?}", "required value"));
     let signature = hex::decode(
         "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da085ac1e43e15996e458f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c00",
     )
-    .unwrap();
+    .unwrap_or_else(|error| panic!("{}: {error:?}", "required value"));
 
     assert!(verify_ed25519(&message, &public_key, &signature).is_ok());
 }
@@ -267,21 +271,21 @@ fn ed25519_published_test_vector_2() {
 #[test]
 fn secp256k1_verify_published_test_vector_1() {
     // Wycheproof ecdsa_secp256k1_sha256 tcId 3; signatures/sources.json.
-    let digest =
-        hex::decode("bb5a52f42f9c9261ed4361f59422a1e30036e7c32b270c8807a419feca605023").unwrap();
-    let public_key = hex::decode("04782c8ed17e3b2a783b5464f33b09652a71c678e05ec51e84e2bcfc663a3de963af9acb4280b8c7f7c42f4ef9aba6245ec1ec1712fd38a0fa96418d8cd6aa6152").unwrap();
-    let signature = hex::decode("d035ee1f17fdb0b2681b163e33c359932659990af77dca632012b30b27a057b31939d9f3b2858bc13e3474cb50e6a82be44faa71940f876c1cba4c3e989202b6").unwrap();
+    let digest = hex::decode("bb5a52f42f9c9261ed4361f59422a1e30036e7c32b270c8807a419feca605023")
+        .unwrap_or_else(|error| panic!("{}: {error:?}", "required value"));
+    let public_key = hex::decode("04782c8ed17e3b2a783b5464f33b09652a71c678e05ec51e84e2bcfc663a3de963af9acb4280b8c7f7c42f4ef9aba6245ec1ec1712fd38a0fa96418d8cd6aa6152").unwrap_or_else(|error| panic!("{}: {error:?}", "required value"));
+    let signature = hex::decode("d035ee1f17fdb0b2681b163e33c359932659990af77dca632012b30b27a057b31939d9f3b2858bc13e3474cb50e6a82be44faa71940f876c1cba4c3e989202b6").unwrap_or_else(|error| panic!("{}: {error:?}", "required value"));
     assert_eq!(verify_secp256k1(&digest, &public_key, &signature), Ok(()));
 }
 
 #[test]
 fn secp256k1_recover_published_test_vector_1() {
-    let digest =
-        hex::decode("5905238877c77421f73e43ee3da6f2d9e2ccad5fc942dcec0cbd25482935faaf").unwrap();
+    let digest = hex::decode("5905238877c77421f73e43ee3da6f2d9e2ccad5fc942dcec0cbd25482935faaf")
+        .unwrap_or_else(|error| panic!("{}: {error:?}", "required value"));
     let signature = hex::decode(
         "f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9388f7b0f632de8140fe337e62a37f3566500a99934c2231b6cb9fd7584b8e672",
     )
-    .unwrap();
+    .unwrap_or_else(|error| panic!("{}: {error:?}", "required value"));
 
     let result = recover_secp256k1(&digest, &signature, 0);
     assert!(result.is_ok() || result.err() == Some(SignatureRefusal::RecoveryFailed));
@@ -316,11 +320,12 @@ fn malleable_signature_detection_ed25519() {
     // RFC 8032 sections 7.1 (TEST 1) and 5.1.7: valid signature, then S + L.
     let message = [];
     let public_key =
-        hex::decode("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a").unwrap();
-    let mut signature = hex::decode("e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b").unwrap();
+        hex::decode("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a")
+            .unwrap_or_else(|error| panic!("{}: {error:?}", "required value"));
+    let mut signature = hex::decode("e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b").unwrap_or_else(|error| panic!("{}: {error:?}", "required value"));
     assert_eq!(verify_ed25519(&message, &public_key, &signature), Ok(()));
-    let order =
-        hex::decode("edd3f55c1a631258d69cf7a2def9de1400000000000000000000000000000010").unwrap();
+    let order = hex::decode("edd3f55c1a631258d69cf7a2def9de1400000000000000000000000000000010")
+        .unwrap_or_else(|error| panic!("{}: {error:?}", "required value"));
     let mut carry = 0u16;
     for (scalar_byte, order_byte) in signature[32..].iter_mut().zip(order) {
         let sum = u16::from(*scalar_byte) + u16::from(order_byte) + carry;
