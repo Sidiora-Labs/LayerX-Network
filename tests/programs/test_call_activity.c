@@ -2384,17 +2384,47 @@ static int dump_lifecycle_vectors(void)
     return fflush(stdout) == 0 ? 0 : 1;
 }
 
+static int stored_fixture_field(const char *document, const char *field,
+                                const char **value)
+{
+    char marker[96];
+    const char *start = NULL, *cursor;
+    size_t depth = 0U;
+    int count = snprintf(marker, sizeof(marker), "\"%s\": ", field);
+    if (count < 0 || (size_t)count >= sizeof(marker)) return 1;
+    for (cursor = document; *cursor != '\0'; ++cursor) {
+        if (*cursor == '{' || *cursor == '[') {
+            ++depth;
+        } else if (*cursor == '}' || *cursor == ']') {
+            if (depth == 0U) return 1;
+            --depth;
+            if (depth == 0U) break;
+        } else if (*cursor == '"') {
+            if (depth == 1U && strncmp(cursor, marker, (size_t)count) == 0) {
+                if (start != NULL) return 1;
+                start = cursor;
+            }
+            for (++cursor; *cursor != '"'; ++cursor) {
+                if (*cursor == '\0') return 1;
+                if (*cursor == '\\') {
+                    ++cursor;
+                    if (*cursor == '\0') return 1;
+                }
+            }
+        }
+    }
+    if (start == NULL || depth != 0U) return 1;
+    *value = start + (size_t)count;
+    return 0;
+}
+
 static int stored_fixture_hex(const char *document, const char *field,
                                uint8_t *bytes, size_t capacity, size_t *length)
 {
-    char marker[96];
     const char *start, *end;
     size_t index;
-    int count = snprintf(marker, sizeof(marker), "\"%s\": \"", field);
-    if (count < 0 || (size_t)count >= sizeof(marker)) return 1;
-    start = strstr(document, marker);
-    if (start == NULL || strstr(start + (size_t)count, marker) != NULL) return 1;
-    start += (size_t)count;
+    if (stored_fixture_field(document, field, &start) != 0 || *start != '"') return 1;
+    ++start;
     end = strchr(start, '"');
     if (end == NULL || (size_t)(end - start) % 2U != 0U ||
         (size_t)(end - start) / 2U > capacity) return 1;
@@ -2410,6 +2440,35 @@ static int stored_fixture_hex(const char *document, const char *field,
         }
         bytes[index] = value;
     }
+    return 0;
+}
+
+static int stored_fixture_hex_nesting_case(void)
+{
+    static const char duplicate[] =
+        "{\"receipt_digest_hex\": \"ab\", \"receipt_digest_hex\": \"cd\"}";
+    static const char nested_first[] =
+        "{\"expected\": {\"receipt_digest_hex\": \"cd\"}, \"receipt_digest_hex\": \"ab\"}";
+    static const char nested_last[] =
+        "{\"receipt_digest_hex\": \"ab\", \"expected\": {\"receipt_digest_hex\": \"cd\"}}";
+    static const char nested_only[] =
+        "{\"expected\": {\"receipt_digest_hex\": \"cd\"}}";
+    const char *expected;
+    uint8_t bytes[1];
+    size_t length;
+    if (stored_fixture_hex(duplicate, "receipt_digest_hex", bytes, sizeof(bytes), &length) == 0 ||
+        stored_fixture_hex(nested_only, "receipt_digest_hex", bytes, sizeof(bytes), &length) == 0)
+        return 1;
+    if (stored_fixture_hex(nested_first, "receipt_digest_hex", bytes, sizeof(bytes), &length) != 0 ||
+        length != 1U || bytes[0] != 0xabU ||
+        stored_fixture_hex(nested_last, "receipt_digest_hex", bytes, sizeof(bytes), &length) != 0 ||
+        length != 1U || bytes[0] != 0xabU)
+        return 1;
+    if (stored_fixture_field(nested_first, "expected", &expected) != 0 ||
+        *expected != '{' ||
+        stored_fixture_hex(expected, "receipt_digest_hex", bytes, sizeof(bytes), &length) != 0 ||
+        length != 1U || bytes[0] != 0xcdU)
+        return 1;
     return 0;
 }
 
@@ -2453,6 +2512,7 @@ static int stored_historical_lifecycle(const char *path)
 static int stored_historical_receipt(const char *path, uint16_t protocol_version)
 {
     char document[32768];
+    const char *authorized_batch, *digest_document;
     uint8_t canonical[4096], public_key[32], expected_digest[32], digest[32];
     static uint8_t arena_bytes[LXP_MAX_ACTIVITY_BYTES];
     size_t length, canonical_length, key_length, digest_length;
@@ -2465,9 +2525,15 @@ static int stored_historical_receipt(const char *path, uint16_t protocol_version
     if (ferror(file) || !feof(file)) { (void)fclose(file); return 1; }
     if (fclose(file) != 0) return 1;
     document[length] = '\0';
-    if (stored_fixture_hex(document, "canonical_receipt_hex", canonical, sizeof(canonical), &canonical_length) != 0 ||
-        stored_fixture_hex(document, "sequencer_public_key_hex", public_key, sizeof(public_key), &key_length) != 0 ||
-        stored_fixture_hex(document, "receipt_digest_hex", expected_digest, sizeof(expected_digest), &digest_length) != 0 ||
+    digest_document = document;
+    if (protocol_version == 1U &&
+        (stored_fixture_field(document, "expected", &digest_document) != 0 ||
+         *digest_document != '{')) return 1;
+    if (stored_fixture_field(document, "authorized_batch", &authorized_batch) != 0 ||
+        *authorized_batch != '{' ||
+        stored_fixture_hex(document, "canonical_receipt_hex", canonical, sizeof(canonical), &canonical_length) != 0 ||
+        stored_fixture_hex(authorized_batch, "sequencer_public_key_hex", public_key, sizeof(public_key), &key_length) != 0 ||
+        stored_fixture_hex(digest_document, "receipt_digest_hex", expected_digest, sizeof(expected_digest), &digest_length) != 0 ||
         key_length != 32U || digest_length != 32U ||
         lxp_arena_init(&arena, arena_bytes, sizeof(arena_bytes)) != LXP_OK ||
         lxp_receipt_decode(canonical, canonical_length, true, &receipt) != LXP_OK ||
@@ -2491,6 +2557,7 @@ static int stored_historical_receipt(const char *path, uint16_t protocol_version
 
 int main(int argc, char **argv)
 {
+    if (stored_fixture_hex_nesting_case() != 0) return 1;
     if (argc == 3 && strcmp(argv[1], "--stored-historical-lifecycle") == 0)
         return stored_historical_lifecycle(argv[2]);
     if (argc == 3 && strcmp(argv[1], "--stored-historical-v1") == 0)
