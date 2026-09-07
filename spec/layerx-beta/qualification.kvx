@@ -1200,6 +1200,92 @@ file = "contracts/config/StaticConfig.sol"
 symbol = "Config hashForProtocol PaxeerBetaDeploymentValidator PaxeerBetaDeploy"
 observed = "Custody-first genesis is circular with the settlement deployment: StaticConfig requires three distinct nonzero genesis commitments (LXGD/LXRR roots) as constructor inputs and hashes them into the component config, so they are part of the vault runtime bytecode; the custody credit profile pins that vault runtime SHA256 and address into genesis; and PaxeerBetaDeploy derives deployment and address prediction from already-produced genesis artifacts. No script ordering in platform/hosted/paxeer/deploy-contracts.sh can satisfy both without manufacturing roots. Evidence: lane custody-funding-2 pass 2 STATUS.md item 4 and NEEDS.md; PR #105."
 assumption = "Owner decision: the beta bootstraps with ordinary genesis and registers the vault through the existing custody-credit registration path after genesis; the custody-first genesis path remains unqualified for the beta and any contract-level resolution (post-genesis commitment setter behind validator and timelock, two-phase vault, or removing the runtime pin from the profile) is deferred to a later protocol change. No settlement contract, validator, deploy script or profile check is altered for the beta on this basis."
+[observation.6.7.cluster-status-publisher]
+task = "6.7"
+file = "platform/hosted/tests/topology-check.sh"
+symbol = "SEPARATELY_OPERATED"
+observed = "platform/hosted/tests/topology-check.sh --strict exits 1: 24 edges, 23 checked, one external status-publisher.layerx-status.svc.cluster.local:443 edge, zero policy failures. The status publisher has no repository server or manifest in the checked topology. Evidence: /root/lx-lanes/cluster/qual-logs/topology-strict.log. tools/ci/beta-contract-check.sh exits 0; evidence: /root/lx-lanes/cluster/qual-logs/contract-check.log."
+assumption = "The strict refusal and status publication edge remain intact. A real status publishing service and its deployment contract are required before this gate can pass."
+severity = "blocker"
+
+[observation.6.7.custody-bootstrap-order]
+task = "6.7"
+file = "platform/hosted/tests/beta-cluster.sh"
+symbol = "wait_for_node_genesis paxeer_contracts_deploy"
+observed = "The explicit custody profile input reaches layerx-genesis-build, whose generated descriptor and registration request feed the existing real settlement deployment. A 207-byte LXBC1 profile binds chain genesis, vault address, runtime hash, asset, attestor authority and network. Cluster bootstrap creates LayerX genesis before deploying the vault. A real matching profile and a resolved vault/profile deployment order are required for positive custody qualification. Ordinary deferred-settlement bootstrap, six malformed or nonregular profile refusal cases, and signed custody genesis generation from the retained real chain-31337/network-17 profile pass with /root/lx-lanes/native-bin binaries. Custody bootstrap emits no LXGR; publication requires matching deployed CheckpointRegistry getters against the native descriptor and registration request; evidence: /root/lx-lanes/cluster/qual-logs/bootstrap-inputs.log."
+assumption = "No custody profile, vault identity or settlement registration was fabricated. Positive custody daemon startup and settlement registration are unqualified."
+severity = "blocker"
+
+[observation.6.7.tooling-native-lifecycle]
+task = "6.7"
+file = "platform/emulator/tests/gateway.rs"
+symbol = "lifecycle_routes_execute_and_replay_real_native_state_receipts"
+observed = "CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4 LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin make platform-test-tooling exits 2. The emulator gateway test fails at line 719, ordinal 3 sequence 3: result -736 instead of 0, terminal Failure(Callback { stage: 5, status: -3 }). The test binary reports 10 passed and one failed. Evidence: /root/lx-lanes/cluster/qual-logs/tooling.log and tooling.exit."
+assumption = "The assertion and implementation remain unchanged because emulator and native sources are outside the cluster bootstrap scope. This failure blocks the aggregate 3.7 and 6.7 qualification chains."
+severity = "blocker"
+
+[observation.3.7.cluster-lifecycle-order]
+task = "3.7"
+file = "platform/Makefile.inc"
+symbol = "platform-beta-cluster-up platform-beta-cluster-down"
+observed = "The make platform-test-tooling platform-beta-cluster-up platform-hosted-smoke platform-beta-cluster-down invocation inherited MAKEFLAGS=-j4 and started lifecycle goals concurrently. Smoke refused absent endpoint inputs; teardown ran while bring-up downloaded tools. The invocation was interrupted with exit 143 before cluster creation or any settlement transaction. Cluster lifecycle invocations now declare .NOTPARALLEL; make database inspection confirms it. Evidence: /root/lx-lanes/cluster/qual-logs/make-chain.log, make-chain.exit and serialization-check.log."
+assumption = "This is a recorded interrupted verification attempt, not a pass. The independent tooling rerun fails in the retained emulator lifecycle assertion, strict topology still refuses the missing status publisher, and only the persistent host chain-125 instance is excluded; disposable in-cluster chain 125 is permitted."
+severity = "blocker"
+
+[observation.6.7.disposable-custody-tooling]
+task = "6.7"
+file = "tests/bridge/deploy_local_custody.py tests/bridge/custody_genesis.py tests/bridge/local_credit_evidence.py platform/hosted/paxeer/deploy-contracts.sh"
+symbol = "main create_profile paxeer_contracts_deploy"
+observed = "Disposable in-cluster Paxeer chain 125 is permitted; the persistent host chain at 127.0.0.1:18545 remains excluded. The supplied custody deployment tooling requires Anvil and unlocked accounts, rejects every chain 125, and advances governance through Anvil time controls. Its genesis helper also rejects chain 125, while the evidence runner hardcodes network 17 and creates chain-31337 Anvil nodes. custody_credit.py supports network 402 but requires two distinct RPC origins, agreed finalized blocks and verified vault code/account proofs. Hosted settlement deployment consumes native LXGD/LXRR artifacts before creating settlement contracts. The required pre-genesis deployment and registration split is not supplied by these interfaces. Exact integration requirements: /root/lx-lanes/cluster/NEEDS.md."
+assumption = "Ordinary genesis remains the explicitly permitted bring-up path while custody-first deployment is unqualified. No chain identity, runtime pin, proof, finality or registration check is bypassed."
+severity = "blocker"
+
+[observation.6.7.cluster-image-runtime]
+task = "6.7"
+file = "platform/hosted/node/Dockerfile platform/hosted/tests/beta-cluster.sh"
+symbol = "build_images cluster_create load_images node_boundary_install"
+observed = "All fifteen images build and load into the disposable kind cluster from source a3410bb45ed5. Calico rollout and both node readiness checks pass; the registry boundary service reaches active/exited with Result=success. An earlier node image build failed when concurrent Make targets raced to download the same Rustup Clippy component. Serial rustup show active-toolchain before parallel Make repairs that failure; the node image build passes. Evidence: /root/lx-lanes/cluster/qual-logs/pass2-chain.log, pass2-chain/image-identities.txt, node-rustup-first-failure.log and node-rustup-image.log."
+assumption = "Image build success and cluster networking readiness do not establish application or settlement readiness. Runtime image evidence belongs to the recorded source revision, before the subsequent rebase onto updated main."
+severity = "note"
+
+[observation.6.7.sealed-builder-upload]
+task = "6.7"
+file = "platform/hosted/tests/beta-cluster.sh"
+symbol = "builder_release_publish"
+observed = "The exact serialized make platform-beta-cluster-up platform-hosted-smoke platform-beta-cluster-down invocation exits 2 while uploading the supplied sealed rootfs: extraction applies directory mode 0555 before populating etc/nsswitch.conf, which fails with Permission denied. The upload archive now grants temporary owner-write permission with tar --mode=u+w; the existing chmod -R a-w seal remains unchanged. Resuming the real builder_release_publish function against the same disposable PVC successfully uploads the 2.6 GiB rootfs as uid 4030, seals it, waits for loader Succeeded, and deletes the loader. Shell syntax and diff checks pass. Evidence: /root/lx-lanes/cluster/qual-logs/pass2-chain.log, builder-upload-runtime.exit, builder-upload-syntax.log, builder-upload-diff.log and resume-bringup-completed.log."
+assumption = "The original exact make-chain failure is retained. Focused upload qualification and resumed real bring-up functions do not convert that original invocation into a pass."
+severity = "note"
+
+[observation.6.7.settlement-prediction-evm]
+task = "6.7"
+file = "platform/hosted/paxeer/deploy-contracts.sh scripts/PaxeerBetaDeploy.s.sol"
+symbol = "predict_bond predictImmediateBetaGuarantorBondForProtocol _predictGuarantorBond"
+observed = "After the builder upload repair, identity and the disposable Paxeer pod run and native LayerX genesis artifacts are produced. deploy-contracts.sh bootstrap then exits 1 with Error: EVM error and GuarantorBond prediction failed. The selected Solidity prediction function decodes the genesis inputs, validates configuration and simulates Blueprint, timelock, asset-registry, vault and bond construction. The retained generic EVM error does not identify which internal operation failed. Public LXGD/LXRR inputs and runtime pod state are retained under /root/lx-lanes/cluster/qual-logs/settlement-inputs/. Raw error evidence: /root/lx-lanes/cluster/qual-logs/settlement-deploy.log and resume-bringup-completed.log."
+assumption = "Prediction and validation remain intact. Contract-simulation diagnosis is required before settlement publication and hosted readiness can proceed. No funded custody, completed settlement registration or passing hosted smoke is established."
+severity = "blocker"
+
+[observation.3.7.hosted-conformance-inputs]
+task = "3.7"
+file = "platform/emulator/tests/conformance.sh platform/hosted/testnet/src/main.rs platform/hosted/gateway/src/lib.rs"
+symbol = "public_route production_route env_write"
+observed = "The real cluster capture finds zero durable activity records and exits 2 because bring-up stops at settlement prediction before service readiness and endpoint export. No activity corpus or LAYERX_TESTNET_URL export is produced. Separately, conformance.sh posts to /v1/activities without the hosted CA or authentication inputs, while the exported testnet-control surface only accepts public GET routes; the activity route belongs to gateway. Evidence: /root/lx-lanes/cluster/qual-logs/conformance-capture-resume.log and conformance-capture-resume.exit."
+assumption = "A real activity corpus, correct activity endpoint and verified TLS/authentication integration are required. No synthetic corpus or substituted success response is supplied."
+severity = "blocker"
+
+[observation.3.7.cluster-verification-result]
+task = "3.7"
+file = "platform/emulator/tests/gateway.rs platform/Makefile.inc"
+symbol = "lifecycle_routes_execute_and_replay_real_native_state_receipts platform-test-tooling"
+observed = "With the disposable cluster still present, make platform-test-tooling platform-beta-cluster-up platform-hosted-smoke platform-beta-cluster-down at source 67bccf4c exits 2 during platform-test-tooling. Gateway integration reports ten passed and one failed: line 719, ordinal 3 sequence 3, result -736 instead of 0, Failure(Callback { stage: 5, status: -3 }). The supplied native readiness metadata is retained beside the source revision. Evidence: /root/lx-lanes/cluster/qual-logs/task-3.7-verify.log, task-3.7-verify.exit, task-3.7-source.txt and task-3.7-native-ready.txt."
+assumption = "The assertion is unchanged. This verification invocation does not reach its cluster-up, hosted-smoke or cluster-down goals and does not qualify the aggregate task."
+severity = "blocker"
+
+[observation.3.7.cluster-smoke-cleanup]
+task = "3.7"
+file = "platform/Makefile.inc platform/hosted/tests/beta-cluster.sh"
+symbol = "platform-hosted-smoke beta_cluster_down"
+observed = "The separate make platform-hosted-smoke attempt exits 2 because LAYERX_TESTNET_URL was never exported after settlement prediction failed. make platform-beta-cluster-down exits 0. Subsequent checks find no containers or image tags carrying the disposable cluster labels and no build/beta-cluster directory. The final source-context archive exclusion check exits 0 before cleanup. Evidence: /root/lx-lanes/cluster/qual-logs/hosted-smoke.log, hosted-smoke.exit, teardown.log, teardown.exit, teardown-clean-check.exit, remaining-cluster-containers.txt, remaining-cluster-images.txt and final-context-check.log."
+assumption = "Cleanup success does not establish hosted smoke or aggregate task success."
 severity = "note"
 [observation.binaryen.llvm_config_header]
 task = "programs-test"
