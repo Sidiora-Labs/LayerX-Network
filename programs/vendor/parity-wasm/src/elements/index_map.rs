@@ -130,7 +130,7 @@ impl<T> IndexMap<T> {
 	}
 
 	/// Create a non-consuming iterator over this `IndexMap`'s keys and values.
-	pub fn iter(&self) -> Iter<T> {
+	pub fn iter(&self) -> Iter<'_, T> {
 		// Note that this does the right thing because we use `&self`.
 		self.into_iter()
 	}
