@@ -146,6 +146,46 @@ workflow.
      --beneficiary "$BENEFICIARY" --amount "$AMOUNT" --output custody.json
    ```
 
+   `--allow-local-chain` is defined as `action="store_true"` and
+   `required=True` (`tests/bridge/deploy_local_custody.py:219`).
+   `--disposable-identity` is the identity-file flag
+   (`tests/bridge/deploy_local_custody.py:221`). When `--disposable-identity`
+   is set, the helper requires `--ca-bundle` and `--key-file` and passes the
+   RPC URL, CA bundle, and identity path to `disposable_rpc`
+   (`tests/bridge/deploy_local_custody.py:224-226`). `disposable_rpc` reads
+   the identity file as JSON (`tests/bridge/deploy_local_custody.py:109`).
+   Required fields are `rpc_origins`
+   (`tests/bridge/deploy_local_custody.py:111-112`), `genesis_sha256`
+   (`tests/bridge/deploy_local_custody.py:113`), `comet_chain_id` as a
+   non-empty string (`tests/bridge/deploy_local_custody.py:114-115`),
+   `chain_id` as a positive `int` (`tests/bridge/deploy_local_custody.py:117`),
+   `ca_sha256` (`tests/bridge/deploy_local_custody.py:118-119`), and
+   `genesis_source` (`tests/bridge/deploy_local_custody.py:123`).
+
+   When `genesis_source` is `boundary`, the helper GETs `/genesis` from the
+   Paxeer boundary, reads at most `MAX_GENESIS_BYTES` (64 MiB), and requires
+   `X-LayerX-Genesis-SHA256` to equal the SHA-256 hex digest of the body
+   (`tests/bridge/deploy_local_custody.py:25`,
+   `tests/bridge/deploy_local_custody.py:35-41`). The `chunked` alternative
+   fetches `/genesis_chunked?chunk=` plus the chunk index and concatenates
+   base64 `data` until the reported `total`
+   (`tests/bridge/deploy_local_custody.py:44-63`).
+
+   `disposable_rpc` refuses an origin not authorized by `rpc_origins`
+   (`tests/bridge/deploy_local_custody.py:110-112`), a CA pin mismatch
+   (`tests/bridge/deploy_local_custody.py:118-119`), the persistent genesis
+   digest on the identity value or the fetched document
+   (`tests/bridge/deploy_local_custody.py:23`,
+   `tests/bridge/deploy_local_custody.py:116`,
+   `tests/bridge/deploy_local_custody.py:126`), persistent blueprint code at
+   the recorded address (`tests/bridge/deploy_local_custody.py:24`,
+   `tests/bridge/deploy_local_custody.py:129-130`), a Comet chain id mismatch
+   (`tests/bridge/deploy_local_custody.py:125-127`), and an EVM chain id
+   mismatch (`tests/bridge/deploy_local_custody.py:128`). The shared Comet
+   chain name alone does not identify the persistent host
+   (`tests/bridge/deploy_local_custody.py:114-116`,
+   `tests/bridge/deploy_local_custody.py:125-130`).
+
    The helper deploys the real `LayerXTimelock`, `AssetRegistry`, Solmate WETH
    and `LayerXVault`. It schedules and executes permission/registration calls
    through the real timelock, advancing only the isolated chain's clock. Actual
