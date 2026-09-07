@@ -1,3 +1,3 @@
-module github.com/Sidiora-Labs/LayerX-Protocol/platform/sdk/go
+module github.com/Sidiora-Labs/LayerX-Network/platform/sdk/go
 
 go 1.21
