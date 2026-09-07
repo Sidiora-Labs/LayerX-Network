@@ -158,7 +158,8 @@ public sealed record ProgramReceiptOutcome(
     UInt128Value FeeUnits,
     byte[] CallGraphRoot,
     byte[] TerminalPayloadRoot,
-    byte[] TransferRoot);
+    byte[] TransferRoot,
+    byte[] AppliedLegsDigest);
 
 public sealed record ProtocolReceipt(
     ushort ProtocolVersion,
@@ -482,6 +483,7 @@ public static class LocalVerifier
             ProgramOutcomeV1 => (byte)1,
             ProgramOutcomeV2 => (byte)2,
             ProgramOutcomeV3 => (byte)3,
+            0x50524734 => (byte)4,
             _ => throw VerificationFailure(),
         };
         var terminalKind = decoder.U8();
@@ -489,7 +491,7 @@ public static class LocalVerifier
         var runtimeVersion = decoder.U16();
         var abiVersion = decoder.U16();
         var feeScheduleVersion = decoder.U32();
-        var meteringScheduleVersion = encodingVersion == 3 ? decoder.U32() : 1U;
+        var meteringScheduleVersion = encodingVersion >= 3 ? decoder.U32() : 1U;
         var cpuFuel = decoder.U64();
         var memoryBytes = decoder.U64();
         var storageReadBytes = decoder.U64();
@@ -508,11 +510,13 @@ public static class LocalVerifier
         var callGraphRoot = decoder.Array32();
         var terminalPayloadRoot = decoder.Array32();
         var transferRoot = decoder.Array32();
+        var appliedLegsDigest = encodingVersion == 4 ? decoder.Array32() : new byte[32];
         var occupancyZero = occupancyByteBatches == default(UInt128Value) && occupancyFeeUnits == default(UInt128Value) &&
             AllZero(occupancyAssetId) && AllZero(occupancyEvidenceDigest) && AllZero(occupancyTransferRoot);
         var validVersion = protocolVersion == 1 && encodingVersion is 1 or 3 ||
-            (protocolVersion == 2 || protocolVersion == 3) && encodingVersion is 2 or 3;
-        if (terminalKind is < 1 or > 3 || runtimeVersion == 0 || abiVersion == 0 ||
+            (protocolVersion == 2 || protocolVersion == 3) && encodingVersion is 2 or 3 ||
+            protocolVersion == 3 && encodingVersion == 4;
+        if ((encodingVersion == 4) == AllZero(appliedLegsDigest) || terminalKind is < 1 or > 3 || runtimeVersion == 0 || abiVersion == 0 ||
             feeScheduleVersion == 0 || meteringScheduleVersion != 1 || AllZero(terminalPayloadRoot) ||
             terminalKind == 1 && resultCode != 0 ||
             terminalKind != 1 && (resultCode == 0 || resultCode <= -1000) ||
@@ -520,15 +524,15 @@ public static class LocalVerifier
             encodingVersion == 1 && !occupancyZero ||
             encodingVersion >= 2 && terminalKind != 1 && !occupancyZero ||
             encodingVersion == 2 && terminalKind == 1 && (AllZero(occupancyAssetId) || AllZero(occupancyEvidenceDigest)) ||
-            encodingVersion == 3 && AllZero(occupancyAssetId) != AllZero(occupancyEvidenceDigest) ||
-            protocolVersion == 1 && encodingVersion == 3 && !occupancyZero ||
-            (protocolVersion == 2 || protocolVersion == 3) && encodingVersion == 3 && terminalKind == 1 && (AllZero(occupancyAssetId) || AllZero(occupancyEvidenceDigest)))
+            encodingVersion >= 3 && AllZero(occupancyAssetId) != AllZero(occupancyEvidenceDigest) ||
+            protocolVersion == 1 && encodingVersion >= 3 && !occupancyZero ||
+            (protocolVersion == 2 || protocolVersion == 3) && encodingVersion >= 3 && terminalKind == 1 && (AllZero(occupancyAssetId) || AllZero(occupancyEvidenceDigest)))
             throw VerificationFailure();
         return new(encodingVersion, terminalKind, resultCode, runtimeVersion, abiVersion,
             feeScheduleVersion, meteringScheduleVersion, cpuFuel, memoryBytes, storageReadBytes,
             storageWriteBytes, outputValues, outputBytes, occupancyByteBatches, occupancyFeeUnits,
             Array.AsReadOnly(feeSchedulePrices), occupancyAssetId, occupancyEvidenceDigest,
-            occupancyTransferRoot, feeUnits, callGraphRoot, terminalPayloadRoot, transferRoot);
+            occupancyTransferRoot, feeUnits, callGraphRoot, terminalPayloadRoot, transferRoot, appliedLegsDigest);
     }
 
     public static ProgramReceiptOutcome DecodeProgramReceiptOutcome(ReadOnlySpan<byte> canonicalOutcome,

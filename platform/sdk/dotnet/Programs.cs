@@ -54,6 +54,7 @@ public sealed record ProgramInterface(byte[] ProgramId, uint Version, byte[] Cod
     ulong ObservedAt, ulong ValidThrough, ProgramSource Source, string Verification);
 public sealed class VerifiedProgramExecution
 {
+    public string TransferVerification { get; }
     public JsonValue Value { get; }
     public ReceiptVerification Receipt { get; }
     public byte[] TerminalPayload { get; }
@@ -62,9 +63,9 @@ public sealed class VerifiedProgramExecution
     public byte[] TerminalPayloadRoot => Receipt.Receipt.ProgramOutcome!.TerminalPayloadRoot.ToArray();
     public byte[] CallGraphRoot => Receipt.Receipt.ProgramOutcome!.CallGraphRoot.ToArray();
 
-    internal VerifiedProgramExecution(JsonValue value, ReceiptVerification receipt, byte[] terminalPayload, byte[] callGraph)
+    internal VerifiedProgramExecution(JsonValue value, ReceiptVerification receipt, byte[] terminalPayload, byte[] callGraph, string transferVerification)
     {
-        Value = value; Receipt = receipt;
+        Value = value; Receipt = receipt; TransferVerification = transferVerification;
         TerminalPayload = terminalPayload.ToArray(); CallGraph = callGraph.ToArray();
     }
 }
@@ -340,7 +341,7 @@ public sealed class ProgramsClient
         var verified = await VerifyReceiptAsync(receiptBytes, authority, activity, checked((ushort)guestAbi), terminal,
             graph, cancellationToken, _protocolVersion).ConfigureAwait(false);
         var receipt = verified.Receipt; var receiptOutcome = receipt.ProgramOutcome!;
-        VerifyTerminal(terminal, graph, program, outcomeDocument, receipt.ProtocolVersion, receiptOutcome);
+        var transferVerification = VerifyTerminal(terminal, graph, program, outcomeDocument, receipt.ProtocolVersion, receiptOutcome);
         var kindMatches = outcomeKind switch
         {
             "completed" or "legacy_completed" => receiptOutcome.TerminalKind == 1 &&
@@ -354,7 +355,7 @@ public sealed class ProgramsClient
             receiptOutcome.StorageReadBytes != read || receiptOutcome.StorageWriteBytes != write ||
             receiptOutcome.OutputValues != outputValues || receiptOutcome.OutputBytes != outputBytes ||
             UInt128Big(receiptOutcome.FeeUnits) != fee || !kindMatches) throw Verify();
-        return new(JsonValue.Object(map), verified, terminal, graph);
+        return new(JsonValue.Object(map), verified, terminal, graph, transferVerification);
     }
 
     private async Task<VerifiedProgramExecution> VerifySimulationAsync(JsonValue value, byte[] expectedProgramId,
@@ -542,12 +543,14 @@ public sealed class ProgramsClient
         }
     }
 
-    private static void VerifyTerminal(byte[] encoded, byte[] availableGraph, byte[] expectedProgram,
+    private static string VerifyTerminal(byte[] encoded, byte[] availableGraph, byte[] expectedProgram,
         IReadOnlyDictionary<string, JsonValue> documentOutcome, ushort protocolVersion, ProgramReceiptOutcome receipt)
     {
         try
         {
-            var attachments = UnwrapTerminal(encoded); var inner = attachments.Inner;
+            if (encoded.Length == 0 || encoded.Length > MaximumProgramBytes || !Fixed(SHA256.HashData(encoded), receipt.TerminalPayloadRoot) ||
+                availableGraph.Length == 0 || !Fixed(SHA256.HashData(availableGraph), receipt.CallGraphRoot)) throw new InvalidDataException();
+            var attachments = UnwrapTerminal(UnwrapAppliedTerminal(encoded, receipt)); var inner = attachments.Inner;
             var candidate = Starts(inner, "LXP/program-execution/v4\0"); var successful = false;
             if (Starts(inner, "LXP/program-execution/v2\0") || Starts(inner, "LXP/program-execution/v3\0"))
             {
@@ -635,7 +638,7 @@ public sealed class ProgramsClient
                 if (receipt.TerminalKind != 2) throw new InvalidDataException();
             }
             else throw new InvalidDataException();
-            VerifyTerminalAttachments(attachments, candidate, successful, protocolVersion, receipt);
+            return VerifyTerminalAttachments(attachments, candidate, successful, protocolVersion, receipt);
         }
         catch { throw Verify(); }
     }
@@ -673,7 +676,7 @@ public sealed class ProgramsClient
         return new(current, occupancy, authorization, transferRoot);
     }
 
-    private static void VerifyTerminalAttachments(TerminalAttachments attachments, bool candidate, bool successful,
+    private static string VerifyTerminalAttachments(TerminalAttachments attachments, bool candidate, bool successful,
         ushort protocolVersion, ProgramReceiptOutcome receipt)
     {
         if (protocolVersion is not (1 or 2 or 3)) throw new InvalidDataException();
@@ -700,14 +703,18 @@ public sealed class ProgramsClient
             UInt128Big(receipt.OccupancyByteBatches) != 0 || UInt128Big(receipt.OccupancyFeeUnits) != 0)
             throw new InvalidDataException();
         var transferPresent = receipt.TransferRoot.Any(value => value != 0);
-        if (candidate ? (attachments.Authorization is not null) != transferPresent : attachments.Authorization is not null)
+        var recorded = receipt.EncodingVersion != 4 && attachments.Authorization is null && transferPresent;
+        var authorityRequired = candidate || receipt.EncodingVersion == 4 && successful;
+        if (!recorded && (authorityRequired ? (attachments.Authorization is not null) != transferPresent : attachments.Authorization is not null))
             throw new InvalidDataException();
         if (attachments.Authorization is { } authorization)
         {
             if (authorization.Length == 0 || attachments.TransferRoot is null || !Fixed(attachments.TransferRoot, receipt.TransferRoot))
                 throw new InvalidDataException();
+            if (receipt.EncodingVersion == 4 && !Starts(authorization, "LayerX/programs/402LXP/transfer-set/v2\0")) throw new InvalidDataException();
             VerifyAuthorizationRoot(authorization, receipt.TransferRoot);
         }
+        return recorded ? "recorded_terminal_root_not_locally_reconstructable" : "reconstructed";
     }
 
     private static void VerifyAuthorizationRoot(byte[] encoded, byte[] expected)
@@ -938,6 +945,34 @@ public sealed class ProgramsClient
             if (entry.Paid != 0) legs.Add(Concatenate([0], entry.Payer, treasury, asset, UInt128Bytes(entry.Paid), BigEndian(23, 2)));
         }
         return MerkleRoot(legs);
+    }
+
+    private static byte[] UnwrapAppliedTerminal(byte[] encoded, ProgramReceiptOutcome receipt)
+    {
+        if (receipt.EncodingVersion != 4) return encoded;
+        var domain = Encoding.UTF8.GetBytes("LXP/programs/terminal-applied-legs/v1\0");
+        var cursor = new TerminalCursor(encoded, 0);
+        if (!Fixed(cursor.Take(domain.Length), domain)) throw new InvalidDataException();
+        var inner = cursor.Sized32(); var legs = cursor.Sized32(); cursor.Finish();
+        if (inner.Length == 0 || inner.Length > MaximumProgramBytes || !Fixed(SHA256.HashData(legs), receipt.AppliedLegsDigest))
+            throw new InvalidDataException();
+        VerifyAppliedLegs(legs, receipt.TransferRoot);
+        return inner;
+    }
+
+    private static void VerifyAppliedLegs(byte[] encoded, byte[] expected)
+    {
+        if (encoded.Length > 256 * 115 || encoded.Length % 115 != 0) throw new InvalidDataException();
+        var legs = new List<byte[]>();
+        for (var offset = 0; offset < encoded.Length; offset += 115)
+        {
+            var leg = encoded.AsSpan(offset, 115).ToArray();
+            if (leg[0] != 0 || leg[113] != 0 || leg[114] != 1 || leg[1..33].All(value => value == 0) ||
+                leg[33..65].All(value => value == 0) || leg[65..97].All(value => value == 0) ||
+                leg[97..113].All(value => value == 0)) throw new InvalidDataException();
+            legs.Add(leg);
+        }
+        if (!Fixed(MerkleRoot(legs), expected)) throw new InvalidDataException("applied transfer root");
     }
 
     private static byte[] MerkleRoot(IReadOnlyList<byte[]> legs)
