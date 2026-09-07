@@ -56,7 +56,7 @@ export interface ProgramUnknownSubmission { readonly state: "unknown"; readonly 
 export type ProgramSubmission = ProgramUnknownSubmission | (ProgramExecutionDocument & Readonly<{ state: "executed" | "refused" }>);
 export interface ProgramSimulationEvidence { readonly boundary_id: string; readonly activity_id: string; readonly previous_state_root: string; readonly hypothetical_state_root: string; readonly observed_sequence: string; readonly observed_at: string; readonly committed: false; readonly public_key: string; readonly signature: string }
 export interface ProgramSimulation { readonly committed: false; readonly execution: ProgramExecutionDocument & Readonly<{ state: "simulated" }>; readonly simulation_evidence: ProgramSimulationEvidence }
-export interface VerifiedProgramReceipt { readonly verification: ReceiptVerification; readonly terminalPayload: Uint8Array; readonly callGraph: Uint8Array }
+export interface VerifiedProgramReceipt { readonly verification: ReceiptVerification; readonly terminalPayload: Uint8Array; readonly callGraph: Uint8Array; readonly transferVerification: "reconstructed" | "recorded_terminal_root_not_locally_reconstructable" }
 
 export class ProgramTrustContext {
   readonly #sequencerPublicKey: Uint8Array;
@@ -141,7 +141,7 @@ export async function verifyProgramReceipt(
   }
   const terminal = await decodeAndVerifyProgramTerminal(terminalPayload, callGraph, execution.program_id, outcome, protocol.protocolVersion);
   if (!sameUsage(terminal.usage, execution.usage) || !sameOutcome(terminal.outcome, execution.outcome)) throw new TypeError("program terminal document binding failed");
-  return Object.freeze({ verification, terminalPayload, callGraph });
+  return Object.freeze({ verification, terminalPayload, callGraph, transferVerification: terminal.transferVerification });
 }
 
 export class ProgramOperations {

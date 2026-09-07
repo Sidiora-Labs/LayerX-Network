@@ -47,6 +47,7 @@ export interface DecodedSignedProgramCall {
 export interface DecodedProgramTerminal {
   readonly outcome: ProgramOutcome;
   readonly usage: ProgramUsage;
+  readonly transferVerification: "reconstructed" | "recorded_terminal_root_not_locally_reconstructable";
 }
 
 export async function bindSignedProgramLifecycle(canonical: Uint8Array, payload: Uint8Array | undefined, ordinal: 1 | 2 | 7, expectedIdempotencyKey?: string): Promise<DecodedSignedProgramCall> {
@@ -139,7 +140,19 @@ export async function decodeAndVerifyProgramTerminal(
   protocolVersion: number,
 ): Promise<DecodedProgramTerminal> {
   if (callGraph.length === 0 || !equal(await sha256(callGraph), receipt.callGraphRoot)) fail("program call graph root");
+  if (terminalPayload.length === 0 || terminalPayload.length > 1_048_576 || !equal(await sha256(terminalPayload), receipt.terminalPayloadRoot)) fail("program terminal root");
   let inner = terminalPayload;
+  if (receipt.encodingVersion === 4) {
+    const domain = bytes("LXP/programs/terminal-applied-legs/v1\0");
+    const wrapper = new Reader(inner);
+    if (!equal(wrapper.fixed(domain.length), domain)) fail("applied terminal domain");
+    inner = wrapper.sizedU32(1_048_576);
+    if (inner.length === 0) fail("empty applied terminal detail");
+    const legs = wrapper.sizedU32(256 * 115);
+    wrapper.end();
+    if (!equal(await sha256(legs), receipt.appliedLegsDigest)) fail("applied legs digest");
+    await verifyAppliedLegs(legs, receipt.transferRoot);
+  }
   let authorization: Uint8Array | undefined;
   let authorityRoot: Uint8Array | undefined;
   let occupancy: Uint8Array | undefined;
@@ -225,14 +238,29 @@ export async function decodeAndVerifyProgramTerminal(
     fail("unexpected occupancy commitment");
   }
   const transferPresent = !equal(receipt.transferRoot, zero);
-  if (candidate ? (authorization !== undefined) !== transferPresent : authorization !== undefined) fail("transfer authority presence");
+  const recorded = receipt.encodingVersion !== 4 && authorization === undefined && transferPresent;
+  const authorityRequired = candidate || receipt.encodingVersion === 4 && successfulExecution;
+  if (!recorded && (authorityRequired ? (authorization !== undefined) !== transferPresent : authorization !== undefined)) fail("transfer authority presence");
   if (authorization !== undefined) {
     if (authorization.length === 0 || authorityRoot === undefined || !equal(authorityRoot, receipt.transferRoot)) fail("transfer authority root");
+    if (receipt.encodingVersion === 4 && !starts(authorization, TRANSFER_SET_V2)) fail("V2 transfer authority required");
     await verifyAuthorizationRoot(authorization, authorityRoot);
   }
   if (protocolVersion !== 1 && protocolVersion !== 2 && protocolVersion !== 3) fail("program receipt protocol");
   const boundUsage = usage ?? receiptUsage(receipt);
-  return Object.freeze({ outcome, usage: boundUsage });
+  return Object.freeze({ outcome, usage: boundUsage, transferVerification: recorded ? "recorded_terminal_root_not_locally_reconstructable" : "reconstructed" });
+}
+
+async function verifyAppliedLegs(encoded: Uint8Array, expected: Uint8Array): Promise<void> {
+  if (encoded.length % 115 !== 0 || encoded.length > 256 * 115) fail("applied legs bounds");
+  const legs: Uint8Array[] = [];
+  for (let offset = 0; offset < encoded.length; offset += 115) {
+    const leg = encoded.subarray(offset, offset + 115);
+    if (leg[0] !== 0 || leg[113] !== 0 || leg[114] !== 1 || allZero(leg.subarray(1, 33))
+      || allZero(leg.subarray(33, 65)) || allZero(leg.subarray(65, 97)) || allZero(leg.subarray(97, 113))) fail("applied leg canonical fields");
+    legs.push(leg);
+  }
+  if (!equal(await merkleRoot(legs), expected)) fail("applied transfer root");
 }
 
 function decodeCallPayload(payload: Uint8Array, call: ProgramCall): void {
@@ -434,7 +462,7 @@ function usageFor(usage: ProgramUsage, resource: number): bigint {
 }
 
 function bindExecutionMetadata(runtime: number, abi: number, fee: number, metering: number, usage: ProgramUsage, receipt: ProgramReceiptOutcome): void {
-  if (runtime !== receipt.runtimeVersion || abi !== receipt.abiVersion || fee !== receipt.feeScheduleVersion
+  if (runtime !== receipt.runtimeVersion || abi !== receipt.abiVersion || (abi === 2 && fee !== receipt.feeScheduleVersion)
     || metering !== receipt.meteringScheduleVersion || !sameUsage(usage, receiptUsage(receipt))) fail("terminal receipt metadata");
 }
 
