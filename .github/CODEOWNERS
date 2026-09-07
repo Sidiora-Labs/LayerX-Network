@@ -1,0 +1,13 @@
+* @Sidiora-Labs/core
+
+src/ @Sidiora-Labs/core
+include/ @Sidiora-Labs/core
+cmd/ @Sidiora-Labs/core
+agent/ @Sidiora-Labs/core
+platform/ @Sidiora-Labs/core
+programs/ @Sidiora-Labs/core
+human/ @Sidiora-Labs/core
+contracts/ @Sidiora-Labs/core
+paxeer-network/ @Sidiora-Labs/core
+spec/ @Sidiora-Labs/core
+docs/ @Sidiora-Labs/core
