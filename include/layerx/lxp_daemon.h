@@ -258,6 +258,8 @@ typedef struct lxp_daemon_protocol_owner {
     lxp_identity_store *identities;
     lx_programs_transfer_runtime *programs_runtime;
     lxp_history *history;
+    pthread_mutex_t receipt_mutex;
+    lxp_log published_receipt_log;
     lxp_verified_receipt_index *verified_receipts;
     lxp_daemon_receipt_authority_store *receipt_authority;
     lxp_daemon_evidence_store *evidence_store;
