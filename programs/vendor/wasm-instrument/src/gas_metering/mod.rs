@@ -111,16 +111,10 @@ pub struct BranchCost {
 }
 
 /// Rules reproducing Wasmi 0.31.2's default cost categories.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct WasmiParityRules {
 	costs: WasmiFuelCosts,
 	branch_costs: Vec<BranchCost>,
-}
-
-impl Default for WasmiParityRules {
-	fn default() -> Self {
-		Self { costs: WasmiFuelCosts::default(), branch_costs: Vec::new() }
-	}
 }
 
 impl WasmiParityRules {
@@ -152,13 +146,29 @@ impl Rules for WasmiParityRules {
 			I32ReinterpretF32 | I64ReinterpretF64 | F32ReinterpretI32 | F64ReinterpretI64 => 0,
 			Call(_) | CallIndirect(_, _) => self.costs.call,
 			GetGlobal(_) | SetGlobal(_) | CurrentMemory(_) | GrowMemory(_) => self.costs.entity,
-			I32Load(_, _) | I64Load(_, _) | F32Load(_, _) | F64Load(_, _) |
-			I32Load8S(_, _) | I32Load8U(_, _) | I32Load16S(_, _) | I32Load16U(_, _) |
-			I64Load8S(_, _) | I64Load8U(_, _) | I64Load16S(_, _) | I64Load16U(_, _) |
-			I64Load32S(_, _) | I64Load32U(_, _) => self.costs.load,
-			I32Store(_, _) | I64Store(_, _) | F32Store(_, _) | F64Store(_, _) |
-			I32Store8(_, _) | I32Store16(_, _) | I64Store8(_, _) | I64Store16(_, _) |
-			I64Store32(_, _) => self.costs.store,
+			I32Load(_, _)
+			| I64Load(_, _)
+			| F32Load(_, _)
+			| F64Load(_, _)
+			| I32Load8S(_, _)
+			| I32Load8U(_, _)
+			| I32Load16S(_, _)
+			| I32Load16U(_, _)
+			| I64Load8S(_, _)
+			| I64Load8U(_, _)
+			| I64Load16S(_, _)
+			| I64Load16U(_, _)
+			| I64Load32S(_, _)
+			| I64Load32U(_, _) => self.costs.load,
+			I32Store(_, _)
+			| I64Store(_, _)
+			| F32Store(_, _)
+			| F64Store(_, _)
+			| I32Store8(_, _)
+			| I32Store16(_, _)
+			| I64Store8(_, _)
+			| I64Store16(_, _)
+			| I64Store32(_, _) => self.costs.store,
 			#[cfg(feature = "bulk")]
 			Bulk(_) => self.costs.entity,
 			#[cfg(feature = "reference_types")]
@@ -350,12 +360,17 @@ pub fn inject<R: Rules, B: Backend>(
 	let mut retained = Vec::new();
 	for section in module.into_sections() {
 		let strip = match &section {
-			elements::Section::Custom(custom) =>
-				custom.name() == "linking" || custom.name().starts_with("reloc.") || custom.name() == "name",
+			elements::Section::Custom(custom) => {
+				custom.name() == "linking"
+					|| custom.name().starts_with("reloc.")
+					|| custom.name() == "name"
+			}
 			elements::Section::Reloc(_) => true,
 			_ => false,
 		};
-		if strip { continue }
+		if strip {
+			continue;
+		}
 		if matches!(section, elements::Section::Custom(_) | elements::Section::Name(_)) {
 			custom_anchors.push(standard_count);
 			retained.push(section);
@@ -388,7 +403,13 @@ pub fn inject<R: Rules, B: Backend>(
 			elements::External::Table(table) => Some(table.elem_type()),
 			_ => None,
 		})
-		.chain(module.table_section().into_iter().flat_map(|section| section.entries()).map(|table| table.elem_type()))
+		.chain(
+			module
+				.table_section()
+				.into_iter()
+				.flat_map(|section| section.entries())
+				.map(|table| table.elem_type()),
+		)
 		.map(|ty| match ty {
 			elements::TableElementType::AnyFunc => ValueType::FuncRef,
 			elements::TableElementType::ExternRef => ValueType::ExternRef,
@@ -405,68 +426,69 @@ pub fn inject<R: Rules, B: Backend>(
 
 	// Calculate the indexes and gas function cost,
 	// for external gas function the cost is counted on the host side
-	let (gas_func_idx, total_func, gas_fn_cost, dynamic_check_idx, function_index_shift) = match gas_meter {
-		GasMeter::External { module: gas_module, function, check } => {
-			// Inject the import of the gas function
-			let import_sig = mbuilder
-				.push_signature(builder::signature().with_param(ValueType::I64).build_sig());
-			mbuilder.push_import(
-				builder::import()
-					.module(gas_module)
-					.field(function)
-					.external()
-					.func(import_sig)
-					.build(),
-			);
-			let check_sig = mbuilder
-				.push_signature(builder::signature().with_param(ValueType::I64).build_sig());
-			mbuilder.push_import(
-				builder::import()
-					.module(gas_module)
-					.field(check)
-					.external()
-					.func(check_sig)
-					.build(),
-			);
+	let (gas_func_idx, total_func, gas_fn_cost, dynamic_check_idx, function_index_shift) =
+		match gas_meter {
+			GasMeter::External { module: gas_module, function, check } => {
+				// Inject the import of the gas function
+				let import_sig = mbuilder
+					.push_signature(builder::signature().with_param(ValueType::I64).build_sig());
+				mbuilder.push_import(
+					builder::import()
+						.module(gas_module)
+						.field(function)
+						.external()
+						.func(import_sig)
+						.build(),
+				);
+				let check_sig = mbuilder
+					.push_signature(builder::signature().with_param(ValueType::I64).build_sig());
+				mbuilder.push_import(
+					builder::import()
+						.module(gas_module)
+						.field(check)
+						.external()
+						.func(check_sig)
+						.build(),
+				);
 
-			(import_count, functions_space + 2, 0, Some(import_count + 1), 2)
-		},
-		GasMeter::Internal { global, ref func_instructions, cost } => {
-			// Inject the gas counting global
-			mbuilder.push_global(
-				builder::global()
-					.with_type(ValueType::I64)
-					.mutable()
-					.init_expr(Instruction::I64Const(0))
-					.build(),
-			);
-			// Inject the export entry for the gas counting global
-			let ebuilder = builder::ExportBuilder::new();
-			let global_export = ebuilder
-				.field(global)
-				.with_internal(elements::Internal::Global(gas_global_idx))
-				.build();
-			mbuilder.push_export(global_export);
+				(import_count, functions_space + 2, 0, Some(import_count + 1), 2)
+			}
+			GasMeter::Internal { global, ref func_instructions, cost } => {
+				// Inject the gas counting global
+				mbuilder.push_global(
+					builder::global()
+						.with_type(ValueType::I64)
+						.mutable()
+						.init_expr(Instruction::I64Const(0))
+						.build(),
+				);
+				// Inject the export entry for the gas counting global
+				let ebuilder = builder::ExportBuilder::new();
+				let global_export = ebuilder
+					.field(global)
+					.with_internal(elements::Internal::Global(gas_global_idx))
+					.build();
+				mbuilder.push_export(global_export);
 
-			let func_idx = functions_space;
+				let func_idx = functions_space;
 
-			// Build local gas function
-			let gas_func_sig =
-				builder::SignatureBuilder::new().with_param(ValueType::I64).build_sig();
+				// Build local gas function
+				let gas_func_sig =
+					builder::SignatureBuilder::new().with_param(ValueType::I64).build_sig();
 
-			let function = builder::FunctionBuilder::new()
-				.with_signature(gas_func_sig)
-				.body()
-				.with_instructions(func_instructions.clone())
-				.build()
-				.build();
+				let function = builder::FunctionBuilder::new()
+					.with_signature(gas_func_sig)
+					.body()
+					.with_instructions(func_instructions.clone())
+					.build()
+					.build();
 
-			// Inject local gas function
-			mbuilder.push_function(function);
+				// Inject local gas function
+				mbuilder.push_function(function);
 
-			(func_idx, func_idx + 1, cost, None, 0)
-		},
-	};
+				(func_idx, func_idx + 1, cost, None, 0)
+			}
+		};
 
 	// We need the built the module for making injections to its blocks
 	let mut module = mbuilder.build();
@@ -491,22 +513,27 @@ pub fn inject<R: Rules, B: Backend>(
 					GasMeter::Internal { .. } => {
 						let len = code_section.bodies().len();
 						&mut code_section.bodies_mut()[..len - 1]
-					},
+					}
 				};
 
-				for (defined_function_index, func_body) in injection_targets.iter_mut().enumerate() {
+				for (defined_function_index, func_body) in injection_targets.iter_mut().enumerate()
+				{
 					// Increment calling addresses if needed
 					if let GasMeter::External { .. } = gas_meter {
 						for instruction in func_body.code_mut().elements_mut().iter_mut() {
 							match instruction {
-								Instruction::Call(call_index) => if *call_index >= gas_func_idx {
-									*call_index += function_index_shift
-								},
+								Instruction::Call(call_index) => {
+									if *call_index >= gas_func_idx {
+										*call_index += function_index_shift
+									}
+								}
 								#[cfg(feature = "reference_types")]
-								Instruction::RefFunc(function_index) => if *function_index >= gas_func_idx {
-									*function_index += function_index_shift
-								},
-								_ => {},
+								Instruction::RefFunc(function_index) => {
+									if *function_index >= gas_func_idx {
+										*function_index += function_index_shift
+									}
+								}
+								_ => {}
 							}
 						}
 					}
@@ -526,12 +553,12 @@ pub fn inject<R: Rules, B: Backend>(
 					.is_err()
 					{
 						error = true;
-						break
+						break;
 					}
 					#[cfg(feature = "bulk")]
 					if matches!(&gas_meter, GasMeter::Internal { .. }) {
-						if rules.memory_grow_cost().enabled() &&
-							inject_internal_grow_counter(func_body.code_mut(), total_func) > 0
+						if rules.memory_grow_cost().enabled()
+							&& inject_internal_grow_counter(func_body.code_mut(), total_func) > 0
 						{
 							need_internal_grow_counter = true;
 						}
@@ -547,9 +574,9 @@ pub fn inject<R: Rules, B: Backend>(
 						);
 					}
 				}
-			},
-			elements::Section::Export(export_section) =>
-			if let GasMeter::External { .. } = gas_meter {
+			}
+			elements::Section::Export(export_section) => {
+				if let GasMeter::External { .. } = gas_meter {
 					for export in export_section.entries_mut() {
 						if let elements::Internal::Function(func_index) = export.internal_mut() {
 							if *func_index >= gas_func_idx {
@@ -557,8 +584,9 @@ pub fn inject<R: Rules, B: Backend>(
 							}
 						}
 					}
-				},
-				elements::Section::Element(elements_section) => {
+				}
+			}
+			elements::Section::Element(elements_section) => {
 				// Note that we do not need to check the element type referenced because in the
 				// WebAssembly 1.0 spec, the only allowed element type is funcref.
 				if let GasMeter::External { .. } = gas_meter {
@@ -571,28 +599,31 @@ pub fn inject<R: Rules, B: Backend>(
 						}
 					}
 				}
-			},
-			elements::Section::Start(start_idx) =>
+			}
+			elements::Section::Start(start_idx) => {
 				if let GasMeter::External { .. } = gas_meter {
 					if *start_idx >= gas_func_idx {
-					*start_idx += function_index_shift
+						*start_idx += function_index_shift
 					}
-				},
-				elements::Section::Global(global_section) => {
-					if let GasMeter::External { .. } = gas_meter {
-						for global in global_section.entries_mut() {
-							for instruction in global.init_expr_mut().code_mut() {
-								#[cfg(feature = "reference_types")]
-								if let Instruction::RefFunc(function_index) = instruction {
-									if *function_index >= gas_func_idx { *function_index += function_index_shift; }
+				}
+			}
+			elements::Section::Global(global_section) => {
+				if let GasMeter::External { .. } = gas_meter {
+					for global in global_section.entries_mut() {
+						for instruction in global.init_expr_mut().code_mut() {
+							#[cfg(feature = "reference_types")]
+							if let Instruction::RefFunc(function_index) = instruction {
+								if *function_index >= gas_func_idx {
+									*function_index += function_index_shift;
 								}
 							}
 						}
 					}
-				},
-				elements::Section::Name(s) =>
+				}
+			}
+			elements::Section::Name(s) => {
 				if let GasMeter::External { .. } = gas_meter {
-					for functions in s.functions_mut() {
+					if let Some(functions) = s.functions_mut() {
 						*functions.names_mut() =
 							IndexMap::from_iter(functions.names().iter().map(|(mut idx, name)| {
 								if idx >= gas_func_idx {
@@ -602,22 +633,25 @@ pub fn inject<R: Rules, B: Backend>(
 								(idx, name.clone())
 							}));
 					}
-					for locals in s.locals_mut() {
-						let updated = IndexMap::from_iter(
-							locals.local_names().iter().map(|(mut idx, names)| {
-								if idx >= gas_func_idx { idx += function_index_shift; }
+					if let Some(locals) = s.locals_mut() {
+						let updated = IndexMap::from_iter(locals.local_names().iter().map(
+							|(mut idx, names)| {
+								if idx >= gas_func_idx {
+									idx += function_index_shift;
+								}
 								(idx, names.clone())
-							}),
-						);
+							},
+						));
 						*locals.local_names_mut() = updated;
 					}
-				},
-			_ => {},
+				}
+			}
+			_ => {}
 		}
 	}
 
 	if error {
-		return Err(module)
+		return Err(module);
 	}
 
 	#[cfg(feature = "bulk")]
@@ -642,11 +676,15 @@ pub fn inject<R: Rules, B: Backend>(
 	let mut customs = customs.drain(..);
 	let mut anchor_index = 0usize;
 	for position in 0..=standard_count {
-		while custom_anchors.get(anchor_index).map_or(false, |anchor| *anchor == position) {
-			if let Some(section) = customs.next() { restored.push(section); }
+		while custom_anchors.get(anchor_index) == Some(&position) {
+			if let Some(section) = customs.next() {
+				restored.push(section);
+			}
 			anchor_index += 1;
 		}
-		if let Some(section) = standards.next() { restored.push(section); }
+		if let Some(section) = standards.next() {
+			restored.push(section);
+		}
 	}
 	restored.extend(standards);
 	restored.extend(customs);
@@ -742,7 +780,7 @@ impl Counter {
 		let closing_control_index = self.stack.len();
 
 		if self.stack.is_empty() {
-			return Ok(())
+			return Ok(());
 		}
 
 		// Update the lowest_forward_br_target for the control block now on top of the stack.
@@ -789,10 +827,13 @@ impl Counter {
 				.expect("last_index is greater than 0; last_index is stack size - 1; qed");
 			let prev_metered_block = &mut prev_control_block.active_metered_block;
 			if closing_metered_block.start_pos == prev_metered_block.start_pos {
-				let cost = prev_metered_block.cost.checked_add(closing_metered_block.cost).ok_or(())?;
-				if cost > u64::from(u32::MAX) { return Err(()) }
+				let cost =
+					prev_metered_block.cost.checked_add(closing_metered_block.cost).ok_or(())?;
+				if cost > u64::from(u32::MAX) {
+					return Err(());
+				}
 				prev_metered_block.cost = cost;
-				return Ok(())
+				return Ok(());
 			}
 		}
 
@@ -812,7 +853,6 @@ impl Counter {
 	}
 
 	fn record_branch_targets(&mut self, indices: &[usize]) -> Result<(), ()> {
-
 		// Update the lowest_forward_br_target of the current control block.
 		for &index in indices {
 			let target_is_loop = {
@@ -820,7 +860,7 @@ impl Counter {
 				target_block.is_loop
 			};
 			if target_is_loop {
-				continue
+				continue;
 			}
 
 			let control_block = self.stack.last_mut().ok_or(())?;
@@ -846,7 +886,9 @@ impl Counter {
 	fn increment(&mut self, val: u32) -> Result<(), ()> {
 		let top_block = self.active_metered_block()?;
 		let cost = top_block.cost.checked_add(val.into()).ok_or(())?;
-		if cost > u64::from(u32::MAX) { return Err(()) }
+		if cost > u64::from(u32::MAX) {
+			return Err(());
+		}
 		top_block.cost = cost;
 		Ok(())
 	}
@@ -913,7 +955,9 @@ fn inject_dynamic_counters<R: Rules>(
 	rules: &R,
 	helpers: &mut Vec<DynamicHelper>,
 ) {
-	if dynamic_check.is_none() { return }
+	if dynamic_check.is_none() {
+		return;
+	}
 	use parity_wasm::elements::{BulkInstruction, Instruction};
 	for instruction in instructions.elements_mut() {
 		let helper = match instruction {
@@ -937,20 +981,31 @@ fn inject_dynamic_counters<R: Rules>(
 				.table_elements_per_fuel()
 				.map(|divisor| DynamicHelper::TableInit(*segment, *table, divisor)),
 			#[cfg(feature = "reference_types")]
-			Instruction::Bulk(BulkInstruction::TableGrow(table)) => rules
-				.table_elements_per_fuel()
-				.and_then(|divisor| table_types.get(*table as usize).copied().map(|ty| DynamicHelper::TableGrow(*table, ty, divisor))),
+			Instruction::Bulk(BulkInstruction::TableGrow(table)) => {
+				rules.table_elements_per_fuel().and_then(|divisor| {
+					table_types
+						.get(*table as usize)
+						.copied()
+						.map(|ty| DynamicHelper::TableGrow(*table, ty, divisor))
+				})
+			}
 			#[cfg(feature = "reference_types")]
-			Instruction::Bulk(BulkInstruction::TableFill(table)) => rules
-				.table_elements_per_fuel()
-				.and_then(|divisor| table_types.get(*table as usize).copied().map(|ty| DynamicHelper::TableFill(*table, ty, divisor))),
+			Instruction::Bulk(BulkInstruction::TableFill(table)) => {
+				rules.table_elements_per_fuel().and_then(|divisor| {
+					table_types
+						.get(*table as usize)
+						.copied()
+						.map(|ty| DynamicHelper::TableFill(*table, ty, divisor))
+				})
+			}
 			_ => None,
 		};
 		if let Some(helper) = helper {
-			let index = helpers.iter().position(|candidate| *candidate == helper).unwrap_or_else(|| {
-				helpers.push(helper);
-				helpers.len() - 1
-			});
+			let index =
+				helpers.iter().position(|candidate| *candidate == helper).unwrap_or_else(|| {
+					helpers.push(helper);
+					helpers.len() - 1
+				});
 			*instruction = Instruction::Call(first_helper + index as u32);
 		}
 	}
@@ -964,93 +1019,189 @@ fn add_dynamic_helpers(
 	helpers: &[DynamicHelper],
 ) -> elements::Module {
 	use parity_wasm::elements::{BlockType, BulkInstruction, Instruction::*, Local};
-	let dynamic_check = match dynamic_check { Some(index) => index, None => return module };
+	let dynamic_check = match dynamic_check {
+		Some(index) => index,
+		None => return module,
+	};
 	let mut builder = builder::from_module(module);
 	for helper in helpers {
 		let (params, mut body, length_local, divisor) = match *helper {
 			DynamicHelper::MemoryGrow(memory, cost_per_page) => {
 				let body = vec![
-					GetLocal(0), I32Const(65_536), I32GtU,
+					GetLocal(0),
+					I32Const(65_536),
+					I32GtU,
 					If(BlockType::Value(ValueType::I32)),
-						I32Const(-1),
+					I32Const(-1),
 					Else,
-						GetLocal(0), I64ExtendUI32, I64Const(i64::from(cost_per_page.get())), I64Mul,
-						Call(dynamic_check),
-						GetLocal(0), GrowMemory(memory), TeeLocal(1),
-						I32Const(-1), I32Ne, If(BlockType::NoResult),
-							GetLocal(0), I64ExtendUI32, I64Const(i64::from(cost_per_page.get())), I64Mul,
-							Call(gas_func),
-						End,
-						GetLocal(1),
-					End, End,
+					GetLocal(0),
+					I64ExtendUI32,
+					I64Const(i64::from(cost_per_page.get())),
+					I64Mul,
+					Call(dynamic_check),
+					GetLocal(0),
+					GrowMemory(memory),
+					TeeLocal(1),
+					I32Const(-1),
+					I32Ne,
+					If(BlockType::NoResult),
+					GetLocal(0),
+					I64ExtendUI32,
+					I64Const(i64::from(cost_per_page.get())),
+					I64Mul,
+					Call(gas_func),
+					End,
+					GetLocal(1),
+					End,
+					End,
 				];
 				let signature = builder::SignatureBuilder::new()
-					.with_param(ValueType::I32).with_result(ValueType::I32).build_sig();
-				builder.push_function(builder::FunctionBuilder::new()
-					.with_signature(signature).body()
-					.with_locals(vec![Local::new(1, ValueType::I32)])
-					.with_instructions(elements::Instructions::new(body)).build().build());
-				continue
-			},
+					.with_param(ValueType::I32)
+					.with_result(ValueType::I32)
+					.build_sig();
+				builder.push_function(
+					builder::FunctionBuilder::new()
+						.with_signature(signature)
+						.body()
+						.with_locals(vec![Local::new(1, ValueType::I32)])
+						.with_instructions(elements::Instructions::new(body))
+						.build()
+						.build(),
+				);
+				continue;
+			}
 			DynamicHelper::MemoryCopy(dst, src, divisor) => (
 				vec![ValueType::I32, ValueType::I32, ValueType::I32],
-				vec![GetLocal(0), GetLocal(1), GetLocal(2), Bulk(BulkInstruction::MemoryCopy(dst, src))], 2, divisor,
+				vec![
+					GetLocal(0),
+					GetLocal(1),
+					GetLocal(2),
+					Bulk(BulkInstruction::MemoryCopy(dst, src)),
+				],
+				2,
+				divisor,
 			),
 			DynamicHelper::MemoryFill(memory, divisor) => (
 				vec![ValueType::I32, ValueType::I32, ValueType::I32],
-				vec![GetLocal(0), GetLocal(1), GetLocal(2), Bulk(BulkInstruction::MemoryFill(memory))], 2, divisor,
+				vec![
+					GetLocal(0),
+					GetLocal(1),
+					GetLocal(2),
+					Bulk(BulkInstruction::MemoryFill(memory)),
+				],
+				2,
+				divisor,
 			),
 			DynamicHelper::MemoryInit(segment, memory, divisor) => (
 				vec![ValueType::I32, ValueType::I32, ValueType::I32],
-				vec![GetLocal(0), GetLocal(1), GetLocal(2), Bulk(BulkInstruction::MemoryInit(segment, memory))], 2, divisor,
+				vec![
+					GetLocal(0),
+					GetLocal(1),
+					GetLocal(2),
+					Bulk(BulkInstruction::MemoryInit(segment, memory)),
+				],
+				2,
+				divisor,
 			),
 			DynamicHelper::TableCopy(dst, src, divisor) => (
 				vec![ValueType::I32, ValueType::I32, ValueType::I32],
-				vec![GetLocal(0), GetLocal(1), GetLocal(2), Bulk(BulkInstruction::TableCopy(dst, src))], 2, divisor,
+				vec![
+					GetLocal(0),
+					GetLocal(1),
+					GetLocal(2),
+					Bulk(BulkInstruction::TableCopy(dst, src)),
+				],
+				2,
+				divisor,
 			),
 			DynamicHelper::TableInit(segment, table, divisor) => (
 				vec![ValueType::I32, ValueType::I32, ValueType::I32],
-				vec![GetLocal(0), GetLocal(1), GetLocal(2), Bulk(BulkInstruction::TableInit(segment, table))], 2, divisor,
+				vec![
+					GetLocal(0),
+					GetLocal(1),
+					GetLocal(2),
+					Bulk(BulkInstruction::TableInit(segment, table)),
+				],
+				2,
+				divisor,
 			),
 			#[cfg(feature = "reference_types")]
 			DynamicHelper::TableFill(table, element_type, divisor) => (
 				vec![ValueType::I32, element_type, ValueType::I32],
-				vec![GetLocal(0), GetLocal(1), GetLocal(2), Bulk(BulkInstruction::TableFill(table))], 2, divisor,
+				vec![
+					GetLocal(0),
+					GetLocal(1),
+					GetLocal(2),
+					Bulk(BulkInstruction::TableFill(table)),
+				],
+				2,
+				divisor,
 			),
 			#[cfg(feature = "reference_types")]
 			DynamicHelper::TableGrow(table, element_type, divisor) => {
-				let mut body = vec![
-					GetLocal(1), I64ExtendUI32, I64Const(i64::from(divisor.get())), I64DivU,
+				let body = vec![
+					GetLocal(1),
+					I64ExtendUI32,
+					I64Const(i64::from(divisor.get())),
+					I64DivU,
 					Call(dynamic_check),
-					GetLocal(0), GetLocal(1), Bulk(BulkInstruction::TableGrow(table)), TeeLocal(2),
-					I32Const(-1), I32Ne, If(BlockType::NoResult),
-					GetLocal(1), I64ExtendUI32, I64Const(i64::from(divisor.get())), I64DivU,
-					Call(gas_func), End, GetLocal(2), End,
+					GetLocal(0),
+					GetLocal(1),
+					Bulk(BulkInstruction::TableGrow(table)),
+					TeeLocal(2),
+					I32Const(-1),
+					I32Ne,
+					If(BlockType::NoResult),
+					GetLocal(1),
+					I64ExtendUI32,
+					I64Const(i64::from(divisor.get())),
+					I64DivU,
+					Call(gas_func),
+					End,
+					GetLocal(2),
+					End,
 				];
 				let signature = builder::SignatureBuilder::new()
 					.with_params(vec![element_type, ValueType::I32])
 					.with_result(ValueType::I32)
 					.build_sig();
-				builder.push_function(builder::FunctionBuilder::new()
-					.with_signature(signature).body()
-					.with_locals(vec![Local::new(1, ValueType::I32)])
-					.with_instructions(elements::Instructions::new(body)).build().build());
-				continue
-			},
+				builder.push_function(
+					builder::FunctionBuilder::new()
+						.with_signature(signature)
+						.body()
+						.with_locals(vec![Local::new(1, ValueType::I32)])
+						.with_instructions(elements::Instructions::new(body))
+						.build()
+						.build(),
+				);
+				continue;
+			}
 		};
 		let mut wrapped = vec![
-			GetLocal(length_local), I64ExtendUI32, I64Const(i64::from(divisor.get())), I64DivU,
+			GetLocal(length_local),
+			I64ExtendUI32,
+			I64Const(i64::from(divisor.get())),
+			I64DivU,
 			Call(dynamic_check),
 		];
 		wrapped.append(&mut body);
 		wrapped.extend([
-			GetLocal(length_local), I64ExtendUI32, I64Const(i64::from(divisor.get())), I64DivU,
-			Call(gas_func), End,
+			GetLocal(length_local),
+			I64ExtendUI32,
+			I64Const(i64::from(divisor.get())),
+			I64DivU,
+			Call(gas_func),
+			End,
 		]);
 		let signature = builder::SignatureBuilder::new().with_params(params);
-		builder.push_function(builder::FunctionBuilder::new()
-			.with_signature(signature.build_sig()).body()
-			.with_instructions(elements::Instructions::new(wrapped)).build().build());
+		builder.push_function(
+			builder::FunctionBuilder::new()
+				.with_signature(signature.build_sig())
+				.body()
+				.with_instructions(elements::Instructions::new(wrapped))
+				.build()
+				.build(),
+		);
 	}
 	builder.build()
 }
@@ -1071,12 +1222,8 @@ fn determine_metered_blocks<R: Rules>(
 		end_branch: bool,
 		is_loop: bool,
 	}
-	let mut reachability = vec![Reachability {
-		entry: true,
-		current: true,
-		end_branch: false,
-		is_loop: false,
-	}];
+	let mut reachability =
+		vec![Reachability { entry: true, current: true, end_branch: false, is_loop: false }];
 
 	// Begin an implicit function (i.e. `func...end`) block.
 	counter.begin_control_block(0, false);
@@ -1088,13 +1235,14 @@ fn determine_metered_blocks<R: Rules>(
 
 	for cursor in 0..instructions.elements().len() {
 		let instruction = &instructions.elements()[cursor];
-		let instruction_cost = rules
-			.instruction_cost_at(function_index, cursor as u32, instruction)
-			.ok_or(())?;
+		let instruction_cost =
+			rules.instruction_cost_at(function_index, cursor as u32, instruction).ok_or(())?;
 		match instruction {
 			Block(_) => {
 				let reachable = reachability.last().ok_or(())?.current;
-				if reachable { counter.increment(instruction_cost)?; }
+				if reachable {
+					counter.increment(instruction_cost)?;
+				}
 
 				// Begin new block. The cost of the following opcodes until `end` or `else` will
 				// be included into this block. The start position is set to that of the previous
@@ -1102,42 +1250,73 @@ fn determine_metered_blocks<R: Rules>(
 				// unnecessary metering instructions.
 				let top_block_start_pos = counter.active_metered_block()?.start_pos;
 				counter.begin_control_block(top_block_start_pos, false);
-				reachability.push(Reachability { entry: reachable, current: reachable, end_branch: false, is_loop: false });
-			},
+				reachability.push(Reachability {
+					entry: reachable,
+					current: reachable,
+					end_branch: false,
+					is_loop: false,
+				});
+			}
 			If(_) => {
 				let reachable = reachability.last().ok_or(())?.current;
-				if reachable { counter.increment(instruction_cost)?; }
+				if reachable {
+					counter.increment(instruction_cost)?;
+				}
 				counter.begin_control_block(cursor + 1, false);
-				if reachable { counter.increment(rules.block_entry_cost())?; }
-				reachability.push(Reachability { entry: reachable, current: reachable, end_branch: reachable, is_loop: false });
-			},
+				if reachable {
+					counter.increment(rules.block_entry_cost())?;
+				}
+				reachability.push(Reachability {
+					entry: reachable,
+					current: reachable,
+					end_branch: reachable,
+					is_loop: false,
+				});
+			}
 			Loop(_) => {
 				let reachable = reachability.last().ok_or(())?.current;
-				if reachable { counter.increment(instruction_cost)?; }
+				if reachable {
+					counter.increment(instruction_cost)?;
+				}
 				counter.begin_control_block(cursor + 1, true);
-				if reachable { counter.increment(rules.block_entry_cost())?; }
-				reachability.push(Reachability { entry: reachable, current: reachable, end_branch: false, is_loop: true });
-			},
+				if reachable {
+					counter.increment(rules.block_entry_cost())?;
+				}
+				reachability.push(Reachability {
+					entry: reachable,
+					current: reachable,
+					end_branch: false,
+					is_loop: true,
+				});
+			}
 			End => {
 				let closing = reachability.pop().ok_or(())?;
-				if closing.current { counter.increment(instruction_cost)?; }
+				if closing.current {
+					counter.increment(instruction_cost)?;
+				}
 				counter.finalize_control_block(cursor)?;
 				if let Some(parent) = reachability.last_mut() {
 					parent.current = closing.current || closing.end_branch;
 				}
-			},
+			}
 			Else => {
 				let frame = reachability.last_mut().ok_or(())?;
 				let then_reachable = frame.current;
 				frame.end_branch |= then_reachable;
 				frame.current = frame.entry;
 				counter.finalize_metered_block(cursor)?;
-				if then_reachable { counter.increment(instruction_cost)?; }
-				if frame.entry { counter.increment(rules.block_entry_cost())?; }
-			},
+				if then_reachable {
+					counter.increment(instruction_cost)?;
+				}
+				if frame.entry {
+					counter.increment(rules.block_entry_cost())?;
+				}
+			}
 			Br(label) => {
 				let reachable = reachability.last().ok_or(())?.current;
-				if reachable { counter.increment(instruction_cost)?; }
+				if reachable {
+					counter.increment(instruction_cost)?;
+				}
 
 				// Label is a relative index into the control stack.
 				let active_index = counter.active_control_block_index().ok_or(())?;
@@ -1146,20 +1325,26 @@ fn determine_metered_blocks<R: Rules>(
 					reachability.get_mut(target_index).ok_or(())?.end_branch = true;
 				}
 				counter.branch(cursor, &[target_index])?;
-				if reachable { reachability.last_mut().ok_or(())?.current = false; }
-			},
+				if reachable {
+					reachability.last_mut().ok_or(())?.current = false;
+				}
+			}
 			BrIf(label) => {
 				let reachable = reachability.last().ok_or(())?.current;
-				if reachable { counter.increment(instruction_cost)?; }
+				if reachable {
+					counter.increment(instruction_cost)?;
+				}
 				let active_index = counter.active_control_block_index().ok_or(())?;
 				let target_index = active_index.checked_sub(*label as usize).ok_or(())?;
 				if reachable && !reachability.get(target_index).ok_or(())?.is_loop {
 					reachability.get_mut(target_index).ok_or(())?.end_branch = true;
 				}
-			},
+			}
 			BrTable(br_table_data) => {
 				let reachable = reachability.last().ok_or(())?.current;
-				if reachable { counter.increment(instruction_cost)?; }
+				if reachable {
+					counter.increment(instruction_cost)?;
+				}
 
 				let active_index = counter.active_control_block_index().ok_or(())?;
 				let target_indices = [br_table_data.default]
@@ -1177,21 +1362,27 @@ fn determine_metered_blocks<R: Rules>(
 					reachability.last_mut().ok_or(())?.current = false;
 				}
 				counter.branch(cursor, &target_indices)?;
-			},
+			}
 			Return => {
 				let reachable = reachability.last().ok_or(())?.current;
-				if reachable { counter.increment(instruction_cost)?; }
+				if reachable {
+					counter.increment(instruction_cost)?;
+				}
 				counter.branch(cursor, &[0])?;
-				if reachable { reachability.last_mut().ok_or(())?.current = false; }
-			},
+				if reachable {
+					reachability.last_mut().ok_or(())?.current = false;
+				}
+			}
 			_ => {
 				// An ordinal non control flow instruction increments the cost of the current block.
 				let reachable = reachability.last().ok_or(())?.current;
-				if reachable { counter.increment(instruction_cost)?; }
+				if reachable {
+					counter.increment(instruction_cost)?;
+				}
 				if reachable && matches!(instruction, Unreachable) {
 					reachability.last_mut().ok_or(())?.current = false;
 				}
-			},
+			}
 		}
 	}
 
@@ -1253,7 +1444,7 @@ fn insert_metering_calls(
 	}
 
 	if block_iter.next().is_some() {
-		return Err(())
+		return Err(());
 	}
 
 	Ok(())
@@ -1310,9 +1501,17 @@ mod tests {
 		assert_eq!(
 			get_function_body(&instrumented, 0).unwrap(),
 			&[
-				I64Const(2), Call(0),
+				I64Const(2),
+				Call(0),
 				Loop(elements::BlockType::NoResult),
-				I64Const(5), Call(0), I32Const(1), BrIf(0), I32Const(2), Drop, End, End,
+				I64Const(5),
+				Call(0),
+				I32Const(1),
+				BrIf(0),
+				I32Const(2),
+				Drop,
+				End,
+				End,
 			],
 		);
 	}
@@ -1352,8 +1551,15 @@ mod tests {
 		assert_eq!(
 			get_function_body(&instrumented, 0).unwrap(),
 			&[
-				I64Const(4), Call(0), Block(elements::BlockType::NoResult),
-				I32Const(1), BrIf(1), End, I32Const(2), Drop, End,
+				I64Const(4),
+				Call(0),
+				Block(elements::BlockType::NoResult),
+				I32Const(1),
+				BrIf(1),
+				End,
+				I32Const(2),
+				Drop,
+				End,
 			],
 		);
 	}
@@ -1369,12 +1575,32 @@ mod tests {
 		assert_eq!(
 			get_function_body(&module, 0).unwrap(),
 			&[
-				GetLocal(0), I32Const(65_536), I32GtU,
-				If(elements::BlockType::Value(ValueType::I32)), I32Const(-1), Else,
-				GetLocal(0), I64ExtendUI32, I64Const(1_024), I64Mul, Call(1),
-				GetLocal(0), GrowMemory(3), TeeLocal(1), I32Const(-1), I32Ne,
-				If(elements::BlockType::NoResult), GetLocal(0), I64ExtendUI32,
-				I64Const(1_024), I64Mul, Call(0), End, GetLocal(1), End, End,
+				GetLocal(0),
+				I32Const(65_536),
+				I32GtU,
+				If(elements::BlockType::Value(ValueType::I32)),
+				I32Const(-1),
+				Else,
+				GetLocal(0),
+				I64ExtendUI32,
+				I64Const(1_024),
+				I64Mul,
+				Call(1),
+				GetLocal(0),
+				GrowMemory(3),
+				TeeLocal(1),
+				I32Const(-1),
+				I32Ne,
+				If(elements::BlockType::NoResult),
+				GetLocal(0),
+				I64ExtendUI32,
+				I64Const(1_024),
+				I64Mul,
+				Call(0),
+				End,
+				GetLocal(1),
+				End,
+				End,
 			],
 		);
 	}
@@ -1391,9 +1617,21 @@ mod tests {
 		assert_eq!(
 			get_function_body(&module, 0).unwrap(),
 			&[
-				GetLocal(2), I64ExtendUI32, I64Const(64), I64DivU, Call(1),
-				GetLocal(0), GetLocal(1), GetLocal(2), Bulk(BulkInstruction::MemoryCopy(2, 5)),
-				GetLocal(2), I64ExtendUI32, I64Const(64), I64DivU, Call(0), End,
+				GetLocal(2),
+				I64ExtendUI32,
+				I64Const(64),
+				I64DivU,
+				Call(1),
+				GetLocal(0),
+				GetLocal(1),
+				GetLocal(2),
+				Bulk(BulkInstruction::MemoryCopy(2, 5)),
+				GetLocal(2),
+				I64ExtendUI32,
+				I64Const(64),
+				I64DivU,
+				Call(0),
+				End,
 			],
 		);
 	}
@@ -1420,12 +1658,31 @@ mod tests {
 		assert_eq!(
 			get_function_body(&injected_module, 1).unwrap(),
 			&vec![
-				GetLocal(0), I32Const(65_536), I32GtU,
-				If(elements::BlockType::Value(ValueType::I32)), I32Const(-1), Else,
-				GetLocal(0), I64ExtendUI32, I64Const(10_000), I64Mul, Call(1),
-				GetLocal(0), GrowMemory(0), TeeLocal(1), I32Const(-1), I32Ne,
-				If(elements::BlockType::NoResult), GetLocal(0), I64ExtendUI32,
-				I64Const(10_000), I64Mul, Call(0), End, GetLocal(1), End,
+				GetLocal(0),
+				I32Const(65_536),
+				I32GtU,
+				If(elements::BlockType::Value(ValueType::I32)),
+				I32Const(-1),
+				Else,
+				GetLocal(0),
+				I64ExtendUI32,
+				I64Const(10_000),
+				I64Mul,
+				Call(1),
+				GetLocal(0),
+				GrowMemory(0),
+				TeeLocal(1),
+				I32Const(-1),
+				I32Ne,
+				If(elements::BlockType::NoResult),
+				GetLocal(0),
+				I64ExtendUI32,
+				I64Const(10_000),
+				I64Mul,
+				Call(0),
+				End,
+				GetLocal(1),
+				End,
 				End,
 			][..]
 		);

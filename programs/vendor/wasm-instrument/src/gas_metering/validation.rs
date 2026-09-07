@@ -146,7 +146,7 @@ fn build_control_flow_graph(
 
 		// Increment the charged cost if there are metering instructions to be inserted here.
 		let apply_block =
-			metered_blocks_iter.peek().map_or(false, |block| block.start_pos == cursor);
+			matches!(metered_blocks_iter.peek(), Some(block) if block.start_pos == cursor);
 		if apply_block {
 			let next_metered_block =
 				metered_blocks_iter.next().expect("peek returned an item; qed");
@@ -165,7 +165,7 @@ fn build_control_flow_graph(
 
 				let exit_node_id = graph.add_node();
 				stack.push(ControlFrame::new(active_node_id, exit_node_id, false));
-			},
+			}
 			Instruction::If(_) => {
 				graph.increment_actual_cost(active_node_id, instruction_cost);
 
@@ -176,7 +176,7 @@ fn build_control_flow_graph(
 				graph.new_forward_edge(active_node_id, then_node_id);
 				graph.increment_actual_cost(then_node_id, rules.block_entry_cost());
 				graph.set_first_instr_pos(then_node_id, cursor + 1);
-			},
+			}
 			Instruction::Loop(_) => {
 				graph.increment_actual_cost(active_node_id, instruction_cost);
 
@@ -187,7 +187,7 @@ fn build_control_flow_graph(
 				graph.new_forward_edge(active_node_id, loop_node_id);
 				graph.increment_actual_cost(loop_node_id, rules.block_entry_cost());
 				graph.set_first_instr_pos(loop_node_id, cursor + 1);
-			},
+			}
 			Instruction::Else => {
 				let active_frame_idx = stack.len() - 1;
 				let prev_frame_idx = stack.len() - 2;
@@ -200,7 +200,7 @@ fn build_control_flow_graph(
 				let prev_node_id = stack[prev_frame_idx].active_node;
 				graph.new_forward_edge(prev_node_id, else_node_id);
 				graph.set_first_instr_pos(else_node_id, cursor + 1);
-			},
+			}
 			Instruction::End => {
 				graph.increment_actual_cost(active_node_id, instruction_cost);
 				let closing_frame = stack.pop()
@@ -212,7 +212,7 @@ fn build_control_flow_graph(
 				if let Some(active_frame) = stack.last_mut() {
 					active_frame.active_node = closing_frame.exit_node;
 				}
-			},
+			}
 			Instruction::Br(label) => {
 				graph.increment_actual_cost(active_node_id, instruction_cost);
 
@@ -224,7 +224,7 @@ fn build_control_flow_graph(
 				let new_node_id = graph.add_node();
 				stack[active_frame_idx].active_node = new_node_id;
 				graph.set_first_instr_pos(new_node_id, cursor + 1);
-			},
+			}
 			Instruction::BrIf(label) => {
 				graph.increment_actual_cost(active_node_id, instruction_cost);
 
@@ -236,7 +236,7 @@ fn build_control_flow_graph(
 				stack[active_frame_idx].active_node = new_node_id;
 				graph.new_forward_edge(active_node_id, new_node_id);
 				graph.set_first_instr_pos(new_node_id, cursor + 1);
-			},
+			}
 			Instruction::BrTable(br_table_data) => {
 				graph.increment_actual_cost(active_node_id, instruction_cost);
 
@@ -249,7 +249,7 @@ fn build_control_flow_graph(
 				let new_node_id = graph.add_node();
 				stack[active_frame_idx].active_node = new_node_id;
 				graph.set_first_instr_pos(new_node_id, cursor + 1);
-			},
+			}
 			Instruction::Return => {
 				graph.increment_actual_cost(active_node_id, instruction_cost);
 
@@ -259,14 +259,14 @@ fn build_control_flow_graph(
 				let new_node_id = graph.add_node();
 				stack[active_frame_idx].active_node = new_node_id;
 				graph.set_first_instr_pos(new_node_id, cursor + 1);
-			},
+			}
 			Instruction::Unreachable => {
 				graph.increment_actual_cost(active_node_id, instruction_cost);
 				let active_frame_idx = stack.len() - 1;
 				let new_node_id = graph.add_node();
 				stack[active_frame_idx].active_node = new_node_id;
 				graph.set_first_instr_pos(new_node_id, cursor + 1);
-			},
+			}
 			_ => graph.increment_actual_cost(active_node_id, instruction_cost),
 		}
 	}
@@ -302,7 +302,7 @@ fn validate_graph_gas_costs(graph: &ControlFlowGraph) -> bool {
 		}
 
 		if node.forward_edges.is_empty() && total_actual != total_charged {
-			return false
+			return false;
 		}
 
 		for loop_node_id in node.loopback_edges.iter() {
@@ -310,13 +310,13 @@ fn validate_graph_gas_costs(graph: &ControlFlowGraph) -> bool {
 				.get_mut(loop_node_id)
 				.expect("cannot arrive at loopback edge without visiting loop entry node");
 			if loop_actual != loop_charged {
-				return false
+				return false;
 			}
 		}
 
 		for next_node_id in node.forward_edges.iter() {
 			if !visit(graph, *next_node_id, total_actual, total_charged, loop_costs) {
-				return false
+				return false;
 			}
 		}
 

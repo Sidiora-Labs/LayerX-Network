@@ -58,11 +58,7 @@ pub mod host_function {
 
 	impl Backend for Injector {
 		fn gas_meter<R: Rules>(self, _module: &Module, _rules: &R) -> GasMeter {
-			GasMeter::External {
-				module: self.module,
-				function: self.name,
-				check: self.check,
-			}
+			GasMeter::External { module: self.module, function: self.name, check: self.check }
 		}
 	}
 }
@@ -129,7 +125,7 @@ pub mod mutable_global {
 				cost + (rules.instruction_cost(instruction).unwrap_or(0) as u64)
 			});
 			// don't charge for the instructions used to fail when out of gas
-			let fail_cost = vec![
+			let fail_cost = [
 				Instruction::I64Const(-1i64),           // non-charged instruction
 				Instruction::SetGlobal(gas_global_idx), // non-charged instruction
 				Instruction::Unreachable,               // non-charged instruction
