@@ -1,5 +1,8 @@
 //! Receipt-verifying authority boundary for the hosted gateway.
 
+pub use layerx_proof::inclusion::SequencerAuthorization;
+
+pub mod authority_evidence;
 pub mod http;
 pub mod store;
 
@@ -300,6 +303,7 @@ pub struct VerifiedOperation {
     activity_id: [u8; 32],
     result_code: i32,
     verification_rank: u8,
+    verification_level: &'static str,
 }
 
 /// Canonical activity identity available only after module, network, wire and
@@ -489,7 +493,7 @@ impl VerifiedOperation {
 
     #[must_use]
     pub const fn verification_level(&self) -> &'static str {
-        "receipt-verified"
+        self.verification_level
     }
 }
 
@@ -552,7 +556,15 @@ pub fn verify_activity_operation(
         activity_id: protocol.activity_id(),
         result_code: protocol.result_code(),
         verification_rank: verified.level().wire_rank(),
+        verification_level: "receipt-verified",
     })
+}
+
+#[derive(Clone, Copy)]
+pub struct ProgramExpectation {
+    pub activity_id: [u8; 32],
+    pub program_id: [u8; 32],
+    pub guest_abi_version: u16,
 }
 
 /// Verifies a committed Programs receipt together with its authenticated
@@ -568,9 +580,7 @@ pub fn verify_program_operation(
     call_graph: &[u8],
     authority: AuthorityFacts,
     trusted_sequencer_key: &[u8; 32],
-    expected_activity_id: [u8; 32],
-    expected_program_id: [u8; 32],
-    expected_guest_abi_version: u16,
+    expected: ProgramExpectation,
 ) -> Result<VerifiedOperation, GatewayError> {
     if authority
         .sequencer_public_key()
@@ -586,18 +596,18 @@ pub fn verify_program_operation(
         call_graph,
         AuthorizedProgramExecutionExpectation {
             authority: authority.authorized(),
-            activity_id: expected_activity_id,
-            program_id: expected_program_id,
-            guest_abi_version: expected_guest_abi_version,
+            activity_id: expected.activity_id,
+            program_id: expected.program_id,
+            guest_abi_version: expected.guest_abi_version,
         },
     )
     .map_err(|_| GatewayError::VerificationRequired)?;
     render_verified_program_operation(
-        verified,
+        &verified,
         terminal_payload,
         call_graph,
-        expected_program_id,
-        expected_guest_abi_version,
+        expected.program_id,
+        expected.guest_abi_version,
         *trusted_sequencer_key,
         "executed",
     )
@@ -616,9 +626,7 @@ pub fn verify_program_simulation_operation(
     call_graph: &[u8],
     trusted_previous_state_root: [u8; 32],
     trusted_sequencer_key: [u8; 32],
-    expected_activity_id: [u8; 32],
-    expected_program_id: [u8; 32],
-    expected_guest_abi_version: u16,
+    expected: ProgramExpectation,
 ) -> Result<VerifiedOperation, GatewayError> {
     let verified = verify_program_execution(
         receipt_bytes,
@@ -627,25 +635,25 @@ pub fn verify_program_simulation_operation(
         ProgramExecutionExpectation {
             sequencer_public_key: trusted_sequencer_key,
             previous_state_root: trusted_previous_state_root,
-            activity_id: expected_activity_id,
-            program_id: expected_program_id,
-            guest_abi_version: expected_guest_abi_version,
+            activity_id: expected.activity_id,
+            program_id: expected.program_id,
+            guest_abi_version: expected.guest_abi_version,
         },
     )
     .map_err(|_| GatewayError::VerificationRequired)?;
     render_verified_program_operation(
-        verified,
+        &verified,
         terminal_payload,
         call_graph,
-        expected_program_id,
-        expected_guest_abi_version,
+        expected.program_id,
+        expected.guest_abi_version,
         trusted_sequencer_key,
         "simulated",
     )
 }
 
 fn render_verified_program_operation(
-    verified: VerifiedProgramExecution,
+    verified: &VerifiedProgramExecution,
     terminal_payload: &[u8],
     call_graph: &[u8],
     expected_program_id: [u8; 32],
@@ -710,6 +718,7 @@ fn render_verified_program_operation(
         activity_id: protocol.activity_id(),
         result_code: verified.result_code(),
         verification_rank: verified.receipt().level().wire_rank(),
+        verification_level: "receipt-verified",
     })
 }
 
@@ -942,6 +951,31 @@ impl Display for GatewayError {
 
 impl std::error::Error for GatewayError {}
 
+/// Parses and validates independently configured sequencer trust inputs.
+///
+/// # Errors
+/// Returns the invalid pin name for malformed keys, identities or bounds.
+pub fn configured_sequencer(
+    id: &str,
+    key: &str,
+    first: &str,
+    last: &str,
+) -> Result<SequencerAuthorization, &'static str> {
+    let authorization = SequencerAuthorization::from_config(id, key, first, last)?;
+    let bytes = authorization.public_key();
+    let key =
+        ed25519_dalek::VerifyingKey::from_bytes(&bytes).map_err(|_| "sequencer public key")?;
+    let mut y = bytes;
+    y[31] &= 0x7f;
+    let mut prime = [0xff; 32];
+    prime[0] = 0xed;
+    prime[31] = 0x7f;
+    if key.is_weak() || y.iter().rev().cmp(prime.iter().rev()) != std::cmp::Ordering::Less {
+        return Err("sequencer public key");
+    }
+    Ok(authorization)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{platform_gateway_program_routes, production_route, IssuedKey, ProductionRoute};
@@ -1018,5 +1052,31 @@ mod tests {
         )
         .is_err());
         assert!(production_route("GET", "/v1/programs/registry").is_err());
+    }
+}
+
+#[cfg(test)]
+mod authorization_config_tests {
+    use super::configured_sequencer;
+    #[test]
+    fn mandatory_authorization_fields_refuse_missing_malformed_and_reversed_inputs() {
+        let id = "11".repeat(32);
+        let key = "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a";
+        assert!(configured_sequencer(&id, key, "1", "1").is_ok());
+        for fields in [
+            ["", key, "1", "2"],
+            [&id, "", "1", "2"],
+            [&id, key, "", "2"],
+            [&id, key, "1", ""],
+            ["xyz", key, "1", "2"],
+            [&id, "ff", "1", "2"],
+            [&id, key, "2", "1"],
+            [&id, key, "+1", "2"],
+            [&id, key, "1", "18446744073709551616"],
+        ] {
+            assert!(configured_sequencer(fields[0], fields[1], fields[2], fields[3]).is_err());
+        }
+        assert!(configured_sequencer(&id, &"00".repeat(32), "1", "2").is_err());
+        assert!(configured_sequencer(&id, &"ff".repeat(32), "1", "2").is_err());
     }
 }
