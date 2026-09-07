@@ -76,6 +76,9 @@ impl SandboxState {
         )
     }
 
+    /// # Errors
+    ///
+    /// Returns a refusal for malformed state, mismatched lease bindings or exceeded state bounds.
     pub fn from_canonical(lease: &Lease, bytes: &[u8]) -> Result<Self, SnapshotRefusal> {
         let mut cursor = SnapshotCursor::new(bytes);
         if cursor.take(SNAPSHOT_DOMAIN.len())? != SNAPSHOT_DOMAIN
@@ -204,6 +207,9 @@ impl SandboxState {
         Ok(())
     }
 
+    /// # Errors
+    ///
+    /// Returns a refusal when state validation or canonical length encoding fails.
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, SnapshotRefusal> {
         self.validate()?;
         let mut output = Vec::new();
@@ -230,6 +236,9 @@ impl SandboxState {
         Ok(output)
     }
 
+    /// # Errors
+    ///
+    /// Returns a refusal when state validation, canonical encoding or hashing fails.
     pub fn digest(&self) -> Result<[u8; 32], SnapshotRefusal> {
         hash_bytes(HashAlgorithm::Sha256, &self.canonical_bytes()?)
             .map_err(|_| SnapshotRefusal::HashRefusal)
@@ -321,12 +330,18 @@ impl CapturedSnapshot {
     pub const fn state(&self) -> &SandboxState {
         &self.state
     }
+    /// # Errors
+    ///
+    /// Returns a refusal when state validation, canonical encoding or hashing fails.
     pub fn digest(&self) -> Result<[u8; 32], SnapshotRefusal> {
         self.state.digest()
     }
 }
 
 impl Snapshot {
+    /// # Errors
+    ///
+    /// Returns a refusal when lease state, code identity, runtime capture or namespace validation fails.
     pub fn capture(
         lease: &Lease,
         instance: &mut ProgramInstance,
@@ -354,6 +369,9 @@ impl Snapshot {
         })
     }
 
+    /// # Errors
+    ///
+    /// Returns a refusal when snapshot ownership, transition, persistence, metering or state validation fails.
     pub fn commit(
         lease: &mut Lease,
         instance: &mut ProgramInstance,
@@ -505,56 +523,46 @@ impl RestoredSandbox {
     }
 }
 
+pub struct RestoreRequest<'a> {
+    pub snapshot_digest: [u8; 32],
+    pub supplied: SandboxState,
+    pub authorization: AuthorizationContext,
+    pub module: &'a ValidatedModule,
+    pub activation: LeaseTransition,
+    pub evidence: TransitionEvidence,
+}
+
+/// # Errors
+///
+/// Returns a refusal when snapshot identity, ownership, target bounds, activation, storage or runtime restoration fails.
 pub fn restore(
     source: &Lease,
     target: &mut Lease,
     storage: &mut Storage,
-    snapshot_digest: [u8; 32],
-    supplied: SandboxState,
-    authorization: AuthorizationContext,
     meter: &mut layerx_programs_runtime::Meter,
-    module: &ValidatedModule,
-    activation: LeaseTransition,
-    evidence: TransitionEvidence,
+    request: RestoreRequest<'_>,
 ) -> Result<RestoredSandbox, SnapshotRefusal> {
-    let record = source
-        .snapshot_records()
-        .iter()
-        .find(|record| record.digest() == snapshot_digest)
-        .ok_or(SnapshotRefusal::UnknownSnapshot)?;
-    if target.state() != LeaseState::Funded {
-        return Err(SnapshotRefusal::TargetNotFunded);
-    }
-    if authorization.principal() != record.owner() || authorization.principal() != target.tenant() {
-        return Err(SnapshotRefusal::NotSnapshotOwner);
-    }
-    if target.host_program() != record.host_program()
-        || target.image_code_hash() != record.image_code_hash()
-        || module.code_hash() != record.image_code_hash()
-    {
-        return Err(SnapshotRefusal::IncompatibleTarget);
-    }
-    if supplied.source_lease != record.source_lease()
-        || supplied.source_namespace != record.namespace()
-    {
-        return Err(SnapshotRefusal::StateLeaseMismatch);
-    }
-    supplied.validate_against(target)?;
-    let bytes = supplied.canonical_bytes()?;
-    let byte_length =
-        u64::try_from(bytes.len()).map_err(|_| SnapshotRefusal::StateBoundExceeded)?;
-    if byte_length != record.byte_length()
-        || hash_bytes(HashAlgorithm::Sha256, &bytes).map_err(|_| SnapshotRefusal::HashRefusal)?
-            != record.digest()
-    {
-        return Err(SnapshotRefusal::DigestMismatch);
-    }
-    if activation.activity != LeaseActivity::Activate
-        || activation.from != LeaseState::Funded
-        || activation.to != LeaseState::Active
-    {
-        return Err(SnapshotRefusal::InvalidActivation);
-    }
+    let RestoreRequest {
+        snapshot_digest,
+        supplied,
+        authorization,
+        module,
+        activation,
+        evidence,
+    } = request;
+    let ValidatedRestore {
+        record,
+        bytes,
+        byte_length,
+    } = validate_restore(
+        source,
+        target,
+        snapshot_digest,
+        &supplied,
+        &authorization,
+        module,
+        &activation,
+    )?;
     let mut candidate = target.clone();
     candidate
         .bind_restore(record.digest())
@@ -631,6 +639,66 @@ pub fn restore(
     Ok(restored)
 }
 
+struct ValidatedRestore<'a> {
+    record: &'a crate::LeaseSnapshotRecord,
+    bytes: Vec<u8>,
+    byte_length: u64,
+}
+
+fn validate_restore<'a>(
+    source: &'a Lease,
+    target: &Lease,
+    snapshot_digest: [u8; 32],
+    supplied: &SandboxState,
+    authorization: &AuthorizationContext,
+    module: &ValidatedModule,
+    activation: &LeaseTransition,
+) -> Result<ValidatedRestore<'a>, SnapshotRefusal> {
+    let record = source
+        .snapshot_records()
+        .iter()
+        .find(|record| record.digest() == snapshot_digest)
+        .ok_or(SnapshotRefusal::UnknownSnapshot)?;
+    if target.state() != LeaseState::Funded {
+        return Err(SnapshotRefusal::TargetNotFunded);
+    }
+    if authorization.principal() != record.owner() || authorization.principal() != target.tenant() {
+        return Err(SnapshotRefusal::NotSnapshotOwner);
+    }
+    if target.host_program() != record.host_program()
+        || target.image_code_hash() != record.image_code_hash()
+        || module.code_hash() != record.image_code_hash()
+    {
+        return Err(SnapshotRefusal::IncompatibleTarget);
+    }
+    if supplied.source_lease != record.source_lease()
+        || supplied.source_namespace != record.namespace()
+    {
+        return Err(SnapshotRefusal::StateLeaseMismatch);
+    }
+    supplied.validate_against(target)?;
+    let bytes = supplied.canonical_bytes()?;
+    let byte_length =
+        u64::try_from(bytes.len()).map_err(|_| SnapshotRefusal::StateBoundExceeded)?;
+    if byte_length != record.byte_length()
+        || hash_bytes(HashAlgorithm::Sha256, &bytes).map_err(|_| SnapshotRefusal::HashRefusal)?
+            != record.digest()
+    {
+        return Err(SnapshotRefusal::DigestMismatch);
+    }
+    if activation.activity != LeaseActivity::Activate
+        || activation.from != LeaseState::Funded
+        || activation.to != LeaseState::Active
+    {
+        return Err(SnapshotRefusal::InvalidActivation);
+    }
+    Ok(ValidatedRestore {
+        record,
+        bytes,
+        byte_length,
+    })
+}
+
 fn snapshot_prefix(digest: [u8; 32]) -> Vec<u8> {
     let mut key = b"snapshot".to_vec();
     key.extend_from_slice(SNAPSHOT_KEY_DOMAIN);
@@ -660,9 +728,9 @@ fn live_namespace_cells(
         })
 }
 
-fn rebound_live_entries(
-    cells: &[NamespaceCell],
-) -> Result<Vec<(Vec<u8>, Vec<u8>)>, SnapshotRefusal> {
+type NamespaceEntries = Vec<(Vec<u8>, Vec<u8>)>;
+
+fn rebound_live_entries(cells: &[NamespaceCell]) -> Result<NamespaceEntries, SnapshotRefusal> {
     let mut entries = Vec::with_capacity(cells.len());
     for cell in cells {
         if cell.key.is_empty() {
@@ -673,10 +741,7 @@ fn rebound_live_entries(
     Ok(entries)
 }
 
-fn snapshot_entries(
-    digest: [u8; 32],
-    bytes: &[u8],
-) -> Result<Vec<(Vec<u8>, Vec<u8>)>, SnapshotRefusal> {
+fn snapshot_entries(digest: [u8; 32], bytes: &[u8]) -> Result<NamespaceEntries, SnapshotRefusal> {
     let prefix = snapshot_prefix(digest);
     let count = bytes.len().div_ceil(SNAPSHOT_CHUNK_BYTES);
     let mut manifest_key = prefix.clone();
