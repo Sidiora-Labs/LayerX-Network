@@ -10,6 +10,7 @@ name = "layerx-gateway"
 path = "src/main.rs"
 
 [dependencies]
+ed25519-dalek.workspace = true
 getrandom.workspace = true
 layerx-proof.workspace = true
 layerx-crypto = { path = "../../../agent/crates/layerx-crypto" }
@@ -25,6 +26,3 @@ zeroize.workspace = true
 
 [lints]
 workspace = true
-
-[dev-dependencies]
-ed25519-dalek.workspace = true

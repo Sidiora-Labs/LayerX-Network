@@ -18,7 +18,7 @@ use layerx_interop_gateway::server::{
 };
 use layerx_interop_gateway::trace::TraceId;
 use layerx_interop_gateway::GatewayCore;
-use layerx_platform_gateway::http::{IncomingRequest, OutgoingResponse};
+use layerx_platform_gateway::http::{IncomingRequest, OutboundRequest, OutgoingResponse};
 use layerx_platform_gateway::store::{
     Completion, KeyRecord, Reservation, ReservationRequest, TapCredentialRecord,
     TapNonceConsumption,
@@ -1992,12 +1992,14 @@ impl Execution<'_> {
         }
         let upstream = self.config.client.request_authorized_traced(
             &self.config.hosted_gateway,
-            "POST",
-            "/v1/activities",
             self.authorization,
-            Some(self.idempotency),
-            "application/octet-stream",
-            &self.activity,
+            &OutboundRequest {
+                method: "POST",
+                path: "/v1/activities",
+                idempotency: Some(self.idempotency),
+                content_type: "application/octet-stream",
+                body: &self.activity,
+            },
             Some(self.trace.as_str()),
         )?;
         if upstream.status == 202 {
@@ -2126,12 +2128,14 @@ fn authority(
     let authorization = format!("Bearer {}", config.receipt_authority_token.as_str());
     let response = config.client.request_authorized_traced(
         &config.receipt_authority,
-        "GET",
-        &format!("/v1/authorized-batches/by-activity/{activity_id}"),
         &authorization,
-        None,
-        "application/json",
-        &[],
+        &OutboundRequest {
+            method: "GET",
+            path: &format!("/v1/authorized-batches/by-activity/{activity_id}"),
+            idempotency: None,
+            content_type: "application/json",
+            body: &[],
+        },
         Some(trace.as_str()),
     )?;
     if response.status != 200 || response.content_type != "application/json" {
@@ -2260,12 +2264,14 @@ fn dependency_ready(
         .client
         .request(
             endpoint,
-            "GET",
-            "/readyz",
             token,
-            None,
-            "application/json",
-            &[],
+            &OutboundRequest {
+                method: "GET",
+                path: "/readyz",
+                idempotency: None,
+                content_type: "application/json",
+                body: &[],
+            },
         )
         .is_ok_and(|response| response.status == 200 && response.content_type == "application/json")
 }
@@ -2275,12 +2281,14 @@ fn hosted_ready(config: &Config) -> bool {
         .client
         .request(
             &config.hosted_gateway,
-            "GET",
-            "/readyz",
             "readiness",
-            None,
-            "application/json",
-            &[],
+            &OutboundRequest {
+                method: "GET",
+                path: "/readyz",
+                idempotency: None,
+                content_type: "application/json",
+                body: &[],
+            },
         )
         .is_ok_and(|response| response.status == 200 && response.content_type == "application/json")
 }

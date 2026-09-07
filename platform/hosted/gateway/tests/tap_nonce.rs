@@ -91,12 +91,6 @@ impl RedisProcess {
             ),
         )
         .unwrap_or_else(|error| panic!("test Redis config must be written: {error}"));
-        let child = Command::new("redis-server")
-            .arg(&config)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap_or_else(|error| panic!("real Redis server must start: {error}"));
         let endpoint = RedisEndpoint::parse(&format!("rediss://localhost:{port}"))
             .unwrap_or_else(|error| panic!("test Redis endpoint must parse: {error}"));
         let certificate = Certificate::from_der(
@@ -104,14 +98,21 @@ impl RedisProcess {
                 .unwrap_or_else(|error| panic!("test certificate must be read: {error}")),
         )
         .unwrap_or_else(|error| panic!("test certificate must parse: {error}"));
+        let child = Command::new("redis-server")
+            .arg(&config)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap_or_else(|error| panic!("real Redis server must start: {error}"));
+        let process = Self {
+            child,
+            directory,
+            endpoint,
+            certificate,
+        };
         for _ in 0..100 {
             if TcpStream::connect(("127.0.0.1", port)).is_ok() {
-                return Self {
-                    child,
-                    directory,
-                    endpoint,
-                    certificate,
-                };
+                return process;
             }
             thread::sleep(Duration::from_millis(20));
         }
@@ -256,10 +257,16 @@ fn principal_binding_comes_only_from_the_authenticated_durable_key_record() {
     let foreign = PrincipalId::new("principal-two".to_owned())
         .unwrap_or_else(|error| panic!("principal: {error:?}"));
     let digest = |principal: &PrincipalId| {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
         principal
             .audit_digest()
             .iter()
-            .map(|byte| format!("{byte:02x}"))
+            .flat_map(|byte| {
+                [
+                    char::from(HEX[usize::from(byte >> 4)]),
+                    char::from(HEX[usize::from(byte & 15)]),
+                ]
+            })
             .collect::<String>()
     };
     let secret = format!("lxp_live_{}", "a".repeat(64));
