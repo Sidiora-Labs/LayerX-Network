@@ -1,4 +1,4 @@
-//! A bounded deterministic scripting program for the LayerX Programs ABI.
+//! A bounded deterministic scripting program for the `LayerX` Programs ABI.
 //!
 //! Scripts are submitted as canonical bytes to this ordinary program. The
 //! complete script is validated before any storage or transfer effect is
@@ -6,15 +6,12 @@
 //! there is no allocator, indirect call, floating point, clock, entropy, or
 //! authority source in the instruction set.
 
-#![no_std]
+#![cfg_attr(target_arch = "wasm32", no_std)]
 
-#[cfg(test)]
-extern crate std;
+use layerx_program_sdk::{AccountId, AssetId, Field, ProgramError, Reason, StorageKey};
 
-use layerx_program_sdk::{
-    call, storage, transfer, AccountId, Amount, AssetId, CallResult, Field, Payment, ProgramError,
-    Reason, StorageKey, StorageValue,
-};
+#[cfg(target_arch = "wasm32")]
+use layerx_program_sdk::{call, storage, transfer, Amount, CallResult, Payment, StorageValue};
 
 /// Frozen script magic.
 pub const MAGIC: [u8; 4] = *b"LXSI";
@@ -53,17 +50,41 @@ pub enum Instruction<'a> {
     /// Assign an exact signed integer to a register.
     Constant { destination: u8, value: i64 },
     /// Checked integer addition.
-    Add { destination: u8, left: u8, right: u8 },
+    Add {
+        destination: u8,
+        left: u8,
+        right: u8,
+    },
     /// Checked integer subtraction.
-    Subtract { destination: u8, left: u8, right: u8 },
+    Subtract {
+        destination: u8,
+        left: u8,
+        right: u8,
+    },
     /// Checked integer multiplication.
-    Multiply { destination: u8, left: u8, right: u8 },
+    Multiply {
+        destination: u8,
+        left: u8,
+        right: u8,
+    },
     /// Integer division, refusing zero and the signed overflow case.
-    Divide { destination: u8, left: u8, right: u8 },
+    Divide {
+        destination: u8,
+        left: u8,
+        right: u8,
+    },
     /// Store one for equality and zero otherwise.
-    Equal { destination: u8, left: u8, right: u8 },
+    Equal {
+        destination: u8,
+        left: u8,
+        right: u8,
+    },
     /// Store one for signed less-than and zero otherwise.
-    LessThan { destination: u8, left: u8, right: u8 },
+    LessThan {
+        destination: u8,
+        left: u8,
+        right: u8,
+    },
     /// Read one canonical big-endian i64 from principal-scoped storage.
     Load { destination: u8, key: &'a [u8] },
     /// Write one register as a canonical big-endian i64.
@@ -71,7 +92,11 @@ pub enum Instruction<'a> {
     /// Delete one key from principal-scoped storage.
     Delete { key: &'a [u8] },
     /// Stage an ordinary capability-checked 402LXP transfer.
-    Transfer { amount: u8, asset: [u8; 32], recipient: [u8; 32] },
+    Transfer {
+        amount: u8,
+        asset: [u8; 32],
+        recipient: [u8; 32],
+    },
     /// Execute a canonical body an exact positive, statically bounded count.
     Repeat { count: u16, body: &'a [u8] },
 }
@@ -79,7 +104,9 @@ pub enum Instruction<'a> {
 /// A fully validated borrowed script.
 #[derive(Clone, Copy)]
 pub struct Interpreter<'a> {
+    #[cfg(target_arch = "wasm32")]
     code: &'a [u8],
+    marker: core::marker::PhantomData<&'a [u8]>,
     registers: u8,
     maximum_steps: u32,
 }
@@ -91,29 +118,50 @@ struct Cursor<'a> {
 }
 
 impl<'a> Cursor<'a> {
-    const fn new(bytes: &'a [u8]) -> Self { Self { bytes, offset: 0 } }
+    const fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, offset: 0 }
+    }
     fn take(&mut self, length: usize) -> Result<&'a [u8], ProgramError> {
         let end = self.offset.checked_add(length).ok_or_else(bounds)?;
         let value = self.bytes.get(self.offset..end).ok_or_else(malformed)?;
         self.offset = end;
         Ok(value)
     }
-    fn byte(&mut self) -> Result<u8, ProgramError> { Ok(self.take(1)?[0]) }
+    fn byte(&mut self) -> Result<u8, ProgramError> {
+        Ok(self.take(1)?[0])
+    }
     fn u16(&mut self) -> Result<u16, ProgramError> {
-        Ok(u16::from_be_bytes(self.take(2)?.try_into().map_err(|_| malformed())?))
+        Ok(u16::from_be_bytes(
+            self.take(2)?.try_into().map_err(|_| malformed())?,
+        ))
     }
     fn i64(&mut self) -> Result<i64, ProgramError> {
-        Ok(i64::from_be_bytes(self.take(8)?.try_into().map_err(|_| malformed())?))
+        Ok(i64::from_be_bytes(
+            self.take(8)?.try_into().map_err(|_| malformed())?,
+        ))
     }
-    const fn finished(self) -> bool { self.offset == self.bytes.len() }
+    const fn finished(self) -> bool {
+        self.offset == self.bytes.len()
+    }
 }
 
-const fn malformed() -> ProgramError { ProgramError::value(Field::CallInput, Reason::Malformed) }
-const fn bounds() -> ProgramError { ProgramError::value(Field::CallInput, Reason::TooLarge) }
-const fn arithmetic(reason: Reason) -> ProgramError { ProgramError::value(Field::CallInput, reason) }
+const fn malformed() -> ProgramError {
+    ProgramError::value(Field::CallInput, Reason::Malformed)
+}
+const fn bounds() -> ProgramError {
+    ProgramError::value(Field::CallInput, Reason::TooLarge)
+}
+#[cfg(target_arch = "wasm32")]
+const fn arithmetic(reason: Reason) -> ProgramError {
+    ProgramError::value(Field::CallInput, reason)
+}
 
 fn register(index: u8, registers: u8) -> Result<u8, ProgramError> {
-    if index < registers { Ok(index) } else { Err(malformed()) }
+    if index < registers {
+        Ok(index)
+    } else {
+        Err(malformed())
+    }
 }
 
 fn key<'a>(cursor: &mut Cursor<'a>) -> Result<&'a [u8], ProgramError> {
@@ -135,12 +183,36 @@ fn decode<'a>(cursor: &mut Cursor<'a>, registers: u8) -> Result<Instruction<'a>,
             let left = register(cursor.byte()?, registers)?;
             let right = register(cursor.byte()?, registers)?;
             Ok(match opcode {
-                OP_ADD => Instruction::Add { destination, left, right },
-                OP_SUB => Instruction::Subtract { destination, left, right },
-                OP_MUL => Instruction::Multiply { destination, left, right },
-                OP_DIV => Instruction::Divide { destination, left, right },
-                OP_EQ => Instruction::Equal { destination, left, right },
-                _ => Instruction::LessThan { destination, left, right },
+                OP_ADD => Instruction::Add {
+                    destination,
+                    left,
+                    right,
+                },
+                OP_SUB => Instruction::Subtract {
+                    destination,
+                    left,
+                    right,
+                },
+                OP_MUL => Instruction::Multiply {
+                    destination,
+                    left,
+                    right,
+                },
+                OP_DIV => Instruction::Divide {
+                    destination,
+                    left,
+                    right,
+                },
+                OP_EQ => Instruction::Equal {
+                    destination,
+                    left,
+                    right,
+                },
+                _ => Instruction::LessThan {
+                    destination,
+                    left,
+                    right,
+                },
             })
         }
         OP_LOAD => Ok(Instruction::Load {
@@ -158,13 +230,22 @@ fn decode<'a>(cursor: &mut Cursor<'a>, registers: u8) -> Result<Instruction<'a>,
             let recipient = cursor.take(32)?.try_into().map_err(|_| malformed())?;
             AssetId::new(asset)?;
             AccountId::new(recipient)?;
-            Ok(Instruction::Transfer { amount, asset, recipient })
+            Ok(Instruction::Transfer {
+                amount,
+                asset,
+                recipient,
+            })
         }
         OP_REPEAT => {
             let count = cursor.u16()?;
             let body_length = usize::from(cursor.u16()?);
-            if count == 0 || body_length == 0 { return Err(malformed()); }
-            Ok(Instruction::Repeat { count, body: cursor.take(body_length)? })
+            if count == 0 || body_length == 0 {
+                return Err(malformed());
+            }
+            Ok(Instruction::Repeat {
+                count,
+                body: cursor.take(body_length)?,
+            })
         }
         _ => Err(malformed()),
     }
@@ -176,16 +257,25 @@ fn validate_block(
     depth: u8,
     remaining: &mut u32,
 ) -> Result<(), ProgramError> {
-    if depth > MAX_CONTROL_DEPTH { return Err(bounds()); }
+    if depth > MAX_CONTROL_DEPTH {
+        return Err(bounds());
+    }
     let mut cursor = Cursor::new(code);
     while !cursor.finished() {
         let instruction = decode(&mut cursor, registers)?;
         *remaining = remaining.checked_sub(1).ok_or_else(bounds)?;
         if let Instruction::Repeat { count, body } = instruction {
             let mut body_budget = MAX_STEPS;
-            validate_block(body, registers, depth.checked_add(1).ok_or_else(bounds)?, &mut body_budget)?;
+            validate_block(
+                body,
+                registers,
+                depth.checked_add(1).ok_or_else(bounds)?,
+                &mut body_budget,
+            )?;
             let body_steps = MAX_STEPS.checked_sub(body_budget).ok_or_else(bounds)?;
-            let expanded = body_steps.checked_mul(u32::from(count)).ok_or_else(bounds)?;
+            let expanded = body_steps
+                .checked_mul(u32::from(count))
+                .ok_or_else(bounds)?;
             *remaining = remaining.checked_sub(expanded).ok_or_else(bounds)?;
         }
     }
@@ -201,39 +291,70 @@ impl<'a> Interpreter<'a> {
     /// keys, zero repeats, excessive nesting, and any expanded step count
     /// beyond both the script declaration and the protocol ceiling.
     pub fn validate(script: &'a [u8]) -> Result<Self, ProgramError> {
-        if script.len() > MAX_SCRIPT_BYTES || script.len() < HEADER_BYTES { return Err(bounds()); }
+        if script.len() > MAX_SCRIPT_BYTES || script.len() < HEADER_BYTES {
+            return Err(bounds());
+        }
         let mut cursor = Cursor::new(script);
-        if cursor.take(4)? != MAGIC || cursor.byte()? != VERSION { return Err(malformed()); }
+        if cursor.take(4)? != MAGIC || cursor.byte()? != VERSION {
+            return Err(malformed());
+        }
         let registers = cursor.byte()?;
-        if registers == 0 || usize::from(registers) > MAX_REGISTERS { return Err(bounds()); }
+        if registers == 0 || usize::from(registers) > MAX_REGISTERS {
+            return Err(bounds());
+        }
         let maximum_steps = u32::from(cursor.u16()?);
-        if maximum_steps == 0 || maximum_steps > MAX_STEPS { return Err(bounds()); }
+        if maximum_steps == 0 || maximum_steps > MAX_STEPS {
+            return Err(bounds());
+        }
         let code_length = usize::from(cursor.u16()?);
         let code = cursor.take(code_length)?;
-        if !cursor.finished() || code.is_empty() { return Err(malformed()); }
+        if !cursor.finished() || code.is_empty() {
+            return Err(malformed());
+        }
         let mut remaining = maximum_steps;
         validate_block(code, registers, 0, &mut remaining)?;
-        Ok(Self { code, registers, maximum_steps })
+        Ok(Self {
+            #[cfg(target_arch = "wasm32")]
+            code,
+            marker: core::marker::PhantomData,
+            registers,
+            maximum_steps,
+        })
     }
 
     /// Returns the statically declared execution ceiling.
     #[must_use]
-    pub const fn maximum_steps(self) -> u32 { self.maximum_steps }
+    pub const fn maximum_steps(self) -> u32 {
+        self.maximum_steps
+    }
 
     /// Returns the exact fixed register count.
     #[must_use]
-    pub const fn register_count(self) -> u8 { self.registers }
+    pub const fn register_count(self) -> u8 {
+        self.registers
+    }
 }
 
+#[cfg(target_arch = "wasm32")]
 trait Host {
     fn load(&mut self, key: &[u8]) -> Result<Option<i64>, ProgramError>;
     fn store(&mut self, key: &[u8], value: i64) -> Result<(), ProgramError>;
     fn delete(&mut self, key: &[u8]) -> Result<(), ProgramError>;
-    fn transfer(&mut self, asset: [u8; 32], recipient: [u8; 32], amount: i64) -> Result<(), ProgramError>;
+    fn transfer(
+        &mut self,
+        asset: [u8; 32],
+        recipient: [u8; 32],
+        amount: i64,
+    ) -> Result<(), ProgramError>;
 }
 
-enum Flow { Continue, Halt }
+#[cfg(target_arch = "wasm32")]
+enum Flow {
+    Continue,
+    Halt,
+}
 
+#[cfg(target_arch = "wasm32")]
 fn execute_block(
     code: &[u8],
     register_count: u8,
@@ -245,43 +366,85 @@ fn execute_block(
     let mut cursor = Cursor::new(code);
     while !cursor.finished() {
         *steps = steps.checked_add(1).ok_or_else(bounds)?;
-        if *steps > maximum_steps { return Err(bounds()); }
+        if *steps > maximum_steps {
+            return Err(bounds());
+        }
         match decode(&mut cursor, register_count)? {
             Instruction::Halt => return Ok(Flow::Halt),
-            Instruction::Constant { destination, value } => registers[usize::from(destination)] = value,
-            Instruction::Add { destination, left, right } => {
+            Instruction::Constant { destination, value } => {
+                registers[usize::from(destination)] = value
+            }
+            Instruction::Add {
+                destination,
+                left,
+                right,
+            } => {
                 registers[usize::from(destination)] = registers[usize::from(left)]
-                    .checked_add(registers[usize::from(right)]).ok_or_else(|| arithmetic(Reason::Overflow))?;
+                    .checked_add(registers[usize::from(right)])
+                    .ok_or_else(|| arithmetic(Reason::Overflow))?;
             }
-            Instruction::Subtract { destination, left, right } => {
+            Instruction::Subtract {
+                destination,
+                left,
+                right,
+            } => {
                 registers[usize::from(destination)] = registers[usize::from(left)]
-                    .checked_sub(registers[usize::from(right)]).ok_or_else(|| arithmetic(Reason::Overflow))?;
+                    .checked_sub(registers[usize::from(right)])
+                    .ok_or_else(|| arithmetic(Reason::Overflow))?;
             }
-            Instruction::Multiply { destination, left, right } => {
+            Instruction::Multiply {
+                destination,
+                left,
+                right,
+            } => {
                 registers[usize::from(destination)] = registers[usize::from(left)]
-                    .checked_mul(registers[usize::from(right)]).ok_or_else(|| arithmetic(Reason::Overflow))?;
+                    .checked_mul(registers[usize::from(right)])
+                    .ok_or_else(|| arithmetic(Reason::Overflow))?;
             }
-            Instruction::Divide { destination, left, right } => {
+            Instruction::Divide {
+                destination,
+                left,
+                right,
+            } => {
                 registers[usize::from(destination)] = registers[usize::from(left)]
-                    .checked_div(registers[usize::from(right)]).ok_or_else(|| arithmetic(Reason::Malformed))?;
+                    .checked_div(registers[usize::from(right)])
+                    .ok_or_else(|| arithmetic(Reason::Malformed))?;
             }
-            Instruction::Equal { destination, left, right } => {
-                registers[usize::from(destination)] = i64::from(registers[usize::from(left)] == registers[usize::from(right)]);
+            Instruction::Equal {
+                destination,
+                left,
+                right,
+            } => {
+                registers[usize::from(destination)] =
+                    i64::from(registers[usize::from(left)] == registers[usize::from(right)]);
             }
-            Instruction::LessThan { destination, left, right } => {
-                registers[usize::from(destination)] = i64::from(registers[usize::from(left)] < registers[usize::from(right)]);
+            Instruction::LessThan {
+                destination,
+                left,
+                right,
+            } => {
+                registers[usize::from(destination)] =
+                    i64::from(registers[usize::from(left)] < registers[usize::from(right)]);
             }
             Instruction::Load { destination, key } => {
                 registers[usize::from(destination)] = host.load(key)?.unwrap_or(0);
             }
-            Instruction::Store { source, key } => host.store(key, registers[usize::from(source)])?,
+            Instruction::Store { source, key } => {
+                host.store(key, registers[usize::from(source)])?
+            }
             Instruction::Delete { key } => host.delete(key)?,
-            Instruction::Transfer { amount, asset, recipient } => {
+            Instruction::Transfer {
+                amount,
+                asset,
+                recipient,
+            } => {
                 host.transfer(asset, recipient, registers[usize::from(amount)])?;
             }
             Instruction::Repeat { count, body } => {
                 for _ in 0..count {
-                    if let Flow::Halt = execute_block(body, register_count, registers, steps, maximum_steps, host)? {
+                    if let Flow::Halt =
+                        execute_block(body, register_count, registers, steps, maximum_steps, host)?
+                    {
                         return Ok(Flow::Halt);
                     }
                 }
@@ -305,12 +468,26 @@ impl Host for AbiHost {
         }
     }
     fn store(&mut self, key: &[u8], value: i64) -> Result<(), ProgramError> {
-        storage::write(StorageKey::new(key)?, StorageValue::new(&value.to_be_bytes())?)
+        storage::write(
+            StorageKey::new(key)?,
+            StorageValue::new(&value.to_be_bytes())?,
+        )
     }
-    fn delete(&mut self, key: &[u8]) -> Result<(), ProgramError> { storage::delete(StorageKey::new(key)?) }
-    fn transfer(&mut self, asset: [u8; 32], recipient: [u8; 32], amount: i64) -> Result<(), ProgramError> {
+    fn delete(&mut self, key: &[u8]) -> Result<(), ProgramError> {
+        storage::delete(StorageKey::new(key)?)
+    }
+    fn transfer(
+        &mut self,
+        asset: [u8; 32],
+        recipient: [u8; 32],
+        amount: i64,
+    ) -> Result<(), ProgramError> {
         let amount = Amount::from_i64(amount)?;
-        transfer::pay(Payment::new(AssetId::new(asset)?, AccountId::new(recipient)?, amount)?)
+        transfer::pay(Payment::new(
+            AssetId::new(asset)?,
+            AccountId::new(recipient)?,
+            amount,
+        )?)
     }
 }
 
@@ -332,7 +509,9 @@ fn invoke(input: &[u8]) -> Result<CallResult, ProgramError> {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn legacy(_: i64) -> Result<i64, ProgramError> { Err(malformed()) }
+fn legacy(_: i64) -> Result<i64, ProgramError> {
+    Err(malformed())
+}
 
 #[cfg(target_arch = "wasm32")]
 layerx_program_sdk::trap_on_panic!();
