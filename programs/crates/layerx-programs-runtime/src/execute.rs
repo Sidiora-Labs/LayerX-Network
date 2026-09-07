@@ -178,7 +178,7 @@ pub struct ProgramInstance {
     validated_code_hash: [u8; 32],
 }
 
-fn commitment_fault(error: crate::CommitmentError) -> ExecutionFault {
+fn commitment_fault(error: &crate::CommitmentError) -> ExecutionFault {
     ExecutionFault::EngineFault {
         reason: format!("deterministic execution commitment refused: {error}"),
     }
@@ -405,9 +405,9 @@ fn execution_state_from_snapshot(
     })
 }
 
-fn arbitration_engine_state_bytes(
+fn arbitration_engine_state_size(
     snapshot: &WasmiExecutionSnapshot,
-) -> Result<Vec<u8>, ExecutionFault> {
+) -> Result<usize, ExecutionFault> {
     fn add(total: &mut usize, amount: usize) -> Result<(), ExecutionFault> {
         *total = total
             .checked_add(amount)
@@ -473,6 +473,12 @@ fn arbitration_engine_state_bytes(
             }
         }
     }
+    Ok(measured)
+}
+
+fn arbitration_engine_state_bytes(
+    snapshot: &WasmiExecutionSnapshot,
+) -> Result<Vec<u8>, ExecutionFault> {
     fn put_len(bytes: &mut Vec<u8>, len: usize) -> Result<(), ExecutionFault> {
         let len = u32::try_from(len).map_err(|_| ExecutionFault::EngineFault {
             reason: "arbitration engine-state collection exceeds u32".to_string(),
@@ -490,6 +496,7 @@ fn arbitration_engine_state_bytes(
             }
         }
     }
+    let measured = arbitration_engine_state_size(snapshot)?;
     let mut bytes = Vec::with_capacity(measured);
     put_len(&mut bytes, snapshot.arbitration_instances.len())?;
     for instance in &snapshot.arbitration_instances {
@@ -515,7 +522,7 @@ fn arbitration_engine_state_bytes(
             match global.value.value_type {
                 WasmiExecutionValueType::I32 => {
                     bytes.push(0);
-                    bytes.extend_from_slice(&(global.value.bits as u32).to_be_bytes());
+                    bytes.extend_from_slice(&global.value.bits.to_be_bytes()[4..]);
                 }
                 WasmiExecutionValueType::I64 => {
                     bytes.push(1);
@@ -591,6 +598,326 @@ fn arbitration_state_from_snapshot(
     })
 }
 
+fn trace_collection_bytes(
+    transition_count: usize,
+    state_count: usize,
+) -> Result<u64, ExecutionFault> {
+    let collection_bytes = transition_count
+        .checked_mul(std::mem::size_of::<crate::ExecutionStep>())
+        .and_then(|bytes| {
+            bytes.checked_add(
+                transition_count
+                    .checked_mul(std::mem::size_of::<crate::ArbitrationExecutionStep>())?,
+            )
+        })
+        .and_then(|bytes| {
+            bytes
+                .checked_add(state_count.checked_mul(std::mem::size_of::<crate::StepCommitment>())?)
+        })
+        .and_then(|bytes| {
+            bytes.checked_add(
+                state_count.checked_mul(std::mem::size_of::<crate::ArbitrationStepCommitment>())?,
+            )
+        })
+        .and_then(|bytes| {
+            bytes.checked_add(state_count.checked_mul(
+                std::mem::size_of::<crate::ExecutionState>() + 2 * std::mem::size_of::<usize>(),
+            )?)
+        })
+        .and_then(|bytes| {
+            bytes.checked_add(state_count.checked_mul(
+                std::mem::size_of::<crate::ArbitrationExecutionState>()
+                    + 2 * std::mem::size_of::<usize>(),
+            )?)
+        })
+        .and_then(|bytes| u64::try_from(bytes).ok())
+        .ok_or_else(|| ExecutionFault::EngineFault {
+            reason: "execution trace collection accounting overflowed".to_string(),
+        })?;
+    Ok(collection_bytes)
+}
+
+#[derive(Default)]
+struct TraceAccounting {
+    unique_state_count: usize,
+    retained_snapshot_bytes: u64,
+    converted_snapshot_bytes: u64,
+    maximum_encoding_bytes: u64,
+    maximum_nested_legacy_encoding_bytes: u64,
+}
+
+fn account_trace_snapshot(
+    accounting: &mut TraceAccounting,
+    snapshot: &wasmi::ExecutionSnapshot,
+) -> Result<(), ExecutionFault> {
+    accounting.unique_state_count =
+        accounting
+            .unique_state_count
+            .checked_add(1)
+            .ok_or_else(|| ExecutionFault::EngineFault {
+                reason: "execution trace state cardinality overflowed".to_string(),
+            })?;
+    let state_bytes = snapshot.supplement.canonical_state_bytes;
+    accounting.retained_snapshot_bytes =
+        accounting
+            .retained_snapshot_bytes
+            .checked_add(snapshot.retained_vec_bytes().ok_or_else(|| {
+                ExecutionFault::EngineFault {
+                    reason: "execution trace snapshot allocation accounting overflowed".to_string(),
+                }
+            })?)
+            .and_then(|bytes| {
+                bytes.checked_add(
+                    std::mem::size_of::<wasmi::ExecutionSnapshot>() as u64
+                        + 2 * std::mem::size_of::<usize>() as u64,
+                )
+            })
+            .ok_or_else(|| ExecutionFault::EngineFault {
+                reason: "execution trace peak-byte accounting overflowed".to_string(),
+            })?;
+    accounting.converted_snapshot_bytes = accounting
+        .converted_snapshot_bytes
+        .checked_add(converted_state_retained_bytes(snapshot).ok_or_else(|| {
+            ExecutionFault::EngineFault {
+                reason: "execution trace converted allocation accounting overflowed".to_string(),
+            }
+        })?)
+        .ok_or_else(|| ExecutionFault::EngineFault {
+            reason: "execution trace converted-byte accounting overflowed".to_string(),
+        })?;
+    accounting.maximum_encoding_bytes = accounting
+        .maximum_encoding_bytes
+        .max(snapshot.supplement.arbitration_canonical_state_bytes);
+    accounting.maximum_nested_legacy_encoding_bytes = accounting
+        .maximum_nested_legacy_encoding_bytes
+        .max(state_bytes);
+    Ok(())
+}
+
+fn measure_execution_transitions(
+    transitions: &Vec<wasmi::ExecutionTransition>,
+) -> Result<(usize, usize), ExecutionFault> {
+    let mut accounting = TraceAccounting::default();
+    let mut duplicated_instruction_bytes = 0_u64;
+    let transition_count = transitions.len();
+    let transition_backing_bytes = transitions
+        .capacity()
+        .checked_mul(std::mem::size_of::<wasmi::ExecutionTransition>())
+        .and_then(|bytes| u64::try_from(bytes).ok())
+        .ok_or_else(|| ExecutionFault::EngineFault {
+            reason: "execution trace transition allocation accounting overflowed".to_string(),
+        })?;
+    let mut previous_post: Option<&std::sync::Arc<wasmi::ExecutionSnapshot>> = None;
+    for transition in transitions {
+        duplicated_instruction_bytes = duplicated_instruction_bytes
+            .checked_add(
+                u64::try_from(transition.pre.canonical_instruction.len())
+                    .ok()
+                    .and_then(|bytes| bytes.checked_mul(2))
+                    .ok_or_else(|| ExecutionFault::EngineFault {
+                        reason: "execution trace instruction allocation accounting overflowed"
+                            .to_string(),
+                    })?,
+            )
+            .ok_or_else(|| ExecutionFault::EngineFault {
+                reason: "execution trace instruction allocation accounting overflowed".to_string(),
+            })?;
+        if previous_post.is_none_or(|post| !std::sync::Arc::ptr_eq(post, &transition.pre)) {
+            account_trace_snapshot(&mut accounting, &transition.pre)?;
+        }
+        account_trace_snapshot(&mut accounting, &transition.post)?;
+        previous_post = Some(&transition.post);
+    }
+    let state_count = accounting.unique_state_count;
+    let collection_bytes = trace_collection_bytes(transition_count, state_count)?;
+    let peak_bytes = accounting
+        .retained_snapshot_bytes
+        .checked_add(transition_backing_bytes)
+        .and_then(|bytes| bytes.checked_add(accounting.converted_snapshot_bytes))
+        .and_then(|bytes| bytes.checked_add(duplicated_instruction_bytes))
+        .and_then(|bytes| bytes.checked_add(collection_bytes))
+        .and_then(|bytes| bytes.checked_add(accounting.maximum_encoding_bytes))
+        .and_then(|bytes| bytes.checked_add(accounting.maximum_nested_legacy_encoding_bytes))
+        .ok_or_else(|| ExecutionFault::EngineFault {
+            reason: "execution trace peak-byte accounting overflowed".to_string(),
+        })?;
+    if peak_bytes > crate::MAX_TRACE_STATE_BYTES {
+        return Err(ExecutionFault::EngineFault {
+            reason: format!(
+                "execution trace peak retained bytes {peak_bytes} exceed {}",
+                crate::MAX_TRACE_STATE_BYTES
+            ),
+        });
+    }
+    Ok((transition_count, state_count))
+}
+
+fn record_legacy_commitments(
+    transition: &wasmi::ExecutionTransition,
+    trace: &mut crate::ExecutionTrace,
+    last_recorded_step: &mut Option<u64>,
+    pre_state: &crate::ExecutionState,
+    post_state: &crate::ExecutionState,
+) -> Result<(crate::StepCommitment, crate::StepCommitment), ExecutionFault> {
+    let pre_commitment =
+        crate::StepCommitment::from_state(pre_state).map_err(|error| commitment_fault(&error))?;
+    let post_commitment =
+        crate::StepCommitment::from_state(post_state).map_err(|error| commitment_fault(&error))?;
+    for (snapshot, commitment) in [
+        (transition.pre.as_ref(), pre_commitment),
+        (transition.post.as_ref(), post_commitment),
+    ] {
+        if u64::from(commitment.encoded_state_bytes) != snapshot.supplement.canonical_state_bytes
+            || commitment.commitment_fuel != snapshot.supplement.commitment_fuel
+        {
+            return Err(ExecutionFault::EngineFault {
+                reason:
+                    "preauthorized execution commitment accounting diverged from canonical state"
+                        .to_string(),
+            });
+        }
+        if *last_recorded_step != Some(commitment.step_index) {
+            trace
+                .record_commitment(commitment)
+                .map_err(|error| commitment_fault(&error))?;
+            *last_recorded_step = Some(commitment.step_index);
+        }
+    }
+    Ok((pre_commitment, post_commitment))
+}
+
+fn validate_arbitration_commitments(
+    transition: &wasmi::ExecutionTransition,
+    arbitration_pre_state: &crate::ArbitrationExecutionState,
+    arbitration_post_state: &crate::ArbitrationExecutionState,
+) -> Result<
+    (
+        crate::ArbitrationStepCommitment,
+        crate::ArbitrationStepCommitment,
+    ),
+    ExecutionFault,
+> {
+    let arbitration_pre_commitment =
+        crate::ArbitrationStepCommitment::from_state(arbitration_pre_state)
+            .map_err(|error| commitment_fault(&error))?;
+    let arbitration_post_commitment =
+        crate::ArbitrationStepCommitment::from_state(arbitration_post_state)
+            .map_err(|error| commitment_fault(&error))?;
+    for (snapshot, state, commitment) in [
+        (
+            transition.pre.as_ref(),
+            arbitration_pre_state,
+            arbitration_pre_commitment,
+        ),
+        (
+            transition.post.as_ref(),
+            arbitration_post_state,
+            arbitration_post_commitment,
+        ),
+    ] {
+        let engine_bytes =
+            u64::try_from(state.engine_state.len()).map_err(|_| ExecutionFault::EngineFault {
+                reason: "arbitration engine-state length is unrepresentable".to_string(),
+            })?;
+        if engine_bytes != snapshot.supplement.arbitration_engine_canonical_bytes
+            || u64::from(commitment.encoded_state_bytes)
+                != snapshot.supplement.arbitration_canonical_state_bytes
+            || commitment.commitment_fuel != snapshot.supplement.arbitration_commitment_fuel
+        {
+            return Err(ExecutionFault::EngineFault {
+                        reason: "preauthorized v2 arbitration commitment accounting diverged from canonical state".to_string(),
+                    });
+        }
+    }
+    Ok((arbitration_pre_commitment, arbitration_post_commitment))
+}
+
+fn convert_execution_transitions(
+    transitions: Vec<wasmi::ExecutionTransition>,
+    policy: crate::TracePolicy,
+    identities: TraceIdentities,
+    transition_count: usize,
+    state_count: usize,
+) -> Result<crate::ExecutionTrace, ExecutionFault> {
+    let mut trace =
+        crate::ExecutionTrace::with_exact_capacity(policy, transition_count, state_count);
+    let mut last_recorded_step = None;
+    let mut last_state: Option<std::sync::Arc<crate::ExecutionState>> = None;
+    let mut last_arbitration_state: Option<std::sync::Arc<crate::ArbitrationExecutionState>> = None;
+    let mut last_snapshot: Option<std::sync::Arc<wasmi::ExecutionSnapshot>> = None;
+    for transition in transitions {
+        let pre_state = match (&last_snapshot, &last_state) {
+            (Some(snapshot), Some(state)) if std::sync::Arc::ptr_eq(snapshot, &transition.pre) => {
+                std::sync::Arc::clone(state)
+            }
+            _ => std::sync::Arc::new(execution_state_from_snapshot(
+                &transition.pre,
+                identities.legacy,
+            )?),
+        };
+        let post_state = std::sync::Arc::new(execution_state_from_snapshot(
+            &transition.post,
+            identities.legacy,
+        )?);
+        let (pre_commitment, post_commitment) = record_legacy_commitments(
+            &transition,
+            &mut trace,
+            &mut last_recorded_step,
+            &pre_state,
+            &post_state,
+        )?;
+        let arbitration_pre_state = match (&last_snapshot, &last_arbitration_state) {
+            (Some(snapshot), Some(state)) if std::sync::Arc::ptr_eq(snapshot, &transition.pre) => {
+                std::sync::Arc::clone(state)
+            }
+            _ => std::sync::Arc::new(arbitration_state_from_snapshot(
+                &transition.pre,
+                identities,
+                policy,
+                std::sync::Arc::clone(&pre_state),
+            )?),
+        };
+        let arbitration_post_state = std::sync::Arc::new(arbitration_state_from_snapshot(
+            &transition.post,
+            identities,
+            policy,
+            std::sync::Arc::clone(&post_state),
+        )?);
+        let (arbitration_pre_commitment, arbitration_post_commitment) =
+            validate_arbitration_commitments(
+                &transition,
+                &arbitration_pre_state,
+                &arbitration_post_state,
+            )?;
+        trace
+            .record_step(crate::ExecutionStep {
+                instruction: transition.pre.canonical_instruction.clone(),
+                instruction_fuel: transition.pre.instruction_fuel,
+                memory_expansion_bytes: transition.memory_expansion_bytes,
+                pre_state: std::sync::Arc::clone(&pre_state),
+                post_state: std::sync::Arc::clone(&post_state),
+                pre_commitment,
+                post_commitment,
+            })
+            .map_err(|error| commitment_fault(&error))?;
+        trace
+            .record_arbitration_step(crate::ArbitrationExecutionStep {
+                instruction: transition.pre.canonical_instruction.clone(),
+                instruction_fuel: transition.pre.instruction_fuel,
+                memory_expansion_bytes: transition.memory_expansion_bytes,
+                pre_state: arbitration_pre_state,
+                post_state: std::sync::Arc::clone(&arbitration_post_state),
+                pre_commitment: arbitration_pre_commitment,
+                post_commitment: arbitration_post_commitment,
+            })
+            .map_err(|error| commitment_fault(&error))?;
+        last_state = Some(std::sync::Arc::clone(&post_state));
+        last_arbitration_state = Some(arbitration_post_state);
+        last_snapshot = Some(std::sync::Arc::clone(&transition.post));
+    }
+    Ok(trace)
+}
+
 impl ProgramInstance {
     pub(crate) const fn new(store: Store<RuntimeState>, instance: Instance) -> Self {
         Self {
@@ -621,6 +948,8 @@ impl ProgramInstance {
             .map(Abi::storage_snapshot)
     }
 
+    /// # Errors
+    /// Refuses absent lease storage or a storage-write meter charge.
     pub fn commit_snapshot_storage(
         &mut self,
         storage: Storage,
@@ -683,7 +1012,7 @@ impl ProgramInstance {
                     .execution_observer_retained_snapshots()
                     .is_some_and(|retained| retained >= commitment_limit)
             {
-                return Err(commitment_fault(crate::CommitmentError::CommitmentLimit {
+                return Err(commitment_fault(&crate::CommitmentError::CommitmentLimit {
                     limit: commitment_limit,
                 }));
             }
@@ -692,296 +1021,14 @@ impl ProgramInstance {
             });
         }
         let transitions = self.store.take_execution_transitions();
-        let mut retained_snapshot_bytes = 0_u64;
-        let mut converted_snapshot_bytes = 0_u64;
-        let mut maximum_encoding_bytes = 0_u64;
-        let mut maximum_nested_legacy_encoding_bytes = 0_u64;
-        let mut duplicated_instruction_bytes = 0_u64;
-        let transition_count = transitions.len();
-        let transition_backing_bytes = transitions
-            .capacity()
-            .checked_mul(std::mem::size_of::<wasmi::ExecutionTransition>())
-            .and_then(|bytes| u64::try_from(bytes).ok())
-            .ok_or_else(|| ExecutionFault::EngineFault {
-                reason: "execution trace transition allocation accounting overflowed".to_string(),
-            })?;
-        let mut unique_state_count = 0_usize;
-        let mut previous_post: Option<&std::sync::Arc<wasmi::ExecutionSnapshot>> = None;
-        for transition in &transitions {
-            duplicated_instruction_bytes = duplicated_instruction_bytes
-                .checked_add(
-                    u64::try_from(transition.pre.canonical_instruction.len())
-                        .ok()
-                        .and_then(|bytes| bytes.checked_mul(2))
-                        .ok_or_else(|| ExecutionFault::EngineFault {
-                            reason: "execution trace instruction allocation accounting overflowed"
-                                .to_string(),
-                        })?,
-                )
-                .ok_or_else(|| ExecutionFault::EngineFault {
-                    reason: "execution trace instruction allocation accounting overflowed"
-                        .to_string(),
-                })?;
-            if previous_post.is_none_or(|post| !std::sync::Arc::ptr_eq(post, &transition.pre)) {
-                unique_state_count = unique_state_count.checked_add(1).ok_or_else(|| {
-                    ExecutionFault::EngineFault {
-                        reason: "execution trace state cardinality overflowed".to_string(),
-                    }
-                })?;
-                let state_bytes = transition.pre.supplement.canonical_state_bytes;
-                retained_snapshot_bytes = retained_snapshot_bytes
-                    .checked_add(transition.pre.retained_vec_bytes().ok_or_else(|| {
-                        ExecutionFault::EngineFault {
-                            reason: "execution trace snapshot allocation accounting overflowed"
-                                .to_string(),
-                        }
-                    })?)
-                    .and_then(|bytes| {
-                        bytes.checked_add(
-                            std::mem::size_of::<wasmi::ExecutionSnapshot>() as u64
-                                + 2 * std::mem::size_of::<usize>() as u64,
-                        )
-                    })
-                    .ok_or_else(|| ExecutionFault::EngineFault {
-                        reason: "execution trace peak-byte accounting overflowed".to_string(),
-                    })?;
-                converted_snapshot_bytes = converted_snapshot_bytes
-                    .checked_add(converted_state_retained_bytes(&transition.pre).ok_or_else(
-                        || {
-                            ExecutionFault::EngineFault {
-                                reason:
-                                    "execution trace converted allocation accounting overflowed"
-                                        .to_string(),
-                            }
-                        },
-                    )?)
-                    .ok_or_else(|| ExecutionFault::EngineFault {
-                        reason: "execution trace converted-byte accounting overflowed".to_string(),
-                    })?;
-                maximum_encoding_bytes = maximum_encoding_bytes
-                    .max(transition.pre.supplement.arbitration_canonical_state_bytes);
-                maximum_nested_legacy_encoding_bytes =
-                    maximum_nested_legacy_encoding_bytes.max(state_bytes);
-            }
-            unique_state_count =
-                unique_state_count
-                    .checked_add(1)
-                    .ok_or_else(|| ExecutionFault::EngineFault {
-                        reason: "execution trace state cardinality overflowed".to_string(),
-                    })?;
-            let state_bytes = transition.post.supplement.canonical_state_bytes;
-            retained_snapshot_bytes = retained_snapshot_bytes
-                .checked_add(transition.post.retained_vec_bytes().ok_or_else(|| {
-                    ExecutionFault::EngineFault {
-                        reason: "execution trace snapshot allocation accounting overflowed"
-                            .to_string(),
-                    }
-                })?)
-                .and_then(|bytes| {
-                    bytes.checked_add(
-                        std::mem::size_of::<wasmi::ExecutionSnapshot>() as u64
-                            + 2 * std::mem::size_of::<usize>() as u64,
-                    )
-                })
-                .ok_or_else(|| ExecutionFault::EngineFault {
-                    reason: "execution trace peak-byte accounting overflowed".to_string(),
-                })?;
-            converted_snapshot_bytes = converted_snapshot_bytes
-                .checked_add(
-                    converted_state_retained_bytes(&transition.post).ok_or_else(|| {
-                        ExecutionFault::EngineFault {
-                            reason: "execution trace converted allocation accounting overflowed"
-                                .to_string(),
-                        }
-                    })?,
-                )
-                .ok_or_else(|| ExecutionFault::EngineFault {
-                    reason: "execution trace converted-byte accounting overflowed".to_string(),
-                })?;
-            maximum_encoding_bytes = maximum_encoding_bytes
-                .max(transition.post.supplement.arbitration_canonical_state_bytes);
-            maximum_nested_legacy_encoding_bytes =
-                maximum_nested_legacy_encoding_bytes.max(state_bytes);
-            previous_post = Some(&transition.post);
-        }
-        let state_count = unique_state_count;
-        let collection_bytes = transition_count
-            .checked_mul(std::mem::size_of::<crate::ExecutionStep>())
-            .and_then(|bytes| {
-                bytes.checked_add(
-                    transition_count
-                        .checked_mul(std::mem::size_of::<crate::ArbitrationExecutionStep>())?,
-                )
-            })
-            .and_then(|bytes| {
-                bytes.checked_add(
-                    state_count.checked_mul(std::mem::size_of::<crate::StepCommitment>())?,
-                )
-            })
-            .and_then(|bytes| {
-                bytes.checked_add(
-                    state_count
-                        .checked_mul(std::mem::size_of::<crate::ArbitrationStepCommitment>())?,
-                )
-            })
-            .and_then(|bytes| {
-                bytes.checked_add(state_count.checked_mul(
-                    std::mem::size_of::<crate::ExecutionState>() + 2 * std::mem::size_of::<usize>(),
-                )?)
-            })
-            .and_then(|bytes| {
-                bytes.checked_add(state_count.checked_mul(
-                    std::mem::size_of::<crate::ArbitrationExecutionState>()
-                        + 2 * std::mem::size_of::<usize>(),
-                )?)
-            })
-            .and_then(|bytes| u64::try_from(bytes).ok())
-            .ok_or_else(|| ExecutionFault::EngineFault {
-                reason: "execution trace collection accounting overflowed".to_string(),
-            })?;
-        let peak_bytes = retained_snapshot_bytes
-            .checked_add(transition_backing_bytes)
-            .and_then(|bytes| bytes.checked_add(converted_snapshot_bytes))
-            .and_then(|bytes| bytes.checked_add(duplicated_instruction_bytes))
-            .and_then(|bytes| bytes.checked_add(collection_bytes))
-            .and_then(|bytes| bytes.checked_add(maximum_encoding_bytes))
-            .and_then(|bytes| bytes.checked_add(maximum_nested_legacy_encoding_bytes))
-            .ok_or_else(|| ExecutionFault::EngineFault {
-                reason: "execution trace peak-byte accounting overflowed".to_string(),
-            })?;
-        if peak_bytes > crate::MAX_TRACE_STATE_BYTES {
-            return Err(ExecutionFault::EngineFault {
-                reason: format!(
-                    "execution trace peak retained bytes {peak_bytes} exceed {}",
-                    crate::MAX_TRACE_STATE_BYTES
-                ),
-            });
-        }
-        let mut trace =
-            crate::ExecutionTrace::with_exact_capacity(policy, transition_count, state_count);
-        let mut last_recorded_step = None;
-        let mut last_state: Option<std::sync::Arc<crate::ExecutionState>> = None;
-        let mut last_arbitration_state: Option<std::sync::Arc<crate::ArbitrationExecutionState>> =
-            None;
-        let mut last_snapshot: Option<std::sync::Arc<wasmi::ExecutionSnapshot>> = None;
-        for transition in transitions {
-            let pre_state = match (&last_snapshot, &last_state) {
-                (Some(snapshot), Some(state))
-                    if std::sync::Arc::ptr_eq(snapshot, &transition.pre) =>
-                {
-                    std::sync::Arc::clone(state)
-                }
-                _ => std::sync::Arc::new(execution_state_from_snapshot(
-                    &transition.pre,
-                    identities.legacy,
-                )?),
-            };
-            let post_state = std::sync::Arc::new(execution_state_from_snapshot(
-                &transition.post,
-                identities.legacy,
-            )?);
-            let pre_commitment =
-                crate::StepCommitment::from_state(pre_state.as_ref()).map_err(commitment_fault)?;
-            let post_commitment =
-                crate::StepCommitment::from_state(post_state.as_ref()).map_err(commitment_fault)?;
-            for (snapshot, commitment) in [
-                (transition.pre.as_ref(), pre_commitment),
-                (transition.post.as_ref(), post_commitment),
-            ] {
-                if u64::from(commitment.encoded_state_bytes)
-                    != snapshot.supplement.canonical_state_bytes
-                    || commitment.commitment_fuel != snapshot.supplement.commitment_fuel
-                {
-                    return Err(ExecutionFault::EngineFault {
-                        reason: "preauthorized execution commitment accounting diverged from canonical state".to_string(),
-                    });
-                }
-                if last_recorded_step != Some(commitment.step_index) {
-                    trace
-                        .record_commitment(commitment)
-                        .map_err(commitment_fault)?;
-                    last_recorded_step = Some(commitment.step_index);
-                }
-            }
-            let arbitration_pre_state = match (&last_snapshot, &last_arbitration_state) {
-                (Some(snapshot), Some(state))
-                    if std::sync::Arc::ptr_eq(snapshot, &transition.pre) =>
-                {
-                    std::sync::Arc::clone(state)
-                }
-                _ => std::sync::Arc::new(arbitration_state_from_snapshot(
-                    &transition.pre,
-                    identities,
-                    policy,
-                    std::sync::Arc::clone(&pre_state),
-                )?),
-            };
-            let arbitration_post_state = std::sync::Arc::new(arbitration_state_from_snapshot(
-                &transition.post,
-                identities,
-                policy,
-                std::sync::Arc::clone(&post_state),
-            )?);
-            let arbitration_pre_commitment =
-                crate::ArbitrationStepCommitment::from_state(arbitration_pre_state.as_ref())
-                    .map_err(commitment_fault)?;
-            let arbitration_post_commitment =
-                crate::ArbitrationStepCommitment::from_state(arbitration_post_state.as_ref())
-                    .map_err(commitment_fault)?;
-            for (snapshot, state, commitment) in [
-                (
-                    transition.pre.as_ref(),
-                    arbitration_pre_state.as_ref(),
-                    arbitration_pre_commitment,
-                ),
-                (
-                    transition.post.as_ref(),
-                    arbitration_post_state.as_ref(),
-                    arbitration_post_commitment,
-                ),
-            ] {
-                let engine_bytes = u64::try_from(state.engine_state.len()).map_err(|_| {
-                    ExecutionFault::EngineFault {
-                        reason: "arbitration engine-state length is unrepresentable".to_string(),
-                    }
-                })?;
-                if engine_bytes != snapshot.supplement.arbitration_engine_canonical_bytes
-                    || u64::from(commitment.encoded_state_bytes)
-                        != snapshot.supplement.arbitration_canonical_state_bytes
-                    || commitment.commitment_fuel != snapshot.supplement.arbitration_commitment_fuel
-                {
-                    return Err(ExecutionFault::EngineFault {
-                        reason: "preauthorized v2 arbitration commitment accounting diverged from canonical state".to_string(),
-                    });
-                }
-            }
-            trace
-                .record_step(crate::ExecutionStep {
-                    instruction: transition.pre.canonical_instruction.clone(),
-                    instruction_fuel: transition.pre.instruction_fuel,
-                    memory_expansion_bytes: transition.memory_expansion_bytes,
-                    pre_state: std::sync::Arc::clone(&pre_state),
-                    post_state: std::sync::Arc::clone(&post_state),
-                    pre_commitment,
-                    post_commitment,
-                })
-                .map_err(commitment_fault)?;
-            trace
-                .record_arbitration_step(crate::ArbitrationExecutionStep {
-                    instruction: transition.pre.canonical_instruction.clone(),
-                    instruction_fuel: transition.pre.instruction_fuel,
-                    memory_expansion_bytes: transition.memory_expansion_bytes,
-                    pre_state: arbitration_pre_state,
-                    post_state: std::sync::Arc::clone(&arbitration_post_state),
-                    pre_commitment: arbitration_pre_commitment,
-                    post_commitment: arbitration_post_commitment,
-                })
-                .map_err(commitment_fault)?;
-            last_state = Some(std::sync::Arc::clone(&post_state));
-            last_arbitration_state = Some(arbitration_post_state);
-            last_snapshot = Some(std::sync::Arc::clone(&transition.post));
-        }
-        Ok(trace)
+        let (transition_count, state_count) = measure_execution_transitions(&transitions)?;
+        convert_execution_transitions(
+            transitions,
+            policy,
+            identities,
+            transition_count,
+            state_count,
+        )
     }
 
     pub(crate) fn execution_observer_fault(&self) -> Option<ExecutionFault> {
@@ -992,7 +1039,9 @@ impl ProgramInstance {
                         wasmi::ExecutionObserverError::SnapshotLimitExceeded,
                         Some((retained, maximum)),
                     ) if retained >= maximum => {
-                        commitment_fault(crate::CommitmentError::CommitmentLimit { limit: maximum })
+                        commitment_fault(&crate::CommitmentError::CommitmentLimit {
+                            limit: maximum,
+                        })
                     }
                     _ => ExecutionFault::EngineFault {
                         reason: format!("deterministic execution observer refused: {error:?}"),
@@ -1092,6 +1141,8 @@ impl ProgramInstance {
         outputs
     }
 
+    /// # Errors
+    /// Returns the typed validation, resource, or execution refusal from this operation.
     pub fn capture_continuation(
         &mut self,
         entrypoint: &str,
@@ -1160,6 +1211,8 @@ impl ProgramInstance {
         })
     }
 
+    /// # Errors
+    /// Returns the typed validation, resource, or execution refusal from this operation.
     pub fn restore_continuation(
         &mut self,
         continuation: &RuntimeContinuation,
@@ -1371,6 +1424,8 @@ pub struct TracedExecutionRecord {
 impl TracedExecutionRecord {
     /// Frozen legacy receipt evidence. It remains decodable but is explicitly
     /// ineligible as a single-step arbitration pre-state.
+    /// # Errors
+    /// Returns the typed validation, resource, or execution refusal from this operation.
     pub fn canonical_legacy_evidence(&self) -> Result<Vec<u8>, crate::CommitmentError> {
         let execution = self.execution.canonical_evidence();
         let trace = self.trace.canonical_bytes()?;
@@ -1395,6 +1450,8 @@ impl TracedExecutionRecord {
     }
 
     /// Canonical v2 receipt evidence binding the complete arbitration chain.
+    /// # Errors
+    /// Returns the typed validation, resource, or execution refusal from this operation.
     pub fn canonical_evidence(&self) -> Result<Vec<u8>, crate::CommitmentError> {
         let execution = self.execution.canonical_evidence();
         let trace = self.trace.canonical_arbitration_bytes()?;
@@ -1532,6 +1589,8 @@ impl PreparedAuthorizedActivity {
 
     /// Measures one namespace in the held post-execution snapshot without
     /// releasing or mutating that snapshot.
+    /// # Errors
+    /// Returns the storage error when namespace size cannot be represented.
     pub fn held_namespace_persistent_bytes(
         &self,
         namespace: crate::StorageNamespace,
@@ -1541,6 +1600,8 @@ impl PreparedAuthorizedActivity {
 
     /// Stages protocol-owned canonical state in the same held storage snapshot
     /// as guest effects, after comparing every expected value to prior state.
+    /// # Errors
+    /// Refuses empty or oversized changes, duplicate keys, stale values, or storage errors.
     pub fn stage_protocol_state_cas(
         &mut self,
         namespace: crate::StorageNamespace,
@@ -1578,6 +1639,8 @@ impl PreparedAuthorizedActivity {
     /// Consumes the held activity, performs its single kernel settlement, and
     /// assigns its storage exactly once on success. A refusal carries only
     /// execution diagnostics and graph evidence, never staged effects.
+    /// # Errors
+    /// Refuses stale storage, inconsistent authority, or kernel settlement evidence.
     pub fn strict_settle(
         self,
         storage: &mut Storage,
@@ -1699,29 +1762,25 @@ impl PreparedTransferLegSummary {
 /// Receipt-ready failure diagnostics for an affine settlement attempt.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SettlementFailure {
-    execution: ExecutionRecord,
-    call_graph: CallGraph,
+    execution: Box<ExecutionRecord>,
+    call_graph: Box<CallGraph>,
     error: TransferLawError,
 }
 
 impl SettlementFailure {
-    const fn new(
-        execution: ExecutionRecord,
-        call_graph: CallGraph,
-        error: TransferLawError,
-    ) -> Self {
+    fn new(execution: ExecutionRecord, call_graph: CallGraph, error: TransferLawError) -> Self {
         Self {
-            execution,
-            call_graph,
+            execution: Box::new(execution),
+            call_graph: Box::new(call_graph),
             error,
         }
     }
     #[must_use]
-    pub const fn execution(&self) -> &ExecutionRecord {
+    pub fn execution(&self) -> &ExecutionRecord {
         &self.execution
     }
     #[must_use]
-    pub const fn call_graph(&self) -> &CallGraph {
+    pub fn call_graph(&self) -> &CallGraph {
         &self.call_graph
     }
     #[must_use]
@@ -1767,7 +1826,7 @@ pub enum BudgetedV1ActivityOutcome {
 #[derive(Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum PreparedAuthorizedActivityOutcome {
-    Success(PreparedAuthorizedActivity),
+    Success(Box<PreparedAuthorizedActivity>),
     Failure(BudgetedV1FailureRecord),
     Resource(BudgetedResourceFailureRecord),
 }
@@ -2113,7 +2172,7 @@ impl V2AuthorizedExecutionRecord {
                 let start = evidence.len();
                 evidence.extend_from_slice(&crate::STEP_COMMITMENT_VERSION.to_be_bytes());
                 evidence.extend_from_slice(&trace.policy().canonical_bytes());
-                evidence.extend_from_slice(&(trace.commitments().len() as u32).to_be_bytes());
+                evidence.extend_from_slice(&(trace.commitments().len() as u64).to_be_bytes()[4..]);
                 for commitment in trace.commitments() {
                     evidence.extend_from_slice(&commitment.step_index.to_be_bytes());
                     evidence.extend_from_slice(&commitment.digest);
@@ -2278,7 +2337,7 @@ impl V2ActivityReceipt {
         match &self.trace_evidence {
             Some(trace) => {
                 encoded.push(1);
-                encoded.extend_from_slice(&(trace.len() as u32).to_be_bytes());
+                encoded.extend_from_slice(&(trace.len() as u64).to_be_bytes()[4..]);
                 encoded.extend_from_slice(trace);
             }
             None => encoded.push(0),
@@ -2580,6 +2639,8 @@ impl<'a> BudgetedAuthorizedExecutionRequest<'a> {
     /// Attaches an explicit declaration only after reproducing the kernel's
     /// canonical activity-id hash and proving the named activity byte range is
     /// exactly that declaration's canonical encoding.
+    /// # Errors
+    /// Returns the typed validation, resource, or execution refusal from this operation.
     pub fn with_bound_access_declaration(
         mut self,
         declaration: crate::AccessDeclaration,
@@ -2658,14 +2719,11 @@ impl ExecutionRecord {
         evidence.extend_from_slice(&self.usage.storage_write_bytes.to_be_bytes());
         evidence.extend_from_slice(&self.usage.output_values.to_be_bytes());
         evidence.extend_from_slice(&self.usage.fee_units.to_be_bytes());
-        match &self.trace {
-            Some(trace) => {
-                evidence.push(1);
-                let trace = canonical_trace_bytes(trace);
-                evidence.extend_from_slice(&(trace.len() as u64).to_be_bytes());
-                evidence.extend_from_slice(&trace);
-            }
-            None => {}
+        if let Some(trace) = &self.trace {
+            evidence.push(1);
+            let trace = canonical_trace_bytes(trace);
+            evidence.extend_from_slice(&(trace.len() as u64).to_be_bytes());
+            evidence.extend_from_slice(&trace);
         }
         evidence
     }
@@ -2710,7 +2768,7 @@ impl ExecutionRecord {
             let start = evidence.len();
             evidence.extend_from_slice(&crate::STEP_COMMITMENT_VERSION.to_be_bytes());
             evidence.extend_from_slice(&trace.policy().canonical_bytes());
-            evidence.extend_from_slice(&(trace.commitments().len() as u32).to_be_bytes());
+            evidence.extend_from_slice(&(trace.commitments().len() as u64).to_be_bytes()[4..]);
             for commitment in trace.commitments() {
                 evidence.extend_from_slice(&commitment.step_index.to_be_bytes());
                 evidence.extend_from_slice(&commitment.digest);
@@ -3034,6 +3092,8 @@ impl Executor {
     ///
     /// The configured policy is part of the returned trace. Observation or state
     /// conversion failures refuse the call instead of returning partial evidence.
+    /// # Errors
+    /// Returns the typed validation, resource, or execution refusal from this operation.
     pub fn execute_traced(
         &self,
         module: &ValidatedModule,
@@ -3113,26 +3173,8 @@ impl Executor {
                 .enable_execution_trace(policy)
                 .map_err(ExecutionError::Fault)?;
         }
-        let code = match entrypoint::invoke(&mut instance, request.entrypoint, request.calldata) {
-            Ok(code) => code,
-            Err(EntrypointRefusal::Fault(fault)) => {
-                if let Some(observer) = instance.execution_observer_fault() {
-                    return Err(ExecutionError::Fault(observer));
-                }
-                if let Some(refusal) = instance.state().refusal() {
-                    return Err(ExecutionError::Composition(refusal.clone()));
-                }
-                return Err(self.classify_fault(fault, instance.meter().exhaustion()));
-            }
-            Err(EntrypointRefusal::Resource(MeterRefusal::BudgetExceeded {
-                resource: ResourceKind::Cpu,
-                ..
-            })) => return Err(self.classify_fault(ExecutionFault::OutOfFuel, None)),
-            Err(EntrypointRefusal::Resource(refusal)) => {
-                return Err(ExecutionError::Resource(refusal));
-            }
-            Err(refusal) => return Err(ExecutionError::Entrypoint(refusal)),
-        };
+        let code =
+            self.invoke_authorized_entry(&mut instance, request.entrypoint, request.calldata)?;
         if let Some(observer) = instance.execution_observer_fault() {
             return Err(ExecutionError::Fault(observer));
         }
@@ -3177,6 +3219,32 @@ impl Executor {
         })
     }
 
+    fn invoke_authorized_entry(
+        &self,
+        instance: &mut ProgramInstance,
+        entrypoint: &str,
+        calldata: &[u8],
+    ) -> Result<i32, ExecutionError> {
+        match entrypoint::invoke(instance, entrypoint, calldata) {
+            Ok(code) => Ok(code),
+            Err(EntrypointRefusal::Fault(fault)) => {
+                if let Some(observer) = instance.execution_observer_fault() {
+                    return Err(ExecutionError::Fault(observer));
+                }
+                if let Some(refusal) = instance.state().refusal() {
+                    return Err(ExecutionError::Composition(refusal.clone()));
+                }
+                Err(self.classify_fault(fault, instance.meter().exhaustion()))
+            }
+            Err(EntrypointRefusal::Resource(MeterRefusal::BudgetExceeded {
+                resource: ResourceKind::Cpu,
+                ..
+            })) => Err(self.classify_fault(ExecutionFault::OutOfFuel, None)),
+            Err(EntrypointRefusal::Resource(refusal)) => Err(ExecutionError::Resource(refusal)),
+            Err(refusal) => Err(ExecutionError::Entrypoint(refusal)),
+        }
+    }
+
     fn seal_authorized_activity(
         prior_storage: Storage,
         held_storage: Storage,
@@ -3209,6 +3277,8 @@ impl Executor {
     /// admitted token is consumed and its authenticated activity binding is
     /// the sole source of invocation authority; callers cannot mint a raw
     /// digest authority.
+    /// # Errors
+    /// Returns the typed validation, resource, or execution refusal from this operation.
     pub fn prepare_authorized_activity_budgeted(
         &self,
         storage: &Storage,
@@ -3231,7 +3301,7 @@ impl Executor {
                 transfer,
                 transfer_authority_v2,
             )
-            .map(PreparedAuthorizedActivityOutcome::Success),
+            .map(|prepared| PreparedAuthorizedActivityOutcome::Success(Box::new(prepared))),
             BudgetedV1ActivityOutcome::Failure(failure) => {
                 Ok(PreparedAuthorizedActivityOutcome::Failure(failure))
             }
