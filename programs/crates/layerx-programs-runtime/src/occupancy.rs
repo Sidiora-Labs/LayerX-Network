@@ -89,8 +89,12 @@ impl OccupancyAuthority {
     pub(crate) const fn fee_ceiling(self) -> u128 {
         self.occupancy_fee_ceiling
     }
-    pub(crate) const fn payer(self) -> PrincipalId { self.payer }
-    pub(crate) const fn root_program(self) -> ProgramId { self.root_program }
+    pub(crate) const fn payer(self) -> PrincipalId {
+        self.payer
+    }
+    pub(crate) const fn root_program(self) -> ProgramId {
+        self.root_program
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -107,21 +111,37 @@ pub struct OccupancyResponsibility {
 
 impl OccupancyResponsibility {
     #[must_use]
-    pub const fn namespace(self) -> StorageNamespace { self.namespace }
+    pub const fn namespace(self) -> StorageNamespace {
+        self.namespace
+    }
     #[must_use]
-    pub const fn payer(self) -> PrincipalId { self.payer }
+    pub const fn payer(self) -> PrincipalId {
+        self.payer
+    }
     #[must_use]
-    pub const fn root_program(self) -> ProgramId { self.root_program }
+    pub const fn root_program(self) -> ProgramId {
+        self.root_program
+    }
     #[must_use]
-    pub const fn activity_binding(self) -> [u8; 32] { self.activity_binding }
+    pub const fn activity_binding(self) -> [u8; 32] {
+        self.activity_binding
+    }
     #[must_use]
-    pub const fn maximum_bytes(self) -> u64 { self.maximum_bytes }
+    pub const fn maximum_bytes(self) -> u64 {
+        self.maximum_bytes
+    }
     #[must_use]
-    pub const fn maximum_price(self) -> u64 { self.maximum_price }
+    pub const fn maximum_price(self) -> u64 {
+        self.maximum_price
+    }
     #[must_use]
-    pub const fn charge_ceiling(self) -> u128 { self.charge_ceiling }
+    pub const fn charge_ceiling(self) -> u128 {
+        self.charge_ceiling
+    }
     #[must_use]
-    pub const fn mandate(self) -> [u8; 32] { self.mandate }
+    pub const fn mandate(self) -> [u8; 32] {
+        self.mandate
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -174,37 +194,69 @@ pub struct OccupancyCharge {
 
 impl OccupancyCharge {
     #[must_use]
-    pub const fn namespace(self) -> StorageNamespace { self.namespace }
+    pub const fn namespace(self) -> StorageNamespace {
+        self.namespace
+    }
     #[must_use]
-    pub const fn payer(self) -> PrincipalId { self.payer }
+    pub const fn payer(self) -> PrincipalId {
+        self.payer
+    }
     #[must_use]
-    pub const fn root_program(self) -> ProgramId { self.root_program }
+    pub const fn root_program(self) -> ProgramId {
+        self.root_program
+    }
     #[must_use]
-    pub const fn activity_binding(self) -> [u8; 32] { self.activity_binding }
+    pub const fn activity_binding(self) -> [u8; 32] {
+        self.activity_binding
+    }
     #[must_use]
-    pub const fn from_batch(self) -> u64 { self.from_batch }
+    pub const fn start_batch(self) -> u64 {
+        self.from_batch
+    }
     #[must_use]
-    pub const fn to_batch(self) -> u64 { self.to_batch }
+    pub const fn to_batch(self) -> u64 {
+        self.to_batch
+    }
     #[must_use]
-    pub const fn recorded_bytes(self) -> u64 { self.recorded_bytes }
+    pub const fn recorded_bytes(self) -> u64 {
+        self.recorded_bytes
+    }
     #[must_use]
-    pub const fn final_bytes(self) -> u64 { self.final_bytes }
+    pub const fn final_bytes(self) -> u64 {
+        self.final_bytes
+    }
     #[must_use]
-    pub const fn byte_batches(self) -> u128 { self.byte_batches }
+    pub const fn byte_batches(self) -> u128 {
+        self.byte_batches
+    }
     #[must_use]
-    pub const fn price(self) -> u64 { self.price }
+    pub const fn price(self) -> u64 {
+        self.price
+    }
     #[must_use]
-    pub const fn fee_units(self) -> u128 { self.accrued_fee_units }
+    pub const fn fee_units(self) -> u128 {
+        self.accrued_fee_units
+    }
     #[must_use]
-    pub const fn prior_arrears(self) -> u128 { self.prior_arrears }
+    pub const fn prior_arrears(self) -> u128 {
+        self.prior_arrears
+    }
     #[must_use]
-    pub const fn amount_due(self) -> u128 { self.amount_due }
+    pub const fn amount_due(self) -> u128 {
+        self.amount_due
+    }
     #[must_use]
-    pub const fn paid(self) -> bool { matches!(self.disposition, OccupancyDisposition::Paid) }
+    pub const fn paid(self) -> bool {
+        matches!(self.disposition, OccupancyDisposition::Paid)
+    }
     #[must_use]
-    pub const fn disposition(self) -> OccupancyDisposition { self.disposition }
+    pub const fn disposition(self) -> OccupancyDisposition {
+        self.disposition
+    }
     #[must_use]
-    pub const fn arrears_after(self) -> u128 { self.arrears_after }
+    pub const fn arrears_after(self) -> u128 {
+        self.arrears_after
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -225,34 +277,212 @@ pub struct OccupancySettlement {
     charges: Vec<OccupancyCharge>,
 }
 
+type PayerDispositions = BTreeMap<PrincipalId, (u128, u128, u128, bool)>;
+
+fn read_current_charge(
+    cursor: &mut Cursor<'_>,
+    namespace: StorageNamespace,
+) -> Result<OccupancyCharge, OccupancyError> {
+    let payer = PrincipalId::new(cursor.array()?).map_err(|_| OccupancyError::MalformedEvidence)?;
+    validate_scope(namespace, payer)?;
+    let root_program =
+        ProgramId::new(cursor.array()?).map_err(|_| OccupancyError::MalformedEvidence)?;
+    let activity_binding = cursor.array()?;
+    let from_batch = cursor.u64()?;
+    let to_batch = cursor.u64()?;
+    let recorded_bytes = cursor.u64()?;
+    let final_bytes = cursor.u64()?;
+    let byte_batches = cursor.u128()?;
+    let price = cursor.u64()?;
+    let accrued_fee_units = cursor.u128()?;
+    let prior_arrears = cursor.u128()?;
+    let amount_due = cursor.u128()?;
+    let authorized_added_fee_units = cursor.u128()?;
+    let disposition = disposition(cursor.byte()?)?;
+    let arrears_after = cursor.u128()?;
+    let maximum_bytes = cursor.u64()?;
+    let maximum_price = cursor.u64()?;
+    let remaining_fee_units = cursor.u128()?;
+    let mandate = cursor.array()?;
+    Ok(OccupancyCharge {
+        namespace,
+        payer,
+        root_program,
+        activity_binding,
+        from_batch,
+        to_batch,
+        recorded_bytes,
+        final_bytes,
+        byte_batches,
+        price,
+        accrued_fee_units,
+        prior_arrears,
+        amount_due,
+        authorized_added_fee_units,
+        disposition,
+        arrears_after,
+        maximum_bytes,
+        maximum_price,
+        remaining_fee_units,
+        mandate,
+    })
+}
+
+fn validate_current_charge(
+    charge: &OccupancyCharge,
+    batch: u64,
+    fee_schedule: FeeSchedule,
+) -> Result<(), OccupancyError> {
+    let OccupancyCharge {
+        namespace,
+        payer,
+        root_program,
+        activity_binding,
+        from_batch,
+        to_batch,
+        recorded_bytes,
+        final_bytes,
+        byte_batches,
+        price,
+        accrued_fee_units,
+        prior_arrears,
+        amount_due,
+        authorized_added_fee_units,
+        disposition,
+        arrears_after,
+        maximum_bytes,
+        maximum_price,
+        mandate,
+        ..
+    } = *charge;
+    let intervals = to_batch
+        .checked_sub(from_batch)
+        .ok_or(OccupancyError::MalformedEvidence)?;
+    let computed_units = u128::from(recorded_bytes)
+        .checked_mul(u128::from(intervals))
+        .ok_or(OccupancyError::ArithmeticOverflow)?;
+    let computed_fee = computed_units
+        .checked_mul(u128::from(price))
+        .ok_or(OccupancyError::ArithmeticOverflow)?;
+    let computed_due = prior_arrears
+        .checked_add(computed_fee)
+        .ok_or(OccupancyError::ArithmeticOverflow)?;
+    let migration = matches!(disposition, OccupancyDisposition::MigrationRequired);
+    if to_batch != batch
+        || (!migration && price != fee_schedule.occupancy_byte_batch_price())
+        || byte_batches != computed_units
+        || accrued_fee_units != computed_fee
+        || amount_due != computed_due
+        || final_bytes > maximum_bytes
+        || (!migration && (mandate == [0; 32] || activity_binding == [0; 32]))
+        || (migration
+            && (price != 0
+                || accrued_fee_units != 0
+                || prior_arrears != 0
+                || amount_due != 0
+                || arrears_after != 0
+                || mandate != [0; 32]
+                || activity_binding != [0; 32]
+                || root_program != namespace.program()))
+        || (authorized_added_fee_units != 0
+            && mandate
+                != mandate_digest(
+                    payer,
+                    root_program,
+                    activity_binding,
+                    namespace,
+                    maximum_bytes,
+                    maximum_price,
+                    authorized_added_fee_units,
+                ))
+        || (matches!(disposition, OccupancyDisposition::ScheduleCeilingExceeded)
+            != (price > maximum_price))
+        || (matches!(disposition, OccupancyDisposition::Paid) && arrears_after != 0)
+        || (!matches!(disposition, OccupancyDisposition::Paid) && arrears_after != amount_due)
+    {
+        return Err(OccupancyError::MalformedEvidence);
+    }
+    Ok(())
+}
+
 impl OccupancySettlement {
     #[must_use]
-    pub const fn batch(&self) -> u64 { self.batch }
+    pub const fn batch(&self) -> u64 {
+        self.batch
+    }
     #[must_use]
-    pub const fn usage(&self) -> OccupancyUsage { self.usage }
+    pub const fn usage(&self) -> OccupancyUsage {
+        self.usage
+    }
     #[must_use]
-    pub const fn fee_schedule(&self) -> FeeSchedule { self.fee_schedule }
+    pub const fn fee_schedule(&self) -> FeeSchedule {
+        self.fee_schedule
+    }
     #[must_use]
-    pub fn charges(&self) -> &[OccupancyCharge] { &self.charges }
-
-    pub fn transfer_root(&self,asset:[u8;32])->Result<[u8;32],OccupancyError>{
-        const LEAF:&[u8]=b"LXP/v1/merkle-leaf\0";const INTERNAL:&[u8]=b"LXP/v1/merkle-internal\0";
-        if asset==[0;32]{return Err(OccupancyError::MalformedEvidence)}
-        let mut treasury_preimage=b"LX:ACCOUNT:v1".to_vec();treasury_preimage.extend_from_slice(&11_u32.to_be_bytes());treasury_preimage.extend_from_slice(b"system:fees");
-        let treasury:[u8;32]=Sha256::digest(treasury_preimage).into();
-        let payers=self.payer_dispositions()?;let mut level=Vec::new();
-        for (payer,(_,paid,_,_)) in payers {if paid==0{continue}let mut leg=Vec::with_capacity(115);leg.push(0);leg.extend_from_slice(&payer.bytes());leg.extend_from_slice(&treasury);leg.extend_from_slice(&asset);leg.extend_from_slice(&paid.to_be_bytes());leg.extend_from_slice(&23_u16.to_be_bytes());let mut leaf=LEAF.to_vec();leaf.extend_from_slice(&leg);level.push(<[u8;32]>::from(Sha256::digest(leaf)));}
-        if level.is_empty(){return Ok([0;32])}while level.len()>1{let mut next=Vec::with_capacity(level.len().div_ceil(2));for pair in level.chunks(2){let right=pair.get(1).unwrap_or(&pair[0]);let mut preimage=INTERNAL.to_vec();preimage.extend_from_slice(&pair[0]);preimage.extend_from_slice(right);next.push(<[u8;32]>::from(Sha256::digest(preimage)));}level=next;}Ok(level[0])
+    pub fn charges(&self) -> &[OccupancyCharge] {
+        &self.charges
     }
 
-    pub fn payer_dispositions(
-        &self,
-    ) -> Result<BTreeMap<PrincipalId, (u128, u128, u128, bool)>, OccupancyError> {
+    ///
+    /// # Errors
+    ///
+    /// Returns a refusal for a zero asset identity or overflowing payer dispositions.
+    pub fn transfer_root(&self, asset: [u8; 32]) -> Result<[u8; 32], OccupancyError> {
+        const LEAF: &[u8] = b"LXP/v1/merkle-leaf\0";
+        const INTERNAL: &[u8] = b"LXP/v1/merkle-internal\0";
+        if asset == [0; 32] {
+            return Err(OccupancyError::MalformedEvidence);
+        }
+        let mut treasury_preimage = b"LX:ACCOUNT:v1".to_vec();
+        treasury_preimage.extend_from_slice(&11_u32.to_be_bytes());
+        treasury_preimage.extend_from_slice(b"system:fees");
+        let treasury: [u8; 32] = Sha256::digest(treasury_preimage).into();
+        let payers = self.payer_dispositions()?;
+        let mut level = Vec::new();
+        for (payer, (_, paid, _, _)) in payers {
+            if paid == 0 {
+                continue;
+            }
+            let mut leg = Vec::with_capacity(115);
+            leg.push(0);
+            leg.extend_from_slice(&payer.bytes());
+            leg.extend_from_slice(&treasury);
+            leg.extend_from_slice(&asset);
+            leg.extend_from_slice(&paid.to_be_bytes());
+            leg.extend_from_slice(&23_u16.to_be_bytes());
+            let mut leaf = LEAF.to_vec();
+            leaf.extend_from_slice(&leg);
+            level.push(<[u8; 32]>::from(Sha256::digest(leaf)));
+        }
+        if level.is_empty() {
+            return Ok([0; 32]);
+        }
+        while level.len() > 1 {
+            let mut next = Vec::with_capacity(level.len().div_ceil(2));
+            for pair in level.chunks(2) {
+                let right = pair.get(1).unwrap_or(&pair[0]);
+                let mut preimage = INTERNAL.to_vec();
+                preimage.extend_from_slice(&pair[0]);
+                preimage.extend_from_slice(right);
+                next.push(<[u8; 32]>::from(Sha256::digest(preimage)));
+            }
+            level = next;
+        }
+        Ok(level[0])
+    }
+
+    ///
+    /// # Errors
+    ///
+    /// Returns an arithmetic refusal if aggregated payer amounts overflow.
+    pub fn payer_dispositions(&self) -> Result<PayerDispositions, OccupancyError> {
         let mut payers = BTreeMap::new();
         for charge in &self.charges {
             let entry = payers.entry(charge.payer).or_insert((0, 0, 0, false));
             entry.0 = checked_add(entry.0, charge.amount_due)?;
-            if charge.paid() { entry.1 = checked_add(entry.1, charge.amount_due)?; }
+            if charge.paid() {
+                entry.1 = checked_add(entry.1, charge.amount_due)?;
+            }
             entry.2 = checked_add(entry.2, charge.arrears_after)?;
             entry.3 |= !charge.paid() && charge.amount_due != 0;
         }
@@ -269,7 +499,7 @@ impl OccupancySettlement {
         out.extend_from_slice(&self.usage.fee_units.to_be_bytes());
         out.extend_from_slice(&self.usage.paid_fee_units.to_be_bytes());
         out.extend_from_slice(&self.usage.arrears_fee_units.to_be_bytes());
-        out.extend_from_slice(&(self.charges.len() as u32).to_be_bytes());
+        out.extend_from_slice(&position_count_bytes(self.charges.len()));
         for charge in &self.charges {
             encode_namespace(&mut out, charge.namespace);
             out.extend_from_slice(&charge.payer.bytes());
@@ -295,89 +525,67 @@ impl OccupancySettlement {
         out
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns a refusal for malformed, noncanonical, or inconsistent settlement evidence.
     pub fn canonical_decode(encoded: &[u8]) -> Result<Self, OccupancyError> {
-        if encoded.len() > MAX_OCCUPANCY_EVIDENCE_BYTES { return Err(OccupancyError::LengthLimit); }
+        if encoded.len() > MAX_OCCUPANCY_EVIDENCE_BYTES {
+            return Err(OccupancyError::LengthLimit);
+        }
         if encoded.starts_with(EVIDENCE_DOMAIN_V1) || encoded.starts_with(EVIDENCE_DOMAIN_V2) {
             return decode_legacy_settlement(encoded);
         }
         let mut cursor = Cursor::new(encoded);
-        if cursor.take(EVIDENCE_DOMAIN.len())? != EVIDENCE_DOMAIN { return Err(OccupancyError::MalformedEvidence); }
+        if cursor.take(EVIDENCE_DOMAIN.len())? != EVIDENCE_DOMAIN {
+            return Err(OccupancyError::MalformedEvidence);
+        }
         let batch = cursor.u64()?;
         let fee_schedule = decode_schedule(&mut cursor, true)?;
         let declared_units = cursor.u128()?;
         let declared_accrued = cursor.u128()?;
         let declared_paid = cursor.u128()?;
         let declared_arrears = cursor.u128()?;
-        let count = usize::try_from(cursor.u32()?).map_err(|_| OccupancyError::MalformedEvidence)?;
-        if count > MAX_OCCUPANCY_POSITIONS { return Err(OccupancyError::LengthLimit); }
+        let count =
+            usize::try_from(cursor.u32()?).map_err(|_| OccupancyError::MalformedEvidence)?;
+        if count > MAX_OCCUPANCY_POSITIONS {
+            return Err(OccupancyError::LengthLimit);
+        }
         let mut charges = Vec::with_capacity(count);
         let mut prior = None;
         let mut usage = OccupancyUsage::default();
         for _ in 0..count {
             let namespace = decode_namespace(&mut cursor)?;
-            if prior.is_some_and(|value| value >= namespace) { return Err(OccupancyError::MalformedEvidence); }
+            if prior.is_some_and(|value| value >= namespace) {
+                return Err(OccupancyError::MalformedEvidence);
+            }
             prior = Some(namespace);
-            let payer = PrincipalId::new(cursor.array()?).map_err(|_| OccupancyError::MalformedEvidence)?;
-            validate_scope(namespace, payer)?;
-            let root_program = ProgramId::new(cursor.array()?).map_err(|_| OccupancyError::MalformedEvidence)?;
-            let activity_binding = cursor.array()?;
-            let from_batch = cursor.u64()?;
-            let to_batch = cursor.u64()?;
-            let recorded_bytes = cursor.u64()?;
-            let final_bytes = cursor.u64()?;
-            let byte_batches = cursor.u128()?;
-            let price = cursor.u64()?;
-            let accrued_fee_units = cursor.u128()?;
-            let prior_arrears = cursor.u128()?;
-            let amount_due = cursor.u128()?;
-            let authorized_added_fee_units = cursor.u128()?;
-            let disposition = disposition(cursor.byte()?)?;
-            let arrears_after = cursor.u128()?;
-            let maximum_bytes = cursor.u64()?;
-            let maximum_price = cursor.u64()?;
-            let remaining_fee_units = cursor.u128()?;
-            let mandate = cursor.array()?;
-            let intervals = to_batch.checked_sub(from_batch).ok_or(OccupancyError::MalformedEvidence)?;
-            let computed_units = u128::from(recorded_bytes).checked_mul(u128::from(intervals)).ok_or(OccupancyError::ArithmeticOverflow)?;
-            let computed_fee = computed_units.checked_mul(u128::from(price)).ok_or(OccupancyError::ArithmeticOverflow)?;
-            let computed_due = prior_arrears.checked_add(computed_fee).ok_or(OccupancyError::ArithmeticOverflow)?;
-            let migration = matches!(disposition, OccupancyDisposition::MigrationRequired);
-            if to_batch != batch || (!migration && price != fee_schedule.occupancy_byte_batch_price())
-                || byte_batches != computed_units || accrued_fee_units != computed_fee
-                || amount_due != computed_due || final_bytes > maximum_bytes
-                || (!migration && (mandate == [0; 32] || activity_binding == [0; 32]))
-                || (migration && (price != 0 || accrued_fee_units != 0 || prior_arrears != 0 ||
-                    amount_due != 0 || arrears_after != 0 || mandate != [0; 32] ||
-                    activity_binding != [0; 32] || root_program != namespace.program()))
-                || (authorized_added_fee_units != 0 && mandate != mandate_digest(
-                    payer,
-                    root_program,
-                    activity_binding,
-                    namespace,
-                    maximum_bytes,
-                    maximum_price,
-                    authorized_added_fee_units,
-                ))
-                || (matches!(disposition, OccupancyDisposition::ScheduleCeilingExceeded)
-                    != (price > maximum_price))
-                || (matches!(disposition, OccupancyDisposition::Paid) && arrears_after != 0)
-                || (!matches!(disposition, OccupancyDisposition::Paid) && arrears_after != amount_due)
-            { return Err(OccupancyError::MalformedEvidence); }
-            usage.byte_batches = checked_add(usage.byte_batches, byte_batches)?;
-            usage.fee_units = checked_add(usage.fee_units, accrued_fee_units)?;
-            if matches!(disposition, OccupancyDisposition::Paid) { usage.paid_fee_units = checked_add(usage.paid_fee_units, amount_due)?; }
-            else { usage.arrears_fee_units = checked_add(usage.arrears_fee_units, arrears_after)?; }
-            charges.push(OccupancyCharge { namespace, payer, root_program, activity_binding,
-                from_batch, to_batch, recorded_bytes,
-                final_bytes, byte_batches, price, accrued_fee_units, prior_arrears, amount_due,
-                authorized_added_fee_units,
-                disposition, arrears_after, maximum_bytes, maximum_price,
-                remaining_fee_units, mandate });
+            let charge = read_current_charge(&mut cursor, namespace)?;
+            validate_current_charge(&charge, batch, fee_schedule)?;
+            usage.byte_batches = checked_add(usage.byte_batches, charge.byte_batches)?;
+            usage.fee_units = checked_add(usage.fee_units, charge.accrued_fee_units)?;
+            if matches!(charge.disposition, OccupancyDisposition::Paid) {
+                usage.paid_fee_units = checked_add(usage.paid_fee_units, charge.amount_due)?;
+            } else {
+                usage.arrears_fee_units =
+                    checked_add(usage.arrears_fee_units, charge.arrears_after)?;
+            }
+            charges.push(charge);
         }
-        if !cursor.is_empty() || usage.byte_batches != declared_units || usage.fee_units != declared_accrued
-            || usage.paid_fee_units != declared_paid || usage.arrears_fee_units != declared_arrears
-        { return Err(OccupancyError::MalformedEvidence); }
-        Ok(Self { batch, usage, fee_schedule, charges })
+        if !cursor.is_empty()
+            || usage.byte_batches != declared_units
+            || usage.fee_units != declared_accrued
+            || usage.paid_fee_units != declared_paid
+            || usage.arrears_fee_units != declared_arrears
+        {
+            return Err(OccupancyError::MalformedEvidence);
+        }
+        Ok(Self {
+            batch,
+            usage,
+            fee_schedule,
+            charges,
+        })
     }
 }
 
@@ -392,28 +600,39 @@ pub struct PreparedOccupancySettlement {
 
 impl PreparedOccupancySettlement {
     #[must_use]
-    pub const fn settlement(&self) -> &OccupancySettlement { &self.settlement }
+    pub const fn settlement(&self) -> &OccupancySettlement {
+        &self.settlement
+    }
 
-    pub(crate) fn defer_unpaid(&mut self, unpaid: &BTreeSet<PrincipalId>) -> Result<(), OccupancyError> {
+    pub(crate) fn defer_unpaid(
+        &mut self,
+        unpaid: &BTreeSet<PrincipalId>,
+    ) -> Result<(), OccupancyError> {
         self.settlement.usage.paid_fee_units = 0;
         self.settlement.usage.arrears_fee_units = 0;
         for charge in &mut self.settlement.charges {
-            let position = self.next_positions.get_mut(&charge.namespace).ok_or(OccupancyError::StalePreparation)?;
+            let position = self
+                .next_positions
+                .get_mut(&charge.namespace)
+                .ok_or(OccupancyError::StalePreparation)?;
             if charge.amount_due != 0 && charge.paid() && unpaid.contains(&charge.payer) {
                 charge.disposition = OccupancyDisposition::InsufficientFunds;
                 charge.arrears_after = charge.amount_due;
-                position.remaining_fee_units = position.remaining_fee_units
+                position.remaining_fee_units = position
+                    .remaining_fee_units
                     .checked_add(charge.amount_due)
                     .ok_or(OccupancyError::ArithmeticOverflow)?;
                 charge.remaining_fee_units = position.remaining_fee_units;
                 position.arrears = charge.amount_due;
                 position.frozen = true;
-                self.settlement.usage.arrears_fee_units = checked_add(self.settlement.usage.arrears_fee_units, charge.amount_due)?;
+                self.settlement.usage.arrears_fee_units =
+                    checked_add(self.settlement.usage.arrears_fee_units, charge.amount_due)?;
             } else if charge.paid() {
                 charge.arrears_after = 0;
                 position.arrears = 0;
                 position.frozen = false;
-                self.settlement.usage.paid_fee_units = checked_add(self.settlement.usage.paid_fee_units, charge.amount_due)?;
+                self.settlement.usage.paid_fee_units =
+                    checked_add(self.settlement.usage.paid_fee_units, charge.amount_due)?;
             } else {
                 self.settlement.usage.arrears_fee_units = checked_add(
                     self.settlement.usage.arrears_fee_units,
@@ -421,7 +640,8 @@ impl PreparedOccupancySettlement {
                 )?;
             }
         }
-        self.next_positions.retain(|_, position| position.bytes != 0 || position.arrears != 0);
+        self.next_positions
+            .retain(|_, position| position.bytes != 0 || position.arrears != 0);
         Ok(())
     }
 }
@@ -446,14 +666,31 @@ pub enum OccupancyError {
 impl Display for OccupancyError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::AuthorityMismatch { .. } => formatter.write_str("occupancy mandate authority mismatch"),
-            Self::ResponsibilityMismatch { .. } => formatter.write_str("occupancy payer cannot be rebound"),
-            Self::DuplicateResponsibility { .. } => formatter.write_str("duplicate occupancy mandate"),
-            Self::MissingResponsibility { .. } => formatter.write_str("occupied namespace has no mandate"),
-            Self::ResponsibilityCeilingExceeded => formatter.write_str("occupancy mandate ceiling exceeded"),
-            Self::ScheduleNotAuthorized { .. } => formatter.write_str("occupancy schedule exceeds persisted mandate"),
-            Self::FrozenNamespace { .. } => formatter.write_str("occupancy namespace is frozen by arrears"),
-            Self::BatchRegression { previous, attempted } => write!(formatter, "occupancy batch {attempted} precedes {previous}"),
+            Self::AuthorityMismatch { .. } => {
+                formatter.write_str("occupancy mandate authority mismatch")
+            }
+            Self::ResponsibilityMismatch { .. } => {
+                formatter.write_str("occupancy payer cannot be rebound")
+            }
+            Self::DuplicateResponsibility { .. } => {
+                formatter.write_str("duplicate occupancy mandate")
+            }
+            Self::MissingResponsibility { .. } => {
+                formatter.write_str("occupied namespace has no mandate")
+            }
+            Self::ResponsibilityCeilingExceeded => {
+                formatter.write_str("occupancy mandate ceiling exceeded")
+            }
+            Self::ScheduleNotAuthorized { .. } => {
+                formatter.write_str("occupancy schedule exceeds persisted mandate")
+            }
+            Self::FrozenNamespace { .. } => {
+                formatter.write_str("occupancy namespace is frozen by arrears")
+            }
+            Self::BatchRegression {
+                previous,
+                attempted,
+            } => write!(formatter, "occupancy batch {attempted} precedes {previous}"),
             Self::StalePreparation => formatter.write_str("stale occupancy preparation"),
             Self::ArithmeticOverflow => formatter.write_str("occupancy arithmetic overflow"),
             Self::LengthLimit => formatter.write_str("occupancy state exceeds protocol bounds"),
@@ -463,7 +700,11 @@ impl Display for OccupancyError {
     }
 }
 impl std::error::Error for OccupancyError {}
-impl From<StorageError> for OccupancyError { fn from(value: StorageError) -> Self { Self::Storage(value) } }
+impl From<StorageError> for OccupancyError {
+    fn from(value: StorageError) -> Self {
+        Self::Storage(value)
+    }
+}
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct OccupancyLedger {
@@ -471,17 +712,214 @@ pub struct OccupancyLedger {
     positions: BTreeMap<StorageNamespace, OccupancyPosition>,
 }
 
+fn charge_legacy_position(
+    namespace: StorageNamespace,
+    position: &mut OccupancyPosition,
+    final_bytes: u64,
+    batch: u64,
+    usage: &mut OccupancyUsage,
+    charges: &mut Vec<OccupancyCharge>,
+) -> Result<(), OccupancyError> {
+    let intervals = batch
+        .checked_sub(position.batch)
+        .ok_or(OccupancyError::BatchRegression {
+            previous: position.batch,
+            attempted: batch,
+        })?;
+    let byte_batches = u128::from(position.bytes)
+        .checked_mul(u128::from(intervals))
+        .ok_or(OccupancyError::ArithmeticOverflow)?;
+    usage.byte_batches = checked_add(usage.byte_batches, byte_batches)?;
+    charges.push(OccupancyCharge {
+        namespace,
+        payer: position.payer,
+        root_program: position.root_program,
+        activity_binding: position.activity_binding,
+        from_batch: position.batch,
+        to_batch: batch,
+        recorded_bytes: position.bytes,
+        final_bytes,
+        byte_batches,
+        price: 0,
+        accrued_fee_units: 0,
+        prior_arrears: 0,
+        amount_due: 0,
+        authorized_added_fee_units: 0,
+        disposition: OccupancyDisposition::MigrationRequired,
+        arrears_after: 0,
+        maximum_bytes: position.maximum_bytes.max(final_bytes),
+        maximum_price: 0,
+        remaining_fee_units: 0,
+        mandate: [0; 32],
+    });
+    position.bytes = final_bytes;
+    position.batch = batch;
+    position.maximum_bytes = position.maximum_bytes.max(final_bytes);
+    position.frozen = true;
+    Ok(())
+}
+
+fn charge_governed_position(
+    namespace: StorageNamespace,
+    position: &mut OccupancyPosition,
+    final_bytes: u64,
+    batch: u64,
+    price: u64,
+    authorized_added_fee_units: u128,
+    usage: &mut OccupancyUsage,
+) -> Result<OccupancyCharge, OccupancyError> {
+    if final_bytes > position.maximum_bytes {
+        return Err(OccupancyError::ResponsibilityCeilingExceeded);
+    }
+    let intervals = batch
+        .checked_sub(position.batch)
+        .ok_or(OccupancyError::BatchRegression {
+            previous: position.batch,
+            attempted: batch,
+        })?;
+    let byte_batches = u128::from(position.bytes)
+        .checked_mul(u128::from(intervals))
+        .ok_or(OccupancyError::ArithmeticOverflow)?;
+    let accrued_fee_units = byte_batches
+        .checked_mul(u128::from(price))
+        .ok_or(OccupancyError::ArithmeticOverflow)?;
+    let amount_due = position
+        .arrears
+        .checked_add(accrued_fee_units)
+        .ok_or(OccupancyError::ArithmeticOverflow)?;
+    let disposition = if price > position.maximum_price {
+        OccupancyDisposition::ScheduleCeilingExceeded
+    } else if amount_due > position.remaining_fee_units {
+        OccupancyDisposition::ChargeCeilingExceeded
+    } else {
+        position.remaining_fee_units -= amount_due;
+        OccupancyDisposition::Paid
+    };
+    usage.byte_batches = checked_add(usage.byte_batches, byte_batches)?;
+    usage.fee_units = checked_add(usage.fee_units, accrued_fee_units)?;
+    if matches!(disposition, OccupancyDisposition::Paid) {
+        usage.paid_fee_units = checked_add(usage.paid_fee_units, amount_due)?;
+    } else {
+        usage.arrears_fee_units = checked_add(usage.arrears_fee_units, amount_due)?;
+    }
+    let charge = OccupancyCharge {
+        namespace,
+        payer: position.payer,
+        root_program: position.root_program,
+        activity_binding: position.activity_binding,
+        from_batch: position.batch,
+        to_batch: batch,
+        recorded_bytes: position.bytes,
+        final_bytes,
+        byte_batches,
+        price,
+        accrued_fee_units,
+        prior_arrears: position.arrears,
+        amount_due,
+        disposition,
+        authorized_added_fee_units,
+        arrears_after: if matches!(disposition, OccupancyDisposition::Paid) {
+            0
+        } else {
+            amount_due
+        },
+        maximum_bytes: position.maximum_bytes,
+        maximum_price: position.maximum_price,
+        remaining_fee_units: position.remaining_fee_units,
+        mandate: position.mandate,
+    };
+    position.bytes = final_bytes;
+    position.batch = batch;
+    position.arrears = if matches!(disposition, OccupancyDisposition::Paid) {
+        0
+    } else {
+        amount_due
+    };
+    position.frozen = !matches!(disposition, OccupancyDisposition::Paid);
+    Ok(charge)
+}
+
+fn apply_responsibilities(
+    next: &mut BTreeMap<StorageNamespace, OccupancyPosition>,
+    declarations: BTreeMap<StorageNamespace, OccupancyResponsibility>,
+    batch: u64,
+) -> Result<BTreeMap<StorageNamespace, u128>, OccupancyError> {
+    let mut authorized_additions = BTreeMap::new();
+    for (namespace, responsibility) in declarations {
+        validate_scope(namespace, responsibility.payer)?;
+        match next.get_mut(&namespace) {
+            Some(position) if !position.legacy && position.payer != responsibility.payer => {
+                return Err(OccupancyError::ResponsibilityMismatch { namespace })
+            }
+            Some(position) => {
+                if !position.legacy && position.root_program != responsibility.root_program {
+                    return Err(OccupancyError::ResponsibilityMismatch { namespace });
+                }
+                if position.legacy {
+                    position.payer = responsibility.payer;
+                }
+                position.root_program = responsibility.root_program;
+                position.activity_binding = responsibility.activity_binding;
+                position.maximum_bytes = responsibility.maximum_bytes;
+                position.maximum_price = responsibility.maximum_price;
+                position.remaining_fee_units = position
+                    .remaining_fee_units
+                    .checked_add(responsibility.charge_ceiling)
+                    .ok_or(OccupancyError::ArithmeticOverflow)?;
+                position.mandate = responsibility.mandate;
+                if position.legacy {
+                    position.frozen = false;
+                }
+                position.legacy = false;
+            }
+            None => {
+                next.insert(
+                    namespace,
+                    OccupancyPosition {
+                        payer: responsibility.payer,
+                        root_program: responsibility.root_program,
+                        activity_binding: responsibility.activity_binding,
+                        bytes: 0,
+                        batch,
+                        maximum_bytes: responsibility.maximum_bytes,
+                        maximum_price: responsibility.maximum_price,
+                        remaining_fee_units: responsibility.charge_ceiling,
+                        mandate: responsibility.mandate,
+                        arrears: 0,
+                        frozen: false,
+                        legacy: false,
+                    },
+                );
+            }
+        }
+        authorized_additions.insert(namespace, responsibility.charge_ceiling);
+    }
+    Ok(authorized_additions)
+}
+
 impl OccupancyLedger {
     #[must_use]
-    pub const fn new() -> Self { Self { last_finalized_batch: 0, positions: BTreeMap::new() } }
-    #[must_use]
-    pub const fn activated_after(last_finalized_batch: u64) -> Self {
-        Self { last_finalized_batch, positions: BTreeMap::new() }
+    pub const fn new() -> Self {
+        Self {
+            last_finalized_batch: 0,
+            positions: BTreeMap::new(),
+        }
     }
     #[must_use]
-    pub const fn last_finalized_batch(&self) -> u64 { self.last_finalized_batch }
+    pub const fn activated_after(last_finalized_batch: u64) -> Self {
+        Self {
+            last_finalized_batch,
+            positions: BTreeMap::new(),
+        }
+    }
     #[must_use]
-    pub fn contains_namespace(&self, namespace: StorageNamespace) -> bool { self.positions.contains_key(&namespace) }
+    pub const fn last_finalized_batch(&self) -> u64 {
+        self.last_finalized_batch
+    }
+    #[must_use]
+    pub fn contains_namespace(&self, namespace: StorageNamespace) -> bool {
+        self.positions.contains_key(&namespace)
+    }
     pub(crate) fn responsibility_limits(
         &self,
         namespace: StorageNamespace,
@@ -490,9 +928,20 @@ impl OccupancyLedger {
             .get(&namespace)
             .map(|position| (position.payer, position.maximum_bytes))
     }
-    pub fn ensure_accessible(&self, namespaces: impl IntoIterator<Item = StorageNamespace>) -> Result<(), OccupancyError> {
+    ///
+    /// # Errors
+    ///
+    /// Returns a refusal if a requested namespace is inaccessible under the occupancy ledger.
+    pub fn ensure_accessible(
+        &self,
+        namespaces: impl IntoIterator<Item = StorageNamespace>,
+    ) -> Result<(), OccupancyError> {
         for namespace in namespaces {
-            if self.positions.get(&namespace).is_some_and(|position| position.frozen) {
+            if self
+                .positions
+                .get(&namespace)
+                .is_some_and(|position| position.frozen)
+            {
                 return Err(OccupancyError::FrozenNamespace { namespace });
             }
         }
@@ -500,10 +949,14 @@ impl OccupancyLedger {
     }
 
     pub(crate) fn frozen_namespaces(&self) -> impl Iterator<Item = StorageNamespace> + '_ {
-        self.positions.iter().filter_map(|(namespace, position)| position.frozen.then_some(*namespace))
+        self.positions
+            .iter()
+            .filter_map(|(namespace, position)| position.frozen.then_some(*namespace))
     }
     pub(crate) fn requires_migration(&self, namespace: StorageNamespace) -> bool {
-        self.positions.get(&namespace).is_some_and(|position| position.legacy)
+        self.positions
+            .get(&namespace)
+            .is_some_and(|position| position.legacy)
     }
     pub(crate) fn import_activation_positions(
         &mut self,
@@ -529,12 +982,18 @@ impl OccupancyLedger {
         bytes: u64,
     ) -> Result<(), OccupancyError> {
         validate_scope(namespace, payer)?;
-        if bytes == 0 { return Err(OccupancyError::MalformedEvidence); }
-        if self.positions.contains_key(&namespace) { return Ok(()); }
+        if bytes == 0 {
+            return Err(OccupancyError::MalformedEvidence);
+        }
+        if self.positions.contains_key(&namespace) {
+            return Ok(());
+        }
         if self.positions.len() == MAX_OCCUPANCY_POSITIONS {
             return Err(OccupancyError::LengthLimit);
         }
-        self.positions.insert(namespace, OccupancyPosition {
+        self.positions.insert(
+            namespace,
+            OccupancyPosition {
                 payer,
                 root_program: namespace.program(),
                 activity_binding: [0; 32],
@@ -547,16 +1006,34 @@ impl OccupancyLedger {
                 arrears: 0,
                 frozen: true,
                 legacy: true,
-            });
+            },
+        );
         Ok(())
     }
 
-    pub fn prepare_unchanged_batch(&self, batch: u64, schedule: FeeSchedule) -> Result<PreparedOccupancySettlement, OccupancyError> {
-        let mut prepared = self.prepare_positions(batch, canonical_position_sizes(&self.positions)?, BTreeMap::new(), schedule)?;
+    ///
+    /// # Errors
+    ///
+    /// Returns a refusal for an invalid batch, schedule, or occupancy settlement.
+    pub fn prepare_unchanged_batch(
+        &self,
+        batch: u64,
+        schedule: FeeSchedule,
+    ) -> Result<PreparedOccupancySettlement, OccupancyError> {
+        let mut prepared = self.prepare_positions(
+            batch,
+            canonical_position_sizes(&self.positions)?,
+            BTreeMap::new(),
+            schedule,
+        )?;
         prepared.finalizes_batch = true;
         Ok(prepared)
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns a refusal for invalid batch inputs, responsibility evidence, or settlement arithmetic.
     pub fn prepare_batch(
         &self,
         batch: u64,
@@ -567,8 +1044,13 @@ impl OccupancyLedger {
         let sizes: BTreeMap<_, _> = storage.namespace_sizes()?.into_iter().collect();
         let mut declarations = BTreeMap::new();
         for responsibility in responsibilities {
-            if declarations.insert(responsibility.namespace, responsibility).is_some() {
-                return Err(OccupancyError::DuplicateResponsibility { namespace: responsibility.namespace });
+            if declarations
+                .insert(responsibility.namespace, responsibility)
+                .is_some()
+            {
+                return Err(OccupancyError::DuplicateResponsibility {
+                    namespace: responsibility.namespace,
+                });
             }
         }
         self.prepare_positions(batch, canonical_sizes(&sizes)?, declarations, schedule)
@@ -581,167 +1063,145 @@ impl OccupancyLedger {
         declarations: BTreeMap<StorageNamespace, OccupancyResponsibility>,
         schedule: FeeSchedule,
     ) -> Result<PreparedOccupancySettlement, OccupancyError> {
-        let expected = self.last_finalized_batch.checked_add(1).ok_or(OccupancyError::ArithmeticOverflow)?;
+        let expected = self
+            .last_finalized_batch
+            .checked_add(1)
+            .ok_or(OccupancyError::ArithmeticOverflow)?;
         if batch != expected {
-            return Err(OccupancyError::BatchRegression { previous: self.last_finalized_batch, attempted: batch });
+            return Err(OccupancyError::BatchRegression {
+                previous: self.last_finalized_batch,
+                attempted: batch,
+            });
         }
-        if self.positions.len() > MAX_OCCUPANCY_POSITIONS || declarations.len() > MAX_OCCUPANCY_POSITIONS { return Err(OccupancyError::LengthLimit); }
+        if self.positions.len() > MAX_OCCUPANCY_POSITIONS
+            || declarations.len() > MAX_OCCUPANCY_POSITIONS
+        {
+            return Err(OccupancyError::LengthLimit);
+        }
         let final_sizes = decode_sizes(&final_storage_sizes)?;
         let mut next = self.positions.clone();
-        let mut authorized_additions = BTreeMap::new();
-        for (namespace, responsibility) in declarations {
-            validate_scope(namespace, responsibility.payer)?;
-            match next.get_mut(&namespace) {
-                Some(position) if !position.legacy &&
-                    position.payer != responsibility.payer =>
-                    return Err(OccupancyError::ResponsibilityMismatch { namespace }),
-                Some(position) => {
-                    if !position.legacy && position.root_program != responsibility.root_program {
-                        return Err(OccupancyError::ResponsibilityMismatch { namespace });
-                    }
-                    if position.legacy {
-                        position.payer = responsibility.payer;
-                    }
-                    position.root_program = responsibility.root_program;
-                    position.activity_binding = responsibility.activity_binding;
-                    position.maximum_bytes = responsibility.maximum_bytes;
-                    position.maximum_price = responsibility.maximum_price;
-                    position.remaining_fee_units = position.remaining_fee_units
-                        .checked_add(responsibility.charge_ceiling)
-                        .ok_or(OccupancyError::ArithmeticOverflow)?;
-                    position.mandate = responsibility.mandate;
-                    if position.legacy { position.frozen = false; }
-                    position.legacy = false;
-                }
-                None => { next.insert(namespace, OccupancyPosition { payer: responsibility.payer,
-                    root_program: responsibility.root_program,
-                    activity_binding: responsibility.activity_binding, bytes: 0, batch,
-                    maximum_bytes: responsibility.maximum_bytes, maximum_price: responsibility.maximum_price,
-                    remaining_fee_units: responsibility.charge_ceiling,
-                    mandate: responsibility.mandate, arrears: 0, frozen: false, legacy: false }); }
-            }
-            authorized_additions.insert(namespace, responsibility.charge_ceiling);
-        }
+        let authorized_additions = apply_responsibilities(&mut next, declarations, batch)?;
         for namespace in final_sizes.keys() {
-            if !next.contains_key(namespace) { return Err(OccupancyError::MissingResponsibility { namespace: *namespace }); }
+            if !next.contains_key(namespace) {
+                return Err(OccupancyError::MissingResponsibility {
+                    namespace: *namespace,
+                });
+            }
         }
-        if next.len() > MAX_OCCUPANCY_POSITIONS { return Err(OccupancyError::LengthLimit); }
+        if next.len() > MAX_OCCUPANCY_POSITIONS {
+            return Err(OccupancyError::LengthLimit);
+        }
         let price = schedule.occupancy_byte_batch_price();
         let mut usage = OccupancyUsage::default();
         let mut charges = Vec::with_capacity(next.len());
         for (namespace, position) in &mut next {
             let final_bytes = final_sizes.get(namespace).copied().unwrap_or(0);
             if position.legacy {
-                let intervals = batch.checked_sub(position.batch).ok_or(
-                    OccupancyError::BatchRegression { previous: position.batch, attempted: batch })?;
-                let byte_batches = u128::from(position.bytes)
-                    .checked_mul(u128::from(intervals))
-                    .ok_or(OccupancyError::ArithmeticOverflow)?;
-                usage.byte_batches = checked_add(usage.byte_batches, byte_batches)?;
-                charges.push(OccupancyCharge {
-                    namespace: *namespace,
-                    payer: position.payer,
-                    root_program: position.root_program,
-                    activity_binding: position.activity_binding,
-                    from_batch: position.batch,
-                    to_batch: batch,
-                    recorded_bytes: position.bytes,
+                charge_legacy_position(
+                    *namespace,
+                    position,
                     final_bytes,
-                    byte_batches,
-                    price: 0,
-                    accrued_fee_units: 0,
-                    prior_arrears: 0,
-                    amount_due: 0,
-                    authorized_added_fee_units: 0,
-                    disposition: OccupancyDisposition::MigrationRequired,
-                    arrears_after: 0,
-                    maximum_bytes: position.maximum_bytes.max(final_bytes),
-                    maximum_price: 0,
-                    remaining_fee_units: 0,
-                    mandate: [0; 32],
-                });
-                position.bytes = final_bytes;
-                position.batch = batch;
-                position.maximum_bytes = position.maximum_bytes.max(final_bytes);
-                position.frozen = true;
+                    batch,
+                    &mut usage,
+                    &mut charges,
+                )?;
                 continue;
             }
-            if final_bytes > position.maximum_bytes { return Err(OccupancyError::ResponsibilityCeilingExceeded); }
-            let intervals = batch.checked_sub(position.batch).ok_or(OccupancyError::BatchRegression { previous: position.batch, attempted: batch })?;
-            let byte_batches = u128::from(position.bytes).checked_mul(u128::from(intervals)).ok_or(OccupancyError::ArithmeticOverflow)?;
-            let accrued_fee_units = byte_batches.checked_mul(u128::from(price)).ok_or(OccupancyError::ArithmeticOverflow)?;
-            let amount_due = position.arrears.checked_add(accrued_fee_units).ok_or(OccupancyError::ArithmeticOverflow)?;
-            let disposition = if price > position.maximum_price {
-                OccupancyDisposition::ScheduleCeilingExceeded
-            } else if amount_due > position.remaining_fee_units {
-                OccupancyDisposition::ChargeCeilingExceeded
-            } else {
-                position.remaining_fee_units -= amount_due;
-                OccupancyDisposition::Paid
-            };
-            usage.byte_batches = checked_add(usage.byte_batches, byte_batches)?;
-            usage.fee_units = checked_add(usage.fee_units, accrued_fee_units)?;
-            if matches!(disposition, OccupancyDisposition::Paid) {
-                usage.paid_fee_units = checked_add(usage.paid_fee_units, amount_due)?;
-            } else {
-                usage.arrears_fee_units = checked_add(usage.arrears_fee_units, amount_due)?;
-            }
-            charges.push(OccupancyCharge { namespace: *namespace, payer: position.payer,
-                root_program: position.root_program, activity_binding: position.activity_binding,
-                from_batch: position.batch,
-                to_batch: batch, recorded_bytes: position.bytes, final_bytes, byte_batches, price, accrued_fee_units,
-                prior_arrears: position.arrears, amount_due, disposition,
-                authorized_added_fee_units: authorized_additions
-                    .get(namespace).copied().unwrap_or(0),
-                arrears_after: if matches!(disposition, OccupancyDisposition::Paid) { 0 } else { amount_due },
-                maximum_bytes: position.maximum_bytes, maximum_price: position.maximum_price,
-                remaining_fee_units: position.remaining_fee_units, mandate: position.mandate });
-            position.bytes = final_bytes;
-            position.batch = batch;
-            position.arrears = if matches!(disposition, OccupancyDisposition::Paid) { 0 } else { amount_due };
-            position.frozen = !matches!(disposition, OccupancyDisposition::Paid);
+            let charge = charge_governed_position(
+                *namespace,
+                position,
+                final_bytes,
+                batch,
+                price,
+                authorized_additions.get(namespace).copied().unwrap_or(0),
+                &mut usage,
+            )?;
+            charges.push(charge);
         }
         next.retain(|_, position| position.bytes != 0 || position.arrears != 0);
-        let settlement = OccupancySettlement { batch, usage, fee_schedule: schedule, charges };
-        if settlement.canonical_evidence().len() > MAX_OCCUPANCY_EVIDENCE_BYTES { return Err(OccupancyError::LengthLimit); }
+        let settlement = OccupancySettlement {
+            batch,
+            usage,
+            fee_schedule: schedule,
+            charges,
+        };
+        if settlement.canonical_evidence().len() > MAX_OCCUPANCY_EVIDENCE_BYTES {
+            return Err(OccupancyError::LengthLimit);
+        }
         let prior_state = self.canonical_state();
-        if prior_state.len() > MAX_OCCUPANCY_LEDGER_BYTES { return Err(OccupancyError::LengthLimit); }
-        Ok(PreparedOccupancySettlement { settlement, prior_state, final_storage_sizes,
-            next_positions: next, finalizes_batch: false })
+        if prior_state.len() > MAX_OCCUPANCY_LEDGER_BYTES {
+            return Err(OccupancyError::LengthLimit);
+        }
+        Ok(PreparedOccupancySettlement {
+            settlement,
+            prior_state,
+            final_storage_sizes,
+            next_positions: next,
+            finalizes_batch: false,
+        })
     }
 
-    pub(crate) fn commit_after_debits(&mut self, prepared: PreparedOccupancySettlement, current_storage: &Storage) -> Result<OccupancySettlement, OccupancyError> {
-        if self.canonical_state() != prepared.prior_state || canonical_storage_sizes(current_storage)? != prepared.final_storage_sizes {
+    pub(crate) fn commit_after_debits(
+        &mut self,
+        prepared: PreparedOccupancySettlement,
+        current_storage: &Storage,
+    ) -> Result<OccupancySettlement, OccupancyError> {
+        if self.canonical_state() != prepared.prior_state
+            || canonical_storage_sizes(current_storage)? != prepared.final_storage_sizes
+        {
             return Err(OccupancyError::StalePreparation);
         }
         self.positions = prepared.next_positions;
-        if prepared.finalizes_batch { self.last_finalized_batch = prepared.settlement.batch; }
+        if prepared.finalizes_batch {
+            self.last_finalized_batch = prepared.settlement.batch;
+        }
         Ok(prepared.settlement)
     }
-    pub(crate) fn commit_unchanged_after_debits(&mut self, prepared: PreparedOccupancySettlement) -> Result<OccupancySettlement, OccupancyError> {
-        if self.canonical_state() != prepared.prior_state || canonical_position_sizes(&self.positions)? != prepared.final_storage_sizes {
+    pub(crate) fn commit_unchanged_after_debits(
+        &mut self,
+        prepared: PreparedOccupancySettlement,
+    ) -> Result<OccupancySettlement, OccupancyError> {
+        if self.canonical_state() != prepared.prior_state
+            || canonical_position_sizes(&self.positions)? != prepared.final_storage_sizes
+        {
             return Err(OccupancyError::StalePreparation);
         }
         self.positions = prepared.next_positions;
-        if prepared.finalizes_batch { self.last_finalized_batch = prepared.settlement.batch; }
+        if prepared.finalizes_batch {
+            self.last_finalized_batch = prepared.settlement.batch;
+        }
         Ok(prepared.settlement)
     }
-    pub fn replay_evidence(&self, evidence: &[u8], final_storage: &Storage,
-        responsibilities: impl IntoIterator<Item = OccupancyResponsibility>) -> Result<OccupancySettlement, OccupancyError> {
+    ///
+    /// # Errors
+    ///
+    /// Returns a refusal if evidence decoding or replay disagrees with the supplied final state.
+    pub fn replay_evidence(
+        &self,
+        evidence: &[u8],
+        final_storage: &Storage,
+        responsibilities: impl IntoIterator<Item = OccupancyResponsibility>,
+    ) -> Result<OccupancySettlement, OccupancyError> {
         let recorded = OccupancySettlement::canonical_decode(evidence)?;
-        if evidence.starts_with(EVIDENCE_DOMAIN_V1) ||
-            evidence.starts_with(EVIDENCE_DOMAIN_V2) {
+        if evidence.starts_with(EVIDENCE_DOMAIN_V1) || evidence.starts_with(EVIDENCE_DOMAIN_V2) {
             return Ok(recorded);
         }
-        let prepared = self.prepare_batch(recorded.batch(), final_storage, responsibilities, recorded.fee_schedule())?;
-        if prepared.settlement != recorded { return Err(OccupancyError::MalformedEvidence); }
+        let prepared = self.prepare_batch(
+            recorded.batch(),
+            final_storage,
+            responsibilities,
+            recorded.fee_schedule(),
+        )?;
+        if prepared.settlement != recorded {
+            return Err(OccupancyError::MalformedEvidence);
+        }
         Ok(recorded)
     }
     #[must_use]
     pub fn canonical_state(&self) -> Vec<u8> {
         let mut out = LEDGER_DOMAIN.to_vec();
         out.extend_from_slice(&self.last_finalized_batch.to_be_bytes());
-        out.extend_from_slice(&(self.positions.len() as u32).to_be_bytes());
+        out.extend_from_slice(&position_count_bytes(self.positions.len()));
         for (namespace, position) in &self.positions {
             encode_namespace(&mut out, *namespace);
             out.extend_from_slice(&position.payer.bytes());
@@ -759,23 +1219,40 @@ impl OccupancyLedger {
         }
         out
     }
+    ///
+    /// # Errors
+    ///
+    /// Returns a refusal for malformed or noncanonical ledger encoding.
     pub fn canonical_decode(encoded: &[u8]) -> Result<Self, OccupancyError> {
-        if encoded.len() > MAX_OCCUPANCY_LEDGER_BYTES { return Err(OccupancyError::LengthLimit); }
-        if encoded.starts_with(LEDGER_DOMAIN_V1) { return decode_legacy_ledger(encoded); }
+        if encoded.len() > MAX_OCCUPANCY_LEDGER_BYTES {
+            return Err(OccupancyError::LengthLimit);
+        }
+        if encoded.starts_with(LEDGER_DOMAIN_V1) {
+            return decode_legacy_ledger(encoded);
+        }
         let mut cursor = Cursor::new(encoded);
-        if cursor.take(LEDGER_DOMAIN.len())? != LEDGER_DOMAIN { return Err(OccupancyError::MalformedEvidence); }
+        if cursor.take(LEDGER_DOMAIN.len())? != LEDGER_DOMAIN {
+            return Err(OccupancyError::MalformedEvidence);
+        }
         let last_finalized_batch = cursor.u64()?;
-        let count = usize::try_from(cursor.u32()?).map_err(|_| OccupancyError::MalformedEvidence)?;
-        if count > MAX_OCCUPANCY_POSITIONS { return Err(OccupancyError::LengthLimit); }
+        let count =
+            usize::try_from(cursor.u32()?).map_err(|_| OccupancyError::MalformedEvidence)?;
+        if count > MAX_OCCUPANCY_POSITIONS {
+            return Err(OccupancyError::LengthLimit);
+        }
         let mut positions = BTreeMap::new();
         let mut prior = None;
         for _ in 0..count {
             let namespace = decode_namespace(&mut cursor)?;
-            if prior.is_some_and(|value| value >= namespace) { return Err(OccupancyError::MalformedEvidence); }
+            if prior.is_some_and(|value| value >= namespace) {
+                return Err(OccupancyError::MalformedEvidence);
+            }
             prior = Some(namespace);
-            let payer = PrincipalId::new(cursor.array()?).map_err(|_| OccupancyError::MalformedEvidence)?;
+            let payer =
+                PrincipalId::new(cursor.array()?).map_err(|_| OccupancyError::MalformedEvidence)?;
             validate_scope(namespace, payer)?;
-            let root_program = ProgramId::new(cursor.array()?).map_err(|_| OccupancyError::MalformedEvidence)?;
+            let root_program =
+                ProgramId::new(cursor.array()?).map_err(|_| OccupancyError::MalformedEvidence)?;
             let activity_binding = cursor.array()?;
             let bytes = cursor.u64()?;
             let batch = cursor.u64()?;
@@ -786,23 +1263,57 @@ impl OccupancyLedger {
             let arrears = cursor.u128()?;
             let frozen = bool_byte(cursor.byte()?)?;
             let legacy = bool_byte(cursor.byte()?)?;
-            if bytes > maximum_bytes || (!legacy && (mandate == [0; 32] || activity_binding == [0; 32])) ||
-                (!legacy && frozen != (arrears != 0)) || (legacy && (!frozen || arrears != 0)) ||
-                (bytes == 0 && arrears == 0) {
+            if bytes > maximum_bytes
+                || (!legacy && (mandate == [0; 32] || activity_binding == [0; 32]))
+                || (!legacy && frozen != (arrears != 0))
+                || (legacy && (!frozen || arrears != 0))
+                || (bytes == 0 && arrears == 0)
+            {
                 return Err(OccupancyError::MalformedEvidence);
             }
-            if positions.insert(namespace, OccupancyPosition { payer, root_program, activity_binding,
-                bytes, batch, maximum_bytes, maximum_price,
-                remaining_fee_units, mandate, arrears, frozen, legacy }).is_some() { return Err(OccupancyError::MalformedEvidence); }
+            if positions
+                .insert(
+                    namespace,
+                    OccupancyPosition {
+                        payer,
+                        root_program,
+                        activity_binding,
+                        bytes,
+                        batch,
+                        maximum_bytes,
+                        maximum_price,
+                        remaining_fee_units,
+                        mandate,
+                        arrears,
+                        frozen,
+                        legacy,
+                    },
+                )
+                .is_some()
+            {
+                return Err(OccupancyError::MalformedEvidence);
+            }
         }
-        if !cursor.is_empty() { return Err(OccupancyError::MalformedEvidence); }
-        Ok(Self { last_finalized_batch, positions })
+        if !cursor.is_empty() {
+            return Err(OccupancyError::MalformedEvidence);
+        }
+        Ok(Self {
+            last_finalized_batch,
+            positions,
+        })
     }
     #[must_use]
-    pub fn recorded_bytes(&self, namespace: StorageNamespace) -> Option<u64> { self.positions.get(&namespace).map(|position| position.bytes) }
+    pub fn recorded_bytes(&self, namespace: StorageNamespace) -> Option<u64> {
+        self.positions
+            .get(&namespace)
+            .map(|position| position.bytes)
+    }
 }
 
-fn checked_add(left: u128, right: u128) -> Result<u128, OccupancyError> { left.checked_add(right).ok_or(OccupancyError::ArithmeticOverflow) }
+fn checked_add(left: u128, right: u128) -> Result<u128, OccupancyError> {
+    left.checked_add(right)
+        .ok_or(OccupancyError::ArithmeticOverflow)
+}
 fn mandate_digest(
     payer: PrincipalId,
     root_program: ProgramId,
@@ -823,9 +1334,22 @@ fn mandate_digest(
     Sha256::digest(&material).into()
 }
 fn validate_scope(namespace: StorageNamespace, payer: PrincipalId) -> Result<(), OccupancyError> {
-    if namespace.principal_scope().is_some_and(|principal| principal != payer) { Err(OccupancyError::AuthorityMismatch { namespace }) } else { Ok(()) }
+    if namespace
+        .principal_scope()
+        .is_some_and(|principal| principal != payer)
+    {
+        Err(OccupancyError::AuthorityMismatch { namespace })
+    } else {
+        Ok(())
+    }
 }
-fn bool_byte(value: u8) -> Result<bool, OccupancyError> { match value { 0 => Ok(false), 1 => Ok(true), _ => Err(OccupancyError::MalformedEvidence) } }
+fn bool_byte(value: u8) -> Result<bool, OccupancyError> {
+    match value {
+        0 => Ok(false),
+        1 => Ok(true),
+        _ => Err(OccupancyError::MalformedEvidence),
+    }
+}
 fn disposition(value: u8) -> Result<OccupancyDisposition, OccupancyError> {
     match value {
         1 => Ok(OccupancyDisposition::Paid),
@@ -845,79 +1369,180 @@ fn decode_namespace(cursor: &mut Cursor<'_>) -> Result<StorageNamespace, Occupan
     use crate::storage::ProgramId;
     let length = usize::from(cursor.byte()?);
     let bytes = cursor.take(length)?;
-    if length != 33 && length != 65 { return Err(OccupancyError::MalformedEvidence); }
-    let program = ProgramId::new(bytes[0..32].try_into().map_err(|_| OccupancyError::MalformedEvidence)?).map_err(|_| OccupancyError::MalformedEvidence)?;
+    if length != 33 && length != 65 {
+        return Err(OccupancyError::MalformedEvidence);
+    }
+    let program = ProgramId::new(
+        bytes[0..32]
+            .try_into()
+            .map_err(|_| OccupancyError::MalformedEvidence)?,
+    )
+    .map_err(|_| OccupancyError::MalformedEvidence)?;
     match (bytes[32], length) {
-        (0, 65) => Ok(StorageNamespace::principal(program, PrincipalId::new(bytes[33..65].try_into().map_err(|_| OccupancyError::MalformedEvidence)?).map_err(|_| OccupancyError::MalformedEvidence)?)),
+        (0, 65) => Ok(StorageNamespace::principal(
+            program,
+            PrincipalId::new(
+                bytes[33..65]
+                    .try_into()
+                    .map_err(|_| OccupancyError::MalformedEvidence)?,
+            )
+            .map_err(|_| OccupancyError::MalformedEvidence)?,
+        )),
         (1, 33) => Ok(StorageNamespace::shared(program)),
-        (2, 65) => Ok(StorageNamespace::protocol_private(program,
-            bytes[33..65].try_into().map_err(|_| OccupancyError::MalformedEvidence)?)),
+        (2, 65) => Ok(StorageNamespace::protocol_private(
+            program,
+            bytes[33..65]
+                .try_into()
+                .map_err(|_| OccupancyError::MalformedEvidence)?,
+        )),
         _ => Err(OccupancyError::MalformedEvidence),
     }
 }
 fn encode_schedule(out: &mut Vec<u8>, schedule: FeeSchedule) {
     out.extend_from_slice(&schedule.version().to_be_bytes());
-    for price in [schedule.cpu_price(), schedule.memory_byte_price(), schedule.storage_read_byte_price(), schedule.storage_write_byte_price(),
-        schedule.output_value_price(), schedule.output_byte_price(), schedule.occupancy_byte_batch_price()] { out.extend_from_slice(&price.to_be_bytes()); }
+    for price in [
+        schedule.cpu_price(),
+        schedule.memory_byte_price(),
+        schedule.storage_read_byte_price(),
+        schedule.storage_write_byte_price(),
+        schedule.output_value_price(),
+        schedule.output_byte_price(),
+        schedule.occupancy_byte_batch_price(),
+    ] {
+        out.extend_from_slice(&price.to_be_bytes());
+    }
 }
-fn decode_schedule(cursor: &mut Cursor<'_>, versioned: bool) -> Result<FeeSchedule, OccupancyError> {
+fn decode_schedule(
+    cursor: &mut Cursor<'_>,
+    versioned: bool,
+) -> Result<FeeSchedule, OccupancyError> {
     let version = if versioned { cursor.u32()? } else { 1 };
-    if version == 0 { return Err(OccupancyError::MalformedEvidence); }
-    Ok(FeeSchedule::new_complete(version, cursor.u64()?, cursor.u64()?, cursor.u64()?, cursor.u64()?, cursor.u64()?, cursor.u64()?, cursor.u64()?))
+    if version == 0 {
+        return Err(OccupancyError::MalformedEvidence);
+    }
+    Ok(FeeSchedule::new_complete(
+        version,
+        cursor.u64()?,
+        cursor.u64()?,
+        cursor.u64()?,
+        cursor.u64()?,
+        cursor.u64()?,
+        cursor.u64()?,
+        cursor.u64()?,
+    ))
 }
-fn canonical_storage_sizes(storage: &Storage) -> Result<Vec<u8>, OccupancyError> { canonical_sizes(&storage.namespace_sizes()?.into_iter().collect()) }
-fn canonical_position_sizes(positions: &BTreeMap<StorageNamespace, OccupancyPosition>) -> Result<Vec<u8>, OccupancyError> {
-    let sizes = positions.iter().filter(|(_, position)| position.bytes != 0).map(|(namespace, position)| (*namespace, position.bytes)).collect();
+fn canonical_storage_sizes(storage: &Storage) -> Result<Vec<u8>, OccupancyError> {
+    canonical_sizes(&storage.namespace_sizes()?.into_iter().collect())
+}
+fn canonical_position_sizes(
+    positions: &BTreeMap<StorageNamespace, OccupancyPosition>,
+) -> Result<Vec<u8>, OccupancyError> {
+    let sizes = positions
+        .iter()
+        .filter(|(_, position)| position.bytes != 0)
+        .map(|(namespace, position)| (*namespace, position.bytes))
+        .collect();
     canonical_sizes(&sizes)
 }
+fn position_count_bytes(count: usize) -> [u8; 4] {
+    let bytes = count.to_le_bytes();
+    [bytes[3], bytes[2], bytes[1], bytes[0]]
+}
+
 fn canonical_sizes(sizes: &BTreeMap<StorageNamespace, u64>) -> Result<Vec<u8>, OccupancyError> {
-    if sizes.len() > MAX_OCCUPANCY_POSITIONS { return Err(OccupancyError::LengthLimit); }
+    if sizes.len() > MAX_OCCUPANCY_POSITIONS {
+        return Err(OccupancyError::LengthLimit);
+    }
     let mut out = Vec::new();
-    out.extend_from_slice(&(sizes.len() as u32).to_be_bytes());
-    for (namespace, bytes) in sizes { encode_namespace(&mut out, *namespace); out.extend_from_slice(&bytes.to_be_bytes()); }
+    out.extend_from_slice(
+        &u32::try_from(sizes.len())
+            .map_err(|_| OccupancyError::LengthLimit)?
+            .to_be_bytes(),
+    );
+    for (namespace, bytes) in sizes {
+        encode_namespace(&mut out, *namespace);
+        out.extend_from_slice(&bytes.to_be_bytes());
+    }
     Ok(out)
 }
 fn decode_sizes(encoded: &[u8]) -> Result<BTreeMap<StorageNamespace, u64>, OccupancyError> {
     let mut cursor = Cursor::new(encoded);
     let count = usize::try_from(cursor.u32()?).map_err(|_| OccupancyError::MalformedEvidence)?;
-    if count > MAX_OCCUPANCY_POSITIONS { return Err(OccupancyError::LengthLimit); }
+    if count > MAX_OCCUPANCY_POSITIONS {
+        return Err(OccupancyError::LengthLimit);
+    }
     let mut sizes = BTreeMap::new();
     for _ in 0..count {
         let namespace = decode_namespace(&mut cursor)?;
         let bytes = cursor.u64()?;
-        if bytes == 0 || sizes.insert(namespace, bytes).is_some() { return Err(OccupancyError::MalformedEvidence); }
+        if bytes == 0 || sizes.insert(namespace, bytes).is_some() {
+            return Err(OccupancyError::MalformedEvidence);
+        }
     }
-    if !cursor.is_empty() { return Err(OccupancyError::MalformedEvidence); }
+    if !cursor.is_empty() {
+        return Err(OccupancyError::MalformedEvidence);
+    }
     Ok(sizes)
 }
 fn decode_legacy_ledger(encoded: &[u8]) -> Result<OccupancyLedger, OccupancyError> {
     let mut cursor = Cursor::new(encoded);
     let _ = cursor.take(LEDGER_DOMAIN_V1.len())?;
     let count = usize::try_from(cursor.u64()?).map_err(|_| OccupancyError::MalformedEvidence)?;
-    if count > MAX_OCCUPANCY_POSITIONS { return Err(OccupancyError::LengthLimit); }
+    if count > MAX_OCCUPANCY_POSITIONS {
+        return Err(OccupancyError::LengthLimit);
+    }
     let mut positions = BTreeMap::new();
     let mut last_finalized_batch = 0;
     for _ in 0..count {
         let namespace = decode_namespace(&mut cursor)?;
-        let payer = PrincipalId::new(cursor.array()?).map_err(|_| OccupancyError::MalformedEvidence)?;
+        let payer =
+            PrincipalId::new(cursor.array()?).map_err(|_| OccupancyError::MalformedEvidence)?;
         validate_scope(namespace, payer)?;
         let bytes = cursor.u64()?;
         let batch = cursor.u64()?;
         last_finalized_batch = last_finalized_batch.max(batch);
-        if bytes == 0 || positions.insert(namespace, OccupancyPosition { payer,
-            root_program: namespace.program(), activity_binding: [0; 32], bytes, batch, maximum_bytes: bytes,
-            maximum_price: 0, remaining_fee_units: 0, mandate: [0; 32], arrears: 0,
-            frozen: true, legacy: true }).is_some() {
+        if bytes == 0
+            || positions
+                .insert(
+                    namespace,
+                    OccupancyPosition {
+                        payer,
+                        root_program: namespace.program(),
+                        activity_binding: [0; 32],
+                        bytes,
+                        batch,
+                        maximum_bytes: bytes,
+                        maximum_price: 0,
+                        remaining_fee_units: 0,
+                        mandate: [0; 32],
+                        arrears: 0,
+                        frozen: true,
+                        legacy: true,
+                    },
+                )
+                .is_some()
+        {
             return Err(OccupancyError::MalformedEvidence);
         }
     }
-    if !cursor.is_empty() { return Err(OccupancyError::MalformedEvidence); }
-    for position in positions.values_mut() { position.batch = last_finalized_batch; }
-    Ok(OccupancyLedger { last_finalized_batch, positions })
+    if !cursor.is_empty() {
+        return Err(OccupancyError::MalformedEvidence);
+    }
+    for position in positions.values_mut() {
+        position.batch = last_finalized_batch;
+    }
+    Ok(OccupancyLedger {
+        last_finalized_batch,
+        positions,
+    })
 }
 fn decode_legacy_settlement(encoded: &[u8]) -> Result<OccupancySettlement, OccupancyError> {
     let versioned = encoded.starts_with(EVIDENCE_DOMAIN_V2);
-    let domain = if versioned { EVIDENCE_DOMAIN_V2 } else { EVIDENCE_DOMAIN_V1 };
+    let domain = if versioned {
+        EVIDENCE_DOMAIN_V2
+    } else {
+        EVIDENCE_DOMAIN_V1
+    };
     let mut cursor = Cursor::new(encoded);
     let _ = cursor.take(domain.len())?;
     let batch = cursor.u64()?;
@@ -925,12 +1550,15 @@ fn decode_legacy_settlement(encoded: &[u8]) -> Result<OccupancySettlement, Occup
     let declared_units = cursor.u128()?;
     let declared_fee = cursor.u128()?;
     let count = usize::try_from(cursor.u64()?).map_err(|_| OccupancyError::MalformedEvidence)?;
-    if count > MAX_OCCUPANCY_POSITIONS { return Err(OccupancyError::LengthLimit); }
+    if count > MAX_OCCUPANCY_POSITIONS {
+        return Err(OccupancyError::LengthLimit);
+    }
     let mut usage = OccupancyUsage::default();
     let mut charges = Vec::with_capacity(count);
     for _ in 0..count {
         let namespace = decode_namespace(&mut cursor)?;
-        let payer = PrincipalId::new(cursor.array()?).map_err(|_| OccupancyError::MalformedEvidence)?;
+        let payer =
+            PrincipalId::new(cursor.array()?).map_err(|_| OccupancyError::MalformedEvidence)?;
         let from_batch = cursor.u64()?;
         let to_batch = cursor.u64()?;
         let recorded_bytes = cursor.u64()?;
@@ -938,40 +1566,95 @@ fn decode_legacy_settlement(encoded: &[u8]) -> Result<OccupancySettlement, Occup
         let byte_batches = cursor.u128()?;
         let price = cursor.u64()?;
         let accrued_fee_units = cursor.u128()?;
-        let intervals = to_batch.checked_sub(from_batch).ok_or(OccupancyError::MalformedEvidence)?;
-        let expected_units = u128::from(recorded_bytes).checked_mul(u128::from(intervals)).ok_or(OccupancyError::ArithmeticOverflow)?;
-        if to_batch != batch || byte_batches != expected_units || price != fee_schedule.occupancy_byte_batch_price()
-            || accrued_fee_units != byte_batches.checked_mul(u128::from(price)).ok_or(OccupancyError::ArithmeticOverflow)? {
+        let intervals = to_batch
+            .checked_sub(from_batch)
+            .ok_or(OccupancyError::MalformedEvidence)?;
+        let expected_units = u128::from(recorded_bytes)
+            .checked_mul(u128::from(intervals))
+            .ok_or(OccupancyError::ArithmeticOverflow)?;
+        if to_batch != batch
+            || byte_batches != expected_units
+            || price != fee_schedule.occupancy_byte_batch_price()
+            || accrued_fee_units
+                != byte_batches
+                    .checked_mul(u128::from(price))
+                    .ok_or(OccupancyError::ArithmeticOverflow)?
+        {
             return Err(OccupancyError::MalformedEvidence);
         }
         usage.byte_batches = checked_add(usage.byte_batches, byte_batches)?;
         usage.fee_units = checked_add(usage.fee_units, accrued_fee_units)?;
         usage.paid_fee_units = checked_add(usage.paid_fee_units, accrued_fee_units)?;
-        charges.push(OccupancyCharge { namespace, payer, root_program: namespace.program(),
-            activity_binding: [0; 32], from_batch, to_batch, recorded_bytes, final_bytes, byte_batches,
-            price, accrued_fee_units, prior_arrears: 0, amount_due: accrued_fee_units,
+        charges.push(OccupancyCharge {
+            namespace,
+            payer,
+            root_program: namespace.program(),
+            activity_binding: [0; 32],
+            from_batch,
+            to_batch,
+            recorded_bytes,
+            final_bytes,
+            byte_batches,
+            price,
+            accrued_fee_units,
+            prior_arrears: 0,
+            amount_due: accrued_fee_units,
             authorized_added_fee_units: 0,
-            disposition: OccupancyDisposition::Paid, arrears_after: 0,
-            maximum_bytes: final_bytes.max(recorded_bytes), maximum_price: price,
-            remaining_fee_units: 0, mandate: [0; 32] });
+            disposition: OccupancyDisposition::Paid,
+            arrears_after: 0,
+            maximum_bytes: final_bytes.max(recorded_bytes),
+            maximum_price: price,
+            remaining_fee_units: 0,
+            mandate: [0; 32],
+        });
     }
-    if !cursor.is_empty() || usage.byte_batches != declared_units || usage.fee_units != declared_fee { return Err(OccupancyError::MalformedEvidence); }
-    Ok(OccupancySettlement { batch, usage, fee_schedule, charges })
+    if !cursor.is_empty() || usage.byte_batches != declared_units || usage.fee_units != declared_fee
+    {
+        return Err(OccupancyError::MalformedEvidence);
+    }
+    Ok(OccupancySettlement {
+        batch,
+        usage,
+        fee_schedule,
+        charges,
+    })
 }
 
-struct Cursor<'a> { remaining: &'a [u8] }
+struct Cursor<'a> {
+    remaining: &'a [u8],
+}
 impl<'a> Cursor<'a> {
-    const fn new(remaining: &'a [u8]) -> Self { Self { remaining } }
-    fn take(&mut self, length: usize) -> Result<&'a [u8], OccupancyError> {
-        let (value, rest) = self.remaining.split_at_checked(length).ok_or(OccupancyError::MalformedEvidence)?;
-        self.remaining = rest; Ok(value)
+    const fn new(remaining: &'a [u8]) -> Self {
+        Self { remaining }
     }
-    fn array<const N: usize>(&mut self) -> Result<[u8; N], OccupancyError> { self.take(N)?.try_into().map_err(|_| OccupancyError::MalformedEvidence) }
-    fn byte(&mut self) -> Result<u8, OccupancyError> { Ok(self.take(1)?[0]) }
-    fn u32(&mut self) -> Result<u32, OccupancyError> { Ok(u32::from_be_bytes(self.array()?)) }
-    fn u64(&mut self) -> Result<u64, OccupancyError> { Ok(u64::from_be_bytes(self.array()?)) }
-    fn u128(&mut self) -> Result<u128, OccupancyError> { Ok(u128::from_be_bytes(self.array()?)) }
-    const fn is_empty(&self) -> bool { self.remaining.is_empty() }
+    fn take(&mut self, length: usize) -> Result<&'a [u8], OccupancyError> {
+        let (value, rest) = self
+            .remaining
+            .split_at_checked(length)
+            .ok_or(OccupancyError::MalformedEvidence)?;
+        self.remaining = rest;
+        Ok(value)
+    }
+    fn array<const N: usize>(&mut self) -> Result<[u8; N], OccupancyError> {
+        self.take(N)?
+            .try_into()
+            .map_err(|_| OccupancyError::MalformedEvidence)
+    }
+    fn byte(&mut self) -> Result<u8, OccupancyError> {
+        Ok(self.take(1)?[0])
+    }
+    fn u32(&mut self) -> Result<u32, OccupancyError> {
+        Ok(u32::from_be_bytes(self.array()?))
+    }
+    fn u64(&mut self) -> Result<u64, OccupancyError> {
+        Ok(u64::from_be_bytes(self.array()?))
+    }
+    fn u128(&mut self) -> Result<u128, OccupancyError> {
+        Ok(u128::from_be_bytes(self.array()?))
+    }
+    const fn is_empty(&self) -> bool {
+        self.remaining.is_empty()
+    }
 }
 
 #[cfg(test)]
@@ -1010,7 +1693,7 @@ mod tests {
             schedule,
             crate::ProgramId::new([7; 32]).expect("nonzero program"),
         )
-            .expect("admitted authority")
+        .expect("admitted authority")
     }
 
     fn occupied(namespace: StorageNamespace) -> Storage {
@@ -1203,7 +1886,9 @@ mod tests {
     fn gaps_refuse_and_committed_drop_stops_future_accrual() {
         let (mut ledger, _storage, namespace) = initialized(100);
         assert_eq!(
-            ledger.prepare_unchanged_batch(3, schedule(1, 2)).unwrap_err(),
+            ledger
+                .prepare_unchanged_batch(3, schedule(1, 2))
+                .unwrap_err(),
             OccupancyError::BatchRegression {
                 previous: 1,
                 attempted: 3,

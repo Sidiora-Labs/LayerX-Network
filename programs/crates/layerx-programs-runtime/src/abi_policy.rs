@@ -28,6 +28,10 @@ impl Display for AbiVersionRefusal {
 impl std::error::Error for AbiVersionRefusal {}
 
 /// Accepts an ABI version for a new deployment or historical replay.
+///
+/// # Errors
+///
+/// Returns a version refusal when the requested ABI is not admitted.
 pub const fn admit_abi_version(requested: u16) -> Result<(), AbiVersionRefusal> {
     match requested {
         ABI_V1_VERSION | ABI_V2_VERSION => Ok(()),
@@ -36,10 +40,11 @@ pub const fn admit_abi_version(requested: u16) -> Result<(), AbiVersionRefusal> 
 }
 
 /// Freezes upgrades as monotonic transitions across supported ABI versions.
-pub const fn admit_abi_upgrade(
-    current: u16,
-    requested: u16,
-) -> Result<(), AbiVersionRefusal> {
+///
+/// # Errors
+///
+/// Returns a version refusal when either ABI or the requested transition is unsupported.
+pub const fn admit_abi_upgrade(current: u16, requested: u16) -> Result<(), AbiVersionRefusal> {
     match (admit_abi_version(current), admit_abi_version(requested)) {
         (Err(refusal), _) | (_, Err(refusal)) => Err(refusal),
         (Ok(()), Ok(())) if requested < current => {

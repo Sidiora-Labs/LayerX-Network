@@ -288,9 +288,9 @@ pub(crate) fn scan_cells(
         .filter(|(address, _)| {
             address.namespace == namespace
                 && address.key.starts_with(prefix)
-                && !after
+                && after
                     .as_ref()
-                    .is_some_and(|after| address.key.as_slice() <= after.as_slice())
+                    .is_none_or(|after| address.key.as_slice() > after.as_slice())
         })
         .peekable();
     let mut entries = Vec::new();

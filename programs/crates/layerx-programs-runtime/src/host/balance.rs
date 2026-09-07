@@ -45,7 +45,7 @@ pub(super) fn register_v2(linker: &mut Linker<RuntimeState>) -> Result<(), Execu
                     Ok(view.balance)
                 }) {
                     Ok(value) => value,
-                    Err(error) => return error_status(error),
+                    Err(error) => return error_status(&error),
                 };
                 if let Err(status) =
                     write_guest(&mut caller, output_pointer, &balance.to_be_bytes())

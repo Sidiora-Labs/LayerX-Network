@@ -38,8 +38,7 @@ pub const GENESIS_OUTPUT_BYTE_PRICE: u64 = 1;
 /// Genesis fee units charged per namespace byte held for one protocol batch.
 pub const GENESIS_OCCUPANCY_BYTE_BATCH_PRICE: u64 = 1;
 /// Legacy name for the genesis occupancy price.
-pub const DEFAULT_OCCUPANCY_BYTE_BATCH_PRICE: u64 =
-    GENESIS_OCCUPANCY_BYTE_BATCH_PRICE;
+pub const DEFAULT_OCCUPANCY_BYTE_BATCH_PRICE: u64 = GENESIS_OCCUPANCY_BYTE_BATCH_PRICE;
 
 /// One independently enforced deterministic resource class.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -433,18 +432,16 @@ impl FeeSchedule {
             response_divisor,
             maximum_change,
         )?);
-        let proposed = if observed_occupancy_byte_batches > target {
-            current
+        let proposed = match observed_occupancy_byte_batches.cmp(&target) {
+            core::cmp::Ordering::Greater => current
                 .checked_add(bounded_change)
                 .ok_or(FeeScheduleError::ArithmeticOverflow)?
-                .min(u128::from(policy.maximum_price))
-        } else if observed_occupancy_byte_batches < target {
-            current
+                .min(u128::from(policy.maximum_price)),
+            core::cmp::Ordering::Less => current
                 .checked_sub(bounded_change)
                 .ok_or(FeeScheduleError::ArithmeticOverflow)?
-                .max(u128::from(policy.minimum_price))
-        } else {
-            current
+                .max(u128::from(policy.minimum_price)),
+            core::cmp::Ordering::Equal => current,
         };
         let applied_change = current.abs_diff(proposed);
         if applied_change > u128::from(maximum_change) {
@@ -730,6 +727,10 @@ pub struct FeeGovernance {
 
 impl FeeGovernance {
     /// Constructs the runtime projection from authenticated protocol state.
+    ///
+    /// # Errors
+    ///
+    /// Returns a refusal for an invalid demand policy or initial fee schedule.
     pub fn new(
         initial: FeeSchedule,
         demand_policy: DemandPricePolicy,
@@ -743,12 +744,20 @@ impl FeeGovernance {
 
     /// Appends one receipt-authorized schedule already made effective by the
     /// protocol transition.
+    ///
+    /// # Errors
+    ///
+    /// Returns a refusal when the schedule is invalid or violates history ordering.
     pub fn record_governed(&mut self, schedule: FeeSchedule) -> Result<(), FeeScheduleError> {
         self.history.record(schedule)
     }
 
     /// Applies one canonical completed-batch occupancy observation and records
     /// the resulting schedule only when its bounded price changes.
+    ///
+    /// # Errors
+    ///
+    /// Returns a refusal for invalid demand adjustment, arithmetic overflow, or history insertion.
     pub fn observe_batch(
         &mut self,
         observed_occupancy_byte_batches: u128,
@@ -770,6 +779,10 @@ impl FeeGovernance {
     }
 
     /// Returns the effective protocol-state schedule.
+    ///
+    /// # Errors
+    ///
+    /// Returns `InvalidSchedule` when no effective schedule exists.
     pub fn current(&self) -> Result<FeeSchedule, FeeScheduleError> {
         self.history
             .schedules()
@@ -822,8 +835,7 @@ fn capped_proportional_change(
     while lower < upper {
         let distance = upper - lower;
         let candidate = lower + distance.div_ceil(2);
-        let required_deviation =
-            ceil_scaled_fraction(candidate, response_divisor, current_price)?;
+        let required_deviation = ceil_scaled_fraction(candidate, response_divisor, current_price)?;
         if deviation >= required_deviation {
             lower = candidate;
         } else {
@@ -1176,7 +1188,10 @@ impl Meter {
         });
     }
 
-    pub(crate) fn charge_output(&mut self, values: usize) -> Result<OutputReservation, MeterRefusal> {
+    pub(crate) fn charge_output(
+        &mut self,
+        values: usize,
+    ) -> Result<OutputReservation, MeterRefusal> {
         let reserved = u32::try_from(values).map_err(|_| {
             let refusal = MeterRefusal::CounterOverflow {
                 resource: ResourceKind::Output,
@@ -1278,10 +1293,7 @@ impl Meter {
 
     fn finish_bounded_usage(&self, cpu_fuel: u64) -> Result<MeteredUsage, MeterRefusal> {
         let priced = [
-            (
-                u128::from(cpu_fuel),
-                self.prices.fee_units_per_cpu_fuel,
-            ),
+            (u128::from(cpu_fuel), self.prices.fee_units_per_cpu_fuel),
             (
                 u128::from(self.memory_bytes),
                 self.prices.fee_units_per_memory_byte,
@@ -1514,10 +1526,7 @@ mod response_tests {
 
     #[test]
     fn failed_parent_output_rollback_preserves_nested_output_usage() {
-        let mut meter = Meter::new_activity(
-            ResourceBudget::declared(),
-            FeeSchedule::declared(),
-        );
+        let mut meter = Meter::new_activity(ResourceBudget::declared(), FeeSchedule::declared());
         let parent = meter
             .charge_output(1)
             .unwrap_or_else(|error| panic!("parent reservation: {error}"));
@@ -1536,10 +1545,7 @@ mod response_tests {
 
     #[test]
     fn oversized_output_reservation_is_typed_and_unbilled() {
-        let mut meter = Meter::new_activity(
-            ResourceBudget::declared(),
-            FeeSchedule::declared(),
-        );
+        let mut meter = Meter::new_activity(ResourceBudget::declared(), FeeSchedule::declared());
         assert_eq!(
             meter.charge_output(usize::MAX),
             Err(MeterRefusal::CounterOverflow {

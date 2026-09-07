@@ -540,8 +540,8 @@ impl CapabilitySet {
                         maximum_amount: child,
                         ..
                     },
-                ) => child <= parent,
-                (
+                )
+                | (
                     Some(Capability::ProgramSpend {
                         maximum_amount: parent,
                         ..

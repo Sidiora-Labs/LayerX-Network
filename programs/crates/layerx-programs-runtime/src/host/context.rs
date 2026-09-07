@@ -49,9 +49,8 @@ pub(super) fn register_v2(linker: &mut Linker<RuntimeState>) -> Result<(), Execu
                 if super::charge_host_cpu(&mut caller, fuel).is_err() {
                     return Err(Trap::from(TrapCode::OutOfFuel));
                 }
-                let value = match caller.data().context_field(field) {
-                    Ok(value) => value,
-                    Err(_) => return Ok(STATUS_DENIED),
+                let Ok(value) = caller.data().context_field(field) else {
+                    return Ok(STATUS_DENIED);
                 };
                 if let Err(status) = output.write(&mut caller, &value) {
                     return Ok(status);

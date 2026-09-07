@@ -67,10 +67,18 @@ impl ModuleCacheKey {
         wasm: &[u8],
     ) -> Result<Self, crate::meter::inject::InjectionRefusal> {
         Self::for_wasm_with_schedule(
-            code_hash, runtime_version, abi_version, wasm, crate::FuelSchedule::WASMI_0_31_2,
+            code_hash,
+            runtime_version,
+            abi_version,
+            wasm,
+            crate::FuelSchedule::WASMI_0_31_2,
         )
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns an injection refusal when the module cannot be instrumented with the schedule.
     pub fn for_wasm_with_schedule(
         code_hash: CodeHash,
         runtime_version: u16,
@@ -78,13 +86,9 @@ impl ModuleCacheKey {
         wasm: &[u8],
         schedule: crate::FuelSchedule,
     ) -> Result<Self, crate::meter::inject::InjectionRefusal> {
-        let injection = crate::meter::inject::MeterInjection::instrument(
-            wasm, schedule,
-        )?;
-        let mut key = Self::new(code_hash, runtime_version, abi_version).with_meter_artifact(
-            injection.schedule().version(),
-            injection.digest(),
-        );
+        let injection = crate::meter::inject::MeterInjection::instrument(wasm, schedule)?;
+        let mut key = Self::new(code_hash, runtime_version, abi_version)
+            .with_meter_artifact(injection.schedule().version(), injection.digest());
         key.metering_schedule_bytes = schedule.canonical_bytes();
         Ok(key)
     }
@@ -105,10 +109,14 @@ impl ModuleCacheKey {
     }
 
     #[must_use]
-    pub const fn metering_schedule_version(self) -> u32 { self.metering_schedule_version }
+    pub const fn metering_schedule_version(self) -> u32 {
+        self.metering_schedule_version
+    }
 
     #[must_use]
-    pub const fn meter_artifact_digest(self) -> [u8; 32] { self.meter_artifact_digest }
+    pub const fn meter_artifact_digest(self) -> [u8; 32] {
+        self.meter_artifact_digest
+    }
 
     fn expected_revision(self) -> Result<AbiRevision, CompiledModuleRefusal> {
         if self.runtime_version != crate::RUNTIME_VERSION {
@@ -215,8 +223,13 @@ impl std::error::Error for ModuleCacheLimitsRefusal {}
 /// Refusal produced before an artifact can enter executable cache state.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CompiledModuleRefusal {
-    UnsupportedRuntimeVersion { requested: u16, supported: u16 },
-    UnsupportedAbiVersion { requested: u16 },
+    UnsupportedRuntimeVersion {
+        requested: u16,
+        supported: u16,
+    },
+    UnsupportedAbiVersion {
+        requested: u16,
+    },
     CodeHashMismatch {
         declared: CodeHash,
         computed: CodeHash,
@@ -313,9 +326,11 @@ impl CompiledModule {
         expected_revision: AbiRevision,
     ) -> Result<Self, CompiledModuleRefusal> {
         let schedule = crate::FuelSchedule::from_protocol_bytes(&key.metering_schedule_bytes)
-            .map_err(|refusal| CompiledModuleRefusal::Validation(
-                ValidationRefusal::MeterInjection { reason: refusal.to_string() },
-            ))?;
+            .map_err(|refusal| {
+                CompiledModuleRefusal::Validation(ValidationRefusal::MeterInjection {
+                    reason: refusal.to_string(),
+                })
+            })?;
         let artifact = engine.validate_versioned_metered(key.abi_version, wasm, schedule)?;
         if key.metering_schedule_version != artifact.metering_schedule_version()
             || key.meter_artifact_digest != artifact.meter_injection().digest()
@@ -536,10 +551,7 @@ impl ModuleCache {
         self.accounted_bytes = retained_bytes;
     }
 
-    fn invalidate_where(
-        &mut self,
-        mut invalidated: impl FnMut(&ModuleCacheKey) -> bool,
-    ) -> usize {
+    fn invalidate_where(&mut self, mut invalidated: impl FnMut(&ModuleCacheKey) -> bool) -> usize {
         let before = self.entries.len();
         let mut removed_bytes = 0;
         self.entries.retain(|key, compiled| {
@@ -576,7 +588,10 @@ impl Display for RuntimeArtifactOwnerRefusal {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Initialization(refusal) => {
-                write!(formatter, "runtime artifact owner initialization refused: {refusal}")
+                write!(
+                    formatter,
+                    "runtime artifact owner initialization refused: {refusal}"
+                )
             }
             Self::SynchronizationPoisoned => {
                 formatter.write_str("runtime artifact cache synchronization is poisoned")
@@ -717,8 +732,12 @@ mod tests {
 
     fn key(wasm: &[u8], abi_version: u16) -> ModuleCacheKey {
         ModuleCacheKey::for_legacy_v1_wasm(
-            Sha256::digest(wasm).into(), crate::RUNTIME_VERSION, abi_version, wasm,
-        ).unwrap_or_else(|refusal| panic!("metering key refused: {refusal}"))
+            Sha256::digest(wasm).into(),
+            crate::RUNTIME_VERSION,
+            abi_version,
+            wasm,
+        )
+        .unwrap_or_else(|refusal| panic!("metering key refused: {refusal}"))
     }
 
     fn padded_add(padding: usize) -> Vec<u8> {
@@ -745,11 +764,7 @@ mod tests {
         }
     }
 
-    fn compile(
-        cache: &mut ModuleCache,
-        engine: &WasmEngine,
-        wasm: &[u8],
-    ) -> Arc<CompiledModule> {
+    fn compile(cache: &mut ModuleCache, engine: &WasmEngine, wasm: &[u8]) -> Arc<CompiledModule> {
         match cache.get_or_compile(engine, key(wasm, crate::ABI_V1_VERSION), wasm) {
             Ok(compiled) => compiled,
             Err(refusal) => panic!("module compilation refused: {refusal}"),
@@ -763,11 +778,8 @@ mod tests {
             Err(refusal) => panic!("declared engine refused: {refusal}"),
         };
         let wasm = add_module();
-        let wrong_hash = ModuleCacheKey::new(
-            [9; 32],
-            crate::RUNTIME_VERSION,
-            crate::ABI_V1_VERSION,
-        );
+        let wrong_hash =
+            ModuleCacheKey::new([9; 32], crate::RUNTIME_VERSION, crate::ABI_V1_VERSION);
         assert!(matches!(
             CompiledModule::compile(&engine, wrong_hash, &wasm),
             Err(CompiledModuleRefusal::CodeHashMismatch { .. })
@@ -786,8 +798,7 @@ mod tests {
             crate::ABI_V1_VERSION,
         );
         assert_eq!(
-            CompiledModule::compile(&engine, unknown_runtime, &wasm)
-                .map(|compiled| compiled.key()),
+            CompiledModule::compile(&engine, unknown_runtime, &wasm).map(|compiled| compiled.key()),
             Err(CompiledModuleRefusal::UnsupportedRuntimeVersion {
                 requested: crate::RUNTIME_VERSION + 1,
                 supported: crate::RUNTIME_VERSION,
@@ -799,8 +810,7 @@ mod tests {
             crate::ABI_VERSION + 1,
         );
         assert_eq!(
-            CompiledModule::compile(&engine, unknown_abi, &wasm)
-                .map(|compiled| compiled.key()),
+            CompiledModule::compile(&engine, unknown_abi, &wasm).map(|compiled| compiled.key()),
             Err(CompiledModuleRefusal::UnsupportedAbiVersion {
                 requested: crate::ABI_VERSION + 1,
             })
@@ -815,13 +825,12 @@ mod tests {
         };
         let first = padded_add(3);
         let second = padded_add(5);
-        let (evicted, keeper) = if key(&first, crate::ABI_V1_VERSION)
-            > key(&second, crate::ABI_V1_VERSION)
-        {
-            (&first, &second)
-        } else {
-            (&second, &first)
-        };
+        let (evicted, keeper) =
+            if key(&first, crate::ABI_V1_VERSION) > key(&second, crate::ABI_V1_VERSION) {
+                (&first, &second)
+            } else {
+                (&second, &first)
+            };
         let mut disabled = ModuleCache::disabled();
         let cold = execute(&mut disabled, &engine, evicted, 17, 25);
         assert!(disabled.is_empty());
@@ -905,8 +914,8 @@ mod tests {
                 continue;
             }
             let first = (0..middle).find(|index| candidates[*index].len() < 8_192);
-            let last = (middle + 1..candidates.len())
-                .find(|index| candidates[*index].len() < 8_192);
+            let last =
+                (middle + 1..candidates.len()).find(|index| candidates[*index].len() < 8_192);
             if let (Some(first), Some(last)) = (first, last) {
                 selection = Some((first, middle, last));
                 break;
@@ -939,7 +948,10 @@ mod tests {
             key(selected[0], crate::ABI_V1_VERSION),
             key(selected[2], crate::ABI_V1_VERSION),
         ];
-        assert_eq!(forward.entries.keys().copied().collect::<Vec<_>>(), expected);
+        assert_eq!(
+            forward.entries.keys().copied().collect::<Vec<_>>(),
+            expected
+        );
         assert_eq!(
             reverse.entries.keys().copied().collect::<Vec<_>>(),
             expected

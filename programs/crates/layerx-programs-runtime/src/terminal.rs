@@ -171,6 +171,10 @@ pub enum TerminalDecodeError {
     MismatchedAbi,
 }
 
+///
+/// # Errors
+///
+/// Returns a decoding refusal for an unsupported kind or ABI, malformed bytes, or inconsistent fields.
 pub fn decode_terminal_payload(
     kind: u8,
     abi: u16,
@@ -469,7 +473,7 @@ fn decode_composition(payload: &[u8]) -> Result<(u8, FailureFields), TerminalDec
             actual: c.array()?,
         },
         3 | 4 => FailureFields::Program(c.array()?),
-        5 | 6 | 7 => FailureFields::Bounds {
+        5..=7 => FailureFields::Bounds {
             limit: c.u32()?,
             attempted: c.u32()?,
         },
@@ -508,7 +512,7 @@ fn decode_entrypoint(payload: &[u8]) -> Result<(u8, FailureFields), TerminalDeco
             first: c.u64()?,
             second: c.u64()?,
         },
-        2 | 3 | 4 => FailureFields::None,
+        2..=4 => FailureFields::None,
         5 | 6 => FailureFields::Code(c.i32()?),
         7 => FailureFields::Fault(decode_fault(&mut c)?),
         8 => FailureFields::Meter(decode_meter_failure(&mut c)?),

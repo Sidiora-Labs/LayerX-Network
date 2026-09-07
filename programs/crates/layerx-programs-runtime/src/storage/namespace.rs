@@ -21,8 +21,13 @@ pub enum StorageNamespace {
         principal: PrincipalId,
     },
     /// State shared by every principal invoking the owning program.
-    ProgramShared { program: ProgramId },
-    ProtocolPrivate { program: ProgramId, scope: [u8; 32] },
+    ProgramShared {
+        program: ProgramId,
+    },
+    ProtocolPrivate {
+        program: ProgramId,
+        scope: [u8; 32],
+    },
 }
 
 impl StorageNamespace {
@@ -47,7 +52,8 @@ impl StorageNamespace {
     #[must_use]
     pub const fn program(self) -> ProgramId {
         match self {
-            Self::PrincipalScoped { program, .. } | Self::ProgramShared { program }
+            Self::PrincipalScoped { program, .. }
+            | Self::ProgramShared { program }
             | Self::ProtocolPrivate { program, .. } => program,
         }
     }
@@ -57,8 +63,7 @@ impl StorageNamespace {
     pub const fn principal_scope(self) -> Option<PrincipalId> {
         match self {
             Self::PrincipalScoped { principal, .. } => Some(principal),
-            Self::ProgramShared { .. } => None,
-            Self::ProtocolPrivate { .. } => None,
+            Self::ProgramShared { .. } | Self::ProtocolPrivate { .. } => None,
         }
     }
 
@@ -116,12 +121,15 @@ impl Ord for StorageNamespace {
                         principal: right, ..
                     },
                 ) => left.cmp(&right),
-                (Self::PrincipalScoped { .. }, Self::ProgramShared { .. }) => Ordering::Less,
-                (Self::ProgramShared { .. }, Self::PrincipalScoped { .. }) => Ordering::Greater,
                 (Self::ProgramShared { .. }, Self::ProgramShared { .. }) => Ordering::Equal,
-                (Self::ProtocolPrivate { scope: left, .. }, Self::ProtocolPrivate { scope: right, .. }) => left.cmp(&right),
-                (Self::ProtocolPrivate { .. }, _) => Ordering::Greater,
-                (_, Self::ProtocolPrivate { .. }) => Ordering::Less,
+                (
+                    Self::ProtocolPrivate { scope: left, .. },
+                    Self::ProtocolPrivate { scope: right, .. },
+                ) => left.cmp(&right),
+                (Self::ProgramShared { .. }, Self::PrincipalScoped { .. })
+                | (Self::ProtocolPrivate { .. }, _) => Ordering::Greater,
+                (Self::PrincipalScoped { .. }, Self::ProgramShared { .. })
+                | (_, Self::ProtocolPrivate { .. }) => Ordering::Less,
             })
     }
 }

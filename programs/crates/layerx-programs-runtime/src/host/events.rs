@@ -52,7 +52,7 @@ pub(super) fn register(linker: &mut Linker<RuntimeState>) -> Result<(), Executio
                             .record_refusal(CompositionRefusal::Authority(error));
                         return Err(Trap::new(COMPOSITION_REFUSED));
                     }
-                    return Ok(error_status(error));
+                    return Ok(error_status(&error));
                 }
                 let topic = match read_guest(&caller, topic_pointer, topic_length, topic_bytes) {
                     Ok(topic) => topic,
@@ -67,7 +67,7 @@ pub(super) fn register(linker: &mut Linker<RuntimeState>) -> Result<(), Executio
                     .with_abi(|abi, _| abi.stage_reserved_event(topic, data))
                 {
                     Ok(()) => Ok(0),
-                    Err(error) => Ok(error_status(error)),
+                    Err(error) => Ok(error_status(&error)),
                 }
             },
         )
