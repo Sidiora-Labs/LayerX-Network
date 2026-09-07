@@ -19,6 +19,29 @@ const REPLAY_RECEIPT_BYTES: usize = 106;
 const PROGRAM_OUTCOME_V1: u32 = 0x5052_4731;
 const PROGRAM_OUTCOME_V2: u32 = 0x5052_4732;
 const PROGRAM_OUTCOME_V3: u32 = 0x5052_4733;
+const PROGRAM_OUTCOME_V4: u32 = 0x5052_4734;
+
+/// Decodes the C-owned V4 terminal envelope without interpreting guest effects.
+///
+/// # Errors
+/// Returns a canonical framing or bound refusal for malformed evidence.
+pub fn decode_applied_terminal(bytes: &[u8]) -> Result<(&[u8], &[u8]), WireError> {
+    const DOMAIN: &[u8] = b"LXP/programs/terminal-applied-legs/v1\0";
+    if bytes.len() > MAX_MESSAGE_BYTES || !bytes.starts_with(DOMAIN) {
+        return Err(WireError::known(KnownResult::NonCanonical, 0));
+    }
+    let mut decoder = Decoder::new(&bytes[DOMAIN.len()..], 0);
+    let detail = decoder.bytes(MAX_MESSAGE_BYTES)?;
+    let legs = decoder.bytes(256 * 115)?;
+    if detail.is_empty() || legs.len() % 115 != 0 {
+        return Err(WireError::known(
+            KnownResult::NonCanonical,
+            decoder.offset(),
+        ));
+    }
+    decoder.finish()?;
+    Ok((detail, legs))
+}
 
 /// Canonical Programs execution facts embedded in a core receipt.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -46,9 +69,15 @@ pub struct ProgramOutcome {
     call_graph_root: [u8; 32],
     terminal_payload_root: [u8; 32],
     transfer_root: [u8; 32],
+    applied_legs_digest: [u8; 32],
 }
 
 impl ProgramOutcome {
+    #[must_use]
+    pub const fn applied_legs_digest(&self) -> [u8; 32] {
+        self.applied_legs_digest
+    }
+
     #[must_use]
     pub const fn encoding_version(&self) -> u8 {
         self.encoding_version
@@ -493,9 +522,12 @@ fn validate_program_outcome(
     }
     if !matches!(
         (protocol, outcome.encoding_version),
-        (1, 1 | 3) | (2 | 3, 2 | 3)
+        (1, 1 | 3) | (2 | 3, 2 | 3) | (3, 4)
     ) {
         return Err(WireError::known(KnownResult::VersionUnsupported, offset));
+    }
+    if (outcome.encoding_version == 4) == (outcome.applied_legs_digest == zero) {
+        return Err(WireError::known(KnownResult::NonCanonical, offset));
     }
     let occupancy_zero = outcome.occupancy_byte_batches == 0
         && outcome.occupancy_fee_units == 0
@@ -507,11 +539,11 @@ fn validate_program_outcome(
         || outcome.encoding_version == 2
             && outcome.terminal_kind == 1
             && (outcome.occupancy_asset_id == zero || outcome.occupancy_evidence_digest == zero)
-        || outcome.encoding_version == 3
+        || outcome.encoding_version >= 3
             && ((outcome.occupancy_asset_id == zero) != (outcome.occupancy_evidence_digest == zero))
-        || protocol == 1 && outcome.encoding_version == 3 && !occupancy_zero
+        || protocol == 1 && outcome.encoding_version >= 3 && !occupancy_zero
         || protocol_version_uses_occupancy(protocol)
-            && outcome.encoding_version == 3
+            && outcome.encoding_version >= 3
             && outcome.terminal_kind == 1
             && (outcome.occupancy_asset_id == zero || outcome.occupancy_evidence_digest == zero)
     {
@@ -529,6 +561,7 @@ fn decode_program_outcome(
         PROGRAM_OUTCOME_V1 => 1,
         PROGRAM_OUTCOME_V2 => 2,
         PROGRAM_OUTCOME_V3 => 3,
+        PROGRAM_OUTCOME_V4 => 4,
         _ => return Err(WireError::known(KnownResult::NonCanonical, offset)),
     };
     let terminal_kind = decoder.u8()?;
@@ -536,7 +569,7 @@ fn decode_program_outcome(
     let runtime_version = decoder.u16()?;
     let abi_version = decoder.u16()?;
     let fee_schedule_version = decoder.u32()?;
-    let metering_schedule_version = if encoding_version == 3 {
+    let metering_schedule_version = if encoding_version >= 3 {
         decoder.u32()?
     } else {
         1
@@ -602,6 +635,11 @@ fn decode_program_outcome(
         call_graph_root: bounded_array(decoder)?,
         terminal_payload_root: bounded_array(decoder)?,
         transfer_root: bounded_array(decoder)?,
+        applied_legs_digest: if encoding_version == 4 {
+            bounded_array(decoder)?
+        } else {
+            [0; 32]
+        },
     };
     validate_program_outcome(&outcome, protocol, offset)?;
     Ok(outcome)
@@ -768,6 +806,7 @@ fn encode_program_outcome(
         1 => PROGRAM_OUTCOME_V1,
         2 => PROGRAM_OUTCOME_V2,
         3 => PROGRAM_OUTCOME_V3,
+        4 => PROGRAM_OUTCOME_V4,
         _ => return Err(WireError::known(KnownResult::VersionUnsupported, 0)),
     })?;
     encoder.u8(outcome.terminal_kind)?;
@@ -775,7 +814,7 @@ fn encode_program_outcome(
     encoder.u16(outcome.runtime_version)?;
     encoder.u16(outcome.abi_version)?;
     encoder.u32(outcome.fee_schedule_version)?;
-    if outcome.encoding_version == 3 {
+    if outcome.encoding_version >= 3 {
         encoder.u32(outcome.metering_schedule_version)?;
     }
     encoder.u64(outcome.cpu_fuel)?;
@@ -797,7 +836,11 @@ fn encode_program_outcome(
     encoder.u128(outcome.fee_units)?;
     encoder.bytes(&outcome.call_graph_root, 32)?;
     encoder.bytes(&outcome.terminal_payload_root, 32)?;
-    encoder.bytes(&outcome.transfer_root, 32)
+    encoder.bytes(&outcome.transfer_root, 32)?;
+    if outcome.encoding_version == 4 {
+        encoder.bytes(&outcome.applied_legs_digest, 32)?;
+    }
+    Ok(())
 }
 
 fn encode_protocol(receipt: &ProtocolReceipt) -> Result<Vec<u8>, WireError> {
@@ -913,6 +956,7 @@ mod program_outcome_vectors {
             call_graph_root: [4; 32],
             terminal_payload_root: [5; 32],
             transfer_root: [6; 32],
+            applied_legs_digest: [0; 32],
         };
         let mut legacy = Encoder::new(MAX_MESSAGE_BYTES);
         encode_program_outcome(&mut legacy, &outcome, 2)?;
@@ -957,6 +1001,7 @@ mod program_outcome_vectors {
             call_graph_root: [0x11; 32],
             terminal_payload_root: [0x22; 32],
             transfer_root: [0; 32],
+            applied_legs_digest: [0; 32],
         };
         let mut encoder = Encoder::new(MAX_MESSAGE_BYTES);
         encode_program_outcome(&mut encoder, &outcome, 1)?;

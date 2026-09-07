@@ -591,6 +591,8 @@ lxp_result layerx_programs_call_terminal_reserve(
 lxp_result layerx_programs_call_terminal_byte(uint64_t token, uint16_t section,
                                                uint32_t offset, uint8_t byte);
 lxp_result layerx_programs_call_terminal_publish(uint64_t token);
+lxp_result layerx_programs_call_terminal_applied_begin(uint64_t token, uint32_t length);
+lxp_result layerx_programs_call_terminal_applied_byte(uint64_t token, uint32_t offset, uint8_t byte);
 
 /* One guest event at a time, copied through scalar fields into the active C
  * journal.  `frame_path` is its canonical eight-byte CallFrameId path. */
