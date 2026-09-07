@@ -3,7 +3,7 @@ name = "agent-wire-differential"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.91.1"
-license = "LicenseRef-Centra-ai-Protocol"
+license = "Apache-2.0"
 
 [dependencies]
 layerx-types = { path = "../../crates/layerx-types" }
