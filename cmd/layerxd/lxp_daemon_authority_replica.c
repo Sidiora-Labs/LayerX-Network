@@ -16,6 +16,7 @@
 #include <string.h>
 #include <strings.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
@@ -785,6 +786,19 @@ lxp_result lxp_daemon_authority_replica_serve(
         (sigaction(SIGINT, &action, NULL) != 0 ||
          sigaction(SIGTERM, &action, NULL) != 0))
         status = LXP_ERR_IO;
+    if (status == LXP_OK && getenv("LAYERX_AUTHORITY_READY_FD") != NULL) {
+        struct stat metadata;
+        uint64_t descriptor;
+        status = parse_u64(getenv("LAYERX_AUTHORITY_READY_FD"), &descriptor);
+        if (status == LXP_OK &&
+            (descriptor > INT_MAX || fstat((int)descriptor, &metadata) != 0 ||
+             !S_ISFIFO(metadata.st_mode)))
+            status = LXP_ERR_NON_CANONICAL;
+        if (status == LXP_OK) {
+            if (write((int)descriptor, "R", 1U) != 1) status = LXP_ERR_IO;
+            if (close((int)descriptor) != 0) status = LXP_ERR_IO;
+        }
+    }
     while (status == LXP_OK && !replica_stop) {
         struct pollfd watched;
         int ready;
