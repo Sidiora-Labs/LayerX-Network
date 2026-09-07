@@ -74,6 +74,9 @@ impl NodeBatch {
     /// Admits batch material only after canonical decoding and exact sequencer
     /// authorization verification. Authenticated transports use the same
     /// constructor after binding the key to their handshake identity.
+    ///
+    /// # Errors
+    /// Returns an error for noncanonical headers or mismatched or invalid sequencer authorization.
     pub fn verify(
         canonical_header: Vec<u8>,
         authorization: BatchAuthorization,
@@ -1738,6 +1741,8 @@ pub struct Publisher {
     solana: crate::solana::SolanaArchiveClient,
 }
 
+pub type MirrorRetrieval<E> = Result<Option<Vec<u8>>, E>;
+
 impl Publisher {
     #[must_use]
     pub const fn new(
@@ -1748,7 +1753,7 @@ impl Publisher {
     }
 
     /// Advances both durable lanes without converting either failure into the
-    /// other lane's state or into a LayerX node failure.
+    /// other lane's state or into a `LayerX` node failure.
     #[must_use]
     pub fn publish(&mut self, archive: &Archive) -> DurablePublicationReport {
         let ethereum_client = &mut self.ethereum;
@@ -1812,8 +1817,8 @@ impl Publisher {
         &self,
         commitment: ArchiveCommitment,
     ) -> (
-        Result<Option<Vec<u8>>, crate::ethereum::EthereumError>,
-        Result<Option<Vec<u8>>, crate::solana::SolanaError>,
+        MirrorRetrieval<crate::ethereum::EthereumError>,
+        MirrorRetrieval<crate::solana::SolanaError>,
     ) {
         (
             self.ethereum.retrieve(commitment),

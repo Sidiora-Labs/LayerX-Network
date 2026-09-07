@@ -147,6 +147,9 @@ pub struct MirrorVerifier {
 impl MirrorVerifier {
     /// Admits one sealed source observation. Archive, chain identity,
     /// canonical position and freshness remain one indivisible source fact.
+    ///
+    /// # Errors
+    /// Returns an error for a mismatched commitment, invalid archive, header authority or signature.
     pub fn from_source(
         observed: ObservedArchive,
         trust: SignedHeaderTrust,
@@ -310,7 +313,10 @@ impl MirrorVerifier {
     /// The v2 archive carries canonical checkpoint bytes but omits the
     /// attestation replay/possession timestamps needed by the protocol-owned
     /// checkpoint verifier. It must never be promoted to checkpoint level.
-    pub const fn checkpoint_level(&self) -> Result<(), MirrorVerifyError> {
+    ///
+    /// # Errors
+    /// Always returns `MirrorVerifyError::CheckpointTrustUnavailable` because attestation timestamps are absent.
+    pub const fn checkpoint_level() -> Result<(), MirrorVerifyError> {
         Err(MirrorVerifyError::CheckpointTrustUnavailable)
     }
 }

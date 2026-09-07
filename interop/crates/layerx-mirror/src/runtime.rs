@@ -147,6 +147,9 @@ enum SpoolRecoveryError {
 
 /// Loads one bounded JSON configuration and starts node acquisition, two
 /// independent durable chain workers and a redacted loopback status endpoint.
+///
+/// # Errors
+/// Returns an error for invalid configuration, inaccessible durable state or status listener failure.
 pub fn run(config_path: &Path) -> Result<(), RuntimeError> {
     let metadata = fs::metadata(config_path).map_err(|_| RuntimeError::Configuration)?;
     if metadata.len() == 0 || metadata.len() > MAX_CONFIG_BYTES as u64 {
@@ -548,10 +551,8 @@ fn spawn_status(
         .set_nonblocking(false)
         .map_err(|_| RuntimeError::Status)?;
     thread::spawn(move || {
-        for stream in listener.incoming() {
-            if let Ok(stream) = stream {
-                let _ = serve_status(stream, &status);
-            }
+        for stream in listener.incoming().flatten() {
+            let _ = serve_status(stream, &status);
         }
     });
     Ok(())
@@ -754,7 +755,7 @@ fn fixed_hex<const N: usize>(value: &str) -> Result<[u8; N], SignerErrorShim> {
 
 fn decode_hex(value: &str) -> Result<Vec<u8>, SignerErrorShim> {
     let digits = value.strip_prefix("0x").unwrap_or(value);
-    if digits.is_empty() || digits.len() % 2 != 0 {
+    if digits.is_empty() || !digits.len().is_multiple_of(2) {
         return Err(SignerErrorShim);
     }
     digits

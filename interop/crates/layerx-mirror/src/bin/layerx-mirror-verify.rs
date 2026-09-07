@@ -1,5 +1,6 @@
 #![deny(unsafe_code)]
 
+use std::fmt::Write as _;
 use std::fs;
 use std::io::{self, Read};
 use std::path::PathBuf;
@@ -130,6 +131,72 @@ fn execute() -> Result<Value, &'static str> {
         first_batch_number: config.first_batch_number,
         last_batch_number: config.last_batch_number,
     };
+    let sources = configured_sources(config)?;
+    let policy = policy(&request.policy)?;
+    let batch_number = canonical_u64(&request.batch_number)?;
+    let archive = sources
+        .read(batch_number, &policy)
+        .map_err(|error| match error {
+            layerx_mirror::source::MirrorSourceError::Divergent => "divergent",
+            layerx_mirror::source::MirrorSourceError::InsufficientAgreement => {
+                "insufficient-agreement"
+            }
+            layerx_mirror::source::MirrorSourceError::Missing => "missing",
+            layerx_mirror::source::MirrorSourceError::RateLimited { .. } => "rate-limited",
+            layerx_mirror::source::MirrorSourceError::RpcDivergent => "rpc-divergent",
+            _ => "source-unavailable",
+        })?;
+    let evidence_checker =
+        MirrorVerifier::from_source(archive, trust).map_err(|_| "verification")?;
+    match request.evidence {
+        EvidenceRequest::Receipt { canonical_hex } => {
+            let canonical = hex(&canonical_hex)?;
+            let verified = evidence_checker
+                .receipt(&canonical)
+                .map_err(|_| "verification")?;
+            let observation = verified.observation().cloned().ok_or("verification")?;
+            let digest = verified
+                .value()
+                .evidence()
+                .receipt_digest()
+                .ok_or("verification")?;
+            Ok(report(
+                &observation,
+                verified.batch_number(),
+                verified.signed_header_digest(),
+                digest,
+                &format!("{:?}", verified.level()),
+            ))
+        }
+        EvidenceRequest::State {
+            canonical_hex,
+            proof_hex,
+        } => {
+            let canonical = hex(&canonical_hex)?;
+            let encoded = hex(&proof_hex)?;
+            let decoded = decode_merkle_proof(&encoded).map_err(|_| "proof")?;
+            let proof = Proof::new(
+                decoded.leaf_index(),
+                decoded.leaf_count(),
+                decoded.siblings().to_vec(),
+            )
+            .map_err(|_| "proof")?;
+            let verified = evidence_checker
+                .state(&canonical, &proof)
+                .map_err(|_| "verification")?;
+            let observation = verified.observation().cloned().ok_or("verification")?;
+            Ok(report(
+                &observation,
+                verified.batch_number(),
+                verified.signed_header_digest(),
+                [0; 32],
+                &format!("{:?}", verified.level()),
+            ))
+        }
+    }
+}
+
+fn configured_sources(config: Config) -> Result<MirrorSources, &'static str> {
     let mut sources = Vec::with_capacity(config.sources.len());
     for source in config.sources {
         sources.push(match source {
@@ -179,73 +246,15 @@ fn execute() -> Result<Value, &'static str> {
     }
     let sources =
         MirrorSources::new(config.layerx_network_id, sources).map_err(|_| "configuration")?;
-    let policy = policy(request.policy)?;
-    let batch_number = canonical_u64(&request.batch_number)?;
-    let archive = sources
-        .read(batch_number, &policy)
-        .map_err(|error| match error {
-            layerx_mirror::source::MirrorSourceError::Divergent => "divergent",
-            layerx_mirror::source::MirrorSourceError::InsufficientAgreement => {
-                "insufficient-agreement"
-            }
-            layerx_mirror::source::MirrorSourceError::Missing => "missing",
-            layerx_mirror::source::MirrorSourceError::RateLimited { .. } => "rate-limited",
-            layerx_mirror::source::MirrorSourceError::RpcDivergent => "rpc-divergent",
-            _ => "source-unavailable",
-        })?;
-    let verifier = MirrorVerifier::from_source(archive, trust).map_err(|_| "verification")?;
-    match request.evidence {
-        EvidenceRequest::Receipt { canonical_hex } => {
-            let canonical = hex(&canonical_hex)?;
-            let verified = verifier.receipt(&canonical).map_err(|_| "verification")?;
-            let observation = verified.observation().cloned().ok_or("verification")?;
-            let digest = verified
-                .value()
-                .evidence()
-                .receipt_digest()
-                .ok_or("verification")?;
-            Ok(report(
-                observation,
-                verified.batch_number(),
-                verified.signed_header_digest(),
-                digest,
-                format!("{:?}", verified.level()),
-            ))
-        }
-        EvidenceRequest::State {
-            canonical_hex,
-            proof_hex,
-        } => {
-            let canonical = hex(&canonical_hex)?;
-            let encoded = hex(&proof_hex)?;
-            let decoded = decode_merkle_proof(&encoded).map_err(|_| "proof")?;
-            let proof = Proof::new(
-                decoded.leaf_index(),
-                decoded.leaf_count(),
-                decoded.siblings().to_vec(),
-            )
-            .map_err(|_| "proof")?;
-            let verified = verifier
-                .state(&canonical, &proof)
-                .map_err(|_| "verification")?;
-            let observation = verified.observation().cloned().ok_or("verification")?;
-            Ok(report(
-                observation,
-                verified.batch_number(),
-                verified.signed_header_digest(),
-                [0; 32],
-                format!("{:?}", verified.level()),
-            ))
-        }
-    }
+    Ok(sources)
 }
 
 fn report(
-    observation: layerx_mirror::source::MirrorObservation,
+    observation: &layerx_mirror::source::MirrorObservation,
     batch_number: u64,
     header: [u8; 32],
     evidence: [u8; 32],
-    level: String,
+    level: &str,
 ) -> Value {
     json!({
         "level": level,
@@ -264,29 +273,23 @@ fn report(
     })
 }
 
-fn policy(value: PolicyRequest) -> Result<MirrorReadPolicy, &'static str> {
+fn policy(value: &PolicyRequest) -> Result<MirrorReadPolicy, &'static str> {
     match value {
         PolicyRequest::Exact { candidate } => Ok(MirrorReadPolicy::Exact(locator(candidate)?)),
         PolicyRequest::OrderedPreference { candidates } => Ok(MirrorReadPolicy::OrderedPreference(
-            candidates
-                .into_iter()
-                .map(locator)
-                .collect::<Result<_, _>>()?,
+            candidates.iter().map(locator).collect::<Result<_, _>>()?,
         )),
         PolicyRequest::Agreement {
             candidates,
             minimum,
         } => Ok(MirrorReadPolicy::Agreement {
-            candidates: candidates
-                .into_iter()
-                .map(locator)
-                .collect::<Result<_, _>>()?,
-            minimum,
+            candidates: candidates.iter().map(locator).collect::<Result<_, _>>()?,
+            minimum: *minimum,
         }),
     }
 }
 
-fn locator(value: Candidate) -> Result<MirrorLocator, &'static str> {
+fn locator(value: &Candidate) -> Result<MirrorLocator, &'static str> {
     Ok(MirrorLocator {
         source_index: value.source,
         commitment: ArchiveCommitment::from_bytes(fixed_hex(&value.commitment_hex)?),
@@ -299,7 +302,7 @@ fn fixed_hex<const N: usize>(value: &str) -> Result<[u8; N], &'static str> {
 
 fn hex(value: &str) -> Result<Vec<u8>, &'static str> {
     let value = value.strip_prefix("0x").unwrap_or(value);
-    if value.len() % 2 != 0 {
+    if !value.len().is_multiple_of(2) {
         return Err("malformed");
     }
     (0..value.len())
@@ -309,7 +312,10 @@ fn hex(value: &str) -> Result<Vec<u8>, &'static str> {
 }
 
 fn encode_hex(value: &[u8]) -> String {
-    value.iter().map(|byte| format!("{byte:02x}")).collect()
+    value.iter().fold(String::new(), |mut output, byte| {
+        write!(&mut output, "{byte:02x}").unwrap_or_else(|error| panic!("hex encoding: {error}"));
+        output
+    })
 }
 
 fn target(value: &layerx_mirror::source::MirrorTargetIdentity) -> String {

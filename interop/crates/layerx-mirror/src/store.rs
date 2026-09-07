@@ -141,6 +141,9 @@ pub struct PublicationRecord {
 impl PublicationRecord {
     /// Refuses phase/identity combinations that would erase an ambiguous
     /// broadcast or claim finality without exact chain position.
+    ///
+    /// # Errors
+    /// Returns an error for invalid bounds, phase, transaction identity or finality position.
     pub fn validate(&self) -> Result<(), StoreError> {
         if self.batch_number == 0 || self.signed_payload.len() > MAX_SIGNED_PAYLOAD_BYTES {
             return Err(StoreError::InvalidTransition);
@@ -220,6 +223,9 @@ impl PublicationJournal {
     /// Opens and fully replays a lane after validating the atomically sealed
     /// high-water offset and hash chain. A truncated but internally valid
     /// prefix is rejected against the independent head file.
+    ///
+    /// # Errors
+    /// Returns an error for invalid batch origin, lock conflict, corrupt journal or filesystem failure.
     pub fn open(
         directory: impl Into<PathBuf>,
         chain: MirrorChain,
@@ -235,6 +241,7 @@ impl PublicationJournal {
         let lock_path = directory.join(format!("{}.lock", lane_name(chain)));
         let lock = OpenOptions::new()
             .create(true)
+            .truncate(false)
             .read(true)
             .write(true)
             .open(lock_path)
@@ -264,6 +271,9 @@ impl PublicationJournal {
 
     /// Durably appends one state transition and seals its new high-water head
     /// before updating the in-memory view.
+    ///
+    /// # Errors
+    /// Returns an error for conflicting or invalid transitions, length overflow or persistence failure.
     pub fn append(&mut self, record: PublicationRecord) -> Result<(), StoreError> {
         record.validate()?;
         if record.chain != self.chain {
@@ -354,7 +364,7 @@ impl PublicationJournal {
         }
     }
 
-    #[must_use]
+    #[must_use = "the iterator must be consumed to inspect publication records"]
     pub fn records(&self) -> impl Iterator<Item = &PublicationRecord> {
         self.records.values()
     }
@@ -374,11 +384,15 @@ pub struct ArchiveSpool {
 }
 
 impl ArchiveSpool {
+    ///
+    /// # Errors
+    /// Returns an error if the directory or lock cannot be opened or the spool is already locked.
     pub fn open(directory: impl Into<PathBuf>) -> Result<Self, StoreError> {
         let directory = directory.into();
         fs::create_dir_all(&directory).map_err(StoreError::Io)?;
         let lock = OpenOptions::new()
             .create(true)
+            .truncate(false)
             .read(true)
             .write(true)
             .open(directory.join(".spool.lock"))
@@ -392,6 +406,9 @@ impl ArchiveSpool {
 
     /// Writes once by commitment using temp-file sync and atomic rename. An
     /// existing object must be byte-identical.
+    ///
+    /// # Errors
+    /// Returns an error for invalid length, conflicting stored content or filesystem failure.
     pub fn put(
         &self,
         commitment: ArchiveCommitment,
@@ -427,6 +444,9 @@ impl ArchiveSpool {
         Ok(())
     }
 
+    ///
+    /// # Errors
+    /// Returns an error if the object cannot be read or its encoding or commitment is invalid.
     pub fn get(&self, commitment: ArchiveCommitment) -> Result<SpooledArchive, StoreError> {
         let mut file = File::open(self.path(commitment)).map_err(StoreError::Io)?;
         let mut bytes = Vec::new();
@@ -436,6 +456,9 @@ impl ArchiveSpool {
 
     /// Lists only canonical content-addressed objects. Temporary or malformed
     /// names are ignored; every returned object is still verified by `get`.
+    ///
+    /// # Errors
+    /// Returns an error if directory entries or file types cannot be read.
     pub fn commitments(&self) -> Result<Vec<ArchiveCommitment>, StoreError> {
         let mut output = Vec::new();
         for entry in fs::read_dir(&self.directory).map_err(StoreError::Io)? {
@@ -588,17 +611,13 @@ fn validate_transition(
     allowed.then_some(()).ok_or(StoreError::InvalidTransition)
 }
 
+type PublicationRecords = BTreeMap<(ArchiveCommitment, PublicationStageKey), PublicationRecord>;
+
 fn replay(
     log: &mut File,
     chain: MirrorChain,
     expected_head: Option<JournalHead>,
-) -> Result<
-    (
-        JournalHead,
-        BTreeMap<(ArchiveCommitment, PublicationStageKey), PublicationRecord>,
-    ),
-    StoreError,
-> {
+) -> Result<(JournalHead, PublicationRecords), StoreError> {
     log.seek(SeekFrom::Start(0)).map_err(StoreError::Io)?;
     let mut records: BTreeMap<(ArchiveCommitment, PublicationStageKey), PublicationRecord> =
         BTreeMap::new();
