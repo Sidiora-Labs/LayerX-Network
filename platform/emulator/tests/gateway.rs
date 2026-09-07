@@ -1,13 +1,14 @@
 //! In-process integration coverage for the local emulator gateway.
 //!
 //! These tests boot the real `layerx_platform_emulator::run` listener, which
-//! links the production LayerX core transition and receipt machinery through
+//! links the production `LayerX` core transition and receipt machinery through
 //! the C bridge, and drive it over its HTTP surface exactly as an SDK or the
 //! middleware would. They assert the production gateway surface
 //! (`/v1/activities`, `/v1/state`, `/v1/receipts/<id>`) and the emulator-only
 //! control hooks (`/__emulator/*`) that live clearly outside the deterministic
 //! transition path.
 
+use std::fmt::Write as _;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
@@ -65,10 +66,10 @@ fn request_with_idempotency(
         body.len()
     );
     if !content_type.is_empty() {
-        head.push_str(&format!("Content-Type: {content_type}\r\n"));
+        write!(head, "Content-Type: {content_type}\r\n").map_err(|error| error.to_string())?;
     }
     if let Some(value) = idempotency_key {
-        head.push_str(&format!("Idempotency-Key: {value}\r\n"));
+        write!(head, "Idempotency-Key: {value}\r\n").map_err(|error| error.to_string())?;
     }
     head.push_str("\r\n");
     stream
@@ -176,8 +177,16 @@ fn error_code(reply: &Reply) -> Option<String> {
     Some(rest[..end].to_string())
 }
 
+fn hex_encode(bytes: &[u8]) -> Result<String, String> {
+    let mut encoded = String::new();
+    for byte in bytes {
+        write!(encoded, "{byte:02x}").map_err(|error| error.to_string())?;
+    }
+    Ok(encoded)
+}
+
 fn hex_decode(value: &str) -> Result<Vec<u8>, String> {
-    if value.len() % 2 != 0 {
+    if !value.len().is_multiple_of(2) {
         return Err("hex value has odd length".to_string());
     }
     value
@@ -493,33 +502,20 @@ fn lifecycle_signed_activity_for_protocol(
     ))?;
     let activity = checked(layerx_wire::activity::decode_signed(&bytes, &registry))?;
     let id = checked(layerx_wire::hash::activity_id(&activity))?;
-    let key = idempotency
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
+    let key = hex_encode(&idempotency)?;
     Ok((bytes, key, id))
 }
 
-#[test]
-fn lifecycle_routes_execute_and_replay_real_native_state_receipts() -> Result<(), String> {
+type LifecycleOperation = (u16, &'static str, Vec<u8>);
+
+fn lifecycle_operations(
+) -> Result<(layerx_types::intent::ProgramId, [LifecycleOperation; 5]), String> {
     use layerx_types::intent::ProgramId;
     use layerx_types::program_lifecycle::{
         NativeProgramDeploy, NativeProgramUpgrade, NativeProgramWindDown, ProgramUpgradePolicy,
         ProgramWindDownOperation,
     };
     use sha2::{Digest, Sha256};
-    let address = boot_protocol(3)?;
-    let signing_key = ed25519_dalek::SigningKey::from_bytes(&EMULATOR_SEED);
-    let public = signing_key.verifying_key().to_bytes();
-    let public_hex = public
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    let prefund = format!("{{\"did\":\"did:layerx:lifecycle\",\"public_key\":\"{public_hex}\",\"amount_lo\":100000000}}");
-    assert_eq!(
-        post_json(&address, "/__emulator/accounts/prefund", &prefund)?.status,
-        200
-    );
     let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../sdk/conformance/fixtures/native-program-deploy-v3.json");
     let fixture: serde_json::Value =
@@ -574,41 +570,60 @@ fn lifecycle_routes_execute_and_replay_real_native_state_receipts() -> Result<()
             deadline_batch: 1000,
         },
     };
-    for (sequence, (ordinal, path, payload)) in [
-        (
-            1,
-            "/v1/programs/deploy",
-            deploy.encode().map_err(|error| format!("{error:?}"))?,
-        ),
-        (
-            3,
-            "/v1/programs/call",
-            call.encode().map_err(|error| format!("{error:?}"))?,
-        ),
-        (
-            2,
-            "/v1/programs/upgrade",
-            upgrade.encode().map_err(|error| format!("{error:?}"))?,
-        ),
-        (
-            3,
-            "/v1/programs/call",
-            call.encode().map_err(|error| format!("{error:?}"))?,
-        ),
-        (
-            7,
-            "/v1/programs/wind-down",
-            deprecate.encode().map_err(|error| format!("{error:?}"))?,
-        ),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let (bytes, key, expected_id) = lifecycle_signed_activity(
-            ordinal,
-            &payload,
-            u64::try_from(sequence).map_err(|error| error.to_string())?,
-        )?;
+    Ok((
+        program,
+        [
+            (
+                1,
+                "/v1/programs/deploy",
+                deploy.encode().map_err(|error| format!("{error:?}"))?,
+            ),
+            (
+                3,
+                "/v1/programs/call",
+                call.encode().map_err(|error| format!("{error:?}"))?,
+            ),
+            (
+                2,
+                "/v1/programs/upgrade",
+                upgrade.encode().map_err(|error| format!("{error:?}"))?,
+            ),
+            (
+                3,
+                "/v1/programs/call",
+                call.encode().map_err(|error| format!("{error:?}"))?,
+            ),
+            (
+                7,
+                "/v1/programs/wind-down",
+                deprecate.encode().map_err(|error| format!("{error:?}"))?,
+            ),
+        ],
+    ))
+}
+
+struct LifecycleRequest<'a> {
+    address: &'a String,
+    ordinal: u16,
+    path: &'a str,
+    payload: &'a [u8],
+    bytes: &'a Vec<u8>,
+    key: &'a String,
+    expected_id: [u8; 32],
+    public: [u8; 32],
+    program: layerx_types::intent::ProgramId,
+    sequence: usize,
+}
+mod lifecycle_checks {
+    use super::*;
+
+    pub(super) fn lifecycle_refusals(input: &LifecycleRequest<'_>) -> Result<(), String> {
+        let address = input.address.clone();
+        let ordinal = input.ordinal;
+        let path = input.path;
+        let payload = input.payload;
+        let bytes = input.bytes.clone();
+        let key = input.key.clone();
         assert_eq!(
             request(&address, "POST", path, "application/octet-stream", &bytes)?.status,
             400
@@ -640,7 +655,7 @@ fn lifecycle_routes_execute_and_replay_real_native_state_receipts() -> Result<()
                 .status,
                 400
             );
-            let mut corrupt = payload.clone();
+            let mut corrupt = payload.to_vec();
             corrupt[68] ^= 1;
             let (corrupt, corrupt_key, _) = lifecycle_signed_activity(ordinal, &corrupt, 0)?;
             assert_eq!(
@@ -656,24 +671,47 @@ fn lifecycle_routes_execute_and_replay_real_native_state_receipts() -> Result<()
                 400
             );
         }
+        Ok(())
+    }
+
+    pub(super) fn lifecycle_submit(
+        input: &LifecycleRequest<'_>,
+    ) -> Result<serde_json::Value, String> {
+        let address = input.address;
+        let ordinal = input.ordinal;
+        let path = input.path;
+        let bytes = input.bytes;
+        let key = input.key.as_str();
         let reply = request_with_idempotency(
-            &address,
+            address,
             "POST",
             path,
             "application/octet-stream",
-            &bytes,
-            Some(&key),
+            bytes,
+            Some(key),
         )?;
         assert_eq!(reply.status, 200, "{}", reply.text());
         let document: serde_json::Value =
             serde_json::from_slice(&reply.body).map_err(|error| error.to_string())?;
         let result = &document["result"];
-        if ordinal != 3 {
+        if ordinal == 3 {
+            assert_eq!(result["idempotency_key"], key);
+        } else {
             assert!(result.get("program_id").is_none());
             assert!(result.get("idempotency_key").is_none());
-        } else {
-            assert_eq!(result["idempotency_key"], key);
         }
+        Ok(document)
+    }
+
+    pub(super) fn lifecycle_receipt(
+        input: &LifecycleRequest<'_>,
+        result: &serde_json::Value,
+    ) -> Result<(), String> {
+        let ordinal = input.ordinal;
+        let public = input.public;
+        let expected_id = input.expected_id;
+        let program = input.program;
+        let sequence = input.sequence;
         let receipt = hex_decode(result["receipt"].as_str().ok_or("receipt missing")?)?;
         let verified = layerx_proof::receipt::verify_sequencer_signature(&receipt, public)
             .map_err(|error| format!("{error:?}"))?;
@@ -721,6 +759,20 @@ fn lifecycle_routes_execute_and_replay_real_native_state_receipts() -> Result<()
             0,
             "ordinal={ordinal} sequence={sequence} activity={expected_id:02x?} {execution_detail}"
         );
+        lifecycle_authority(input, result, &receipt, protocol)?;
+        Ok(())
+    }
+
+    fn lifecycle_authority(
+        input: &LifecycleRequest<'_>,
+        result: &serde_json::Value,
+        receipt: &[u8],
+        protocol: &layerx_wire::receipt::ProtocolReceipt,
+    ) -> Result<(), String> {
+        let ordinal = input.ordinal;
+        let public = input.public;
+        let program = input.program;
+        let expected_id = input.expected_id;
         let authority = layerx_proof::receipt::AuthorizedBatch::new(
             protocol.batch_id(),
             protocol.asset(),
@@ -736,7 +788,7 @@ fn lifecycle_routes_execute_and_replay_real_native_state_receipts() -> Result<()
             )?;
             let graph = hex_decode(result["call_graph"].as_str().ok_or("graph missing")?)?;
             let execution = layerx_proof::program::verify_program_execution(
-                &receipt,
+                receipt,
                 &terminal,
                 &graph,
                 layerx_proof::program::ProgramExecutionExpectation {
@@ -754,23 +806,37 @@ fn lifecycle_routes_execute_and_replay_real_native_state_receipts() -> Result<()
             assert_eq!(execution.output_values(), 2);
         } else {
             assert!(protocol.program_outcome().is_none());
-            layerx_proof::receipt::verify_program_state(&receipt, &authority)
+            layerx_proof::receipt::verify_program_state(receipt, &authority)
                 .map_err(|error| format!("{error:?}"))?;
         }
-        let mut corrupt = receipt;
+        let mut corrupt = receipt.to_vec();
         let last = corrupt.len() - 1;
         corrupt[last] ^= 1;
         assert!(layerx_proof::receipt::verify_sequencer_signature(&corrupt, public).is_err());
         if ordinal != 3 {
             assert!(layerx_proof::receipt::verify_program_state(&corrupt, &authority).is_err());
         }
+        Ok(())
+    }
+
+    pub(super) fn lifecycle_replay(
+        input: &LifecycleRequest<'_>,
+        result: &serde_json::Value,
+    ) -> Result<(), String> {
+        let address = input.address.clone();
+        let ordinal = input.ordinal;
+        let path = input.path;
+        let payload = input.payload;
+        let bytes = input.bytes;
+        let key = input.key.as_str();
+        let sequence = input.sequence;
         let replay = request_with_idempotency(
             &address,
             "POST",
             path,
             "application/octet-stream",
-            &bytes,
-            Some(&key),
+            bytes,
+            Some(key),
         )?;
         assert_eq!(replay.status, 200, "{}", replay.text());
         let replay: serde_json::Value =
@@ -799,7 +865,7 @@ fn lifecycle_routes_execute_and_replay_real_native_state_receipts() -> Result<()
             );
         }
         if ordinal == 1 {
-            let mut conflict = payload;
+            let mut conflict = payload.to_vec();
             conflict[0] ^= 1;
             let (conflict, conflict_key, _) = lifecycle_signed_activity(ordinal, &conflict, 0)?;
             assert_eq!(
@@ -815,6 +881,60 @@ fn lifecycle_routes_execute_and_replay_real_native_state_receipts() -> Result<()
                 409
             );
         }
+        Ok(())
+    }
+}
+
+#[test]
+fn lifecycle_routes_execute_and_replay_real_native_state_receipts() -> Result<(), String> {
+    let address = boot_protocol(3)?;
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&EMULATOR_SEED);
+    let public = signing_key.verifying_key().to_bytes();
+    let public_hex = hex_encode(&public)?;
+    let prefund = format!("{{\"did\":\"did:layerx:lifecycle\",\"public_key\":\"{public_hex}\",\"amount_lo\":100000000}}");
+    assert_eq!(
+        post_json(&address, "/__emulator/accounts/prefund", &prefund)?.status,
+        200
+    );
+    let (program, operations) = lifecycle_operations()?;
+    for (sequence, (ordinal, path, payload)) in operations.into_iter().enumerate() {
+        let (bytes, key, expected_id) = lifecycle_signed_activity(
+            ordinal,
+            &payload,
+            u64::try_from(sequence).map_err(|error| error.to_string())?,
+        )?;
+        let input = LifecycleRequest {
+            address: &address,
+            ordinal,
+            path,
+            payload: &payload,
+            bytes: &bytes,
+            key: &key,
+            expected_id,
+            public,
+            program,
+            sequence,
+        };
+        lifecycle_checks::lifecycle_refusals(&input)?;
+        let document = lifecycle_checks::lifecycle_submit(&input)?;
+        let result = &document["result"];
+        lifecycle_checks::lifecycle_receipt(&input, result)?;
+        lifecycle_checks::lifecycle_replay(&input, result)?;
+    }
+    Ok(())
+}
+
+fn prefund_profiles(legacy: &String, native: &String) -> Result<(), String> {
+    for address in [&legacy, &native] {
+        let public = ed25519_dalek::SigningKey::from_bytes(&EMULATOR_SEED)
+            .verifying_key()
+            .to_bytes();
+        let public = hex_encode(&public)?;
+        let body = format!("{{\"did\":\"did:layerx:lifecycle\",\"public_key\":\"{public}\",\"amount_lo\":1000000}}");
+        assert_eq!(
+            post_json(address, "/__emulator/accounts/prefund", &body)?.status,
+            200
+        );
     }
     Ok(())
 }
@@ -824,20 +944,7 @@ fn native_and_legacy_profiles_keep_snapshot_and_module_versions_separate() -> Re
     use layerx_types::program_lifecycle::{NativeProgramDeploy, ProgramUpgradePolicy};
     let legacy = boot_protocol(2)?;
     let native = boot_protocol(3)?;
-    for address in [&legacy, &native] {
-        let public = ed25519_dalek::SigningKey::from_bytes(&EMULATOR_SEED)
-            .verifying_key()
-            .to_bytes();
-        let public = public
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
-        let body = format!("{{\"did\":\"did:layerx:lifecycle\",\"public_key\":\"{public}\",\"amount_lo\":1000000}}");
-        assert_eq!(
-            post_json(address, "/__emulator/accounts/prefund", &body)?.status,
-            200
-        );
-    }
+    prefund_profiles(&legacy, &native)?;
     let legacy_snapshot = request(&legacy, "GET", "/__emulator/snapshot", "", &[])?;
     let native_snapshot = request(&native, "GET", "/__emulator/snapshot", "", &[])?;
     assert_eq!(legacy_snapshot.status, 200);
@@ -925,16 +1032,36 @@ fn native_and_legacy_profiles_keep_snapshot_and_module_versions_separate() -> Re
     Ok(())
 }
 
-#[test]
-fn move_quote_commit_replay_recovery_and_lost_ack_use_the_real_transition() -> Result<(), String> {
+struct MoveSetup {
+    address: String,
+    source: &'static str,
+    destination: &'static str,
+    before_state: serde_json::Value,
+    before_root: String,
+    before_receipt_root: String,
+}
+struct MoveCommit {
+    quote_body: String,
+    commit_body: String,
+    idempotency: &'static str,
+    committed: Reply,
+    committed_result: serde_json::Value,
+}
+struct MoveRoots {
+    committed_root: String,
+    committed_receipt_root: String,
+}
+struct MoveRace {
+    competing_b_id: String,
+    winner_root: String,
+    winner_receipt_root: String,
+}
+fn move_setup() -> Result<MoveSetup, String> {
     let address = boot()?;
     let source_public = ed25519_dalek::SigningKey::from_bytes(&EMULATOR_SEED)
         .verifying_key()
         .to_bytes();
-    let source_public = source_public
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
+    let source_public = hex_encode(&source_public)?;
     let destination_public = "24".repeat(32);
     let source = "agent:did:layerx:move-source:main";
     let destination = "agent:did:layerx:move-destination:main";
@@ -977,10 +1104,24 @@ fn move_quote_commit_replay_recovery_and_lost_ack_use_the_real_transition() -> R
         .to_owned();
     assert_ne!(before_receipt_root, before_root);
 
+    Ok(MoveSetup {
+        address,
+        source,
+        destination,
+        before_state,
+        before_root,
+        before_receipt_root,
+    })
+}
+
+fn move_commit(setup: &MoveSetup) -> Result<MoveCommit, String> {
+    let address = &setup.address;
+    let source = setup.source;
+    let destination = setup.destination;
     let quote_body = format!(
         "{{\"source\":\"{source}\",\"destination\":\"{destination}\",\"money\":{{\"currency\":\"LXP\",\"amount\":\"250\"}}}}"
     );
-    let quote_reply = post_json(&address, "/v1/moves/quote", &quote_body)?;
+    let quote_reply = post_json(address, "/v1/moves/quote", &quote_body)?;
     assert_eq!(
         quote_reply.status,
         200,
@@ -1001,7 +1142,7 @@ fn move_quote_commit_replay_recovery_and_lost_ack_use_the_real_transition() -> R
     let commit_body = format!("{{\"quote_id\":\"{quote_id}\"}}");
     let idempotency = "move-payment-test-0001";
     let committed = request_with_idempotency(
-        &address,
+        address,
         "POST",
         "/v1/moves",
         "application/json",
@@ -1016,11 +1157,31 @@ fn move_quote_commit_replay_recovery_and_lost_ack_use_the_real_transition() -> R
             .and_then(serde_json::Value::as_str),
         Some("done")
     );
+
+    Ok(MoveCommit {
+        quote_body,
+        commit_body,
+        idempotency,
+        committed,
+        committed_result,
+    })
+}
+
+fn move_receipt(
+    setup: &MoveSetup,
+    payment: &MoveCommit,
+) -> Result<layerx_wire::receipt::Receipt, String> {
+    let address = &setup.address;
+    let source = setup.source;
+    let destination = setup.destination;
+    let before_state = &setup.before_state;
+    let before_receipt_root = setup.before_receipt_root.clone();
+    let committed_result = &payment.committed_result;
     let receipt_path = committed_result
         .pointer("/evidence/0/source_ref")
         .and_then(serde_json::Value::as_str)
         .ok_or("move journey omitted receipt source_ref")?;
-    let receipt_reply = request(&address, "GET", receipt_path, "", &[])?;
+    let receipt_reply = request(address, "GET", receipt_path, "", &[])?;
     assert_eq!(receipt_reply.status, 200);
     let receipt_result = response_result(&receipt_reply)?;
     let receipt_hex = receipt_result
@@ -1088,8 +1249,23 @@ fn move_quote_commit_replay_recovery_and_lost_ack_use_the_real_transition() -> R
         protocol.transfer_set_root()
     );
 
+    Ok(decoded)
+}
+
+fn move_replay(
+    setup: &MoveSetup,
+    payment: &MoveCommit,
+    protocol: &layerx_wire::receipt::ProtocolReceipt,
+) -> Result<MoveRoots, String> {
+    let address = &setup.address;
+    let source = setup.source;
+    let destination = setup.destination;
+    let before_root = setup.before_root.as_str();
+    let commit_body = &payment.commit_body;
+    let idempotency = payment.idempotency;
+    let committed = &payment.committed;
     let replayed = request_with_idempotency(
-        &address,
+        address,
         "POST",
         "/v1/moves",
         "application/json",
@@ -1098,7 +1274,7 @@ fn move_quote_commit_replay_recovery_and_lost_ack_use_the_real_transition() -> R
     )?;
     assert_eq!(replayed.status, 200);
     assert_eq!(replayed.body, committed.body);
-    let state_reply = request(&address, "GET", "/v1/state", "", &[])?;
+    let state_reply = request(address, "GET", "/v1/state", "", &[])?;
     let state = response_result(&state_reply)?;
     let committed_root = state
         .get("state_root")
@@ -1157,10 +1333,23 @@ fn move_quote_commit_replay_recovery_and_lost_ack_use_the_real_transition() -> R
         Some(0)
     );
 
-    let snapshot = request(&address, "GET", "/__emulator/snapshot", "", &[])?;
+    Ok(MoveRoots {
+        committed_root,
+        committed_receipt_root,
+    })
+}
+
+fn move_recovery(setup: &MoveSetup, payment: &MoveCommit, roots: &MoveRoots) -> Result<(), String> {
+    let address = &setup.address;
+    let commit_body = &payment.commit_body;
+    let idempotency = payment.idempotency;
+    let committed = &payment.committed;
+    let committed_root = &roots.committed_root;
+    let committed_receipt_root = &roots.committed_receipt_root;
+    let snapshot = request(address, "GET", "/__emulator/snapshot", "", &[])?;
     assert_eq!(snapshot.status, 200);
     let imported = request(
-        &address,
+        address,
         "PUT",
         "/__emulator/snapshot",
         "application/octet-stream",
@@ -1173,7 +1362,7 @@ fn move_quote_commit_replay_recovery_and_lost_ack_use_the_real_transition() -> R
         imported.text()
     );
     let recovered_replay = request_with_idempotency(
-        &address,
+        address,
         "POST",
         "/v1/moves",
         "application/json",
@@ -1182,7 +1371,7 @@ fn move_quote_commit_replay_recovery_and_lost_ack_use_the_real_transition() -> R
     )?;
     assert_eq!(recovered_replay.status, 200);
     assert_eq!(recovered_replay.body, committed.body);
-    let recovered_state_reply = request(&address, "GET", "/v1/state", "", &[])?;
+    let recovered_state_reply = request(address, "GET", "/v1/state", "", &[])?;
     let recovered_state = response_result(&recovered_state_reply)?;
     assert_eq!(
         recovered_state
@@ -1199,14 +1388,22 @@ fn move_quote_commit_replay_recovery_and_lost_ack_use_the_real_transition() -> R
         "snapshot recovery changed the committed receipt root"
     );
 
+    Ok(())
+}
+
+fn move_refusal(setup: &MoveSetup, payment: &MoveCommit, roots: &MoveRoots) -> Result<(), String> {
+    let address = &setup.address;
+    let quote_body = &payment.quote_body;
+    let committed_root = &roots.committed_root;
+    let committed_receipt_root = &roots.committed_receipt_root;
     let insufficient = quote_body.replace("\"250\"", "\"9999\"");
-    let insufficient_reply = post_json(&address, "/v1/moves/quote", &insufficient)?;
+    let insufficient_reply = post_json(address, "/v1/moves/quote", &insufficient)?;
     assert_eq!(insufficient_reply.status, 409);
     assert_eq!(
         error_code(&insufficient_reply).as_deref(),
         Some("move_balance_unavailable")
     );
-    let after_refusal_reply = request(&address, "GET", "/v1/state", "", &[])?;
+    let after_refusal_reply = request(address, "GET", "/v1/state", "", &[])?;
     let after_refusal = response_result(&after_refusal_reply)?;
     assert_eq!(
         after_refusal
@@ -1223,8 +1420,21 @@ fn move_quote_commit_replay_recovery_and_lost_ack_use_the_real_transition() -> R
         "refused quote changed receipt state"
     );
 
+    Ok(())
+}
+
+fn move_conflict(
+    setup: &MoveSetup,
+    payment: &MoveCommit,
+    roots: &MoveRoots,
+) -> Result<String, String> {
+    let address = &setup.address;
+    let quote_body = &payment.quote_body;
+    let idempotency = payment.idempotency;
+    let committed_root = &roots.committed_root;
+    let committed_receipt_root = &roots.committed_receipt_root;
     let second_quote_body = quote_body.replace("\"250\"", "\"100\"");
-    let second_quote_reply = post_json(&address, "/v1/moves/quote", &second_quote_body)?;
+    let second_quote_reply = post_json(address, "/v1/moves/quote", &second_quote_body)?;
     assert_eq!(second_quote_reply.status, 200);
     let second_quote = response_result(&second_quote_reply)?;
     let second_quote_id = second_quote
@@ -1233,7 +1443,7 @@ fn move_quote_commit_replay_recovery_and_lost_ack_use_the_real_transition() -> R
         .ok_or("second quote omitted quote_id")?;
     let second_commit = format!("{{\"quote_id\":\"{second_quote_id}\"}}");
     let conflicting = request_with_idempotency(
-        &address,
+        address,
         "POST",
         "/v1/moves",
         "application/json",
@@ -1245,7 +1455,7 @@ fn move_quote_commit_replay_recovery_and_lost_ack_use_the_real_transition() -> R
         error_code(&conflicting).as_deref(),
         Some("idempotency_conflict")
     );
-    let after_conflict_reply = request(&address, "GET", "/v1/state", "", &[])?;
+    let after_conflict_reply = request(address, "GET", "/v1/state", "", &[])?;
     let after_conflict = response_result(&after_conflict_reply)?;
     assert_eq!(
         after_conflict
@@ -1261,6 +1471,12 @@ fn move_quote_commit_replay_recovery_and_lost_ack_use_the_real_transition() -> R
         Some(committed_receipt_root.as_str()),
         "idempotency conflict changed receipt state"
     );
+
+    Ok(second_commit)
+}
+
+fn move_lost_ack(setup: &MoveSetup, second_commit: &str) -> Result<(), String> {
+    let address = setup.address.clone();
     assert_eq!(
         post_json(
             &address,
@@ -1298,7 +1514,16 @@ fn move_quote_commit_replay_recovery_and_lost_ack_use_the_real_transition() -> R
         "lost acknowledgement did not resolve: {}",
         resolved.text()
     );
-    let final_state_reply = request(&address, "GET", "/v1/state", "", &[])?;
+
+    Ok(())
+}
+
+fn move_final_state(setup: &MoveSetup, roots: &MoveRoots) -> Result<(), String> {
+    let address = &setup.address;
+    let source = setup.source;
+    let destination = setup.destination;
+    let committed_root = &roots.committed_root;
+    let final_state_reply = request(address, "GET", "/v1/state", "", &[])?;
     let final_state = response_result(&final_state_reply)?;
     let final_root = final_state
         .get("state_root")
@@ -1344,31 +1569,70 @@ fn move_quote_commit_replay_recovery_and_lost_ack_use_the_real_transition() -> R
         Some(0)
     );
 
-    let competing_a_reply = post_json(
-        &address,
-        "/v1/moves/quote",
-        &quote_body.replace("\"250\"", "\"50\""),
-    )?;
-    let competing_b_reply = post_json(
-        &address,
-        "/v1/moves/quote",
-        &quote_body.replace("\"250\"", "\"60\""),
-    )?;
+    Ok(())
+}
+
+fn move_competing_quotes(setup: &MoveSetup, payment: &MoveCommit) -> Result<MoveRace, String> {
+    let address = &setup.address;
+    let quote_body = &payment.quote_body;
+    let replies = CompetingReplies {
+        competing_a_reply: post_json(
+            address,
+            "/v1/moves/quote",
+            &quote_body.replace("\"250\"", "\"50\""),
+        )?,
+        competing_b_reply: post_json(
+            address,
+            "/v1/moves/quote",
+            &quote_body.replace("\"250\"", "\"60\""),
+        )?,
+    };
+    let ids = competing_quote_ids(&replies)?;
+    finish_competing_quotes(setup, &ids)
+}
+
+struct CompetingReplies {
+    competing_a_reply: Reply,
+    competing_b_reply: Reply,
+}
+struct CompetingIds {
+    competing_a_id: String,
+    competing_b_id: String,
+}
+fn competing_quote_ids(
+    CompetingReplies {
+        competing_a_reply,
+        competing_b_reply,
+    }: &CompetingReplies,
+) -> Result<CompetingIds, String> {
     assert_eq!(competing_a_reply.status, 200);
     assert_eq!(competing_b_reply.status, 200);
-    let competing_a = response_result(&competing_a_reply)?;
-    let competing_b = response_result(&competing_b_reply)?;
-    let competing_a_id = competing_a
-        .get("quote_id")
-        .and_then(serde_json::Value::as_str)
-        .ok_or("first competing quote omitted quote_id")?;
-    let competing_b_id = competing_b
-        .get("quote_id")
-        .and_then(serde_json::Value::as_str)
-        .ok_or("second competing quote omitted quote_id")?;
+    let competing_a = response_result(competing_a_reply)?;
+    let competing_b = response_result(competing_b_reply)?;
+    Ok(CompetingIds {
+        competing_a_id: competing_a
+            .get("quote_id")
+            .and_then(serde_json::Value::as_str)
+            .ok_or("first competing quote omitted quote_id")?
+            .to_owned(),
+        competing_b_id: competing_b
+            .get("quote_id")
+            .and_then(serde_json::Value::as_str)
+            .ok_or("second competing quote omitted quote_id")?
+            .to_owned(),
+    })
+}
+fn finish_competing_quotes(
+    setup: &MoveSetup,
+    CompetingIds {
+        competing_a_id,
+        competing_b_id,
+    }: &CompetingIds,
+) -> Result<MoveRace, String> {
+    let address = &setup.address;
     assert_ne!(competing_a_id, competing_b_id);
     let winner = request_with_idempotency(
-        &address,
+        address,
         "POST",
         "/v1/moves",
         "application/json",
@@ -1381,7 +1645,7 @@ fn move_quote_commit_replay_recovery_and_lost_ack_use_the_real_transition() -> R
         "winning quote failed: {}",
         winner.text()
     );
-    let winner_state_reply = request(&address, "GET", "/v1/state", "", &[])?;
+    let winner_state_reply = request(address, "GET", "/v1/state", "", &[])?;
     let winner_state = response_result(&winner_state_reply)?;
     let winner_root = winner_state
         .get("state_root")
@@ -1393,8 +1657,23 @@ fn move_quote_commit_replay_recovery_and_lost_ack_use_the_real_transition() -> R
         .and_then(serde_json::Value::as_str)
         .ok_or("winner state omitted receipt_state_root")?
         .to_owned();
+
+    Ok(MoveRace {
+        competing_b_id: competing_b_id.to_owned(),
+        winner_root,
+        winner_receipt_root,
+    })
+}
+
+fn move_stale_quote(setup: &MoveSetup, race: &MoveRace) -> Result<(), String> {
+    let address = &setup.address;
+    let source = setup.source;
+    let destination = setup.destination;
+    let competing_b_id = &race.competing_b_id;
+    let winner_root = &race.winner_root;
+    let winner_receipt_root = &race.winner_receipt_root;
     let loser = request_with_idempotency(
-        &address,
+        address,
         "POST",
         "/v1/moves",
         "application/json",
@@ -1403,7 +1682,7 @@ fn move_quote_commit_replay_recovery_and_lost_ack_use_the_real_transition() -> R
     )?;
     assert_eq!(loser.status, 409);
     assert_eq!(error_code(&loser).as_deref(), Some("move_quote_stale"));
-    let race_state_reply = request(&address, "GET", "/v1/state", "", &[])?;
+    let race_state_reply = request(address, "GET", "/v1/state", "", &[])?;
     let race_state = response_result(&race_state_reply)?;
     assert_eq!(
         race_state
@@ -1451,5 +1730,24 @@ fn move_quote_commit_replay_recovery_and_lost_ack_use_the_real_transition() -> R
             .and_then(serde_json::Value::as_u64),
         Some(400)
     );
+    Ok(())
+}
+
+#[test]
+fn move_quote_commit_replay_recovery_and_lost_ack_use_the_real_transition() -> Result<(), String> {
+    let setup = move_setup()?;
+    let payment = move_commit(&setup)?;
+    let decoded = move_receipt(&setup, &payment)?;
+    let protocol = decoded
+        .protocol()
+        .ok_or("move receipt was not protocol receipt")?;
+    let roots = move_replay(&setup, &payment, protocol)?;
+    move_recovery(&setup, &payment, &roots)?;
+    move_refusal(&setup, &payment, &roots)?;
+    let second_commit = move_conflict(&setup, &payment, &roots)?;
+    move_lost_ack(&setup, &second_commit)?;
+    move_final_state(&setup, &roots)?;
+    let race = move_competing_quotes(&setup, &payment)?;
+    move_stale_quote(&setup, &race)?;
     Ok(())
 }
