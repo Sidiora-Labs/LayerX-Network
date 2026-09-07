@@ -58,9 +58,6 @@ version = "=0.12.1"
 [dev-dependencies.pretty_assertions]
 version = "=1.4.1"
 
-[dev-dependencies.rand]
-version = "=0.8.8"
-
 [dev-dependencies.wasmparser]
 version = "=0.95.0"
 

@@ -1,7 +1,7 @@
 //! This module is used to validate the correctness of the gas metering algorithm.
 //!
 //! Since the gas metering algorithm is complex, this checks correctness by fuzzing. The testing
-//! strategy is to generate random, valid Wasm modules using Binaryen's translate-to-fuzz
+//! strategy is to generate reproducible, valid Wasm modules using Binaryen's translate-to-fuzz
 //! functionality, then ensure for all functions defined, in all execution paths though the
 //! function body that do not trap that the amount of gas charged by the proposed metering
 //! instructions is correct. This is done by constructing a control flow graph and exhaustively
@@ -349,13 +349,23 @@ mod tests {
 
 	use binaryen::tools::translate_to_fuzz_mvp;
 	use parity_wasm::elements;
-	use rand::{thread_rng, RngCore};
 
+	/// Validate a fixed corpus for reproducibility: SplitMix64 seed 0x4c58_504d_4554_4552.
+	/// Each output word fills eight input bytes in little-endian order.
 	#[test]
 	fn test_build_control_flow_graph() {
+		const SEED: u64 = 0x4c58_504d_4554_4552;
+		let mut state = SEED;
 		for _ in 0..20 {
 			let mut rand_input = [0u8; 2048];
-			thread_rng().fill_bytes(&mut rand_input);
+			for chunk in rand_input.chunks_exact_mut(8) {
+				state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+				let mut word = state;
+				word = (word ^ (word >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+				word = (word ^ (word >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+				word ^= word >> 31;
+				chunk.copy_from_slice(&word.to_le_bytes());
+			}
 
 			let module_bytes = translate_to_fuzz_mvp(&rand_input).write();
 			let module: elements::Module = elements::deserialize_buffer(&module_bytes)
