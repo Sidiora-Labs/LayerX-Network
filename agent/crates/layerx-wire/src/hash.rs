@@ -378,6 +378,45 @@ pub fn receipt_execution_batch_id(
     }
 }
 
+/// Selects the maintained identity after the caller authenticates the header
+/// and the maintenance leaf at `activity_count` in a tree of `activity_count + 1`.
+/// The historical selector remains [`receipt_execution_batch_id`].
+///
+/// # Errors
+/// Refuses mismatched commitments, sequence ranges, or Programs activity roots.
+pub fn receipt_execution_batch_id_maintenance(
+    receipt: &crate::receipt::ProtocolReceipt,
+    header: &crate::receipt::BatchHeader,
+    maintenance: &crate::maintenance::OccupancyMaintenance<'_>,
+    activity_count: u32,
+) -> Result<[u8; 32], WireError> {
+    if activity_count == 0
+        || header.first_sequence() == 0
+        || header
+            .first_sequence()
+            .checked_add(u64::from(activity_count))
+            != Some(header.last_sequence())
+        || receipt.protocol_version() != header.protocol_version()
+        || receipt.global_sequence() < header.first_sequence()
+        || receipt.global_sequence() >= header.last_sequence()
+        || maintenance.batch_number != header.batch_number()
+        || maintenance.global_sequence != header.last_sequence()
+        || maintenance.resulting_state_root != header.resulting_state_root()
+        || (receipt.module_id() == 9
+            && receipt.operation() == 3
+            && receipt.activity_root() != header.activity_merkle_root())
+    {
+        return Err(WireError::known(KnownResult::NonCanonical, 0));
+    }
+    program_execution_batch_id(
+        header.previous_state_root(),
+        header.activity_merkle_root(),
+        header.first_sequence(),
+        header.last_sequence() - 1,
+        header.batch_number(),
+    )
+}
+
 /// Computes the exact checkpoint identifier over canonical header bytes,
 /// big-endian validity-proof length, and validity-proof bytes.
 ///

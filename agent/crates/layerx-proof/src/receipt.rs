@@ -310,6 +310,130 @@ pub fn verify_outcome(
     })
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct MaintainedOutcomeEvidence<'a> {
+    pub header: &'a [u8],
+    pub header_signature: &'a [u8; 64],
+    pub activity_proof: &'a crate::merkle::Proof,
+    pub maintenance: &'a [u8],
+    pub maintenance_proof: &'a crate::merkle::Proof,
+    pub authorization: &'a crate::inclusion::SequencerAuthorization,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MaintainedOutcomeFailure {
+    Inclusion(crate::inclusion::InclusionError),
+    MaintenanceEncoding,
+    SequenceRange,
+    Receipt(ReceiptCheck),
+}
+
+/// Verifies a selected maintained outcome through the signed maintenance transition.
+///
+/// # Errors
+/// Refuses invalid signatures, inclusion, identity, positions or transition roots.
+pub fn verify_outcome_maintained(
+    receipt_bytes: &[u8],
+    authorised: &AuthorizedBatch,
+    evidence: &MaintainedOutcomeEvidence<'_>,
+) -> Result<VerifiedReceipt, MaintainedOutcomeFailure> {
+    let activity_batch = maintained_activity_batch(receipt_bytes, authorised, evidence)?;
+    verify_outcome(receipt_bytes, &activity_batch)
+        .map_err(|failure| MaintainedOutcomeFailure::Receipt(failure.check))
+}
+
+/// Verifies a selected maintained Programs state outcome.
+///
+/// # Errors
+/// Refuses invalid maintained evidence or any Programs state receipt invariant.
+pub fn verify_program_state_maintained(
+    receipt_bytes: &[u8],
+    authorised: &AuthorizedBatch,
+    evidence: &MaintainedOutcomeEvidence<'_>,
+) -> Result<VerifiedReceipt, MaintainedOutcomeFailure> {
+    let activity_batch = maintained_activity_batch(receipt_bytes, authorised, evidence)?;
+    verify_program_state(receipt_bytes, &activity_batch)
+        .map_err(|failure| MaintainedOutcomeFailure::Receipt(failure.check))
+}
+
+fn maintained_activity_batch(
+    receipt_bytes: &[u8],
+    authorised: &AuthorizedBatch,
+    evidence: &MaintainedOutcomeEvidence<'_>,
+) -> Result<AuthorizedBatch, MaintainedOutcomeFailure> {
+    use crate::inclusion::verify_receipt;
+    use MaintainedOutcomeFailure::{Receipt as Failure, SequenceRange};
+    let included = verify_receipt(
+        receipt_bytes,
+        evidence.activity_proof,
+        evidence.header,
+        evidence.header_signature,
+        evidence.authorization,
+    )
+    .map_err(MaintainedOutcomeFailure::Inclusion)?;
+    verify_receipt(
+        evidence.maintenance,
+        evidence.maintenance_proof,
+        evidence.header,
+        evidence.header_signature,
+        evidence.authorization,
+    )
+    .map_err(MaintainedOutcomeFailure::Inclusion)?;
+    let header = included.header().header();
+    if authorised.sequencer_public_key != evidence.authorization.public_key() {
+        return Err(Failure(ReceiptCheck::SequencerSignature));
+    }
+    if authorised.previous_state_root != header.previous_state_root() {
+        return Err(Failure(ReceiptCheck::PreviousStateRoot));
+    }
+    if authorised.resulting_state_root != header.resulting_state_root() {
+        return Err(Failure(ReceiptCheck::ResultingStateRoot));
+    }
+    let maintenance = layerx_wire::maintenance::decode_occupancy_maintenance(evidence.maintenance)
+        .map_err(|_| MaintainedOutcomeFailure::MaintenanceEncoding)?;
+    if maintenance.resulting_state_root != authorised.resulting_state_root {
+        return Err(Failure(ReceiptCheck::ResultingStateRoot));
+    }
+    let receipt = decode(receipt_bytes).map_err(|_| Failure(ReceiptCheck::Decode))?;
+    let protocol = receipt
+        .protocol()
+        .ok_or(Failure(ReceiptCheck::ReceiptShape))?;
+    let count = header
+        .last_sequence()
+        .checked_sub(header.first_sequence())
+        .and_then(|count| u32::try_from(count).ok())
+        .ok_or(SequenceRange)?;
+    if count == 0
+        || count.checked_add(1) != Some(evidence.maintenance_proof.leaf_count())
+        || evidence.maintenance_proof.leaf_index() != count
+        || evidence.activity_proof.leaf_count() != evidence.maintenance_proof.leaf_count()
+        || evidence.activity_proof.leaf_index() >= count
+        || header
+            .first_sequence()
+            .checked_add(u64::from(evidence.activity_proof.leaf_index()))
+            != Some(protocol.global_sequence())
+    {
+        return Err(SequenceRange);
+    }
+    let expected = layerx_wire::hash::receipt_execution_batch_id_maintenance(
+        protocol,
+        header,
+        &maintenance,
+        count,
+    )
+    .map_err(|_| Failure(ReceiptCheck::BatchId))?;
+    if expected != authorised.batch_id {
+        return Err(Failure(ReceiptCheck::BatchId));
+    }
+    Ok(AuthorizedBatch::new(
+        expected,
+        authorised.asset,
+        authorised.previous_state_root,
+        maintenance.previous_state_root,
+        authorised.sequencer_public_key,
+    ))
+}
+
 /// Verifies canonical receipt bytes and their internal sequencer signature
 /// without accepting transport-supplied batch, asset, or state facts.
 ///
