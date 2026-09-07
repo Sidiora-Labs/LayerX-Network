@@ -161,10 +161,12 @@ mod tests {
     #[test]
     fn frozen_field_ids_and_encodings_are_canonical() {
         let context = ExecutionContext::authenticated(0x0102_0304_0506_0708, 9, 1, 2, 3)
-            .expect("authenticated context");
-        let program = ProgramId::new([0x11; 32]).expect("program");
-        let caller = ProgramId::new([0x22; 32]).expect("caller");
-        let principal = PrincipalId::new([0x33; 32]).expect("principal");
+            .unwrap_or_else(|error| panic!("authenticated context: {error:?}"));
+        let program =
+            ProgramId::new([0x11; 32]).unwrap_or_else(|error| panic!("program: {error:?}"));
+        let caller = ProgramId::new([0x22; 32]).unwrap_or_else(|error| panic!("caller: {error:?}"));
+        let principal =
+            PrincipalId::new([0x33; 32]).unwrap_or_else(|error| panic!("principal: {error:?}"));
         let vectors = [
             (1, vec![0x11; 32]),
             (2, [vec![1], vec![0x22; 32]].concat()),
@@ -177,23 +179,21 @@ mod tests {
             (9, vec![0, 0, 0, 3]),
         ];
         for (id, expected) in vectors {
-            let field = ContextField::try_from(id).expect("known field");
+            let field =
+                ContextField::try_from(id).unwrap_or_else(|error| panic!("known field: {error:?}"));
             assert_eq!(
                 context.encode(field, program, Some(caller), principal, 10),
                 expected
             );
         }
         assert_eq!(
-            context.encode(
-                ContextField::ImmediateCaller,
-                program,
-                None,
-                principal,
-                10
-            ),
+            context.encode(ContextField::ImmediateCaller, program, None, principal, 10),
             [0]
         );
         assert_eq!(ContextField::try_from(0), Err(ContextRefusal::UnknownField));
-        assert_eq!(ContextField::try_from(10), Err(ContextRefusal::UnknownField));
+        assert_eq!(
+            ContextField::try_from(10),
+            Err(ContextRefusal::UnknownField)
+        );
     }
 }
