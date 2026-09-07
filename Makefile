@@ -1745,7 +1745,8 @@ $(BUILD_DIR)/tests/lxp_test_program_artifacts: \
 		cmd/layerxd/lxp_daemon_evidence.c $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
 		$(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -lsqlite3 -pthread -ldl -lm -o $@
 
-test-program-artifacts: $(BUILD_DIR)/tests/lxp_test_program_artifacts
+test-program-artifacts: $(BUILD_DIR)/tests/lxp_test_program_artifacts programs-reference-escrow \
+		$(BUILD_DIR)/tests/bridge/sign-credit $(BUILD_DIR)/tests/bridge/test-credit
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_program_artifacts
 
 $(BUILD_DIR)/tests/lxp_test_finality_json: tests/daemon/lxp_test_finality_json.c \
@@ -3124,6 +3125,10 @@ programs-sdk-c:
 		programs/sdk/c/src/capability.c \
 		-o $(BUILD_DIR)/tests/programs_sdk_c_capability_parity
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/programs_sdk_c_capability_parity
+
+.PHONY: programs-reference-escrow
+programs-reference-escrow:
+	sh programs/sdk/rust/examples/escrow/build.sh
 
 programs-sdk-rust:
 	npm --prefix programs/sdk/rust ci --ignore-scripts --no-audit --no-fund

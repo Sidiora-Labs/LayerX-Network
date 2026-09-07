@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 
+#include "layerx/lx_asset.h"
 #include "layerx/lxp_activity.h"
 #include "layerx/lxp_batch.h"
 #include "layerx/lxp_daemon.h"
