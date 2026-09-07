@@ -10,10 +10,10 @@ This is the Rust workspace in `interop/`. It is not a second ledger.
 | --- | --- | --- |
 | Gateway | Transport-neutral routes, redaction, adapter host | `crates/layerx-interop-gateway`, executable composition in `crates/layerx-interop-service` |
 | MCP / A2A transports | Ingress labels `mcp` and `a2a` next to `http` | Gateway `IngressTransport`; x402 `TransportKind` |
-| x402 v2 | Buyer, seller, facilitator over HTTP, MCP, and A2A | `crates/layerx-x402` — [COMPATIBILITY.md](crates/layerx-x402/COMPATIBILITY.md) |
+| x402 v2 | Buyer, seller, facilitator over HTTP, MCP, and A2A | `crates/layerx-x402` - [COMPATIBILITY.md](crates/layerx-x402/COMPATIBILITY.md) |
 | Ethereum / Solana mirrors | Batch archive publication and verification. Pure archives: no vault, no portal, no custody | `crates/layerx-mirror`; contracts in `contracts/ethereum-mirror/` and `contracts/solana-mirror/`; deploy notes in `deploy/mirror/` |
-| Ethereum / Solana migration | Source-chain verifiers and the `migration` adapter | `crates/layerx-migrate` — [OPERATIONS.md](crates/layerx-migrate/OPERATIONS.md) |
-| Portable receipts | Verify LayerX receipts without a live node | `crates/layerx-portable` — [PORTABILITY.md](PORTABILITY.md) |
+| Ethereum / Solana migration | Source-chain verifiers and the `migration` adapter | `crates/layerx-migrate` - [OPERATIONS.md](crates/layerx-migrate/OPERATIONS.md) |
+| Portable receipts | Verify LayerX receipts without a live node | `crates/layerx-portable` - [PORTABILITY.md](PORTABILITY.md) |
 | Other adapters | AP2, UCP, Visa TAP, fiat rails | `crates/layerx-ap2`, `crates/layerx-ucp`, `crates/layerx-visa-tap`, `crates/layerx-fiat` |
 
 There is no standalone `layerx-a2a` crate. A2A is a transport on the gateway and on x402, plus the CLI installer in `platform/cli/`.
@@ -25,7 +25,7 @@ There is no standalone `layerx-a2a` crate. A2A is a transport on the gateway and
 | `agent/crates/layerx-mcp` | Tenant- and scope-bound MCP server that routes every call through `layerx-agentd` |
 | This workspace + `platform/cli/` | MCP as an interop ingress; `layerx install mcp` / `layerx mcp serve` from the developer CLI |
 
-Normative MCP tool design: [`spec/layerx-agent-interface/docs/mcp-tools.md`](../spec/layerx-agent-interface/docs/mcp-tools.md). CLI install copy: [`platform/docs/content/install.md`](../platform/docs/content/install.md) and [`platform/docs/content/guide/interop.md`](../platform/docs/content/guide/interop.md).
+MCP tool inventory: [`agent/crates/layerx-mcp/README.md`](../agent/crates/layerx-mcp/README.md). CLI install copy: [`platform/docs/content/install.md`](../platform/docs/content/install.md) and [`platform/docs/content/guide/interop.md`](../platform/docs/content/guide/interop.md).
 
 Interop service deployment inputs, including the required protocol network,
 authoritative module registry, server-owned TAP clock skew, explicit trusted
