@@ -240,9 +240,9 @@ fn secp256k1_verify_impl(
         return Err(SignatureRefusal::MalformedPublicKey);
     };
 
-    use k256::ecdsa::signature::Verifier;
+    use k256::ecdsa::signature::hazmat::PrehashVerifier;
     verifying_key
-        .verify(message_digest, &signature)
+        .verify_prehash(message_digest, &signature)
         .map_err(|_| SignatureRefusal::VerificationFailed)
 }
 
@@ -325,7 +325,12 @@ mod tests {
             Some(SignatureRefusal::MalformedSignature)
         );
         assert_eq!(
-            verify_ed25519(&[0u8; MAX_MESSAGE_DIGEST_BYTES + 1], &public_key, &signature).err(),
+            verify_ed25519(
+                &[0u8; MAX_MESSAGE_DIGEST_BYTES + 1],
+                &public_key,
+                &signature
+            )
+            .err(),
             Some(SignatureRefusal::InvalidMessageLength)
         );
     }
