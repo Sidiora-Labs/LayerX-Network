@@ -3812,6 +3812,27 @@ task = "5.1"
 file = "tests/crypto/lxp_test_ct.c Makefile"
 symbol = "test-crypto-suite"
 observed = "formerly observation.5.1.focused-crypto-check-intermittent. make check exits 2 in qual-logs/r17/make-check-harness.log with verbatim: make: *** [Makefile:1533: test-crypto-suite] Error 1. The recipe runs build/tests/lxp_test_ct and emits no more specific diagnostic. Earlier make check exits 0 (make-check.log); the subsequent unchanged-check rerun exits 0 (make-check-final.log)."
+[observation.5.1.focused-fuzz-provisioned-boundary]
+task = "5.1"
+file = "agent/fuzz/Cargo.lock agent/tests/qualify/src/main.rs agent/tests/qualify/fuzz.rs agent/tools/run-sanitizers.sh agent/tools/boundary-check/src/main.rs agent/crates/layerx-sdk/src/program_http.rs agent/crates/layerx-agentd/tests/support/real_authority.rs"
+symbol = "agent_qualify_fuzz_gate agent_qualify_sanitizer_gate now_millis now_ms"
+observed = "make agent-qualify-fuzz exits 2; qual-logs/r17/row-45.log. Environment: CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4 LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin. All ten targets complete 256 bounded runs and corpus minimisation, then the workspace address-sanitizer tests complete. The sanitizer script reports verbatim: thread sanitizer unavailable: pinned standard library is not TSan-instrumented. The final boundary check fails verbatim: qualification gate failed: unsafe-allowlist failed: status=exit status: 1 stdout_tail= stderr_tail=ambient-nondeterminism: agent/crates/layerx-sdk/src/program_http.rs\nambient-nondeterminism: agent/crates/layerx-agentd/tests/support/real_authority.rs\nmake: *** [Makefile:2307: agent-qualify-fuzz] Error 1. Full child stdout and stderr are preserved in qual-logs/r17/fuzz-details/."
+assumption = "program_http.rs:533 reads SystemTime::now in now_millis. real_authority.rs:53 reads SystemTime::now in now_ms and uses Instant::now for real process deadlines. The boundary scanner rejects ambient clock tokens outside its allowed paths. These source and check conflicts are outside the lock and replay harness repairs; neither source, allowlist, checker nor fuzz assertion is changed. The fuzz lock resolves the current Programs runtime and agent-daemon dependencies; locked offline metadata exits 0 (qual-logs/r17/fuzz-locked-metadata.log; metadata in fuzz-metadata.json). Resolution adds 95 package records and removes unused pkcs8 and spki records; no retained package version or checksum changes. Dependency and feature changes are recorded in fuzz-lock-analysis.json and fuzz-lock.diff. This qualifies lock resolution and the measured fuzz/address-sanitizer stages, not the complete row."
+severity = "blocker"
+
+[observation.5.1.focused-human-faults-refusal-executed]
+task = "5.1"
+file = "tools/qualification/release_runner.py Makefile spec/layerx-beta/spec.kvx"
+symbol = "human-qualify-faults"
+observed = "env -u LAYERX_QUALIFICATION_REAL_STACK make human-qualify-faults exits 2; qual-logs/r17/human-faults.log. Verbatim: qualification failed: LAYERX_QUALIFICATION_REAL_STACK=1 is required\nmake: *** [Makefile:2103: human-qualify-faults] Error 1."
+assumption = "No real stack exists for this gate. Its required flag is unset, no stack is fabricated, and no protected persistent service is touched. An authorized provisioned real stack is required before this gate can pass."
+severity = "blocker"
+
+[observation.5.1.focused-crypto-check-intermittent]
+task = "5.1"
+file = "tests/crypto/lxp_test_ct.c Makefile"
+symbol = "test-crypto-suite"
+observed = "make check exits 2 in qual-logs/r17/make-check-harness.log with verbatim: make: *** [Makefile:1533: test-crypto-suite] Error 1. The recipe runs build/tests/lxp_test_ct and emits no more specific diagnostic. Earlier make check exits 0 (make-check.log); the subsequent unchanged-check rerun exits 0 (make-check-final.log)."
 assumption = "The test includes elapsed-time comparisons as well as functional assertions. The exact failing branch is not established. No crypto source, assertion, bound or runtime setting was changed. git diff --check and cg spec lint exit 0 after the lock observations (diff-lock.log, lint-lock.log); lint reports zero errors and six existing warnings."
 severity = "note"
 
