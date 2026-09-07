@@ -40,6 +40,9 @@ data:
   LAYERX_WEBHOOKS_OPERATOR_TOKEN_FILE: /run/layerx/tokens/operator
   LAYERX_WEBHOOKS_CURSOR_KEY_FILE: /run/layerx/keys/cursor
   LAYERX_WEBHOOKS_SEQUENCER_PUBLIC_KEY_FILE: /run/layerx/keys/sequencer
+  LAYERX_WEBHOOKS_SEQUENCER_ID_FILE: /run/layerx/keys/sequencer-id
+  LAYERX_WEBHOOKS_SEQUENCER_FIRST_BATCH_FILE: /run/layerx/keys/sequencer-first-batch
+  LAYERX_WEBHOOKS_SEQUENCER_LAST_BATCH_FILE: /run/layerx/keys/sequencer-last-batch
   LAYERX_DASHBOARD_LISTEN: 0.0.0.0:9445
   LAYERX_DASHBOARD_GATEWAY_REDIS_URL: rediss://redis.layerx-internal.svc:6379
   LAYERX_DASHBOARD_REDIS_CA_DER: /run/layerx/ca/internal.der
@@ -113,6 +116,9 @@ spec:
                     - { key: webhook-operator-token, path: tokens/operator }
                     - { key: cursor-key, path: keys/cursor }
                     - { key: sequencer-public-key, path: keys/sequencer }
+                    - { key: sequencer-id, path: keys/sequencer-id }
+                    - { key: sequencer-first-batch, path: keys/sequencer-first-batch }
+                    - { key: sequencer-last-batch, path: keys/sequencer-last-batch }
 ---
 apiVersion: apps/v1
 kind: Deployment
