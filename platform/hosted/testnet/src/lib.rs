@@ -23,6 +23,13 @@ pub struct TestnetConfig {
 }
 
 impl TestnetConfig {
+    /// Validates the release identity and testnet operations configuration.
+    ///
+    /// # Errors
+    /// Returns an error if the package or wire version differs from the pending
+    /// release, the wire version is unsupported, the network ID is incorrect,
+    /// any endpoint is not a canonical HTTPS origin, the reset schedule is empty,
+    /// or the snapshot interval is zero.
     pub fn validate(&self, pending: &PendingRelease) -> Result<(), &'static str> {
         if self.package_semver != pending.package_semver {
             return Err("testnet package release does not match pending release");
