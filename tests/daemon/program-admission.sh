@@ -5,6 +5,10 @@ root=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$root"
 [[ $(id -u) == 0 ]]
 build_dir=${1:-build}
+sequencer_binary="$root/$build_dir/bin/layerxd"
+if [[ ${2:-} == --maintenance-crash ]]; then
+    sequencer_binary="$root/$build_dir/tests/lxp_test_maintenance_crash"
+fi
 work=$(mktemp -d /tmp/lxp-program-admission-XXXXXX)
 replica_pid= sequencer_pid=
 cleanup() {
@@ -35,6 +39,11 @@ PY
 read -r program_port replica_port rpc_port < "$work/ports"
 mkfifo "$work/replica-ready"
 exec {replica_ready_fd}<>"$work/replica-ready"
+if [[ ${2:-} == --maintenance-crash ]]; then
+    mkfifo "$work/apply-gate"
+    exec {apply_gate_fd}<>"$work/apply-gate"
+    export LXP_TEST_APPLY_GATE_FD="$apply_gate_fd" LXP_TEST_CRASH_BOUNDARY="$3" LXP_TEST_CRASH_OCCURRENCE="$4"
+fi
 LAYERX_NODE_PAXEER_CHAIN_ID=31337 \
 LAYERX_NODE_SETTLEMENT_CONTRACT=0x1111111111111111111111111111111111111111 \
 LAYERX_NODE_CHECKPOINT_REGISTRY=0x2222222222222222222222222222222222222222 \
@@ -48,7 +57,7 @@ bash platform/hosted/node/bootstrap.sh --data-dir "$work/data" --run-dir "$work/
 replica_pid=$!
 IFS= read -r -n 1 -t 20 replica_ready <&"$replica_ready_fd"
 [[ "$replica_ready" == R ]]
-(set -a; source "$work/data/sequencer.env"; exec "$root/$build_dir/bin/layerxd" --serve "$work/data/sequencer.conf") > "$work/sequencer.log" 2>&1 &
+(set -a; source "$work/data/sequencer.env"; exec "$sequencer_binary" --serve "$work/data/sequencer.conf") > "$work/sequencer.log" 2>&1 &
 sequencer_pid=$!
 for ((attempt=0; attempt<200; attempt++)); do
     [[ ! -S "$work/run/layerxd.lni.sock" ]] || break
@@ -57,12 +66,23 @@ for ((attempt=0; attempt<200; attempt++)); do
 done
 cp "$build_dir/tests/lxp_test_program_admission" "$work/client"
 chmod 0755 "$work/client"
-setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$work/run/layerxd.lni.sock" "${@:2}"
-kill -0 "$sequencer_pid"
+if [[ ${2:-} == --maintenance-crash ]]; then
+    setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$work/run/layerxd.lni.sock" --maintenance-queue
+    printf G >&"$apply_gate_fd"
+    result=0
+    wait "$sequencer_pid" || result=$?
+    [[ "$result" == $((128 + $3)) ]]
+    sequencer_pid=
+else
+    setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$work/run/layerxd.lni.sock" "${@:2}"
+    kill -0 "$sequencer_pid"
+fi
 
-if [[ ${2:-} == --maintenance ]]; then
-    kill -KILL "$sequencer_pid"
-    wait "$sequencer_pid" || true
+if [[ ${2:-} == --maintenance || ${2:-} == --maintenance-crash ]]; then
+    if [[ -n "$sequencer_pid" ]]; then
+        kill -KILL "$sequencer_pid"
+        wait "$sequencer_pid" || true
+    fi
     sequencer_pid=
     kill -KILL "$replica_pid"
     wait "$replica_pid" || true
@@ -89,4 +109,5 @@ PYWAIT
     setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$work/run/layerxd.lni.sock" --maintenance-recovered
     kill -0 "$sequencer_pid"
     kill -0 "$replica_pid"
+    (set -a; source "$work/data/replica.env"; python3 tests/daemon/maintenance-evidence.py)
 fi

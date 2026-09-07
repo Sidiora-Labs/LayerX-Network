@@ -12,6 +12,7 @@
 #include "layerx/lxp_identity.h"
 #include "layerx/lxp_protocol.h"
 #include "layerx/lxp_receipt.h"
+#include "layerx/lxp_fault.h"
 
 #include "lxp_daemon_batch_wal.h"
 #include "lxp_daemon_lni_internal.h"
@@ -705,7 +706,9 @@ static lxp_result admission_journal_compact_locked(
             offset += sizeof(header) + activity->length;
         }
     }
+    if (status == LXP_OK) lxp_fault_inject_point(LXP_FAULT_ADMISSION_TEMP_WRITTEN);
     if (status == LXP_OK && fdatasync(descriptor) != 0) status = LXP_ERR_IO;
+    if (status == LXP_OK) lxp_fault_inject_point(LXP_FAULT_ADMISSION_TEMP_SYNCED);
     if (status == LXP_OK &&
         (fstat(descriptor, &metadata) != 0 || !S_ISREG(metadata.st_mode) ||
          metadata.st_nlink != 1 || metadata.st_uid != geteuid() ||
@@ -719,8 +722,10 @@ static lxp_result admission_journal_compact_locked(
         status = LXP_ERR_IO;
     else if (status == LXP_OK)
         renamed = true;
+    if (status == LXP_OK) lxp_fault_inject_point(LXP_FAULT_ADMISSION_RENAMED);
     if (status == LXP_OK && fsync(server->admission_parent_descriptor) != 0)
         status = LXP_FATAL_INVARIANT;
+    if (status == LXP_OK) lxp_fault_inject_point(LXP_FAULT_ADMISSION_DIRECTORY_SYNCED);
     if (renamed) {
         int old = server->journal_descriptor;
         server->journal_descriptor = descriptor;
@@ -1389,8 +1394,8 @@ static lxp_result send_node_info(lxp_daemon_lni_server *server,
         server->daemon->next_sequence - 1U;
     if (pthread_mutex_unlock(&server->daemon->mutex) != 0)
         return LXP_FATAL_INVARIANT;
-    if (pthread_mutex_lock(&server->owner->mutex) != 0) return LXP_ERR_IO;
-    batch = server->owner->receipt_authority->last_batch_number;
+    if (pthread_mutex_lock(&server->owner->receipt_mutex) != 0) return LXP_ERR_IO;
+    batch = server->owner->published_batch_number;
     store_u16(payload + cursor, LNI_VERSION_MAJOR); cursor += 2U;
     store_u16(payload + cursor, LNI_VERSION_MINOR); cursor += 2U;
     store_u16(payload + cursor, server->owner->protocol_version); cursor += 2U;
@@ -1400,7 +1405,7 @@ static lxp_result send_node_info(lxp_daemon_lni_server *server,
     store_u64(payload + cursor, batch); cursor += 8U;
     if (server->owner->evidence_store != NULL)
         (void)memcpy(payload + cursor,
-                     server->owner->evidence_store->latest_checkpoint_id,
+                     server->owner->published_checkpoint_id,
                      32U);
     else
         (void)memset(payload + cursor, 0, 32U);
@@ -1415,7 +1420,7 @@ static lxp_result send_node_info(lxp_daemon_lni_server *server,
         (void)memcpy(payload + cursor, capabilities[index], length);
         cursor += length;
     }
-    if (pthread_mutex_unlock(&server->owner->mutex) != 0)
+    if (pthread_mutex_unlock(&server->owner->receipt_mutex) != 0)
         status = LXP_FATAL_INVARIANT;
     if (status == LXP_OK)
         status = send_envelope(descriptor, server->frame_bytes,
@@ -3006,6 +3011,16 @@ static lxp_result send_finality_evidence_register(
         (lxp_byte_span){request->payload, request->payload_length},
         (lxp_byte_span){request->proof, request->proof_length},
         server->owner->scratch, &evidence);
+    if (status == LXP_OK) {
+        if (pthread_mutex_lock(&server->owner->receipt_mutex) != 0)
+            status = LXP_ERR_IO;
+        else {
+            (void)memcpy(server->owner->published_checkpoint_id,
+                         server->owner->evidence_store->latest_checkpoint_id, 32U);
+            if (pthread_mutex_unlock(&server->owner->receipt_mutex) != 0)
+                status = LXP_FATAL_INVARIANT;
+        }
+    }
     if (status == LXP_OK) {
         store_u16(response, 1U);
         (void)memcpy(response + 2U, evidence.checkpoint_id, 32U);
