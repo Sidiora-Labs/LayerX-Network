@@ -1616,7 +1616,7 @@ static int deploy_and_upgrade_artifacts_case(uint16_t protocol_version,
             LXP_OK || receipt.result_code != LXP_OK ||
         !receipt.program_outcome.present ||
         receipt.program_outcome.terminal_kind != LXP_PROGRAM_TERMINAL_SUCCESS ||
-        receipt.program_outcome.encoding_version != 3U ||
+        receipt.program_outcome.encoding_version != (composite ? 4U : 3U) ||
         receipt.program_outcome.runtime_version == 0U ||
         receipt.program_outcome.abi_version != LX_PROGRAMS_ABI_VERSION ||
         receipt.program_outcome.fee_schedule_version != 1U ||
@@ -2409,7 +2409,44 @@ static int stored_fixture_hex(const char *document, const char *field,
     return 0;
 }
 
-static int stored_historical_v1(const char *path)
+static int stored_historical_lifecycle(const char *path)
+{
+    char document[32768];
+    uint8_t canonical[8192], payload[4096], expected_id[32], identifier[32], public_key[32];
+    static uint8_t arena_bytes[LXP_MAX_ACTIVITY_BYTES];
+    size_t length, canonical_length, payload_length, id_length, key_length;
+    lxp_activity activity;
+    lxp_arena arena;
+    lxp_byte_span encoded;
+    FILE *file = fopen(path, "rb");
+    if (file == NULL) return 1;
+    length = fread(document, 1U, sizeof(document) - 1U, file);
+    if (ferror(file) || !feof(file)) { (void)fclose(file); return 1; }
+    if (fclose(file) != 0) return 1;
+    document[length] = '\0';
+    if (stored_fixture_hex(document, "signed_activity_hex", canonical, sizeof(canonical), &canonical_length) != 0 ||
+        stored_fixture_hex(document, "payload_hex", payload, sizeof(payload), &payload_length) != 0 ||
+        stored_fixture_hex(document, "activity_id_hex", expected_id, sizeof(expected_id), &id_length) != 0 ||
+        stored_fixture_hex(document, "public_key_hex", public_key, sizeof(public_key), &key_length) != 0 ||
+        id_length != 32U || key_length != 32U ||
+        lxp_activity_decode(canonical, canonical_length, &activity) != LXP_OK ||
+        activity.protocol_version != 3U || lxp_activity_module_id(activity.activity_type) != LXP_MODULE_PROGRAMS ||
+        activity.payload.length != payload_length || memcmp(activity.payload.bytes, payload, payload_length) != 0 ||
+        activity.authority.length != 32U || memcmp(activity.authority.bytes, public_key, 32U) != 0 ||
+        lxp_activity_verify_signature(&activity) != LXP_OK ||
+        lxp_activity_id(canonical, canonical_length, identifier) != LXP_OK ||
+        memcmp(identifier, expected_id, 32U) != 0 ||
+        lxp_arena_init(&arena, arena_bytes, sizeof(arena_bytes)) != LXP_OK ||
+        lxp_activity_encode(&activity, &arena, &encoded) != LXP_OK ||
+        encoded.length != canonical_length || memcmp(encoded.bytes, canonical, canonical_length) != 0)
+        return 1;
+    canonical[canonical_length - 1U] ^= 1U;
+    if (lxp_activity_decode(canonical, canonical_length, &activity) != LXP_OK ||
+        lxp_activity_verify_signature(&activity) == LXP_OK) return 1;
+    return 0;
+}
+
+static int stored_historical_receipt(const char *path, uint16_t protocol_version)
 {
     char document[32768];
     uint8_t canonical[4096], public_key[32], expected_digest[32], digest[32];
@@ -2430,9 +2467,11 @@ static int stored_historical_v1(const char *path)
         key_length != 32U || digest_length != 32U ||
         lxp_arena_init(&arena, arena_bytes, sizeof(arena_bytes)) != LXP_OK ||
         lxp_receipt_decode(canonical, canonical_length, true, &receipt) != LXP_OK ||
-        receipt.protocol_version != 1U || receipt.module_id != LXP_MODULE_PROGRAMS ||
-        receipt.module_version != 1U || !receipt.program_outcome.present ||
-        receipt.program_outcome.abi_version != 1U ||
+        receipt.protocol_version != protocol_version || receipt.module_id != LXP_MODULE_PROGRAMS ||
+        receipt.module_version != (protocol_version == 1U ? 1U : 4U) ||
+        !receipt.program_outcome.present ||
+        receipt.program_outcome.encoding_version != 3U ||
+        receipt.program_outcome.abi_version != (protocol_version == 1U ? 1U : 2U) ||
         !lxp_ct_is_zero(receipt.program_outcome.applied_legs_digest, 32U) ||
         lxp_receipt_verify(&receipt, public_key, &arena) != LXP_OK ||
         lxp_receipt_digest(&receipt, &arena, digest) != LXP_OK ||
@@ -2448,8 +2487,15 @@ static int stored_historical_v1(const char *path)
 
 int main(int argc, char **argv)
 {
+    if (argc == 3 && strcmp(argv[1], "--stored-historical-lifecycle") == 0)
+        return stored_historical_lifecycle(argv[2]);
     if (argc == 3 && strcmp(argv[1], "--stored-historical-v1") == 0)
-        return stored_historical_v1(argv[2]);
+        return stored_historical_receipt(argv[2], 1U);
+    if (argc == 3 && strcmp(argv[1], "--stored-historical-v3") == 0)
+        return stored_historical_receipt(argv[2], 3U);
+    if ((argc == 1 || (argc == 2 && strcmp(argv[1], "--post-upgrade-batch") == 0)) &&
+        stored_historical_receipt("platform/sdk/conformance/fixtures/receipt-programs-executed-v3.json", 3U) != 0)
+        return 1;
     if (argc == 2 && strcmp(argv[1], "--post-upgrade-batch") == 0) {
         if (deploy_and_upgrade_artifacts_case(
                 LXP_PROTOCOL_VERSION_STATE_COMMITMENT, false) != 0) return 1;
