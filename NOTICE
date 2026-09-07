@@ -1,0 +1,12 @@
+LayerX Protocol
+Copyright 2026 Sidiora Labs
+
+This product includes software developed at Sidiora Labs.
+
+unicode-ident: Copyright © 1991-2023 Unicode, Inc. (Unicode License V3)
+icu_collections 2.3.0, icu_locale_core 2.3.0, icu_normalizer 2.3.0, icu_normalizer_data 2.3.0, icu_properties 2.3.0, icu_properties_data 2.3.0, icu_provider 2.3.1, litemap 0.8.3, potential_utf 0.1.6, tinystr 0.8.4, writeable 0.6.4, zerovec 0.11.8, zerovec-derive 0.11.6, zerotrie 0.2.5: Copyright © 2020-2024 Unicode, Inc. (Unicode License V3)
+regex-syntax 0.8.11 Unicode tables: Copyright Unicode, Inc.
+zerocopy 0.8.56 and zerocopy-derive 0.8.56: Copyright 2019 The Fuchsia Authors (BSD-2-Clause)
+fiat-crypto: Copyright (c) 2015-2020 the fiat-crypto authors (BSD-1-Clause)
+gogo/protobuf (paxeer-network/sdk/third_party/proto/gogoproto): Copyright (c) 2013, The GoGo Authors (BSD-3-Clause)
+Protocol Buffers (paxeer-network/sdk/third_party/proto/google/protobuf): Copyright 2008 Google Inc. (BSD-3-Clause)

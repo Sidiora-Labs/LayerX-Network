@@ -36,7 +36,7 @@ strip = true
 edition = "2021"
 rust-version = "1.91.1"
 version = "0.1.0"
-license = "LicenseRef-Centra-ai-Protocol"
+license = "Apache-2.0"
 
 [workspace.dependencies]
 wasmi = { path = "vendor/wasmi-0.31.2", version = "=0.31.2" }

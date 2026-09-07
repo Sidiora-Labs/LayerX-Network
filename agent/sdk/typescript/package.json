@@ -9,7 +9,7 @@
   },
   "type": "module",
   "private": false,
-  "license": "SEE LICENSE IN LICENSE",
+  "license": "Apache-2.0",
   "exports": {
     ".": {
       "types": "./dist/src/index.d.ts",

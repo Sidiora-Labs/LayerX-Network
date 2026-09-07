@@ -16,7 +16,7 @@ resolver = "2"
 edition = "2021"
 rust-version = "1.91.1"
 version = "0.1.0"
-license = "LicenseRef-Centra-ai-Protocol"
+license = "Apache-2.0"
 
 [workspace.lints.rust]
 unsafe_code = "deny"

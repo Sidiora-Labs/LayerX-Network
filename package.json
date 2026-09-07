@@ -1,6 +1,7 @@
 {
   "name": "layerx-protocol",
   "private": true,
+  "license": "Apache-2.0",
   "workspaces": [
     "agent/sdk/typescript",
     "platform/middleware/agent",

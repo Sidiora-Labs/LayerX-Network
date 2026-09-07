@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: LicenseRef-Centra-ai-Protocol
+// SPDX-License-Identifier: Apache-2.0
 pragma solidity 0.8.30;
 
 /// @notice Immutable, permissionless publication of public LayerX archive
