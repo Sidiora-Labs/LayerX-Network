@@ -220,8 +220,10 @@ impl FiatPlane for SandboxPlane {
 
 fn sandbox_verifier(class: EvidenceClass, hold_until: Option<u64>) -> SandboxVerifier {
     SandboxVerifier {
-        provider: ExternalId::new("provider-1").unwrap(),
-        settlement: ExternalId::new("settle-001").unwrap(),
+        provider: ExternalId::new("provider-1")
+            .unwrap_or_else(|error| panic!("external identifier: {error:?}")),
+        settlement: ExternalId::new("settle-001")
+            .unwrap_or_else(|error| panic!("external identifier: {error:?}")),
         rail: FiatRail::Card,
         class,
         amount: 5_000,
@@ -388,7 +390,7 @@ fn settled_credits_only_against_verified_receipt_evidence() {
     let mut plane = SandboxPlane {
         intent_outcome: Ok(FiatPlaneResult::Executed(ExecutedFiatOutcome {
             canonical_receipt: material.canonical_receipt.clone(),
-            authorised_batch: material.authorised_batch.clone(),
+            authorised_batch: material.authorised_batch,
         })),
     };
     let state = FiatAdapter::apply(
@@ -438,7 +440,7 @@ fn receipt_mismatch_refuses_credit_and_preserves_honest_state() {
     let mut plane = SandboxPlane {
         intent_outcome: Ok(FiatPlaneResult::Executed(ExecutedFiatOutcome {
             canonical_receipt: material.canonical_receipt.clone(),
-            authorised_batch: material.authorised_batch.clone(),
+            authorised_batch: material.authorised_batch,
         })),
     };
     let refused = FiatAdapter::apply(
@@ -470,7 +472,7 @@ fn reversal_reconciles_through_legitimate_protocol_operation() {
     let mut plane = SandboxPlane {
         intent_outcome: Ok(FiatPlaneResult::Executed(ExecutedFiatOutcome {
             canonical_receipt: material.canonical_receipt.clone(),
-            authorised_batch: material.authorised_batch.clone(),
+            authorised_batch: material.authorised_batch,
         })),
     };
     let state = FiatAdapter::apply(
@@ -526,7 +528,7 @@ fn chargeback_reconciles_through_legitimate_protocol_operation() {
     let mut plane = SandboxPlane {
         intent_outcome: Ok(FiatPlaneResult::Executed(ExecutedFiatOutcome {
             canonical_receipt: material.canonical_receipt.clone(),
-            authorised_batch: material.authorised_batch.clone(),
+            authorised_batch: material.authorised_batch,
         })),
     };
     let state = FiatAdapter::apply(
@@ -643,7 +645,7 @@ fn idempotency_binds_provider_settlement_to_exactly_one_outcome() {
     let mut plane = SandboxPlane {
         intent_outcome: Ok(FiatPlaneResult::Executed(ExecutedFiatOutcome {
             canonical_receipt: material.canonical_receipt.clone(),
-            authorised_batch: material.authorised_batch.clone(),
+            authorised_batch: material.authorised_batch,
         })),
     };
     let first = FiatAdapter::apply(
@@ -681,8 +683,10 @@ fn evidence_classes_model_rail_specific_settlement_stages() {
     assert_ne!(EvidenceClass::Settled, EvidenceClass::Reversed);
     assert_ne!(EvidenceClass::Reversed, EvidenceClass::Chargeback);
     let verifier = SandboxVerifier {
-        provider: ExternalId::new("provider-bank").unwrap(),
-        settlement: ExternalId::new("settle-bank-001").unwrap(),
+        provider: ExternalId::new("provider-bank")
+            .unwrap_or_else(|error| panic!("external identifier: {error:?}")),
+        settlement: ExternalId::new("settle-bank-001")
+            .unwrap_or_else(|error| panic!("external identifier: {error:?}")),
         rail: FiatRail::Bank,
         class: EvidenceClass::Settled,
         amount: 10_000,
@@ -720,7 +724,7 @@ fn adapter_interfaces_are_rail_agnostic_and_provider_edge_only() {
     let mut plane = SandboxPlane {
         intent_outcome: Ok(FiatPlaneResult::Executed(ExecutedFiatOutcome {
             canonical_receipt: material.canonical_receipt.clone(),
-            authorised_batch: material.authorised_batch.clone(),
+            authorised_batch: material.authorised_batch,
         })),
     };
     let card_state = FiatAdapter::apply(
