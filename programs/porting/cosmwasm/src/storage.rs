@@ -129,7 +129,10 @@ impl StateBinding {
     /// Returns whether the binding can be carried over at all.
     #[must_use]
     pub const fn portable(self) -> bool {
-        true
+        matches!(
+            self,
+            Self::Item | Self::SenderIndexed | Self::SenderSuffixed | Self::Shared
+        )
     }
 }
 

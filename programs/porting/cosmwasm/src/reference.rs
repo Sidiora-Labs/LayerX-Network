@@ -41,7 +41,7 @@ pub const ARTIFACT_PATH: &str = "build/donation.wasm";
 /// The pinned build command, whose last word names the descriptor to compile.
 pub const BUILD_COMMAND: &str = "layerx-porting-cosmwasm emit port/donation.port";
 
-/// Maps a contract-funded `BankMsg::Send` onto one public, rederivable LayerX account.
+/// Maps a contract-funded `BankMsg::Send` onto one public, rederivable `LayerX` account.
 ///
 /// # Errors
 ///
