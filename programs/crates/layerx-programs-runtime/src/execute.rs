@@ -1540,6 +1540,7 @@ impl PreparedAuthorizedActivity {
     }
 
     #[must_use]
+    #[cfg(feature = "host-ffi")]
     pub(crate) const fn transfer_set(&self) -> Option<&AtomicTransferSet> {
         self.transfer_set.as_ref()
     }
@@ -2138,6 +2139,7 @@ impl V2AuthorizedExecutionRecord {
         evidence
     }
 
+    #[cfg(feature = "host-ffi")]
     pub(crate) fn write_canonical_evidence(&self, evidence: &mut Vec<u8>, graph: &mut Vec<u8>) {
         evidence.clear();
         evidence.extend_from_slice(b"LXP/program-execution/v4\0");
@@ -2626,11 +2628,13 @@ impl<'a> BudgetedAuthorizedExecutionRequest<'a> {
     /// Attaches the declaration already committed by the canonical activity
     /// binding. Explicit declarations are enforced in every call frame.
     #[must_use]
+    #[cfg(feature = "host-ffi")]
     pub(crate) fn with_access_declaration(mut self, declaration: crate::AccessDeclaration) -> Self {
         self.access_declaration = declaration;
         self
     }
 
+    #[cfg(feature = "host-ffi")]
     pub(crate) fn with_transfer_authority_v2(mut self, selected: bool) -> Self {
         self.transfer_authority_v2 = selected;
         self
@@ -2670,6 +2674,7 @@ impl<'a> BudgetedAuthorizedExecutionRequest<'a> {
         Ok(self)
     }
 
+    #[cfg(feature = "host-ffi")]
     pub(crate) fn with_authenticated_execution_context(
         mut self,
         execution_context: ExecutionContext,
@@ -2728,6 +2733,7 @@ impl ExecutionRecord {
         evidence
     }
 
+    #[cfg(feature = "host-ffi")]
     pub(crate) fn write_canonical_evidence(&self, evidence: &mut Vec<u8>) {
         evidence.clear();
         evidence.extend_from_slice(if self.trace.is_some() {
@@ -3681,6 +3687,7 @@ impl Executor {
         )
     }
 
+    #[cfg(feature = "host-ffi")]
     pub(crate) fn execute_authorized_v2_budgeted(
         &self,
         storage: &mut Storage,
