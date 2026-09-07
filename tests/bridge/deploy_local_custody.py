@@ -1,4 +1,5 @@
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -15,10 +16,45 @@ import urllib.request
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
-from custody_credit import NoRedirect, Rpc, agreed_block, eth_hash, quantity, require, unhex, write_new
+from custody_credit import NoRedirect, Rpc, eth_hash, quantity, require, unhex, write_new
 
 
 ROOT = Path(__file__).resolve().parents[2]
+PERSISTENT_CHAIN_ID = "hyperpax_125-1"
+PERSISTENT_GENESIS = bytes.fromhex("07fec8dbcbfdb79b45b9b9a33f5845f8502816b2f9eeebebe2708733c5180b88")
+PERSISTENT_BLUEPRINT = "0x64a8d4b74faf4e9a2d18fb5e280623f632a02939"
+MAX_GENESIS_BYTES = 64 * 1024 * 1024
+
+
+def genesis_document(rpc, source):
+    def fetch(path, limit):
+        with rpc.opener.open(rpc.url.rstrip("/") + path, timeout=20) as response:
+            raw = response.read(limit + 1)
+        require(len(raw) <= limit, "genesis response bound")
+        return raw
+
+    if source == "published":
+        return fetch("/genesis.json", MAX_GENESIS_BYTES)
+    require(source == "chunked", "explicit genesis source required")
+    document = bytearray()
+    total = None
+    for index in range(64):
+        envelope = json.loads(fetch("/genesis_chunked?chunk=" + str(index), 24 * 1024 * 1024))
+        if "jsonrpc" in envelope:
+            require(envelope["jsonrpc"] == "2.0" and "error" not in envelope, "genesis RPC failure")
+            result = envelope["result"]
+        else:
+            result = envelope
+        require(set(result) == {"total", "chunk", "data"}, "genesis chunk response")
+        count = int(result["total"])
+        require(0 < count <= 64 and int(result["chunk"]) == index
+                and (total is None or count == total), "genesis chunk sequence")
+        total = count
+        document.extend(base64.b64decode(result["data"], validate=True))
+        require(len(document) <= MAX_GENESIS_BYTES, "genesis document bound")
+        if index + 1 == total:
+            return bytes(document)
+    raise ValueError("genesis chunk bound")
 
 
 def command(*args, env=None):
@@ -68,18 +104,28 @@ def disposable_rpc(url, ca_bundle, identity_file):
     selected = origin(url)
     require(selected in [origin(value) for value in identity["rpc_origins"]],
             "RPC origin not authorized by disposable identity")
-    genesis = unhex(identity["genesis_hash"], 32)
-    denied = unhex(identity["persistent_genesis_hash"], 32)
-    require(genesis != bytes(32) and denied != bytes(32) and genesis != denied,
-            "persistent chain genesis refused")
+    genesis = unhex(identity["genesis_sha256"], 32)
+    comet_chain = identity["comet_chain_id"]
+    require(isinstance(comet_chain, str) and comet_chain and comet_chain != PERSISTENT_CHAIN_ID,
+            "persistent Comet chain ID refused")
+    require(genesis != bytes(32) and genesis != PERSISTENT_GENESIS, "persistent chain genesis refused")
+    require(type(identity["chain_id"]) is int and identity["chain_id"] > 0, "EVM chain ID required")
     require(hashlib.sha256(Path(ca_bundle).read_bytes()).digest()
             == unhex(identity["ca_sha256"], 32), "disposable CA pin")
     context = ssl.create_default_context(cafile=ca_bundle)
     rpc = Rpc(url)
     rpc.opener = urllib.request.build_opener(NoRedirect(), urllib.request.HTTPSHandler(context=context))
+    document = genesis_document(rpc, identity["genesis_source"])
+    observed = hashlib.sha256(document).digest()
+    observed_chain = json.loads(document)["chain_id"]
+    require(observed_chain != PERSISTENT_CHAIN_ID, "persistent Comet chain ID refused")
+    require(observed != PERSISTENT_GENESIS, "persistent chain genesis refused")
+    require(observed == genesis and observed_chain == comet_chain, "disposable genesis identity")
     require(quantity(rpc.call("eth_chainId", [])) == identity["chain_id"], "disposable chain ID")
-    observed = unhex(agreed_block([rpc], "0x0")["hash"], 32)
-    require(observed != denied and observed == genesis, "disposable genesis identity")
+    require(not unhex(rpc.call("eth_getCode", [PERSISTENT_BLUEPRINT, "latest"])),
+            "persistent blueprint code refused")
+    rpc.genesis_sha256 = observed
+    rpc.comet_chain_id = observed_chain
     rpc.disposable = True
     rpc.command_env = {**os.environ, "SSL_CERT_FILE": str(Path(ca_bundle).resolve())}
     return rpc
@@ -221,6 +267,8 @@ def main():
               "asset": args.asset, "amount": str(args.amount), "beneficiary": args.beneficiary,
               "transaction": deposited["transactionHash"], "runtime_sha256": "0x" + hashlib.sha256(code).hexdigest(),
               "fork_block": quantity(rpc.call("eth_blockNumber", []))}
+    if beta:
+        result.update(genesis_sha256="0x" + rpc.genesis_sha256.hex(), comet_chain_id=rpc.comet_chain_id)
     write_new(args.output, json.dumps(result, indent=2).encode() + b"\n")
 
 

@@ -1,8 +1,10 @@
+import base64
 import contextlib
 import hashlib
 import http.server
 import json
 import os
+import re
 from pathlib import Path
 import socket
 import ssl
@@ -18,7 +20,8 @@ import urllib.request
 ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT / 'tests/bridge'))
 from custody_credit import Rpc, create_profile, eth_hash, unhex, write_new
-from deploy_local_custody import command, disposable_rpc, signer
+from deploy_local_custody import (command, disposable_rpc, signer, genesis_document,
+                                  PERSISTENT_CHAIN_ID, PERSISTENT_GENESIS, PERSISTENT_BLUEPRINT)
 from cryptography.hazmat.primitives.asymmetric import ec, ed25519
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
@@ -54,7 +57,65 @@ def chain(directory, extra=()):
 
 
 @contextlib.contextmanager
-def boundary(directory, rpc):
+def comet_chain(directory, blueprint_code=False):
+    home = directory / "paxd"
+    binary = os.environ.get("PAXD", "paxd")
+    chain_id = "custody-disposable-1"
+    command(binary, "init", "custody", "--chain-id", chain_id, "--home", str(home))
+    command(binary, "keys", "add", "validator", "--keyring-backend", "test", "--home", str(home))
+    command(binary, "add-genesis-account", "validator", "100000000000000000000uhpx",
+            "--keyring-backend", "test", "--home", str(home))
+    command(binary, "gentx", "validator", "7000000000000000uhpx", "--chain-id", chain_id,
+            "--keyring-backend", "test", "--home", str(home), "--ip", "127.0.0.1")
+    genesis_path = home / "config/genesis.json"
+    genesis = json.loads(genesis_path.read_bytes())
+    validator = json.loads((home / "config/priv_validator_key.json").read_bytes())["pub_key"]
+    genesis["validators"] = [{"power": "7000000000", "pub_key": validator}]
+    genesis["app_state"]["staking"]["params"]["max_voting_power_ratio"] = "1.000000000000000000"
+    if blueprint_code:
+        runtime = unhex(command("forge", "inspect", "--contracts", "platform/hosted/paxeer/contracts",
+                               "platform/hosted/paxeer/contracts/BetaUsdl.sol:BetaUsdl", "deployedBytecode"))
+        genesis["app_state"]["evm"]["codes"] = [{"address": PERSISTENT_BLUEPRINT,
+                                                  "code": base64.b64encode(runtime).decode()}]
+    genesis_path.write_text(json.dumps(genesis))
+    command(binary, "collect-gentxs", "--home", str(home))
+    comet_url = "http://127.0.0.1:" + str(port())
+    evm_port = port()
+    app = home / "config/app.toml"
+    config = app.read_text()
+    for key, value in [("http_enabled", "true"), ("http_address", '"127.0.0.1"'),
+                       ("http_port", str(evm_port)), ("ws_enabled", "false")]:
+        config = re.sub(r"^" + key + r" = .*", key + " = " + value, config, flags=re.MULTILINE)
+    app.write_text(config)
+    with (directory / "paxd.log").open("wb") as log:
+        process = subprocess.Popen([binary, "start", "--home", str(home), "--mode", "validator",
+                                    "--rpc.laddr", comet_url.replace("http:", "tcp:"),
+                                    "--p2p.laddr", "tcp://127.0.0.1:" + str(port()),
+                                    "--p2p.pex=false", "--grpc.enable=false", "--grpc-web.enable=false",
+                                    "--rpc.pprof-laddr", "", "--concurrency-workers", "4"],
+                                   stdout=log, stderr=log)
+    try:
+        rpc = Rpc("http://127.0.0.1:" + str(evm_port))
+        for _ in range(300):
+            if process.poll() is not None:
+                raise RuntimeError("disposable paxd exited; inspect paxd.log")
+            try:
+                rpc.call("eth_chainId", [])
+                with urllib.request.urlopen(comet_url + "/genesis_chunked?chunk=0", timeout=2):
+                    pass
+                break
+            except (OSError, ValueError):
+                time.sleep(.2)
+        else:
+            raise RuntimeError("disposable paxd readiness deadline")
+        yield rpc, comet_url, genesis_path
+    finally:
+        process.terminate()
+        process.wait(timeout=30)
+
+
+@contextlib.contextmanager
+def boundary(directory, rpc, genesis_path, comet_url):
     command('openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1',
             '-subj', '/CN=Custody test CA', '-keyout', str(directory / 'ca.key'),
             '-out', str(directory / 'ca.pem'))
@@ -70,12 +131,27 @@ def boundary(directory, rpc):
         def log_message(self, *_):
             pass
 
+        def do_GET(self):
+            if self.path == "/genesis.json":
+                response = genesis_path.read_bytes()
+            elif self.path.startswith("/genesis_chunked?chunk="):
+                with urllib.request.urlopen(comet_url + self.path, timeout=20) as upstream:
+                    response = upstream.read()
+            else:
+                self.send_error(404)
+                return
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(response)))
+            self.end_headers()
+            self.wfile.write(response)
+
         def do_POST(self):
             body = self.rfile.read(int(self.headers['Content-Length']))
             calls = json.loads(body)
             for call in calls if isinstance(calls, list) else [calls]:
                 method = call['method']
-                if method.startswith(('anvil_', 'evm_')) or method in ('eth_sendTransaction', 'eth_accounts'):
+                if (method.startswith(('anvil_', 'evm_')) or method in ('eth_sendTransaction', 'eth_accounts')
+                        or (method == 'eth_getBlockByNumber' and call['params'][0] in ('0x0', 'earliest'))):
                     refused.append(method)
                     self.send_error(403)
                     return
@@ -103,10 +179,29 @@ def boundary(directory, rpc):
 
 
 class DisposableCustody(unittest.TestCase):
+    def test_real_paxeer_genesis_code_at_denied_blueprint_address(self):
+        with tempfile.TemporaryDirectory(dir=ROOT / 'qual-logs') as temporary:
+            directory = Path(temporary)
+            with comet_chain(directory, blueprint_code=True) as (rpc, comet_url, genesis_path), \
+                    boundary(directory, rpc, genesis_path, comet_url) as (url, refused):
+                identity = {'chain_id': int(rpc.call('eth_chainId', []), 16),
+                            'genesis_sha256': '0x' + hashlib.sha256(genesis_path.read_bytes()).hexdigest(),
+                            'comet_chain_id': json.loads(genesis_path.read_bytes())['chain_id'],
+                            'genesis_source': 'published', 'rpc_origins': [url],
+                            'ca_sha256': '0x' + hashlib.sha256((directory / 'ca.pem').read_bytes()).hexdigest()}
+                identity_path = directory / 'identity.json'
+                identity_path.write_text(json.dumps(identity))
+                self.assertEqual(int(rpc.call('eth_call', [{'to': PERSISTENT_BLUEPRINT,
+                                                          'data': '0x313ce567'}, 'latest']), 16), 6)
+                with self.assertRaisesRegex(ValueError, 'persistent blueprint code refused'):
+                    disposable_rpc(url, str(directory / 'ca.pem'), identity_path)
+                self.assertEqual(refused, [])
+
     def test_real_signed_ca_verified_deployment_and_identity_refusals(self):
         with tempfile.TemporaryDirectory(dir=ROOT / 'qual-logs') as temporary:
             directory = Path(temporary)
-            with chain(directory) as rpc, boundary(directory, rpc) as (url, refused):
+            with comet_chain(directory) as (paxeer, comet_url, genesis_path), chain(directory) as rpc, \
+                    boundary(directory, rpc, genesis_path, comet_url) as (url, refused):
                 private = ec.generate_private_key(ec.SECP256K1())
                 write_new(directory / 'signer.key',
                           ('0x' + private.private_numbers().private_value.to_bytes(32, 'big').hex()).encode())
@@ -114,11 +209,12 @@ class DisposableCustody(unittest.TestCase):
                 address = '0x' + eth_hash(public[1:])[-20:].hex()
                 rpc.call('eth_sendTransaction', [{'from': rpc.call('eth_accounts', [])[0],
                                                   'to': address, 'value': hex(10 ** 21)}])
-                genesis = rpc.call('eth_getBlockByNumber', ['0x0', False])['hash']
-                with chain(directory) as other:
-                    denied = other.call('eth_getBlockByNumber', ['0x0', False])['hash']
+                genesis = '0x' + hashlib.sha256(genesis_path.read_bytes()).hexdigest()
+                denied = '0x' + PERSISTENT_GENESIS.hex()
                 self.assertNotEqual(genesis, denied)
-                identity = {'chain_id': 125, 'genesis_hash': genesis, 'persistent_genesis_hash': denied,
+                identity = {'chain_id': 125, 'genesis_sha256': genesis,
+                            'comet_chain_id': json.loads(genesis_path.read_bytes())['chain_id'],
+                            'genesis_source': 'published',
                             'rpc_origins': [url], 'ca_sha256': '0x' + hashlib.sha256(
                                 (directory / 'ca.pem').read_bytes()).hexdigest()}
                 identity_path = directory / 'disposable.json'
@@ -132,12 +228,33 @@ class DisposableCustody(unittest.TestCase):
                     disposable_rpc('https://localhost:19443', ca, identity_path)
                 with self.assertRaises(OSError):
                     Rpc(url).call('eth_chainId', [])
-                for field, value in [('genesis_hash', denied), ('chain_id', 31337),
+                for field, value in [('genesis_sha256', denied), ('chain_id', 31337),
+                                     ('comet_chain_id', PERSISTENT_CHAIN_ID),
+                                     ('comet_chain_id', 'wrong-chain'),
+                                     ('genesis_sha256', '0x' + 'ab' * 32),
                                      ('ca_sha256', '0x' + '00' * 32), ('rpc_origins', ['https://localhost:1'])]:
                     identity_path.write_text(json.dumps({**identity, field: value}))
                     with self.assertRaises(ValueError):
                         disposable_rpc(url, ca, identity_path)
                 identity_path.write_text(json.dumps(identity))
+                paxeer_dir = directory / 'paxeer-boundary'
+                paxeer_dir.mkdir()
+                with boundary(paxeer_dir, paxeer, genesis_path, comet_url) as (paxeer_url, paxeer_refused):
+                    paxeer_identity = {**identity, 'chain_id': int(paxeer.call('eth_chainId', []), 16),
+                                       'rpc_origins': [paxeer_url], 'ca_sha256': '0x' + hashlib.sha256(
+                                           (paxeer_dir / 'ca.pem').read_bytes()).hexdigest()}
+                    paxeer_identity_path = paxeer_dir / 'identity.json'
+                    paxeer_identity_path.write_text(json.dumps(paxeer_identity))
+                    verified_paxeer = disposable_rpc(paxeer_url, str(paxeer_dir / 'ca.pem'), paxeer_identity_path)
+                    self.assertEqual(verified_paxeer.genesis_sha256, unhex(genesis, 32))
+                    chunked = genesis_document(verified_paxeer, 'chunked')
+                    paxeer_identity.update(genesis_source='chunked',
+                                           genesis_sha256='0x' + hashlib.sha256(chunked).hexdigest())
+                    paxeer_identity_path.write_text(json.dumps(paxeer_identity))
+                    self.assertEqual(disposable_rpc(paxeer_url, str(paxeer_dir / 'ca.pem'),
+                                                    paxeer_identity_path).genesis_sha256,
+                                     hashlib.sha256(chunked).digest())
+                    self.assertEqual(paxeer_refused, [])
                 os.chmod(directory / 'signer.key', 0o644)
                 with self.assertRaises(ValueError):
                     signer(verified, directory / 'signer.key')
@@ -165,7 +282,7 @@ class DisposableCustody(unittest.TestCase):
                 observer_dir = directory / 'observer'
                 observer_dir.mkdir()
                 with chain(directory, ['--fork-url', rpc.url, '--fork-block-number', str(fork_height)]) as observer:
-                    with boundary(observer_dir, observer) as (observer_url, observer_refused):
+                    with boundary(observer_dir, observer, genesis_path, comet_url) as (observer_url, observer_refused):
                         bundle = directory / 'bundle.pem'
                         bundle.write_bytes((directory / 'ca.pem').read_bytes()
                                            + (observer_dir / 'ca.pem').read_bytes())
@@ -179,7 +296,8 @@ class DisposableCustody(unittest.TestCase):
                         previous_ca = os.environ.get('SSL_CERT_FILE')
                         os.environ['SSL_CERT_FILE'] = str(bundle)
                         try:
-                            create_profile(SimpleNamespace(rpc=[url, observer_url], chain_id=125, network_id=402,
+                            create_profile(SimpleNamespace(rpc=[url, observer_url], ca_bundle=str(bundle),
+                                           disposable_identity=str(identity_path), chain_id=125, network_id=402,
                                            vault=deployed['vault'], runtime_sha256=deployed['runtime_sha256'],
                                            asset=deployed['asset'], confirmations=2,
                                            attestor_key=str(directory / 'attestor.key'), output=str(profile)))

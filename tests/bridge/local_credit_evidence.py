@@ -61,17 +61,23 @@ def existing_evidence(args, directory):
     authority = read_key(args.attestor_key).public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
     require(authority == unhex(args.attestor_public_key, 32), 'configured attestor authority')
     identity = json.loads(Path(args.disposable_identity).read_text())
-    require(custody['chain_id'] == identity['chain_id'], 'deployment chain binding')
+    require(custody['chain_id'] == identity['chain_id']
+            and custody['comet_chain_id'] == identity['comet_chain_id']
+            and unhex(custody['genesis_sha256'], 32) == unhex(identity['genesis_sha256'], 32),
+            'deployment chain binding')
     profile = str(directory / 'custody.profile')
     previous_ca = os.environ.get('SSL_CERT_FILE')
     os.environ['SSL_CERT_FILE'] = str(Path(args.ca_bundle).resolve())
     try:
-        create_profile(SimpleNamespace(rpc=args.rpc, chain_id=identity['chain_id'], network_id=args.network_id,
+        create_profile(SimpleNamespace(rpc=args.rpc, ca_bundle=args.ca_bundle,
+                       disposable_identity=args.disposable_identity,
+                       chain_id=identity['chain_id'], network_id=args.network_id,
                        vault=custody['vault'], runtime_sha256=custody['runtime_sha256'], asset=args.asset,
                        confirmations=args.confirmations, attestor_key=args.attestor_key, output=profile))
         encoded = Path(profile).read_bytes()
-        require(encoded[169:201] == unhex(identity['genesis_hash'], 32), 'profile disposable genesis binding')
-        attest(SimpleNamespace(rpc=args.rpc, profile=profile, network_id=args.network_id,
+        require(encoded[169:201] == unhex(identity['genesis_sha256'], 32), 'profile disposable genesis binding')
+        attest(SimpleNamespace(rpc=args.rpc, ca_bundle=args.ca_bundle,
+               disposable_identity=args.disposable_identity, profile=profile, network_id=args.network_id,
                transaction=custody['transaction'], beneficiary=beneficiary, beneficiary_key=args.beneficiary_key,
                attestor_key=args.attestor_key, expected_amount=int(custody['amount']),
                output=str(directory / 'custody.credit')))
@@ -83,7 +89,8 @@ def existing_evidence(args, directory):
     write_new(directory / 'identity.json', json.dumps({
         'did': did, 'public_key': public.hex(), 'beneficiary': beneficiary,
         'asset': args.asset, 'amount': custody['amount'], 'network_id': args.network_id,
-        'protocol_version': 3, 'chain_genesis_hash': identity['genesis_hash'],
+        'protocol_version': 3, 'genesis_sha256': identity['genesis_sha256'],
+        'comet_chain_id': identity['comet_chain_id'], 'genesis_source': identity['genesis_source'],
         'rpc_origins': args.rpc, 'attestor_public_key': args.attestor_public_key,
     }).encode())
     print('Existing TLS-verified custody observations, profile and credit verified')

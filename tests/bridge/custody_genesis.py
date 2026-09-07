@@ -5,7 +5,7 @@ from pathlib import Path
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
-from custody_credit import big, quantity, require, sha, unhex, write_new
+from custody_credit import big, quantity, require, sha, write_new
 from deploy_local_custody import command, disposable_rpc
 
 
@@ -27,8 +27,7 @@ def main():
                 "chain 125 requires verified disposable identity")
         rpc = disposable_rpc(args.rpc, args.ca_bundle, args.disposable_identity)
         require(quantity(rpc.call("eth_chainId", [])) == chain_id, "profile chain ID")
-        require(unhex(rpc.call("eth_getBlockByNumber", ["0x0", False])["hash"], 32)
-                == profile[169:201], "profile genesis identity")
+        require(rpc.genesis_sha256 == profile[169:201], "profile genesis identity")
     else:
         require(not args.rpc and not args.ca_bundle, "RPC verification requires disposable identity")
     directory = Path(args.output).resolve()
