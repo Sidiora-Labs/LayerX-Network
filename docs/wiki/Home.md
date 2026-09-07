@@ -69,6 +69,8 @@ See `docs/MONOREPO.md` for build boundaries, workflow naming, and tag convention
 - [Hosted registry](HostedRegistry.md)
 - [Hosted internal](HostedInternal.md)
 - [Hosted identity](HostedIdentity.md)
+- [Hosted faucet](HostedFaucet.md)
+- [Hosted testnet control](HostedTestnetControl.md)
 - [Paxeer boundary](PaxeerBoundary.md)
 
 ---
