@@ -41,7 +41,16 @@ fn independent_engines_produce_identical_evidence() {
 fn governed_fee_history_reprices_each_recorded_version_exactly() {
     let wasm = add_module();
     let genesis = FeeSchedule::declared();
-    let revised = FeeSchedule::new_complete(2, 3, 5, 7, 11, 13, 17, 19);
+    let revised = FeeSchedule::new_complete(layerx_programs_runtime::FeeScheduleParameters {
+        version: 2,
+        fee_units_per_cpu_fuel: 3,
+        fee_units_per_memory_byte: 5,
+        fee_units_per_storage_read_byte: 7,
+        fee_units_per_storage_write_byte: 11,
+        fee_units_per_output_value: 13,
+        fee_units_per_output_byte: 17,
+        fee_units_per_occupancy_byte_batch: 19,
+    });
     let mut schedules = FeeScheduleHistory::new(genesis)
         .unwrap_or_else(|error| panic!("genesis schedule refused: {error}"));
     schedules

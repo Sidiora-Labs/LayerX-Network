@@ -583,7 +583,16 @@ fn malformed_state_path_geometry_never_reaches_nested_verification() {
 fn maintenance_leaf(resulting_root: [u8; 32]) -> Vec<u8> {
     use layerx_programs_runtime::{meter::FeeSchedule, occupancy::OccupancyLedger};
 
-    let schedule = FeeSchedule::new_complete(1, 1, 2, 3, 4, 5, 6, 7);
+    let schedule = FeeSchedule::new_complete(layerx_programs_runtime::FeeScheduleParameters {
+        version: 1,
+        fee_units_per_cpu_fuel: 1,
+        fee_units_per_memory_byte: 2,
+        fee_units_per_storage_read_byte: 3,
+        fee_units_per_storage_write_byte: 4,
+        fee_units_per_output_value: 5,
+        fee_units_per_output_byte: 6,
+        fee_units_per_occupancy_byte_batch: 7,
+    });
     let prepared = OccupancyLedger::activated_after(6)
         .prepare_unchanged_batch(7, schedule)
         .unwrap_or_else(|error| panic!("real settlement failed: {error:?}"));

@@ -726,7 +726,16 @@ mod tests {
     use layerx_programs_runtime::{PrincipalId, ProgramId};
 
     fn active_usage_state(escrow_amount: u128, namespace_bytes: u64) -> DurableUsageState {
-        let schedule = FeeSchedule::new_complete(1, 1, 1, 1, 1, 1, 1, 1);
+        let schedule = FeeSchedule::new_complete(layerx_programs_runtime::FeeScheduleParameters {
+            version: 1,
+            fee_units_per_cpu_fuel: 1,
+            fee_units_per_memory_byte: 1,
+            fee_units_per_storage_read_byte: 1,
+            fee_units_per_storage_write_byte: 1,
+            fee_units_per_output_value: 1,
+            fee_units_per_output_byte: 1,
+            fee_units_per_occupancy_byte_batch: 1,
+        });
         let mut lease = Lease::request_with_schedule(LeaseId::new([1; 32]).expect("lease"),
             PrincipalId::new([2; 32]).expect("tenant"), ProgramId::new([3; 32]).expect("program"),
             [4; 32], [5; 32], escrow_amount, LeaseLimits { cpu_fuel: 10, memory_bytes: 10,
