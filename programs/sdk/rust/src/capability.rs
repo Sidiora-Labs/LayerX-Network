@@ -274,10 +274,10 @@ impl<const N: usize> CapabilitySet<N> {
                 Capability::StorageRead => write_bytes(output, &mut cursor, &[TAG_STORAGE_READ])?,
                 Capability::StorageWrite => write_bytes(output, &mut cursor, &[TAG_STORAGE_WRITE])?,
                 Capability::SharedStorageRead => {
-                    write_bytes(output, &mut cursor, &[TAG_SHARED_STORAGE_READ])?
+                    write_bytes(output, &mut cursor, &[TAG_SHARED_STORAGE_READ])?;
                 }
                 Capability::SharedStorageWrite => {
-                    write_bytes(output, &mut cursor, &[TAG_SHARED_STORAGE_WRITE])?
+                    write_bytes(output, &mut cursor, &[TAG_SHARED_STORAGE_WRITE])?;
                 }
                 Capability::EmitEvent => write_bytes(output, &mut cursor, &[TAG_EMIT_EVENT])?,
                 Capability::Call { program } => {
@@ -358,12 +358,9 @@ mod parity_vectors {
 
     #[test]
     fn mixed_v1_encoding_matches_shared_sdk_fixture() {
-        let program = ProgramId::new([0x11; 32])
-            .unwrap_or_else(|error| panic!("program: {error}"));
-        let asset = AssetId::new([0x22; 32])
-            .unwrap_or_else(|error| panic!("asset: {error}"));
-        let account = AccountId::new([0x33; 32])
-            .unwrap_or_else(|error| panic!("account: {error}"));
+        let program = ProgramId::new([0x11; 32]).unwrap_or_else(|error| panic!("program: {error}"));
+        let asset = AssetId::new([0x22; 32]).unwrap_or_else(|error| panic!("asset: {error}"));
+        let account = AccountId::new([0x33; 32]).unwrap_or_else(|error| panic!("account: {error}"));
         let transfer = Capability::transfer(asset, account, Amount::from_u128(7))
             .unwrap_or_else(|error| panic!("transfer: {error}"));
         let set = CapabilitySet::<3>::from_grants(&[

@@ -5,8 +5,8 @@
 //! and only inside the ceiling its capability grant fixed. Amounts are exact
 //! protocol integers, refused at construction when zero.
 
-use crate::amount::Amount;
 use crate::abi::MAX_PROGRAM_ACCOUNT_SEED_BYTES;
+use crate::amount::Amount;
 use crate::error::{Field, ProgramError, Reason};
 use crate::ids::{AccountId, AssetId};
 
@@ -67,6 +67,10 @@ pub struct ProgramDeposit<'a> {
 impl<'a> ProgramDeposit<'a> {
     /// Builds a bounded deposit request. The host rederives the destination and
     /// the kernel verifies its current registry and asset binding before commit.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a zero deposit amount.
     pub const fn new(
         seed: ProgramAccountSeed<'a>,
         destination: AccountId,
@@ -264,12 +268,11 @@ mod tests {
 
     #[test]
     fn program_account_payment_refuses_zero_amount() {
-        let seed = ProgramAccountSeed::new(b"vault").unwrap_or_else(|error| panic!("seed: {error}"));
+        let seed =
+            ProgramAccountSeed::new(b"vault").unwrap_or_else(|error| panic!("seed: {error}"));
         let source = AccountId::new([1; 32]).unwrap_or_else(|error| panic!("source: {error}"));
         let asset = AssetId::new([2; 32]).unwrap_or_else(|error| panic!("asset: {error}"));
         let to = AccountId::new([3; 32]).unwrap_or_else(|error| panic!("to: {error}"));
-        assert!(
-            ProgramAccountPayment::new(seed, source, asset, to, Amount::from_u128(0)).is_err()
-        );
+        assert!(ProgramAccountPayment::new(seed, source, asset, to, Amount::from_u128(0)).is_err());
     }
 }
