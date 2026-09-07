@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Audit and generate immutable Programs ABI vectors from canonical source."""
-import argparse, ast, hashlib, pathlib, re, sys
+import argparse, ast, hashlib, json, pathlib, re, sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 RUNTIME = ROOT / "programs/crates/layerx-programs-runtime/src"
@@ -83,6 +83,32 @@ def audit_surface(runtime_source):
     if table(sdk, "V2_HOST_FUNCTIONS") != v2: raise ValueError("Rust SDK ABI v2 table diverges")
     return {1: v1_manifest, current_version: v2_manifest}
 
+def terminal_schema():
+    native = (ROOT / "src/protocol/lxp_receipt.c").read_text()
+    callbacks = (ROOT / "include/layerx/programs.h").read_text()
+    if "LXP_PROGRAM_OUTCOME_TAG_V4 = 0x50524734" not in native:
+        raise ValueError("native terminal V4 tag differs")
+    for callback in ("layerx_programs_call_terminal_applied_begin", "layerx_programs_call_terminal_applied_byte"):
+        if callback not in callbacks:
+            raise ValueError("native applied-leg callback is absent")
+    return json.dumps({
+        "name": "program-terminal-v4",
+        "protocol_version": 3,
+        "outcome_tag_hex": "50524734",
+        "outcome_bytes": 421,
+        "outcome_layout": "V3 field order, then u32be(32) followed by applied_legs_digest[32]",
+        "applied_legs_digest": "SHA256 of exact ordered AtomicTransferSet::kernel_canonical() bytes; SHA256(empty) for zero applied legs",
+        "terminal_domain_hex": b"LXP/programs/terminal-applied-legs/v1\0".hex(),
+        "terminal_layout": "domain, u32be(detail_length), detail, u32be(applied_length), applied_legs",
+        "kernel_leg_bytes": 115,
+        "maximum_legs": 256,
+        "compact_magic_hex": b"LXRC4".hex(),
+        "compact_bytes": 596,
+        "compact_layout": "LXRC3 field order with LXRC4 magic, then applied_legs_digest[32]",
+        "pre_runtime_digest_extension": "context-hash failure preimage V1 followed by u8(4) and SHA256(empty)",
+        "guest_abi_versions_unchanged": [1, 2],
+    }, indent=2) + "\n"
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true")
@@ -111,6 +137,25 @@ def main():
             print(f"new ABI v{version} has no generated vector", file=sys.stderr); return 1
         else:
             path.write_text(generated)
+    path = OUTPUT / "terminal-v4-schema.json"
+    generated = terminal_schema()
+    if args.check:
+        if not path.exists() or path.read_text() != generated:
+            print("terminal V4 schema vector drift", file=sys.stderr); return 1
+    else:
+        path.write_text(generated)
+    fixture = ROOT / "platform/sdk/conformance/fixtures/receipt-programs-executed-v4.json"
+    canonical = bytes.fromhex(json.loads(fixture.read_text())["canonical_receipt_hex"])
+    outcome = canonical[-490:-69]
+    if len(outcome) != 421 or outcome[:4] != bytes.fromhex("50524734") or canonical[-69:-64] != bytes.fromhex("0100000040"):
+        raise ValueError("executed C fixture does not carry the declared V4 layout")
+    path = OUTPUT / "terminal-v4-outcome.hex"
+    generated = outcome.hex() + "\n"
+    if args.check:
+        if not path.exists() or path.read_text() != generated:
+            print("executed terminal V4 vector drift", file=sys.stderr); return 1
+    else:
+        path.write_text(generated)
     return 0
 
 if __name__ == "__main__": raise SystemExit(main())

@@ -19,7 +19,7 @@ pub struct Endpoint {
 
 impl Endpoint {
     /// # Errors
-    /// Returns an error for a non-canonical HTTPS endpoint or invalid DNS host or port.
+    /// Refuses noncanonical HTTPS endpoints or invalid DNS names and ports.
     pub fn parse(value: &str) -> Result<Self, String> {
         let rest = value
             .strip_prefix("https://")
@@ -72,11 +72,12 @@ pub struct Client {
     identity: Identity,
 }
 
-#[derive(Clone, Copy)]
-pub struct RequestTarget<'a> {
-    pub endpoint: &'a Endpoint,
+pub struct OutboundRequest<'a> {
     pub method: &'a str,
     pub path: &'a str,
+    pub idempotency: Option<&'a str>,
+    pub content_type: &'a str,
+    pub body: &'a [u8],
 }
 
 impl Client {
@@ -86,60 +87,47 @@ impl Client {
     }
 
     /// # Errors
-    /// Returns an error for invalid request bounds, TLS, transport, or response framing.
+    /// Refuses requests outside the configured bounds and TLS or HTTP failures.
     pub fn request(
         &self,
-        target: RequestTarget<'_>,
+        endpoint: &Endpoint,
         bearer: &str,
-        idempotency: Option<&str>,
-        content_type: &str,
-        body: &[u8],
+        request: &OutboundRequest<'_>,
     ) -> Result<UpstreamResponse, String> {
-        self.request_authorized(
-            target,
-            &format!("Bearer {bearer}"),
+        self.request_authorized(endpoint, &format!("Bearer {bearer}"), request)
+    }
+
+    /// Sends one bounded request with the supplied authorization value.
+    ///
+    /// # Errors
+    /// Refuses requests outside the configured bounds and TLS or HTTP failures.
+    pub fn request_authorized(
+        &self,
+        endpoint: &Endpoint,
+        authorization: &str,
+        request: &OutboundRequest<'_>,
+    ) -> Result<UpstreamResponse, String> {
+        self.request_authorized_traced(endpoint, authorization, request, None)
+    }
+
+    /// Propagates the ingress trace identifier unchanged across the boundary.
+    ///
+    /// # Errors
+    /// Refuses invalid traces, requests outside bounds and TLS or HTTP failures.
+    pub fn request_authorized_traced(
+        &self,
+        endpoint: &Endpoint,
+        authorization: &str,
+        request: &OutboundRequest<'_>,
+        trace: Option<&str>,
+    ) -> Result<UpstreamResponse, String> {
+        let OutboundRequest {
+            method,
+            path,
             idempotency,
             content_type,
             body,
-        )
-    }
-
-    /// Sends one bounded request with an already validated authorization
-    /// value. This is used when another hosted ingress forwards the exact
-    /// `LayerX-Key` credential to the gateway authentication boundary.
-    ///
-    /// # Errors
-    /// Returns an error for invalid request bounds, TLS, transport, or response framing.
-    pub fn request_authorized(
-        &self,
-        target: RequestTarget<'_>,
-        authorization: &str,
-        idempotency: Option<&str>,
-        content_type: &str,
-        body: &[u8],
-    ) -> Result<UpstreamResponse, String> {
-        self.request_authorized_traced(target, authorization, idempotency, content_type, body, None)
-    }
-
-    /// Sends one bounded authorized request while propagating the ingress
-    /// trace identifier unchanged across the service boundary.
-    ///
-    /// # Errors
-    /// Returns an error for invalid request bounds, TLS, transport, or response framing.
-    pub fn request_authorized_traced(
-        &self,
-        target: RequestTarget<'_>,
-        authorization: &str,
-        idempotency: Option<&str>,
-        content_type: &str,
-        body: &[u8],
-        trace: Option<&str>,
-    ) -> Result<UpstreamResponse, String> {
-        let RequestTarget {
-            endpoint,
-            method,
-            path,
-        } = target;
+        } = *request;
         if !path.starts_with('/') || path.contains(['?', '#', '\\']) || body.len() > MAX_RESPONSE {
             return Err("outbound request exceeds its boundary".to_owned());
         }
@@ -234,7 +222,7 @@ pub struct UpstreamResponse {
 }
 
 /// # Errors
-/// Returns an error for malformed, oversized, truncated, or unreadable HTTP requests.
+/// Refuses malformed, truncated or oversized HTTP requests and read failures.
 pub fn read_request(stream: &mut impl Read, maximum: usize) -> Result<IncomingRequest, String> {
     let (start, headers, body) = read_message(stream, maximum)?;
     let mut parts = start.split_whitespace();
@@ -343,7 +331,7 @@ fn read_message(stream: &mut impl Read, maximum: usize) -> Result<HttpMessage, S
 }
 
 /// # Errors
-/// Returns an error if writing or flushing the response fails.
+/// Returns an error when writing or flushing the response fails.
 pub fn write_response(stream: &mut impl Write, response: &OutgoingResponse) -> Result<(), String> {
     let reason = match response.status {
         200 => "OK",

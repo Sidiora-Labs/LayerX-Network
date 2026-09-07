@@ -23,10 +23,9 @@ fn imported_add(abi_module: &str, import: &str, import_arity: usize) -> Vec<u8> 
 use layerx_programs_runtime::{
     hash_bytes, programs_differential_gate, programs_differential_gate_versioned,
     replay_recorded_execution, replay_recorded_execution_with_fee_history, Deploy, Executor,
-    FeeSchedule, FeeScheduleHistory, HashAlgorithm, Lifecycle, LifecycleRefusal,
-    ProgramId, RecordedExecution, ReplayRefusal, UpgradePolicy, ValidationLimits,
-    ValidationRefusal, WasmEngine, WasmValue, ABI_V1_VERSION, ABI_V2_VERSION, ABI_VERSION,
-    RUNTIME_VERSION,
+    FeeSchedule, FeeScheduleHistory, HashAlgorithm, Lifecycle, LifecycleRefusal, ProgramId,
+    RecordedExecution, ReplayRefusal, UpgradePolicy, ValidationLimits, ValidationRefusal,
+    WasmEngine, WasmValue, ABI_V1_VERSION, ABI_V2_VERSION, ABI_VERSION, RUNTIME_VERSION,
 };
 
 #[test]
@@ -41,7 +40,16 @@ fn independent_engines_produce_identical_evidence() {
 fn governed_fee_history_reprices_each_recorded_version_exactly() {
     let wasm = add_module();
     let genesis = FeeSchedule::declared();
-    let revised = FeeSchedule::new_complete(2, 3, 5, 7, 11, 13, 17, 19);
+    let revised = FeeSchedule::new_complete(layerx_programs_runtime::FeeScheduleParameters {
+        version: 2,
+        fee_units_per_cpu_fuel: 3,
+        fee_units_per_memory_byte: 5,
+        fee_units_per_storage_read_byte: 7,
+        fee_units_per_storage_write_byte: 11,
+        fee_units_per_output_value: 13,
+        fee_units_per_output_byte: 17,
+        fee_units_per_occupancy_byte_batch: 19,
+    });
     let mut schedules = FeeScheduleHistory::new(genesis)
         .unwrap_or_else(|error| panic!("genesis schedule refused: {error}"));
     schedules
@@ -51,7 +59,8 @@ fn governed_fee_history_reprices_each_recorded_version_exactly() {
         runtime_version: RUNTIME_VERSION,
         abi_version: ABI_V2_VERSION,
         fee_schedule_version: genesis.version(),
-        metering_schedule_version: layerx_programs_runtime::meter::inject::GENESIS_METERING_SCHEDULE_VERSION,
+        metering_schedule_version:
+            layerx_programs_runtime::meter::inject::GENESIS_METERING_SCHEDULE_VERSION,
         wasm: &wasm,
         export: "add",
         args: &[WasmValue::I32(20), WasmValue::I32(22)],
@@ -62,15 +71,15 @@ fn governed_fee_history_reprices_each_recorded_version_exactly() {
         fee_schedule_version: revised.version(),
         ..base.clone()
     };
-    let revised_evidence = replay_recorded_execution_with_fee_history(
-        &revised_record,
-        &schedules,
-    )
-    .unwrap_or_else(|error| panic!("revised replay refused: {error}"));
+    let revised_evidence = replay_recorded_execution_with_fee_history(&revised_record, &schedules)
+        .unwrap_or_else(|error| panic!("revised replay refused: {error}"));
     assert_ne!(genesis_evidence, revised_evidence);
     assert_eq!(
         replay_recorded_execution_with_fee_history(
-            &RecordedExecution { fee_schedule_version: 3, ..base },
+            &RecordedExecution {
+                fee_schedule_version: 3,
+                ..base
+            },
             &schedules,
         ),
         Err(ReplayRefusal::UnknownFeeScheduleVersion { version: 3 })
@@ -84,7 +93,8 @@ fn recorded_v1_replays_identically_after_a_simulated_upgrade() {
         runtime_version: RUNTIME_VERSION,
         abi_version: layerx_programs_runtime::ABI_V1_VERSION,
         fee_schedule_version: layerx_programs_runtime::FeeSchedule::declared().version(),
-        metering_schedule_version: layerx_programs_runtime::meter::inject::GENESIS_METERING_SCHEDULE_VERSION,
+        metering_schedule_version:
+            layerx_programs_runtime::meter::inject::GENESIS_METERING_SCHEDULE_VERSION,
         wasm: &wasm,
         export: "add",
         args: &[WasmValue::I32(20), WasmValue::I32(22)],
@@ -104,7 +114,8 @@ fn mixed_v1_v2_history_selects_each_recorded_abi_and_fee_schedule() {
             runtime_version: RUNTIME_VERSION,
             abi_version: layerx_programs_runtime::ABI_V1_VERSION,
             fee_schedule_version: schedule,
-            metering_schedule_version: layerx_programs_runtime::meter::inject::GENESIS_METERING_SCHEDULE_VERSION,
+            metering_schedule_version:
+                layerx_programs_runtime::meter::inject::GENESIS_METERING_SCHEDULE_VERSION,
             wasm: &v1_wasm,
             export: "add",
             args: &[WasmValue::I32(1), WasmValue::I32(2)],
@@ -113,7 +124,8 @@ fn mixed_v1_v2_history_selects_each_recorded_abi_and_fee_schedule() {
             runtime_version: RUNTIME_VERSION,
             abi_version: layerx_programs_runtime::ABI_V2_VERSION,
             fee_schedule_version: schedule,
-            metering_schedule_version: layerx_programs_runtime::meter::inject::GENESIS_METERING_SCHEDULE_VERSION,
+            metering_schedule_version:
+                layerx_programs_runtime::meter::inject::GENESIS_METERING_SCHEDULE_VERSION,
             wasm: &v2_wasm,
             export: "add",
             args: &[WasmValue::I32(3), WasmValue::I32(4)],
@@ -145,7 +157,8 @@ fn unknown_runtime_and_abi_artifacts_are_preserved_without_execution() {
         runtime_version: RUNTIME_VERSION + 1,
         abi_version: ABI_VERSION,
         fee_schedule_version: layerx_programs_runtime::FeeSchedule::declared().version(),
-        metering_schedule_version: layerx_programs_runtime::meter::inject::GENESIS_METERING_SCHEDULE_VERSION,
+        metering_schedule_version:
+            layerx_programs_runtime::meter::inject::GENESIS_METERING_SCHEDULE_VERSION,
         wasm: &wasm,
         export: "add",
         args: &[],
@@ -269,10 +282,7 @@ fn start_module(traps: bool) -> Vec<u8> {
         function_section(&[0, 1]),
         export_section(&[("run", 1)]),
         raw_section(8, &[0]),
-        code_section(&[
-            func_body(&[], &start),
-            func_body(&[], &[0x41, 42, OP_END]),
-        ]),
+        code_section(&[func_body(&[], &start), func_body(&[], &[0x41, 42, OP_END])]),
     ])
 }
 
@@ -284,8 +294,8 @@ fn loop_module() -> Vec<u8> {
         code_section(&[func_body(
             &[(1, TYPE_I32)],
             &[
-                0x41, 3, 0x21, 0, 0x02, 0x40, 0x03, 0x40, 0x20, 0, 0x41, 1, 0x6b, 0x22,
-                0, 0x0d, 0, OP_END, OP_END, 0x20, 0, OP_END,
+                0x41, 3, 0x21, 0, 0x02, 0x40, 0x03, 0x40, 0x20, 0, 0x41, 1, 0x6b, 0x22, 0, 0x0d, 0,
+                OP_END, OP_END, 0x20, 0, OP_END,
             ],
         )]),
     ])
@@ -311,10 +321,7 @@ fn memory_grow_module() -> Vec<u8> {
         function_section(&[0]),
         memory_section(),
         memory_and_function_exports(0, "run"),
-        code_section(&[func_body(
-            &[],
-            &[OP_LOCAL_GET, 0, 0x40, 0, OP_END],
-        )]),
+        code_section(&[func_body(&[], &[OP_LOCAL_GET, 0, 0x40, 0, OP_END])]),
     ])
 }
 
@@ -356,6 +363,15 @@ fn table_copy_module() -> Vec<u8> {
 }
 
 fn differential_vectors() -> Vec<DifferentialVector> {
+    let mut vectors = Vec::new();
+    vectors.extend(differential_vectors_0());
+    vectors.extend(differential_vectors_1());
+    vectors.extend(differential_vectors_2());
+    vectors.extend(differential_vectors_3());
+    vectors
+}
+
+fn differential_vectors_0() -> Vec<DifferentialVector> {
     vec![
         vector(
             "V1 function entry, locals, arithmetic, and ordinary return",
@@ -363,7 +379,10 @@ fn differential_vectors() -> Vec<DifferentialVector> {
             add_module(),
             "add",
             vec![WasmValue::I32(20), WasmValue::I32(22)],
-            ExpectedObservation::Success { outputs: vec![WasmValue::I32(42)], memory_bytes: 0 },
+            ExpectedObservation::Success {
+                outputs: vec![WasmValue::I32(42)],
+                memory_bytes: 0,
+            },
         ),
         vector(
             "V2 executes inherited import-free code under its recorded ABI",
@@ -371,7 +390,10 @@ fn differential_vectors() -> Vec<DifferentialVector> {
             add_module(),
             "add",
             vec![WasmValue::I32(-7), WasmValue::I32(7)],
-            ExpectedObservation::Success { outputs: vec![WasmValue::I32(0)], memory_bytes: 0 },
+            ExpectedObservation::Success {
+                outputs: vec![WasmValue::I32(0)],
+                memory_bytes: 0,
+            },
         ),
         vector(
             "successful start-function work is charged before the export",
@@ -379,7 +401,10 @@ fn differential_vectors() -> Vec<DifferentialVector> {
             start_module(false),
             "run",
             vec![],
-            ExpectedObservation::Success { outputs: vec![WasmValue::I32(42)], memory_bytes: 0 },
+            ExpectedObservation::Success {
+                outputs: vec![WasmValue::I32(42)],
+                memory_bytes: 0,
+            },
         ),
         vector(
             "a start-function trap preserves the same refusal and charged prefix",
@@ -387,7 +412,11 @@ fn differential_vectors() -> Vec<DifferentialVector> {
             start_module(true),
             "run",
             vec![],
-            ExpectedObservation::ExecutionRefusal { fault_contains: "unreachable", charged: true, memory_bytes: 0 },
+            ExpectedObservation::ExecutionRefusal {
+                fault_contains: "unreachable",
+                charged: true,
+                memory_bytes: 0,
+            },
         ),
         vector(
             "a trap after arithmetic retains the same pre-trap CPU charge",
@@ -395,15 +424,27 @@ fn differential_vectors() -> Vec<DifferentialVector> {
             nullary_module(&[0x41, 20, 0x41, 22, 0x6a, 0x1a, 0x00, OP_END]),
             "run",
             vec![],
-            ExpectedObservation::ExecutionRefusal { fault_contains: "unreachable", charged: true, memory_bytes: 0 },
+            ExpectedObservation::ExecutionRefusal {
+                fault_contains: "unreachable",
+                charged: true,
+                memory_bytes: 0,
+            },
         ),
+    ]
+}
+
+fn differential_vectors_1() -> Vec<DifferentialVector> {
+    vec![
         vector(
             "an internal call charges both function entries and the call boundary",
             ABI_V1_VERSION,
             internal_call_module(),
             "run",
             vec![],
-            ExpectedObservation::Success { outputs: vec![WasmValue::I32(42)], memory_bytes: 0 },
+            ExpectedObservation::Success {
+                outputs: vec![WasmValue::I32(42)],
+                memory_bytes: 0,
+            },
         ),
         vector(
             "loop backedges and br_if charge identically on every taken edge",
@@ -411,7 +452,10 @@ fn differential_vectors() -> Vec<DifferentialVector> {
             loop_module(),
             "run",
             vec![],
-            ExpectedObservation::Success { outputs: vec![WasmValue::I32(0)], memory_bytes: 0 },
+            ExpectedObservation::Success {
+                outputs: vec![WasmValue::I32(0)],
+                memory_bytes: 0,
+            },
         ),
         vector(
             "br_table selector handling and destination charging are identical",
@@ -421,7 +465,10 @@ fn differential_vectors() -> Vec<DifferentialVector> {
             ]),
             "run",
             vec![],
-            ExpectedObservation::Success { outputs: vec![WasmValue::I32(42)], memory_bytes: 0 },
+            ExpectedObservation::Success {
+                outputs: vec![WasmValue::I32(42)],
+                memory_bytes: 0,
+            },
         ),
         vector(
             "memory store and load static/dynamic charges preserve the result",
@@ -432,7 +479,10 @@ fn differential_vectors() -> Vec<DifferentialVector> {
             ),
             "run",
             vec![],
-            ExpectedObservation::Success { outputs: vec![WasmValue::I32(42)], memory_bytes: 65_536 },
+            ExpectedObservation::Success {
+                outputs: vec![WasmValue::I32(42)],
+                memory_bytes: 65_536,
+            },
         ),
         vector(
             "successful memory.grow commits its lazy size-dependent charge",
@@ -440,43 +490,59 @@ fn differential_vectors() -> Vec<DifferentialVector> {
             memory_grow_module(),
             "run",
             vec![WasmValue::I32(1)],
-            ExpectedObservation::Success { outputs: vec![WasmValue::I32(1)], memory_bytes: 131_072 },
+            ExpectedObservation::Success {
+                outputs: vec![WasmValue::I32(1)],
+                memory_bytes: 131_072,
+            },
         ),
+    ]
+}
+
+fn differential_vectors_2() -> Vec<DifferentialVector> {
+    vec![
         vector(
             "failed memory.grow returns minus one without committing a growth charge",
             ABI_V1_VERSION,
             memory_grow_module(),
             "run",
             vec![WasmValue::I32(-1)],
-            ExpectedObservation::Success { outputs: vec![WasmValue::I32(-1)], memory_bytes: 65_536 },
+            ExpectedObservation::Success {
+                outputs: vec![WasmValue::I32(-1)],
+                memory_bytes: 65_536,
+            },
         ),
         vector(
             "successful bulk memory.copy charges its requested byte length lazily",
             ABI_V1_VERSION,
             memory_module(
                 &[
-                    0x41, 8, 0x41, 0, 0x41, 3, 0xfc, 10, 0, 0, 0x41, 8, 0x2d, 0, 0,
-                    OP_END,
+                    0x41, 8, 0x41, 0, 0x41, 3, 0xfc, 10, 0, 0, 0x41, 8, 0x2d, 0, 0, OP_END,
                 ],
                 Some(b"abc"),
             ),
             "run",
             vec![],
-            ExpectedObservation::Success { outputs: vec![WasmValue::I32(97)], memory_bytes: 65_536 },
+            ExpectedObservation::Success {
+                outputs: vec![WasmValue::I32(97)],
+                memory_bytes: 65_536,
+            },
         ),
         vector(
             "trapping bulk memory.copy does not commit its lazy success charge",
             ABI_V1_VERSION,
             memory_module(
                 &[
-                    0x41, 0xff, 0xff, 3, 0x41, 0, 0x41, 3, 0xfc, 10, 0, 0, 0x41, 0,
-                    OP_END,
+                    0x41, 0xff, 0xff, 3, 0x41, 0, 0x41, 3, 0xfc, 10, 0, 0, 0x41, 0, OP_END,
                 ],
                 Some(b"abc"),
             ),
             "run",
             vec![],
-            ExpectedObservation::ExecutionRefusal { fault_contains: "out of bounds", charged: true, memory_bytes: 65_536 },
+            ExpectedObservation::ExecutionRefusal {
+                fault_contains: "out of bounds",
+                charged: true,
+                memory_bytes: 65_536,
+            },
         ),
         vector(
             "successful table.copy charges its requested element count lazily",
@@ -484,7 +550,10 @@ fn differential_vectors() -> Vec<DifferentialVector> {
             table_copy_module(),
             "run",
             vec![],
-            ExpectedObservation::Success { outputs: vec![WasmValue::I32(42)], memory_bytes: 0 },
+            ExpectedObservation::Success {
+                outputs: vec![WasmValue::I32(42)],
+                memory_bytes: 0,
+            },
         ),
         vector(
             "V2 real hash import charges guest instructions and host CPU once",
@@ -492,15 +561,27 @@ fn differential_vectors() -> Vec<DifferentialVector> {
             hash_module(),
             "run",
             vec![],
-            ExpectedObservation::Success { outputs: vec![WasmValue::I32(0)], memory_bytes: 65_536 },
+            ExpectedObservation::Success {
+                outputs: vec![WasmValue::I32(0)],
+                memory_bytes: 65_536,
+            },
         ),
+    ]
+}
+
+fn differential_vectors_3() -> Vec<DifferentialVector> {
+    vec![
         vector(
             "missing exports produce the same typed execution refusal",
             ABI_V1_VERSION,
             add_module(),
             "absent",
             vec![],
-            ExpectedObservation::ExecutionRefusal { fault_contains: "unknown export", charged: false, memory_bytes: 0 },
+            ExpectedObservation::ExecutionRefusal {
+                fault_contains: "unknown export",
+                charged: false,
+                memory_bytes: 0,
+            },
         ),
         vector(
             "malformed bytes produce the same validation refusal class",
@@ -522,12 +603,14 @@ fn differential_vectors() -> Vec<DifferentialVector> {
 }
 
 fn take<const N: usize>(bytes: &[u8], cursor: &mut usize) -> [u8; N] {
-    let end = cursor.checked_add(N).expect("evidence cursor overflow");
+    let end = cursor
+        .checked_add(N)
+        .unwrap_or_else(|| panic!("evidence cursor overflow"));
     let value: [u8; N] = bytes
         .get(*cursor..end)
-        .expect("truncated differential evidence")
+        .unwrap_or_else(|| panic!("truncated differential evidence"))
         .try_into()
-        .expect("fixed-width evidence field");
+        .unwrap_or_else(|error| panic!("{}: {error:?}", "fixed-width evidence field"));
     *cursor = end;
     value
 }
@@ -561,133 +644,398 @@ fn decode_full_usage(evidence: &[u8], cursor: &mut usize) -> DecodedUsage {
 
 fn assert_expected_observation(vector: &DifferentialVector, evidence: &[u8]) {
     match &vector.expected {
-        ExpectedObservation::Success { outputs, memory_bytes } => {
-            assert_eq!(evidence.first(), Some(&0x30), "{}: expected success", vector.invariant);
-            let mut cursor = 1;
-            let domain = b"LXP/program-execution/v2\0";
-            assert_eq!(
-                evidence.get(cursor..cursor + domain.len()),
-                Some(domain.as_slice()),
-                "{}: wrong evidence domain",
-                vector.invariant,
-            );
-            cursor += domain.len();
-            assert_eq!(u16::from_be_bytes(take(evidence, &mut cursor)), RUNTIME_VERSION);
-            assert_eq!(u16::from_be_bytes(take(evidence, &mut cursor)), vector.abi);
-            assert_eq!(
-                u32::from_be_bytes(take(evidence, &mut cursor)),
-                layerx_programs_runtime::meter::inject::GENESIS_METERING_SCHEDULE_VERSION,
-            );
-            let count = u128::from_be_bytes(take(evidence, &mut cursor));
-            assert_eq!(count, outputs.len() as u128, "{}: wrong output count", vector.invariant);
-            let mut observed_outputs = Vec::with_capacity(outputs.len());
-            for _ in 0..outputs.len() {
-                let tag = take::<1>(evidence, &mut cursor)[0];
-                observed_outputs.push(match tag {
-                    1 => WasmValue::I32(i32::from_be_bytes(take(evidence, &mut cursor))),
-                    2 => WasmValue::I64(i64::from_be_bytes(take(evidence, &mut cursor))),
-                    other => panic!("{}: unknown output tag {other}", vector.invariant),
-                });
-            }
-            assert_eq!(&observed_outputs, outputs, "{}: wrong outputs", vector.invariant);
-            let record_cpu = u64::from_be_bytes(take(evidence, &mut cursor));
-            let record_memory = u64::from_be_bytes(take(evidence, &mut cursor));
-            let record_storage_read = u64::from_be_bytes(take(evidence, &mut cursor));
-            let record_storage_write = u64::from_be_bytes(take(evidence, &mut cursor));
-            let record_output_values = u32::from_be_bytes(take(evidence, &mut cursor));
-            let record_fee_units = u128::from_be_bytes(take(evidence, &mut cursor));
-            let usage = decode_full_usage(evidence, &mut cursor);
-            assert_eq!(usage.cpu_fuel, record_cpu, "{}: duplicated CPU disagreed", vector.invariant);
-            assert_eq!(usage.memory_bytes, record_memory, "{}: duplicated memory disagreed", vector.invariant);
-            assert_eq!(usage.storage_read_bytes, record_storage_read, "{}: duplicated reads disagreed", vector.invariant);
-            assert_eq!(usage.storage_write_bytes, record_storage_write, "{}: duplicated writes disagreed", vector.invariant);
-            assert_eq!(usage.output_values, record_output_values, "{}: duplicated outputs disagreed", vector.invariant);
-            assert_eq!(usage.fee_units, record_fee_units, "{}: duplicated fees disagreed", vector.invariant);
-            assert!(usage.cpu_fuel > 0, "{}: successful work was uncharged", vector.invariant);
-            assert_eq!(usage.memory_bytes, *memory_bytes, "{}: wrong memory high-water mark", vector.invariant);
-            assert_eq!(usage.storage_read_bytes, 0, "{}: unexpected storage read", vector.invariant);
-            assert_eq!(usage.storage_write_bytes, 0, "{}: unexpected storage write", vector.invariant);
-            assert_eq!(usage.output_values, outputs.len() as u32, "{}: wrong output usage", vector.invariant);
-            assert_eq!(usage.output_bytes, 0, "{}: unexpected output bytes", vector.invariant);
-            assert_eq!(usage.occupancy_byte_batches, 0, "{}: unexpected occupancy", vector.invariant);
-            assert_eq!(usage.occupancy_fee_units, 0, "{}: unexpected occupancy fee", vector.invariant);
-            assert_eq!(cursor, evidence.len(), "{}: trailing success evidence", vector.invariant);
+        ExpectedObservation::Success {
+            outputs,
+            memory_bytes,
+        } => {
+            assert_success_observation(vector, evidence, outputs, *memory_bytes);
         }
-        ExpectedObservation::ExecutionRefusal { fault_contains, charged, memory_bytes } => {
-            assert_eq!(evidence.first(), Some(&0x31), "{}: expected execution refusal", vector.invariant);
-            let mut cursor = 1;
-            let fault_len = u64::from_be_bytes(take(evidence, &mut cursor)) as usize;
-            let fault_end = cursor.checked_add(fault_len).expect("fault length overflow");
-            let fault = core::str::from_utf8(
-                evidence.get(cursor..fault_end).expect("truncated refusal fault"),
-            )
-            .expect("refusal fault is UTF-8");
-            cursor = fault_end;
-            assert!(
-                fault.contains(fault_contains),
-                "{}: refusal `{fault}` did not contain `{fault_contains}`",
-                vector.invariant,
-            );
-            let cpu_fuel = u64::from_be_bytes(take(evidence, &mut cursor));
-            if *charged {
-                assert!(cpu_fuel > 0, "{}: charged prefix was lost", vector.invariant);
-            } else {
-                assert_eq!(cpu_fuel, 0, "{}: refusal charged unexpected CPU", vector.invariant);
-            }
-            let exhaustion = take::<1>(evidence, &mut cursor)[0];
-            if exhaustion == 1 {
-                let length = u64::from_be_bytes(take(evidence, &mut cursor)) as usize;
-                let end = cursor.checked_add(length).expect("exhaustion length overflow");
-                let _reason = core::str::from_utf8(
-                    evidence.get(cursor..end).expect("truncated exhaustion reason"),
-                )
-                .expect("exhaustion reason is UTF-8");
-                cursor = end;
-            } else {
-                assert_eq!(exhaustion, 0, "{}: invalid exhaustion tag", vector.invariant);
-            }
-            assert_eq!(exhaustion, 0, "{}: unexpected resource exhaustion", vector.invariant);
-            let raw_cpu = u64::from_be_bytes(take(evidence, &mut cursor));
-            let raw_memory = u64::from_be_bytes(take(evidence, &mut cursor));
-            let raw_storage_read = u64::from_be_bytes(take(evidence, &mut cursor));
-            let raw_storage_write = u64::from_be_bytes(take(evidence, &mut cursor));
-            let raw_output_values = u32::from_be_bytes(take(evidence, &mut cursor));
-            let raw_output_bytes = u64::from_be_bytes(take(evidence, &mut cursor));
-            assert_eq!(raw_cpu, cpu_fuel, "{}: refusal CPU snapshots disagreed", vector.invariant);
-            assert_eq!(raw_memory, *memory_bytes, "{}: wrong refusal memory high-water mark", vector.invariant);
-            assert_eq!(raw_storage_read, 0, "{}: refusal read storage", vector.invariant);
-            assert_eq!(raw_storage_write, 0, "{}: refusal wrote storage", vector.invariant);
-            assert_eq!(raw_output_values, 0, "{}: refusal returned values", vector.invariant);
-            assert_eq!(raw_output_bytes, 0, "{}: refusal returned bytes", vector.invariant);
-            let finalization = take::<1>(evidence, &mut cursor)[0];
-            if finalization == 1 {
-                let usage = decode_full_usage(evidence, &mut cursor);
-                assert_eq!(usage.cpu_fuel, raw_cpu, "{}: finalized CPU disagreed", vector.invariant);
-                assert_eq!(usage.memory_bytes, raw_memory, "{}: finalized memory disagreed", vector.invariant);
-                assert_eq!(usage.storage_read_bytes, raw_storage_read, "{}: finalized reads disagreed", vector.invariant);
-                assert_eq!(usage.storage_write_bytes, raw_storage_write, "{}: finalized writes disagreed", vector.invariant);
-                assert_eq!(usage.output_values, raw_output_values, "{}: finalized outputs disagreed", vector.invariant);
-                assert_eq!(usage.output_bytes, raw_output_bytes, "{}: finalized output bytes disagreed", vector.invariant);
-                assert_eq!(usage.occupancy_byte_batches, 0, "{}: refusal recorded occupancy", vector.invariant);
-                assert_eq!(usage.occupancy_fee_units, 0, "{}: refusal recorded occupancy fee", vector.invariant);
-            } else {
-                assert_eq!(finalization, 0, "{}: invalid finalization tag", vector.invariant);
-                let length = u64::from_be_bytes(take(evidence, &mut cursor)) as usize;
-                let end = cursor.checked_add(length).expect("finalization reason overflow");
-                let reason = core::str::from_utf8(
-                    evidence.get(cursor..end).expect("truncated finalization reason"),
-                )
-                .expect("finalization reason is UTF-8");
-                cursor = end;
-                panic!("{}: non-exhausted refusal failed usage finalization: {reason}", vector.invariant);
-            }
-            assert_eq!(cursor, evidence.len(), "{}: trailing refusal evidence", vector.invariant);
+        ExpectedObservation::ExecutionRefusal {
+            fault_contains,
+            charged,
+            memory_bytes,
+        } => {
+            assert_refusal_observation(vector, evidence, fault_contains, *charged, *memory_bytes);
         }
         ExpectedObservation::ValidationRefusal => {
-            assert_eq!(evidence.first(), Some(&0x11), "{}: expected validation refusal", vector.invariant);
-            assert!(evidence.len() > 1, "{}: empty validation reason", vector.invariant);
+            assert_eq!(
+                evidence.first(),
+                Some(&0x11),
+                "{}: expected validation refusal",
+                vector.invariant
+            );
+            assert!(
+                evidence.len() > 1,
+                "{}: empty validation reason",
+                vector.invariant
+            );
         }
     }
+}
+
+fn assert_success_observation(
+    vector: &DifferentialVector,
+    evidence: &[u8],
+    outputs: &[WasmValue],
+    memory_bytes: u64,
+) {
+    let mut cursor = assert_success_outputs(vector, evidence, outputs);
+    let record_cpu = u64::from_be_bytes(take(evidence, &mut cursor));
+    let record_memory = u64::from_be_bytes(take(evidence, &mut cursor));
+    let record_storage_read = u64::from_be_bytes(take(evidence, &mut cursor));
+    let record_storage_write = u64::from_be_bytes(take(evidence, &mut cursor));
+    let record_output_values = u32::from_be_bytes(take(evidence, &mut cursor));
+    let record_fee_units = u128::from_be_bytes(take(evidence, &mut cursor));
+    let usage = decode_full_usage(evidence, &mut cursor);
+    assert_eq!(
+        usage.cpu_fuel, record_cpu,
+        "{}: duplicated CPU disagreed",
+        vector.invariant
+    );
+    assert_eq!(
+        usage.memory_bytes, record_memory,
+        "{}: duplicated memory disagreed",
+        vector.invariant
+    );
+    assert_eq!(
+        usage.storage_read_bytes, record_storage_read,
+        "{}: duplicated reads disagreed",
+        vector.invariant
+    );
+    assert_eq!(
+        usage.storage_write_bytes, record_storage_write,
+        "{}: duplicated writes disagreed",
+        vector.invariant
+    );
+    assert_eq!(
+        usage.output_values, record_output_values,
+        "{}: duplicated outputs disagreed",
+        vector.invariant
+    );
+    assert_eq!(
+        usage.fee_units, record_fee_units,
+        "{}: duplicated fees disagreed",
+        vector.invariant
+    );
+    assert!(
+        usage.cpu_fuel > 0,
+        "{}: successful work was uncharged",
+        vector.invariant
+    );
+    assert_eq!(
+        usage.memory_bytes, memory_bytes,
+        "{}: wrong memory high-water mark",
+        vector.invariant
+    );
+    assert_eq!(
+        usage.storage_read_bytes, 0,
+        "{}: unexpected storage read",
+        vector.invariant
+    );
+    assert_eq!(
+        usage.storage_write_bytes, 0,
+        "{}: unexpected storage write",
+        vector.invariant
+    );
+    assert_eq!(
+        usage.output_values,
+        u32::try_from(outputs.len()).unwrap_or_else(|error| panic!("output count: {error}")),
+        "{}: wrong output usage",
+        vector.invariant
+    );
+    assert_eq!(
+        usage.output_bytes, 0,
+        "{}: unexpected output bytes",
+        vector.invariant
+    );
+    assert_eq!(
+        usage.occupancy_byte_batches, 0,
+        "{}: unexpected occupancy",
+        vector.invariant
+    );
+    assert_eq!(
+        usage.occupancy_fee_units, 0,
+        "{}: unexpected occupancy fee",
+        vector.invariant
+    );
+    assert_eq!(
+        cursor,
+        evidence.len(),
+        "{}: trailing success evidence",
+        vector.invariant
+    );
+}
+
+fn assert_success_outputs(
+    vector: &DifferentialVector,
+    evidence: &[u8],
+    outputs: &[WasmValue],
+) -> usize {
+    assert_eq!(
+        evidence.first(),
+        Some(&0x30),
+        "{}: expected success",
+        vector.invariant
+    );
+    let mut cursor = 1;
+    let domain = b"LXP/program-execution/v2\0";
+    assert_eq!(
+        evidence.get(cursor..cursor + domain.len()),
+        Some(domain.as_slice()),
+        "{}: wrong evidence domain",
+        vector.invariant,
+    );
+    cursor += domain.len();
+    assert_eq!(
+        u16::from_be_bytes(take(evidence, &mut cursor)),
+        RUNTIME_VERSION
+    );
+    assert_eq!(u16::from_be_bytes(take(evidence, &mut cursor)), vector.abi);
+    assert_eq!(
+        u32::from_be_bytes(take(evidence, &mut cursor)),
+        layerx_programs_runtime::meter::inject::GENESIS_METERING_SCHEDULE_VERSION,
+    );
+    let count = u128::from_be_bytes(take(evidence, &mut cursor));
+    assert_eq!(
+        count,
+        outputs.len() as u128,
+        "{}: wrong output count",
+        vector.invariant
+    );
+    let mut observed_outputs = Vec::with_capacity(outputs.len());
+    for _ in 0..outputs.len() {
+        let tag = take::<1>(evidence, &mut cursor)[0];
+        observed_outputs.push(match tag {
+            1 => WasmValue::I32(i32::from_be_bytes(take(evidence, &mut cursor))),
+            2 => WasmValue::I64(i64::from_be_bytes(take(evidence, &mut cursor))),
+            other => panic!("{}: unknown output tag {other}", vector.invariant),
+        });
+    }
+    assert_eq!(
+        &observed_outputs, outputs,
+        "{}: wrong outputs",
+        vector.invariant
+    );
+    cursor
+}
+
+fn assert_refusal_observation(
+    vector: &DifferentialVector,
+    evidence: &[u8],
+    fault_contains: &str,
+    charged: bool,
+    memory_bytes: u64,
+) {
+    let (mut cursor, cpu_fuel) = assert_refusal_prefix(vector, evidence, fault_contains, charged);
+    let raw_cpu = u64::from_be_bytes(take(evidence, &mut cursor));
+    let raw_memory = u64::from_be_bytes(take(evidence, &mut cursor));
+    let raw_storage_read = u64::from_be_bytes(take(evidence, &mut cursor));
+    let raw_storage_write = u64::from_be_bytes(take(evidence, &mut cursor));
+    let raw_output_values = u32::from_be_bytes(take(evidence, &mut cursor));
+    let raw_output_bytes = u64::from_be_bytes(take(evidence, &mut cursor));
+    assert_eq!(
+        raw_cpu, cpu_fuel,
+        "{}: refusal CPU snapshots disagreed",
+        vector.invariant
+    );
+    assert_eq!(
+        raw_memory, memory_bytes,
+        "{}: wrong refusal memory high-water mark",
+        vector.invariant
+    );
+    assert_eq!(
+        raw_storage_read, 0,
+        "{}: refusal read storage",
+        vector.invariant
+    );
+    assert_eq!(
+        raw_storage_write, 0,
+        "{}: refusal wrote storage",
+        vector.invariant
+    );
+    assert_eq!(
+        raw_output_values, 0,
+        "{}: refusal returned values",
+        vector.invariant
+    );
+    assert_eq!(
+        raw_output_bytes, 0,
+        "{}: refusal returned bytes",
+        vector.invariant
+    );
+    assert_refusal_finalization(
+        vector,
+        evidence,
+        cursor,
+        (
+            raw_cpu,
+            raw_memory,
+            raw_storage_read,
+            raw_storage_write,
+            raw_output_values,
+            raw_output_bytes,
+        ),
+    );
+}
+
+fn assert_refusal_prefix(
+    vector: &DifferentialVector,
+    evidence: &[u8],
+    fault_contains: &str,
+    charged: bool,
+) -> (usize, u64) {
+    assert_eq!(
+        evidence.first(),
+        Some(&0x31),
+        "{}: expected execution refusal",
+        vector.invariant
+    );
+    let mut cursor = 1;
+    let fault_len = usize::try_from(u64::from_be_bytes(take(evidence, &mut cursor)))
+        .unwrap_or_else(|error| panic!("evidence length: {error}"));
+    let fault_end = cursor
+        .checked_add(fault_len)
+        .unwrap_or_else(|| panic!("fault length overflow"));
+    let fault = core::str::from_utf8(
+        evidence
+            .get(cursor..fault_end)
+            .unwrap_or_else(|| panic!("truncated refusal fault")),
+    )
+    .unwrap_or_else(|error| panic!("{}: {error:?}", "refusal fault is UTF-8"));
+    cursor = fault_end;
+    assert!(
+        fault.contains(fault_contains),
+        "{}: refusal `{fault}` did not contain `{fault_contains}`",
+        vector.invariant,
+    );
+    let cpu_fuel = u64::from_be_bytes(take(evidence, &mut cursor));
+    if charged {
+        assert!(
+            cpu_fuel > 0,
+            "{}: charged prefix was lost",
+            vector.invariant
+        );
+    } else {
+        assert_eq!(
+            cpu_fuel, 0,
+            "{}: refusal charged unexpected CPU",
+            vector.invariant
+        );
+    }
+    let exhaustion = take::<1>(evidence, &mut cursor)[0];
+    if exhaustion == 1 {
+        let length = usize::try_from(u64::from_be_bytes(take(evidence, &mut cursor)))
+            .unwrap_or_else(|error| panic!("evidence length: {error}"));
+        let end = cursor
+            .checked_add(length)
+            .unwrap_or_else(|| panic!("exhaustion length overflow"));
+        let _reason = core::str::from_utf8(
+            evidence
+                .get(cursor..end)
+                .unwrap_or_else(|| panic!("truncated exhaustion reason")),
+        )
+        .unwrap_or_else(|error| panic!("{}: {error:?}", "exhaustion reason is UTF-8"));
+        cursor = end;
+    } else {
+        assert_eq!(
+            exhaustion, 0,
+            "{}: invalid exhaustion tag",
+            vector.invariant
+        );
+    }
+    assert_eq!(
+        exhaustion, 0,
+        "{}: unexpected resource exhaustion",
+        vector.invariant
+    );
+    (cursor, cpu_fuel)
+}
+
+fn assert_refusal_finalization(
+    vector: &DifferentialVector,
+    evidence: &[u8],
+    mut cursor: usize,
+    raw_usage: (u64, u64, u64, u64, u32, u64),
+) {
+    let (
+        raw_cpu,
+        raw_memory,
+        raw_storage_read,
+        raw_storage_write,
+        raw_output_values,
+        raw_output_bytes,
+    ) = raw_usage;
+    let finalization = take::<1>(evidence, &mut cursor)[0];
+    if finalization == 1 {
+        let usage = decode_full_usage(evidence, &mut cursor);
+        assert_eq!(
+            usage.cpu_fuel, raw_cpu,
+            "{}: finalized CPU disagreed",
+            vector.invariant
+        );
+        assert_eq!(
+            usage.memory_bytes, raw_memory,
+            "{}: finalized memory disagreed",
+            vector.invariant
+        );
+        assert_eq!(
+            usage.storage_read_bytes, raw_storage_read,
+            "{}: finalized reads disagreed",
+            vector.invariant
+        );
+        assert_eq!(
+            usage.storage_write_bytes, raw_storage_write,
+            "{}: finalized writes disagreed",
+            vector.invariant
+        );
+        assert_eq!(
+            usage.output_values, raw_output_values,
+            "{}: finalized outputs disagreed",
+            vector.invariant
+        );
+        assert_eq!(
+            usage.output_bytes, raw_output_bytes,
+            "{}: finalized output bytes disagreed",
+            vector.invariant
+        );
+        assert_eq!(
+            usage.occupancy_byte_batches, 0,
+            "{}: refusal recorded occupancy",
+            vector.invariant
+        );
+        assert_eq!(
+            usage.occupancy_fee_units, 0,
+            "{}: refusal recorded occupancy fee",
+            vector.invariant
+        );
+    } else {
+        assert_eq!(
+            finalization, 0,
+            "{}: invalid finalization tag",
+            vector.invariant
+        );
+        let length = usize::try_from(u64::from_be_bytes(take(evidence, &mut cursor)))
+            .unwrap_or_else(|error| panic!("evidence length: {error}"));
+        let end = cursor
+            .checked_add(length)
+            .unwrap_or_else(|| panic!("finalization reason overflow"));
+        let reason = core::str::from_utf8(
+            evidence
+                .get(cursor..end)
+                .unwrap_or_else(|| panic!("truncated finalization reason")),
+        )
+        .unwrap_or_else(|error| panic!("{}: {error:?}", "finalization reason is UTF-8"));
+        panic!(
+            "{}: non-exhausted refusal failed usage finalization: {reason}",
+            vector.invariant
+        );
+    }
+    assert_eq!(
+        cursor,
+        evidence.len(),
+        "{}: trailing refusal evidence",
+        vector.invariant
+    );
 }
 
 #[test]
@@ -776,7 +1124,8 @@ fn deploy_activity(byte: u8, wasm: Vec<u8>) -> Deploy {
 
 #[test]
 fn oversized_module_is_refused_at_deploy_time_with_a_typed_result() {
-    let mut lifecycle = Lifecycle::new(engine_with(limits(64, 16, 1_024, 16)), Executor::declared());
+    let mut lifecycle =
+        Lifecycle::new(engine_with(limits(64, 16, 1_024, 16)), Executor::declared());
     let wasm = module(&[padding_section(128)]);
     let refusal = lifecycle.deploy(deploy_activity(1, wasm.clone()));
     assert_eq!(
@@ -797,8 +1146,10 @@ fn oversized_module_is_refused_at_deploy_time_with_a_typed_result() {
 
 #[test]
 fn function_count_over_limit_is_refused_at_deploy_time_with_a_typed_result() {
-    let mut lifecycle =
-        Lifecycle::new(engine_with(limits(65_536, 4, 1_024, 16)), Executor::declared());
+    let mut lifecycle = Lifecycle::new(
+        engine_with(limits(65_536, 4, 1_024, 16)),
+        Executor::declared(),
+    );
     let bodies: Vec<Vec<u8>> = (0..5).map(|_| func_body(&[], &[OP_END])).collect();
     let wasm = module(&[
         type_section(&[(&[], &[])]),

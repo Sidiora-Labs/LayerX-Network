@@ -12,9 +12,11 @@
 #include "layerx/lxp_identity.h"
 #include "layerx/lxp_protocol.h"
 #include "layerx/lxp_receipt.h"
+#include "layerx/lxp_fault.h"
 
 #include "lxp_daemon_batch_wal.h"
 #include "lxp_daemon_lni_internal.h"
+#include "lxp_daemon_lni_account.h"
 
 #include <openssl/evp.h>
 
@@ -188,16 +190,36 @@ static void admission_superblock_encode(uint32_t network_id,
     store_u32(bytes + 28U, lxp_log_crc32c(bytes, 28U));
 }
 
+static void admission_reservation_superblock_encode(
+    const lxp_daemon *daemon, uint8_t bytes[LNI_ADMISSION_JOURNAL_SUPERBLOCK_BYTES])
+{
+    admission_superblock_encode(daemon->config.network_id, bytes);
+    store_u16(bytes + 4U, 2U);
+    if (daemon->reserved_batch_count != 0U) {
+        store_u64(bytes + 12U, daemon->next_sequence);
+        store_u64(bytes + 20U, daemon->next_sequence + daemon->reserved_batch_count);
+    }
+    store_u32(bytes + 28U, lxp_log_crc32c(bytes, 28U));
+}
+
 static bool admission_superblock_valid(const uint8_t *bytes,
                                        uint32_t network_id)
 {
     size_t index;
     if (load_u32(bytes) != LNI_ADMISSION_JOURNAL_MAGIC ||
-        load_u16(bytes + 4U) != LNI_ADMISSION_JOURNAL_VERSION ||
+        (load_u16(bytes + 4U) != LNI_ADMISSION_JOURNAL_VERSION &&
+         load_u16(bytes + 4U) != 2U) ||
         load_u16(bytes + 6U) != LNI_ADMISSION_JOURNAL_SUPERBLOCK_BYTES ||
         load_u32(bytes + 8U) != network_id ||
         load_u32(bytes + 28U) != lxp_log_crc32c(bytes, 28U))
         return false;
+    if (load_u16(bytes + 4U) == 2U) {
+        uint64_t first = load_u64(bytes + 12U);
+        uint64_t maintenance = load_u64(bytes + 20U);
+        return (first == 0U && maintenance == 0U) ||
+            (first != 0U && maintenance > first && maintenance != UINT64_MAX &&
+             maintenance - first <= LXP_DAEMON_MAX_BATCH_ACTIVITIES);
+    }
     for (index = 12U; index < 28U; ++index)
         if (bytes[index] != 0U) return false;
     return true;
@@ -331,6 +353,8 @@ static lxp_result admission_journal_open(lxp_daemon_lni_server *server)
     server->journal_device = (uint64_t)metadata.st_dev;
     server->journal_inode = (uint64_t)metadata.st_ino;
     server->journal_end = (uint64_t)metadata.st_size;
+    server->reserved_first_sequence = load_u64(superblock + 12U);
+    server->reserved_maintenance_sequence = load_u64(superblock + 20U);
     return admission_journal_named(
         server, descriptor, server->journal_device, server->journal_inode) ?
         LXP_OK : LXP_ERR_AUTH_SCOPE;
@@ -396,6 +420,7 @@ static lxp_result admission_journal_recover(
     uint64_t previous_sequence = 0U;
     uint64_t floor;
     size_t recovered_count = 0U;
+    size_t reserved_count = 0U;
     size_t recovered_bytes = 0U;
     bool have_previous = false;
     bool incomplete_tail = false;
@@ -418,6 +443,13 @@ static lxp_result admission_journal_recover(
     floor = server->owner->feed_store.scanned_through_sequence == 0U ?
         server->owner->feed_store.baseline_next_sequence :
         server->owner->feed_store.scanned_through_sequence + 1U;
+    if (server->reserved_maintenance_sequence >= floor &&
+        server->reserved_maintenance_sequence != 0U) {
+        if (server->reserved_first_sequence != floor)
+            status = LXP_ERR_LOG_CORRUPT;
+        else
+            reserved_count = (size_t)(server->reserved_maintenance_sequence - floor);
+    }
     if (pthread_mutex_unlock(&server->owner->mutex) != 0 && status == LXP_OK)
         status = LXP_FATAL_INVARIANT;
     if (status == LXP_OK && pthread_mutex_lock(&server->daemon->mutex) != 0) {
@@ -457,9 +489,13 @@ static lxp_result admission_journal_recover(
             incomplete_tail = true;
             break;
         }
-        if (have_previous &&
-            (previous_sequence == UINT64_MAX ||
-             sequence != previous_sequence + 1U)) {
+        if (sequence == 0U || sequence == UINT64_MAX ||
+            (server->reserved_maintenance_sequence != 0U &&
+             sequence == server->reserved_maintenance_sequence) ||
+            (have_previous &&
+             (previous_sequence == UINT64_MAX ||
+              sequence != previous_sequence + 1U +
+                (previous_sequence + 1U == server->reserved_maintenance_sequence ? 1U : 0U)))) {
             status = LXP_ERR_LOG_CORRUPT;
             break;
         }
@@ -511,7 +547,9 @@ static lxp_result admission_journal_recover(
             size_t prior;
             if (recovered_count == LXP_DAEMON_QUEUE_CAPACITY ||
                 length > LXP_DAEMON_QUEUE_MAX_BYTES - recovered_bytes ||
-                sequence != floor + recovered_count) {
+                recovered_count >= UINT64_MAX - floor ||
+                sequence != floor + recovered_count +
+                    (reserved_count != 0U && recovered_count >= reserved_count ? 1U : 0U)) {
                 lxp_secure_zero(activity, length);
                 free(activity);
                 status = LXP_ERR_LOG_CORRUPT;
@@ -551,6 +589,8 @@ static lxp_result admission_journal_recover(
         offset += sizeof(header) + length;
         valid_end = offset;
     }
+    if (status == LXP_OK && reserved_count > recovered_count)
+        status = LXP_ERR_LOG_CORRUPT;
     if (status == LXP_OK && incomplete_tail) {
         if (ftruncate(server->journal_descriptor, (off_t)valid_end) != 0 ||
             fdatasync(server->journal_descriptor) != 0)
@@ -575,6 +615,7 @@ static lxp_result admission_journal_recover(
             server->daemon->queue_head = 0U;
             server->daemon->queue_count = recovered_count;
             server->daemon->queue_bytes = recovered_bytes;
+            server->daemon->reserved_batch_count = reserved_count;
             server->journal_entry_count = recovered_count;
             if (recovered_count != 0U)
                 (void)pthread_cond_broadcast(&server->daemon->queue_changed);
@@ -626,8 +667,7 @@ static lxp_result admission_journal_compact_locked(
                             0600);
         if (descriptor < 0) status = LXP_ERR_IO;
     }
-    admission_superblock_encode(server->daemon->config.network_id,
-                                superblock);
+    admission_reservation_superblock_encode(server->daemon, superblock);
     if (status == LXP_OK)
         status = file_write_exact(descriptor, superblock,
                                   sizeof(superblock), 0U);
@@ -639,8 +679,9 @@ static lxp_result admission_journal_compact_locked(
         lxp_daemon_activity *activity = &server->daemon->queue[at];
         uint8_t header[LNI_ADMISSION_JOURNAL_RECORD_BYTES];
         uint8_t activity_id[32];
-        uint64_t expected = server->daemon->next_sequence + index;
-        if (activity->global_sequence != expected ||
+        uint64_t expected = 0U;
+        status = lxp_daemon_queue_sequence_locked(server->daemon, index, &expected);
+        if (status != LXP_OK || activity->global_sequence != expected ||
             activity->length == 0U ||
             activity->length > LXP_MAX_ACTIVITY_BYTES)
             status = LXP_FATAL_INVARIANT;
@@ -666,7 +707,9 @@ static lxp_result admission_journal_compact_locked(
             offset += sizeof(header) + activity->length;
         }
     }
+    if (status == LXP_OK) lxp_fault_inject_point(LXP_FAULT_ADMISSION_TEMP_WRITTEN);
     if (status == LXP_OK && fdatasync(descriptor) != 0) status = LXP_ERR_IO;
+    if (status == LXP_OK) lxp_fault_inject_point(LXP_FAULT_ADMISSION_TEMP_SYNCED);
     if (status == LXP_OK &&
         (fstat(descriptor, &metadata) != 0 || !S_ISREG(metadata.st_mode) ||
          metadata.st_nlink != 1 || metadata.st_uid != geteuid() ||
@@ -680,14 +723,18 @@ static lxp_result admission_journal_compact_locked(
         status = LXP_ERR_IO;
     else if (status == LXP_OK)
         renamed = true;
+    if (status == LXP_OK) lxp_fault_inject_point(LXP_FAULT_ADMISSION_RENAMED);
     if (status == LXP_OK && fsync(server->admission_parent_descriptor) != 0)
         status = LXP_FATAL_INVARIANT;
+    if (status == LXP_OK) lxp_fault_inject_point(LXP_FAULT_ADMISSION_DIRECTORY_SYNCED);
     if (renamed) {
         int old = server->journal_descriptor;
         server->journal_descriptor = descriptor;
         server->journal_device = (uint64_t)metadata.st_dev;
         server->journal_inode = (uint64_t)metadata.st_ino;
         server->journal_end = offset;
+        server->reserved_first_sequence = load_u64(superblock + 12U);
+        server->reserved_maintenance_sequence = load_u64(superblock + 20U);
         server->journal_entry_count = server->daemon->queue_count;
         (void)memcpy(server->journal_entries, rebuilt,
                      server->journal_entry_count * sizeof(rebuilt[0]));
@@ -697,6 +744,15 @@ static lxp_result admission_journal_compact_locked(
     if (descriptor >= 0) (void)close(descriptor);
     if (!renamed) (void)admission_temp_remove(server);
     return status;
+}
+
+static lxp_result admission_journal_reserve_maintenance(void *context)
+{
+    lxp_daemon_lni_server *server = context;
+    if (server == NULL || server->daemon == NULL || !server->journal_bound ||
+        server->daemon->reserved_batch_count == 0U)
+        return LXP_ERR_CONTEXT_MISMATCH;
+    return admission_journal_compact_locked(server);
 }
 
 static lxp_result admission_journal_persist(
@@ -1339,8 +1395,8 @@ static lxp_result send_node_info(lxp_daemon_lni_server *server,
         server->daemon->next_sequence - 1U;
     if (pthread_mutex_unlock(&server->daemon->mutex) != 0)
         return LXP_FATAL_INVARIANT;
-    if (pthread_mutex_lock(&server->owner->mutex) != 0) return LXP_ERR_IO;
-    batch = server->owner->receipt_authority->last_batch_number;
+    if (pthread_mutex_lock(&server->owner->receipt_mutex) != 0) return LXP_ERR_IO;
+    batch = server->owner->published_batch_number;
     store_u16(payload + cursor, LNI_VERSION_MAJOR); cursor += 2U;
     store_u16(payload + cursor, LNI_VERSION_MINOR); cursor += 2U;
     store_u16(payload + cursor, server->owner->protocol_version); cursor += 2U;
@@ -1350,7 +1406,7 @@ static lxp_result send_node_info(lxp_daemon_lni_server *server,
     store_u64(payload + cursor, batch); cursor += 8U;
     if (server->owner->evidence_store != NULL)
         (void)memcpy(payload + cursor,
-                     server->owner->evidence_store->latest_checkpoint_id,
+                     server->owner->published_checkpoint_id,
                      32U);
     else
         (void)memset(payload + cursor, 0, 32U);
@@ -1365,7 +1421,7 @@ static lxp_result send_node_info(lxp_daemon_lni_server *server,
         (void)memcpy(payload + cursor, capabilities[index], length);
         cursor += length;
     }
-    if (pthread_mutex_unlock(&server->owner->mutex) != 0)
+    if (pthread_mutex_unlock(&server->owner->receipt_mutex) != 0)
         status = LXP_FATAL_INVARIANT;
     if (status == LXP_OK)
         status = send_envelope(descriptor, server->frame_bytes,
@@ -1602,7 +1658,7 @@ static lxp_result lni_principal(
     return LXP_OK;
 }
 
-static lxp_result program_call_admission_decode(
+static lxp_result program_admission_decode(
     lxp_daemon_protocol_owner *owner, const lxp_activity *activity)
 {
     lxp_module_ctx ctx;
@@ -1642,7 +1698,9 @@ static lxp_result program_call_admission_decode(
             status = LXP_ERR_CONTEXT_MISMATCH;
         return status;
     }
-    if (activity->activity_type != LX_PROGRAMS_CALL) return LXP_OK;
+    if (activity->activity_type != LX_PROGRAMS_CALL &&
+        activity->activity_type != LX_PROGRAMS_DEPLOY &&
+        activity->activity_type != LX_PROGRAMS_UPGRADE) return LXP_OK;
     if (owner->kernel == NULL || owner->scratch == NULL)
         return LXP_ERR_MODULE_DISABLED;
     mark = lxp_arena_mark(owner->scratch);
@@ -1651,8 +1709,13 @@ static lxp_result program_call_admission_decode(
         owner->kernel->epoch, 0U, 0U, owner->scratch, false);
     if (status == LXP_OK) {
         ctx.protocol_version = activity->protocol_version;
-        status = lxp_programs_call_decode(
-            &ctx, activity->payload.bytes, activity->payload.length, &decoded);
+        if (activity->activity_type == LX_PROGRAMS_CALL)
+            status = lxp_programs_call_decode(
+                &ctx, activity->payload.bytes, activity->payload.length, &decoded);
+        else
+            status = lxp_programs_lifecycle_decode(
+                &ctx, lxp_activity_type_ordinal(activity->activity_type),
+                activity->payload.bytes, activity->payload.length, &decoded);
     }
     reset_status = lxp_arena_reset(owner->scratch, mark);
     return reset_status == LXP_OK ? status : reset_status;
@@ -1709,7 +1772,7 @@ static lxp_result send_submit(lxp_daemon_lni_server *server, int descriptor,
                                 request->correlation_id, 4U, status, deadline);
     }
     if (pthread_mutex_lock(&server->owner->mutex) != 0) return LXP_ERR_IO;
-    status = program_call_admission_decode(server->owner, &activity);
+    status = program_admission_decode(server->owner, &activity);
     if (status != LXP_OK) {
         if (pthread_mutex_unlock(&server->owner->mutex) != 0)
             return LXP_FATAL_INVARIANT;
@@ -1726,12 +1789,8 @@ static lxp_result send_submit(lxp_daemon_lni_server *server, int descriptor,
         pthread_mutex_lock(&server->daemon->mutex) != 0)
         status = LXP_ERR_IO;
     if (status == LXP_OK) {
-        if (server->daemon->queue_count >=
-            UINT64_MAX - server->daemon->next_sequence)
-            status = LXP_ERR_SEQUENCE_GAP;
-        else
-            expected_sequence = server->daemon->next_sequence +
-                server->daemon->queue_count;
+        status = lxp_daemon_queue_sequence_locked(
+            server->daemon, server->daemon->queue_count, &expected_sequence);
         if (pthread_mutex_unlock(&server->daemon->mutex) != 0)
             status = LXP_FATAL_INVARIANT;
     }
@@ -1857,7 +1916,10 @@ static lxp_result send_receipt(lxp_daemon_lni_server *server, int descriptor,
 {
     lxp_receipt_query query;
     lxp_byte_span receipt;
-    size_t mark;
+    lxp_log published_log;
+    lxp_history history = {0};
+    lxp_arena arena;
+    uint8_t *storage;
     lxp_result status;
     (void)memset(&query, 0, sizeof(query));
     if (request->proof_length != 0U || request->payload_length < 1U)
@@ -1880,10 +1942,16 @@ static lxp_result send_receipt(lxp_daemon_lni_server *server, int descriptor,
     }
     query.maximum_response_bytes = server->frame_bytes -
         LNI_ENVELOPE_FIXED_BYTES;
-    if (pthread_mutex_lock(&server->owner->mutex) != 0) return LXP_ERR_IO;
-    mark = lxp_arena_mark(server->owner->scratch);
-    status = lxp_receipt_lookup(server->owner->history, &query,
-                                server->owner->scratch, &receipt);
+    if (pthread_mutex_lock(&server->owner->receipt_mutex) != 0) return LXP_ERR_IO;
+    published_log = server->owner->published_receipt_log;
+    if (pthread_mutex_unlock(&server->owner->receipt_mutex) != 0)
+        return LXP_FATAL_INVARIANT;
+    history.log = &published_log;
+    storage = malloc(query.maximum_response_bytes);
+    if (storage == NULL) return LXP_ERR_IO;
+    status = lxp_arena_init(&arena, storage, query.maximum_response_bytes);
+    if (status == LXP_OK)
+        status = lxp_receipt_lookup(&history, &query, &arena, &receipt);
     if (status == LXP_ERR_UNKNOWN_ACTIVITY)
         status = send_envelope(descriptor, server->frame_bytes,
                                LNI_RECEIPT_LOOKUP_RESPONSE,
@@ -1898,9 +1966,7 @@ static lxp_result send_receipt(lxp_daemon_lni_server *server, int descriptor,
     else
         status = receipt_refusal(descriptor, server->frame_bytes,
                                  request->correlation_id, status, deadline);
-    (void)lxp_arena_reset(server->owner->scratch, mark);
-    if (pthread_mutex_unlock(&server->owner->mutex) != 0 && status == LXP_OK)
-        status = LXP_FATAL_INVARIANT;
+    free(storage);
     return status;
 }
 
@@ -2370,7 +2436,7 @@ lxp_result lxp_daemon_lni_simulate(
     if (pthread_mutex_lock(&owner->mutex) != 0) return LXP_ERR_IO;
     locked = true;
     mark = lxp_arena_mark(owner->scratch);
-    status = program_call_admission_decode(owner, &activity);
+    status = program_admission_decode(owner, &activity);
     if (status == LXP_OK && lxp_ct_memcmp(sequencer_public_key,
                       owner->receipt_authority->authorization.public_key,
                       32U) != 0)
@@ -2561,80 +2627,6 @@ static lxp_result evidence_refusal(
             LXP_ERR_MODULE_DISABLED : status;
     return send_refusal(descriptor, server->frame_bytes, correlation_id,
                         4U, public_status, deadline);
-}
-
-static lxp_result latest_receipt_evidence(
-    lxp_daemon_protocol_owner *owner, lxp_arena *arena,
-    lxp_daemon_receipt_evidence *evidence)
-{
-    uint64_t offset = 0U;
-    uint64_t target;
-    size_t mark;
-    bool present = true;
-    lxp_result status = LXP_OK;
-    if (owner == NULL || owner->receipt_authority == NULL || arena == NULL ||
-        evidence == NULL)
-        return LXP_ERR_NON_CANONICAL;
-    target = owner->receipt_authority->last_global_sequence;
-    if (target == 0U) return LXP_ERR_MODULE_DISABLED;
-    mark = lxp_arena_mark(arena);
-    while (status == LXP_OK && present) {
-        status = lxp_daemon_receipt_authority_scan(
-            owner->receipt_authority, &offset, arena, evidence, &present);
-        if (status != LXP_OK || !present) break;
-        if (evidence->global_sequence == target) return LXP_OK;
-        if (evidence->global_sequence > target)
-            return LXP_ERR_LOG_CORRUPT;
-        status = lxp_arena_reset(arena, mark);
-    }
-    return status == LXP_OK ? LXP_ERR_PROJECTION_STALE : status;
-}
-
-static lxp_result latest_account_evidence(
-    lxp_daemon_protocol_owner *owner, const uint8_t account_id[32],
-    const uint8_t *asset_id, const uint8_t *target_activity_id,
-    lxp_arena *arena, lxp_daemon_account_evidence *evidence)
-{
-    lxp_daemon_receipt_evidence head;
-    lxp_receipt receipt;
-    const lx_account_registry *accounts;
-    uint8_t receipt_digest[32];
-    size_t index;
-    bool found = false;
-    lxp_result status;
-    if (owner == NULL || owner->kernel == NULL || owner->kernel->state == NULL ||
-        owner->kernel->state->accounts == NULL || account_id == NULL ||
-        arena == NULL || evidence == NULL)
-        return LXP_ERR_NON_CANONICAL;
-    accounts = owner->kernel->state->accounts;
-    for (index = 0U; index < accounts->count; ++index) {
-        const lx_account *account = &accounts->accounts[index];
-        if (lxp_ct_memcmp(account->id, account_id, 32U) != 0) continue;
-        if (found) return LXP_FATAL_INVARIANT;
-        found = true;
-        if (asset_id != NULL &&
-            (!account->has_asset ||
-             lxp_ct_memcmp(account->asset_id, asset_id, 32U) != 0))
-            return LXP_ERR_ASSET_MISMATCH;
-    }
-    if (!found) return LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE;
-    status = latest_receipt_evidence(owner, arena, &head);
-    if (status == LXP_OK)
-        status = lxp_receipt_decode(head.canonical_receipt.bytes,
-                                    head.canonical_receipt.length,
-                                    true, &receipt);
-    if (status == LXP_OK && target_activity_id != NULL &&
-        lxp_ct_memcmp(receipt.activity_id, target_activity_id, 32U) != 0)
-        status = LXP_ERR_CONTEXT_MISMATCH;
-    if (status == LXP_OK)
-        status = lxp_receipt_digest(&receipt, arena, receipt_digest);
-    if (status == LXP_OK)
-        status = lxp_daemon_account_evidence_build(
-            owner->kernel, owner->network_id, account_id, receipt_digest,
-            receipt.timestamp, head.canonical_receipt, &head.receipt_proof,
-            &owner->receipt_authority->authorization,
-            head.canonical_header, head.header_signature, arena, evidence);
-    return status;
 }
 
 static lxp_result parse_account_read_request(
@@ -2946,6 +2938,16 @@ static lxp_result send_finality_evidence_register(
         (lxp_byte_span){request->payload, request->payload_length},
         (lxp_byte_span){request->proof, request->proof_length},
         server->owner->scratch, &evidence);
+    if (status == LXP_OK) {
+        if (pthread_mutex_lock(&server->owner->receipt_mutex) != 0)
+            status = LXP_ERR_IO;
+        else {
+            (void)memcpy(server->owner->published_checkpoint_id,
+                         server->owner->evidence_store->latest_checkpoint_id, 32U);
+            if (pthread_mutex_unlock(&server->owner->receipt_mutex) != 0)
+                status = LXP_FATAL_INVARIANT;
+        }
+    }
     if (status == LXP_OK) {
         store_u16(response, 1U);
         (void)memcpy(response + 2U, evidence.checkpoint_id, 32U);
@@ -3301,8 +3303,6 @@ lxp_result lxp_daemon_lni_serve(
     if (status != LXP_OK) goto fail;
     status = admission_journal_open(server);
     if (status != LXP_OK) goto fail;
-    status = admission_journal_recover(server);
-    if (status != LXP_OK) goto fail;
     descriptor = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
     if (descriptor < 0) {
         status = LXP_ERR_IO;
@@ -3345,11 +3345,14 @@ lxp_result lxp_daemon_lni_serve(
     }
     daemon->persist_admission = admission_journal_persist;
     daemon->persist_admission_context = server;
+    daemon->persist_maintenance_reservation = admission_journal_reserve_maintenance;
     server->journal_bound = true;
     if (pthread_mutex_unlock(&daemon->mutex) != 0) {
         status = LXP_FATAL_INVARIANT;
         goto fail_created;
     }
+    status = admission_journal_recover(server);
+    if (status != LXP_OK) goto fail_created;
     if (pthread_create(&server->thread, NULL, server_run, server) != 0) {
         status = LXP_ERR_IO;
         goto fail_created;
@@ -3361,6 +3364,7 @@ fail_created:
         if (daemon->persist_admission_context == server) {
             daemon->persist_admission = NULL;
             daemon->persist_admission_context = NULL;
+            daemon->persist_maintenance_reservation = NULL;
         }
         server->journal_bound = false;
         (void)pthread_mutex_unlock(&daemon->mutex);
@@ -3414,6 +3418,7 @@ lxp_result lxp_daemon_lni_stop(lxp_daemon_lni_server *server)
         if (server->daemon->persist_admission_context == server) {
             server->daemon->persist_admission = NULL;
             server->daemon->persist_admission_context = NULL;
+            server->daemon->persist_maintenance_reservation = NULL;
         } else if (status == LXP_OK) {
             status = LXP_ERR_CONTEXT_MISMATCH;
         }

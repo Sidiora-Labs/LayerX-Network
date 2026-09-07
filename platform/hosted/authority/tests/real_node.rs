@@ -8,18 +8,20 @@ use layerx_client::lni::schema::{decode_envelope, encode_envelope, Envelope, Ver
 use layerx_client::lni::transport::{ConnectionGate, FrameTransport, Limits, Uds};
 use layerx_platform_authority::{
     authorized_batch_by_activity, hex, parse_replica_evidence, receipt_locator, BatchEvidence,
-    EvidenceRefusal,
+    BatchIdentityEvidence, EvidenceRefusal,
 };
 use layerx_proof::inclusion::{verify_receipt, InclusionError, SequencerAuthorization};
 use layerx_proof::merkle::decode_proof;
-use layerx_proof::receipt::{verify_outcome, AuthorizedBatch};
+use layerx_proof::receipt::{
+    verify_outcome_maintained, AuthorizedBatch, MaintainedOutcomeEvidence,
+};
 use layerx_types::activity::{Authority, EnvelopeBuilder, Signature, TimestampBound};
 use layerx_types::amount::Amount;
 use layerx_types::ids::{Did, IdempotencyKey};
 use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry, Payload};
 use layerx_wire::activity::{decode_signed, encode_signed_envelope, encode_unsigned_envelope};
 use layerx_wire::encode::Encoder;
-use layerx_wire::hash::{activity_id, execution_batch_id, Domain};
+use layerx_wire::hash::{activity_id, execution_batch_id, program_execution_batch_id, Domain};
 use layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION as PROTOCOL_VERSION;
 use native_tls::{Certificate, TlsConnector};
 use sha2::{Digest as _, Sha256};
@@ -830,8 +832,10 @@ struct Cluster {
 fn start_cluster(with_sequencer: bool) -> Cluster {
     let identity = identity();
     let repository = repository_root();
-    let layerxd = repository.join("build/bin/layerxd");
-    let builder = repository.join("build/bin/layerx-genesis-build");
+    let binaries = std::env::var_os("LAYERX_TEST_NATIVE_BIN_DIR")
+        .map_or_else(|| repository.join("build/bin"), PathBuf::from);
+    let layerxd = binaries.join("layerxd");
+    let builder = binaries.join("layerx-genesis-build");
     assert!(layerxd.is_file(), "{} is not built", layerxd.display());
     assert!(builder.is_file(), "{} is not built", builder.display());
     let root = std::env::temp_dir().join(format!(
@@ -1365,6 +1369,21 @@ fn real_node_authority_serves_verified_facts_and_reflects_replica_loss() {
     );
     assert_eq!(gateway_view.content_type, "application/json");
     let facts = json(&gateway_view);
+    if let Some(path) = std::env::var_os("LAYERX_TEST_MAINTAINED_AUTHORITY_FIXTURE") {
+        let capture = serde_json::json!({
+            "authority": facts,
+            "receipt_hex": hex::encode(&submitted.receipt),
+            "sequencer_id": hex::encode(&cluster.sequencer_id),
+            "sequencer_public_key": hex::encode(&cluster.sequencer_key),
+            "first_batch": FIRST_BATCH.to_string(),
+            "last_batch": LAST_BATCH.to_string(),
+        });
+        write(
+            Path::new(&path),
+            &must(serde_json::to_vec_pretty(&capture), "public evidence"),
+            0o644,
+        );
+    }
     let keys: Vec<&String> = facts
         .as_object()
         .unwrap_or_else(|| panic!("facts must be an object"))
@@ -1375,6 +1394,7 @@ fn real_node_authority_serves_verified_facts_and_reflects_replica_loss() {
         [
             "activity_id",
             "asset",
+            "batch_evidence",
             "batch_id",
             "network_id",
             "previous_state_root",
@@ -1397,8 +1417,44 @@ fn real_node_authority_serves_verified_facts_and_reflects_replica_loss() {
     );
     assert_eq!(field(&facts, "asset"), hex::encode(&cluster.asset));
     let authorised = authority_facts(&gateway_view);
+    let served_document = serde_json::json!({
+        "authority_replica_id": hex::encode(&cluster.replica_id),
+        "sequencer_public_key": hex::encode(&cluster.sequencer_key),
+        "batch_evidence": facts["batch_evidence"],
+    });
+    let served_evidence = must(
+        parse_replica_evidence(
+            &must(serde_json::to_vec(&served_document), "served evidence JSON"),
+            cluster.replica_id,
+            cluster.sequencer_key,
+        ),
+        "served evidence",
+    );
+    let served_proof = must(
+        decode_proof(&served_evidence.receipt_proof),
+        "served activity proof",
+    );
+    let BatchIdentityEvidence::OccupancyMaintenanceV2 {
+        receipt: maintenance_bytes,
+        proof: maintenance_path,
+    } = &served_evidence.batch_identity
+    else {
+        panic!("maintained response")
+    };
+    let maintenance_path = must(decode_proof(maintenance_path), "served maintenance proof");
     let verified = must(
-        verify_outcome(&submitted.receipt, &authorised),
+        verify_outcome_maintained(
+            &submitted.receipt,
+            &authorised,
+            &MaintainedOutcomeEvidence {
+                header: &served_evidence.header,
+                header_signature: &served_evidence.header_signature,
+                activity_proof: &served_proof,
+                maintenance: maintenance_bytes,
+                maintenance_proof: &maintenance_path,
+                authorization: &authorization,
+            },
+        ),
         "receipt verification under the served facts",
     );
     let protocol = verified
@@ -1447,6 +1503,7 @@ fn real_node_authority_serves_verified_facts_and_reflects_replica_loss() {
         parse_replica_evidence(&relayed.body, cluster.replica_id, cluster.sequencer_key),
         "replica evidence",
     );
+    assert_eq!(served_evidence, evidence);
     let proof = must(decode_proof(&evidence.receipt_proof), "receipt proof");
     let inclusion = must(
         verify_receipt(
@@ -1459,14 +1516,65 @@ fn real_node_authority_serves_verified_facts_and_reflects_replica_loss() {
         "independent inclusion verification",
     );
     let header = inclusion.header().header();
+    let BatchIdentityEvidence::OccupancyMaintenanceV2 {
+        receipt,
+        proof: maintenance_proof,
+    } = &evidence.batch_identity
+    else {
+        panic!("native maintained batch must carry maintenance evidence")
+    };
+    let maintenance_proof = must(decode_proof(maintenance_proof), "maintenance proof");
+    must(
+        verify_receipt(
+            receipt,
+            &maintenance_proof,
+            &evidence.header,
+            &evidence.header_signature,
+            &authorization,
+        ),
+        "independent maintenance inclusion verification",
+    );
+    let maintenance = must(
+        layerx_wire::maintenance::decode_occupancy_maintenance(receipt),
+        "maintenance record",
+    );
+    assert_eq!(maintenance.batch_number, header.batch_number());
+    assert_eq!(maintenance.global_sequence, header.last_sequence());
+    assert_eq!(
+        maintenance.resulting_state_root,
+        header.resulting_state_root()
+    );
+    assert_eq!(maintenance_proof.leaf_index(), proof.leaf_count() - 1);
+    assert_eq!(maintenance_proof.leaf_count(), proof.leaf_count());
+    assert_eq!(
+        u64::from(maintenance_proof.leaf_index()),
+        header.last_sequence() - header.first_sequence()
+    );
+    assert_eq!(
+        header.first_sequence() + u64::from(proof.leaf_index()),
+        protocol.global_sequence()
+    );
     let expected_batch_id = must(
-        execution_batch_id(
+        program_execution_batch_id(
             header.previous_state_root(),
-            protocol.activity_id(),
-            protocol.global_sequence(),
+            header.activity_merkle_root(),
+            header.first_sequence(),
+            header.last_sequence() - 1,
             header.batch_number(),
         ),
-        "execution batch id",
+        "maintained execution batch id",
+    );
+    assert_ne!(
+        expected_batch_id,
+        must(
+            execution_batch_id(
+                header.previous_state_root(),
+                protocol.activity_id(),
+                protocol.global_sequence(),
+                header.batch_number()
+            ),
+            "legacy execution batch id"
+        )
     );
     assert_eq!(hex::encode(&expected_batch_id), field(&facts, "batch_id"));
     assert_eq!(

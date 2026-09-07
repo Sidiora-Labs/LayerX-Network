@@ -1,5 +1,5 @@
 #[path = "../../layerx-programs-registry/tests/support/mod.rs"]
-mod protocol_support;
+pub mod protocol_support;
 
 use layerx_programs_runtime::test_support::{
     code_section, func_body, function_section, module, raw_section, type_section, unsigned_leb,
@@ -7,13 +7,15 @@ use layerx_programs_runtime::test_support::{
 };
 use layerx_programs_runtime::{
     Abi, AuthorizationContext, CapabilitySet, FeeSchedule, Meter, PrincipalId, ProgramId,
-    ResourceBudget, Storage, UnavailableReceiptOracle, ValidationLimits, WasmEngine, WasmValue,
-    ABI_V1_VERSION,
+    ProgramInstance, ResourceBudget, Storage, UnavailableReceiptOracle, ValidatedModule,
+    ValidationLimits, WasmEngine, WasmValue, ABI_V1_VERSION,
 };
 use layerx_programs_sandbox::{
     restore, Lease, LeaseActivity, LeaseId, LeaseLimits, LeaseState, LeaseTransition, SandboxState,
     Snapshot, SnapshotRefusal, TransitionEvidence,
 };
+
+use layerx_programs_sandbox::snapshot::{RestoreRequest, RestoredSandbox};
 
 const ENTRYPOINT: &[u8] = b"sandbox_transition";
 const CALL_PREFIX: usize = 106;
@@ -86,8 +88,16 @@ fn call_payload(host: ProgramId, transition: LeaseTransition) -> Vec<u8> {
     let mut payload = vec![0; CALL_PREFIX];
     payload[..32].copy_from_slice(&host.bytes());
     payload[32..34].copy_from_slice(&2u16.to_be_bytes());
-    payload[34..36].copy_from_slice(&(ENTRYPOINT.len() as u16).to_be_bytes());
-    payload[36..40].copy_from_slice(&(calldata.len() as u32).to_be_bytes());
+    payload[34..36].copy_from_slice(
+        &u16::try_from(ENTRYPOINT.len())
+            .unwrap_or_else(|error| panic!("entrypoint length: {error}"))
+            .to_be_bytes(),
+    );
+    payload[36..40].copy_from_slice(
+        &u32::try_from(calldata.len())
+            .unwrap_or_else(|error| panic!("calldata length: {error}"))
+            .to_be_bytes(),
+    );
     payload[46..50].copy_from_slice(&1u32.to_be_bytes());
     payload.extend_from_slice(ENTRYPOINT);
     payload.extend_from_slice(&calldata);
@@ -100,7 +110,7 @@ fn evidence(
     batch: u64,
 ) -> (LeaseTransition, TransitionEvidence) {
     let fixture = protocol_support::programs_call_fixture(
-        call_payload(lease.host_program(), transition),
+        &call_payload(lease.host_program(), transition),
         batch,
         protocol_support::NOW,
     );
@@ -116,7 +126,7 @@ fn evidence(
         )
         .unwrap_or_else(|error| panic!("head: {error}"));
     transition.activity_id = head.activity_id();
-    let verified = TransitionEvidence::verify_call(
+    let call_evidence = TransitionEvidence::verify_call(
         &head,
         lease,
         transition,
@@ -126,7 +136,7 @@ fn evidence(
         &proof.header,
     )
     .unwrap_or_else(|error| panic!("evidence: {error}"));
-    (transition, verified)
+    (transition, call_evidence)
 }
 
 fn advance(mut lease: Lease, edges: &[(LeaseActivity, LeaseState, LeaseState, u64)]) -> Lease {
@@ -346,218 +356,37 @@ fn snapshot_transition(
 fn snapshot_destroy_restore_and_continue_preserves_exact_execution_state() {
     let mut source = active(1, 9);
     let module = validated_continuation();
-    let mut source_storage = Storage::new();
-    let namespace = source
-        .namespace()
-        .storage_namespace()
-        .unwrap_or_else(|error| panic!("namespace: {error}"));
-    let live_key = b"counter".to_vec();
-    let mut transaction = source_storage.transaction(namespace);
-    transaction
-        .write(&live_key, &41u64.to_be_bytes())
-        .unwrap_or_else(|error| panic!("live write: {error}"));
-    transaction.commit();
-    let mut uninterrupted_instance = running_instance(&source, &module, source_storage);
-    assert_eq!(
-        uninterrupted_instance.call("seed", &[]),
-        Ok(vec![WasmValue::I32(41)])
-    );
-    let uninterrupted_capture =
-        Snapshot::capture(&source, &mut uninterrupted_instance, "continue", &[])
-            .unwrap_or_else(|error| panic!("sandbox state: {error}"));
-    let uninterrupted = uninterrupted_capture.state().clone();
-    let (snapshot_edge, snapshot_evidence) = snapshot_transition(
-        &source,
-        uninterrupted_capture
-            .digest()
-            .unwrap_or_else(|error| panic!("digest: {error}")),
-        13,
-    );
-    let snapshot = Snapshot::commit(
-        &mut source,
-        &mut uninterrupted_instance,
-        uninterrupted_capture,
-        snapshot_edge,
-        snapshot_evidence,
-    )
-    .unwrap_or_else(|error| panic!("snapshot: {error}"));
-    let snapshot_usage = uninterrupted_instance
-        .meter()
-        .finish()
-        .unwrap_or_else(|error| panic!("usage: {error}"));
-    assert!(snapshot_usage.storage_write_bytes >= snapshot.storage_bytes());
-    let mut source_storage = uninterrupted_instance
-        .storage_snapshot()
-        .unwrap_or_else(|| panic!("runtime storage"));
-    assert_eq!(source.snapshot_records().len(), 1);
-    assert_eq!(source.snapshot_records()[0].digest(), snapshot.digest());
-    assert_eq!(source.snapshot_records()[0].namespace(), source.namespace());
-    assert_eq!(
-        source.snapshot_records()[0].byte_length(),
-        snapshot.byte_length()
-    );
-    assert!(source.snapshot_records()[0].chunk_count() > 0);
-    assert_eq!(source.snapshot_records()[0].owner(), source.tenant());
-    assert_eq!(source.snapshot_records()[0].source_lease(), source.id());
-    assert_eq!(
-        source.snapshot_records()[0].host_program(),
-        source.host_program()
-    );
-    assert_eq!(
-        source.snapshot_records()[0].image_code_hash(),
-        source.image_code_hash()
-    );
-    let restarted_source = Lease::decode_state(
-        &source
-            .canonical_state_bytes()
-            .unwrap_or_else(|error| panic!("source state: {error}")),
-    )
-    .unwrap_or_else(|error| panic!("restart lease: {error}"));
-    assert_eq!(
-        restarted_source.snapshot_records(),
-        source.snapshot_records()
-    );
-    let restarted_snapshot = SandboxState::from_canonical(
-        &restarted_source,
-        &snapshot
-            .state()
-            .canonical_bytes()
-            .unwrap_or_else(|error| panic!("snapshot bytes: {error}")),
-    )
-    .unwrap_or_else(|error| panic!("restart snapshot: {error}"));
-    assert_eq!(restarted_snapshot, *snapshot.state());
-    assert!(
-        source_storage
-            .namespace_persistent_bytes(
-                source
-                    .namespace()
-                    .storage_namespace()
-                    .unwrap_or_else(|error| panic!("namespace: {error}"))
-            )
-            .unwrap_or_else(|error| panic!("source occupancy: {error}"))
-            > 0
-    );
+    let (mut uninterrupted_instance, snapshot, uninterrupted, mut source_storage) =
+        capture_seeded_snapshot(&mut source, &module);
+    let restarted_snapshot = verify_snapshot_restart(&source, &snapshot, &source_storage);
 
-    let mut destroyed = advance_existing(
-        source,
-        &[
-            (
-                LeaseActivity::BeginSettlement,
-                LeaseState::Active,
-                LeaseState::Settling,
-                14,
-            ),
-            (
-                LeaseActivity::Expire,
-                LeaseState::Settling,
-                LeaseState::Expired,
-                15,
-            ),
-        ],
-    );
-    let (destroy, destroy_evidence) = evidence(
-        &destroyed,
-        LeaseTransition {
-            lease: destroyed.id(),
-            tenant: destroyed.tenant(),
-            activity: LeaseActivity::Destroy,
-            from: LeaseState::Expired,
-            to: LeaseState::Destroyed,
-            activity_id: [0; 32],
-            usage_observation_digest: [0; 32],
-        },
-        16,
-    );
-    let mut reclaim_meter = meter();
-    destroyed
-        .destroy_with_evidence(
-            &mut source_storage,
-            &mut reclaim_meter,
-            destroy,
-            destroy_evidence,
-        )
-        .unwrap_or_else(|error| panic!("destroy: {error}"));
-    assert_eq!(destroyed.state(), LeaseState::Destroyed);
-    assert_eq!(destroyed.snapshot_records().len(), 1);
-    assert_eq!(destroyed.snapshot_records()[0].digest(), snapshot.digest());
-    assert_eq!(
-        destroyed.snapshot_records()[0].namespace(),
-        destroyed.namespace()
-    );
-    assert_eq!(
-        source_storage.namespace_persistent_bytes(
-            destroyed
-                .namespace()
-                .storage_namespace()
-                .unwrap_or_else(|error| panic!("namespace: {error}"))
-        ),
-        Ok(0)
-    );
-    let restarted_destroyed = Lease::decode_state(
-        &destroyed
-            .canonical_state_bytes()
-            .unwrap_or_else(|error| panic!("destroyed state: {error}")),
-    )
-    .unwrap_or_else(|error| panic!("restart destroyed: {error}"));
+    let restarted_destroyed = destroy_snapshot_source(source, &mut source_storage, &snapshot);
     let mut target = funded(2, 9);
     let mut target_storage = Storage::new();
     let (activate, activation_evidence) = activation(&target, 22);
     let mut restore_meter = meter();
     let target_authorization = AuthorizationContext::new(target.tenant(), CapabilitySet::empty());
-    let reconstructed_bytes = snapshot.byte_length() + 15;
-    let total_restored_bytes = reconstructed_bytes + 65_536 + 16;
-    for (attempted, runtime_copy) in [(reconstructed_bytes, false), (total_restored_bytes, true)] {
-        let limit = attempted - 1;
-        let mut bounded_meter = Meter::new(
-            ResourceBudget::new_complete(1_000, 1 << 20, 1 << 20, limit, 100, 1 << 20, 100),
-            FeeSchedule::declared(),
-        );
-        let target_before = target.clone();
-        let storage_before = target_storage.clone();
-        let meter_before = bounded_meter.clone();
-        let refusal = restore(
-            &restarted_destroyed,
-            &mut target,
-            &mut target_storage,
-            snapshot.digest(),
-            restarted_snapshot.clone(),
-            target_authorization.clone(),
-            &mut bounded_meter,
-            &module,
-            activate,
-            activation_evidence,
-        )
-        .err();
-        let expected = layerx_programs_runtime::MeterRefusal::BudgetExceeded {
-            resource: layerx_programs_runtime::ResourceKind::StorageWrite,
-            limit,
-            attempted,
-        };
-        if runtime_copy {
-            assert_eq!(
-                refusal,
-                Some(SnapshotRefusal::Runtime(
-                    layerx_programs_runtime::ExecutionFault::Resource { refusal: expected }
-                ))
-            );
-        } else {
-            assert_eq!(refusal, Some(SnapshotRefusal::Meter(expected)));
-        }
-        assert_eq!(target, target_before);
-        assert_eq!(target_storage, storage_before);
-        assert_eq!(bounded_meter.finish(), meter_before.finish());
-    }
+    let request = RestoreRequest {
+        snapshot_digest: snapshot.digest(),
+        supplied: restarted_snapshot,
+        authorization: target_authorization,
+        module: &module,
+        activation: activate,
+        evidence: activation_evidence,
+    };
+    verify_restore_bounds(
+        &restarted_destroyed,
+        &mut target,
+        &mut target_storage,
+        &request,
+        &snapshot,
+    );
     let restored = restore(
         &restarted_destroyed,
         &mut target,
         &mut target_storage,
-        snapshot.digest(),
-        restarted_snapshot,
-        target_authorization,
         &mut restore_meter,
-        &module,
-        activate,
-        activation_evidence,
+        request,
     )
     .unwrap_or_else(|error| panic!("restore: {error}"));
     assert_eq!(
@@ -582,34 +411,7 @@ fn snapshot_destroy_restore_and_continue_preserves_exact_execution_state() {
         snapshot.byte_length() + 65_536 + 16 + 15
     );
 
-    let uninterrupted_before = uninterrupted_instance
-        .meter()
-        .finish()
-        .unwrap_or_else(|error| panic!("uninterrupted before: {error}"));
-    let uninterrupted_output = uninterrupted_instance
-        .call("continue", &[])
-        .unwrap_or_else(|error| panic!("uninterrupted continuation: {error}"));
-    let uninterrupted_after = uninterrupted_instance
-        .meter()
-        .finish()
-        .unwrap_or_else(|error| panic!("uninterrupted after: {error}"));
-    let restored_output = restored.outputs();
-    let restored_usage = restored
-        .instance()
-        .meter()
-        .finish()
-        .unwrap_or_else(|error| panic!("restored runtime usage: {error}"));
-    assert_eq!(restored_output, uninterrupted_output);
-    assert_eq!(restored_output, [WasmValue::I32(42)]);
-    let uninterrupted_delta = (
-        uninterrupted_after.cpu_fuel - uninterrupted_before.cpu_fuel,
-        uninterrupted_after.memory_bytes - uninterrupted_before.memory_bytes,
-        uninterrupted_after.storage_read_bytes - uninterrupted_before.storage_read_bytes,
-        uninterrupted_after.storage_write_bytes - uninterrupted_before.storage_write_bytes,
-        uninterrupted_after.output_values - uninterrupted_before.output_values,
-        uninterrupted_after.output_bytes - uninterrupted_before.output_bytes,
-    );
-    assert_eq!(restored_usage.cpu_fuel, uninterrupted_delta.0);
+    verify_continuation(&mut uninterrupted_instance, &restored);
 }
 
 #[test]
@@ -622,7 +424,6 @@ fn ownership_digest_and_target_bindings_are_refused_before_metering() {
         .unwrap_or_else(|error| panic!("seed: {error}"));
     let canonical_capture = Snapshot::capture(&source, &mut source_instance, "continue", &[])
         .unwrap_or_else(|error| panic!("capture: {error}"));
-    let canonical = canonical_capture.state().clone();
     let (edge, proof) = snapshot_transition(
         &source,
         canonical_capture
@@ -652,13 +453,15 @@ fn ownership_digest_and_target_bindings_are_refused_before_metering() {
             &source,
             &mut target,
             &mut target_storage,
-            snapshot.digest(),
-            snapshot.state().clone(),
-            intruder_authorization,
             &mut intruder_meter,
-            &module,
-            activate,
-            activation_evidence
+            layerx_programs_sandbox::snapshot::RestoreRequest {
+                snapshot_digest: snapshot.digest(),
+                supplied: snapshot.state().clone(),
+                authorization: intruder_authorization,
+                module: &module,
+                activation: activate,
+                evidence: activation_evidence,
+            },
         ),
         Err(SnapshotRefusal::NotSnapshotOwner)
     ));
@@ -680,13 +483,15 @@ fn ownership_digest_and_target_bindings_are_refused_before_metering() {
             &source,
             &mut target,
             &mut target_storage,
-            snapshot.digest(),
-            altered.state().clone(),
-            target_authorization,
             &mut mismatch_meter,
-            &module,
-            activate,
-            activation_evidence
+            layerx_programs_sandbox::snapshot::RestoreRequest {
+                snapshot_digest: snapshot.digest(),
+                supplied: altered.state().clone(),
+                authorization: target_authorization,
+                module: &module,
+                activation: activate,
+                evidence: activation_evidence,
+            },
         ),
         Err(SnapshotRefusal::DigestMismatch)
     ));
@@ -697,26 +502,7 @@ fn ownership_digest_and_target_bindings_are_refused_before_metering() {
         Ok(0)
     );
 
-    let mut foreign = funded(5, 8);
-    let mut foreign_storage = Storage::new();
-    let mut foreign_meter = meter();
-    let (activate, activation_evidence) = activation(&foreign, 22);
-    let foreign_authorization = AuthorizationContext::new(foreign.tenant(), CapabilitySet::empty());
-    assert!(matches!(
-        restore(
-            &source,
-            &mut foreign,
-            &mut foreign_storage,
-            snapshot.digest(),
-            snapshot.state().clone(),
-            foreign_authorization,
-            &mut foreign_meter,
-            &module,
-            activate,
-            activation_evidence
-        ),
-        Err(SnapshotRefusal::NotSnapshotOwner)
-    ));
+    verify_foreign_target_refusal(&source, &module, &snapshot);
 }
 
 #[test]
@@ -814,5 +600,296 @@ fn continuation_capture_fails_closed_when_a_mutable_global_is_hidden() {
     assert!(matches!(
         instance.capture_continuation("continue", &[]),
         Err(layerx_programs_runtime::ExecutionFault::EngineFault { .. })
+    ));
+}
+
+fn capture_seeded_snapshot(
+    source: &mut Lease,
+    module: &ValidatedModule,
+) -> (ProgramInstance, Snapshot, SandboxState, Storage) {
+    let mut source_storage = Storage::new();
+    let namespace = source
+        .namespace()
+        .storage_namespace()
+        .unwrap_or_else(|error| panic!("namespace: {error}"));
+    let live_key = b"counter".to_vec();
+    let mut transaction = source_storage.transaction(namespace);
+    transaction
+        .write(&live_key, &41u64.to_be_bytes())
+        .unwrap_or_else(|error| panic!("live write: {error}"));
+    assert_eq!(transaction.commit(), 1);
+    let mut uninterrupted_instance = running_instance(source, module, source_storage);
+    assert_eq!(
+        uninterrupted_instance.call("seed", &[]),
+        Ok(vec![WasmValue::I32(41)])
+    );
+    let uninterrupted_capture =
+        Snapshot::capture(source, &mut uninterrupted_instance, "continue", &[])
+            .unwrap_or_else(|error| panic!("sandbox state: {error}"));
+    let uninterrupted = uninterrupted_capture.state().clone();
+    let (snapshot_edge, snapshot_evidence) = snapshot_transition(
+        source,
+        uninterrupted_capture
+            .digest()
+            .unwrap_or_else(|error| panic!("digest: {error}")),
+        13,
+    );
+    let snapshot = Snapshot::commit(
+        source,
+        &mut uninterrupted_instance,
+        uninterrupted_capture,
+        snapshot_edge,
+        snapshot_evidence,
+    )
+    .unwrap_or_else(|error| panic!("snapshot: {error}"));
+    let snapshot_usage = uninterrupted_instance
+        .meter()
+        .finish()
+        .unwrap_or_else(|error| panic!("usage: {error}"));
+    assert!(snapshot_usage.storage_write_bytes >= snapshot.storage_bytes());
+    let source_storage = uninterrupted_instance
+        .storage_snapshot()
+        .unwrap_or_else(|| panic!("runtime storage"));
+    (
+        uninterrupted_instance,
+        snapshot,
+        uninterrupted,
+        source_storage,
+    )
+}
+
+fn verify_snapshot_restart(
+    source: &Lease,
+    snapshot: &Snapshot,
+    source_storage: &Storage,
+) -> SandboxState {
+    assert_eq!(source.snapshot_records().len(), 1);
+    assert_eq!(source.snapshot_records()[0].digest(), snapshot.digest());
+    assert_eq!(source.snapshot_records()[0].namespace(), source.namespace());
+    assert_eq!(
+        source.snapshot_records()[0].byte_length(),
+        snapshot.byte_length()
+    );
+    assert!(source.snapshot_records()[0].chunk_count() > 0);
+    assert_eq!(source.snapshot_records()[0].owner(), source.tenant());
+    assert_eq!(source.snapshot_records()[0].source_lease(), source.id());
+    assert_eq!(
+        source.snapshot_records()[0].host_program(),
+        source.host_program()
+    );
+    assert_eq!(
+        source.snapshot_records()[0].image_code_hash(),
+        source.image_code_hash()
+    );
+    let restarted_source = Lease::decode_state(
+        &source
+            .canonical_state_bytes()
+            .unwrap_or_else(|error| panic!("source state: {error}")),
+    )
+    .unwrap_or_else(|error| panic!("restart lease: {error}"));
+    assert_eq!(
+        restarted_source.snapshot_records(),
+        source.snapshot_records()
+    );
+    let restarted_snapshot = SandboxState::from_canonical(
+        &restarted_source,
+        &snapshot
+            .state()
+            .canonical_bytes()
+            .unwrap_or_else(|error| panic!("snapshot bytes: {error}")),
+    )
+    .unwrap_or_else(|error| panic!("restart snapshot: {error}"));
+    assert_eq!(restarted_snapshot, *snapshot.state());
+    assert!(
+        source_storage
+            .namespace_persistent_bytes(
+                source
+                    .namespace()
+                    .storage_namespace()
+                    .unwrap_or_else(|error| panic!("namespace: {error}"))
+            )
+            .unwrap_or_else(|error| panic!("source occupancy: {error}"))
+            > 0
+    );
+
+    restarted_snapshot
+}
+
+fn destroy_snapshot_source(
+    source: Lease,
+    source_storage: &mut Storage,
+    snapshot: &Snapshot,
+) -> Lease {
+    let mut destroyed = advance_existing(
+        source,
+        &[
+            (
+                LeaseActivity::BeginSettlement,
+                LeaseState::Active,
+                LeaseState::Settling,
+                14,
+            ),
+            (
+                LeaseActivity::Expire,
+                LeaseState::Settling,
+                LeaseState::Expired,
+                15,
+            ),
+        ],
+    );
+    let (destroy, destroy_evidence) = evidence(
+        &destroyed,
+        LeaseTransition {
+            lease: destroyed.id(),
+            tenant: destroyed.tenant(),
+            activity: LeaseActivity::Destroy,
+            from: LeaseState::Expired,
+            to: LeaseState::Destroyed,
+            activity_id: [0; 32],
+            usage_observation_digest: [0; 32],
+        },
+        16,
+    );
+    let mut reclaim_meter = meter();
+    destroyed
+        .destroy_with_evidence(
+            source_storage,
+            &mut reclaim_meter,
+            destroy,
+            destroy_evidence,
+        )
+        .unwrap_or_else(|error| panic!("destroy: {error}"));
+    assert_eq!(destroyed.state(), LeaseState::Destroyed);
+    assert_eq!(destroyed.snapshot_records().len(), 1);
+    assert_eq!(destroyed.snapshot_records()[0].digest(), snapshot.digest());
+    assert_eq!(
+        destroyed.snapshot_records()[0].namespace(),
+        destroyed.namespace()
+    );
+    assert_eq!(
+        source_storage.namespace_persistent_bytes(
+            destroyed
+                .namespace()
+                .storage_namespace()
+                .unwrap_or_else(|error| panic!("namespace: {error}"))
+        ),
+        Ok(0)
+    );
+    let restarted_destroyed = Lease::decode_state(
+        &destroyed
+            .canonical_state_bytes()
+            .unwrap_or_else(|error| panic!("destroyed state: {error}")),
+    )
+    .unwrap_or_else(|error| panic!("restart destroyed: {error}"));
+    restarted_destroyed
+}
+
+fn verify_restore_bounds(
+    source: &Lease,
+    target: &mut Lease,
+    target_storage: &mut Storage,
+    request: &RestoreRequest<'_>,
+    snapshot: &Snapshot,
+) {
+    let reconstructed_bytes = snapshot.byte_length() + 15;
+    let total_restored_bytes = reconstructed_bytes + 65_536 + 16;
+    for (attempted, runtime_copy) in [(reconstructed_bytes, false), (total_restored_bytes, true)] {
+        let limit = attempted - 1;
+        let mut bounded_meter = Meter::new(
+            ResourceBudget::new_complete(1_000, 1 << 20, 1 << 20, limit, 100, 1 << 20, 100),
+            FeeSchedule::declared(),
+        );
+        let target_before = target.clone();
+        let storage_before = target_storage.clone();
+        let meter_before = bounded_meter.clone();
+        let refusal = restore(
+            source,
+            target,
+            target_storage,
+            &mut bounded_meter,
+            layerx_programs_sandbox::snapshot::RestoreRequest {
+                snapshot_digest: request.snapshot_digest,
+                supplied: request.supplied.clone(),
+                authorization: request.authorization.clone(),
+                module: request.module,
+                activation: request.activation,
+                evidence: request.evidence,
+            },
+        )
+        .err();
+        let expected = layerx_programs_runtime::MeterRefusal::BudgetExceeded {
+            resource: layerx_programs_runtime::ResourceKind::StorageWrite,
+            limit,
+            attempted,
+        };
+        if runtime_copy {
+            assert_eq!(
+                refusal,
+                Some(SnapshotRefusal::Runtime(
+                    layerx_programs_runtime::ExecutionFault::Resource { refusal: expected }
+                ))
+            );
+        } else {
+            assert_eq!(refusal, Some(SnapshotRefusal::Meter(expected)));
+        }
+        assert_eq!(*target, target_before);
+        assert_eq!(*target_storage, storage_before);
+        assert_eq!(bounded_meter.finish(), meter_before.finish());
+    }
+}
+
+fn verify_continuation(uninterrupted_instance: &mut ProgramInstance, restored: &RestoredSandbox) {
+    let uninterrupted_before = uninterrupted_instance
+        .meter()
+        .finish()
+        .unwrap_or_else(|error| panic!("uninterrupted before: {error}"));
+    let uninterrupted_output = uninterrupted_instance
+        .call("continue", &[])
+        .unwrap_or_else(|error| panic!("uninterrupted continuation: {error}"));
+    let uninterrupted_after = uninterrupted_instance
+        .meter()
+        .finish()
+        .unwrap_or_else(|error| panic!("uninterrupted after: {error}"));
+    let restored_output = restored.outputs();
+    let execution_usage = restored
+        .instance()
+        .meter()
+        .finish()
+        .unwrap_or_else(|error| panic!("restored runtime usage: {error}"));
+    assert_eq!(restored_output, uninterrupted_output);
+    assert_eq!(restored_output, [WasmValue::I32(42)]);
+    let uninterrupted_delta = (
+        uninterrupted_after.cpu_fuel - uninterrupted_before.cpu_fuel,
+        uninterrupted_after.memory_bytes - uninterrupted_before.memory_bytes,
+        uninterrupted_after.storage_read_bytes - uninterrupted_before.storage_read_bytes,
+        uninterrupted_after.storage_write_bytes - uninterrupted_before.storage_write_bytes,
+        uninterrupted_after.output_values - uninterrupted_before.output_values,
+        uninterrupted_after.output_bytes - uninterrupted_before.output_bytes,
+    );
+    assert_eq!(execution_usage.cpu_fuel, uninterrupted_delta.0);
+}
+
+fn verify_foreign_target_refusal(source: &Lease, module: &ValidatedModule, snapshot: &Snapshot) {
+    let mut foreign = funded(5, 8);
+    let mut foreign_storage = Storage::new();
+    let mut foreign_meter = meter();
+    let (activate, activation_evidence) = activation(&foreign, 22);
+    let foreign_authorization = AuthorizationContext::new(foreign.tenant(), CapabilitySet::empty());
+    assert!(matches!(
+        restore(
+            source,
+            &mut foreign,
+            &mut foreign_storage,
+            &mut foreign_meter,
+            layerx_programs_sandbox::snapshot::RestoreRequest {
+                snapshot_digest: snapshot.digest(),
+                supplied: snapshot.state().clone(),
+                authorization: foreign_authorization,
+                module,
+                activation: activate,
+                evidence: activation_evidence,
+            },
+        ),
+        Err(SnapshotRefusal::NotSnapshotOwner)
     ));
 }

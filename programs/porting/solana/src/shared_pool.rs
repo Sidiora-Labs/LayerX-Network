@@ -8,7 +8,7 @@ use crate::account::{AccountMapping, AccountRole, AccountSchema, Field, FieldTyp
 use crate::error::PortRefusal;
 use crate::pubkey::{Pubkey, SeedPath, PUBKEY_BYTES};
 
-/// Seed positions supplied by the authenticated LayerX invocation envelope.
+/// Seed positions supplied by the authenticated `LayerX` invocation envelope.
 pub const PARTICIPANT_ENVELOPE_SEEDS: [usize; 1] = [2];
 
 /// The pool account schema holding the shared reserve.
@@ -56,7 +56,7 @@ impl PoolReserve {
         AccountRole::ProgramOwnedShared
     }
 
-    /// Translates the pool account into its LayerX form.
+    /// Translates the pool account into its `LayerX` form.
     ///
     /// # Errors
     ///
@@ -172,7 +172,8 @@ mod tests {
         let role = PoolReserve::role();
         assert_eq!(role, AccountRole::ProgramOwnedShared);
 
-        let mapping = PoolReserve::translate().unwrap();
+        let mapping =
+            PoolReserve::translate().unwrap_or_else(|error| panic!("shared pool: {error}"));
         assert_eq!(mapping, AccountMapping::SharedCell);
     }
 
@@ -181,13 +182,15 @@ mod tests {
         let role = ParticipantDeposit::role();
         assert_eq!(role, AccountRole::ProgramState);
 
-        let mapping = role.translate().unwrap();
+        let mapping = role
+            .translate()
+            .unwrap_or_else(|error| panic!("shared pool: {error}"));
         assert_eq!(mapping, AccountMapping::NamespacedCell);
     }
 
     #[test]
     fn pool_schema_has_correct_space() {
-        let schema = PoolReserve::schema().unwrap();
+        let schema = PoolReserve::schema().unwrap_or_else(|error| panic!("shared pool: {error}"));
         // Discriminator (8) + u64 (8) + u32 (4) + Pubkey (32) = 52
         assert_eq!(schema.space(), 52);
     }
@@ -195,8 +198,10 @@ mod tests {
     #[test]
     fn pool_state_round_trips() {
         let authority = [42u8; PUBKEY_BYTES];
-        let encoded = PoolReserve::encode_initial(authority).unwrap();
-        let (total, count, auth) = PoolReserve::decode(&encoded).unwrap();
+        let encoded = PoolReserve::encode_initial(authority)
+            .unwrap_or_else(|error| panic!("shared pool: {error}"));
+        let (total, count, auth) =
+            PoolReserve::decode(&encoded).unwrap_or_else(|error| panic!("shared pool: {error}"));
 
         assert_eq!(total, 0);
         assert_eq!(count, 0);
@@ -205,7 +210,8 @@ mod tests {
 
     #[test]
     fn participant_schema_has_correct_space() {
-        let schema = ParticipantDeposit::schema().unwrap();
+        let schema =
+            ParticipantDeposit::schema().unwrap_or_else(|error| panic!("shared pool: {error}"));
         // Discriminator (8) + u64 (8) + u32 (4) = 20
         assert_eq!(schema.space(), 20);
     }
@@ -214,7 +220,7 @@ mod tests {
     fn pool_storage_key_derivation() {
         // Demonstrates that the pool key can be derived and will land in
         // shared namespace when the runtime executes it
-        let key = PoolReserve::storage_key().unwrap();
+        let key = PoolReserve::storage_key().unwrap_or_else(|error| panic!("shared pool: {error}"));
         assert!(!key.is_empty());
     }
 
@@ -222,19 +228,27 @@ mod tests {
     fn participant_storage_key_collapses_signer() {
         // Demonstrates that the participant key collapses the signer seed
         // and will land in principal-scoped namespace
-        let first = ParticipantDeposit::seeds(Pubkey::new([1; PUBKEY_BYTES]).unwrap())
-            .unwrap()
-            .collapse(&PARTICIPANT_ENVELOPE_SEEDS)
-            .unwrap()
-            .storage_key()
-            .unwrap();
-        let second = ParticipantDeposit::seeds(Pubkey::new([2; PUBKEY_BYTES]).unwrap())
-            .unwrap()
-            .collapse(&PARTICIPANT_ENVELOPE_SEEDS)
-            .unwrap()
-            .storage_key()
-            .unwrap();
+        let first = ParticipantDeposit::seeds(
+            Pubkey::new([1; PUBKEY_BYTES]).unwrap_or_else(|error| panic!("shared pool: {error}")),
+        )
+        .unwrap_or_else(|error| panic!("shared pool: {error}"))
+        .collapse(&PARTICIPANT_ENVELOPE_SEEDS)
+        .unwrap_or_else(|error| panic!("shared pool: {error}"))
+        .storage_key()
+        .unwrap_or_else(|error| panic!("shared pool: {error}"));
+        let second = ParticipantDeposit::seeds(
+            Pubkey::new([2; PUBKEY_BYTES]).unwrap_or_else(|error| panic!("shared pool: {error}")),
+        )
+        .unwrap_or_else(|error| panic!("shared pool: {error}"))
+        .collapse(&PARTICIPANT_ENVELOPE_SEEDS)
+        .unwrap_or_else(|error| panic!("shared pool: {error}"))
+        .storage_key()
+        .unwrap_or_else(|error| panic!("shared pool: {error}"));
         assert_eq!(first, second);
-        assert_eq!(first, ParticipantDeposit::storage_key().unwrap());
+        assert_eq!(
+            first,
+            ParticipantDeposit::storage_key()
+                .unwrap_or_else(|error| panic!("shared pool: {error}"))
+        );
     }
 }

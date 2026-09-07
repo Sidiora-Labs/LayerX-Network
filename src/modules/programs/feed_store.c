@@ -5,6 +5,7 @@
 #include "layerx/lxp_receipt.h"
 #include "layerx/lxp_storage.h"
 #include "layerx/lxp_kernel.h"
+#include "layerx/lxp_hash.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -14,6 +15,7 @@ enum {
     FEED_NOTICE_RECORD = 1,
     FEED_HEAD_RECORD = 2,
     FEED_BASELINE_RECORD = 3,
+    FEED_MAINTENANCE_RECORD = 4,
     FEED_PENDING_BYTES = 109,
     FEED_COMPLETE_BYTES = 77,
     FEED_NOTICE_BYTES = 84,
@@ -339,7 +341,7 @@ static lxp_result replay_feed(void *context,
         return status == LXP_OK ? LXP_OK : LXP_ERR_LOG_CORRUPT;
     }
     if (header->body_length == FEED_HEAD_BYTES && body[0] == FEED_RECORD_VERSION &&
-        body[1] == FEED_HEAD_RECORD) {
+        (body[1] == FEED_HEAD_RECORD || body[1] == FEED_MAINTENANCE_RECORD)) {
         uint64_t sequence = read_u64(body + 2U);
         if (sequence != header->global_sequence ||
             store->scanned_through_sequence == UINT64_MAX ||
@@ -528,6 +530,24 @@ static lxp_result canonical_complete_append(
     write_u64(complete + 5U, sequence);
     (void)memcpy(complete + 13U, receipt_digest, 32U);
     (void)memcpy(complete + 45U, state_root, 32U);
+    offset = 0U;
+    while (offset < store->canonical_log->write_offset) {
+        lxp_log_record_header header;
+        uint8_t existing[FEED_COMPLETE_BYTES];
+        status = lxp_log_read(store->canonical_log, offset, &header, NULL, 0U);
+        if (status != LXP_OK && status != LXP_ERR_LENGTH_LIMIT) return status;
+        if (header.global_sequence == sequence &&
+            header.record_kind == LXP_LOG_CHECKPOINT &&
+            header.body_length == FEED_COMPLETE_BYTES) {
+            status = lxp_log_read(store->canonical_log, offset, &header,
+                                  existing, sizeof(existing));
+            if (status != LXP_OK) return status;
+            if (lxp_ct_memcmp(existing, complete, sizeof(complete)) != 0)
+                return LXP_ERR_LOG_CORRUPT;
+            return lxp_log_write_boundary(store->canonical_log);
+        }
+        offset += LXP_LOG_HEADER_BYTES + header.body_length;
+    }
     status = lxp_log_append(store->canonical_log, LXP_LOG_CHECKPOINT,
                             sequence, complete, sizeof(complete), &offset);
     if (status == LXP_OK)
@@ -570,8 +590,14 @@ static lxp_result store_advance(void *context, const lxp_activity *activity,
     if (status != LXP_OK) return status;
     if (lxp_ct_memcmp(activity_id, receipt->activity_id, 32U) != 0)
         return LXP_FATAL_INVARIANT;
-    if (receipt->global_sequence <= store->scanned_through_sequence)
-        return head_matches(store, receipt, digest, activity_id);
+    if (receipt->global_sequence <= store->scanned_through_sequence) {
+        status = head_matches(store, receipt, digest, activity_id);
+        if (status == LXP_OK)
+            status = canonical_complete_append(
+                store, receipt->global_sequence, digest,
+                receipt->resulting_state_root);
+        return status;
+    }
     if ((store->notice_group_open &&
          (store->open_notice_sequence != receipt->global_sequence ||
           lxp_ct_memcmp(store->open_notice_receipt_digest,
@@ -606,6 +632,116 @@ static lxp_result store_advance(void *context, const lxp_activity *activity,
                  sizeof(store->open_notice_receipt_digest));
     store->next_notice_ordinal = 0U;
     return LXP_OK;
+}
+
+static lxp_result maintenance_head(
+    lx_programs_state_feed_store *store, lxp_byte_span encoded,
+    uint64_t timestamp, uint64_t *validation_offset)
+{
+    lxp_programs_occupancy_receipt record;
+    uint8_t body[FEED_HEAD_BYTES] = {0}, digest[32];
+    uint64_t offset = validation_offset == NULL ? 0U : *validation_offset;
+    lxp_result status = lxp_programs_occupancy_receipt_decode(encoded.bytes, encoded.length, &record);
+    if (status == LXP_OK) status = lxp_hash_sha256(encoded.bytes, encoded.length, digest);
+    if (status != LXP_OK) return status;
+    if (timestamp == 0U || record.global_sequence == 0U) return LXP_ERR_NON_CANONICAL;
+    body[0] = FEED_RECORD_VERSION;
+    body[1] = FEED_MAINTENANCE_RECORD;
+    write_u64(body + 2U, record.global_sequence);
+    (void)memcpy(body + 10U, digest, 32U);
+    (void)memcpy(body + 42U, record.resulting_state_root, 32U);
+    write_u64(body + 74U, timestamp);
+    (void)memcpy(body + 82U, digest, 32U);
+    if (record.global_sequence <= store->scanned_through_sequence) {
+        while (offset < store->log->write_offset) {
+            lxp_log_record_header header;
+            uint8_t found[FEED_HEAD_BYTES];
+            status = lxp_log_read(store->log, offset, &header, found, sizeof(found));
+            if (status != LXP_OK) return status;
+            offset += LXP_LOG_HEADER_BYTES + header.body_length;
+            if (header.global_sequence == record.global_sequence &&
+                header.body_length == sizeof(body) && found[1] == FEED_MAINTENANCE_RECORD) {
+                if (lxp_ct_memcmp(found, body, sizeof(body)) != 0) return LXP_ERR_LOG_CORRUPT;
+                if (validation_offset != NULL) *validation_offset = offset;
+                return LXP_OK;
+            }
+        }
+        return LXP_ERR_LOG_CORRUPT;
+    }
+    if (store->notice_group_open || store->scanned_through_sequence == UINT64_MAX ||
+        record.global_sequence != (store->scanned_through_sequence == 0U ?
+            store->baseline_next_sequence : store->scanned_through_sequence + 1U) ||
+        lxp_ct_memcmp(record.previous_state_root, store->scanned_through_sequence == 0U ?
+            store->baseline_state_root : store->head_state_root, 32U) != 0)
+        return LXP_ERR_SEQUENCE_GAP;
+    status = lxp_log_append(store->log, LXP_LOG_STATE_DIFF, record.global_sequence,
+        body, sizeof(body), &offset);
+    if (status == LXP_OK) status = lxp_log_write_boundary(store->log);
+    if (status == LXP_OK) {
+        store->scanned_through_sequence = record.global_sequence;
+        (void)memcpy(store->head_receipt_digest, digest, 32U);
+        (void)memcpy(store->head_state_root, record.resulting_state_root, 32U);
+        store->head_timestamp = timestamp;
+    }
+    return status;
+}
+
+static lxp_result observe_maintenance(void *context, const lxp_kernel *kernel,
+    lxp_byte_span encoded, uint64_t timestamp)
+{
+    const lx_programs_state_feed *feed = context;
+    lx_programs_state_feed_store *store;
+    lxp_programs_occupancy_receipt record;
+    uint8_t *body;
+    uint64_t offset = 0U;
+    size_t length;
+    bool found = false;
+    lxp_result status;
+    if (feed == NULL || feed->begin != store_begin || feed->advance != store_advance ||
+        feed->context == NULL || kernel == NULL || encoded.length > LXP_MAX_ACTIVITY_BYTES - 13U)
+        return LXP_ERR_NON_CANONICAL;
+    store = feed->context;
+    status = lxp_programs_occupancy_receipt_decode(encoded.bytes, encoded.length, &record);
+    if (status != LXP_OK) return status;
+    if (lxp_ct_memcmp(record.resulting_state_root, kernel->current_state_root, 32U) != 0)
+        return LXP_ERR_CONTEXT_MISMATCH;
+    length = 13U + encoded.length;
+    body = malloc(length);
+    if (body == NULL) return LXP_ERR_IO;
+    (void)memcpy(body, "LXPM1", 5U);
+    write_u64(body + 5U, timestamp);
+    (void)memcpy(body + 13U, encoded.bytes, encoded.length);
+    status = store_lock(store);
+    if (status != LXP_OK) { free(body); return status; }
+    while (status == LXP_OK && offset < store->canonical_log->write_offset) {
+        lxp_log_record_header header;
+        status = lxp_log_read(store->canonical_log, offset, &header, NULL, 0U);
+        if (status == LXP_ERR_LENGTH_LIMIT) status = LXP_OK;
+        if (status != LXP_OK) break;
+        if (header.global_sequence == record.global_sequence) {
+            uint8_t *existing = malloc(header.body_length);
+            if (existing == NULL) { status = LXP_ERR_IO; break; }
+            status = lxp_log_read(store->canonical_log, offset, &header, existing, header.body_length);
+            if (status == LXP_OK && (header.record_kind != LXP_LOG_CHECKPOINT ||
+                header.body_length != length || lxp_ct_memcmp(existing, body, length) != 0))
+                status = LXP_ERR_LOG_CORRUPT;
+            free(existing);
+            if (status == LXP_OK) found = true;
+            break;
+        }
+        offset += LXP_LOG_HEADER_BYTES + header.body_length;
+    }
+    if (status == LXP_OK && !found)
+        status = lxp_log_append(store->canonical_log, LXP_LOG_CHECKPOINT,
+            record.global_sequence, body, (uint32_t)length, &offset);
+    if (status == LXP_OK) status = lxp_log_write_boundary(store->canonical_log);
+    if (status == LXP_OK) status = maintenance_head(store, encoded, timestamp, NULL);
+    {
+        lxp_result unlocked = store_unlock(store);
+        if (status == LXP_OK) status = unlocked;
+    }
+    free(body);
+    return status;
 }
 
 static lxp_result recover_canonical(lx_programs_state_feed_store *store,
@@ -654,6 +790,19 @@ static lxp_result recover_canonical(lx_programs_state_feed_store *store,
             continue;
         }
         if (header.record_kind == (uint8_t)LXP_LOG_CHECKPOINT &&
+            header.body_length > 13U && memcmp(body, "LXPM1", 5U) == 0) {
+            lxp_programs_occupancy_receipt record;
+            lxp_byte_span encoded = {body + 13U, header.body_length - 13U};
+            status = lxp_programs_occupancy_receipt_decode(encoded.bytes, encoded.length, &record);
+            if (status == LXP_OK && (pending || activity_bytes != NULL ||
+                record.global_sequence != header.global_sequence ||
+                record.global_sequence != expected_sequence || expected_sequence == UINT64_MAX))
+                status = LXP_ERR_LOG_CORRUPT;
+            if (status == LXP_OK)
+                status = maintenance_head(store, encoded, read_u64(body + 5U),
+                    &feed_validation_offset);
+            if (status == LXP_OK) ++expected_sequence;
+        } else if (header.record_kind == (uint8_t)LXP_LOG_CHECKPOINT &&
             header.body_length == FEED_PENDING_BYTES &&
             memcmp(body, pending_magic, sizeof(pending_magic)) == 0) {
             uint64_t sequence = read_u64(body + 5U);
@@ -874,6 +1023,19 @@ lxp_result lxp_programs_state_feed_store_anchor(
     }
 }
 
+lxp_result lxp_programs_state_feed_store_bind_maintenance(
+    lx_programs_state_feed_store *store, lxp_kernel *kernel)
+{
+    if (store == NULL || kernel == NULL || store->feed.context != store ||
+        store->feed.begin != store_begin || store->feed.append != store_append ||
+        store->feed.advance != store_advance || store->feed.lock != store_lock ||
+        store->feed.unlock != store_unlock ||
+        kernel->commit_observer_context != &store->feed || kernel->observe_commit == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    kernel->observe_maintenance = observe_maintenance;
+    return LXP_OK;
+}
+
 lxp_result lxp_programs_state_feed_store_recover(
     lx_programs_state_feed_store *store, lxp_kernel *kernel)
 {
@@ -883,6 +1045,7 @@ lxp_result lxp_programs_state_feed_store_recover(
         kernel->commit_observer_context != &store->feed ||
         kernel->observe_commit == NULL)
         return LXP_ERR_NON_CANONICAL;
+    kernel->observe_maintenance = observe_maintenance;
     status = store_lock(store);
     if (status == LXP_OK) {
         locked = true;
@@ -982,7 +1145,7 @@ lxp_result lxp_programs_state_feed_store_page(
             }
         } else if (header.body_length == FEED_HEAD_BYTES &&
                    body[0] == FEED_RECORD_VERSION &&
-                   body[1] == FEED_HEAD_RECORD) {
+                   (body[1] == FEED_HEAD_RECORD || body[1] == FEED_MAINTENANCE_RECORD)) {
             uint64_t sequence = read_u64(body + 2U);
             if (!baseline || sequence != expected_sequence ||
                 sequence != header.global_sequence ||

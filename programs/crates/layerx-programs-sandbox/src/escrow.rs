@@ -3,8 +3,8 @@
 use core::fmt::{self, Display};
 
 use layerx_programs_runtime::{
-    KernelTransferPrimitive, PreparedAuthorizedActivity, PreparedMonetarySummary,
-    ProgramAuthority, Storage, TransferLawError, TransferSource, VerifiedProgramSettlement,
+    KernelTransferPrimitive, PreparedAuthorizedActivity, PreparedMonetarySummary, ProgramAuthority,
+    Storage, TransferLawError, TransferSource, VerifiedProgramSettlement,
     VerifiedStorageAssignment,
 };
 
@@ -27,22 +27,57 @@ pub struct Escrow {
 }
 
 impl Escrow {
-    pub(crate) fn funded_genesis(lease: &Lease, funding_root: [u8; 32]) -> Result<Self, EscrowRefusal> {
+    pub(crate) fn funded_genesis(
+        lease: &Lease,
+        funding_root: [u8; 32],
+    ) -> Result<Self, EscrowRefusal> {
         if lease.state() != LeaseState::Funded || funding_root == [0; 32] {
             return Err(EscrowRefusal::FundingMismatch);
         }
-        Ok(Self { lease: lease.id(), account: lease.escrow_account(), asset: lease.escrow_asset(),
-            funded: lease.escrow_amount(), spent: 0, refunded: 0, funding_root,
-            settlement_root: None, finalized: false })
+        Ok(Self {
+            lease: lease.id(),
+            account: lease.escrow_account(),
+            asset: lease.escrow_asset(),
+            funded: lease.escrow_amount(),
+            spent: 0,
+            refunded: 0,
+            funding_root,
+            settlement_root: None,
+            finalized: false,
+        })
     }
-    #[must_use] pub const fn lease(self) -> LeaseId { self.lease }
-    #[must_use] pub const fn account(self) -> [u8; 32] { self.account }
-    #[must_use] pub const fn asset(self) -> [u8; 32] { self.asset }
-    #[must_use] pub const fn funded(self) -> u128 { self.funded }
-    #[must_use] pub const fn spent(self) -> u128 { self.spent }
-    #[must_use] pub const fn refunded(self) -> u128 { self.refunded }
-    #[must_use] pub const fn funding_root(self) -> [u8; 32] { self.funding_root }
-    #[must_use] pub const fn settlement_root(self) -> Option<[u8; 32]> { self.settlement_root }
+    #[must_use]
+    pub const fn lease(self) -> LeaseId {
+        self.lease
+    }
+    #[must_use]
+    pub const fn account(self) -> [u8; 32] {
+        self.account
+    }
+    #[must_use]
+    pub const fn asset(self) -> [u8; 32] {
+        self.asset
+    }
+    #[must_use]
+    pub const fn funded(self) -> u128 {
+        self.funded
+    }
+    #[must_use]
+    pub const fn spent(self) -> u128 {
+        self.spent
+    }
+    #[must_use]
+    pub const fn refunded(self) -> u128 {
+        self.refunded
+    }
+    #[must_use]
+    pub const fn funding_root(self) -> [u8; 32] {
+        self.funding_root
+    }
+    #[must_use]
+    pub const fn settlement_root(self) -> Option<[u8; 32]> {
+        self.settlement_root
+    }
 
     #[must_use]
     pub fn canonical_state(self) -> Vec<u8> {
@@ -63,11 +98,17 @@ impl Escrow {
         state.extend_from_slice(&self.funding_root);
         match self.settlement_root {
             None => state.push(0),
-            Some(root) => { state.push(1); state.extend_from_slice(&root); }
+            Some(root) => {
+                state.push(1);
+                state.extend_from_slice(&root);
+            }
         }
         state.push(u8::from(self.finalized));
     }
 
+    /// # Errors
+    ///
+    /// Returns a refusal when the encoding, lease binding or escrow conservation checks fail.
     pub fn decode_state(lease: &Lease, state: &[u8]) -> Result<Self, EscrowRefusal> {
         let fixed = ESCROW_STATE_DOMAIN.len() + 32 + 32 + 32 + 16 + 16 + 16 + 32 + 1 + 1;
         if state.len() != fixed && state.len() != fixed + 32 {
@@ -78,61 +119,125 @@ impl Escrow {
             return Err(EscrowRefusal::InvalidStateEncoding);
         }
         let mut take = |length: usize| -> Result<&[u8], EscrowRefusal> {
-            let end = offset.checked_add(length).ok_or(EscrowRefusal::InvalidStateEncoding)?;
-            let value = state.get(offset..end).ok_or(EscrowRefusal::InvalidStateEncoding)?;
+            let end = offset
+                .checked_add(length)
+                .ok_or(EscrowRefusal::InvalidStateEncoding)?;
+            let value = state
+                .get(offset..end)
+                .ok_or(EscrowRefusal::InvalidStateEncoding)?;
             offset = end;
             Ok(value)
         };
-        let escrow_lease = LeaseId::new(take(32)?.try_into().map_err(|_| EscrowRefusal::InvalidStateEncoding)?)
+        let escrow_lease = LeaseId::new(
+            take(32)?
+                .try_into()
+                .map_err(|_| EscrowRefusal::InvalidStateEncoding)?,
+        )
+        .map_err(|_| EscrowRefusal::InvalidStateEncoding)?;
+        let account = take(32)?
+            .try_into()
             .map_err(|_| EscrowRefusal::InvalidStateEncoding)?;
-        let account = take(32)?.try_into().map_err(|_| EscrowRefusal::InvalidStateEncoding)?;
-        let asset = take(32)?.try_into().map_err(|_| EscrowRefusal::InvalidStateEncoding)?;
-        let funded = u128::from_be_bytes(take(16)?.try_into().map_err(|_| EscrowRefusal::InvalidStateEncoding)?);
-        let spent = u128::from_be_bytes(take(16)?.try_into().map_err(|_| EscrowRefusal::InvalidStateEncoding)?);
-        let refunded = u128::from_be_bytes(take(16)?.try_into().map_err(|_| EscrowRefusal::InvalidStateEncoding)?);
-        let funding_root = take(32)?.try_into().map_err(|_| EscrowRefusal::InvalidStateEncoding)?;
+        let asset = take(32)?
+            .try_into()
+            .map_err(|_| EscrowRefusal::InvalidStateEncoding)?;
+        let funded = u128::from_be_bytes(
+            take(16)?
+                .try_into()
+                .map_err(|_| EscrowRefusal::InvalidStateEncoding)?,
+        );
+        let spent = u128::from_be_bytes(
+            take(16)?
+                .try_into()
+                .map_err(|_| EscrowRefusal::InvalidStateEncoding)?,
+        );
+        let refunded = u128::from_be_bytes(
+            take(16)?
+                .try_into()
+                .map_err(|_| EscrowRefusal::InvalidStateEncoding)?,
+        );
+        let funding_root = take(32)?
+            .try_into()
+            .map_err(|_| EscrowRefusal::InvalidStateEncoding)?;
         let settlement_root = match take(1)?[0] {
             0 => None,
-            1 => Some(take(32)?.try_into().map_err(|_| EscrowRefusal::InvalidStateEncoding)?),
+            1 => Some(
+                take(32)?
+                    .try_into()
+                    .map_err(|_| EscrowRefusal::InvalidStateEncoding)?,
+            ),
             _ => return Err(EscrowRefusal::InvalidStateEncoding),
         };
-        let finalized = match take(1)?[0] { 0 => false, 1 => true,
-            _ => return Err(EscrowRefusal::InvalidStateEncoding) };
-        if offset != state.len() || funding_root == [0; 32]
+        let finalized = match take(1)?[0] {
+            0 => false,
+            1 => true,
+            _ => return Err(EscrowRefusal::InvalidStateEncoding),
+        };
+        if offset != state.len()
+            || funding_root == [0; 32]
             || refunded > 0 && settlement_root.is_none()
             || settlement_root.is_some() && !finalized
             || !finalized && refunded != 0
         {
             return Err(EscrowRefusal::InvalidStateEncoding);
         }
-        let escrow = Self { lease: escrow_lease, account, asset, funded, spent, refunded,
-            funding_root, settlement_root, finalized };
+        let escrow = Self {
+            lease: escrow_lease,
+            account,
+            asset,
+            funded,
+            spent,
+            refunded,
+            funding_root,
+            settlement_root,
+            finalized,
+        };
         escrow.binds(lease)?;
-        if escrow.remaining().is_err() || finalized && funded != spent.checked_add(refunded)
-            .ok_or(EscrowRefusal::InvalidStateEncoding)? {
+        if escrow.remaining().is_err()
+            || finalized
+                && funded
+                    != spent
+                        .checked_add(refunded)
+                        .ok_or(EscrowRefusal::InvalidStateEncoding)?
+        {
             return Err(EscrowRefusal::InvalidStateEncoding);
         }
-        if escrow.canonical_state() != state { return Err(EscrowRefusal::InvalidStateEncoding); }
+        if escrow.canonical_state() != state {
+            return Err(EscrowRefusal::InvalidStateEncoding);
+        }
         Ok(escrow)
     }
 
-    #[must_use]
+    /// # Errors
+    ///
+    /// Returns a conservation violation when spending and refunds exceed funded escrow.
     pub fn remaining(self) -> Result<u128, EscrowRefusal> {
-        self.funded.checked_sub(self.spent)
+        self.funded
+            .checked_sub(self.spent)
             .and_then(|remaining| remaining.checked_sub(self.refunded))
             .ok_or(EscrowRefusal::ConservationViolation)
     }
 
-    #[must_use]
-    pub fn permits_execution(self, lease: &Lease, maximum_charge: u128) -> Result<(), EscrowRefusal> {
+    /// # Errors
+    ///
+    /// Returns a refusal for a mismatched lease or an invalid or excessive charge.
+    pub fn permits_execution(
+        self,
+        lease: &Lease,
+        maximum_charge: u128,
+    ) -> Result<(), EscrowRefusal> {
         self.binds(lease)?;
         if !matches!(lease.state(), LeaseState::Funded | LeaseState::Active) {
             return Err(EscrowRefusal::LeaseNotExecutable);
         }
-        if self.finalized { return Err(EscrowRefusal::AlreadySettled); }
+        if self.finalized {
+            return Err(EscrowRefusal::AlreadySettled);
+        }
         ensure_charge(maximum_charge, self.remaining()?)
     }
 
+    /// # Errors
+    ///
+    /// Returns a refusal when debit authorization, charge validation or prepared settlement fails.
     pub fn spend(
         &mut self,
         lease: &Lease,
@@ -142,65 +247,112 @@ impl Escrow {
         kernel: &mut impl KernelTransferPrimitive,
     ) -> Result<EscrowOutcome, EscrowRefusal> {
         self.permits_execution(lease, exact_charge)?;
-        let summary = prepared.monetary_summary().ok_or(EscrowRefusal::MissingTransferSet)?;
+        let summary = prepared
+            .monetary_summary()
+            .ok_or(EscrowRefusal::MissingTransferSet)?;
         let charged = validate_program_debits(
-            self, lease, &summary, Some((lease.fee_destination(), exact_charge)),
+            lease,
+            &summary,
+            Some((lease.fee_destination(), exact_charge)),
         )?;
         ensure_exact_charge(exact_charge, charged)?;
-        let assignment = prepared.strict_settle(storage, kernel)
+        let assignment = prepared
+            .strict_settle(storage, kernel)
             .map_err(|failure| EscrowRefusal::Transfer(failure.error()))?;
-        let settlement = assignment.settlement().copied().ok_or(EscrowRefusal::MissingTransferSet)?;
-        self.spent = self.spent.checked_add(charged).ok_or(EscrowRefusal::ConservationViolation)?;
-        if self.spent > self.funded { return Err(EscrowRefusal::ConservationViolation); }
-        Ok(EscrowOutcome { assignment, settlement: Some(settlement), amount: charged })
+        let settlement = assignment
+            .settlement()
+            .copied()
+            .ok_or(EscrowRefusal::MissingTransferSet)?;
+        self.spent = self
+            .spent
+            .checked_add(charged)
+            .ok_or(EscrowRefusal::ConservationViolation)?;
+        if self.spent > self.funded {
+            return Err(EscrowRefusal::ConservationViolation);
+        }
+        Ok(EscrowOutcome {
+            assignment,
+            settlement: Some(settlement),
+            amount: charged,
+        })
     }
 
-    pub(crate) fn projected_spend(self, lease: &Lease, exact_charge: u128) -> Result<Self, EscrowRefusal> {
+    pub(crate) fn projected_spend(
+        self,
+        lease: &Lease,
+        exact_charge: u128,
+    ) -> Result<Self, EscrowRefusal> {
         self.permits_execution(lease, exact_charge)?;
         let mut projected = self;
-        projected.spent = projected.spent.checked_add(exact_charge)
+        projected.spent = projected
+            .spent
+            .checked_add(exact_charge)
             .ok_or(EscrowRefusal::ConservationViolation)?;
-        if projected.spent > projected.funded { return Err(EscrowRefusal::ConservationViolation); }
+        if projected.spent > projected.funded {
+            return Err(EscrowRefusal::ConservationViolation);
+        }
         Ok(projected)
     }
 
     pub(crate) fn projected_expiry_spend(
-        self, lease: &Lease, exact_charge: u128,
+        self,
+        lease: &Lease,
+        exact_charge: u128,
     ) -> Result<Self, EscrowRefusal> {
         self.binds(lease)?;
         if !matches!(lease.state(), LeaseState::Active | LeaseState::Settling) {
             return Err(EscrowRefusal::LeaseNotExecutable);
         }
-        if self.finalized { return Err(EscrowRefusal::AlreadySettled); }
+        if self.finalized {
+            return Err(EscrowRefusal::AlreadySettled);
+        }
         ensure_charge(exact_charge, self.remaining()?)?;
         let mut projected = self;
-        projected.spent = projected.spent.checked_add(exact_charge)
+        projected.spent = projected
+            .spent
+            .checked_add(exact_charge)
             .ok_or(EscrowRefusal::ConservationViolation)?;
-        if projected.spent > projected.funded { return Err(EscrowRefusal::ConservationViolation); }
+        if projected.spent > projected.funded {
+            return Err(EscrowRefusal::ConservationViolation);
+        }
         Ok(projected)
     }
 
     pub(crate) fn finalize_refund(
-        &mut self, lease: &Lease, amount: u128, transfer_root: [u8; 32],
+        &mut self,
+        lease: &Lease,
+        amount: u128,
+        transfer_root: [u8; 32],
     ) -> Result<(), EscrowRefusal> {
         self.binds(lease)?;
-        if self.finalized || amount != self.remaining()? ||
-            (amount == 0) != (transfer_root == [0; 32]) {
-            return Err(EscrowRefusal::RefundMismatch { expected: self.remaining()?, actual: amount });
+        if self.finalized
+            || amount != self.remaining()?
+            || (amount == 0) != (transfer_root == [0; 32])
+        {
+            return Err(EscrowRefusal::RefundMismatch {
+                expected: self.remaining()?,
+                actual: amount,
+            });
         }
         self.refunded = amount;
         self.settlement_root = (amount != 0).then_some(transfer_root);
         self.finalized = true;
-        if self.funded != self.spent.checked_add(self.refunded)
-            .ok_or(EscrowRefusal::ConservationViolation)? {
+        if self.funded
+            != self
+                .spent
+                .checked_add(self.refunded)
+                .ok_or(EscrowRefusal::ConservationViolation)?
+        {
             return Err(EscrowRefusal::ConservationViolation);
         }
         Ok(())
     }
 
     fn binds(self, lease: &Lease) -> Result<(), EscrowRefusal> {
-        if self.lease != lease.id() || self.account != lease.escrow_account()
-            || self.asset != lease.escrow_asset() || self.funded != lease.escrow_amount()
+        if self.lease != lease.id()
+            || self.account != lease.escrow_account()
+            || self.asset != lease.escrow_asset()
+            || self.funded != lease.escrow_amount()
         {
             return Err(EscrowRefusal::LeaseMismatch);
         }
@@ -216,11 +368,23 @@ pub struct EscrowOutcome {
 }
 
 impl EscrowOutcome {
-    #[must_use] pub const fn assignment(&self) -> &VerifiedStorageAssignment { &self.assignment }
-    #[must_use] pub const fn settlement(&self) -> Option<&VerifiedProgramSettlement> { self.settlement.as_ref() }
-    #[must_use] pub const fn amount(&self) -> u128 { self.amount }
+    #[must_use]
+    pub const fn assignment(&self) -> &VerifiedStorageAssignment {
+        &self.assignment
+    }
+    #[must_use]
+    pub const fn settlement(&self) -> Option<&VerifiedProgramSettlement> {
+        self.settlement.as_ref()
+    }
+    #[must_use]
+    pub const fn amount(&self) -> u128 {
+        self.amount
+    }
 }
 
+/// # Errors
+///
+/// Returns a refusal when lease state, refund validation or prepared settlement fails.
 pub fn settle(
     escrow: &mut Escrow,
     lease: &Lease,
@@ -237,33 +401,65 @@ pub fn settle(
     }
     let refund = escrow.remaining()?;
     if refund == 0 {
-        if prepared.has_monetary_effects() { return Err(EscrowRefusal::RefundMismatch { expected: 0, actual: prepared.monetary_summary().map_or(0, |summary| summary.total_amount()) }); }
-        let assignment = prepared.strict_settle(storage, kernel)
+        if prepared.has_monetary_effects() {
+            return Err(EscrowRefusal::RefundMismatch {
+                expected: 0,
+                actual: prepared
+                    .monetary_summary()
+                    .map_or(0, |summary| summary.total_amount()),
+            });
+        }
+        let assignment = prepared
+            .strict_settle(storage, kernel)
             .map_err(|failure| EscrowRefusal::Transfer(failure.error()))?;
         escrow.finalized = true;
-        return Ok(EscrowOutcome { assignment, settlement: None, amount: 0 });
+        return Ok(EscrowOutcome {
+            assignment,
+            settlement: None,
+            amount: 0,
+        });
     }
-    let summary = prepared.monetary_summary().ok_or(EscrowRefusal::MissingTransferSet)?;
-    let debited = validate_program_debits(escrow, lease, &summary, Some((lease.tenant().bytes(), refund)))?;
+    let summary = prepared
+        .monetary_summary()
+        .ok_or(EscrowRefusal::MissingTransferSet)?;
+    let debited = validate_program_debits(lease, &summary, Some((lease.tenant().bytes(), refund)))?;
     if debited != refund || summary.legs().len() != 1 {
-        return Err(EscrowRefusal::RefundMismatch { expected: refund, actual: debited });
+        return Err(EscrowRefusal::RefundMismatch {
+            expected: refund,
+            actual: debited,
+        });
     }
-    let assignment = prepared.strict_settle(storage, kernel)
+    let assignment = prepared
+        .strict_settle(storage, kernel)
         .map_err(|failure| EscrowRefusal::Transfer(failure.error()))?;
-    let settlement = assignment.settlement().copied().ok_or(EscrowRefusal::MissingTransferSet)?;
+    let settlement = assignment
+        .settlement()
+        .copied()
+        .ok_or(EscrowRefusal::MissingTransferSet)?;
     escrow.refunded = refund;
     escrow.settlement_root = Some(settlement.transfer_set_root());
     escrow.finalized = true;
-    if escrow.funded != escrow.spent.checked_add(escrow.refunded)
-        .ok_or(EscrowRefusal::ConservationViolation)? {
+    if escrow.funded
+        != escrow
+            .spent
+            .checked_add(escrow.refunded)
+            .ok_or(EscrowRefusal::ConservationViolation)?
+    {
         return Err(EscrowRefusal::ConservationViolation);
     }
-    Ok(EscrowOutcome { assignment, settlement: Some(settlement), amount: refund })
+    Ok(EscrowOutcome {
+        assignment,
+        settlement: Some(settlement),
+        amount: refund,
+    })
 }
 
 fn ensure_charge(requested: u128, remaining: u128) -> Result<(), EscrowRefusal> {
     if requested == 0 || requested > remaining {
-        Err(EscrowRefusal::EscrowExhausted { requested, remaining })
+        Err(EscrowRefusal::EscrowExhausted {
+            requested,
+            remaining,
+        })
     } else {
         Ok(())
     }
@@ -272,11 +468,12 @@ fn ensure_charge(requested: u128, remaining: u128) -> Result<(), EscrowRefusal> 
 fn ensure_exact_charge(expected: u128, actual: u128) -> Result<(), EscrowRefusal> {
     if expected == 0 || actual != expected {
         Err(EscrowRefusal::ChargeMismatch { expected, actual })
-    } else { Ok(()) }
+    } else {
+        Ok(())
+    }
 }
 
 fn validate_program_debits(
-    escrow: &Escrow,
     lease: &Lease,
     summary: &PreparedMonetarySummary,
     exact_destination: Option<([u8; 32], u128)>,
@@ -291,33 +488,59 @@ fn validate_program_debits(
             return Err(EscrowRefusal::TransferSetMismatch);
         };
         validate_authority(authority, lease, &seed, leg.asset(), leg.to(), leg.amount())?;
-        if leg.program() != lease.host_program() || leg.principal() != lease.tenant()
-            || leg.asset() != lease.escrow_asset() {
+        if leg.program() != lease.host_program()
+            || leg.principal() != lease.tenant()
+            || leg.asset() != lease.escrow_asset()
+        {
             return Err(EscrowRefusal::TransferSetMismatch);
         }
         if let Some((destination, amount)) = exact_destination {
-            if leg.to() != destination { return Err(EscrowRefusal::TransferSetMismatch); }
+            if leg.to() != destination {
+                return Err(EscrowRefusal::TransferSetMismatch);
+            }
             if leg.amount() != amount {
-                return Err(EscrowRefusal::ChargeMismatch { expected: amount, actual: leg.amount() });
+                return Err(EscrowRefusal::ChargeMismatch {
+                    expected: amount,
+                    actual: leg.amount(),
+                });
             }
         }
-        total = total.checked_add(leg.amount()).ok_or(EscrowRefusal::ConservationViolation)?;
+        total = total
+            .checked_add(leg.amount())
+            .ok_or(EscrowRefusal::ConservationViolation)?;
     }
-    if total != summary.total_amount() { return Err(EscrowRefusal::TransferSetMismatch); }
+    if total != summary.total_amount() {
+        return Err(EscrowRefusal::TransferSetMismatch);
+    }
     Ok(total)
 }
 
 fn validate_authority(
-    authority: &ProgramAuthority, lease: &Lease, seed: &[u8], asset: [u8; 32],
-    destination: [u8; 32], amount: u128,
+    authority: &ProgramAuthority,
+    lease: &Lease,
+    seed: &[u8],
+    asset: [u8; 32],
+    destination: [u8; 32],
+    amount: u128,
 ) -> Result<(), EscrowRefusal> {
-    if authority.owner_program() != lease.host_program() || authority.seed() != seed
-        || authority.source_account() != lease.escrow_account() || authority.asset() != asset
-        || authority.to() != destination || authority.amount() != amount {
+    if authority.owner_program() != lease.host_program()
+        || authority.seed() != seed
+        || authority.source_account() != lease.escrow_account()
+        || authority.asset() != asset
+        || authority.to() != destination
+        || authority.amount() != amount
+    {
         return Err(EscrowRefusal::TransferSetMismatch);
     }
-    ProgramAuthority::validate_owner_frame(lease.host_program(), seed, lease.escrow_account(),
-        asset, destination, amount).map_err(EscrowRefusal::Transfer)
+    ProgramAuthority::validate_owner_frame(
+        lease.host_program(),
+        seed,
+        lease.escrow_account(),
+        asset,
+        destination,
+        amount,
+    )
+    .map_err(EscrowRefusal::Transfer)
 }
 
 fn escrow_seed(lease: LeaseId) -> Vec<u8> {
@@ -347,7 +570,9 @@ pub enum EscrowRefusal {
 }
 
 impl Display for EscrowRefusal {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result { write!(formatter, "{self:?}") }
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{self:?}")
+    }
 }
 
 impl std::error::Error for EscrowRefusal {}
@@ -359,18 +584,41 @@ mod tests {
     use layerx_programs_runtime::{PrincipalId, ProgramId};
 
     fn lease(amount: u128) -> Lease {
-        Lease::request(LeaseId::new([1; 32]).expect("lease"),
-            PrincipalId::new([2; 32]).expect("principal"),
-            ProgramId::new([3; 32]).expect("program"), [4; 32], [5; 32], amount,
-            LeaseLimits { cpu_fuel: 1, memory_bytes: 1, storage_read_bytes: 1,
-                storage_write_bytes: 1, output_values: 1, output_bytes: 1,
-                table_elements: 1, namespace_bytes: 1 }, 1, 2).expect("lease")
+        Lease::request(
+            LeaseId::new([1; 32]).unwrap_or_else(|error| panic!("lease: {error:?}")),
+            PrincipalId::new([2; 32]).unwrap_or_else(|error| panic!("principal: {error:?}")),
+            ProgramId::new([3; 32]).unwrap_or_else(|error| panic!("program: {error:?}")),
+            [4; 32],
+            [5; 32],
+            amount,
+            LeaseLimits {
+                cpu_fuel: 1,
+                memory_bytes: 1,
+                storage_read_bytes: 1,
+                storage_write_bytes: 1,
+                output_values: 1,
+                output_bytes: 1,
+                table_elements: 1,
+                namespace_bytes: 1,
+            },
+            1,
+            2,
+        )
+        .unwrap_or_else(|error| panic!("lease: {error:?}"))
     }
 
     fn escrow(lease: &Lease, spent: u128, refunded: u128) -> Escrow {
-        Escrow { lease: lease.id(), account: lease.escrow_account(), asset: lease.escrow_asset(),
-            funded: lease.escrow_amount(), spent, refunded, funding_root: [6; 32],
-            settlement_root: (refunded != 0).then_some([7; 32]), finalized: refunded != 0 }
+        Escrow {
+            lease: lease.id(),
+            account: lease.escrow_account(),
+            asset: lease.escrow_asset(),
+            funded: lease.escrow_amount(),
+            spent,
+            refunded,
+            funding_root: [6; 32],
+            settlement_root: (refunded != 0).then_some([7; 32]),
+            finalized: refunded != 0,
+        }
     }
 
     #[test]
@@ -378,16 +626,36 @@ mod tests {
         let lease = lease(100);
         let escrow = escrow(&lease, 100, 0);
         assert_eq!(escrow.remaining(), Ok(0));
-        assert_eq!(ensure_charge(1, escrow.remaining().expect("remainder")),
-            Err(EscrowRefusal::EscrowExhausted { requested: 1, remaining: 0 }));
+        assert_eq!(
+            ensure_charge(
+                1,
+                escrow
+                    .remaining()
+                    .unwrap_or_else(|error| panic!("remainder: {error:?}"))
+            ),
+            Err(EscrowRefusal::EscrowExhausted {
+                requested: 1,
+                remaining: 0
+            })
+        );
     }
 
     #[test]
     fn underpayment_and_overpayment_are_refused_before_kernel_commit() {
-        assert_eq!(ensure_exact_charge(10, 9),
-            Err(EscrowRefusal::ChargeMismatch { expected: 10, actual: 9 }));
-        assert_eq!(ensure_exact_charge(10, 11),
-            Err(EscrowRefusal::ChargeMismatch { expected: 10, actual: 11 }));
+        assert_eq!(
+            ensure_exact_charge(10, 9),
+            Err(EscrowRefusal::ChargeMismatch {
+                expected: 10,
+                actual: 9
+            })
+        );
+        assert_eq!(
+            ensure_exact_charge(10, 11),
+            Err(EscrowRefusal::ChargeMismatch {
+                expected: 10,
+                actual: 11
+            })
+        );
         assert_eq!(ensure_exact_charge(10, 10), Ok(()));
     }
 
@@ -396,7 +664,13 @@ mod tests {
         let lease = lease(100);
         let escrow = escrow(&lease, 0, 0);
         assert_eq!(escrow.remaining(), Ok(100));
-        assert_eq!(escrow.funded(), escrow.spent() + escrow.remaining().expect("remainder"));
+        assert_eq!(
+            escrow.funded(),
+            escrow.spent()
+                + escrow
+                    .remaining()
+                    .unwrap_or_else(|error| panic!("remainder: {error:?}"))
+        );
     }
 
     #[test]
@@ -418,6 +692,9 @@ mod tests {
         let mut altered = encoded;
         let last = altered.len() - 1;
         altered[last] = 0;
-        assert_eq!(Escrow::decode_state(&lease, &altered), Err(EscrowRefusal::InvalidStateEncoding));
+        assert_eq!(
+            Escrow::decode_state(&lease, &altered),
+            Err(EscrowRefusal::InvalidStateEncoding)
+        );
     }
 }

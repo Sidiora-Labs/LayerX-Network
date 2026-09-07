@@ -12,11 +12,13 @@ use layerx_proof::inclusion::{
 use layerx_proof::merkle::{MerkleError, Proof, MAX_DEPTH};
 use layerx_proof::receipt::verify_sequencer_signature;
 use layerx_proof::state::{
-    verify_nested_account, AccountProofError, NestedAccountProof, VerifiedAccountState,
+    verify_nested_account, verify_nested_account_maintenance, AccountProofError,
+    NestedAccountProof, VerifiedAccountState, VerifiedMaintenanceAccountState,
 };
 use layerx_types::payload::ModuleRegistry;
 use layerx_wire::activity::{decode_signed, encode_signed};
 use layerx_wire::hash::activity_id;
+use layerx_wire::maintenance::decode_occupancy_maintenance;
 use layerx_wire::receipt::{decode_batch_header, Receipt};
 
 use crate::lni::refusal::decode_core_refusal;
@@ -32,6 +34,9 @@ const REGISTER_REQUEST_TAG: u16 = 28;
 const REGISTER_RESPONSE_TAG: u16 = 29;
 const WIRE_VERSION: u16 = 1;
 const MAX_RECEIPT_BYTES: usize = 4_096;
+const MAINTENANCE_WIRE_VERSION: u16 = 2;
+const MAX_MAINTENANCE_BYTES: usize =
+    b"LXP/programs/occupancy-receipt/v2\0".len() + 374 + 256 * 81 + 65_536;
 const MAX_VALIDITY_PROOF_BYTES: usize = 1_048_576;
 const MAX_SETTLEMENT_REFERENCE_BYTES: usize = 1_024;
 const SETTLEMENT_REFERENCE_BYTES: usize = 110;
@@ -226,6 +231,13 @@ pub enum VerifiedProofBundle {
         proof: Proof,
         signed_header: SignedHeader,
     },
+    MaintainedAccount {
+        canonical_bytes: Vec<u8>,
+        activity_id: [u8; 32],
+        activity_receipt: Vec<u8>,
+        verified: Box<VerifiedMaintenanceAccountState>,
+        signed_header: SignedHeader,
+    },
     Account {
         canonical_bytes: Vec<u8>,
         activity_id: [u8; 32],
@@ -240,6 +252,7 @@ impl VerifiedProofBundle {
         match self {
             Self::Activity { signed_header, .. }
             | Self::Receipt { signed_header, .. }
+            | Self::MaintainedAccount { signed_header, .. }
             | Self::Account { signed_header, .. } => signed_header,
         }
     }
@@ -251,6 +264,9 @@ impl VerifiedProofBundle {
                 canonical_bytes, ..
             }
             | Self::Receipt {
+                canonical_bytes, ..
+            }
+            | Self::MaintainedAccount {
                 canonical_bytes, ..
             }
             | Self::Account {
@@ -518,10 +534,12 @@ pub fn proof_bundle(
     }
     if kind == 2 {
         return account_proof_bundle(
+            transport,
             response,
             account_id.ok_or(EvidenceError::Malformed)?,
             target_activity_id,
             context,
+            registry,
         );
     }
     inclusion_proof_bundle(response, kind, target_activity_id, context, registry)
@@ -604,10 +622,12 @@ fn inclusion_proof_bundle(
 }
 
 fn account_proof_bundle(
+    transport: &mut dyn FrameTransport,
     response: Response,
     account: [u8; 32],
     target_activity_id: [u8; 32],
     context: EvidenceContext,
+    registry: &ModuleRegistry,
 ) -> Result<VerifiedProofBundle, EvidenceError> {
     let decoded = decode_nested_evidence(
         &response.proof,
@@ -622,6 +642,74 @@ fn account_proof_bundle(
         context.expected_protocol_version,
         context.expected_network_id,
     )?;
+    if let AccountEvidenceKind::Maintenance { parameter_version } = decoded.kind {
+        let activity_count = decoded
+            .proof
+            .receipt_proof
+            .leaf_count()
+            .checked_sub(1)
+            .ok_or(EvidenceError::Malformed)?;
+        let verified = verify_nested_account_maintenance(
+            &response.payload,
+            account,
+            None,
+            &decoded.proof,
+            &authorization,
+            activity_count,
+            parameter_version,
+        )
+        .map_err(EvidenceError::Account)?;
+        let maintenance = decode_occupancy_maintenance(&decoded.proof.receipt_bytes)
+            .map_err(|_| EvidenceError::Receipt)?;
+        let mut request = Vec::with_capacity(35);
+        request.extend_from_slice(&WIRE_VERSION.to_be_bytes());
+        request.push(3);
+        request.extend_from_slice(&target_activity_id);
+        let receipt_response = exchange(
+            transport,
+            context.interface_version,
+            context
+                .correlation_id
+                .checked_add(1)
+                .ok_or(EvidenceError::Malformed)?,
+            PROOF_BUNDLE_REQUEST_TAG,
+            PROOF_BUNDLE_RESPONSE_TAG,
+            &request,
+            &[],
+        )?;
+        let receipt_bundle =
+            inclusion_proof_bundle(receipt_response, 3, target_activity_id, context, registry)?;
+        let VerifiedProofBundle::Receipt {
+            canonical_bytes: activity_receipt,
+            activity_id,
+            signed_header,
+            ..
+        } = receipt_bundle
+        else {
+            return Err(EvidenceError::Receipt);
+        };
+        let Receipt::Protocol(receipt) =
+            verify_sequencer_signature(&activity_receipt, authorization.public_key())
+                .map_err(|_| EvidenceError::Receipt)?
+        else {
+            return Err(EvidenceError::Receipt);
+        };
+        if signed_header != decoded.signed_header
+            || receipt.global_sequence().checked_add(1) != Some(maintenance.global_sequence)
+            || receipt.resulting_state_root() != maintenance.previous_state_root
+            || receipt.activity_id() != activity_id
+            || activity_id != target_activity_id
+        {
+            return Err(EvidenceError::SelectorMismatch);
+        }
+        return Ok(VerifiedProofBundle::MaintainedAccount {
+            canonical_bytes: response.payload,
+            activity_id,
+            activity_receipt,
+            verified: Box::new(verified),
+            signed_header: decoded.signed_header,
+        });
+    }
     let verified = verify_nested_account(
         &response.payload,
         account,
@@ -641,7 +729,14 @@ fn account_proof_bundle(
     })
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AccountEvidenceKind {
+    Activity,
+    Maintenance { parameter_version: u32 },
+}
+
 pub(crate) struct DecodedNestedEvidence {
+    pub kind: AccountEvidenceKind,
     pub selector: RootSelector,
     pub proof: NestedAccountProof,
     pub signed_header: SignedHeader,
@@ -654,7 +749,8 @@ pub(crate) fn decode_nested_evidence(
     expected_network_id: u32,
 ) -> Result<DecodedNestedEvidence, EvidenceError> {
     let mut reader = Reader::new(bytes);
-    if reader.u16()? != WIRE_VERSION || reader.u8()? != 2 {
+    let wire_version = reader.u16()?;
+    if !matches!(wire_version, WIRE_VERSION | MAINTENANCE_WIRE_VERSION) || reader.u8()? != 2 {
         return Err(EvidenceError::Malformed);
     }
     let selector = RootSelector::decode(&mut reader)?;
@@ -672,7 +768,22 @@ pub(crate) fn decode_nested_evidence(
     let account_proof = decode_proof(&mut reader)?;
     let account_tree_proof = decode_proof(&mut reader)?;
     let universal_root_proof = decode_proof(&mut reader)?;
-    let receipt_bytes = decode_receipt_bytes(&mut reader)?;
+    let (kind, receipt_bytes) = if wire_version == MAINTENANCE_WIRE_VERSION {
+        let bytes = reader.length_prefixed(MAX_MAINTENANCE_BYTES)?;
+        let maintenance =
+            decode_occupancy_maintenance(bytes).map_err(|_| EvidenceError::Receipt)?;
+        (
+            AccountEvidenceKind::Maintenance {
+                parameter_version: maintenance.parameter_version,
+            },
+            bytes.to_vec(),
+        )
+    } else {
+        (
+            AccountEvidenceKind::Activity,
+            decode_receipt_bytes(&mut reader)?,
+        )
+    };
     let receipt_proof = decode_proof(&mut reader)?;
     let signed_header = decode_signed_header(&mut reader)?;
     let checkpoint = match reader.u8()? {
@@ -712,6 +823,7 @@ pub(crate) fn decode_nested_evidence(
     };
     bind_selector(selector, &signed_header, checkpoint.as_ref())?;
     Ok(DecodedNestedEvidence {
+        kind,
         selector,
         proof,
         signed_header,

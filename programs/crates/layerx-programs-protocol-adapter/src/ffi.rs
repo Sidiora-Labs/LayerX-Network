@@ -232,7 +232,9 @@ impl ProtocolProgramStateRead {
         self.balances
     }
 
-    #[must_use]
+    /// # Errors
+    ///
+    /// Returns `CorruptRecord` when a collection or proof exceeds its encoding bound.
     pub fn canonical_encode(&self) -> Result<Vec<u8>, ProtocolAdapterError> {
         let mut encoded = RECORD_MAGIC.to_vec();
         encoded.extend_from_slice(&self.balances.program().bytes());
@@ -249,6 +251,11 @@ impl ProtocolProgramStateRead {
     /// current canonical account-state head. Stored bytes never authorize
     /// themselves and a historical-but-valid receipt is not published as a
     /// live balance read.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for malformed records, invalid time bounds, mismatched
+    /// receipt or state heads, or failed account-state and registry verification.
     pub fn restore_verified(
         bytes: &[u8],
         registry: &mut Registry,
@@ -652,13 +659,13 @@ fn take_snapshot(cursor: &mut Cursor<'_>) -> Result<VerifiedAccountSnapshot, Pro
                 kind: cursor.byte()?,
                 balance: u128::from_be_bytes(cursor.array()?),
                 asset_id: cursor.array()?,
-                has_asset: take_bool(cursor)?,
+                has_asset: (take_bool(cursor)?).into(),
                 next_sequence: cursor.u64()?,
                 created_at_sequence: cursor.u64()?,
-                frozen: take_bool(cursor)?,
-                has_open_reference: take_bool(cursor)?,
+                frozen: (take_bool(cursor)?).into(),
+                has_open_reference: (take_bool(cursor)?).into(),
                 authority_key: cursor.array()?,
-                has_authority_key: take_bool(cursor)?,
+                has_authority_key: (take_bool(cursor)?).into(),
             },
             proof: take_proof(cursor)?,
         });
@@ -736,7 +743,7 @@ unsafe extern "C" fn collect_history(history: *const CHistory, user: *mut c_void
     RESULT_OK
 }
 
-fn proof(value: CProof) -> Result<StateProof, ProtocolAdapterError> {
+fn proof(value: &CProof) -> Result<StateProof, ProtocolAdapterError> {
     let depth = usize::from(value.depth);
     if depth > MAX_PROOF_DEPTH {
         return Err(ProtocolAdapterError::NonCanonicalView);
@@ -757,7 +764,7 @@ fn lifecycle(value: i32) -> Result<ProgramLifecycle, ProtocolAdapterError> {
     }
 }
 
-fn binding(value: CBinding) -> Result<ProgramValueAccountBinding, ProtocolAdapterError> {
+fn binding(value: &CBinding) -> Result<ProgramValueAccountBinding, ProtocolAdapterError> {
     let length = usize::from(value.seed_length);
     if length > MAX_SEED_BYTES {
         return Err(ProtocolAdapterError::NonCanonicalView);
@@ -775,7 +782,7 @@ fn binding(value: CBinding) -> Result<ProgramValueAccountBinding, ProtocolAdapte
     })
 }
 
-fn account(value: CAccount) -> Result<CanonicalAccountLeaf, ProtocolAdapterError> {
+fn account(value: &CAccount) -> Result<CanonicalAccountLeaf, ProtocolAdapterError> {
     let name_length = usize::from(value.name_length);
     if name_length > MAX_ACCOUNT_NAME_BYTES || value.kind < 0 || value.kind > i32::from(u8::MAX) {
         return Err(ProtocolAdapterError::NonCanonicalView);
@@ -786,37 +793,21 @@ fn account(value: CAccount) -> Result<CanonicalAccountLeaf, ProtocolAdapterError
         kind: u8::try_from(value.kind).map_err(|_| ProtocolAdapterError::NonCanonicalView)?,
         balance: (u128::from(value.balance.hi) << 64) | u128::from(value.balance.lo),
         asset_id: value.asset_id,
-        has_asset: value.has_asset,
+        has_asset: (value.has_asset).into(),
         next_sequence: value.next_sequence,
         created_at_sequence: value.created_at_sequence,
-        frozen: value.frozen,
-        has_open_reference: value.has_open_reference,
+        frozen: (value.frozen).into(),
+        has_open_reference: (value.has_open_reference).into(),
         authority_key: value.authority_key,
-        has_authority_key: value.has_authority_key,
+        has_authority_key: (value.has_authority_key).into(),
     })
 }
 
-/// Reads one complete program directly from the committed Programs module and
-/// account tree. The C iterator is the sole producer: it verifies the named
-/// receipt at the current state head and returns exact primary/account/outer
-/// proofs before Rust constructs any public balance value.
-///
-/// # Safety
-///
-/// `context` must be a live read-only `lxp_module_ctx` whose lifetime covers
-/// this synchronous call. It must be bound to the canonical kernel account
-/// registry and verified-receipt index as required by the C iterator.
-pub unsafe fn read_program_state(
+unsafe fn read_account_head(
     context: *mut c_void,
-    registry: &mut Registry,
     program: ProgramId,
     receipt_digest: [u8; 32],
-    now: u64,
-    staleness_limit: u64,
-) -> Result<ProtocolProgramStateRead, ProtocolAdapterError> {
-    if context.is_null() || receipt_digest == [0; 32] || now == 0 || staleness_limit == 0 {
-        return Err(ProtocolAdapterError::NonCanonicalView);
-    }
+) -> Result<CAccountStateHead, ProtocolAdapterError> {
     let mut head = CAccountStateHead {
         observed_sequence: 0,
         observed_at: 0,
@@ -849,7 +840,7 @@ pub unsafe fn read_program_state(
             context,
             program.bytes().as_ptr(),
             receipt_digest.as_ptr(),
-            &mut head,
+            &raw mut head,
         )
     };
     if status != RESULT_OK {
@@ -865,6 +856,22 @@ pub unsafe fn read_program_state(
     {
         return Err(ProtocolAdapterError::NonCanonicalView);
     }
+    Ok(head)
+}
+
+unsafe fn read_account_snapshot(
+    context: *mut c_void,
+    program: ProgramId,
+    receipt_digest: [u8; 32],
+    head: &CAccountStateHead,
+) -> Result<
+    (
+        Vec<ProgramValueAccountBinding>,
+        VerifiedAccountSnapshot,
+        usize,
+    ),
+    ProtocolAdapterError,
+> {
     let mut values = Vec::<CValueAccountView>::new();
     let status = unsafe {
         lxp_programs_value_account_iter(
@@ -872,7 +879,7 @@ pub unsafe fn read_program_state(
             program.bytes().as_ptr(),
             receipt_digest.as_ptr(),
             collect_value,
-            (&mut values as *mut Vec<CValueAccountView>).cast(),
+            (&raw mut values).cast(),
         )
     };
     if status != RESULT_OK {
@@ -898,8 +905,8 @@ pub unsafe fn read_program_state(
         {
             return Err(ProtocolAdapterError::NonCanonicalView);
         }
-        let binding = binding(value.binding)?;
-        let account = account(value.account)?;
+        let binding = binding(&value.binding)?;
+        let account = account(&value.account)?;
         if binding.program != program
             || account.account_id != binding.account_id
             || account.asset_id != binding.asset_id
@@ -910,11 +917,11 @@ pub unsafe fn read_program_state(
         bindings.push(binding.clone());
         proven_bindings.push(ProvenProgramBinding {
             binding,
-            proof: proof(value.binding_proof)?,
+            proof: proof(&value.binding_proof)?,
         });
         proven_accounts.push(ProvenAccountLeaf {
             leaf: account,
-            proof: proof(value.account_proof)?,
+            proof: proof(&value.account_proof)?,
         });
     }
     proven_bindings.sort_by_key(|value| value.binding.primary_key());
@@ -930,9 +937,9 @@ pub unsafe fn read_program_state(
         universal_root: head.universal_root,
         programs_root: head.programs_root,
         account_root: head.account_root,
-        account_tree_proof: proof(head.account_tree_proof)?,
-        universal_root_proof: proof(head.universal_root_proof)?,
-        programs_root_proof: proof(head.programs_root_proof)?,
+        account_tree_proof: proof(&head.account_tree_proof)?,
+        universal_root_proof: proof(&head.universal_root_proof)?,
+        programs_root_proof: proof(&head.programs_root_proof)?,
         freshness: ReadFreshness {
             observed_sequence: head.observed_sequence,
             observed_at: head.observed_at,
@@ -940,6 +947,15 @@ pub unsafe fn read_program_state(
         bindings: proven_bindings,
         accounts: proven_accounts,
     };
+    Ok((bindings, snapshot, live_count))
+}
+
+unsafe fn read_program_lifecycle(
+    context: *mut c_void,
+    program: ProgramId,
+    binding_count: usize,
+    live_count: usize,
+) -> Result<ProgramLifecycle, ProtocolAdapterError> {
     let mut status_view = CWindDownView {
         program_id: [0; 32],
         status: 0,
@@ -949,8 +965,9 @@ pub unsafe fn read_program_state(
         value_account_count: 0,
         live_value_account_count: 0,
     };
-    let status =
-        unsafe { lxp_programs_wind_down_read(context, program.bytes().as_ptr(), &mut status_view) };
+    let status = unsafe {
+        lxp_programs_wind_down_read(context, program.bytes().as_ptr(), &raw mut status_view)
+    };
     let program_lifecycle = if status == RESULT_UNKNOWN_FIELD {
         ProgramLifecycle::Active
     } else if status == RESULT_OK
@@ -958,7 +975,7 @@ pub unsafe fn read_program_state(
         && status_view.exit_program == program.bytes()
         && status_view.deadline != 0
         && status_view.effective_sequence != 0
-        && usize::from(status_view.value_account_count) == bindings.len()
+        && usize::from(status_view.value_account_count) == binding_count
         && usize::from(status_view.live_value_account_count) == live_count
     {
         lifecycle(status_view.status)?
@@ -967,13 +984,20 @@ pub unsafe fn read_program_state(
     } else {
         return Err(ProtocolAdapterError::CoreRefused(status));
     };
+    Ok(program_lifecycle)
+}
+
+unsafe fn read_exit_routes(
+    context: *mut c_void,
+    program: ProgramId,
+) -> Result<Vec<ExitRoute>, ProtocolAdapterError> {
     let mut c_routes = Vec::<CExitRoute>::new();
     let route_status = unsafe {
         lxp_programs_exit_route_iter(
             context,
             program.bytes().as_ptr(),
             collect_route,
-            (&mut c_routes as *mut Vec<CExitRoute>).cast(),
+            (&raw mut c_routes).cast(),
         )
     };
     if route_status != RESULT_OK {
@@ -992,13 +1016,21 @@ pub unsafe fn read_program_state(
             destination: route.destination,
         });
     }
+    Ok(routes)
+}
+
+unsafe fn read_lifecycle_history(
+    context: *mut c_void,
+    program: ProgramId,
+    binding_count: usize,
+) -> Result<Vec<LifecycleReceipt>, ProtocolAdapterError> {
     let mut c_history = Vec::<CHistory>::new();
     let history_status = unsafe {
         lxp_programs_wind_down_history_iter(
             context,
             program.bytes().as_ptr(),
             collect_history,
-            (&mut c_history as *mut Vec<CHistory>).cast(),
+            (&raw mut c_history).cast(),
         )
     };
     if history_status != RESULT_OK {
@@ -1008,7 +1040,7 @@ pub unsafe fn read_program_state(
     for record in c_history {
         if record.program_id != program.bytes()
             || record.exit_program != program.bytes()
-            || usize::from(record.value_account_count) != bindings.len()
+            || usize::from(record.value_account_count) != binding_count
             || record.live_value_account_count > record.value_account_count
             || record.account_root == [0; 32]
         {
@@ -1028,6 +1060,42 @@ pub unsafe fn read_program_state(
             live_value_accounts: u32::from(record.live_value_account_count),
         });
     }
+    Ok(history)
+}
+
+/// Reads one complete program directly from the committed Programs module and
+/// account tree. The C iterator is the sole producer: it verifies the named
+/// receipt at the current state head and returns exact primary/account/outer
+/// proofs before Rust constructs any public balance value.
+///
+/// # Errors
+///
+/// Returns an error when the core refuses the read, the returned view is
+/// noncanonical, or account-state, lifecycle, or registry verification fails.
+///
+/// # Safety
+///
+/// `context` must be a live read-only `lxp_module_ctx` whose lifetime covers
+/// this synchronous call. It must be bound to the canonical kernel account
+/// registry and verified-receipt index as required by the C iterator.
+pub unsafe fn read_program_state(
+    context: *mut c_void,
+    registry: &mut Registry,
+    program: ProgramId,
+    receipt_digest: [u8; 32],
+    now: u64,
+    staleness_limit: u64,
+) -> Result<ProtocolProgramStateRead, ProtocolAdapterError> {
+    if context.is_null() || receipt_digest == [0; 32] || now == 0 || staleness_limit == 0 {
+        return Err(ProtocolAdapterError::NonCanonicalView);
+    }
+    let head = unsafe { read_account_head(context, program, receipt_digest) }?;
+    let (bindings, snapshot, live_count) =
+        unsafe { read_account_snapshot(context, program, receipt_digest, &head) }?;
+    let program_lifecycle =
+        unsafe { read_program_lifecycle(context, program, bindings.len(), live_count) }?;
+    let routes = unsafe { read_exit_routes(context, program) }?;
+    let history = unsafe { read_lifecycle_history(context, program, bindings.len()) }?;
     registry.replay_protocol_state(program, &bindings, &routes, program_lifecycle, &history)?;
     let journal = ProtocolJournal {
         head: AccountStateHead {

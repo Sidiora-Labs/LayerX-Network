@@ -50,13 +50,13 @@ fn bigint_operation_fuel(
                 .saturating_add(exp_bits.saturating_mul(operand_width))
         }
     };
-    
+
     u64::try_from(base_cost).unwrap_or(u64::MAX)
 }
 
 fn bigint_mul_256(a: &[u8; 32], b: &[u8; 32]) -> [u8; 64] {
     let mut result = [0u8; 64];
-    
+
     for i in 0..32 {
         let mut carry = 0u16;
         for j in 0..32 {
@@ -65,14 +65,14 @@ fn bigint_mul_256(a: &[u8; 32], b: &[u8; 32]) -> [u8; 64] {
                 .wrapping_mul(u16::from(b[31 - j]))
                 .wrapping_add(u16::from(result[63 - pos]))
                 .wrapping_add(carry);
-            result[63 - pos] = (product & 0xFF) as u8;
+            result[63 - pos] = product.to_le_bytes()[0];
             carry = product >> 8;
         }
         if i + 32 < 64 {
-            result[63 - (i + 32)] = result[63 - (i + 32)].wrapping_add(carry as u8);
+            result[63 - (i + 32)] = result[63 - (i + 32)].wrapping_add(carry.to_le_bytes()[0]);
         }
     }
-    
+
     result
 }
 
@@ -93,17 +93,17 @@ fn bigint_to_be_bytes(value: &num_bigint::BigUint, width: usize) -> Vec<u8> {
 
 fn bigint_div_256(a: &[u8; 32], b: &[u8; 32]) -> Result<[u8; 32], WideIntegerRefusal> {
     let divisor = bigint_from_be_bytes(b);
-    
+
     if divisor == num_bigint::BigUint::ZERO {
         return Err(WideIntegerRefusal {
             op: WideIntegerOp::Div,
             reason: WideIntegerRefusalReason::DivisionByZero,
         });
     }
-    
+
     let dividend = bigint_from_be_bytes(a);
     let quotient = dividend / divisor;
-    
+
     let bytes = bigint_to_be_bytes(&quotient, 32);
     let mut result = [0u8; 32];
     result.copy_from_slice(&bytes);
@@ -112,17 +112,17 @@ fn bigint_div_256(a: &[u8; 32], b: &[u8; 32]) -> Result<[u8; 32], WideIntegerRef
 
 fn bigint_rem_256(a: &[u8; 32], b: &[u8; 32]) -> Result<[u8; 32], WideIntegerRefusal> {
     let divisor = bigint_from_be_bytes(b);
-    
+
     if divisor == num_bigint::BigUint::ZERO {
         return Err(WideIntegerRefusal {
             op: WideIntegerOp::Rem,
             reason: WideIntegerRefusalReason::DivisionByZero,
         });
     }
-    
+
     let dividend = bigint_from_be_bytes(a);
     let remainder = dividend % divisor;
-    
+
     let bytes = bigint_to_be_bytes(&remainder, 32);
     let mut result = [0u8; 32];
     result.copy_from_slice(&bytes);
@@ -142,19 +142,19 @@ fn bigint_modexp_256(
     modulus: &[u8; 32],
 ) -> Result<[u8; 32], WideIntegerRefusal> {
     let m = bigint_from_be_bytes(modulus);
-    
+
     if m == num_bigint::BigUint::ZERO {
         return Err(WideIntegerRefusal {
             op: WideIntegerOp::ModExp,
             reason: WideIntegerRefusalReason::ModulusZero,
         });
     }
-    
+
     let b = bigint_from_be_bytes(base);
     let e = bigint_from_be_bytes(exponent);
-    
+
     let result = b.modpow(&e, &m);
-    
+
     let bytes = bigint_to_be_bytes(&result, 32);
     let mut output = [0u8; 32];
     output.copy_from_slice(&bytes);
@@ -172,6 +172,14 @@ fn read_fixed_256(caller: &Caller<'_, RuntimeState>, ptr: i32, len: i32) -> Resu
 }
 
 pub(crate) fn register(linker: &mut Linker<RuntimeState>) -> Result<(), ExecutionFault> {
+    register_mul(linker)?;
+    register_div(linker)?;
+    register_rem(linker)?;
+    register_modexp(linker)?;
+    Ok(())
+}
+
+fn register_mul(linker: &mut Linker<RuntimeState>) -> Result<(), ExecutionFault> {
     linker
         .func_wrap(
             ABI_V2_MODULE,
@@ -188,38 +196,44 @@ pub(crate) fn register(linker: &mut Linker<RuntimeState>) -> Result<(), Executio
                     Ok(cap) => cap,
                     Err(status) => return status,
                 };
-                
+
                 if capacity < 64 {
                     return STATUS_BOUNDS;
                 }
-                
+
                 let a = match read_fixed_256(&caller, a_ptr, a_len) {
                     Ok(a) => a,
                     Err(status) => return status,
                 };
-                
+
                 let b = match read_fixed_256(&caller, b_ptr, b_len) {
                     Ok(b) => b,
                     Err(status) => return status,
                 };
-                
-                if super::super::host::charge_host_cpu(&mut caller, bigint_operation_fuel(WideIntegerOp::Mul, 32, None))
-                    .is_err()
+
+                if super::super::host::charge_host_cpu(
+                    &mut caller,
+                    bigint_operation_fuel(WideIntegerOp::Mul, 32, None),
+                )
+                .is_err()
                 {
                     return STATUS_METER;
                 }
-                
+
                 let result = bigint_mul_256(&a, &b);
-                
+
                 if let Err(status) = write_guest(&mut caller, output_ptr, &result) {
                     return status;
                 }
-                
+
                 64
             },
         )
-        .map_err(|error| linker_fault(&error))?;
-    
+        .map(|_| ())
+        .map_err(|error| linker_fault(&error))
+}
+
+fn register_div(linker: &mut Linker<RuntimeState>) -> Result<(), ExecutionFault> {
     linker
         .func_wrap(
             ABI_V2_MODULE,
@@ -236,41 +250,46 @@ pub(crate) fn register(linker: &mut Linker<RuntimeState>) -> Result<(), Executio
                     Ok(cap) => cap,
                     Err(status) => return status,
                 };
-                
+
                 if capacity < 32 {
                     return STATUS_BOUNDS;
                 }
-                
+
                 let a = match read_fixed_256(&caller, a_ptr, a_len) {
                     Ok(a) => a,
                     Err(status) => return status,
                 };
-                
+
                 let b = match read_fixed_256(&caller, b_ptr, b_len) {
                     Ok(b) => b,
                     Err(status) => return status,
                 };
-                
-                if super::super::host::charge_host_cpu(&mut caller, bigint_operation_fuel(WideIntegerOp::Div, 32, None))
-                    .is_err()
+
+                if super::super::host::charge_host_cpu(
+                    &mut caller,
+                    bigint_operation_fuel(WideIntegerOp::Div, 32, None),
+                )
+                .is_err()
                 {
                     return STATUS_METER;
                 }
-                
-                let result = match bigint_div_256(&a, &b) {
-                    Ok(result) => result,
-                    Err(_) => return STATUS_INVALID,
+
+                let Ok(result) = bigint_div_256(&a, &b) else {
+                    return STATUS_INVALID;
                 };
-                
+
                 if let Err(status) = write_guest(&mut caller, output_ptr, &result) {
                     return status;
                 }
-                
+
                 32
             },
         )
-        .map_err(|error| linker_fault(&error))?;
-    
+        .map(|_| ())
+        .map_err(|error| linker_fault(&error))
+}
+
+fn register_rem(linker: &mut Linker<RuntimeState>) -> Result<(), ExecutionFault> {
     linker
         .func_wrap(
             ABI_V2_MODULE,
@@ -287,41 +306,46 @@ pub(crate) fn register(linker: &mut Linker<RuntimeState>) -> Result<(), Executio
                     Ok(cap) => cap,
                     Err(status) => return status,
                 };
-                
+
                 if capacity < 32 {
                     return STATUS_BOUNDS;
                 }
-                
+
                 let a = match read_fixed_256(&caller, a_ptr, a_len) {
                     Ok(a) => a,
                     Err(status) => return status,
                 };
-                
+
                 let b = match read_fixed_256(&caller, b_ptr, b_len) {
                     Ok(b) => b,
                     Err(status) => return status,
                 };
-                
-                if super::super::host::charge_host_cpu(&mut caller, bigint_operation_fuel(WideIntegerOp::Rem, 32, None))
-                    .is_err()
+
+                if super::super::host::charge_host_cpu(
+                    &mut caller,
+                    bigint_operation_fuel(WideIntegerOp::Rem, 32, None),
+                )
+                .is_err()
                 {
                     return STATUS_METER;
                 }
-                
-                let result = match bigint_rem_256(&a, &b) {
-                    Ok(result) => result,
-                    Err(_) => return STATUS_INVALID,
+
+                let Ok(result) = bigint_rem_256(&a, &b) else {
+                    return STATUS_INVALID;
                 };
-                
+
                 if let Err(status) = write_guest(&mut caller, output_ptr, &result) {
                     return status;
                 }
-                
+
                 32
             },
         )
-        .map_err(|error| linker_fault(&error))?;
-    
+        .map(|_| ())
+        .map_err(|error| linker_fault(&error))
+}
+
+fn register_modexp(linker: &mut Linker<RuntimeState>) -> Result<(), ExecutionFault> {
     linker
         .func_wrap(
             ABI_V2_MODULE,
@@ -340,54 +364,51 @@ pub(crate) fn register(linker: &mut Linker<RuntimeState>) -> Result<(), Executio
                     Ok(cap) => cap,
                     Err(status) => return status,
                 };
-                
+
                 if capacity < 32 {
                     return STATUS_BOUNDS;
                 }
-                
+
                 let base = match read_fixed_256(&caller, base_ptr, base_len) {
                     Ok(b) => b,
                     Err(status) => return status,
                 };
-                
+
                 let exponent = match read_fixed_256(&caller, exp_ptr, exp_len) {
                     Ok(e) => e,
                     Err(status) => return status,
                 };
-                
+
                 let modulus = match read_fixed_256(&caller, mod_ptr, mod_len) {
                     Ok(m) => m,
                     Err(status) => return status,
                 };
-                
+
                 let exp_value = bigint_from_be_bytes(&exponent);
                 let exp_bits = count_bits(&exp_value);
-                
-                if super::super::host::charge_host_cpu(&mut caller, bigint_operation_fuel(
-                    WideIntegerOp::ModExp,
-                    32,
-                    Some(exp_bits),
-                ))
+
+                if super::super::host::charge_host_cpu(
+                    &mut caller,
+                    bigint_operation_fuel(WideIntegerOp::ModExp, 32, Some(exp_bits)),
+                )
                 .is_err()
                 {
                     return STATUS_METER;
                 }
-                
-                let result = match bigint_modexp_256(&base, &exponent, &modulus) {
-                    Ok(result) => result,
-                    Err(_) => return STATUS_INVALID,
+
+                let Ok(result) = bigint_modexp_256(&base, &exponent, &modulus) else {
+                    return STATUS_INVALID;
                 };
-                
+
                 if let Err(status) = write_guest(&mut caller, output_ptr, &result) {
                     return status;
                 }
-                
+
                 32
             },
         )
-        .map_err(|error| linker_fault(&error))?;
-    
-    Ok(())
+        .map(|_| ())
+        .map_err(|error| linker_fault(&error))
 }
 
 #[cfg(test)]
@@ -395,8 +416,8 @@ mod golden_vectors {
     use super::*;
 
     fn reference_product(left: &[u8; 32], right: &[u8; 32]) -> [u8; 64] {
-        let product = num_bigint::BigUint::from_bytes_be(left)
-            * num_bigint::BigUint::from_bytes_be(right);
+        let product =
+            num_bigint::BigUint::from_bytes_be(left) * num_bigint::BigUint::from_bytes_be(right);
         let encoded = product.to_bytes_be();
         let mut expected = [0; 64];
         expected[64 - encoded.len()..].copy_from_slice(&encoded);
@@ -408,13 +429,13 @@ mod golden_vectors {
         let one = [0u8; 32];
         let mut one_val = one;
         one_val[31] = 1;
-        
+
         let value = [0u8; 32];
         let mut value_bytes = value;
         value_bytes[31] = 42;
-        
+
         let result = bigint_mul_256(&one_val, &value_bytes);
-        
+
         assert_eq!(&result[32..64], &value_bytes[..]);
         assert_eq!(&result[0..32], &[0u8; 32]);
     }
@@ -422,11 +443,11 @@ mod golden_vectors {
     #[test]
     fn mul_overflow_boundary() {
         let max = [0xFFu8; 32];
-        
+
         let two = [0u8; 32];
         let mut two_val = two;
         two_val[31] = 2;
-        
+
         let result = bigint_mul_256(&max, &two_val);
 
         assert_eq!(result, reference_product(&max, &two_val));
@@ -452,11 +473,12 @@ mod golden_vectors {
     fn div_identity() {
         let mut value = [0u8; 32];
         value[31] = 42;
-        
+
         let mut one = [0u8; 32];
         one[31] = 1;
-        
-        let result = bigint_div_256(&value, &one).unwrap();
+
+        let result = bigint_div_256(&value, &one)
+            .unwrap_or_else(|error| panic!("unexpected bigint refusal: {error:?}"));
         assert_eq!(result, value);
     }
 
@@ -465,13 +487,16 @@ mod golden_vectors {
         let value = [0u8; 32];
         let mut value_bytes = value;
         value_bytes[31] = 42;
-        
+
         let zero = [0u8; 32];
-        
+
         let result = bigint_div_256(&value_bytes, &zero);
         assert!(result.is_err());
         assert_eq!(
-            result.unwrap_err().reason,
+            result
+                .err()
+                .unwrap_or_else(|| panic!("expected bigint refusal"))
+                .reason,
             WideIntegerRefusalReason::DivisionByZero
         );
     }
@@ -480,12 +505,13 @@ mod golden_vectors {
     fn rem_identity() {
         let mut value = [0u8; 32];
         value[31] = 42;
-        
+
         let mut divisor = [0u8; 32];
         divisor[31] = 10;
-        
-        let result = bigint_rem_256(&value, &divisor).unwrap();
-        
+
+        let result = bigint_rem_256(&value, &divisor)
+            .unwrap_or_else(|error| panic!("unexpected bigint refusal: {error:?}"));
+
         let mut expected = [0u8; 32];
         expected[31] = 2;
         assert_eq!(result, expected);
@@ -495,13 +521,16 @@ mod golden_vectors {
     fn rem_by_zero() {
         let mut value = [0u8; 32];
         value[31] = 42;
-        
+
         let zero = [0u8; 32];
-        
+
         let result = bigint_rem_256(&value, &zero);
         assert!(result.is_err());
         assert_eq!(
-            result.unwrap_err().reason,
+            result
+                .err()
+                .unwrap_or_else(|| panic!("expected bigint refusal"))
+                .reason,
             WideIntegerRefusalReason::DivisionByZero
         );
     }
@@ -510,14 +539,15 @@ mod golden_vectors {
     fn modexp_identity() {
         let mut base = [0u8; 32];
         base[31] = 5;
-        
+
         let mut exp = [0u8; 32];
         exp[31] = 1;
-        
+
         let mut modulus = [0u8; 32];
         modulus[31] = 100;
-        
-        let result = bigint_modexp_256(&base, &exp, &modulus).unwrap();
+
+        let result = bigint_modexp_256(&base, &exp, &modulus)
+            .unwrap_or_else(|error| panic!("unexpected bigint refusal: {error:?}"));
         assert_eq!(result, base);
     }
 
@@ -525,14 +555,15 @@ mod golden_vectors {
     fn modexp_zero_exponent() {
         let mut base = [0u8; 32];
         base[31] = 5;
-        
+
         let exp = [0u8; 32];
-        
+
         let mut modulus = [0u8; 32];
         modulus[31] = 100;
-        
-        let result = bigint_modexp_256(&base, &exp, &modulus).unwrap();
-        
+
+        let result = bigint_modexp_256(&base, &exp, &modulus)
+            .unwrap_or_else(|error| panic!("unexpected bigint refusal: {error:?}"));
+
         let mut expected = [0u8; 32];
         expected[31] = 1;
         assert_eq!(result, expected);
@@ -542,16 +573,19 @@ mod golden_vectors {
     fn modexp_zero_modulus() {
         let mut base = [0u8; 32];
         base[31] = 5;
-        
+
         let mut exp = [0u8; 32];
         exp[31] = 3;
-        
+
         let zero = [0u8; 32];
-        
+
         let result = bigint_modexp_256(&base, &exp, &zero);
         assert!(result.is_err());
         assert_eq!(
-            result.unwrap_err().reason,
+            result
+                .err()
+                .unwrap_or_else(|| panic!("expected bigint refusal"))
+                .reason,
             WideIntegerRefusalReason::ModulusZero
         );
     }
@@ -560,29 +594,31 @@ mod golden_vectors {
     fn modexp_maximum_width() {
         let mut base = [0u8; 32];
         base[31] = 2;
-        
+
         let mut exp = [0u8; 32];
         exp[30] = 0x01;
-        
+
         let max_modulus = [0xFFu8; 32];
-        
-        let result = bigint_modexp_256(&base, &exp, &max_modulus).unwrap();
-        
+
+        let result = bigint_modexp_256(&base, &exp, &max_modulus)
+            .unwrap_or_else(|error| panic!("unexpected bigint refusal: {error:?}"));
+
         assert!(result.iter().any(|&b| b != 0));
     }
 
     #[test]
     fn modexp_overflow_boundary() {
         let max = [0xFFu8; 32];
-        
+
         let mut exp = [0u8; 32];
         exp[31] = 2;
-        
+
         let mut modulus = [0u8; 32];
         modulus[31] = 100;
-        
-        let result = bigint_modexp_256(&max, &exp, &modulus).unwrap();
-        
+
+        let result = bigint_modexp_256(&max, &exp, &modulus)
+            .unwrap_or_else(|error| panic!("unexpected bigint refusal: {error:?}"));
+
         let mut expected = [0u8; 32];
         expected[31] = 25;
         assert_eq!(result, expected);

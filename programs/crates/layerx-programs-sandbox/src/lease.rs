@@ -43,6 +43,9 @@ pub const MAX_LEASE_ESCROW: u128 = 1_000_000_000_000_000_000_000_000;
 pub struct LeaseId([u8; 32]);
 
 impl LeaseId {
+    /// # Errors
+    ///
+    /// Returns a refusal when the lease identifier is zero.
     pub fn new(bytes: [u8; 32]) -> Result<Self, LeaseRefusal> {
         if bytes == [0; 32] {
             return Err(LeaseRefusal::ReservedIdentifier);
@@ -64,7 +67,9 @@ pub struct EphemeralNamespace {
 }
 
 impl EphemeralNamespace {
-    #[must_use]
+    /// # Errors
+    ///
+    /// Returns a refusal when namespace hashing fails or produces an invalid namespace.
     pub fn derive(host: ProgramId, lease: LeaseId) -> Result<Self, LeaseRefusal> {
         let mut preimage = Vec::with_capacity(NAMESPACE_DOMAIN.len() + 64);
         preimage.extend_from_slice(NAMESPACE_DOMAIN);
@@ -92,15 +97,22 @@ impl EphemeralNamespace {
         self.lease
     }
 
+    /// # Errors
+    ///
+    /// Returns a refusal when the derived storage namespace is invalid.
     pub fn storage_namespace(self) -> Result<StorageNamespace, LeaseRefusal> {
         let principal = PrincipalId::new(self.prefix).map_err(|_| LeaseRefusal::HashRefusal)?;
         Ok(StorageNamespace::principal(self.host, principal))
     }
 
+    /// # Errors
+    ///
+    /// Returns a refusal when the derived execution principal is invalid.
     pub fn execution_principal(self) -> Result<PrincipalId, LeaseRefusal> {
         PrincipalId::new(self.prefix).map_err(|_| LeaseRefusal::HashRefusal)
     }
 
+    #[must_use]
     pub fn snapshot_storage_namespace(self) -> StorageNamespace {
         StorageNamespace::protocol_private(self.host, self.prefix)
     }
@@ -138,6 +150,9 @@ impl LeaseLimits {
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns a refusal when a resource limit is zero or exceeds its declared bound.
     pub fn validate(self) -> Result<Self, LeaseRefusal> {
         let checks = [
             (BoundKind::CpuFuel, self.cpu_fuel, MAX_LEASE_CPU_FUEL),
@@ -320,11 +335,7 @@ const fn declared_edge(activity: LeaseActivity, from: LeaseState, to: LeaseState
             LeaseState::Funded,
             LeaseState::Active
         ) | (
-            LeaseActivity::BeginSettlement,
-            LeaseState::Active,
-            LeaseState::Settling
-        ) | (
-            LeaseActivity::CloseBoundExceeded,
+            LeaseActivity::BeginSettlement | LeaseActivity::CloseBoundExceeded,
             LeaseState::Active,
             LeaseState::Settling
         ) | (
@@ -333,19 +344,7 @@ const fn declared_edge(activity: LeaseActivity, from: LeaseState, to: LeaseState
             LeaseState::Active
         ) | (
             LeaseActivity::Expire,
-            LeaseState::Requested,
-            LeaseState::Expired
-        ) | (
-            LeaseActivity::Expire,
-            LeaseState::Funded,
-            LeaseState::Expired
-        ) | (
-            LeaseActivity::Expire,
-            LeaseState::Active,
-            LeaseState::Expired
-        ) | (
-            LeaseActivity::Expire,
-            LeaseState::Settling,
+            LeaseState::Requested | LeaseState::Funded | LeaseState::Active | LeaseState::Settling,
             LeaseState::Expired
         ) | (
             LeaseActivity::Destroy,
@@ -366,7 +365,9 @@ pub struct LeaseTransition {
     pub usage_observation_digest: [u8; 32],
 }
 
-#[must_use]
+/// # Errors
+///
+/// Returns a refusal when hashing the canonical usage observation fails.
 pub fn usage_observation_digest(
     lease: LeaseId,
     usage: LeaseUsage,
@@ -403,6 +404,9 @@ pub struct TransitionEvidence {
 }
 
 impl TransitionEvidence {
+    /// # Errors
+    ///
+    /// Returns a refusal when receipt verification, execution binding or usage evidence is invalid.
     pub fn verify_call(
         head: &VerifiedProtocolHead,
         lease: &Lease,
@@ -853,6 +857,9 @@ impl Lease {
         Ok(())
     }
 
+    /// # Errors
+    ///
+    /// Returns a refusal when lease identifiers, funding, lifetime or resource limits are invalid.
     #[allow(clippy::too_many_arguments)]
     pub fn request(
         id: LeaseId,
@@ -879,6 +886,9 @@ impl Lease {
         )
     }
 
+    /// # Errors
+    ///
+    /// Returns a refusal when lease terms, fee schedule or derived account bindings are invalid.
     #[allow(clippy::too_many_arguments)]
     pub fn request_with_schedule(
         id: LeaseId,
@@ -1061,7 +1071,9 @@ impl Lease {
         Ok(())
     }
 
-    #[must_use]
+    /// # Errors
+    ///
+    /// Returns a refusal when hashing the canonical request binding fails.
     pub fn request_binding_digest(&self) -> Result<[u8; 32], LeaseRefusal> {
         let mut preimage = Vec::new();
         preimage.extend_from_slice(b"LayerX/programs/sandbox/request/v3\0");
@@ -1096,6 +1108,9 @@ impl Lease {
         hash_bytes(HashAlgorithm::Sha256, &preimage).map_err(|_| LeaseRefusal::HashRefusal)
     }
 
+    /// # Errors
+    ///
+    /// Returns a refusal when a history or snapshot count cannot be encoded.
     pub fn canonical_state_bytes(&self) -> Result<Vec<u8>, LeaseRefusal> {
         let mut out = Vec::new();
         self.write_canonical_state(&mut out)?;
@@ -1178,6 +1193,9 @@ impl Lease {
         Ok(())
     }
 
+    /// # Errors
+    ///
+    /// Returns a refusal when canonical state encoding or hashing fails.
     pub fn state_digest(&self) -> Result<[u8; 32], LeaseRefusal> {
         hash_bytes(HashAlgorithm::Sha256, &self.canonical_state_bytes()?)
             .map_err(|_| LeaseRefusal::HashRefusal)
@@ -1197,7 +1215,9 @@ impl Lease {
         projected.state_digest()
     }
 
-    #[must_use]
+    /// # Errors
+    ///
+    /// Returns a refusal when canonical state encoding or hashing fails.
     pub fn state_witness(&self) -> Result<LeaseStateWitness, LeaseRefusal> {
         let canonical_state = self.canonical_state_bytes()?;
         let digest = hash_bytes(HashAlgorithm::Sha256, &canonical_state)
@@ -1208,7 +1228,9 @@ impl Lease {
         })
     }
 
-    #[must_use]
+    /// # Errors
+    ///
+    /// Returns a refusal when canonical state encoding or hashing fails.
     pub fn verifies_state_witness(
         &self,
         witness: &LeaseStateWitness,
@@ -1217,6 +1239,9 @@ impl Lease {
             && witness.digest == self.state_digest()?)
     }
 
+    /// # Errors
+    ///
+    /// Returns a refusal for invalid encoding, terms, transition history, snapshot bindings or accounting.
     pub fn decode_state(bytes: &[u8]) -> Result<Self, LeaseRefusal> {
         let mut cursor = StateCursor::new(bytes);
         if cursor.take(LEASE_STATE_DOMAIN.len())? != LEASE_STATE_DOMAIN {
@@ -1255,16 +1280,7 @@ impl Lease {
             table_elements: cursor.u64()?,
             namespace_bytes: cursor.u64()?,
         };
-        let fee_schedule = FeeSchedule::new_complete(
-            cursor.u32()?,
-            cursor.u64()?,
-            cursor.u64()?,
-            cursor.u64()?,
-            cursor.u64()?,
-            cursor.u64()?,
-            cursor.u64()?,
-            cursor.u64()?,
-        );
+        let fee_schedule = Self::decode_fee_schedule(&mut cursor)?;
         let escrow_consumed = cursor.u128()?;
         let state = state_from_tag(cursor.u8()?)?;
         let history_length = usize::from(cursor.u8()?);
@@ -1289,117 +1305,8 @@ impl Lease {
         {
             return Err(LeaseRefusal::InvalidStateEncoding);
         }
-        let mut prior_state = LeaseState::Requested;
-        let mut prior_batch = None;
-        for index in 0..history_length {
-            let activity = activity_from_tag(cursor.u8()?)?;
-            let from = state_from_tag(cursor.u8()?)?;
-            let to = state_from_tag(cursor.u8()?)?;
-            let transition = LeaseTransition {
-                lease: id,
-                tenant,
-                activity,
-                from,
-                to,
-                activity_id: cursor.array()?,
-                usage_observation_digest: cursor.array()?,
-            };
-            let receipt_digest = cursor.array()?;
-            let batch_sequence = cursor.u64()?;
-            if !declared_edge(activity, from, to)
-                || from != prior_state
-                || transition.activity_id == [0; 32]
-                || receipt_digest == [0; 32]
-                || prior_batch.is_some_and(|prior| batch_sequence < prior)
-                || lease.history.iter().any(|prior| {
-                    prior.transition.activity_id == transition.activity_id
-                        || prior.receipt_digest == receipt_digest
-                })
-                || (index == 0
-                    && (activity != LeaseActivity::Request
-                        || batch_sequence != opened_at
-                        || transition.usage_observation_digest
-                            != lease.request_binding_digest()?))
-                || (index != 0 && activity == LeaseActivity::Request)
-                || (!matches!(
-                    activity,
-                    LeaseActivity::Request
-                        | LeaseActivity::CloseBoundExceeded
-                        | LeaseActivity::Snapshot
-                ) && transition.usage_observation_digest != [0; 32])
-                || (activity == LeaseActivity::Snapshot
-                    && transition.usage_observation_digest == [0; 32])
-                || (matches!(
-                    activity,
-                    LeaseActivity::Fund | LeaseActivity::Activate | LeaseActivity::BeginSettlement
-                ) && batch_sequence >= expiry)
-                || (activity == LeaseActivity::Expire
-                    && from != LeaseState::Settling
-                    && batch_sequence < expiry)
-            {
-                return Err(LeaseRefusal::InvalidStateEncoding);
-            }
-            lease.history.push(LeaseTransitionReceipt {
-                lease: id,
-                transition,
-                receipt_digest,
-                batch_sequence,
-            });
-            prior_state = to;
-            prior_batch = Some(batch_sequence);
-        }
-        let snapshot_length = usize::from(cursor.u16()?);
-        if snapshot_length > MAX_LEASE_SNAPSHOTS {
-            return Err(LeaseRefusal::SnapshotBindingOverflow);
-        }
-        for _ in 0..snapshot_length {
-            let digest = cursor.array()?;
-            let owner = PrincipalId::new(cursor.array()?)
-                .map_err(|_| LeaseRefusal::InvalidSnapshotBinding)?;
-            let source_lease = LeaseId::new(cursor.array()?)?;
-            let namespace = cursor.array()?;
-            let snapshot_host = ProgramId::new(cursor.array()?)
-                .map_err(|_| LeaseRefusal::InvalidSnapshotBinding)?;
-            let snapshot_image = cursor.array()?;
-            let byte_length = cursor.u64()?;
-            let chunk_count = cursor.u32()?;
-            if digest == [0; 32]
-                || namespace != lease.namespace.bytes()
-                || owner != tenant
-                || source_lease != id
-                || snapshot_host != host
-                || snapshot_image != image
-                || byte_length == 0
-                || chunk_count == 0
-                || lease
-                    .snapshot_records
-                    .iter()
-                    .any(|record| record.digest == digest)
-            {
-                return Err(LeaseRefusal::InvalidSnapshotBinding);
-            }
-            lease.snapshot_records.push(LeaseSnapshotRecord {
-                digest,
-                owner,
-                source_lease,
-                namespace: lease.namespace,
-                host_program: snapshot_host,
-                image_code_hash: snapshot_image,
-                byte_length,
-                chunk_count,
-            });
-        }
-        lease.restored_from = match cursor.u8()? {
-            0 => None,
-            1 => {
-                let digest = cursor.array()?;
-                if digest == [0; 32] {
-                    return Err(LeaseRefusal::InvalidSnapshotBinding);
-                }
-                Some(digest)
-            }
-            _ => return Err(LeaseRefusal::InvalidSnapshotBinding),
-        };
+        let prior_state = lease.decode_history(&mut cursor, history_length)?;
+        lease.decode_snapshot_bindings(&mut cursor)?;
         if !cursor.is_empty() || prior_state != state || history_length == 0 {
             return Err(LeaseRefusal::InvalidStateEncoding);
         }
@@ -1434,6 +1341,157 @@ impl Lease {
         Ok(lease)
     }
 
+    fn decode_fee_schedule(cursor: &mut StateCursor<'_>) -> Result<FeeSchedule, LeaseRefusal> {
+        Ok(FeeSchedule::new_complete(
+            layerx_programs_runtime::FeeScheduleParameters {
+                version: cursor.u32()?,
+                fee_units_per_cpu_fuel: cursor.u64()?,
+                fee_units_per_memory_byte: cursor.u64()?,
+                fee_units_per_storage_read_byte: cursor.u64()?,
+                fee_units_per_storage_write_byte: cursor.u64()?,
+                fee_units_per_output_value: cursor.u64()?,
+                fee_units_per_output_byte: cursor.u64()?,
+                fee_units_per_occupancy_byte_batch: cursor.u64()?,
+            },
+        ))
+    }
+
+    fn decode_history(
+        &mut self,
+        cursor: &mut StateCursor<'_>,
+        history_length: usize,
+    ) -> Result<LeaseState, LeaseRefusal> {
+        let id = self.id;
+        let tenant = self.tenant;
+        let opened_at = self.opened_at;
+        let expiry = self.expiry;
+        let mut prior_state = LeaseState::Requested;
+        let mut prior_batch = None;
+        for index in 0..history_length {
+            let activity = activity_from_tag(cursor.u8()?)?;
+            let from = state_from_tag(cursor.u8()?)?;
+            let to = state_from_tag(cursor.u8()?)?;
+            let transition = LeaseTransition {
+                lease: id,
+                tenant,
+                activity,
+                from,
+                to,
+                activity_id: cursor.array()?,
+                usage_observation_digest: cursor.array()?,
+            };
+            let receipt_digest = cursor.array()?;
+            let batch_sequence = cursor.u64()?;
+            if !declared_edge(activity, from, to)
+                || from != prior_state
+                || transition.activity_id == [0; 32]
+                || receipt_digest == [0; 32]
+                || prior_batch.is_some_and(|prior| batch_sequence < prior)
+                || self.history.iter().any(|prior| {
+                    prior.transition.activity_id == transition.activity_id
+                        || prior.receipt_digest == receipt_digest
+                })
+                || (index == 0
+                    && (activity != LeaseActivity::Request
+                        || batch_sequence != opened_at
+                        || transition.usage_observation_digest != self.request_binding_digest()?))
+                || (index != 0 && activity == LeaseActivity::Request)
+                || (!matches!(
+                    activity,
+                    LeaseActivity::Request
+                        | LeaseActivity::CloseBoundExceeded
+                        | LeaseActivity::Snapshot
+                ) && transition.usage_observation_digest != [0; 32])
+                || (activity == LeaseActivity::Snapshot
+                    && transition.usage_observation_digest == [0; 32])
+                || (matches!(
+                    activity,
+                    LeaseActivity::Fund | LeaseActivity::Activate | LeaseActivity::BeginSettlement
+                ) && batch_sequence >= expiry)
+                || (activity == LeaseActivity::Expire
+                    && from != LeaseState::Settling
+                    && batch_sequence < expiry)
+            {
+                return Err(LeaseRefusal::InvalidStateEncoding);
+            }
+            self.history.push(LeaseTransitionReceipt {
+                lease: id,
+                transition,
+                receipt_digest,
+                batch_sequence,
+            });
+            prior_state = to;
+            prior_batch = Some(batch_sequence);
+        }
+        Ok(prior_state)
+    }
+
+    fn decode_snapshot_bindings(
+        &mut self,
+        cursor: &mut StateCursor<'_>,
+    ) -> Result<(), LeaseRefusal> {
+        let id = self.id;
+        let tenant = self.tenant;
+        let host = self.host_program;
+        let image = self.image_code_hash;
+        let snapshot_length = usize::from(cursor.u16()?);
+        if snapshot_length > MAX_LEASE_SNAPSHOTS {
+            return Err(LeaseRefusal::SnapshotBindingOverflow);
+        }
+        for _ in 0..snapshot_length {
+            let digest = cursor.array()?;
+            let owner = PrincipalId::new(cursor.array()?)
+                .map_err(|_| LeaseRefusal::InvalidSnapshotBinding)?;
+            let source_lease = LeaseId::new(cursor.array()?)?;
+            let namespace = cursor.array()?;
+            let snapshot_host = ProgramId::new(cursor.array()?)
+                .map_err(|_| LeaseRefusal::InvalidSnapshotBinding)?;
+            let snapshot_image = cursor.array()?;
+            let byte_length = cursor.u64()?;
+            let chunk_count = cursor.u32()?;
+            if digest == [0; 32]
+                || namespace != self.namespace.bytes()
+                || owner != tenant
+                || source_lease != id
+                || snapshot_host != host
+                || snapshot_image != image
+                || byte_length == 0
+                || chunk_count == 0
+                || self
+                    .snapshot_records
+                    .iter()
+                    .any(|record| record.digest == digest)
+            {
+                return Err(LeaseRefusal::InvalidSnapshotBinding);
+            }
+            self.snapshot_records.push(LeaseSnapshotRecord {
+                digest,
+                owner,
+                source_lease,
+                namespace: self.namespace,
+                host_program: snapshot_host,
+                image_code_hash: snapshot_image,
+                byte_length,
+                chunk_count,
+            });
+        }
+        self.restored_from = match cursor.u8()? {
+            0 => None,
+            1 => {
+                let digest = cursor.array()?;
+                if digest == [0; 32] {
+                    return Err(LeaseRefusal::InvalidSnapshotBinding);
+                }
+                Some(digest)
+            }
+            _ => return Err(LeaseRefusal::InvalidSnapshotBinding),
+        };
+        Ok(())
+    }
+
+    /// # Errors
+    ///
+    /// Returns a refusal for an unknown lease, invalid transition or inconsistent transition evidence.
     pub fn transition(
         &mut self,
         transition: LeaseTransition,
@@ -1462,6 +1520,9 @@ impl Lease {
         self.apply_transition(transition, evidence)
     }
 
+    /// # Errors
+    ///
+    /// Returns a refusal when terminal evidence, lease bindings or namespace reclamation fails.
     pub fn destroy_with_evidence(
         &mut self,
         storage: &mut Storage,
@@ -1599,12 +1660,15 @@ impl Lease {
         Ok(TransitionOutcome::Advanced(receipt))
     }
 
+    /// # Errors
+    ///
+    /// Returns a refusal for an unknown or inactive lease, regressed usage or invalid bound-closure evidence.
     pub fn record_usage(
         &mut self,
         usage: LeaseUsage,
         escrow_consumed: u128,
         observed_batch: u64,
-        closure: Option<(LeaseTransition, TransitionEvidence)>,
+        closure: Option<&(LeaseTransition, TransitionEvidence)>,
     ) -> Result<UsageOutcome, LeaseRefusal> {
         if self.state != LeaseState::Active {
             return Err(LeaseRefusal::LeaseNotActive);
@@ -1638,7 +1702,7 @@ impl Lease {
             self.escrow_consumed = escrow_consumed;
             return Ok(UsageOutcome::Recorded(usage));
         };
-        let (closure, evidence) = closure.ok_or(LeaseRefusal::MissingClosureActivity)?;
+        let &(closure, evidence) = closure.ok_or(LeaseRefusal::MissingClosureActivity)?;
         if closure.activity != LeaseActivity::CloseBoundExceeded {
             return Err(LeaseRefusal::WrongActivity);
         }
@@ -1679,6 +1743,9 @@ impl LeaseBook {
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns a refusal when request evidence, lease identity or concurrency limits are invalid.
     pub fn insert_requested(
         &mut self,
         mut lease: Lease,
@@ -1708,13 +1775,16 @@ impl LeaseBook {
         self.leases.get(&id)
     }
 
+    /// # Errors
+    ///
+    /// Returns a refusal for an unknown or inactive lease, regressed usage or invalid bound-closure evidence.
     pub fn record_usage(
         &mut self,
         id: LeaseId,
         usage: LeaseUsage,
         escrow_consumed: u128,
         observed_batch: u64,
-        closure: Option<(LeaseTransition, TransitionEvidence)>,
+        closure: Option<&(LeaseTransition, TransitionEvidence)>,
     ) -> Result<UsageOutcome, LeaseRefusal> {
         self.leases
             .get_mut(&id)
@@ -1722,6 +1792,9 @@ impl LeaseBook {
             .record_usage(usage, escrow_consumed, observed_batch, closure)
     }
 
+    /// # Errors
+    ///
+    /// Returns a refusal for an unknown lease, invalid transition or inconsistent transition evidence.
     pub fn transition(
         &mut self,
         id: LeaseId,
@@ -1744,6 +1817,9 @@ impl LeaseBook {
         Ok(outcome)
     }
 
+    /// # Errors
+    ///
+    /// Returns a refusal when terminal evidence, lease bindings or namespace reclamation fails.
     pub fn destroy_with_evidence(
         &mut self,
         id: LeaseId,
@@ -1936,9 +2012,9 @@ mod tests {
 
     fn lease(id: u8, tenant: u8) -> Lease {
         Lease::request(
-            LeaseId::new([id; 32]).expect("lease id"),
-            PrincipalId::new([tenant; 32]).expect("tenant"),
-            ProgramId::new([3; 32]).expect("program"),
+            LeaseId::new([id; 32]).unwrap_or_else(|error| panic!("lease id: {error:?}")),
+            PrincipalId::new([tenant; 32]).unwrap_or_else(|error| panic!("tenant: {error:?}")),
+            ProgramId::new([3; 32]).unwrap_or_else(|error| panic!("program: {error:?}")),
             [4; 32],
             [5; 32],
             100,
@@ -1955,7 +2031,7 @@ mod tests {
             10,
             20,
         )
-        .expect("valid lease")
+        .unwrap_or_else(|error| panic!("valid lease: {error:?}"))
     }
 
     #[test]
@@ -1985,11 +2061,20 @@ mod tests {
 
     #[test]
     fn fee_schedule_is_frozen_in_canonical_lease_state() {
-        let schedule = FeeSchedule::new_complete(9, 2, 3, 5, 7, 11, 13, 17);
+        let schedule = FeeSchedule::new_complete(layerx_programs_runtime::FeeScheduleParameters {
+            version: 9,
+            fee_units_per_cpu_fuel: 2,
+            fee_units_per_memory_byte: 3,
+            fee_units_per_storage_read_byte: 5,
+            fee_units_per_storage_write_byte: 7,
+            fee_units_per_output_value: 11,
+            fee_units_per_output_byte: 13,
+            fee_units_per_occupancy_byte_batch: 17,
+        });
         let lease = Lease::request_with_schedule(
-            LeaseId::new([8; 32]).expect("lease id"),
-            PrincipalId::new([2; 32]).expect("tenant"),
-            ProgramId::new([3; 32]).expect("program"),
+            LeaseId::new([8; 32]).unwrap_or_else(|error| panic!("lease id: {error:?}")),
+            PrincipalId::new([2; 32]).unwrap_or_else(|error| panic!("tenant: {error:?}")),
+            ProgramId::new([3; 32]).unwrap_or_else(|error| panic!("program: {error:?}")),
             [4; 32],
             [5; 32],
             100,
@@ -2007,11 +2092,11 @@ mod tests {
             20,
             schedule,
         )
-        .expect("lease");
+        .unwrap_or_else(|error| panic!("lease: {error:?}"));
         let declared = Lease::request(
-            LeaseId::new([8; 32]).expect("lease id"),
-            PrincipalId::new([2; 32]).expect("tenant"),
-            ProgramId::new([3; 32]).expect("program"),
+            LeaseId::new([8; 32]).unwrap_or_else(|error| panic!("lease id: {error:?}")),
+            PrincipalId::new([2; 32]).unwrap_or_else(|error| panic!("tenant: {error:?}")),
+            ProgramId::new([3; 32]).unwrap_or_else(|error| panic!("program: {error:?}")),
             [4; 32],
             [5; 32],
             100,
@@ -2028,22 +2113,28 @@ mod tests {
             10,
             20,
         )
-        .expect("declared lease");
+        .unwrap_or_else(|error| panic!("declared lease: {error:?}"));
         assert_eq!(lease.fee_schedule(), schedule);
         assert_ne!(
-            lease.canonical_state_bytes().expect("scheduled canonical"),
+            lease
+                .canonical_state_bytes()
+                .unwrap_or_else(|error| panic!("scheduled canonical: {error:?}")),
             declared
                 .canonical_state_bytes()
-                .expect("declared canonical")
+                .unwrap_or_else(|error| panic!("declared canonical: {error:?}"))
         );
         assert_eq!(
             lease.fee_destination(),
-            system_fee_destination().expect("fee account")
+            system_fee_destination().unwrap_or_else(|error| panic!("fee account: {error:?}"))
         );
         let mut substituted = lease.clone();
         substituted.fee_destination = [9; 32];
         assert_eq!(
-            Lease::decode_state(&substituted.canonical_state_bytes().expect("state")),
+            Lease::decode_state(
+                &substituted
+                    .canonical_state_bytes()
+                    .unwrap_or_else(|error| panic!("state: {error:?}"))
+            ),
             Err(LeaseRefusal::InvalidStateEncoding)
         );
     }
@@ -2086,11 +2177,7 @@ mod tests {
                             LeaseState::Funded,
                             LeaseState::Active
                         ) | (
-                            LeaseActivity::BeginSettlement,
-                            LeaseState::Active,
-                            LeaseState::Settling
-                        ) | (
-                            LeaseActivity::CloseBoundExceeded,
+                            LeaseActivity::BeginSettlement | LeaseActivity::CloseBoundExceeded,
                             LeaseState::Active,
                             LeaseState::Settling
                         ) | (

@@ -16,6 +16,7 @@ def main():
         text=True,
     )
     expected = {
+        "native-program-call-v3": 3,
         "native-program-deploy-v3": 1,
         "native-program-upgrade-v3": 2,
         "native-program-wind-down-route-v3": 7,
@@ -23,6 +24,17 @@ def main():
         "native-program-wind-down-tombstone-v3": 7,
         "native-program-wind-down-exit-v3": 7,
     }
+    subprocess.run(
+        [str(arguments.encoder.resolve()), "--stored-historical-v3",
+         str(Path(__file__).with_name("receipt-programs-executed-v3.json"))],
+        check=True, timeout=120,
+    )
+    for name in expected:
+        subprocess.run(
+            [str(arguments.encoder.resolve()), "--stored-historical-lifecycle",
+             str(Path(__file__).with_name(name + ".json"))],
+            check=True, timeout=120,
+        )
     documents = {}
     for line in encoded.stdout.splitlines():
         document = json.loads(line)
@@ -36,16 +48,20 @@ def main():
         payload = bytes.fromhex(document["payload_hex"])
         if not payload or payload.hex() != document["payload_hex"]:
             raise ValueError("native encoder returned non-canonical hexadecimal")
+        document["name"] = name.removesuffix("-v3") + "-v4"
         documents[name] = json.dumps(document, indent=2) + "\n"
     if set(documents) != set(expected):
         raise ValueError("native encoder omitted a lifecycle vector")
     for name, contents in documents.items():
-        destination = Path(__file__).with_name(name + ".json")
+        destination = Path(__file__).with_name(name.removesuffix("-v3") + "-v4.json")
         if arguments.check:
             if destination.read_text() != contents:
                 raise ValueError(f"native lifecycle fixture drift: {destination}")
         else:
             destination.write_text(contents)
+
+    from generate_executed_program_v4_fixture import main as executed_v4
+    executed_v4()
 
 
 if __name__ == "__main__":

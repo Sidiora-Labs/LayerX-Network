@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "layerx/lxp_daemon.h"
+#include "lxp_daemon_maintenance_json.h"
 
 #include "layerx/lxp_crypto.h"
 
@@ -191,10 +192,12 @@ static lxp_result evidence_for_head(
         arena, evidence);
 }
 
-static void put_batch_evidence(json_writer *writer,
+static void put_batch_evidence(lxp_daemon_protocol_owner *owner, json_writer *writer,
                                const lxp_daemon_receipt_evidence *evidence,
                                lxp_arena *arena)
 {
+    char *identity_json = NULL;
+    size_t identity_length = 0U;
     lxp_codec_writer proof_writer;
     size_t mark = lxp_arena_mark(arena);
     lxp_result status = lxp_codec_writer_init(
@@ -207,6 +210,13 @@ static void put_batch_evidence(json_writer *writer,
         (void)lxp_arena_reset(arena, mark);
         return;
     }
+    status = maintenance_identity_json(owner->receipt_authority, evidence,
+        arena, &identity_json, &identity_length);
+    if (status != LXP_OK) {
+        writer->status = status;
+        (void)lxp_arena_reset(arena, mark);
+        return;
+    }
     json_text(writer, "{\"header_hex\":\"");
     json_hex(writer, evidence->canonical_header.bytes,
              evidence->canonical_header.length);
@@ -214,7 +224,10 @@ static void put_batch_evidence(json_writer *writer,
     json_hex(writer, evidence->header_signature, 64U);
     json_text(writer, "\",\"receipt_proof_hex\":\"");
     json_hex(writer, proof_writer.bytes, proof_writer.length);
-    json_text(writer, "\"}");
+    json_text(writer, "\"");
+    if (identity_length != 0U) json_raw(writer, identity_json, identity_length);
+    free(identity_json);
+    json_text(writer, "}");
     (void)lxp_arena_reset(arena, mark);
 }
 
@@ -224,10 +237,33 @@ static lxp_result put_receipt_document(
     lxp_arena *arena, json_writer *writer)
 {
     lxp_receipt receipt;
-    lxp_result status = lxp_receipt_decode(
-        evidence->canonical_receipt.bytes,
-        evidence->canonical_receipt.length, true, &receipt);
-    if (status != LXP_OK) return status;
+    lxp_programs_occupancy_receipt maintenance;
+    lxp_batch_header header;
+    const uint8_t *state_root;
+    uint64_t sequence, timestamp;
+    lxp_result status;
+    if (evidence->format_version == 3U) {
+        status = lxp_programs_occupancy_receipt_decode(
+            evidence->canonical_receipt.bytes,
+            evidence->canonical_receipt.length, &maintenance);
+        if (status != LXP_OK) return status;
+        state_root = maintenance.resulting_state_root;
+        sequence = maintenance.global_sequence;
+        status = lxp_batch_header_decode(evidence->canonical_header.bytes,
+            evidence->canonical_header.length, &header);
+        if (status != LXP_OK) return status;
+        timestamp = header.timestamp_ms;
+    } else {
+        status = lxp_receipt_decode(evidence->canonical_receipt.bytes,
+            evidence->canonical_receipt.length, true, &receipt);
+        if (status != LXP_OK) return status;
+        state_root = receipt.resulting_state_root;
+        sequence = receipt.global_sequence;
+        timestamp = receipt.timestamp;
+    }
+    if (current && (sequence != owner->feed_store.scanned_through_sequence ||
+        lxp_ct_memcmp(state_root, owner->feed_store.head_state_root, 32U) != 0))
+        return LXP_ERR_PROJECTION_STALE;
     json_text(writer, "{\"current\":");
     json_text(writer, current ? "true" : "false");
     json_text(writer, ",\"receipt_hex\":\"");
@@ -236,15 +272,14 @@ static lxp_result put_receipt_document(
     json_text(writer, "\",\"receipt_digest\":\"");
     json_hex(writer, evidence->receipt_digest, 32U);
     json_text(writer, "\",\"state_root\":\"");
-    json_hex(writer, receipt.resulting_state_root, 32U);
+    json_hex(writer, state_root, 32U);
     json_format(writer,
                 "\",\"observed_sequence\":%llu,\"observed_at\":%llu,"
                 "\"batch_evidence\":",
-                (unsigned long long)receipt.global_sequence,
-                (unsigned long long)receipt.timestamp);
-    put_batch_evidence(writer, evidence, arena);
+                (unsigned long long)sequence,
+                (unsigned long long)timestamp);
+    put_batch_evidence(owner, writer, evidence, arena);
     json_text(writer, "}");
-    (void)owner;
     return writer->status;
 }
 
@@ -446,7 +481,7 @@ static lxp_result batch_route(lxp_daemon_protocol_owner *owner,
     json_text(writer, "{\"sequencer_public_key\":\"");
     json_hex(writer, owner->receipt_authority->authorization.public_key, 32U);
     json_text(writer, "\",\"batch_evidence\":");
-    put_batch_evidence(writer, &evidence, arena);
+    put_batch_evidence(owner, writer, &evidence, arena);
     json_text(writer, "}");
     return writer->status;
 }
@@ -563,6 +598,7 @@ lxp_result lxp_daemon_protocol_owner_attach(
     lxp_result status;
     pthread_mutexattr_t mutex_attributes;
     bool mutex_initialized = false;
+    bool receipt_mutex_initialized = false;
     const char *stage = "input validation";
     if (owner == NULL || kernel == NULL || identities == NULL ||
         network_id == 0U ||
@@ -611,6 +647,11 @@ lxp_result lxp_daemon_protocol_owner_attach(
         mutex_initialized = status == LXP_OK;
     }
     if (status != LXP_OK) goto fail;
+    if (pthread_mutex_init(&owner->receipt_mutex, NULL) != 0) {
+        status = LXP_ERR_IO;
+        goto fail;
+    }
+    receipt_mutex_initialized = true;
     status = lxp_verified_receipt_index_bind_fallback(
         verified_receipts, durable_receipt_facts, owner);
     if (status != LXP_OK) goto fail;
@@ -624,6 +665,8 @@ lxp_result lxp_daemon_protocol_owner_attach(
         status = lxp_kernel_bind_module_runtime(
             kernel, LXP_MODULE_PROGRAMS, programs_runtime);
     }
+    if (status == LXP_OK)
+        status = lxp_programs_state_feed_store_bind_maintenance(&owner->feed_store, kernel);
     if (status == LXP_OK) stage = "canonical replay";
     if (status == LXP_OK) status = replay(replay_context, owner);
     if (status == LXP_OK) stage = "feed recovery";
@@ -653,11 +696,11 @@ lxp_result lxp_daemon_protocol_owner_attach(
             status = lxp_daemon_receipt_authority_scan(
                 receipt_authority, &authority_offset, scratch,
                 &evidence, &present);
-            if (status == LXP_OK && present)
+            if (status == LXP_OK && present && evidence.format_version != 3U)
                 status = lxp_receipt_decode(
                     evidence.canonical_receipt.bytes,
                     evidence.canonical_receipt.length, true, &receipt);
-            if (status == LXP_OK && present)
+            if (status == LXP_OK && present && evidence.format_version != 3U)
                 status = lxp_verified_receipt_index_add(
                     verified_receipts, &receipt,
                     receipt_authority->authorization.public_key, scratch);
@@ -672,16 +715,28 @@ lxp_result lxp_daemon_protocol_owner_attach(
         status = lxp_daemon_receipt_authority_lookup(
             receipt_authority, owner->feed_store.head_receipt_digest,
             scratch, &evidence);
-        if (status == LXP_OK)
-            status = lxp_receipt_decode(
-                evidence.canonical_receipt.bytes,
-                evidence.canonical_receipt.length, true, &receipt);
-        if (status == LXP_OK &&
-            (receipt.global_sequence !=
-                 owner->feed_store.scanned_through_sequence ||
-             lxp_ct_memcmp(receipt.resulting_state_root,
-                           owner->feed_store.head_state_root, 32U) != 0))
-            status = LXP_ERR_PROJECTION_STALE;
+        if (status == LXP_OK && evidence.format_version == 3U) {
+            lxp_programs_occupancy_receipt maintenance;
+            status = lxp_programs_occupancy_receipt_decode(
+                evidence.canonical_receipt.bytes, evidence.canonical_receipt.length,
+                &maintenance);
+            if (status == LXP_OK &&
+                (maintenance.global_sequence != owner->feed_store.scanned_through_sequence ||
+                 lxp_ct_memcmp(maintenance.resulting_state_root,
+                               owner->feed_store.head_state_root, 32U) != 0))
+                status = LXP_ERR_PROJECTION_STALE;
+        } else {
+            if (status == LXP_OK)
+                status = lxp_receipt_decode(
+                    evidence.canonical_receipt.bytes,
+                    evidence.canonical_receipt.length, true, &receipt);
+            if (status == LXP_OK &&
+                (receipt.global_sequence !=
+                     owner->feed_store.scanned_through_sequence ||
+                 lxp_ct_memcmp(receipt.resulting_state_root,
+                               owner->feed_store.head_state_root, 32U) != 0))
+                status = LXP_ERR_PROJECTION_STALE;
+        }
         (void)lxp_arena_reset(scratch, mark);
     }
     if (status == LXP_OK && receipt_authority->record_count != 0U) {
@@ -700,7 +755,12 @@ lxp_result lxp_daemon_protocol_owner_attach(
         else
             owner->latest_sealed_timestamp = bootstrap_sealed_timestamp;
     }
-    if (status == LXP_OK) owner->attached = true;
+    if (status == LXP_OK) {
+        owner->published_receipt_log = *canonical_log;
+        owner->published_receipt_log.capacity = canonical_log->write_offset;
+        owner->published_batch_number = receipt_authority->last_batch_number;
+        owner->attached = true;
+    }
     else {
 fail:
         (void)fprintf(stderr, "layerxd: protocol owner %s failed with result %d\n", stage, (int)status);
@@ -713,6 +773,7 @@ fail:
         owner->bearer_token_length = 0U;
         (void)lxp_verified_receipt_index_bind_fallback(
             verified_receipts, NULL, NULL);
+        if (receipt_mutex_initialized) (void)pthread_mutex_destroy(&owner->receipt_mutex);
         if (mutex_initialized) (void)pthread_mutex_destroy(&owner->mutex);
     }
     return status;
@@ -731,6 +792,7 @@ lxp_result lxp_daemon_protocol_owner_detach(
     if (lxp_verified_receipt_index_bind_fallback(
             owner->verified_receipts, NULL, NULL) != LXP_OK)
         return LXP_FATAL_INVARIANT;
+    if (pthread_mutex_destroy(&owner->receipt_mutex) != 0) return LXP_ERR_IO;
     if (pthread_mutex_destroy(&owner->mutex) != 0) return LXP_ERR_IO;
     lxp_secure_zero(owner->bearer_token, sizeof(owner->bearer_token));
     owner->bearer_token_length = 0U;
@@ -764,8 +826,17 @@ lxp_result lxp_daemon_protocol_owner_bind_evidence(
     if (owner->evidence_store != NULL &&
         owner->evidence_store != evidence_store)
         status = LXP_ERR_CONTEXT_MISMATCH;
-    else
+    else {
         owner->evidence_store = evidence_store;
+        if (pthread_mutex_lock(&owner->receipt_mutex) != 0)
+            status = LXP_ERR_IO;
+        else {
+            (void)memcpy(owner->published_checkpoint_id,
+                         evidence_store->latest_checkpoint_id, 32U);
+            if (pthread_mutex_unlock(&owner->receipt_mutex) != 0)
+                status = LXP_FATAL_INVARIANT;
+        }
+    }
     if (pthread_mutex_unlock(&owner->mutex) != 0 && status == LXP_OK)
         status = LXP_FATAL_INVARIANT;
     return status;

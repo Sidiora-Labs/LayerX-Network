@@ -1305,9 +1305,12 @@ mod tests {
     #[test]
     fn golden_state_encoding_and_digest_are_frozen() {
         let state = golden_state();
-        let encoded = state.canonical_bytes().expect("golden state encodes");
+        let encoded = state
+            .canonical_bytes()
+            .unwrap_or_else(|error| panic!("golden state encodes: {error:?}"));
         assert_eq!(hex(&encoded), "00011111111111111111111111111111111111111111111111111111111111111111222222222222222222222222222222222222222222222222222222222222222233333333333333333333333333333333333333333333333333333333333333330000000000000008000000000000000d0000000200ffffffff01010203040506070800000001000000020100000000000000150000000101fffffffffffffffe0000000101000000020000000004007f80ff000000010000000001000000002a00000002000000000161000000036f6e6501000000016200000000000003e70000000000000009000000000001000000000000000000020000000000000003000000010000000000000004000000000000000000000000000000050000000000000000000000000000000600000000000000000000000000000007");
-        let commitment = StepCommitment::from_state(&state).expect("golden state commits");
+        let commitment = StepCommitment::from_state(&state)
+            .unwrap_or_else(|error| panic!("golden state commits: {error:?}"));
         assert_eq!(
             commitment.digest,
             [
@@ -1325,18 +1328,27 @@ mod tests {
 
     #[test]
     fn trace_records_only_declared_intervals_in_order() {
-        let policy = TracePolicy::new(4, 3).expect("valid trace policy");
+        let policy =
+            TracePolicy::new(4, 3).unwrap_or_else(|error| panic!("valid trace policy: {error:?}"));
         let mut trace = ExecutionTrace::new(policy);
         let mut state = golden_state();
         state.step_index = 3;
         assert_eq!(
-            trace.record(&state).expect("unaligned step is ignored"),
+            trace
+                .record(&state)
+                .unwrap_or_else(|error| panic!("unaligned step is ignored: {error:?}")),
             None
         );
         state.step_index = 4;
-        assert!(trace.record(&state).expect("first commitment").is_some());
+        assert!(trace
+            .record(&state)
+            .unwrap_or_else(|error| panic!("first commitment: {error:?}"))
+            .is_some());
         state.step_index = 8;
-        assert!(trace.record(&state).expect("second commitment").is_some());
+        assert!(trace
+            .record(&state)
+            .unwrap_or_else(|error| panic!("second commitment: {error:?}"))
+            .is_some());
         assert_eq!(trace.commitments().len(), 2);
         assert_eq!(
             trace.policy().canonical_bytes(),
@@ -1346,21 +1358,28 @@ mod tests {
 
     #[test]
     fn complete_trace_evidence_bytes_are_platform_independent() {
-        let policy = TracePolicy::new(4, 3).expect("valid trace policy");
+        let policy =
+            TracePolicy::new(4, 3).unwrap_or_else(|error| panic!("valid trace policy: {error:?}"));
         let mut trace = ExecutionTrace::new(policy);
-        trace.record(&golden_state()).expect("golden commitment");
+        trace
+            .record(&golden_state())
+            .unwrap_or_else(|error| panic!("golden commitment: {error:?}"));
         assert_eq!(
-            hex(&trace.canonical_bytes().expect("golden trace encodes")),
+            hex(&trace
+                .canonical_bytes()
+                .unwrap_or_else(|error| panic!("golden trace encodes: {error:?}"))),
             include_str!("../vectors/step-commitment-trace-v1.hex").trim(),
         );
     }
 
     #[test]
     fn legacy_commitment_is_not_an_arbitration_pre_state() {
-        let _commitment =
-            StepCommitment::from_state(&golden_state()).expect("legacy golden state commits");
+        let _commitment = StepCommitment::from_state(&golden_state())
+            .unwrap_or_else(|error| panic!("legacy golden state commits: {error:?}"));
         assert!(!StepCommitment::arbitration_eligible());
-        let trace = ExecutionTrace::new(TracePolicy::new(1, 2).expect("valid policy"));
+        let trace = ExecutionTrace::new(
+            TracePolicy::new(1, 2).unwrap_or_else(|error| panic!("valid policy: {error:?}")),
+        );
         assert_eq!(
             trace.canonical_arbitration_bytes(),
             Err(CommitmentError::LegacyCommitmentNotArbitrable),
@@ -1369,7 +1388,8 @@ mod tests {
 
     #[test]
     fn arbitration_commitment_separates_engine_host_and_base_state() {
-        let policy = TracePolicy::new(1, 2).expect("valid policy");
+        let policy =
+            TracePolicy::new(1, 2).unwrap_or_else(|error| panic!("valid policy: {error:?}"));
         let identity = ArbitrationExecutionIdentity {
             module_code_hash: [0x11; 32],
             input_digest: [0x22; 32],
@@ -1389,8 +1409,8 @@ mod tests {
             host_state_root: [0x77; 32],
             host_state_bytes: 9,
         };
-        let original =
-            ArbitrationStepCommitment::from_state(&state).expect("complete state commits");
+        let original = ArbitrationStepCommitment::from_state(&state)
+            .unwrap_or_else(|error| panic!("complete state commits: {error:?}"));
         assert!(original.arbitration_eligible());
         for changed in [
             ArbitrationExecutionState {
@@ -1412,7 +1432,7 @@ mod tests {
             assert_ne!(
                 original.digest,
                 ArbitrationStepCommitment::from_state(&changed)
-                    .expect("distinct complete state commits")
+                    .unwrap_or_else(|error| panic!("distinct complete state commits: {error:?}"))
                     .digest,
             );
         }
@@ -1420,15 +1440,20 @@ mod tests {
 
     #[test]
     fn canonical_arbitration_trace_verifier_rejects_mutation_and_truncation() {
-        let policy = TracePolicy::new(1, 4).expect("valid policy");
+        let policy =
+            TracePolicy::new(1, 4).unwrap_or_else(|error| panic!("valid policy: {error:?}"));
         let mut trace = ExecutionTrace::new(policy);
         let pre_legacy = Arc::new(golden_state());
         let mut post_legacy_value = golden_state();
         post_legacy_value.step_index = pre_legacy.step_index + 1;
         post_legacy_value.program_counter += 1;
         let post_legacy = Arc::new(post_legacy_value);
-        trace.record(&pre_legacy).expect("pre-state commitment");
-        trace.record(&post_legacy).expect("post-state commitment");
+        trace
+            .record(&pre_legacy)
+            .unwrap_or_else(|error| panic!("pre-state commitment: {error:?}"));
+        trace
+            .record(&post_legacy)
+            .unwrap_or_else(|error| panic!("post-state commitment: {error:?}"));
         let identity = ArbitrationExecutionIdentity {
             module_code_hash: pre_legacy.module_code_hash,
             input_digest: pre_legacy.input_digest,
@@ -1456,9 +1481,9 @@ mod tests {
             host_state_bytes: 1,
         });
         let pre_commitment = ArbitrationStepCommitment::from_state(&pre_state)
-            .expect("pre-state arbitration commitment");
+            .unwrap_or_else(|error| panic!("pre-state arbitration commitment: {error:?}"));
         let post_commitment = ArbitrationStepCommitment::from_state(&post_state)
-            .expect("post-state arbitration commitment");
+            .unwrap_or_else(|error| panic!("post-state arbitration commitment: {error:?}"));
         trace
             .record_arbitration_step(ArbitrationExecutionStep {
                 instruction: vec![0x01],
@@ -1469,11 +1494,13 @@ mod tests {
                 pre_commitment,
                 post_commitment,
             })
-            .expect("complete arbitration transition");
+            .unwrap_or_else(|error| panic!("complete arbitration transition: {error:?}"));
 
-        let encoded = trace.canonical_arbitration_bytes().expect("trace encodes");
+        let encoded = trace
+            .canonical_arbitration_bytes()
+            .unwrap_or_else(|error| panic!("trace encodes: {error:?}"));
         ExecutionTrace::verify_canonical_arbitration_bytes(&encoded)
-            .expect("canonical trace verifies");
+            .unwrap_or_else(|error| panic!("canonical trace verifies: {error:?}"));
 
         let mut mutated = encoded.clone();
         mutated[0] ^= 1;

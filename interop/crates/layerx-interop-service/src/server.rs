@@ -18,7 +18,7 @@ use layerx_interop_gateway::server::{
 };
 use layerx_interop_gateway::trace::TraceId;
 use layerx_interop_gateway::GatewayCore;
-use layerx_platform_gateway::http::{IncomingRequest, OutgoingResponse};
+use layerx_platform_gateway::http::{IncomingRequest, OutboundRequest, OutgoingResponse};
 use layerx_platform_gateway::store::{
     Completion, KeyRecord, Reservation, ReservationRequest, TapCredentialRecord,
     TapNonceConsumption,
@@ -2067,15 +2067,15 @@ impl Execution<'_> {
             return Err("authenticated signer binding is invalid".to_owned());
         }
         let upstream = self.config.client.request_authorized_traced(
-            layerx_platform_gateway::http::RequestTarget {
-                endpoint: &self.config.hosted_gateway,
+            &self.config.hosted_gateway,
+            self.authorization,
+            &OutboundRequest {
                 method: "POST",
                 path: "/v1/activities",
+                idempotency: Some(self.idempotency),
+                content_type: "application/octet-stream",
+                body: &self.activity,
             },
-            self.authorization,
-            Some(self.idempotency),
-            "application/octet-stream",
-            &self.activity,
             Some(self.trace.as_str()),
         )?;
         if upstream.status == 202 {
@@ -2203,15 +2203,15 @@ fn authority(
 ) -> Result<AuthorizedFacts, String> {
     let authorization = format!("Bearer {}", config.receipt_authority_token.as_str());
     let response = config.client.request_authorized_traced(
-        layerx_platform_gateway::http::RequestTarget {
-            endpoint: &config.receipt_authority,
+        &config.receipt_authority,
+        &authorization,
+        &OutboundRequest {
             method: "GET",
             path: &format!("/v1/authorized-batches/by-activity/{activity_id}"),
+            idempotency: None,
+            content_type: "application/json",
+            body: &[],
         },
-        &authorization,
-        None,
-        "application/json",
-        &[],
         Some(trace.as_str()),
     )?;
     if response.status != 200 || response.content_type != "application/json" {
@@ -2339,15 +2339,15 @@ fn dependency_ready(
     config
         .client
         .request(
-            layerx_platform_gateway::http::RequestTarget {
-                endpoint,
+            endpoint,
+            token,
+            &OutboundRequest {
                 method: "GET",
                 path: "/readyz",
+                idempotency: None,
+                content_type: "application/json",
+                body: &[],
             },
-            token,
-            None,
-            "application/json",
-            &[],
         )
         .is_ok_and(|response| response.status == 200 && response.content_type == "application/json")
 }
@@ -2356,15 +2356,15 @@ fn hosted_ready(config: &Config) -> bool {
     config
         .client
         .request(
-            layerx_platform_gateway::http::RequestTarget {
-                endpoint: &config.hosted_gateway,
+            &config.hosted_gateway,
+            "readiness",
+            &OutboundRequest {
                 method: "GET",
                 path: "/readyz",
+                idempotency: None,
+                content_type: "application/json",
+                body: &[],
             },
-            "readiness",
-            None,
-            "application/json",
-            &[],
         )
         .is_ok_and(|response| response.status == 200 && response.content_type == "application/json")
 }

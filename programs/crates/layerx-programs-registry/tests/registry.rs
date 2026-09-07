@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-mod support;
+pub mod support;
 
 use layerx_programs::{
     BuildEnvironment, DeploymentJournal, DeploymentRecord, ExecutableAdmissionError,
@@ -25,9 +25,6 @@ use support::{
 const PROGRAM: [u8; 32] = [0x31; 32];
 const WASM_V1: &[u8] = &[0, 97, 115, 109, 1, 0, 0, 0];
 const WASM_V2: &[u8] = &[0, 97, 115, 109, 1, 0, 0, 0, 0, 3, 2, b'v', b'2'];
-const FOREIGN_WASM: &[u8] = &[
-    0, 97, 115, 109, 1, 0, 0, 0, 0, 8, 7, b'f', b'o', b'r', b'e', b'i', b'g', b'n',
-];
 const INVALID_WASM: &[u8] = &[0, 97, 115, 109, 1, 0, 0, 0, 1, 1, 0xff];
 
 struct WrongAuthority;
@@ -544,7 +541,7 @@ fn reproducible_build_verification_records_success_and_visible_mismatch() {
     let first = record(program, 1, None, WASM_V1, UpgradePolicy::Immutable, 70);
     let mut registry = Registry::new();
     registry
-        .replay_journal(&[first.clone()])
+        .replay_journal(std::slice::from_ref(&first))
         .unwrap_or_else(|error| panic!("deployment: {error}"));
     let verified = ReproducibleBuild::from_output(&source(), environment(), WASM_V1)
         .unwrap_or_else(|error| panic!("build evidence: {error}"));

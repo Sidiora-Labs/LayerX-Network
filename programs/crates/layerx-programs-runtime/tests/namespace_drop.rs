@@ -39,7 +39,7 @@ fn capabilities(grants: impl IntoIterator<Item = Capability>) -> CapabilitySet {
 fn signed_leb(mut value: i32) -> Vec<u8> {
     let mut bytes = Vec::new();
     loop {
-        let byte = (value as u8) & 0x7f;
+        let byte = value.to_le_bytes()[0] & 0x7f;
         value >>= 7;
         let done = (value == 0 && byte & 0x40 == 0) || (value == -1 && byte & 0x40 != 0);
         bytes.push(if done { byte } else { byte | 0x80 });

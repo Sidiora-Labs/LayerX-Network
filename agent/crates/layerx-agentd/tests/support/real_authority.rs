@@ -671,7 +671,7 @@ fn verify_replica_inclusion(
     fixture: &Fixture,
     submitted: &Submitted,
     body: &serde_json::Value,
-) -> layerx_proof::inclusion::InclusionEvidence {
+) -> ReplicaReceiptEvidence {
     let replica_id = fixture.replica_id;
     let sequencer_id = fixture.sequencer_id;
     let sequencer_key = fixture.sequencer_key;
@@ -716,7 +716,7 @@ fn verify_replica_inclusion(
     );
     let authorization =
         layerx_proof::inclusion::SequencerAuthorization::new(sequencer, key, 1, last_batch);
-    must(
+    let inclusion = must(
         layerx_proof::inclusion::verify_receipt(
             &submitted.receipt,
             &proof,
@@ -725,6 +725,124 @@ fn verify_replica_inclusion(
             &authorization,
         ),
         "real replica signature and inclusion",
+    );
+    let committed = inclusion.header().header();
+    let (last_activity_sequence, activity_resulting_root) =
+        match body["batch_evidence"].get("batch_identity") {
+            None => (committed.last_sequence(), committed.resulting_state_root()),
+            Some(identity) => verify_maintenance_attachment(
+                submitted,
+                identity,
+                &inclusion,
+                &ReplicaInclusionInputs {
+                    header: &header,
+                    signature: &signature,
+                    proof: &proof,
+                    authorization: &authorization,
+                },
+            ),
+        };
+    ReplicaReceiptEvidence {
+        inclusion,
+        last_activity_sequence,
+        activity_resulting_root,
+    }
+}
+
+struct ReplicaReceiptEvidence {
+    inclusion: layerx_proof::inclusion::InclusionEvidence,
+    last_activity_sequence: u64,
+    activity_resulting_root: [u8; 32],
+}
+
+struct ReplicaInclusionInputs<'a> {
+    header: &'a [u8],
+    signature: &'a [u8; 64],
+    proof: &'a layerx_proof::merkle::Proof,
+    authorization: &'a layerx_proof::inclusion::SequencerAuthorization,
+}
+
+fn verify_maintenance_attachment(
+    submitted: &Submitted,
+    identity: &serde_json::Value,
+    inclusion: &layerx_proof::inclusion::InclusionEvidence,
+    inputs: &ReplicaInclusionInputs<'_>,
+) -> (u64, [u8; 32]) {
+    assert_eq!(identity["kind"].as_str(), Some("occupancy_maintenance_v2"));
+    let field = |name| {
+        must(
+            hex::decode(
+                identity[name]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("maintenance field missing")),
+            ),
+            "maintenance hexadecimal",
+        )
+    };
+    let maintenance_bytes = field("receipt_hex");
+    let canonical_proof = must(
+        layerx_wire::receipt::decode_merkle_proof(&field("receipt_proof_hex")),
+        "maintenance wire proof",
+    );
+    let maintenance_proof = must(
+        layerx_proof::merkle::Proof::new(
+            canonical_proof.leaf_index(),
+            canonical_proof.leaf_count(),
+            canonical_proof.siblings().to_vec(),
+        ),
+        "maintenance proof",
+    );
+    let receipt = must(
+        layerx_wire::receipt::decode(&submitted.receipt),
+        "activity receipt",
+    );
+    let protocol = receipt
+        .protocol()
+        .unwrap_or_else(|| panic!("activity protocol"));
+    let header = inclusion.header().header();
+    let activity = must(
+        layerx_proof::receipt::authorized_maintained_activity_batch(
+            &submitted.receipt,
+            &layerx_proof::receipt::AuthorizedBatch::new(
+                protocol.batch_id(),
+                protocol.asset(),
+                header.previous_state_root(),
+                header.resulting_state_root(),
+                inputs.authorization.public_key(),
+            ),
+            &layerx_proof::receipt::MaintainedOutcomeEvidence {
+                header: inputs.header,
+                header_signature: inputs.signature,
+                activity_proof: inputs.proof,
+                maintenance: &maintenance_bytes,
+                maintenance_proof: &maintenance_proof,
+                authorization: inputs.authorization,
+            },
+        ),
+        "authenticated maintenance transition",
+    );
+    let maintenance = must(
+        layerx_wire::maintenance::decode_occupancy_maintenance(&maintenance_bytes),
+        "maintenance receipt",
+    );
+    assert_eq!(
+        header.resulting_state_root(),
+        maintenance.resulting_state_root
+    );
+    assert_eq!(
+        protocol.resulting_state_root(),
+        maintenance.previous_state_root
+    );
+    assert_eq!(
+        activity.resulting_state_root(),
+        maintenance.previous_state_root
+    );
+    (
+        header
+            .last_sequence()
+            .checked_sub(1)
+            .unwrap_or_else(|| panic!("maintained activity endpoint")),
+        activity.resulting_state_root(),
     )
 }
 
@@ -732,12 +850,12 @@ fn assert_replica_receipt(
     fixture: &Fixture,
     submitted: &Submitted,
     protocol: &layerx_wire::receipt::ProtocolReceipt,
-    inclusion: &layerx_proof::inclusion::InclusionEvidence,
+    evidence: &ReplicaReceiptEvidence,
 ) {
     let scope = fixture.scope;
     let sequencer_key = fixture.sequencer_key;
     let key = sequencer_key;
-    let committed = inclusion.header().header();
+    let committed = evidence.inclusion.header().header();
     assert_eq!(committed.network_id(), scope.network_id);
     assert_eq!(committed.protocol_version(), scope.protocol_version);
     assert!(protocol.global_sequence() >= committed.first_sequence());
@@ -759,7 +877,7 @@ fn assert_replica_receipt(
             committed.previous_state_root(),
             committed.activity_merkle_root(),
             committed.first_sequence(),
-            committed.last_sequence(),
+            evidence.last_activity_sequence,
             committed.batch_number(),
         ),
         "real execution batch identity",
@@ -771,7 +889,7 @@ fn assert_replica_receipt(
     );
     assert_eq!(
         protocol.resulting_state_root(),
-        committed.resulting_state_root()
+        evidence.activity_resulting_root
     );
     assert_eq!(protocol.module_version(), 4);
     assert_eq!(protocol.operation(), 0);

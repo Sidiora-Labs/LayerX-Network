@@ -10,6 +10,7 @@ struct AccountProofConnection {
     input: std::process::ChildStdin,
     output: std::process::ChildStdout,
     corrupt_account_root: Option<[u8; 32]>,
+    corrupt_receipt_identity: bool,
 }
 
 impl AccountProofConnection {
@@ -48,6 +49,7 @@ impl AccountProofConnection {
             input,
             output,
             corrupt_account_root: None,
+            corrupt_receipt_identity: false,
         }
     }
 }
@@ -66,19 +68,27 @@ impl FrameTransport for AccountProofConnection {
 
     fn receive(&mut self) -> Result<Vec<u8>, TransportError> {
         let bytes = layerx_client::lni::framing::read_frame(&mut self.output, LNI_FRAME_BYTES)?;
-        let Some(account) = self.corrupt_account_root.take() else {
-            return Ok(bytes);
-        };
         let envelope = must(
             layerx_client::lni::schema::decode_envelope(&bytes),
             "real proof envelope",
         );
-        assert_eq!(envelope.message_tag, 17);
         let mut proof = envelope.proof_material.to_vec();
-        assert!(proof.len() >= 68);
-        assert_eq!(&proof[..4], &[0, 1, 2, 1]);
-        assert_eq!(&proof[4..36], &account);
-        proof[36] ^= 1;
+        if let Some(account) = self.corrupt_account_root.take() {
+            assert_eq!(envelope.message_tag, 17);
+            assert!(proof.len() >= 68);
+            assert_eq!(&proof[..4], &[0, 2, 2, 1]);
+            assert_eq!(&proof[4..36], &account);
+            proof[36] ^= 1;
+        } else if self.corrupt_receipt_identity
+            && envelope.message_tag == 17
+            && proof.starts_with(&[0, 1, 3])
+        {
+            assert!(proof.len() >= 35);
+            proof[3] ^= 1;
+            self.corrupt_receipt_identity = false;
+        } else {
+            return Ok(bytes);
+        }
         Ok(must(
             layerx_client::lni::schema::encode_envelope(layerx_client::lni::schema::Envelope {
                 proof_material: &proof,
@@ -206,23 +216,61 @@ fn verify_account_bundle(
         proof_bundle(connection, selector, context, &bridge_registry()),
         "public nested account verifier",
     );
-    let VerifiedProofBundle::Account {
-        canonical_bytes,
-        activity_id,
-        verified,
-        signed_header,
-    } = bundle
-    else {
-        panic!("account proof bundle required");
-    };
-    assert_eq!(canonical_bytes, value.canonical_bytes());
-    assert_eq!(activity_id, protocol.activity_id());
-    assert_eq!(
-        verified.header().header().resulting_state_root(),
-        protocol.resulting_state_root()
-    );
-    assert_eq!(signed_header.public_key, cluster.sequencer_key);
-    assert_eq!(verified.receipt_activity_id(), protocol.activity_id());
+    match bundle {
+        VerifiedProofBundle::Account {
+            canonical_bytes,
+            activity_id,
+            verified,
+            signed_header,
+        } => {
+            assert_eq!(canonical_bytes, value.canonical_bytes());
+            assert_eq!(activity_id, protocol.activity_id());
+            assert_eq!(
+                verified.header().header().resulting_state_root(),
+                protocol.resulting_state_root()
+            );
+            assert_eq!(signed_header.public_key, cluster.sequencer_key);
+            assert_eq!(verified.receipt_activity_id(), protocol.activity_id());
+        }
+        VerifiedProofBundle::MaintainedAccount {
+            canonical_bytes,
+            activity_id,
+            activity_receipt,
+            verified,
+            signed_header,
+        } => {
+            let layerx_wire::receipt::Receipt::Protocol(covered) = must(
+                layerx_proof::receipt::verify_sequencer_signature(
+                    &activity_receipt,
+                    cluster.sequencer_key,
+                ),
+                "maintained activity receipt signature",
+            ) else {
+                panic!("protocol receipt required");
+            };
+            assert_eq!(canonical_bytes, value.canonical_bytes());
+            assert_eq!(activity_id, protocol.activity_id());
+            assert_eq!(covered.activity_id(), protocol.activity_id());
+            assert_eq!(
+                covered.resulting_state_root(),
+                protocol.resulting_state_root()
+            );
+            assert_eq!(
+                verified.header().header().last_sequence(),
+                protocol.global_sequence() + 1
+            );
+            assert_eq!(
+                verified.header().header().resulting_state_root(),
+                must(
+                    decode_batch_header(&signed_header.canonical_bytes),
+                    "maintained header"
+                )
+                .resulting_state_root()
+            );
+            assert_eq!(signed_header.public_key, cluster.sequencer_key);
+        }
+        _ => panic!("account proof bundle required"),
+    }
     connection.corrupt_account_root = Some(identifier);
     let mut retry = context;
     retry.correlation_id += 100;
@@ -230,6 +278,13 @@ fn verify_account_bundle(
         proof_bundle(connection, selector, retry, &bridge_registry()),
         Err(EvidenceError::Account(_))
     ));
+    connection.corrupt_receipt_identity = true;
+    retry.correlation_id += 100;
+    assert!(matches!(
+        proof_bundle(connection, selector, retry, &bridge_registry()),
+        Err(EvidenceError::SelectorMismatch)
+    ));
+    assert!(!connection.corrupt_receipt_identity);
 }
 
 const CUSTODY_CHAIN_ID: u64 = 31337;
@@ -519,23 +574,96 @@ fn verify_funding_batch(
         verify_receipt(bytes, &proof, &header_bytes, &signature, &authorization),
         "offline funding inclusion",
     );
-    assert_eq!(
-        protocol.batch_id(),
-        must(
-            receipt_execution_batch_id(protocol, &header),
-            "funding batch id"
-        )
-    );
+    let activity = funding_activity_batch(bytes, evidence, &authorization);
+    assert_eq!(protocol.batch_id(), activity.batch_id());
     assert_eq!(protocol.previous_state_root(), header.previous_state_root());
     assert_eq!(
         protocol.resulting_state_root(),
-        header.resulting_state_root()
+        activity.resulting_state_root()
     );
     let mut tampered = bytes.to_vec();
     let last = tampered.len() - 1;
     tampered[last] ^= 1;
     assert!(verify_receipt(&tampered, &proof, &header_bytes, &signature, &authorization).is_err());
     authorization
+}
+
+fn funding_activity_batch(
+    bytes: &[u8],
+    evidence: &serde_json::Value,
+    authorization: &SequencerAuthorization,
+) -> layerx_proof::receipt::AuthorizedBatch {
+    use layerx_proof::receipt::{
+        authorized_maintained_activity_batch, AuthorizedBatch, MaintainedOutcomeEvidence,
+    };
+    let receipt = must(layerx_wire::receipt::decode(bytes), "funding receipt");
+    let protocol = receipt
+        .protocol()
+        .unwrap_or_else(|| panic!("funding protocol"));
+    let header_bytes = unhex(field(evidence, "header_hex"));
+    let header = must(decode_batch_header(&header_bytes), "funding header");
+    let authority = AuthorizedBatch::new(
+        protocol.batch_id(),
+        protocol.asset(),
+        header.previous_state_root(),
+        header.resulting_state_root(),
+        authorization.public_key(),
+    );
+    let Some(identity) = evidence.get("batch_identity") else {
+        assert_eq!(
+            protocol.batch_id(),
+            must(
+                receipt_execution_batch_id(protocol, &header),
+                "funding batch id"
+            )
+        );
+        return authority;
+    };
+    assert_eq!(field(identity, "kind"), "occupancy_maintenance_v2");
+    let decode_proof = |value: &serde_json::Value| {
+        let wire = must(
+            decode_merkle_proof(&unhex(field(value, "receipt_proof_hex"))),
+            "funding wire proof",
+        );
+        must(
+            Proof::new(
+                wire.leaf_index(),
+                wire.leaf_count(),
+                wire.siblings().to_vec(),
+            ),
+            "funding Merkle proof",
+        )
+    };
+    let proof = decode_proof(evidence);
+    let maintenance_proof = decode_proof(identity);
+    let maintenance = unhex(field(identity, "receipt_hex"));
+    let signature = must(
+        <[u8; 64]>::try_from(unhex(field(evidence, "header_signature"))),
+        "funding header signature",
+    );
+    let activity = must(
+        authorized_maintained_activity_batch(
+            bytes,
+            &authority,
+            &MaintainedOutcomeEvidence {
+                header: &header_bytes,
+                header_signature: &signature,
+                activity_proof: &proof,
+                maintenance: &maintenance,
+                maintenance_proof: &maintenance_proof,
+                authorization,
+            },
+        ),
+        "authenticated funding maintenance",
+    );
+    let record = must(
+        layerx_wire::maintenance::decode_occupancy_maintenance(&maintenance),
+        "funding maintenance",
+    );
+    assert_eq!(header.resulting_state_root(), record.resulting_state_root);
+    assert_eq!(protocol.resulting_state_root(), record.previous_state_root);
+    assert_eq!(activity.resulting_state_root(), record.previous_state_root);
+    activity
 }
 
 fn credit_actor(cluster: &Cluster, root: &Path, profile: &Path, credit: &Path, actor_key: &Path) {
@@ -739,4 +867,101 @@ fn produce_custody_credit(
     producer("custody_credit.py", &attest_arguments);
     chain.evidence_arguments = evidence_arguments;
     (profile, credit)
+}
+
+#[test]
+fn maintained_program_journal_rejects_missing_corrupt_and_substituted_attachments() {
+    let cluster = start_cluster();
+    check_readiness(&cluster);
+    let signed = signed_program_call(&cluster.actor, random32());
+    let key = format!("maintenance-{}", token());
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let submitted = loop {
+        let answer = cluster.client.call(&Call::submit(
+            "/v1/programs/call",
+            &cluster.gateway_token,
+            &key,
+            &signed,
+        ));
+        if answer.status == 200 || Instant::now() >= deadline {
+            break answer;
+        }
+        assert!(
+            answer.status == 202 || answer.status == 503,
+            "{}",
+            answer.text()
+        );
+        thread::sleep(Duration::from_millis(100));
+    };
+    assert_eq!(submitted.status, 200, "{}", submitted.text());
+    let key_digest = format!("{:x}", Sha256::digest(key.as_bytes()));
+    let journal = cluster
+        .state_dir
+        .join("journal")
+        .join(format!("{key_digest}.json"));
+    let original = must(fs::read(&journal), "maintained journal");
+    let document: serde_json::Value =
+        must(serde_json::from_slice(&original), "maintained journal JSON");
+    assert_eq!(
+        document["program_execution"]["evidence"]["batch_identity"]["kind"],
+        "occupancy_maintenance_v2"
+    );
+    for case in 0..5 {
+        let mut corrupted = document.clone();
+        let evidence = &mut corrupted["program_execution"]["evidence"];
+        match case {
+            0 => {
+                evidence
+                    .as_object_mut()
+                    .unwrap_or_else(|| panic!("batch evidence"))
+                    .remove("batch_identity");
+            }
+            1 => {
+                evidence["batch_identity"] = serde_json::json!({"kind": "historical"});
+            }
+            2 => {
+                let mut bytes = unhex(field(&evidence["batch_identity"], "receipt_hex"));
+                let last = bytes.len() - 1;
+                bytes[last] ^= 1;
+                evidence["batch_identity"]["receipt_hex"] = serde_json::json!(hex(&bytes));
+            }
+            3 => {
+                evidence["batch_identity"]["receipt_proof_hex"] =
+                    evidence["receipt_proof_hex"].clone();
+            }
+            4 => {
+                evidence["batch_identity"]["kind"] = serde_json::json!("unknown");
+            }
+            _ => unreachable!(),
+        }
+        must(
+            fs::write(
+                &journal,
+                must(serde_json::to_vec(&corrupted), "corrupt maintained journal"),
+            ),
+            "write corrupt maintained journal",
+        );
+        let refused = cluster.client.call(&Call::submit(
+            "/v1/programs/call",
+            &cluster.gateway_token,
+            &key,
+            &signed,
+        ));
+        let expected_code = if case == 4 {
+            "persistence_unavailable"
+        } else {
+            "program_artifacts_invalid"
+        };
+        assert_refusal(&refused, 503, expected_code);
+    }
+    must(fs::write(&journal, original), "restore maintained journal");
+    let replay = cluster.client.call(&Call::submit(
+        "/v1/programs/call",
+        &cluster.gateway_token,
+        &key,
+        &signed,
+    ));
+    assert_eq!(replay.status, 200, "{}", replay.text());
+    assert_eq!(replay.text(), submitted.text());
+    assert_eq!(journal_record(&cluster, &key)["attempts"], 1);
 }

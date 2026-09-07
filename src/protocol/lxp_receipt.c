@@ -11,7 +11,8 @@ enum {
     LXP_RECEIPT_STRUCTURE_TAG = 0x5201,
     LXP_PROGRAM_OUTCOME_TAG_V1 = 0x50524731,
     LXP_PROGRAM_OUTCOME_TAG_V2 = 0x50524732,
-    LXP_PROGRAM_OUTCOME_TAG_V3 = 0x50524733
+    LXP_PROGRAM_OUTCOME_TAG_V3 = 0x50524733,
+    LXP_PROGRAM_OUTCOME_TAG_V4 = 0x50524734
 };
 
 static bool valid_program_terminal(uint8_t terminal)
@@ -110,8 +111,10 @@ lxp_result lxp_program_outcome_validate(const lxp_program_outcome *outcome)
             return LXP_ERR_NON_CANONICAL;
     }
     if (outcome->encoding_version != 1U && outcome->encoding_version != 2U &&
-        outcome->encoding_version != 3U)
+        outcome->encoding_version != 3U && outcome->encoding_version != 4U)
         return LXP_ERR_VERSION_UNSUPPORTED;
+    if ((outcome->encoding_version == 4U) == lxp_ct_is_zero(outcome->applied_legs_digest, 32U))
+        return LXP_ERR_NON_CANONICAL;
     if (outcome->encoding_version < 3U &&
         outcome->metering_schedule_version !=
             LXP_PROGRAM_METERING_SCHEDULE_VERSION_V1)
@@ -129,7 +132,7 @@ lxp_result lxp_program_outcome_validate(const lxp_program_outcome *outcome)
                 !lxp_ct_is_zero(outcome->occupancy_evidence_digest, 32U) ||
                 !lxp_ct_is_zero(outcome->occupancy_transfer_root, 32U))) {
         return LXP_FATAL_INVARIANT;
-    } else if (outcome->encoding_version == 3U &&
+    } else if (outcome->encoding_version >= 3U &&
                (lxp_ct_is_zero(outcome->occupancy_asset_id, 32U) !=
                     lxp_ct_is_zero(outcome->occupancy_evidence_digest, 32U))) {
         return LXP_ERR_NON_CANONICAL;
@@ -153,22 +156,24 @@ lxp_result lxp_program_outcome_validate_for_protocol(
 {
     lxp_result status = lxp_program_outcome_validate(outcome);
     if (status != LXP_OK) return status;
+    if (outcome->encoding_version == 4U && protocol_version != LXP_PROTOCOL_VERSION_STATE_COMMITMENT)
+        return LXP_ERR_VERSION_UNSUPPORTED;
     if (!lxp_protocol_version_supported(protocol_version))
         return LXP_ERR_VERSION_UNSUPPORTED;
     if ((lxp_protocol_version_uses_occupancy(protocol_version) &&
          outcome->encoding_version != 2U &&
-         outcome->encoding_version != 3U) ||
+         outcome->encoding_version != 3U && outcome->encoding_version != 4U) ||
         (protocol_version == LXP_PROTOCOL_VERSION_LEGACY &&
          outcome->encoding_version != 1U &&
-         outcome->encoding_version != 3U))
+         outcome->encoding_version != 3U && outcome->encoding_version != 4U))
         return LXP_ERR_VERSION_UNSUPPORTED;
-    if (outcome->encoding_version == 3U &&
+    if (outcome->encoding_version >= 3U &&
         lxp_protocol_version_uses_occupancy(protocol_version) &&
         outcome->terminal_kind == LXP_PROGRAM_TERMINAL_SUCCESS &&
         (lxp_ct_is_zero(outcome->occupancy_asset_id, 32U) ||
          lxp_ct_is_zero(outcome->occupancy_evidence_digest, 32U)))
         return LXP_ERR_NON_CANONICAL;
-    if (outcome->encoding_version == 3U &&
+    if (outcome->encoding_version >= 3U &&
         protocol_version == LXP_PROTOCOL_VERSION_LEGACY &&
         (!lxp_u128_is_zero(outcome->occupancy_byte_batches) ||
          !lxp_u128_is_zero(outcome->occupancy_fee_units) ||
@@ -384,7 +389,8 @@ static lxp_result program_outcome_encode(lxp_codec_writer *writer,
     lxp_result status = lxp_program_outcome_validate(outcome);
     if (status == LXP_OK)
         status = lxp_codec_write_u32(
-            writer, outcome->encoding_version == 3U ?
+            writer, outcome->encoding_version == 4U ? LXP_PROGRAM_OUTCOME_TAG_V4 :
+                outcome->encoding_version == 3U ?
                 LXP_PROGRAM_OUTCOME_TAG_V3 :
                 (outcome->encoding_version == 2U ?
                     LXP_PROGRAM_OUTCOME_TAG_V2 : LXP_PROGRAM_OUTCOME_TAG_V1));
@@ -398,7 +404,7 @@ static lxp_result program_outcome_encode(lxp_codec_writer *writer,
         status = lxp_codec_write_u16(writer, outcome->abi_version);
     if (status == LXP_OK)
         status = lxp_codec_write_u32(writer, outcome->fee_schedule_version);
-    if (status == LXP_OK && outcome->encoding_version == 3U)
+    if (status == LXP_OK && outcome->encoding_version >= 3U)
         status = lxp_codec_write_u32(
             writer, outcome->metering_schedule_version);
     if (status == LXP_OK) status = lxp_codec_write_u64(writer, outcome->cpu_fuel);
@@ -443,6 +449,8 @@ static lxp_result program_outcome_encode(lxp_codec_writer *writer,
     if (status == LXP_OK)
         status = lxp_codec_write_bytes(writer, outcome->transfer_root, 32U,
                                        32U);
+    if (status == LXP_OK && outcome->encoding_version == 4U)
+        status = lxp_codec_write_bytes(writer, outcome->applied_legs_digest, 32U, 32U);
     return status;
 }
 
@@ -457,10 +465,10 @@ static lxp_result program_outcome_decode(lxp_codec_reader *reader,
     if (status != LXP_OK ||
         (tag != LXP_PROGRAM_OUTCOME_TAG_V1 &&
          tag != LXP_PROGRAM_OUTCOME_TAG_V2 &&
-         tag != LXP_PROGRAM_OUTCOME_TAG_V3))
+         tag != LXP_PROGRAM_OUTCOME_TAG_V3 && tag != LXP_PROGRAM_OUTCOME_TAG_V4))
         return LXP_ERR_NON_CANONICAL;
     outcome->present = true;
-    outcome->encoding_version = tag == LXP_PROGRAM_OUTCOME_TAG_V3 ? 3U :
+    outcome->encoding_version = tag == LXP_PROGRAM_OUTCOME_TAG_V4 ? 4U : tag == LXP_PROGRAM_OUTCOME_TAG_V3 ? 3U :
         (tag == LXP_PROGRAM_OUTCOME_TAG_V2 ? 2U : 1U);
     outcome->metering_schedule_version =
         LXP_PROGRAM_METERING_SCHEDULE_VERSION_V1;
@@ -473,7 +481,7 @@ static lxp_result program_outcome_decode(lxp_codec_reader *reader,
         status = lxp_codec_read_u16(reader, &outcome->abi_version);
     if (status == LXP_OK)
         status = lxp_codec_read_u32(reader, &outcome->fee_schedule_version);
-    if (status == LXP_OK && outcome->encoding_version == 3U)
+    if (status == LXP_OK && outcome->encoding_version >= 3U)
         status = lxp_codec_read_u32(
             reader, &outcome->metering_schedule_version);
     if (status == LXP_OK)
@@ -511,6 +519,8 @@ static lxp_result program_outcome_decode(lxp_codec_reader *reader,
         status = copy_exact(reader, outcome->terminal_payload_root, 32U);
     if (status == LXP_OK)
         status = copy_exact(reader, outcome->transfer_root, 32U);
+    if (status == LXP_OK && outcome->encoding_version == 4U)
+        status = copy_exact(reader, outcome->applied_legs_digest, 32U);
     if (status != LXP_OK) return status;
     return lxp_program_outcome_validate(outcome);
 }

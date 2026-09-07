@@ -186,6 +186,7 @@ impl ProgramFailure {
         encoded
     }
 
+    #[cfg(feature = "host-ffi")]
     pub(crate) fn append_canonical(&self, encoded: &mut Vec<u8>) {
         encoded.extend_from_slice(&self.program.bytes());
         encoded.extend_from_slice(&self.class.code().to_be_bytes());

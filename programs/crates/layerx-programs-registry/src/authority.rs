@@ -321,7 +321,6 @@ impl DeploymentRecord {
         let module = take_slice(bytes, &mut cursor, module_bytes)?.to_vec();
         let migration = match take_array::<1>(bytes, &mut cursor)? {
             [0] => None,
-            [1] => return Err(RegistryError::CorruptRecord),
             [2] => Some(decode_migration_evidence(bytes, &mut cursor)?),
             _ => return Err(RegistryError::CorruptRecord),
         };
@@ -648,7 +647,7 @@ mod tests {
         STEP_COMMITMENT_BASE_FUEL, STEP_COMMITMENT_FUEL_PER_BYTE,
     };
 
-    fn traced_execution() -> ExecutionRecord {
+    fn traced_module() -> Vec<u8> {
         let memory_section = raw_section(5, &[1, 0, 1]);
         let global_section = raw_section(
             6,
@@ -666,7 +665,7 @@ mod tests {
                 OP_END,
             ],
         );
-        let wasm = module(&[
+        module(&[
             type_section(&[(&[TYPE_I32], &[TYPE_I32]), (&[TYPE_I32], &[TYPE_I32])]),
             function_section(&[0, 1]),
             memory_section,
@@ -716,10 +715,18 @@ mod tests {
                     ],
                 ),
             ]),
-        ]);
-        let engine = WasmEngine::declared().expect("declared engine");
-        let validated = engine.validate(&wasm).expect("valid traced module");
-        let trace_policy = TracePolicy::new(3, 256).expect("valid trace policy");
+        ])
+    }
+
+    fn traced_execution() -> ExecutionRecord {
+        let wasm = traced_module();
+        let engine =
+            WasmEngine::declared().unwrap_or_else(|error| panic!("declared engine: {error:?}"));
+        let validated = engine
+            .validate(&wasm)
+            .unwrap_or_else(|error| panic!("valid traced module: {error:?}"));
+        let trace_policy = TracePolicy::new(3, 256)
+            .unwrap_or_else(|error| panic!("valid trace policy: {error:?}"));
         let declared = ResourceBudget::declared();
         let trace_state_fuel = MAX_TRACE_STATE_BYTES
             .checked_mul(STEP_COMMITMENT_FUEL_PER_BYTE)
@@ -729,12 +736,12 @@ mod tests {
                 )
             })
             .and_then(|fuel| fuel.checked_mul(2))
-            .expect("protocol trace bounds fit fuel accounting");
+            .unwrap_or_else(|| panic!("protocol trace bounds fit fuel accounting"));
         let budget = ResourceBudget::new_complete(
             declared
                 .cpu_fuel()
                 .checked_add(trace_state_fuel)
-                .expect("declared trace budget fits"),
+                .unwrap_or_else(|| panic!("declared trace budget fits")),
             declared.memory_bytes(),
             declared.storage_read_bytes(),
             declared.storage_write_bytes(),
@@ -745,7 +752,7 @@ mod tests {
         Executor::new(budget, FeeSchedule::declared())
             .with_trace_policy(trace_policy)
             .execute_traced(&validated, "run", &[WasmValue::I32(7)])
-            .expect("real traced execution")
+            .unwrap_or_else(|error| panic!("real traced execution: {error:?}"))
             .execution
     }
 
@@ -768,13 +775,14 @@ mod tests {
             },
             None,
         )
-        .expect("valid migration execution evidence")
+        .unwrap_or_else(|error| panic!("valid migration execution evidence: {error:?}"))
     }
 
     fn deployment_record() -> DeploymentRecord {
         let module = vec![1, 2, 3];
         DeploymentRecord {
-            program: ProgramId::new([1; 32]).expect("nonzero program"),
+            program: ProgramId::new([1; 32])
+                .unwrap_or_else(|error| panic!("nonzero program: {error:?}")),
             version: 2,
             abi_version: layerx_programs_runtime::ABI_V2_VERSION,
             upgrade_policy: UpgradePolicy::Authority([2; 32]),
@@ -791,10 +799,13 @@ mod tests {
     fn version_two_migration_evidence_round_trips_every_metered_field() {
         let record = deployment_record();
         let encoded = record.canonical_encoding();
-        let decoded = DeploymentRecord::decode(&encoded).expect("record decodes");
+        let decoded = DeploymentRecord::decode(&encoded)
+            .unwrap_or_else(|error| panic!("record decodes: {error:?}"));
 
         assert_eq!(decoded, record);
-        let evidence = decoded.migration.expect("migration evidence retained");
+        let evidence = decoded
+            .migration
+            .unwrap_or_else(|| panic!("migration evidence retained"));
         assert_eq!(evidence.runtime_version(), 7);
         assert_eq!(evidence.metering_schedule_version(), 11);
         assert_eq!(evidence.outputs(), [WasmValue::I32(-4), WasmValue::I64(9)]);
@@ -810,17 +821,18 @@ mod tests {
         let expected_trace = execution
             .trace
             .as_ref()
-            .expect("execution contains trace")
+            .unwrap_or_else(|| panic!("execution contains trace"))
             .canonical_arbitration_bytes()
-            .expect("trace evidence encodes");
+            .unwrap_or_else(|error| panic!("trace evidence encodes: {error:?}"));
         let evidence = MigrationExecutionEvidence::from_execution(&execution)
-            .expect("traced execution is admitted");
+            .unwrap_or_else(|error| panic!("traced execution is admitted: {error:?}"));
         assert_eq!(evidence.trace_evidence(), Some(expected_trace.as_slice()));
 
         let mut record = deployment_record();
         record.migration = Some(evidence);
         let encoded = record.canonical_encoding();
-        let decoded = DeploymentRecord::decode(&encoded).expect("traced record round trips");
+        let decoded = DeploymentRecord::decode(&encoded)
+            .unwrap_or_else(|error| panic!("traced record round trips: {error:?}"));
         assert_eq!(
             decoded
                 .migration
@@ -832,7 +844,7 @@ mod tests {
         let trace_offset = encoded
             .windows(expected_trace.len())
             .position(|window| window == expected_trace)
-            .expect("trace occurs in canonical record");
+            .unwrap_or_else(|| panic!("trace occurs in canonical record"));
         let mut mutated = encoded;
         mutated[trace_offset] ^= 1;
         assert_eq!(
@@ -848,7 +860,7 @@ mod tests {
         let evidence_len = record
             .migration
             .as_ref()
-            .expect("migration evidence")
+            .unwrap_or_else(|| panic!("migration evidence"))
             .canonical_bytes()
             .len();
         let migration_tag = encoded.len() - 32 - evidence_len - 4 - 1;
@@ -873,7 +885,7 @@ mod tests {
         let evidence_len = record
             .migration
             .as_ref()
-            .expect("migration evidence")
+            .unwrap_or_else(|| panic!("migration evidence"))
             .canonical_bytes()
             .len();
         let migration_tag = encoded.len() - 32 - evidence_len - 4 - 1;

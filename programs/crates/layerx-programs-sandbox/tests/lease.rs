@@ -1,5 +1,5 @@
 #[path = "../../layerx-programs-registry/tests/support/mod.rs"]
-mod protocol_support;
+pub mod protocol_support;
 
 use layerx_programs_runtime::{
     AuthorizationContext, CapabilitySet, FeeSchedule, Meter, PrincipalId, ProgramId,
@@ -59,8 +59,16 @@ fn call_payload(host: ProgramId, transition: LeaseTransition) -> Vec<u8> {
     let mut payload = vec![0; CALL_PREFIX];
     payload[..32].copy_from_slice(&host.bytes());
     payload[32..34].copy_from_slice(&2u16.to_be_bytes());
-    payload[34..36].copy_from_slice(&(ENTRYPOINT.len() as u16).to_be_bytes());
-    payload[36..40].copy_from_slice(&(calldata.len() as u32).to_be_bytes());
+    payload[34..36].copy_from_slice(
+        &u16::try_from(ENTRYPOINT.len())
+            .unwrap_or_else(|error| panic!("entrypoint length: {error}"))
+            .to_be_bytes(),
+    );
+    payload[36..40].copy_from_slice(
+        &u32::try_from(calldata.len())
+            .unwrap_or_else(|error| panic!("calldata length: {error}"))
+            .to_be_bytes(),
+    );
     payload[46..50].copy_from_slice(&1u32.to_be_bytes());
     payload.extend_from_slice(ENTRYPOINT);
     payload.extend_from_slice(&calldata);
@@ -73,7 +81,7 @@ fn verified(
     batch: u64,
 ) -> (LeaseTransition, TransitionEvidence) {
     let fixture = protocol_support::programs_call_fixture(
-        call_payload(lease.host_program(), transition),
+        &call_payload(lease.host_program(), transition),
         batch,
         protocol_support::NOW,
     );
@@ -108,7 +116,7 @@ fn wrong_principal_refusal(
     batch: u64,
 ) -> LeaseRefusal {
     let fixture = protocol_support::programs_call_fixture(
-        call_payload(lease.host_program(), transition),
+        &call_payload(lease.host_program(), transition),
         batch,
         protocol_support::NOW,
     );
@@ -193,74 +201,7 @@ fn real_receipts_drive_every_lifecycle_edge_and_destroyed_never_revives() {
     let mut book = LeaseBook::new();
     book.insert_requested(lease, request, request_evidence)
         .unwrap_or_else(|error| panic!("request: {error}"));
-    for (activity, from, to, batch) in [
-        (
-            LeaseActivity::Fund,
-            LeaseState::Requested,
-            LeaseState::Funded,
-            11,
-        ),
-        (
-            LeaseActivity::Activate,
-            LeaseState::Funded,
-            LeaseState::Active,
-            12,
-        ),
-        (
-            LeaseActivity::BeginSettlement,
-            LeaseState::Active,
-            LeaseState::Settling,
-            13,
-        ),
-        (
-            LeaseActivity::Expire,
-            LeaseState::Settling,
-            LeaseState::Expired,
-            14,
-        ),
-        (
-            LeaseActivity::Destroy,
-            LeaseState::Expired,
-            LeaseState::Destroyed,
-            15,
-        ),
-    ] {
-        let current = book
-            .get(LeaseId::new([1; 32]).unwrap_or_else(|error| panic!("id: {error}")))
-            .unwrap_or_else(|| panic!("stored lease"))
-            .clone();
-        let (declared, evidence) = transition(&current, activity, from, to, [0; 32], batch);
-        if activity == LeaseActivity::Destroy {
-            book.destroy_with_evidence(
-                current.id(),
-                &mut Storage::new(),
-                &mut storage_meter(),
-                declared,
-                evidence,
-            )
-            .unwrap_or_else(|error| panic!("destroy: {error}"));
-        } else {
-            book.transition(current.id(), declared, evidence)
-                .unwrap_or_else(|error| panic!("transition: {error}"));
-        }
-        if activity == LeaseActivity::Destroy {
-            assert_eq!(
-                book.destroy_with_evidence(
-                    current.id(),
-                    &mut Storage::new(),
-                    &mut storage_meter(),
-                    declared,
-                    evidence
-                ),
-                Err(LeaseRefusal::ReplayedEvidence)
-            );
-        } else {
-            assert_eq!(
-                book.transition(current.id(), declared, evidence),
-                Err(LeaseRefusal::ReplayedEvidence)
-            );
-        }
-    }
+    drive_lifecycle_edges(&mut book);
     let destroyed = book
         .get(LeaseId::new([1; 32]).unwrap_or_else(|error| panic!("id: {error}")))
         .unwrap_or_else(|| panic!("destroyed lease"))
@@ -291,65 +232,7 @@ fn real_receipts_drive_every_lifecycle_edge_and_destroyed_never_revives() {
 
 #[test]
 fn real_bound_receipt_closes_intrinsically_and_refuses_mismatch_and_regression() {
-    let lease = candidate(2, 3, 10, 20);
-    let request_digest = lease
-        .request_binding_digest()
-        .unwrap_or_else(|error| panic!("request digest: {error}"));
-    let (request, request_evidence) = transition(
-        &lease,
-        LeaseActivity::Request,
-        LeaseState::Requested,
-        LeaseState::Requested,
-        request_digest,
-        10,
-    );
-    let mut book = LeaseBook::new();
-    book.insert_requested(lease, request, request_evidence)
-        .unwrap_or_else(|error| panic!("request: {error}"));
-    for (activity, from, to, batch) in [
-        (
-            LeaseActivity::Fund,
-            LeaseState::Requested,
-            LeaseState::Funded,
-            11,
-        ),
-        (
-            LeaseActivity::Activate,
-            LeaseState::Funded,
-            LeaseState::Active,
-            12,
-        ),
-    ] {
-        let current = book
-            .get(LeaseId::new([2; 32]).unwrap_or_else(|error| panic!("id: {error}")))
-            .unwrap_or_else(|| panic!("lease"))
-            .clone();
-        if current.state() == LeaseState::Funded {
-            let (expire, expire_evidence) = transition(
-                &current,
-                LeaseActivity::Expire,
-                LeaseState::Funded,
-                LeaseState::Expired,
-                [0; 32],
-                12,
-            );
-            assert!(matches!(
-                book.transition(current.id(), expire, expire_evidence),
-                Err(LeaseRefusal::NotExpired { .. })
-            ));
-        }
-        let (declared, evidence) = transition(&current, activity, from, to, [0; 32], batch);
-        if activity == LeaseActivity::Activate {
-            let mut altered = declared;
-            altered.to = LeaseState::Expired;
-            assert_eq!(
-                book.transition(current.id(), altered, evidence),
-                Err(LeaseRefusal::ActivityReceiptMismatch)
-            );
-        }
-        book.transition(current.id(), declared, evidence)
-            .unwrap_or_else(|error| panic!("advance: {error}"));
-    }
+    let mut book = activate_bound_receipt_lease();
     let id = LeaseId::new([2; 32]).unwrap_or_else(|error| panic!("id: {error}"));
     assert_eq!(
         book.record_usage(
@@ -418,7 +301,7 @@ fn real_bound_receipt_closes_intrinsically_and_refuses_mismatch_and_regression()
     let mut altered = close;
     altered.to = LeaseState::Expired;
     assert_eq!(
-        book.record_usage(id, usage, 5, 14, Some((altered, evidence))),
+        book.record_usage(id, usage, 5, 14, Some(&(altered, evidence))),
         Err(LeaseRefusal::ActivityReceiptMismatch)
     );
     assert_eq!(
@@ -428,60 +311,14 @@ fn real_bound_receipt_closes_intrinsically_and_refuses_mismatch_and_regression()
         Ok(before)
     );
     assert!(matches!(
-        book.record_usage(id, usage, 5, 14, Some((close, evidence))),
+        book.record_usage(id, usage, 5, 14, Some(&(close, evidence))),
         Ok(UsageOutcome::ClosedByBound { .. })
     ));
 }
 
 #[test]
 fn real_request_evidence_enforces_principal_concurrency_and_expiry() {
-    let mut book = LeaseBook::new();
-    for index in 1..=MAX_CONCURRENT_LEASES_PER_PRINCIPAL as u8 {
-        let lease = candidate(index, 9, 10, 20);
-        let digest = lease
-            .request_binding_digest()
-            .unwrap_or_else(|error| panic!("digest: {error}"));
-        let (request, evidence) = transition(
-            &lease,
-            LeaseActivity::Request,
-            LeaseState::Requested,
-            LeaseState::Requested,
-            digest,
-            10,
-        );
-        book.insert_requested(lease, request, evidence)
-            .unwrap_or_else(|error| panic!("admit: {error}"));
-    }
-    let lease = candidate(33, 9, 10, 20);
-    let digest = lease
-        .request_binding_digest()
-        .unwrap_or_else(|error| panic!("digest: {error}"));
-    let (request, evidence) = transition(
-        &lease,
-        LeaseActivity::Request,
-        LeaseState::Requested,
-        LeaseState::Requested,
-        digest,
-        10,
-    );
-    assert_eq!(
-        book.insert_requested(lease, request, evidence),
-        Err(LeaseRefusal::PrincipalLeaseLimit)
-    );
-
-    let requested = book
-        .get(LeaseId::new([2; 32]).unwrap_or_else(|error| panic!("requested id: {error}")))
-        .unwrap_or_else(|| panic!("requested lease"));
-    let mut corrupt = requested
-        .canonical_state_bytes()
-        .unwrap_or_else(|error| panic!("state: {error}"));
-    let usage_offset = b"LayerX/programs/sandbox/lease-state/v1\0".len() + 224 + 16 + 64 + 16;
-    corrupt[usage_offset + 7] = 1;
-    assert_eq!(
-        Lease::decode_state(&corrupt),
-        Err(LeaseRefusal::InvalidStateEncoding)
-    );
-
+    let mut book = fill_principal_and_refuse_corrupt_state();
     let first = LeaseId::new([1; 32]).unwrap_or_else(|error| panic!("first id: {error}"));
     let current = book
         .get(first)
@@ -548,81 +385,8 @@ fn real_request_evidence_enforces_principal_concurrency_and_expiry() {
         book.insert_requested(lease, request, evidence),
         Err(LeaseRefusal::PrincipalLeaseLimit)
     );
-    for index in 2..=33 {
-        let id = LeaseId::new([index; 32]).unwrap_or_else(|error| panic!("id: {error}"));
-        let current = book.get(id).unwrap_or_else(|| panic!("lease")).clone();
-        let (expire, evidence) = transition(
-            &current,
-            LeaseActivity::Expire,
-            LeaseState::Requested,
-            LeaseState::Expired,
-            [0; 32],
-            30,
-        );
-        book.transition(id, expire, evidence)
-            .unwrap_or_else(|error| panic!("expire: {error}"));
-        let current = book
-            .get(id)
-            .unwrap_or_else(|| panic!("expired lease"))
-            .clone();
-        let (destroy, evidence) = transition(
-            &current,
-            LeaseActivity::Destroy,
-            LeaseState::Expired,
-            LeaseState::Destroyed,
-            [0; 32],
-            31,
-        );
-        book.destroy_with_evidence(
-            id,
-            &mut Storage::new(),
-            &mut storage_meter(),
-            destroy,
-            evidence,
-        )
-        .unwrap_or_else(|error| panic!("destroy: {error}"));
-        assert!(book
-            .destroy_with_evidence(
-                id,
-                &mut Storage::new(),
-                &mut storage_meter(),
-                destroy,
-                evidence
-            )
-            .is_err());
-    }
-    for index in 34..34 + MAX_CONCURRENT_LEASES_PER_PRINCIPAL as u8 {
-        let lease = candidate(index, 9, 32, 40);
-        let digest = lease
-            .request_binding_digest()
-            .unwrap_or_else(|error| panic!("digest: {error}"));
-        let (request, evidence) = transition(
-            &lease,
-            LeaseActivity::Request,
-            LeaseState::Requested,
-            LeaseState::Requested,
-            digest,
-            32,
-        );
-        book.insert_requested(lease, request, evidence)
-            .unwrap_or_else(|error| panic!("refill: {error}"));
-    }
-    let lease = candidate(66, 9, 32, 40);
-    let digest = lease
-        .request_binding_digest()
-        .unwrap_or_else(|error| panic!("digest: {error}"));
-    let (request, evidence) = transition(
-        &lease,
-        LeaseActivity::Request,
-        LeaseState::Requested,
-        LeaseState::Requested,
-        digest,
-        32,
-    );
-    assert_eq!(
-        book.insert_requested(lease, request, evidence),
-        Err(LeaseRefusal::PrincipalLeaseLimit)
-    );
+    expire_and_destroy_remaining_leases(&mut book);
+    refill_principal_and_refuse_overflow(&mut book);
 }
 
 #[test]
@@ -654,7 +418,7 @@ fn altered_real_activity_and_header_evidence_are_refused() {
         usage_observation_digest: digest,
     };
     let fixture = protocol_support::programs_call_fixture(
-        call_payload(lease.host_program(), transition),
+        &call_payload(lease.host_program(), transition),
         10,
         protocol_support::NOW,
     );
@@ -706,5 +470,276 @@ fn altered_real_activity_and_header_evidence_are_refused() {
             &header
         ),
         Err(LeaseRefusal::InvalidCanonicalEvidence)
+    );
+}
+
+fn drive_lifecycle_edges(book: &mut LeaseBook) {
+    for (activity, from, to, batch) in [
+        (
+            LeaseActivity::Fund,
+            LeaseState::Requested,
+            LeaseState::Funded,
+            11,
+        ),
+        (
+            LeaseActivity::Activate,
+            LeaseState::Funded,
+            LeaseState::Active,
+            12,
+        ),
+        (
+            LeaseActivity::BeginSettlement,
+            LeaseState::Active,
+            LeaseState::Settling,
+            13,
+        ),
+        (
+            LeaseActivity::Expire,
+            LeaseState::Settling,
+            LeaseState::Expired,
+            14,
+        ),
+        (
+            LeaseActivity::Destroy,
+            LeaseState::Expired,
+            LeaseState::Destroyed,
+            15,
+        ),
+    ] {
+        let current = book
+            .get(LeaseId::new([1; 32]).unwrap_or_else(|error| panic!("id: {error}")))
+            .unwrap_or_else(|| panic!("stored lease"))
+            .clone();
+        let (declared, evidence) = transition(&current, activity, from, to, [0; 32], batch);
+        if activity == LeaseActivity::Destroy {
+            book.destroy_with_evidence(
+                current.id(),
+                &mut Storage::new(),
+                &mut storage_meter(),
+                declared,
+                evidence,
+            )
+            .unwrap_or_else(|error| panic!("destroy: {error}"));
+        } else {
+            book.transition(current.id(), declared, evidence)
+                .unwrap_or_else(|error| panic!("transition: {error}"));
+        }
+        if activity == LeaseActivity::Destroy {
+            assert_eq!(
+                book.destroy_with_evidence(
+                    current.id(),
+                    &mut Storage::new(),
+                    &mut storage_meter(),
+                    declared,
+                    evidence
+                ),
+                Err(LeaseRefusal::ReplayedEvidence)
+            );
+        } else {
+            assert_eq!(
+                book.transition(current.id(), declared, evidence),
+                Err(LeaseRefusal::ReplayedEvidence)
+            );
+        }
+    }
+}
+
+fn activate_bound_receipt_lease() -> LeaseBook {
+    let lease = candidate(2, 3, 10, 20);
+    let request_digest = lease
+        .request_binding_digest()
+        .unwrap_or_else(|error| panic!("request digest: {error}"));
+    let (request, request_evidence) = transition(
+        &lease,
+        LeaseActivity::Request,
+        LeaseState::Requested,
+        LeaseState::Requested,
+        request_digest,
+        10,
+    );
+    let mut book = LeaseBook::new();
+    book.insert_requested(lease, request, request_evidence)
+        .unwrap_or_else(|error| panic!("request: {error}"));
+    for (activity, from, to, batch) in [
+        (
+            LeaseActivity::Fund,
+            LeaseState::Requested,
+            LeaseState::Funded,
+            11,
+        ),
+        (
+            LeaseActivity::Activate,
+            LeaseState::Funded,
+            LeaseState::Active,
+            12,
+        ),
+    ] {
+        let current = book
+            .get(LeaseId::new([2; 32]).unwrap_or_else(|error| panic!("id: {error}")))
+            .unwrap_or_else(|| panic!("lease"))
+            .clone();
+        if current.state() == LeaseState::Funded {
+            let (expire, expire_evidence) = transition(
+                &current,
+                LeaseActivity::Expire,
+                LeaseState::Funded,
+                LeaseState::Expired,
+                [0; 32],
+                12,
+            );
+            assert!(matches!(
+                book.transition(current.id(), expire, expire_evidence),
+                Err(LeaseRefusal::NotExpired { .. })
+            ));
+        }
+        let (declared, evidence) = transition(&current, activity, from, to, [0; 32], batch);
+        if activity == LeaseActivity::Activate {
+            let mut altered = declared;
+            altered.to = LeaseState::Expired;
+            assert_eq!(
+                book.transition(current.id(), altered, evidence),
+                Err(LeaseRefusal::ActivityReceiptMismatch)
+            );
+        }
+        book.transition(current.id(), declared, evidence)
+            .unwrap_or_else(|error| panic!("advance: {error}"));
+    }
+    book
+}
+
+fn fill_principal_and_refuse_corrupt_state() -> LeaseBook {
+    let mut book = LeaseBook::new();
+    for index in 1..=u8::try_from(MAX_CONCURRENT_LEASES_PER_PRINCIPAL)
+        .unwrap_or_else(|error| panic!("lease limit: {error}"))
+    {
+        let lease = candidate(index, 9, 10, 20);
+        let digest = lease
+            .request_binding_digest()
+            .unwrap_or_else(|error| panic!("digest: {error}"));
+        let (request, evidence) = transition(
+            &lease,
+            LeaseActivity::Request,
+            LeaseState::Requested,
+            LeaseState::Requested,
+            digest,
+            10,
+        );
+        book.insert_requested(lease, request, evidence)
+            .unwrap_or_else(|error| panic!("admit: {error}"));
+    }
+    let lease = candidate(33, 9, 10, 20);
+    let digest = lease
+        .request_binding_digest()
+        .unwrap_or_else(|error| panic!("digest: {error}"));
+    let (request, evidence) = transition(
+        &lease,
+        LeaseActivity::Request,
+        LeaseState::Requested,
+        LeaseState::Requested,
+        digest,
+        10,
+    );
+    assert_eq!(
+        book.insert_requested(lease, request, evidence),
+        Err(LeaseRefusal::PrincipalLeaseLimit)
+    );
+
+    let requested = book
+        .get(LeaseId::new([2; 32]).unwrap_or_else(|error| panic!("requested id: {error}")))
+        .unwrap_or_else(|| panic!("requested lease"));
+    let mut corrupt = requested
+        .canonical_state_bytes()
+        .unwrap_or_else(|error| panic!("state: {error}"));
+    let usage_offset = b"LayerX/programs/sandbox/lease-state/v1\0".len() + 224 + 16 + 64 + 16;
+    corrupt[usage_offset + 7] = 1;
+    assert_eq!(
+        Lease::decode_state(&corrupt),
+        Err(LeaseRefusal::InvalidStateEncoding)
+    );
+
+    book
+}
+
+fn expire_and_destroy_remaining_leases(book: &mut LeaseBook) {
+    for index in 2..=33 {
+        let id = LeaseId::new([index; 32]).unwrap_or_else(|error| panic!("id: {error}"));
+        let current = book.get(id).unwrap_or_else(|| panic!("lease")).clone();
+        let (expire, evidence) = transition(
+            &current,
+            LeaseActivity::Expire,
+            LeaseState::Requested,
+            LeaseState::Expired,
+            [0; 32],
+            30,
+        );
+        book.transition(id, expire, evidence)
+            .unwrap_or_else(|error| panic!("expire: {error}"));
+        let current = book
+            .get(id)
+            .unwrap_or_else(|| panic!("expired lease"))
+            .clone();
+        let (destroy, evidence) = transition(
+            &current,
+            LeaseActivity::Destroy,
+            LeaseState::Expired,
+            LeaseState::Destroyed,
+            [0; 32],
+            31,
+        );
+        book.destroy_with_evidence(
+            id,
+            &mut Storage::new(),
+            &mut storage_meter(),
+            destroy,
+            evidence,
+        )
+        .unwrap_or_else(|error| panic!("destroy: {error}"));
+        assert!(book
+            .destroy_with_evidence(
+                id,
+                &mut Storage::new(),
+                &mut storage_meter(),
+                destroy,
+                evidence
+            )
+            .is_err());
+    }
+}
+
+fn refill_principal_and_refuse_overflow(book: &mut LeaseBook) {
+    for index in 34..34
+        + u8::try_from(MAX_CONCURRENT_LEASES_PER_PRINCIPAL)
+            .unwrap_or_else(|error| panic!("lease limit: {error}"))
+    {
+        let lease = candidate(index, 9, 32, 40);
+        let digest = lease
+            .request_binding_digest()
+            .unwrap_or_else(|error| panic!("digest: {error}"));
+        let (request, evidence) = transition(
+            &lease,
+            LeaseActivity::Request,
+            LeaseState::Requested,
+            LeaseState::Requested,
+            digest,
+            32,
+        );
+        book.insert_requested(lease, request, evidence)
+            .unwrap_or_else(|error| panic!("refill: {error}"));
+    }
+    let lease = candidate(66, 9, 32, 40);
+    let digest = lease
+        .request_binding_digest()
+        .unwrap_or_else(|error| panic!("digest: {error}"));
+    let (request, evidence) = transition(
+        &lease,
+        LeaseActivity::Request,
+        LeaseState::Requested,
+        LeaseState::Requested,
+        digest,
+        32,
+    );
+    assert_eq!(
+        book.insert_requested(lease, request, evidence),
+        Err(LeaseRefusal::PrincipalLeaseLimit)
     );
 }

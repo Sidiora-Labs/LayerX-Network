@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200809L
 #include "layerx/programs.h"
 
 #include "../../src/modules/programs/artifact.h"
@@ -6,13 +7,19 @@
 #include "layerx/lxp_hash.h"
 #include "layerx/lxp_kernel.h"
 #include "layerx/lxp_snapshot.h"
+#include "layerx/lxp_genesis.h"
 
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include <openssl/evp.h>
 
 static bool dump_executed_v3;
+static bool dump_executed_v4;
+static bool dump_principal_v4;
+static bool dump_mutated_leg_v4;
+static bool post_upgrade_batch_regression;
 static const uint8_t executed_sequencer_seed[32] = {0x45U};
 static int lifecycle_vector_signature(lxp_activity *activity,
                                       uint8_t public_key[32], uint8_t signature[64]);
@@ -39,13 +46,15 @@ static int emit_executed_fixture(const lxp_activity *activity,
                                  const lxp_receipt *receipt)
 {
     static uint8_t storage[2U * LXP_MAX_ACTIVITY_BYTES];
+    static uint8_t mutated_terminal[LXP_MAX_ACTIVITY_BYTES];
+    lxp_receipt mutated_receipt;
     lxp_arena arena;
     lxp_byte_span canonical, signed_activity;
     uint8_t public_key[32], digest[32], activity_id[32];
     if (receipt->protocol_version != LXP_PROTOCOL_VERSION_STATE_COMMITMENT ||
         receipt->module_version != LX_PROGRAMS_SANDBOX_DESTROY_ABI_VERSION ||
         receipt->result_code != LXP_OK || !receipt->program_outcome.present ||
-        receipt->program_outcome.abi_version != LX_PROGRAMS_ACCOUNT_ABI_VERSION ||
+        receipt->program_outcome.abi_version != (dump_principal_v4 ? LX_PROGRAMS_ABI_VERSION : LX_PROGRAMS_ACCOUNT_ABI_VERSION) ||
         receipt->program_outcome.terminal_kind != LXP_PROGRAM_TERMINAL_SUCCESS ||
         executed_public_key(executed_sequencer_seed, public_key) != 0 ||
         lxp_arena_init(&arena, storage, sizeof(storage)) != LXP_OK ||
@@ -55,7 +64,55 @@ static int emit_executed_fixture(const lxp_activity *activity,
         lxp_activity_encode(activity, &arena, &signed_activity) != LXP_OK ||
         lxp_activity_id(signed_activity.bytes, signed_activity.length, activity_id) != LXP_OK ||
         memcmp(activity_id, receipt->activity_id, 32U) != 0)
-        return 1;
+        return fprintf(stderr, "Executed fixture failed at line=%d\n", __LINE__), 1;
+    if (dump_executed_v4) {
+        static const uint8_t domain[] = "LXP/programs/terminal-applied-legs/v1";
+        lxp_byte_span terminal = receipt->program_outcome.terminal_payload;
+        uint32_t detail_length, legs_length;
+        size_t offset = sizeof(domain);
+        uint8_t applied_digest[32];
+        if (receipt->program_outcome.encoding_version != 4U ||
+            terminal.length < sizeof(domain) + 8U ||
+            memcmp(terminal.bytes, domain, sizeof(domain)) != 0) return fprintf(stderr, "Executed fixture failed at line=%d\n", __LINE__), 1;
+        detail_length = ((uint32_t)terminal.bytes[offset] << 24U) |
+            ((uint32_t)terminal.bytes[offset + 1U] << 16U) |
+            ((uint32_t)terminal.bytes[offset + 2U] << 8U) | terminal.bytes[offset + 3U];
+        offset += 4U;
+        if (detail_length > terminal.length - offset - 4U) return fprintf(stderr, "Executed fixture failed at line=%d\n", __LINE__), 1;
+        if (dump_principal_v4) {
+            static const uint8_t authority_domain[] = "LXP/program-execution-with-transfer-authority/v2";
+            if (detail_length < sizeof(authority_domain) ||
+                memcmp(terminal.bytes + offset, authority_domain, sizeof(authority_domain)) != 0)
+                return fprintf(stderr, "Executed fixture failed at line=%d\n", __LINE__), 1;
+        }
+        offset += detail_length;
+        legs_length = ((uint32_t)terminal.bytes[offset] << 24U) |
+            ((uint32_t)terminal.bytes[offset + 1U] << 16U) |
+            ((uint32_t)terminal.bytes[offset + 2U] << 8U) | terminal.bytes[offset + 3U];
+        offset += 4U;
+        if (legs_length != 115U || terminal.length - offset != legs_length ||
+            lxp_hash_sha256(terminal.bytes + offset, legs_length, applied_digest) != LXP_OK ||
+            memcmp(applied_digest, receipt->program_outcome.applied_legs_digest, 32U) != 0)
+            return fprintf(stderr, "Executed fixture failed at line=%d\n", __LINE__), 1;
+        if (dump_mutated_leg_v4) {
+            (void)memcpy(mutated_terminal, terminal.bytes, terminal.length);
+            mutated_terminal[offset + 112U] ^= 2U;
+            mutated_receipt = *receipt;
+            mutated_receipt.program_outcome.terminal_payload.bytes = mutated_terminal;
+            if (lxp_hash_sha256(mutated_terminal + offset, legs_length,
+                                mutated_receipt.program_outcome.applied_legs_digest) != LXP_OK ||
+                lxp_hash_sha256(mutated_terminal, terminal.length,
+                                mutated_receipt.program_outcome.terminal_payload_root) != LXP_OK ||
+                lxp_arena_reset(&arena, 0U) != LXP_OK ||
+                lxp_receipt_sign(&mutated_receipt, executed_sequencer_seed, &arena) != LXP_OK ||
+                lxp_receipt_verify(&mutated_receipt, public_key, &arena) != LXP_OK ||
+                lxp_receipt_digest(&mutated_receipt, &arena, digest) != LXP_OK ||
+                lxp_receipt_encode(&mutated_receipt, true, &arena, &canonical) != LXP_OK ||
+                lxp_activity_encode(activity, &arena, &signed_activity) != LXP_OK)
+                return fprintf(stderr, "Executed fixture failed at line=%d\n", __LINE__), 1;
+            receipt = &mutated_receipt;
+        }
+    }
     if (printf("{") < 0 ||
         executed_hex_field("canonical_receipt_hex", canonical.bytes, canonical.length) != 0 ||
         executed_hex_field("signed_activity_hex", signed_activity.bytes, signed_activity.length) != 0 ||
@@ -73,7 +130,7 @@ static int emit_executed_fixture(const lxp_activity *activity,
         executed_hex_field("resulting_state_root_hex", receipt->resulting_state_root, 32U) != 0 ||
         printf("\"sequencer_public_key_hex\":\"") < 0 ||
         lifecycle_vector_hex(public_key, 32U) != 0 || printf("\"}}\n") < 0)
-        return 1;
+        return fprintf(stderr, "Executed fixture failed at line=%d\n", __LINE__), 1;
     return fflush(stdout) == 0 ? 0 : 1;
 }
 
@@ -380,10 +437,11 @@ static const uint64_t call_budget[LX_PROGRAMS_CALL_BUDGET_FIELDS] = {
     1000000U, 16777216U, 1048576U, 1048576U, 64U, 1048576U, 4096U
 };
 
-static size_t call_payload_with_access(
+static size_t call_payload_with_data(
     uint8_t *out, const uint8_t program_id[32],
     const uint8_t *capabilities, size_t capabilities_length,
-    const uint8_t *access_declaration, size_t access_declaration_length)
+    const uint8_t *access_declaration, size_t access_declaration_length,
+    const uint8_t *calldata, size_t calldata_length)
 {
     static const uint8_t entrypoint[] = "layerx_call";
     size_t cursor = 0U;
@@ -394,7 +452,7 @@ static size_t call_payload_with_access(
     cursor += 2U;
     write_u16(out + cursor, (uint16_t)(sizeof(entrypoint) - 1U));
     cursor += 2U;
-    write_u32(out + cursor, 0U);
+    write_u32(out + cursor, (uint32_t)calldata_length);
     cursor += 4U;
     write_u16(out + cursor, (uint16_t)capabilities_length);
     cursor += 2U;
@@ -408,10 +466,23 @@ static size_t call_payload_with_access(
     }
     (void)memcpy(out + cursor, entrypoint, sizeof(entrypoint) - 1U);
     cursor += sizeof(entrypoint) - 1U;
+    if (calldata_length != 0U)
+        (void)memcpy(out + cursor, calldata, calldata_length);
+    cursor += calldata_length;
     (void)memcpy(out + cursor, capabilities, capabilities_length);
     cursor += capabilities_length;
     (void)memcpy(out + cursor, access_declaration, access_declaration_length);
     return cursor + access_declaration_length;
+}
+
+static size_t call_payload_with_access(
+    uint8_t *out, const uint8_t program_id[32],
+    const uint8_t *capabilities, size_t capabilities_length,
+    const uint8_t *access_declaration, size_t access_declaration_length)
+{
+    return call_payload_with_data(out, program_id, capabilities,
+                                  capabilities_length, access_declaration,
+                                  access_declaration_length, NULL, 0U);
 }
 
 static size_t call_payload_with_capabilities(
@@ -939,6 +1010,241 @@ static int artifact_fixture_failure(uint16_t protocol_version, int line)
     return 1;
 }
 
+static lxp_result publish_artifact_fixture_batch(
+    lxp_kernel *kernel, const lxp_activity *activity,
+    lxp_kernel_execution *execution, lxp_receipt *receipt)
+{
+    lxp_kernel_prepared_batch *prepared = NULL;
+    lxp_activity signed_activity = *activity;
+    lxp_byte_span canonical, receipts[2], header_bytes;
+    lxp_batch_roots roots;
+    lxp_batch_header header = {0};
+    lxp_sequencer_authorization authorization = {0};
+    lxp_programs_occupancy_receipt maintenance;
+    uint8_t signature[64], public_key[32], preimage[88], durable[32];
+    uint8_t header_signature[64];
+    size_t retry = 0U;
+    FILE *publication = NULL;
+    lxp_result status;
+    signed_activity.signature = (lxp_byte_span){signature, sizeof(signature)};
+    if (lxp_hash_payload(signed_activity.payload.bytes, signed_activity.payload.length,
+                         signed_activity.payload_hash) != LXP_OK)
+        return LXP_ERR_PAYLOAD_HASH_MISMATCH;
+    if (lifecycle_vector_signature(&signed_activity, public_key, signature) != 0)
+        return LXP_ERR_BAD_SIGNATURE;
+    status = lxp_activity_verify_signature(&signed_activity);
+    if (status == LXP_OK)
+        status = lxp_activity_encode(&signed_activity, execution->arena, &canonical);
+    if (status == LXP_OK)
+        status = lxp_batch_roots_compute(
+            &(lxp_batch_root_inputs){&canonical, 1U, NULL, 0U, NULL, 0U,
+                                     NULL, 0U, NULL, 0U}, execution->arena, &roots);
+    if (status == LXP_OK) {
+        (void)memcpy(preimage, kernel->current_state_root, 32U);
+        (void)memcpy(preimage + 32U, roots.activity_merkle_root, 32U);
+        write_u64(preimage + 64U, execution->global_sequence);
+        write_u64(preimage + 72U, execution->global_sequence);
+        write_u64(preimage + 80U, execution->batch_number);
+        status = lxp_hash_context_value(preimage, sizeof(preimage), execution->batch_id);
+        (void)memcpy(execution->activity_root, roots.activity_merkle_root, 32U);
+    }
+    if (status == LXP_OK) {
+        if (activity->activity_type == LX_PROGRAMS_CALL) {
+            status = lxp_kernel_prepare_activity_batch(kernel, &signed_activity,
+                execution, 1U, 4U, &prepared, &retry);
+            if (status == LXP_OK && retry != 0U) status = LXP_FATAL_INVARIANT;
+        } else {
+            status = lxp_kernel_prepare_serial_activity_batch(kernel,
+                &signed_activity, execution, &prepared);
+        }
+    }
+    if (status == LXP_OK)
+        status = lxp_kernel_prepare_batch_maintenance(prepared, &signed_activity, execution);
+    if (status == LXP_OK && kernel->state->next_sequence != execution->global_sequence)
+        status = LXP_FATAL_INVARIANT;
+    if (status == LXP_OK) {
+        *receipt = *lxp_kernel_prepared_batch_receipts(prepared);
+        if (executed_public_key(executed_sequencer_seed, authorization.public_key) != 0)
+            status = LXP_ERR_BAD_SIGNATURE;
+    }
+    if (status == LXP_OK)
+        status = lxp_receipt_verify(receipt, authorization.public_key, execution->arena);
+    if (status == LXP_OK)
+        status = lxp_receipt_encode(receipt, true, execution->arena, &receipts[0]);
+    if (status == LXP_OK) {
+        receipts[1] = lxp_kernel_prepared_batch_maintenance(prepared);
+        status = lxp_programs_occupancy_receipt_decode(
+            receipts[1].bytes, receipts[1].length, &maintenance);
+    }
+    if (status == LXP_OK &&
+        (maintenance.global_sequence != execution->global_sequence + 1U ||
+         maintenance.batch_number != execution->batch_number))
+        status = LXP_FATAL_INVARIANT;
+    if (status == LXP_OK)
+        status = lxp_batch_roots_compute(
+            &(lxp_batch_root_inputs){&canonical, 1U, receipts, 2U,
+                lxp_kernel_prepared_batch_events(prepared), 1U,
+                NULL, 0U, NULL, 0U}, execution->arena, &roots);
+    if (status == LXP_OK) {
+        header.protocol_version = activity->protocol_version;
+        header.network_id = execution->network_id;
+        header.epoch = execution->epoch;
+        header.batch_number = execution->batch_number;
+        header.first_sequence = execution->global_sequence;
+        header.last_sequence = execution->global_sequence + 1U;
+        header.timestamp_ms = execution->batch_timestamp_ms;
+        (void)memcpy(header.previous_state_root, kernel->current_state_root, 32U);
+        (void)memcpy(header.resulting_state_root, maintenance.resulting_state_root, 32U);
+        (void)memcpy(header.activity_merkle_root, roots.activity_merkle_root, 32U);
+        (void)memcpy(header.receipt_merkle_root, roots.receipt_merkle_root, 32U);
+        (void)memcpy(header.event_merkle_root, roots.event_merkle_root, 32U);
+        (void)memcpy(header.oracle_root, roots.oracle_root, 32U);
+        (void)memcpy(header.data_availability_root, roots.data_availability_root, 32U);
+        (void)memcpy(authorization.sequencer_id, authorization.public_key, 32U);
+        authorization.authorized = 1U;
+        authorization.first_batch_number = 1U;
+        authorization.last_batch_number = 4U;
+        (void)memcpy(header.sequencer_id, authorization.sequencer_id, 32U);
+        status = lxp_batch_sign(&header, executed_sequencer_seed, &authorization,
+                                header_signature, execution->arena);
+    }
+    if (status == LXP_OK)
+        status = lxp_batch_header_encode(&header, execution->arena, &header_bytes);
+    if (status == LXP_OK) {
+        const lxp_byte_span records[] = {header_bytes,
+            {header_signature, sizeof(header_signature)}, canonical,
+            receipts[0], receipts[1], *lxp_kernel_prepared_batch_events(prepared),
+            receipt->program_outcome.terminal_payload,
+            receipt->program_outcome.call_graph_payload,
+            {lxp_kernel_prepared_batch_publication_digest(prepared), 32U}};
+        publication = tmpfile();
+        if (publication == NULL) status = LXP_FATAL_INVARIANT;
+        for (size_t i = 0U; status == LXP_OK && i < sizeof(records) / sizeof(records[0]); ++i) {
+            uint8_t length[8];
+            write_u64(length, records[i].length);
+            if (fwrite(length, 1U, sizeof(length), publication) != sizeof(length) ||
+                (records[i].length != 0U && fwrite(records[i].bytes, 1U,
+                    records[i].length, publication) != records[i].length))
+                status = LXP_FATAL_INVARIANT;
+        }
+        if (status == LXP_OK &&
+            (fflush(publication) != 0 || fsync(fileno(publication)) != 0))
+            status = LXP_FATAL_INVARIANT;
+    }
+    if (status == LXP_OK) {
+        (void)memcpy(durable, lxp_kernel_prepared_batch_publication_digest(prepared), 32U);
+        status = lxp_kernel_commit_prepared_batch(kernel, execution->identities, prepared, durable);
+    }
+    if (status == LXP_OK)
+        status = lxp_kernel_finalize_prepared_batch_publication(
+            kernel, &signed_activity, prepared, durable);
+    if (status == LXP_OK &&
+        (kernel->state->next_sequence != execution->global_sequence + 2U ||
+         memcmp(kernel->current_state_root, maintenance.resulting_state_root, 32U) != 0))
+        status = LXP_FATAL_INVARIANT;
+    for (size_t i = 0U; status == LXP_OK && i < 2U; ++i) {
+        lxp_byte_span *span = i == 0U ? &receipt->program_outcome.terminal_payload :
+            &receipt->program_outcome.call_graph_payload;
+        if (span->length != 0U) {
+            void *copy;
+            status = lxp_arena_alloc(execution->arena, span->length, 1U, &copy);
+            if (status == LXP_OK) {
+                (void)memcpy(copy, span->bytes, span->length);
+                span->bytes = copy;
+            }
+        }
+    }
+    if (publication != NULL && fclose(publication) != 0) status = LXP_FATAL_INVARIANT;
+    lxp_kernel_prepared_batch_destroy(prepared);
+    if (status != LXP_OK || receipt->result_code != LXP_OK)
+        (void)fprintf(stderr, "Programs batch protocol=%u sequence=%llu status=%d receipt=%d\n",
+            (unsigned)activity->protocol_version,
+            (unsigned long long)execution->global_sequence, (int)status, (int)receipt->result_code);
+    return status;
+}
+
+static int post_upgrade_maintenance_case(
+    lxp_kernel *kernel, lxp_activity *activity, lxp_kernel_execution *execution,
+    const uint8_t program_id[32], const uint8_t code_hash[32],
+    const uint8_t *upgraded_wasm, size_t upgraded_wasm_length)
+{
+    const uint16_t protocol_version = activity->protocol_version;
+    lxp_receipt receipt = {0};
+    lxp_identity *identity = &execution->identities->identities[0];
+    lx_programs_transfer_runtime *runtime = kernel->module_runtime[LXP_MODULE_PROGRAMS];
+    lx_account *actor = &runtime->accounts->accounts[0];
+    lx_account *treasury = &runtime->accounts->accounts[1];
+    uint8_t call[STAGED_CALL_FIXTURE_BYTES], payload[2048], upgraded_hash[32];
+    uint8_t first_terminal_root[32];
+    size_t payload_length;
+    lxp_u128 actor_before, treasury_before;
+    if (publish_artifact_fixture_batch(kernel, activity, execution, &receipt) != LXP_OK ||
+        receipt.result_code != LXP_OK || identity->next_sequence != 1U ||
+        kernel->state->next_sequence != 3U)
+        return artifact_fixture_failure(protocol_version, __LINE__);
+    payload_length = staged_call_payload(call, program_id);
+    if (payload_length != sizeof(call)) return artifact_fixture_failure(protocol_version, __LINE__);
+    activity->activity_type = LX_PROGRAMS_CALL;
+    activity->payload = (lxp_byte_span){call, payload_length};
+    activity->account_sequence = 1U;
+    activity->idempotency_key[31] = 2U;
+    activity->fee_limit = actor->balance;
+    execution->fee_balance = actor->balance;
+    execution->batch_number = 2U;
+    execution->global_sequence = 3U;
+    if (lxp_arena_reset(execution->arena, 0U) != LXP_OK ||
+        publish_artifact_fixture_batch(kernel, activity, execution, &receipt) != LXP_OK ||
+        receipt.result_code != LXP_OK || !receipt.program_outcome.present ||
+        receipt.program_outcome.terminal_kind != LXP_PROGRAM_TERMINAL_SUCCESS ||
+        identity->next_sequence != 2U || kernel->state->next_sequence != 5U)
+        return artifact_fixture_failure(protocol_version, __LINE__);
+    (void)memcpy(first_terminal_root, receipt.program_outcome.terminal_payload_root, 32U);
+    payload_length = upgrade_payload(payload, program_id, code_hash,
+        upgraded_wasm, upgraded_wasm_length, upgraded_hash,
+        LX_PROGRAMS_ABI_VERSION, INTERFACE_CAPABILITIES_NONE, false);
+    activity->activity_type = LX_PROGRAMS_UPGRADE;
+    activity->payload = (lxp_byte_span){payload, payload_length};
+    activity->account_sequence = 2U;
+    activity->idempotency_key[31] = 3U;
+    activity->fee_limit = (lxp_u128){0U, 0U};
+    execution->batch_number = 3U;
+    execution->global_sequence = 5U;
+    if (lxp_arena_reset(execution->arena, 0U) != LXP_OK ||
+        publish_artifact_fixture_batch(kernel, activity, execution, &receipt) != LXP_OK ||
+        receipt.result_code != LXP_OK || identity->next_sequence != 3U ||
+        kernel->state->next_sequence != 7U || receipt.effects.count != 1U ||
+        receipt.effects.effects[0].event_type != LX_PROGRAMS_EVENT_UPGRADED ||
+        receipt.effects.effects[0].body_length != 64U ||
+        memcmp(receipt.effects.effects[0].body, code_hash, 32U) != 0 ||
+        memcmp(receipt.effects.effects[0].body + 32U, upgraded_hash, 32U) != 0)
+        return artifact_fixture_failure(protocol_version, __LINE__);
+    activity->activity_type = LX_PROGRAMS_CALL;
+    activity->payload = (lxp_byte_span){call, sizeof(call)};
+    activity->account_sequence = 3U;
+    activity->idempotency_key[31] = 4U;
+    activity->fee_limit = actor->balance;
+    execution->fee_balance = actor->balance;
+    execution->batch_number = 4U;
+    execution->global_sequence = 7U;
+    actor_before = actor->balance;
+    treasury_before = treasury->balance;
+    if (lxp_arena_reset(execution->arena, 0U) != LXP_OK ||
+        publish_artifact_fixture_batch(kernel, activity, execution, &receipt) !=
+            LXP_OK || receipt.result_code != LXP_OK ||
+        !receipt.program_outcome.present ||
+        receipt.program_outcome.terminal_kind != LXP_PROGRAM_TERMINAL_SUCCESS ||
+        receipt.effects.count != 1U ||
+        receipt.effects.effects[0].event_type != LX_PROGRAMS_EVENT_CALL_OUTCOME ||
+        memcmp(receipt.program_outcome.terminal_payload_root,
+               first_terminal_root, 32U) == 0 ||
+        lxp_u128_is_zero(receipt.fee_charged) ||
+        identity->next_sequence != 4U || kernel->state->next_sequence != 9U ||
+        exact_fee_applied(actor_before, treasury_before, actor, treasury,
+                          receipt.fee_charged) != 0)
+        return artifact_fixture_failure(protocol_version, __LINE__);
+    return 0;
+}
+
 static int deploy_and_upgrade_artifacts_case(uint16_t protocol_version,
                                             bool separate_counters)
 {
@@ -1026,7 +1332,7 @@ static int deploy_and_upgrade_artifacts_case(uint16_t protocol_version,
     uint8_t original_root[32];
     uint8_t restored_root[32];
     (void)memset(program_id, 0x31, sizeof(program_id));
-    if (dump_executed_v3) {
+    if (dump_executed_v3 || post_upgrade_batch_regression) {
         static const uint8_t actor_seed[32] = {0x33U};
         if (executed_public_key(actor_seed, primary_key) != 0) return 1;
     }
@@ -1082,7 +1388,7 @@ static int deploy_and_upgrade_artifacts_case(uint16_t protocol_version,
         (void)memcpy(payload + 104U, wasm, wasm_length);
         payload_length = 104U + wasm_length;
     }
-    if (dump_executed_v3) write_u16(payload + 32U, LX_PROGRAMS_ACCOUNT_ABI_VERSION);
+    if (dump_executed_v3 && !dump_principal_v4) write_u16(payload + 32U, LX_PROGRAMS_ACCOUNT_ABI_VERSION);
     fill_activity(&activity, LX_PROGRAMS_DEPLOY, payload, payload_length,
                   did, sizeof(did) - 1U, primary_key);
     activity.protocol_version = protocol_version;
@@ -1106,7 +1412,7 @@ static int deploy_and_upgrade_artifacts_case(uint16_t protocol_version,
          lxp_state_root(&kernel, kernel.current_state_root) != LXP_OK))
         return artifact_fixture_failure(protocol_version, __LINE__);
     (void)memset(&execution, 0, sizeof(execution));
-    if (dump_executed_v3) {
+    if (dump_executed_v3 || post_upgrade_batch_regression) {
         const uint8_t grant_id[32] = {0};
         executed_scope.module_mask = UINT64_C(1) << LXP_MODULE_PROGRAMS;
         executed_scope.activity_ordinal_min = 1U;
@@ -1130,12 +1436,43 @@ static int deploy_and_upgrade_artifacts_case(uint16_t protocol_version,
     execution.recorded_module_version = module_version;
     execution.parameter_version = 1U;
     execution.signature_valid = true;
-    if (dump_executed_v3) execution.sequencer_private_key = executed_sequencer_seed;
+    if (dump_executed_v3 || post_upgrade_batch_regression) execution.sequencer_private_key = executed_sequencer_seed;
     execution.identities = &identities;
     execution.authority = &authority;
     execution.fee_parameters = &fees;
     execution.gas_limit = 1000000U;
     execution.arena = &arena;
+    if (post_upgrade_batch_regression) {
+        lxp_genesis_manifest fee_manifest = {0};
+        lx_programs_fee_genesis_parameters fee_genesis = {0};
+        (void)memcpy(fee_manifest.signer_public_key, primary_key, 32U);
+        fee_genesis.schedule = runtime.fee_schedule;
+        (void)memcpy(fee_genesis.occupancy_asset_id, fee_asset, 32U);
+        fee_genesis.target_occupancy_byte_batches = 3U;
+        fee_genesis.response_denominator = 1U;
+        fee_genesis.maximum_change_numerator = 1U;
+        fee_genesis.maximum_change_denominator = 1U;
+        fee_genesis.minimum_fee_units_per_occupancy_byte_batch = 1U;
+        fee_genesis.maximum_fee_units_per_occupancy_byte_batch = 10U;
+        runtime.resolve_occupancy_parameters = lxp_programs_fee_governance_resolve_runtime;
+        runtime.occupancy_parameter_context = &kernel;
+        if (lxp_programs_fee_genesis_append(&fee_manifest, &fee_genesis) != LXP_OK ||
+            lxp_programs_fee_genesis_materialize(&fee_manifest, &kernel) != LXP_OK ||
+            lxp_state_root(&kernel, kernel.current_state_root) != LXP_OK)
+            return artifact_fixture_failure(protocol_version, __LINE__);
+        uint8_t *publication_storage = malloc(4U * LXP_MAX_BATCH_BODY_BYTES);
+        if (publication_storage == NULL ||
+            lxp_arena_init(&arena, publication_storage, 4U * LXP_MAX_BATCH_BODY_BYTES) != LXP_OK) {
+            free(publication_storage);
+            return artifact_fixture_failure(protocol_version, __LINE__);
+        }
+        int result = post_upgrade_maintenance_case(&kernel, &activity, &execution,
+            program_id, code_hash, upgraded_wasm, upgraded_wasm_length);
+        free(publication_storage);
+        while (kernel.blob_count != 0U) free(kernel.blobs[--kernel.blob_count].bytes);
+        if (lxp_state_store_destroy(&state) != LXP_OK) result = 1;
+        return result;
+    }
     if (execute_artifact_fixture_activity(&kernel, &activity, &execution, &receipt) !=
             LXP_OK ||
         receipt.result_code != LXP_OK ||
@@ -1173,7 +1510,7 @@ static int deploy_and_upgrade_artifacts_case(uint16_t protocol_version,
         capabilities[82] = 1U;
         payload_length = call_payload_with_capabilities(
             call, program_id, capabilities, sizeof(capabilities));
-        if (dump_executed_v3) write_u16(call + 32U, LX_PROGRAMS_ACCOUNT_ABI_VERSION);
+        if (dump_executed_v3 && !dump_principal_v4) write_u16(call + 32U, LX_PROGRAMS_ACCOUNT_ABI_VERSION);
         fill_activity(&activity, LX_PROGRAMS_CALL, call, payload_length,
                       did, sizeof(did) - 1U, primary_key);
         activity.protocol_version = protocol_version;
@@ -1197,6 +1534,23 @@ static int deploy_and_upgrade_artifacts_case(uint16_t protocol_version,
             memcmp(receipt.transfer_set_root,
                    receipt.program_outcome.transfer_root, 32U) != 0)
             return artifact_fixture_failure(protocol_version, __LINE__);
+        if (dump_executed_v4) {
+            uint8_t applied_digest[32], terminal_digest[32], state_root[32];
+            lxp_u128 balance = actor->balance;
+            (void)memcpy(applied_digest, receipt.program_outcome.applied_legs_digest, 32U);
+            (void)memcpy(terminal_digest, receipt.program_outcome.terminal_payload_root, 32U);
+            (void)memcpy(state_root, kernel.current_state_root, 32U);
+            execution.global_sequence = 4U;
+            execution.fee_balance = actor->balance;
+            if (lxp_arena_reset(&arena, 0U) != LXP_OK ||
+                execute_artifact_fixture_activity(&kernel, &activity, &execution, &receipt) != LXP_ERR_IDEMPOTENT_REPLAY ||
+                receipt.program_outcome.encoding_version != 4U ||
+                memcmp(applied_digest, receipt.program_outcome.applied_legs_digest, 32U) != 0 ||
+                memcmp(terminal_digest, receipt.program_outcome.terminal_payload_root, 32U) != 0 ||
+                memcmp(state_root, kernel.current_state_root, 32U) != 0 ||
+                lxp_u128_cmp(actor->balance, balance) != 0)
+                return artifact_fixture_failure(protocol_version, __LINE__);
+        }
         if (dump_executed_v3) {
             while (kernel.blob_count != 0U)
                 free(kernel.blobs[--kernel.blob_count].bytes);
@@ -1262,7 +1616,7 @@ static int deploy_and_upgrade_artifacts_case(uint16_t protocol_version,
             LXP_OK || receipt.result_code != LXP_OK ||
         !receipt.program_outcome.present ||
         receipt.program_outcome.terminal_kind != LXP_PROGRAM_TERMINAL_SUCCESS ||
-        receipt.program_outcome.encoding_version != 3U ||
+        receipt.program_outcome.encoding_version != (composite ? 4U : 3U) ||
         receipt.program_outcome.runtime_version == 0U ||
         receipt.program_outcome.abi_version != LX_PROGRAMS_ABI_VERSION ||
         receipt.program_outcome.fee_schedule_version != 1U ||
@@ -1298,6 +1652,10 @@ static int deploy_and_upgrade_artifacts_case(uint16_t protocol_version,
             (unsigned long long)state.next_sequence,
             receipt.program_outcome.terminal_payload.length,
             receipt.program_outcome.call_graph_payload.length);
+        while (kernel.blob_count != 0U)
+            free(kernel.blobs[--kernel.blob_count].bytes);
+        kernel.blob_total_bytes = 0U;
+        (void)lxp_state_store_destroy(&state);
         return artifact_fixture_failure(protocol_version, __LINE__);
     }
     (void)memcpy(first_terminal_root,
@@ -1916,6 +2274,14 @@ static int dump_lifecycle_payload(const char *name, uint16_t ordinal,
         printf("\",\"idempotency_key_hex\":\"") < 0 ||
         lifecycle_vector_hex(activity.idempotency_key, sizeof(activity.idempotency_key)) != 0)
         return 1;
+    if (ordinal == 3U) {
+        size_t index;
+        if (printf("\",\"fee_limit\":\"1000\",\"resources\":[") < 0) return 1;
+        for (index = 0U; index < LX_PROGRAMS_CALL_BUDGET_FIELDS; ++index)
+            if (printf("%s\"%llu\"", index == 0U ? "" : ",",
+                       (unsigned long long)call_budget[index]) < 0) return 1;
+        return puts("]}") < 0 ? 1 : 0;
+    }
     return puts("\"}") < 0 ? 1 : 0;
 }
 
@@ -1942,6 +2308,58 @@ static int dump_lifecycle_vectors(void)
                              INTERFACE_CAPABILITIES_NONE, false);
     if (dump_lifecycle_payload("native-program-upgrade-v3", 2U, payload, length) != 0)
         return 1;
+    {
+        static const uint8_t calldata[] = {0U, 0x61U, 0xffU, 0x10U};
+        static const uint8_t declaration_domain[] = "LayerX/programs/access-declaration/v1";
+        static const uint8_t set_domain[] = "LayerX/programs/access-set/v1";
+        uint8_t capabilities[83] = {0U, 1U, 5U};
+        uint8_t access[sizeof(declaration_domain) + 5U + sizeof(set_domain) + 71U];
+        static uint8_t decode_storage[LXP_MAX_ACTIVITY_BYTES];
+        lxp_state_store state;
+        lxp_state_journal journal;
+        lxp_kernel kernel;
+        lxp_module_ctx ctx;
+        lxp_arena arena;
+        uint64_t parameters = 1U;
+        void *decoded = NULL;
+        size_t cursor = 0U;
+        (void)memset(capabilities + 3U, 0x22, 32U);
+        (void)memset(capabilities + 35U, 0x33, 32U);
+        capabilities[82U] = 7U;
+        append_bytes(access, &cursor, declaration_domain, sizeof(declaration_domain));
+        access[cursor++] = 1U;
+        write_u32(access + cursor, (uint32_t)(sizeof(set_domain) + 71U));
+        cursor += 4U;
+        append_bytes(access, &cursor, set_domain, sizeof(set_domain));
+        write_u16(access + cursor, 0U);
+        cursor += 2U;
+        write_u16(access + cursor, 1U);
+        cursor += 2U;
+        (void)memset(access + cursor, 0x33, 32U);
+        cursor += 32U;
+        (void)memset(access + cursor, 0x22, 32U);
+        cursor += 32U;
+        access[cursor++] = 1U;
+        write_u16(access + cursor, 0U);
+        cursor += 2U;
+        if (cursor != sizeof(access)) return 1;
+        length = call_payload_with_data(payload, program_id, capabilities,
+                                        sizeof(capabilities), access, cursor,
+                                        calldata, sizeof(calldata));
+        write_u16(payload + 32U, LX_PROGRAMS_ACCOUNT_ABI_VERSION);
+        if (lxp_state_store_init(&state, 0U) != LXP_OK ||
+            lxp_kernel_create(&kernel, &state, &journal, &parameters, 0U) != LXP_OK ||
+            lxp_kernel_register_module(&kernel, programs_module_registration_v4()) != LXP_OK ||
+            lxp_arena_init(&arena, decode_storage, sizeof(decode_storage)) != LXP_OK ||
+            lxp_module_ctx_init(&ctx, &kernel, LXP_MODULE_PROGRAMS, 1U, 0U, 1U,
+                                1000000U, &arena, false) != LXP_OK) return 1;
+        ctx.protocol_version = LXP_PROTOCOL_VERSION_STATE_COMMITMENT;
+        if (lxp_programs_call_decode(&ctx, payload, length, &decoded) != LXP_OK ||
+            decoded == NULL ||
+            lxp_state_store_destroy(&state) != LXP_OK ||
+            dump_lifecycle_payload("native-program-call-v3", 3U, payload, length) != 0)
+            return 1;
+    }
     (void)memcpy(payload, program_id, 32U);
     payload[32U] = 1U;
     (void)memset(payload + 33U, 0x33, 32U);
@@ -1966,8 +2384,205 @@ static int dump_lifecycle_vectors(void)
     return fflush(stdout) == 0 ? 0 : 1;
 }
 
+static int stored_fixture_field(const char *document, const char *field,
+                                const char **value)
+{
+    char marker[96];
+    const char *start = NULL, *cursor;
+    size_t depth = 0U;
+    int count = snprintf(marker, sizeof(marker), "\"%s\": ", field);
+    if (count < 0 || (size_t)count >= sizeof(marker)) return 1;
+    for (cursor = document; *cursor != '\0'; ++cursor) {
+        if (*cursor == '{' || *cursor == '[') {
+            ++depth;
+        } else if (*cursor == '}' || *cursor == ']') {
+            if (depth == 0U) return 1;
+            --depth;
+            if (depth == 0U) break;
+        } else if (*cursor == '"') {
+            if (depth == 1U && strncmp(cursor, marker, (size_t)count) == 0) {
+                if (start != NULL) return 1;
+                start = cursor;
+            }
+            for (++cursor; *cursor != '"'; ++cursor) {
+                if (*cursor == '\0') return 1;
+                if (*cursor == '\\') {
+                    ++cursor;
+                    if (*cursor == '\0') return 1;
+                }
+            }
+        }
+    }
+    if (start == NULL || depth != 0U) return 1;
+    *value = start + (size_t)count;
+    return 0;
+}
+
+static int stored_fixture_hex(const char *document, const char *field,
+                               uint8_t *bytes, size_t capacity, size_t *length)
+{
+    const char *start, *end;
+    size_t index;
+    if (stored_fixture_field(document, field, &start) != 0 || *start != '"') return 1;
+    ++start;
+    end = strchr(start, '"');
+    if (end == NULL || (size_t)(end - start) % 2U != 0U ||
+        (size_t)(end - start) / 2U > capacity) return 1;
+    *length = (size_t)(end - start) / 2U;
+    for (index = 0U; index < *length; ++index) {
+        uint8_t value = 0U;
+        size_t nibble;
+        for (nibble = 0U; nibble < 2U; ++nibble) {
+            char digit = start[index * 2U + nibble];
+            if (digit >= '0' && digit <= '9') value = (uint8_t)(value * 16U + (uint8_t)(digit - '0'));
+            else if (digit >= 'a' && digit <= 'f') value = (uint8_t)(value * 16U + (uint8_t)(digit - 'a' + 10));
+            else return 1;
+        }
+        bytes[index] = value;
+    }
+    return 0;
+}
+
+static int stored_fixture_hex_nesting_case(void)
+{
+    static const char duplicate[] =
+        "{\"receipt_digest_hex\": \"ab\", \"receipt_digest_hex\": \"cd\"}";
+    static const char nested_first[] =
+        "{\"expected\": {\"receipt_digest_hex\": \"cd\"}, \"receipt_digest_hex\": \"ab\"}";
+    static const char nested_last[] =
+        "{\"receipt_digest_hex\": \"ab\", \"expected\": {\"receipt_digest_hex\": \"cd\"}}";
+    static const char nested_only[] =
+        "{\"expected\": {\"receipt_digest_hex\": \"cd\"}}";
+    const char *expected;
+    uint8_t bytes[1];
+    size_t length;
+    if (stored_fixture_hex(duplicate, "receipt_digest_hex", bytes, sizeof(bytes), &length) == 0 ||
+        stored_fixture_hex(nested_only, "receipt_digest_hex", bytes, sizeof(bytes), &length) == 0)
+        return 1;
+    if (stored_fixture_hex(nested_first, "receipt_digest_hex", bytes, sizeof(bytes), &length) != 0 ||
+        length != 1U || bytes[0] != 0xabU ||
+        stored_fixture_hex(nested_last, "receipt_digest_hex", bytes, sizeof(bytes), &length) != 0 ||
+        length != 1U || bytes[0] != 0xabU)
+        return 1;
+    if (stored_fixture_field(nested_first, "expected", &expected) != 0 ||
+        *expected != '{' ||
+        stored_fixture_hex(expected, "receipt_digest_hex", bytes, sizeof(bytes), &length) != 0 ||
+        length != 1U || bytes[0] != 0xcdU)
+        return 1;
+    return 0;
+}
+
+static int stored_historical_lifecycle(const char *path)
+{
+    char document[32768];
+    uint8_t canonical[8192], payload[4096], expected_id[32], identifier[32], public_key[32];
+    static uint8_t arena_bytes[LXP_MAX_ACTIVITY_BYTES];
+    size_t length, canonical_length, payload_length, id_length, key_length;
+    lxp_activity activity;
+    lxp_arena arena;
+    lxp_byte_span encoded;
+    FILE *file = fopen(path, "rb");
+    if (file == NULL) return 1;
+    length = fread(document, 1U, sizeof(document) - 1U, file);
+    if (ferror(file) || !feof(file)) { (void)fclose(file); return 1; }
+    if (fclose(file) != 0) return 1;
+    document[length] = '\0';
+    if (stored_fixture_hex(document, "signed_activity_hex", canonical, sizeof(canonical), &canonical_length) != 0 ||
+        stored_fixture_hex(document, "payload_hex", payload, sizeof(payload), &payload_length) != 0 ||
+        stored_fixture_hex(document, "activity_id_hex", expected_id, sizeof(expected_id), &id_length) != 0 ||
+        stored_fixture_hex(document, "public_key_hex", public_key, sizeof(public_key), &key_length) != 0 ||
+        id_length != 32U || key_length != 32U ||
+        lxp_activity_decode(canonical, canonical_length, &activity) != LXP_OK ||
+        activity.protocol_version != 3U || lxp_activity_module_id(activity.activity_type) != LXP_MODULE_PROGRAMS ||
+        activity.payload.length != payload_length || memcmp(activity.payload.bytes, payload, payload_length) != 0 ||
+        activity.authority.length != 32U || memcmp(activity.authority.bytes, public_key, 32U) != 0 ||
+        lxp_activity_verify_signature(&activity) != LXP_OK ||
+        lxp_activity_id(canonical, canonical_length, identifier) != LXP_OK ||
+        memcmp(identifier, expected_id, 32U) != 0 ||
+        lxp_arena_init(&arena, arena_bytes, sizeof(arena_bytes)) != LXP_OK ||
+        lxp_activity_encode(&activity, &arena, &encoded) != LXP_OK ||
+        encoded.length != canonical_length || memcmp(encoded.bytes, canonical, canonical_length) != 0)
+        return 1;
+    canonical[canonical_length - 1U] ^= 1U;
+    if (lxp_activity_decode(canonical, canonical_length, &activity) != LXP_OK ||
+        lxp_activity_verify_signature(&activity) == LXP_OK) return 1;
+    return 0;
+}
+
+static int stored_historical_receipt(const char *path, uint16_t protocol_version)
+{
+    char document[32768];
+    const char *authorized_batch, *digest_document;
+    uint8_t canonical[4096], public_key[32], expected_digest[32], digest[32];
+    static uint8_t arena_bytes[LXP_MAX_ACTIVITY_BYTES];
+    size_t length, canonical_length, key_length, digest_length;
+    lxp_arena arena;
+    lxp_receipt receipt;
+    lxp_byte_span encoded;
+    FILE *file = fopen(path, "rb");
+    if (file == NULL) return 1;
+    length = fread(document, 1U, sizeof(document) - 1U, file);
+    if (ferror(file) || !feof(file)) { (void)fclose(file); return 1; }
+    if (fclose(file) != 0) return 1;
+    document[length] = '\0';
+    digest_document = document;
+    if (protocol_version == 1U &&
+        (stored_fixture_field(document, "expected", &digest_document) != 0 ||
+         *digest_document != '{')) return 1;
+    if (stored_fixture_field(document, "authorized_batch", &authorized_batch) != 0 ||
+        *authorized_batch != '{' ||
+        stored_fixture_hex(document, "canonical_receipt_hex", canonical, sizeof(canonical), &canonical_length) != 0 ||
+        stored_fixture_hex(authorized_batch, "sequencer_public_key_hex", public_key, sizeof(public_key), &key_length) != 0 ||
+        stored_fixture_hex(digest_document, "receipt_digest_hex", expected_digest, sizeof(expected_digest), &digest_length) != 0 ||
+        key_length != 32U || digest_length != 32U ||
+        lxp_arena_init(&arena, arena_bytes, sizeof(arena_bytes)) != LXP_OK ||
+        lxp_receipt_decode(canonical, canonical_length, true, &receipt) != LXP_OK ||
+        receipt.protocol_version != protocol_version || receipt.module_id != LXP_MODULE_PROGRAMS ||
+        receipt.module_version != (protocol_version == 1U ? 1U : 4U) ||
+        !receipt.program_outcome.present ||
+        receipt.program_outcome.encoding_version != 3U ||
+        receipt.program_outcome.abi_version != (protocol_version == 1U ? 1U : 2U) ||
+        !lxp_ct_is_zero(receipt.program_outcome.applied_legs_digest, 32U) ||
+        lxp_receipt_verify(&receipt, public_key, &arena) != LXP_OK ||
+        lxp_receipt_digest(&receipt, &arena, digest) != LXP_OK ||
+        memcmp(digest, expected_digest, 32U) != 0 ||
+        lxp_receipt_encode(&receipt, true, &arena, &encoded) != LXP_OK ||
+        encoded.length != canonical_length || memcmp(encoded.bytes, canonical, canonical_length) != 0)
+        return 1;
+    if (lxp_arena_reset(&arena, 0U) != LXP_OK) return 1;
+    public_key[0] ^= 1U;
+    if (lxp_receipt_verify(&receipt, public_key, &arena) == LXP_OK) return 1;
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
+    if (stored_fixture_hex_nesting_case() != 0) return 1;
+    if (argc == 3 && strcmp(argv[1], "--stored-historical-lifecycle") == 0)
+        return stored_historical_lifecycle(argv[2]);
+    if (argc == 3 && strcmp(argv[1], "--stored-historical-v1") == 0)
+        return stored_historical_receipt(argv[2], 1U);
+    if (argc == 3 && strcmp(argv[1], "--stored-historical-v3") == 0)
+        return stored_historical_receipt(argv[2], 3U);
+    if ((argc == 1 || (argc == 2 && strcmp(argv[1], "--post-upgrade-batch") == 0)) &&
+        stored_historical_receipt("platform/sdk/conformance/fixtures/receipt-programs-executed-v3.json", 3U) != 0)
+        return 1;
+    if (argc == 2 && strcmp(argv[1], "--post-upgrade-batch") == 0) {
+        if (deploy_and_upgrade_artifacts_case(
+                LXP_PROTOCOL_VERSION_STATE_COMMITMENT, false) != 0) return 1;
+        post_upgrade_batch_regression = true;
+        return deploy_and_upgrade_artifacts_case(
+            LXP_PROTOCOL_VERSION_STATE_COMMITMENT, false);
+    }
+    if (argc == 2 && (strcmp(argv[1], "--dump-executed-v4") == 0 ||
+                      strcmp(argv[1], "--dump-principal-v4") == 0 ||
+                      strcmp(argv[1], "--dump-mutated-leg-v4") == 0)) {
+        dump_executed_v3 = true;
+        dump_executed_v4 = true;
+        dump_principal_v4 = strcmp(argv[1], "--dump-principal-v4") == 0;
+        dump_mutated_leg_v4 = strcmp(argv[1], "--dump-mutated-leg-v4") == 0;
+        return deploy_and_upgrade_artifacts_case(LXP_PROTOCOL_VERSION_STATE_COMMITMENT, true);
+    }
     if (argc == 2 && strcmp(argv[1], "--dump-executed-v3") == 0) {
         dump_executed_v3 = true;
         return deploy_and_upgrade_artifacts_case(LXP_PROTOCOL_VERSION_STATE_COMMITMENT, true);

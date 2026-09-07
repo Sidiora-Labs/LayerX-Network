@@ -1,4 +1,4 @@
-mod support;
+pub mod support;
 
 use layerx_programs::{
     verify_interface_read, InterfaceCapability, InterfaceEntryPoint, InterfaceRefusal,

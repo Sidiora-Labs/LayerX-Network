@@ -13,7 +13,7 @@ const MAX_PROOF_DEPTH: usize = 32;
 pub const MAX_PROGRAM_VALUE_ACCOUNTS: usize = 512;
 const STATE_LEAF_DOMAIN: &[u8] = b"LXP/v1/state-leaf\0";
 const STATE_NODE_DOMAIN: &[u8] = b"LXP/v1/state-node\0";
-const ACCOUNT_TREE_KEY: &[u8] = b"account-tree";
+const ACCOUNT_TREE_KEY: &[u8; 12] = b"account-tree";
 const PROGRAM_ACCOUNT_NAME_PREFIX: &[u8] = b"module:programs:value:";
 const PROGRAM_ACCOUNT_PRIMARY_PREFIX: &[u8] = b"program-account\0p";
 const PROGRAMS_MODULE_ID: u16 = 9;
@@ -30,6 +30,118 @@ pub struct ProgramValueAccountBinding {
     pub registration_event_digest: [u8; 32],
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AssetPresence {
+    Absent,
+    Present,
+}
+
+impl From<bool> for AssetPresence {
+    fn from(value: bool) -> Self {
+        if value {
+            Self::Present
+        } else {
+            Self::Absent
+        }
+    }
+}
+
+impl From<AssetPresence> for bool {
+    fn from(value: AssetPresence) -> Self {
+        value == AssetPresence::Present
+    }
+}
+
+impl From<AssetPresence> for u8 {
+    fn from(value: AssetPresence) -> Self {
+        Self::from(bool::from(value))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AccountFreeze {
+    Unfrozen,
+    Frozen,
+}
+
+impl From<bool> for AccountFreeze {
+    fn from(value: bool) -> Self {
+        if value {
+            Self::Frozen
+        } else {
+            Self::Unfrozen
+        }
+    }
+}
+
+impl From<AccountFreeze> for bool {
+    fn from(value: AccountFreeze) -> Self {
+        value == AccountFreeze::Frozen
+    }
+}
+
+impl From<AccountFreeze> for u8 {
+    fn from(value: AccountFreeze) -> Self {
+        Self::from(bool::from(value))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OpenReference {
+    Absent,
+    Present,
+}
+
+impl From<bool> for OpenReference {
+    fn from(value: bool) -> Self {
+        if value {
+            Self::Present
+        } else {
+            Self::Absent
+        }
+    }
+}
+
+impl From<OpenReference> for bool {
+    fn from(value: OpenReference) -> Self {
+        value == OpenReference::Present
+    }
+}
+
+impl From<OpenReference> for u8 {
+    fn from(value: OpenReference) -> Self {
+        Self::from(bool::from(value))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AuthorityKeyPresence {
+    Absent,
+    Present,
+}
+
+impl From<bool> for AuthorityKeyPresence {
+    fn from(value: bool) -> Self {
+        if value {
+            Self::Present
+        } else {
+            Self::Absent
+        }
+    }
+}
+
+impl From<AuthorityKeyPresence> for bool {
+    fn from(value: AuthorityKeyPresence) -> Self {
+        value == AuthorityKeyPresence::Present
+    }
+}
+
+impl From<AuthorityKeyPresence> for u8 {
+    fn from(value: AuthorityKeyPresence) -> Self {
+        Self::from(bool::from(value))
+    }
+}
+
 /// Exact account leaf material committed by `lx_account_registry_root`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CanonicalAccountLeaf {
@@ -38,13 +150,13 @@ pub struct CanonicalAccountLeaf {
     pub kind: u8,
     pub balance: u128,
     pub asset_id: [u8; 32],
-    pub has_asset: bool,
+    pub has_asset: AssetPresence,
     pub next_sequence: u64,
     pub created_at_sequence: u64,
-    pub frozen: bool,
-    pub has_open_reference: bool,
+    pub frozen: AccountFreeze,
+    pub has_open_reference: OpenReference,
     pub authority_key: [u8; 32],
-    pub has_authority_key: bool,
+    pub has_authority_key: AuthorityKeyPresence,
 }
 
 /// Canonical proof shape used by the account, universal and module-root trees.
@@ -111,11 +223,17 @@ pub struct AccountStateHead {
 }
 
 pub trait AccountStateJournal {
+    /// # Errors
+    ///
+    /// Returns journal lookup or receipt-availability errors.
     fn account_state_head(
         &self,
         receipt_digest: [u8; 32],
     ) -> Result<AccountStateHead, AccountStateError>;
 
+    /// # Errors
+    ///
+    /// Returns journal lookup or current-head availability errors.
     fn current_account_state_head(&self) -> Result<AccountStateHead, AccountStateError>;
 }
 
@@ -127,6 +245,9 @@ pub struct JournalAccountStateAuthority<J> {
 }
 
 impl<J: AccountStateJournal> JournalAccountStateAuthority<J> {
+    /// # Errors
+    ///
+    /// Refuses a zero observation time or staleness limit.
     pub fn new(journal: J, now: u64, staleness_limit: u64) -> Result<Self, AccountStateError> {
         if now == 0 || staleness_limit == 0 {
             return Err(AccountStateError::InvalidFreshness);
@@ -176,9 +297,17 @@ pub enum AccountStateError {
     StaleRead,
     InvalidFreshness,
     InvalidAccountLeaf,
-    MissingAccount { account_id: [u8; 32] },
-    DuplicateAccount { account_id: [u8; 32] },
-    AccountMismatch { account_id: [u8; 32] },
+    /// A state-leaf key or value exceeds the canonical `u32::MAX` byte length.
+    StateLeafTooLong,
+    MissingAccount {
+        account_id: [u8; 32],
+    },
+    DuplicateAccount {
+        account_id: [u8; 32],
+    },
+    AccountMismatch {
+        account_id: [u8; 32],
+    },
     ProofTooDeep,
     InvalidProof,
     AccountRootMismatch,
@@ -210,6 +339,9 @@ impl Display for AccountStateError {
             Self::StaleRead => formatter.write_str("account-state head is stale"),
             Self::InvalidFreshness => formatter.write_str("account snapshot freshness is invalid"),
             Self::InvalidAccountLeaf => formatter.write_str("canonical account leaf is invalid"),
+            Self::StateLeafTooLong => {
+                formatter.write_str("state-leaf key or value exceeds u32::MAX bytes")
+            }
             Self::MissingAccount { account_id } => write!(
                 formatter,
                 "program account {account_id:02x?} is missing from the account snapshot"
@@ -296,7 +428,7 @@ impl ProgramValueAccountBinding {
     ///
     /// Refuses a non-canonical version-two registration record.
     pub fn primary_commitment(&self) -> Result<[u8; 32], AccountStateError> {
-        Ok(state_leaf_hash(&self.primary_key(), &self.primary_value()?))
+        state_leaf_hash(&self.primary_key(), &self.primary_value()?)
     }
 }
 
@@ -321,11 +453,11 @@ impl CanonicalAccountLeaf {
     fn validate_module_value(&self) -> Result<(), AccountStateError> {
         if self.account_id == [0; 32]
             || self.asset_id == [0; 32]
-            || !self.has_asset
+            || !bool::from(self.has_asset)
             || self.kind != MODULE_VALUE_KIND
             || self.name != program_account_name(self.account_id)
             || self.name.len() > MAX_ACCOUNT_NAME_BYTES
-            || self.has_authority_key
+            || bool::from(self.has_authority_key)
             || self.authority_key != [0; 32]
         {
             return Err(AccountStateError::InvalidAccountLeaf);
@@ -344,6 +476,10 @@ impl CanonicalAccountLeaf {
         self.validate_module_value()?;
         let name_length =
             u16::try_from(self.name.len()).map_err(|_| AccountStateError::InvalidAccountLeaf)?;
+        Ok(self.encode_value(name_length))
+    }
+
+    fn encode_value(&self, name_length: u16) -> Vec<u8> {
         let mut value = Vec::with_capacity(103 + self.name.len());
         value.extend_from_slice(&name_length.to_be_bytes());
         value.extend_from_slice(&self.name);
@@ -357,7 +493,7 @@ impl CanonicalAccountLeaf {
         value.push(u8::from(self.has_open_reference));
         value.extend_from_slice(&self.authority_key);
         value.push(u8::from(self.has_authority_key));
-        Ok(value)
+        value
     }
 
     /// Computes the exact leaf commitment used by the C account tree.
@@ -366,7 +502,7 @@ impl CanonicalAccountLeaf {
     ///
     /// Refuses a record which is not a canonical `MODULE_VALUE` account.
     pub fn commitment(&self) -> Result<[u8; 32], AccountStateError> {
-        Ok(state_leaf_hash(&self.key(), &self.value()?))
+        state_leaf_hash(&self.key(), &self.value()?)
     }
 }
 
@@ -384,6 +520,9 @@ impl VerifiedAccountSnapshot {
         self.verify_with_head(authority, true)
     }
 
+    /// # Errors
+    ///
+    /// Refuses stale, unverified, malformed or root-mismatched historical evidence.
     pub fn verify_historical(
         &self,
         authority: &JournalAccountStateAuthority<impl AccountStateJournal>,
@@ -411,17 +550,17 @@ impl VerifiedAccountSnapshot {
             return Err(AccountStateError::InvalidFreshness);
         }
         authority.verify(self, current)?;
-        let account_tree_leaf = state_leaf_hash(ACCOUNT_TREE_KEY, &self.account_root);
+        let account_tree_leaf = account_tree_commitment(self.account_root);
         verify_state_proof(
             account_tree_leaf,
             &self.account_tree_proof,
             self.universal_root,
         )
         .map_err(|error| proof_error(error, AccountStateError::UniversalRootMismatch))?;
-        let universal_leaf = state_leaf_hash(&0_u16.to_be_bytes(), &self.universal_root);
+        let universal_leaf = universal_root_commitment(self.universal_root);
         verify_state_proof(universal_leaf, &self.universal_root_proof, self.state_root)
             .map_err(|error| proof_error(error, AccountStateError::StateRootMismatch))?;
-        let programs_leaf = state_leaf_hash(&PROGRAMS_MODULE_ID.to_be_bytes(), &self.programs_root);
+        let programs_leaf = programs_root_commitment(self.programs_root);
         verify_state_proof(programs_leaf, &self.programs_root_proof, self.state_root)
             .map_err(|error| proof_error(error, AccountStateError::StateRootMismatch))?;
         if self.bindings.len() > MAX_PROGRAM_VALUE_ACCOUNTS {
@@ -486,6 +625,9 @@ impl VerifiedAccountSnapshot {
         self.resolve_program_with_head(program, bindings, authority, true)
     }
 
+    /// # Errors
+    ///
+    /// Refuses invalid historical proofs and missing, extra or mismatched account bindings.
     pub fn resolve_program_historical(
         &self,
         program: ProgramId,
@@ -551,7 +693,7 @@ impl VerifiedAccountSnapshot {
                 account_id: binding.account_id,
                 asset_id: binding.asset_id,
                 balance: account.leaf.balance,
-                frozen: account.leaf.frozen,
+                frozen: bool::from(account.leaf.frozen),
                 observed_sequence: self.freshness.observed_sequence,
                 receipt_digest: self.receipt_digest,
                 state_root: self.state_root,
@@ -573,19 +715,35 @@ fn program_account_name(account_id: [u8; 32]) -> Vec<u8> {
     name
 }
 
-fn state_leaf_hash(key: &[u8], value: &[u8]) -> [u8; 32] {
+fn state_leaf_lengths(key: usize, value: usize) -> Result<(u32, u32), AccountStateError> {
+    let key = u32::try_from(key).map_err(|_| AccountStateError::StateLeafTooLong)?;
+    let value = u32::try_from(value).map_err(|_| AccountStateError::StateLeafTooLong)?;
+    Ok((key, value))
+}
+
+fn state_leaf_hash(key: &[u8], value: &[u8]) -> Result<[u8; 32], AccountStateError> {
+    let lengths = state_leaf_lengths(key.len(), value.len())?;
+    Ok(state_leaf_hash_with_lengths(key, value, lengths))
+}
+
+fn state_leaf_hash_with_lengths(key: &[u8], value: &[u8], lengths: (u32, u32)) -> [u8; 32] {
     let mut material = Vec::with_capacity(STATE_LEAF_DOMAIN.len() + 8 + key.len() + value.len());
     material.extend_from_slice(STATE_LEAF_DOMAIN);
-    material.extend_from_slice(&(key.len() as u32).to_be_bytes());
-    material.extend_from_slice(&(value.len() as u32).to_be_bytes());
+    material.extend_from_slice(&lengths.0.to_be_bytes());
+    material.extend_from_slice(&lengths.1.to_be_bytes());
     material.extend_from_slice(key);
     material.extend_from_slice(value);
     sha256(&material)
 }
 
 /// Computes a canonical state leaf from its exact key and value bytes.
-#[must_use]
-pub fn state_leaf_commitment(key: &[u8], value: &[u8]) -> [u8; 32] {
+/// Each slice is bounded to `u32::MAX` bytes by the canonical length encoding.
+///
+/// # Errors
+///
+/// Returns [`AccountStateError::StateLeafTooLong`] if either slice exceeds
+/// `u32::MAX` bytes, before allocating or hashing the leaf material.
+pub fn state_leaf_commitment(key: &[u8], value: &[u8]) -> Result<[u8; 32], AccountStateError> {
     state_leaf_hash(key, value)
 }
 
@@ -595,13 +753,15 @@ pub fn state_leaf_commitment(key: &[u8], value: &[u8]) -> [u8; 32] {
 /// # Errors
 ///
 /// Refuses malformed proof geometry, an excessive path, or a root mismatch.
+/// Returns [`AccountStateError::StateLeafTooLong`] if the key or value exceeds
+/// the canonical `u32::MAX` byte bound, before allocating or hashing material.
 pub fn verify_state_membership(
     key: &[u8],
     value: &[u8],
     proof: &StateProof,
     expected_root: [u8; 32],
 ) -> Result<(), AccountStateError> {
-    verify_state_proof(state_leaf_hash(key, value), proof, expected_root)
+    verify_state_proof(state_leaf_hash(key, value)?, proof, expected_root)
 }
 
 fn state_node_hash(left: [u8; 32], right: [u8; 32]) -> [u8; 32] {
@@ -621,19 +781,19 @@ pub fn state_node_commitment(left: [u8; 32], right: [u8; 32]) -> [u8; 32] {
 /// Computes the universal-subtree leaf which commits the account-tree root.
 #[must_use]
 pub fn account_tree_commitment(account_root: [u8; 32]) -> [u8; 32] {
-    state_leaf_hash(ACCOUNT_TREE_KEY, &account_root)
+    state_leaf_hash_with_lengths(ACCOUNT_TREE_KEY, &account_root, (12, 32))
 }
 
 /// Computes the outer state leaf for universal module id zero.
 #[must_use]
 pub fn universal_root_commitment(universal_root: [u8; 32]) -> [u8; 32] {
-    state_leaf_hash(&0_u16.to_be_bytes(), &universal_root)
+    state_leaf_hash_with_lengths(&0_u16.to_be_bytes(), &universal_root, (2, 32))
 }
 
 /// Computes the outer state leaf for the Programs module id.
 #[must_use]
 pub fn programs_root_commitment(programs_root: [u8; 32]) -> [u8; 32] {
-    state_leaf_hash(&PROGRAMS_MODULE_ID.to_be_bytes(), &programs_root)
+    state_leaf_hash_with_lengths(&PROGRAMS_MODULE_ID.to_be_bytes(), &programs_root, (2, 32))
 }
 
 fn proof_depth(mut count: u32) -> usize {
@@ -686,5 +846,145 @@ fn verify_state_proof(
         Ok(())
     } else {
         Err(AccountStateError::InvalidProof)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn public_state_leaf_apis_refuse_real_over_bound_slices() {
+        let length = usize::try_from(u64::from(u32::MAX) + 1)
+            .unwrap_or_else(|error| panic!("over-bound length fits 64-bit usize: {error}"));
+        let bytes = vec![0_u8; length];
+        assert_eq!(bytes.len(), length);
+        let proof = StateProof {
+            leaf_index: 0,
+            leaf_count: 1,
+            siblings: Vec::new(),
+        };
+        for (key, value) in [(bytes.as_slice(), &[][..]), (&[][..], bytes.as_slice())] {
+            assert_eq!(
+                state_leaf_commitment(key, value),
+                Err(AccountStateError::StateLeafTooLong)
+            );
+            assert_eq!(
+                verify_state_membership(key, value, &proof, [0; 32]),
+                Err(AccountStateError::StateLeafTooLong)
+            );
+        }
+    }
+
+    #[test]
+    fn state_leaf_length_conversion_enforces_each_bound_without_allocation() {
+        assert_eq!(state_leaf_lengths(0, 0), Ok((0, 0)));
+        let maximum = usize::try_from(u32::MAX)
+            .unwrap_or_else(|error| panic!("u32 length fits target usize: {error}"));
+        assert_eq!(
+            state_leaf_lengths(maximum, maximum),
+            Ok((u32::MAX, u32::MAX))
+        );
+        if let Some(excessive) = maximum.checked_add(1) {
+            assert_eq!(
+                state_leaf_lengths(excessive, 0),
+                Err(AccountStateError::StateLeafTooLong)
+            );
+            assert_eq!(
+                state_leaf_lengths(0, excessive),
+                Err(AccountStateError::StateLeafTooLong)
+            );
+            assert_eq!(
+                state_leaf_lengths(excessive, excessive),
+                Err(AccountStateError::StateLeafTooLong)
+            );
+        }
+    }
+
+    #[test]
+    fn bounded_state_leaf_membership_preserves_commitments_and_refusals() {
+        let root = [7; 32];
+        for (key, expected) in [
+            (ACCOUNT_TREE_KEY.as_slice(), account_tree_commitment(root)),
+            (
+                0_u16.to_be_bytes().as_slice(),
+                universal_root_commitment(root),
+            ),
+            (
+                PROGRAMS_MODULE_ID.to_be_bytes().as_slice(),
+                programs_root_commitment(root),
+            ),
+        ] {
+            assert_eq!(state_leaf_commitment(key, &root), Ok(expected));
+            let proof = StateProof {
+                leaf_index: 0,
+                leaf_count: 1,
+                siblings: Vec::new(),
+            };
+            assert_eq!(
+                verify_state_membership(key, &root, &proof, expected),
+                Ok(())
+            );
+            assert_eq!(
+                verify_state_membership(key, &[8; 32], &proof, expected),
+                Err(AccountStateError::InvalidProof)
+            );
+        }
+        assert!(state_leaf_commitment(&[], &[]).is_ok());
+    }
+
+    fn old_account_value(leaf: &CanonicalAccountLeaf, flags: [bool; 4]) -> Vec<u8> {
+        let mut value = Vec::new();
+        let name_length = u16::try_from(leaf.name.len())
+            .unwrap_or_else(|error| panic!("account name length: {error}"));
+        value.extend_from_slice(&name_length.to_be_bytes());
+        value.extend_from_slice(&leaf.name);
+        value.push(leaf.kind);
+        value.extend_from_slice(&leaf.balance.to_be_bytes());
+        value.extend_from_slice(&leaf.asset_id);
+        value.push(u8::from(flags[0]));
+        value.extend_from_slice(&leaf.next_sequence.to_be_bytes());
+        value.extend_from_slice(&leaf.created_at_sequence.to_be_bytes());
+        value.push(u8::from(flags[1]));
+        value.push(u8::from(flags[2]));
+        value.extend_from_slice(&leaf.authority_key);
+        value.push(u8::from(flags[3]));
+        value
+    }
+
+    #[test]
+    fn all_account_flag_combinations_preserve_canonical_bytes_and_validation() {
+        for bits in 0_u8..16 {
+            let flags = [bits & 1 != 0, bits & 2 != 0, bits & 4 != 0, bits & 8 != 0];
+            let leaf = CanonicalAccountLeaf {
+                account_id: [1; 32],
+                name: program_account_name([1; 32]),
+                kind: MODULE_VALUE_KIND,
+                balance: 0x1234,
+                asset_id: [2; 32],
+                has_asset: flags[0].into(),
+                next_sequence: 7,
+                created_at_sequence: 3,
+                frozen: flags[1].into(),
+                has_open_reference: flags[2].into(),
+                authority_key: [0; 32],
+                has_authority_key: flags[3].into(),
+            };
+            let expected = old_account_value(&leaf, flags);
+            let name_length = u16::try_from(leaf.name.len())
+                .unwrap_or_else(|error| panic!("account name length: {error}"));
+            assert_eq!(leaf.encode_value(name_length), expected, "flags {bits}");
+            assert_eq!(bool::from(leaf.frozen), flags[1]);
+            assert_eq!(
+                leaf.value(),
+                if flags[0] && !flags[3] {
+                    Ok(expected)
+                } else {
+                    Err(AccountStateError::InvalidAccountLeaf)
+                },
+                "flags {bits}"
+            );
+        }
     }
 }

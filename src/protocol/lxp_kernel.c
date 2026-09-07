@@ -20,6 +20,9 @@ struct lxp_kernel_batch_snapshot {
     lxp_kernel kernel;
     lxp_state_journal journal;
     lx_programs_transfer_runtime programs_runtime;
+    lx_asset_runtime asset_runtime;
+    lx_asset_record *asset_records;
+    bool asset_runtime_bound;
     lxp_transfer_asset_state *assets;
     lx_programs_fee_schedule fee_schedule;
     lx_programs_metering_schedule metering_schedule;
@@ -52,6 +55,8 @@ struct lxp_kernel_prepared_batch {
     uint8_t **event_bytes;
     uint8_t **artifact_bytes;
     uint8_t publication_digest[32];
+    uint8_t *maintenance_storage;
+    lxp_byte_span maintenance;
     lxp_kernel_batch_boundary base_boundary;
     lxp_kernel_batch_boundary final_boundary;
     size_t count;
@@ -167,6 +172,7 @@ static void kernel_snapshot_release(lxp_kernel_batch_snapshot *snapshot)
         free(snapshot->kernel.blobs[index].bytes);
         snapshot->kernel.blobs[index].bytes = NULL;
     }
+    free(snapshot->asset_records);
     free(snapshot->assets);
     snapshot->assets = NULL;
     lxp_state_snapshot_destroy(snapshot->state);
@@ -217,13 +223,33 @@ static lxp_result kernel_snapshot_finish(
     snapshot->kernel.apply_transfer_set = lxp_kernel_canonical_ledger_apply;
     snapshot->kernel.check_supply = NULL;
     snapshot->kernel.observe_commit = NULL;
+    snapshot->kernel.observe_maintenance = NULL;
     snapshot->kernel.commit_observer_context = NULL;
     snapshot->kernel.publication_poisoned = false;
     snapshot->kernel.poisoned_sequence = 0U;
     (void)memset(snapshot->kernel.poisoned_activity_id, 0, 32U);
     (void)memset(snapshot->kernel.poisoned_state_root, 0, 32U);
+    if (snapshot->kernel.module_runtime[LXP_MODULE_ASSET] != NULL) {
+        const lx_asset_runtime *asset = snapshot->kernel.module_runtime[LXP_MODULE_ASSET];
+        if (asset->accounts != runtime->accounts || asset->assets == NULL ||
+            asset->asset_count == 0U || asset->asset_count > LX_ASSET_REGISTRY_CAPACITY ||
+            asset->transfer_assets != runtime->assets ||
+            asset->transfer_asset_count != runtime->asset_count)
+            return LXP_ERR_CONTEXT_MISMATCH;
+        snapshot->asset_runtime = *asset;
+        snapshot->asset_records = malloc(asset->asset_count * sizeof(*snapshot->asset_records));
+        if (snapshot->asset_records == NULL) return LXP_ERR_ARENA_EXHAUSTED;
+        (void)memcpy(snapshot->asset_records, asset->assets,
+                     asset->asset_count * sizeof(*snapshot->asset_records));
+        snapshot->asset_runtime.accounts = lxp_state_snapshot_accounts_for_prepare(snapshot->state);
+        snapshot->asset_runtime.assets = snapshot->asset_records;
+        snapshot->asset_runtime.transfer_assets = snapshot->assets;
+        snapshot->asset_runtime_bound = true;
+    }
     (void)memset(snapshot->kernel.module_runtime, 0,
                  sizeof(snapshot->kernel.module_runtime));
+    if (snapshot->asset_runtime_bound)
+        snapshot->kernel.module_runtime[LXP_MODULE_ASSET] = &snapshot->asset_runtime;
     snapshot->programs_runtime = *runtime;
     snapshot->programs_runtime.accounts =
         lxp_state_snapshot_accounts_for_prepare(snapshot->state);
@@ -1609,7 +1635,8 @@ typedef struct legacy_compact_receipt {
 
 enum {
     COMPACT_RECEIPT_V2_BYTES = 560,
-    COMPACT_RECEIPT_V3_BYTES = 564
+    COMPACT_RECEIPT_V3_BYTES = 564,
+    COMPACT_RECEIPT_V4_BYTES = 596
 };
 static const uint8_t compact_receipt_v2_magic[5] = {
     'L', 'X', 'R', 'C', '2'
@@ -1617,6 +1644,8 @@ static const uint8_t compact_receipt_v2_magic[5] = {
 static const uint8_t compact_receipt_v3_magic[5] = {
     'L', 'X', 'R', 'C', '3'
 };
+
+static const uint8_t compact_receipt_v4_magic[5] = {'L', 'X', 'R', 'C', '4'};
 
 static void compact_write_u16(uint8_t *bytes, uint16_t value)
 {
@@ -1663,12 +1692,13 @@ static lxp_result compact_receipt_encode(
     const lxp_receipt *receipt, bool metered, uint8_t *bytes)
 {
     const lxp_program_outcome *outcome;
+    bool applied = receipt != NULL && receipt->program_outcome.encoding_version == 4U;
     size_t offset = 0U;
     size_t index;
     if (receipt == NULL || bytes == NULL ||
         !lxp_protocol_version_supported(receipt->protocol_version) ||
         (metered && (!receipt->program_outcome.present ||
-                     receipt->program_outcome.encoding_version != 3U)) ||
+                     receipt->program_outcome.encoding_version != (applied ? 4U : 3U))) ||
         (!metered && receipt->program_outcome.present))
         return LXP_ERR_NON_CANONICAL;
     outcome = &receipt->program_outcome;
@@ -1690,7 +1720,7 @@ static lxp_result compact_receipt_encode(
     if (compact_status != LXP_OK) return compact_status; \
     offset += 16U; \
 } while (0)
-    COMPACT_COPY(metered ? compact_receipt_v3_magic :
+    COMPACT_COPY(applied ? compact_receipt_v4_magic : metered ? compact_receipt_v3_magic :
                            compact_receipt_v2_magic,
                  sizeof(compact_receipt_v2_magic));
     COMPACT_U16(receipt->protocol_version);
@@ -1730,12 +1760,13 @@ static lxp_result compact_receipt_encode(
     COMPACT_COPY(outcome->call_graph_root, 32U);
     COMPACT_COPY(outcome->terminal_payload_root, 32U);
     COMPACT_COPY(outcome->transfer_root, 32U);
+    if (applied) COMPACT_COPY(outcome->applied_legs_digest, 32U);
 #undef COMPACT_U128
 #undef COMPACT_U64
 #undef COMPACT_U32
 #undef COMPACT_U16
 #undef COMPACT_COPY
-    return offset == (metered ? COMPACT_RECEIPT_V3_BYTES :
+    return offset == (applied ? COMPACT_RECEIPT_V4_BYTES : metered ? COMPACT_RECEIPT_V3_BYTES :
                                 COMPACT_RECEIPT_V2_BYTES) ?
         LXP_OK : LXP_FATAL_INVARIANT;
 }
@@ -1745,12 +1776,14 @@ static lxp_result compact_receipt_decode(
     lxp_receipt *receipt)
 {
     lxp_program_outcome *outcome;
+    bool applied = bytes != NULL && length == COMPACT_RECEIPT_V4_BYTES &&
+        memcmp(bytes, compact_receipt_v4_magic, sizeof(compact_receipt_v4_magic)) == 0;
     size_t offset = 0U;
     size_t index;
     if (bytes == NULL || receipt == NULL ||
-        length != (metered ? COMPACT_RECEIPT_V3_BYTES :
+        length != (applied ? COMPACT_RECEIPT_V4_BYTES : metered ? COMPACT_RECEIPT_V3_BYTES :
                              COMPACT_RECEIPT_V2_BYTES) ||
-        memcmp(bytes, metered ? compact_receipt_v3_magic :
+        memcmp(bytes, applied ? compact_receipt_v4_magic : metered ? compact_receipt_v3_magic :
                                 compact_receipt_v2_magic,
                sizeof(compact_receipt_v2_magic)) != 0)
         return LXP_FATAL_REPLAY_DIVERGENCE;
@@ -1820,25 +1853,28 @@ static lxp_result compact_receipt_decode(
     COMPACT_READ_COPY(outcome->call_graph_root, 32U);
     COMPACT_READ_COPY(outcome->terminal_payload_root, 32U);
     COMPACT_READ_COPY(outcome->transfer_root, 32U);
+    if (applied) COMPACT_READ_COPY(outcome->applied_legs_digest, 32U);
 #undef COMPACT_READ_U128
 #undef COMPACT_READ_U64
 #undef COMPACT_READ_U32
 #undef COMPACT_READ_U16
 #undef COMPACT_READ_COPY
     if (offset != length ||
+        (applied && (!metered || !outcome->present || outcome->encoding_version != 4U ||
+                     receipt->protocol_version != LXP_PROTOCOL_VERSION_STATE_COMMITMENT)) ||
         !lxp_protocol_version_supported(receipt->protocol_version) ||
         (outcome->present && outcome->encoding_version != 1U &&
          outcome->encoding_version != 2U &&
-         outcome->encoding_version != 3U) ||
+         outcome->encoding_version != 3U && outcome->encoding_version != 4U) ||
         (outcome->present && receipt->module_id != LXP_MODULE_PROGRAMS) ||
         (lxp_protocol_version_uses_occupancy(receipt->protocol_version) &&
          outcome->present && outcome->encoding_version != 2U &&
-         outcome->encoding_version != 3U) ||
+         outcome->encoding_version != 3U && outcome->encoding_version != 4U) ||
         (receipt->protocol_version == LXP_PROTOCOL_VERSION_LEGACY &&
          outcome->present && outcome->encoding_version != 1U &&
-         outcome->encoding_version != 3U) ||
-        (metered && outcome->present && outcome->encoding_version != 3U) ||
-        (!metered && outcome->encoding_version == 3U) ||
+         outcome->encoding_version != 3U && outcome->encoding_version != 4U) ||
+        (metered && outcome->present && outcome->encoding_version != (applied ? 4U : 3U)) ||
+        (!metered && outcome->encoding_version >= 3U) ||
         (outcome->present && outcome->metering_schedule_version == 0U))
         return LXP_FATAL_REPLAY_DIVERGENCE;
     if (outcome->present &&
@@ -1854,6 +1890,9 @@ static lxp_result receipt_restore_compact(const uint8_t *bytes, size_t length,
     const compact_receipt *compact;
     if (bytes == NULL || receipt == NULL)
         return LXP_FATAL_REPLAY_DIVERGENCE;
+    if (length == COMPACT_RECEIPT_V4_BYTES &&
+        memcmp(bytes, compact_receipt_v4_magic, sizeof(compact_receipt_v4_magic)) == 0)
+        return compact_receipt_decode(bytes, length, true, receipt);
     if (length == COMPACT_RECEIPT_V3_BYTES &&
         memcmp(bytes, compact_receipt_v3_magic,
                sizeof(compact_receipt_v3_magic)) == 0)
@@ -2007,11 +2046,12 @@ static lxp_result receipt_store(lxp_state_journal *journal,
                                 const lxp_activity *activity,
                                 const lxp_receipt *receipt)
 {
-    uint8_t compact[COMPACT_RECEIPT_V3_BYTES];
+    uint8_t compact[COMPACT_RECEIPT_V4_BYTES];
     lxp_result status;
     if (!lxp_protocol_version_supported(receipt->protocol_version) ||
         (receipt->program_outcome.present &&
-         receipt->program_outcome.encoding_version != 3U))
+         receipt->program_outcome.encoding_version != 3U &&
+         receipt->program_outcome.encoding_version != 4U))
         return LXP_ERR_VERSION_UNSUPPORTED;
     if (receipt->protocol_version == LXP_PROTOCOL_VERSION_LEGACY &&
         !receipt->program_outcome.present) {
@@ -2043,7 +2083,8 @@ static lxp_result receipt_store(lxp_state_journal *journal,
                                   activity->actor_did.length,
                                   activity->idempotency_key,
                                   compact,
-                                  receipt->program_outcome.present ?
+                                  receipt->program_outcome.encoding_version == 4U ?
+                                      COMPACT_RECEIPT_V4_BYTES : receipt->program_outcome.present ?
                                       COMPACT_RECEIPT_V3_BYTES :
                                       COMPACT_RECEIPT_V2_BYTES);
 }
@@ -2052,21 +2093,23 @@ lxp_result lxp_kernel_idempotency_state_value(
     const uint8_t *bytes, size_t length, uint8_t *output, size_t capacity)
 {
     lxp_receipt *receipt;
-    bool metered;
+    bool metered, applied;
     lxp_result status;
     if (bytes == NULL || output == NULL || length > capacity)
         return LXP_ERR_NON_CANONICAL;
     if (length < sizeof(compact_receipt_v2_magic) + 2U ||
         (memcmp(bytes, compact_receipt_v2_magic, sizeof(compact_receipt_v2_magic)) != 0 &&
-         memcmp(bytes, compact_receipt_v3_magic, sizeof(compact_receipt_v3_magic)) != 0) ||
+         memcmp(bytes, compact_receipt_v3_magic, sizeof(compact_receipt_v3_magic)) != 0 &&
+         memcmp(bytes, compact_receipt_v4_magic, sizeof(compact_receipt_v4_magic)) != 0) ||
         compact_read_u16(bytes + sizeof(compact_receipt_v2_magic)) !=
             LXP_PROTOCOL_VERSION_STATE_COMMITMENT) {
         (void)memcpy(output, bytes, length);
         return LXP_OK;
     }
-    metered = memcmp(bytes, compact_receipt_v3_magic,
+    applied = memcmp(bytes, compact_receipt_v4_magic, sizeof(compact_receipt_v4_magic)) == 0;
+    metered = applied || memcmp(bytes, compact_receipt_v3_magic,
                      sizeof(compact_receipt_v3_magic)) == 0;
-    if (length != (metered ? COMPACT_RECEIPT_V3_BYTES : COMPACT_RECEIPT_V2_BYTES))
+    if (length != (applied ? COMPACT_RECEIPT_V4_BYTES : metered ? COMPACT_RECEIPT_V3_BYTES : COMPACT_RECEIPT_V2_BYTES))
         return LXP_ERR_NON_CANONICAL;
     receipt = (lxp_receipt *)malloc(sizeof(*receipt));
     if (receipt == NULL) return LXP_ERR_ARENA_EXHAUSTED;
@@ -2163,7 +2206,7 @@ static lxp_result synthesize_program_call_failure(
     static const uint8_t failure_domain[] =
         "LXP/programs/pre-runtime-failure/v1";
     uint8_t payload_hash[32];
-    uint8_t failure_input[sizeof(failure_domain) + 32U + 32U + 4U + 4U + 4U];
+    uint8_t failure_input[sizeof(failure_domain) + 32U + 32U + 4U + 4U + 4U + 1U + 32U];
     size_t offset = 0U;
     lxp_result status;
     if (activity == NULL || activity_id == NULL || execution == NULL ||
@@ -2175,7 +2218,11 @@ static lxp_result synthesize_program_call_failure(
     if (status != LXP_OK) return status;
     (void)memset(outcome, 0, sizeof(*outcome));
     outcome->present = true;
-    outcome->encoding_version = 3U;
+    outcome->encoding_version = activity->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT ? 4U : 3U;
+    if (outcome->encoding_version == 4U) {
+        status = lxp_hash_sha256("", 0U, outcome->applied_legs_digest);
+        if (status != LXP_OK) return status;
+    }
     outcome->terminal_kind = LXP_PROGRAM_TERMINAL_FAILURE;
     outcome->result_code = module_result;
     outcome->runtime_version = 1U;
@@ -2206,6 +2253,11 @@ static lxp_result synthesize_program_call_failure(
     offset += 4U;
     store_u32(failure_input + offset, execution->parameter_version);
     offset += 4U;
+    if (outcome->encoding_version == 4U) {
+        failure_input[offset++] = outcome->encoding_version;
+        (void)memcpy(failure_input + offset, outcome->applied_legs_digest, 32U);
+        offset += 32U;
+    }
     return lxp_hash_domain(LXP_DOMAIN_CONTEXT_HASH, failure_input, offset,
                            outcome->terminal_payload_root);
 }
@@ -2428,6 +2480,10 @@ static lxp_result kernel_snapshot_replace(
     free(replacement);
     target->kernel.state = lxp_state_snapshot_store_for_prepare(target->state);
     target->kernel.journal = &target->journal;
+    if (target->asset_runtime_bound) {
+        target->asset_runtime.accounts = lxp_state_snapshot_accounts_for_prepare(target->state);
+        target->kernel.module_runtime[LXP_MODULE_ASSET] = &target->asset_runtime;
+    }
     target->programs_runtime.accounts =
         lxp_state_snapshot_accounts_for_prepare(target->state);
     target->programs_runtime.metering_schedule_context = target;
@@ -2668,7 +2724,7 @@ static bool kernel_snapshot_matches_live(
 }
 
 static lxp_result kernel_settled_snapshot_validate(
-    const lxp_kernel_batch_snapshot *settled)
+    const lxp_kernel_batch_snapshot *settled, lxp_byte_span encoded_maintenance)
 {
     const lxp_state_store *store;
     lxp_receipt latest;
@@ -2740,19 +2796,34 @@ static lxp_result kernel_settled_snapshot_validate(
             have_latest = true;
         }
     }
-    if (have_latest &&
-        (latest.global_sequence == UINT64_MAX ||
-         latest.global_sequence + 1U != store->next_sequence ||
-         lxp_ct_memcmp(latest.resulting_state_root,
-                       settled->kernel.current_state_root, 32U) != 0))
-        return LXP_FATAL_INVARIANT;
+    if (encoded_maintenance.length != 0U) {
+        lxp_programs_occupancy_receipt maintenance;
+        status = lxp_programs_occupancy_receipt_decode(encoded_maintenance.bytes,
+            encoded_maintenance.length, &maintenance);
+        if (status != LXP_OK) return status;
+        if (!have_latest || latest.global_sequence == UINT64_MAX ||
+            latest.global_sequence + 1U != maintenance.global_sequence ||
+            maintenance.global_sequence == UINT64_MAX ||
+            maintenance.global_sequence + 1U != store->next_sequence ||
+            lxp_ct_memcmp(latest.resulting_state_root, maintenance.previous_state_root, 32U) != 0 ||
+            lxp_ct_memcmp(maintenance.resulting_state_root, settled->kernel.current_state_root, 32U) != 0 ||
+            lxp_ct_memcmp(maintenance.resulting_state_root, canonical_root, 32U) != 0)
+            return LXP_FATAL_INVARIANT;
+    } else {
+        if (have_latest &&
+            (latest.global_sequence == UINT64_MAX ||
+             latest.global_sequence + 1U != store->next_sequence ||
+             lxp_ct_memcmp(latest.resulting_state_root,
+                           settled->kernel.current_state_root, 32U) != 0))
+            return LXP_FATAL_INVARIANT;
+    }
     return LXP_OK;
 }
 
-lxp_result lxp_kernel_batch_snapshot_commit(
+static lxp_result kernel_batch_snapshot_commit(
     lxp_kernel *kernel, lxp_identity_store *identities,
     const lxp_kernel_batch_snapshot *base,
-    const lxp_kernel_batch_snapshot *settled)
+    const lxp_kernel_batch_snapshot *settled, lxp_byte_span maintenance)
 {
     uint8_t *blob_bytes[LXP_KERNEL_MAX_BLOBS] = {NULL};
     lxp_state_publication_guard *guard = NULL;
@@ -2767,7 +2838,7 @@ lxp_result lxp_kernel_batch_snapshot_commit(
         return LXP_ERR_NON_CANONICAL;
     if (!kernel_snapshot_matches_live(base, kernel, identities))
         return LXP_ERR_CONTEXT_MISMATCH;
-    status = kernel_settled_snapshot_validate(settled);
+    status = kernel_settled_snapshot_validate(settled, maintenance);
     if (status != LXP_OK) return status;
     for (index = 0U; index < settled->kernel.blob_count; ++index) {
         if (settled->kernel.blobs[index].length == 0U ||
@@ -2836,6 +2907,15 @@ lxp_result lxp_kernel_batch_snapshot_commit(
                  settled->kernel.current_state_root, 32U);
     lxp_state_snapshot_publish_guarded(guard);
     return lxp_state_publication_guard_end(guard);
+}
+
+lxp_result lxp_kernel_batch_snapshot_commit(
+    lxp_kernel *kernel, lxp_identity_store *identities,
+    const lxp_kernel_batch_snapshot *base,
+    const lxp_kernel_batch_snapshot *settled)
+{
+    return kernel_batch_snapshot_commit(kernel, identities, base, settled,
+        (lxp_byte_span){NULL, 0U});
 }
 
 typedef struct lxp_kernel_prepare_worker {
@@ -2908,6 +2988,36 @@ lxp_result lxp_kernel_batch_publication_digest(
     return status;
 }
 
+lxp_result lxp_kernel_batch_publication_digest_maintenance(
+    const lxp_kernel_batch_boundary *base,
+    const lxp_kernel_batch_boundary *final,
+    const lxp_byte_span *activities, const lxp_byte_span *receipts,
+    const lxp_byte_span *events, size_t activity_count,
+    lxp_byte_span maintenance, uint8_t digest[32])
+{
+    static const uint8_t domain[] = "LXP/kernel/prepared-maintenance/v1";
+    lxp_programs_occupancy_receipt record;
+    lxp_result status;
+    if (maintenance.bytes == NULL || maintenance.length == 0U)
+        return LXP_ERR_NON_CANONICAL;
+    status = lxp_programs_occupancy_receipt_decode(
+        maintenance.bytes, maintenance.length, &record);
+    if (status != LXP_OK) return status;
+    if (base == NULL || final == NULL ||
+        activity_count > UINT64_MAX - base->next_sequence ||
+        record.global_sequence != base->next_sequence + activity_count ||
+        record.global_sequence == UINT64_MAX ||
+        final->next_sequence != record.global_sequence + 1U ||
+        lxp_ct_memcmp(record.resulting_state_root, final->receipt_state_root, 32U) != 0)
+        return LXP_ERR_CONTEXT_MISMATCH;
+    status = lxp_kernel_batch_publication_digest(
+        base, final, activities, receipts, events, activity_count, digest);
+    if (status == LXP_OK) status = level_token_mix(digest, domain, sizeof(domain));
+    if (status == LXP_OK)
+        status = level_token_mix(digest, maintenance.bytes, maintenance.length);
+    return status;
+}
+
 static lxp_result kernel_prepared_batch_digest(
     const lxp_activity *activities,
     const lxp_kernel_execution *executions,
@@ -2919,7 +3029,7 @@ static lxp_result kernel_prepared_batch_digest(
         lxp_state_snapshot_store(batch->settled->state);
     lxp_byte_span activity_bytes[LXP_PROGRAMS_SCHEDULE_MAX_ACTIVITIES];
     lxp_byte_span receipt_bytes[LXP_PROGRAMS_SCHEDULE_MAX_ACTIVITIES];
-    size_t marks[LXP_PROGRAMS_SCHEDULE_MAX_ACTIVITIES];
+    uint8_t *owned[LXP_PROGRAMS_SCHEDULE_MAX_ACTIVITIES][2] = {{NULL}};
     size_t index;
     lxp_result status;
     if (base_state == NULL || settled_state == NULL)
@@ -2937,29 +3047,250 @@ static lxp_result kernel_prepared_batch_digest(
             &batch->settled->kernel,
             batch->final_boundary.canonical_state_root);
     if (status != LXP_OK) return status;
-    for (index = 0U; index < batch->count; ++index)
-        marks[index] = lxp_arena_mark(executions[index].arena);
-    for (index = 0U; index < batch->count; ++index) {
-        status = lxp_activity_encode(&activities[index],
-                                     executions[index].arena,
-                                     &activity_bytes[index]);
+    for (index = 0U; status == LXP_OK && index < batch->count; ++index) {
+        lxp_arena *arena = executions[index].arena;
+        size_t mark = lxp_arena_mark(arena);
+        status = lxp_activity_encode(&activities[index], arena, &activity_bytes[index]);
+        if (status == LXP_OK) {
+            owned[index][0] = malloc(activity_bytes[index].length);
+            if (owned[index][0] == NULL) status = LXP_ERR_ARENA_EXHAUSTED;
+            else {
+                (void)memcpy(owned[index][0], activity_bytes[index].bytes, activity_bytes[index].length);
+                activity_bytes[index].bytes = owned[index][0];
+            }
+        }
+        if (lxp_arena_reset(arena, mark) != LXP_OK) status = LXP_FATAL_INVARIANT;
         if (status == LXP_OK)
-            status = lxp_receipt_encode(&batch->receipts[index], true,
-                                        executions[index].arena,
-                                        &receipt_bytes[index]);
-        if (status != LXP_OK) break;
+            status = lxp_receipt_encode(&batch->receipts[index], true, arena, &receipt_bytes[index]);
+        if (status == LXP_OK) {
+            owned[index][1] = malloc(receipt_bytes[index].length);
+            if (owned[index][1] == NULL) status = LXP_ERR_ARENA_EXHAUSTED;
+            else {
+                (void)memcpy(owned[index][1], receipt_bytes[index].bytes, receipt_bytes[index].length);
+                receipt_bytes[index].bytes = owned[index][1];
+            }
+        }
+        if (lxp_arena_reset(arena, mark) != LXP_OK) status = LXP_FATAL_INVARIANT;
     }
-    if (status == LXP_OK)
-        status = lxp_kernel_batch_publication_digest(
-            &batch->base_boundary, &batch->final_boundary, activity_bytes,
-            receipt_bytes, batch->events, batch->count,
-            batch->publication_digest);
+    if (status == LXP_OK) {
+        if (batch->maintenance.length != 0U)
+            status = lxp_kernel_batch_publication_digest_maintenance(
+                &batch->base_boundary, &batch->final_boundary, activity_bytes,
+                receipt_bytes, batch->events, batch->count, batch->maintenance,
+                batch->publication_digest);
+        else
+            status = lxp_kernel_batch_publication_digest(
+                &batch->base_boundary, &batch->final_boundary, activity_bytes,
+                receipt_bytes, batch->events, batch->count,
+                batch->publication_digest);
+    }
     for (index = 0U; index < batch->count; ++index) {
-        lxp_result reset_status =
-            lxp_arena_reset(executions[index].arena, marks[index]);
-        if (status == LXP_OK) status = reset_status;
+        free(owned[index][0]);
+        free(owned[index][1]);
     }
     return status;
+}
+
+typedef struct kernel_staged_commit {
+    lxp_arena *arena;
+    uint8_t receipt_digest[32];
+    uint64_t sequence;
+    bool present;
+} kernel_staged_commit;
+
+static lxp_result kernel_stage_commit(
+    void *context, const lxp_kernel *kernel, const lxp_activity *activity,
+    const lxp_receipt *receipt)
+{
+    kernel_staged_commit *record = context;
+    uint8_t activity_id[32];
+    lxp_byte_span encoded;
+    size_t mark;
+    lxp_result status;
+    if (record == NULL || record->arena == NULL || kernel == NULL ||
+        activity == NULL || receipt == NULL || record->present ||
+        receipt->global_sequence != record->sequence ||
+        receipt->global_sequence == UINT64_MAX ||
+        kernel->state->next_sequence != receipt->global_sequence + 1U ||
+        lxp_ct_memcmp(kernel->current_state_root, receipt->resulting_state_root, 32U) != 0)
+        return LXP_ERR_CONTEXT_MISMATCH;
+    mark = lxp_arena_mark(record->arena);
+    status = lxp_activity_encode(activity, record->arena, &encoded);
+    if (status == LXP_OK)
+        status = lxp_activity_id(encoded.bytes, encoded.length, activity_id);
+    if (status == LXP_OK && lxp_ct_memcmp(activity_id, receipt->activity_id, 32U) != 0)
+        status = LXP_ERR_CONTEXT_MISMATCH;
+    if (status == LXP_OK) status = lxp_arena_reset(record->arena, mark);
+    if (status == LXP_OK)
+        status = lxp_receipt_digest(receipt, record->arena, record->receipt_digest);
+    if (lxp_arena_reset(record->arena, mark) != LXP_OK) return LXP_FATAL_INVARIANT;
+    record->present = status == LXP_OK;
+    return status;
+}
+
+lxp_result lxp_kernel_prepare_serial_activity_batch(
+    lxp_kernel *kernel, const lxp_activity *activity,
+    const lxp_kernel_execution *execution, lxp_kernel_prepared_batch **batch_out)
+{
+    lxp_kernel_prepared_batch *batch = NULL;
+    lxp_kernel_execution private_execution;
+    kernel_staged_commit record;
+    const lx_programs_transfer_runtime *runtime;
+    uint8_t receipt_digest[32];
+    size_t mark;
+    uint8_t *storage = NULL;
+    lxp_arena arena;
+    lxp_result status;
+    if (kernel == NULL || activity == NULL || execution == NULL || batch_out == NULL ||
+        execution->identities == NULL || execution->arena == NULL ||
+        activity->activity_type == LX_PROGRAMS_CALL)
+        return LXP_ERR_NON_CANONICAL;
+    *batch_out = NULL;
+    runtime = kernel->module_runtime[LXP_MODULE_PROGRAMS];
+    if ((activity->activity_type == LX_PROGRAMS_ACCOUNT ||
+         activity->activity_type == LX_PROGRAMS_WIND_DOWN) &&
+        (runtime == NULL || runtime->state_feed == NULL || kernel->observe_commit == NULL))
+        return LXP_ERR_MODULE_DISABLED;
+    batch = calloc(1U, sizeof(*batch));
+    storage = malloc(LXP_KERNEL_PREPARE_ARENA_BYTES);
+    if (batch == NULL || storage == NULL) {
+        status = LXP_ERR_ARENA_EXHAUSTED;
+        goto done;
+    }
+    batch->count = 1U;
+    batch->receipts = calloc(1U, sizeof(*batch->receipts));
+    batch->events = calloc(1U, sizeof(*batch->events));
+    batch->event_bytes = calloc(1U, sizeof(*batch->event_bytes));
+    batch->artifact_bytes = calloc(2U, sizeof(*batch->artifact_bytes));
+    if (batch->receipts == NULL || batch->events == NULL ||
+        batch->event_bytes == NULL || batch->artifact_bytes == NULL) {
+        status = LXP_ERR_ARENA_EXHAUSTED;
+        goto done;
+    }
+    status = lxp_arena_init(&arena, storage, LXP_KERNEL_PREPARE_ARENA_BYTES);
+    if (status == LXP_OK)
+        status = lxp_kernel_batch_snapshot_create(kernel, execution->identities,
+            execution->verified_receipts, execution, &batch->base);
+    if (status == LXP_OK)
+        status = lxp_kernel_batch_snapshot_clone(batch->base, &batch->settled);
+    if (status == LXP_OK)
+        status = lxp_kernel_batch_snapshot_begin_level(batch->settled);
+    if (status != LXP_OK) goto done;
+    private_execution = *execution;
+    private_execution.arena = &arena;
+    private_execution.identities = &batch->settled->identities;
+    private_execution.verified_receipts = &batch->settled->verified_receipts;
+    private_execution.fee_parameters = &batch->settled->fee_parameters;
+    private_execution.canonical_events_out = NULL;
+    record = (kernel_staged_commit){execution->arena, {0}, execution->global_sequence, false};
+    batch->settled->programs_runtime.state_feed = runtime->state_feed;
+    batch->settled->kernel.observe_commit = kernel_stage_commit;
+    batch->settled->kernel.commit_observer_context = &record;
+    status = lxp_kernel_execute_activity(&batch->settled->kernel, activity,
+                                         &private_execution, &batch->receipts[0]);
+    batch->settled->kernel.observe_commit = NULL;
+    batch->settled->kernel.commit_observer_context = NULL;
+    batch->settled->programs_runtime.state_feed = NULL;
+    mark = lxp_arena_mark(execution->arena);
+    if (status == LXP_OK)
+        status = lxp_receipt_digest(&batch->receipts[0], execution->arena, receipt_digest);
+    if (lxp_arena_reset(execution->arena, mark) != LXP_OK) status = LXP_FATAL_INVARIANT;
+    if (status == LXP_OK && (!record.present ||
+        lxp_ct_memcmp(record.receipt_digest, receipt_digest, 32U) != 0))
+        status = LXP_FATAL_INVARIANT;
+    if (status == LXP_OK)
+        status = lxp_programs_project_receipt_events(&batch->receipts[0], &arena, &batch->events[0]);
+    if (status == LXP_OK && batch->events[0].length != 0U) {
+        batch->event_bytes[0] = malloc(batch->events[0].length);
+        if (batch->event_bytes[0] == NULL) status = LXP_ERR_ARENA_EXHAUSTED;
+        else {
+            (void)memcpy(batch->event_bytes[0], batch->events[0].bytes, batch->events[0].length);
+            batch->events[0].bytes = batch->event_bytes[0];
+        }
+    }
+    for (size_t i = 0U; status == LXP_OK && i < 2U; ++i) {
+        lxp_byte_span *span = i == 0U ? &batch->receipts[0].program_outcome.terminal_payload :
+            &batch->receipts[0].program_outcome.call_graph_payload;
+        if (span->length == 0U) continue;
+        if (span->bytes == NULL || span->length > LXP_MAX_ACTIVITY_BYTES) {
+            status = LXP_ERR_LENGTH_LIMIT;
+            break;
+        }
+        batch->artifact_bytes[i] = malloc(span->length);
+        if (batch->artifact_bytes[i] == NULL) status = LXP_ERR_ARENA_EXHAUSTED;
+        else {
+            (void)memcpy(batch->artifact_bytes[i], span->bytes, span->length);
+            span->bytes = batch->artifact_bytes[i];
+        }
+    }
+    if (status == LXP_OK) status = lxp_state_snapshot_seal_level(batch->settled->state);
+    if (status == LXP_OK) status = kernel_prepared_batch_digest(activity, execution, batch);
+    if (status == LXP_OK) {
+        *batch_out = batch;
+        batch = NULL;
+    }
+done:
+    lxp_kernel_prepared_batch_destroy(batch);
+    free(storage);
+    return status;
+}
+
+lxp_result lxp_kernel_prepare_batch_maintenance(
+    lxp_kernel_prepared_batch *batch, const lxp_activity *activities,
+    const lxp_kernel_execution *executions)
+{
+    lxp_arena arena;
+    lxp_programs_occupancy_receipt record;
+    lxp_kernel_batch_snapshot *candidate = NULL;
+    lxp_kernel_batch_snapshot *previous;
+    uint8_t *storage;
+    lxp_byte_span encoded = {NULL, 0U};
+    lxp_result status;
+    if (batch == NULL || activities == NULL || executions == NULL ||
+        batch->committed || batch->count == 0U || batch->maintenance.length != 0U ||
+        !lxp_protocol_version_uses_occupancy(activities[0].protocol_version))
+        return LXP_ERR_NON_CANONICAL;
+    storage = malloc(LXP_MAX_BATCH_BODY_BYTES);
+    if (storage == NULL) return LXP_ERR_ARENA_EXHAUSTED;
+    status = lxp_arena_init(&arena, storage, LXP_MAX_BATCH_BODY_BYTES);
+    if (status == LXP_OK)
+        status = lxp_kernel_batch_snapshot_clone(batch->settled, &candidate);
+    if (status == LXP_OK)
+        status = lxp_kernel_batch_snapshot_begin_level(candidate);
+    if (status == LXP_OK)
+        status = lxp_programs_finalize_occupancy_batch_selected(
+            &candidate->kernel, activities[0].protocol_version, candidate->fee_schedule.version,
+            executions[0].batch_number,
+            executions[0].batch_timestamp_ms, candidate->kernel.state->next_sequence,
+            executions[0].parameter_version, &arena, &record, &encoded);
+    if (status == LXP_OK)
+        status = lxp_state_snapshot_seal_level(candidate->state);
+    if (status == LXP_OK) {
+        previous = batch->settled;
+        batch->settled = candidate;
+        batch->maintenance_storage = storage;
+        batch->maintenance = encoded;
+        status = kernel_prepared_batch_digest(activities, executions, batch);
+        if (status == LXP_OK) {
+            candidate = previous;
+            storage = NULL;
+        } else {
+            batch->settled = previous;
+            batch->maintenance_storage = NULL;
+            batch->maintenance = (lxp_byte_span){NULL, 0U};
+            if (kernel_prepared_batch_digest(activities, executions, batch) != LXP_OK)
+                status = LXP_FATAL_INVARIANT;
+        }
+    }
+    lxp_kernel_batch_snapshot_destroy(candidate);
+    free(storage);
+    return status;
+}
+
+lxp_byte_span lxp_kernel_prepared_batch_maintenance(
+    const lxp_kernel_prepared_batch *batch)
+{
+    return batch == NULL ? (lxp_byte_span){NULL, 0U} : batch->maintenance;
 }
 
 static bool program_planning_refusal(lxp_result status)
@@ -3380,6 +3711,16 @@ const lxp_byte_span *lxp_kernel_prepared_batch_events(
     return batch == NULL ? NULL : batch->events;
 }
 
+uint32_t lxp_kernel_prepared_batch_fee_schedule_version(const lxp_kernel_prepared_batch *batch)
+{
+    return batch == NULL ? 0U : batch->base->fee_schedule.version;
+}
+
+uint32_t lxp_kernel_prepared_batch_metering_schedule_version(const lxp_kernel_prepared_batch *batch)
+{
+    return batch == NULL ? 0U : batch->base->metering_schedule.version;
+}
+
 const uint8_t *lxp_kernel_prepared_batch_final_root(
     const lxp_kernel_prepared_batch *batch)
 {
@@ -3430,8 +3771,8 @@ lxp_result lxp_kernel_commit_prepared_batch(
         lxp_ct_memcmp(fsynced_publication_digest,
                       batch->publication_digest, 32U) != 0)
         return LXP_ERR_CONTEXT_MISMATCH;
-    status = lxp_kernel_batch_snapshot_commit(
-        kernel, identities, batch->base, batch->settled);
+    status = kernel_batch_snapshot_commit(
+        kernel, identities, batch->base, batch->settled, batch->maintenance);
     if (status == LXP_OK) {
         batch->committed = true;
         kernel->publication_poisoned = true;
@@ -3444,16 +3785,23 @@ lxp_result lxp_kernel_commit_prepared_batch(
                      batch->base_boundary.receipt_state_root, 32U);
         kernel->pending_batch_first_sequence =
             batch->receipts[0].global_sequence;
-        kernel->pending_batch_last_sequence =
-            batch->receipts[batch->count - 1U].global_sequence;
+        kernel->pending_batch_last_sequence = batch->final_boundary.next_sequence - 1U;
         kernel->pending_batch_publication_index = 0U;
         kernel->poisoned_sequence = kernel->pending_batch_first_sequence;
         (void)memcpy(kernel->poisoned_activity_id,
                      batch->receipts[0].activity_id, 32U);
         (void)memcpy(kernel->poisoned_state_root,
                      batch->final_boundary.receipt_state_root, 32U);
-        status = receipt_committed_state_check(
-            kernel, &batch->receipts[batch->count - 1U]);
+        if (batch->maintenance.length != 0U) {
+            uint8_t root[32];
+            status = lxp_state_root(kernel, root);
+            if (status == LXP_OK &&
+                lxp_ct_memcmp(root, batch->final_boundary.canonical_state_root, 32U) != 0)
+                status = LXP_FATAL_INVARIANT;
+        } else {
+            status = receipt_committed_state_check(
+                kernel, &batch->receipts[batch->count - 1U]);
+        }
     }
     return status;
 }
@@ -3473,20 +3821,24 @@ lxp_result lxp_kernel_finalize_prepared_batch_publication(
                       batch->publication_digest, 32U) != 0 ||
         kernel->pending_batch_first_sequence !=
             batch->receipts[0].global_sequence ||
-        kernel->pending_batch_last_sequence !=
-            batch->receipts[batch->count - 1U].global_sequence)
+        kernel->pending_batch_last_sequence != batch->final_boundary.next_sequence - 1U)
         return LXP_ERR_CONTEXT_MISMATCH;
+    if (batch->maintenance.length != 0U)
+        return lxp_kernel_finalize_batch_publication_maintenance(
+            kernel, activities, batch->receipts, batch->count,
+            batch->maintenance, fsynced_publication_digest);
     return lxp_kernel_finalize_batch_publication_records(
         kernel, activities, batch->receipts, batch->count,
         fsynced_publication_digest);
 }
 
-lxp_result lxp_kernel_restore_batch_publication_pending(
+static lxp_result restore_batch_publication_pending(
     lxp_kernel *kernel, const uint8_t fsynced_publication_digest[32],
     const uint8_t batch_id[32],
     const uint8_t base_receipt_state_root[32],
     const uint8_t final_receipt_state_root[32], uint64_t first_sequence,
-    uint64_t last_sequence, uint32_t next_publication_index)
+    uint64_t last_sequence, uint32_t next_publication_index,
+    bool maintenance)
 {
     if (kernel == NULL || fsynced_publication_digest == NULL ||
         batch_id == NULL || base_receipt_state_root == NULL ||
@@ -3495,7 +3847,7 @@ lxp_result lxp_kernel_restore_batch_publication_pending(
         lxp_ct_is_zero(batch_id, 32U) ||
         first_sequence == 0U || last_sequence < first_sequence ||
         last_sequence - first_sequence >=
-            LXP_PROGRAMS_SCHEDULE_MAX_ACTIVITIES ||
+            LXP_PROGRAMS_SCHEDULE_MAX_ACTIVITIES + (maintenance ? 1U : 0U) ||
         (uint64_t)next_publication_index >
             last_sequence - first_sequence + 1U ||
         lxp_ct_memcmp(kernel->current_state_root,
@@ -3517,9 +3869,32 @@ lxp_result lxp_kernel_restore_batch_publication_pending(
     return LXP_OK;
 }
 
-lxp_result lxp_kernel_finalize_batch_publication_records(
+lxp_result lxp_kernel_restore_batch_publication_pending(
+    lxp_kernel *kernel, const uint8_t fsynced_publication_digest[32],
+    const uint8_t batch_id[32], const uint8_t base_receipt_state_root[32],
+    const uint8_t final_receipt_state_root[32], uint64_t first_sequence,
+    uint64_t last_sequence, uint32_t next_publication_index)
+{
+    return restore_batch_publication_pending(kernel, fsynced_publication_digest,
+        batch_id, base_receipt_state_root, final_receipt_state_root,
+        first_sequence, last_sequence, next_publication_index, false);
+}
+
+lxp_result lxp_kernel_restore_batch_publication_pending_maintenance(
+    lxp_kernel *kernel, const uint8_t fsynced_publication_digest[32],
+    const uint8_t batch_id[32], const uint8_t base_receipt_state_root[32],
+    const uint8_t final_receipt_state_root[32], uint64_t first_sequence,
+    uint64_t last_sequence, uint32_t next_publication_index)
+{
+    return restore_batch_publication_pending(kernel, fsynced_publication_digest,
+        batch_id, base_receipt_state_root, final_receipt_state_root,
+        first_sequence, last_sequence, next_publication_index, true);
+}
+
+static lxp_result finalize_publication_records(
     lxp_kernel *kernel, const lxp_activity *activities,
     const lxp_receipt *receipts, size_t activity_count,
+    const lxp_programs_occupancy_receipt *maintenance, lxp_byte_span encoded_maintenance,
     const uint8_t fsynced_publication_digest[32])
 {
     size_t index;
@@ -3534,14 +3909,16 @@ lxp_result lxp_kernel_finalize_batch_publication_records(
                       kernel->pending_batch_publication_digest, 32U) != 0 ||
         receipts[0].global_sequence !=
             kernel->pending_batch_first_sequence ||
-        receipts[activity_count - 1U].global_sequence !=
-            kernel->pending_batch_last_sequence ||
+        (maintenance == NULL ? receipts[activity_count - 1U].global_sequence :
+             maintenance->global_sequence) != kernel->pending_batch_last_sequence ||
         kernel->pending_batch_last_sequence -
                 kernel->pending_batch_first_sequence + 1U !=
-            activity_count ||
+            activity_count + (maintenance != NULL ? 1U : 0U) ||
         kernel->pending_batch_first_sequence >
             UINT64_MAX - (activity_count - 1U) ||
-        lxp_ct_memcmp(receipts[activity_count - 1U].resulting_state_root,
+        lxp_ct_memcmp(maintenance == NULL ?
+                          receipts[activity_count - 1U].resulting_state_root :
+                          maintenance->resulting_state_root,
                       kernel->poisoned_state_root, 32U) != 0)
         return LXP_ERR_CONTEXT_MISMATCH;
     if (lxp_ct_memcmp(receipts[0].previous_state_root,
@@ -3578,12 +3955,23 @@ lxp_result lxp_kernel_finalize_batch_publication_records(
         }
     }
     free(verification_bytes);
-    if (kernel->pending_batch_publication_index > activity_count)
+    if (kernel->pending_batch_publication_index > activity_count + (maintenance != NULL ? 1U : 0U))
         return LXP_FATAL_INVARIANT;
-    {
+    if (maintenance == NULL) {
         lxp_result status = receipt_committed_state_check(
             kernel, &receipts[activity_count - 1U]);
         if (status != LXP_OK) return status;
+    } else {
+        uint8_t root[32];
+        lxp_result status = lxp_state_root(kernel, root);
+        if (status != LXP_OK) return status;
+        if (lxp_ct_memcmp(root, maintenance->resulting_state_root, 32U) != 0 ||
+            lxp_ct_memcmp(receipts[activity_count - 1U].resulting_state_root,
+                          maintenance->previous_state_root, 32U) != 0 ||
+            maintenance->global_sequence == 0U ||
+            receipts[activity_count - 1U].global_sequence != maintenance->global_sequence - 1U ||
+            maintenance->parameter_version != receipts[0].parameter_version)
+            return LXP_ERR_CONTEXT_MISMATCH;
     }
     if (kernel->observe_commit != NULL)
         for (index = kernel->pending_batch_publication_index;
@@ -3594,6 +3982,19 @@ lxp_result lxp_kernel_finalize_batch_publication_records(
             if (status != LXP_OK) return LXP_FATAL_INVARIANT;
             kernel->pending_batch_publication_index = (uint32_t)(index + 1U);
         }
+    if (kernel->observe_commit == NULL &&
+        kernel->pending_batch_publication_index < activity_count)
+        kernel->pending_batch_publication_index = (uint32_t)activity_count;
+    if (maintenance != NULL && kernel->pending_batch_publication_index == activity_count) {
+        if (kernel->observe_commit != NULL && kernel->observe_maintenance == NULL)
+            return LXP_ERR_MODULE_DISABLED;
+        if (kernel->observe_maintenance != NULL) {
+            lxp_result status = kernel->observe_maintenance(
+                kernel->commit_observer_context, kernel, encoded_maintenance, receipts[0].timestamp);
+            if (status != LXP_OK) return status;
+        }
+        kernel->pending_batch_publication_index = (uint32_t)(activity_count + 1U);
+    }
     kernel->publication_poisoned = false;
     kernel->batch_publication_pending = false;
     kernel->poisoned_sequence = 0U;
@@ -3606,6 +4007,31 @@ lxp_result lxp_kernel_finalize_batch_publication_records(
     (void)memset(kernel->poisoned_activity_id, 0, 32U);
     (void)memset(kernel->poisoned_state_root, 0, 32U);
     return LXP_OK;
+}
+
+lxp_result lxp_kernel_finalize_batch_publication_records(
+    lxp_kernel *kernel, const lxp_activity *activities,
+    const lxp_receipt *receipts, size_t activity_count,
+    const uint8_t fsynced_publication_digest[32])
+{
+    return finalize_publication_records(kernel, activities, receipts, activity_count,
+        NULL, (lxp_byte_span){NULL, 0U}, fsynced_publication_digest);
+}
+
+lxp_result lxp_kernel_finalize_batch_publication_maintenance(
+    lxp_kernel *kernel, const lxp_activity *activities,
+    const lxp_receipt *receipts, size_t activity_count,
+    lxp_byte_span maintenance, const uint8_t fsynced_publication_digest[32])
+{
+    lxp_programs_occupancy_receipt record;
+    lxp_result status = lxp_programs_occupancy_receipt_decode(
+        maintenance.bytes, maintenance.length, &record);
+    if (status != LXP_OK) return status;
+    if (receipts == NULL || activity_count == 0U ||
+        !lxp_protocol_version_uses_occupancy(receipts[0].protocol_version))
+        return LXP_ERR_NON_CANONICAL;
+    return finalize_publication_records(kernel, activities, receipts, activity_count,
+        &record, maintenance, fsynced_publication_digest);
 }
 
 uint32_t lxp_kernel_batch_publication_next_index(const lxp_kernel *kernel)
@@ -3624,6 +4050,7 @@ void lxp_kernel_prepared_batch_destroy(lxp_kernel_prepared_batch *batch)
     if (batch->artifact_bytes != NULL)
         for (index = 0U; index < batch->count * 2U; ++index)
             free(batch->artifact_bytes[index]);
+    free(batch->maintenance_storage);
     free(batch->artifact_bytes);
     free(batch->event_bytes);
     free(batch->events);

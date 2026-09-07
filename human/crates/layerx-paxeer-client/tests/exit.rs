@@ -1,4 +1,3 @@
-use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU16, Ordering};
@@ -554,13 +553,23 @@ fn two_confirmation_progress(
 }
 
 fn prove_core_endpoint_is_unavailable() {
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .unwrap_or_else(|error| panic!("reserve unavailable core port: {error}"));
-    let port = listener
-        .local_addr()
-        .unwrap_or_else(|error| panic!("unavailable core address: {error}"))
-        .port();
-    drop(listener);
+    let socket = rustix::net::socket(
+        rustix::net::AddressFamily::INET,
+        rustix::net::SocketType::STREAM,
+        Some(rustix::net::ipproto::TCP),
+    )
+    .unwrap_or_else(|error| panic!("create unavailable core socket: {error}"));
+    rustix::net::bind(
+        &socket,
+        &std::net::SocketAddrV4::new(std::net::Ipv4Addr::LOCALHOST, 0),
+    )
+    .unwrap_or_else(|error| panic!("reserve unavailable core port: {error}"));
+    let address = std::net::SocketAddrV4::try_from(
+        rustix::net::getsockname(&socket)
+            .unwrap_or_else(|error| panic!("unavailable core address: {error}")),
+    )
+    .unwrap_or_else(|error| panic!("unavailable core address must be IPv4: {error}"));
+    let port = address.port();
     let endpoint = EndpointConfig {
         url: format!("http://127.0.0.1:{port}"),
         request_timeout: Duration::from_millis(100),
@@ -576,6 +585,7 @@ fn prove_core_endpoint_is_unavailable() {
         "unavailable core endpoint must fail to connect, got {:?}",
         failure.fault
     );
+    drop(socket);
 }
 
 fn exit_client(anvil: &Anvil, contract: EvmAddress) -> EmergencyExit {
