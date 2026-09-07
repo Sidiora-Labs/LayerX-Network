@@ -21,7 +21,7 @@ mod paxeer_real {
         pub(super) fn new(expectation: DebitExpectation) -> Self {
             let anvil = Anvil::launch();
             let (token, vault, bond, checkpoint_registry, challenge_manager, claims) =
-                deploy_suite(&anvil);
+                deploy_suite_for_protocol(&anvil, PROTOCOL_VERSION);
             let leaf = withdrawal_leaf(expectation);
             let timestamp_ms = anvil
                 .latest_timestamp()
