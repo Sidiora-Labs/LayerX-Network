@@ -4,20 +4,26 @@ import json
 import os
 import selectors
 import signal
+import ssl
+import stat
 import subprocess
 import time
 from pathlib import Path
 import urllib.parse
+import urllib.request
 
-from custody_credit import Rpc, quantity, require, unhex, write_new
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+
+from custody_credit import NoRedirect, Rpc, agreed_block, eth_hash, quantity, require, unhex, write_new
 
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def command(*args):
+def command(*args, env=None):
     with subprocess.Popen(args, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                          start_new_session=True) as process:
+                          start_new_session=True, env=env) as process:
         output = bytearray()
         total = 0
         deadline = time.monotonic() + 120
@@ -48,6 +54,55 @@ def command(*args):
         return output.decode("utf-8").strip()
 
 
+def origin(url):
+    parsed = urllib.parse.urlsplit(url)
+    require(parsed.scheme == "https" and parsed.hostname and not parsed.username
+            and not parsed.password and not parsed.fragment and not parsed.query
+            and parsed.path in ("", "/"), "disposable RPC must be an HTTPS origin")
+    require(parsed.port not in (18545, 19443), "persistent host endpoint refused")
+    return (parsed.scheme, parsed.hostname, parsed.port or 443)
+
+
+def disposable_rpc(url, ca_bundle, identity_file):
+    identity = json.loads(Path(identity_file).read_text())
+    selected = origin(url)
+    require(selected in [origin(value) for value in identity["rpc_origins"]],
+            "RPC origin not authorized by disposable identity")
+    genesis = unhex(identity["genesis_hash"], 32)
+    denied = unhex(identity["persistent_genesis_hash"], 32)
+    require(genesis != bytes(32) and denied != bytes(32) and genesis != denied,
+            "persistent chain genesis refused")
+    require(hashlib.sha256(Path(ca_bundle).read_bytes()).digest()
+            == unhex(identity["ca_sha256"], 32), "disposable CA pin")
+    context = ssl.create_default_context(cafile=ca_bundle)
+    rpc = Rpc(url)
+    rpc.opener = urllib.request.build_opener(NoRedirect(), urllib.request.HTTPSHandler(context=context))
+    require(quantity(rpc.call("eth_chainId", [])) == identity["chain_id"], "disposable chain ID")
+    observed = unhex(agreed_block([rpc], "0x0")["hash"], 32)
+    require(observed != denied and observed == genesis, "disposable genesis identity")
+    rpc.disposable = True
+    rpc.command_env = {**os.environ, "SSL_CERT_FILE": str(Path(ca_bundle).resolve())}
+    return rpc
+
+
+def signer(rpc, path):
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        info = os.fstat(descriptor)
+        require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_mode & 0o077 == 0
+                and 66 <= info.st_size <= 68,
+                "signer key must be a private regular file")
+        raw = os.read(descriptor, 69).strip()
+        require(len(raw) == 66, "signer key length")
+        key = unhex(raw.decode("ascii"), 32)
+    finally:
+        os.close(descriptor)
+    private = ec.derive_private_key(int.from_bytes(key, "big"), ec.SECP256K1())
+    public = private.public_key().public_bytes(Encoding.X962, PublicFormat.UncompressedPoint)
+    rpc.signing_key = "0x" + key.hex()
+    return "0x" + eth_hash(public[1:])[-20:].hex()
+
+
 def calldata(signature, *args):
     return command("cast", "calldata", signature, *map(str, args))
 
@@ -65,17 +120,24 @@ def receipt(rpc, transaction):
 
 
 def send(rpc, account, target, data, value=0):
+    if getattr(rpc, "signing_key", None):
+        transaction = command("cast", "send", "--rpc-url", rpc.url, "--private-key", rpc.signing_key,
+                              "--async", "--gas-limit", "6000000", "--value", str(value),
+                              target, "--data", data, env=getattr(rpc, "command_env", None))
+        return receipt(rpc, transaction)
     transaction = rpc.call("eth_sendTransaction", [{"from": account, "to": target,
                             "data": data, "value": hex(value), "gas": hex(6000000)}])
     return receipt(rpc, transaction)
 
 
 def deploy(rpc, account, contract, *args):
-    invocation = ["forge", "create", contract, "--broadcast", "--unlocked", "--from", account,
+    wallet = (["--private-key", rpc.signing_key] if getattr(rpc, "signing_key", None)
+              else ["--unlocked", "--from", account])
+    invocation = ["forge", "create", contract, "--broadcast", *wallet,
                   "--rpc-url", rpc.url, "--json"]
     if args:
         invocation += ["--constructor-args", *map(str, args)]
-    result = json.loads(command(*invocation))
+    result = json.loads(command(*invocation, env=getattr(rpc, "command_env", None)))
     address = result["deployedTo"]
     require(len(unhex(address, 20)) == 20, "deployment address")
     deployed = receipt(rpc, result["transactionHash"])
@@ -87,10 +149,12 @@ def deploy(rpc, account, contract, *args):
 def govern(rpc, account, timelock, target, data):
     nonce = int(rpc.call("eth_call", [{"to": timelock, "data": calldata("operationNonce()")}, "latest"]), 16)
     salt = "0x" + hashlib.sha256((target + data + str(nonce)).encode()).hexdigest()
+    delay = 0 if getattr(rpc, "disposable", False) else 86400
     send(rpc, account, timelock, calldata("schedule(address,uint256,bytes,bytes32,uint64)",
-                                       target, 0, data, salt, 86400))
-    rpc.call("evm_increaseTime", [86401])
-    rpc.call("evm_mine", [], allow_missing=True)
+                                       target, 0, data, salt, delay))
+    if not getattr(rpc, "disposable", False):
+        rpc.call("evm_increaseTime", [86401])
+        rpc.call("evm_mine", [], allow_missing=True)
     send(rpc, account, timelock, calldata("execute(address,uint256,bytes,bytes32,uint256)",
                                        target, 0, data, salt, nonce))
 
@@ -103,19 +167,33 @@ def main():
     parser.add_argument("--amount", type=int, required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--allow-local-chain", action="store_true", required=True)
+    parser.add_argument("--ca-bundle")
+    parser.add_argument("--disposable-identity")
+    parser.add_argument("--key-file")
     args = parser.parse_args()
-    rpc = Rpc(args.rpc)
-    parsed = urllib.parse.urlsplit(args.rpc)
-    require(parsed.hostname in ("127.0.0.1", "::1") and parsed.port != 18545, "isolated loopback chain only")
-    require("anvil" in rpc.call("web3_clientVersion", []).lower(), "Anvil required")
-    require(quantity(rpc.call("eth_chainId", [])) != 125, "persistent chain ID refused")
+    if args.disposable_identity:
+        require(args.ca_bundle and args.key_file, "disposable deployment requires CA and signer")
+        rpc = disposable_rpc(args.rpc, args.ca_bundle, args.disposable_identity)
+        require(quantity(rpc.call("eth_chainId", [])) == 125, "beta timelock requires chain 125")
+        account = signer(rpc, args.key_file)
+    else:
+        require(not args.ca_bundle, "CA requires explicit disposable identity")
+        parsed = urllib.parse.urlsplit(args.rpc)
+        require(parsed.hostname in ("127.0.0.1", "::1") and parsed.port not in (18545, 19443),
+                "isolated loopback chain only")
+        rpc = Rpc(args.rpc)
+        require("anvil" in rpc.call("web3_clientVersion", []).lower(), "Anvil required")
+        require(quantity(rpc.call("eth_chainId", [])) != 125, "persistent chain ID refused")
+        account = signer(rpc, args.key_file) if args.key_file else rpc.call("eth_accounts", [])[0]
     require(0 < args.amount < 2 ** 128, "amount bound")
     unhex(args.asset, 32)
     unhex(args.beneficiary, 32)
-    account = rpc.call("eth_accounts", [])[0]
     config = "0x" + hashlib.sha256(b"LayerX/local-custody/real-weth/v1").hexdigest()
-    timelock = deploy(rpc, account, "contracts/governance/LayerXTimelock.sol:LayerXTimelock",
-                      86400, 172800, account, account, account, 0, config, 1)
+    beta = getattr(rpc, "disposable", False)
+    contract = ("contracts/governance/LayerXBetaTimelock.sol:LayerXBetaTimelock" if beta
+                else "contracts/governance/LayerXTimelock.sol:LayerXTimelock")
+    timelock = deploy(rpc, account, contract,
+                      0 if beta else 86400, 172800, account, account, account, 0, config, 1)
     registry = deploy(rpc, account, "contracts/custody/AssetRegistry.sol:AssetRegistry",
                       timelock, account, config, 1)
     token = deploy(rpc, account,
@@ -131,7 +209,8 @@ def main():
     send(rpc, account, token, calldata("approve(address,uint256)", vault, args.amount))
     deposited = send(rpc, account, vault, calldata("deposit(bytes32,uint256,bytes32)",
                                                  args.asset, args.amount, args.beneficiary))
-    rpc.call("anvil_mine", ["0x80"], allow_missing=True)
+    if not beta:
+        rpc.call("anvil_mine", ["0x80"], allow_missing=True)
     wrapped_balance = int(rpc.call("eth_call", [{"to": token,
                            "data": calldata("balanceOf(address)", vault)}, "latest"]), 16)
     native_balance = quantity(rpc.call("eth_getBalance", [token, "latest"]))

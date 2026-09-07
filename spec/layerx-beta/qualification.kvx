@@ -1487,4 +1487,18 @@ file = "platform/emulator/tests/gateway.rs platform/Cargo.lock platform/Makefile
 symbol = "lifecycle_routes_execute_and_replay_real_native_state_receipts platform-test-tooling"
 observed = "After rebasing onto 4d40bb04, the exact make platform-test-tooling platform-beta-cluster-up platform-hosted-smoke platform-beta-cluster-down command is repeated at f3902709 and exits 2. The gateway suite again reports ten passed and one failed at line 719: ordinal 3 sequence 3, -736 versus 0, callback stage 5/status -3. Later lifecycle goals are not reached. Separate final make platform-beta-cluster-down exits 0. The image-input comparison exits 0: Paxeer, boundary, settlement and cluster-script source files and the boundary runtime dependency versions, sources and checksums are unchanged from the recorded image build. Evidence: /root/lx-lanes/cluster/qual-logs/pass4/task-3.7-final.command, task-3.7-final.log, task-3.7-final.exit, final-source.txt, final-image-inputs.log, final-image-inputs.exit, cluster-down-final.log and cluster-down-final.exit."
 assumption = "Current-source prediction evidence remains tied to build revision 6c6df74e0969; the comparison establishes unchanged relevant inputs, not a new image build at the final commit. The native callback assertion remains intact and unresolved. No aggregate hosted success is claimed."
+[observation.6.1.5]
+task = "6.1"
+file = "scripts/PaxeerBetaDeploy.s.sol"
+symbol = "_predictGuarantorBond _deployGuarantorBond StaticConfig.hashForProtocol"
+observed = "The settlement runner decodes LXGD/LXRR before deploying or predicting Blueprint, timelock, asset registry, vault and bond. StaticConfig.validateForProtocol requires three distinct nonzero genesis commitments; hashForProtocol includes them in the component config hash embedded in vault runtime. A custody profile pins the vault address and runtime SHA256 before its native genesis is built. The current deployment contract therefore cannot be split solely in deploy-contracts.sh without changing the genesis-dependent configuration contract. GuarantorBond additionally requires the fixed USDL token and asset; CheckpointRegistry construction requires genuine native genesis roots. The retained settlement-deploy.log contains only Error: EVM error and does not identify an internal revert."
+assumption = "A custody-first configuration and deployment interface is required from the Solidity owner. Preserve constructor, runtime pin, prediction and genesis checks; do not substitute WETH for USDL, manufacture roots, or present the WETH evidence deployment as a complete settlement suite. A disposable paxd reproduction or sanitized internal failure evidence is still required to diagnose prediction."
+severity = "blocker"
+
+[observation.6.1.6]
+task = "6.1"
+file = "tests/bridge/deploy_local_custody.py"
+symbol = "disposable_rpc"
+observed = "Disposable identity explicitly binds chain ID, genesis hash, HTTPS origins and PEM CA SHA256, and requires an operator-supplied persistent_genesis_hash deny pin. Both the requested and observed genesis must differ from that pin; ports 18545 and 19443 are refused before connection. The supplied public handoff has no authoritative persistent-host genesis hash. The actual host was not queried."
+assumption = "Supply the authoritative persistent-host hash and independently operated second trusted RPC origin as cluster integration inputs. Tests can prove denial of a real isolated chain identity but cannot establish the actual host deny pin without that input."
 severity = "blocker"
