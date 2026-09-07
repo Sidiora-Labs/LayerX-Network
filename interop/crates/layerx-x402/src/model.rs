@@ -93,6 +93,8 @@ pub struct ResourceInfo {
 }
 
 impl ResourceInfo {
+    /// # Errors
+    /// Returns an error for invalid URLs, text or tag bounds.
     pub fn validate(&self) -> Result<(), X402Error> {
         validate_url(&self.url)?;
         if self
@@ -145,6 +147,8 @@ pub struct PaymentRequirements {
 }
 
 impl PaymentRequirements {
+    /// # Errors
+    /// Returns an error for invalid scheme, network, asset, payee, amount or timeout.
     pub fn validate(&self) -> Result<(), X402Error> {
         if !identifier(&self.scheme, 32)
             || !caip2(&self.network)
@@ -158,6 +162,8 @@ impl PaymentRequirements {
         Ok(())
     }
 
+    /// # Errors
+    /// Returns an error for a non-`LayerX` network or invalid asset or payee encoding.
     pub fn layerx_facts(&self) -> Result<([u8; 32], [u8; 32]), X402Error> {
         let (namespace, _) = self
             .network
@@ -183,6 +189,8 @@ pub struct PaymentRequired {
 }
 
 impl PaymentRequired {
+    /// # Errors
+    /// Returns an error for invalid version, resource, offers, error text or extensions.
     pub fn validate(&self) -> Result<(), X402Error> {
         validate_version(self.x402_version)?;
         self.resource.validate()?;
@@ -215,6 +223,8 @@ pub struct PaymentPayload {
 }
 
 impl PaymentPayload {
+    /// # Errors
+    /// Returns an error for invalid version, accepted offer, resource, payload shape or extensions.
     pub fn validate(&self) -> Result<(), X402Error> {
         validate_version(self.x402_version)?;
         self.accepted.validate()?;
@@ -245,6 +255,8 @@ pub struct SettlementResponse {
 }
 
 impl SettlementResponse {
+    /// # Errors
+    /// Returns an error for invalid field bounds or inconsistent settlement evidence.
     pub fn validate_wire(&self) -> Result<(), X402Error> {
         if !caip2(&self.network)
             || self.transaction.len() > 512
