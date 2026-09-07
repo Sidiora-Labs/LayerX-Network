@@ -1838,6 +1838,20 @@ file = "platform/emulator/tests/gateway.rs"
 symbol = "lifecycle_routes_execute_and_replay_real_native_state_receipts"
 observed = "CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4 LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin LAYERX_BETA_CLUSTER_NAME=layerx-cluster-lane make platform-test-tooling exits 2. The emulator gateway suite passes ten tests and fails ordinal 3 sequence 3 at line 719: -736 versus 0, callback stage 5/status -3. Later tooling recipe steps are not reached. Supplied native-bin metadata reports source 7bc94bf775e8a59b458076ae8415cee7cb0e0417 and partial authority qualification. make test-bridge-deposit exits 2 at Makefile:1055 with unresolved Programs runtime symbols including layerx_programs_interface_validate. The same commands exit 2 again after rebase, with the same callback and linkage failures. Logs: qual-logs/pass5/tooling.log, final-tooling.log, native-ready.txt, bridge-deposit.log and final-bridge-deposit.log. Final cg spec lint exits 0 in qual-logs/pass5/final-spec-lint.log."
 assumption = "Native runtime and Makefile repairs are outside the cluster wiring and custody helper ownership. No assertion, bound or gate is changed. These aggregate gates do not qualify the hosted stack."
+[observation.6.11.native-test-programs-link]
+task = "6.11"
+file = "Makefile"
+symbol = "test_bridge_deposit test_paxeer_bond programs-build"
+observed = "The native test recipe audit identifies 37 sibling binaries with unresolved layerx_programs symbols, 77 clean-link siblings and four unrelated failures. Bridge deposit and the 37 proven failing siblings now use the existing Programs static archive ordering, runtime system libraries and programs-build order-only prerequisite. All 38 repaired binary build commands exit 0. make build/tests/test_paxeer_bond and build/tests/test_paxeer_bond exit 0; its recipe remains unchanged because it links cleanly. The complete command, exit and log inventory is retained in qual-logs/bridge-link/audit-table.md and gates.jsonl; clean recipes are listed in clean-targets.txt."
+assumption = "Link qualification does not establish runtime correctness of every repaired binary. No test source, assertion, bound, compiler check or clean-link sibling recipe changes."
+severity = "note"
+
+[observation.6.11.native-test-unrelated-gate-failures]
+task = "6.11"
+file = "Makefile tests/test_fee_replay.c include/layerx/lxp_fee.h src/ledger/lx_account_registry.c tests/test_bridge_deposit.c"
+symbol = "test_account_id lxp_test_journal lxp_test_idempotency lxp_test_journal_tsan test_fee_replay test_bridge_deposit"
+observed = "The sibling audit finds missing OpenSSL EVP linkage in test_account_id, lxp_test_journal and lxp_test_idempotency. test_fee_replay.c:358-361 fails -Werror=missing-field-initializers for exact_program_fee_present before linkage. timeout 300 make check exits 2 on journal EVP linkage and journal_tsan missing lxp_ed25519_pubkey_is_canonical from lx_account_registry.c:332. timeout 600 make test-bridge-deposit exits 2 after all 145 Foundry tests pass and the native bridge binary exits 1. Direct build/tests/test_bridge_deposit also exits 1 without diagnostics. Evidence: qual-logs/bridge-link/audit-test_account_id.log, audit-lxp_test_journal.log, audit-lxp_test_idempotency.log, audit-test_fee_replay.log, check.log, bridge-test.log and bridge-native.log."
+assumption = "These failures are outside the Programs-link recipe repair. The bridge test has no compile error and remains unchanged. Existing assertions, source and compiler checks are retained; successful binary linkage does not qualify the full bridge or aggregate native gate."
 severity = "blocker"
 
 [observation.6.4.interop-grouped-store-qualification]
