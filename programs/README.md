@@ -1,6 +1,6 @@
 # LayerX Programs
 
-**The programmable runtime for LayerX — deterministic guest execution with no balance-writing authority.**
+**The programmable runtime for LayerX - deterministic guest execution with no balance-writing authority.**
 
 This workspace holds the LayerX programs surface: a deterministic WASM runtime, the
 registry that proves what a program deployed and what it holds, the C↔Rust bridge into
@@ -13,7 +13,7 @@ place where untrusted guest code runs. Guest execution is dispatched under the p
 module inside the runtime module registry (`LXP_MODULE_PROGRAMS = 9` in
 [`include/layerx/lxp_module.h`](../include/layerx/lxp_module.h)), but a program is not a
 ninth economic module and writes no balances of its own. Every monetary effect a program
-produces compiles to an authenticated `402LXP` transfer set applied by the kernel — the
+produces compiles to an authenticated `402LXP` transfer set applied by the kernel - the
 same single money doorway every module uses.
 
 Where the rest of the system fits:
@@ -27,7 +27,7 @@ Where the rest of the system fits:
 - **Settlement** happens on Paxeer Network (EVM chain ID `125`). LayerX orders and
   executes activity; periodic checkpoints settle on Paxeer. Since the monorepo
   integration, the Paxeer settlement stack lives in this same repository under
-  [`paxeer-network/`](../paxeer-network) — co-located, but with its own trust and build
+  [`paxeer-network/`](../paxeer-network) - co-located, but with its own trust and build
   boundary (see [`docs/MONOREPO.md`](../docs/MONOREPO.md) once published, and the root
   [`README.md`](../README.md)).
 
@@ -60,23 +60,23 @@ arithmetic are denied across the tree.
 It runs on a pinned `wasmi` interpreter with floating point and other nondeterminism
 removed. The module map (see `src/lib.rs`) separates concerns deliberately:
 
-- `validate.rs`, `limits.rs` — static module validation and structural bounds (module
+- `validate.rs`, `limits.rs` - static module validation and structural bounds (module
   bytes, function count, stack height, call depth).
-- `budget.rs`, `meter.rs` — caller-declared activity ceilings, the admitted budget token,
+- `budget.rs`, `meter.rs` - caller-declared activity ceilings, the admitted budget token,
   and per-execution resource metering (CPU fuel, memory, storage read/write, output).
-- `abi/` — the transaction boundary. `abi/capability.rs` owns capability grants, their
+- `abi/` - the transaction boundary. `abi/capability.rs` owns capability grants, their
   canonical encoding, and downward-only narrowing; `abi/response.rs` owns response and
   refusal transport; `abi/storage_ops.rs` owns namespaced storage.
-- `accounts.rs` — deterministic derivation of program-owned accounts.
-- `transfer.rs`, `ffi_transfer.rs` — the sole monetary exit: typed `402LXP` requests
+- `accounts.rs` - deterministic derivation of program-owned accounts.
+- `transfer.rs`, `ffi_transfer.rs` - the sole monetary exit: typed `402LXP` requests
   bound to invocation authority and submitted as one atomic set to the kernel primitive.
-- `occupancy.rs` — deterministic, receipt-bound storage-occupancy accounting.
-- `calls.rs`, `engine.rs`, `execute.rs`, `entrypoint.rs`, `lifecycle.rs` — cross-program
+- `occupancy.rs` - deterministic, receipt-bound storage-occupancy accounting.
+- `calls.rs`, `engine.rs`, `execute.rs`, `entrypoint.rs`, `lifecycle.rs` - cross-program
   calls, execution, and program lifecycle.
-- `host/` — linker orchestration; each host-function family (storage, events, calls,
+- `host/` - linker orchestration; each host-function family (storage, events, calls,
   transfer) is registered in exactly one unit and reaches execution state only through
   `RuntimeState`.
-- `ffi.rs`, `ffi_call.rs` — the FFI bridge the C protocol module calls into.
+- `ffi.rs`, `ffi_call.rs` - the FFI bridge the C protocol module calls into.
 
 **`layerx-programs-registry`** (`#![forbid(unsafe_code)]`) turns protocol receipts into
 answers about programs: the append-only `DeploymentJournal`, `ProgramValueAccountBinding`
@@ -100,7 +100,7 @@ and requirement `36.5` for occupancy).
 ### Program-owned accounts
 
 A program can own accounts that no principal can claim. An account id is derived
-deterministically from the program and a seed — a pure function of public inputs, with no
+deterministically from the program and a seed - a pure function of public inputs, with no
 host state, clock, or entropy involved:
 
 ```
@@ -133,7 +133,7 @@ A principal can **fund** a program account (an ordinary `402LXP` credit leg) but
 
 Spending authority narrows, never widens. The `ProgramSpend` capability
 (`abi/capability.rs`) conveys a bounded grant over accounts the granting program itself
-derives — distinct from the `Transfer402` grant over the invoking principal's balance. It
+derives - distinct from the `Transfer402` grant over the invoking principal's balance. It
 binds `owner_program`, `seed`, `source_account`, `asset`, `to`, and a `maximum_amount`.
 
 Across a program-to-program call edge the grant may only be narrowed:
@@ -153,7 +153,7 @@ is no silent widen and no partial transfer set survives a refused escalation.
 ### Occupancy settlement
 
 State that persists is paid for as long as it persists. Occupancy is deterministic,
-batch-indexed rent for persistent program storage — it meters **namespace bytes held
+batch-indexed rent for persistent program storage - it meters **namespace bytes held
 across protocol batches**, priced by the fee schedule. There is no wall-clock component:
 "time" here is the protocol batch sequence.
 
@@ -168,7 +168,7 @@ amount_due   = prior_arrears + accrued_fee
 Before writing storage a call must establish a signed responsibility mandate that names
 the payer and caps both the bytes and the lifetime charge; the occupancy fee budget is
 carved out of the activity's signed fee limit, separate from the execution meter. Each
-charge resolves to a disposition — `Paid`, `ChargeCeilingExceeded` (namespace frozen),
+charge resolves to a disposition - `Paid`, `ChargeCeilingExceeded` (namespace frozen),
 `ScheduleCeilingExceeded`, `InsufficientFunds`, or `MigrationRequired` (pre-upgrade legacy
 bytes, frozen at price zero until the owner migrates). Settlement is charged to the
 declared responsible account through ordinary `402LXP` transfer legs and bound into the
@@ -185,7 +185,7 @@ refuses to strand value: a deprecation cannot complete while a bound account sti
 a non-zero balance without an authorized exit route.
 
 The invariant that ties all of this together: **`402LXP` remains the sole balance
-writer.** Programs emit transfer sets — they never set a balance directly. As the platform
+writer.** Programs emit transfer sets - they never set a balance directly. As the platform
 spec puts it, *"No program ever receives balance-writing authority. Every monetary effect
 a program produces is expressed as authenticated 402LXP transfers applied by the kernel
 transfer primitive… a balance change outside a 402LXP transfer aborts the transition."*
@@ -197,9 +197,9 @@ transfer primitive… a balance change outside a 402LXP transfer aborts the tran
 ABI 2 is the current frozen guest ABI; ABI 1 remains supported for legacy programs.
 Guest program SDKs include:
 
-- **`sdk/rust`** (`layerx-program-sdk`) — the Rust guest SDK.
-- **`sdk/c`** — a C guest SDK with headers, sources, and a toolchain manifest.
-- **`sdk/assemblyscript`** — an AssemblyScript SDK (`abi`, `capability`, `transfer`,
+- **`sdk/rust`** (`layerx-program-sdk`) - the Rust guest SDK.
+- **`sdk/c`** - a C guest SDK with headers, sources, and a toolchain manifest.
+- **`sdk/assemblyscript`** - an AssemblyScript SDK (`abi`, `capability`, `transfer`,
   `storage`, `event`, `call`, `receipt` bindings) with a determinism lint.
 
 The Rust SDK ships `escrow` and `vault` examples; the C and AssemblyScript SDKs
@@ -210,9 +210,9 @@ amount-monotone narrowing rules. ABI 1 does not admit these grants.
 The porting kits map familiar contract vocabularies onto the programs ABI and are explicit
 about what does not carry over:
 
-- **`porting/evm`** — porting a Solidity contract.
-- **`porting/solana`** — porting a Solana / Anchor program.
-- **`porting/cosmwasm`** — porting a CosmWasm contract.
+- **`porting/evm`** - porting a Solidity contract.
+- **`porting/solana`** - porting a Solana / Anchor program.
+- **`porting/cosmwasm`** - porting a CosmWasm contract.
 
 Each has a `MIGRATION.md` written for a developer who already knows the source chain.
 
@@ -220,13 +220,13 @@ Each has a `MIGRATION.md` written for a developer who already knows the source c
 
 ## Fuzzing, tools, and tests
 
-- **`fuzz/`** — a structure-aware fuzz target (`src/main.rs`) with a checked-in corpus.
-- **`tools/dependency-policy.sh`** — enforces the vendored-dependency policy (`deny.toml`).
-- **`tools/runtime-module-boundaries.sh`** — enforces the runtime's module-boundary rules.
-- **`tests/gauntlet/`** — the hostile-program gauntlet (cross-program derivation, callee
+- **`fuzz/`** - a structure-aware fuzz target (`src/main.rs`) with a checked-in corpus.
+- **`tools/dependency-policy.sh`** - enforces the vendored-dependency policy (`deny.toml`).
+- **`tools/runtime-module-boundaries.sh`** - enforces the runtime's module-boundary rules.
+- **`tests/gauntlet/`** - the hostile-program gauntlet (cross-program derivation, callee
   spend attempts, escalation across depth/fan-out/repeated visits) with an
   `attack-inventory.tsv`.
-- **`tests/vectors/`** — cross-implementation vectors, including calldata fixtures, that
+- **`tests/vectors/`** - cross-implementation vectors, including calldata fixtures, that
   keep the C and Rust surfaces byte-identical.
 
 ---
@@ -236,17 +236,17 @@ Each has a `MIGRATION.md` written for a developer who already knows the source c
 The programs workspace builds with the pinned Rust toolchain declared in
 `programs/Cargo.toml` (`rust-version = 1.91.1`) against vendored dependencies. Runtime and
 kernel share golden vectors so the C and Rust implementations stay in lockstep. For the
-full qualification story — deterministic cross-architecture replay, fault injection,
-fuzzing, and settlement — see [`docs/QUALIFICATION.md`](../docs/QUALIFICATION.md).
+full qualification story - deterministic cross-architecture replay, fault injection,
+fuzzing, and settlement - see [`docs/QUALIFICATION.md`](../docs/QUALIFICATION.md).
 
 Project status is deliberately narrow:
 
 | Stage | Detail |
 | --- | --- |
-| Availability | Limited beta opens **September 7**. |
+| Availability | The public testnet exposes a gateway API and a faucet. There is no LayerX mainnet. |
 | Source | Licensed under the Apache License, Version 2.0. |
-| Public endpoints | None yet for LayerX itself. No public RPC, faucet, or explorer. |
-| Settlement | Checkpoints settle on Paxeer Network (EVM chain ID `125`); the settlement stack is co-located under `paxeer-network/`. |
+| Public endpoints | Gateway API and faucet on the public testnet. |
+| Settlement | Checkpoints settle on Paxeer Network (EVM chain ID `125`); custody and settlement live on Paxeer. The settlement stack is co-located under `paxeer-network/`. |
 
 A successful local build is development evidence, not authorization to deploy, move
 custody, or handle real assets.
