@@ -1,0 +1,44 @@
+area:protocol:
+  - changed-files:
+      - any-glob-to-any-file:
+          - src/**
+          - include/**
+          - cmd/**
+          - tests/**
+          - Makefile
+
+area:agent:
+  - changed-files:
+      - any-glob-to-any-file: agent/**
+
+area:platform:
+  - changed-files:
+      - any-glob-to-any-file: platform/**
+
+area:programs:
+  - changed-files:
+      - any-glob-to-any-file: programs/**
+
+area:human:
+  - changed-files:
+      - any-glob-to-any-file: human/**
+
+area:contracts:
+  - changed-files:
+      - any-glob-to-any-file:
+          - contracts/**
+          - foundry.toml
+
+area:paxeer:
+  - changed-files:
+      - any-glob-to-any-file: paxeer-network/**
+
+area:spec:
+  - changed-files:
+      - any-glob-to-any-file: spec/**
+
+area:docs:
+  - changed-files:
+      - any-glob-to-any-file:
+          - docs/**
+          - "*.md"
