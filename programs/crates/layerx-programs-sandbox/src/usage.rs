@@ -344,11 +344,17 @@ impl UsageLedger {
                 || receipt.observation.root_program != lease.host_program()
                 || (receipt.sequence == 1 && receipt.previous != GENESIS_RECEIPT)
                 || (receipt.sequence > 1 && receipt.previous == GENESIS_RECEIPT)
-                || receipt.transfer_root != sandbox_escrow_charge_root(
-                    lease.host_program(), lease.namespace().execution_principal().map_err(UsageRefusal::Lease)?,
-                    receipt.activity_id, lease.id().bytes(), receipt.expected_lease_digest,
-                    lease.escrow_account(), lease.escrow_asset(), lease.fee_destination(), receipt.charged,
-                ).map_err(|_| UsageRefusal::InvalidChain)?
+                || receipt.transfer_root != sandbox_escrow_charge_root(&layerx_programs_runtime::transfer::SandboxEscrowCharge {
+                    host_program: lease.host_program(),
+                    execution_principal: lease.namespace().execution_principal().map_err(UsageRefusal::Lease)?,
+                    invocation_authority: receipt.activity_id,
+                    lease_id: lease.id().bytes(),
+                    expected_lease_digest: receipt.expected_lease_digest,
+                    escrow_account: lease.escrow_account(),
+                    asset: lease.escrow_asset(),
+                    fee_destination: lease.fee_destination(),
+                    amount: receipt.charged,
+                }).map_err(|_| UsageRefusal::InvalidChain)?
                 || (receipt.sequence == 1 && receipt.previous_accumulator_root != [0; 32])
                 || self.accumulator_root != accumulator_root_for(
                     receipt.previous_accumulator_root, receipt.sequence, receipt.digest)? {
@@ -389,13 +395,18 @@ impl UsageLedger {
                 || receipt.fee_destination != lease.fee_destination()
                 || receipt.prices != UsagePrices::from_schedule(lease.fee_schedule())
                 || receipt.observation.root_program != lease.host_program()
-                || receipt.transfer_root != sandbox_escrow_charge_root(
-                    lease.host_program(), lease.namespace().execution_principal()
-                        .map_err(UsageRefusal::Lease)?, receipt.activity_id,
-                    lease.id().bytes(), receipt.expected_lease_digest,
-                    lease.escrow_account(), lease.escrow_asset(), lease.fee_destination(),
-                    receipt.charged,
-                ).map_err(|_| UsageRefusal::InvalidChain)?
+                || receipt.transfer_root != sandbox_escrow_charge_root(&layerx_programs_runtime::transfer::SandboxEscrowCharge {
+                    host_program: lease.host_program(),
+                    execution_principal: lease.namespace().execution_principal()
+                        .map_err(UsageRefusal::Lease)?,
+                    invocation_authority: receipt.activity_id,
+                    lease_id: lease.id().bytes(),
+                    expected_lease_digest: receipt.expected_lease_digest,
+                    escrow_account: lease.escrow_account(),
+                    asset: lease.escrow_asset(),
+                    fee_destination: lease.fee_destination(),
+                    amount: receipt.charged,
+                }).map_err(|_| UsageRefusal::InvalidChain)?
                 || receipt.cumulative_spent != spent.checked_add(receipt.charged)
                     .ok_or(UsageRefusal::ArithmeticOverflow)?
                 || receipt.observed_batch < prior_batch
@@ -799,10 +810,17 @@ mod tests {
         let mut state = active_usage_state(3, 1);
         let activity_id = [9; 32];
         let expected_digest = state.lease.state_digest().expect("digest");
-        let root = sandbox_escrow_charge_root(state.lease.host_program(),
-            state.lease.namespace().execution_principal().expect("principal"), activity_id,
-            state.lease.id().bytes(), expected_digest, state.lease.escrow_account(),
-            state.lease.escrow_asset(), state.lease.fee_destination(), 3).expect("root");
+        let root = sandbox_escrow_charge_root(&layerx_programs_runtime::transfer::SandboxEscrowCharge {
+            host_program: state.lease.host_program(),
+            execution_principal: state.lease.namespace().execution_principal().expect("principal"),
+            invocation_authority: activity_id,
+            lease_id: state.lease.id().bytes(),
+            expected_lease_digest: expected_digest,
+            escrow_account: state.lease.escrow_account(),
+            asset: state.lease.escrow_asset(),
+            fee_destination: state.lease.fee_destination(),
+            amount: 3,
+        }).expect("root");
         let mut lease_bytes = Vec::new(); let mut receipt_bytes = Vec::new();
         let receipt = record_expiry_occupancy_settlement(&mut state, activity_id, root,
             &mut lease_bytes, &mut receipt_bytes).expect("final settlement");
