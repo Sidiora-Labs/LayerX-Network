@@ -238,3 +238,79 @@ fn signed_maintenance_sequence_and_root_mismatches_are_refused() {
         Err(EvidenceRefusal::SequenceRange)
     );
 }
+
+#[test]
+fn maintained_previous_root_and_cross_batch_leaf_are_refused() {
+    let (bytes, evidence, authorization) = fixture();
+    for previous in [true, false] {
+        let mut changed = evidence.clone();
+        if let BatchIdentityEvidence::OccupancyMaintenanceV2 { receipt, .. } =
+            &mut changed.batch_identity
+        {
+            let offset = if previous {
+                receipt.len() - 64
+            } else {
+                b"LXP/programs/occupancy-receipt/v2\0".len() + 7
+            };
+            receipt[offset] ^= 1;
+        }
+        assert!(matches!(
+            verify(&bytes, &changed, &authorization),
+            Err(EvidenceRefusal::Inclusion(InclusionError::Merkle(_)))
+        ));
+        reseal(&bytes, &mut changed);
+        assert_eq!(
+            verify(&bytes, &changed, &authorization),
+            Err(if previous {
+                EvidenceRefusal::Receipt(layerx_proof::receipt::ReceiptCheck::ResultingStateRoot)
+            } else {
+                EvidenceRefusal::BatchIdentity
+            })
+        );
+    }
+}
+
+#[test]
+fn historical_document_cannot_select_maintained_outcome() {
+    let document: serde_json::Value = must(serde_json::from_str(include_str!(
+        "fixtures/real-program-deploy-receipt.json"
+    )));
+    let field = |name: &str| {
+        must(hex::decode(
+            document[name].as_str().unwrap_or_else(|| panic!("field")),
+        ))
+    };
+    let (_, maintained, _) = fixture();
+    let historical = field("receipt_hex");
+    let mut evidence = BatchEvidence {
+        header: field("header_hex"),
+        header_signature: must(field("header_signature_hex").try_into()),
+        receipt_proof: encode_proof(&must(Proof::new(0, 1, vec![]))),
+        batch_identity: BatchIdentityEvidence::Historical,
+    };
+    let header = must(decode_batch_header(&evidence.header));
+    let authorization = SequencerAuthorization::new(
+        header.sequencer_id(),
+        must(field("sequencer_public_key_hex").try_into()),
+        1,
+        u64::MAX,
+    );
+    let facts = must(verify(&historical, &evidence, &authorization));
+    let decoded = must(decode(&historical));
+    let protocol = decoded.protocol().unwrap_or_else(|| panic!("protocol"));
+    let header = must(decode_batch_header(&evidence.header));
+    assert_eq!(
+        facts.batch_id,
+        must(layerx_wire::hash::execution_batch_id(
+            header.previous_state_root(),
+            protocol.activity_id(),
+            protocol.global_sequence(),
+            header.batch_number(),
+        ))
+    );
+    evidence.batch_identity = maintained.batch_identity;
+    assert!(matches!(
+        verify(&historical, &evidence, &authorization),
+        Err(EvidenceRefusal::Inclusion(InclusionError::Merkle(_)))
+    ));
+}
