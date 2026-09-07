@@ -1254,3 +1254,26 @@ symbol = "platform-sample-preflight"
 observed = "make platform-sample-install exits 2 because platform-sample-preflight fails with \"Maven is required for Platform samples\" (recipe Error 1). Swift and dotnet are also absent from PATH. make platform-sample-dependencies-ready exits 2 with \"run make platform-sample-install first\". python3, go and cargo are present. Evidence: qual-logs/item2-platform-sample-install.log, qual-logs/item2-platform-sample-dependencies-ready.log."
 assumption = "The sample-install failure is a missing host toolchain, not a lockfile or deny-policy failure. The preflight checks remain intact."
 severity = "note"
+[observation.6.4.40]
+task = "6.4"
+file = "programs/crates/layerx-programs-runtime/tests/hash_determinism.rs"
+symbol = "blake3_official_vectors blake3_reference_confirms_text_inputs blake3_golden_vectors cross_platform_byte_identity_blake3"
+observed = "The runtime and independent reference implementation match all 35 official BLAKE3 1.5.0 input_len vectors using repeating bytes 0 through 250 and the 32-byte hash prefix. Authority URL: https://raw.githubusercontent.com/BLAKE3-team/BLAKE3/1.5.0/test_vectors/test_vectors.json; SHA256 dcb91ea8accc77e6d6e632af7cdc1a99a9f3ae78cf648da595c7d064db32f624. Independent authority URL: https://raw.githubusercontent.com/BLAKE3-team/BLAKE3/1.5.0/reference_impl/reference_impl.rs; SHA256 2fae31faabb79094ebb8c8377e5f1d804ae46902f8cc2a8b31e14d2632948ca0. The reference is compiled from byte-identical source in tests/support/blake3_reference.rs. Both implementations produce abc = 6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85 and hello world = d74981efa70a0c880b8d8c1985d075dbcbf679b99a5f9914e5aaf96b831a9e24. Both hand-written goldens are corrected only after these independent comparisons pass."
+assumption = "cargo test --locked --manifest-path programs/Cargo.toml -p layerx-programs-runtime --test hash_determinism exits 0 with 14 tests passed in qual-logs/blake3/hash-final.log. Initial authority checks before golden edits exit 0 in qual-logs/blake3/official.log and reference.log. python3 qual-logs/blake3/authority-check.py exits 0 and verifies complete vector extraction and byte-identical reference source. rustfmt --check --edition 2021 programs/crates/layerx-programs-runtime/tests/hash_determinism.rs exits 0 in qual-logs/blake3/fmt-owned.log. The runtime implementation is unchanged."
+severity = "note"
+
+[observation.6.4.41]
+task = "6.4"
+file = "programs/vendor/parity-wasm/src/elements/index_map.rs"
+symbol = "slow_assertions cargo-clippy cargo-fmt"
+observed = "cargo clippy --locked --manifest-path programs/Cargo.toml -p layerx-programs-runtime --all-targets -- -D warnings exits 101 before qualifying the test target: parity-wasm has 21 errors and wasmi has 32 errors. Diagnostics include unexpected slow_assertions cfg, legacy numeric methods, conversions and lifetime syntax. Raw output: qual-logs/blake3/clippy.log. cd programs && cargo fmt --check exits 1 on existing workspace formatting drift, beginning at programs/benches/interpreter.rs; raw output and locations: qual-logs/blake3/fmt-workspace.log and fmt-workspace-locations.txt. cargo fmt --check --manifest-path programs/Cargo.toml from the repository root separately exits 1 with Failed to find targets."
+assumption = "Dependency and workspace files are outside the hash-test ownership. No lint suppression, formatting bypass or runtime repair is applied. The upstream reference source remains intact. Focused tests and owned-file formatting do not establish a strict all-target Clippy or workspace formatting pass."
+severity = "blocker"
+
+[observation.6.4.42]
+task = "6.4"
+file = "programs/crates/layerx-programs-runtime/tests/signature_vectors.rs"
+symbol = "malleable_signature_detection_ed25519 malleable_signature_detection_secp256k1 secp256k1_recover_zero_vector_fails secp256k1_verify_accepts_compressed_public_key secp256k1_verify_accepts_uncompressed_public_key secp256k1_verify_published_test_vector_1 secp256k1_verify_zero_vector_fails"
+observed = "make programs-test exits 2 with Cargo exit 101 after the workspace signature_vectors target reports 19 passed and 7 failed. Assertions at lines 146, 158, 170 and 315 expect VerificationFailed but receive MalformedSignature; line 219 expects RecoveryFailed but receives MalformedSignature; line 301 expects VerificationFailed but receives MalformedPublicKey; line 266 rejects the purported published secp256k1 vector. The aggregate hash_determinism target passes all 14 tests. Raw output: qual-logs/blake3/programs-test.log."
+assumption = "Aggregate qualification used temporary merge 09147433b83314401f5ec21d53c3358e41ee49b9 incorporating Binaryen prerequisite 854d07aec8107047ea2c613674af2223e6c09a6d plus owned hash-test changes, with CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4 LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin and default worktree targets. The prerequisite merge is excluded from the hash-test branch. Signature tests and implementation are outside ownership and remain intact; their owner must resolve the vector/refusal disagreements on independent authority. This is not a passing aggregate Programs gate."
+severity = "blocker"
