@@ -38,6 +38,7 @@ def fixture(raw):
         "canonical_receipt_hex", "signed_activity_hex", "program_id_hex",
         "receipt_digest_hex", "terminal_payload_hex", "call_graph_hex",
         "batch_number", "network_id", "authorized_batch",
+        "name", "provenance", "expected", "execution_document",
     }
     if set(raw) != expected_fields:
         raise ValueError("unexpected native execution fixture fields")
