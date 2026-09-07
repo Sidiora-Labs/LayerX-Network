@@ -14,6 +14,7 @@ pub(crate) struct ProtocolScheduleEffects {
 }
 
 impl ProtocolScheduleEffects {
+    #[cfg(feature = "host-ffi")]
     pub(crate) fn new(
         accounts: AccessSet,
         identities: impl IntoIterator<Item = [u8; 32]>,
@@ -48,6 +49,7 @@ impl ProtocolScheduleEffects {
 /// payload and admission binding are retained so a prepared worker input
 /// cannot be detached from the activity whose capabilities were decoded.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg(feature = "host-ffi")]
 pub(crate) struct PreparedScheduleAccess {
     access: ScheduleAccess,
     canonical_payload: Vec<u8>,
@@ -55,6 +57,7 @@ pub(crate) struct PreparedScheduleAccess {
     payer: [u8; 32],
 }
 
+#[cfg(feature = "host-ffi")]
 pub(crate) struct AuthenticatedScheduleCall<'a> {
     pub(crate) canonical_payload: &'a [u8],
     pub(crate) activity_binding: [u8; 32],
@@ -66,6 +69,7 @@ pub(crate) struct AuthenticatedScheduleCall<'a> {
     pub(crate) protocol_effects: Option<ProtocolScheduleEffects>,
 }
 
+#[cfg(feature = "host-ffi")]
 impl PreparedScheduleAccess {
     pub(crate) fn from_authenticated_call(
         request: AuthenticatedScheduleCall<'_>,
@@ -149,6 +153,7 @@ impl ScheduleAccess {
     /// Production construction path. The caller must derive `reachable` from
     /// the admitted request's verified capabilities, never activity metadata.
     #[must_use]
+    #[cfg(feature = "host-ffi")]
     pub(crate) const fn from_admitted(
         declaration: AccessDeclaration,
         reachable: AccessSet,
