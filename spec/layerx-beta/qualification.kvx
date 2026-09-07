@@ -3495,3 +3495,27 @@ symbol = "real_escrow_requires_registered_destination_account terminal_wrap_appl
 observed = "formerly observation.6.4.lifecycle-terminal-envelope-conflict. Exact 6.4 fails at lifecycle.rs:991 after maintenance inclusion, batch identity, authorized program execution and result_code -736 checks pass. The unchanged equality expects the bare LXP/programs/settlement-failure/v1 NUL 09 payload. The authenticated terminal instead contains the LXP/programs/terminal-applied-legs/v1 NUL envelope, a big-endian payload length of 36, the expected settlement-failure payload and zero applied legs. The successful escrow lifecycle test passes; only the unregistered-destination terminal equality fails. Raw evidence: qual-logs/n30/task-6.4.log, exit 101, real_node 10 passed and 1 failed."
 assumption = "The terminal producer and equality remain intact. Reconciling the terminal encoding contract is outside the maintained batch-ID dispatch repair and requires an explicit owner decision; no envelope stripping, alternate-byte acceptance or assertion change is introduced. Full 6.4 remains blocked."
 severity = "blocker"
+
+[observation.6.4.146]
+task = "6.4"
+file = "platform/hosted/agent-boundary/tests/real_node/lifecycle.rs agent/crates/layerx-wire/src/receipt.rs src/modules/programs/call.c"
+symbol = "real_escrow_requires_registered_destination_account decode_applied_terminal terminal_wrap_applied"
+observed = "The original lifecycle.rs:991 expectation required the entire authenticated terminal to equal bare LXP/programs/settlement-failure/v1 NUL 09 bytes. The corrected expectation decodes the terminal with the canonical decode_applied_terminal, requires the inner detail to equal those exact bytes and requires zero applied legs. The result-code assertion remains exactly -736."
+assumption = "Authority: owner decision 1 selects the V4 applied-legs terminal contract for protocol 3, as recorded for the first CALL assertion in observation.6.4.124 (formerly observation.6.4.terminal-v4-fixture-selection), and the explicit ruling extending that correction to lifecycle.rs:991. The producer at src/modules/programs/call.c:1040 remains unchanged. Canonical framing and authenticated execution verification precede the detail and empty-leg assertions."
+severity = "note"
+
+[observation.6.4.147]
+task = "6.4"
+file = "platform/hosted/agent-boundary/tests/real_node/lifecycle.rs spec/layerx-beta/qualification.kvx"
+symbol = "real_escrow_requires_registered_destination_account decode_applied_terminal"
+observed = "Exact task 6.4 exits 0 with 11/11 real_node tests, zero failures and zero ignored tests; qual-logs/n31/task-6.4.log. The authenticated unregistered-destination terminal satisfies the exact settlement-failure detail, empty applied legs and -736 result-code assertions. The exact task 6.11 chain exits 0, including 52 selected Forge tests; qual-logs/n31/task-6.11.log. Agentd all-targets passes 259 tests, client/proof/wire passes 127 and emulator library/gateway passes 32, with zero failures or ignored tests; agentd-all.log, client-proof-wire.log and emulator.log. rustfmt, strict boundary all-target Clippy, make check, make beta-ledger-check, git diff --check and cg spec lint exit 0; rustfmt.log, boundary-clippy.log, check.log, ledger-final.log, diff-check.log and spec-lint.log. Exact commands, exits and absolute raw log paths are in qual-logs/n31/gates.jsonl."
+assumption = "CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4 RAYON_NUM_THREADS=4 LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin; the interpreter Wasm and Python environment match the preceding qualification environment. Native producer source and all three binary hashes match native-ready.txt, verified by qual-logs/n31/native-provenance.json. Spec lint reports zero errors and nine existing warnings. Codify review exits 124 at its timeout; advisory guard exits 0 while selecting unrelated task 3.7; cortex_guard is unavailable, exit 127. Task statuses remain unchanged. These local gates do not establish hosted deployment or whole-beta readiness."
+severity = "note"
+
+[observation.6.4.148]
+task = "6.4"
+file = "platform/hosted/webhooks/src/trusted.rs platform/hosted/webhooks/deployment.yaml spec/layerx-beta/qualification.kvx"
+symbol = "git rebase --rebase-merges"
+observed = "The terminal correction and all requested qualification gates pass on f80868b6. Final rebase onto origin/main d4e60c0057d98061ec0f3f5cf7b618b14f1371d6 exits 1 while replaying merge d125448d, with a content conflict in platform/hosted/webhooks/src/trusted.rs; qual-logs/n31/final-rebase-merges.log. git rebase --abort exits 0 and git diff --exit-code f80868b6 HEAD && git diff --exit-code HEAD exits 0; redundant-rebase-abort.log and final-source-check.log. git merge-base --is-ancestor origin/main HEAD exits 1; final-base-check.log. The absent upstream commits are 0d665970 and d4e60c00."
+assumption = "Webhook credential integration and its conflict resolution are outside the terminal expectation and ledger normalisation scope. No webhook source or deployment conflict is resolved here. The passing local gates qualify the preserved source; current-main integration remains incomplete."
+severity = "blocker"

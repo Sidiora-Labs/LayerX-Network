@@ -19,7 +19,9 @@ use layerx_types::program_lifecycle::{
     ProgramWindDownOperation,
 };
 use layerx_wire::hash::{receipt_digest, receipt_execution_batch_id};
-use layerx_wire::receipt::{decode_batch_header, decode_merkle_proof, encode_unsigned};
+use layerx_wire::receipt::{
+    decode_applied_terminal, decode_batch_header, decode_merkle_proof, encode_unsigned,
+};
 
 const FEE_LIMIT: u128 = 1_000_000_000_000;
 const DEPOSIT: u128 = 100;
@@ -988,7 +990,12 @@ fn real_escrow_requires_registered_destination_account() {
             .result_code(),
         -736
     );
-    assert_eq!(terminal, b"LXP/programs/settlement-failure/v1\0\x09");
+    let (detail, applied_legs) = must(
+        decode_applied_terminal(&terminal),
+        "authenticated applied-legs terminal",
+    );
+    assert_eq!(detail, b"LXP/programs/settlement-failure/v1\0\x09");
+    assert_eq!(applied_legs.len(), 0);
     println!(
         "authenticated unregistered destination refusal: {}",
         hex(&terminal)
