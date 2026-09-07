@@ -531,7 +531,10 @@ fn render_python_receipt_contract(
     let mut output = String::from(
         "# Code generated from platform/sdk/generators/receipt.kvx. DO NOT EDIT.\n\nfrom enum import Enum\n",
     );
-    if !stub {
+    if stub {
+        output
+            .push_str("\nPROGRAMS_MODULE_ID: int\nPROGRAM_OUTCOME_TAGS: tuple[int, int, int]\n\n");
+    } else {
         writeln!(
             output,
             "\nPROGRAMS_MODULE_ID = {}\nPROGRAM_OUTCOME_TAGS = ({}, {}, {})\n",
@@ -541,9 +544,6 @@ fn render_python_receipt_contract(
             contract.program_outcome_tags[2]
         )
         .map_err(|error| error.to_string())?;
-    } else {
-        output
-            .push_str("\nPROGRAMS_MODULE_ID: int\nPROGRAM_OUTCOME_TAGS: tuple[int, int, int]\n\n");
     }
     output.push_str("class ReceiptFailureCode(str, Enum):\n");
     for check in &contract.failure_checks {
@@ -1274,6 +1274,21 @@ fn write_go(repo_root: &Path) -> Result<(), String> {
         .map_err(|error| format!("write {}: {error}", path.display()))
 }
 
+fn render_jvm_set(output: &mut String, name: &str, values: &[String]) -> Result<(), String> {
+    writeln!(output, "    static final Set<String> {name} = Set.of(")
+        .map_err(|error| error.to_string())?;
+    for (index, value) in values.iter().enumerate() {
+        writeln!(
+            output,
+            "        {}{}",
+            quoted(value),
+            if index + 1 == values.len() { ");" } else { "," }
+        )
+        .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
 fn generate_jvm_contract(repo_root: &Path) -> Result<String, String> {
     let agent = schema_sections(&repo_root.join(SOURCES[0].1))?;
     let human = schema_sections(&repo_root.join(SOURCES[1].1))?;
@@ -1304,42 +1319,28 @@ fn generate_jvm_contract(repo_root: &Path) -> Result<String, String> {
     let mut output = String::from(
         "// Code generated from the LayerX Agent API and Human API schemas. DO NOT EDIT.\n\npackage com.sidiora.layerx.sdk;\n\nimport java.util.List;\nimport java.util.Map;\nimport java.util.Set;\n\nfinal class GeneratedContract {\n    private GeneratedContract() {}\n",
     );
-    let render_set = |output: &mut String, name: &str, values: &[String]| -> Result<(), String> {
-        writeln!(output, "    static final Set<String> {name} = Set.of(")
-            .map_err(|error| error.to_string())?;
-        for (index, value) in values.iter().enumerate() {
-            writeln!(
-                output,
-                "        {}{}",
-                quoted(value),
-                if index + 1 == values.len() { ");" } else { "," }
-            )
-            .map_err(|error| error.to_string())?;
-        }
-        Ok(())
-    };
-    render_set(&mut output, "AGENT_OPERATIONS", &agent_operations)?;
-    render_set(
+    render_jvm_set(&mut output, "AGENT_OPERATIONS", &agent_operations)?;
+    render_jvm_set(
         &mut output,
         "AGENT_IDEMPOTENT",
         &agent_mutations.into_iter().collect::<Vec<_>>(),
     )?;
-    render_set(
+    render_jvm_set(
         &mut output,
         "AGENT_ERROR_CLASSES",
         &variants(&agent, "type.ErrorClass")?,
     )?;
-    render_set(
+    render_jvm_set(
         &mut output,
         "AGENT_RETRIABILITY",
         &variants(&agent, "type.Retriability")?,
     )?;
-    render_set(
+    render_jvm_set(
         &mut output,
         "HUMAN_ERROR_CODES",
         &variants(&human, "type.ErrorCode")?,
     )?;
-    render_set(
+    render_jvm_set(
         &mut output,
         "HUMAN_RETRIABILITY",
         &variants(&human, "type.Retriability")?,
