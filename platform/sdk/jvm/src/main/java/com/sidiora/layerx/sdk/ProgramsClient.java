@@ -179,7 +179,7 @@ public final class ProgramsClient {
     }
 
     public record VerifiedExecution(ObjectNode document, LocalVerifier.ReceiptVerification receipt,
-                                    byte[] terminalPayload, byte[] callGraph) {
+                                    byte[] terminalPayload, byte[] callGraph, String transferVerification) {
         public VerifiedExecution {
             document = copy(document);
             Objects.requireNonNull(receipt, "receipt");
@@ -603,7 +603,7 @@ public final class ProgramsClient {
             guestAbi, terminalPayload, callGraph, protocolVersion);
         LocalVerifier.ProtocolReceipt receipt = verified.receipt();
         LocalVerifier.ProgramReceiptOutcome receiptOutcome = receipt.programOutcome();
-        verifyTerminal(terminalPayload, callGraph, program, outcomeDocument, receipt.protocolVersion(),
+        String transferVerification = verifyTerminal(terminalPayload, callGraph, program, outcomeDocument, receipt.protocolVersion(),
             receiptOutcome);
         boolean kindMatches = switch (outcomeKind) {
             case "completed" -> receiptOutcome.terminalKind() == 1
@@ -622,7 +622,7 @@ public final class ProgramsClient {
                 || receiptOutcome.outputValues() != outputValues
                 || !receiptOutcome.outputBytes().equals(outputBytes)
                 || !receiptOutcome.feeUnits().equals(feeUnits) || !kindMatches) invalidVerification();
-        return new VerifiedExecution(document, verified, terminalPayload, callGraph);
+        return new VerifiedExecution(document, verified, terminalPayload, callGraph, transferVerification);
     }
 
     private record TerminalUsage(BigInteger cpu, BigInteger memory, BigInteger read, BigInteger write,
@@ -649,10 +649,12 @@ public final class ProgramsClient {
     private record PayerAggregate(byte[] payer, BigInteger due, BigInteger paid,
                                   BigInteger arrears) {}
 
-    private static void verifyTerminal(byte[] encoded, byte[] availableGraph, byte[] expectedProgram,
+    static String verifyTerminal(byte[] encoded, byte[] availableGraph, byte[] expectedProgram,
             ObjectNode documentOutcome, int protocolVersion, LocalVerifier.ProgramReceiptOutcome receipt) {
         try {
-            TerminalAttachments attachments = unwrapTerminal(encoded);
+            if (encoded.length == 0 || encoded.length > MAX_CALLDATA_BYTES || !MessageDigest.isEqual(sha256(encoded), receipt.terminalPayloadRoot())
+                    || availableGraph.length == 0 || !MessageDigest.isEqual(sha256(availableGraph), receipt.callGraphRoot())) throw new IllegalArgumentException();
+            TerminalAttachments attachments = unwrapTerminal(unwrapAppliedTerminal(encoded, receipt));
             byte[] inner = attachments.inner();
             TerminalCursor cursor;
             boolean candidate = starts(inner, "LXP/program-execution/v4\0");
@@ -728,7 +730,7 @@ public final class ProgramsClient {
                             || !"completed".equals(text(documentOutcome, "kind"))
                             || code != requiredI32(documentOutcome.get("code"))
                             || !MessageDigest.isEqual(response,
-                                boundedHex(text(documentOutcome, "response"), true))) {
+                                responseBytes(documentOutcome))) {
                         throw new IllegalArgumentException();
                     }
                     expectedKind = "completed";
@@ -780,9 +782,11 @@ public final class ProgramsClient {
                 cursor.finish();
                 requireRefusal(documentOutcome, "guest_refused", receipt.resultCode());
             } else throw new IllegalArgumentException();
-            verifyTerminalAttachments(attachments, candidate, successful, protocolVersion, receipt);
+            return verifyTerminalAttachments(attachments, candidate, successful, protocolVersion, receipt);
         } catch (RuntimeException error) {
-            invalidVerification();
+            PlatformSdkException failure = PlatformSdkException.verificationFailure();
+            failure.initCause(error);
+            throw failure;
         }
     }
 
@@ -957,7 +961,7 @@ public final class ProgramsClient {
         } else if (tag != 2) throw new IllegalArgumentException();
     }
 
-    private static void verifyTerminalAttachments(TerminalAttachments attachments, boolean candidate,
+    private static String verifyTerminalAttachments(TerminalAttachments attachments, boolean candidate,
             boolean successful, int protocolVersion, LocalVerifier.ProgramReceiptOutcome receipt) {
         boolean occupancyRequired = (protocolVersion == 2 || protocolVersion == 3) && successful;
         if (occupancyRequired != (attachments.occupancy() != null)) throw new IllegalArgumentException();
@@ -982,16 +986,20 @@ public final class ProgramsClient {
             throw new IllegalArgumentException();
         }
         boolean transferPresent = !allZero(receipt.transferRoot());
-        if (candidate ? (attachments.authorization() != null) != transferPresent
-                : attachments.authorization() != null) throw new IllegalArgumentException();
+        boolean recorded = receipt.encodingVersion() != 4 && attachments.authorization() == null && transferPresent;
+        boolean authorityRequired = candidate || receipt.encodingVersion() == 4 && successful;
+        if (!recorded && (authorityRequired ? (attachments.authorization() != null) != transferPresent
+                : attachments.authorization() != null)) throw new IllegalArgumentException();
         if (attachments.authorization() != null) {
             if (attachments.authorization().length == 0 || attachments.transferRoot() == null
                     || !MessageDigest.isEqual(attachments.transferRoot(), receipt.transferRoot())) {
                 throw new IllegalArgumentException();
             }
+            if (receipt.encodingVersion() == 4 && !starts(attachments.authorization(), "LayerX/programs/402LXP/transfer-set/v2\0")) throw new IllegalArgumentException();
             verifyAuthorizationRoot(attachments.authorization(), attachments.transferRoot());
         }
         if (protocolVersion != 1 && protocolVersion != 2 && protocolVersion != 3) throw new IllegalArgumentException();
+        return recorded ? "recorded_terminal_root_not_locally_reconstructable" : "reconstructed";
     }
 
     static TerminalAttachments unwrapTerminal(byte[] encoded) {
@@ -1394,6 +1402,27 @@ public final class ProgramsClient {
         return merkleRoot(legs);
     }
 
+    static byte[] unwrapAppliedTerminal(byte[] encoded, LocalVerifier.ProgramReceiptOutcome receipt) {
+        if (receipt.encodingVersion() != 4) return encoded;
+        byte[] domain = "LXP/programs/terminal-applied-legs/v1\0".getBytes(StandardCharsets.UTF_8);
+        TerminalCursor cursor = new TerminalCursor(encoded, 0);
+        if (!MessageDigest.isEqual(cursor.take(domain.length), domain)) throw new IllegalArgumentException();
+        byte[] inner = cursor.sized32(), legs = cursor.sized32();
+        cursor.finish();
+        if (inner.length == 0 || inner.length > MAX_CALLDATA_BYTES || legs.length > 256 * 115 || legs.length % 115 != 0
+                || !MessageDigest.isEqual(sha256(legs), receipt.appliedLegsDigest())) throw new IllegalArgumentException();
+        List<byte[]> entries = new ArrayList<>();
+        for (int offset = 0; offset < legs.length; offset += 115) {
+            byte[] leg = Arrays.copyOfRange(legs, offset, offset + 115);
+            if (leg[0] != 0 || leg[113] != 0 || leg[114] != 1 || allZero(Arrays.copyOfRange(leg, 1, 33))
+                    || allZero(Arrays.copyOfRange(leg, 33, 65)) || allZero(Arrays.copyOfRange(leg, 65, 97))
+                    || allZero(Arrays.copyOfRange(leg, 97, 113))) throw new IllegalArgumentException();
+            entries.add(leg);
+        }
+        if (!MessageDigest.isEqual(merkleRoot(entries), receipt.transferRoot())) throw new IllegalArgumentException("applied transfer root");
+        return inner;
+    }
+
     private static byte[] merkleRoot(List<byte[]> legs) {
         if (legs.isEmpty()) return new byte[32];
         List<byte[]> level = new ArrayList<>();
@@ -1467,7 +1496,7 @@ public final class ProgramsClient {
             case "completed" -> {
                 requireFields(outcome, "kind", "code", "response");
                 requiredI32(outcome.get("code"));
-                boundedHex(text(outcome, "response"), true);
+                responseBytes(outcome);
             }
             case "legacy_completed" -> {
                 requireFields(outcome, "kind", "code", "values");
@@ -1674,6 +1703,12 @@ public final class ProgramsClient {
         JsonNode value = parent == null ? null : parent.get(field);
         if (!(value instanceof ObjectNode object)) throw decodeFailure();
         return object;
+    }
+
+    private static byte[] responseBytes(JsonNode outcome) {
+        JsonNode response = outcome.get("response");
+        if (response == null || !response.isTextual()) throw decodeFailure();
+        return boundedHex(response.textValue(), true);
     }
 
     private static String text(JsonNode parent, String field) {

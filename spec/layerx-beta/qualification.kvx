@@ -1982,3 +1982,11 @@ symbol = "VerifyProgramReceipt TestSignedTerminalV4Vectors"
 observed = "CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4 sh platform/sdk/conformance/run-go.sh /root/lx-lanes/terminal exits 0 in qual-logs/pass5-go-sdk.log, including generator drift check, all Go tests and conformance. git diff --check exits 0 in qual-logs/pass5-go-diff-check.log. All four signed shared vectors authenticate; V4 positives reconstruct, mutated-leg rejects, V3 reports recorded root, malformed terminals reject and empty applied legs require zero root."
 assumption = "The Go SDK command is the exact individual recipe exposed by platform-verify-sdks in platform/Makefile.inc. No separate Go SDK Make target exists. Stored native inputs use the provenance and regeneration boundary recorded in terminal-v4-stored-input-qualification."
 severity = "note"
+
+[observation.6.11.terminal-v4-jvm]
+task = "6.11"
+file = "platform/sdk/jvm/src/main/java/com/sidiora/layerx/sdk/ProgramsClient.java platform/sdk/jvm/src/main/java/com/sidiora/layerx/sdk/verify/LocalVerifier.java"
+symbol = "verifyTerminal TerminalV4Test"
+observed = "CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4 sh platform/sdk/conformance/run-jvm.sh /root/lx-lanes/terminal exits 0 in qual-logs/pass6-jvm-sdk-final.log, including generator drift, 33 JVM tests and conformance. All four shared signed vectors authenticate; V4 positives reconstruct, signed mutated-leg rejects, V3 reports recorded root, truncated and trailing terminals reject. git diff --check exits 0 in qual-logs/pass6-jvm-diff-check.log."
+assumption = "The generator refreshed only the JVM verifier digest in platform/sdk/pipeline.kvx. Initial SDK and focused commands exit 1 in qual-logs/pass6-jvm-sdk.log and qual-logs/pass6-jvm-focused.log because the generic nonempty text reader rejects the canonical empty response; response decoding now uses its string type and existing empty-permitted bounded hex contract. Stored vectors and native regeneration scope remain as recorded in terminal-v4-stored-input-qualification."
+severity = "note"
