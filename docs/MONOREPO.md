@@ -13,9 +13,9 @@ This repository is the canonical Sidiora Labs ecosystem monorepo for LayerX and 
 
 LayerX and Paxeer have independent build systems, release processes, and qualification gates:
 
-- **LayerX**: C17, Rust, Solidity, TypeScript. Built with the root `Makefile`. Qualified with `make ci`, replay, arithmetic, fault, and fuzz suites.
+- **LayerX**: C17 (`-std=c17` in the root `Makefile`), Rust 1.91.1 (`rust-toolchain.toml`), Solidity 0.8.27 (`foundry.toml`), TypeScript. Built with the root `Makefile`: `make build`, `make test`, `make test-contracts`, `make ci`. Qualified with `make ci`, `make qualify-replay`, `make qualify-arith`, `make qualify-faults`, and `make qualify-fuzz`. Replay qualification needs GCC 13, Clang 18, Docker, an amd64 musl runner, and an AArch64 cross-compiler plus QEMU; see `docs/QUALIFICATION.md`.
 - **Paxeer**: Go, Solidity, Rust, Docker. Built with `make paxeer-build`, `make paxeer-lint`, `make paxeer-test`, `make paxeer-ci`.
-- **Monorepo integrity**: `make monorepo-ci` runs cross-subsystem checks but does not replace either subsystem's own qualification.
+- **Monorepo integrity**: `make monorepo-ci` runs cross-subsystem checks but does not replace either subsystem's own qualification. `make ci` runs `public-audit`, native tests, a two-build archive comparison, consensus symbol checks, and sanitizer suites.
 
 Release tags follow the pattern:
 - LayerX: `vX.Y.Z`
