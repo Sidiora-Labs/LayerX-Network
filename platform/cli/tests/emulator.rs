@@ -194,6 +194,10 @@ fn payment_test_quotes_and_commits_once_through_the_live_emulator() {
             == Some("receipt-verified")
     );
 
+    assert_payment_balances(&cli);
+}
+
+fn assert_payment_balances(cli: &Cli) {
     let source = envelope(&cli.run(&[
         "--json",
         "account",

@@ -75,16 +75,27 @@ pub fn endpoint(listen: &str) -> Result<SocketAddr, String> {
     Ok(address)
 }
 
-pub fn serve(
-    configuration: &Configuration,
-    gateway_credential: &str,
-    key: &str,
-    source: Option<&str>,
-    asset: Option<&str>,
-    listen: &str,
-    authorization_file: &Path,
-    mode: DeploymentMode,
-) -> Result<(), String> {
+#[derive(Clone, Copy)]
+pub struct ServeRequest<'a> {
+    pub gateway_credential: &'a str,
+    pub key: &'a str,
+    pub source: Option<&'a str>,
+    pub asset: Option<&'a str>,
+    pub listen: &'a str,
+    pub authorization_file: &'a Path,
+    pub mode: DeploymentMode,
+}
+
+pub fn serve(configuration: &Configuration, request: ServeRequest<'_>) -> Result<(), String> {
+    let ServeRequest {
+        gateway_credential,
+        key,
+        source,
+        asset,
+        listen,
+        authorization_file,
+        mode,
+    } = request;
     let address = endpoint(listen)?;
     let tools = toolset::surface(mode)?;
     let runtime = Arc::new(toolset::Runtime::new(
@@ -280,9 +291,8 @@ fn send(
     };
     let outcome = toolset::invoke(runtime, tool, &instruction.arguments);
     let task = build_task(&ids, &context, message, tool.name, &timestamp, outcome);
-    let mut tasks = match tasks.lock() {
-        Ok(tasks) => tasks,
-        Err(_) => return failure(identifier, -32603, "the task ledger is unavailable"),
+    let Ok(mut tasks) = tasks.lock() else {
+        return failure(identifier, -32603, "the task ledger is unavailable");
     };
     if tasks.len() >= MAX_TRACKED_TASKS {
         if let Some(evicted) = tasks.keys().next().cloned() {
@@ -306,7 +316,7 @@ fn build_task(
             let state = match gateway_state(&value) {
                 Some("refused") => "rejected",
                 Some("unknown") => "unknown",
-                Some("acknowledged") | Some("pending") => "submitted",
+                Some("acknowledged" | "pending") => "submitted",
                 _ => "completed",
             };
             json!({
@@ -354,9 +364,8 @@ fn cancel(tasks: &Mutex<BTreeMap<String, Value>>, identifier: Value, parameters:
     let Some(name) = parameters.get("id").and_then(Value::as_str) else {
         return failure(identifier, -32602, "the request did not name a task");
     };
-    let tasks = match tasks.lock() {
-        Ok(tasks) => tasks,
-        Err(_) => return failure(identifier, -32603, "the task ledger is unavailable"),
+    let Ok(tasks) = tasks.lock() else {
+        return failure(identifier, -32603, "the task ledger is unavailable");
     };
     let Some(task) = tasks.get(name) else {
         return failure(identifier, -32001, "the task was not found");
@@ -379,9 +388,8 @@ fn fetch(tasks: &Mutex<BTreeMap<String, Value>>, identifier: Value, parameters: 
     let Some(name) = parameters.get("id").and_then(Value::as_str) else {
         return failure(identifier, -32602, "the request did not name a task");
     };
-    let tasks = match tasks.lock() {
-        Ok(tasks) => tasks,
-        Err(_) => return failure(identifier, -32603, "the task ledger is unavailable"),
+    let Ok(tasks) = tasks.lock() else {
+        return failure(identifier, -32603, "the task ledger is unavailable");
     };
     match tasks.get(name) {
         Some(task) => success(identifier, task.clone()),
@@ -417,7 +425,7 @@ fn read_instruction(message: &Value) -> Result<Instruction, String> {
     Err("the message did not name a skill and its arguments".into())
 }
 
-fn read_request(stream: &mut TcpStream) -> Result<Request, String> {
+fn read_headers(stream: &mut TcpStream) -> Result<(Vec<u8>, usize), String> {
     let mut bytes = Vec::with_capacity(4096);
     let mut chunk = [0_u8; 4096];
     let header_end = loop {
@@ -439,12 +447,10 @@ fn read_request(stream: &mut TcpStream) -> Result<Request, String> {
             return Err("the request headers exceed the transport limit".into());
         }
     };
-    let headers = std::str::from_utf8(&bytes[..header_end])
-        .map_err(|_| "the request headers are not UTF-8".to_string())?;
-    let mut lines = headers.split("\r\n");
-    let start = lines
-        .next()
-        .ok_or_else(|| "the request has no start line".to_string())?;
+    Ok((bytes, header_end))
+}
+
+fn request_line(start: &str) -> Result<(&str, &str), String> {
     let mut start_fields = start.split(' ');
     let method = start_fields.next().unwrap_or_default();
     let path = start_fields.next().unwrap_or_default();
@@ -460,6 +466,19 @@ fn read_request(stream: &mut TcpStream) -> Result<Request, String> {
     {
         return Err("the request line is not canonical HTTP/1.1".into());
     }
+    Ok((method, path))
+}
+
+fn read_request(stream: &mut TcpStream) -> Result<Request, String> {
+    let (mut bytes, header_end) = read_headers(stream)?;
+    let mut chunk = [0_u8; 4096];
+    let headers = std::str::from_utf8(&bytes[..header_end])
+        .map_err(|_| "the request headers are not UTF-8".to_string())?;
+    let mut lines = headers.split("\r\n");
+    let start = lines
+        .next()
+        .ok_or_else(|| "the request has no start line".to_string())?;
+    let (method, path) = request_line(start)?;
     let mut length = 0_usize;
     let mut has_length = false;
     let mut has_host = false;

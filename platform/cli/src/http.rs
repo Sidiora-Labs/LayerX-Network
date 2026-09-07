@@ -141,7 +141,7 @@ impl Client {
                 }))
             }
         };
-        decode_stateful(response, "POST", path)
+        Ok(decode_stateful(response, "POST", path))
     }
 
     pub fn post_activity(
@@ -173,7 +173,7 @@ impl Client {
             Err(error) => return Err(format!("POST {path} failed: {error}")),
         };
         if idempotency.is_some() {
-            decode_stateful(response, "POST", path)
+            Ok(decode_stateful(response, "POST", path))
         } else {
             decode(response, "POST", path)
         }
@@ -268,7 +268,7 @@ fn decode_stateful(
     mut response: ureq::http::Response<ureq::Body>,
     method: &str,
     path: &str,
-) -> Result<Value, String> {
+) -> Value {
     let status = response.status().as_u16();
     let retry_after = response
         .headers()
@@ -278,7 +278,7 @@ fn decode_stateful(
     let body = match read_response_body(&mut response, method, path) {
         Ok(body) => body,
         Err(error) => {
-            return Ok(json!({
+            return json!({
                 "state": "unknown",
                 "failure": {
                     "code": "gateway_response_unreadable",
@@ -286,7 +286,7 @@ fn decode_stateful(
                     "http_status": status,
                     "retry_after_seconds": retry_after,
                 },
-            }))
+            })
         }
     };
     let value = if body.trim().is_empty() {
@@ -295,7 +295,7 @@ fn decode_stateful(
         match serde_json::from_str(&body) {
             Ok(value) => value,
             Err(error) => {
-                return Ok(json!({
+                return json!({
                     "state": "unknown",
                     "failure": {
                         "code": "gateway_response_invalid",
@@ -303,26 +303,26 @@ fn decode_stateful(
                         "http_status": status,
                         "retry_after_seconds": retry_after,
                     },
-                }))
+                })
             }
         }
     };
     if (200..300).contains(&status) {
-        return Ok(value);
+        return value;
     }
     let state = if (400..500).contains(&status) {
         "refused"
     } else {
         "unknown"
     };
-    Ok(json!({
+    json!({
         "state": state,
         "failure": {
             "http_status": status,
             "response": value,
             "retry_after_seconds": retry_after,
         }
-    }))
+    })
 }
 
 fn read_response_body(
