@@ -27,11 +27,11 @@ export default function Installation() {
       <h2>Repository Location</h2>
 
       <p>
-        Paxeer Network lives in the <a href="https://github.com/Sidiora-Labs/LayerX-Protocol">Sidiora-Labs/LayerX-Protocol</a> monorepo under <code>paxeer-network/</code>.
+        Paxeer Network lives in the <a href="https://github.com/Sidiora-Labs/LayerX-Network">Sidiora-Labs/LayerX-Network</a> monorepo under <code>paxeer-network/</code>.
       </p>
 
-      <pre><code>{`git clone https://github.com/Sidiora-Labs/LayerX-Protocol.git
-cd LayerX-Protocol/paxeer-network`}</code></pre>
+      <pre><code>{`git clone https://github.com/Sidiora-Labs/LayerX-Network.git
+cd LayerX-Network/paxeer-network`}</code></pre>
 
       <h2>Build from Monorepo Root</h2>
 

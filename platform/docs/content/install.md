@@ -94,7 +94,7 @@ The installed JSON contains only the executable arguments, the configuration pat
 |---|---|
 | TypeScript | `npm install @sidiora/layerx-sdk` |
 | Python | `python3 -m pip install layerx-sdk` |
-| Go | `go get github.com/Sidiora-Labs/LayerX-Protocol/platform/sdk/go` |
+| Go | `go get github.com/Sidiora-Labs/LayerX-Network/platform/sdk/go` |
 | Java and Kotlin | Add `com.sidiora.layerx:layerx-sdk:0.1.0` to your build |
 | Swift | Add the `LayerXSDK` package to `Package.swift` |
 | C# | `dotnet add package LayerX.Sdk` |

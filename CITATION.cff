@@ -3,6 +3,6 @@ message: If you use LayerX, please cite it using these metadata.
 title: LayerX
 authors:
   - name: Sidiora Labs
-repository-url: https://github.com/Sidiora-Labs/LayerX-Protocol
+repository-url: https://github.com/Sidiora-Labs/LayerX-Network
 license: Apache-2.0
 type: software

@@ -64,7 +64,7 @@ let rate: ExchangeRateResponse = deps.querier.query(&query_msg)?;`}</code></pre>
       </p>
 
       <pre><code>{`[dependencies]
-paxeer-bindings = { git = "https://github.com/Sidiora-Labs/LayerX-Protocol", branch = "main", subdir = "paxeer-network/wasmbinding" }`}</code></pre>
+paxeer-bindings = { git = "https://github.com/Sidiora-Labs/LayerX-Network", branch = "main", subdir = "paxeer-network/wasmbinding" }`}</code></pre>
 
       <h2>Message Handling</h2>
 
