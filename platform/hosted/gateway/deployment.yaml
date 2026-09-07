@@ -154,6 +154,10 @@ spec:
   ingress:
     - from: [{podSelector: {matchLabels: {app: layerx-gateway}}}]
       ports: [{protocol: TCP, port: 6379}]
+    - from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: layerx-developer}}
+          podSelector: {matchLabels: {app: layerx-dashboard-api}}
+      ports: [{protocol: TCP, port: 6379}]
   egress: []
 ---
 apiVersion: networking.k8s.io/v1
@@ -164,6 +168,10 @@ spec:
   policyTypes: [Ingress, Egress]
   ingress:
     - from: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ingress-nginx}}}, {podSelector: {matchLabels: {app: layerx-testnet-control}}}]
+      ports: [{protocol: TCP, port: 9443}]
+    - from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: layerx-internal}}
+          podSelector: {matchExpressions: [{key: app, operator: In, values: [layerx-internal-payments, layerx-internal-programs]}]}
       ports: [{protocol: TCP, port: 9443}]
   egress:
     - to: [{podSelector: {matchLabels: {app: layerx-gateway-redis}}}]

@@ -87,7 +87,7 @@ IMAGE_LABEL=io.layerx.beta-cluster
 BOUNDARY_LABEL=layerx.io/program-registry-boundary
 
 IMAGE_NAMES=(layerx-testnet-control layerx-gateway layerx-faucet layerx-program-registry layerx-webhooks layerx-dashboard layerx-dashboard-web
-    layerx-node layerx-core-boundary layerx-receipt-authority layerx-agent-boundary layerx-identity layerx-paxeer-boundary paxd-node paxd)
+    layerx-internal layerx-node layerx-core-boundary layerx-receipt-authority layerx-agent-boundary layerx-identity layerx-paxeer-boundary paxd-node paxd)
 TRUSTED_BOUNDARY_SERVICES=(layerx-pending-core layerx-pending-core-admin paxeer-boundary layerx-identity layerx-receipt-authority layerx-agent-boundary)
 INTERNAL_NAMESPACE=layerx-internal
 FOUNDRY_BIN=${LAYERX_BETA_FOUNDRY_BIN:-/root/.foundry/bin}
@@ -118,6 +118,7 @@ image_source() {
         layerx-webhooks) printf 'ghcr.io/sidiora-labs/layerx-webhooks:0.1.0 platform/hosted/webhooks/Dockerfile' ;;
         layerx-dashboard) printf 'ghcr.io/sidiora-labs/layerx-dashboard:0.1.0 platform/hosted/dashboard/Dockerfile' ;;
         layerx-dashboard-web) printf 'ghcr.io/sidiora-labs/layerx-dashboard-web:0.1.0 platform/hosted/dashboard/web/Dockerfile' ;;
+        layerx-internal) printf 'ghcr.io/sidiora-labs/layerx-internal:0.1.0 platform/hosted/internal/Dockerfile' ;;
         layerx-node) printf 'ghcr.io/sidiora-labs/layerx-node:0.1.0 platform/hosted/node/Dockerfile' ;;
         layerx-core-boundary) printf 'ghcr.io/sidiora-labs/layerx-core-boundary:0.1.0 platform/hosted/core/Dockerfile' ;;
         layerx-receipt-authority) printf 'ghcr.io/sidiora-labs/layerx-receipt-authority:0.1.0 platform/hosted/authority/Dockerfile' ;;
@@ -376,7 +377,7 @@ ca_generate() {
     issue_cert testnet-control layerx-testnet-control serverAuth \
         "DNS:layerx-testnet-public.$svc,DNS:layerx-testnet-admin.$svc,DNS:layerx-testnet-public,DNS:layerx-testnet-admin,DNS:$TESTNET_HOST,DNS:localhost,IP:127.0.0.1"
     issue_cert gateway layerx-gateway serverAuth \
-        "DNS:layerx-gateway.$svc,DNS:layerx-gateway,DNS:$GATEWAY_HOST,DNS:localhost,IP:127.0.0.1"
+        "DNS:layerx-gateway.$svc,DNS:layerx-gateway.$TESTNET_NAMESPACE.svc,DNS:layerx-gateway,DNS:$GATEWAY_HOST,DNS:localhost,IP:127.0.0.1"
     issue_cert faucet layerx-faucet serverAuth \
         "DNS:layerx-faucet-public.$svc,DNS:layerx-faucet-public,DNS:$FAUCET_HOST,DNS:localhost,IP:127.0.0.1"
     issue_cert registry layerx-program-registry serverAuth \
@@ -386,6 +387,11 @@ ca_generate() {
     issue_cert developer layerx-developer serverAuth \
         "DNS:layerx-webhooks.$dev,DNS:layerx-dashboard-api.$dev,DNS:layerx-webhooks,DNS:layerx-dashboard-api,DNS:$DEVELOPER_HOST,DNS:localhost,IP:127.0.0.1"
     local internal="$INTERNAL_NAMESPACE.svc.cluster.local"
+    local service
+    issue_cert internal-redis redis serverAuth "DNS:redis.$internal,DNS:redis.$INTERNAL_NAMESPACE.svc,DNS:redis"
+    for service in kms journeys payments approvals programs; do
+        issue_cert "internal-$service" "$service" serverAuth "DNS:$service.$internal,DNS:$service.$INTERNAL_NAMESPACE.svc,DNS:$service"
+    done
     issue_cert pending-core layerx-pending-core serverAuth \
         "DNS:layerx-pending-core.$svc,DNS:layerx-pending-core.$TESTNET_NAMESPACE.svc,DNS:layerx-pending-core,DNS:localhost,IP:127.0.0.1"
     issue_cert pending-core-admin layerx-pending-core-admin serverAuth \
@@ -508,6 +514,11 @@ secrets_generate() {
     write_token "$d/webhook-redis.password"
     printf 'layerx-dashboard' > "$d/dashboard-redis.username"
     write_token "$d/dashboard-redis.password"
+    (umask 077; printf 'user layerx-dashboard on >%s ~gateway:* +ping +get +hmget +smembers +xrevrange\n' \
+        "$(cat "$d/dashboard-redis.password")" >> "$d/gateway-redis.acl")
+    (umask 077; printf 'user default off\nuser layerx-webhooks on >%s ~webhooks:* +ping +eval +hget +hmget +hset +hincrby +smembers +sadd\n' \
+        "$(cat "$d/webhook-redis.password")" > "$d/internal-redis.acl")
+    write_token "$d/internal-kms-seal.key"
     local token
     for token in kms identity authority journey payment approval program source-trigger operator; do
         write_token "$d/developer-$token.token"
@@ -576,6 +587,21 @@ secrets_apply() {
     local c="$CA_DIR" s="$SECRETS_DIR" ns="$TESTNET_NAMESPACE" dev="$DEVELOPER_NAMESPACE"
     kube create namespace "$ns" --dry-run=client -o yaml | kube apply -f - > /dev/null
     kube create namespace "$dev" --dry-run=client -o yaml | kube apply -f - > /dev/null
+    kube create namespace "$INTERNAL_NAMESPACE" --dry-run=client -o yaml | kube apply -f - > /dev/null
+    apply_secret "$INTERNAL_NAMESPACE" layerx-internal-redis-runtime \
+        --from-file=server.pem="$c/internal-redis/cert.pem" --from-file=server.key="$c/internal-redis/key.pem" \
+        --from-file=ca.pem="$c/ca.crt" --from-file=users.acl="$s/internal-redis.acl"
+    apply_secret "$INTERNAL_NAMESPACE" layerx-internal-kms-runtime \
+        --from-file=server.der="$c/internal-kms/cert.der" --from-file=server-key.der="$c/internal-kms/key.der" \
+        --from-file=ca.der="$c/ca.der" --from-file=token="$s/developer-kms.token" --from-file=seal-secret="$s/internal-kms-seal.key"
+    local service token
+    for service in journeys payments approvals programs; do
+        token=${service%s}
+        apply_secret "$INTERNAL_NAMESPACE" "layerx-internal-$service-runtime" \
+            --from-file=server.der="$c/internal-$service/cert.der" --from-file=server-key.der="$c/internal-$service/key.der" \
+            --from-file=ca.der="$c/ca.der" --from-file=upstream-ca.der="$c/ca.der" --from-file=token="$s/developer-$token.token"
+    done
+    MISSING_INPUTS+=("Human Service layerx-testnet/layerx-human and authenticated Human principal cookies for journeys/approvals; no hosted Human manifest exists")
     apply_secret "$ns" layerx-internal-ca --from-file=ca.crt.der="$c/ca.der" --from-file=ca.crt="$c/ca.crt"
     apply_secret "$ns" layerx-testnet-control-tls --from-file=server.crt.der="$c/testnet-control/cert.der" \
         --from-file=server.key.der="$c/testnet-control/key.der" --from-file=ca.crt.der="$c/ca.der" --from-file=ca.crt="$c/ca.crt"
@@ -832,6 +858,7 @@ PY
     render_manifest "$REPO_ROOT/platform/hosted/testnet/deployment.yaml" "$MANIFESTS_DIR/testnet.yaml"
     render_manifest "$REPO_ROOT/platform/hosted/gateway/deployment.yaml" "$MANIFESTS_DIR/gateway.yaml"
     render_manifest "$REPO_ROOT/platform/hosted/registry/deployment.yaml" "$MANIFESTS_DIR/registry.yaml"
+    render_manifest "$REPO_ROOT/platform/hosted/internal/deployment.yaml" "$MANIFESTS_DIR/internal.yaml"
     render_manifest "$REPO_ROOT/platform/hosted/webhooks/deployment.yaml" "$MANIFESTS_DIR/developer.yaml"
     python3 "$SCRIPT_DIR/sequencer-pins.py" --manifests "$MANIFESTS_DIR"
     cat >> "$MANIFESTS_DIR/testnet.yaml" <<EOF
@@ -869,6 +896,10 @@ manifests_apply() {
     kube apply -f "$MANIFESTS_DIR/testnet.yaml" > /dev/null
     kube apply -f "$MANIFESTS_DIR/gateway.yaml" > /dev/null
     kube apply -f "$MANIFESTS_DIR/registry.yaml" > /dev/null
+}
+
+internal_apply() {
+    kube apply -f "$MANIFESTS_DIR/internal.yaml" > /dev/null
     kube -n "$DEVELOPER_NAMESPACE" apply -f "$MANIFESTS_DIR/developer.yaml" > /dev/null
 }
 
@@ -1029,6 +1060,33 @@ identity_provision() {
     log "identity provisioned $TEST_SOURCE_DID and $TEST_DESTINATION_DID (session token source: $TEST_AUTH_SOURCE)"
 }
 
+internal_principals_provision() {
+    local service scope status dir="$WORK_DIR/internal-principals"
+    mkdir -p "$dir"
+    chmod 0700 "$dir"
+    for service in payments programs; do
+        if [ "$service" = payments ]; then scope=receipt:read; else scope=program:read; fi
+        jq -n --arg key "$(cat "$SECRETS_DIR/test-source-signer.pub.hex")" --arg scope "$scope" \
+            '{signer_public_key: $key, scopes: [$scope], quota_requests: 1000, quota_window_seconds: 60}' > "$dir/$service-request.json"
+        (umask 077; : > "$dir/$service-response.json")
+        status=$(curl --silent --show-error --max-time 30 --cacert "$CA_DIR/ca.crt" \
+            --header "Authorization: Bearer $(cat "$SECRETS_DIR/test-auth.token")" \
+            --header 'Content-Type: application/json' --header "Idempotency-Key: internal-$service" \
+            --data-binary "@$dir/$service-request.json" --output "$dir/$service-response.json" \
+            --write-out '%{http_code}' "$GATEWAY_URL/v1/keys")
+        [ "$status" = 201 ] || [ "$status" = 200 ] || fail "gateway refused $service principal key with status $status"
+        (umask 077; jq -er '.key | select(.authorization_scheme == "LayerX-Key") | .id + ":" + .secret' \
+            "$dir/$service-response.json" > "$dir/$service.credential")
+        (umask 077; jq -n --arg sub "$TEST_SOURCE_DID" '{($sub): "/run/layerx/principal.credential"}' > "$dir/credentials.json")
+        apply_secret "$INTERNAL_NAMESPACE" "layerx-internal-$service-runtime" \
+            --from-file=server.der="$CA_DIR/internal-$service/cert.der" --from-file=server-key.der="$CA_DIR/internal-$service/key.der" \
+            --from-file=ca.der="$CA_DIR/ca.der" --from-file=upstream-ca.der="$CA_DIR/ca.der" \
+            --from-file=token="$SECRETS_DIR/developer-${service%s}.token" \
+            --from-file=credentials.json="$dir/credentials.json" --from-file=principal.credential="$dir/$service.credential"
+        rm -f "$dir/$service-response.json"
+    done
+}
+
 port_forward() {
     local name=$1 namespace=$2 service=$3 port=$4 target=$5 pidfile attempt launch
     pidfile="$WORK_DIR/port-forward-$name.pid"
@@ -1063,14 +1121,17 @@ readyz() {
 }
 
 wait_ready() {
-    local deadline=$((SECONDS + READY_TIMEOUT)) body developer_ready
+    local deadline=$((SECONDS + READY_TIMEOUT)) body developer_ready internal_ready
     while :; do
         body=$(readyz "$TESTNET_URL") || body=""
         developer_ready=$(kube -n "$DEVELOPER_NAMESPACE" get deployments -o json 2>/dev/null \
             | jq -r '[.items[] | select((.status.readyReplicas // 0) < .spec.replicas) | .metadata.name] | join(",")') \
             || developer_ready="namespace $DEVELOPER_NAMESPACE unreadable"
+        internal_ready=$(kube -n "$INTERNAL_NAMESPACE" get deployments,statefulsets -o json 2>/dev/null \
+            | jq -r '[.items[] | select((.status.readyReplicas // 0) < .spec.replicas) | .metadata.name] | join(",")') \
+            || internal_ready="namespace $INTERNAL_NAMESPACE unreadable"
         if [ -n "$body" ] && jq -e '.state == "ready" and all(.journeys[]; .ready == true)' <<<"$body" > /dev/null 2>&1 \
-            && jq -e 'all(.dependencies[]; .ready == true) and (.journeys | length) == 4' <<<"$body" > /dev/null 2>&1 && [ -z "$developer_ready" ]; then
+            && jq -e 'all(.dependencies[]; .ready == true) and (.journeys | length) == 4' <<<"$body" > /dev/null 2>&1 && [ -z "$developer_ready" ] && [ -z "$internal_ready" ]; then
             printf '%s' "$body" > "$WORK_DIR/readyz.json"
             return 0
         fi
@@ -1085,6 +1146,8 @@ wait_ready() {
                     printf 'beta-cluster: testnet /readyz unreachable at %s\n' "$TESTNET_URL"
                 fi
                 [ -z "$developer_ready" ] || printf 'beta-cluster: developer plane deployments not ready: %s\n' "$developer_ready"
+                [ -z "$internal_ready" ] || printf 'beta-cluster: internal workloads not ready: %s\n' "$internal_ready"
+                kube -n "$INTERNAL_NAMESPACE" get pods -o wide 2>/dev/null || true
                 kube -n "$TESTNET_NAMESPACE" get pods -o wide 2>/dev/null || true
                 kube -n "$DEVELOPER_NAMESPACE" get pods -o wide 2>/dev/null || true
                 local input
@@ -1102,6 +1165,11 @@ qualification_url() {
     value=${!override:-}
     if [ -n "$value" ]; then
         printf 'export %s=%s\n' "$variable" "$value" >> "$ENV_FILE"
+        return 0
+    fi
+    if [ -z "$url" ]; then
+        printf '# %s: %s\nunset %s\n' "$variable" "$surface" "$variable" >> "$ENV_FILE"
+        MISSING_INPUTS+=("$variable: $surface; supply $override only for a real deployed surface")
         return 0
     fi
     printf '# %s: %s\nexport %s=%s\n' "$variable" "$surface" "$variable" "$url" >> "$ENV_FILE"
@@ -1124,6 +1192,7 @@ env_write() {
         printf 'export LAYERX_TEST_AMOUNT=%s\n' "$TEST_AMOUNT"
         printf 'export LAYERX_GATEWAY_CA_FILE=%s\n' "$CA_DIR/ca.crt"
         printf 'export WEBHOOKS_URL=%s\n' "$DEVELOPER_URL"
+        printf 'export LAYERX_AGENT_BOUNDARY_URL=%s\n' "$AGENT_URL"
         printf 'export LAYERX_IDENTITY_URL=%s\n' "$IDENTITY_URL"
         printf 'export LAYERX_PAXEER_BOUNDARY_URL=%s\n' "$PAXEER_URL"
         printf 'export LAYERX_PAXEER_SETTLEMENT_CONTRACT=%s\n' "$GUARANTOR_BOND"
@@ -1133,10 +1202,10 @@ env_write() {
     } >> "$ENV_FILE"
     qualification_url LAYERX_QUALIFICATION_NODE_URL LAYERX_BETA_QUALIFICATION_NODE_URL "$NODE_URL" \
         "beta_driver.py --node-url: the core boundary Service layerx-pending-core (node readiness, state and receipts)"
-    qualification_url LAYERX_QUALIFICATION_AGENT_URL LAYERX_BETA_QUALIFICATION_AGENT_URL "$AGENT_URL" \
-        "beta_driver.py --agentd-url: the agent boundary Service layerx-agent-boundary (LNI submissions for agents)"
-    qualification_url LAYERX_QUALIFICATION_HUMAN_URL LAYERX_BETA_QUALIFICATION_HUMAN_URL "$GATEWAY_URL" \
-        "beta_driver.py --human-service-url (LAYERX_API_URL of the SDK samples and the CLI): the gateway is the only hosted surface serving /v1 routes to humans; no in-cluster human service exists"
+    qualification_url LAYERX_QUALIFICATION_AGENT_URL LAYERX_BETA_QUALIFICATION_AGENT_URL "" \
+        "beta_driver.py --agentd-url requires agentd; no hosted agentd Service is declared"
+    qualification_url LAYERX_QUALIFICATION_HUMAN_URL LAYERX_BETA_QUALIFICATION_HUMAN_URL "" \
+        "beta_driver.py --human-service-url requires Human; no hosted Human Service is declared"
     qualification_url LAYERX_QUALIFICATION_PAXEER_URL LAYERX_BETA_QUALIFICATION_PAXEER_URL "$PAXEER_URL" \
         "beta_driver.py --paxeer-testnet-url: the Paxeer boundary Service paxeer-boundary (JSON-RPC relay to the chain $PAXEER_CHAIN_ID node)"
 }
@@ -1278,6 +1347,8 @@ beta_cluster_up() {
     port_forward testnet "$TESTNET_NAMESPACE" layerx-testnet-public "$TESTNET_PORT" 443
     port_forward gateway "$TESTNET_NAMESPACE" layerx-gateway "$GATEWAY_PORT" 443
     port_forward faucet "$TESTNET_NAMESPACE" layerx-faucet-public "$FAUCET_PORT" 443
+    internal_principals_provision
+    internal_apply
     port_forward developer "$DEVELOPER_NAMESPACE" layerx-webhooks 19450 443
     port_forward pending-core "$TESTNET_NAMESPACE" layerx-pending-core 19446 9443
     port_forward agent-boundary "$TESTNET_NAMESPACE" layerx-agent-boundary 19447 9443
@@ -1300,7 +1371,7 @@ beta_cluster_down() {
     elif [ "$mode" = owner ] && [ -x "$TOOLS_DIR/kubectl" ] && [ -r "${LAYERX_BETA_KUBECONFIG:-/nonexistent}" ]; then
         KUBECONFIG_FILE=$LAYERX_BETA_KUBECONFIG
         log "deleting beta namespaces from the owner cluster"
-        kube delete namespace "$TESTNET_NAMESPACE" "$DEVELOPER_NAMESPACE" --ignore-not-found --wait=true > /dev/null
+        kube delete namespace "$TESTNET_NAMESPACE" "$DEVELOPER_NAMESPACE" "$INTERNAL_NAMESPACE" --ignore-not-found --wait=true > /dev/null
     fi
     if [ -f "$WORK_DIR/images" ]; then
         while read -r name canonical ref id; do
