@@ -2981,3 +2981,11 @@ symbol = "check programs-abi-drift"
 observed = "make check exits 0, including native state commitment and Programs artifact execution for protocols 2 and 3. git diff --check exits 0. cg spec lint exits 0 with nine existing missing-path warnings. Exact commands, exits and raw output are retained in qual-logs/programs-lint-pass9/gates.jsonl, check.log, diff-check-final.log and spec-lint-final.log."
 assumption = "These aggregate checks do not supersede the independent Solana porting workspace-lint blocker. No task status, manifest, policy, lockfile or generated workflow pointer is changed by the sandbox repair."
 severity = "note"
+
+[observation.6.11.solana-porting-strict-lint-qualified]
+task = "6.11"
+file = "programs/porting/solana/src/error.rs programs/porting/solana/src/monetary.rs programs/porting/solana/src/qualify.rs programs/porting/solana/src/reference.rs programs/porting/solana/src/shared_pool.rs"
+symbol = "layerx-porting-solana"
+observed = "Unused private imports are removed, documentation identifiers use backticks and shared-pool test Result handling retains panic-on-error behavior. No assertion, input, bound, validation, encoding or error path is removed. Strict all-target Clippy exits 0 and cargo test exits 0 with eight passed, zero failed and zero ignored. Touched-file rustfmt check, make check, git diff --check and cg spec lint exit 0; spec lint reports nine existing missing-path warnings. Exact commands, exit codes and logs are in qual-logs/programs-lint-pass10/gates.jsonl, solana-clippy-2.log, solana-tests.log, rustfmt-check.log, check.log, diff-check.log and spec-lint.log."
+assumption = "The initial focused Clippy attempt exposed sixteen shared-pool test unwrap diagnostics, repaired without suppressions. make programs-lint exits 2 after module boundaries pass and workspace Clippy reaches EVM and CosmWasm porting diagnostics; dependency-policy and cargo-deny are not reached. Raw output is in qual-logs/programs-lint-pass10/programs-lint.log. Focused Solana qualification does not establish workspace lint completion."
+severity = "note"
