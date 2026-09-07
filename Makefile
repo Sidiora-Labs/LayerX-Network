@@ -1052,10 +1052,11 @@ $(BUILD_DIR)/tests/test_metering: tests/test_metering.c fuzz/fuzz_meter.c \
 test-metering: $(BUILD_DIR)/tests/test_metering
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_metering
 
-$(BUILD_DIR)/tests/test_fee_replay: tests/test_fee_replay.c $(LIBRARY)
+$(BUILD_DIR)/tests/test_fee_replay: tests/test_fee_replay.c \
+		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(EXTRA_LDFLAGS) \
-		-lcrypto -pthread -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
+		$(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
 
 test-fee-replay: $(BUILD_DIR)/tests/test_fee_replay test-dispatch
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_fee_replay

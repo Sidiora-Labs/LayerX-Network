@@ -355,10 +355,12 @@ int main(void)
     static lxp_fee_replay_entry replayed[TEST_RECORDS];
     static lxp_fee_replay_entry logged[TEST_RECORDS];
     static const fee_wire wires[TEST_RECORDS] = {
-        {1U, 1U, {5U, 2U, 1U}, {0U, 1000U}, LXP_OK},
-        {2U, 2U, {7U, 4U, 3U}, {0U, 1000U}, LXP_ERR_AGREEMENT_STATE},
-        {6U, 3U, {11U, 6U, 5U}, {0U, 1000U}, LXP_OK},
-        {8U, 4U, {13U, 8U, 7U}, {0U, 1000U}, LXP_ERR_MARKET_HALTED}
+        {1U, 1U, {5U, 2U, 1U, false, 0U, {0U, 0U}}, {0U, 1000U}, LXP_OK},
+        {2U, 2U, {7U, 4U, 3U, false, 0U, {0U, 0U}}, {0U, 1000U},
+         LXP_ERR_AGREEMENT_STATE},
+        {6U, 3U, {11U, 6U, 5U, false, 0U, {0U, 0U}}, {0U, 1000U}, LXP_OK},
+        {8U, 4U, {13U, 8U, 7U, false, 0U, {0U, 0U}}, {0U, 1000U},
+         LXP_ERR_MARKET_HALTED}
     };
     char directory[] = "/tmp/lxp-fee-replay-XXXXXX";
     char path[128];
