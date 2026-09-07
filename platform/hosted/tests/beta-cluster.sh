@@ -36,6 +36,7 @@
 #   LAYERX_BETA_QUALIFICATION_AGENT_URL
 #   LAYERX_BETA_QUALIFICATION_HUMAN_URL
 #   LAYERX_BETA_QUALIFICATION_PAXEER_URL
+#   LAYERX_BETA_FORBIDDEN_CHAIN_ID      refuse contract transactions on this chain id, including disposable clusters
 #   LAYERX_BETA_KEEP_TOOLS              set to 1 to keep the pinned kind/kubectl downloads on teardown
 #
 # The trusted-boundary services (node with core boundary, receipt authority and agent boundary; identity;
@@ -87,7 +88,7 @@ IMAGE_LABEL=io.layerx.beta-cluster
 BOUNDARY_LABEL=layerx.io/program-registry-boundary
 
 IMAGE_NAMES=(layerx-testnet-control layerx-gateway layerx-faucet layerx-program-registry layerx-webhooks layerx-dashboard layerx-dashboard-web
-    layerx-internal layerx-node layerx-core-boundary layerx-receipt-authority layerx-agent-boundary layerx-identity layerx-paxeer-boundary paxd-node paxd)
+    layerx-internal layerx-human layerx-node layerx-core-boundary layerx-receipt-authority layerx-agent-boundary layerx-identity layerx-paxeer-boundary paxd-node paxd)
 TRUSTED_BOUNDARY_SERVICES=(layerx-pending-core layerx-pending-core-admin paxeer-boundary layerx-identity layerx-receipt-authority layerx-agent-boundary)
 INTERNAL_NAMESPACE=layerx-internal
 FOUNDRY_BIN=${LAYERX_BETA_FOUNDRY_BIN:-/root/.foundry/bin}
@@ -119,6 +120,7 @@ image_source() {
         layerx-dashboard) printf 'ghcr.io/sidiora-labs/layerx-dashboard:0.1.0 platform/hosted/dashboard/Dockerfile' ;;
         layerx-dashboard-web) printf 'ghcr.io/sidiora-labs/layerx-dashboard-web:0.1.0 platform/hosted/dashboard/web/Dockerfile' ;;
         layerx-internal) printf 'ghcr.io/sidiora-labs/layerx-internal:0.1.0 platform/hosted/internal/Dockerfile' ;;
+        layerx-human) printf 'ghcr.io/sidiora-labs/layerx-human:0.1.0 platform/hosted/human/Dockerfile' ;;
         layerx-node) printf 'ghcr.io/sidiora-labs/layerx-node:0.1.0 platform/hosted/node/Dockerfile' ;;
         layerx-core-boundary) printf 'ghcr.io/sidiora-labs/layerx-core-boundary:0.1.0 platform/hosted/core/Dockerfile' ;;
         layerx-receipt-authority) printf 'ghcr.io/sidiora-labs/layerx-receipt-authority:0.1.0 platform/hosted/authority/Dockerfile' ;;
@@ -378,6 +380,8 @@ ca_generate() {
         "DNS:layerx-testnet-public.$svc,DNS:layerx-testnet-admin.$svc,DNS:layerx-testnet-public,DNS:layerx-testnet-admin,DNS:$TESTNET_HOST,DNS:localhost,IP:127.0.0.1"
     issue_cert gateway layerx-gateway serverAuth \
         "DNS:layerx-gateway.$svc,DNS:layerx-gateway.$TESTNET_NAMESPACE.svc,DNS:layerx-gateway,DNS:$GATEWAY_HOST,DNS:localhost,IP:127.0.0.1"
+    issue_cert human layerx-human serverAuth \
+        "DNS:layerx-human.$svc,DNS:layerx-human.$TESTNET_NAMESPACE.svc,DNS:layerx-human,DNS:human.testnet.layerx.network,DNS:localhost,IP:127.0.0.1"
     issue_cert faucet layerx-faucet serverAuth \
         "DNS:layerx-faucet-public.$svc,DNS:layerx-faucet-public,DNS:$FAUCET_HOST,DNS:localhost,IP:127.0.0.1"
     issue_cert registry layerx-program-registry serverAuth \
@@ -599,13 +603,18 @@ secrets_apply() {
         --from-file=server.der="$c/internal-kms/cert.der" --from-file=server-key.der="$c/internal-kms/key.der" \
         --from-file=ca.der="$c/ca.der" --from-file=token="$s/developer-kms.token" --from-file=seal-secret="$s/internal-kms-seal.key"
     local service token
+    printf '{}\n' > "$s/human-credentials.json"
     for service in journeys payments approvals programs; do
         token=${service%s}
         apply_secret "$INTERNAL_NAMESPACE" "layerx-internal-$service-runtime" \
             --from-file=server.der="$c/internal-$service/cert.der" --from-file=server-key.der="$c/internal-$service/key.der" \
-            --from-file=ca.der="$c/ca.der" --from-file=upstream-ca.der="$c/ca.der" --from-file=token="$s/developer-$token.token"
+            --from-file=ca.der="$c/ca.der" --from-file=upstream-ca.der="$c/ca.der" --from-file=token="$s/developer-$token.token" \
+            --from-file=credentials.json="$s/human-credentials.json"
     done
-    MISSING_INPUTS+=("Human Service layerx-testnet/layerx-human and authenticated Human principal cookies for journeys/approvals; no hosted Human manifest exists")
+    MISSING_INPUTS+=("Human production component configuration/material and local agentd, identity, security, movement and mTLS KMS providers; see platform/hosted/human/README.md")
+    MISSING_INPUTS+=("Authenticated Human principal cookies for journeys/approvals require the passkey assertion and session.open ceremony; credential maps remain empty")
+    apply_secret "$ns" layerx-human-tls --from-file=server.crt.der="$c/human/cert.der" \
+        --from-file=server.key.der="$c/human/key.der" --from-file=ca.crt="$c/ca.crt"
     apply_secret "$ns" layerx-internal-ca --from-file=ca.crt.der="$c/ca.der" --from-file=ca.crt="$c/ca.crt"
     apply_secret "$ns" layerx-testnet-control-tls --from-file=server.crt.der="$c/testnet-control/cert.der" \
         --from-file=server.key.der="$c/testnet-control/key.der" --from-file=ca.crt.der="$c/ca.der" --from-file=ca.crt="$c/ca.crt"
@@ -867,6 +876,7 @@ PY
     render_manifest "$REPO_ROOT/platform/hosted/testnet/deployment.yaml" "$MANIFESTS_DIR/testnet.yaml"
     render_manifest "$REPO_ROOT/platform/hosted/gateway/deployment.yaml" "$MANIFESTS_DIR/gateway.yaml"
     render_manifest "$REPO_ROOT/platform/hosted/registry/deployment.yaml" "$MANIFESTS_DIR/registry.yaml"
+    render_manifest "$REPO_ROOT/platform/hosted/human/deployment.yaml" "$MANIFESTS_DIR/human.yaml"
     render_manifest "$REPO_ROOT/platform/hosted/internal/deployment.yaml" "$MANIFESTS_DIR/internal.yaml"
     render_manifest "$REPO_ROOT/platform/hosted/webhooks/deployment.yaml" "$MANIFESTS_DIR/developer.yaml"
     python3 "$SCRIPT_DIR/sequencer-pins.py" --manifests "$MANIFESTS_DIR"
@@ -902,6 +912,7 @@ trusted_boundary_apply() {
 }
 
 manifests_apply() {
+    kube apply -f "$MANIFESTS_DIR/human.yaml" > /dev/null
     kube apply -f "$MANIFESTS_DIR/testnet.yaml" > /dev/null
     kube apply -f "$MANIFESTS_DIR/gateway.yaml" > /dev/null
     kube apply -f "$MANIFESTS_DIR/registry.yaml" > /dev/null
@@ -964,6 +975,8 @@ wait_for_node_genesis() {
 }
 
 paxeer_contracts_deploy() {
+    [ "${LAYERX_BETA_FORBIDDEN_CHAIN_ID:-}" != "$PAXEER_CHAIN_ID" ] \
+        || fail "contract transactions on chain $PAXEER_CHAIN_ID are forbidden by LAYERX_BETA_FORBIDDEN_CHAIN_ID"
     local dir="$WORK_DIR/paxeer" signer bond_amount
     mkdir -p "$dir/guarantor-keys"
     chmod 0700 "$dir/guarantor-keys"
@@ -1153,9 +1166,15 @@ readyz() {
 }
 
 wait_ready() {
-    local deadline=$((SECONDS + READY_TIMEOUT)) body developer_ready internal_ready
+    local deadline=$((SECONDS + READY_TIMEOUT)) body developer_ready internal_ready human_ready human_status
     while :; do
         body=$(readyz "$TESTNET_URL") || body=""
+        human_status=$(curl --silent --show-error --max-time 10 --cacert "$CA_DIR/ca.crt" \
+            --output "$WORK_DIR/human-readyz.json" --write-out '%{http_code}' "$HUMAN_URL/readyz" 2>/dev/null) || human_status=unreachable
+        human_ready=false
+        if [ "$human_status" = 200 ] && jq -e '.ready == true and all(.components[]; . == "ready")' "$WORK_DIR/human-readyz.json" >/dev/null 2>&1; then
+            human_ready=true
+        fi
         developer_ready=$(kube -n "$DEVELOPER_NAMESPACE" get deployments -o json 2>/dev/null \
             | jq -r '[.items[] | select((.status.readyReplicas // 0) < .spec.replicas) | .metadata.name] | join(",")') \
             || developer_ready="namespace $DEVELOPER_NAMESPACE unreadable"
@@ -1163,7 +1182,7 @@ wait_ready() {
             | jq -r '[.items[] | select((.status.readyReplicas // 0) < .spec.replicas) | .metadata.name] | join(",")') \
             || internal_ready="namespace $INTERNAL_NAMESPACE unreadable"
         if [ -n "$body" ] && jq -e '.state == "ready" and all(.journeys[]; .ready == true)' <<<"$body" > /dev/null 2>&1 \
-            && jq -e 'all(.dependencies[]; .ready == true) and (.journeys | length) == 4' <<<"$body" > /dev/null 2>&1 && [ -z "$developer_ready" ] && [ -z "$internal_ready" ]; then
+            && jq -e 'all(.dependencies[]; .ready == true) and (.journeys | length) == 4' <<<"$body" > /dev/null 2>&1 && [ -z "$developer_ready" ] && [ -z "$internal_ready" ] && [ "$human_ready" = true ]; then
             printf '%s' "$body" > "$WORK_DIR/readyz.json"
             return 0
         fi
@@ -1177,6 +1196,7 @@ wait_ready() {
                 else
                     printf 'beta-cluster: testnet /readyz unreachable at %s\n' "$TESTNET_URL"
                 fi
+                printf 'beta-cluster: Human /readyz HTTP status: %s\n' "$human_status"
                 [ -z "$developer_ready" ] || printf 'beta-cluster: developer plane deployments not ready: %s\n' "$developer_ready"
                 [ -z "$internal_ready" ] || printf 'beta-cluster: internal workloads not ready: %s\n' "$internal_ready"
                 kube -n "$INTERNAL_NAMESPACE" get pods -o wide 2>/dev/null || true
@@ -1236,8 +1256,8 @@ env_write() {
         "beta_driver.py --node-url: the core boundary Service layerx-pending-core (node readiness, state and receipts)"
     qualification_url LAYERX_QUALIFICATION_AGENT_URL LAYERX_BETA_QUALIFICATION_AGENT_URL "" \
         "beta_driver.py --agentd-url requires agentd; no hosted agentd Service is declared"
-    qualification_url LAYERX_QUALIFICATION_HUMAN_URL LAYERX_BETA_QUALIFICATION_HUMAN_URL "" \
-        "beta_driver.py --human-service-url requires Human; no hosted Human Service is declared"
+    qualification_url LAYERX_QUALIFICATION_HUMAN_URL LAYERX_BETA_QUALIFICATION_HUMAN_URL "$HUMAN_URL" \
+        "beta_driver.py --human-service-url: layerx-human HTTPS API; /readyz verifies all production components"
     qualification_url LAYERX_QUALIFICATION_PAXEER_URL LAYERX_BETA_QUALIFICATION_PAXEER_URL "$PAXEER_URL" \
         "beta_driver.py --paxeer-testnet-url: the Paxeer boundary Service paxeer-boundary (JSON-RPC relay to the chain $PAXEER_CHAIN_ID node)"
 }
@@ -1368,6 +1388,7 @@ beta_cluster_up() {
     PAXEER_URL="https://localhost:19449"
     PAXEER_OBSERVER_URL="https://localhost:19452"
     IDENTITY_URL="https://localhost:$IDENTITY_PORT"
+    HUMAN_URL="https://localhost:19453"
     wait_for_pod_ready "$TESTNET_NAMESPACE" app=paxeer 600
     port_forward paxeer-boundary "$TESTNET_NAMESPACE" paxeer-boundary 19449 9443
     port_forward paxeer-observer-boundary "$TESTNET_NAMESPACE" paxeer-observer-boundary 19452 9443
@@ -1384,6 +1405,7 @@ beta_cluster_up() {
     port_forward faucet "$TESTNET_NAMESPACE" layerx-faucet-public "$FAUCET_PORT" 443
     internal_principals_provision
     internal_apply
+    port_forward human "$TESTNET_NAMESPACE" layerx-human 19453 9443
     port_forward developer "$DEVELOPER_NAMESPACE" layerx-webhooks 19450 443
     port_forward pending-core "$TESTNET_NAMESPACE" layerx-pending-core 19446 9443
     port_forward agent-boundary "$TESTNET_NAMESPACE" layerx-agent-boundary 19447 9443

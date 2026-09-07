@@ -67,6 +67,7 @@ The reached rung of a surface is raised only by a `[gate.*]` record in the evide
 | hosted-agent-boundary | agent boundary: layerx-agent-boundary LNI submissions for the gateway and the registry | hosted | deployment_proven | source_present | platform/hosted/agent-boundary |
 | hosted-identity | identity service: principals, sessions, introspection and service tokens | hosted | deployment_proven | source_present | platform/hosted/identity |
 | hosted-paxeer | Paxeer chain 125 node with its JSON-RPC boundary, chain initialisation and settlement contract deployment | hosted | deployment_proven | source_present | platform/hosted/paxeer |
+| hosted-human | Human HTTPS API and privileged components; readiness requires the production providers | hosted | deployment_proven | source_present | platform/hosted/human |
 | hosted-internal | layerx-internal aliases, Redis, KMS and event sources for the developer plane | hosted | deployment_proven | source_present | platform/hosted/internal |
 | hosted-tests | static topology check: every configured in-cluster URL resolves to an exposed Service port admitted by NetworkPolicy on both ends | hosted | deployment_proven | source_present | platform/hosted/tests |
 | middleware-buyer | @sidiora/layerx-buyer-middleware | functional | runtime_proven | source_present | platform/middleware/buyer |
