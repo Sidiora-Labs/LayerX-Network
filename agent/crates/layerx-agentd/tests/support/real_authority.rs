@@ -49,9 +49,17 @@ fn random32() -> [u8; 32] {
     bytes
 }
 
-fn now_ms() -> u64 {
-    let elapsed = must(SystemTime::now().duration_since(UNIX_EPOCH), "clock");
-    u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
+#[derive(Clone, Copy)]
+pub(super) struct Clock {
+    pub(super) wall_time: fn() -> SystemTime,
+    pub(super) monotonic_time: fn() -> Instant,
+}
+
+impl Clock {
+    fn now_ms(self) -> u64 {
+        let elapsed = must((self.wall_time)().duration_since(UNIX_EPOCH), "clock");
+        u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
+    }
 }
 
 fn repository_root() -> PathBuf {
@@ -169,13 +177,18 @@ struct Genesis {
     receipt_state_root: [u8; 32],
 }
 
-fn genesis_request(scope: Scope, asset: &[u8; 32], guarantor_key: &[u8; 33]) -> Vec<u8> {
+fn genesis_request(
+    clock: Clock,
+    scope: Scope,
+    asset: &[u8; 32],
+    guarantor_key: &[u8; 33],
+) -> Vec<u8> {
     let mut request = Vec::with_capacity(512);
     request.extend_from_slice(b"LXGB");
     request.push(1);
     request.extend_from_slice(&scope.protocol_version.to_be_bytes());
     request.extend_from_slice(&scope.network_id.to_be_bytes());
-    request.extend_from_slice(&now_ms().to_be_bytes());
+    request.extend_from_slice(&clock.now_ms().to_be_bytes());
     request.extend_from_slice(&1_u16.to_be_bytes());
     request.extend_from_slice(&MODULE_GOVERNANCE.to_be_bytes());
     let mut parameter_key = [0_u8; 32];
@@ -248,14 +261,14 @@ fn genesis_guarantor_key(directory: &Path) -> [u8; 33] {
     )
 }
 
-fn build_genesis(scope: Scope, root: &Path, builder: &Path) -> Genesis {
+fn build_genesis(clock: Clock, scope: Scope, root: &Path, builder: &Path) -> Genesis {
     let directory = root.join("genesis");
     make_dir(&directory, 0o755);
     let asset = random32();
     let guarantor_key = genesis_guarantor_key(&directory);
     write(
         &directory.join("request.lxgb"),
-        &genesis_request(scope, &asset, &guarantor_key),
+        &genesis_request(clock, scope, &asset, &guarantor_key),
         0o600,
     );
     write(&directory.join("signer.key"), &random32(), 0o600);
@@ -359,8 +372,8 @@ fn spawn_daemon(
     Daemon { child, stderr }
 }
 
-fn wait_for_port(port: u16, daemon: &mut Daemon, what: &str) {
-    let deadline = Instant::now() + Duration::from_secs(30);
+fn wait_for_port(clock: Clock, port: u16, daemon: &mut Daemon, what: &str) {
+    let deadline = (clock.monotonic_time)() + Duration::from_secs(30);
     loop {
         if TcpStream::connect(("127.0.0.1", port)).is_ok() {
             return;
@@ -372,7 +385,7 @@ fn wait_for_port(port: u16, daemon: &mut Daemon, what: &str) {
             );
         }
         assert!(
-            Instant::now() < deadline,
+            (clock.monotonic_time)() < deadline,
             "{what} did not open port {port}: {}",
             daemon.diagnostics()
         );
@@ -425,8 +438,14 @@ fn connect_lni(scope: Scope, socket: &Path, gate: &ConnectionGate) -> Uds {
     transport
 }
 
-fn wait_for_lni(scope: Scope, socket: &Path, gate: &ConnectionGate, daemon: &mut Daemon) {
-    let deadline = Instant::now() + Duration::from_secs(60);
+fn wait_for_lni(
+    clock: Clock,
+    scope: Scope,
+    socket: &Path,
+    gate: &ConnectionGate,
+    daemon: &mut Daemon,
+) {
+    let deadline = (clock.monotonic_time)() + Duration::from_secs(60);
     let expected = HandshakeConfig {
         built_interface_version: Version::V1_4,
         expected_protocol_version: scope.protocol_version,
@@ -447,7 +466,7 @@ fn wait_for_lni(scope: Scope, socket: &Path, gate: &ConnectionGate, daemon: &mut
             );
         }
         assert!(
-            Instant::now() < deadline,
+            (clock.monotonic_time)() < deadline,
             "sequencer LNI did not come up: {}",
             daemon.diagnostics()
         );
@@ -512,10 +531,10 @@ fn actor() -> Actor {
     Actor { signing_key, did }
 }
 
-fn signed_program_call(scope: Scope, actor: &Actor, sequence: u64) -> Vec<u8> {
+fn signed_program_call(clock: Clock, scope: Scope, actor: &Actor, sequence: u64) -> Vec<u8> {
     let idempotency = random32();
-    let not_before = now_ms().saturating_sub(30_000);
-    let expires_at = now_ms() + 120_000;
+    let not_before = clock.now_ms().saturating_sub(30_000);
+    let expires_at = clock.now_ms() + 120_000;
     let call = NativeProgramCall {
         program_id: ProgramId::new(random32()),
         guest_abi: 1,
@@ -575,6 +594,7 @@ struct Submitted {
 }
 
 fn submit_and_wait(
+    clock: Clock,
     transport: &mut dyn FrameTransport,
     signed: &[u8],
     correlation: u64,
@@ -593,7 +613,7 @@ fn submit_and_wait(
     let mut selector = Vec::with_capacity(33);
     selector.push(1);
     selector.extend_from_slice(&expected_id);
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let deadline = (clock.monotonic_time)() + Duration::from_secs(30);
     let mut attempt = 0_u64;
     loop {
         let (tag, receipt, proof) = exchange(transport, 5, correlation + 1000 + attempt, &selector);
@@ -606,7 +626,10 @@ fn submit_and_wait(
                 receipt,
             };
         }
-        assert!(Instant::now() < deadline, "receipt never became durable");
+        assert!(
+            (clock.monotonic_time)() < deadline,
+            "receipt never became durable"
+        );
         attempt += 1;
         thread::sleep(Duration::from_millis(50));
     }
@@ -915,6 +938,7 @@ fn assert_replica_receipt(
 }
 
 struct Fixture {
+    clock: Clock,
     scope: Scope,
     identity: Identity,
     root: PathBuf,
@@ -933,6 +957,7 @@ struct Fixture {
 }
 
 fn fixture(
+    clock: Clock,
     policy: super::TestAuthorityPolicy<'_>,
     expected_sequencer_id: Option<[u8; 32]>,
 ) -> Fixture {
@@ -951,11 +976,11 @@ fn fixture(
     let root = std::env::temp_dir().join(format!(
         "layerx-authority-{}-{}-{}",
         std::process::id(),
-        now_ms(),
+        clock.now_ms(),
         hex::encode(&random32()[..8])
     ));
     make_dir(&root, 0o755);
-    let genesis = build_genesis(scope, &root, &builder);
+    let genesis = build_genesis(clock, scope, &root, &builder);
     let daemon_binary = root.join("layerxd");
     must(
         fs::hard_link(&layerxd, &daemon_binary),
@@ -992,6 +1017,7 @@ fn fixture(
         .unwrap_or_else(|| panic!("fixture batch range overflow"));
 
     Fixture {
+        clock,
         scope,
         identity,
         root,
@@ -1063,7 +1089,12 @@ fn start_replica(fixture: &Fixture) -> Replica {
         identity,
         root.join("replica.stderr"),
     );
-    wait_for_port(replica_port, &mut replica, "authority replica");
+    wait_for_port(
+        fixture.clock,
+        replica_port,
+        &mut replica,
+        "authority replica",
+    );
     assert!(
         must(
             fs::metadata(replica_dir.join("replica.log")),
@@ -1284,7 +1315,7 @@ fn start_sequencer(
         identity,
         root.join("sequencer.stderr"),
     );
-    wait_for_lni(scope, socket, &gate, &mut sequencer);
+    wait_for_lni(fixture.clock, scope, socket, &gate, &mut sequencer);
     let transport = connect_lni(scope, socket, &gate);
     (gate, sequencer, transport)
 }
@@ -1298,8 +1329,8 @@ fn submit_calls(
     let scope = fixture.scope;
     let mut retained = Vec::new();
     for sequence in 1..=policy.handshake_batch {
-        let signed = signed_program_call(scope, &paths.actor, sequence);
-        let submitted = submit_and_wait(transport, &signed, sequence * 10_000);
+        let signed = signed_program_call(fixture.clock, scope, &paths.actor, sequence);
+        let submitted = submit_and_wait(fixture.clock, transport, &signed, sequence * 10_000);
         verify_replica_receipt(fixture, &submitted);
         retained.push((signed, submitted));
     }
@@ -1350,6 +1381,7 @@ fn restart_authority(
         root.join("replica-restart.stderr"),
     );
     wait_for_port(
+        fixture.clock,
         replica_port,
         &mut replica.daemon,
         "restarted authority replica",
@@ -1362,13 +1394,13 @@ fn restart_authority(
         identity,
         root.join("sequencer-restart.stderr"),
     );
-    wait_for_lni(scope, socket, gate, sequencer);
+    wait_for_lni(fixture.clock, scope, socket, gate, sequencer);
     let mut transport = connect_lni(scope, socket, gate);
     for (index, (signed, original)) in retained.iter().enumerate() {
         let correlation = u64::try_from(index).unwrap_or_else(|_| panic!("correlation overflow"))
             * 10_000
             + 100_000;
-        let recovered = submit_and_wait(&mut transport, signed, correlation);
+        let recovered = submit_and_wait(fixture.clock, &mut transport, signed, correlation);
         assert_eq!(recovered.activity_id, original.activity_id);
         assert_eq!(recovered.receipt, original.receipt);
         verify_replica_receipt(fixture, &recovered);
@@ -1389,6 +1421,7 @@ fn restart_authority(
 }
 
 pub(super) fn authorize(
+    clock: Clock,
     authority_gate: &mut Gate,
     policy: super::TestAuthorityPolicy<'_>,
     expected_sequencer_id: Option<[u8; 32]>,
@@ -1397,7 +1430,7 @@ pub(super) fn authorize(
     let _guard = FIXTURE_LOCK
         .lock()
         .unwrap_or_else(|_| panic!("real authority fixture lock poisoned"));
-    let fixture = fixture(policy, expected_sequencer_id);
+    let fixture = fixture(clock, policy, expected_sequencer_id);
     let mut replica = start_replica(&fixture);
     let paths = prepare_node(&fixture);
     let node_env = node_environment(&fixture, &paths);
