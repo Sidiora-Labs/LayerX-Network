@@ -4526,3 +4526,131 @@ symbol = "encode_activity qualify-replay"
 observed = "On 39deceadc2588221ef10dc7199250995226a0b55 with the legacy corpus pin applied, make qualify-replay exits 0 (qual-logs/r23/qualify-replay.log); make check exits 0 (qual-logs/r23/check.log); git diff --check exits 0 (qual-logs/r23/diff-check.log); make beta-ledger-check exits 0 (qual-logs/r23/beta-ledger-check.log). The replay gate generates 10000000 activities in 1000 batches; all six compiler and architecture outputs match the published legacy corpus digest 2ea6be03496f578075334f3365a6dd57266af0bad632a8b91d8846b512a1be1b, and the original single-byte mutation refusal check passes. Imported historical observations use distinct numeric identifiers 5.1.31 through 5.1.33."
 assumption = "Environment: CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4 LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin; worktree-default build directories. Gate output inspection is limited to exit codes and the last 40 log lines. encode_activity selects LXP_PROTOCOL_VERSION_LEGACY explicitly; golden bytes, runtime codecs, workload bounds and assertions are unchanged. This qualifies the legacy corpus only."
 severity = "note"
+
+[observation.4.1.6]
+task = "4.1"
+file = "platform/sdk/go"
+symbol = "sdk-build"
+observed = "GO1: go build ./... in platform/sdk/go exits 0. Log: qual-logs/go1/sdk-build.log."
+assumption = "Module paths, imports and SDK metadata use the renamed repository; dependency versions and assertions are unchanged."
+severity = "note"
+
+[observation.4.1.7]
+task = "4.1"
+file = "platform/sdk/go"
+symbol = "sdk-vet"
+observed = "GO1: go vet ./... in platform/sdk/go exits 0. Log: qual-logs/go1/sdk-vet.log."
+assumption = "Module paths, imports and SDK metadata use the renamed repository; dependency versions and assertions are unchanged."
+severity = "note"
+
+[observation.4.1.8]
+task = "4.1"
+file = "platform/sdk/go"
+symbol = "sdk-test"
+observed = "GO1: go test ./... in platform/sdk/go exits 0. Log: qual-logs/go1/sdk-test.log."
+assumption = "Module paths, imports and SDK metadata use the renamed repository; dependency versions and assertions are unchanged."
+severity = "note"
+
+[observation.4.1.9]
+task = "4.1"
+file = "platform/docs/samples/first-payment-go"
+symbol = "sample-build"
+observed = "GO1: go build ./... in platform/docs/samples/first-payment-go exits 0. Log: qual-logs/go1/sample-build.log."
+assumption = "Module paths, imports and SDK metadata use the renamed repository; dependency versions and assertions are unchanged."
+severity = "note"
+
+[observation.4.1.10]
+task = "4.1"
+file = "platform/docs/samples/first-payment-go"
+symbol = "sample-vet"
+observed = "GO1: go vet ./... in platform/docs/samples/first-payment-go exits 0. Log: qual-logs/go1/sample-vet.log."
+assumption = "Module paths, imports and SDK metadata use the renamed repository; dependency versions and assertions are unchanged."
+severity = "note"
+
+[observation.4.1.11]
+task = "4.1"
+file = "platform/docs/samples/first-payment-go"
+symbol = "sample-test"
+observed = "GO1: go test ./... in platform/docs/samples/first-payment-go exits 0. Log: qual-logs/go1/sample-test.log. The module reports no test files."
+assumption = "Module paths, imports and SDK metadata use the renamed repository; dependency versions and assertions are unchanged."
+severity = "note"
+
+[observation.4.1.12]
+task = "4.1"
+file = "paxeer-network/hpx/registry"
+symbol = "registry-build"
+observed = "GO1: go build ./... in paxeer-network/hpx/registry exits 0. Log: qual-logs/go1/registry-build.log."
+assumption = "Module paths, imports and SDK metadata use the renamed repository; dependency versions and assertions are unchanged."
+severity = "note"
+
+[observation.4.1.13]
+task = "4.1"
+file = "paxeer-network/hpx/registry"
+symbol = "registry-vet"
+observed = "GO1: go vet ./... in paxeer-network/hpx/registry exits 0. Log: qual-logs/go1/registry-vet.log."
+assumption = "Module paths, imports and SDK metadata use the renamed repository; dependency versions and assertions are unchanged."
+severity = "note"
+
+[observation.4.1.14]
+task = "4.1"
+file = "paxeer-network/hpx/registry"
+symbol = "registry-test"
+observed = "GO1: go test ./... in paxeer-network/hpx/registry exits 0. Log: qual-logs/go1/registry-test.log. The module reports no test files."
+assumption = "Module paths, imports and SDK metadata use the renamed repository; dependency versions and assertions are unchanged."
+severity = "note"
+
+[observation.4.1.15]
+task = "4.1"
+file = "Makefile platform/Makefile.inc"
+symbol = "gofmt"
+observed = "GO1: gofmt -l platform/sdk/go/client.go platform/sdk/go/cmd/conformance/main.go platform/docs/samples/first-payment-go/main.go in . exits 0. Log: qual-logs/go1/gofmt.log. Output is empty."
+assumption = "Module paths, imports and SDK metadata use the renamed repository; dependency versions and assertions are unchanged."
+severity = "note"
+
+[observation.4.1.16]
+task = "4.1"
+file = "Makefile platform/Makefile.inc"
+symbol = "old-paths"
+observed = "GO1: git grep -n 'LayerX-Protocol' -- platform/sdk/go platform/docs/samples/first-payment-go paxeer-network/hpx/registry platform/docs/content/quickstart/go.md platform/docs/content/install.md platform/docs/content/beta.md in . exits 1. Log: qual-logs/go1/old-paths.log. No matching old repository paths remain in the owned modules or documentation."
+assumption = "Module paths, imports and SDK metadata use the renamed repository; dependency versions and assertions are unchanged."
+severity = "note"
+
+[observation.4.1.17]
+task = "4.1"
+file = "Makefile platform/Makefile.inc"
+symbol = "platform-build-all"
+observed = "GO1: make platform-build-all in . exits 2. Log: qual-logs/go1/platform-build-all.log. Missing local sample Python environment fails platform-sample-dependencies-ready; confirmed in qual-logs/go1/platform-build-all-confirm.log.    Compiling openssl-macros v0.1.1    Compiling openssl v0.10.73    Compiling serde v1.0.229    Compiling native-tls v0.2.15    Compiling ureq v3.4.0    Compiling layerx-platform-release v0.1.0 (/root/lx-lanes/gosdk/platform/release)     Finished `dev` profile [unoptimized + debuginfo] target(s) in 33.89s      Running `platform/target/debug/layerx-platform-release --check platform/release/registries.kvx`"
+assumption = "The aggregate prerequisite failure is outside the Go module rename scope; component owners must resolve it before aggregate qualification can pass."
+severity = "blocker"
+
+[observation.4.1.18]
+task = "4.1"
+file = "Makefile platform/Makefile.inc"
+symbol = "platform-test-docs"
+observed = "GO1: make platform-test-docs in . exits 2. Log: qual-logs/go1/platform-test-docs.log. Missing local sample Python environment and unresolved @sidiora/layerx-buyer-middleware prevent the Go sample recipe from running.     at ModuleLoader.resolve (node:internal/modules/esm/loader:724:38)     at ModuleLoader.getModuleJobForImport (node:internal/modules/esm/loader:320:38)     at ModuleJob._link (node:internal/modules/esm/module_job:182:49) {   code: 'ERR_MODULE_NOT_FOUND' }  Node.js v22.23.2 make: *** [platform/Makefile.inc:303: platform-test-reference-apps] Error 1"
+assumption = "The aggregate prerequisite failure is outside the Go module rename scope; component owners must resolve it before aggregate qualification can pass."
+severity = "blocker"
+
+[observation.4.1.19]
+task = "4.1"
+file = "Makefile platform/Makefile.inc"
+symbol = "beta-ledger-check"
+observed = "GO1: make beta-ledger-check in . exits 0. Log: qual-logs/go1/beta-ledger-check.log."
+assumption = "Module paths, imports and SDK metadata use the renamed repository; dependency versions and assertions are unchanged."
+severity = "note"
+
+[observation.4.1.20]
+task = "4.1"
+file = "Makefile platform/Makefile.inc"
+symbol = "diff-check"
+observed = "GO1: git diff --check in . exits 0. Log: qual-logs/go1/diff-check.log."
+assumption = "Module paths, imports and SDK metadata use the renamed repository; dependency versions and assertions are unchanged."
+severity = "note"
+
+[observation.4.1.21]
+task = "4.1"
+file = "Makefile platform/Makefile.inc"
+symbol = "platform-build-all-confirm"
+observed = "GO1: make platform-build-all in . exits 2. Log: qual-logs/go1/platform-build-all-confirm.log. Missing local sample Python environment fails platform-sample-dependencies-ready; confirmed in qual-logs/go1/platform-build-all-confirm.log. python3 platform/sdk/generators/generate_jvm.py --check /root/lx-lanes/gosdk cargo run --offline --manifest-path platform/Cargo.toml --locked -p layerx-platform-sdkgen -- --check     Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.43s      Running `platform/target/debug/layerx-platform-sdkgen --check` make[1]: Leaving directory '/root/lx-lanes/gosdk' cargo run --offline --manifest-path platform/Cargo.toml --locked -p layerx-platform-release -- --check platform/release/registries.kvx     Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.30s      Running `platform/target/debug/layerx-platform-release --check platform/release/registries.kvx`"
+assumption = "The aggregate prerequisite failure is outside the Go module rename scope; component owners must resolve it before aggregate qualification can pass."
+severity = "blocker"
