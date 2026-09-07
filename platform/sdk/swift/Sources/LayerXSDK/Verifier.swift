@@ -187,6 +187,7 @@ public struct ReceiptEffect: Sendable {
 }
 
 public struct ProgramReceiptOutcome: Sendable {
+    public let appliedLegsDigest: Data
     public let encodingVersion: UInt8
     public let terminalKind: UInt8
     public let resultCode: Int32
@@ -578,6 +579,7 @@ private func decodeProgramReceiptOutcomeFrom(_ decoder: inout WireDecoder,
     case programOutcomeV1: encodingVersion = 1
     case programOutcomeV2: encodingVersion = 2
     case programOutcomeV3: encodingVersion = 3
+    case 0x50524734: encodingVersion = 4
     default: throw verificationFailure()
     }
     let terminalKind = try decoder.u8()
@@ -585,7 +587,7 @@ private func decodeProgramReceiptOutcomeFrom(_ decoder: inout WireDecoder,
     let runtimeVersion = try decoder.u16()
     let abiVersion = try decoder.u16()
     let feeScheduleVersion = try decoder.u32()
-    let meteringScheduleVersion: UInt32 = encodingVersion == 3 ? (try decoder.u32()) : 1
+    let meteringScheduleVersion: UInt32 = encodingVersion >= 3 ? (try decoder.u32()) : 1
     let cpuFuel = try decoder.u64()
     let memoryBytes = try decoder.u64()
     let storageReadBytes = try decoder.u64()
@@ -606,11 +608,13 @@ private func decodeProgramReceiptOutcomeFrom(_ decoder: inout WireDecoder,
     let callGraphRoot = try decoder.array32()
     let terminalPayloadRoot = try decoder.array32()
     let transferRoot = try decoder.array32()
+    let appliedLegsDigest = encodingVersion == 4 ? (try decoder.array32()) : Data(repeating: 0, count: 32)
     let occupancyZero = occupancyByteBatches == zero128 && occupancyFeeUnits == zero128
         && allZero(occupancyAssetID) && allZero(occupancyEvidenceDigest) && allZero(occupancyTransferRoot)
     let validVersion = protocolVersion == 1 && (encodingVersion == 1 || encodingVersion == 3)
         || (protocolVersion == 2 || protocolVersion == 3) && (encodingVersion == 2 || encodingVersion == 3)
-    guard (1...3).contains(terminalKind), runtimeVersion != 0, abiVersion != 0,
+        || protocolVersion == 3 && encodingVersion == 4
+    guard (encodingVersion == 4) != allZero(appliedLegsDigest), (1...3).contains(terminalKind), runtimeVersion != 0, abiVersion != 0,
           feeScheduleVersion != 0, meteringScheduleVersion == 1, !allZero(terminalPayloadRoot),
           terminalKind != 1 || resultCode == 0,
           terminalKind == 1 || (resultCode != 0 && resultCode > -1000),
@@ -618,12 +622,12 @@ private func decodeProgramReceiptOutcomeFrom(_ decoder: inout WireDecoder,
           encodingVersion != 1 || occupancyZero,
           encodingVersion < 2 || terminalKind == 1 || occupancyZero,
           encodingVersion != 2 || terminalKind != 1 || (!allZero(occupancyAssetID) && !allZero(occupancyEvidenceDigest)),
-          encodingVersion != 3 || allZero(occupancyAssetID) == allZero(occupancyEvidenceDigest),
-          protocolVersion != 1 || encodingVersion != 3 || occupancyZero,
-          (protocolVersion != 2 && protocolVersion != 3) || encodingVersion != 3 || terminalKind != 1
+          encodingVersion < 3 || allZero(occupancyAssetID) == allZero(occupancyEvidenceDigest),
+          protocolVersion != 1 || encodingVersion < 3 || occupancyZero,
+          (protocolVersion != 2 && protocolVersion != 3) || encodingVersion < 3 || terminalKind != 1
             || (!allZero(occupancyAssetID) && !allZero(occupancyEvidenceDigest))
     else { throw verificationFailure() }
-    return ProgramReceiptOutcome(encodingVersion: encodingVersion, terminalKind: terminalKind,
+    return ProgramReceiptOutcome(appliedLegsDigest: appliedLegsDigest, encodingVersion: encodingVersion, terminalKind: terminalKind,
         resultCode: resultCode, runtimeVersion: runtimeVersion, abiVersion: abiVersion,
         feeScheduleVersion: feeScheduleVersion, meteringScheduleVersion: meteringScheduleVersion,
         cpuFuel: cpuFuel, memoryBytes: memoryBytes, storageReadBytes: storageReadBytes,

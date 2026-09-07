@@ -1,8 +1,56 @@
+import Crypto
 import Foundation
 import XCTest
 @testable import LayerXSDK
 
 final class ReceiptFixtureTests: XCTestCase {
+    func testSignedTerminalV4Vectors() async throws {
+        for name in ["executed-v4", "principal-v4", "mutated-leg-v4", "executed-v3"] {
+            let raw = try Data(contentsOf: fixtureURL("receipt-programs-\(name).json"))
+            let vector = try XCTUnwrap(JSONSerialization.jsonObject(with: raw) as? [String: Any])
+            let batch = try XCTUnwrap(vector["authorized_batch"] as? [String: Any])
+            let authority = AuthorizedReceiptBatch(
+                batchID: try hexField(batch, "batch_id_hex"), asset: try hexField(batch, "asset_hex"),
+                previousStateRoot: try hexField(batch, "previous_state_root_hex"),
+                resultingStateRoot: try hexField(batch, "resulting_state_root_hex"),
+                sequencerPublicKey: try hexField(batch, "sequencer_public_key_hex"))
+            let verified = try await LocalVerifier.verifyReceipt(try hexField(vector, "canonical_receipt_hex"), authorized: authority, protocolVersion: 3)
+            XCTAssertEqual(verified.receiptDigest, try hexField(vector, "receipt_digest_hex"), name)
+            var activity = Data("LXP/v1/activity-id\0".utf8)
+            activity.append(try hexField(vector, "signed_activity_hex"))
+            XCTAssertEqual(Data(SHA256.hash(data: activity)), verified.receipt.activityID, name)
+            let receipt = try XCTUnwrap(verified.receipt.programOutcome)
+            let terminal = try hexField(vector, "terminal_payload_hex")
+            let graph = try hexField(vector, "call_graph_hex")
+            let program = try hexField(vector, "program_id_hex")
+            var outcome: [String: JSONValue] = ["kind": .string("completed"), "code": .integer(0), "response": .string("")]
+            if name == "principal-v4" {
+                outcome = ["kind": .string("legacy_completed"), "code": .integer(0),
+                    "values": .array([.object(["type": .string("i32"), "value": .integer(0)])])]
+            }
+            if name == "mutated-leg-v4" {
+                XCTAssertThrowsError(try unwrapAppliedTerminal(terminal, receipt: receipt))
+                XCTAssertThrowsError(try verifyTerminal(terminal, availableGraph: graph, expectedProgram: program,
+                    documentOutcome: outcome, protocolVersion: 3, receipt: receipt))
+            } else {
+                XCTAssertEqual(try verifyTerminal(terminal, availableGraph: graph, expectedProgram: program,
+                    documentOutcome: outcome, protocolVersion: 3, receipt: receipt),
+                    name == "executed-v3" ? "recorded_terminal_root_not_locally_reconstructable" : "reconstructed", name)
+            }
+            if name == "executed-v4" {
+                for length in 0..<terminal.count {
+                    XCTAssertThrowsError(try verifyTerminal(Data(terminal.prefix(length)), availableGraph: graph, expectedProgram: program,
+                        documentOutcome: outcome, protocolVersion: 3, receipt: receipt))
+                }
+                var trailing = terminal; trailing.append(0)
+                XCTAssertThrowsError(try verifyTerminal(trailing, availableGraph: graph, expectedProgram: program,
+                    documentOutcome: outcome, protocolVersion: 3, receipt: receipt))
+            }
+        }
+        XCTAssertNoThrow(try verifyAppliedLegs(Data(), expected: Data(repeating: 0, count: 32)))
+        XCTAssertThrowsError(try verifyAppliedLegs(Data(), expected: Data(repeating: 1, count: 32)))
+    }
+
     func testNativeLifecycleCFixtures() throws {
     let token = try AccessToken(Data("fixture-bearer".utf8))
     defer { token.destroy() }
