@@ -4494,3 +4494,35 @@ symbol = "HttpProgramTransport::connect Clock::now_ms authorize"
 observed = "The SDK program transport receives a required fallible millisecond clock callback. The real authority harness receives wall and monotonic clock callbacks from the outer real-process harness. Freshness bounds and 30/60/30-second process deadlines are unchanged. rustfmt exits 0; qual-logs/r22/rustfmt.log and rustfmt-final.log. Strict SDK and agentd all-target Clippy exits 0; qual-logs/r22/clippy-qualified.log. SDK tests and agentd all-targets exit 0; qual-logs/r22/sdk-test.log and agentd-test.log. All five additional approval_semantics runs exit 0; qual-logs/r22/approval-semantics-1.log through approval-semantics-5.log. The boundary qualification gate make agent-qualify-fuzz exits 0; qual-logs/r22/boundary-gate.log. Only its final three lines are read: ten targets, 256 runs per target, allowlist passed, address passed and thread unsupported-pinned-stdlib."
 assumption = "The branch is rebased onto main at 5c17c8d4, with qualified code inputs unchanged as verified in observation 6.10.12. The checker, allowlists, assertions and clock bounds remain unchanged. Environment: CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4 LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin."
 severity = "note"
+
+[observation.5.1.31]
+task = "5.1"
+file = "tests/qualification/lxp_qual_replay.c include/layerx/lxp_protocol.h tools/lxp_qual_replay_matrix.sh tests/vectors/qualification_replay_10m.digest"
+symbol = "encode_activity qualify-replay"
+observed = "Initial make qualify-replay exits 2 (qual-logs/r17/row-43.log): /root/lx-lanes/exec/tests/vectors/qualification_replay_10m.digest /root/lx-lanes/exec/build/qualification/replay/gcc-o2.digest differ: byte 43, line 3. All six outputs match each other; the mutation refuses with status=-1002 sequence=10000. The published vector and generator originated in 2e9b08ec when LXP_PROTOCOL_VERSION was 1. e93f5fb3 changed the default to occupancy protocol 2, while encode_activity continued using that moving default. The harness now explicitly selects LXP_PROTOCOL_VERSION_LEGACY, reproducing the published corpus without changing the golden file. Exact make qualify-replay rerun exits 0 (qual-logs/r17/row-43-final.log): activities=10000000 batches=1000 corpus=2ea6be03496f578075334f3365a6dd57266af0bad632a8b91d8846b512a1be1b. GCC and clang-18 at O0/O2, musl and AArch64 outputs all match the original digest. The original single-byte mutation check passes, refusing at sequence 10000. Raw digests and mutation evidence are in qual-logs/r17/replay-before/ and replay-final/; source history is replay-source-history.diff."
+assumption = "Only the test corpus protocol selection changes. No matrix compiler pin, golden digest, assertion, workload count or runtime codec changes. This is qualification of the published legacy replay corpus, not a protocol-2 or protocol-3 corpus claim. Environment: CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4 LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin. make check exits 0 after rebasing onto native base 0f2e8326fcf9a598d86a3beac1b4dca65e55ff9c, including the added maintenance protocol test (qual-logs/r17/make-check-rebased.log). The native rebase does not change replay inputs or row-32 recipes. Replay completed before the subsequent disk-threshold interruption recorded below; disk output is retained in disk-before.log and disk-after.log."
+severity = "note"
+
+[observation.5.1.32]
+task = "5.1"
+file = "spec/layerx-beta/qualification.kvx tests/qualification/lxp_qual_replay.c"
+symbol = "row-32-final disk-stop"
+observed = "The final row-32 rerun was terminated by the owned disk monitor at free_bytes=26179309568, below its 25 GiB threshold. qual-logs/r17/DISK-STOP and disk-monitor.log retain the measurement. The make process received SIGTERM (Python returncode -15; wrapper exit 143); row-32-final.log ends: make: *** [Makefile:1967: human-test-service] Terminated. This is an interrupted gate, not an assertion failure or pass. The earlier exact row 32 exits 0 and five consecutive exit suites exit 0. make check on final native base c63b80eee91589422a9ecc6891c57b4dfa9a73aa exits 0 (make-check-published-base.log)."
+assumption = "Historical interrupted aggregate qualification at f4b157a92808b1ce495c812e3214a7fc447657cd. The native update changes client evidence and native LNI paths, so the interrupted row-32 rerun is not replaced by the earlier pass."
+severity = "blocker"
+
+[observation.5.1.33]
+task = "5.1"
+file = "spec/layerx-beta/qualification.kvx tools/ci/beta-ledger-check.sh"
+symbol = "beta-ledger-check"
+observed = "make beta-ledger-check exits 2 in qual-logs/r18/ledger-replay.log with 344 violations after the pending replay and disk-stop observations receive numeric IDs. Existing records contain duplicate sections and keys, nonnumeric IDs, missing severity fields, and invalid severity values. The first finding is duplicate observation.6.4.7 at line 1466, first declared at line 1123. git fetch origin succeeds; origin/lane/native remains c63b80eee91589422a9ecc6891c57b4dfa9a73aa and retains the incompatible ledger records."
+assumption = "Historical ledger validation failure on c63b80eee91589422a9ecc6891c57b4dfa9a73aa; this result does not describe validation of the current ledger."
+severity = "blocker"
+
+[observation.5.1.34]
+task = "5.1"
+file = "tests/qualification/lxp_qual_replay.c tools/lxp_qual_replay_matrix.sh tests/vectors/qualification_replay_10m.digest"
+symbol = "encode_activity qualify-replay"
+observed = "On 39deceadc2588221ef10dc7199250995226a0b55 with the legacy corpus pin applied, make qualify-replay exits 0 (qual-logs/r23/qualify-replay.log); make check exits 0 (qual-logs/r23/check.log); git diff --check exits 0 (qual-logs/r23/diff-check.log); make beta-ledger-check exits 0 (qual-logs/r23/beta-ledger-check.log). The replay gate generates 10000000 activities in 1000 batches; all six compiler and architecture outputs match the published legacy corpus digest 2ea6be03496f578075334f3365a6dd57266af0bad632a8b91d8846b512a1be1b, and the original single-byte mutation refusal check passes. Imported historical observations use distinct numeric identifiers 5.1.31 through 5.1.33."
+assumption = "Environment: CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4 LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin; worktree-default build directories. Gate output inspection is limited to exit codes and the last 40 log lines. encode_activity selects LXP_PROTOCOL_VERSION_LEGACY explicitly; golden bytes, runtime codecs, workload bounds and assertions are unchanged. This qualifies the legacy corpus only."
+severity = "note"
