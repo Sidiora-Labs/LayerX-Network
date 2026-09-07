@@ -353,7 +353,7 @@ impl SolanaVerifier {
         if value.is_null() {
             return Ok(None);
         }
-        parse_block(slot, value).map(Some)
+        parse_block(slot, &value).map(Some)
     }
 
     fn block_at_or_before(&self, slot: u64) -> Result<Block, MigrationError> {
@@ -482,7 +482,7 @@ impl SolanaVerifier {
 
     fn verify_asset(
         &self,
-        claim: SolanaAssetClaim,
+        claim: &SolanaAssetClaim,
     ) -> Result<(Instruction, Block, Block), MigrationError> {
         self.verify_network()?;
         let transaction = self.transaction(claim.signature)?;
@@ -666,112 +666,7 @@ impl SolanaVerifier {
             previous_hash = Some(block.hash);
             range_anchor = Some(block.hash);
             for body in &block.transactions {
-                if !transaction_succeeded(body)? {
-                    continue;
-                }
-                let keys = account_keys(body)?;
-                let address_index = keys.iter().position(|key| key.address == claim.address);
-                let meta = body
-                    .get("meta")
-                    .ok_or(MigrationError::RpcResponseMismatch)?;
-                let pre_tokens = token_balances_for_owner(meta, "preTokenBalances", claim.address)?;
-                let post_tokens =
-                    token_balances_for_owner(meta, "postTokenBalances", claim.address)?;
-                if address_index.is_none() && pre_tokens.is_empty() && post_tokens.is_empty() {
-                    continue;
-                }
-                let signatures = transaction_signatures(body)?;
-                let signature = *signatures
-                    .first()
-                    .ok_or(MigrationError::RpcResponseMismatch)?;
-                let mut custody_record = None;
-                for value in instructions(body)? {
-                    if let Some(instruction) = self.parse_instruction(value, &keys, false)? {
-                        if instruction.source == claim.address {
-                            self.verify_program_boundary(instruction.source_asset_account, slot)?;
-                            verify_token_custody(
-                                body,
-                                &keys,
-                                &instruction,
-                                self.config.custody_account,
-                                self.config.custody_token_authority,
-                            )?;
-                            custody_record = Some(instruction);
-                        }
-                    }
-                }
-                let transaction = transaction_id(signature)?;
-                let mut produced = false;
-                if let Some(address_index) = address_index {
-                    let before = balance_at(meta, "preBalances", address_index)?;
-                    let after = balance_at(meta, "postBalances", address_index)?;
-                    if after != before {
-                        records.push(ExternalHistoryRecord {
-                            chain: SourceChain::Solana {
-                                genesis_hash: self.config.genesis_hash,
-                            },
-                            transaction,
-                            address: ExternalAddress::Solana(claim.address),
-                            kind: if after > before {
-                                ExternalHistoryKind::Incoming
-                            } else {
-                                ExternalHistoryKind::Outgoing
-                            },
-                            timestamp: block.timestamp,
-                            source_asset: self.config.native_asset,
-                            source_amount: u128::from(after.abs_diff(before)),
-                            provenance: ExternalProvenance::Solana,
-                        });
-                        produced = true;
-                    }
-                }
-                let assets: BTreeSet<_> = pre_tokens
-                    .keys()
-                    .chain(post_tokens.keys())
-                    .copied()
-                    .collect();
-                for asset in assets {
-                    let before = pre_tokens.get(&asset).copied().unwrap_or(0);
-                    let after = post_tokens.get(&asset).copied().unwrap_or(0);
-                    if before == after {
-                        continue;
-                    }
-                    records.push(ExternalHistoryRecord {
-                        chain: SourceChain::Solana {
-                            genesis_hash: self.config.genesis_hash,
-                        },
-                        transaction,
-                        address: ExternalAddress::Solana(claim.address),
-                        kind: if after > before {
-                            ExternalHistoryKind::Incoming
-                        } else {
-                            ExternalHistoryKind::Outgoing
-                        },
-                        timestamp: block.timestamp,
-                        source_asset: asset,
-                        source_amount: after.abs_diff(before),
-                        provenance: ExternalProvenance::Solana,
-                    });
-                    produced = true;
-                }
-                if !produced && (address_index.is_some() || custody_record.is_some()) {
-                    records.push(ExternalHistoryRecord {
-                        chain: SourceChain::Solana {
-                            genesis_hash: self.config.genesis_hash,
-                        },
-                        transaction,
-                        address: ExternalAddress::Solana(claim.address),
-                        kind: ExternalHistoryKind::Contract,
-                        timestamp: block.timestamp,
-                        source_asset: custody_record
-                            .map_or(self.config.native_asset, |value| value.source_asset),
-                        source_amount: 0,
-                        provenance: ExternalProvenance::Solana,
-                    });
-                }
-                if records.len() > 256 {
-                    return Err(MigrationError::InvalidHistory);
-                }
+                self.history_transaction(&claim, &block, body, &mut records)?;
             }
         }
         records.sort_by_key(|record| {
@@ -811,6 +706,131 @@ impl SolanaVerifier {
             next_cursor: Some(cursor),
             evidence_digest,
         })
+    }
+    fn history_transaction(
+        &self,
+        claim: &SolanaHistoryClaim,
+        block: &Block,
+        body: &Value,
+        records: &mut Vec<ExternalHistoryRecord>,
+    ) -> Result<(), MigrationError> {
+        if !transaction_succeeded(body)? {
+            return Ok(());
+        }
+        let keys = account_keys(body)?;
+        let address_index = keys.iter().position(|key| key.address == claim.address);
+        let meta = body
+            .get("meta")
+            .ok_or(MigrationError::RpcResponseMismatch)?;
+        let pre_tokens = token_balances_for_owner(meta, "preTokenBalances", claim.address)?;
+        let post_tokens = token_balances_for_owner(meta, "postTokenBalances", claim.address)?;
+        if address_index.is_none() && pre_tokens.is_empty() && post_tokens.is_empty() {
+            return Ok(());
+        }
+        let signatures = transaction_signatures(body)?;
+        let signature = *signatures
+            .first()
+            .ok_or(MigrationError::RpcResponseMismatch)?;
+        let custody_record = self.history_custody(claim, block, body, &keys)?;
+        let transaction = transaction_id(signature)?;
+        let mut produced = false;
+        if let Some(address_index) = address_index {
+            let before = balance_at(meta, "preBalances", address_index)?;
+            let after = balance_at(meta, "postBalances", address_index)?;
+            if after != before {
+                records.push(ExternalHistoryRecord {
+                    chain: SourceChain::Solana {
+                        genesis_hash: self.config.genesis_hash,
+                    },
+                    transaction,
+                    address: ExternalAddress::Solana(claim.address),
+                    kind: if after > before {
+                        ExternalHistoryKind::Incoming
+                    } else {
+                        ExternalHistoryKind::Outgoing
+                    },
+                    timestamp: block.timestamp,
+                    source_asset: self.config.native_asset,
+                    source_amount: u128::from(after.abs_diff(before)),
+                    provenance: ExternalProvenance::Solana,
+                });
+                produced = true;
+            }
+        }
+        let assets: BTreeSet<_> = pre_tokens
+            .keys()
+            .chain(post_tokens.keys())
+            .copied()
+            .collect();
+        for asset in assets {
+            let before = pre_tokens.get(&asset).copied().unwrap_or(0);
+            let after = post_tokens.get(&asset).copied().unwrap_or(0);
+            if before == after {
+                continue;
+            }
+            records.push(ExternalHistoryRecord {
+                chain: SourceChain::Solana {
+                    genesis_hash: self.config.genesis_hash,
+                },
+                transaction,
+                address: ExternalAddress::Solana(claim.address),
+                kind: if after > before {
+                    ExternalHistoryKind::Incoming
+                } else {
+                    ExternalHistoryKind::Outgoing
+                },
+                timestamp: block.timestamp,
+                source_asset: asset,
+                source_amount: after.abs_diff(before),
+                provenance: ExternalProvenance::Solana,
+            });
+            produced = true;
+        }
+        if !produced && (address_index.is_some() || custody_record.is_some()) {
+            records.push(ExternalHistoryRecord {
+                chain: SourceChain::Solana {
+                    genesis_hash: self.config.genesis_hash,
+                },
+                transaction,
+                address: ExternalAddress::Solana(claim.address),
+                kind: ExternalHistoryKind::Contract,
+                timestamp: block.timestamp,
+                source_asset: custody_record
+                    .map_or(self.config.native_asset, |value| value.source_asset),
+                source_amount: 0,
+                provenance: ExternalProvenance::Solana,
+            });
+        }
+        if records.len() > 256 {
+            return Err(MigrationError::InvalidHistory);
+        }
+        Ok(())
+    }
+
+    fn history_custody(
+        &self,
+        claim: &SolanaHistoryClaim,
+        block: &Block,
+        body: &Value,
+        keys: &[AccountKey],
+    ) -> Result<Option<Instruction>, MigrationError> {
+        let mut custody_record = None;
+        for value in instructions(body)? {
+            if let Some(instruction) = self.parse_instruction(value, keys, false)? {
+                if instruction.source == claim.address {
+                    self.verify_program_boundary(instruction.source_asset_account, block.slot)?;
+                    verify_token_custody(
+                        body,
+                        keys,
+                        &instruction,
+                        self.config.custody_account,
+                        self.config.custody_token_authority,
+                    )?;
+                    custody_record = Some(instruction);
+                }
+            }
+        }
+        Ok(custody_record)
     }
 }
 
@@ -865,7 +885,7 @@ impl SourceVerifier for SolanaVerifier {
         if claim.genesis_hash != self.config.genesis_hash {
             return Err(MigrationError::InvalidNetwork);
         }
-        let (instruction, block, head) = self.verify_asset(claim)?;
+        let (instruction, block, head) = self.verify_asset(&claim)?;
         let transaction = transaction_id(claim.signature)?;
         self.journal.record_claim(
             &format!(
@@ -1128,7 +1148,7 @@ fn validate_history(claim: &SolanaHistoryClaim) -> Result<(), MigrationError> {
     Ok(())
 }
 
-fn parse_block(slot: u64, value: Value) -> Result<Block, MigrationError> {
+fn parse_block(slot: u64, value: &Value) -> Result<Block, MigrationError> {
     let transactions = value
         .get("transactions")
         .and_then(Value::as_array)
@@ -1138,8 +1158,8 @@ fn parse_block(slot: u64, value: Value) -> Result<Block, MigrationError> {
     }
     Ok(Block {
         slot,
-        hash: decode_base58_fixed(string(&value, "blockhash")?)?,
-        previous_hash: decode_base58_fixed(string(&value, "previousBlockhash")?)?,
+        hash: decode_base58_fixed(string(value, "blockhash")?)?,
+        previous_hash: decode_base58_fixed(string(value, "previousBlockhash")?)?,
         parent_slot: value
             .get("parentSlot")
             .and_then(Value::as_u64)
@@ -1568,7 +1588,7 @@ fn now() -> Result<u64, MigrationError> {
 
 /// Redaction-safe digest of a Solana asset claim for operator correlation.
 #[must_use]
-pub fn solana_claim_digest(claim: SolanaAssetClaim) -> [u8; 32] {
+pub fn solana_claim_digest(claim: &SolanaAssetClaim) -> [u8; 32] {
     let mut hash = Sha256::new();
     hash.update(ASSET_DOMAIN);
     hash.update(claim.genesis_hash);

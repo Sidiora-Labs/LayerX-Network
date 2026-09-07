@@ -208,7 +208,7 @@ impl Journal {
         {
             return Err(MigrationError::CheckpointConflict);
         }
-        self.append(Update::Chain {
+        self.append(&Update::Chain {
             network: network.to_owned(),
             checkpoint,
         })
@@ -224,7 +224,7 @@ impl Journal {
         if !valid_key(key) || height == 0 || block_hash == [0; 32] || evidence_digest == [0; 32] {
             return Err(MigrationError::CheckpointConflict);
         }
-        self.append(Update::Claim {
+        self.append(&Update::Claim {
             key: key.to_owned(),
             checkpoint: ClaimCheckpoint {
                 height,
@@ -265,7 +265,7 @@ impl Journal {
             None if previous_cursor.is_none() => None,
             _ => return Err(MigrationError::CheckpointConflict),
         };
-        self.append(Update::HistoryPrepared {
+        self.append(&Update::HistoryPrepared {
             stream: stream.to_owned(),
             checkpoint: HistoryCheckpoint {
                 previous_cursor,
@@ -289,7 +289,7 @@ impl Journal {
         if !valid_key(stream) || evidence_digest == [0; 32] || next_cursor == [0; 32] {
             return Err(MigrationError::CheckpointConflict);
         }
-        self.append(Update::HistoryCommitted {
+        self.append(&Update::HistoryCommitted {
             stream: stream.to_owned(),
             evidence_digest,
             next_cursor,
@@ -358,7 +358,7 @@ impl Journal {
         if !valid_key(key) || evidence_digest == [0; 32] {
             return Err(MigrationError::CheckpointConflict);
         }
-        self.append(Update::Ownership {
+        self.append(&Update::Ownership {
             key: key.to_owned(),
             evidence_digest,
         })
@@ -372,7 +372,7 @@ impl Journal {
         if !valid_key(key) || claim_digest == [0; 32] {
             return Err(MigrationError::CheckpointConflict);
         }
-        self.append(Update::CustodyReference {
+        self.append(&Update::CustodyReference {
             key: key.to_owned(),
             claim_digest,
         })
@@ -382,10 +382,10 @@ impl Journal {
         hmac(self.key.as_slice(), CURSOR_DOMAIN, context)
     }
 
-    fn append(&self, update: Update) -> Result<(), MigrationError> {
+    fn append(&self, update: &Update) -> Result<(), MigrationError> {
         for _ in 0..64 {
             let mut state = self.load()?;
-            if apply(&mut state, &update)? == Apply::Already {
+            if apply(&mut state, update)? == Apply::Already {
                 return Ok(());
             }
             let body = RecordBody {
@@ -649,7 +649,7 @@ impl Journal {
 }
 
 fn private_directory(metadata: &fs::Metadata) -> bool {
-    metadata.file_type().is_dir() && metadata.permissions().mode() & 0o077 == 0
+    metadata.file_type().is_dir() && metadata.permissions().mode().trailing_zeros() >= 6
 }
 
 fn canonical_direct_path(path: &std::path::Path) -> bool {
@@ -667,7 +667,7 @@ fn private_file(entry: &fs::DirEntry, owner: u32) -> Result<bool, MigrationError
     let metadata = entry
         .metadata()
         .map_err(|_| MigrationError::CheckpointIntegrity)?;
-    Ok(metadata.uid() == owner && metadata.permissions().mode() & 0o077 == 0)
+    Ok(metadata.uid() == owner && metadata.permissions().mode().trailing_zeros() >= 6)
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -720,14 +720,13 @@ fn apply(state: &mut State, update: &Update) -> Result<Apply, MigrationError> {
                 state.histories.insert(stream.clone(), checkpoint.clone());
                 Ok(Apply::Applied)
             }
-            Some(_) => Err(MigrationError::CheckpointConflict),
             None if checkpoint.previous_cursor.is_none()
                 && checkpoint.previous_anchor_hash.is_none() =>
             {
                 state.histories.insert(stream.clone(), checkpoint.clone());
                 Ok(Apply::Applied)
             }
-            None => Err(MigrationError::CheckpointConflict),
+            Some(_) | None => Err(MigrationError::CheckpointConflict),
         },
         Update::HistoryCommitted {
             stream,
@@ -890,8 +889,9 @@ mod storage_tests {
         fs::DirBuilder::new()
             .mode(0o700)
             .create(&root)
-            .expect("private journal fixture directory");
-        symlink(&root, &alias).expect("journal fixture ancestor symlink");
+            .unwrap_or_else(|error| panic!("private journal fixture directory: {error:?}"));
+        symlink(&root, &alias)
+            .unwrap_or_else(|error| panic!("journal fixture ancestor symlink: {error:?}"));
         Paths { root, alias }
     }
 
@@ -902,7 +902,7 @@ mod storage_tests {
         fs::DirBuilder::new()
             .mode(0o700)
             .create(&direct)
-            .expect("private namespace");
+            .unwrap_or_else(|error| panic!("private namespace: {error:?}"));
         assert!(canonical_direct_path(&direct));
         assert!(!canonical_direct_path(&paths.alias.join("namespace")));
     }
@@ -916,17 +916,19 @@ mod storage_tests {
             .write(true)
             .mode(0o600)
             .open(&file_path)
-            .expect("private record");
-        let owner = fs::metadata(&paths.root).expect("namespace metadata").uid();
+            .unwrap_or_else(|error| panic!("private record: {error:?}"));
+        let owner = fs::metadata(&paths.root)
+            .unwrap_or_else(|error| panic!("namespace metadata: {error:?}"))
+            .uid();
         let entry = fs::read_dir(&paths.root)
-            .expect("namespace entries")
+            .unwrap_or_else(|error| panic!("namespace entries: {error:?}"))
             .next()
-            .expect("record entry")
-            .expect("record entry metadata");
+            .unwrap_or_else(|| panic!("record entry"))
+            .unwrap_or_else(|error| panic!("record entry metadata: {error:?}"));
         assert_eq!(private_file(&entry, owner), Ok(true));
         assert_eq!(private_file(&entry, owner.wrapping_add(1)), Ok(false));
         fs::set_permissions(&file_path, fs::Permissions::from_mode(0o640))
-            .expect("make record group-readable");
+            .unwrap_or_else(|error| panic!("make record group-readable: {error:?}"));
         assert_eq!(private_file(&entry, owner), Ok(false));
     }
 
@@ -939,17 +941,19 @@ mod storage_tests {
             .write(true)
             .mode(0o600)
             .open(&target)
-            .expect("private symlink target");
+            .unwrap_or_else(|error| panic!("private symlink target: {error:?}"));
         let link = paths.root.join("00000000000000000001.seal");
-        symlink(&target, &link).expect("record symlink");
-        let owner = fs::metadata(&paths.root).expect("namespace metadata").uid();
+        symlink(&target, &link).unwrap_or_else(|error| panic!("record symlink: {error:?}"));
+        let owner = fs::metadata(&paths.root)
+            .unwrap_or_else(|error| panic!("namespace metadata: {error:?}"))
+            .uid();
         let entry = fs::read_dir(&paths.root)
-            .expect("namespace entries")
+            .unwrap_or_else(|error| panic!("namespace entries: {error:?}"))
             .find_map(|entry| {
                 let entry = entry.ok()?;
                 (entry.file_name().to_str() == Some("00000000000000000001.seal")).then_some(entry)
             })
-            .expect("seal symlink entry");
+            .unwrap_or_else(|| panic!("seal symlink entry"));
         assert_eq!(private_file(&entry, owner), Ok(false));
     }
 }
