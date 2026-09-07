@@ -348,6 +348,22 @@ fn start_local_gateway(
             signer_file.clone(),
         ),
         (
+            "LAYERX_GATEWAY_SEQUENCER_ID_FILE",
+            local_secret(
+                &cluster.root,
+                "sequencer-id.hex",
+                &hex_encode(&cluster.sequencer_id),
+            ),
+        ),
+        (
+            "LAYERX_GATEWAY_SEQUENCER_FIRST_BATCH_FILE",
+            local_secret(&cluster.root, "sequencer-first-batch", "1"),
+        ),
+        (
+            "LAYERX_GATEWAY_SEQUENCER_LAST_BATCH_FILE",
+            local_secret(&cluster.root, "sequencer-last-batch", &u64::MAX.to_string()),
+        ),
+        (
             "LAYERX_GATEWAY_KEY_PROVISIONING_KEY_FILE",
             local_secret(
                 &cluster.root,
