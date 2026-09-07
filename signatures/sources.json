@@ -1,0 +1,32 @@
+[
+  {
+    "file": "rfc8032.txt",
+    "url": "https://www.rfc-editor.org/rfc/rfc8032.txt",
+    "sha256": "ed63657ff389301282b169b0abde9b5dd2c7e4d524fdfa5da6ff3094fc93c4c3"
+  },
+  {
+    "file": "wycheproof.json",
+    "url": "https://raw.githubusercontent.com/C2SP/wycheproof/main/testvectors_v1/ecdsa_secp256k1_sha256_test.json",
+    "sha256": "43db761c0a2eae71fb0755d355d5130e28ce64a5b07846cf27e7072082597a81",
+    "cases": [
+      {
+        "tcId": 3,
+        "purpose": "Valid prehashed signature, compressed and uncompressed SEC1 key acceptance"
+      },
+      {
+        "tcId": 1,
+        "purpose": "Existing genuine high-S refusal in signature_authority.rs"
+      }
+    ]
+  },
+  {
+    "file": "secp256k1.h",
+    "url": "https://raw.githubusercontent.com/bitcoin-core/secp256k1/v0.6.0/include/secp256k1.h",
+    "sha256": "0c3bbf04703f9a240a200a57fb75b3d7ef072464f24369d34bd9fc0848a66f3b"
+  },
+  {
+    "file": "secp256k1_recovery.h",
+    "url": "https://raw.githubusercontent.com/bitcoin-core/secp256k1/v0.6.0/include/secp256k1_recovery.h",
+    "sha256": "9ef005af267b04b2f4def6e7d3bc7a8ad42dad80063f939aab8eb46317c6212f"
+  }
+]
