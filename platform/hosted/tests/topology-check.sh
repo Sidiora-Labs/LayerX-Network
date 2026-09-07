@@ -343,6 +343,9 @@ class Chunk:
                 inner = indent + (len(cur[1]) - len(item))
                 self.raw[self.pos] = " " * inner + item
                 items.append(self.parse_mapping(inner))
+            elif BLOCK_SCALAR.match(item):
+                self.pos += 1
+                items.append(self.parse_block_scalar(indent, item))
             else:
                 self.pos += 1
                 items.append(self.parse_inline(item))
@@ -372,14 +375,15 @@ class Chunk:
                 else:
                     result[key] = self.parse_node(nxt[0])
             elif BLOCK_SCALAR.match(rest):
-                result[key] = self.parse_block_scalar(indent)
+                result[key] = self.parse_block_scalar(indent, rest)
             elif rest[0] in "{[":
                 result[key] = self.parse_flow(rest)
             else:
                 result[key] = self.parse_inline(rest)
 
-    def parse_block_scalar(self, indent):
+    def parse_block_scalar(self, indent, indicator):
         lines = []
+        content_indent = None
         while self.pos < len(self.raw):
             raw = self.raw[self.pos]
             if raw.strip() == "":
@@ -389,9 +393,20 @@ class Chunk:
             line_indent = len(raw) - len(raw.lstrip(" "))
             if line_indent <= indent:
                 break
-            lines.append(raw)
+            if content_indent is None:
+                content_indent = line_indent
+            if line_indent < content_indent:
+                raise YamlError("line %d: invalid block scalar indentation" % (self.pos + 1))
+            lines.append(raw[content_indent:])
             self.pos += 1
-        return "\n".join(lines)
+        value = "\n".join(lines) + ("\n" if lines else "")
+        if indicator.startswith(">"):
+            value = re.sub(r"(?<=\S)\n(?=[^ \n])", " ", value)
+        if indicator.endswith("-"):
+            return value.rstrip("\n")
+        if indicator.endswith("+"):
+            return value
+        return value.rstrip("\n") + ("\n" if any(lines) else "")
 
     def parse_flow(self, text):
         while unbalanced(text):
@@ -836,4 +851,8 @@ PY
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   topology_check "$@"
+  if [ "$#" -eq 0 ] && python3 -c 'import yaml' >/dev/null 2>&1; then
+    topology_check --yaml-parser builtin
+    python3 "$(dirname "${BASH_SOURCE[0]}")/topology-regressions.py"
+  fi
 fi
