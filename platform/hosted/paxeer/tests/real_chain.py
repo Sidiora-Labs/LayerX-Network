@@ -1,3 +1,4 @@
+import hashlib
 import http.client
 import json
 import os
@@ -60,13 +61,14 @@ with tempfile.TemporaryDirectory(prefix='layerx-paxeer-real-') as work:
         env.update(LAYERX_PAXEER_BOUNDARY_LISTEN=f'127.0.0.1:{boundary_port}',
                    LAYERX_PAXEER_BOUNDARY_TLS_CERT_DER=str(work/'cert.der'),
                    LAYERX_PAXEER_BOUNDARY_TLS_KEY_DER=str(work/'key.der'),
+                   LAYERX_PAXEER_COMET_URL='http://127.0.0.1:' + env['LAYERX_PAXEER_RPC_PORT'],
                    LAYERX_PAXEER_NODE_URL='http://127.0.0.1:' + env['LAYERX_PAXEER_EVM_PORT'])
         with (work/'boundary.log').open('w') as log:
             boundary = subprocess.Popen([sys.argv[1]], env=env, stdout=log, stderr=log)
         processes.append(boundary)
         context = ssl.create_default_context(cafile=str(work/'ca.pem'))
 
-        def request(method, path, body=None):
+        def raw_request(method, path, body=None):
             connection = http.client.HTTPSConnection('localhost', boundary_port, context=context, timeout=5)
             connection.request(method, path, body, {'Content-Type': 'application/json'})
             response = connection.getresponse()
@@ -74,7 +76,11 @@ with tempfile.TemporaryDirectory(prefix='layerx-paxeer-real-') as work:
             assert response.getheader('Content-Type') == 'application/json'
             assert response.getheader('Cache-Control') == 'no-store'
             connection.close()
-            return response.status, json.loads(data)
+            return response.status, response.headers, data
+
+        def request(method, path, body=None):
+            status, _, data = raw_request(method, path, body)
+            return status, json.loads(data)
 
         deadline = time.monotonic() + 90
         while time.monotonic() < deadline:
@@ -90,6 +96,21 @@ with tempfile.TemporaryDirectory(prefix='layerx-paxeer-real-') as work:
         for identifier in [1, 'preserved', None]:
             status, data = request('POST', '/', json.dumps({'jsonrpc':'2.0', 'id':identifier, 'method':'eth_chainId', 'params':[]}))
             assert status == 200 and data['result'] == '0x7d' and data['id'] == identifier
+        evm_chain_id = int(data['result'], 16)
+        status, headers, body = raw_request('GET', '/genesis')
+        assert status == 200, body
+        assert headers.get_all('X-LayerX-Genesis-SHA256') == [hashlib.sha256(body).hexdigest()]
+        genesis = json.loads(body)
+        assert evm_chain_id == 125
+        assert genesis['chain_id'] == f'hyperpax_{evm_chain_id}-1', genesis['chain_id']
+        local_genesis = json.loads((work/'chain/config/genesis.json').read_bytes())
+        abci = local_genesis['consensus_params']['abci']
+        assert type(abci['vote_extensions_enable_height']) is int
+        abci['vote_extensions_enable_height'] = str(abci['vote_extensions_enable_height'])
+        assert genesis == local_genesis, {
+            key: (genesis.get(key), local_genesis.get(key))
+            for key in genesis.keys() | local_genesis.keys()
+            if genesis.get(key) != local_genesis.get(key)}
         status, data = request('POST', '/', '{"jsonrpc":"2.0","id":"error","method":"eth_missingMethod","params":[]}')
         assert status == 200 and data['id'] == 'error' and 'error' in data
         payload = '{"jsonrpc":"2.0","id":"limit","method":"eth_chainId","params":[]}'
@@ -184,7 +205,7 @@ with tempfile.TemporaryDirectory(prefix='layerx-paxeer-real-') as work:
         node.wait(timeout=20)
         assert request('GET', '/readyz')[0] == 503
         assert request('GET', '/livez')[0] == 200
-        print('real paxd: chain 125, TLS relay, preserved IDs, RPC errors, loopback bind, node-loss readiness passed')
+        print('real paxd: chain 125, live Comet genesis SHA256 and chain identity, TLS relay, preserved IDs, RPC errors, loopback bind, node-loss readiness passed')
     except subprocess.CalledProcessError as error:
         sys.stderr.write(error.stderr.decode(errors='replace'))
         raise
