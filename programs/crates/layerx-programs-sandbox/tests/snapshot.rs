@@ -100,7 +100,7 @@ fn evidence(
     batch: u64,
 ) -> (LeaseTransition, TransitionEvidence) {
     let fixture = protocol_support::programs_call_fixture(
-        call_payload(lease.host_program(), transition),
+        &call_payload(lease.host_program(), transition),
         batch,
         protocol_support::NOW,
     );
