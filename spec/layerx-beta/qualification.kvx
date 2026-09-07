@@ -2193,3 +2193,11 @@ symbol = "verify_outcome_maintained authorized_batch_by_activity"
 observed = "After merging authority-maintenance through 682604bc with authorship preserved, CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4 RAYON_NUM_THREADS=4 LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin make test-daemon-finality-authority exits 0. Log: qual-logs/n11-authority.log; exit ledger: qual-logs/n11-authority.exit. Native finality JSON checks, isolated-chain positive/negative cases and the hosted real-node authority test pass."
 assumption = "This resolves the previously recorded maintained authority consumer gate on the merged source. It does not qualify terminal V2 production, signed applied-leg evidence, executed V4 fixtures or downstream authority consumers."
 severity = "info"
+
+[observation.6.4.terminal-transfer-source-checkpoint]
+task = "6.4"
+file = "programs/crates/layerx-programs-runtime/src/transfer.rs; programs/crates/layerx-programs-runtime/src/ffi_call.rs; include/layerx/lxp_receipt.h; src/protocol/lxp_kernel.c"
+symbol = "authorize_v2 verify_applied_kernel_legs compact_receipt_encode"
+observed = "Additive transfer source provides explicit V2 authorization for principal sets without changing default V1 selection, plus exact kernel-leg reconstruction and unrun field/order/multiplicity mutation cases. Production FFI selection, signed receipt layout, proof/wire integration, ABI generator extension and executed V4 fixtures are not implemented. No format, build, test or lint command has run against this partial implementation. The preceding authority gate and native rebuild ran before these transfer edits."
+assumption = "Complete the entire terminal implementation before qualification. The C outcome tag currently ends at V3; compact_receipt_encode requires encoding_version 3 and the fixed compact V3 record must not be reinterpreted. Pre-runtime failure construction currently produces a domain-separated digest without terminal payload bytes and also needs the explicitly selected new terminal contract. Historical V1 and V3 bytes, roots, assertions and generator baselines remain unchanged."
+severity = "note"
