@@ -1,0 +1,35 @@
+changelog:
+  exclude:
+    labels:
+      - ignore-for-release
+  categories:
+    - title: Protocol runtime
+      labels:
+        - area:protocol
+    - title: Agent
+      labels:
+        - area:agent
+    - title: Platform
+      labels:
+        - area:platform
+    - title: Programs
+      labels:
+        - area:programs
+    - title: Human interface
+      labels:
+        - area:human
+    - title: Contracts
+      labels:
+        - area:contracts
+    - title: Paxeer Network
+      labels:
+        - area:paxeer
+    - title: Specification
+      labels:
+        - area:spec
+    - title: Documentation
+      labels:
+        - area:docs
+    - title: Other
+      labels:
+        - "*"
