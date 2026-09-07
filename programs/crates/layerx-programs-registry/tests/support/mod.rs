@@ -229,6 +229,25 @@ pub fn legacy_deploy_fixture(
 }
 
 #[must_use]
+pub fn programs_call_fixture(payload: &[u8], batch_number: u64, timestamp: u64) -> ProtocolFixture {
+    fixture_in_epoch(
+        payload,
+        3,
+        &FixtureState {
+            wasm: WASM_V1,
+            policy: UpgradePolicy::Authority(AUTHORITY),
+            version: 1,
+            batch_number,
+            timestamp,
+            deprecated: false,
+            wrong_batch_id: false,
+            epoch: 2,
+        },
+        [7; 32],
+    )
+}
+
+#[must_use]
 pub fn deploy_fixture_in_epoch(
     wasm: &[u8],
     policy: UpgradePolicy,

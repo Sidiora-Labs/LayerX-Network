@@ -73,7 +73,7 @@ fn verified(
     batch: u64,
 ) -> (LeaseTransition, TransitionEvidence) {
     let fixture = protocol_support::programs_call_fixture(
-        call_payload(lease.host_program(), transition),
+        &call_payload(lease.host_program(), transition),
         batch,
         protocol_support::NOW,
     );
@@ -108,7 +108,7 @@ fn wrong_principal_refusal(
     batch: u64,
 ) -> LeaseRefusal {
     let fixture = protocol_support::programs_call_fixture(
-        call_payload(lease.host_program(), transition),
+        &call_payload(lease.host_program(), transition),
         batch,
         protocol_support::NOW,
     );
@@ -654,7 +654,7 @@ fn altered_real_activity_and_header_evidence_are_refused() {
         usage_observation_digest: digest,
     };
     let fixture = protocol_support::programs_call_fixture(
-        call_payload(lease.host_program(), transition),
+        &call_payload(lease.host_program(), transition),
         10,
         protocol_support::NOW,
     );
