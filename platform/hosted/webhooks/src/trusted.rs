@@ -578,6 +578,10 @@ impl ReceiptVerifier {
 
 fn read_secret(name: &str) -> Result<Zeroizing<String>, String> {
     let path = env::var(name).map_err(|_| format!("{name} is required"))?;
+    read_secret_file(std::path::Path::new(&path), name)
+}
+
+fn read_secret_file(path: &std::path::Path, name: &str) -> Result<Zeroizing<String>, String> {
     let mut value = fs::read_to_string(path).map_err(|error| error.to_string())?;
     while matches!(value.as_bytes().last(), Some(b'\r' | b'\n')) {
         value.pop();
@@ -646,5 +650,60 @@ mod authority_shape_tests {
         let mut unknown = document;
         unknown["unexpected"] = serde_json::json!(true);
         assert!(serde_json::from_value::<AuthorityResponse>(unknown).is_err());
+    }
+}
+
+#[cfg(test)]
+mod credential_tests {
+    use super::read_secret_file;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::Path;
+    use std::process::Command;
+
+    #[test]
+    fn consumes_the_cluster_generated_webhook_component_credential() {
+        let mut nonce = [0_u8; 16];
+        getrandom::fill(&mut nonce).unwrap_or_else(|error| panic!("nonce: {error}"));
+        let root = std::env::temp_dir().join(format!(
+            "webhook-component-{}",
+            crate::encoding::hex_encode(&nonce)
+        ));
+        let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/beta-cluster.sh");
+        let status = Command::new("bash")
+            .arg("-c")
+            .arg("source \"$1\"; component_secrets_generate \"$2\"")
+            .arg("component-secrets")
+            .arg(script)
+            .arg(&root)
+            .status()
+            .unwrap_or_else(|error| panic!("credential producer: {error}"));
+        assert!(status.success());
+        let path = root.join("webhook-component.token");
+        let token = read_secret_file(&path, "LAYERX_WEBHOOKS_COMPONENT_TOKEN_FILE")
+            .unwrap_or_else(|error| panic!("credential consumer: {error}"));
+        assert!(token.len() == 64 && token.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        let bytes = fs::read(&path).unwrap_or_else(|error| panic!("material: {error}"));
+        assert!(bytes.len() == 65 && bytes[64] == b'\n');
+        assert!(token.as_bytes() == &bytes[..64]);
+        let metadata = fs::metadata(&path).unwrap_or_else(|error| panic!("permissions: {error}"));
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+        for name in ["gateway-component.token", "registry-node.token"] {
+            let other = read_secret_file(&root.join(name), name)
+                .unwrap_or_else(|error| panic!("other component: {error}"));
+            assert!(token.as_str() != other.as_str());
+        }
+        fs::write(&path, format!("{}\r\n", token.as_str()))
+            .unwrap_or_else(|error| panic!("CRLF: {error}"));
+        let crlf = read_secret_file(&path, "component")
+            .unwrap_or_else(|error| panic!("CRLF consumer: {error}"));
+        assert!(token.as_str() == crlf.as_str());
+        fs::write(&path, b"\r\n").unwrap_or_else(|error| panic!("empty material: {error}"));
+        assert!(read_secret_file(&path, "component").is_err());
+        fs::write(&path, vec![b'a'; 4097])
+            .unwrap_or_else(|error| panic!("oversized material: {error}"));
+        assert!(read_secret_file(&path, "component").is_err());
+        fs::remove_dir_all(&root).unwrap_or_else(|error| panic!("cleanup: {error}"));
+        assert!(read_secret_file(&path, "component").is_err());
     }
 }

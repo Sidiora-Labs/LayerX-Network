@@ -64,6 +64,7 @@ struct Config {
     tls: Arc<ServerConfig>,
     gateway_token: Zeroizing<String>,
     registry_token: Zeroizing<String>,
+    webhook_token: Zeroizing<String>,
     lni_socket: PathBuf,
     lni_deadline: Duration,
     node: NodeEndpoint,
@@ -96,6 +97,7 @@ impl Session {
 enum Plane {
     Gateway,
     Registry,
+    Webhook,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -435,6 +437,13 @@ fn config() -> Result<Config, String> {
     {
         return Err("gateway and registry bearer tokens must be distinct".to_owned());
     }
+    let webhook_token = read_secret("LAYERX_AGENT_BOUNDARY_WEBHOOK_TOKEN_FILE")?;
+    if [gateway_token.as_str(), registry_token.as_str()]
+        .iter()
+        .any(|token| token.as_bytes().ct_eq(webhook_token.as_bytes()).unwrap_u8() == 1)
+    {
+        return Err("webhook bearer token must be distinct from gateway and registry".to_owned());
+    }
     let lni_socket = PathBuf::from(
         env::var("LAYERX_AGENT_BOUNDARY_LNI_SOCKET")
             .map_err(|_| "LAYERX_AGENT_BOUNDARY_LNI_SOCKET is required")?,
@@ -470,6 +479,7 @@ fn config() -> Result<Config, String> {
         tls: server_tls_config()?,
         gateway_token,
         registry_token,
+        webhook_token,
         lni_socket,
         lni_deadline: Duration::from_millis(lni_deadline_ms),
         node: node_endpoint(
@@ -1679,6 +1689,14 @@ fn authenticate(config: &Config, request: &Request) -> Result<Plane, Response> {
     {
         return Ok(Plane::Registry);
     }
+    if token
+        .as_bytes()
+        .ct_eq(config.webhook_token.as_bytes())
+        .unwrap_u8()
+        == 1
+    {
+        return Ok(Plane::Webhook);
+    }
     Err(refusal(401, "identity_required", None))
 }
 
@@ -1709,7 +1727,7 @@ fn route(config: &Config, request: &Request) -> Response {
         return relay_route(config, &request.path);
     }
     if let Some(activity) = path.strip_prefix("/internal/v1/receipts/") {
-        if plane != Plane::Registry {
+        if !matches!(plane, Plane::Registry | Plane::Webhook) {
             return refusal(403, "entitlement_denied", None);
         }
         if request.method != "GET" || query.is_some() {
