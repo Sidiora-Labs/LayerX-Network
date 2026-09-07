@@ -5,6 +5,7 @@
 
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_hash.h"
+#include "layerx/lxp_fault.h"
 #include "layerx/lxp_activity.h"
 #include "layerx/lxp_protocol.h"
 #include "layerx/lxp_receipt.h"
@@ -639,7 +640,9 @@ static lxp_result durable_replace(const char *directory,const uint8_t *bytes,
         ssize_t written=write(fd,bytes+offset,length-offset);
         if(written>0)offset+=(size_t)written; else if(written<0 && errno==EINTR)continue; else status=LXP_ERR_IO;
     }
+    if(status==LXP_OK)lxp_fault_inject_point(LXP_FAULT_BATCH_WAL_WRITTEN);
     if(status==LXP_OK && fdatasync(fd)!=0)status=LXP_ERR_IO;
+    if(status==LXP_OK)lxp_fault_inject_point(LXP_FAULT_BATCH_WAL_SYNCED);
     if(fd>=0 && close(fd)!=0 && status==LXP_OK)status=LXP_ERR_IO;
     fd=-1;
     if(status==LXP_OK && require_absent) {
@@ -656,12 +659,14 @@ static lxp_result durable_replace(const char *directory,const uint8_t *bytes,
     } else if(status==LXP_OK) {
         directory_changed=true;
     }
+    if(status==LXP_OK)lxp_fault_inject_point(LXP_FAULT_BATCH_WAL_NAMED);
     if(status!=LXP_OK && dfd>=0 && temp_named &&
        unlinkat(dfd,temp,0)==0) {
         temp_named=false;directory_changed=true;
     }
     if(dfd>=0 && directory_changed && fsync(dfd)!=0 && status==LXP_OK)
         status=LXP_ERR_IO;
+    if(status==LXP_OK)lxp_fault_inject_point(LXP_FAULT_BATCH_WAL_DIRECTORY_SYNCED);
     if(dfd>=0)(void)close(dfd);
     if(locked && pthread_mutex_unlock(&wal_replace_mutex)!=0 && status==LXP_OK)
         status=LXP_ERR_IO;

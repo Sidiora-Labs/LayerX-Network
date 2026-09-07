@@ -316,6 +316,12 @@ static lxp_result evidence_json(authority_replica *replica,
                                 char **body, size_t *body_length)
 {
     lxp_daemon_receipt_evidence evidence;
+    lxp_batch_header batch;
+    lxp_daemon_receipt_evidence maintenance;
+    lxp_codec_writer maintenance_writer;
+    bool maintained = false;
+    char *identity_json = NULL;
+    size_t identity_length = 0U;
     lxp_codec_writer proof_writer;
     char *response;
     char replica_hex[65];
@@ -335,6 +341,42 @@ static lxp_result evidence_json(authority_replica *replica,
         lxp_ct_memcmp(evidence.batch_id, batch_id, 32U) != 0)
         status = LXP_ERR_CONTEXT_MISMATCH;
     if (status == LXP_OK)
+        status = lxp_batch_header_decode(evidence.canonical_header.bytes,
+            evidence.canonical_header.length, &batch);
+    if (status == LXP_OK && replica->store.last_global_sequence < batch.last_sequence)
+        status = LXP_ERR_UNKNOWN_ACTIVITY;
+    if (status == LXP_OK)
+        status = lxp_daemon_receipt_authority_batch_maintenance(
+            &replica->store, &evidence, &replica->scratch, &maintenance, &maintained);
+    if (status == LXP_OK && maintained)
+        status = lxp_codec_writer_init(&maintenance_writer, &replica->scratch,
+            16U + LXP_MERKLE_MAX_DEPTH * 32U);
+    if (status == LXP_OK && maintained)
+        status = lxp_merkle_proof_encode(&maintenance_writer, &maintenance.receipt_proof);
+    if (status == LXP_OK && maintained) {
+        char *receipt_hex = malloc(maintenance.canonical_receipt.length * 2U + 1U);
+        char *maintenance_proof_hex = malloc(maintenance_writer.length * 2U + 1U);
+        size_t identity_capacity = sizeof(",\"batch_identity\":{\"kind\":\"occupancy_maintenance_v2\","
+            "\"receipt_hex\":\"\",\"receipt_proof_hex\":\"\"}") +
+            maintenance.canonical_receipt.length * 2U + maintenance_writer.length * 2U;
+        identity_json = malloc(identity_capacity);
+        if (receipt_hex == NULL || maintenance_proof_hex == NULL || identity_json == NULL)
+            status = LXP_ERR_IO;
+        else {
+            hex_encode(maintenance.canonical_receipt.bytes,
+                maintenance.canonical_receipt.length, receipt_hex);
+            hex_encode(maintenance_writer.bytes, maintenance_writer.length, maintenance_proof_hex);
+            length = snprintf(identity_json, identity_capacity,
+                ",\"batch_identity\":{\"kind\":\"occupancy_maintenance_v2\","
+                "\"receipt_hex\":\"%s\",\"receipt_proof_hex\":\"%s\"}", receipt_hex, maintenance_proof_hex);
+            if (length < 0 || (size_t)length >= identity_capacity)
+                status = LXP_ERR_LENGTH_LIMIT;
+            else identity_length = (size_t)length;
+        }
+        free(receipt_hex);
+        free(maintenance_proof_hex);
+    }
+    if (status == LXP_OK)
         status = lxp_codec_writer_init(
             &proof_writer, &replica->scratch,
             16U + LXP_MERKLE_MAX_DEPTH * 32U);
@@ -350,7 +392,7 @@ static lxp_result evidence_json(authority_replica *replica,
                           "\"receipt_proof_hex\":\"\"}}") +
                    sizeof(replica_hex) - 1U + sizeof(key_hex) - 1U +
                    sizeof(header_hex) - 1U + sizeof(signature_hex) - 1U +
-                   proof_writer.length * 2U;
+                   proof_writer.length * 2U + identity_length;
         response = (char *)malloc(capacity);
         if (proof_hex == NULL || response == NULL) {
             free(proof_hex); free(response); status = LXP_ERR_IO;
@@ -366,8 +408,9 @@ static lxp_result evidence_json(authority_replica *replica,
                 "\"sequencer_public_key\":\"%s\","
                 "\"batch_evidence\":{\"header_hex\":\"%s\","
                 "\"header_signature\":\"%s\","
-                "\"receipt_proof_hex\":\"%s\"}}",
-                replica_hex, key_hex, header_hex, signature_hex, proof_hex);
+                "\"receipt_proof_hex\":\"%s\"%s}}",
+                replica_hex, key_hex, header_hex, signature_hex, proof_hex,
+                identity_json != NULL ? identity_json : "");
             free(proof_hex);
             if (length < 0 || (size_t)length >= capacity) {
                 free(response); status = LXP_ERR_LENGTH_LIMIT;
@@ -377,6 +420,7 @@ static lxp_result evidence_json(authority_replica *replica,
             }
         }
     }
+    free(identity_json);
     (void)lxp_arena_reset(&replica->scratch, mark);
     if (pthread_mutex_unlock(&replica->mutex) != 0 && status == LXP_OK)
         status = LXP_FATAL_INVARIANT;

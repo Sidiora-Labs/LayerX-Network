@@ -22,7 +22,7 @@ static _Thread_local lxp_fault_state active_fault;
 static bool boundary_valid(lxp_fault_boundary boundary)
 {
     return boundary >= LXP_FAULT_LOG_HEADER_WRITTEN &&
-           boundary <= LXP_FAULT_CHECKPOINT_DIRECTORY_SYNCED;
+           boundary <= LXP_FAULT_BATCH_WAL_DIRECTORY_SYNCED;
 }
 
 lxp_result lxp_fault_arm(lxp_fault_boundary boundary, uint32_t occurrence)
