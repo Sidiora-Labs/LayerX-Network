@@ -348,8 +348,33 @@ fn runtime_manifest(file: ManifestFile) -> Result<RuntimeManifest, String> {
             "interop trust roots for AP2, Visa TAP and fiat providers are required".to_owned(),
         );
     }
+    validate_ap2_roots(&file.ap2_keys, &file.ap2_assets)?;
+    validate_visa_fiat_roots(&file.visa_agents, &file.visa_targets, &file.fiat_providers)?;
+    let ucp_payment_handler = PaymentHandler::new(
+        file.ucp_payment_handler.id,
+        file.ucp_payment_handler.version,
+        file.ucp_payment_handler.spec,
+        file.ucp_payment_handler.schema,
+    )
+    .map_err(|error| format!("UCP payment-handler declaration is invalid: {error}"))?;
+    let manifest = RuntimeManifest {
+        adapters,
+        transports,
+        x402_supported: file.x402_supported,
+        ap2_keys: file.ap2_keys,
+        ap2_assets: file.ap2_assets,
+        ucp_payment_handler,
+        visa_agents: file.visa_agents,
+        visa_targets: file.visa_targets,
+        fiat_providers: file.fiat_providers,
+    };
+    let _ = gateway;
+    Ok(manifest)
+}
+
+fn validate_ap2_roots(keys: &[Ap2KeyPin], assets: &[Ap2AssetBinding]) -> Result<(), String> {
     let mut ap2_key_identities = BTreeSet::new();
-    for key in &file.ap2_keys {
+    for key in keys {
         if !matches!(
             key.use_case.as_str(),
             "checkout-mandate" | "payment-mandate" | "merchant-checkout"
@@ -362,7 +387,7 @@ fn runtime_manifest(file: ManifestFile) -> Result<RuntimeManifest, String> {
         }
     }
     let mut ap2_asset_identities = BTreeSet::new();
-    for binding in &file.ap2_assets {
+    for binding in assets {
         let atomic_units = binding
             .atomic_units_per_minor_unit
             .parse::<u128>()
@@ -394,8 +419,16 @@ fn runtime_manifest(file: ManifestFile) -> Result<RuntimeManifest, String> {
             return Err("AP2 asset binding declaration is invalid".to_owned());
         }
     }
+    Ok(())
+}
+
+fn validate_visa_fiat_roots(
+    agents: &[VisaAgentPin],
+    targets: &[VisaTargetPin],
+    providers: &[FiatProviderPin],
+) -> Result<(), String> {
     let mut visa_key_ids = BTreeSet::new();
-    for key in &file.visa_agents {
+    for key in agents {
         if key.key_id.is_empty()
             || key.agent_id.is_empty()
             || !key.agent_domain.starts_with("https://")
@@ -410,7 +443,7 @@ fn runtime_manifest(file: ManifestFile) -> Result<RuntimeManifest, String> {
         }
     }
     let mut visa_target_principals = BTreeSet::new();
-    for target in &file.visa_targets {
+    for target in targets {
         if parse_hex32(&target.principal_digest).is_err()
             || target.principal_digest != target.principal_digest.to_ascii_lowercase()
             || !matches!(
@@ -427,7 +460,7 @@ fn runtime_manifest(file: ManifestFile) -> Result<RuntimeManifest, String> {
         }
     }
     let mut fiat_provider_ids = BTreeSet::new();
-    for key in &file.fiat_providers {
+    for key in providers {
         if key.provider.is_empty()
             || parse_hex32(&key.public_key_ed25519).is_err()
             || !fiat_provider_ids.insert(key.provider.as_str())
@@ -435,26 +468,7 @@ fn runtime_manifest(file: ManifestFile) -> Result<RuntimeManifest, String> {
             return Err("fiat provider trust-root declaration is invalid".to_owned());
         }
     }
-    let ucp_payment_handler = PaymentHandler::new(
-        file.ucp_payment_handler.id,
-        file.ucp_payment_handler.version,
-        file.ucp_payment_handler.spec,
-        file.ucp_payment_handler.schema,
-    )
-    .map_err(|error| format!("UCP payment-handler declaration is invalid: {error}"))?;
-    let manifest = RuntimeManifest {
-        adapters,
-        transports,
-        x402_supported: file.x402_supported,
-        ap2_keys: file.ap2_keys,
-        ap2_assets: file.ap2_assets,
-        ucp_payment_handler,
-        visa_agents: file.visa_agents,
-        visa_targets: file.visa_targets,
-        fiat_providers: file.fiat_providers,
-    };
-    let _ = gateway;
-    Ok(manifest)
+    Ok(())
 }
 
 fn descriptor(pin: &AdapterPin) -> Result<AdapterDescriptor, String> {
@@ -622,7 +636,7 @@ pub fn parse_hex32(value: &str) -> Result<[u8; 32], String> {
 }
 
 pub fn decode_hex(value: &str, maximum: usize) -> Result<Vec<u8>, String> {
-    if value.len() % 2 != 0 || value.len() / 2 > maximum {
+    if !value.len().is_multiple_of(2) || value.len() / 2 > maximum {
         return Err("hexadecimal payload exceeds its bound".to_owned());
     }
     value
