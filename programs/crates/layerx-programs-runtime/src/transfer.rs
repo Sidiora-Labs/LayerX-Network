@@ -695,6 +695,7 @@ pub struct SandboxEscrowCharge {
 }
 
 impl AtomicTransferSet {
+    #[cfg(feature = "host-ffi")]
     fn retarget_sandbox_escrow_charge(&mut self, amount: u128) -> Result<(), TransferLawError> {
         if !self.v2 || self.legs.len() != 1 || amount == 0 {
             return Err(TransferLawError::InvalidTransferSet);
@@ -813,6 +814,7 @@ impl AtomicTransferSet {
         })
     }
 
+    #[cfg(feature = "host-ffi")]
     pub(crate) fn settle_sandbox_escrow_charge(
         &self,
         kernel: &mut impl KernelTransferPrimitive,
@@ -973,18 +975,21 @@ impl AtomicTransferSet {
     }
 }
 
+#[cfg(feature = "host-ffi")]
 pub struct ReservedSandboxEscrowCharge {
     set: AtomicTransferSet,
 }
 
 /// # Errors
 /// Refuses invalid sandbox bindings, monetary fields, or escrow account derivation.
+#[cfg(feature = "host-ffi")]
 pub fn reserve_host_sandbox_escrow_charge(
     request: &SandboxEscrowCharge,
 ) -> Result<ReservedSandboxEscrowCharge, TransferLawError> {
     AtomicTransferSet::sandbox_escrow_charge(request).map(|set| ReservedSandboxEscrowCharge { set })
 }
 
+#[cfg(feature = "host-ffi")]
 pub(crate) fn settle_reserved_sandbox_escrow_charge(
     reserved: &mut ReservedSandboxEscrowCharge,
     exact_fee: u128,
