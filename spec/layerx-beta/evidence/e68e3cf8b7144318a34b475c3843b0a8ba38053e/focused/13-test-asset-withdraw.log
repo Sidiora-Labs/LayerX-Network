@@ -1,0 +1,269 @@
+make[1]: warning: jobserver unavailable: using -j1.  Add '+' to parent make rule.
+make[1]: Entering directory '/root/lx-lanes/exec'
+cd programs && cargo build --locked --workspace --features layerx-programs-sandbox/host-ffi
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.14s
+cc -Iinclude -Ibuild/generated -DLXP_BUILD_TARGET_TRIPLE=\"x86_64-linux-gnu\" -DLXP_BUILD_OPTIMISATION=\"-O2\" -DLXP_BUILD_REVISION=\"unknown\" -std=c17 -pedantic -Werror -Wall -Wextra -Wconversion -Wshadow -Wvla -fno-strict-aliasing -ffp-contract=off -O2  tests/modules/test_asset_withdraw.c build/liblayerx.a programs/target/debug/liblayerx_programs_sandbox.a \
+	build/liblayerx.a  -lcrypto -pthread -ldl -lm -o build/tests/test_asset_withdraw
+build/tests/test_asset_withdraw
+cc -Iinclude -Ibuild/generated -DLXP_BUILD_TARGET_TRIPLE=\"x86_64-linux-gnu\" -DLXP_BUILD_OPTIMISATION=\"-O2\" -DLXP_BUILD_REVISION=\"unknown\" -std=c17 -pedantic -Werror -Wall -Wextra -Wconversion -Wshadow -Wvla -fno-strict-aliasing -ffp-contract=off -O2  tests/test_bridge_withdraw.c build/liblayerx.a programs/target/debug/liblayerx_programs_sandbox.a \
+	build/liblayerx.a  -lcrypto -pthread -ldl -lm -o build/tests/test_bridge_withdraw
+tools/ci/solidity-state-surface.sh
+solidity state surface: 68 selectors have test evidence
+forge test --offline --root .
+Compiling 23 files with Solc 0.8.27
+Solc 0.8.27 finished in 178.39s
+Compiler run successful with warnings:
+Warning (2018): Function state mutability can be restricted to pure
+   --> test/CheckpointRegistry.t.sol:239:5:
+    |
+239 |     function _vectorHeaderFromJson(string memory vector)
+    |     ^ (Relevant source part starts here and spans across multiple lines).
+
+
+Ran 16 tests for test/ContractManager.t.sol:ContractManagerTest
+[PASS] testCancellationAndAuthorityAreFailClosed() (gas: 234355)
+[PASS] testContainerManifestAndSelectorInventoryIsComplete() (gas: 182349)
+[PASS] testContainerRejectsDirectMigrationCompletion() (gas: 15306)
+[PASS] testContainerRejectsGenesisFinalizationAgainstUnregisteredTopology() (gas: 34768)
+[PASS] testContainerRejectsManifestWithMismatchedImmutableGovernance() (gas: 7707909)
+[PASS] testContainerRejectsMismatchedEmergencyCouncil() (gas: 7733698)
+[PASS] testContainerRejectsNonCanonicalAddressReturn() (gas: 6950732)
+[PASS] testExecutesCommittedMigrationExactlyOnce() (gas: 302089)
+[PASS] testLaterFailureRollsBackEveryEarlierOperation() (gas: 357630)
+[PASS] testMigrationCannotExecuteEarlyOrAfterExpiry() (gas: 255531)
+[PASS] testOrderedOperationRootRejectsReordering() (gas: 286882)
+[PASS] testPostCallHashMismatchRollsBackTarget() (gas: 298835)
+[PASS] testPostCallLayoutMismatchRollsBackTarget() (gas: 298610)
+[PASS] testRejectsValueCodeHashAndStorageViolations() (gas: 101584)
+[PASS] testRejectsVersionDowngradeAndConcurrentPlan() (gas: 258662)
+[PASS] testRejectsWrongTargetAndSelector() (gas: 80705)
+Suite result: ok. 16 passed; 0 failed; 0 skipped; finished in 10.93ms (5.75ms CPU time)
+
+Ran 12 tests for test/GuarantorBond.t.sol:GuarantorBondTest
+[PASS] testAdministrativeJailDoesNotShieldBondFromLaterSlash() (gas: 4212441)
+[PASS] testEquivocationRejectsDifferentCoordinateAndUnauthorizedEra() (gas: 4204788)
+[PASS] testEquivocationRejectsForeignNetworkAndPaxeerDomain() (gas: 4201998)
+[PASS] testEveryEligibilityMutationAdvancesVersionWithoutConsumingGovernanceSequence() (gas: 4336501)
+[PASS] testFeeOnTransferAndNativePaxAreRejected() (gas: 4206229)
+[PASS] testFundingCannotCreateOrBackdateMembership() (gas: 4186226)
+[PASS] testGenesisBondedSetRejectsPartialOmittedDuplicateAndUnsortedMembers() (gas: 4789108)
+[PASS] testGovernedRemovalStartsUnbonding() (gas: 4209992)
+[PASS] testOldSignerEquivocationPreservesEpochHistoryAndExcludesCurrentMember() (gas: 4261895)
+[PASS] testPermissionlessPortableEquivocationSlashes() (gas: 4219588)
+[PASS] testRotationAndRemovalAreVersionedAndEpochBound() (gas: 4281437)
+[PASS] testUsdlConservationThroughUnbondSlashAndSweep() (gas: 4415317)
+Suite result: ok. 12 passed; 0 failed; 0 skipped; finished in 15.45ms (11.26ms CPU time)
+
+Ran 6 tests for test/LayerXTimelock.t.sol:LayerXTimelockTest
+[PASS] testGovernanceCannotBypassDelay() (gas: 1496102)
+[PASS] testGuardianCancelsQueuedOperation() (gas: 1448465)
+[PASS] testImmediateBetaExecutesWithoutAdvancingTimeAndRefusesReplay() (gas: 1507420)
+[PASS] testImmediateBetaRetainsTargetAllowlistAndRoleAuthorization() (gas: 4192133)
+[PASS] testImmediateProfileCannotChangeStandardConstructorOrOtherChains() (gas: 334037)
+[PASS] testRoleChangesRequireTheirOwnCompletedDelay() (gas: 1512269)
+Suite result: ok. 6 passed; 0 failed; 0 skipped; finished in 1.10ms (796.57µs CPU time)
+
+Ran 11 tests for test/PaxeerBetaDeploymentValidator.t.sol:PaxeerBetaDeploymentValidatorTest
+[PASS] testBuildsExactProtocolV2StaticConfig() (gas: 31091)
+[PASS] testCanonicalDescriptorAndRegistrationRequestCrossCheck() (gas: 8849)
+[PASS] testExplicitProtocolThreePinsConfigBlueprintAndManager() (gas: 6051222)
+[PASS] testGuarantorsMustBeSortedUniqueFundedAndApproved() (gas: 129047)
+[PASS] testImmediateBetaIsExplicitAndPreservesEconomicAndAuthorityChecks() (gas: 92099)
+[PASS] testRejectsDescriptorRegistrationMismatchAndMalformedArtifacts() (gas: 14876)
+[PASS] testRejectsEmptyGuarantorSet() (gas: 9438)
+[PASS] testRejectsInvalidAuthorityEconomicAndReleaseInputs() (gas: 59384)
+[PASS] testRejectsNonPaxeerChainAndWrongUsdlDecimals() (gas: 77967)
+[PASS] testRunnerPhaseSelectorsAreStableAndDistinct() (gas: 3388)
+[PASS] testRunnerRejectsMissingTopologyBeforeEveryStatefulPhase() (gas: 46176838)
+Suite result: ok. 11 passed; 0 failed; 0 skipped; finished in 5.96ms (3.27ms CPU time)
+
+Ran 25 tests for test/CheckpointRegistry.t.sol:CheckpointRegistryTest
+[PASS] testCanonicalAttestationMatchesProtocolV2GoldenVector() (gas: 3163)
+[PASS] testCanonicalHeaderMatchesCVector() (gas: 18282)
+[PASS] testCanonicalMillisecondTimestampsMeetSecondBasedWallClockBounds() (gas: 400290)
+[PASS] testDeclaredSettlementDrivesRegistryFreshnessPolicy() (gas: 11699)
+[PASS] testFirstCheckpointRejectsCanonicalRootAndAcceptsReceiptRoot() (gas: 424964)
+[PASS] testGenesisCheckpointIdentityBindsDistinctRootsManifestAndConfig() (gas: 3392185)
+[PASS] testInitialContinuityUsesGenesisReceiptRoot() (gas: 14553)
+[PASS] testOnlySlashingAuthorityCanInvalidateWithoutErasingHistory() (gas: 481761)
+[PASS] testPayloadSizeIndependentOfActivityCount() (gas: 15645)
+[PASS] testProtocolThreeRejectsLegacyHeaderAndBindsCertificateVersion() (gas: 8071578)
+[PASS] testRecordedCertificateSurvivesLaterMembershipAndCustodyMutations() (gas: 941018)
+[PASS] testRecordedCertificateSurvivesLaterVersionedSlash() (gas: 516609)
+[PASS] testRegisteredCertificateRequiresExactRecordedSet() (gas: 433382)
+[PASS] testRegistersThresholdCertificate() (gas: 400341)
+[PASS] testRejectsDuplicateGuarantor() (gas: 74758)
+[PASS] testRejectsForeignNetworkAndPaxeerDomainAttestation() (gas: 190048)
+[PASS] testRejectsMillisecondAttestationBeyondSecondConfiguredDelay() (gas: 56633)
+[PASS] testRejectsMillisecondTimestampBeyondSecondConfiguredDrift() (gas: 42722)
+[PASS] testRejectsSignatureOutsideGovernedMembership() (gas: 89597)
+[PASS] testRejectsStateRootDiscontinuity() (gas: 44616)
+[PASS] testVectorBoundaryHigh() (gas: 705889)
+[PASS] testVectorBoundaryLow() (gas: 705827)
+[PASS] testVectorFresh() (gas: 705765)
+[PASS] testVectorTooEarly() (gas: 322387)
+[PASS] testVectorTooLate() (gas: 322448)
+Suite result: ok. 25 passed; 0 failed; 0 skipped; finished in 38.50ms (25.97ms CPU time)
+
+Ran 25 tests for test/ContractDeployment.t.sol:ContractDeploymentTest
+[PASS] testBlueprintDeploysAtPredictedAddressAndIsIdempotent() (gas: 4845019)
+[PASS] testBlueprintDerivesCanonicalTimelockBeforeStaticConfigHash() (gas: 1826627)
+[PASS] testBlueprintRejectsConfiguredGovernanceAndIncompleteSeal() (gas: 4746803)
+[PASS] testBlueprintRejectsNonManager() (gas: 3229475)
+[PASS] testBlueprintRejectsOccupiedAndWrongRuntimeCode() (gas: 4827650)
+[PASS] testBlueprintRejectsTimelockWithoutComponentAttestation() (gas: 4818810)
+[PASS] testBlueprintRequiresTimelockAsFirstAndOnlyBootstrapDeployment() (gas: 4784611)
+[PASS] testBlueprintSealRejectsArbitraryBytecodeDespiteMatchingExpectedRuntimeHash() (gas: 7983776)
+[PASS] testBlueprintSealRejectsManagerManifestMappingDisagreement() (gas: 31189221)
+[PASS] testBlueprintSealRejectsNoncanonicalStorageLayoutAttestation() (gas: 8121993)
+[PASS] testBlueprintSealRejectsUninitializedManager() (gas: 16284856)
+[PASS] testBlueprintSealRejectsWrongConfigAttestation() (gas: 8120051)
+[PASS] testBlueprintSealRejectsWrongReleaseAttestation() (gas: 8121708)
+[PASS] testBlueprintSealRejectsWrongRoleAttestation() (gas: 8120448)
+[PASS] testBlueprintSealRejectsZeroStorageLayoutAttestation() (gas: 8121916)
+[PASS] testBlueprintTimelockWrongRuntimeHashRollsBackFirstChildNonce() (gas: 6113789)
+[PASS] testFeaturesRejectForeignAndUnknownFacilities() (gas: 11024)
+[PASS] testPredeployRolesAreExhaustiveAndUnique() (gas: 91130)
+[PASS] testPreinstallManifestIsExhaustiveAndAttested() (gas: 1852989)
+[PASS] testPreinstallManifestRejectsDuplicateAddress() (gas: 1669583)
+[PASS] testSemverRejectsLeadingZeroAndPrerelease() (gas: 17483)
+[PASS] testStaticConfigBindsAssetsChainAndAuthorities() (gas: 46384)
+[PASS] testStaticConfigRejectsWrongChainAndUnorderedAssets() (gas: 30777)
+[PASS] testStaticConfigRejectsWrongUsdlIdentityDecimalsAndGenesisRoots() (gas: 57270)
+[PASS] testStrictStableSemverComparison() (gas: 27674)
+Suite result: ok. 25 passed; 0 failed; 0 skipped; finished in 20.04ms (19.06ms CPU time)
+
+Ran 11 tests for test/ContractExecutionSafety.t.sol:ContractExecutionSafetyTest
+[PASS] testBurnUsesCanonicalSinkWithoutSelfDestruct() (gas: 429774)
+[PASS] testDirectAndDelegateOnlyPostures() (gas: 476810)
+[PASS] testDirectCodelessOriginRuleRejectsContractsAndConstructors() (gas: 183942)
+[PASS] testEIP7702DelegatedOriginIsNotCodeless() (gas: 151521)
+[PASS] testNamespacedStorageRoundTrip() (gas: 216242)
+[PASS] testNestedContextAndReservedStorageSlotsReject() (gas: 646766)
+[PASS] testPersistentAndTransientContextClearAfterScope() (gas: 857266)
+[PASS] testSafeCallBoundsFailureWithoutLosingClassification() (gas: 464587)
+[PASS] testSafeCallBoundsSuccessfulReturnData() (gas: 442582)
+[PASS] testSafeCallRejectsEmptyCodeAndStaticMutation() (gas: 669193)
+[PASS] testUUPSSelectorsFailClosedDirectAndDelegated() (gas: 475469)
+Suite result: ok. 11 passed; 0 failed; 0 skipped; finished in 720.54µs (507.05µs CPU time)
+
+Ran 17 tests for test/ContractIntegration.t.sol:ContractIntegrationTest
+[PASS] testAssetAndNullifierAdministrativeLifecycles() (gas: 1717666)
+[PASS] testBootstrapRequiresBothGovernanceDelays() (gas: 1702896)
+[PASS] testBootstrapRolesAreFullyTransferredAndRevoked() (gas: 23587)
+[PASS] testCompleteDeterministicSuiteAndCustodyInvariants() (gas: 1294167)
+[PASS] testDeployerCannotBypassImmutableTimelockGovernance() (gas: 33442)
+[PASS] testEmergencyExitUsesLatestCertifiedBalanceExactlyOnce() (gas: 2047315)
+[PASS] testGenesisFinalizationAndUsdlCustodyBoundaryAreCanonical() (gas: 391984)
+[PASS] testGenesisFinalizationCannotRunTwice() (gas: 106408)
+[PASS] testGenesisFinalizationRejectsStaleBondedSetVersion() (gas: 55589917)
+[PASS] testGuarantorAdministrativeSlashAndUnbondLifecycles() (gas: 4890325)
+[PASS] testRejectedChallengeForfeitsBondToGovernance() (gas: 1908241)
+[PASS] testReserveReconciliationBindsCertifiedLiabilitiesToCustody() (gas: 1888351)
+[PASS] testRoleTransitionFailureLeavesBlueprintUnsealed() (gas: 55737274)
+[PASS] testSealBeforeGenesisFinalizationLeavesBlueprintUnsealed() (gas: 55796503)
+[PASS] testUpheldChallengeCancelsWithdrawalAndSlashesCertificate() (gas: 2239521)
+[PASS] testUpheldLatestCheckpointCannotAuthorizeEmergencyExit() (gas: 2531085)
+[PASS] testWithdrawalClaimFinalisesExactlyOnce() (gas: 2101763)
+Suite result: ok. 17 passed; 0 failed; 0 skipped; finished in 84.27ms (72.90ms CPU time)
+
+Ran 2 tests for test/ContractIntegration.t.sol:MessageTypesTest
+[PASS] testFuzz_MessageHashBindsNonceValueGasAndPayload(uint64,uint128,uint64,bytes32) (runs: 10000, μ: 7018, ~: 7018)
+[PASS] testMessageHashRejectsCrossChainAndCrossManagerReplay() (gas: 7682)
+Suite result: ok. 2 passed; 0 failed; 0 skipped; finished in 480.43ms (480.32ms CPU time)
+
+Ran 15 tests for test/ContractPrimitives.t.sol:ContractPrimitivesTest
+[PASS] testArithmeticRejectsOverflowAndNarrowing() (gas: 11268)
+[PASS] testBoundedBigEndianReaders() (gas: 6924)
+[PASS] testCanonicalErrorClassificationAndCommitment() (gas: 18897)
+[PASS] testCheckedArithmeticAndFullPrecisionMulDiv() (gas: 10737)
+[PASS] testDecimalConversionNeverHidesDust() (gas: 13409)
+[PASS] testDomainSeparatedHashesAndCallCommitments() (gas: 12894)
+[PASS] testFuzz_BytesRejectEveryShortWord(bytes) (runs: 10000, μ: 9810, ~: 9810)
+[PASS] testFuzz_DecimalRoundTripExact(uint128,uint8) (runs: 10000, μ: 16339, ~: 13661)
+[PASS] testFuzz_HashBindsDomain(bytes32,bytes32,bytes) (runs: 10000, μ: 14438, ~: 14405)
+[PASS] testFuzz_MulDivMatchesNonOverflowingProduct(uint128,uint128,uint128) (runs: 10000, μ: 9316, ~: 9316)
+[PASS] testIndexAwareMerkleProof() (gas: 8606)
+[PASS] testMerkleRejectsIndexOutsideProofDepth() (gas: 8994)
+[PASS] testReaderRejectsOutOfBounds() (gas: 8874)
+[PASS] testSignatureRecoveryRejectsNonCanonicalLength() (gas: 9114)
+[PASS] testStrictSignatureRecoveryAndMalleabilityRejection() (gas: 14920)
+Suite result: ok. 15 passed; 0 failed; 0 skipped; finished in 1.62s (1.60s CPU time)
+
+Ran 5 tests for test/ContractInvariants.t.sol:ContractInvariantsTest
+[PASS] invariant_AllDepositedValueIsHeldOrReleased() (runs: 1000, calls: 128000, reverts: 0)
+
+╭-----------------------+-------------------+-------+---------+----------╮
+| Contract              | Selector          | Calls | Reverts | Discards |
++========================================================================+
+| VaultInvariantHandler | deposit           | 32084 | 0       | 0        |
+|-----------------------+-------------------+-------+---------+----------|
+| VaultInvariantHandler | initialize        | 31804 | 0       | 0        |
+|-----------------------+-------------------+-------+---------+----------|
+| VaultInvariantHandler | release           | 32101 | 0       | 0        |
+|-----------------------+-------------------+-------+---------+----------|
+| VaultInvariantHandler | replayLastRelease | 32011 | 0       | 0        |
+╰-----------------------+-------------------+-------+---------+----------╯
+
+[PASS] invariant_CustodyMirrorMatchesActualTokenBalance() (runs: 1000, calls: 128000, reverts: 0)
+
+╭-----------------------+-------------------+-------+---------+----------╮
+| Contract              | Selector          | Calls | Reverts | Discards |
++========================================================================+
+| VaultInvariantHandler | deposit           | 32084 | 0       | 0        |
+|-----------------------+-------------------+-------+---------+----------|
+| VaultInvariantHandler | initialize        | 31804 | 0       | 0        |
+|-----------------------+-------------------+-------+---------+----------|
+| VaultInvariantHandler | release           | 32101 | 0       | 0        |
+|-----------------------+-------------------+-------+---------+----------|
+| VaultInvariantHandler | replayLastRelease | 32011 | 0       | 0        |
+╰-----------------------+-------------------+-------+---------+----------╯
+
+[PASS] invariant_ReleaseClaimCanNeverReplay() (runs: 1000, calls: 128000, reverts: 0)
+
+╭-----------------------+-------------------+-------+---------+----------╮
+| Contract              | Selector          | Calls | Reverts | Discards |
++========================================================================+
+| VaultInvariantHandler | deposit           | 32084 | 0       | 0        |
+|-----------------------+-------------------+-------+---------+----------|
+| VaultInvariantHandler | initialize        | 31804 | 0       | 0        |
+|-----------------------+-------------------+-------+---------+----------|
+| VaultInvariantHandler | release           | 32101 | 0       | 0        |
+|-----------------------+-------------------+-------+---------+----------|
+| VaultInvariantHandler | replayLastRelease | 32011 | 0       | 0        |
+╰-----------------------+-------------------+-------+---------+----------╯
+
+[PASS] invariant_TokenSupplyNeverLeavesHandlerAndVault() (runs: 1000, calls: 128000, reverts: 0)
+
+╭-----------------------+-------------------+-------+---------+----------╮
+| Contract              | Selector          | Calls | Reverts | Discards |
++========================================================================+
+| VaultInvariantHandler | deposit           | 32084 | 0       | 0        |
+|-----------------------+-------------------+-------+---------+----------|
+| VaultInvariantHandler | initialize        | 31804 | 0       | 0        |
+|-----------------------+-------------------+-------+---------+----------|
+| VaultInvariantHandler | release           | 32101 | 0       | 0        |
+|-----------------------+-------------------+-------+---------+----------|
+| VaultInvariantHandler | replayLastRelease | 32011 | 0       | 0        |
+╰-----------------------+-------------------+-------+---------+----------╯
+
+[PASS] invariant_VaultCannotBecomeUUPSUpgradeable() (runs: 1000, calls: 128000, reverts: 0)
+
+╭-----------------------+-------------------+-------+---------+----------╮
+| Contract              | Selector          | Calls | Reverts | Discards |
++========================================================================+
+| VaultInvariantHandler | deposit           | 32084 | 0       | 0        |
+|-----------------------+-------------------+-------+---------+----------|
+| VaultInvariantHandler | initialize        | 31804 | 0       | 0        |
+|-----------------------+-------------------+-------+---------+----------|
+| VaultInvariantHandler | release           | 32101 | 0       | 0        |
+|-----------------------+-------------------+-------+---------+----------|
+| VaultInvariantHandler | replayLastRelease | 32011 | 0       | 0        |
+╰-----------------------+-------------------+-------+---------+----------╯
+
+Suite result: ok. 5 passed; 0 failed; 0 skipped; finished in 24.12s (68.34s CPU time)
+
+Ran 11 test suites in 24.13s (26.40s CPU time): 145 tests passed, 0 failed, 0 skipped (145 total tests)
+build/tests/test_bridge_withdraw
+build/tests/lxp_test_result
+make[1]: Leaving directory '/root/lx-lanes/exec'

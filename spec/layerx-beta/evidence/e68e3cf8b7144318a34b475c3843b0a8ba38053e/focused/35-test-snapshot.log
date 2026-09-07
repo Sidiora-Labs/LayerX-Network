@@ -1,0 +1,24 @@
+make[1]: warning: jobserver unavailable: using -j1.  Add '+' to parent make rule.
+make[1]: Entering directory '/root/lx-lanes/exec'
+cd programs && cargo build --locked --workspace --features layerx-programs-sandbox/host-ffi
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.22s
+build/tests/test_snapshot
+build/tests/lxp_test_state_root
+build/tests/programs_registration
+build/tests/programs_lifecycle
+build/tests/programs_monetary_law
+build/tests/programs_call_activity
+Programs fixture execution protocol=3 sequence=4 status=-302 receipt=0
+Programs fixture execution protocol=3 sequence=4 status=-301 receipt=0
+Programs fixture execution protocol=3 sequence=4 status=-300 receipt=0
+Programs fixture execution protocol=2 sequence=6 status=0 receipt=-736
+Programs fixture execution protocol=2 sequence=8 status=0 receipt=-601
+Programs fixture execution protocol=3 sequence=6 status=0 receipt=-736
+Programs fixture execution protocol=3 sequence=8 status=0 receipt=-601
+build/tests/programs_occupancy_batch
+build/tests/programs_metering_schedule
+program metering schedule vectors ok
+build/tests/programs_fee_governance
+build/tests/programs_accounts
+build/tests/programs_winddown
+make[1]: Leaving directory '/root/lx-lanes/exec'

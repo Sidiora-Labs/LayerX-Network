@@ -1,0 +1,5 @@
+make[1]: warning: jobserver unavailable: using -j1.  Add '+' to parent make rule.
+make[1]: Entering directory '/root/lx-lanes/exec'
+cargo build --manifest-path interop/Cargo.toml --locked --workspace
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.80s
+make[1]: Leaving directory '/root/lx-lanes/exec'

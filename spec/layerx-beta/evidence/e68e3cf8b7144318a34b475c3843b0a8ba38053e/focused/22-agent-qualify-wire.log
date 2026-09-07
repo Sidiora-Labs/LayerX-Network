@@ -1,0 +1,17 @@
+make[1]: warning: jobserver unavailable: using -j1.  Add '+' to parent make rule.
+make[1]: Entering directory '/root/lx-lanes/exec'
+mkdir -p build/
+cc -Iinclude -Ibuild/generated -DLXP_BUILD_TARGET_TRIPLE=\"x86_64-linux-gnu\" -DLXP_BUILD_OPTIMISATION=\"-O2\" -DLXP_BUILD_REVISION=\"unknown\" -std=c17 -pedantic -Werror -Wall -Wextra -Wconversion -Wshadow -Wvla -fno-strict-aliasing -ffp-contract=off -O2  agent/tools/wire-differential/reference.c build/liblayerx.a  -lcrypto -pthread -o build/agent-wire-reference
+cargo build --manifest-path agent/tools/wire-differential/Cargo.toml --locked
+   Compiling layerx-types v0.1.0 (/root/lx-lanes/exec/agent/crates/layerx-types)
+   Compiling layerx-wire v0.1.0 (/root/lx-lanes/exec/agent/crates/layerx-wire)
+   Compiling agent-wire-differential v0.1.0 (/root/lx-lanes/exec/agent/tools/wire-differential)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 7.87s
+cargo run --manifest-path agent/tests/qualify/Cargo.toml --locked -- wire \
+	/root/lx-lanes/exec /root/lx-lanes/exec/build/agent-wire-reference \
+	/root/lx-lanes/exec/agent/tools/wire-differential/target/debug/agent-wire-differential
+    Updating crates.io index
+error: the lock file /root/lx-lanes/exec/agent/tests/qualify/Cargo.lock needs to be updated but --locked was passed to prevent this
+If you want to try to generate the lock file without accessing the network, remove the --locked flag and use --offline instead.
+make[1]: *** [Makefile:2621: agent-qualify-wire] Error 101
+make[1]: Leaving directory '/root/lx-lanes/exec'

@@ -1,0 +1,440 @@
+make[1]: warning: jobserver unavailable: using -j1.  Add '+' to parent make rule.
+make[1]: Entering directory '/root/lx-lanes/exec'
+build/tests/lxp_test_protocol
+cargo test --manifest-path agent/Cargo.toml --locked -p layerx-wire --test hashing
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/hashing.rs (agent/target/debug/deps/hashing-14ba264434b75b98)
+
+running 8 tests
+test protocol_three_account_ids_match_native_ledger_vectors ... ok
+test native_program_batch_identity_binds_tree_and_entire_sequence_range ... ok
+test checkpoint_domain_tags_are_the_declared_version_two_tags ... ok
+test checkpoint_vectors_pin_header_encoding_and_identities ... ok
+test signing_preimage_binds_network_and_protocol_version ... ok
+test all_domains_separate_identical_canonical_bytes ... ok
+test activity_and_payload_hashes_match_every_replay_vector ... ok
+test raw_text_and_debug_values_cannot_enter_consensus_hashing ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.48s
+
+cargo test --manifest-path agent/Cargo.toml --locked -p layerx-proof --test checkpoint
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.18s
+     Running tests/checkpoint.rs (agent/target/debug/deps/checkpoint-b43276409f77bddc)
+
+running 7 tests
+test embedded_settlement_is_the_declared_document ... ok
+test rejects_checkpoint_identifier_and_settlement_domain_failures ... ok
+test declared_domain_verification_rejects_foreign_contracts_and_weak_thresholds ... ok
+test rejects_threshold_duplicate_membership_and_signature_failures ... ok
+test freshness_window_is_header_relative_and_closed_on_both_ends ... ok
+test transported_registration_never_invents_paxeer_chain_finality ... ok
+test checkpoint_vectors_apply_the_declared_freshness_window ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+tools/ci/solidity-state-surface.sh
+solidity state surface: 68 selectors have test evidence
+forge test --offline --root .
+No files changed, compilation skipped
+
+Ran 11 tests for test/ContractExecutionSafety.t.sol:ContractExecutionSafetyTest
+[PASS] testBurnUsesCanonicalSinkWithoutSelfDestruct() (gas: 429774)
+[PASS] testDirectAndDelegateOnlyPostures() (gas: 476810)
+[PASS] testDirectCodelessOriginRuleRejectsContractsAndConstructors() (gas: 183942)
+[PASS] testEIP7702DelegatedOriginIsNotCodeless() (gas: 151521)
+[PASS] testNamespacedStorageRoundTrip() (gas: 216242)
+[PASS] testNestedContextAndReservedStorageSlotsReject() (gas: 646766)
+[PASS] testPersistentAndTransientContextClearAfterScope() (gas: 857266)
+[PASS] testSafeCallBoundsFailureWithoutLosingClassification() (gas: 464587)
+[PASS] testSafeCallBoundsSuccessfulReturnData() (gas: 442582)
+[PASS] testSafeCallRejectsEmptyCodeAndStaticMutation() (gas: 669193)
+[PASS] testUUPSSelectorsFailClosedDirectAndDelegated() (gas: 475469)
+Suite result: ok. 11 passed; 0 failed; 0 skipped; finished in 1.06ms (773.88µs CPU time)
+
+Ran 25 tests for test/CheckpointRegistry.t.sol:CheckpointRegistryTest
+[PASS] testCanonicalAttestationMatchesProtocolV2GoldenVector() (gas: 3163)
+[PASS] testCanonicalHeaderMatchesCVector() (gas: 18282)
+[PASS] testCanonicalMillisecondTimestampsMeetSecondBasedWallClockBounds() (gas: 400290)
+[PASS] testDeclaredSettlementDrivesRegistryFreshnessPolicy() (gas: 11699)
+[PASS] testFirstCheckpointRejectsCanonicalRootAndAcceptsReceiptRoot() (gas: 424964)
+[PASS] testGenesisCheckpointIdentityBindsDistinctRootsManifestAndConfig() (gas: 3392185)
+[PASS] testInitialContinuityUsesGenesisReceiptRoot() (gas: 14553)
+[PASS] testOnlySlashingAuthorityCanInvalidateWithoutErasingHistory() (gas: 481761)
+[PASS] testPayloadSizeIndependentOfActivityCount() (gas: 15645)
+[PASS] testProtocolThreeRejectsLegacyHeaderAndBindsCertificateVersion() (gas: 8071578)
+[PASS] testRecordedCertificateSurvivesLaterMembershipAndCustodyMutations() (gas: 941018)
+[PASS] testRecordedCertificateSurvivesLaterVersionedSlash() (gas: 516609)
+[PASS] testRegisteredCertificateRequiresExactRecordedSet() (gas: 433382)
+[PASS] testRegistersThresholdCertificate() (gas: 400341)
+[PASS] testRejectsDuplicateGuarantor() (gas: 74758)
+[PASS] testRejectsForeignNetworkAndPaxeerDomainAttestation() (gas: 190048)
+[PASS] testRejectsMillisecondAttestationBeyondSecondConfiguredDelay() (gas: 56633)
+[PASS] testRejectsMillisecondTimestampBeyondSecondConfiguredDrift() (gas: 42722)
+[PASS] testRejectsSignatureOutsideGovernedMembership() (gas: 89597)
+[PASS] testRejectsStateRootDiscontinuity() (gas: 44616)
+[PASS] testVectorBoundaryHigh() (gas: 705889)
+[PASS] testVectorBoundaryLow() (gas: 705827)
+[PASS] testVectorFresh() (gas: 705765)
+[PASS] testVectorTooEarly() (gas: 322387)
+[PASS] testVectorTooLate() (gas: 322448)
+Suite result: ok. 25 passed; 0 failed; 0 skipped; finished in 26.86ms (23.62ms CPU time)
+
+Ran 25 tests for test/ContractDeployment.t.sol:ContractDeploymentTest
+[PASS] testBlueprintDeploysAtPredictedAddressAndIsIdempotent() (gas: 4845019)
+[PASS] testBlueprintDerivesCanonicalTimelockBeforeStaticConfigHash() (gas: 1826627)
+[PASS] testBlueprintRejectsConfiguredGovernanceAndIncompleteSeal() (gas: 4746803)
+[PASS] testBlueprintRejectsNonManager() (gas: 3229475)
+[PASS] testBlueprintRejectsOccupiedAndWrongRuntimeCode() (gas: 4827650)
+[PASS] testBlueprintRejectsTimelockWithoutComponentAttestation() (gas: 4818810)
+[PASS] testBlueprintRequiresTimelockAsFirstAndOnlyBootstrapDeployment() (gas: 4784611)
+[PASS] testBlueprintSealRejectsArbitraryBytecodeDespiteMatchingExpectedRuntimeHash() (gas: 7983776)
+[PASS] testBlueprintSealRejectsManagerManifestMappingDisagreement() (gas: 31189221)
+[PASS] testBlueprintSealRejectsNoncanonicalStorageLayoutAttestation() (gas: 8121993)
+[PASS] testBlueprintSealRejectsUninitializedManager() (gas: 16284856)
+[PASS] testBlueprintSealRejectsWrongConfigAttestation() (gas: 8120051)
+[PASS] testBlueprintSealRejectsWrongReleaseAttestation() (gas: 8121708)
+[PASS] testBlueprintSealRejectsWrongRoleAttestation() (gas: 8120448)
+[PASS] testBlueprintSealRejectsZeroStorageLayoutAttestation() (gas: 8121916)
+[PASS] testBlueprintTimelockWrongRuntimeHashRollsBackFirstChildNonce() (gas: 6113789)
+[PASS] testFeaturesRejectForeignAndUnknownFacilities() (gas: 11024)
+[PASS] testPredeployRolesAreExhaustiveAndUnique() (gas: 91130)
+[PASS] testPreinstallManifestIsExhaustiveAndAttested() (gas: 1852989)
+[PASS] testPreinstallManifestRejectsDuplicateAddress() (gas: 1669583)
+[PASS] testSemverRejectsLeadingZeroAndPrerelease() (gas: 17483)
+[PASS] testStaticConfigBindsAssetsChainAndAuthorities() (gas: 46384)
+[PASS] testStaticConfigRejectsWrongChainAndUnorderedAssets() (gas: 30777)
+[PASS] testStaticConfigRejectsWrongUsdlIdentityDecimalsAndGenesisRoots() (gas: 57270)
+[PASS] testStrictStableSemverComparison() (gas: 27674)
+Suite result: ok. 25 passed; 0 failed; 0 skipped; finished in 25.38ms (16.36ms CPU time)
+
+Ran 12 tests for test/GuarantorBond.t.sol:GuarantorBondTest
+[PASS] testAdministrativeJailDoesNotShieldBondFromLaterSlash() (gas: 4212441)
+[PASS] testEquivocationRejectsDifferentCoordinateAndUnauthorizedEra() (gas: 4204788)
+[PASS] testEquivocationRejectsForeignNetworkAndPaxeerDomain() (gas: 4201998)
+[PASS] testEveryEligibilityMutationAdvancesVersionWithoutConsumingGovernanceSequence() (gas: 4336501)
+[PASS] testFeeOnTransferAndNativePaxAreRejected() (gas: 4206229)
+[PASS] testFundingCannotCreateOrBackdateMembership() (gas: 4186226)
+[PASS] testGenesisBondedSetRejectsPartialOmittedDuplicateAndUnsortedMembers() (gas: 4789108)
+[PASS] testGovernedRemovalStartsUnbonding() (gas: 4209992)
+[PASS] testOldSignerEquivocationPreservesEpochHistoryAndExcludesCurrentMember() (gas: 4261895)
+[PASS] testPermissionlessPortableEquivocationSlashes() (gas: 4219588)
+[PASS] testRotationAndRemovalAreVersionedAndEpochBound() (gas: 4281437)
+[PASS] testUsdlConservationThroughUnbondSlashAndSweep() (gas: 4415317)
+Suite result: ok. 12 passed; 0 failed; 0 skipped; finished in 6.69ms (6.25ms CPU time)
+
+Ran 6 tests for test/LayerXTimelock.t.sol:LayerXTimelockTest
+[PASS] testGovernanceCannotBypassDelay() (gas: 1496102)
+[PASS] testGuardianCancelsQueuedOperation() (gas: 1448465)
+[PASS] testImmediateBetaExecutesWithoutAdvancingTimeAndRefusesReplay() (gas: 1507420)
+[PASS] testImmediateBetaRetainsTargetAllowlistAndRoleAuthorization() (gas: 4192133)
+[PASS] testImmediateProfileCannotChangeStandardConstructorOrOtherChains() (gas: 334037)
+[PASS] testRoleChangesRequireTheirOwnCompletedDelay() (gas: 1512269)
+Suite result: ok. 6 passed; 0 failed; 0 skipped; finished in 895.85µs (734.81µs CPU time)
+
+Ran 16 tests for test/ContractManager.t.sol:ContractManagerTest
+[PASS] testCancellationAndAuthorityAreFailClosed() (gas: 234355)
+[PASS] testContainerManifestAndSelectorInventoryIsComplete() (gas: 182349)
+[PASS] testContainerRejectsDirectMigrationCompletion() (gas: 15306)
+[PASS] testContainerRejectsGenesisFinalizationAgainstUnregisteredTopology() (gas: 34768)
+[PASS] testContainerRejectsManifestWithMismatchedImmutableGovernance() (gas: 7707909)
+[PASS] testContainerRejectsMismatchedEmergencyCouncil() (gas: 7733698)
+[PASS] testContainerRejectsNonCanonicalAddressReturn() (gas: 6950732)
+[PASS] testExecutesCommittedMigrationExactlyOnce() (gas: 302089)
+[PASS] testLaterFailureRollsBackEveryEarlierOperation() (gas: 357630)
+[PASS] testMigrationCannotExecuteEarlyOrAfterExpiry() (gas: 255531)
+[PASS] testOrderedOperationRootRejectsReordering() (gas: 286882)
+[PASS] testPostCallHashMismatchRollsBackTarget() (gas: 298835)
+[PASS] testPostCallLayoutMismatchRollsBackTarget() (gas: 298610)
+[PASS] testRejectsValueCodeHashAndStorageViolations() (gas: 101584)
+[PASS] testRejectsVersionDowngradeAndConcurrentPlan() (gas: 258662)
+[PASS] testRejectsWrongTargetAndSelector() (gas: 80705)
+Suite result: ok. 16 passed; 0 failed; 0 skipped; finished in 8.58ms (5.64ms CPU time)
+
+Ran 11 tests for test/PaxeerBetaDeploymentValidator.t.sol:PaxeerBetaDeploymentValidatorTest
+[PASS] testBuildsExactProtocolV2StaticConfig() (gas: 31091)
+[PASS] testCanonicalDescriptorAndRegistrationRequestCrossCheck() (gas: 8849)
+[PASS] testExplicitProtocolThreePinsConfigBlueprintAndManager() (gas: 6051222)
+[PASS] testGuarantorsMustBeSortedUniqueFundedAndApproved() (gas: 129047)
+[PASS] testImmediateBetaIsExplicitAndPreservesEconomicAndAuthorityChecks() (gas: 92099)
+[PASS] testRejectsDescriptorRegistrationMismatchAndMalformedArtifacts() (gas: 14876)
+[PASS] testRejectsEmptyGuarantorSet() (gas: 9438)
+[PASS] testRejectsInvalidAuthorityEconomicAndReleaseInputs() (gas: 59384)
+[PASS] testRejectsNonPaxeerChainAndWrongUsdlDecimals() (gas: 77967)
+[PASS] testRunnerPhaseSelectorsAreStableAndDistinct() (gas: 3388)
+[PASS] testRunnerRejectsMissingTopologyBeforeEveryStatefulPhase() (gas: 46176838)
+Suite result: ok. 11 passed; 0 failed; 0 skipped; finished in 4.83ms (2.63ms CPU time)
+
+Ran 17 tests for test/ContractIntegration.t.sol:ContractIntegrationTest
+[PASS] testAssetAndNullifierAdministrativeLifecycles() (gas: 1717666)
+[PASS] testBootstrapRequiresBothGovernanceDelays() (gas: 1702896)
+[PASS] testBootstrapRolesAreFullyTransferredAndRevoked() (gas: 23587)
+[PASS] testCompleteDeterministicSuiteAndCustodyInvariants() (gas: 1294167)
+[PASS] testDeployerCannotBypassImmutableTimelockGovernance() (gas: 33442)
+[PASS] testEmergencyExitUsesLatestCertifiedBalanceExactlyOnce() (gas: 2047315)
+[PASS] testGenesisFinalizationAndUsdlCustodyBoundaryAreCanonical() (gas: 391984)
+[PASS] testGenesisFinalizationCannotRunTwice() (gas: 106408)
+[PASS] testGenesisFinalizationRejectsStaleBondedSetVersion() (gas: 55589917)
+[PASS] testGuarantorAdministrativeSlashAndUnbondLifecycles() (gas: 4890325)
+[PASS] testRejectedChallengeForfeitsBondToGovernance() (gas: 1908241)
+[PASS] testReserveReconciliationBindsCertifiedLiabilitiesToCustody() (gas: 1888351)
+[PASS] testRoleTransitionFailureLeavesBlueprintUnsealed() (gas: 55737274)
+[PASS] testSealBeforeGenesisFinalizationLeavesBlueprintUnsealed() (gas: 55796503)
+[PASS] testUpheldChallengeCancelsWithdrawalAndSlashesCertificate() (gas: 2239521)
+[PASS] testUpheldLatestCheckpointCannotAuthorizeEmergencyExit() (gas: 2531085)
+[PASS] testWithdrawalClaimFinalisesExactlyOnce() (gas: 2101763)
+Suite result: ok. 17 passed; 0 failed; 0 skipped; finished in 60.54ms (44.05ms CPU time)
+
+Ran 2 tests for test/ContractIntegration.t.sol:MessageTypesTest
+[PASS] testFuzz_MessageHashBindsNonceValueGasAndPayload(uint64,uint128,uint64,bytes32) (runs: 10000, μ: 7018, ~: 7018)
+[PASS] testMessageHashRejectsCrossChainAndCrossManagerReplay() (gas: 7682)
+Suite result: ok. 2 passed; 0 failed; 0 skipped; finished in 366.98ms (366.89ms CPU time)
+
+Ran 15 tests for test/ContractPrimitives.t.sol:ContractPrimitivesTest
+[PASS] testArithmeticRejectsOverflowAndNarrowing() (gas: 11268)
+[PASS] testBoundedBigEndianReaders() (gas: 6924)
+[PASS] testCanonicalErrorClassificationAndCommitment() (gas: 18897)
+[PASS] testCheckedArithmeticAndFullPrecisionMulDiv() (gas: 10737)
+[PASS] testDecimalConversionNeverHidesDust() (gas: 13409)
+[PASS] testDomainSeparatedHashesAndCallCommitments() (gas: 12894)
+[PASS] testFuzz_BytesRejectEveryShortWord(bytes) (runs: 10000, μ: 9810, ~: 9810)
+[PASS] testFuzz_DecimalRoundTripExact(uint128,uint8) (runs: 10000, μ: 16257, ~: 13079)
+[PASS] testFuzz_HashBindsDomain(bytes32,bytes32,bytes) (runs: 10000, μ: 14438, ~: 14405)
+[PASS] testFuzz_MulDivMatchesNonOverflowingProduct(uint128,uint128,uint128) (runs: 10000, μ: 9316, ~: 9316)
+[PASS] testIndexAwareMerkleProof() (gas: 8606)
+[PASS] testMerkleRejectsIndexOutsideProofDepth() (gas: 8994)
+[PASS] testReaderRejectsOutOfBounds() (gas: 8874)
+[PASS] testSignatureRecoveryRejectsNonCanonicalLength() (gas: 9114)
+[PASS] testStrictSignatureRecoveryAndMalleabilityRejection() (gas: 14920)
+Suite result: ok. 15 passed; 0 failed; 0 skipped; finished in 1.36s (1.51s CPU time)
+
+Ran 5 tests for test/ContractInvariants.t.sol:ContractInvariantsTest
+[PASS] invariant_AllDepositedValueIsHeldOrReleased() (runs: 1000, calls: 128000, reverts: 0)
+
+╭-----------------------+-------------------+-------+---------+----------╮
+| Contract              | Selector          | Calls | Reverts | Discards |
++========================================================================+
+| VaultInvariantHandler | deposit           | 31957 | 0       | 0        |
+|-----------------------+-------------------+-------+---------+----------|
+| VaultInvariantHandler | initialize        | 32176 | 0       | 0        |
+|-----------------------+-------------------+-------+---------+----------|
+| VaultInvariantHandler | release           | 31980 | 0       | 0        |
+|-----------------------+-------------------+-------+---------+----------|
+| VaultInvariantHandler | replayLastRelease | 31887 | 0       | 0        |
+╰-----------------------+-------------------+-------+---------+----------╯
+
+[PASS] invariant_CustodyMirrorMatchesActualTokenBalance() (runs: 1000, calls: 128000, reverts: 0)
+
+╭-----------------------+-------------------+-------+---------+----------╮
+| Contract              | Selector          | Calls | Reverts | Discards |
++========================================================================+
+| VaultInvariantHandler | deposit           | 31957 | 0       | 0        |
+|-----------------------+-------------------+-------+---------+----------|
+| VaultInvariantHandler | initialize        | 32176 | 0       | 0        |
+|-----------------------+-------------------+-------+---------+----------|
+| VaultInvariantHandler | release           | 31980 | 0       | 0        |
+|-----------------------+-------------------+-------+---------+----------|
+| VaultInvariantHandler | replayLastRelease | 31887 | 0       | 0        |
+╰-----------------------+-------------------+-------+---------+----------╯
+
+[PASS] invariant_ReleaseClaimCanNeverReplay() (runs: 1000, calls: 128000, reverts: 0)
+
+╭-----------------------+-------------------+-------+---------+----------╮
+| Contract              | Selector          | Calls | Reverts | Discards |
++========================================================================+
+| VaultInvariantHandler | deposit           | 31957 | 0       | 0        |
+|-----------------------+-------------------+-------+---------+----------|
+| VaultInvariantHandler | initialize        | 32176 | 0       | 0        |
+|-----------------------+-------------------+-------+---------+----------|
+| VaultInvariantHandler | release           | 31980 | 0       | 0        |
+|-----------------------+-------------------+-------+---------+----------|
+| VaultInvariantHandler | replayLastRelease | 31887 | 0       | 0        |
+╰-----------------------+-------------------+-------+---------+----------╯
+
+[PASS] invariant_TokenSupplyNeverLeavesHandlerAndVault() (runs: 1000, calls: 128000, reverts: 0)
+
+╭-----------------------+-------------------+-------+---------+----------╮
+| Contract              | Selector          | Calls | Reverts | Discards |
++========================================================================+
+| VaultInvariantHandler | deposit           | 31957 | 0       | 0        |
+|-----------------------+-------------------+-------+---------+----------|
+| VaultInvariantHandler | initialize        | 32176 | 0       | 0        |
+|-----------------------+-------------------+-------+---------+----------|
+| VaultInvariantHandler | release           | 31980 | 0       | 0        |
+|-----------------------+-------------------+-------+---------+----------|
+| VaultInvariantHandler | replayLastRelease | 31887 | 0       | 0        |
+╰-----------------------+-------------------+-------+---------+----------╯
+
+[PASS] invariant_VaultCannotBecomeUUPSUpgradeable() (runs: 1000, calls: 128000, reverts: 0)
+
+╭-----------------------+-------------------+-------+---------+----------╮
+| Contract              | Selector          | Calls | Reverts | Discards |
++========================================================================+
+| VaultInvariantHandler | deposit           | 31957 | 0       | 0        |
+|-----------------------+-------------------+-------+---------+----------|
+| VaultInvariantHandler | initialize        | 32176 | 0       | 0        |
+|-----------------------+-------------------+-------+---------+----------|
+| VaultInvariantHandler | release           | 31980 | 0       | 0        |
+|-----------------------+-------------------+-------+---------+----------|
+| VaultInvariantHandler | replayLastRelease | 31887 | 0       | 0        |
+╰-----------------------+-------------------+-------+---------+----------╯
+
+Suite result: ok. 5 passed; 0 failed; 0 skipped; finished in 28.12s (71.71s CPU time)
+
+Ran 11 test suites in 28.13s (29.99s CPU time): 145 tests passed, 0 failed, 0 skipped (145 total tests)
+cargo test --manifest-path interop/Cargo.toml --locked -p layerx-mirror
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.66s
+     Running unittests src/lib.rs (interop/target/debug/deps/layerx_mirror-c4548192fda79e86)
+
+running 7 tests
+test runtime::tests::startup_refuses_a_second_spool_owner ... ok
+test runtime::tests::startup_refuses_duplicate_batch_metadata ... ok
+test runtime::tests::startup_refuses_gapped_batch_metadata ... ok
+test runtime::tests::startup_refuses_unreadable_commitment_inventory ... ok
+test runtime::tests::clean_restart_resumes_after_the_contiguous_spool_prefix ... ok
+test runtime::tests::startup_refuses_corrupt_archive_bytes ... ok
+test runtime::tests::startup_refuses_object_missing_after_inventory ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s
+
+     Running unittests src/bin/layerx-mirror-publisher.rs (interop/target/debug/deps/layerx_mirror_publisher-43ae4413df5219d4)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/layerx-mirror-verify.rs (interop/target/debug/deps/layerx_mirror_verify-0e37065b4c27e628)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/checkpoint_vectors.rs (interop/target/debug/deps/checkpoint_vectors-17b3973be64ce5f1)
+
+running 1 test
+test mirror_checkpoint_identity_and_freshness_follow_the_shared_vectors ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s
+
+     Running tests/publish.rs (interop/target/debug/deps/publish-f9879a7fe5a8a532)
+
+running 12 tests
+test invalid_chain_configuration_is_rejected_before_any_write ... ok
+test confirmation_requires_the_archive_to_be_retrievable_intact ... ok
+test publishes_pure_archives_without_custody_semantics ... ok
+test below_finality_confirmations_stay_pending ... ok
+test a_rejected_transaction_degrades_typed ... ok
+test a_pending_publication_is_idempotent_and_later_confirms ... ok
+test a_stalled_mirror_reports_lag_while_the_other_confirms ... ok
+test mirror_chain_unavailability_is_a_typed_degradation_not_a_block ... ok
+test a_reorg_is_observable_and_the_cursor_retreats ... ok
+test retrieval_reports_missing_tampered_and_unavailable_mirrors ... ok
+test confirms_and_retrieves_the_same_archive_on_both_test_networks ... ok
+test freshness_states_checkpoint_lag_honestly ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
+
+   Doc-tests layerx_mirror
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+cargo test --manifest-path interop/contracts/solana-mirror/Cargo.toml --locked
+warning: unexpected `cfg` condition value: `custom-heap`
+  --> src/lib.rs:15:1
+   |
+15 | entrypoint!(process_instruction);
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: no expected values for `feature`
+   = note: using a cfg inside a macro will use the cfgs from the destination crate and not the ones from the defining crate
+   = help: try referring to `$crate::custom_heap_default` crate for guidance on how handle this unexpected cfg
+   = help: the macro `$crate::custom_heap_default` may come from an old version of the `solana_program_entrypoint` crate, try updating your dependency with `cargo update -p solana_program_entrypoint`
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+   = note: `#[warn(unexpected_cfgs)]` on by default
+   = note: this warning originates in the macro `$crate::custom_heap_default` which comes from the expansion of the macro `entrypoint` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: unexpected `cfg` condition value: `solana`
+  --> src/lib.rs:15:1
+   |
+15 | entrypoint!(process_instruction);
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `redox`, `rtems`, `solaris`, `solid_asp3`, `teeos`, `trusty`, and `tvos` and 11 more
+   = note: using a cfg inside a macro will use the cfgs from the destination crate and not the ones from the defining crate
+   = help: try referring to `$crate::custom_heap_default` crate for guidance on how handle this unexpected cfg
+   = help: the macro `$crate::custom_heap_default` may come from an old version of the `solana_program_entrypoint` crate, try updating your dependency with `cargo update -p solana_program_entrypoint`
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+   = note: this warning originates in the macro `$crate::custom_heap_default` which comes from the expansion of the macro `entrypoint` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: unexpected `cfg` condition value: `custom-panic`
+  --> src/lib.rs:15:1
+   |
+15 | entrypoint!(process_instruction);
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: no expected values for `feature`
+   = note: using a cfg inside a macro will use the cfgs from the destination crate and not the ones from the defining crate
+   = help: try referring to `$crate::custom_panic_default` crate for guidance on how handle this unexpected cfg
+   = help: the macro `$crate::custom_panic_default` may come from an old version of the `solana_program_entrypoint` crate, try updating your dependency with `cargo update -p solana_program_entrypoint`
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+   = note: this warning originates in the macro `$crate::custom_panic_default` which comes from the expansion of the macro `entrypoint` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: unexpected `cfg` condition value: `solana`
+  --> src/lib.rs:15:1
+   |
+15 | entrypoint!(process_instruction);
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `redox`, `rtems`, `solaris`, `solid_asp3`, `teeos`, `trusty`, and `tvos` and 11 more
+   = note: using a cfg inside a macro will use the cfgs from the destination crate and not the ones from the defining crate
+   = help: try referring to `$crate::custom_panic_default` crate for guidance on how handle this unexpected cfg
+   = help: the macro `$crate::custom_panic_default` may come from an old version of the `solana_program_entrypoint` crate, try updating your dependency with `cargo update -p solana_program_entrypoint`
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+   = note: this warning originates in the macro `$crate::custom_panic_default` which comes from the expansion of the macro `entrypoint` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: use of deprecated module `solana_program::system_instruction`: Use `solana_system_interface` crate instead
+  --> src/lib.rs:11:21
+   |
+11 | use solana_program::system_instruction;
+   |                     ^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated module `solana_program::system_program`: Use `solana_sdk_ids::system_program` instead
+  --> src/lib.rs:12:21
+   |
+12 | use solana_program::system_program;
+   |                     ^^^^^^^^^^^^^^
+
+warning: `layerx-solana-mirror-program` (lib) generated 6 warnings
+warning: `layerx-solana-mirror-program` (lib test) generated 6 warnings (6 duplicates)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.11s
+     Running unittests src/lib.rs (interop/contracts/solana-mirror/target/debug/deps/layerx_solana_mirror_program-39bbb00a1bd6f7e5)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests layerx_solana_mirror_program
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+forge test --root . --contracts interop/contracts/ethereum-mirror \
+	--match-path interop/contracts/ethereum-mirror/test/LayerXMirrorArchive.t.sol \
+	--use 0.8.30 --evm-version paris --optimize --optimizer-runs 100000 \
+	--via-ir --no-metadata
+Compiling 2 files with Solc 0.8.30
+Solc 0.8.30 finished in 938.16ms
+Compiler run successful!
+
+Ran 3 tests for interop/contracts/ethereum-mirror/test/LayerXMirrorArchive.t.sol:LayerXMirrorArchiveTest
+[PASS] testArchiveRoundTripAndIdempotence() (gas: 1106317)
+[PASS] testMirrorRejectsValue() (gas: 912559)
+[PASS] testOnlyPublisherCanOpenArchive() (gas: 1028950)
+Suite result: ok. 3 passed; 0 failed; 0 skipped; finished in 1.56ms (664.68µs CPU time)
+
+Ran 1 test suite in 66.57ms (1.56ms CPU time): 3 tests passed, 0 failed, 0 skipped (3 total tests)
+make[1]: Leaving directory '/root/lx-lanes/exec'

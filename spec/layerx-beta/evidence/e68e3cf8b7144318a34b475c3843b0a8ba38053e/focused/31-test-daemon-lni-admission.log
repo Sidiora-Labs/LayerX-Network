@@ -1,0 +1,55 @@
+make[1]: warning: jobserver unavailable: using -j1.  Add '+' to parent make rule.
+make[1]: Entering directory '/root/lx-lanes/exec'
+cd programs && cargo build --locked --workspace --features layerx-programs-sandbox/host-ffi
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.10s
+build/tests/test_daemon_lni_admission
+build/tests/lxp_test_admission
+build/tests/lxp_test_batch_wal_recovery
+cargo test --manifest-path agent/Cargo.toml --locked -p layerx-client --test lni_schema
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s
+     Running tests/lni_schema.rs (agent/target/debug/deps/lni_schema-b2bab3eacab02019)
+
+running 3 tests
+test lni_golden_vectors_are_literal_and_canonical_for_every_message ... ok
+test version_and_capability_rules_are_checked_against_the_schema_source ... ok
+test lni_schema_and_document_cover_every_declared_message ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+cargo test --manifest-path agent/Cargo.toml --locked -p layerx-client --test submit
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
+     Running tests/submit.rs (agent/target/debug/deps/submit-86dc95c8c33d72b7)
+
+running 5 tests
+test high_level_client_refuses_legacy_submit_without_durable_capability ... ok
+test invalid_signature_fails_before_any_submission_bytes_are_sent ... ok
+test legacy_submit_acknowledgement_preserves_broad_v1_evidence ... ok
+test mismatched_submit_acknowledgement_is_indeterminate ... ok
+test retries_and_reconnects_preserve_exact_signed_bytes_under_fragmentation ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+
+cargo test --manifest-path agent/Cargo.toml --locked -p layerx-agentd --test handshake_gate
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.35s
+     Running tests/handshake_gate.rs (agent/target/debug/deps/handshake_gate-b1027dcd44c08085)
+
+running 6 tests
+test authority_source_rejects_leaf_and_ancestor_symlinks ... ok
+test reconnect_repeats_handshake_for_node_upgrade_and_disappearing_capability ... ok
+test startup_is_not_ready_until_real_framed_handshake_reports_the_full_intersection ... ok
+test authority_source_rejects_permissive_and_non_regular_inputs ... ok
+test network_protocol_and_major_upgrade_mismatches_refuse_operation ... ok
+test legacy_submit_capability_does_not_open_beta_write_gate ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.27s
+
+mkdir -p build/agent/
+cc -Iinclude -Ibuild/generated -DLXP_BUILD_TARGET_TRIPLE=\"x86_64-linux-gnu\" -DLXP_BUILD_OPTIMISATION=\"-O2\" -DLXP_BUILD_REVISION=\"unknown\" -std=c17 -pedantic -Werror -Wall -Wextra -Wconversion -Wshadow -Wvla -fno-strict-aliasing -ffp-contract=off -O2  agent/tests/boundary/node/layerxd_lni.c \
+	cmd/layerxd/lxp_daemon_main.c cmd/layerxd/lxp_daemon_config.c cmd/layerxd/lxp_daemon_shutdown.c cmd/layerxd/lxp_daemon_receipt_authority.c cmd/layerxd/lxp_daemon_protocol.c cmd/layerxd/lxp_daemon_listener.c cmd/layerxd/lxp_daemon_lni.c cmd/layerxd/lxp_daemon_evidence.c cmd/layerxd/lxp_daemon_finality_authority.c cmd/layerxd/lxp_daemon_batch_wal.c cmd/layerxd/lxp_daemon_artifact.c cmd/layerxd/lxp_daemon_process.c cmd/layerxd/lxp_daemon_authority_replica.c cmd/layerxd/lxp_daemon_cli.c build/liblayerx.a programs/target/debug/liblayerx_programs_sandbox.a \
+	 -lcrypto -lsqlite3 -pthread -ldl -lm -o build/agent/layerxd-lni
+agent/tests/boundary/node/layerxd_lni.c:80:37: error: ‘LX_ASSET_REGISTRY_CAPACITY’ undeclared here (not in a function); did you mean ‘LX_ACCOUNT_REGISTRY_CAPACITY’?
+   80 |     lxp_transfer_asset_state assets[LX_ASSET_REGISTRY_CAPACITY];
+      |                                     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+      |                                     LX_ACCOUNT_REGISTRY_CAPACITY
+make[1]: *** [Makefile:2269: build/agent/layerxd-lni] Error 1
+make[1]: Leaving directory '/root/lx-lanes/exec'

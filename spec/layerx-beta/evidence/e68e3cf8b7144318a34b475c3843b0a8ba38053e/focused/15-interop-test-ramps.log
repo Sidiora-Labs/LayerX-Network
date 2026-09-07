@@ -1,0 +1,83 @@
+make[1]: warning: jobserver unavailable: using -j1.  Add '+' to parent make rule.
+make[1]: Entering directory '/root/lx-lanes/exec'
+cargo test --locked --manifest-path platform/Cargo.toml -p layerx-ramp-toolkit
+   Compiling syn v2.0.119
+   Compiling syn v3.0.3
+   Compiling inout v0.1.4
+   Compiling cipher v0.4.4
+   Compiling chacha20 v0.9.1
+   Compiling chacha20poly1305 v0.10.1
+   Compiling zerovec-derive v0.11.6
+   Compiling displaydoc v0.2.7
+   Compiling serde_derive v1.0.229
+   Compiling synstructure v0.13.2
+   Compiling zerofrom-derive v0.1.7
+   Compiling yoke-derive v0.8.2
+   Compiling curve25519-dalek-derive v0.1.1
+   Compiling openssl-macros v0.1.1
+   Compiling curve25519-dalek v4.1.3
+   Compiling openssl v0.10.73
+   Compiling zerofrom v0.1.8
+   Compiling ed25519-dalek v2.2.0
+   Compiling yoke v0.8.3
+   Compiling zerovec v0.11.8
+   Compiling zerotrie v0.2.5
+   Compiling layerx-programs-runtime v0.1.0 (/root/lx-lanes/exec/programs/crates/layerx-programs-runtime)
+   Compiling tinystr v0.8.4
+   Compiling potential_utf v0.1.6
+   Compiling icu_locale_core v2.3.0
+   Compiling icu_collections v2.3.0
+   Compiling layerx-crypto v0.1.0 (/root/lx-lanes/exec/agent/crates/layerx-crypto)
+   Compiling icu_provider v2.3.1
+   Compiling icu_properties v2.3.0
+   Compiling icu_normalizer v2.3.0
+   Compiling idna_adapter v1.2.2
+   Compiling idna v1.1.0
+   Compiling native-tls v0.2.15
+   Compiling serde v1.0.229
+   Compiling url v2.5.8
+   Compiling ureq v3.4.0
+   Compiling layerx-proof v0.1.0 (/root/lx-lanes/exec/agent/crates/layerx-proof)
+   Compiling layerx-client v0.1.0 (/root/lx-lanes/exec/agent/crates/layerx-client)
+   Compiling layerx-agent-api v0.1.0 (/root/lx-lanes/exec/agent/crates/layerx-agent-api)
+   Compiling layerx-mirror v0.1.0 (/root/lx-lanes/exec/interop/crates/layerx-mirror)
+   Compiling layerx-sdk v0.1.0 (/root/lx-lanes/exec/agent/crates/layerx-sdk)
+   Compiling layerx-intents v0.1.0 (/root/lx-lanes/exec/human/crates/layerx-intents)
+   Compiling layerx-paxeer-client v0.1.0 (/root/lx-lanes/exec/human/crates/layerx-paxeer-client)
+   Compiling layerx-ramp-toolkit v0.1.0 (/root/lx-lanes/exec/platform/ramps/toolkit)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 04s
+     Running unittests src/lib.rs (platform/target/debug/deps/layerx_ramp_toolkit-7534d3663fd36ad5)
+
+running 4 tests
+test clients::authorization_config_tests::mandatory_authorization_fields_refuse_missing_malformed_and_reversed_inputs ... ok
+test clients::authority_shape_tests::real_authority_shape_selects_attachment_without_null_or_unknown_fallback ... ok
+test clients::maintained_consumer_tests::historical_document_cannot_enter_maintained_verification ... ok
+test clients::maintained_consumer_tests::real_maintained_response_requires_independent_pins_and_exact_variant ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+
+     Running tests/contracts.rs (platform/target/debug/deps/contracts-181e3af1e69823d6)
+
+running 9 tests
+test digest_binds_authenticated_customer_and_direction ... ok
+test payment_direction_selects_direct_send_or_customer_grant ... ok
+test done_requires_both_verified_legs_and_external_label ... ok
+test applied_callback_identity_is_idempotent_and_forged_retries_conflict ... ok
+test callback_validation_is_staged_before_any_durable_append ... ok
+test replaying_the_journal_reproduces_identical_projection ... ok
+test torn_tail_is_recovered_but_terminated_corruption_is_rejected ... ok
+test interrupted_callback_write_recovers_on_restart_without_repair ... ok
+test failed_callback_apply_retains_no_event_and_retry_is_idempotent ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+
+   Doc-tests layerx_ramp_toolkit
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+cargo build --locked --manifest-path platform/Cargo.toml -p layerx-reference-ramp
+   Compiling layerx-reference-ramp v0.1.0 (/root/lx-lanes/exec/platform/ramps/reference)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 11.78s
+make[1]: Leaving directory '/root/lx-lanes/exec'

@@ -1,0 +1,6 @@
+make[1]: warning: jobserver unavailable: using -j1.  Add '+' to parent make rule.
+make[1]: Entering directory '/root/lx-lanes/exec'
+tools/lxp_qual_replay_matrix.sh
+required compiler unavailable: clang-18
+make[1]: *** [Makefile:1377: qualify-replay] Error 1
+make[1]: Leaving directory '/root/lx-lanes/exec'
