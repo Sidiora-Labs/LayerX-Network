@@ -242,6 +242,18 @@ pub struct FeeSchedule {
     fee_units_per_occupancy_byte_batch: u64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FeeScheduleParameters {
+    pub version: u32,
+    pub fee_units_per_cpu_fuel: u64,
+    pub fee_units_per_memory_byte: u64,
+    pub fee_units_per_storage_read_byte: u64,
+    pub fee_units_per_storage_write_byte: u64,
+    pub fee_units_per_output_value: u64,
+    pub fee_units_per_output_byte: u64,
+    pub fee_units_per_occupancy_byte_batch: u64,
+}
+
 impl FeeSchedule {
     /// Returns whether the schedule has a version and a nonzero coefficient
     /// for every priced resource.
@@ -280,16 +292,17 @@ impl FeeSchedule {
 
     /// Constructs the complete governed schedule recorded by the protocol.
     #[must_use]
-    pub const fn new_complete(
-        version: u32,
-        fee_units_per_cpu_fuel: u64,
-        fee_units_per_memory_byte: u64,
-        fee_units_per_storage_read_byte: u64,
-        fee_units_per_storage_write_byte: u64,
-        fee_units_per_output_value: u64,
-        fee_units_per_output_byte: u64,
-        fee_units_per_occupancy_byte_batch: u64,
-    ) -> Self {
+    pub const fn new_complete(parameters: FeeScheduleParameters) -> Self {
+        let FeeScheduleParameters {
+            version,
+            fee_units_per_cpu_fuel,
+            fee_units_per_memory_byte,
+            fee_units_per_storage_read_byte,
+            fee_units_per_storage_write_byte,
+            fee_units_per_output_value,
+            fee_units_per_output_byte,
+            fee_units_per_occupancy_byte_batch,
+        } = parameters;
         Self {
             version,
             fee_units_per_cpu_fuel,
@@ -331,16 +344,16 @@ impl FeeSchedule {
     /// state by recorded version; this value is only the genesis input.
     #[must_use]
     pub const fn declared() -> Self {
-        Self::new_complete(
-            GENESIS_FEE_SCHEDULE_VERSION,
-            GENESIS_CPU_FUEL_PRICE,
-            GENESIS_MEMORY_BYTE_PRICE,
-            GENESIS_STORAGE_READ_BYTE_PRICE,
-            GENESIS_STORAGE_WRITE_BYTE_PRICE,
-            GENESIS_OUTPUT_VALUE_PRICE,
-            GENESIS_OUTPUT_BYTE_PRICE,
-            GENESIS_OCCUPANCY_BYTE_BATCH_PRICE,
-        )
+        Self::new_complete(FeeScheduleParameters {
+            version: GENESIS_FEE_SCHEDULE_VERSION,
+            fee_units_per_cpu_fuel: GENESIS_CPU_FUEL_PRICE,
+            fee_units_per_memory_byte: GENESIS_MEMORY_BYTE_PRICE,
+            fee_units_per_storage_read_byte: GENESIS_STORAGE_READ_BYTE_PRICE,
+            fee_units_per_storage_write_byte: GENESIS_STORAGE_WRITE_BYTE_PRICE,
+            fee_units_per_output_value: GENESIS_OUTPUT_VALUE_PRICE,
+            fee_units_per_output_byte: GENESIS_OUTPUT_BYTE_PRICE,
+            fee_units_per_occupancy_byte_batch: GENESIS_OCCUPANCY_BYTE_BATCH_PRICE,
+        })
     }
 
     /// Returns fee units per interpreter CPU fuel unit.
