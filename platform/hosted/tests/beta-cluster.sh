@@ -1143,32 +1143,94 @@ internal_principals_provision() {
     done
 }
 
-port_forward() {
-    local name=$1 namespace=$2 service=$3 port=$4 target=$5 pidfile attempt launch
-    pidfile="$WORK_DIR/port-forward-$name.pid"
-    if [ -f "$pidfile" ] && kill -0 "$(cat "$pidfile")" 2>/dev/null; then kill "$(cat "$pidfile")" || true; fi
-    for launch in $(seq 1 90); do
-        kube -n "$namespace" port-forward --address 127.0.0.1 "service/$service" "$port:$target" > "$LOG_DIR/port-forward-$name.log" 2>&1 &
-        printf '%s' "$!" > "$pidfile"
-        for attempt in $(seq 1 50); do
-            if grep -q "Forwarding from 127.0.0.1:$port" "$LOG_DIR/port-forward-$name.log" 2>/dev/null; then return 0; fi
-            kill -0 "$(cat "$pidfile")" 2>/dev/null || break
+port_forward_tcp_ready() {
+    python3 - "$1" <<'PYTCP'
+import socket
+import sys
+try:
+    with socket.create_connection(("127.0.0.1", int(sys.argv[1])), timeout=0.2):
+        pass
+except OSError:
+    sys.exit(1)
+PYTCP
+}
+
+port_forward_supervise() {
+    local name=$1 namespace=$2 service=$3 port=$4 target=$5
+    local child="" failures=0 started deadline status ready
+    trap 'if [ -n "$child" ]; then kill "$child" 2>/dev/null || true; wait "$child" 2>/dev/null || true; fi' EXIT
+    trap 'exit 0' TERM INT HUP
+    while :; do
+        started=$SECONDS
+        ready=0
+        "$TOOLS_DIR/kubectl" --kubeconfig "$KUBECONFIG_FILE" -n "$namespace" \
+            port-forward --address 127.0.0.1 "service/$service" "$port:$target" &
+        child=$!
+        deadline=$((SECONDS + 60))
+        while kill -0 "$child" 2>/dev/null; do
+            if port_forward_tcp_ready "$port"; then
+                ready=1
+                started=$SECONDS
+                printf 'supervisor: ready name=%s child=%s port=%s\n' "$name" "$child" "$port"
+                break
+            fi
+            if [ "$SECONDS" -ge "$deadline" ]; then
+                printf 'supervisor: readiness timeout name=%s child=%s after=60s\n' "$name" "$child"
+                kill "$child" 2>/dev/null || true
+                break
+            fi
             sleep 0.2
         done
-        if kill -0 "$(cat "$pidfile")" 2>/dev/null; then fail "port-forward to $namespace/$service did not report readiness"; fi
-        grep -q 'pod is not running' "$LOG_DIR/port-forward-$name.log" 2>/dev/null \
-            || { cat "$LOG_DIR/port-forward-$name.log" >&2; fail "port-forward to $namespace/$service failed"; }
-        sleep 2
+        status=0
+        wait "$child" || status=$?
+        child=""
+        if [ "$ready" = 1 ] && [ "$((SECONDS - started))" -ge 120 ]; then failures=0; fi
+        failures=$((failures + 1))
+        if [ "$failures" -ge 8 ]; then
+            printf 'supervisor: exhausted name=%s failures=%s status=%s stable_window=120s\n' "$name" "$failures" "$status"
+            return 1
+        fi
+        printf 'supervisor: restart name=%s failure=%s limit=8 stable_window=120s status=%s\n' "$name" "$failures" "$status"
+        sleep 1
     done
-    fail "port-forward to $namespace/$service found no running pod within 180s"
+}
+
+port_forward_stop() {
+    local pidfile=$1 pid
+    [ -f "$pidfile" ] || return 0
+    pid=$(cat "$pidfile")
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    local attempt
+    for attempt in $(seq 1 50); do
+        if ! kill -0 "$pid" 2>/dev/null; then break; fi
+        sleep 0.1
+    done
+    rm -f "$pidfile"
+}
+
+port_forward() {
+    local name=$1 namespace=$2 service=$3 port=$4 target=$5 pidfile supervisor deadline
+    pidfile="$WORK_DIR/port-forward-$name.pid"
+    port_forward_stop "$pidfile"
+    port_forward_supervise "$name" "$namespace" "$service" "$port" "$target" \
+        >> "$LOG_DIR/port-forward-$name.log" 2>&1 < /dev/null &
+    supervisor=$!
+    printf '%s' "$supervisor" > "$pidfile"
+    deadline=$((SECONDS + 60))
+    while kill -0 "$supervisor" 2>/dev/null; do
+        if port_forward_tcp_ready "$port"; then return 0; fi
+        [ "$SECONDS" -lt "$deadline" ] || break
+        sleep 0.2
+    done
+    port_forward_stop "$pidfile"
+    fail "port-forward to $namespace/$service did not accept TCP within 60s (log $LOG_DIR/port-forward-$name.log)"
 }
 
 port_forwards_stop() {
     local pidfile
     for pidfile in "$WORK_DIR"/port-forward-*.pid; do
-        [ -f "$pidfile" ] || continue
-        kill "$(cat "$pidfile")" 2>/dev/null || true
-        rm -f "$pidfile"
+        port_forward_stop "$pidfile"
     done
 }
 
