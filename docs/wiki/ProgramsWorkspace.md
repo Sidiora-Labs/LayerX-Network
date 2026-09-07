@@ -17,7 +17,7 @@ Members under `programs/crates/` (`programs/Cargo.toml:4-9`):
 | `layerx-programs-market` | Workspace member (`programs/Cargo.toml:7`). The crate `Cargo.toml` has no `description` (`programs/crates/layerx-programs-market/Cargo.toml:1-16`). `src/lib.rs` has no crate-level documentation comment (`programs/crates/layerx-programs-market/src/lib.rs:1`). |
 | `layerx-programs-sandbox` | Protocol-state models for bounded, ephemeral program sandboxes (`programs/crates/layerx-programs-sandbox/src/lib.rs:1`). |
 
-`programs/README.md` names three crates in its layout table (`programs/README.md:47-49`) and a section titled "The three crates" (`programs/README.md:57-89`). The workspace member list also includes `layerx-programs-interpreter`, `layerx-programs-market`, and `layerx-programs-sandbox` (`programs/Cargo.toml:6-9`).
+`programs/README.md` names three crates in its layout table (`programs/README.md:47-49`) and a section titled "The three crates" (`programs/README.md:57-89`). The workspace member list also includes `layerx-programs-interpreter`, `layerx-programs-market`, and `layerx-programs-sandbox` (`programs/Cargo.toml:6-9`). `porting/cosmwasm`, `porting/cosmwasm/guest`, `porting/evm`, `porting/evm/guest`, `porting/solana`, and `porting/solana/guest` are workspace members (`programs/Cargo.toml:11-16`); see [Porting](Porting.md).
 
 ## Frozen ABI
 
