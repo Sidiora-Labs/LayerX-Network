@@ -1,0 +1,69 @@
+make[1]: warning: jobserver unavailable: using -j1.  Add '+' to parent make rule.
+make[1]: Entering directory '/root/lx-lanes/exec'
+cargo build --manifest-path interop/Cargo.toml --locked --workspace
+   Compiling getrandom v0.2.17
+   Compiling typenum v1.20.1
+   Compiling subtle v2.6.1
+   Compiling generic-array v0.14.9
+   Compiling const-oid v0.9.6
+   Compiling rand_core v0.6.4
+   Compiling der v0.7.10
+   Compiling ff v0.13.1
+   Compiling base16ct v0.2.0
+   Compiling group v0.13.0
+   Compiling password-hash v0.5.0
+   Compiling layerx-wire v0.1.0 (/root/lx-lanes/exec/agent/crates/layerx-wire)
+   Compiling crypto-common v0.1.6
+   Compiling block-buffer v0.10.4
+   Compiling digest v0.10.7
+   Compiling sec1 v0.7.3
+   Compiling signature v2.2.0
+   Compiling crypto-bigint v0.5.5
+   Compiling hmac v0.12.1
+   Compiling rfc6979 v0.4.0
+   Compiling sha2 v0.10.9
+   Compiling spki v0.7.3
+   Compiling inout v0.1.4
+   Compiling ed25519 v2.2.3
+   Compiling cipher v0.4.4
+   Compiling curve25519-dalek v4.1.3
+   Compiling universal-hash v0.5.1
+   Compiling elliptic-curve v0.13.8
+   Compiling ecdsa v0.16.9
+   Compiling poly1305 v0.8.0
+   Compiling chacha20 v0.9.1
+   Compiling blake2 v0.10.6
+   Compiling ed25519-dalek v2.2.0
+   Compiling k256 v0.13.4
+   Compiling sha3 v0.10.8
+   Compiling aead v0.5.2
+   Compiling argon2 v0.5.3
+   Compiling chacha20poly1305 v0.10.1
+   Compiling ring v0.17.14
+   Compiling der v0.8.1
+   Compiling layerx-crypto v0.1.0 (/root/lx-lanes/exec/agent/crates/layerx-crypto)
+   Compiling layerx-programs-runtime v0.1.0 (/root/lx-lanes/exec/programs/crates/layerx-programs-runtime)
+   Compiling rustls-webpki v0.103.15
+   Compiling rustls v0.23.43
+   Compiling ureq v3.4.0
+   Compiling getrandom v0.4.3
+   Compiling primeorder v0.13.6
+   Compiling p256 v0.13.2
+   Compiling layerx-proof v0.1.0 (/root/lx-lanes/exec/agent/crates/layerx-proof)
+   Compiling layerx-client v0.1.0 (/root/lx-lanes/exec/agent/crates/layerx-client)
+   Compiling layerx-interop-gateway v0.1.0 (/root/lx-lanes/exec/interop/crates/layerx-interop-gateway)
+   Compiling layerx-platform-gateway v0.1.0 (/root/lx-lanes/exec/platform/hosted/gateway)
+   Compiling layerx-portable v0.1.0 (/root/lx-lanes/exec/interop/crates/layerx-portable)
+   Compiling layerx-agent-api v0.1.0 (/root/lx-lanes/exec/agent/crates/layerx-agent-api)
+   Compiling layerx-ucp v0.1.0 (/root/lx-lanes/exec/interop/crates/layerx-ucp)
+   Compiling layerx-mirror v0.1.0 (/root/lx-lanes/exec/interop/crates/layerx-mirror)
+   Compiling layerx-x402 v0.1.0 (/root/lx-lanes/exec/interop/crates/layerx-x402)
+   Compiling layerx-visa-tap v0.1.0 (/root/lx-lanes/exec/interop/crates/layerx-visa-tap)
+   Compiling layerx-fiat v0.1.0 (/root/lx-lanes/exec/interop/crates/layerx-fiat)
+   Compiling layerx-sdk v0.1.0 (/root/lx-lanes/exec/agent/crates/layerx-sdk)
+   Compiling layerx-migrate v0.1.0 (/root/lx-lanes/exec/interop/crates/layerx-migrate)
+   Compiling layerx-intents v0.1.0 (/root/lx-lanes/exec/human/crates/layerx-intents)
+   Compiling layerx-ap2 v0.1.0 (/root/lx-lanes/exec/interop/crates/layerx-ap2)
+   Compiling layerx-interop-service v0.1.0 (/root/lx-lanes/exec/interop/crates/layerx-interop-service)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 40s
+make[1]: Leaving directory '/root/lx-lanes/exec'

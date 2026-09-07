@@ -1,0 +1,54 @@
+make[1]: warning: jobserver unavailable: using -j1.  Add '+' to parent make rule.
+make[1]: Entering directory '/root/lx-lanes/exec'
+cargo build --offline --manifest-path platform/Cargo.toml --locked --workspace
+warning: variable does not need to be mutable
+   --> hosted/registry/src/builder.rs:723:9
+    |
+723 |     let mut file = File::from(descriptor);
+    |         ----^^^^
+    |         |
+    |         help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `field` is never used
+    --> hosted/registry/src/routes.rs:1010:4
+     |
+1010 | fn field(body: &[u8], name: &str) -> Option<String> {
+     |    ^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `layerx-platform-registry` (lib) generated 2 warnings (run `cargo fix --lib -p layerx-platform-registry` to apply 1 suggestion)
+warning: variable does not need to be mutable
+   --> hosted/registry/src/main.rs:609:9
+    |
+609 |     let mut output = match child.stdout.take() {
+    |         ----^^^^^^
+    |         |
+    |         help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> hosted/registry/src/main.rs:689:16
+    |
+689 |             Ok(mut stream) => {
+    |                ----^^^^^^
+    |                |
+    |                help: remove this `mut`
+
+warning: `layerx-platform-registry` (bin "layerx-program-registry") generated 2 warnings (run `cargo fix --bin "layerx-program-registry"` to apply 2 suggestions)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.44s
+make platform-sdk-check
+make[2]: Entering directory '/root/lx-lanes/exec'
+python3 platform/sdk/generators/generate_portable.py --check /root/lx-lanes/exec
+python3 platform/sdk/generators/generate_jvm.py --check /root/lx-lanes/exec
+cargo run --offline --manifest-path platform/Cargo.toml --locked -p layerx-platform-sdkgen -- --check
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.13s
+     Running `platform/target/debug/layerx-platform-sdkgen --check`
+make[2]: Leaving directory '/root/lx-lanes/exec'
+cargo run --offline --manifest-path platform/Cargo.toml --locked -p layerx-platform-release -- --check platform/release/registries.kvx
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.19s
+     Running `platform/target/debug/layerx-platform-release --check platform/release/registries.kvx`
+make[1]: Leaving directory '/root/lx-lanes/exec'

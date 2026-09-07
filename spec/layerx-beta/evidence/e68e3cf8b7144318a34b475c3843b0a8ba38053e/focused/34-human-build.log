@@ -1,0 +1,50 @@
+make[1]: warning: jobserver unavailable: using -j1.  Add '+' to parent make rule.
+make[1]: Entering directory '/root/lx-lanes/exec'
+cargo test --manifest-path human/tools/api-gen/Cargo.toml --locked
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.01s
+     Running unittests src/lib.rs (human/tools/api-gen/target/debug/deps/layerx_human_api_gen-5e72e3cc6bd1bab3)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (human/tools/api-gen/target/debug/deps/layerx_human_api_gen-35d550423799334c)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/generation.rs (human/tools/api-gen/target/debug/deps/generation-4eac3c0d6b00950f)
+
+running 13 tests
+test idempotent_operations_require_the_key_and_reads_carry_none ... ok
+test operation_paths_encode_their_parameters ... ok
+test consensus_amounts_map_to_bigint ... ok
+test real_schema_generates_deterministically ... ok
+test committed_client_matches_regeneration ... ok
+test hand_edited_output_fails_the_gate ... ok
+test unresolved_reference_refuses_generation ... ok
+test unexpected_output_fails_the_gate ... ok
+test stale_output_after_schema_change_fails_the_gate ... ok
+test missing_output_fails_the_gate ... ok
+test fresh_regeneration_passes_the_gate ... ok
+test defective_scalar_mapping_refuses_generation ... ok
+test generated_client_covers_every_schema_declaration ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.69s
+
+   Doc-tests layerx_human_api_gen
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+cargo run --manifest-path human/tools/api-gen/Cargo.toml --locked -- --check human/schema/human-api human/apps/web/src/api/generated
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running `human/tools/api-gen/target/debug/layerx-human-api-gen --check human/schema/human-api human/apps/web/src/api/generated`
+human-api client is fresh: 2 file(s), 78 operations, 174 types
+cargo build --manifest-path human/Cargo.toml --locked --workspace
+error: the lock file /root/lx-lanes/exec/human/Cargo.lock needs to be updated but --locked was passed to prevent this
+If you want to try to generate the lock file without accessing the network, remove the --locked flag and use --offline instead.
+make[1]: *** [Makefile:1933: human-build] Error 101
+make[1]: Leaving directory '/root/lx-lanes/exec'

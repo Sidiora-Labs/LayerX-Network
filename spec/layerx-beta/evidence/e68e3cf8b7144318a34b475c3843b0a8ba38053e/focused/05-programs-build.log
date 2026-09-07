@@ -1,0 +1,5 @@
+make[1]: warning: jobserver unavailable: using -j1.  Add '+' to parent make rule.
+make[1]: Entering directory '/root/lx-lanes/exec'
+cd programs && cargo build --locked --workspace --features layerx-programs-sandbox/host-ffi
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.17s
+make[1]: Leaving directory '/root/lx-lanes/exec'

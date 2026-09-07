@@ -3653,6 +3653,596 @@ file = "tools/lxp_qual_replay_matrix.sh tools/lxp_replay_matrix.sh tools/ci/repl
 symbol = "clang-18"
 observed = "formerly observation.5.1.focused-replay-compiler-prerequisite. Read-only diagnosis: tools/lxp_qual_replay_matrix.sh:24-27 explicitly refuses absent clang-18; lines 41-42 select clang-18 for both optimization levels. tools/lxp_replay_matrix.sh:21-22 and tools/ci/replay-matrix.sh:26 also pin that executable. The searched CI workflows install unversioned clang, not clang-18; no clang-18 pin appears in docs. ls /usr/bin/clang* exits 2 with: ls: cannot access '/usr/bin/clang*': No such file or directory. command -v finds gcc-13 at /usr/bin/gcc-13 and neither clang nor clang-18. Evidence: qual-logs/r15/compiler-pins.log and host-clang.log."
 assumption = "Compiler provisioning is external to this repair. No compiler was installed and make qualify-replay was not rerun. The executable requirement remains intact."
+[gate.5.1.1]
+task = "5.1"
+reqs = ["12.2","12.4","12.5"]
+revision = "e68e3cf8b7144318a34b475c3843b0a8ba38053e"
+command = "make build layerxd layerx-genesis-build"
+environment = "vmi3050659 x86_64; bash: GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu); make: GNU Make 4.3; cc: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; gcc-13: gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; clang-18: unavailable; rustc: rustc 1.91.1 (ed61e7d7e 2025-11-07); cargo: cargo 1.91.1 (ea2d97820 2025-10-10); node: v22.23.2; npm: 10.9.8; python3: Python 3.12.3; forge: forge Version: 1.7.1; CARGO_BUILD_JOBS=4; RAYON_NUM_THREADS=4"
+started_at = "2026-09-07T12:23:31Z"
+outcome = "pass"
+evidence = "spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/01-build.log"
+note = "Tracked working-tree changes present at runner start; this is development evidence, not immutable release qualification."
+
+[gate.5.1.2]
+task = "5.1"
+reqs = ["12.2","12.4","12.5"]
+revision = "e68e3cf8b7144318a34b475c3843b0a8ba38053e"
+command = "make agent-build"
+environment = "vmi3050659 x86_64; bash: GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu); make: GNU Make 4.3; cc: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; gcc-13: gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; clang-18: unavailable; rustc: rustc 1.91.1 (ed61e7d7e 2025-11-07); cargo: cargo 1.91.1 (ea2d97820 2025-10-10); node: v22.23.2; npm: 10.9.8; python3: Python 3.12.3; forge: forge Version: 1.7.1; CARGO_BUILD_JOBS=4; RAYON_NUM_THREADS=4"
+started_at = "2026-09-07T12:24:07Z"
+outcome = "pass"
+evidence = "spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/02-agent-build.log"
+note = "Tracked working-tree changes present at runner start; this is development evidence, not immutable release qualification."
+
+[gate.5.1.3]
+task = "5.1"
+reqs = ["12.2","12.4","12.5"]
+revision = "e68e3cf8b7144318a34b475c3843b0a8ba38053e"
+command = "make human-build"
+environment = "vmi3050659 x86_64; bash: GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu); make: GNU Make 4.3; cc: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; gcc-13: gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; clang-18: unavailable; rustc: rustc 1.91.1 (ed61e7d7e 2025-11-07); cargo: cargo 1.91.1 (ea2d97820 2025-10-10); node: v22.23.2; npm: 10.9.8; python3: Python 3.12.3; forge: forge Version: 1.7.1; CARGO_BUILD_JOBS=4; RAYON_NUM_THREADS=4"
+started_at = "2026-09-07T12:25:52Z"
+outcome = "fail"
+evidence = "spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/03-human-build.log"
+note = "make human-build exited 2; Tracked working-tree changes present at runner start; this is development evidence, not immutable release qualification."
+
+[gate.5.1.4]
+task = "5.1"
+reqs = ["12.2","12.4","12.5"]
+revision = "e68e3cf8b7144318a34b475c3843b0a8ba38053e"
+command = "make platform-build"
+environment = "vmi3050659 x86_64; bash: GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu); make: GNU Make 4.3; cc: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; gcc-13: gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; clang-18: unavailable; rustc: rustc 1.91.1 (ed61e7d7e 2025-11-07); cargo: cargo 1.91.1 (ea2d97820 2025-10-10); node: v22.23.2; npm: 10.9.8; python3: Python 3.12.3; forge: forge Version: 1.7.1; CARGO_BUILD_JOBS=4; RAYON_NUM_THREADS=4"
+started_at = "2026-09-07T12:26:06Z"
+outcome = "pass"
+evidence = "spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/04-platform-build.log"
+note = "Tracked working-tree changes present at runner start; this is development evidence, not immutable release qualification."
+
+[gate.5.1.5]
+task = "5.1"
+reqs = ["12.2","12.4","12.5"]
+revision = "e68e3cf8b7144318a34b475c3843b0a8ba38053e"
+command = "make programs-build"
+environment = "vmi3050659 x86_64; bash: GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu); make: GNU Make 4.3; cc: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; gcc-13: gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; clang-18: unavailable; rustc: rustc 1.91.1 (ed61e7d7e 2025-11-07); cargo: cargo 1.91.1 (ea2d97820 2025-10-10); node: v22.23.2; npm: 10.9.8; python3: Python 3.12.3; forge: forge Version: 1.7.1; CARGO_BUILD_JOBS=4; RAYON_NUM_THREADS=4"
+started_at = "2026-09-07T12:29:49Z"
+outcome = "pass"
+evidence = "spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/05-programs-build.log"
+note = "Tracked working-tree changes present at runner start; this is development evidence, not immutable release qualification."
+
+[gate.5.1.6]
+task = "5.1"
+reqs = ["12.2","12.4","12.5"]
+revision = "e68e3cf8b7144318a34b475c3843b0a8ba38053e"
+command = "make interop-build"
+environment = "vmi3050659 x86_64; bash: GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu); make: GNU Make 4.3; cc: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; gcc-13: gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; clang-18: unavailable; rustc: rustc 1.91.1 (ed61e7d7e 2025-11-07); cargo: cargo 1.91.1 (ea2d97820 2025-10-10); node: v22.23.2; npm: 10.9.8; python3: Python 3.12.3; forge: forge Version: 1.7.1; CARGO_BUILD_JOBS=4; RAYON_NUM_THREADS=4"
+started_at = "2026-09-07T12:29:50Z"
+outcome = "pass"
+evidence = "spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/06-interop-build.log"
+note = "Tracked working-tree changes present at runner start; this is development evidence, not immutable release qualification."
+
+[gate.5.1.7]
+task = "5.1"
+reqs = ["12.2","12.4","12.5"]
+revision = "e68e3cf8b7144318a34b475c3843b0a8ba38053e"
+command = "make test-daemon-lni-admission test-admission test-batch-wal-recovery agent-test-lni-schema agent-test-client-submit-focused agent-test-agentd-handshake-gate agent-test-boundary"
+environment = "vmi3050659 x86_64; bash: GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu); make: GNU Make 4.3; cc: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; gcc-13: gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; clang-18: unavailable; rustc: rustc 1.91.1 (ed61e7d7e 2025-11-07); cargo: cargo 1.91.1 (ea2d97820 2025-10-10); node: v22.23.2; npm: 10.9.8; python3: Python 3.12.3; forge: forge Version: 1.7.1; CARGO_BUILD_JOBS=4; RAYON_NUM_THREADS=4"
+started_at = "2026-09-07T12:31:31Z"
+outcome = "fail"
+evidence = "spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/07-test-daemon-lni-admission.log"
+note = "make test-daemon-lni-admission test-admission test-batch-wal-recovery agent-test-lni-schema agent-test-client-submit-focused agent-test-agentd-handshake-gate agent-test-boundary exited 2; Tracked working-tree changes present at runner start; this is development evidence, not immutable release qualification."
+
+[gate.5.1.8]
+task = "5.1"
+reqs = ["12.2","12.4","12.5"]
+revision = "e68e3cf8b7144318a34b475c3843b0a8ba38053e"
+command = "make agent-test-agentd-session agent-test-agentd-revocation agent-test-agentd-tenant-resolve agent-test-agentd-subscription agent-test-agentd-delivery agent-test-agentd-gaps agent-test-agentd-webhook agent-test-mcp-scope agent-test-mcp-readonly agent-test-mcp-write agent-test-sdk-rust agent-test-contract-schema platform-sdk-check human-test-service"
+environment = "vmi3050659 x86_64; bash: GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu); make: GNU Make 4.3; cc: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; gcc-13: gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; clang-18: unavailable; rustc: rustc 1.91.1 (ed61e7d7e 2025-11-07); cargo: cargo 1.91.1 (ea2d97820 2025-10-10); node: v22.23.2; npm: 10.9.8; python3: Python 3.12.3; forge: forge Version: 1.7.1; CARGO_BUILD_JOBS=4; RAYON_NUM_THREADS=4"
+started_at = "2026-09-07T12:34:49Z"
+outcome = "fail"
+evidence = "spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/08-agent-test-agentd-session.log"
+note = "make agent-test-agentd-session agent-test-agentd-revocation agent-test-agentd-tenant-resolve agent-test-agentd-subscription agent-test-agentd-delivery agent-test-agentd-gaps agent-test-agentd-webhook agent-test-mcp-scope agent-test-mcp-readonly agent-test-mcp-write agent-test-sdk-rust agent-test-contract-schema platform-sdk-check human-test-service exited 2; Tracked working-tree changes present at runner start; this is development evidence, not immutable release qualification."
+
+[gate.5.1.9]
+task = "5.1"
+reqs = ["12.2","12.4","12.5"]
+revision = "e68e3cf8b7144318a34b475c3843b0a8ba38053e"
+command = "make human-test-activity"
+environment = "vmi3050659 x86_64; bash: GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu); make: GNU Make 4.3; cc: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; gcc-13: gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; clang-18: unavailable; rustc: rustc 1.91.1 (ed61e7d7e 2025-11-07); cargo: cargo 1.91.1 (ea2d97820 2025-10-10); node: v22.23.2; npm: 10.9.8; python3: Python 3.12.3; forge: forge Version: 1.7.1; CARGO_BUILD_JOBS=4; RAYON_NUM_THREADS=4"
+started_at = "2026-09-07T12:37:15Z"
+outcome = "fail"
+evidence = "spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/09-human-test-activity.log"
+note = "make human-test-activity exited 2; Tracked working-tree changes present at runner start; this is development evidence, not immutable release qualification."
+
+[gate.5.1.10]
+task = "5.1"
+reqs = ["12.2","12.4","12.5"]
+revision = "e68e3cf8b7144318a34b475c3843b0a8ba38053e"
+command = "make human-build human-test-unit human-test-component"
+environment = "vmi3050659 x86_64; bash: GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu); make: GNU Make 4.3; cc: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; gcc-13: gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; clang-18: unavailable; rustc: rustc 1.91.1 (ed61e7d7e 2025-11-07); cargo: cargo 1.91.1 (ea2d97820 2025-10-10); node: v22.23.2; npm: 10.9.8; python3: Python 3.12.3; forge: forge Version: 1.7.1; CARGO_BUILD_JOBS=4; RAYON_NUM_THREADS=4"
+started_at = "2026-09-07T12:37:16Z"
+outcome = "fail"
+evidence = "spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/10-human-build.log"
+note = "make human-build human-test-unit human-test-component exited 2; Tracked working-tree changes present at runner start; this is development evidence, not immutable release qualification."
+
+[gate.5.1.11]
+task = "5.1"
+reqs = ["12.2","12.4","12.5"]
+revision = "e68e3cf8b7144318a34b475c3843b0a8ba38053e"
+command = "make test-snapshot test-state-root programs-core-test"
+environment = "vmi3050659 x86_64; bash: GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu); make: GNU Make 4.3; cc: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; gcc-13: gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; clang-18: unavailable; rustc: rustc 1.91.1 (ed61e7d7e 2025-11-07); cargo: cargo 1.91.1 (ea2d97820 2025-10-10); node: v22.23.2; npm: 10.9.8; python3: Python 3.12.3; forge: forge Version: 1.7.1; CARGO_BUILD_JOBS=4; RAYON_NUM_THREADS=4"
+started_at = "2026-09-07T12:37:18Z"
+outcome = "pass"
+evidence = "spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/11-test-snapshot.log"
+note = "Tracked working-tree changes present at runner start; this is development evidence, not immutable release qualification."
+
+[gate.5.1.12]
+task = "5.1"
+reqs = ["12.2","12.4","12.5"]
+revision = "e68e3cf8b7144318a34b475c3843b0a8ba38053e"
+command = "make test-protocol agent-test-wire-hashing agent-test-proof-checkpoint test-contracts interop-test-mirrors"
+environment = "vmi3050659 x86_64; bash: GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu); make: GNU Make 4.3; cc: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; gcc-13: gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; clang-18: unavailable; rustc: rustc 1.91.1 (ed61e7d7e 2025-11-07); cargo: cargo 1.91.1 (ea2d97820 2025-10-10); node: v22.23.2; npm: 10.9.8; python3: Python 3.12.3; forge: forge Version: 1.7.1; CARGO_BUILD_JOBS=4; RAYON_NUM_THREADS=4"
+started_at = "2026-09-07T12:38:43Z"
+outcome = "pass"
+evidence = "spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/12-test-protocol.log"
+note = "Tracked working-tree changes present at runner start; this is development evidence, not immutable release qualification."
+
+[gate.5.1.13]
+task = "5.1"
+reqs = ["12.2","12.4","12.5"]
+revision = "e68e3cf8b7144318a34b475c3843b0a8ba38053e"
+command = "make test-asset-withdraw test-bridge-withdraw test-result"
+environment = "vmi3050659 x86_64; bash: GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu); make: GNU Make 4.3; cc: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; gcc-13: gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; clang-18: unavailable; rustc: rustc 1.91.1 (ed61e7d7e 2025-11-07); cargo: cargo 1.91.1 (ea2d97820 2025-10-10); node: v22.23.2; npm: 10.9.8; python3: Python 3.12.3; forge: forge Version: 1.7.1; CARGO_BUILD_JOBS=4; RAYON_NUM_THREADS=4"
+started_at = "2026-09-07T12:45:56Z"
+outcome = "pass"
+evidence = "spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/13-test-asset-withdraw.log"
+note = "Tracked working-tree changes present at runner start; this is development evidence, not immutable release qualification."
+
+[gate.5.1.14]
+task = "5.1"
+reqs = ["12.2","12.4","12.5"]
+revision = "e68e3cf8b7144318a34b475c3843b0a8ba38053e"
+command = "make platform-test-registry"
+environment = "vmi3050659 x86_64; bash: GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu); make: GNU Make 4.3; cc: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; gcc-13: gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; clang-18: unavailable; rustc: rustc 1.91.1 (ed61e7d7e 2025-11-07); cargo: cargo 1.91.1 (ea2d97820 2025-10-10); node: v22.23.2; npm: 10.9.8; python3: Python 3.12.3; forge: forge Version: 1.7.1; CARGO_BUILD_JOBS=4; RAYON_NUM_THREADS=4"
+started_at = "2026-09-07T12:51:13Z"
+outcome = "pass"
+evidence = "spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/14-platform-test-registry.log"
+note = "Tracked working-tree changes present at runner start; this is development evidence, not immutable release qualification."
+
+[gate.5.1.15]
+task = "5.1"
+reqs = ["12.2","12.4","12.5"]
+revision = "e68e3cf8b7144318a34b475c3843b0a8ba38053e"
+command = "make interop-test-ramps"
+environment = "vmi3050659 x86_64; bash: GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu); make: GNU Make 4.3; cc: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; gcc-13: gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; clang-18: unavailable; rustc: rustc 1.91.1 (ed61e7d7e 2025-11-07); cargo: cargo 1.91.1 (ea2d97820 2025-10-10); node: v22.23.2; npm: 10.9.8; python3: Python 3.12.3; forge: forge Version: 1.7.1; CARGO_BUILD_JOBS=4; RAYON_NUM_THREADS=4"
+started_at = "2026-09-07T12:52:12Z"
+outcome = "pass"
+evidence = "spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/15-interop-test-ramps.log"
+note = "Tracked working-tree changes present at runner start; this is development evidence, not immutable release qualification."
+
+[gate.5.1.16]
+task = "5.1"
+reqs = ["12.2","12.4","12.5"]
+revision = "e68e3cf8b7144318a34b475c3843b0a8ba38053e"
+command = "make platform-test-tooling platform-hosted-topology-check beta-contract-check"
+environment = "vmi3050659 x86_64; bash: GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu); make: GNU Make 4.3; cc: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; gcc-13: gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; clang-18: unavailable; rustc: rustc 1.91.1 (ed61e7d7e 2025-11-07); cargo: cargo 1.91.1 (ea2d97820 2025-10-10); node: v22.23.2; npm: 10.9.8; python3: Python 3.12.3; forge: forge Version: 1.7.1; CARGO_BUILD_JOBS=4; RAYON_NUM_THREADS=4"
+started_at = "2026-09-07T12:53:30Z"
+outcome = "fail"
+evidence = "spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/16-platform-test-tooling.log"
+note = "make platform-test-tooling platform-hosted-topology-check beta-contract-check exited 2; Tracked working-tree changes present at runner start; this is development evidence, not immutable release qualification."
+
+[gate.5.1.17]
+task = "5.1"
+reqs = ["12.2","12.4","12.5"]
+revision = "e68e3cf8b7144318a34b475c3843b0a8ba38053e"
+command = "make platform-test-tooling platform-beta-cluster-up platform-hosted-smoke platform-beta-cluster-down"
+environment = "vmi3050659 x86_64; bash: GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu); make: GNU Make 4.3; cc: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; gcc-13: gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; clang-18: unavailable; rustc: rustc 1.91.1 (ed61e7d7e 2025-11-07); cargo: cargo 1.91.1 (ea2d97820 2025-10-10); node: v22.23.2; npm: 10.9.8; python3: Python 3.12.3; forge: forge Version: 1.7.1; CARGO_BUILD_JOBS=4; RAYON_NUM_THREADS=4"
+started_at = "2026-09-07T12:59:16Z"
+outcome = "blocked"
+evidence = "spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/17-platform-test-tooling.log"
+note = "Cluster operations are outside focused local authorization; owner must authorize beta infrastructure and execute task 3.7 with cluster identity and boundary evidence.; Tracked working-tree changes present at runner start; this is development evidence, not immutable release qualification."
+
+[gate.5.1.18]
+task = "5.1"
+reqs = ["12.2","12.4","12.5"]
+revision = "e68e3cf8b7144318a34b475c3843b0a8ba38053e"
+command = "make qualify-faults"
+environment = "vmi3050659 x86_64; bash: GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu); make: GNU Make 4.3; cc: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; gcc-13: gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; clang-18: unavailable; rustc: rustc 1.91.1 (ed61e7d7e 2025-11-07); cargo: cargo 1.91.1 (ea2d97820 2025-10-10); node: v22.23.2; npm: 10.9.8; python3: Python 3.12.3; forge: forge Version: 1.7.1; CARGO_BUILD_JOBS=4; RAYON_NUM_THREADS=4"
+started_at = "2026-09-07T12:59:16Z"
+outcome = "pass"
+evidence = "spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/18-qualify-faults.log"
+note = "Tracked working-tree changes present at runner start; this is development evidence, not immutable release qualification."
+
+[gate.5.1.19]
+task = "5.1"
+reqs = ["12.2","12.4","12.5"]
+revision = "e68e3cf8b7144318a34b475c3843b0a8ba38053e"
+command = "make qualify-replay"
+environment = "vmi3050659 x86_64; bash: GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu); make: GNU Make 4.3; cc: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; gcc-13: gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; clang-18: unavailable; rustc: rustc 1.91.1 (ed61e7d7e 2025-11-07); cargo: cargo 1.91.1 (ea2d97820 2025-10-10); node: v22.23.2; npm: 10.9.8; python3: Python 3.12.3; forge: forge Version: 1.7.1; CARGO_BUILD_JOBS=4; RAYON_NUM_THREADS=4"
+started_at = "2026-09-07T12:59:34Z"
+outcome = "fail"
+evidence = "spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/19-qualify-replay.log"
+note = "make qualify-replay exited 2; Tracked working-tree changes present at runner start; this is development evidence, not immutable release qualification."
+
+[gate.5.1.20]
+task = "5.1"
+reqs = ["12.2","12.4","12.5"]
+revision = "e68e3cf8b7144318a34b475c3843b0a8ba38053e"
+command = "make agent-qualify-faults"
+environment = "vmi3050659 x86_64; bash: GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu); make: GNU Make 4.3; cc: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; gcc-13: gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; clang-18: unavailable; rustc: rustc 1.91.1 (ed61e7d7e 2025-11-07); cargo: cargo 1.91.1 (ea2d97820 2025-10-10); node: v22.23.2; npm: 10.9.8; python3: Python 3.12.3; forge: forge Version: 1.7.1; CARGO_BUILD_JOBS=4; RAYON_NUM_THREADS=4"
+started_at = "2026-09-07T12:59:34Z"
+outcome = "fail"
+evidence = "spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/20-agent-qualify-faults.log"
+note = "make agent-qualify-faults exited 2; Tracked working-tree changes present at runner start; this is development evidence, not immutable release qualification."
+
+[gate.5.1.21]
+task = "5.1"
+reqs = ["12.2","12.4","12.5"]
+revision = "e68e3cf8b7144318a34b475c3843b0a8ba38053e"
+command = "make agent-qualify-fuzz"
+environment = "vmi3050659 x86_64; bash: GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu); make: GNU Make 4.3; cc: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; gcc-13: gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; clang-18: unavailable; rustc: rustc 1.91.1 (ed61e7d7e 2025-11-07); cargo: cargo 1.91.1 (ea2d97820 2025-10-10); node: v22.23.2; npm: 10.9.8; python3: Python 3.12.3; forge: forge Version: 1.7.1; CARGO_BUILD_JOBS=4; RAYON_NUM_THREADS=4"
+started_at = "2026-09-07T12:59:43Z"
+outcome = "fail"
+evidence = "spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/21-agent-qualify-fuzz.log"
+note = "make agent-qualify-fuzz exited 2; Tracked working-tree changes present at runner start; this is development evidence, not immutable release qualification."
+
+[gate.5.1.22]
+task = "5.1"
+reqs = ["12.2","12.4","12.5"]
+revision = "e68e3cf8b7144318a34b475c3843b0a8ba38053e"
+command = "make agent-qualify-wire"
+environment = "vmi3050659 x86_64; bash: GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu); make: GNU Make 4.3; cc: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; gcc-13: gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; clang-18: unavailable; rustc: rustc 1.91.1 (ed61e7d7e 2025-11-07); cargo: cargo 1.91.1 (ea2d97820 2025-10-10); node: v22.23.2; npm: 10.9.8; python3: Python 3.12.3; forge: forge Version: 1.7.1; CARGO_BUILD_JOBS=4; RAYON_NUM_THREADS=4"
+started_at = "2026-09-07T12:59:50Z"
+outcome = "fail"
+evidence = "spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/22-agent-qualify-wire.log"
+note = "make agent-qualify-wire exited 2; Tracked working-tree changes present at runner start; this is development evidence, not immutable release qualification."
+
+[gate.5.1.23]
+task = "5.1"
+reqs = ["12.2","12.4","12.5"]
+revision = "e68e3cf8b7144318a34b475c3843b0a8ba38053e"
+command = "make agent-qualify-boundary"
+environment = "vmi3050659 x86_64; bash: GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu); make: GNU Make 4.3; cc: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; gcc-13: gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; clang-18: unavailable; rustc: rustc 1.91.1 (ed61e7d7e 2025-11-07); cargo: cargo 1.91.1 (ea2d97820 2025-10-10); node: v22.23.2; npm: 10.9.8; python3: Python 3.12.3; forge: forge Version: 1.7.1; CARGO_BUILD_JOBS=4; RAYON_NUM_THREADS=4"
+started_at = "2026-09-07T13:00:00Z"
+outcome = "fail"
+evidence = "spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/23-agent-qualify-boundary.log"
+note = "make agent-qualify-boundary exited 2; Tracked working-tree changes present at runner start; this is development evidence, not immutable release qualification."
+
+[gate.5.1.24]
+task = "5.1"
+reqs = ["12.2","12.4","12.5"]
+revision = "e68e3cf8b7144318a34b475c3843b0a8ba38053e"
+command = "make human-qualify-faults"
+environment = "vmi3050659 x86_64; bash: GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu); make: GNU Make 4.3; cc: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; gcc-13: gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; clang-18: unavailable; rustc: rustc 1.91.1 (ed61e7d7e 2025-11-07); cargo: cargo 1.91.1 (ea2d97820 2025-10-10); node: v22.23.2; npm: 10.9.8; python3: Python 3.12.3; forge: forge Version: 1.7.1; CARGO_BUILD_JOBS=4; RAYON_NUM_THREADS=4"
+started_at = "2026-09-07T13:00:11Z"
+outcome = "fail"
+evidence = "spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/24-human-qualify-faults.log"
+note = "make human-qualify-faults exited 2; Tracked working-tree changes present at runner start; this is development evidence, not immutable release qualification."
+
+[gate.5.1.25]
+task = "5.1"
+reqs = ["12.2","12.4","12.5"]
+revision = "e68e3cf8b7144318a34b475c3843b0a8ba38053e"
+command = "make build layerxd layerx-genesis-build"
+environment = "vmi3050659 x86_64; bash: GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu); make: GNU Make 4.3; cc: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; gcc-13: gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; clang-18: unavailable; rustc: rustc 1.91.1 (ed61e7d7e 2025-11-07); cargo: cargo 1.91.1 (ea2d97820 2025-10-10); node: v22.23.2; npm: 10.9.8; python3: Python 3.12.3; forge: forge Version: 1.7.1; CARGO_BUILD_JOBS=4; RAYON_NUM_THREADS=4; LAYERX_QUALIFICATION_ARTIFACT_DIR=/root/lx-lanes/exec/spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused"
+started_at = "2026-09-07T13:01:06Z"
+outcome = "pass"
+evidence = "spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/25-build.log"
+note = "Tracked working-tree changes present before command execution; this is development evidence, not immutable release qualification."
+
+[gate.5.1.26]
+task = "5.1"
+reqs = ["12.2","12.4","12.5"]
+revision = "e68e3cf8b7144318a34b475c3843b0a8ba38053e"
+command = "make agent-build"
+environment = "vmi3050659 x86_64; bash: GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu); make: GNU Make 4.3; cc: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; gcc-13: gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; clang-18: unavailable; rustc: rustc 1.91.1 (ed61e7d7e 2025-11-07); cargo: cargo 1.91.1 (ea2d97820 2025-10-10); node: v22.23.2; npm: 10.9.8; python3: Python 3.12.3; forge: forge Version: 1.7.1; CARGO_BUILD_JOBS=4; RAYON_NUM_THREADS=4; LAYERX_QUALIFICATION_ARTIFACT_DIR=/root/lx-lanes/exec/spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused"
+started_at = "2026-09-07T13:01:07Z"
+outcome = "pass"
+evidence = "spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/26-agent-build.log"
+note = "Tracked working-tree changes present before command execution; this is development evidence, not immutable release qualification."
+
+[gate.5.1.27]
+task = "5.1"
+reqs = ["12.2","12.4","12.5"]
+revision = "e68e3cf8b7144318a34b475c3843b0a8ba38053e"
+command = "make human-build"
+environment = "vmi3050659 x86_64; bash: GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu); make: GNU Make 4.3; cc: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; gcc-13: gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; clang-18: unavailable; rustc: rustc 1.91.1 (ed61e7d7e 2025-11-07); cargo: cargo 1.91.1 (ea2d97820 2025-10-10); node: v22.23.2; npm: 10.9.8; python3: Python 3.12.3; forge: forge Version: 1.7.1; CARGO_BUILD_JOBS=4; RAYON_NUM_THREADS=4; LAYERX_QUALIFICATION_ARTIFACT_DIR=/root/lx-lanes/exec/spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused"
+started_at = "2026-09-07T13:01:10Z"
+outcome = "fail"
+evidence = "spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/27-human-build.log"
+note = "make human-build exited 2; Tracked working-tree changes present before command execution; this is development evidence, not immutable release qualification."
+
+[gate.5.1.28]
+task = "5.1"
+reqs = ["12.2","12.4","12.5"]
+revision = "e68e3cf8b7144318a34b475c3843b0a8ba38053e"
+command = "make platform-build"
+environment = "vmi3050659 x86_64; bash: GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu); make: GNU Make 4.3; cc: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; gcc-13: gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; clang-18: unavailable; rustc: rustc 1.91.1 (ed61e7d7e 2025-11-07); cargo: cargo 1.91.1 (ea2d97820 2025-10-10); node: v22.23.2; npm: 10.9.8; python3: Python 3.12.3; forge: forge Version: 1.7.1; CARGO_BUILD_JOBS=4; RAYON_NUM_THREADS=4; LAYERX_QUALIFICATION_ARTIFACT_DIR=/root/lx-lanes/exec/spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused"
+started_at = "2026-09-07T13:01:12Z"
+outcome = "pass"
+evidence = "spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/28-platform-build.log"
+note = "Tracked working-tree changes present before command execution; this is development evidence, not immutable release qualification."
+
+[gate.5.1.29]
+task = "5.1"
+reqs = ["12.2","12.4","12.5"]
+revision = "e68e3cf8b7144318a34b475c3843b0a8ba38053e"
+command = "make programs-build"
+environment = "vmi3050659 x86_64; bash: GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu); make: GNU Make 4.3; cc: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; gcc-13: gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; clang-18: unavailable; rustc: rustc 1.91.1 (ed61e7d7e 2025-11-07); cargo: cargo 1.91.1 (ea2d97820 2025-10-10); node: v22.23.2; npm: 10.9.8; python3: Python 3.12.3; forge: forge Version: 1.7.1; CARGO_BUILD_JOBS=4; RAYON_NUM_THREADS=4; LAYERX_QUALIFICATION_ARTIFACT_DIR=/root/lx-lanes/exec/spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused"
+started_at = "2026-09-07T13:01:15Z"
+outcome = "pass"
+evidence = "spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/29-programs-build.log"
+note = "Tracked working-tree changes present before command execution; this is development evidence, not immutable release qualification."
+
+[gate.5.1.30]
+task = "5.1"
+reqs = ["12.2","12.4","12.5"]
+revision = "e68e3cf8b7144318a34b475c3843b0a8ba38053e"
+command = "make interop-build"
+environment = "vmi3050659 x86_64; bash: GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu); make: GNU Make 4.3; cc: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; gcc-13: gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; clang-18: unavailable; rustc: rustc 1.91.1 (ed61e7d7e 2025-11-07); cargo: cargo 1.91.1 (ea2d97820 2025-10-10); node: v22.23.2; npm: 10.9.8; python3: Python 3.12.3; forge: forge Version: 1.7.1; CARGO_BUILD_JOBS=4; RAYON_NUM_THREADS=4; LAYERX_QUALIFICATION_ARTIFACT_DIR=/root/lx-lanes/exec/spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused"
+started_at = "2026-09-07T13:01:16Z"
+outcome = "pass"
+evidence = "spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/30-interop-build.log"
+note = "Tracked working-tree changes present before command execution; this is development evidence, not immutable release qualification."
+
+[gate.5.1.31]
+task = "5.1"
+reqs = ["12.2","12.4","12.5"]
+revision = "e68e3cf8b7144318a34b475c3843b0a8ba38053e"
+command = "make test-daemon-lni-admission test-admission test-batch-wal-recovery agent-test-lni-schema agent-test-client-submit-focused agent-test-agentd-handshake-gate agent-test-boundary"
+environment = "vmi3050659 x86_64; bash: GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu); make: GNU Make 4.3; cc: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; gcc-13: gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; clang-18: unavailable; rustc: rustc 1.91.1 (ed61e7d7e 2025-11-07); cargo: cargo 1.91.1 (ea2d97820 2025-10-10); node: v22.23.2; npm: 10.9.8; python3: Python 3.12.3; forge: forge Version: 1.7.1; CARGO_BUILD_JOBS=4; RAYON_NUM_THREADS=4; LAYERX_QUALIFICATION_ARTIFACT_DIR=/root/lx-lanes/exec/spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused"
+started_at = "2026-09-07T13:01:18Z"
+outcome = "fail"
+evidence = "spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/31-test-daemon-lni-admission.log"
+note = "make test-daemon-lni-admission test-admission test-batch-wal-recovery agent-test-lni-schema agent-test-client-submit-focused agent-test-agentd-handshake-gate agent-test-boundary exited 2; Tracked working-tree changes present before command execution; this is development evidence, not immutable release qualification."
+
+[gate.5.1.32]
+task = "5.1"
+reqs = ["12.2","12.4","12.5"]
+revision = "e68e3cf8b7144318a34b475c3843b0a8ba38053e"
+command = "make agent-test-agentd-session agent-test-agentd-revocation agent-test-agentd-tenant-resolve agent-test-agentd-subscription agent-test-agentd-delivery agent-test-agentd-gaps agent-test-agentd-webhook agent-test-mcp-scope agent-test-mcp-readonly agent-test-mcp-write agent-test-sdk-rust agent-test-contract-schema platform-sdk-check human-test-service"
+environment = "vmi3050659 x86_64; bash: GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu); make: GNU Make 4.3; cc: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; gcc-13: gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; clang-18: unavailable; rustc: rustc 1.91.1 (ed61e7d7e 2025-11-07); cargo: cargo 1.91.1 (ea2d97820 2025-10-10); node: v22.23.2; npm: 10.9.8; python3: Python 3.12.3; forge: forge Version: 1.7.1; CARGO_BUILD_JOBS=4; RAYON_NUM_THREADS=4; LAYERX_QUALIFICATION_ARTIFACT_DIR=/root/lx-lanes/exec/spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused"
+started_at = "2026-09-07T13:02:27Z"
+outcome = "fail"
+evidence = "spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/32-agent-test-agentd-session.log"
+note = "make agent-test-agentd-session agent-test-agentd-revocation agent-test-agentd-tenant-resolve agent-test-agentd-subscription agent-test-agentd-delivery agent-test-agentd-gaps agent-test-agentd-webhook agent-test-mcp-scope agent-test-mcp-readonly agent-test-mcp-write agent-test-sdk-rust agent-test-contract-schema platform-sdk-check human-test-service exited 2; Tracked working-tree changes present before command execution; this is development evidence, not immutable release qualification."
+
+[gate.5.1.33]
+task = "5.1"
+reqs = ["12.2","12.4","12.5"]
+revision = "e68e3cf8b7144318a34b475c3843b0a8ba38053e"
+command = "make human-test-activity"
+environment = "vmi3050659 x86_64; bash: GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu); make: GNU Make 4.3; cc: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; gcc-13: gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; clang-18: unavailable; rustc: rustc 1.91.1 (ed61e7d7e 2025-11-07); cargo: cargo 1.91.1 (ea2d97820 2025-10-10); node: v22.23.2; npm: 10.9.8; python3: Python 3.12.3; forge: forge Version: 1.7.1; CARGO_BUILD_JOBS=4; RAYON_NUM_THREADS=4; LAYERX_QUALIFICATION_ARTIFACT_DIR=/root/lx-lanes/exec/spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused"
+started_at = "2026-09-07T13:02:36Z"
+outcome = "fail"
+evidence = "spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/33-human-test-activity.log"
+note = "make human-test-activity exited 2; Tracked working-tree changes present before command execution; this is development evidence, not immutable release qualification."
+
+[gate.5.1.34]
+task = "5.1"
+reqs = ["12.2","12.4","12.5"]
+revision = "e68e3cf8b7144318a34b475c3843b0a8ba38053e"
+command = "make human-build human-test-unit human-test-component"
+environment = "vmi3050659 x86_64; bash: GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu); make: GNU Make 4.3; cc: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; gcc-13: gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; clang-18: unavailable; rustc: rustc 1.91.1 (ed61e7d7e 2025-11-07); cargo: cargo 1.91.1 (ea2d97820 2025-10-10); node: v22.23.2; npm: 10.9.8; python3: Python 3.12.3; forge: forge Version: 1.7.1; CARGO_BUILD_JOBS=4; RAYON_NUM_THREADS=4; LAYERX_QUALIFICATION_ARTIFACT_DIR=/root/lx-lanes/exec/spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused"
+started_at = "2026-09-07T13:02:37Z"
+outcome = "fail"
+evidence = "spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/34-human-build.log"
+note = "make human-build human-test-unit human-test-component exited 2; Tracked working-tree changes present before command execution; this is development evidence, not immutable release qualification."
+
+[gate.5.1.35]
+task = "5.1"
+reqs = ["12.2","12.4","12.5"]
+revision = "e68e3cf8b7144318a34b475c3843b0a8ba38053e"
+command = "make test-snapshot test-state-root programs-core-test"
+environment = "vmi3050659 x86_64; bash: GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu); make: GNU Make 4.3; cc: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; gcc-13: gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; clang-18: unavailable; rustc: rustc 1.91.1 (ed61e7d7e 2025-11-07); cargo: cargo 1.91.1 (ea2d97820 2025-10-10); node: v22.23.2; npm: 10.9.8; python3: Python 3.12.3; forge: forge Version: 1.7.1; CARGO_BUILD_JOBS=4; RAYON_NUM_THREADS=4; LAYERX_QUALIFICATION_ARTIFACT_DIR=/root/lx-lanes/exec/spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused"
+started_at = "2026-09-07T13:02:39Z"
+outcome = "pass"
+evidence = "spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/35-test-snapshot.log"
+note = "Tracked working-tree changes present before command execution; this is development evidence, not immutable release qualification."
+
+[gate.5.1.36]
+task = "5.1"
+reqs = ["12.2","12.4","12.5"]
+revision = "e68e3cf8b7144318a34b475c3843b0a8ba38053e"
+command = "make test-protocol agent-test-wire-hashing agent-test-proof-checkpoint test-contracts interop-test-mirrors"
+environment = "vmi3050659 x86_64; bash: GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu); make: GNU Make 4.3; cc: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; gcc-13: gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; clang-18: unavailable; rustc: rustc 1.91.1 (ed61e7d7e 2025-11-07); cargo: cargo 1.91.1 (ea2d97820 2025-10-10); node: v22.23.2; npm: 10.9.8; python3: Python 3.12.3; forge: forge Version: 1.7.1; CARGO_BUILD_JOBS=4; RAYON_NUM_THREADS=4; LAYERX_QUALIFICATION_ARTIFACT_DIR=/root/lx-lanes/exec/spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused"
+started_at = "2026-09-07T13:02:42Z"
+outcome = "pass"
+evidence = "spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/36-test-protocol.log"
+note = "Tracked working-tree changes present before command execution; this is development evidence, not immutable release qualification."
+
+[gate.5.1.37]
+task = "5.1"
+reqs = ["12.2","12.4","12.5"]
+revision = "e68e3cf8b7144318a34b475c3843b0a8ba38053e"
+command = "make test-asset-withdraw test-bridge-withdraw test-result"
+environment = "vmi3050659 x86_64; bash: GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu); make: GNU Make 4.3; cc: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; gcc-13: gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; clang-18: unavailable; rustc: rustc 1.91.1 (ed61e7d7e 2025-11-07); cargo: cargo 1.91.1 (ea2d97820 2025-10-10); node: v22.23.2; npm: 10.9.8; python3: Python 3.12.3; forge: forge Version: 1.7.1; CARGO_BUILD_JOBS=4; RAYON_NUM_THREADS=4; LAYERX_QUALIFICATION_ARTIFACT_DIR=/root/lx-lanes/exec/spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused"
+started_at = "2026-09-07T13:03:31Z"
+outcome = "pass"
+evidence = "spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/37-test-asset-withdraw.log"
+note = "Tracked working-tree changes present before command execution; this is development evidence, not immutable release qualification."
+
+[gate.5.1.38]
+task = "5.1"
+reqs = ["12.2","12.4","12.5"]
+revision = "e68e3cf8b7144318a34b475c3843b0a8ba38053e"
+command = "make platform-test-registry"
+environment = "vmi3050659 x86_64; bash: GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu); make: GNU Make 4.3; cc: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; gcc-13: gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; clang-18: unavailable; rustc: rustc 1.91.1 (ed61e7d7e 2025-11-07); cargo: cargo 1.91.1 (ea2d97820 2025-10-10); node: v22.23.2; npm: 10.9.8; python3: Python 3.12.3; forge: forge Version: 1.7.1; CARGO_BUILD_JOBS=4; RAYON_NUM_THREADS=4; LAYERX_QUALIFICATION_ARTIFACT_DIR=/root/lx-lanes/exec/spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused"
+started_at = "2026-09-07T13:08:22Z"
+outcome = "pass"
+evidence = "spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/38-platform-test-registry.log"
+note = "Tracked working-tree changes present before command execution; this is development evidence, not immutable release qualification."
+
+[gate.5.1.39]
+task = "5.1"
+reqs = ["12.2","12.4","12.5"]
+revision = "e68e3cf8b7144318a34b475c3843b0a8ba38053e"
+command = "make interop-test-ramps"
+environment = "vmi3050659 x86_64; bash: GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu); make: GNU Make 4.3; cc: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; gcc-13: gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; clang-18: unavailable; rustc: rustc 1.91.1 (ed61e7d7e 2025-11-07); cargo: cargo 1.91.1 (ea2d97820 2025-10-10); node: v22.23.2; npm: 10.9.8; python3: Python 3.12.3; forge: forge Version: 1.7.1; CARGO_BUILD_JOBS=4; RAYON_NUM_THREADS=4; LAYERX_QUALIFICATION_ARTIFACT_DIR=/root/lx-lanes/exec/spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused"
+started_at = "2026-09-07T13:08:23Z"
+outcome = "pass"
+evidence = "spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/39-interop-test-ramps.log"
+note = "Tracked working-tree changes present before command execution; this is development evidence, not immutable release qualification."
+
+[gate.5.1.40]
+task = "5.1"
+reqs = ["12.2","12.4","12.5"]
+revision = "e68e3cf8b7144318a34b475c3843b0a8ba38053e"
+command = "make platform-test-tooling platform-hosted-topology-check beta-contract-check"
+environment = "vmi3050659 x86_64; bash: GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu); make: GNU Make 4.3; cc: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; gcc-13: gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; clang-18: unavailable; rustc: rustc 1.91.1 (ed61e7d7e 2025-11-07); cargo: cargo 1.91.1 (ea2d97820 2025-10-10); node: v22.23.2; npm: 10.9.8; python3: Python 3.12.3; forge: forge Version: 1.7.1; CARGO_BUILD_JOBS=4; RAYON_NUM_THREADS=4; LAYERX_QUALIFICATION_ARTIFACT_DIR=/root/lx-lanes/exec/spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused"
+started_at = "2026-09-07T13:08:25Z"
+outcome = "fail"
+evidence = "spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/40-platform-test-tooling.log"
+note = "make platform-test-tooling platform-hosted-topology-check beta-contract-check exited 2; Tracked working-tree changes present before command execution; this is development evidence, not immutable release qualification."
+
+[gate.5.1.41]
+task = "5.1"
+reqs = ["12.2","12.4","12.5"]
+revision = "e68e3cf8b7144318a34b475c3843b0a8ba38053e"
+command = "make platform-test-tooling platform-beta-cluster-up platform-hosted-smoke platform-beta-cluster-down"
+environment = "vmi3050659 x86_64; bash: GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu); make: GNU Make 4.3; cc: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; gcc-13: gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; clang-18: unavailable; rustc: rustc 1.91.1 (ed61e7d7e 2025-11-07); cargo: cargo 1.91.1 (ea2d97820 2025-10-10); node: v22.23.2; npm: 10.9.8; python3: Python 3.12.3; forge: forge Version: 1.7.1; CARGO_BUILD_JOBS=4; RAYON_NUM_THREADS=4; LAYERX_QUALIFICATION_ARTIFACT_DIR=/root/lx-lanes/exec/spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused"
+started_at = "2026-09-07T13:11:33Z"
+outcome = "blocked"
+evidence = "spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/41-platform-test-tooling.log"
+note = "Cluster operations are outside focused local authorization; owner must authorize beta infrastructure and execute task 3.7 with cluster identity and boundary evidence.; Tracked working-tree changes present before command execution; this is development evidence, not immutable release qualification."
+
+[gate.5.1.42]
+task = "5.1"
+reqs = ["12.2","12.4","12.5"]
+revision = "e68e3cf8b7144318a34b475c3843b0a8ba38053e"
+command = "make qualify-faults"
+environment = "vmi3050659 x86_64; bash: GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu); make: GNU Make 4.3; cc: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; gcc-13: gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; clang-18: unavailable; rustc: rustc 1.91.1 (ed61e7d7e 2025-11-07); cargo: cargo 1.91.1 (ea2d97820 2025-10-10); node: v22.23.2; npm: 10.9.8; python3: Python 3.12.3; forge: forge Version: 1.7.1; CARGO_BUILD_JOBS=4; RAYON_NUM_THREADS=4; LAYERX_QUALIFICATION_ARTIFACT_DIR=/root/lx-lanes/exec/spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused"
+started_at = "2026-09-07T13:11:33Z"
+outcome = "pass"
+evidence = "spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/42-qualify-faults.log"
+note = "Tracked working-tree changes present before command execution; this is development evidence, not immutable release qualification."
+
+[gate.5.1.43]
+task = "5.1"
+reqs = ["12.2","12.4","12.5"]
+revision = "e68e3cf8b7144318a34b475c3843b0a8ba38053e"
+command = "make qualify-replay"
+environment = "vmi3050659 x86_64; bash: GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu); make: GNU Make 4.3; cc: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; gcc-13: gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; clang-18: unavailable; rustc: rustc 1.91.1 (ed61e7d7e 2025-11-07); cargo: cargo 1.91.1 (ea2d97820 2025-10-10); node: v22.23.2; npm: 10.9.8; python3: Python 3.12.3; forge: forge Version: 1.7.1; CARGO_BUILD_JOBS=4; RAYON_NUM_THREADS=4; LAYERX_QUALIFICATION_ARTIFACT_DIR=/root/lx-lanes/exec/spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused"
+started_at = "2026-09-07T13:11:40Z"
+outcome = "fail"
+evidence = "spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/43-qualify-replay.log"
+note = "make qualify-replay exited 2; Tracked working-tree changes present before command execution; this is development evidence, not immutable release qualification."
+
+[gate.5.1.44]
+task = "5.1"
+reqs = ["12.2","12.4","12.5"]
+revision = "e68e3cf8b7144318a34b475c3843b0a8ba38053e"
+command = "make agent-qualify-faults"
+environment = "vmi3050659 x86_64; bash: GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu); make: GNU Make 4.3; cc: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; gcc-13: gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; clang-18: unavailable; rustc: rustc 1.91.1 (ed61e7d7e 2025-11-07); cargo: cargo 1.91.1 (ea2d97820 2025-10-10); node: v22.23.2; npm: 10.9.8; python3: Python 3.12.3; forge: forge Version: 1.7.1; CARGO_BUILD_JOBS=4; RAYON_NUM_THREADS=4; LAYERX_QUALIFICATION_ARTIFACT_DIR=/root/lx-lanes/exec/spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused"
+started_at = "2026-09-07T13:11:40Z"
+outcome = "fail"
+evidence = "spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/44-agent-qualify-faults.log"
+note = "make agent-qualify-faults exited 2; Tracked working-tree changes present before command execution; this is development evidence, not immutable release qualification."
+
+[gate.5.1.45]
+task = "5.1"
+reqs = ["12.2","12.4","12.5"]
+revision = "e68e3cf8b7144318a34b475c3843b0a8ba38053e"
+command = "make agent-qualify-fuzz"
+environment = "vmi3050659 x86_64; bash: GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu); make: GNU Make 4.3; cc: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; gcc-13: gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; clang-18: unavailable; rustc: rustc 1.91.1 (ed61e7d7e 2025-11-07); cargo: cargo 1.91.1 (ea2d97820 2025-10-10); node: v22.23.2; npm: 10.9.8; python3: Python 3.12.3; forge: forge Version: 1.7.1; CARGO_BUILD_JOBS=4; RAYON_NUM_THREADS=4; LAYERX_QUALIFICATION_ARTIFACT_DIR=/root/lx-lanes/exec/spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused"
+started_at = "2026-09-07T13:11:50Z"
+outcome = "fail"
+evidence = "spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/45-agent-qualify-fuzz.log"
+note = "make agent-qualify-fuzz exited 2; Tracked working-tree changes present before command execution; this is development evidence, not immutable release qualification."
+
+[gate.5.1.46]
+task = "5.1"
+reqs = ["12.2","12.4","12.5"]
+revision = "e68e3cf8b7144318a34b475c3843b0a8ba38053e"
+command = "make agent-qualify-wire"
+environment = "vmi3050659 x86_64; bash: GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu); make: GNU Make 4.3; cc: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; gcc-13: gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; clang-18: unavailable; rustc: rustc 1.91.1 (ed61e7d7e 2025-11-07); cargo: cargo 1.91.1 (ea2d97820 2025-10-10); node: v22.23.2; npm: 10.9.8; python3: Python 3.12.3; forge: forge Version: 1.7.1; CARGO_BUILD_JOBS=4; RAYON_NUM_THREADS=4; LAYERX_QUALIFICATION_ARTIFACT_DIR=/root/lx-lanes/exec/spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused"
+started_at = "2026-09-07T13:11:52Z"
+outcome = "fail"
+evidence = "spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/46-agent-qualify-wire.log"
+note = "make agent-qualify-wire exited 2; Tracked working-tree changes present before command execution; this is development evidence, not immutable release qualification."
+
+[gate.5.1.47]
+task = "5.1"
+reqs = ["12.2","12.4","12.5"]
+revision = "e68e3cf8b7144318a34b475c3843b0a8ba38053e"
+command = "make agent-qualify-boundary"
+environment = "vmi3050659 x86_64; bash: GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu); make: GNU Make 4.3; cc: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; gcc-13: gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; clang-18: unavailable; rustc: rustc 1.91.1 (ed61e7d7e 2025-11-07); cargo: cargo 1.91.1 (ea2d97820 2025-10-10); node: v22.23.2; npm: 10.9.8; python3: Python 3.12.3; forge: forge Version: 1.7.1; CARGO_BUILD_JOBS=4; RAYON_NUM_THREADS=4; LAYERX_QUALIFICATION_ARTIFACT_DIR=/root/lx-lanes/exec/spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused"
+started_at = "2026-09-07T13:11:54Z"
+outcome = "fail"
+evidence = "spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/47-agent-qualify-boundary.log"
+note = "make agent-qualify-boundary exited 2; Tracked working-tree changes present before command execution; this is development evidence, not immutable release qualification."
+
+[gate.5.1.48]
+task = "5.1"
+reqs = ["12.2","12.4","12.5"]
+revision = "e68e3cf8b7144318a34b475c3843b0a8ba38053e"
+command = "make human-qualify-faults"
+environment = "vmi3050659 x86_64; bash: GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu); make: GNU Make 4.3; cc: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; gcc-13: gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; clang-18: unavailable; rustc: rustc 1.91.1 (ed61e7d7e 2025-11-07); cargo: cargo 1.91.1 (ea2d97820 2025-10-10); node: v22.23.2; npm: 10.9.8; python3: Python 3.12.3; forge: forge Version: 1.7.1; CARGO_BUILD_JOBS=4; RAYON_NUM_THREADS=4; LAYERX_QUALIFICATION_ARTIFACT_DIR=/root/lx-lanes/exec/spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused"
+started_at = "2026-09-07T13:12:06Z"
+outcome = "fail"
+evidence = "spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/48-human-qualify-faults.log"
+note = "make human-qualify-faults exited 2; Tracked working-tree changes present before command execution; this is development evidence, not immutable release qualification."
+
+[observation.5.1.1]
+task = "5.1"
+file = "human/Cargo.lock"
+symbol = "human-build"
+observed = "make human-build: fail. The committed Human lockfile requires an update and the required command enforces --locked. Evidence: spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/27-human-build.log."
+assumption = "The component owner must resolve the recorded failure before focused qualification can pass; no assertion, bound, lockfile or gate was weakened."
+severity = "blocker"
+
+[observation.5.1.2]
+task = "2.1"
+file = "agent/tests/boundary/node/layerxd_lni.c"
+symbol = "test-daemon-lni-admission"
+observed = "make test-daemon-lni-admission test-admission test-batch-wal-recovery agent-test-lni-schema agent-test-client-submit-focused agent-test-agentd-handshake-gate agent-test-boundary: fail. The native boundary fixture references undeclared LX_ASSET_REGISTRY_CAPACITY. Evidence: spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/31-test-daemon-lni-admission.log."
+assumption = "The component owner must resolve the recorded failure before focused qualification can pass; no assertion, bound, lockfile or gate was weakened."
+severity = "blocker"
+
+[observation.5.1.3]
+task = "2.2"
+file = "human/Cargo.lock"
+symbol = "agent-test-agentd-session"
+observed = "make agent-test-agentd-session agent-test-agentd-revocation agent-test-agentd-tenant-resolve agent-test-agentd-subscription agent-test-agentd-delivery agent-test-agentd-gaps agent-test-agentd-webhook agent-test-mcp-scope agent-test-mcp-readonly agent-test-mcp-write agent-test-sdk-rust agent-test-contract-schema platform-sdk-check human-test-service: fail. The committed Human lockfile requires an update and the required command enforces --locked. Evidence: spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/32-agent-test-agentd-session.log."
+assumption = "The component owner must resolve the recorded failure before focused qualification can pass; no assertion, bound, lockfile or gate was weakened."
+severity = "blocker"
+
+[observation.5.1.4]
+task = "2.3"
+file = "human/Cargo.lock"
+symbol = "human-test-activity"
+observed = "make human-test-activity: fail. The committed Human lockfile requires an update and the required command enforces --locked. Evidence: spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/33-human-test-activity.log."
+assumption = "The component owner must resolve the recorded failure before focused qualification can pass; no assertion, bound, lockfile or gate was weakened."
+severity = "blocker"
+
+[observation.5.1.5]
+task = "2.4"
+file = "human/Cargo.lock"
+symbol = "human-build"
+observed = "make human-build human-test-unit human-test-component: fail. The committed Human lockfile requires an update and the required command enforces --locked. Evidence: spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/34-human-build.log."
+assumption = "The component owner must resolve the recorded failure before focused qualification can pass; no assertion, bound, lockfile or gate was weakened."
+severity = "blocker"
+
+[observation.5.1.6]
+task = "3.6"
+file = "platform/emulator/src/native_call.rs"
+symbol = "platform-test-tooling"
+observed = "make platform-test-tooling platform-hosted-topology-check beta-contract-check: fail. Two emulator native-call tests reject the signed activity as not matching the request. Evidence: spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/40-platform-test-tooling.log."
+assumption = "The component owner must resolve the recorded failure before focused qualification can pass; no assertion, bound, lockfile or gate was weakened."
+severity = "blocker"
+
+[observation.5.1.7]
+task = "3.7"
+file = "spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/41-platform-test-tooling.log"
+symbol = "platform-test-tooling"
+observed = "make platform-test-tooling platform-beta-cluster-up platform-hosted-smoke platform-beta-cluster-down: blocked. The full command output is retained in the gate evidence. Evidence: spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/41-platform-test-tooling.log."
+assumption = "Owner authorization for beta infrastructure and execution of task 3.7 with cluster identity and boundary evidence are required."
+severity = "blocker"
+
+[observation.5.1.8]
+task = "5.1"
+file = "tools/lxp_qual_replay_matrix.sh"
+symbol = "qualify-replay"
+observed = "make qualify-replay: fail. The required clang-18 compiler is unavailable. Evidence: spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/43-qualify-replay.log."
+assumption = "The component owner must resolve the recorded failure before focused qualification can pass; no assertion, bound, lockfile or gate was weakened."
 severity = "blocker"
 
 [observation.5.1.9]
@@ -3661,6 +4251,10 @@ file = "spec/layerx-beta/spec.kvx tools/qualification/release_runner.py tools/ci
 symbol = "human-qualify-faults"
 observed = "formerly observation.5.1.focused-human-real-stack-prerequisite. Read-only diagnosis: release_runner.py:576-577 requires LAYERX_QUALIFICATION_REAL_STACK=1 before real evidence collection. Task 5.1 do_1 includes human-qualify-faults but supplies no stack provisioning step. Task 5.2 do_1 explicitly starts the components and do_2 supplies LAYERX_QUALIFICATION_REAL_STACK=1; task 5.2 requires 5.1. The focused runner on lane/beta-qualify-focused invokes the command and records failure; it does not provision or assert a real stack. That runner is not yet present on the measured lane/native base. Evidence: qual-logs/r15/runner-diagnosis.log."
 assumption = "Task 5.1 needs an already provisioned authorized real stack to pass this gate; its current contract does not instruct the runner to create it. Task 5.2 owns setup, creating a prerequisite ordering issue for the orchestrator. Setting the flag alone does not establish a stack. Runner and task statuses remain unchanged; make human-qualify-faults was not rerun."
+file = "agent/tests/boundary/node/layerxd_lni.c"
+symbol = "agent-qualify-faults"
+observed = "make agent-qualify-faults: fail. The native boundary fixture references undeclared LX_ASSET_REGISTRY_CAPACITY. Evidence: spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/44-agent-qualify-faults.log."
+assumption = "The component owner must resolve the recorded failure before focused qualification can pass; no assertion, bound, lockfile or gate was weakened."
 severity = "blocker"
 
 [observation.5.1.10]
@@ -3669,6 +4263,10 @@ file = "human/Cargo.lock agent/tests/qualify/Cargo.lock human/crates/layerx-huma
 symbol = "human-build human-test-service human-test-activity human-test-unit human-test-component agent-qualify-fuzz agent-qualify-wire"
 observed = "formerly observation.5.1.focused-lock-gate-results. Environment: CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4 LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin. Measured base 97e7e9097daeab58d18d801d8e7297692f3fc9d1. make human-build exits 2; qual-logs/r15/row-27-before-dependencies.log | make agent-test-agentd-session agent-test-agentd-revocation agent-test-agentd-tenant-resolve agent-test-agentd-subscription agent-test-agentd-delivery agent-test-agentd-gaps agent-test-agentd-webhook agent-test-mcp-scope agent-test-mcp-readonly agent-test-mcp-write agent-test-sdk-rust agent-test-contract-schema platform-sdk-check human-test-service exits 2; qual-logs/r15/row-32.log | make human-test-activity exits 0; qual-logs/r15/row-33.log | make human-build human-test-unit human-test-component exits 2; qual-logs/r15/row-34-before-dependencies.log | make human-build exits 0; qual-logs/r15/row-27.log | make agent-qualify-fuzz exits 2; qual-logs/r15/row-45.log | make agent-qualify-wire exits 0; qual-logs/r15/row-46.log | make human-build human-test-unit human-test-component exits 0; qual-logs/r15/row-34.log Initial rows 27 and 34 failed verbatim: sh: 1: ../../node_modules/.bin/tsup: not found. npm --prefix human/apps/web ci first exited 152 with npm error network read ECONNRESET (qual-logs/r15/npm-ci.log), then retry exited 0 (npm-ci-retry.log). Repeated rows 27 and 34 pass. Row 33 passes activity, detail, export and three export documentation tests. Row 46 passes 125 wire cases, ten vector classes, 53 activity types and eight payload boundaries. Row 32 retains: error[E0425]: cannot find function `deploy_suite` in this scope; crates/layerx-human-service/tests/withdraw.rs:24:17; error: could not compile `layerx-human-service` (test \"withdraw\") due to 1 previous error; make: *** [Makefile:1952: human-test-service] Error 101. The included human/crates/layerx-paxeer-client/tests/withdraw.rs:468 now defines deploy_suite_for_protocol; the caller is outside the assigned lockfile repair. Row 45 builds the qualification binary successfully and enters bounded-fuzz, then rustup attempts to provision the absent pinned nightly. The owned subprocess was terminated to honor the no-compiler-installation constraint. Verbatim final failure: Terminated; make[1]: *** [Makefile:2138: agent-fuzz-all] Error 143; make: *** [Makefile:2306: agent-qualify-fuzz] Error 1. Before termination the subprocess downloaded components and logged installation of cargo, clippy and rust-docs; full toolchain installation and fuzz execution are not established. qual-logs/r15/fuzz-toolchain-stop.log records the intervention; row-45.log retains the complete failure envelope. This is an interrupted prerequisite attempt, not a fuzz pass."
 assumption = "The lockfiles pass locked offline resolution and their binaries build. Remaining compiler-prerequisite and Human test caller failures require their owners; no production or full wave qualification is claimed. No assertion or runner was changed."
+file = "agent/tests/qualify/Cargo.lock"
+symbol = "agent-qualify-fuzz"
+observed = "make agent-qualify-fuzz: fail. The committed Agent qualification lockfile requires an update and the required command enforces --locked. Evidence: spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/45-agent-qualify-fuzz.log."
+assumption = "The component owner must resolve the recorded failure before focused qualification can pass; no assertion, bound, lockfile or gate was weakened."
 severity = "blocker"
 
 [observation.5.1.11]
@@ -3756,6 +4354,26 @@ file = "agent/fuzz/Cargo.lock agent/tests/qualify/src/main.rs agent/tests/qualif
 symbol = "agent_qualify_fuzz_gate agent_qualify_sanitizer_gate now_millis now_ms"
 observed = "formerly observation.5.1.focused-fuzz-provisioned-boundary. make agent-qualify-fuzz exits 2; qual-logs/r17/row-45.log. Environment: CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4 LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin. All ten targets complete 256 bounded runs and corpus minimisation, then the workspace address-sanitizer tests complete. The sanitizer script reports verbatim: thread sanitizer unavailable: pinned standard library is not TSan-instrumented. The final boundary check fails verbatim: qualification gate failed: unsafe-allowlist failed: status=exit status: 1 stdout_tail= stderr_tail=ambient-nondeterminism: agent/crates/layerx-sdk/src/program_http.rs\nambient-nondeterminism: agent/crates/layerx-agentd/tests/support/real_authority.rs\nmake: *** [Makefile:2307: agent-qualify-fuzz] Error 1. Full child stdout and stderr are preserved in qual-logs/r17/fuzz-details/."
 assumption = "program_http.rs:533 reads SystemTime::now in now_millis. real_authority.rs:53 reads SystemTime::now in now_ms and uses Instant::now for real process deadlines. The boundary scanner rejects ambient clock tokens outside its allowed paths. These source and check conflicts are outside the lock and replay harness repairs; neither source, allowlist, checker nor fuzz assertion is changed. The fuzz lock resolves the current Programs runtime and agent-daemon dependencies; locked offline metadata exits 0 (qual-logs/r17/fuzz-locked-metadata.log; metadata in fuzz-metadata.json). Resolution adds 95 package records and removes unused pkcs8 and spki records; no retained package version or checksum changes. Dependency and feature changes are recorded in fuzz-lock-analysis.json and fuzz-lock.diff. This qualifies lock resolution and the measured fuzz/address-sanitizer stages, not the complete row."
+file = "agent/tests/qualify/Cargo.lock"
+symbol = "agent-qualify-wire"
+observed = "make agent-qualify-wire: fail. The committed Agent qualification lockfile requires an update and the required command enforces --locked. Evidence: spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/46-agent-qualify-wire.log."
+assumption = "The component owner must resolve the recorded failure before focused qualification can pass; no assertion, bound, lockfile or gate was weakened."
+severity = "blocker"
+
+[observation.5.1.12]
+task = "5.1"
+file = "agent/tests/boundary/node/layerxd_lni.c"
+symbol = "agent-qualify-boundary"
+observed = "make agent-qualify-boundary: fail. The native boundary fixture references undeclared LX_ASSET_REGISTRY_CAPACITY. Evidence: spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/47-agent-qualify-boundary.log."
+assumption = "The component owner must resolve the recorded failure before focused qualification can pass; no assertion, bound, lockfile or gate was weakened."
+severity = "blocker"
+
+[observation.5.1.13]
+task = "5.1"
+file = "tools/qualification/release_runner.py"
+symbol = "human-qualify-faults"
+observed = "make human-qualify-faults: fail. The Human qualification runner refuses execution without the required real-stack environment. Evidence: spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/48-human-qualify-faults.log."
+assumption = "The component owner must resolve the recorded failure before focused qualification can pass; no assertion, bound, lockfile or gate was weakened."
 severity = "blocker"
 
 [observation.5.1.14]
@@ -3764,6 +4382,10 @@ file = "tools/qualification/release_runner.py Makefile spec/layerx-beta/spec.kvx
 symbol = "human-qualify-faults"
 observed = "formerly observation.5.1.focused-human-faults-refusal-executed. env -u LAYERX_QUALIFICATION_REAL_STACK make human-qualify-faults exits 2; qual-logs/r17/human-faults.log. Verbatim: qualification failed: LAYERX_QUALIFICATION_REAL_STACK=1 is required\nmake: *** [Makefile:2103: human-qualify-faults] Error 1."
 assumption = "No real stack exists for this gate. Its required flag is unset, no stack is fabricated, and no protected persistent service is touched. An authorized provisioned real stack is required before this gate can pass."
+file = "spec/layerx-beta/qualification.kvx"
+symbol = "beta_ledger_check"
+observed = "The full ledger check reports existing invalid observation identifiers, duplicate sections and keys, missing severity fields and invalid severity values. Raw output: qual-logs/r14/ledger-final.log. The focused records are checked separately in qual-logs/r14/focused-ledger-check.log."
+assumption = "Reconcile the existing observation schema without deleting or rewriting evidence of executed commands."
 severity = "blocker"
 
 [observation.5.1.15]
@@ -3772,4 +4394,8 @@ file = "tests/crypto/lxp_test_ct.c Makefile"
 symbol = "test-crypto-suite"
 observed = "formerly observation.5.1.focused-crypto-check-intermittent. make check exits 2 in qual-logs/r17/make-check-harness.log with verbatim: make: *** [Makefile:1533: test-crypto-suite] Error 1. The recipe runs build/tests/lxp_test_ct and emits no more specific diagnostic. Earlier make check exits 0 (make-check.log); the subsequent unchanged-check rerun exits 0 (make-check-final.log)."
 assumption = "The test includes elapsed-time comparisons as well as functional assertions. The exact failing branch is not established. No crypto source, assertion, bound or runtime setting was changed. git diff --check and cg spec lint exit 0 after the lock observations (diff-lock.log, lint-lock.log); lint reports zero errors and six existing warnings."
+file = "tools/ci/beta-qualify.sh"
+symbol = "beta_qualify_focused"
+observed = "Shellcheck and cortex_guard are unavailable. Bash syntax and make dry-run checks pass. Codify review timed out; its advisory guard used active task 3.7 and does not qualify the focused runner scope. Raw logs: qual-logs/r14/."
+assumption = "Tool absence and advisory graph output do not establish qualification; task status remains unchanged."
 severity = "note"

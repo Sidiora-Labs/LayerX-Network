@@ -1,0 +1,11 @@
+make[1]: warning: jobserver unavailable: using -j1.  Add '+' to parent make rule.
+make[1]: Entering directory '/root/lx-lanes/exec'
+cd programs && cargo build --locked --workspace --features layerx-programs-sandbox/host-ffi
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.57s
+cc -Iinclude -Ibuild/generated -DLXP_BUILD_TARGET_TRIPLE=\"x86_64-linux-gnu\" -DLXP_BUILD_OPTIMISATION=\"-O2\" -DLXP_BUILD_REVISION=\"unknown\" -std=c17 -pedantic -Werror -Wall -Wextra -Wconversion -Wshadow -Wvla -fno-strict-aliasing -ffp-contract=off -O2  tests/test_qual_recovery.c \
+	tests/qualification/lxp_qual_faults.c \
+	src/storage/lxp_projection.c build/liblayerx.a programs/target/debug/liblayerx_programs_sandbox.a \
+	build/liblayerx.a  \
+	-lcrypto -lsqlite3 -pthread -ldl -lm -o build/tests/test_qual_recovery
+build/tests/test_qual_recovery
+make[1]: Leaving directory '/root/lx-lanes/exec'
