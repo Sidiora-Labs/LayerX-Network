@@ -149,6 +149,7 @@ impl std::error::Error for ProtocolEvidenceError {}
 /// state-root, registry-record and lifecycle verification all succeeded.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VerifiedDeploymentEvidence {
+    lifecycle: ProgramLifecycle,
     record: DeploymentRecord,
     interface: Option<crate::ProgramInterface>,
     receipt_digest: [u8; 32],
@@ -161,6 +162,10 @@ pub struct VerifiedDeploymentEvidence {
 }
 
 impl VerifiedDeploymentEvidence {
+    pub(crate) fn into_record(self) -> DeploymentRecord {
+        self.record
+    }
+
     #[must_use]
     pub const fn program(&self) -> ProgramId {
         self.record.program
@@ -225,7 +230,7 @@ impl VerifiedDeploymentEvidence {
 
     #[must_use]
     pub const fn lifecycle(&self) -> ProgramLifecycle {
-        ProgramLifecycle::Active
+        self.lifecycle
     }
 
     #[must_use]
@@ -312,6 +317,7 @@ impl VerifiedProgramHead {
         self.freshness
     }
 
+    #[must_use]
     pub const fn valid_until_ms(&self) -> u64 {
         self.valid_until_ms
     }
@@ -461,6 +467,9 @@ impl ProtocolDeploymentVerifier {
 
     /// Verifies a canonical deploy or upgrade through its exact successful
     /// receipt and resulting Programs state before returning opaque evidence.
+    /// # Errors
+    ///
+    /// Refuses invalid, stale or mismatched activity, receipt, signed batch and registry evidence.
     pub fn verify_deployment(
         &self,
         proof: &DeploymentProof,
@@ -490,14 +499,15 @@ impl ProtocolDeploymentVerifier {
         if included.header().digest() != head.batch_header_digest
             || head.activity_id != activity_identifier
         {
-            return Err(if head.activity_id != activity_identifier {
-                ProtocolEvidenceError::ActivityReceiptMismatch
-            } else {
+            return Err(if head.activity_id == activity_identifier {
                 ProtocolEvidenceError::BatchMismatch
+            } else {
+                ProtocolEvidenceError::ActivityReceiptMismatch
             });
         }
         let (record, interface) = bind_deployment(parsed, &head)?;
         Ok(VerifiedDeploymentEvidence {
+            lifecycle: head.lifecycle,
             record,
             interface,
             receipt_digest: head.receipt_digest,
@@ -514,6 +524,9 @@ impl ProtocolDeploymentVerifier {
     /// its old receipt is a current execution head. All cryptographic and state
     /// bindings remain mandatory; only the admission-time wall clock check is
     /// omitted.
+    /// # Errors
+    ///
+    /// Refuses invalid or mismatched historical activity, receipt, signed batch and registry evidence.
     pub fn verify_historical_deployment(
         &self,
         proof: &DeploymentProof,
@@ -542,14 +555,15 @@ impl ProtocolDeploymentVerifier {
         if included.header().digest() != head.batch_header_digest
             || head.activity_id != activity_identifier
         {
-            return Err(if head.activity_id != activity_identifier {
-                ProtocolEvidenceError::ActivityReceiptMismatch
-            } else {
+            return Err(if head.activity_id == activity_identifier {
                 ProtocolEvidenceError::BatchMismatch
+            } else {
+                ProtocolEvidenceError::ActivityReceiptMismatch
             });
         }
         let (record, interface) = bind_deployment(parsed, &head)?;
         Ok(VerifiedDeploymentEvidence {
+            lifecycle: head.lifecycle,
             record,
             interface,
             receipt_digest: head.receipt_digest,
@@ -564,6 +578,9 @@ impl ProtocolDeploymentVerifier {
 
     /// Verifies one fresh Programs registry/lifecycle view under a successful,
     /// batch-included, sequencer-signed state receipt.
+    /// # Errors
+    ///
+    /// Refuses stale or invalid program proofs and unexpected program identities.
     pub fn verify_current_program(
         &self,
         proof: &ProgramStateProof,
@@ -596,6 +613,9 @@ impl ProtocolDeploymentVerifier {
 
     /// Verifies one fresh protocol receipt under the explicitly configured
     /// current trust anchor.
+    /// # Errors
+    ///
+    /// Refuses stale or invalid receipts, inclusion proofs and signed batch headers.
     pub fn verify_current_protocol_head(
         &self,
         receipt: &[u8],
@@ -615,6 +635,9 @@ impl ProtocolDeploymentVerifier {
 
     /// Verifies a historical protocol receipt under the exact trust anchor
     /// selected from its signed header, without applying current-head age.
+    /// # Errors
+    ///
+    /// Refuses invalid historical receipts, inclusion proofs and signed batch headers.
     pub fn verify_historical_protocol_head(
         &self,
         receipt: &[u8],
@@ -1056,177 +1079,180 @@ fn parse_lifecycle_activity(
         return Err(ProtocolEvidenceError::CanonicalActivity);
     }
     match ordinal {
-        DEPLOY_ORDINAL => {
-            if payload.len() < 104 || payload[35] != 0 {
-                return Err(ProtocolEvidenceError::CanonicalActivity);
-            }
-            let authority = array::<32>(payload, 36)?;
-            let policy = match payload[34] {
-                0 if authority == [0; 32] => UpgradePolicy::Immutable,
-                1 if authority != [0; 32] => UpgradePolicy::Authority(authority),
-                _ => return Err(ProtocolEvidenceError::CanonicalActivity),
-            };
-            let new_code_hash = array::<32>(payload, 68)?;
-            let wasm_length = usize::try_from(u32::from_be_bytes(array::<4>(payload, 100)?))
-                .map_err(|_| ProtocolEvidenceError::CanonicalActivity)?;
-            let legacy = wasm_length != 0 && payload.len().checked_sub(104) == Some(wasm_length);
-            if legacy {
-                let module = payload[104..].to_vec();
-                if wasm_length > MAX_MODULE_BYTES
-                    || module.get(..WASM_HEADER.len()) != Some(WASM_HEADER)
-                {
-                    return Err(ProtocolEvidenceError::CanonicalActivity);
-                }
-                if crate::hash::sha256(&module) != new_code_hash {
-                    return Err(ProtocolEvidenceError::DeploymentMismatch);
-                }
-                return Ok(LifecycleActivity::Deploy {
-                    program,
-                    abi_version,
-                    policy,
-                    new_code_hash,
-                    module,
-                    interface: None,
-                });
-            }
-            if payload.len() < 108 {
-                return Err(ProtocolEvidenceError::CanonicalActivity);
-            }
-            let interface_length = usize::try_from(u32::from_be_bytes(array::<4>(payload, 104)?))
-                .map_err(|_| ProtocolEvidenceError::CanonicalActivity)?;
-            if wasm_length == 0
-                || wasm_length > MAX_MODULE_BYTES
-                || interface_length == 0
-                || interface_length > 952
-                || payload.len().checked_sub(108) != interface_length.checked_add(wasm_length)
-            {
-                return Err(ProtocolEvidenceError::CanonicalActivity);
-            }
-            let interface_bytes = payload
-                .get(108..108 + interface_length)
-                .ok_or(ProtocolEvidenceError::CanonicalActivity)?;
-            let module = payload[108 + interface_length..].to_vec();
-            if module.get(..WASM_HEADER.len()) != Some(WASM_HEADER) {
-                return Err(ProtocolEvidenceError::CanonicalActivity);
-            }
-            if crate::hash::sha256(&module) != new_code_hash {
-                return Err(ProtocolEvidenceError::DeploymentMismatch);
-            }
-            let interface = crate::ProgramInterface::decode(interface_bytes)
-                .map_err(|_| ProtocolEvidenceError::CanonicalActivity)?;
-            if interface.code_hash() != new_code_hash || interface.abi_version() != abi_version {
-                return Err(ProtocolEvidenceError::DeploymentMismatch);
-            }
-            let rebound =
-                crate::ProgramInterface::bind(&module, abi_version, interface.entries().to_vec())
-                    .map_err(|_| ProtocolEvidenceError::DeploymentMismatch)?;
-            if rebound.canonical_encoding() != interface_bytes {
-                return Err(ProtocolEvidenceError::DeploymentMismatch);
-            }
-            Ok(LifecycleActivity::Deploy {
-                program,
-                abi_version,
-                policy,
-                new_code_hash,
-                module,
-                interface: Some(interface),
-            })
-        }
-        UPGRADE_ORDINAL => {
-            if payload.len() < 106 || payload[35] != 0 || payload[34] & 0xfc != 0 {
-                return Err(ProtocolEvidenceError::CanonicalActivity);
-            }
-            let old_code_hash = array::<32>(payload, 36)?;
-            let new_code_hash = array::<32>(payload, 68)?;
-            let hook_length = usize::from(u16::from_be_bytes(array::<2>(payload, 100)?));
-            let wasm_length = usize::try_from(u32::from_be_bytes(array::<4>(payload, 102)?))
-                .map_err(|_| ProtocolEvidenceError::CanonicalActivity)?;
-            let legacy_variable = hook_length
-                .checked_add(wasm_length)
-                .ok_or(ProtocolEvidenceError::CanonicalActivity)?;
-            let legacy = payload[34] & 0xfe == 0
-                && wasm_length != 0
-                && payload.len().checked_sub(106) == Some(legacy_variable)
-                && (((payload[34] & 1) == 0) == (hook_length == 0));
-            if legacy {
-                let module = payload[106 + hook_length..].to_vec();
-                if wasm_length > MAX_MODULE_BYTES
-                    || module.get(..WASM_HEADER.len()) != Some(WASM_HEADER)
-                {
-                    return Err(ProtocolEvidenceError::CanonicalActivity);
-                }
-                if crate::hash::sha256(&module) != new_code_hash {
-                    return Err(ProtocolEvidenceError::DeploymentMismatch);
-                }
-                return Ok(LifecycleActivity::Upgrade {
-                    program,
-                    abi_version,
-                    old_code_hash,
-                    new_code_hash,
-                    module,
-                    interface: None,
-                });
-            }
-            if payload.len() < 110 {
-                return Err(ProtocolEvidenceError::CanonicalActivity);
-            }
-            let interface_length = usize::try_from(u32::from_be_bytes(array::<4>(payload, 106)?))
-                .map_err(|_| ProtocolEvidenceError::CanonicalActivity)?;
-            let variable = hook_length
-                .checked_add(interface_length)
-                .and_then(|length| length.checked_add(wasm_length))
-                .ok_or(ProtocolEvidenceError::CanonicalActivity)?;
-            if wasm_length == 0
-                || wasm_length > MAX_MODULE_BYTES
-                || interface_length > 952
-                || payload.len().checked_sub(110) != Some(variable)
-                || (interface_length == 0 && payload[34] & 2 == 0)
-                || ((payload[34] & 1) == 0) != (hook_length == 0)
-            {
-                return Err(ProtocolEvidenceError::CanonicalActivity);
-            }
-            let interface_start = 110 + hook_length;
-            let interface_bytes = payload
-                .get(interface_start..interface_start + interface_length)
-                .ok_or(ProtocolEvidenceError::CanonicalActivity)?;
-            let module = payload[interface_start + interface_length..].to_vec();
-            if module.get(..WASM_HEADER.len()) != Some(WASM_HEADER) {
-                return Err(ProtocolEvidenceError::CanonicalActivity);
-            }
-            if crate::hash::sha256(&module) != new_code_hash {
-                return Err(ProtocolEvidenceError::DeploymentMismatch);
-            }
-            let interface = if interface_length == 0 {
-                None
-            } else {
-                let interface = crate::ProgramInterface::decode(interface_bytes)
-                    .map_err(|_| ProtocolEvidenceError::CanonicalActivity)?;
-                if interface.code_hash() != new_code_hash || interface.abi_version() != abi_version
-                {
-                    return Err(ProtocolEvidenceError::DeploymentMismatch);
-                }
-                let rebound = crate::ProgramInterface::bind(
-                    &module,
-                    abi_version,
-                    interface.entries().to_vec(),
-                )
-                .map_err(|_| ProtocolEvidenceError::DeploymentMismatch)?;
-                if rebound.canonical_encoding() != interface_bytes {
-                    return Err(ProtocolEvidenceError::DeploymentMismatch);
-                }
-                Some(interface)
-            };
-            Ok(LifecycleActivity::Upgrade {
-                program,
-                abi_version,
-                old_code_hash,
-                new_code_hash,
-                module,
-                interface,
-            })
-        }
+        DEPLOY_ORDINAL => parse_deploy_activity(payload, program, abi_version),
+        UPGRADE_ORDINAL => parse_upgrade_activity(payload, program, abi_version),
         _ => Err(ProtocolEvidenceError::UnsupportedActivity),
     }
+}
+
+fn parse_deploy_activity(
+    payload: &[u8],
+    program: ProgramId,
+    abi_version: u16,
+) -> Result<LifecycleActivity, ProtocolEvidenceError> {
+    if payload.len() < 104 || payload[35] != 0 {
+        return Err(ProtocolEvidenceError::CanonicalActivity);
+    }
+    let authority = array::<32>(payload, 36)?;
+    let policy = match payload[34] {
+        0 if authority == [0; 32] => UpgradePolicy::Immutable,
+        1 if authority != [0; 32] => UpgradePolicy::Authority(authority),
+        _ => return Err(ProtocolEvidenceError::CanonicalActivity),
+    };
+    let new_code_hash = array::<32>(payload, 68)?;
+    let wasm_length = usize::try_from(u32::from_be_bytes(array::<4>(payload, 100)?))
+        .map_err(|_| ProtocolEvidenceError::CanonicalActivity)?;
+    let legacy = wasm_length != 0 && payload.len().checked_sub(104) == Some(wasm_length);
+    if legacy {
+        let module = payload[104..].to_vec();
+        if wasm_length > MAX_MODULE_BYTES || module.get(..WASM_HEADER.len()) != Some(WASM_HEADER) {
+            return Err(ProtocolEvidenceError::CanonicalActivity);
+        }
+        if crate::hash::sha256(&module) != new_code_hash {
+            return Err(ProtocolEvidenceError::DeploymentMismatch);
+        }
+        return Ok(LifecycleActivity::Deploy {
+            program,
+            abi_version,
+            policy,
+            new_code_hash,
+            module,
+            interface: None,
+        });
+    }
+    if payload.len() < 108 {
+        return Err(ProtocolEvidenceError::CanonicalActivity);
+    }
+    let interface_length = usize::try_from(u32::from_be_bytes(array::<4>(payload, 104)?))
+        .map_err(|_| ProtocolEvidenceError::CanonicalActivity)?;
+    if wasm_length == 0
+        || wasm_length > MAX_MODULE_BYTES
+        || interface_length == 0
+        || interface_length > 952
+        || payload.len().checked_sub(108) != interface_length.checked_add(wasm_length)
+    {
+        return Err(ProtocolEvidenceError::CanonicalActivity);
+    }
+    let interface_bytes = payload
+        .get(108..108 + interface_length)
+        .ok_or(ProtocolEvidenceError::CanonicalActivity)?;
+    let module = payload[108 + interface_length..].to_vec();
+    if module.get(..WASM_HEADER.len()) != Some(WASM_HEADER) {
+        return Err(ProtocolEvidenceError::CanonicalActivity);
+    }
+    if crate::hash::sha256(&module) != new_code_hash {
+        return Err(ProtocolEvidenceError::DeploymentMismatch);
+    }
+    let interface = crate::ProgramInterface::decode(interface_bytes)
+        .map_err(|_| ProtocolEvidenceError::CanonicalActivity)?;
+    if interface.code_hash() != new_code_hash || interface.abi_version() != abi_version {
+        return Err(ProtocolEvidenceError::DeploymentMismatch);
+    }
+    let rebound = crate::ProgramInterface::bind(&module, abi_version, interface.entries().to_vec())
+        .map_err(|_| ProtocolEvidenceError::DeploymentMismatch)?;
+    if rebound.canonical_encoding() != interface_bytes {
+        return Err(ProtocolEvidenceError::DeploymentMismatch);
+    }
+    Ok(LifecycleActivity::Deploy {
+        program,
+        abi_version,
+        policy,
+        new_code_hash,
+        module,
+        interface: Some(interface),
+    })
+}
+
+fn parse_upgrade_activity(
+    payload: &[u8],
+    program: ProgramId,
+    abi_version: u16,
+) -> Result<LifecycleActivity, ProtocolEvidenceError> {
+    if payload.len() < 106 || payload[35] != 0 || payload[34] & 0xfc != 0 {
+        return Err(ProtocolEvidenceError::CanonicalActivity);
+    }
+    let old_code_hash = array::<32>(payload, 36)?;
+    let new_code_hash = array::<32>(payload, 68)?;
+    let hook_length = usize::from(u16::from_be_bytes(array::<2>(payload, 100)?));
+    let wasm_length = usize::try_from(u32::from_be_bytes(array::<4>(payload, 102)?))
+        .map_err(|_| ProtocolEvidenceError::CanonicalActivity)?;
+    let legacy_variable = hook_length
+        .checked_add(wasm_length)
+        .ok_or(ProtocolEvidenceError::CanonicalActivity)?;
+    let legacy = payload[34] & 0xfe == 0
+        && wasm_length != 0
+        && payload.len().checked_sub(106) == Some(legacy_variable)
+        && (((payload[34] & 1) == 0) == (hook_length == 0));
+    if legacy {
+        let module = payload[106 + hook_length..].to_vec();
+        if wasm_length > MAX_MODULE_BYTES || module.get(..WASM_HEADER.len()) != Some(WASM_HEADER) {
+            return Err(ProtocolEvidenceError::CanonicalActivity);
+        }
+        if crate::hash::sha256(&module) != new_code_hash {
+            return Err(ProtocolEvidenceError::DeploymentMismatch);
+        }
+        return Ok(LifecycleActivity::Upgrade {
+            program,
+            abi_version,
+            old_code_hash,
+            new_code_hash,
+            module,
+            interface: None,
+        });
+    }
+    if payload.len() < 110 {
+        return Err(ProtocolEvidenceError::CanonicalActivity);
+    }
+    let interface_length = usize::try_from(u32::from_be_bytes(array::<4>(payload, 106)?))
+        .map_err(|_| ProtocolEvidenceError::CanonicalActivity)?;
+    let variable = hook_length
+        .checked_add(interface_length)
+        .and_then(|length| length.checked_add(wasm_length))
+        .ok_or(ProtocolEvidenceError::CanonicalActivity)?;
+    if wasm_length == 0
+        || wasm_length > MAX_MODULE_BYTES
+        || interface_length > 952
+        || payload.len().checked_sub(110) != Some(variable)
+        || (interface_length == 0 && payload[34] & 2 == 0)
+        || ((payload[34] & 1) == 0) != (hook_length == 0)
+    {
+        return Err(ProtocolEvidenceError::CanonicalActivity);
+    }
+    let interface_start = 110 + hook_length;
+    let interface_bytes = payload
+        .get(interface_start..interface_start + interface_length)
+        .ok_or(ProtocolEvidenceError::CanonicalActivity)?;
+    let module = payload[interface_start + interface_length..].to_vec();
+    if module.get(..WASM_HEADER.len()) != Some(WASM_HEADER) {
+        return Err(ProtocolEvidenceError::CanonicalActivity);
+    }
+    if crate::hash::sha256(&module) != new_code_hash {
+        return Err(ProtocolEvidenceError::DeploymentMismatch);
+    }
+    let interface = if interface_length == 0 {
+        None
+    } else {
+        let interface = crate::ProgramInterface::decode(interface_bytes)
+            .map_err(|_| ProtocolEvidenceError::CanonicalActivity)?;
+        if interface.code_hash() != new_code_hash || interface.abi_version() != abi_version {
+            return Err(ProtocolEvidenceError::DeploymentMismatch);
+        }
+        let rebound =
+            crate::ProgramInterface::bind(&module, abi_version, interface.entries().to_vec())
+                .map_err(|_| ProtocolEvidenceError::DeploymentMismatch)?;
+        if rebound.canonical_encoding() != interface_bytes {
+            return Err(ProtocolEvidenceError::DeploymentMismatch);
+        }
+        Some(interface)
+    };
+    Ok(LifecycleActivity::Upgrade {
+        program,
+        abi_version,
+        old_code_hash,
+        new_code_hash,
+        module,
+        interface,
+    })
 }
 
 fn bind_deployment(
@@ -1476,6 +1502,9 @@ impl DeploymentProof {
 
     /// Decodes untrusted proof material. Callers must pass the result through
     /// [`ProtocolDeploymentVerifier`] before using any claim it contains.
+    /// # Errors
+    ///
+    /// Refuses malformed, oversized or non-canonical deployment proof encodings.
     pub fn decode(bytes: &[u8]) -> Result<Self, ProtocolEvidenceError> {
         if bytes.len() > MAX_EVIDENCE_BYTES
             || bytes.get(..EVIDENCE_DOMAIN.len()) != Some(EVIDENCE_DOMAIN)
@@ -1503,6 +1532,9 @@ impl DeploymentProof {
 
     /// Computes the canonical unsigned receipt digest used only to address
     /// stored proof material. This does not verify the receipt signature.
+    /// # Errors
+    ///
+    /// Refuses receipt bytes that cannot be decoded canonically.
     pub fn claimed_receipt_digest(&self) -> Result<[u8; 32], ProtocolEvidenceError> {
         let receipt =
             decode_receipt(&self.state.receipt).map_err(|_| ProtocolEvidenceError::Receipt)?;
