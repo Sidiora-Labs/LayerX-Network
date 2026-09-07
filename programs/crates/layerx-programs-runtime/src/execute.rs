@@ -1654,16 +1654,16 @@ impl PreparedAuthorizedActivity {
             ));
         }
         let settlement = match (self.transfer, self.transfer_set) {
-            (Some(transfer), Some(transfer_set)) => Some(
-                transfer
-                    .settle_authorized_set(&transfer_set, kernel)
-                    .map_err(|error| {
+            (Some(_transfer), Some(transfer_set)) => Some(
+                TransferCapability::settle_authorized_set(&transfer_set, kernel).map_err(
+                    |error| {
                         SettlementFailure::new(
                             self.record.execution.clone(),
                             self.record.call_graph.clone(),
                             error,
                         )
-                    })?,
+                    },
+                )?,
             ),
             (None, None) => None,
             _ => {

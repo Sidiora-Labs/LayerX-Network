@@ -491,7 +491,7 @@ pub unsafe extern "C" fn layerx_programs_settle_wind_down_402lxp_leg(
     let Ok(set) = transfer.authorize(&effects) else {
         return RESULT_NON_CANONICAL;
     };
-    match transfer.settle_authorized_set(&set, &mut WindDownKernel { token }) {
+    match TransferCapability::settle_authorized_set(&set, &mut WindDownKernel { token }) {
         Ok(_) => RESULT_OK,
         Err(_) => RESULT_NON_CANONICAL,
     }
