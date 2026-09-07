@@ -12,7 +12,8 @@ use layerx_proof::inclusion::{
 use layerx_proof::merkle::{MerkleError, Proof, MAX_DEPTH};
 use layerx_proof::receipt::verify_sequencer_signature;
 use layerx_proof::state::{
-    verify_nested_account, AccountProofError, NestedAccountProof, VerifiedAccountState,
+    verify_nested_account, verify_nested_account_maintenance, AccountProofError,
+    NestedAccountProof, VerifiedAccountState, VerifiedMaintenanceAccountState,
 };
 use layerx_types::payload::ModuleRegistry;
 use layerx_wire::activity::{decode_signed, encode_signed};
@@ -230,6 +231,13 @@ pub enum VerifiedProofBundle {
         proof: Proof,
         signed_header: SignedHeader,
     },
+    MaintainedAccount {
+        canonical_bytes: Vec<u8>,
+        activity_id: [u8; 32],
+        activity_receipt: Vec<u8>,
+        verified: Box<VerifiedMaintenanceAccountState>,
+        signed_header: SignedHeader,
+    },
     Account {
         canonical_bytes: Vec<u8>,
         activity_id: [u8; 32],
@@ -244,6 +252,7 @@ impl VerifiedProofBundle {
         match self {
             Self::Activity { signed_header, .. }
             | Self::Receipt { signed_header, .. }
+            | Self::MaintainedAccount { signed_header, .. }
             | Self::Account { signed_header, .. } => signed_header,
         }
     }
@@ -255,6 +264,9 @@ impl VerifiedProofBundle {
                 canonical_bytes, ..
             }
             | Self::Receipt {
+                canonical_bytes, ..
+            }
+            | Self::MaintainedAccount {
                 canonical_bytes, ..
             }
             | Self::Account {
@@ -522,10 +534,12 @@ pub fn proof_bundle(
     }
     if kind == 2 {
         return account_proof_bundle(
+            transport,
             response,
             account_id.ok_or(EvidenceError::Malformed)?,
             target_activity_id,
             context,
+            registry,
         );
     }
     inclusion_proof_bundle(response, kind, target_activity_id, context, registry)
@@ -608,10 +622,12 @@ fn inclusion_proof_bundle(
 }
 
 fn account_proof_bundle(
+    transport: &mut dyn FrameTransport,
     response: Response,
     account: [u8; 32],
     target_activity_id: [u8; 32],
     context: EvidenceContext,
+    registry: &ModuleRegistry,
 ) -> Result<VerifiedProofBundle, EvidenceError> {
     let decoded = decode_nested_evidence(
         &response.proof,
@@ -626,6 +642,74 @@ fn account_proof_bundle(
         context.expected_protocol_version,
         context.expected_network_id,
     )?;
+    if let AccountEvidenceKind::Maintenance { parameter_version } = decoded.kind {
+        let activity_count = decoded
+            .proof
+            .receipt_proof
+            .leaf_count()
+            .checked_sub(1)
+            .ok_or(EvidenceError::Malformed)?;
+        let verified = verify_nested_account_maintenance(
+            &response.payload,
+            account,
+            None,
+            &decoded.proof,
+            &authorization,
+            activity_count,
+            parameter_version,
+        )
+        .map_err(EvidenceError::Account)?;
+        let maintenance = decode_occupancy_maintenance(&decoded.proof.receipt_bytes)
+            .map_err(|_| EvidenceError::Receipt)?;
+        let mut request = Vec::with_capacity(35);
+        request.extend_from_slice(&WIRE_VERSION.to_be_bytes());
+        request.push(3);
+        request.extend_from_slice(&target_activity_id);
+        let receipt_response = exchange(
+            transport,
+            context.interface_version,
+            context
+                .correlation_id
+                .checked_add(1)
+                .ok_or(EvidenceError::Malformed)?,
+            PROOF_BUNDLE_REQUEST_TAG,
+            PROOF_BUNDLE_RESPONSE_TAG,
+            &request,
+            &[],
+        )?;
+        let receipt_bundle =
+            inclusion_proof_bundle(receipt_response, 3, target_activity_id, context, registry)?;
+        let VerifiedProofBundle::Receipt {
+            canonical_bytes: activity_receipt,
+            activity_id,
+            signed_header,
+            ..
+        } = receipt_bundle
+        else {
+            return Err(EvidenceError::Receipt);
+        };
+        let Receipt::Protocol(receipt) =
+            verify_sequencer_signature(&activity_receipt, authorization.public_key())
+                .map_err(|_| EvidenceError::Receipt)?
+        else {
+            return Err(EvidenceError::Receipt);
+        };
+        if signed_header != decoded.signed_header
+            || receipt.global_sequence().checked_add(1) != Some(maintenance.global_sequence)
+            || receipt.resulting_state_root() != maintenance.previous_state_root
+            || receipt.activity_id() != activity_id
+            || activity_id != target_activity_id
+        {
+            return Err(EvidenceError::SelectorMismatch);
+        }
+        return Ok(VerifiedProofBundle::MaintainedAccount {
+            canonical_bytes: response.payload,
+            activity_id,
+            activity_receipt,
+            verified: Box::new(verified),
+            signed_header: decoded.signed_header,
+        });
+    }
     let verified = verify_nested_account(
         &response.payload,
         account,

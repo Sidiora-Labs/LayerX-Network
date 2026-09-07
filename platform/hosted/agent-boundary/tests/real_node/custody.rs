@@ -10,6 +10,7 @@ struct AccountProofConnection {
     input: std::process::ChildStdin,
     output: std::process::ChildStdout,
     corrupt_account_root: Option<[u8; 32]>,
+    corrupt_receipt_identity: bool,
 }
 
 impl AccountProofConnection {
@@ -48,6 +49,7 @@ impl AccountProofConnection {
             input,
             output,
             corrupt_account_root: None,
+            corrupt_receipt_identity: false,
         }
     }
 }
@@ -66,19 +68,27 @@ impl FrameTransport for AccountProofConnection {
 
     fn receive(&mut self) -> Result<Vec<u8>, TransportError> {
         let bytes = layerx_client::lni::framing::read_frame(&mut self.output, LNI_FRAME_BYTES)?;
-        let Some(account) = self.corrupt_account_root.take() else {
-            return Ok(bytes);
-        };
         let envelope = must(
             layerx_client::lni::schema::decode_envelope(&bytes),
             "real proof envelope",
         );
-        assert_eq!(envelope.message_tag, 17);
         let mut proof = envelope.proof_material.to_vec();
-        assert!(proof.len() >= 68);
-        assert_eq!(&proof[..4], &[0, 1, 2, 1]);
-        assert_eq!(&proof[4..36], &account);
-        proof[36] ^= 1;
+        if let Some(account) = self.corrupt_account_root.take() {
+            assert_eq!(envelope.message_tag, 17);
+            assert!(proof.len() >= 68);
+            assert_eq!(&proof[..4], &[0, 2, 2, 1]);
+            assert_eq!(&proof[4..36], &account);
+            proof[36] ^= 1;
+        } else if self.corrupt_receipt_identity
+            && envelope.message_tag == 17
+            && proof.starts_with(&[0, 1, 3])
+        {
+            assert!(proof.len() >= 35);
+            proof[3] ^= 1;
+            self.corrupt_receipt_identity = false;
+        } else {
+            return Ok(bytes);
+        }
         Ok(must(
             layerx_client::lni::schema::encode_envelope(layerx_client::lni::schema::Envelope {
                 proof_material: &proof,
@@ -206,23 +216,61 @@ fn verify_account_bundle(
         proof_bundle(connection, selector, context, &bridge_registry()),
         "public nested account verifier",
     );
-    let VerifiedProofBundle::Account {
-        canonical_bytes,
-        activity_id,
-        verified,
-        signed_header,
-    } = bundle
-    else {
-        panic!("account proof bundle required");
-    };
-    assert_eq!(canonical_bytes, value.canonical_bytes());
-    assert_eq!(activity_id, protocol.activity_id());
-    assert_eq!(
-        verified.header().header().resulting_state_root(),
-        protocol.resulting_state_root()
-    );
-    assert_eq!(signed_header.public_key, cluster.sequencer_key);
-    assert_eq!(verified.receipt_activity_id(), protocol.activity_id());
+    match bundle {
+        VerifiedProofBundle::Account {
+            canonical_bytes,
+            activity_id,
+            verified,
+            signed_header,
+        } => {
+            assert_eq!(canonical_bytes, value.canonical_bytes());
+            assert_eq!(activity_id, protocol.activity_id());
+            assert_eq!(
+                verified.header().header().resulting_state_root(),
+                protocol.resulting_state_root()
+            );
+            assert_eq!(signed_header.public_key, cluster.sequencer_key);
+            assert_eq!(verified.receipt_activity_id(), protocol.activity_id());
+        }
+        VerifiedProofBundle::MaintainedAccount {
+            canonical_bytes,
+            activity_id,
+            activity_receipt,
+            verified,
+            signed_header,
+        } => {
+            let layerx_wire::receipt::Receipt::Protocol(covered) = must(
+                layerx_proof::receipt::verify_sequencer_signature(
+                    &activity_receipt,
+                    cluster.sequencer_key,
+                ),
+                "maintained activity receipt signature",
+            ) else {
+                panic!("protocol receipt required");
+            };
+            assert_eq!(canonical_bytes, value.canonical_bytes());
+            assert_eq!(activity_id, protocol.activity_id());
+            assert_eq!(covered.activity_id(), protocol.activity_id());
+            assert_eq!(
+                covered.resulting_state_root(),
+                protocol.resulting_state_root()
+            );
+            assert_eq!(
+                verified.header().header().last_sequence(),
+                protocol.global_sequence() + 1
+            );
+            assert_eq!(
+                verified.header().header().resulting_state_root(),
+                must(
+                    decode_batch_header(&signed_header.canonical_bytes),
+                    "maintained header"
+                )
+                .resulting_state_root()
+            );
+            assert_eq!(signed_header.public_key, cluster.sequencer_key);
+        }
+        _ => panic!("account proof bundle required"),
+    }
     connection.corrupt_account_root = Some(identifier);
     let mut retry = context;
     retry.correlation_id += 100;
@@ -230,6 +278,13 @@ fn verify_account_bundle(
         proof_bundle(connection, selector, retry, &bridge_registry()),
         Err(EvidenceError::Account(_))
     ));
+    connection.corrupt_receipt_identity = true;
+    retry.correlation_id += 100;
+    assert!(matches!(
+        proof_bundle(connection, selector, retry, &bridge_registry()),
+        Err(EvidenceError::SelectorMismatch)
+    ));
+    assert!(!connection.corrupt_receipt_identity);
 }
 
 const CUSTODY_CHAIN_ID: u64 = 31337;
