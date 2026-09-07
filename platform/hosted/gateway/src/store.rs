@@ -1,3 +1,28 @@
+#[derive(Clone, Copy)]
+pub struct Completion<'a> {
+    pub idempotency_scope: &'a str,
+    pub request_digest: &'a str,
+    pub state: &'a str,
+    pub response_hex: &'a str,
+    pub receipt_hex: &'a str,
+    pub activity_id: Option<&'a str>,
+    pub principal_digest: &'a str,
+    pub audit_event: &'a str,
+}
+
+#[derive(Clone, Copy)]
+pub struct ReservationRequest<'a> {
+    pub idempotency_scope: &'a str,
+    pub request_digest: &'a str,
+    pub now: u64,
+    pub retention_seconds: u64,
+    pub activity_id: &'a str,
+    pub protocol_idempotency_key: &'a str,
+    pub principal_digest: &'a str,
+    pub audit_event: &'a str,
+    pub continuation: &'a str,
+}
+
 use native_tls::{Certificate, TlsConnector};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -23,6 +48,8 @@ pub struct RedisEndpoint {
 }
 
 impl RedisEndpoint {
+    /// # Errors
+    /// Rejects noncanonical Redis TLS endpoints.
     pub fn parse(value: &str) -> Result<Self, String> {
         let authority = value
             .strip_prefix("rediss://")
@@ -132,6 +159,7 @@ enum Resp {
 }
 
 impl RedisStore {
+    #[must_use]
     pub fn new(
         endpoint: RedisEndpoint,
         ca: Certificate,
@@ -146,10 +174,13 @@ impl RedisStore {
         }
     }
 
+    #[must_use]
     pub fn ready(&self) -> bool {
         matches!(self.command(&["PING"]), Ok(Resp::Simple(value)) if value == "PONG")
     }
 
+    /// # Errors
+    /// Returns transport, malformed store response, validation or audit contention errors.
     pub fn issue_key(&self, record: &KeyRecord, audit_event: &str) -> Result<(), String> {
         let key = format!("gateway:key:{}", record.key_id);
         let principal_keys = format!("gateway:principal:{}:keys", record.principal_digest);
@@ -190,6 +221,8 @@ impl RedisStore {
         Err("gateway audit head remained contended".to_owned())
     }
 
+    /// # Errors
+    /// Returns transport, malformed store response, validation or audit contention errors.
     pub fn key(&self, key_id: &str) -> Result<Option<KeyRecord>, String> {
         let key = format!("gateway:key:{key_id}");
         match self.command(&["HGETALL", &key])? {
@@ -213,6 +246,8 @@ impl RedisStore {
         }
     }
 
+    /// # Errors
+    /// Returns transport, malformed store response, validation or audit contention errors.
     pub fn list_keys(&self, principal_digest: &str) -> Result<Vec<String>, String> {
         let key = format!("gateway:principal:{principal_digest}:keys");
         let Resp::Array(values) = self.command(&["SMEMBERS", &key])? else {
@@ -224,12 +259,17 @@ impl RedisStore {
             .collect::<Option<Vec<_>>>()
             .ok_or_else(|| "gateway key-list response contains an invalid identifier".to_owned())?;
         keys.sort();
-        if keys.len() > MAX_KEYS_PER_PRINCIPAL as usize {
+        if keys.len()
+            > usize::try_from(MAX_KEYS_PER_PRINCIPAL)
+                .map_err(|_| "key limit exceeds address space")?
+        {
             return Err("gateway principal key-list exceeds its bound".to_owned());
         }
         Ok(keys)
     }
 
+    /// # Errors
+    /// Returns transport, malformed store response, validation or audit contention errors.
     pub fn rotate_key(
         &self,
         old: &KeyRecord,
@@ -278,6 +318,8 @@ impl RedisStore {
         Err("gateway audit head remained contended".to_owned())
     }
 
+    /// # Errors
+    /// Returns transport, malformed store response, validation or audit contention errors.
     pub fn revoke_key(
         &self,
         key_id: &str,
@@ -308,19 +350,24 @@ impl RedisStore {
         Err("gateway audit head remained contended".to_owned())
     }
 
+    /// # Errors
+    /// Returns transport, malformed store response, validation or audit contention errors.
     pub fn reserve(
         &self,
         record: &KeyRecord,
-        idempotency_scope: &str,
-        request_digest: &str,
-        now: u64,
-        retention_seconds: u64,
-        activity_id: &str,
-        protocol_idempotency_key: &str,
-        principal_digest: &str,
-        audit_event: &str,
-        continuation: &str,
+        request: ReservationRequest<'_>,
     ) -> Result<Reservation, String> {
+        let ReservationRequest {
+            idempotency_scope,
+            request_digest,
+            now,
+            retention_seconds,
+            activity_id,
+            protocol_idempotency_key,
+            principal_digest,
+            audit_event,
+            continuation,
+        } = request;
         let continuation_chunks = continuation_chunks(continuation)?;
         let key = format!("gateway:key:{}", record.key_id);
         let window = now / record.quota_window_seconds;
@@ -366,7 +413,7 @@ impl RedisStore {
                 return Err("gateway reservation response is invalid".to_owned());
             };
             match values.first().and_then(text).as_deref() {
-                Some("audit_retry") => continue,
+                Some("audit_retry") => {}
                 Some("reserved") => return Ok(Reservation::Reserved),
                 Some("revoked") => return Ok(Reservation::Revoked),
                 Some("rate_limited") => {
@@ -393,6 +440,8 @@ impl RedisStore {
         Err("gateway audit head remained contended".to_owned())
     }
 
+    /// # Errors
+    /// Returns transport, malformed store response, validation or audit contention errors.
     pub fn operation(&self, idempotency_scope: &str) -> Result<Option<OperationRecord>, String> {
         let key = format!("gateway:idem:{idempotency_scope}");
         match self.command(&["HGETALL", &key])? {
@@ -416,6 +465,8 @@ impl RedisStore {
         }
     }
 
+    /// # Errors
+    /// Returns transport, malformed store response, validation or audit contention errors.
     pub fn consume_read(
         &self,
         record: &KeyRecord,
@@ -447,7 +498,7 @@ impl RedisStore {
                 return Err("gateway quota response is invalid".to_owned());
             };
             match values.first().and_then(text).as_deref() {
-                Some("audit_retry") => continue,
+                Some("audit_retry") => {}
                 Some("consumed") => return Ok(None),
                 Some("rate_limited") => return Ok(Some(retry)),
                 Some("revoked") => return Err("gateway key was revoked".to_owned()),
@@ -457,17 +508,19 @@ impl RedisStore {
         Err("gateway audit head remained contended".to_owned())
     }
 
-    pub fn complete(
-        &self,
-        idempotency_scope: &str,
-        request_digest: &str,
-        state: &str,
-        response_hex: &str,
-        receipt_hex: &str,
-        activity_id: Option<&str>,
-        principal_digest: &str,
-        audit_event: &str,
-    ) -> Result<(), String> {
+    /// # Errors
+    /// Returns transport, malformed store response, validation or audit contention errors.
+    pub fn complete(&self, request: Completion<'_>) -> Result<(), String> {
+        let Completion {
+            idempotency_scope,
+            request_digest,
+            state,
+            response_hex,
+            receipt_hex,
+            activity_id,
+            principal_digest,
+            audit_event,
+        } = request;
         let idem = format!("gateway:idem:{idempotency_scope}");
         let owner = activity_id.map_or_else(
             || "gateway:activity:none".to_owned(),
@@ -508,6 +561,8 @@ impl RedisStore {
         Err("gateway audit head remained contended".to_owned())
     }
 
+    /// # Errors
+    /// Returns transport, malformed store response, validation or audit contention errors.
     pub fn activity_owner(&self, activity_id: &str) -> Result<Option<String>, String> {
         let key = format!("gateway:activity:{activity_id}");
         match self.command(&["GET", &key])? {
@@ -519,6 +574,8 @@ impl RedisStore {
         }
     }
 
+    /// # Errors
+    /// Returns transport, malformed store response, validation or audit contention errors.
     pub fn activity_operation(&self, activity_id: &str) -> Result<Option<OperationRecord>, String> {
         let key = format!("gateway:activity-operation:{activity_id}");
         let operation_key = match self.command(&["GET", &key])? {
@@ -554,8 +611,10 @@ impl RedisStore {
     }
 
     /// Atomically consumes a TAP registry-key/nonce pair and persists the
-    /// credential, exact LayerX activity, and signer binding through the
+    /// credential, exact `LayerX` activity, and signer binding through the
     /// effective credential expiry.
+    /// # Errors
+    /// Returns transport, malformed store response, validation or audit contention errors.
     pub fn consume_tap_nonce(
         &self,
         registry_key: &str,
@@ -622,6 +681,8 @@ impl RedisStore {
 
     /// Reads one credential-to-activity binding previously committed by the
     /// atomic TAP nonce transition.
+    /// # Errors
+    /// Returns transport, malformed store response, validation or audit contention errors.
     pub fn tap_binding(&self, binding_digest: &str) -> Result<Option<TapCredentialRecord>, String> {
         if !valid_hex_digest(binding_digest) {
             return Err("gateway TAP binding digest is invalid".to_owned());
@@ -717,7 +778,7 @@ impl RedisStore {
     }
 }
 
-const ISSUE_SCRIPT: &str = r#"
+const ISSUE_SCRIPT: &str = r"
 local current = redis.call('GET', KEYS[4]) or ''
 if current ~= ARGV[12] then return {'audit_retry'} end
 if redis.call('EXISTS', KEYS[1]) == 1 then return {'conflict'} end
@@ -727,9 +788,9 @@ redis.call('SADD', KEYS[2], ARGV[1])
 redis.call('XADD', KEYS[3], '*', 'previous', ARGV[12], 'chain', ARGV[13], 'event', ARGV[11])
 redis.call('SET', KEYS[4], ARGV[13])
 return {'issued'}
-"#;
+";
 
-const ROTATE_SCRIPT: &str = r#"
+const ROTATE_SCRIPT: &str = r"
 local current = redis.call('GET', KEYS[5]) or ''
 if current ~= ARGV[12] then return {'audit_retry'} end
 if redis.call('HGET', KEYS[1], 'principal') ~= ARGV[1] or redis.call('HGET', KEYS[1], 'epoch') ~= ARGV[2] or redis.call('HGET', KEYS[1], 'disabled') ~= '0' then return {'conflict'} end
@@ -740,9 +801,9 @@ redis.call('HSET', KEYS[2], 'principal', ARGV[1], 'salt', ARGV[4], 'secret_diges
 redis.call('SADD', KEYS[3], ARGV[3])
 redis.call('XADD', KEYS[4], '*', 'previous', ARGV[12], 'chain', ARGV[13], 'event', ARGV[11]); redis.call('SET', KEYS[5], ARGV[13])
 return {'rotated'}
-"#;
+";
 
-const REVOKE_SCRIPT: &str = r#"
+const REVOKE_SCRIPT: &str = r"
 if redis.call('HGET', KEYS[1], 'principal') ~= ARGV[1] then return {'forbidden'} end
 if redis.call('HGET', KEYS[1], 'disabled') == '1' then return {'already_revoked'} end
 local current = redis.call('GET', KEYS[3]) or ''
@@ -750,9 +811,9 @@ if current ~= ARGV[3] then return {'audit_retry'} end
 redis.call('HSET', KEYS[1], 'disabled', '1'); redis.call('HINCRBY', KEYS[1], 'epoch', 1)
 redis.call('XADD', KEYS[2], '*', 'previous', ARGV[3], 'chain', ARGV[4], 'event', ARGV[2]); redis.call('SET', KEYS[3], ARGV[4])
 return {'revoked'}
-"#;
+";
 
-const RESERVE_SCRIPT: &str = r#"
+const RESERVE_SCRIPT: &str = r"
 if redis.call('HGET', KEYS[1], 'disabled') ~= '0' or redis.call('HGET', KEYS[1], 'epoch') ~= ARGV[1] then return {'revoked'} end
 local existing = redis.call('HGET', KEYS[3], 'digest')
 if existing then return {'existing', existing, redis.call('HGET', KEYS[3], 'state') or '', redis.call('HGET', KEYS[3], 'response') or '', redis.call('HGET', KEYS[3], 'receipt') or '', redis.call('HGET', KEYS[3], 'principal') or ''} end
@@ -776,9 +837,9 @@ redis.call('SET', KEYS[7], ARGV[10], 'EX', ARGV[4])
 redis.call('SET', KEYS[8], KEYS[3], 'EX', ARGV[4])
 redis.call('XADD', KEYS[4], '*', 'previous', ARGV[8], 'chain', ARGV[9], 'event', ARGV[6], 'outcome', 'pending'); redis.call('SET', KEYS[5], ARGV[9])
 return {'reserved'}
-"#;
+";
 
-const CONSUME_SCRIPT: &str = r#"
+const CONSUME_SCRIPT: &str = r"
 if redis.call('HGET', KEYS[1], 'disabled') ~= '0' or redis.call('HGET', KEYS[1], 'epoch') ~= ARGV[1] then return {'revoked'} end
 local previous = redis.call('GET', KEYS[4]) or ''
 if previous ~= ARGV[5] then return {'audit_retry'} end
@@ -787,9 +848,9 @@ local outcome = 'consumed'
 if used >= tonumber(ARGV[2]) then outcome = 'rate_limited' else redis.call('INCR', KEYS[2]); redis.call('EXPIRE', KEYS[2], ARGV[3]) end
 redis.call('XADD', KEYS[3], '*', 'previous', ARGV[5], 'chain', ARGV[6], 'event', ARGV[4], 'outcome', outcome); redis.call('SET', KEYS[4], ARGV[6])
 return {outcome}
-"#;
+";
 
-const COMPLETE_SCRIPT: &str = r#"
+const COMPLETE_SCRIPT: &str = r"
 if redis.call('HGET', KEYS[1], 'digest') ~= ARGV[1] then return {'conflict'} end
 if redis.call('HGET', KEYS[1], 'state') ~= 'pending' then return {'completed'} end
 local previous = redis.call('GET', KEYS[4]) or ''
@@ -802,9 +863,9 @@ end
 redis.call('HSET', KEYS[1], 'state', ARGV[2], 'response', ARGV[3], 'receipt', ARGV[4]); if ARGV[2] ~= 'pending' then redis.call('SREM', KEYS[2], KEYS[1]) end
 redis.call('XADD', KEYS[3], '*', 'previous', ARGV[6], 'chain', ARGV[7], 'event', ARGV[5], 'outcome', ARGV[2]); redis.call('SET', KEYS[4], ARGV[7])
 return {'completed'}
-"#;
+";
 
-const TAP_CONSUME_SCRIPT: &str = r#"
+const TAP_CONSUME_SCRIPT: &str = r"
 local previous = redis.call('GET', KEYS[4]) or ''
 if previous ~= ARGV[18] then return {'audit_retry'} end
 local existing = redis.call('GET', KEYS[1])
@@ -827,7 +888,7 @@ redis.call('EXPIRE', KEYS[2], ARGV[1])
 redis.call('XADD', KEYS[3], '*', 'previous', ARGV[18], 'chain', ARGV[19], 'event', ARGV[17], 'outcome', 'consumed')
 redis.call('SET', KEYS[4], ARGV[19])
 return {'consumed'}
-"#;
+";
 
 fn validate_tap_record(
     registry_key: &str,
@@ -1059,7 +1120,7 @@ fn text(value: &Resp) -> Option<String> {
 }
 
 fn pairs(values: &[Resp]) -> Result<BTreeMap<String, String>, String> {
-    if values.len() % 2 != 0 {
+    if !values.len().is_multiple_of(2) {
         return Err("gateway Redis hash is malformed".to_owned());
     }
     let mut fields = BTreeMap::new();
@@ -1150,7 +1211,8 @@ mod continuation_tests {
     #[test]
     fn maximum_program_activity_hex_is_durably_chunked() {
         let value = "a".repeat(MAX_CONTINUATION_BYTES);
-        let chunks = continuation_chunks(&value).unwrap();
+        let chunks = continuation_chunks(&value)
+            .unwrap_or_else(|error| panic!("continuation chunks: {error}"));
         assert_eq!(chunks.len(), MAX_CONTINUATION_CHUNKS);
         assert!(chunks
             .iter()
