@@ -291,7 +291,7 @@ impl RemoteChainSigner {
         }
         let key = VerifyingKey::from_sec1_bytes(&self.config.public_key)
             .map_err(|_| SignerError::Configuration)?;
-        let point = key.to_encoded_point(false);
+        let point = key.to_sec1_point(false);
         let bytes = point.as_bytes();
         let body = bytes.get(1..).ok_or(SignerError::Configuration)?;
         let digest = Keccak256::digest(body);
@@ -423,7 +423,7 @@ fn verify_response(
                 .map_err(|_| SignerError::InvalidSignature)?;
             let parsed =
                 Signature::from_slice(&compact).map_err(|_| SignerError::InvalidSignature)?;
-            if parsed.normalize_s().is_some() {
+            if parsed.normalize_s() != parsed {
                 return Err(SignerError::InvalidSignature);
             }
             let recovery =

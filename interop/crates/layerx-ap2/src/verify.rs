@@ -960,5 +960,5 @@ const fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
 }
 
 fn same_key(left: &VerifyingKey, right: &VerifyingKey) -> bool {
-    left.to_encoded_point(false) == right.to_encoded_point(false)
+    left.to_sec1_point(false) == right.to_sec1_point(false)
 }

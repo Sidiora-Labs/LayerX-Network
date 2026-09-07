@@ -2213,3 +2213,27 @@ symbol = "program_execution_batch_id"
 observed = "The initial Agent test command exits 101 at budget_create. The all-target no-fail-fast rerun also exits 101: Agentd passes 216 tests and fails 43 across 12 targets, with zero ignored tests. Every panic originates at the unchanged batch identity assertion at real_authority.rs:767 or the subsequently poisoned fixture lock at line 1281. The failing targets are budget_create, budget_divergence, budget_reconcile, budget_unknown, ceiling, limits-exactly-once, operator, outbox, protocol2_restart, protocol_evidence, recovery and unknown. Evidence: qual-logs/k256-pass11/agent-test.log and agent-test-complete.log."
 assumption = "The fixture compares program_execution_batch_id with the native protocol batch identity using LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin. No native binary, batch identity contract or fixture assertion is changed. The full Agent test gate is not qualified; this failure requires the native and fixture owners to reconcile the supplied binaries and source contract."
 severity = "blocker"
+
+[observation.6.4.k256-interop-migration-qualification]
+task = "6.4"
+file = "interop/Cargo.toml interop/Cargo.lock interop/crates/layerx-ap2/src/verify.rs interop/crates/layerx-ap2/tests/mandates.rs interop/crates/layerx-migrate/src/ethereum.rs interop/crates/layerx-mirror/src/signer.rs"
+symbol = "EthereumVerifier"
+observed = "Interop k256 and p256 requirements both pin 0.14.0. High-S rejection compares the signature with normalize_s, which now returns a signature directly, and SEC1 serialization retains the existing compression flags. Locked all-target build, test and strict Clippy for layerx-ap2, layerx-migrate, layerx-mirror and layerx-interop-service all exit 0. Tests pass 61 cases; six pre-existing protected testnet cases remain ignored. Evidence: qual-logs/k256-pass11/interop-build.log, interop-test.log and interop-clippy.log. All 260 assertion bodies across the touched Agent and Interop test files remain unchanged; signature vector and authority files are unchanged."
+assumption = "The interop lockfile was updated with cargo update -p k256 -p p256. Repeating that targeted update offline locks zero packages. All transitive package additions and removals are recorded in qual-logs/k256-pass11/lock-review.json. The migration qualifies only the recorded local gates."
+severity = "note"
+
+[observation.6.4.k256-interop-remaining-dependency-bans]
+task = "6.4"
+file = "interop/Cargo.lock agent/crates/layerx-crypto/Cargo.toml programs/Cargo.toml human/Cargo.toml platform/Cargo.toml programs/vendor/wasmi-0.31.2/Cargo.toml"
+symbol = "interop-lint"
+observed = "make interop-lint exits 2 after workspace Clippy and dependency-policy checks pass; cargo-deny exits 3. The der duplicate is cleared. Remaining duplicate bans are block-buffer 0.10.4/0.12.1, cpufeatures 0.2.17/0.3.1, crypto-common 0.1.6/0.2.2, digest 0.10.7/0.11.3, getrandom 0.2.17/0.4.3, rand_core 0.6.4/0.10.1, sha2 0.10.9/0.11.0, signature 2.2.0/3.0.0 and windows-sys 0.52.0/0.61.2. The paste unmaintained advisory remains through wasmi_core. Evidence: qual-logs/k256-pass11/interop-lint.log and interop-deny.log."
+assumption = "The older crypto branches remain required by ed25519-dalek, argon2, chacha20poly1305 and sha3, plus dependencies declared in other workspaces. Ring retains getrandom 0.2 and windows-sys 0.52. Their coordinated migrations and vendored wasmi changes are outside this migration scope. The r-efi duplicate was already absent from the starting lockfile and is not attributed to this change. No deny configuration, exemption or assertion is changed."
+severity = "blocker"
+
+[observation.6.4.k256-dependent-lockfile-boundary]
+task = "6.4"
+file = "platform/Cargo.lock human/Cargo.lock"
+symbol = "cargo tree --locked"
+observed = "Read-only cargo tree --locked --manifest-path platform/Cargo.toml -i k256 and the corresponding human/Cargo.toml command both exit 101 because the lockfile must be updated for the migrated path dependencies. Evidence: qual-logs/k256-pass11/platform-lock-check.log and human-lock-check.log."
+assumption = "The fourth permitted lockfile is not identified beyond the three named migration workspaces. Both dependent workspace lockfiles are left unchanged pending explicit ownership clarification. Other independently locked consumers also require coordinated refresh before their locked gates can be claimed."
+severity = "blocker"

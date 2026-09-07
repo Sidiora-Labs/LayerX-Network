@@ -123,7 +123,7 @@ fn alternate_root(mandate: Value) -> String {
 
 fn agent_jwk() -> Value {
     let key = agent_key();
-    let point = key.verifying_key().to_encoded_point(false);
+    let point = key.verifying_key().to_sec1_point(false);
     json!({"kty":"EC","crv":"P-256","x":URL_SAFE_NO_PAD.encode(point.x().unwrap_or_else(|| panic!("x coordinate"))),"y":URL_SAFE_NO_PAD.encode(point.y().unwrap_or_else(|| panic!("y coordinate")))})
 }
 

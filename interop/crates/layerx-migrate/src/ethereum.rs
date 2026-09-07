@@ -880,7 +880,7 @@ impl SourceVerifier for EthereumVerifier {
         let digest = personal_sign_digest(&claim.signing_message());
         let signature = Signature::from_slice(&claim.signature[..64])
             .map_err(|_| MigrationError::OwnershipSignatureMismatch)?;
-        if signature.normalize_s().is_some() {
+        if signature.normalize_s() != signature {
             return Err(MigrationError::OwnershipSignatureMismatch);
         }
         let recovery_byte = match claim.signature[64] {
@@ -892,7 +892,7 @@ impl SourceVerifier for EthereumVerifier {
             .ok_or(MigrationError::OwnershipSignatureMismatch)?;
         let key = VerifyingKey::recover_from_prehash(&digest, &signature, recovery)
             .map_err(|_| MigrationError::OwnershipSignatureMismatch)?;
-        let point = key.to_encoded_point(false);
+        let point = key.to_sec1_point(false);
         let public = point
             .as_bytes()
             .get(1..)
