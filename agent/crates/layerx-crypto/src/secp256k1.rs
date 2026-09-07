@@ -35,7 +35,7 @@ pub fn verify_digest(
         return Err(VerifyError::BadSignature);
     }
     let signature = Signature::from_slice(signature).map_err(|_| VerifyError::BadSignature)?;
-    if signature.normalize_s().is_some() {
+    if signature.normalize_s() != signature {
         return Err(VerifyError::BadSignature);
     }
     let verifying_key =
@@ -57,7 +57,7 @@ pub fn evm_address(public_key: &[u8]) -> Result<[u8; 20], VerifyError> {
     }
     let verifying_key =
         VerifyingKey::from_sec1_bytes(public_key).map_err(|_| VerifyError::BadSignature)?;
-    let encoded = verifying_key.to_encoded_point(false);
+    let encoded = verifying_key.to_sec1_point(false);
     let digest = Keccak256::digest(&encoded.as_bytes()[1..]);
     let mut address = [0_u8; 20];
     address.copy_from_slice(&digest[12..]);
@@ -83,7 +83,7 @@ pub fn verify_recoverable_digest(
         .filter(|value| u8::from(*value) <= 1)
         .ok_or(VerifyError::BadSignature)?;
     let signature = Signature::from_slice(signature).map_err(|_| VerifyError::BadSignature)?;
-    if signature.normalize_s().is_some() {
+    if signature.normalize_s() != signature {
         return Err(VerifyError::BadSignature);
     }
     let expected =

@@ -89,7 +89,7 @@ fn core_secp256k1_vector_and_malleable_forms_match() {
     let Ok(signature): Result<Secp256k1Signature, _> = signing_key.sign_prehash(&digest) else {
         panic!("core secp256k1 vector signing failed");
     };
-    let public_key = signing_key.verifying_key().to_encoded_point(true);
+    let public_key = signing_key.verifying_key().to_sec1_point(true);
     assert_eq!(
         public_key.as_bytes(),
         &[
@@ -99,9 +99,7 @@ fn core_secp256k1_vector_and_malleable_forms_match() {
         ]
     );
     let signature_bytes: [u8; 64] = signature.to_bytes().into();
-    let (recoverable_signature, recovery_id) = signing_key
-        .sign_prehash_recoverable(&digest)
-        .unwrap_or_else(|error| panic!("recoverable secp256k1 signing failed: {error}"));
+    let (recoverable_signature, recovery_id) = signing_key.sign_prehash_recoverable(&digest);
     let recoverable_bytes: [u8; 64] = recoverable_signature.to_bytes().into();
     assert_eq!(recoverable_bytes, signature_bytes);
     assert_eq!(

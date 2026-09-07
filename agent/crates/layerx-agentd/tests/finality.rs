@@ -393,7 +393,7 @@ fn guarantor(value: u8, checkpoint: [u8; 32]) -> GuarantorFixture {
     scalar[31] = value;
     let signing = SigningKey::from_bytes((&scalar).into())
         .unwrap_or_else(|error| panic!("guarantor key: {error}"));
-    let encoded = signing.verifying_key().to_encoded_point(true);
+    let encoded = signing.verifying_key().to_sec1_point(true);
     let public_key: [u8; 33] = encoded
         .as_bytes()
         .try_into()
@@ -416,9 +416,7 @@ fn guarantor(value: u8, checkpoint: [u8; 32]) -> GuarantorFixture {
     assert_eq!(message.len(), 189);
     let digest = checkpoint_attestation_digest(&message)
         .unwrap_or_else(|error| panic!("attestation digest: {error:?}"));
-    let (signature, recovery_id): (Signature, _) = signing
-        .sign_prehash_recoverable(&digest)
-        .unwrap_or_else(|error| panic!("attestation signature: {error}"));
+    let (signature, recovery_id): (Signature, _) = signing.sign_prehash_recoverable(&digest);
     let signer = secp256k1::evm_address(&public_key)
         .unwrap_or_else(|error| panic!("attestation signer: {error:?}"));
     let mut attestation = message;

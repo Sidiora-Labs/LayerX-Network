@@ -53,7 +53,7 @@ fn key(value: u8) -> (SigningKey, [u8; 33], [u8; 32]) {
     scalar[31] = value;
     let signing = SigningKey::from_bytes((&scalar).into())
         .unwrap_or_else(|error| panic!("invalid signing key: {error}"));
-    let encoded = signing.verifying_key().to_encoded_point(true);
+    let encoded = signing.verifying_key().to_sec1_point(true);
     let public_key: [u8; 33] = encoded
         .as_bytes()
         .try_into()
@@ -104,16 +104,9 @@ fn attestation_at(
     message[181..].copy_from_slice(&attested_at_ms.to_be_bytes());
     let digest = checkpoint_attestation_digest(&message)
         .unwrap_or_else(|error| panic!("attestation hash failed: {error:?}"));
-    let (signature, recovery_id): (Signature, _) = signing_key
-        .sign_prehash_recoverable(&digest)
-        .unwrap_or_else(|error| panic!("attestation signing failed: {error}"));
-    let signer = secp256k1::evm_address(
-        signing_key
-            .verifying_key()
-            .to_encoded_point(true)
-            .as_bytes(),
-    )
-    .unwrap_or_else(|error| panic!("attestation signer: {error:?}"));
+    let (signature, recovery_id): (Signature, _) = signing_key.sign_prehash_recoverable(&digest);
+    let signer = secp256k1::evm_address(signing_key.verifying_key().to_sec1_point(true).as_bytes())
+        .unwrap_or_else(|error| panic!("attestation signer: {error:?}"));
     Attestation::new(
         PROTOCOL_VERSION,
         42,

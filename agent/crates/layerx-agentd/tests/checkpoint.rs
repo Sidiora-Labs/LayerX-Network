@@ -54,7 +54,7 @@ fn guarantor_key(value: u8) -> (SigningKey, [u8; 33], [u8; 32]) {
     scalar[31] = value;
     let signing = SigningKey::from_bytes((&scalar).into())
         .unwrap_or_else(|error| panic!("signing key: {error}"));
-    let encoded = signing.verifying_key().to_encoded_point(true);
+    let encoded = signing.verifying_key().to_sec1_point(true);
     let public = encoded
         .as_bytes()
         .try_into()
@@ -83,10 +83,8 @@ fn attestation(checkpoint: [u8; 32], guarantor_id: [u8; 32], key: &SigningKey) -
     message[181..].copy_from_slice(&(1_000 + u64::from(guarantor_id[0])).to_be_bytes());
     let digest = checkpoint_attestation_digest(&message)
         .unwrap_or_else(|error| panic!("attestation digest: {error:?}"));
-    let (signature, recovery_id): (Signature, _) = key
-        .sign_prehash_recoverable(&digest)
-        .unwrap_or_else(|error| panic!("attestation signature: {error}"));
-    let signer = secp256k1::evm_address(key.verifying_key().to_encoded_point(true).as_bytes())
+    let (signature, recovery_id): (Signature, _) = key.sign_prehash_recoverable(&digest);
+    let signer = secp256k1::evm_address(key.verifying_key().to_sec1_point(true).as_bytes())
         .unwrap_or_else(|error| panic!("attestation signer: {error:?}"));
     Attestation::new(
         layerx_wire::limits::PROTOCOL_VERSION,

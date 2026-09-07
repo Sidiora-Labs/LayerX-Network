@@ -2197,3 +2197,19 @@ symbol = "programs-abi-drift"
 observed = "make programs-abi-drift exits 2: the ABI vector drift script passes, then Cargo cannot find k256 0.14.0 in the configured offline vendor tree. make check exits 2 at the same missing vendored dependency during programs-build. Runtime all-target strict Clippy exits 101 on existing diagnostics outside the migrated signature module, including private_interfaces at execute.rs:662 and dead code and pedantic diagnostics in execution and transfer modules. The signature-module items_after_statements diagnostics were repaired by moving the prehash trait import to module scope; the rerun reports no signature-module diagnostic. Evidence: qual-logs/k256-pass11/abi-drift.log, make-check.log and programs-clippy-rerun.log."
 assumption = "Registry dependency vendoring and unrelated runtime lint repairs require separate ownership. The configured offline source and all lint checks remain intact. Passing root-invoked Cargo tests does not qualify the offline aggregate gates."
 severity = "blocker"
+
+[observation.6.4.k256-agent-migration-qualification]
+task = "6.4"
+file = "agent/Cargo.lock agent/crates/layerx-crypto/src/secp256k1.rs agent/crates/layerx-crypto/tests/verify.rs agent/crates/layerx-proof/tests/checkpoint.rs agent/crates/layerx-agentd/tests/checkpoint.rs agent/crates/layerx-agentd/tests/export.rs agent/crates/layerx-agentd/tests/finality.rs"
+symbol = "verify_recoverable_digest"
+observed = "Agent k256 requirements pin 0.14.0. SEC1 compression flags, prehash bytes and high-S refusals remain unchanged. Recoverable signing test helpers consume the new infallible tuple return without changing assertions. Locked all-target build and strict Clippy for layerx-crypto, layerx-proof and layerx-agentd exit 0. The all-target no-fail-fast test run passes all 28 crypto tests and all 31 proof tests. Evidence: qual-logs/k256-pass11/agent-build-rerun.log, agent-clippy.log, agent-test-complete.log and assertion-integrity.log."
+assumption = "The targeted k256 lockfile update changes its dependency closure and removes an unused base64 0.22.1 entry; it does not blanket-update the workspace. Package-level lockfile changes are retained in qual-logs/k256-pass11/lock-review.json."
+severity = "note"
+
+[observation.6.4.k256-agent-native-fixture-boundary]
+task = "6.4"
+file = "agent/crates/layerx-agentd/tests/support/real_authority.rs"
+symbol = "program_execution_batch_id"
+observed = "The initial Agent test command exits 101 at budget_create. The all-target no-fail-fast rerun also exits 101: Agentd passes 216 tests and fails 43 across 12 targets, with zero ignored tests. Every panic originates at the unchanged batch identity assertion at real_authority.rs:767 or the subsequently poisoned fixture lock at line 1281. The failing targets are budget_create, budget_divergence, budget_reconcile, budget_unknown, ceiling, limits-exactly-once, operator, outbox, protocol2_restart, protocol_evidence, recovery and unknown. Evidence: qual-logs/k256-pass11/agent-test.log and agent-test-complete.log."
+assumption = "The fixture compares program_execution_batch_id with the native protocol batch identity using LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin. No native binary, batch identity contract or fixture assertion is changed. The full Agent test gate is not qualified; this failure requires the native and fixture owners to reconcile the supplied binaries and source contract."
+severity = "blocker"
