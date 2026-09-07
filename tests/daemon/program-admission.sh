@@ -91,6 +91,38 @@ if [[ ${2:-} == --maintenance || ${2:-} == --maintenance-crash ]]; then
     replica_pid=$!
     IFS= read -r -n 1 -t 20 replica_ready <&"$replica_ready_fd"
     [[ "$replica_ready" == R ]]
+    if [[ ${5:-} == --reject-* ]]; then
+        python3 - "$work/data" "$5" <<'PYMARKER'
+import pathlib, sys
+root = pathlib.Path(sys.argv[1])
+marker, = root.rglob('initialized-genesis.lxg')
+case = sys.argv[2]
+record = bytearray(marker.read_bytes())
+if case == '--reject-missing':
+    marker.unlink()
+elif case == '--reject-body':
+    record[30] ^= 1
+    marker.write_bytes(record)
+elif case == '--reject-signature':
+    record[-1] ^= 1
+    marker.write_bytes(record)
+elif case == '--reject-truncated':
+    marker.write_bytes(record[:-1])
+elif case == '--reject-symlink':
+    retained = marker.with_suffix('.retained')
+    marker.rename(retained)
+    marker.symlink_to(retained)
+elif case == '--reject-zero-checkpoint':
+    (marker.parent / '00000000000000000000.lxs').write_bytes(b'invalid')
+else:
+    raise SystemExit('unknown marker mutation')
+PYMARKER
+        result=0
+        (set -a; source "$work/data/sequencer.env"; exec "$root/$build_dir/bin/layerxd" --serve "$work/data/sequencer.conf") >> "$work/sequencer.log" 2>&1 || result=$?
+        [[ "$result" != 0 ]]
+        rg -q 'bootstrap .* failed with result' "$work/sequencer.log"
+        exit 0
+    fi
     (set -a; source "$work/data/sequencer.env"; exec "$root/$build_dir/bin/layerxd" --serve "$work/data/sequencer.conf") >> "$work/sequencer.log" 2>&1 &
     sequencer_pid=$!
     python3 - "$work/run/layerxd.lni.sock" "$sequencer_pid" <<'PYWAIT'
