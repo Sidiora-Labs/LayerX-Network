@@ -611,6 +611,7 @@ secrets_apply() {
             --from-file=credentials.json="$s/human-credentials.json"
     done
     human_secrets_apply
+    MISSING_INPUTS+=("Human production component configuration/material and local agentd, identity, security, movement and mTLS KMS providers; see platform/hosted/human/README.md")
     MISSING_INPUTS+=("Authenticated Human principal cookies for journeys/approvals require the passkey assertion and session.open ceremony; credential maps remain empty")
     apply_secret "$ns" layerx-human-tls --from-file=server.crt.der="$c/human/cert.der" \
         --from-file=server.key.der="$c/human/key.der" --from-file=ca.crt="$c/ca.crt"
