@@ -198,7 +198,7 @@ fn run() -> Result<(), String> {
     let cadence = Duration::from_secs(config.reconcile_seconds);
     thread::Builder::new()
         .name("ramp-reconciler".to_owned())
-        .spawn(move || reconcile_loop(reconcile_state, cadence))
+        .spawn(move || reconcile_loop(&reconcile_state, cadence))
         .map_err(|error| format!("start reconciler: {error}"))?;
     let listener = TcpListener::bind(&config.listen)
         .map_err(|error| format!("bind {}: {error}", config.listen))?;
@@ -374,38 +374,8 @@ fn build_state(config: &Config) -> Result<State, String> {
         vault_id: config.paxeer.vault_id.clone(),
         signer_key_handle: config.paxeer.signer_key_handle.clone(),
     };
-    let rpc_trust_anchor_der = fs::read(&config.paxeer.rpc_trust_anchor_der)
-        .map_err(|_| "Paxeer RPC trust anchor is unavailable".to_owned())?;
-    if rpc_trust_anchor_der.is_empty() {
-        return Err("Paxeer RPC trust anchor is empty".to_owned());
-    }
-    let paxeer_tracker_config = TrackerConfig {
-        endpoints: config
-            .paxeer
-            .rpc_endpoints
-            .iter()
-            .map(|url| EndpointConfig {
-                url: url.clone(),
-                request_timeout: timeout,
-                transport: EndpointTransport::PinnedTls {
-                    trust_anchor_der: rpc_trust_anchor_der.clone(),
-                },
-                expected_chain_id: config.paxeer.rpc_chain_id,
-            })
-            .collect(),
-        minimum_endpoint_agreement: config.paxeer.rpc_minimum_agreement,
-        required_confirmations: config.paxeer.required_confirmations,
-        poll_cadence: Duration::from_secs(config.paxeer.poll_cadence_seconds),
-        delayed_after_polls: config.paxeer.delayed_after_polls,
-    };
-    let send = ActivityType::new(ModuleId::Asset, 5)
-        .map_err(|_| "asset send activity rejected".to_owned())?;
-    let receive = ActivityType::new(ModuleId::Asset, 6)
-        .map_err(|_| "asset receive activity rejected".to_owned())?;
-    let registration = ModuleRegistration::new(ModuleId::Asset, &[send, receive])
-        .map_err(|_| "asset registry rejected".to_owned())?;
-    let registry =
-        ModuleRegistry::new(&[registration]).map_err(|_| "module registry rejected".to_owned())?;
+    let paxeer_tracker_config = tracker_config(config, timeout)?;
+    let registry = asset_registry()?;
     let mut quotes = BTreeMap::new();
     for quote in &config.quotes {
         if quotes
@@ -439,6 +409,46 @@ fn build_state(config: &Config) -> Result<State, String> {
     })
 }
 
+fn asset_registry() -> Result<ModuleRegistry, String> {
+    let send = ActivityType::new(ModuleId::Asset, 5)
+        .map_err(|_| "asset send activity rejected".to_owned())?;
+    let receive = ActivityType::new(ModuleId::Asset, 6)
+        .map_err(|_| "asset receive activity rejected".to_owned())?;
+    let registration = ModuleRegistration::new(ModuleId::Asset, &[send, receive])
+        .map_err(|_| "asset registry rejected".to_owned())?;
+    let registry =
+        ModuleRegistry::new(&[registration]).map_err(|_| "module registry rejected".to_owned())?;
+    Ok(registry)
+}
+
+fn tracker_config(config: &Config, timeout: Duration) -> Result<TrackerConfig, String> {
+    let rpc_trust_anchor_der = fs::read(&config.paxeer.rpc_trust_anchor_der)
+        .map_err(|_| "Paxeer RPC trust anchor is unavailable".to_owned())?;
+    if rpc_trust_anchor_der.is_empty() {
+        return Err("Paxeer RPC trust anchor is empty".to_owned());
+    }
+    let paxeer_tracker_config = TrackerConfig {
+        endpoints: config
+            .paxeer
+            .rpc_endpoints
+            .iter()
+            .map(|url| EndpointConfig {
+                url: url.clone(),
+                request_timeout: timeout,
+                transport: EndpointTransport::PinnedTls {
+                    trust_anchor_der: rpc_trust_anchor_der.clone(),
+                },
+                expected_chain_id: config.paxeer.rpc_chain_id,
+            })
+            .collect(),
+        minimum_endpoint_agreement: config.paxeer.rpc_minimum_agreement,
+        required_confirmations: config.paxeer.required_confirmations,
+        poll_cadence: Duration::from_secs(config.paxeer.poll_cadence_seconds),
+        delayed_after_polls: config.paxeer.delayed_after_polls,
+    };
+    Ok(paxeer_tracker_config)
+}
+
 fn configured_key(value: &str, label: &str) -> Result<[u8; 32], String> {
     let key = parse_hex32(value).map_err(|_| format!("{label} key rejected"))?;
     if key == [0; 32] {
@@ -469,12 +479,11 @@ fn secret_text(path: &PathBuf) -> Result<String, String> {
 }
 
 fn serve(stream: TcpStream, acceptor: &TlsAcceptor, state: &State) {
-    let mut tls = match acceptor.accept(stream) {
-        Ok(tls) => tls,
-        Err(_) => return,
+    let Ok(mut tls) = acceptor.accept(stream) else {
+        return;
     };
     let response = read_request(&mut tls)
-        .and_then(|request| route(state, request))
+        .and_then(|request| route(state, &request))
         .unwrap_or_else(|response| response);
     let _ = tls.write_all(&response.encode());
     let _ = tls.flush();
@@ -588,7 +597,7 @@ fn read_request(stream: &mut TlsStream<TcpStream>) -> Result<Request, Response> 
     })
 }
 
-fn route(state: &State, request: Request) -> Result<Response, Response> {
+fn route(state: &State, request: &Request) -> Result<Response, Response> {
     if request.method == "GET" && request.path == "/livez" {
         return Ok(ok(json!({ "live": true })));
     }
@@ -608,31 +617,7 @@ fn route(state: &State, request: Request) -> Result<Response, Response> {
         });
     }
     if request.method == "POST" && request.path == "/v1/orders" {
-        let principal = authenticate(state, &request)?;
-        let create: CreateOrder =
-            serde_json::from_slice(&request.body).map_err(|_| error(400, "order_invalid"))?;
-        let mut journal = state
-            .journal
-            .lock()
-            .map_err(|_| error(503, "journal_unavailable"))?;
-        if let Some(existing) = journal.order_by_id(&create.order_id) {
-            if existing.order.customer != principal
-                || existing.order.quote.quote_id != create.quote_id
-                || existing.order.payer_grant != create.payer_grant
-            {
-                return Err(error(409, "order_id_conflict"));
-            }
-            return Ok(created(&existing.presentation()));
-        }
-        let quote = state
-            .quotes
-            .get(&create.quote_id)
-            .cloned()
-            .ok_or_else(|| error(404, "quote_not_found"))?;
-        let order = RampOrder::bind(create, quote, principal, state.operator.clone(), now())
-            .map_err(map_error)?;
-        let snapshot = journal.create_order(order, now()).map_err(map_error)?;
-        return Ok(created(&snapshot.presentation()));
+        return create_order(state, request);
     }
     if request.method == "POST" && request.path == "/v1/provider-callbacks" {
         let callback: ProviderCallback =
@@ -644,14 +629,14 @@ fn route(state: &State, request: Request) -> Result<Response, Response> {
         let mut engine = engine(state, &mut journal);
         engine
             .provider_callback(&callback, &state.provider_callback_public_key, now())
-            .map_err(map_error)?;
+            .map_err(|error| map_error(&error))?;
         return Ok(ok(json!({ "accepted": true })));
     }
     if let Some(digest) = request.path.strip_prefix("/v1/orders/") {
         if request.method != "GET" || digest.contains('/') {
             return Err(error(404, "not_found"));
         }
-        let principal = authenticate(state, &request)?;
+        let principal = authenticate(state, request)?;
         let digest = parse_hex32(digest).map_err(|_| error(400, "order_digest_invalid"))?;
         let journal = state
             .journal
@@ -670,116 +655,16 @@ fn route(state: &State, request: Request) -> Result<Response, Response> {
         })));
     }
     if request.method == "POST" && request.path == "/internal/v1/work" {
-        require_operator(state, &request)?;
-        let work: Work =
-            serde_json::from_slice(&request.body).map_err(|_| error(400, "work_invalid"))?;
-        let mut journal = state
-            .journal
-            .lock()
-            .map_err(|_| error(503, "journal_unavailable"))?;
-        let mut engine = engine(state, &mut journal);
-        match work.action {
-            WorkAction::Compliance => engine.evaluate_compliance(work.order_digest, now()),
-            WorkAction::SubmitProvider => engine.submit_provider(work.order_digest, now()),
-            WorkAction::ReconcileProvider => engine.reconcile_provider(work.order_digest, now()),
-            WorkAction::SubmitLayerx => match work.account_sequence {
-                Some(sequence) => engine.submit_layerx(work.order_digest, sequence, now()),
-                None => Err(RampError::InvalidOrder),
-            },
-            WorkAction::ResolveLayerx => engine.resolve_layerx(work.order_digest, now()),
-        }
-        .map_err(map_error)?;
-        let snapshot = journal
-            .order(&work.order_digest)
-            .ok_or_else(|| error(404, "order_not_found"))?;
-        return Ok(ok(json!({
-            "stage": snapshot.stage,
-            "presentation": snapshot.presentation()
-        })));
+        return perform_work(state, request);
     }
     if request.method == "POST" && request.path == "/internal/v1/rebalances" {
-        require_operator(state, &request)?;
-        let action: Rebalance =
-            serde_json::from_slice(&request.body).map_err(|_| error(400, "rebalance_invalid"))?;
-        let mut journal = state
-            .journal
-            .lock()
-            .map_err(|_| error(503, "journal_unavailable"))?;
-        let mut rebalancer = InventoryRebalancer {
-            journal: &mut journal,
-            custody: &state.paxeer,
-        };
-        return match action {
-            Rebalance::Submit {
-                asset,
-                amount,
-                idempotency_key,
-            } => {
-                let (operation_id, transaction) = rebalancer
-                    .submit(asset, amount, idempotency_key, now())
-                    .map_err(map_error)?;
-                Ok(accepted(json!({
-                    "operation_id": operation_id,
-                    "transaction_hash": format!("0x{}", layerx_ramp_toolkit::clients::hex(&transaction.bytes())),
-                    "status": "broadcast_unknown"
-                })))
-            }
-            Rebalance::Poll {
-                idempotency_key,
-                operation_id,
-                transaction_hash,
-            } => {
-                let transaction = TransactionHash::from_hex(&transaction_hash)
-                    .map_err(|_| error(400, "transaction_hash_invalid"))?;
-                let mut trackers = state
-                    .paxeer_trackers
-                    .lock()
-                    .map_err(|_| error(503, "paxeer_tracker_unavailable"))?;
-                if !trackers.contains_key(&idempotency_key) {
-                    let tracker =
-                        FinalityTracker::new(state.paxeer_tracker_config.clone(), transaction)
-                            .map_err(|_| error(503, "paxeer_tracker_unavailable"))?;
-                    trackers.insert(idempotency_key, tracker);
-                }
-                let tracker = trackers
-                    .get_mut(&idempotency_key)
-                    .ok_or_else(|| error(503, "paxeer_tracker_unavailable"))?;
-                if tracker.transaction() != transaction {
-                    return Err(error(409, "rebalance_transaction_conflict"));
-                }
-                let report = rebalancer
-                    .poll(idempotency_key, &operation_id, tracker, now())
-                    .map_err(map_error)?;
-                let persisted = journal
-                    .paxeer(&idempotency_key)
-                    .ok_or_else(|| error(404, "rebalance_not_found"))?;
-                Ok(ok(json!({
-                    "operation_id": operation_id,
-                    "transaction_hash": transaction_hash,
-                    "status": persisted.stage,
-                    "confirmations": report.progress().confirmed,
-                    "required_confirmations": report.progress().required,
-                    "chain": chain_signal(&report.signal()),
-                    "endpoints": endpoint_signal(&report.endpoint())
-                })))
-            }
-            Rebalance::Reconcile { idempotency_key } => {
-                let (operation_id, transaction) = rebalancer
-                    .reconcile(idempotency_key, now())
-                    .map_err(map_error)?;
-                Ok(accepted(json!({
-                    "operation_id": operation_id,
-                    "transaction_hash": format!("0x{}", layerx_ramp_toolkit::clients::hex(&transaction.bytes())),
-                    "status": "broadcast_unknown"
-                })))
-            }
-        };
+        return rebalance(state, request);
     }
     if let Some(idempotency) = request.path.strip_prefix("/internal/v1/rebalances/") {
         if request.method != "GET" || idempotency.contains('/') {
             return Err(error(404, "not_found"));
         }
-        require_operator(state, &request)?;
+        require_operator(state, request)?;
         let idempotency =
             parse_hex32(idempotency).map_err(|_| error(400, "idempotency_key_invalid"))?;
         let journal = state
@@ -801,6 +686,146 @@ fn route(state: &State, request: Request) -> Result<Response, Response> {
         })));
     }
     Err(error(404, "not_found"))
+}
+
+fn create_order(state: &State, request: &Request) -> Result<Response, Response> {
+    let principal = authenticate(state, request)?;
+    let create: CreateOrder =
+        serde_json::from_slice(&request.body).map_err(|_| error(400, "order_invalid"))?;
+    let mut journal = state
+        .journal
+        .lock()
+        .map_err(|_| error(503, "journal_unavailable"))?;
+    if let Some(existing) = journal.order_by_id(&create.order_id) {
+        if existing.order.customer != principal
+            || existing.order.quote.quote_id != create.quote_id
+            || existing.order.payer_grant != create.payer_grant
+        {
+            return Err(error(409, "order_id_conflict"));
+        }
+        return Ok(created(existing.presentation()));
+    }
+    let quote = state
+        .quotes
+        .get(&create.quote_id)
+        .cloned()
+        .ok_or_else(|| error(404, "quote_not_found"))?;
+    let order = RampOrder::bind(create, quote, principal, state.operator.clone(), now())
+        .map_err(|error| map_error(&error))?;
+    let snapshot = journal
+        .create_order(order, now())
+        .map_err(|error| map_error(&error))?;
+    Ok(created(snapshot.presentation()))
+}
+
+fn perform_work(state: &State, request: &Request) -> Result<Response, Response> {
+    require_operator(state, request)?;
+    let work: Work =
+        serde_json::from_slice(&request.body).map_err(|_| error(400, "work_invalid"))?;
+    let mut journal = state
+        .journal
+        .lock()
+        .map_err(|_| error(503, "journal_unavailable"))?;
+    let mut engine = engine(state, &mut journal);
+    match work.action {
+        WorkAction::Compliance => engine.evaluate_compliance(work.order_digest, now()),
+        WorkAction::SubmitProvider => engine.submit_provider(work.order_digest, now()),
+        WorkAction::ReconcileProvider => engine.reconcile_provider(work.order_digest, now()),
+        WorkAction::SubmitLayerx => match work.account_sequence {
+            Some(sequence) => engine.submit_layerx(work.order_digest, sequence, now()),
+            None => Err(RampError::InvalidOrder),
+        },
+        WorkAction::ResolveLayerx => engine.resolve_layerx(work.order_digest, now()),
+    }
+    .map_err(|error| map_error(&error))?;
+    let snapshot = journal
+        .order(&work.order_digest)
+        .ok_or_else(|| error(404, "order_not_found"))?;
+    Ok(ok(json!({
+        "stage": snapshot.stage,
+        "presentation": snapshot.presentation()
+    })))
+}
+
+fn rebalance(state: &State, request: &Request) -> Result<Response, Response> {
+    require_operator(state, request)?;
+    let action: Rebalance =
+        serde_json::from_slice(&request.body).map_err(|_| error(400, "rebalance_invalid"))?;
+    let mut journal = state
+        .journal
+        .lock()
+        .map_err(|_| error(503, "journal_unavailable"))?;
+    let mut rebalancer = InventoryRebalancer {
+        journal: &mut journal,
+        custody: &state.paxeer,
+    };
+    match action {
+        Rebalance::Submit {
+            asset,
+            amount,
+            idempotency_key,
+        } => {
+            let (operation_id, transaction) = rebalancer
+                .submit(asset, amount, idempotency_key, now())
+                .map_err(|error| map_error(&error))?;
+            Ok(accepted(json!({
+                "operation_id": operation_id,
+                "transaction_hash": format!("0x{}", layerx_ramp_toolkit::clients::hex(&transaction.bytes())),
+                "status": "broadcast_unknown"
+            })))
+        }
+        Rebalance::Poll {
+            idempotency_key,
+            operation_id,
+            transaction_hash,
+        } => {
+            let transaction = TransactionHash::from_hex(&transaction_hash)
+                .map_err(|_| error(400, "transaction_hash_invalid"))?;
+            let mut trackers = state
+                .paxeer_trackers
+                .lock()
+                .map_err(|_| error(503, "paxeer_tracker_unavailable"))?;
+            if let std::collections::btree_map::Entry::Vacant(entry) =
+                trackers.entry(idempotency_key)
+            {
+                let tracker =
+                    FinalityTracker::new(state.paxeer_tracker_config.clone(), transaction)
+                        .map_err(|_| error(503, "paxeer_tracker_unavailable"))?;
+                entry.insert(tracker);
+            }
+            let tracker = trackers
+                .get_mut(&idempotency_key)
+                .ok_or_else(|| error(503, "paxeer_tracker_unavailable"))?;
+            if tracker.transaction() != transaction {
+                return Err(error(409, "rebalance_transaction_conflict"));
+            }
+            let report = rebalancer
+                .poll(idempotency_key, &operation_id, tracker, now())
+                .map_err(|error| map_error(&error))?;
+            let persisted = journal
+                .paxeer(&idempotency_key)
+                .ok_or_else(|| error(404, "rebalance_not_found"))?;
+            Ok(ok(json!({
+                "operation_id": operation_id,
+                "transaction_hash": transaction_hash,
+                "status": persisted.stage,
+                "confirmations": report.progress().confirmed,
+                "required_confirmations": report.progress().required,
+                "chain": chain_signal(&report.signal()),
+                "endpoints": endpoint_signal(&report.endpoint())
+            })))
+        }
+        Rebalance::Reconcile { idempotency_key } => {
+            let (operation_id, transaction) = rebalancer
+                .reconcile(idempotency_key, now())
+                .map_err(|error| map_error(&error))?;
+            Ok(accepted(json!({
+                "operation_id": operation_id,
+                "transaction_hash": format!("0x{}", layerx_ramp_toolkit::clients::hex(&transaction.bytes())),
+                "status": "broadcast_unknown"
+            })))
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -884,12 +909,11 @@ fn engine<'a>(state: &'a State, journal: &'a mut Journal) -> RampEngine<'a> {
     }
 }
 
-fn reconcile_loop(state: Arc<State>, cadence: Duration) {
+fn reconcile_loop(state: &State, cadence: Duration) {
     loop {
         thread::sleep(cadence);
-        let mut journal = match state.journal.lock() {
-            Ok(journal) => journal,
-            Err(_) => continue,
+        let Ok(mut journal) = state.journal.lock() else {
+            continue;
         };
         let due = journal.orders();
         for snapshot in due {
@@ -910,7 +934,7 @@ fn reconcile_loop(state: Arc<State>, cadence: Duration) {
             {
                 continue;
             }
-            let mut worker = engine(&state, &mut journal);
+            let mut worker = engine(state, &mut journal);
             let result = match snapshot.stage {
                 WorkflowStage::ProviderSubmissionPlanned
                 | WorkflowStage::ProviderSubmittedUnknown
@@ -991,7 +1015,7 @@ fn json_response(status: u16, value: impl Serialize) -> Response {
     }
 }
 
-fn map_error(error_value: RampError) -> Response {
+fn map_error(error_value: &RampError) -> Response {
     match error_value {
         RampError::InvalidOrder | RampError::InvalidPrincipal | RampError::OrderBinding => {
             error(400, "request_refused")

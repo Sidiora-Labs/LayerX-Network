@@ -2181,3 +2181,27 @@ symbol = "platform-lint"
 observed = "make platform-lint exits 2 in qual-logs/au18/platform-lint.log at cargo clippy --offline --manifest-path platform/Cargo.toml --locked --workspace --all-targets -- -D warnings. The first error is missing_errors_doc for hosted/testnet/src/lib.rs:26 validate. Concurrent jobs next report unused_mut at hosted/registry/src/builder.rs:723, missing_errors_doc at hosted/dashboard/src/gateway.rs:52 and must_use_candidate at gateway.rs:73. Later aggregate lint stages do not execute."
 assumption = "These diagnostics are outside emulator ownership and are recorded without repairs. Registry stash 32964687 remains untouched. No aggregate lint success is claimed."
 severity = "blocker"
+
+[observation.5.2.platform-cli-default-credential-test-boundary]
+task = "5.2"
+file = "platform/cli/src/credential.rs platform/cli/tests/common/mod.rs platform/cli/tests/commands.rs"
+symbol = "configure_store auth_status_reports_no_token_for_a_fresh_environment key_lifecycle_metadata_persists_in_configuration"
+observed = "Working-tree CLI strict all-target Clippy exits 0 in qual-logs/au19/cli-clippy-recheck.log. cargo test --locked --manifest-path platform/Cargo.toml -p layerx-platform-cli exits 101 in qual-logs/au19/cli-test.log: 37 unit tests pass; commands.rs passes 16 tests and fails auth_status_reports_no_token_for_a_fresh_environment and key_lifecycle_metadata_persists_in_configuration because the default binary refuses the test harness credential-store override. Later integration targets do not execute. The harness requests the mock store while configure_store permits that override only behind test-credential-store. The lint repair leaves both that refusal and the existing assertions intact."
+assumption = "CLI source remains uncommitted because its required default-feature test gate does not pass. Enabling the mock credential-store feature or changing the production refusal is not a qualifying repair. Real credential-store test infrastructure requires separate scope. The exact touched source paths are listed in qual-logs/au19/cli-files.txt; all command attempts, exit codes and log paths are in qual-logs/au19/results.jsonl."
+severity = "blocker"
+
+[observation.5.2.platform-lint-registry-only-error-boundary]
+task = "5.2"
+file = "platform/hosted/registry/src/auth.rs platform/hosted/registry/src/builder.rs platform/hosted/registry/src/node_state.rs platform/hosted/registry/src/program_state.rs platform/hosted/registry/src/routes.rs platform/Makefile.inc"
+symbol = "platform-lint"
+observed = "make platform-lint exits 2 at platform/Makefile.inc:106 after workspace all-target Clippy exits 101. All 23 emitted errors are in the excluded registry library: unused_mut, dead_code, missing_errors_doc, too_many_arguments, needless_pass_by_value, suspicious_open_options and too_many_lines. Programs runtime and sandbox dependencies also emit nonfatal private-interface, unused-variable and dead-code warnings. Evidence: qual-logs/au19/platform-lint-registry-boundary.log. The workspace policy command, marketplace guest Clippy, dependency-policy script and cargo-deny stages do not execute."
+assumption = "This result includes uncommitted CLI lint repairs whose default-feature tests remain blocked as separately recorded. The pushed source does not include those CLI repairs and is not claimed to reach the same registry-only error boundary. Registry source and its retained stash are unchanged; its test import remains a separately deferred dependency. No assertion, bound, validation, authorization, encoding, tracing or lint policy is relaxed."
+severity = "blocker"
+
+[observation.5.2.platform-remaining-crate-lint-gates]
+task = "5.2"
+file = "platform/hosted/testnet/src/lib.rs platform/hosted/dashboard/src/gateway.rs platform/hosted/dashboard/src/model.rs platform/hosted/dashboard/src/service.rs platform/hosted/dashboard/src/main.rs platform/ramps/reference/src/main.rs"
+symbol = "TestnetConfig::validate Dashboard Store route build_state"
+observed = "For layerx-platform-testnet, layerx-platform-dashboard and layerx-reference-ramp, cargo clippy --locked --manifest-path platform/Cargo.toml -p PACKAGE --all-targets -- -D warnings and cargo test --locked --manifest-path platform/Cargo.toml -p PACKAGE each exit 0. Testnet passes nine tests, dashboard discovers zero tests and reference ramp passes one connection-bound test. Touched-file rustfmt checks exit 0. Exact commands, exits and log paths are in qual-logs/au19/results.jsonl, with testnet-clippy.log, testnet-test.log, dashboard-clippy-final.log, dashboard-test.log, ramp-clippy-final.log and ramp-test.log as the final crate evidence."
+assumption = "These focused gates do not establish passing aggregate platform lint or deployment qualification. Error documentation follows existing failure branches; expression, borrowing and helper extraction repairs preserve existing runtime checks. No manifest, lockfile or task status is changed."
+severity = "note"
