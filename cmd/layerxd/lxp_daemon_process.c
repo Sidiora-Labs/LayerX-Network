@@ -1833,6 +1833,10 @@ static lxp_result publish_canonical_batch(
             process->owner.published_receipt_log = *process->owner.history->log;
             process->owner.published_receipt_log.capacity =
                 process->owner.published_receipt_log.write_offset;
+            process->owner.published_batch_number =
+                process->receipt_authority.last_batch_number;
+            (void)memcpy(process->owner.published_checkpoint_id,
+                         process->evidence_store.latest_checkpoint_id, 32U);
             if (pthread_mutex_unlock(&process->owner.receipt_mutex) != 0)
                 status = LXP_FATAL_INVARIANT;
         }
