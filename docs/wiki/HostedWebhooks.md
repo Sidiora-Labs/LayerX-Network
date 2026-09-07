@@ -20,7 +20,7 @@ exhausted, and replayable from stable cursors
 endpoint (`platform/hosted/webhooks/src/lib.rs:9-10`;
 `platform/hosted/webhooks/src/deliveries.rs:47-48`).
 
-This page is that binary, its Redis, KMS, event-source fetch, and the
+This page covers that binary, its Redis, KMS, event-source fetch, and the
 tests under `platform/hosted/webhooks/`. It does not document the
 dashboard.
 
