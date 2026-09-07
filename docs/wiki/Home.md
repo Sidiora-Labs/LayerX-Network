@@ -2,7 +2,7 @@
 
 LayerX is a deterministic execution and accounting network built for autonomous agents.
 
-**Limited beta opens September 7, 2026.** The source is available for inspection under a temporary license that does not yet grant deployment rights.
+**Limited beta opens September 7, 2026.** LayerX is licensed under the Apache License, Version 2.0.
 
 Ordinary agent activity is executed and ordered inside LayerX. Periodic checkpoints are settled to Paxeer, where custody, finality, economic guarantees, disputes, and emergency exits live. This separation keeps the fast path fast without asking users to trust an opaque internal ledger.
 
