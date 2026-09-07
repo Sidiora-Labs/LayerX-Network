@@ -28,9 +28,10 @@ pub(super) fn register(linker: &mut Linker<RuntimeState>) -> Result<(), Executio
              signature_pointer: i32,
              signature_length: i32|
              -> i32 {
-                let algorithm = match SignatureAlgorithm::decode(algorithm as u32) {
-                    Ok(algorithm) => algorithm,
-                    Err(_) => return STATUS_INVALID,
+                let Ok(algorithm) =
+                    SignatureAlgorithm::decode(u32::from_ne_bytes(algorithm.to_ne_bytes()))
+                else {
+                    return STATUS_INVALID;
                 };
 
                 if let Err(status) = charge_signature_fuel(&mut caller, algorithm) {
@@ -48,11 +49,11 @@ pub(super) fn register(linker: &mut Linker<RuntimeState>) -> Result<(), Executio
                         Err(status) => return status,
                     };
 
-                let signature =
-                    match read_guest(&caller, signature_pointer, signature_length, 128) {
-                        Ok(signature) => signature,
-                        Err(status) => return status,
-                    };
+                let signature = match read_guest(&caller, signature_pointer, signature_length, 128)
+                {
+                    Ok(signature) => signature,
+                    Err(status) => return status,
+                };
 
                 let result = match algorithm {
                     SignatureAlgorithm::Ed25519 => {
@@ -66,18 +67,24 @@ pub(super) fn register(linker: &mut Linker<RuntimeState>) -> Result<(), Executio
 
                 match result {
                     Ok(()) => 0,
-                    Err(SignatureRefusal::InvalidAlgorithm) => STATUS_INVALID,
-                    Err(SignatureRefusal::InvalidMessageLength) => STATUS_INVALID,
-                    Err(SignatureRefusal::MalformedPublicKey) => STATUS_INVALID,
-                    Err(SignatureRefusal::MalformedSignature) => STATUS_INVALID,
                     Err(SignatureRefusal::VerificationFailed) => STATUS_VERIFY_FAILED,
-                    Err(SignatureRefusal::InvalidRecoveryId)
-                    | Err(SignatureRefusal::RecoveryFailed) => STATUS_INVALID,
+                    Err(
+                        SignatureRefusal::InvalidAlgorithm
+                        | SignatureRefusal::InvalidMessageLength
+                        | SignatureRefusal::MalformedPublicKey
+                        | SignatureRefusal::MalformedSignature
+                        | SignatureRefusal::InvalidRecoveryId
+                        | SignatureRefusal::RecoveryFailed,
+                    ) => STATUS_INVALID,
                 }
             },
         )
         .map_err(|error| linker_fault(&error))?;
 
+    register_recovery(linker)
+}
+
+fn register_recovery(linker: &mut Linker<RuntimeState>) -> Result<(), ExecutionFault> {
     linker
         .func_wrap(
             crate::abi::ABI_V2_MODULE,
@@ -103,29 +110,30 @@ pub(super) fn register(linker: &mut Linker<RuntimeState>) -> Result<(), Executio
                         Err(status) => return status,
                     };
 
-                let signature =
-                    match read_guest(&caller, signature_pointer, signature_length, 128) {
-                        Ok(signature) => signature,
-                        Err(status) => return status,
-                    };
+                let signature = match read_guest(&caller, signature_pointer, signature_length, 128)
+                {
+                    Ok(signature) => signature,
+                    Err(status) => return status,
+                };
 
-                if recovery_id < 0 || recovery_id > 3 {
+                if !(0..=3).contains(&recovery_id) {
                     return STATUS_INVALID;
                 }
 
-                let public_key =
-                    match recover_secp256k1(&message_digest, &signature, recovery_id as u8) {
-                        Ok(public_key) => public_key,
-                        Err(SignatureRefusal::InvalidMessageLength) => return STATUS_INVALID,
-                        Err(SignatureRefusal::MalformedSignature) => return STATUS_INVALID,
-                        Err(SignatureRefusal::InvalidRecoveryId) => return STATUS_INVALID,
-                        Err(SignatureRefusal::RecoveryFailed) => return STATUS_VERIFY_FAILED,
-                        Err(_) => return STATUS_INVALID,
-                    };
+                let public_key = match recover_secp256k1(
+                    &message_digest,
+                    &signature,
+                    recovery_id.to_le_bytes()[0],
+                ) {
+                    Ok(public_key) => public_key,
+                    Err(SignatureRefusal::RecoveryFailed) => return STATUS_VERIFY_FAILED,
+                    Err(_) => return STATUS_INVALID,
+                };
 
-                if output_capacity < 0
-                    || (output_capacity as usize) < SECP256K1_UNCOMPRESSED_PUBLIC_KEY_BYTES
-                {
+                let Ok(output_capacity) = usize::try_from(output_capacity) else {
+                    return STATUS_BOUNDS;
+                };
+                if output_capacity < SECP256K1_UNCOMPRESSED_PUBLIC_KEY_BYTES {
                     return STATUS_BOUNDS;
                 }
 

@@ -18,7 +18,7 @@ const WASM_SECTION: u16 = 0;
 const HOOK_SECTION: u16 = 1;
 
 unsafe extern "C" {
-    /// Returns one C-owned activity byte as `0..=255`, or a negative LayerX
+    /// Returns one C-owned activity byte as `0..=255`, or a negative `LayerX`
     /// refusal. The token and bytes are valid only for this synchronous call.
     fn layerx_programs_migration_activity_byte(token: u64, section: u16, offset: u32) -> i32;
 }
@@ -92,9 +92,8 @@ pub extern "C" fn layerx_programs_migration_execute_activity(
     for (chunk, word) in code_hash.chunks_exact_mut(8).zip([h0, h1, h2, h3]) {
         chunk.copy_from_slice(&word.to_be_bytes());
     }
-    let owner = match crate::cache::runtime_artifacts() {
-        Ok(owner) => owner,
-        Err(_) => return RESULT_FATAL_INVARIANT,
+    let Ok(owner) = crate::cache::runtime_artifacts() else {
+        return RESULT_FATAL_INVARIANT;
     };
     let mut schedule_bytes = [0_u8; 76];
     schedule_bytes[..4].copy_from_slice(&metering_schedule_version.to_be_bytes());
@@ -108,28 +107,26 @@ pub extern "C" fn layerx_programs_migration_execute_activity(
         meter_func_locals_per_fuel,
         meter_memory_bytes_per_fuel,
         meter_table_elements_per_fuel,
-    ].into_iter().enumerate() {
+    ]
+    .into_iter()
+    .enumerate()
+    {
         let start = 4 + index * 8;
         schedule_bytes[start..start + 8].copy_from_slice(&coefficient.to_be_bytes());
     }
-    let schedule = match crate::FuelSchedule::from_protocol_bytes(&schedule_bytes) {
-        Ok(schedule) => schedule,
-        Err(_) => return RESULT_NON_CANONICAL,
+    let Ok(schedule) = crate::FuelSchedule::from_protocol_bytes(&schedule_bytes) else {
+        return RESULT_NON_CANONICAL;
     };
-    let cache_key = match ModuleCacheKey::for_wasm_with_schedule(
+    let Ok(cache_key) = ModuleCacheKey::for_wasm_with_schedule(
         code_hash,
         crate::RUNTIME_VERSION,
         abi_version,
         &wasm,
         schedule,
-    ) {
-        Ok(key) => key,
-        Err(_) => return RESULT_NON_CANONICAL,
+    ) else {
+        return RESULT_NON_CANONICAL;
     };
-    let module = match owner.get_or_compile(
-        cache_key,
-        &wasm,
-    ) {
+    let module = match owner.get_or_compile(cache_key, &wasm) {
         Ok(module) => module,
         Err(RuntimeArtifactOwnerRefusal::Compilation(_)) => return RESULT_NON_CANONICAL,
         Err(

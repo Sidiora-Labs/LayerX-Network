@@ -60,7 +60,8 @@ impl Display for ReplayRefusal {
                 write!(f, "unknown metering schedule version {version}")
             }
             Self::MeteringPlanMismatch { recorded, artifact } => write!(
-                f, "recorded metering schedule {recorded} differs from artifact {artifact}"
+                f,
+                "recorded metering schedule {recorded} differs from artifact {artifact}"
             ),
             Self::Engine(reason) => write!(f, "engine refusal: {reason}"),
             Self::Validation(reason) => write!(f, "validation refusal: {reason}"),
@@ -131,8 +132,8 @@ impl ExecutorRevision {
             self.runtime_version,
             self.abi_version,
         )
-            .execute(&module, record.export, record.args)
-            .map_err(ReplayRefusal::Execution)?;
+        .execute(&module, record.export, record.args)
+        .map_err(ReplayRefusal::Execution)?;
         result.runtime_version = self.runtime_version;
         result.abi_version = self.abi_version;
         Ok(result.canonical_evidence())
@@ -287,16 +288,29 @@ pub struct TraceRunnerSubmission {
 }
 
 impl TraceRunnerArtifact {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the attestation signature has an invalid length.
     pub fn attach_attestation_signature(mut self, signature: &[u8]) -> Result<Self, String> {
-        if signature.len() != 64 { return Err("trace artifact attestation signature length is invalid".to_string()) }
+        if signature.len() != 64 {
+            return Err("trace artifact attestation signature length is invalid".to_string());
+        }
         self.attestation_signature.copy_from_slice(signature);
         Ok(self)
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if artifact fields cannot be canonically encoded.
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, String> {
-        if self.executable_identity == [0; 32] || self.build_manifest_identity == [0; 32]
-            || self.platform_identity.is_empty() || self.attestation_signature.len() != 64 {
-            return Err("trace artifact runner provenance is empty".to_string())
+        if self.executable_identity == [0; 32]
+            || self.build_manifest_identity == [0; 32]
+            || self.platform_identity.is_empty()
+            || self.attestation_signature.len() != 64
+        {
+            return Err("trace artifact runner provenance is empty".to_string());
         }
         let platform_len = u16::try_from(self.platform_identity.len())
             .map_err(|_| "trace artifact platform identity exceeds u16".to_string())?;
@@ -314,42 +328,88 @@ impl TraceRunnerArtifact {
         Ok(bytes)
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for malformed or noncanonical artifact bytes.
     pub fn from_canonical_bytes(bytes: &[u8]) -> Result<Self, String> {
         const DOMAIN: &[u8] = b"LXP/trace-runner-artifact/v1\0";
         let mut cursor = DOMAIN.len();
-        if !bytes.starts_with(DOMAIN) { return Err("trace artifact domain mismatch".to_string()) }
-        let executable_identity = bytes.get(cursor..cursor + 32)
-            .and_then(|value| value.try_into().ok()).ok_or_else(|| "trace artifact executable identity truncated".to_string())?;
+        if !bytes.starts_with(DOMAIN) {
+            return Err("trace artifact domain mismatch".to_string());
+        }
+        let executable_identity = bytes
+            .get(cursor..cursor + 32)
+            .and_then(|value| value.try_into().ok())
+            .ok_or_else(|| "trace artifact executable identity truncated".to_string())?;
         cursor += 32;
-        let build_manifest_identity = bytes.get(cursor..cursor + 32)
-            .and_then(|value| value.try_into().ok()).ok_or_else(|| "trace artifact build manifest identity truncated".to_string())?;
+        let build_manifest_identity = bytes
+            .get(cursor..cursor + 32)
+            .and_then(|value| value.try_into().ok())
+            .ok_or_else(|| "trace artifact build manifest identity truncated".to_string())?;
         cursor += 32;
-        let workload_identity = bytes.get(cursor..cursor + 32)
-            .and_then(|value| value.try_into().ok()).ok_or_else(|| "trace artifact workload identity truncated".to_string())?;
+        let workload_identity = bytes
+            .get(cursor..cursor + 32)
+            .and_then(|value| value.try_into().ok())
+            .ok_or_else(|| "trace artifact workload identity truncated".to_string())?;
         cursor += 32;
-        let platform_len = bytes.get(cursor..cursor + 2)
-            .and_then(|value| value.try_into().ok()).map(u16::from_be_bytes)
+        let platform_len = bytes
+            .get(cursor..cursor + 2)
+            .and_then(|value| value.try_into().ok())
+            .map(u16::from_be_bytes)
             .ok_or_else(|| "trace artifact platform length truncated".to_string())?;
         cursor += 2;
-        let platform_end = cursor.checked_add(usize::from(platform_len)).ok_or_else(|| "trace artifact platform length overflow".to_string())?;
-        let platform_identity = bytes.get(cursor..platform_end).ok_or_else(|| "trace artifact platform identity truncated".to_string())?.to_vec();
+        let platform_end = cursor
+            .checked_add(usize::from(platform_len))
+            .ok_or_else(|| "trace artifact platform length overflow".to_string())?;
+        let platform_identity = bytes
+            .get(cursor..platform_end)
+            .ok_or_else(|| "trace artifact platform identity truncated".to_string())?
+            .to_vec();
         cursor = platform_end;
-        let evidence_len = bytes.get(cursor..cursor + 8)
-            .and_then(|value| value.try_into().ok()).map(u64::from_be_bytes)
+        let evidence_len = bytes
+            .get(cursor..cursor + 8)
+            .and_then(|value| value.try_into().ok())
+            .map(u64::from_be_bytes)
             .and_then(|value| usize::try_from(value).ok())
             .ok_or_else(|| "trace artifact evidence length invalid".to_string())?;
-        if evidence_len > 128 * 1_024 * 1_024 { return Err("trace artifact evidence exceeds bound".to_string()) }
+        if evidence_len > 128 * 1_024 * 1_024 {
+            return Err("trace artifact evidence exceeds bound".to_string());
+        }
         cursor += 8;
-        let evidence_end = cursor.checked_add(evidence_len).ok_or_else(|| "trace artifact evidence length overflow".to_string())?;
-        let canonical_evidence = bytes.get(cursor..evidence_end).ok_or_else(|| "trace artifact evidence truncated".to_string())?.to_vec();
-        let signature_end = evidence_end.checked_add(64).ok_or_else(|| "trace artifact signature overflow".to_string())?;
-        let attestation_signature = bytes.get(evidence_end..signature_end).ok_or_else(|| "trace artifact signature truncated".to_string())?.to_vec();
-        if signature_end != bytes.len() { return Err("trace artifact has trailing bytes".to_string()) }
-        let artifact = Self { platform_identity, workload_identity, executable_identity, build_manifest_identity, canonical_evidence, attestation_signature };
+        let evidence_end = cursor
+            .checked_add(evidence_len)
+            .ok_or_else(|| "trace artifact evidence length overflow".to_string())?;
+        let canonical_evidence = bytes
+            .get(cursor..evidence_end)
+            .ok_or_else(|| "trace artifact evidence truncated".to_string())?
+            .to_vec();
+        let signature_end = evidence_end
+            .checked_add(64)
+            .ok_or_else(|| "trace artifact signature overflow".to_string())?;
+        let attestation_signature = bytes
+            .get(evidence_end..signature_end)
+            .ok_or_else(|| "trace artifact signature truncated".to_string())?
+            .to_vec();
+        if signature_end != bytes.len() {
+            return Err("trace artifact has trailing bytes".to_string());
+        }
+        let artifact = Self {
+            platform_identity,
+            workload_identity,
+            executable_identity,
+            build_manifest_identity,
+            canonical_evidence,
+            attestation_signature,
+        };
         artifact.canonical_bytes()?;
         Ok(artifact)
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the attested fields cannot be encoded.
     pub fn attestation_digest(&self) -> Result<[u8; 32], String> {
         let mut unsigned = self.clone();
         unsigned.attestation_signature = vec![0; 64];
@@ -359,6 +419,10 @@ impl TraceRunnerArtifact {
     }
 }
 
+///
+/// # Errors
+///
+/// Returns an error if execution, trace generation, or artifact encoding fails.
 pub fn programs_trace_runner_artifact(
     platform_identity: &[u8],
     executable_bytes: &[u8],
@@ -368,21 +432,45 @@ pub fn programs_trace_runner_artifact(
     args: &[WasmValue],
     policy: crate::TracePolicy,
 ) -> Result<TraceRunnerArtifact, String> {
-    if platform_identity.is_empty() || executable_bytes.is_empty() || build_manifest_bytes.is_empty() {
-        return Err("trace runner provenance is empty".to_string())
+    if platform_identity.is_empty()
+        || executable_bytes.is_empty()
+        || build_manifest_bytes.is_empty()
+    {
+        return Err("trace runner provenance is empty".to_string());
     }
-    let executable_identity = crate::hash_bytes(crate::HashAlgorithm::Sha256, executable_bytes).map_err(|error| error.to_string())?;
-    let build_manifest_identity = crate::hash_bytes(crate::HashAlgorithm::Sha256, build_manifest_bytes).map_err(|error| error.to_string())?;
+    let executable_identity = crate::hash_bytes(crate::HashAlgorithm::Sha256, executable_bytes)
+        .map_err(|error| error.to_string())?;
+    let build_manifest_identity =
+        crate::hash_bytes(crate::HashAlgorithm::Sha256, build_manifest_bytes)
+            .map_err(|error| error.to_string())?;
     let mut workload = b"LXP/program-trace-runner-workload/v1\0".to_vec();
-    workload.extend_from_slice(&u64::try_from(wasm.len()).map_err(|_| "trace workload module length exceeds u64".to_string())?.to_be_bytes());
+    workload.extend_from_slice(
+        &u64::try_from(wasm.len())
+            .map_err(|_| "trace workload module length exceeds u64".to_string())?
+            .to_be_bytes(),
+    );
     workload.extend_from_slice(wasm);
-    workload.extend_from_slice(&u64::try_from(export.len()).map_err(|_| "trace workload export length exceeds u64".to_string())?.to_be_bytes());
+    workload.extend_from_slice(
+        &u64::try_from(export.len())
+            .map_err(|_| "trace workload export length exceeds u64".to_string())?
+            .to_be_bytes(),
+    );
     workload.extend_from_slice(export.as_bytes());
-    workload.extend_from_slice(&u64::try_from(args.len()).map_err(|_| "trace workload argument count exceeds u64".to_string())?.to_be_bytes());
+    workload.extend_from_slice(
+        &u64::try_from(args.len())
+            .map_err(|_| "trace workload argument count exceeds u64".to_string())?
+            .to_be_bytes(),
+    );
     for argument in args {
         match argument {
-            WasmValue::I32(value) => { workload.push(0); workload.extend_from_slice(&value.to_be_bytes()); }
-            WasmValue::I64(value) => { workload.push(1); workload.extend_from_slice(&value.to_be_bytes()); }
+            WasmValue::I32(value) => {
+                workload.push(0);
+                workload.extend_from_slice(&value.to_be_bytes());
+            }
+            WasmValue::I64(value) => {
+                workload.push(1);
+                workload.extend_from_slice(&value.to_be_bytes());
+            }
         }
     }
     workload.extend_from_slice(&policy.canonical_bytes());
@@ -390,29 +478,29 @@ pub fn programs_trace_runner_artifact(
     let workload_identity = crate::hash_bytes(crate::HashAlgorithm::Sha256, &workload)
         .map_err(|error| error.to_string())?;
     let result = WasmEngine::declared()
-            .map_err(|error| error.to_string())
-            .and_then(|engine| engine.validate(wasm).map_err(|error| error.to_string()))
-            .and_then(|module| {
-                Executor::declared()
-                    .with_trace_policy(policy)
-                    .execute_traced(&module, export, args)
-                    .map_err(|error| error.to_string())?
-                    .canonical_evidence()
-                    .map_err(|error| error.to_string())
-            });
+        .map_err(|error| error.to_string())
+        .and_then(|engine| engine.validate(wasm).map_err(|error| error.to_string()))
+        .and_then(|module| {
+            Executor::declared()
+                .with_trace_policy(policy)
+                .execute_traced(&module, export, args)
+                .map_err(|error| error.to_string())?
+                .canonical_evidence()
+                .map_err(|error| error.to_string())
+        });
     let canonical_evidence = match result {
-            Ok(evidence) => {
-                let mut observed = vec![0];
-                observed.extend_from_slice(&evidence);
-                observed
-            }
-            Err(reason) => {
-                let mut observed = vec![1];
-                observed.extend_from_slice(&(reason.len() as u64).to_be_bytes());
-                observed.extend_from_slice(reason.as_bytes());
-                observed
-            }
-        };
+        Ok(evidence) => {
+            let mut observed = vec![0];
+            observed.extend_from_slice(&evidence);
+            observed
+        }
+        Err(reason) => {
+            let mut observed = vec![1];
+            observed.extend_from_slice(&(reason.len() as u64).to_be_bytes());
+            observed.extend_from_slice(reason.as_bytes());
+            observed
+        }
+    };
     Ok(TraceRunnerArtifact {
         platform_identity: platform_identity.to_vec(),
         workload_identity,
@@ -423,40 +511,59 @@ pub fn programs_trace_runner_artifact(
     })
 }
 
+///
+/// # Errors
+///
+/// Returns a mismatch if either submission fails verification or the traces disagree.
 pub fn programs_trace_differential_gate(
     first_submission: TraceRunnerSubmission,
     first_trust: &TraceRunnerTrust,
     second_submission: TraceRunnerSubmission,
     second_trust: &TraceRunnerTrust,
 ) -> Result<Vec<u8>, DifferentialMismatch> {
-    let first_artifact = first_submission.artifact.clone();
-    let second_artifact = second_submission.artifact.clone();
-    let verify = |artifact: &TraceRunnerArtifact, submission: &TraceRunnerSubmission, trust: &TraceRunnerTrust| {
-        let executable = crate::hash_bytes(crate::HashAlgorithm::Sha256, &submission.executable_bytes).ok();
-        let manifest = crate::hash_bytes(crate::HashAlgorithm::Sha256, &submission.build_manifest_bytes).ok();
+    let first_artifact = &first_submission.artifact;
+    let second_artifact = &second_submission.artifact;
+    let verify = |artifact: &TraceRunnerArtifact,
+                  submission: &TraceRunnerSubmission,
+                  trust: &TraceRunnerTrust| {
+        let executable =
+            crate::hash_bytes(crate::HashAlgorithm::Sha256, &submission.executable_bytes).ok();
+        let manifest = crate::hash_bytes(
+            crate::HashAlgorithm::Sha256,
+            &submission.build_manifest_bytes,
+        )
+        .ok();
         executable == Some(artifact.executable_identity)
             && manifest == Some(artifact.build_manifest_identity)
             && artifact.executable_identity == trust.executable_identity
             && artifact.build_manifest_identity == trust.build_manifest_identity
             && artifact.platform_identity == trust.platform_identity
             && artifact.attestation_digest().ok().is_some_and(|digest| {
-                crate::verify_ed25519(&digest, &trust.attestation_public_key, &artifact.attestation_signature).is_ok()
+                crate::verify_ed25519(
+                    &digest,
+                    &trust.attestation_public_key,
+                    &artifact.attestation_signature,
+                )
+                .is_ok()
             })
     };
     let structurally_valid = first_artifact.canonical_bytes().is_ok()
         && second_artifact.canonical_bytes().is_ok()
-        && verify(&first_artifact, &first_submission, first_trust)
-        && verify(&second_artifact, &second_submission, second_trust);
+        && verify(first_artifact, &first_submission, first_trust)
+        && verify(second_artifact, &second_submission, second_trust);
     let independent = first_artifact.platform_identity != second_artifact.platform_identity
         && first_trust.attestation_public_key != second_trust.attestation_public_key;
-    if !structurally_valid || !independent || first_artifact.workload_identity != second_artifact.workload_identity {
+    if !structurally_valid
+        || !independent
+        || first_artifact.workload_identity != second_artifact.workload_identity
+    {
         return Err(DifferentialMismatch {
-            first: first_artifact.canonical_evidence,
-            second: second_artifact.canonical_evidence,
+            first: first_submission.artifact.canonical_evidence,
+            second: second_submission.artifact.canonical_evidence,
         });
-    };
-    let first = first_artifact.canonical_evidence;
-    let second = second_artifact.canonical_evidence;
+    }
+    let first = first_submission.artifact.canonical_evidence;
+    let second = second_submission.artifact.canonical_evidence;
     if first != second {
         return Err(DifferentialMismatch { first, second });
     }
@@ -468,30 +575,45 @@ fn differential_observation(
     export: &str,
     args: &[WasmValue],
 ) -> Vec<u8> {
-    let mut instance = match module.instantiate_metered_retained_for_qualification(Meter::declared()) {
-        Ok(instance) => instance,
-        Err(failure) => {
-            let (fault, state) = *failure;
-            return refusal_observation(
-                &fault,
-                state.meter(),
-            );
-        }
-    };
+    let mut instance =
+        match module.instantiate_metered_retained_for_qualification(Meter::declared()) {
+            Ok(instance) => instance,
+            Err(failure) => {
+                let (fault, state) = *failure;
+                return refusal_observation(&fault, state.meter());
+            }
+        };
     let outputs = match instance.call(export, args) {
         Ok(outputs) => outputs,
         Err(fault) => {
-            return refusal_observation(
-                &fault,
-                instance.meter(),
-            );
+            return refusal_observation(&fault, instance.meter());
         }
     };
     let abi_version = match module.abi_revision() {
         crate::validate::AbiRevision::V1 => crate::ABI_V1_VERSION,
         crate::validate::AbiRevision::V2 => crate::ABI_V2_VERSION,
     };
-    success_observation(abi_version, module.metering_schedule_version(), outputs, instance.meter())
+    success_observation(
+        abi_version,
+        module.metering_schedule_version(),
+        outputs,
+        instance.meter(),
+    )
+}
+
+fn reference_instantiation_refusal(
+    error: &wasmi::Error,
+    store: &mut wasmi::Store<crate::host::RuntimeState>,
+) -> Vec<u8> {
+    let fault = crate::execute::fault_from_error(error);
+    let commit = commit_reference_store(store);
+    if fault == ExecutionFault::OutOfFuel {
+        store.data_mut().meter_mut().mark_cpu_exhausted();
+    }
+    if let Err(commit_fault) = commit {
+        return refusal_observation(&commit_fault, store.data().meter());
+    }
+    refusal_observation(&fault, store.data().meter())
 }
 
 fn legacy_reference_observation(
@@ -529,15 +651,12 @@ fn legacy_reference_observation(
         crate::ABI_V2_VERSION => crate::validate::AbiRevision::V2,
         _ => return validation_observation(&format!("unsupported ABI version {abi_version}")),
     };
-    let module = match crate::validate::validate_original_for_qualification(
-        &engine,
-        limits,
-        wasm,
-        revision,
-    ) {
-        Ok(module) => module,
-        Err(error) => return validation_observation(&error.to_string()),
-    };
+    let module =
+        match crate::validate::validate_original_for_qualification(&engine, limits, wasm, revision)
+        {
+            Ok(module) => module,
+            Err(error) => return validation_observation(&error.to_string()),
+        };
     let linker = match crate::host::linker(&engine) {
         Ok(linker) => linker,
         Err(fault) => return engine_observation(&fault.to_string()),
@@ -553,35 +672,13 @@ fn legacy_reference_observation(
     let pre = match linker.instantiate(&mut store, &module) {
         Ok(pre) => pre,
         Err(error) => {
-            let fault = crate::execute::fault_from_error(&error);
-            let commit = commit_reference_store(&mut store);
-            if fault == ExecutionFault::OutOfFuel {
-                store.data_mut().meter_mut().mark_cpu_exhausted();
-            }
-            if let Err(commit_fault) = commit {
-                return refusal_observation(&commit_fault, store.data().meter());
-            }
-            return refusal_observation(
-                &fault,
-                store.data().meter(),
-            );
+            return reference_instantiation_refusal(&error, &mut store);
         }
     };
     let instance = match pre.start(&mut store) {
         Ok(instance) => instance,
         Err(error) => {
-            let fault = crate::execute::fault_from_error(&error);
-            let commit = commit_reference_store(&mut store);
-            if fault == ExecutionFault::OutOfFuel {
-                store.data_mut().meter_mut().mark_cpu_exhausted();
-            }
-            if let Err(commit_fault) = commit {
-                return refusal_observation(&commit_fault, store.data().meter());
-            }
-            return refusal_observation(
-                &fault,
-                store.data().meter(),
-            );
+            return reference_instantiation_refusal(&error, &mut store);
         }
     };
     let mut instance = crate::ProgramInstance::new(store, instance);
@@ -594,20 +691,14 @@ fn legacy_reference_observation(
             outputs,
             instance.meter(),
         ),
-        (Err(fault), Ok(_)) | (Ok(_), Err(fault)) => refusal_observation(
-            &fault,
-            instance.meter(),
-        ),
+        (Err(fault), Ok(_)) | (Ok(_), Err(fault)) => refusal_observation(&fault, instance.meter()),
         (Err(outcome_fault), Err(commit_fault)) => {
             let fault = if outcome_fault == ExecutionFault::OutOfFuel {
                 outcome_fault
             } else {
                 commit_fault
             };
-            refusal_observation(
-                &fault,
-                instance.meter(),
-            )
+            refusal_observation(&fault, instance.meter())
         }
     }
 }
@@ -697,16 +788,28 @@ fn validation_observation(reason: &str) -> Vec<u8> {
     observation
 }
 
-fn commit_reference_store(store: &mut wasmi::Store<crate::host::RuntimeState>) -> Result<(), ExecutionFault> {
-    let consumed = store.fuel_consumed().ok_or_else(|| ExecutionFault::EngineFault {
-        reason: "legacy reference engine fuel is disabled".to_string(),
-    })?;
+fn commit_reference_store(
+    store: &mut wasmi::Store<crate::host::RuntimeState>,
+) -> Result<(), ExecutionFault> {
+    let consumed = store
+        .fuel_consumed()
+        .ok_or_else(|| ExecutionFault::EngineFault {
+            reason: "legacy reference engine fuel is disabled".to_string(),
+        })?;
     let committed = store.data().legacy_reference_engine_committed();
-    let guest = consumed.checked_sub(committed).ok_or_else(|| ExecutionFault::EngineFault {
-        reason: "legacy reference host fuel exceeded engine fuel".to_string(),
-    })?;
-    store.data_mut().meter_mut().charge_cpu(guest).map_err(|refusal| ExecutionFault::Resource { refusal })?;
-    store.data_mut().set_legacy_reference_engine_committed(consumed);
+    let guest = consumed
+        .checked_sub(committed)
+        .ok_or_else(|| ExecutionFault::EngineFault {
+            reason: "legacy reference host fuel exceeded engine fuel".to_string(),
+        })?;
+    store
+        .data_mut()
+        .meter_mut()
+        .charge_cpu(guest)
+        .map_err(|refusal| ExecutionFault::Resource { refusal })?;
+    store
+        .data_mut()
+        .set_legacy_reference_engine_committed(consumed);
     Ok(())
 }
 
@@ -725,6 +828,10 @@ pub fn programs_differential_gate(
     programs_differential_gate_versioned(crate::ABI_V1_VERSION, wasm, export, args)
 }
 
+///
+/// # Errors
+///
+/// Returns a mismatch if versioned execution fails or the execution results disagree.
 pub fn programs_differential_gate_versioned(
     abi_version: u16,
     wasm: &[u8],
@@ -743,7 +850,11 @@ pub fn programs_differential_gate_versioned(
         Ok(module) => module,
         Err(error) => {
             let second = validation_observation(&error.to_string());
-            return if first == second { Ok(second) } else { Err(DifferentialMismatch { first, second }) };
+            return if first == second {
+                Ok(second)
+            } else {
+                Err(DifferentialMismatch { first, second })
+            };
         }
     };
     let second = differential_observation(&module, export, args);
@@ -767,6 +878,10 @@ pub fn replay_recorded_execution(record: &RecordedExecution<'_>) -> Result<Vec<u
 /// Replays using the exact append-only governed schedule version recorded by
 /// the execution receipt. Unknown versions refuse rather than selecting the
 /// node's current schedule.
+///
+/// # Errors
+///
+/// Returns a replay refusal if schedule selection, execution, or recorded evidence verification fails.
 pub fn replay_recorded_execution_with_fee_history(
     record: &RecordedExecution<'_>,
     history: &FeeScheduleHistory,
@@ -871,7 +986,10 @@ mod tests {
                 let first = programs_fuzz_observation(target, input);
                 let second = programs_fuzz_observation(target, input);
                 assert_eq!(first, second, "fuzz observation diverged for {target:?}");
-                assert!(!first.is_empty(), "fuzz observation was empty for {target:?}");
+                assert!(
+                    !first.is_empty(),
+                    "fuzz observation was empty for {target:?}"
+                );
             }
         }
     }
@@ -879,7 +997,10 @@ mod tests {
     #[test]
     fn fuzz_observation_records_a_typed_validation_refusal_without_faulting() {
         let observation = programs_fuzz_observation(FuzzTarget::Validation, &[0x00, 0x61, 0x73]);
-        assert_eq!(observation.first().copied(), Some(super::OBSERVE_VALIDATION_REFUSED));
+        assert_eq!(
+            observation.first().copied(),
+            Some(super::OBSERVE_VALIDATION_REFUSED)
+        );
     }
 
     #[test]

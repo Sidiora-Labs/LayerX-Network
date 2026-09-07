@@ -49,7 +49,7 @@ pub(super) fn register(linker: &mut Linker<RuntimeState>) -> Result<(), Executio
                 };
                 let capabilities = match CapabilitySet::decode_canonical(&encoded) {
                     Ok(capabilities) => capabilities,
-                    Err(error) => return Ok(error_status(error)),
+                    Err(error) => return Ok(error_status(&error)),
                 };
                 if caller.data().authorization_abi().is_none()
                     || caller.data().composition().is_none()
@@ -173,7 +173,7 @@ pub(super) fn register_v2(linker: &mut Linker<RuntimeState>) -> Result<(), Execu
                 };
                 let capabilities = match CapabilitySet::decode_v2_canonical(&encoded) {
                     Ok(capabilities) => capabilities,
-                    Err(error) => return Ok(i64::from(error_status(error))),
+                    Err(error) => return Ok(i64::from(error_status(&error))),
                 };
                 if caller.data().authorization_abi().is_none()
                     || caller.data().composition().is_none()

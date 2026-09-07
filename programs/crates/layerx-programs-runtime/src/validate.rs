@@ -292,6 +292,10 @@ impl ValidatedModule {
             .map_err(|(fault, _)| fault)
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns an execution fault if instantiation fails or the module start function traps.
     pub fn instantiate_sandbox(
         &self,
         meter: Meter,
@@ -331,19 +335,6 @@ impl ValidatedModule {
         composition: Composition,
     ) -> Result<ProgramInstance, Box<(ExecutionFault, RuntimeState)>> {
         self.instantiate_state_retained(RuntimeState::composed(meter, abi, composition))
-    }
-
-    pub(crate) fn instantiate_composed_response_retained(
-        &self,
-        meter: Meter,
-        abi: Abi,
-        composition: Composition,
-        capacity: usize,
-    ) -> Result<
-        Result<ProgramInstance, Box<(ExecutionFault, RuntimeState)>>,
-        crate::abi::response::ResponseRefusal,
-    > {
-        self.instantiate_composed_response_context_retained(meter, abi, composition, capacity, None)
     }
 
     pub(crate) fn instantiate_composed_response_context_retained(
@@ -498,16 +489,7 @@ fn validate_original_module(
         })?;
         match payload {
             Payload::TypeSection(reader) => {
-                for entry in reader {
-                    let entry = entry.map_err(|error| ValidationRefusal::MalformedModule {
-                        reason: error.to_string(),
-                    })?;
-                    let Type::Func(func_type) = entry;
-                    for value_type in func_type.params().iter().chain(func_type.results()) {
-                        refuse_value_type(*value_type)?;
-                    }
-                    function_types.push(func_type);
-                }
+                validate_function_types(reader, &mut function_types)?;
             }
             Payload::ImportSection(reader) => {
                 for entry in reader {
@@ -538,19 +520,7 @@ fn validate_original_module(
                 }
             }
             Payload::ExportSection(reader) => {
-                for entry in reader {
-                    let entry = entry.map_err(|error| ValidationRefusal::MalformedModule {
-                        reason: error.to_string(),
-                    })?;
-                    if entry.kind == wasmparser_nostd::ExternalKind::Func {
-                        exported_functions.insert(entry.name.to_string(), entry.index);
-                    } else if entry.kind == wasmparser_nostd::ExternalKind::Global {
-                        exported_globals
-                            .entry(entry.index)
-                            .or_default()
-                            .push(entry.name.to_string());
-                    }
-                }
+                collect_exports(reader, &mut exported_functions, &mut exported_globals)?;
             }
             Payload::GlobalSection(reader) => {
                 for entry in reader {
@@ -579,26 +549,97 @@ fn validate_original_module(
             reason: "imported function count exceeds u32".into(),
         }
     })?;
-    let interface_entry_capability_masks = exported_functions
+    let interface_entry_capability_masks = entry_capability_masks(
+        exported_functions,
+        imported_function_count,
+        &imported_function_masks,
+        &function_calls,
+        all_imported_capability_mask,
+    );
+    let resumable_globals = resumable_global_names(&mutable_globals, &exported_globals)?;
+    Ok(OriginalValidation {
+        module,
+        byte_size,
+        function_count,
+        interface_entry_capability_masks,
+        resumable_globals,
+    })
+}
+
+fn validate_function_types(
+    reader: wasmparser_nostd::TypeSectionReader<'_>,
+    function_types: &mut Vec<wasmparser_nostd::FuncType>,
+) -> Result<(), ValidationRefusal> {
+    for entry in reader {
+        let entry = entry.map_err(|error| ValidationRefusal::MalformedModule {
+            reason: error.to_string(),
+        })?;
+        let Type::Func(func_type) = entry;
+        for value_type in func_type.params().iter().chain(func_type.results()) {
+            refuse_value_type(*value_type)?;
+        }
+        function_types.push(func_type);
+    }
+    Ok(())
+}
+
+fn collect_exports(
+    reader: wasmparser_nostd::ExportSectionReader<'_>,
+    exported_functions: &mut BTreeMap<String, u32>,
+    exported_globals: &mut BTreeMap<u32, Vec<String>>,
+) -> Result<(), ValidationRefusal> {
+    for entry in reader {
+        let entry = entry.map_err(|error| ValidationRefusal::MalformedModule {
+            reason: error.to_string(),
+        })?;
+        if entry.kind == wasmparser_nostd::ExternalKind::Func {
+            exported_functions.insert(entry.name.to_string(), entry.index);
+        } else if entry.kind == wasmparser_nostd::ExternalKind::Global {
+            exported_globals
+                .entry(entry.index)
+                .or_default()
+                .push(entry.name.to_string());
+        }
+    }
+    Ok(())
+}
+
+fn entry_capability_masks(
+    exported_functions: BTreeMap<String, u32>,
+    imported_function_count: u32,
+    imported_function_masks: &[u16],
+    function_calls: &[(Vec<u32>, bool)],
+    all_imported_capability_mask: u16,
+) -> BTreeMap<String, u16> {
+    exported_functions
         .into_iter()
         .map(|(name, function_index)| {
             let mask = reachable_interface_capabilities(
                 function_index,
                 imported_function_count,
-                &imported_function_masks,
-                &function_calls,
+                imported_function_masks,
+                function_calls,
                 all_imported_capability_mask,
             );
             (name, mask)
         })
-        .collect();
+        .collect()
+}
+
+fn resumable_global_names(
+    mutable_globals: &[bool],
+    exported_globals: &BTreeMap<u32, Vec<String>>,
+) -> Result<Option<Vec<String>>, ValidationRefusal> {
     let mut resumable_globals = Vec::new();
     let mut complete = true;
-    for (index, mutable) in mutable_globals.into_iter().enumerate() {
+    for (index, mutable) in mutable_globals.iter().copied().enumerate() {
         if !mutable {
             continue;
         }
-        let names = exported_globals.get(&(index as u32));
+        let index = u32::try_from(index).map_err(|_| ValidationRefusal::MalformedModule {
+            reason: "global index exceeds the Wasm index range".to_string(),
+        })?;
+        let names = exported_globals.get(&index);
         if let Some(names) = names.filter(|names| names.len() == 1) {
             resumable_globals.push(names[0].clone());
         } else {
@@ -606,13 +647,7 @@ fn validate_original_module(
         }
     }
     resumable_globals.sort();
-    Ok(OriginalValidation {
-        module,
-        byte_size,
-        function_count,
-        interface_entry_capability_masks,
-        resumable_globals: complete.then_some(resumable_globals),
-    })
+    Ok(complete.then_some(resumable_globals))
 }
 
 fn interface_calls(body: &FunctionBody<'_>) -> Result<(Vec<u32>, bool), ValidationRefusal> {

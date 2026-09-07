@@ -136,6 +136,10 @@ impl WasmEngine {
 
     /// Replays legacy schedule-one validation from the recorded ABI version.
     /// New protocol execution must use [`Self::validate_versioned_metered`].
+    ///
+    /// # Errors
+    ///
+    /// Returns a refusal for an unsupported ABI or invalid module.
     pub fn validate_versioned(
         &self,
         abi_version: u16,
@@ -145,6 +149,10 @@ impl WasmEngine {
     }
 
     /// Validates and instruments under the exact protocol-resolved schedule.
+    ///
+    /// # Errors
+    ///
+    /// Returns a refusal for an unsupported ABI, invalid module, or failed metering injection.
     pub fn validate_versioned_metered(
         &self,
         abi_version: u16,

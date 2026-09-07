@@ -1,7 +1,7 @@
 //! Deterministic scheduling for program activities with declared access sets.
 
-use std::fmt;
 use std::collections::BTreeSet;
+use std::fmt;
 use std::num::NonZeroUsize;
 use std::thread;
 
@@ -22,16 +22,25 @@ impl ProtocolScheduleEffects {
         if identities.iter().any(|identity| *identity == [0; 32]) {
             return None;
         }
-        Some(Self { accounts, identities })
+        Some(Self {
+            accounts,
+            identities,
+        })
     }
 
     pub(crate) fn empty() -> Self {
-        Self { accounts: AccessSet::empty(), identities: BTreeSet::new() }
+        Self {
+            accounts: AccessSet::empty(),
+            identities: BTreeSet::new(),
+        }
     }
 
     fn conflicts_with(&self, other: &Self) -> bool {
         self.accounts.conflicts_with(&other.accounts)
-            || self.identities.iter().any(|identity| other.identities.contains(identity))
+            || self
+                .identities
+                .iter()
+                .any(|identity| other.identities.contains(identity))
     }
 }
 
@@ -62,11 +71,8 @@ impl PreparedScheduleAccess {
         }
         let declaration = AccessDeclaration::canonical_decode(access_declaration)
             .map_err(|_| crate::AbiError::AccessDeclaration)?;
-        let reachable = crate::CapabilitySet::admitted_schedule_accesses(
-            capabilities,
-            program,
-            principal,
-        )?;
+        let reachable =
+            crate::CapabilitySet::admitted_schedule_accesses(capabilities, program, principal)?;
         let Some(protocol_effects) = protocol_effects else {
             return Ok(Self {
                 access: ScheduleAccess::conservative_absent(),
@@ -76,21 +82,16 @@ impl PreparedScheduleAccess {
             });
         };
         Ok(Self {
-            access: ScheduleAccess::from_admitted(
-                declaration,
-                reachable,
-                protocol_effects,
-            ),
+            access: ScheduleAccess::from_admitted(declaration, reachable, protocol_effects),
             canonical_payload: canonical_payload.to_vec(),
             activity_binding,
             payer,
         })
     }
 
-    pub(crate) const fn access(&self) -> &ScheduleAccess { &self.access }
-    pub(crate) fn canonical_payload(&self) -> &[u8] { &self.canonical_payload }
-    pub(crate) const fn activity_binding(&self) -> &[u8; 32] { &self.activity_binding }
-    pub(crate) const fn payer(&self) -> &[u8; 32] { &self.payer }
+    pub(crate) const fn access(&self) -> &ScheduleAccess {
+        &self.access
+    }
 }
 
 /// Conservative default that bounds node-local thread demand without entering
@@ -148,14 +149,13 @@ impl ScheduleAccess {
     }
 
     #[must_use]
-    pub const fn declaration(&self) -> &AccessDeclaration { &self.declaration }
+    pub const fn declaration(&self) -> &AccessDeclaration {
+        &self.declaration
+    }
 
     #[must_use]
-    pub const fn reachable(&self) -> &AccessSet { &self.reachable }
-
-    #[must_use]
-    pub(crate) fn protocol_effects(&self) -> Option<&ProtocolScheduleEffects> {
-        self.protocol_effects.as_ref()
+    pub const fn reachable(&self) -> &AccessSet {
+        &self.reachable
     }
 
     #[must_use]
@@ -218,14 +218,21 @@ impl ConflictGraph {
             activity_levels.push(level);
         }
 
-        Self { predecessors, dependency_levels }
+        Self {
+            predecessors,
+            dependency_levels,
+        }
     }
 
     #[must_use]
-    pub fn len(&self) -> usize { self.predecessors.len() }
+    pub fn len(&self) -> usize {
+        self.predecessors.len()
+    }
 
     #[must_use]
-    pub fn is_empty(&self) -> bool { self.predecessors.is_empty() }
+    pub fn is_empty(&self) -> bool {
+        self.predecessors.is_empty()
+    }
 
     #[must_use]
     pub fn conflicts(&self, earlier: usize, later: usize) -> bool {
@@ -241,7 +248,9 @@ impl ConflictGraph {
     }
 
     #[must_use]
-    pub fn dependency_levels(&self) -> &[Vec<usize>] { &self.dependency_levels }
+    pub fn dependency_levels(&self) -> &[Vec<usize>] {
+        &self.dependency_levels
+    }
 }
 
 /// Immutable schedule derived solely from canonical batch access information.
@@ -252,10 +261,14 @@ pub struct SchedulePlan {
 
 impl SchedulePlan {
     #[must_use]
-    pub const fn graph(&self) -> &ConflictGraph { &self.graph }
+    pub const fn graph(&self) -> &ConflictGraph {
+        &self.graph
+    }
 
     #[must_use]
-    pub fn dependency_levels(&self) -> &[Vec<usize>] { self.graph.dependency_levels() }
+    pub fn dependency_levels(&self) -> &[Vec<usize>] {
+        self.graph.dependency_levels()
+    }
 }
 
 /// Whether execution may use worker threads or deliberately refuses parallelism.
@@ -277,15 +290,20 @@ impl ParallelScheduler {
     pub fn parallel() -> Self {
         Self {
             strategy: SchedulingStrategy::Parallel,
-            maximum_workers: NonZeroUsize::new(DEFAULT_MAXIMUM_SCHEDULER_WORKERS)
-                .expect("scheduler worker default is nonzero"),
+            maximum_workers: const {
+                NonZeroUsize::new(DEFAULT_MAXIMUM_SCHEDULER_WORKERS)
+                    .expect("scheduler worker default is nonzero")
+            },
         }
     }
 
     /// Selects a worker bound without changing the graph, snapshots, or commit order.
     #[must_use]
     pub const fn parallel_with_workers(maximum_workers: NonZeroUsize) -> Self {
-        Self { strategy: SchedulingStrategy::Parallel, maximum_workers }
+        Self {
+            strategy: SchedulingStrategy::Parallel,
+            maximum_workers,
+        }
     }
 
     /// Safe refusal path for operators that cannot or choose not to parallelise.
@@ -298,14 +316,20 @@ impl ParallelScheduler {
     }
 
     #[must_use]
-    pub const fn strategy(self) -> SchedulingStrategy { self.strategy }
+    pub const fn strategy(self) -> SchedulingStrategy {
+        self.strategy
+    }
 
     #[must_use]
-    pub const fn maximum_workers(self) -> NonZeroUsize { self.maximum_workers }
+    pub const fn maximum_workers(self) -> NonZeroUsize {
+        self.maximum_workers
+    }
 
     #[must_use]
-    pub fn plan(self, accesses: &[ScheduleAccess]) -> SchedulePlan {
-        SchedulePlan { graph: ConflictGraph::from_accesses(accesses) }
+    pub fn plan(accesses: &[ScheduleAccess]) -> SchedulePlan {
+        SchedulePlan {
+            graph: ConflictGraph::from_accesses(accesses),
+        }
     }
 
     /// Executes each dependency level against one immutable snapshot. Results are
@@ -314,6 +338,10 @@ impl ParallelScheduler {
     /// Therefore an error drops the speculative state without leaking a partial
     /// commit. The infallible final callback runs in global canonical order. Serial
     /// strategy uses the identical snapshot, apply, and commit protocol.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for inconsistent inputs or any staged execution or application failure.
     pub fn execute_staged<T, S, R, E, Execute, Apply, Commit>(
         self,
         activities: &[T],
@@ -339,7 +367,7 @@ impl ParallelScheduler {
             });
         }
 
-        let plan = self.plan(accesses);
+        let plan = Self::plan(accesses);
         let mut completed: Vec<Option<R>> = (0..activities.len()).map(|_| None).collect();
         for level in plan.dependency_levels() {
             let view = speculative_state.clone();
@@ -348,13 +376,9 @@ impl ParallelScheduler {
                     .iter()
                     .map(|&index| (index, execute(&view, index, &activities[index])))
                     .collect(),
-                SchedulingStrategy::Parallel => execute_level(
-                    level,
-                    activities,
-                    &view,
-                    &execute,
-                    self.maximum_workers,
-                )?,
+                SchedulingStrategy::Parallel => {
+                    execute_level(level, activities, &view, &execute, self.maximum_workers)?
+                }
             };
             for (index, result) in staged {
                 let output = result.map_err(|source| ScheduleError::Activity { index, source })?;
@@ -372,8 +396,12 @@ impl ParallelScheduler {
 }
 
 impl Default for ParallelScheduler {
-    fn default() -> Self { Self::parallel() }
+    fn default() -> Self {
+        Self::parallel()
+    }
 }
+
+type StagedResults<R, E> = Vec<(usize, Result<R, E>)>;
 
 fn execute_level<T, S, R, E, Execute>(
     level: &[usize],
@@ -381,7 +409,7 @@ fn execute_level<T, S, R, E, Execute>(
     view: &S,
     execute: &Execute,
     maximum_workers: NonZeroUsize,
-) -> Result<Vec<(usize, Result<R, E>)>, ScheduleError<E>>
+) -> Result<StagedResults<R, E>, ScheduleError<E>>
 where
     T: Sync,
     S: Sync,
@@ -400,21 +428,22 @@ where
                     serial_tail.push((index, execute(view, index, &activities[index])));
                     continue;
                 }
-                match thread::Builder::new().spawn_scoped(scope, move || {
-                    execute(view, index, &activities[index])
-                }) {
-                    Ok(worker) => workers.push((index, worker)),
-                    Err(_) => {
-                        // Host thread availability is not protocol state. Keep
-                        // the same snapshot and stage the unspawned suffix here.
-                        refuse_parallel = true;
-                        serial_tail.push((index, execute(view, index, &activities[index])));
-                    }
+                if let Ok(worker) = thread::Builder::new()
+                    .spawn_scoped(scope, move || execute(view, index, &activities[index]))
+                {
+                    workers.push((index, worker));
+                } else {
+                    // Host thread availability is not protocol state. Keep
+                    // the same snapshot and stage the unspawned suffix here.
+                    refuse_parallel = true;
+                    serial_tail.push((index, execute(view, index, &activities[index])));
                 }
             }
             let mut results = Vec::with_capacity(workers.len() + serial_tail.len());
             for (index, worker) in workers {
-                let result = worker.join().map_err(|_| ScheduleError::WorkerPanicked { index })?;
+                let result = worker
+                    .join()
+                    .map_err(|_| ScheduleError::WorkerPanicked { index })?;
                 results.push((index, result));
             }
             results.extend(serial_tail);
@@ -438,13 +467,23 @@ pub enum ScheduleError<E> {
 impl<E: fmt::Display> fmt::Display for ScheduleError<E> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::LengthMismatch { activities, accesses } => write!(
+            Self::LengthMismatch {
+                activities,
+                accesses,
+            } => write!(
                 formatter,
                 "scheduler received {activities} activities but {accesses} access declarations",
             ),
-            Self::WorkerPanicked { index } => write!(formatter, "scheduler worker {index} panicked"),
-            Self::MissingResult { index } => write!(formatter, "scheduler produced no result for activity {index}"),
-            Self::Activity { index, source } => write!(formatter, "activity {index} failed: {source}"),
+            Self::WorkerPanicked { index } => {
+                write!(formatter, "scheduler worker {index} panicked")
+            }
+            Self::MissingResult { index } => write!(
+                formatter,
+                "scheduler produced no result for activity {index}"
+            ),
+            Self::Activity { index, source } => {
+                write!(formatter, "activity {index} failed: {source}")
+            }
         }
     }
 }

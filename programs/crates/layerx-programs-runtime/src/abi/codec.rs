@@ -1,4 +1,4 @@
-//! Canonical calldata encoding for LayerX programs.
+//! Canonical calldata encoding for `LayerX` programs.
 //!
 //! This module defines the frozen calldata encoding convention that ensures
 //! byte-identical encoding across SDKs and prevents digest collisions from
@@ -15,7 +15,7 @@ pub const DECODED_SIZE_LIMIT: usize = 16_777_216;
 /// Encoding convention discriminator.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EncodingConvention {
-    /// LayerX canonical encoding with strict validation.
+    /// `LayerX` canonical encoding with strict validation.
     LayerX,
     /// EVM head-only layout for ported contracts.
     EvmHeadOnly,
@@ -23,13 +23,17 @@ pub enum EncodingConvention {
 
 impl EncodingConvention {
     #[must_use]
-    pub const fn tag(&self) -> u8 {
+    pub const fn tag(self) -> u8 {
         match self {
             Self::LayerX => 0x01,
             Self::EvmHeadOnly => 0x02,
         }
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns `InvalidConvention` for an unrecognized convention tag.
     pub fn from_tag(tag: u8) -> Result<Self, CodecError> {
         match tag {
             0x01 => Ok(Self::LayerX),
@@ -98,7 +102,7 @@ impl From<MeterRefusal> for CodecError {
     }
 }
 
-/// Type discriminators for LayerX canonical encoding.
+/// Type discriminators for `LayerX` canonical encoding.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum TypeTag {
@@ -137,6 +141,10 @@ pub enum TypeTag {
 }
 
 impl TypeTag {
+    ///
+    /// # Errors
+    ///
+    /// Returns `InvalidType` for an unrecognized type discriminator.
     pub fn from_byte(byte: u8) -> Result<Self, CodecError> {
         match byte {
             0x10 => Ok(Self::U8),
@@ -160,7 +168,7 @@ impl TypeTag {
     }
 
     #[must_use]
-    pub const fn size_bytes(&self) -> Option<usize> {
+    pub const fn size_bytes(self) -> Option<usize> {
         match self {
             Self::U8 | Self::I8 => Some(1),
             Self::U16 | Self::I16 => Some(2),
@@ -168,11 +176,9 @@ impl TypeTag {
             Self::U64 | Self::I64 => Some(8),
             Self::U128 | Self::I128 => Some(16),
             Self::U256 => Some(32),
-            Self::Bytes
-            | Self::FixedArray
-            | Self::VariableArray
-            | Self::Option
-            | Self::Union => None,
+            Self::Bytes | Self::FixedArray | Self::VariableArray | Self::Option | Self::Union => {
+                None
+            }
         }
     }
 }
@@ -185,7 +191,7 @@ pub struct Calldata {
 }
 
 impl Calldata {
-    /// Creates an empty calldata buffer with LayerX convention.
+    /// Creates an empty calldata buffer with `LayerX` convention.
     #[must_use]
     pub fn new() -> Self {
         Self {

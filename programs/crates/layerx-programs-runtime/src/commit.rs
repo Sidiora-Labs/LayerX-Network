@@ -188,6 +188,10 @@ pub struct TracePolicy {
 }
 
 impl TracePolicy {
+    ///
+    /// # Errors
+    ///
+    /// Returns a policy refusal for an invalid interval or commitment bound.
     pub fn new(interval: u64, maximum_commitments: u32) -> Result<Self, CommitmentError> {
         if interval == 0 {
             return Err(CommitmentError::ZeroInterval);
@@ -319,11 +323,15 @@ impl ExecutionTrace {
         !self.arbitration_steps.is_empty()
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns a state-encoding, ordering, cost, or trace-limit refusal.
     pub fn record(
         &mut self,
         state: &ExecutionState,
     ) -> Result<Option<StepCommitment>, CommitmentError> {
-        if state.step_index % self.policy.interval != 0 {
+        if !state.step_index.is_multiple_of(self.policy.interval) {
             return Ok(None);
         }
         let commitment = StepCommitment::from_state(state)?;
@@ -437,9 +445,7 @@ impl ExecutionTrace {
             if self
                 .arbitration_commitments
                 .last()
-                .map_or(false, |previous| {
-                    previous.step_index == commitment.step_index
-                })
+                .is_some_and(|previous| previous.step_index == commitment.step_index)
                 || additions[..addition_count].iter().flatten().any(
                     |previous: &ArbitrationStepCommitment| {
                         previous.step_index == commitment.step_index
@@ -496,6 +502,10 @@ impl ExecutionTrace {
     }
 
     /// Receipt encoding binds both declared policy and the ordered chain.
+    ///
+    /// # Errors
+    ///
+    /// Returns a commitment encoding or size-limit refusal.
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, CommitmentError> {
         let mut bytes = Vec::with_capacity(20 + self.commitments.len() * 52);
         bytes.extend_from_slice(&STEP_COMMITMENT_VERSION.to_be_bytes());
@@ -515,6 +525,10 @@ impl ExecutionTrace {
     /// Canonical arbitration evidence. Legacy commitments remain embedded for
     /// receipt compatibility, but eligibility is established only by the
     /// complete v2 chain appended here.
+    ///
+    /// # Errors
+    ///
+    /// Returns an arbitration trace encoding or size-limit refusal.
     pub fn canonical_arbitration_bytes(&self) -> Result<Vec<u8>, CommitmentError> {
         if self.arbitration_commitments.is_empty() || self.arbitration_steps.is_empty() {
             return Err(CommitmentError::LegacyCommitmentNotArbitrable);
@@ -557,6 +571,10 @@ impl ExecutionTrace {
 
     /// Verifies frozen arbitration-trace evidence without manufacturing the
     /// execution witnesses intentionally omitted from receipt evidence.
+    ///
+    /// # Errors
+    ///
+    /// Returns a refusal for malformed, noncanonical, or inconsistent arbitration evidence.
     pub fn verify_canonical_arbitration_bytes(bytes: &[u8]) -> Result<(), CommitmentError> {
         if bytes.len() > MAX_ARBITRATION_STATE_BYTES {
             return Err(CommitmentError::ArbitrationStateTooLarge {
@@ -743,6 +761,10 @@ impl<'a> CanonicalTraceCursor<'a> {
 }
 
 impl StepCommitment {
+    ///
+    /// # Errors
+    ///
+    /// Returns a state-encoding, size-limit, or commitment-cost refusal.
     pub fn from_state(state: &ExecutionState) -> Result<Self, CommitmentError> {
         let encoded = state.canonical_bytes()?;
         let encoded_state_bytes =
@@ -766,12 +788,16 @@ impl StepCommitment {
     /// They omit transition-determining state and cannot be used by the
     /// single-step arbiter.
     #[must_use]
-    pub const fn arbitration_eligible(self) -> bool {
+    pub const fn arbitration_eligible() -> bool {
         false
     }
 }
 
 impl ArbitrationStepCommitment {
+    ///
+    /// # Errors
+    ///
+    /// Returns an arbitration state-encoding, size-limit, or commitment-cost refusal.
     pub fn from_state(state: &ArbitrationExecutionState) -> Result<Self, CommitmentError> {
         let encoded = state.canonical_bytes()?;
         let encoded_state_bytes = u32::try_from(encoded.len()).map_err(|_| {
@@ -819,6 +845,10 @@ impl ArbitrationStepCommitment {
     }
 }
 
+///
+/// # Errors
+///
+/// Returns `CostOverflow` if the commitment fuel calculation overflows.
 pub fn step_commitment_fuel(encoded_state_bytes: u64) -> Result<u64, CommitmentError> {
     STEP_COMMITMENT_BASE_FUEL
         .checked_add(
@@ -832,6 +862,10 @@ pub fn step_commitment_fuel(encoded_state_bytes: u64) -> Result<u64, CommitmentE
 /// Exact v2 state length shared by observer authorization, commitment hashing
 /// and receipt accounting. The fixed portion contains the v2 identity, three
 /// length/root fields and the host-state length.
+///
+/// # Errors
+///
+/// Returns a size or arithmetic refusal if the combined state cannot be represented.
 pub fn arbitration_step_state_bytes(
     legacy_state_bytes: u64,
     engine_state_bytes: u64,
@@ -845,6 +879,10 @@ pub fn arbitration_step_state_bytes(
         .ok_or(CommitmentError::CostOverflow)
 }
 
+///
+/// # Errors
+///
+/// Propagates state-size and commitment-fuel calculation refusals.
 pub fn arbitration_step_commitment_fuel(
     legacy_state_bytes: u64,
     engine_state_bytes: u64,
@@ -852,6 +890,10 @@ pub fn arbitration_step_commitment_fuel(
     arbitration_step_commitment_fuel_with_host(legacy_state_bytes, engine_state_bytes, 0)
 }
 
+///
+/// # Errors
+///
+/// Propagates combined state-size and commitment-fuel calculation refusals.
 pub fn arbitration_step_commitment_fuel_with_host(
     legacy_state_bytes: u64,
     engine_state_bytes: u64,
@@ -868,6 +910,10 @@ pub fn arbitration_step_commitment_fuel_with_host(
 
 impl ExecutionState {
     /// Produces the frozen, endian-independent state encoding.
+    ///
+    /// # Errors
+    ///
+    /// Returns a refusal for invalid or oversized execution state encoding.
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, CommitmentError> {
         validate_canonical_globals(&self.globals)?;
         validate_canonical_overlay(&self.storage_overlay)?;
@@ -934,6 +980,10 @@ impl ArbitrationExecutionState {
     /// Produces the separately versioned, endian-independent arbitration
     /// encoding after checking every component and the aggregate before the
     /// output allocation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a refusal for invalid or oversized arbitration state encoding.
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, CommitmentError> {
         if self.legacy.module_code_hash != self.identity.module_code_hash
             || self.legacy.input_digest != self.identity.input_digest
@@ -1307,9 +1357,9 @@ mod tests {
 
     #[test]
     fn legacy_commitment_is_not_an_arbitration_pre_state() {
-        let commitment =
+        let _commitment =
             StepCommitment::from_state(&golden_state()).expect("legacy golden state commits");
-        assert!(!commitment.arbitration_eligible());
+        assert!(!StepCommitment::arbitration_eligible());
         let trace = ExecutionTrace::new(TracePolicy::new(1, 2).expect("valid policy"));
         assert_eq!(
             trace.canonical_arbitration_bytes(),

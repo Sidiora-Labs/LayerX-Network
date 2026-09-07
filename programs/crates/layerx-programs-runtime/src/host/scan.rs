@@ -11,7 +11,7 @@ use super::memory::{nonnegative, read_guest, validate_output};
 use super::{error_status, linker_fault, RuntimeState, STATUS_BOUNDS};
 
 fn selector(raw: i32) -> Result<StorageSelector, i32> {
-    StorageSelector::try_from(raw).map_err(error_status)
+    StorageSelector::try_from(raw).map_err(|error| error_status(&error))
 }
 
 /// Registers `storage_scan_scoped` without changing the frozen V1 ABI.
@@ -71,18 +71,18 @@ pub(super) fn register_v2(linker: &mut Linker<RuntimeState>) -> Result<(), Execu
                 };
                 let limits = match ScanLimits::new(max_entries, max_bytes) {
                     Ok(limits) => limits,
-                    Err(error) => return error_status(error.into()),
+                    Err(error) => return error_status(&error.into()),
                 };
                 let page = match caller
                     .data_mut()
                     .with_abi(|abi, _| abi.storage_scan_preview(selected, &prefix, &cursor, limits))
                 {
                     Ok(page) => page,
-                    Err(error) => return error_status(error),
+                    Err(error) => return error_status(&error),
                 };
                 let encoded = match page.encode_for_guest() {
                     Ok(encoded) => encoded,
-                    Err(error) => return error_status(error.into()),
+                    Err(error) => return error_status(&error.into()),
                 };
                 if encoded.len() > output.capacity() {
                     return STATUS_BOUNDS;
@@ -91,7 +91,7 @@ pub(super) fn register_v2(linker: &mut Linker<RuntimeState>) -> Result<(), Execu
                     .data_mut()
                     .with_abi(|abi, meter| abi.charge_storage_scan(meter, selected, &page))
                 {
-                    return error_status(error);
+                    return error_status(&error);
                 }
                 if let Err(status) = output.write(&mut caller, &encoded) {
                     return status;

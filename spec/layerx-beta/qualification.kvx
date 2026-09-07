@@ -1652,3 +1652,59 @@ symbol = "WasmiParityRules inject build_control_flow_graph"
 observed = "wasm-instrument strict all-target all-feature Clippy exits 0 after deriving the equivalent default, replacing single Option iterations with if let, retaining exact Option comparisons, removing an unused mutable binding and using an array for cost summation. The test-only metered-block predicate retains its condition through matches. All 40 vendor unit tests pass, including real randomized Binaryen gas validation and stack-limiter tests. Runtime replay, determinism and hash_determinism pass 33 tests; interpreter conformance and ABI linker each pass two tests; ABI drift passes. The exact workspace Clippy command with layerx-programs-sandbox/host-ffi still exits 101 on 305 out-of-scope runtime library diagnostics, beginning with ffi_call.rs:2122,2127 needless_continue, host/signature.rs:74 unnested_or_patterns and transfer.rs similar_names. make programs-lint exits 2 at Makefile:2879 after module boundaries pass, before the dependency-policy and cargo-deny steps. Evidence: qual-logs/third-pass/vendor-clippy-final.log, vendor-tests.log, runtime-tests.log, interpreter.log, abi-drift.log, workspace-clippy-final.log and programs-lint.log."
 assumption = "The owned vendor repair does not qualify the whole workspace. Runtime source, dependency policy, manifests, lockfiles and assertions remain unchanged. The independently reproduced dependency-policy refusal is an additional blocker, not the first failure reached by make programs-lint."
 severity = "blocker"
+
+[observation.6.11.36]
+task = "6.11"
+file = "programs/vendor/wasm-instrument/src/gas_metering/validation.rs programs/vendor/wasm-instrument/Cargo.toml programs/Cargo.lock"
+symbol = "test_build_control_flow_graph"
+observed = "The metering validation corpus uses inline SplitMix64 with fixed seed 0x4c58_504d_4554_4552 and little-endian output words. It retains twenty 2048-byte inputs, real Binaryen translation, parity-wasm parsing, metered-block determination and every function validation/assertion. All 40 vendor unit tests pass through vendored resolution. Removing rand by cargo metadata resolution also removes getrandom, wasi, rand_chacha and ppv-lite86; rand_core remains at 0.6.4 with no features. No package versions, checksums or unrelated edges change. The unchanged dependency-policy script exits 0; cargo deny check advisories sources and cargo deny check bans --exclude-dev exit 0. Evidence: qual-logs/fourth-pass/vendor-tests-vendored.log, dependency-audit.log, policy-final.log, deny-advisories-sources.log and deny-bans.log."
+assumption = "The lockfile removal set includes rand_chacha and ppv-lite86 in addition to the explicitly enumerated entropy packages. Their removal is required by the resolved rand dependency closure. The fixed corpus provides reproducible real-module validation; it does not claim equivalence to unbounded random exploration."
+severity = "note"
+
+[observation.6.11.37]
+task = "6.11"
+file = "programs/crates/layerx-programs-runtime/src programs/crates/layerx-programs-interpreter/src/lib.rs programs/crates/layerx-programs-market/src/lib.rs programs/porting/cosmwasm/guest/src/lib.rs"
+symbol = "ExecutionError FeeSchedule::new_complete StepCommitment::arbitration_eligible settle_host_sandbox_escrow_charge OccupancyCharge::from_batch ParallelScheduler::plan"
+observed = "Behavior-preserving runtime repairs retain canonical field ordering, refusal checks, resource bounds and assertions while extracting private helpers, removing unused private wrappers, documenting errors and correcting strict lint findings. Runtime unit tests pass 144 cases; replay, determinism and hash_determinism pass 33 cases; interpreter conformance and ABI linker pass two cases each; ABI drift passes. Focused strict runtime/sandbox Clippy exits 101: the runtime library reports 100 errors, comprising 87 in excluded production paths and 13 retained public-signature or ExecutionError-dependent findings. Lib-test compilation reports 337 errors. Deduplicated primary diagnostics across those compilations comprise 87 excluded production, 13 retained production and 229 excluded test findings. The exact workspace Clippy command exits 101 with 110 observed errors in interpreter, market and CosmWasm guest targets. make programs-lint exits 2 at Makefile:2879 after module boundaries pass, before policy/deny recipes. Evidence: qual-logs/fourth-pass/runtime-unit.log, runtime-regressions.log, interpreter.log, abi-drift.log, runtime-clippy-current.log, runtime-clippy-current-diagnostics.json, workspace-clippy-current.log and programs-lint.log."
+assumption = "Remaining findings are not confined to excluded runtime files. ExecutionError representation repairs must retain all failure payloads; public constructor/accessor changes require coordinated callers, including sandbox and excluded runtime tests. No lint allowances, assertion changes or runtime test changes are introduced. The observed workspace failure set is not an exhaustive inventory of targets blocked by compilation."
+severity = "blocker"
+
+[observation.6.11.38]
+task = "6.11"
+file = "programs/crates/layerx-programs-runtime/src/access.rs programs/crates/layerx-programs-runtime/src/cache.rs programs/crates/layerx-programs-runtime/src/meter.rs programs/crates/layerx-programs-runtime/src/meter/inject.rs programs/crates/layerx-programs-runtime/src/occupancy.rs programs/crates/layerx-programs-runtime/src/qualification.rs"
+symbol = "rustfmt runtime test modules"
+observed = "Rustfmt is applied to touched production source. Production-prefix format checks pass and vendor formatting passes. Whole-file rustfmt exits 1 on pre-existing formatting in excluded inline runtime tests. Every named runtime test module remains byte-identical to HEAD. Evidence: qual-logs/fourth-pass/runtime-format-check.log, production-format-check.log, vendor-format-check.log and scope-audit-final.log."
+assumption = "Whole-file formatting cannot pass without formatting the excluded test modules. Production formatting does not qualify the protected test sections or the strict workspace gate."
+severity = "blocker"
+
+[observation.6.11.39]
+task = "6.11"
+file = "programs/crates/layerx-programs-runtime/src/ffi_call.rs programs/crates/layerx-programs-runtime/src/execute.rs programs/crates/layerx-programs-runtime/src/transfer.rs programs/crates/layerx-programs-runtime/src/calls.rs programs/crates/layerx-programs-runtime/src/crypto"
+symbol = "settle_host_sandbox_escrow_charge ExecutionError"
+observed = "The ffi_call.rs lint edits are restored to HEAD for the terminal-contract rewrite. Every diagnostic in the protected terminal files, the prior 87 excluded production findings, crypto findings and ExecutionError representation plus its forwarding result_large_err findings remain assigned to the terminal-contract repair. Exact prior inventory: qual-logs/fourth-pass/runtime-clippy-current-errors.txt and runtime-clippy-current-diagnostics.json. Current host-FFI library inventory: qual-logs/fifth-pass/runtime/clippy-host.jsonl and clippy-host-errors.txt; 151 diagnostics include 54 in restored ffi_call.rs, 52 in execute.rs, 18 in transfer.rs, 10 in calls.rs, seven in crypto, eight ExecutionError forwarding findings and two constructor argument-count findings."
+assumption = "This preserves terminal-contract ownership and does not claim a passing workspace lint gate."
+severity = "blocker"
+
+[observation.6.11.40]
+task = "6.11"
+file = "programs/crates/layerx-programs-runtime/src/meter.rs programs/crates/layerx-programs-runtime/src/schedule.rs programs/crates/layerx-programs-runtime/src/ffi_call.rs"
+symbol = "FeeSchedule::new_complete PreparedScheduleAccess::from_authenticated_call"
+observed = "The grouped FeeSchedule constructor requires protected production caller changes in ffi_call.rs:2454 and :3385, which still supply version and seven positional coefficients. Restoring ffi_call.rs also exposes E0061 at :314 against the grouped PreparedScheduleAccess constructor; its original eight-argument signature is retained to restore host-FFI compilation. Evidence: qual-logs/fifth-pass/runtime/lint.log and clippy-host-errors.txt. StepCommitment::arbitration_eligible and ParallelScheduler::plan are associated functions, with the same legacy negative assertion and Self::plan scheduling path; OccupancyCharge::start_batch retains the original accessor value."
+assumption = "Two owned production argument-count findings cannot be removed without coordinated protected caller edits. No compatibility fallback, lint allowance or assertion weakening is introduced."
+severity = "blocker"
+
+[observation.6.11.41]
+task = "6.11"
+file = "programs/crates/layerx-programs-runtime/tests/signature_vectors.rs programs/crates/layerx-programs-runtime/tests/storage_scan.rs"
+symbol = "signature_vectors storage_scan"
+observed = "Full locked runtime tests with the built interpreter Wasm supplied fail seven signature-vector assertions and three storage-scan assertions. Running both targets against HEAD with all runtime repairs stashed reproduces the same ten failing cases. Signature failures include malformed-input refusal mismatches and a published secp256k1 vector; scan failures include page byte counts, pagination fuel and expected rollback refusal. Evidence: qual-logs/fifth-pass/runtime/tests-vendored.log, baseline-failures.log and baseline-comparison.log."
+assumption = "The baseline comparison identifies these failures as pre-existing. Their code and assertions remain intact; passing unit and other integration targets do not qualify the full runtime suite."
+severity = "blocker"
+
+[observation.6.11.42]
+task = "6.11"
+file = "programs/crates/layerx-programs-runtime/src"
+symbol = "runtime lint qualification"
+observed = "Final touched-file rustfmt check, ABI drift, interpreter conformance, unchanged dependency policy and both cargo-deny commands exit 0. Full locked runtime tests execute 396 passing cases and ten baseline-reproduced failures with none ignored, including all 144 passing unit tests. make programs-lint exits 2; its first refusal is programs/crates/layerx-programs-interpreter/tests/conformance.rs:67 ignored_unit_patterns, and the runtime library reports 151 diagnostics. The six protected inline test modules equal rustfmt applied to HEAD byte-for-byte. Evidence: qual-logs/fifth-pass/runtime-final/gates.md and its named logs, runtime/baseline-comparison.log and runtime/test-format-audit.log."
+assumption = "Independent lint repairs are qualified by passing focused targets; the full suite and workspace lint remain blocked by recorded defects and protected caller migrations."
+severity = "blocker"

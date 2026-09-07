@@ -37,7 +37,7 @@ pub(super) fn register(linker: &mut Linker<RuntimeState>) -> Result<(), Executio
                     .with_abi(|abi, _| abi.request_transfer(asset, recipient, amount))
                 {
                     Ok(()) => 0,
-                    Err(error) => error_status(error),
+                    Err(error) => error_status(&error),
                 }
             },
         )
@@ -91,7 +91,7 @@ pub(super) fn register_v2(linker: &mut Linker<RuntimeState>) -> Result<(), Execu
                     abi.request_program_transfer(&seed, source, asset, recipient, amount)
                 }) {
                     Ok(()) => 0,
-                    Err(error) => error_status(error),
+                    Err(error) => error_status(&error),
                 }
             },
         )
@@ -135,7 +135,7 @@ pub(super) fn register_v2(linker: &mut Linker<RuntimeState>) -> Result<(), Execu
                     abi.request_program_funding(&seed, destination, asset, amount)
                 }) {
                     Ok(()) => 0,
-                    Err(error) => error_status(error),
+                    Err(error) => error_status(&error),
                 }
             },
         )

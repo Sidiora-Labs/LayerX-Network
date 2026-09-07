@@ -5,15 +5,12 @@ use std::collections::BTreeSet;
 
 use crate::accounts::{derive_program_account, ProgramAccountError};
 use crate::crypto::{hash_bytes, HashAlgorithm};
-use crate::storage::{
-    PrincipalId, ProgramId, StorageNamespace, MAX_STORAGE_KEY_BYTES,
-};
+use crate::storage::{PrincipalId, ProgramId, StorageNamespace, MAX_STORAGE_KEY_BYTES};
 
 /// Domain separating an access set from every other canonical artifact.
 pub const ACCESS_SET_DOMAIN: &[u8] = b"LayerX/programs/access-set/v1\0";
 /// Domain separating presence or absence of a declaration from its access set.
-pub const ACCESS_DECLARATION_DOMAIN: &[u8] =
-    b"LayerX/programs/access-declaration/v1\0";
+pub const ACCESS_DECLARATION_DOMAIN: &[u8] = b"LayerX/programs/access-declaration/v1\0";
 
 /// Maximum storage scopes in one explicit access set.
 pub const MAX_ACCESS_STORAGE_ENTRIES: usize = 1_024;
@@ -25,8 +22,8 @@ pub const MAX_ACCESS_CALLEE_ENTRIES: usize = 512;
 /// Maximum canonical byte length of a present or absent access declaration.
 pub const MAX_ACCESS_DECLARATION_BYTES: usize = 1_048_576;
 /// Maximum access-set bytes transportable inside that declaration envelope.
-pub const MAX_ACCESS_SET_BYTES: usize = MAX_ACCESS_DECLARATION_BYTES
-    - ACCESS_DECLARATION_DOMAIN.len() - 1 - 4;
+pub const MAX_ACCESS_SET_BYTES: usize =
+    MAX_ACCESS_DECLARATION_BYTES - ACCESS_DECLARATION_DOMAIN.len() - 1 - 4;
 
 /// Charge units added for each account/asset declaration, separately from its
 /// canonical encoded bytes.
@@ -116,10 +113,7 @@ impl KeyAccess {
     ///
     /// Refuses empty or oversized bounds and intervals whose start is not
     /// strictly before their end.
-    pub fn range(
-        start: impl AsRef<[u8]>,
-        end: impl AsRef<[u8]>,
-    ) -> Result<Self, AccessRefusal> {
+    pub fn range(start: impl AsRef<[u8]>, end: impl AsRef<[u8]>) -> Result<Self, AccessRefusal> {
         let start = start.as_ref();
         let end = end.as_ref();
         validate_exact_key(start)?;
@@ -187,10 +181,7 @@ impl KeyAccess {
                     end: requested_end,
                 },
             ) => range_inside_prefix(declared, requested_start, requested_end),
-            (
-                Self::Range { start, end },
-                Self::Exact(key),
-            ) => start <= key && key < end,
+            (Self::Range { start, end }, Self::Exact(key)) => start <= key && key < end,
             (
                 Self::Range { start, end },
                 Self::Range {
@@ -198,10 +189,8 @@ impl KeyAccess {
                     end: requested_end,
                 },
             ) => start <= requested_start && requested_end <= end,
-            (Self::Range { start, end }, Self::Prefix(prefix)) => {
-                prefix_successor(prefix)
-                    .is_some_and(|upper| start.as_slice() <= prefix && upper.as_slice() <= end)
-            }
+            (Self::Range { start, end }, Self::Prefix(prefix)) => prefix_successor(prefix)
+                .is_some_and(|upper| start.as_slice() <= prefix && upper.as_slice() <= end),
             (Self::Exact(_), Self::Prefix(_) | Self::Range { .. }) => false,
         }
     }
@@ -209,8 +198,9 @@ impl KeyAccess {
     fn overlaps(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Exact(left), Self::Exact(right)) => left == right,
-            (Self::Exact(key), Self::Prefix(prefix))
-            | (Self::Prefix(prefix), Self::Exact(key)) => key.starts_with(prefix),
+            (Self::Exact(key), Self::Prefix(prefix)) | (Self::Prefix(prefix), Self::Exact(key)) => {
+                key.starts_with(prefix)
+            }
             (Self::Exact(key), Self::Range { start, end })
             | (Self::Range { start, end }, Self::Exact(key)) => start <= key && key < end,
             (Self::Prefix(left), Self::Prefix(right)) => {
@@ -421,7 +411,9 @@ impl AccessSet {
         let mut set = Self::new(storage, accounts)?;
         for callee in callees {
             if set.callees.len() == MAX_ACCESS_CALLEE_ENTRIES {
-                return Err(AccessRefusal::TooManyCalleeEntries { limit: MAX_ACCESS_CALLEE_ENTRIES });
+                return Err(AccessRefusal::TooManyCalleeEntries {
+                    limit: MAX_ACCESS_CALLEE_ENTRIES,
+                });
             }
             if !set.callees.insert(callee) {
                 return Err(AccessRefusal::DuplicateCalleeAccess);
@@ -467,7 +459,9 @@ impl AccessSet {
     }
 
     #[must_use]
-    pub fn callees(&self) -> impl ExactSizeIterator<Item = &ProgramId> { self.callees.iter() }
+    pub fn callees(&self) -> impl ExactSizeIterator<Item = &ProgramId> {
+        self.callees.iter()
+    }
 
     #[must_use]
     pub fn is_empty(&self) -> bool {
@@ -482,14 +476,16 @@ impl AccessSet {
     /// Refuses an entry count, key bound, or total encoding length outside the
     /// frozen limits.
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, AccessRefusal> {
-        let storage_count = u16::try_from(self.storage.len())
-            .map_err(|_| AccessRefusal::TooManyStorageEntries {
+        let storage_count = u16::try_from(self.storage.len()).map_err(|_| {
+            AccessRefusal::TooManyStorageEntries {
                 limit: MAX_ACCESS_STORAGE_ENTRIES,
-            })?;
-        let account_count = u16::try_from(self.accounts.len())
-            .map_err(|_| AccessRefusal::TooManyAccountEntries {
+            }
+        })?;
+        let account_count = u16::try_from(self.accounts.len()).map_err(|_| {
+            AccessRefusal::TooManyAccountEntries {
                 limit: MAX_ACCESS_ACCOUNT_ENTRIES,
-            })?;
+            }
+        })?;
         let mut encoded = Vec::new();
         encoded.extend_from_slice(ACCESS_SET_DOMAIN);
         encoded.extend_from_slice(&storage_count.to_be_bytes());
@@ -504,10 +500,14 @@ impl AccessSet {
             encoded.extend_from_slice(&access.asset);
             encoded.push(access.mode.tag());
         }
-        let callee_count = u16::try_from(self.callees.len())
-            .map_err(|_| AccessRefusal::TooManyCalleeEntries { limit: MAX_ACCESS_CALLEE_ENTRIES })?;
+        let callee_count =
+            u16::try_from(self.callees.len()).map_err(|_| AccessRefusal::TooManyCalleeEntries {
+                limit: MAX_ACCESS_CALLEE_ENTRIES,
+            })?;
         encoded.extend_from_slice(&callee_count.to_be_bytes());
-        for callee in &self.callees { encoded.extend_from_slice(&callee.bytes()); }
+        for callee in &self.callees {
+            encoded.extend_from_slice(&callee.bytes());
+        }
         if encoded.len() > MAX_ACCESS_SET_BYTES {
             return Err(AccessRefusal::EncodingTooLarge {
                 length: encoded.len(),
@@ -564,12 +564,16 @@ impl AccessSet {
         }
         let callee_count = usize::from(cursor.take_u16()?);
         if callee_count > MAX_ACCESS_CALLEE_ENTRIES {
-            return Err(AccessRefusal::TooManyCalleeEntries { limit: MAX_ACCESS_CALLEE_ENTRIES });
+            return Err(AccessRefusal::TooManyCalleeEntries {
+                limit: MAX_ACCESS_CALLEE_ENTRIES,
+            });
         }
         let mut callees = Vec::with_capacity(callee_count);
         for _ in 0..callee_count {
-            callees.push(ProgramId::new(cursor.take_array()?)
-                .map_err(|_| AccessRefusal::MalformedCanonicalBytes)?);
+            callees.push(
+                ProgramId::new(cursor.take_array()?)
+                    .map_err(|_| AccessRefusal::MalformedCanonicalBytes)?,
+            );
         }
         if !cursor.is_empty() {
             return Err(AccessRefusal::MalformedCanonicalBytes);
@@ -589,11 +593,9 @@ impl AccessSet {
     /// bound.
     pub fn commitment(&self) -> Result<[u8; 32], AccessRefusal> {
         let encoded = self.canonical_bytes()?;
-        hash_bytes(HashAlgorithm::Sha256, &encoded).map_err(|_| {
-            AccessRefusal::EncodingTooLarge {
-                length: encoded.len(),
-                limit: MAX_ACCESS_SET_BYTES,
-            }
+        hash_bytes(HashAlgorithm::Sha256, &encoded).map_err(|_| AccessRefusal::EncodingTooLarge {
+            length: encoded.len(),
+            limit: MAX_ACCESS_SET_BYTES,
         })
     }
 
@@ -612,8 +614,8 @@ impl AccessSet {
                 .checked_add(access.keys.charge_units()?)
                 .ok_or(AccessRefusal::ChargeOverflow)
         })?;
-        let account_count = u64::try_from(self.accounts.len())
-            .map_err(|_| AccessRefusal::ChargeOverflow)?;
+        let account_count =
+            u64::try_from(self.accounts.len()).map_err(|_| AccessRefusal::ChargeOverflow)?;
         let account_units = account_count
             .checked_mul(ACCOUNT_ACCESS_CHARGE_UNITS)
             .ok_or(AccessRefusal::ChargeOverflow)?;
@@ -673,14 +675,17 @@ impl AccessSet {
         self.accounts.contains(&access)
     }
 
-    fn permits_call(&self, callee: ProgramId) -> bool { self.callees.contains(&callee) }
+    fn permits_call(&self, callee: ProgramId) -> bool {
+        self.callees.contains(&callee)
+    }
 }
 
 /// Presence-sensitive activity commitment. Absence means the complete set
 /// reachable through the independently enforced capabilities, never an empty
 /// set and never an authority widening.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Default)]
 pub enum AccessDeclaration {
+    #[default]
     Absent,
     Explicit(AccessSet),
 }
@@ -701,6 +706,10 @@ impl AccessDeclaration {
     /// SDK construction path for access that is a pure function of canonical
     /// calldata. The callback receives no runtime state, so it cannot quietly
     /// claim that a prior-state-dependent access was proved ahead of time.
+    ///
+    /// # Errors
+    ///
+    /// Propagates derivation and access-set validation refusals.
     pub fn derive_from_calldata(
         calldata: &[u8],
         derive: fn(&[u8], &mut AccessSetBuilder) -> Result<(), AccessRefusal>,
@@ -713,6 +722,10 @@ impl AccessDeclaration {
     /// SDK construction path for accesses an interface cannot derive. The
     /// caller must provide a complete builder explicitly; absence remains a
     /// separate whole-reachable-set declaration.
+    ///
+    /// # Errors
+    ///
+    /// Returns a refusal when the builder cannot produce a valid bounded access set.
     pub fn explicit_builder(builder: AccessSetBuilder) -> Result<Self, AccessRefusal> {
         builder.build().map(Self::Explicit)
     }
@@ -783,12 +796,11 @@ impl AccessDeclaration {
     /// Refuses an over-bound declaration encoding.
     pub fn canonical_activity_field(&self) -> Result<Vec<u8>, AccessRefusal> {
         let declaration = self.canonical_bytes()?;
-        let length = u32::try_from(declaration.len()).map_err(|_| {
-            AccessRefusal::EncodingTooLarge {
+        let length =
+            u32::try_from(declaration.len()).map_err(|_| AccessRefusal::EncodingTooLarge {
                 length: declaration.len(),
                 limit: MAX_ACCESS_DECLARATION_BYTES,
-            }
-        })?;
+            })?;
         let mut field = Vec::with_capacity(4usize.saturating_add(declaration.len()));
         field.extend_from_slice(&length.to_be_bytes());
         field.extend_from_slice(&declaration);
@@ -841,11 +853,9 @@ impl AccessDeclaration {
     /// bound.
     pub fn commitment(&self) -> Result<[u8; 32], AccessRefusal> {
         let encoded = self.canonical_bytes()?;
-        hash_bytes(HashAlgorithm::Sha256, &encoded).map_err(|_| {
-            AccessRefusal::EncodingTooLarge {
-                length: encoded.len(),
-                limit: MAX_ACCESS_DECLARATION_BYTES,
-            }
+        hash_bytes(HashAlgorithm::Sha256, &encoded).map_err(|_| AccessRefusal::EncodingTooLarge {
+            length: encoded.len(),
+            limit: MAX_ACCESS_DECLARATION_BYTES,
         })
     }
 
@@ -949,9 +959,7 @@ impl AccessDeclaration {
     ) -> Result<(), AccessRefusal> {
         match self {
             Self::Absent => Ok(()),
-            Self::Explicit(accesses)
-                if accesses.permits_storage(namespace, mode, &requested) =>
-            {
+            Self::Explicit(accesses) if accesses.permits_storage(namespace, mode, &requested) => {
                 Ok(())
             }
             Self::Explicit(_) => Err(AccessRefusal::UndeclaredStorage {
@@ -985,12 +993,6 @@ impl AccessDeclaration {
     ) -> bool {
         self.effective_set(self_reachable)
             .conflicts_with(other.effective_set(other_reachable))
-    }
-}
-
-impl Default for AccessDeclaration {
-    fn default() -> Self {
-        Self::Absent
     }
 }
 
@@ -1316,7 +1318,9 @@ impl AccessSetBuilder {
     /// Refuses a builder above the callee-entry bound.
     pub fn call(&mut self, callee: ProgramId) -> Result<&mut Self, AccessRefusal> {
         if self.callees.len() == MAX_ACCESS_CALLEE_ENTRIES {
-            return Err(AccessRefusal::TooManyCalleeEntries { limit: MAX_ACCESS_CALLEE_ENTRIES });
+            return Err(AccessRefusal::TooManyCalleeEntries {
+                limit: MAX_ACCESS_CALLEE_ENTRIES,
+            });
         }
         self.callees.push(callee);
         Ok(self)
@@ -1356,19 +1360,34 @@ impl AccessSetBuilder {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AccessRefusal {
     EmptyKey,
-    KeyTooLarge { length: usize, limit: usize },
+    KeyTooLarge {
+        length: usize,
+        limit: usize,
+    },
     InvalidKeyRange,
     ReservedAccount,
     ReservedAsset,
-    ProgramAccountSeedTooLarge { length: usize, limit: usize },
+    ProgramAccountSeedTooLarge {
+        length: usize,
+        limit: usize,
+    },
     ProgramAccountDerivation,
-    TooManyStorageEntries { limit: usize },
-    TooManyAccountEntries { limit: usize },
-    TooManyCalleeEntries { limit: usize },
+    TooManyStorageEntries {
+        limit: usize,
+    },
+    TooManyAccountEntries {
+        limit: usize,
+    },
+    TooManyCalleeEntries {
+        limit: usize,
+    },
     DuplicateStorageAccess,
     DuplicateAccountAccess,
     DuplicateCalleeAccess,
-    EncodingTooLarge { length: usize, limit: usize },
+    EncodingTooLarge {
+        length: usize,
+        limit: usize,
+    },
     MalformedCanonicalBytes,
     ChargeOverflow,
     UndeclaredStorage {
@@ -1381,7 +1400,9 @@ pub enum AccessRefusal {
         asset: [u8; 32],
         mode: AccessMode,
     },
-    UndeclaredCall { callee: ProgramId },
+    UndeclaredCall {
+        callee: ProgramId,
+    },
 }
 
 impl Display for AccessRefusal {
@@ -1389,7 +1410,10 @@ impl Display for AccessRefusal {
         match self {
             Self::EmptyKey => formatter.write_str("storage key is empty"),
             Self::KeyTooLarge { length, limit } => {
-                write!(formatter, "storage key length {length} exceeds limit {limit}")
+                write!(
+                    formatter,
+                    "storage key length {length} exceeds limit {limit}"
+                )
             }
             Self::InvalidKeyRange => formatter.write_str("storage key range is empty or reversed"),
             Self::ReservedAccount => formatter.write_str("account identifier is reserved"),
@@ -1407,13 +1431,11 @@ impl Display for AccessRefusal {
             Self::TooManyAccountEntries { limit } => {
                 write!(formatter, "access set exceeds {limit} account entries")
             }
-            Self::TooManyCalleeEntries { limit } => write!(formatter, "access set exceeds {limit} callee entries"),
-            Self::DuplicateStorageAccess => {
-                formatter.write_str("storage access is declared twice")
+            Self::TooManyCalleeEntries { limit } => {
+                write!(formatter, "access set exceeds {limit} callee entries")
             }
-            Self::DuplicateAccountAccess => {
-                formatter.write_str("account access is declared twice")
-            }
+            Self::DuplicateStorageAccess => formatter.write_str("storage access is declared twice"),
+            Self::DuplicateAccountAccess => formatter.write_str("account access is declared twice"),
             Self::DuplicateCalleeAccess => formatter.write_str("callee access is declared twice"),
             Self::EncodingTooLarge { length, limit } => write!(
                 formatter,
@@ -1427,13 +1449,15 @@ impl Display for AccessRefusal {
                 namespace, mode, ..
             } => write!(
                 formatter,
-                "{mode} access falls outside the declaration for namespace {:?}",
-                namespace
+                "{mode} access falls outside the declaration for namespace {namespace:?}"
             ),
             Self::UndeclaredAccount { mode, .. } => {
                 write!(formatter, "account {mode} falls outside the declaration")
             }
-            Self::UndeclaredCall { callee } => write!(formatter, "call to program {:?} falls outside the declaration", callee),
+            Self::UndeclaredCall { callee } => write!(
+                formatter,
+                "call to program {callee:?} falls outside the declaration"
+            ),
         }
     }
 }
@@ -1468,13 +1492,11 @@ fn range_inside_prefix(prefix: &[u8], start: &[u8], end: &[u8]) -> bool {
     if prefix.is_empty() {
         return true;
     }
-    prefix <= start
-        && prefix_successor(prefix).is_none_or(|upper| end <= upper.as_slice())
+    prefix <= start && prefix_successor(prefix).is_none_or(|upper| end <= upper.as_slice())
 }
 
 fn prefix_range_overlaps(prefix: &[u8], start: &[u8], end: &[u8]) -> bool {
-    prefix < end
-        && prefix_successor(prefix).is_none_or(|upper| start < upper.as_slice())
+    prefix < end && prefix_successor(prefix).is_none_or(|upper| start < upper.as_slice())
 }
 
 fn encode_namespace(encoded: &mut Vec<u8>, namespace: StorageNamespace) {
@@ -1522,8 +1544,8 @@ fn encode_key(encoded: &mut Vec<u8>, key: &[u8]) -> Result<(), AccessRefusal> {
 }
 
 fn decode_namespace(cursor: &mut AccessCursor<'_>) -> Result<StorageNamespace, AccessRefusal> {
-    let program = ProgramId::new(cursor.take_array()?)
-        .map_err(|_| AccessRefusal::MalformedCanonicalBytes)?;
+    let program =
+        ProgramId::new(cursor.take_array()?).map_err(|_| AccessRefusal::MalformedCanonicalBytes)?;
     match cursor.take_u8()? {
         PRINCIPAL_NAMESPACE_TAG => {
             let principal = PrincipalId::new(cursor.take_array()?)
@@ -1531,7 +1553,10 @@ fn decode_namespace(cursor: &mut AccessCursor<'_>) -> Result<StorageNamespace, A
             Ok(StorageNamespace::principal(program, principal))
         }
         SHARED_NAMESPACE_TAG => Ok(StorageNamespace::shared(program)),
-        2 => Ok(StorageNamespace::protocol_private(program, cursor.take_array()?)),
+        2 => Ok(StorageNamespace::protocol_private(
+            program,
+            cursor.take_array()?,
+        )),
         _ => Err(AccessRefusal::MalformedCanonicalBytes),
     }
 }
@@ -1549,12 +1574,9 @@ fn decode_key_access(cursor: &mut AccessCursor<'_>) -> Result<KeyAccess, AccessR
     }
 }
 
-fn derive_access_account(
-    program: ProgramId,
-    seed: &[u8],
-) -> Result<[u8; 32], AccessRefusal> {
+fn derive_access_account(program: ProgramId, seed: &[u8]) -> Result<[u8; 32], AccessRefusal> {
     derive_program_account(program, seed)
-        .map(|account| account.bytes())
+        .map(crate::accounts::ProgramAccount::bytes)
         .map_err(|error| match error {
             ProgramAccountError::SeedTooLarge { length, limit } => {
                 AccessRefusal::ProgramAccountSeedTooLarge { length, limit }
@@ -1621,7 +1643,9 @@ impl<'a> AccessCursor<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::abi::{Abi, AbiError, AuthorizationContext, Capability, CapabilitySet, ReceiptOracle, ReceiptView};
+    use crate::abi::{
+        Abi, AbiError, AuthorizationContext, Capability, CapabilitySet, ReceiptOracle, ReceiptView,
+    };
     use crate::{FeeSchedule, Meter, ResourceBudget, Storage};
 
     struct NoReceipts;
@@ -1681,7 +1705,12 @@ mod tests {
         assert_eq!(AccessSet::empty().canonical_bytes().expect("empty"), empty);
         let mut absent = b"LayerX/programs/access-declaration/v1\0".to_vec();
         absent.push(0);
-        assert_eq!(AccessDeclaration::absent().canonical_bytes().expect("absent"), absent);
+        assert_eq!(
+            AccessDeclaration::absent()
+                .canonical_bytes()
+                .expect("absent"),
+            absent
+        );
     }
 
     #[test]
@@ -1739,19 +1768,17 @@ mod tests {
             .expect("reader");
         let reader = AccessDeclaration::explicit(reader_builder.build().expect("reader set"));
         assert!(absent.conflicts_with(&reader));
-        assert!(absent.conflicts_with_resolved(
-            &reachable,
-            &reader,
-            &AccessSet::empty()
-        ));
+        assert!(absent.conflicts_with_resolved(&reachable, &reader, &AccessSet::empty()));
     }
 
     #[test]
     fn conflicts_are_symmetric_and_only_write_overlap_conflicts() {
         let declaration = |mode: AccessMode, key: &[u8]| {
             AccessSet::new(
-                [StorageAccess::new(namespace(), mode, KeyAccess::exact(key).expect("key"))
-                    .expect("access")],
+                [
+                    StorageAccess::new(namespace(), mode, KeyAccess::exact(key).expect("key"))
+                        .expect("access"),
+                ],
                 [],
             )
             .expect("set")
@@ -1795,7 +1822,10 @@ mod tests {
 
         assert_eq!(overdeclared.storage_len(), 2);
         assert!(
-            overdeclared.charge().expect("overdeclared charge").total_units()
+            overdeclared
+                .charge()
+                .expect("overdeclared charge")
+                .total_units()
                 > prefix_only.charge().expect("prefix charge").total_units()
         );
     }
@@ -1822,8 +1852,10 @@ mod tests {
             [],
         )
         .expect("broad");
-        assert!(broad.charge().expect("broad charge").total_units()
-            > exact.charge().expect("exact charge").total_units());
+        assert!(
+            broad.charge().expect("broad charge").total_units()
+                > exact.charge().expect("exact charge").total_units()
+        );
         assert_eq!(broad.charge(), broad.charge());
     }
 
@@ -1865,7 +1897,9 @@ mod tests {
     fn call_activity_field_covers_presence_and_exact_declaration_bytes() {
         let absent = AccessDeclaration::absent();
         let mut builder = AccessSet::builder();
-        builder.read_key(namespace(), b"from-calldata").expect("key");
+        builder
+            .read_key(namespace(), b"from-calldata")
+            .expect("key");
         let explicit = AccessDeclaration::explicit(builder.build().expect("set"));
         assert_ne!(
             absent.canonical_activity_field().expect("absent field"),
@@ -1875,10 +1909,11 @@ mod tests {
 
     #[test]
     fn calldata_derived_declaration_is_exact_and_prior_state_cannot_widen_it() {
-        let declaration = AccessDeclaration::derive_from_calldata(
-            b"orders/7",
-            |calldata, builder| builder.read_key(namespace(), calldata).map(|_| ()),
-        ).expect("derive");
+        let declaration =
+            AccessDeclaration::derive_from_calldata(b"orders/7", |calldata, builder| {
+                builder.read_key(namespace(), calldata).map(|_| ())
+            })
+            .expect("derive");
         assert!(declaration
             .enforce_storage_key(namespace(), AccessMode::Read, b"orders/7")
             .is_ok());
@@ -1902,17 +1937,27 @@ mod tests {
 
         let mut conservative = AccessSet::builder();
         conservative
-            .read_key(root, b"route").expect("route")
-            .write_namespace(callee).expect("callee namespace")
-            .call(program(9)).expect("callee");
+            .read_key(root, b"route")
+            .expect("route")
+            .write_namespace(callee)
+            .expect("callee namespace")
+            .call(program(9))
+            .expect("callee");
         let conservative = AccessDeclaration::explicit(conservative.build().expect("set"));
         assert!(conservative
             .enforce_storage_key(callee, AccessMode::Write, b"callee-state")
             .is_ok());
         assert!(conservative.enforce_call(program(9)).is_ok());
-        assert!(conservative
-            .charge(&AccessSet::empty()).expect("charge").total_units()
-            > declaration.charge(&AccessSet::empty()).expect("charge").total_units());
+        assert!(
+            conservative
+                .charge(&AccessSet::empty())
+                .expect("charge")
+                .total_units()
+                > declaration
+                    .charge(&AccessSet::empty())
+                    .expect("charge")
+                    .total_units()
+        );
     }
 
     fn authorized_abi(
@@ -1928,7 +1973,8 @@ mod tests {
             AuthorizationContext::new(actor, capabilities),
             storage,
             &NoReceipts,
-        ).expect("authorized ABI");
+        )
+        .expect("authorized ABI");
         abi.set_access_declaration(declaration);
         abi
     }
@@ -1942,14 +1988,25 @@ mod tests {
         let owner = program(1);
         let actor = principal(2);
         let mut declaration = AccessSet::builder();
-        declaration.read_principal_key(owner, actor, b"allowed").expect("declaration");
+        declaration
+            .read_principal_key(owner, actor, b"allowed")
+            .expect("declaration");
         let declaration = AccessDeclaration::explicit(declaration.build().expect("set"));
-        for (calldata, permitted) in [(b"allowed".as_slice(), true), (b"denied".as_slice(), false)] {
+        for (calldata, permitted) in [(b"allowed".as_slice(), true), (b"denied".as_slice(), false)]
+        {
             let capabilities = CapabilitySet::new([Capability::StorageRead]).expect("capabilities");
-            let mut abi = authorized_abi(owner, actor, capabilities, Storage::new(), declaration.clone());
+            let mut abi = authorized_abi(
+                owner,
+                actor,
+                capabilities,
+                Storage::new(),
+                declaration.clone(),
+            );
             let outcome = abi.storage_read(&mut activity_meter(), calldata);
             assert_eq!(outcome.is_ok(), permitted);
-            if !permitted { assert_eq!(outcome, Err(AbiError::AccessDeclaration)); }
+            if !permitted {
+                assert_eq!(outcome, Err(AbiError::AccessDeclaration));
+            }
         }
     }
 
@@ -1964,14 +2021,21 @@ mod tests {
         transaction.write(b"secret", b"value").expect("secret");
         let _ = transaction.commit();
         let mut declaration = AccessSet::builder();
-        declaration.read_key(namespace, b"route").expect("route declaration");
+        declaration
+            .read_key(namespace, b"route")
+            .expect("route declaration");
         let capabilities = CapabilitySet::new([Capability::StorageRead]).expect("capabilities");
         let mut abi = authorized_abi(
-            owner, actor, capabilities, storage,
+            owner,
+            actor,
+            capabilities,
+            storage,
             AccessDeclaration::explicit(declaration.build().expect("set")),
         );
-        let selected = abi.storage_read(&mut activity_meter(), b"route")
-            .expect("declared read").expect("route value");
+        let selected = abi
+            .storage_read(&mut activity_meter(), b"route")
+            .expect("declared read")
+            .expect("route value");
         assert_eq!(
             abi.storage_read(&mut activity_meter(), &selected),
             Err(AbiError::AccessDeclaration)
@@ -1986,15 +2050,29 @@ mod tests {
         let capabilities = CapabilitySet::new([
             Capability::Call { program: callee },
             Capability::SharedStorageWrite,
-        ]).expect("capabilities");
+        ])
+        .expect("capabilities");
         let mut declaration = AccessSet::builder();
         declaration.call(callee).expect("call declaration");
         let declaration = AccessDeclaration::explicit(declaration.build().expect("set"));
-        let mut root = authorized_abi(owner, actor, capabilities, Storage::new(), declaration.clone());
-        let child_frame = crate::abi::CallFrameId::root().child(1).expect("child frame");
-        let child_capabilities = root.stage_call(
-            callee, b"input", vec![Capability::SharedStorageWrite], child_frame,
-        ).expect("declared call");
+        let mut root = authorized_abi(
+            owner,
+            actor,
+            capabilities,
+            Storage::new(),
+            declaration.clone(),
+        );
+        let child_frame = crate::abi::CallFrameId::root()
+            .child(1)
+            .expect("child frame");
+        let child_capabilities = root
+            .stage_call(
+                callee,
+                b"input",
+                vec![Capability::SharedStorageWrite],
+                child_frame,
+            )
+            .expect("declared call");
         let mut child = Abi::nested(
             crate::ABI_V2_VERSION,
             callee,
@@ -2002,11 +2080,15 @@ mod tests {
             root.storage_snapshot(),
             root.verified_receipts(),
             root.verified_balances(),
-        ).expect("child ABI");
+        )
+        .expect("child ABI");
         child.set_access_declaration(declaration);
         assert_eq!(
             child.storage_write_selected(
-                &mut activity_meter(), crate::abi::StorageSelector::Shared, b"state", b"value",
+                &mut activity_meter(),
+                crate::abi::StorageSelector::Shared,
+                b"state",
+                b"value",
             ),
             Err(AbiError::AccessDeclaration)
         );
@@ -2020,15 +2102,21 @@ mod tests {
         let capabilities = CapabilitySet::new([
             Capability::Call { program: callee },
             Capability::SharedStorageWrite,
-        ]).expect("capabilities");
-        let reachable = capabilities.reachable_accesses(owner, actor).expect("reachable set");
-        assert!(reachable.storage_accesses().any(|access| {
-            access.namespace() == StorageNamespace::shared(owner)
-        }));
-        assert!(reachable.storage_accesses().any(|access| {
-            access.namespace() == StorageNamespace::shared(callee)
-        }));
-        assert_eq!(reachable.callees().copied().collect::<Vec<_>>(), vec![callee]);
+        ])
+        .expect("capabilities");
+        let reachable = capabilities
+            .reachable_accesses(owner, actor)
+            .expect("reachable set");
+        assert!(reachable
+            .storage_accesses()
+            .any(|access| { access.namespace() == StorageNamespace::shared(owner) }));
+        assert!(reachable
+            .storage_accesses()
+            .any(|access| { access.namespace() == StorageNamespace::shared(callee) }));
+        assert_eq!(
+            reachable.callees().copied().collect::<Vec<_>>(),
+            vec![callee]
+        );
         assert_eq!(
             AccessDeclaration::absent().charge(&reachable),
             reachable.charge()
