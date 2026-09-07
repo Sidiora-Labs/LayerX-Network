@@ -326,6 +326,10 @@ impl TransferCapability {
         self.authorize_with_version(effects, false)
     }
 
+    /// Selects V2 authority encoding even for principal-only transfers.
+    ///
+    /// # Errors
+    /// Refuses the same invalid effects and authority violations as `authorize`.
     pub fn authorize_v2(
         &self,
         effects: &AbiEffects,
@@ -1143,6 +1147,10 @@ pub fn verify_authorization_root(
     Ok(())
 }
 
+/// Verifies the exact ordered applied kernel legs against their committed root.
+///
+/// # Errors
+/// Refuses malformed legs, exceeded bounds, or a mismatched Merkle root.
 pub fn verify_applied_kernel_legs(
     encoded: &[u8],
     expected: [u8; 32],
@@ -1155,7 +1163,7 @@ pub fn verify_applied_kernel_legs(
             Err(TransferLawError::ReceiptMismatch)
         };
     }
-    if encoded.len() % LEG_BYTES != 0 || encoded.len() / LEG_BYTES > MAX_TRANSFER_LEGS {
+    if !encoded.len().is_multiple_of(LEG_BYTES) || encoded.len() / LEG_BYTES > MAX_TRANSFER_LEGS {
         return Err(TransferLawError::InvalidTransferSet);
     }
     for leg in encoded.chunks_exact(LEG_BYTES) {
@@ -1657,12 +1665,16 @@ mod tests {
             .unwrap_or_else(|error| panic!("V2 authority: {error}"));
         let graph = CallGraph::root(crate::CompositionRules::declared(), program, principal);
         assert_eq!(
-            capability.authorize_for_graph_with_version(&effects, &graph, false),
-            Ok(legacy.clone())
+            capability
+                .authorize_for_graph_with_version(&effects, &graph, false)
+                .as_ref(),
+            Ok(&legacy)
         );
         assert_eq!(
-            capability.authorize_for_graph_with_version(&effects, &graph, true),
-            Ok(current.clone())
+            capability
+                .authorize_for_graph_with_version(&effects, &graph, true)
+                .as_ref(),
+            Ok(&current)
         );
         let wrong_graph = CallGraph::root(
             crate::CompositionRules::declared(),
@@ -1680,12 +1692,12 @@ mod tests {
         assert_eq!(legacy.kernel_canonical(), current.kernel_canonical());
         assert_eq!(legacy.kernel_root(), current.kernel_root());
         assert_eq!(
-            AtomicTransferSet::canonical_decode(legacy.canonical()),
-            Ok(legacy.clone())
+            AtomicTransferSet::canonical_decode(legacy.canonical()).as_ref(),
+            Ok(&legacy)
         );
         assert_eq!(
-            AtomicTransferSet::canonical_decode(current.canonical()),
-            Ok(current.clone())
+            AtomicTransferSet::canonical_decode(current.canonical()).as_ref(),
+            Ok(&current)
         );
         assert_eq!(
             verify_authorization_root(legacy.canonical(), legacy.kernel_root()),

@@ -1157,13 +1157,16 @@ impl ProgramInstance {
         &mut self,
         continuation: &RuntimeContinuation,
     ) -> Result<Vec<WasmValue>, ExecutionFault> {
-        let declared = self.resumable_globals.as_ref().ok_or_else(|| {
-            ExecutionFault::EngineFault {
+        let declared =
+            self.resumable_globals
+                .as_ref()
+                .ok_or_else(|| {
+                    ExecutionFault::EngineFault {
                 reason:
                     "sandbox continuation requires every mutable global to be exported exactly once"
                         .to_string(),
             }
-        })?;
+                })?;
         if continuation
             .globals
             .iter()

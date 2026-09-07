@@ -71,6 +71,12 @@ fn real_executed_v4_and_signed_mutated_leg_refusal() {
             verify_program_outcome(&canonical, &authority).is_ok(),
             "real signature for {name}"
         );
+        assert_eq!(
+            layerx_proof::receipt::verify_historical_program_outcome_v1(&canonical, &authority)
+                .err()
+                .map(|error| error.check),
+            Some(layerx_proof::receipt::ReceiptCheck::ProtocolVersion)
+        );
         let terminal = bytes(&document, "terminal_payload_hex");
         let (_, legs) =
             decode_applied_terminal(&terminal).unwrap_or_else(|error| panic!("{error:?}"));
@@ -125,6 +131,32 @@ fn stored_historical_protocol_v1_receipt_still_verifies_byte_exactly() {
     assert!(
         layerx_proof::receipt::verify_historical_program_outcome_v1(&canonical, &authority).is_ok()
     );
+    assert_eq!(
+        verify_program_outcome(&canonical, &authority)
+            .err()
+            .map(|error| error.check),
+        Some(layerx_proof::receipt::ReceiptCheck::ProtocolVersion)
+    );
+    for index in 0..4 {
+        let mut binding = [
+            array(&document, "batch_id_hex"),
+            array(&document, "previous_state_root_hex"),
+            array(&document, "resulting_state_root_hex"),
+            array(&document, "sequencer_public_key_hex"),
+        ];
+        binding[index][0] ^= 1;
+        let changed = AuthorizedBatch::new(
+            binding[0],
+            array(&document, "asset_hex"),
+            binding[1],
+            binding[2],
+            binding[3],
+        );
+        assert!(
+            layerx_proof::receipt::verify_historical_program_outcome_v1(&canonical, &changed)
+                .is_err()
+        );
+    }
     let decoded = decode(&canonical).unwrap_or_else(|error| panic!("{error:?}"));
     assert_eq!(layerx_wire::receipt::encode(&decoded), Ok(canonical));
     let protocol = decoded.protocol().unwrap_or_else(|| panic!("protocol"));
