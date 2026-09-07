@@ -159,6 +159,7 @@ impl Capability {
 pub struct CapabilitySet(BTreeMap<CapabilityKey, Capability>);
 
 impl CapabilitySet {
+    #[cfg(feature = "host-ffi")]
     pub(crate) fn admitted_schedule_accesses(
         encoded: &[u8],
         program: ProgramId,
