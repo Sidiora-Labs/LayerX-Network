@@ -321,7 +321,6 @@ impl DeploymentRecord {
         let module = take_slice(bytes, &mut cursor, module_bytes)?.to_vec();
         let migration = match take_array::<1>(bytes, &mut cursor)? {
             [0] => None,
-            [1] => return Err(RegistryError::CorruptRecord),
             [2] => Some(decode_migration_evidence(bytes, &mut cursor)?),
             _ => return Err(RegistryError::CorruptRecord),
         };
