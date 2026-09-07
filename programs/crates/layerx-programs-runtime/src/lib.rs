@@ -204,10 +204,11 @@ pub use storage::{
     NamespaceDrop, PrincipalId, ProgramId, ScanEntry, ScanLimits, Storage, StorageError,
     StorageNamespace, StorageScan,
 };
+#[cfg(feature = "host-ffi")]
+pub use transfer::{reserve_host_sandbox_escrow_charge, ReservedSandboxEscrowCharge};
 pub use transfer::{
-    reserve_host_sandbox_escrow_charge, sandbox_escrow_charge_root, AtomicTransferSet,
-    KernelTransferEvidence, KernelTransferPrimitive, ProgramAuthority, ProgramFundingBinding,
-    ReservedSandboxEscrowCharge, TransferCapability, TransferLawError, TransferSource,
+    sandbox_escrow_charge_root, AtomicTransferSet, KernelTransferEvidence, KernelTransferPrimitive,
+    ProgramAuthority, ProgramFundingBinding, TransferCapability, TransferLawError, TransferSource,
     VerifiedProgramSettlement,
 };
 pub use validate::{AbiRevision, ValidatedModule, ValidationRefusal};
