@@ -2886,3 +2886,98 @@ symbol = "dependency lockfile integration"
 observed = "git rebase --rebase-merges origin/main exits 1 replaying merge 50024a88 against afe4053b453eaeb9832b4c723b0f659799906dae, with content conflicts in the listed files. Raw output: qual-logs/n21/rebase.log. git rebase --abort exits 0 and restores qualified commit 706321cb24d9acf33bcd54064e1ca1af45afc0d2. The interop lockfile change adds only ed25519-dalek to layerx-platform-gateway dependencies; all nine requested gates exit 0, recorded in qual-logs/n21/results.json."
 assumption = "Source and fixture conflict resolution exceeds the single lockfile edge scope. Publication remains blocked by the required rebase; no conflict resolution or force push was performed."
 severity = "blocker"
+[observation.6.11.adapter-ordered-read-lint]
+task = "6.11"
+file = "programs/crates/layerx-programs-protocol-adapter/src/ffi.rs"
+symbol = "proof binding account read_program_state read_account_head read_account_snapshot read_program_lifecycle read_exit_routes read_lifecycle_history"
+observed = "Private proof, binding and account decoders borrow their C structs. Complete account-head, account-snapshot, lifecycle, exit-route and history decode stages move into named helpers in their original order, followed by the unchanged registry replay and account-state authority verification. Adapter strict all-target Clippy exits 0, adapter and registry tests exit 0 with 39 tests passed, touched-file rustfmt check exits 0 and make programs-abi-drift exits 0 with both ABI linker tests passed. Exact output is retained under qual-logs/programs-lint-green/adapter-clippy.log, adapter-registry-test.log, adapter-rustfmt.log and abi-drift.log with corresponding exit files."
+assumption = "These gates qualify the adapter refactor. They do not establish workspace lint success or sandbox qualification. C entry points, layouts, validation predicates and typed refusal paths are unchanged."
+severity = "note"
+
+[observation.6.11.sandbox-strict-lint-owned-boundary]
+task = "6.11"
+file = "programs/crates/layerx-programs-sandbox/src/execute.rs programs/crates/layerx-programs-sandbox/src/lease.rs programs/crates/layerx-programs-sandbox/src/snapshot.rs programs/crates/layerx-programs-sandbox/tests/lease.rs programs/crates/layerx-programs-sandbox/tests/snapshot.rs"
+symbol = "LeaseCapabilities::authorization Lease::record_usage LeaseBook::record_usage restore"
+observed = "Strict sandbox all-target host-ffi Clippy exits 101 with four remaining library diagnostics: authorization is unused in the library but referenced by an existing unit test; both record_usage closure parameters pass 376-byte Option values by value; restore has ten arguments against the seven-argument limit. The lib-test build reports the same three signature findings. The complete output is qual-logs/programs-lint-green/sandbox-clippy-4.log. Earlier attempts and fixes are retained in sandbox-clippy-1.log through sandbox-clippy-3.log. Touched-file rustfmt check exits 0. Source retention inventory in source-retention.json records identical unit-test names and assertion counts and no added suppression attributes."
+assumption = "Changing the two signatures requires preserving and updating four closure-evidence arguments in tests/lease.rs and five restore calls in tests/snapshot.rs, outside the owned src paths. The referenced private authorization helper is retained under the explicit dead-code retention rule; compiling it under cfg(test) requires a scope decision. Exact requests are in untracked NEEDS.md. No failing check or assertion is relaxed, and sandbox remains unqualified."
+severity = "blocker"
+
+[observation.6.11.integrated-lint-rebase-conflicts]
+task = "6.11"
+file = "Makefile tests/daemon/lxp_test_program_admission.c tests/daemon/program-admission.sh agent/crates/layerx-proof/src/receipt.rs interop/crates/layerx-interop-service/src/server.rs platform/hosted/gateway/src/http.rs platform/hosted/gateway/src/lib.rs platform/hosted/gateway/src/main.rs platform/sdk/conformance/fixtures/receipt-programs-executed-v3.json tests/programs/test_call_activity.c"
+symbol = "integrated branch replay"
+observed = "Rebase onto origin/main conflicts while replaying 65dec6e5 in native admission files. A merge-preserving rebase conflicts while recreating 9659bed6 in proof, interop, hosted gateway, the executed receipt fixture and native CALL tests. Both attempts are aborted and the integrated source is restored. Conflict lists and raw replay output are retained in qual-logs/programs-lint-green/rebase-conflicts.txt, rebase-merges-conflicts.txt and rebase-merges-retry.log."
+assumption = "These paths exceed the lint repair ownership. Publication requires an integrated base rebased by its owner or authority to merge origin/main while preserving the existing integration history. No manual out-of-scope conflict resolution is applied."
+severity = "blocker"
+
+[observation.6.11.sandbox-shared-fixture-missing]
+task = "6.11"
+file = "programs/crates/layerx-programs-sandbox/tests/lease.rs programs/crates/layerx-programs-registry/tests/support/mod.rs"
+symbol = "protocol_support::programs_call_fixture"
+observed = "The required combined cargo test for sandbox with host-ffi, protocol-adapter and registry exits 101 before test execution. Sandbox lease integration tests path-import registry tests/support/mod.rs and call programs_call_fixture at lines 75, 110 and 656. The helper is absent in the integrated source and present in the parent of inherited commit 4bbcae49. Rust reports E0425 at all three calls. Exact command, exit and full compiler output are retained in qual-logs/programs-lint-green/gates.jsonl and combined-tests.log."
+assumption = "Restoring the real shared fixture helper requires registry test-support ownership. Existing sandbox calls and assertions remain intact; no substitute fixture or skipped test is introduced. This failed combined gate does not supersede the separately passing adapter and registry-only test run."
+severity = "blocker"
+
+[observation.6.11.programs-workspace-lint-retained-refusals]
+task = "6.11"
+file = "programs/crates/layerx-programs-sandbox/src/execute.rs programs/crates/layerx-programs-sandbox/src/lease.rs programs/crates/layerx-programs-sandbox/src/snapshot.rs Makefile"
+symbol = "programs-lint"
+observed = "make programs-lint exits 2 after Cargo Clippy exits 101 on the four sandbox library diagnostics recorded in observation.6.11.sandbox-strict-lint-owned-boundary. The module-boundary prerequisite completes before Clippy. Dependency-policy and both cargo-deny commands are not reached. Exact output and shell exit are retained in qual-logs/programs-lint-green/programs-lint.log and programs-lint.exit; the command record is in gates.jsonl."
+assumption = "The workspace target has not reached exit zero. No deny policy, manifest, lockfile, ABI header or fixture is changed. Downstream workspace diagnostics remain unqualified until sandbox passes."
+severity = "blocker"
+
+[observation.6.11.programs-lint-local-qualification]
+task = "6.11"
+file = "programs/crates/layerx-programs-sandbox/src programs/crates/layerx-programs-protocol-adapter/src/ffi.rs spec/layerx-beta/spec.kvx"
+symbol = "sandbox unit tests programs-abi-drift check"
+observed = "The focused sandbox host-ffi library test gate exits 0 with 24 tests passed and none failed or ignored. Final make programs-abi-drift exits 0 with both ABI linker tests passed. The complete make check exits 0, including real Programs artifact execution for protocols 2 and 3. Touched-file rustfmt check and git diff --check exit 0. cg spec lint exits 0 with nine missing-path warnings for operation_generated.rs and existing beta qualification/report paths. Exact commands, exits and raw logs are retained in qual-logs/programs-lint-green/initial-gates.jsonl, gates.jsonl, sandbox-unit-tests.log, abi-drift-final.log, check-final.log, rustfmt-check.log, diff-check.log and spec-lint.log."
+assumption = "The initial make check attempt was interrupted with exit 130 to avoid overlapping dependency qualification with sandbox implementation; only check-final.log represents the complete aggregate attempt. Focused unit tests and native qualification do not replace the combined test gate blocked by the removed shared fixture, strict workspace lint, or successful publication. Sandbox remains unqualified and uncommitted."
+severity = "note"
+
+[observation.6.11.sandbox-granted-lint-repair]
+task = "6.11"
+file = "programs/crates/layerx-programs-sandbox/src/execute.rs programs/crates/layerx-programs-sandbox/src/lease.rs programs/crates/layerx-programs-sandbox/src/snapshot.rs programs/crates/layerx-programs-sandbox/tests/lease.rs programs/crates/layerx-programs-sandbox/tests/snapshot.rs"
+symbol = "LeaseCapabilities::authorization Lease::record_usage LeaseBook::record_usage RestoreRequest restore"
+observed = "RestoreRequest groups the existing restore inputs without changing validation or publication order. Both record_usage methods borrow an optional closure/evidence tuple; None arguments remain unchanged and the two Some arguments borrow their original tuples. LeaseCapabilities::authorization is compiled only for tests; the hostile-images test body is unchanged. Strict sandbox library-only host-ffi Clippy exits 0. The required combined sandbox host-ffi, protocol-adapter and registry cargo test exits 0 with 73 passed, none failed or ignored, including hostile-image refusal and snapshot destroy/restore continuation. Adapter and registry strict all-target Clippy exit 0. Touched-file rustfmt check, git diff --check and make programs-abi-drift exit 0. Exact commands, exits and output are in qual-logs/programs-lint-pass8/gates.jsonl and its referenced logs."
+assumption = "The shared signed-call fixture is restored by integrated native commit e8c7899b; the duplicate local restoration was dropped. The adapter change is replayed onto that native base without replaying its already-integrated predecessor commits. The earlier missing-helper and main-rebase blockers are superseded. Passing library lint and combined tests do not replace sandbox all-target lint."
+severity = "note"
+
+[observation.6.11.sandbox-integration-test-lint-boundary]
+task = "6.11"
+file = "programs/crates/layerx-programs-sandbox/tests/lease.rs programs/crates/layerx-programs-sandbox/tests/snapshot.rs programs/crates/layerx-programs-registry/tests/support/mod.rs"
+symbol = "protocol_support call_payload real_receipts_drive_every_lifecycle_edge_and_destroyed_never_revives real_bound_receipt_closes_intrinsically_and_refuses_mismatch_and_regression real_request_evidence_enforces_principal_concurrency_and_expiry snapshot_destroy_restore_and_continue_preserves_exact_execution_state ownership_digest_and_target_bindings_are_refused_before_metering"
+observed = "Sandbox strict all-target host-ffi Clippy exits 101 after the library diagnostics are repaired. The snapshot test target reports 21 diagnostics and the lease test target reports 20. Findings include existing narrowing length and concurrency-limit casts, five oversized test functions, similar local names, an unused canonical binding, an unused storage commit result, and dead-code findings for registry helpers imported through private protocol_support modules. Full diagnostics and exact locations are in qual-logs/programs-lint-pass8/sandbox-clippy-final.log. Registry strict all-target Clippy exits 0 with the restored shared helper present."
+assumption = "These integration-test constructs are outside the granted restore and record_usage argument expressions. Repair requires checked conversions, complete-stage extraction, meaningful result handling and public shared fixture-module declarations matching the registry test binaries. No assertion, expected error, input, bound or enabled test is changed to silence the findings. The sandbox item remains incomplete and uncommitted."
+severity = "blocker"
+
+[observation.6.11.programs-lint-integrated-gate-result]
+task = "6.11"
+file = "Makefile programs/crates/layerx-programs-sandbox/tests/lease.rs programs/crates/layerx-programs-sandbox/tests/snapshot.rs"
+symbol = "programs-lint programs-abi-drift check"
+observed = "make programs-lint exits 2 at Makefile:2941 after the runtime module-boundary prerequisite passes and workspace all-target host-ffi Clippy exits 101 on the sandbox integration-test findings. No runtime-crate error is reported in this attempt. Dependency-policy and both cargo-deny stages are not reached. make programs-abi-drift exits 0 with both ABI linker tests passed. make check exits 0, including native state-commitment and Programs artifact tests under protocols 2 and 3. cg spec lint exits 0 with existing missing-path warnings. Exact commands, exits and raw output are in qual-logs/programs-lint-pass8/gates.jsonl, programs-lint.log, abi-drift.log, check.log and spec-lint.log."
+assumption = "The integrated runtime is supplied by the native base. The remaining workspace gate blocker is the sandbox integration-test scope described in observation.6.11.sandbox-integration-test-lint-boundary. These results do not qualify downstream dependency-policy or cargo-deny checks and do not establish workspace lint completion."
+severity = "blocker"
+
+[observation.6.11.sandbox-integration-lint-qualified]
+task = "6.11"
+file = "programs/crates/layerx-programs-sandbox/src programs/crates/layerx-programs-sandbox/tests/lease.rs programs/crates/layerx-programs-sandbox/tests/snapshot.rs"
+symbol = "protocol_support call_payload drive_lifecycle_edges capture_seeded_snapshot verify_snapshot_restart destroy_snapshot_source verify_restore_bounds verify_continuation"
+observed = "Sandbox fixture modules are public, length and concurrency conversions are checked, storage transaction commit asserts exactly one changed cell, and complete lifecycle and snapshot stages are extracted into named helpers. Existing inputs, assertions, expected errors and all ten integration tests are retained; no suppression attribute is added. Sandbox all-target host-ffi Clippy with -D warnings exits 0. The combined sandbox host-ffi, protocol-adapter and registry test command with --no-fail-fast exits 0 with 73 passed, zero failed and zero ignored. Touched-file rustfmt check and make programs-abi-drift exit 0. Exact commands, exits and raw output are in qual-logs/programs-lint-pass9/gates.jsonl, sandbox-clippy-2.log, combined-tests.log, rustfmt-check.log and abi-drift.log."
+assumption = "The sandbox integration-test findings in observation.6.11.sandbox-integration-test-lint-boundary are repaired. Focused qualification does not imply workspace lint completion."
+severity = "note"
+
+[observation.6.11.programs-lint-solana-porting-blocker]
+task = "6.11"
+file = "programs/porting/solana/src/qualify.rs programs/porting/solana/src/error.rs programs/porting/solana/src/monetary.rs programs/porting/solana/src/reference.rs programs/porting/solana/src/shared_pool.rs"
+symbol = "programs-lint layerx-porting-solana"
+observed = "make programs-lint exits 2 after the module-boundary prerequisite passes and workspace Clippy exits 101. The first diagnostics are unused AbiEffects and TransferCapability imports at qualify.rs:16,19, followed by clippy::doc_markdown findings for LayerX at error.rs:34, monetary.rs:223, reference.rs:47 and shared_pool.rs:11,59. Cargo reports six errors for layerx-porting-solana. Dependency-policy and both cargo-deny stages are not reached. Complete unchanged diagnostics are retained in qual-logs/programs-lint-pass9/programs-lint.log with exit code in programs-lint.exit."
+assumption = "These porting paths are outside sandbox repair ownership and remain unchanged. Their owner must repair the findings before the workspace gate can reach dependency-policy and cargo-deny. Sandbox strict all-target host-ffi Clippy independently exits 0."
+severity = "blocker"
+
+[observation.6.11.sandbox-aggregate-lint-repair-checks]
+task = "6.11"
+file = "Makefile spec/layerx-beta/spec.kvx programs/crates/layerx-programs-sandbox"
+symbol = "check programs-abi-drift"
+observed = "make check exits 0, including native state commitment and Programs artifact execution for protocols 2 and 3. git diff --check exits 0. cg spec lint exits 0 with nine existing missing-path warnings. Exact commands, exits and raw output are retained in qual-logs/programs-lint-pass9/gates.jsonl, check.log, diff-check-final.log and spec-lint-final.log."
+assumption = "These aggregate checks do not supersede the independent Solana porting workspace-lint blocker. No task status, manifest, policy, lockfile or generated workflow pointer is changed by the sandbox repair."
+severity = "note"
