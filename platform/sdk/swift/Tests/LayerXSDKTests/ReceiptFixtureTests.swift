@@ -137,7 +137,9 @@ final class ReceiptFixtureTests: XCTestCase {
         XCTAssertEqual(try decodeSignedCall(call).activityID, try hexField(fixture, "activity_id_hex"))
         let wrongFee = try ProgramCall(nativeCall: native, feeLimit: ProtocolAmount("999"), signedActivity: signed)
         XCTAssertThrowsError(try decodeSignedCall(wrongFee))
-        let changed = NativeProgramCall(programID: native.programID, guestABI: native.guestABI, entrypoint: native.entrypoint, calldata: native.calldata, capabilities: native.capabilities, accessDeclaration: native.accessDeclaration, responseCapacity: 17, resources: native.resources)
+        let changed = NativeProgramCall(programID: native.programID, guestABI: native.guestABI, entrypoint: native.entrypoint, calldata: native.calldata, capabilities: native.capabilities, accessDeclaration: native.accessDeclaration, responseCapacity: (native.responseCapacity + 1) % 1_048_577, resources: native.resources)
+        XCTAssertNotEqual(native.responseCapacity, changed.responseCapacity)
+        _ = try changed.encode()
         XCTAssertThrowsError(try decodeSignedCall(ProgramCall(nativeCall: changed, feeLimit: ProtocolAmount("1000"), signedActivity: signed)))
         for length in 0..<payload.count { XCTAssertThrowsError(try NativeProgramCall.decode(payload.prefix(length))) }
     }
