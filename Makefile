@@ -264,7 +264,7 @@ test-harness: $(BUILD_DIR)/tests/lxp_test_harness
 list-tests: $(BUILD_DIR)/tests/lxp_test_harness
 	$(BUILD_DIR)/tests/lxp_test_harness --list
 
-test: test-result test-protocol test-state-commitment-transition test-program-artifacts test-arena test-harness test-codec \
+test: test-result test-protocol test-state-commitment-transition test-program-artifacts test-daemon-maintenance-protocol test-arena test-harness test-codec \
 	test-codec-limits test-codec-version test-codec-vectors fuzz-codec-smoke \
 	test-crypto-suite test-arith-u128 test-arith-u256 test-arith-rounding \
 	test-arith-property test-arith-nofloat test-log test-log-durability \
@@ -1738,7 +1738,7 @@ $(BUILD_DIR)/tests/lxp_test_daemon_finality_authority: \
 $(BUILD_DIR)/tests/lxp_test_program_artifacts: \
 		tests/daemon/lxp_test_program_artifacts.c tests/programs/test_call_activity.c \
 		cmd/layerxd/lxp_daemon_receipt_authority.c cmd/layerxd/lxp_daemon_protocol.c \
-		cmd/layerxd/lxp_daemon_evidence.c $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+		cmd/layerxd/lxp_daemon_evidence.c cmd/layerxd/lxp_daemon_maintenance_json.h $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) tests/daemon/lxp_test_program_artifacts.c \
 		cmd/layerxd/lxp_daemon_receipt_authority.c cmd/layerxd/lxp_daemon_protocol.c \
@@ -1748,6 +1748,20 @@ $(BUILD_DIR)/tests/lxp_test_program_artifacts: \
 test-program-artifacts: $(BUILD_DIR)/tests/lxp_test_program_artifacts programs-reference-escrow \
 		$(BUILD_DIR)/tests/bridge/sign-credit $(BUILD_DIR)/tests/bridge/test-credit
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_program_artifacts
+
+.PHONY: test-daemon-maintenance-protocol
+$(BUILD_DIR)/tests/lxp_test_maintenance_protocol: \
+		tests/daemon/lxp_test_maintenance_protocol.c \
+		cmd/layerxd/lxp_daemon_receipt_authority.c cmd/layerxd/lxp_daemon_protocol.c \
+		cmd/layerxd/lxp_daemon_evidence.c cmd/layerxd/lxp_daemon_maintenance_json.h $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) tests/daemon/lxp_test_maintenance_protocol.c \
+		cmd/layerxd/lxp_daemon_receipt_authority.c cmd/layerxd/lxp_daemon_protocol.c \
+		cmd/layerxd/lxp_daemon_evidence.c $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
+		$(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -lsqlite3 -pthread -ldl -lm -o $@
+
+test-daemon-maintenance-protocol: $(BUILD_DIR)/tests/lxp_test_maintenance_protocol
+	python3 tests/daemon/maintenance-protocol.py $(BUILD_DIR)/tests/lxp_test_maintenance_protocol
 
 $(BUILD_DIR)/tests/lxp_test_finality_json: tests/daemon/lxp_test_finality_json.c \
 		cmd/layerxd/lxp_daemon_finality_authority.c \

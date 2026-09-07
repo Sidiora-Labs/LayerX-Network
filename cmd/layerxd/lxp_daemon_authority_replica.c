@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "layerx/lxp_daemon.h"
+#include "lxp_daemon_maintenance_json.h"
 
 #include "layerx/lxp_crypto.h"
 
@@ -317,9 +318,6 @@ static lxp_result evidence_json(authority_replica *replica,
 {
     lxp_daemon_receipt_evidence evidence;
     lxp_batch_header batch;
-    lxp_daemon_receipt_evidence maintenance;
-    lxp_codec_writer maintenance_writer;
-    bool maintained = false;
     char *identity_json = NULL;
     size_t identity_length = 0U;
     lxp_codec_writer proof_writer;
@@ -346,36 +344,8 @@ static lxp_result evidence_json(authority_replica *replica,
     if (status == LXP_OK && replica->store.last_global_sequence < batch.last_sequence)
         status = LXP_ERR_UNKNOWN_ACTIVITY;
     if (status == LXP_OK)
-        status = lxp_daemon_receipt_authority_batch_maintenance(
-            &replica->store, &evidence, &replica->scratch, &maintenance, &maintained);
-    if (status == LXP_OK && maintained)
-        status = lxp_codec_writer_init(&maintenance_writer, &replica->scratch,
-            16U + LXP_MERKLE_MAX_DEPTH * 32U);
-    if (status == LXP_OK && maintained)
-        status = lxp_merkle_proof_encode(&maintenance_writer, &maintenance.receipt_proof);
-    if (status == LXP_OK && maintained) {
-        char *receipt_hex = malloc(maintenance.canonical_receipt.length * 2U + 1U);
-        char *maintenance_proof_hex = malloc(maintenance_writer.length * 2U + 1U);
-        size_t identity_capacity = sizeof(",\"batch_identity\":{\"kind\":\"occupancy_maintenance_v2\","
-            "\"receipt_hex\":\"\",\"receipt_proof_hex\":\"\"}") +
-            maintenance.canonical_receipt.length * 2U + maintenance_writer.length * 2U;
-        identity_json = malloc(identity_capacity);
-        if (receipt_hex == NULL || maintenance_proof_hex == NULL || identity_json == NULL)
-            status = LXP_ERR_IO;
-        else {
-            hex_encode(maintenance.canonical_receipt.bytes,
-                maintenance.canonical_receipt.length, receipt_hex);
-            hex_encode(maintenance_writer.bytes, maintenance_writer.length, maintenance_proof_hex);
-            length = snprintf(identity_json, identity_capacity,
-                ",\"batch_identity\":{\"kind\":\"occupancy_maintenance_v2\","
-                "\"receipt_hex\":\"%s\",\"receipt_proof_hex\":\"%s\"}", receipt_hex, maintenance_proof_hex);
-            if (length < 0 || (size_t)length >= identity_capacity)
-                status = LXP_ERR_LENGTH_LIMIT;
-            else identity_length = (size_t)length;
-        }
-        free(receipt_hex);
-        free(maintenance_proof_hex);
-    }
+        status = maintenance_identity_json(&replica->store, &evidence,
+            &replica->scratch, &identity_json, &identity_length);
     if (status == LXP_OK)
         status = lxp_codec_writer_init(
             &proof_writer, &replica->scratch,
