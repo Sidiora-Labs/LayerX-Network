@@ -7,6 +7,7 @@
 
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_hash.h"
+#include "layerx/lxp_merkle.h"
 #include "layerx/lxp_kernel.h"
 #include "layerx/lxp_fee.h"
 #include "layerx/lxp_receipt.h"
@@ -116,6 +117,9 @@ struct lxp_programs_call_activity {
         uint64_t output_bytes;
         lxp_u128 fee_units;
         uint8_t transfer_root[32];
+        uint8_t applied_legs[LXP_MAX_TRANSFER_SET_LEGS * 115U];
+        uint32_t applied_length;
+        uint32_t applied_written;
         uint8_t *graph;
         uint32_t graph_length;
         uint8_t *terminal;
@@ -1001,6 +1005,81 @@ lxp_result layerx_programs_call_terminal_byte(uint64_t token, uint16_t section,
     return LXP_OK;
 }
 
+lxp_result layerx_programs_call_terminal_applied_begin(uint64_t token, uint32_t length)
+{
+    lxp_programs_call_activity *value = (lxp_programs_call_activity *)(uintptr_t)token;
+    if (value == NULL || value->ctx == NULL || value->terminal.active ||
+        !value->terminal.reserved || !value->transfer_applied ||
+        value->terminal.applied_length != 0U || length == 0U ||
+        length > sizeof(value->terminal.applied_legs) ||
+        length != (uint32_t)value->transfer_leg_count * 115U)
+        return LXP_ERR_NON_CANONICAL;
+    value->terminal.applied_length = length;
+    return LXP_OK;
+}
+
+lxp_result layerx_programs_call_terminal_applied_byte(uint64_t token, uint32_t offset, uint8_t byte)
+{
+    lxp_programs_call_activity *value = (lxp_programs_call_activity *)(uintptr_t)token;
+    if (value == NULL || value->ctx == NULL || value->terminal.active ||
+        offset != value->terminal.applied_written || offset >= value->terminal.applied_length)
+        return LXP_ERR_NON_CANONICAL;
+    value->terminal.applied_legs[offset] = byte;
+    ++value->terminal.applied_written;
+    return LXP_OK;
+}
+
+static void terminal_write_u32(uint8_t *bytes, uint32_t value)
+{
+    bytes[0] = (uint8_t)(value >> 24U);
+    bytes[1] = (uint8_t)(value >> 16U);
+    bytes[2] = (uint8_t)(value >> 8U);
+    bytes[3] = (uint8_t)value;
+}
+
+static lxp_result terminal_wrap_applied(lxp_programs_call_activity *value)
+{
+    static const uint8_t domain[] = "LXP/programs/terminal-applied-legs/v1";
+    uint8_t hashes[LXP_MAX_TRANSFER_SET_LEGS][32];
+    uint32_t length = value->terminal.terminal_kind == LXP_PROGRAM_TERMINAL_SUCCESS ?
+        value->terminal.applied_length : 0U;
+    uint32_t detail_length = value->terminal.terminal_length;
+    size_t prefix = sizeof(domain) + 4U;
+    size_t count = length / 115U, i;
+    lxp_result status;
+    if (value->terminal.terminal_kind == LXP_PROGRAM_TERMINAL_SUCCESS) {
+        if (value->terminal.applied_written != length ||
+            ((length == 0U) != lxp_ct_is_zero(value->terminal.transfer_root, 32U)))
+            return LXP_ERR_NON_CANONICAL;
+        for (i = 0U; i < count; ++i) {
+            status = lxp_merkle_leaf_hash(value->terminal.applied_legs + i * 115U, 115U, hashes[i]);
+            if (status != LXP_OK) return status;
+        }
+        while (count > 1U) {
+            size_t next = (count + 1U) / 2U;
+            for (i = 0U; i < next; ++i) {
+                size_t right = i * 2U + 1U < count ? i * 2U + 1U : i * 2U;
+                status = lxp_merkle_node_hash(hashes[i * 2U], hashes[right], hashes[i]);
+                if (status != LXP_OK) return status;
+            }
+            count = next;
+        }
+        if (length != 0U && lxp_ct_memcmp(hashes[0], value->terminal.transfer_root, 32U) != 0)
+            return LXP_ERR_NON_CANONICAL;
+    }
+    if (prefix + detail_length + 4U + length > value->terminal.terminal_capacity ||
+        prefix + detail_length + 4U + length > LXP_MAX_ACTIVITY_BYTES)
+        return LXP_ERR_LENGTH_LIMIT;
+    (void)memmove(value->terminal.terminal + prefix, value->terminal.terminal, detail_length);
+    (void)memcpy(value->terminal.terminal, domain, sizeof(domain));
+    terminal_write_u32(value->terminal.terminal + sizeof(domain), detail_length);
+    terminal_write_u32(value->terminal.terminal + prefix + detail_length, length);
+    (void)memcpy(value->terminal.terminal + prefix + detail_length + 4U,
+                 value->terminal.applied_legs, length);
+    value->terminal.terminal_length = (uint32_t)(prefix + detail_length + 4U + length);
+    return LXP_OK;
+}
+
 lxp_result layerx_programs_call_terminal_publish(uint64_t token)
 {
     lxp_programs_call_activity *value =
@@ -1016,6 +1095,10 @@ lxp_result layerx_programs_call_terminal_publish(uint64_t token)
     admission = lxp_ctx_call_admission(value->ctx);
     activity_id = lxp_ctx_activity_id(value->ctx);
     if (admission == NULL || activity_id == NULL) return LXP_FATAL_INVARIANT;
+    if (value->ctx->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT) {
+        status = terminal_wrap_applied(value);
+        if (status != LXP_OK) return status;
+    }
     status = lxp_hash_sha256(value->terminal.graph, value->terminal.graph_length, graph_root);
     if (status == LXP_OK) status = lxp_hash_sha256(value->terminal.terminal,
                                                     value->terminal.terminal_length,
@@ -1026,7 +1109,13 @@ lxp_result layerx_programs_call_terminal_publish(uint64_t token)
     if (status != LXP_OK) return status;
     (void)memset(&outcome, 0, sizeof(outcome));
     outcome.present = true;
-    outcome.encoding_version = 3U;
+    outcome.encoding_version = value->ctx->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT ? 4U : 3U;
+    if (outcome.encoding_version == 4U) {
+        status = lxp_hash_sha256(value->terminal.applied_legs,
+            value->terminal.terminal_kind == LXP_PROGRAM_TERMINAL_SUCCESS ? value->terminal.applied_length : 0U,
+            outcome.applied_legs_digest);
+        if (status != LXP_OK) return status;
+    }
     outcome.terminal_kind = value->terminal.terminal_kind;
     outcome.result_code = value->terminal.result_code;
     outcome.runtime_version = value->terminal.runtime_version;

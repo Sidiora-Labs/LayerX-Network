@@ -326,7 +326,10 @@ impl TransferCapability {
         self.authorize_with_version(effects, false)
     }
 
-    pub fn authorize_v2(&self, effects: &AbiEffects) -> Result<AtomicTransferSet, TransferLawError> {
+    pub fn authorize_v2(
+        &self,
+        effects: &AbiEffects,
+    ) -> Result<AtomicTransferSet, TransferLawError> {
         self.authorize_with_version(effects, true)
     }
 
@@ -339,7 +342,8 @@ impl TransferCapability {
             return Err(TransferLawError::InvalidTransferSet);
         }
         let frames = self.authorized_frames(effects)?;
-        let v2 = require_v2 || self.root_capabilities.has_program_spend()
+        let v2 = require_v2
+            || self.root_capabilities.has_program_spend()
             || effects
                 .calls
                 .iter()
@@ -574,10 +578,11 @@ impl TransferCapability {
         })
     }
 
-    pub(crate) fn authorize_for_graph(
+    pub(crate) fn authorize_for_graph_with_version(
         &self,
         effects: &AbiEffects,
         graph: &CallGraph,
+        v2: bool,
     ) -> Result<AtomicTransferSet, TransferLawError> {
         if graph.principal() != self.principal {
             return Err(TransferLawError::InvariantViolation);
@@ -593,7 +598,11 @@ impl TransferCapability {
                 return Err(TransferLawError::InvariantViolation);
             }
         }
-        self.authorize(effects)
+        if v2 {
+            self.authorize_v2(effects)
+        } else {
+            self.authorize(effects)
+        }
     }
 
     fn authorized_frames(
@@ -1150,9 +1159,12 @@ pub fn verify_applied_kernel_legs(
         return Err(TransferLawError::InvalidTransferSet);
     }
     for leg in encoded.chunks_exact(LEG_BYTES) {
-        if leg[0] != 0 || leg[113..] != 1u16.to_be_bytes()
-            || leg[1..33] == [0; 32] || leg[33..65] == [0; 32]
-            || leg[65..97] == [0; 32] || leg[97..113] == [0; 16]
+        if leg[0] != 0
+            || leg[113..] != 1u16.to_be_bytes()
+            || leg[1..33] == [0; 32]
+            || leg[33..65] == [0; 32]
+            || leg[65..97] == [0; 32]
+            || leg[97..113] == [0; 16]
         {
             return Err(TransferLawError::InvalidTransfer);
         }
@@ -1631,22 +1643,62 @@ mod tests {
         let principal = principal_id(2);
         let capability = capability(program, principal);
         let effects = AbiEffects {
-            transfers: vec![request(program, principal, 7), request(program, principal, 11)],
+            transfers: vec![
+                request(program, principal, 7),
+                request(program, principal, 11),
+            ],
             ..AbiEffects::default()
         };
-        let legacy = capability.authorize(&effects).unwrap_or_else(|error| panic!("legacy authority: {error}"));
-        let current = capability.authorize_v2(&effects).unwrap_or_else(|error| panic!("V2 authority: {error}"));
+        let legacy = capability
+            .authorize(&effects)
+            .unwrap_or_else(|error| panic!("legacy authority: {error}"));
+        let current = capability
+            .authorize_v2(&effects)
+            .unwrap_or_else(|error| panic!("V2 authority: {error}"));
+        let graph = CallGraph::root(crate::CompositionRules::declared(), program, principal);
+        assert_eq!(
+            capability.authorize_for_graph_with_version(&effects, &graph, false),
+            Ok(legacy.clone())
+        );
+        assert_eq!(
+            capability.authorize_for_graph_with_version(&effects, &graph, true),
+            Ok(current.clone())
+        );
+        let wrong_graph = CallGraph::root(
+            crate::CompositionRules::declared(),
+            program,
+            principal_id(9),
+        );
+        assert_eq!(
+            capability.authorize_for_graph_with_version(&effects, &wrong_graph, true),
+            Err(TransferLawError::InvariantViolation)
+        );
         assert!(!legacy.is_v2());
         assert!(current.is_v2());
         assert!(current.canonical().starts_with(SET_DOMAIN_V2));
         assert_ne!(legacy.canonical(), current.canonical());
         assert_eq!(legacy.kernel_canonical(), current.kernel_canonical());
         assert_eq!(legacy.kernel_root(), current.kernel_root());
-        assert_eq!(AtomicTransferSet::canonical_decode(legacy.canonical()), Ok(legacy.clone()));
-        assert_eq!(AtomicTransferSet::canonical_decode(current.canonical()), Ok(current.clone()));
-        assert_eq!(verify_authorization_root(legacy.canonical(), legacy.kernel_root()), Ok(()));
-        assert_eq!(verify_authorization_root(current.canonical(), current.kernel_root()), Ok(()));
-        assert_eq!(capability.authorize_v2(&AbiEffects::default()), Err(TransferLawError::InvalidTransferSet));
+        assert_eq!(
+            AtomicTransferSet::canonical_decode(legacy.canonical()),
+            Ok(legacy.clone())
+        );
+        assert_eq!(
+            AtomicTransferSet::canonical_decode(current.canonical()),
+            Ok(current.clone())
+        );
+        assert_eq!(
+            verify_authorization_root(legacy.canonical(), legacy.kernel_root()),
+            Ok(())
+        );
+        assert_eq!(
+            verify_authorization_root(current.canonical(), current.kernel_root()),
+            Ok(())
+        );
+        assert_eq!(
+            capability.authorize_v2(&AbiEffects::default()),
+            Err(TransferLawError::InvalidTransferSet)
+        );
     }
 
     #[test]
@@ -1655,10 +1707,15 @@ mod tests {
         let principal = principal_id(2);
         let capability = capability(program, principal);
         let effects = AbiEffects {
-            transfers: vec![request(program, principal, 7), request(program, principal, 11)],
+            transfers: vec![
+                request(program, principal, 7),
+                request(program, principal, 11),
+            ],
             ..AbiEffects::default()
         };
-        let set = capability.authorize_v2(&effects).unwrap_or_else(|error| panic!("V2 authority: {error}"));
+        let set = capability
+            .authorize_v2(&effects)
+            .unwrap_or_else(|error| panic!("V2 authority: {error}"));
         let bytes = set.kernel_canonical();
         assert_eq!(verify_applied_kernel_legs(bytes, set.kernel_root()), Ok(()));
         for offset in [0, 1, 33, 65, 97, 112, 113, 114] {

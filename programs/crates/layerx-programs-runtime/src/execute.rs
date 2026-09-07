@@ -2531,6 +2531,7 @@ pub struct BudgetedAuthorizedExecutionRequest<'a> {
     activity_binding: ActivityBudgetBinding,
     execution_context: Option<ExecutionContext>,
     access_declaration: crate::AccessDeclaration,
+    transfer_authority_v2: bool,
 }
 
 impl<'a> BudgetedAuthorizedExecutionRequest<'a> {
@@ -2548,6 +2549,7 @@ impl<'a> BudgetedAuthorizedExecutionRequest<'a> {
             payer,
             activity_binding,
             execution_context: None,
+            transfer_authority_v2: false,
             access_declaration: crate::AccessDeclaration::absent(),
         }
     }
@@ -2557,6 +2559,11 @@ impl<'a> BudgetedAuthorizedExecutionRequest<'a> {
     #[must_use]
     pub(crate) fn with_access_declaration(mut self, declaration: crate::AccessDeclaration) -> Self {
         self.access_declaration = declaration;
+        self
+    }
+
+    pub(crate) fn with_transfer_authority_v2(mut self, selected: bool) -> Self {
+        self.transfer_authority_v2 = selected;
         self
     }
 
@@ -3165,12 +3172,17 @@ impl Executor {
         held_storage: Storage,
         record: AuthorizedExecutionRecord,
         transfer: TransferCapability,
+        transfer_authority_v2: bool,
     ) -> Result<PreparedAuthorizedActivity, ExecutionError> {
         let (transfer, transfer_set) = if record.effects.transfers.is_empty() {
             (None, None)
         } else {
             let transfer_set = transfer
-                .authorize_for_graph(&record.effects, &record.call_graph)
+                .authorize_for_graph_with_version(
+                    &record.effects,
+                    &record.call_graph,
+                    transfer_authority_v2,
+                )
                 .map_err(ExecutionError::Transfer)?;
             (Some(transfer), Some(transfer_set))
         };
@@ -3193,6 +3205,7 @@ impl Executor {
         budgeted: BudgetedAuthorizedExecutionRequest<'_>,
     ) -> Result<PreparedAuthorizedActivityOutcome, ExecutionError> {
         let activity_binding = budgeted.activity_binding;
+        let transfer_authority_v2 = budgeted.transfer_authority_v2;
         let transfer = TransferCapability::from_root_authorization(
             budgeted.request.program,
             &budgeted.request.authorization,
@@ -3201,10 +3214,14 @@ impl Executor {
         .map_err(ExecutionError::Transfer)?;
         let mut held_storage = storage.clone();
         match self.execute_authorized_budgeted(&mut held_storage, budgeted)? {
-            BudgetedV1ActivityOutcome::Success(record) => {
-                Self::seal_authorized_activity(storage.clone(), held_storage, record, transfer)
-                    .map(PreparedAuthorizedActivityOutcome::Success)
-            }
+            BudgetedV1ActivityOutcome::Success(record) => Self::seal_authorized_activity(
+                storage.clone(),
+                held_storage,
+                record,
+                transfer,
+                transfer_authority_v2,
+            )
+            .map(PreparedAuthorizedActivityOutcome::Success),
             BudgetedV1ActivityOutcome::Failure(failure) => {
                 Ok(PreparedAuthorizedActivityOutcome::Failure(failure))
             }
@@ -3245,6 +3262,7 @@ impl Executor {
             activity_binding,
             execution_context: _,
             access_declaration,
+            transfer_authority_v2: _,
         } = budgeted;
         self.validate_budget_token(&admitted_budget, payer, activity_binding)?;
         if request.module.abi_revision() != AbiRevision::V1 {
@@ -3569,6 +3587,7 @@ impl Executor {
             activity_binding,
             execution_context,
             access_declaration,
+            transfer_authority_v2: _,
         } = budgeted;
         let executor = self.for_abi(crate::ABI_V2_VERSION);
         executor.validate_budget_token(&admitted_budget, payer, activity_binding)?;
@@ -3594,6 +3613,7 @@ impl Executor {
             activity_binding,
             execution_context,
             access_declaration,
+            transfer_authority_v2: _,
         } = budgeted;
         self.validate_budget_token(&admitted_budget, payer, activity_binding)?;
         let execution_context = execution_context.ok_or(ExecutionError::Context(
