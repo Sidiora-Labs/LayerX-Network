@@ -397,6 +397,7 @@ impl AbiEffects {
         Ok(encoded)
     }
 
+    #[cfg(feature = "host-ffi")]
     pub(crate) fn write_canonical_program_event_envelope(
         &self,
         encoded: &mut Vec<u8>,

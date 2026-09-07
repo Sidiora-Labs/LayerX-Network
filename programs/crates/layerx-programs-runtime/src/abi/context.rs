@@ -88,6 +88,7 @@ impl ExecutionContext {
         bytes
     }
 
+    #[cfg(any(feature = "host-ffi", test))]
     pub(crate) const fn authenticated(
         activity_sequence: u64,
         batch_height: u64,
@@ -141,6 +142,7 @@ impl ExecutionContext {
         }
     }
 
+    #[cfg(feature = "host-ffi")]
     pub(crate) const fn authenticates_versions(
         self,
         runtime_version: u16,

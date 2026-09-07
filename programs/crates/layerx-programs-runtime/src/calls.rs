@@ -353,6 +353,7 @@ impl CallGraph {
         evidence
     }
 
+    #[cfg(feature = "host-ffi")]
     pub(crate) fn write_canonical_evidence(&self, evidence: &mut Vec<u8>) {
         evidence.clear();
         evidence.extend_from_slice(GRAPH_DOMAIN);
