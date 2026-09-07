@@ -14,6 +14,9 @@ pub const MAX_SOURCE_ID_BYTES: usize = 64;
 pub struct MirrorSourceId(String);
 
 impl MirrorSourceId {
+    ///
+    /// # Errors
+    /// Returns an error for an empty, oversized or control-character-containing identifier.
     pub fn new(value: impl Into<String>) -> Result<Self, MirrorSourceError> {
         let value = value.into();
         if value.is_empty()
@@ -204,6 +207,9 @@ pub struct MirrorSource {
 }
 
 impl MirrorSource {
+    ///
+    /// # Errors
+    /// Returns an error if any required Ethereum target identity is zero.
     pub fn ethereum(
         id: MirrorSourceId,
         config: EthereumMirrorReadConfig,
@@ -230,6 +236,9 @@ impl MirrorSource {
         })
     }
 
+    ///
+    /// # Errors
+    /// Returns an error if any required Solana target identity is zero.
     pub fn solana(
         id: MirrorSourceId,
         config: SolanaMirrorReadConfig,
@@ -351,6 +360,9 @@ pub struct MirrorSources {
 }
 
 impl MirrorSources {
+    ///
+    /// # Errors
+    /// Returns an error for a zero network, invalid source count or duplicate source identifiers.
     pub fn new(
         layerx_network_id: u32,
         sources: Vec<MirrorSource>,
@@ -374,6 +386,9 @@ impl MirrorSources {
     /// Reads all policy candidates so a conflict cannot be hidden by an
     /// earlier preferred response. The selected archive always remains one
     /// source's indivisible evidence bundle.
+    ///
+    /// # Errors
+    /// Returns an error for invalid policy, unavailable data, conflicting commitments or insufficient agreement.
     pub fn read(
         &self,
         batch_number: u64,
@@ -457,7 +472,10 @@ impl MirrorSources {
     }
 
     /// Rechecks publication provenance while retaining the already verified
-    /// archive bytes and signed LayerX evidence.
+    /// archive bytes and signed `LayerX` evidence.
+    ///
+    /// # Errors
+    /// Returns an error for an unknown source or a failed chain provenance query.
     pub fn recheck(
         &self,
         mut archive: ObservedArchive,
