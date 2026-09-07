@@ -198,7 +198,7 @@ fn scan_guest_selected(
         memory,
         exports,
         code_section(&[func_body(&[], &[0x41, 0, 0x0b]), func_body(&[], &entry)]),
-        data_section(&[(0, prefix), (32, cursor), (64, b"keep")]),
+        data_section(&[(0, prefix), (32, cursor), (256, b"keep")]),
     ])
 }
 
@@ -257,7 +257,7 @@ fn scan_status_guest(
             func_body(&[], &[0x41, 0, 0x0b]),
             func_body(&[(1, TYPE_I32)], &entry),
         ]),
-        data_section(&[(0, prefix), (32, cursor), (64, b"keep"), (128, b"keep")]),
+        data_section(&[(0, prefix), (32, cursor), (128, b"keep")]),
     ])
 }
 
@@ -411,6 +411,22 @@ fn candidate_scan_paginates_across_activities_and_is_insertion_order_independent
         .unwrap_or_else(|| panic!("first response"))
         .bytes[13..]
         .to_vec();
+    let mut overwritten_cursor = cursor.clone();
+    overwritten_cursor[64 - 32..68 - 32].copy_from_slice(b"keep");
+    let before = left.clone();
+    let corrupted = execute(
+        &scan_status_guest(1, b"", &overwritten_cursor, 1, 93, 128, 13, 128),
+        owner,
+        actor,
+        principal_read(),
+        &mut left,
+        8,
+    );
+    assert_eq!(corrupted.execution().usage().storage_read_bytes, 0);
+    let mut expected_refusal = (-2_i32).to_le_bytes().to_vec();
+    expected_refusal.extend_from_slice(b"keep");
+    assert_eq!(corrupted.response().unwrap().bytes, expected_refusal);
+    assert_eq!(left, before);
     let second = execute(
         &scan_guest(b"", &cursor, 1, 93, 128, 13, 128, 13),
         owner,
@@ -446,6 +462,21 @@ fn candidate_scan_enforces_complete_page_byte_ceiling_independently_of_entry_cei
         namespace,
         &[(b"a", b"a"), (b"b", b"b"), (b"c", b"c")],
     );
+
+    let terminal_page = expected_page(&[(b"a", b"a"), (b"b", b"b"), (b"c", b"c")], None);
+    assert_eq!(terminal_page.len(), 29);
+    let terminal = execute(
+        &scan_guest(b"", b"", 64, 101, 128, 101, 128, 29),
+        owner,
+        actor,
+        principal_read(),
+        &mut exact_storage,
+        29,
+    );
+    assert_eq!(terminal.execution().usage().storage_read_bytes, 29);
+    assert_eq!(terminal.response().unwrap().bytes, terminal_page);
+    seed(&mut exact_storage, namespace, &[(b"d", b"d")]);
+    seed(&mut one_byte_lower_storage, namespace, &[(b"d", b"d")]);
 
     let exact_cursor = expected_cursor(owner, actor, 64, 101, b"b");
     let exact_page = expected_page(&[(b"a", b"a"), (b"b", b"b")], Some(&exact_cursor));
@@ -500,19 +531,19 @@ fn candidate_scan_refusals_are_unmetered_and_leave_output_sentinel_unchanged() {
     );
     for (guest, grants) in [
         (
-            scan_guest(b"", b"", 1, 13, 128, 12, 64, 4),
+            scan_guest(b"", b"", 1, 13, 128, 12, 256, 4),
             principal_read(),
         ),
         (
-            scan_guest(b"", b"", 1, 13, 65_535, 13, 64, 4),
+            scan_guest(b"", b"", 1, 13, 65_535, 13, 256, 4),
             principal_read(),
         ),
         (
-            scan_guest(b"", b"", 1, 13, 128, 13, 64, 4),
+            scan_guest(b"", b"", 1, 13, 128, 13, 256, 4),
             CapabilitySet::empty(),
         ),
         (
-            scan_guest_selected(2, b"", b"", 1, 13, 128, 13, 64, 4),
+            scan_guest_selected(2, b"", b"", 1, 13, 128, 13, 256, 4),
             principal_read(),
         ),
     ] {
@@ -629,15 +660,15 @@ fn candidate_scan_rejects_cross_scope_prefix_and_limit_cursor_reuse() {
         .to_vec();
     for (guest, grants) in [
         (
-            scan_guest(b"a", &cursor, 1, 93, 128, 13, 64, 4),
+            scan_guest(b"a", &cursor, 1, 93, 128, 13, 256, 4),
             principal_read(),
         ),
         (
-            scan_guest(b"", &cursor, 2, 93, 128, 13, 64, 4),
+            scan_guest(b"", &cursor, 2, 93, 128, 13, 256, 4),
             principal_read(),
         ),
         (
-            scan_guest_selected(2, b"", &cursor, 1, 93, 128, 13, 64, 4),
+            scan_guest_selected(2, b"", &cursor, 1, 93, 128, 13, 256, 4),
             CapabilitySet::new([Capability::SharedStorageRead])
                 .unwrap_or_else(|error| panic!("shared grant: {error}")),
         ),
@@ -692,7 +723,7 @@ fn candidate_scan_observes_same_activity_writes_and_a_later_failure_rolls_them_b
     let module = engine
         .validate_candidate_v2(&write_then_scan_guest(12, true))
         .unwrap_or_else(|error| panic!("candidate validation: {error}"));
-    assert!(Executor::declared()
+    let trapped = Executor::declared()
         .execute_authorized_candidate(
             &mut refused,
             AuthorizedExecutionRequest {
@@ -706,6 +737,15 @@ fn candidate_scan_observes_same_activity_writes_and_a_later_failure_rolls_them_b
                 response_capacity: 0,
             },
         )
-        .is_err());
+        .unwrap_or_else(|error| panic!("typed trap outcome: {error}"));
+    let layerx_programs_runtime::V2ActivityOutcome::Failure(failure) = trapped.outcome() else {
+        panic!("expected typed runtime fault: {:?}", trapped.outcome());
+    };
+    assert_eq!(
+        failure.class(),
+        layerx_programs_runtime::RefusalClass::RuntimeFault
+    );
+    assert_eq!(failure.program(), owner);
+    assert!(trapped.response().is_none());
     assert_eq!(refused, before);
 }
