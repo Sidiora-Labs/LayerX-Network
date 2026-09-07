@@ -5,8 +5,8 @@ from pathlib import Path
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
-from custody_credit import big, require, sha, write_new
-from deploy_local_custody import command
+from custody_credit import big, quantity, require, sha, unhex, write_new
+from deploy_local_custody import command, disposable_rpc
 
 
 def main():
@@ -14,11 +14,23 @@ def main():
     parser.add_argument('--profile', required=True)
     parser.add_argument('--output', required=True)
     parser.add_argument('--builder', required=True)
+    parser.add_argument('--rpc')
+    parser.add_argument('--ca-bundle')
+    parser.add_argument('--disposable-identity')
     args = parser.parse_args()
     profile = Path(args.profile).read_bytes()
     require(len(profile) == 207 and profile[:5] == b'LXBC1' and profile[205:] == big(3, 2),
             'protocol-three custody profile required')
-    require(int.from_bytes(profile[5:13], "big") != 125, "persistent chain ID refused")
+    chain_id = int.from_bytes(profile[5:13], "big")
+    if chain_id == 125 or args.disposable_identity:
+        require(args.rpc and args.ca_bundle and args.disposable_identity,
+                "chain 125 requires verified disposable identity")
+        rpc = disposable_rpc(args.rpc, args.ca_bundle, args.disposable_identity)
+        require(quantity(rpc.call("eth_chainId", [])) == chain_id, "profile chain ID")
+        require(unhex(rpc.call("eth_getBlockByNumber", ["0x0", False])["hash"], 32)
+                == profile[169:201], "profile genesis identity")
+    else:
+        require(not args.rpc and not args.ca_bundle, "RPC verification requires disposable identity")
     directory = Path(args.output).resolve()
     directory.mkdir(mode=0o700, parents=True, exist_ok=False)
     key = Ed25519PrivateKey.generate()
