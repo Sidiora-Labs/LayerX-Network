@@ -44,6 +44,7 @@ See `docs/MONOREPO.md` for build boundaries, workflow naming, and tag convention
 
 ## Resources
 
+- [Testnet quickstart](Quickstart.md)
 - [Protocol design](https://github.com/Sidiora-Labs/LayerX-Protocol/blob/main/spec/layerx-protocol/design.md)
 - [Contributing guide](https://github.com/Sidiora-Labs/LayerX-Protocol/blob/main/CONTRIBUTING.md)
 - [Security policy](https://github.com/Sidiora-Labs/LayerX-Protocol/blob/main/SECURITY.md)
