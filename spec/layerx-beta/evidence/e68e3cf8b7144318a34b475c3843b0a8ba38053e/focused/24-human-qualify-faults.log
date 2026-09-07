@@ -1,0 +1,6 @@
+make[1]: warning: jobserver unavailable: using -j1.  Add '+' to parent make rule.
+make[1]: Entering directory '/root/lx-lanes/exec'
+python3 tools/qualification/release_runner.py human-qualify-faults
+qualification failed: LAYERX_QUALIFICATION_REAL_STACK=1 is required
+make[1]: *** [Makefile:2102: human-qualify-faults] Error 1
+make[1]: Leaving directory '/root/lx-lanes/exec'

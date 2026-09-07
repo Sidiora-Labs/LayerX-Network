@@ -1,0 +1,181 @@
+make[1]: warning: jobserver unavailable: using -j1.  Add '+' to parent make rule.
+make[1]: Entering directory '/root/lx-lanes/exec'
+cargo test --manifest-path agent/Cargo.toml --locked -p layerx-agentd --test session
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.22s
+     Running tests/session.rs (agent/target/debug/deps/session-db6fb31441013d48)
+
+running 13 tests
+test absent_protocol_authority_and_incomplete_requests_are_refused ... ok
+test an_unknown_record_version_is_refused ... ok
+test legacy_records_load_at_the_first_generation_and_are_rewritten_on_change ... ok
+test restart_reloads_the_generation_before_an_open_session_token_is_accepted ... ok
+test a_zero_generation_record_is_refused_rather_than_defaulted ... ok
+test scope_narrowing_advances_the_generation_and_refuses_every_earlier_token ... ok
+test a_recorded_session_id_is_never_reopened_even_after_restart ... ok
+test generation_exhaustion_is_typed_and_does_not_mutate_or_persist_the_session ... ok
+test session_open_binds_every_dimension_and_token_is_daemon_only ... ok
+test closed_session_token_is_revoked_not_expired_before_and_after_restart ... ok
+test closing_one_concurrent_session_leaves_sibling_state_untouched ... ok
+test closing_under_one_tenant_cannot_alter_generations_under_another ... ok
+test a_failed_tenant_restore_leaves_every_existing_and_candidate_session_untouched ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.45s
+
+cargo test --manifest-path agent/Cargo.toml --locked -p layerx-agentd --test revocation
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.23s
+     Running tests/revocation.rs (agent/target/debug/deps/revocation-9b8643cf2a5e002f)
+
+running 6 tests
+test unknown_submission_remains_owned_for_receipt_resolution ... ok
+test revocation_cancels_only_unsubmitted_work_and_persists_session_invalidation ... ok
+test revocation_stops_the_in_flight_stream_with_a_typed_event ... ok
+test authority_revocation_batch_failure_changes_no_session_or_generation ... ok
+test authority_revocation_is_global_for_the_same_did_and_authority_but_session_ids_remain_tenant_qualified ... ok
+test revocation_leaves_sibling_and_cross_tenant_sessions_at_their_generation ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+
+cargo test --manifest-path agent/Cargo.toml --locked -p layerx-agentd --test tenant_resolve
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.18s
+     Running tests/tenant_resolve.rs (agent/target/debug/deps/tenant_resolve-f798bf0d514a7cdb)
+
+running 7 tests
+test cross_tenant_target_and_replayed_token_use_one_non_enumerating_refusal ... ok
+test bootstrap_operations_are_explicitly_outside_the_existing_token_gate ... ok
+test spoofed_request_tenants_are_ignored_on_every_surface ... ok
+test wrong_agent_scope_and_expiry_are_explicit_and_audited ... ok
+test an_unloaded_registry_refuses_every_generated_gated_operation_until_reload ... ok
+test revocation_is_reported_before_expiry_for_every_generated_gated_operation ... ok
+test every_generated_token_gated_operation_refuses_closed_revoked_and_restarted_sessions ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s
+
+cargo test --manifest-path agent/Cargo.toml --locked -p layerx-agentd --test subscription
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.54s
+     Running tests/subscription.rs (agent/target/debug/deps/subscription-a3c22e54842fc405)
+
+running 5 tests
+test tenant_and_agent_scope_are_applied_before_any_filter ... ok
+test legacy_subscription_without_a_session_generation_is_durably_quarantined ... ok
+test pause_resume_delete_and_cross_scope_non_disclosure_are_durable ... ok
+test restart_resumes_from_acknowledged_cursor_and_remembers_deliveries ... ok
+test closed_session_terminates_the_in_flight_stream_with_a_typed_revoked_event ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.28s
+
+cargo test --manifest-path agent/Cargo.toml --locked -p layerx-agentd --test delivery
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s
+     Running tests/delivery.rs (agent/target/debug/deps/delivery-14943ef82250ed79)
+
+running 3 tests
+test stalled_consumer_keeps_the_seam_and_event_under_bounded_retry ... ok
+test start_before_filter_subject_genesis_transitions_before_first_live_match ... ok
+test loaded_seam_is_ordered_observable_and_has_no_duplicate ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s
+
+cargo test --manifest-path agent/Cargo.toml --locked -p layerx-agentd --test gaps
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
+     Running tests/gaps.rs (agent/target/debug/deps/gaps-5477ee3b334416a8)
+
+running 4 tests
+test retention_expiry_marks_outage_truncated_and_survives_restart ... ok
+test unrecoverable_core_gap_remains_durably_blocked ... ok
+test skipped_sequence_is_backfilled_over_the_real_stream_before_unblocking ... ok
+test bound_gap_runtime_requires_the_common_resolver_and_refuses_after_revocation ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+
+cargo test --manifest-path agent/Cargo.toml --locked -p layerx-agentd --test webhook
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s
+     Running tests/webhook.rs (agent/target/debug/deps/webhook-9ebecdcf84739fa9)
+
+running 4 tests
+test unreachable_endpoint_schedules_retry_and_preserves_health_cursor ... ok
+test deletion_prevents_connection_and_retains_tombstone_audit ... ok
+test capability_revocation_midflight_cancels_ack_wait_and_persists_stop ... ok
+test slow_endpoint_receives_byte_identical_retry_and_bound_event_evidence ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s
+
+cargo test --manifest-path agent/Cargo.toml --locked -p layerx-mcp --test scope
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.63s
+     Running tests/scope.rs (agent/target/debug/deps/scope-416670d466a3d9ca)
+
+running 7 tests
+test server_exposes_only_the_exact_bound_scope_and_separates_read_from_write ... ok
+test every_reachable_tool_is_an_audited_daemon_invocation_with_all_gates ... ok
+test authority_revocation_refuses_the_bound_server_and_leaves_a_sibling_session_live ... ok
+test binding_refuses_unlinked_cross_tenant_expired_empty_and_unloaded_authority ... ok
+test bound_server_refuses_every_tool_once_its_session_is_closed_or_revoked ... ok
+test a_committed_write_is_linearized_against_a_concurrent_close ... ok
+test every_catalogue_tool_has_a_canonical_operation_and_reauthorizes_at_route_and_completion ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.70s
+
+cargo test --manifest-path agent/Cargo.toml --locked -p layerx-mcp --test readonly
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.19s
+     Running tests/readonly.rs (agent/target/debug/deps/readonly-d1bfbdbf07a82a17)
+
+running 5 tests
+test write_only_scope_cannot_construct_a_read_only_server ... ok
+test write_tools_are_absent_through_every_model_reachable_shape ... ok
+test read_only_capability_and_catalogue_expose_no_write_surface ... ok
+test read_only_mode_never_invokes_a_write_executor ... ok
+test read_only_server_refuses_every_read_once_its_session_is_closed ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s
+
+cargo test --manifest-path agent/Cargo.toml --locked -p layerx-mcp --test write
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s
+     Running tests/write.rs (agent/target/debug/deps/write-037344400ba53fbe)
+
+running 5 tests
+test terminal_protocol_rejection_names_track_stage_and_exact_result_code ... ok
+test refused_policy_is_a_typed_stage_error_and_is_audited ... ok
+test executed_without_matching_verified_receipt_is_never_success ... ok
+test closed_session_refuses_submit_and_track_with_a_typed_revocation_before_any_transcript ... ok
+test unknown_is_never_reported_as_success_and_late_receipt_resolves_through_track ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s
+
+cargo test --manifest-path agent/Cargo.toml --locked -p layerx-sdk --test sdk
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s
+     Running tests/sdk.rs (agent/target/debug/deps/sdk-b0074e2bfe861a26)
+
+running 6 tests
+test approval_module_matches_contract_1_1_operations_events_and_outcomes ... ok
+test signer_surface_contains_no_key_export_and_offline_verifier_is_real ... ok
+test operation_catalogue_covers_the_complete_contract_surface ... ok
+test unknown_and_future_protocol_codes_remain_lossless ... ok
+test reads_never_present_unverified_or_below_requested_values ... ok
+test daemon_and_direct_node_shapes_publish_identical_guarantees_and_calls ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+cargo test --manifest-path agent/Cargo.toml --locked -p layerx-agent-api --test schema
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running tests/schema.rs (agent/target/debug/deps/schema-7d3d88f281729ac4)
+
+running 8 tests
+test compatibility_gate_accepts_additions_and_rejects_mutation_or_removal ... ok
+test consensus_integers_are_exact_and_dynamic_languages_are_not_numeric ... ok
+test adding_a_settlement_domain_is_additive_by_construction ... ok
+test generated_contract_is_pinned_to_the_schema ... ok
+test golden_request_and_response_vectors_are_reviewable_exact_bytes ... ok
+test custody_receipt_shapes_name_the_paxeer_settlement_domain ... ok
+test untagged_or_foreign_custody_claims_are_rejected ... ok
+test programs_contract_is_included_with_receipt_resolution_and_call_idempotency ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+python3 platform/sdk/generators/generate_portable.py --check /root/lx-lanes/exec
+python3 platform/sdk/generators/generate_jvm.py --check /root/lx-lanes/exec
+cargo run --offline --manifest-path platform/Cargo.toml --locked -p layerx-platform-sdkgen -- --check
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running `platform/target/debug/layerx-platform-sdkgen --check`
+cargo test --manifest-path human/Cargo.toml --locked -p layerx-human-service
+error: the lock file /root/lx-lanes/exec/human/Cargo.lock needs to be updated but --locked was passed to prevent this
+If you want to try to generate the lock file without accessing the network, remove the --locked flag and use --offline instead.
+make[1]: *** [Makefile:1952: human-test-service] Error 101
+make[1]: Leaving directory '/root/lx-lanes/exec'

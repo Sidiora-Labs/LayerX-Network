@@ -1,0 +1,14 @@
+make[1]: warning: jobserver unavailable: using -j1.  Add '+' to parent make rule.
+make[1]: Entering directory '/root/lx-lanes/exec'
+cd programs && cargo build --locked --workspace --features layerx-programs-sandbox/host-ffi
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.13s
+mkdir -p build/agent/
+cc -Iinclude -Ibuild/generated -DLXP_BUILD_TARGET_TRIPLE=\"x86_64-linux-gnu\" -DLXP_BUILD_OPTIMISATION=\"-O2\" -DLXP_BUILD_REVISION=\"unknown\" -std=c17 -pedantic -Werror -Wall -Wextra -Wconversion -Wshadow -Wvla -fno-strict-aliasing -ffp-contract=off -O2  agent/tests/boundary/node/layerxd_lni.c \
+	cmd/layerxd/lxp_daemon_main.c cmd/layerxd/lxp_daemon_config.c cmd/layerxd/lxp_daemon_shutdown.c cmd/layerxd/lxp_daemon_receipt_authority.c cmd/layerxd/lxp_daemon_protocol.c cmd/layerxd/lxp_daemon_listener.c cmd/layerxd/lxp_daemon_lni.c cmd/layerxd/lxp_daemon_evidence.c cmd/layerxd/lxp_daemon_finality_authority.c cmd/layerxd/lxp_daemon_batch_wal.c cmd/layerxd/lxp_daemon_artifact.c cmd/layerxd/lxp_daemon_process.c cmd/layerxd/lxp_daemon_authority_replica.c cmd/layerxd/lxp_daemon_cli.c build/liblayerx.a programs/target/debug/liblayerx_programs_sandbox.a \
+	 -lcrypto -lsqlite3 -pthread -ldl -lm -o build/agent/layerxd-lni
+agent/tests/boundary/node/layerxd_lni.c:80:37: error: ‘LX_ASSET_REGISTRY_CAPACITY’ undeclared here (not in a function); did you mean ‘LX_ACCOUNT_REGISTRY_CAPACITY’?
+   80 |     lxp_transfer_asset_state assets[LX_ASSET_REGISTRY_CAPACITY];
+      |                                     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+      |                                     LX_ACCOUNT_REGISTRY_CAPACITY
+make[1]: *** [Makefile:2269: build/agent/layerxd-lni] Error 1
+make[1]: Leaving directory '/root/lx-lanes/exec'

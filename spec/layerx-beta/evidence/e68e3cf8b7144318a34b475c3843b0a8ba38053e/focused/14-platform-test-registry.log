@@ -1,0 +1,118 @@
+make[1]: warning: jobserver unavailable: using -j1.  Add '+' to parent make rule.
+make[1]: Entering directory '/root/lx-lanes/exec'
+cargo test --offline --manifest-path platform/Cargo.toml --locked -p layerx-platform-registry
+   Compiling crypto-common v0.1.7
+   Compiling ff v0.13.1
+   Compiling der v0.7.10
+   Compiling wasmi v0.31.2 (/root/lx-lanes/exec/programs/vendor/wasmi-0.31.2)
+   Compiling digest v0.10.7
+   Compiling group v0.13.0
+   Compiling signature v2.2.0
+   Compiling hmac v0.12.1
+   Compiling sha2 v0.10.9
+   Compiling rfc6979 v0.4.0
+   Compiling sec1 v0.7.3
+   Compiling elliptic-curve v0.13.8
+   Compiling ed25519 v2.2.3
+   Compiling curve25519-dalek v4.1.3
+   Compiling sha3 v0.10.8
+   Compiling ecdsa v0.16.9
+   Compiling ed25519-dalek v2.2.0
+   Compiling k256 v0.13.4
+   Compiling openssl v0.10.73
+   Compiling layerx-crypto v0.1.0 (/root/lx-lanes/exec/agent/crates/layerx-crypto)
+   Compiling rustix v1.1.4
+   Compiling linux-raw-sys v0.12.1
+   Compiling native-tls v0.2.15
+   Compiling ureq v3.4.0
+   Compiling layerx-programs-runtime v0.1.0 (/root/lx-lanes/exec/programs/crates/layerx-programs-runtime)
+   Compiling layerx-proof v0.1.0 (/root/lx-lanes/exec/agent/crates/layerx-proof)
+   Compiling layerx-programs-registry v0.1.0 (/root/lx-lanes/exec/programs/crates/layerx-programs-registry)
+   Compiling layerx-programs-protocol-adapter v0.1.0 (/root/lx-lanes/exec/programs/crates/layerx-programs-protocol-adapter)
+   Compiling layerx-platform-registry v0.1.0 (/root/lx-lanes/exec/platform/hosted/registry)
+warning: variable does not need to be mutable
+   --> hosted/registry/src/builder.rs:723:9
+    |
+723 |     let mut file = File::from(descriptor);
+    |         ----^^^^
+    |         |
+    |         help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `field` is never used
+    --> hosted/registry/src/routes.rs:1010:4
+     |
+1010 | fn field(body: &[u8], name: &str) -> Option<String> {
+     |    ^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `layerx-platform-registry` (lib) generated 2 warnings (run `cargo fix --lib -p layerx-platform-registry` to apply 1 suggestion)
+warning: variable does not need to be mutable
+   --> hosted/registry/src/main.rs:609:9
+    |
+609 |     let mut output = match child.stdout.take() {
+    |         ----^^^^^^
+    |         |
+    |         help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> hosted/registry/src/main.rs:689:16
+    |
+689 |             Ok(mut stream) => {
+    |                ----^^^^^^
+    |                |
+    |                help: remove this `mut`
+
+warning: `layerx-platform-registry` (lib test) generated 2 warnings (2 duplicates)
+warning: `layerx-platform-registry` (bin "layerx-program-registry" test) generated 2 warnings (2 duplicates)
+warning: `layerx-platform-registry` (bin "layerx-program-registry") generated 2 warnings (run `cargo fix --bin "layerx-program-registry"` to apply 2 suggestions)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 57.56s
+     Running unittests src/lib.rs (platform/target/debug/deps/layerx_platform_registry-219efbceb651fa84)
+
+running 5 tests
+test auth::tests::bearer_authority_refuses_absent_wrong_and_ambiguous_credentials ... ok
+test routes::tests::deployment_ingress_does_not_accept_caller_proof_bytes ... ok
+test routes::tests::deployment_ingress_stays_blocked_for_forgeable_record_shape ... ok
+test http::tests::accepts_one_canonical_bounded_request ... ok
+test http::tests::refuses_duplicate_content_length_and_transfer_encoding ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/layerx-cgroup-exec.rs (platform/target/debug/deps/layerx_cgroup_exec-ca06a6eb9958bc64)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (platform/target/debug/deps/layerx_program_registry-e42f5af80637040d)
+
+running 3 tests
+test tests::request_deadline_cancels_only_the_bounded_worker_and_preserves_listener_liveness ... ok
+test tests::delegation_quota_and_open_inode_execution_fail_closed ... ok
+test tests::deployment_contract_keeps_https_mtls_and_bearer_roles_aligned ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/journal.rs (platform/target/debug/deps/journal-6aa2d36e2bf3accd)
+
+running 6 tests
+test observed_head_round_trips_and_refuses_absent_observations ... ok
+test envelope_encoding_round_trips_and_names_the_missing_part ... ok
+test startup_quarantines_defective_units_and_loads_the_rest ... ok
+test legacy_two_file_units_load_when_complete_and_quarantine_when_not ... ok
+test replaying_the_journal_reproduces_the_projection_of_its_evidence ... ok
+test interruption_at_every_write_step_recovers_on_restart_without_repair ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.75s
+
+   Doc-tests layerx_platform_registry
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+make[1]: Leaving directory '/root/lx-lanes/exec'

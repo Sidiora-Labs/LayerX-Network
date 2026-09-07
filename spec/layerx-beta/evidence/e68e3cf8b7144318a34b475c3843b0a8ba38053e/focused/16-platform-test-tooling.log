@@ -1,0 +1,423 @@
+make[1]: warning: jobserver unavailable: using -j1.  Add '+' to parent make rule.
+make[1]: Entering directory '/root/lx-lanes/exec'
+bash platform/cli/tests/production-credential-refusal.sh
+   Compiling cfg-if v1.0.4
+   Compiling libc v0.2.189
+   Compiling version_check v0.9.5
+   Compiling typenum v1.20.1
+   Compiling zeroize v1.9.0
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling unicode-ident v1.0.24
+   Compiling generic-array v0.14.7
+   Compiling subtle v2.6.1
+   Compiling const-oid v0.9.6
+   Compiling autocfg v1.5.1
+   Compiling block-buffer v0.10.4
+   Compiling shlex v2.0.1
+   Compiling getrandom v0.2.17
+   Compiling syn v2.0.119
+   Compiling find-msvc-tools v0.1.11
+   Compiling cpufeatures v0.2.17
+   Compiling rand_core v0.6.4
+   Compiling cc v1.4.4
+   Compiling syn v3.0.3
+   Compiling crypto-common v0.1.7
+   Compiling digest v0.10.7
+   Compiling num-traits v0.2.19
+   Compiling serde_core v1.0.229
+   Compiling bitflags v2.13.1
+   Compiling once_cell v1.21.4
+   Compiling serde v1.0.229
+   Compiling block-padding v0.3.3
+   Compiling inout v0.1.4
+   Compiling hmac v0.12.1
+   Compiling pkg-config v0.3.34
+   Compiling pin-project-lite v0.2.17
+   Compiling vcpkg v0.2.15
+   Compiling cipher v0.4.4
+   Compiling num-integer v0.1.47
+   Compiling sha2 v0.10.9
+   Compiling semver v1.0.28
+   Compiling winnow v1.0.4
+   Compiling serde_derive v1.0.229
+   Compiling rustc_version v0.4.1
+   Compiling openssl-sys v0.9.117
+   Compiling num-bigint v0.4.8
+   Compiling signature v2.2.0
+   Compiling ff v0.13.1
+   Compiling der v0.7.10
+   Compiling parking v2.2.1
+   Compiling base64ct v1.8.3
+   Compiling base16ct v0.2.0
+   Compiling group v0.13.0
+   Compiling curve25519-dalek v4.1.3
+   Compiling sec1 v0.7.3
+   Compiling crypto-bigint v0.5.5
+   Compiling equivalent v1.0.2
+   Compiling hashbrown v0.17.1
+   Compiling paste v1.0.15
+   Compiling libm v0.2.16
+   Compiling futures-core v0.3.34
+   Compiling foreign-types-shared v0.1.1
+   Compiling openssl v0.10.73
+   Compiling foreign-types v0.3.2
+   Compiling indexmap v2.14.0
+   Compiling elliptic-curve v0.13.8
+   Compiling toml_parser v1.1.3+spec-1.1.0
+   Compiling curve25519-dalek-derive v0.1.1
+   Compiling openssl-macros v0.1.1
+   Compiling rfc6979 v0.4.0
+   Compiling toml_datetime v1.1.1+spec-1.1.0
+   Compiling crossbeam-utils v0.8.22
+   Compiling parity-wasm v0.45.0 (/root/lx-lanes/exec/programs/vendor/parity-wasm)
+   Compiling ecdsa v0.16.9
+   Compiling ed25519 v2.2.3
+   Compiling blake3 v1.5.0
+   Compiling universal-hash v0.5.1
+   Compiling indexmap-nostd v0.4.0
+   Compiling opaque-debug v0.3.1
+   Compiling rustix v1.1.4
+   Compiling downcast-rs v1.2.1
+   Compiling keccak v0.1.6
+   Compiling wasmi_core v0.13.0
+   Compiling sha3 v0.10.8
+   Compiling wasmparser-nostd v0.100.2
+   Compiling poly1305 v0.8.0
+   Compiling ed25519-dalek v2.2.0
+   Compiling k256 v0.13.4
+   Compiling toml_edit v0.25.13+spec-1.1.0
+   Compiling password-hash v0.5.0
+   Compiling chacha20 v0.9.1
+   Compiling blake2 v0.10.6
+   Compiling aead v0.5.2
+   Compiling constant_time_eq v0.3.1
+   Compiling smallvec v1.15.2
+   Compiling layerx-types v0.1.0 (/root/lx-lanes/exec/agent/crates/layerx-types)
+   Compiling linux-raw-sys v0.12.1
+   Compiling arrayvec v0.7.8
+   Compiling futures-io v0.3.34
+   Compiling fastrand v2.5.0
+   Compiling arrayref v0.3.9
+   Compiling spin v0.9.9
+   Compiling wasmi_arena v0.4.1
+   Compiling wasmi v0.31.2 (/root/lx-lanes/exec/programs/vendor/wasmi-0.31.2)
+   Compiling layerx-wire v0.1.0 (/root/lx-lanes/exec/agent/crates/layerx-wire)
+   Compiling chacha20poly1305 v0.10.1
+   Compiling argon2 v0.5.3
+   Compiling wasm-instrument v0.4.0 (/root/lx-lanes/exec/programs/vendor/wasm-instrument)
+   Compiling proc-macro-crate v3.5.0
+   Compiling concurrent-queue v2.5.0
+   Compiling zvariant_utils v4.2.0
+   Compiling event-listener v5.4.2
+   Compiling enumflags2_derive v0.7.12
+   Compiling zvariant_derive v5.15.0
+   Compiling event-listener-strategy v0.5.4
+   Compiling layerx-crypto v0.1.0 (/root/lx-lanes/exec/agent/crates/layerx-crypto)
+   Compiling enumflags2 v0.7.12
+   Compiling futures-lite v2.6.1
+   Compiling zcheapstr v1.1.0
+   Compiling ring v0.17.14
+   Compiling endi v1.1.1
+   Compiling slab v0.4.12
+   Compiling async-io v2.6.0
+   Compiling log v0.4.34
+   Compiling polling v3.11.0
+   Compiling errno v0.3.14
+   Compiling rustls-pki-types v1.15.1
+   Compiling itoa v1.0.18
+   Compiling async-task v4.7.1
+   Compiling zmij v1.0.23
+   Compiling untrusted v0.9.0
+   Compiling signal-hook-registry v1.4.8
+   Compiling zvariant v5.15.0
+   Compiling async-channel v2.5.0
+   Compiling atomic-waker v1.1.2
+   Compiling rustls v0.23.43
+   Compiling serde_json v1.0.149
+   Compiling httparse v1.10.1
+   Compiling zbus_names v4.3.4
+   Compiling piper v0.2.5
+   Compiling rustls-webpki v0.103.15
+   Compiling async-signal v0.2.14
+   Compiling async-lock v3.4.2
+   Compiling tracing-attributes v0.1.31
+   Compiling tracing-core v0.1.36
+   Compiling layerx-programs-runtime v0.1.0 (/root/lx-lanes/exec/programs/crates/layerx-programs-runtime)
+   Compiling memchr v2.8.3
+   Compiling native-tls v0.2.15
+   Compiling bytes v1.12.1
+   Compiling tracing v0.1.44
+   Compiling http v1.5.0
+   Compiling async-process v2.5.0
+   Compiling zbus_macros v5.19.0
+   Compiling blocking v1.6.2
+   Compiling async-executor v1.14.0
+   Compiling async-broadcast v0.7.2
+   Compiling ordered-stream v0.2.0
+   Compiling pem-rfc7468 v1.0.0
+   Compiling num-rational v0.4.2
+   Compiling async-trait v0.1.92
+   Compiling serde_repr v0.1.21
+   Compiling futures-macro v0.3.34
+   Compiling num-iter v0.1.46
+   Compiling async-recursion v1.1.1
+   Compiling uuid v1.25.0
+   Compiling num-complex v0.4.6
+   Compiling getrandom v0.3.4
+   Compiling utf8parse v0.2.2
+   Compiling futures-task v0.3.34
+   Compiling layerx-agent-api v0.1.0 (/root/lx-lanes/exec/agent/crates/layerx-agent-api)
+   Compiling hex v0.4.3
+   Compiling openssl-probe v0.1.6
+   Compiling base64 v0.23.1
+   Compiling zbus v5.19.0
+   Compiling ureq-proto v0.6.1
+   Compiling futures-util v0.3.34
+   Compiling anstyle-parse v1.0.0
+   Compiling num v0.4.3
+   Compiling der v0.8.1
+   Compiling cbc v0.1.2
+   Compiling aes v0.8.4
+   Compiling hkdf v0.12.4
+   Compiling anstyle-query v1.1.5
+   Compiling percent-encoding v2.3.2
+   Compiling utf8-zero v0.8.1
+   Compiling anstyle v1.0.14
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling colorchoice v1.0.5
+   Compiling ureq v3.4.0
+   Compiling anstream v1.0.0
+   Compiling secret-service v5.1.0
+   Compiling layerx-program-sdk v0.1.0 (/root/lx-lanes/exec/programs/sdk/rust)
+   Compiling keyring-core v1.0.0
+   Compiling layerx-platform-emulator v0.1.0 (/root/lx-lanes/exec/platform/emulator)
+   Compiling getrandom v0.4.3
+   Compiling heck v0.5.0
+   Compiling clap_lex v1.1.0
+   Compiling strsim v0.11.1
+   Compiling clap_builder v4.6.6
+   Compiling clap_derive v4.6.4
+   Compiling layerx-proof v0.1.0 (/root/lx-lanes/exec/agent/crates/layerx-proof)
+   Compiling layerx-programs-registry v0.1.0 (/root/lx-lanes/exec/programs/crates/layerx-programs-registry)
+   Compiling layerx-client v0.1.0 (/root/lx-lanes/exec/agent/crates/layerx-client)
+   Compiling layerx-programs-protocol-adapter v0.1.0 (/root/lx-lanes/exec/programs/crates/layerx-programs-protocol-adapter)
+   Compiling layerx-programs-sandbox v0.1.0 (/root/lx-lanes/exec/programs/crates/layerx-programs-sandbox)
+   Compiling layerx-agentd v0.1.0 (/root/lx-lanes/exec/agent/crates/layerx-agentd)
+   Compiling zbus-secret-service-keyring-store v1.0.1
+   Compiling toml_writer v1.1.2+spec-1.1.0
+   Compiling keyring v4.1.6
+   Compiling clap v4.6.6
+   Compiling layerx-mcp v0.1.0 (/root/lx-lanes/exec/agent/crates/layerx-mcp)
+   Compiling layerx-platform-cli v0.1.0 (/root/lx-lanes/exec/platform/cli)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3m 03s
+cargo test --offline --manifest-path platform/Cargo.toml --locked -p layerx-platform-cli --features test-credential-store
+   Compiling syn v2.0.119
+   Compiling elliptic-curve v0.13.8
+   Compiling ecdsa v0.16.9
+   Compiling k256 v0.13.4
+   Compiling openssl-macros v0.1.1
+   Compiling curve25519-dalek-derive v0.1.1
+   Compiling enumflags2_derive v0.7.12
+   Compiling tracing-attributes v0.1.31
+   Compiling openssl v0.10.73
+   Compiling curve25519-dalek v4.1.3
+   Compiling enumflags2 v0.7.12
+   Compiling ed25519-dalek v2.2.0
+   Compiling zvariant v5.15.0
+   Compiling layerx-programs-runtime v0.1.0 (/root/lx-lanes/exec/programs/crates/layerx-programs-runtime)
+   Compiling layerx-crypto v0.1.0 (/root/lx-lanes/exec/agent/crates/layerx-crypto)
+   Compiling zbus_names v4.3.4
+   Compiling zbus_macros v5.19.0
+   Compiling tracing v0.1.44
+   Compiling async-recursion v1.1.1
+   Compiling native-tls v0.2.15
+   Compiling ureq v3.4.0
+   Compiling zbus v5.19.0
+   Compiling secret-service v5.1.0
+   Compiling zbus-secret-service-keyring-store v1.0.1
+   Compiling keyring v4.1.6
+   Compiling layerx-proof v0.1.0 (/root/lx-lanes/exec/agent/crates/layerx-proof)
+   Compiling layerx-programs-registry v0.1.0 (/root/lx-lanes/exec/programs/crates/layerx-programs-registry)
+   Compiling layerx-client v0.1.0 (/root/lx-lanes/exec/agent/crates/layerx-client)
+   Compiling layerx-programs-protocol-adapter v0.1.0 (/root/lx-lanes/exec/programs/crates/layerx-programs-protocol-adapter)
+   Compiling layerx-agent-api v0.1.0 (/root/lx-lanes/exec/agent/crates/layerx-agent-api)
+   Compiling layerx-agentd v0.1.0 (/root/lx-lanes/exec/agent/crates/layerx-agentd)
+   Compiling layerx-programs-sandbox v0.1.0 (/root/lx-lanes/exec/programs/crates/layerx-programs-sandbox)
+   Compiling layerx-platform-emulator v0.1.0 (/root/lx-lanes/exec/platform/emulator)
+   Compiling layerx-mcp v0.1.0 (/root/lx-lanes/exec/agent/crates/layerx-mcp)
+   Compiling layerx-platform-cli v0.1.0 (/root/lx-lanes/exec/platform/cli)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 39s
+     Running unittests src/main.rs (platform/target/debug/deps/layerx-0e35a3ae7505ec1b)
+
+running 37 tests
+test credential::secret_boundary_tests::stdin_secret_refuses_truncation ... ok
+test output::tests::prose_errors_use_the_generic_machine_code ... ok
+test emulator::profile_path_tests::filesystem_root_is_not_a_profile_directory ... ok
+test output::tests::typed_command_errors_keep_their_machine_code ... ok
+test a2a::request_boundary_tests::rejects_ambiguous_http_framing ... ok
+test program_arguments_tests::registry_list_is_not_a_cli_command ... ok
+test a2a::request_boundary_tests::rejects_query_aliases_and_oversized_headers ... ok
+test programs::call_tests::canonical_integer_transport_forms_preserve_exact_u64_values ... ok
+test programs::call_tests::cli_encodes_native_call_and_preserves_legacy_agent_layout ... ok
+test programs::call_tests::completed_outcome_against_a_failed_receipt_is_refused ... ok
+test programs::call_tests::call_bounds_and_ambiguous_legacy_capabilities_are_refused ... ok
+test a2a::request_boundary_tests::binds_mutation_authorization_to_the_exact_installed_bearer ... ok
+test programs::call_tests::call_a_refuses_activity_signed_for_call_b ... ok
+test credential::secret_boundary_tests::bearer_secret_refuses_header_control_bytes ... ok
+test install::a2a::authorization_file_tests::rejects_a_symlinked_ancestor ... ok
+test program_arguments_tests::call_and_simulation_default_to_native_abi_two ... ok
+test programs::call_tests::lifecycle_response_requires_exact_envelope_and_verified_receipt ... ok
+test install::a2a::authorization_file_tests::requires_private_current_owner_parent_and_leaf ... ok
+test programs::call_tests::completed_outcome_is_bound_to_a_successful_receipt ... ok
+test programs::call_tests::non_canonical_call_payload_has_an_explicit_cli_refusal ... ok
+test programs::call_tests::lifecycle_transport_state_is_consistent_with_receipt_result ... ok
+test programs::call_tests::pre_receipt_refusals_retain_the_transport_reason ... ok
+test programs::call_tests::interface_source_is_not_accepted_as_canonical_interface_bytes ... ok
+test programs::call_tests::abi_configuration_defaults_to_two_and_refuses_conflicts ... ok
+test workspace::tests::explicit_selection_is_ordered_and_deduplicated ... ok
+test workspace::tests::unknown_module_is_rejected ... ok
+test programs::call_tests::refused_outcome_is_bound_to_a_failed_receipt ... ok
+test programs::call_tests::separate_execution_material_is_bound_to_the_acknowledged_receipt ... ok
+test programs::call_tests::render_refuses_unverified_receipt_bytes_even_with_success_siblings ... ok
+test programs::call_tests::render_refuses_a_response_without_a_receipt ... ok
+test programs::call_tests::scoped_capabilities_preserve_all_authority_fields ... ok
+test workspace::tests::all_selection_covers_every_module ... ok
+test workspace::tests::display_quotes_only_unsafe_arguments ... ok
+test program_arguments_tests::upgrade_clear_and_publish_interface_are_mutually_exclusive ... ok
+test programs::call_tests::c_lifecycle_fixtures_sign_exactly_and_refuse_wrong_ordinal ... ok
+test programs::call_tests::signing_uses_protocol_three_and_exact_native_payload ... ok
+test program_arguments_tests::lifecycle_commands_require_signing_and_parse_all_operations ... ok
+
+test result: ok. 37 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+     Running tests/commands.rs (platform/target/debug/deps/commands-24f1de9f55b44289)
+
+running 18 tests
+test deleting_an_unknown_key_is_refused ... ok
+test payment_rejects_a_short_idempotency_key ... ok
+test environment_use_rejects_unknown_environment_names ... ok
+test payment_rejects_a_zero_amount ... ok
+test environment_use_requires_endpoint_and_network_together ... ok
+test program_build_reports_a_missing_manifest ... ok
+test program_registry_get_rejects_an_unsafe_identifier ... ok
+test auth_status_reports_no_token_for_a_fresh_environment ... ok
+test legacy_non_emulator_profile_without_an_anchor_can_be_selected ... ok
+test program_deploy_reports_a_missing_artifact ... ok
+test program_registry_verify_source_rejects_a_malformed_digest ... ok
+test json_and_human_output_diverge_for_the_same_command ... ok
+test environment_list_reports_the_default_profile ... ok
+test receipt_get_rejects_an_unsafe_identifier ... ok
+test receipt_verify_refuses_a_forged_receipt_locally ... ok
+test unknown_subcommands_are_rejected ... ok
+test new_scaffolds_a_deterministic_program_project ... ok
+test key_lifecycle_metadata_persists_in_configuration ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.37s
+
+     Running tests/credential.rs (platform/target/debug/deps/credential-d59b01da67894448)
+
+running 5 tests
+test imported_seed_is_never_written_to_configuration ... ok
+test duplicate_key_names_are_refused_with_a_machine_readable_error ... ok
+test configuration_file_is_owner_only ... ok
+test created_key_reports_its_secret_storage_and_hides_the_secret ... ok
+test api_token_is_never_written_to_configuration ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+
+     Running tests/emulator.rs (platform/target/debug/deps/emulator-c639345f43d0d4c9)
+
+running 18 tests
+test bootstrap::emulator_up_requires_the_sequencer_seed_file ... ok
+test bootstrap::provision_refuses_a_symlinked_profile_ancestor ... ok
+test bootstrap::environment_use_refuses_a_network_id_that_disagrees_with_the_advertised_identity ... ok
+test bootstrap::environment_use_names_each_missing_bootstrap_input ... ok
+test bootstrap::environment_use_refuses_an_empty_or_malformed_anchor ... ok
+test bootstrap::environment_use_refuses_an_anchor_that_disagrees_with_the_advertised_identity ... ok
+test bootstrap::provision_recovers_a_stale_private_identity_stage ... ok
+test bootstrap::environment_use_reverifies_a_stored_emulator_identity_before_selection ... ok
+test bootstrap::environment_use_binds_the_anchor_file_after_verifying_the_advertised_identity ... ok
+test account_is_created_and_read_back_through_the_emulator ... ok
+test bootstrap::provision_writes_an_owner_only_seed_and_prints_only_paths_and_the_anchor ... ok
+test environment_selection_points_at_the_live_emulator ... ok
+test human_and_machine_output_agree_on_the_active_environment ... ok
+test reading_a_missing_account_is_a_machine_readable_refusal ... ok
+test bootstrap::provision_refuses_to_overwrite_without_force ... ok
+test bootstrap::clean_bootstrap ... ok
+test bootstrap::concurrent_forced_provisions_publish_one_consistent_identity_pair ... ok
+test payment_test_quotes_and_commits_once_through_the_live_emulator ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.82s
+
+     Running tests/install.rs (platform/target/debug/deps/install-9d813920427507ae)
+
+running 3 tests
+test undocumented_runtime_alias_is_rejected_before_credentials_are_touched ... ok
+test production_installation_never_falls_back_to_emulator_routes ... ok
+test payment_installation_requires_a_fixed_real_source_and_asset ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/workspace.rs (platform/target/debug/deps/workspace-47360cf452b246e4)
+
+running 5 tests
+test module_inventory_covers_every_top_level_surface ... ok
+test executing_without_an_explicit_selection_is_rejected ... ok
+test repo_root_override_must_point_at_layerx ... ok
+test doctor_is_read_only_and_machine_readable ... ok
+test all_dry_run_plans_without_executing_dependencies_or_builds ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+cargo test --offline --manifest-path platform/Cargo.toml --locked -p layerx-platform-emulator
+   Compiling layerx-crypto v0.1.0 (/root/lx-lanes/exec/agent/crates/layerx-crypto)
+   Compiling layerx-programs-runtime v0.1.0 (/root/lx-lanes/exec/programs/crates/layerx-programs-runtime)
+   Compiling layerx-proof v0.1.0 (/root/lx-lanes/exec/agent/crates/layerx-proof)
+   Compiling layerx-programs-registry v0.1.0 (/root/lx-lanes/exec/programs/crates/layerx-programs-registry)
+   Compiling layerx-programs-sandbox v0.1.0 (/root/lx-lanes/exec/programs/crates/layerx-programs-sandbox)
+   Compiling layerx-platform-emulator v0.1.0 (/root/lx-lanes/exec/platform/emulator)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 57.03s
+     Running unittests src/main.rs (platform/target/debug/deps/layerx_platform_emulator-b92cb1da1c875b7d)
+
+running 21 tests
+test boundary_tests::trace_exhaustion_never_wraps ... ok
+test program_call_tests::duplicate_or_unknown_activity_fields_are_rejected ... ok
+test native_call::tests::native_json_and_octet_routes_retain_original_signed_bytes ... FAILED
+test native_call::tests::exact_native_json_and_scope_bindings ... FAILED
+test boundary_tests::emulator_protocol_profiles_are_explicit_and_closed ... ok
+test program_call_tests::missing_activity_is_rejected ... ok
+test program_call_tests::both_ingress_forms_feed_identical_bytes_to_the_transition ... ok
+test boundary_tests::control_surface_accepts_ipv4_and_ipv6_loopback ... ok
+test program_call_tests::emulator_exposes_only_the_six_program_operation_routes ... ok
+test boundary_tests::sequencer_identity_advertises_the_public_key_and_never_the_seed ... ok
+test program_call_tests::program_routes_share_the_exact_agent_envelope ... ok
+test program_call_tests::program_error_classes_are_stable_for_provider_parity ... ok
+test boundary_tests::control_surface_refuses_non_loopback_listeners ... ok
+test program_call_tests::program_get_selectors_bind_route_and_expected_activity ... ok
+test program_call_tests::recovery_snapshot_rejects_tampering_and_inconsistent_bindings ... ok
+test program_call_tests::recovery_snapshot_is_deterministic_and_preserves_program_indexes ... ok
+test program_call_tests::retained_unknown_operation_is_recoverable_without_a_false_signature_claim ... ok
+test program_call_tests::signed_program_activity_is_bounded_to_one_mebibyte ... ok
+test program_lifecycle::tests::lifecycle_payloads_bind_hash_framing_and_ordinal ... ok
+test program_lifecycle::tests::lifecycle_signed_activity_binds_exact_route_protocol_and_payload ... ok
+test program_call_tests::discovery_is_explicitly_server_verified_only ... ok
+
+failures:
+
+---- native_call::tests::native_json_and_octet_routes_retain_original_signed_bytes stdout ----
+Error: "native signed activity does not match request"
+
+---- native_call::tests::exact_native_json_and_scope_bindings stdout ----
+Error: "native signed activity does not match request"
+
+
+failures:
+    native_call::tests::exact_native_json_and_scope_bindings
+    native_call::tests::native_json_and_octet_routes_retain_original_signed_bytes
+
+test result: FAILED. 19 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+error: test failed, to rerun pass `-p layerx-platform-emulator --lib`
+make[1]: *** [platform/Makefile.inc:117: platform-test-tooling] Error 101
+make[1]: Leaving directory '/root/lx-lanes/exec'

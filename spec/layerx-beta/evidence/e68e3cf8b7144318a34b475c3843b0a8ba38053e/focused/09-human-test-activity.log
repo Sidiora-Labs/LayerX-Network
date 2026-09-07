@@ -1,0 +1,7 @@
+make[1]: warning: jobserver unavailable: using -j1.  Add '+' to parent make rule.
+make[1]: Entering directory '/root/lx-lanes/exec'
+cargo test --manifest-path human/Cargo.toml --locked -p layerx-human-service --test activity
+error: the lock file /root/lx-lanes/exec/human/Cargo.lock needs to be updated but --locked was passed to prevent this
+If you want to try to generate the lock file without accessing the network, remove the --locked flag and use --offline instead.
+make[1]: *** [Makefile:1985: human-test-activity] Error 101
+make[1]: Leaving directory '/root/lx-lanes/exec'

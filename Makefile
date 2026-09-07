@@ -3223,3 +3223,31 @@ $(BUILD_DIR)/tests/lxp_test_lni_account: tests/daemon/lxp_test_lni_account.c \
 
 test-daemon-lni-account: $(BUILD_DIR)/tests/lxp_test_lni_account
 	python3 tests/daemon/lni-account.py $(BUILD_DIR)/tests/lxp_test_lni_account
+
+.PHONY: beta-qualify-focused
+beta-qualify-focused:
+	tools/ci/beta-qualify.sh \
+		'make build layerxd layerx-genesis-build' \
+		'make agent-build' \
+		'make human-build' \
+		'make platform-build' \
+		'make programs-build' \
+		'make interop-build' \
+		'make test-daemon-lni-admission test-admission test-batch-wal-recovery agent-test-lni-schema agent-test-client-submit-focused agent-test-agentd-handshake-gate agent-test-boundary' \
+		'make agent-test-agentd-session agent-test-agentd-revocation agent-test-agentd-tenant-resolve agent-test-agentd-subscription agent-test-agentd-delivery agent-test-agentd-gaps agent-test-agentd-webhook agent-test-mcp-scope agent-test-mcp-readonly agent-test-mcp-write agent-test-sdk-rust agent-test-contract-schema platform-sdk-check human-test-service' \
+		'make human-test-activity' \
+		'make human-build human-test-unit human-test-component' \
+		'make test-snapshot test-state-root programs-core-test' \
+		'make test-protocol agent-test-wire-hashing agent-test-proof-checkpoint test-contracts interop-test-mirrors' \
+		'make test-asset-withdraw test-bridge-withdraw test-result' \
+		'make platform-test-registry' \
+		'make interop-test-ramps' \
+		'make platform-test-tooling platform-hosted-topology-check beta-contract-check' \
+		'make platform-test-tooling platform-beta-cluster-up platform-hosted-smoke platform-beta-cluster-down' \
+		'make qualify-faults' \
+		'make qualify-replay' \
+		'make agent-qualify-faults' \
+		'make agent-qualify-fuzz' \
+		'make agent-qualify-wire' \
+		'make agent-qualify-boundary' \
+		'make human-qualify-faults'
