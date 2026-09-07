@@ -748,6 +748,8 @@ for env in boundary['env']:
         env['value'] = '0.0.0.0:9444'
     elif env['name'] == 'LAYERX_PAXEER_NODE_URL':
         env['value'] = 'http://127.0.0.1:8555'
+    elif env['name'] == 'LAYERX_PAXEER_COMET_URL':
+        env['value'] = 'http://127.0.0.1:26667'
 boundary['ports'] = [{'name': 'observer-https', 'containerPort': 9444}]
 for probe in ['readinessProbe', 'livenessProbe']:
     boundary[probe]['httpGet']['port'] = 'observer-https'
@@ -779,6 +781,9 @@ paxeer_origins_write() {
           backends: [{container: "paxd", home: "/var/lib/paxeer"},
                      {container: "paxd-observer", home: "/var/lib/paxeer-observer"}]}' \
         > "$WORK_DIR/paxeer/rpc-origins.json"
+    local comet_chain_id
+    comet_chain_id=$(kube -n "$TESTNET_NAMESPACE" exec paxeer-0 -c paxd -- jq -er .chain_id /var/lib/paxeer/config/genesis.json)
+    python3 "$SCRIPT_DIR/paxeer-identity.py" "$WORK_DIR/paxeer/rpc-origins.json" "$comet_chain_id"
     log "Paxeer origins: $PAXEER_URL $PAXEER_OBSERVER_URL; CA bundle: $CA_DIR/ca.pem; inputs: $WORK_DIR/paxeer/rpc-origins.json"
 }
 
