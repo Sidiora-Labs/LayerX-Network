@@ -2141,15 +2141,9 @@ fn settle_call_occupancy(
         }
         match ledger.responsibility_limits(namespace) {
             Some((payer, _))
-                if payer != authority.payer() && !ledger.requires_migration(namespace) =>
-            {
-                continue
-            }
+                if payer != authority.payer() && !ledger.requires_migration(namespace) => {}
             Some((_, maximum_bytes))
-                if final_bytes <= maximum_bytes && !ledger.requires_migration(namespace) =>
-            {
-                continue
-            }
+                if final_bytes <= maximum_bytes && !ledger.requires_migration(namespace) => {}
             _ => eligible.push((namespace, final_bytes)),
         }
     }
@@ -2213,45 +2207,6 @@ fn settle_call_occupancy(
     let evidence = settlement.canonical_evidence();
     publish_occupancy(token, parameter_version, &settlement, &ledger)?;
     Ok((settlement.usage(), evidence))
-}
-
-fn execution_with_occupancy_evidence(execution: &[u8], occupancy: &[u8]) -> Result<Vec<u8>, i32> {
-    let mut evidence = b"LXP/program-execution-with-occupancy/v1\0".to_vec();
-    evidence.extend_from_slice(
-        &u32::try_from(execution.len())
-            .map_err(|_| LENGTH_LIMIT)?
-            .to_be_bytes(),
-    );
-    evidence.extend_from_slice(execution);
-    evidence.extend_from_slice(
-        &u32::try_from(occupancy.len())
-            .map_err(|_| LENGTH_LIMIT)?
-            .to_be_bytes(),
-    );
-    evidence.extend_from_slice(occupancy);
-    Ok(evidence)
-}
-
-fn execution_with_program_authority_evidence(
-    execution: &[u8],
-    authorization: &[u8],
-    transfer_root: [u8; 32],
-) -> Result<Vec<u8>, i32> {
-    let mut evidence = b"LXP/program-execution-with-transfer-authority/v2\0".to_vec();
-    evidence.extend_from_slice(
-        &u32::try_from(execution.len())
-            .map_err(|_| LENGTH_LIMIT)?
-            .to_be_bytes(),
-    );
-    evidence.extend_from_slice(execution);
-    evidence.extend_from_slice(
-        &u32::try_from(authorization.len())
-            .map_err(|_| LENGTH_LIMIT)?
-            .to_be_bytes(),
-    );
-    evidence.extend_from_slice(authorization);
-    evidence.extend_from_slice(&transfer_root);
-    Ok(evidence)
 }
 
 fn wrap_reserved_evidence(
