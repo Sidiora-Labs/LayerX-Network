@@ -15,6 +15,11 @@ use crate::store::{Store, TenantId};
 
 mod events;
 mod expiry;
+pub(crate) use expiry::PreparedDecision;
+
+#[cfg(test)]
+#[path = "../../tests/approval_ordering/mod.rs"]
+mod ordering_tests;
 
 pub use events::{
     ApprovalEmission, ApprovalEventError, ApprovalEventKind, ApprovalEvents, ApprovalLifecycle,
@@ -299,6 +304,10 @@ pub struct ApprovalService<'a> {
     registry: &'a ApprovalRegistry,
     limiter: &'a BudgetLimiter,
     expiry: &'a ApprovalExpiry,
+    #[cfg(test)]
+    after_prepare: Option<&'a (dyn Fn() + Sync)>,
+    #[cfg(test)]
+    before_decision: Option<&'a (dyn Fn() + Sync)>,
 }
 
 impl<'a> ApprovalService<'a> {
@@ -312,6 +321,10 @@ impl<'a> ApprovalService<'a> {
             registry,
             limiter,
             expiry,
+            #[cfg(test)]
+            after_prepare: None,
+            #[cfg(test)]
+            before_decision: None,
         }
     }
 
@@ -327,6 +340,10 @@ impl<'a> ApprovalService<'a> {
         page_limit: usize,
         current_sequence: u64,
     ) -> Result<ApprovalPage, ApprovalOperationError> {
+        let _decision = self
+            .expiry
+            .lock_decisions()
+            .map_err(ApprovalOperationError::Durability)?;
         if page_limit == 0 || page_limit > 100 {
             return Err(ApprovalOperationError::InvalidPageLimit);
         }
@@ -365,6 +382,10 @@ impl<'a> ApprovalService<'a> {
         approval_id: [u8; 32],
         current_sequence: u64,
     ) -> Result<ApprovalRecord, ApprovalOperationError> {
+        let _decision = self
+            .expiry
+            .lock_decisions()
+            .map_err(ApprovalOperationError::Durability)?;
         let mut snapshot = self
             .registry
             .get_scoped(tenant, approval_id, current_sequence)
@@ -387,6 +408,10 @@ impl<'a> ApprovalService<'a> {
         current_prepared: &Prepared,
         submissions: &ApprovalSubmissionQueue,
     ) -> Result<ApprovalDecision, ApprovalOperationError> {
+        let _decision = self
+            .expiry
+            .lock_decisions()
+            .map_err(ApprovalOperationError::Durability)?;
         let DecisionRequest {
             tenant,
             approval_id,
@@ -421,7 +446,7 @@ impl<'a> ApprovalService<'a> {
             .map_err(ApprovalOperationError::Durability)?
         {
             expiry::DecisionResolution::Winner => None,
-            expiry::DecisionResolution::WinnerPrepared(key, bytes) => Some((key, bytes)),
+            expiry::DecisionResolution::WinnerPrepared(prepared) => Some(prepared),
             expiry::DecisionResolution::Repeat(decision) => return Ok(decision),
             expiry::DecisionResolution::Conflict(winner) => {
                 return Ok(conflict(winner));
@@ -430,6 +455,10 @@ impl<'a> ApprovalService<'a> {
                 return Ok(decision(ApprovalOutcome::Expired, None));
             }
         };
+        #[cfg(test)]
+        if let Some(after_prepare) = self.after_prepare {
+            after_prepare();
+        }
         let claimed = match self
             .registry
             .claim_scoped(tenant, approval_id, current_sequence)
@@ -460,6 +489,26 @@ impl<'a> ApprovalService<'a> {
                     return Ok(decision(outcome, None));
                 }
             };
+        self.persist_grant(
+            approval_id,
+            approver,
+            queued_submission_ref,
+            decision_record,
+        )?;
+        debug_assert_eq!(submission_ref, Some(queued_submission_ref));
+        Ok(decision(
+            ApprovalOutcome::Granted,
+            Some(queued_submission_ref),
+        ))
+    }
+
+    fn persist_grant(
+        &self,
+        approval_id: [u8; 32],
+        approver: ApproverId,
+        queued_submission_ref: [u8; 32],
+        decision_record: Option<PreparedDecision>,
+    ) -> Result<(), ApprovalOperationError> {
         let fallback_decision_record = (!self.registry.has_durable_store())
             .then(|| decision_record.clone())
             .flatten();
@@ -473,16 +522,12 @@ impl<'a> ApprovalService<'a> {
                 decision_record,
             )
             .map_err(ApprovalOperationError::Registry)?;
-        if let Some((key, bytes)) = fallback_decision_record {
+        if let Some(prepared) = fallback_decision_record {
             self.expiry
-                .persist_prepared_decision(key, bytes)
+                .persist_prepared_decision(prepared)
                 .map_err(ApprovalOperationError::Durability)?;
         }
-        debug_assert_eq!(submission_ref, Some(queued_submission_ref));
-        Ok(decision(
-            ApprovalOutcome::Granted,
-            Some(queued_submission_ref),
-        ))
+        Ok(())
     }
 
     /// Finalizes rejection and releases the hold's reservation deterministically.
@@ -494,6 +539,14 @@ impl<'a> ApprovalService<'a> {
         &self,
         request: DecisionRequest<'_>,
     ) -> Result<ApprovalDecision, ApprovalOperationError> {
+        #[cfg(test)]
+        if let Some(before_decision) = self.before_decision {
+            before_decision();
+        }
+        let _decision = self
+            .expiry
+            .lock_decisions()
+            .map_err(ApprovalOperationError::Durability)?;
         let DecisionRequest {
             tenant,
             approval_id,
@@ -518,7 +571,7 @@ impl<'a> ApprovalService<'a> {
             .map_err(ApprovalOperationError::Durability)?
         {
             expiry::DecisionResolution::Winner => {}
-            expiry::DecisionResolution::WinnerPrepared(_, _) => {
+            expiry::DecisionResolution::WinnerPrepared(_) => {
                 return Err(ApprovalOperationError::Durability(
                     ApprovalExpiryError::Corrupt,
                 ))
