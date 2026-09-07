@@ -2,8 +2,11 @@
 
 use core::fmt::{self, Display};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
+#[cfg(any(feature = "host-ffi", test))]
+use std::collections::BTreeSet;
 
+#[cfg(any(feature = "host-ffi", test))]
 use crate::budget::AdmittedBudget;
 use crate::meter::FeeSchedule;
 use crate::storage::{PrincipalId, ProgramId, Storage, StorageError, StorageNamespace};
@@ -19,6 +22,7 @@ pub const MAX_OCCUPANCY_POSITIONS: usize = 256;
 pub const MAX_OCCUPANCY_LEDGER_BYTES: usize = 60_000;
 pub const MAX_OCCUPANCY_EVIDENCE_BYTES: usize = 65_536;
 
+#[cfg(any(feature = "host-ffi", test))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct OccupancyAuthority {
     payer: PrincipalId,
@@ -28,6 +32,7 @@ pub(crate) struct OccupancyAuthority {
     maximum_price: u64,
 }
 
+#[cfg(any(feature = "host-ffi", test))]
 impl OccupancyAuthority {
     pub(crate) fn from_admitted(
         admitted: &AdmittedBudget,
@@ -86,12 +91,15 @@ impl OccupancyAuthority {
         })
     }
 
+    #[cfg(feature = "host-ffi")]
     pub(crate) const fn fee_ceiling(self) -> u128 {
         self.occupancy_fee_ceiling
     }
+    #[cfg(feature = "host-ffi")]
     pub(crate) const fn payer(self) -> PrincipalId {
         self.payer
     }
+    #[cfg(feature = "host-ffi")]
     pub(crate) const fn root_program(self) -> ProgramId {
         self.root_program
     }
@@ -592,8 +600,11 @@ impl OccupancySettlement {
 #[derive(Clone, Debug)]
 pub struct PreparedOccupancySettlement {
     settlement: OccupancySettlement,
+    #[cfg(any(feature = "host-ffi", test))]
     prior_state: Vec<u8>,
+    #[cfg(any(feature = "host-ffi", test))]
     final_storage_sizes: Vec<u8>,
+    #[cfg(any(feature = "host-ffi", test))]
     next_positions: BTreeMap<StorageNamespace, OccupancyPosition>,
     finalizes_batch: bool,
 }
@@ -604,6 +615,7 @@ impl PreparedOccupancySettlement {
         &self.settlement
     }
 
+    #[cfg(any(feature = "host-ffi", test))]
     pub(crate) fn defer_unpaid(
         &mut self,
         unpaid: &BTreeSet<PrincipalId>,
@@ -920,6 +932,7 @@ impl OccupancyLedger {
     pub fn contains_namespace(&self, namespace: StorageNamespace) -> bool {
         self.positions.contains_key(&namespace)
     }
+    #[cfg(feature = "host-ffi")]
     pub(crate) fn responsibility_limits(
         &self,
         namespace: StorageNamespace,
@@ -948,16 +961,19 @@ impl OccupancyLedger {
         Ok(())
     }
 
+    #[cfg(feature = "host-ffi")]
     pub(crate) fn frozen_namespaces(&self) -> impl Iterator<Item = StorageNamespace> + '_ {
         self.positions
             .iter()
             .filter_map(|(namespace, position)| position.frozen.then_some(*namespace))
     }
+    #[cfg(feature = "host-ffi")]
     pub(crate) fn requires_migration(&self, namespace: StorageNamespace) -> bool {
         self.positions
             .get(&namespace)
             .is_some_and(|position| position.legacy)
     }
+    #[cfg(feature = "host-ffi")]
     pub(crate) fn import_activation_positions(
         &mut self,
         storage: &Storage,
@@ -975,6 +991,7 @@ impl OccupancyLedger {
         Ok(())
     }
 
+    #[cfg(feature = "host-ffi")]
     pub(crate) fn import_activation_position(
         &mut self,
         namespace: StorageNamespace,
@@ -1022,7 +1039,7 @@ impl OccupancyLedger {
     ) -> Result<PreparedOccupancySettlement, OccupancyError> {
         let mut prepared = self.prepare_positions(
             batch,
-            canonical_position_sizes(&self.positions)?,
+            &canonical_position_sizes(&self.positions)?,
             BTreeMap::new(),
             schedule,
         )?;
@@ -1053,13 +1070,13 @@ impl OccupancyLedger {
                 });
             }
         }
-        self.prepare_positions(batch, canonical_sizes(&sizes)?, declarations, schedule)
+        self.prepare_positions(batch, &canonical_sizes(&sizes)?, declarations, schedule)
     }
 
     fn prepare_positions(
         &self,
         batch: u64,
-        final_storage_sizes: Vec<u8>,
+        final_storage_sizes: &[u8],
         declarations: BTreeMap<StorageNamespace, OccupancyResponsibility>,
         schedule: FeeSchedule,
     ) -> Result<PreparedOccupancySettlement, OccupancyError> {
@@ -1078,7 +1095,7 @@ impl OccupancyLedger {
         {
             return Err(OccupancyError::LengthLimit);
         }
-        let final_sizes = decode_sizes(&final_storage_sizes)?;
+        let final_sizes = decode_sizes(final_storage_sizes)?;
         let mut next = self.positions.clone();
         let authorized_additions = apply_responsibilities(&mut next, declarations, batch)?;
         for namespace in final_sizes.keys() {
@@ -1134,13 +1151,17 @@ impl OccupancyLedger {
         }
         Ok(PreparedOccupancySettlement {
             settlement,
+            #[cfg(any(feature = "host-ffi", test))]
             prior_state,
-            final_storage_sizes,
+            #[cfg(any(feature = "host-ffi", test))]
+            final_storage_sizes: final_storage_sizes.to_vec(),
+            #[cfg(any(feature = "host-ffi", test))]
             next_positions: next,
             finalizes_batch: false,
         })
     }
 
+    #[cfg(any(feature = "host-ffi", test))]
     pub(crate) fn commit_after_debits(
         &mut self,
         prepared: PreparedOccupancySettlement,
@@ -1157,6 +1178,7 @@ impl OccupancyLedger {
         }
         Ok(prepared.settlement)
     }
+    #[cfg(any(feature = "host-ffi", test))]
     pub(crate) fn commit_unchanged_after_debits(
         &mut self,
         prepared: PreparedOccupancySettlement,
@@ -1431,6 +1453,7 @@ fn decode_schedule(
         fee_units_per_occupancy_byte_batch: cursor.u64()?,
     }))
 }
+#[cfg(any(feature = "host-ffi", test))]
 fn canonical_storage_sizes(storage: &Storage) -> Result<Vec<u8>, OccupancyError> {
     canonical_sizes(&storage.namespace_sizes()?.into_iter().collect())
 }

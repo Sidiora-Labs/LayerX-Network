@@ -171,6 +171,7 @@ impl Storage {
         }
     }
 
+    #[cfg(feature = "host-ffi")]
     pub(crate) fn enforce_frozen_namespaces(
         &mut self,
         namespaces: impl IntoIterator<Item = StorageNamespace>,
@@ -187,10 +188,12 @@ impl Storage {
         }
     }
 
+    #[cfg(feature = "host-ffi")]
     pub(crate) fn clear_access_log(&self) {
         self.accessed_namespaces.borrow_mut().clear();
     }
 
+    #[cfg(feature = "host-ffi")]
     pub(crate) fn was_accessed(&self, namespace: StorageNamespace) -> bool {
         self.accessed_namespaces.borrow().contains(&namespace)
     }
