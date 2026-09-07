@@ -113,6 +113,8 @@ struct AuthorityResponse {
 }
 
 impl TrustedSources {
+    /// # Errors
+    /// Refuses missing or invalid configuration, secret files, endpoints or TLS material.
     pub fn from_environment() -> Result<Self, String> {
         let ca = Certificate::from_der(
             &fs::read(
@@ -182,6 +184,7 @@ impl TrustedSources {
         })
     }
 
+    #[must_use]
     pub fn ready(&self) -> bool {
         self.verifier.ready()
             && self.sources.values().all(|source| {
@@ -199,6 +202,8 @@ impl TrustedSources {
             })
     }
 
+    /// # Errors
+    /// Refuses invalid identifiers, unavailable sources, malformed events and unverified receipts.
     pub fn fetch(
         &self,
         kind: EventKind,
@@ -296,6 +301,8 @@ impl TrustedSources {
 }
 
 impl DeveloperIdentity {
+    /// # Errors
+    /// Refuses missing or invalid configuration, secret files, endpoints or TLS material.
     pub fn from_environment() -> Result<Self, String> {
         let ca = Certificate::from_der(
             &fs::read(
@@ -325,6 +332,8 @@ impl DeveloperIdentity {
         })
     }
 
+    /// # Errors
+    /// Refuses missing or invalid configuration, secret files, endpoints or TLS material.
     pub fn from_dashboard_environment() -> Result<Self, String> {
         let ca = Certificate::from_der(
             &fs::read(
@@ -354,6 +363,9 @@ impl DeveloperIdentity {
         })
     }
 
+    /// # Errors
+    /// Refuses invalid or inactive sessions, failed introspection, invalid principals
+    /// and missing or mismatched anti-forgery tokens for cookie mutations.
     pub fn authenticate(
         &self,
         authorization: Option<&str>,
@@ -417,18 +429,23 @@ impl DeveloperIdentity {
 }
 
 impl SourceTrigger {
+    /// # Errors
+    /// Refuses missing or invalid configuration, secret files, endpoints or TLS material.
     pub fn from_environment() -> Result<Self, String> {
         Ok(Self {
             token: read_secret("LAYERX_WEBHOOKS_SOURCE_TRIGGER_TOKEN_FILE")?,
         })
     }
 
+    /// # Errors
+    /// Refuses missing or invalid configuration, secret files, endpoints or TLS material.
     pub fn operator_from_environment() -> Result<Self, String> {
         Ok(Self {
             token: read_secret("LAYERX_WEBHOOKS_OPERATOR_TOKEN_FILE")?,
         })
     }
 
+    #[must_use]
     pub fn authorizes(&self, authorization: Option<&str>) -> bool {
         authorization
             .and_then(|value| value.strip_prefix("Bearer "))
