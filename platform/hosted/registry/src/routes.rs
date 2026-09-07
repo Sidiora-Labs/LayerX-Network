@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
 
-use crate::builder::HermeticBuilder;
+use crate::builder::{HermeticBuilder, HermeticBuilderConfig};
 use crate::journal::{FileDeploymentJournal, QuarantinedUnit};
 use crate::mirror::{MirrorRefusal, SourceMirror};
 use crate::node_state::NodeProgramStateSource;
@@ -91,21 +91,21 @@ impl Registrar {
     /// declared build environment and stored verifications that no longer
     /// decode.
     pub fn open(config: &Config, now: u64) -> Result<Self, String> {
-        let builder = HermeticBuilder::new(
-            config.workspace.clone(),
-            config.builder_image_digest,
-            config.builder_environment_root.clone(),
-            config.builder_entrypoint.clone(),
-            config.builder_isolation_runtime.clone(),
-            config.builder_isolation_runtime_digest,
-            config.builder_job_supervisor.clone(),
-            config.builder_job_supervisor_digest,
-            config.builder_cgroup_root.clone(),
-            config.build_timeout_seconds,
-            config.build_memory_bytes,
-            config.build_process_limit,
-            config.build_file_size_bytes,
-        )?;
+        let builder = HermeticBuilder::new(HermeticBuilderConfig {
+            workspace: config.workspace.clone(),
+            builder_image_digest: config.builder_image_digest,
+            environment_root: config.builder_environment_root.clone(),
+            entrypoint: config.builder_entrypoint.clone(),
+            isolation_runtime: config.builder_isolation_runtime.clone(),
+            isolation_runtime_digest: config.builder_isolation_runtime_digest,
+            job_supervisor: config.builder_job_supervisor.clone(),
+            job_supervisor_digest: config.builder_job_supervisor_digest,
+            cgroup_root: config.builder_cgroup_root.clone(),
+            timeout_seconds: config.build_timeout_seconds,
+            memory_bytes: config.build_memory_bytes,
+            process_limit: config.build_process_limit,
+            file_size_bytes: config.build_file_size_bytes,
+        })?;
         let verifier = SourceVerifier::new(builder, config.attempts)
             .map_err(|refused| format!("the build pipeline is not admissible: {refused}"))?;
         if config.staleness_ms == 0 {
@@ -254,6 +254,10 @@ impl Registrar {
     /// cursor is advanced only after every affected program has been resolved
     /// at the same current head, independently receipt-checked, replayed and
     /// persisted.
+    ///
+    /// # Errors
+    /// Refuses unavailable, stale, inconsistent or unverified node state,
+    /// exhausted scan bounds, and journal persistence failures.
     pub fn synchronize_protocol_state(
         &mut self,
         requested: Option<ProgramId>,
@@ -1005,11 +1009,6 @@ fn source_request(body: &[u8]) -> Option<(String, [u8; 32])> {
     let uri = document["source_uri"].as_str()?.to_owned();
     let digest = hex::decode_digest(document["source_digest"].as_str()?).ok()?;
     Some((uri, digest))
-}
-
-fn field(body: &[u8], name: &str) -> Option<String> {
-    let document: Value = serde_json::from_slice(body).ok()?;
-    Some(document[name].as_str()?.to_owned())
 }
 
 fn deployment_ingress_unavailable(_untrusted_body: &[u8]) -> Response {

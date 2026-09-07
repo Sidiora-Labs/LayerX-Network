@@ -18,6 +18,9 @@ pub struct FileProgramStateJournal {
 }
 
 impl FileProgramStateJournal {
+    ///
+    /// # Errors
+    /// Returns a filesystem error when the journal directory cannot be created.
     pub fn open(root: PathBuf) -> Result<Self, String> {
         fs::create_dir_all(&root).map_err(|error| {
             format!(
@@ -28,6 +31,9 @@ impl FileProgramStateJournal {
         Ok(Self { root })
     }
 
+    ///
+    /// # Errors
+    /// Refuses noncanonical state encoding and atomic persistence failures.
     pub fn store(&self, state: &ProtocolProgramStateRead) -> Result<(), String> {
         let bytes = state
             .canonical_encode()
@@ -45,6 +51,9 @@ impl FileProgramStateJournal {
     /// Hash-checks every local cache candidate. This never constructs a
     /// verified read: restart publication requires a fresh node receipt/head
     /// resolution and `ProtocolProgramStateRead::restore_verified`.
+    ///
+    /// # Errors
+    /// Returns filesystem errors and refuses cached records whose names do not match their content digests.
     pub fn audit(&self) -> Result<(), String> {
         let mut paths = fs::read_dir(&self.root)
             .map_err(|error| {
@@ -83,6 +92,9 @@ impl FileProgramStateJournal {
         Ok(())
     }
 
+    ///
+    /// # Errors
+    /// Returns filesystem errors other than an absent cursor and refuses malformed cursor contents.
     pub fn cursor(&self) -> Result<ProgramStateCursor, String> {
         let path = self.root.join(CURSOR_FILE);
         let text = match fs::read_to_string(&path) {
@@ -111,6 +123,9 @@ impl FileProgramStateJournal {
         })
     }
 
+    ///
+    /// # Errors
+    /// Refuses event ordinals, regressing or unreadable cursors and atomic persistence failures.
     pub fn advance(&self, cursor: ProgramStateCursor) -> Result<(), String> {
         if cursor.ordinal != 0 {
             return Err("program-state scan cursor cannot carry an event ordinal".to_owned());
