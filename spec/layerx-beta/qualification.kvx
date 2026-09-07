@@ -2328,3 +2328,11 @@ symbol = "OutboundRequest platform workspace"
 observed = "cargo build --locked --manifest-path platform/Cargo.toml --workspace exits 0 with CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4 and worktree-local targets; log qual-logs/au8-platform-workspace-build.log. No additional platform workspace HTTP caller migration is required by this build. Existing warnings from Programs, vendored Wasm dependencies and hosted registry remain in the log. git diff --check exits 0; log qual-logs/au8-diff-check.log."
 assumption = "A passing platform workspace build does not qualify interop: its locked commands remain blocked by interop/Cargo.lock as recorded separately. No assertions, native_call tests, signed fixtures or external provisioning files are changed."
 severity = "note"
+
+[observation.6.4.terminal-v4-fixture-selection]
+task = "6.4"
+file = "tests/programs/test_call_activity.c; platform/sdk/conformance/fixtures/generate_native_lifecycle_fixtures.py; platform/sdk/conformance/fixtures/generate_executed_program_fixture.py; agent/crates/layerx-proof/tests/terminal_v4.rs"
+symbol = "deploy_and_upgrade_artifacts_case stored_historical_receipt"
+observed = "Owner decision 1 selects the V4 contract for protocol-3 terminals. The first CALL assertion encoded the pre-decision contract; it now requires encoding 4 for protocol 3 and retains exact encoding 3 for the legacy protocol path. The early assertion failure releases committed kernel blobs and destroys the fixture state. Frozen V3 receipt signature, digest and byte-exact decode/encode replay are checked alongside the retained V1 regression; current lifecycle generation writes separate V4 files and invokes the real V4 execution and proof procedure. Stored signed lifecycle V3 bytes are verified without regeneration. The Python executed-fixture target reads the stored V3 file and verifies it without invoking the current producer or writing historical bytes."
+assumption = "Historical receipt verification does not establish historical terminal attachment verification in the Python SDK. The SDK executed-fixture gate remains independently required. Gateway tests construct the signed fixture guest ABI 2 CALL, including calldata, parameterized transfer capability and explicit account access; matcher and frozen fixture bytes remain unchanged."
+severity = "note"
