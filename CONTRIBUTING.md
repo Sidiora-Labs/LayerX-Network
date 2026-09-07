@@ -1,95 +1,65 @@
 # Contributing to LayerX
 
-LayerX is security-critical accounting and settlement software. Contributions
-must preserve deterministic replay, conservation of value, explicit authority,
-and fail-closed behavior across both the C runtime and Solidity contracts.
+LayerX is security-critical accounting and settlement software. Contributions must preserve deterministic replay, conservation of value, explicit authority, and fail-closed behavior.
 
-## Before proposing a change
-
-Read the [normative requirements](spec/layerx-protocol/requirements.md),
-[design](spec/layerx-protocol/design.md), and
-[threat model](spec/layerx-protocol/docs/threat-model.md). Search existing issues
-before opening a new one. Do not use a public issue for a suspected
-vulnerability; follow [SECURITY.md](SECURITY.md).
-
-Protocol changes need an explicit requirement and task in
-`spec/layerx-protocol/spec.kvx`. Generated files—including `AGENTS.md`, IDE rule
-files, and the Markdown mirrors next to `spec.kvx`—must be regenerated from KVX
-sources rather than edited directly.
-
-## Task workflow
-
-The repository uses Codify for one-at-a-time task ownership and implementation
-traceability:
+This project is licensed under Apache 2.0. By contributing you agree that your work is licensed under those terms. Use Developer Certificate of Origin sign-off on every commit:
 
 ```sh
-cg spec next
-cg spec start <task-id>
-cg context "change area"
-cg impact <symbol> -d 2
+git commit -s
 ```
 
-Implement only the claimed task and its acceptance criteria. When all real
-verification gates pass, finish with:
+See [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md). Report vulnerabilities only through [SECURITY.md](SECURITY.md).
+
+## Set up
+
+Build and test from the repository root with the [Makefile](Makefile). A development container definition belongs under `.devcontainer/` when that directory is present.
+
+Toolchain:
+
+- C17 for the protocol runtime (`-std=c17` in the Makefile)
+- Rust 1.91.1 (`rust-toolchain.toml`)
+- Solidity 0.8.27 (`foundry.toml`)
+- Further qualification compilers and runners in [docs/QUALIFICATION.md](docs/QUALIFICATION.md)
+
+Useful targets:
 
 ```sh
-cg sync
-cg changes
-cg spec done <task-id>
-cg spec trace <task-id>
-```
-
-Do not force a task to done to bypass a failed verification command or graph
-check. Do not add fake implementations, placeholder behavior, or mocked
-security boundaries to satisfy tests.
-
-## Implementation rules
-
-- Use C17 for the LayerX protocol runtime and Solidity `0.8.27` for LayerX settlement contracts.
-- Paxeer Network is a separate Go module under `paxeer-network/` with its own Makefile and CI (`make paxeer-build`, `make paxeer-lint`, `make paxeer-test`, `make paxeer-ci`).
-- Programs is a Rust workspace under `programs/` for the programmable LayerX runtime.
-- Preserve canonical byte encodings and result-code assignments. Both are
-  protocol interfaces, not implementation details.
-- Use checked fixed-width integer arithmetic for every consensus-critical
-  calculation. Floating point is prohibited in transition paths.
-- Keep 402LXP as the only balance writer. Modules emit validated transfer sets.
-- Keep network, wall-clock, filesystem enumeration, and database iteration order
-  outside deterministic state transitions.
-- Reject malformed or non-canonical input explicitly and transactionally.
-- Add real regression tests, negative tests, and fuzz coverage for every parser
-  or externally controlled boundary changed.
-- Preserve unrelated workspace changes.
-
-## Verification
-
-Run the narrowest affected target while iterating, then the applicable broad
-gates before review:
-
-```sh
-make public-audit
 make build
 make test
 make test-contracts
+make ci
 ```
 
-Paxeer Network and the monorepo have separate optional gates that do not replace LayerX qualification:
+Paxeer Network is a separate Go module under `paxeer-network/` (`make paxeer-build`, `make paxeer-lint`, `make paxeer-test`, `make paxeer-ci`). See [docs/MONOREPO.md](docs/MONOREPO.md).
 
-```sh
-make paxeer-ci       # Paxeer-specific evidence
-make monorepo-ci     # Cross-subsystem integrity
-```
+## Spec first
 
-Arithmetic, replay, recovery, settlement, and cross-architecture changes have
-additional gates documented in [docs/QUALIFICATION.md](docs/QUALIFICATION.md).
-Include the exact commands and outcomes in the pull request. A local result is
-not a production certification, and no contribution authorizes deployment,
-validator mutation, custody migration, or a real-value canary.
+Protocol behavior is defined by the normative KVX sources under [`spec/`](spec/). Generated Markdown next to those sources is a reading aid, not the place to start a change. Protocol work needs an explicit requirement and task in the relevant `spec.kvx` before implementation.
 
-## Pull requests
+Do not hand-edit generated files such as `AGENTS.md` or the Markdown mirrors of KVX.
 
-Keep changes narrowly scoped and explain the threat or invariant they preserve.
-Complete the pull-request checklist, identify the affected requirement and task,
-and call out any verification that could not be run. Reviewers may require new
-adversarial cases, proof obligations, replay vectors, or migration analysis when
-a change crosses a trust boundary.
+## Branches and pull requests
 
+- Branch from `main`.
+- Keep the change narrow and tied to a requirement or a reproducible defect.
+- Complete the pull-request template. Name the affected requirement and task when the change is specified.
+- Record the exact verification commands you ran and their outcomes.
+- Call out any required gate you could not run.
+
+Reviewers may ask for negative tests, replay vectors, or migration analysis when a change crosses a trust boundary.
+
+## Tests
+
+Run the narrowest affected target while iterating, then the applicable broad gates before review. Arithmetic, replay, recovery, settlement, and cross-architecture changes have extra gates in [docs/QUALIFICATION.md](docs/QUALIFICATION.md).
+
+A local result is not a production certification. No contribution authorizes deployment, validator mutation, custody migration, or a real-value canary.
+
+## No weakening, no fakes
+
+- Do not relax an assertion, loosen a bound, widen a type, add a silent fallback, skip or delete a test, or disable a check to make something pass. If the code and a check disagree, leave both intact and explain the conflict in the pull request.
+- Do not add stub, mock, placeholder, or fake implementations to satisfy tests. Test real code paths with real types.
+- Preserve canonical byte encodings and result-code assignments.
+- Use checked fixed-width integer arithmetic on consensus-critical paths. Floating point is prohibited in transition functions.
+- Keep `402LXP` as the only balance writer. Modules emit validated transfer sets.
+- Keep network, wall-clock, filesystem enumeration, and database iteration order outside deterministic state transitions.
+- Reject malformed or non-canonical input explicitly and transactionally.
