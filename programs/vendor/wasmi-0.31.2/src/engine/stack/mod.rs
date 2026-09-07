@@ -9,9 +9,7 @@ use crate::{
     core::UntypedValue,
     engine::{code_map::CodeMap, func_types::FuncTypeRegistry, FuncParams},
     func::{HostFuncEntity, WasmFuncEntity},
-    AsContext,
-    Instance,
-    StoreContextMut,
+    AsContext, Instance, StoreContextMut,
 };
 use core::{
     fmt::{self, Display},
@@ -151,7 +149,8 @@ impl Stack {
         self.values.prepare_wasm_call(header)?;
         let ip = code_map.instr_ptr(header.iref());
         let instance = wasm_func.instance();
-        self.frames.init(ip, instance, wasm_func.func_body(), value_base);
+        self.frames
+            .init(ip, instance, wasm_func.func_body(), value_base);
         Ok(())
     }
 
@@ -215,14 +214,13 @@ impl Stack {
             .clone();
         trampoline
             .call(ctx, instance, params_results)
-            .map_err(|error| {
+            .inspect_err(|_error| {
                 // Note: We drop the values that have been temporarily added to
                 //       the stack to act as parameter and result buffer for the
                 //       called host function. Since the host function failed we
                 //       need to clean up the temporary buffer values here.
                 //       This is required for resumable calls to work properly.
                 self.values.drop(delta);
-                error
             })?;
         // If the host functions returns fewer results than it receives parameters
         // the value stack needs to be shrinked for the delta.

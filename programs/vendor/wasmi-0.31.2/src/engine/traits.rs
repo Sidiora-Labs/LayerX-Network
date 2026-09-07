@@ -74,7 +74,7 @@ pub trait CallResults {
     fn call_results(self, results: &[UntypedValue]) -> Self::Results;
 }
 
-impl<'a> CallResults for &'a mut [Value] {
+impl CallResults for &mut [Value] {
     type Results = ();
 
     fn call_results(self, results: &[UntypedValue]) -> Self::Results {

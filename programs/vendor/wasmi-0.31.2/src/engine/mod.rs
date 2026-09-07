@@ -21,11 +21,7 @@ pub use self::{
     code_map::CompiledFunc,
     config::{Config, FuelConsumptionMode},
     func_builder::{
-        FuncBuilder,
-        FuncTranslatorAllocations,
-        Instr,
-        RelativeDepth,
-        TranslationError,
+        FuncBuilder, FuncTranslatorAllocations, Instr, RelativeDepth, TranslationError,
     },
     resumable::{ResumableCall, ResumableInvocation, TypedResumableCall, TypedResumableInvocation},
     stack::StackLimits,
@@ -48,11 +44,7 @@ pub(crate) use self::{
 use crate::{
     core::{Trap, TrapCode},
     func::FuncEntity,
-    AsContext,
-    AsContextMut,
-    Func,
-    FuncType,
-    StoreContextMut,
+    AsContext, AsContextMut, Func, FuncType, StoreContextMut,
 };
 use alloc::{sync::Arc, vec::Vec};
 use core::sync::atomic::{AtomicU32, Ordering};
@@ -182,7 +174,12 @@ impl Engine {
         local_types: Vec<crate::execution_trace::ExecutionValueType>,
         instrs: I,
     ) where
-        I: IntoIterator<Item = (Instruction, Option<crate::execution_trace::InstructionMetadata>)>,
+        I: IntoIterator<
+            Item = (
+                Instruction,
+                Option<crate::execution_trace::InstructionMetadata>,
+            ),
+        >,
     {
         self.inner
             .init_func(func, len_locals, local_stack_height, local_types, instrs)
@@ -230,7 +227,7 @@ impl Engine {
     #[inline]
     pub(crate) fn execute_func<T, Results>(
         &self,
-        mut ctx: StoreContextMut<T>,
+        ctx: StoreContextMut<T>,
         func: &Func,
         params: impl CallParams,
         results: Results,
@@ -424,12 +421,20 @@ impl EngineInner {
         local_types: Vec<crate::execution_trace::ExecutionValueType>,
         instrs: I,
     ) where
-        I: IntoIterator<Item = (Instruction, Option<crate::execution_trace::InstructionMetadata>)>,
+        I: IntoIterator<
+            Item = (
+                Instruction,
+                Option<crate::execution_trace::InstructionMetadata>,
+            ),
+        >,
     {
-        self.res
-            .write()
-            .code_map
-            .init_func(func, len_locals, local_stack_height, local_types, instrs)
+        self.res.write().code_map.init_func(
+            func,
+            len_locals,
+            local_stack_height,
+            local_types,
+            instrs,
+        )
     }
 
     fn resolve_func_type<F, R>(&self, func_type: &DedupFuncType, f: F) -> R
@@ -741,26 +746,39 @@ impl<'engine> EngineExecutor<'engine> {
                 Ok(outcome) => outcome,
                 Err(trap) => {
                     ctx.store.inner.refuse_trapped_transition();
-                    return Err(TaggedTrap::Wasm(trap))
+                    return Err(TaggedTrap::Wasm(trap));
                 }
             };
             match outcome {
                 WasmOutcome::Return => {
                     let terminal_instance = *cache.instance();
-                    let charge = ctx.store.inner.terminal_observation_charge(terminal_instance, self.stack.values.entries().len())
+                    let charge = ctx
+                        .store
+                        .inner
+                        .terminal_observation_charge(
+                            terminal_instance,
+                            self.stack.values.entries().len(),
+                        )
                         .map_err(|_| TaggedTrap::Wasm(TrapCode::UnreachableCodeReached.into()))?;
                     if let Some(charge) = charge {
-                        ctx.store.refresh_execution_supplement(charge).map_err(|_| TaggedTrap::Wasm(TrapCode::UnreachableCodeReached.into()))?;
+                        ctx.store
+                            .refresh_execution_supplement(charge)
+                            .map_err(|_| {
+                                TaggedTrap::Wasm(TrapCode::UnreachableCodeReached.into())
+                            })?;
                     }
-                    ctx.store.inner.finalize_return_transition(terminal_instance, self.stack.values.entries())
+                    ctx.store
+                        .inner
+                        .finalize_return_transition(terminal_instance, self.stack.values.entries())
                         .map_err(|_| TaggedTrap::Wasm(TrapCode::UnreachableCodeReached.into()))?;
-                    return Ok(())
-                },
+                    return Ok(());
+                }
                 WasmOutcome::Observe(charge) => {
-                    ctx.store.refresh_execution_supplement(charge)
+                    ctx.store
+                        .refresh_execution_supplement(charge)
                         .map_err(|_| TaggedTrap::Wasm(TrapCode::UnreachableCodeReached.into()))?;
-                    continue
-                },
+                    continue;
+                }
                 WasmOutcome::Call {
                     ref host_func,
                     instance,
@@ -782,9 +800,11 @@ impl<'engine> EngineExecutor<'engine> {
                         // This is the default case and we can easily make host function
                         // errors return a resumable call handle.
                         if let Err(trap) = result {
-                            let _ = ctx.store.refresh_execution_supplement(crate::execution_trace::ObservationCharge::default());
+                            let _ = ctx.store.refresh_execution_supplement(
+                                crate::execution_trace::ObservationCharge::default(),
+                            );
                             ctx.store.inner.refuse_trapped_transition();
-                            return Err(TaggedTrap::host(*func, trap))
+                            return Err(TaggedTrap::host(*func, trap));
                         }
                     } else {
                         // Case: No frame is on the call stack. (edge case)
@@ -793,9 +813,11 @@ impl<'engine> EngineExecutor<'engine> {
                         // In this case we treat host function errors the same as if we called
                         // the host function as root and do not allow to resume the call.
                         if let Err(trap) = result {
-                            let _ = ctx.store.refresh_execution_supplement(crate::execution_trace::ObservationCharge::default());
+                            let _ = ctx.store.refresh_execution_supplement(
+                                crate::execution_trace::ObservationCharge::default(),
+                            );
                             ctx.store.inner.refuse_trapped_transition();
-                            return Err(TaggedTrap::Wasm(trap))
+                            return Err(TaggedTrap::Wasm(trap));
                         }
                     }
                 }
