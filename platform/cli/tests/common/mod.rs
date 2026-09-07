@@ -1,10 +1,12 @@
 //! Shared harness for the platform CLI command suite.
 //!
 //! Every test drives the real `layerx` binary as a child process against an
-//! isolated configuration file and the in-memory mock credential store, so no
-//! test can read or write a developer's real keychain or configuration.
+//! isolated configuration and a private real Secret Service process.
 #![allow(dead_code, clippy::missing_panics_doc, clippy::missing_errors_doc)]
 
+mod credential_environment;
+
+use credential_environment::CredentialEnvironment;
 use std::io::{Read as _, Write as _};
 use std::net::{TcpListener, TcpStream};
 #[cfg(unix)]
@@ -33,18 +35,19 @@ fn repo_root() -> PathBuf {
 
 /// An isolated CLI invocation environment.
 ///
-/// Holds a private on-disk configuration file and pins the credential store to
-/// the in-memory mock, so credential-touching commands run without a real
-/// operating-system keychain and never disturb the machine's real state.
+/// Holds a private configuration, session bus and real credential service.
 pub struct Cli {
+    environment: CredentialEnvironment,
     config: PathBuf,
 }
 
 impl Cli {
     #[must_use]
     pub fn new() -> Self {
+        let environment = CredentialEnvironment::new();
         Self {
-            config: scratch("config").with_extension("json"),
+            config: environment.root().join("config.json"),
+            environment,
         }
     }
 
@@ -59,13 +62,11 @@ impl Cli {
     }
 
     fn command(&self, arguments: &[&str]) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_layerx"));
+        let mut command = self.environment.command(env!("CARGO_BIN_EXE_layerx"));
         command
             .args(arguments)
             .env("LAYERX_CONFIG", &self.config)
-            .env("LAYERX_CREDENTIAL_STORE", "mock")
-            .env("LAYERX_REPO_ROOT", repo_root())
-            .env_remove("XDG_CONFIG_HOME");
+            .env("LAYERX_REPO_ROOT", repo_root());
         command
     }
 
