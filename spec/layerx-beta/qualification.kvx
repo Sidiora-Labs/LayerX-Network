@@ -1974,3 +1974,11 @@ symbol = "decodeAndVerifyProgramTerminal"
 observed = "CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4 make agent-test-sdk-ts exits 0 in qual-logs/pass5-ts-sdk-final.log; git diff --check exits 0 in qual-logs/pass5-ts-diff-check.log. Signed shared V4 and principal-V4 reconstruct, mutated-leg-V4 authenticates then rejects, V3 reports recorded root, and truncated/trailing terminals reject."
 assumption = "Initial SDK gate exits 2 for missing tsc in qual-logs/pass5-ts-sdk.log. npm --prefix agent/sdk/typescript ci --ignore-scripts --no-audit --no-fund exits 0 in qual-logs/pass5-ts-dependencies.log. The subsequent compile exits 2 in qual-logs/pass5-ts-sdk-rerun.log until the existing typed V3 test outcome explicitly supplies its canonical zero applied-leg digest. Stored native vectors and native regeneration scope remain as recorded in terminal-v4-stored-input-qualification."
 severity = "note"
+
+[observation.6.11.terminal-v4-go]
+task = "6.11"
+file = "platform/sdk/go/programs.go platform/sdk/go/terminal_v4_test.go"
+symbol = "VerifyProgramReceipt TestSignedTerminalV4Vectors"
+observed = "CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4 sh platform/sdk/conformance/run-go.sh /root/lx-lanes/terminal exits 0 in qual-logs/pass5-go-sdk.log, including generator drift check, all Go tests and conformance. git diff --check exits 0 in qual-logs/pass5-go-diff-check.log. All four signed shared vectors authenticate; V4 positives reconstruct, mutated-leg rejects, V3 reports recorded root, malformed terminals reject and empty applied legs require zero root."
+assumption = "The Go SDK command is the exact individual recipe exposed by platform-verify-sdks in platform/Makefile.inc. No separate Go SDK Make target exists. Stored native inputs use the provenance and regeneration boundary recorded in terminal-v4-stored-input-qualification."
+severity = "note"
