@@ -53,6 +53,7 @@ See `docs/MONOREPO.md` for build boundaries, workflow naming, and tag convention
 - [Sandbox](Sandbox.md)
 - [Storage scan](StorageScan.md)
 - [SDK terminal verification](SdkTerminalVerification.md)
+- [Portable receipt verifier](PortableVerifier.md)
 - [Programs workspace gates](ProgramsWorkspace.md)
 - [Beta cluster](BetaCluster.md)
 
