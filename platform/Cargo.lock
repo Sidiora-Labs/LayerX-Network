@@ -1327,7 +1327,7 @@ name = "layerx-platform-agent-boundary"
 version = "0.1.0"
 dependencies = [
  "ed25519-dalek",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "layerx-client",
  "layerx-programs-runtime",
  "layerx-proof",
@@ -1347,7 +1347,7 @@ name = "layerx-platform-authority"
 version = "0.1.0"
 dependencies = [
  "ed25519-dalek",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "layerx-client",
  "layerx-proof",
  "layerx-types",
@@ -1367,7 +1367,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "ed25519-dalek",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "keyring",
  "keyring-core",
  "layerx-crypto",
@@ -1458,7 +1458,7 @@ name = "layerx-platform-gateway"
 version = "0.1.0"
 dependencies = [
  "ed25519-dalek",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "layerx-crypto",
  "layerx-proof",
  "layerx-types",
@@ -1476,7 +1476,7 @@ dependencies = [
 name = "layerx-platform-identity"
 version = "0.1.0"
 dependencies = [
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "native-tls",
  "rustls",
  "serde",
@@ -1491,7 +1491,7 @@ name = "layerx-platform-internal"
 version = "0.1.0"
 dependencies = [
  "ed25519-dalek",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "layerx-wire",
  "native-tls",
  "ring",
@@ -1577,7 +1577,7 @@ name = "layerx-platform-webhooks"
 version = "0.1.0"
 dependencies = [
  "ed25519-dalek",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "layerx-platform-gateway",
  "layerx-wire",
  "native-tls",

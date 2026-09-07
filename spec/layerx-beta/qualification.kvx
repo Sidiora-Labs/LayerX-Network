@@ -2093,3 +2093,27 @@ symbol = "interop-build interop-test interop-lint"
 observed = "cargo build --locked --manifest-path interop/Cargo.toml --workspace, cargo test --locked --manifest-path interop/Cargo.toml --workspace, cargo clippy --locked --manifest-path interop/Cargo.toml --workspace --all-targets -- -D warnings, make interop-build and make interop-test each exit 0. Each workspace test run passes 231 tests with six pre-existing protected-testnet tests ignored. make interop-lint exits 2 at cargo-deny with the same four duplicate groups and paste advisory; Clippy and dependency/unsafe policy pass. git diff --check exits 0. Exact commands, exits and individual log paths are recorded in qual-logs/au13/gates.jsonl."
 assumption = "CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4 and LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin are exported. These gates describe unchanged dependency/source inputs at f1c60a5d; they do not establish dependency convergence or external testnet qualification. Only blocker observations are appended. No task status is changed."
 severity = "blocker"
+
+[observation.6.4.gateway-getrandom-convergence]
+task = "6.4"
+file = "platform/Cargo.toml platform/Cargo.lock platform/hosted/gateway/src/lib.rs interop/Cargo.lock"
+symbol = "IssuedKey::generate"
+observed = "The platform workspace getrandom pin is 0.4.3. Its seven inheriting consumers resolve to the existing 0.4.3 package in platform/Cargo.lock. The gateway retains getrandom::fill on the identical buffer and the same GatewayError::Entropy mapping because the 0.4.3 API supports that call unchanged. Interop removes getrandom 0.3.4, r-efi 5.3.0 and their now-unused wasip2 and wit-bindgen dependencies. Locked gateway build and all 18 gateway tests exit 0. Locked interop workspace build, 231 tests and strict all-target Clippy exit 0; six existing protected-testnet tests remain ignored. Exact commands and exits are in qual-logs/au14/results.jsonl; outputs are gateway-build.log, gateway-test.log, interop-build.log, interop-test.log and interop-clippy.log in that directory. git diff --check exits 0."
+assumption = "The initial targeted platform getrandom update refused the independent layerx-agentd exact 0.3.4 pin; updating the gateway package resolution offline changed only inherited workspace dependency edges. Agent source and pins remain unchanged. No Rust source, entropy behavior, assertion, dependency policy or task status changes. CARGO_BUILD_JOBS=4 and MAKEFLAGS=-j4 are exported; LAYERX_TEST_NATIVE_BIN_DIR points to /root/lx-lanes/native-bin. Full lint qualification remains blocked by the separately recorded source and dependency refusals."
+severity = "note"
+
+[observation.6.4.gateway-getrandom-lint-baseline]
+task = "6.4"
+file = "platform/hosted/gateway/src/http.rs platform/hosted/gateway/src/lib.rs"
+symbol = "platform-lint"
+observed = "Strict gateway all-target Clippy exits 101 with 14 diagnostics in unchanged source: http.rs missing_errors_doc at lines 21, 78, 102, 127, 231 and 339; must_use_candidate at 74; too_many_arguments at 78 and 102; type_complexity at 278; lib.rs unused_self at 491, too_many_arguments at 565 and 613 and needless_pass_by_value at 648. The same command with the unchanged base platform manifest and lockfile also exits 101 with the same 14 diagnostic messages. make platform-lint exits 2 at its workspace Clippy step; later platform lint steps do not execute. Evidence: qual-logs/au14/gateway-clippy.log, baseline-gateway-clippy.log, baseline-comparison.log and platform-lint.log."
+assumption = "These source locations are outside the authorized entropy-call edit. No diagnostics were suppressed or source signatures changed. No passing platform lint gate is claimed."
+severity = "blocker"
+
+[observation.6.4.interop-ring-convergence-boundary]
+task = "6.4"
+file = "interop/Cargo.toml interop/Cargo.lock platform/Cargo.toml agent/crates/layerx-client/Cargo.toml agent/crates/layerx-agentd/Cargo.toml"
+symbol = "interop-lint"
+observed = "make interop-lint passes strict workspace Clippy and dependency/unsafe policy, then exits 2 after cargo-deny exits 3. Exact refusals remain der 0.7.10/0.8.1, getrandom 0.2.17/0.4.3, windows-sys 0.52.0/0.61.2, and unmaintained paste 1.0.15 RUSTSEC-2024-0436. The r-efi duplicate refusal is gone. cargo tree -i windows-sys@0.52.0 on the host prints no dependents; --target all shows ring 0.17.14 as its only direct dependent, through rustls and rustls-webpki. The fetched sparse registry index ends at ring 0.17.14, requiring windows-sys ^0.52 and getrandom ^0.2.10. Crypto rand_core also requires getrandom 0.2.17. Raw evidence: qual-logs/au14/interop-lint.log, windows-tree.log, windows-all-tree.log, ring-index.jsonl and getrandom-old-tree.log."
+assumption = "There is no available direct dependency version bump that removes the ring windows-sys branch. A compatible upstream release or separately authorized coordinated cryptographic-provider migration is required. Platform additionally retains getrandom 0.3.4 through the independent layerx-agentd exact pin. Full getrandom and windows-sys convergence is not established. Curve and interpreter dependency migrations remain outside this change; deny.toml and all checks remain intact."
+severity = "blocker"
