@@ -2,6 +2,7 @@
   "name": "program-terminal-v4",
   "protocol_version": 3,
   "outcome_tag_hex": "50524734",
+  "outcome_bytes": 421,
   "outcome_layout": "V3 field order, then u32be(32) followed by applied_legs_digest[32]",
   "applied_legs_digest": "SHA256 of exact ordered AtomicTransferSet::kernel_canonical() bytes; SHA256(empty) for zero applied legs",
   "terminal_domain_hex": "4c58502f70726f6772616d732f7465726d696e616c2d6170706c6965642d6c6567732f763100",

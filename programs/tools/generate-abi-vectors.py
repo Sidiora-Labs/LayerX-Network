@@ -95,6 +95,7 @@ def terminal_schema():
         "name": "program-terminal-v4",
         "protocol_version": 3,
         "outcome_tag_hex": "50524734",
+        "outcome_bytes": 421,
         "outcome_layout": "V3 field order, then u32be(32) followed by applied_legs_digest[32]",
         "applied_legs_digest": "SHA256 of exact ordered AtomicTransferSet::kernel_canonical() bytes; SHA256(empty) for zero applied legs",
         "terminal_domain_hex": b"LXP/programs/terminal-applied-legs/v1\0".hex(),
@@ -141,6 +142,18 @@ def main():
     if args.check:
         if not path.exists() or path.read_text() != generated:
             print("terminal V4 schema vector drift", file=sys.stderr); return 1
+    else:
+        path.write_text(generated)
+    fixture = ROOT / "platform/sdk/conformance/fixtures/receipt-programs-executed-v4.json"
+    canonical = bytes.fromhex(json.loads(fixture.read_text())["canonical_receipt_hex"])
+    outcome = canonical[-490:-69]
+    if len(outcome) != 421 or outcome[:4] != bytes.fromhex("50524734") or canonical[-69:-64] != bytes.fromhex("0100000040"):
+        raise ValueError("executed C fixture does not carry the declared V4 layout")
+    path = OUTPUT / "terminal-v4-outcome.hex"
+    generated = outcome.hex() + "\n"
+    if args.check:
+        if not path.exists() or path.read_text() != generated:
+            print("executed terminal V4 vector drift", file=sys.stderr); return 1
     else:
         path.write_text(generated)
     return 0
