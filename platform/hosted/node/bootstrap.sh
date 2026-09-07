@@ -158,6 +158,7 @@ LAYERXD=""
 GENESIS_BUILD=""
 CUSTODY_PROFILE=""
 SETTLEMENT_ENV=""
+SETTLEMENT_DOCUMENT=${LAYERX_PAXEER_SETTLEMENT_JSON:-}
 FORCE=0
 
 while [ $# -gt 0 ]; do
@@ -182,6 +183,7 @@ while [ $# -gt 0 ]; do
         --genesis-build) GENESIS_BUILD=$2; shift 2 ;;
         --custody-profile) CUSTODY_PROFILE=$2; shift 2 ;;
         --settlement-env) SETTLEMENT_ENV=$2; shift 2 ;;
+        --settlement-document) SETTLEMENT_DOCUMENT=$2; shift 2 ;;
         --force) FORCE=1; shift ;;
         -h|--help) usage ;;
         *) fail "unknown argument $1" ;;
@@ -263,6 +265,17 @@ MIGRATIONS=$(readlink -f "$MIGRATIONS")
 command -v openssl >/dev/null || fail "openssl is required"
 command -v sha256sum >/dev/null || fail "sha256sum is required"
 command -v od >/dev/null || fail "od is required"
+
+if [ -z "$SETTLEMENT_DOCUMENT" ]; then
+    SOURCE_ROOT=$(cd "$(dirname "$0")/../../.." && pwd)
+    if [ -r "$SOURCE_ROOT/contracts/config/checkpoint-settlement.json" ]; then
+        SETTLEMENT_DOCUMENT="$SOURCE_ROOT/contracts/config/checkpoint-settlement.json"
+    else
+        SETTLEMENT_DOCUMENT=/opt/layerx/checkpoint-settlement.json
+    fi
+fi
+GUARANTOR_COUNT=$(jq -er '.finality_policy.certificate_threshold | select(type == "number" and . == floor and . >= 1 and . <= 32)' "$SETTLEMENT_DOCUMENT") \
+    || fail "certificate threshold must be an integer in 1..32 (LXP_GENESIS_MAX_GUARANTORS)"
 
 bin_to_hex() { od -An -v -tx1 | tr -d ' \n'; }
 
@@ -362,16 +375,36 @@ SUPERVISOR_SOCKET="$RUN_DIR/supervisor.sock"
 umask 077
 mkdir -p "$DATA_DIR/checkpoints" "$DATA_DIR/logs" "$DATA_DIR/replica" "$DATA_DIR/secrets" "$DATA_DIR/work"
 GUARANTOR_KEY_FILE="$DATA_DIR/secrets/guarantor-key.pem"
-openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:secp256k1 -out "$GUARANTOR_KEY_FILE"
-GUARANTOR_PUBLIC=$(openssl ec -in "$GUARANTOR_KEY_FILE" -pubout -conv_form compressed -outform DER 2>/dev/null | tail -c 33 | bin_to_hex)
-[[ $GUARANTOR_PUBLIC =~ ^0[23][0-9a-f]{64}$ ]] || fail "could not derive a compressed secp256k1 guarantor public key"
-GUARANTOR_ID=$(printf 'layerx-beta-guarantor:%s' "$GUARANTOR_PUBLIC" | sha256_hex)
-GUARANTOR_SECOND_KEY_FILE="$DATA_DIR/secrets/guarantor-second-key.pem"
-openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:secp256k1 -out "$GUARANTOR_SECOND_KEY_FILE"
-GUARANTOR_SECOND_PUBLIC=$(openssl ec -in "$GUARANTOR_SECOND_KEY_FILE" -pubout -conv_form compressed -outform DER 2>/dev/null | tail -c 33 | bin_to_hex)
-[[ $GUARANTOR_SECOND_PUBLIC =~ ^0[23][0-9a-f]{64}$ ]] || fail "could not derive the second guarantor public key"
-GUARANTOR_SECOND_ID=$(printf 'layerx-beta-guarantor:%s' "$GUARANTOR_SECOND_PUBLIC" | sha256_hex)
-[ "$GUARANTOR_ID" != "$GUARANTOR_SECOND_ID" ] || fail "guarantor identities must differ"
+GUARANTOR_ENTRIES=()
+declare -A GUARANTOR_KEYS=()
+for ((index = 0; index < GUARANTOR_COUNT; index++)); do
+    key_file="$DATA_DIR/secrets/guarantor-key-$index.pem"
+    if [ "$index" -eq 0 ]; then key_file=$GUARANTOR_KEY_FILE; fi
+    openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:secp256k1 -out "$key_file"
+    chmod 0600 "$key_file"
+    public=$(openssl ec -in "$key_file" -pubout -conv_form compressed -outform DER 2>/dev/null | tail -c 33 | bin_to_hex)
+    [[ $public =~ ^0[23][0-9a-f]{64}$ ]] || fail "could not derive a compressed secp256k1 guarantor public key"
+    id=$(printf 'layerx-beta-guarantor:%s' "$public" | sha256_hex)
+    GUARANTOR_ENTRIES+=("$id $public")
+    GUARANTOR_KEYS["$id"]=$key_file
+done
+mapfile -t GUARANTOR_ENTRIES < <(printf '%s\n' "${GUARANTOR_ENTRIES[@]}" | LC_ALL=C sort)
+previous_id=""
+for entry in "${GUARANTOR_ENTRIES[@]}"; do
+    id=${entry%% *}
+    [[ $id > $previous_id ]] || fail "guarantor identifiers must be strictly ascending"
+    previous_id=$id
+done
+entry=${GUARANTOR_ENTRIES[0]}
+GUARANTOR_ID=${entry%% *}
+GUARANTOR_PUBLIC=${entry#* }
+GUARANTOR_KEY_FILE=${GUARANTOR_KEYS[$GUARANTOR_ID]}
+if [ "$GUARANTOR_COUNT" -gt 1 ]; then
+    entry=${GUARANTOR_ENTRIES[1]}
+    GUARANTOR_SECOND_ID=${entry%% *}
+    GUARANTOR_SECOND_PUBLIC=${entry#* }
+    GUARANTOR_SECOND_KEY_FILE=${GUARANTOR_KEYS[$GUARANTOR_SECOND_ID]}
+fi
 
 # --- genesis request (LXGB v1) -------------------------------------------
 PARAMETER_KEY=$(printf 'parameter-version' | bin_to_hex)
@@ -388,12 +421,12 @@ REQUEST="$DATA_DIR/work/genesis-request.lxgb"
     hex_to_bin "$(be_hex 7 2)"
     hex_to_bin "$PARAMETER_KEY"
     hex_to_bin "$PARAMETER_VALUE"
-    hex_to_bin "$(be_hex 2 2)"
-    while read -r guarantor_id guarantor_public; do
-        hex_to_bin "$guarantor_id"
-        hex_to_bin "$guarantor_public"
+    hex_to_bin "$(be_hex "$GUARANTOR_COUNT" 2)"
+    for entry in "${GUARANTOR_ENTRIES[@]}"; do
+        hex_to_bin "${entry%% *}"
+        hex_to_bin "${entry#* }"
         hex_to_bin "$(be_hex 0 16)"
-    done < <(printf '%s %s\n%s %s\n' "$GUARANTOR_ID" "$GUARANTOR_PUBLIC" "$GUARANTOR_SECOND_ID" "$GUARANTOR_SECOND_PUBLIC" | LC_ALL=C sort)
+    done
     hex_to_bin "$ASSET_ID"
     hex_to_bin "$(be_hex 1 4)"
     for coefficient in 1 1 1 1 1 8 8 64 8; do hex_to_bin "$(be_hex "$coefficient" 8)"; done
@@ -403,7 +436,7 @@ REQUEST="$DATA_DIR/work/genesis-request.lxgb"
     for price in 1 1 2 4 1 1 100; do hex_to_bin "$(be_hex "$price" 8)"; done
     for demand in 100 1 1 10 1 1000; do hex_to_bin "$(be_hex "$demand" 8)"; done
 } > "$REQUEST"
-[ "$(stat -c %s "$REQUEST")" -eq 476 ] || fail "genesis request has an unexpected length"
+[ "$(stat -c %s "$REQUEST")" -eq "$((314 + 81 * GUARANTOR_COUNT))" ] || fail "genesis request has an unexpected length"
 
 SIGNER_KEY="$DATA_DIR/work/genesis-signer.key"
 hex_to_bin "$SEQUENCER_PRIVATE" > "$SIGNER_KEY"
@@ -514,7 +547,7 @@ LAYERX_AUTHORITY_PORT=$REPLICA_PORT
 EOF
 
 umask 022
-cat > "$DATA_DIR/node.env" <<EOF
+cat > "$DATA_DIR/node.env.tmp" <<EOF
 LAYERX_NODE_NETWORK_ID=$NETWORK_ID
 LAYERX_NODE_ASSET_ID=$ASSET_ID
 LAYERX_NODE_LNI_SOCKET=$LNI_SOCKET
@@ -531,9 +564,6 @@ LAYERX_NODE_GENESIS_RECEIPT_STATE_ROOT=$GENESIS_RECEIPT_STATE_ROOT
 LAYERX_NODE_GENESIS_GUARANTOR_ID=$GUARANTOR_ID
 LAYERX_NODE_GENESIS_GUARANTOR_PUBLIC_KEY=$GUARANTOR_PUBLIC
 LAYERX_NODE_GENESIS_GUARANTOR_KEY_FILE=$GUARANTOR_KEY_FILE
-LAYERX_NODE_SECOND_GUARANTOR_ID=$GUARANTOR_SECOND_ID
-LAYERX_NODE_SECOND_GUARANTOR_PUBLIC_KEY=$GUARANTOR_SECOND_PUBLIC
-LAYERX_NODE_SECOND_GUARANTOR_KEY_FILE=$GUARANTOR_SECOND_KEY_FILE
 LAYERX_PAXEER_GENESIS_DIR=$GENESIS_DIR
 LAYERX_NODE_TREASURY_DID=$TREASURY_DID
 LAYERX_NODE_TREASURY_PUBLIC_KEY=$TREASURY_PUBLIC
@@ -545,20 +575,31 @@ LAYERX_NODE_REPLICA_CONFIG=$DATA_DIR/replica.conf
 LAYERX_NODE_SEQUENCER_ENV=$DATA_DIR/sequencer.env
 LAYERX_NODE_REPLICA_ENV=$DATA_DIR/replica.env
 EOF
-chmod 0644 "$DATA_DIR/node.env"
-for identity in 1 2; do
+printf 'LAYERX_NODE_GENESIS_GUARANTOR_COUNT=%s\n' "$GUARANTOR_COUNT" >> "$DATA_DIR/node.env.tmp"
+for ((index = 0; index < GUARANTOR_COUNT; index++)); do
+    entry=${GUARANTOR_ENTRIES[index]}
+    identity_id=${entry%% *}
+    identity_public=${entry#* }
+    identity_key=${GUARANTOR_KEYS[$identity_id]}
+    printf 'LAYERX_NODE_GENESIS_GUARANTOR_ID_%s=%s\nLAYERX_NODE_GENESIS_GUARANTOR_PUBLIC_KEY_%s=%s\n' \
+        "$index" "$identity_id" "$index" "$identity_public" >> "$DATA_DIR/node.env.tmp"
+done
+if [ "$GUARANTOR_COUNT" -gt 1 ]; then
+    printf 'LAYERX_NODE_SECOND_GUARANTOR_ID=%s\nLAYERX_NODE_SECOND_GUARANTOR_PUBLIC_KEY=%s\nLAYERX_NODE_SECOND_GUARANTOR_KEY_FILE=%s\n' \
+        "$GUARANTOR_SECOND_ID" "$GUARANTOR_SECOND_PUBLIC" "$GUARANTOR_SECOND_KEY_FILE" >> "$DATA_DIR/node.env.tmp"
+fi
+chmod 0644 "$DATA_DIR/node.env.tmp"
+mv "$DATA_DIR/node.env.tmp" "$DATA_DIR/node.env"
+for ((index = 0; index < GUARANTOR_COUNT; index++)); do
+    identity=$((index + 1))
+    entry=${GUARANTOR_ENTRIES[index]}
+    identity_id=${entry%% *}
+    identity_key=${GUARANTOR_KEYS[$identity_id]}
     producer_dir="$(dirname "$DATA_DIR")/guarantor-$identity"
     mkdir -p "$producer_dir/identity" "$producer_dir/state"
     chgrp "$LNI_GID" "$producer_dir" "$producer_dir/identity" "$producer_dir/state"
     chmod 0750 "$producer_dir" "$producer_dir/identity"
     chmod 2770 "$producer_dir/state"
-    if [ "$identity" = 1 ]; then
-        identity_key=$GUARANTOR_KEY_FILE
-        identity_id=$GUARANTOR_ID
-    else
-        identity_key=$GUARANTOR_SECOND_KEY_FILE
-        identity_id=$GUARANTOR_SECOND_ID
-    fi
     install -m 0440 "$identity_key" "$producer_dir/identity/key.pem"
     install -m 0440 "$SNAPSHOT" "$producer_dir/identity/genesis.lxs"
     install -m 0440 "$MANIFEST" "$producer_dir/identity/genesis.manifest"
@@ -575,7 +616,6 @@ for identity in 1 2; do
     chgrp "$LNI_GID" "$producer_dir/identity/"*
     chmod 0440 "$producer_dir/identity/"*
 done
-
 printf 'LAYERX_CORE_SEQUENCER_ID=%s\nLAYERX_CORE_TREASURY_ASSET=%s\n' \
     "$SEQUENCER_ID" "$ASSET_ID" > "$RUN_DIR/core.env.tmp"
 chmod 0644 "$RUN_DIR/core.env.tmp"
