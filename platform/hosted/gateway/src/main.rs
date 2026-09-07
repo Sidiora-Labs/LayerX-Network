@@ -1335,9 +1335,8 @@ fn program_simulation(
     if upstream.status != 200 || upstream.content_type != "application/json" {
         return response(503, "component_invalid", Some(5));
     }
-    let document: serde_json::Value = match serde_json::from_slice(&upstream.body) {
-        Ok(value) => value,
-        Err(_) => return response(503, "component_invalid", Some(5)),
+    let Ok(document): Result<serde_json::Value, _> = serde_json::from_slice(&upstream.body) else {
+        return response(503, "component_invalid", Some(5));
     };
     let expected = SimulationExpectation {
         activity_id: submission.activity_id(),
@@ -2084,9 +2083,8 @@ fn resolve_pending_lifecycle(
     if upstream.status != 200 || upstream.content_type != "application/json" {
         return response(502, "component_invalid", None);
     }
-    let document: serde_json::Value = match serde_json::from_slice(&upstream.body) {
-        Ok(value) => value,
-        Err(_) => return response(502, "component_invalid", None),
+    let Ok(document): Result<serde_json::Value, _> = serde_json::from_slice(&upstream.body) else {
+        return response(502, "component_invalid", None);
     };
     let component: LifecycleActivity =
         match serde_json::from_value::<LifecycleActivity>(document["result"].clone()) {
@@ -3403,8 +3401,8 @@ mod programs_wire_tests {
                     }),
                 ),
             );
-            let document: serde_json::Value =
-                serde_json::from_slice(&output.body).unwrap_or_else(|error| panic!("{error:?}"));
+            let document: serde_json::Value = serde_json::from_slice(&output.body)
+                .unwrap_or_else(|error| panic!("test value must be valid: {error}"));
             let verification_status = if matches!(state, "unknown" | "pending") {
                 serde_json::json!({
                     "state":"Unverified",
@@ -3450,12 +3448,14 @@ mod programs_wire_tests {
 
         let before = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_else(|error| panic!("{error:?}"))
+            .unwrap_or_else(|error| panic!("test value must be valid: {error}"))
             .as_millis();
-        let observed = u128::from(now_millis().unwrap_or_else(|error| panic!("{error:?}")));
+        let observed = u128::from(
+            now_millis().unwrap_or_else(|error| panic!("test value must be valid: {error}")),
+        );
         let after = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_else(|error| panic!("{error:?}"))
+            .unwrap_or_else(|error| panic!("test value must be valid: {error}"))
             .as_millis();
         assert!((before..=after).contains(&observed));
     }
@@ -3475,8 +3475,8 @@ mod programs_wire_tests {
                 }),
             ),
         );
-        let document: serde_json::Value =
-            serde_json::from_slice(&output.body).unwrap_or_else(|error| panic!("{error:?}"));
+        let document: serde_json::Value = serde_json::from_slice(&output.body)
+            .unwrap_or_else(|error| panic!("test value must be valid: {error}"));
         assert_eq!(
             document["verification_status"],
             serde_json::json!({
@@ -3533,8 +3533,8 @@ mod programs_wire_tests {
                 operation,
                 json_response(status, &serde_json::json!({"ok":true,"result":value})),
             );
-            let document: serde_json::Value =
-                serde_json::from_slice(&output.body).unwrap_or_else(|error| panic!("{error:?}"));
+            let document: serde_json::Value = serde_json::from_slice(&output.body)
+                .unwrap_or_else(|error| panic!("test value must be valid: {error}"));
             assert_eq!(document["verification_status"], expected, "{operation}");
         }
 
@@ -3565,8 +3565,8 @@ mod programs_wire_tests {
             "gw-contract-test",
             response(409, "idempotency_conflict", None),
         );
-        let document: serde_json::Value =
-            serde_json::from_slice(&output.body).unwrap_or_else(|error| panic!("{error:?}"));
+        let document: serde_json::Value = serde_json::from_slice(&output.body)
+            .unwrap_or_else(|error| panic!("test value must be valid: {error}"));
         assert_eq!(
             document,
             serde_json::json!({
@@ -3614,8 +3614,8 @@ mod programs_wire_tests {
             continuation: "00ff".to_owned(),
         };
         let output = pending_program_response(&operation, "gw-contract-test");
-        let document: serde_json::Value =
-            serde_json::from_slice(&output.body).unwrap_or_else(|error| panic!("{error:?}"));
+        let document: serde_json::Value = serde_json::from_slice(&output.body)
+            .unwrap_or_else(|error| panic!("test value must be valid: {error}"));
         assert_eq!(document["result"]["retained_signed_activity"], "00ff");
 
         let legacy = OperationRecord {
@@ -3623,8 +3623,8 @@ mod programs_wire_tests {
             ..operation
         };
         let output = pending_program_response(&legacy, "gw-contract-test");
-        let document: serde_json::Value =
-            serde_json::from_slice(&output.body).unwrap_or_else(|error| panic!("{error:?}"));
+        let document: serde_json::Value = serde_json::from_slice(&output.body)
+            .unwrap_or_else(|error| panic!("test value must be valid: {error}"));
         assert!(document["result"].get("retained_signed_activity").is_none());
     }
 
