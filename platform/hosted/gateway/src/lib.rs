@@ -488,7 +488,7 @@ impl VerifiedOperation {
     }
 
     #[must_use]
-    pub const fn verification_level(&self) -> &'static str {
+    pub const fn verification_level(_operation: &Self) -> &'static str {
         "receipt-verified"
     }
 }
@@ -555,6 +555,13 @@ pub fn verify_activity_operation(
     })
 }
 
+#[derive(Clone, Copy)]
+pub struct ProgramOperationExpectation {
+    pub activity_id: [u8; 32],
+    pub program_id: [u8; 32],
+    pub guest_abi_version: u16,
+}
+
 /// Verifies a committed Programs receipt together with its authenticated
 /// terminal payload and call graph, then renders only locally derived fields.
 ///
@@ -568,10 +575,13 @@ pub fn verify_program_operation(
     call_graph: &[u8],
     authority: AuthorityFacts,
     trusted_sequencer_key: &[u8; 32],
-    expected_activity_id: [u8; 32],
-    expected_program_id: [u8; 32],
-    expected_guest_abi_version: u16,
+    expectation: ProgramOperationExpectation,
 ) -> Result<VerifiedOperation, GatewayError> {
+    let ProgramOperationExpectation {
+        activity_id: expected_activity_id,
+        program_id: expected_program_id,
+        guest_abi_version: expected_guest_abi_version,
+    } = expectation;
     if authority
         .sequencer_public_key()
         .ct_eq(trusted_sequencer_key)
@@ -593,7 +603,7 @@ pub fn verify_program_operation(
     )
     .map_err(|_| GatewayError::VerificationRequired)?;
     render_verified_program_operation(
-        verified,
+        &verified,
         terminal_payload,
         call_graph,
         expected_program_id,
@@ -616,10 +626,13 @@ pub fn verify_program_simulation_operation(
     call_graph: &[u8],
     trusted_previous_state_root: [u8; 32],
     trusted_sequencer_key: [u8; 32],
-    expected_activity_id: [u8; 32],
-    expected_program_id: [u8; 32],
-    expected_guest_abi_version: u16,
+    expectation: ProgramOperationExpectation,
 ) -> Result<VerifiedOperation, GatewayError> {
+    let ProgramOperationExpectation {
+        activity_id: expected_activity_id,
+        program_id: expected_program_id,
+        guest_abi_version: expected_guest_abi_version,
+    } = expectation;
     let verified = verify_program_execution(
         receipt_bytes,
         terminal_payload,
@@ -634,7 +647,7 @@ pub fn verify_program_simulation_operation(
     )
     .map_err(|_| GatewayError::VerificationRequired)?;
     render_verified_program_operation(
-        verified,
+        &verified,
         terminal_payload,
         call_graph,
         expected_program_id,
@@ -645,7 +658,7 @@ pub fn verify_program_simulation_operation(
 }
 
 fn render_verified_program_operation(
-    verified: VerifiedProgramExecution,
+    verified: &VerifiedProgramExecution,
     terminal_payload: &[u8],
     call_graph: &[u8],
     expected_program_id: [u8; 32],

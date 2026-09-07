@@ -634,7 +634,9 @@ pub fn settled_payment(draft: PaymentDraft<'_>) -> Result<ProtocolEvent, Webhook
     if draft.operation.result_code() != 0 {
         return Err(WebhookError::VerificationRequired);
     }
-    let verification = Verification::parse(draft.operation.verification_level())?;
+    let verification = Verification::parse(
+        layerx_platform_gateway::VerifiedOperation::verification_level(draft.operation),
+    )?;
     if !verification.at_least(Verification::ReceiptVerified) {
         return Err(WebhookError::VerificationRequired);
     }

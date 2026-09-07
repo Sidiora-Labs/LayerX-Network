@@ -2067,9 +2067,11 @@ impl Execution<'_> {
             return Err("authenticated signer binding is invalid".to_owned());
         }
         let upstream = self.config.client.request_authorized_traced(
-            &self.config.hosted_gateway,
-            "POST",
-            "/v1/activities",
+            layerx_platform_gateway::http::RequestTarget {
+                endpoint: &self.config.hosted_gateway,
+                method: "POST",
+                path: "/v1/activities",
+            },
             self.authorization,
             Some(self.idempotency),
             "application/octet-stream",
@@ -2201,9 +2203,11 @@ fn authority(
 ) -> Result<AuthorizedFacts, String> {
     let authorization = format!("Bearer {}", config.receipt_authority_token.as_str());
     let response = config.client.request_authorized_traced(
-        &config.receipt_authority,
-        "GET",
-        &format!("/v1/authorized-batches/by-activity/{activity_id}"),
+        layerx_platform_gateway::http::RequestTarget {
+            endpoint: &config.receipt_authority,
+            method: "GET",
+            path: &format!("/v1/authorized-batches/by-activity/{activity_id}"),
+        },
         &authorization,
         None,
         "application/json",
@@ -2335,9 +2339,11 @@ fn dependency_ready(
     config
         .client
         .request(
-            endpoint,
-            "GET",
-            "/readyz",
+            layerx_platform_gateway::http::RequestTarget {
+                endpoint,
+                method: "GET",
+                path: "/readyz",
+            },
             token,
             None,
             "application/json",
@@ -2350,9 +2356,11 @@ fn hosted_ready(config: &Config) -> bool {
     config
         .client
         .request(
-            &config.hosted_gateway,
-            "GET",
-            "/readyz",
+            layerx_platform_gateway::http::RequestTarget {
+                endpoint: &config.hosted_gateway,
+                method: "GET",
+                path: "/readyz",
+            },
             "readiness",
             None,
             "application/json",

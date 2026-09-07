@@ -266,7 +266,9 @@ impl TrustedSources {
             facts.push(ProtocolFact::unverified(fact.name, fact.value)?);
         }
         if let Some(operation) = operation.as_ref() {
-            let verification = Verification::parse(operation.verification_level())?;
+            let verification = Verification::parse(
+                layerx_platform_gateway::VerifiedOperation::verification_level(operation),
+            )?;
             let receipt = hex_encode(&operation.receipt_digest());
             facts.push(ProtocolFact::verified(
                 "activity_id",
