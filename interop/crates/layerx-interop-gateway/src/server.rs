@@ -130,6 +130,7 @@ pub enum EvidencePolicy {
 impl EvidencePolicy {
     /// Parses an exact deployment declaration. There is intentionally no
     /// default: an omitted or unfamiliar policy refuses service startup.
+    #[must_use]
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "layerx-receipt" => Some(Self::LayerXReceipt),
@@ -218,12 +219,9 @@ pub fn interop_gateway_routes<'a>(
         ("POST", transport, "x402", ["verify"] | ["facilitator", "verify"]) => {
             InteropRoute::X402Verify { transport }
         }
-        (
-            "POST",
-            transport,
-            "x402",
-            ["settle"] | ["seller", "settle"] | ["facilitator", "settle"],
-        ) => InteropRoute::X402Settle { transport },
+        ("POST", transport, "x402", ["settle"] | ["seller" | "facilitator", "settle"]) => {
+            InteropRoute::X402Settle { transport }
+        }
         ("POST", IngressTransport::Http, "ap2", ["mandates", "verify"]) => {
             InteropRoute::Ap2VerifyMandates
         }
