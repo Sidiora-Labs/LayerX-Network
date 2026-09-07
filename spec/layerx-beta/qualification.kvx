@@ -2292,3 +2292,11 @@ symbol = "req.14.ac_3 task.6.2.do_3"
 observed = "Owner decision (decider: repository owner; approval: \"yes on all five\"): admin refusals caused by the request are 4xx; durable-storage faults (journal write or lock failure) are 503 with no state change."
 assumption = "Files changed: spec/layerx-beta/spec.kvx and spec/layerx-beta/qualification.kvx. This record applies the decision only to the named contract or Make recipe."
 severity = "note"
+
+[observation.6.1.owner-decision-3]
+task = "6.1"
+file = "spec/layerx-beta/spec.kvx"
+symbol = "task.6.1.do_2"
+observed = "Owner decision (decider: repository owner; approval: \"yes on all five\"): node egress is DNS plus the pinned Paxeer TLS endpoint used by the finality verifier."
+assumption = "Files changed: spec/layerx-beta/spec.kvx and spec/layerx-beta/qualification.kvx. This record applies the decision only to the named contract or Make recipe."
+severity = "note"
