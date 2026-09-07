@@ -545,7 +545,7 @@ static int maintenance_head(int *descriptor, uint64_t sequence, uint64_t batch)
     return 1;
 }
 
-static int maintenance_admission(int *descriptor, const signer *key, bool recovered)
+static int maintenance_admission(int *descriptor, const signer *key, bool recovered, bool queued)
 {
     uint8_t deploy[112] = {1U}, encoded[ACTIVITY_CAPACITY], id[32];
     size_t length;
@@ -565,10 +565,13 @@ static int maintenance_admission(int *descriptor, const signer *key, bool recove
         REQUIRE(lxp_activity_id(encoded, length, id) == LXP_OK);
         REQUIRE(send_request(*descriptor, LNI_MINOR, SUBMIT_REQUEST, i + 1U, encoded, length) == 0);
         REQUIRE(expect_ack(*descriptor, i + 1U, encoded, length, id) == 0);
-        REQUIRE(maintenance_receipt(*descriptor, i * 2U + 1U, id) == 0);
-        REQUIRE(maintenance_head(descriptor, i * 2U + 2U, i + 1U) == 0);
+        if (!queued) {
+            REQUIRE(maintenance_receipt(*descriptor, i * 2U + 1U, id) == 0);
+            REQUIRE(maintenance_head(descriptor, i * 2U + 2U, i + 1U) == 0);
+        }
     }
-    puts("durable activity and maintenance sequences remain contiguous across real daemon publication");
+    if (queued) puts("three signed activities durably queued before execution");
+    else puts("durable activity and maintenance sequences remain contiguous across real daemon publication");
     return 0;
 }
 
@@ -596,9 +599,11 @@ int main(int argc, char **argv)
     REQUIRE(descriptor >= 0 && connect(descriptor, (struct sockaddr *)&address, sizeof(address)) == 0);
     REQUIRE(handshake(descriptor) == 0);
     if (argc == 3 && (strcmp(argv[2], "--maintenance") == 0 ||
-                     strcmp(argv[2], "--maintenance-recovered") == 0)) {
+                     strcmp(argv[2], "--maintenance-recovered") == 0 ||
+                     strcmp(argv[2], "--maintenance-queue") == 0)) {
         REQUIRE(maintenance_admission(&descriptor, &key,
-            strcmp(argv[2], "--maintenance-recovered") == 0) == 0);
+            strcmp(argv[2], "--maintenance-recovered") == 0,
+            strcmp(argv[2], "--maintenance-queue") == 0) == 0);
         REQUIRE(close(descriptor) == 0);
         return 0;
     }
