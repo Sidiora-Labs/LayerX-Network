@@ -205,6 +205,9 @@ impl Display for InterfaceRefusal {
 impl std::error::Error for InterfaceRefusal {}
 
 impl ProgramInterface {
+    /// # Errors
+    ///
+    /// Refuses absent interfaces, invalid module interfaces or a deployment code-hash mismatch.
     pub fn bind_deployment(
         deployment: &VerifiedDeploymentEvidence,
         entries: Vec<InterfaceEntryPoint>,
@@ -219,6 +222,9 @@ impl ProgramInterface {
         Ok(interface)
     }
 
+    /// # Errors
+    ///
+    /// Refuses invalid deployment interfaces or an unauthorized narrowing or ABI upgrade.
     pub fn bind_verified_upgrade(
         deployment: &VerifiedDeploymentEvidence,
         entries: Vec<InterfaceEntryPoint>,
@@ -230,6 +236,9 @@ impl ProgramInterface {
         Ok(interface)
     }
 
+    /// # Errors
+    ///
+    /// Refuses unsupported ABIs, rejected modules, invalid entries, missing exports or capability mismatches.
     pub fn bind(
         module: &[u8],
         abi_version: u16,
@@ -267,6 +276,9 @@ impl ProgramInterface {
         Self::from_parts(code_hash, abi_version, entries)
     }
 
+    /// # Errors
+    ///
+    /// Refuses invalid module interfaces or an unauthorized narrowing or ABI upgrade.
     pub fn bind_upgrade(
         module: &[u8],
         abi_version: u16,
@@ -288,7 +300,7 @@ impl ProgramInterface {
             return Err(InterfaceRefusal::Invalid);
         }
         validate_entries(&entries)?;
-        let encoding = encode_interface(code_hash, abi_version, &entries);
+        let encoding = encode_interface(code_hash, abi_version, &entries)?;
         if encoding.len() > MAX_INTERFACE_BYTES {
             return Err(InterfaceRefusal::Invalid);
         }
@@ -323,6 +335,9 @@ impl ProgramInterface {
         self.digest
     }
 
+    /// # Errors
+    ///
+    /// Refuses an unknown entry-point name.
     pub fn encode_call(
         &self,
         entry_name: &str,
@@ -339,6 +354,9 @@ impl ProgramInterface {
         Ok(calldata)
     }
 
+    /// # Errors
+    ///
+    /// Refuses truncated or unknown entry-point discriminators.
     pub fn decode_call<'a>(
         &self,
         calldata: &'a [u8],
@@ -356,6 +374,9 @@ impl ProgramInterface {
         Ok((entry, &calldata[4..]))
     }
 
+    /// # Errors
+    ///
+    /// Refuses malformed, oversized, invalid or non-canonical interface encodings.
     pub fn decode(bytes: &[u8]) -> Result<Self, InterfaceRefusal> {
         if bytes.len() > MAX_INTERFACE_BYTES || bytes.get(..DOMAIN.len()) != Some(DOMAIN) {
             return Err(InterfaceRefusal::NonCanonical);
@@ -363,8 +384,7 @@ impl ProgramInterface {
         let mut cursor = DOMAIN.len();
         let code_hash = take::<32>(bytes, &mut cursor)?;
         let abi_version = u16::from_be_bytes(take::<2>(bytes, &mut cursor)?);
-        let count = usize::try_from(u16::from_be_bytes(take::<2>(bytes, &mut cursor)?))
-            .map_err(|_| InterfaceRefusal::NonCanonical)?;
+        let count = usize::from(u16::from_be_bytes(take::<2>(bytes, &mut cursor)?));
         if count == 0 || count > MAX_ENTRIES {
             return Err(InterfaceRefusal::Invalid);
         }
@@ -409,6 +429,9 @@ impl ProgramInterface {
             })
     }
 
+    /// # Errors
+    ///
+    /// Refuses unsupported ABI transitions or narrowing upgrades without breaking authorization.
     pub fn authorize_upgrade(&self, prior: &Self, breaking: bool) -> Result<(), InterfaceRefusal> {
         admit_abi_upgrade(prior.abi_version, self.abi_version)
             .map_err(InterfaceRefusal::AbiVersion)?;
@@ -492,6 +515,7 @@ impl ValueType {
     }
 }
 
+#[must_use]
 pub fn interface_state_key(program: ProgramId) -> Vec<u8> {
     let mut key = Vec::with_capacity(STATE_PREFIX.len() + 32);
     key.extend_from_slice(STATE_PREFIX);
@@ -499,6 +523,9 @@ pub fn interface_state_key(program: ProgramId) -> Vec<u8> {
     key
 }
 
+/// # Errors
+///
+/// Refuses version zero.
 pub fn interface_state_value(
     program: ProgramId,
     version: u32,
@@ -515,6 +542,9 @@ pub fn interface_state_value(
     Ok(value)
 }
 
+/// # Errors
+///
+/// Refuses invalid state proofs, malformed interfaces and program, version or code-hash mismatches.
 pub fn verify_interface_read(
     head: &VerifiedProgramHead,
     witness: &InterfaceStateWitness,
@@ -574,7 +604,7 @@ fn validate_entries(entries: &[InterfaceEntryPoint]) -> Result<(), InterfaceRefu
         if entry.capabilities.len() > MAX_FIELDS
             || entry.event_topics.len() > MAX_FIELDS
             || entry.failures.len() > MAX_FIELDS
-            || !capabilities_canonically_sorted(&entry.capabilities)
+            || !capabilities_canonically_sorted(&entry.capabilities)?
             || !strictly_sorted(&entry.event_topics)
         {
             return Err(InterfaceRefusal::Invalid);
@@ -709,43 +739,68 @@ fn validate_name(name: &str) -> Result<(), InterfaceRefusal> {
 fn strictly_sorted<T: Ord>(items: &[T]) -> bool {
     items.windows(2).all(|p| p[0] < p[1])
 }
-fn capabilities_canonically_sorted(items: &[InterfaceCapability]) -> bool {
-    items.windows(2).all(|pair| {
+fn capabilities_canonically_sorted(
+    items: &[InterfaceCapability],
+) -> Result<bool, InterfaceRefusal> {
+    for pair in items.windows(2) {
         let mut left = Vec::new();
         let mut right = Vec::new();
-        encode_capability(&mut left, &pair[0]);
-        encode_capability(&mut right, &pair[1]);
-        left < right
-    })
+        encode_capability(&mut left, &pair[0])?;
+        encode_capability(&mut right, &pair[1])?;
+        if left >= right {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
-fn encode_interface(code_hash: [u8; 32], abi: u16, entries: &[InterfaceEntryPoint]) -> Vec<u8> {
+fn encode_interface(
+    code_hash: [u8; 32],
+    abi: u16,
+    entries: &[InterfaceEntryPoint],
+) -> Result<Vec<u8>, InterfaceRefusal> {
     let mut out = Vec::new();
     out.extend_from_slice(DOMAIN);
     out.extend_from_slice(&code_hash);
     out.extend_from_slice(&abi.to_be_bytes());
-    out.extend_from_slice(&(entries.len() as u16).to_be_bytes());
+    out.extend_from_slice(
+        &u16::try_from(entries.len())
+            .unwrap_or_else(|error| panic!("validated interface length: {error}"))
+            .to_be_bytes(),
+    );
     for entry in entries {
         put_text(&mut out, &entry.name);
         out.extend_from_slice(&entry.discriminator);
         encode_schema(&mut out, &entry.calldata);
         encode_schema(&mut out, &entry.response);
-        out.extend_from_slice(&(entry.capabilities.len() as u16).to_be_bytes());
+        out.extend_from_slice(
+            &u16::try_from(entry.capabilities.len())
+                .unwrap_or_else(|error| panic!("validated interface length: {error}"))
+                .to_be_bytes(),
+        );
         for cap in &entry.capabilities {
-            encode_capability(&mut out, cap);
+            encode_capability(&mut out, cap)?;
         }
-        out.extend_from_slice(&(entry.event_topics.len() as u16).to_be_bytes());
+        out.extend_from_slice(
+            &u16::try_from(entry.event_topics.len())
+                .unwrap_or_else(|error| panic!("validated interface length: {error}"))
+                .to_be_bytes(),
+        );
         for topic in &entry.event_topics {
             out.extend_from_slice(topic);
         }
-        out.extend_from_slice(&(entry.failures.len() as u16).to_be_bytes());
+        out.extend_from_slice(
+            &u16::try_from(entry.failures.len())
+                .unwrap_or_else(|error| panic!("validated interface length: {error}"))
+                .to_be_bytes(),
+        );
         for failure in &entry.failures {
             out.extend_from_slice(&failure.code.to_be_bytes());
             put_text(&mut out, &failure.name);
             encode_schema(&mut out, &failure.detail);
         }
     }
-    out
+    Ok(out)
 }
 
 fn encode_schema(out: &mut Vec<u8>, schema: &ValueSchema) {
@@ -788,7 +843,11 @@ fn encode_value_type(out: &mut Vec<u8>, value: &ValueType) {
         }
         ValueType::Union(variants) => {
             out.push(TypeTag::Union as u8);
-            out.extend_from_slice(&(variants.len() as u16).to_be_bytes());
+            out.extend_from_slice(
+                &u16::try_from(variants.len())
+                    .unwrap_or_else(|error| panic!("validated interface length: {error}"))
+                    .to_be_bytes(),
+            );
             for variant in variants {
                 out.extend_from_slice(&variant.tag.to_be_bytes());
                 encode_value_type(out, &variant.value);
@@ -803,7 +862,7 @@ fn decode_entry(bytes: &[u8], cursor: &mut usize) -> Result<InterfaceEntryPoint,
     let calldata = decode_schema(bytes, cursor, 0)?;
     let response = decode_schema(bytes, cursor, 0)?;
     let capabilities = take_count(bytes, cursor, decode_capability)?;
-    let event_topics = take_count(bytes, cursor, |bytes, cursor| take::<32>(bytes, cursor))?;
+    let event_topics = take_count(bytes, cursor, take::<32>)?;
     let failures = take_count(bytes, cursor, |bytes, cursor| {
         Ok(TypedFailure {
             code: u32::from_be_bytes(take::<4>(bytes, cursor)?),
@@ -886,7 +945,10 @@ fn decode_value_type(
     )
 }
 
-fn encode_capability(out: &mut Vec<u8>, capability: &InterfaceCapability) {
+fn encode_capability(
+    out: &mut Vec<u8>,
+    capability: &InterfaceCapability,
+) -> Result<(), InterfaceRefusal> {
     match capability {
         InterfaceCapability::StorageRead => out.push(0),
         InterfaceCapability::StorageWrite => out.push(1),
@@ -917,7 +979,7 @@ fn encode_capability(out: &mut Vec<u8>, capability: &InterfaceCapability) {
         } => {
             out.push(7);
             out.extend_from_slice(&owner_program.bytes());
-            put_bytes16(out, seed);
+            put_bytes16(out, seed)?;
             out.extend_from_slice(source_account);
             out.extend_from_slice(asset);
             out.extend_from_slice(to);
@@ -938,6 +1000,7 @@ fn encode_capability(out: &mut Vec<u8>, capability: &InterfaceCapability) {
             out.extend_from_slice(receipt_digest);
         }
     }
+    Ok(())
 }
 
 fn decode_capability(
@@ -985,16 +1048,26 @@ fn decode_capability(
 }
 
 fn put_text(out: &mut Vec<u8>, text: &str) {
-    out.extend_from_slice(&(text.len() as u16).to_be_bytes());
+    out.extend_from_slice(
+        &u16::try_from(text.len())
+            .unwrap_or_else(|error| panic!("validated interface length: {error}"))
+            .to_be_bytes(),
+    );
     out.extend_from_slice(text.as_bytes());
 }
 fn put_bytes(out: &mut Vec<u8>, bytes: &[u8]) {
-    out.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
+    out.extend_from_slice(
+        &u32::try_from(bytes.len())
+            .unwrap_or_else(|error| panic!("validated interface bytes: {error}"))
+            .to_be_bytes(),
+    );
     out.extend_from_slice(bytes);
 }
-fn put_bytes16(out: &mut Vec<u8>, bytes: &[u8]) {
-    out.extend_from_slice(&(bytes.len() as u16).to_be_bytes());
+fn put_bytes16(out: &mut Vec<u8>, bytes: &[u8]) -> Result<(), InterfaceRefusal> {
+    let length = u16::try_from(bytes.len()).map_err(|_| InterfaceRefusal::Invalid)?;
+    out.extend_from_slice(&length.to_be_bytes());
     out.extend_from_slice(bytes);
+    Ok(())
 }
 fn take<const N: usize>(bytes: &[u8], cursor: &mut usize) -> Result<[u8; N], InterfaceRefusal> {
     let end = cursor
