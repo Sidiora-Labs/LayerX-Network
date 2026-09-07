@@ -1,8 +1,8 @@
 use layerx_programs::{
     account_tree_commitment, program_account_registration_commitment, programs_root_commitment,
     state_leaf_commitment, state_node_commitment, universal_root_commitment, AccountStateError,
-    AccountStateHead, AccountStateJournal, CanonicalAccountLeaf, Deprecation, DeprecationRefusal,
-    DeprecationRequest, DeploymentRecord, ExitRoute, JournalAccountStateAuthority,
+    AccountStateHead, AccountStateJournal, CanonicalAccountLeaf, DeploymentRecord, Deprecation,
+    DeprecationRefusal, DeprecationRequest, ExitRoute, JournalAccountStateAuthority,
     LegacyDeprecationRequest, ProgramLifecycle, ProgramValueAccountBinding, ProvenAccountLeaf,
     ProvenProgramBinding, ReadFreshness, Registry, RegistryError, StateProof,
     VerifiedAccountSnapshot, WindDownPolicy, WindDownStateAccess, MAX_PROGRAM_VALUE_ACCOUNTS,
@@ -224,13 +224,13 @@ fn account(
         kind: 13,
         balance,
         asset_id: binding.asset_id,
-        has_asset: true,
+        has_asset: (true).into(),
         next_sequence: 0,
         created_at_sequence: binding.registered_sequence,
-        frozen,
-        has_open_reference: false,
+        frozen: frozen.into(),
+        has_open_reference: (false).into(),
         authority_key: [0; 32],
-        has_authority_key: false,
+        has_authority_key: (false).into(),
     }
 }
 
@@ -816,13 +816,13 @@ fn shared_c_rust_state_vectors_freeze_leaf_order_odd_duplication_and_bounds() {
         kind: 13,
         balance: 0x12_3456,
         asset_id,
-        has_asset: true,
+        has_asset: (true).into(),
         next_sequence: 7,
         created_at_sequence: 3,
-        frozen: false,
-        has_open_reference: true,
+        frozen: (false).into(),
+        has_open_reference: (true).into(),
         authority_key: [0; 32],
-        has_authority_key: false,
+        has_authority_key: (false).into(),
     };
     assert_eq!(leaf.commitment(), Ok(vector_hash("account_leaf")));
     let mut account_key = vec![4];

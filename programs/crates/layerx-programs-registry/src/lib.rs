@@ -14,9 +14,10 @@ mod resolver;
 pub use account_state::{
     account_tree_commitment, program_account_registration_commitment, programs_root_commitment,
     state_leaf_commitment, state_node_commitment, universal_root_commitment,
-    verify_state_membership, AccountStateError, AccountStateHead, AccountStateJournal,
-    CanonicalAccountLeaf, JournalAccountStateAuthority, ProgramValueAccountBinding,
-    ProvenAccountLeaf, ProvenProgramBinding, StateProof, ValueAccount, VerifiedAccountSnapshot,
+    verify_state_membership, AccountFreeze, AccountStateError, AccountStateHead,
+    AccountStateJournal, AssetPresence, AuthorityKeyPresence, CanonicalAccountLeaf,
+    JournalAccountStateAuthority, OpenReference, ProgramValueAccountBinding, ProvenAccountLeaf,
+    ProvenProgramBinding, StateProof, ValueAccount, VerifiedAccountSnapshot,
     MAX_PROGRAM_VALUE_ACCOUNTS,
 };
 pub use archive::{ArchiveError, SourceArchive, SourceFile};
