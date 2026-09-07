@@ -1,3 +1,4 @@
+pub use layerx_proof::inclusion::SequencerAuthorization;
 use std::fs::{self, File};
 use std::io::{Read as _, Write as _};
 use std::net::{IpAddr, TcpStream, ToSocketAddrs as _};
@@ -786,6 +787,7 @@ pub struct ActivityConfig {
 }
 
 pub struct LayerxClient {
+    pub sequencer_authorization: SequencerAuthorization,
     pub http: MutualTlsClient,
     pub gateway: Endpoint,
     pub receipt_authority: Endpoint,
@@ -961,18 +963,6 @@ impl LayerxClient {
             activity_id: String,
             receipt: String,
         }
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct AuthorityBody {
-            activity_id: String,
-            batch_id: String,
-            asset: String,
-            previous_state_root: String,
-            resulting_state_root: String,
-            sequencer_public_key: String,
-            network_id: String,
-            wire_version: String,
-        }
         let id = hex(&activity);
         let gateway_authorization = format!("LayerX-Key {}", self.gateway_key);
         let receipt_path = format!("/v1/receipts/{id}");
@@ -1029,7 +1019,10 @@ impl LayerxClient {
         {
             return Err(RampError::Layerx);
         }
-        let evidence = ReceiptEvidence {
+        if parse_hex32(&facts.sequencer_public_key)? != self.sequencer_authorization.public_key() {
+            return Err(RampError::Layerx);
+        }
+        let mut evidence = ReceiptEvidence {
             activity_id: activity,
             canonical_receipt,
             authorized_batch: AuthorizedBatch::new(
@@ -1040,6 +1033,15 @@ impl LayerxClient {
                 parse_hex32(&facts.sequencer_public_key)?,
             ),
         };
+        if let Some(maintained) = facts.batch_evidence {
+            evidence.authorized_batch = maintained
+                .authorize(
+                    &evidence.canonical_receipt,
+                    &evidence.authorized_batch,
+                    &self.sequencer_authorization,
+                )
+                .map_err(|_| RampError::Layerx)?;
+        }
         verify_order_receipt(order, &evidence).map(|leg| LayerxSubmission::Verified {
             leg,
             canonical_activity: None,
@@ -1405,4 +1407,331 @@ pub fn callback_evidence_digest(callback: &ProviderCallback) -> Result<[u8; 32],
     hasher.update(b"LXP/market-maker-ramp/provider-callback/v1\0");
     hasher.update(bytes);
     Ok(hasher.finalize().into())
+}
+
+/// Parses and validates independently configured sequencer trust inputs.
+///
+/// # Errors
+/// Returns the invalid pin name for malformed keys, identities or bounds.
+pub fn configured_sequencer(
+    id: &str,
+    key: &str,
+    first: &str,
+    last: &str,
+) -> Result<SequencerAuthorization, &'static str> {
+    let authorization = SequencerAuthorization::from_config(id, key, first, last)?;
+    let bytes = authorization.public_key();
+    let key =
+        ed25519_dalek::VerifyingKey::from_bytes(&bytes).map_err(|_| "sequencer public key")?;
+    let mut y = bytes;
+    y[31] &= 0x7f;
+    let mut prime = [0xff; 32];
+    prime[0] = 0xed;
+    prime[31] = 0x7f;
+    if key.is_weak() || y.iter().rev().cmp(prime.iter().rev()) != std::cmp::Ordering::Less {
+        return Err("sequencer public key");
+    }
+    Ok(authorization)
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MaintainedBatchDocument {
+    header_hex: String,
+    header_signature: String,
+    receipt_proof_hex: String,
+    batch_identity: MaintainedIdentityDocument,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum MaintainedIdentityDocument {
+    OccupancyMaintenanceV2 {
+        receipt_hex: String,
+        receipt_proof_hex: String,
+    },
+}
+
+impl MaintainedBatchDocument {
+    /// Authenticates this selected maintained attachment under configured pins.
+    ///
+    /// # Errors
+    /// Refuses malformed encodings, signatures, inclusion, identity or roots.
+    pub fn authorize(
+        &self,
+        receipt: &[u8],
+        facts: &layerx_proof::receipt::AuthorizedBatch,
+        authorization: &SequencerAuthorization,
+    ) -> Result<layerx_proof::receipt::AuthorizedBatch, &'static str> {
+        fn bytes(text: &str) -> Result<Vec<u8>, &'static str> {
+            if text.len() > 2_097_152
+                || !text.len().is_multiple_of(2)
+                || !text.bytes().all(|byte| byte.is_ascii_hexdigit())
+            {
+                return Err("maintained evidence encoding");
+            }
+            text.as_bytes()
+                .chunks_exact(2)
+                .map(|pair| {
+                    let digits =
+                        std::str::from_utf8(pair).map_err(|_| "maintained evidence encoding")?;
+                    u8::from_str_radix(digits, 16).map_err(|_| "maintained evidence encoding")
+                })
+                .collect()
+        }
+        fn proof(text: &str) -> Result<layerx_proof::merkle::Proof, &'static str> {
+            let encoded = bytes(text)?;
+            let path = layerx_wire::receipt::decode_merkle_proof(&encoded)
+                .map_err(|_| "maintained proof encoding")?;
+            layerx_proof::merkle::Proof::new(
+                path.leaf_index(),
+                path.leaf_count(),
+                path.siblings().to_vec(),
+            )
+            .map_err(|_| "maintained proof encoding")
+        }
+        let header = bytes(&self.header_hex)?;
+        let signature: [u8; 64] = bytes(&self.header_signature)?
+            .try_into()
+            .map_err(|_| "maintained signature encoding")?;
+        let activity_proof = proof(&self.receipt_proof_hex)?;
+        let MaintainedIdentityDocument::OccupancyMaintenanceV2 {
+            receipt_hex,
+            receipt_proof_hex,
+        } = &self.batch_identity;
+        let maintenance = bytes(receipt_hex)?;
+        let maintenance_proof = proof(receipt_proof_hex)?;
+        layerx_proof::receipt::authorized_maintained_activity_batch(
+            receipt,
+            facts,
+            &layerx_proof::receipt::MaintainedOutcomeEvidence {
+                header: &header,
+                header_signature: &signature,
+                activity_proof: &activity_proof,
+                maintenance: &maintenance,
+                maintenance_proof: &maintenance_proof,
+                authorization,
+            },
+        )
+        .map_err(|_| "maintained evidence verification")
+    }
+}
+
+fn present_maintained<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<MaintainedBatchDocument>, D::Error> {
+    <MaintainedBatchDocument as serde::Deserialize>::deserialize(deserializer).map(Some)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AuthorityBody {
+    activity_id: String,
+    batch_id: String,
+    asset: String,
+    previous_state_root: String,
+    resulting_state_root: String,
+    sequencer_public_key: String,
+    network_id: String,
+    wire_version: String,
+    #[serde(default, deserialize_with = "present_maintained")]
+    batch_evidence: Option<MaintainedBatchDocument>,
+}
+
+#[cfg(test)]
+mod maintained_consumer_tests {
+    use super::*;
+    use layerx_proof::receipt::{verify_outcome, verify_program_state, AuthorizedBatch};
+    use std::path::PathBuf;
+
+    fn required<T, E: std::fmt::Debug>(value: Result<T, E>) -> T {
+        value.unwrap_or_else(|error| panic!("{error:?}"))
+    }
+    fn bytes(value: &str) -> Vec<u8> {
+        value
+            .as_bytes()
+            .chunks_exact(2)
+            .map(|pair| required(u8::from_str_radix(required(std::str::from_utf8(pair)), 16)))
+            .collect()
+    }
+    fn field(value: &serde_json::Value, name: &str) -> String {
+        value[name]
+            .as_str()
+            .unwrap_or_else(|| panic!("missing {name}"))
+            .to_owned()
+    }
+    fn pins(value: &serde_json::Value) -> SequencerAuthorization {
+        required(SequencerAuthorization::from_config(
+            &field(value, "sequencer_id"),
+            &field(value, "sequencer_public_key"),
+            &field(value, "first_batch"),
+            &field(value, "last_batch"),
+        ))
+    }
+    fn facts(value: &serde_json::Value) -> AuthorizedBatch {
+        let fixed = |name| required(bytes(&field(value, name)).try_into());
+        AuthorizedBatch::new(
+            fixed("batch_id"),
+            fixed("asset"),
+            fixed("previous_state_root"),
+            fixed("resulting_state_root"),
+            fixed("sequencer_public_key"),
+        )
+    }
+    fn captured() -> serde_json::Value {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let path = root.join("../../hosted/gateway/tests/fixtures/maintained-authority.json");
+        required(serde_json::from_slice(&required(std::fs::read(path))))
+    }
+    #[test]
+    fn real_maintained_response_requires_independent_pins_and_exact_variant() {
+        let capture = captured();
+        let authority = &capture["authority"];
+        let receipt = bytes(&field(&capture, "receipt_hex"));
+        let document: MaintainedBatchDocument =
+            required(serde_json::from_value(authority["batch_evidence"].clone()));
+        let original = facts(authority);
+        let authorization = pins(&capture);
+        let selected = required(document.authorize(&receipt, &original, &authorization));
+        assert!(verify_outcome(&receipt, &selected).is_ok());
+        assert!(
+            verify_outcome(&receipt, &original).is_err(),
+            "maintained response must fail historical verification"
+        );
+        for name in [
+            "sequencer_id",
+            "sequencer_public_key",
+            "first_batch",
+            "last_batch",
+        ] {
+            let mut changed = capture.clone();
+            changed[name] = match name {
+                "first_batch" => serde_json::json!(u64::MAX.to_string()),
+                "last_batch" => serde_json::json!("0"),
+                _ => serde_json::json!("aa".repeat(32)),
+            };
+            let key = required(bytes(&field(&changed, "sequencer_public_key")).try_into());
+            let id = required(bytes(&field(&changed, "sequencer_id")).try_into());
+            let first = required(field(&changed, "first_batch").parse());
+            let last = required(field(&changed, "last_batch").parse());
+            assert!(
+                document
+                    .authorize(
+                        &receipt,
+                        &original,
+                        &SequencerAuthorization::new(id, key, first, last)
+                    )
+                    .is_err(),
+                "{name}"
+            );
+        }
+        for name in [
+            "batch_id",
+            "asset",
+            "previous_state_root",
+            "resulting_state_root",
+            "sequencer_public_key",
+        ] {
+            let mut changed = authority.clone();
+            changed[name] = serde_json::json!("aa".repeat(32));
+            let result = document.authorize(&receipt, &facts(&changed), &authorization);
+            assert!(
+                result.is_err()
+                    || result.is_ok_and(|selected| verify_outcome(&receipt, &selected).is_err()),
+                "{name}"
+            );
+        }
+        for change in ["kind", "unknown", "null"] {
+            let mut changed = authority["batch_evidence"].clone();
+            match change {
+                "kind" => changed["batch_identity"] = serde_json::json!({"kind": "historical"}),
+                "unknown" => changed["unexpected"] = serde_json::json!(true),
+                _ => changed = serde_json::Value::Null,
+            }
+            assert!(serde_json::from_value::<MaintainedBatchDocument>(changed).is_err());
+        }
+    }
+    #[test]
+    fn historical_document_cannot_enter_maintained_verification() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let historical: serde_json::Value =
+            required(serde_json::from_slice(&required(std::fs::read(root.join(
+                "../../hosted/authority/tests/fixtures/real-program-deploy-receipt.json",
+            )))));
+        let receipt = bytes(&field(&historical, "receipt_hex"));
+        let header = required(layerx_wire::receipt::decode_batch_header(&bytes(&field(
+            &historical,
+            "header_hex",
+        ))));
+        let decoded = required(layerx_wire::receipt::decode(&receipt));
+        let protocol = decoded.protocol().unwrap_or_else(|| panic!("protocol"));
+        let historical_facts = AuthorizedBatch::new(
+            protocol.batch_id(),
+            protocol.asset(),
+            header.previous_state_root(),
+            header.resulting_state_root(),
+            required(bytes(&field(&historical, "sequencer_public_key_hex")).try_into()),
+        );
+        assert!(verify_program_state(&receipt, &historical_facts).is_ok());
+        let capture = captured();
+        let document: MaintainedBatchDocument = required(serde_json::from_value(
+            capture["authority"]["batch_evidence"].clone(),
+        ));
+        assert!(document
+            .authorize(&receipt, &historical_facts, &pins(&capture))
+            .is_err());
+    }
+}
+
+#[cfg(test)]
+mod authorization_config_tests {
+    use super::configured_sequencer;
+    #[test]
+    fn mandatory_authorization_fields_refuse_missing_malformed_and_reversed_inputs() {
+        let id = "11".repeat(32);
+        let key = "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a";
+        assert!(configured_sequencer(&id, key, "1", "1").is_ok());
+        for fields in [
+            ["", key, "1", "2"],
+            [&id, "", "1", "2"],
+            [&id, key, "", "2"],
+            [&id, key, "1", ""],
+            ["xyz", key, "1", "2"],
+            [&id, "ff", "1", "2"],
+            [&id, key, "2", "1"],
+            [&id, key, "+1", "2"],
+            [&id, key, "1", "18446744073709551616"],
+        ] {
+            assert!(configured_sequencer(fields[0], fields[1], fields[2], fields[3]).is_err());
+        }
+        assert!(configured_sequencer(&id, &"00".repeat(32), "1", "2").is_err());
+        assert!(configured_sequencer(&id, &"ff".repeat(32), "1", "2").is_err());
+    }
+}
+
+#[cfg(test)]
+mod authority_shape_tests {
+    use super::*;
+    #[test]
+    fn real_authority_shape_selects_attachment_without_null_or_unknown_fallback() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../hosted/gateway/tests/fixtures/maintained-authority.json");
+        let bytes = std::fs::read(path).unwrap_or_else(|error| panic!("{error}"));
+        let capture: serde_json::Value =
+            serde_json::from_slice(&bytes).unwrap_or_else(|error| panic!("{error}"));
+        let document = capture["authority"].clone();
+        assert!(serde_json::from_value::<AuthorityBody>(document.clone()).is_ok());
+        let mut historical = document.clone();
+        historical
+            .as_object_mut()
+            .unwrap_or_else(|| panic!("object"))
+            .remove("batch_evidence");
+        assert!(serde_json::from_value::<AuthorityBody>(historical).is_ok());
+        let mut null = document.clone();
+        null["batch_evidence"] = serde_json::Value::Null;
+        assert!(serde_json::from_value::<AuthorityBody>(null).is_err());
+        let mut unknown = document;
+        unknown["unexpected"] = serde_json::json!(true);
+        assert!(serde_json::from_value::<AuthorityBody>(unknown).is_err());
+    }
 }
