@@ -383,7 +383,7 @@ impl ApprovalRegistry {
         approver: ApproverId,
         reason: &'static str,
         resulting_activity_id: Option<[u8; 32]>,
-        decision_record: Option<(TenantKey, Vec<u8>)>,
+        decision_record: Option<crate::approval::PreparedDecision>,
     ) -> Result<ApprovalAuditEntry, ApprovalError> {
         let mut holds = self.holds.lock().map_err(|_| ApprovalError::Unavailable)?;
         let held = holds.get_mut(&hold_id).ok_or(ApprovalError::NotFound)?;
@@ -625,7 +625,7 @@ fn replace_durable_with_released(
     registry: &ApprovalRegistry,
     held: &HeldApproval,
     submission_ref: [u8; 32],
-    decision_record: (TenantKey, Vec<u8>),
+    decision_record: crate::approval::PreparedDecision,
 ) -> Result<(), ApprovalError> {
     let Some(store) = &registry.store else {
         return Ok(());
@@ -633,17 +633,15 @@ fn replace_durable_with_released(
     let hold_key = hold_storage_key(&held.context.tenant, held.context.request_id)?;
     let released_key = released_storage_key(&held.context.tenant, held.context.request_id)?;
     let bytes = encode_released(held, submission_ref)?;
-    store
-        .lock()
-        .map_err(|_| ApprovalError::Unavailable)?
-        .replace_local_with_companion(
-            &hold_key,
-            released_key,
-            bytes,
-            decision_record.0,
-            decision_record.1,
-        )
-        .map_err(|_| ApprovalError::Unavailable)
+    let mut store = store.lock().map_err(|_| ApprovalError::Unavailable)?;
+    decision_record
+        .replace_hold(&mut store, &hold_key, released_key, bytes)
+        .map_err(|error| match error {
+            crate::approval::ApprovalExpiryError::DecisionConflict => {
+                ApprovalError::DecisionConflict
+            }
+            _ => ApprovalError::Unavailable,
+        })
 }
 
 fn validate_for_read(held: &mut HeldApproval, current_sequence: u64) {

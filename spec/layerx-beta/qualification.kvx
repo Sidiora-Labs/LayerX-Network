@@ -3559,6 +3559,14 @@ observed = "The terminal correction and all requested qualification gates pass o
 assumption = "Webhook credential integration and its conflict resolution are outside the terminal expectation and ledger normalisation scope. No webhook source or deployment conflict is resolved here. The passing local gates qualify the preserved source; current-main integration remains incomplete."
 severity = "blocker"
 
+[observation.6.4.150]
+task = "6.4"
+file = "agent/Cargo.lock; agent/tests/qualify/Cargo.lock; agent/crates/layerx-sdk/src/program_http.rs; agent/crates/layerx-agentd/tests/support/real_authority.rs"
+symbol = "HttpProgramTransport::connect authorize agent-qualify-fuzz"
+observed = "formerly observation.6.4.146. Clock injection is implemented but unqualified. rustfmt exits 0 (qual-logs/r19/rustfmt.log). cargo clippy --locked --manifest-path agent/Cargo.toml -p layerx-sdk -p layerx-agentd --all-targets -- -D warnings exits 101; cargo test --locked --manifest-path agent/Cargo.toml -p layerx-sdk exits 101; cargo test --locked --manifest-path agent/Cargo.toml -p layerx-agentd --all-targets exits 101. Each stops before compilation because agent/Cargo.lock needs updating. Exact make agent-qualify-fuzz exits 2 because agent/tests/qualify/Cargo.lock needs updating under --locked; its cargo invocation exits 101 before the runner or boundary checker executes. Logs: qual-logs/r19/clippy.log, qual-logs/r19/sdk-test.log, qual-logs/r19/agentd-test.log, qual-logs/r19/fuzz.log. make check exits 0 (qual-logs/r19/check.log). cg spec lint exits 0 with zero errors and six existing warnings (qual-logs/r19/spec-lint.log). make beta-ledger-check and git diff --check exit 0 (qual-logs/r19/ledger-final.log and qual-logs/r19/diff-check.log)."
+assumption = "Both lockfiles remain unchanged because they are outside the owned crates. No SDK or agentd test result, including the 259 passing agentd test bar, is established. The boundary checker and allowlists remain unchanged; exact fuzz qualification must resume after the lockfile owner reconciles the manifests and lockfiles."
+severity = "blocker"
+
 [observation.6.8.4]
 task = "6.8"
 file = "platform/hosted/agent-boundary/src/main.rs platform/hosted/agent-boundary/tests/real_node.rs platform/hosted/node/deployment.yaml platform/hosted/webhooks/src/trusted.rs platform/hosted/webhooks/deployment.yaml platform/hosted/tests/beta-cluster.sh platform/hosted/tests/topology-check.sh"
@@ -3813,26 +3821,27 @@ file = "tests/crypto/lxp_test_ct.c Makefile"
 symbol = "test-crypto-suite"
 observed = "formerly observation.5.1.focused-crypto-check-intermittent. make check exits 2 in qual-logs/r17/make-check-harness.log with verbatim: make: *** [Makefile:1533: test-crypto-suite] Error 1. The recipe runs build/tests/lxp_test_ct and emits no more specific diagnostic. Earlier make check exits 0 (make-check.log); the subsequent unchanged-check rerun exits 0 (make-check-final.log)."
 [observation.5.1.focused-fuzz-provisioned-boundary]
+[observation.5.1.7]
 task = "5.1"
 file = "agent/fuzz/Cargo.lock agent/tests/qualify/src/main.rs agent/tests/qualify/fuzz.rs agent/tools/run-sanitizers.sh agent/tools/boundary-check/src/main.rs agent/crates/layerx-sdk/src/program_http.rs agent/crates/layerx-agentd/tests/support/real_authority.rs"
 symbol = "agent_qualify_fuzz_gate agent_qualify_sanitizer_gate now_millis now_ms"
-observed = "make agent-qualify-fuzz exits 2; qual-logs/r17/row-45.log. Environment: CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4 LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin. All ten targets complete 256 bounded runs and corpus minimisation, then the workspace address-sanitizer tests complete. The sanitizer script reports verbatim: thread sanitizer unavailable: pinned standard library is not TSan-instrumented. The final boundary check fails verbatim: qualification gate failed: unsafe-allowlist failed: status=exit status: 1 stdout_tail= stderr_tail=ambient-nondeterminism: agent/crates/layerx-sdk/src/program_http.rs\nambient-nondeterminism: agent/crates/layerx-agentd/tests/support/real_authority.rs\nmake: *** [Makefile:2307: agent-qualify-fuzz] Error 1. Full child stdout and stderr are preserved in qual-logs/r17/fuzz-details/."
+observed = "formerly observation.5.1.focused-fuzz-provisioned-boundary. make agent-qualify-fuzz exits 2; qual-logs/r17/row-45.log. Environment: CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4 LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin. All ten targets complete 256 bounded runs and corpus minimisation, then the workspace address-sanitizer tests complete. The sanitizer script reports verbatim: thread sanitizer unavailable: pinned standard library is not TSan-instrumented. The final boundary check fails verbatim: qualification gate failed: unsafe-allowlist failed: status=exit status: 1 stdout_tail= stderr_tail=ambient-nondeterminism: agent/crates/layerx-sdk/src/program_http.rs\nambient-nondeterminism: agent/crates/layerx-agentd/tests/support/real_authority.rs\nmake: *** [Makefile:2307: agent-qualify-fuzz] Error 1. Full child stdout and stderr are preserved in qual-logs/r17/fuzz-details/."
 assumption = "program_http.rs:533 reads SystemTime::now in now_millis. real_authority.rs:53 reads SystemTime::now in now_ms and uses Instant::now for real process deadlines. The boundary scanner rejects ambient clock tokens outside its allowed paths. These source and check conflicts are outside the lock and replay harness repairs; neither source, allowlist, checker nor fuzz assertion is changed. The fuzz lock resolves the current Programs runtime and agent-daemon dependencies; locked offline metadata exits 0 (qual-logs/r17/fuzz-locked-metadata.log; metadata in fuzz-metadata.json). Resolution adds 95 package records and removes unused pkcs8 and spki records; no retained package version or checksum changes. Dependency and feature changes are recorded in fuzz-lock-analysis.json and fuzz-lock.diff. This qualifies lock resolution and the measured fuzz/address-sanitizer stages, not the complete row."
 severity = "blocker"
 
-[observation.5.1.focused-human-faults-refusal-executed]
+[observation.5.1.8]
 task = "5.1"
 file = "tools/qualification/release_runner.py Makefile spec/layerx-beta/spec.kvx"
 symbol = "human-qualify-faults"
-observed = "env -u LAYERX_QUALIFICATION_REAL_STACK make human-qualify-faults exits 2; qual-logs/r17/human-faults.log. Verbatim: qualification failed: LAYERX_QUALIFICATION_REAL_STACK=1 is required\nmake: *** [Makefile:2103: human-qualify-faults] Error 1."
+observed = "formerly observation.5.1.focused-human-faults-refusal-executed. env -u LAYERX_QUALIFICATION_REAL_STACK make human-qualify-faults exits 2; qual-logs/r17/human-faults.log. Verbatim: qualification failed: LAYERX_QUALIFICATION_REAL_STACK=1 is required\nmake: *** [Makefile:2103: human-qualify-faults] Error 1."
 assumption = "No real stack exists for this gate. Its required flag is unset, no stack is fabricated, and no protected persistent service is touched. An authorized provisioned real stack is required before this gate can pass."
 severity = "blocker"
 
-[observation.5.1.focused-crypto-check-intermittent]
+[observation.5.1.9]
 task = "5.1"
 file = "tests/crypto/lxp_test_ct.c Makefile"
 symbol = "test-crypto-suite"
-observed = "make check exits 2 in qual-logs/r17/make-check-harness.log with verbatim: make: *** [Makefile:1533: test-crypto-suite] Error 1. The recipe runs build/tests/lxp_test_ct and emits no more specific diagnostic. Earlier make check exits 0 (make-check.log); the subsequent unchanged-check rerun exits 0 (make-check-final.log)."
+observed = "formerly observation.5.1.focused-crypto-check-intermittent. make check exits 2 in qual-logs/r17/make-check-harness.log with verbatim: make: *** [Makefile:1533: test-crypto-suite] Error 1. The recipe runs build/tests/lxp_test_ct and emits no more specific diagnostic. Earlier make check exits 0 (make-check.log); the subsequent unchanged-check rerun exits 0 (make-check-final.log)."
 assumption = "The test includes elapsed-time comparisons as well as functional assertions. The exact failing branch is not established. No crypto source, assertion, bound or runtime setting was changed. git diff --check and cg spec lint exit 0 after the lock observations (diff-lock.log, lint-lock.log); lint reports zero errors and six existing warnings."
 severity = "note"
 
@@ -4482,4 +4491,18 @@ file = "tools/ci/beta-qualify.sh"
 symbol = "beta_qualify_focused"
 observed = "formerly observation.5.1.15. Shellcheck and cortex_guard are unavailable. Bash syntax and make dry-run checks pass. Codify review timed out; its advisory guard used active task 3.7 and does not qualify the focused runner scope. Raw logs: qual-logs/r14/."
 assumption = "Tool absence and advisory graph output do not establish qualification; task status remains unchanged."
+[observation.6.10.11]
+task = "6.10"
+file = "agent/crates/layerx-agentd/src/approval/expiry.rs agent/crates/layerx-agentd/src/approval/mod.rs agent/crates/layerx-agentd/src/policy/approval.rs agent/crates/layerx-agentd/tests/approval_ordering/mod.rs agent/crates/layerx-agentd/tests/approval_semantics.rs"
+symbol = "ApprovalExpiry::decide ApprovalService::approve PreparedDecision::replace_hold"
+observed = "Source inspection identifies a grant preparation that releases the store mutex without persisting the decision, followed by a registry claim and unconditional decision write. A rejection can persist during that interval, producing AlreadyDecided instead of Conflict or allowing the prepared grant to overwrite a durable rejection. The service now holds a decision lock across preparation, claim and persistence; reads that expire holds and explicit recovery use the same lock. Prepared decisions carry the exact expected pending bytes, checked under the store mutex before either the local write or the existing atomic hold-to-released replacement. The original concurrent approval semantics test remains unchanged. New real-store tests use barriers at grant preparation and rejection entry and verify restart recovery, and separately refuse a stale prepared grant after a durable rejection. rustfmt exits 0 (qual-logs/r22/rustfmt.log, rustfmt-repair.log and rustfmt-final.log). Strict SDK and agentd all-target Clippy exits 0 (qual-logs/r22/clippy-qualified.log); its earlier task-scoped closure and function-length errors are repaired without changing lint configuration. SDK tests exit 0 (qual-logs/r22/sdk-test.log). Both new regressions pass (qual-logs/r22/approval-ordering.log, exit 0). Agentd all-targets exits 0 (qual-logs/r22/agentd-test.log), and approval_semantics exits 0 in five further runs (qual-logs/r22/approval-semantics-1.log through approval-semantics-5.log). The boundary qualification gate exits 0 (qual-logs/r22/boundary-gate.log). Its final three lines report ten targets, 256 runs per target, and the allowlist check passing; the gate reports address passed and thread unsupported-pinned-stdlib. make check exits 0 before and after rebase (qual-logs/r22/check.log and check-final.log)."
+assumption = "The service uses the daemon's sole ApprovalExpiry owner. The durable registry retains its atomic released-submission and decision transaction; no persistence fallback or assertion relaxation is introduced."
+severity = "note"
+
+[observation.6.10.12]
+task = "6.10"
+file = "Makefile agent/fuzz/Cargo.lock spec/layerx-beta/qualification.kvx"
+symbol = "programs-check-executed-v4-fixture agent-qualify-fuzz"
+observed = "The initial git rebase origin/main at 55317447 exits 1 while replaying a44982c2 with a root Makefile conflict; qual-logs/r22/rebase.log. That rebase is aborted without an out-of-scope Makefile edit. A subsequent fetch includes the native merge in main at 5c17c8d4; git rebase origin/main then exits 0 and all lane edits restore without conflicts; qual-logs/r22/fetch-final.log, rebase-final.log and restore-final.log. The fuzz lock reconciliation is retained as 9ab489e7. git diff --exit-code against the pre-rebase source snapshot over agent, programs, src, include, cmd, tests, tools and Makefile exits 0; qual-logs/r22/qualified-inputs.log. Observation 6.4.143 already contains severity blocker after the native merge. The three historical records reintroduced by the fuzz lock commit are normalized to observation.5.1.7 through 5.1.9 with their content preserved; the existing note severity on the intermittent crypto observation is restored. The carried clock observation is retained as observation.6.4.150, with a distinct header and the original blocker severity; upstream observation.6.4.148 is preserved separately."
+assumption = "The earlier integration blocker is resolved by upstream ancestry, with no manual conflict resolution or removed check. Qualified code inputs are byte-identical across the rebase; untracked test and clock helper sources are retained unchanged. The boundary checker scans agent/crates, whose source and allowlists are unchanged by integration."
 severity = "note"
