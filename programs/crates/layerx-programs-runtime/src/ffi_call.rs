@@ -310,14 +310,16 @@ fn prepare_schedule_item(
             schedule_span(call.capabilities).and_then(|capabilities| {
                 schedule_span(call.access_declaration).and_then(|declaration| {
                     crate::schedule::PreparedScheduleAccess::from_authenticated_call(
-                        payload,
-                        call.activity_binding,
-                        program,
-                        principal,
-                        call.payer,
-                        capabilities,
-                        declaration,
-                        protocol_effects,
+                        crate::schedule::AuthenticatedScheduleCall {
+                            canonical_payload: payload,
+                            activity_binding: call.activity_binding,
+                            program,
+                            principal,
+                            payer: call.payer,
+                            capabilities,
+                            access_declaration: declaration,
+                            protocol_effects,
+                        },
                     )
                     .map_err(|_| NON_CANONICAL)
                 })
