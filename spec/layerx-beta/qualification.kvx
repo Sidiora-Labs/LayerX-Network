@@ -1990,3 +1990,11 @@ symbol = "verifyTerminal TerminalV4Test"
 observed = "CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4 sh platform/sdk/conformance/run-jvm.sh /root/lx-lanes/terminal exits 0 in qual-logs/pass6-jvm-sdk-final.log, including generator drift, 33 JVM tests and conformance. All four shared signed vectors authenticate; V4 positives reconstruct, signed mutated-leg rejects, V3 reports recorded root, truncated and trailing terminals reject. git diff --check exits 0 in qual-logs/pass6-jvm-diff-check.log."
 assumption = "The generator refreshed only the JVM verifier digest in platform/sdk/pipeline.kvx. Initial SDK and focused commands exit 1 in qual-logs/pass6-jvm-sdk.log and qual-logs/pass6-jvm-focused.log because the generic nonempty text reader rejects the canonical empty response; response decoding now uses its string type and existing empty-permitted bounded hex contract. Stored vectors and native regeneration scope remain as recorded in terminal-v4-stored-input-qualification."
 severity = "note"
+
+[observation.6.11.terminal-v4-swift]
+task = "6.11"
+file = "platform/sdk/swift/Sources/LayerXSDK/Programs.swift platform/sdk/swift/Sources/LayerXSDK/Verifier.swift platform/sdk/swift/Tests/LayerXSDKTests/ReceiptFixtureTests.swift"
+symbol = "verifyTerminal testSignedTerminalV4Vectors"
+observed = "swift build --disable-automatic-resolution --package-path platform/sdk/swift -j 4 and swift test --disable-automatic-resolution --package-path platform/sdk/swift -j 4 each exit 0 in qual-logs/pass6-swift-build.log and qual-logs/pass6-swift-test.log. All 16 tests pass, including the four signed shared vectors, V4 root reconstruction, authenticated mutated-leg refusal, V3 recorded-root reporting, truncation and trailing-byte refusal, and zero-root empty legs. git diff --check exits 0 in qual-logs/pass6-swift-diff-check.log."
+assumption = "Commands are the individual Swift build and test recipes from platform/Makefile.inc platform-verify-sdks, with four jobs. CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4 are exported. Dependencies and build outputs remain local and untracked. Stored input provenance and native regeneration scope remain as recorded in terminal-v4-stored-input-qualification."
+severity = "note"
