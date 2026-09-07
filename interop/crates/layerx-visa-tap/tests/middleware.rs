@@ -5,7 +5,7 @@ use layerx_visa_tap::{
     bind_verified_agent, prepare_trusted_intent, AgentIntent, AgentPublicKey, CredentialBinding,
     CredentialBindingStore, KeyStatus, LayerXIntentAuthority, MerchantCredentialStatus,
     MerchantOperationResult, NonceWindow, RegisteredAgentKey, TapError, TapRequest, TapVerifier,
-    TrustedAgentRegistry, TrustedCommerceIntent, VerifiedTrustedAgent,
+    TrustedAgentRegistry, TrustedCommerceIntent,
 };
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -33,10 +33,7 @@ impl MockTrustedAgentRegistry {
 
 impl TrustedAgentRegistry for MockTrustedAgentRegistry {
     fn resolve(&self, key_id: &str, _now: u64) -> Result<RegisteredAgentKey, TapError> {
-        self.keys
-            .get(key_id)
-            .cloned()
-            .ok_or(TapError::UnknownKey)
+        self.keys.get(key_id).cloned().ok_or(TapError::UnknownKey)
     }
 }
 
@@ -54,7 +51,7 @@ impl MerchantBindingStore {
     fn get_bindings(&self, principal: &PrincipalId) -> Vec<CredentialBinding> {
         self.bindings
             .lock()
-            .unwrap()
+            .unwrap_or_else(|error| panic!("binding lock: {error}"))
             .get(principal.as_str())
             .cloned()
             .unwrap_or_default()
@@ -70,7 +67,7 @@ impl CredentialBindingStore for MerchantBindingStore {
     ) -> Result<(), TapError> {
         self.bindings
             .lock()
-            .unwrap()
+            .unwrap_or_else(|error| panic!("binding lock: {error}"))
             .entry(principal.as_str().to_owned())
             .or_default()
             .push(binding.clone());
@@ -198,9 +195,8 @@ fn seller_middleware_binds_credentials_without_granting_protocol_authority() {
     let trace = TraceId::mint([0x88; 16]);
     let mut store = MerchantBindingStore::new();
 
-    let binding =
-        bind_verified_agent(&principal, AGENT, &verified, &mut store, &trace)
-            .unwrap_or_else(|error| panic!("binding must succeed: {error}"));
+    let binding = bind_verified_agent(&principal, AGENT, &verified, &mut store, &trace)
+        .unwrap_or_else(|error| panic!("binding must succeed: {error}"));
 
     assert_eq!(binding.layerx_agent, AGENT);
     assert_eq!(binding.trusted_agent_id, "visa-commerce-agent-7");
@@ -344,6 +340,8 @@ fn malformed_credentials_are_refused_with_typed_status() {
     );
 
     assert!(result.is_err());
-    let error = result.unwrap_err();
+    let Err(error) = result else {
+        panic!("malformed credential was accepted");
+    };
     assert_eq!(error.merchant_status(), MerchantCredentialStatus::Invalid);
 }
