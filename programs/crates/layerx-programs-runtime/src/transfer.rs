@@ -648,7 +648,6 @@ impl TransferCapability {
     }
 
     pub(crate) fn settle_authorized_set(
-        &self,
         transfers: &AtomicTransferSet,
         kernel: &mut impl KernelTransferPrimitive,
     ) -> Result<VerifiedProgramSettlement, TransferLawError> {
@@ -981,28 +980,9 @@ pub struct ReservedSandboxEscrowCharge {
 /// # Errors
 /// Refuses invalid sandbox bindings, monetary fields, or escrow account derivation.
 pub fn reserve_host_sandbox_escrow_charge(
-    host_program: ProgramId,
-    execution_principal: PrincipalId,
-    invocation_authority: [u8; 32],
-    lease_id: [u8; 32],
-    expected_lease_digest: [u8; 32],
-    escrow_account: [u8; 32],
-    asset: [u8; 32],
-    fee_destination: [u8; 32],
-    maximum_fee: u128,
+    request: &SandboxEscrowCharge,
 ) -> Result<ReservedSandboxEscrowCharge, TransferLawError> {
-    AtomicTransferSet::sandbox_escrow_charge(&crate::transfer::SandboxEscrowCharge {
-        host_program,
-        execution_principal,
-        invocation_authority,
-        lease_id,
-        expected_lease_digest,
-        escrow_account,
-        asset,
-        fee_destination,
-        amount: maximum_fee,
-    })
-    .map(|set| ReservedSandboxEscrowCharge { set })
+    AtomicTransferSet::sandbox_escrow_charge(request).map(|set| ReservedSandboxEscrowCharge { set })
 }
 
 pub(crate) fn settle_reserved_sandbox_escrow_charge(
@@ -1022,28 +1002,9 @@ pub(crate) fn settle_reserved_sandbox_escrow_charge(
 /// Refuses any reserved binding, lease/state digest, invalid escrow account,
 /// monetary field, or non-canonical program-account derivation.
 pub fn sandbox_escrow_charge_root(
-    host_program: ProgramId,
-    execution_principal: PrincipalId,
-    invocation_authority: [u8; 32],
-    lease_id: [u8; 32],
-    expected_lease_digest: [u8; 32],
-    escrow_account: [u8; 32],
-    asset: [u8; 32],
-    fee_destination: [u8; 32],
-    exact_fee: u128,
+    request: &SandboxEscrowCharge,
 ) -> Result<[u8; 32], TransferLawError> {
-    AtomicTransferSet::sandbox_escrow_charge(&crate::transfer::SandboxEscrowCharge {
-        host_program,
-        execution_principal,
-        invocation_authority,
-        lease_id,
-        expected_lease_digest,
-        escrow_account,
-        asset,
-        fee_destination,
-        amount: exact_fee,
-    })
-    .map(|set| set.kernel_root())
+    AtomicTransferSet::sandbox_escrow_charge(request).map(|set| set.kernel_root())
 }
 
 /// # Errors
@@ -2321,9 +2282,17 @@ mod tests {
         assert!(matches!(set.legs()[0].source, TransferSource::Program(_)));
         assert!(set.canonical().starts_with(SANDBOX_ESCROW_CHARGE_DOMAIN));
         assert_eq!(
-            sandbox_escrow_charge_root(
-                host, principal, [4; 32], lease, [5; 32], escrow, [6; 32], [7; 32], 11,
-            ),
+            sandbox_escrow_charge_root(&crate::transfer::SandboxEscrowCharge {
+                host_program: host,
+                execution_principal: principal,
+                invocation_authority: [4; 32],
+                lease_id: lease,
+                expected_lease_digest: [5; 32],
+                escrow_account: escrow,
+                asset: [6; 32],
+                fee_destination: [7; 32],
+                amount: 11,
+            }),
             Ok(set.kernel_root()),
         );
     }

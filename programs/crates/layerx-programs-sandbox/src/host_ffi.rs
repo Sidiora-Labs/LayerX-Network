@@ -279,11 +279,17 @@ pub extern "C" fn layerx_programs_sandbox_admit_host(
         let principal = lease.namespace().execution_principal().map_err(|_| NON_CANONICAL)?;
         let expected_lease_digest = lease.state_digest().map_err(|_| NON_CANONICAL)?;
         let lease_terms_digest = lease.request_binding_digest().map_err(|_| NON_CANONICAL)?;
-        let transfer = reserve_host_sandbox_escrow_charge(
-            lease.host_program(), principal, activity_id, lease.id().bytes(),
-            expected_lease_digest, lease.escrow_account(),
-            lease.escrow_asset(), lease.fee_destination(), maximum_charge,
-        ).map_err(|_| NON_CANONICAL)?;
+        let transfer = reserve_host_sandbox_escrow_charge(&layerx_programs_runtime::transfer::SandboxEscrowCharge {
+            host_program: lease.host_program(),
+            execution_principal: principal,
+            invocation_authority: activity_id,
+            lease_id: lease.id().bytes(),
+            expected_lease_digest,
+            escrow_account: lease.escrow_account(),
+            asset: lease.escrow_asset(),
+            fee_destination: lease.fee_destination(),
+            amount: maximum_charge,
+        }).map_err(|_| NON_CANONICAL)?;
         HOST_SETTLEMENT_RESERVATION.with(|slot| {
             let mut slot = slot.borrow_mut();
             if slot.is_some() { return Err(NON_CANONICAL); }
