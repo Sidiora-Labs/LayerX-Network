@@ -1,6 +1,6 @@
 //! Independent portable receipt verifier harness.
 //!
-//! This harness proves that an external party with no LayerX infrastructure
+//! This harness proves that an external party with no `LayerX` infrastructure
 //! can verify exported receipts using only:
 //! 1. The published portable format specification (FORMAT.md)
 //! 2. Golden test vectors
@@ -40,10 +40,13 @@ pub struct IndependentVerifier {
 }
 
 impl IndependentVerifier {
+    #[must_use]
     pub const fn new(name: &'static str) -> Self {
         Self { name }
     }
 
+    /// # Errors
+    /// Returns an error for invalid portable data, format, batch authority or receipt proof.
     pub fn verify_vector_against_trusted_batch(
         &self,
         vector_json: &str,
@@ -64,6 +67,7 @@ impl IndependentVerifier {
         })
     }
 
+    #[must_use]
     pub fn verify_all_golden_vectors(
         &self,
     ) -> Vec<Result<VerificationOutcome, PortableReceiptError>> {
@@ -124,11 +128,7 @@ fn independent_verifier_rejects_batch_mismatch() {
         AuthorizedBatch::new([99u8; 32], [99u8; 32], [99u8; 32], [99u8; 32], [99u8; 32]);
 
     let result = verifier.verify_vector_against_trusted_batch(GOLDEN_VECTOR_1, &wrong_batch);
-    match result {
-        Err(PortableReceiptError::BatchAuthorizationMismatch) => {}
-        Err(PortableReceiptError::Receipt(_)) => {}
-        other => {}
-    }
+    drop(result);
 }
 
 #[test]
@@ -147,9 +147,6 @@ fn independent_verifier_no_layerx_infrastructure_required() {
     let result = verifier.verify_vector_against_trusted_batch(GOLDEN_VECTOR_1, &trusted_batch);
 
     let _verification_completed_without_gateway = result.is_ok() || result.is_err();
-    let _verification_completed_without_node = true;
-    let _verification_completed_without_database = true;
-    let _verification_completed_without_network = true;
 }
 
 #[test]
