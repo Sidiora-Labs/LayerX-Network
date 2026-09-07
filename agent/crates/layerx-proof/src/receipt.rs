@@ -356,6 +356,18 @@ pub fn verify_program_state_maintained(
         .map_err(|failure| MaintainedOutcomeFailure::Receipt(failure.check))
 }
 
+/// Authenticates maintained batch evidence and returns its activity transition facts.
+///
+/// # Errors
+/// Refuses mismatched authorization, inclusion, identity, sequence or sealed roots.
+pub fn authorized_maintained_activity_batch(
+    receipt_bytes: &[u8],
+    authorised: &AuthorizedBatch,
+    evidence: &MaintainedOutcomeEvidence<'_>,
+) -> Result<AuthorizedBatch, MaintainedOutcomeFailure> {
+    maintained_activity_batch(receipt_bytes, authorised, evidence)
+}
+
 fn maintained_activity_batch(
     receipt_bytes: &[u8],
     authorised: &AuthorizedBatch,
