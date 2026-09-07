@@ -1,5 +1,9 @@
 use std::net::IpAddr;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
+
+#[cfg(test)]
+#[path = "../../../tests/support/wall_clock.rs"]
+mod wall_clock;
 
 use layerx_crypto::ed25519;
 use layerx_types::intent::{
@@ -82,6 +86,7 @@ impl std::fmt::Debug for LayerXKeyCredential {
 }
 
 pub struct HttpProgramTransport {
+    clock: fn() -> Result<u64, ProgramOperationError>,
     agent: ureq::Agent,
     endpoint: Url,
     credential: Option<LayerXKeyCredential>,
@@ -248,6 +253,7 @@ impl HttpProgramTransport {
         endpoint: &str,
         credential: Option<LayerXKeyCredential>,
         trusted_sequencer_public_key: [u8; 32],
+        clock: fn() -> Result<u64, ProgramOperationError>,
     ) -> Result<Self, ProgramOperationError> {
         let endpoint = validate_endpoint(endpoint)?;
         if trusted_sequencer_public_key.iter().all(|byte| *byte == 0) {
@@ -259,6 +265,7 @@ impl HttpProgramTransport {
             .max_redirects(0)
             .build();
         Ok(Self {
+            clock,
             agent: config.into(),
             endpoint,
             credential,
@@ -400,7 +407,7 @@ impl ProgramTransport for HttpProgramTransport {
             }),
             None,
         )?;
-        decode_discovery(&value, program, now_millis()?)
+        decode_discovery(&value, program, (self.clock)()?)
     }
 
     fn interface(
@@ -418,7 +425,7 @@ impl ProgramTransport for HttpProgramTransport {
             }),
             None,
         )?;
-        decode_interface(&value, program, now_millis()?)
+        decode_interface(&value, program, (self.clock)()?)
     }
 
     fn simulate(
@@ -527,14 +534,6 @@ struct SubmissionExpectation<'a> {
     idempotency_key: Option<[u8; 32]>,
     retained_signed_activity: Option<&'a [u8]>,
     trusted_sequencer_public_key: [u8; 32],
-}
-
-fn now_millis() -> Result<u64, ProgramOperationError> {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .ok()
-        .and_then(|duration| u64::try_from(duration.as_millis()).ok())
-        .ok_or(ProgramOperationError::Verification)
 }
 
 fn validate_endpoint(value: &str) -> Result<Url, ProgramOperationError> {
@@ -1530,7 +1529,14 @@ mod source_contract {
             super::resolve_lifecycle_submission(&request, refusal),
             Err(super::ProgramOperationError::Boundary { status: 400, .. })
         ));
-        let transport = super::HttpProgramTransport::connect("http://127.0.0.1:1", None, [1; 32])
+        let transport =
+            super::HttpProgramTransport::connect("http://127.0.0.1:1", None, [1; 32], || {
+                super::wall_clock::wall_time()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .ok()
+                    .and_then(|duration| u64::try_from(duration.as_millis()).ok())
+                    .ok_or(super::ProgramOperationError::Verification)
+            })
             .map_err(|error| format!("{error:?}"))?;
         assert!(matches!(
             transport.submit_lifecycle(
