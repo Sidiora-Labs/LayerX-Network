@@ -155,7 +155,9 @@ table: `storage_read`, `storage_write`, `storage_delete`, `event_emit`,
 `program_call`, `transfer_402`, `receipt_read`. ABI 2 keeps that namespace and
 adds `layerx_v2`: response/refusal, scoped storage including scan and drop,
 `transfer_program_402`, `fund_program_402`, `context_read`, `balance_read`,
-hash, signature verify/recover, and 256-bit bigint ops.
+hash, signature verify/recover, and 256-bit bigint ops. Bounded
+`storage_scan_scoped` encoding, ceilings, and refusals are on
+[StorageScan](StorageScan.md).
 
 Rust `admit_abi_version` accepts only 1 and 2. C CALL decode also caps guest
 ABI at 2. C `lxp_programs_abi_transition_validate` additionally accepts
