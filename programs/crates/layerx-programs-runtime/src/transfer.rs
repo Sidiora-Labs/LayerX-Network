@@ -293,6 +293,26 @@ pub struct TransferCapability {
     root_capabilities: CapabilitySet,
 }
 
+type PrincipalFrameKey = (CallFrameId, [u8; 32], [u8; 32]);
+type PrincipalGraphKey = ([u8; 32], [u8; 32]);
+type ProgramGraphKey = (ProgramId, Vec<u8>, [u8; 32], [u8; 32], [u8; 32]);
+type ProgramFrameKey = (
+    CallFrameId,
+    ProgramId,
+    Vec<u8>,
+    [u8; 32],
+    [u8; 32],
+    [u8; 32],
+);
+
+#[derive(Default)]
+struct TransferTotals {
+    principal_frame: BTreeMap<PrincipalFrameKey, u128>,
+    principal_graph: BTreeMap<PrincipalGraphKey, u128>,
+    program_frame: BTreeMap<ProgramFrameKey, u128>,
+    program_graph: BTreeMap<ProgramGraphKey, u128>,
+}
+
 impl TransferCapability {
     /// Binds one programs invocation to its protocol-authenticated authority.
     ///
@@ -381,28 +401,9 @@ impl TransferCapability {
             u32::try_from(events.len()).map_err(|_| TransferLawError::InvalidTransferSet)?;
         canonical.extend_from_slice(&event_length.to_be_bytes());
         canonical.extend_from_slice(&events);
-        canonical.extend_from_slice(&(effects.calls.len() as u64).to_be_bytes());
-        for call in &effects.calls {
-            canonical.extend_from_slice(&call.caller.bytes());
-            canonical.extend_from_slice(&call.callee.bytes());
-            canonical.extend_from_slice(&call.principal.bytes());
-            let (caller_path, caller_depth) = call.caller_frame.canonical_bytes();
-            let (destination_path, destination_depth) = call.callee_frame.canonical_bytes();
-            canonical.extend_from_slice(&caller_path);
-            canonical.push(caller_depth);
-            canonical.extend_from_slice(&destination_path);
-            canonical.push(destination_depth);
-            let grants = call.capabilities.canonical_encoding();
-            let grant_length =
-                u32::try_from(grants.len()).map_err(|_| TransferLawError::InvariantViolation)?;
-            canonical.extend_from_slice(&grant_length.to_be_bytes());
-            canonical.extend_from_slice(&grants);
-        }
+        encode_call_edges(&mut canonical, effects)?;
         canonical.extend_from_slice(&(effects.transfers.len() as u64).to_be_bytes());
-        let mut principal_frame_totals = BTreeMap::new();
-        let mut principal_graph_totals = BTreeMap::new();
-        let mut program_frame_totals = BTreeMap::new();
-        let mut program_graph_totals = BTreeMap::new();
+        let mut totals = TransferTotals::default();
         for transfer in &effects.transfers {
             let Some((program, capabilities)) = frames.get(&transfer.frame) else {
                 return Err(TransferLawError::InvariantViolation);
@@ -420,153 +421,22 @@ impl TransferCapability {
                 TransferSource::Principal(source)
                 | TransferSource::ProgramFunding {
                     principal: source, ..
-                } => {
-                    if *source != self.principal {
-                        return Err(TransferLawError::UnverifiedAuthority);
-                    }
-                    if let TransferSource::ProgramFunding { binding, .. } = &transfer.source {
-                        if binding.owner_program != *program
-                            || binding.owner_program != transfer.program
-                            || binding.destination_account != transfer.to
-                            || binding.asset != transfer.asset
-                            || derive_program_account(binding.owner_program, &binding.seed)
-                                .map_err(|_| TransferLawError::InvalidProgramFunding)?
-                                .bytes()
-                                != binding.destination_account
-                        {
-                            return Err(TransferLawError::InvalidProgramFunding);
-                        }
-                    }
-                    let frame_key = (transfer.frame, transfer.asset, transfer.to);
-                    let frame_amount = principal_frame_totals
-                        .get(&frame_key)
-                        .copied()
-                        .unwrap_or(0_u128)
-                        .checked_add(transfer.amount)
-                        .ok_or(TransferLawError::AmountOverflow)?;
-                    if !capabilities.permits_transfer(transfer.asset, transfer.to, frame_amount) {
-                        return Err(TransferLawError::CapabilityEscalation);
-                    }
-                    principal_frame_totals.insert(frame_key, frame_amount);
-                    let graph_key = (transfer.asset, transfer.to);
-                    let graph_amount = principal_graph_totals
-                        .get(&graph_key)
-                        .copied()
-                        .unwrap_or(0_u128)
-                        .checked_add(transfer.amount)
-                        .ok_or(TransferLawError::AmountOverflow)?;
-                    if !self.root_capabilities.permits_transfer(
-                        transfer.asset,
-                        transfer.to,
-                        graph_amount,
-                    ) {
-                        return Err(TransferLawError::CapabilityEscalation);
-                    }
-                    principal_graph_totals.insert(graph_key, graph_amount);
-                }
-                TransferSource::Program(authority) => {
-                    if authority.owner_program != *program
-                        || authority.owner_program != transfer.program
-                        || authority.staging_frame != transfer.frame
-                        || authority.asset != transfer.asset
-                        || authority.to != transfer.to
-                        || authority.amount != transfer.amount
-                        || derive_program_account(authority.owner_program, &authority.seed)
-                            .map_err(|_| TransferLawError::InvalidProgramAuthority)?
-                            .bytes()
-                            != authority.source_account
-                    {
-                        return Err(TransferLawError::InvalidProgramAuthority);
-                    }
-                    let frame_key = (
-                        transfer.frame,
-                        authority.owner_program,
-                        authority.seed.clone(),
-                        authority.source_account,
-                        transfer.asset,
-                        transfer.to,
-                    );
-                    let frame_amount = program_frame_totals
-                        .get(&frame_key)
-                        .copied()
-                        .unwrap_or(0_u128)
-                        .checked_add(transfer.amount)
-                        .ok_or(TransferLawError::AmountOverflow)?;
-                    if !capabilities.permits_program_spend(
-                        crate::abi::capability::ProgramSpendAuthorization {
-                            staging_program: transfer.program,
-                            owner_program: authority.owner_program,
-                            seed: &authority.seed,
-                            source_account: authority.source_account,
-                            asset: transfer.asset,
-                            to: transfer.to,
-                            amount: frame_amount,
-                        },
-                    ) {
-                        return Err(TransferLawError::CapabilityEscalation);
-                    }
-                    program_frame_totals.insert(frame_key, frame_amount);
-                    let graph_key = (
-                        authority.owner_program,
-                        authority.seed.clone(),
-                        authority.source_account,
-                        transfer.asset,
-                        transfer.to,
-                    );
-                    let graph_amount = program_graph_totals
-                        .get(&graph_key)
-                        .copied()
-                        .unwrap_or(0_u128)
-                        .checked_add(transfer.amount)
-                        .ok_or(TransferLawError::AmountOverflow)?;
-                    if !self.root_capabilities.permits_program_spend(
-                        crate::abi::capability::ProgramSpendAuthorization {
-                            staging_program: authority.owner_program,
-                            owner_program: authority.owner_program,
-                            seed: &authority.seed,
-                            source_account: authority.source_account,
-                            asset: transfer.asset,
-                            to: transfer.to,
-                            amount: graph_amount,
-                        },
-                    ) {
-                        return Err(TransferLawError::CapabilityEscalation);
-                    }
-                    program_graph_totals.insert(graph_key, graph_amount);
-                }
+                } => self.authorize_principal_leg(
+                    transfer,
+                    *program,
+                    capabilities,
+                    *source,
+                    &mut totals,
+                )?,
+                TransferSource::Program(authority) => self.authorize_program_leg(
+                    transfer,
+                    *program,
+                    capabilities,
+                    authority,
+                    &mut totals,
+                )?,
             }
-            let (path, depth) = transfer.frame.canonical_bytes();
-            canonical.extend_from_slice(&path);
-            canonical.push(depth);
-            if v2 {
-                match &transfer.source {
-                    TransferSource::Principal(source) => {
-                        canonical.push(SOURCE_PRINCIPAL);
-                        canonical.extend_from_slice(&source.bytes());
-                    }
-                    TransferSource::ProgramFunding { principal, binding } => {
-                        canonical.push(SOURCE_PROGRAM_FUNDING);
-                        canonical.extend_from_slice(&principal.bytes());
-                        let encoded = binding.canonical_encoding()?;
-                        let length = u32::try_from(encoded.len())
-                            .map_err(|_| TransferLawError::InvalidProgramFunding)?;
-                        canonical.extend_from_slice(&length.to_be_bytes());
-                        canonical.extend_from_slice(&encoded);
-                    }
-                    TransferSource::Program(authority) => {
-                        canonical.push(SOURCE_PROGRAM);
-                        let encoded = authority.canonical_encoding()?;
-                        let length = u32::try_from(encoded.len())
-                            .map_err(|_| TransferLawError::InvalidProgramAuthority)?;
-                        canonical.extend_from_slice(&length.to_be_bytes());
-                        canonical.extend_from_slice(&encoded);
-                    }
-                }
-            }
-            canonical.extend_from_slice(&transfer.asset);
-            canonical.extend_from_slice(&transfer.to);
-            canonical.extend_from_slice(&transfer.amount.to_be_bytes());
-            canonical.extend_from_slice(&transfer.program.bytes());
+            encode_authorized_leg(&mut canonical, transfer, v2)?;
         }
         let kernel_canonical = canonical_kernel_legs(&effects.transfers)?;
         let kernel_root = canonical_kernel_root(&kernel_canonical, effects.transfers.len())?;
@@ -581,6 +451,139 @@ impl TransferCapability {
             legs: effects.transfers.clone(),
             v2,
         })
+    }
+
+    fn authorize_principal_leg(
+        &self,
+        transfer: &TransferRequest,
+        program: ProgramId,
+        capabilities: &CapabilitySet,
+        source: PrincipalId,
+        totals: &mut TransferTotals,
+    ) -> Result<(), TransferLawError> {
+        if source != self.principal {
+            return Err(TransferLawError::UnverifiedAuthority);
+        }
+        if let TransferSource::ProgramFunding { binding, .. } = &transfer.source {
+            if binding.owner_program != program
+                || binding.owner_program != transfer.program
+                || binding.destination_account != transfer.to
+                || binding.asset != transfer.asset
+                || derive_program_account(binding.owner_program, &binding.seed)
+                    .map_err(|_| TransferLawError::InvalidProgramFunding)?
+                    .bytes()
+                    != binding.destination_account
+            {
+                return Err(TransferLawError::InvalidProgramFunding);
+            }
+        }
+        let frame_key = (transfer.frame, transfer.asset, transfer.to);
+        let frame_amount = totals
+            .principal_frame
+            .get(&frame_key)
+            .copied()
+            .unwrap_or(0_u128)
+            .checked_add(transfer.amount)
+            .ok_or(TransferLawError::AmountOverflow)?;
+        if !capabilities.permits_transfer(transfer.asset, transfer.to, frame_amount) {
+            return Err(TransferLawError::CapabilityEscalation);
+        }
+        totals.principal_frame.insert(frame_key, frame_amount);
+        let graph_key = (transfer.asset, transfer.to);
+        let graph_amount = totals
+            .principal_graph
+            .get(&graph_key)
+            .copied()
+            .unwrap_or(0_u128)
+            .checked_add(transfer.amount)
+            .ok_or(TransferLawError::AmountOverflow)?;
+        if !self
+            .root_capabilities
+            .permits_transfer(transfer.asset, transfer.to, graph_amount)
+        {
+            return Err(TransferLawError::CapabilityEscalation);
+        }
+        totals.principal_graph.insert(graph_key, graph_amount);
+        Ok(())
+    }
+
+    fn authorize_program_leg(
+        &self,
+        transfer: &TransferRequest,
+        program: ProgramId,
+        capabilities: &CapabilitySet,
+        authority: &ProgramAuthority,
+        totals: &mut TransferTotals,
+    ) -> Result<(), TransferLawError> {
+        if authority.owner_program != program
+            || authority.owner_program != transfer.program
+            || authority.staging_frame != transfer.frame
+            || authority.asset != transfer.asset
+            || authority.to != transfer.to
+            || authority.amount != transfer.amount
+            || derive_program_account(authority.owner_program, &authority.seed)
+                .map_err(|_| TransferLawError::InvalidProgramAuthority)?
+                .bytes()
+                != authority.source_account
+        {
+            return Err(TransferLawError::InvalidProgramAuthority);
+        }
+        let frame_key = (
+            transfer.frame,
+            authority.owner_program,
+            authority.seed.clone(),
+            authority.source_account,
+            transfer.asset,
+            transfer.to,
+        );
+        let frame_amount = totals
+            .program_frame
+            .get(&frame_key)
+            .copied()
+            .unwrap_or(0_u128)
+            .checked_add(transfer.amount)
+            .ok_or(TransferLawError::AmountOverflow)?;
+        if !capabilities.permits_program_spend(crate::abi::capability::ProgramSpendAuthorization {
+            staging_program: transfer.program,
+            owner_program: authority.owner_program,
+            seed: &authority.seed,
+            source_account: authority.source_account,
+            asset: transfer.asset,
+            to: transfer.to,
+            amount: frame_amount,
+        }) {
+            return Err(TransferLawError::CapabilityEscalation);
+        }
+        totals.program_frame.insert(frame_key, frame_amount);
+        let graph_key = (
+            authority.owner_program,
+            authority.seed.clone(),
+            authority.source_account,
+            transfer.asset,
+            transfer.to,
+        );
+        let graph_amount = totals
+            .program_graph
+            .get(&graph_key)
+            .copied()
+            .unwrap_or(0_u128)
+            .checked_add(transfer.amount)
+            .ok_or(TransferLawError::AmountOverflow)?;
+        if !self.root_capabilities.permits_program_spend(
+            crate::abi::capability::ProgramSpendAuthorization {
+                staging_program: authority.owner_program,
+                owner_program: authority.owner_program,
+                seed: &authority.seed,
+                source_account: authority.source_account,
+                asset: transfer.asset,
+                to: transfer.to,
+                amount: graph_amount,
+            },
+        ) {
+            return Err(TransferLawError::CapabilityEscalation);
+        }
+        totals.program_graph.insert(graph_key, graph_amount);
+        Ok(())
     }
 
     pub(crate) fn authorize_for_graph_with_version(
@@ -650,7 +653,7 @@ impl TransferCapability {
         kernel: &mut impl KernelTransferPrimitive,
     ) -> Result<VerifiedProgramSettlement, TransferLawError> {
         let evidence = kernel.apply_and_verify_402lxp_set(transfers)?;
-        kernel.verify_402lxp_transfer_set_root(&transfers, &evidence)?;
+        kernel.verify_402lxp_transfer_set_root(transfers, &evidence)?;
         if evidence.transfer_set_root != transfers.kernel_root
             || evidence.leg_count != transfers.legs.len()
             || evidence.total_amount != transfers.total_amount
@@ -677,6 +680,19 @@ pub struct AtomicTransferSet {
     total_amount: u128,
     legs: Vec<TransferRequest>,
     v2: bool,
+}
+
+#[derive(Clone, Copy)]
+pub struct SandboxEscrowCharge {
+    pub host_program: ProgramId,
+    pub execution_principal: PrincipalId,
+    pub invocation_authority: [u8; 32],
+    pub lease_id: [u8; 32],
+    pub expected_lease_digest: [u8; 32],
+    pub escrow_account: [u8; 32],
+    pub asset: [u8; 32],
+    pub fee_destination: [u8; 32],
+    pub amount: u128,
 }
 
 impl AtomicTransferSet {
@@ -725,16 +741,19 @@ impl AtomicTransferSet {
     /// guest capability. The source must be the canonical lease escrow account
     /// and the invocation authority is the admitted activity binding.
     pub(crate) fn sandbox_escrow_charge(
-        host_program: ProgramId,
-        execution_principal: PrincipalId,
-        invocation_authority: [u8; 32],
-        lease_id: [u8; 32],
-        expected_lease_digest: [u8; 32],
-        escrow_account: [u8; 32],
-        asset: [u8; 32],
-        fee_destination: [u8; 32],
-        amount: u128,
+        request: &SandboxEscrowCharge,
     ) -> Result<Self, TransferLawError> {
+        let SandboxEscrowCharge {
+            host_program,
+            execution_principal,
+            invocation_authority,
+            lease_id,
+            expected_lease_digest,
+            escrow_account,
+            asset,
+            fee_destination,
+            amount,
+        } = *request;
         if invocation_authority == [0; 32]
             || lease_id == [0; 32]
             || expected_lease_digest == [0; 32]
@@ -895,46 +914,7 @@ impl AtomicTransferSet {
             u32::try_from(events.len()).map_err(|_| TransferLawError::InvalidTransferSet)?;
         canonical.extend_from_slice(&canonical_event_length.to_be_bytes());
         canonical.extend_from_slice(&events);
-        let call_count = usize::try_from(u64::from_be_bytes(cursor.array()?))
-            .map_err(|_| TransferLawError::InvalidTransferSet)?;
-        if call_count > crate::DEFAULT_MAX_CALL_GRAPH_EDGES as usize {
-            return Err(TransferLawError::InvalidTransferSet);
-        }
-        canonical.extend_from_slice(&(call_count as u64).to_be_bytes());
-        for _ in 0..call_count {
-            let caller = ProgramId::new(cursor.array()?)
-                .map_err(|_| TransferLawError::InvalidTransferSet)?;
-            let destination = ProgramId::new(cursor.array()?)
-                .map_err(|_| TransferLawError::InvalidTransferSet)?;
-            let call_principal = PrincipalId::new(cursor.array()?)
-                .map_err(|_| TransferLawError::InvalidTransferSet)?;
-            let caller_frame = frame_from_cursor(&mut cursor)?;
-            let destination_frame = frame_from_cursor(&mut cursor)?;
-            let grant_length = u32::from_be_bytes(cursor.array()?) as usize;
-            let grants = cursor.take(grant_length)?;
-            let grants = if v2 {
-                CapabilitySet::decode_v2_canonical(grants)
-            } else {
-                CapabilitySet::decode_canonical(grants)
-            }
-            .map_err(|_| TransferLawError::InvalidTransferSet)?;
-            canonical.extend_from_slice(&caller.bytes());
-            canonical.extend_from_slice(&destination.bytes());
-            canonical.extend_from_slice(&call_principal.bytes());
-            let (caller_path, caller_depth) = caller_frame.canonical_bytes();
-            let (destination_path, destination_depth) = destination_frame.canonical_bytes();
-            canonical.extend_from_slice(&caller_path);
-            canonical.push(caller_depth);
-            canonical.extend_from_slice(&destination_path);
-            canonical.push(destination_depth);
-            let grants = CapabilitySet::new(grants)
-                .map_err(|_| TransferLawError::InvalidTransferSet)?
-                .canonical_encoding();
-            let canonical_grant_length =
-                u32::try_from(grants.len()).map_err(|_| TransferLawError::InvalidTransferSet)?;
-            canonical.extend_from_slice(&canonical_grant_length.to_be_bytes());
-            canonical.extend_from_slice(&grants);
-        }
+        decode_call_edges(&mut cursor, &mut canonical, v2)?;
         let leg_count = usize::try_from(u64::from_be_bytes(cursor.array()?))
             .map_err(|_| TransferLawError::InvalidTransferSet)?;
         if leg_count == 0 || leg_count > MAX_TRANSFER_LEGS {
@@ -945,38 +925,7 @@ impl AtomicTransferSet {
         let mut legs = Vec::with_capacity(leg_count);
         for _ in 0..leg_count {
             let frame = frame_from_cursor(&mut cursor)?;
-            let source = if v2 {
-                match cursor.take(1)?[0] {
-                    SOURCE_PRINCIPAL => {
-                        let source = PrincipalId::new(cursor.array()?)
-                            .map_err(|_| TransferLawError::InvalidTransferSet)?;
-                        if source != principal {
-                            return Err(TransferLawError::UnverifiedAuthority);
-                        }
-                        TransferSource::Principal(source)
-                    }
-                    SOURCE_PROGRAM => {
-                        let authority_length = u32::from_be_bytes(cursor.array()?) as usize;
-                        let authority = decode_program_authority(cursor.take(authority_length)?)?;
-                        TransferSource::Program(authority)
-                    }
-                    SOURCE_PROGRAM_FUNDING => {
-                        let source = PrincipalId::new(cursor.array()?)
-                            .map_err(|_| TransferLawError::InvalidTransferSet)?;
-                        if source != principal {
-                            return Err(TransferLawError::UnverifiedAuthority);
-                        }
-                        let length = u32::from_be_bytes(cursor.array()?) as usize;
-                        TransferSource::ProgramFunding {
-                            principal: source,
-                            binding: decode_program_funding(cursor.take(length)?)?,
-                        }
-                    }
-                    _ => return Err(TransferLawError::InvalidTransferSet),
-                }
-            } else {
-                TransferSource::Principal(principal)
-            };
+            let source = decode_transfer_source(&mut cursor, principal, v2)?;
             let asset = cursor.array()?;
             let to = cursor.array()?;
             let amount = u128::from_be_bytes(cursor.array()?);
@@ -985,24 +934,7 @@ impl AtomicTransferSet {
             if asset == [0; 32] || to == [0; 32] || amount == 0 {
                 return Err(TransferLawError::InvalidTransfer);
             }
-            if let TransferSource::Program(authority) = &source {
-                if authority.owner_program != leg_program
-                    || authority.staging_frame != frame
-                    || authority.asset != asset
-                    || authority.to != to
-                    || authority.amount != amount
-                {
-                    return Err(TransferLawError::InvalidProgramAuthority);
-                }
-            }
-            if let TransferSource::ProgramFunding { binding, .. } = &source {
-                if binding.owner_program != leg_program
-                    || binding.destination_account != to
-                    || binding.asset != asset
-                {
-                    return Err(TransferLawError::InvalidProgramFunding);
-                }
-            }
+            validate_decoded_leg_source(&source, leg_program, frame, asset, to, amount)?;
             total = total
                 .checked_add(amount)
                 .ok_or(TransferLawError::AmountOverflow)?;
@@ -1015,38 +947,13 @@ impl AtomicTransferSet {
                 to,
                 amount,
             });
-            let (path, depth) = frame.canonical_bytes();
-            canonical.extend_from_slice(&path);
-            canonical.push(depth);
-            if v2 {
-                match source {
-                    TransferSource::Principal(source) => {
-                        canonical.push(SOURCE_PRINCIPAL);
-                        canonical.extend_from_slice(&source.bytes());
-                    }
-                    TransferSource::ProgramFunding { principal, binding } => {
-                        canonical.push(SOURCE_PROGRAM_FUNDING);
-                        canonical.extend_from_slice(&principal.bytes());
-                        let encoded = binding.canonical_encoding()?;
-                        let length = u32::try_from(encoded.len())
-                            .map_err(|_| TransferLawError::InvalidProgramFunding)?;
-                        canonical.extend_from_slice(&length.to_be_bytes());
-                        canonical.extend_from_slice(&encoded);
-                    }
-                    TransferSource::Program(authority) => {
-                        canonical.push(SOURCE_PROGRAM);
-                        let encoded = authority.canonical_encoding()?;
-                        let length = u32::try_from(encoded.len())
-                            .map_err(|_| TransferLawError::InvalidProgramAuthority)?;
-                        canonical.extend_from_slice(&length.to_be_bytes());
-                        canonical.extend_from_slice(&encoded);
-                    }
-                }
-            }
-            canonical.extend_from_slice(&asset);
-            canonical.extend_from_slice(&to);
-            canonical.extend_from_slice(&amount.to_be_bytes());
-            canonical.extend_from_slice(&leg_program.bytes());
+            encode_decoded_leg(
+                &mut canonical,
+                frame,
+                source,
+                (asset, to, amount, leg_program),
+                v2,
+            )?;
         }
         if !cursor.is_empty() || canonical != encoded {
             return Err(TransferLawError::InvalidTransferSet);
@@ -1071,6 +978,8 @@ pub struct ReservedSandboxEscrowCharge {
     set: AtomicTransferSet,
 }
 
+/// # Errors
+/// Refuses invalid sandbox bindings, monetary fields, or escrow account derivation.
 pub fn reserve_host_sandbox_escrow_charge(
     host_program: ProgramId,
     execution_principal: PrincipalId,
@@ -1082,7 +991,7 @@ pub fn reserve_host_sandbox_escrow_charge(
     fee_destination: [u8; 32],
     maximum_fee: u128,
 ) -> Result<ReservedSandboxEscrowCharge, TransferLawError> {
-    AtomicTransferSet::sandbox_escrow_charge(
+    AtomicTransferSet::sandbox_escrow_charge(&crate::transfer::SandboxEscrowCharge {
         host_program,
         execution_principal,
         invocation_authority,
@@ -1091,8 +1000,8 @@ pub fn reserve_host_sandbox_escrow_charge(
         escrow_account,
         asset,
         fee_destination,
-        maximum_fee,
-    )
+        amount: maximum_fee,
+    })
     .map(|set| ReservedSandboxEscrowCharge { set })
 }
 
@@ -1123,7 +1032,7 @@ pub fn sandbox_escrow_charge_root(
     fee_destination: [u8; 32],
     exact_fee: u128,
 ) -> Result<[u8; 32], TransferLawError> {
-    AtomicTransferSet::sandbox_escrow_charge(
+    AtomicTransferSet::sandbox_escrow_charge(&crate::transfer::SandboxEscrowCharge {
         host_program,
         execution_principal,
         invocation_authority,
@@ -1132,11 +1041,13 @@ pub fn sandbox_escrow_charge_root(
         escrow_account,
         asset,
         fee_destination,
-        exact_fee,
-    )
+        amount: exact_fee,
+    })
     .map(|set| set.kernel_root())
 }
 
+/// # Errors
+/// Refuses non-canonical authorization or a mismatched kernel root.
 pub fn verify_authorization_root(
     encoded: &[u8],
     expected: [u8; 32],
@@ -1183,6 +1094,230 @@ pub fn verify_applied_kernel_legs(
     }
     Ok(())
 }
+fn encode_call_edges(
+    canonical: &mut Vec<u8>,
+    effects: &AbiEffects,
+) -> Result<(), TransferLawError> {
+    canonical.extend_from_slice(&(effects.calls.len() as u64).to_be_bytes());
+    for call in &effects.calls {
+        canonical.extend_from_slice(&call.caller.bytes());
+        canonical.extend_from_slice(&call.callee.bytes());
+        canonical.extend_from_slice(&call.principal.bytes());
+        let (caller_path, caller_depth) = call.caller_frame.canonical_bytes();
+        let (destination_path, destination_depth) = call.callee_frame.canonical_bytes();
+        canonical.extend_from_slice(&caller_path);
+        canonical.push(caller_depth);
+        canonical.extend_from_slice(&destination_path);
+        canonical.push(destination_depth);
+        let grants = call.capabilities.canonical_encoding();
+        let grant_length =
+            u32::try_from(grants.len()).map_err(|_| TransferLawError::InvariantViolation)?;
+        canonical.extend_from_slice(&grant_length.to_be_bytes());
+        canonical.extend_from_slice(&grants);
+    }
+    Ok(())
+}
+
+fn validate_decoded_leg_source(
+    source: &TransferSource,
+    leg_program: ProgramId,
+    frame: CallFrameId,
+    asset: [u8; 32],
+    to: [u8; 32],
+    amount: u128,
+) -> Result<(), TransferLawError> {
+    if let TransferSource::Program(authority) = source {
+        if authority.owner_program != leg_program
+            || authority.staging_frame != frame
+            || authority.asset != asset
+            || authority.to != to
+            || authority.amount != amount
+        {
+            return Err(TransferLawError::InvalidProgramAuthority);
+        }
+    }
+    if let TransferSource::ProgramFunding { binding, .. } = source {
+        if binding.owner_program != leg_program
+            || binding.destination_account != to
+            || binding.asset != asset
+        {
+            return Err(TransferLawError::InvalidProgramFunding);
+        }
+    }
+    Ok(())
+}
+
+fn encode_authorized_leg(
+    canonical: &mut Vec<u8>,
+    transfer: &TransferRequest,
+    v2: bool,
+) -> Result<(), TransferLawError> {
+    let (path, depth) = transfer.frame.canonical_bytes();
+    canonical.extend_from_slice(&path);
+    canonical.push(depth);
+    if v2 {
+        match &transfer.source {
+            TransferSource::Principal(source) => {
+                canonical.push(SOURCE_PRINCIPAL);
+                canonical.extend_from_slice(&source.bytes());
+            }
+            TransferSource::ProgramFunding { principal, binding } => {
+                canonical.push(SOURCE_PROGRAM_FUNDING);
+                canonical.extend_from_slice(&principal.bytes());
+                let encoded = binding.canonical_encoding()?;
+                let length = u32::try_from(encoded.len())
+                    .map_err(|_| TransferLawError::InvalidProgramFunding)?;
+                canonical.extend_from_slice(&length.to_be_bytes());
+                canonical.extend_from_slice(&encoded);
+            }
+            TransferSource::Program(authority) => {
+                canonical.push(SOURCE_PROGRAM);
+                let encoded = authority.canonical_encoding()?;
+                let length = u32::try_from(encoded.len())
+                    .map_err(|_| TransferLawError::InvalidProgramAuthority)?;
+                canonical.extend_from_slice(&length.to_be_bytes());
+                canonical.extend_from_slice(&encoded);
+            }
+        }
+    }
+    canonical.extend_from_slice(&transfer.asset);
+    canonical.extend_from_slice(&transfer.to);
+    canonical.extend_from_slice(&transfer.amount.to_be_bytes());
+    canonical.extend_from_slice(&transfer.program.bytes());
+    Ok(())
+}
+
+fn decode_call_edges(
+    cursor: &mut TransferCursor<'_>,
+    canonical: &mut Vec<u8>,
+    v2: bool,
+) -> Result<(), TransferLawError> {
+    let call_count = usize::try_from(u64::from_be_bytes(cursor.array()?))
+        .map_err(|_| TransferLawError::InvalidTransferSet)?;
+    if call_count > crate::DEFAULT_MAX_CALL_GRAPH_EDGES as usize {
+        return Err(TransferLawError::InvalidTransferSet);
+    }
+    canonical.extend_from_slice(&(call_count as u64).to_be_bytes());
+    for _ in 0..call_count {
+        let caller =
+            ProgramId::new(cursor.array()?).map_err(|_| TransferLawError::InvalidTransferSet)?;
+        let destination =
+            ProgramId::new(cursor.array()?).map_err(|_| TransferLawError::InvalidTransferSet)?;
+        let call_principal =
+            PrincipalId::new(cursor.array()?).map_err(|_| TransferLawError::InvalidTransferSet)?;
+        let caller_frame = frame_from_cursor(cursor)?;
+        let destination_frame = frame_from_cursor(cursor)?;
+        let grant_length = u32::from_be_bytes(cursor.array()?) as usize;
+        let grants = cursor.take(grant_length)?;
+        let grants = if v2 {
+            CapabilitySet::decode_v2_canonical(grants)
+        } else {
+            CapabilitySet::decode_canonical(grants)
+        }
+        .map_err(|_| TransferLawError::InvalidTransferSet)?;
+        canonical.extend_from_slice(&caller.bytes());
+        canonical.extend_from_slice(&destination.bytes());
+        canonical.extend_from_slice(&call_principal.bytes());
+        let (caller_path, caller_depth) = caller_frame.canonical_bytes();
+        let (destination_path, destination_depth) = destination_frame.canonical_bytes();
+        canonical.extend_from_slice(&caller_path);
+        canonical.push(caller_depth);
+        canonical.extend_from_slice(&destination_path);
+        canonical.push(destination_depth);
+        let grants = CapabilitySet::new(grants)
+            .map_err(|_| TransferLawError::InvalidTransferSet)?
+            .canonical_encoding();
+        let canonical_grant_length =
+            u32::try_from(grants.len()).map_err(|_| TransferLawError::InvalidTransferSet)?;
+        canonical.extend_from_slice(&canonical_grant_length.to_be_bytes());
+        canonical.extend_from_slice(&grants);
+    }
+    Ok(())
+}
+
+fn decode_transfer_source(
+    cursor: &mut TransferCursor<'_>,
+    principal: PrincipalId,
+    v2: bool,
+) -> Result<TransferSource, TransferLawError> {
+    let source = if v2 {
+        match cursor.take(1)?[0] {
+            SOURCE_PRINCIPAL => {
+                let source = PrincipalId::new(cursor.array()?)
+                    .map_err(|_| TransferLawError::InvalidTransferSet)?;
+                if source != principal {
+                    return Err(TransferLawError::UnverifiedAuthority);
+                }
+                TransferSource::Principal(source)
+            }
+            SOURCE_PROGRAM => {
+                let authority_length = u32::from_be_bytes(cursor.array()?) as usize;
+                let authority = decode_program_authority(cursor.take(authority_length)?)?;
+                TransferSource::Program(authority)
+            }
+            SOURCE_PROGRAM_FUNDING => {
+                let source = PrincipalId::new(cursor.array()?)
+                    .map_err(|_| TransferLawError::InvalidTransferSet)?;
+                if source != principal {
+                    return Err(TransferLawError::UnverifiedAuthority);
+                }
+                let length = u32::from_be_bytes(cursor.array()?) as usize;
+                TransferSource::ProgramFunding {
+                    principal: source,
+                    binding: decode_program_funding(cursor.take(length)?)?,
+                }
+            }
+            _ => return Err(TransferLawError::InvalidTransferSet),
+        }
+    } else {
+        TransferSource::Principal(principal)
+    };
+    Ok(source)
+}
+
+fn encode_decoded_leg(
+    canonical: &mut Vec<u8>,
+    frame: CallFrameId,
+    source: TransferSource,
+    fields: ([u8; 32], [u8; 32], u128, ProgramId),
+    v2: bool,
+) -> Result<(), TransferLawError> {
+    let (asset, to, amount, leg_program) = fields;
+    let (path, depth) = frame.canonical_bytes();
+    canonical.extend_from_slice(&path);
+    canonical.push(depth);
+    if v2 {
+        match source {
+            TransferSource::Principal(source) => {
+                canonical.push(SOURCE_PRINCIPAL);
+                canonical.extend_from_slice(&source.bytes());
+            }
+            TransferSource::ProgramFunding { principal, binding } => {
+                canonical.push(SOURCE_PROGRAM_FUNDING);
+                canonical.extend_from_slice(&principal.bytes());
+                let encoded = binding.canonical_encoding()?;
+                let length = u32::try_from(encoded.len())
+                    .map_err(|_| TransferLawError::InvalidProgramFunding)?;
+                canonical.extend_from_slice(&length.to_be_bytes());
+                canonical.extend_from_slice(&encoded);
+            }
+            TransferSource::Program(authority) => {
+                canonical.push(SOURCE_PROGRAM);
+                let encoded = authority.canonical_encoding()?;
+                let length = u32::try_from(encoded.len())
+                    .map_err(|_| TransferLawError::InvalidProgramAuthority)?;
+                canonical.extend_from_slice(&length.to_be_bytes());
+                canonical.extend_from_slice(&encoded);
+            }
+        }
+    }
+    canonical.extend_from_slice(&asset);
+    canonical.extend_from_slice(&to);
+    canonical.extend_from_slice(&amount.to_be_bytes());
+    canonical.extend_from_slice(&leg_program.bytes());
+    Ok(())
+}
+
 fn decode_program_authority(encoded: &[u8]) -> Result<ProgramAuthority, TransferLawError> {
     let mut cursor = TransferCursor::new(encoded);
     if cursor.take(PROGRAM_AUTHORITY_DOMAIN.len())? != PROGRAM_AUTHORITY_DOMAIN {
@@ -1306,7 +1441,7 @@ fn parse_event_envelope(encoded: &[u8]) -> Result<Vec<u8>, TransferLawError> {
         return Err(TransferLawError::InvalidTransferSet);
     }
     let mut canonical = DOMAIN.to_vec();
-    canonical.extend_from_slice(&(count as u32).to_be_bytes());
+    canonical.extend_from_slice(&(count as u64).to_be_bytes()[4..]);
     for _ in 0..count {
         let program =
             ProgramId::new(cursor.array()?).map_err(|_| TransferLawError::InvalidTransferSet)?;
@@ -1328,9 +1463,9 @@ fn parse_event_envelope(encoded: &[u8]) -> Result<Vec<u8>, TransferLawError> {
         let (path, depth) = frame.canonical_bytes();
         canonical.extend_from_slice(&path);
         canonical.push(depth);
-        canonical.extend_from_slice(&(topic_length as u32).to_be_bytes());
+        canonical.extend_from_slice(&(topic_length as u64).to_be_bytes()[4..]);
         canonical.extend_from_slice(topic);
-        canonical.extend_from_slice(&(data_length as u32).to_be_bytes());
+        canonical.extend_from_slice(&(data_length as u64).to_be_bytes()[4..]);
         canonical.extend_from_slice(data);
     }
     if cursor.is_empty() && canonical == encoded {
@@ -1390,6 +1525,8 @@ pub trait KernelTransferPrimitive {
     /// Cryptographically verifies that the nonzero transfer-set root is the
     /// commitment to this exact canonical request. The C kernel owns the only
     /// production implementation; the runtime never substitutes a ledger.
+    /// # Errors
+    /// Refuses a transfer set whose root does not match kernel evidence.
     fn verify_402lxp_transfer_set_root(
         &self,
         transfers: &AtomicTransferSet,
@@ -2167,9 +2304,17 @@ mod tests {
         let escrow = derive_program_account(host, &seed)
             .unwrap_or_else(|error| panic!("escrow: {error}"))
             .bytes();
-        let set = AtomicTransferSet::sandbox_escrow_charge(
-            host, principal, [4; 32], lease, [5; 32], escrow, [6; 32], [7; 32], 11,
-        )
+        let set = AtomicTransferSet::sandbox_escrow_charge(&crate::transfer::SandboxEscrowCharge {
+            host_program: host,
+            execution_principal: principal,
+            invocation_authority: [4; 32],
+            lease_id: lease,
+            expected_lease_digest: [5; 32],
+            escrow_account: escrow,
+            asset: [6; 32],
+            fee_destination: [7; 32],
+            amount: 11,
+        })
         .unwrap_or_else(|error| panic!("charge: {error}"));
         assert_eq!(set.legs().len(), 1);
         assert_eq!(set.total_amount(), 11);
@@ -2194,9 +2339,17 @@ mod tests {
             .unwrap_or_else(|error| panic!("escrow: {error}"))
             .bytes();
         let charge = |binding, digest| {
-            AtomicTransferSet::sandbox_escrow_charge(
-                host, principal, binding, lease, digest, escrow, [6; 32], [7; 32], 11,
-            )
+            AtomicTransferSet::sandbox_escrow_charge(&crate::transfer::SandboxEscrowCharge {
+                host_program: host,
+                execution_principal: principal,
+                invocation_authority: binding,
+                lease_id: lease,
+                expected_lease_digest: digest,
+                escrow_account: escrow,
+                asset: [6; 32],
+                fee_destination: [7; 32],
+                amount: 11,
+            })
             .unwrap_or_else(|error| panic!("charge: {error}"))
         };
         let first = charge([4; 32], [5; 32]);
