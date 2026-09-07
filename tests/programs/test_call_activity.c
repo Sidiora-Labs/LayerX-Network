@@ -1534,6 +1534,23 @@ static int deploy_and_upgrade_artifacts_case(uint16_t protocol_version,
             memcmp(receipt.transfer_set_root,
                    receipt.program_outcome.transfer_root, 32U) != 0)
             return artifact_fixture_failure(protocol_version, __LINE__);
+        if (dump_executed_v4) {
+            uint8_t applied_digest[32], terminal_digest[32], state_root[32];
+            lxp_u128 balance = actor->balance;
+            (void)memcpy(applied_digest, receipt.program_outcome.applied_legs_digest, 32U);
+            (void)memcpy(terminal_digest, receipt.program_outcome.terminal_payload_root, 32U);
+            (void)memcpy(state_root, kernel.current_state_root, 32U);
+            execution.global_sequence = 4U;
+            execution.fee_balance = actor->balance;
+            if (lxp_arena_reset(&arena, 0U) != LXP_OK ||
+                execute_artifact_fixture_activity(&kernel, &activity, &execution, &receipt) != LXP_ERR_IDEMPOTENT_REPLAY ||
+                receipt.program_outcome.encoding_version != 4U ||
+                memcmp(applied_digest, receipt.program_outcome.applied_legs_digest, 32U) != 0 ||
+                memcmp(terminal_digest, receipt.program_outcome.terminal_payload_root, 32U) != 0 ||
+                memcmp(state_root, kernel.current_state_root, 32U) != 0 ||
+                lxp_u128_cmp(actor->balance, balance) != 0)
+                return artifact_fixture_failure(protocol_version, __LINE__);
+        }
         if (dump_executed_v3) {
             while (kernel.blob_count != 0U)
                 free(kernel.blobs[--kernel.blob_count].bytes);
@@ -2363,8 +2380,76 @@ static int dump_lifecycle_vectors(void)
     return fflush(stdout) == 0 ? 0 : 1;
 }
 
+static int stored_fixture_hex(const char *document, const char *field,
+                               uint8_t *bytes, size_t capacity, size_t *length)
+{
+    char marker[96];
+    const char *start, *end;
+    size_t index;
+    int count = snprintf(marker, sizeof(marker), "\"%s\": \"", field);
+    if (count < 0 || (size_t)count >= sizeof(marker)) return 1;
+    start = strstr(document, marker);
+    if (start == NULL || strstr(start + (size_t)count, marker) != NULL) return 1;
+    start += (size_t)count;
+    end = strchr(start, '"');
+    if (end == NULL || (size_t)(end - start) % 2U != 0U ||
+        (size_t)(end - start) / 2U > capacity) return 1;
+    *length = (size_t)(end - start) / 2U;
+    for (index = 0U; index < *length; ++index) {
+        uint8_t value = 0U;
+        size_t nibble;
+        for (nibble = 0U; nibble < 2U; ++nibble) {
+            char digit = start[index * 2U + nibble];
+            if (digit >= '0' && digit <= '9') value = (uint8_t)(value * 16U + (uint8_t)(digit - '0'));
+            else if (digit >= 'a' && digit <= 'f') value = (uint8_t)(value * 16U + (uint8_t)(digit - 'a' + 10));
+            else return 1;
+        }
+        bytes[index] = value;
+    }
+    return 0;
+}
+
+static int stored_historical_v1(const char *path)
+{
+    char document[32768];
+    uint8_t canonical[4096], public_key[32], expected_digest[32], digest[32];
+    static uint8_t arena_bytes[LXP_MAX_ACTIVITY_BYTES];
+    size_t length, canonical_length, key_length, digest_length;
+    lxp_arena arena;
+    lxp_receipt receipt;
+    lxp_byte_span encoded;
+    FILE *file = fopen(path, "rb");
+    if (file == NULL) return 1;
+    length = fread(document, 1U, sizeof(document) - 1U, file);
+    if (ferror(file) || !feof(file)) { (void)fclose(file); return 1; }
+    if (fclose(file) != 0) return 1;
+    document[length] = '\0';
+    if (stored_fixture_hex(document, "canonical_receipt_hex", canonical, sizeof(canonical), &canonical_length) != 0 ||
+        stored_fixture_hex(document, "sequencer_public_key_hex", public_key, sizeof(public_key), &key_length) != 0 ||
+        stored_fixture_hex(document, "receipt_digest_hex", expected_digest, sizeof(expected_digest), &digest_length) != 0 ||
+        key_length != 32U || digest_length != 32U ||
+        lxp_arena_init(&arena, arena_bytes, sizeof(arena_bytes)) != LXP_OK ||
+        lxp_receipt_decode(canonical, canonical_length, true, &receipt) != LXP_OK ||
+        receipt.protocol_version != 1U || receipt.module_id != LXP_MODULE_PROGRAMS ||
+        receipt.module_version != 1U || !receipt.program_outcome.present ||
+        receipt.program_outcome.abi_version != 1U ||
+        !lxp_ct_is_zero(receipt.program_outcome.applied_legs_digest, 32U) ||
+        lxp_receipt_verify(&receipt, public_key, &arena) != LXP_OK ||
+        lxp_receipt_digest(&receipt, &arena, digest) != LXP_OK ||
+        memcmp(digest, expected_digest, 32U) != 0 ||
+        lxp_receipt_encode(&receipt, true, &arena, &encoded) != LXP_OK ||
+        encoded.length != canonical_length || memcmp(encoded.bytes, canonical, canonical_length) != 0)
+        return 1;
+    if (lxp_arena_reset(&arena, 0U) != LXP_OK) return 1;
+    public_key[0] ^= 1U;
+    if (lxp_receipt_verify(&receipt, public_key, &arena) == LXP_OK) return 1;
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
+    if (argc == 3 && strcmp(argv[1], "--stored-historical-v1") == 0)
+        return stored_historical_v1(argv[2]);
     if (argc == 2 && strcmp(argv[1], "--post-upgrade-batch") == 0) {
         if (deploy_and_upgrade_artifacts_case(
                 LXP_PROTOCOL_VERSION_STATE_COMMITMENT, false) != 0) return 1;
