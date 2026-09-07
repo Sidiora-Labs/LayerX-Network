@@ -56,9 +56,14 @@ See `docs/MONOREPO.md` for build boundaries, workflow naming, and tag convention
 - [Portable receipt verifier](PortableVerifier.md)
 - [x402 transport](X402Transport.md)
 - [Agentd](Agentd.md)
+- [CLI](Cli.md)
+- [Hosted core](HostedCore.md)
+- [Hosted authority](HostedAuthority.md)
 - [Programs workspace gates](ProgramsWorkspace.md)
 - [Porting](Porting.md)
 - [Beta cluster](BetaCluster.md)
+- [Hosted gateway](HostedGateway.md)
+- [Hosted webhooks](HostedWebhooks.md)
 
 ---
 

@@ -280,30 +280,22 @@ fn signed_program_call(
     let payload_hash =
         payload_hash_for(&payload).map_err(|error| format!("payload hash failed: {error:?}"))?;
     let now = protocol_timestamp;
+    let actor = Did::new(SIMULATION_ACTOR)
+        .map_err(|error| format!("simulation actor failed: {error:?}"))?;
+    let authority = Authority::owner(&public_key)
+        .map_err(|error| format!("owner authority failed: {error:?}"))?;
+    let timestamp_bound =
+        TimestampBound::new(now.saturating_sub(30_000), now.saturating_add(120_000))
+            .map_err(|error| format!("validity failed: {error:?}"))?;
     let mut builder = EnvelopeBuilder::new();
     builder
         .protocol_version(layerx_wire::limits::PROTOCOL_VERSION)
         .and_then(|value| value.network_id(77))
         .and_then(|value| value.activity_type(activity_type))
-        .and_then(|value| {
-            value.actor_did(
-                Did::new(SIMULATION_ACTOR)
-                    .map_err(|error| format!("simulation actor failed: {error:?}"))?,
-            )
-        })
-        .and_then(|value| {
-            value.authority(
-                Authority::owner(&public_key)
-                    .map_err(|error| format!("owner authority failed: {error:?}"))?,
-            )
-        })
+        .and_then(|value| value.actor_did(actor))
+        .and_then(|value| value.authority(authority))
         .and_then(|value| value.account_sequence(account_sequence))
-        .and_then(|value| {
-            value.timestamp_bound(
-                TimestampBound::new(now.saturating_sub(30_000), now.saturating_add(120_000))
-                    .map_err(|error| format!("validity failed: {error:?}"))?,
-            )
-        })
+        .and_then(|value| value.timestamp_bound(timestamp_bound))
         .and_then(|value| value.idempotency_key(IdempotencyKey::new(program_id)))
         .and_then(|value| value.fee_limit(Amount::from_u128(0)))
         .and_then(|value| value.payload_hash(payload_hash))
