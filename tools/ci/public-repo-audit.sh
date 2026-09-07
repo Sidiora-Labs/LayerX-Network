@@ -68,7 +68,7 @@ if [ -n "$mutable_action_refs" ]; then
 fi
 
 required_files=".editorconfig .gitattributes .gitignore CHANGELOG.md \
-CONTRIBUTING.md LICENSE LICENSE_NOTICE.md README.md SECURITY.md SUPPORT.md \
+CONTRIBUTING.md LICENSE NOTICE README.md SECURITY.md SUPPORT.md \
 docs/QUALIFICATION.md .github/workflows/ci.yml"
 for required_file in $required_files; do
     if [ ! -s "$required_file" ]; then
