@@ -8,7 +8,10 @@ use layerx_proof::merkle::Proof;
 use layerx_proof::program::{
     verify_authorized_program_execution, AuthorizedProgramExecutionExpectation,
 };
-use layerx_proof::receipt::{verify_program_state, AuthorizedBatch};
+use layerx_proof::receipt::{
+    authorized_maintained_activity_batch, verify_program_state, AuthorizedBatch,
+    MaintainedOutcomeEvidence,
+};
 use layerx_types::intent::ProgramId;
 use layerx_types::program_call::{NativeProgramCall, Resources};
 use layerx_types::program_lifecycle::{
@@ -460,17 +463,74 @@ fn verify_lifecycle_batch(
     let last = changed_receipt.len() - 1;
     changed_receipt[last] ^= 1;
     assert!(verify_sequencer_signature(&changed_receipt, cluster.sequencer_key).is_err());
-    let batch_id = must(
-        receipt_execution_batch_id(protocol, &header),
-        "receipt batch identity",
-    );
-    assert_eq!(protocol.batch_id(), batch_id);
-    AuthorizedBatch::new(
-        batch_id,
+    let authority = AuthorizedBatch::new(
+        protocol.batch_id(),
         protocol.asset(),
         header.previous_state_root(),
         header.resulting_state_root(),
         cluster.sequencer_key,
+    );
+    let (batch_id, authority) = if let Some(identity) = evidence.get("batch_identity") {
+        let activity =
+            verify_lifecycle_maintenance(bytes, evidence, identity, &authorization, &authority);
+        (activity.batch_id(), activity)
+    } else {
+        (
+            must(
+                receipt_execution_batch_id(protocol, &header),
+                "receipt batch identity",
+            ),
+            authority,
+        )
+    };
+    assert_eq!(protocol.batch_id(), batch_id);
+    authority
+}
+
+fn verify_lifecycle_maintenance(
+    bytes: &[u8],
+    evidence: &serde_json::Value,
+    identity: &serde_json::Value,
+    authorization: &SequencerAuthorization,
+    authority: &AuthorizedBatch,
+) -> AuthorizedBatch {
+    assert_eq!(field(identity, "kind"), "occupancy_maintenance_v2");
+    let decode_proof = |value: &serde_json::Value| {
+        let wire = must(
+            decode_merkle_proof(&unhex(field(value, "receipt_proof_hex"))),
+            "lifecycle wire proof",
+        );
+        must(
+            Proof::new(
+                wire.leaf_index(),
+                wire.leaf_count(),
+                wire.siblings().to_vec(),
+            ),
+            "lifecycle inclusion proof",
+        )
+    };
+    let proof = decode_proof(evidence);
+    let maintenance_proof = decode_proof(identity);
+    let maintenance = unhex(field(identity, "receipt_hex"));
+    let header_bytes = unhex(field(evidence, "header_hex"));
+    let signature = must(
+        <[u8; 64]>::try_from(unhex(field(evidence, "header_signature"))),
+        "lifecycle header signature",
+    );
+    must(
+        authorized_maintained_activity_batch(
+            bytes,
+            authority,
+            &MaintainedOutcomeEvidence {
+                header: &header_bytes,
+                header_signature: &signature,
+                activity_proof: &proof,
+                maintenance: &maintenance,
+                maintenance_proof: &maintenance_proof,
+                authorization,
+            },
+        ),
+        "authenticated lifecycle maintenance",
     )
 }
 
