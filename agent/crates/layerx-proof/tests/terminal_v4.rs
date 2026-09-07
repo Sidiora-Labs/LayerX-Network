@@ -188,3 +188,36 @@ fn terminal_v4_envelope_refuses_bounds_truncation_and_trailing_bytes() {
     changed[0] ^= 1;
     assert!(decode_applied_terminal(&changed).is_err());
 }
+
+#[test]
+fn stored_historical_v3_receipt_replays_without_v4_fields() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../platform/sdk/conformance/fixtures/receipt-programs-executed-v3.json");
+    let document = std::fs::read_to_string(path).unwrap_or_else(|error| panic!("{error}"));
+    let canonical = bytes(&document, "canonical_receipt_hex");
+    let authority = AuthorizedBatch::new(
+        array(&document, "batch_id_hex"),
+        array(&document, "asset_hex"),
+        array(&document, "previous_state_root_hex"),
+        array(&document, "resulting_state_root_hex"),
+        array(&document, "sequencer_public_key_hex"),
+    );
+    assert!(verify_program_outcome(&canonical, &authority).is_ok());
+    let decoded = decode(&canonical).unwrap_or_else(|error| panic!("{error:?}"));
+    assert_eq!(layerx_wire::receipt::encode(&decoded), Ok(canonical));
+    let protocol = decoded.protocol().unwrap_or_else(|| panic!("protocol"));
+    assert_eq!(protocol.protocol_version(), 3);
+    let outcome = protocol
+        .program_outcome()
+        .unwrap_or_else(|| panic!("outcome"));
+    assert_eq!(outcome.encoding_version(), 3);
+    assert_eq!(outcome.applied_legs_digest(), [0; 32]);
+    assert_eq!(
+        <[u8; 32]>::from(Sha256::digest(bytes(&document, "terminal_payload_hex"))),
+        outcome.terminal_payload_root()
+    );
+    assert_eq!(
+        <[u8; 32]>::from(Sha256::digest(bytes(&document, "call_graph_hex"))),
+        outcome.call_graph_root()
+    );
+}
