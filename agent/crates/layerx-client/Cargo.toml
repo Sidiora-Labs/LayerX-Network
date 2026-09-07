@@ -15,6 +15,7 @@ rustls = { version = "0.23.32", default-features = false, features = ["ring", "s
 
 [dev-dependencies]
 ed25519-dalek = "=2.2.0"
+layerx-programs-runtime = { path = "../../../programs/crates/layerx-programs-runtime" }
 
 [lints]
 workspace = true

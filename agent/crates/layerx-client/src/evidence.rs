@@ -17,6 +17,7 @@ use layerx_proof::state::{
 use layerx_types::payload::ModuleRegistry;
 use layerx_wire::activity::{decode_signed, encode_signed};
 use layerx_wire::hash::activity_id;
+use layerx_wire::maintenance::decode_occupancy_maintenance;
 use layerx_wire::receipt::{decode_batch_header, Receipt};
 
 use crate::lni::refusal::decode_core_refusal;
@@ -32,6 +33,9 @@ const REGISTER_REQUEST_TAG: u16 = 28;
 const REGISTER_RESPONSE_TAG: u16 = 29;
 const WIRE_VERSION: u16 = 1;
 const MAX_RECEIPT_BYTES: usize = 4_096;
+const MAINTENANCE_WIRE_VERSION: u16 = 2;
+const MAX_MAINTENANCE_BYTES: usize =
+    b"LXP/programs/occupancy-receipt/v2\0".len() + 374 + 256 * 81 + 65_536;
 const MAX_VALIDITY_PROOF_BYTES: usize = 1_048_576;
 const MAX_SETTLEMENT_REFERENCE_BYTES: usize = 1_024;
 const SETTLEMENT_REFERENCE_BYTES: usize = 110;
@@ -641,7 +645,14 @@ fn account_proof_bundle(
     })
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AccountEvidenceKind {
+    Activity,
+    Maintenance { parameter_version: u32 },
+}
+
 pub(crate) struct DecodedNestedEvidence {
+    pub kind: AccountEvidenceKind,
     pub selector: RootSelector,
     pub proof: NestedAccountProof,
     pub signed_header: SignedHeader,
@@ -654,7 +665,8 @@ pub(crate) fn decode_nested_evidence(
     expected_network_id: u32,
 ) -> Result<DecodedNestedEvidence, EvidenceError> {
     let mut reader = Reader::new(bytes);
-    if reader.u16()? != WIRE_VERSION || reader.u8()? != 2 {
+    let wire_version = reader.u16()?;
+    if !matches!(wire_version, WIRE_VERSION | MAINTENANCE_WIRE_VERSION) || reader.u8()? != 2 {
         return Err(EvidenceError::Malformed);
     }
     let selector = RootSelector::decode(&mut reader)?;
@@ -672,7 +684,22 @@ pub(crate) fn decode_nested_evidence(
     let account_proof = decode_proof(&mut reader)?;
     let account_tree_proof = decode_proof(&mut reader)?;
     let universal_root_proof = decode_proof(&mut reader)?;
-    let receipt_bytes = decode_receipt_bytes(&mut reader)?;
+    let (kind, receipt_bytes) = if wire_version == MAINTENANCE_WIRE_VERSION {
+        let bytes = reader.length_prefixed(MAX_MAINTENANCE_BYTES)?;
+        let maintenance =
+            decode_occupancy_maintenance(bytes).map_err(|_| EvidenceError::Receipt)?;
+        (
+            AccountEvidenceKind::Maintenance {
+                parameter_version: maintenance.parameter_version,
+            },
+            bytes.to_vec(),
+        )
+    } else {
+        (
+            AccountEvidenceKind::Activity,
+            decode_receipt_bytes(&mut reader)?,
+        )
+    };
     let receipt_proof = decode_proof(&mut reader)?;
     let signed_header = decode_signed_header(&mut reader)?;
     let checkpoint = match reader.u8()? {
@@ -712,6 +739,7 @@ pub(crate) fn decode_nested_evidence(
     };
     bind_selector(selector, &signed_header, checkpoint.as_ref())?;
     Ok(DecodedNestedEvidence {
+        kind,
         selector,
         proof,
         signed_header,
