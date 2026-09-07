@@ -1453,6 +1453,8 @@ file = "platform/hosted/paxeer/deploy-contracts.sh scripts/PaxeerBetaDeploy.s.so
 symbol = "predict_bond predictImmediateBetaGuarantorBondForProtocol fund_controllers"
 observed = "A focused disposable Docker Paxeer instance runs the repository init-chain.sh through the existing CA-verified boundary, with real signed network-402 native genesis. The fixed USDL address contains 2348 bytes of runtime code and returns decimals=6. The exact prediction function runs with forge script -vvvv and exits 0 both before funding and after the deployment runner's signed controller funding. Sanitized traces retain call names and execution outcomes only: Blueprint, immediate-beta timelock, AssetRegistry, LayerXVault and GuarantorBond construction complete. Evidence: /root/lx-lanes/cluster/qual-logs/pass3/prediction-trace.log, prediction-trace.exit, funded-prediction-trace.log, funded-prediction-trace.exit, focused-genesis.log and focused-images.txt."
 assumption = "The earlier Error: EVM error was not reproduced on these recorded prebuilt Paxeer and boundary images. This is no attribution or repair of the prior failure and no completed settlement deployment. The separate current-source full-stack image attempt was interrupted with exit 143 during image construction; it did not create a kind cluster or reach settlement."
+severity = "blocker"
+
 [observation.6.4.6]
 task = "6.4"
 file = "cmd/layerxd/lxp_daemon_process.c"
@@ -1749,6 +1751,8 @@ file = "programs/crates/layerx-programs-interpreter/src/lib.rs programs/porting/
 symbol = "Interpreter AbiHost execute_block"
 observed = "Interpreter native cdylib builds use std; Wasm retains no_std. Wasm-only ABI imports, execution helpers and code storage follow the existing ABI host/entrypoint target configuration, retaining the borrowed lifetime on native validation through PhantomData. Strict native library Clippy for interpreter and guest exits 0. Locked touched-crate tests exit 0 with three interpreter tests; the guest defines no tests. Both real-runtime interpreter cases pass. Formatting, ABI drift, dependency policy and both cargo-deny gates exit 0. make programs-lint exits 2; first refusal: crates/layerx-programs-interpreter/tests/conformance.rs:67:51: error: matching over `()` is more explicit. Evidence: qual-logs/fifth-pass/interpreter-guest-final/gates.md, lint-errors.txt, lint-errors.json and qual-logs/fifth-pass/interpreter-guest-clippy.log."
 assumption = "Remaining workspace test lints include unowned interpreter conformance tests and the market compilation inventory spanning lib.rs, settle.rs and attest.rs. Optional market repairs remain deferred; no ownership is inferred for settle.rs or attest.rs. Strict library success does not qualify all targets."
+severity = "blocker"
+
 [observation.6.4.8]
 task = "6.4"
 file = "agent/crates/layerx-proof/src/state.rs"
@@ -1771,6 +1775,8 @@ file = "programs/crates/layerx-programs-interpreter/tests/conformance.rs program
 symbol = "refusal_stage execute_block FeeSchedule::new_complete PreparedScheduleAccess::from_authenticated_call ExecutionError"
 observed = "Interpreter conformance tests use explicit unit error patterns, preserve unexpected-success panic behavior and extract unchanged checked arithmetic into a helper. All three interpreter tests pass, focused strict all-target market/interpreter Clippy passes, and touched-file formatting, ABI drift, real-runtime interpreter conformance and dependency policy exit 0. make programs-lint exits 2; its first refusal is ffi_call.rs:2122:17 needless_continue. Runtime library compilation reports 151 errors and runtime lib-test compilation reports 388 errors, including protected terminal/crypto findings, other runtime test findings, ExecutionError forwarding and the two retained argument-count findings. No market or interpreter diagnostics remain in the observed aggregate run. Evidence: qual-logs/sixth-pass/interpreter-test.log, focused-clippy.log, format-check.log, abi.log, conformance.log, policy.log, lint.log, lint-errors.txt and lint-errors.json."
 assumption = "FeeSchedule::new_complete at meter.rs:283 retains its original signature because grouped coefficients require protected ffi_call.rs:2454 and :3385 caller changes. PreparedScheduleAccess::from_authenticated_call at schedule.rs:59 retains its original eight arguments because grouping activity_binding and payer requires protected ffi_call.rs:314. Both inventories are unchanged. Runtime source and tests, including all ExecutionError forwarding sites, remain outside this pass. Passing focused checks do not qualify the full workspace or targets blocked by runtime compilation."
+severity = "blocker"
+
 [observation.6.4.compressed-zero]
 task = "6.4"
 file = "programs/crates/layerx-programs-runtime/tests/signature_vectors.rs"
@@ -1938,6 +1944,8 @@ file = "tests/test_bridge_deposit.c src/protocol/lxp_kernel.c src/protocol/lxp_m
 symbol = "main lxp_kernel_apply_transfer_set emit_transfer_set lx_asset_deposit_credit"
 observed = "make test-bridge-deposit exits 2 after all 145 Foundry tests pass; direct build/tests/test_bridge_deposit exits 1 with empty stdout and stderr. The first failed check is tests/test_bridge_deposit.c:269-270: lxp_bridge_deposit_credit returns LXP_ERR_NON_CANONICAL (-3) instead of LXP_ERR_INSUFFICIENT_BALANCE (-400) with reserve balance zero. LLDB follows successful nullifier lookup and staging into transfer emission; lxp_kernel_apply_transfer_set returns -3 before apply_capability or lxp_apply_transfer_set runs. The zero-initialized transfer.context has no source_authorities or source_authority_count, which the kernel requires at src/protocol/lxp_kernel.c:1067-1073. Evidence: qual-logs/native-links/bridge-make.log, bridge-direct.log, bridge-debug-3.log, bridge-inner.log and bridge-kernel.log."
 assumption = "The native recipe has empty RUN_PREFIX by default and sets no test-specific environment. The failing path uses in-process data and no prerequisite artifact or environment lookup. Supplying real debit authorization requires test or production changes outside the owned initializer and recipe paths; the assertions and kernel check remain intact."
+severity = "blocker"
+
 [observation.6.4.9]
 task = "6.4"
 file = "agent/crates/layerx-client/src/evidence.rs"
@@ -2561,3 +2569,11 @@ symbol = "deploy_and_upgrade_artifacts_case stored_historical_receipt"
 observed = "Owner decision 1 selects the V4 contract for protocol-3 terminals. The first CALL assertion encoded the pre-decision contract; it now requires encoding 4 for protocol 3 and retains exact encoding 3 for the legacy protocol path. The early assertion failure releases committed kernel blobs and destroys the fixture state. Frozen V3 receipt signature, digest and byte-exact decode/encode replay are checked alongside the retained V1 regression; current lifecycle generation writes separate V4 files and invokes the real V4 execution and proof procedure. Stored signed lifecycle V3 bytes are verified without regeneration. The Python executed-fixture target reads the stored V3 file and verifies it without invoking the current producer or writing historical bytes."
 assumption = "Historical receipt verification does not establish historical terminal attachment verification in the Python SDK. The SDK executed-fixture gate remains independently required. Gateway tests construct the signed fixture guest ABI 2 CALL, including calldata, parameterized transfer capability and explicit account access; matcher and frozen fixture bytes remain unchanged."
 severity = "note"
+
+[observation.6.4.terminal-v4-rebased-qualification]
+task = "6.4"
+file = "agent/sdk/python/layerx_sdk/program_wire.py; programs/crates/layerx-programs-runtime/src/calls.rs; programs/crates/layerx-programs-runtime/src/execute.rs; programs/crates/layerx-programs-runtime/src/ffi_call.rs"
+symbol = "decode_and_verify_program_terminal ExecutionError"
+observed = "On source 76d540916e3610723a0f0d720b1cadc896b1bbec, make programs-check-executed-fixture exits 2 with ValueError: invalid transfer authority presence against the frozen stored V3 receipt. Strict runtime Clippy with --all-targets --features host-ffi -- -D warnings exits 101 with 131 library errors and 368 library-test errors. The diagnostic inventory includes large error results, missing error documentation, function and argument bounds, conversions and retained test lint findings. Raw logs: qual-logs/n14-matrix-executed.log and qual-logs/n14-matrix-runtime-clippy.log; exact locations: qual-logs/n14-clippy-inventory.json. The full runtime test suite with --no-fail-fast exits 0 after the merged signature and storage test reconciliation; log qual-logs/n14-matrix-runtime-test.log."
+assumption = "Historical SDK verification requires an explicitly selected historical contract while preserving current attachment checks and frozen V3 bytes. Runtime lint repairs remain incomplete across owned and external files; passing runtime tests do not qualify strict Clippy. All prior observation sections are retained with their severity fields; preservation evidence is qual-logs/n14-qualification-preservation.json. No assertion, type, bound or lint gate is weakened."
+severity = "blocker"
