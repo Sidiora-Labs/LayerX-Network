@@ -276,7 +276,7 @@ class ReceiptEffect:
 
 @dataclass(frozen=True)
 class ProgramReceiptOutcome:
-    encoding_version: Literal[1, 2, 3]
+    encoding_version: Literal[1, 2, 3, 4]
     terminal_kind: Literal[1, 2, 3]
     result_code: int
     runtime_version: int
@@ -299,6 +299,7 @@ class ProgramReceiptOutcome:
     call_graph_root: bytes
     terminal_payload_root: bytes
     transfer_root: bytes
+    applied_legs_digest: bytes = bytes(32)
 
 
 @dataclass(frozen=True)
@@ -610,11 +611,12 @@ def _decode_program_receipt_outcome_from(
         _PROGRAM_OUTCOME_V1: 1,
         _PROGRAM_OUTCOME_V2: 2,
         _PROGRAM_OUTCOME_V3: 3,
+        0x50524734: 4,
     }
     encoding_value = tags.get(decoder.u32())
     if encoding_value is None:
         _failure()
-    encoding_version = cast(Literal[1, 2, 3], encoding_value)
+    encoding_version = cast(Literal[1, 2, 3, 4], encoding_value)
     terminal_value = decoder.u8()
     if terminal_value not in (1, 2, 3):
         _failure()
@@ -623,7 +625,7 @@ def _decode_program_receipt_outcome_from(
     runtime_version = decoder.u16()
     abi_version = decoder.u16()
     fee_schedule_version = decoder.u32()
-    metering_schedule_version = decoder.u32() if encoding_version == 3 else 1
+    metering_schedule_version = decoder.u32() if encoding_version >= 3 else 1
     cpu_fuel = decoder.u64()
     memory_bytes = decoder.u64()
     storage_read_bytes = decoder.u64()
@@ -643,6 +645,7 @@ def _decode_program_receipt_outcome_from(
     call_graph_root = decoder.bounded(32)
     terminal_payload_root = decoder.bounded(32)
     transfer_root = decoder.bounded(32)
+    applied_legs_digest = decoder.bounded(32) if encoding_version == 4 else bytes(32)
     occupancy_zero = (
         occupancy_byte_batches == 0
         and occupancy_fee_units == 0
@@ -662,7 +665,9 @@ def _decode_program_receipt_outcome_from(
         or not (
             (protocol_version == 1 and encoding_version in (1, 3))
             or (protocol_version in (2, 3) and encoding_version in (2, 3))
+            or (protocol_version == 3 and encoding_version == 4)
         )
+        or ((encoding_version == 4) == _all_zero(applied_legs_digest))
         or (encoding_version == 1 and not occupancy_zero)
         or (encoding_version >= 2 and terminal_kind != 1 and not occupancy_zero)
         or (
@@ -671,13 +676,13 @@ def _decode_program_receipt_outcome_from(
             and (_all_zero(occupancy_asset_id) or _all_zero(occupancy_evidence_digest))
         )
         or (
-            encoding_version == 3
+            encoding_version >= 3
             and _all_zero(occupancy_asset_id) != _all_zero(occupancy_evidence_digest)
         )
-        or (protocol_version == 1 and encoding_version == 3 and not occupancy_zero)
+        or (protocol_version == 1 and encoding_version >= 3 and not occupancy_zero)
         or (
             protocol_version in (2, 3)
-            and encoding_version == 3
+            and encoding_version >= 3
             and terminal_kind == 1
             and (_all_zero(occupancy_asset_id) or _all_zero(occupancy_evidence_digest))
         )
@@ -707,6 +712,7 @@ def _decode_program_receipt_outcome_from(
         call_graph_root=call_graph_root,
         terminal_payload_root=terminal_payload_root,
         transfer_root=transfer_root,
+        applied_legs_digest=applied_legs_digest,
     )
 
 

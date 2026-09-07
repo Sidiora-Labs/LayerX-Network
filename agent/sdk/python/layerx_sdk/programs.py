@@ -138,6 +138,7 @@ class VerifiedProgramReceipt:
     verification: ReceiptVerification
     terminal_payload: bytes
     call_graph: bytes
+    transfer_verification: Literal["reconstructed", "recorded_terminal_root_not_locally_reconstructable"]
 
 
 def _hex32(value: str) -> bool:
@@ -190,7 +191,7 @@ def verify_program_receipt(
     terminal = decode_and_verify_program_terminal(terminal_payload, call_graph, cast(str, execution["program_id"]), outcome, protocol.protocol_version)
     if terminal.usage != execution.get("usage") or terminal.outcome != execution.get("outcome"):
         raise ValueError("program terminal document binding failed")
-    return VerifiedProgramReceipt(verification, terminal_payload, call_graph)
+    return VerifiedProgramReceipt(verification, terminal_payload, call_graph, terminal.transfer_verification)
 
 
 def verify_lifecycle_recovery(result: object, expected_activity: str, sequencer: bytes, signatures: LocalSignatureVerifier) -> ReceiptVerification:
