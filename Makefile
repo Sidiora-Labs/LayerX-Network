@@ -264,7 +264,7 @@ test-harness: $(BUILD_DIR)/tests/lxp_test_harness
 list-tests: $(BUILD_DIR)/tests/lxp_test_harness
 	$(BUILD_DIR)/tests/lxp_test_harness --list
 
-test: test-result test-protocol test-state-commitment-transition test-program-artifacts test-daemon-maintenance-protocol test-arena test-harness test-codec \
+test: test-result test-protocol test-state-commitment-transition test-program-artifacts test-daemon-maintenance-protocol test-daemon-lni-account test-arena test-harness test-codec \
 	test-codec-limits test-codec-version test-codec-vectors fuzz-codec-smoke \
 	test-crypto-suite test-arith-u128 test-arith-u256 test-arith-rounding \
 	test-arith-property test-arith-nofloat test-log test-log-durability \
@@ -1250,7 +1250,7 @@ test-layerxd: $(BUILD_DIR)/tests/test_layerxd
 
 $(BUILD_DIR)/tests/test_daemon_lni_admission: \
 		tests/test_daemon_lni_admission.c $(LAYERXD_SOURCES) \
-		cmd/layerxd/lxp_daemon_lni_internal.h $(LIBRARY) \
+		cmd/layerxd/lxp_daemon_lni_internal.h cmd/layerxd/lxp_daemon_lni_account.h $(LIBRARY) \
 		$(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) -Icmd/layerxd $(CFLAGS) \
@@ -3209,3 +3209,17 @@ test-daemon-maintenance-crash: $(BUILD_DIR)/tests/lxp_test_maintenance_crash $(B
 .PHONY: test-bridge-maintenance-publication
 test-bridge-maintenance-publication: $(BUILD_DIR)/tests/lxp_test_maintenance_publication $(BUILD_DIR)/tests/bridge/sign-credit $(BUILD_DIR)/tests/bridge/test-credit build/bin/layerx-genesis-build
 	$(BRIDGE_PYTHON) tests/bridge/qualify_credit.py --build-dir $(BUILD_DIR) --maintenance
+
+.PHONY: test-daemon-lni-account
+$(BUILD_DIR)/tests/lxp_test_lni_account: tests/daemon/lxp_test_lni_account.c \
+        tests/storage/lxp_test_finality_evidence.c cmd/layerxd/lxp_daemon_lni_account.h \
+        cmd/layerxd/lxp_daemon_receipt_authority.c cmd/layerxd/lxp_daemon_evidence.c \
+        $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) -Icmd/layerxd $(CFLAGS) tests/daemon/lxp_test_lni_account.c \
+		cmd/layerxd/lxp_daemon_receipt_authority.c cmd/layerxd/lxp_daemon_evidence.c \
+		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) $(LIBRARY) $(EXTRA_LDFLAGS) \
+		-lcrypto -lsqlite3 -pthread -ldl -lm -o $@
+
+test-daemon-lni-account: $(BUILD_DIR)/tests/lxp_test_lni_account
+	python3 tests/daemon/lni-account.py $(BUILD_DIR)/tests/lxp_test_lni_account

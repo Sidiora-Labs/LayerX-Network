@@ -16,6 +16,7 @@
 
 #include "lxp_daemon_batch_wal.h"
 #include "lxp_daemon_lni_internal.h"
+#include "lxp_daemon_lni_account.h"
 
 #include <openssl/evp.h>
 
@@ -2626,80 +2627,6 @@ static lxp_result evidence_refusal(
             LXP_ERR_MODULE_DISABLED : status;
     return send_refusal(descriptor, server->frame_bytes, correlation_id,
                         4U, public_status, deadline);
-}
-
-static lxp_result latest_receipt_evidence(
-    lxp_daemon_protocol_owner *owner, lxp_arena *arena,
-    lxp_daemon_receipt_evidence *evidence)
-{
-    uint64_t offset = 0U;
-    uint64_t target;
-    size_t mark;
-    bool present = true;
-    lxp_result status = LXP_OK;
-    if (owner == NULL || owner->receipt_authority == NULL || arena == NULL ||
-        evidence == NULL)
-        return LXP_ERR_NON_CANONICAL;
-    target = owner->receipt_authority->last_global_sequence;
-    if (target == 0U) return LXP_ERR_MODULE_DISABLED;
-    mark = lxp_arena_mark(arena);
-    while (status == LXP_OK && present) {
-        status = lxp_daemon_receipt_authority_scan(
-            owner->receipt_authority, &offset, arena, evidence, &present);
-        if (status != LXP_OK || !present) break;
-        if (evidence->global_sequence == target) return LXP_OK;
-        if (evidence->global_sequence > target)
-            return LXP_ERR_LOG_CORRUPT;
-        status = lxp_arena_reset(arena, mark);
-    }
-    return status == LXP_OK ? LXP_ERR_PROJECTION_STALE : status;
-}
-
-static lxp_result latest_account_evidence(
-    lxp_daemon_protocol_owner *owner, const uint8_t account_id[32],
-    const uint8_t *asset_id, const uint8_t *target_activity_id,
-    lxp_arena *arena, lxp_daemon_account_evidence *evidence)
-{
-    lxp_daemon_receipt_evidence head;
-    lxp_receipt receipt;
-    const lx_account_registry *accounts;
-    uint8_t receipt_digest[32];
-    size_t index;
-    bool found = false;
-    lxp_result status;
-    if (owner == NULL || owner->kernel == NULL || owner->kernel->state == NULL ||
-        owner->kernel->state->accounts == NULL || account_id == NULL ||
-        arena == NULL || evidence == NULL)
-        return LXP_ERR_NON_CANONICAL;
-    accounts = owner->kernel->state->accounts;
-    for (index = 0U; index < accounts->count; ++index) {
-        const lx_account *account = &accounts->accounts[index];
-        if (lxp_ct_memcmp(account->id, account_id, 32U) != 0) continue;
-        if (found) return LXP_FATAL_INVARIANT;
-        found = true;
-        if (asset_id != NULL &&
-            (!account->has_asset ||
-             lxp_ct_memcmp(account->asset_id, asset_id, 32U) != 0))
-            return LXP_ERR_ASSET_MISMATCH;
-    }
-    if (!found) return LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE;
-    status = latest_receipt_evidence(owner, arena, &head);
-    if (status == LXP_OK)
-        status = lxp_receipt_decode(head.canonical_receipt.bytes,
-                                    head.canonical_receipt.length,
-                                    true, &receipt);
-    if (status == LXP_OK && target_activity_id != NULL &&
-        lxp_ct_memcmp(receipt.activity_id, target_activity_id, 32U) != 0)
-        status = LXP_ERR_CONTEXT_MISMATCH;
-    if (status == LXP_OK)
-        status = lxp_receipt_digest(&receipt, arena, receipt_digest);
-    if (status == LXP_OK)
-        status = lxp_daemon_account_evidence_build(
-            owner->kernel, owner->network_id, account_id, receipt_digest,
-            receipt.timestamp, head.canonical_receipt, &head.receipt_proof,
-            &owner->receipt_authority->authorization,
-            head.canonical_header, head.header_signature, arena, evidence);
-    return status;
 }
 
 static lxp_result parse_account_read_request(
