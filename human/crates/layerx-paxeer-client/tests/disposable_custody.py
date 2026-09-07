@@ -142,12 +142,16 @@ class DisposableCustody(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     signer(verified, directory / 'signer.key')
                 os.chmod(directory / 'signer.key', 0o600)
+                actor = ed25519.Ed25519PrivateKey.generate()
+                actor_public = actor.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+                name = ('agent:did:layerx:' + actor_public.hex() + ':main').encode()
+                beneficiary = '0x' + hashlib.sha256(b'LX:ACCOUNT:v1' + len(name).to_bytes(4, 'big') + name).hexdigest()
                 output = directory / 'custody.json'
                 command('python3', str(ROOT / 'tests/bridge/deploy_local_custody.py'),
                         '--allow-local-chain', '--rpc', url, '--ca-bundle', ca,
                         '--disposable-identity', str(identity_path), '--key-file', str(directory / 'signer.key'),
                         '--asset', '0x' + hashlib.sha256(b'test asset').hexdigest(),
-                        '--beneficiary', '0x' + hashlib.sha256(b'test beneficiary').hexdigest(),
+                        '--beneficiary', beneficiary,
                         '--amount', '1000000000000000000', '--output', str(output))
                 deployed = json.loads(output.read_text())
                 self.assertEqual(deployed['chain_id'], 125)
@@ -169,7 +173,8 @@ class DisposableCustody(unittest.TestCase):
                         identity['ca_sha256'] = '0x' + hashlib.sha256(bundle.read_bytes()).hexdigest()
                         identity_path.write_text(json.dumps(identity))
                         disposable_rpc(observer_url, str(bundle), identity_path)
-                        write_new(directory / 'attestor.key', ed25519.Ed25519PrivateKey.generate().private_bytes_raw())
+                        authority = ed25519.Ed25519PrivateKey.generate()
+                        write_new(directory / 'attestor.key', authority.private_bytes_raw())
                         profile = directory / 'custody.profile'
                         previous_ca = os.environ.get('SSL_CERT_FILE')
                         os.environ['SSL_CERT_FILE'] = str(bundle)
@@ -192,6 +197,34 @@ class DisposableCustody(unittest.TestCase):
                         command(*invocation, '--output', str(directory / 'genesis'), '--rpc', url,
                                 '--ca-bundle', str(bundle), '--disposable-identity', str(identity_path))
                         self.assertTrue((directory / 'genesis/artifacts/genesis.manifest').is_file())
+
+                        evidence_args = ['python3', str(ROOT / 'tests/bridge/local_credit_evidence.py'),
+                                         '--rpc', url, '--rpc', observer_url, '--ca-bundle', str(bundle),
+                                         '--disposable-identity', str(identity_path), '--custody', str(output),
+                                         '--asset', deployed['asset'], '--attestor-key', str(directory / 'attestor.key'),
+                                         '--attestor-public-key', '0x' + authority.public_key().public_bytes(
+                                             Encoding.Raw, PublicFormat.Raw).hex(),
+                                         '--beneficiary-key', '0x' + actor_public.hex(),
+                                         '--network-id', '402', '--confirmations', '2']
+                        command(*evidence_args, '--output', str(directory / 'evidence'))
+                        produced_profile = (directory / 'evidence/custody.profile').read_bytes()
+                        self.assertEqual(produced_profile, profile.read_bytes())
+                        credit = (directory / 'evidence/custody.credit').read_bytes()
+                        self.assertEqual(len(credit), 427)
+                        self.assertEqual(credit[37:41], (402).to_bytes(4, 'big'))
+                        authority.public_key().verify(credit[363:], b'LX:CUSTODY:CREDIT:v1' + credit[:363])
+                        for option, value in [('--asset', '0x' + '00' * 32),
+                                              ('--attestor-public-key', '0x' + '00' * 32),
+                                              ('--beneficiary-key', '0x' + '00' * 32),
+                                              ('--rpc', url)]:
+                            invalid = evidence_args.copy()
+                            selected = len(invalid) - 1 - invalid[::-1].index(option)
+                            invalid[selected + 1] = value
+                            rejected = directory / ('rejected-' + option[2:])
+                            with self.assertRaises(ValueError):
+                                command(*invalid, '--output', str(rejected))
+                            self.assertFalse((rejected / 'custody.credit').exists())
+                        self.assertEqual(refused, [])
                         self.assertEqual(observer_refused, [])
 
 
