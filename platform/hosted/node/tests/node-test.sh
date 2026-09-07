@@ -11,8 +11,9 @@ set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/../../../.." && pwd)
 NODE_DIR="$ROOT/platform/hosted/node"
-LAYERXD="$ROOT/build/bin/layerxd"
-GENESIS_BUILD="$ROOT/build/bin/layerx-genesis-build"
+NATIVE_BIN_DIR=${LAYERX_TEST_NATIVE_BIN_DIR:-$ROOT/build/bin}
+LAYERXD="$NATIVE_BIN_DIR/layerxd"
+GENESIS_BUILD="$NATIVE_BIN_DIR/layerx-genesis-build"
 CARGO=${PLATFORM_CARGO:-cargo}
 NETWORK_ID=${LAYERX_NODE_TEST_NETWORK_ID:-4242}
 PROGRAM_PORT=${LAYERX_NODE_TEST_PROGRAM_PORT:-19401}
@@ -39,7 +40,7 @@ PROBE="$NODE_DIR/tests/probe/target/release/layerx-node-probe"
 WORK=$(mktemp -d /tmp/layerx-node-test.XXXXXX)
 chmod 0755 "$WORK"
 cp "$PROBE" "$WORK/probe"
-cp "$ROOT/build/bin/layerxctl" "$WORK/layerxctl"
+cp "$NATIVE_BIN_DIR/layerxctl" "$WORK/layerxctl"
 chmod 0755 "$WORK/probe"
 chmod 0755 "$WORK/layerxctl"
 DATA="$WORK/data"
@@ -128,6 +129,7 @@ set +a
 [ "$(stat -c %s "$DATA/genesis/genesis.registration")" = 82 ] || fail "bootstrap registration missing"
 grep -q "^$(printf '%s' "$LAYERX_NODE_TREASURY_DID" | od -An -v -tx1 | tr -d ' \n'):$LAYERX_NODE_TREASURY_PUBLIC_KEY:0$" "$DATA/identities.txt" \
     || fail "treasury identity not registered"
+[ "$LAYERX_NODE_GENESIS_GUARANTOR_COUNT" -eq "$(jq -r '.finality_policy.certificate_threshold' "$ROOT/contracts/config/checkpoint-settlement.json")" ] || fail "genesis guarantor count mismatch"
 FIRST_MANIFEST_INODE=$(stat -c %i "$DATA/genesis/genesis.manifest")
 
 log "LNI handshake as uid $CLIENT_UID"
