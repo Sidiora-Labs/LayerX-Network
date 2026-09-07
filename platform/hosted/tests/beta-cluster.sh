@@ -696,6 +696,92 @@ render_manifest() {
     fi
 }
 
+paxeer_observer_render() {
+    python3 - "$MANIFESTS_DIR/paxeer.yaml" <<'PYOBSERVER'
+import copy
+import sys
+import yaml
+path = sys.argv[1]
+with open(path) as source:
+    documents = list(yaml.safe_load_all(source))
+stateful = next(doc for doc in documents if doc['kind'] == 'StatefulSet')
+pod = stateful['spec']['template']['spec']
+initializer = copy.deepcopy(pod['initContainers'][0])
+initializer['name'] = 'observer-genesis'
+initializer['env'] = []
+initializer['command'] = ['bash', '-ec', r'''
+primary=/var/lib/paxeer
+observer=/var/lib/paxeer-observer
+if [ ! -e "$observer/config/.observer-initialised" ]; then
+    test ! -e "$observer/config/genesis.json"
+    paxd init paxeer-observer --chain-id "$(jq -r .chain_id "$primary/config/genesis.json")" --home "$observer" >/dev/null 2>&1
+    cp "$primary/config/genesis.json" "$observer/config/genesis.json"
+    cp "$primary/config/config.toml" "$observer/config/config.toml"
+    cp "$primary/config/app.toml" "$observer/config/app.toml"
+    peer=$(paxd tendermint show-node-id --home "$primary")
+    sed -i 's/^mode = .*/mode = "full"/; s/127.0.0.1:26657/127.0.0.1:26667/g; s/127.0.0.1:26656/127.0.0.1:26666/g' "$observer/config/config.toml"
+    sed -i "s/^persistent-peers = .*/persistent-peers = \"$peer@127.0.0.1:26656\"/" "$observer/config/config.toml"
+    sed -i 's/^http_port = 8545$/http_port = 8555/; s/^ws_port = 8546$/ws_port = 8556/; s/127.0.0.1:9090/127.0.0.1:9190/g; s/127.0.0.1:9091/127.0.0.1:9191/g' "$observer/config/app.toml"
+    paxd validate-genesis --home "$observer" >/dev/null
+    touch "$observer/config/.observer-initialised"
+fi
+cmp "$primary/config/genesis.json" "$observer/config/genesis.json"
+''']
+initializer['volumeMounts'] = [
+    {'name': 'data', 'mountPath': '/var/lib/paxeer', 'readOnly': True},
+    {'name': 'observer-data', 'mountPath': '/var/lib/paxeer-observer'},
+    {'name': 'tmp', 'mountPath': '/tmp'},
+]
+pod['initContainers'].append(initializer)
+observer = copy.deepcopy(next(c for c in pod['containers'] if c['name'] == 'paxd'))
+observer['name'] = 'paxd-observer'
+observer['args'] = ['start', '--home', '/var/lib/paxeer-observer']
+observer['volumeMounts'] = [
+    {'name': 'observer-data', 'mountPath': '/var/lib/paxeer-observer'},
+    {'name': 'tmp', 'mountPath': '/tmp'},
+]
+pod['containers'].append(observer)
+boundary = copy.deepcopy(next(c for c in pod['containers'] if c['name'] == 'boundary'))
+boundary['name'] = 'observer-boundary'
+for env in boundary['env']:
+    if env['name'] == 'LAYERX_PAXEER_BOUNDARY_LISTEN':
+        env['value'] = '0.0.0.0:9444'
+    elif env['name'] == 'LAYERX_PAXEER_NODE_URL':
+        env['value'] = 'http://127.0.0.1:8555'
+boundary['ports'] = [{'name': 'observer-https', 'containerPort': 9444}]
+for probe in ['readinessProbe', 'livenessProbe']:
+    boundary[probe]['httpGet']['port'] = 'observer-https'
+pod['containers'].append(boundary)
+claim = copy.deepcopy(stateful['spec']['volumeClaimTemplates'][0])
+claim['metadata']['name'] = 'observer-data'
+stateful['spec']['volumeClaimTemplates'].append(claim)
+documents.append({
+    'apiVersion': 'v1', 'kind': 'Service',
+    'metadata': {'name': 'paxeer-observer-boundary', 'namespace': 'layerx-testnet'},
+    'spec': {'selector': {'app': 'paxeer'}, 'ports': [
+        {'name': 'https', 'port': 9443, 'targetPort': 'observer-https'}]},
+})
+for doc in documents:
+    if doc['kind'] == 'NetworkPolicy' and doc['metadata']['name'] == 'paxeer-boundary':
+        for rule in doc['spec']['ingress']:
+            rule['ports'].append({'protocol': 'TCP', 'port': 9444})
+with open(path, 'w') as output:
+    yaml.safe_dump_all(documents, output, sort_keys=False)
+PYOBSERVER
+}
+
+paxeer_origins_write() {
+    mkdir -p "$WORK_DIR/paxeer"
+    openssl x509 -inform DER -in "$CA_DIR/ca.der" -out "$CA_DIR/ca.pem"
+    jq -n --arg primary "$PAXEER_URL" --arg observer "$PAXEER_OBSERVER_URL" \
+        --arg ca "$CA_DIR/ca.pem" --arg key "$SECRETS_DIR/paxeer-deployer.key" \
+        '{rpc_origins: [$primary, $observer], ca_bundle: $ca, key_file: $key,
+          backends: [{container: "paxd", home: "/var/lib/paxeer"},
+                     {container: "paxd-observer", home: "/var/lib/paxeer-observer"}]}' \
+        > "$WORK_DIR/paxeer/rpc-origins.json"
+    log "Paxeer origins: $PAXEER_URL $PAXEER_OBSERVER_URL; CA bundle: $CA_DIR/ca.pem; inputs: $WORK_DIR/paxeer/rpc-origins.json"
+}
+
 manifests_render() {
     mkdir -p "$MANIFESTS_DIR"
     render_manifest "$NODE_MANIFEST" "$MANIFESTS_DIR/node.yaml"
@@ -723,6 +809,7 @@ PY
     fi
     render_manifest "$REPO_ROOT/platform/hosted/identity/deployment.yaml" "$MANIFESTS_DIR/identity.yaml"
     render_manifest "$REPO_ROOT/platform/hosted/paxeer/deployment.yaml" "$MANIFESTS_DIR/paxeer.yaml"
+    paxeer_observer_render
     render_manifest "$REPO_ROOT/platform/hosted/testnet/deployment.yaml" "$MANIFESTS_DIR/testnet.yaml"
     render_manifest "$REPO_ROOT/platform/hosted/gateway/deployment.yaml" "$MANIFESTS_DIR/gateway.yaml"
     render_manifest "$REPO_ROOT/platform/hosted/registry/deployment.yaml" "$MANIFESTS_DIR/registry.yaml"
@@ -1155,9 +1242,12 @@ beta_cluster_up() {
     NODE_URL="https://localhost:19446"
     AGENT_URL="https://localhost:19447"
     PAXEER_URL="https://localhost:19449"
+    PAXEER_OBSERVER_URL="https://localhost:19452"
     IDENTITY_URL="https://localhost:$IDENTITY_PORT"
     wait_for_pod_ready "$TESTNET_NAMESPACE" app=paxeer 600
     port_forward paxeer-boundary "$TESTNET_NAMESPACE" paxeer-boundary 19449 9443
+    port_forward paxeer-observer-boundary "$TESTNET_NAMESPACE" paxeer-observer-boundary 19452 9443
+    paxeer_origins_write
     wait_for_node_genesis
     paxeer_contracts_deploy
     settlement_publish
