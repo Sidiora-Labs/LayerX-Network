@@ -105,6 +105,10 @@ struct LayerxConfig {
     network_id: u32,
     fee_limit: u128,
     signer_public_key: String,
+    sequencer_id: String,
+    sequencer_public_key: String,
+    sequencer_first_batch: String,
+    sequencer_last_batch: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -310,6 +314,36 @@ fn server_acceptor(config: &Config) -> Result<TlsAcceptor, String> {
         .map_err(|_| "server TLS configuration rejected".to_owned())
 }
 
+fn build_layerx(config: &LayerxConfig, http: MutualTlsClient) -> Result<LayerxClient, String> {
+    let sequencer_authorization = layerx_ramp_toolkit::clients::configured_sequencer(
+        &config.sequencer_id,
+        &config.sequencer_public_key,
+        &config.sequencer_first_batch,
+        &config.sequencer_last_batch,
+    )
+    .map_err(|field| format!("invalid LayerX {field}"))?;
+    Ok(LayerxClient {
+        sequencer_authorization,
+        http,
+        gateway: Endpoint::parse(&config.gateway_endpoint)
+            .map_err(|_| "gateway endpoint rejected".to_owned())?,
+        receipt_authority: Endpoint::parse(&config.receipt_authority_endpoint)
+            .map_err(|_| "receipt authority endpoint rejected".to_owned())?,
+        signer: Endpoint::parse(&config.signer_endpoint)
+            .map_err(|_| "signer endpoint rejected".to_owned())?,
+        gateway_key: secret_text(&config.gateway_key_file)?,
+        authority_token: secret_text(&config.authority_token_file)?,
+        signer_token: secret_text(&config.signer_token_file)?,
+        activity: ActivityConfig {
+            actor_did: config.actor_did.as_bytes().to_vec(),
+            protocol_version: config.protocol_version,
+            network_id: config.network_id,
+            fee_limit: config.fee_limit,
+            signer_public_key: configured_key(&config.signer_public_key, "LayerX signer")?,
+        },
+    })
+}
+
 fn build_state(config: &Config) -> Result<State, String> {
     let tls = MutualTlsFiles {
         ca_pem: config.client_tls.ca_pem.clone(),
@@ -343,25 +377,7 @@ fn build_state(config: &Config) -> Result<State, String> {
         settlement_path: config.provider.settlement_path.clone(),
         status_path: config.provider.status_path.clone(),
     };
-    let layerx = LayerxClient {
-        http: client()?,
-        gateway: Endpoint::parse(&config.layerx.gateway_endpoint)
-            .map_err(|_| "gateway endpoint rejected".to_owned())?,
-        receipt_authority: Endpoint::parse(&config.layerx.receipt_authority_endpoint)
-            .map_err(|_| "receipt authority endpoint rejected".to_owned())?,
-        signer: Endpoint::parse(&config.layerx.signer_endpoint)
-            .map_err(|_| "signer endpoint rejected".to_owned())?,
-        gateway_key: secret_text(&config.layerx.gateway_key_file)?,
-        authority_token: secret_text(&config.layerx.authority_token_file)?,
-        signer_token: secret_text(&config.layerx.signer_token_file)?,
-        activity: ActivityConfig {
-            actor_did: config.layerx.actor_did.as_bytes().to_vec(),
-            protocol_version: config.layerx.protocol_version,
-            network_id: config.layerx.network_id,
-            fee_limit: config.layerx.fee_limit,
-            signer_public_key: configured_key(&config.layerx.signer_public_key, "LayerX signer")?,
-        },
-    };
+    let layerx = build_layerx(&config.layerx, client()?)?;
     let paxeer = PaxeerCustodyClient {
         http: client()?,
         endpoint: Endpoint::parse(&config.paxeer.custody_endpoint)

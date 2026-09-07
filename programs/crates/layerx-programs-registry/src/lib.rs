@@ -14,9 +14,10 @@ mod resolver;
 pub use account_state::{
     account_tree_commitment, program_account_registration_commitment, programs_root_commitment,
     state_leaf_commitment, state_node_commitment, universal_root_commitment,
-    verify_state_membership, AccountStateError, AccountStateHead, AccountStateJournal,
-    CanonicalAccountLeaf, JournalAccountStateAuthority, ProgramValueAccountBinding,
-    ProvenAccountLeaf, ProvenProgramBinding, StateProof, ValueAccount, VerifiedAccountSnapshot,
+    verify_state_membership, AccountFreeze, AccountStateError, AccountStateHead,
+    AccountStateJournal, AssetPresence, AuthorityKeyPresence, CanonicalAccountLeaf,
+    JournalAccountStateAuthority, OpenReference, ProgramValueAccountBinding, ProvenAccountLeaf,
+    ProvenProgramBinding, StateProof, ValueAccount, VerifiedAccountSnapshot,
     MAX_PROGRAM_VALUE_ACCOUNTS,
 };
 pub use archive::{ArchiveError, SourceArchive, SourceFile};
@@ -311,6 +312,14 @@ pub struct Registry {
     entries: BTreeMap<ProgramId, RegistryEntry>,
 }
 
+#[derive(Clone, Copy)]
+struct DeploymentIdentity {
+    program: ProgramId,
+    number: u32,
+    old_code_hash: Option<[u8; 32]>,
+    new_code_hash: [u8; 32],
+}
+
 impl Registry {
     #[must_use]
     pub fn new() -> Self {
@@ -339,10 +348,12 @@ impl Registry {
         receipt_digest: [u8; 32],
     ) -> Result<(), RegistryError> {
         self.record_deployment_version(
-            receipt.program(),
-            receipt.version(),
-            receipt.old_code_hash(),
-            receipt.new_code_hash(),
+            DeploymentIdentity {
+                program: receipt.program(),
+                number: receipt.version(),
+                old_code_hash: receipt.old_code_hash(),
+                new_code_hash: receipt.new_code_hash(),
+            },
             version,
             policy,
             receipt_digest,
@@ -352,16 +363,21 @@ impl Registry {
     /// Appends one deployment only after the canonical activity, successful
     /// receipt, signed batch, resulting Programs root and registry leaf were
     /// verified together.
+    /// # Errors
+    ///
+    /// Refuses invalid authority, deployment mismatch, non-contiguous history or unsupported ABI transitions.
     pub fn record_verified_deployment(
         &mut self,
         evidence: &VerifiedDeploymentEvidence,
     ) -> Result<(), RegistryError> {
         let record = evidence.record();
         self.record_deployment_version(
-            record.program,
-            record.version,
-            record.old_code_hash,
-            record.new_code_hash,
+            DeploymentIdentity {
+                program: record.program,
+                number: record.version,
+                old_code_hash: record.old_code_hash,
+                new_code_hash: record.new_code_hash,
+            },
             &record.program_version(),
             record.upgrade_policy,
             evidence.receipt_digest(),
@@ -370,14 +386,17 @@ impl Registry {
 
     fn record_deployment_version(
         &mut self,
-        program: ProgramId,
-        number: u32,
-        old_code_hash: Option<[u8; 32]>,
-        new_code_hash: [u8; 32],
+        identity: DeploymentIdentity,
         version: &ProgramVersion,
         policy: UpgradePolicy,
         receipt_digest: [u8; 32],
     ) -> Result<(), RegistryError> {
+        let DeploymentIdentity {
+            program,
+            number,
+            old_code_hash,
+            new_code_hash,
+        } = identity;
         if matches!(
             policy,
             UpgradePolicy::Authority(authority) if authority == [0; 32]
@@ -435,10 +454,12 @@ impl Registry {
         for record in ordered {
             record.validate()?;
             self.record_deployment_version(
-                record.program,
-                record.version,
-                record.old_code_hash,
-                record.new_code_hash,
+                DeploymentIdentity {
+                    program: record.program,
+                    number: record.version,
+                    old_code_hash: record.old_code_hash,
+                    new_code_hash: record.new_code_hash,
+                },
                 &record.program_version(),
                 record.upgrade_policy,
                 record.digest(),
@@ -619,6 +640,40 @@ impl Registry {
             .ok_or(AccountStateError::UnknownProgram)
     }
 
+    fn validate_protocol_history(
+        program: ProgramId,
+        history: &[LifecycleReceipt],
+    ) -> Result<ProgramLifecycle, RegistryError> {
+        let mut prior = ProgramLifecycle::Active;
+        let mut prior_sequence = 0_u64;
+        let mut policy = None;
+        for receipt in history {
+            if receipt.program != program
+                || receipt.prior != prior
+                || receipt.current == ProgramLifecycle::Active
+                || receipt.effective_sequence <= prior_sequence
+                || receipt.authority == [0; 32]
+                || receipt.wind_down.exit_program != program.bytes()
+                || receipt.wind_down.deadline == 0
+                || policy.is_some_and(|value| value != receipt.wind_down)
+            {
+                return Err(RegistryError::ProtocolStateMismatch);
+            }
+            let edge = matches!(
+                (receipt.prior, receipt.current),
+                (ProgramLifecycle::Active, ProgramLifecycle::Deprecated)
+                    | (ProgramLifecycle::Deprecated, ProgramLifecycle::Tombstoned)
+            );
+            if !edge {
+                return Err(RegistryError::ProtocolStateMismatch);
+            }
+            prior = receipt.current;
+            prior_sequence = receipt.effective_sequence;
+            policy = Some(receipt.wind_down);
+        }
+        Ok(prior)
+    }
+
     /// Replays the exact protocol-owned binding, route and lifecycle indexes
     /// obtained by the production C adapter. The update is atomic and accepts
     /// inactive programs only when their previously registered bindings are
@@ -673,33 +728,7 @@ impl Registry {
         {
             return Err(RegistryError::ProtocolStateMismatch);
         }
-        let mut prior = ProgramLifecycle::Active;
-        let mut prior_sequence = 0_u64;
-        let mut policy = None;
-        for receipt in history {
-            if receipt.program != program
-                || receipt.prior != prior
-                || receipt.current == ProgramLifecycle::Active
-                || receipt.effective_sequence <= prior_sequence
-                || receipt.authority == [0; 32]
-                || receipt.wind_down.exit_program != program.bytes()
-                || receipt.wind_down.deadline == 0
-                || policy.is_some_and(|value| value != receipt.wind_down)
-            {
-                return Err(RegistryError::ProtocolStateMismatch);
-            }
-            let edge = matches!(
-                (receipt.prior, receipt.current),
-                (ProgramLifecycle::Active, ProgramLifecycle::Deprecated)
-                    | (ProgramLifecycle::Deprecated, ProgramLifecycle::Tombstoned)
-            );
-            if !edge {
-                return Err(RegistryError::ProtocolStateMismatch);
-            }
-            prior = receipt.current;
-            prior_sequence = receipt.effective_sequence;
-            policy = Some(receipt.wind_down);
-        }
+        let prior = Self::validate_protocol_history(program, history)?;
         if prior != lifecycle
             || (lifecycle == ProgramLifecycle::Active
                 && (!history.is_empty() || !ordered_routes.is_empty()))
@@ -721,15 +750,15 @@ impl Registry {
             .iter()
             .all(|existing| ordered_routes.iter().any(|value| value == existing));
         let retains_history = history.starts_with(&entry.lifecycle_history);
-        let lifecycle_does_not_regress = match (entry.lifecycle, lifecycle) {
-            (ProgramLifecycle::Active, _) => true,
-            (
-                ProgramLifecycle::Deprecated,
-                ProgramLifecycle::Deprecated | ProgramLifecycle::Tombstoned,
-            )
-            | (ProgramLifecycle::Tombstoned, ProgramLifecycle::Tombstoned) => true,
-            _ => false,
-        };
+        let lifecycle_does_not_regress = matches!(
+            (entry.lifecycle, lifecycle),
+            (ProgramLifecycle::Active, _)
+                | (
+                    ProgramLifecycle::Deprecated,
+                    ProgramLifecycle::Deprecated | ProgramLifecycle::Tombstoned,
+                )
+                | (ProgramLifecycle::Tombstoned, ProgramLifecycle::Tombstoned)
+        );
         let inactive_indexes_immutable = entry.lifecycle == ProgramLifecycle::Active
             || (entry.value_accounts == ordered_bindings && entry.exit_routes == ordered_routes);
         if !retains_bindings

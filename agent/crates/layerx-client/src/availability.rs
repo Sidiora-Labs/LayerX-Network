@@ -381,11 +381,12 @@ where
                     report(provider, &chunks, ProviderFailure::Reassembly(failure))
                 });
                 let records = records?.into_records();
-                let verified = records
-                    .verify(&chunks, context.record_roots)
-                    .map_err(|failure| {
-                        report(provider, &chunks, ProviderFailure::Reassembly(failure))
-                    })?;
+                let verified =
+                    records
+                        .verify(&chunks, context.record_roots)
+                        .map_err(|failure| {
+                            report(provider, &chunks, ProviderFailure::Reassembly(failure))
+                        })?;
                 return Ok(AvailabilityResult {
                     provider: provider.to_owned(),
                     chunks,

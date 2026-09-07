@@ -4,13 +4,12 @@ use layerx_programs_runtime::test_support::{
     TYPE_I32, TYPE_I64,
 };
 use layerx_programs_runtime::{
-    Abi, AbiError, AccessDeclaration, AccessSet, ActivityBudgetBinding,
+    hash_bytes, Abi, AbiError, AccessDeclaration, AccessSet, ActivityBudgetBinding,
     AuthorizationContext, AuthorizedExecutionRequest, BudgetedAuthorizedExecutionRequest,
-    Capability, CapabilitySet, DeclaredBudget,
-    CompositionContext, CompositionRefusal, CompositionRules, ExecutionError, Executor,
-    FeeSchedule, Meter, PrincipalId, ProgramCatalog, ProgramId, ReceiptOracle, ReceiptView,
-    ResourceBudget, Storage, StorageNamespace, StorageSelector, WasmEngine, WasmValue, ABI_VERSION,
-    CALL_ENTRY_EXPORT, HashAlgorithm, hash_bytes,
+    Capability, CapabilitySet, CompositionContext, CompositionRefusal, CompositionRules,
+    DeclaredBudget, ExecutionError, Executor, FeeSchedule, HashAlgorithm, Meter, PrincipalId,
+    ProgramCatalog, ProgramId, ReceiptOracle, ReceiptView, ResourceBudget, Storage,
+    StorageNamespace, StorageSelector, WasmEngine, WasmValue, ABI_VERSION, CALL_ENTRY_EXPORT,
 };
 
 #[derive(Debug)]
@@ -116,7 +115,7 @@ fn invalid_selector_guest(raw_selector: i8) -> Vec<u8> {
     let encoded_selector = if raw_selector == -1 {
         0x7f
     } else {
-        raw_selector as u8
+        raw_selector.to_ne_bytes()[0]
     };
     let entry = [
         0x41,
@@ -258,11 +257,13 @@ fn calldata_selected_writer() -> Vec<u8> {
     ]);
     let imports = import_section(&[(CANDIDATE_ABI_MODULE, "storage_write_scoped", 0)]);
     let (memory, exports) = memory_and_exports(1, 2);
-    let entry = [
-        0x41, 1, 0x20, 0, 0x20, 1, 0x20, 0, 0x20, 1, 0x10, 0, 0x0b,
-    ];
+    let entry = [0x41, 1, 0x20, 0, 0x20, 1, 0x20, 0, 0x20, 1, 0x10, 0, 0x0b];
     module(&[
-        types, imports, function_section(&[1, 2]), memory, exports,
+        types,
+        imports,
+        function_section(&[1, 2]),
+        memory,
+        exports,
         code_section(&[func_body(&[], &[0x41, 0, 0x0b]), func_body(&[], &entry)]),
     ])
 }
@@ -279,11 +280,15 @@ fn prior_state_selected_writer() -> Vec<u8> {
     ]);
     let (memory, exports) = memory_and_exports(2, 3);
     let entry = [
-        0x41, 1, 0x41, 8, 0x41, 5, 0x41, 32, 0x41, 6, 0x10, 0, 0x1a,
-        0x41, 1, 0x41, 32, 0x41, 6, 0x41, 40, 0x41, 1, 0x10, 1, 0x0b,
+        0x41, 1, 0x41, 8, 0x41, 5, 0x41, 32, 0x41, 6, 0x10, 0, 0x1a, 0x41, 1, 0x41, 32, 0x41, 6,
+        0x41, 40, 0x41, 1, 0x10, 1, 0x0b,
     ];
     module(&[
-        types, imports, function_section(&[1, 2]), memory, exports,
+        types,
+        imports,
+        function_section(&[1, 2]),
+        memory,
+        exports,
         code_section(&[func_body(&[], &[0x41, 0, 0x0b]), func_body(&[], &entry)]),
         data_segments(&[(8, b"route"), (40, b"v")]),
     ])
@@ -325,10 +330,11 @@ fn execute_guest_declared(
     capabilities: CapabilitySet,
     storage: &mut Storage,
     calldata: &[u8],
-    declaration: AccessDeclaration,
-    composition: CompositionContext,
+    access: (AccessDeclaration, CompositionContext),
 ) -> Result<layerx_programs_runtime::CandidateAuthorizedExecutionRecord, ExecutionError> {
-    let declaration_bytes = declaration.canonical_bytes()
+    let (declaration, composition) = access;
+    let declaration_bytes = declaration
+        .canonical_bytes()
         .unwrap_or_else(|error| panic!("declaration: {error}"));
     let mut canonical_activity = b"access-vector-call-activity".to_vec();
     let declaration_offset = canonical_activity.len();
@@ -337,17 +343,19 @@ fn execute_guest_declared(
     preimage.extend_from_slice(&canonical_activity);
     let digest = hash_bytes(HashAlgorithm::Sha256, &preimage)
         .unwrap_or_else(|error| panic!("activity digest: {error}"));
-    let binding = ActivityBudgetBinding::new(digest)
-        .unwrap_or_else(|error| panic!("binding: {error}"));
+    let binding =
+        ActivityBudgetBinding::new(digest).unwrap_or_else(|error| panic!("binding: {error}"));
     let executor = Executor::declared();
     let declared = DeclaredBudget::new(
         1_000_000, 1_048_576, 1_048_576, 1_048_576, 64, 1_048_576, 64,
-    ).unwrap_or_else(|error| panic!("budget: {error}"));
+    )
+    .unwrap_or_else(|error| panic!("budget: {error}"));
     let admitted = executor
         .admit_activity_budget_for_qualification(declared, actor, binding, u128::MAX)
         .unwrap_or_else(|error| panic!("admit: {error}"));
     let engine = WasmEngine::declared().unwrap_or_else(|error| panic!("engine: {error}"));
-    let module = engine.validate_candidate_v2(wasm)
+    let module = engine
+        .validate_candidate_v2(wasm)
         .unwrap_or_else(|error| panic!("candidate: {error}"));
     let request = BudgetedAuthorizedExecutionRequest::new(
         AuthorizedExecutionRequest {
@@ -363,17 +371,24 @@ fn execute_guest_declared(
         admitted,
         actor,
         binding,
-    ).with_bound_access_declaration(declaration, &canonical_activity, declaration_offset)
-        .unwrap_or_else(|error| panic!("bound declaration: {error}"));
+    )
+    .with_bound_access_declaration(declaration, &canonical_activity, declaration_offset)
+    .unwrap_or_else(|error| panic!("bound declaration: {error}"));
     executor.execute_authorized_candidate_budgeted_for_qualification(storage, request)
 }
 
 fn explicit_access(
-    build: impl FnOnce(&mut layerx_programs_runtime::AccessSetBuilder) -> Result<(), layerx_programs_runtime::AccessRefusal>,
+    build: impl FnOnce(
+        &mut layerx_programs_runtime::AccessSetBuilder,
+    ) -> Result<(), layerx_programs_runtime::AccessRefusal>,
 ) -> AccessDeclaration {
     let mut builder = AccessSet::builder();
     build(&mut builder).unwrap_or_else(|error| panic!("access build: {error}"));
-    AccessDeclaration::explicit(builder.build().unwrap_or_else(|error| panic!("access set: {error}")))
+    AccessDeclaration::explicit(
+        builder
+            .build()
+            .unwrap_or_else(|error| panic!("access set: {error}")),
+    )
 }
 
 #[test]
@@ -383,19 +398,37 @@ fn declared_access_executes_calldata_selected_guest_keys_and_charges_excess() {
     let namespace = StorageNamespace::principal(owner, actor);
     let exact = explicit_access(|builder| builder.write_key(namespace, b"alpha").map(|_| ()));
     let broad = explicit_access(|builder| builder.write_namespace(namespace).map(|_| ()));
-    let capabilities = || CapabilitySet::new([Capability::StorageWrite]).unwrap_or_else(|error| panic!("capabilities: {error}"));
+    let capabilities = || {
+        CapabilitySet::new([Capability::StorageWrite])
+            .unwrap_or_else(|error| panic!("capabilities: {error}"))
+    };
     let mut exact_storage = Storage::new();
     let exact_record = execute_guest_declared(
-        &calldata_selected_writer(), owner, actor, capabilities(), &mut exact_storage,
-        b"alpha", exact, CompositionContext::isolated(),
-    ).unwrap_or_else(|error| panic!("exact execution: {error}"));
-    assert_eq!(exact_storage.transaction(namespace).read(b"alpha"), Ok(Some(b"alpha".to_vec())));
+        &calldata_selected_writer(),
+        owner,
+        actor,
+        capabilities(),
+        &mut exact_storage,
+        b"alpha",
+        (exact, CompositionContext::isolated()),
+    )
+    .unwrap_or_else(|error| panic!("exact execution: {error}"));
+    assert_eq!(
+        exact_storage.transaction(namespace).read(b"alpha"),
+        Ok(Some(b"alpha".to_vec()))
+    );
 
     let mut broad_storage = Storage::new();
     let broad_record = execute_guest_declared(
-        &calldata_selected_writer(), owner, actor, capabilities(), &mut broad_storage,
-        b"alpha", broad, CompositionContext::isolated(),
-    ).unwrap_or_else(|error| panic!("broad execution: {error}"));
+        &calldata_selected_writer(),
+        owner,
+        actor,
+        capabilities(),
+        &mut broad_storage,
+        b"alpha",
+        (broad, CompositionContext::isolated()),
+    )
+    .unwrap_or_else(|error| panic!("broad execution: {error}"));
     assert!(broad_record.execution().usage().cpu_fuel > exact_record.execution().usage().cpu_fuel);
     assert_ne!(
         broad_record.canonical_evidence(),
@@ -404,18 +437,34 @@ fn declared_access_executes_calldata_selected_guest_keys_and_charges_excess() {
 
     let mut omitted_storage = Storage::new();
     let omitted_record = execute_guest_declared(
-        &calldata_selected_writer(), owner, actor, capabilities(), &mut omitted_storage,
-        b"alpha", AccessDeclaration::absent(), CompositionContext::isolated(),
-    ).unwrap_or_else(|error| panic!("omitted execution: {error}"));
-    assert!(omitted_record.execution().usage().cpu_fuel > exact_record.execution().usage().cpu_fuel);
-    assert_eq!(omitted_storage.transaction(namespace).read(b"alpha"), Ok(Some(b"alpha".to_vec())));
+        &calldata_selected_writer(),
+        owner,
+        actor,
+        capabilities(),
+        &mut omitted_storage,
+        b"alpha",
+        (AccessDeclaration::absent(), CompositionContext::isolated()),
+    )
+    .unwrap_or_else(|error| panic!("omitted execution: {error}"));
+    assert!(
+        omitted_record.execution().usage().cpu_fuel > exact_record.execution().usage().cpu_fuel
+    );
+    assert_eq!(
+        omitted_storage.transaction(namespace).read(b"alpha"),
+        Ok(Some(b"alpha".to_vec()))
+    );
 
     let before = Storage::new();
     let mut denied_storage = before.clone();
     let denied = explicit_access(|builder| builder.write_key(namespace, b"beta").map(|_| ()));
     let denied_record = execute_guest_declared(
-        &calldata_selected_writer(), owner, actor, capabilities(), &mut denied_storage,
-        b"alpha", denied, CompositionContext::isolated(),
+        &calldata_selected_writer(),
+        owner,
+        actor,
+        capabilities(),
+        &mut denied_storage,
+        b"alpha",
+        (denied, CompositionContext::isolated()),
     );
     assert_eq!(
         denied_record,
@@ -433,14 +482,24 @@ fn declared_access_rolls_back_prior_state_selected_guest_write() {
     let namespace = StorageNamespace::principal(owner, actor);
     let mut seeded = Storage::new();
     let mut transaction = seeded.transaction(namespace);
-    transaction.write(b"route", b"secret").unwrap_or_else(|error| panic!("seed: {error}"));
+    transaction
+        .write(b"route", b"secret")
+        .unwrap_or_else(|error| panic!("seed: {error}"));
     let _ = transaction.commit();
     let before = seeded.clone();
-    let capabilities = || CapabilitySet::new([Capability::StorageRead, Capability::StorageWrite]).unwrap_or_else(|error| panic!("capabilities: {error}"));
+    let capabilities = || {
+        CapabilitySet::new([Capability::StorageRead, Capability::StorageWrite])
+            .unwrap_or_else(|error| panic!("capabilities: {error}"))
+    };
     let incomplete = explicit_access(|builder| builder.read_key(namespace, b"route").map(|_| ()));
     let denied = execute_guest_declared(
-        &prior_state_selected_writer(), owner, actor, capabilities(), &mut seeded,
-        &[], incomplete, CompositionContext::isolated(),
+        &prior_state_selected_writer(),
+        owner,
+        actor,
+        capabilities(),
+        &mut seeded,
+        &[],
+        (incomplete, CompositionContext::isolated()),
     );
     assert_eq!(
         denied,
@@ -456,11 +515,20 @@ fn declared_access_rolls_back_prior_state_selected_guest_write() {
         Ok(())
     });
     let accepted = execute_guest_declared(
-        &prior_state_selected_writer(), owner, actor, capabilities(), &mut seeded,
-        &[], complete, CompositionContext::isolated(),
-    ).unwrap_or_else(|error| panic!("prior-state acceptance: {error}"));
+        &prior_state_selected_writer(),
+        owner,
+        actor,
+        capabilities(),
+        &mut seeded,
+        &[],
+        (complete, CompositionContext::isolated()),
+    )
+    .unwrap_or_else(|error| panic!("prior-state acceptance: {error}"));
     assert_eq!(accepted.execution().outputs(), &[WasmValue::I32(0)]);
-    assert_eq!(seeded.transaction(namespace).read(b"secret"), Ok(Some(b"v".to_vec())));
+    assert_eq!(
+        seeded.transaction(namespace).read(b"secret"),
+        Ok(Some(b"v".to_vec()))
+    );
 }
 
 #[test]
@@ -482,16 +550,25 @@ fn declared_access_is_enforced_inside_real_nested_guest_frame() {
         );
         CompositionContext::catalog(catalog, CompositionRules::declared())
     };
-    let capabilities = || CapabilitySet::new([
-        Capability::Call { program: child }, Capability::SharedStorageRead,
-        Capability::SharedStorageWrite,
-    ]).unwrap_or_else(|error| panic!("capabilities: {error}"));
+    let capabilities = || {
+        CapabilitySet::new([
+            Capability::Call { program: child },
+            Capability::SharedStorageRead,
+            Capability::SharedStorageWrite,
+        ])
+        .unwrap_or_else(|error| panic!("capabilities: {error}"))
+    };
     let incomplete = explicit_access(|builder| builder.call(child).map(|_| ()));
     let before = Storage::new();
     let mut denied_storage = before.clone();
     let denied = execute_guest_declared(
-        &candidate_forwarder(child, &requested), root, actor, capabilities(),
-        &mut denied_storage, &[], incomplete, catalog(),
+        &candidate_forwarder(child, &requested),
+        root,
+        actor,
+        capabilities(),
+        &mut denied_storage,
+        &[],
+        (incomplete, catalog()),
     );
     assert_eq!(
         denied,
@@ -509,12 +586,21 @@ fn declared_access_is_enforced_inside_real_nested_guest_frame() {
     });
     let mut accepted_storage = Storage::new();
     let accepted = execute_guest_declared(
-        &candidate_forwarder(child, &requested), root, actor, capabilities(),
-        &mut accepted_storage, &[], complete, catalog(),
-    ).unwrap_or_else(|error| panic!("nested acceptance: {error}"));
+        &candidate_forwarder(child, &requested),
+        root,
+        actor,
+        capabilities(),
+        &mut accepted_storage,
+        &[],
+        (complete, catalog()),
+    )
+    .unwrap_or_else(|error| panic!("nested acceptance: {error}"));
     assert_eq!(accepted.call_graph().edges().len(), 1);
     assert_eq!(accepted.call_graph().edges()[0].callee(), child);
-    assert_eq!(accepted_storage.transaction(child_namespace).read(b"total"), Ok(Some(vec![0])));
+    assert_eq!(
+        accepted_storage.transaction(child_namespace).read(b"total"),
+        Ok(Some(vec![0]))
+    );
 }
 
 #[test]

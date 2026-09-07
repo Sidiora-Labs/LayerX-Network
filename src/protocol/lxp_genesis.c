@@ -820,3 +820,59 @@ lxp_result lxp_genesis_bootstrap_verify(
     if (status != LXP_OK) *activities_enabled = false;
     return status;
 }
+
+lxp_result lxp_genesis_initialized_verify(
+    const lxp_genesis_manifest *manifest,
+    const lxp_genesis_bootstrap_registration *registration,
+    uint32_t configured_network_id,
+    const lxp_snapshot_manifest_record *snapshot,
+    const lxp_kernel *kernel, lxp_arena *arena,
+    bool *activities_enabled)
+{
+    uint8_t projected_root[32];
+    uint8_t live_root[32];
+    uint8_t expected_receipt_root[32];
+    lxp_result status;
+    if (manifest == NULL || registration == NULL || snapshot == NULL ||
+        kernel == NULL || arena == NULL || activities_enabled == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    *activities_enabled = false;
+    if ((manifest->protocol_version != LXP_PROTOCOL_VERSION &&
+         manifest->protocol_version != LXP_PROTOCOL_VERSION_STATE_COMMITMENT) ||
+        !lxp_network_id_matches(configured_network_id,
+                                manifest->network_id) ||
+        snapshot->global_sequence != 0U ||
+        lxp_ct_memcmp(manifest->genesis_state_root,
+                      snapshot->canonical_state_root, 32U) != 0)
+        return LXP_ERR_ROOT_MISMATCH;
+    if (!registration->finalised || registration->registration_index != 0U ||
+        registration->network_id != manifest->network_id ||
+        lxp_ct_memcmp(registration->state_root,
+                      manifest->genesis_receipt_state_root, 32U) != 0 ||
+        lxp_ct_memcmp(registration->settlement_anchor,
+                      manifest->genesis_receipt_state_root, 32U) != 0)
+        return LXP_ERR_ROOT_MISMATCH;
+    status = lxp_genesis_verify_signature(manifest, arena);
+    if (status == LXP_OK)
+        status = lxp_programs_metering_genesis_validate(manifest);
+    if (status == LXP_OK)
+        status = lxp_programs_fee_genesis_validate(manifest);
+    if (status == LXP_OK)
+        status = lxp_genesis_state_root(manifest, arena, projected_root);
+    if (status == LXP_OK)
+        status = lxp_genesis_receipt_state_root(
+            manifest->network_id, projected_root, expected_receipt_root);
+    if (status == LXP_OK) status = lxp_state_root(kernel, live_root);
+    if (status == LXP_OK &&
+        (lxp_ct_memcmp(projected_root,
+                       snapshot->canonical_state_root, 32U) != 0 ||
+         lxp_ct_memcmp(live_root,
+                       snapshot->canonical_state_root, 32U) != 0 ||
+         lxp_ct_memcmp(expected_receipt_root,
+                       snapshot->receipt_state_root, 32U) != 0 ||
+         lxp_ct_memcmp(kernel->current_state_root,
+                       snapshot->receipt_state_root, 32U) != 0))
+        status = LXP_ERR_ROOT_MISMATCH;
+    *activities_enabled = status == LXP_OK;
+    return status;
+}

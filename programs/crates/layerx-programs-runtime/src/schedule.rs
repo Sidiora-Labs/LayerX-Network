@@ -14,6 +14,7 @@ pub(crate) struct ProtocolScheduleEffects {
 }
 
 impl ProtocolScheduleEffects {
+    #[cfg(feature = "host-ffi")]
     pub(crate) fn new(
         accounts: AccessSet,
         identities: impl IntoIterator<Item = [u8; 32]>,
@@ -48,6 +49,7 @@ impl ProtocolScheduleEffects {
 /// payload and admission binding are retained so a prepared worker input
 /// cannot be detached from the activity whose capabilities were decoded.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg(feature = "host-ffi")]
 pub(crate) struct PreparedScheduleAccess {
     access: ScheduleAccess,
     canonical_payload: Vec<u8>,
@@ -55,17 +57,33 @@ pub(crate) struct PreparedScheduleAccess {
     payer: [u8; 32],
 }
 
+#[cfg(feature = "host-ffi")]
+pub(crate) struct AuthenticatedScheduleCall<'a> {
+    pub(crate) canonical_payload: &'a [u8],
+    pub(crate) activity_binding: [u8; 32],
+    pub(crate) program: crate::ProgramId,
+    pub(crate) principal: crate::PrincipalId,
+    pub(crate) payer: [u8; 32],
+    pub(crate) capabilities: &'a [u8],
+    pub(crate) access_declaration: &'a [u8],
+    pub(crate) protocol_effects: Option<ProtocolScheduleEffects>,
+}
+
+#[cfg(feature = "host-ffi")]
 impl PreparedScheduleAccess {
     pub(crate) fn from_authenticated_call(
-        canonical_payload: &[u8],
-        activity_binding: [u8; 32],
-        program: crate::ProgramId,
-        principal: crate::PrincipalId,
-        payer: [u8; 32],
-        capabilities: &[u8],
-        access_declaration: &[u8],
-        protocol_effects: Option<ProtocolScheduleEffects>,
+        request: AuthenticatedScheduleCall<'_>,
     ) -> Result<Self, crate::AbiError> {
+        let AuthenticatedScheduleCall {
+            canonical_payload,
+            activity_binding,
+            program,
+            principal,
+            payer,
+            capabilities,
+            access_declaration,
+            protocol_effects,
+        } = request;
         if canonical_payload.is_empty() || activity_binding == [0; 32] || payer == [0; 32] {
             return Err(crate::AbiError::InvalidEncoding);
         }
@@ -135,6 +153,7 @@ impl ScheduleAccess {
     /// Production construction path. The caller must derive `reachable` from
     /// the admitted request's verified capabilities, never activity metadata.
     #[must_use]
+    #[cfg(feature = "host-ffi")]
     pub(crate) const fn from_admitted(
         declaration: AccessDeclaration,
         reachable: AccessSet,

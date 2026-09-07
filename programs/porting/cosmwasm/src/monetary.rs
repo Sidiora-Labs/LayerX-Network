@@ -59,7 +59,8 @@ impl ProgramAccountTransferPlan {
             || amount == 0
             || derive_program_account(owner_program, seed)
                 .map_err(|_| PortRefusal::InvalidProgramAccount)?
-                .bytes() != source
+                .bytes()
+                != source
         {
             return Err(PortRefusal::InvalidProgramAccount);
         }
@@ -229,7 +230,7 @@ impl ValueFlow {
     /// # Errors
     ///
     /// Refuses invalid derived-account context, supply mutation and source
-    /// constructs that have no deterministic LayerX equivalent.
+    /// constructs that have no deterministic `LayerX` equivalent.
     pub fn translate_with_program_account(
         &self,
         asset: [u8; 32],
@@ -241,7 +242,12 @@ impl ValueFlow {
         match self {
             Self::BankSend { recipient, amount } | Self::SubMessageFunds { recipient, amount } => {
                 ProgramAccountTransferPlan::new(
-                    owner_program, seed, source, asset, *recipient, *amount,
+                    owner_program,
+                    seed,
+                    source,
+                    asset,
+                    *recipient,
+                    *amount,
                 )
                 .map(TranslatedValueFlow::ProgramAccount)
             }
@@ -301,7 +307,7 @@ impl ValueFlow {
     }
 }
 
-/// The authentic monetary source selected for one translated CosmWasm flow.
+/// The authentic monetary source selected for one translated `CosmWasm` flow.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TranslatedValueFlow {
     /// Debits the invoking principal through ordinary transfer authority.
@@ -339,13 +345,20 @@ mod custody_tests {
         let source = derive_program_account(owner, b"contract")
             .unwrap_or_else(|error| panic!("derive: {error}"))
             .bytes();
-        let translated = (ValueFlow::BankSend { recipient: [4; 32], amount: 9 })
-            .translate_with_program_account([3; 32], [2; 32], owner, b"contract", source)
-            .unwrap_or_else(|error| panic!("translate: {error}"));
+        let translated = (ValueFlow::BankSend {
+            recipient: [4; 32],
+            amount: 9,
+        })
+        .translate_with_program_account([3; 32], [2; 32], owner, b"contract", source)
+        .unwrap_or_else(|error| panic!("translate: {error}"));
         assert!(matches!(translated, TranslatedValueFlow::ProgramAccount(_)));
         assert_eq!(
             (ValueFlow::BankBurn { amount: 9 }).translate_with_program_account(
-                [3; 32], [2; 32], owner, b"contract", source,
+                [3; 32],
+                [2; 32],
+                owner,
+                b"contract",
+                source,
             ),
             Err(PortRefusal::SupplyMutation)
         );

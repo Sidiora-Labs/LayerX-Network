@@ -28,7 +28,7 @@ pub struct Transfer402Plan {
     amount: u128,
 }
 
-/// A payout signed by the program through its LayerX-derived value account.
+/// A payout signed by the program through its `LayerX`-derived value account.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProgramAccountTransferPlan {
     owner_program: ProgramId,
@@ -59,7 +59,8 @@ impl ProgramAccountTransferPlan {
             || amount == 0
             || derive_program_account(owner_program, seed)
                 .map_err(|_| PortRefusal::InvalidProgramAccount)?
-                .bytes() != source
+                .bytes()
+                != source
         {
             return Err(PortRefusal::InvalidProgramAccount);
         }
@@ -220,7 +221,7 @@ pub enum ValueFlow {
 }
 
 impl ValueFlow {
-    /// Translates an Anchor/PDA flow with the LayerX derived account that
+    /// Translates an Anchor/PDA flow with the `LayerX` derived account that
     /// replaces the PDA's value-holding role.
     ///
     /// # Errors
@@ -236,12 +237,21 @@ impl ValueFlow {
         source: [u8; 32],
     ) -> Result<TranslatedValueFlow, PortRefusal> {
         match self {
-            Self::ProgramAuthorityFunded { authority, recipient, amount } => {
+            Self::ProgramAuthorityFunded {
+                authority,
+                recipient,
+                amount,
+            } => {
                 if authority != &source {
                     return Err(PortRefusal::InvalidProgramAccount);
                 }
                 ProgramAccountTransferPlan::new(
-                    owner_program, seed, source, asset, *recipient, *amount,
+                    owner_program,
+                    seed,
+                    source,
+                    asset,
+                    *recipient,
+                    *amount,
                 )
                 .map(TranslatedValueFlow::ProgramAccount)
             }
@@ -343,8 +353,8 @@ mod custody_tests {
             recipient: [4; 32],
             amount: 9,
         })
-            .translate_with_program_account([3; 32], [2; 32], owner, b"pool", source)
-            .unwrap_or_else(|error| panic!("translate: {error}"));
+        .translate_with_program_account([3; 32], [2; 32], owner, b"pool", source)
+        .unwrap_or_else(|error| panic!("translate: {error}"));
         assert!(matches!(translated, TranslatedValueFlow::ProgramAccount(_)));
         assert_eq!(
             (ValueFlow::RentSweep { recipient: [4; 32] })

@@ -73,6 +73,7 @@ typedef struct lxp_daemon_signed_header_evidence {
 } lxp_daemon_signed_header_evidence;
 
 typedef struct lxp_daemon_account_evidence {
+    uint16_t format_version;
     uint8_t account_id[32];
     uint8_t receipt_digest[32];
     uint64_t observed_sequence;
@@ -146,6 +147,13 @@ lxp_result lxp_daemon_account_evidence_publish(
     const lxp_daemon_account_evidence *evidence, lxp_arena *arena,
     uint8_t record_digest[32]);
 lxp_result lxp_daemon_account_evidence_publish_batch(
+    lxp_daemon_evidence_store *store, const lxp_kernel *kernel,
+    lxp_byte_span canonical_head_receipt,
+    const lxp_merkle_proof *head_receipt_proof,
+    const lxp_sequencer_authorization *authorization,
+    lxp_byte_span canonical_header, const uint8_t header_signature[64],
+    lxp_arena *arena);
+lxp_result lxp_daemon_account_evidence_publish_batch_maintenance(
     lxp_daemon_evidence_store *store, const lxp_kernel *kernel,
     lxp_byte_span canonical_head_receipt,
     const lxp_merkle_proof *head_receipt_proof,
@@ -250,6 +258,10 @@ typedef struct lxp_daemon_protocol_owner {
     lxp_identity_store *identities;
     lx_programs_transfer_runtime *programs_runtime;
     lxp_history *history;
+    pthread_mutex_t receipt_mutex;
+    lxp_log published_receipt_log;
+    uint64_t published_batch_number;
+    uint8_t published_checkpoint_id[32];
     lxp_verified_receipt_index *verified_receipts;
     lxp_daemon_receipt_authority_store *receipt_authority;
     lxp_daemon_evidence_store *evidence_store;
@@ -342,6 +354,8 @@ typedef struct lxp_daemon_lni_server {
     uint64_t journal_device;
     uint64_t journal_inode;
     uint64_t journal_end;
+    uint64_t reserved_first_sequence;
+    uint64_t reserved_maintenance_sequence;
     uint64_t connection_generation;
     uint64_t expected_admission_sequence;
     uint8_t expected_admission_activity_id[32];
@@ -378,6 +392,12 @@ lxp_result lxp_daemon_receipt_authority_append(
     const uint8_t *canonical_header, size_t header_length,
     const uint8_t header_signature[64],
     const lxp_merkle_proof *receipt_proof, lxp_arena *arena);
+lxp_result lxp_daemon_receipt_authority_append_maintenance(
+    lxp_daemon_receipt_authority_store *store,
+    const uint8_t *canonical_receipt, size_t receipt_length,
+    const uint8_t *canonical_header, size_t header_length,
+    const uint8_t header_signature[64],
+    const lxp_merkle_proof *receipt_proof, lxp_arena *arena);
 lxp_result lxp_daemon_receipt_authority_append_artifacts(
     lxp_daemon_receipt_authority_store *store,
     const uint8_t *canonical_receipt, size_t receipt_length,
@@ -389,10 +409,16 @@ lxp_result lxp_daemon_receipt_authority_lookup(
     const lxp_daemon_receipt_authority_store *store,
     const uint8_t receipt_digest[32], lxp_arena *arena,
     lxp_daemon_receipt_evidence *evidence);
+lxp_result lxp_daemon_receipt_authority_batch_maintenance(
+    const lxp_daemon_receipt_authority_store *store,
+    const lxp_daemon_receipt_evidence *activity, lxp_arena *arena,
+    lxp_daemon_receipt_evidence *maintenance, bool *present);
 lxp_result lxp_daemon_receipt_authority_scan(
     const lxp_daemon_receipt_authority_store *store, uint64_t *record_offset,
     lxp_arena *arena, lxp_daemon_receipt_evidence *evidence,
     bool *present);
+lxp_result lxp_programs_state_feed_store_bind_maintenance(
+    lx_programs_state_feed_store *store, lxp_kernel *kernel);
 lxp_result lxp_daemon_protocol_owner_attach(
     lxp_daemon_protocol_owner *owner, lxp_kernel *kernel,
     lxp_identity_store *identities, uint32_t network_id,
@@ -484,6 +510,10 @@ typedef lxp_result (*lxp_daemon_apply_batch_fn)(
     const lxp_daemon_activity *activities, size_t offered_count,
     size_t *consumed_count);
 
+lxp_result lxp_daemon_queue_sequence_locked(
+    const lxp_daemon *daemon, size_t index, uint64_t *sequence);
+lxp_result lxp_daemon_reserve_batch_maintenance(lxp_daemon *daemon, size_t count);
+
 struct lxp_daemon {
     lxp_daemon_configuration config;
     lxp_daemon_apply_fn apply;
@@ -501,6 +531,8 @@ struct lxp_daemon {
     size_t queue_bytes;
     lxp_daemon_admission_persist_fn persist_admission;
     void *persist_admission_context;
+    lxp_result (*persist_maintenance_reservation)(void *context);
+    size_t reserved_batch_count;
     uint64_t next_sequence;
     lxp_result failure;
     bool accepting;
@@ -540,6 +572,14 @@ lxp_result lxp_daemon_serve(const char *configuration_path);
 lxp_result lxp_daemon_authority_replica_serve(
     const char *configuration_path);
 lxp_result lxp_daemon_authority_replica_publish(
+    const char *loopback_address, uint16_t port,
+    const uint8_t *bearer_token, size_t bearer_token_length,
+    const uint8_t expected_replica_id[32],
+    const uint8_t *canonical_receipt, size_t receipt_length,
+    const uint8_t *canonical_header, size_t header_length,
+    const uint8_t header_signature[64],
+    const lxp_merkle_proof *receipt_proof);
+lxp_result lxp_daemon_authority_replica_publish_maintenance(
     const char *loopback_address, uint16_t port,
     const uint8_t *bearer_token, size_t bearer_token_length,
     const uint8_t expected_replica_id[32],

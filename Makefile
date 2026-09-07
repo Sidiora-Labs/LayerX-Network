@@ -264,7 +264,7 @@ test-harness: $(BUILD_DIR)/tests/lxp_test_harness
 list-tests: $(BUILD_DIR)/tests/lxp_test_harness
 	$(BUILD_DIR)/tests/lxp_test_harness --list
 
-test: test-result test-protocol test-state-commitment-transition test-program-artifacts test-arena test-harness test-codec \
+test: test-result test-protocol test-state-commitment-transition test-program-artifacts test-daemon-maintenance-protocol test-daemon-lni-account test-arena test-harness test-codec \
 	test-codec-limits test-codec-version test-codec-vectors fuzz-codec-smoke \
 	test-crypto-suite test-arith-u128 test-arith-u256 test-arith-rounding \
 	test-arith-property test-arith-nofloat test-log test-log-durability \
@@ -1250,7 +1250,7 @@ test-layerxd: $(BUILD_DIR)/tests/test_layerxd
 
 $(BUILD_DIR)/tests/test_daemon_lni_admission: \
 		tests/test_daemon_lni_admission.c $(LAYERXD_SOURCES) \
-		cmd/layerxd/lxp_daemon_lni_internal.h $(LIBRARY) \
+		cmd/layerxd/lxp_daemon_lni_internal.h cmd/layerxd/lxp_daemon_lni_account.h $(LIBRARY) \
 		$(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) -Icmd/layerxd $(CFLAGS) \
@@ -1689,6 +1689,21 @@ $(BUILD_DIR)/tests/lxp_test_batch_wal_recovery: \
 		$(PROGRAMS_RUNTIME_LIB) $(LIBRARY) \
 		$(EXTRA_LDFLAGS) -lcrypto -pthread -o $@
 
+$(BUILD_DIR)/tests/lxp_test_maintenance_publication: \
+		tests/storage/lxp_test_maintenance_publication.c \
+		tests/programs/test_call_activity.c cmd/layerxd/lxp_daemon_batch_wal.c \
+		cmd/layerxd/lxp_daemon_receipt_authority.c cmd/layerxd/lxp_daemon_evidence.c \
+		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) -Icmd/layerxd $(CFLAGS) \
+		tests/storage/lxp_test_maintenance_publication.c \
+		cmd/layerxd/lxp_daemon_batch_wal.c cmd/layerxd/lxp_daemon_receipt_authority.c \
+		cmd/layerxd/lxp_daemon_evidence.c $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) $(LIBRARY) \
+		$(EXTRA_LDFLAGS) -lcrypto -pthread -lsqlite3 -ldl -lm -o $@
+
+test-maintenance-publication: $(BUILD_DIR)/tests/lxp_test_maintenance_publication
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_maintenance_publication
+
 test-batch-wal-recovery: $(BUILD_DIR)/tests/lxp_test_batch_wal_recovery
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_batch_wal_recovery
 
@@ -1723,7 +1738,7 @@ $(BUILD_DIR)/tests/lxp_test_daemon_finality_authority: \
 $(BUILD_DIR)/tests/lxp_test_program_artifacts: \
 		tests/daemon/lxp_test_program_artifacts.c tests/programs/test_call_activity.c \
 		cmd/layerxd/lxp_daemon_receipt_authority.c cmd/layerxd/lxp_daemon_protocol.c \
-		cmd/layerxd/lxp_daemon_evidence.c $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+		cmd/layerxd/lxp_daemon_evidence.c cmd/layerxd/lxp_daemon_maintenance_json.h $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) tests/daemon/lxp_test_program_artifacts.c \
 		cmd/layerxd/lxp_daemon_receipt_authority.c cmd/layerxd/lxp_daemon_protocol.c \
@@ -1733,6 +1748,20 @@ $(BUILD_DIR)/tests/lxp_test_program_artifacts: \
 test-program-artifacts: $(BUILD_DIR)/tests/lxp_test_program_artifacts programs-reference-escrow \
 		$(BUILD_DIR)/tests/bridge/sign-credit $(BUILD_DIR)/tests/bridge/test-credit
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_program_artifacts
+
+.PHONY: test-daemon-maintenance-protocol
+$(BUILD_DIR)/tests/lxp_test_maintenance_protocol: \
+		tests/daemon/lxp_test_maintenance_protocol.c \
+		cmd/layerxd/lxp_daemon_receipt_authority.c cmd/layerxd/lxp_daemon_protocol.c \
+		cmd/layerxd/lxp_daemon_evidence.c cmd/layerxd/lxp_daemon_maintenance_json.h $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) tests/daemon/lxp_test_maintenance_protocol.c \
+		cmd/layerxd/lxp_daemon_receipt_authority.c cmd/layerxd/lxp_daemon_protocol.c \
+		cmd/layerxd/lxp_daemon_evidence.c $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
+		$(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -lsqlite3 -pthread -ldl -lm -o $@
+
+test-daemon-maintenance-protocol: $(BUILD_DIR)/tests/lxp_test_maintenance_protocol
+	python3 tests/daemon/maintenance-protocol.py $(BUILD_DIR)/tests/lxp_test_maintenance_protocol
 
 $(BUILD_DIR)/tests/lxp_test_finality_json: tests/daemon/lxp_test_finality_json.c \
 		cmd/layerxd/lxp_daemon_finality_authority.c \
@@ -1758,7 +1787,7 @@ $(BUILD_DIR)/tests/lxp_test_journal: tests/state/lxp_test_journal.c $(LIBRARY)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -pthread -o $@
 
 $(BUILD_DIR)/tests/lxp_test_journal_tsan: tests/state/lxp_test_journal.c \
-		src/state/lxp_journal.c src/crypto/lxp_hash.c \
+		src/state/lxp_journal.c src/crypto/lxp_hash.c src/crypto/lxp_ed25519.c \
 		src/state/lxp_idempotency.c \
 		src/crypto/lxp_ct.c src/crypto/lxp_ed25519.c \
 		src/ledger/lx_account_registry.c src/ledger/lx_account_id.c \
@@ -3147,3 +3176,50 @@ beta-qualify:
 
 beta-driver-test:
 	python3 -m unittest tools.qualification.test_release_runner tools.qualification.test_beta_driver
+
+$(BUILD_DIR)/tests/lxp_test_program_admission: tests/daemon/lxp_test_program_admission.c $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) $(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
+
+.PHONY: test-program-admission
+test-program-admission: $(BUILD_DIR)/tests/lxp_test_program_admission $(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build
+	bash tests/daemon/program-admission.sh $(BUILD_DIR)
+
+.PHONY: test-program-simulate
+test-program-simulate: $(BUILD_DIR)/tests/lxp_test_program_admission $(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build
+	bash tests/daemon/program-admission.sh $(BUILD_DIR) simulate
+
+BRIDGE_PYTHON ?= python3
+.PHONY: test-bridge-credit
+test-bridge-credit: $(BUILD_DIR)/tests/bridge/sign-credit $(BUILD_DIR)/tests/bridge/test-credit build/bin/layerx-genesis-build
+	$(BRIDGE_PYTHON) tests/bridge/qualify_credit.py --build-dir $(BUILD_DIR)
+
+.PHONY: test-daemon-maintenance-publication test-maintenance-publication
+test-daemon-maintenance-publication: $(BUILD_DIR)/tests/lxp_test_program_admission $(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build
+	bash tests/daemon/program-admission.sh $(BUILD_DIR) --maintenance
+
+$(BUILD_DIR)/tests/lxp_test_maintenance_crash: tests/daemon/lxp_test_maintenance_crash.c $(filter-out $(BUILD_DIR)/obj/cmd/layerxd/main.o,$(LAYERXD_OBJECTS)) $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(filter-out $(BUILD_DIR)/obj/cmd/layerxd/main.o,$(LAYERXD_OBJECTS)) $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) $(EXTRA_LDFLAGS) -Wl,--wrap=lxp_daemon_start_protocol_batch -lcrypto -lsqlite3 -pthread -ldl -lm -o $@
+
+.PHONY: test-daemon-maintenance-crash
+test-daemon-maintenance-crash: $(BUILD_DIR)/tests/lxp_test_maintenance_crash $(BUILD_DIR)/tests/lxp_test_program_admission $(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build
+	bash tests/daemon/maintenance-crash.sh $(BUILD_DIR)
+
+.PHONY: test-bridge-maintenance-publication
+test-bridge-maintenance-publication: $(BUILD_DIR)/tests/lxp_test_maintenance_publication $(BUILD_DIR)/tests/bridge/sign-credit $(BUILD_DIR)/tests/bridge/test-credit build/bin/layerx-genesis-build
+	$(BRIDGE_PYTHON) tests/bridge/qualify_credit.py --build-dir $(BUILD_DIR) --maintenance
+
+.PHONY: test-daemon-lni-account
+$(BUILD_DIR)/tests/lxp_test_lni_account: tests/daemon/lxp_test_lni_account.c \
+        tests/storage/lxp_test_finality_evidence.c cmd/layerxd/lxp_daemon_lni_account.h \
+        cmd/layerxd/lxp_daemon_receipt_authority.c cmd/layerxd/lxp_daemon_evidence.c \
+        $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) -Icmd/layerxd $(CFLAGS) tests/daemon/lxp_test_lni_account.c \
+		cmd/layerxd/lxp_daemon_receipt_authority.c cmd/layerxd/lxp_daemon_evidence.c \
+		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) $(LIBRARY) $(EXTRA_LDFLAGS) \
+		-lcrypto -lsqlite3 -pthread -ldl -lm -o $@
+
+test-daemon-lni-account: $(BUILD_DIR)/tests/lxp_test_lni_account
+	python3 tests/daemon/lni-account.py $(BUILD_DIR)/tests/lxp_test_lni_account

@@ -31,7 +31,7 @@ pub enum PortRefusal {
     /// The construct writes lamports directly. No program holds balance-writing
     /// authority on `LayerX`.
     LamportMutation,
-    /// The PDA-shaped authority does not match the LayerX program and seed.
+    /// The PDA-shaped authority does not match the `LayerX` program and seed.
     InvalidProgramAccount,
     /// Rent sweeping has no exact bounded amount in the source instruction.
     UnboundedRentSweep,

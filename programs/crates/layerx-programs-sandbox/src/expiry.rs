@@ -35,9 +35,12 @@ pub struct AuthenticatedTerminalRecord {
 }
 
 impl AuthenticatedTerminalRecord {
+    /// # Errors
+    ///
+    /// Returns a refusal when terminal evidence or its authenticated receipt is invalid.
     pub fn verify(
         verifier: &ProtocolDeploymentVerifier,
-        evidence: TerminalReceiptEvidence,
+        evidence: &TerminalReceiptEvidence,
         now_ms: u64,
         expected_lease: LeaseId,
     ) -> Result<Self, ExpiryRefusal> {
@@ -195,6 +198,7 @@ impl TerminalLeaseRecord {
         self.terminal_digest
     }
 
+    #[must_use]
     pub fn canonical_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(TERMINAL_DOMAIN.len() + 288);
         bytes.extend_from_slice(TERMINAL_DOMAIN);
@@ -214,6 +218,9 @@ impl TerminalLeaseRecord {
         bytes
     }
 
+    /// # Errors
+    ///
+    /// Returns a refusal when terminal evidence or its authenticated receipt is invalid.
     pub fn verify(&self) -> Result<(), ExpiryRefusal> {
         let digest = hash_bytes(HashAlgorithm::Sha256, &self.canonical_bytes())
             .map_err(|_| ExpiryRefusal::HashRefusal)?;
@@ -231,16 +238,30 @@ impl TerminalLeaseRecord {
     }
 }
 
+pub struct DestroyRequest {
+    pub lease: Lease,
+    pub escrow: Escrow,
+    pub prepared_refund: PreparedAuthorizedActivity,
+    pub boundary: u64,
+    pub evidence: SweepEvidence,
+}
+
+/// # Errors
+///
+/// Returns a refusal when expiry, reclamation, refund settlement or terminal accounting fails.
 pub fn destroy<K: KernelTransferPrimitive>(
-    lease: Lease,
-    escrow: Escrow,
     storage: &mut Storage,
     meter: &mut Meter,
-    prepared_refund: PreparedAuthorizedActivity,
     kernel: &mut K,
-    boundary: u64,
-    evidence: SweepEvidence,
+    request: DestroyRequest,
 ) -> Result<TerminalLeaseRecord, ExpiryRefusal> {
+    let DestroyRequest {
+        lease,
+        escrow,
+        prepared_refund,
+        boundary,
+        evidence,
+    } = request;
     let evidence = evidence.validate()?;
     if boundary < lease.expiry() || lease.state() == LeaseState::Destroyed {
         return Err(ExpiryRefusal::NotDue);
@@ -283,9 +304,10 @@ pub fn destroy<K: KernelTransferPrimitive>(
     if outcome.amount() != refund {
         return Err(ExpiryRefusal::RefundMismatch);
     }
-    let refund_transfer_root = outcome
-        .settlement()
-        .map_or([0; 32], |value| value.transfer_set_root());
+    let refund_transfer_root = outcome.settlement().map_or(
+        [0; 32],
+        layerx_programs_runtime::VerifiedProgramSettlement::transfer_set_root,
+    );
     if (refund == 0) != (refund_transfer_root == [0; 32]) {
         return Err(ExpiryRefusal::RefundMismatch);
     }
@@ -331,6 +353,9 @@ impl ExpiryQueue {
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns a refusal for an invalid lease, duplicate entry or exceeded queue bound.
     pub fn schedule(&mut self, lease: &Lease) -> Result<(), ExpiryRefusal> {
         let key = (lease.expiry(), lease.id());
         if lease.state() == LeaseState::Destroyed
@@ -347,6 +372,9 @@ impl ExpiryQueue {
         Ok(())
     }
 
+    /// # Errors
+    ///
+    /// Returns a refusal when the sweep limit is invalid or the due count overflows.
     pub fn due(&self, boundary: u64, limit: u32) -> Result<SweepPage, ExpiryRefusal> {
         if limit == 0 || limit > MAX_SWEEP_LEASES_PER_BATCH {
             return Err(ExpiryRefusal::InvalidLimit);
@@ -376,6 +404,9 @@ impl ExpiryQueue {
         })
     }
 
+    /// # Errors
+    ///
+    /// Returns a refusal when terminal verification or the scheduled lease binding fails.
     pub fn record_destroyed(&mut self, record: TerminalLeaseRecord) -> Result<(), ExpiryRefusal> {
         record.verify()?;
         let key = (record.expiry, record.lease);
@@ -398,6 +429,9 @@ impl ExpiryQueue {
         self.terminal.iter().find(|record| record.lease == lease)
     }
 
+    /// # Errors
+    ///
+    /// Returns an accounting overflow when a queue or record length cannot be encoded.
     pub fn canonical_state(&self) -> Result<Vec<u8>, ExpiryRefusal> {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(SWEEP_STATE_DOMAIN);
@@ -429,6 +463,9 @@ impl ExpiryQueue {
         Ok(bytes)
     }
 
+    /// # Errors
+    ///
+    /// Returns a refusal when canonical encoding, hashing or chunk-count conversion fails.
     pub fn canonical_chunks(&self) -> Result<Vec<Vec<u8>>, ExpiryRefusal> {
         const CHUNK: usize = 1000;
         let state = self.canonical_state()?;
@@ -445,8 +482,16 @@ impl ExpiryQueue {
                 let mut chunk = Vec::with_capacity(40 + body.len());
                 chunk.extend_from_slice(b"LXSQ1");
                 chunk.extend_from_slice(&root);
-                chunk.extend_from_slice(&(index as u16).to_be_bytes());
-                chunk.extend_from_slice(&(count as u16).to_be_bytes());
+                chunk.extend_from_slice(
+                    &u16::try_from(index)
+                        .map_err(|_| ExpiryRefusal::AccountingOverflow)?
+                        .to_be_bytes(),
+                );
+                chunk.extend_from_slice(
+                    &u16::try_from(count)
+                        .map_err(|_| ExpiryRefusal::AccountingOverflow)?
+                        .to_be_bytes(),
+                );
                 chunk.extend_from_slice(body);
                 Ok(chunk)
             })
@@ -460,6 +505,9 @@ impl Default for ExpiryQueue {
     }
 }
 
+/// # Errors
+///
+/// Returns a refusal when due-lease selection, destruction or terminal recording fails.
 pub fn sweep<F>(
     queue: &mut ExpiryQueue,
     boundary: u64,
@@ -531,9 +579,10 @@ mod source_cases {
 
     fn lease(id: u8, expiry: u64) -> Lease {
         Lease::request(
-            LeaseId::new([id; 32]).expect("lease"),
-            PrincipalId::new([id.wrapping_add(64); 32]).expect("tenant"),
-            ProgramId::new([3; 32]).expect("host"),
+            LeaseId::new([id; 32]).unwrap_or_else(|error| panic!("lease: {error:?}")),
+            PrincipalId::new([id.wrapping_add(64); 32])
+                .unwrap_or_else(|error| panic!("tenant: {error:?}")),
+            ProgramId::new([3; 32]).unwrap_or_else(|error| panic!("host: {error:?}")),
             [4; 32],
             [5; 32],
             100,
@@ -550,7 +599,7 @@ mod source_cases {
             1,
             expiry,
         )
-        .expect("lease")
+        .unwrap_or_else(|error| panic!("lease: {error:?}"))
     }
 
     fn terminal(lease: &Lease, boundary: u64) -> TerminalLeaseRecord {
@@ -567,11 +616,13 @@ mod source_cases {
             refund_transfer_root: [7; 32],
             expiry_receipt_digest: [8; 32],
             destroy_receipt_digest: [9; 32],
-            prior_lease_digest: lease.state_digest().expect("digest"),
+            prior_lease_digest: lease
+                .state_digest()
+                .unwrap_or_else(|error| panic!("digest: {error:?}")),
             terminal_digest: [0; 32],
         };
-        record.terminal_digest =
-            hash_bytes(HashAlgorithm::Sha256, &record.canonical_bytes()).expect("terminal digest");
+        record.terminal_digest = hash_bytes(HashAlgorithm::Sha256, &record.canonical_bytes())
+            .unwrap_or_else(|error| panic!("terminal digest: {error:?}"));
         record
     }
 
@@ -579,35 +630,47 @@ mod source_cases {
     fn cohort_is_ordered_bounded_and_carried_across_batches() {
         let mut queue = ExpiryQueue::new();
         for id in 1..=14 {
-            queue.schedule(&lease(id, 20)).expect("schedule");
+            queue
+                .schedule(&lease(id, 20))
+                .unwrap_or_else(|error| panic!("schedule: {error:?}"));
         }
-        let first = queue.due(19, MAX_SWEEP_LEASES_PER_BATCH).expect("page");
+        let first = queue
+            .due(19, MAX_SWEEP_LEASES_PER_BATCH)
+            .unwrap_or_else(|error| panic!("page: {error:?}"));
         assert!(first.leases().is_empty());
-        let first = queue.due(20, MAX_SWEEP_LEASES_PER_BATCH).expect("page");
+        let first = queue
+            .due(20, MAX_SWEEP_LEASES_PER_BATCH)
+            .unwrap_or_else(|error| panic!("page: {error:?}"));
         assert_eq!(first.leases().len(), 6);
         assert_eq!(first.remaining_due(), 8);
-        assert_eq!(first.leases()[0], LeaseId::new([1; 32]).expect("id"));
-        assert_eq!(first.leases()[5], LeaseId::new([6; 32]).expect("id"));
+        assert_eq!(
+            first.leases()[0],
+            LeaseId::new([1; 32]).unwrap_or_else(|error| panic!("id: {error:?}"))
+        );
+        assert_eq!(
+            first.leases()[5],
+            LeaseId::new([6; 32]).unwrap_or_else(|error| panic!("id: {error:?}"))
+        );
         for id in 1..=6 {
             let value = lease(id, 20);
             queue
                 .record_destroyed(terminal(&value, 20))
-                .expect("first batch");
+                .unwrap_or_else(|error| panic!("first batch: {error:?}"));
         }
         let second = queue
             .due(21, MAX_SWEEP_LEASES_PER_BATCH)
-            .expect("second page");
+            .unwrap_or_else(|error| panic!("second page: {error:?}"));
         assert_eq!(second.leases().len(), 6);
         assert_eq!(second.remaining_due(), 2);
         for id in 7..=12 {
             let value = lease(id, 20);
             queue
                 .record_destroyed(terminal(&value, 21))
-                .expect("second batch");
+                .unwrap_or_else(|error| panic!("second batch: {error:?}"));
         }
         let third = queue
             .due(22, MAX_SWEEP_LEASES_PER_BATCH)
-            .expect("third page");
+            .unwrap_or_else(|error| panic!("third page: {error:?}"));
         assert_eq!(third.leases().len(), 2);
         assert_eq!(third.remaining_due(), 0);
     }
@@ -616,7 +679,9 @@ mod source_cases {
     fn queue_refuses_duplicate_and_unbounded_sweep_admission() {
         let mut queue = ExpiryQueue::new();
         let lease = lease(1, 20);
-        queue.schedule(&lease).expect("schedule");
+        queue
+            .schedule(&lease)
+            .unwrap_or_else(|error| panic!("schedule: {error:?}"));
         assert_eq!(queue.schedule(&lease), Err(ExpiryRefusal::Replay));
         assert_eq!(queue.due(20, 0), Err(ExpiryRefusal::InvalidLimit));
         assert_eq!(

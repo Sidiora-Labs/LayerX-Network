@@ -739,18 +739,18 @@ fn principal_and_shared_namespaces_are_closed_ordered_and_disjoint() {
     let (program_a, principal_a) = ids(21, 31);
     let (program_b, principal_b) = ids(22, 32);
     let principal_a_namespace = StorageNamespace::principal(program_a, principal_a);
-    let principal_b_namespace = StorageNamespace::principal(program_a, principal_b);
+    let second_principal_namespace = StorageNamespace::principal(program_a, principal_b);
     let other_program_principal = StorageNamespace::principal(program_b, principal_a);
     let shared_a_namespace = StorageNamespace::shared(program_a);
-    let shared_b_namespace = StorageNamespace::shared(program_b);
+    let other_shared_namespace = StorageNamespace::shared(program_b);
     assert_eq!(principal_a_namespace.program(), program_a);
     assert_eq!(principal_a_namespace.principal_scope(), Some(principal_a));
     assert_eq!(shared_a_namespace.program(), program_a);
     assert_eq!(shared_a_namespace.principal_scope(), None);
-    assert!(principal_a_namespace < principal_b_namespace);
-    assert!(principal_b_namespace < shared_a_namespace);
+    assert!(principal_a_namespace < second_principal_namespace);
+    assert!(second_principal_namespace < shared_a_namespace);
     assert!(shared_a_namespace < other_program_principal);
-    assert!(shared_a_namespace < shared_b_namespace);
+    assert!(shared_a_namespace < other_shared_namespace);
     let mut principal_bytes = vec![21; 32];
     principal_bytes.push(0);
     principal_bytes.extend_from_slice(&[31; 32]);
@@ -772,9 +772,9 @@ fn principal_and_shared_namespaces_are_closed_ordered_and_disjoint() {
     let mut storage = Storage::new();
     for (namespace, value) in [
         (principal_a_namespace, b"principal-a".as_slice()),
-        (principal_b_namespace, b"principal-b".as_slice()),
+        (second_principal_namespace, b"principal-b".as_slice()),
         (shared_a_namespace, b"shared-a".as_slice()),
-        (shared_b_namespace, b"shared-b".as_slice()),
+        (other_shared_namespace, b"shared-b".as_slice()),
     ] {
         let mut transaction = storage.transaction(namespace);
         transaction
@@ -784,9 +784,9 @@ fn principal_and_shared_namespaces_are_closed_ordered_and_disjoint() {
     }
     for (namespace, expected) in [
         (principal_a_namespace, b"principal-a".as_slice()),
-        (principal_b_namespace, b"principal-b".as_slice()),
+        (second_principal_namespace, b"principal-b".as_slice()),
         (shared_a_namespace, b"shared-a".as_slice()),
-        (shared_b_namespace, b"shared-b".as_slice()),
+        (other_shared_namespace, b"shared-b".as_slice()),
     ] {
         assert_eq!(storage.namespace_cell_count(namespace), 1);
         assert_eq!(

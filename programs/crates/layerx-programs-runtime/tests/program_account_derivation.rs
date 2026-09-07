@@ -58,7 +58,9 @@ fn conformance_vectors() -> Vec<([u8; 32], Vec<u8>, &'static str)> {
             {
                 let mut program = [0u8; 32];
                 for (index, byte) in program.iter_mut().enumerate() {
-                    *byte = index as u8 + 1;
+                    *byte = u8::try_from(index)
+                        .unwrap_or_else(|error| panic!("program index: {error}"))
+                        + 1;
                 }
                 program
             },
@@ -80,25 +82,28 @@ fn frozen_preimage(program: [u8; 32], seed: &[u8]) -> Vec<u8> {
     preimage.extend_from_slice(FROZEN_DOMAIN);
     preimage.extend_from_slice(&program);
     preimage.extend_from_slice(
-        &(u32::try_from(seed.len()).expect("seed length fits u32")).to_be_bytes(),
+        &(u32::try_from(seed.len())
+            .unwrap_or_else(|error| panic!("{}: {error:?}", "seed length fits u32")))
+        .to_be_bytes(),
     );
     preimage.extend_from_slice(seed);
     preimage
 }
 
 fn program(bytes: [u8; 32]) -> ProgramId {
-    ProgramId::new(bytes).expect("nonzero program identifier")
+    ProgramId::new(bytes)
+        .unwrap_or_else(|error| panic!("{}: {error:?}", "nonzero program identifier"))
 }
 
 fn format_hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    hex::encode(bytes)
 }
 
 #[test]
 fn golden_preimage_layout_is_frozen() {
     for (program_bytes, seed, _) in conformance_vectors() {
-        let assembled =
-            program_account_preimage(program(program_bytes), &seed).expect("preimage assembles");
+        let assembled = program_account_preimage(program(program_bytes), &seed)
+            .unwrap_or_else(|error| panic!("{}: {error:?}", "preimage assembles"));
         assert_eq!(
             assembled,
             frozen_preimage(program_bytes, &seed),
@@ -111,13 +116,15 @@ fn golden_preimage_layout_is_frozen() {
 #[test]
 fn golden_derivation_matches_frozen_preimage_hash() {
     for (program_bytes, seed, expected_hex) in conformance_vectors() {
-        let account = derive_program_account(program(program_bytes), &seed)
-            .expect("derivation succeeds for admitted seed");
+        let account =
+            derive_program_account(program(program_bytes), &seed).unwrap_or_else(|error| {
+                panic!("{}: {error:?}", "derivation succeeds for admitted seed")
+            });
         let expected = hash_bytes(
             HashAlgorithm::Sha256,
             &frozen_preimage(program_bytes, &seed),
         )
-        .expect("hash succeeds");
+        .unwrap_or_else(|error| panic!("{}: {error:?}", "hash succeeds"));
         assert_eq!(
             account.bytes(),
             expected,
@@ -131,10 +138,12 @@ fn golden_derivation_matches_frozen_preimage_hash() {
 #[test]
 fn derivation_is_byte_identical_across_repeated_computation() {
     for (program_bytes, seed, _) in conformance_vectors() {
-        let first = derive_program_account(program(program_bytes), &seed).expect("derivation");
+        let first = derive_program_account(program(program_bytes), &seed)
+            .unwrap_or_else(|error| panic!("{}: {error:?}", "derivation"));
         let baseline_hex = format_hex(&first.bytes());
         for _ in 0..64 {
-            let again = derive_program_account(program(program_bytes), &seed).expect("derivation");
+            let again = derive_program_account(program(program_bytes), &seed)
+                .unwrap_or_else(|error| panic!("{}: {error:?}", "derivation"));
             assert_eq!(
                 format_hex(&again.bytes()),
                 baseline_hex,
@@ -148,7 +157,8 @@ fn derivation_is_byte_identical_across_repeated_computation() {
 #[test]
 fn derivation_outputs_are_fixed_width() {
     for (program_bytes, seed, _) in conformance_vectors() {
-        let account = derive_program_account(program(program_bytes), &seed).expect("derivation");
+        let account = derive_program_account(program(program_bytes), &seed)
+            .unwrap_or_else(|error| panic!("{}: {error:?}", "derivation"));
         assert_eq!(account.bytes().len(), PROGRAM_ACCOUNT_BYTES);
     }
 }
@@ -157,8 +167,8 @@ fn derivation_outputs_are_fixed_width() {
 fn conformance_vectors_do_not_collide() {
     let mut seen: Vec<[u8; PROGRAM_ACCOUNT_BYTES]> = Vec::new();
     for (program_bytes, seed, _) in conformance_vectors() {
-        let account: ProgramAccount =
-            derive_program_account(program(program_bytes), &seed).expect("derivation");
+        let account: ProgramAccount = derive_program_account(program(program_bytes), &seed)
+            .unwrap_or_else(|error| panic!("{}: {error:?}", "derivation"));
         let bytes = account.bytes();
         assert!(
             !seen.contains(&bytes),
@@ -171,8 +181,10 @@ fn conformance_vectors_do_not_collide() {
 #[test]
 fn same_seed_under_distinct_programs_never_collides() {
     let seed = b"counterparty";
-    let left = derive_program_account(program([1u8; 32]), seed).expect("derivation");
-    let right = derive_program_account(program([2u8; 32]), seed).expect("derivation");
+    let left = derive_program_account(program([1u8; 32]), seed)
+        .unwrap_or_else(|error| panic!("{}: {error:?}", "derivation"));
+    let right = derive_program_account(program([2u8; 32]), seed)
+        .unwrap_or_else(|error| panic!("{}: {error:?}", "derivation"));
     assert_ne!(
         left.bytes(),
         right.bytes(),

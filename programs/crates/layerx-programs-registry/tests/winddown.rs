@@ -1,8 +1,8 @@
 use layerx_programs::{
     account_tree_commitment, program_account_registration_commitment, programs_root_commitment,
     state_leaf_commitment, state_node_commitment, universal_root_commitment, AccountStateError,
-    AccountStateHead, AccountStateJournal, CanonicalAccountLeaf, Deprecation, DeprecationRefusal,
-    DeprecationRequest, DeploymentRecord, ExitRoute, JournalAccountStateAuthority,
+    AccountStateHead, AccountStateJournal, CanonicalAccountLeaf, DeploymentRecord, Deprecation,
+    DeprecationRefusal, DeprecationRequest, ExitRoute, JournalAccountStateAuthority,
     LegacyDeprecationRequest, ProgramLifecycle, ProgramValueAccountBinding, ProvenAccountLeaf,
     ProvenProgramBinding, ReadFreshness, Registry, RegistryError, StateProof,
     VerifiedAccountSnapshot, WindDownPolicy, WindDownStateAccess, MAX_PROGRAM_VALUE_ACCOUNTS,
@@ -69,7 +69,11 @@ fn registration_event(binding: &ProgramValueAccountBinding) -> Vec<u8> {
     event.extend_from_slice(&binding.program.bytes());
     event.extend_from_slice(&binding.account_id);
     event.extend_from_slice(&binding.asset_id);
-    event.extend_from_slice(&(binding.seed.len() as u16).to_be_bytes());
+    event.extend_from_slice(
+        &(u16::try_from(binding.seed.len())
+            .unwrap_or_else(|_| panic!("binding seed length fits u16")))
+        .to_be_bytes(),
+    );
     event.extend_from_slice(&Sha256::digest(&binding.seed));
     event.extend_from_slice(&binding.registered_sequence.to_be_bytes());
     event
@@ -224,13 +228,13 @@ fn account(
         kind: 13,
         balance,
         asset_id: binding.asset_id,
-        has_asset: true,
+        has_asset: (true).into(),
         next_sequence: 0,
         created_at_sequence: binding.registered_sequence,
-        frozen,
-        has_open_reference: false,
+        frozen: frozen.into(),
+        has_open_reference: (false).into(),
         authority_key: [0; 32],
-        has_authority_key: false,
+        has_authority_key: (false).into(),
     }
 }
 
@@ -255,8 +259,9 @@ fn tree(leaves: &[[u8; 32]]) -> ([u8; 32], Vec<StateProof>) {
             index /= 2;
         }
         proofs.push(StateProof {
-            leaf_index: target as u32,
-            leaf_count: leaves.len() as u32,
+            leaf_index: u32::try_from(target).unwrap_or_else(|_| panic!("proof target fits u32")),
+            leaf_count: u32::try_from(leaves.len())
+                .unwrap_or_else(|_| panic!("proof leaf count fits u32")),
             siblings,
         });
     }
@@ -310,20 +315,25 @@ fn snapshot(
         .collect();
 
     let account_tree_leaf = account_tree_commitment(account_root);
-    let sequence_leaf = state_leaf_commitment(b"sequence", &(sequence + 1).to_be_bytes());
+    let sequence_leaf = state_leaf_commitment(b"sequence", &(sequence + 1).to_be_bytes())
+        .unwrap_or_else(|error| panic!("sequence leaf: {error}"));
     let (universal_root, mut universal_proofs) = tree(&[account_tree_leaf, sequence_leaf]);
 
     let universal_leaf = universal_root_commitment(universal_root);
     let mut module_leaves = vec![universal_leaf];
     for module in 1_u16..9 {
-        module_leaves.push(state_leaf_commitment(
-            &module.to_be_bytes(),
-            &[module as u8; 32],
-        ));
+        module_leaves.push(
+            state_leaf_commitment(
+                &module.to_be_bytes(),
+                &[u8::try_from(module).unwrap_or_else(|_| panic!("fixture module fits u8")); 32],
+            )
+            .unwrap_or_else(|error| panic!("module leaf: {error}")),
+        );
     }
     module_leaves.push(programs_root_commitment(programs_root));
     let (state_root, state_proofs) = tree(&module_leaves);
-    let receipt = [sequence as u8; 32];
+    let receipt =
+        [u8::try_from(sequence).unwrap_or_else(|_| panic!("fixture receipt sequence fits u8")); 32];
     let proven = leaves
         .into_iter()
         .zip(account_proofs)
@@ -376,7 +386,10 @@ fn routes(bindings: &[ProgramValueAccountBinding]) -> Vec<ExitRoute> {
             seed: binding.seed.clone(),
             account_id: binding.account_id,
             asset_id: binding.asset_id,
-            destination: [0x80 + index as u8; 32],
+            destination: [0x80
+                + u8::try_from(index)
+                    .unwrap_or_else(|_| panic!("fixture destination index fits u8"));
+                32],
         })
         .collect()
 }
@@ -477,7 +490,8 @@ fn altered_client_balance_is_refused_by_the_account_root() {
 }
 
 #[test]
-fn missing_exit_or_frozen_value_refuses_without_partial_lifecycle_change() {
+fn missing_exit_or_frozen_value_refuses_without_partial_lifecycle_change(
+) -> Result<(), layerx_programs::RegistryError> {
     let id = program(3);
     let bindings = vec![binding(id, 0x14, 0x24, 10), binding(id, 0x15, 0x25, 11)];
     let mut registry = registry_with_accounts(id, &bindings);
@@ -490,7 +504,7 @@ fn missing_exit_or_frozen_value_refuses_without_partial_lifecycle_change() {
         })
     );
     assert_eq!(
-        registry.entry_for_wind_down(id).unwrap().lifecycle,
+        registry.entry_for_wind_down(id)?.lifecycle,
         ProgramLifecycle::Active
     );
 
@@ -503,9 +517,10 @@ fn missing_exit_or_frozen_value_refuses_without_partial_lifecycle_change() {
         })
     );
     assert_eq!(
-        registry.entry_for_wind_down(id).unwrap().lifecycle,
+        registry.entry_for_wind_down(id)?.lifecycle,
         ProgramLifecycle::Active
     );
+    Ok(())
 }
 
 #[test]
@@ -572,7 +587,8 @@ fn external_exit_program_is_not_mistaken_for_program_derived_authority() {
 }
 
 #[test]
-fn authority_deadline_and_duplicate_route_refusals_remain_typed_and_atomic() {
+fn authority_deadline_and_duplicate_route_refusals_remain_typed_and_atomic(
+) -> Result<(), layerx_programs::RegistryError> {
     let id = program(6);
     let bindings = vec![binding(id, 0x19, 0x29, 10), binding(id, 0x1a, 0x2a, 11)];
     let mut registry = registry_with_accounts(id, &bindings);
@@ -587,7 +603,7 @@ fn authority_deadline_and_duplicate_route_refusals_remain_typed_and_atomic() {
         ))
     );
     assert_eq!(
-        registry.entry_for_wind_down(id).unwrap().lifecycle,
+        registry.entry_for_wind_down(id)?.lifecycle,
         ProgramLifecycle::Active
     );
 
@@ -605,9 +621,10 @@ fn authority_deadline_and_duplicate_route_refusals_remain_typed_and_atomic() {
         Err(DeprecationRefusal::DuplicateExit)
     );
     assert_eq!(
-        registry.entry_for_wind_down(id).unwrap().lifecycle,
+        registry.entry_for_wind_down(id)?.lifecycle,
         ProgramLifecycle::Active
     );
+    Ok(())
 }
 
 #[test]
@@ -701,7 +718,8 @@ fn replay_reconstructs_identical_tombstone_history_and_live_balances() {
 }
 
 #[test]
-fn replay_refuses_a_logged_transition_that_would_strand_live_value() {
+fn replay_refuses_a_logged_transition_that_would_strand_live_value(
+) -> Result<(), layerx_programs::RegistryError> {
     let id = program(9);
     let bindings = vec![binding(id, 0x1d, 0x2d, 10)];
     let mut registry = registry_with_accounts(id, &bindings);
@@ -718,9 +736,10 @@ fn replay_refuses_a_logged_transition_that_would_strand_live_value() {
         })
     );
     assert_eq!(
-        registry.entry_for_wind_down(id).unwrap().lifecycle,
+        registry.entry_for_wind_down(id)?.lifecycle,
         ProgramLifecycle::Active
     );
+    Ok(())
 }
 
 #[test]
@@ -808,6 +827,11 @@ fn shared_c_rust_state_vectors_freeze_leaf_order_odd_duplication_and_bounds() {
     assert_eq!(vector("max_program_accounts"), "512");
     assert_eq!(MAX_PROGRAM_VALUE_ACCOUNTS, 512);
     assert_eq!(vector("refused_program_accounts"), "513");
+    canonical_account_and_tree_vectors();
+    canonical_proof_bound_vectors();
+}
+
+fn canonical_account_and_tree_vectors() {
     let account_id = vector_hash("account_id");
     let asset_id = vector_hash("asset_id");
     let leaf = CanonicalAccountLeaf {
@@ -816,24 +840,33 @@ fn shared_c_rust_state_vectors_freeze_leaf_order_odd_duplication_and_bounds() {
         kind: 13,
         balance: 0x12_3456,
         asset_id,
-        has_asset: true,
+        has_asset: (true).into(),
         next_sequence: 7,
         created_at_sequence: 3,
-        frozen: false,
-        has_open_reference: true,
+        frozen: (false).into(),
+        has_open_reference: (true).into(),
         authority_key: [0; 32],
-        has_authority_key: false,
+        has_authority_key: (false).into(),
     };
     assert_eq!(leaf.commitment(), Ok(vector_hash("account_leaf")));
     let mut account_key = vec![4];
     account_key.extend_from_slice(&account_id);
     assert_eq!(
         state_leaf_commitment(&account_key, &vector_bytes("account_value")),
-        vector_hash("account_leaf")
+        Ok(vector_hash("account_leaf"))
     );
-    assert_eq!(state_leaf_commitment(&[0], &[0x10]), vector_hash("leaf0"));
-    assert_eq!(state_leaf_commitment(&[1], &[0x20]), vector_hash("leaf1"));
-    assert_eq!(state_leaf_commitment(&[2], &[0x30]), vector_hash("leaf2"));
+    assert_eq!(
+        state_leaf_commitment(&[0], &[0x10]),
+        Ok(vector_hash("leaf0"))
+    );
+    assert_eq!(
+        state_leaf_commitment(&[1], &[0x20]),
+        Ok(vector_hash("leaf1"))
+    );
+    assert_eq!(
+        state_leaf_commitment(&[2], &[0x30]),
+        Ok(vector_hash("leaf2"))
+    );
     assert_eq!(
         state_node_commitment(vector_hash("leaf0"), vector_hash("leaf1")),
         vector_hash("node01")
@@ -846,17 +879,19 @@ fn shared_c_rust_state_vectors_freeze_leaf_order_odd_duplication_and_bounds() {
     );
     assert_eq!(
         state_leaf_commitment(&0_u16.to_be_bytes(), &vector_hash("tree_root")),
-        vector_hash("outer0_leaf")
+        Ok(vector_hash("outer0_leaf"))
     );
     assert_eq!(
         state_leaf_commitment(&9_u16.to_be_bytes(), &vector_hash("programs_root"),),
-        vector_hash("outer9_leaf")
+        Ok(vector_hash("outer9_leaf"))
     );
     assert_eq!(
         state_node_commitment(vector_hash("outer0_leaf"), vector_hash("outer9_leaf"),),
         vector_hash("outer_root")
     );
+}
 
+fn canonical_proof_bound_vectors() {
     let id = program(11);
     let bindings = vec![binding(id, 0x1f, 0x2f, 10)];
     let (mut account_snapshot, authority) = snapshot(&bindings, &[1], &[false], 99);

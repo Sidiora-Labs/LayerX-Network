@@ -181,8 +181,8 @@ pub use limits::{DeclaredLimit, LimitsRefusal, ValidationLimits};
 pub use meter::inject::{FuelSchedule, InjectionRefusal, MeterInjection};
 pub use meter::{
     BudgetMeterRefusal, BudgetResourceKind, DemandPriceAdjustment, DemandPricePolicy,
-    FeeGovernance, FeeSchedule, FeeScheduleError, FeeScheduleHistory, Meter, MeterRefusal,
-    MeteredUsage, ResourceBudget, ResourceKind,
+    FeeGovernance, FeeSchedule, FeeScheduleError, FeeScheduleHistory, FeeScheduleParameters, Meter,
+    MeterRefusal, MeteredUsage, ResourceBudget, ResourceKind,
 };
 pub use occupancy::{
     OccupancyCharge, OccupancyDisposition, OccupancyError, OccupancyLedger,
@@ -204,10 +204,11 @@ pub use storage::{
     NamespaceDrop, PrincipalId, ProgramId, ScanEntry, ScanLimits, Storage, StorageError,
     StorageNamespace, StorageScan,
 };
+#[cfg(feature = "host-ffi")]
+pub use transfer::{reserve_host_sandbox_escrow_charge, ReservedSandboxEscrowCharge};
 pub use transfer::{
-    reserve_host_sandbox_escrow_charge, sandbox_escrow_charge_root, AtomicTransferSet,
-    KernelTransferEvidence, KernelTransferPrimitive, ProgramAuthority, ProgramFundingBinding,
-    ReservedSandboxEscrowCharge, TransferCapability, TransferLawError, TransferSource,
+    sandbox_escrow_charge_root, AtomicTransferSet, KernelTransferEvidence, KernelTransferPrimitive,
+    ProgramAuthority, ProgramFundingBinding, TransferCapability, TransferLawError, TransferSource,
     VerifiedProgramSettlement,
 };
 pub use validate::{AbiRevision, ValidatedModule, ValidationRefusal};

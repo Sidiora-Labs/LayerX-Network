@@ -38,7 +38,7 @@ struct ReceiptVerifier {
     component_token: Zeroizing<String>,
     authority: Endpoint,
     authority_token: Zeroizing<String>,
-    trusted_sequencer_key: [u8; 32],
+    sequencer_authorization: layerx_platform_gateway::SequencerAuthorization,
     network_id: String,
     wire_version: String,
 }
@@ -110,6 +110,11 @@ struct AuthorityResponse {
     sequencer_public_key: String,
     network_id: String,
     wire_version: String,
+    #[serde(
+        default,
+        deserialize_with = "layerx_platform_gateway::authority_evidence::present_maintained"
+    )]
+    batch_evidence: Option<layerx_platform_gateway::authority_evidence::MaintainedBatchDocument>,
 }
 
 impl TrustedSources {
@@ -172,8 +177,13 @@ impl TrustedSources {
                     .map_err(|_| "LAYERX_WEBHOOKS_AUTHORITY_URL is required")?,
             )?,
             authority_token: read_secret("LAYERX_WEBHOOKS_AUTHORITY_TOKEN_FILE")?,
-            trusted_sequencer_key: fixed_hex::<32>(trusted.as_str())
-                .map_err(|_| "trusted sequencer key is invalid".to_owned())?,
+            sequencer_authorization: layerx_platform_gateway::configured_sequencer(
+                read_secret("LAYERX_WEBHOOKS_SEQUENCER_ID_FILE")?.as_str(),
+                trusted.as_str(),
+                read_secret("LAYERX_WEBHOOKS_SEQUENCER_FIRST_BATCH_FILE")?.as_str(),
+                read_secret("LAYERX_WEBHOOKS_SEQUENCER_LAST_BATCH_FILE")?.as_str(),
+            )
+            .map_err(|field| format!("invalid webhooks {field}"))?,
             network_id: bounded_env("LAYERX_WEBHOOKS_NETWORK_ID", 64)?,
             wire_version,
         };
@@ -526,19 +536,40 @@ impl ReceiptVerifier {
             return Err(WebhookError::VerificationRequired);
         }
         let sequencer = fixed_hex::<32>(&authority.sequencer_public_key)?;
-        if sequencer != self.trusted_sequencer_key {
+        if sequencer != self.sequencer_authorization.public_key() {
             return Err(WebhookError::VerificationRequired);
         }
+        let receipt_bytes = hex_decode(&receipt.receipt)?;
+        let facts = AuthorityFacts::new(
+            fixed_hex(&authority.batch_id)?,
+            fixed_hex(&authority.asset)?,
+            fixed_hex(&authority.previous_state_root)?,
+            fixed_hex(&authority.resulting_state_root)?,
+            sequencer,
+        );
+        let facts = match authority.batch_evidence {
+            None => facts,
+            Some(maintained) => {
+                let verified = maintained
+                    .authorize(
+                        &receipt_bytes,
+                        &facts.authorized(),
+                        &self.sequencer_authorization,
+                    )
+                    .map_err(|_| WebhookError::VerificationRequired)?;
+                AuthorityFacts::new(
+                    verified.batch_id(),
+                    verified.asset(),
+                    verified.previous_state_root(),
+                    verified.resulting_state_root(),
+                    verified.sequencer_public_key(),
+                )
+            }
+        };
         verify_activity_operation(
-            &hex_decode(&receipt.receipt)?,
-            AuthorityFacts::new(
-                fixed_hex(&authority.batch_id)?,
-                fixed_hex(&authority.asset)?,
-                fixed_hex(&authority.previous_state_root)?,
-                fixed_hex(&authority.resulting_state_root)?,
-                sequencer,
-            ),
-            &self.trusted_sequencer_key,
+            &receipt_bytes,
+            facts,
+            &self.sequencer_authorization.public_key(),
             Some(expected),
         )
         .map_err(WebhookError::from)
@@ -593,6 +624,33 @@ fn session_cookie(header: &str) -> Result<&str, WebhookError> {
         }
     }
     selected.ok_or(WebhookError::InvalidRequest)
+}
+
+#[cfg(test)]
+mod authority_shape_tests {
+    use super::*;
+    #[test]
+    fn real_authority_shape_selects_attachment_without_null_or_unknown_fallback() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../gateway/tests/fixtures/maintained-authority.json");
+        let bytes = std::fs::read(path).unwrap_or_else(|error| panic!("{error}"));
+        let capture: serde_json::Value =
+            serde_json::from_slice(&bytes).unwrap_or_else(|error| panic!("{error}"));
+        let document = capture["authority"].clone();
+        assert!(serde_json::from_value::<AuthorityResponse>(document.clone()).is_ok());
+        let mut historical = document.clone();
+        historical
+            .as_object_mut()
+            .unwrap_or_else(|| panic!("object"))
+            .remove("batch_evidence");
+        assert!(serde_json::from_value::<AuthorityResponse>(historical).is_ok());
+        let mut null = document.clone();
+        null["batch_evidence"] = serde_json::Value::Null;
+        assert!(serde_json::from_value::<AuthorityResponse>(null).is_err());
+        let mut unknown = document;
+        unknown["unexpected"] = serde_json::json!(true);
+        assert!(serde_json::from_value::<AuthorityResponse>(unknown).is_err());
+    }
 }
 
 #[cfg(test)]

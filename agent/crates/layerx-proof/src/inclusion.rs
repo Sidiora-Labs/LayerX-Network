@@ -35,6 +35,42 @@ impl SequencerAuthorization {
         }
     }
 
+    /// Parses independently configured identity, key and inclusive batch bounds.
+    ///
+    /// # Errors
+    /// Returns the invalid field name for malformed pins or reversed bounds.
+    pub fn from_config(
+        sequencer_id: &str,
+        public_key: &str,
+        first_batch_number: &str,
+        last_batch_number: &str,
+    ) -> Result<Self, &'static str> {
+        fn hex32(value: &str) -> Option<[u8; 32]> {
+            if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                return None;
+            }
+            let mut result = [0; 32];
+            for (index, byte) in result.iter_mut().enumerate() {
+                *byte = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16).ok()?;
+            }
+            Some(result)
+        }
+        fn number(value: &str) -> Option<u64> {
+            if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+                return None;
+            }
+            value.parse().ok()
+        }
+        let id = hex32(sequencer_id).ok_or("sequencer ID")?;
+        let key = hex32(public_key).ok_or("sequencer public key")?;
+        let first = number(first_batch_number).ok_or("first authorized batch")?;
+        let last = number(last_batch_number).ok_or("last authorized batch")?;
+        if first > last {
+            return Err("authorized batch range");
+        }
+        Ok(Self::new(id, key, first, last))
+    }
+
     /// Returns the authorised sequencer verification key.
     #[must_use]
     pub const fn public_key(&self) -> [u8; 32] {

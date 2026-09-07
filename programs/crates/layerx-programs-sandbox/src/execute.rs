@@ -3,10 +3,8 @@
 use core::fmt::{self, Display};
 
 use layerx_programs_runtime::{
-    AbiError, AuthorizationContext, AuthorizedExecutionRecord, AuthorizedExecutionRequest,
-    Capability, CapabilitySet, CompositionContext, ExecutionError, ExecutionFault, Executor,
-    FeeSchedule, MeterRefusal, ReceiptOracle, ResourceBudget, ResourceKind, Storage,
-    StorageNamespace, ValidatedModule,
+    AbiError, AuthorizedExecutionRecord, Capability, CapabilitySet, CompositionContext,
+    ExecutionError, ReceiptOracle, StorageNamespace, ValidatedModule,
 };
 
 use crate::{BoundKind, Lease, LeaseRefusal, LeaseState, LeaseUsage};
@@ -23,6 +21,9 @@ impl LeaseCapabilities {
     /// Derives the only authority available to a sandbox image. The root host
     /// program may access its lease-principal namespace; no shared storage,
     /// transfer, balance, receipt, event, or callee authority is admitted.
+    /// # Errors
+    ///
+    /// Returns a refusal when the lease namespace, execution principal or capability set is invalid.
     pub fn derive(lease: &Lease) -> Result<Self, SandboxRefusal> {
         let principal = lease
             .namespace()
@@ -56,8 +57,9 @@ impl LeaseCapabilities {
         &self.grants
     }
 
-    fn authorization(&self) -> AuthorizationContext {
-        AuthorizationContext::new(self.principal, self.grants.clone())
+    #[cfg(test)]
+    fn authorization(&self) -> layerx_programs_runtime::AuthorizationContext {
+        layerx_programs_runtime::AuthorizationContext::new(self.principal, self.grants.clone())
     }
 }
 
@@ -118,194 +120,6 @@ impl Display for SandboxRefusal {
 
 impl std::error::Error for SandboxRefusal {}
 
-/// Executes one sandbox activity using the production runtime meter and an
-/// isolated working storage snapshot. Storage is assigned only on success and
-/// only after namespace and escrow ceilings are checked.
-pub(crate) fn execute_scoped(
-    storage: &mut Storage,
-    lease: &Lease,
-    prices: FeeSchedule,
-    request: SandboxExecutionRequest<'_>,
-) -> Result<SandboxExecutionRecord, SandboxRefusal> {
-    if lease.state() != LeaseState::Active {
-        return Err(SandboxRefusal::LeaseNotActive {
-            state: lease.state(),
-        });
-    }
-    if request.observed_batch >= lease.expiry() {
-        return Err(SandboxRefusal::LeaseExpired {
-            expiry: lease.expiry(),
-            observed: request.observed_batch,
-        });
-    }
-    let capabilities = LeaseCapabilities::derive(lease)?;
-    let limits = lease.limits();
-    let prior = lease.usage();
-    let budget = ResourceBudget::new_complete(
-        remaining(BoundKind::CpuFuel, limits.cpu_fuel, prior.cpu_fuel)?,
-        limits.memory_bytes,
-        remaining(
-            BoundKind::StorageReadBytes,
-            limits.storage_read_bytes,
-            prior.storage_read_bytes,
-        )?,
-        remaining(
-            BoundKind::StorageWriteBytes,
-            limits.storage_write_bytes,
-            prior.storage_write_bytes,
-        )?,
-        u32::try_from(remaining(
-            BoundKind::OutputValues,
-            limits.output_values,
-            prior.output_values,
-        )?)
-        .map_err(|_| SandboxRefusal::AccountingOverflow {
-            bound: BoundKind::OutputValues,
-        })?,
-        remaining(
-            BoundKind::OutputBytes,
-            limits.output_bytes,
-            prior.output_bytes,
-        )?,
-        u32::try_from(limits.table_elements).map_err(|_| SandboxRefusal::AccountingOverflow {
-            bound: BoundKind::TableElements,
-        })?,
-    );
-    let mut held = storage.clone();
-    let runtime_request = AuthorizedExecutionRequest {
-        module: request.module,
-        program: lease.host_program(),
-        authorization: capabilities.authorization(),
-        receipts: request.receipts,
-        entrypoint: request.entrypoint,
-        calldata: request.calldata,
-        composition: request.composition,
-        response_capacity: request.response_capacity,
-    };
-    let execution = Executor::new(budget, prices)
-        .execute_authorized(&mut held, runtime_request)
-        .map_err(|error| classify_execution(error, budget))?;
-    let metered = execution.execution.usage;
-    let namespace_bytes = held
-        .namespace_persistent_bytes(capabilities.namespace())
-        .map_err(|_| SandboxRefusal::AccountingOverflow {
-            bound: BoundKind::NamespaceBytes,
-        })?;
-    if namespace_bytes > limits.namespace_bytes {
-        return Err(SandboxRefusal::CeilingExhausted {
-            bound: BoundKind::NamespaceBytes,
-            limit: u128::from(limits.namespace_bytes),
-            attempted: u128::from(namespace_bytes),
-        });
-    }
-    let activity_usage = LeaseUsage {
-        cpu_fuel: metered.cpu_fuel,
-        memory_bytes: metered.memory_bytes,
-        storage_read_bytes: metered.storage_read_bytes,
-        storage_write_bytes: metered.storage_write_bytes,
-        output_values: u64::from(metered.output_values),
-        output_bytes: metered.output_bytes,
-        table_elements: 0,
-        namespace_bytes,
-    };
-    let cumulative_usage = LeaseUsage {
-        cpu_fuel: add(BoundKind::CpuFuel, prior.cpu_fuel, activity_usage.cpu_fuel)?,
-        memory_bytes: prior.memory_bytes.max(activity_usage.memory_bytes),
-        storage_read_bytes: add(
-            BoundKind::StorageReadBytes,
-            prior.storage_read_bytes,
-            activity_usage.storage_read_bytes,
-        )?,
-        storage_write_bytes: add(
-            BoundKind::StorageWriteBytes,
-            prior.storage_write_bytes,
-            activity_usage.storage_write_bytes,
-        )?,
-        output_values: add(
-            BoundKind::OutputValues,
-            prior.output_values,
-            activity_usage.output_values,
-        )?,
-        output_bytes: add(
-            BoundKind::OutputBytes,
-            prior.output_bytes,
-            activity_usage.output_bytes,
-        )?,
-        table_elements: prior.table_elements,
-        namespace_bytes,
-    };
-    let cumulative_escrow_consumed = lease
-        .escrow_consumed()
-        .checked_add(metered.fee_units)
-        .ok_or(SandboxRefusal::AccountingOverflow {
-            bound: BoundKind::Escrow,
-        })?;
-    if cumulative_escrow_consumed > lease.escrow_amount() {
-        return Err(SandboxRefusal::CeilingExhausted {
-            bound: BoundKind::Escrow,
-            limit: lease.escrow_amount(),
-            attempted: cumulative_escrow_consumed,
-        });
-    }
-    *storage = held;
-    Ok(SandboxExecutionRecord {
-        execution,
-        activity_usage,
-        cumulative_usage,
-        activity_fee_units: metered.fee_units,
-        cumulative_escrow_consumed,
-    })
-}
-
-fn remaining(bound: BoundKind, limit: u64, consumed: u64) -> Result<u64, SandboxRefusal> {
-    limit
-        .checked_sub(consumed)
-        .ok_or(SandboxRefusal::CeilingExhausted {
-            bound,
-            limit: u128::from(limit),
-            attempted: u128::from(consumed),
-        })
-}
-
-fn add(bound: BoundKind, left: u64, right: u64) -> Result<u64, SandboxRefusal> {
-    left.checked_add(right)
-        .ok_or(SandboxRefusal::AccountingOverflow { bound })
-}
-
-fn classify_execution(error: ExecutionError, budget: ResourceBudget) -> SandboxRefusal {
-    match error {
-        ExecutionError::Resource(MeterRefusal::BudgetExceeded {
-            resource,
-            limit,
-            attempted,
-        }) => SandboxRefusal::CeilingExhausted {
-            bound: match resource {
-                ResourceKind::Cpu => BoundKind::CpuFuel,
-                ResourceKind::Memory => BoundKind::MemoryBytes,
-                ResourceKind::StorageRead => BoundKind::StorageReadBytes,
-                ResourceKind::StorageWrite => BoundKind::StorageWriteBytes,
-                ResourceKind::StorageOccupancy => BoundKind::NamespaceBytes,
-                ResourceKind::Output => BoundKind::OutputValues,
-                ResourceKind::OutputBytes => BoundKind::OutputBytes,
-            },
-            limit: u128::from(limit),
-            attempted: u128::from(attempted),
-        },
-        ExecutionError::Fault(ExecutionFault::OutOfFuel) => SandboxRefusal::CeilingExhausted {
-            bound: BoundKind::CpuFuel,
-            limit: u128::from(budget.cpu_fuel()),
-            attempted: u128::from(budget.cpu_fuel()).saturating_add(1),
-        },
-        ExecutionError::Fault(ExecutionFault::GrowthLimited) => {
-            SandboxRefusal::GrowthCeilingExhausted {
-                memory_limit: budget.memory_bytes(),
-                table_limit: u64::from(budget.table_elements()),
-            }
-        }
-        other => SandboxRefusal::Program(other),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -314,7 +128,8 @@ mod tests {
         type_section, unsigned_leb, OP_CALL, OP_END, OP_I32_CONST, TYPE_I32,
     };
     use layerx_programs_runtime::{
-        PrincipalId, ReceiptView, WasmEngine, WasmValue, ABI_MODULE, CALL_ENTRY_EXPORT,
+        AuthorizedExecutionRequest, Executor, PrincipalId, ReceiptView, Storage, WasmEngine,
+        ABI_MODULE, CALL_ENTRY_EXPORT,
     };
 
     struct NoReceipts;
@@ -327,9 +142,10 @@ mod tests {
 
     fn lease(id: u8) -> Lease {
         Lease::request(
-            crate::LeaseId::new([id; 32]).expect("lease id"),
-            PrincipalId::new([9; 32]).expect("tenant"),
-            layerx_programs_runtime::ProgramId::new([7; 32]).expect("program"),
+            crate::LeaseId::new([id; 32]).unwrap_or_else(|error| panic!("lease id: {error:?}")),
+            PrincipalId::new([9; 32]).unwrap_or_else(|error| panic!("tenant: {error:?}")),
+            layerx_programs_runtime::ProgramId::new([7; 32])
+                .unwrap_or_else(|error| panic!("program: {error:?}")),
             [6; 32],
             [5; 32],
             1_000_000,
@@ -346,35 +162,45 @@ mod tests {
             1,
             100,
         )
-        .expect("lease")
+        .unwrap_or_else(|error| panic!("lease: {error:?}"))
     }
 
     #[test]
     fn capabilities_are_derived_and_contain_no_escape_authority() {
         let lease = lease(1);
-        let capabilities = LeaseCapabilities::derive(&lease).expect("capabilities");
+        let capabilities = LeaseCapabilities::derive(&lease)
+            .unwrap_or_else(|error| panic!("capabilities: {error:?}"));
         assert_eq!(
             capabilities.principal(),
-            lease.namespace().execution_principal().expect("principal")
+            lease
+                .namespace()
+                .execution_principal()
+                .unwrap_or_else(|error| panic!("principal: {error:?}"))
         );
         assert_eq!(
             capabilities.namespace(),
-            lease.namespace().storage_namespace().expect("namespace")
+            lease
+                .namespace()
+                .storage_namespace()
+                .unwrap_or_else(|error| panic!("namespace: {error:?}"))
         );
         assert_eq!(capabilities.grants().canonical_encoding(), vec![0, 2, 1, 2]);
     }
 
     #[test]
     fn adjacent_leases_cannot_observe_the_same_runtime_namespace() {
-        let left = LeaseCapabilities::derive(&lease(1)).expect("left");
-        let right = LeaseCapabilities::derive(&lease(2)).expect("right");
+        let left =
+            LeaseCapabilities::derive(&lease(1)).unwrap_or_else(|error| panic!("left: {error:?}"));
+        let right =
+            LeaseCapabilities::derive(&lease(2)).unwrap_or_else(|error| panic!("right: {error:?}"));
         assert_ne!(left.principal(), right.principal());
         assert_ne!(left.namespace(), right.namespace());
     }
 
     #[test]
     fn hostile_authority_families_are_absent_by_construction() {
-        let capabilities = LeaseCapabilities::derive(&lease(3)).expect("capabilities");
+        let capabilities = LeaseCapabilities::derive(&lease(3))
+            .unwrap_or_else(|error| panic!("capabilities: {error:?}"));
         let encoded = capabilities.grants().canonical_encoding();
         for hostile_tag in [3u8, 4, 5, 6, 7, 8, 9, 10] {
             assert!(!encoded[2..].contains(&hostile_tag));
@@ -434,19 +260,21 @@ mod tests {
     #[test]
     fn hostile_images_cannot_emit_or_call_an_unleased_program() {
         let lease = lease(4);
-        let capabilities = LeaseCapabilities::derive(&lease).expect("capabilities");
-        let engine = WasmEngine::declared().expect("engine");
+        let capabilities = LeaseCapabilities::derive(&lease)
+            .unwrap_or_else(|error| panic!("capabilities: {error:?}"));
+        let engine = WasmEngine::declared().unwrap_or_else(|error| panic!("engine: {error:?}"));
         for (function, arity) in [("event_emit", 4usize), ("program_call", 6usize)] {
             let module = engine
                 .validate(&hostile_host_call_image(function, arity))
-                .expect("image");
+                .unwrap_or_else(|error| panic!("image: {error:?}"));
             let mut catalog = layerx_programs_runtime::ProgramCatalog::new();
             assert!(catalog
                 .insert(
-                    layerx_programs_runtime::ProgramId::new([8; 32]).expect("callee"),
+                    layerx_programs_runtime::ProgramId::new([8; 32])
+                        .unwrap_or_else(|error| panic!("callee: {error:?}")),
                     engine
                         .validate(&hostile_host_call_image(function, arity))
-                        .expect("callee image")
+                        .unwrap_or_else(|error| panic!("callee image: {error:?}"))
                 )
                 .is_none());
             let mut storage = Storage::new();

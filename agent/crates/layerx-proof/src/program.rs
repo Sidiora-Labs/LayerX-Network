@@ -234,6 +234,27 @@ fn verify_program_execution_receipt(
             ProgramExecutionCheck::TerminalPayload,
         ));
     }
+    let terminal_payload = if outcome.encoding_version() == 4 {
+        let (detail, legs) = layerx_wire::receipt::decode_applied_terminal(terminal_payload)
+            .map_err(|_| {
+                ProgramExecutionVerificationFailure::at(ProgramExecutionCheck::Terminal)
+            })?;
+        if <[u8; 32]>::from(Sha256::digest(legs)) != outcome.applied_legs_digest() {
+            return Err(ProgramExecutionVerificationFailure::at(
+                ProgramExecutionCheck::TransferAuthority,
+            ));
+        }
+        layerx_programs_runtime::transfer::verify_applied_kernel_legs(
+            legs,
+            outcome.transfer_root(),
+        )
+        .map_err(|_| {
+            ProgramExecutionVerificationFailure::at(ProgramExecutionCheck::TransferAuthority)
+        })?;
+        detail
+    } else {
+        terminal_payload
+    };
     let terminal = decode_terminal_payload(
         outcome.terminal_kind(),
         outcome.abi_version(),
@@ -414,6 +435,7 @@ fn verify_terminal_commitments(
         protocol_version_uses_occupancy(protocol_version) && successful_execution;
     let mut occupancy_seen = false;
     let mut occupancy_present = false;
+    let authority_required = candidate || outcome.encoding_version() == 4 && successful_execution;
     let mut authority_seen = false;
     for attachment in &terminal.attachments {
         match attachment {
@@ -430,7 +452,7 @@ fn verify_terminal_commitments(
                 authorization,
                 transfer_root,
             } => {
-                if !candidate || authority_seen {
+                if !authority_required || authority_seen {
                     return Err(ProgramExecutionVerificationFailure::at(
                         ProgramExecutionCheck::TransferAuthority,
                     ));
@@ -447,7 +469,7 @@ fn verify_terminal_commitments(
             ProgramExecutionCheck::Occupancy,
         ));
     }
-    if candidate && authority_seen != (outcome.transfer_root() != [0; 32]) {
+    if authority_required && authority_seen != (outcome.transfer_root() != [0; 32]) {
         return Err(ProgramExecutionVerificationFailure::at(
             ProgramExecutionCheck::TransferAuthority,
         ));

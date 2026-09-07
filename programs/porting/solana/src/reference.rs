@@ -44,7 +44,7 @@ pub const ARTIFACT_PATH: &str = "build/mint-limit.wasm";
 /// The pinned build command, whose last word names the descriptor to compile.
 pub const BUILD_COMMAND: &str = "layerx-porting-solana emit port/mint-limit.port";
 
-/// Maps an `invoke_signed` PDA payout onto one public, rederivable LayerX account.
+/// Maps an `invoke_signed` PDA payout onto one public, rederivable `LayerX` account.
 ///
 /// # Errors
 ///

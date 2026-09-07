@@ -552,7 +552,8 @@ mod tests {
 
     #[test]
     fn empty_calldata_is_valid() {
-        let calldata = Calldata::from_bytes(&[]).expect("empty calldata");
+        let calldata =
+            Calldata::from_bytes(&[]).unwrap_or_else(|error| panic!("empty calldata: {error:?}"));
         assert_eq!(calldata.convention(), EncodingConvention::LayerX);
         assert!(calldata.payload().is_empty());
     }
@@ -560,10 +561,13 @@ mod tests {
     #[test]
     fn layerx_convention_tag_roundtrips() {
         let mut calldata = Calldata::new();
-        calldata.encode_u8(42).expect("encode u8");
+        calldata
+            .encode_u8(42)
+            .unwrap_or_else(|error| panic!("encode u8: {error:?}"));
         let bytes = calldata.as_bytes();
         assert_eq!(bytes[0], 0x01);
-        let decoded = Calldata::from_bytes(&bytes).expect("decode");
+        let decoded =
+            Calldata::from_bytes(&bytes).unwrap_or_else(|error| panic!("decode: {error:?}"));
         assert_eq!(decoded.convention(), EncodingConvention::LayerX);
         assert_eq!(decoded.payload(), &[0x10, 42]);
     }
@@ -573,7 +577,8 @@ mod tests {
         let calldata = Calldata::with_convention(EncodingConvention::EvmHeadOnly);
         let bytes = calldata.as_bytes();
         assert_eq!(bytes[0], 0x02);
-        let decoded = Calldata::from_bytes(&bytes).expect("decode");
+        let decoded =
+            Calldata::from_bytes(&bytes).unwrap_or_else(|error| panic!("decode: {error:?}"));
         assert_eq!(decoded.convention(), EncodingConvention::EvmHeadOnly);
     }
 
@@ -581,7 +586,9 @@ mod tests {
     fn invalid_convention_tag_is_rejected() {
         let invalid = vec![0xff, 0x10, 42];
         assert_eq!(
-            Calldata::from_bytes(&invalid).unwrap_err(),
+            Calldata::from_bytes(&invalid)
+                .err()
+                .unwrap_or_else(|| panic!("expected refusal")),
             CodecError::InvalidConvention
         );
     }
@@ -589,11 +596,21 @@ mod tests {
     #[test]
     fn integer_encodings_are_canonical() {
         let mut calldata = Calldata::new();
-        calldata.encode_u8(1).expect("u8");
-        calldata.encode_u16(256).expect("u16");
-        calldata.encode_u32(65536).expect("u32");
-        calldata.encode_u64(4_294_967_296).expect("u64");
-        calldata.encode_u128(u128::MAX).expect("u128");
+        calldata
+            .encode_u8(1)
+            .unwrap_or_else(|error| panic!("u8: {error:?}"));
+        calldata
+            .encode_u16(256)
+            .unwrap_or_else(|error| panic!("u16: {error:?}"));
+        calldata
+            .encode_u32(65536)
+            .unwrap_or_else(|error| panic!("u32: {error:?}"));
+        calldata
+            .encode_u64(4_294_967_296)
+            .unwrap_or_else(|error| panic!("u64: {error:?}"));
+        calldata
+            .encode_u128(u128::MAX)
+            .unwrap_or_else(|error| panic!("u128: {error:?}"));
         let bytes = calldata.as_bytes();
         assert!(Calldata::from_bytes(&bytes).is_ok());
     }
@@ -601,9 +618,12 @@ mod tests {
     #[test]
     fn bytes_encoding_is_canonical() {
         let mut calldata = Calldata::new();
-        calldata.encode_bytes(b"hello").expect("bytes");
+        calldata
+            .encode_bytes(b"hello")
+            .unwrap_or_else(|error| panic!("bytes: {error:?}"));
         let bytes = calldata.as_bytes();
-        let decoded = Calldata::from_bytes(&bytes).expect("decode");
+        let decoded =
+            Calldata::from_bytes(&bytes).unwrap_or_else(|error| panic!("decode: {error:?}"));
         assert_eq!(
             decoded.payload(),
             &[0x20, 0x00, 0x00, 0x00, 0x05, b'h', b'e', b'l', b'l', b'o']
@@ -613,7 +633,9 @@ mod tests {
     #[test]
     fn empty_bytes_is_canonical() {
         let mut calldata = Calldata::new();
-        calldata.encode_bytes(&[]).expect("empty bytes");
+        calldata
+            .encode_bytes(&[])
+            .unwrap_or_else(|error| panic!("empty bytes: {error:?}"));
         let bytes = calldata.as_bytes();
         assert!(Calldata::from_bytes(&bytes).is_ok());
     }
@@ -621,14 +643,22 @@ mod tests {
     #[test]
     fn fixed_array_nesting_is_bounded() {
         let mut calldata = Calldata::new();
-        calldata.begin_fixed_array(1).expect("array");
+        calldata
+            .begin_fixed_array(1)
+            .unwrap_or_else(|error| panic!("array: {error:?}"));
         for _ in 0..MAX_NESTING_DEPTH {
-            calldata.begin_fixed_array(1).expect("nested");
+            calldata
+                .begin_fixed_array(1)
+                .unwrap_or_else(|error| panic!("nested: {error:?}"));
         }
-        calldata.encode_u8(42).expect("leaf");
+        calldata
+            .encode_u8(42)
+            .unwrap_or_else(|error| panic!("leaf: {error:?}"));
         let bytes = calldata.as_bytes();
         assert_eq!(
-            Calldata::from_bytes(&bytes).unwrap_err(),
+            Calldata::from_bytes(&bytes)
+                .err()
+                .unwrap_or_else(|| panic!("expected refusal")),
             CodecError::NestingTooDeep
         );
     }
@@ -636,19 +666,27 @@ mod tests {
     #[test]
     fn option_none_is_canonical() {
         let mut calldata = Calldata::new();
-        calldata.encode_option_none().expect("none");
+        calldata
+            .encode_option_none()
+            .unwrap_or_else(|error| panic!("none: {error:?}"));
         let bytes = calldata.as_bytes();
-        let decoded = Calldata::from_bytes(&bytes).expect("decode");
+        let decoded =
+            Calldata::from_bytes(&bytes).unwrap_or_else(|error| panic!("decode: {error:?}"));
         assert_eq!(decoded.payload(), &[0x40, 0x00]);
     }
 
     #[test]
     fn option_some_is_canonical() {
         let mut calldata = Calldata::new();
-        calldata.begin_option_some().expect("some");
-        calldata.encode_u8(7).expect("value");
+        calldata
+            .begin_option_some()
+            .unwrap_or_else(|error| panic!("some: {error:?}"));
+        calldata
+            .encode_u8(7)
+            .unwrap_or_else(|error| panic!("value: {error:?}"));
         let bytes = calldata.as_bytes();
-        let decoded = Calldata::from_bytes(&bytes).expect("decode");
+        let decoded =
+            Calldata::from_bytes(&bytes).unwrap_or_else(|error| panic!("decode: {error:?}"));
         assert_eq!(decoded.payload(), &[0x40, 0x01, 0x10, 7]);
     }
 
@@ -656,7 +694,9 @@ mod tests {
     fn invalid_option_discriminator_is_rejected() {
         let invalid = vec![0x01, 0x40, 0x02];
         assert_eq!(
-            Calldata::from_bytes(&invalid).unwrap_err(),
+            Calldata::from_bytes(&invalid)
+                .err()
+                .unwrap_or_else(|| panic!("expected refusal")),
             CodecError::InvalidOption
         );
     }
@@ -664,8 +704,12 @@ mod tests {
     #[test]
     fn union_encoding_is_canonical() {
         let mut calldata = Calldata::new();
-        calldata.begin_union(3).expect("union");
-        calldata.encode_bytes(b"data").expect("payload");
+        calldata
+            .begin_union(3)
+            .unwrap_or_else(|error| panic!("union: {error:?}"));
+        calldata
+            .encode_bytes(b"data")
+            .unwrap_or_else(|error| panic!("payload: {error:?}"));
         let bytes = calldata.as_bytes();
         assert!(Calldata::from_bytes(&bytes).is_ok());
     }
@@ -678,7 +722,9 @@ mod tests {
         let mut misaligned = vec![0x02];
         misaligned.extend_from_slice(&[0u8; 31]);
         assert_eq!(
-            Calldata::from_bytes(&misaligned).unwrap_err(),
+            Calldata::from_bytes(&misaligned)
+                .err()
+                .unwrap_or_else(|| panic!("expected refusal")),
             CodecError::NonCanonical
         );
     }
@@ -694,7 +740,9 @@ mod tests {
     fn input_size_limit_is_enforced() {
         let oversized = vec![0u8; MAX_CALLDATA_BYTES + 1];
         assert_eq!(
-            Calldata::from_bytes(&oversized).unwrap_err(),
+            Calldata::from_bytes(&oversized)
+                .err()
+                .unwrap_or_else(|| panic!("expected refusal")),
             CodecError::InputTooLarge
         );
     }

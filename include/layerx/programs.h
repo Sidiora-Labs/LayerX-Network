@@ -591,6 +591,8 @@ lxp_result layerx_programs_call_terminal_reserve(
 lxp_result layerx_programs_call_terminal_byte(uint64_t token, uint16_t section,
                                                uint32_t offset, uint8_t byte);
 lxp_result layerx_programs_call_terminal_publish(uint64_t token);
+lxp_result layerx_programs_call_terminal_applied_begin(uint64_t token, uint32_t length);
+lxp_result layerx_programs_call_terminal_applied_byte(uint64_t token, uint32_t offset, uint8_t byte);
 
 /* One guest event at a time, copied through scalar fields into the active C
  * journal.  `frame_path` is its canonical eight-byte CallFrameId path. */
@@ -877,6 +879,11 @@ typedef struct lxp_programs_occupancy_receipt {
 /* The batch coordinator invokes this exactly once after the batch's activity
  * transitions and before sealing roots, including for an empty batch. The
  * encoded receipt is included in the canonical batch receipt set. */
+lxp_result lxp_programs_finalize_occupancy_batch_selected(
+    struct lxp_kernel *kernel, uint16_t protocol_version, uint32_t schedule_version,
+    uint64_t batch_number, uint64_t batch_timestamp_ms,
+    uint64_t global_sequence, uint32_t parameter_version, lxp_arena *arena,
+    lxp_programs_occupancy_receipt *receipt, lxp_byte_span *encoded);
 lxp_result lxp_programs_finalize_occupancy_batch(
     lxp_kernel *kernel, uint64_t batch_number, uint64_t batch_timestamp_ms,
     uint64_t global_sequence, uint32_t parameter_version, lxp_arena *arena,
