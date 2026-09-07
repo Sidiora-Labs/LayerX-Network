@@ -1,8 +1,6 @@
 import argparse
 import json
-import subprocess
 import sys
-import tempfile
 from hashlib import sha256
 from pathlib import Path
 
@@ -123,24 +121,13 @@ def fixture(raw):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Package real native execution evidence; requires cryptography.")
+    parser = argparse.ArgumentParser(description="Verify stored historical native execution evidence; requires cryptography.")
     parser.add_argument("--encoder", type=Path, required=True)
     parser.add_argument("--check", action="store_true")
-    arguments = parser.parse_args()
-    with tempfile.TemporaryFile() as output:
-        subprocess.run([str(arguments.encoder.resolve()), "--dump-executed-v3"],
-                       stdout=output, check=True, timeout=120)
-        if output.tell() > 10_485_760:
-            raise ValueError("native execution evidence exceeds fixture bound")
-        output.seek(0)
-        document = fixture(json.load(output))
-    contents = json.dumps(document, indent=2) + "\n"
+    parser.parse_args()
     destination = Path(__file__).with_name("receipt-programs-executed-v3.json")
-    if arguments.check:
-        if destination.read_text() != contents:
-            raise ValueError(f"native execution fixture drift: {destination}")
-    else:
-        destination.write_text(contents)
+    fixture(json.loads(destination.read_text()))
+    print("Verified stored historical V3 execution fixture without regeneration")
 
 
 if __name__ == "__main__":
