@@ -135,6 +135,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Quickstart reconciled with the cluster export and program deploy walk
 - Programs wiki citations and payload layouts corrected after fact-check
 - Beta cluster page refreshed for the genesis route and observer identity wiring
+- Public wiki and subsystem READMEs aligned: present-tense testnet (gateway API and faucet, no LayerX mainnet, custody on Paxeer), Apache 2.0 wording, complete wiki Home index with Home backlinks, and monorepo/qualification toolchain commands matching the README
 
 #### Tooling
 - cargo-deny invoked without the removed `--disable-fetch` flag
