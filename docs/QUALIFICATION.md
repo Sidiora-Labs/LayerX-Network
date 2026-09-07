@@ -3,6 +3,12 @@
 LayerX qualification is evidence layered by risk. A lower layer never implies a
 higher one, and no local command authorizes deployment or handling real assets.
 
+The core runtime is C17 (`-std=c17` in the root `Makefile`). Agent, human, and
+platform workspaces use Rust 1.91.1 (`rust-toolchain.toml`). LayerX settlement
+contracts use Solidity 0.8.27 (`foundry.toml`). Replay qualification needs GCC
+13, Clang 18, Docker, an amd64 musl runner, and an AArch64 cross-compiler plus
+QEMU.
+
 ## Evidence levels
 
 | Level | Evidence | Representative gate |
@@ -84,6 +90,9 @@ that evidence but cannot satisfy or authorize the live gate by themselves.
 Paxeer Network has its own qualification gates under `paxeer-network/`:
 
 ```sh
+make paxeer-build
+make paxeer-lint
+make paxeer-test
 make paxeer-ci
 make monorepo-ci
 ```
