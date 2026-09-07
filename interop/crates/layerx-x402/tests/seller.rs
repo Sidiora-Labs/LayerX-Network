@@ -9,13 +9,12 @@ use layerx_interop_gateway::adapter::{AdapterId, ConformanceSuite};
 use layerx_interop_gateway::principal::PrincipalId;
 use layerx_interop_gateway::trace::TraceId;
 use layerx_interop_gateway::GatewayCore;
-use layerx_proof::receipt::AuthorizedBatch;
 use layerx_x402::model::{
     AtomicAmount, PaymentPayload, PaymentRequired, PaymentRequirements, ResourceInfo,
     SettlementResponse, X402_VERSION,
 };
 use layerx_x402::seller::{
-    ExecutedPayment, LayerXPaymentRequest, PaymentPlane, PlanePaymentOutcome, Seller, SellerOutcome,
+    LayerXPaymentRequest, PaymentPlane, PlanePaymentOutcome, Seller, SellerOutcome,
 };
 use layerx_x402::x402_adapter_descriptor;
 use serde_json::json;
@@ -92,17 +91,6 @@ fn test_payment_payload() -> PaymentPayload {
     }
 }
 
-fn mock_receipt_bytes() -> Vec<u8> {
-    vec![
-        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e,
-        0x0f,
-    ]
-}
-
-fn mock_authorized_batch() -> AuthorizedBatch {
-    AuthorizedBatch::new([1; 32], [0xab; 32], [2; 32], [3; 32], [4; 32])
-}
-
 #[test]
 fn seller_validates_payment_required_on_construction() {
     let valid = test_payment_required();
@@ -124,9 +112,11 @@ fn seller_validates_payment_required_on_construction() {
 #[test]
 fn seller_emits_payment_required_signal_with_402_status() {
     let required = test_payment_required();
-    let seller = Seller::new(required).expect("valid required");
+    let seller = Seller::new(required).unwrap_or_else(|error| panic!("valid required: {error:?}"));
 
-    let signal = seller.payment_required().expect("encoding succeeds");
+    let signal = seller
+        .payment_required()
+        .unwrap_or_else(|error| panic!("encoding succeeds: {error:?}"));
 
     assert_eq!(signal.status, 402);
     assert!(!signal.header.is_empty());
@@ -137,16 +127,19 @@ fn seller_emits_payment_required_signal_with_402_status() {
 #[test]
 fn seller_refuses_payment_when_requirements_mismatch() {
     let required = test_payment_required();
-    let seller = Seller::new(required).expect("valid required");
+    let seller = Seller::new(required).unwrap_or_else(|error| panic!("valid required: {error:?}"));
 
     let mut mismatched_payload = test_payment_payload();
     mismatched_payload.accepted.amount = AtomicAmount::from_u128(9999);
 
-    let encoded = base64::engine::general_purpose::STANDARD
-        .encode(serde_json::to_vec(&mismatched_payload).unwrap());
+    let encoded = base64::engine::general_purpose::STANDARD.encode(
+        serde_json::to_vec(&mismatched_payload)
+            .unwrap_or_else(|error| panic!("test input: {error:?}")),
+    );
 
     let mut gateway = registered_gateway();
-    let principal = PrincipalId::new("test-merchant").unwrap();
+    let principal =
+        PrincipalId::new("test-merchant").unwrap_or_else(|error| panic!("test input: {error:?}"));
     let mut plane = TestPaymentPlane {
         outcome: PlanePaymentOutcome::Pending,
     };
@@ -160,14 +153,16 @@ fn seller_refuses_payment_when_requirements_mismatch() {
 #[test]
 fn seller_returns_pending_when_plane_returns_pending() {
     let required = test_payment_required();
-    let seller = Seller::new(required).expect("valid required");
+    let seller = Seller::new(required).unwrap_or_else(|error| panic!("valid required: {error:?}"));
     let payload = test_payment_payload();
 
-    let encoded =
-        base64::engine::general_purpose::STANDARD.encode(serde_json::to_vec(&payload).unwrap());
+    let encoded = base64::engine::general_purpose::STANDARD.encode(
+        serde_json::to_vec(&payload).unwrap_or_else(|error| panic!("test input: {error:?}")),
+    );
 
     let mut gateway = registered_gateway();
-    let principal = PrincipalId::new("test-merchant").unwrap();
+    let principal =
+        PrincipalId::new("test-merchant").unwrap_or_else(|error| panic!("test input: {error:?}"));
     let mut plane = TestPaymentPlane {
         outcome: PlanePaymentOutcome::Pending,
     };
@@ -175,7 +170,7 @@ fn seller_returns_pending_when_plane_returns_pending() {
 
     let outcome = seller
         .settle(&mut gateway, &principal, &encoded, &mut plane, &trace, 0)
-        .expect("settlement accepted");
+        .unwrap_or_else(|error| panic!("settlement accepted: {error:?}"));
 
     assert!(matches!(outcome, SellerOutcome::Pending));
 }
@@ -183,14 +178,16 @@ fn seller_returns_pending_when_plane_returns_pending() {
 #[test]
 fn seller_returns_refused_when_plane_refuses_payment() {
     let required = test_payment_required();
-    let seller = Seller::new(required).expect("valid required");
+    let seller = Seller::new(required).unwrap_or_else(|error| panic!("valid required: {error:?}"));
     let payload = test_payment_payload();
 
-    let encoded =
-        base64::engine::general_purpose::STANDARD.encode(serde_json::to_vec(&payload).unwrap());
+    let encoded = base64::engine::general_purpose::STANDARD.encode(
+        serde_json::to_vec(&payload).unwrap_or_else(|error| panic!("test input: {error:?}")),
+    );
 
     let mut gateway = registered_gateway();
-    let principal = PrincipalId::new("test-merchant").unwrap();
+    let principal =
+        PrincipalId::new("test-merchant").unwrap_or_else(|error| panic!("test input: {error:?}"));
     let mut plane = TestPaymentPlane {
         outcome: PlanePaymentOutcome::Refused {
             reason: "insufficient_balance",
@@ -200,7 +197,7 @@ fn seller_returns_refused_when_plane_refuses_payment() {
 
     let outcome = seller
         .settle(&mut gateway, &principal, &encoded, &mut plane, &trace, 0)
-        .expect("refusal handled");
+        .unwrap_or_else(|error| panic!("refusal handled: {error:?}"));
 
     match outcome {
         SellerOutcome::Refused { response, .. } => {
@@ -214,15 +211,17 @@ fn seller_returns_refused_when_plane_refuses_payment() {
 #[test]
 fn seller_idempotency_key_is_deterministic_per_principal_and_payload() {
     let required = test_payment_required();
-    let seller = Seller::new(required).expect("valid required");
+    let seller = Seller::new(required).unwrap_or_else(|error| panic!("valid required: {error:?}"));
     let payload = test_payment_payload();
 
-    let encoded =
-        base64::engine::general_purpose::STANDARD.encode(serde_json::to_vec(&payload).unwrap());
+    let encoded = base64::engine::general_purpose::STANDARD.encode(
+        serde_json::to_vec(&payload).unwrap_or_else(|error| panic!("test input: {error:?}")),
+    );
 
     let mut gateway1 = registered_gateway();
     let mut gateway2 = registered_gateway();
-    let principal = PrincipalId::new("test-merchant").unwrap();
+    let principal =
+        PrincipalId::new("test-merchant").unwrap_or_else(|error| panic!("test input: {error:?}"));
     let mut plane = TestPaymentPlane {
         outcome: PlanePaymentOutcome::Pending,
     };
@@ -230,11 +229,11 @@ fn seller_idempotency_key_is_deterministic_per_principal_and_payload() {
 
     let _outcome1 = seller
         .settle(&mut gateway1, &principal, &encoded, &mut plane, &trace, 0)
-        .expect("first settlement");
+        .unwrap_or_else(|error| panic!("first settlement: {error:?}"));
 
     let _outcome2 = seller
         .settle(&mut gateway2, &principal, &encoded, &mut plane, &trace, 100)
-        .expect("second settlement");
+        .unwrap_or_else(|error| panic!("second settlement: {error:?}"));
 }
 
 #[test]
@@ -248,8 +247,11 @@ fn seller_preserves_extensions_from_payment_required() {
         },
     );
 
-    let seller = Seller::new(required).expect("valid with extensions");
-    let signal = seller.payment_required().expect("encoding succeeds");
+    let seller =
+        Seller::new(required).unwrap_or_else(|error| panic!("valid with extensions: {error:?}"));
+    let signal = seller
+        .payment_required()
+        .unwrap_or_else(|error| panic!("encoding succeeds: {error:?}"));
 
     assert!(signal.body.extensions.contains_key("custom"));
 }
@@ -257,16 +259,19 @@ fn seller_preserves_extensions_from_payment_required() {
 #[test]
 fn seller_validates_payment_payload_before_settlement() {
     let required = test_payment_required();
-    let seller = Seller::new(required).expect("valid required");
+    let seller = Seller::new(required).unwrap_or_else(|error| panic!("valid required: {error:?}"));
 
     let mut invalid_payload = test_payment_payload();
     invalid_payload.x402_version = 1;
 
-    let encoded = base64::engine::general_purpose::STANDARD
-        .encode(serde_json::to_vec(&invalid_payload).unwrap());
+    let encoded = base64::engine::general_purpose::STANDARD.encode(
+        serde_json::to_vec(&invalid_payload)
+            .unwrap_or_else(|error| panic!("test input: {error:?}")),
+    );
 
     let mut gateway = registered_gateway();
-    let principal = PrincipalId::new("test-merchant").unwrap();
+    let principal =
+        PrincipalId::new("test-merchant").unwrap_or_else(|error| panic!("test input: {error:?}"));
     let mut plane = TestPaymentPlane {
         outcome: PlanePaymentOutcome::Pending,
     };
@@ -295,22 +300,25 @@ fn payment_plane_request_contains_all_requirements() {
     }
 
     let required = test_payment_required();
-    let seller = Seller::new(required.clone()).expect("valid required");
+    let seller =
+        Seller::new(required.clone()).unwrap_or_else(|error| panic!("valid required: {error:?}"));
     let payload = test_payment_payload();
 
-    let encoded =
-        base64::engine::general_purpose::STANDARD.encode(serde_json::to_vec(&payload).unwrap());
+    let encoded = base64::engine::general_purpose::STANDARD.encode(
+        serde_json::to_vec(&payload).unwrap_or_else(|error| panic!("test input: {error:?}")),
+    );
 
     let mut gateway = registered_gateway();
-    let principal = PrincipalId::new("test-merchant").unwrap();
+    let principal =
+        PrincipalId::new("test-merchant").unwrap_or_else(|error| panic!("test input: {error:?}"));
     let mut plane = CapturePaymentPlane { captured: None };
     let trace = TraceId::mint([0xab; 16]);
 
     let _outcome = seller
         .settle(&mut gateway, &principal, &encoded, &mut plane, &trace, 0)
-        .expect("settlement accepted");
+        .unwrap_or_else(|error| panic!("settlement accepted: {error:?}"));
 
-    let captured = plane.captured.expect("plane was called");
+    let captured = plane.captured.unwrap_or_else(|| panic!("plane was called"));
     assert_eq!(captured.scheme, "exact");
     assert_eq!(captured.network, "layerx:testnet");
     assert_eq!(captured.amount.value(), 1000);
@@ -354,8 +362,11 @@ fn seller_supports_multiple_payment_requirements() {
     second.scheme = "alternative".to_owned();
     required.accepts.push(second);
 
-    let seller = Seller::new(required).expect("multiple requirements accepted");
-    let signal = seller.payment_required().expect("encoding succeeds");
+    let seller = Seller::new(required)
+        .unwrap_or_else(|error| panic!("multiple requirements accepted: {error:?}"));
+    let signal = seller
+        .payment_required()
+        .unwrap_or_else(|error| panic!("encoding succeeds: {error:?}"));
 
     assert_eq!(signal.body.accepts.len(), 2);
 }
@@ -363,9 +374,12 @@ fn seller_supports_multiple_payment_requirements() {
 #[test]
 fn seller_resource_info_is_preserved_in_signal() {
     let required = test_payment_required();
-    let seller = Seller::new(required.clone()).expect("valid required");
+    let seller =
+        Seller::new(required.clone()).unwrap_or_else(|error| panic!("valid required: {error:?}"));
 
-    let signal = seller.payment_required().expect("encoding succeeds");
+    let signal = seller
+        .payment_required()
+        .unwrap_or_else(|error| panic!("encoding succeeds: {error:?}"));
 
     assert_eq!(signal.body.resource.url, required.resource.url);
     assert_eq!(

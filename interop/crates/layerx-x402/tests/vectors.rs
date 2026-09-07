@@ -8,11 +8,10 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use layerx_x402::model::{
     AtomicAmount, PaymentPayload, PaymentRequired, PaymentRequirements, ResourceInfo,
-    SettlementResponse, X402Error, X402_VERSION,
+    SettlementResponse, X402_VERSION,
 };
 use layerx_x402::transport::{
-    decode_payment_payload, decode_payment_required, decode_settlement, encode_payment_payload,
-    encode_payment_required, encode_settlement, TransportKind, TransportValue,
+    decode_payment_required, encode_payment_required, TransportKind, TransportValue,
 };
 use serde_json::json;
 
@@ -23,6 +22,12 @@ struct Vector {
 }
 
 fn payment_required_vectors() -> Vec<Vector> {
+    let mut vectors = valid_payment_required_vectors();
+    vectors.extend(invalid_payment_required_vectors());
+    vectors
+}
+
+fn valid_payment_required_vectors() -> Vec<Vector> {
     vec![
         Vector {
             name: "minimal_valid_payment_required",
@@ -96,6 +101,11 @@ fn payment_required_vectors() -> Vec<Vector> {
                 ]
             }),
         },
+    ]
+}
+
+fn invalid_payment_required_vectors() -> Vec<Vector> {
+    vec![
         Vector {
             name: "payment_required_wrong_version",
             valid: false,
@@ -444,9 +454,10 @@ fn atomic_amount_canonical_encoding_round_trips() {
 
     for amount in amounts {
         let atomic = AtomicAmount::from_u128(amount);
-        let serialized = serde_json::to_string(&atomic).expect("serialization");
-        let deserialized: AtomicAmount =
-            serde_json::from_str(&serialized).expect("deserialization");
+        let serialized = serde_json::to_string(&atomic)
+            .unwrap_or_else(|error| panic!("serialization: {error:?}"));
+        let deserialized: AtomicAmount = serde_json::from_str(&serialized)
+            .unwrap_or_else(|error| panic!("deserialization: {error:?}"));
         assert_eq!(deserialized.value(), amount);
     }
 }
@@ -471,8 +482,7 @@ fn atomic_amount_refuses_non_canonical_strings() {
         let result = AtomicAmount::parse(value);
         assert!(
             result.is_err(),
-            "expected {} to be invalid but parsed successfully",
-            value
+            "expected {value} to be invalid but parsed successfully"
         );
     }
 }
@@ -488,7 +498,8 @@ fn atomic_amount_accepts_canonical_strings() {
     ];
 
     for (string, expected) in valid {
-        let parsed = AtomicAmount::parse(string).expect("parsing");
+        let parsed =
+            AtomicAmount::parse(string).unwrap_or_else(|error| panic!("parsing: {error:?}"));
         assert_eq!(parsed.value(), expected);
     }
 }
@@ -518,15 +529,19 @@ fn payment_required_http_transport_encoding_is_base64_json() {
         extensions: BTreeMap::new(),
     };
 
-    let encoded = encode_payment_required(TransportKind::Http, &required).expect("encoding");
+    let encoded = encode_payment_required(TransportKind::Http, &required)
+        .unwrap_or_else(|error| panic!("encoding: {error:?}"));
 
     let TransportValue::HttpHeader { name, value } = encoded else {
         panic!("expected HTTP header");
     };
 
     assert_eq!(name, "PAYMENT-REQUIRED");
-    let decoded = STANDARD.decode(value.as_bytes()).expect("base64");
-    let parsed: PaymentRequired = serde_json::from_slice(&decoded).expect("json");
+    let decoded = STANDARD
+        .decode(value.as_bytes())
+        .unwrap_or_else(|error| panic!("base64: {error:?}"));
+    let parsed: PaymentRequired =
+        serde_json::from_slice(&decoded).unwrap_or_else(|error| panic!("json: {error:?}"));
     assert_eq!(parsed.x402_version, X402_VERSION);
 }
 
@@ -555,13 +570,15 @@ fn payment_required_mcp_transport_encoding_is_json() {
         extensions: BTreeMap::new(),
     };
 
-    let encoded = encode_payment_required(TransportKind::Mcp, &required).expect("encoding");
+    let encoded = encode_payment_required(TransportKind::Mcp, &required)
+        .unwrap_or_else(|error| panic!("encoding: {error:?}"));
 
     let TransportValue::Json(value) = encoded else {
         panic!("expected JSON");
     };
 
-    let parsed: PaymentRequired = serde_json::from_value(value).expect("parsing");
+    let parsed: PaymentRequired =
+        serde_json::from_value(value).unwrap_or_else(|error| panic!("parsing: {error:?}"));
     assert_eq!(parsed, required);
 }
 
@@ -672,8 +689,10 @@ fn wire_encoding_round_trip_preserves_all_fields() {
     };
 
     for transport in [TransportKind::Http, TransportKind::Mcp, TransportKind::A2a] {
-        let encoded = encode_payment_required(transport, &original).expect("encoding");
-        let decoded = decode_payment_required(transport, &encoded).expect("decoding");
+        let encoded = encode_payment_required(transport, &original)
+            .unwrap_or_else(|error| panic!("encoding: {error:?}"));
+        let decoded = decode_payment_required(transport, &encoded)
+            .unwrap_or_else(|error| panic!("decoding: {error:?}"));
         assert_eq!(decoded, original);
     }
 }
