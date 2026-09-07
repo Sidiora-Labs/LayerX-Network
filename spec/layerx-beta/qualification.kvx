@@ -2276,3 +2276,11 @@ symbol = "test-daemon-finality-authority check"
 observed = "make layerxd test-daemon-finality-authority && make -s check exits 0 in qual-logs/au24/task-6.10.log and again on the final Makefile source in qual-logs/au24/task-6.10-final.log. Real chain-31337 Anvil registration verifies; wrong chain, settlement, checkpoint, block, signature and registry, reverted transaction and unreachable-chain cases pass. Both absent- and empty-log bootstrap modes pass the real sequencer, replica and independent authority receipt test. The aggregate native check exits 0."
 assumption = "CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4 and LAYERX_TEST_NATIVE_BIN_DIR unset; test scripts create disposable loopback Anvil nodes. No persistent chain or cluster is used. This executes the local exact gate and does not establish hosted image, funded treasury, cluster or whole-beta qualification."
 severity = "note"
+
+[observation.6.3.owner-decision-1]
+task = "6.3"
+file = "spec/layerx-beta/spec.kvx"
+symbol = "req.14.ac_4 task.6.3.do_2"
+observed = "Owner decision (decider: repository owner; approval: \"yes on all five\"): the hosted authority returns the eight documented fields, plus a ninth `batch_evidence` field present only when the batch carries an occupancy-maintenance receipt (the maintained batch identity and proof the consumer verifies)."
+assumption = "Files changed: spec/layerx-beta/spec.kvx and spec/layerx-beta/qualification.kvx. This record applies the decision only to the named contract or Make recipe."
+severity = "note"
