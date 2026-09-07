@@ -2117,3 +2117,19 @@ symbol = "interop-lint"
 observed = "make interop-lint passes strict workspace Clippy and dependency/unsafe policy, then exits 2 after cargo-deny exits 3. Exact refusals remain der 0.7.10/0.8.1, getrandom 0.2.17/0.4.3, windows-sys 0.52.0/0.61.2, and unmaintained paste 1.0.15 RUSTSEC-2024-0436. The r-efi duplicate refusal is gone. cargo tree -i windows-sys@0.52.0 on the host prints no dependents; --target all shows ring 0.17.14 as its only direct dependent, through rustls and rustls-webpki. The fetched sparse registry index ends at ring 0.17.14, requiring windows-sys ^0.52 and getrandom ^0.2.10. Crypto rand_core also requires getrandom 0.2.17. Raw evidence: qual-logs/au14/interop-lint.log, windows-tree.log, windows-all-tree.log, ring-index.jsonl and getrandom-old-tree.log."
 assumption = "There is no available direct dependency version bump that removes the ring windows-sys branch. A compatible upstream release or separately authorized coordinated cryptographic-provider migration is required. Platform additionally retains getrandom 0.3.4 through the independent layerx-agentd exact pin. Full getrandom and windows-sys convergence is not established. Curve and interpreter dependency migrations remain outside this change; deny.toml and all checks remain intact."
 severity = "blocker"
+
+[observation.6.4.gateway-lint-binary-boundary]
+task = "6.4"
+file = "platform/hosted/gateway/src/main.rs platform/hosted/gateway/tests/tap_nonce.rs"
+symbol = "platform-lint"
+observed = "The 14 library diagnostics in observation.6.4.gateway-getrandom-lint-baseline are repaired: strict library Clippy exits 0 and the gateway test suite exits 0. Strict all-target gateway Clippy exits 101 after reaching the binary and integration targets: main.rs has 55 binary diagnostics and 65 including unit tests; tap_nonce.rs has zombie_processes at line 94 and format_collect at line 259. Binary findings include unnested_or_patterns, manual_is_multiple_of, too_many_lines, needless_pass_by_value, map_unwrap_or, manual_let_else, single_match_else, match_same_arms and unwrap_used. These pre-existing code paths were not refactored beyond the requested caller migrations. Evidence: qual-logs/au15/gateway-lib-clippy.log, gateway-clippy-final.log, gateway-test-final.log and caller-expression-check.log. Interop workspace build, test and strict all-target Clippy exit 0 in interop-build.log, interop-test.log and interop-clippy.log."
+assumption = "Library qualification does not establish a passing all-target gateway lint gate. The additional binary and integration-test lint repairs are separate from the recorded 14 library diagnostics. No assertion, bound, validation or lint configuration was weakened."
+severity = "blocker"
+
+[observation.6.4.gateway-lint-registry-boundary]
+task = "6.4"
+file = "platform/hosted/registry/src/builder.rs platform/hosted/registry/src/routes.rs platform/hosted/registry/src/auth.rs"
+symbol = "platform-lint"
+observed = "make platform-lint exits 2 at workspace Clippy. The first registry diagnostics are unused_mut on builder.rs:723, dead_code for routes.rs:1010 field, missing_errors_doc on auth.rs:45 and too_many_arguments on builder.rs:70. Registry source is outside the gateway signature migration. Evidence: qual-logs/au15/platform-lint.log."
+assumption = "Registry diagnostics and subsequent platform lint steps require separate qualification; no passing platform-lint result is claimed."
+severity = "blocker"

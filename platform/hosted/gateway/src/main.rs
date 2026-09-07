@@ -398,9 +398,11 @@ fn program_head(
     let upstream = config
         .client
         .request(
-            &config.registry,
-            "GET",
-            &format!("/v1/programs/registry/{program}"),
+            layerx_platform_gateway::http::RequestTarget {
+                endpoint: &config.registry,
+                method: "GET",
+                path: &format!("/v1/programs/registry/{program}"),
+            },
             config.registry_token.as_str(),
             None,
             "application/json",
@@ -1055,9 +1057,11 @@ fn upstream_json(
     config
         .client
         .request(
-            endpoint,
-            method,
-            path,
+            layerx_platform_gateway::http::RequestTarget {
+                endpoint,
+                method,
+                path,
+            },
             token,
             idempotency,
             "application/json",
@@ -1504,9 +1508,11 @@ fn verified_program_result(
         &call_graph,
         facts,
         &config.trusted_sequencer_key,
-        expected_activity,
-        head.program_id,
-        head.abi_version,
+        layerx_platform_gateway::ProgramOperationExpectation {
+            activity_id: expected_activity,
+            program_id: head.program_id,
+            guest_abi_version: head.abi_version,
+        },
     )
     .map_err(|_| response(503, "program_receipt_verification_failed", Some(5)))?;
     Ok((
@@ -1567,9 +1573,11 @@ fn program_simulation(
         Err(_) => return response(503, "persistence_unavailable", Some(5)),
     }
     let upstream = match config.client.request(
-        &config.component,
-        "POST",
-        "/v1/programs/simulate",
+        layerx_platform_gateway::http::RequestTarget {
+            endpoint: &config.component,
+            method: "POST",
+            path: "/v1/programs/simulate",
+        },
         config.component_token.as_str(),
         None,
         "application/octet-stream",
@@ -1624,9 +1632,11 @@ fn program_simulation(
         &call_graph,
         state_root,
         config.trusted_sequencer_key,
-        submission.activity_id(),
-        program_id,
-        head.abi_version,
+        layerx_platform_gateway::ProgramOperationExpectation {
+            activity_id: submission.activity_id(),
+            program_id,
+            guest_abi_version: head.abi_version,
+        },
     ) {
         Ok(value) => value,
         Err(_) => return response(503, "program_simulation_unverified", Some(5)),
@@ -1914,12 +1924,14 @@ fn activity(
         Reservation::Reserved => {}
     }
     let upstream = match config.client.request(
-        &config.component,
-        "POST",
-        if program_mutation {
-            &request.path
-        } else {
-            "/v1/activities"
+        layerx_platform_gateway::http::RequestTarget {
+            endpoint: &config.component,
+            method: "POST",
+            path: if program_mutation {
+                &request.path
+            } else {
+                "/v1/activities"
+            },
         },
         config.component_token.as_str(),
         Some(&protocol_idempotency),
@@ -2243,12 +2255,14 @@ fn resolve_pending_lifecycle(
         _ => return response(502, "lifecycle_binding_invalid", None),
     };
     let upstream = match config.client.request(
-        &config.component,
-        "GET",
-        &format!(
-            "/v1/programs/receipts/by-idempotency/{}",
-            operation.idempotency_key
-        ),
+        layerx_platform_gateway::http::RequestTarget {
+            endpoint: &config.component,
+            method: "GET",
+            path: &format!(
+                "/v1/programs/receipts/by-idempotency/{}",
+                operation.idempotency_key
+            ),
+        },
         config.component_token.as_str(),
         None,
         "application/json",
@@ -2349,9 +2363,11 @@ fn resolve_pending_program(
         }
     }
     let upstream = match config.client.request(
-        &config.component,
-        "GET",
-        &format!("/v1/programs/activities/{}", operation.activity_id),
+        layerx_platform_gateway::http::RequestTarget {
+            endpoint: &config.component,
+            method: "GET",
+            path: &format!("/v1/programs/activities/{}", operation.activity_id),
+        },
         config.component_token.as_str(),
         None,
         "application/json",
@@ -2515,9 +2531,11 @@ fn read_route(
                 return response(404, "receipt_not_found", None);
             }
             let upstream = match config.client.request(
-                &config.component,
-                "GET",
-                &format!("/v1/receipts/{activity_id}"),
+                layerx_platform_gateway::http::RequestTarget {
+                    endpoint: &config.component,
+                    method: "GET",
+                    path: &format!("/v1/receipts/{activity_id}"),
+                },
                 config.component_token.as_str(),
                 None,
                 "application/json",
@@ -2598,9 +2616,11 @@ fn read_route(
                 Err(error) => return error,
             };
             let upstream = match config.client.request(
-                &config.registry,
-                "GET",
-                &format!("/v1/programs/registry/{program}/interface"),
+                layerx_platform_gateway::http::RequestTarget {
+                    endpoint: &config.registry,
+                    method: "GET",
+                    path: &format!("/v1/programs/registry/{program}/interface"),
+                },
                 config.registry_token.as_str(),
                 None,
                 "application/json",
@@ -2815,9 +2835,11 @@ fn dependency_ready(
     require_routes: bool,
 ) -> bool {
     let Ok(upstream) = config.client.request(
-        endpoint,
-        "GET",
-        "/readyz",
+        layerx_platform_gateway::http::RequestTarget {
+            endpoint,
+            method: "GET",
+            path: "/readyz",
+        },
         token,
         None,
         "application/json",
@@ -2838,9 +2860,11 @@ fn dependency_ready(
 
 fn program_registry_ready(config: &Config) -> bool {
     let Ok(upstream) = config.client.request(
-        &config.registry,
-        "GET",
-        "/healthz",
+        layerx_platform_gateway::http::RequestTarget {
+            endpoint: &config.registry,
+            method: "GET",
+            path: "/healthz",
+        },
         config.registry_token.as_str(),
         None,
         "application/json",
