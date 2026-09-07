@@ -4,21 +4,24 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use layerx_programs_runtime::{
-    admit_abi_upgrade, admit_abi_version, AbiRevision, ActivityBudgetBinding, CompositionContext, CompositionRefusal, CompositionRules,
-    EngineRefusal, ProgramId, ProgramResolver, ValidatedModule, ValidationRefusal, WasmEngine,
-    ABI_V1_VERSION, ABI_V2_VERSION,
+    admit_abi_upgrade, admit_abi_version, AbiRevision, ActivityBudgetBinding, CompositionContext,
+    CompositionRefusal, CompositionRules, EngineRefusal, ProgramId, ProgramResolver,
+    ValidatedModule, ValidationRefusal, WasmEngine, ABI_V1_VERSION, ABI_V2_VERSION,
 };
 
-use crate::{
-    ProgramLifecycle, ReadFreshness, VerifiedDeploymentEvidence, VerifiedProgramHead,
-};
+use crate::{ProgramLifecycle, ReadFreshness, VerifiedDeploymentEvidence, VerifiedProgramHead};
 
 /// Typed refusal returned before any deployment enters the executable
 /// resolver.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ExecutableAdmissionError {
-    InactiveLifecycle { lifecycle: ProgramLifecycle },
-    NonIncreasingVersion { current: u32, requested: u32 },
+    InactiveLifecycle {
+        lifecycle: ProgramLifecycle,
+    },
+    NonIncreasingVersion {
+        current: u32,
+        requested: u32,
+    },
     FreshnessRegression {
         current: ReadFreshness,
         requested: ReadFreshness,
@@ -28,11 +31,19 @@ pub enum ExecutableAdmissionError {
         declared: u16,
         validated: AbiRevision,
     },
-    MissingCurrentHead { program: ProgramId },
-    DuplicateCurrentHead { program: ProgramId },
-    CurrentDeploymentMismatch { program: ProgramId },
+    MissingCurrentHead {
+        program: ProgramId,
+    },
+    DuplicateCurrentHead {
+        program: ProgramId,
+    },
+    CurrentDeploymentMismatch {
+        program: ProgramId,
+    },
     CurrentHeadMismatch,
-    EvidenceExpired { program: ProgramId },
+    EvidenceExpired {
+        program: ProgramId,
+    },
     Validation(ValidationRefusal),
 }
 
@@ -40,7 +51,10 @@ impl Display for ExecutableAdmissionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InactiveLifecycle { lifecycle } => {
-                write!(formatter, "program lifecycle {lifecycle:?} is not executable")
+                write!(
+                    formatter,
+                    "program lifecycle {lifecycle:?} is not executable"
+                )
             }
             Self::NonIncreasingVersion { current, requested } => write!(
                 formatter,
@@ -63,10 +77,12 @@ impl Display for ExecutableAdmissionError {
             Self::DuplicateCurrentHead { .. } => {
                 formatter.write_str("current lifecycle evidence duplicates a program")
             }
-            Self::CurrentDeploymentMismatch { .. } => formatter
-                .write_str("current Programs state differs from the admitted deployment"),
-            Self::CurrentHeadMismatch => formatter
-                .write_str("current program proofs do not share one receipt state head"),
+            Self::CurrentDeploymentMismatch { .. } => {
+                formatter.write_str("current Programs state differs from the admitted deployment")
+            }
+            Self::CurrentHeadMismatch => {
+                formatter.write_str("current program proofs do not share one receipt state head")
+            }
             Self::EvidenceExpired { .. } => {
                 formatter.write_str("current program evidence has expired")
             }
@@ -165,9 +181,13 @@ impl VerifiedProgramCatalog {
         let expected_revision = match evidence.abi_version() {
             ABI_V1_VERSION => AbiRevision::V1,
             ABI_V2_VERSION => AbiRevision::V2,
-            declared => return Err(ExecutableAdmissionError::AbiVersion(
-                layerx_programs_runtime::AbiVersionRefusal::Unsupported { requested: declared },
-            )),
+            declared => {
+                return Err(ExecutableAdmissionError::AbiVersion(
+                    layerx_programs_runtime::AbiVersionRefusal::Unsupported {
+                        requested: declared,
+                    },
+                ))
+            }
         };
         let module = match expected_revision {
             AbiRevision::V1 => self.engine.validate(evidence.module()),
@@ -180,14 +200,17 @@ impl VerifiedProgramCatalog {
                 validated: module.abi_revision(),
             });
         }
+        let receipt_digest = evidence.receipt_digest();
+        let freshness = evidence.freshness();
+        let record = evidence.into_record();
         self.programs.insert(
-            evidence.program(),
+            record.program,
             VerifiedProgram {
-                version: evidence.version(),
-                code_hash: evidence.code_hash(),
-                abi_version: evidence.abi_version(),
-                receipt_digest: evidence.receipt_digest(),
-                freshness: evidence.freshness(),
+                version: record.version,
+                code_hash: record.new_code_hash,
+                abi_version: record.abi_version,
+                receipt_digest,
+                freshness,
                 module,
             },
         );
@@ -247,6 +270,9 @@ impl VerifiedProgramCatalog {
     /// Consumes current state proofs and produces an affine, activity-bound
     /// resolver. A later lifecycle transition or expired head is refused
     /// before a runtime composition context exists.
+    /// # Errors
+    ///
+    /// Refuses missing, duplicate, expired, inactive or inconsistent current heads and invalid activity authority.
     pub fn authorize_activity(
         self,
         heads: Vec<VerifiedProgramHead>,
@@ -297,9 +323,7 @@ impl VerifiedProgramCatalog {
             common = Some(identity);
         }
         if let Some(program) = current.keys().next().copied() {
-            return Err(ExecutableAdmissionError::CurrentDeploymentMismatch {
-                program,
-            });
+            return Err(ExecutableAdmissionError::CurrentDeploymentMismatch { program });
         }
         let catalog = ActivityProgramCatalog {
             programs: self.programs,
