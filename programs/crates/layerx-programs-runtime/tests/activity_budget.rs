@@ -178,8 +178,7 @@ fn frozen_defined_function_charge_sites(wasm: &[u8], defined_index: usize) -> Ve
             External::Function(_) => {
                 let current = function_index;
                 function_index += 1;
-                (entry.module() == "layerx_private_metering/v1"
-                    && entry.field() == "charge_i64")
+                (entry.module() == "layerx_private_metering/v1" && entry.field() == "charge_i64")
                     .then_some(current)
             }
             _ => None,
@@ -194,7 +193,8 @@ fn frozen_defined_function_charge_sites(wasm: &[u8], defined_index: usize) -> Ve
         .windows(2)
         .filter_map(|window| match window {
             [Instruction::I64Const(charge), Instruction::Call(target)]
-                if *target == charge_function => {
+                if *target == charge_function =>
+            {
                 u64::try_from(*charge).ok()
             }
             _ => None,
@@ -209,17 +209,11 @@ fn access_charge(callees: impl IntoIterator<Item = ProgramId>) -> u64 {
         .total_units()
 }
 
-fn storage_write_call_access_charge(
-    root: ProgramId,
-    payer: PrincipalId,
-    child: ProgramId,
-) -> u64 {
+fn storage_write_call_access_charge(root: ProgramId, payer: PrincipalId, child: ProgramId) -> u64 {
     let mut builder = AccessSet::builder();
     builder
         .write_namespace(StorageNamespace::principal(root, payer))
-        .and_then(|builder| {
-            builder.write_namespace(StorageNamespace::principal(child, payer))
-        })
+        .and_then(|builder| builder.write_namespace(StorageNamespace::principal(child, payer)))
         .and_then(|builder| builder.call(child))
         .unwrap_or_else(|error| panic!("storage/call access set: {error}"));
     builder
@@ -1031,6 +1025,10 @@ fn declared_budget_enforces_exact_v1_bounds_in_stable_dimension_order() {
     );
     assert_eq!(maximum_declared.resource_budget(), maximum);
 
+    assert_budget_maximum_refusals(maximum);
+}
+
+fn assert_budget_maximum_refusals(maximum: ResourceBudget) {
     let over = [
         (
             BudgetDimension::CpuFuel,
@@ -2138,6 +2136,10 @@ fn retained_start_faults_keep_usage_leaf_identity_and_atomic_rollback() {
     assert_eq!(candidate.execution().usage().storage_write_bytes, 2);
     assert_eq!(storage, Storage::new());
 
+    assert_nested_start_faults();
+}
+
+fn assert_nested_start_faults() {
     let child = ProgramId::new([153; 32]).unwrap_or_else(|error| panic!("child: {error}"));
     let requested = CapabilitySet::new([Capability::StorageWrite])
         .unwrap_or_else(|error| panic!("requested: {error}"));
@@ -2192,8 +2194,7 @@ fn retained_start_faults_keep_usage_leaf_identity_and_atomic_rollback() {
         + root_charge_sites[0]
         + layerx_programs_runtime::call_admission_fuel(0)
         + child_charge_sites[0];
-    let (usage, attempted) =
-        repeated_charge_exhaustion(5_000, prefix, child_charge_sites[1]);
+    let (usage, attempted) = repeated_charge_exhaustion(5_000, prefix, child_charge_sites[1]);
     assert_eq!(
         exhausted.refusal(),
         BudgetMeterRefusal::BudgetExceeded {
