@@ -952,6 +952,45 @@ wait_for_node_genesis() {
     [ "$NODE_SEQUENCER_PUBLIC_KEY" = "$(cat "$CA_DIR/sequencer.pub.hex")" ] || fail "the node sequencer public key differs from the generated sequencer key"
 }
 
+guarantor_set_render() {
+    jq -s 'sort_by(.guarantor_id) | to_entries | map(.value + {governance_sequence: (.key + 1)})' "$1"
+}
+
+guarantor_sequence_test() (
+    set -euo pipefail
+    local dir threshold index public signer id mutation
+    dir=$(mktemp -d)
+    trap 'rm -rf "$dir"' EXIT
+    umask 077
+    for threshold in 2 3; do
+        : > "$dir/members.jsonl"
+        for ((index = threshold; index > 0; index--)); do
+            openssl ecparam -name secp256k1 -genkey -noout -out "$dir/member.key"
+            public=0x$(openssl ec -in "$dir/member.key" -pubout -conv_form compressed -outform DER 2>/dev/null | tail -c 33 | od -An -v -tx1 | tr -d ' \n')
+            signer=$(python3 "$REPO_ROOT/platform/hosted/paxeer/settlement-domain.py" signer "$public")
+            printf -v id '0x%064x' "$index"
+            jq -n --arg id "$id" --arg public "$public" --arg signer "$signer" \
+                '{guarantor_id: $id, public_key: $public, signer: $signer, bond_controller: $signer, joined_epoch: 1, bond_amount: "1"}' >> "$dir/members.jsonl"
+        done
+        guarantor_set_render "$dir/members.jsonl" > "$dir/members.json"
+        jq -e --argjson threshold "$threshold" '
+            length == $threshold and . == sort_by(.guarantor_id) and
+            [.[].governance_sequence] == [range(1; $threshold + 1)]
+        ' "$dir/members.json" > /dev/null
+        jq -s 'sort_by(.guarantor_id)' "$dir/members.jsonl" > "$dir/expected.json"
+        jq -e --slurpfile expected "$dir/expected.json" 'map(del(.governance_sequence)) == $expected[0]' "$dir/members.json" > /dev/null
+        LAYERX_PAXEER_GUARANTORS="$dir/members.json" bash "$REPO_ROOT/platform/hosted/paxeer/deploy-contracts.sh" check-guarantors
+        for mutation in 'map(.governance_sequence = 1)' '.[0].governance_sequence = 0' '.[1].governance_sequence = 3' '.[1].governance_sequence = "2"' '.[1].governance_sequence = 2.5' 'reverse'; do
+            jq "$mutation" "$dir/members.json" > "$dir/invalid.json"
+            if LAYERX_PAXEER_GUARANTORS="$dir/invalid.json" bash "$REPO_ROOT/platform/hosted/paxeer/deploy-contracts.sh" check-guarantors > "$dir/refusal.log" 2>&1; then
+                fail "non-contiguous governance sequences were accepted: $mutation"
+            fi
+            grep -q 'governance sequences must be contiguous from 1 in member order' "$dir/refusal.log"
+        done
+        log "guarantor sequence threshold $threshold: sorted 1..$threshold and six explicit refusals passed"
+    done
+)
+
 paxeer_contracts_deploy() {
     [ "${LAYERX_BETA_FORBIDDEN_CHAIN_ID:-}" != "$PAXEER_CHAIN_ID" ] \
         || fail "contract transactions on chain $PAXEER_CHAIN_ID are forbidden by LAYERX_BETA_FORBIDDEN_CHAIN_ID"
@@ -979,11 +1018,11 @@ paxeer_contracts_deploy() {
         signer=$(python3 "$REPO_ROOT/platform/hosted/paxeer/settlement-domain.py" signer "0x$public") || fail "guarantor signer derivation failed"
         jq -n --arg id "0x$id" --arg signer "$signer" --arg public_key "0x$public" \
             --arg controller "$(cat "$SECRETS_DIR/$controller.address")" --arg bond "$bond_amount" \
-            '{guarantor_id: $id, signer: $signer, public_key: $public_key, bond_controller: $controller, joined_epoch: 1, governance_sequence: 1, bond_amount: $bond}' \
+            '{guarantor_id: $id, signer: $signer, public_key: $public_key, bond_controller: $controller, joined_epoch: 1, bond_amount: $bond}' \
             >> "$dir/guarantors.jsonl"
         (umask 077; cp "$SECRETS_DIR/$controller.key" "$dir/guarantor-keys/0x$id.controller.key")
     done
-    jq -s 'sort_by(.guarantor_id)' "$dir/guarantors.jsonl" > "$dir/guarantors.json"
+    guarantor_set_render "$dir/guarantors.jsonl" > "$dir/guarantors.json"
     jq --arg proposer "$(cat "$SECRETS_DIR/paxeer-final-proposer.address")" --arg executor "$(cat "$SECRETS_DIR/paxeer-final-executor.address")" \
         --arg council "$(cat "$SECRETS_DIR/paxeer-emergency-council.address")" \
         '. + {protocol_version: 3, final_proposer: $proposer, final_executor: $executor, emergency_council: $council}' \
@@ -1530,6 +1569,7 @@ main() {
             done
             beta_cluster_up "$boundary"
             ;;
+        test-guarantor-sequences) guarantor_sequence_test ;;
         down) beta_cluster_down ;;
         render) beta_cluster_render ;;
         *) sed -n '2,41p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 64 ;;
