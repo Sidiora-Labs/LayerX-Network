@@ -1238,3 +1238,19 @@ symbol = "cargo test --locked --workspace"
 observed = "cargo test --locked --manifest-path platform/Cargo.toml --workspace --no-fail-fast exits 101. Eight targets fail, all outside the lockfile and deny recipe repair. layerx-platform-agent-boundary real_node: missing programs/sdk/rust/examples/escrow/target/wasm32-unknown-unknown/release/layerx_reference_escrow.wasm and missing build/bin/layerxd. layerx-platform-authority real_node and layerx-platform-core boundary: missing build/bin/layerxd. layerx-platform-cli commands, credential, and emulator: credential store override mock is unavailable in this binary (the card command omits --features layerx-platform-cli/test-credential-store). layerx-platform-emulator gateway lifecycle_routes_execute_and_replay_real_native_state_receipts: left==right failed at emulator/tests/gateway.rs:719 with ordinal=3 sequence=3 terminal DecodedTerm. layerx-platform-paxeer-boundary real_chain: settlement domain qualification failed and real Paxeer qualification failed exit status 1. Remaining workspace targets passed. Evidence: qual-logs/platform-workspace-test.log, qual-logs/platform-workspace-test-nofailfast.log."
 assumption = "Native binaries are out of scope on this server. These failures pre-exist the lockfile and cargo-deny recipe edits. No assertion was relaxed."
 severity = "note"
+
+[observation.platform.base64_unified]
+task = "platform-lint"
+file = "interop/Cargo.toml"
+symbol = "workspace.dependencies.base64"
+observed = "The interop workspace pin is now base64 = \"=0.23.1\". cargo update -p base64@0.22.1 --precise 0.23.1 removed base64 0.22.1 from interop/Cargo.lock and platform/Cargo.lock. cargo tree -i base64 in both workspaces reports a single base64 v0.23.1 used by layerx-mirror, other interop crates, ureq 3.4.0 and ureq-proto 0.6.1. layerx-mirror call sites already use base64::Engine and general_purpose::STANDARD; no source change. cargo deny --manifest-path platform/Cargo.toml check advisories bans sources exits 0 with advisories ok, bans ok, sources ok. cargo build --locked --manifest-path interop/Cargo.toml -p layerx-mirror exits 0. cargo test --locked --manifest-path interop/Cargo.toml -p layerx-mirror exits 0 (unit, checkpoint_vectors, and 12 publish tests). cargo check --locked --manifest-path platform/Cargo.toml --workspace exits 0. deny.toml was not edited. Evidence: qual-logs/item2-cargo-deny.log, qual-logs/item2-interop-base64-tree.log, qual-logs/item2-platform-base64-tree.log, qual-logs/item2-mirror-build.log, qual-logs/item2-mirror-test.log, qual-logs/item2-platform-check.log."
+assumption = "Observation platform.base64_duplicate is resolved for the platform graph. A single base64 version satisfies bans multiple-versions=deny without skip, skip-tree, or allow."
+severity = "note"
+
+[observation.platform.sample_install_toolchain]
+task = "platform-sample-install"
+file = "platform/Makefile.inc"
+symbol = "platform-sample-preflight"
+observed = "make platform-sample-install exits 2 because platform-sample-preflight fails with \"Maven is required for Platform samples\" (recipe Error 1). Swift and dotnet are also absent from PATH. make platform-sample-dependencies-ready exits 2 with \"run make platform-sample-install first\". python3, go and cargo are present. Evidence: qual-logs/item2-platform-sample-install.log, qual-logs/item2-platform-sample-dependencies-ready.log."
+assumption = "The sample-install failure is a missing host toolchain, not a lockfile or deny-policy failure. The preflight checks remain intact."
+severity = "note"
