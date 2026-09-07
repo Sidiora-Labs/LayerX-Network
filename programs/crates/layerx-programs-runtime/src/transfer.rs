@@ -323,11 +323,23 @@ impl TransferCapability {
     /// Aborts on an empty or oversized set, invalid leg, authority mismatch,
     /// or arithmetic overflow.
     pub fn authorize(&self, effects: &AbiEffects) -> Result<AtomicTransferSet, TransferLawError> {
+        self.authorize_with_version(effects, false)
+    }
+
+    pub fn authorize_v2(&self, effects: &AbiEffects) -> Result<AtomicTransferSet, TransferLawError> {
+        self.authorize_with_version(effects, true)
+    }
+
+    fn authorize_with_version(
+        &self,
+        effects: &AbiEffects,
+        require_v2: bool,
+    ) -> Result<AtomicTransferSet, TransferLawError> {
         if effects.transfers.is_empty() || effects.transfers.len() > MAX_TRANSFER_LEGS {
             return Err(TransferLawError::InvalidTransferSet);
         }
         let frames = self.authorized_frames(effects)?;
-        let v2 = self.root_capabilities.has_program_spend()
+        let v2 = require_v2 || self.root_capabilities.has_program_spend()
             || effects
                 .calls
                 .iter()
@@ -1121,6 +1133,35 @@ pub fn verify_authorization_root(
     }
     Ok(())
 }
+
+pub fn verify_applied_kernel_legs(
+    encoded: &[u8],
+    expected: [u8; 32],
+) -> Result<(), TransferLawError> {
+    const LEG_BYTES: usize = 115;
+    if encoded.is_empty() {
+        return if expected == [0; 32] {
+            Ok(())
+        } else {
+            Err(TransferLawError::ReceiptMismatch)
+        };
+    }
+    if encoded.len() % LEG_BYTES != 0 || encoded.len() / LEG_BYTES > MAX_TRANSFER_LEGS {
+        return Err(TransferLawError::InvalidTransferSet);
+    }
+    for leg in encoded.chunks_exact(LEG_BYTES) {
+        if leg[0] != 0 || leg[113..] != 1u16.to_be_bytes()
+            || leg[1..33] == [0; 32] || leg[33..65] == [0; 32]
+            || leg[65..97] == [0; 32] || leg[97..113] == [0; 16]
+        {
+            return Err(TransferLawError::InvalidTransfer);
+        }
+    }
+    if canonical_kernel_root(encoded, encoded.len() / LEG_BYTES)? != expected {
+        return Err(TransferLawError::ReceiptMismatch);
+    }
+    Ok(())
+}
 fn decode_program_authority(encoded: &[u8]) -> Result<ProgramAuthority, TransferLawError> {
     let mut cursor = TransferCursor::new(encoded);
     if cursor.take(PROGRAM_AUTHORITY_DOMAIN.len())? != PROGRAM_AUTHORITY_DOMAIN {
@@ -1582,6 +1623,59 @@ mod tests {
         assert!(set
             .canonical()
             .starts_with(b"LayerX/programs/402LXP/transfer-set/v1\0"));
+    }
+
+    #[test]
+    fn explicit_v2_principal_authority_preserves_kernel_legs_and_legacy_decoding() {
+        let program = program_id(1);
+        let principal = principal_id(2);
+        let capability = capability(program, principal);
+        let effects = AbiEffects {
+            transfers: vec![request(program, principal, 7), request(program, principal, 11)],
+            ..AbiEffects::default()
+        };
+        let legacy = capability.authorize(&effects).unwrap_or_else(|error| panic!("legacy authority: {error}"));
+        let current = capability.authorize_v2(&effects).unwrap_or_else(|error| panic!("V2 authority: {error}"));
+        assert!(!legacy.is_v2());
+        assert!(current.is_v2());
+        assert!(current.canonical().starts_with(SET_DOMAIN_V2));
+        assert_ne!(legacy.canonical(), current.canonical());
+        assert_eq!(legacy.kernel_canonical(), current.kernel_canonical());
+        assert_eq!(legacy.kernel_root(), current.kernel_root());
+        assert_eq!(AtomicTransferSet::canonical_decode(legacy.canonical()), Ok(legacy.clone()));
+        assert_eq!(AtomicTransferSet::canonical_decode(current.canonical()), Ok(current.clone()));
+        assert_eq!(verify_authorization_root(legacy.canonical(), legacy.kernel_root()), Ok(()));
+        assert_eq!(verify_authorization_root(current.canonical(), current.kernel_root()), Ok(()));
+        assert_eq!(capability.authorize_v2(&AbiEffects::default()), Err(TransferLawError::InvalidTransferSet));
+    }
+
+    #[test]
+    fn applied_kernel_evidence_authenticates_each_field_order_and_multiplicity() {
+        let program = program_id(1);
+        let principal = principal_id(2);
+        let capability = capability(program, principal);
+        let effects = AbiEffects {
+            transfers: vec![request(program, principal, 7), request(program, principal, 11)],
+            ..AbiEffects::default()
+        };
+        let set = capability.authorize_v2(&effects).unwrap_or_else(|error| panic!("V2 authority: {error}"));
+        let bytes = set.kernel_canonical();
+        assert_eq!(verify_applied_kernel_legs(bytes, set.kernel_root()), Ok(()));
+        for offset in [0, 1, 33, 65, 97, 112, 113, 114] {
+            let mut mutated = bytes.to_vec();
+            mutated[offset] ^= 1;
+            assert!(verify_applied_kernel_legs(&mutated, set.kernel_root()).is_err());
+        }
+        let mut reversed = bytes[115..].to_vec();
+        reversed.extend_from_slice(&bytes[..115]);
+        assert!(verify_applied_kernel_legs(&reversed, set.kernel_root()).is_err());
+        assert!(verify_applied_kernel_legs(&bytes[..115], set.kernel_root()).is_err());
+        assert!(verify_applied_kernel_legs(&bytes[..bytes.len() - 1], set.kernel_root()).is_err());
+        assert!(verify_applied_kernel_legs(&[], set.kernel_root()).is_err());
+        assert_eq!(verify_applied_kernel_legs(&[], [0; 32]), Ok(()));
+        assert!(verify_applied_kernel_legs(bytes, [0; 32]).is_err());
+        let over_bound = bytes[..115].repeat(MAX_TRANSFER_LEGS + 1);
+        assert!(verify_applied_kernel_legs(&over_bound, set.kernel_root()).is_err());
     }
 
     #[test]
