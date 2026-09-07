@@ -2,6 +2,7 @@ use layerx_platform_gateway::store::{
     RedisEndpoint, RedisStore, TapCredentialRecord, TapNonceConsumption,
 };
 use native_tls::Certificate;
+use std::fmt::Write as _;
 use std::fs;
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
@@ -115,7 +116,7 @@ impl RedisProcess {
             }
             thread::sleep(Duration::from_millis(20));
         }
-        panic!("real Redis server did not become reachable")
+        redis_unreachable(child)
     }
 
     fn store(&self) -> RedisStore {
@@ -259,8 +260,11 @@ fn principal_binding_comes_only_from_the_authenticated_durable_key_record() {
         principal
             .audit_digest()
             .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>()
+            .fold(String::new(), |mut text, byte| {
+                write!(text, "{byte:02x}")
+                    .unwrap_or_else(|error| panic!("writing to String cannot fail: {error}"));
+                text
+            })
     };
     let secret = format!("lxp_live_{}", "a".repeat(64));
     let record = KeyRecord {
@@ -298,4 +302,12 @@ fn principal_binding_comes_only_from_the_authenticated_durable_key_record() {
         )
         .unwrap_or_else(|error| panic!("revoke: {error}")));
     assert!(authenticate_gateway_key(&store, &credential).is_err());
+}
+
+fn redis_unreachable(mut child: Child) -> ! {
+    let _ = child.kill();
+    child
+        .wait()
+        .unwrap_or_else(|error| panic!("test Redis child must be reaped: {error}"));
+    panic!("real Redis server did not become reachable")
 }
