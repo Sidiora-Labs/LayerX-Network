@@ -2045,4 +2045,19 @@ file = "platform/sdk/conformance/fixtures/receipt-programs-executed-v3.json agen
 symbol = "test_actual_kernel_runtime_receipt_and_module_binding parseProgramExecutionDocument"
 observed = "The captured external ABI-2 executed-receipt fixture lacks execution_document. Full Python tests exit 1 with KeyError execution_document in qual-logs/binding-abi2-py-complete-scratch.log. Full TypeScript tests exit 1 reading document.usage in qual-logs/binding-abi2-ts.log. The native-binding refusal tests pass on that same scratch tree. The exact captured producer fixture remains at qual-logs/binding-abi2-scratch/platform/sdk/conformance/fixtures/receipt-programs-executed-v3.json."
 assumption = "The fixture producer must emit the complete execution_document required by the existing SDK execution tests. Producer and execution tests are outside native-binding test ownership. Assertions and fixtures were not weakened or edited to hide this independent failure. Full qualification against the captured executed-receipt fixture remains blocked."
+
+[observation.6.4.sandbox-expiry-capacity]
+task = "6.4"
+file = "programs/crates/layerx-programs-sandbox/src/lease.rs programs/crates/layerx-programs-sandbox/tests/lease.rs"
+symbol = "LeaseBook::transition real_request_evidence_enforces_principal_concurrency_and_expiry"
+observed = "Authority: spec/layerx-platform/spec.kvx req.41 ac_5 and task.34.1 do_2/do_4 close leases at expiry and bound concurrent leases. LeaseBook now releases the principal slot exactly on the transition to Expired; subsequent destruction does not release it again. Real receipt-backed coverage admits a replacement before destruction, refuses an extra lease after destruction, drains the cohort including repeated-destroy refusals, then admits exactly a full cohort and refuses one more. The full host-ffi sandbox suite exits 0 with 34 tests passing and none ignored; touched-file rustfmt --check, the interpreter Wasm build, make programs-abi-drift and git diff --check exit 0. Exact commands and exits: qual-logs/sandbox-fixes/gates.jsonl. Final suite: qual-logs/sandbox-fixes/passing-sandbox-test.log."
+assumption = "Expired remains a distinct lifecycle state until storage reclamation; LeaseState::is_terminal retains its Destroyed-only meaning. Task statuses are unchanged."
+severity = "note"
+
+[observation.6.4.sandbox-runtime-clippy-dependency]
+task = "6.4"
+file = "programs/crates/layerx-programs-runtime/src/ffi_call.rs programs/crates/layerx-programs-runtime/src/execute.rs programs/crates/layerx-programs-runtime/src/transfer.rs"
+symbol = "execute"
+observed = "cargo clippy --locked --manifest-path programs/Cargo.toml -p layerx-programs-sandbox --lib --tests --features host-ffi -- -D warnings exits 101 while checking the runtime dependency, with 151 errors beginning at ffi_call.rs:2122 needless_continue. The sandbox lint result is not established. Raw output: qual-logs/sandbox-fixes/clippy.log; diagnostic index: qual-logs/sandbox-fixes/clippy-errors.txt."
+assumption = "Runtime source and lint policy remain unchanged. Runtime diagnostics require repair outside the sandbox ownership boundary. make programs-core-test covers native Programs binaries in Makefile and does not include the sandbox crate, so the conditional sandbox gate does not apply."
 severity = "blocker"
