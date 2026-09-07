@@ -359,3 +359,5 @@ Sources:
 - `agent/crates/layerx-wire/src/limits.rs:29-33`
 - `agent/crates/layerx-crypto/src/ed25519.rs:54-70`
 - `docs/wiki/SdkTerminalVerification.md`
+
+[Home](Home.md)

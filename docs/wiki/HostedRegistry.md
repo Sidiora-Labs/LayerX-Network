@@ -222,3 +222,5 @@ There are no `#[test]` functions in `builder.rs`, `mirror.rs`, `verified.rs`, `n
 NetworkPolicy ingress names `layerx-role: source-publication-operator` (`platform/hosted/registry/deployment.yaml:90-91`). No workload with that label is in the default topology-check manifests (`platform/hosted/tests/topology-check.sh:81-88`).
 
 `GET /healthz` does not inspect protocol state (`platform/hosted/registry/src/routes.rs:223-226`). The kubelet probe does not call it (`platform/hosted/registry/deployment.yaml:49`; `platform/hosted/registry/src/main.rs:848-849`).
+
+[Home](Home.md)

@@ -470,3 +470,5 @@ padding round-trips and reject non-canonical input
 (`platform/hosted/internal/src/base64.rs:96-119`). Identifier tests
 prove principal, token, and lowercase hex rules
 (`platform/hosted/internal/src/secret.rs:201-215`).
+
+[Home](Home.md)

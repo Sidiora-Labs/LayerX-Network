@@ -44,9 +44,9 @@ Crate documentation (`programs/porting/solana/src/lib.rs:2-18`): the kit
 carries a Solana program onto the LayerX programs ABI. Account data stays
 byte-identical (Anchor discriminator first, `borsh` fields after). Instruction
 and event discriminators stay byte-identical. Constructs the account model
-assumes and LayerX does not provide — a program-held lamport balance, a
+assumes and LayerX does not provide - a program-held lamport balance, a
 program-derived signing authority over somebody else's funds, an account
-another program may mutate — are refused by name at translation time. The
+another program may mutate - are refused by name at translation time. The
 [`reference`](../../programs/porting/solana/src/reference.rs) port emits a
 deterministic module, deploys through the real lifecycle, rebuilds from
 published source, and executes under the real metered executor.
@@ -178,9 +178,9 @@ Checks before a ported program is admitted:
 Crate documentation (`programs/porting/evm/src/lib.rs:2-16`): the kit carries
 an EVM contract onto the LayerX programs ABI. Storage slot addresses stay
 byte-identical. Event topics and four-byte selectors stay byte-identical.
-Constructs the EVM model assumes and LayerX does not provide — a
+Constructs the EVM model assumes and LayerX does not provide - a
 contract-held balance, a clock, ambient authority over another account's funds
-— are refused by name at translation time. The reference port in `reference`
+- are refused by name at translation time. The reference port in `reference`
 emits, deploys, rebuilds, and executes on the real plane.
 
 `programs_porting_evm()` returns
@@ -282,8 +282,8 @@ Crate documentation (`programs/porting/cosmwasm/src/lib.rs:2-23`): the kit
 carries a CosmWasm contract onto the LayerX programs ABI. Raw storage keys stay
 byte-identical (`cw-storage-plus` `Item` and `Map` prefix framing). JSON
 message and event names stay byte-identical. Constructs the chain model assumes
-and LayerX does not provide — a contract-held bank balance, spending somebody
-else's allowance, a `Deps::querier` round trip, state shared across senders —
+and LayerX does not provide - a contract-held bank balance, spending somebody
+else's allowance, a `Deps::querier` round trip, state shared across senders -
 are refused by name at translation time. JSON stops at the edge; the running
 program moves canonically framed bytes. The reference port emits, deploys,
 rebuilds, and executes on the real plane.
@@ -410,3 +410,5 @@ do not assert a `PortRefusal`
 | Refusal test in crate | `Err(PortRefusal::UnboundedRentSweep)` (`programs/porting/solana/src/monetary.rs:349-353`) | `Err(PortRefusal::UnboundedBalanceSweep)` (`programs/porting/evm/src/monetary.rs:329-333`) | `Err(PortRefusal::SupplyMutation)` (`programs/porting/cosmwasm/src/monetary.rs:346-351`) |
 | ABI v2 reference guest | `programs/porting/solana/reference-v2/src/lib.rs:1-9` | `programs/porting/evm/reference-v2/src/lib.rs:1-15` | `programs/porting/cosmwasm/reference-v2/src/lib.rs:1-9` |
 | Make lint artifact | `layerx_anchor_context_reference.wasm` (`Makefile:3093`, `Makefile:3096`) | `layerx_evm_context_reference.wasm` (`Makefile:3092`, `Makefile:3095`) | `layerx_cosmwasm_context_reference.wasm` (`Makefile:3094`, `Makefile:3097`) |
+
+[Home](Home.md)
