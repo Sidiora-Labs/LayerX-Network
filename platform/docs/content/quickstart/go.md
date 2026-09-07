@@ -5,7 +5,7 @@ Add a payment to a Go service. Nine lines, no protocol vocabulary, no key handli
 ## Before you start
 
 ```text
-go get github.com/Sidiora-Labs/LayerX-Protocol/platform/sdk/go
+go get github.com/Sidiora-Labs/LayerX-Network/platform/sdk/go
 ```
 
 | Variable | What it is |

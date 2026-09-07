@@ -225,4 +225,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Exact sandbox capability refusals required through valid guest calls
 - Exact portable receipt refusals from the vector contract
 
-[Unreleased]: https://github.com/Sidiora-Labs/LayerX-Protocol/commits/main
+[Unreleased]: https://github.com/Sidiora-Labs/LayerX-Network/commits/main
