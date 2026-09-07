@@ -6478,6 +6478,8 @@ assumption = "The inherited sole-writer conflict remains recorded by explicit sc
 severity = "note"
 [observation.6.8.101]
 task = "6.8"
+[observation.6.8.11]
+task = "6.8"
 file = "platform/hosted/agent-boundary/Dockerfile platform/hosted/tests/beta-cluster.sh"
 symbol = "build_images beta_cluster_up beta_cluster_down"
 observed = "On revision 259e4b0f20ae3d22f75d9db934187b1109822ca2, make beta-ledger-check exits 0 before the exact make platform-hosted-topology-check platform-beta-cluster-up platform-beta-cluster-down invocation. The exact invocation exits 2: topology passes both parsers and all retained regressions; twelve images complete (testnet-control, gateway, faucet, program-registry, webhooks, dashboard, dashboard-web, internal, human, node, core-boundary, receipt-authority). The next image, layerx-agent-boundary, fails before compilation at Dockerfile:1 while resolving rust:1.91.1-alpine3.22 and alpine:3.22 metadata: failed to fetch anonymous token from auth.docker.io, read: connection reset by peer. Docker exits 1 and make exits 2. The one-second disk monitor does not intervene (disk_stop=false). Logs: qual-logs/au32/ledger-before.log, task-6.8.log, task-6.8-result.json, build-layerx-agent-boundary.log and build-<image>.log. All twelve completed local image IDs are in qual-logs/au32/images.log; Human image ID is sha256:a32ae1a6c80f6fed769d5c969192c953709419aa9d307865d89cef1b5528339c."
