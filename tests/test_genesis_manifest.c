@@ -202,6 +202,33 @@ static int check_version(uint16_t protocol_version)
         &manifest, &decoded_registration, 42U, true, &snapshot_manifest,
         &kernel, &arena, &enabled) == LXP_OK && enabled);
 
+    REQUIRE(lxp_genesis_initialized_verify(
+        &manifest, &decoded_registration, 42U, &snapshot_manifest,
+        &kernel, &arena, &enabled) == LXP_OK && enabled);
+    REQUIRE(lxp_genesis_initialized_verify(
+        &manifest, &decoded_registration, 43U, &snapshot_manifest,
+        &kernel, &arena, &enabled) != LXP_OK && !enabled);
+    changed_snapshot = snapshot_manifest;
+    changed_snapshot.global_sequence = 1U;
+    REQUIRE(lxp_genesis_initialized_verify(
+        &manifest, &decoded_registration, 42U, &changed_snapshot,
+        &kernel, &arena, &enabled) != LXP_OK && !enabled);
+    changed_snapshot = snapshot_manifest;
+    changed_snapshot.receipt_state_root[0] ^= 1U;
+    REQUIRE(lxp_genesis_initialized_verify(
+        &manifest, &decoded_registration, 42U, &changed_snapshot,
+        &kernel, &arena, &enabled) != LXP_OK && !enabled);
+    changed = manifest;
+    changed.signature[0] ^= 1U;
+    REQUIRE(lxp_genesis_initialized_verify(
+        &changed, &decoded_registration, 42U, &snapshot_manifest,
+        &kernel, &arena, &enabled) != LXP_OK && !enabled);
+    decoded_registration.finalised = false;
+    REQUIRE(lxp_genesis_initialized_verify(
+        &manifest, &decoded_registration, 42U, &snapshot_manifest,
+        &kernel, &arena, &enabled) != LXP_OK && !enabled);
+    decoded_registration = registration;
+
     enabled = true;
     REQUIRE(lxp_genesis_bootstrap_verify(
         &manifest, &decoded_registration, 42U, false, &snapshot_manifest,
