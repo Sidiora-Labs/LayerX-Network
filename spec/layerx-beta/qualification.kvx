@@ -1966,3 +1966,11 @@ symbol = "TerminalV4 programs-check-executed-v4-fixture"
 observed = "PYTHONPATH=agent/sdk/python python3 platform/sdk/conformance/terminal-v4.test.py, make agent-test-sdk-py, LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin make programs-check-executed-fixture, make programs-abi-drift and git diff --check each exit 0. Logs: qual-logs/pass5-python-terminal-v4.log, qual-logs/pass5-python-sdk.log, qual-logs/pass5-executed-fixture.log, qual-logs/pass5-abi-drift.log and qual-logs/pass5-diff-check.log. Make commands use CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4."
 assumption = "V4 fixtures are stored authenticated inputs. qual-logs/terminal-native-import.log establishes byte identity of the generator and executed-v4, principal-v4 and mutated-leg-v4 vectors to native 9f092ea4; V3 retains original native fields with existing packaging. programs-check-executed-v4-fixture was not run here: regeneration requires the separately owned C producer and Rust terminal_v4 proof test supplied by PR #94. PR #99 integrates after PR #94. This supersedes the local regeneration prerequisite in terminal-v4-python-native-producer-blocked; it does not assert that regeneration ran or that native qualification passed here."
 severity = "note"
+
+[observation.6.11.terminal-v4-typescript]
+task = "6.11"
+file = "agent/sdk/typescript/src/program-wire.ts agent/sdk/typescript/test/program-executed-v3.test.ts"
+symbol = "decodeAndVerifyProgramTerminal"
+observed = "CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4 make agent-test-sdk-ts exits 0 in qual-logs/pass5-ts-sdk-final.log; git diff --check exits 0 in qual-logs/pass5-ts-diff-check.log. Signed shared V4 and principal-V4 reconstruct, mutated-leg-V4 authenticates then rejects, V3 reports recorded root, and truncated/trailing terminals reject."
+assumption = "Initial SDK gate exits 2 for missing tsc in qual-logs/pass5-ts-sdk.log. npm --prefix agent/sdk/typescript ci --ignore-scripts --no-audit --no-fund exits 0 in qual-logs/pass5-ts-dependencies.log. The subsequent compile exits 2 in qual-logs/pass5-ts-sdk-rerun.log until the existing typed V3 test outcome explicitly supplies its canonical zero applied-leg digest. Stored native vectors and native regeneration scope remain as recorded in terminal-v4-stored-input-qualification."
+severity = "note"

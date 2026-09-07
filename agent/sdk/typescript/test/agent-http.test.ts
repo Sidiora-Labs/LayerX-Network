@@ -223,7 +223,7 @@ const receiptOutcome: ProgramReceiptOutcome = {
   occupancyByteBatches: 0n, occupancyFeeUnits: 0n, feeSchedulePrices: [0n, 0n, 0n, 0n, 0n, 0n, 0n],
   occupancyAssetId: new Uint8Array(32), occupancyEvidenceDigest: new Uint8Array(32),
   occupancyTransferRoot: new Uint8Array(32), feeUnits: 10n, callGraphRoot: graphRoot,
-  terminalPayloadRoot: terminalRoot, transferRoot: new Uint8Array(32),
+  terminalPayloadRoot: terminalRoot, transferRoot: new Uint8Array(32), appliedLegsDigest: new Uint8Array(32),
 };
 const decodedTerminal = await decodeAndVerifyProgramTerminal(terminal, graph, programId, receiptOutcome, 1);
 assert(decodedTerminal.outcome.kind === "completed" && decodedTerminal.outcome.response === "aabb", "canonical candidate terminal response was not bound");
