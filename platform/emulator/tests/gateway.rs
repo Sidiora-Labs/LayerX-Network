@@ -718,6 +718,10 @@ mod lifecycle_checks {
         let protocol = verified.protocol().ok_or("protocol receipt missing")?;
         assert_eq!(protocol.activity_id(), expected_id);
         assert_eq!(
+            protocol.global_sequence(),
+            2 * u64::try_from(sequence).map_err(|error| error.to_string())? + 1
+        );
+        assert_eq!(
             (
                 protocol.module_id(),
                 protocol.module_version(),
@@ -920,6 +924,12 @@ fn lifecycle_routes_execute_and_replay_real_native_state_receipts() -> Result<()
         let result = &document["result"];
         lifecycle_checks::lifecycle_receipt(&input, result)?;
         lifecycle_checks::lifecycle_replay(&input, result)?;
+        let state = request(&address, "GET", "/v1/state", "", &[])?;
+        assert_eq!(state.status, 200);
+        let state: serde_json::Value =
+            serde_json::from_slice(&state.body).map_err(|error| error.to_string())?;
+        assert_eq!(state["result"]["batch_number"], sequence + 1);
+        assert_eq!(state["result"]["next_sequence"], 2 * (sequence + 1) + 1);
     }
     Ok(())
 }
