@@ -274,8 +274,9 @@ impl TransferSource {
     #[must_use]
     pub const fn account(&self) -> [u8; 32] {
         match self {
-            Self::Principal(principal) => principal.bytes(),
-            Self::ProgramFunding { principal, .. } => principal.bytes(),
+            Self::Principal(principal) | Self::ProgramFunding { principal, .. } => {
+                principal.bytes()
+            }
             Self::Program(authority) => authority.source_account(),
         }
     }
@@ -386,11 +387,11 @@ impl TransferCapability {
             canonical.extend_from_slice(&call.callee.bytes());
             canonical.extend_from_slice(&call.principal.bytes());
             let (caller_path, caller_depth) = call.caller_frame.canonical_bytes();
-            let (callee_path, callee_depth) = call.callee_frame.canonical_bytes();
+            let (destination_path, destination_depth) = call.callee_frame.canonical_bytes();
             canonical.extend_from_slice(&caller_path);
             canonical.push(caller_depth);
-            canonical.extend_from_slice(&callee_path);
-            canonical.push(callee_depth);
+            canonical.extend_from_slice(&destination_path);
+            canonical.push(destination_depth);
             let grants = call.capabilities.canonical_encoding();
             let grant_length =
                 u32::try_from(grants.len()).map_err(|_| TransferLawError::InvariantViolation)?;
@@ -903,12 +904,12 @@ impl AtomicTransferSet {
         for _ in 0..call_count {
             let caller = ProgramId::new(cursor.array()?)
                 .map_err(|_| TransferLawError::InvalidTransferSet)?;
-            let callee = ProgramId::new(cursor.array()?)
+            let destination = ProgramId::new(cursor.array()?)
                 .map_err(|_| TransferLawError::InvalidTransferSet)?;
             let call_principal = PrincipalId::new(cursor.array()?)
                 .map_err(|_| TransferLawError::InvalidTransferSet)?;
             let caller_frame = frame_from_cursor(&mut cursor)?;
-            let callee_frame = frame_from_cursor(&mut cursor)?;
+            let destination_frame = frame_from_cursor(&mut cursor)?;
             let grant_length = u32::from_be_bytes(cursor.array()?) as usize;
             let grants = cursor.take(grant_length)?;
             let grants = if v2 {
@@ -918,14 +919,14 @@ impl AtomicTransferSet {
             }
             .map_err(|_| TransferLawError::InvalidTransferSet)?;
             canonical.extend_from_slice(&caller.bytes());
-            canonical.extend_from_slice(&callee.bytes());
+            canonical.extend_from_slice(&destination.bytes());
             canonical.extend_from_slice(&call_principal.bytes());
             let (caller_path, caller_depth) = caller_frame.canonical_bytes();
-            let (callee_path, callee_depth) = callee_frame.canonical_bytes();
+            let (destination_path, destination_depth) = destination_frame.canonical_bytes();
             canonical.extend_from_slice(&caller_path);
             canonical.push(caller_depth);
-            canonical.extend_from_slice(&callee_path);
-            canonical.push(callee_depth);
+            canonical.extend_from_slice(&destination_path);
+            canonical.push(destination_depth);
             let grants = CapabilitySet::new(grants)
                 .map_err(|_| TransferLawError::InvalidTransferSet)?
                 .canonical_encoding();
