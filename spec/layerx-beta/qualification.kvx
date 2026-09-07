@@ -1464,3 +1464,11 @@ symbol = "route GetEVMChainID create_profile"
 observed = "The ordinary disposable genesis uses hyperpax_125-1 because it is the only current Comet mapping to EVM chain 125. The supplied persistent-host refusal contract rejects that Comet chain ID independently of the genesis digest, so a different genesis document does not satisfy that refusal contract. The boundary has no /genesis route. Published custody helper revision f2bfd20e7cc3cae438dd6be7cb6c358067065088 still reads block 0 and contains no Comet identity path. Exact required external changes are recorded in /root/lx-lanes/cluster/NEEDS.md."
 assumption = "Ordinary genesis remains selected. No Comet custody identity manifest is asserted valid and no custody-first helper is invoked. The persistent host is never queried; its public deny identifiers come only from the supplied inputs."
 severity = "blocker"
+
+[observation.3.7.cluster-rebased-verification]
+task = "3.7"
+file = "platform/emulator/tests/gateway.rs platform/Makefile.inc"
+symbol = "lifecycle_routes_execute_and_replay_real_native_state_receipts platform-test-tooling"
+observed = "On source 6c6df74e0969c5529a480087c945968523aeaf82 rebased onto d17b6e5b, the exact verify_cmd make platform-test-tooling platform-beta-cluster-up platform-hosted-smoke platform-beta-cluster-down exits 2. The gateway integration suite reports ten passed and one failed at emulator/tests/gateway.rs:719: ordinal 3 sequence 3 returns -736 instead of 0 with Failure(Callback { stage: 5, status: -3 }). The later cluster-up, smoke and down goals are not reached. CARGO_BUILD_JOBS=4, MAKEFLAGS=-j4 and LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin are set. Evidence: /root/lx-lanes/cluster/qual-logs/pass4/task-3.7-verify.log, task-3.7-verify.exit, source.txt and native-ready.txt."
+assumption = "The supplied native readiness file identifies source 8645dc0b and NOT READY; this evidence does not certify newer native binaries. The assertion and native implementation remain unchanged and require native-owner resolution. Ordinary genesis is selected under observation.3.7.custody-first-genesis. No aggregate qualification success is claimed."
+severity = "blocker"
