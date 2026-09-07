@@ -95,7 +95,7 @@ public final class LocalVerifier {
         BigInteger storageWriteBytes, long outputValues, BigInteger outputBytes,
         BigInteger occupancyByteBatches, BigInteger occupancyFeeUnits, List<BigInteger> feeSchedulePrices,
         byte[] occupancyAssetId, byte[] occupancyEvidenceDigest, byte[] occupancyTransferRoot,
-        BigInteger feeUnits, byte[] callGraphRoot, byte[] terminalPayloadRoot, byte[] transferRoot) {
+        BigInteger feeUnits, byte[] callGraphRoot, byte[] terminalPayloadRoot, byte[] transferRoot, byte[] appliedLegsDigest) {
         public ProgramReceiptOutcome { feeSchedulePrices = List.copyOf(feeSchedulePrices); }
     }
     public record ProtocolReceipt(int protocolVersion, byte[] activityId, BigInteger globalSequence,
@@ -418,11 +418,11 @@ public final class LocalVerifier {
     private static ProgramReceiptOutcome decodeProgramReceiptOutcomeFrom(Decoder d, int protocolVersion) {
         long tag = d.u32();
         int encodingVersion = tag == PROGRAM_OUTCOME_V1 ? 1
-            : tag == PROGRAM_OUTCOME_V2 ? 2 : tag == PROGRAM_OUTCOME_V3 ? 3 : 0;
+            : tag == PROGRAM_OUTCOME_V2 ? 2 : tag == PROGRAM_OUTCOME_V3 ? 3 : tag == 0x50524734L ? 4 : 0;
         if (encodingVersion == 0) fail();
         int terminalKind = d.u8(); int resultCode = d.i32(); int runtimeVersion = d.u16();
         int abiVersion = d.u16(); long feeScheduleVersion = d.u32();
-        long meteringScheduleVersion = encodingVersion == 3 ? d.u32() : 1;
+        long meteringScheduleVersion = encodingVersion >= 3 ? d.u32() : 1;
         BigInteger cpuFuel = d.integer(8), memoryBytes = d.integer(8);
         BigInteger storageReadBytes = d.integer(8), storageWriteBytes = d.integer(8);
         long outputValues = d.u32(); BigInteger outputBytes = d.integer(8);
@@ -440,11 +440,13 @@ public final class LocalVerifier {
         }
         BigInteger feeUnits = d.integer(16); byte[] callGraphRoot = d.bounded(32);
         byte[] terminalPayloadRoot = d.bounded(32); byte[] transferRoot = d.bounded(32);
+        byte[] appliedLegsDigest = encodingVersion == 4 ? d.bounded(32) : new byte[32];
         boolean occupancyZero = occupancyByteBatches.signum() == 0 && occupancyFeeUnits.signum() == 0
             && allZero(occupancyAssetId) && allZero(occupancyEvidenceDigest) && allZero(occupancyTransferRoot);
         boolean validVersion = protocolVersion == 1 && (encodingVersion == 1 || encodingVersion == 3)
-            || (protocolVersion == 2 || protocolVersion == 3) && (encodingVersion == 2 || encodingVersion == 3);
-        if (terminalKind < 1 || terminalKind > 3 || runtimeVersion == 0 || abiVersion == 0
+            || (protocolVersion == 2 || protocolVersion == 3) && (encodingVersion == 2 || encodingVersion == 3)
+            || protocolVersion == 3 && encodingVersion == 4;
+        if ((encodingVersion == 4) == allZero(appliedLegsDigest) || terminalKind < 1 || terminalKind > 3 || runtimeVersion == 0 || abiVersion == 0
                 || feeScheduleVersion == 0 || meteringScheduleVersion != 1 || allZero(terminalPayloadRoot)
                 || terminalKind == 1 && resultCode != 0
                 || terminalKind != 1 && (resultCode == 0 || resultCode <= -1000)
@@ -453,15 +455,15 @@ public final class LocalVerifier {
                 || encodingVersion >= 2 && terminalKind != 1 && !occupancyZero
                 || encodingVersion == 2 && terminalKind == 1
                     && (allZero(occupancyAssetId) || allZero(occupancyEvidenceDigest))
-                || encodingVersion == 3 && allZero(occupancyAssetId) != allZero(occupancyEvidenceDigest)
-                || protocolVersion == 1 && encodingVersion == 3 && !occupancyZero
-                || (protocolVersion == 2 || protocolVersion == 3) && encodingVersion == 3 && terminalKind == 1
+                || encodingVersion >= 3 && allZero(occupancyAssetId) != allZero(occupancyEvidenceDigest)
+                || protocolVersion == 1 && encodingVersion >= 3 && !occupancyZero
+                || (protocolVersion == 2 || protocolVersion == 3) && encodingVersion >= 3 && terminalKind == 1
                     && (allZero(occupancyAssetId) || allZero(occupancyEvidenceDigest))) fail();
         return new ProgramReceiptOutcome(encodingVersion, terminalKind, resultCode, runtimeVersion,
             abiVersion, feeScheduleVersion, meteringScheduleVersion, cpuFuel, memoryBytes,
             storageReadBytes, storageWriteBytes, outputValues, outputBytes, occupancyByteBatches,
             occupancyFeeUnits, feeSchedulePrices, occupancyAssetId, occupancyEvidenceDigest,
-            occupancyTransferRoot, feeUnits, callGraphRoot, terminalPayloadRoot, transferRoot);
+            occupancyTransferRoot, feeUnits, callGraphRoot, terminalPayloadRoot, transferRoot, appliedLegsDigest);
     }
 
     public static ProgramReceiptOutcome decodeProgramReceiptOutcome(byte[] canonicalOutcome,

@@ -32,3 +32,26 @@ await assert.rejects(verifyProgramReceipt(parsed, authority, new ProgramTrustCon
 for (const module_version of [0, 5, true]) assert.throws(() => parseProgramExecutionDocument({ ...document, module_version }));
 const corrupted = Buffer.from(fixture.canonical_receipt_hex, "hex"); corrupted[corrupted.length - 1] = corrupted[corrupted.length - 1]! ^ 1;
 await assert.rejects(verifyProgramReceipt(parseProgramExecutionDocument({ ...document, receipt: corrupted.toString("hex") }), authority, trust));
+
+for (const name of ["executed-v4", "principal-v4", "mutated-leg-v4", "executed-v3"]) {
+  const vector = JSON.parse(readFileSync(new URL(`../../../../../platform/sdk/conformance/fixtures/receipt-programs-${name}.json`, import.meta.url), "utf8")) as typeof fixture & { signed_activity_hex: string };
+  const batch = vector.authorized_batch;
+  const authenticated = await verifyReceiptOutcome(Buffer.from(vector.canonical_receipt_hex, "hex"), {
+    batchId: Buffer.from(batch.batch_id_hex, "hex"), asset: Buffer.from(batch.asset_hex, "hex"),
+    previousStateRoot: Buffer.from(batch.previous_state_root_hex, "hex"), resultingStateRoot: Buffer.from(batch.resulting_state_root_hex, "hex"),
+    sequencerPublicKey: Buffer.from(batch.sequencer_public_key_hex, "hex"),
+  }, { protocolVersion: 3 });
+  assert.equal(Buffer.from(authenticated.receiptDigest).toString("hex"), vector.receipt_digest_hex);
+  const { createHash } = await import("node:crypto");
+  assert.deepEqual(Buffer.from(authenticated.receipt.activityId), createHash("sha256").update("LXP/v1/activity-id\0").update(Buffer.from(vector.signed_activity_hex, "hex")).digest());
+  const outcome = authenticated.receipt.programOutcome;
+  assert(outcome);
+  const payload = Buffer.from(vector.terminal_payload_hex, "hex"), graph = Buffer.from(vector.call_graph_hex, "hex");
+  const decode = (value: Uint8Array) => decodeAndVerifyProgramTerminal(value, graph, vector.program_id_hex, outcome, 3);
+  if (name === "mutated-leg-v4") await assert.rejects(decode(payload), /applied transfer root/);
+  else assert.equal((await decode(payload)).transferVerification, name === "executed-v3" ? "recorded_terminal_root_not_locally_reconstructable" : "reconstructed");
+  if (name === "executed-v4") {
+    for (let length = 0; length < payload.length; length++) await assert.rejects(decode(payload.subarray(0, length)));
+    await assert.rejects(decode(Buffer.concat([payload, Buffer.of(0)])));
+  }
+}

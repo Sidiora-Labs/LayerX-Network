@@ -177,7 +177,7 @@ export interface ReceiptEffect {
 }
 
 export interface ProgramReceiptOutcome {
-  readonly encodingVersion: 1 | 2 | 3;
+  readonly encodingVersion: 1 | 2 | 3 | 4;
   readonly terminalKind: 1 | 2 | 3;
   readonly resultCode: number;
   readonly runtimeVersion: number;
@@ -200,6 +200,7 @@ export interface ProgramReceiptOutcome {
   readonly callGraphRoot: Uint8Array;
   readonly terminalPayloadRoot: Uint8Array;
   readonly transferRoot: Uint8Array;
+  readonly appliedLegsDigest: Uint8Array;
 }
 
 export interface ProtocolReceipt {
@@ -731,7 +732,7 @@ function allZero(value: Uint8Array): boolean {
 
 function decodeProgramReceiptOutcomeFrom(decoder: Decoder, protocolVersion: number): ProgramReceiptOutcome {
   const tag = decoder.u32();
-  const encodingVersion = tag === PROGRAM_OUTCOME_V1 ? 1 : tag === PROGRAM_OUTCOME_V2 ? 2 : tag === PROGRAM_OUTCOME_V3 ? 3 : 0;
+  const encodingVersion = tag === PROGRAM_OUTCOME_V1 ? 1 : tag === PROGRAM_OUTCOME_V2 ? 2 : tag === PROGRAM_OUTCOME_V3 ? 3 : tag === 0x50524734 ? 4 : 0;
   if (encodingVersion === 0) {
     return receiptFailure(ReceiptFailureCode.ProgramOutcome);
   }
@@ -744,7 +745,7 @@ function decodeProgramReceiptOutcomeFrom(decoder: Decoder, protocolVersion: numb
   const runtimeVersion = decoder.u16();
   const abiVersion = decoder.u16();
   const feeScheduleVersion = decoder.u32();
-  const meteringScheduleVersion = encodingVersion === 3 ? decoder.u32() : 1;
+  const meteringScheduleVersion = encodingVersion >= 3 ? decoder.u32() : 1;
   const cpuFuel = decoder.u64();
   const memoryBytes = decoder.u64();
   const storageReadBytes = decoder.u64();
@@ -766,6 +767,7 @@ function decodeProgramReceiptOutcomeFrom(decoder: Decoder, protocolVersion: numb
   const callGraphRoot = decoder.bounded(32);
   const terminalPayloadRoot = decoder.bounded(32);
   const transferRoot = decoder.bounded(32);
+  const appliedLegsDigest = encodingVersion === 4 ? decoder.bounded(32) : new Uint8Array(32);
   const occupancyZero = occupancyByteBatches === 0n
     && occupancyFeeUnits === 0n
     && allZero(occupancyAssetId)
@@ -781,14 +783,16 @@ function decodeProgramReceiptOutcomeFrom(decoder: Decoder, protocolVersion: numb
     || (terminalKind !== 1 && (resultCode === 0 || resultCode <= -1000))
     || (terminalKind !== 1 && !allZero(transferRoot))
     || !((protocolVersion === LEGACY_PROTOCOL_VERSION && (encodingVersion === 1 || encodingVersion === 3))
-      || (protocolVersionUsesOccupancy(protocolVersion) && (encodingVersion === 2 || encodingVersion === 3)))
+      || (protocolVersionUsesOccupancy(protocolVersion) && (encodingVersion === 2 || encodingVersion === 3))
+      || (protocolVersion === 3 && encodingVersion === 4))
+    || ((encodingVersion === 4) === allZero(appliedLegsDigest))
     || (encodingVersion === 1 && !occupancyZero)
     || (encodingVersion >= 2 && terminalKind !== 1 && !occupancyZero)
     || (encodingVersion === 2 && terminalKind === 1
       && (allZero(occupancyAssetId) || allZero(occupancyEvidenceDigest)))
-    || (encodingVersion === 3 && allZero(occupancyAssetId) !== allZero(occupancyEvidenceDigest))
-    || (protocolVersion === LEGACY_PROTOCOL_VERSION && encodingVersion === 3 && !occupancyZero)
-    || (protocolVersionUsesOccupancy(protocolVersion) && encodingVersion === 3 && terminalKind === 1
+    || (encodingVersion >= 3 && allZero(occupancyAssetId) !== allZero(occupancyEvidenceDigest))
+    || (protocolVersion === LEGACY_PROTOCOL_VERSION && encodingVersion >= 3 && !occupancyZero)
+    || (protocolVersionUsesOccupancy(protocolVersion) && encodingVersion >= 3 && terminalKind === 1
       && (allZero(occupancyAssetId) || allZero(occupancyEvidenceDigest)))
   ) {
     return receiptFailure(ReceiptFailureCode.ProgramOutcome);
@@ -817,6 +821,7 @@ function decodeProgramReceiptOutcomeFrom(decoder: Decoder, protocolVersion: numb
     callGraphRoot,
     terminalPayloadRoot,
     transferRoot,
+    appliedLegsDigest,
   });
 }
 

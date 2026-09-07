@@ -68,6 +68,7 @@ public struct ProgramInterface: Sendable {
     public let source: ProgramSource; public let verification = "server-side-receipt-verification-only"
 }
 public struct VerifiedProgramExecution: Sendable {
+    public let transferVerification: String
     public let value: JSONValue
     public let receipt: ReceiptVerification
     public let terminalPayload: Data
@@ -374,7 +375,7 @@ private func verifiedExecution(_ object: [String: JSONValue], state: String, ide
         expectedActivityID: activity, expectedGuestABIVersion: UInt16(guestABI),
         terminalPayload: terminal, callGraph: graph, protocolVersion: protocolVersion)
     guard let receiptOutcome = verified.receipt.programOutcome else { throw programVerification() }
-    try verifyTerminal(terminal, availableGraph: graph, expectedProgram: program,
+    let transferVerification = try verifyTerminal(terminal, availableGraph: graph, expectedProgram: program,
         documentOutcome: outcomeDocument, protocolVersion: verified.receipt.protocolVersion, receipt: receiptOutcome)
     let kindMatches: Bool
     if outcomeKind == "completed" || outcomeKind == "legacy_completed" {
@@ -393,7 +394,7 @@ private func verifiedExecution(_ object: [String: JSONValue], state: String, ide
           receiptOutcome.storageReadBytes == read, receiptOutcome.storageWriteBytes == write,
           receiptOutcome.outputValues == outputValues, receiptOutcome.outputBytes == outputBytes,
           receiptOutcome.feeUnits == fee, kindMatches else { throw programVerification() }
-    return .init(value: .object(object), receipt: verified, terminalPayload: terminal, callGraph: graph)
+    return .init(transferVerification: transferVerification, value: .object(object), receipt: verified, terminalPayload: terminal, callGraph: graph)
 }
 
 private func verifiedSimulation(_ value: JSONValue, expectedProgramID: Data, binding: ActivityBinding,
@@ -552,11 +553,14 @@ private func validateFailure(_ failure: [String: JSONValue]) throws {
     }
 }
 
-private func verifyTerminal(_ encoded: Data, availableGraph: Data, expectedProgram: Data,
+func verifyTerminal(_ encoded: Data, availableGraph: Data, expectedProgram: Data,
                             documentOutcome: [String: JSONValue], protocolVersion: UInt16,
-                            receipt: ProgramReceiptOutcome) throws {
+                            receipt: ProgramReceiptOutcome) throws -> String {
     do {
-        let attachments = try unwrapTerminal(encoded); let inner = attachments.inner
+        guard !encoded.isEmpty, encoded.count <= 1_048_576,
+              Data(SHA256.hash(data: encoded)) == receipt.terminalPayloadRoot,
+              !availableGraph.isEmpty, Data(SHA256.hash(data: availableGraph)) == receipt.callGraphRoot else { throw programVerification() }
+        let attachments = try unwrapTerminal(unwrapAppliedTerminal(encoded, receipt: receipt)); let inner = attachments.inner
         let candidate = starts(inner, "LXP/program-execution/v4\0"); var successful = false
         if starts(inner, "LXP/program-execution/v2\0") || starts(inner, "LXP/program-execution/v3\0") {
             let traced = starts(inner, "LXP/program-execution/v3\0")
@@ -640,7 +644,7 @@ private func verifyTerminal(_ encoded: Data, availableGraph: Data, expectedProgr
             try requireRefusal(documentOutcome, expected: "guest_refused", code: receipt.resultCode)
             guard receipt.terminalKind == 2 else { throw programVerification() }
         } else { throw programVerification() }
-        try verifyTerminalAttachments(attachments, candidate: candidate, successful: successful,
+        return try verifyTerminalAttachments(attachments, candidate: candidate, successful: successful,
             protocolVersion: protocolVersion, receipt: receipt)
     } catch { throw programVerification() }
 }
@@ -679,7 +683,7 @@ private func unwrapTerminal(_ encoded: Data) throws -> TerminalAttachments {
 }
 
 private func verifyTerminalAttachments(_ attachments: TerminalAttachments, candidate: Bool, successful: Bool,
-                                       protocolVersion: UInt16, receipt: ProgramReceiptOutcome) throws {
+                                       protocolVersion: UInt16, receipt: ProgramReceiptOutcome) throws -> String {
     guard protocolVersion == 1 || protocolVersion == 2 || protocolVersion == 3 else { throw programVerification() }
     let zero = UInt128Value(high: 0, low: 0)
     let occupancyRequired = (protocolVersion == 2 || protocolVersion == 3) && successful
@@ -705,13 +709,17 @@ private func verifyTerminalAttachments(_ attachments: TerminalAttachments, candi
               receipt.occupancyByteBatches == zero, receipt.occupancyFeeUnits == zero else { throw programVerification() }
     }
     let transferPresent = receipt.transferRoot.contains(where: { $0 != 0 })
-    guard (candidate ? (attachments.authorization != nil) == transferPresent : attachments.authorization == nil) else {
+    let recorded = receipt.encodingVersion != 4 && attachments.authorization == nil && transferPresent
+    let authorityRequired = candidate || receipt.encodingVersion == 4 && successful
+    guard recorded || (authorityRequired ? (attachments.authorization != nil) == transferPresent : attachments.authorization == nil) else {
         throw programVerification()
     }
     if let authorization = attachments.authorization {
         guard !authorization.isEmpty, attachments.transferRoot == receipt.transferRoot else { throw programVerification() }
+        guard receipt.encodingVersion != 4 || starts(authorization, "LayerX/programs/402LXP/transfer-set/v2\0") else { throw programVerification() }
         try verifyAuthorizationRoot(authorization, expected: receipt.transferRoot)
     }
+    return recorded ? "recorded_terminal_root_not_locally_reconstructable" : "reconstructed"
 }
 
 private func verifyAuthorizationRoot(_ encoded: Data, expected: Data) throws {
@@ -949,6 +957,32 @@ private func occupancyTransferRoot(_ settlement: OccupancySettlementBinding, ass
         }
     }
     return merkleRoot(legs)
+}
+
+func unwrapAppliedTerminal(_ encoded: Data, receipt: ProgramReceiptOutcome) throws -> Data {
+    if receipt.encodingVersion != 4 { return encoded }
+    let domain = Data("LXP/programs/terminal-applied-legs/v1\0".utf8)
+    var cursor = try TerminalCursor(encoded, offset: 0)
+    guard try cursor.take(domain.count) == domain else { throw programVerification() }
+    let inner = try cursor.sized32(); let legs = try cursor.sized32(); try cursor.finish()
+    guard !inner.isEmpty, inner.count <= 1_048_576,
+          Data(SHA256.hash(data: legs)) == receipt.appliedLegsDigest else { throw programVerification() }
+    try verifyAppliedLegs(legs, expected: receipt.transferRoot)
+    return inner
+}
+
+func verifyAppliedLegs(_ encoded: Data, expected: Data) throws {
+    guard encoded.count <= 256 * 115, encoded.count % 115 == 0 else { throw programVerification() }
+    let bytes = [UInt8](encoded)
+    var legs: [Data] = []
+    for offset in stride(from: 0, to: bytes.count, by: 115) {
+        let leg = Array(bytes[offset..<(offset + 115)])
+        guard leg[0] == 0, leg[113] == 0, leg[114] == 1,
+              leg[1..<33].contains(where: { $0 != 0 }), leg[33..<65].contains(where: { $0 != 0 }),
+              leg[65..<97].contains(where: { $0 != 0 }), leg[97..<113].contains(where: { $0 != 0 }) else { throw programVerification() }
+        legs.append(Data(leg))
+    }
+    guard merkleRoot(legs) == expected else { throw programVerification() }
 }
 
 private func merkleRoot(_ legs: [Data]) -> Data {
