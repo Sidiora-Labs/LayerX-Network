@@ -1,12 +1,9 @@
-#[cfg(not(features = "std"))]
 use alloc::collections::BTreeMap as Map;
 use alloc::vec::Vec;
 use parity_wasm::{
 	builder,
 	elements::{self, FunctionType, Internal},
 };
-#[cfg(features = "std")]
-use std::collections::HashMap as Map;
 
 use super::{resolve_func_type, Context};
 
@@ -37,9 +34,8 @@ pub fn generate_thunks(
 		// Replacement map is at least export section size.
 		let mut replacement_map: Map<u32, Thunk> = Map::new();
 
-		for func_idx in exported_func_indices
-			.chain(table_func_indices)
-			.chain(start_func_idx.into_iter())
+		for func_idx in
+			exported_func_indices.chain(table_func_indices).chain(start_func_idx.into_iter())
 		{
 			let callee_stack_cost = ctx.stack_cost(func_idx).ok_or("function index isn't found")?;
 
@@ -118,20 +114,22 @@ pub fn generate_thunks(
 
 	for section in module.sections_mut() {
 		match section {
-			elements::Section::Export(export_section) =>
+			elements::Section::Export(export_section) => {
 				for entry in export_section.entries_mut() {
 					if let Internal::Function(function_idx) = entry.internal_mut() {
 						fixup(function_idx)
 					}
-				},
-			elements::Section::Element(elem_section) =>
+				}
+			}
+			elements::Section::Element(elem_section) => {
 				for segment in elem_section.entries_mut() {
 					for function_idx in segment.members_mut() {
 						fixup(function_idx)
 					}
-				},
+				}
+			}
 			elements::Section::Start(start_idx) => fixup(start_idx),
-			_ => {},
+			_ => {}
 		}
 	}
 

@@ -1628,3 +1628,27 @@ symbol = "dependency-policy"
 observed = "The unchanged sh programs/tools/dependency-policy.sh exits 1 with forbidden boundary, clock, randomness or network crate. The resolved graph contains rand v0.8.8 through wasm-instrument dev-dependencies and getrandom v0.2.17 through rand_core v0.6.4. cargo tree --locked -i getrandom records the full reverse graph. The unchanged cargo deny check advisories sources and cargo deny check bans --exclude-dev both exit 0 when invoked independently from programs. Evidence: qual-logs/second-pass/dependency-policy.log, forbidden-dependency-tree.log, deny-advisories.log and deny-bans.log."
 assumption = "Dependency policy, dependency manifests and cargo-deny configuration are outside this repair. Preserve the existing refusal and dependency checks; the aggregate lint gate is not qualified."
 severity = "blocker"
+
+[observation.6.11.33]
+task = "6.11"
+file = "programs/vendor/wasm-instrument/src/stack_limiter/thunk.rs programs/vendor/wasm-instrument/Cargo.toml"
+symbol = "generate_thunks"
+observed = "Cargo.toml declares std and enables it by default. The original cfg(features = std) spelling does not match Cargo feature configuration: BTreeMap was compiled with and without std, while the HashMap import was dead. Correcting only the cfg name would activate HashMap for std and change the iteration order used to assign generated thunk indices. The repair retains BTreeMap unconditionally and removes the misspelled conditions and dead import. No newly compiled HashMap path or lint allowance is introduced."
+assumption = "Changing the collection to HashMap requires an independent determinism decision; a spelling-only correction would not preserve the existing behavior."
+severity = "note"
+
+[observation.6.11.34]
+task = "6.11"
+file = "programs/tools/dependency-policy.sh programs/vendor/wasm-instrument/Cargo.toml programs/vendor/wasm-instrument/src/gas_metering/validation.rs programs/deny.toml Makefile"
+symbol = "dependency-policy test_build_control_flow_graph"
+observed = "The unchanged dependency-policy script exits 1 both here and in a clean detached origin/main checkout at 341b75a64c94b1fa857ca00fdfc76188a49ed4e6. Its first banned-package rule scans every cargo metadata package, including dev and target-specific dependencies, matching rand, getrandom and wasi. It exits before the rand_core entropy-feature check, whose resolved getrandom and std features also violate its predicate. wasm-instrument declares rand as a dev-dependency. Exactly one test uses it: test_build_control_flow_graph fills twenty 2048-byte inputs with thread_rng, translates each through real Binaryen, and validates metering for every generated function. Cargo metadata includes wasm-instrument as a workspace member, so the final cargo test --locked --workspace recipe of programs-test includes that test when prerequisites pass. The clean checkout was verified unchanged and removed. Evidence: qual-logs/third-pass/main-policy.log, main-clean.log, main-remove.log, metadata.log, policy-facts.log and dependency-tree.log."
+assumption = "The shell script implements no dev exemption; the separate cargo deny check bans --exclude-dev command does not change its package scan. Specification text forbids runtime and toolchain randomness but does not define a Programs shell-policy dev exemption. Removing the test loses coverage; fixed Binaryen vectors lose fresh random exploration; production-only policy filtering changes the policy and requires negative coverage for shared packages and features. No policy, manifest, lockfile or test removal is applied."
+severity = "blocker"
+
+[observation.6.11.35]
+task = "6.11"
+file = "programs/crates/layerx-programs-runtime/src programs/vendor/wasm-instrument/src/gas_metering/mod.rs programs/vendor/wasm-instrument/src/gas_metering/backend.rs programs/vendor/wasm-instrument/src/gas_metering/validation.rs"
+symbol = "WasmiParityRules inject build_control_flow_graph"
+observed = "wasm-instrument strict all-target all-feature Clippy exits 0 after deriving the equivalent default, replacing single Option iterations with if let, retaining exact Option comparisons, removing an unused mutable binding and using an array for cost summation. The test-only metered-block predicate retains its condition through matches. All 40 vendor unit tests pass, including real randomized Binaryen gas validation and stack-limiter tests. Runtime replay, determinism and hash_determinism pass 33 tests; interpreter conformance and ABI linker each pass two tests; ABI drift passes. The exact workspace Clippy command with layerx-programs-sandbox/host-ffi still exits 101 on 305 out-of-scope runtime library diagnostics, beginning with ffi_call.rs:2122,2127 needless_continue, host/signature.rs:74 unnested_or_patterns and transfer.rs similar_names. make programs-lint exits 2 at Makefile:2879 after module boundaries pass, before the dependency-policy and cargo-deny steps. Evidence: qual-logs/third-pass/vendor-clippy-final.log, vendor-tests.log, runtime-tests.log, interpreter.log, abi-drift.log, workspace-clippy-final.log and programs-lint.log."
+assumption = "The owned vendor repair does not qualify the whole workspace. Runtime source, dependency policy, manifests, lockfiles and assertions remain unchanged. The independently reproduced dependency-policy refusal is an additional blocker, not the first failure reached by make programs-lint."
+severity = "blocker"
