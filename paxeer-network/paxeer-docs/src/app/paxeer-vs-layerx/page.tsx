@@ -5,16 +5,16 @@ export default function PaxeerVsLayerX() {
   return (
     <DocsLayout>
       <div className="page-header">
-        <h1 className="page-title">Paxeer vs LayerX</h1>
+        <h1 className="page-title">Paxeer vs LayerX Network</h1>
         <p className="page-description">
-          Understanding the relationship and boundaries between Paxeer L1 and the LayerX agent channel.
+          Understanding the relationship and boundaries between Paxeer L1 and the LayerX Network agent channel.
         </p>
       </div>
 
       <h2>Two Distinct Systems</h2>
 
       <p>
-        Paxeer and LayerX are separate systems with different purposes. They sit in the same repository for review convenience, but co-location <strong>does not grant LayerX authority over Paxeer, or the reverse</strong>. Each maintains its own build, release tags, and trust boundary.
+        Paxeer and LayerX Network are separate systems with different purposes. They sit in the same repository for review convenience, but co-location <strong>does not grant LayerX authority over Paxeer, or the reverse</strong>. Each maintains its own build, release tags, and trust boundary.
       </p>
 
       <h3>Paxeer (EVM L1, Chain ID 125)</h3>
@@ -35,10 +35,10 @@ export default function PaxeerVsLayerX() {
         <strong>Repository path:</strong> <code>paxeer-network/</code> (this documentation)
       </div>
 
-      <h3>LayerX (Agent Channel)</h3>
+      <h3>LayerX Network (Agent Channel)</h3>
 
       <p>
-        LayerX is an agent-only side channel designed for high-frequency microtransactions:
+        LayerX Network is an agent-only side channel designed for high-frequency microtransactions:
       </p>
 
       <ul>
@@ -156,7 +156,7 @@ export default function PaxeerVsLayerX() {
         <li><strong>Paxeer:</strong> EVM L1, chain ID 125, for LayerX custody/checkpoints/bonds/challenges/exits</li>
         <li><strong>LayerX:</strong> Agent-only side channel with 5,000 µUSDX base fee (~½¢), congestion 1×–64×</li>
         <li><strong>Never "zero fees":</strong> LayerX is not zero-fee (paxeer.app marketing is incorrect on this point)</li>
-        <li><strong>Limited beta:</strong> September 7, 2026 (no public RPC yet)</li>
+        <li><strong>Public testnet:</strong> gateway API and faucet exist; there is no LayerX mainnet; custody and settlement live on Paxeer</li>
         <li><strong>PAX:</strong> Paxeer gas token only</li>
         <li><strong>USDX / USDL:</strong> LayerX unit and backing asset (no LayerX token)</li>
         <li><strong>Co-location ≠ shared authority:</strong> Same repo, separate systems</li>

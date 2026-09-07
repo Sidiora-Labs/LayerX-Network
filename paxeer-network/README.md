@@ -1,6 +1,6 @@
 # Paxeer Network
 
-**EVM Layer 1 (chain ID `125`). The settlement and custody layer for LayerX.**
+**EVM Layer 1 (chain ID `125`). The settlement and custody layer for LayerX Network.**
 
 Paxeer is where LayerX checkpoints, custody, guarantor bonds, challenges, withdrawals, and emergency exits live. Ordinary LayerX activity stays on LayerX. Periodic checkpoints settle here so custody never leaves an L1 that can be replayed independently of the LayerX sequencer.
 

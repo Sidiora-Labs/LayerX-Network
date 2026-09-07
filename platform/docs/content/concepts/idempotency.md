@@ -1,6 +1,6 @@
 # Retries and unknown outcomes
 
-Networks time out in the middle of payments. LayerX is built so that the obvious reaction - retry - is safe, and so that the case where nobody can yet say what happened is a first-class answer rather than a silence.
+Networks time out in the middle of payments. LayerX Network is built so that the obvious reaction - retry - is safe, and so that the case where nobody can yet say what happened is a first-class answer rather than a silence.
 
 ## Idempotency keys
 

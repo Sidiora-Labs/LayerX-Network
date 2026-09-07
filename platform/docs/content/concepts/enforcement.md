@@ -1,6 +1,6 @@
 # Who enforces what
 
-Most payment platforms describe every restriction in the same voice, so a customer cannot tell which ones survive an attacker owning the vendor's servers. LayerX labels each capability with the layer that actually holds it, and this documentation fails its own build if a page documents capabilities without stating them.
+Most payment platforms describe every restriction in the same voice, so a customer cannot tell which ones survive an attacker owning the vendor's servers. LayerX Network labels each capability with the layer that actually holds it, and this documentation fails its own build if a page documents capabilities without stating them.
 
 ## The four layers
 

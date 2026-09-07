@@ -1,6 +1,6 @@
 # Receipts
 
-A receipt is the only artefact in LayerX that constitutes proof. Everything else - a `200`, a webhook, a journey in state `done`, a dashboard row - is a report about a payment. The receipt is the payment.
+A receipt is the only artefact in LayerX Network that constitutes proof. Everything else - a `200`, a webhook, a journey in state `done`, a dashboard row - is a report about a payment. The receipt is the payment.
 
 ## What verification needs
 

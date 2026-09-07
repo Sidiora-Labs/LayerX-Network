@@ -1,6 +1,6 @@
 # Security Policy
 
-LayerX handles authorization, accounting, custody commitments, and emergency exit evidence. Treat any defect that can affect value conservation, authority, finality, data availability, replay determinism, withdrawal uniqueness, upgrade safety, or private key handling as a security issue.
+LayerX Network handles authorization, accounting, custody commitments, and emergency exit evidence. Treat any defect that can affect value conservation, authority, finality, data availability, replay determinism, withdrawal uniqueness, upgrade safety, or private key handling as a security issue.
 
 ## Supported branches
 

@@ -1,7 +1,7 @@
 # Hosted gateway
 
 `layerx-gateway` is the receipt-verifying public ingress for hosted
-LayerX (`platform/hosted/gateway/src/lib.rs:1`;
+LayerX Network (`platform/hosted/gateway/src/lib.rs:1`;
 `platform/hosted/gateway/Cargo.toml:8-10`;
 `platform/hosted/gateway/src/lib.rs:885-887`). The crate is
 `layerx-platform-gateway`; the binary path is `src/main.rs`. The

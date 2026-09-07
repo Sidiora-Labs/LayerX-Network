@@ -50,7 +50,7 @@ An in-memory implementation is correct and not durable. On restart it forgets, a
 
 | Capability | Layer | What that means here |
 |---|---|---|
-| Offline receipt verification | `protocol` | The authority verifies receipt bytes against a batch header, with no LayerX service in the path. |
+| Offline receipt verification | `protocol` | The authority verifies receipt bytes against a batch header, with no LayerX Network service in the path. |
 | Atomic settlement | `protocol` | A verified receipt describes a payment that happened whole. |
 | Receipt-gated resource release | `service` | Binds requests that reach your service through this middleware, and nothing else. |
 | Exactly-once fulfilment | `service` | As durable as the repository you supply. |

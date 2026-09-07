@@ -1,6 +1,6 @@
 # layerx-mcp
 
-Tenant- and scope-bound Model Context Protocol tools for LayerX. A model gets the tools its bound scope allows. It does not get protocol authority.
+Tenant- and scope-bound Model Context Protocol tools for LayerX Network. A model gets the tools its bound scope allows. It does not get protocol authority.
 
 Every call routes through `layerx-agentd`. There is no MCP-only write path and no tool-owned connection to the C17 core. Authority is fixed at server startup from an ordinary daemon session and capability.
 
@@ -12,7 +12,6 @@ This crate lives in the agent workspace (`agent/`). Related surfaces:
 | Daemon | `agent/crates/layerx-agentd` |
 | MCP / A2A as interop transports | [`interop/`](../../../interop/README.md) |
 | `layerx install mcp` / `layerx mcp serve` | `platform/cli/` |
-| Tool design (normative) | [`spec/layerx-agent-interface/docs/mcp-tools.md`](../../../spec/layerx-agent-interface/docs/mcp-tools.md) |
 
 ## Tools in this crate
 

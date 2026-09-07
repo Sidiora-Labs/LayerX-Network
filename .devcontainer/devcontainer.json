@@ -1,5 +1,5 @@
 {
-  "name": "LayerX",
+  "name": "LayerX Network",
   "build": {
     "dockerfile": "Dockerfile",
     "context": ".."

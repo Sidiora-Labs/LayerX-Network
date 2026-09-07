@@ -11,7 +11,7 @@ Ordered instantly in-channel. Anchored to Paxeer on the L0 → L4 ladder.
 
 An activity is not final all at once. Each step names who is on the hook if the claim turns out to be wrong. The guarantee behind a batch is not a validity proof. It is bonded re-execution, a challenge window, and withdrawal limits.
 
-LayerX and the Paxeer settlement stack now live in one monorepo, so the whole path - from the sequencer that orders an activity to the Paxeer contracts that register a checkpoint - is auditable in one place. Paxeer Network is EVM chain ID `125`, and its node and contracts live under `paxeer-network/`. Custody still only moves on the Paxeer side; co-location changes nothing about the trust boundary.
+LayerX Network and the Paxeer settlement stack now live in one monorepo, so the whole path - from the sequencer that orders an activity to the Paxeer contracts that register a checkpoint - is auditable in one place. Paxeer Network is EVM chain ID `125`, and its node and contracts live under `paxeer-network/`. Custody still only moves on the Paxeer side; co-location changes nothing about the trust boundary.
 
 ---
 

@@ -1,6 +1,6 @@
 # Support
 
-This repository does not provide a hosted service, custody service, production SLA, or permission to deploy the contracts with real assets.
+LayerX Network provides a public testnet gateway API and faucet without an SLA. See [docs/wiki/Home.md](docs/wiki/Home.md), [docs/wiki/HostedGateway.md](docs/wiki/HostedGateway.md), and [docs/wiki/HostedFaucet.md](docs/wiki/HostedFaucet.md). This repository does not provide a production SLA, a custody service, or permission to deploy the contracts with real assets.
 
 ## Where to ask
 

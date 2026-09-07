@@ -1,9 +1,9 @@
 <!-- id: beta_contract -->
 <!-- readiness_claim: false -->
 
-# LayerX beta contract
+# LayerX Network beta contract
 
-This is the canonical LayerX beta contract. It is the only statement of the surfaces and journeys the beta supports, the beta endpoints and hostnames, the network id, the wire protocol version, the beta CA, the artifact set, the evidence rung each surface must reach and has reached, the unknown-state behaviour, the external dependencies with their beta counterparts and the beta-versus-production differences. `tools/ci/beta-contract-check.sh` checks the install docs, the hosted manifests, the release manifest, the release workflow, the hosted status surface and the docs content index against this document; any disagreement fails the build.
+This is the canonical LayerX Network beta contract. It is the only statement of the surfaces and journeys the beta supports, the beta endpoints and hostnames, the network id, the wire protocol version, the beta CA, the artifact set, the evidence rung each surface must reach and has reached, the unknown-state behaviour, the external dependencies with their beta counterparts and the beta-versus-production differences. `tools/ci/beta-contract-check.sh` checks the install docs, the hosted manifests, the release manifest, the release workflow, the hosted status surface and the docs content index against this document; any disagreement fails the build.
 
 **This beta is not ready.** The readiness claim below is `false` and stays `false` until every surface has reached its required rung through an executed gate recorded in `spec/layerx-beta/qualification.kvx` and every contradiction listed here has been resolved in its source.
 
@@ -13,7 +13,7 @@ This is the canonical LayerX beta contract. It is the only statement of the surf
 | --- | --- |
 | id | beta_contract |
 | readiness_claim | false |
-| readiness_statement | The LayerX beta is NOT ready: no gate record exists, every surface is at rung source_present, and the cross-source contradictions listed in this contract are open. |
+| readiness_statement | The LayerX Network beta is NOT ready: no gate record exists, every surface is at rung source_present, and the cross-source contradictions listed in this contract are open. |
 | beta_domain | layerx.network |
 | required_rung_functional | runtime_proven |
 | required_rung_hosted | deployment_proven |

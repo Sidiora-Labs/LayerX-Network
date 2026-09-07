@@ -1,6 +1,6 @@
 # Agentd
 
-`layerx-agentd` is the non-authoritative LayerX agent daemon
+`layerx-agentd` is the non-authoritative LayerX Network agent daemon
 (`agent/crates/layerx-agentd/src/lib.rs:1`). It consumes protocol
 receipts and signed batch evidence. It never mints balances. It never
 mints a protocol budget object from local state.

@@ -14,7 +14,7 @@ export default function RunNode() {
       <div className="source-note">
         <span className="badge badge-warning">Limited Beta</span>
         <p style={{ marginTop: '0.5rem' }}>
-          LayerX limited beta opens September 7, 2026. Validator onboarding and public endpoints not yet available.
+          The public testnet exposes a gateway API and a faucet. There is no LayerX Network mainnet. Custody and settlement live on Paxeer.
         </p>
       </div>
 
@@ -75,9 +75,9 @@ export default function RunNode() {
       </p>
 
       <ul>
-        <li><code>~/.paxd/config/config.toml</code> — Consensus, P2P, RPC</li>
-        <li><code>~/.paxd/config/app.toml</code> — Application, EVM, API</li>
-        <li><code>~/.paxd/config/genesis.json</code> — Genesis state</li>
+        <li><code>~/.paxd/config/config.toml</code> - Consensus, P2P, RPC</li>
+        <li><code>~/.paxd/config/app.toml</code> - Application, EVM, API</li>
+        <li><code>~/.paxd/config/genesis.json</code> - Genesis state</li>
       </ul>
 
       <p>
