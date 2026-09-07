@@ -1998,3 +1998,11 @@ symbol = "verifyTerminal testSignedTerminalV4Vectors"
 observed = "swift build --disable-automatic-resolution --package-path platform/sdk/swift -j 4 and swift test --disable-automatic-resolution --package-path platform/sdk/swift -j 4 each exit 0 in qual-logs/pass6-swift-build.log and qual-logs/pass6-swift-test.log. All 16 tests pass, including the four signed shared vectors, V4 root reconstruction, authenticated mutated-leg refusal, V3 recorded-root reporting, truncation and trailing-byte refusal, and zero-root empty legs. git diff --check exits 0 in qual-logs/pass6-swift-diff-check.log."
 assumption = "Commands are the individual Swift build and test recipes from platform/Makefile.inc platform-verify-sdks, with four jobs. CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4 are exported. Dependencies and build outputs remain local and untracked. Stored input provenance and native regeneration scope remain as recorded in terminal-v4-stored-input-qualification."
 severity = "note"
+
+[observation.6.11.terminal-v4-dotnet]
+task = "6.11"
+file = "platform/sdk/dotnet/Programs.cs platform/sdk/dotnet/Verifier.cs platform/sdk/dotnet/tests/LayerX.Sdk.Tests/ReceiptFixtureTests.cs"
+symbol = "VerifyTerminal SignedTerminalV4Vectors"
+observed = "dotnet restore platform/sdk/dotnet/tests/LayerX.Sdk.Tests/LayerX.Sdk.Tests.csproj --nologo exits 0 in qual-logs/pass6-dotnet-restore.log. dotnet build platform/sdk/dotnet/LayerX.Sdk.csproj --no-restore --configuration Release --nologo exits 0 with zero warnings and errors in qual-logs/pass6-dotnet-build.log. dotnet test platform/sdk/dotnet/tests/LayerX.Sdk.Tests/LayerX.Sdk.Tests.csproj --no-restore --nologo exits 0 with all 17 tests and no skips in qual-logs/pass6-dotnet-test.log. git diff --check exits 0 in qual-logs/pass6-dotnet-diff-check.log."
+assumption = "The full SDK test suite includes all four signed shared vectors, V4 reconstruction, authenticated mutated-leg transfer-root refusal, V3 recorded-root reporting, truncation and trailing-byte refusal, and zero-root empty legs. Build and test commands are the individual dotnet recipes from platform/Makefile.inc platform-verify-sdks. CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4 are exported. Stored inputs and native regeneration scope remain as recorded in terminal-v4-stored-input-qualification."
+severity = "note"
