@@ -1,0 +1,20 @@
+name: Question
+description: Ask a non-security question about building, testing, or using this repository.
+title: "question: "
+labels: [question]
+body:
+  - type: markdown
+    attributes:
+      value: Do not disclose vulnerabilities here. Use the private process in SECURITY.md. Design discussion that is not a defect may belong in GitHub Discussions.
+  - type: checkboxes
+    attributes:
+      label: Preflight
+      options:
+        - label: I searched existing issues and this is not a security report.
+          required: true
+  - type: textarea
+    attributes:
+      label: Question
+      description: What you need clarified, including the revision and commands you already ran.
+    validations:
+      required: true

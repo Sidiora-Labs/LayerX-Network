@@ -1,5 +1,5 @@
 name: Bug report
-description: Report a reproducible, non-security defect in LayerX.
+description: Report a reproducible, non-security defect.
 title: "bug: "
 labels: [bug]
 body:
@@ -15,7 +15,7 @@ body:
   - type: input
     attributes:
       label: Revision
-      description: Commit or Codify snapshot identifying the source tested.
+      description: Commit identifying the source tested.
     validations:
       required: true
   - type: textarea
@@ -44,4 +44,4 @@ body:
   - type: textarea
     attributes:
       label: Affected invariant or requirement
-
+      description: Name the requirement, spec task, or invariant if known.

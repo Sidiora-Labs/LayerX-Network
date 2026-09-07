@@ -1,0 +1,38 @@
+name: Feature request
+description: Propose a non-security change with a requirement or spec task.
+title: "feat: "
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: Do not disclose vulnerabilities here. Use the private process in SECURITY.md.
+  - type: checkboxes
+    attributes:
+      label: Preflight
+      options:
+        - label: I searched existing issues and this is not a security report.
+          required: true
+  - type: textarea
+    attributes:
+      label: Problem
+      description: What cannot be done today, and who is blocked.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Proposed change
+      description: The smallest change that would close the gap.
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: Spec task or requirement
+      description: spec.kvx task id, requirement clause, or "none yet".
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Compatibility
+      description: Impact on wire encoding, result codes, state roots, storage, or contract ABI.
+    validations:
+      required: true
