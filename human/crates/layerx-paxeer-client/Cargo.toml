@@ -20,6 +20,7 @@ rustls = { version = "=0.23.43", default-features = false, features = ["ring", "
 
 [dev-dependencies]
 k256.workspace = true
+rustix.workspace = true
 
 [lints]
 workspace = true
