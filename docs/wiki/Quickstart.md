@@ -7,7 +7,7 @@ through the CLI command that exists (and the hosted activity HTTP route the
 gateway actually serves), fetched receipt bytes, a local `layerx receipt
 verify` result, and a Paxeer-boundary observation of chain id `125`.
 
-This page is that path. Commands, flags, printed fields, and HTTP routes are
+This page follows that path. Commands, flags, printed fields, and HTTP routes are
 cited to the tree. Related pages: [CLI](Cli.md), [Beta cluster](BetaCluster.md),
 [Hosted gateway](HostedGateway.md), [Hosted identity](HostedIdentity.md),
 [Finality](Finality.md). `docs/wiki-drafts/` is not a source.
