@@ -3559,14 +3559,6 @@ observed = "The terminal correction and all requested qualification gates pass o
 assumption = "Webhook credential integration and its conflict resolution are outside the terminal expectation and ledger normalisation scope. No webhook source or deployment conflict is resolved here. The passing local gates qualify the preserved source; current-main integration remains incomplete."
 severity = "blocker"
 
-[observation.6.4.150]
-task = "6.4"
-file = "agent/Cargo.lock; agent/tests/qualify/Cargo.lock; agent/crates/layerx-sdk/src/program_http.rs; agent/crates/layerx-agentd/tests/support/real_authority.rs"
-symbol = "HttpProgramTransport::connect authorize agent-qualify-fuzz"
-observed = "formerly observation.6.4.146. Clock injection is implemented but unqualified. rustfmt exits 0 (qual-logs/r19/rustfmt.log). cargo clippy --locked --manifest-path agent/Cargo.toml -p layerx-sdk -p layerx-agentd --all-targets -- -D warnings exits 101; cargo test --locked --manifest-path agent/Cargo.toml -p layerx-sdk exits 101; cargo test --locked --manifest-path agent/Cargo.toml -p layerx-agentd --all-targets exits 101. Each stops before compilation because agent/Cargo.lock needs updating. Exact make agent-qualify-fuzz exits 2 because agent/tests/qualify/Cargo.lock needs updating under --locked; its cargo invocation exits 101 before the runner or boundary checker executes. Logs: qual-logs/r19/clippy.log, qual-logs/r19/sdk-test.log, qual-logs/r19/agentd-test.log, qual-logs/r19/fuzz.log. make check exits 0 (qual-logs/r19/check.log). cg spec lint exits 0 with zero errors and six existing warnings (qual-logs/r19/spec-lint.log). make beta-ledger-check and git diff --check exit 0 (qual-logs/r19/ledger-final.log and qual-logs/r19/diff-check.log)."
-assumption = "Both lockfiles remain unchanged because they are outside the owned crates. No SDK or agentd test result, including the 259 passing agentd test bar, is established. The boundary checker and allowlists remain unchanged; exact fuzz qualification must resume after the lockfile owner reconciles the manifests and lockfiles."
-severity = "blocker"
-
 [observation.6.8.4]
 task = "6.8"
 file = "platform/hosted/agent-boundary/src/main.rs platform/hosted/agent-boundary/tests/real_node.rs platform/hosted/node/deployment.yaml platform/hosted/webhooks/src/trusted.rs platform/hosted/webhooks/deployment.yaml platform/hosted/tests/beta-cluster.sh platform/hosted/tests/topology-check.sh"
@@ -3816,28 +3808,6 @@ assumption = "No real stack exists for this gate. Its required flag is unset, no
 severity = "blocker"
 
 [observation.5.1.15]
-task = "5.1"
-file = "tests/crypto/lxp_test_ct.c Makefile"
-symbol = "test-crypto-suite"
-observed = "formerly observation.5.1.focused-crypto-check-intermittent. make check exits 2 in qual-logs/r17/make-check-harness.log with verbatim: make: *** [Makefile:1533: test-crypto-suite] Error 1. The recipe runs build/tests/lxp_test_ct and emits no more specific diagnostic. Earlier make check exits 0 (make-check.log); the subsequent unchanged-check rerun exits 0 (make-check-final.log)."
-[observation.5.1.focused-fuzz-provisioned-boundary]
-[observation.5.1.7]
-task = "5.1"
-file = "agent/fuzz/Cargo.lock agent/tests/qualify/src/main.rs agent/tests/qualify/fuzz.rs agent/tools/run-sanitizers.sh agent/tools/boundary-check/src/main.rs agent/crates/layerx-sdk/src/program_http.rs agent/crates/layerx-agentd/tests/support/real_authority.rs"
-symbol = "agent_qualify_fuzz_gate agent_qualify_sanitizer_gate now_millis now_ms"
-observed = "formerly observation.5.1.focused-fuzz-provisioned-boundary. make agent-qualify-fuzz exits 2; qual-logs/r17/row-45.log. Environment: CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4 LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin. All ten targets complete 256 bounded runs and corpus minimisation, then the workspace address-sanitizer tests complete. The sanitizer script reports verbatim: thread sanitizer unavailable: pinned standard library is not TSan-instrumented. The final boundary check fails verbatim: qualification gate failed: unsafe-allowlist failed: status=exit status: 1 stdout_tail= stderr_tail=ambient-nondeterminism: agent/crates/layerx-sdk/src/program_http.rs\nambient-nondeterminism: agent/crates/layerx-agentd/tests/support/real_authority.rs\nmake: *** [Makefile:2307: agent-qualify-fuzz] Error 1. Full child stdout and stderr are preserved in qual-logs/r17/fuzz-details/."
-assumption = "program_http.rs:533 reads SystemTime::now in now_millis. real_authority.rs:53 reads SystemTime::now in now_ms and uses Instant::now for real process deadlines. The boundary scanner rejects ambient clock tokens outside its allowed paths. These source and check conflicts are outside the lock and replay harness repairs; neither source, allowlist, checker nor fuzz assertion is changed. The fuzz lock resolves the current Programs runtime and agent-daemon dependencies; locked offline metadata exits 0 (qual-logs/r17/fuzz-locked-metadata.log; metadata in fuzz-metadata.json). Resolution adds 95 package records and removes unused pkcs8 and spki records; no retained package version or checksum changes. Dependency and feature changes are recorded in fuzz-lock-analysis.json and fuzz-lock.diff. This qualifies lock resolution and the measured fuzz/address-sanitizer stages, not the complete row."
-severity = "blocker"
-
-[observation.5.1.8]
-task = "5.1"
-file = "tools/qualification/release_runner.py Makefile spec/layerx-beta/spec.kvx"
-symbol = "human-qualify-faults"
-observed = "formerly observation.5.1.focused-human-faults-refusal-executed. env -u LAYERX_QUALIFICATION_REAL_STACK make human-qualify-faults exits 2; qual-logs/r17/human-faults.log. Verbatim: qualification failed: LAYERX_QUALIFICATION_REAL_STACK=1 is required\nmake: *** [Makefile:2103: human-qualify-faults] Error 1."
-assumption = "No real stack exists for this gate. Its required flag is unset, no stack is fabricated, and no protected persistent service is touched. An authorized provisioned real stack is required before this gate can pass."
-severity = "blocker"
-
-[observation.5.1.9]
 task = "5.1"
 file = "tests/crypto/lxp_test_ct.c Makefile"
 symbol = "test-crypto-suite"
@@ -4491,6 +4461,14 @@ file = "tools/ci/beta-qualify.sh"
 symbol = "beta_qualify_focused"
 observed = "formerly observation.5.1.15. Shellcheck and cortex_guard are unavailable. Bash syntax and make dry-run checks pass. Codify review timed out; its advisory guard used active task 3.7 and does not qualify the focused runner scope. Raw logs: qual-logs/r14/."
 assumption = "Tool absence and advisory graph output do not establish qualification; task status remains unchanged."
+[observation.6.4.158]
+task = "6.4"
+file = "agent/Cargo.lock; agent/tests/qualify/Cargo.lock; agent/crates/layerx-sdk/src/program_http.rs; agent/crates/layerx-agentd/tests/support/real_authority.rs"
+symbol = "HttpProgramTransport::connect authorize agent-qualify-fuzz"
+observed = "formerly observation.6.4.150. formerly observation.6.4.146. Clock injection is implemented but unqualified. rustfmt exits 0 (qual-logs/r19/rustfmt.log). cargo clippy --locked --manifest-path agent/Cargo.toml -p layerx-sdk -p layerx-agentd --all-targets -- -D warnings exits 101; cargo test --locked --manifest-path agent/Cargo.toml -p layerx-sdk exits 101; cargo test --locked --manifest-path agent/Cargo.toml -p layerx-agentd --all-targets exits 101. Each stops before compilation because agent/Cargo.lock needs updating. Exact make agent-qualify-fuzz exits 2 because agent/tests/qualify/Cargo.lock needs updating under --locked; its cargo invocation exits 101 before the runner or boundary checker executes. Logs: qual-logs/r19/clippy.log, qual-logs/r19/sdk-test.log, qual-logs/r19/agentd-test.log, qual-logs/r19/fuzz.log. make check exits 0 (qual-logs/r19/check.log). cg spec lint exits 0 with zero errors and six existing warnings (qual-logs/r19/spec-lint.log). make beta-ledger-check and git diff --check exit 0 (qual-logs/r19/ledger-final.log and qual-logs/r19/diff-check.log)."
+assumption = "Both lockfiles remain unchanged because they are outside the owned crates. No SDK or agentd test result, including the 259 passing agentd test bar, is established. The boundary checker and allowlists remain unchanged; exact fuzz qualification must resume after the lockfile owner reconciles the manifests and lockfiles."
+severity = "blocker"
+
 [observation.6.10.11]
 task = "6.10"
 file = "agent/crates/layerx-agentd/src/approval/expiry.rs agent/crates/layerx-agentd/src/approval/mod.rs agent/crates/layerx-agentd/src/policy/approval.rs agent/crates/layerx-agentd/tests/approval_ordering/mod.rs agent/crates/layerx-agentd/tests/approval_semantics.rs"
