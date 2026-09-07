@@ -158,6 +158,20 @@ load_timelock_profile() {
     fi
 }
 
+load_guarantors() {
+    [ -r "$GUARANTORS_JSON" ] || fail "guarantor list $GUARANTORS_JSON is not readable"
+    GUARANTOR_COUNT=$(jq 'length' "$GUARANTORS_JSON")
+    [ "$GUARANTOR_COUNT" -gt 0 ] || fail "the guarantor list is empty"
+    GUARANTOR_SET=$(jq -c '
+        to_entries | map(.value + {
+            joined_epoch: (.value.joined_epoch // 1),
+            governance_sequence: (.value.governance_sequence // (.key + 1))
+        })' "$GUARANTORS_JSON")
+    printf '%s' "$GUARANTOR_SET" | jq -e '
+        to_entries | all(.value.governance_sequence == (.key + 1))
+    ' >/dev/null || fail "guarantor governance sequences must be contiguous from 1 in member order"
+}
+
 load_inputs() {
     [ -n "$INPUT_JSON" ] && [ -r "$INPUT_JSON" ] || fail "LAYERX_PAXEER_DEPLOYMENT_INPUT must name the owned input from prepare-beta.py"
     [ -r "$GUARANTORS_JSON" ] || fail "guarantor list $GUARANTORS_JSON is not readable"
@@ -181,13 +195,7 @@ load_inputs() {
             [ "$(call "$address" 'protocolVersion()(uint16)')" = "$PROTOCOL_VERSION" ] || fail "deployed component protocol mismatch"
         done
     fi
-    GUARANTOR_COUNT=$(jq 'length' "$GUARANTORS_JSON")
-    [ "$GUARANTOR_COUNT" -gt 0 ] || fail "the guarantor list is empty"
-    GUARANTOR_SET=$(jq -c '
-        to_entries | map(.value + {
-            joined_epoch: (.value.joined_epoch // 1),
-            governance_sequence: (.value.governance_sequence // (.key + 1))
-        })' "$GUARANTORS_JSON")
+    load_guarantors
     local index
     for index in $(seq 0 $((GUARANTOR_COUNT - 1))); do
         local public_key signer expected
@@ -463,6 +471,7 @@ phase_status() {
 }
 
 case "$PHASE" in
+    check-guarantors) load_guarantors ;;
     check-profile) load_timelock_profile; printf '%s\n' "$TIMELOCK_PROFILE" ;;
     bootstrap) phase_bootstrap ;;
     deploy) phase_deploy ;;
