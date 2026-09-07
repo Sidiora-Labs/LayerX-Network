@@ -8,10 +8,7 @@ use crate::{
         config::FuelCosts,
         DropKeep,
     },
-    Engine,
-    Linker,
-    Module,
-    Store,
+    Engine, Linker, Module, Store,
 };
 
 /// Converts the `wat` string source into `wasm` encoded byte.
@@ -86,7 +83,7 @@ fn compiled_func(index: u32) -> CompiledFunc {
 ///
 /// If the `u32` index value is out of bounds for the [`GlobalIdx`].
 fn global_idx(index: u32) -> GlobalIdx {
-    GlobalIdx::try_from(index).unwrap()
+    GlobalIdx::from(index)
 }
 
 /// Returns the [`BranchTableTargets`] for the given amount.
@@ -222,9 +219,7 @@ fn executes_root_wasm_return() {
         .unwrap()
         .start(&mut store)
         .unwrap();
-    let call = instance
-        .get_typed_func::<(), i32>(&store, "call")
-        .unwrap();
+    let call = instance.get_typed_func::<(), i32>(&store, "call").unwrap();
     assert_eq!(call.call(&mut store, ()).unwrap(), 7);
 }
 

@@ -26,7 +26,7 @@ impl<'a> IntoIterator for &'a ValueStack {
 }
 
 impl ValueStack {
-    pub fn iter(&self) -> core::slice::Iter<UntypedValue> {
+    pub fn iter(&self) -> core::slice::Iter<'_, UntypedValue> {
         self.into_iter()
     }
 }
@@ -90,5 +90,5 @@ fn drop_keep_works() {
     assert_drop_keep(&stack, drop_keep(5, 1), [6]);
 
     // Drop is always 6.
-    assert_drop_keep(&stack, drop_keep(6, 0), iter::repeat(0).take(0));
+    assert_drop_keep(&stack, drop_keep(6, 0), iter::repeat_n(0, 0));
 }

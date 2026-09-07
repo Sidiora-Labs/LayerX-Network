@@ -16,11 +16,7 @@ pub use self::{
 };
 use super::{
     engine::{CompiledFunc, DedupFuncType, FuncFinished, FuncParams},
-    AsContext,
-    AsContextMut,
-    Instance,
-    StoreContext,
-    Stored,
+    AsContext, AsContextMut, Instance, StoreContext, Stored,
 };
 use crate::{core::Trap, engine::ResumableCall, Engine, Error, Value};
 use alloc::{boxed::Box, sync::Arc};
@@ -310,11 +306,11 @@ impl Func {
     /// This is typically used to create a host-defined function to pass as an import to a Wasm module.
     ///
     /// - `ty`: the signature that the given closure adheres to,
-    ///         used to indicate what the inputs and outputs are.
+    ///   used to indicate what the inputs and outputs are.
     /// - `func`: the native code invoked whenever this Func will be called.
-    ///           The closure is provided a [`Caller`] as its first argument
-    ///           which allows it to query information about the [`Instance`]
-    ///           that is assocaited to the call.
+    ///   The closure is provided a [`Caller`] as its first argument
+    ///   which allows it to query information about the [`Instance`]
+    ///   that is assocaited to the call.
     ///
     /// # Note
     ///

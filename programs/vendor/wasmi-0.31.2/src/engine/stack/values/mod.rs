@@ -246,7 +246,7 @@ impl ValueStack {
             // the current value stack length and add the additional flat amount
             // on top. This avoids too many frequent reallocations.
             self.entries
-                .extend(iter::repeat(UntypedValue::default()).take(new_len));
+                .extend(iter::repeat_n(UntypedValue::default(), new_len));
         }
         Ok(())
     }

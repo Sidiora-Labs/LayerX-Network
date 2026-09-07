@@ -9,7 +9,9 @@ use wasmi_arena::ArenaIndex;
 pub struct CompiledFunc(u32);
 
 impl CompiledFunc {
-    pub(crate) fn to_u32(self) -> u32 { self.0 }
+    pub(crate) fn to_u32(self) -> u32 {
+        self.0
+    }
 }
 
 impl ArenaIndex for CompiledFunc {
@@ -77,7 +79,12 @@ pub struct FuncHeader {
 
 impl FuncHeader {
     /// Create a new initialized [`FuncHeader`].
-    pub fn new(iref: InstructionsRef, len_locals: usize, local_stack_height: usize, local_types: Vec<crate::execution_trace::ExecutionValueType>) -> Self {
+    pub fn new(
+        iref: InstructionsRef,
+        len_locals: usize,
+        local_stack_height: usize,
+        local_types: Vec<crate::execution_trace::ExecutionValueType>,
+    ) -> Self {
         let max_stack_height = local_stack_height
             .checked_add(len_locals)
             .unwrap_or_else(|| panic!("invalid maximum stack height for function"));
@@ -192,7 +199,12 @@ impl CodeMap {
         local_types: Vec<crate::execution_trace::ExecutionValueType>,
         instrs: I,
     ) where
-        I: IntoIterator<Item = (Instruction, Option<crate::execution_trace::InstructionMetadata>)>,
+        I: IntoIterator<
+            Item = (
+                Instruction,
+                Option<crate::execution_trace::InstructionMetadata>,
+            ),
+        >,
     {
         assert!(
             self.header(func).is_uninit(),
@@ -204,7 +216,8 @@ impl CodeMap {
             self.metadata.push(metadata);
         }
         let iref = InstructionsRef::new(start);
-        self.headers[func.into_usize()] = FuncHeader::new(iref, len_locals, local_stack_height, local_types);
+        self.headers[func.into_usize()] =
+            FuncHeader::new(iref, len_locals, local_stack_height, local_types);
     }
 
     pub(crate) fn metadata(
@@ -214,7 +227,8 @@ impl CodeMap {
         let index = ptr.ptr as usize;
         let base = self.instrs.as_ptr() as usize;
         let width = core::mem::size_of::<Instruction>();
-        index.checked_sub(base)
+        index
+            .checked_sub(base)
             .filter(|offset| offset % width == 0)
             .and_then(|offset| self.metadata.get(offset / width))
             .and_then(Option::as_ref)
@@ -314,9 +328,5 @@ impl InstructionPtr {
         //         Wasm validation and `wasmi` codegen to never run out
         //         of valid bounds using this method.
         unsafe { &*self.ptr }
-    }
-
-    pub(crate) fn get_at(&self, offset: usize) -> &Instruction {
-        unsafe { &*self.ptr.add(offset) }
     }
 }
