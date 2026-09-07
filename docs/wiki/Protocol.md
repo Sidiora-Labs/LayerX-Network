@@ -112,7 +112,7 @@ Per activity the kernel, in fixed order:
 10. Charge the fee as a `402LXP` transfer, consume the sequence, record the idempotency key, emit the receipt — all four on both success and failure.
 11. Recompute the state root and chain it into the receipt.
 
-Receipts are evidence produced by the protocol. No receipt field is supplied by a client. A `layerx-receipt-proof-v1` object is verified against independently trusted batch facts without a node; see [Portable receipt verifier](PortableVerifier.md).
+Receipts are evidence produced by the protocol. No receipt field is supplied by a client. A `layerx-receipt-proof-v1` object is verified against independently trusted batch facts without a node; see [Portable receipt verifier](PortableVerifier.md). Interop adapters translate foreign payment protocols into that receipt evidence without writing balances; x402 v2 over HTTP, MCP, and A2A is in [x402 transport](X402Transport.md). The non-authoritative agent daemon consumes those receipts as protocol evidence and never mints balances or budgets from local state; see [Agentd](Agentd.md).
 
 You pay for the work an activity does — bytes, signatures, state — not a zero-fee line. The specified base fee is 5,000 µUSDX per activity (about half a cent). See Payments and Fees.
 
