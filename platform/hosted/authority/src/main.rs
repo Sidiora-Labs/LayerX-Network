@@ -653,9 +653,8 @@ fn by_activity(config: &Config, requested: &str) -> Response {
             Err(error) => return evidence_refusal(&error),
         };
     match authorized_batch_by_activity(activity_id, &receipt, &evidence, &config.authorization) {
-        Ok(facts) => json(
-            200,
-            &serde_json::json!({
+        Ok(facts) => {
+            let mut response = serde_json::json!({
                 "activity_id": requested,
                 "batch_id": hex::encode(&facts.batch_id),
                 "asset": hex::encode(&facts.asset),
@@ -664,8 +663,19 @@ fn by_activity(config: &Config, requested: &str) -> Response {
                 "sequencer_public_key": hex::encode(&facts.sequencer_public_key),
                 "network_id": config.network_id,
                 "wire_version": config.wire_version,
-            }),
-        ),
+            });
+            if matches!(
+                evidence.batch_identity,
+                layerx_platform_authority::BatchIdentityEvidence::OccupancyMaintenanceV2 { .. }
+            ) {
+                let replica: serde_json::Value = match serde_json::from_slice(&document) {
+                    Ok(value) => value,
+                    Err(_) => return evidence_refusal(&EvidenceRefusal::ReplicaDocument),
+                };
+                response["batch_evidence"] = replica["batch_evidence"].clone();
+            }
+            json(200, &response)
+        }
         Err(error) => evidence_refusal(&error),
     }
 }
