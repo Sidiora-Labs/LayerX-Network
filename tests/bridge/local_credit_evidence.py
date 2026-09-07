@@ -1,15 +1,17 @@
 import argparse
 import json
+import os
 import socket
 import subprocess
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
-from custody_credit import Rpc, require, sha, write_new
-from deploy_local_custody import ROOT, command
+from custody_credit import Rpc, attest, create_profile, read_key, require, sha, unhex, write_new
+from deploy_local_custody import ROOT, command, disposable_rpc
 
 
 def port():
@@ -41,12 +43,74 @@ def launch(directory, name, extra):
         raise
 
 
+def existing_evidence(args, directory):
+    require(len(args.rpc) == 2 and args.ca_bundle and args.disposable_identity,
+            'two trusted RPC origins, CA bundle and disposable identity required')
+    require(args.custody and args.asset and args.attestor_key and args.attestor_public_key
+            and args.beneficiary_key and args.network_id == 402 and args.confirmations
+            and args.confirmations > 0, 'explicit cluster custody configuration required')
+    rpcs = [disposable_rpc(url, args.ca_bundle, args.disposable_identity) for url in args.rpc]
+    require(rpcs[0].identity != rpcs[1].identity, 'distinct trusted RPC origins required')
+    custody = json.loads(Path(args.custody).read_text())
+    require(unhex(custody['asset'], 32) == unhex(args.asset, 32), 'configured asset binding')
+    public = unhex(args.beneficiary_key, 32)
+    did = 'did:layerx:' + public.hex()
+    name = ('agent:' + did + ':main').encode()
+    beneficiary = '0x' + sha(b'LX:ACCOUNT:v1' + len(name).to_bytes(4, 'big') + name).hex()
+    require(unhex(custody['beneficiary'], 32) == unhex(beneficiary, 32), 'configured beneficiary binding')
+    authority = read_key(args.attestor_key).public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+    require(authority == unhex(args.attestor_public_key, 32), 'configured attestor authority')
+    identity = json.loads(Path(args.disposable_identity).read_text())
+    require(custody['chain_id'] == identity['chain_id'], 'deployment chain binding')
+    profile = str(directory / 'custody.profile')
+    previous_ca = os.environ.get('SSL_CERT_FILE')
+    os.environ['SSL_CERT_FILE'] = str(Path(args.ca_bundle).resolve())
+    try:
+        create_profile(SimpleNamespace(rpc=args.rpc, chain_id=identity['chain_id'], network_id=args.network_id,
+                       vault=custody['vault'], runtime_sha256=custody['runtime_sha256'], asset=args.asset,
+                       confirmations=args.confirmations, attestor_key=args.attestor_key, output=profile))
+        encoded = Path(profile).read_bytes()
+        require(encoded[169:201] == unhex(identity['genesis_hash'], 32), 'profile disposable genesis binding')
+        attest(SimpleNamespace(rpc=args.rpc, profile=profile, network_id=args.network_id,
+               transaction=custody['transaction'], beneficiary=beneficiary, beneficiary_key=args.beneficiary_key,
+               attestor_key=args.attestor_key, expected_amount=int(custody['amount']),
+               output=str(directory / 'custody.credit')))
+    finally:
+        if previous_ca is None:
+            del os.environ['SSL_CERT_FILE']
+        else:
+            os.environ['SSL_CERT_FILE'] = previous_ca
+    write_new(directory / 'identity.json', json.dumps({
+        'did': did, 'public_key': public.hex(), 'beneficiary': beneficiary,
+        'asset': args.asset, 'amount': custody['amount'], 'network_id': args.network_id,
+        'protocol_version': 3, 'chain_genesis_hash': identity['genesis_hash'],
+        'rpc_origins': args.rpc, 'attestor_public_key': args.attestor_public_key,
+    }).encode())
+    print('Existing TLS-verified custody observations, profile and credit verified')
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--output', required=True)
+    parser.add_argument('--rpc', action='append')
+    parser.add_argument('--ca-bundle')
+    parser.add_argument('--disposable-identity')
+    parser.add_argument('--custody')
+    parser.add_argument('--asset')
+    parser.add_argument('--attestor-key')
+    parser.add_argument('--attestor-public-key')
+    parser.add_argument('--beneficiary-key')
+    parser.add_argument('--network-id', type=int)
+    parser.add_argument('--confirmations', type=int)
     args = parser.parse_args()
     directory = Path(args.output).resolve()
     directory.mkdir(mode=0o700, parents=True, exist_ok=False)
+    if args.rpc:
+        existing_evidence(args, directory)
+        return
+    require(not any((args.ca_bundle, args.disposable_identity, args.custody, args.asset,
+                     args.attestor_key, args.attestor_public_key, args.beneficiary_key,
+                     args.network_id, args.confirmations)), 'cluster inputs require explicit RPC origins')
     actor = Ed25519PrivateKey.generate()
     public = actor.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
     did = 'did:layerx:' + public.hex()
