@@ -1,6 +1,6 @@
 # LayerX interoperability workspace
 
-Adapters at the edge. They translate someone else's protocol into LayerX-shaped evidence, and they never write balances. `402LXP` remains the only balance writer. Custody and withdrawal guarantees stay on Paxeer.
+Adapters at the edge. They translate someone else's protocol into evidence shaped for LayerX Network, and they never write balances. `402LXP` remains the only balance writer. Custody and withdrawal guarantees stay on Paxeer.
 
 This is the Rust workspace in `interop/`. It is not a second ledger.
 

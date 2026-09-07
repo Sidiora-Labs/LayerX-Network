@@ -1,6 +1,6 @@
 # LayerX Programs
 
-**The programmable runtime for LayerX - deterministic guest execution with no balance-writing authority.**
+**The programmable runtime for LayerX Network - deterministic guest execution with no balance-writing authority.**
 
 This workspace holds the LayerX programs surface: a deterministic WASM runtime, the
 registry that proves what a program deployed and what it holds, the C↔Rust bridge into

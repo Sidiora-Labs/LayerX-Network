@@ -2,7 +2,7 @@
 
 `layerx-x402` is the interop adapter for x402 v2. Seller issuance is
 edge translation; settlement success requires a gateway-verified
-canonical LayerX receipt (`interop/crates/layerx-x402/src/seller.rs:1-3`;
+canonical LayerX Network receipt (`interop/crates/layerx-x402/src/seller.rs:1-3`;
 `interop/crates/layerx-x402/src/facilitator.rs:1-3`). Interop adapters
 translate foreign protocols into LayerX-shaped evidence and never write
 balances (`interop/README.md:3`). The adapter id is `x402`, the spec version is

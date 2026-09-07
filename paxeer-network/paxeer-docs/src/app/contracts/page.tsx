@@ -7,7 +7,7 @@ export default function Contracts() {
       <div className="page-header">
         <h1 className="page-title">Contracts</h1>
         <p className="page-description">
-          Paxeer-native Solidity contracts and LayerX settlement contracts deployed on Paxeer.
+          Paxeer-native Solidity contracts and LayerX Network settlement contracts deployed on Paxeer.
         </p>
       </div>
 
@@ -132,15 +132,15 @@ export default function Contracts() {
       </p>
 
       <ul>
-        <li><code>EVMCompatibilityTester.sol</code> — EVM compatibility validation</li>
-        <li><code>TransientStorageTester.sol</code> — EIP-1153 transient storage tests</li>
-        <li><code>SelfDestructTester.sol</code> — SELFDESTRUCT behavior verification</li>
-        <li><code>SnapshotRevertTester.sol</code> — State snapshot and revert testing</li>
-        <li><code>SstoreGasTest.sol</code> — SSTORE gas cost verification</li>
-        <li><code>ProxySwapTester.sol</code>, <code>MultiHopSwapTester.sol</code> — DEX testing</li>
-        <li><code>MultiSender.sol</code>, <code>BatchCallAndSponsor.sol</code> — Batch operations</li>
-        <li><code>Box.sol</code>, <code>BoxV2.sol</code> — Upgradeable proxy testing</li>
-        <li><code>TestToken.sol</code>, <code>ERC721.sol</code>, <code>ERC1155.sol</code> — Token testing</li>
+        <li><code>EVMCompatibilityTester.sol</code> - EVM compatibility validation</li>
+        <li><code>TransientStorageTester.sol</code> - EIP-1153 transient storage tests</li>
+        <li><code>SelfDestructTester.sol</code> - SELFDESTRUCT behavior verification</li>
+        <li><code>SnapshotRevertTester.sol</code> - State snapshot and revert testing</li>
+        <li><code>SstoreGasTest.sol</code> - SSTORE gas cost verification</li>
+        <li><code>ProxySwapTester.sol</code>, <code>MultiHopSwapTester.sol</code> - DEX testing</li>
+        <li><code>MultiSender.sol</code>, <code>BatchCallAndSponsor.sol</code> - Batch operations</li>
+        <li><code>Box.sol</code>, <code>BoxV2.sol</code> - Upgradeable proxy testing</li>
+        <li><code>TestToken.sol</code>, <code>ERC721.sol</code>, <code>ERC1155.sol</code> - Token testing</li>
       </ul>
 
       <h3>Build & Test</h3>
@@ -165,8 +165,8 @@ npx hardhat test --network paxlocal`}</code></pre>
       </p>
 
       <ul>
-        <li><code>paxlocal</code> — <code>http://127.0.0.1:8545</code> (Docker cluster)</li>
-        <li><code>devnet</code> — <code>https://evm-rpc.arctic-1.paxnetwork.io/</code></li>
+        <li><code>paxlocal</code> - <code>http://127.0.0.1:8545</code> (Docker cluster)</li>
+        <li><code>devnet</code> - <code>https://evm-rpc.arctic-1.paxnetwork.io/</code></li>
       </ul>
 
       <h3>Updating Pointer Contracts</h3>
@@ -228,16 +228,16 @@ npx hardhat test --network paxlocal`}</code></pre>
       <h3>Supporting Directories</h3>
 
       <ul>
-        <li><code>challenge/</code> — Challenge and dispute contracts</li>
-        <li><code>custody/</code> — Custody-related helpers</li>
-        <li><code>governance/</code> — LayerX governance contracts</li>
-        <li><code>interfaces/</code> — Contract interfaces</li>
-        <li><code>libraries/</code> — Shared libraries (merkle proofs, signature verification)</li>
-        <li><code>manager/</code> — Settlement manager contracts</li>
-        <li><code>security/</code> — Security modules (pausability, access control)</li>
-        <li><code>storage/</code> — Storage layout contracts</li>
-        <li><code>config/</code> — Deployment configuration</li>
-        <li><code>deployment/</code> — Deployment scripts and artifacts</li>
+        <li><code>challenge/</code> - Challenge and dispute contracts</li>
+        <li><code>custody/</code> - Custody-related helpers</li>
+        <li><code>governance/</code> - LayerX governance contracts</li>
+        <li><code>interfaces/</code> - Contract interfaces</li>
+        <li><code>libraries/</code> - Shared libraries (merkle proofs, signature verification)</li>
+        <li><code>manager/</code> - Settlement manager contracts</li>
+        <li><code>security/</code> - Security modules (pausability, access control)</li>
+        <li><code>storage/</code> - Storage layout contracts</li>
+        <li><code>config/</code> - Deployment configuration</li>
+        <li><code>deployment/</code> - Deployment scripts and artifacts</li>
       </ul>
 
       <h3>Deployment Addresses</h3>

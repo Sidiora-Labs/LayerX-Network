@@ -1,6 +1,6 @@
 # Paying for things
 
-Every payment on every LayerX surface has the same three steps. Learn them once.
+Every payment on every LayerX Network surface has the same three steps. Learn them once.
 
 1. **Quote.** You say who is paying, who is being paid and how much. You get back what will actually happen: the mechanism, the fee estimate with its ceiling, when the money is expected to arrive, and whether any part of it is irreversible.
 2. **Commit.** You turn exactly that quote into a journey, carrying an idempotency key you chose.

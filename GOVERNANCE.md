@@ -1,6 +1,6 @@
 # Governance
 
-LayerX is maintained by the Sidiora Labs core team. This document describes how decisions are made, how maintainers are added, and how protocol changes move through the specification.
+LayerX Network is maintained by the Sidiora Labs core team. This document describes how decisions are made, how maintainers are added, and how protocol changes move through the specification.
 
 ## Maintainers
 

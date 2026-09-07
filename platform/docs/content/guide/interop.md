@@ -1,6 +1,6 @@
 # Interop
 
-The interop plane translates at the edge. Adapters speak someone else's protocol on one side and hand typed, verified results to LayerX on the other - and they are structurally prevented from constructing LayerX payload bytes themselves. The plane's payload authorities are the only constructors, which is why an adapter bug cannot become a monetary bug.
+The interop plane translates at the edge. Adapters speak someone else's protocol on one side and hand typed, verified results to LayerX Network on the other - and they are structurally prevented from constructing LayerX payload bytes themselves. The plane's payload authorities are the only constructors, which is why an adapter bug cannot become a monetary bug.
 
 ## Adapters
 

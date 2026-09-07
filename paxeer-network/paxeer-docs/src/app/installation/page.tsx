@@ -45,7 +45,7 @@ make paxeer-test     # Run tests
 make paxeer-ci       # Lint + test (CI gate)`}</code></pre>
 
       <p>
-        <code>make monorepo-ci</code> at the repository root composes the LayerX gate with <code>make paxeer-ci</code>.
+        <code>make monorepo-ci</code> at the repository root composes the LayerX Network gate with <code>make paxeer-ci</code>.
       </p>
 
       <h2>Build from paxeer-network/ Directory</h2>

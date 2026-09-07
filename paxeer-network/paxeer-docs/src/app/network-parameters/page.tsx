@@ -54,7 +54,7 @@ export default function NetworkParameters() {
           </tr>
           <tr>
             <td><strong>USDX</strong></td>
-            <td>LayerX settlement unit</td>
+            <td>LayerX Network settlement unit</td>
             <td>LayerX side channel</td>
           </tr>
           <tr>
@@ -207,7 +207,7 @@ export default function NetworkParameters() {
       <div className="source-note">
         <span className="badge badge-warning">Limited Beta</span>
         <p style={{ marginTop: '0.5rem' }}>
-          LayerX limited beta opens September 7, 2026. Public RPC endpoints are not yet available. Do not invent or document public LayerX RPC URLs.
+          The public testnet exposes a gateway API and a faucet. There is no LayerX Network mainnet. Custody and settlement live on Paxeer. Do not invent or document public LayerX RPC URLs.
         </p>
       </div>
 

@@ -18,7 +18,7 @@ A principal is who the protocol thinks is acting. An account is the balance reco
 
 ## Movements
 
-Money inside LayerX moves as one of four mechanisms, and the vocabulary is fixed everywhere - API, logs and user-facing copy alike:
+Money inside LayerX Network moves as one of four mechanisms, and the vocabulary is fixed everywhere - API, logs and user-facing copy alike:
 
 | Mechanism | What it does |
 |---|---|

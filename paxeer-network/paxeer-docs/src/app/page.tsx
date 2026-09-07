@@ -17,10 +17,10 @@ export default function Home() {
         <div className="relative z-10 max-w-[1200px] mx-auto px-6 py-20">
           <p className="font-mono text-xs text-ink-text uppercase tracking-[0.14em] mb-6">EVM L1 · Cosmos SDK Fork · Chain ID 125</p>
           <h1 className="text-6xl font-light leading-[0.98] tracking-[-0.04em] mb-7">
-            Paxeer is where LayerX <span className="block text-ink-text font-normal">checkpoints, custody, and exits</span> live.
+            Paxeer is where LayerX Network <span className="block text-ink-text font-normal">checkpoints, custody, and exits</span> live.
           </h1>
           <p className="text-lg text-on-surface-variant leading-relaxed max-w-[610px] mb-8">
-            EVM chain ID 125, Cosmos identifier hyperpax_125-1. Runs <code className="text-sm">paxd</code> with PAX gas. LayerX activities charge 5,000 µUSDX (~½¢) base fee, never zero. Limited beta opens September 7, 2026.
+            EVM chain ID 125, Cosmos identifier hyperpax_125-1. Runs <code className="text-sm">paxd</code> with PAX gas. LayerX activities charge 5,000 µUSDX (~½¢) base fee, never zero. The public testnet exposes a gateway API and a faucet. There is no LayerX mainnet. Custody and settlement live on Paxeer.
           </p>
           <div className="flex flex-wrap gap-3">
             <Link href="/installation" className="inline-flex items-center justify-center gap-2 min-h-12 px-6 bg-primary text-on-primary rounded-full font-medium text-sm shadow-1 hover:bg-primary/90 transition-all duration-150">

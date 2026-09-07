@@ -1,6 +1,6 @@
 # Receipts and verification
 
-A receipt is the thing that makes a LayerX payment different from a database row that says a payment happened. It is a canonical byte string produced by the protocol, and it verifies against an authorised batch header using only those two inputs. No LayerX node, gateway or hosted service is in the path.
+A receipt is the thing that makes a LayerX Network payment different from a database row that says a payment happened. It is a canonical byte string produced by the protocol, and it verifies against an authorised batch header using only those two inputs. No LayerX node, gateway or hosted service is in the path.
 
 That is the whole point: someone who trusts none of the operators can still check the claim.
 
