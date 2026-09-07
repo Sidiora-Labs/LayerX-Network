@@ -714,3 +714,40 @@ lxp_result lxp_daemon_receipt_authority_scan(
     *present = true;
     return LXP_OK;
 }
+
+
+lxp_result lxp_daemon_receipt_authority_batch_maintenance(
+    const lxp_daemon_receipt_authority_store *store,
+    const lxp_daemon_receipt_evidence *activity, lxp_arena *arena,
+    lxp_daemon_receipt_evidence *maintenance, bool *present)
+{
+    uint64_t offset = 0U;
+    lxp_result status;
+    if (store == NULL || activity == NULL || arena == NULL ||
+        maintenance == NULL || present == NULL ||
+        activity->canonical_header.bytes == NULL ||
+        activity->canonical_header.length != LXP_BATCH_HEADER_ENCODED_SIZE)
+        return LXP_ERR_NON_CANONICAL;
+    *present = false;
+    for (;;) {
+        bool found;
+        size_t mark = lxp_arena_mark(arena);
+        status = lxp_daemon_receipt_authority_scan(
+            store, &offset, arena, maintenance, &found);
+        if (status == LXP_OK && found && maintenance->format_version == 3U &&
+            maintenance->canonical_header.length == activity->canonical_header.length &&
+            lxp_ct_memcmp(maintenance->canonical_header.bytes,
+                activity->canonical_header.bytes, activity->canonical_header.length) == 0) {
+            if (lxp_ct_memcmp(maintenance->header_signature,
+                              activity->header_signature, 64U) != 0 ||
+                maintenance->receipt_proof.leaf_count != activity->receipt_proof.leaf_count ||
+                (activity->format_version != 3U &&
+                 activity->receipt_proof.leaf_index >= maintenance->receipt_proof.leaf_index))
+                return LXP_ERR_CONTEXT_MISMATCH;
+            *present = true;
+            return LXP_OK;
+        }
+        if (lxp_arena_reset(arena, mark) != LXP_OK) return LXP_FATAL_INVARIANT;
+        if (status != LXP_OK || !found) return status;
+    }
+}

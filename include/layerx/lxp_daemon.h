@@ -260,6 +260,8 @@ typedef struct lxp_daemon_protocol_owner {
     lxp_history *history;
     pthread_mutex_t receipt_mutex;
     lxp_log published_receipt_log;
+    uint64_t published_batch_number;
+    uint8_t published_checkpoint_id[32];
     lxp_verified_receipt_index *verified_receipts;
     lxp_daemon_receipt_authority_store *receipt_authority;
     lxp_daemon_evidence_store *evidence_store;
@@ -407,10 +409,16 @@ lxp_result lxp_daemon_receipt_authority_lookup(
     const lxp_daemon_receipt_authority_store *store,
     const uint8_t receipt_digest[32], lxp_arena *arena,
     lxp_daemon_receipt_evidence *evidence);
+lxp_result lxp_daemon_receipt_authority_batch_maintenance(
+    const lxp_daemon_receipt_authority_store *store,
+    const lxp_daemon_receipt_evidence *activity, lxp_arena *arena,
+    lxp_daemon_receipt_evidence *maintenance, bool *present);
 lxp_result lxp_daemon_receipt_authority_scan(
     const lxp_daemon_receipt_authority_store *store, uint64_t *record_offset,
     lxp_arena *arena, lxp_daemon_receipt_evidence *evidence,
     bool *present);
+lxp_result lxp_programs_state_feed_store_bind_maintenance(
+    lx_programs_state_feed_store *store, lxp_kernel *kernel);
 lxp_result lxp_daemon_protocol_owner_attach(
     lxp_daemon_protocol_owner *owner, lxp_kernel *kernel,
     lxp_identity_store *identities, uint32_t network_id,

@@ -630,6 +630,8 @@ lxp_result lxp_daemon_protocol_owner_attach(
         status = lxp_kernel_bind_module_runtime(
             kernel, LXP_MODULE_PROGRAMS, programs_runtime);
     }
+    if (status == LXP_OK)
+        status = lxp_programs_state_feed_store_bind_maintenance(&owner->feed_store, kernel);
     if (status == LXP_OK) stage = "canonical replay";
     if (status == LXP_OK) status = replay(replay_context, owner);
     if (status == LXP_OK) stage = "feed recovery";
@@ -721,6 +723,7 @@ lxp_result lxp_daemon_protocol_owner_attach(
     if (status == LXP_OK) {
         owner->published_receipt_log = *canonical_log;
         owner->published_receipt_log.capacity = canonical_log->write_offset;
+        owner->published_batch_number = receipt_authority->last_batch_number;
         owner->attached = true;
     }
     else {
@@ -788,8 +791,17 @@ lxp_result lxp_daemon_protocol_owner_bind_evidence(
     if (owner->evidence_store != NULL &&
         owner->evidence_store != evidence_store)
         status = LXP_ERR_CONTEXT_MISMATCH;
-    else
+    else {
         owner->evidence_store = evidence_store;
+        if (pthread_mutex_lock(&owner->receipt_mutex) != 0)
+            status = LXP_ERR_IO;
+        else {
+            (void)memcpy(owner->published_checkpoint_id,
+                         evidence_store->latest_checkpoint_id, 32U);
+            if (pthread_mutex_unlock(&owner->receipt_mutex) != 0)
+                status = LXP_FATAL_INVARIANT;
+        }
+    }
     if (pthread_mutex_unlock(&owner->mutex) != 0 && status == LXP_OK)
         status = LXP_FATAL_INVARIANT;
     return status;
