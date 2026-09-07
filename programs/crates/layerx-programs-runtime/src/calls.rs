@@ -455,6 +455,8 @@ pub trait ProgramResolver: fmt::Debug {
     /// Claims this resolver for one authenticated activity. Raw qualification
     /// catalogs accept any request; evidence-backed resolvers override this to
     /// enforce their exact activity binding and affine use.
+    /// # Errors
+    /// Refuses a mismatched, reused, or unauthenticated activity binding.
     fn authorize_activity(
         &self,
         _binding: Option<crate::ActivityBudgetBinding>,
@@ -575,6 +577,18 @@ impl Default for CompositionContext {
     }
 }
 
+/// Fixed-width metering identity retained without enlarging every refusal.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MeteringPlanIdentity(Box<[u8; 76]>);
+
+impl core::ops::Deref for MeteringPlanIdentity {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_slice()
+    }
+}
+
 /// Closed composition refusal taxonomy. Every variant aborts the whole
 /// activity, so no partial call graph, storage write or transfer request can
 /// survive a refused leg.
@@ -596,8 +610,8 @@ pub enum CompositionRefusal {
     },
     /// A call graph attempted to combine distinct instruction-cost plans.
     MeteringPlanMismatch {
-        expected: [u8; 76],
-        actual: [u8; 76],
+        expected: MeteringPlanIdentity,
+        actual: MeteringPlanIdentity,
     },
     /// The callee identifier resolves to no deployed module.
     UnknownProgram {
@@ -902,8 +916,8 @@ fn execute_nested(
     let actual_metering = module.meter_injection().schedule();
     if actual_metering != expected_metering {
         return Err(CompositionRefusal::MeteringPlanMismatch {
-            expected: expected_metering.canonical_bytes(),
-            actual: actual_metering.canonical_bytes(),
+            expected: MeteringPlanIdentity(Box::new(expected_metering.canonical_bytes())),
+            actual: MeteringPlanIdentity(Box::new(actual_metering.canonical_bytes())),
         });
     }
     if state.meter().is_activity() {
@@ -1300,19 +1314,24 @@ mod context_tests {
 
     #[test]
     fn immediate_caller_is_owned_by_each_active_edge() {
-        let root = ProgramId::new([1; 32]).expect("root");
-        let middle = ProgramId::new([2; 32]).expect("middle");
-        let leaf = ProgramId::new([3; 32]).expect("leaf");
-        let principal = PrincipalId::new([4; 32]).expect("principal");
+        let root = ProgramId::new([1; 32]).unwrap_or_else(|error| panic!("root: {error:?}"));
+        let middle = ProgramId::new([2; 32]).unwrap_or_else(|error| panic!("middle: {error:?}"));
+        let leaf = ProgramId::new([3; 32]).unwrap_or_else(|error| panic!("leaf: {error:?}"));
+        let principal =
+            PrincipalId::new([4; 32]).unwrap_or_else(|error| panic!("principal: {error:?}"));
         let mut graph = CallGraph::root(CompositionRules::declared(), root, principal);
         assert_eq!(graph.current().map(|frame| frame.program()), Some(root));
         assert_eq!(graph.immediate_caller(), None);
 
-        graph.enter(middle).expect("middle edge");
+        graph
+            .enter(middle)
+            .unwrap_or_else(|error| panic!("middle edge: {error:?}"));
         assert_eq!(graph.current().map(|frame| frame.program()), Some(middle));
         assert_eq!(graph.immediate_caller(), Some(root));
 
-        graph.enter(leaf).expect("leaf edge");
+        graph
+            .enter(leaf)
+            .unwrap_or_else(|error| panic!("leaf edge: {error:?}"));
         assert_eq!(graph.current().map(|frame| frame.program()), Some(leaf));
         assert_eq!(graph.immediate_caller(), Some(middle));
         assert!(matches!(
