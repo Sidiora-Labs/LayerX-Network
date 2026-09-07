@@ -41,7 +41,7 @@ distribution = "https://proxy.golang.org"
 signing = "git-tag-signature"
 provenance = "go-checksum-database"
 verification = "byte-compare-against-tagged-source"
-packages = ["github.com/Sidiora-Labs/LayerX-Protocol/platform/sdk/go"]
+packages = ["github.com/Sidiora-Labs/LayerX-Network/platform/sdk/go"]
 status = "active"
 
 [registry.maven-central]

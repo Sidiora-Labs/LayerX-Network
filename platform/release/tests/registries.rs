@@ -94,7 +94,7 @@ fn every_registry_is_active_with_real_sorted_package_identities() {
     assert!(package("pypi").contains(&"layerx-sdk".to_owned()));
     assert_eq!(
         package("go-modules"),
-        vec!["github.com/Sidiora-Labs/LayerX-Protocol/platform/sdk/go"]
+        vec!["github.com/Sidiora-Labs/LayerX-Network/platform/sdk/go"]
     );
     assert!(package("maven-central").contains(&"com.sidiora.layerx:layerx-sdk".to_owned()));
     assert_eq!(package("swiftpm"), vec!["LayerXSDK"]);

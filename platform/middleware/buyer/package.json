@@ -4,7 +4,7 @@
   "description": "Receipt-verifying LayerX x402 buyer middleware",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Sidiora-Labs/LayerX-Protocol.git",
+    "url": "git+https://github.com/Sidiora-Labs/LayerX-Network.git",
     "directory": "platform/middleware/buyer"
   },
   "type": "module",

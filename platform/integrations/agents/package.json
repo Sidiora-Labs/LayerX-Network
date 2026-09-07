@@ -4,7 +4,7 @@
   "description": "One-dependency LayerX integrations for MCP, A2A, OpenAI, Anthropic, LangChain and the Vercel AI SDK",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Sidiora-Labs/LayerX-Protocol.git",
+    "url": "git+https://github.com/Sidiora-Labs/LayerX-Network.git",
     "directory": "platform/integrations/agents"
   },
   "type": "module",
