@@ -12,6 +12,8 @@ use std::thread;
 use std::time::Duration;
 use zeroize::Zeroize;
 
+mod genesis;
+
 const MAX_BODY_BYTES: usize = 2 * 1024 * 1024;
 const MAX_HEADER_BYTES: usize = 16 * 1024;
 const MAX_REQUEST_BYTES: usize = MAX_BODY_BYTES + MAX_HEADER_BYTES;
@@ -85,6 +87,7 @@ struct Config {
     tls: Arc<ServerConfig>,
     node: NodeEndpoint,
     chain_id: u64,
+    comet: Option<NodeEndpoint>,
 }
 
 struct Request {
@@ -107,6 +110,7 @@ struct Response {
     status: u16,
     body: Vec<u8>,
     retry_after: Option<u64>,
+    genesis_sha256: Option<String>,
 }
 
 enum NodeFailure {
@@ -157,6 +161,15 @@ fn config() -> Result<Config, String> {
                 .map_err(|_| "LAYERX_PAXEER_NODE_URL is required")?,
         )?,
         chain_id,
+        comet: env::var("LAYERX_PAXEER_COMET_URL").map_or_else(
+            |error| match error {
+                env::VarError::NotPresent => Ok(None),
+                env::VarError::NotUnicode(_) => {
+                    Err("LAYERX_PAXEER_COMET_URL must be Unicode".to_owned())
+                }
+            },
+            |value| genesis::endpoint(&value).map(Some),
+        )?,
     })
 }
 
@@ -376,6 +389,7 @@ fn rpc_error(id: &Value, code: i64, message: &str) -> Response {
         status: 200,
         body: body.to_string().into_bytes(),
         retry_after: None,
+        genesis_sha256: None,
     }
 }
 
@@ -421,6 +435,7 @@ fn relay(config: &Config, request: &Request) -> Response {
                     status: 200,
                     body,
                     retry_after: None,
+                    genesis_sha256: None,
                 }
             }
             _ => refusal(502, "node_response_invalid", Some(5)),
@@ -466,6 +481,12 @@ fn route(config: &Config, request: &Request) -> Response {
     if request.method == "GET" && request.path == "/readyz" {
         return readiness(config);
     }
+    if request.method == "GET" && request.path == "/genesis" {
+        return config
+            .comet
+            .as_ref()
+            .map_or_else(|| refusal(404, "not_found", None), genesis::response);
+    }
     if request.method == "POST" && request.path == "/" {
         return relay(config, request);
     }
@@ -477,6 +498,7 @@ fn ok(body: String) -> Response {
         status: 200,
         body: body.into_bytes(),
         retry_after: None,
+        genesis_sha256: None,
     }
 }
 
@@ -494,6 +516,7 @@ fn refusal(status: u16, code: &str, retry_after: Option<u64>) -> Response {
         status,
         body: body.to_string().into_bytes(),
         retry_after,
+        genesis_sha256: None,
     }
 }
 
@@ -509,9 +532,15 @@ fn write_response(stream: &mut impl Write, response: &Response) -> Result<(), St
     let retry = response.retry_after.map_or(String::new(), |seconds| {
         format!("Retry-After: {seconds}\r\n")
     });
+    let genesis_hash = response
+        .genesis_sha256
+        .as_ref()
+        .map_or(String::new(), |digest| {
+            format!("X-LayerX-Genesis-SHA256: {digest}\r\n")
+        });
     write!(
         stream,
-        "HTTP/1.1 {} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nCache-Control: no-store\r\n{retry}Connection: close\r\n\r\n",
+        "HTTP/1.1 {} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nCache-Control: no-store\r\n{retry}{genesis_hash}Connection: close\r\n\r\n",
         response.status,
         response.body.len()
     )
