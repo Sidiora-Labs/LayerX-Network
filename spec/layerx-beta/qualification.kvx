@@ -3364,6 +3364,14 @@ observed = "The hosted Human image builds the real HTTPS API and privileged comp
 assumption = "Ready Human hosting remains blocked on the provider graph and mandatory configuration. Source references and required integration requests are recorded in platform/hosted/human/README.md and the untracked NEEDS.md. Human session.open requires an indexed verified passkey assertion and real agent authority registration; journeys/approvals cookie maps remain empty. The Next.js standalone web application needs its own Node runtime and is not served as static files by the Rust API. The beta contract checker discovers hosted directories automatically; platform/docs/content/beta.md includes hosted-human without claiming runtime or deployment proof. No spec task status is changed."
 severity = "blocker"
 
+[observation.6.8.topology-node-sequence-literal]
+task = "6.8"
+file = "platform/hosted/tests/topology-check.sh platform/hosted/tests/topology-regressions.py platform/hosted/node/deployment.yaml"
+symbol = "Chunk.parse_sequence Chunk.parse_block_scalar load_builtin"
+observed = "The node manifest uses a YAML literal block as a sequence item in container args. The built-in parser previously treated the block indicator as an inline scalar and left its indented body unconsumed. Sequence block parsing now consumes that body and preserves the following env mapping. The regression compares the actual paxeer-relay args with PyYAML. make platform-hosted-topology-check exits 0 in qual-logs/au29/topology-final.log with both parsers: 43 edges, 42 admitted, one separately operated status-publisher edge and zero failures. Full topology parity, the original missing-Human baseline, all nine negative mutations and namespace precedence checks remain asserted. Adding the Human manifest removes exactly the two original missing-service failures."
+assumption = "This is static topology and parser evidence, not runtime connectivity. The default make target now runs the built-in parser and persistent regression suite as well as PyYAML when PyYAML is installed. No assertion, bound, missing-host refusal or strict external-service refusal is removed."
+severity = "note"
+
 [observation.6.7.human-image-lockfile-refusal]
 task = "6.7"
 file = "platform/hosted/human/Dockerfile human/Cargo.lock"
