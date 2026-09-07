@@ -6,7 +6,11 @@ const DOMAIN: &[u8] = b"LayerX/program-interface/v1\0";
 const CODE_HASH: [u8; 32] = [0x5a; 32];
 
 fn push_text(out: &mut Vec<u8>, value: &str) {
-    out.extend_from_slice(&u16::try_from(value.len()).unwrap_or_else(|error| panic!("fixture text length: {error}" )).to_be_bytes());
+    out.extend_from_slice(
+        &u16::try_from(value.len())
+            .unwrap_or_else(|error| panic!("fixture text length: {error}"))
+            .to_be_bytes(),
+    );
     out.extend_from_slice(value.as_bytes());
 }
 
@@ -39,9 +43,12 @@ fn infallible_entry(out: &mut Vec<u8>, name: &str, discriminator: [u8; 4]) {
 
 fn difficult_names_interface() -> Vec<u8> {
     let mut names = vec![
-        ("1entry", [0x10, 0, 0, 1]), ("Alpha", [0x10, 0, 0, 2]),
-        ("_entry", [0x10, 0, 0, 3]), ("alpha", [0x10, 0, 0, 4]),
-        ("fooBar", [0x10, 0, 0, 5]), ("foo_bar", [0x10, 0, 0, 6]),
+        ("1entry", [0x10, 0, 0, 1]),
+        ("Alpha", [0x10, 0, 0, 2]),
+        ("_entry", [0x10, 0, 0, 3]),
+        ("alpha", [0x10, 0, 0, 4]),
+        ("fooBar", [0x10, 0, 0, 5]),
+        ("foo_bar", [0x10, 0, 0, 6]),
         ("match", [0x10, 0, 0, 7]),
     ];
     names.sort_by_key(|(name, _)| *name);
@@ -49,32 +56,86 @@ fn difficult_names_interface() -> Vec<u8> {
     out.extend_from_slice(DOMAIN);
     out.extend_from_slice(&CODE_HASH);
     out.extend_from_slice(&2_u16.to_be_bytes());
-    out.extend_from_slice(&u16::try_from(names.len()).unwrap_or_else(|error| panic!("difficult-name count: {error}")).to_be_bytes());
-    for (name, discriminator) in names { infallible_entry(&mut out, name, discriminator); }
+    out.extend_from_slice(
+        &u16::try_from(names.len())
+            .unwrap_or_else(|error| panic!("difficult-name count: {error}"))
+            .to_be_bytes(),
+    );
+    for (name, discriminator) in names {
+        infallible_entry(&mut out, name, discriminator);
+    }
     out
 }
 
 fn exhaustive_interface() -> Vec<u8> {
     let mut schemas = vec![
-        ("bytes", { let mut v = layerx(0x20); v.extend_from_slice(&8_u32.to_be_bytes()); v }),
+        ("bytes", {
+            let mut v = layerx(0x20);
+            v.extend_from_slice(&8_u32.to_be_bytes());
+            v
+        }),
         ("evm", vec![2]),
-        ("fixed", { let mut v = layerx(0x30); v.extend_from_slice(&2_u32.to_be_bytes()); v.push(0x10); v }),
-        ("i128", layerx(0x1c)), ("i16", layerx(0x19)), ("i32", layerx(0x1a)),
-        ("i64", layerx(0x1b)), ("i8", layerx(0x18)),
-        ("option", { let mut v = layerx(0x40); v.push(0x12); v }),
-        ("u128", layerx(0x14)), ("u16", layerx(0x11)), ("u256", layerx(0x15)),
-        ("u32", layerx(0x12)), ("u64", layerx(0x13)), ("u8", layerx(0x10)),
-        ("union", { let mut v = layerx(0x50); v.extend_from_slice(&2_u16.to_be_bytes()); v.extend_from_slice(&0_u32.to_be_bytes()); v.push(0x10); v.extend_from_slice(&7_u32.to_be_bytes()); v.push(0x11); v }),
-        ("variable", { let mut v = layerx(0x31); v.extend_from_slice(&3_u32.to_be_bytes()); v.push(0x11); v }),
+        ("fixed", {
+            let mut v = layerx(0x30);
+            v.extend_from_slice(&2_u32.to_be_bytes());
+            v.push(0x10);
+            v
+        }),
+        ("i128", layerx(0x1c)),
+        ("i16", layerx(0x19)),
+        ("i32", layerx(0x1a)),
+        ("i64", layerx(0x1b)),
+        ("i8", layerx(0x18)),
+        ("option", {
+            let mut v = layerx(0x40);
+            v.push(0x12);
+            v
+        }),
+        ("u128", layerx(0x14)),
+        ("u16", layerx(0x11)),
+        ("u256", layerx(0x15)),
+        ("u32", layerx(0x12)),
+        ("u64", layerx(0x13)),
+        ("u8", layerx(0x10)),
+        ("union", {
+            let mut v = layerx(0x50);
+            v.extend_from_slice(&2_u16.to_be_bytes());
+            v.extend_from_slice(&0_u32.to_be_bytes());
+            v.push(0x10);
+            v.extend_from_slice(&7_u32.to_be_bytes());
+            v.push(0x11);
+            v
+        }),
+        ("variable", {
+            let mut v = layerx(0x31);
+            v.extend_from_slice(&3_u32.to_be_bytes());
+            v.push(0x11);
+            v
+        }),
     ];
     schemas.sort_by_key(|(name, _)| *name);
     let mut out = Vec::new();
     out.extend_from_slice(DOMAIN);
     out.extend_from_slice(&CODE_HASH);
     out.extend_from_slice(&2_u16.to_be_bytes());
-    out.extend_from_slice(&u16::try_from(schemas.len()).unwrap_or_else(|error| panic!("fixture entry count: {error}")).to_be_bytes());
+    out.extend_from_slice(
+        &u16::try_from(schemas.len())
+            .unwrap_or_else(|error| panic!("fixture entry count: {error}"))
+            .to_be_bytes(),
+    );
     for (index, (name, schema)) in schemas.iter().enumerate() {
-        entry(&mut out, name, [0xa5, 0, 0, u8::try_from(index + 1).unwrap_or_else(|error| panic!("fixture discriminator: {error}"))], schema);
+        entry(
+            &mut out,
+            name,
+            [
+                0xa5,
+                0,
+                0,
+                u8::try_from(index + 1)
+                    .unwrap_or_else(|error| panic!("fixture discriminator: {error}")),
+            ],
+            schema,
+        );
     }
     out
 }
@@ -83,35 +144,53 @@ fn exhaustive_interface() -> Vec<u8> {
 fn canonical_fixture_generates_digest_bound_self_contained_artifacts() {
     let bytes = exhaustive_interface();
     let expected_digest: [u8; 32] = Sha256::digest(&bytes).into();
-    let generator = BindingGenerator::from_interface(&bytes).unwrap_or_else(|error| panic!("canonical fixture refused: {error}"));
+    let generator = BindingGenerator::from_interface(&bytes)
+        .unwrap_or_else(|error| panic!("canonical fixture refused: {error}"));
     assert_eq!(generator.interface_digest(), expected_digest);
     assert_eq!(generator.code_hash(), CODE_HASH);
     assert_eq!(generator.require_digest(expected_digest), Ok(()));
     assert_eq!(generator.require_code_hash(CODE_HASH), Ok(()));
     assert_eq!(
         generator.require_digest([0x33; 32]),
-        Err(BindgenError::StaleBinding { expected: expected_digest, published: [0x33; 32] })
+        Err(BindgenError::StaleBinding {
+            expected: expected_digest,
+            published: [0x33; 32]
+        })
     );
     assert_eq!(
         generator.require_code_hash([0x44; 32]),
-        Err(BindgenError::CodeHashMismatch { expected: CODE_HASH, deployed: [0x44; 32] })
+        Err(BindgenError::CodeHashMismatch {
+            expected: CODE_HASH,
+            deployed: [0x44; 32]
+        })
     );
 
     let artifacts = generator.generate_all();
     assert_eq!(artifacts.interface_digest, expected_digest);
-    for required in ["u8", "u16", "u32", "u64", "u128", "u256", "i8", "i16", "i32", "i64", "i128", "bytes", "fixed", "variable", "option", "union", "evm"] {
+    for required in [
+        "u8", "u16", "u32", "u64", "u128", "u256", "i8", "i16", "i32", "i64", "i128", "bytes",
+        "fixed", "variable", "option", "union", "evm",
+    ] {
         assert!(artifacts.rust.contains(&format!("pub mod {required}")));
         assert!(artifacts.guest.contains(&format!("pub mod {required}")));
     }
-    assert!(artifacts.rust.contains("check_target(deployed_code_hash,published_digest)?"));
-    assert!(artifacts.typescript.contains("checkTarget(deployedCodeHash,publishedDigest);"));
+    assert!(artifacts
+        .rust
+        .contains("check_target(deployed_code_hash,published_digest)?"));
+    assert!(artifacts
+        .typescript
+        .contains("checkTarget(deployedCodeHash,publishedDigest);"));
     assert!(artifacts.guest.contains("pub fn dispatch<P:Program>"));
-    assert!(artifacts.typescript.contains("export type UnionInput = {tag:0;value:number} | {tag:7;value:number};"));
+    assert!(artifacts
+        .typescript
+        .contains("export type UnionInput = {tag:0;value:number} | {tag:7;value:number};"));
 }
 
 #[test]
 fn frozen_vectors_are_exact_and_shared_by_both_clients() {
-    let generated = BindingGenerator::from_interface(&exhaustive_interface()).unwrap_or_else(|error| panic!("canonical fixture refused: {error}")).generate_all();
+    let generated = BindingGenerator::from_interface(&exhaustive_interface())
+        .unwrap_or_else(|error| panic!("canonical fixture refused: {error}"))
+        .generate_all();
     let vectors = [
         ("u8", "[16, 127]"),
         ("u16", "[17, 18, 52]"),
@@ -121,25 +200,70 @@ fn frozen_vectors_are_exact_and_shared_by_both_clients() {
     ];
     for (name, exact) in vectors {
         assert!(generated.rust.contains(&format!("(\"{name}\",&{exact})")));
-        assert!(generated.typescript.contains(&format!("['{name}',Uint8Array.from({exact})]")));
+        assert!(generated
+            .typescript
+            .contains(&format!("['{name}',Uint8Array.from({exact})]")));
     }
 }
 
 #[test]
 fn generated_sources_expose_every_roundtrip_and_failure_path() {
-    let generated = BindingGenerator::from_interface(&exhaustive_interface()).unwrap_or_else(|error| panic!("canonical fixture refused: {error}")).generate_all();
-    for name in ["Bytes", "Evm", "Fixed", "I128", "I16", "I32", "I64", "I8", "Option", "U128", "U16", "U256", "U32", "U64", "U8", "Union", "Variable"] {
-        assert!(generated.typescript.contains(&format!("export function encode{name}(")));
-        assert!(generated.typescript.contains(&format!("export function decode{name}Output(")));
-        assert!(generated.typescript.contains(&format!("export function decode{name}Failure(")));
+    let generated = BindingGenerator::from_interface(&exhaustive_interface())
+        .unwrap_or_else(|error| panic!("canonical fixture refused: {error}"))
+        .generate_all();
+    for name in [
+        "Bytes", "Evm", "Fixed", "I128", "I16", "I32", "I64", "I8", "Option", "U128", "U16",
+        "U256", "U32", "U64", "U8", "Union", "Variable",
+    ] {
+        assert!(generated
+            .typescript
+            .contains(&format!("export function encode{name}(")));
+        assert!(generated
+            .typescript
+            .contains(&format!("export function decode{name}Output(")));
+        assert!(generated
+            .typescript
+            .contains(&format!("export function decode{name}Failure(")));
     }
-    for name in ["bytes", "evm", "fixed", "i128", "i16", "i32", "i64", "i8", "option", "u128", "u16", "u256", "u32", "u64", "u8", "union_binding", "variable"] {
-        assert!(generated.rust.contains(&format!("pub fn decode_output(bytes:&[u8])")));
+    for name in [
+        "bytes",
+        "evm",
+        "fixed",
+        "i128",
+        "i16",
+        "i32",
+        "i64",
+        "i8",
+        "option",
+        "u128",
+        "u16",
+        "u256",
+        "u32",
+        "u64",
+        "u8",
+        "union_binding",
+        "variable",
+    ] {
+        assert!(generated.rust.contains("pub fn decode_output(bytes:&[u8])"));
         assert!(generated.rust.contains(&format!("pub mod {name}")));
-        assert!(generated.guest.contains(&format!("fn {name}(&mut self, input:")));
+        assert!(generated
+            .guest
+            .contains(&format!("fn {name}(&mut self, input:")));
     }
-    assert_eq!(generated.rust.matches("pub fn decode_failure(code:u32").count(), 17);
-    assert_eq!(generated.guest.matches("Err(DispatchFailure::Typed{code,detail})").count(), 17);
+    assert_eq!(
+        generated
+            .rust
+            .matches("pub fn decode_failure(code:u32")
+            .count(),
+        17
+    );
+    assert_eq!(
+        generated
+            .guest
+            .matches("Err(DispatchFailure::Typed{code,detail})")
+            .count(),
+        17
+    );
     assert!(!generated.rust.contains("pub type Input=Input"));
     assert!(!generated.rust.contains("pub type Output=Output"));
     assert!(!generated.guest.contains("pub type Input=Input"));
@@ -148,25 +272,70 @@ fn generated_sources_expose_every_roundtrip_and_failure_path() {
 
 #[test]
 fn infallible_and_difficult_names_have_stable_collision_free_symbols() {
-    let generated = BindingGenerator::from_interface(&difficult_names_interface()).unwrap_or_else(|error| panic!("difficult names refused: {error}")).generate_all();
-    for rust_name in ["n_1entry", "alpha_lx_10000002", "_entry", "alpha_lx_10000004", "foobar", "foo_bar", "match_binding"] {
-        assert!(generated.rust.contains(&format!("pub mod {rust_name}")), "missing Rust symbol {rust_name}");
-        assert!(generated.guest.contains(&format!("pub mod {rust_name}")), "missing guest symbol {rust_name}");
+    let generated = BindingGenerator::from_interface(&difficult_names_interface())
+        .unwrap_or_else(|error| panic!("difficult names refused: {error}"))
+        .generate_all();
+    for rust_name in [
+        "n_1entry",
+        "alpha_lx_10000002",
+        "_entry",
+        "alpha_lx_10000004",
+        "foobar",
+        "foo_bar",
+        "match_binding",
+    ] {
+        assert!(
+            generated.rust.contains(&format!("pub mod {rust_name}")),
+            "missing Rust symbol {rust_name}"
+        );
+        assert!(
+            generated.guest.contains(&format!("pub mod {rust_name}")),
+            "missing guest symbol {rust_name}"
+        );
     }
-    for ts_name in ["N1entry", "AlphaLx10000002", "Entry", "AlphaLx10000004", "FooBarLx10000005", "FooBarLx10000006", "Match"] {
-        assert!(generated.typescript.contains(&format!("export type {ts_name}Failure = never;")), "missing TypeScript symbol {ts_name}");
+    for ts_name in [
+        "N1entry",
+        "AlphaLx10000002",
+        "Entry",
+        "AlphaLx10000004",
+        "FooBarLx10000005",
+        "FooBarLx10000006",
+        "Match",
+    ] {
+        assert!(
+            generated
+                .typescript
+                .contains(&format!("export type {ts_name}Failure = never;")),
+            "missing TypeScript symbol {ts_name}"
+        );
     }
-    assert_eq!(generated.rust.matches("pub type Failure=core::convert::Infallible;").count(), 7);
-    assert_eq!(generated.guest.matches("pub type Failure=core::convert::Infallible;").count(), 7);
+    assert_eq!(
+        generated
+            .rust
+            .matches("pub type Failure=core::convert::Infallible;")
+            .count(),
+        7
+    );
+    assert_eq!(
+        generated
+            .guest
+            .matches("pub type Failure=core::convert::Infallible;")
+            .count(),
+        7
+    );
     assert_eq!(generated.typescript.matches("Failure = never;").count(), 7);
 }
 
 #[test]
 #[ignore = "human qualification invokes the installed Rust and TypeScript compilers"]
 fn generated_client_guest_and_typescript_are_compiler_inputs() {
-    let generated = BindingGenerator::from_interface(&exhaustive_interface()).unwrap_or_else(|error| panic!("canonical fixture refused: {error}")).generate_all();
-    let root = std::env::temp_dir().join(format!("layerx-bindgen-conformance-{}", std::process::id()));
-    fs::create_dir_all(&root).unwrap_or_else(|error| panic!("create conformance directory: {error}"));
+    let generated = BindingGenerator::from_interface(&exhaustive_interface())
+        .unwrap_or_else(|error| panic!("canonical fixture refused: {error}"))
+        .generate_all();
+    let root =
+        std::env::temp_dir().join(format!("layerx-bindgen-conformance-{}", std::process::id()));
+    fs::create_dir_all(&root)
+        .unwrap_or_else(|error| panic!("create conformance directory: {error}"));
     let client = root.join("client.rs");
     let guest = root.join("guest.rs");
     let typescript = root.join("bindings.ts");
@@ -193,8 +362,9 @@ fn main(){
  assert_eq!(u8::decode_output(&[1,0x10,0x7f]),Ok(127));
 }
 "#;
-    fs::write(&client, format!("{}{}", generated.rust, rust_consumer)).unwrap_or_else(|error| panic!("write generated client consumer: {error}"));
-    let guest_consumer = r#"
+    fs::write(&client, format!("{}{}", generated.rust, rust_consumer))
+        .unwrap_or_else(|error| panic!("write generated client consumer: {error}"));
+    let guest_consumer = r"
 struct ConformanceProgram;
 impl Program for ConformanceProgram {
  fn bytes(&mut self,v:bytes::Input)->Result<bytes::Output,bytes::Failure>{Ok(v)} fn evm(&mut self,v:evm::Input)->Result<evm::Output,evm::Failure>{Ok(v)}
@@ -208,9 +378,10 @@ impl Program for ConformanceProgram {
  fn union_binding(&mut self,v:union_binding::Input)->Result<union_binding::Output,union_binding::Failure>{match v{union_binding::Input::Variant0(value)=>Ok(union_binding::Output::Variant0(value)),union_binding::Input::Variant1(value)=>Ok(union_binding::Output::Variant1(value))}} fn variable(&mut self,v:variable::Input)->Result<variable::Output,variable::Failure>{Ok(v)}
 }
 fn main(){let mut p=ConformanceProgram;assert_eq!(dispatch(&mut p,&[0xa5,0,0,15,1,0x10,0x7f]),Err(DispatchFailure::Typed{code:7,detail:vec![1,0x10,0x7f]}));assert!(dispatch(&mut p,&[0xa5,0,0,16,1,0x50,0,0,0,0,0x10,9]).is_ok());assert!(dispatch(&mut p,&[0xa5,0,0,16,1,0x50,0,0,0,7,0x11,0,10]).is_ok());}
-"#;
-    fs::write(&guest, format!("{}{}", generated.guest, guest_consumer)).unwrap_or_else(|error| panic!("write generated guest consumer: {error}"));
-    let ts_consumer = r#"
+";
+    fs::write(&guest, format!("{}{}", generated.guest, guest_consumer))
+        .unwrap_or_else(|error| panic!("write generated guest consumer: {error}"));
+    let ts_consumer = r"
 const hash=CODE_HASH,digest=INTERFACE_DIGEST;
 const bytesValue=boundedBytes(8,Uint8Array.of(1,2,3)),fixedValue=fixedArray(2,[1,2]),variableValue=variableArray(3,[1,2]);
 const evmValue=evmHead(Uint8Array.from([...new Uint8Array(31),1]));
@@ -222,24 +393,78 @@ try{encodeU8(127,hash,'00'.repeat(32));throw new Error('missing stale refusal')}
 // @ts-expect-error LayerXCall is branded and cannot be forged by arbitrary transport bytes.
 const forged:LayerXCall<U8Output,U8Failure>={bytes:Uint8Array.of(1)};
 void calls;void forged;
-"#;
-    fs::write(&typescript, format!("{}{}", generated.typescript, ts_consumer)).unwrap_or_else(|error| panic!("write generated TypeScript consumer: {error}"));
+";
+    fs::write(
+        &typescript,
+        format!("{}{}", generated.typescript, ts_consumer),
+    )
+    .unwrap_or_else(|error| panic!("write generated TypeScript consumer: {error}"));
 
+    compile_and_run_consumers(&root);
+}
+
+fn compile_and_run_consumers(root: &Path) {
+    let client = root.join("client.rs");
+    let guest = root.join("guest.rs");
+    let typescript = root.join("bindings.ts");
     for source in [&client, &guest] {
-        let output = Command::new("rustc").args(["--edition=2021"]).arg(source).arg("--out-dir").arg(&root).output().unwrap_or_else(|error| panic!("invoke rustc for {}: {error}", source.display()));
-        assert!(output.status.success(), "rustc rejected {}:\n{}", source.display(), String::from_utf8_lossy(&output.stderr));
-        let executable = root.join(source.file_stem().unwrap_or_else(|| panic!("source has no stem")));
-        let output = Command::new(&executable).output().unwrap_or_else(|error| panic!("run generated conformance consumer {}: {error}", executable.display()));
-        assert!(output.status.success(), "generated conformance consumer {} failed:\n{}", executable.display(), String::from_utf8_lossy(&output.stderr));
+        let output = Command::new("rustc")
+            .args(["--edition=2021"])
+            .arg(source)
+            .arg("--out-dir")
+            .arg(root)
+            .output()
+            .unwrap_or_else(|error| panic!("invoke rustc for {}: {error}", source.display()));
+        assert!(
+            output.status.success(),
+            "rustc rejected {}:\n{}",
+            source.display(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let executable = root.join(
+            source
+                .file_stem()
+                .unwrap_or_else(|| panic!("source has no stem")),
+        );
+        let output = Command::new(&executable).output().unwrap_or_else(|error| {
+            panic!(
+                "run generated conformance consumer {}: {error}",
+                executable.display()
+            )
+        });
+        assert!(
+            output.status.success(),
+            "generated conformance consumer {} failed:\n{}",
+            executable.display(),
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
     let typescript_compiler = Path::new(env!("CARGO_MANIFEST_DIR")).join("node_modules/.bin/tsc");
     let output = Command::new(&typescript_compiler)
-        .args(["--strict", "--target", "ES2020", "--module", "commonjs", "--outDir"])
-        .arg(&root)
+        .args([
+            "--strict", "--target", "ES2020", "--module", "commonjs", "--outDir",
+        ])
+        .arg(root)
         .arg(&typescript)
         .output()
-        .unwrap_or_else(|error| panic!("invoke TypeScript compiler {}: {error}", typescript_compiler.display()));
-    assert!(output.status.success(), "tsc rejected generated bindings:\n{}", String::from_utf8_lossy(&output.stderr));
-    let output = Command::new("node").arg(root.join("bindings.js")).output().unwrap_or_else(|error| panic!("run generated TypeScript consumer: {error}"));
-    assert!(output.status.success(), "generated TypeScript consumer failed:\n{}", String::from_utf8_lossy(&output.stderr));
+        .unwrap_or_else(|error| {
+            panic!(
+                "invoke TypeScript compiler {}: {error}",
+                typescript_compiler.display()
+            )
+        });
+    assert!(
+        output.status.success(),
+        "tsc rejected generated bindings:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let output = Command::new("node")
+        .arg(root.join("bindings.js"))
+        .output()
+        .unwrap_or_else(|error| panic!("run generated TypeScript consumer: {error}"));
+    assert!(
+        output.status.success(),
+        "generated TypeScript consumer failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }

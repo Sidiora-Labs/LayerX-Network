@@ -1610,3 +1610,35 @@ symbol = "BindingGenerator emit_rust_codec_prelude emit_rust_frozen_vectors emit
 observed = "The supplemental workspace Clippy run with --keep-going and unchanged -D warnings exits 101 and exposes 16 additional errors outside vendor ownership. bindgen.rs has needless_raw_string_hashes at 116 and 253, possible_missing_else at 330 and 331, unused interface_digest and code_hash at 85 and 86, match_same_arms at 215 and 218, write_with_newline at 237 and 317, unnecessary_join at 289, 299 and 306, format_push_string at 302, and uninlined_format_args at 328 and 329. build.rs has manual_assert at 55 and 69. Evidence: qual-logs/clippy-keep-going.log."
 assumption = "The SDK owner must preserve generated binding bytes and every schema, hash, length and input check while repairing these diagnostics. Five retained vendor API findings plus sixteen SDK findings are known unresolved errors, not an exhaustive count for targets blocked by those dependencies."
 severity = "blocker"
+
+[observation.6.11.29]
+task = "6.11"
+file = "programs/vendor/parity-wasm/src/elements/index_map.rs programs/vendor/wasmi-0.31.2/src/module/mod.rs programs/vendor/wasmi-0.31.2/src/store.rs"
+symbol = "IndexMap::iter Module::imports Module::exports AsContext::as_context AsContextMut::as_context_mut"
+observed = "All five elided iterator and context lifetimes are spelled explicitly without changing their types. cargo clippy --locked -p parity-wasm -p wasmi --all-targets -- -D warnings from programs exits 0. Runtime replay, determinism and hash_determinism pass 33 tests; interpreter conformance and ABI linker each pass two tests; ABI vector drift, focused return-trait and stack regressions, and touched-file rustfmt checks pass. Evidence: qual-logs/second-pass/vendor-clippy.log, runtime-tests.log, interpreter.log, abi-drift.log, trait.log, stack.log and rustfmt.log."
+assumption = "The signature-spelling blockers in observations 6.11.25 and 6.11.27 are resolved. The omitted parity-wasm fixture prerequisite in observation 6.11.26 remains; fixtures and assertions are unchanged."
+severity = "note"
+
+[observation.6.11.30]
+task = "6.11"
+file = "programs/sdk/rust/src programs/sdk/rust/build.rs programs/sdk/rust/tests/bindgen_conformance.rs"
+symbol = "BindingGenerator Writer::storage_entries HashInput::new Ed25519Message::new ScanLimits::new"
+observed = "The original build-script diagnostics and subsequently reachable SDK library/test diagnostics are repaired. Existing conformance tests consume interface_digest and code_hash; require_digest and require_code_hash now use these accessors. String emission preserves output bytes. Constructors retain their exact bounds while reading the constructed values; private Wasm-only imports and decoding internals match their existing caller configuration. All scan decoding checks remain compiled for Wasm. Canonical access storage emission and generated-consumer compiler execution are extracted into private helpers without changing ordering, assertions or refusal paths. cargo clippy --locked -p layerx-program-sdk --all-targets -- -D warnings exits 0; cargo check --locked -p layerx-program-sdk --target wasm32-unknown-unknown exits 0; SDK tests pass 16 unit and four conformance tests. The explicitly selected ignored conformance test also passes, compiling and executing generated Rust client, Rust guest and TypeScript consumers. Logs: qual-logs/second-pass/sdk-clippy-accepted.log, sdk-wasm-check.log, sdk-tests-final.log and sdk-generated-compilers.log."
+assumption = "Generated bindings from the existing exhaustive and difficult-name canonical fixtures were saved before editing under qual-logs/bindings-before. diff -ru qual-logs/bindings-before qual-logs/bindings-after exits 0 for all Rust, TypeScript and guest outputs. Real original and repaired build scripts also produce identical output for both fixtures and preserve refusal exit 101 for partial configuration, missing digest, short hash, invalid hex, stale digest and wrong code hash; qual-logs/second-pass/build-comparison.json and build-before/build-after outputs retain evidence. Vault and escrow KVX examples are descriptive interfaces rather than canonical binary BindingGenerator inputs."
+severity = "note"
+
+[observation.6.11.31]
+task = "6.11"
+file = "programs/vendor/wasm-instrument/src/stack_limiter/thunk.rs programs/vendor/wasm-instrument/src/gas_metering/mod.rs programs/vendor/wasm-instrument/src/gas_metering/backend.rs"
+symbol = "WasmiParityRules gas_metering stack_limiter::thunk"
+observed = "The unchanged workspace Clippy gate exits 101 after reaching wasm-instrument. Eight library diagnostics remain: unexpected cfg name features at thunk.rs:1,8; derivable Default at gas_metering/mod.rs:120; Option loops at :595,605; unnecessary map_or at :645; unused mut at :1022; unnecessary vec at gas_metering/backend.rs:132. The unchanged make programs-lint passes module boundaries then stops at Makefile:2879 with Clippy exit 101 and make exit 2, before dependency-policy or cargo-deny recipes. Evidence: qual-logs/second-pass/workspace-clippy-final.log and programs-lint.log."
+assumption = "wasm-instrument is outside the authorized parity-wasm, wasmi and Rust SDK paths. No edits or lint allowances were applied there. Further dependent targets remain unqualified."
+severity = "blocker"
+
+[observation.6.11.32]
+task = "6.11"
+file = "programs/tools/dependency-policy.sh programs/vendor/wasm-instrument/Cargo.toml programs/Cargo.toml"
+symbol = "dependency-policy"
+observed = "The unchanged sh programs/tools/dependency-policy.sh exits 1 with forbidden boundary, clock, randomness or network crate. The resolved graph contains rand v0.8.8 through wasm-instrument dev-dependencies and getrandom v0.2.17 through rand_core v0.6.4. cargo tree --locked -i getrandom records the full reverse graph. The unchanged cargo deny check advisories sources and cargo deny check bans --exclude-dev both exit 0 when invoked independently from programs. Evidence: qual-logs/second-pass/dependency-policy.log, forbidden-dependency-tree.log, deny-advisories.log and deny-bans.log."
+assumption = "Dependency policy, dependency manifests and cargo-deny configuration are outside this repair. Preserve the existing refusal and dependency checks; the aggregate lint gate is not qualified."
+severity = "blocker"
