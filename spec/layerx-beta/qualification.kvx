@@ -2284,3 +2284,11 @@ symbol = "req.14.ac_4 task.6.3.do_2"
 observed = "Owner decision (decider: repository owner; approval: \"yes on all five\"): the hosted authority returns the eight documented fields, plus a ninth `batch_evidence` field present only when the batch carries an occupancy-maintenance receipt (the maintained batch identity and proof the consumer verifies)."
 assumption = "Files changed: spec/layerx-beta/spec.kvx and spec/layerx-beta/qualification.kvx. This record applies the decision only to the named contract or Make recipe."
 severity = "note"
+
+[observation.6.2.owner-decision-2]
+task = "6.2"
+file = "spec/layerx-beta/spec.kvx"
+symbol = "req.14.ac_3 task.6.2.do_3"
+observed = "Owner decision (decider: repository owner; approval: \"yes on all five\"): admin refusals caused by the request are 4xx; durable-storage faults (journal write or lock failure) are 503 with no state change."
+assumption = "Files changed: spec/layerx-beta/spec.kvx and spec/layerx-beta/qualification.kvx. This record applies the decision only to the named contract or Make recipe."
+severity = "note"
