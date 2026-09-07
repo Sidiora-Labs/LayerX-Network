@@ -30,18 +30,15 @@ fn serve(config: &Arc<config::Config>, tcp: TcpStream) -> Result<(), String> {
     let connection =
         ServerConnection::new(Arc::clone(&config.tls)).map_err(|error| error.to_string())?;
     let mut stream = StreamOwned::new(connection, tcp);
-    let request = match http::read_request(&mut stream, MAX_REQUEST) {
-        Ok(value) => value,
-        Err(_) => {
-            return http::write_response(
-                &mut stream,
-                &http::OutgoingResponse {
-                    status: 400,
-                    body: b"{\"ok\":false,\"error\":{\"code\":\"invalid_http_request\"}}".to_vec(),
-                    retry_after: None,
-                },
-            );
-        }
+    let Ok(request) = http::read_request(&mut stream, MAX_REQUEST) else {
+        return http::write_response(
+            &mut stream,
+            &http::OutgoingResponse {
+                status: 400,
+                body: b"{\"ok\":false,\"error\":{\"code\":\"invalid_http_request\"}}".to_vec(),
+                retry_after: None,
+            },
+        );
     };
     http::write_response(&mut stream, &server::route(config, &request))
 }
