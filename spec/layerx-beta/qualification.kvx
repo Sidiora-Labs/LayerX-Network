@@ -2025,3 +2025,67 @@ symbol = "LayerxClient::resolve AuthorityBody AuthorityResponse ReceiptVerifier"
 observed = "The three strict authority consumers require maintained evidence integration. LayerxClient::resolve and its AuthorityBody decoder are the ramps target. Gateway and webhooks pin a public key but lack a complete SequencerAuthorization record. Raw source inspection: qual-logs/au5-prerequisite-audit.log and qual-logs/au5-consumers.txt."
 assumption = "The configuration contract requires independently configured sequencer ID, Ed25519 public key, first authorized batch and last authorized batch for every strict consumer, with startup refusal for absent or malformed inputs. Reference constructor wiring and gateway and webhooks configuration are in scope. This is implementation work, not a missing source prerequisite. Maintained verification receives only configured authorization; response evidence and activity signing keys cannot establish it. The historical execution_batch_id verification path remains required and unchanged. Consumer implementation and qualification remain pending."
 severity = "info"
+
+[observation.6.4.strict-consumer-deployment-pins]
+task = "6.4"
+file = "platform/hosted/tests/beta-cluster.sh; platform/hosted/testnet/deployment.yaml; platform/hosted/gateway/deployment.yaml; platform/hosted/webhooks/deployment.yaml"
+symbol = "sequencer authorization configuration"
+observed = "Gateway requires LAYERX_GATEWAY_SEQUENCER_ID_FILE=/run/layerx/authority/sequencer-id, LAYERX_GATEWAY_SEQUENCER_FIRST_BATCH_FILE=/run/layerx/authority/sequencer-first-batch and LAYERX_GATEWAY_SEQUENCER_LAST_BATCH_FILE=/run/layerx/authority/sequencer-last-batch beside its existing public key file. Webhooks requires LAYERX_WEBHOOKS_SEQUENCER_ID_FILE=/run/layerx/keys/sequencer-id, LAYERX_WEBHOOKS_SEQUENCER_FIRST_BATCH_FILE=/run/layerx/keys/sequencer-first-batch and LAYERX_WEBHOOKS_SEQUENCER_LAST_BATCH_FILE=/run/layerx/keys/sequencer-last-batch beside its existing public key file."
+assumption = "Cluster provisioning must populate sequencer-id, sequencer-first-batch and sequencer-last-batch in Secret layerx-gateway-authority-client and Secret layerx-developer-hosted-runtime. Values must be the independently configured 64-hex sequencer ID and inclusive decimal batch bounds supplied to the receipt authority; sequencer-public-key must remain the matching independently provisioned Ed25519 public key. No values may be derived from response evidence. The exact deployed values are provisioning inputs, not constants or defaults. Provisioning scripts and testnet manifests are outside consumer ownership. Reference ramp JSON layerx requires sequencer_id, sequencer_public_key, sequencer_first_batch and sequencer_last_batch as strings with the same values."
+severity = "blocker"
+
+[observation.6.4.strict-consumer-qualification-conflicts]
+task = "6.4"
+file = "platform/hosted/gateway/src/native_call.rs; platform/hosted/gateway/src/http.rs; platform/hosted/gateway/src/lib.rs; platform/hosted/webhooks/src/trusted.rs"
+symbol = "native_call::tests::exact_native_json_and_scope_bindings native_call::tests::native_transport_retains_original_signed_bytes Client::request verify_program_operation verify_program_simulation_operation render_verified_program_operation"
+observed = "The gateway crate test command exits 101 because two unchanged native_call tests return native signed activity does not match request. Strict gateway Clippy exits 101 on existing HTTP missing error documentation, missing must_use, argument count and type complexity findings, and existing Programs unused self, argument count and pass-by-value findings. Webhooks strict Clippy stops in the gateway dependency. Exact commands and logs: cargo test --locked --manifest-path platform/Cargo.toml -p layerx-platform-gateway (qual-logs/au6-layerx-platform-gateway-test.log); cargo clippy --locked --manifest-path platform/Cargo.toml -p layerx-platform-gateway --all-targets -- -D warnings (qual-logs/au6-layerx-platform-gateway-clippy.log); equivalent webhooks command (qual-logs/au6-layerx-platform-webhooks-clippy.log)."
+assumption = "These checks remain intact. No native call matcher, HTTP helper, historical receipt verifier or Programs verification check is relaxed. These unrelated failures prevent full consumer qualification and are separate from the implemented authorization configuration and selected maintained evidence decoder."
+severity = "blocker"
+
+[observation.6.4.strict-consumer-reference-and-sandbox]
+task = "6.4"
+file = "platform/ramps/reference/src/main.rs; platform/ramps/sandbox-journey.sh; platform/hosted/tests/beta-cluster.sh"
+symbol = "build_state route reconcile_loop map_error sandbox journey"
+observed = "Reference ramp strict Clippy exits 101 on existing build_state and route length, let-else style, needless borrowing, map-entry and pass-by-value findings. Constructor extraction reduces build_state but leaves its existing length failure. cargo clippy --locked --manifest-path platform/Cargo.toml -p layerx-reference-ramp --all-targets -- -D warnings: qual-logs/au6-layerx-reference-ramp-clippy-complete.log. make interop-test-ramps-sandbox exits 2 before requests because LAYERX_RAMP_URL is unset: qual-logs/au6-ramps-sandbox.log."
+assumption = "The sandbox also requires LAYERX_RAMP_CA_PEM, LAYERX_RAMP_CUSTOMER_TOKEN, LAYERX_RAMP_OPERATOR_URL, LAYERX_RAMP_OPERATOR_TOKEN, LAYERX_RAMP_ON_QUOTE_ID, LAYERX_RAMP_OFF_QUOTE_ID, LAYERX_RAMP_OFF_GRANT_JSON, LAYERX_RAMP_ON_ACCOUNT_SEQUENCE and LAYERX_RAMP_OFF_RECEIVER_SEQUENCE. No sandbox service or credential is invented. Existing reference service checks are preserved. Gateway hosted-boundary and webhooks fault-injection scripts have no dedicated integration make target; they require a real hosted stack and its configured identities and are not claimed executed."
+severity = "blocker"
+
+[observation.6.4.strict-consumer-native-fixture-baseline]
+task = "6.4"
+file = "platform/hosted/gateway/src/native_call.rs; platform/sdk/conformance/fixtures/native-program-call-v3.json"
+symbol = "native_call::tests::exact_native_json_and_scope_bindings native_call::tests::native_transport_retains_original_signed_bytes"
+observed = "With consumer changes stashed, the tracked tree exactly equals 6612de54. Each command cargo test --locked --manifest-path platform/Cargo.toml -p layerx-platform-gateway --bin layerx-gateway native_call::tests::<test> -- --exact exits 101 at that revision and with the consumer tree for both named tests. Each invocation executes one test and reports native signed activity does not match request. Baseline logs: qual-logs/au7-baseline-bin-exact_native_json_and_scope_bindings.log and qual-logs/au7-baseline-bin-native_transport_retains_original_signed_bytes.log. Consumer comparison logs: qual-logs/au7-current-bin-exact_native_json_and_scope_bindings.log and qual-logs/au7-current-bin-native_transport_retains_original_signed_bytes.log. All use CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4 LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin; native-ready.txt identifies 7bc94bf7. The two tests themselves do not invoke native binaries."
+assumption = "The checked-in signed fixture is unchanged from 6612de54 and contains a 348-byte payload, while the request encodes 158 bytes. First mismatch at payload offset 33: request 01, fixture 02 (guest ABI 1 versus 2). Request calldata is empty; fixture calldata is 0061ff10. Capabilities lengths are 2 versus 83 bytes, beginning 0000 versus 000105. Access declaration lengths are 39 versus 144 bytes: request suffix after the domain is 0000; fixture begins 000100000065 after the domain. Full exact capability and access bytes, matching program ID, entrypoint, fee limit, response capacity and resource fields are retained in qual-logs/au7-native-mismatch.log. native_call.rs, its assertions and the signed fixture remain unchanged. Library-only preliminary invocations selected zero tests and are not baseline evidence."
+severity = "note"
+
+[observation.6.4.strict-consumer-owned-clippy-repair]
+task = "6.4"
+file = "platform/hosted/gateway/src/http.rs; platform/hosted/gateway/src/lib.rs; platform/hosted/gateway/src/main.rs; platform/hosted/gateway/tests/tap_nonce.rs; platform/hosted/webhooks/src/trusted.rs; platform/ramps/reference/src/main.rs"
+symbol = "OutboundRequest ProgramExpectation build_tracker_config reserve_activity complete_activity"
+observed = "Consumer qualification now includes gateway HTTP and Programs API argument grouping, bounded handler extraction, explicit error documentation, value borrowing, match syntax, map-entry insertion and owned Redis child cleanup. Existing public VerifiedOperation::verification_level remains an instance method backed by a private label initialized only after receipt verification. No allow attribute was added; the HTTP argument-count allow was removed."
+assumption = "Exact existing assertion expressions and error response constructors are preserved across gateway main, gateway Redis tests and the reference ramp; the HTTP validation, TLS and transmission body is byte-identical. Raw comparison: qual-logs/au7-source-review.log. Receipt proof source at agent/crates/layerx-proof/src/receipt.rs and the native-call matcher remain unchanged from 6612de54. Strict all-target Clippy must exit 0 for toolkit, reference ramp, gateway and webhooks; retained final commands and exits are in qual-logs/au7-results.json. Earlier qualification failures remain in qual-logs/au7-*-clippy-initial.log and au7-gateway-webhooks-repair*.log."
+severity = "note"
+
+[observation.6.4.strict-consumer-http-caller-migration]
+task = "6.4"
+file = "interop/crates/layerx-interop-service/src/server.rs; platform/hosted/gateway/src/http.rs"
+symbol = "Client::request Client::request_authorized_traced"
+observed = "The gateway HTTP API now takes a borrowed OutboundRequest containing method, path, idempotency, content_type and body. request takes endpoint, bearer, request; request_authorized_traced takes endpoint, authorization, request, trace. Four interop-service source callers retain the previous positional signature: submit, authorized_facts, dependency_ready and hosted_ready. This is a source-level integration mismatch; no interop compilation is claimed."
+assumption = "The interop-service owner must group the existing expressions into OutboundRequest while preserving endpoint, bearer or authorization, idempotency, body, media type and trace exactly, then qualify that crate. Exact call sites and migration instructions are in the untracked worktree NEEDS.md. Interop files, cluster provisioning, hosted/testnet and hosted/paxeer remain outside consumer ownership."
+severity = "blocker"
+
+[observation.6.4.strict-consumer-sandbox-external-inputs]
+task = "6.4"
+file = "platform/ramps/sandbox-journey.sh"
+symbol = "interop-test-ramps-sandbox"
+observed = "The sandbox journey requires unavailable external provider inputs. The retained command make interop-test-ramps-sandbox exits 2 before requests because LAYERX_RAMP_URL is unset; raw log qual-logs/au6-ramps-sandbox.log. It is recorded separately from the local consumer qualification table."
+assumption = "No sandbox transaction or deployment is claimed. Provisioning must still provide the independent gateway and webhooks sequencer ID and inclusive batch-range Secret keys and reference-ramp JSON fields described in observation.6.4.strict-consumer-deployment-pins. The local consumer changes provide mandatory configuration parsing and manifest file references only."
+severity = "note"
+
+[observation.6.4.strict-consumer-final-qualification]
+task = "6.4"
+file = "platform/ramps/toolkit/src/clients.rs; platform/ramps/reference/src/main.rs; platform/hosted/gateway; platform/hosted/webhooks/src/trusted.rs; platform/hosted/authority/tests/real_node.rs"
+symbol = "configured_sequencer MaintainedBatchDocument::authorize ReceiptVerifier::verify"
+observed = "With CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4 LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin, cargo test --locked --manifest-path agent/Cargo.toml -p layerx-proof and its strict all-target Clippy command exit 0. cargo test --locked --manifest-path platform/Cargo.toml -p <crate> and cargo clippy --locked --manifest-path platform/Cargo.toml -p <crate> --all-targets -- -D warnings exit 0 for layerx-ramp-toolkit, layerx-reference-ramp, layerx-platform-webhooks and layerx-platform-authority. Gateway strict Clippy exits 0. Gateway full tests, including --no-fail-fast, exit 101 only for the two native_call tests proven pre-existing at 6612de54; all remaining gateway tests, including real TLS Redis nonce and principal binding, pass. make test-daemon-finality-authority and make interop-test-ramps exit 0. The real authority capture test exits 0 against the supplied native binaries and writes public evidence to qual-logs/au7-maintained-authority.json. Exact commands, exits and retained absolute log paths are in qual-logs/au7-results.json."
+assumption = "This qualifies local consumer source, independent configured authorization, maintained attachment authentication, strict decoding and preserved historical verification. It does not establish sandbox execution, cluster deployment, the standalone gateway lifecycle harness or webhooks cluster fault injection. The independent authorization files still require provisioning, and the four interop HTTP callers require the migration recorded separately. No task status or full beta release qualification is asserted."
+severity = "note"
