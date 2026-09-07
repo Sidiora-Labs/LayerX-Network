@@ -1875,13 +1875,13 @@ pub trait AsContext {
     type UserState;
 
     /// Returns the store context that this type provides access to.
-    fn as_context(&self) -> StoreContext<Self::UserState>;
+    fn as_context(&self) -> StoreContext<'_, Self::UserState>;
 }
 
 /// A trait used to get exclusive access to a [`Store`] in `wasmi`.
 pub trait AsContextMut: AsContext {
     /// Returns the store context that this type provides access to.
-    fn as_context_mut(&mut self) -> StoreContextMut<Self::UserState>;
+    fn as_context_mut(&mut self) -> StoreContextMut<'_, Self::UserState>;
 }
 
 /// A temporary handle to a [`&Store<T>`][`Store`].
