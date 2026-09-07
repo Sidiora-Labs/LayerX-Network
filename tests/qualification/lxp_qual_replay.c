@@ -191,7 +191,7 @@ static lxp_result encode_activity(uint64_t sequence, uint32_t activity_type,
     (void)memcpy(idempotency_input, "LXPQ-IDEMPOTENCY", 16U);
     store_u32(idempotency_input + 16U, activity_type);
     (void)memset(&activity, 0, sizeof(activity));
-    activity.protocol_version = LXP_PROTOCOL_VERSION;
+    activity.protocol_version = LXP_PROTOCOL_VERSION_LEGACY;
     activity.network_id = UINT32_C(77);
     activity.activity_type = activity_type;
     activity.actor_did.bytes = actor;
