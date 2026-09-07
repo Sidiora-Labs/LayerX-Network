@@ -30,6 +30,118 @@ pub struct ProgramValueAccountBinding {
     pub registration_event_digest: [u8; 32],
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AssetPresence {
+    Absent,
+    Present,
+}
+
+impl From<bool> for AssetPresence {
+    fn from(value: bool) -> Self {
+        if value {
+            Self::Present
+        } else {
+            Self::Absent
+        }
+    }
+}
+
+impl From<AssetPresence> for bool {
+    fn from(value: AssetPresence) -> Self {
+        value == AssetPresence::Present
+    }
+}
+
+impl From<AssetPresence> for u8 {
+    fn from(value: AssetPresence) -> Self {
+        Self::from(bool::from(value))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AccountFreeze {
+    Unfrozen,
+    Frozen,
+}
+
+impl From<bool> for AccountFreeze {
+    fn from(value: bool) -> Self {
+        if value {
+            Self::Frozen
+        } else {
+            Self::Unfrozen
+        }
+    }
+}
+
+impl From<AccountFreeze> for bool {
+    fn from(value: AccountFreeze) -> Self {
+        value == AccountFreeze::Frozen
+    }
+}
+
+impl From<AccountFreeze> for u8 {
+    fn from(value: AccountFreeze) -> Self {
+        Self::from(bool::from(value))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OpenReference {
+    Absent,
+    Present,
+}
+
+impl From<bool> for OpenReference {
+    fn from(value: bool) -> Self {
+        if value {
+            Self::Present
+        } else {
+            Self::Absent
+        }
+    }
+}
+
+impl From<OpenReference> for bool {
+    fn from(value: OpenReference) -> Self {
+        value == OpenReference::Present
+    }
+}
+
+impl From<OpenReference> for u8 {
+    fn from(value: OpenReference) -> Self {
+        Self::from(bool::from(value))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AuthorityKeyPresence {
+    Absent,
+    Present,
+}
+
+impl From<bool> for AuthorityKeyPresence {
+    fn from(value: bool) -> Self {
+        if value {
+            Self::Present
+        } else {
+            Self::Absent
+        }
+    }
+}
+
+impl From<AuthorityKeyPresence> for bool {
+    fn from(value: AuthorityKeyPresence) -> Self {
+        value == AuthorityKeyPresence::Present
+    }
+}
+
+impl From<AuthorityKeyPresence> for u8 {
+    fn from(value: AuthorityKeyPresence) -> Self {
+        Self::from(bool::from(value))
+    }
+}
+
 /// Exact account leaf material committed by `lx_account_registry_root`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CanonicalAccountLeaf {
@@ -38,13 +150,13 @@ pub struct CanonicalAccountLeaf {
     pub kind: u8,
     pub balance: u128,
     pub asset_id: [u8; 32],
-    pub has_asset: bool,
+    pub has_asset: AssetPresence,
     pub next_sequence: u64,
     pub created_at_sequence: u64,
-    pub frozen: bool,
-    pub has_open_reference: bool,
+    pub frozen: AccountFreeze,
+    pub has_open_reference: OpenReference,
     pub authority_key: [u8; 32],
-    pub has_authority_key: bool,
+    pub has_authority_key: AuthorityKeyPresence,
 }
 
 /// Canonical proof shape used by the account, universal and module-root trees.
@@ -330,11 +442,11 @@ impl CanonicalAccountLeaf {
     fn validate_module_value(&self) -> Result<(), AccountStateError> {
         if self.account_id == [0; 32]
             || self.asset_id == [0; 32]
-            || !self.has_asset
+            || !bool::from(self.has_asset)
             || self.kind != MODULE_VALUE_KIND
             || self.name != program_account_name(self.account_id)
             || self.name.len() > MAX_ACCOUNT_NAME_BYTES
-            || self.has_authority_key
+            || bool::from(self.has_authority_key)
             || self.authority_key != [0; 32]
         {
             return Err(AccountStateError::InvalidAccountLeaf);
@@ -353,6 +465,10 @@ impl CanonicalAccountLeaf {
         self.validate_module_value()?;
         let name_length =
             u16::try_from(self.name.len()).map_err(|_| AccountStateError::InvalidAccountLeaf)?;
+        Ok(self.encode_value(name_length))
+    }
+
+    fn encode_value(&self, name_length: u16) -> Vec<u8> {
         let mut value = Vec::with_capacity(103 + self.name.len());
         value.extend_from_slice(&name_length.to_be_bytes());
         value.extend_from_slice(&self.name);
@@ -366,7 +482,7 @@ impl CanonicalAccountLeaf {
         value.push(u8::from(self.has_open_reference));
         value.extend_from_slice(&self.authority_key);
         value.push(u8::from(self.has_authority_key));
-        Ok(value)
+        value
     }
 
     /// Computes the exact leaf commitment used by the C account tree.
@@ -566,7 +682,7 @@ impl VerifiedAccountSnapshot {
                 account_id: binding.account_id,
                 asset_id: binding.asset_id,
                 balance: account.leaf.balance,
-                frozen: account.leaf.frozen,
+                frozen: bool::from(account.leaf.frozen),
                 observed_sequence: self.freshness.observed_sequence,
                 receipt_digest: self.receipt_digest,
                 state_root: self.state_root,
@@ -701,5 +817,64 @@ fn verify_state_proof(
         Ok(())
     } else {
         Err(AccountStateError::InvalidProof)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn old_account_value(leaf: &CanonicalAccountLeaf, flags: [bool; 4]) -> Vec<u8> {
+        let mut value = Vec::new();
+        let name_length = u16::try_from(leaf.name.len())
+            .unwrap_or_else(|error| panic!("account name length: {error}"));
+        value.extend_from_slice(&name_length.to_be_bytes());
+        value.extend_from_slice(&leaf.name);
+        value.push(leaf.kind);
+        value.extend_from_slice(&leaf.balance.to_be_bytes());
+        value.extend_from_slice(&leaf.asset_id);
+        value.push(u8::from(flags[0]));
+        value.extend_from_slice(&leaf.next_sequence.to_be_bytes());
+        value.extend_from_slice(&leaf.created_at_sequence.to_be_bytes());
+        value.push(u8::from(flags[1]));
+        value.push(u8::from(flags[2]));
+        value.extend_from_slice(&leaf.authority_key);
+        value.push(u8::from(flags[3]));
+        value
+    }
+
+    #[test]
+    fn all_account_flag_combinations_preserve_canonical_bytes_and_validation() {
+        for bits in 0_u8..16 {
+            let flags = [bits & 1 != 0, bits & 2 != 0, bits & 4 != 0, bits & 8 != 0];
+            let leaf = CanonicalAccountLeaf {
+                account_id: [1; 32],
+                name: program_account_name([1; 32]),
+                kind: MODULE_VALUE_KIND,
+                balance: 0x1234,
+                asset_id: [2; 32],
+                has_asset: flags[0].into(),
+                next_sequence: 7,
+                created_at_sequence: 3,
+                frozen: flags[1].into(),
+                has_open_reference: flags[2].into(),
+                authority_key: [0; 32],
+                has_authority_key: flags[3].into(),
+            };
+            let expected = old_account_value(&leaf, flags);
+            let name_length = u16::try_from(leaf.name.len())
+                .unwrap_or_else(|error| panic!("account name length: {error}"));
+            assert_eq!(leaf.encode_value(name_length), expected, "flags {bits}");
+            assert_eq!(bool::from(leaf.frozen), flags[1]);
+            assert_eq!(
+                leaf.value(),
+                if flags[0] && !flags[3] {
+                    Ok(expected)
+                } else {
+                    Err(AccountStateError::InvalidAccountLeaf)
+                },
+                "flags {bits}"
+            );
+        }
     }
 }
