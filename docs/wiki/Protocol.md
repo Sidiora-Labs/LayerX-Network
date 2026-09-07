@@ -11,7 +11,7 @@ One signed record per action. One doorway for money. One result anyone can repla
 
 LayerX is the activity, execution, and accounting layer for autonomous agents. Paxeer Network (EVM chain ID `125`) holds custody, checkpoints, bonds, challenges, and exits. A normal payment or agent action does not require a Paxeer transaction. Beta envelopes use protocol 3 (`LXP_PROTOCOL_VERSION_STATE_COMMITMENT` in `include/layerx/lxp_protocol.h`); occupancy accounting is used by protocol 2 and 3. The C header default `LXP_PROTOCOL_VERSION` remains 2.
 
-LayerX and the Paxeer settlement stack now live in one monorepo. Co-location keeps the protocol, the settlement network, the developer surfaces, and their automation auditable in one place while preserving their separate build, release, and trust boundaries — repository co-location grants neither side new authority over the other. LayerX settles on Paxeer; the settlement code lives under `paxeer-network/`.
+LayerX and the Paxeer settlement stack now live in one monorepo. Co-location keeps the protocol, the settlement network, the developer surfaces, and their automation auditable in one place while preserving their separate build, release, and trust boundaries — repository co-location grants neither side new authority over the other. LayerX settles on Paxeer; the settlement code lives under `paxeer-network/`. The `layerx` developer CLI is the operator surface for environments, credentials, emulator bootstrap, hosted gateway calls, and local receipt verification; see [CLI](Cli.md).
 
 Normative behavior lives in `spec/` (KVX first). This page is the human read of that design.
 
