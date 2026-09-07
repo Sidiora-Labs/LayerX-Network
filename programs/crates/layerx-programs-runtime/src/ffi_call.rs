@@ -2797,7 +2797,7 @@ pub extern "C" fn layerx_programs_call_begin(
                         .map(|set| (set.canonical().to_vec(), set.kernel_root()));
                     let mut kernel = CKernel { token };
                     let settlement = if let Some(set) = transfer_set.as_ref() {
-                        match transfer.settle_authorized_set(set, &mut kernel) {
+                        match TransferCapability::settle_authorized_set(set, &mut kernel) {
                             Ok(settlement) => Some(settlement),
                             Err(error) => {
                                 write_settlement_detail(&mut terminal_detail, error);
