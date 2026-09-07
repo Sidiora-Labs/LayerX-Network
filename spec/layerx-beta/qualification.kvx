@@ -4181,51 +4181,51 @@ outcome = "fail"
 evidence = "spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/48-human-qualify-faults.log"
 note = "make human-qualify-faults exited 2; Tracked working-tree changes present before command execution; this is development evidence, not immutable release qualification."
 
-[observation.5.1.1]
+[observation.5.1.16]
 task = "5.1"
 file = "human/Cargo.lock"
 symbol = "human-build"
-observed = "make human-build: fail. The committed Human lockfile requires an update and the required command enforces --locked. Evidence: spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/27-human-build.log."
+observed = "formerly observation.5.1.1 (renumbered after rebase). make human-build: fail. The committed Human lockfile requires an update and the required command enforces --locked. Evidence: spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/27-human-build.log."
 assumption = "The component owner must resolve the recorded failure before focused qualification can pass; no assertion, bound, lockfile or gate was weakened."
 severity = "blocker"
 
-[observation.5.1.2]
+[observation.5.1.17]
 task = "2.1"
 file = "agent/tests/boundary/node/layerxd_lni.c"
 symbol = "test-daemon-lni-admission"
-observed = "make test-daemon-lni-admission test-admission test-batch-wal-recovery agent-test-lni-schema agent-test-client-submit-focused agent-test-agentd-handshake-gate agent-test-boundary: fail. The native boundary fixture references undeclared LX_ASSET_REGISTRY_CAPACITY. Evidence: spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/31-test-daemon-lni-admission.log."
+observed = "formerly observation.5.1.2 (renumbered after rebase). make test-daemon-lni-admission test-admission test-batch-wal-recovery agent-test-lni-schema agent-test-client-submit-focused agent-test-agentd-handshake-gate agent-test-boundary: fail. The native boundary fixture references undeclared LX_ASSET_REGISTRY_CAPACITY. Evidence: spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/31-test-daemon-lni-admission.log."
 assumption = "The component owner must resolve the recorded failure before focused qualification can pass; no assertion, bound, lockfile or gate was weakened."
 severity = "blocker"
 
-[observation.5.1.3]
+[observation.5.1.18]
 task = "2.2"
 file = "human/Cargo.lock"
 symbol = "agent-test-agentd-session"
-observed = "make agent-test-agentd-session agent-test-agentd-revocation agent-test-agentd-tenant-resolve agent-test-agentd-subscription agent-test-agentd-delivery agent-test-agentd-gaps agent-test-agentd-webhook agent-test-mcp-scope agent-test-mcp-readonly agent-test-mcp-write agent-test-sdk-rust agent-test-contract-schema platform-sdk-check human-test-service: fail. The committed Human lockfile requires an update and the required command enforces --locked. Evidence: spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/32-agent-test-agentd-session.log."
+observed = "formerly observation.5.1.3 (renumbered after rebase). make agent-test-agentd-session agent-test-agentd-revocation agent-test-agentd-tenant-resolve agent-test-agentd-subscription agent-test-agentd-delivery agent-test-agentd-gaps agent-test-agentd-webhook agent-test-mcp-scope agent-test-mcp-readonly agent-test-mcp-write agent-test-sdk-rust agent-test-contract-schema platform-sdk-check human-test-service: fail. The committed Human lockfile requires an update and the required command enforces --locked. Evidence: spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/32-agent-test-agentd-session.log."
 assumption = "The component owner must resolve the recorded failure before focused qualification can pass; no assertion, bound, lockfile or gate was weakened."
 severity = "blocker"
 
-[observation.5.1.4]
+[observation.5.1.19]
 task = "2.3"
 file = "human/Cargo.lock"
 symbol = "human-test-activity"
-observed = "make human-test-activity: fail. The committed Human lockfile requires an update and the required command enforces --locked. Evidence: spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/33-human-test-activity.log."
+observed = "formerly observation.5.1.4 (renumbered after rebase). make human-test-activity: fail. The committed Human lockfile requires an update and the required command enforces --locked. Evidence: spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/33-human-test-activity.log."
 assumption = "The component owner must resolve the recorded failure before focused qualification can pass; no assertion, bound, lockfile or gate was weakened."
 severity = "blocker"
 
-[observation.5.1.5]
+[observation.5.1.20]
 task = "2.4"
 file = "human/Cargo.lock"
 symbol = "human-build"
-observed = "make human-build human-test-unit human-test-component: fail. The committed Human lockfile requires an update and the required command enforces --locked. Evidence: spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/34-human-build.log."
+observed = "formerly observation.5.1.5 (renumbered after rebase). make human-build human-test-unit human-test-component: fail. The committed Human lockfile requires an update and the required command enforces --locked. Evidence: spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/34-human-build.log."
 assumption = "The component owner must resolve the recorded failure before focused qualification can pass; no assertion, bound, lockfile or gate was weakened."
 severity = "blocker"
 
-[observation.5.1.6]
+[observation.5.1.21]
 task = "3.6"
 file = "platform/emulator/src/native_call.rs"
 symbol = "platform-test-tooling"
-observed = "make platform-test-tooling platform-hosted-topology-check beta-contract-check: fail. Two emulator native-call tests reject the signed activity as not matching the request. Evidence: spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/40-platform-test-tooling.log."
+observed = "formerly observation.5.1.6 (renumbered after rebase). make platform-test-tooling platform-hosted-topology-check beta-contract-check: fail. Two emulator native-call tests reject the signed activity as not matching the request. Evidence: spec/layerx-beta/evidence/e68e3cf8b7144318a34b475c3843b0a8ba38053e/focused/40-platform-test-tooling.log."
 assumption = "The component owner must resolve the recorded failure before focused qualification can pass; no assertion, bound, lockfile or gate was weakened."
 severity = "blocker"
 
