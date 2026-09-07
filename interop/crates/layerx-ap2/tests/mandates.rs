@@ -6,7 +6,6 @@ use layerx_ap2::{
 };
 use p256::ecdsa::signature::Signer as _;
 use p256::ecdsa::{Signature, SigningKey, VerifyingKey};
-use p256::elliptic_curve::sec1::ToEncodedPoint as _;
 use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
 
@@ -45,16 +44,20 @@ impl KeyResolver for TestKeyResolver {
 }
 
 fn issuer_key() -> SigningKey {
-    SigningKey::from_bytes((&[7_u8; 32]).into()).expect("valid issuer scalar")
+    SigningKey::from_bytes((&[7_u8; 32]).into())
+        .unwrap_or_else(|error| panic!("valid issuer scalar: {error:?}"))
 }
 fn merchant_key() -> SigningKey {
-    SigningKey::from_bytes((&[11_u8; 32]).into()).expect("valid merchant scalar")
+    SigningKey::from_bytes((&[11_u8; 32]).into())
+        .unwrap_or_else(|error| panic!("valid merchant scalar: {error:?}"))
 }
 fn agent_key() -> SigningKey {
-    SigningKey::from_bytes((&[19_u8; 32]).into()).expect("valid agent scalar")
+    SigningKey::from_bytes((&[19_u8; 32]).into())
+        .unwrap_or_else(|error| panic!("valid agent scalar: {error:?}"))
 }
 fn alternate_issuer_key() -> SigningKey {
-    SigningKey::from_bytes((&[23_u8; 32]).into()).expect("valid alternate issuer scalar")
+    SigningKey::from_bytes((&[23_u8; 32]).into())
+        .unwrap_or_else(|error| panic!("valid alternate issuer scalar: {error:?}"))
 }
 
 fn context() -> VerificationContext<'static> {
@@ -69,17 +72,21 @@ fn context() -> VerificationContext<'static> {
 }
 
 fn vector(source: &str, expected_generator: &str) -> Value {
-    let value: Value =
-        serde_json::from_str(source).expect("golden vector specification is valid JSON");
+    let value: Value = serde_json::from_str(source)
+        .unwrap_or_else(|error| panic!("golden vector specification is valid JSON: {error:?}"));
     assert_eq!(value["generator"], expected_generator);
     assert!(!source.to_ascii_lowercase().contains("placeholder"));
     value
 }
 
-fn jws(header: Value, payload: &Value, key: &SigningKey) -> String {
-    let header = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&header).expect("serializable header"));
-    let payload =
-        URL_SAFE_NO_PAD.encode(serde_json::to_vec(payload).expect("serializable payload"));
+fn jws(header: &Value, payload: &Value, key: &SigningKey) -> String {
+    let header = URL_SAFE_NO_PAD.encode(
+        serde_json::to_vec(header).unwrap_or_else(|error| panic!("serializable header: {error:?}")),
+    );
+    let payload = URL_SAFE_NO_PAD.encode(
+        serde_json::to_vec(payload)
+            .unwrap_or_else(|error| panic!("serializable payload: {error:?}")),
+    );
     let signing_input = format!("{header}.{payload}");
     let signature: Signature = key.sign(signing_input.as_bytes());
     format!(
@@ -89,11 +96,12 @@ fn jws(header: Value, payload: &Value, key: &SigningKey) -> String {
 }
 
 fn root(mandate: Value) -> String {
-    let payload = json!({"iat": NOW - 60, "exp": NOW + 3_600, "delegate_payload": [mandate]});
+    let mut payload = json!({"iat": NOW - 60, "exp": NOW + 3_600});
+    payload["delegate_payload"] = Value::Array(vec![mandate]);
     format!(
         "{}~",
         jws(
-            json!({"alg":"ES256","typ":"dc+sd-jwt","kid":ISSUER_KID}),
+            &json!({"alg":"ES256","typ":"dc+sd-jwt","kid":ISSUER_KID}),
             &payload,
             &issuer_key()
         )
@@ -101,11 +109,12 @@ fn root(mandate: Value) -> String {
 }
 
 fn alternate_root(mandate: Value) -> String {
-    let payload = json!({"iat": NOW - 60, "exp": NOW + 3_600, "delegate_payload": [mandate]});
+    let mut payload = json!({"iat": NOW - 60, "exp": NOW + 3_600});
+    payload["delegate_payload"] = Value::Array(vec![mandate]);
     format!(
         "{}~",
         jws(
-            json!({"alg":"ES256","typ":"dc+sd-jwt","kid":ALTERNATE_ISSUER_KID}),
+            &json!({"alg":"ES256","typ":"dc+sd-jwt","kid":ALTERNATE_ISSUER_KID}),
             &payload,
             &alternate_issuer_key()
         )
@@ -115,15 +124,16 @@ fn alternate_root(mandate: Value) -> String {
 fn agent_jwk() -> Value {
     let key = agent_key();
     let point = key.verifying_key().to_encoded_point(false);
-    json!({"kty":"EC","crv":"P-256","x":URL_SAFE_NO_PAD.encode(point.x().expect("x coordinate")),"y":URL_SAFE_NO_PAD.encode(point.y().expect("y coordinate"))})
+    json!({"kty":"EC","crv":"P-256","x":URL_SAFE_NO_PAD.encode(point.x().unwrap_or_else(|| panic!("x coordinate"))),"y":URL_SAFE_NO_PAD.encode(point.y().unwrap_or_else(|| panic!("y coordinate")))})
 }
 
 fn key_bound(open: &str, mandate: Value) -> String {
-    let payload = json!({"iat":NOW-30,"exp":NOW+1_800,"aud":"test-merchant-api","nonce":"nonce-abc123xyz","sd_hash":URL_SAFE_NO_PAD.encode(Sha256::digest(open.as_bytes())),"delegate_payload":[mandate]});
+    let mut payload = json!({"iat":NOW-30,"exp":NOW+1_800,"aud":"test-merchant-api","nonce":"nonce-abc123xyz","sd_hash":URL_SAFE_NO_PAD.encode(Sha256::digest(open.as_bytes()))});
+    payload["delegate_payload"] = Value::Array(vec![mandate]);
     format!(
         "{}~",
         jws(
-            json!({"alg":"ES256","typ":"kb+sd-jwt"}),
+            &json!({"alg":"ES256","typ":"kb+sd-jwt"}),
             &payload,
             &agent_key()
         )
@@ -132,7 +142,7 @@ fn key_bound(open: &str, mandate: Value) -> String {
 
 fn merchant_checkout(amount: u128, id: &str) -> String {
     jws(
-        json!({"alg":"ES256","typ":"JWT","kid":MERCHANT_KID}),
+        &json!({"alg":"ES256","typ":"JWT","kid":MERCHANT_KID}),
         &json!({
             "id":id,"merchant":{"id":"merchant-001","name":"Test Merchant"},
             "line_items":[{"id":"line-001","item":{"id":"sku-001","title":"LayerX node credit","price":amount},"quantity":1,"totals":[{"type":"total","amount":amount}]}],
@@ -176,14 +186,16 @@ fn autonomous_pair(amount: u128, maximum: u128) -> (String, String) {
 }
 
 fn corrupt_signature(presentation: &str) -> String {
-    let first = presentation.find('.').expect("header separator");
+    let first = presentation
+        .find('.')
+        .unwrap_or_else(|| panic!("header separator"));
     let start = presentation[first + 1..]
         .find('.')
-        .map(|next| first + next + 2)
-        .expect("payload separator");
+        .map_or_else(|| panic!("payload separator"), |next| first + next + 2);
     let mut bytes = presentation.as_bytes().to_vec();
     bytes[start] = if bytes[start] == b'A' { b'B' } else { b'A' };
-    String::from_utf8(bytes).expect("base64url mutation is UTF-8")
+    String::from_utf8(bytes)
+        .unwrap_or_else(|error| panic!("base64url mutation is UTF-8: {error:?}"))
 }
 
 #[test]
@@ -195,32 +207,32 @@ fn authentic_direct_vector_verifies_expected_values() {
     let amount = u128::from(
         spec["expected_values"]["amount_minor_units"]
             .as_u64()
-            .expect("minor-unit amount"),
+            .unwrap_or_else(|| panic!("minor-unit amount")),
     );
     let (checkout, payment) = direct_pair(amount);
     let resolver = TestKeyResolver::authentic();
     let verified = MandateVerifier::new(&resolver)
         .verify(&checkout, &payment, &context())
-        .expect("authentic direct pair verifies");
+        .unwrap_or_else(|error| panic!("authentic direct pair verifies: {error:?}"));
     assert_eq!(verified.mode(), MandateMode::Direct);
     assert_eq!(
         verified.checkout_id(),
         spec["expected_values"]["checkout_id"]
             .as_str()
-            .expect("checkout id")
+            .unwrap_or_else(|| panic!("checkout id"))
     );
     assert_eq!(
         verified.payee().id(),
         spec["expected_values"]["payee_id"]
             .as_str()
-            .expect("payee id")
+            .unwrap_or_else(|| panic!("payee id"))
     );
     assert_eq!(verified.amount().minor_units(), amount);
     assert_eq!(
         verified.amount().currency(),
         spec["expected_values"]["currency"]
             .as_str()
-            .expect("currency")
+            .unwrap_or_else(|| panic!("currency"))
     );
 }
 
@@ -234,7 +246,7 @@ fn authentic_autonomous_vector_verifies_key_binding_and_constraints() {
     let resolver = TestKeyResolver::authentic();
     let verified = MandateVerifier::new(&resolver)
         .verify(&checkout, &payment, &context())
-        .expect("authentic autonomous pair verifies");
+        .unwrap_or_else(|error| panic!("authentic autonomous pair verifies: {error:?}"));
     assert_eq!(verified.mode(), MandateMode::Autonomous);
     assert_eq!(verified.checkout_id(), "checkout-67890");
     assert_eq!(verified.amount().minor_units(), 15_000);
@@ -296,12 +308,12 @@ fn authentic_amount_violation_reaches_constraint_evaluation() {
     let amount = u128::from(
         spec["authentic_amount_minor_units"]
             .as_u64()
-            .expect("authentic amount"),
+            .unwrap_or_else(|| panic!("authentic amount")),
     );
     let maximum = u128::from(
         spec["constraint_max_minor_units"]
             .as_u64()
-            .expect("constraint maximum"),
+            .unwrap_or_else(|| panic!("constraint maximum")),
     );
     let (checkout, payment) = autonomous_pair(amount, maximum);
     let resolver = TestKeyResolver::authentic();
@@ -379,7 +391,7 @@ fn unsupported_algorithm_is_refused_before_key_resolution() {
     let token = format!(
         "{}~",
         jws(
-            json!({"alg":"RS256","kid":ISSUER_KID}),
+            &json!({"alg":"RS256","kid":ISSUER_KID}),
             &json!({"delegate_payload":[]}),
             &issuer_key()
         )
