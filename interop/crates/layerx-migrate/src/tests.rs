@@ -27,7 +27,6 @@ const SOLANA_TESTNET_GENESIS: [u8; 32] = [
 
 const PERIOD_START: u64 = 1_700_000_000;
 const WINDOW_START: u64 = 200;
-const TEST_AGENT_ACCOUNT: [u8; 32] = [0xa2; 32];
 const TEST_ASSET: [u8; 32] = [0xc2; 32];
 const TEST_CUSTODY_AUTHORITY: [u8; 32] = [0x42; 32];
 const TEST_CUSTODY_AUTHORIZATION: [u8; 32] = [0x92; 32];
@@ -200,7 +199,7 @@ impl TestPlane {
         bytes.extend_from_slice(&1_u128.to_be_bytes());
         push_bytes(&mut bytes, &[0x91; 32]);
         push_bytes(&mut bytes, &TEST_CUSTODY_AUTHORIZATION);
-        push_bytes(&mut bytes, &binding_policy().context_hash(ownership));
+        push_bytes(&mut bytes, &BindingReceiptPolicy::context_hash(ownership));
         push_u64(&mut bytes, PERIOD_START + sequence);
         bytes.push(0);
         let signature = self.sign(&bytes);
@@ -250,7 +249,7 @@ impl TestPlane {
         bytes.extend_from_slice(&(credit_before + finality.layerx_amount).to_be_bytes());
         push_bytes(&mut bytes, &[0x91; 32]);
         push_bytes(&mut bytes, &[0x92; 32]);
-        push_bytes(&mut bytes, &custody_policy().context_hash(finality));
+        push_bytes(&mut bytes, &CustodyReceiptPolicy::context_hash(finality));
         push_u64(&mut bytes, PERIOD_START + sequence);
         bytes.push(0);
         let signature = self.sign(&bytes);
@@ -351,6 +350,18 @@ struct EthereumTestVerifier {
 
 impl crate::sealed::SourceVerifier for EthereumTestVerifier {}
 
+struct FinalityFields<const N: usize> {
+    transaction: SourceTransaction,
+    source: [u8; N],
+    source_asset: [u8; 32],
+    source_amount: u128,
+    custody_reference: [u8; 32],
+    layerx_asset: [u8; 32],
+    layerx_amount: u128,
+    destination: [u8; 32],
+    finality_height: u64,
+}
+
 impl EthereumTestVerifier {
     fn new(chain_id: u64) -> Self {
         Self { chain_id }
@@ -361,7 +372,6 @@ impl EthereumTestVerifier {
         address: [u8; 20],
         layerx_identity: [u8; 32],
     ) -> SourceEvidence {
-        let chain = SourceChain::Ethereum { chain_id };
         let canonical = [
             b"ethereum-signature-v1".as_slice(),
             &chain_id.to_be_bytes(),
@@ -372,18 +382,18 @@ impl EthereumTestVerifier {
         SourceEvidence::new(canonical).unwrap_or_else(|error| panic!("evidence: {error}"))
     }
 
-    fn test_finality_evidence(
-        chain_id: u64,
-        transaction: SourceTransaction,
-        source: [u8; 20],
-        source_asset: [u8; 32],
-        source_amount: u128,
-        custody_reference: [u8; 32],
-        layerx_asset: [u8; 32],
-        layerx_amount: u128,
-        destination: [u8; 32],
-        finality_height: u64,
-    ) -> SourceEvidence {
+    fn test_finality_evidence(chain_id: u64, fields: &FinalityFields<20>) -> SourceEvidence {
+        let FinalityFields {
+            transaction,
+            source,
+            source_asset,
+            source_amount,
+            custody_reference,
+            layerx_asset,
+            layerx_amount,
+            destination,
+            finality_height,
+        } = *fields;
         let canonical = [
             b"ethereum-finality-v1".as_slice(),
             &chain_id.to_be_bytes(),
@@ -403,7 +413,7 @@ impl EthereumTestVerifier {
 
     fn test_history_evidence(
         chain_id: u64,
-        records: Vec<ExternalHistoryRecord>,
+        records: &[ExternalHistoryRecord],
         next_cursor: Option<[u8; 32]>,
     ) -> SourceEvidence {
         let mut canonical = Vec::new();
@@ -416,7 +426,7 @@ impl EthereumTestVerifier {
         } else {
             canonical.push(0);
         }
-        for record in &records {
+        for record in records {
             if let ExternalAddress::Ethereum(address) = record.address {
                 canonical.extend_from_slice(record.transaction.bytes());
                 canonical.extend_from_slice(&address);
@@ -562,11 +572,11 @@ impl SourceVerifier for EthereumTestVerifier {
             return Err(MigrationError::InvalidNetwork);
         }
         offset += 8;
-        let record_count = u64::from_be_bytes(
-            canonical[offset..offset + 8]
+        let record_count = usize::from_be_bytes(
+            canonical[offset + 8 - size_of::<usize>()..offset + 8]
                 .try_into()
                 .map_err(|_| MigrationError::InvalidEvidence)?,
-        ) as usize;
+        );
         offset += 8;
         let next_cursor = if canonical[offset] == 1 {
             offset += 1;
@@ -673,16 +683,19 @@ impl SolanaTestVerifier {
 
     fn test_finality_evidence(
         genesis_hash: [u8; 32],
-        transaction: SourceTransaction,
-        source: [u8; 32],
-        source_asset: [u8; 32],
-        source_amount: u128,
-        custody_reference: [u8; 32],
-        layerx_asset: [u8; 32],
-        layerx_amount: u128,
-        destination: [u8; 32],
-        finality_height: u64,
+        fields: &FinalityFields<32>,
     ) -> SourceEvidence {
+        let FinalityFields {
+            transaction,
+            source,
+            source_asset,
+            source_amount,
+            custody_reference,
+            layerx_asset,
+            layerx_amount,
+            destination,
+            finality_height,
+        } = *fields;
         let canonical = [
             b"solana-finality-v1".as_slice(),
             &genesis_hash,
@@ -702,7 +715,7 @@ impl SolanaTestVerifier {
 
     fn test_history_evidence(
         genesis_hash: [u8; 32],
-        records: Vec<ExternalHistoryRecord>,
+        records: &[ExternalHistoryRecord],
         next_cursor: Option<[u8; 32]>,
     ) -> SourceEvidence {
         let mut canonical = Vec::new();
@@ -715,7 +728,7 @@ impl SolanaTestVerifier {
         } else {
             canonical.push(0);
         }
-        for record in &records {
+        for record in records {
             if let ExternalAddress::Solana(address) = record.address {
                 canonical.extend_from_slice(record.transaction.bytes());
                 canonical.extend_from_slice(&address);
@@ -855,11 +868,11 @@ impl SourceVerifier for SolanaTestVerifier {
             return Err(MigrationError::InvalidNetwork);
         }
         offset += 32;
-        let record_count = u64::from_be_bytes(
-            canonical[offset..offset + 8]
+        let record_count = usize::from_be_bytes(
+            canonical[offset + 8 - size_of::<usize>()..offset + 8]
                 .try_into()
                 .map_err(|_| MigrationError::InvalidEvidence)?,
-        ) as usize;
+        );
         offset += 8;
         let next_cursor = if canonical[offset] == 1 {
             offset += 1;
@@ -1016,15 +1029,17 @@ fn ethereum_asset_migration_credits_only_against_verified_finality() {
     let finality_height = 20_000_000;
     let evidence = EthereumTestVerifier::test_finality_evidence(
         ETHEREUM_MAINNET_CHAIN_ID,
-        transaction,
-        eth_source,
-        source_asset,
-        source_amount,
-        custody_reference,
-        layerx_asset,
-        layerx_amount,
-        destination,
-        finality_height,
+        &FinalityFields {
+            transaction,
+            source: eth_source,
+            source_asset,
+            source_amount,
+            custody_reference,
+            layerx_asset,
+            layerx_amount,
+            destination,
+            finality_height,
+        },
     );
     let state = MigrationAdapter::migrate_asset(
         &mut gateway,
@@ -1079,11 +1094,8 @@ fn ethereum_history_import_labels_records_as_external_provenance() {
             provenance: ExternalProvenance::Ethereum,
         },
     ];
-    let evidence = EthereumTestVerifier::test_history_evidence(
-        ETHEREUM_SEPOLIA_CHAIN_ID,
-        records.clone(),
-        None,
-    );
+    let evidence =
+        EthereumTestVerifier::test_history_evidence(ETHEREUM_SEPOLIA_CHAIN_ID, &records, None);
     let state = MigrationAdapter::import_history(
         &mut gateway,
         &alice,
@@ -1152,15 +1164,17 @@ fn solana_asset_migration_credits_only_against_verified_finality() {
     let finality_height = 150_000_000;
     let evidence = SolanaTestVerifier::test_finality_evidence(
         SOLANA_MAINNET_GENESIS,
-        transaction,
-        sol_source,
-        source_asset,
-        source_amount,
-        custody_reference,
-        layerx_asset,
-        layerx_amount,
-        destination,
-        finality_height,
+        &FinalityFields {
+            transaction,
+            source: sol_source,
+            source_asset,
+            source_amount,
+            custody_reference,
+            layerx_asset,
+            layerx_amount,
+            destination,
+            finality_height,
+        },
     );
     let state = MigrationAdapter::migrate_asset(
         &mut gateway,
@@ -1200,7 +1214,7 @@ fn solana_history_import_labels_records_as_external_provenance() {
         provenance: ExternalProvenance::Solana,
     }];
     let evidence =
-        SolanaTestVerifier::test_history_evidence(SOLANA_MAINNET_GENESIS, records.clone(), None);
+        SolanaTestVerifier::test_history_evidence(SOLANA_MAINNET_GENESIS, &records, None);
     let state = MigrationAdapter::import_history(
         &mut gateway,
         &dave,

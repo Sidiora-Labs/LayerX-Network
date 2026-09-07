@@ -11,7 +11,7 @@ use std::time::Duration;
 use rustls::pki_types::{CertificateDer, ServerName};
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::Value;
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::MigrationError;
@@ -115,13 +115,13 @@ impl RpcCluster {
         if request_id == 0 {
             return Err(MigrationError::RpcUnavailable);
         }
-        let body = serde_json::to_vec(&json!({
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "method": method,
-            "params": parameters
-        }))
-        .map_err(|_| MigrationError::RpcUnavailable)?;
+        let envelope = serde_json::Map::from_iter([
+            ("jsonrpc".to_owned(), Value::String("2.0".to_owned())),
+            ("id".to_owned(), Value::from(request_id)),
+            ("method".to_owned(), Value::String(method.to_owned())),
+            ("params".to_owned(), parameters),
+        ]);
+        let body = serde_json::to_vec(&envelope).map_err(|_| MigrationError::RpcUnavailable)?;
         if body.len() > 256 * 1024 {
             return Err(MigrationError::Configuration);
         }
@@ -446,8 +446,12 @@ fn read_json_rpc(
             wire_body
         }
     };
+    decode_rpc_envelope(&body, request_id)
+}
+
+fn decode_rpc_envelope(body: &[u8], request_id: u64) -> Result<Value, MigrationError> {
     let envelope: Value =
-        serde_json::from_slice(&body).map_err(|_| MigrationError::RpcResponseMismatch)?;
+        serde_json::from_slice(body).map_err(|_| MigrationError::RpcResponseMismatch)?;
     if envelope.get("jsonrpc").and_then(Value::as_str) != Some("2.0")
         || envelope.get("id").and_then(Value::as_u64) != Some(request_id)
     {

@@ -669,7 +669,7 @@ impl BindingReceiptPolicy {
     /// Returns the exact external-claim commitment carried by the binding
     /// operation's protocol receipt.
     #[must_use]
-    pub fn context_hash(&self, ownership: &VerifiedOwnership) -> [u8; 32] {
+    pub fn context_hash(ownership: &VerifiedOwnership) -> [u8; 32] {
         binding_context_hash(ownership)
     }
 
@@ -696,7 +696,7 @@ impl BindingReceiptPolicy {
             || protocol.asset() != self.asset
             || protocol.amount() != self.amount
             || protocol.to() != ownership.layerx_identity
-            || protocol.context_hash() != self.context_hash(ownership)
+            || protocol.context_hash() != Self::context_hash(ownership)
             || protocol
                 .debit_balance_before()
                 .checked_sub(protocol.debit_balance_after())
@@ -760,7 +760,7 @@ impl CustodyReceiptPolicy {
     /// Returns the exact source-claim commitment that the custody operation
     /// must carry in the protocol receipt context.
     #[must_use]
-    pub fn context_hash(&self, finality: &VerifiedAssetFinality) -> [u8; 32] {
+    pub fn context_hash(finality: &VerifiedAssetFinality) -> [u8; 32] {
         custody_context_hash(finality)
     }
 
@@ -784,7 +784,7 @@ impl CustodyReceiptPolicy {
             || protocol.module_version() != self.module_version
             || protocol.parameter_version() != self.parameter_version
             || protocol.operation() != self.operation
-            || protocol.context_hash() != self.context_hash(finality)
+            || protocol.context_hash() != Self::context_hash(finality)
             || protocol.asset() != finality.layerx_asset
             || protocol.amount() != finality.layerx_amount
             || protocol.to() != finality.destination
