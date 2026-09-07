@@ -1063,6 +1063,8 @@ unsafe extern "C" {
     ) -> i32;
     fn layerx_programs_call_terminal_byte(token: u64, section: u16, offset: u32, byte: u8) -> i32;
     fn layerx_programs_call_terminal_publish(token: u64) -> i32;
+    fn layerx_programs_call_terminal_applied_begin(token: u64, length: u32) -> i32;
+    fn layerx_programs_call_terminal_applied_byte(token: u64, offset: u32, byte: u8) -> i32;
     fn layerx_programs_call_event_begin(
         token: u64,
         index: u32,
@@ -1718,6 +1720,28 @@ impl KernelTransferPrimitive for CKernel {
         {
             Err(TransferLawError::ReceiptMismatch)
         } else {
+            crate::transfer::verify_applied_kernel_legs(
+                transfers.kernel_canonical(),
+                evidence.transfer_set_root,
+            )?;
+            c_ok(unsafe {
+                layerx_programs_call_terminal_applied_begin(
+                    self.token,
+                    u32::try_from(transfers.kernel_canonical().len())
+                        .map_err(|_| TransferLawError::InvalidTransferSet)?,
+                )
+            })
+            .map_err(|_| TransferLawError::ReceiptMismatch)?;
+            for (offset, byte) in transfers.kernel_canonical().iter().copied().enumerate() {
+                c_ok(unsafe {
+                    layerx_programs_call_terminal_applied_byte(
+                        self.token,
+                        u32::try_from(offset).map_err(|_| TransferLawError::InvalidTransferSet)?,
+                        byte,
+                    )
+                })
+                .map_err(|_| TransferLawError::ReceiptMismatch)?;
+            }
             Ok(())
         }
     }
@@ -2707,7 +2731,11 @@ pub extern "C" fn layerx_programs_call_begin(
                     let transfer_set = if effects.transfers.is_empty() {
                         None
                     } else {
-                        match transfer.authorize_for_graph(effects, record.call_graph()) {
+                        match transfer.authorize_for_graph_with_version(
+                            effects,
+                            record.call_graph(),
+                            protocol_version == 3,
+                        ) {
                             Ok(set) => Some(set),
                             Err(error) => {
                                 write_settlement_detail(&mut terminal_detail, error);
@@ -3128,7 +3156,8 @@ pub extern "C" fn layerx_programs_call_begin(
             .prepare_authorized_activity_budgeted(
                 &storage,
                 BudgetedAuthorizedExecutionRequest::new(request, admitted, payer, binding)
-                    .with_access_declaration(access_declaration),
+                    .with_access_declaration(access_declaration)
+                    .with_transfer_authority_v2(protocol_version == 3),
             )
             .map_err(|_| NON_CANONICAL)?
         {
@@ -3261,7 +3290,11 @@ pub extern "C" fn layerx_programs_call_begin(
                 if protocol_uses_occupancy(protocol_version) {
                     wrap_reserved_evidence(
                         &mut terminal_detail,
-                        b"LXP/programs/execution-occupancy/v1\0",
+                        if protocol_version == 3 {
+                            b"LXP/program-execution-with-occupancy/v1\0"
+                        } else {
+                            b"LXP/programs/execution-occupancy/v1\0"
+                        },
                         &occupancy_evidence,
                         &[],
                     )?;
@@ -3269,7 +3302,11 @@ pub extern "C" fn layerx_programs_call_begin(
                 if let Some((authorization, transfer_root)) = program_authority_evidence {
                     wrap_reserved_evidence(
                         &mut terminal_detail,
-                        b"LXP/programs/execution-authority/v1\0",
+                        if protocol_version == 3 {
+                            b"LXP/program-execution-with-transfer-authority/v2\0"
+                        } else {
+                            b"LXP/programs/execution-authority/v1\0"
+                        },
                         &authorization,
                         &transfer_root,
                     )?;

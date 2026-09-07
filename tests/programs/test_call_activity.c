@@ -16,6 +16,9 @@
 #include <openssl/evp.h>
 
 static bool dump_executed_v3;
+static bool dump_executed_v4;
+static bool dump_principal_v4;
+static bool dump_mutated_leg_v4;
 static bool post_upgrade_batch_regression;
 static const uint8_t executed_sequencer_seed[32] = {0x45U};
 static int lifecycle_vector_signature(lxp_activity *activity,
@@ -43,13 +46,15 @@ static int emit_executed_fixture(const lxp_activity *activity,
                                  const lxp_receipt *receipt)
 {
     static uint8_t storage[2U * LXP_MAX_ACTIVITY_BYTES];
+    static uint8_t mutated_terminal[LXP_MAX_ACTIVITY_BYTES];
+    lxp_receipt mutated_receipt;
     lxp_arena arena;
     lxp_byte_span canonical, signed_activity;
     uint8_t public_key[32], digest[32], activity_id[32];
     if (receipt->protocol_version != LXP_PROTOCOL_VERSION_STATE_COMMITMENT ||
         receipt->module_version != LX_PROGRAMS_SANDBOX_DESTROY_ABI_VERSION ||
         receipt->result_code != LXP_OK || !receipt->program_outcome.present ||
-        receipt->program_outcome.abi_version != LX_PROGRAMS_ACCOUNT_ABI_VERSION ||
+        receipt->program_outcome.abi_version != (dump_principal_v4 ? LX_PROGRAMS_ABI_VERSION : LX_PROGRAMS_ACCOUNT_ABI_VERSION) ||
         receipt->program_outcome.terminal_kind != LXP_PROGRAM_TERMINAL_SUCCESS ||
         executed_public_key(executed_sequencer_seed, public_key) != 0 ||
         lxp_arena_init(&arena, storage, sizeof(storage)) != LXP_OK ||
@@ -59,7 +64,55 @@ static int emit_executed_fixture(const lxp_activity *activity,
         lxp_activity_encode(activity, &arena, &signed_activity) != LXP_OK ||
         lxp_activity_id(signed_activity.bytes, signed_activity.length, activity_id) != LXP_OK ||
         memcmp(activity_id, receipt->activity_id, 32U) != 0)
-        return 1;
+        return fprintf(stderr, "Executed fixture failed at line=%d\n", __LINE__), 1;
+    if (dump_executed_v4) {
+        static const uint8_t domain[] = "LXP/programs/terminal-applied-legs/v1";
+        lxp_byte_span terminal = receipt->program_outcome.terminal_payload;
+        uint32_t detail_length, legs_length;
+        size_t offset = sizeof(domain);
+        uint8_t applied_digest[32];
+        if (receipt->program_outcome.encoding_version != 4U ||
+            terminal.length < sizeof(domain) + 8U ||
+            memcmp(terminal.bytes, domain, sizeof(domain)) != 0) return fprintf(stderr, "Executed fixture failed at line=%d\n", __LINE__), 1;
+        detail_length = ((uint32_t)terminal.bytes[offset] << 24U) |
+            ((uint32_t)terminal.bytes[offset + 1U] << 16U) |
+            ((uint32_t)terminal.bytes[offset + 2U] << 8U) | terminal.bytes[offset + 3U];
+        offset += 4U;
+        if (detail_length > terminal.length - offset - 4U) return fprintf(stderr, "Executed fixture failed at line=%d\n", __LINE__), 1;
+        if (dump_principal_v4) {
+            static const uint8_t authority_domain[] = "LXP/program-execution-with-transfer-authority/v2";
+            if (detail_length < sizeof(authority_domain) ||
+                memcmp(terminal.bytes + offset, authority_domain, sizeof(authority_domain)) != 0)
+                return fprintf(stderr, "Executed fixture failed at line=%d\n", __LINE__), 1;
+        }
+        offset += detail_length;
+        legs_length = ((uint32_t)terminal.bytes[offset] << 24U) |
+            ((uint32_t)terminal.bytes[offset + 1U] << 16U) |
+            ((uint32_t)terminal.bytes[offset + 2U] << 8U) | terminal.bytes[offset + 3U];
+        offset += 4U;
+        if (legs_length != 115U || terminal.length - offset != legs_length ||
+            lxp_hash_sha256(terminal.bytes + offset, legs_length, applied_digest) != LXP_OK ||
+            memcmp(applied_digest, receipt->program_outcome.applied_legs_digest, 32U) != 0)
+            return fprintf(stderr, "Executed fixture failed at line=%d\n", __LINE__), 1;
+        if (dump_mutated_leg_v4) {
+            (void)memcpy(mutated_terminal, terminal.bytes, terminal.length);
+            mutated_terminal[offset + 112U] ^= 2U;
+            mutated_receipt = *receipt;
+            mutated_receipt.program_outcome.terminal_payload.bytes = mutated_terminal;
+            if (lxp_hash_sha256(mutated_terminal + offset, legs_length,
+                                mutated_receipt.program_outcome.applied_legs_digest) != LXP_OK ||
+                lxp_hash_sha256(mutated_terminal, terminal.length,
+                                mutated_receipt.program_outcome.terminal_payload_root) != LXP_OK ||
+                lxp_arena_reset(&arena, 0U) != LXP_OK ||
+                lxp_receipt_sign(&mutated_receipt, executed_sequencer_seed, &arena) != LXP_OK ||
+                lxp_receipt_verify(&mutated_receipt, public_key, &arena) != LXP_OK ||
+                lxp_receipt_digest(&mutated_receipt, &arena, digest) != LXP_OK ||
+                lxp_receipt_encode(&mutated_receipt, true, &arena, &canonical) != LXP_OK ||
+                lxp_activity_encode(activity, &arena, &signed_activity) != LXP_OK)
+                return fprintf(stderr, "Executed fixture failed at line=%d\n", __LINE__), 1;
+            receipt = &mutated_receipt;
+        }
+    }
     if (printf("{") < 0 ||
         executed_hex_field("canonical_receipt_hex", canonical.bytes, canonical.length) != 0 ||
         executed_hex_field("signed_activity_hex", signed_activity.bytes, signed_activity.length) != 0 ||
@@ -77,7 +130,7 @@ static int emit_executed_fixture(const lxp_activity *activity,
         executed_hex_field("resulting_state_root_hex", receipt->resulting_state_root, 32U) != 0 ||
         printf("\"sequencer_public_key_hex\":\"") < 0 ||
         lifecycle_vector_hex(public_key, 32U) != 0 || printf("\"}}\n") < 0)
-        return 1;
+        return fprintf(stderr, "Executed fixture failed at line=%d\n", __LINE__), 1;
     return fflush(stdout) == 0 ? 0 : 1;
 }
 
@@ -1335,7 +1388,7 @@ static int deploy_and_upgrade_artifacts_case(uint16_t protocol_version,
         (void)memcpy(payload + 104U, wasm, wasm_length);
         payload_length = 104U + wasm_length;
     }
-    if (dump_executed_v3) write_u16(payload + 32U, LX_PROGRAMS_ACCOUNT_ABI_VERSION);
+    if (dump_executed_v3 && !dump_principal_v4) write_u16(payload + 32U, LX_PROGRAMS_ACCOUNT_ABI_VERSION);
     fill_activity(&activity, LX_PROGRAMS_DEPLOY, payload, payload_length,
                   did, sizeof(did) - 1U, primary_key);
     activity.protocol_version = protocol_version;
@@ -1457,7 +1510,7 @@ static int deploy_and_upgrade_artifacts_case(uint16_t protocol_version,
         capabilities[82] = 1U;
         payload_length = call_payload_with_capabilities(
             call, program_id, capabilities, sizeof(capabilities));
-        if (dump_executed_v3) write_u16(call + 32U, LX_PROGRAMS_ACCOUNT_ABI_VERSION);
+        if (dump_executed_v3 && !dump_principal_v4) write_u16(call + 32U, LX_PROGRAMS_ACCOUNT_ABI_VERSION);
         fill_activity(&activity, LX_PROGRAMS_CALL, call, payload_length,
                       did, sizeof(did) - 1U, primary_key);
         activity.protocol_version = protocol_version;
@@ -2318,6 +2371,15 @@ int main(int argc, char **argv)
         post_upgrade_batch_regression = true;
         return deploy_and_upgrade_artifacts_case(
             LXP_PROTOCOL_VERSION_STATE_COMMITMENT, false);
+    }
+    if (argc == 2 && (strcmp(argv[1], "--dump-executed-v4") == 0 ||
+                      strcmp(argv[1], "--dump-principal-v4") == 0 ||
+                      strcmp(argv[1], "--dump-mutated-leg-v4") == 0)) {
+        dump_executed_v3 = true;
+        dump_executed_v4 = true;
+        dump_principal_v4 = strcmp(argv[1], "--dump-principal-v4") == 0;
+        dump_mutated_leg_v4 = strcmp(argv[1], "--dump-mutated-leg-v4") == 0;
+        return deploy_and_upgrade_artifacts_case(LXP_PROTOCOL_VERSION_STATE_COMMITMENT, true);
     }
     if (argc == 2 && strcmp(argv[1], "--dump-executed-v3") == 0) {
         dump_executed_v3 = true;

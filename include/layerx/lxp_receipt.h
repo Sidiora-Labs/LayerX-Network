@@ -69,6 +69,7 @@ typedef struct lxp_program_outcome {
     uint8_t terminal_payload_root[32];
     lxp_byte_span terminal_payload;
     uint8_t transfer_root[32];
+    uint8_t applied_legs_digest[32];
 } lxp_program_outcome;
 
 typedef struct lxp_receipt {
