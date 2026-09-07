@@ -8,7 +8,7 @@ use layerx_client::lni::schema::{decode_envelope, encode_envelope, Envelope, Ver
 use layerx_client::lni::transport::{ConnectionGate, FrameTransport, Limits, Uds};
 use layerx_platform_authority::{
     authorized_batch_by_activity, hex, parse_replica_evidence, receipt_locator, BatchEvidence,
-    EvidenceRefusal,
+    BatchIdentityEvidence, EvidenceRefusal,
 };
 use layerx_proof::inclusion::{verify_receipt, InclusionError, SequencerAuthorization};
 use layerx_proof::merkle::decode_proof;
@@ -19,7 +19,7 @@ use layerx_types::ids::{Did, IdempotencyKey};
 use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry, Payload};
 use layerx_wire::activity::{decode_signed, encode_signed_envelope, encode_unsigned_envelope};
 use layerx_wire::encode::Encoder;
-use layerx_wire::hash::{activity_id, execution_batch_id, Domain};
+use layerx_wire::hash::{activity_id, execution_batch_id, program_execution_batch_id, Domain};
 use layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION as PROTOCOL_VERSION;
 use native_tls::{Certificate, TlsConnector};
 use sha2::{Digest as _, Sha256};
@@ -1459,14 +1459,65 @@ fn real_node_authority_serves_verified_facts_and_reflects_replica_loss() {
         "independent inclusion verification",
     );
     let header = inclusion.header().header();
+    let BatchIdentityEvidence::OccupancyMaintenanceV2 {
+        receipt,
+        proof: maintenance_proof,
+    } = &evidence.batch_identity
+    else {
+        panic!("native maintained batch must carry maintenance evidence")
+    };
+    let maintenance_proof = must(decode_proof(maintenance_proof), "maintenance proof");
+    must(
+        verify_receipt(
+            receipt,
+            &maintenance_proof,
+            &evidence.header,
+            &evidence.header_signature,
+            &authorization,
+        ),
+        "independent maintenance inclusion verification",
+    );
+    let maintenance = must(
+        layerx_wire::maintenance::decode_occupancy_maintenance(receipt),
+        "maintenance record",
+    );
+    assert_eq!(maintenance.batch_number, header.batch_number());
+    assert_eq!(maintenance.global_sequence, header.last_sequence());
+    assert_eq!(
+        maintenance.resulting_state_root,
+        header.resulting_state_root()
+    );
+    assert_eq!(maintenance_proof.leaf_index(), proof.leaf_count() - 1);
+    assert_eq!(maintenance_proof.leaf_count(), proof.leaf_count());
+    assert_eq!(
+        u64::from(maintenance_proof.leaf_index()),
+        header.last_sequence() - header.first_sequence()
+    );
+    assert_eq!(
+        header.first_sequence() + u64::from(proof.leaf_index()),
+        protocol.global_sequence()
+    );
     let expected_batch_id = must(
-        execution_batch_id(
+        program_execution_batch_id(
             header.previous_state_root(),
-            protocol.activity_id(),
-            protocol.global_sequence(),
+            header.activity_merkle_root(),
+            header.first_sequence(),
+            header.last_sequence() - 1,
             header.batch_number(),
         ),
-        "execution batch id",
+        "maintained execution batch id",
+    );
+    assert_ne!(
+        expected_batch_id,
+        must(
+            execution_batch_id(
+                header.previous_state_root(),
+                protocol.activity_id(),
+                protocol.global_sequence(),
+                header.batch_number()
+            ),
+            "legacy execution batch id"
+        )
     );
     assert_eq!(hex::encode(&expected_batch_id), field(&facts, "batch_id"));
     assert_eq!(

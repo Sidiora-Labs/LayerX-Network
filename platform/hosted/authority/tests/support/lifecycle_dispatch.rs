@@ -73,6 +73,7 @@ fn state_fixture() -> (Vec<u8>, AuthorizedBatch) {
         verified_header,
     ));
     let evidence = super::BatchEvidence {
+        batch_identity: super::BatchIdentityEvidence::Historical,
         header: header.clone(),
         header_signature: signature,
         receipt_proof: layerx_proof::merkle::encode_proof(&proof),
@@ -84,6 +85,7 @@ fn state_fixture() -> (Vec<u8>, AuthorizedBatch) {
         &authorization,
     ));
     assert_eq!(facts.batch_id, batch_id);
+    verify_historical_documents(&bytes, &evidence, &authorization);
     let mut tampered = evidence;
     tampered.header_signature[0] ^= 1;
     assert_eq!(
@@ -105,6 +107,65 @@ fn state_fixture() -> (Vec<u8>, AuthorizedBatch) {
         signer,
     );
     (bytes, authority)
+}
+
+fn verify_historical_documents(
+    bytes: &[u8],
+    evidence: &super::BatchEvidence,
+    authorization: &layerx_proof::inclusion::SequencerAuthorization,
+) {
+    let receipt = must(decode(bytes));
+    let protocol = receipt.protocol().unwrap_or_else(|| panic!("protocol"));
+    let verified_header = must(layerx_wire::receipt::decode_batch_header(&evidence.header));
+    let batch_id = protocol.batch_id();
+    let proof = must(layerx_proof::merkle::decode_proof(&evidence.receipt_proof));
+    let signer = authorization.public_key();
+    assert_eq!(
+        batch_id,
+        must(layerx_wire::hash::execution_batch_id(
+            verified_header.previous_state_root(),
+            protocol.activity_id(),
+            protocol.global_sequence(),
+            verified_header.batch_number(),
+        ))
+    );
+    let mut encoder = layerx_wire::encode::Encoder::new(2048);
+    must(encoder.structure_header(0x4d50));
+    must(encoder.u32(proof.leaf_index()));
+    must(encoder.u32(proof.leaf_count()));
+    must(encoder.u8(must(u8::try_from(proof.siblings().len()))));
+    must(encoder.bytes(&proof.siblings().concat(), 1024));
+    let mut replica_document = serde_json::json!({
+        "authority_replica_id": hex::encode(&[7; 32]),
+        "sequencer_public_key": hex::encode(&signer),
+        "batch_evidence": {
+            "header_hex": hex::encode(&evidence.header),
+            "header_signature": hex::encode(&evidence.header_signature),
+            "receipt_proof_hex": hex::encode(&encoder.finish()),
+        }
+    });
+    for explicit in [false, true] {
+        if explicit {
+            replica_document["batch_evidence"]["batch_identity"] =
+                serde_json::json!({"kind": "historical"});
+        }
+        let parsed = must(super::parse_replica_evidence(
+            &must(serde_json::to_vec(&replica_document)),
+            [7; 32],
+            signer,
+        ));
+        assert_eq!(&parsed, evidence);
+        assert_eq!(
+            must(super::authorized_batch_by_activity(
+                protocol.activity_id(),
+                bytes,
+                &parsed,
+                authorization,
+            ))
+            .batch_id,
+            batch_id
+        );
+    }
 }
 
 fn call_fixture() -> (Vec<u8>, AuthorizedBatch) {

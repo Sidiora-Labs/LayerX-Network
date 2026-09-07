@@ -8,7 +8,9 @@
 use layerx_proof::inclusion::{verify_receipt, InclusionError, SequencerAuthorization};
 use layerx_proof::merkle::{decode_proof, encode_proof, Proof};
 use layerx_proof::receipt::{verify_outcome, verify_program_state, AuthorizedBatch, ReceiptCheck};
-use layerx_wire::hash::{receipt_digest, receipt_execution_batch_id};
+use layerx_wire::hash::{
+    receipt_digest, receipt_execution_batch_id, receipt_execution_batch_id_maintenance,
+};
 use layerx_wire::receipt::{decode, decode_merkle_proof, encode_unsigned};
 use serde::Deserialize;
 
@@ -98,6 +100,13 @@ pub struct BatchEvidence {
     /// Encoded index-aware Merkle proof of the receipt under the header's
     /// receipt root.
     pub receipt_proof: Vec<u8>,
+    pub batch_identity: BatchIdentityEvidence,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum BatchIdentityEvidence {
+    Historical,
+    OccupancyMaintenanceV2 { receipt: Vec<u8>, proof: Vec<u8> },
 }
 
 /// The exact reason an authority answer was refused.
@@ -175,6 +184,24 @@ struct ReplicaBatchEvidence {
     header_hex: String,
     header_signature: String,
     receipt_proof_hex: String,
+    #[serde(default)]
+    batch_identity: ReplicaBatchIdentity,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum ReplicaBatchIdentity {
+    Historical {},
+    OccupancyMaintenanceV2 {
+        receipt_hex: String,
+        receipt_proof_hex: String,
+    },
+}
+
+impl Default for ReplicaBatchIdentity {
+    fn default() -> Self {
+        Self::Historical {}
+    }
 }
 
 /// Extracts the activity, batch identity and receipt digest a replica lookup
@@ -244,6 +271,32 @@ pub fn parse_replica_evidence(
         header,
         header_signature,
         receipt_proof: encode_proof(&proof),
+        batch_identity: match document.batch_evidence.batch_identity {
+            ReplicaBatchIdentity::Historical {} => BatchIdentityEvidence::Historical,
+            ReplicaBatchIdentity::OccupancyMaintenanceV2 {
+                receipt_hex,
+                receipt_proof_hex,
+            } => {
+                let receipt =
+                    hex::decode(&receipt_hex).map_err(|_| EvidenceRefusal::EvidenceEncoding)?;
+                layerx_wire::maintenance::decode_occupancy_maintenance(&receipt)
+                    .map_err(|_| EvidenceRefusal::EvidenceEncoding)?;
+                let canonical = hex::decode(&receipt_proof_hex)
+                    .map_err(|_| EvidenceRefusal::EvidenceEncoding)?;
+                let decoded = decode_merkle_proof(&canonical)
+                    .map_err(|_| EvidenceRefusal::EvidenceEncoding)?;
+                let proof = Proof::new(
+                    decoded.leaf_index(),
+                    decoded.leaf_count(),
+                    decoded.siblings().to_vec(),
+                )
+                .map_err(|_| EvidenceRefusal::EvidenceEncoding)?;
+                BatchIdentityEvidence::OccupancyMaintenanceV2 {
+                    receipt,
+                    proof: encode_proof(&proof),
+                }
+            }
+        },
     })
 }
 
@@ -287,8 +340,45 @@ pub fn authorized_batch_by_activity(
     {
         return Err(EvidenceRefusal::SequenceRange);
     }
-    let expected =
-        receipt_execution_batch_id(protocol, header).map_err(|_| EvidenceRefusal::BatchIdentity)?;
+    let expected = match &evidence.batch_identity {
+        BatchIdentityEvidence::Historical => receipt_execution_batch_id(protocol, header)
+            .map_err(|_| EvidenceRefusal::BatchIdentity)?,
+        BatchIdentityEvidence::OccupancyMaintenanceV2 {
+            receipt: maintenance,
+            proof: maintenance_proof,
+        } => {
+            let maintenance_proof =
+                decode_proof(maintenance_proof).map_err(|_| EvidenceRefusal::EvidenceEncoding)?;
+            verify_receipt(
+                maintenance,
+                &maintenance_proof,
+                &evidence.header,
+                &evidence.header_signature,
+                authorization,
+            )
+            .map_err(EvidenceRefusal::Inclusion)?;
+            let activity_count = header
+                .last_sequence()
+                .checked_sub(header.first_sequence())
+                .and_then(|count| u32::try_from(count).ok())
+                .ok_or(EvidenceRefusal::SequenceRange)?;
+            if activity_count.checked_add(1) != Some(maintenance_proof.leaf_count())
+                || maintenance_proof.leaf_index() != activity_count
+                || proof.leaf_count() != maintenance_proof.leaf_count()
+                || proof.leaf_index() >= activity_count
+                || header
+                    .first_sequence()
+                    .checked_add(u64::from(proof.leaf_index()))
+                    != Some(protocol.global_sequence())
+            {
+                return Err(EvidenceRefusal::SequenceRange);
+            }
+            let record = layerx_wire::maintenance::decode_occupancy_maintenance(maintenance)
+                .map_err(|_| EvidenceRefusal::EvidenceEncoding)?;
+            receipt_execution_batch_id_maintenance(protocol, header, &record, activity_count)
+                .map_err(|_| EvidenceRefusal::BatchIdentity)?
+        }
+    };
     if protocol.batch_id() != expected {
         return Err(EvidenceRefusal::BatchIdentity);
     }
