@@ -12,7 +12,7 @@ RUN rustup show active-toolchain \
 
 FROM debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates libssl3 libsqlite3-0 openssl socat bash coreutils python3 python3-venv \
+        ca-certificates libssl3 libsqlite3-0 openssl socat bash coreutils jq python3 python3-venv \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd -g 4020 layerx && useradd -M -u 4020 -g 4020 -s /usr/sbin/nologin layerx \
     && mkdir -p /opt/layerx/migrations /var/lib/layerx /run/layerx \
@@ -26,6 +26,7 @@ COPY --from=build /src/build/bin/layerxd /usr/local/bin/layerxd
 COPY --from=build /src/build/bin/layerx-genesis-build /usr/local/bin/layerx-genesis-build
 COPY --from=build /src/build/bin/layerxctl /usr/local/bin/layerxctl
 COPY --from=build /src/migrations/0007_history_index.sql /opt/layerx/migrations/0007_history_index.sql
+COPY --from=build /src/contracts/config/checkpoint-settlement.json /opt/layerx/checkpoint-settlement.json
 COPY --from=build /src/platform/hosted/node/bootstrap.sh /opt/layerx/bootstrap.sh
 COPY --from=build /src/platform/hosted/node/supervisor.sh /opt/layerx/supervisor.sh
 COPY --from=build /src/platform/hosted/node/guarantor.sh /opt/layerx/guarantor.sh

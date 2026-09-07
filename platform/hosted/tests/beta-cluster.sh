@@ -977,24 +977,35 @@ wait_for_node_genesis() {
 paxeer_contracts_deploy() {
     [ "${LAYERX_BETA_FORBIDDEN_CHAIN_ID:-}" != "$PAXEER_CHAIN_ID" ] \
         || fail "contract transactions on chain $PAXEER_CHAIN_ID are forbidden by LAYERX_BETA_FORBIDDEN_CHAIN_ID"
-    local dir="$WORK_DIR/paxeer" signer bond_amount
+    local dir="$WORK_DIR/paxeer" signer bond_amount count index id public controller previous_id=""
     mkdir -p "$dir/guarantor-keys"
     chmod 0700 "$dir/guarantor-keys"
-    signer=$(python3 "$REPO_ROOT/platform/hosted/paxeer/settlement-domain.py" signer "0x$NODE_GUARANTOR_PUBLIC_KEY") || fail "guarantor signer derivation failed"
+    count=$(sed -n 's/^LAYERX_NODE_GENESIS_GUARANTOR_COUNT=//p' "$WORK_DIR/genesis/node.env")
+    [[ $count =~ ^[1-9][0-9]*$ ]] && [ "$count" -le 32 ] || fail "node.env carries no bounded genesis guarantor count"
+    [ "$count" -ge "$(jq -er '.finality_policy.certificate_threshold' "$REPO_ROOT/contracts/config/checkpoint-settlement.json")" ] \
+        || fail "genesis guarantors cannot meet the certificate threshold"
     bond_amount=$(jq -r '((.usdl_custody_cap | tonumber) * .minimum_bond_bps / 10000 | floor) | tostring' "$REPO_ROOT/platform/hosted/paxeer/deployment-input.beta.json")
     [[ $bond_amount =~ ^[1-9][0-9]*$ ]] || fail "the beta deployment input yields no positive minimum guarantor bond"
-    local second_signer
-    second_signer=$(python3 "$REPO_ROOT/platform/hosted/paxeer/settlement-domain.py" signer "0x$NODE_SECOND_GUARANTOR_PUBLIC_KEY") || fail "second guarantor signer derivation failed"
-    jq -n --arg id "0x$NODE_GUARANTOR_ID" --arg signer "$signer" --arg public_key "0x$NODE_GUARANTOR_PUBLIC_KEY" \
-        --arg controller "$(cat "$SECRETS_DIR/paxeer-guarantor-controller.address")" --arg bond "$bond_amount" \
-        --arg second_id "0x$NODE_SECOND_GUARANTOR_ID" --arg second_signer "$second_signer" \
-        --arg second_public "0x$NODE_SECOND_GUARANTOR_PUBLIC_KEY" \
-        --arg second_controller "$(cat "$SECRETS_DIR/paxeer-guarantor-second-controller.address")" \
-        '[{guarantor_id: $id, signer: $signer, public_key: $public_key, bond_controller: $controller, joined_epoch: 1, governance_sequence: 1, bond_amount: $bond},
-          {guarantor_id: $second_id, signer: $second_signer, public_key: $second_public, bond_controller: $second_controller, joined_epoch: 1, governance_sequence: 2, bond_amount: $bond}] | sort_by(.guarantor_id) | to_entries | map(.value + {governance_sequence: (.key + 1)})' \
-        > "$dir/guarantors.json"
-    (umask 077; cp "$SECRETS_DIR/paxeer-guarantor-controller.key" "$dir/guarantor-keys/0x$NODE_GUARANTOR_ID.controller.key")
-    (umask 077; cp "$SECRETS_DIR/paxeer-guarantor-second-controller.key" "$dir/guarantor-keys/0x$NODE_SECOND_GUARANTOR_ID.controller.key")
+    : > "$dir/guarantors.jsonl"
+    for ((index = 0; index < count; index++)); do
+        id=$(sed -n "s/^LAYERX_NODE_GENESIS_GUARANTOR_ID_$index=//p" "$WORK_DIR/genesis/node.env")
+        public=$(sed -n "s/^LAYERX_NODE_GENESIS_GUARANTOR_PUBLIC_KEY_$index=//p" "$WORK_DIR/genesis/node.env")
+        [[ $id =~ ^[0-9a-f]{64}$ && $id > $previous_id ]] || fail "genesis guarantor ids must be strictly ascending"
+        [[ $public =~ ^0[23][0-9a-f]{64}$ ]] || fail "node.env carries no compressed genesis guarantor public key"
+        previous_id=$id
+        controller=paxeer-guarantor-controller
+        if [ "$index" -gt 0 ]; then
+            controller="paxeer-guarantor-controller-$index"
+            evm_key_generate "$controller"
+        fi
+        signer=$(python3 "$REPO_ROOT/platform/hosted/paxeer/settlement-domain.py" signer "0x$public") || fail "guarantor signer derivation failed"
+        jq -n --arg id "0x$id" --arg signer "$signer" --arg public_key "0x$public" \
+            --arg controller "$(cat "$SECRETS_DIR/$controller.address")" --arg bond "$bond_amount" \
+            '{guarantor_id: $id, signer: $signer, public_key: $public_key, bond_controller: $controller, joined_epoch: 1, governance_sequence: 1, bond_amount: $bond}' \
+            >> "$dir/guarantors.jsonl"
+        (umask 077; cp "$SECRETS_DIR/$controller.key" "$dir/guarantor-keys/0x$id.controller.key")
+    done
+    jq -s 'sort_by(.guarantor_id)' "$dir/guarantors.jsonl" > "$dir/guarantors.json"
     jq --arg proposer "$(cat "$SECRETS_DIR/paxeer-final-proposer.address")" --arg executor "$(cat "$SECRETS_DIR/paxeer-final-executor.address")" \
         --arg council "$(cat "$SECRETS_DIR/paxeer-emergency-council.address")" \
         '. + {protocol_version: 3, final_proposer: $proposer, final_executor: $executor, emergency_council: $council}' \
