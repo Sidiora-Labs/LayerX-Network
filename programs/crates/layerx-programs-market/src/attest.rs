@@ -5,7 +5,9 @@ use layerx_program_sdk::{AccountId, Field, ProgramError, Reason};
 #[cfg(target_arch = "wasm32")]
 use layerx_program_sdk::{
     crypto::{self, Ed25519Message, HashAlgorithm, HashInput},
-    event, storage::shared, EventData, EventTopic, StorageValue,
+    event,
+    storage::shared,
+    EventData, EventTopic, StorageValue,
 };
 
 pub const MAX_ATTESTERS: usize = 8;
@@ -20,13 +22,21 @@ pub const ATTESTATION_SIGNATURE_BYTES: usize = 64;
 const VERSION: u8 = 1;
 const POLICY_DOMAIN: &[u8] = b"LXP/market-attesters/v1\0";
 const STATEMENT_DOMAIN: &[u8] = b"LXP/market-attested-input/v1\0";
+#[cfg(target_arch = "wasm32")]
 const COMMITTED_INPUT_DOMAIN: &[u8] = b"LXP/market-committed-set/v1\0";
+#[cfg(target_arch = "wasm32")]
 const ADMITTED_INPUT_DOMAIN: &[u8] = b"LXP/market-admitted-set/v1\0";
+#[cfg(target_arch = "wasm32")]
 const ACCUMULATOR_DOMAIN: &[u8] = b"LXP/market-input-accumulator/v1\0";
+#[cfg(target_arch = "wasm32")]
 const SETTLEMENT_INPUT_DOMAIN: &[u8] = b"LXP/market-settlement-inputs/v1\0";
+#[cfg(target_arch = "wasm32")]
 const POLICY_PREFIX: &[u8] = b"lx.market.attesters/";
+#[cfg(target_arch = "wasm32")]
 const INPUT_PREFIX: &[u8] = b"lx.market.input/";
+#[cfg(target_arch = "wasm32")]
 const REPLAY_PREFIX: &[u8] = b"lx.market.attested/";
+#[cfg(target_arch = "wasm32")]
 const TOPIC_INPUT: &[u8] = b"lx.market.input";
 
 pub type LeaseId = [u8; 32];
@@ -89,11 +99,13 @@ pub struct AttesterSet<'a> {
 }
 
 impl<'a> AttesterSet<'a> {
+    /// # Errors
+    /// Returns an error for invalid identity, revision, empty or noncanonical entries, names or keys, or duplicate names.
     pub fn new(
         lease_id: LeaseId,
         tenant: AccountId,
         revision: u64,
-        entries: [Option<Attester<'a>>; MAX_ATTESTERS],
+        entries: &[Option<Attester<'a>>; MAX_ATTESTERS],
     ) -> Result<Self, ProgramError> {
         if lease_id == [0; 32] || revision == 0 {
             return Err(malformed());
@@ -126,10 +138,12 @@ impl<'a> AttesterSet<'a> {
             committed_root: [0; 32],
             admitted_root: [0; 32],
             settlement_commitment: None,
-            entries,
+            entries: *entries,
         })
     }
 
+    /// # Errors
+    /// Returns an error when the name is not in the attester set.
     pub fn named_key(&self, name: &[u8]) -> Result<[u8; 32], ProgramError> {
         self.entries
             .iter()
@@ -139,6 +153,7 @@ impl<'a> AttesterSet<'a> {
             .ok_or_else(malformed)
     }
 
+    #[must_use]
     pub fn ready_for_settlement(&self) -> bool {
         self.sealed_at.is_some()
             && self.committed_inputs > 0
@@ -146,8 +161,12 @@ impl<'a> AttesterSet<'a> {
             && self.settlement_commitment.is_some()
     }
 
+    /// # Errors
+    /// Returns an error unless all committed inputs are admitted and the settlement commitment is frozen.
     pub fn settlement_input_commitment(&self) -> Result<[u8; 32], ProgramError> {
-        if !self.ready_for_settlement() { return Err(malformed()); }
+        if !self.ready_for_settlement() {
+            return Err(malformed());
+        }
         self.settlement_commitment.ok_or_else(malformed)
     }
 }
@@ -181,22 +200,43 @@ pub struct AttestedInput {
     pub status: InputStatus,
 }
 
-pub fn encode_attestation(attestation: Attestation<'_>, output: &mut [u8]) -> Result<usize, ProgramError> {
-    if !valid_name(attestation.attester_name) { return Err(malformed()); }
+/// # Errors
+/// Returns an error for a noncanonical name or insufficient output space.
+pub fn encode_attestation(
+    attestation: Attestation<'_>,
+    output: &mut [u8],
+) -> Result<usize, ProgramError> {
+    if !valid_name(attestation.attester_name) {
+        return Err(malformed());
+    }
     let mut offset = 0usize;
     append(output, &mut offset, &attestation.input.lease_id)?;
     append(output, &mut offset, &attestation.input.input_id)?;
     append(output, &mut offset, &attestation.input.payload_digest)?;
-    append(output, &mut offset, &attestation.input.payload_length.to_be_bytes())?;
+    append(
+        output,
+        &mut offset,
+        &attestation.input.payload_length.to_be_bytes(),
+    )?;
     append(output, &mut offset, &[attestation.input.source as u8])?;
-    append(output, &mut offset, &attestation.input.source_locator_digest)?;
+    append(
+        output,
+        &mut offset,
+        &attestation.input.source_locator_digest,
+    )?;
     append(output, &mut offset, &attestation.observed_at.to_be_bytes())?;
-    append(output, &mut offset, &[u8::try_from(attestation.attester_name.len()).map_err(|_| malformed())?])?;
+    append(
+        output,
+        &mut offset,
+        &[u8::try_from(attestation.attester_name.len()).map_err(|_| malformed())?],
+    )?;
     append(output, &mut offset, attestation.attester_name)?;
     append(output, &mut offset, &attestation.signature)?;
     Ok(offset)
 }
 
+/// # Errors
+/// Returns an error for truncated, malformed or trailing input.
 pub fn decode_attestation(input: &[u8]) -> Result<Attestation<'_>, ProgramError> {
     let mut cursor = Cursor::new(input);
     let attestation = Attestation {
@@ -216,6 +256,8 @@ pub fn decode_attestation(input: &[u8]) -> Result<Attestation<'_>, ProgramError>
     Ok(attestation)
 }
 
+/// # Errors
+/// Returns an error for invalid authority, sealed policy, input identity, source, ordering or count.
 pub fn commit_input(
     policy: &mut AttesterSet<'_>,
     commitment: InputCommitment,
@@ -234,7 +276,10 @@ pub fn commit_input(
     {
         return Err(malformed());
     }
-    policy.committed_inputs = policy.committed_inputs.checked_add(1).ok_or_else(malformed)?;
+    policy.committed_inputs = policy
+        .committed_inputs
+        .checked_add(1)
+        .ok_or_else(malformed)?;
     let predecessor_input_id = policy.last_committed_input;
     policy.last_committed_input = commitment.input_id;
     Ok(AttestedInput {
@@ -248,6 +293,8 @@ pub fn commit_input(
     })
 }
 
+/// # Errors
+/// Returns an error for invalid authority, an already sealed policy or no committed inputs.
 pub fn seal_inputs(
     policy: &mut AttesterSet<'_>,
     principal: AccountId,
@@ -264,9 +311,7 @@ fn valid_name(name: &[u8]) -> bool {
     !name.is_empty()
         && name.len() <= MAX_ATTESTER_NAME_BYTES
         && name.iter().all(|byte| {
-            byte.is_ascii_lowercase()
-                || byte.is_ascii_digit()
-                || matches!(byte, b'-' | b'.')
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'.')
         })
 }
 
@@ -280,7 +325,9 @@ struct Cursor<'a> {
 }
 
 impl<'a> Cursor<'a> {
-    const fn new(bytes: &'a [u8]) -> Self { Self { bytes, offset: 0 } }
+    const fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, offset: 0 }
+    }
     fn take(&mut self, length: usize) -> Result<&'a [u8], ProgramError> {
         let end = self.offset.checked_add(length).ok_or_else(malformed)?;
         let value = self.bytes.get(self.offset..end).ok_or_else(malformed)?;
@@ -290,36 +337,58 @@ impl<'a> Cursor<'a> {
     fn array<const N: usize>(&mut self) -> Result<[u8; N], ProgramError> {
         self.take(N)?.try_into().map_err(|_| malformed())
     }
-    fn byte(&mut self) -> Result<u8, ProgramError> { Ok(self.take(1)?[0]) }
-    fn u32(&mut self) -> Result<u32, ProgramError> { Ok(u32::from_be_bytes(self.array()?)) }
-    fn u64(&mut self) -> Result<u64, ProgramError> { Ok(u64::from_be_bytes(self.array()?)) }
-    fn account(&mut self) -> Result<AccountId, ProgramError> { AccountId::new(self.array()?) }
+    fn byte(&mut self) -> Result<u8, ProgramError> {
+        Ok(self.take(1)?[0])
+    }
+    fn u32(&mut self) -> Result<u32, ProgramError> {
+        Ok(u32::from_be_bytes(self.array()?))
+    }
+    fn u64(&mut self) -> Result<u64, ProgramError> {
+        Ok(u64::from_be_bytes(self.array()?))
+    }
+    fn account(&mut self) -> Result<AccountId, ProgramError> {
+        AccountId::new(self.array()?)
+    }
     fn name(&mut self) -> Result<&'a [u8], ProgramError> {
         let length = usize::from(self.byte()?);
         let name = self.take(length)?;
-        if !valid_name(name) { return Err(malformed()); }
+        if !valid_name(name) {
+            return Err(malformed());
+        }
         Ok(name)
     }
     fn finish(self) -> Result<(), ProgramError> {
-        if self.offset == self.bytes.len() { Ok(()) } else { Err(malformed()) }
+        if self.offset == self.bytes.len() {
+            Ok(())
+        } else {
+            Err(malformed())
+        }
     }
 }
 
 fn append(output: &mut [u8], offset: &mut usize, value: &[u8]) -> Result<(), ProgramError> {
     let end = offset.checked_add(value.len()).ok_or_else(malformed)?;
-    output.get_mut(*offset..end).ok_or_else(malformed)?.copy_from_slice(value);
+    output
+        .get_mut(*offset..end)
+        .ok_or_else(malformed)?
+        .copy_from_slice(value);
     *offset = end;
     Ok(())
 }
 
-pub fn encode_policy(policy: AttesterSet<'_>, output: &mut [u8]) -> Result<usize, ProgramError> {
+/// # Errors
+/// Returns an error for insufficient output space or an unrepresentable entry count or name length.
+pub fn encode_policy(policy: &AttesterSet<'_>, output: &mut [u8]) -> Result<usize, ProgramError> {
     let mut offset = 0usize;
     append(output, &mut offset, &[VERSION])?;
     append(output, &mut offset, &policy.lease_id)?;
     append(output, &mut offset, &policy.tenant.bytes())?;
     append(output, &mut offset, &policy.revision.to_be_bytes())?;
     match policy.sealed_at {
-        Some(height) => { append(output, &mut offset, &[1])?; append(output, &mut offset, &height.to_be_bytes())?; }
+        Some(height) => {
+            append(output, &mut offset, &[1])?;
+            append(output, &mut offset, &height.to_be_bytes())?;
+        }
         None => append(output, &mut offset, &[0])?,
     }
     append(output, &mut offset, &policy.committed_inputs.to_be_bytes())?;
@@ -329,44 +398,72 @@ pub fn encode_policy(policy: AttesterSet<'_>, output: &mut [u8]) -> Result<usize
     append(output, &mut offset, &policy.committed_root)?;
     append(output, &mut offset, &policy.admitted_root)?;
     match policy.settlement_commitment {
-        Some(root) => { append(output, &mut offset, &[1])?; append(output, &mut offset, &root)?; }
+        Some(root) => {
+            append(output, &mut offset, &[1])?;
+            append(output, &mut offset, &root)?;
+        }
         None => append(output, &mut offset, &[0])?,
     }
     let count = policy.entries.iter().flatten().count();
-    append(output, &mut offset, &[u8::try_from(count).map_err(|_| malformed())?])?;
+    append(
+        output,
+        &mut offset,
+        &[u8::try_from(count).map_err(|_| malformed())?],
+    )?;
     for attester in policy.entries.iter().flatten() {
-        append(output, &mut offset, &[u8::try_from(attester.name.len()).map_err(|_| malformed())?])?;
+        append(
+            output,
+            &mut offset,
+            &[u8::try_from(attester.name.len()).map_err(|_| malformed())?],
+        )?;
         append(output, &mut offset, attester.name)?;
         append(output, &mut offset, &attester.ed25519_key)?;
     }
     Ok(offset)
 }
 
+/// # Errors
+/// Returns an error for malformed, truncated, trailing or inconsistent policy data.
 pub fn decode_policy(input: &[u8]) -> Result<AttesterSet<'_>, ProgramError> {
     let mut cursor = Cursor::new(input);
-    if cursor.byte()? != VERSION { return Err(malformed()); }
+    if cursor.byte()? != VERSION {
+        return Err(malformed());
+    }
     let lease_id = cursor.array()?;
     let tenant = cursor.account()?;
     let revision = cursor.u64()?;
-    let sealed_at = match cursor.byte()? { 0 => None, 1 => Some(cursor.u64()?), _ => return Err(malformed()) };
+    let sealed_at = match cursor.byte()? {
+        0 => None,
+        1 => Some(cursor.u64()?),
+        _ => return Err(malformed()),
+    };
     let committed_inputs = cursor.u32()?;
     let admitted_inputs = cursor.u32()?;
-    if admitted_inputs > committed_inputs { return Err(malformed()); }
+    if admitted_inputs > committed_inputs {
+        return Err(malformed());
+    }
     let last_committed_input = cursor.array()?;
     let last_admitted_input = cursor.array()?;
     let committed_root = cursor.array()?;
     let admitted_root = cursor.array()?;
     let settlement_commitment = match cursor.byte()? {
-        0 => None, 1 => Some(cursor.array()?), _ => return Err(malformed()),
+        0 => None,
+        1 => Some(cursor.array()?),
+        _ => return Err(malformed()),
     };
     let count = usize::from(cursor.byte()?);
-    if count == 0 || count > MAX_ATTESTERS { return Err(malformed()); }
+    if count == 0 || count > MAX_ATTESTERS {
+        return Err(malformed());
+    }
     let mut entries = [None; MAX_ATTESTERS];
     for entry in entries.iter_mut().take(count) {
-        *entry = Some(Attester { name: cursor.name()?, ed25519_key: cursor.array()? });
+        *entry = Some(Attester {
+            name: cursor.name()?,
+            ed25519_key: cursor.array()?,
+        });
     }
     cursor.finish()?;
-    let mut policy = AttesterSet::new(lease_id, tenant, revision, entries)?;
+    let mut policy = AttesterSet::new(lease_id, tenant, revision, &entries)?;
     policy.sealed_at = sealed_at;
     policy.committed_inputs = committed_inputs;
     policy.admitted_inputs = admitted_inputs;
@@ -385,13 +482,28 @@ pub fn decode_policy(input: &[u8]) -> Result<AttesterSet<'_>, ProgramError> {
     Ok(policy)
 }
 
+/// # Errors
+/// Returns an error when the output cannot hold the encoded input.
 pub fn encode_input(input: AttestedInput, output: &mut [u8]) -> Result<usize, ProgramError> {
     let mut offset = 0usize;
-    append(output, &mut offset, &[VERSION, input.status as u8, input.evidence as u8, input.commitment.source as u8])?;
+    append(
+        output,
+        &mut offset,
+        &[
+            VERSION,
+            input.status as u8,
+            input.evidence as u8,
+            input.commitment.source as u8,
+        ],
+    )?;
     append(output, &mut offset, &input.commitment.lease_id)?;
     append(output, &mut offset, &input.commitment.input_id)?;
     append(output, &mut offset, &input.commitment.payload_digest)?;
-    append(output, &mut offset, &input.commitment.payload_length.to_be_bytes())?;
+    append(
+        output,
+        &mut offset,
+        &input.commitment.payload_length.to_be_bytes(),
+    )?;
     append(output, &mut offset, &input.commitment.source_locator_digest)?;
     append(output, &mut offset, &input.predecessor_input_id)?;
     append(output, &mut offset, &input.observed_at.to_be_bytes())?;
@@ -400,26 +512,49 @@ pub fn encode_input(input: AttestedInput, output: &mut [u8]) -> Result<usize, Pr
     Ok(offset)
 }
 
+/// # Errors
+/// Returns an error for malformed, truncated, trailing or non-attested input.
 pub fn decode_input(input: &[u8]) -> Result<AttestedInput, ProgramError> {
     let mut cursor = Cursor::new(input);
-    if cursor.byte()? != VERSION { return Err(malformed()); }
-    let status = match cursor.byte()? { 1 => InputStatus::Committed, 2 => InputStatus::Attested, _ => return Err(malformed()) };
-    let evidence = match cursor.byte()? { 1 => EvidenceClass::Attested, 2 => EvidenceClass::VerifiedExecution, _ => return Err(malformed()) };
+    if cursor.byte()? != VERSION {
+        return Err(malformed());
+    }
+    let status = match cursor.byte()? {
+        1 => InputStatus::Committed,
+        2 => InputStatus::Attested,
+        _ => return Err(malformed()),
+    };
+    let evidence = match cursor.byte()? {
+        1 => EvidenceClass::Attested,
+        2 => EvidenceClass::VerifiedExecution,
+        _ => return Err(malformed()),
+    };
     let source = ExternalInputSource::decode(cursor.byte()?)?;
     let result = AttestedInput {
         commitment: InputCommitment {
-            lease_id: cursor.array()?, input_id: cursor.array()?, payload_digest: cursor.array()?,
-            payload_length: cursor.u64()?, source, source_locator_digest: cursor.array()?,
+            lease_id: cursor.array()?,
+            input_id: cursor.array()?,
+            payload_digest: cursor.array()?,
+            payload_length: cursor.u64()?,
+            source,
+            source_locator_digest: cursor.array()?,
         },
         predecessor_input_id: cursor.array()?,
-        observed_at: cursor.u64()?, attester_name_digest: cursor.array()?, statement_digest: cursor.array()?,
-        evidence, status,
+        observed_at: cursor.u64()?,
+        attester_name_digest: cursor.array()?,
+        statement_digest: cursor.array()?,
+        evidence,
+        status,
     };
     cursor.finish()?;
-    if result.evidence != EvidenceClass::Attested { return Err(malformed()); }
+    if result.evidence != EvidenceClass::Attested {
+        return Err(malformed());
+    }
     Ok(result)
 }
 
+/// # Errors
+/// Returns an error for a noncanonical name or insufficient output space.
 pub fn statement_bytes(
     policy_root: [u8; 32],
     revision: u64,
@@ -428,7 +563,9 @@ pub fn statement_bytes(
     attester_name: &[u8],
     output: &mut [u8],
 ) -> Result<usize, ProgramError> {
-    if !valid_name(attester_name) { return Err(malformed()); }
+    if !valid_name(attester_name) {
+        return Err(malformed());
+    }
     let mut offset = 0usize;
     append(output, &mut offset, STATEMENT_DOMAIN)?;
     append(output, &mut offset, &policy_root)?;
@@ -436,25 +573,46 @@ pub fn statement_bytes(
     append(output, &mut offset, &commitment.lease_id)?;
     append(output, &mut offset, &commitment.input_id)?;
     append(output, &mut offset, &commitment.payload_digest)?;
-    append(output, &mut offset, &commitment.payload_length.to_be_bytes())?;
+    append(
+        output,
+        &mut offset,
+        &commitment.payload_length.to_be_bytes(),
+    )?;
     append(output, &mut offset, &[commitment.source as u8])?;
     append(output, &mut offset, &commitment.source_locator_digest)?;
     append(output, &mut offset, &observed_at.to_be_bytes())?;
-    append(output, &mut offset, &[u8::try_from(attester_name.len()).map_err(|_| malformed())?])?;
+    append(
+        output,
+        &mut offset,
+        &[u8::try_from(attester_name.len()).map_err(|_| malformed())?],
+    )?;
     append(output, &mut offset, attester_name)?;
     Ok(offset)
 }
 
-pub fn encode_policy_commitment(policy: AttesterSet<'_>, output: &mut [u8]) -> Result<usize, ProgramError> {
+/// # Errors
+/// Returns an error for insufficient output space or an unrepresentable entry count or name length.
+pub fn encode_policy_commitment(
+    policy: &AttesterSet<'_>,
+    output: &mut [u8],
+) -> Result<usize, ProgramError> {
     let mut offset = 0usize;
     append(output, &mut offset, POLICY_DOMAIN)?;
     append(output, &mut offset, &policy.lease_id)?;
     append(output, &mut offset, &policy.tenant.bytes())?;
     append(output, &mut offset, &policy.revision.to_be_bytes())?;
     let count = policy.entries.iter().flatten().count();
-    append(output, &mut offset, &[u8::try_from(count).map_err(|_| malformed())?])?;
+    append(
+        output,
+        &mut offset,
+        &[u8::try_from(count).map_err(|_| malformed())?],
+    )?;
     for attester in policy.entries.iter().flatten() {
-        append(output, &mut offset, &[u8::try_from(attester.name.len()).map_err(|_| malformed())?])?;
+        append(
+            output,
+            &mut offset,
+            &[u8::try_from(attester.name.len()).map_err(|_| malformed())?],
+        )?;
         append(output, &mut offset, attester.name)?;
         append(output, &mut offset, &attester.ed25519_key)?;
     }
@@ -462,30 +620,56 @@ pub fn encode_policy_commitment(policy: AttesterSet<'_>, output: &mut [u8]) -> R
 }
 
 #[cfg(target_arch = "wasm32")]
-fn state_key(prefix: &[u8], lease_id: LeaseId, suffix: Option<[u8; 32]>) -> Result<([u8; 96], usize), ProgramError> {
+fn state_key(
+    prefix: &[u8],
+    lease_id: LeaseId,
+    suffix: Option<[u8; 32]>,
+) -> Result<([u8; 96], usize), ProgramError> {
     let mut key = [0; 96];
     let mut length = prefix.len();
-    key.get_mut(..length).ok_or_else(malformed)?.copy_from_slice(prefix);
+    key.get_mut(..length)
+        .ok_or_else(malformed)?
+        .copy_from_slice(prefix);
     append(&mut key, &mut length, &lease_id)?;
-    if let Some(value) = suffix { append(&mut key, &mut length, &value)?; }
+    if let Some(value) = suffix {
+        append(&mut key, &mut length, &value)?;
+    }
     Ok((key, length))
 }
 
 #[cfg(target_arch = "wasm32")]
-fn read(prefix: &[u8], lease_id: LeaseId, suffix: Option<[u8; 32]>, output: &mut [u8]) -> Result<usize, ProgramError> {
+fn read(
+    prefix: &[u8],
+    lease_id: LeaseId,
+    suffix: Option<[u8; 32]>,
+    output: &mut [u8],
+) -> Result<usize, ProgramError> {
     let (key, length) = state_key(prefix, lease_id, suffix)?;
     shared::read(shared::SharedStorageKey::new(&key[..length])?, output)?
         .ok_or_else(|| ProgramError::value(Field::StorageValue, Reason::Malformed))
 }
 
 #[cfg(target_arch = "wasm32")]
-fn write(prefix: &[u8], lease_id: LeaseId, suffix: Option<[u8; 32]>, value: &[u8]) -> Result<(), ProgramError> {
+fn write(
+    prefix: &[u8],
+    lease_id: LeaseId,
+    suffix: Option<[u8; 32]>,
+    value: &[u8],
+) -> Result<(), ProgramError> {
     let (key, length) = state_key(prefix, lease_id, suffix)?;
-    shared::write(shared::SharedStorageKey::new(&key[..length])?, StorageValue::new(value)?)
+    shared::write(
+        shared::SharedStorageKey::new(&key[..length])?,
+        StorageValue::new(value)?,
+    )
 }
 
 #[cfg(target_arch = "wasm32")]
-fn absent(prefix: &[u8], lease_id: LeaseId, suffix: Option<[u8; 32]>, scratch: &mut [u8]) -> Result<(), ProgramError> {
+fn absent(
+    prefix: &[u8],
+    lease_id: LeaseId,
+    suffix: Option<[u8; 32]>,
+    scratch: &mut [u8],
+) -> Result<(), ProgramError> {
     let (key, length) = state_key(prefix, lease_id, suffix)?;
     if shared::read(shared::SharedStorageKey::new(&key[..length])?, scratch)?.is_some() {
         return Err(ProgramError::value(Field::StorageValue, Reason::Duplicate));
@@ -506,7 +690,11 @@ fn committed_leaf(commitment: InputCommitment) -> Result<[u8; 32], ProgramError>
     append(&mut bytes, &mut offset, &commitment.lease_id)?;
     append(&mut bytes, &mut offset, &commitment.input_id)?;
     append(&mut bytes, &mut offset, &commitment.payload_digest)?;
-    append(&mut bytes, &mut offset, &commitment.payload_length.to_be_bytes())?;
+    append(
+        &mut bytes,
+        &mut offset,
+        &commitment.payload_length.to_be_bytes(),
+    )?;
     append(&mut bytes, &mut offset, &[commitment.source as u8])?;
     append(&mut bytes, &mut offset, &commitment.source_locator_digest)?;
     digest(&bytes[..offset])
@@ -534,11 +722,13 @@ fn accumulate(prior: [u8; 32], leaf: [u8; 32]) -> Result<[u8; 32], ProgramError>
 }
 
 #[cfg(target_arch = "wasm32")]
-fn freeze_settlement_commitment(policy: AttesterSet<'_>) -> Result<[u8; 32], ProgramError> {
-    if policy.sealed_at.is_none() || policy.committed_inputs == 0
+fn freeze_settlement_commitment(policy: &AttesterSet<'_>) -> Result<[u8; 32], ProgramError> {
+    if policy.sealed_at.is_none()
+        || policy.committed_inputs == 0
         || policy.admitted_inputs != policy.committed_inputs
         || policy.last_admitted_input != policy.last_committed_input
-        || policy.committed_root == [0; 32] || policy.admitted_root == [0; 32]
+        || policy.committed_root == [0; 32]
+        || policy.admitted_root == [0; 32]
     {
         return Err(malformed());
     }
@@ -551,13 +741,19 @@ fn freeze_settlement_commitment(policy: AttesterSet<'_>) -> Result<[u8; 32], Pro
     append(&mut bytes, &mut offset, &policy.lease_id)?;
     append(&mut bytes, &mut offset, &policy.revision.to_be_bytes())?;
     append(&mut bytes, &mut offset, &policy_root)?;
-    append(&mut bytes, &mut offset, &policy.committed_inputs.to_be_bytes())?;
+    append(
+        &mut bytes,
+        &mut offset,
+        &policy.committed_inputs.to_be_bytes(),
+    )?;
     append(&mut bytes, &mut offset, &policy.committed_root)?;
     append(&mut bytes, &mut offset, &policy.admitted_root)?;
     digest(&bytes[..offset])
 }
 
 #[cfg(target_arch = "wasm32")]
+/// # Errors
+/// Returns an error for an existing policy, invalid attesters or a refused storage operation.
 pub fn configure(
     lease_id: LeaseId,
     tenant: AccountId,
@@ -566,47 +762,72 @@ pub fn configure(
     scratch: &mut [u8; ATTESTER_SET_CAPACITY],
 ) -> Result<(), ProgramError> {
     absent(POLICY_PREFIX, lease_id, None, scratch)?;
-    let policy = AttesterSet::new(lease_id, tenant, revision, entries)?;
-    let written = encode_policy(policy, scratch)?;
+    let policy = AttesterSet::new(lease_id, tenant, revision, &entries)?;
+    let written = encode_policy(&policy, scratch)?;
     write(POLICY_PREFIX, lease_id, None, &scratch[..written])
 }
 
 #[cfg(target_arch = "wasm32")]
-pub fn commit(
-    commitment: InputCommitment,
-    principal: AccountId,
-) -> Result<(), ProgramError> {
+/// # Errors
+/// Returns an error for invalid input admission, duplicate input or a refused storage or hash operation.
+pub fn commit(commitment: InputCommitment, principal: AccountId) -> Result<(), ProgramError> {
     let mut policy_bytes = [0; ATTESTER_SET_CAPACITY];
     let policy_length = read(POLICY_PREFIX, commitment.lease_id, None, &mut policy_bytes)?;
     let mut policy = decode_policy(&policy_bytes[..policy_length])?;
     let mut input_bytes = [0; ATTESTED_INPUT_CAPACITY];
-    absent(INPUT_PREFIX, commitment.lease_id, Some(commitment.input_id), &mut input_bytes)?;
+    absent(
+        INPUT_PREFIX,
+        commitment.lease_id,
+        Some(commitment.input_id),
+        &mut input_bytes,
+    )?;
     let input = commit_input(&mut policy, commitment, principal)?;
-    policy.committed_root = accumulate(policy.committed_root,
-        committed_leaf(commitment)?)?;
+    policy.committed_root = accumulate(policy.committed_root, committed_leaf(commitment)?)?;
     let input_length = encode_input(input, &mut input_bytes)?;
     let mut policy_output = [0; ATTESTER_SET_CAPACITY];
-    let policy_written = encode_policy(policy, &mut policy_output)?;
-    write(INPUT_PREFIX, commitment.lease_id, Some(commitment.input_id), &input_bytes[..input_length])?;
-    write(POLICY_PREFIX, commitment.lease_id, None, &policy_output[..policy_written])?;
-    event::emit(EventTopic::new(TOPIC_INPUT)?, EventData::new(&input_bytes[..input_length])?)
+    let policy_written = encode_policy(&policy, &mut policy_output)?;
+    write(
+        INPUT_PREFIX,
+        commitment.lease_id,
+        Some(commitment.input_id),
+        &input_bytes[..input_length],
+    )?;
+    write(
+        POLICY_PREFIX,
+        commitment.lease_id,
+        None,
+        &policy_output[..policy_written],
+    )?;
+    event::emit(
+        EventTopic::new(TOPIC_INPUT)?,
+        EventData::new(&input_bytes[..input_length])?,
+    )
 }
 
 #[cfg(target_arch = "wasm32")]
+/// # Errors
+/// Returns an error for invalid sealing authority or state, or a refused storage operation.
 pub fn seal(lease_id: LeaseId, principal: AccountId, height: u64) -> Result<(), ProgramError> {
     let mut bytes = [0; ATTESTER_SET_CAPACITY];
     let length = read(POLICY_PREFIX, lease_id, None, &mut bytes)?;
     let mut policy = decode_policy(&bytes[..length])?;
     seal_inputs(&mut policy, principal, height)?;
     let mut output = [0; ATTESTER_SET_CAPACITY];
-    let written = encode_policy(policy, &mut output)?;
+    let written = encode_policy(&policy, &mut output)?;
     write(POLICY_PREFIX, lease_id, None, &output[..written])
 }
 
 #[cfg(target_arch = "wasm32")]
+/// # Errors
+/// Returns an error for invalid policy, timing, input, ordering, replay or signature, or a refused host operation.
 pub fn admit(attestation: Attestation<'_>, height: u64) -> Result<(), ProgramError> {
     let mut policy_bytes = [0; ATTESTER_SET_CAPACITY];
-    let policy_length = read(POLICY_PREFIX, attestation.input.lease_id, None, &mut policy_bytes)?;
+    let policy_length = read(
+        POLICY_PREFIX,
+        attestation.input.lease_id,
+        None,
+        &mut policy_bytes,
+    )?;
     let mut policy = decode_policy(&policy_bytes[..policy_length])?;
     let sealed_at = policy.sealed_at.ok_or_else(malformed)?;
     if attestation.observed_at < sealed_at
@@ -616,7 +837,12 @@ pub fn admit(attestation: Attestation<'_>, height: u64) -> Result<(), ProgramErr
         return Err(malformed());
     }
     let mut input_bytes = [0; ATTESTED_INPUT_CAPACITY];
-    let input_length = read(INPUT_PREFIX, attestation.input.lease_id, Some(attestation.input.input_id), &mut input_bytes)?;
+    let input_length = read(
+        INPUT_PREFIX,
+        attestation.input.lease_id,
+        Some(attestation.input.input_id),
+        &mut input_bytes,
+    )?;
     let committed = decode_input(&input_bytes[..input_length])?;
     if committed.commitment != attestation.input {
         return Err(malformed());
@@ -628,7 +854,7 @@ pub fn admit(attestation: Attestation<'_>, height: u64) -> Result<(), ProgramErr
         return Err(malformed());
     }
     let mut policy_canonical = [0; ATTESTER_SET_CAPACITY];
-    let canonical_length = encode_policy_commitment(policy, &mut policy_canonical)?;
+    let canonical_length = encode_policy_commitment(&policy, &mut policy_canonical)?;
     let policy_root = digest(&policy_canonical[..canonical_length])?;
     let mut statement = [0; ATTESTATION_STATEMENT_CAPACITY];
     let statement_length = statement_bytes(
@@ -641,9 +867,18 @@ pub fn admit(attestation: Attestation<'_>, height: u64) -> Result<(), ProgramErr
     )?;
     let statement_digest = digest(&statement[..statement_length])?;
     let name_digest = digest(attestation.attester_name)?;
-    absent(REPLAY_PREFIX, attestation.input.lease_id, Some(statement_digest), &mut input_bytes)?;
+    absent(
+        REPLAY_PREFIX,
+        attestation.input.lease_id,
+        Some(statement_digest),
+        &mut input_bytes,
+    )?;
     let key = policy.named_key(attestation.attester_name)?;
-    crypto::ed25519_verify(Ed25519Message::new(&statement_digest)?, &key, &attestation.signature)?;
+    crypto::ed25519_verify(
+        Ed25519Message::new(&statement_digest)?,
+        &key,
+        &attestation.signature,
+    )?;
     let admitted = AttestedInput {
         commitment: attestation.input,
         predecessor_input_id: committed.predecessor_input_id,
@@ -653,22 +888,45 @@ pub fn admit(attestation: Attestation<'_>, height: u64) -> Result<(), ProgramErr
         evidence: EvidenceClass::Attested,
         status: InputStatus::Attested,
     };
-    policy.admitted_inputs = policy.admitted_inputs.checked_add(1).ok_or_else(malformed)?;
+    policy.admitted_inputs = policy
+        .admitted_inputs
+        .checked_add(1)
+        .ok_or_else(malformed)?;
     policy.last_admitted_input = admitted.commitment.input_id;
     policy.admitted_root = accumulate(policy.admitted_root, admitted_leaf(admitted)?)?;
     if policy.admitted_inputs == policy.committed_inputs {
-        policy.settlement_commitment = Some(freeze_settlement_commitment(policy)?);
+        policy.settlement_commitment = Some(freeze_settlement_commitment(&policy)?);
     }
     let input_written = encode_input(admitted, &mut input_bytes)?;
     let mut policy_output = [0; ATTESTER_SET_CAPACITY];
-    let policy_written = encode_policy(policy, &mut policy_output)?;
-    write(INPUT_PREFIX, attestation.input.lease_id, Some(attestation.input.input_id), &input_bytes[..input_written])?;
-    write(REPLAY_PREFIX, attestation.input.lease_id, Some(statement_digest), &[VERSION])?;
-    write(POLICY_PREFIX, attestation.input.lease_id, None, &policy_output[..policy_written])?;
-    event::emit(EventTopic::new(TOPIC_INPUT)?, EventData::new(&input_bytes[..input_written])?)
+    let policy_written = encode_policy(&policy, &mut policy_output)?;
+    write(
+        INPUT_PREFIX,
+        attestation.input.lease_id,
+        Some(attestation.input.input_id),
+        &input_bytes[..input_written],
+    )?;
+    write(
+        REPLAY_PREFIX,
+        attestation.input.lease_id,
+        Some(statement_digest),
+        &[VERSION],
+    )?;
+    write(
+        POLICY_PREFIX,
+        attestation.input.lease_id,
+        None,
+        &policy_output[..policy_written],
+    )?;
+    event::emit(
+        EventTopic::new(TOPIC_INPUT)?,
+        EventData::new(&input_bytes[..input_written])?,
+    )
 }
 
 #[cfg(target_arch = "wasm32")]
+/// # Errors
+/// Returns an error if the policy cannot be read or its settlement commitment is not ready.
 pub fn require_ready_commitment(lease_id: LeaseId) -> Result<[u8; 32], ProgramError> {
     let mut bytes = [0; ATTESTER_SET_CAPACITY];
     let length = read(POLICY_PREFIX, lease_id, None, &mut bytes)?;
@@ -684,9 +942,12 @@ mod tests {
         AccountId::new([value; 32]).unwrap_or_else(|error| panic!("account: {error}"))
     }
 
-    fn entries<'a>(name: &'a [u8], key: [u8; 32]) -> [Option<Attester<'a>>; MAX_ATTESTERS] {
+    fn entries(name: &[u8], key: [u8; 32]) -> [Option<Attester<'_>>; MAX_ATTESTERS] {
         let mut entries = [None; MAX_ATTESTERS];
-        entries[0] = Some(Attester { name, ed25519_key: key });
+        entries[0] = Some(Attester {
+            name,
+            ed25519_key: key,
+        });
         entries
     }
 
@@ -704,8 +965,9 @@ mod tests {
     #[test]
     fn real_source_commitment_is_sealed_before_work_and_labeled_attested() {
         let tenant = account(3);
-        let mut policy = AttesterSet::new([7; 32], tenant, 4, entries(b"weather-oracle.eu", [11; 32]))
-            .unwrap_or_else(|error| panic!("policy: {error}"));
+        let mut policy =
+            AttesterSet::new([7; 32], tenant, 4, &entries(b"weather-oracle.eu", [11; 32]))
+                .unwrap_or_else(|error| panic!("policy: {error}"));
         let input = commit_input(&mut policy, weather(), tenant)
             .unwrap_or_else(|error| panic!("commit: {error}"));
         seal_inputs(&mut policy, tenant, 1_201).unwrap_or_else(|error| panic!("seal: {error}"));
@@ -718,33 +980,48 @@ mod tests {
     #[test]
     fn policy_and_hardware_input_have_canonical_bounded_round_trips() {
         let tenant = account(3);
-        let mut policy = AttesterSet::new([7; 32], tenant, 9, entries(b"factory-meter-17", [12; 32]))
-            .unwrap_or_else(|error| panic!("policy: {error}"));
+        let mut policy =
+            AttesterSet::new([7; 32], tenant, 9, &entries(b"factory-meter-17", [12; 32]))
+                .unwrap_or_else(|error| panic!("policy: {error}"));
         let mut commitment = weather();
         commitment.source = ExternalInputSource::HardwareSensor;
         let input = commit_input(&mut policy, commitment, tenant)
             .unwrap_or_else(|error| panic!("commit: {error}"));
         let mut policy_bytes = [0; ATTESTER_SET_CAPACITY];
-        let length = encode_policy(policy, &mut policy_bytes).unwrap_or_else(|error| panic!("encode: {error}"));
+        let length = encode_policy(&policy, &mut policy_bytes)
+            .unwrap_or_else(|error| panic!("encode: {error}"));
         assert_eq!(decode_policy(&policy_bytes[..length]), Ok(policy));
         let mut input_bytes = [0; ATTESTED_INPUT_CAPACITY];
-        let length = encode_input(input, &mut input_bytes).unwrap_or_else(|error| panic!("encode: {error}"));
+        let length =
+            encode_input(input, &mut input_bytes).unwrap_or_else(|error| panic!("encode: {error}"));
         assert_eq!(decode_input(&input_bytes[..length]), Ok(input));
     }
 
     #[test]
     fn unnamed_attester_and_malformed_policy_are_refused() {
-        let policy = AttesterSet::new([7; 32], account(3), 1, entries(b"enclave-cluster-3", [13; 32]))
-            .unwrap_or_else(|error| panic!("policy: {error}"));
+        let policy = AttesterSet::new(
+            [7; 32],
+            account(3),
+            1,
+            &entries(b"enclave-cluster-3", [13; 32]),
+        )
+        .unwrap_or_else(|error| panic!("policy: {error}"));
         assert!(policy.named_key(b"foreign-enclave").is_err());
-        assert!(AttesterSet::new([7; 32], account(3), 1, entries(b"Not Canonical", [13; 32])).is_err());
+        assert!(
+            AttesterSet::new([7; 32], account(3), 1, &entries(b"Not Canonical", [13; 32])).is_err()
+        );
     }
 
     #[test]
     fn runtime_authenticated_tenant_is_required_for_commit_and_seal() {
         let tenant = account(3);
-        let mut policy = AttesterSet::new([7; 32], tenant, 1, entries(b"operator-review-board", [14; 32]))
-            .unwrap_or_else(|error| panic!("policy: {error}"));
+        let mut policy = AttesterSet::new(
+            [7; 32],
+            tenant,
+            1,
+            &entries(b"operator-review-board", [14; 32]),
+        )
+        .unwrap_or_else(|error| panic!("policy: {error}"));
         assert!(commit_input(&mut policy, weather(), account(4)).is_err());
         commit_input(&mut policy, weather(), tenant)
             .unwrap_or_else(|error| panic!("commit: {error}"));
@@ -754,13 +1031,27 @@ mod tests {
     #[test]
     fn statement_binds_policy_source_payload_and_observation() {
         let mut first = [0; ATTESTATION_STATEMENT_CAPACITY];
-        let first_length = statement_bytes([21; 32], 5, weather(), 1_205, b"weather-oracle.eu", &mut first)
-            .unwrap_or_else(|error| panic!("statement: {error}"));
+        let first_length = statement_bytes(
+            [21; 32],
+            5,
+            weather(),
+            1_205,
+            b"weather-oracle.eu",
+            &mut first,
+        )
+        .unwrap_or_else(|error| panic!("statement: {error}"));
         let mut altered = weather();
         altered.source = ExternalInputSource::HumanOperator;
         let mut second = [0; ATTESTATION_STATEMENT_CAPACITY];
-        let second_length = statement_bytes([21; 32], 5, altered, 1_205, b"weather-oracle.eu", &mut second)
-            .unwrap_or_else(|error| panic!("statement: {error}"));
+        let second_length = statement_bytes(
+            [21; 32],
+            5,
+            altered,
+            1_205,
+            b"weather-oracle.eu",
+            &mut second,
+        )
+        .unwrap_or_else(|error| panic!("statement: {error}"));
         assert_eq!(first_length, second_length);
         assert_ne!(&first[..first_length], &second[..second_length]);
     }
@@ -783,18 +1074,20 @@ mod tests {
     #[test]
     fn input_order_replay_missing_and_exact_frozen_root_are_explicit() {
         let tenant = account(3);
-        let mut policy = AttesterSet::new([7; 32], tenant, 11,
-            entries(b"weather-oracle.eu", [11; 32]))
-            .unwrap_or_else(|error| panic!("policy: {error}"));
+        let mut policy = AttesterSet::new(
+            [7; 32],
+            tenant,
+            11,
+            &entries(b"weather-oracle.eu", [11; 32]),
+        )
+        .unwrap_or_else(|error| panic!("policy: {error}"));
         let first = weather();
-        commit_input(&mut policy, first, tenant)
-            .unwrap_or_else(|error| panic!("first: {error}"));
+        commit_input(&mut policy, first, tenant).unwrap_or_else(|error| panic!("first: {error}"));
         assert!(commit_input(&mut policy, first, tenant).is_err());
         let mut earlier = first;
         earlier.input_id = [7; 32];
         assert!(commit_input(&mut policy, earlier, tenant).is_err());
-        seal_inputs(&mut policy, tenant, 1_201)
-            .unwrap_or_else(|error| panic!("seal: {error}"));
+        seal_inputs(&mut policy, tenant, 1_201).unwrap_or_else(|error| panic!("seal: {error}"));
         assert!(policy.settlement_input_commitment().is_err());
         policy.admitted_inputs = policy.committed_inputs;
         policy.last_admitted_input = policy.last_committed_input;
