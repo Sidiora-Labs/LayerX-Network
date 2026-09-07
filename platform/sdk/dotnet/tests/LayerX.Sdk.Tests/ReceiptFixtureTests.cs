@@ -1,3 +1,6 @@
+using System.Reflection;
+using System.Security.Cryptography;
+using System.Text;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using LayerX.Sdk;
@@ -7,6 +10,50 @@ namespace LayerX.Sdk.Tests;
 
 public sealed class ReceiptFixtureTests
 {
+    [Fact]
+    public async Task SignedTerminalV4Vectors()
+    {
+        var verify = typeof(ProgramsClient).GetMethod("VerifyTerminal", BindingFlags.NonPublic | BindingFlags.Static)!;
+        var unwrap = typeof(ProgramsClient).GetMethod("UnwrapAppliedTerminal", BindingFlags.NonPublic | BindingFlags.Static)!;
+        var applied = typeof(ProgramsClient).GetMethod("VerifyAppliedLegs", BindingFlags.NonPublic | BindingFlags.Static)!;
+        foreach (var name in new[] { "executed-v4", "principal-v4", "mutated-leg-v4", "executed-v3" })
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(FixturePath("receipt-programs-" + name + ".json")));
+            var vector = document.RootElement; var batch = vector.GetProperty("authorized_batch");
+            var authority = new AuthorizedReceiptBatch(HexField(batch, "batch_id_hex"), HexField(batch, "asset_hex"),
+                HexField(batch, "previous_state_root_hex"), HexField(batch, "resulting_state_root_hex"), HexField(batch, "sequencer_public_key_hex"));
+            var verified = await LocalVerifier.VerifyReceiptAsync(HexField(vector, "canonical_receipt_hex"), authority, protocolVersion: 3);
+            Assert.Equal(HexField(vector, "receipt_digest_hex"), verified.ReceiptDigest);
+            Assert.Equal(SHA256.HashData(Encoding.UTF8.GetBytes("LXP/v1/activity-id\0").Concat(HexField(vector, "signed_activity_hex")).ToArray()), verified.Receipt.ActivityId);
+            var receipt = Assert.IsType<ProgramReceiptOutcome>(verified.Receipt.ProgramOutcome);
+            var terminal = HexField(vector, "terminal_payload_hex"); var graph = HexField(vector, "call_graph_hex");
+            var program = HexField(vector, "program_id_hex");
+            var outcome = new Dictionary<string, JsonValue> { ["kind"] = JsonValue.String("completed"), ["code"] = JsonValue.Integer(0), ["response"] = JsonValue.String("") };
+            if (name == "principal-v4")
+            {
+                outcome.Remove("response"); outcome["kind"] = JsonValue.String("legacy_completed");
+                outcome["values"] = JsonValue.Array(new[] { JsonValue.Object(new Dictionary<string, JsonValue> { ["type"] = JsonValue.String("i32"), ["value"] = JsonValue.Integer(0) }) });
+            }
+            object? Verify(byte[] encoded) => verify.Invoke(null, new object[] { encoded, graph, program, outcome, (ushort)3, receipt });
+            void Reject(byte[] encoded) => Assert.IsType<PlatformSdkException>(Assert.Throws<TargetInvocationException>(() => Verify(encoded)).InnerException);
+            if (name == "mutated-leg-v4")
+            {
+                var error = Assert.IsType<InvalidDataException>(Assert.Throws<TargetInvocationException>(() => unwrap.Invoke(null, new object[] { terminal, receipt })).InnerException);
+                Assert.Equal("applied transfer root", error.Message);
+                Reject(terminal);
+            }
+            else Assert.Equal(name == "executed-v3" ? "recorded_terminal_root_not_locally_reconstructable" : "reconstructed", Verify(terminal));
+            if (name == "executed-v4")
+            {
+                for (var length = 0; length < terminal.Length; length++) Reject(terminal[..length]);
+                Reject(terminal.Concat(new byte[] { 0 }).ToArray());
+            }
+        }
+        applied.Invoke(null, new object[] { Array.Empty<byte>(), new byte[32] });
+        Assert.IsType<InvalidDataException>(Assert.Throws<TargetInvocationException>(() => applied.Invoke(null,
+            new object[] { Array.Empty<byte>(), Enumerable.Repeat((byte)1, 32).ToArray() })).InnerException);
+    }
+
     [Fact]
     public async Task NativeLifecycleCFixtures()
     {
