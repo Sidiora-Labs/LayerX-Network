@@ -8,6 +8,5 @@ Index of `docs/` in this repository.
 | [wiki/Quickstart.md](wiki/Quickstart.md) | Testnet quickstart |
 | [MONOREPO.md](MONOREPO.md) | Monorepo layout, build boundaries, and release tags |
 | [QUALIFICATION.md](QUALIFICATION.md) | Qualification evidence levels and gates |
-| [wiki-drafts/](wiki-drafts/) | Draft wiki pages; not a source |
 
 Normative protocol text lives under [`spec/`](../spec/), not here. The root [README.md](../README.md) is the project introduction.
