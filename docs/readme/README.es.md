@@ -1,8 +1,8 @@
-<p align="center"><img src="../../layerx-network.png" alt="LayerX" width="720"></p>
+<p align="center"><img src="../../layerx-network.png" alt="LayerX Network" width="720"></p>
 
-<h1 align="center">LayerX</h1>
+<h1 align="center">LayerX Network</h1>
 
-Una red determinista de ejecución y contabilidad para agentes autónomos.
+LayerX Network es una red determinista de ejecución y contabilidad para agentes autónomos.
 
 [English](../../README.md) · Español · [日本語](README.ja.md) · [Русский](README.ru.md) · [简体中文](README.zh-CN.md) · [Português](README.pt-BR.md) · [Deutsch](README.de.md) · [Français](README.fr.md)
 
@@ -11,15 +11,15 @@ Una red determinista de ejecución y contabilidad para agentes autónomos.
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](../../LICENSE)
 [![CI](https://github.com/Sidiora-Labs/LayerX-Network/actions/workflows/ci.yml/badge.svg)](../../.github/workflows/ci.yml)
 
-## Qué es LayerX
+## Qué es LayerX Network
 
-LayerX es una red determinista de ejecución y contabilidad para agentes autónomos. Toda operación que cambia el estado entra como un `Activity` firmado y codificado de forma canónica. El protocolo verifica al actor y su autoridad, consume la secuencia de la cuenta, ordena la actividad en una secuencia global, aplica una transición de estado determinista y devuelve un recibo firmado ligado a la raíz de estado resultante.
+LayerX Network es una red determinista de ejecución y contabilidad para agentes autónomos. Toda operación que cambia el estado entra como un `Activity` firmado y codificado de forma canónica. El protocolo verifica al actor y su autoridad, consume la secuencia de la cuenta, ordena la actividad en una secuencia global, aplica una transición de estado determinista y devuelve un recibo firmado ligado a la raíz de estado resultante.
 
 El registro de actividades de solo anexión es la autoridad. Los índices de base de datos son proyecciones desechables y se pueden reconstruir reejecutando ese registro. La ejecución crítica para el consenso excluye punto flotante, decisiones de reloj local, orden de iteración de la base de datos y otras fuentes de no determinismo. `402LXP` es el único componente autorizado a escribir saldos. Los módulos del protocolo emiten conjuntos de transferencias validados en lugar de mutar fondos por sí mismos.
 
 La actividad ordinaria de los agentes se ejecuta y se ordena dentro de LayerX. Los puntos de control periódicos se liquidan en Paxeer, que retiene la custodia, el registro de puntos de control, las fianzas de garantes, los desafíos, los retiros, las disputas y las salidas de emergencia. Una acción ordinaria de LayerX no requiere una transacción de Paxeer.
 
-Este repositorio es el monorepositorio de Sidiora Labs para LayerX y Paxeer Network. La colocalización mantiene el protocolo, la red de liquidación, los contratos y las superficies de desarrollador auditables en un solo lugar. Cada subsistema conserva su propio límite de compilación, publicación, despliegue y confianza. Véase [`spec/layerx-protocol/design.md`](../../spec/layerx-protocol/design.md).
+Este repositorio es el monorepositorio de Sidiora Labs para LayerX Network y Paxeer Network. La colocalización mantiene el protocolo, la red de liquidación, los contratos y las superficies de desarrollador auditables en un solo lugar. Cada subsistema conserva su propio límite de compilación, publicación, despliegue y confianza. Véase [`spec/layerx-protocol/design.md`](../../spec/layerx-protocol/design.md).
 
 ## Probar la red de prueba
 
@@ -143,4 +143,4 @@ Informe de vulnerabilidades mediante el reporte privado de GitHub, como se descr
 
 Licenciado bajo la Licencia Apache, versión 2.0. Véase [`LICENSE`](../../LICENSE) y [`NOTICE`](../../NOTICE).
 
-LayerX lo desarrolla Sidiora Labs.
+LayerX Network lo desarrolla Sidiora Labs.

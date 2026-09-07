@@ -1,8 +1,8 @@
-<p align="center"><img src="../../layerx-network.png" alt="LayerX" width="720"></p>
+<p align="center"><img src="../../layerx-network.png" alt="LayerX Network" width="720"></p>
 
-<h1 align="center">LayerX</h1>
+<h1 align="center">LayerX Network</h1>
 
-面向自主智能体的确定性执行与记账网络。
+LayerX Network 是面向自主智能体的确定性执行与记账网络。
 
 [English](../../README.md) · [Español](README.es.md) · [日本語](README.ja.md) · [Русский](README.ru.md) · 简体中文 · [Português](README.pt-BR.md) · [Deutsch](README.de.md) · [Français](README.fr.md)
 
@@ -11,15 +11,15 @@
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](../../LICENSE)
 [![CI](https://github.com/Sidiora-Labs/LayerX-Network/actions/workflows/ci.yml/badge.svg)](../../.github/workflows/ci.yml)
 
-## LayerX 是什么
+## LayerX Network 是什么
 
-LayerX 是面向自主智能体的确定性执行与记账网络。每一次改变状态的操作都以经过签名、按规范编码的 `Activity` 进入系统。协议核验执行者及其权限，消耗账户序号，将活动排入一条全局序列，应用确定性状态转移，并返回与结果状态根绑定的签名回执。
+LayerX Network 是面向自主智能体的确定性执行与记账网络。每一次改变状态的操作都以经过签名、按规范编码的 `Activity` 进入系统。协议核验执行者及其权限，消耗账户序号，将活动排入一条全局序列，应用确定性状态转移，并返回与结果状态根绑定的签名回执。
 
 只追加的活动日志才是权威来源。数据库索引是可丢弃的投影，可通过重放该日志重建。共识关键路径上的执行排除浮点运算、本地时钟决策、数据库迭代顺序以及其他非确定性来源。只有 `402LXP` 可以写入余额。协议模块发出经过校验的转账集合，而不是自行改动资金。
 
 普通智能体活动在 LayerX 内部执行并排序。周期性检查点结算到 Paxeer，由其负责托管、检查点登记、担保人保证金、挑战、提现、争议和紧急退出。普通 LayerX 操作不需要一笔 Paxeer 交易。
 
-本仓库是 Sidiora Labs 为 LayerX 与 Paxeer Network 设立的 monorepo。将协议、结算网络、合约和开发者界面放在一起，便于在同一处审计。各子系统保留各自的构建、发布、部署和信任边界。参见 [`spec/layerx-protocol/design.md`](../../spec/layerx-protocol/design.md)。
+本仓库是 Sidiora Labs 为 LayerX Network 与 Paxeer Network 设立的 monorepo。将协议、结算网络、合约和开发者界面放在一起，便于在同一处审计。各子系统保留各自的构建、发布、部署和信任边界。参见 [`spec/layerx-protocol/design.md`](../../spec/layerx-protocol/design.md)。
 
 ## 试用测试网
 
@@ -143,4 +143,4 @@ make paxeer-ci
 
 依 Apache 许可证 2.0 版授权。参见 [`LICENSE`](../../LICENSE) 和 [`NOTICE`](../../NOTICE)。
 
-LayerX 由 Sidiora Labs 开发。
+LayerX Network 由 Sidiora Labs 开发。

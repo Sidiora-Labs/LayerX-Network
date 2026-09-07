@@ -1,8 +1,8 @@
-<p align="center"><img src="../../layerx-network.png" alt="LayerX" width="720"></p>
+<p align="center"><img src="../../layerx-network.png" alt="LayerX Network" width="720"></p>
 
-<h1 align="center">LayerX</h1>
+<h1 align="center">LayerX Network</h1>
 
-自律エージェント向けの決定的実行および会計ネットワーク。
+LayerX Network は自律エージェント向けの決定的実行および会計ネットワークです。
 
 [English](../../README.md) · [Español](README.es.md) · 日本語 · [Русский](README.ru.md) · [简体中文](README.zh-CN.md) · [Português](README.pt-BR.md) · [Deutsch](README.de.md) · [Français](README.fr.md)
 
@@ -11,15 +11,15 @@
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](../../LICENSE)
 [![CI](https://github.com/Sidiora-Labs/LayerX-Network/actions/workflows/ci.yml/badge.svg)](../../.github/workflows/ci.yml)
 
-## LayerX とは
+## LayerX Network とは
 
-LayerX は自律エージェント向けの決定的実行および会計ネットワークです。状態を変更する操作はすべて、署名済みで正規符号化された `Activity` として投入されます。プロトコルは行為者と権限を検証し、アカウントシーケンスを消費し、単一のグローバルシーケンス上で Activity を順序付け、決定的な状態遷移を適用し、結果の状態ルートに紐付く署名済みレシートを返します。
+LayerX Network は自律エージェント向けの決定的実行および会計ネットワークです。状態を変更する操作はすべて、署名済みで正規符号化された `Activity` として投入されます。プロトコルは行為者と権限を検証し、アカウントシーケンスを消費し、単一のグローバルシーケンス上で Activity を順序付け、決定的な状態遷移を適用し、結果の状態ルートに紐付く署名済みレシートを返します。
 
 追記専用の Activity ログが権威です。データベース索引は破棄可能な射影であり、そのログをリプレイすれば再構築できます。コンセンサスに関わる実行は浮動小数点、ローカル時計による判断、データベースの反復順、その他の非決定性の源を排除します。残高の書き込みが許されるコンポーネントは `402LXP` のみです。プロトコルモジュールは資金を自ら変更せず、検証済みの転送集合を発行します。
 
 通常のエージェント Activity は LayerX 内で実行および順序付けされます。定期チェックポイントは Paxeer に決済され、Paxeer はカストディ、チェックポイント登録、保証人ボンド、チャレンジ、出金、紛争、緊急退出を保持します。通常の LayerX 操作に Paxeer トランザクションは不要です。
 
-本リポジトリは LayerX および Paxeer Network 向けの Sidiora Labs モノレポです。同一配置により、プロトコル、決済ネットワーク、コントラクト、開発者向け面を一箇所で監査できます。各サブシステムは独自のビルド、リリース、デプロイ、信頼境界を維持します。[`spec/layerx-protocol/design.md`](../../spec/layerx-protocol/design.md) を参照してください。
+本リポジトリは LayerX Network および Paxeer Network 向けの Sidiora Labs モノレポです。同一配置により、プロトコル、決済ネットワーク、コントラクト、開発者向け面を一箇所で監査できます。各サブシステムは独自のビルド、リリース、デプロイ、信頼境界を維持します。[`spec/layerx-protocol/design.md`](../../spec/layerx-protocol/design.md) を参照してください。
 
 ## テストネットを試す
 
@@ -143,4 +143,4 @@ make paxeer-ci
 
 Apache License, Version 2.0 のもとでライセンスされます。[`LICENSE`](../../LICENSE) および [`NOTICE`](../../NOTICE) を参照してください。
 
-LayerX は Sidiora Labs が開発しています。
+LayerX Network は Sidiora Labs が開発しています。
