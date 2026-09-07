@@ -1635,7 +1635,8 @@ typedef struct legacy_compact_receipt {
 
 enum {
     COMPACT_RECEIPT_V2_BYTES = 560,
-    COMPACT_RECEIPT_V3_BYTES = 564
+    COMPACT_RECEIPT_V3_BYTES = 564,
+    COMPACT_RECEIPT_V4_BYTES = 596
 };
 static const uint8_t compact_receipt_v2_magic[5] = {
     'L', 'X', 'R', 'C', '2'
@@ -1643,6 +1644,8 @@ static const uint8_t compact_receipt_v2_magic[5] = {
 static const uint8_t compact_receipt_v3_magic[5] = {
     'L', 'X', 'R', 'C', '3'
 };
+
+static const uint8_t compact_receipt_v4_magic[5] = {'L', 'X', 'R', 'C', '4'};
 
 static void compact_write_u16(uint8_t *bytes, uint16_t value)
 {
@@ -1689,12 +1692,13 @@ static lxp_result compact_receipt_encode(
     const lxp_receipt *receipt, bool metered, uint8_t *bytes)
 {
     const lxp_program_outcome *outcome;
+    bool applied = receipt != NULL && receipt->program_outcome.encoding_version == 4U;
     size_t offset = 0U;
     size_t index;
     if (receipt == NULL || bytes == NULL ||
         !lxp_protocol_version_supported(receipt->protocol_version) ||
         (metered && (!receipt->program_outcome.present ||
-                     receipt->program_outcome.encoding_version != 3U)) ||
+                     receipt->program_outcome.encoding_version != (applied ? 4U : 3U))) ||
         (!metered && receipt->program_outcome.present))
         return LXP_ERR_NON_CANONICAL;
     outcome = &receipt->program_outcome;
@@ -1716,7 +1720,7 @@ static lxp_result compact_receipt_encode(
     if (compact_status != LXP_OK) return compact_status; \
     offset += 16U; \
 } while (0)
-    COMPACT_COPY(metered ? compact_receipt_v3_magic :
+    COMPACT_COPY(applied ? compact_receipt_v4_magic : metered ? compact_receipt_v3_magic :
                            compact_receipt_v2_magic,
                  sizeof(compact_receipt_v2_magic));
     COMPACT_U16(receipt->protocol_version);
@@ -1756,12 +1760,13 @@ static lxp_result compact_receipt_encode(
     COMPACT_COPY(outcome->call_graph_root, 32U);
     COMPACT_COPY(outcome->terminal_payload_root, 32U);
     COMPACT_COPY(outcome->transfer_root, 32U);
+    if (applied) COMPACT_COPY(outcome->applied_legs_digest, 32U);
 #undef COMPACT_U128
 #undef COMPACT_U64
 #undef COMPACT_U32
 #undef COMPACT_U16
 #undef COMPACT_COPY
-    return offset == (metered ? COMPACT_RECEIPT_V3_BYTES :
+    return offset == (applied ? COMPACT_RECEIPT_V4_BYTES : metered ? COMPACT_RECEIPT_V3_BYTES :
                                 COMPACT_RECEIPT_V2_BYTES) ?
         LXP_OK : LXP_FATAL_INVARIANT;
 }
@@ -1771,12 +1776,14 @@ static lxp_result compact_receipt_decode(
     lxp_receipt *receipt)
 {
     lxp_program_outcome *outcome;
+    bool applied = bytes != NULL && length == COMPACT_RECEIPT_V4_BYTES &&
+        memcmp(bytes, compact_receipt_v4_magic, sizeof(compact_receipt_v4_magic)) == 0;
     size_t offset = 0U;
     size_t index;
     if (bytes == NULL || receipt == NULL ||
-        length != (metered ? COMPACT_RECEIPT_V3_BYTES :
+        length != (applied ? COMPACT_RECEIPT_V4_BYTES : metered ? COMPACT_RECEIPT_V3_BYTES :
                              COMPACT_RECEIPT_V2_BYTES) ||
-        memcmp(bytes, metered ? compact_receipt_v3_magic :
+        memcmp(bytes, applied ? compact_receipt_v4_magic : metered ? compact_receipt_v3_magic :
                                 compact_receipt_v2_magic,
                sizeof(compact_receipt_v2_magic)) != 0)
         return LXP_FATAL_REPLAY_DIVERGENCE;
@@ -1846,25 +1853,28 @@ static lxp_result compact_receipt_decode(
     COMPACT_READ_COPY(outcome->call_graph_root, 32U);
     COMPACT_READ_COPY(outcome->terminal_payload_root, 32U);
     COMPACT_READ_COPY(outcome->transfer_root, 32U);
+    if (applied) COMPACT_READ_COPY(outcome->applied_legs_digest, 32U);
 #undef COMPACT_READ_U128
 #undef COMPACT_READ_U64
 #undef COMPACT_READ_U32
 #undef COMPACT_READ_U16
 #undef COMPACT_READ_COPY
     if (offset != length ||
+        (applied && (!metered || !outcome->present || outcome->encoding_version != 4U ||
+                     receipt->protocol_version != LXP_PROTOCOL_VERSION_STATE_COMMITMENT)) ||
         !lxp_protocol_version_supported(receipt->protocol_version) ||
         (outcome->present && outcome->encoding_version != 1U &&
          outcome->encoding_version != 2U &&
-         outcome->encoding_version != 3U) ||
+         outcome->encoding_version != 3U && outcome->encoding_version != 4U) ||
         (outcome->present && receipt->module_id != LXP_MODULE_PROGRAMS) ||
         (lxp_protocol_version_uses_occupancy(receipt->protocol_version) &&
          outcome->present && outcome->encoding_version != 2U &&
-         outcome->encoding_version != 3U) ||
+         outcome->encoding_version != 3U && outcome->encoding_version != 4U) ||
         (receipt->protocol_version == LXP_PROTOCOL_VERSION_LEGACY &&
          outcome->present && outcome->encoding_version != 1U &&
-         outcome->encoding_version != 3U) ||
-        (metered && outcome->present && outcome->encoding_version != 3U) ||
-        (!metered && outcome->encoding_version == 3U) ||
+         outcome->encoding_version != 3U && outcome->encoding_version != 4U) ||
+        (metered && outcome->present && outcome->encoding_version != (applied ? 4U : 3U)) ||
+        (!metered && outcome->encoding_version >= 3U) ||
         (outcome->present && outcome->metering_schedule_version == 0U))
         return LXP_FATAL_REPLAY_DIVERGENCE;
     if (outcome->present &&
@@ -1880,6 +1890,9 @@ static lxp_result receipt_restore_compact(const uint8_t *bytes, size_t length,
     const compact_receipt *compact;
     if (bytes == NULL || receipt == NULL)
         return LXP_FATAL_REPLAY_DIVERGENCE;
+    if (length == COMPACT_RECEIPT_V4_BYTES &&
+        memcmp(bytes, compact_receipt_v4_magic, sizeof(compact_receipt_v4_magic)) == 0)
+        return compact_receipt_decode(bytes, length, true, receipt);
     if (length == COMPACT_RECEIPT_V3_BYTES &&
         memcmp(bytes, compact_receipt_v3_magic,
                sizeof(compact_receipt_v3_magic)) == 0)
@@ -2033,11 +2046,12 @@ static lxp_result receipt_store(lxp_state_journal *journal,
                                 const lxp_activity *activity,
                                 const lxp_receipt *receipt)
 {
-    uint8_t compact[COMPACT_RECEIPT_V3_BYTES];
+    uint8_t compact[COMPACT_RECEIPT_V4_BYTES];
     lxp_result status;
     if (!lxp_protocol_version_supported(receipt->protocol_version) ||
         (receipt->program_outcome.present &&
-         receipt->program_outcome.encoding_version != 3U))
+         receipt->program_outcome.encoding_version != 3U &&
+         receipt->program_outcome.encoding_version != 4U))
         return LXP_ERR_VERSION_UNSUPPORTED;
     if (receipt->protocol_version == LXP_PROTOCOL_VERSION_LEGACY &&
         !receipt->program_outcome.present) {
@@ -2069,7 +2083,8 @@ static lxp_result receipt_store(lxp_state_journal *journal,
                                   activity->actor_did.length,
                                   activity->idempotency_key,
                                   compact,
-                                  receipt->program_outcome.present ?
+                                  receipt->program_outcome.encoding_version == 4U ?
+                                      COMPACT_RECEIPT_V4_BYTES : receipt->program_outcome.present ?
                                       COMPACT_RECEIPT_V3_BYTES :
                                       COMPACT_RECEIPT_V2_BYTES);
 }
@@ -2078,21 +2093,23 @@ lxp_result lxp_kernel_idempotency_state_value(
     const uint8_t *bytes, size_t length, uint8_t *output, size_t capacity)
 {
     lxp_receipt *receipt;
-    bool metered;
+    bool metered, applied;
     lxp_result status;
     if (bytes == NULL || output == NULL || length > capacity)
         return LXP_ERR_NON_CANONICAL;
     if (length < sizeof(compact_receipt_v2_magic) + 2U ||
         (memcmp(bytes, compact_receipt_v2_magic, sizeof(compact_receipt_v2_magic)) != 0 &&
-         memcmp(bytes, compact_receipt_v3_magic, sizeof(compact_receipt_v3_magic)) != 0) ||
+         memcmp(bytes, compact_receipt_v3_magic, sizeof(compact_receipt_v3_magic)) != 0 &&
+         memcmp(bytes, compact_receipt_v4_magic, sizeof(compact_receipt_v4_magic)) != 0) ||
         compact_read_u16(bytes + sizeof(compact_receipt_v2_magic)) !=
             LXP_PROTOCOL_VERSION_STATE_COMMITMENT) {
         (void)memcpy(output, bytes, length);
         return LXP_OK;
     }
-    metered = memcmp(bytes, compact_receipt_v3_magic,
+    applied = memcmp(bytes, compact_receipt_v4_magic, sizeof(compact_receipt_v4_magic)) == 0;
+    metered = applied || memcmp(bytes, compact_receipt_v3_magic,
                      sizeof(compact_receipt_v3_magic)) == 0;
-    if (length != (metered ? COMPACT_RECEIPT_V3_BYTES : COMPACT_RECEIPT_V2_BYTES))
+    if (length != (applied ? COMPACT_RECEIPT_V4_BYTES : metered ? COMPACT_RECEIPT_V3_BYTES : COMPACT_RECEIPT_V2_BYTES))
         return LXP_ERR_NON_CANONICAL;
     receipt = (lxp_receipt *)malloc(sizeof(*receipt));
     if (receipt == NULL) return LXP_ERR_ARENA_EXHAUSTED;
@@ -2189,7 +2206,7 @@ static lxp_result synthesize_program_call_failure(
     static const uint8_t failure_domain[] =
         "LXP/programs/pre-runtime-failure/v1";
     uint8_t payload_hash[32];
-    uint8_t failure_input[sizeof(failure_domain) + 32U + 32U + 4U + 4U + 4U];
+    uint8_t failure_input[sizeof(failure_domain) + 32U + 32U + 4U + 4U + 4U + 1U + 32U];
     size_t offset = 0U;
     lxp_result status;
     if (activity == NULL || activity_id == NULL || execution == NULL ||
@@ -2201,7 +2218,11 @@ static lxp_result synthesize_program_call_failure(
     if (status != LXP_OK) return status;
     (void)memset(outcome, 0, sizeof(*outcome));
     outcome->present = true;
-    outcome->encoding_version = 3U;
+    outcome->encoding_version = activity->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT ? 4U : 3U;
+    if (outcome->encoding_version == 4U) {
+        status = lxp_hash_sha256("", 0U, outcome->applied_legs_digest);
+        if (status != LXP_OK) return status;
+    }
     outcome->terminal_kind = LXP_PROGRAM_TERMINAL_FAILURE;
     outcome->result_code = module_result;
     outcome->runtime_version = 1U;
@@ -2232,6 +2253,11 @@ static lxp_result synthesize_program_call_failure(
     offset += 4U;
     store_u32(failure_input + offset, execution->parameter_version);
     offset += 4U;
+    if (outcome->encoding_version == 4U) {
+        failure_input[offset++] = outcome->encoding_version;
+        (void)memcpy(failure_input + offset, outcome->applied_legs_digest, 32U);
+        offset += 32U;
+    }
     return lxp_hash_domain(LXP_DOMAIN_CONTEXT_HASH, failure_input, offset,
                            outcome->terminal_payload_root);
 }

@@ -554,6 +554,25 @@ pub fn verify_program_outcome(
     receipt_bytes: &[u8],
     authorised: &AuthorizedBatch,
 ) -> Result<VerifiedReceipt, VerificationFailure> {
+    verify_program_outcome_selected(receipt_bytes, authorised, false)
+}
+
+/// Verifies a stored protocol-1 Programs receipt with historical module binding.
+///
+/// # Errors
+/// Refuses any nonhistorical version, module mismatch or failed receipt proof.
+pub fn verify_historical_program_outcome_v1(
+    receipt_bytes: &[u8],
+    authorised: &AuthorizedBatch,
+) -> Result<VerifiedReceipt, VerificationFailure> {
+    verify_program_outcome_selected(receipt_bytes, authorised, true)
+}
+
+fn verify_program_outcome_selected(
+    receipt_bytes: &[u8],
+    authorised: &AuthorizedBatch,
+    historical_v1: bool,
+) -> Result<VerifiedReceipt, VerificationFailure> {
     let receipt =
         decode(receipt_bytes).map_err(|_| VerificationFailure::at(ReceiptCheck::Decode))?;
     let reproduced =
@@ -564,8 +583,15 @@ pub fn verify_program_outcome(
     let protocol = receipt
         .protocol()
         .ok_or_else(|| VerificationFailure::at(ReceiptCheck::ReceiptShape))?;
-    if !supported_protocol_version(protocol.protocol_version()) {
+    if if historical_v1 {
+        protocol.protocol_version() != 1
+    } else {
+        !supported_protocol_version(protocol.protocol_version())
+    } {
         return Err(VerificationFailure::at(ReceiptCheck::ProtocolVersion));
+    }
+    if historical_v1 && protocol.module_version() != 1 {
+        return Err(VerificationFailure::at(ReceiptCheck::Module));
     }
     if u32::from(protocol.module_id()) != PROGRAMS_MODULE_ID
         || !programs_version_for_protocol(
