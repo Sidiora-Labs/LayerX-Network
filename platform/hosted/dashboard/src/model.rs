@@ -195,9 +195,8 @@ impl PaymentView {
     #[must_use]
     pub fn of(event: &ProtocolEvent) -> Self {
         let settlement = fact(event, "state");
-        let settlement_verification = settlement
-            .map(ProtocolFact::verification)
-            .unwrap_or(Verification::Unverified);
+        let settlement_verification =
+            settlement.map_or(Verification::Unverified, ProtocolFact::verification);
         let receipt_digest = settlement.and_then(ProtocolFact::receipt_digest);
         let settled = settlement.is_some_and(|fact| fact.value() == "settled")
             && settlement_verification.at_least(Verification::ReceiptVerified)
