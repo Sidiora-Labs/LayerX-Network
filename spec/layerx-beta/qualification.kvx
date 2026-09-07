@@ -1745,6 +1745,68 @@ file = "programs/crates/layerx-programs-interpreter/tests/conformance.rs program
 symbol = "refusal_stage execute_block FeeSchedule::new_complete PreparedScheduleAccess::from_authenticated_call ExecutionError"
 observed = "Interpreter conformance tests use explicit unit error patterns, preserve unexpected-success panic behavior and extract unchanged checked arithmetic into a helper. All three interpreter tests pass, focused strict all-target market/interpreter Clippy passes, and touched-file formatting, ABI drift, real-runtime interpreter conformance and dependency policy exit 0. make programs-lint exits 2; its first refusal is ffi_call.rs:2122:17 needless_continue. Runtime library compilation reports 151 errors and runtime lib-test compilation reports 388 errors, including protected terminal/crypto findings, other runtime test findings, ExecutionError forwarding and the two retained argument-count findings. No market or interpreter diagnostics remain in the observed aggregate run. Evidence: qual-logs/sixth-pass/interpreter-test.log, focused-clippy.log, format-check.log, abi.log, conformance.log, policy.log, lint.log, lint-errors.txt and lint-errors.json."
 assumption = "FeeSchedule::new_complete at meter.rs:283 retains its original signature because grouped coefficients require protected ffi_call.rs:2454 and :3385 caller changes. PreparedScheduleAccess::from_authenticated_call at schedule.rs:59 retains its original eight arguments because grouping activity_binding and payer requires protected ffi_call.rs:314. Both inventories are unchanged. Runtime source and tests, including all ExecutionError forwarding sites, remain outside this pass. Passing focused checks do not qualify the full workspace or targets blocked by runtime compilation."
+[observation.6.4.compressed-zero]
+task = "6.4"
+file = "programs/crates/layerx-programs-runtime/tests/signature_vectors.rs"
+symbol = "secp256k1_verify_accepts_compressed_public_key"
+observed = "Original expectation: VerificationFailed for r=s=0. Corrected expectation: MalformedSignature for r=s=0; additionally Ok(()) for the genuine Wycheproof tcId 3 signature with compressed SEC1 public key. Authority: libsecp256k1 v0.6.0 include/secp256k1.h compact parse documentation allows zero R/S encoding but guarantees verification failure. MalformedSignature is the owner-authorized LayerX parsing classification, not a classification prescribed by the header. Independent check: OpenSSL accepts the exact Wycheproof tcId 3 prehash signature in both SEC1 key encodings; fetched-file SHA256 values match signatures/sources.json. python3 signatures/check.py exits 0; raw output qual-logs/sixth-pass/authority.log. Focused signature_vectors and storage_scan exit 0 with 26 and seven passing tests; qual-logs/sixth-pass/focused.log."
+assumption = "Explicit owner authorization permits these expectation corrections. Production crypto, refusal enum, input contract and existing genuine high-S authority case remain unchanged."
+severity = "note"
+
+[observation.6.4.uncompressed-zero]
+task = "6.4"
+file = "programs/crates/layerx-programs-runtime/tests/signature_vectors.rs"
+symbol = "secp256k1_verify_accepts_uncompressed_public_key"
+observed = "Original expectation: VerificationFailed for r=s=0. Corrected expectation: MalformedSignature for r=s=0; additionally Ok(()) for the genuine Wycheproof tcId 3 signature with uncompressed SEC1 public key. Authority: libsecp256k1 v0.6.0 include/secp256k1.h compact parse documentation allows zero R/S encoding but guarantees verification failure. MalformedSignature is the owner-authorized LayerX parsing classification, not a classification prescribed by the header. Independent check: OpenSSL accepts the exact Wycheproof tcId 3 prehash signature in both SEC1 key encodings; fetched-file SHA256 values match signatures/sources.json. python3 signatures/check.py exits 0; raw output qual-logs/sixth-pass/authority.log. Focused signature_vectors and storage_scan exit 0 with 26 and seven passing tests; qual-logs/sixth-pass/focused.log."
+assumption = "Explicit owner authorization permits these expectation corrections. Production crypto, refusal enum, input contract and existing genuine high-S authority case remain unchanged."
+severity = "note"
+
+[observation.6.4.verify-zero]
+task = "6.4"
+file = "programs/crates/layerx-programs-runtime/tests/signature_vectors.rs"
+symbol = "secp256k1_verify_zero_vector_fails"
+observed = "Original expectation: VerificationFailed for r=s=0. Corrected expectation: MalformedSignature for r=s=0. Authority: libsecp256k1 v0.6.0 include/secp256k1.h compact parse documentation allows zero R/S encoding but guarantees verification failure. MalformedSignature is the owner-authorized LayerX parsing classification, not a classification prescribed by the header. Independent check: OpenSSL accepts the exact Wycheproof tcId 3 prehash signature in both SEC1 key encodings; fetched-file SHA256 values match signatures/sources.json. python3 signatures/check.py exits 0; raw output qual-logs/sixth-pass/authority.log. Focused signature_vectors and storage_scan exit 0 with 26 and seven passing tests; qual-logs/sixth-pass/focused.log."
+assumption = "Explicit owner authorization permits these expectation corrections. Production crypto, refusal enum, input contract and existing genuine high-S authority case remain unchanged."
+severity = "note"
+
+[observation.6.4.recover-zero]
+task = "6.4"
+file = "programs/crates/layerx-programs-runtime/tests/signature_vectors.rs"
+symbol = "secp256k1_recover_zero_vector_fails"
+observed = "Original expectation: RecoveryFailed for r=s=0 for recovery ids 0 through 3. Corrected expectation: MalformedSignature for r=s=0 for every recovery id 0 through 3. Authority: libsecp256k1 v0.6.0 include/secp256k1.h compact parse documentation allows zero R/S encoding but guarantees verification failure. MalformedSignature is the owner-authorized LayerX parsing classification, not a classification prescribed by the header. Independent check: OpenSSL accepts the exact Wycheproof tcId 3 prehash signature in both SEC1 key encodings; fetched-file SHA256 values match signatures/sources.json. python3 signatures/check.py exits 0; raw output qual-logs/sixth-pass/authority.log. Focused signature_vectors and storage_scan exit 0 with 26 and seven passing tests; qual-logs/sixth-pass/focused.log."
+assumption = "Explicit owner authorization permits these expectation corrections. Production crypto, refusal enum, input contract and existing genuine high-S authority case remain unchanged."
+severity = "note"
+
+[observation.6.4.ed25519-malleability]
+task = "6.4"
+file = "programs/crates/layerx-programs-runtime/tests/signature_vectors.rs"
+symbol = "malleable_signature_detection_ed25519"
+observed = "Original expectation: VerificationFailed for the undecodable public key [02;32]. Corrected expectation: MalformedPublicKey for [02;32]; valid RFC 8032 TEST 1 succeeds, then adding L to S yields VerificationFailed. Authority: RFC 8032 sections 5.1.7 and 7.1 TEST 1; signatures/rfc8032.txt. Independent check: OpenSSL accepts RFC TEST 1 and rejects S+L; modular arithmetic proves [02;32] has no decoded x coordinate. python3 signatures/check.py exits 0; raw output qual-logs/sixth-pass/authority.log. Focused signature_vectors and storage_scan exit 0 with 26 and seven passing tests; qual-logs/sixth-pass/focused.log."
+assumption = "Explicit owner authorization permits these expectation corrections. Production crypto, refusal enum, input contract and existing genuine high-S authority case remain unchanged."
+severity = "note"
+
+[observation.6.4.secp256k1-malleability]
+task = "6.4"
+file = "programs/crates/layerx-programs-runtime/tests/signature_vectors.rs"
+symbol = "malleable_signature_detection_secp256k1"
+observed = "Original expectation: VerificationFailed for r=0 and s=255. Corrected expectation: MalformedSignature for r=0 and s=255; genuine high-S Wycheproof tcId 1 test remains unchanged. Authority: libsecp256k1 v0.6.0 include/secp256k1.h compact parse documentation allows zero R/S encoding but guarantees verification failure. MalformedSignature is the owner-authorized LayerX parsing classification, not a classification prescribed by the header. Independent check: OpenSSL accepts the exact Wycheproof tcId 3 prehash signature in both SEC1 key encodings; fetched-file SHA256 values match signatures/sources.json. python3 signatures/check.py exits 0; raw output qual-logs/sixth-pass/authority.log. Focused signature_vectors and storage_scan exit 0 with 26 and seven passing tests; qual-logs/sixth-pass/focused.log."
+assumption = "Explicit owner authorization permits these expectation corrections. Production crypto, refusal enum, input contract and existing genuine high-S authority case remain unchanged."
+severity = "note"
+
+[observation.6.4.published-secp256k1]
+task = "6.4"
+file = "programs/crates/layerx-programs-runtime/tests/signature_vectors.rs"
+symbol = "secp256k1_verify_published_test_vector_1"
+observed = "Original expectation: Success for uncited signature bytes independently rejected by OpenSSL. Corrected expectation: Ok(()) for Wycheproof ecdsa_secp256k1_sha256 tcId 3, using SHA256(message) and losslessly decoded DER r/s without normalization. Authority: Wycheproof ecdsa_secp256k1_sha256_test.json tcId 3; SHA256 43db761c0a2eae71fb0755d355d5130e28ce64a5b07846cf27e7072082597a81. Source URL, case IDs and hashes are in signatures/sources.json. Independent check: OpenSSL accepts the exact Wycheproof tcId 3 prehash signature in both SEC1 key encodings; fetched-file SHA256 values match signatures/sources.json. python3 signatures/check.py exits 0; raw output qual-logs/sixth-pass/authority.log. Focused signature_vectors and storage_scan exit 0 with 26 and seven passing tests; qual-logs/sixth-pass/focused.log."
+assumption = "Explicit owner authorization permits these expectation corrections. Production crypto, refusal enum, input contract and existing genuine high-S authority case remain unchanged."
+severity = "note"
+
+[observation.6.4.runtime-benchmark-module-type]
+task = "6.4"
+file = "programs/benches/interpreter.rs programs/crates/layerx-programs-runtime/src/execute.rs"
+symbol = "execute AuthorizedExecutionRequest"
+observed = "The required cargo test --locked -p layerx-programs-runtime --all-targets with the built interpreter Wasm exits 101. Benchmark helper execute at interpreter.rs:57 takes CompiledModule, while AuthorizedExecutionRequest.module and validate_candidate_v2 require ValidatedModule. E0308 diagnostics occur at lines 74, 153, 154, 160 and 161. Raw output: qual-logs/sixth-pass/runtime-all.log. The focused signature_vectors and storage_scan targets pass all 33 tests; make programs-abi-drift exits 0."
+assumption = "Benchmark and production source are outside the authorized test-expectation paths. NEEDS.md requests reconciliation of the real helper with the validated-module API without changing assertions. Full all-target qualification remains blocked."
 severity = "blocker"
 [observation.3.7.observer-genesis-identity]
 task = "3.7"
