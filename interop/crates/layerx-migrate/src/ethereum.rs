@@ -36,7 +36,7 @@ pub enum EthereumWord {
     Data(u16),
 }
 
-/// Operator-owned ABI map for the deployed custody contract event. LayerX
+/// Operator-owned ABI map for the deployed custody contract event. `LayerX`
 /// does not guess a custody ABI: every bound field and selector is explicit.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 pub struct EthereumCustodySchema {
@@ -427,19 +427,21 @@ impl EthereumVerifier {
     }
 
     fn block_by_tag(&self, tag: &str) -> Result<Block, MigrationError> {
-        parse_block(self.rpc.call("eth_getBlockByNumber", json!([tag, false]))?)
+        parse_block(&self.rpc.call("eth_getBlockByNumber", json!([tag, false]))?)
     }
 
     fn block_by_number(&self, number: u64) -> Result<Block, MigrationError> {
         parse_block(
-            self.rpc
+            &self
+                .rpc
                 .call("eth_getBlockByNumber", json!([quantity(number), false]))?,
         )
     }
 
     fn block_by_hash(&self, hash: [u8; 32]) -> Result<Block, MigrationError> {
         parse_block(
-            self.rpc
+            &self
+                .rpc
                 .call("eth_getBlockByHash", json!([ethereum_hex(&hash), false]))?,
         )
     }
@@ -654,6 +656,61 @@ impl EthereumVerifier {
         if outgoing_transfers.len() > MAX_LOGS || incoming_transfers.len() > MAX_LOGS {
             return Err(MigrationError::InvalidHistory);
         }
+        let (mut records, range_anchor) = self.history_transactions(&claim, parent_anchor)?;
+        self.history_events(
+            &claim,
+            logs,
+            outgoing_transfers,
+            incoming_transfers,
+            &mut records,
+        )?;
+        self.prepare_history_page(&claim, evidence_digest, &stream, records, &range_anchor)
+    }
+
+    fn prepare_history_page(
+        &self,
+        claim: &EthereumHistoryClaim,
+        evidence_digest: [u8; 32],
+        stream: &str,
+        mut records: Vec<ExternalHistoryRecord>,
+        range_anchor: &Block,
+    ) -> Result<VerifiedHistoryPage, MigrationError> {
+        records.sort_by_key(|record| {
+            (
+                record.timestamp,
+                record.transaction,
+                record.source_asset,
+                record.kind,
+            )
+        });
+        records.dedup_by_key(|record| (record.transaction, record.source_asset, record.kind));
+        let next = claim.to_block.saturating_add(1);
+        let mut cursor_context = Vec::new();
+        cursor_context.extend_from_slice(&self.config.chain_id.to_be_bytes());
+        cursor_context.extend_from_slice(&claim.address);
+        cursor_context.extend_from_slice(&next.to_be_bytes());
+        cursor_context.extend_from_slice(&range_anchor.hash);
+        let cursor = self.journal.cursor(&cursor_context);
+        self.journal.prepare_history(
+            stream,
+            claim.previous_cursor,
+            claim.from_block,
+            claim.to_block,
+            range_anchor.hash,
+            evidence_digest,
+            cursor,
+        )?;
+        Ok(VerifiedHistoryPage {
+            records,
+            next_cursor: Some(cursor),
+            evidence_digest,
+        })
+    }
+    fn history_transactions(
+        &self,
+        claim: &EthereumHistoryClaim,
+        parent_anchor: Option<[u8; 32]>,
+    ) -> Result<(Vec<ExternalHistoryRecord>, Block), MigrationError> {
         let mut records = Vec::new();
         let mut previous_hash = parent_anchor;
         let mut range_anchor = None;
@@ -661,7 +718,7 @@ impl EthereumVerifier {
             let full = self
                 .rpc
                 .call("eth_getBlockByNumber", json!([quantity(number), true]))?;
-            let header = parse_block(full.clone())?;
+            let header = parse_block(&full)?;
             if header.number != number
                 || previous_hash.is_some_and(|hash| header.parent_hash != hash)
             {
@@ -730,6 +787,17 @@ impl EthereumVerifier {
             }
         }
         let range_anchor = range_anchor.ok_or(MigrationError::InvalidHistory)?;
+        Ok((records, range_anchor))
+    }
+
+    fn history_events(
+        &self,
+        claim: &EthereumHistoryClaim,
+        logs: &[Value],
+        outgoing_transfers: &[Value],
+        incoming_transfers: &[Value],
+        records: &mut Vec<ExternalHistoryRecord>,
+    ) -> Result<(), MigrationError> {
         for value in logs {
             let Some(event) = self.parse_event(value)? else {
                 continue;
@@ -787,36 +855,7 @@ impl EthereumVerifier {
                 return Err(MigrationError::InvalidHistory);
             }
         }
-        records.sort_by_key(|record| {
-            (
-                record.timestamp,
-                record.transaction,
-                record.source_asset,
-                record.kind,
-            )
-        });
-        records.dedup_by_key(|record| (record.transaction, record.source_asset, record.kind));
-        let next = claim.to_block.saturating_add(1);
-        let mut cursor_context = Vec::new();
-        cursor_context.extend_from_slice(&self.config.chain_id.to_be_bytes());
-        cursor_context.extend_from_slice(&claim.address);
-        cursor_context.extend_from_slice(&next.to_be_bytes());
-        cursor_context.extend_from_slice(&range_anchor.hash);
-        let cursor = self.journal.cursor(&cursor_context);
-        self.journal.prepare_history(
-            &stream,
-            claim.previous_cursor,
-            claim.from_block,
-            claim.to_block,
-            range_anchor.hash,
-            evidence_digest,
-            cursor,
-        )?;
-        Ok(VerifiedHistoryPage {
-            records,
-            next_cursor: Some(cursor),
-            evidence_digest,
-        })
+        Ok(())
     }
 }
 
@@ -1112,15 +1151,15 @@ fn parse_history(evidence: &SourceEvidence) -> Result<EthereumHistoryClaim, Migr
     Ok(claim)
 }
 
-fn parse_block(value: Value) -> Result<Block, MigrationError> {
+fn parse_block(value: &Value) -> Result<Block, MigrationError> {
     if value.is_null() {
         return Err(MigrationError::SourcePending);
     }
     Ok(Block {
-        number: decode_quantity(string(&value, "number")?)?,
-        hash: decode_fixed_hex(string(&value, "hash")?)?,
-        parent_hash: decode_fixed_hex(string(&value, "parentHash")?)?,
-        timestamp: decode_quantity(string(&value, "timestamp")?)?,
+        number: decode_quantity(string(value, "number")?)?,
+        hash: decode_fixed_hex(string(value, "hash")?)?,
+        parent_hash: decode_fixed_hex(string(value, "parentHash")?)?,
+        timestamp: decode_quantity(string(value, "timestamp")?)?,
     })
 }
 
