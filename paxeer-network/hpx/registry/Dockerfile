@@ -9,7 +9,7 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.sourceRevision=${SO
 
 FROM alpine:3.20
 ARG SOURCE_REVISION=unknown
-LABEL org.opencontainers.image.source="https://github.com/Sidiora-Labs/LayerX-Protocol" \
+LABEL org.opencontainers.image.source="https://github.com/Sidiora-Labs/LayerX-Network" \
       org.opencontainers.image.revision="${SOURCE_REVISION}" \
       org.opencontainers.image.title="HyperPax HPX Registry"
 RUN adduser -D -u 10001 hpx
