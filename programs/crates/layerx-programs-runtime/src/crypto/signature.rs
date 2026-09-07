@@ -3,6 +3,7 @@
 use core::fmt::{self, Display};
 
 use ed25519_dalek::{Signature as Ed25519Signature, Verifier, VerifyingKey as Ed25519PublicKey};
+use k256::ecdsa::signature::hazmat::PrehashVerifier;
 use k256::ecdsa::{
     RecoveryId, Signature as Secp256k1Signature, VerifyingKey as Secp256k1VerifyingKey,
 };
@@ -240,7 +241,6 @@ fn secp256k1_verify_impl(
         return Err(SignatureRefusal::MalformedPublicKey);
     };
 
-    use k256::ecdsa::signature::hazmat::PrehashVerifier;
     verifying_key
         .verify_prehash(message_digest, &signature)
         .map_err(|_| SignatureRefusal::VerificationFailed)
@@ -274,7 +274,11 @@ fn secp256k1_recover_impl(
     let recovered_key = VerifyingKey::recover_from_prehash(message_digest, &signature, recovery_id)
         .map_err(|_| SignatureRefusal::RecoveryFailed)?;
 
-    let encoded = recovered_key.to_encoded_point(false);
+    recovered_key
+        .verify_prehash(message_digest, &signature)
+        .map_err(|_| SignatureRefusal::RecoveryFailed)?;
+
+    let encoded = recovered_key.to_sec1_point(false);
     let bytes = encoded.as_bytes();
 
     if bytes.len() != SECP256K1_UNCOMPRESSED_PUBLIC_KEY_BYTES {

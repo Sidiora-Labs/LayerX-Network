@@ -2181,3 +2181,19 @@ symbol = "platform-lint"
 observed = "make platform-lint exits 2 in qual-logs/au18/platform-lint.log at cargo clippy --offline --manifest-path platform/Cargo.toml --locked --workspace --all-targets -- -D warnings. The first error is missing_errors_doc for hosted/testnet/src/lib.rs:26 validate. Concurrent jobs next report unused_mut at hosted/registry/src/builder.rs:723, missing_errors_doc at hosted/dashboard/src/gateway.rs:52 and must_use_candidate at gateway.rs:73. Later aggregate lint stages do not execute."
 assumption = "These diagnostics are outside emulator ownership and are recorded without repairs. Registry stash 32964687 remains untouched. No aggregate lint success is claimed."
 severity = "blocker"
+
+[observation.6.4.k256-runtime-migration-qualification]
+task = "6.4"
+file = "programs/Cargo.toml programs/Cargo.lock programs/crates/layerx-programs-runtime/src/crypto/signature.rs"
+symbol = "secp256k1_recover_impl"
+observed = "The k256 0.14.0 migration uses ecdsa 0.17.0 and elliptic-curve 0.14.1. Recovery explicitly verifies the recovered key against the supplied prehash and signature, retaining the prior RecoveryFailed result for high-S recovery. SEC1 point serialization preserves the compression flag. Root-invoked cargo build --locked --manifest-path programs/Cargo.toml -p layerx-programs-runtime --all-targets exits 0. The matching all-target cargo test exits 0 with 407 tests passed and zero ignored, using freshly built interpreter and compiled-equivalent Wasm artifacts. The signature vector and authority files are unchanged. Evidence: qual-logs/k256-pass11/programs-build-final.log, programs-test-final.log, guest-build.log and vector-integrity.log."
+assumption = "Targeted cargo update -p k256 replaces the k256 dependency closure only; the package additions and removals are recorded in qual-logs/k256-pass11/lock-review.json. No ABI headers, vector bytes, expected outcomes or dependency policies change."
+severity = "note"
+
+[observation.6.4.k256-runtime-vendor-and-lint-boundary]
+task = "6.4"
+file = "programs/.cargo/config.toml programs/vendor programs/crates/layerx-programs-runtime/src/execute.rs programs/crates/layerx-programs-runtime/src/transfer.rs"
+symbol = "programs-abi-drift"
+observed = "make programs-abi-drift exits 2: the ABI vector drift script passes, then Cargo cannot find k256 0.14.0 in the configured offline vendor tree. make check exits 2 at the same missing vendored dependency during programs-build. Runtime all-target strict Clippy exits 101 on existing diagnostics outside the migrated signature module, including private_interfaces at execute.rs:662 and dead code and pedantic diagnostics in execution and transfer modules. The signature-module items_after_statements diagnostics were repaired by moving the prehash trait import to module scope; the rerun reports no signature-module diagnostic. Evidence: qual-logs/k256-pass11/abi-drift.log, make-check.log and programs-clippy-rerun.log."
+assumption = "Registry dependency vendoring and unrelated runtime lint repairs require separate ownership. The configured offline source and all lint checks remain intact. Passing root-invoked Cargo tests does not qualify the offline aggregate gates."
+severity = "blocker"
