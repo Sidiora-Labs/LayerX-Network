@@ -832,8 +832,10 @@ struct Cluster {
 fn start_cluster(with_sequencer: bool) -> Cluster {
     let identity = identity();
     let repository = repository_root();
-    let layerxd = repository.join("build/bin/layerxd");
-    let builder = repository.join("build/bin/layerx-genesis-build");
+    let binaries = std::env::var_os("LAYERX_TEST_NATIVE_BIN_DIR")
+        .map_or_else(|| repository.join("build/bin"), PathBuf::from);
+    let layerxd = binaries.join("layerxd");
+    let builder = binaries.join("layerx-genesis-build");
     assert!(layerxd.is_file(), "{} is not built", layerxd.display());
     assert!(builder.is_file(), "{} is not built", builder.display());
     let root = std::env::temp_dir().join(format!(
@@ -1367,6 +1369,21 @@ fn real_node_authority_serves_verified_facts_and_reflects_replica_loss() {
     );
     assert_eq!(gateway_view.content_type, "application/json");
     let facts = json(&gateway_view);
+    if let Some(path) = std::env::var_os("LAYERX_TEST_MAINTAINED_AUTHORITY_FIXTURE") {
+        let capture = serde_json::json!({
+            "authority": facts,
+            "receipt_hex": hex::encode(&submitted.receipt),
+            "sequencer_id": hex::encode(&cluster.sequencer_id),
+            "sequencer_public_key": hex::encode(&cluster.sequencer_key),
+            "first_batch": FIRST_BATCH.to_string(),
+            "last_batch": LAST_BATCH.to_string(),
+        });
+        write(
+            Path::new(&path),
+            &must(serde_json::to_vec_pretty(&capture), "public evidence"),
+            0o644,
+        );
+    }
     let keys: Vec<&String> = facts
         .as_object()
         .unwrap_or_else(|| panic!("facts must be an object"))
