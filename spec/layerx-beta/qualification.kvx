@@ -2300,3 +2300,11 @@ symbol = "task.6.1.do_2"
 observed = "Owner decision (decider: repository owner; approval: \"yes on all five\"): node egress is DNS plus the pinned Paxeer TLS endpoint used by the finality verifier."
 assumption = "Files changed: spec/layerx-beta/spec.kvx and spec/layerx-beta/qualification.kvx. This record applies the decision only to the named contract or Make recipe."
 severity = "note"
+
+[observation.6.1.owner-decision-4]
+task = "6.1"
+file = "spec/layerx-beta/spec.kvx"
+symbol = "task.6.1.do_1"
+observed = "Owner decision (decider: repository owner; approval: \"yes on all five\"): genesis is ordinary (zero treasury balance, single asset at genesis) per the owner's earlier ordinary-genesis decision; funding happens through the admin treasury SEND path after bootstrap."
+assumption = "Files changed: spec/layerx-beta/spec.kvx and spec/layerx-beta/qualification.kvx. This record applies the decision only to the named contract or Make recipe."
+severity = "note"
