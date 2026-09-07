@@ -202,6 +202,7 @@ spec:
             - {name: LAYERX_AGENT_BOUNDARY_TLS_KEY_DER, value: /run/layerx/agent-tls/server.key.der}
             - {name: LAYERX_AGENT_BOUNDARY_CLIENT_CA_DER, value: /run/layerx/trust/ca.crt.der}
             - {name: LAYERX_AGENT_BOUNDARY_GATEWAY_TOKEN_FILE, value: /run/layerx/gateway-component/token}
+            - {name: LAYERX_AGENT_BOUNDARY_WEBHOOK_TOKEN_FILE, value: /run/layerx/webhooks-component/token}
             - {name: LAYERX_AGENT_BOUNDARY_REGISTRY_TOKEN_FILE, value: /run/layerx/registry-component/token}
             - {name: LAYERX_AGENT_BOUNDARY_LNI_SOCKET, value: /run/layerx/node/layerxd.lni.sock}
             - {name: LAYERX_AGENT_BOUNDARY_NODE_URL, value: "http://127.0.0.1:9401"}
@@ -218,6 +219,7 @@ spec:
             - {name: agent-tls, mountPath: /run/layerx/agent-tls, readOnly: true}
             - {name: trust, mountPath: /run/layerx/trust, readOnly: true}
             - {name: gateway-component, mountPath: /run/layerx/gateway-component, readOnly: true}
+            - {name: webhooks-component, mountPath: /run/layerx/webhooks-component, readOnly: true}
             - {name: registry-component, mountPath: /run/layerx/registry-component, readOnly: true}
       volumes:
         - {name: run, emptyDir: {medium: Memory, sizeLimit: 16Mi}}
@@ -235,6 +237,7 @@ spec:
         - {name: registry-authority, secret: {secretName: layerx-program-registry-authority-client}}
         - {name: webhooks-authority, secret: {secretName: layerx-webhooks-authority-client}}
         - {name: gateway-component, secret: {secretName: layerx-gateway-component-client}}
+        - {name: webhooks-component, secret: {secretName: layerx-webhooks-component-client}}
         - {name: registry-component, secret: {secretName: layerx-program-registry-node-client}}
   volumeClaimTemplates:
     - metadata: {name: data}
@@ -276,7 +279,7 @@ spec:
     - from: [{podSelector: {matchLabels: {app: layerx-faucet}}}]
       ports: [{protocol: TCP, port: 9443}]
     - from: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: layerx-developer}}, podSelector: {matchLabels: {app: layerx-webhooks}}}]
-      ports: [{protocol: TCP, port: 9445}]
+      ports: [{protocol: TCP, port: 9445}, {protocol: TCP, port: 9446}]
     - from: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: layerx-developer}}, podSelector: {matchLabels: {app: layerx-dashboard-api}}}]
       ports: [{protocol: TCP, port: 9445}, {protocol: TCP, port: 9446}]
 ---
