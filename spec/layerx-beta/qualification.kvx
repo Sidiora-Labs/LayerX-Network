@@ -1851,6 +1851,12 @@ file = "platform/sdk/conformance/fixtures/generate_executed_program_fixture.py; 
 symbol = "fixture decode_and_verify_program_terminal"
 observed = "make programs-check-executed-fixture exits 2 in qual-logs/pass7-full-executed.log: program_wire.py:258 rejects transfer authority presence from the native protocol-3 terminal. Capability and native lifecycle fixture checks pass separately. V3 fixture bytes, ABI files and terminal emission are unchanged by this qualification."
 assumption = "The occupancy prerequisite is not fully qualified. Shared native-bin is not refreshed and terminal-evidence implementation, ABI generation and V4 fixtures remain pending. Client maintenance-v2 integration is a separate consumer dependency, not the reason for holding this work."
+[observation.6.4.35]
+task = "6.4"
+file = "agent/crates/layerx-client/Cargo.toml"
+symbol = "OccupancySettlement::canonical_evidence"
+observed = "The layerx-client dev-dependencies contain ed25519-dalek but no layerx-programs-runtime dependency. The production settlement constructor and canonical evidence encoder required for maintenance account-proof test generation are provided by programs/crates/layerx-programs-runtime/src/occupancy.rs. The wire maintenance module exposes a decoder but no settlement constructor, and layerx-proof does not re-export the runtime. Client account-proof decoder and read dispatch edits remain unqualified; the required tests and qualification commands have not run."
+assumption = "Add a direct test-only runtime dependency and the corresponding client lockfile entry through the manifest owner before generating maintenance test evidence with the production encoder. Preserve the ordinary receipt bound and all authentication and root checks."
 severity = "blocker"
 
 [observation.6.4.native-receipt-publication-lock]
@@ -1876,3 +1882,75 @@ symbol = "ReplicaDocument decode_and_verify_program_terminal"
 observed = "make test-daemon-finality-authority exits 2 with ReplicaDocument in qual-logs/n9-matrix-finality.log. The native replica supplies the exact retained maintenance receipt and proof under batch_identity.kind occupancy_maintenance_v2; six real HTTP responses are checked against retained signed headers and proofs. make programs-check-executed-fixture exits 2 with invalid transfer authority presence in qual-logs/n9-matrix-executed.log; recorded V3 is unchanged. cargo test --locked --manifest-path agent/Cargo.toml -p layerx-proof -p layerx-wire and cargo clippy --locked --manifest-path agent/Cargo.toml -p layerx-proof -p layerx-wire --all-targets -- -D warnings both exit 101 before compilation because the workspace lockfile requires updating; logs are qual-logs/n9-matrix-proof-wire-test.log and qual-logs/n9-matrix-proof-wire-clippy.log. The lockfile is outside native ownership and is unchanged."
 assumption = "These failed gates are recorded independently of native implementation. Exact matrix commands and exit codes are in qual-logs/n9-matrix-results.json. Successful native normal and ASan gates do not establish complete occupancy or terminal qualification."
 severity = "error"
+[observation.6.4.36]
+task = "6.4"
+file = "agent/crates/layerx-client/Cargo.toml"
+symbol = "layerx-programs-runtime"
+observed = "Adding the authorized dev-dependency path ../../../../programs/crates/layerx-programs-runtime prevents Cargo from loading the client manifest: the path resolves to /root/lx-lanes/programs/crates/layerx-programs-runtime/Cargo.toml, which does not exist. cargo metadata --manifest-path agent/Cargo.toml --format-version 1 exits 101; sh agent/tools/dependency-policy.sh exits 101 at its cargo metadata --locked command before evaluating dependency policy rules. Logs: qual-logs/client-resolution.log and qual-logs/client-dependency-policy.log. Cargo.lock is unchanged. Maintenance client integration test source is written but unformatted and unqualified."
+assumption = "Authorize the client dev-dependency path ../../../programs/crates/layerx-programs-runtime, which resolves inside the repository, and the corresponding Cargo resolution update. Then qualify the test source and run the requested client and aggregate gates without editing the dependency policy."
+severity = "blocker"
+
+[observation.6.4.37]
+task = "6.4"
+file = "agent/crates/layerx-client/tests/maintenance_reads.rs"
+symbol = "ordinary_version_one_still_verifies_and_both_version_swaps_fail receipt_and_maintenance_length_limits_are_independent verify_nested_account"
+observed = "The corrected runtime dev-dependency resolves successfully with cargo metadata --manifest-path agent/Cargo.toml --format-version 1 (exit 0); agent/Cargo.lock adds only layerx-programs-runtime to the client dependency list. cargo test --manifest-path agent/Cargo.toml --locked -p layerx-client exits 101: maintenance success with signed freshness and commitment/inclusion/signature rejection tests pass, but the version-swap test expects ReceiptEncoding and receives ReceiptSignature, and the ordinary 4096-byte length case expects ReceiptEncoding and receives Header(Merkle(RootMismatch)). The ordinary proof verifier verifies inclusion before receipt signatures and maps receipt signature verification errors to ReceiptSignature. Both assertions and verifier behavior remain intact. Logs: qual-logs/k5-resolution.log and qual-logs/k5-client-test.log."
+assumption = "Resolve the exact error-contract conflict explicitly before changing assertions or proof behavior. The boundary loop stops at its first failed assertion, so later length cases are not qualified. Successful maintenance and tampering cases do not qualify the full client test suite."
+severity = "blocker"
+
+[observation.6.4.38]
+task = "6.4"
+file = "agent/crates/layerx-client/src/availability.rs"
+symbol = "records.verify"
+observed = "cargo fmt --manifest-path agent/Cargo.toml -p layerx-client -- --check exits 1 solely on the pre-existing records.verify expression formatting in availability.rs. The incidental package formatter edit to this unrelated file was reverted; only the maintenance implementation and its test source retain formatting changes. cargo clippy --manifest-path agent/Cargo.toml --locked -p layerx-client --all-targets -- -D warnings exits 0. Logs: qual-logs/k5-fmt-check.log and qual-logs/k5-client-clippy.log."
+assumption = "Have the availability source owner format the reported expression before the package-wide format gate can pass. Preserve maintenance-only ownership."
+severity = "blocker"
+
+[observation.6.4.39]
+task = "6.4"
+file = "agent/crates/layerx-client/tests/maintenance_reads.rs"
+symbol = "ordinary_version_one_still_verifies_and_both_version_swaps_fail receipt_and_maintenance_length_limits_are_independent"
+observed = "make agent-test initially exits 2 because the real authority fixture cannot find build/bin/layerxd. Repeating make agent-test with LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin reaches maintenance_reads and exits 2 on the same ReceiptSignature versus ReceiptEncoding and Header(Merkle(RootMismatch)) versus ReceiptEncoding assertion conflicts as the focused client test. The maintenance freshness and tampering cases pass in both runs that reach them. make agent-lint exits 0, including its unchanged dependency-policy.sh; a separate sh agent/tools/dependency-policy.sh also exits 0. rustfmt --edition 2021 --check on evidence.rs, read.rs and tests/maintenance_reads.rs exits 0. Logs: qual-logs/k5-agent-test.log, qual-logs/k5-agent-test-native.log, qual-logs/k5-agent-lint.log, qual-logs/k5-dependency-policy.log and qual-logs/k5-owned-fmt-check.log."
+assumption = "The native binary directory resolves the aggregate fixture prerequisite but does not resolve the preserved client assertions. Full workspace qualification remains incomplete after Cargo stops at those failures. Resolve observation 6.4.37 and the unrelated package formatting difference in observation 6.4.38 before publication."
+severity = "blocker"
+
+
+[observation.6.4.client-maintenance-rejection-contract]
+task = "6.4"
+file = "agent/crates/layerx-client/tests/maintenance_reads.rs"
+symbol = "ordinary_version_one_still_verifies_and_both_version_swaps_fail receipt_and_maintenance_length_limits_are_independent"
+observed = "The new maintenance version-swap assertion now requires ReceiptSignature when maintenance bytes are presented as wire version 1. The ordinary 4096-byte padded receipt assertion now requires Header(Merkle(RootMismatch)). These exact rejection variants follow the established proof verifier ordering: inclusion is checked before receipt signatures, and receipt signature verification errors map to ReceiptSignature. Every negative case still requires rejection; no proof or wire implementation, bound, signature check or root assertion changed."
+assumption = "Matching the existing verifier's exact error contract corrects the newly introduced assertions without weakening rejection coverage. The rebased tests remain unqualified because the locked dependency gate stops before compilation."
+severity = "info"
+
+[observation.6.4.client-maintenance-rebased-lock]
+task = "6.4"
+file = "agent/Cargo.lock; interop/crates/layerx-mirror/Cargo.toml"
+symbol = "layerx-mirror base64"
+observed = "After rebasing onto 90cf3c94, cargo test --manifest-path agent/Cargo.toml --locked -p layerx-client exits 101, LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin make agent-test exits 2, cargo clippy --manifest-path agent/Cargo.toml --locked -p layerx-client --all-targets -- -D warnings exits 101, and make agent-lint exits 2 because Cargo requires a lockfile update before compilation. Logs: qual-logs/k6-client-test.log, qual-logs/k6-agent-test-native.log, qual-logs/k6-client-clippy.log and qual-logs/k6-agent-lint.log. The mirror manifest requires base64 =0.23.1 while its agent lock dependency selects base64 0.22.1. Offline metadata resolution exits 0 and removes unused base64 0.22.1, changes the mirror edge to base64 0.23.1 and normalizes the remaining base64 references; those unrelated changes were reverted. Only the authorized client runtime dependency entry remains."
+assumption = "The dependency owner must reconcile the mirror base64 edge and resulting Cargo lock normalization in agent/Cargo.lock before rerunning the four blocked gates. No locked check was bypassed. No tests ran in this qualification attempt and the dependency-policy stage of make agent-lint was not reached."
+severity = "blocker"
+
+[observation.6.4.client-availability-format]
+task = "6.4"
+file = "agent/crates/layerx-client/src/availability.rs"
+symbol = "records.verify"
+observed = "The records.verify expression is formatted without changing behavior. cargo fmt --manifest-path agent/Cargo.toml -p layerx-client exits 0 and cargo fmt --manifest-path agent/Cargo.toml -p layerx-client -- --check exits 0. Logs: qual-logs/k6-format.log and qual-logs/k6-fmt-check.log."
+assumption = "This closes the formatting conflict in observation 6.4.38. Package formatting success does not qualify the blocked maintenance tests or clippy gates."
+severity = "info"
+
+[observation.6.4.client-maintenance-lock-reconciled]
+task = "6.4"
+file = "agent/Cargo.lock; interop/crates/layerx-mirror/Cargo.toml"
+symbol = "layerx-mirror base64"
+observed = "cargo metadata --manifest-path agent/Cargo.toml --format-version 1 --offline exits 0; logs: qual-logs/k7-resolution.log and qual-logs/k7-resolution.json. This is the agent workspace counterpart to the verify-receipt sample lock correction in PR #107, commit \"Drop the unused base64 0.22.1 entry from the verify-receipt sample lock\". The final lock diff removes only base64 0.22.1, selects the already-locked base64 0.23.1 for layerx-mirror, normalizes ureq and ureq-proto references, and adds the authorized layerx-client test dependency on layerx-programs-runtime. This checkout contains ureq and ureq-proto rather than the reqwest and rustls-pemfile dependants named in the request. A parsed package comparison confirms no other version or package field changes. Exact final diff follows:\ndiff --git a/agent/Cargo.lock b/agent/Cargo.lock\nindex 01847b72..34a5485f 100644\n--- a/agent/Cargo.lock\n+++ b/agent/Cargo.lock\n@@ -48,12 +48,6 @@ version = \"0.2.0\"\n source = \"registry+https://github.com/rust-lang/crates.io-index\"\n checksum = \"4c7f02d4ea65f2c1853089ffd8d2787bdbc63de2f0d29dedbcf8ccdfa0ccd4cf\"\n \n-[[package]]\n-name = \"base64\"\n-version = \"0.22.1\"\n-source = \"registry+https://github.com/rust-lang/crates.io-index\"\n-checksum = \"72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6\"\n-\n [[package]]\n name = \"base64\"\n version = \"0.23.1\"\n@@ -747,6 +741,7 @@ version = \"0.1.0\"\n dependencies = [\n  \"ed25519-dalek\",\n  \"layerx-crypto\",\n+ \"layerx-programs-runtime\",\n  \"layerx-proof\",\n  \"layerx-types\",\n  \"layerx-wire\",\n@@ -785,7 +780,7 @@ dependencies = [\n name = \"layerx-mirror\"\n version = \"0.1.0\"\n dependencies = [\n- \"base64 0.22.1\",\n+ \"base64\",\n  \"ed25519-dalek\",\n  \"k256\",\n  \"layerx-agent-api\",\n@@ -1509,7 +1504,7 @@ version = \"3.4.0\"\n source = \"registry+https://github.com/rust-lang/crates.io-index\"\n checksum = \"972d7902c8735f2695410b8aed7df6ed12a47394aa1c8d7af49f0497b731a94d\"\n dependencies = [\n- \"base64 0.23.1\",\n+ \"base64\",\n  \"cookie_store\",\n  \"der 0.8.1\",\n  \"log\",\n@@ -1528,7 +1523,7 @@ version = \"0.6.1\"\n source = \"registry+https://github.com/rust-lang/crates.io-index\"\n checksum = \"da5f78b09e6941e1a0f2e30e695e4b120377b54d5e0aec11b594bb57b3971613\"\n dependencies = [\n- \"base64 0.23.1\",\n+ \"base64\",\n  \"http\",\n  \"httparse\",\n  \"log\",\n"
+assumption = "The bare base64 dependency reference resolves uniquely to the remaining base64 0.23.1 package. Locked checks remain enabled. This resolves observation 6.4.client-maintenance-rebased-lock; full client qualification is recorded separately."
+severity = "info"
+
+[observation.6.4.client-maintenance-qualified]
+task = "6.4"
+file = "agent/crates/layerx-client/src/evidence.rs; agent/crates/layerx-client/src/read.rs; agent/crates/layerx-client/tests/maintenance_reads.rs; agent/crates/layerx-client/Cargo.toml; agent/Cargo.lock"
+symbol = "decode_nested_evidence verified_account_position"
+observed = "cargo test --manifest-path agent/Cargo.toml --locked -p layerx-client exits 0 in qual-logs/k7-client-test.log; LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin make agent-test exits 0 in qual-logs/k7-agent-test-native.log; cargo clippy --manifest-path agent/Cargo.toml --locked -p layerx-client --all-targets -- -D warnings exits 0 in qual-logs/k7-client-clippy.log; cargo fmt --manifest-path agent/Cargo.toml -p layerx-client -- --check exits 0 in qual-logs/k7-fmt-check.log; make agent-lint exits 0 in qual-logs/k7-agent-lint.log. All four maintenance_reads tests pass, including production settlement verification with signed-header freshness, ordinary version-1 compatibility, both version swaps, commitment/inclusion/signature rejection, and independent ordinary/maintenance length limits. Aggregate lint includes the unchanged dependency and unsafe-code policies. Environment: CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4; build outputs are worktree-local."
+assumption = "These five gates qualify client wire-version selection on the current dependency state. The supplied native-bin/native-ready.txt still describes an older unqualified native snapshot, so aggregate success does not certify native maintenance publication, finality authority integration or production readiness. No proof, wire hash, native or hosted authority source changed. Earlier blocked runs remain historical evidence; their client lock, formatting and exact rejection-contract blockers are resolved by the changes and gates recorded here."
+severity = "info"
