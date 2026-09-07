@@ -140,10 +140,14 @@ mod tests {
         .map_err(|_| "registration invalid")?])
         .map_err(|_| "registry invalid")?;
         let body = serde_json::json!({
-            "payload_encoding":"native-v1", "program_id":"11".repeat(32), "calldata":"",
+            "payload_encoding":"native-v1", "program_id":"11".repeat(32), "calldata":"0061ff10",
             "budget":{"fuel":"1000000","fee_limit":"1000"}, "signed_activity":vector["signed_activity_hex"],
-            "native_call":{"guest_abi":1,"entrypoint":"layerx_call","capabilities_hex":"0000",
-                "access_declaration_hex":super::super::hex(b"LayerX/programs/access-declaration/v1\0\0"),
+            "native_call":{"guest_abi":2,"entrypoint":"layerx_call",
+                "capabilities_hex":format!("000105{}{}{}07", "22".repeat(32), "33".repeat(32), "00".repeat(15)),
+                "access_declaration_hex":format!("{}0100000065{}00000001{}{}010000",
+                    super::super::hex(b"LayerX/programs/access-declaration/v1\0"),
+                    super::super::hex(b"LayerX/programs/access-set/v1\0"),
+                    "33".repeat(32), "22".repeat(32)),
                 "response_capacity":16,"resources":vector["resources"]}
         });
         Ok((body, registry))
@@ -158,7 +162,7 @@ mod tests {
         for (path, changed) in [
             ("/budget/fee_limit", serde_json::json!("999")),
             ("/budget/fuel", serde_json::json!("999")),
-            ("/native_call/guest_abi", serde_json::json!(2)),
+            ("/native_call/guest_abi", serde_json::json!(1)),
             ("/native_call/entrypoint", serde_json::json!("other")),
             ("/native_call/capabilities_hex", serde_json::json!("0001")),
             (
