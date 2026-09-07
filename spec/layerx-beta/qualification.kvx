@@ -1502,3 +1502,19 @@ symbol = "disposable_rpc"
 observed = "Disposable identity explicitly binds chain ID, genesis hash, HTTPS origins and PEM CA SHA256, and requires an operator-supplied persistent_genesis_hash deny pin. Both the requested and observed genesis must differ from that pin; ports 18545 and 19443 are refused before connection. The supplied public handoff has no authoritative persistent-host genesis hash. The actual host was not queried."
 assumption = "Supply the authoritative persistent-host hash and independently operated second trusted RPC origin as cluster integration inputs. Tests can prove denial of a real isolated chain identity but cannot establish the actual host deny pin without that input."
 severity = "blocker"
+
+[observation.6.1.7]
+task = "6.1"
+file = "Makefile"
+symbol = "build/tests/test_bridge_deposit"
+observed = "make test-bridge-deposit exits 2 at Makefile:1055 because the link against liblayerx.a omits Programs runtime definitions, including layerx_programs_call_begin, layerx_programs_schedule_plan, layerx_programs_sandbox_admit_host and layerx_programs_interface_validate. Raw evidence: qual-logs/pass2-make-bridge-deposit.log; extracted unresolved references: qual-logs/pass2-bridge-link-errors.txt. The full paxeer-client cargo test and strict all-target Clippy both exit 0 in qual-logs/pass2-item1-cargo-test.log and qual-logs/pass2-item1-clippy.log."
+assumption = "The native Make linkage is outside the custody helper ownership. Preserve the test and supply the real runtime linkage through its owner. Separately passing Rust and Python evidence checks do not qualify the failed native Make gate."
+severity = "blocker"
+
+[observation.6.1.8]
+task = "6.1"
+file = "tests/bridge/local_credit_evidence.py"
+symbol = "existing_evidence disposable_rpc"
+observed = "The real Anvil integration deploys WETH custody through a generated CA boundary that refuses unlocked-account and time-travel calls. A separate fork observer behind a second verified TLS origin supplies the same chain-125 genesis, finalized block and proven vault account/code. The existing profile and attest verifiers produce network-402 custody evidence with configured asset, beneficiary and attestor; wrong asset, beneficiary, attestor and duplicate-origin inputs are refused. The signed profile builds native genesis using the supplied layerx-genesis-build binary. Evidence: qual-logs/pass2-item3-existing-evidence.log. make build/tests/bridge/sign-credit build/tests/bridge/test-credit exits 0; both native credit commands exit 0 using real retained Anvil evidence and signed native genesis, in qual-logs/pass2-make-credit-tools.log and qual-logs/pass2-native-credit.log."
+assumption = "These are real isolated Anvil and native library gates. They do not prove disposable paxd deployment, registry registration, daemon credit admission, funded SEND or the full settlement bootstrap. The Solidity configuration cycle, authoritative persistent-host deny pin and independent cluster observer remain integration requirements."
+severity = "note"
