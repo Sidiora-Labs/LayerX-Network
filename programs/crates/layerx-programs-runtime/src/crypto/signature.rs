@@ -1,6 +1,7 @@
 //! Deterministic signature verification and public-key recovery primitives.
 
 use core::fmt::{self, Display};
+use k256::ecdsa::signature::hazmat::PrehashVerifier;
 
 use ed25519_dalek::{Signature as Ed25519Signature, Verifier, VerifyingKey as Ed25519PublicKey};
 use k256::ecdsa::{
@@ -240,7 +241,6 @@ fn secp256k1_verify_impl(
         return Err(SignatureRefusal::MalformedPublicKey);
     };
 
-    use k256::ecdsa::signature::hazmat::PrehashVerifier;
     verifying_key
         .verify_prehash(message_digest, &signature)
         .map_err(|_| SignatureRefusal::VerificationFailed)
