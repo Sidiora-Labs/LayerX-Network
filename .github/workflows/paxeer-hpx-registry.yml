@@ -85,7 +85,7 @@ jobs:
             --tags="main,sha-${SOURCE_REVISION}" \
             --ldflags="-s -w -X main.sourceRevision=${SOURCE_REVISION}" \
             --image-user=10001:10001 \
-            --image-label="org.opencontainers.image.source=https://github.com/Sidiora-Labs/LayerX-Protocol" \
+            --image-label="org.opencontainers.image.source=https://github.com/Sidiora-Labs/LayerX-Network" \
             --image-label="org.opencontainers.image.revision=${SOURCE_REVISION}" \
             --image-label="org.opencontainers.image.title=HyperPax HPX Registry" \
             .

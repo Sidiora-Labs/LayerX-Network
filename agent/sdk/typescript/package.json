@@ -4,7 +4,7 @@
   "description": "Production TypeScript SDK for the LayerX Agent and Human APIs",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Sidiora-Labs/LayerX-Protocol.git",
+    "url": "git+https://github.com/Sidiora-Labs/LayerX-Network.git",
     "directory": "agent/sdk/typescript"
   },
   "type": "module",

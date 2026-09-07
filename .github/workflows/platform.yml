@@ -825,7 +825,7 @@ jobs:
     env:
       LAYERX_RELEASE_REGISTRY: go-modules
       LAYERX_RELEASE_DISTRIBUTION: https://proxy.golang.org
-      LAYERX_RELEASE_PACKAGES: github.com/Sidiora-Labs/LayerX-Protocol/platform/sdk/go
+      LAYERX_RELEASE_PACKAGES: github.com/Sidiora-Labs/LayerX-Network/platform/sdk/go
       LAYERX_RELEASE_VERSION: ${{ needs.release-pipeline.outputs.version }}
       LAYERX_RELEASE_OUTPUT: build/release/go-modules
     steps:

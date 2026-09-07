@@ -102,4 +102,4 @@ RUN groupadd --gid "${USER_GID}" "${USERNAME}" \
     && chown -R "${USERNAME}:${USERNAME}" "/home/${USERNAME}"
 
 USER ${USERNAME}
-WORKDIR /workspaces/LayerX-Protocol
+WORKDIR /workspaces/LayerX-Network

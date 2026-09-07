@@ -4,7 +4,7 @@
   "description": "One-call LayerX x402 route mount and client-bundle secret scanner for Next.js",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Sidiora-Labs/LayerX-Protocol.git",
+    "url": "git+https://github.com/Sidiora-Labs/LayerX-Network.git",
     "directory": "platform/integrations/next"
   },
   "type": "module",

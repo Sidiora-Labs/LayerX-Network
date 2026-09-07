@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: GitHub Discussions
-    url: https://github.com/Sidiora-Labs/LayerX-Protocol/discussions
+    url: https://github.com/Sidiora-Labs/LayerX-Network/discussions
     about: Design and usage questions that do not disclose security-sensitive information.
   - name: Private security reporting
-    url: https://github.com/Sidiora-Labs/LayerX-Protocol/security/advisories/new
+    url: https://github.com/Sidiora-Labs/LayerX-Network/security/advisories/new
     about: Report vulnerabilities privately. Do not open a public issue.
