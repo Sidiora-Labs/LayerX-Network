@@ -9,7 +9,7 @@
 *内容が異なる場合は、英語版 README を参照版とします。*
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](../../LICENSE)
-[![CI](https://github.com/Sidiora-Labs/LayerX-Protocol/actions/workflows/ci.yml/badge.svg)](../../.github/workflows/ci.yml)
+[![CI](https://github.com/Sidiora-Labs/LayerX-Network/actions/workflows/ci.yml/badge.svg)](../../.github/workflows/ci.yml)
 
 ## LayerX とは
 

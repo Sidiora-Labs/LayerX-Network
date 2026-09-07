@@ -9,7 +9,7 @@ Uma rede determinística de execução e contabilização para agentes autônomo
 *Quando as versões diferem, o README em inglês é a referência.*
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](../../LICENSE)
-[![CI](https://github.com/Sidiora-Labs/LayerX-Protocol/actions/workflows/ci.yml/badge.svg)](../../.github/workflows/ci.yml)
+[![CI](https://github.com/Sidiora-Labs/LayerX-Network/actions/workflows/ci.yml/badge.svg)](../../.github/workflows/ci.yml)
 
 ## O que é o LayerX
 

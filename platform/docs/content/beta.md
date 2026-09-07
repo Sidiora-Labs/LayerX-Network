@@ -38,7 +38,7 @@ The reached rung of a surface is raised only by a `[gate.*]` record in the evide
 | sdk-typescript | @sidiora/layerx-sdk | functional | runtime_proven | source_present | agent/sdk/typescript |
 | sdk-python | layerx-sdk on PyPI | functional | runtime_proven | source_present | agent/sdk/python |
 | sdk-rust | layerx-sdk on crates.io | functional | runtime_proven | source_present | agent/crates/layerx-sdk |
-| sdk-go | github.com/Sidiora-Labs/LayerX-Protocol/platform/sdk/go | functional | runtime_proven | source_present | platform/sdk/go |
+| sdk-go | github.com/Sidiora-Labs/LayerX-Network/platform/sdk/go | functional | runtime_proven | source_present | platform/sdk/go |
 | sdk-jvm | com.sidiora.layerx:layerx-sdk | functional | runtime_proven | source_present | platform/sdk/jvm |
 | sdk-swift | LayerXSDK | functional | runtime_proven | source_present | platform/sdk/swift |
 | sdk-dotnet | LayerX.Sdk | functional | runtime_proven | source_present | platform/sdk/dotnet |
@@ -167,7 +167,7 @@ The reached rung of a surface is raised only by a `[gate.*]` record in the evide
 | crates-io | https://crates.io | sdk-rust | layerx-agent-api, layerx-client, layerx-crypto, layerx-mirror, layerx-programs-runtime, layerx-proof, layerx-sdk, layerx-types, layerx-wire | present |
 | npm | https://registry.npmjs.org | sdk-typescript | @sidiora/layerx-agent-integrations, @sidiora/layerx-agent-middleware, @sidiora/layerx-buyer-middleware, @sidiora/layerx-express, @sidiora/layerx-merchant-middleware, @sidiora/layerx-next, @sidiora/layerx-sdk, @sidiora/layerx-seller-middleware | present |
 | pypi | https://pypi.org | sdk-python | layerx-fastapi, layerx-sdk | present |
-| go-modules | https://proxy.golang.org | sdk-go | github.com/Sidiora-Labs/LayerX-Protocol/platform/sdk/go | present |
+| go-modules | https://proxy.golang.org | sdk-go | github.com/Sidiora-Labs/LayerX-Network/platform/sdk/go | present |
 | maven-central | https://repo1.maven.org/maven2 | sdk-jvm | com.sidiora.layerx:layerx-android, com.sidiora.layerx:layerx-sdk, com.sidiora.layerx:layerx-spring-boot-starter | present |
 | swiftpm | https://github.com | sdk-swift | LayerXSDK | present |
 | nuget | https://www.nuget.org | sdk-dotnet | LayerX.Sdk | present |
@@ -191,7 +191,7 @@ The artifact set of the beta is exactly the content of the artifact manifest at 
 | --- | --- | --- |
 | TypeScript | @sidiora/layerx-sdk | npm |
 | Python | layerx-sdk | pypi |
-| Go | github.com/Sidiora-Labs/LayerX-Protocol/platform/sdk/go | go-modules |
+| Go | github.com/Sidiora-Labs/LayerX-Network/platform/sdk/go | go-modules |
 | Java and Kotlin | com.sidiora.layerx:layerx-sdk:0.1.0 | maven-central |
 | Swift | LayerXSDK | swiftpm |
 | C# | LayerX.Sdk | nuget |
