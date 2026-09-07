@@ -51,6 +51,7 @@ See `docs/MONOREPO.md` for build boundaries, workflow naming, and tag convention
 - [Monorepo layout](https://github.com/Sidiora-Labs/LayerX-Protocol/blob/main/docs/MONOREPO.md)
 - [Programs](Programs.md)
 - [Sandbox](Sandbox.md)
+- [Storage scan](StorageScan.md)
 - [SDK terminal verification](SdkTerminalVerification.md)
 - [Programs workspace gates](ProgramsWorkspace.md)
 - [Beta cluster](BetaCluster.md)

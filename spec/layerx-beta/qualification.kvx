@@ -3013,3 +3013,51 @@ symbol = "programs-lint check"
 observed = "With the Solana, EVM and CosmWasm repairs applied, make programs-lint exits 0. The module-boundary prerequisite passes; cargo clippy --locked --workspace --all-targets --features layerx-programs-sandbox/host-ffi -- -D warnings passes; sh programs/tools/dependency-policy.sh reports dependency, vendoring, unsafe and integer-only policies passed; cargo deny check advisories sources reports advisories ok and sources ok; cargo deny check bans --exclude-dev reports bans ok. make check exits 0 including state-commitment transition and Programs artifact execution for protocols 2 and 3. git diff --check and cg spec lint exit 0; spec lint retains nine missing-path warnings. Raw output and exact command exits are in qual-logs/programs-lint-pass10/gates.jsonl, programs-lint-2.log, check-final.log, final-diff-check.log and final-spec-lint.log."
 assumption = "The dependency policy and both cargo-deny stages were executed unchanged. Previously reported paste, der, getrandom and windows-sys refusals did not recur in this invocation. Vendor dependency MSRV warnings remain in Clippy output. These are local gate results, not deployment or release certification."
 severity = "note"
+
+[observation.6.4.emulator-lint-integration-boundary]
+task = "6.4"
+file = "platform/emulator/src/main.rs platform/emulator/tests/gateway.rs"
+symbol = "layerx-platform-emulator"
+observed = "The 24 recorded main.rs diagnostics are repaired through stage extraction, grouped inputs, checked account-length encoding, lossless operation comparison and equivalent pattern changes. Strict library Clippy exits 0 in qual-logs/au17/emulator-lib-clippy.log. Strict all-target Clippy exits 101 in qual-logs/au17/emulator-clippy-4.log on 16 pre-existing gateway.rs diagnostics: similar_names at 767, 776, 1352 and 1365; doc_markdown at 4; format_push_string at 68 and 71; manual_is_multiple_of at 180; format_collect at 496, 514, 831 and 934; too_many_lines at 504, 823 and 929; if_not_else at 671. gateway.rs is unchanged. Touched-file rustfmt check, git diff --check and cg spec lint exit 0; spec lint reports nine existing missing-path warnings. Exact commands and exits are in qual-logs/au17/results.jsonl."
+assumption = "All-target qualification remains blocked by integration-test refactoring involving protected assertion stages. No assertions, bounds, validation, manifests or lockfiles are weakened or changed outside the emulator source. The 54 main.rs assertions remain present; the sole assertion token change groups the original snapshot encoder argument expressions, as recorded in qual-logs/au17/assertion-review.log."
+severity = "blocker"
+
+[observation.6.4.emulator-lint-native-lifecycle-refusal]
+task = "6.4"
+file = "platform/emulator/tests/gateway.rs programs/crates/layerx-programs-runtime/src/ffi_call.rs"
+symbol = "lifecycle_routes_execute_and_replay_real_native_state_receipts"
+observed = "cargo test --locked --manifest-path platform/Cargo.toml -p layerx-platform-emulator exits 101. All 21 unit tests pass; 10 of 11 gateway integration tests pass. The unchanged assertion at gateway.rs:719 expects result 0 for ordinal 3 sequence 3 and observes -736 with Failure(Callback { stage: 5, status: -3 }). Raw evidence: qual-logs/au17/emulator-test.log. Move quotation, commitment, replay, recovery and lost acknowledgement integration coverage passes."
+assumption = "The native occupancy maintenance publication repair is external to this source refactor. LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin is exported; the gateway tests execute the actual in-process emulator and linked native bridge. No protected persistent chain or service is used or changed."
+severity = "blocker"
+
+[observation.6.4.emulator-lint-workspace-boundary]
+task = "6.4"
+file = "platform/hosted/testnet/src/lib.rs platform/hosted/dashboard/src/gateway.rs platform/hosted/registry/src"
+symbol = "platform-lint"
+observed = "make platform-lint exits 2 at workspace Clippy. The first diagnostic is missing_errors_doc on hosted/testnet/src/lib.rs:26 validate. Concurrent jobs also report dashboard gateway missing_errors_doc at 52 and must_use_candidate at 73, followed by registry diagnostics. Raw evidence: qual-logs/au17/platform-lint.log. Subsequent platform-lint steps do not run."
+assumption = "These crates are outside emulator ownership. Registry edits remain parked in the dedicated registry lint repair stash. No aggregate platform-lint success is claimed."
+severity = "blocker"
+
+[observation.6.4.emulator-all-target-lint-qualified]
+task = "6.4"
+file = "platform/emulator/src/main.rs platform/emulator/tests/gateway.rs"
+symbol = "layerx-platform-emulator"
+observed = "cargo clippy --locked --manifest-path platform/Cargo.toml -p layerx-platform-emulator --all-targets -- -D warnings exits 0 in qual-logs/au18/emulator-clippy-complete.log. rustfmt --check --edition 2021 platform/emulator/src/main.rs platform/emulator/tests/gateway.rs exits 0 in qual-logs/au18/fmt-check-final.log. All 148 gateway assertion bodies are byte-identical to the original source, including expected values, refusals and bounds; comparison exits 0 in qual-logs/au18/assertion-review-final.log. Stage helpers retain the original request sequence, receipt checks, snapshot recovery, idempotency conflict, lost acknowledgement and competing quote assertions."
+assumption = "This supersedes the integration-target lint blocker in observation.6.4.emulator-lint-integration-boundary. CARGO_BUILD_JOBS=4, MAKEFLAGS=-j4 and LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin are exported. The native bridge executes in process with the worktree sources. No lint allow attribute, assertion relaxation or dependency change is introduced. Exact commands, exits and logs, including unsuccessful qualification attempts, are retained in qual-logs/au18/results.jsonl."
+severity = "note"
+
+[observation.6.4.emulator-all-target-native-baseline]
+task = "6.4"
+file = "platform/emulator/tests/gateway.rs programs/crates/layerx-programs-runtime/src/ffi_call.rs"
+symbol = "lifecycle_routes_execute_and_replay_real_native_state_receipts"
+observed = "cargo test --locked --manifest-path platform/Cargo.toml -p layerx-platform-emulator --no-fail-fast exits 101 in qual-logs/au18/emulator-test-complete.log. All 21 unit tests and 10 of 11 integration tests pass, with zero ignored tests. The only failure is the original gateway.rs:719 assertion, moved intact to gateway.rs:757: ordinal=3 sequence=3, expected result 0, actual -736, terminal Failure(Callback { stage: 5, status: -3 }). The activity identifier is c1272a6eb55dd24f7dee1f536a192a0a58ff77914b51c2bf462b0781e0e29580."
+assumption = "This is the pre-existing main failure identified by the scope clarification and independently retained in qual-logs/au17/emulator-test.log, not an emulator lint regression. Native occupancy maintenance publication is owned by PR #94. The assertion and its expected success remain unchanged; no full test-suite success is claimed."
+severity = "blocker"
+
+[observation.6.4.emulator-all-target-aggregate-boundary]
+task = "6.4"
+file = "platform/hosted/testnet/src/lib.rs platform/hosted/registry/src/builder.rs platform/hosted/dashboard/src/gateway.rs"
+symbol = "platform-lint"
+observed = "make platform-lint exits 2 in qual-logs/au18/platform-lint.log at cargo clippy --offline --manifest-path platform/Cargo.toml --locked --workspace --all-targets -- -D warnings. The first error is missing_errors_doc for hosted/testnet/src/lib.rs:26 validate. Concurrent jobs next report unused_mut at hosted/registry/src/builder.rs:723, missing_errors_doc at hosted/dashboard/src/gateway.rs:52 and must_use_candidate at gateway.rs:73. Later aggregate lint stages do not execute."
+assumption = "These diagnostics are outside emulator ownership and are recorded without repairs. Registry stash 32964687 remains untouched. No aggregate lint success is claimed."
+severity = "blocker"
