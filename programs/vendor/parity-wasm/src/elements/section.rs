@@ -86,7 +86,7 @@ impl Deserialize for Section {
 				let start_idx = VarUint32::deserialize(&mut section_reader)?;
 				section_reader.close()?;
 				Section::Start(start_idx.into())
-			},
+			}
 			9 => Section::Element(ElementSection::deserialize(reader)?),
 			10 => Section::Code(CodeSection::deserialize(reader)?),
 			11 => Section::Data(DataSection::deserialize(reader)?),
@@ -95,7 +95,7 @@ impl Deserialize for Section {
 				let count = VarUint32::deserialize(&mut section_reader)?;
 				section_reader.close()?;
 				Section::DataCount(count.into())
-			},
+			}
 			invalid_id => return Err(Error::InvalidSectionId(invalid_id)),
 		})
 	}
@@ -109,73 +109,73 @@ impl Serialize for Section {
 			Section::Custom(custom_section) => {
 				VarUint7::from(0x00).serialize(writer)?;
 				custom_section.serialize(writer)?;
-			},
+			}
 			Section::Unparsed { id, payload } => {
 				VarUint7::from(id).serialize(writer)?;
 				writer.write(&payload[..])?;
-			},
+			}
 			Section::Type(type_section) => {
 				VarUint7::from(0x01).serialize(writer)?;
 				type_section.serialize(writer)?;
-			},
+			}
 			Section::Import(import_section) => {
 				VarUint7::from(0x02).serialize(writer)?;
 				import_section.serialize(writer)?;
-			},
+			}
 			Section::Function(function_section) => {
 				VarUint7::from(0x03).serialize(writer)?;
 				function_section.serialize(writer)?;
-			},
+			}
 			Section::Table(table_section) => {
 				VarUint7::from(0x04).serialize(writer)?;
 				table_section.serialize(writer)?;
-			},
+			}
 			Section::Memory(memory_section) => {
 				VarUint7::from(0x05).serialize(writer)?;
 				memory_section.serialize(writer)?;
-			},
+			}
 			Section::Global(global_section) => {
 				VarUint7::from(0x06).serialize(writer)?;
 				global_section.serialize(writer)?;
-			},
+			}
 			Section::Export(export_section) => {
 				VarUint7::from(0x07).serialize(writer)?;
 				export_section.serialize(writer)?;
-			},
+			}
 			Section::Start(index) => {
 				VarUint7::from(0x08).serialize(writer)?;
 				let mut counted_writer = CountedWriter::new(writer);
 				VarUint32::from(index).serialize(&mut counted_writer)?;
 				counted_writer.done()?;
-			},
+			}
 			Section::DataCount(count) => {
 				VarUint7::from(0x0c).serialize(writer)?;
 				let mut counted_writer = CountedWriter::new(writer);
 				VarUint32::from(count).serialize(&mut counted_writer)?;
 				counted_writer.done()?;
-			},
+			}
 			Section::Element(element_section) => {
 				VarUint7::from(0x09).serialize(writer)?;
 				element_section.serialize(writer)?;
-			},
+			}
 			Section::Code(code_section) => {
 				VarUint7::from(0x0a).serialize(writer)?;
 				code_section.serialize(writer)?;
-			},
+			}
 			Section::Data(data_section) => {
 				VarUint7::from(0x0b).serialize(writer)?;
 				data_section.serialize(writer)?;
-			},
+			}
 			Section::Name(name_section) => {
 				VarUint7::from(0x00).serialize(writer)?;
 				let custom =
 					CustomSection { name: "name".to_owned(), payload: serialize(name_section)? };
 				custom.serialize(writer)?;
-			},
+			}
 			Section::Reloc(reloc_section) => {
 				VarUint7::from(0x00).serialize(writer)?;
 				reloc_section.serialize(writer)?;
-			},
+			}
 		}
 		Ok(())
 	}
@@ -289,7 +289,7 @@ impl Deserialize for CustomSection {
 		let buf = buffered_read!(ENTRIES_BUFFER_LENGTH, section_length, reader);
 		let mut cursor = io::Cursor::new(&buf[..]);
 		let name = String::deserialize(&mut cursor)?;
-		let payload = buf[cursor.position() as usize..].to_vec();
+		let payload = buf[cursor.position()..].to_vec();
 		Ok(CustomSection { name, payload })
 	}
 }
@@ -343,8 +343,7 @@ impl Serialize for TypeSection {
 	fn serialize<W: io::Write>(self, writer: &mut W) -> Result<(), Self::Error> {
 		let mut counted_writer = CountedWriter::new(writer);
 		let data = self.0;
-		let counted_list =
-			CountedListWriter::<Type, _>(data.len(), data.into_iter().map(Into::into));
+		let counted_list = CountedListWriter::<Type, _>(data.len(), data.into_iter());
 		counted_list.serialize(&mut counted_writer)?;
 		counted_writer.done()?;
 		Ok(())
@@ -373,18 +372,12 @@ impl ImportSection {
 
 	/// Returns number of functions.
 	pub fn functions(&self) -> usize {
-		self.0
-			.iter()
-			.filter(|entry| matches!(*entry.external(), External::Function(_)))
-			.count()
+		self.0.iter().filter(|entry| matches!(*entry.external(), External::Function(_))).count()
 	}
 
 	/// Returns number of globals
 	pub fn globals(&self) -> usize {
-		self.0
-			.iter()
-			.filter(|entry| matches!(entry.external(), &External::Global(_)))
-			.count()
+		self.0.iter().filter(|entry| matches!(entry.external(), &External::Global(_))).count()
 	}
 }
 
@@ -402,8 +395,7 @@ impl Serialize for ImportSection {
 	fn serialize<W: io::Write>(self, writer: &mut W) -> Result<(), Self::Error> {
 		let mut counted_writer = CountedWriter::new(writer);
 		let data = self.0;
-		let counted_list =
-			CountedListWriter::<ImportEntry, _>(data.len(), data.into_iter().map(Into::into));
+		let counted_list = CountedListWriter::<ImportEntry, _>(data.len(), data.into_iter());
 		counted_list.serialize(&mut counted_writer)?;
 		counted_writer.done()?;
 		Ok(())
@@ -490,8 +482,7 @@ impl Serialize for TableSection {
 	fn serialize<W: io::Write>(self, writer: &mut W) -> Result<(), Self::Error> {
 		let mut counted_writer = CountedWriter::new(writer);
 		let data = self.0;
-		let counted_list =
-			CountedListWriter::<TableType, _>(data.len(), data.into_iter().map(Into::into));
+		let counted_list = CountedListWriter::<TableType, _>(data.len(), data.into_iter());
 		counted_list.serialize(&mut counted_writer)?;
 		counted_writer.done()?;
 		Ok(())
@@ -533,8 +524,7 @@ impl Serialize for MemorySection {
 	fn serialize<W: io::Write>(self, writer: &mut W) -> Result<(), Self::Error> {
 		let mut counted_writer = CountedWriter::new(writer);
 		let data = self.0;
-		let counted_list =
-			CountedListWriter::<MemoryType, _>(data.len(), data.into_iter().map(Into::into));
+		let counted_list = CountedListWriter::<MemoryType, _>(data.len(), data.into_iter());
 		counted_list.serialize(&mut counted_writer)?;
 		counted_writer.done()?;
 		Ok(())
@@ -576,8 +566,7 @@ impl Serialize for GlobalSection {
 	fn serialize<W: io::Write>(self, writer: &mut W) -> Result<(), Self::Error> {
 		let mut counted_writer = CountedWriter::new(writer);
 		let data = self.0;
-		let counted_list =
-			CountedListWriter::<GlobalEntry, _>(data.len(), data.into_iter().map(Into::into));
+		let counted_list = CountedListWriter::<GlobalEntry, _>(data.len(), data.into_iter());
 		counted_list.serialize(&mut counted_writer)?;
 		counted_writer.done()?;
 		Ok(())
@@ -619,8 +608,7 @@ impl Serialize for ExportSection {
 	fn serialize<W: io::Write>(self, writer: &mut W) -> Result<(), Self::Error> {
 		let mut counted_writer = CountedWriter::new(writer);
 		let data = self.0;
-		let counted_list =
-			CountedListWriter::<ExportEntry, _>(data.len(), data.into_iter().map(Into::into));
+		let counted_list = CountedListWriter::<ExportEntry, _>(data.len(), data.into_iter());
 		counted_list.serialize(&mut counted_writer)?;
 		counted_writer.done()?;
 		Ok(())
@@ -662,8 +650,7 @@ impl Serialize for CodeSection {
 	fn serialize<W: io::Write>(self, writer: &mut W) -> Result<(), Self::Error> {
 		let mut counted_writer = CountedWriter::new(writer);
 		let data = self.0;
-		let counted_list =
-			CountedListWriter::<FuncBody, _>(data.len(), data.into_iter().map(Into::into));
+		let counted_list = CountedListWriter::<FuncBody, _>(data.len(), data.into_iter());
 		counted_list.serialize(&mut counted_writer)?;
 		counted_writer.done()?;
 		Ok(())
@@ -705,8 +692,7 @@ impl Serialize for ElementSection {
 	fn serialize<W: io::Write>(self, writer: &mut W) -> Result<(), Self::Error> {
 		let mut counted_writer = CountedWriter::new(writer);
 		let data = self.0;
-		let counted_list =
-			CountedListWriter::<ElementSegment, _>(data.len(), data.into_iter().map(Into::into));
+		let counted_list = CountedListWriter::<ElementSegment, _>(data.len(), data.into_iter());
 		counted_list.serialize(&mut counted_writer)?;
 		counted_writer.done()?;
 		Ok(())
@@ -748,8 +734,7 @@ impl Serialize for DataSection {
 	fn serialize<W: io::Write>(self, writer: &mut W) -> Result<(), Self::Error> {
 		let mut counted_writer = CountedWriter::new(writer);
 		let data = self.0;
-		let counted_list =
-			CountedListWriter::<DataSegment, _>(data.len(), data.into_iter().map(Into::into));
+		let counted_list = CountedListWriter::<DataSegment, _>(data.len(), data.into_iter());
 		counted_list.serialize(&mut counted_writer)?;
 		counted_writer.done()?;
 		Ok(())
@@ -799,10 +784,10 @@ mod tests {
 			deserialize_buffer(functions_test_payload()).expect("section to be deserialized");
 
 		match section {
-			Section::Function(_) => {},
+			Section::Function(_) => {}
 			_ => {
 				panic!("Payload should be recognized as functions section")
-			},
+			}
 		}
 	}
 
@@ -885,10 +870,10 @@ mod tests {
 			deserialize_buffer(export_payload()).expect("section to be deserialized");
 
 		match section {
-			Section::Export(_) => {},
+			Section::Export(_) => {}
 			_ => {
 				panic!("Payload should be recognized as export section")
-			},
+			}
 		}
 	}
 
@@ -923,10 +908,10 @@ mod tests {
 			deserialize_buffer(code_payload()).expect("section to be deserialized");
 
 		match section {
-			Section::Code(_) => {},
+			Section::Code(_) => {}
 			_ => {
 				panic!("Payload should be recognized as a code section")
-			},
+			}
 		}
 	}
 
@@ -973,10 +958,10 @@ mod tests {
 			deserialize_buffer(data_payload()).expect("section to be deserialized");
 
 		match section {
-			Section::Data(_) => {},
+			Section::Data(_) => {}
 			_ => {
 				panic!("Payload should be recognized as a data section")
-			},
+			}
 		}
 	}
 
