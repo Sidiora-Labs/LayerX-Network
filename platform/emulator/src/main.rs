@@ -1,7 +1,7 @@
 mod native_call;
 mod program_lifecycle;
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::{c_char, c_int, c_uchar, c_uint, c_ulonglong, c_void, CStr};
 use std::fmt::Write as _;
 use std::io::{Read, Write};
@@ -585,7 +585,7 @@ fn move_send_payload(
     quote: &MoveQuoteRecord,
     idempotency: [u8; 32],
     network_id: u32,
-) -> Result<(Vec<u8>, [u8; 32], [u8; 32]), String> {
+) -> Result<MovePayload, String> {
     let public_key = signing_key.verifying_key().to_bytes();
     let context = move_context(
         &quote.source_id,
@@ -641,7 +641,7 @@ fn signed_move_activity(
     emulator: &Emulator,
     quote: &MoveQuoteRecord,
     idempotency: [u8; 32],
-) -> Result<(Vec<u8>, [u8; 32], [u8; 32], [u8; 32]), String> {
+) -> Result<SignedMoveActivity, String> {
     let (activity_type, registry) = asset_send_registry()?;
     let (payload_bytes, context_hash, authorization_hash) = move_send_payload(
         &emulator.signing_key,
@@ -1093,108 +1093,8 @@ fn parse_request(stream: &mut TcpStream) -> Result<Request, String> {
             return Err("request headers exceed emulator limit".into());
         }
     };
-    let headers = std::str::from_utf8(&bytes[..header_end]).map_err(|_| "headers are not UTF-8")?;
-    let mut lines = headers.split("\r\n");
-    let request_line = lines.next().ok_or("missing request line")?;
-    let mut request_fields = request_line.split(' ');
-    let method = request_fields.next().unwrap_or_default();
-    let target = request_fields.next().unwrap_or_default();
-    if method.is_empty()
-        || !method.bytes().all(|byte| byte.is_ascii_uppercase())
-        || request_fields.next() != Some("HTTP/1.1")
-        || request_fields.next().is_some()
-        || !target.starts_with('/')
-        || target.starts_with("//")
-        || target.contains(['?', '#', '\\', '\0'])
-        || target
-            .split('/')
-            .any(|segment| matches!(segment, "." | ".."))
-    {
-        return Err("invalid request line".into());
-    }
-    let path = target.to_string();
-    let mut content_length = 0_usize;
-    let mut has_content_length = false;
-    let mut content_type = String::new();
-    let mut has_content_type = false;
-    let mut has_host = false;
-    let mut idempotency_key = None;
-    for line in lines.filter(|line| !line.is_empty()) {
-        let (name, value) = line
-            .split_once(':')
-            .ok_or_else(|| "invalid request header".to_string())?;
-        if name.is_empty()
-            || !name
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-        {
-            return Err("invalid request header name".into());
-        }
-        let value = value.trim_matches([' ', '\t']);
-        if value
-            .bytes()
-            .any(|byte| byte.is_ascii_control() && byte != b'\t')
-        {
-            return Err("invalid request header value".into());
-        }
-        if name.eq_ignore_ascii_case("content-length") {
-            if has_content_length
-                || value.is_empty()
-                || !value.bytes().all(|byte| byte.is_ascii_digit())
-            {
-                return Err("duplicate content length".into());
-            }
-            content_length = value.parse().map_err(|_| "invalid content length")?;
-            has_content_length = true;
-        } else if name.eq_ignore_ascii_case("content-type") {
-            if has_content_type {
-                return Err("duplicate content type".into());
-            }
-            content_type = value.to_ascii_lowercase();
-            has_content_type = true;
-        } else if name.eq_ignore_ascii_case("host") {
-            if has_host || value.is_empty() {
-                return Err("invalid host header".into());
-            }
-            has_host = true;
-        } else if name.eq_ignore_ascii_case("idempotency-key") {
-            if idempotency_key.is_some()
-                || if target == "/v1/programs/call" {
-                    value.is_empty() || value.len() > 128
-                } else if target == "/v1/moves" {
-                    !valid_human_idempotency(value)
-                } else {
-                    value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit())
-                }
-            {
-                return Err("invalid idempotency key".into());
-            }
-            idempotency_key = Some(if matches!(target, "/v1/programs/call" | "/v1/moves") {
-                value.to_owned()
-            } else {
-                value.to_ascii_lowercase()
-            });
-        } else if name.eq_ignore_ascii_case("transfer-encoding") {
-            return Err("transfer encoding is not supported".into());
-        }
-    }
-    if !has_host {
-        return Err("missing host header".into());
-    }
-    if matches!(method, "POST" | "PUT") && !has_content_length {
-        return Err("write request is missing content length".into());
-    }
-    let programs_get = method == "GET"
-        && (target.starts_with("/v1/programs/registry/")
-            || target.starts_with("/v1/programs/receipts/by-idempotency/")
-            || target.starts_with("/v1/programs/activities/"));
-    if !matches!(method, "POST" | "PUT") && !programs_get && content_length != 0 {
-        return Err("read request may not carry a body".into());
-    }
-    if content_length > MAX_REQUEST_BYTES {
-        return Err("request body exceeds emulator limit".into());
-    }
-    let method = method.to_owned();
+    let (method, path, content_type, idempotency_key, content_length) =
+        parse_request_headers(&bytes, header_end)?;
     while bytes.len() - header_end < content_length {
         let read = stream.read(&mut chunk).map_err(|error| error.to_string())?;
         if read == 0 {
@@ -1656,14 +1556,17 @@ fn program_outcome_json(outcome: &ProgramCallOutcome) -> serde_json::Value {
 
 fn verified_program_document(
     verified: &VerifiedProgramExecution,
-    terminal_payload: &[u8],
-    call_graph: &[u8],
-    program_id: [u8; 32],
-    guest_abi_version: u16,
-    sequencer_public_key: [u8; 32],
-    state: &str,
-    idempotency_key: Option<&str>,
+    fields: ProgramDocumentFields<'_>,
 ) -> Result<serde_json::Value, String> {
+    let ProgramDocumentFields {
+        terminal_payload,
+        call_graph,
+        program_id,
+        guest_abi_version,
+        sequencer_public_key,
+        state,
+        idempotency_key,
+    } = fields;
     let protocol = verified
         .receipt()
         .receipt()
@@ -1821,199 +1724,14 @@ fn program_call(emulator: &mut Emulator, request: &Request, trace: u64) -> Respo
             "program recovery index reached its bounded capacity",
         );
     }
-    let program_id = decoded.program_id;
-    let head = match if lifecycle {
-        Ok(None)
-    } else {
-        active_program_head(emulator, program_id, trace).map(Some)
-    } {
-        Ok(head) => head,
-        Err(response) => return response,
-    };
-    let before = match inspect_state(emulator) {
-        Ok(state) => state,
-        Err(code) => return core_response(trace, code),
-    };
-    let mut receipt = CoreReceipt {
-        activity_id: [0; 32],
-        batch_id: [0; 32],
-        state_root: [0; 32],
-        previous_state_root: [0; 32],
-        asset: [0; 32],
-        sequencer_public_key: [0; 32],
-        global_sequence: 0,
-        result_code: 0,
-        metered_cost_hi: 0,
-        metered_cost_lo: 0,
-        bytes: ptr::null(),
-        length: 0,
-        terminal_payload: ptr::null(),
-        terminal_payload_length: 0,
-        call_graph: ptr::null(),
-        call_graph_length: 0,
-        isolated_owner: ptr::null_mut(),
-    };
-    let code = unsafe {
-        platform_emulator_execute(
-            emulator.core,
-            decoded.signed.as_ptr(),
-            decoded.signed.len(),
-            &raw mut receipt,
-        )
-    };
-    if code == -904 {
-        let retained_signed_activity = hex_encode(&decoded.signed);
-        let response = serde_json::json!({
-            "state":"unknown",
-            "activity_id":activity_id.as_str(),
-            "idempotency_key":protocol_idempotency.as_str(),
-            "retained_signed_activity":retained_signed_activity.as_str(),
-        })
-        .to_string();
-        emulator
-            .program_activity_operations
-            .insert(activity_id.clone(), protocol_idempotency.clone());
-        let operation = ProgramOperation {
-            activity_id,
-            response,
-            retained_signed_activity: Some(retained_signed_activity),
-        };
-        let result = stored_program_operation_response(trace, &operation);
-        emulator
-            .program_operations
-            .insert(protocol_idempotency, operation);
-        return result;
-    }
-    if code != 0 {
-        return core_response(trace, code);
-    }
-    let lifecycle_authority = if lifecycle {
-        Some(AuthorizedBatch::new(
-            receipt.batch_id,
-            receipt.asset,
-            before.receipt_state_root,
-            receipt.state_root,
-            emulator.signing_key.verifying_key().to_bytes(),
-        ))
-    } else {
-        None
-    };
-    let lifecycle_result_code = receipt.result_code;
-    let material = match take_core_receipt(&mut receipt) {
-        Ok(material) => material,
-        Err(error) => return refusal(trace, 503, "core_invalid_output", &error),
-    };
-    if lifecycle {
-        let Some(authority) = lifecycle_authority else {
-            return refusal(
-                trace,
-                503,
-                "program_receipt_verification_failed",
-                "missing lifecycle authority",
-            );
-        };
-        let valid =
-            program_lifecycle::verify_receipt(&material.receipt, &authority, decoded.activity_id)
-                .is_ok();
-        if !valid || material.activity_id != decoded.activity_id {
-            return refusal(
-                trace,
-                503,
-                "program_receipt_verification_failed",
-                "lifecycle receipt does not bind the submitted activity and state",
-            );
-        }
-        let receipt_hex = hex_encode(&material.receipt);
-        let response = serde_json::json!({
-            "activity_id": activity_id, "receipt": receipt_hex,
-            "idempotency_key": protocol_idempotency,
-            "state": if lifecycle_result_code == 0 { "completed" } else { "refused" },
-            "terminal_payload": "", "call_graph": "",
-        })
-        .to_string();
-        remember_receipt(emulator, activity_id.clone(), receipt_hex);
-        emulator
-            .program_activity_operations
-            .insert(activity_id.clone(), protocol_idempotency.clone());
-        let operation = ProgramOperation {
-            activity_id,
-            response: response.clone(),
-            retained_signed_activity: Some(hex_encode(&decoded.signed)),
-        };
-        let response = stored_program_operation_response(trace, &operation);
-        emulator
-            .program_operations
-            .insert(protocol_idempotency, operation);
-        return response;
-    }
-    let Some(head) = head else {
-        return refusal(
-            trace,
-            503,
-            "program_head_unavailable",
-            "call requires a verified program head",
-        );
-    };
-    let verified = match verify_program_execution(
-        &material.receipt,
-        &material.terminal_payload,
-        &material.call_graph,
-        ProgramExecutionExpectation {
-            sequencer_public_key: emulator.signing_key.verifying_key().to_bytes(),
-            previous_state_root: before.receipt_state_root,
-            activity_id: decoded.activity_id,
-            program_id,
-            guest_abi_version: head.abi_version,
-        },
-    ) {
-        Ok(verified)
-            if verified
-                .receipt()
-                .receipt()
-                .protocol()
-                .is_some_and(|protocol| {
-                    protocol.protocol_version() == decoded.protocol_version
-                }) =>
-        {
-            verified
-        }
-        Ok(_) | Err(_) => {
-            return refusal(
-                trace,
-                503,
-                "program_receipt_verification_failed",
-                "the core result did not verify against the submitted call and trusted state",
-            )
-        }
-    };
-    let document = match verified_program_document(
-        &verified,
-        &material.terminal_payload,
-        &material.call_graph,
-        program_id,
-        head.abi_version,
-        emulator.signing_key.verifying_key().to_bytes(),
-        "executed",
-        Some(&protocol_idempotency),
-    ) {
-        Ok(document) => document,
-        Err(error) => return refusal(trace, 503, "core_invalid_output", &error),
-    };
-    let response = document.to_string();
-    let receipt_hex = hex_encode(&material.receipt);
-    remember_receipt(emulator, activity_id.clone(), receipt_hex);
-    emulator
-        .program_activity_operations
-        .insert(activity_id.clone(), protocol_idempotency.clone());
-    emulator.program_operations.insert(
+    execute_program_call(
+        emulator,
+        &decoded,
+        lifecycle,
         protocol_idempotency,
-        ProgramOperation {
-            activity_id,
-            response: response.clone(),
-            retained_signed_activity: Some(hex_encode(&decoded.signed)),
-        },
-    );
-    success(trace, &response)
+        activity_id,
+        trace,
+    )
 }
 
 fn inspect(emulator: &Emulator, trace: u64) -> Response {
@@ -2242,136 +1960,7 @@ fn move_quote(emulator: &mut Emulator, request: &Request, trace: u64) -> Respons
             "move quote recovery index reached its bounded capacity",
         );
     }
-    let source_authority = match emulator.accounts.get(&body.source) {
-        Some(value) => value.clone(),
-        None => {
-            return refusal(
-                trace,
-                404,
-                "move_source_not_found",
-                "source account is not registered in this emulator",
-            )
-        }
-    };
-    if source_authority.public_key != emulator.signing_key.verifying_key().to_bytes() {
-        return refusal(
-            trace,
-            409,
-            "move_source_not_managed",
-            "source account is not controlled by the emulator signing authority",
-        );
-    }
-    let source = match core_account(emulator, &body.source) {
-        Ok(Some(value)) => value,
-        Ok(None) => {
-            return refusal(
-                trace,
-                404,
-                "move_source_not_found",
-                "source account is absent from canonical state",
-            )
-        }
-        Err(code) => return core_response(trace, code),
-    };
-    let identity_sequence = match core_identity_sequence(emulator, &source_authority.did) {
-        Ok(value) => value,
-        Err(code) => return core_response(trace, code),
-    };
-    if identity_sequence.checked_add(1).is_none() || source.next_sequence.checked_add(1).is_none() {
-        return refusal(
-            trace,
-            503,
-            "core_invalid_output",
-            "move source sequence is exhausted",
-        );
-    }
-    let destination = match core_account(emulator, &body.destination) {
-        Ok(Some(value)) => value,
-        Ok(None) => {
-            return refusal(
-                trace,
-                404,
-                "move_destination_not_found",
-                "destination account is absent from canonical state",
-            )
-        }
-        Err(code) => return core_response(trace, code),
-    };
-    if destination.balance.checked_add(amount).is_none() {
-        return refusal(
-            trace,
-            409,
-            "move_balance_unavailable",
-            "destination canonical balance cannot accept the requested move",
-        );
-    }
-    if source.id != source_authority.id || source.balance < amount {
-        return refusal(
-            trace,
-            409,
-            "move_balance_unavailable",
-            "source canonical balance cannot cover the requested move",
-        );
-    }
-    let state = match inspect_state(emulator) {
-        Ok(value) => value,
-        Err(code) => return core_response(trace, code),
-    };
-    let expires_at = match state.timestamp_ms.checked_add(MOVE_QUOTE_WINDOW_MS) {
-        Some(value) => value,
-        None => {
-            return refusal(
-                trace,
-                503,
-                "core_invalid_output",
-                "move quote expiry overflowed",
-            )
-        }
-    };
-    if timestamp_text(state.timestamp_ms).is_err() || timestamp_text(expires_at).is_err() {
-        return refusal(
-            trace,
-            503,
-            "core_invalid_output",
-            "move quote timestamp is outside the supported range",
-        );
-    }
-    let mut quote_material = Vec::new();
-    quote_material.extend_from_slice(&(body.source.len() as u16).to_be_bytes());
-    quote_material.extend_from_slice(body.source.as_bytes());
-    quote_material.extend_from_slice(&(body.destination.len() as u16).to_be_bytes());
-    quote_material.extend_from_slice(body.destination.as_bytes());
-    quote_material.extend_from_slice(&amount.to_be_bytes());
-    quote_material.extend_from_slice(&state.timestamp_ms.to_be_bytes());
-    quote_material.extend_from_slice(&expires_at.to_be_bytes());
-    quote_material.extend_from_slice(&identity_sequence.to_be_bytes());
-    quote_material.extend_from_slice(&source.next_sequence.to_be_bytes());
-    quote_material.extend_from_slice(&state.canonical_state_root);
-    quote_material.extend_from_slice(&state.receipt_state_root);
-    let quote_id = format!(
-        "qte_{}",
-        hex_encode(&hash_bytes(MOVE_QUOTE_DOMAIN, &quote_material))
-    );
-    let quote = MoveQuoteRecord {
-        quote_id: quote_id.clone(),
-        source: body.source,
-        destination: body.destination,
-        source_id: source.id,
-        destination_id: destination.id,
-        amount,
-        currency: body.money.currency,
-        created_at: state.timestamp_ms,
-        expires_at,
-        identity_sequence,
-        source_sequence: source.next_sequence,
-        committed_idempotency: None,
-    };
-    let document = match move_quote_document(&quote) {
-        Ok(value) => value,
-        Err(error) => return refusal(trace, 503, "core_invalid_output", &error),
-    };
-    emulator.move_quotes.insert(quote_id, quote);
-    success(trace, &document.to_string())
+    quote_accounts(emulator, body, amount, trace)
 }
 
 fn empty_core_receipt() -> CoreReceipt {
@@ -2536,266 +2125,7 @@ fn move_commit(emulator: &mut Emulator, request: &Request, trace: u64) -> Respon
             "move quote expired before commitment",
         );
     }
-    let source_authority = match emulator.accounts.get(&quote.source) {
-        Some(value)
-            if value.id == quote.source_id
-                && value.public_key == emulator.signing_key.verifying_key().to_bytes() =>
-        {
-            value.clone()
-        }
-        _ => {
-            return refusal(
-                trace,
-                409,
-                "move_quote_stale",
-                "source authority or account sequence changed after quotation",
-            )
-        }
-    };
-    let identity_sequence = match core_identity_sequence(emulator, &source_authority.did) {
-        Ok(value) if value == quote.identity_sequence => value,
-        Ok(_) => {
-            return refusal(
-                trace,
-                409,
-                "move_quote_stale",
-                "source identity sequence changed after quotation",
-            )
-        }
-        Err(code) => return core_response(trace, code),
-    };
-    let source = match core_account(emulator, &quote.source) {
-        Ok(Some(value))
-            if value.id == quote.source_id
-                && value.next_sequence == quote.source_sequence
-                && value.balance >= quote.amount =>
-        {
-            value
-        }
-        Ok(_) => {
-            return refusal(
-                trace,
-                409,
-                "move_balance_unavailable",
-                "source canonical balance cannot cover the quoted move",
-            )
-        }
-        Err(code) => return core_response(trace, code),
-    };
-    let destination = match core_account(emulator, &quote.destination) {
-        Ok(Some(value)) if value.id == quote.destination_id => value,
-        Ok(_) => {
-            return refusal(
-                trace,
-                409,
-                "move_quote_stale",
-                "destination account changed after quotation",
-            )
-        }
-        Err(code) => return core_response(trace, code),
-    };
-    let _ = (source_authority, identity_sequence);
-    let protocol_idempotency = move_idempotency(&idempotency);
-    let (activity, expected_activity_id, expected_context_hash, expected_authorization_hash) =
-        match signed_move_activity(emulator, &quote, protocol_idempotency) {
-            Ok(value) => value,
-            Err(error) => return refusal(trace, 503, "move_encoding_failed", &error),
-        };
-    let mut receipt = empty_core_receipt();
-    let code = unsafe {
-        platform_emulator_execute(
-            emulator.core,
-            activity.as_ptr(),
-            activity.len(),
-            &raw mut receipt,
-        )
-    };
-    if code != 0 && code != -904 {
-        return core_response(trace, code);
-    }
-    let batch_id = receipt.batch_id;
-    let previous_state_root = receipt.previous_state_root;
-    let resulting_state_root = receipt.state_root;
-    let asset = receipt.asset;
-    let sequencer_public_key = receipt.sequencer_public_key;
-    let result_code = receipt.result_code;
-    let material = match take_core_receipt(&mut receipt) {
-        Ok(value) => value,
-        Err(error) => {
-            return move_unknown(
-                emulator,
-                idempotency,
-                &quote.quote_id,
-                trace,
-                "move_receipt_unavailable",
-                &error,
-            );
-        }
-    };
-    if result_code != 0 {
-        let refused = core_response(trace, result_code);
-        retain_move_response(emulator, idempotency, &quote.quote_id, &refused);
-        return refused;
-    }
-    let authorised = AuthorizedBatch::new(
-        batch_id,
-        asset,
-        previous_state_root,
-        resulting_state_root,
-        sequencer_public_key,
-    );
-    let verified = match verify_receipt(&material.receipt, &authorised) {
-        Ok(value) => value,
-        Err(_) => {
-            return move_unknown(
-                emulator,
-                idempotency,
-                &quote.quote_id,
-                trace,
-                "move_receipt_verification_failed",
-                "core committed a move but its returned receipt did not verify",
-            )
-        }
-    };
-    let expected_source_after = source.balance - quote.amount;
-    let expected_destination_after = destination.balance + quote.amount;
-    let protocol = match verified.receipt().protocol() {
-        Some(value)
-            if material.activity_id == expected_activity_id
-                && value.protocol_version() == layerx_wire::limits::PROTOCOL_VERSION
-                && value.activity_id() == expected_activity_id
-                && value.result_code() == 0
-                && value.module_id() == 1
-                && value.operation() == ASSET_SEND_OPERATION as u8
-                && value.asset() == NATIVE_ASSET
-                && value.amount() == quote.amount
-                && value.from() == quote.source_id
-                && value.to() == quote.destination_id
-                && value.debit_balance_before() == source.balance
-                && value.debit_balance_after() == expected_source_after
-                && value.credit_balance_before() == destination.balance
-                && value.credit_balance_after() == expected_destination_after
-                && value.debit_sequence() == quote.source_sequence
-                && value.previous_state_root() == state.receipt_state_root
-                && value.resulting_state_root() != value.previous_state_root()
-                && value.context_hash() == expected_context_hash
-                && value.authorization_hash() == expected_authorization_hash
-                && value.transfer_set_root() != [0; 32]
-                && value.effects().len() == 1
-                && value.effects()[0].module_id() == 1
-                && value.effects()[0].kind() == 2
-                && value.effects()[0].monetary()
-                && value.effects()[0].transfer_set_root() == value.transfer_set_root() =>
-        {
-            value
-        }
-        _ => {
-            return move_unknown(
-                emulator,
-                idempotency,
-                &quote.quote_id,
-                trace,
-                "move_receipt_binding_failed",
-                "verified receipt does not bind the exact quoted move",
-            )
-        }
-    };
-    let post_source = match core_account(emulator, &quote.source) {
-        Ok(Some(value)) => value,
-        Ok(None) => {
-            return move_unknown(
-                emulator,
-                idempotency,
-                &quote.quote_id,
-                trace,
-                "move_receipt_binding_failed",
-                "committed source account disappeared from canonical state",
-            )
-        }
-        Err(code) => return core_response(trace, code),
-    };
-    let post_destination = match core_account(emulator, &quote.destination) {
-        Ok(Some(value)) => value,
-        Ok(None) => {
-            return move_unknown(
-                emulator,
-                idempotency,
-                &quote.quote_id,
-                trace,
-                "move_receipt_binding_failed",
-                "committed destination account disappeared from canonical state",
-            )
-        }
-        Err(code) => return core_response(trace, code),
-    };
-    let post_state = match inspect_state(emulator) {
-        Ok(value) => value,
-        Err(code) => return core_response(trace, code),
-    };
-    if post_source.balance != protocol.debit_balance_after()
-        || post_source.next_sequence != quote.source_sequence + 1
-        || post_destination.balance != protocol.credit_balance_after()
-        || post_state.receipt_state_root != protocol.resulting_state_root()
-        || post_state.canonical_state_root == state.canonical_state_root
-    {
-        return move_unknown(
-            emulator,
-            idempotency,
-            &quote.quote_id,
-            trace,
-            "move_receipt_binding_failed",
-            "receipt economic facts disagree with canonical account state",
-        );
-    }
-    let receipt_digest = match verified.evidence().receipt_digest() {
-        Some(value) => value,
-        None => {
-            return move_unknown(
-                emulator,
-                idempotency,
-                &quote.quote_id,
-                trace,
-                "move_receipt_binding_failed",
-                "verified receipt omitted its digest",
-            )
-        }
-    };
-    remember_receipt(
-        emulator,
-        hex_encode(&expected_activity_id),
-        hex_encode(&material.receipt),
-    );
-    let journey = match move_journey(
-        &quote,
-        &idempotency,
-        expected_activity_id,
-        receipt_digest,
-        state.timestamp_ms,
-    ) {
-        Ok(value) => value,
-        Err(error) => {
-            return move_unknown(
-                emulator,
-                idempotency,
-                &quote.quote_id,
-                trace,
-                "move_journey_encoding_failed",
-                &error,
-            )
-        }
-    };
-    let completed = success(trace, &journey.to_string());
-    retain_move_response(emulator, idempotency, &quote.quote_id, &completed);
-    if code == -904 {
-        refusal(
-            trace,
-            503,
-            "move_acknowledgement_lost",
-            "move committed and was retained under the original idempotency key",
-        )
-    } else {
-        completed
-    }
+    validate_move_commit(emulator, idempotency, quote, state, trace)
 }
 
 fn update_time(emulator: &mut Emulator, request: &Request, trace: u64, advance: bool) -> Response {
@@ -2897,8 +2227,9 @@ fn canonical_program_response(response: &str, activity_id: &str, idempotency_key
     let Ok(document) = serde_json::from_str::<serde_json::Value>(response) else {
         return false;
     };
+    let canonical = document.to_string();
     document.is_object()
-        && document.to_string() == response
+        && canonical == response
         && document
             .get("activity_id")
             .and_then(serde_json::Value::as_str)
@@ -2909,16 +2240,17 @@ fn canonical_program_response(response: &str, activity_id: &str, idempotency_key
             == Some(idempotency_key)
 }
 
-fn encode_recovery_snapshot(
-    core_snapshot: &[u8],
-    receipts: &HashMap<String, String>,
-    receipt_order: &VecDeque<String>,
-    program_operations: &HashMap<String, ProgramOperation>,
-    program_activity_operations: &HashMap<String, String>,
-    accounts: &HashMap<String, EmulatorAccount>,
-    move_quotes: &HashMap<String, MoveQuoteRecord>,
-    move_operations: &HashMap<String, MoveOperation>,
-) -> Result<Vec<u8>, String> {
+fn encode_recovery_snapshot(input: RecoverySnapshotInput<'_>) -> Result<Vec<u8>, String> {
+    let RecoverySnapshotInput {
+        core_snapshot,
+        receipts,
+        receipt_order,
+        program_operations,
+        program_activity_operations,
+        accounts,
+        move_quotes,
+        move_operations,
+    } = input;
     if core_snapshot.is_empty() || core_snapshot.len() > MAX_CORE_SNAPSHOT_BYTES {
         return Err("emulator core snapshot is outside its bound".to_owned());
     }
@@ -2948,151 +2280,15 @@ fn encode_recovery_snapshot(
     append_snapshot_u32(&mut encoded, move_operations.len())?;
     append_snapshot_bytes(&mut encoded, core_snapshot)?;
 
-    let mut seen_receipts = HashMap::new();
-    for activity_id in receipt_order {
-        if !canonical_hex32_text(activity_id) || seen_receipts.insert(activity_id, ()).is_some() {
-            return Err("emulator receipt recovery order is invalid".to_owned());
-        }
-        let activity = hex_decode(activity_id)
-            .map_err(|_| "emulator receipt activity id is invalid".to_owned())?;
-        let receipt = receipts
-            .get(activity_id)
-            .ok_or_else(|| "emulator receipt recovery order is incomplete".to_owned())?;
-        let receipt = hex_decode(receipt)
-            .map_err(|_| "emulator receipt recovery bytes are invalid".to_owned())?;
-        if receipt.is_empty() || receipt.len() > MAX_RECEIPT_BYTES {
-            return Err("emulator receipt recovery bytes exceed their bound".to_owned());
-        }
-        append_snapshot_bytes(&mut encoded, &activity)?;
-        append_snapshot_u32(&mut encoded, receipt.len())?;
-        append_snapshot_bytes(&mut encoded, &receipt)?;
-    }
-
-    let mut operations: Vec<_> = program_operations.iter().collect();
-    operations.sort_by(|(left, _), (right, _)| left.cmp(right));
-    for (idempotency_key, operation) in operations {
-        if !canonical_hex32_text(idempotency_key)
-            || !canonical_hex32_text(&operation.activity_id)
-            || program_activity_operations.get(&operation.activity_id) != Some(idempotency_key)
-            || !canonical_program_response(
-                &operation.response,
-                &operation.activity_id,
-                idempotency_key,
-            )
-        {
-            return Err("emulator program recovery binding is invalid".to_owned());
-        }
-        let idempotency = hex_decode(idempotency_key)
-            .map_err(|_| "emulator program idempotency key is invalid".to_owned())?;
-        let activity = hex_decode(&operation.activity_id)
-            .map_err(|_| "emulator program activity id is invalid".to_owned())?;
-        let retained = match operation.retained_signed_activity.as_deref() {
-            Some(value) => {
-                let bytes = hex_decode(value).map_err(|_| {
-                    "emulator retained signed program activity is invalid".to_owned()
-                })?;
-                if bytes.is_empty() || bytes.len() > MAX_RETAINED_SIGNED_ACTIVITY_BYTES {
-                    return Err(
-                        "emulator retained signed program activity exceeds its bound".to_owned(),
-                    );
-                }
-                bytes
-            }
-            None => Vec::new(),
-        };
-        append_snapshot_bytes(&mut encoded, &idempotency)?;
-        append_snapshot_bytes(&mut encoded, &activity)?;
-        append_snapshot_u32(&mut encoded, operation.response.len())?;
-        append_snapshot_bytes(&mut encoded, operation.response.as_bytes())?;
-        append_snapshot_u32(&mut encoded, retained.len())?;
-        append_snapshot_bytes(&mut encoded, &retained)?;
-    }
-
-    let mut account_entries: Vec<_> = accounts.iter().collect();
-    account_entries.sort_by(|(left, _), (right, _)| left.cmp(right));
-    for (name, account) in account_entries {
-        if name != &format!("agent:{}:main", account.did)
-            || account.did.is_empty()
-            || account.did.len() > 512
-            || !account.did.starts_with("did:")
-            || account.did.contains('\0')
-            || account.public_key == [0; 32]
-            || account.id == [0; 32]
-        {
-            return Err("emulator account recovery binding is invalid".to_owned());
-        }
-        append_snapshot_text(&mut encoded, name)?;
-        append_snapshot_text(&mut encoded, &account.did)?;
-        append_snapshot_bytes(&mut encoded, &account.id)?;
-        append_snapshot_bytes(&mut encoded, &account.public_key)?;
-    }
-
-    let mut quote_entries: Vec<_> = move_quotes.iter().collect();
-    quote_entries.sort_by(|(left, _), (right, _)| left.cmp(right));
-    for (quote_id, quote) in quote_entries {
-        let quote_hex = quote_id.strip_prefix("qte_");
-        if quote_id != &quote.quote_id
-            || quote_hex.is_none_or(|value| !canonical_hex32_text(value))
-            || quote.source == quote.destination
-            || quote.amount == 0
-            || quote.currency != "LXP"
-            || quote.created_at == 0
-            || quote.expires_at <= quote.created_at
-            || accounts
-                .get(&quote.source)
-                .is_none_or(|account| account.id != quote.source_id)
-            || accounts
-                .get(&quote.destination)
-                .is_none_or(|account| account.id != quote.destination_id)
-            || quote
-                .committed_idempotency
-                .as_deref()
-                .is_some_and(|value| !valid_human_idempotency(value))
-        {
-            return Err("emulator move quote recovery binding is invalid".to_owned());
-        }
-        append_snapshot_text(&mut encoded, quote_id)?;
-        append_snapshot_text(&mut encoded, &quote.source)?;
-        append_snapshot_text(&mut encoded, &quote.destination)?;
-        append_snapshot_bytes(&mut encoded, &quote.source_id)?;
-        append_snapshot_bytes(&mut encoded, &quote.destination_id)?;
-        append_snapshot_bytes(&mut encoded, &quote.amount.to_be_bytes())?;
-        append_snapshot_text(&mut encoded, &quote.currency)?;
-        append_snapshot_bytes(&mut encoded, &quote.created_at.to_be_bytes())?;
-        append_snapshot_bytes(&mut encoded, &quote.expires_at.to_be_bytes())?;
-        append_snapshot_bytes(&mut encoded, &quote.identity_sequence.to_be_bytes())?;
-        append_snapshot_bytes(&mut encoded, &quote.source_sequence.to_be_bytes())?;
-        match quote.committed_idempotency.as_deref() {
-            Some(value) => {
-                append_snapshot_bytes(&mut encoded, &[1])?;
-                append_snapshot_text(&mut encoded, value)?;
-            }
-            None => append_snapshot_bytes(&mut encoded, &[0])?,
-        }
-    }
-
-    let mut move_entries: Vec<_> = move_operations.iter().collect();
-    move_entries.sort_by(|(left, _), (right, _)| left.cmp(right));
-    for (idempotency, operation) in move_entries {
-        if !valid_human_idempotency(idempotency)
-            || operation.body.is_empty()
-            || operation.body.len() > MAX_PROGRAM_RESPONSE_BYTES
-            || !matches!(operation.status, 200 | 400 | 404 | 409 | 503)
-            || serde_json::from_str::<serde_json::Value>(&operation.body).is_err()
-            || move_quotes
-                .get(&operation.quote_id)
-                .and_then(|quote| quote.committed_idempotency.as_deref())
-                != Some(idempotency)
-        {
-            return Err("emulator move operation recovery binding is invalid".to_owned());
-        }
-        append_snapshot_text(&mut encoded, idempotency)?;
-        append_snapshot_text(&mut encoded, &operation.quote_id)?;
-        append_snapshot_bytes(&mut encoded, &operation.status.to_be_bytes())?;
-        append_snapshot_u32(&mut encoded, operation.body.len())?;
-        append_snapshot_bytes(&mut encoded, operation.body.as_bytes())?;
-    }
-
+    encode_snapshot_receipts(&mut encoded, receipts, receipt_order)?;
+    encode_snapshot_programs(
+        &mut encoded,
+        program_operations,
+        program_activity_operations,
+    )?;
+    encode_snapshot_accounts(&mut encoded, accounts)?;
+    encode_snapshot_quotes(&mut encoded, move_quotes, accounts)?;
+    encode_snapshot_moves(&mut encoded, move_operations, move_quotes)?;
     let mut digest = Sha256::new();
     digest.update(RECOVERY_SNAPSHOT_DIGEST_DOMAIN);
     digest.update(&encoded);
@@ -3195,190 +2391,19 @@ fn decode_recovery_snapshot(body: &[u8]) -> Result<RecoverySnapshot, String> {
     }
     let core_snapshot = snapshot_take(authenticated, &mut offset, core_length)?.to_vec();
 
-    let mut receipts = HashMap::with_capacity(receipt_count);
-    let mut receipt_order = VecDeque::with_capacity(receipt_count);
-    for _ in 0..receipt_count {
-        let activity_id = hex_encode(snapshot_take(authenticated, &mut offset, 32)?);
-        let receipt_length = snapshot_u32(authenticated, &mut offset)?;
-        if receipt_length == 0 || receipt_length > MAX_RECEIPT_BYTES {
-            return Err("emulator recovery receipt exceeds its bound".to_owned());
-        }
-        let receipt = hex_encode(snapshot_take(authenticated, &mut offset, receipt_length)?);
-        if receipts.insert(activity_id.clone(), receipt).is_some() {
-            return Err("emulator recovery receipt activity is duplicated".to_owned());
-        }
-        receipt_order.push_back(activity_id);
-    }
-
-    let mut program_operations = HashMap::with_capacity(operation_count);
-    let mut program_activity_operations = HashMap::with_capacity(operation_count);
-    for _ in 0..operation_count {
-        let idempotency_key = hex_encode(snapshot_take(authenticated, &mut offset, 32)?);
-        let activity_id = hex_encode(snapshot_take(authenticated, &mut offset, 32)?);
-        let response_length = snapshot_u32(authenticated, &mut offset)?;
-        if response_length == 0 || response_length > MAX_PROGRAM_RESPONSE_BYTES {
-            return Err("emulator recovery program response exceeds its bound".to_owned());
-        }
-        let response =
-            std::str::from_utf8(snapshot_take(authenticated, &mut offset, response_length)?)
-                .map_err(|_| "emulator recovery program response is not UTF-8".to_owned())?
-                .to_owned();
-        if !canonical_program_response(&response, &activity_id, &idempotency_key) {
-            return Err("emulator recovery program response is invalid".to_owned());
-        }
-        let retained_length = snapshot_u32(authenticated, &mut offset)?;
-        if retained_length > MAX_RETAINED_SIGNED_ACTIVITY_BYTES {
-            return Err("emulator retained recovery activity exceeds its bound".to_owned());
-        }
-        let retained_signed_activity = if retained_length == 0 {
-            None
-        } else {
-            Some(hex_encode(snapshot_take(
-                authenticated,
-                &mut offset,
-                retained_length,
-            )?))
-        };
-        if program_activity_operations
-            .insert(activity_id.clone(), idempotency_key.clone())
-            .is_some()
-            || program_operations
-                .insert(
-                    idempotency_key,
-                    ProgramOperation {
-                        activity_id,
-                        response,
-                        retained_signed_activity,
-                    },
-                )
-                .is_some()
-        {
-            return Err("emulator recovery program binding is duplicated".to_owned());
-        }
-    }
-
-    let mut accounts = HashMap::with_capacity(account_count);
-    for _ in 0..account_count {
-        let name = snapshot_text(authenticated, &mut offset, 1_024)?;
-        let did = snapshot_text(authenticated, &mut offset, 512)?;
-        let id: [u8; 32] = snapshot_take(authenticated, &mut offset, 32)?
-            .try_into()
-            .map_err(|_| "emulator recovery account id is invalid".to_owned())?;
-        let public_key: [u8; 32] = snapshot_take(authenticated, &mut offset, 32)?
-            .try_into()
-            .map_err(|_| "emulator recovery public key is invalid".to_owned())?;
-        if name != format!("agent:{did}:main")
-            || !did.starts_with("did:")
-            || did.contains('\0')
-            || id == [0; 32]
-            || public_key == [0; 32]
-            || accounts
-                .insert(
-                    name,
-                    EmulatorAccount {
-                        id,
-                        did,
-                        public_key,
-                    },
-                )
-                .is_some()
-        {
-            return Err("emulator recovery account binding is invalid".to_owned());
-        }
-    }
-
-    let mut move_quotes = HashMap::with_capacity(move_quote_count);
-    for _ in 0..move_quote_count {
-        let quote_id = snapshot_text(authenticated, &mut offset, 80)?;
-        let source = snapshot_text(authenticated, &mut offset, 1_024)?;
-        let destination = snapshot_text(authenticated, &mut offset, 1_024)?;
-        let source_id: [u8; 32] = snapshot_take(authenticated, &mut offset, 32)?
-            .try_into()
-            .map_err(|_| "emulator recovery source id is invalid".to_owned())?;
-        let destination_id: [u8; 32] = snapshot_take(authenticated, &mut offset, 32)?
-            .try_into()
-            .map_err(|_| "emulator recovery destination id is invalid".to_owned())?;
-        let amount = snapshot_u128(authenticated, &mut offset)?;
-        let currency = snapshot_text(authenticated, &mut offset, 16)?;
-        let created_at = snapshot_u64(authenticated, &mut offset)?;
-        let expires_at = snapshot_u64(authenticated, &mut offset)?;
-        let identity_sequence = snapshot_u64(authenticated, &mut offset)?;
-        let source_sequence = snapshot_u64(authenticated, &mut offset)?;
-        let committed_idempotency = match snapshot_take(authenticated, &mut offset, 1)?[0] {
-            0 => None,
-            1 => Some(snapshot_text(authenticated, &mut offset, 128)?),
-            _ => return Err("emulator recovery move quote state is invalid".to_owned()),
-        };
-        let quote = MoveQuoteRecord {
-            quote_id: quote_id.clone(),
-            source,
-            destination,
-            source_id,
-            destination_id,
-            amount,
-            currency,
-            created_at,
-            expires_at,
-            identity_sequence,
-            source_sequence,
-            committed_idempotency,
-        };
-        if quote_id
-            .strip_prefix("qte_")
-            .is_none_or(|value| !canonical_hex32_text(value))
-            || quote.source == quote.destination
-            || quote.amount == 0
-            || quote.currency != "LXP"
-            || quote.created_at == 0
-            || quote.expires_at <= quote.created_at
-            || accounts
-                .get(&quote.source)
-                .is_none_or(|account| account.id != quote.source_id)
-            || accounts
-                .get(&quote.destination)
-                .is_none_or(|account| account.id != quote.destination_id)
-            || quote
-                .committed_idempotency
-                .as_deref()
-                .is_some_and(|value| !valid_human_idempotency(value))
-            || move_quotes.insert(quote_id, quote).is_some()
-        {
-            return Err("emulator recovery move quote binding is invalid".to_owned());
-        }
-    }
-
-    let mut move_operations = HashMap::with_capacity(move_operation_count);
-    for _ in 0..move_operation_count {
-        let idempotency = snapshot_text(authenticated, &mut offset, 128)?;
-        let quote_id = snapshot_text(authenticated, &mut offset, 80)?;
-        let status_bytes: [u8; 2] = snapshot_take(authenticated, &mut offset, 2)?
-            .try_into()
-            .map_err(|_| "emulator recovery move status is invalid".to_owned())?;
-        let status = u16::from_be_bytes(status_bytes);
-        let body_length = snapshot_u32(authenticated, &mut offset)?;
-        if body_length == 0 || body_length > MAX_PROGRAM_RESPONSE_BYTES {
-            return Err("emulator recovery move response exceeds its bound".to_owned());
-        }
-        let body = std::str::from_utf8(snapshot_take(authenticated, &mut offset, body_length)?)
-            .map_err(|_| "emulator recovery move response is not UTF-8".to_owned())?
-            .to_owned();
-        let operation = MoveOperation {
-            quote_id: quote_id.clone(),
-            status,
-            body,
-        };
-        if !valid_human_idempotency(&idempotency)
-            || !matches!(status, 200 | 400 | 404 | 409 | 503)
-            || serde_json::from_str::<serde_json::Value>(&operation.body).is_err()
-            || move_quotes
-                .get(&quote_id)
-                .and_then(|quote| quote.committed_idempotency.as_deref())
-                != Some(idempotency.as_str())
-            || move_operations.insert(idempotency, operation).is_some()
-        {
-            return Err("emulator recovery move operation binding is invalid".to_owned());
-        }
-    }
+    let (receipts, receipt_order) =
+        decode_snapshot_receipts(authenticated, &mut offset, receipt_count)?;
+    let (program_operations, program_activity_operations) =
+        decode_snapshot_programs(authenticated, &mut offset, operation_count)?;
+    let accounts = decode_snapshot_accounts(authenticated, &mut offset, account_count)?;
+    let move_quotes =
+        decode_snapshot_quotes(authenticated, &mut offset, move_quote_count, &accounts)?;
+    let move_operations = decode_snapshot_moves(
+        authenticated,
+        &mut offset,
+        move_operation_count,
+        &move_quotes,
+    )?;
     if move_quotes.values().any(|quote| {
         quote
             .committed_idempotency
@@ -3420,16 +2445,16 @@ fn export_snapshot(emulator: &mut Emulator, trace: u64) -> Response {
         );
     }
     let core_snapshot = unsafe { slice::from_raw_parts(bytes, length) };
-    match encode_recovery_snapshot(
+    match encode_recovery_snapshot(RecoverySnapshotInput {
         core_snapshot,
-        &emulator.receipts,
-        &emulator.receipt_order,
-        &emulator.program_operations,
-        &emulator.program_activity_operations,
-        &emulator.accounts,
-        &emulator.move_quotes,
-        &emulator.move_operations,
-    ) {
+        receipts: &emulator.receipts,
+        receipt_order: &emulator.receipt_order,
+        program_operations: &emulator.program_operations,
+        program_activity_operations: &emulator.program_activity_operations,
+        accounts: &emulator.accounts,
+        move_quotes: &emulator.move_quotes,
+        move_operations: &emulator.move_operations,
+    }) {
         Ok(body) => Response {
             status: 200,
             content_type: "application/vnd.layerx.emulator-snapshot",
@@ -3446,14 +2471,14 @@ fn import_snapshot(emulator: &mut Emulator, body: &[u8], trace: u64) -> Response
     };
     let mut prior_bytes = ptr::null();
     let mut prior_length = 0_usize;
-    let prior_code = unsafe {
+    let export_code = unsafe {
         platform_emulator_snapshot_export(
             emulator.core,
             &raw mut prior_bytes,
             &raw mut prior_length,
         )
     };
-    if prior_code != 0
+    if export_code != 0
         || prior_bytes.is_null()
         || prior_length == 0
         || prior_length > MAX_CORE_SNAPSHOT_BYTES
@@ -3787,78 +2812,10 @@ fn program_registry_read(
     if inspect_code != 0 {
         return core_response(trace, inspect_code);
     }
-    let valid_through = match live.timestamp_ms.checked_add(300_000) {
-        Some(value) => value,
-        None => return refusal(trace, 503, "core_invalid_output", "freshness overflow"),
+    let Some(valid_through) = live.timestamp_ms.checked_add(300_000) else {
+        return refusal(trace, 503, "core_invalid_output", "freshness overflow");
     };
-    let lifecycle = match program.lifecycle {
-        1 => "active",
-        2 => "deprecated",
-        3 => "tombstoned",
-        _ => {
-            return refusal(
-                trace,
-                503,
-                "core_invalid_output",
-                "program lifecycle is invalid",
-            )
-        }
-    };
-    if !interface_only {
-        let discovery = serde_json::json!({
-            "program_id":hex_encode(&program.program_id),
-            "lifecycle":lifecycle,
-            "version":program.version,
-            "code_hash":hex_encode(&program.code_hash),
-            "abi_version":program.abi_version,
-            "receipt_digest":hex_encode(&program.deployment_receipt_digest),
-            "state_root":hex_encode(&program.state_root),
-            "observed_sequence":program.observed_sequence.to_string(),
-            "observed_at":live.timestamp_ms.to_string(),
-            "valid_through":valid_through.to_string(),
-            "verification":"registry-receipt-and-current-head-verified",
-        });
-        return success(trace, &discovery.to_string());
-    }
-    if program.has_interface == 0 {
-        return refusal(
-            trace,
-            404,
-            "program_interface_absent",
-            "program has no published interface",
-        );
-    }
-    if program.has_interface != 1
-        || program.interface_bytes.is_null()
-        || program.interface_length == 0
-        || program.interface_length > 952
-    {
-        return refusal(
-            trace,
-            503,
-            "core_invalid_output",
-            "program interface state is invalid",
-        );
-    }
-    let interface =
-        unsafe { slice::from_raw_parts(program.interface_bytes, program.interface_length) };
-    let interface_digest: [u8; 32] = Sha256::digest(interface).into();
-    let interface = serde_json::json!({
-        "program_id":hex_encode(&program.program_id),
-        "version":program.version,
-        "code_hash":hex_encode(&program.code_hash),
-        "abi_version":program.abi_version,
-        "interface":hex_encode(interface),
-        "interface_digest":hex_encode(&interface_digest),
-        "receipt_digest":hex_encode(&program.deployment_receipt_digest),
-        "state_root":hex_encode(&program.state_root),
-        "observed_sequence":program.observed_sequence.to_string(),
-        "observed_at":live.timestamp_ms.to_string(),
-        "valid_through":valid_through.to_string(),
-        "source":{"status":"unpublished"},
-        "verification":"deployment-interface-and-current-head-verified",
-    });
-    success(trace, &interface.to_string())
+    program_registry_document(&program, &live, valid_through, interface_only, trace)
 }
 
 fn program_simulate(emulator: &mut Emulator, request: &Request, trace: u64) -> Response {
@@ -3943,60 +2900,22 @@ fn program_simulate(emulator: &mut Emulator, request: &Request, trace: u64) -> R
     };
     let execution = match verified_program_document(
         &verified,
-        &material.terminal_payload,
-        &material.call_graph,
-        program_id,
-        head.abi_version,
-        emulator.signing_key.verifying_key().to_bytes(),
-        "simulated",
-        None,
+        ProgramDocumentFields {
+            terminal_payload: &material.terminal_payload,
+            call_graph: &material.call_graph,
+            program_id,
+            guest_abi_version: head.abi_version,
+            sequencer_public_key: emulator.signing_key.verifying_key().to_bytes(),
+            state: "simulated",
+            idempotency_key: None,
+        },
     ) {
         Ok(document) => document,
         Err(error) => return refusal(trace, 503, "core_invalid_output", &error),
     };
-    let signing = &emulator.signing_key;
-    let mut boundary_material = b"LayerX/emulator/simulation-boundary/v1\0".to_vec();
-    boundary_material.extend_from_slice(&signing.verifying_key().to_bytes());
-    let boundary_id: [u8; 32] = Sha256::digest(&boundary_material).into();
-    let mut evidence = b"LayerX/agent/program-simulation-evidence/v1\0".to_vec();
-    evidence.extend_from_slice(&boundary_id);
-    evidence.extend_from_slice(&decoded.activity_id);
-    evidence.extend_from_slice(&head.state_root);
-    let hypothetical_state_root = verified
-        .receipt()
-        .receipt()
-        .protocol()
-        .map(|protocol| protocol.resulting_state_root());
-    let Some(hypothetical_state_root) = hypothetical_state_root else {
-        return refusal(
-            trace,
-            503,
-            "core_invalid_output",
-            "verified simulation has no protocol state root",
-        );
-    };
-    evidence.extend_from_slice(&hypothetical_state_root);
-    evidence.extend_from_slice(&head.observed_sequence.to_be_bytes());
-    evidence.extend_from_slice(&live.timestamp_ms.to_be_bytes());
-    evidence.push(0);
-    let evidence_digest: [u8; 32] = Sha256::digest(&evidence).into();
-    let evidence_signature = signing.sign(&evidence_digest).to_bytes();
-    let response = serde_json::json!({
-        "committed":false,
-        "execution":execution,
-        "simulation_evidence":{
-            "boundary_id":hex_encode(&boundary_id),
-            "activity_id":hex_encode(&decoded.activity_id),
-            "previous_state_root":hex_encode(&head.state_root),
-            "hypothetical_state_root":hex_encode(&hypothetical_state_root),
-            "observed_sequence":head.observed_sequence.to_string(),
-            "observed_at":live.timestamp_ms.to_string(),
-            "committed":false,
-            "public_key":hex_encode(&signing.verifying_key().to_bytes()),
-            "signature":hex_encode(&evidence_signature),
-        },
-    });
-    success(trace, &response.to_string())
+    program_simulation_document(
+        emulator, &decoded, &head, &live, &verified, &execution, trace,
+    )
 }
 
 fn parse_amount(value: &str) -> Result<(u64, u64), String> {
@@ -4093,7 +3012,7 @@ fn parse_config(arguments: impl IntoIterator<Item = String>) -> Result<Config, S
 }
 
 /// Starts the local gateway adapter around the production `LayerX` transition.
-fn platform_emulator(config: Config) -> Result<(), String> {
+fn platform_emulator(config: &Config) -> Result<(), String> {
     layerx_programs_runtime::retain_host_ffi_exports();
     layerx_programs_sandbox::retain_host_ffi_exports();
     let seed = config.sequencer_seed.ok_or_else(|| {
@@ -4127,7 +3046,7 @@ fn platform_emulator(config: Config) -> Result<(), String> {
         move_operations: HashMap::new(),
         trace: 0,
     };
-    for prefund in config.prefunds {
+    for prefund in &config.prefunds {
         if let Err(status) = prefund_core(
             &mut emulator,
             &prefund.did,
@@ -4142,98 +3061,7 @@ fn platform_emulator(config: Config) -> Result<(), String> {
             ));
         }
     }
-    let listener = TcpListener::bind(config.listen)
-        .map_err(|error| format!("cannot listen on {}: {error}", config.listen))?;
-    eprintln!(
-        "LayerX emulator ready on http://{} (network {}, deterministic time {})",
-        config.listen, config.network_id, config.timestamp_ms
-    );
-    let (admission_sender, admission_receiver) = sync_channel::<TcpStream>(ADMISSION_CAPACITY);
-    let admission_receiver = Arc::new(Mutex::new(admission_receiver));
-    let (transition_sender, transition_receiver) =
-        sync_channel::<ParsedConnection>(TRANSITION_CAPACITY);
-    for index in 0..PARSER_WORKERS {
-        let admission_receiver = Arc::clone(&admission_receiver);
-        let transition_sender = transition_sender.clone();
-        thread::Builder::new()
-            .name(format!("layerx-emulator-http-{index}"))
-            .spawn(move || loop {
-                let stream = match admission_receiver.lock() {
-                    Ok(receiver) => receiver.recv(),
-                    Err(_) => return,
-                };
-                let Ok(mut stream) = stream else {
-                    return;
-                };
-                if stream
-                    .set_read_timeout(Some(IO_TIMEOUT))
-                    .and_then(|()| stream.set_write_timeout(Some(IO_TIMEOUT)))
-                    .is_err()
-                {
-                    continue;
-                }
-                let request = parse_request(&mut stream);
-                let (response_sender, response_receiver) = sync_channel(1);
-                if transition_sender
-                    .send(ParsedConnection {
-                        request,
-                        response: response_sender,
-                    })
-                    .is_err()
-                {
-                    return;
-                }
-                let Ok(response) = response_receiver.recv() else {
-                    return;
-                };
-                let _ = write_response(&mut stream, &response);
-            })
-            .map_err(|error| format!("could not start emulator HTTP worker {index}: {error}"))?;
-    }
-    drop(transition_sender);
-    thread::Builder::new()
-        .name("layerx-emulator-admission".to_owned())
-        .spawn(move || {
-            for connection in listener.incoming() {
-                match connection {
-                    Ok(stream) => match admission_sender.try_send(stream) {
-                        Ok(()) => {}
-                        Err(TrySendError::Full(mut stream)) => {
-                            let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
-                            let response = refusal(
-                                0,
-                                503,
-                                "overloaded",
-                                "the emulator HTTP admission queue is full",
-                            );
-                            let _ = write_response(&mut stream, &response);
-                        }
-                        Err(TrySendError::Disconnected(_)) => return,
-                    },
-                    Err(error) => eprintln!("emulator connection error: {error}"),
-                }
-            }
-        })
-        .map_err(|error| format!("could not start emulator admission worker: {error}"))?;
-    for work in transition_receiver {
-        let response = match work.request {
-            Ok(request) => route(&mut emulator, &request),
-            Err(error) => {
-                if let Some(trace) = advance_trace(&mut emulator.trace) {
-                    refusal(trace, 400, "invalid_request", &error)
-                } else {
-                    refusal(
-                        u64::MAX,
-                        503,
-                        "trace_exhausted",
-                        "the emulator trace space is exhausted",
-                    )
-                }
-            }
-        };
-        let _ = work.response.send(response);
-    }
-    Err("all emulator HTTP workers stopped".into())
+    serve_emulator(config, emulator)
 }
 
 /// Runs the emulator subcommand behind the unified `layerx` CLI dispatcher.
@@ -4243,7 +3071,7 @@ fn platform_emulator(config: Config) -> Result<(), String> {
 /// Returns configuration, core-initialisation, or listener failures without
 /// terminating the owning CLI process.
 pub fn run(arguments: impl IntoIterator<Item = String>) -> Result<(), String> {
-    parse_config(arguments).and_then(platform_emulator)
+    parse_config(arguments).and_then(|config| platform_emulator(&config))
 }
 
 #[cfg(test)]
@@ -4371,9 +3199,8 @@ mod program_call_tests {
         let Ok(from_json) = decode_activity(&json_request(CANONICAL_ACTIVITY_HEX)) else {
             panic!("program-call activity hex did not decode");
         };
-        let from_octets = match decode_activity(&octet_request(&expected)) {
-            Ok(bytes) => bytes,
-            Err(_) => panic!("octet-stream program-call activity did not decode"),
+        let Ok(from_octets) = decode_activity(&octet_request(&expected)) else {
+            panic!("octet-stream program-call activity did not decode");
         };
         assert_eq!(from_json, expected);
         assert_eq!(from_octets, expected);
@@ -4413,7 +3240,7 @@ mod program_call_tests {
     }
 
     #[test]
-    fn program_routes_share_the_exact_agent_envelope() {
+    fn program_routes_share_the_exact_agent_envelope() -> Result<(), Box<dyn std::error::Error>> {
         for state in ["refused", "unknown", "pending", "executed"] {
             let mut inner = success(
                 7,
@@ -4426,7 +3253,7 @@ mod program_call_tests {
                 inner.status = 202;
             }
             let output = agent_response(7, inner);
-            let document: serde_json::Value = serde_json::from_slice(&output.body).unwrap();
+            let document: serde_json::Value = serde_json::from_slice(&output.body)?;
             let verification_status = if matches!(state, "unknown" | "pending") {
                 serde_json::json!({
                     "state":"Unverified",
@@ -4455,7 +3282,7 @@ mod program_call_tests {
             8,
             refusal(8, 409, "idempotency_conflict", "different activity"),
         );
-        let document: serde_json::Value = serde_json::from_slice(&output.body).unwrap();
+        let document: serde_json::Value = serde_json::from_slice(&output.body)?;
         assert_eq!(
             document,
             serde_json::json!({
@@ -4466,10 +3293,11 @@ mod program_call_tests {
                 "reason":"idempotency_conflict",
             })
         );
+        Ok(())
     }
 
     #[test]
-    fn discovery_is_explicitly_server_verified_only() {
+    fn discovery_is_explicitly_server_verified_only() -> Result<(), Box<dyn std::error::Error>> {
         for verification in [
             "registry-receipt-and-current-head-verified",
             "deployment-interface-and-current-head-verified",
@@ -4485,7 +3313,7 @@ mod program_call_tests {
                     .to_string(),
                 ),
             );
-            let document: serde_json::Value = serde_json::from_slice(&output.body).unwrap();
+            let document: serde_json::Value = serde_json::from_slice(&output.body)?;
             assert_eq!(
                 document["verification_status"],
                 serde_json::json!({
@@ -4496,10 +3324,12 @@ mod program_call_tests {
                 })
             );
         }
+        Ok(())
     }
 
     #[test]
-    fn retained_unknown_operation_is_recoverable_without_a_false_signature_claim() {
+    fn retained_unknown_operation_is_recoverable_without_a_false_signature_claim(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let operation = ProgramOperation {
             activity_id: "a".repeat(64),
             response: serde_json::json!({
@@ -4514,7 +3344,7 @@ mod program_call_tests {
         let stored = stored_program_operation_response(10, &operation);
         assert_eq!(stored.status, 202);
         let output = agent_response(10, stored);
-        let document: serde_json::Value = serde_json::from_slice(&output.body).unwrap();
+        let document: serde_json::Value = serde_json::from_slice(&output.body)?;
         assert_eq!(document["value"]["retained_signed_activity"], "00ff");
         assert_eq!(
             document["verification_status"],
@@ -4525,6 +3355,7 @@ mod program_call_tests {
                 "reason":"receipt_pending",
             })
         );
+        Ok(())
     }
 
     #[test]
@@ -4549,7 +3380,8 @@ mod program_call_tests {
     }
 
     #[test]
-    fn recovery_snapshot_is_deterministic_and_preserves_program_indexes() {
+    fn recovery_snapshot_is_deterministic_and_preserves_program_indexes(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let receipt_activity = "a".repeat(64);
         let program_activity = "b".repeat(64);
         let idempotency = "c".repeat(64);
@@ -4624,31 +3456,21 @@ mod program_call_tests {
             },
         )]);
 
-        let first = encode_recovery_snapshot(
-            b"bounded-core-snapshot",
-            &receipts,
-            &receipt_order,
-            &program_operations,
-            &program_activity_operations,
-            &accounts,
-            &move_quotes,
-            &move_operations,
-        )
-        .unwrap();
-        let second = encode_recovery_snapshot(
-            b"bounded-core-snapshot",
-            &receipts,
-            &receipt_order,
-            &program_operations,
-            &program_activity_operations,
-            &accounts,
-            &move_quotes,
-            &move_operations,
-        )
-        .unwrap();
+        let input = super::RecoverySnapshotInput {
+            core_snapshot: b"bounded-core-snapshot",
+            receipts: &receipts,
+            receipt_order: &receipt_order,
+            program_operations: &program_operations,
+            program_activity_operations: &program_activity_operations,
+            accounts: &accounts,
+            move_quotes: &move_quotes,
+            move_operations: &move_operations,
+        };
+        let first = encode_recovery_snapshot(input)?;
+        let second = encode_recovery_snapshot(input)?;
         assert_eq!(first, second);
 
-        let recovered = decode_recovery_snapshot(&first).unwrap();
+        let recovered = decode_recovery_snapshot(&first)?;
         assert_eq!(recovered.core_snapshot.as_slice(), b"bounded-core-snapshot");
         assert_eq!(recovered.receipts, receipts);
         assert_eq!(recovered.receipt_order, receipt_order);
@@ -4660,10 +3482,12 @@ mod program_call_tests {
         assert_eq!(recovered.accounts, accounts);
         assert_eq!(recovered.move_quotes, move_quotes);
         assert_eq!(recovered.move_operations, move_operations);
+        Ok(())
     }
 
     #[test]
-    fn recovery_snapshot_rejects_tampering_and_inconsistent_bindings() {
+    fn recovery_snapshot_rejects_tampering_and_inconsistent_bindings(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let activity = "a".repeat(64);
         let idempotency = "b".repeat(64);
         let receipts = HashMap::from([(activity.clone(), "00".to_owned())]);
@@ -4686,34 +3510,34 @@ mod program_call_tests {
         let accounts = HashMap::new();
         let move_quotes = HashMap::new();
         let move_operations = HashMap::new();
-        assert!(encode_recovery_snapshot(
-            b"bounded-core-snapshot",
-            &receipts,
-            &receipt_order,
-            &operations,
-            &bindings,
-            &accounts,
-            &move_quotes,
-            &move_operations,
-        )
+        assert!(encode_recovery_snapshot(super::RecoverySnapshotInput {
+            core_snapshot: b"bounded-core-snapshot",
+            receipts: &receipts,
+            receipt_order: &receipt_order,
+            program_operations: &operations,
+            program_activity_operations: &bindings,
+            accounts: &accounts,
+            move_quotes: &move_quotes,
+            move_operations: &move_operations,
+        })
         .is_err());
 
         let empty_operations = HashMap::new();
         let empty_bindings = HashMap::new();
-        let mut encoded = encode_recovery_snapshot(
-            b"bounded-core-snapshot",
-            &receipts,
-            &receipt_order,
-            &empty_operations,
-            &empty_bindings,
-            &accounts,
-            &move_quotes,
-            &move_operations,
-        )
-        .unwrap();
+        let mut encoded = encode_recovery_snapshot(super::RecoverySnapshotInput {
+            core_snapshot: b"bounded-core-snapshot",
+            receipts: &receipts,
+            receipt_order: &receipt_order,
+            program_operations: &empty_operations,
+            program_activity_operations: &empty_bindings,
+            accounts: &accounts,
+            move_quotes: &move_quotes,
+            move_operations: &move_operations,
+        })?;
         let last = encoded.len() - 1;
         encoded[last] ^= 1;
         assert!(decode_recovery_snapshot(&encoded).is_err());
+        Ok(())
     }
 
     #[test]
@@ -4822,4 +3646,1663 @@ mod program_call_tests {
         };
         assert!(decode_program_activity(&request).is_err());
     }
+}
+
+type MovePayload = (Vec<u8>, [u8; 32], [u8; 32]);
+type SignedMoveActivity = (Vec<u8>, [u8; 32], [u8; 32], [u8; 32]);
+
+#[derive(Clone, Copy)]
+struct ProgramDocumentFields<'a> {
+    terminal_payload: &'a [u8],
+    call_graph: &'a [u8],
+    program_id: [u8; 32],
+    guest_abi_version: u16,
+    sequencer_public_key: [u8; 32],
+    state: &'a str,
+    idempotency_key: Option<&'a str>,
+}
+
+fn parse_request_headers(bytes: &[u8], header_end: usize) -> Result<RequestHeaders, String> {
+    let headers = std::str::from_utf8(&bytes[..header_end]).map_err(|_| "headers are not UTF-8")?;
+    let mut lines = headers.split("\r\n");
+    let (method, target) = parse_request_line(lines.next().ok_or("missing request line")?)?;
+    let path = target.to_string();
+    let mut content_length = 0_usize;
+    let mut has_content_length = false;
+    let mut content_type = String::new();
+    let mut has_content_type = false;
+    let mut has_host = false;
+    let mut idempotency_key = None;
+    for line in lines.filter(|line| !line.is_empty()) {
+        let (name, value) = line
+            .split_once(':')
+            .ok_or_else(|| "invalid request header".to_string())?;
+        if name.is_empty()
+            || !name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        {
+            return Err("invalid request header name".into());
+        }
+        let value = value.trim_matches([' ', '\t']);
+        if value
+            .bytes()
+            .any(|byte| byte.is_ascii_control() && byte != b'\t')
+        {
+            return Err("invalid request header value".into());
+        }
+        if name.eq_ignore_ascii_case("content-length") {
+            if has_content_length
+                || value.is_empty()
+                || !value.bytes().all(|byte| byte.is_ascii_digit())
+            {
+                return Err("duplicate content length".into());
+            }
+            content_length = value.parse().map_err(|_| "invalid content length")?;
+            has_content_length = true;
+        } else if name.eq_ignore_ascii_case("content-type") {
+            if has_content_type {
+                return Err("duplicate content type".into());
+            }
+            content_type = value.to_ascii_lowercase();
+            has_content_type = true;
+        } else if name.eq_ignore_ascii_case("host") {
+            if has_host || value.is_empty() {
+                return Err("invalid host header".into());
+            }
+            has_host = true;
+        } else if name.eq_ignore_ascii_case("idempotency-key") {
+            if idempotency_key.is_some()
+                || if target == "/v1/programs/call" {
+                    value.is_empty() || value.len() > 128
+                } else if target == "/v1/moves" {
+                    !valid_human_idempotency(value)
+                } else {
+                    value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit())
+                }
+            {
+                return Err("invalid idempotency key".into());
+            }
+            idempotency_key = Some(if matches!(target, "/v1/programs/call" | "/v1/moves") {
+                value.to_owned()
+            } else {
+                value.to_ascii_lowercase()
+            });
+        } else if name.eq_ignore_ascii_case("transfer-encoding") {
+            return Err("transfer encoding is not supported".into());
+        }
+    }
+    if !has_host {
+        return Err("missing host header".into());
+    }
+    if matches!(method, "POST" | "PUT") && !has_content_length {
+        return Err("write request is missing content length".into());
+    }
+    let programs_get = method == "GET"
+        && (target.starts_with("/v1/programs/registry/")
+            || target.starts_with("/v1/programs/receipts/by-idempotency/")
+            || target.starts_with("/v1/programs/activities/"));
+    if !matches!(method, "POST" | "PUT") && !programs_get && content_length != 0 {
+        return Err("read request may not carry a body".into());
+    }
+    if content_length > MAX_REQUEST_BYTES {
+        return Err("request body exceeds emulator limit".into());
+    }
+    let method = method.to_owned();
+    Ok((method, path, content_type, idempotency_key, content_length))
+}
+
+type RequestHeaders = (String, String, String, Option<String>, usize);
+
+fn parse_request_line(request_line: &str) -> Result<(&str, &str), String> {
+    let mut request_fields = request_line.split(' ');
+    let method = request_fields.next().unwrap_or_default();
+    let target = request_fields.next().unwrap_or_default();
+    if method.is_empty()
+        || !method.bytes().all(|byte| byte.is_ascii_uppercase())
+        || request_fields.next() != Some("HTTP/1.1")
+        || request_fields.next().is_some()
+        || !target.starts_with('/')
+        || target.starts_with("//")
+        || target.contains(['?', '#', '\\', '\0'])
+        || target
+            .split('/')
+            .any(|segment| matches!(segment, "." | ".."))
+    {
+        return Err("invalid request line".into());
+    }
+    Ok((method, target))
+}
+
+fn program_registry_document(
+    program: &CoreProgram,
+    live: &CoreState,
+    valid_through: u64,
+    interface_only: bool,
+    trace: u64,
+) -> Response {
+    let lifecycle = match program.lifecycle {
+        1 => "active",
+        2 => "deprecated",
+        3 => "tombstoned",
+        _ => {
+            return refusal(
+                trace,
+                503,
+                "core_invalid_output",
+                "program lifecycle is invalid",
+            )
+        }
+    };
+    if !interface_only {
+        let discovery = serde_json::json!({
+            "program_id":hex_encode(&program.program_id),
+            "lifecycle":lifecycle,
+            "version":program.version,
+            "code_hash":hex_encode(&program.code_hash),
+            "abi_version":program.abi_version,
+            "receipt_digest":hex_encode(&program.deployment_receipt_digest),
+            "state_root":hex_encode(&program.state_root),
+            "observed_sequence":program.observed_sequence.to_string(),
+            "observed_at":live.timestamp_ms.to_string(),
+            "valid_through":valid_through.to_string(),
+            "verification":"registry-receipt-and-current-head-verified",
+        });
+        return success(trace, &discovery.to_string());
+    }
+    if program.has_interface == 0 {
+        return refusal(
+            trace,
+            404,
+            "program_interface_absent",
+            "program has no published interface",
+        );
+    }
+    if program.has_interface != 1
+        || program.interface_bytes.is_null()
+        || program.interface_length == 0
+        || program.interface_length > 952
+    {
+        return refusal(
+            trace,
+            503,
+            "core_invalid_output",
+            "program interface state is invalid",
+        );
+    }
+    let interface =
+        unsafe { slice::from_raw_parts(program.interface_bytes, program.interface_length) };
+    let interface_digest: [u8; 32] = Sha256::digest(interface).into();
+    let interface = serde_json::json!({
+        "program_id":hex_encode(&program.program_id),
+        "version":program.version,
+        "code_hash":hex_encode(&program.code_hash),
+        "abi_version":program.abi_version,
+        "interface":hex_encode(interface),
+        "interface_digest":hex_encode(&interface_digest),
+        "receipt_digest":hex_encode(&program.deployment_receipt_digest),
+        "state_root":hex_encode(&program.state_root),
+        "observed_sequence":program.observed_sequence.to_string(),
+        "observed_at":live.timestamp_ms.to_string(),
+        "valid_through":valid_through.to_string(),
+        "source":{"status":"unpublished"},
+        "verification":"deployment-interface-and-current-head-verified",
+    });
+    success(trace, &interface.to_string())
+}
+
+fn program_simulation_document(
+    emulator: &Emulator,
+    decoded: &DecodedProgramActivity,
+    head: &CoreProgram,
+    live: &CoreState,
+    verified: &VerifiedProgramExecution,
+    execution: &serde_json::Value,
+    trace: u64,
+) -> Response {
+    let signing = &emulator.signing_key;
+    let mut boundary_material = b"LayerX/emulator/simulation-boundary/v1\0".to_vec();
+    boundary_material.extend_from_slice(&signing.verifying_key().to_bytes());
+    let boundary_id: [u8; 32] = Sha256::digest(&boundary_material).into();
+    let mut evidence = b"LayerX/agent/program-simulation-evidence/v1\0".to_vec();
+    evidence.extend_from_slice(&boundary_id);
+    evidence.extend_from_slice(&decoded.activity_id);
+    evidence.extend_from_slice(&head.state_root);
+    let hypothetical_state_root = verified
+        .receipt()
+        .receipt()
+        .protocol()
+        .map(layerx_wire::receipt::ProtocolReceipt::resulting_state_root);
+    let Some(hypothetical_state_root) = hypothetical_state_root else {
+        return refusal(
+            trace,
+            503,
+            "core_invalid_output",
+            "verified simulation has no protocol state root",
+        );
+    };
+    evidence.extend_from_slice(&hypothetical_state_root);
+    evidence.extend_from_slice(&head.observed_sequence.to_be_bytes());
+    evidence.extend_from_slice(&live.timestamp_ms.to_be_bytes());
+    evidence.push(0);
+    let evidence_digest: [u8; 32] = Sha256::digest(&evidence).into();
+    let evidence_signature = signing.sign(&evidence_digest).to_bytes();
+    let response = serde_json::json!({
+        "committed":false,
+        "execution":execution,
+        "simulation_evidence":{
+            "boundary_id":hex_encode(&boundary_id),
+            "activity_id":hex_encode(&decoded.activity_id),
+            "previous_state_root":hex_encode(&head.state_root),
+            "hypothetical_state_root":hex_encode(&hypothetical_state_root),
+            "observed_sequence":head.observed_sequence.to_string(),
+            "observed_at":live.timestamp_ms.to_string(),
+            "committed":false,
+            "public_key":hex_encode(&signing.verifying_key().to_bytes()),
+            "signature":hex_encode(&evidence_signature),
+        },
+    });
+    success(trace, &response.to_string())
+}
+
+fn serve_emulator(config: &Config, mut emulator: Emulator) -> Result<(), String> {
+    let listener = TcpListener::bind(config.listen)
+        .map_err(|error| format!("cannot listen on {}: {error}", config.listen))?;
+    eprintln!(
+        "LayerX emulator ready on http://{} (network {}, deterministic time {})",
+        config.listen, config.network_id, config.timestamp_ms
+    );
+    let (admission_sender, admission_receiver) = sync_channel::<TcpStream>(ADMISSION_CAPACITY);
+    let admission_receiver = Arc::new(Mutex::new(admission_receiver));
+    let (transition_sender, transition_receiver) =
+        sync_channel::<ParsedConnection>(TRANSITION_CAPACITY);
+    for index in 0..PARSER_WORKERS {
+        let admission_receiver = Arc::clone(&admission_receiver);
+        let transition_sender = transition_sender.clone();
+        thread::Builder::new()
+            .name(format!("layerx-emulator-http-{index}"))
+            .spawn(move || loop {
+                let stream = match admission_receiver.lock() {
+                    Ok(receiver) => receiver.recv(),
+                    Err(_) => return,
+                };
+                let Ok(mut stream) = stream else {
+                    return;
+                };
+                if stream
+                    .set_read_timeout(Some(IO_TIMEOUT))
+                    .and_then(|()| stream.set_write_timeout(Some(IO_TIMEOUT)))
+                    .is_err()
+                {
+                    continue;
+                }
+                let request = parse_request(&mut stream);
+                let (response_sender, response_receiver) = sync_channel(1);
+                if transition_sender
+                    .send(ParsedConnection {
+                        request,
+                        response: response_sender,
+                    })
+                    .is_err()
+                {
+                    return;
+                }
+                let Ok(response) = response_receiver.recv() else {
+                    return;
+                };
+                let _ = write_response(&mut stream, &response);
+            })
+            .map_err(|error| format!("could not start emulator HTTP worker {index}: {error}"))?;
+    }
+    drop(transition_sender);
+    thread::Builder::new()
+        .name("layerx-emulator-admission".to_owned())
+        .spawn(move || {
+            for connection in listener.incoming() {
+                match connection {
+                    Ok(stream) => match admission_sender.try_send(stream) {
+                        Ok(()) => {}
+                        Err(TrySendError::Full(mut stream)) => {
+                            let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
+                            let response = refusal(
+                                0,
+                                503,
+                                "overloaded",
+                                "the emulator HTTP admission queue is full",
+                            );
+                            let _ = write_response(&mut stream, &response);
+                        }
+                        Err(TrySendError::Disconnected(_)) => return,
+                    },
+                    Err(error) => eprintln!("emulator connection error: {error}"),
+                }
+            }
+        })
+        .map_err(|error| format!("could not start emulator admission worker: {error}"))?;
+    for work in transition_receiver {
+        let response = match work.request {
+            Ok(request) => route(&mut emulator, &request),
+            Err(error) => {
+                if let Some(trace) = advance_trace(&mut emulator.trace) {
+                    refusal(trace, 400, "invalid_request", &error)
+                } else {
+                    refusal(
+                        u64::MAX,
+                        503,
+                        "trace_exhausted",
+                        "the emulator trace space is exhausted",
+                    )
+                }
+            }
+        };
+        let _ = work.response.send(response);
+    }
+    Err("all emulator HTTP workers stopped".into())
+}
+
+fn quote_accounts(
+    emulator: &mut Emulator,
+    body: MoveQuoteBody,
+    amount: u128,
+    trace: u64,
+) -> Response {
+    let source_authority = match emulator.accounts.get(&body.source) {
+        Some(value) => value.clone(),
+        None => {
+            return refusal(
+                trace,
+                404,
+                "move_source_not_found",
+                "source account is not registered in this emulator",
+            )
+        }
+    };
+    if source_authority.public_key != emulator.signing_key.verifying_key().to_bytes() {
+        return refusal(
+            trace,
+            409,
+            "move_source_not_managed",
+            "source account is not controlled by the emulator signing authority",
+        );
+    }
+    let source = match core_account(emulator, &body.source) {
+        Ok(Some(value)) => value,
+        Ok(None) => {
+            return refusal(
+                trace,
+                404,
+                "move_source_not_found",
+                "source account is absent from canonical state",
+            )
+        }
+        Err(code) => return core_response(trace, code),
+    };
+    let identity_sequence = match core_identity_sequence(emulator, &source_authority.did) {
+        Ok(value) => value,
+        Err(code) => return core_response(trace, code),
+    };
+    if identity_sequence.checked_add(1).is_none() || source.next_sequence.checked_add(1).is_none() {
+        return refusal(
+            trace,
+            503,
+            "core_invalid_output",
+            "move source sequence is exhausted",
+        );
+    }
+    let destination = match core_account(emulator, &body.destination) {
+        Ok(Some(value)) => value,
+        Ok(None) => {
+            return refusal(
+                trace,
+                404,
+                "move_destination_not_found",
+                "destination account is absent from canonical state",
+            )
+        }
+        Err(code) => return core_response(trace, code),
+    };
+    if destination.balance.checked_add(amount).is_none() {
+        return refusal(
+            trace,
+            409,
+            "move_balance_unavailable",
+            "destination canonical balance cannot accept the requested move",
+        );
+    }
+    if source.id != source_authority.id || source.balance < amount {
+        return refusal(
+            trace,
+            409,
+            "move_balance_unavailable",
+            "source canonical balance cannot cover the requested move",
+        );
+    }
+    retain_move_quote(
+        emulator,
+        body,
+        amount,
+        &source,
+        &destination,
+        identity_sequence,
+        trace,
+    )
+}
+
+fn retain_move_quote(
+    emulator: &mut Emulator,
+    body: MoveQuoteBody,
+    amount: u128,
+    source: &CoreAccountView,
+    destination: &CoreAccountView,
+    identity_sequence: u64,
+    trace: u64,
+) -> Response {
+    let state = match inspect_state(emulator) {
+        Ok(value) => value,
+        Err(code) => return core_response(trace, code),
+    };
+    let Some(expires_at) = state.timestamp_ms.checked_add(MOVE_QUOTE_WINDOW_MS) else {
+        return refusal(
+            trace,
+            503,
+            "core_invalid_output",
+            "move quote expiry overflowed",
+        );
+    };
+    if timestamp_text(state.timestamp_ms).is_err() || timestamp_text(expires_at).is_err() {
+        return refusal(
+            trace,
+            503,
+            "core_invalid_output",
+            "move quote timestamp is outside the supported range",
+        );
+    }
+    let mut quote_material = Vec::new();
+    let Ok(source_length) = u16::try_from(body.source.len()) else {
+        return refusal(
+            trace,
+            400,
+            "invalid_move_quote",
+            "move account length exceeds its canonical bound",
+        );
+    };
+    quote_material.extend_from_slice(&source_length.to_be_bytes());
+    quote_material.extend_from_slice(body.source.as_bytes());
+    let Ok(destination_length) = u16::try_from(body.destination.len()) else {
+        return refusal(
+            trace,
+            400,
+            "invalid_move_quote",
+            "move account length exceeds its canonical bound",
+        );
+    };
+    quote_material.extend_from_slice(&destination_length.to_be_bytes());
+    quote_material.extend_from_slice(body.destination.as_bytes());
+    quote_material.extend_from_slice(&amount.to_be_bytes());
+    quote_material.extend_from_slice(&state.timestamp_ms.to_be_bytes());
+    quote_material.extend_from_slice(&expires_at.to_be_bytes());
+    quote_material.extend_from_slice(&identity_sequence.to_be_bytes());
+    quote_material.extend_from_slice(&source.next_sequence.to_be_bytes());
+    quote_material.extend_from_slice(&state.canonical_state_root);
+    quote_material.extend_from_slice(&state.receipt_state_root);
+    let quote_id = format!(
+        "qte_{}",
+        hex_encode(&hash_bytes(MOVE_QUOTE_DOMAIN, &quote_material))
+    );
+    let quote = MoveQuoteRecord {
+        quote_id: quote_id.clone(),
+        source: body.source,
+        destination: body.destination,
+        source_id: source.id,
+        destination_id: destination.id,
+        amount,
+        currency: body.money.currency,
+        created_at: state.timestamp_ms,
+        expires_at,
+        identity_sequence,
+        source_sequence: source.next_sequence,
+        committed_idempotency: None,
+    };
+    let document = match move_quote_document(&quote) {
+        Ok(value) => value,
+        Err(error) => return refusal(trace, 503, "core_invalid_output", &error),
+    };
+    emulator.move_quotes.insert(quote_id, quote);
+    success(trace, &document.to_string())
+}
+
+fn execute_program_call(
+    emulator: &mut Emulator,
+    decoded: &DecodedProgramActivity,
+    lifecycle: bool,
+    protocol_idempotency: String,
+    activity_id: String,
+    trace: u64,
+) -> Response {
+    let program_id = decoded.program_id;
+    let head = match if lifecycle {
+        Ok(None)
+    } else {
+        active_program_head(emulator, program_id, trace).map(Some)
+    } {
+        Ok(head) => head,
+        Err(response) => return response,
+    };
+    let before = match inspect_state(emulator) {
+        Ok(state) => state,
+        Err(code) => return core_response(trace, code),
+    };
+    let mut receipt = CoreReceipt {
+        activity_id: [0; 32],
+        batch_id: [0; 32],
+        state_root: [0; 32],
+        previous_state_root: [0; 32],
+        asset: [0; 32],
+        sequencer_public_key: [0; 32],
+        global_sequence: 0,
+        result_code: 0,
+        metered_cost_hi: 0,
+        metered_cost_lo: 0,
+        bytes: ptr::null(),
+        length: 0,
+        terminal_payload: ptr::null(),
+        terminal_payload_length: 0,
+        call_graph: ptr::null(),
+        call_graph_length: 0,
+        isolated_owner: ptr::null_mut(),
+    };
+    let code = unsafe {
+        platform_emulator_execute(
+            emulator.core,
+            decoded.signed.as_ptr(),
+            decoded.signed.len(),
+            &raw mut receipt,
+        )
+    };
+    if code == -904 {
+        let retained_signed_activity = hex_encode(&decoded.signed);
+        let response = serde_json::json!({
+            "state":"unknown",
+            "activity_id":activity_id.as_str(),
+            "idempotency_key":protocol_idempotency.as_str(),
+            "retained_signed_activity":retained_signed_activity.as_str(),
+        })
+        .to_string();
+        emulator
+            .program_activity_operations
+            .insert(activity_id.clone(), protocol_idempotency.clone());
+        let operation = ProgramOperation {
+            activity_id,
+            response,
+            retained_signed_activity: Some(retained_signed_activity),
+        };
+        let result = stored_program_operation_response(trace, &operation);
+        emulator
+            .program_operations
+            .insert(protocol_idempotency, operation);
+        return result;
+    }
+    if code != 0 {
+        return core_response(trace, code);
+    }
+    let lifecycle_authority = if lifecycle {
+        Some(AuthorizedBatch::new(
+            receipt.batch_id,
+            receipt.asset,
+            before.receipt_state_root,
+            receipt.state_root,
+            emulator.signing_key.verifying_key().to_bytes(),
+        ))
+    } else {
+        None
+    };
+    let lifecycle_result_code = receipt.result_code;
+    let material = match take_core_receipt(&mut receipt) {
+        Ok(material) => material,
+        Err(error) => return refusal(trace, 503, "core_invalid_output", &error),
+    };
+    retain_program_execution(
+        emulator,
+        ProgramExecutionResult {
+            decoded,
+            lifecycle,
+            protocol_idempotency,
+            activity_id,
+            head,
+            before,
+            lifecycle_authority,
+            lifecycle_result_code,
+            material,
+        },
+        trace,
+    )
+}
+
+fn retain_program_execution(
+    emulator: &mut Emulator,
+    result: ProgramExecutionResult<'_>,
+    trace: u64,
+) -> Response {
+    let ProgramExecutionResult {
+        decoded,
+        lifecycle,
+        protocol_idempotency,
+        activity_id,
+        head,
+        before,
+        lifecycle_authority,
+        lifecycle_result_code,
+        material,
+    } = result;
+    let program_id = decoded.program_id;
+    if lifecycle {
+        return retain_lifecycle_execution(
+            emulator,
+            LifecycleExecution {
+                decoded,
+                protocol_idempotency,
+                activity_id,
+                lifecycle_authority,
+                lifecycle_result_code,
+                material: &material,
+            },
+            trace,
+        );
+    }
+    let Some(head) = head else {
+        return refusal(
+            trace,
+            503,
+            "program_head_unavailable",
+            "call requires a verified program head",
+        );
+    };
+    let verified = match verify_program_execution(
+        &material.receipt,
+        &material.terminal_payload,
+        &material.call_graph,
+        ProgramExecutionExpectation {
+            sequencer_public_key: emulator.signing_key.verifying_key().to_bytes(),
+            previous_state_root: before.receipt_state_root,
+            activity_id: decoded.activity_id,
+            program_id,
+            guest_abi_version: head.abi_version,
+        },
+    ) {
+        Ok(verified)
+            if verified
+                .receipt()
+                .receipt()
+                .protocol()
+                .is_some_and(|protocol| {
+                    protocol.protocol_version() == decoded.protocol_version
+                }) =>
+        {
+            verified
+        }
+        Ok(_) | Err(_) => {
+            return refusal(
+                trace,
+                503,
+                "program_receipt_verification_failed",
+                "the core result did not verify against the submitted call and trusted state",
+            )
+        }
+    };
+    let document = match verified_program_document(
+        &verified,
+        ProgramDocumentFields {
+            terminal_payload: &material.terminal_payload,
+            call_graph: &material.call_graph,
+            program_id,
+            guest_abi_version: head.abi_version,
+            sequencer_public_key: emulator.signing_key.verifying_key().to_bytes(),
+            state: "executed",
+            idempotency_key: Some(&protocol_idempotency),
+        },
+    ) {
+        Ok(document) => document,
+        Err(error) => return refusal(trace, 503, "core_invalid_output", &error),
+    };
+    let response = document.to_string();
+    let receipt_hex = hex_encode(&material.receipt);
+    remember_receipt(emulator, activity_id.clone(), receipt_hex);
+    emulator
+        .program_activity_operations
+        .insert(activity_id.clone(), protocol_idempotency.clone());
+    emulator.program_operations.insert(
+        protocol_idempotency,
+        ProgramOperation {
+            activity_id,
+            response: response.clone(),
+            retained_signed_activity: Some(hex_encode(&decoded.signed)),
+        },
+    );
+    success(trace, &response)
+}
+
+struct ProgramExecutionResult<'a> {
+    decoded: &'a DecodedProgramActivity,
+    lifecycle: bool,
+    protocol_idempotency: String,
+    activity_id: String,
+    head: Option<CoreProgram>,
+    before: CoreState,
+    lifecycle_authority: Option<AuthorizedBatch>,
+    lifecycle_result_code: c_int,
+    material: OwnedCoreReceipt,
+}
+
+struct LifecycleExecution<'a> {
+    decoded: &'a DecodedProgramActivity,
+    protocol_idempotency: String,
+    activity_id: String,
+    lifecycle_authority: Option<AuthorizedBatch>,
+    lifecycle_result_code: c_int,
+    material: &'a OwnedCoreReceipt,
+}
+fn retain_lifecycle_execution(
+    emulator: &mut Emulator,
+    result: LifecycleExecution<'_>,
+    trace: u64,
+) -> Response {
+    let LifecycleExecution {
+        decoded,
+        protocol_idempotency,
+        activity_id,
+        lifecycle_authority,
+        lifecycle_result_code,
+        material,
+    } = result;
+    let Some(authority) = lifecycle_authority else {
+        return refusal(
+            trace,
+            503,
+            "program_receipt_verification_failed",
+            "missing lifecycle authority",
+        );
+    };
+    let valid =
+        program_lifecycle::verify_receipt(&material.receipt, &authority, decoded.activity_id)
+            .is_ok();
+    if !valid || material.activity_id != decoded.activity_id {
+        return refusal(
+            trace,
+            503,
+            "program_receipt_verification_failed",
+            "lifecycle receipt does not bind the submitted activity and state",
+        );
+    }
+    let receipt_hex = hex_encode(&material.receipt);
+    let response = serde_json::json!({
+        "activity_id": activity_id, "receipt": receipt_hex,
+        "idempotency_key": protocol_idempotency,
+        "state": if lifecycle_result_code == 0 { "completed" } else { "refused" },
+        "terminal_payload": "", "call_graph": "",
+    })
+    .to_string();
+    remember_receipt(emulator, activity_id.clone(), receipt_hex);
+    emulator
+        .program_activity_operations
+        .insert(activity_id.clone(), protocol_idempotency.clone());
+    let operation = ProgramOperation {
+        activity_id,
+        response: response.clone(),
+        retained_signed_activity: Some(hex_encode(&decoded.signed)),
+    };
+    let response = stored_program_operation_response(trace, &operation);
+    emulator
+        .program_operations
+        .insert(protocol_idempotency, operation);
+    response
+}
+
+#[derive(Clone, Copy)]
+struct RecoverySnapshotInput<'a> {
+    core_snapshot: &'a [u8],
+    receipts: &'a HashMap<String, String>,
+    receipt_order: &'a VecDeque<String>,
+    program_operations: &'a HashMap<String, ProgramOperation>,
+    program_activity_operations: &'a HashMap<String, String>,
+    accounts: &'a HashMap<String, EmulatorAccount>,
+    move_quotes: &'a HashMap<String, MoveQuoteRecord>,
+    move_operations: &'a HashMap<String, MoveOperation>,
+}
+
+fn encode_snapshot_receipts(
+    encoded: &mut Vec<u8>,
+    receipts: &HashMap<String, String>,
+    receipt_order: &VecDeque<String>,
+) -> Result<(), String> {
+    let mut seen_receipts = HashSet::new();
+    for activity_id in receipt_order {
+        if !canonical_hex32_text(activity_id) || !seen_receipts.insert(activity_id) {
+            return Err("emulator receipt recovery order is invalid".to_owned());
+        }
+        let activity = hex_decode(activity_id)
+            .map_err(|_| "emulator receipt activity id is invalid".to_owned())?;
+        let receipt = receipts
+            .get(activity_id)
+            .ok_or_else(|| "emulator receipt recovery order is incomplete".to_owned())?;
+        let receipt = hex_decode(receipt)
+            .map_err(|_| "emulator receipt recovery bytes are invalid".to_owned())?;
+        if receipt.is_empty() || receipt.len() > MAX_RECEIPT_BYTES {
+            return Err("emulator receipt recovery bytes exceed their bound".to_owned());
+        }
+        append_snapshot_bytes(encoded, &activity)?;
+        append_snapshot_u32(encoded, receipt.len())?;
+        append_snapshot_bytes(encoded, &receipt)?;
+    }
+
+    Ok(())
+}
+
+fn encode_snapshot_programs(
+    encoded: &mut Vec<u8>,
+    program_operations: &HashMap<String, ProgramOperation>,
+    program_activity_operations: &HashMap<String, String>,
+) -> Result<(), String> {
+    let mut operations: Vec<_> = program_operations.iter().collect();
+    operations.sort_by(|(left, _), (right, _)| left.cmp(right));
+    for (idempotency_key, operation) in operations {
+        if !canonical_hex32_text(idempotency_key)
+            || !canonical_hex32_text(&operation.activity_id)
+            || program_activity_operations.get(&operation.activity_id) != Some(idempotency_key)
+            || !canonical_program_response(
+                &operation.response,
+                &operation.activity_id,
+                idempotency_key,
+            )
+        {
+            return Err("emulator program recovery binding is invalid".to_owned());
+        }
+        let idempotency = hex_decode(idempotency_key)
+            .map_err(|_| "emulator program idempotency key is invalid".to_owned())?;
+        let activity = hex_decode(&operation.activity_id)
+            .map_err(|_| "emulator program activity id is invalid".to_owned())?;
+        let retained = match operation.retained_signed_activity.as_deref() {
+            Some(value) => {
+                let bytes = hex_decode(value).map_err(|_| {
+                    "emulator retained signed program activity is invalid".to_owned()
+                })?;
+                if bytes.is_empty() || bytes.len() > MAX_RETAINED_SIGNED_ACTIVITY_BYTES {
+                    return Err(
+                        "emulator retained signed program activity exceeds its bound".to_owned(),
+                    );
+                }
+                bytes
+            }
+            None => Vec::new(),
+        };
+        append_snapshot_bytes(encoded, &idempotency)?;
+        append_snapshot_bytes(encoded, &activity)?;
+        append_snapshot_u32(encoded, operation.response.len())?;
+        append_snapshot_bytes(encoded, operation.response.as_bytes())?;
+        append_snapshot_u32(encoded, retained.len())?;
+        append_snapshot_bytes(encoded, &retained)?;
+    }
+
+    Ok(())
+}
+
+fn encode_snapshot_accounts(
+    encoded: &mut Vec<u8>,
+    accounts: &HashMap<String, EmulatorAccount>,
+) -> Result<(), String> {
+    let mut account_entries: Vec<_> = accounts.iter().collect();
+    account_entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+    for (name, account) in account_entries {
+        if name != &format!("agent:{}:main", account.did)
+            || account.did.is_empty()
+            || account.did.len() > 512
+            || !account.did.starts_with("did:")
+            || account.did.contains('\0')
+            || account.public_key == [0; 32]
+            || account.id == [0; 32]
+        {
+            return Err("emulator account recovery binding is invalid".to_owned());
+        }
+        append_snapshot_text(encoded, name)?;
+        append_snapshot_text(encoded, &account.did)?;
+        append_snapshot_bytes(encoded, &account.id)?;
+        append_snapshot_bytes(encoded, &account.public_key)?;
+    }
+
+    Ok(())
+}
+
+fn encode_snapshot_quotes(
+    encoded: &mut Vec<u8>,
+    move_quotes: &HashMap<String, MoveQuoteRecord>,
+    accounts: &HashMap<String, EmulatorAccount>,
+) -> Result<(), String> {
+    let mut quote_entries: Vec<_> = move_quotes.iter().collect();
+    quote_entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+    for (quote_id, quote) in quote_entries {
+        let quote_hex = quote_id.strip_prefix("qte_");
+        if quote_id != &quote.quote_id
+            || quote_hex.is_none_or(|value| !canonical_hex32_text(value))
+            || quote.source == quote.destination
+            || quote.amount == 0
+            || quote.currency != "LXP"
+            || quote.created_at == 0
+            || quote.expires_at <= quote.created_at
+            || accounts
+                .get(&quote.source)
+                .is_none_or(|account| account.id != quote.source_id)
+            || accounts
+                .get(&quote.destination)
+                .is_none_or(|account| account.id != quote.destination_id)
+            || quote
+                .committed_idempotency
+                .as_deref()
+                .is_some_and(|value| !valid_human_idempotency(value))
+        {
+            return Err("emulator move quote recovery binding is invalid".to_owned());
+        }
+        append_snapshot_text(encoded, quote_id)?;
+        append_snapshot_text(encoded, &quote.source)?;
+        append_snapshot_text(encoded, &quote.destination)?;
+        append_snapshot_bytes(encoded, &quote.source_id)?;
+        append_snapshot_bytes(encoded, &quote.destination_id)?;
+        append_snapshot_bytes(encoded, &quote.amount.to_be_bytes())?;
+        append_snapshot_text(encoded, &quote.currency)?;
+        append_snapshot_bytes(encoded, &quote.created_at.to_be_bytes())?;
+        append_snapshot_bytes(encoded, &quote.expires_at.to_be_bytes())?;
+        append_snapshot_bytes(encoded, &quote.identity_sequence.to_be_bytes())?;
+        append_snapshot_bytes(encoded, &quote.source_sequence.to_be_bytes())?;
+        match quote.committed_idempotency.as_deref() {
+            Some(value) => {
+                append_snapshot_bytes(encoded, &[1])?;
+                append_snapshot_text(encoded, value)?;
+            }
+            None => append_snapshot_bytes(encoded, &[0])?,
+        }
+    }
+
+    Ok(())
+}
+
+fn encode_snapshot_moves(
+    encoded: &mut Vec<u8>,
+    move_operations: &HashMap<String, MoveOperation>,
+    move_quotes: &HashMap<String, MoveQuoteRecord>,
+) -> Result<(), String> {
+    let mut move_entries: Vec<_> = move_operations.iter().collect();
+    move_entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+    for (idempotency, operation) in move_entries {
+        if !valid_human_idempotency(idempotency)
+            || operation.body.is_empty()
+            || operation.body.len() > MAX_PROGRAM_RESPONSE_BYTES
+            || !matches!(operation.status, 200 | 400 | 404 | 409 | 503)
+            || serde_json::from_str::<serde_json::Value>(&operation.body).is_err()
+            || move_quotes
+                .get(&operation.quote_id)
+                .and_then(|quote| quote.committed_idempotency.as_deref())
+                != Some(idempotency)
+        {
+            return Err("emulator move operation recovery binding is invalid".to_owned());
+        }
+        append_snapshot_text(encoded, idempotency)?;
+        append_snapshot_text(encoded, &operation.quote_id)?;
+        append_snapshot_bytes(encoded, &operation.status.to_be_bytes())?;
+        append_snapshot_u32(encoded, operation.body.len())?;
+        append_snapshot_bytes(encoded, operation.body.as_bytes())?;
+    }
+
+    Ok(())
+}
+
+type ReceiptIndex = (HashMap<String, String>, VecDeque<String>);
+type ProgramIndex = (HashMap<String, ProgramOperation>, HashMap<String, String>);
+
+fn decode_snapshot_receipts(
+    authenticated: &[u8],
+    offset: &mut usize,
+    receipt_count: usize,
+) -> Result<ReceiptIndex, String> {
+    let mut receipts = HashMap::with_capacity(receipt_count);
+    let mut receipt_order = VecDeque::with_capacity(receipt_count);
+    for _ in 0..receipt_count {
+        let activity_id = hex_encode(snapshot_take(authenticated, offset, 32)?);
+        let receipt_length = snapshot_u32(authenticated, offset)?;
+        if receipt_length == 0 || receipt_length > MAX_RECEIPT_BYTES {
+            return Err("emulator recovery receipt exceeds its bound".to_owned());
+        }
+        let receipt = hex_encode(snapshot_take(authenticated, offset, receipt_length)?);
+        if receipts.insert(activity_id.clone(), receipt).is_some() {
+            return Err("emulator recovery receipt activity is duplicated".to_owned());
+        }
+        receipt_order.push_back(activity_id);
+    }
+
+    Ok((receipts, receipt_order))
+}
+
+fn decode_snapshot_programs(
+    authenticated: &[u8],
+    offset: &mut usize,
+    operation_count: usize,
+) -> Result<ProgramIndex, String> {
+    let mut program_operations = HashMap::with_capacity(operation_count);
+    let mut program_activity_operations = HashMap::with_capacity(operation_count);
+    for _ in 0..operation_count {
+        let idempotency_key = hex_encode(snapshot_take(authenticated, offset, 32)?);
+        let activity_id = hex_encode(snapshot_take(authenticated, offset, 32)?);
+        let response_length = snapshot_u32(authenticated, offset)?;
+        if response_length == 0 || response_length > MAX_PROGRAM_RESPONSE_BYTES {
+            return Err("emulator recovery program response exceeds its bound".to_owned());
+        }
+        let response = std::str::from_utf8(snapshot_take(authenticated, offset, response_length)?)
+            .map_err(|_| "emulator recovery program response is not UTF-8".to_owned())?
+            .to_owned();
+        if !canonical_program_response(&response, &activity_id, &idempotency_key) {
+            return Err("emulator recovery program response is invalid".to_owned());
+        }
+        let retained_length = snapshot_u32(authenticated, offset)?;
+        if retained_length > MAX_RETAINED_SIGNED_ACTIVITY_BYTES {
+            return Err("emulator retained recovery activity exceeds its bound".to_owned());
+        }
+        let retained_signed_activity = if retained_length == 0 {
+            None
+        } else {
+            Some(hex_encode(snapshot_take(
+                authenticated,
+                offset,
+                retained_length,
+            )?))
+        };
+        if program_activity_operations
+            .insert(activity_id.clone(), idempotency_key.clone())
+            .is_some()
+            || program_operations
+                .insert(
+                    idempotency_key,
+                    ProgramOperation {
+                        activity_id,
+                        response,
+                        retained_signed_activity,
+                    },
+                )
+                .is_some()
+        {
+            return Err("emulator recovery program binding is duplicated".to_owned());
+        }
+    }
+
+    Ok((program_operations, program_activity_operations))
+}
+
+fn decode_snapshot_accounts(
+    authenticated: &[u8],
+    offset: &mut usize,
+    account_count: usize,
+) -> Result<HashMap<String, EmulatorAccount>, String> {
+    let mut accounts = HashMap::with_capacity(account_count);
+    for _ in 0..account_count {
+        let name = snapshot_text(authenticated, offset, 1_024)?;
+        let did = snapshot_text(authenticated, offset, 512)?;
+        let id: [u8; 32] = snapshot_take(authenticated, offset, 32)?
+            .try_into()
+            .map_err(|_| "emulator recovery account id is invalid".to_owned())?;
+        let public_key: [u8; 32] = snapshot_take(authenticated, offset, 32)?
+            .try_into()
+            .map_err(|_| "emulator recovery public key is invalid".to_owned())?;
+        if name != format!("agent:{did}:main")
+            || !did.starts_with("did:")
+            || did.contains('\0')
+            || id == [0; 32]
+            || public_key == [0; 32]
+            || accounts
+                .insert(
+                    name,
+                    EmulatorAccount {
+                        id,
+                        did,
+                        public_key,
+                    },
+                )
+                .is_some()
+        {
+            return Err("emulator recovery account binding is invalid".to_owned());
+        }
+    }
+
+    Ok(accounts)
+}
+
+fn decode_snapshot_quotes(
+    authenticated: &[u8],
+    offset: &mut usize,
+    move_quote_count: usize,
+    accounts: &HashMap<String, EmulatorAccount>,
+) -> Result<HashMap<String, MoveQuoteRecord>, String> {
+    let mut move_quotes = HashMap::with_capacity(move_quote_count);
+    for _ in 0..move_quote_count {
+        let quote_id = snapshot_text(authenticated, offset, 80)?;
+        let source = snapshot_text(authenticated, offset, 1_024)?;
+        let destination = snapshot_text(authenticated, offset, 1_024)?;
+        let source_id: [u8; 32] = snapshot_take(authenticated, offset, 32)?
+            .try_into()
+            .map_err(|_| "emulator recovery source id is invalid".to_owned())?;
+        let destination_id: [u8; 32] = snapshot_take(authenticated, offset, 32)?
+            .try_into()
+            .map_err(|_| "emulator recovery destination id is invalid".to_owned())?;
+        let amount = snapshot_u128(authenticated, offset)?;
+        let currency = snapshot_text(authenticated, offset, 16)?;
+        let created_at = snapshot_u64(authenticated, offset)?;
+        let expires_at = snapshot_u64(authenticated, offset)?;
+        let identity_sequence = snapshot_u64(authenticated, offset)?;
+        let source_sequence = snapshot_u64(authenticated, offset)?;
+        let committed_idempotency = match snapshot_take(authenticated, offset, 1)?[0] {
+            0 => None,
+            1 => Some(snapshot_text(authenticated, offset, 128)?),
+            _ => return Err("emulator recovery move quote state is invalid".to_owned()),
+        };
+        let quote = MoveQuoteRecord {
+            quote_id: quote_id.clone(),
+            source,
+            destination,
+            source_id,
+            destination_id,
+            amount,
+            currency,
+            created_at,
+            expires_at,
+            identity_sequence,
+            source_sequence,
+            committed_idempotency,
+        };
+        if quote_id
+            .strip_prefix("qte_")
+            .is_none_or(|value| !canonical_hex32_text(value))
+            || quote.source == quote.destination
+            || quote.amount == 0
+            || quote.currency != "LXP"
+            || quote.created_at == 0
+            || quote.expires_at <= quote.created_at
+            || accounts
+                .get(&quote.source)
+                .is_none_or(|account| account.id != quote.source_id)
+            || accounts
+                .get(&quote.destination)
+                .is_none_or(|account| account.id != quote.destination_id)
+            || quote
+                .committed_idempotency
+                .as_deref()
+                .is_some_and(|value| !valid_human_idempotency(value))
+            || move_quotes.insert(quote_id, quote).is_some()
+        {
+            return Err("emulator recovery move quote binding is invalid".to_owned());
+        }
+    }
+
+    Ok(move_quotes)
+}
+
+fn decode_snapshot_moves(
+    authenticated: &[u8],
+    offset: &mut usize,
+    move_operation_count: usize,
+    move_quotes: &HashMap<String, MoveQuoteRecord>,
+) -> Result<HashMap<String, MoveOperation>, String> {
+    let mut move_operations = HashMap::with_capacity(move_operation_count);
+    for _ in 0..move_operation_count {
+        let idempotency = snapshot_text(authenticated, offset, 128)?;
+        let quote_id = snapshot_text(authenticated, offset, 80)?;
+        let status_bytes: [u8; 2] = snapshot_take(authenticated, offset, 2)?
+            .try_into()
+            .map_err(|_| "emulator recovery move status is invalid".to_owned())?;
+        let status = u16::from_be_bytes(status_bytes);
+        let body_length = snapshot_u32(authenticated, offset)?;
+        if body_length == 0 || body_length > MAX_PROGRAM_RESPONSE_BYTES {
+            return Err("emulator recovery move response exceeds its bound".to_owned());
+        }
+        let body = std::str::from_utf8(snapshot_take(authenticated, offset, body_length)?)
+            .map_err(|_| "emulator recovery move response is not UTF-8".to_owned())?
+            .to_owned();
+        let operation = MoveOperation {
+            quote_id: quote_id.clone(),
+            status,
+            body,
+        };
+        if !valid_human_idempotency(&idempotency)
+            || !matches!(status, 200 | 400 | 404 | 409 | 503)
+            || serde_json::from_str::<serde_json::Value>(&operation.body).is_err()
+            || move_quotes
+                .get(&quote_id)
+                .and_then(|quote| quote.committed_idempotency.as_deref())
+                != Some(idempotency.as_str())
+            || move_operations.insert(idempotency, operation).is_some()
+        {
+            return Err("emulator recovery move operation binding is invalid".to_owned());
+        }
+    }
+    Ok(move_operations)
+}
+
+fn validate_move_commit(
+    emulator: &mut Emulator,
+    idempotency: String,
+    quote: MoveQuoteRecord,
+    state: CoreState,
+    trace: u64,
+) -> Response {
+    let source_authority = match emulator.accounts.get(&quote.source) {
+        Some(value)
+            if value.id == quote.source_id
+                && value.public_key == emulator.signing_key.verifying_key().to_bytes() =>
+        {
+            value.clone()
+        }
+        _ => {
+            return refusal(
+                trace,
+                409,
+                "move_quote_stale",
+                "source authority or account sequence changed after quotation",
+            )
+        }
+    };
+    let identity_sequence = match core_identity_sequence(emulator, &source_authority.did) {
+        Ok(value) if value == quote.identity_sequence => value,
+        Ok(_) => {
+            return refusal(
+                trace,
+                409,
+                "move_quote_stale",
+                "source identity sequence changed after quotation",
+            )
+        }
+        Err(code) => return core_response(trace, code),
+    };
+    let source = match core_account(emulator, &quote.source) {
+        Ok(Some(value))
+            if value.id == quote.source_id
+                && value.next_sequence == quote.source_sequence
+                && value.balance >= quote.amount =>
+        {
+            value
+        }
+        Ok(_) => {
+            return refusal(
+                trace,
+                409,
+                "move_balance_unavailable",
+                "source canonical balance cannot cover the quoted move",
+            )
+        }
+        Err(code) => return core_response(trace, code),
+    };
+    let destination = match core_account(emulator, &quote.destination) {
+        Ok(Some(value)) if value.id == quote.destination_id => value,
+        Ok(_) => {
+            return refusal(
+                trace,
+                409,
+                "move_quote_stale",
+                "destination account changed after quotation",
+            )
+        }
+        Err(code) => return core_response(trace, code),
+    };
+    let _ = (source_authority, identity_sequence);
+    execute_move_commit(
+        emulator,
+        MoveCommitContext {
+            idempotency,
+            quote,
+            state,
+            source,
+            destination,
+        },
+        trace,
+    )
+}
+
+fn execute_move_commit(
+    emulator: &mut Emulator,
+    context: MoveCommitContext,
+    trace: u64,
+) -> Response {
+    let MoveCommitContext {
+        idempotency,
+        quote,
+        state,
+        source,
+        destination,
+    } = context;
+    let protocol_idempotency = move_idempotency(&idempotency);
+    let (activity, expected_activity_id, expected_context_hash, expected_authorization_hash) =
+        match signed_move_activity(emulator, &quote, protocol_idempotency) {
+            Ok(value) => value,
+            Err(error) => return refusal(trace, 503, "move_encoding_failed", &error),
+        };
+    let mut receipt = empty_core_receipt();
+    let code = unsafe {
+        platform_emulator_execute(
+            emulator.core,
+            activity.as_ptr(),
+            activity.len(),
+            &raw mut receipt,
+        )
+    };
+    if code != 0 && code != -904 {
+        return core_response(trace, code);
+    }
+    let batch_id = receipt.batch_id;
+    let previous_state_root = receipt.previous_state_root;
+    let resulting_state_root = receipt.state_root;
+    let asset = receipt.asset;
+    let sequencer_public_key = receipt.sequencer_public_key;
+    let result_code = receipt.result_code;
+    let material = match take_core_receipt(&mut receipt) {
+        Ok(value) => value,
+        Err(error) => {
+            return move_unknown(
+                emulator,
+                idempotency,
+                &quote.quote_id,
+                trace,
+                "move_receipt_unavailable",
+                &error,
+            );
+        }
+    };
+    if result_code != 0 {
+        let refused = core_response(trace, result_code);
+        retain_move_response(emulator, idempotency, &quote.quote_id, &refused);
+        return refused;
+    }
+    let authorised = AuthorizedBatch::new(
+        batch_id,
+        asset,
+        previous_state_root,
+        resulting_state_root,
+        sequencer_public_key,
+    );
+    verify_move_commit(
+        emulator,
+        MoveExecutionResult {
+            context: MoveCommitContext {
+                idempotency,
+                quote,
+                state,
+                source,
+                destination,
+            },
+            material,
+            authorised,
+            expected_activity_id,
+            expected_context_hash,
+            expected_authorization_hash,
+            code,
+        },
+        trace,
+    )
+}
+
+struct MoveCommitContext {
+    idempotency: String,
+    quote: MoveQuoteRecord,
+    state: CoreState,
+    source: CoreAccountView,
+    destination: CoreAccountView,
+}
+
+fn verify_move_commit(
+    emulator: &mut Emulator,
+    result: MoveExecutionResult,
+    trace: u64,
+) -> Response {
+    let MoveExecutionResult {
+        context,
+        material,
+        authorised,
+        expected_activity_id,
+        expected_context_hash,
+        expected_authorization_hash,
+        code,
+    } = result;
+    let MoveCommitContext {
+        idempotency,
+        quote,
+        state,
+        source,
+        destination,
+    } = context;
+    let Ok(verified) = verify_receipt(&material.receipt, &authorised) else {
+        return move_unknown(
+            emulator,
+            idempotency,
+            &quote.quote_id,
+            trace,
+            "move_receipt_verification_failed",
+            "core committed a move but its returned receipt did not verify",
+        );
+    };
+    let expected_source_after = source.balance - quote.amount;
+    let expected_destination_after = destination.balance + quote.amount;
+    let protocol = match verified.receipt().protocol() {
+        Some(value)
+            if material.activity_id == expected_activity_id
+                && value.protocol_version() == layerx_wire::limits::PROTOCOL_VERSION
+                && value.activity_id() == expected_activity_id
+                && value.result_code() == 0
+                && value.module_id() == 1
+                && u16::from(value.operation()) == ASSET_SEND_OPERATION
+                && value.asset() == NATIVE_ASSET
+                && value.amount() == quote.amount
+                && value.from() == quote.source_id
+                && value.to() == quote.destination_id
+                && value.debit_balance_before() == source.balance
+                && value.debit_balance_after() == expected_source_after
+                && value.credit_balance_before() == destination.balance
+                && value.credit_balance_after() == expected_destination_after
+                && value.debit_sequence() == quote.source_sequence
+                && value.previous_state_root() == state.receipt_state_root
+                && value.resulting_state_root() != value.previous_state_root()
+                && value.context_hash() == expected_context_hash
+                && value.authorization_hash() == expected_authorization_hash
+                && value.transfer_set_root() != [0; 32]
+                && value.effects().len() == 1
+                && value.effects()[0].module_id() == 1
+                && value.effects()[0].kind() == 2
+                && value.effects()[0].monetary()
+                && value.effects()[0].transfer_set_root() == value.transfer_set_root() =>
+        {
+            value
+        }
+        _ => {
+            return move_unknown(
+                emulator,
+                idempotency,
+                &quote.quote_id,
+                trace,
+                "move_receipt_binding_failed",
+                "verified receipt does not bind the exact quoted move",
+            )
+        }
+    };
+    if let Err(response) = validate_move_post_state(
+        emulator,
+        idempotency.clone(),
+        &quote,
+        &state,
+        protocol,
+        trace,
+    ) {
+        return response;
+    }
+    finish_verified_move(
+        emulator,
+        MoveCommitContext {
+            idempotency,
+            quote,
+            state,
+            source,
+            destination,
+        },
+        &material,
+        expected_activity_id,
+        &verified,
+        code,
+        trace,
+    )
+}
+
+struct MoveExecutionResult {
+    context: MoveCommitContext,
+    material: OwnedCoreReceipt,
+    authorised: AuthorizedBatch,
+    expected_activity_id: [u8; 32],
+    expected_context_hash: [u8; 32],
+    expected_authorization_hash: [u8; 32],
+    code: c_int,
+}
+
+fn validate_move_post_state(
+    emulator: &mut Emulator,
+    idempotency: String,
+    quote: &MoveQuoteRecord,
+    state: &CoreState,
+    protocol: &layerx_wire::receipt::ProtocolReceipt,
+    trace: u64,
+) -> Result<(), Response> {
+    let post_source = match core_account(emulator, &quote.source) {
+        Ok(Some(value)) => value,
+        Ok(None) => {
+            return Err(move_unknown(
+                emulator,
+                idempotency,
+                &quote.quote_id,
+                trace,
+                "move_receipt_binding_failed",
+                "committed source account disappeared from canonical state",
+            ));
+        }
+        Err(code) => return Err(core_response(trace, code)),
+    };
+    let post_destination = match core_account(emulator, &quote.destination) {
+        Ok(Some(value)) => value,
+        Ok(None) => {
+            return Err(move_unknown(
+                emulator,
+                idempotency,
+                &quote.quote_id,
+                trace,
+                "move_receipt_binding_failed",
+                "committed destination account disappeared from canonical state",
+            ));
+        }
+        Err(code) => return Err(core_response(trace, code)),
+    };
+    let post_state = match inspect_state(emulator) {
+        Ok(value) => value,
+        Err(code) => return Err(core_response(trace, code)),
+    };
+    if post_source.balance != protocol.debit_balance_after()
+        || post_source.next_sequence != quote.source_sequence + 1
+        || post_destination.balance != protocol.credit_balance_after()
+        || post_state.receipt_state_root != protocol.resulting_state_root()
+        || post_state.canonical_state_root == state.canonical_state_root
+    {
+        return Err(move_unknown(
+            emulator,
+            idempotency,
+            &quote.quote_id,
+            trace,
+            "move_receipt_binding_failed",
+            "receipt economic facts disagree with canonical account state",
+        ));
+    }
+    Ok(())
+}
+
+fn publish_move_commit(
+    emulator: &mut Emulator,
+    context: MoveCommitContext,
+    material: &OwnedCoreReceipt,
+    expected_activity_id: [u8; 32],
+    receipt_digest: [u8; 32],
+    code: c_int,
+    trace: u64,
+) -> Response {
+    let MoveCommitContext {
+        idempotency,
+        quote,
+        state,
+        ..
+    } = context;
+    remember_receipt(
+        emulator,
+        hex_encode(&expected_activity_id),
+        hex_encode(&material.receipt),
+    );
+    let journey = match move_journey(
+        &quote,
+        &idempotency,
+        expected_activity_id,
+        receipt_digest,
+        state.timestamp_ms,
+    ) {
+        Ok(value) => value,
+        Err(error) => {
+            return move_unknown(
+                emulator,
+                idempotency,
+                &quote.quote_id,
+                trace,
+                "move_journey_encoding_failed",
+                &error,
+            )
+        }
+    };
+    let completed = success(trace, &journey.to_string());
+    retain_move_response(emulator, idempotency, &quote.quote_id, &completed);
+    if code == -904 {
+        refusal(
+            trace,
+            503,
+            "move_acknowledgement_lost",
+            "move committed and was retained under the original idempotency key",
+        )
+    } else {
+        completed
+    }
+}
+
+fn finish_verified_move(
+    emulator: &mut Emulator,
+    context: MoveCommitContext,
+    material: &OwnedCoreReceipt,
+    expected_activity_id: [u8; 32],
+    verified: &layerx_proof::receipt::VerifiedReceipt,
+    code: c_int,
+    trace: u64,
+) -> Response {
+    let MoveCommitContext {
+        ref idempotency,
+        ref quote,
+        ..
+    } = context;
+    let Some(receipt_digest) = verified.evidence().receipt_digest() else {
+        return move_unknown(
+            emulator,
+            idempotency.clone(),
+            &quote.quote_id,
+            trace,
+            "move_receipt_binding_failed",
+            "verified receipt omitted its digest",
+        );
+    };
+    publish_move_commit(
+        emulator,
+        context,
+        material,
+        expected_activity_id,
+        receipt_digest,
+        code,
+        trace,
+    )
 }
