@@ -59,6 +59,7 @@ def chain(directory, name, source=None, block=None):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--build-dir', default='build')
+    parser.add_argument('--maintenance', action='store_true')
     args = parser.parse_args()
     build = (ROOT / args.build_dir).resolve()
     evidence = ROOT / 'build' / 'custody-qualification'
@@ -112,6 +113,9 @@ def main():
                     work / 'actor', '0', timestamp, work / 'activity')
                 run(build / 'tests/bridge/test-credit', work / 'genesis-output/genesis.manifest',
                     work / 'activity', work / 'actor')
+                if args.maintenance:
+                    run(build / 'tests/lxp_test_maintenance_publication',
+                        work / 'genesis-output/genesis.manifest', work / 'activity')
                 run(sys.executable, 'tests/bridge/test_evidence.py', *attest)
     print('real custody signing, native verification, rollback, replay and evidence gates passed')
 

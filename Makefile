@@ -3123,3 +3123,15 @@ test-bridge-credit: $(BUILD_DIR)/tests/bridge/sign-credit $(BUILD_DIR)/tests/bri
 .PHONY: test-daemon-maintenance-publication test-maintenance-publication
 test-daemon-maintenance-publication: $(BUILD_DIR)/tests/lxp_test_program_admission $(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build
 	bash tests/daemon/program-admission.sh $(BUILD_DIR) --maintenance
+
+$(BUILD_DIR)/tests/lxp_test_maintenance_crash: tests/daemon/lxp_test_maintenance_crash.c $(filter-out $(BUILD_DIR)/obj/cmd/layerxd/main.o,$(LAYERXD_OBJECTS)) $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(filter-out $(BUILD_DIR)/obj/cmd/layerxd/main.o,$(LAYERXD_OBJECTS)) $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) $(EXTRA_LDFLAGS) -Wl,--wrap=lxp_daemon_start_protocol_batch -lcrypto -lsqlite3 -pthread -ldl -lm -o $@
+
+.PHONY: test-daemon-maintenance-crash
+test-daemon-maintenance-crash: $(BUILD_DIR)/tests/lxp_test_maintenance_crash $(BUILD_DIR)/tests/lxp_test_program_admission $(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build
+	bash tests/daemon/maintenance-crash.sh $(BUILD_DIR)
+
+.PHONY: test-bridge-maintenance-publication
+test-bridge-maintenance-publication: $(BUILD_DIR)/tests/lxp_test_maintenance_publication $(BUILD_DIR)/tests/bridge/sign-credit $(BUILD_DIR)/tests/bridge/test-credit build/bin/layerx-genesis-build
+	$(BRIDGE_PYTHON) tests/bridge/qualify_credit.py --build-dir $(BUILD_DIR) --maintenance
