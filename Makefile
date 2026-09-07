@@ -2978,6 +2978,15 @@ programs-native-lifecycle-fixtures: $(BUILD_DIR)/tests/programs_call_activity
 programs-check-native-lifecycle-fixtures: $(BUILD_DIR)/tests/programs_call_activity
 	python3 platform/sdk/conformance/fixtures/generate_native_lifecycle_fixtures.py --encoder $< --check
 
+.PHONY: programs-executed-v4-fixture programs-check-executed-v4-fixture
+programs-executed-v4-fixture: programs-build
+	$(MAKE) $(BUILD_DIR)/tests/programs_call_activity
+	python3 platform/sdk/conformance/fixtures/generate_executed_program_v4_fixture.py --encoder $(BUILD_DIR)/tests/programs_call_activity
+
+programs-check-executed-v4-fixture: programs-build
+	$(MAKE) $(BUILD_DIR)/tests/programs_call_activity
+	python3 platform/sdk/conformance/fixtures/generate_executed_program_v4_fixture.py --encoder $(BUILD_DIR)/tests/programs_call_activity --check
+
 .PHONY: programs-executed-fixture programs-check-executed-fixture
 programs-executed-fixture: $(BUILD_DIR)/tests/programs_call_activity
 	python3 platform/sdk/conformance/fixtures/generate_executed_program_fixture.py --encoder $<
