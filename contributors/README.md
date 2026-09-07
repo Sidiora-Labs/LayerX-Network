@@ -1,6 +1,6 @@
 # Contributors
 
-LayerX recognises contributors in the all-contributors sense: patches, review, documentation, tests, and operations all count. Names are listed in [CONTRIBUTORS.md](../CONTRIBUTORS.md).
+LayerX Network recognises contributors in the all-contributors sense: patches, review, documentation, tests, and operations all count. Names are listed in [CONTRIBUTORS.md](../CONTRIBUTORS.md).
 
 Recognition is not the same as maintainer status. Governance is described in [GOVERNANCE.md](../GOVERNANCE.md).
 

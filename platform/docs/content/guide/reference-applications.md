@@ -1,6 +1,6 @@
 # Reference applications
 
-Four cloneable applications live under `platform/examples`: a buyer agent that pays a metered API through buyer middleware, the paid API protected by seller middleware, a merchant shop with durable receipt-backed orders and signed settlement webhooks, and a marketplace implemented as a LayerX Program.
+Four cloneable applications live under `platform/examples`: a buyer agent that pays a metered API through buyer middleware, the paid API protected by seller middleware, a merchant shop with durable receipt-backed orders and signed settlement webhooks, and a marketplace implemented as a LayerX Network program.
 
 The checked-in `platform/examples/reference-apps.json` is the launch manifest. It names the exact emulator and testnet command for every application. Public endpoints and the names of required environment variables are declared in each application's `layerx.example.json`; selecting a profile is the only way to select a network. Tokens remain server-side environment values and are never compiled into browser code.
 

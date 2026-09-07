@@ -1,7 +1,7 @@
 # Program porting crates
 
 The `programs/` workspace members `porting/solana`, `porting/evm`, and
-`porting/cosmwasm` (plus each crate's `guest`) are the LayerX program porting
+`porting/cosmwasm` (plus each crate's `guest`) are the LayerX Network program porting
 kits (`programs/Cargo.toml:11-16`, `programs/README.md:51`,
 `programs/README.md:210-217`). Package names are `layerx-porting-solana`,
 `layerx-porting-evm`, and `layerx-porting-cosmwasm`; lib names are

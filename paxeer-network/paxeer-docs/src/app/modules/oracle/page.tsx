@@ -78,7 +78,7 @@ export default function Oracle() {
 
       <ul>
         <li><strong>PAX/USD price:</strong> For gas price estimation and fee calculations</li>
-        <li><strong>USDL valuation:</strong> For LayerX settlement contracts</li>
+        <li><strong>USDL valuation:</strong> For LayerX Network settlement contracts</li>
         <li><strong>Cross-chain asset prices:</strong> For IBC transfers and interchain operations</li>
       </ul>
 

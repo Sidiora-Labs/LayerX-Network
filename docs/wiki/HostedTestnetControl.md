@@ -1,7 +1,7 @@
 # Hosted testnet control
 
 `layerx-testnet-control` is the public status, parameter, and journey
-admission surface for hosted LayerX, and the private funding/reset
+admission surface for hosted LayerX Network, and the private funding/reset
 proxy (`platform/hosted/testnet/README.md:3`;
 `platform/hosted/testnet/Cargo.toml:11-13`;
 `platform/hosted/testnet/src/main.rs:1141-1282`). The crate is

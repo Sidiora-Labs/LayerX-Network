@@ -1,6 +1,6 @@
 # Monorepo layout
 
-This repository is the canonical Sidiora Labs ecosystem monorepo for LayerX and the Paxeer Network. Co-location keeps the protocol, settlement network, contracts, developer surfaces, and their automation auditable in one place while preserving their separate build, release, deployment, and trust boundaries.
+This repository is the canonical Sidiora Labs ecosystem monorepo for LayerX Network and the Paxeer Network. Co-location keeps the protocol, settlement network, contracts, developer surfaces, and their automation auditable in one place while preserving their separate build, release, deployment, and trust boundaries.
 
 ## What lives where
 

@@ -1,6 +1,6 @@
 # Qualification
 
-LayerX qualification is evidence layered by risk. A lower layer never implies a
+LayerX Network qualification is evidence layered by risk. A lower layer never implies a
 higher one, and no local command authorizes deployment or handling real assets.
 
 The core runtime is C17 (`-std=c17` in the root `Makefile`). Agent, human, and

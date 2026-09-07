@@ -1,6 +1,6 @@
 # Programs workspace gates
 
-The `programs/` tree is a Cargo workspace for the LayerX programs surface: a deterministic WASM runtime, the registry that proves what a program deployed and what it holds, the C↔Rust bridge into the protocol kernel, developer SDKs, porting kits, and the adversarial test corpus (`programs/README.md:5-7`). Guest execution is dispatched under kernel module ID `9` (`LXP_MODULE_PROGRAMS`); a program is not a ninth economic module and writes no balances of its own (`programs/README.md:9-17`).
+The `programs/` tree is a Cargo workspace for the LayerX Network programs surface: a deterministic WASM runtime, the registry that proves what a program deployed and what it holds, the C↔Rust bridge into the protocol kernel, developer SDKs, porting kits, and the adversarial test corpus (`programs/README.md:5-7`). Guest execution is dispatched under kernel module ID `9` (`LXP_MODULE_PROGRAMS`); a program is not a ninth economic module and writes no balances of its own (`programs/README.md:9-17`).
 
 ## Workspace and crate layout
 

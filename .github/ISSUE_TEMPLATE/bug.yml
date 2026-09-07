@@ -1,4 +1,4 @@
-name: Bug report
+name: LayerX Network bug report
 description: Report a reproducible, non-security defect.
 title: "bug: "
 labels: [bug]

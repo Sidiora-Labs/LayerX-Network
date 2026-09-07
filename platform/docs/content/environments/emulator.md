@@ -1,6 +1,6 @@
 # The emulator
 
-The emulator is the local LayerX environment. It is not a mock: it runs the real protocol core transition, produces real receipts, and refuses everything the real chain refuses. What it adds is control - you can set the clock, prefund an account, inject a fault, and snapshot the whole world.
+The emulator is the local LayerX Network environment. It is not a mock: it runs the real protocol core transition, produces real receipts, and refuses everything the real chain refuses. What it adds is control - you can set the clock, prefund an account, inject a fault, and snapshot the whole world.
 
 ## Starting it
 
@@ -81,7 +81,7 @@ Timeouts, expiries and settlement windows are real, and waiting for them in wall
 
 It is a single local process holding state in memory. It is not a network, so it has no consensus, no other validators, and no external anchoring - `settlement-anchored` is not something a local run establishes. Differential conformance against the hosted testnet is what closes that gap, and it is a separate exercise from local development.
 
-For an environment with real finality and other participants, use the [testnet](environments-testnet.html).
+For an environment with real finality and other participants, use the [testnet quickstart](../../../../docs/wiki/Quickstart.md).
 
 ## Enforced by
 
