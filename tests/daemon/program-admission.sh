@@ -33,6 +33,8 @@ for _ in range(3):
 (root / 'ports').write_text(' '.join(ports) + '\n')
 PY
 read -r program_port replica_port rpc_port < "$work/ports"
+mkfifo "$work/replica-ready"
+exec {replica_ready_fd}<>"$work/replica-ready"
 LAYERX_NODE_PAXEER_CHAIN_ID=31337 \
 LAYERX_NODE_SETTLEMENT_CONTRACT=0x1111111111111111111111111111111111111111 \
 LAYERX_NODE_CHECKPOINT_REGISTRY=0x2222222222222222222222222222222222222222 \
@@ -42,8 +44,10 @@ bash platform/hosted/node/bootstrap.sh --data-dir "$work/data" --run-dir "$work/
     --lni-uid 4021 --lni-gid 4021 --program-port "$program_port" --replica-port "$replica_port" \
     --layerxd "$root/$build_dir/bin/layerxd" --genesis-build "$root/$build_dir/bin/layerx-genesis-build" \
     > "$work/bootstrap.log" 2>&1
-(set -a; source "$work/data/replica.env"; exec "$root/$build_dir/bin/layerxd" --authority-replica "$work/data/replica.conf") > "$work/replica.log" 2>&1 &
+(set -a; source "$work/data/replica.env"; export LAYERX_AUTHORITY_READY_FD="$replica_ready_fd"; exec "$root/$build_dir/bin/layerxd" --authority-replica "$work/data/replica.conf") > "$work/replica.log" 2>&1 &
 replica_pid=$!
+IFS= read -r -n 1 -t 20 replica_ready <&"$replica_ready_fd"
+[[ "$replica_ready" == R ]]
 (set -a; source "$work/data/sequencer.env"; exec "$root/$build_dir/bin/layerxd" --serve "$work/data/sequencer.conf") > "$work/sequencer.log" 2>&1 &
 sequencer_pid=$!
 for ((attempt=0; attempt<200; attempt++)); do
@@ -63,8 +67,10 @@ if [[ ${2:-} == --maintenance ]]; then
     kill -KILL "$replica_pid"
     wait "$replica_pid" || true
     replica_pid=
-    (set -a; source "$work/data/replica.env"; exec "$root/$build_dir/bin/layerxd" --authority-replica "$work/data/replica.conf") >> "$work/replica.log" 2>&1 &
+    (set -a; source "$work/data/replica.env"; export LAYERX_AUTHORITY_READY_FD="$replica_ready_fd"; exec "$root/$build_dir/bin/layerxd" --authority-replica "$work/data/replica.conf") >> "$work/replica.log" 2>&1 &
     replica_pid=$!
+    IFS= read -r -n 1 -t 20 replica_ready <&"$replica_ready_fd"
+    [[ "$replica_ready" == R ]]
     (set -a; source "$work/data/sequencer.env"; exec "$root/$build_dir/bin/layerxd" --serve "$work/data/sequencer.conf") >> "$work/sequencer.log" 2>&1 &
     sequencer_pid=$!
     python3 - "$work/run/layerxd.lni.sock" "$sequencer_pid" <<'PYWAIT'
