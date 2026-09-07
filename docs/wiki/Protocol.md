@@ -120,7 +120,7 @@ You pay for the work an activity does - bytes, signatures, state - not a zero-fe
 
 ## Status
 
-The public testnet exposes a gateway API and a faucet. There is no LayerX mainnet. Custody and settlement live on Paxeer. Source is open for inspection while the public lane is qualified.
+The public testnet exposes a gateway API and a faucet. There is no LayerX mainnet. Custody and settlement live on Paxeer. LayerX is licensed under the Apache License, Version 2.0.
 
 ---
 
