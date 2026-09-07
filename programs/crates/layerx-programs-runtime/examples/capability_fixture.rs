@@ -88,8 +88,8 @@ fn fixture() -> Result<Value, String> {
     let mut requests = ordered.clone();
     for grant in &mut requests {
         match grant {
-            Capability::Transfer402 { maximum_amount, .. } => *maximum_amount = 500,
-            Capability::ProgramSpend { maximum_amount, .. } => *maximum_amount = 500,
+            Capability::Transfer402 { maximum_amount, .. }
+            | Capability::ProgramSpend { maximum_amount, .. } => *maximum_amount = 500,
             _ => {}
         }
     }
@@ -108,10 +108,10 @@ fn fixture() -> Result<Value, String> {
             match grant {
                 Capability::Transfer402 { maximum_amount, .. } if tag == 5 => *maximum_amount = 501,
                 Capability::ProgramSpend { maximum_amount, .. } if tag == 9 => {
-                    *maximum_amount = 501
+                    *maximum_amount = 501;
                 }
                 Capability::BalanceView { receipt_digest, .. } if tag == 10 => {
-                    *receipt_digest = [0x55; 32]
+                    *receipt_digest = [0x55; 32];
                 }
                 _ => {}
             }

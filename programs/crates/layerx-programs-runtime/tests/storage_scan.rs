@@ -31,7 +31,7 @@ fn principal(byte: u8) -> PrincipalId {
 fn signed_leb(mut value: i32) -> Vec<u8> {
     let mut bytes = Vec::new();
     loop {
-        let byte = (value & 0x7f) as u8;
+        let byte = value.to_le_bytes()[0] & 0x7f;
         value >>= 7;
         let done = (value == 0 && byte & 0x40 == 0) || (value == -1 && byte & 0x40 != 0);
         bytes.push(if done { byte } else { byte | 0x80 });
@@ -425,7 +425,13 @@ fn candidate_scan_paginates_across_activities_and_is_insertion_order_independent
     assert_eq!(corrupted.execution().usage().storage_read_bytes, 0);
     let mut expected_refusal = (-2_i32).to_le_bytes().to_vec();
     expected_refusal.extend_from_slice(b"keep");
-    assert_eq!(corrupted.response().unwrap().bytes, expected_refusal);
+    assert_eq!(
+        corrupted
+            .response()
+            .unwrap_or_else(|| panic!("successful response required"))
+            .bytes,
+        expected_refusal
+    );
     assert_eq!(left, before);
     let second = execute(
         &scan_guest(b"", &cursor, 1, 93, 128, 13, 128, 13),
@@ -474,7 +480,13 @@ fn candidate_scan_enforces_complete_page_byte_ceiling_independently_of_entry_cei
         29,
     );
     assert_eq!(terminal.execution().usage().storage_read_bytes, 29);
-    assert_eq!(terminal.response().unwrap().bytes, terminal_page);
+    assert_eq!(
+        terminal
+            .response()
+            .unwrap_or_else(|| panic!("successful response required"))
+            .bytes,
+        terminal_page
+    );
     seed(&mut exact_storage, namespace, &[(b"d", b"d")]);
     seed(&mut one_byte_lower_storage, namespace, &[(b"d", b"d")]);
 
