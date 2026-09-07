@@ -846,15 +846,16 @@ mod source_vectors {
     }
 
     #[test]
-    fn producer_impossible_wrapper_order_is_refused() {
+    fn producer_impossible_wrapper_order_is_refused() -> Result<(), core::num::TryFromIntError> {
         let mut inner = b"LXP/program-execution-with-transfer-authority/v2\0".to_vec();
         inner.extend_from_slice(&0_u32.to_be_bytes());
         inner.extend_from_slice(&0_u32.to_be_bytes());
         inner.extend_from_slice(&[1; 32]);
         let mut outer = b"LXP/program-execution-with-occupancy/v1\0".to_vec();
-        outer.extend_from_slice(&(inner.len() as u32).to_be_bytes());
+        outer.extend_from_slice(&u32::try_from(inner.len())?.to_be_bytes());
         outer.extend_from_slice(&inner);
         outer.extend_from_slice(&0_u32.to_be_bytes());
         assert!(decode_terminal_payload(1, 2, &outer).is_err());
+        Ok(())
     }
 }
