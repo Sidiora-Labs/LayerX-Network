@@ -1711,7 +1711,10 @@ mod legacy_lifecycle_vectors {
         payload.extend_from_slice(&[0, 0]);
         payload.extend_from_slice(&[0; 32]);
         payload.extend_from_slice(&crate::hash::sha256(module));
-        payload.extend_from_slice(&(module.len() as u32).to_be_bytes());
+        let module_len = u32::try_from(module.len()).unwrap_or_else(|error| {
+            panic!("Wasm header length fits the u32 frame field: {error:?}")
+        });
+        payload.extend_from_slice(&module_len.to_be_bytes());
         payload.extend_from_slice(module);
         payload
     }
@@ -1725,7 +1728,10 @@ mod legacy_lifecycle_vectors {
         payload.extend_from_slice(&[3; 32]);
         payload.extend_from_slice(&crate::hash::sha256(module));
         payload.extend_from_slice(&0_u16.to_be_bytes());
-        payload.extend_from_slice(&(module.len() as u32).to_be_bytes());
+        let module_len = u32::try_from(module.len()).unwrap_or_else(|error| {
+            panic!("Wasm header length fits the u32 frame field: {error:?}")
+        });
+        payload.extend_from_slice(&module_len.to_be_bytes());
         payload.extend_from_slice(module);
         payload
     }
@@ -1769,7 +1775,10 @@ mod legacy_lifecycle_vectors {
         payload.extend_from_slice(&[3; 32]);
         payload.extend_from_slice(&crate::hash::sha256(module));
         payload.extend_from_slice(&0_u16.to_be_bytes());
-        payload.extend_from_slice(&(module.len() as u32).to_be_bytes());
+        let module_len = u32::try_from(module.len()).unwrap_or_else(|error| {
+            panic!("Wasm header length fits the u32 frame field: {error:?}")
+        });
+        payload.extend_from_slice(&module_len.to_be_bytes());
         payload.extend_from_slice(&0_u32.to_be_bytes());
         payload.extend_from_slice(module);
         assert!(matches!(
