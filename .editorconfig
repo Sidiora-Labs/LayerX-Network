@@ -6,17 +6,33 @@ end_of_line = lf
 insert_final_newline = true
 trim_trailing_whitespace = true
 
-[Makefile]
-indent_style = tab
-
-[*.{c,h,sol}]
+[*.rs]
 indent_style = space
 indent_size = 4
 
-[*.{json,md,toml,yaml,yml}]
+[*.{c,h}]
+indent_style = space
+indent_size = 4
+
+[*.sol]
+indent_style = space
+indent_size = 4
+
+[*.go]
+indent_style = tab
+
+[*.{yml,yaml}]
+indent_style = space
+indent_size = 2
+
+[*.json]
 indent_style = space
 indent_size = 2
 
 [*.md]
+indent_style = space
+indent_size = 2
 trim_trailing_whitespace = false
 
+[Makefile]
+indent_style = tab

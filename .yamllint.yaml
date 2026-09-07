@@ -1,0 +1,9 @@
+extends: relaxed
+
+rules:
+  indentation:
+    spaces: 2
+    indent-sequences: consistent
+  line-length: disable
+  document-start: disable
+  truthy: disable

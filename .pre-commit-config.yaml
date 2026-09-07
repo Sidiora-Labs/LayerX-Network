@@ -1,0 +1,31 @@
+exclude: ^(programs/vendor/)
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: \.md$
+      - id: end-of-file-fixer
+  - repo: https://github.com/igorshubovych/markdownlint-cli
+    rev: v0.49.1
+    hooks:
+      - id: markdownlint
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.38.0
+    hooks:
+      - id: yamllint
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt --check
+        language: system
+        pass_filenames: false
+        files: \.rs$
+        entry: bash -c 'status=0; for manifest in agent/Cargo.toml programs/Cargo.toml human/Cargo.toml interop/Cargo.toml platform/Cargo.toml cmd/layerxctl/Cargo.toml; do cargo fmt --check --manifest-path "$manifest" --all || status=1; done; exit "$status"'
+      - id: forge-fmt
+        name: forge fmt --check
+        language: system
+        pass_filenames: false
+        files: \.sol$
+        entry: forge fmt --check
