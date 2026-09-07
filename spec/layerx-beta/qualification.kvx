@@ -6639,6 +6639,7 @@ observed = "formerly observation.6.8.29. The required fetch and rebase onto orig
 assumption = "The exact gate ran on the earlier 944ba68385bd working tree and failed during activation; it is not a passing aggregate gate for the rebased repository. Source identity for the three changed helpers does not establish qualification of other changes brought in by rebase."
 
 [observation.6.8.31]
+[observation.6.8.30]
 task = "6.8"
 severity = "note"
 file = "platform/hosted/tests/beta-cluster.sh platform/hosted/paxeer/deploy-contracts.sh contracts/GuarantorBond.sol"
@@ -6647,6 +6648,10 @@ observed = "formerly observation.6.8.30. The settlement generator assigned gover
 assumption = "Contract assertions, member identities, controllers and certificate thresholds are unchanged. Focused and aggregate qualification outcomes are recorded separately."
 
 [observation.6.8.32]
+observed = "The settlement generator assigned governance_sequence 1 to every member, while GuarantorBond requires lastGovernanceSequence + 1 for each membership operation. The generator now assigns the sorted member position plus one. The deployment loader explicitly refuses non-contiguous sequences before any Forge deployment call; its existing default for omitted sequences is unchanged. The cluster shell test renders real generated secp256k1 members for thresholds two and three and asserts sorted order and exact 1..N sequences. Negative cases cover duplicate, zero, gap, string, fractional and reversed sequences through the production deployment validator."
+assumption = "Contract assertions, member identities, controllers and certificate thresholds are unchanged. Focused and aggregate qualification outcomes are recorded separately."
+
+[observation.6.8.31]
 task = "6.8"
 severity = "note"
 file = "platform/hosted/tests/beta-cluster.sh platform/hosted/paxeer/deploy-contracts.sh"
@@ -6655,6 +6660,10 @@ observed = "formerly observation.6.8.31. bash -n platform/hosted/tests/beta-clus
 assumption = "The exact make platform-hosted-topology-check platform-beta-cluster-up platform-hosted-smoke platform-beta-cluster-down gate is not run: the common rules forbid transactions on chain 125 while disposable bootstrap deploys contracts on chain 125. Clarification of that transaction boundary is required before executing bootstrap. No aggregate qualification or retained live cluster is claimed."
 
 [observation.6.8.33]
+observed = "bash -n platform/hosted/tests/beta-cluster.sh platform/hosted/paxeer/deploy-contracts.sh, bash platform/hosted/tests/beta-cluster.sh test-guarantor-sequences, make platform-hosted-topology-check, make beta-ledger-check and git diff --check each exit 0. The sequence test also compares every non-sequence member field against the sorted original input. Logs: qual-logs/au38/bash-n.log, cluster-test.log, topology.log, ledger.log and diff-check.log."
+assumption = "The exact make platform-hosted-topology-check platform-beta-cluster-up platform-hosted-smoke platform-beta-cluster-down gate is not run: the common rules forbid transactions on chain 125 while disposable bootstrap deploys contracts on chain 125. Clarification of that transaction boundary is required before executing bootstrap. No aggregate qualification or retained live cluster is claimed."
+
+[observation.6.8.32]
 task = "6.8"
 severity = "blocker"
 file = "platform/hosted/tests/beta-cluster.sh platform/cli/src/credential.rs docs/wiki/Quickstart.md"
@@ -6851,3 +6860,5 @@ symbol = "deployment_ingress_unavailable FileDeploymentJournal::append"
 observed = "The checkout lacks platform/hosted/human/material.py and platform/hosted/beta-cluster.sh. The existing cluster script is platform/hosted/tests/beta-cluster.sh. Registry POST /__registry/deployments unconditionally returns deployment_proof_unavailable. FileDeploymentJournal::append accepts VerifiedDeploymentEvidence and publishes a sealed .envelope; the two-file .admission/.deployment shape is a legacy reader input. DeploymentProof requires the canonical activity, activity inclusion proof, receipt inclusion proof, signed batch header, Programs root proof, program leaf witness and lifecycle witness. No consumer parser is present to establish the requested exact byte compatibility."
 assumption = "Supply the Human material assembler and its tests in this checkout and identify the authorized cluster script path. The native deployment interface must provide the complete canonical DeploymentProof material required by ProtocolDeploymentVerifier before registry ingress can publish verified journal pairs. Caller-supplied projections or invented receipt evidence cannot replace that interface. No implementation or real-binary deployment qualification is claimed."
 severity = "blocker"
+observed = "The initial make platform-beta-cluster-down exits 2 after deleting both kind nodes and reporting teardown complete: editing the shell source while it was running caused a subsequent parse error. Repeating that command against stable source exits 0, with an empty cluster-container inventory. Logs: qual-logs/au38/down.log, down-final.log and down-containers.log. The built release layerx --json key create quickstart exits 1 with the OS Secret Service error. CLI version, auth status, project scaffold and actual WASM build each exit 0; auth remains unconfigured. Exact commands: qual-logs/au38/quickstart-local.sh."
+assumption = "The cluster and its supervised forwards are down. Hosted Quickstart steps require a successful bring-up and exported environment; no curl funding or receipt success is claimed. The existing Quickstart env_write wording discrepancy remains recorded for the documentation owner. No credential-store substitute or persistent-chain operation is used."
