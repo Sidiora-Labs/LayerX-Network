@@ -6,7 +6,7 @@
 use layerx_portable::{
     interop_portable_verification, PortableReceipt, PortableReceiptError, PORTABLE_RECEIPT_FORMAT,
 };
-use layerx_proof::receipt::AuthorizedBatch;
+use layerx_proof::receipt::{AuthorizedBatch, ReceiptCheck, VerificationFailure};
 
 const GOLDEN_RECEIPT_JSON: &str = r#"{
   "format": "layerx-receipt-proof-v1",
@@ -142,7 +142,7 @@ fn verify_requires_matching_batch_authorization() {
 }
 
 #[test]
-fn roundtrip_export_and_verify() {
+fn export_rejects_truncated_canonical_receipt() {
     let canonical_receipt = vec![
         1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
         1, 1,
@@ -150,9 +150,11 @@ fn roundtrip_export_and_verify() {
     let batch = AuthorizedBatch::new([10u8; 32], [20u8; 32], [30u8; 32], [40u8; 32], [50u8; 32]);
 
     let result = PortableReceipt::export(&canonical_receipt, &batch);
-    assert!(
-        result.is_err() || result.is_ok(),
-        "Export with minimal receipt (will fail verification but tests API)"
+    assert_eq!(
+        result,
+        Err(PortableReceiptError::Receipt(VerificationFailure {
+            check: ReceiptCheck::Decode,
+        }))
     );
 }
 
