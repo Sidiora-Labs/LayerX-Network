@@ -16,6 +16,19 @@
 #   check-profile validate the selected profile against any existing deployment record
 #   status       print the recorded deployment and the on-chain view
 #
+# Custody-first integration:
+#   This runner currently consumes genuine LXGD/LXRR before prediction and deployment.
+#   A pre-genesis phase must deploy custody without genesis-dependent component runtime,
+#   then build the signed native genesis with that exact vault address/runtime profile.
+#   A post-genesis phase must consume and cross-check those real LXGD/LXRR artifacts,
+#   preserve the existing vault/bond identities and deploy/register the settlement registry.
+#   The current Solidity runner does not expose that split: StaticConfig hashes all three
+#   genesis commitments into the immutable component config (including vault runtime),
+#   and CheckpointRegistry requires them in its constructor. A Solidity configuration/
+#   deployment interface is required before shell orchestration can implement these phases.
+#   GuarantorBond also requires the fixed USDL token/asset; a WETH custody deployment is
+#   not a replacement settlement suite. Do not generate provisional roots for bootstrap.
+#
 # Environment:
 #   LAYERX_PAXEER_BOUNDARY_URL         https URL of the paxeer-boundary (required)
 #   LAYERX_PAXEER_BOUNDARY_CA_DER      DER certificate that issued the boundary certificate (required)
