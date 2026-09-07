@@ -48,9 +48,10 @@ const WORKLOADS: [Workload; 4] = [
 ];
 
 fn required_path(name: &str) -> PathBuf {
-    env::var_os(name)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| panic!("{name} must name a built ABI-v2 Wasm artifact"))
+    env::var_os(name).map_or_else(
+        || panic!("{name} must name a built ABI-v2 Wasm artifact"),
+        PathBuf::from,
+    )
 }
 
 fn decode_vectors() -> Vec<Vec<u8>> {

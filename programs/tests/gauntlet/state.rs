@@ -402,7 +402,11 @@ fn shared_cursor(owner: ProgramId, after: &[u8]) -> Vec<u8> {
     cursor.extend_from_slice(&0u16.to_be_bytes());
     cursor.extend_from_slice(&1u32.to_be_bytes());
     cursor.extend_from_slice(&128u32.to_be_bytes());
-    cursor.extend_from_slice(&(after.len() as u16).to_be_bytes());
+    cursor.extend_from_slice(
+        &u16::try_from(after.len())
+            .unwrap_or_else(|error| panic!("cursor length: {error}"))
+            .to_be_bytes(),
+    );
     cursor.extend_from_slice(after);
     cursor
 }
@@ -415,25 +419,12 @@ fn seed(storage: &mut Storage, namespace: StorageNamespace, key: &[u8], value: &
     assert_eq!(transaction.commit(), 1);
 }
 
-pub(super) fn foreign_shared_selectors_are_structurally_closed() {
-    let (attacker, actor) = ids(41, 51);
-    let (victim, _) = ids(42, 51);
-    let victim_namespace = StorageNamespace::shared(victim);
-    let attacker_namespace = StorageNamespace::shared(attacker);
-    let mut storage = Storage::new();
-    seed(&mut storage, victim_namespace, b"target", b"canary");
-    let principal_canary = StorageNamespace::principal(attacker, actor);
-    seed(
-        &mut storage,
-        principal_canary,
-        b"target",
-        b"principal-canary",
-    );
-    let grants = CapabilitySet::new([
-        Capability::SharedStorageRead,
-        Capability::SharedStorageWrite,
-    ])
-    .unwrap_or_else(|error| panic!("grants: {error}"));
+fn assert_shared_selector_refusals(
+    storage: &mut Storage,
+    attacker: ProgramId,
+    actor: PrincipalId,
+    grants: &CapabilitySet,
+) {
     for selector in [-1, 0, 3, i32::MAX] {
         for wasm in [
             scoped_read_guest(selector, b"target"),
@@ -446,7 +437,7 @@ pub(super) fn foreign_shared_selectors_are_structurally_closed() {
             let record = execute_candidate(
                 &Executor::declared(),
                 &wasm,
-                &mut storage,
+                storage,
                 attacker,
                 actor,
                 grants.clone(),
@@ -461,7 +452,7 @@ pub(super) fn foreign_shared_selectors_are_structurally_closed() {
                 CandidateActivityOutcome::Failure(_)
             ));
             assert!(record.effects().is_none());
-            assert_eq!(storage, before);
+            assert_eq!(*storage, before);
         }
     }
     for (selector, capability) in [
@@ -490,7 +481,7 @@ pub(super) fn foreign_shared_selectors_are_structurally_closed() {
             let record = execute_candidate(
                 &Executor::declared(),
                 &wasm,
-                &mut storage,
+                storage,
                 attacker,
                 actor,
                 CapabilitySet::new([capability.clone()])
@@ -501,9 +492,31 @@ pub(super) fn foreign_shared_selectors_are_structurally_closed() {
             assert_eq!(record.execution().outputs(), [WasmValue::I32(-1)]);
             assert_eq!(record.execution().usage().storage_read_bytes, 0);
             assert_eq!(record.execution().usage().storage_write_bytes, 0);
-            assert_eq!(storage, before);
+            assert_eq!(*storage, before);
         }
     }
+}
+
+pub(super) fn foreign_shared_selectors_are_structurally_closed() {
+    let (attacker, actor) = ids(41, 51);
+    let (victim, _) = ids(42, 51);
+    let victim_namespace = StorageNamespace::shared(victim);
+    let attacker_namespace = StorageNamespace::shared(attacker);
+    let mut storage = Storage::new();
+    seed(&mut storage, victim_namespace, b"target", b"canary");
+    let principal_canary = StorageNamespace::principal(attacker, actor);
+    seed(
+        &mut storage,
+        principal_canary,
+        b"target",
+        b"principal-canary",
+    );
+    let grants = CapabilitySet::new([
+        Capability::SharedStorageRead,
+        Capability::SharedStorageWrite,
+    ])
+    .unwrap_or_else(|error| panic!("grants: {error}"));
+    assert_shared_selector_refusals(&mut storage, attacker, actor, &grants);
     execute_candidate(
         &Executor::declared(),
         &scoped_write_guest(2, b"target", b"attacker"),
@@ -763,6 +776,16 @@ pub(super) fn narrowing_never_widens_shared_authority_across_a_call() {
         Ok(Some(b"delegated".to_vec()))
     );
 
+    assert_cross_storage_grants_refused(root, child, actor, &engine, &mut delegated_storage);
+}
+
+fn assert_cross_storage_grants_refused(
+    root: ProgramId,
+    child: ProgramId,
+    actor: PrincipalId,
+    engine: &WasmEngine,
+    delegated_storage: &mut Storage,
+) {
     for (parent_grant, requested_grant) in [
         (Capability::StorageWrite, Capability::SharedStorageWrite),
         (Capability::SharedStorageWrite, Capability::StorageWrite),
@@ -787,7 +810,7 @@ pub(super) fn narrowing_never_widens_shared_authority_across_a_call() {
             execute_candidate(
                 &Executor::declared(),
                 &call_with_capability_bytes(child, &requested),
-                &mut delegated_storage,
+                delegated_storage,
                 root,
                 actor,
                 CapabilitySet::new([Capability::Call { program: child }, parent_grant])
@@ -798,7 +821,7 @@ pub(super) fn narrowing_never_widens_shared_authority_across_a_call() {
                 AbiError::CapabilityDenied,
             )))
         );
-        assert_eq!(delegated_storage, before);
+        assert_eq!(*delegated_storage, before);
     }
     for (parent_grant, requested_grant, selector) in [
         (Capability::StorageRead, Capability::SharedStorageRead, 2),
@@ -819,7 +842,7 @@ pub(super) fn narrowing_never_widens_shared_authority_across_a_call() {
             execute_candidate(
                 &Executor::declared(),
                 &call_with_capability_bytes(child, &requested),
-                &mut delegated_storage,
+                delegated_storage,
                 root,
                 actor,
                 CapabilitySet::new([Capability::Call { program: child }, parent_grant])
@@ -830,7 +853,7 @@ pub(super) fn narrowing_never_widens_shared_authority_across_a_call() {
                 AbiError::CapabilityDenied,
             )))
         );
-        assert_eq!(delegated_storage, before);
+        assert_eq!(*delegated_storage, before);
     }
 }
 
