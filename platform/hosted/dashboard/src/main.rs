@@ -113,23 +113,23 @@ fn owned_route(config: &Config, request: &Request, principal: &Principal, at: u6
         ["v1", "dashboard", "overview"] => config
             .dashboard
             .overview(principal, at)
-            .map(|value| serde_json::to_value(value)),
+            .map(serde_json::to_value),
         ["v1", "dashboard", "keys"] => config
             .dashboard
             .keys(principal, at)
-            .map(|value| serde_json::to_value(value)),
+            .map(serde_json::to_value),
         ["v1", "dashboard", "usage"] => config
             .dashboard
             .usage(principal, at)
-            .map(|value| serde_json::to_value(value)),
+            .map(serde_json::to_value),
         ["v1", "dashboard", "requests"] => config
             .dashboard
             .requests(principal, page(request))
-            .map(|value| serde_json::to_value(value)),
+            .map(serde_json::to_value),
         ["v1", "dashboard", "webhooks"] => config
             .dashboard
             .endpoints(principal, at)
-            .map(|value| serde_json::to_value(value)),
+            .map(serde_json::to_value),
         ["v1", "dashboard", "webhook-deliveries"] => {
             let endpoint = request
                 .parameter("endpoint")
@@ -139,22 +139,22 @@ fn owned_route(config: &Config, request: &Request, principal: &Principal, at: u6
                 Ok(endpoint) => config
                     .dashboard
                     .deliveries(principal, endpoint.as_ref(), page(request), at)
-                    .map(|value| serde_json::to_value(value)),
+                    .map(serde_json::to_value),
                 Err(error) => Err(DashboardError::from(error)),
             }
         }
         ["v1", "dashboard", "webhook-dead-letters"] => config
             .dashboard
             .dead_letters(principal, page(request), at)
-            .map(|value| serde_json::to_value(value)),
+            .map(serde_json::to_value),
         ["v1", "dashboard", "test-payments"] => config
             .dashboard
             .payments(principal, page(request), at)
-            .map(|value| serde_json::to_value(value)),
+            .map(serde_json::to_value),
         ["v1", "dashboard", "receipts", activity] => config
             .dashboard
             .receipt(principal, activity, at)
-            .map(|value| serde_json::to_value(value)),
+            .map(serde_json::to_value),
         _ => return Reply::refusal(404, "not_found", None),
     };
     result
@@ -176,7 +176,7 @@ fn route(config: &Config, request: &Request) -> Reply {
     }
 }
 
-fn serve(config: Arc<Config>) -> Result<(), String> {
+fn serve(config: &Arc<Config>) -> Result<(), String> {
     let listener = TcpListener::bind(config.listen).map_err(|error| error.to_string())?;
     for accepted in listener.incoming() {
         let Ok(tcp) = accepted else {
@@ -186,7 +186,7 @@ fn serve(config: Arc<Config>) -> Result<(), String> {
             ACTIVE_CONNECTIONS.fetch_sub(1, Ordering::AcqRel);
             continue;
         }
-        let request_config = Arc::clone(&config);
+        let request_config = Arc::clone(config);
         thread::spawn(move || {
             let _guard = ConnectionGuard;
             let _ = handle(tcp, &request_config);
@@ -219,7 +219,7 @@ fn handle(tcp: TcpStream, config: &Config) -> Result<(), String> {
 }
 
 fn main() {
-    if let Err(error) = config().and_then(|config| serve(Arc::new(config))) {
+    if let Err(error) = config().and_then(|config| serve(&Arc::new(config))) {
         eprintln!("layerx-dashboard: {error}");
         std::process::exit(2);
     }
