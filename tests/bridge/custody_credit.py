@@ -373,11 +373,34 @@ def rpc_pair(urls):
     return rpcs
 
 
-def create_profile(args):
+def identity_rpcs(args):
+    if getattr(args, "disposable_identity", None):
+        from deploy_local_custody import disposable_rpc
+        require(getattr(args, "ca_bundle", None), "disposable identity requires CA")
+        require(len(args.rpc) == 2, "exactly two distinct RPC origins required")
+        rpcs = [disposable_rpc(url, args.ca_bundle, args.disposable_identity) for url in args.rpc]
+        require(rpcs[0].identity != rpcs[1].identity, "distinct endpoint origins required")
+        require(rpcs[0].genesis_sha256 == rpcs[1].genesis_sha256
+                and rpcs[0].comet_chain_id == rpcs[1].comet_chain_id, "Comet genesis quorum")
+        budget = {"calls": 0, "bytes": 0}
+        for rpc in rpcs:
+            rpc.budget = budget
+        return rpcs, rpcs[0].genesis_sha256
+    require(not getattr(args, "ca_bundle", None), "CA requires disposable identity")
+    require(all(urllib.parse.urlsplit(url).port not in (18545, 19443) for url in args.rpc),
+            "persistent host endpoint refused")
     rpcs = rpc_pair(args.rpc)
+    require(all(quantity(rpc.call("eth_chainId", [])) != 125 for rpc in rpcs),
+            "chain 125 requires verified disposable identity")
+    require(all("anvil" in rpc.call("web3_clientVersion", []).lower() for rpc in rpcs),
+            "non-Anvil chains require verified disposable identity")
+    return rpcs, unhex(agreed_block(rpcs, "0x0")["hash"], 32)
+
+
+def create_profile(args):
+    rpcs, genesis = identity_rpcs(args)
     chain = [quantity(rpc.call("eth_chainId", [])) for rpc in rpcs]
     require(chain == [args.chain_id, args.chain_id] and args.chain_id > 0, "chain identity")
-    genesis = agreed_block(rpcs, "0x0")
     tip = common_finalized(rpcs)
     code = verified_code(rpcs, args.vault, tip)
     require(sha(code) == unhex(args.runtime_sha256, 32), "vault runtime pin")
@@ -386,21 +409,20 @@ def create_profile(args):
     reserve = sha(b"LX:ACCOUNT:v1" + big(len(name), 4) + name)
     require(args.confirmations > 0 and args.network_id > 0, "confirmation/network bound")
     profile = (b"LXBC1" + big(args.chain_id, 8) + unhex(args.vault, 20) + sha(code) + public +
-               unhex(args.asset, 32) + reserve + big(args.confirmations, 8) + unhex(genesis["hash"], 32) +
+               unhex(args.asset, 32) + reserve + big(args.confirmations, 8) + genesis +
                big(args.network_id, 4) + big(3, 2))
     require(len(profile) == PROFILE_BYTES, "profile layout")
     write_new(args.output, profile)
 
 
 def attest(args):
-    rpcs = rpc_pair(args.rpc)
+    rpcs, genesis = identity_rpcs(args)
     with open(args.profile, "rb") as source:
         profile = source.read(PROFILE_BYTES + 1)
     require(len(profile) == PROFILE_BYTES and profile[:5] == b"LXBC1", "profile layout")
     chain = int.from_bytes(profile[5:13], "big")
     require(all(quantity(rpc.call("eth_chainId", [])) == chain for rpc in rpcs), "chain identity")
-    genesis = agreed_block(rpcs, "0x0")
-    require(unhex(genesis["hash"], 32) == profile[169:201], "chain genesis identity")
+    require(genesis == profile[169:201], "chain genesis identity")
     require(args.network_id > 0 and profile[201:207] == big(args.network_id, 4) + big(3, 2), "network/protocol binding")
     transaction = "0x" + unhex(args.transaction, 32).hex()
     observations = [rpc.call("eth_getTransactionReceipt", [transaction]) for rpc in rpcs]
@@ -479,6 +501,8 @@ def main():
     credit.add_argument("--beneficiary-key", required=True)
     credit.add_argument("--expected-amount", type=int, required=True)
     for command in (profile, credit):
+        command.add_argument("--ca-bundle")
+        command.add_argument("--disposable-identity")
         command.add_argument("--rpc", action="append", required=True)
         command.add_argument("--attestor-key", required=True)
         command.add_argument("--output", required=True)
