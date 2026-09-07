@@ -44,44 +44,16 @@ pub fn parse_request(stream: &mut impl Read) -> Result<Request, String> {
         .next()
         .unwrap_or_default()
         .to_owned();
-    let version = start.next().ok_or_else(|| "missing HTTP version".to_owned())?;
-    if version != "HTTP/1.1" || start.next().is_some() || !method.bytes().all(|byte| byte.is_ascii_uppercase()) {
+    let version = start
+        .next()
+        .ok_or_else(|| "missing HTTP version".to_owned())?;
+    if version != "HTTP/1.1"
+        || start.next().is_some()
+        || !method.bytes().all(|byte| byte.is_ascii_uppercase())
+    {
         return Err("invalid request line".to_owned());
     }
-    let mut headers = HashMap::new();
-    let mut content_length = 0_usize;
-    for line in lines.filter(|line| !line.is_empty()) {
-        let (raw_name, value) = line
-            .split_once(':')
-            .ok_or_else(|| "invalid header".to_owned())?;
-        if raw_name != raw_name.trim() {
-            return Err("invalid header name whitespace".to_owned());
-        }
-        let name = raw_name.to_ascii_lowercase();
-        let value = value.trim().to_owned();
-        if name.is_empty()
-            || !name.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-            || value.bytes().any(|byte| byte.is_ascii_control() && byte != b'\t')
-            || headers.contains_key(&name)
-        {
-            return Err("duplicate or invalid header".to_owned());
-        }
-        if name == "transfer-encoding" {
-            return Err("transfer encoding is not accepted".to_owned());
-        }
-        if name == "content-length" {
-            if value.is_empty()
-                || !value.bytes().all(|byte| byte.is_ascii_digit())
-                || (value.len() > 1 && value.starts_with('0'))
-            {
-                return Err("invalid content length".to_owned());
-            }
-            content_length = value
-                .parse()
-                .map_err(|_| "invalid content length".to_owned())?;
-        }
-        headers.insert(name, value);
-    }
+    let (headers, content_length) = parse_headers(lines)?;
     let body_end = header_end
         .checked_add(content_length)
         .ok_or_else(|| "invalid request size".to_owned())?;
@@ -109,6 +81,50 @@ pub fn parse_request(stream: &mut impl Read) -> Result<Request, String> {
         headers,
         body: bytes[header_end..body_end].to_vec(),
     })
+}
+
+fn parse_headers<'a>(
+    lines: impl Iterator<Item = &'a str>,
+) -> Result<(HashMap<String, String>, usize), String> {
+    let mut headers = HashMap::new();
+    let mut content_length = 0_usize;
+    for line in lines.filter(|line| !line.is_empty()) {
+        let (raw_name, value) = line
+            .split_once(':')
+            .ok_or_else(|| "invalid header".to_owned())?;
+        if raw_name != raw_name.trim() {
+            return Err("invalid header name whitespace".to_owned());
+        }
+        let name = raw_name.to_ascii_lowercase();
+        let value = value.trim().to_owned();
+        if name.is_empty()
+            || !name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+            || value
+                .bytes()
+                .any(|byte| byte.is_ascii_control() && byte != b'\t')
+            || headers.contains_key(&name)
+        {
+            return Err("duplicate or invalid header".to_owned());
+        }
+        if name == "transfer-encoding" {
+            return Err("transfer encoding is not accepted".to_owned());
+        }
+        if name == "content-length" {
+            if value.is_empty()
+                || !value.bytes().all(|byte| byte.is_ascii_digit())
+                || (value.len() > 1 && value.starts_with('0'))
+            {
+                return Err("invalid content length".to_owned());
+            }
+            content_length = value
+                .parse()
+                .map_err(|_| "invalid content length".to_owned())?;
+        }
+        headers.insert(name, value);
+    }
+    Ok((headers, content_length))
 }
 
 /// Writes one response and closes the connection.
@@ -150,25 +166,36 @@ mod tests {
     fn parse(bytes: &'static [u8]) -> Result<crate::Request, String> {
         let listener = TcpListener::bind("127.0.0.1:0")
             .unwrap_or_else(|error| panic!("listener fixture failed: {error}"));
-        let address = listener.local_addr()
+        let address = listener
+            .local_addr()
             .unwrap_or_else(|error| panic!("listener address failed: {error}"));
         let writer = thread::spawn(move || {
             let mut stream = TcpStream::connect(address)
                 .unwrap_or_else(|error| panic!("fixture connection failed: {error}"));
-            stream.write_all(bytes)
+            stream
+                .write_all(bytes)
                 .unwrap_or_else(|error| panic!("fixture write failed: {error}"));
         });
-        let (mut stream, _) = listener.accept()
+        let (mut stream, _) = listener
+            .accept()
             .unwrap_or_else(|error| panic!("fixture accept failed: {error}"));
         let parsed = parse_request(&mut stream);
-        writer.join().unwrap_or_else(|_| panic!("fixture writer panicked"));
+        writer
+            .join()
+            .unwrap_or_else(|_| panic!("fixture writer panicked"));
         parsed
     }
 
     #[test]
     fn refuses_duplicate_content_length_and_transfer_encoding() {
-        assert!(parse(b"POST /__registry/sources HTTP/1.1\r\nContent-Length: 0\r\nContent-Length: 0\r\n\r\n").is_err());
-        assert!(parse(b"POST /__registry/sources HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n").is_err());
+        assert!(parse(
+            b"POST /__registry/sources HTTP/1.1\r\nContent-Length: 0\r\nContent-Length: 0\r\n\r\n"
+        )
+        .is_err());
+        assert!(parse(
+            b"POST /__registry/sources HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n"
+        )
+        .is_err());
     }
 
     #[test]

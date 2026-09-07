@@ -42,6 +42,9 @@ impl std::fmt::Debug for RegistryAuthority {
 
 impl RegistryAuthority {
     /// Consumes a bounded non-empty secret and retains only its digest.
+    ///
+    /// # Errors
+    /// Refuses empty, oversized, or control-character-bearing secrets.
     pub fn new(mut secret: Zeroizing<String>) -> Result<Self, String> {
         if secret.is_empty()
             || secret.len() > 4_096

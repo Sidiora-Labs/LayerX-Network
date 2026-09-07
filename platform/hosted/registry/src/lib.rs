@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub use auth::{Authorization, RegistryAuthority};
-pub use builder::HermeticBuilder;
+pub use builder::{HermeticBuilder, HermeticBuilderConfig};
 pub use http::{parse_request, write_response};
 pub use journal::{
     DeploymentEnvelope, FileDeploymentJournal, JournalLoad, QuarantinedUnit, UnitDefect, UnitPart,

@@ -60,6 +60,23 @@ pub struct HermeticBuilder {
     request_deadline: std::sync::Arc<Mutex<Option<Instant>>>,
 }
 
+/// Inputs pinned by the operator for a hermetic build boundary.
+pub struct HermeticBuilderConfig {
+    pub workspace: PathBuf,
+    pub builder_image_digest: [u8; 32],
+    pub environment_root: PathBuf,
+    pub entrypoint: String,
+    pub isolation_runtime: PathBuf,
+    pub isolation_runtime_digest: [u8; 32],
+    pub job_supervisor: PathBuf,
+    pub job_supervisor_digest: [u8; 32],
+    pub cgroup_root: PathBuf,
+    pub timeout_seconds: u64,
+    pub memory_bytes: u64,
+    pub process_limit: u32,
+    pub file_size_bytes: u64,
+}
+
 impl HermeticBuilder {
     /// Binds the sandbox to the builder image this host is pinned to.
     ///
@@ -67,21 +84,22 @@ impl HermeticBuilder {
     ///
     /// Refuses unpinned environment or isolation bytes, invalid resource
     /// bounds, and unusable environment or workspace paths.
-    pub fn new(
-        workspace: PathBuf,
-        builder_image_digest: [u8; 32],
-        environment_root: PathBuf,
-        entrypoint: String,
-        isolation_runtime: PathBuf,
-        isolation_runtime_digest: [u8; 32],
-        job_supervisor: PathBuf,
-        job_supervisor_digest: [u8; 32],
-        cgroup_root: PathBuf,
-        timeout_seconds: u64,
-        memory_bytes: u64,
-        process_limit: u32,
-        file_size_bytes: u64,
-    ) -> Result<Self, String> {
+    pub fn new(config: HermeticBuilderConfig) -> Result<Self, String> {
+        let HermeticBuilderConfig {
+            workspace,
+            builder_image_digest,
+            environment_root,
+            entrypoint,
+            isolation_runtime,
+            isolation_runtime_digest,
+            job_supervisor,
+            job_supervisor_digest,
+            cgroup_root,
+            timeout_seconds,
+            memory_bytes,
+            process_limit,
+            file_size_bytes,
+        } = config;
         if builder_image_digest == [0; 32] {
             return Err("the pinned builder image digest is required".to_owned());
         }
@@ -145,6 +163,9 @@ impl HermeticBuilder {
     }
 
     /// Binds subsequent attempts to the monotonic ingress deadline.
+    ///
+    /// # Errors
+    /// Returns an error if the deadline lock is poisoned.
     pub fn set_request_deadline(&self, deadline: Instant) -> Result<(), String> {
         self.request_deadline
             .lock()
@@ -160,9 +181,9 @@ impl HermeticBuilder {
 
     fn sandbox(&self, attempt: &BuildAttempt<'_>) -> Result<QuotaWorkspace, BuildRefusal> {
         let mut slots = fs::read_dir(&self.workspace)
-            .map_err(unavailable)?
+            .map_err(|error| unavailable(&error))?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(unavailable)?;
+            .map_err(|error| unavailable(&error))?;
         slots.sort_by_key(fs::DirEntry::file_name);
         let (slot, lock) = slots
             .into_iter()
@@ -171,6 +192,7 @@ impl HermeticBuilder {
                 let lock = slot.join(".layerx-build-lock");
                 let file = fs::OpenOptions::new()
                     .create(true)
+                    .truncate(false)
                     .read(true)
                     .write(true)
                     .open(&lock)
@@ -182,24 +204,24 @@ impl HermeticBuilder {
             .ok_or_else(|| BuildRefusal::SandboxUnavailable {
                 reason: "no hard-quota build filesystem is available".to_owned(),
             })?;
-        for entry in fs::read_dir(&slot).map_err(unavailable)? {
-            let entry = entry.map_err(unavailable)?;
+        for entry in fs::read_dir(&slot).map_err(|error| unavailable(&error))? {
+            let entry = entry.map_err(|error| unavailable(&error))?;
             if entry.file_name() == ".layerx-build-lock" || entry.file_name() == "lost+found" {
                 continue;
             }
-            let kind = entry.file_type().map_err(unavailable)?;
+            let kind = entry.file_type().map_err(|error| unavailable(&error))?;
             if kind.is_dir() {
-                fs::remove_dir_all(entry.path()).map_err(unavailable)?;
+                fs::remove_dir_all(entry.path()).map_err(|error| unavailable(&error))?;
             } else {
-                fs::remove_file(entry.path()).map_err(unavailable)?;
+                fs::remove_file(entry.path()).map_err(|error| unavailable(&error))?;
             }
         }
         File::open(&slot)
             .and_then(|directory| directory.sync_all())
-            .map_err(unavailable)?;
+            .map_err(|error| unavailable(&error))?;
         let root = slot.join(format!("attempt-{}", attempt.attempt));
         if let Err(error) = fs::create_dir(&root) {
-            return Err(unavailable(error));
+            return Err(unavailable(&error));
         }
         let workspace = QuotaWorkspace { root, _lock: lock };
         let deadline = self
@@ -211,7 +233,7 @@ impl HermeticBuilder {
             .ok_or_else(|| BuildRefusal::SandboxUnavailable {
                 reason: "builder request deadline is unavailable".to_owned(),
             })?;
-        fs::create_dir_all(workspace.root.join("source")).map_err(unavailable)?;
+        fs::create_dir_all(workspace.root.join("source")).map_err(|error| unavailable(&error))?;
         materialize(&workspace.root.join("source"), attempt.archive, deadline)?;
         copy_environment(
             &self.environment_root,
@@ -255,8 +277,8 @@ impl HermeticBuilder {
             return Err(BuildRefusal::InvalidPlan);
         }
         let log_path = source.join(BUILD_LOG);
-        let log = File::create(&log_path).map_err(unavailable)?;
-        let mut log_reader = log.try_clone().map_err(unavailable)?;
+        let log = File::create(&log_path).map_err(|error| unavailable(&error))?;
+        let mut log_reader = log.try_clone().map_err(|error| unavailable(&error))?;
         let request_deadline = self
             .request_deadline
             .lock()
@@ -271,7 +293,65 @@ impl HermeticBuilder {
             .ok_or_else(|| BuildRefusal::BuilderFailed {
                 reason: "request deadline expired before cgroup admission".to_owned(),
             })?;
-        let mut child = Command::new(format!("/proc/self/fd/{}", job_supervisor.as_raw_fd()))
+        let mut child = self
+            .build_command(BuildCommand {
+                attempt,
+                source: &source,
+                environment: &environment,
+                arguments,
+                job_supervisor: &job_supervisor,
+                isolation_runtime: &isolation_runtime,
+                remaining,
+                log,
+            })
+            .spawn()
+            .map_err(|error| unavailable(&error))?;
+        let build_deadline = Instant::now()
+            .checked_add(Duration::from_secs(self.timeout_seconds))
+            .ok_or_else(|| BuildRefusal::SandboxUnavailable {
+                reason: "declared build timeout is out of range".to_owned(),
+            })?;
+        let deadline = build_deadline.min(request_deadline);
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) => {
+                    if Instant::now() >= deadline {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return Err(BuildRefusal::BuilderFailed {
+                            reason: format!(
+                                "pinned build exceeded {} seconds",
+                                self.timeout_seconds
+                            ),
+                        });
+                    }
+                    thread::sleep(Duration::from_millis(POLL_MILLISECONDS));
+                }
+                Err(error) => return Err(unavailable(&error)),
+            }
+        };
+        if status.success() {
+            Ok(())
+        } else {
+            Err(BuildRefusal::BuilderFailed {
+                reason: format!("{status}: {}", tail_open(&mut log_reader)?),
+            })
+        }
+    }
+    fn build_command(&self, input: BuildCommand<'_, '_>) -> Command {
+        let BuildCommand {
+            attempt,
+            source,
+            environment,
+            arguments,
+            job_supervisor,
+            isolation_runtime,
+            remaining,
+            log,
+        } = input;
+        let mut command = Command::new(format!("/proc/self/fd/{}", job_supervisor.as_raw_fd()));
+        command
             .arg("--cgroup-v2")
             .arg("--cgroup-root")
             .arg(&self.cgroup_root)
@@ -285,7 +365,7 @@ impl HermeticBuilder {
             .arg(format!("--pids-max={}", self.process_limit))
             .arg(format!("--io-write-max={}", self.file_size_bytes))
             .arg("--workspace-device-path")
-            .arg(&source)
+            .arg(source)
             .arg(format!("--wall-time-max-ms={}", remaining.as_millis()))
             .arg("--")
             .arg(format!("/proc/self/fd/{}", isolation_runtime.as_raw_fd()))
@@ -299,10 +379,10 @@ impl HermeticBuilder {
                 "--clearenv",
                 "--ro-bind",
             ])
-            .arg(&environment)
+            .arg(environment)
             .arg("/")
             .args(["--dir", "/build", "--bind"])
-            .arg(&source)
+            .arg(source)
             .arg("/build")
             .args([
                 "--dir", "/tmp", "--tmpfs", "/tmp", "--proc", "/proc", "--dev", "/dev",
@@ -339,41 +419,8 @@ impl HermeticBuilder {
             .env_clear()
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::from(log))
-            .spawn()
-            .map_err(unavailable)?;
-        let build_deadline = Instant::now()
-            .checked_add(Duration::from_secs(self.timeout_seconds))
-            .ok_or_else(|| BuildRefusal::SandboxUnavailable {
-                reason: "declared build timeout is out of range".to_owned(),
-            })?;
-        let deadline = build_deadline.min(request_deadline);
-        let status = loop {
-            match child.try_wait() {
-                Ok(Some(status)) => break status,
-                Ok(None) => {
-                    if Instant::now() >= deadline {
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        return Err(BuildRefusal::BuilderFailed {
-                            reason: format!(
-                                "pinned build exceeded {} seconds",
-                                self.timeout_seconds
-                            ),
-                        });
-                    }
-                    thread::sleep(Duration::from_millis(POLL_MILLISECONDS));
-                }
-                Err(error) => return Err(unavailable(error)),
-            }
-        };
-        if status.success() {
-            Ok(())
-        } else {
-            Err(BuildRefusal::BuilderFailed {
-                reason: format!("{status}: {}", tail_open(&mut log_reader)?),
-            })
-        }
+            .stderr(Stdio::from(log));
+        command
     }
 }
 
@@ -426,6 +473,7 @@ fn validate_build_boundary(workspace: &Path, cgroup: &Path) -> Result<PathBuf, S
         let slot = entry.path();
         let lock = fs::OpenOptions::new()
             .create(true)
+            .truncate(false)
             .read(true)
             .write(true)
             .open(slot.join(".layerx-build-lock"))
@@ -594,7 +642,7 @@ impl BuildRunner for HermeticBuilder {
 }
 
 fn copy_environment(source: &Path, target: &Path, deadline: Instant) -> Result<(), BuildRefusal> {
-    fs::create_dir_all(target).map_err(unavailable)?;
+    fs::create_dir_all(target).map_err(|error| unavailable(&error))?;
     let mut pending = vec![(source.to_path_buf(), target.to_path_buf())];
     let mut seen = 0_usize;
     let mut copied = 0_u64;
@@ -605,11 +653,12 @@ fn copy_environment(source: &Path, target: &Path, deadline: Instant) -> Result<(
                     .to_owned(),
             });
         }
-        for entry in fs::read_dir(&from).map_err(unavailable)? {
-            let entry = entry.map_err(unavailable)?;
+        for entry in fs::read_dir(&from).map_err(|error| unavailable(&error))? {
+            let entry = entry.map_err(|error| unavailable(&error))?;
             let source_path = entry.path();
             let target_path = to.join(entry.file_name());
-            let metadata = fs::symlink_metadata(&source_path).map_err(unavailable)?;
+            let metadata =
+                fs::symlink_metadata(&source_path).map_err(|error| unavailable(&error))?;
             seen = seen.saturating_add(1);
             if seen > MAX_ENVIRONMENT_FILES || metadata.file_type().is_symlink() {
                 return Err(BuildRefusal::SandboxUnavailable {
@@ -617,7 +666,7 @@ fn copy_environment(source: &Path, target: &Path, deadline: Instant) -> Result<(
                 });
             }
             if metadata.is_dir() {
-                fs::create_dir(&target_path).map_err(unavailable)?;
+                fs::create_dir(&target_path).map_err(|error| unavailable(&error))?;
                 pending.push((source_path, target_path));
             } else if metadata.is_file() {
                 copied = copied.checked_add(metadata.len()).ok_or_else(|| {
@@ -630,8 +679,9 @@ fn copy_environment(source: &Path, target: &Path, deadline: Instant) -> Result<(
                         reason: "builder environment exceeds its byte bound".to_owned(),
                     });
                 }
-                fs::copy(&source_path, &target_path).map_err(unavailable)?;
-                fs::set_permissions(&target_path, metadata.permissions()).map_err(unavailable)?;
+                fs::copy(&source_path, &target_path).map_err(|error| unavailable(&error))?;
+                fs::set_permissions(&target_path, metadata.permissions())
+                    .map_err(|error| unavailable(&error))?;
             } else {
                 return Err(BuildRefusal::SandboxUnavailable {
                     reason: "builder environment contains a non-regular object".to_owned(),
@@ -655,9 +705,9 @@ fn materialize(
         }
         let target = root.join(&file.path);
         if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent).map_err(unavailable)?;
+            fs::create_dir_all(parent).map_err(|error| unavailable(&error))?;
         }
-        fs::write(&target, &file.content).map_err(unavailable)?;
+        fs::write(&target, &file.content).map_err(|error| unavailable(&error))?;
         make_non_executable(&target)?;
     }
     Ok(())
@@ -667,7 +717,8 @@ fn materialize(
 fn make_non_executable(path: &Path) -> Result<(), BuildRefusal> {
     use std::os::unix::fs::PermissionsExt as _;
 
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600)).map_err(unavailable)
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+        .map_err(|error| unavailable(&error))
 }
 
 #[cfg(not(unix))]
@@ -676,7 +727,7 @@ fn make_non_executable(_path: &Path) -> Result<(), BuildRefusal> {
 }
 
 fn tail_open(file: &mut File) -> Result<String, BuildRefusal> {
-    let metadata = file.metadata().map_err(unavailable)?;
+    let metadata = file.metadata().map_err(|error| unavailable(&error))?;
     if !metadata.is_file() || metadata.len() > 134_217_728 {
         return Err(BuildRefusal::SandboxUnavailable {
             reason: "builder log is not a bounded regular file".to_owned(),
@@ -684,11 +735,12 @@ fn tail_open(file: &mut File) -> Result<String, BuildRefusal> {
     }
     let length = metadata.len();
     let start = length.saturating_sub(LOG_TAIL as u64);
-    file.seek(SeekFrom::Start(start)).map_err(unavailable)?;
+    file.seek(SeekFrom::Start(start))
+        .map_err(|error| unavailable(&error))?;
     let mut bytes = Vec::new();
     file.take(LOG_TAIL as u64)
         .read_to_end(&mut bytes)
-        .map_err(unavailable)?;
+        .map_err(|error| unavailable(&error))?;
     Ok(String::from_utf8_lossy(&bytes)
         .replace(['\n', '\r', '"'], " ")
         .trim()
@@ -720,7 +772,7 @@ fn read_beneath(root: &Path, relative: &Path, maximum: u64) -> Result<Vec<u8>, i
             "sandbox output is not a bounded regular file",
         ));
     }
-    let mut file = File::from(descriptor);
+    let file = File::from(descriptor);
     let mut bytes = Vec::with_capacity(usize::try_from(stat.st_size).unwrap_or(0));
     file.take(maximum.saturating_add(1))
         .read_to_end(&mut bytes)?;
@@ -737,9 +789,19 @@ fn read_beneath(_root: &Path, _relative: &Path, _maximum: u64) -> Result<Vec<u8>
     ))
 }
 
-#[allow(clippy::needless_pass_by_value)]
-fn unavailable(error: io::Error) -> BuildRefusal {
+fn unavailable(error: &io::Error) -> BuildRefusal {
     BuildRefusal::SandboxUnavailable {
         reason: error.to_string(),
     }
+}
+
+struct BuildCommand<'a, 'b> {
+    attempt: &'a BuildAttempt<'b>,
+    source: &'a Path,
+    environment: &'a Path,
+    arguments: &'a [String],
+    job_supervisor: &'a File,
+    isolation_runtime: &'a File,
+    remaining: Duration,
+    log: File,
 }
