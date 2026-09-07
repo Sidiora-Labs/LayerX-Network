@@ -192,7 +192,7 @@ impl Module {
     }
 
     /// Returns an iterator over the imports of the [`Module`].
-    pub fn imports(&self) -> ModuleImportsIter {
+    pub fn imports(&self) -> ModuleImportsIter<'_> {
         let len_imported_funcs = self.imports.len_funcs;
         let len_imported_globals = self.imports.len_globals;
         ModuleImportsIter {
@@ -255,7 +255,7 @@ impl Module {
     }
 
     /// Returns an iterator over the exports of the [`Module`].
-    pub fn exports(&self) -> ModuleExportsIter {
+    pub fn exports(&self) -> ModuleExportsIter<'_> {
         ModuleExportsIter::new(self)
     }
 
