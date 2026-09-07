@@ -12,13 +12,14 @@ import tempfile
 import threading
 import time
 import unittest
+from types import SimpleNamespace
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT / 'tests/bridge'))
-from custody_credit import Rpc, eth_hash, unhex, write_new
+from custody_credit import Rpc, create_profile, eth_hash, unhex, write_new
 from deploy_local_custody import command, disposable_rpc, signer
-from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric import ec, ed25519
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 
@@ -29,10 +30,10 @@ def port():
 
 
 @contextlib.contextmanager
-def chain(directory):
+def chain(directory, extra=()):
     url = 'http://127.0.0.1:' + str(port())
     process = subprocess.Popen(['anvil', '--silent', '--mnemonic-random', '12', '--chain-id', '125',
-                                '--port', url.rsplit(':', 1)[1]],
+                                '--port', url.rsplit(':', 1)[1], *extra],
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         rpc = Rpc(url)
@@ -154,6 +155,44 @@ class DisposableCustody(unittest.TestCase):
                 code = unhex(rpc.call('eth_getCode', [deployed['vault'], 'latest']))
                 self.assertEqual(deployed['runtime_sha256'], '0x' + hashlib.sha256(code).hexdigest())
                 self.assertEqual(int(rpc.call('eth_getBalance', [deployed['token'], 'latest']), 16), 10 ** 18)
+
+                rpc.call('anvil_mine', ['0x80'], allow_missing=True)
+                fork_height = int(rpc.call('eth_blockNumber', []), 16)
+                observer_dir = directory / 'observer'
+                observer_dir.mkdir()
+                with chain(directory, ['--fork-url', rpc.url, '--fork-block-number', str(fork_height)]) as observer:
+                    with boundary(observer_dir, observer) as (observer_url, observer_refused):
+                        bundle = directory / 'bundle.pem'
+                        bundle.write_bytes((directory / 'ca.pem').read_bytes()
+                                           + (observer_dir / 'ca.pem').read_bytes())
+                        identity['rpc_origins'].append(observer_url)
+                        identity['ca_sha256'] = '0x' + hashlib.sha256(bundle.read_bytes()).hexdigest()
+                        identity_path.write_text(json.dumps(identity))
+                        disposable_rpc(observer_url, str(bundle), identity_path)
+                        write_new(directory / 'attestor.key', ed25519.Ed25519PrivateKey.generate().private_bytes_raw())
+                        profile = directory / 'custody.profile'
+                        previous_ca = os.environ.get('SSL_CERT_FILE')
+                        os.environ['SSL_CERT_FILE'] = str(bundle)
+                        try:
+                            create_profile(SimpleNamespace(rpc=[url, observer_url], chain_id=125, network_id=402,
+                                           vault=deployed['vault'], runtime_sha256=deployed['runtime_sha256'],
+                                           asset=deployed['asset'], confirmations=2,
+                                           attestor_key=str(directory / 'attestor.key'), output=str(profile)))
+                        finally:
+                            if previous_ca is None:
+                                del os.environ['SSL_CERT_FILE']
+                            else:
+                                os.environ['SSL_CERT_FILE'] = previous_ca
+                        builder = Path(os.environ.get('LAYERX_TEST_NATIVE_BIN_DIR', '/root/lx-lanes/native-bin')) / 'layerx-genesis-build'
+                        invocation = ['python3', str(ROOT / 'tests/bridge/custody_genesis.py'),
+                                      '--profile', str(profile), '--builder', str(builder)]
+                        with self.assertRaises(ValueError):
+                            command(*invocation, '--output', str(directory / 'refused-genesis'))
+                        self.assertFalse((directory / 'refused-genesis').exists())
+                        command(*invocation, '--output', str(directory / 'genesis'), '--rpc', url,
+                                '--ca-bundle', str(bundle), '--disposable-identity', str(identity_path))
+                        self.assertTrue((directory / 'genesis/artifacts/genesis.manifest').is_file())
+                        self.assertEqual(observer_refused, [])
 
 
 if __name__ == '__main__':
