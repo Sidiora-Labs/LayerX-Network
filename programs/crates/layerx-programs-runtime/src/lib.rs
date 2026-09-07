@@ -181,8 +181,8 @@ pub use limits::{DeclaredLimit, LimitsRefusal, ValidationLimits};
 pub use meter::inject::{FuelSchedule, InjectionRefusal, MeterInjection};
 pub use meter::{
     BudgetMeterRefusal, BudgetResourceKind, DemandPriceAdjustment, DemandPricePolicy,
-    FeeGovernance, FeeSchedule, FeeScheduleError, FeeScheduleHistory, Meter, MeterRefusal,
-    MeteredUsage, ResourceBudget, ResourceKind,
+    FeeGovernance, FeeSchedule, FeeScheduleError, FeeScheduleHistory, FeeScheduleParameters, Meter,
+    MeterRefusal, MeteredUsage, ResourceBudget, ResourceKind,
 };
 pub use occupancy::{
     OccupancyCharge, OccupancyDisposition, OccupancyError, OccupancyLedger,

@@ -1420,16 +1420,16 @@ fn decode_schedule(
     if version == 0 {
         return Err(OccupancyError::MalformedEvidence);
     }
-    Ok(FeeSchedule::new_complete(
+    Ok(FeeSchedule::new_complete(crate::FeeScheduleParameters {
         version,
-        cursor.u64()?,
-        cursor.u64()?,
-        cursor.u64()?,
-        cursor.u64()?,
-        cursor.u64()?,
-        cursor.u64()?,
-        cursor.u64()?,
-    ))
+        fee_units_per_cpu_fuel: cursor.u64()?,
+        fee_units_per_memory_byte: cursor.u64()?,
+        fee_units_per_storage_read_byte: cursor.u64()?,
+        fee_units_per_storage_write_byte: cursor.u64()?,
+        fee_units_per_output_value: cursor.u64()?,
+        fee_units_per_output_byte: cursor.u64()?,
+        fee_units_per_occupancy_byte_batch: cursor.u64()?,
+    }))
 }
 fn canonical_storage_sizes(storage: &Storage) -> Result<Vec<u8>, OccupancyError> {
     canonical_sizes(&storage.namespace_sizes()?.into_iter().collect())
@@ -1675,7 +1675,16 @@ mod tests {
     }
 
     const fn schedule(version: u32, occupancy_price: u64) -> FeeSchedule {
-        FeeSchedule::new_complete(version, 0, 0, 0, 0, 0, 0, occupancy_price)
+        FeeSchedule::new_complete(crate::FeeScheduleParameters {
+            version,
+            fee_units_per_cpu_fuel: 0,
+            fee_units_per_memory_byte: 0,
+            fee_units_per_storage_read_byte: 0,
+            fee_units_per_storage_write_byte: 0,
+            fee_units_per_output_value: 0,
+            fee_units_per_output_byte: 0,
+            fee_units_per_occupancy_byte_batch: occupancy_price,
+        })
     }
 
     fn authority(payer: PrincipalId, ceiling: u128) -> OccupancyAuthority {
