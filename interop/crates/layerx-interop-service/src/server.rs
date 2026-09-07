@@ -65,29 +65,27 @@ pub fn route(config: &Config, request: &IncomingRequest) -> OutgoingResponse {
     {
         return failure(400, "untrusted_identity_header", None);
     }
-    let parsed = match interop_gateway_routes(&request.method, &request.path) {
-        Ok(route) => route,
-        Err(_) => return failure(404, "not_found", None),
+    let Ok(parsed) = interop_gateway_routes(&request.method, &request.path) else {
+        return failure(404, "not_found", None);
     };
     match parsed {
         InteropRoute::Live => live(),
         InteropRoute::Ready => ready(config),
         InteropRoute::AdapterMetadata => metadata(config),
-        route => authenticated(config, request, route),
+        route => authenticated(config, request, &route),
     }
 }
 
 fn authenticated(
     config: &Config,
     request: &IncomingRequest,
-    route: InteropRoute<'_>,
+    route: &InteropRoute<'_>,
 ) -> OutgoingResponse {
     if request.body.len() > MAX_BODY {
         return failure(400, "request_too_large", None);
     }
-    let authorization = match request.headers.get("authorization") {
-        Some(value) => value,
-        None => return failure(401, "api_key_required", None),
+    let Some(authorization) = request.headers.get("authorization") else {
+        return failure(401, "api_key_required", None);
     };
     let record = match authenticate_gateway_key(&config.store, authorization) {
         Ok(record) => record,
@@ -98,36 +96,18 @@ fn authenticated(
     };
     let trace = trace(request);
     if let InteropRoute::Resume { operation } = &route {
-        return match config.store.operation(operation) {
-            Ok(Some(stored))
-                if stored
-                    .principal
-                    .as_bytes()
-                    .ct_eq(record.principal_digest.as_bytes())
-                    .unwrap_u8()
-                    == 1 =>
-            {
-                if stored.state == "pending" && !stored.continuation.is_empty() {
-                    match resumed_request(&stored.continuation, authorization) {
-                        Ok(resumed) => match interop_gateway_routes(&resumed.method, &resumed.path)
-                        {
-                            Ok(resumed_route)
-                                if !matches!(resumed_route, InteropRoute::Resume { .. }) =>
-                            {
-                                authenticated(config, &resumed, resumed_route)
-                            }
-                            _ => failure(503, "continuation_invalid", Some(5)),
-                        },
-                        Err(()) => failure(503, "continuation_invalid", Some(5)),
-                    }
-                } else {
-                    stored_response(&stored.state, &stored.response, &trace, operation)
-                }
-            }
-            Ok(Some(_)) | Ok(None) => failure(404, "operation_not_found", None),
-            Err(_) => failure(503, "persistence_unavailable", Some(5)),
-        };
+        return resume_operation(config, &record, authorization, &trace, operation);
     }
+    reserve_operation(config, request, route, record, trace)
+}
+
+fn reserve_operation(
+    config: &Config,
+    request: &IncomingRequest,
+    route: &InteropRoute<'_>,
+    record: KeyRecord,
+    trace: TraceId,
+) -> OutgoingResponse {
     let observed_at = now().unwrap_or(1);
     let adapter = route.adapter().map_or("operation", HostedAdapter::surface);
     let request_digest = gateway_digest(&[
@@ -136,14 +116,7 @@ fn authenticated(
         request.path.as_bytes(),
         &request.body,
     ]);
-    let callback_identity = matches!(
-        route,
-        InteropRoute::Ap2VerifyMandates
-            | InteropRoute::Ap2Execute
-            | InteropRoute::VisaVerifyIntent
-            | InteropRoute::VisaExecuteIntent
-            | InteropRoute::FiatCallback { .. }
-    );
+    let callback_identity = uses_callback_identity(route);
     let idempotency = if callback_identity {
         request_digest.as_str()
     } else {
@@ -165,9 +138,8 @@ fn authenticated(
         "attempted",
         observed_at,
     );
-    let continuation = match continuation(request) {
-        Ok(value) => value,
-        Err(()) => return failure(400, "request_too_large", None),
+    let Ok(continuation) = continuation(request) else {
+        return failure(400, "request_too_large", None);
     };
     match config.store.reserve(
         &record,
@@ -217,9 +189,57 @@ fn authenticated(
         Ok(Reservation::Reserved) => {}
         Err(_) => return failure(503, "persistence_unavailable", Some(5)),
     }
-    let principal = match PrincipalId::new(record.principal_digest.clone()) {
-        Ok(value) => value,
-        Err(_) => return failure(503, "persistence_unavailable", Some(5)),
+    complete_operation(
+        config,
+        request,
+        route,
+        IngressOperation {
+            record,
+            trace,
+            scope,
+            request_digest,
+            adapter,
+            observed_at,
+        },
+    )
+}
+
+fn uses_callback_identity(route: &InteropRoute<'_>) -> bool {
+    matches!(
+        route,
+        InteropRoute::Ap2VerifyMandates
+            | InteropRoute::Ap2Execute
+            | InteropRoute::VisaVerifyIntent
+            | InteropRoute::VisaExecuteIntent
+            | InteropRoute::FiatCallback { .. }
+    )
+}
+
+struct IngressOperation {
+    record: KeyRecord,
+    trace: TraceId,
+    scope: String,
+    request_digest: String,
+    adapter: &'static str,
+    observed_at: u64,
+}
+
+fn complete_operation(
+    config: &Config,
+    request: &IncomingRequest,
+    route: &InteropRoute<'_>,
+    operation: IngressOperation,
+) -> OutgoingResponse {
+    let IngressOperation {
+        record,
+        trace,
+        scope,
+        request_digest,
+        adapter,
+        observed_at,
+    } = operation;
+    let Ok(principal) = PrincipalId::new(record.principal_digest.clone()) else {
+        return failure(503, "persistence_unavailable", Some(5));
     };
     let dispatched = dispatch(config, request, route, &record, &principal, &trace, &scope);
     let body = dispatched.body(&trace, &scope);
@@ -250,6 +270,43 @@ fn authenticated(
         status: dispatched.status,
         body,
         retry_after: None,
+    }
+}
+
+fn resume_operation(
+    config: &Config,
+    record: &KeyRecord,
+    authorization: &str,
+    trace: &TraceId,
+    operation: &str,
+) -> OutgoingResponse {
+    match config.store.operation(operation) {
+        Ok(Some(stored))
+            if stored
+                .principal
+                .as_bytes()
+                .ct_eq(record.principal_digest.as_bytes())
+                .unwrap_u8()
+                == 1 =>
+        {
+            if stored.state == "pending" && !stored.continuation.is_empty() {
+                match resumed_request(&stored.continuation, authorization) {
+                    Ok(resumed) => match interop_gateway_routes(&resumed.method, &resumed.path) {
+                        Ok(resumed_route)
+                            if !matches!(resumed_route, InteropRoute::Resume { .. }) =>
+                        {
+                            authenticated(config, &resumed, &resumed_route)
+                        }
+                        _ => failure(503, "continuation_invalid", Some(5)),
+                    },
+                    Err(()) => failure(503, "continuation_invalid", Some(5)),
+                }
+            } else {
+                stored_response(&stored.state, &stored.response, trace, operation)
+            }
+        }
+        Ok(Some(_) | None) => failure(404, "operation_not_found", None),
+        Err(_) => failure(503, "persistence_unavailable", Some(5)),
     }
 }
 
@@ -344,13 +401,13 @@ impl Dispatch {
 fn dispatch(
     config: &Config,
     request: &IncomingRequest,
-    route: InteropRoute<'_>,
+    route: &InteropRoute<'_>,
     record: &KeyRecord,
     principal: &PrincipalId,
     trace: &TraceId,
     operation: &str,
 ) -> Dispatch {
-    match route {
+    match *route {
         InteropRoute::Resume { .. } => {
             Dispatch::result(202, "pending", json!({ "state": "pending" }))
         }
@@ -412,11 +469,12 @@ fn x402_buyer(
 ) -> Dispatch {
     let body: BuyerRequest = match typed_body(request, transport) {
         Ok(value) => value,
-        Err(_) => return Dispatch::error(400, "refused", "invalid_x402_buyer_request"),
+        Err(()) => return Dispatch::error(400, "refused", "invalid_x402_buyer_request"),
     };
-    let header = match encode_payment_required(TransportKind::Http, &body.payment_required) {
-        Ok(TransportValue::HttpHeader { value, .. }) => value,
-        _ => return Dispatch::error(400, "refused", "invalid_x402_offer"),
+    let Ok(TransportValue::HttpHeader { value: header, .. }) =
+        encode_payment_required(TransportKind::Http, &body.payment_required)
+    else {
+        return Dispatch::error(400, "refused", "invalid_x402_offer");
     };
     let supported = config
         .manifest
@@ -428,16 +486,14 @@ fn x402_buyer(
             network: kind.network.clone(),
         })
         .collect();
-    let buyer = match Buyer::new(supported) {
-        Ok(value) => value,
-        Err(_) => return Dispatch::error(503, "pending", "adapter_configuration_invalid"),
+    let Ok(buyer) = Buyer::new(supported) else {
+        return Dispatch::error(503, "pending", "adapter_configuration_invalid");
     };
     let mut plane = BuyerPlane {
         payload: Some(body.scheme_payload),
     };
-    let idempotency = match parse_hex32(operation) {
-        Ok(value) => value,
-        Err(_) => return Dispatch::error(503, "pending", "operation_identity_invalid"),
+    let Ok(idempotency) = parse_hex32(operation) else {
+        return Dispatch::error(503, "pending", "operation_identity_invalid");
     };
     match buyer.build_payment(&header, idempotency, &mut plane, trace) {
         Ok(built) => Dispatch::result(
@@ -473,11 +529,10 @@ impl BuyerPaymentPlane for BuyerPlane {
 fn x402_seller(request: &IncomingRequest, transport: IngressTransport) -> Dispatch {
     let required: PaymentRequired = match typed_body(request, transport) {
         Ok(value) => value,
-        Err(_) => return Dispatch::error(400, "refused", "invalid_x402_offer"),
+        Err(()) => return Dispatch::error(400, "refused", "invalid_x402_offer"),
     };
-    let seller = match Seller::new(required) {
-        Ok(value) => value,
-        Err(_) => return Dispatch::error(400, "refused", "invalid_x402_offer"),
+    let Ok(seller) = Seller::new(required) else {
+        return Dispatch::error(400, "refused", "invalid_x402_offer");
     };
     match seller.payment_required() {
         Ok(signal) => Dispatch::result(
@@ -498,7 +553,7 @@ fn x402_request(
     request: &IncomingRequest,
     transport: IngressTransport,
 ) -> Result<FacilitatorRequest, ()> {
-    let value: Value = typed_body(request, transport).map_err(|_| ())?;
+    let value: Value = typed_body(request, transport)?;
     decode_facilitator_request(transport_kind(transport), &TransportValue::Json(value))
         .map_err(|_| ())
 }
@@ -618,25 +673,20 @@ fn x402_verify(
     principal: &PrincipalId,
     trace: &TraceId,
 ) -> Dispatch {
-    let parsed = match x402_request(request, transport) {
-        Ok(value) => value,
-        Err(()) => return Dispatch::error(400, "refused", "invalid_x402_request"),
+    let Ok(parsed) = x402_request(request, transport) else {
+        return Dispatch::error(400, "refused", "invalid_x402_request");
     };
-    let facilitator = match Facilitator::new(config.manifest.x402_supported.clone()) {
-        Ok(value) => value,
-        Err(_) => return Dispatch::error(503, "pending", "adapter_configuration_invalid"),
+    let Ok(facilitator) = Facilitator::new(config.manifest.x402_supported.clone()) else {
+        return Dispatch::error(503, "pending", "adapter_configuration_invalid");
     };
-    let expected_signer = match parse_hex32(&record.signer_public_key) {
-        Ok(value) => value,
-        Err(_) => return Dispatch::error(503, "pending", "authenticated_signer_invalid"),
+    let Ok(expected_signer) = parse_hex32(&record.signer_public_key) else {
+        return Dispatch::error(503, "pending", "authenticated_signer_invalid");
     };
-    let server_now = match now() {
-        Ok(value) => value,
-        Err(_) => return Dispatch::error(503, "pending", "clock_unavailable"),
+    let Ok(server_now) = now() else {
+        return Dispatch::error(503, "pending", "clock_unavailable");
     };
-    let mut gateway = match gateway_core(config, trace, server_now) {
-        Ok(value) => value,
-        Err(()) => return Dispatch::error(503, "pending", "adapter_configuration_invalid"),
+    let Ok(mut gateway) = gateway_core(config, trace, server_now) else {
+        return Dispatch::error(503, "pending", "adapter_configuration_invalid");
     };
     let mut plane = X402VerifyPlane {
         modules: &config.modules,
@@ -702,9 +752,8 @@ impl FacilitatorPlane for X402SettlePlane<'_> {
                 payer: None,
             });
         };
-        let expected_signer = match parse_hex32(self.expected_signer) {
-            Ok(value) => value,
-            Err(_) => return Err(X402Error::PaymentRefused),
+        let Ok(expected_signer) = parse_hex32(self.expected_signer) else {
+            return Err(X402Error::PaymentRefused);
         };
         let (submission, _) = match verified_x402_transfer(
             &request,
@@ -766,9 +815,8 @@ fn x402_settle(
     principal: &PrincipalId,
     trace: &TraceId,
 ) -> Dispatch {
-    let parsed = match x402_request(request, transport) {
-        Ok(value) => value,
-        Err(()) => return Dispatch::error(400, "refused", "invalid_x402_request"),
+    let Ok(parsed) = x402_request(request, transport) else {
+        return Dispatch::error(400, "refused", "invalid_x402_request");
     };
     let stable_identity = parsed
         .payment_payload
@@ -779,21 +827,17 @@ fn x402_settle(
     let Some(stable_identity) = stable_identity else {
         return Dispatch::error(400, "refused", "protocol_idempotency_required");
     };
-    let authorization = match request.headers.get("authorization") {
-        Some(value) => value,
-        None => return Dispatch::error(401, "refused", "api_key_required"),
+    let Some(authorization) = request.headers.get("authorization") else {
+        return Dispatch::error(401, "refused", "api_key_required");
     };
-    let facilitator = match Facilitator::new(config.manifest.x402_supported.clone()) {
-        Ok(value) => value,
-        Err(_) => return Dispatch::error(503, "pending", "adapter_configuration_invalid"),
+    let Ok(facilitator) = Facilitator::new(config.manifest.x402_supported.clone()) else {
+        return Dispatch::error(503, "pending", "adapter_configuration_invalid");
     };
-    let server_now = match now() {
-        Ok(value) => value,
-        Err(_) => return Dispatch::error(503, "pending", "clock_unavailable"),
+    let Ok(server_now) = now() else {
+        return Dispatch::error(503, "pending", "clock_unavailable");
     };
-    let mut gateway = match gateway_core(config, trace, server_now) {
-        Ok(value) => value,
-        Err(()) => return Dispatch::error(503, "pending", "adapter_configuration_invalid"),
+    let Ok(mut gateway) = gateway_core(config, trace, server_now) else {
+        return Dispatch::error(503, "pending", "adapter_configuration_invalid");
     };
     let mut plane = X402SettlePlane {
         config,
@@ -856,6 +900,14 @@ struct Ap2Request {
     activity: String,
 }
 
+struct DispatchContext<'a> {
+    config: &'a Config,
+    request: &'a IncomingRequest,
+    record: &'a KeyRecord,
+    principal: &'a PrincipalId,
+    trace: &'a TraceId,
+}
+
 fn ap2(
     config: &Config,
     request: &IncomingRequest,
@@ -867,7 +919,7 @@ fn ap2(
 ) -> Dispatch {
     let body: Ap2Request = match direct_body(request) {
         Ok(value) => value,
-        Err(_) => return Dispatch::error(400, "refused", "invalid_ap2_request"),
+        Err(()) => return Dispatch::error(400, "refused", "invalid_ap2_request"),
     };
     let resolver = Ap2Resolver {
         keys: &config.manifest.ap2_keys,
@@ -877,9 +929,8 @@ fn ap2(
     {
         return Dispatch::error(503, "pending", "authenticated_principal_invalid");
     }
-    let server_now = match now() {
-        Ok(value) => value,
-        Err(_) => return Dispatch::error(503, "pending", "clock_unavailable"),
+    let Ok(server_now) = now() else {
+        return Dispatch::error(503, "pending", "clock_unavailable");
     };
     let mut matched = None;
     for binding in config
@@ -932,36 +983,59 @@ fn ap2(
             }),
         );
     }
+    ap2_execute(
+        &DispatchContext {
+            config,
+            request,
+            record,
+            principal,
+            trace,
+        },
+        &body,
+        binding,
+        &verified,
+        server_now,
+    )
+}
+
+fn ap2_execute(
+    context: &DispatchContext<'_>,
+    body: &Ap2Request,
+    binding: &crate::config::Ap2AssetBinding,
+    verified: &layerx_ap2::VerifiedMandates,
+    server_now: u64,
+) -> Dispatch {
+    let DispatchContext {
+        config,
+        request,
+        record,
+        principal,
+        trace,
+    } = *context;
     if verified.amount().currency().len() != 3 || body.activity.is_empty() {
         return Dispatch::error(400, "refused", "typed_intent_required");
     }
-    let activity = match decode_hex(&body.activity, MAX_BODY) {
-        Ok(value) => value,
-        Err(_) => return Dispatch::error(400, "refused", "typed_intent_required"),
+    let Ok(activity) = decode_hex(&body.activity, MAX_BODY) else {
+        return Dispatch::error(400, "refused", "typed_intent_required");
     };
-    let asset = match parse_hex32(&binding.asset) {
-        Ok(value) => value,
-        Err(_) => return Dispatch::error(400, "refused", "asset_binding_invalid"),
+    let Ok(asset) = parse_hex32(&binding.asset) else {
+        return Dispatch::error(400, "refused", "asset_binding_invalid");
     };
-    let payer = match parse_hex32(&binding.payer_account) {
-        Ok(value) => value,
-        Err(_) => return Dispatch::error(400, "refused", "account_binding_invalid"),
+    let Ok(payer) = parse_hex32(&binding.payer_account) else {
+        return Dispatch::error(400, "refused", "account_binding_invalid");
     };
-    let payee = match parse_hex32(&binding.payee_account) {
-        Ok(value) => value,
-        Err(_) => return Dispatch::error(400, "refused", "account_binding_invalid"),
+    let Ok(recipient) = parse_hex32(&binding.payee_account) else {
+        return Dispatch::error(400, "refused", "account_binding_invalid");
     };
-    let atomic_units = match binding.atomic_units_per_minor_unit.parse::<u128>() {
-        Ok(value) => value,
-        Err(_) => return Dispatch::error(503, "pending", "adapter_configuration_invalid"),
+    let Ok(atomic_units) = binding.atomic_units_per_minor_unit.parse::<u128>() else {
+        return Dispatch::error(503, "pending", "adapter_configuration_invalid");
     };
-    let payee_merchant = match Merchant::new(
+    let Ok(payee_merchant) = Merchant::new(
         binding.payee_merchant_id.clone(),
         binding.payee_merchant_name.clone(),
         binding.payee_merchant_website.clone(),
-    ) {
-        Ok(value) => value,
-        Err(_) => return Dispatch::error(503, "pending", "adapter_configuration_invalid"),
+    ) else {
+        return Dispatch::error(503, "pending", "adapter_configuration_invalid");
     };
     let layerx_binding = LayerXAssetBinding {
         currency: binding.currency.clone(),
@@ -969,7 +1043,7 @@ fn ap2(
         atomic_units_per_minor_unit: atomic_units,
         asset,
         payer_receipt_account: payer,
-        payee_receipt_account: payee,
+        payee_receipt_account: recipient,
         payee_merchant,
     };
     let context = VerificationContext {
@@ -980,7 +1054,7 @@ fn ap2(
         currency_minor_exponent: binding.minor_unit_exponent,
         usage: None,
     };
-    let payment = match authorize_payment(principal, &verified, &context, &layerx_binding) {
+    let payment = match authorize_payment(principal, verified, &context, &layerx_binding) {
         Ok(value) => value,
         Err(Ap2Error::ConstraintViolated(_)) => {
             return Dispatch::error(400, "refused", "mandate_merchant_mismatch")
@@ -990,8 +1064,7 @@ fn ap2(
     let authorization = request
         .headers
         .get("authorization")
-        .map(String::as_str)
-        .unwrap_or("");
+        .map_or("", String::as_str);
     let activity_idempotency_key = hex(&payment.idempotency_key());
     let execution = Execution {
         config,
@@ -1013,37 +1086,38 @@ fn ap2(
             "refused",
             json!({ "state": ExternalState::Refused.label() }),
         ),
-        Ok(PlaneOutcome::Executed(evidence)) => {
-            let receipt = match verify(&evidence.receipt, &evidence.authorized) {
-                Ok(value) => value,
-                Err(_) => return Dispatch::error(503, "pending", "receipt_verification_failed"),
-            };
-            let Some(protocol) = receipt.receipt().protocol() else {
-                return Dispatch::error(503, "pending", "receipt_verification_failed");
-            };
-            if protocol.asset() != payment.asset()
-                || protocol.from() != payment.payer_receipt_account()
-                || protocol.to() != payment.payee_receipt_account()
-                || protocol.amount() != payment.amount()
-            {
-                return Dispatch::error(503, "pending", "receipt_intent_mismatch");
-            }
-            let mut result = Dispatch::result(
-                200,
-                "completed",
-                json!({
-                    "state": ExternalState::ReceiptVerified.label(),
-                    "transaction_id": payment.transaction_id(),
-                    "checkout_id": payment.checkout_id(),
-                    "receipt_digest": hex(&evidence.verified.receipt_digest())
-                }),
-            );
-            result.receipt_hex = Some(hex(&evidence.receipt));
-            result.activity_id = Some(hex(&evidence.verified.activity_id()));
-            result
-        }
+        Ok(PlaneOutcome::Executed(evidence)) => ap2_executed(&payment, &evidence),
         Err(_) => Dispatch::error(503, "pending", "settlement_unavailable"),
     }
+}
+
+fn ap2_executed(payment: &layerx_ap2::AuthorizedPayment, evidence: &ExecutionEvidence) -> Dispatch {
+    let Ok(receipt) = verify(&evidence.receipt, &evidence.authorized) else {
+        return Dispatch::error(503, "pending", "receipt_verification_failed");
+    };
+    let Some(protocol) = receipt.receipt().protocol() else {
+        return Dispatch::error(503, "pending", "receipt_verification_failed");
+    };
+    if protocol.asset() != payment.asset()
+        || protocol.from() != payment.payer_receipt_account()
+        || protocol.to() != payment.payee_receipt_account()
+        || protocol.amount() != payment.amount()
+    {
+        return Dispatch::error(503, "pending", "receipt_intent_mismatch");
+    }
+    let mut result = Dispatch::result(
+        200,
+        "completed",
+        json!({
+            "state": ExternalState::ReceiptVerified.label(),
+            "transaction_id": payment.transaction_id(),
+            "checkout_id": payment.checkout_id(),
+            "receipt_digest": hex(&evidence.verified.receipt_digest())
+        }),
+    );
+    result.receipt_hex = Some(hex(&evidence.receipt));
+    result.activity_id = Some(hex(&evidence.verified.activity_id()));
+    result
 }
 
 struct Ap2Resolver<'a> {
@@ -1207,18 +1281,15 @@ fn ucp(
 ) -> Dispatch {
     let body: UcpRequest = match direct_body(request) {
         Ok(value) => value,
-        Err(_) => return Dispatch::error(400, "refused", "invalid_ucp_request"),
+        Err(()) => return Dispatch::error(400, "refused", "invalid_ucp_request"),
     };
-    let client_platform = match ucp_client_profile(&body) {
-        Ok(value) => value,
-        Err(()) => return Dispatch::error(400, "refused", "ucp_profile_refused"),
+    let Ok(client_platform) = ucp_client_profile(&body) else {
+        return Dispatch::error(400, "refused", "ucp_profile_refused");
     };
-    let negotiated = match NegotiatedCapabilities::negotiate(
-        &client_platform,
-        &config.manifest.ucp_payment_handler,
-    ) {
-        Ok(value) => value,
-        Err(_) => return Dispatch::error(400, "refused", "ucp_capability_refused"),
+    let Ok(negotiated) =
+        NegotiatedCapabilities::negotiate(&client_platform, &config.manifest.ucp_payment_handler)
+    else {
+        return Dispatch::error(400, "refused", "ucp_capability_refused");
     };
     let currency: [u8; 3] = match body.currency.as_bytes().try_into() {
         Ok(value) => value,
@@ -1248,23 +1319,19 @@ fn ucp(
     if body.activity.is_empty() {
         return Dispatch::error(400, "refused", "typed_intent_required");
     }
-    let activity = match decode_hex(&body.activity, MAX_BODY) {
-        Ok(value) => value,
-        Err(_) => return Dispatch::error(400, "refused", "typed_intent_required"),
+    let Ok(activity) = decode_hex(&body.activity, MAX_BODY) else {
+        return Dispatch::error(400, "refused", "typed_intent_required");
     };
-    let server_now = match now() {
-        Ok(value) => value,
-        Err(_) => return Dispatch::error(503, "pending", "clock_unavailable"),
+    let Ok(server_now) = now() else {
+        return Dispatch::error(503, "pending", "clock_unavailable");
     };
-    let mut gateway = match gateway_core(config, trace, server_now) {
-        Ok(value) => value,
-        Err(()) => return Dispatch::error(503, "pending", "adapter_configuration_invalid"),
+    let Ok(mut gateway) = gateway_core(config, trace, server_now) else {
+        return Dispatch::error(503, "pending", "adapter_configuration_invalid");
     };
     let authorization = request
         .headers
         .get("authorization")
-        .map(String::as_str)
-        .unwrap_or("");
+        .map_or("", String::as_str);
     let mut plane = UcpServicePlane {
         config,
         authorization,
@@ -1284,6 +1351,13 @@ fn ucp(
         trace,
         server_now,
     );
+    ucp_outcome(completed, plane)
+}
+
+fn ucp_outcome(
+    completed: Result<layerx_ucp::CheckoutOutcome, layerx_interop_gateway::trace::Traced<UcpError>>,
+    plane: UcpServicePlane<'_>,
+) -> Dispatch {
     match completed {
         Ok(outcome) => match outcome.status {
             CheckoutStatus::Completed => {
@@ -1365,25 +1439,23 @@ fn visa(
 ) -> Dispatch {
     let body: VisaRequest = match direct_body(request) {
         Ok(value) => value,
-        Err(_) => return Dispatch::error(400, "refused", "invalid_visa_tap_request"),
+        Err(()) => return Dispatch::error(400, "refused", "invalid_visa_tap_request"),
     };
-    let tap = match TapRequest::parse(
+    let Ok(tap) = TapRequest::parse(
         body.authority,
         body.path,
         &body.signature_input,
         &body.signature,
-    ) {
-        Ok(value) => value,
-        Err(_) => return Dispatch::error(400, "refused", "visa_tap_refused"),
+    ) else {
+        return Dispatch::error(400, "refused", "visa_tap_refused");
     };
-    let target = match config
+    let Some(target) = config
         .manifest
         .visa_targets
         .iter()
         .find(|target| target.principal_digest.as_str() == record.principal_digest)
-    {
-        Some(value) => value,
-        None => return Dispatch::error(400, "refused", "visa_tap_target_unavailable"),
+    else {
+        return Dispatch::error(400, "refused", "visa_tap_target_unavailable");
     };
     if require_visa_target(&tap, target).is_err() {
         return Dispatch::error(400, "refused", "visa_tap_target_mismatch");
@@ -1391,26 +1463,19 @@ fn visa(
     let registry = VisaRegistry {
         pins: &config.manifest.visa_agents,
     };
-    let observed_at = match now() {
-        Ok(value) => value,
-        Err(_) => return Dispatch::error(503, "pending", "server_clock_unavailable"),
+    let Ok(observed_at) = now() else {
+        return Dispatch::error(503, "pending", "server_clock_unavailable");
     };
-    let verified = match TapVerifier::verify_credential(
-        &tap,
-        &registry,
-        observed_at,
-        config.tap_clock_skew_seconds,
-    ) {
-        Ok(value) => value,
-        Err(_) => return Dispatch::error(400, "refused", "visa_tap_refused"),
+    let Ok(verified) =
+        TapVerifier::verify_credential(&tap, &registry, observed_at, config.tap_clock_skew_seconds)
+    else {
+        return Dispatch::error(400, "refused", "visa_tap_refused");
     };
-    let layerx_agent = match verified.layerx_agent {
-        Some(value) => value,
-        None => return Dispatch::error(400, "refused", "layerx_agent_binding_required"),
+    let Some(layerx_agent) = verified.layerx_agent else {
+        return Dispatch::error(400, "refused", "layerx_agent_binding_required");
     };
-    let signer_public_key = match parse_hex32(&record.signer_public_key) {
-        Ok(value) => value,
-        Err(_) => return Dispatch::error(503, "pending", "persistence_unavailable"),
+    let Ok(signer_public_key) = parse_hex32(&record.signer_public_key) else {
+        return Dispatch::error(503, "pending", "persistence_unavailable");
     };
     if let Err(code) = require_visa_actor(layerx_agent, signer_public_key) {
         return Dispatch::error(400, "refused", code);
@@ -1418,28 +1483,9 @@ fn visa(
     if let Err(code) = require_visa_route(execute, verified.intent, &body.activity) {
         return Dispatch::error(400, "refused", code);
     }
-    let activity_binding = if execute {
-        let canonical = match decode_hex(&body.activity, MAX_BODY) {
-            Ok(value) if !value.is_empty() => value,
-            _ => return Dispatch::error(400, "refused", "typed_intent_required"),
-        };
-        let submission = match verify_submission(
-            &canonical,
-            &config.modules,
-            config.protocol_version,
-            config.protocol_network_id,
-            &signer_public_key,
-        ) {
-            Ok(value) => value,
-            Err(_) => return Dispatch::error(400, "refused", "activity_authorization_refused"),
-        };
-        Some(VisaActivityBinding {
-            canonical,
-            activity_id: submission.activity_id(),
-            idempotency_key: hex(&submission.idempotency_key()),
-        })
-    } else {
-        None
+    let activity_binding = match visa_activity(config, &body.activity, execute, signer_public_key) {
+        Ok(binding) => binding,
+        Err(refusal) => return refusal,
     };
     let replay_until = match verified
         .expires_at
@@ -1488,9 +1534,18 @@ fn visa(
             }),
         );
     }
-    let activity = match activity_binding {
-        Some(value) => value,
-        None => return Dispatch::error(400, "refused", "typed_intent_required"),
+    visa_execute(config, request, record, trace, activity_binding)
+}
+
+fn visa_execute(
+    config: &Config,
+    request: &IncomingRequest,
+    record: &KeyRecord,
+    trace: &TraceId,
+    activity_binding: Option<VisaActivityBinding>,
+) -> Dispatch {
+    let Some(activity) = activity_binding else {
+        return Dispatch::error(400, "refused", "typed_intent_required");
     };
     let activity_id = activity.activity_id;
     let idempotency_key = activity.idempotency_key;
@@ -1498,8 +1553,7 @@ fn visa(
     let authorization = request
         .headers
         .get("authorization")
-        .map(String::as_str)
-        .unwrap_or("");
+        .map_or("", String::as_str);
     match (Execution {
         config,
         authorization,
@@ -1533,6 +1587,40 @@ fn visa(
         }
         Err(_) => Dispatch::error(503, "pending", "settlement_unavailable"),
     }
+}
+
+fn visa_activity(
+    config: &Config,
+    activity: &str,
+    execute: bool,
+    signer_public_key: [u8; 32],
+) -> Result<Option<VisaActivityBinding>, Dispatch> {
+    Ok(if execute {
+        let canonical = match decode_hex(activity, MAX_BODY) {
+            Ok(value) if !value.is_empty() => value,
+            _ => return Err(Dispatch::error(400, "refused", "typed_intent_required")),
+        };
+        let Ok(submission) = verify_submission(
+            &canonical,
+            &config.modules,
+            config.protocol_version,
+            config.protocol_network_id,
+            &signer_public_key,
+        ) else {
+            return Err(Dispatch::error(
+                400,
+                "refused",
+                "activity_authorization_refused",
+            ));
+        };
+        Some(VisaActivityBinding {
+            canonical,
+            activity_id: submission.activity_id(),
+            idempotency_key: hex(&submission.idempotency_key()),
+        })
+    } else {
+        None
+    })
 }
 
 fn require_visa_actor(
@@ -1721,21 +1809,18 @@ fn fiat(
 ) -> Dispatch {
     let body: FiatCallback = match direct_body(request) {
         Ok(value) => value,
-        Err(_) => return Dispatch::error(400, "refused", "invalid_provider_callback"),
+        Err(()) => return Dispatch::error(400, "refused", "invalid_provider_callback"),
     };
-    let token = match TokenReference::new(body.token_reference.into_bytes()) {
-        Ok(value) => value,
-        Err(_) => return Dispatch::error(400, "refused", "provider_callback_refused"),
+    let Ok(token) = TokenReference::new(body.token_reference.into_bytes()) else {
+        return Dispatch::error(400, "refused", "provider_callback_refused");
     };
-    let evidence_bytes = match serde_json::to_vec(&body.evidence) {
-        Ok(value) => value,
-        Err(_) => return Dispatch::error(400, "refused", "provider_callback_refused"),
+    let Ok(evidence_bytes) = serde_json::to_vec(&body.evidence) else {
+        return Dispatch::error(400, "refused", "provider_callback_refused");
     };
-    let evidence = match ProviderEvidence::new(evidence_bytes) {
-        Ok(value) => value,
-        Err(_) => return Dispatch::error(400, "refused", "provider_callback_refused"),
+    let Ok(evidence) = ProviderEvidence::new(evidence_bytes) else {
+        return Dispatch::error(400, "refused", "provider_callback_refused");
     };
-    let verifier = FiatEvidenceVerifier {
+    let evidence_verifier = FiatEvidenceVerifier {
         pins: &config.manifest.fiat_providers,
         expected_rail: adapter,
     };
@@ -1745,17 +1830,16 @@ fn fiat(
     let authorization = request
         .headers
         .get("authorization")
-        .map(String::as_str)
-        .unwrap_or("");
-    let facts = match FiatAdapter::verify_evidence(&token, &evidence, &verifier, trace) {
-        Ok(value) => value,
-        Err(_) => return Dispatch::error(400, "refused", "provider_callback_refused"),
+        .map_or("", String::as_str);
+    let Ok(facts) = FiatAdapter::verify_evidence(&token, &evidence, &evidence_verifier, trace)
+    else {
+        return Dispatch::error(400, "refused", "provider_callback_refused");
     };
     match facts.class {
-        EvidenceClass::Authorised => fiat_state(FiatJourneyState::AuthorisedHold {
+        EvidenceClass::Authorised => fiat_state(&FiatJourneyState::AuthorisedHold {
             until: facts.hold_until.unwrap_or(facts.observed_at),
         }),
-        EvidenceClass::Clearing => fiat_state(FiatJourneyState::ClearingHold {
+        EvidenceClass::Clearing => fiat_state(&FiatJourneyState::ClearingHold {
             until: facts.hold_until.unwrap_or(facts.observed_at),
         }),
         EvidenceClass::Settled | EvidenceClass::Reversed | EvidenceClass::Chargeback => {
@@ -1773,7 +1857,7 @@ fn fiat(
                 trace,
             };
             match execution.submit() {
-                Ok(PlaneOutcome::Pending) => fiat_state(match facts.class {
+                Ok(PlaneOutcome::Pending) => fiat_state(&match facts.class {
                     EvidenceClass::Settled => FiatJourneyState::CreditPending,
                     EvidenceClass::Reversed => FiatJourneyState::ReversalPending {
                         hold_until: facts.hold_until,
@@ -1785,57 +1869,49 @@ fn fiat(
                         FiatJourneyState::Refused
                     }
                 }),
-                Ok(PlaneOutcome::Refused) => fiat_state(FiatJourneyState::Refused),
-                Ok(PlaneOutcome::Executed(executed)) => {
-                    let verified = match verify(&executed.receipt, &executed.authorized) {
-                        Ok(value) => value,
-                        Err(_) => {
-                            return Dispatch::error(503, "pending", "receipt_verification_failed")
-                        }
-                    };
-                    let Some(protocol) = verified.receipt().protocol() else {
-                        return Dispatch::error(503, "pending", "receipt_verification_failed");
-                    };
-                    let account_matches = match facts.class {
-                        EvidenceClass::Settled => protocol.to() == facts.destination,
-                        EvidenceClass::Reversed | EvidenceClass::Chargeback => {
-                            protocol.from() == facts.destination
-                        }
-                        EvidenceClass::Authorised | EvidenceClass::Clearing => false,
-                    };
-                    if protocol.asset() != facts.asset
-                        || protocol.amount() != facts.amount
-                        || !account_matches
-                    {
-                        return Dispatch::error(503, "pending", "receipt_intent_mismatch");
-                    }
-                    let digest = executed.verified.receipt_digest();
-                    let state = match facts.class {
-                        EvidenceClass::Settled => FiatJourneyState::Credited {
-                            receipt_digest: digest,
-                        },
-                        EvidenceClass::Reversed => FiatJourneyState::Reversed {
-                            receipt_digest: digest,
-                        },
-                        EvidenceClass::Chargeback => FiatJourneyState::ChargedBack {
-                            receipt_digest: digest,
-                        },
-                        EvidenceClass::Authorised | EvidenceClass::Clearing => {
-                            FiatJourneyState::Refused
-                        }
-                    };
-                    let mut result = fiat_state(state);
-                    result.receipt_hex = Some(hex(&executed.receipt));
-                    result.activity_id = Some(hex(&executed.verified.activity_id()));
-                    result
-                }
+                Ok(PlaneOutcome::Refused) => fiat_state(&FiatJourneyState::Refused),
+                Ok(PlaneOutcome::Executed(executed)) => fiat_executed(&facts, &executed),
                 Err(_) => Dispatch::error(503, "pending", "settlement_unavailable"),
             }
         }
     }
 }
 
-fn fiat_state(state: FiatJourneyState) -> Dispatch {
+fn fiat_executed(facts: &VerifiedProviderFacts, executed: &ExecutionEvidence) -> Dispatch {
+    let Ok(verified) = verify(&executed.receipt, &executed.authorized) else {
+        return Dispatch::error(503, "pending", "receipt_verification_failed");
+    };
+    let Some(protocol) = verified.receipt().protocol() else {
+        return Dispatch::error(503, "pending", "receipt_verification_failed");
+    };
+    let account_matches = match facts.class {
+        EvidenceClass::Settled => protocol.to() == facts.destination,
+        EvidenceClass::Reversed | EvidenceClass::Chargeback => protocol.from() == facts.destination,
+        EvidenceClass::Authorised | EvidenceClass::Clearing => false,
+    };
+    if protocol.asset() != facts.asset || protocol.amount() != facts.amount || !account_matches {
+        return Dispatch::error(503, "pending", "receipt_intent_mismatch");
+    }
+    let digest = executed.verified.receipt_digest();
+    let state = match facts.class {
+        EvidenceClass::Settled => FiatJourneyState::Credited {
+            receipt_digest: digest,
+        },
+        EvidenceClass::Reversed => FiatJourneyState::Reversed {
+            receipt_digest: digest,
+        },
+        EvidenceClass::Chargeback => FiatJourneyState::ChargedBack {
+            receipt_digest: digest,
+        },
+        EvidenceClass::Authorised | EvidenceClass::Clearing => FiatJourneyState::Refused,
+    };
+    let mut result = fiat_state(&state);
+    result.receipt_hex = Some(hex(&executed.receipt));
+    result.activity_id = Some(hex(&executed.verified.activity_id()));
+    result
+}
+
+fn fiat_state(state: &FiatJourneyState) -> Dispatch {
     match state {
         FiatJourneyState::AuthorisedHold { until } => Dispatch::result(
             200,
@@ -1865,17 +1941,17 @@ fn fiat_state(state: FiatJourneyState) -> Dispatch {
         FiatJourneyState::Credited { receipt_digest } => Dispatch::result(
             200,
             "completed",
-            json!({ "state": ExternalState::ReceiptVerified.label(), "receipt_digest": hex(&receipt_digest) }),
+            json!({ "state": ExternalState::ReceiptVerified.label(), "receipt_digest": hex(receipt_digest) }),
         ),
         FiatJourneyState::Reversed { receipt_digest } => Dispatch::result(
             200,
             "completed",
-            json!({ "state": ExternalState::Reversed.label(), "receipt_digest": hex(&receipt_digest) }),
+            json!({ "state": ExternalState::Reversed.label(), "receipt_digest": hex(receipt_digest) }),
         ),
         FiatJourneyState::ChargedBack { receipt_digest } => Dispatch::result(
             200,
             "completed",
-            json!({ "state": "charged-back", "receipt_digest": hex(&receipt_digest) }),
+            json!({ "state": "charged-back", "receipt_digest": hex(receipt_digest) }),
         ),
         FiatJourneyState::Refused => Dispatch::result(
             200,
@@ -1976,7 +2052,7 @@ struct Execution<'a> {
 enum PlaneOutcome {
     Pending,
     Refused,
-    Executed(ExecutionEvidence),
+    Executed(Box<ExecutionEvidence>),
 }
 
 struct ExecutionEvidence {
@@ -2060,11 +2136,11 @@ impl Execution<'_> {
         {
             return Err("hosted gateway response conflicts with verified receipt".to_owned());
         }
-        Ok(PlaneOutcome::Executed(ExecutionEvidence {
+        Ok(PlaneOutcome::Executed(Box::new(ExecutionEvidence {
             receipt,
             authorized,
             verified,
-        }))
+        })))
     }
 }
 
@@ -2179,7 +2255,7 @@ fn transport_kind(transport: IngressTransport) -> TransportKind {
 fn live() -> OutgoingResponse {
     json_response(
         200,
-        json!({ "status": "live", "service": "layerx-interop-gateway", "package_semver": env!("CARGO_PKG_VERSION") }),
+        &json!({ "status": "live", "service": "layerx-interop-gateway", "package_semver": env!("CARGO_PKG_VERSION") }),
     )
 }
 
@@ -2194,7 +2270,7 @@ fn ready(config: &Config) -> OutgoingResponse {
     let ready = durable && hosted && authority;
     json_response(
         if ready { 200 } else { 503 },
-        json!({
+        &json!({
             "status": if ready { "ready" } else { "degraded" },
             "components": { "durable_gateway_store": readiness(durable), "hosted_gateway": readiness(hosted), "receipt_authority": readiness(authority) }
         }),
@@ -2247,7 +2323,7 @@ fn metadata(config: &Config) -> OutgoingResponse {
     })).collect();
     json_response(
         200,
-        json!({ "adapters": adapters, "transports": transports }),
+        &json!({ "adapters": adapters, "transports": transports }),
     )
 }
 
@@ -2307,7 +2383,7 @@ fn stored_response(
         },
         _ if state == "pending" => json_response(
             202,
-            json!({ "ok": true, "operation": operation, "result": { "state": "pending" }, "trace": trace.as_str() }),
+            &json!({ "ok": true, "operation": operation, "result": { "state": "pending" }, "trace": trace.as_str() }),
         ),
         _ => failure(503, "persistence_unavailable", Some(5)),
     }
@@ -2323,7 +2399,7 @@ fn failure(status: u16, code: &str, retry_after: Option<u64>) -> OutgoingRespons
     }
 }
 
-fn json_response(status: u16, value: Value) -> OutgoingResponse {
+fn json_response(status: u16, value: &Value) -> OutgoingResponse {
     OutgoingResponse {
         status,
         body: value.to_string().into_bytes(),
@@ -2427,7 +2503,8 @@ mod tests {
             observed_at: 1_700_000_000,
             hold_until: None,
         };
-        let canonical = serde_json::to_vec(&facts).expect("fiat facts serialize");
+        let canonical = serde_json::to_vec(&facts)
+            .unwrap_or_else(|error| panic!("fiat facts serialize: {error:?}"));
         let mut signed = FIAT_EVIDENCE_SIGNATURE_DOMAIN.to_vec();
         signed.extend_from_slice(&canonical);
         let signature = signing.sign(&signed);
@@ -2436,9 +2513,9 @@ mod tests {
                 facts,
                 signature: hex(&signature.to_bytes()),
             })
-            .expect("fiat evidence serializes"),
+            .unwrap_or_else(|error| panic!("fiat evidence serializes: {error:?}")),
         )
-        .expect("fiat evidence is bounded")
+        .unwrap_or_else(|error| panic!("fiat evidence is bounded: {error:?}"))
     }
 
     #[test]
@@ -2525,22 +2602,22 @@ mod tests {
     fn fiat_provider_signature_binds_the_opaque_token_reference() {
         let signing = SigningKey::from_bytes(&[0x61; 32]);
         let token = TokenReference::new(b"provider-token-a".to_vec())
-            .expect("opaque provider token is valid");
+            .unwrap_or_else(|error| panic!("opaque provider token is valid: {error:?}"));
         let substituted = TokenReference::new(b"provider-token-b".to_vec())
-            .expect("substitute provider token is valid");
+            .unwrap_or_else(|error| panic!("substitute provider token is valid: {error:?}"));
         let evidence = signed_fiat_evidence(&signing, &token);
         let pins = [FiatProviderPin {
             provider: "provider-001".to_owned(),
             public_key_ed25519: hex(signing.verifying_key().as_bytes()),
         }];
-        let verifier = FiatEvidenceVerifier {
+        let evidence_verifier = FiatEvidenceVerifier {
             pins: &pins,
             expected_rail: HostedAdapter::FiatCard,
         };
         let trace = TraceId::mint([0x62; 16]);
-        assert!(verifier.verify(&token, &evidence, &trace).is_ok());
+        assert!(evidence_verifier.verify(&token, &evidence, &trace).is_ok());
         assert_eq!(
-            verifier.verify(&substituted, &evidence, &trace),
+            evidence_verifier.verify(&substituted, &evidence, &trace),
             Err(layerx_fiat::FiatError::InvalidEvidence)
         );
     }
@@ -2574,7 +2651,8 @@ mod tests {
         let requirements = PaymentRequirements {
             scheme: "exact".to_owned(),
             network: "layerx:testnet".to_owned(),
-            amount: AtomicAmount::parse("1000").expect("fixture amount is canonical"),
+            amount: AtomicAmount::parse("1000")
+                .unwrap_or_else(|error| panic!("fixture amount is canonical: {error:?}")),
             asset: "44".repeat(32),
             pay_to: "45".repeat(32),
             max_timeout_seconds: 60,
@@ -2595,19 +2673,21 @@ mod tests {
 
     fn x402_fixture_gateway(trace: &TraceId) -> GatewayCore {
         let conformance = ConformanceSuite::new(
-            AdapterId::new("x402-v2-local-matrix").expect("suite id is valid"),
+            AdapterId::new("x402-v2-local-matrix")
+                .unwrap_or_else(|error| panic!("suite id is valid: {error:?}")),
             1,
             [0x11; 32],
         )
-        .expect("conformance suite is declared");
+        .unwrap_or_else(|error| panic!("conformance suite is declared: {error:?}"));
         let mut gateway = GatewayCore::new();
         gateway
             .register_adapter(
-                x402_adapter_descriptor(conformance).expect("x402 descriptor is valid"),
+                x402_adapter_descriptor(conformance)
+                    .unwrap_or_else(|error| panic!("x402 descriptor is valid: {error:?}")),
                 trace,
                 10,
             )
-            .expect("x402 adapter registers");
+            .unwrap_or_else(|error| panic!("x402 adapter registers: {error:?}"));
         gateway
     }
 
@@ -2623,10 +2703,12 @@ mod tests {
             extensions: vec![],
             signers: BTreeMap::new(),
         })
-        .expect("facilitator supports the layerx exact kind");
+        .unwrap_or_else(|error| panic!("facilitator supports the layerx exact kind: {error:?}"));
         let trace = TraceId::mint([0x71; 16]);
-        let principal = PrincipalId::new("principal-x402-verify").expect("principal id is valid");
-        let modules = ModuleRegistry::new(&[]).expect("empty module registry is valid");
+        let principal = PrincipalId::new("principal-x402-verify")
+            .unwrap_or_else(|error| panic!("principal id is valid: {error:?}"));
+        let modules = ModuleRegistry::new(&[])
+            .unwrap_or_else(|error| panic!("empty module registry is valid: {error:?}"));
         let mut plane = X402VerifyPlane {
             modules: &modules,
             protocol_version: layerx_wire::limits::PROTOCOL_VERSION,
@@ -2644,7 +2726,9 @@ mod tests {
                 &trace,
                 10,
             )
-            .expect("verify renders a refusal for a payment without a typed activity");
+            .unwrap_or_else(|error| {
+                panic!("verify renders a refusal for a payment without a typed activity: {error:?}")
+            });
         assert!(!unsigned.is_valid);
         assert_eq!(
             unsigned.invalid_reason.as_deref(),
@@ -2662,7 +2746,9 @@ mod tests {
                 &trace,
                 10,
             )
-            .expect("verify renders a refusal for unverifiable activity bytes");
+            .unwrap_or_else(|error| {
+                panic!("verify renders a refusal for unverifiable activity bytes: {error:?}")
+            });
         assert!(!unverifiable.is_valid);
         assert_eq!(
             unverifiable.invalid_reason.as_deref(),
@@ -2671,7 +2757,7 @@ mod tests {
     }
 
     fn ucp_wire(capabilities: Value, payment_handlers: Value) -> UcpRequest {
-        serde_json::from_value(serde_json::json!({
+        let mut wire = serde_json::json!({
             "checkout_id": "checkout-1",
             "currency": "USD",
             "total_minor": "1000",
@@ -2679,13 +2765,16 @@ mod tests {
             "recipient": "45".repeat(32),
             "idempotency_key": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
             "profile_url": "https://client.example/profile",
-            "capabilities": capabilities,
-            "payment_handlers": payment_handlers,
+            "capabilities": [],
+            "payment_handlers": [],
             "activity": "00",
             "order_id": "order-1",
             "permalink_url": "https://merchant.example/orders/1"
-        }))
-        .expect("UCP wire request parses")
+        });
+        wire["capabilities"] = capabilities;
+        wire["payment_handlers"] = payment_handlers;
+        serde_json::from_value(wire)
+            .unwrap_or_else(|error| panic!("UCP wire request parses: {error:?}"))
     }
 
     #[test]
@@ -2696,7 +2785,7 @@ mod tests {
             "https://interop.layerx.example/specs/payment-handler",
             "https://interop.layerx.example/schemas/payment-handler.json",
         )
-        .expect("platform payment handler is valid");
+        .unwrap_or_else(|error| panic!("platform payment handler is valid: {error:?}"));
         let handler_wire = serde_json::json!([{
             "id": "dev.layerx.payment",
             "version": "2026-04-08",
@@ -2711,7 +2800,9 @@ mod tests {
         }]);
         let without_checkout =
             ucp_client_profile(&ucp_wire(serde_json::json!([]), handler_wire.clone()))
-                .expect("client profile without checkout parses");
+                .unwrap_or_else(|error| {
+                    panic!("client profile without checkout parses: {error:?}")
+                });
         assert_eq!(
             NegotiatedCapabilities::negotiate(&without_checkout, &platform_handler),
             Err(UcpError::CapabilityUnavailable)
@@ -2724,15 +2815,17 @@ mod tests {
         }]);
         let foreign_handler =
             ucp_client_profile(&ucp_wire(checkout_wire.clone(), foreign_handler_wire))
-                .expect("client profile with a foreign handler parses");
+                .unwrap_or_else(|error| {
+                    panic!("client profile with a foreign handler parses: {error:?}")
+                });
         assert_eq!(
             NegotiatedCapabilities::negotiate(&foreign_handler, &platform_handler),
             Err(UcpError::PaymentHandlerUnavailable)
         );
         let compatible = ucp_client_profile(&ucp_wire(checkout_wire, handler_wire))
-            .expect("compatible client profile parses");
+            .unwrap_or_else(|error| panic!("compatible client profile parses: {error:?}"));
         let negotiated = NegotiatedCapabilities::negotiate(&compatible, &platform_handler)
-            .expect("compatible client profile negotiates");
+            .unwrap_or_else(|error| panic!("compatible client profile negotiates: {error:?}"));
         assert!(negotiated.checkout());
     }
 
@@ -2756,7 +2849,7 @@ mod tests {
             assert!(serde_json::from_value::<Ap2Request>(request.clone()).is_err());
             request
                 .as_object_mut()
-                .expect("AP2 request is an object")
+                .unwrap_or_else(|| panic!("AP2 request is an object"))
                 .remove(field);
         }
     }
