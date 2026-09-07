@@ -1827,6 +1827,17 @@ static lxp_result publish_canonical_batch(
             &process->sequencer_authorization, canonical_header,
             header_signature, &process->execution_arena);
     if (status == LXP_OK) {
+        if (pthread_mutex_lock(&process->owner.receipt_mutex) != 0)
+            status = LXP_ERR_IO;
+        else {
+            process->owner.published_receipt_log = *process->owner.history->log;
+            process->owner.published_receipt_log.capacity =
+                process->owner.published_receipt_log.write_offset;
+            if (pthread_mutex_unlock(&process->owner.receipt_mutex) != 0)
+                status = LXP_FATAL_INVARIANT;
+        }
+    }
+    if (status == LXP_OK) {
         process->owner.latest_sealed_timestamp = timestamp;
         process->next_batch = process->next_batch ==
                                       process->sequencer_authorization
