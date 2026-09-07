@@ -2022,3 +2022,27 @@ symbol = "programs-check-executed-fixture programs-abi-drift"
 observed = "Passing fixture and ABI gates emit private-interface, unused-import, unused-variable and dead-code warnings from existing Programs runtime, sandbox and porting sources. Exact diagnostics are retained in qual-logs/pass6-final-executed-fixture.log and qual-logs/pass6-final-abi-drift.log."
 assumption = "These sources are outside SDK ownership and were not modified. No warning or assertion was disabled."
 severity = "note"
+
+[observation.6.11.native-binding-fixture-derived-mismatches]
+task = "6.11"
+file = "agent/sdk/python/tests/test_native_program_binding.py agent/sdk/typescript/test/receipt-fixture.test.ts platform/sdk/jvm/src/test/java/com/sidiora/layerx/sdk/ReceiptFixtureTest.java platform/sdk/swift/Tests/LayerXSDKTests/ReceiptFixtureTests.swift platform/sdk/dotnet/tests/LayerX.Sdk.Tests/ReceiptFixtureTests.cs"
+symbol = "test_real_signed_native_binding_and_mismatches nativeSignedBinding testNativeSignedBinding"
+observed = "Every native-field mutation in Python and TypeScript derives from the decoded fixture; ABI swaps between supported values 1 and 2. Each mutation is asserted different and encoded successfully before signed-binding refusal. JVM, Swift and dotnet capacity mutations derive from decoded capacity within its bound and assert inequality. With branch ABI-1 fixtures, make agent-test-sdk-py, make agent-test-sdk-ts, sh platform/sdk/conformance/run-jvm.sh /root/lx-lanes/terminal, swift test --disable-automatic-resolution --package-path platform/sdk/swift -j 4, and dotnet test platform/sdk/dotnet/tests/LayerX.Sdk.Tests/LayerX.Sdk.Tests.csproj --no-restore --nologo exit 0 in qual-logs/binding-branch-py.log, qual-logs/binding-branch-ts.log, qual-logs/binding-branch-jvm.log, qual-logs/binding-branch-swift.log and qual-logs/binding-branch-dotnet.log. Python has 34 tests, JVM 33, Swift 16 and dotnet 17. git diff --check exits 0 in qual-logs/binding-diff-check.log."
+assumption = "CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4 are exported. Go already derives its negative capacity by incrementing the fixture value and is unchanged. No SDK sources or tracked fixtures change. The local Codify graph is absent; cg brief, cg survey and cg context report not inside a Codify project. No graph gate or task completion is claimed."
+severity = "note"
+
+[observation.6.11.native-binding-abi2-scratch]
+task = "6.11"
+file = "platform/sdk/conformance/fixtures/native-program-call-v3.json platform/sdk/conformance/fixtures/receipt-programs-executed-v3.json"
+symbol = "decode_signed_program_call decodeSignedProgramCall nativeSignedBinding testNativeSignedBinding"
+observed = "Untracked qual-logs/binding-abi2-scratch contains copied SDK code and captured ABI-2 native-call and executed-receipt fixtures from /root/lx-lanes/native/platform/sdk/conformance/fixtures. Python native-binding unittest and TypeScript receipt-fixture suite exit 0 in qual-logs/binding-abi2-scratch-py-focused.log and qual-logs/binding-abi2-scratch-ts-focused.log. Full JVM, Swift and dotnet suites exit 0 in qual-logs/binding-abi2-scratch-jvm-final.log, qual-logs/binding-abi2-swift.log and qual-logs/binding-abi2-dotnet.log. Full Python and TypeScript suites with only the native-call fixture replaced by the captured ABI-2 fixture also exit 0 in qual-logs/binding-abi2-binding-only-py.log and qual-logs/binding-abi2-binding-only-ts.log. All eight Python and TypeScript native-field refusal cases are retained and execute with both ABIs."
+assumption = "The scratch copies are untracked. Initial scratch Python and JVM failures came from omitted FastAPI signature-verifier and schema/codec input files; the complete existing tracked dependencies were copied and suites rerun. Exact commands and scratch working directories are listed in the PR command table."
+severity = "note"
+
+[observation.6.11.executed-fixture-missing-execution-document]
+task = "6.11"
+file = "platform/sdk/conformance/fixtures/receipt-programs-executed-v3.json agent/sdk/python/tests/test_program_executed_v3.py agent/sdk/typescript/test/program-executed-v3.test.ts"
+symbol = "test_actual_kernel_runtime_receipt_and_module_binding parseProgramExecutionDocument"
+observed = "The captured external ABI-2 executed-receipt fixture lacks execution_document. Full Python tests exit 1 with KeyError execution_document in qual-logs/binding-abi2-py-complete-scratch.log. Full TypeScript tests exit 1 reading document.usage in qual-logs/binding-abi2-ts.log. The native-binding refusal tests pass on that same scratch tree. The exact captured producer fixture remains at qual-logs/binding-abi2-scratch/platform/sdk/conformance/fixtures/receipt-programs-executed-v3.json."
+assumption = "The fixture producer must emit the complete execution_document required by the existing SDK execution tests. Producer and execution tests are outside native-binding test ownership. Assertions and fixtures were not weakened or edited to hide this independent failure. Full qualification against the captured executed-receipt fixture remains blocked."
+severity = "blocker"

@@ -59,7 +59,9 @@ public final class ReceiptFixtureTest {
         method.setAccessible(true);
         method.invoke(null, new ProgramsClient.Call(nativeCall, BigInteger.valueOf(1000), signed));
         assertThrows(java.lang.reflect.InvocationTargetException.class, () -> method.invoke(null, new ProgramsClient.Call(nativeCall, BigInteger.valueOf(999), signed)));
-        NativeProgramCall changed = new NativeProgramCall(nativeCall.programId(), nativeCall.guestAbi(), nativeCall.entrypoint(), nativeCall.calldata(), nativeCall.capabilities(), nativeCall.accessDeclaration(), 17, nativeCall.resources());
+        NativeProgramCall changed = new NativeProgramCall(nativeCall.programId(), nativeCall.guestAbi(), nativeCall.entrypoint(), nativeCall.calldata(), nativeCall.capabilities(), nativeCall.accessDeclaration(), (nativeCall.responseCapacity() + 1) % 1_048_577, nativeCall.resources());
+        assertNotEquals(nativeCall.responseCapacity(), changed.responseCapacity());
+        changed.encode();
         assertThrows(java.lang.reflect.InvocationTargetException.class, () -> method.invoke(null, new ProgramsClient.Call(changed, BigInteger.valueOf(1000), signed)));
         for (int length = 0; length < payload.length; length++) {
             byte[] truncated = java.util.Arrays.copyOf(payload, length);
