@@ -38,6 +38,7 @@ spec:
           env:
             - {name: LAYERX_PAXEER_BOUNDARY_LISTEN, value: "0.0.0.0:9443"}
             - {name: LAYERX_PAXEER_NODE_URL, value: "http://127.0.0.1:8545"}
+            - {name: LAYERX_PAXEER_COMET_URL, value: "http://127.0.0.1:26657"}
             - {name: LAYERX_PAXEER_CHAIN_ID, value: "125"}
             - {name: LAYERX_PAXEER_BOUNDARY_TLS_CERT_DER, value: /run/layerx/tls/server.crt.der}
             - {name: LAYERX_PAXEER_BOUNDARY_TLS_KEY_DER, value: /run/layerx/tls/server.key.der}
