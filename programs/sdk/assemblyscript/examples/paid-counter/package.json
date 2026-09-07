@@ -4,7 +4,7 @@
   "description": "Paid-counter quickstart program for the LayerX AssemblyScript SDK",
   "type": "module",
   "private": true,
-  "license": "SEE LICENSE IN LICENSE",
+  "license": "Apache-2.0",
   "scripts": {
     "build": "asc assembly/index.ts --config asconfig.json --target release",
     "lint": "node ../../tools/determinism-lint.mjs assembly build/paid-counter.wasm",

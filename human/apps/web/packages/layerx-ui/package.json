@@ -2,7 +2,7 @@
   "name": "@layerx/ui",
   "version": "0.1.0",
   "description": "LayerX UI \u2014 a responsive (mobile shell / desktop shell) React component library for Next.js, extracted from the LayerX Figma design set.",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",

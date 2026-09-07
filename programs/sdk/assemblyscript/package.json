@@ -4,7 +4,7 @@
   "description": "Deterministic AssemblyScript guest bindings for the LayerX version-one programs ABI",
   "type": "module",
   "private": false,
-  "license": "SEE LICENSE IN LICENSE",
+  "license": "Apache-2.0",
   "ascMain": "assembly/index.ts",
   "exports": {
     ".": "./assembly/index.ts",

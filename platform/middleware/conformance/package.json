@@ -4,7 +4,7 @@
   "description": "Non-authority conformance suite for the LayerX buyer, seller, merchant and agent middleware",
   "type": "module",
   "private": true,
-  "license": "SEE LICENSE IN LICENSE",
+  "license": "Apache-2.0",
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "conformance": "node run.mjs"
