@@ -100,6 +100,7 @@ require_tools() {
     local version
     version=$("$FORGE" --version 2>/dev/null | sed -n 's/^forge Version: \([0-9.]*\).*/\1/p')
     [ "$version" = "$FOUNDRY_VERSION_PIN" ] || fail "forge $version is installed; the beta deployment pins forge $FOUNDRY_VERSION_PIN"
+    command -v timeout >/dev/null 2>&1 || fail "timeout is required"
     command -v python3 >/dev/null 2>&1 || fail "python3 is required"
     command -v jq >/dev/null 2>&1 || fail "jq is required"
     command -v openssl >/dev/null 2>&1 || fail "openssl is required"
@@ -115,7 +116,7 @@ require_endpoint() {
     openssl x509 -inform DER -in "$BOUNDARY_CA" -out "$WORK/ca.pem" >/dev/null 2>&1 || fail "boundary CA is not a DER certificate"
     export SSL_CERT_FILE="$WORK/ca.pem"
     local observed
-    observed=$("$CAST" chain-id --rpc-url "$BOUNDARY_URL") || fail "the boundary did not answer eth_chainId"
+    observed=$(rpc_read chain-id) || fail "the boundary did not answer eth_chainId"
     [ "$observed" = "$CHAIN_ID" ] || fail "the boundary serves chain $observed, expected $CHAIN_ID"
 }
 
@@ -215,8 +216,32 @@ controller_key() {
     tr -d '\r\n' < "$path"
 }
 
+rpc_read() {
+    local deadline=$((SECONDS + 60)) remaining status
+    while :; do
+        remaining=$((deadline - SECONDS))
+        [ "$remaining" -gt 0 ] || return 1
+        status=0
+        timeout "$remaining" "$CAST" "$@" --rpc-url "$BOUNDARY_URL" > "$WORK/rpc-read.out" 2> "$WORK/rpc-read.err" || status=$?
+        if [ "$status" = 0 ]; then
+            cat "$WORK/rpc-read.out"
+            return 0
+        fi
+        if ! grep -Eqi 'connection refused|connection reset|error sending request|connection closed|channel closed|unexpected eof' "$WORK/rpc-read.err"; then
+            cat "$WORK/rpc-read.err" >&2
+            return "$status"
+        fi
+        if [ "$SECONDS" -ge "$deadline" ]; then
+            cat "$WORK/rpc-read.err" >&2
+            return "$status"
+        fi
+        printf 'deploy-contracts: RPC transport interrupted; waiting for endpoint recovery (60s budget)\n' >&2
+        sleep 1
+    done
+}
+
 call() {
-    "$CAST" call --rpc-url "$BOUNDARY_URL" "$@"
+    rpc_read call "$@"
 }
 
 send() {
@@ -235,7 +260,7 @@ fund_controllers() {
         bond=$(printf '%s' "$GUARANTOR_SET" | jq -r ".[$index].bond_amount")
         key=$(controller_key "$guarantor_id")
         [ "$("$CAST" wallet address --private-key "$key")" = "$controller" ] || fail "controller key for $guarantor_id does not match $controller"
-        gas=$("$CAST" balance --rpc-url "$BOUNDARY_URL" "$controller")
+        gas=$(rpc_read balance "$controller")
         if [ "$(printf '%s\n' "$gas" "$CONTROLLER_GAS_WEI" | sort -n | head -1)" != "$CONTROLLER_GAS_WEI" ]; then
             send "$DEPLOYER_KEY" --value "$CONTROLLER_GAS_WEI" "$controller"
         fi
