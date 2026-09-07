@@ -1652,6 +1652,10 @@ static int deploy_and_upgrade_artifacts_case(uint16_t protocol_version,
             (unsigned long long)state.next_sequence,
             receipt.program_outcome.terminal_payload.length,
             receipt.program_outcome.call_graph_payload.length);
+        while (kernel.blob_count != 0U)
+            free(kernel.blobs[--kernel.blob_count].bytes);
+        kernel.blob_total_bytes = 0U;
+        (void)lxp_state_store_destroy(&state);
         return artifact_fixture_failure(protocol_version, __LINE__);
     }
     (void)memcpy(first_terminal_root,
