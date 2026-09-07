@@ -31,7 +31,11 @@ use layerx_types::verify::VerificationLevel;
 use layerx_wire::encode::Encoder;
 use layerx_wire::hash::{batch_header_digest, execution_batch_id, receipt_digest};
 
+#[path = "../../../../tests/support/monotonic_clock.rs"]
+mod monotonic_clock;
 mod real_authority;
+#[path = "../../../../tests/support/wall_clock.rs"]
+mod wall_clock;
 
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(1);
 
@@ -285,7 +289,16 @@ fn try_evidence_authority_mode(
         sequencer_authority_source: authority_path,
     };
     let mut gate = Gate::new(&config)?;
-    real_authority::authorize(&mut gate, policy, sequencer_id, restart.then_some(&config))?;
+    real_authority::authorize(
+        real_authority::Clock {
+            wall_time: wall_clock::wall_time,
+            monotonic_time: monotonic_clock::monotonic_time,
+        },
+        &mut gate,
+        policy,
+        sequencer_id,
+        restart.then_some(&config),
+    )?;
     Ok(gate
         .evidence_authority()
         .unwrap_or_else(|error| panic!("write-ready evidence authority: {error:?}"))
