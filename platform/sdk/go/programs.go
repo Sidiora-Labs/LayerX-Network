@@ -281,10 +281,18 @@ type ProgramSubmission struct {
 	Verification           *VerifiedProgramReceipt
 }
 
+type ProgramTransferVerification string
+
+const (
+	ProgramTransfersReconstructed ProgramTransferVerification = "reconstructed"
+	ProgramTransfersRecorded      ProgramTransferVerification = "recorded_terminal_root_not_locally_reconstructable"
+)
+
 type VerifiedProgramReceipt struct {
-	Verification    VerifiedReceipt
-	TerminalPayload []byte
-	CallGraph       []byte
+	TransferVerification ProgramTransferVerification
+	Verification         VerifiedReceipt
+	TerminalPayload      []byte
+	CallGraph            []byte
 }
 
 type programCallBinding struct {
@@ -441,10 +449,11 @@ func VerifyProgramReceipt(execution ProgramExecutionDocument, authority Authoriz
 	if digestError != nil || verified.Receipt.ActivityID != activity || verified.Receipt.BatchID != authority.BatchID || verified.Receipt.ResultingStateRoot != authority.ResultingStateRoot || verified.Receipt.ModuleID != 9 || verified.Receipt.Operation != 3 || verified.Receipt.ModuleVersion != execution.ModuleVersion || outcome == nil || outcome.ABIVersion != execution.GuestABIVersion || outcome.ResultCode != execution.ResultCode || len(graph) == 0 || terminalDigest != outcome.TerminalPayloadRoot || graphDigest != outcome.CallGraphRoot || verified.ReceiptDigest != declaredReceiptDigest {
 		return VerifiedProgramReceipt{}, verificationFailure()
 	}
-	if verifyProgramTerminal(execution, verified.Receipt, terminal, graph) != nil {
+	transferVerification, terminalError := verifyProgramTerminal(execution, verified.Receipt, terminal, graph)
+	if terminalError != nil {
 		return VerifiedProgramReceipt{}, verificationFailure()
 	}
-	return VerifiedProgramReceipt{Verification: verified, TerminalPayload: terminal, CallGraph: graph}, nil
+	return VerifiedProgramReceipt{Verification: verified, TerminalPayload: terminal, CallGraph: graph, TransferVerification: transferVerification}, nil
 }
 
 type programTerminalProjection struct {
@@ -467,52 +476,64 @@ type programTerminalProjection struct {
 	TransferRoot            [32]byte
 }
 
-func verifyProgramTerminal(execution ProgramExecutionDocument, receipt ProtocolReceipt, terminal []byte, graph []byte) error {
+func verifyProgramTerminal(execution ProgramExecutionDocument, receipt ProtocolReceipt, terminal []byte, graph []byte) (ProgramTransferVerification, error) {
 	receiptOutcome := receipt.ProgramOutcome
 	if receiptOutcome == nil {
-		return errors.New("missing Programs receipt outcome")
+		return "", errors.New("missing Programs receipt outcome")
 	}
 	programID, err := programHex32(execution.ProgramID)
 	if err != nil {
-		return err
+		return "", err
 	}
-	projection, err := decodeProgramTerminal(receiptOutcome.TerminalKind, receiptOutcome.ABIVersion, terminal, programID, receiptOutcome.ResultCode)
+	if len(terminal) == 0 || len(terminal) > 1_048_576 || sha256.Sum256(terminal) != receiptOutcome.TerminalPayloadRoot || len(graph) == 0 || sha256.Sum256(graph) != receiptOutcome.CallGraphRoot {
+		return "", errors.New("Programs terminal or graph root mismatch")
+	}
+	inner, err := unwrapAppliedProgramTerminal(terminal, *receiptOutcome)
+	if err != nil {
+		return "", err
+	}
+	projection, err := decodeProgramTerminal(receiptOutcome.TerminalKind, receiptOutcome.ABIVersion, inner, programID, receiptOutcome.ResultCode)
 	if err != nil || projection.RuntimeVersion != receiptOutcome.RuntimeVersion || projection.Candidate && projection.FeeScheduleVersion != receiptOutcome.FeeScheduleVersion || projection.MeteringScheduleVersion != receiptOutcome.MeteringScheduleVersion || projection.CPUFuel != receiptOutcome.CPUFuel || projection.MemoryBytes != receiptOutcome.MemoryBytes || projection.StorageReadBytes != receiptOutcome.StorageReadBytes || projection.StorageWriteBytes != receiptOutcome.StorageWriteBytes || projection.OutputValues != receiptOutcome.OutputValues || projection.OutputBytes != receiptOutcome.OutputBytes || !projection.FeeUnits.Equal(receiptOutcome.FeeUnits) || !programOutcomesEqual(projection.Outcome, execution.Outcome) {
-		return errors.New("Programs terminal projection mismatch")
+		return "", errors.New("Programs terminal projection mismatch")
 	}
 	if projection.Candidate && !bytes.Equal(projection.EmbeddedGraph, graph) {
-		return errors.New("Programs embedded call graph mismatch")
+		return "", errors.New("Programs embedded call graph mismatch")
 	}
 	occupancyRequired := (receipt.ProtocolVersion == 2 || receipt.ProtocolVersion == 3) && projection.Successful
 	if occupancyRequired != (projection.Occupancy != nil) {
-		return errors.New("Programs occupancy attachment mismatch")
+		return "", errors.New("Programs occupancy attachment mismatch")
 	}
 	if projection.Occupancy == nil {
 		if receiptOutcome.OccupancyEvidenceDigest != ([32]byte{}) || receiptOutcome.OccupancyTransferRoot != ([32]byte{}) || receiptOutcome.OccupancyByteBatches != (Uint128{}) || receiptOutcome.OccupancyFeeUnits != (Uint128{}) {
-			return errors.New("Programs receipt carries unattached occupancy")
+			return "", errors.New("Programs receipt carries unattached occupancy")
 		}
 	} else if len(projection.Occupancy) == 0 {
 		if receiptOutcome.OccupancyEvidenceDigest != ([32]byte{}) || receiptOutcome.OccupancyTransferRoot != ([32]byte{}) || receiptOutcome.OccupancyByteBatches != (Uint128{}) || receiptOutcome.OccupancyFeeUnits != (Uint128{}) {
-			return errors.New("Programs empty occupancy attachment mismatch")
+			return "", errors.New("Programs empty occupancy attachment mismatch")
 		}
 	} else if sha256.Sum256(projection.Occupancy) != receiptOutcome.OccupancyEvidenceDigest {
-		return errors.New("Programs occupancy digest mismatch")
+		return "", errors.New("Programs occupancy digest mismatch")
 	} else {
 		occupancy, occupancyError := decodeProgramOccupancy(projection.Occupancy, receiptOutcome.OccupancyAssetID)
 		if occupancyError != nil || !occupancy.ByteBatches.Equal(receiptOutcome.OccupancyByteBatches) || !occupancy.FeeUnits.Equal(receiptOutcome.OccupancyFeeUnits) || occupancy.TransferRoot != receiptOutcome.OccupancyTransferRoot {
-			return errors.New("Programs occupancy settlement mismatch")
+			return "", errors.New("Programs occupancy settlement mismatch")
 		}
 	}
-	if !projection.Candidate && projection.TransferAuthorization != nil {
-		return errors.New("Programs transfer authority attachment mismatch")
+	recorded := receiptOutcome.EncodingVersion != 4 && projection.TransferAuthorization == nil && receiptOutcome.TransferRoot != ([32]byte{})
+	authorityRequired := projection.Candidate || receiptOutcome.EncodingVersion == 4 && projection.Successful
+	if !recorded && ((!authorityRequired && projection.TransferAuthorization != nil) || authorityRequired && (projection.TransferAuthorization != nil) != (receiptOutcome.TransferRoot != ([32]byte{}))) {
+		return "", errors.New("Programs transfer authority presence mismatch")
 	}
-	if (projection.TransferAuthorization != nil) != (receiptOutcome.TransferRoot != ([32]byte{})) {
-		return errors.New("Programs transfer authority presence mismatch")
+	if receiptOutcome.EncodingVersion == 4 && projection.TransferAuthorization != nil && !bytes.HasPrefix(projection.TransferAuthorization, []byte("LayerX/programs/402LXP/transfer-set/v2\x00")) {
+		return "", errors.New("Programs V2 transfer authority required")
 	}
 	if projection.TransferAuthorization != nil && (projection.TransferRoot != receiptOutcome.TransferRoot || verifyProgramTransferAuthorization(projection.TransferAuthorization, projection.TransferRoot) != nil) {
-		return errors.New("Programs transfer authority root mismatch")
+		return "", errors.New("Programs transfer authority root mismatch")
 	}
-	return nil
+	if recorded {
+		return ProgramTransfersRecorded, nil
+	}
+	return ProgramTransfersReconstructed, nil
 }
 
 func programOutcomesEqual(left ProgramOutcome, right ProgramOutcome) bool {
@@ -2098,4 +2119,46 @@ func programHex32Raw(value json.RawMessage) ([32]byte, error) {
 
 func PlatformSDKPrograms() string {
 	return "server-attested-registry-and-locally-verified-program-execution-v1"
+}
+
+func unwrapAppliedProgramTerminal(encoded []byte, outcome ProgramReceiptOutcome) ([]byte, error) {
+	if outcome.EncodingVersion != 4 {
+		return encoded, nil
+	}
+	domain := []byte("LXP/programs/terminal-applied-legs/v1\x00")
+	cursor := programTerminalCursor{value: encoded}
+	if !bytes.Equal(cursor.take(len(domain)), domain) {
+		return nil, errors.New("Programs applied terminal domain")
+	}
+	inner, legs := cursor.sized32(), cursor.sized32()
+	if cursor.failed || !cursor.finished() || len(inner) == 0 || len(inner) > 1_048_576 || len(legs) > 256*115 || len(legs)%115 != 0 || sha256.Sum256(legs) != outcome.AppliedLegsDigest {
+		return nil, errors.New("Programs applied legs bounds or digest")
+	}
+	leaves := make([][32]byte, 0, len(legs)/115)
+	for offset := 0; offset < len(legs); offset += 115 {
+		leg := legs[offset : offset+115]
+		if leg[0] != 0 || leg[113] != 0 || leg[114] != 1 || allProgramZero(leg[1:33]) || allProgramZero(leg[33:65]) || allProgramZero(leg[65:97]) || allProgramZero(leg[97:113]) {
+			return nil, errors.New("Programs applied leg canonical fields")
+		}
+		leaves = append(leaves, domainDigest([]byte("LXP/v1/merkle-leaf\x00"), leg))
+	}
+	for len(leaves) > 1 {
+		next := make([][32]byte, 0, (len(leaves)+1)/2)
+		for index := 0; index < len(leaves); index += 2 {
+			right := leaves[index]
+			if index+1 < len(leaves) {
+				right = leaves[index+1]
+			}
+			next = append(next, domainDigest([]byte("LXP/v1/merkle-internal\x00"), leaves[index][:], right[:]))
+		}
+		leaves = next
+	}
+	root := [32]byte{}
+	if len(leaves) != 0 {
+		root = leaves[0]
+	}
+	if root != outcome.TransferRoot {
+		return nil, errors.New("Programs applied transfer root mismatch")
+	}
+	return inner, nil
 }
