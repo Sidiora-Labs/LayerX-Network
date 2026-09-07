@@ -8,7 +8,7 @@ import (
 	"os"
 	"time"
 
-	layerx "github.com/Sidiora-Labs/LayerX-Protocol/platform/sdk/go"
+	layerx "github.com/Sidiora-Labs/LayerX-Network/platform/sdk/go"
 )
 
 type Money struct {
