@@ -49,6 +49,7 @@ pub struct TrustAnchorFixture {
     pub revoked_from_batch: Option<u64>,
 }
 
+#[must_use]
 pub fn verifier_for_fixture(
     fixture: &ProtocolFixture,
     first_batch: u64,
@@ -72,6 +73,10 @@ pub fn verifier_for_fixture(
     )
 }
 
+/// # Panics
+///
+/// Panics if the supplied trust history cannot construct a protocol verifier.
+#[must_use]
 pub fn verifier_from_history(
     anchors: &[TrustAnchorFixture],
     current_anchor: usize,
@@ -81,6 +86,13 @@ pub fn verifier_from_history(
         .unwrap_or_else(|error| panic!("protocol verifier: {error}"))
 }
 
+/// # Panics
+///
+/// Panics if the selected anchor is absent, history bounds are exceeded, or temporary history file operations fail.
+///
+/// # Errors
+///
+/// Returns the protocol evidence error if protected trust-history validation fails.
 pub fn try_verifier_from_history(
     anchors: &[TrustAnchorFixture],
     current_anchor: usize,
@@ -154,15 +166,24 @@ pub fn try_verifier_from_history(
     verifier
 }
 
+/// # Panics
+///
+/// Panics if the fixed program identifier is invalid.
+#[must_use]
 pub fn program() -> ProgramId {
     ProgramId::new(PROGRAM_BYTES).unwrap_or_else(|error| panic!("program: {error}"))
 }
 
+/// # Panics
+///
+/// Panics if SHA-256 hashing fails.
+#[must_use]
 pub fn code_hash(wasm: &[u8]) -> [u8; 32] {
     hash_bytes(HashAlgorithm::Sha256, wasm)
         .unwrap_or_else(|error| panic!("program code hash: {error}"))
 }
 
+#[must_use]
 pub fn deploy_fixture(
     wasm: &[u8],
     policy: UpgradePolicy,
@@ -172,6 +193,10 @@ pub fn deploy_fixture(
     deploy_fixture_in_epoch(wasm, policy, batch_number, timestamp, 2, [7; 32])
 }
 
+/// # Panics
+///
+/// Panics if the encoded interface length cannot be decoded.
+#[must_use]
 pub fn legacy_deploy_fixture(
     wasm: &[u8],
     policy: UpgradePolicy,
@@ -186,37 +211,24 @@ pub fn legacy_deploy_fixture(
     ))
     .unwrap_or_else(|_| panic!("interface length usize"));
     payload.drain(104..108 + interface_length);
-    fixture(
-        payload,
+    fixture_in_epoch(
+        &payload,
         1,
-        wasm,
-        policy,
-        1,
-        batch_number,
-        timestamp,
-        false,
-        false,
+        &FixtureState {
+            wasm,
+            policy,
+            version: 1,
+            batch_number,
+            timestamp,
+            deprecated: false,
+            wrong_batch_id: false,
+            epoch: 2,
+        },
+        [7; 32],
     )
 }
 
-pub fn programs_call_fixture(
-    payload: Vec<u8>,
-    batch_number: u64,
-    timestamp: u64,
-) -> ProtocolFixture {
-    fixture(
-        payload,
-        3,
-        WASM_V1,
-        UpgradePolicy::Authority(AUTHORITY),
-        1,
-        batch_number,
-        timestamp,
-        false,
-        false,
-    )
-}
-
+#[must_use]
 pub fn deploy_fixture_in_epoch(
     wasm: &[u8],
     policy: UpgradePolicy,
@@ -227,53 +239,66 @@ pub fn deploy_fixture_in_epoch(
 ) -> ProtocolFixture {
     let payload = deploy_payload(wasm, policy);
     fixture_in_epoch(
-        payload,
+        &payload,
         1,
-        wasm,
-        policy,
-        1,
-        batch_number,
-        timestamp,
-        false,
-        false,
-        epoch,
+        &FixtureState {
+            wasm,
+            policy,
+            version: 1,
+            batch_number,
+            timestamp,
+            deprecated: false,
+            wrong_batch_id: false,
+            epoch,
+        },
         signing_key,
     )
 }
 
+#[must_use]
 pub fn wrong_batch_id_fixture(batch_number: u64, timestamp: u64) -> ProtocolFixture {
     let policy = UpgradePolicy::Authority(AUTHORITY);
-    fixture(
-        deploy_payload(WASM_V1, policy),
+    fixture_in_epoch(
+        &deploy_payload(WASM_V1, policy),
         1,
-        WASM_V1,
-        policy,
-        1,
-        batch_number,
-        timestamp,
-        false,
-        true,
+        &FixtureState {
+            wasm: WASM_V1,
+            policy,
+            version: 1,
+            batch_number,
+            timestamp,
+            deprecated: false,
+            wrong_batch_id: true,
+            epoch: 2,
+        },
+        [7; 32],
     )
 }
 
+#[must_use]
 pub fn wrong_abi_fixture(batch_number: u64, timestamp: u64) -> ProtocolFixture {
     let policy = UpgradePolicy::Authority(AUTHORITY);
     let mut payload = deploy_payload(WASM_V1, policy);
     payload[32..34].copy_from_slice(&3_u16.to_be_bytes());
     payload[168..170].copy_from_slice(&3_u16.to_be_bytes());
-    fixture(
-        payload,
+    fixture_in_epoch(
+        &payload,
         1,
-        WASM_V1,
-        policy,
-        1,
-        batch_number,
-        timestamp,
-        false,
-        false,
+        &FixtureState {
+            wasm: WASM_V1,
+            policy,
+            version: 1,
+            batch_number,
+            timestamp,
+            deprecated: false,
+            wrong_batch_id: false,
+            epoch: 2,
+        },
+        [7; 32],
     )
 }
 
+#[must_use]
 pub fn upgrade_fixture(
     old_wasm: &[u8],
     new_wasm: &[u8],
@@ -281,64 +306,45 @@ pub fn upgrade_fixture(
     timestamp: u64,
 ) -> ProtocolFixture {
     let payload = upgrade_payload(old_wasm, new_wasm);
-    fixture(
-        payload,
-        2,
-        new_wasm,
-        UpgradePolicy::Authority(AUTHORITY),
-        2,
-        batch_number,
-        timestamp,
-        false,
-        false,
-    )
-}
-
-pub fn deprecated_state(fixture: &ProtocolFixture, timestamp: u64) -> ProgramStateProof {
-    state_fixture(
-        &fixture.proof.activity,
-        fixture.sequencer_id,
-        fixture.batch_number + 1,
-        timestamp,
-        WASM_V1,
-        UpgradePolicy::Authority(AUTHORITY),
-        1,
-        true,
-        false,
-    )
-    .0
-}
-
-fn fixture(
-    payload: Vec<u8>,
-    ordinal: u16,
-    wasm: &[u8],
-    policy: UpgradePolicy,
-    version: u32,
-    batch_number: u64,
-    timestamp: u64,
-    deprecated: bool,
-    wrong_batch_id: bool,
-) -> ProtocolFixture {
     fixture_in_epoch(
-        payload,
-        ordinal,
-        wasm,
-        policy,
-        version,
-        batch_number,
-        timestamp,
-        deprecated,
-        wrong_batch_id,
+        &payload,
         2,
+        &FixtureState {
+            wasm: new_wasm,
+            policy: UpgradePolicy::Authority(AUTHORITY),
+            version: 2,
+            batch_number,
+            timestamp,
+            deprecated: false,
+            wrong_batch_id: false,
+            epoch: 2,
+        },
         [7; 32],
     )
 }
 
-fn fixture_in_epoch(
-    payload: Vec<u8>,
-    ordinal: u16,
-    wasm: &[u8],
+#[must_use]
+pub fn deprecated_state(fixture: &ProtocolFixture, timestamp: u64) -> ProgramStateProof {
+    state_fixture(
+        &fixture.proof.activity,
+        fixture.sequencer_id,
+        &FixtureState {
+            wasm: WASM_V1,
+            policy: UpgradePolicy::Authority(AUTHORITY),
+            version: 1,
+            batch_number: fixture.batch_number + 1,
+            timestamp,
+            deprecated: true,
+            wrong_batch_id: false,
+            epoch: 2,
+        },
+    )
+    .0
+}
+
+#[derive(Clone, Copy)]
+struct FixtureState<'a> {
+    wasm: &'a [u8],
     policy: UpgradePolicy,
     version: u32,
     batch_number: u64,
@@ -346,23 +352,20 @@ fn fixture_in_epoch(
     deprecated: bool,
     wrong_batch_id: bool,
     epoch: u64,
+}
+
+fn fixture_in_epoch(
+    payload: &[u8],
+    ordinal: u16,
+    state: &FixtureState<'_>,
     signing_key: [u8; 32],
 ) -> ProtocolFixture {
-    let activity = encode_activity(&payload, ordinal);
+    let batch_number = state.batch_number;
+    let activity = encode_activity(payload, ordinal);
     let key = SigningKey::from_bytes(&signing_key);
     let sequencer_id = key.verifying_key().to_bytes();
-    let (state, header_signature, interface_witness) = state_fixture_with_key(
-        &activity,
-        &key,
-        batch_number,
-        timestamp,
-        wasm,
-        policy,
-        version,
-        deprecated,
-        wrong_batch_id,
-        epoch,
-    );
+    let (state, header_signature, interface_witness) =
+        state_fixture_with_key(&activity, &key, state);
     let (activity_proof, _) = build_proof(&[activity.as_slice()], 0)
         .unwrap_or_else(|error| panic!("activity proof: {error:?}"));
     let mut state = state;
@@ -383,27 +386,33 @@ fn fixture_in_epoch(
 fn state_fixture(
     activity: &[u8],
     sequencer_id: [u8; 32],
-    batch_number: u64,
-    timestamp: u64,
-    wasm: &[u8],
-    policy: UpgradePolicy,
-    version: u32,
-    deprecated: bool,
-    wrong_batch_id: bool,
+    state: &FixtureState<'_>,
 ) -> (ProgramStateProof, [u8; 64]) {
+    let FixtureState {
+        wasm,
+        policy,
+        version,
+        batch_number,
+        timestamp,
+        deprecated,
+        wrong_batch_id,
+        ..
+    } = *state;
     let key = SigningKey::from_bytes(&[7; 32]);
     assert_eq!(key.verifying_key().to_bytes(), sequencer_id);
     let (state, signature, _) = state_fixture_with_key(
         activity,
         &key,
-        batch_number,
-        timestamp,
-        wasm,
-        policy,
-        version,
-        deprecated,
-        wrong_batch_id,
-        2,
+        &FixtureState {
+            wasm,
+            policy,
+            version,
+            batch_number,
+            timestamp,
+            deprecated,
+            wrong_batch_id,
+            epoch: 2,
+        },
     );
     (state, signature)
 }
@@ -411,15 +420,15 @@ fn state_fixture(
 fn state_fixture_with_key(
     activity: &[u8],
     key: &SigningKey,
-    batch_number: u64,
-    timestamp: u64,
-    wasm: &[u8],
-    policy: UpgradePolicy,
-    version: u32,
-    deprecated: bool,
-    wrong_batch_id: bool,
-    epoch: u64,
+    state: &FixtureState<'_>,
 ) -> (ProgramStateProof, [u8; 64], InterfaceStateWitness) {
+    let FixtureState {
+        wasm,
+        policy,
+        version,
+        deprecated,
+        ..
+    } = *state;
     let program_key = program_key();
     let program_value = program_record(wasm, policy, version);
     let interface = fixture_interface(wasm);
@@ -436,7 +445,9 @@ fn state_fixture_with_key(
     leaves.sort_by(|left, right| left.0.cmp(&right.0));
     let leaf_hashes = leaves
         .iter()
-        .map(|(key, value)| state_leaf_commitment(key, value))
+        .map(|(key, value)| {
+            state_leaf_commitment(key, value).unwrap_or_else(|error| panic!("state leaf: {error}"))
+        })
         .collect::<Vec<_>>();
     let program_index = leaves
         .iter()
@@ -459,30 +470,61 @@ fn state_fixture_with_key(
         value: interface_value,
         proof: interface_proof,
     };
-    let lifecycle = if deprecated {
-        let status_index = leaves
-            .iter()
-            .position(|(key, _)| key == &status_key())
-            .unwrap_or_else(|| panic!("status leaf absent"));
-        let (status_proof, root) = build_state_proof(&leaf_hashes, status_index);
-        assert_eq!(root, programs_root);
-        ProgramLifecycleProof::Status(StateLeafWitness {
-            key: leaves[status_index].0.clone(),
-            value: leaves[status_index].1.clone(),
-            proof: status_proof,
-        })
-    } else {
-        ProgramLifecycleProof::Active {
-            lower: Some(program_witness.clone()),
-            upper: None,
-        }
-    };
+    let lifecycle = fixture_lifecycle(
+        deprecated,
+        &leaves,
+        &leaf_hashes,
+        programs_root,
+        &program_witness,
+    );
     let state_root = programs_root_commitment(programs_root);
     let programs_root_proof = StateProof {
         leaf_index: 0,
         leaf_count: 1,
         siblings: Vec::new(),
     };
+    let SignedStateReceipt {
+        receipt,
+        receipt_proof,
+        header,
+        header_signature,
+    } = signed_state_receipt(activity, key, state, state_root);
+    (
+        ProgramStateProof {
+            receipt,
+            receipt_proof,
+            header,
+            header_signature,
+            programs_root,
+            programs_root_proof,
+            program_record: program_witness,
+            lifecycle,
+        },
+        header_signature,
+        interface_witness,
+    )
+}
+
+struct SignedStateReceipt {
+    receipt: Vec<u8>,
+    receipt_proof: layerx_proof::merkle::Proof,
+    header: Vec<u8>,
+    header_signature: [u8; 64],
+}
+
+fn signed_state_receipt(
+    activity: &[u8],
+    key: &SigningKey,
+    state: &FixtureState<'_>,
+    state_root: [u8; 32],
+) -> SignedStateReceipt {
+    let FixtureState {
+        batch_number,
+        timestamp,
+        wrong_batch_id,
+        epoch,
+        ..
+    } = *state;
     let activity_value = canonical_activity_id(activity);
     let (activity_proof, activity_root) =
         build_proof(&[activity], 0).unwrap_or_else(|error| panic!("activity root: {error:?}"));
@@ -526,20 +568,39 @@ fn state_fixture_with_key(
     let header_hash =
         batch_header_digest(&header).unwrap_or_else(|error| panic!("header digest: {error:?}"));
     let header_signature = key.sign(&header_hash).to_bytes();
-    (
-        ProgramStateProof {
-            receipt,
-            receipt_proof,
-            header,
-            header_signature,
-            programs_root,
-            programs_root_proof,
-            program_record: program_witness,
-            lifecycle,
-        },
+    SignedStateReceipt {
+        receipt,
+        receipt_proof,
+        header,
         header_signature,
-        interface_witness,
-    )
+    }
+}
+
+fn fixture_lifecycle(
+    deprecated: bool,
+    leaves: &[(Vec<u8>, Vec<u8>)],
+    leaf_hashes: &[[u8; 32]],
+    programs_root: [u8; 32],
+    program_witness: &StateLeafWitness,
+) -> ProgramLifecycleProof {
+    if deprecated {
+        let status_index = leaves
+            .iter()
+            .position(|(key, _)| key == &status_key())
+            .unwrap_or_else(|| panic!("status leaf absent"));
+        let (status_proof, root) = build_state_proof(leaf_hashes, status_index);
+        assert_eq!(root, programs_root);
+        ProgramLifecycleProof::Status(StateLeafWitness {
+            key: leaves[status_index].0.clone(),
+            value: leaves[status_index].1.clone(),
+            proof: status_proof,
+        })
+    } else {
+        ProgramLifecycleProof::Active {
+            lower: Some(program_witness.clone()),
+            upper: None,
+        }
+    }
 }
 
 fn encode_activity(payload: &[u8], ordinal: u16) -> Vec<u8> {
@@ -735,6 +796,10 @@ fn upgrade_payload(old_wasm: &[u8], new_wasm: &[u8]) -> Vec<u8> {
     payload
 }
 
+/// # Panics
+///
+/// Panics if neither the supplied module nor the reference module binds the fixture interface.
+#[must_use]
 pub fn fixture_interface(wasm: &[u8]) -> ProgramInterface {
     let entries = || {
         vec![InterfaceEntryPoint {
