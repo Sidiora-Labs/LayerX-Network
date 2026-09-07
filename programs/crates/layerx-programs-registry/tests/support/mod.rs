@@ -436,7 +436,9 @@ fn state_fixture_with_key(
     leaves.sort_by(|left, right| left.0.cmp(&right.0));
     let leaf_hashes = leaves
         .iter()
-        .map(|(key, value)| state_leaf_commitment(key, value))
+        .map(|(key, value)| {
+            state_leaf_commitment(key, value).unwrap_or_else(|error| panic!("state leaf: {error}"))
+        })
         .collect::<Vec<_>>();
     let program_index = leaves
         .iter()
