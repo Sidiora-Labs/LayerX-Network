@@ -1,0 +1,25 @@
+{
+  "name": "LayerX",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "features": {
+    "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {
+      "moby": true,
+      "installDockerBuildx": true
+    }
+  },
+  "remoteUser": "vscode",
+  "postCreateCommand": "make build",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "rust-lang.rust-analyzer",
+        "llvm-vs-code-extensions.vscode-clangd",
+        "JuanBlanco.solidity",
+        "EditorConfig.EditorConfig"
+      ]
+    }
+  }
+}
