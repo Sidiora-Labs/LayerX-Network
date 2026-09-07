@@ -65,6 +65,7 @@ See `docs/MONOREPO.md` for build boundaries, workflow naming, and tag convention
 - [Hosted gateway](HostedGateway.md)
 - [Hosted webhooks](HostedWebhooks.md)
 - [Hosted registry](HostedRegistry.md)
+- [Hosted internal](HostedInternal.md)
 
 ---
 
