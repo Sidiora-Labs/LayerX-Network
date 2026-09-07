@@ -54,6 +54,7 @@ class DecodedSignedProgramCall:
 class DecodedProgramTerminal:
     outcome: Mapping[str, object]
     usage: Mapping[str, object]
+    transfer_verification: Literal["reconstructed", "recorded_terminal_root_not_locally_reconstructable"]
 
 
 def bind_signed_program_lifecycle(canonical: bytes, payload: bytes | None, ordinal: int, expected_idempotency_key: str | None = None) -> DecodedSignedProgramCall:
@@ -169,7 +170,22 @@ def decode_and_verify_program_terminal(
 ) -> DecodedProgramTerminal:
     if not call_graph or sha256(call_graph).digest() != receipt.call_graph_root:
         _fail("program call graph root")
+    if not terminal_payload or len(terminal_payload) > 1_048_576 or sha256(terminal_payload).digest() != receipt.terminal_payload_root:
+        _fail("program terminal root")
     inner = terminal_payload
+    if receipt.encoding_version == 4:
+        domain = b"LXP/programs/terminal-applied-legs/v1\0"
+        wrapper = _Reader(inner)
+        if wrapper.fixed(len(domain)) != domain:
+            _fail("applied terminal domain")
+        inner = wrapper.sized_u32(1_048_576)
+        if not inner:
+            _fail("empty applied terminal detail")
+        legs = wrapper.sized_u32(256 * 115)
+        wrapper.end()
+        if sha256(legs).digest() != receipt.applied_legs_digest:
+            _fail("applied legs digest")
+        _verify_applied_legs(legs, receipt.transfer_root)
     authorization: bytes | None = None
     authority_root: bytes | None = None
     occupancy: bytes | None = None
@@ -254,15 +270,32 @@ def decode_and_verify_program_terminal(
     elif receipt.occupancy_evidence_digest != bytes(32) or receipt.occupancy_transfer_root != bytes(32) or receipt.occupancy_byte_batches or receipt.occupancy_fee_units:
         _fail("unexpected occupancy commitment")
     transfer_present = receipt.transfer_root != bytes(32)
-    if ((authorization is not None) != transfer_present if candidate else authorization is not None):
+    recorded = receipt.encoding_version != 4 and authorization is None and transfer_present
+    authority_required = candidate or receipt.encoding_version == 4 and successful
+    if not recorded and ((authorization is not None) != transfer_present if authority_required else authorization is not None):
         _fail("transfer authority presence")
     if authorization is not None:
         if not authorization or authority_root != receipt.transfer_root:
             _fail("transfer authority root")
+        if receipt.encoding_version == 4 and not authorization.startswith(_TRANSFER_SET_V2):
+            _fail("V2 transfer authority required")
         _verify_authorization_root(authorization, cast(bytes, authority_root))
     if protocol_version not in (1, 2, 3):
         _fail("program receipt protocol")
-    return DecodedProgramTerminal(outcome, usage if usage is not None else _receipt_usage(receipt))
+    return DecodedProgramTerminal(outcome, usage if usage is not None else _receipt_usage(receipt),
+        "recorded_terminal_root_not_locally_reconstructable" if recorded else "reconstructed")
+
+
+def _verify_applied_legs(encoded: bytes, expected: bytes) -> None:
+    if len(encoded) % 115 or len(encoded) > 256 * 115:
+        _fail("applied legs bounds")
+    legs = [encoded[index:index + 115] for index in range(0, len(encoded), 115)]
+    for leg in legs:
+        if (leg[0] != 0 or leg[113:] != b"\0\1" or not any(leg[1:33])
+                or not any(leg[33:65]) or not any(leg[65:97]) or not any(leg[97:113])):
+            _fail("applied leg canonical fields")
+    if _merkle_root(legs) != expected:
+        _fail("applied transfer root")
 
 
 def _decode_call_payload(payload: bytes, call: object) -> None:
@@ -449,7 +482,7 @@ def _usage_for(usage: Mapping[str, object], resource: int) -> int:
 
 
 def _bind_metadata(decoded: Mapping[str, object], receipt: ProgramReceiptOutcome) -> None:
-    if decoded["runtime"] != receipt.runtime_version or decoded["abi"] != receipt.abi_version or decoded["fee"] != receipt.fee_schedule_version or decoded["metering"] != receipt.metering_schedule_version or decoded["usage"] != _receipt_usage(receipt):
+    if decoded["runtime"] != receipt.runtime_version or decoded["abi"] != receipt.abi_version or (decoded["abi"] == 2 and decoded["fee"] != receipt.fee_schedule_version) or decoded["metering"] != receipt.metering_schedule_version or decoded["usage"] != _receipt_usage(receipt):
         _fail("terminal receipt metadata")
 
 
