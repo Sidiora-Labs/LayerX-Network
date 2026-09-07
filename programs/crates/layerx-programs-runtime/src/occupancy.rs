@@ -1663,12 +1663,13 @@ mod tests {
     use crate::{ActivityBudgetBinding, ResourceBudget};
 
     fn principal(value: u8) -> PrincipalId {
-        PrincipalId::new([value; 32]).expect("nonzero principal")
+        PrincipalId::new([value; 32]).unwrap_or_else(|error| panic!("nonzero principal: {error:?}"))
     }
 
     fn namespace(payer: PrincipalId) -> StorageNamespace {
         StorageNamespace::principal(
-            crate::ProgramId::new([7; 32]).expect("nonzero program"),
+            crate::ProgramId::new([7; 32])
+                .unwrap_or_else(|error| panic!("nonzero program: {error:?}")),
             payer,
         )
     }
@@ -1682,7 +1683,8 @@ mod tests {
         let admitted = AdmittedBudget::new(
             ResourceBudget::new_complete(3, 65_536, 0, 0, 1, 0, 0),
             payer,
-            ActivityBudgetBinding::new([9; 32]).expect("nonzero activity"),
+            ActivityBudgetBinding::new([9; 32])
+                .unwrap_or_else(|error| panic!("nonzero activity: {error:?}")),
             0,
             schedule,
             ResourceBudget::declared(),
@@ -1691,9 +1693,10 @@ mod tests {
             &admitted,
             ceiling,
             schedule,
-            crate::ProgramId::new([7; 32]).expect("nonzero program"),
+            crate::ProgramId::new([7; 32])
+                .unwrap_or_else(|error| panic!("nonzero program: {error:?}")),
         )
-        .expect("admitted authority")
+        .unwrap_or_else(|error| panic!("admitted authority: {error:?}"))
     }
 
     fn occupied(namespace: StorageNamespace) -> Storage {
@@ -1707,9 +1710,13 @@ mod tests {
         transaction
             .write(
                 b"k",
-                &vec![1; usize::try_from(bytes - 1).expect("bounded bytes")],
+                &vec![
+                    1;
+                    usize::try_from(bytes - 1)
+                        .unwrap_or_else(|error| panic!("bounded bytes: {error:?}"))
+                ],
             )
-            .expect("bounded write");
+            .unwrap_or_else(|error| panic!("bounded write: {error:?}"));
         assert_eq!(transaction.commit(), 1);
         storage
     }
@@ -1720,20 +1727,20 @@ mod tests {
         let storage = occupied(namespace);
         let responsibility = authority(payer, ceiling)
             .authorize(namespace, 10, ceiling)
-            .expect("signed occupancy mandate");
+            .unwrap_or_else(|error| panic!("signed occupancy mandate: {error:?}"));
         let mut ledger = OccupancyLedger::new();
         let prepared = ledger
             .prepare_batch(1, &storage, [responsibility], schedule(1, 2))
-            .expect("initial position");
+            .unwrap_or_else(|error| panic!("initial position: {error:?}"));
         ledger
             .commit_after_debits(prepared, &storage)
-            .expect("initial position commit");
+            .unwrap_or_else(|error| panic!("initial position commit: {error:?}"));
         let prepared = ledger
             .prepare_unchanged_batch(1, schedule(1, 2))
-            .expect("first terminal transition");
+            .unwrap_or_else(|error| panic!("first terminal transition: {error:?}"));
         ledger
             .commit_unchanged_after_debits(prepared)
-            .expect("first terminal commit");
+            .unwrap_or_else(|error| panic!("first terminal commit: {error:?}"));
         (ledger, storage, namespace)
     }
 
@@ -1746,20 +1753,20 @@ mod tests {
         let storage = occupied_bytes(namespace, bytes);
         let responsibility = authority(payer, ceiling)
             .authorize(namespace, bytes, ceiling)
-            .expect("signed occupancy mandate");
+            .unwrap_or_else(|error| panic!("signed occupancy mandate: {error:?}"));
         let mut ledger = OccupancyLedger::new();
         let prepared = ledger
             .prepare_batch(1, &storage, [responsibility], schedule(1, 2))
-            .expect("initial position");
+            .unwrap_or_else(|error| panic!("initial position: {error:?}"));
         ledger
             .commit_after_debits(prepared, &storage)
-            .expect("initial position commit");
+            .unwrap_or_else(|error| panic!("initial position commit: {error:?}"));
         let prepared = ledger
             .prepare_unchanged_batch(1, schedule(1, 2))
-            .expect("first terminal transition");
+            .unwrap_or_else(|error| panic!("first terminal transition: {error:?}"));
         ledger
             .commit_unchanged_after_debits(prepared)
-            .expect("first terminal commit");
+            .unwrap_or_else(|error| panic!("first terminal commit: {error:?}"));
         (ledger, storage, namespace)
     }
 
@@ -1768,14 +1775,14 @@ mod tests {
         let (mut ledger, _storage, namespace) = initialized(20);
         let paid = ledger
             .prepare_unchanged_batch(2, schedule(1, 2))
-            .expect("contiguous second batch");
+            .unwrap_or_else(|error| panic!("contiguous second batch: {error:?}"));
         assert_eq!(paid.settlement().usage().paid_fee_units, 20);
         ledger
             .commit_unchanged_after_debits(paid)
-            .expect("paid terminal commit");
+            .unwrap_or_else(|error| panic!("paid terminal commit: {error:?}"));
         let exhausted = ledger
             .prepare_unchanged_batch(3, schedule(1, 2))
-            .expect("ceiling exhaustion is a disposition");
+            .unwrap_or_else(|error| panic!("ceiling exhaustion is a disposition: {error:?}"));
         assert_eq!(
             exhausted.settlement().charges()[0].disposition(),
             OccupancyDisposition::ChargeCeilingExceeded
@@ -1783,7 +1790,7 @@ mod tests {
         assert_eq!(exhausted.settlement().usage().arrears_fee_units, 20);
         ledger
             .commit_unchanged_after_debits(exhausted)
-            .expect("frozen terminal commit");
+            .unwrap_or_else(|error| panic!("frozen terminal commit: {error:?}"));
         assert_eq!(
             ledger.ensure_accessible([namespace]),
             Err(OccupancyError::FrozenNamespace { namespace })
@@ -1799,29 +1806,31 @@ mod tests {
         let (mut insolvent, _, _) = initialized(100);
         let mut prepared = insolvent
             .prepare_unchanged_batch(2, schedule(1, 2))
-            .expect("contiguous settlement");
+            .unwrap_or_else(|error| panic!("contiguous settlement: {error:?}"));
         prepared
             .defer_unpaid(&BTreeSet::from([principal(3)]))
-            .expect("typed insolvency");
+            .unwrap_or_else(|error| panic!("typed insolvency: {error:?}"));
         assert_eq!(
             prepared.settlement().charges()[0].disposition(),
             OccupancyDisposition::InsufficientFunds
         );
         insolvent
             .commit_unchanged_after_debits(prepared)
-            .expect("insolvent position does not halt the batch");
+            .unwrap_or_else(|error| {
+                panic!("insolvent position does not halt the batch: {error:?}")
+            });
 
         let (mut repriced, _, _) = initialized(100);
         let prepared = repriced
             .prepare_unchanged_batch(2, schedule(2, 3))
-            .expect("versioned schedule transition");
+            .unwrap_or_else(|error| panic!("versioned schedule transition: {error:?}"));
         assert_eq!(
             prepared.settlement().charges()[0].disposition(),
             OccupancyDisposition::ScheduleCeilingExceeded
         );
         repriced
             .commit_unchanged_after_debits(prepared)
-            .expect("repriced position does not halt the batch");
+            .unwrap_or_else(|error| panic!("repriced position does not halt the batch: {error:?}"));
     }
 
     #[test]
@@ -1830,49 +1839,52 @@ mod tests {
         let second = principal(4);
         let first_namespace = namespace(first);
         let second_namespace = StorageNamespace::principal(
-            crate::ProgramId::new([8; 32]).expect("nonzero program"),
+            crate::ProgramId::new([8; 32])
+                .unwrap_or_else(|error| panic!("nonzero program: {error:?}")),
             second,
         );
         let mut storage = occupied(first_namespace);
         let mut transaction = storage.transaction(second_namespace);
-        transaction.write(b"k", &[2; 9]).expect("bounded write");
+        transaction
+            .write(b"k", &[2; 9])
+            .unwrap_or_else(|error| panic!("bounded write: {error:?}"));
         assert_eq!(transaction.commit(), 1);
         let responsibilities = [
             authority(first, 100)
                 .authorize(first_namespace, 10, 100)
-                .expect("first mandate"),
+                .unwrap_or_else(|error| panic!("first mandate: {error:?}")),
             authority(second, 100)
                 .authorize(second_namespace, 10, 100)
-                .expect("second mandate"),
+                .unwrap_or_else(|error| panic!("second mandate: {error:?}")),
         ];
         let mut ledger = OccupancyLedger::new();
         let prepared = ledger
             .prepare_batch(1, &storage, responsibilities, schedule(1, 2))
-            .expect("multi-payer initialization");
+            .unwrap_or_else(|error| panic!("multi-payer initialization: {error:?}"));
         ledger
             .commit_after_debits(prepared, &storage)
-            .expect("multi-payer initialization commit");
+            .unwrap_or_else(|error| panic!("multi-payer initialization commit: {error:?}"));
         let first_batch = ledger
             .prepare_unchanged_batch(1, schedule(1, 2))
-            .expect("initial terminal");
+            .unwrap_or_else(|error| panic!("initial terminal: {error:?}"));
         ledger
             .commit_unchanged_after_debits(first_batch)
-            .expect("initial terminal commit");
+            .unwrap_or_else(|error| panic!("initial terminal commit: {error:?}"));
         let mut second_batch = ledger
             .prepare_unchanged_batch(2, schedule(1, 2))
-            .expect("multi-payer settlement");
+            .unwrap_or_else(|error| panic!("multi-payer settlement: {error:?}"));
         second_batch
             .defer_unpaid(&BTreeSet::from([second]))
-            .expect("one payer insolvent");
+            .unwrap_or_else(|error| panic!("one payer insolvent: {error:?}"));
         let dispositions = second_batch
             .settlement()
             .payer_dispositions()
-            .expect("bounded payer totals");
+            .unwrap_or_else(|error| panic!("bounded payer totals: {error:?}"));
         assert_eq!(dispositions[&first], (20, 20, 0, false));
         assert_eq!(dispositions[&second], (20, 0, 20, true));
         ledger
             .commit_unchanged_after_debits(second_batch)
-            .expect("one insolvent payer cannot halt the batch");
+            .unwrap_or_else(|error| panic!("one insolvent payer cannot halt the batch: {error:?}"));
         assert!(ledger.ensure_accessible([first_namespace]).is_ok());
         assert_eq!(
             ledger.ensure_accessible([second_namespace]),
@@ -1888,7 +1900,8 @@ mod tests {
         assert_eq!(
             ledger
                 .prepare_unchanged_batch(3, schedule(1, 2))
-                .unwrap_err(),
+                .err()
+                .unwrap_or_else(|| panic!("expected refusal")),
             OccupancyError::BatchRegression {
                 previous: 1,
                 attempted: 3,
@@ -1897,7 +1910,7 @@ mod tests {
         let empty = Storage::new();
         let prepared = ledger
             .prepare_batch(2, &empty, [], schedule(1, 2))
-            .expect("drop settlement");
+            .unwrap_or_else(|error| panic!("drop settlement: {error:?}"));
         assert_eq!(prepared.settlement().charges()[0].final_bytes, 0);
         assert_eq!(prepared.settlement().charges()[0].fee_units(), 20);
         let evidence = prepared.settlement().canonical_evidence();
@@ -1907,13 +1920,13 @@ mod tests {
         );
         ledger
             .commit_after_debits(prepared, &empty)
-            .expect("drop commit");
+            .unwrap_or_else(|error| panic!("drop commit: {error:?}"));
         let terminal = ledger
             .prepare_unchanged_batch(2, schedule(1, 2))
-            .expect("same-batch terminal transition");
+            .unwrap_or_else(|error| panic!("same-batch terminal transition: {error:?}"));
         ledger
             .commit_unchanged_after_debits(terminal)
-            .expect("same-batch terminal commit");
+            .unwrap_or_else(|error| panic!("same-batch terminal commit: {error:?}"));
         assert_eq!(ledger.recorded_bytes(namespace), None);
     }
 
@@ -1928,13 +1941,13 @@ mod tests {
             for batch in 2u64..=16 {
                 let prepared = ledger
                     .prepare_unchanged_batch(batch, schedule(1, 2))
-                    .expect("contiguous property settlement");
+                    .unwrap_or_else(|error| panic!("contiguous property settlement: {error:?}"));
                 let usage = prepared.settlement().usage();
                 assert_eq!(usage.byte_batches, u128::from(bytes));
                 assert_eq!(usage.fee_units, u128::from(bytes) * 2);
                 cumulative_units = cumulative_units
                     .checked_add(usage.fee_units)
-                    .expect("bounded matrix");
+                    .unwrap_or_else(|| panic!("bounded matrix"));
                 assert!(cumulative_units > prior_cumulative_units);
                 prior_cumulative_units = cumulative_units;
                 if batch == 2 {
@@ -1943,7 +1956,7 @@ mod tests {
                 }
                 ledger
                     .commit_unchanged_after_debits(prepared)
-                    .expect("property terminal commit");
+                    .unwrap_or_else(|error| panic!("property terminal commit: {error:?}"));
             }
         }
     }
@@ -1957,15 +1970,15 @@ mod tests {
                 for batch in 2..drop_batch {
                     let prepared = ledger
                         .prepare_unchanged_batch(batch, schedule(1, 2))
-                        .expect("pre-drop interval");
+                        .unwrap_or_else(|error| panic!("pre-drop interval: {error:?}"));
                     ledger
                         .commit_unchanged_after_debits(prepared)
-                        .expect("pre-drop commit");
+                        .unwrap_or_else(|error| panic!("pre-drop commit: {error:?}"));
                 }
                 let empty = Storage::new();
                 let dropped = ledger
                     .prepare_batch(drop_batch, &empty, [], schedule(1, 2))
-                    .expect("drop interval");
+                    .unwrap_or_else(|error| panic!("drop interval: {error:?}"));
                 assert_eq!(dropped.settlement().charges().len(), 1);
                 assert_eq!(
                     dropped.settlement().charges()[0].byte_batches(),
@@ -1974,17 +1987,17 @@ mod tests {
                 assert_eq!(dropped.settlement().charges()[0].final_bytes, 0);
                 ledger
                     .commit_after_debits(dropped, &empty)
-                    .expect("drop state commit");
+                    .unwrap_or_else(|error| panic!("drop state commit: {error:?}"));
                 let terminal = ledger
                     .prepare_unchanged_batch(drop_batch, schedule(1, 2))
-                    .expect("drop terminal");
+                    .unwrap_or_else(|error| panic!("drop terminal: {error:?}"));
                 ledger
                     .commit_unchanged_after_debits(terminal)
-                    .expect("drop terminal commit");
+                    .unwrap_or_else(|error| panic!("drop terminal commit: {error:?}"));
                 assert_eq!(ledger.recorded_bytes(namespace), None);
                 let after = ledger
                     .prepare_unchanged_batch(drop_batch + 1, schedule(1, 2))
-                    .expect("post-drop interval");
+                    .unwrap_or_else(|error| panic!("post-drop interval: {error:?}"));
                 assert_eq!(after.settlement().usage(), OccupancyUsage::default());
             }
         }

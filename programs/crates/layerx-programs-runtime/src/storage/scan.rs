@@ -644,6 +644,10 @@ mod tests {
             Ok(19)
         );
 
+        assert_scan_budget_refusal(&mut second, limits);
+    }
+
+    fn assert_scan_budget_refusal(second: &mut Abi, limits: ScanLimits) {
         let mut short_meter = Meter::new(
             ResourceBudget::new(1, 1, 104, 1, 1, 1),
             FeeSchedule::declared(),

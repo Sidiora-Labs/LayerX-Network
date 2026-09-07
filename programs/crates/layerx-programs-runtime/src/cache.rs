@@ -856,7 +856,7 @@ mod tests {
             Err(refusal) => panic!("declared engine refused: {refusal}"),
         };
         let modules = [padded_add(7), padded_add(11), padded_add(17)];
-        let largest_weight = match modules
+        let Some(largest_weight) = modules
             .iter()
             .map(|module| {
                 let compiled = match CompiledModule::compile(
@@ -870,9 +870,8 @@ mod tests {
                 compiled.accounted_bytes()
             })
             .max()
-        {
-            Some(weight) => weight,
-            None => panic!("canonical eviction test requires at least one module"),
+        else {
+            panic!("canonical eviction test requires at least one module");
         };
         let byte_limit = largest_weight * 2;
         let limits = cache_limits(2, byte_limit);
@@ -921,18 +920,16 @@ mod tests {
                 break;
             }
         }
-        let (first, middle, last) = match selection {
-            Some(selection) => selection,
-            None => panic!("deterministic candidate set has no small-heavy-small key sequence"),
+        let Some((first, middle, last)) = selection else {
+            panic!("deterministic candidate set has no small-heavy-small key sequence");
         };
         let selected = [&candidates[first], &candidates[middle], &candidates[last]];
         let mut cold = ModuleCache::disabled();
         let weights = selected.map(|module| compile(&mut cold, &engine, module).accounted_bytes());
         assert!(weights[1] > weights[0]);
         assert!(weights[1] > weights[2]);
-        let byte_limit = match weights[0].checked_add(weights[2]) {
-            Some(limit) => limit,
-            None => panic!("selected artifact weights overflowed"),
+        let Some(byte_limit) = weights[0].checked_add(weights[2]) else {
+            panic!("selected artifact weights overflowed");
         };
         let limits = cache_limits(3, byte_limit);
 
@@ -983,9 +980,8 @@ mod tests {
 
         assert!(Arc::ptr_eq(&first, &hit));
         assert!(!Arc::ptr_eq(&first, &replacement));
-        let retained = match cache.entries.get(&cache_key) {
-            Some(retained) => retained,
-            None => panic!("replacement artifact was not retained"),
+        let Some(retained) = cache.entries.get(&cache_key) else {
+            panic!("replacement artifact was not retained");
         };
         assert!(Arc::ptr_eq(retained, &replacement));
         assert_eq!(retained.validation_limits, alternate_limits);

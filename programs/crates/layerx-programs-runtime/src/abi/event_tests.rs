@@ -1,7 +1,7 @@
 use super::{
     Abi, AbiError, AuthorizationContext, Capability, CapabilitySet, ReceiptOracle, ReceiptView,
     MAX_CANONICAL_CAPABILITY_SET_BYTES, MAX_CAPABILITIES, MAX_CAPABILITY_ENCODING_BYTES,
-    MAX_EVENT_DATA_BYTES, MAX_EVENT_TOPIC_BYTES, MAX_EVENTS_PER_ACTIVITY,
+    MAX_EVENTS_PER_ACTIVITY, MAX_EVENT_DATA_BYTES, MAX_EVENT_TOPIC_BYTES,
 };
 use crate::{
     derive_program_account, FeeSchedule, Meter, PrincipalId, ProgramId, ResourceBudget, Storage,
@@ -49,10 +49,7 @@ fn event_count_boundary_refuses_before_a_sixty_fifth_stage() {
         abi.stage_reserved_event(vec![1], Vec::new())
             .unwrap_or_else(|error| panic!("stage boundary event: {error}"));
     }
-    assert_eq!(
-        abi.emit_event(&mut meter, 1, 0),
-        Err(AbiError::EventBounds)
-    );
+    assert_eq!(abi.emit_event(&mut meter, 1, 0), Err(AbiError::EventBounds));
     assert_eq!(abi.commit().effects.events.len(), MAX_EVENTS_PER_ACTIVITY);
 }
 
@@ -84,8 +81,8 @@ fn maximum_largest_grant_set_fits_the_transport_ceiling() {
     let owner = program(3);
     let grant = |index: usize| {
         let mut seed = vec![7; MAX_PROGRAM_ACCOUNT_SEED_BYTES];
-        let ordinal = u16::try_from(index)
-            .unwrap_or_else(|error| panic!("capability ordinal: {error}"));
+        let ordinal =
+            u16::try_from(index).unwrap_or_else(|error| panic!("capability ordinal: {error}"));
         seed[..2].copy_from_slice(&ordinal.to_be_bytes());
         let source_account = derive_program_account(owner, &seed)
             .unwrap_or_else(|error| panic!("derived account: {error}"))
@@ -103,8 +100,11 @@ fn maximum_largest_grant_set_fits_the_transport_ceiling() {
         .unwrap_or_else(|error| panic!("maximum capability set: {error}"));
     assert_eq!(MAX_CAPABILITIES, 238);
     assert_eq!(MAX_CANONICAL_CAPABILITY_SET_BYTES, 65_452);
-    assert_eq!(set.canonical_encoding().len(), MAX_CANONICAL_CAPABILITY_SET_BYTES);
-    assert!(MAX_CANONICAL_CAPABILITY_SET_BYTES <= MAX_CAPABILITY_ENCODING_BYTES);
+    assert_eq!(
+        set.canonical_encoding().len(),
+        MAX_CANONICAL_CAPABILITY_SET_BYTES
+    );
+    const { assert!(MAX_CANONICAL_CAPABILITY_SET_BYTES <= MAX_CAPABILITY_ENCODING_BYTES) };
     assert_eq!(
         CapabilitySet::new((0..=MAX_CAPABILITIES).map(grant)),
         Err(AbiError::InvalidCapability)
