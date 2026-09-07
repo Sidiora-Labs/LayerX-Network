@@ -9,7 +9,9 @@ use layerx_types::amount::Amount;
 use layerx_types::verify::VerificationLevel;
 use layerx_wire::receipt::decode_batch_header;
 
-use crate::evidence::{decode_nested_evidence, EvidenceError, RootSelector};
+use crate::evidence::{
+    decode_nested_evidence, AccountEvidenceKind, DecodedNestedEvidence, EvidenceError, RootSelector,
+};
 use crate::head::Head;
 use crate::lni::refusal::decode_core_refusal;
 use crate::lni::schema::{decode_envelope, encode_envelope, Envelope, SchemaError, Version};
@@ -405,14 +407,13 @@ fn verify_state_value(
         }
         RootSelector::Latest | RootSelector::Batch(_) | RootSelector::Checkpoint(_) => {}
     }
-    let verified = layerx_proof::state::verify_nested_account(
+    let (global_sequence, batch_number) = verified_account_position(
         canonical_bytes,
         expected_account,
         expected_asset,
-        &decoded.proof,
+        &decoded,
         &context.sequencer_authorization,
-    )
-    .map_err(ReadError::Account)?;
+    )?;
     let achieved = if let Some(checkpoint) = decoded.checkpoint {
         checkpoint.report().level()
     } else {
@@ -424,11 +425,58 @@ fn verify_state_value(
         proof_material: proof_material.to_vec(),
         achieved,
         freshness: Freshness {
-            global_sequence: verified.observed_sequence(),
-            batch_number: verified.header().header().batch_number(),
+            global_sequence,
+            batch_number,
             observed_head_sequence: context.head.chain_sequence,
             observed_checkpoint: context.head.finalised_checkpoint,
         },
+    })
+}
+
+fn verified_account_position(
+    canonical_bytes: &[u8],
+    expected_account: [u8; 32],
+    expected_asset: Option<[u8; 32]>,
+    decoded: &DecodedNestedEvidence,
+    authorization: &SequencerAuthorization,
+) -> Result<(u64, u64), ReadError> {
+    Ok(match decoded.kind {
+        AccountEvidenceKind::Activity => {
+            let verified = layerx_proof::state::verify_nested_account(
+                canonical_bytes,
+                expected_account,
+                expected_asset,
+                &decoded.proof,
+                authorization,
+            )
+            .map_err(ReadError::Account)?;
+            (
+                verified.observed_sequence(),
+                verified.header().header().batch_number(),
+            )
+        }
+        AccountEvidenceKind::Maintenance { parameter_version } => {
+            let activity_count = decoded
+                .proof
+                .receipt_proof
+                .leaf_count()
+                .checked_sub(1)
+                .ok_or(ReadError::MalformedValue)?;
+            let verified = layerx_proof::state::verify_nested_account_maintenance(
+                canonical_bytes,
+                expected_account,
+                expected_asset,
+                &decoded.proof,
+                authorization,
+                activity_count,
+                parameter_version,
+            )
+            .map_err(ReadError::Account)?;
+            (
+                verified.header().header().last_sequence(),
+                verified.header().header().batch_number(),
+            )
+        }
     })
 }
 
