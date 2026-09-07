@@ -771,8 +771,16 @@ impl Lease {
             output_values: cursor.u64()?, output_bytes: cursor.u64()?,
             table_elements: cursor.u64()?, namespace_bytes: cursor.u64()?,
         };
-        let fee_schedule = FeeSchedule::new_complete(cursor.u32()?, cursor.u64()?, cursor.u64()?,
-            cursor.u64()?, cursor.u64()?, cursor.u64()?, cursor.u64()?, cursor.u64()?);
+        let fee_schedule = FeeSchedule::new_complete(layerx_programs_runtime::FeeScheduleParameters {
+            version: cursor.u32()?,
+            fee_units_per_cpu_fuel: cursor.u64()?,
+            fee_units_per_memory_byte: cursor.u64()?,
+            fee_units_per_storage_read_byte: cursor.u64()?,
+            fee_units_per_storage_write_byte: cursor.u64()?,
+            fee_units_per_output_value: cursor.u64()?,
+            fee_units_per_output_byte: cursor.u64()?,
+            fee_units_per_occupancy_byte_batch: cursor.u64()?,
+        });
         let escrow_consumed = cursor.u128()?;
         let state = state_from_tag(cursor.u8()?)?;
         let history_length = usize::from(cursor.u8()?);
@@ -1203,7 +1211,16 @@ mod tests {
 
     #[test]
     fn fee_schedule_is_frozen_in_canonical_lease_state() {
-        let schedule = FeeSchedule::new_complete(9, 2, 3, 5, 7, 11, 13, 17);
+        let schedule = FeeSchedule::new_complete(layerx_programs_runtime::FeeScheduleParameters {
+            version: 9,
+            fee_units_per_cpu_fuel: 2,
+            fee_units_per_memory_byte: 3,
+            fee_units_per_storage_read_byte: 5,
+            fee_units_per_storage_write_byte: 7,
+            fee_units_per_output_value: 11,
+            fee_units_per_output_byte: 13,
+            fee_units_per_occupancy_byte_batch: 17,
+        });
         let lease = Lease::request_with_schedule(
             LeaseId::new([8; 32]).expect("lease id"),
             PrincipalId::new([2; 32]).expect("tenant"),

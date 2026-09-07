@@ -2501,16 +2501,16 @@ pub extern "C" fn layerx_programs_call_begin(
             u32::try_from(table_elements).map_err(|_| LENGTH_LIMIT)?,
         )
         .map_err(|_| NON_CANONICAL)?;
-        let fee_schedule = crate::FeeSchedule::new_complete(
-            fee_schedule_version,
-            fee_cpu,
-            fee_memory_byte,
-            fee_storage_read_byte,
-            fee_storage_write_byte,
-            fee_output_value,
-            fee_output_byte,
-            fee_occupancy_byte_batch,
-        );
+        let fee_schedule = crate::FeeSchedule::new_complete(crate::FeeScheduleParameters {
+            version: fee_schedule_version,
+            fee_units_per_cpu_fuel: fee_cpu,
+            fee_units_per_memory_byte: fee_memory_byte,
+            fee_units_per_storage_read_byte: fee_storage_read_byte,
+            fee_units_per_storage_write_byte: fee_storage_write_byte,
+            fee_units_per_output_value: fee_output_value,
+            fee_units_per_output_byte: fee_output_byte,
+            fee_units_per_occupancy_byte_batch: fee_occupancy_byte_batch,
+        });
         let executor = Executor::new_versioned(
             crate::ResourceBudget::declared(),
             fee_schedule,
@@ -3460,16 +3460,16 @@ pub extern "C" fn layerx_programs_occupancy_finalize_rust(
         if token == 0 || batch_number == 0 || parameter_version == 0 || schedule_version == 0 {
             return Err(NON_CANONICAL);
         }
-        let schedule = crate::FeeSchedule::new_complete(
-            schedule_version,
-            fee_cpu,
-            fee_memory_byte,
-            fee_storage_read_byte,
-            fee_storage_write_byte,
-            fee_output_value,
-            fee_output_byte,
-            fee_occupancy_byte_batch,
-        );
+        let schedule = crate::FeeSchedule::new_complete(crate::FeeScheduleParameters {
+            version: schedule_version,
+            fee_units_per_cpu_fuel: fee_cpu,
+            fee_units_per_memory_byte: fee_memory_byte,
+            fee_units_per_storage_read_byte: fee_storage_read_byte,
+            fee_units_per_storage_write_byte: fee_storage_write_byte,
+            fee_units_per_output_value: fee_output_value,
+            fee_units_per_output_byte: fee_output_byte,
+            fee_units_per_occupancy_byte_batch: fee_occupancy_byte_batch,
+        });
         if !schedule.is_valid() {
             return Err(NON_CANONICAL);
         }
