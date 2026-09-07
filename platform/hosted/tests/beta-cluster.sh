@@ -507,6 +507,7 @@ secrets_generate() {
     done
     cp "$CA_DIR/sequencer.pub.hex" "$d/sequencer-public-key"
     (umask 077; encode_trust_history "$d/trust-history" "$SEQUENCER_ID" "$(cat "$CA_DIR/sequencer.pub.hex")")
+    python3 "$SCRIPT_DIR/sequencer-pins.py" "$d" "$WORK_DIR/sequencer-authorization.json"
     random_hex 32 > "$d/receipt-authority-replica-id"
     cp "$REPO_ROOT/interop/deploy/gateway/module-registry.example.json" "$d/module-registry.json"
     (umask 077; cp "$CA_DIR/sequencer.seed.hex" "$d/node-sequencer.key")
@@ -584,7 +585,9 @@ secrets_apply() {
     apply_secret "$ns" layerx-gateway-server-tls --from-file=server.crt.der="$c/gateway/cert.der" --from-file=server.key.der="$c/gateway/key.der"
     apply_secret "$ns" layerx-gateway-client-identity --from-file=client.p12="$c/gateway-client/client.p12" --from-file=password="$c/gateway-client/password"
     apply_secret "$ns" layerx-gateway-component-client --from-file=token="$s/gateway-component.token"
-    apply_secret "$ns" layerx-gateway-authority-client --from-file=token="$s/gateway-authority.token" --from-file=sequencer-public-key="$s/sequencer-public-key"
+    apply_secret "$ns" layerx-gateway-authority-client --from-file=token="$s/gateway-authority.token" --from-file=sequencer-public-key="$s/sequencer-public-key" \
+        --from-file=sequencer-id="$s/sequencer-id" --from-file=sequencer-first-batch="$s/sequencer-first-batch" \
+        --from-file=sequencer-last-batch="$s/sequencer-last-batch"
     apply_secret "$ns" layerx-gateway-identity-client --from-file=token="$s/gateway-identity.token"
     apply_secret "$ns" layerx-gateway-redis-tls --from-file=tls.crt="$c/gateway-redis/cert.pem" \
         --from-file=tls.key="$c/gateway-redis/key.pem" --from-file=ca.crt="$c/ca.crt"
@@ -629,7 +632,9 @@ secrets_apply() {
         --from-file=journey-source-token="$s/developer-journey.token" --from-file=payment-source-token="$s/developer-payment.token" \
         --from-file=approval-source-token="$s/developer-approval.token" --from-file=program-source-token="$s/developer-program.token" \
         --from-file=source-trigger-token="$s/developer-source-trigger.token" --from-file=webhook-operator-token="$s/developer-operator.token" \
-        --from-file=cursor-key="$s/cursor.key" --from-file=sequencer-public-key="$s/sequencer-public-key"
+        --from-file=cursor-key="$s/cursor.key" --from-file=sequencer-public-key="$s/sequencer-public-key" \
+        --from-file=sequencer-id="$s/sequencer-id" --from-file=sequencer-first-batch="$s/sequencer-first-batch" \
+        --from-file=sequencer-last-batch="$s/sequencer-last-batch"
     apply_tls_secret "$dev" layerx-developer-ingress-tls developer
 }
 
@@ -819,6 +824,7 @@ PY
     render_manifest "$REPO_ROOT/platform/hosted/gateway/deployment.yaml" "$MANIFESTS_DIR/gateway.yaml"
     render_manifest "$REPO_ROOT/platform/hosted/registry/deployment.yaml" "$MANIFESTS_DIR/registry.yaml"
     render_manifest "$REPO_ROOT/platform/hosted/webhooks/deployment.yaml" "$MANIFESTS_DIR/developer.yaml"
+    python3 "$SCRIPT_DIR/sequencer-pins.py" --manifests "$MANIFESTS_DIR"
     cat >> "$MANIFESTS_DIR/testnet.yaml" <<EOF
 ---
 apiVersion: networking.k8s.io/v1
