@@ -260,3 +260,5 @@ That test then posts `/admin/v1/testnet/fund` against a fresh genesis. The statu
 `lifecycle_routes_submit_real_signed_activities_and_verify_state_receipts` submits deploy, upgrade, and wind-down over the real node, verifies state receipts, and replays idempotent 200 bodies (`platform/hosted/core/tests/boundary.rs:375-472`, `platform/hosted/core/tests/boundary.rs:475-544`).
 
 `platform/hosted/core/tests/send.rs` asserts `build_send` embeds native `agent:<did>:main` account ids in the payload and authorization and that the signed envelope starts with protocol bytes `[0, 3]` (`platform/hosted/core/tests/send.rs:3-32`).
+
+[Home](Home.md)

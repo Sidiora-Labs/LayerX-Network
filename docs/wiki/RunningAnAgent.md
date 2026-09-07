@@ -662,3 +662,5 @@ Sources: `docs/wiki/Agentd.md`, `docs/wiki/Cli.md`,
 `platform/cli/src/install/`, `platform/cli/src/toolset.rs`,
 `platform/cli/src/mcp.rs`, `agent/sdk/typescript/examples/`,
 `agent/sdk/python/examples/`.
+
+[Home](Home.md)

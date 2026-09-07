@@ -546,3 +546,5 @@ inputs appear here:
 | `platform-hosted-smoke` | requires `LAYERX_GATEWAY_URL` (`platform/Makefile.inc:161-173`) |
 | `platform-hosted-topology-check` | `topology-check.sh`, default manifests include the gateway (`platform/Makefile.inc:177-178`; `platform/hosted/tests/topology-check.sh:22`) |
 | `platform-test-agent-install` | requires `LAYERX_GATEWAY_URL` (`platform/Makefile.inc:190-201`) |
+
+[Home](Home.md)

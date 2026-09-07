@@ -267,3 +267,5 @@ workflow.
    checks each finalized header, and requires refusal of their divergent
    finalized anchors. It never substitutes an RPC response or signs a synthetic
    custody root. These local forks are not independent production finality.
+
+[Home](Home.md)

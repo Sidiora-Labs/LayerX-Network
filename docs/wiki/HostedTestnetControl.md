@@ -463,3 +463,5 @@ Make:
 | `platform-hosted-smoke` | requires `LAYERX_TESTNET_URL` and `LAYERX_FAUCET_URL` (`platform/Makefile.inc:161-173`) |
 | `platform-hosted-topology-check` | default manifests include testnet (`platform/Makefile.inc:177-178`; `platform/hosted/tests/topology-check.sh:21`) |
 | `platform-beta-cluster-up` | waits until testnet `GET /readyz` has `state == "ready"` and every journey ready (`platform/hosted/tests/beta-cluster.sh:1286-1287`) |
+
+[Home](Home.md)

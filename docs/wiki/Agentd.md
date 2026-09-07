@@ -561,3 +561,5 @@ Sources: `agent/crates/layerx-agentd/src/{lib,main,config,protocol_evidence,rece
 `agent/crates/layerx-agentd/src/{budget,approval,capability,limits,policy,boot}/`,
 `agent/crates/layerx-agentd/tests/{budget_*,approval*,capability,ceiling,degraded,finality,cache,admission,protocol_evidence}.rs`,
 `agent/crates/layerx-agentd/tests/support/{mod,real_authority}.rs`.
+
+[Home](Home.md)

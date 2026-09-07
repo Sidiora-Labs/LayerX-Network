@@ -308,3 +308,5 @@ the replica and authority with no sequencer
 - After replica loss, `/readyz` is `503` and relay is `503`
   `replica_unavailable`
   (`platform/hosted/authority/tests/real_node.rs:1749-1765`).
+
+[Home](Home.md)

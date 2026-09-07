@@ -299,8 +299,8 @@ Sources:
 
 A CALL terminal is begun with kind `SUCCESS` (1), `FAILURE` (2), or `RESOURCE`
 (3) (`lxp_program_terminal_kind`). Success requires `result_code == LXP_OK`;
-non-success forbids `LXP_OK` and forbids fatals. Three reserved buffers —
-call graph, terminal payload, events — are hashed on publish.
+non-success forbids `LXP_OK` and forbids fatals. Three reserved buffers -
+call graph, terminal payload, events - are hashed on publish.
 
 `layerx_programs_call_terminal_publish` binds `lxp_program_outcome` onto the
 activity context. Only success emits `CALL_OUTCOME` and copies the transfer
@@ -494,3 +494,5 @@ Sources:
 - `programs/crates/layerx-programs-runtime/src/abi_policy.rs:31-36`
 - `include/layerx/lxp_module.h:22`
 - `include/layerx/lxp_protocol.h:12`
+
+[Home](Home.md)

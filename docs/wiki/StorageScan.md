@@ -294,3 +294,5 @@ first-page responses, equal usage, and equal canonical evidence
 (`programs/crates/layerx-programs-runtime/tests/storage_scan.rs:388-408`).
 `[task.29.3]` `do_4` requires insertion-order independence
 (`spec/layerx-platform/spec.kvx:3007`).
+
+[Home](Home.md)

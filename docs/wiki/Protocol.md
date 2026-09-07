@@ -126,8 +126,8 @@ The public testnet exposes a gateway API and a faucet. There is no LayerX mainne
 
 ## Start here
 
-- Home
-- Modules - `0x01`–`0x08` economic modules and Programs `0x09`
-- Programs - DEPLOY / UPGRADE / CALL, simulate, guest ABI 2, occupancy
-- Finality - L0 → L4
+- [Home](Home.md)
+- [Modules](Modules.md): `0x01`–`0x08` economic modules and Programs `0x09`
+- [Programs](Programs.md): DEPLOY / UPGRADE / CALL, simulate, guest ABI 2, occupancy
+- [Finality](Finality.md): L0 → L4
 - Design § protocol

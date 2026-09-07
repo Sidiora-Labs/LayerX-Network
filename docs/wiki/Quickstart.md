@@ -577,3 +577,5 @@ kind cluster when mode is kind or absent, removes labeled images, deletes
 `build/beta-cluster`, and unless `LAYERX_BETA_KEEP_TOOLS=1` removes pinned
 kind/kubectl/calico downloads (`platform/hosted/tests/beta-cluster.sh:1292-1317`).
 It prints `teardown complete` (`platform/hosted/tests/beta-cluster.sh:1317`).
+
+[Home](Home.md)
