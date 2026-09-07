@@ -111,11 +111,17 @@ pub struct AccountStateHead {
 }
 
 pub trait AccountStateJournal {
+    /// # Errors
+    ///
+    /// Returns journal lookup or receipt-availability errors.
     fn account_state_head(
         &self,
         receipt_digest: [u8; 32],
     ) -> Result<AccountStateHead, AccountStateError>;
 
+    /// # Errors
+    ///
+    /// Returns journal lookup or current-head availability errors.
     fn current_account_state_head(&self) -> Result<AccountStateHead, AccountStateError>;
 }
 
@@ -127,6 +133,9 @@ pub struct JournalAccountStateAuthority<J> {
 }
 
 impl<J: AccountStateJournal> JournalAccountStateAuthority<J> {
+    /// # Errors
+    ///
+    /// Refuses a zero observation time or staleness limit.
     pub fn new(journal: J, now: u64, staleness_limit: u64) -> Result<Self, AccountStateError> {
         if now == 0 || staleness_limit == 0 {
             return Err(AccountStateError::InvalidFreshness);
@@ -384,6 +393,9 @@ impl VerifiedAccountSnapshot {
         self.verify_with_head(authority, true)
     }
 
+    /// # Errors
+    ///
+    /// Refuses stale, unverified, malformed or root-mismatched historical evidence.
     pub fn verify_historical(
         &self,
         authority: &JournalAccountStateAuthority<impl AccountStateJournal>,
@@ -486,6 +498,9 @@ impl VerifiedAccountSnapshot {
         self.resolve_program_with_head(program, bindings, authority, true)
     }
 
+    /// # Errors
+    ///
+    /// Refuses invalid historical proofs and missing, extra or mismatched account bindings.
     pub fn resolve_program_historical(
         &self,
         program: ProgramId,
