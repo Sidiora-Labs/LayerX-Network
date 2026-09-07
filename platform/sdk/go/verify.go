@@ -83,6 +83,7 @@ type ProgramReceiptOutcome struct {
 	CallGraphRoot           [32]byte
 	TerminalPayloadRoot     [32]byte
 	TransferRoot            [32]byte
+	AppliedLegsDigest       [32]byte
 }
 
 type ProtocolReceipt struct {
@@ -380,6 +381,8 @@ func decodeProgramReceiptOutcomeFrom(decoder *wireDecoder, protocolVersion uint1
 		outcome.EncodingVersion = 2
 	case ProgramOutcomeTagV3:
 		outcome.EncodingVersion = 3
+	case 0x50524734:
+		outcome.EncodingVersion = 4
 	default:
 		return ProgramReceiptOutcome{}, false
 	}
@@ -389,7 +392,7 @@ func decodeProgramReceiptOutcomeFrom(decoder *wireDecoder, protocolVersion uint1
 	outcome.ABIVersion = decoder.u16()
 	outcome.FeeScheduleVersion = decoder.u32()
 	outcome.MeteringScheduleVersion = 1
-	if outcome.EncodingVersion == 3 {
+	if outcome.EncodingVersion >= 3 {
 		outcome.MeteringScheduleVersion = decoder.u32()
 	}
 	outcome.CPUFuel = decoder.u64()
@@ -412,9 +415,12 @@ func decodeProgramReceiptOutcomeFrom(decoder *wireDecoder, protocolVersion uint1
 	outcome.CallGraphRoot = decoder.array32()
 	outcome.TerminalPayloadRoot = decoder.array32()
 	outcome.TransferRoot = decoder.array32()
+	if outcome.EncodingVersion == 4 {
+		outcome.AppliedLegsDigest = decoder.array32()
+	}
 	occupancyZero := outcome.OccupancyByteBatches == (Uint128{}) && outcome.OccupancyFeeUnits == (Uint128{}) && outcome.OccupancyAssetID == [32]byte{} && outcome.OccupancyEvidenceDigest == [32]byte{} && outcome.OccupancyTransferRoot == [32]byte{}
-	validVersion := protocolVersion == 1 && (outcome.EncodingVersion == 1 || outcome.EncodingVersion == 3) || (protocolVersion == 2 || protocolVersion == 3) && (outcome.EncodingVersion == 2 || outcome.EncodingVersion == 3)
-	if decoder.failed || outcome.TerminalKind < 1 || outcome.TerminalKind > 3 || outcome.RuntimeVersion == 0 || outcome.ABIVersion == 0 || outcome.FeeScheduleVersion == 0 || outcome.MeteringScheduleVersion != 1 || outcome.TerminalPayloadRoot == [32]byte{} || outcome.TerminalKind == 1 && outcome.ResultCode != 0 || outcome.TerminalKind != 1 && (outcome.ResultCode == 0 || outcome.ResultCode <= -1000) || outcome.TerminalKind != 1 && outcome.TransferRoot != [32]byte{} || !validVersion || outcome.EncodingVersion == 1 && !occupancyZero || outcome.EncodingVersion >= 2 && outcome.TerminalKind != 1 && !occupancyZero || outcome.EncodingVersion == 2 && outcome.TerminalKind == 1 && (outcome.OccupancyAssetID == [32]byte{} || outcome.OccupancyEvidenceDigest == [32]byte{}) || outcome.EncodingVersion == 3 && (outcome.OccupancyAssetID == [32]byte{}) != (outcome.OccupancyEvidenceDigest == [32]byte{}) || protocolVersion == 1 && outcome.EncodingVersion == 3 && !occupancyZero || (protocolVersion == 2 || protocolVersion == 3) && outcome.EncodingVersion == 3 && outcome.TerminalKind == 1 && (outcome.OccupancyAssetID == [32]byte{} || outcome.OccupancyEvidenceDigest == [32]byte{}) {
+	validVersion := protocolVersion == 1 && (outcome.EncodingVersion == 1 || outcome.EncodingVersion == 3) || (protocolVersion == 2 || protocolVersion == 3) && (outcome.EncodingVersion == 2 || outcome.EncodingVersion == 3) || protocolVersion == 3 && outcome.EncodingVersion == 4
+	if decoder.failed || (outcome.EncodingVersion == 4) == (outcome.AppliedLegsDigest == [32]byte{}) || outcome.TerminalKind < 1 || outcome.TerminalKind > 3 || outcome.RuntimeVersion == 0 || outcome.ABIVersion == 0 || outcome.FeeScheduleVersion == 0 || outcome.MeteringScheduleVersion != 1 || outcome.TerminalPayloadRoot == [32]byte{} || outcome.TerminalKind == 1 && outcome.ResultCode != 0 || outcome.TerminalKind != 1 && (outcome.ResultCode == 0 || outcome.ResultCode <= -1000) || outcome.TerminalKind != 1 && outcome.TransferRoot != [32]byte{} || !validVersion || outcome.EncodingVersion == 1 && !occupancyZero || outcome.EncodingVersion >= 2 && outcome.TerminalKind != 1 && !occupancyZero || outcome.EncodingVersion == 2 && outcome.TerminalKind == 1 && (outcome.OccupancyAssetID == [32]byte{} || outcome.OccupancyEvidenceDigest == [32]byte{}) || outcome.EncodingVersion >= 3 && (outcome.OccupancyAssetID == [32]byte{}) != (outcome.OccupancyEvidenceDigest == [32]byte{}) || protocolVersion == 1 && outcome.EncodingVersion >= 3 && !occupancyZero || (protocolVersion == 2 || protocolVersion == 3) && outcome.EncodingVersion >= 3 && outcome.TerminalKind == 1 && (outcome.OccupancyAssetID == [32]byte{} || outcome.OccupancyEvidenceDigest == [32]byte{}) {
 		return ProgramReceiptOutcome{}, false
 	}
 	return outcome, true
