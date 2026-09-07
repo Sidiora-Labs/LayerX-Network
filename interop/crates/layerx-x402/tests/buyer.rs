@@ -70,29 +70,9 @@ fn test_payment_required() -> PaymentRequired {
 }
 
 fn encode_payment_required(required: &PaymentRequired) -> String {
-    STANDARD.encode(serde_json::to_vec(required).unwrap())
-}
-
-fn mock_settlement_response() -> SettlementResponse {
-    let mut extensions = BTreeMap::new();
-    extensions.insert(
-        "layerx".to_owned(),
-        json!({
-            "receipt": STANDARD.encode(mock_receipt_bytes()),
-            "receiptDigest": "ab".repeat(32),
-            "verificationLevel": "sequencer-signed"
-        }),
-    );
-
-    SettlementResponse {
-        success: true,
-        error_reason: None,
-        payer: Some("0x".to_owned() + &"56".repeat(32)),
-        transaction: format!("lxp:{}", "ab".repeat(32)),
-        network: "layerx:testnet".to_owned(),
-        amount: Some(AtomicAmount::from_u128(500)),
-        extensions,
-    }
+    STANDARD.encode(
+        serde_json::to_vec(required).unwrap_or_else(|error| panic!("test input: {error:?}")),
+    )
 }
 
 fn mock_receipt_bytes() -> Vec<u8> {
@@ -137,7 +117,7 @@ fn buyer_validates_supported_kinds_on_construction() {
 #[test]
 fn buyer_refuses_unsupported_offer() {
     let supported = test_supported();
-    let buyer = Buyer::new(supported).expect("valid supported");
+    let buyer = Buyer::new(supported).unwrap_or_else(|error| panic!("valid supported: {error:?}"));
 
     let mut required = test_payment_required();
     required.accepts[0].scheme = "unsupported".to_owned();
@@ -156,7 +136,7 @@ fn buyer_refuses_unsupported_offer() {
 #[test]
 fn buyer_selects_first_supported_offer_in_seller_order() {
     let supported = test_supported();
-    let buyer = Buyer::new(supported).expect("valid supported");
+    let buyer = Buyer::new(supported).unwrap_or_else(|error| panic!("valid supported: {error:?}"));
 
     let mut required = test_payment_required();
     let unsupported = PaymentRequirements {
@@ -180,7 +160,7 @@ fn buyer_selects_first_supported_offer_in_seller_order() {
 
     let payment = buyer
         .build_payment(&encoded, [1; 32], &mut plane, &trace)
-        .expect("payment built");
+        .unwrap_or_else(|error| panic!("payment built: {error:?}"));
 
     assert_eq!(payment.payload.accepted.scheme, "exact");
     assert_eq!(payment.payload.accepted.network, "layerx:testnet");
@@ -189,7 +169,7 @@ fn buyer_selects_first_supported_offer_in_seller_order() {
 #[test]
 fn buyer_echoes_required_extensions_byte_for_value() {
     let supported = test_supported();
-    let buyer = Buyer::new(supported).expect("valid supported");
+    let buyer = Buyer::new(supported).unwrap_or_else(|error| panic!("valid supported: {error:?}"));
 
     let mut required = test_payment_required();
     required.extensions.insert(
@@ -208,7 +188,7 @@ fn buyer_echoes_required_extensions_byte_for_value() {
 
     let payment = buyer
         .build_payment(&encoded, [1; 32], &mut plane, &trace)
-        .expect("payment built");
+        .unwrap_or_else(|error| panic!("payment built: {error:?}"));
 
     assert_eq!(payment.payload.extensions, required.extensions);
 }
@@ -216,7 +196,7 @@ fn buyer_echoes_required_extensions_byte_for_value() {
 #[test]
 fn buyer_refuses_zero_idempotency_key() {
     let supported = test_supported();
-    let buyer = Buyer::new(supported).expect("valid supported");
+    let buyer = Buyer::new(supported).unwrap_or_else(|error| panic!("valid supported: {error:?}"));
 
     let required = test_payment_required();
     let encoded = encode_payment_required(&required);
@@ -233,7 +213,7 @@ fn buyer_refuses_zero_idempotency_key() {
 #[test]
 fn buyer_validates_payment_required_header_before_parsing() {
     let supported = test_supported();
-    let buyer = Buyer::new(supported).expect("valid supported");
+    let buyer = Buyer::new(supported).unwrap_or_else(|error| panic!("valid supported: {error:?}"));
 
     let invalid_header = "not-valid-base64!";
     let mut plane = TestBuyerPlane {
@@ -249,7 +229,7 @@ fn buyer_validates_payment_required_header_before_parsing() {
 #[test]
 fn buyer_refuses_wrong_x402_version() {
     let supported = test_supported();
-    let buyer = Buyer::new(supported).expect("valid supported");
+    let buyer = Buyer::new(supported).unwrap_or_else(|error| panic!("valid supported: {error:?}"));
 
     let mut required = test_payment_required();
     required.x402_version = 1;
@@ -268,7 +248,7 @@ fn buyer_refuses_wrong_x402_version() {
 #[test]
 fn buyer_includes_resource_info_in_built_payment() {
     let supported = test_supported();
-    let buyer = Buyer::new(supported).expect("valid supported");
+    let buyer = Buyer::new(supported).unwrap_or_else(|error| panic!("valid supported: {error:?}"));
 
     let required = test_payment_required();
     let encoded = encode_payment_required(&required);
@@ -279,16 +259,23 @@ fn buyer_includes_resource_info_in_built_payment() {
 
     let payment = buyer
         .build_payment(&encoded, [1; 32], &mut plane, &trace)
-        .expect("payment built");
+        .unwrap_or_else(|error| panic!("payment built: {error:?}"));
 
     assert!(payment.payload.resource.is_some());
-    assert_eq!(payment.payload.resource.unwrap().url, required.resource.url);
+    assert_eq!(
+        payment
+            .payload
+            .resource
+            .unwrap_or_else(|| panic!("payment resource missing"))
+            .url,
+        required.resource.url
+    );
 }
 
 #[test]
 fn buyer_payment_header_is_base64_encoded_json() {
     let supported = test_supported();
-    let buyer = Buyer::new(supported).expect("valid supported");
+    let buyer = Buyer::new(supported).unwrap_or_else(|error| panic!("valid supported: {error:?}"));
 
     let required = test_payment_required();
     let encoded = encode_payment_required(&required);
@@ -299,12 +286,13 @@ fn buyer_payment_header_is_base64_encoded_json() {
 
     let payment = buyer
         .build_payment(&encoded, [1; 32], &mut plane, &trace)
-        .expect("payment built");
+        .unwrap_or_else(|error| panic!("payment built: {error:?}"));
 
     let decoded = STANDARD
         .decode(payment.header.as_bytes())
-        .expect("valid base64");
-    let parsed: PaymentPayload = serde_json::from_slice(&decoded).expect("valid payment payload");
+        .unwrap_or_else(|error| panic!("valid base64: {error:?}"));
+    let parsed: PaymentPayload = serde_json::from_slice(&decoded)
+        .unwrap_or_else(|error| panic!("valid payment payload: {error:?}"));
 
     assert_eq!(parsed.x402_version, X402_VERSION);
     assert_eq!(parsed.accepted, test_requirements());
@@ -324,7 +312,7 @@ fn buyer_plane_request_contains_all_requirements() {
     }
 
     let supported = test_supported();
-    let buyer = Buyer::new(supported).expect("valid supported");
+    let buyer = Buyer::new(supported).unwrap_or_else(|error| panic!("valid supported: {error:?}"));
 
     let required = test_payment_required();
     let encoded = encode_payment_required(&required);
@@ -333,9 +321,9 @@ fn buyer_plane_request_contains_all_requirements() {
 
     let _payment = buyer
         .build_payment(&encoded, [5; 32], &mut plane, &trace)
-        .expect("payment built");
+        .unwrap_or_else(|error| panic!("payment built: {error:?}"));
 
-    let captured = plane.captured.expect("plane was called");
+    let captured = plane.captured.unwrap_or_else(|| panic!("plane was called"));
     assert_eq!(captured.requirements, test_requirements());
     assert_eq!(captured.idempotency_key, [5; 32]);
 }
@@ -343,7 +331,7 @@ fn buyer_plane_request_contains_all_requirements() {
 #[test]
 fn buyer_refuses_non_object_scheme_payload() {
     let supported = test_supported();
-    let buyer = Buyer::new(supported).expect("valid supported");
+    let buyer = Buyer::new(supported).unwrap_or_else(|error| panic!("valid supported: {error:?}"));
 
     let required = test_payment_required();
     let encoded = encode_payment_required(&required);
@@ -360,7 +348,7 @@ fn buyer_refuses_non_object_scheme_payload() {
 #[test]
 fn buyer_built_payment_preserves_idempotency_key() {
     let supported = test_supported();
-    let buyer = Buyer::new(supported).expect("valid supported");
+    let buyer = Buyer::new(supported).unwrap_or_else(|error| panic!("valid supported: {error:?}"));
 
     let required = test_payment_required();
     let encoded = encode_payment_required(&required);
@@ -372,7 +360,7 @@ fn buyer_built_payment_preserves_idempotency_key() {
     let key = [7; 32];
     let payment = buyer
         .build_payment(&encoded, key, &mut plane, &trace)
-        .expect("payment built");
+        .unwrap_or_else(|error| panic!("payment built: {error:?}"));
 
     assert_eq!(payment.idempotency_key, key);
 }
@@ -401,7 +389,9 @@ fn buyer_capture_refuses_failed_settlement_as_success() {
         extensions: BTreeMap::new(),
     };
 
-    let encoded = STANDARD.encode(serde_json::to_vec(&failed).unwrap());
+    let encoded = STANDARD.encode(
+        serde_json::to_vec(&failed).unwrap_or_else(|error| panic!("test input: {error:?}")),
+    );
     let batch = mock_authorized_batch();
     let trace = TraceId::mint([0xab; 16]);
 
@@ -434,7 +424,9 @@ fn buyer_capture_refuses_missing_layerx_evidence() {
         extensions: BTreeMap::new(),
     };
 
-    let encoded = STANDARD.encode(serde_json::to_vec(&no_evidence).unwrap());
+    let encoded = STANDARD.encode(
+        serde_json::to_vec(&no_evidence).unwrap_or_else(|error| panic!("test input: {error:?}")),
+    );
     let batch = mock_authorized_batch();
     let trace = TraceId::mint([0xab; 16]);
 
@@ -477,7 +469,9 @@ fn buyer_capture_refuses_wrong_verification_level() {
         extensions,
     };
 
-    let encoded = STANDARD.encode(serde_json::to_vec(&wrong_level).unwrap());
+    let encoded = STANDARD.encode(
+        serde_json::to_vec(&wrong_level).unwrap_or_else(|error| panic!("test input: {error:?}")),
+    );
     let batch = mock_authorized_batch();
     let trace = TraceId::mint([0xab; 16]);
 
@@ -520,7 +514,9 @@ fn buyer_capture_refuses_malformed_receipt() {
         extensions,
     };
 
-    let encoded = STANDARD.encode(serde_json::to_vec(&bad_receipt).unwrap());
+    let encoded = STANDARD.encode(
+        serde_json::to_vec(&bad_receipt).unwrap_or_else(|error| panic!("test input: {error:?}")),
+    );
     let batch = mock_authorized_batch();
     let trace = TraceId::mint([0xab; 16]);
 
@@ -551,7 +547,7 @@ fn supported_kind_equality_matches_both_scheme_and_network() {
 #[test]
 fn buyer_validates_payment_payload_after_construction() {
     let supported = test_supported();
-    let buyer = Buyer::new(supported).expect("valid supported");
+    let buyer = Buyer::new(supported).unwrap_or_else(|error| panic!("valid supported: {error:?}"));
 
     let required = test_payment_required();
     let encoded = encode_payment_required(&required);
@@ -562,7 +558,7 @@ fn buyer_validates_payment_payload_after_construction() {
 
     let payment = buyer
         .build_payment(&encoded, [1; 32], &mut plane, &trace)
-        .expect("payment built");
+        .unwrap_or_else(|error| panic!("payment built: {error:?}"));
 
     assert!(payment.payload.validate().is_ok());
 }

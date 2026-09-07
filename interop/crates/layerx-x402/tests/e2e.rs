@@ -10,18 +10,15 @@ use layerx_interop_gateway::adapter::{AdapterId, ConformanceSuite};
 use layerx_interop_gateway::principal::PrincipalId;
 use layerx_interop_gateway::trace::TraceId;
 use layerx_interop_gateway::GatewayCore;
-use layerx_proof::receipt::AuthorizedBatch;
 use layerx_x402::buyer::{Buyer, BuyerPaymentPlane, PaymentBuildRequest, SupportedKind};
 use layerx_x402::model::{
     AtomicAmount, PaymentPayload, PaymentRequired, PaymentRequirements, ResourceInfo, X402Error,
     X402_VERSION,
 };
 use layerx_x402::seller::{
-    ExecutedPayment, LayerXPaymentRequest, PaymentPlane, PlanePaymentOutcome, Seller, SellerOutcome,
+    LayerXPaymentRequest, PaymentPlane, PlanePaymentOutcome, Seller, SellerOutcome,
 };
-use layerx_x402::transport::{
-    decode_payment_payload, encode_payment_payload, encode_payment_required, TransportKind,
-};
+use layerx_x402::transport::{encode_payment_required, TransportKind};
 use layerx_x402::x402_adapter_descriptor;
 use serde_json::{json, Value};
 
@@ -104,9 +101,12 @@ fn create_payment_required() -> PaymentRequired {
 #[test]
 fn buyer_and_seller_complete_payment_flow_over_http() {
     let required = create_payment_required();
-    let seller = Seller::new(required.clone()).expect("seller created");
+    let seller =
+        Seller::new(required.clone()).unwrap_or_else(|error| panic!("seller created: {error:?}"));
 
-    let signal = seller.payment_required().expect("signal issued");
+    let signal = seller
+        .payment_required()
+        .unwrap_or_else(|error| panic!("signal issued: {error:?}"));
     assert_eq!(signal.status, 402);
 
     let buyer = Buyer::new(vec![
@@ -119,13 +119,16 @@ fn buyer_and_seller_complete_payment_flow_over_http() {
             network: "layerx:mainnet".to_owned(),
         },
     ])
-    .expect("buyer created");
+    .unwrap_or_else(|error| panic!("buyer created: {error:?}"));
 
-    let transport_value =
-        encode_payment_required(TransportKind::Http, &signal.body).expect("encode for transport");
-    let payment_header = match transport_value {
-        layerx_x402::transport::TransportValue::HttpHeader { value, .. } => value,
-        _ => panic!("expected HTTP header"),
+    let transport_value = encode_payment_required(TransportKind::Http, &signal.body)
+        .unwrap_or_else(|error| panic!("encode for transport: {error:?}"));
+    let layerx_x402::transport::TransportValue::HttpHeader {
+        value: payment_header,
+        ..
+    } = transport_value
+    else {
+        panic!("expected HTTP header");
     };
 
     let mut buyer_plane = MockBuyerPlane {
@@ -138,7 +141,7 @@ fn buyer_and_seller_complete_payment_flow_over_http() {
 
     let payment = buyer
         .build_payment(&payment_header, [5; 32], &mut buyer_plane, &trace)
-        .expect("payment built");
+        .unwrap_or_else(|error| panic!("payment built: {error:?}"));
 
     assert_eq!(payment.payload.x402_version, X402_VERSION);
     assert_eq!(payment.payload.accepted.scheme, "exact");
@@ -146,7 +149,8 @@ fn buyer_and_seller_complete_payment_flow_over_http() {
     assert_eq!(payment.idempotency_key, [5; 32]);
 
     let mut gateway = registered_gateway();
-    let principal = PrincipalId::new("test-merchant").unwrap();
+    let principal =
+        PrincipalId::new("test-merchant").unwrap_or_else(|error| panic!("test input: {error:?}"));
     let mut seller_plane = MockSellerPlane {
         outcome: PlanePaymentOutcome::Pending,
     };
@@ -160,7 +164,7 @@ fn buyer_and_seller_complete_payment_flow_over_http() {
             &trace,
             0,
         )
-        .expect("settlement processed");
+        .unwrap_or_else(|error| panic!("settlement processed: {error:?}"));
 
     assert!(matches!(outcome, SellerOutcome::Pending));
 }
@@ -173,9 +177,11 @@ fn buyer_selects_first_supported_scheme_from_seller_accepts() {
         scheme: "402lxp".to_owned(),
         network: "layerx:mainnet".to_owned(),
     }])
-    .expect("buyer created");
+    .unwrap_or_else(|error| panic!("buyer created: {error:?}"));
 
-    let encoded = STANDARD.encode(serde_json::to_vec(&required).unwrap());
+    let encoded = STANDARD.encode(
+        serde_json::to_vec(&required).unwrap_or_else(|error| panic!("test input: {error:?}")),
+    );
     let mut plane = MockBuyerPlane {
         scheme_payload: json!({"scheme": "402lxp"}),
     };
@@ -183,7 +189,7 @@ fn buyer_selects_first_supported_scheme_from_seller_accepts() {
 
     let payment = buyer
         .build_payment(&encoded, [1; 32], &mut plane, &trace)
-        .expect("payment built");
+        .unwrap_or_else(|error| panic!("payment built: {error:?}"));
 
     assert_eq!(payment.payload.accepted.scheme, "402lxp");
     assert_eq!(payment.payload.accepted.network, "layerx:mainnet");
@@ -193,9 +199,10 @@ fn buyer_selects_first_supported_scheme_from_seller_accepts() {
 #[test]
 fn seller_validates_buyer_payment_matches_issued_requirements() {
     let required = create_payment_required();
-    let seller = Seller::new(required.clone()).expect("seller created");
+    let seller =
+        Seller::new(required.clone()).unwrap_or_else(|error| panic!("seller created: {error:?}"));
 
-    let mut wrong_payload = PaymentPayload {
+    let wrong_payload = PaymentPayload {
         x402_version: X402_VERSION,
         resource: None,
         payload: json!({"scheme": "exact"}),
@@ -211,10 +218,13 @@ fn seller_validates_buyer_payment_matches_issued_requirements() {
         extensions: BTreeMap::new(),
     };
 
-    let encoded = STANDARD.encode(serde_json::to_vec(&wrong_payload).unwrap());
+    let encoded = STANDARD.encode(
+        serde_json::to_vec(&wrong_payload).unwrap_or_else(|error| panic!("test input: {error:?}")),
+    );
 
     let mut gateway = registered_gateway();
-    let principal = PrincipalId::new("test-merchant").unwrap();
+    let principal =
+        PrincipalId::new("test-merchant").unwrap_or_else(|error| panic!("test input: {error:?}"));
     let mut plane = MockSellerPlane {
         outcome: PlanePaymentOutcome::Pending,
     };
@@ -236,16 +246,21 @@ fn payment_flow_preserves_extensions_end_to_end() {
         },
     );
 
-    let seller = Seller::new(required.clone()).expect("seller created");
-    let signal = seller.payment_required().expect("signal issued");
+    let seller =
+        Seller::new(required.clone()).unwrap_or_else(|error| panic!("seller created: {error:?}"));
+    let signal = seller
+        .payment_required()
+        .unwrap_or_else(|error| panic!("signal issued: {error:?}"));
 
     let buyer = Buyer::new(vec![SupportedKind {
         scheme: "exact".to_owned(),
         network: "layerx:testnet".to_owned(),
     }])
-    .expect("buyer created");
+    .unwrap_or_else(|error| panic!("buyer created: {error:?}"));
 
-    let encoded = STANDARD.encode(serde_json::to_vec(&signal.body).unwrap());
+    let encoded = STANDARD.encode(
+        serde_json::to_vec(&signal.body).unwrap_or_else(|error| panic!("test input: {error:?}")),
+    );
     let mut plane = MockBuyerPlane {
         scheme_payload: json!({"authorization": "test"}),
     };
@@ -253,7 +268,7 @@ fn payment_flow_preserves_extensions_end_to_end() {
 
     let payment = buyer
         .build_payment(&encoded, [7; 32], &mut plane, &trace)
-        .expect("payment built");
+        .unwrap_or_else(|error| panic!("payment built: {error:?}"));
 
     assert_eq!(payment.payload.extensions, required.extensions);
 }
@@ -269,7 +284,8 @@ fn seller_refuses_payment_when_extension_missing() {
         },
     );
 
-    let seller = Seller::new(required.clone()).expect("seller created");
+    let seller =
+        Seller::new(required.clone()).unwrap_or_else(|error| panic!("seller created: {error:?}"));
 
     let payload = PaymentPayload {
         x402_version: X402_VERSION,
@@ -287,10 +303,13 @@ fn seller_refuses_payment_when_extension_missing() {
         extensions: BTreeMap::new(),
     };
 
-    let encoded = STANDARD.encode(serde_json::to_vec(&payload).unwrap());
+    let encoded = STANDARD.encode(
+        serde_json::to_vec(&payload).unwrap_or_else(|error| panic!("test input: {error:?}")),
+    );
 
     let mut gateway = registered_gateway();
-    let principal = PrincipalId::new("test-merchant").unwrap();
+    let principal =
+        PrincipalId::new("test-merchant").unwrap_or_else(|error| panic!("test input: {error:?}"));
     let mut plane = MockSellerPlane {
         outcome: PlanePaymentOutcome::Pending,
     };
@@ -304,22 +323,24 @@ fn seller_refuses_payment_when_extension_missing() {
 #[test]
 fn transport_independent_payment_flow_over_mcp() {
     let required = create_payment_required();
-    let seller = Seller::new(required.clone()).expect("seller created");
+    let _seller =
+        Seller::new(required.clone()).unwrap_or_else(|error| panic!("seller created: {error:?}"));
 
-    let transport_value =
-        encode_payment_required(TransportKind::Mcp, &required).expect("encode for MCP transport");
-    let json_value = match transport_value {
-        layerx_x402::transport::TransportValue::Json(value) => value,
-        _ => panic!("expected JSON"),
+    let transport_value = encode_payment_required(TransportKind::Mcp, &required)
+        .unwrap_or_else(|error| panic!("encode for MCP transport: {error:?}"));
+    let layerx_x402::transport::TransportValue::Json(json_value) = transport_value else {
+        panic!("expected JSON");
     };
 
-    let encoded = STANDARD.encode(serde_json::to_vec(&json_value).unwrap());
+    let encoded = STANDARD.encode(
+        serde_json::to_vec(&json_value).unwrap_or_else(|error| panic!("test input: {error:?}")),
+    );
 
     let buyer = Buyer::new(vec![SupportedKind {
         scheme: "exact".to_owned(),
         network: "layerx:testnet".to_owned(),
     }])
-    .expect("buyer created");
+    .unwrap_or_else(|error| panic!("buyer created: {error:?}"));
 
     let mut plane = MockBuyerPlane {
         scheme_payload: json!({"authorization": "mcp-payment"}),
@@ -328,15 +349,28 @@ fn transport_independent_payment_flow_over_mcp() {
 
     let payment = buyer
         .build_payment(&encoded, [9; 32], &mut plane, &trace)
-        .expect("payment built");
+        .unwrap_or_else(|error| panic!("payment built: {error:?}"));
 
     assert_eq!(payment.payload.accepted.scheme, "exact");
 }
 
 #[test]
 fn seller_refuses_payment_before_plane_execution_when_validation_fails() {
+    struct NeverCalledPlane;
+
+    impl PaymentPlane for NeverCalledPlane {
+        fn execute(
+            &mut self,
+            _request: LayerXPaymentRequest,
+            _trace: &TraceId,
+        ) -> Result<PlanePaymentOutcome, X402Error> {
+            panic!("plane should not be called for invalid payment");
+        }
+    }
+
     let required = create_payment_required();
-    let seller = Seller::new(required.clone()).expect("seller created");
+    let seller =
+        Seller::new(required.clone()).unwrap_or_else(|error| panic!("seller created: {error:?}"));
 
     let invalid_payload = PaymentPayload {
         x402_version: 1,
@@ -354,22 +388,14 @@ fn seller_refuses_payment_before_plane_execution_when_validation_fails() {
         extensions: BTreeMap::new(),
     };
 
-    let encoded = STANDARD.encode(serde_json::to_vec(&invalid_payload).unwrap());
-
-    struct NeverCalledPlane;
-
-    impl PaymentPlane for NeverCalledPlane {
-        fn execute(
-            &mut self,
-            _request: LayerXPaymentRequest,
-            _trace: &TraceId,
-        ) -> Result<PlanePaymentOutcome, X402Error> {
-            panic!("plane should not be called for invalid payment");
-        }
-    }
+    let encoded = STANDARD.encode(
+        serde_json::to_vec(&invalid_payload)
+            .unwrap_or_else(|error| panic!("test input: {error:?}")),
+    );
 
     let mut gateway = registered_gateway();
-    let principal = PrincipalId::new("test-merchant").unwrap();
+    let principal =
+        PrincipalId::new("test-merchant").unwrap_or_else(|error| panic!("test input: {error:?}"));
     let mut plane = NeverCalledPlane;
     let trace = TraceId::mint([0xab; 16]);
 
@@ -386,9 +412,11 @@ fn buyer_constructs_payment_with_correct_idempotency_semantics() {
         scheme: "exact".to_owned(),
         network: "layerx:testnet".to_owned(),
     }])
-    .expect("buyer created");
+    .unwrap_or_else(|error| panic!("buyer created: {error:?}"));
 
-    let encoded = STANDARD.encode(serde_json::to_vec(&required).unwrap());
+    let encoded = STANDARD.encode(
+        serde_json::to_vec(&required).unwrap_or_else(|error| panic!("test input: {error:?}")),
+    );
     let mut plane = MockBuyerPlane {
         scheme_payload: json!({"authorization": "test"}),
     };
@@ -399,11 +427,11 @@ fn buyer_constructs_payment_with_correct_idempotency_semantics() {
 
     let payment1 = buyer
         .build_payment(&encoded, key1, &mut plane, &trace)
-        .expect("payment 1 built");
+        .unwrap_or_else(|error| panic!("payment 1 built: {error:?}"));
 
     let payment2 = buyer
         .build_payment(&encoded, key2, &mut plane, &trace)
-        .expect("payment 2 built");
+        .unwrap_or_else(|error| panic!("payment 2 built: {error:?}"));
 
     assert_eq!(payment1.idempotency_key, key1);
     assert_eq!(payment2.idempotency_key, key2);
@@ -413,15 +441,18 @@ fn buyer_constructs_payment_with_correct_idempotency_semantics() {
 #[test]
 fn seller_outcome_types_distinguish_pending_refused_and_settled() {
     let required = create_payment_required();
-    let seller = Seller::new(required.clone()).expect("seller created");
+    let seller =
+        Seller::new(required.clone()).unwrap_or_else(|error| panic!("seller created: {error:?}"));
 
     let buyer = Buyer::new(vec![SupportedKind {
         scheme: "exact".to_owned(),
         network: "layerx:testnet".to_owned(),
     }])
-    .expect("buyer created");
+    .unwrap_or_else(|error| panic!("buyer created: {error:?}"));
 
-    let encoded = STANDARD.encode(serde_json::to_vec(&required).unwrap());
+    let encoded = STANDARD.encode(
+        serde_json::to_vec(&required).unwrap_or_else(|error| panic!("test input: {error:?}")),
+    );
     let mut plane = MockBuyerPlane {
         scheme_payload: json!({"authorization": "test"}),
     };
@@ -429,10 +460,11 @@ fn seller_outcome_types_distinguish_pending_refused_and_settled() {
 
     let payment = buyer
         .build_payment(&encoded, [1; 32], &mut plane, &trace)
-        .expect("payment built");
+        .unwrap_or_else(|error| panic!("payment built: {error:?}"));
 
     let mut gateway = registered_gateway();
-    let principal = PrincipalId::new("test-merchant").unwrap();
+    let principal =
+        PrincipalId::new("test-merchant").unwrap_or_else(|error| panic!("test input: {error:?}"));
 
     let mut pending_plane = MockSellerPlane {
         outcome: PlanePaymentOutcome::Pending,
@@ -446,7 +478,7 @@ fn seller_outcome_types_distinguish_pending_refused_and_settled() {
             &trace,
             0,
         )
-        .expect("pending processed");
+        .unwrap_or_else(|error| panic!("pending processed: {error:?}"));
     assert!(matches!(pending_outcome, SellerOutcome::Pending));
 
     let mut refused_plane = MockSellerPlane {
@@ -463,7 +495,7 @@ fn seller_outcome_types_distinguish_pending_refused_and_settled() {
             &trace,
             100,
         )
-        .expect("refused processed");
+        .unwrap_or_else(|error| panic!("refused processed: {error:?}"));
     assert!(matches!(refused_outcome, SellerOutcome::Refused { .. }));
 }
 
@@ -479,7 +511,9 @@ fn payment_requirements_layerx_facts_extraction() {
         extra: None,
     };
 
-    let (asset, recipient) = requirements.layerx_facts().expect("layerx facts");
+    let (asset, recipient) = requirements
+        .layerx_facts()
+        .unwrap_or_else(|error| panic!("layerx facts: {error:?}"));
 
     assert_eq!(asset, [0xab; 32]);
     assert_eq!(recipient, [0xcd; 32]);
@@ -490,8 +524,11 @@ fn payment_required_with_error_message_is_valid() {
     let mut required = create_payment_required();
     required.error = Some("Authentication required".to_owned());
 
-    let seller = Seller::new(required.clone()).expect("seller created");
-    let signal = seller.payment_required().expect("signal issued");
+    let seller =
+        Seller::new(required.clone()).unwrap_or_else(|error| panic!("seller created: {error:?}"));
+    let signal = seller
+        .payment_required()
+        .unwrap_or_else(|error| panic!("signal issued: {error:?}"));
 
     assert_eq!(
         signal.body.error,
@@ -507,9 +544,11 @@ fn resource_info_with_all_fields_is_preserved() {
         scheme: "exact".to_owned(),
         network: "layerx:testnet".to_owned(),
     }])
-    .expect("buyer created");
+    .unwrap_or_else(|error| panic!("buyer created: {error:?}"));
 
-    let encoded = STANDARD.encode(serde_json::to_vec(&required).unwrap());
+    let encoded = STANDARD.encode(
+        serde_json::to_vec(&required).unwrap_or_else(|error| panic!("test input: {error:?}")),
+    );
     let mut plane = MockBuyerPlane {
         scheme_payload: json!({"authorization": "test"}),
     };
@@ -517,9 +556,12 @@ fn resource_info_with_all_fields_is_preserved() {
 
     let payment = buyer
         .build_payment(&encoded, [1; 32], &mut plane, &trace)
-        .expect("payment built");
+        .unwrap_or_else(|error| panic!("payment built: {error:?}"));
 
-    let resource = payment.payload.resource.expect("resource present");
+    let resource = payment
+        .payload
+        .resource
+        .unwrap_or_else(|| panic!("resource present"));
     assert_eq!(resource.url, required.resource.url);
     assert_eq!(resource.description, required.resource.description);
     assert_eq!(resource.mime_type, required.resource.mime_type);
