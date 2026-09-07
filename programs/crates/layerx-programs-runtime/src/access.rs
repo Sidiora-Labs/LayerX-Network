@@ -1656,11 +1656,11 @@ mod tests {
     }
 
     fn program(byte: u8) -> ProgramId {
-        ProgramId::new([byte; 32]).expect("program")
+        ProgramId::new([byte; 32]).unwrap_or_else(|error| panic!("program: {error:?}"))
     }
 
     fn principal(byte: u8) -> PrincipalId {
-        PrincipalId::new([byte; 32]).expect("principal")
+        PrincipalId::new([byte; 32]).unwrap_or_else(|error| panic!("principal: {error:?}"))
     }
 
     fn namespace() -> StorageNamespace {
@@ -1671,23 +1671,29 @@ mod tests {
     fn canonical_encoding_is_independent_of_builder_order_and_strictly_decodes() {
         let mut left = AccessSet::builder();
         left.visible_account([9; 32], [8; 32])
-            .expect("account")
+            .unwrap_or_else(|error| panic!("account: {error:?}"))
             .write_key(namespace(), b"z")
-            .expect("z")
+            .unwrap_or_else(|error| panic!("z: {error:?}"))
             .read_key(namespace(), b"a")
-            .expect("a");
+            .unwrap_or_else(|error| panic!("a: {error:?}"));
         let mut right = AccessSet::builder();
         right
             .read_key(namespace(), b"a")
-            .expect("a")
+            .unwrap_or_else(|error| panic!("a: {error:?}"))
             .write_key(namespace(), b"z")
-            .expect("z")
+            .unwrap_or_else(|error| panic!("z: {error:?}"))
             .visible_account([9; 32], [8; 32])
-            .expect("account");
-        let left = left.build().expect("left");
-        let right = right.build().expect("right");
+            .unwrap_or_else(|error| panic!("account: {error:?}"));
+        let left = left
+            .build()
+            .unwrap_or_else(|error| panic!("left: {error:?}"));
+        let right = right
+            .build()
+            .unwrap_or_else(|error| panic!("right: {error:?}"));
         assert_eq!(left, right);
-        let encoded = left.canonical_bytes().expect("encode");
+        let encoded = left
+            .canonical_bytes()
+            .unwrap_or_else(|error| panic!("encode: {error:?}"));
         assert_eq!(AccessSet::canonical_decode(&encoded), Ok(left));
 
         let mut trailing = encoded;
@@ -1702,13 +1708,18 @@ mod tests {
     fn frozen_empty_and_absent_encodings_match_protocol_bytes() {
         let mut empty = b"LayerX/programs/access-set/v1\0".to_vec();
         empty.extend_from_slice(&[0, 0, 0, 0, 0, 0]);
-        assert_eq!(AccessSet::empty().canonical_bytes().expect("empty"), empty);
+        assert_eq!(
+            AccessSet::empty()
+                .canonical_bytes()
+                .unwrap_or_else(|error| panic!("empty: {error:?}")),
+            empty
+        );
         let mut absent = b"LayerX/programs/access-declaration/v1\0".to_vec();
         absent.push(0);
         assert_eq!(
             AccessDeclaration::absent()
                 .canonical_bytes()
-                .expect("absent"),
+                .unwrap_or_else(|error| panic!("absent: {error:?}")),
             absent
         );
     }
@@ -1718,12 +1729,16 @@ mod tests {
         let mut builder = AccessSet::builder();
         builder
             .read_prefix(namespace(), b"orders/")
-            .expect("prefix")
+            .unwrap_or_else(|error| panic!("prefix: {error:?}"))
             .write_key(namespace(), b"total")
-            .expect("write")
+            .unwrap_or_else(|error| panic!("write: {error:?}"))
             .visible_account([3; 32], [4; 32])
-            .expect("account");
-        let declaration = AccessDeclaration::explicit(builder.build().expect("set"));
+            .unwrap_or_else(|error| panic!("account: {error:?}"));
+        let declaration = AccessDeclaration::explicit(
+            builder
+                .build()
+                .unwrap_or_else(|error| panic!("set: {error:?}")),
+        );
         assert!(matches!(
             declaration.enforce_call(program(9)),
             Err(AccessRefusal::UndeclaredCall { .. })
@@ -1754,8 +1769,10 @@ mod tests {
         let mut reachable_builder = AccessSet::builder();
         reachable_builder
             .write_key(namespace(), b"state")
-            .expect("reachable");
-        let reachable = reachable_builder.build().expect("reachable set");
+            .unwrap_or_else(|error| panic!("reachable: {error:?}"));
+        let reachable = reachable_builder
+            .build()
+            .unwrap_or_else(|error| panic!("reachable set: {error:?}"));
         let absent = AccessDeclaration::absent();
         assert!(absent
             .enforce_storage_key(namespace(), AccessMode::Write, b"state")
@@ -1765,8 +1782,12 @@ mod tests {
         let mut reader_builder = AccessSet::builder();
         reader_builder
             .read_key(namespace(), b"state")
-            .expect("reader");
-        let reader = AccessDeclaration::explicit(reader_builder.build().expect("reader set"));
+            .unwrap_or_else(|error| panic!("reader: {error:?}"));
+        let reader = AccessDeclaration::explicit(
+            reader_builder
+                .build()
+                .unwrap_or_else(|error| panic!("reader set: {error:?}")),
+        );
         assert!(absent.conflicts_with(&reader));
         assert!(absent.conflicts_with_resolved(&reachable, &reader, &AccessSet::empty()));
     }
@@ -1775,13 +1796,15 @@ mod tests {
     fn conflicts_are_symmetric_and_only_write_overlap_conflicts() {
         let declaration = |mode: AccessMode, key: &[u8]| {
             AccessSet::new(
-                [
-                    StorageAccess::new(namespace(), mode, KeyAccess::exact(key).expect("key"))
-                        .expect("access"),
-                ],
+                [StorageAccess::new(
+                    namespace(),
+                    mode,
+                    KeyAccess::exact(key).unwrap_or_else(|error| panic!("key: {error:?}")),
+                )
+                .unwrap_or_else(|error| panic!("access: {error:?}"))],
                 [],
             )
-            .expect("set")
+            .unwrap_or_else(|error| panic!("set: {error:?}"))
         };
         let read = declaration(AccessMode::Read, b"same");
         let write = declaration(AccessMode::Write, b"same");
@@ -1798,35 +1821,39 @@ mod tests {
             StorageAccess::new(
                 namespace(),
                 AccessMode::Read,
-                KeyAccess::prefix(b"orders/").expect("prefix"),
+                KeyAccess::prefix(b"orders/").unwrap_or_else(|error| panic!("prefix: {error:?}")),
             )
-            .expect("prefix access"),
+            .unwrap_or_else(|error| panic!("prefix access: {error:?}")),
             StorageAccess::new(
                 namespace(),
                 AccessMode::Read,
-                KeyAccess::exact(b"orders/1").expect("key"),
+                KeyAccess::exact(b"orders/1").unwrap_or_else(|error| panic!("key: {error:?}")),
             )
-            .expect("key access"),
+            .unwrap_or_else(|error| panic!("key access: {error:?}")),
         ];
-        let overdeclared = AccessSet::new(accesses, []).expect("overdeclared set");
+        let overdeclared = AccessSet::new(accesses, [])
+            .unwrap_or_else(|error| panic!("overdeclared set: {error:?}"));
         let prefix_only = AccessSet::new(
             [StorageAccess::new(
                 namespace(),
                 AccessMode::Read,
-                KeyAccess::prefix(b"orders/").expect("prefix"),
+                KeyAccess::prefix(b"orders/").unwrap_or_else(|error| panic!("prefix: {error:?}")),
             )
-            .expect("prefix access")],
+            .unwrap_or_else(|error| panic!("prefix access: {error:?}"))],
             [],
         )
-        .expect("prefix set");
+        .unwrap_or_else(|error| panic!("prefix set: {error:?}"));
 
         assert_eq!(overdeclared.storage_len(), 2);
         assert!(
             overdeclared
                 .charge()
-                .expect("overdeclared charge")
+                .unwrap_or_else(|error| panic!("overdeclared charge: {error:?}"))
                 .total_units()
-                > prefix_only.charge().expect("prefix charge").total_units()
+                > prefix_only
+                    .charge()
+                    .unwrap_or_else(|error| panic!("prefix charge: {error:?}"))
+                    .total_units()
         );
     }
 
@@ -1836,25 +1863,31 @@ mod tests {
             [StorageAccess::new(
                 namespace(),
                 AccessMode::Read,
-                KeyAccess::exact(b"a").expect("key"),
+                KeyAccess::exact(b"a").unwrap_or_else(|error| panic!("key: {error:?}")),
             )
-            .expect("access")],
+            .unwrap_or_else(|error| panic!("access: {error:?}"))],
             [],
         )
-        .expect("exact");
+        .unwrap_or_else(|error| panic!("exact: {error:?}"));
         let broad = AccessSet::new(
             [StorageAccess::new(
                 namespace(),
                 AccessMode::Read,
-                KeyAccess::prefix([]).expect("whole namespace"),
+                KeyAccess::prefix([]).unwrap_or_else(|error| panic!("whole namespace: {error:?}")),
             )
-            .expect("access")],
+            .unwrap_or_else(|error| panic!("access: {error:?}"))],
             [],
         )
-        .expect("broad");
+        .unwrap_or_else(|error| panic!("broad: {error:?}"));
         assert!(
-            broad.charge().expect("broad charge").total_units()
-                > exact.charge().expect("exact charge").total_units()
+            broad
+                .charge()
+                .unwrap_or_else(|error| panic!("broad charge: {error:?}"))
+                .total_units()
+                > exact
+                    .charge()
+                    .unwrap_or_else(|error| panic!("exact charge: {error:?}"))
+                    .total_units()
         );
         assert_eq!(broad.charge(), broad.charge());
     }
@@ -1863,13 +1896,15 @@ mod tests {
     fn program_account_builder_uses_the_canonical_public_derivation() {
         let owner = program(7);
         let account = derive_program_account(owner, b"vault")
-            .expect("derive")
+            .unwrap_or_else(|error| panic!("derive: {error:?}"))
             .bytes();
         let mut builder = AccessSet::builder();
         builder
             .visible_program_account(owner, b"vault", [6; 32])
-            .expect("visible account");
-        let set = builder.build().expect("set");
+            .unwrap_or_else(|error| panic!("visible account: {error:?}"));
+        let set = builder
+            .build()
+            .unwrap_or_else(|error| panic!("set: {error:?}"));
         assert_eq!(
             set.account_accesses().next().map(AccountAccess::account),
             Some(account)
@@ -1881,11 +1916,17 @@ mod tests {
         let absent = AccessDeclaration::absent();
         let empty = AccessDeclaration::explicit(AccessSet::empty());
         assert_ne!(
-            absent.canonical_bytes().expect("absent"),
-            empty.canonical_bytes().expect("empty")
+            absent
+                .canonical_bytes()
+                .unwrap_or_else(|error| panic!("absent: {error:?}")),
+            empty
+                .canonical_bytes()
+                .unwrap_or_else(|error| panic!("empty: {error:?}"))
         );
         for declaration in [absent, empty] {
-            let encoded = declaration.canonical_bytes().expect("encode");
+            let encoded = declaration
+                .canonical_bytes()
+                .unwrap_or_else(|error| panic!("encode: {error:?}"));
             assert_eq!(
                 AccessDeclaration::canonical_decode(&encoded),
                 Ok(declaration)
@@ -1899,11 +1940,19 @@ mod tests {
         let mut builder = AccessSet::builder();
         builder
             .read_key(namespace(), b"from-calldata")
-            .expect("key");
-        let explicit = AccessDeclaration::explicit(builder.build().expect("set"));
+            .unwrap_or_else(|error| panic!("key: {error:?}"));
+        let explicit = AccessDeclaration::explicit(
+            builder
+                .build()
+                .unwrap_or_else(|error| panic!("set: {error:?}")),
+        );
         assert_ne!(
-            absent.canonical_activity_field().expect("absent field"),
-            explicit.canonical_activity_field().expect("explicit field")
+            absent
+                .canonical_activity_field()
+                .unwrap_or_else(|error| panic!("absent field: {error:?}")),
+            explicit
+                .canonical_activity_field()
+                .unwrap_or_else(|error| panic!("explicit field: {error:?}"))
         );
     }
 
@@ -1913,7 +1962,7 @@ mod tests {
             AccessDeclaration::derive_from_calldata(b"orders/7", |calldata, builder| {
                 builder.read_key(namespace(), calldata).map(|_| ())
             })
-            .expect("derive");
+            .unwrap_or_else(|error| panic!("derive: {error:?}"));
         assert!(declaration
             .enforce_storage_key(namespace(), AccessMode::Read, b"orders/7")
             .is_ok());
@@ -1928,8 +1977,14 @@ mod tests {
         let root = StorageNamespace::principal(program(1), principal(2));
         let callee = StorageNamespace::shared(program(9));
         let mut builder = AccessSet::builder();
-        builder.read_key(root, b"route").expect("root route");
-        let declaration = AccessDeclaration::explicit(builder.build().expect("set"));
+        builder
+            .read_key(root, b"route")
+            .unwrap_or_else(|error| panic!("root route: {error:?}"));
+        let declaration = AccessDeclaration::explicit(
+            builder
+                .build()
+                .unwrap_or_else(|error| panic!("set: {error:?}")),
+        );
         assert!(matches!(
             declaration.enforce_storage_key(callee, AccessMode::Write, b"callee-state"),
             Err(AccessRefusal::UndeclaredStorage { .. })
@@ -1938,12 +1993,16 @@ mod tests {
         let mut conservative = AccessSet::builder();
         conservative
             .read_key(root, b"route")
-            .expect("route")
+            .unwrap_or_else(|error| panic!("route: {error:?}"))
             .write_namespace(callee)
-            .expect("callee namespace")
+            .unwrap_or_else(|error| panic!("callee namespace: {error:?}"))
             .call(program(9))
-            .expect("callee");
-        let conservative = AccessDeclaration::explicit(conservative.build().expect("set"));
+            .unwrap_or_else(|error| panic!("callee: {error:?}"));
+        let conservative = AccessDeclaration::explicit(
+            conservative
+                .build()
+                .unwrap_or_else(|error| panic!("set: {error:?}")),
+        );
         assert!(conservative
             .enforce_storage_key(callee, AccessMode::Write, b"callee-state")
             .is_ok());
@@ -1951,11 +2010,11 @@ mod tests {
         assert!(
             conservative
                 .charge(&AccessSet::empty())
-                .expect("charge")
+                .unwrap_or_else(|error| panic!("charge: {error:?}"))
                 .total_units()
                 > declaration
                     .charge(&AccessSet::empty())
-                    .expect("charge")
+                    .unwrap_or_else(|error| panic!("charge: {error:?}"))
                     .total_units()
         );
     }
@@ -1974,7 +2033,7 @@ mod tests {
             storage,
             &NoReceipts,
         )
-        .expect("authorized ABI");
+        .unwrap_or_else(|error| panic!("authorized ABI: {error:?}"));
         abi.set_access_declaration(declaration);
         abi
     }
@@ -1990,11 +2049,16 @@ mod tests {
         let mut declaration = AccessSet::builder();
         declaration
             .read_principal_key(owner, actor, b"allowed")
-            .expect("declaration");
-        let declaration = AccessDeclaration::explicit(declaration.build().expect("set"));
+            .unwrap_or_else(|error| panic!("declaration: {error:?}"));
+        let declaration = AccessDeclaration::explicit(
+            declaration
+                .build()
+                .unwrap_or_else(|error| panic!("set: {error:?}")),
+        );
         for (calldata, permitted) in [(b"allowed".as_slice(), true), (b"denied".as_slice(), false)]
         {
-            let capabilities = CapabilitySet::new([Capability::StorageRead]).expect("capabilities");
+            let capabilities = CapabilitySet::new([Capability::StorageRead])
+                .unwrap_or_else(|error| panic!("capabilities: {error:?}"));
             let mut abi = authorized_abi(
                 owner,
                 actor,
@@ -2017,25 +2081,34 @@ mod tests {
         let namespace = StorageNamespace::principal(owner, actor);
         let mut storage = Storage::new();
         let mut transaction = storage.transaction(namespace);
-        transaction.write(b"route", b"secret").expect("route");
-        transaction.write(b"secret", b"value").expect("secret");
+        transaction
+            .write(b"route", b"secret")
+            .unwrap_or_else(|error| panic!("route: {error:?}"));
+        transaction
+            .write(b"secret", b"value")
+            .unwrap_or_else(|error| panic!("secret: {error:?}"));
         let _ = transaction.commit();
         let mut declaration = AccessSet::builder();
         declaration
             .read_key(namespace, b"route")
-            .expect("route declaration");
-        let capabilities = CapabilitySet::new([Capability::StorageRead]).expect("capabilities");
+            .unwrap_or_else(|error| panic!("route declaration: {error:?}"));
+        let capabilities = CapabilitySet::new([Capability::StorageRead])
+            .unwrap_or_else(|error| panic!("capabilities: {error:?}"));
         let mut abi = authorized_abi(
             owner,
             actor,
             capabilities,
             storage,
-            AccessDeclaration::explicit(declaration.build().expect("set")),
+            AccessDeclaration::explicit(
+                declaration
+                    .build()
+                    .unwrap_or_else(|error| panic!("set: {error:?}")),
+            ),
         );
         let selected = abi
             .storage_read(&mut activity_meter(), b"route")
-            .expect("declared read")
-            .expect("route value");
+            .unwrap_or_else(|error| panic!("declared read: {error:?}"))
+            .unwrap_or_else(|| panic!("route value"));
         assert_eq!(
             abi.storage_read(&mut activity_meter(), &selected),
             Err(AbiError::AccessDeclaration)
@@ -2051,10 +2124,16 @@ mod tests {
             Capability::Call { program: callee },
             Capability::SharedStorageWrite,
         ])
-        .expect("capabilities");
+        .unwrap_or_else(|error| panic!("capabilities: {error:?}"));
         let mut declaration = AccessSet::builder();
-        declaration.call(callee).expect("call declaration");
-        let declaration = AccessDeclaration::explicit(declaration.build().expect("set"));
+        declaration
+            .call(callee)
+            .unwrap_or_else(|error| panic!("call declaration: {error:?}"));
+        let declaration = AccessDeclaration::explicit(
+            declaration
+                .build()
+                .unwrap_or_else(|error| panic!("set: {error:?}")),
+        );
         let mut root = authorized_abi(
             owner,
             actor,
@@ -2064,7 +2143,7 @@ mod tests {
         );
         let child_frame = crate::abi::CallFrameId::root()
             .child(1)
-            .expect("child frame");
+            .unwrap_or_else(|error| panic!("child frame: {error:?}"));
         let child_capabilities = root
             .stage_call(
                 callee,
@@ -2072,7 +2151,7 @@ mod tests {
                 vec![Capability::SharedStorageWrite],
                 child_frame,
             )
-            .expect("declared call");
+            .unwrap_or_else(|error| panic!("declared call: {error:?}"));
         let mut child = Abi::nested(
             crate::ABI_V2_VERSION,
             callee,
@@ -2081,7 +2160,7 @@ mod tests {
             root.verified_receipts(),
             root.verified_balances(),
         )
-        .expect("child ABI");
+        .unwrap_or_else(|error| panic!("child ABI: {error:?}"));
         child.set_access_declaration(declaration);
         assert_eq!(
             child.storage_write_selected(
@@ -2103,10 +2182,10 @@ mod tests {
             Capability::Call { program: callee },
             Capability::SharedStorageWrite,
         ])
-        .expect("capabilities");
+        .unwrap_or_else(|error| panic!("capabilities: {error:?}"));
         let reachable = capabilities
             .reachable_accesses(owner, actor)
-            .expect("reachable set");
+            .unwrap_or_else(|error| panic!("reachable set: {error:?}"));
         assert!(reachable
             .storage_accesses()
             .any(|access| { access.namespace() == StorageNamespace::shared(owner) }));
