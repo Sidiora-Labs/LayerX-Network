@@ -2997,3 +2997,19 @@ symbol = "SharedSupplyPort emit_mint"
 observed = "Unused private imports are removed and documentation identifiers use backticks. Stateless shared-supply methods are associated functions with all workspace callers migrated. Existing constructor calls and test assertions remain. Emission converts the same supply pointer, balance pointer and maximum supply constants with checked conversions returning PortRefusal::OutOfRange; the old cast suppression is removed. Opcode order and constant values remain unchanged. Strict all-target Clippy exits 0 and cargo test exits 0 with five passed, zero failed and zero ignored. Touched-file rustfmt check exits 0. Exact commands, exits and raw output are in qual-logs/programs-lint-pass10/gates.jsonl, evm-clippy.log, evm-tests.log and porting-rustfmt-check.log."
 assumption = "Workspace reference searches found SharedSupplyPort callers only in its own shared_supply module. These focused gates qualify the EVM crate repair; aggregate workspace and dependency-policy results are recorded separately."
 severity = "note"
+
+[observation.6.11.cosmwasm-porting-strict-lint-qualified]
+task = "6.11"
+file = "programs/porting/cosmwasm/src/monetary.rs programs/porting/cosmwasm/src/qualify.rs programs/porting/cosmwasm/src/reference.rs programs/porting/cosmwasm/src/shared_orderbook.rs programs/porting/cosmwasm/src/storage.rs"
+symbol = "StateBinding::portable OrderBook"
+observed = "Unused private imports are removed, documentation identifiers use backticks and shared-orderbook tests retain panic-on-error Result handling. StateBinding::portable explicitly matches every existing variant and continues to return true for each; its callers, key encodings and assertions are unchanged. Strict all-target Clippy exits 0 and cargo test exits 0 with nine passed, zero failed and zero ignored. Touched-file rustfmt check exits 0. Exact commands, exits and raw output are in qual-logs/programs-lint-pass10/gates.jsonl, cosmwasm-clippy.log, cosmwasm-tests.log and porting-rustfmt-check.log."
+assumption = "No lint suppression, fallback, assertion relaxation, manifest, lockfile, ABI header, fixture or vendor change is introduced by the porting repairs."
+severity = "note"
+
+[observation.6.11.programs-workspace-lint-porting-qualified]
+task = "6.11"
+file = "Makefile programs/tools/dependency-policy.sh programs/deny.toml programs/porting"
+symbol = "programs-lint check"
+observed = "With the Solana, EVM and CosmWasm repairs applied, make programs-lint exits 0. The module-boundary prerequisite passes; cargo clippy --locked --workspace --all-targets --features layerx-programs-sandbox/host-ffi -- -D warnings passes; sh programs/tools/dependency-policy.sh reports dependency, vendoring, unsafe and integer-only policies passed; cargo deny check advisories sources reports advisories ok and sources ok; cargo deny check bans --exclude-dev reports bans ok. make check exits 0 including state-commitment transition and Programs artifact execution for protocols 2 and 3. git diff --check and cg spec lint exit 0; spec lint retains nine missing-path warnings. Raw output and exact command exits are in qual-logs/programs-lint-pass10/gates.jsonl, programs-lint-2.log, check-final.log, final-diff-check.log and final-spec-lint.log."
+assumption = "The dependency policy and both cargo-deny stages were executed unchanged. Previously reported paste, der, getrandom and windows-sys refusals did not recur in this invocation. Vendor dependency MSRV warnings remain in Clippy output. These are local gate results, not deployment or release certification."
+severity = "note"
