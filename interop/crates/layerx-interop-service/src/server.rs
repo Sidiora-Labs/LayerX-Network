@@ -20,7 +20,8 @@ use layerx_interop_gateway::trace::TraceId;
 use layerx_interop_gateway::GatewayCore;
 use layerx_platform_gateway::http::{IncomingRequest, OutgoingResponse};
 use layerx_platform_gateway::store::{
-    KeyRecord, Reservation, TapCredentialRecord, TapNonceConsumption,
+    Completion, KeyRecord, Reservation, ReservationRequest, TapCredentialRecord,
+    TapNonceConsumption,
 };
 use layerx_platform_gateway::{
     authenticate_gateway_key, gateway_audit_event, gateway_digest, verify_activity_operation,
@@ -170,15 +171,17 @@ fn authenticated(
     };
     match config.store.reserve(
         &record,
-        &scope,
-        &request_digest,
-        observed_at,
-        config.idempotency_seconds,
-        &request_digest,
-        idempotency,
-        &record.principal_digest,
-        &audit,
-        &continuation,
+        ReservationRequest {
+            idempotency_scope: &scope,
+            request_digest: &request_digest,
+            now: observed_at,
+            retention_seconds: config.idempotency_seconds,
+            activity_id: &request_digest,
+            protocol_idempotency_key: idempotency,
+            principal_digest: &record.principal_digest,
+            audit_event: &audit,
+            continuation: &continuation,
+        },
     ) {
         Ok(Reservation::Revoked) => return failure(401, "api_key_required", None),
         Ok(Reservation::RateLimited {
@@ -229,16 +232,16 @@ fn authenticated(
     );
     if config
         .store
-        .complete(
-            &scope,
-            &request_digest,
-            dispatched.durable_state,
-            &hex(&body),
-            dispatched.receipt_hex.as_deref().unwrap_or(""),
-            dispatched.activity_id.as_deref(),
-            &record.principal_digest,
-            &completion_audit,
-        )
+        .complete(Completion {
+            idempotency_scope: &scope,
+            request_digest: &request_digest,
+            state: dispatched.durable_state,
+            response_hex: &hex(&body),
+            receipt_hex: dispatched.receipt_hex.as_deref().unwrap_or(""),
+            activity_id: dispatched.activity_id.as_deref(),
+            principal_digest: &record.principal_digest,
+            audit_event: &completion_audit,
+        })
         .is_err()
     {
         return failure(503, "persistence_unavailable", Some(5));
