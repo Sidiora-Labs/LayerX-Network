@@ -148,7 +148,7 @@ type SDKMetadata struct {
 
 func PlatformSDKGo() SDKMetadata {
 	return SDKMetadata{
-		Module:          "github.com/Sidiora-Labs/LayerX-Protocol/platform/sdk/go",
+		Module:          "github.com/Sidiora-Labs/LayerX-Network/platform/sdk/go",
 		Version:         "0.1.0",
 		AgentOperations: len(AllAgentOperations()),
 		HumanOperations: len(AllHumanOperations()),
