@@ -269,8 +269,15 @@ fn canonical_wasm_arguments(args: &[WasmValue]) -> Vec<u8> {
 
 fn execution_value(value: WasmiExecutionValue) -> crate::ExecutionValue {
     match value.value_type {
-        WasmiExecutionValueType::I32 => crate::ExecutionValue::I32(value.bits as u32 as i32),
-        WasmiExecutionValueType::I64 => crate::ExecutionValue::I64(value.bits as i64),
+        WasmiExecutionValueType::I32 => crate::ExecutionValue::I32(i32::from_le_bytes([
+            value.bits.to_le_bytes()[0],
+            value.bits.to_le_bytes()[1],
+            value.bits.to_le_bytes()[2],
+            value.bits.to_le_bytes()[3],
+        ])),
+        WasmiExecutionValueType::I64 => {
+            crate::ExecutionValue::I64(i64::from_le_bytes(value.bits.to_le_bytes()))
+        }
     }
 }
 
@@ -659,7 +666,7 @@ impl ProgramInstance {
         Ok(())
     }
 
-    pub(crate) fn take_execution_trace(
+    fn take_execution_trace(
         &mut self,
         policy: crate::TracePolicy,
         identities: TraceIdentities,
@@ -715,7 +722,7 @@ impl ProgramInstance {
                     reason: "execution trace instruction allocation accounting overflowed"
                         .to_string(),
                 })?;
-            if previous_post.map_or(true, |post| !std::sync::Arc::ptr_eq(post, &transition.pre)) {
+            if previous_post.is_none_or(|post| !std::sync::Arc::ptr_eq(post, &transition.pre)) {
                 unique_state_count = unique_state_count.checked_add(1).ok_or_else(|| {
                     ExecutionFault::EngineFault {
                         reason: "execution trace state cardinality overflowed".to_string(),
@@ -1203,7 +1210,7 @@ impl ProgramInstance {
             .map_err(|refusal| ExecutionFault::Resource { refusal })?;
         let current = memory.data(&self.store).len();
         if continuation.linear_memory.len() < current
-            || continuation.linear_memory.len() % 65_536 != 0
+            || !continuation.linear_memory.len().is_multiple_of(65_536)
         {
             return Err(ExecutionFault::MemoryOutOfBounds);
         }
