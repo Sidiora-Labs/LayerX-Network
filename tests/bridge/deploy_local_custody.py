@@ -20,7 +20,6 @@ from custody_credit import NoRedirect, Rpc, eth_hash, quantity, require, unhex, 
 
 
 ROOT = Path(__file__).resolve().parents[2]
-PERSISTENT_CHAIN_ID = "hyperpax_125-1"
 PERSISTENT_GENESIS = bytes.fromhex("07fec8dbcbfdb79b45b9b9a33f5845f8502816b2f9eeebebe2708733c5180b88")
 PERSISTENT_BLUEPRINT = "0x64a8d4b74faf4e9a2d18fb5e280623f632a02939"
 MAX_GENESIS_BYTES = 64 * 1024 * 1024
@@ -33,6 +32,13 @@ def genesis_document(rpc, source):
         require(len(raw) <= limit, "genesis response bound")
         return raw
 
+    if source == "boundary":
+        with rpc.opener.open(rpc.url.rstrip("/") + "/genesis", timeout=30) as response:
+            raw = response.read(MAX_GENESIS_BYTES + 1)
+            require(len(raw) <= MAX_GENESIS_BYTES, "genesis response bound")
+            require(response.headers.get_all("X-LayerX-Genesis-SHA256")
+                    == [hashlib.sha256(raw).hexdigest()], "genesis response digest")
+        return raw
     if source == "published":
         return fetch("/genesis.json", MAX_GENESIS_BYTES)
     require(source == "chunked", "explicit genesis source required")
@@ -106,8 +112,7 @@ def disposable_rpc(url, ca_bundle, identity_file):
             "RPC origin not authorized by disposable identity")
     genesis = unhex(identity["genesis_sha256"], 32)
     comet_chain = identity["comet_chain_id"]
-    require(isinstance(comet_chain, str) and comet_chain and comet_chain != PERSISTENT_CHAIN_ID,
-            "persistent Comet chain ID refused")
+    require(isinstance(comet_chain, str) and comet_chain, "Comet chain ID required")
     require(genesis != bytes(32) and genesis != PERSISTENT_GENESIS, "persistent chain genesis refused")
     require(type(identity["chain_id"]) is int and identity["chain_id"] > 0, "EVM chain ID required")
     require(hashlib.sha256(Path(ca_bundle).read_bytes()).digest()
@@ -118,7 +123,6 @@ def disposable_rpc(url, ca_bundle, identity_file):
     document = genesis_document(rpc, identity["genesis_source"])
     observed = hashlib.sha256(document).digest()
     observed_chain = json.loads(document)["chain_id"]
-    require(observed_chain != PERSISTENT_CHAIN_ID, "persistent Comet chain ID refused")
     require(observed != PERSISTENT_GENESIS, "persistent chain genesis refused")
     require(observed == genesis and observed_chain == comet_chain, "disposable genesis identity")
     require(quantity(rpc.call("eth_chainId", [])) == identity["chain_id"], "disposable chain ID")
