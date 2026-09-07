@@ -2466,3 +2466,27 @@ symbol = "programs-check-executed-fixture programs-abi-drift"
 observed = "Passing fixture and ABI gates emit private-interface, unused-import, unused-variable and dead-code warnings from existing Programs runtime, sandbox and porting sources. Exact diagnostics are retained in qual-logs/pass6-final-executed-fixture.log and qual-logs/pass6-final-abi-drift.log."
 assumption = "These sources are outside SDK ownership and were not modified. No warning or assertion was disabled."
 severity = "note"
+
+[observation.6.11.native-terminal-merged-input-contract]
+task = "6.11"
+file = "platform/sdk/conformance/fixtures/generate_executed_program_fixture.py platform/sdk/conformance/fixtures/receipt-programs-executed-v3.json agent/sdk/python/tests/test_native_program_binding.py agent/sdk/typescript/test/receipt-fixture.test.ts"
+symbol = "fixture NativeProgramBindingTest"
+observed = "After merging terminal dd363b46, LAYERX_TEST_NATIVE_BIN_DIR=build/bin make programs-check-executed-fixture exits 2 with ValueError: unexpected native execution fixture fields at packager line 43. The merge retains every prior native historical field exactly and adds the terminal metadata, proven by qual-logs/n15-merge-fixture-preservation.json. make programs-check-executed-v4-fixture exits 0. make agent-test-sdk-py exits 2 because the guest_abi mismatch case does not raise ValueError. After dependency installation, make agent-test-sdk-ts exits 2 with mismatched native field accepted. Raw logs: qual-logs/n15-executed.log, qual-logs/n15-executed-v4.log, qual-logs/n15-sdk-py.log, qual-logs/n15-sdk-ts-rerun.log."
+assumption = "The stored historical evidence and SDK assertions are retained. The producer input-key contract and native guest-ABI mismatch tests require reconciliation by their owners. No SDK source or assertion is changed here."
+severity = "blocker"
+
+[observation.6.11.native-historical-metadata-precheck]
+task = "6.11"
+file = "tests/programs/test_call_activity.c platform/sdk/conformance/fixtures/receipt-programs-executed-v3.json platform/sdk/conformance/fixtures/generate_native_lifecycle_fixtures.py"
+symbol = "stored_fixture_hex stored_historical_receipt"
+observed = "build/tests/programs_call_activity --post-upgrade-batch exits 1 without diagnostic output in qual-logs/n15-post-upgrade.log. make programs-check-native-lifecycle-fixtures exits 2 because --stored-historical-v3 returns 1, in qual-logs/n15-lifecycle.log. The merged fixture contains two receipt_digest_hex markers, retained in qual-logs/n15-historical-field-counts.json; stored_fixture_hex rejects a second marker before receipt decoding."
+assumption = "Both entrypoints execute the same historical precheck. Preserve duplicate-field rejection and all original signed evidence while reconciling the shared fixture representation. Post-upgrade execution is not qualified by the failing precheck."
+severity = "blocker"
+
+[observation.6.11.runtime-strict-transfer-api-coordination]
+task = "6.11"
+file = "programs/crates/layerx-programs-runtime/src/transfer.rs programs/crates/layerx-programs-runtime/src/ffi_transfer.rs programs/crates/layerx-programs-sandbox/src/host_ffi.rs programs/crates/layerx-programs-sandbox/src/usage.rs"
+symbol = "TransferCapability::settle_authorized_set reserve_host_sandbox_escrow_charge sandbox_escrow_charge_root"
+observed = "The strict runtime all-targets host-ffi Clippy location pipeline records cargo exit 101 and grep/sort/uniq exits 0 in qual-logs/n15-clippy-pipeline-exits.txt. The remaining diagnostics within the edited runtime file group are transfer.rs:651 unused_self and transfer.rs:983,1024 too_many_arguments. calls.rs, execute.rs, ffi_call.rs and crypto have no remaining locations. Full location inventory: qual-logs/n15-clippy-locations.log; diagnostic text: qual-logs/n15-runtime-clippy-second.log. The full locked runtime tests with interpreter Wasm, make check, make programs-abi-drift and the artifacts ASan target each exit 0 in qual-logs/n15-runtime-test.log, qual-logs/n15-check.log, qual-logs/n15-abi-drift.log and qual-logs/n15-artifacts-asan.log. Tested source contents are bound by qual-logs/n15-tested-source.json."
+assumption = "The associated settlement call requires its ffi_transfer.rs caller to change. Grouping both public sandbox escrow functions requires the sandbox host_ffi.rs and usage.rs callers to change; the fixed-field SandboxEscrowCharge type now supports that follow-up. Those callers are outside the authorized file split. No assertion, bound or lint check is relaxed. Strict runtime Clippy is not qualified, and remaining locations are not all outside the edited file group."
+severity = "blocker"
