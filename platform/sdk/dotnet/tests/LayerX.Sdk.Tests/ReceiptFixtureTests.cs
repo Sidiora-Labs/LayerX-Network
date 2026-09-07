@@ -112,7 +112,10 @@ public sealed class ReceiptFixtureTests
         var method = typeof(ProgramsClient).GetMethod("DecodeSignedCall", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
         method.Invoke(null, new object[] { new ProgramCall(nativeCall, new ProtocolAmount("1000"), signed) });
         Assert.Throws<System.Reflection.TargetInvocationException>(() => method.Invoke(null, new object[] { new ProgramCall(nativeCall, new ProtocolAmount("999"), signed) }));
-        Assert.Throws<System.Reflection.TargetInvocationException>(() => method.Invoke(null, new object[] { new ProgramCall(nativeCall with { ResponseCapacity = 17 }, new ProtocolAmount("1000"), signed) }));
+        var changed = nativeCall with { ResponseCapacity = (nativeCall.ResponseCapacity + 1) % 1_048_577 };
+        Assert.NotEqual(nativeCall.ResponseCapacity, changed.ResponseCapacity);
+        changed.Encode();
+        Assert.Throws<System.Reflection.TargetInvocationException>(() => method.Invoke(null, new object[] { new ProgramCall(changed, new ProtocolAmount("1000"), signed) }));
         for (var length = 0; length < payload.Length; length++) Assert.Throws<ArgumentException>(() => NativeProgramCall.Decode(payload[..length]));
     }
 

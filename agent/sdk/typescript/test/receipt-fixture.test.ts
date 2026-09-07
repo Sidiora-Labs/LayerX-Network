@@ -210,16 +210,35 @@ const { decodeSignedProgramCall } = await import("../src/program-wire.js");
 const nativeModel = decodeNativeProgramCall(hexBytes(nativeFixture.payload_hex));
 const nativeRequest = new NativeProgramRequest(nativeModel, 1000n, hexBytes(nativeFixture.signed_activity_hex));
 assert((await decodeSignedProgramCall(nativeRequest)).activityId === nativeFixture.activity_id_hex, "native signed binding");
-for (const changed of [
-  { ...nativeModel, programId: new Uint8Array(32).fill(0x22) }, { ...nativeModel, guestAbi: 2 as const },
-  { ...nativeModel, entrypoint: "other" }, { ...nativeModel, calldata: new Uint8Array([1]) },
-  { ...nativeModel, capabilities: new Uint8Array([0, 1]) }, { ...nativeModel, accessDeclaration: new Uint8Array([1]) },
-  { ...nativeModel, responseCapacity: 17 }, { ...nativeModel, resources: [999n, ...nativeModel.resources.slice(1)] as unknown as typeof nativeModel.resources },
-]) {
+const changedProgramId = nativeModel.programId.slice();
+const nonzeroIndex = changedProgramId.findIndex(value => value !== 0);
+changedProgramId[nonzeroIndex] = changedProgramId[nonzeroIndex] === 1 ? 2 : 1;
+const mutateBytes = (value: Uint8Array): Uint8Array => {
+  const changed = value.length ? value.slice() : new Uint8Array(1);
+  changed[0] = (changed[0] ?? 0) ^ 1;
+  return changed;
+};
+const mismatches: { [K in keyof typeof nativeModel]: [K, (typeof nativeModel)[K]] }[keyof typeof nativeModel][] = [
+  ["programId", changedProgramId], ["guestAbi", nativeModel.guestAbi === 1 ? 2 : 1],
+  ["entrypoint", (nativeModel.entrypoint[0] === "a" ? "b" : "a") + nativeModel.entrypoint.slice(1)],
+  ["calldata", mutateBytes(nativeModel.calldata)], ["capabilities", mutateBytes(nativeModel.capabilities)],
+  ["accessDeclaration", mutateBytes(nativeModel.accessDeclaration)],
+  ["responseCapacity", (nativeModel.responseCapacity + 1) % 1_048_577],
+  ["resources", [nativeModel.resources[0] ^ 1n, nativeModel.resources[1], nativeModel.resources[2], nativeModel.resources[3], nativeModel.resources[4], nativeModel.resources[5], nativeModel.resources[6]]],
+];
+for (const [field, value] of mismatches) {
+  const original = nativeModel[field];
+  assert(value instanceof Uint8Array && original instanceof Uint8Array
+    ? value.length !== original.length || value.some((byte, index) => byte !== original[index])
+    : Array.isArray(value) && Array.isArray(original)
+      ? value.some((item, index) => item !== original[index]) : value !== original,
+  `native ${field} mutation is unchanged`);
+  const changed = { ...nativeModel, [field]: value };
+  encodeNativeProgramCall(changed);
   let rejected = false;
   try { await decodeSignedProgramCall(new NativeProgramRequest(changed, 1000n, nativeRequest.signedActivity)); } catch { rejected = true; }
   assert(rejected, "mismatched native field accepted");
 }
 let rejectedNativeFee = false;
-try { await decodeSignedProgramCall(new NativeProgramRequest(nativeModel, 999n, nativeRequest.signedActivity)); } catch { rejectedNativeFee = true; }
+try { await decodeSignedProgramCall(new NativeProgramRequest(nativeModel, nativeRequest.budget.feeLimit - 1n, nativeRequest.signedActivity)); } catch { rejectedNativeFee = true; }
 assert(rejectedNativeFee, "native envelope fee mismatch accepted");
