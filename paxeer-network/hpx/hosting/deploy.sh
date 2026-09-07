@@ -16,7 +16,7 @@ REGISTRY_BIN="${HPX_REGISTRY_BIN:-/usr/local/libexec/hpx-registry}"
 ENV_FILE="${HPX_REGISTRY_ENV:-/etc/hpx-registry.env}"
 UNIT_FILE="/etc/systemd/system/hpx-registry.service"
 NGINX_SITE="/etc/nginx/sites-available/hpx-registry"
-RELEASE_BASE="https://github.com/Sidiora-Labs/LayerX-Protocol/releases/download/hpx-registry-${SOURCE_REVISION}"
+RELEASE_BASE="https://github.com/Sidiora-Labs/LayerX-Network/releases/download/hpx-registry-${SOURCE_REVISION}"
 
 CHAIN_ID="${HPX_CHAIN_ID:-hyperpax_125-1}"
 SEED_PEERS="${HPX_SEED_PEERS:-e9c56cbadc4a96b67f69dcaaa7b4691851e945ca@31.220.74.140:26656}"

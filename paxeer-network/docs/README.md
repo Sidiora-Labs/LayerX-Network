@@ -1,6 +1,6 @@
 # Paxeer Network documentation
 
-These files document the **Paxeer Network** subtree of [Sidiora-Labs/LayerX-Protocol](https://github.com/Sidiora-Labs/LayerX-Protocol). They are not a standalone repository. The node, modules, RPC, and chain contracts live in `paxeer-network/`; LayerX execution, settlement contracts, and specifications live beside it at the monorepo root.
+These files document the **Paxeer Network** subtree of [Sidiora-Labs/LayerX-Network](https://github.com/Sidiora-Labs/LayerX-Network). They are not a standalone repository. The node, modules, RPC, and chain contracts live in `paxeer-network/`; LayerX Network execution, settlement contracts, and specifications live beside it at the monorepo root.
 
 Paxeer is the EVM L1 (chain ID `125`) LayerX uses for custody and checkpoint settlement. Co-location in this monorepo does not merge the two trust boundaries.
 
