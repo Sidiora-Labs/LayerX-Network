@@ -540,3 +540,5 @@ so the LNI client can present a uid other than the daemon
 - stopping the supervisors removes `supervisor.sock` and
   leaves no `layerxd` processes
   (`platform/hosted/node/tests/node-test.sh:197-206`)
+
+[Home](Home.md)

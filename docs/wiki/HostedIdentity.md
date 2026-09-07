@@ -416,3 +416,5 @@ Gateway local lifecycle starts the same binary and posts
 | `platform-test-trusted-boundary` | depends on `platform-test-identity` (`platform/Makefile.inc:9`; `platform/Makefile.inc:159`) |
 | `platform-test` | workspace `cargo test`, including this crate (`platform/Makefile.inc:112-113`) |
 | `platform-hosted-topology-check` | `topology-check.sh`; default manifests include identity (`platform/Makefile.inc:177-178`; `platform/hosted/tests/topology-check.sh:19`; `platform/hosted/tests/topology-check.sh:85`) |
+
+[Home](Home.md)

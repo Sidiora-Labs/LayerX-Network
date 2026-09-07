@@ -274,3 +274,5 @@ not admit the mock. The scheduled hosted journey is the gate that provisions
 a real keyring (`.github/workflows/platform.yml:1458-1510`). Those sources
 disagree if “the CLI test suite” is taken to mean only `cargo test -p
 layerx-platform-cli`.
+
+[Home](Home.md)

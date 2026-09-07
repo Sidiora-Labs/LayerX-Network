@@ -71,7 +71,7 @@ This ladder is how LayerX qualifies a checkpoint onto Paxeer. It is not "final o
 
 ## Start here
 
-- Home
-- Protocol - LXC envelope and the three rules
-- Modules - the eight economic modules and the programs surface
+- [Home](Home.md)
+- [Protocol](Protocol.md): LXC envelope and the three rules
+- [Modules](Modules.md): the eight economic modules and the programs surface
 - Security

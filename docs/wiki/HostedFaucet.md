@@ -400,3 +400,5 @@ Hosted smoke, against a real faucet URL
 inputs (`platform/Makefile.inc:161-173`). `platform-test` is workspace
 `cargo test`, including `layerx-platform-faucet`
 (`platform/Makefile.inc:112-113`; `platform/Cargo.toml:7`).
+
+[Home](Home.md)

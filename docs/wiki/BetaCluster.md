@@ -10,10 +10,10 @@ Work products land under `build/beta-cluster` (`platform/hosted/tests/beta-clust
 
 Root `Makefile` includes the platform recipes (`Makefile:2802`). The operator chain is:
 
-1. `make platform-test-tooling` — prerequisite `platform-test-cli-production-credential-refusal`, then crate tests, then `sh -n` / `bash -n` / `python3 -m py_compile` of `platform/hosted/paxeer/init-chain.sh`, `platform/hosted/tests/beta-cluster.sh`, `platform/hosted/paxeer/deploy-contracts.sh`, `platform/hosted/paxeer/prepare-beta.py`, among others (`platform/Makefile.inc:115`, `platform/Makefile.inc:115-130`, `platform/Makefile.inc:120-129`, `platform/Makefile.inc:130`).
-2. `make platform-beta-cluster-up` — `bash platform/hosted/tests/beta-cluster.sh up $(PLATFORM_BETA_CLUSTER_FLAGS)` (`platform/Makefile.inc:184-185`).
-3. `make platform-hosted-smoke` — sources `PLATFORM_BETA_CLUSTER_ENV` (default `build/beta-cluster/env`) and refuses any empty required smoke input, then runs `platform/hosted/testnet/tests/hosted-smoke.sh` (`platform/Makefile.inc:3`, `platform/Makefile.inc:161-173`).
-4. `make platform-beta-cluster-down` — `bash platform/hosted/tests/beta-cluster.sh down` (`platform/Makefile.inc:187-188`).
+1. `make platform-test-tooling` - prerequisite `platform-test-cli-production-credential-refusal`, then crate tests, then `sh -n` / `bash -n` / `python3 -m py_compile` of `platform/hosted/paxeer/init-chain.sh`, `platform/hosted/tests/beta-cluster.sh`, `platform/hosted/paxeer/deploy-contracts.sh`, `platform/hosted/paxeer/prepare-beta.py`, among others (`platform/Makefile.inc:115`, `platform/Makefile.inc:115-130`, `platform/Makefile.inc:120-129`, `platform/Makefile.inc:130`).
+2. `make platform-beta-cluster-up` - `bash platform/hosted/tests/beta-cluster.sh up $(PLATFORM_BETA_CLUSTER_FLAGS)` (`platform/Makefile.inc:184-185`).
+3. `make platform-hosted-smoke` - sources `PLATFORM_BETA_CLUSTER_ENV` (default `build/beta-cluster/env`) and refuses any empty required smoke input, then runs `platform/hosted/testnet/tests/hosted-smoke.sh` (`platform/Makefile.inc:3`, `platform/Makefile.inc:161-173`).
+4. `make platform-beta-cluster-down` - `bash platform/hosted/tests/beta-cluster.sh down` (`platform/Makefile.inc:187-188`).
 
 When `platform-beta-cluster-up` or `platform-beta-cluster-down` is among the make goals, make sets `.NOTPARALLEL` (`platform/Makefile.inc:180-182`). Smoke consumes the env file that `up` writes (`platform/Makefile.inc:3`, `platform/hosted/tests/beta-cluster.sh:61`, `platform/hosted/tests/beta-cluster.sh:1090-1113`, `platform/hosted/tests/beta-cluster.sh:1264`).
 
@@ -72,3 +72,5 @@ The upload applies PVC `layerx-program-builder-release`, starts loader pod `laye
 ## Not covered
 
 - Custody-first genesis is not performed. Bring-up waits for node genesis artifacts and then runs `deploy-contracts.sh bootstrap` (`platform/hosted/tests/beta-cluster.sh:1251-1252`). `deploy-contracts.sh` consumes LXGD/LXRR before prediction and deployment and does not expose a pre-genesis custody deploy followed by a signed native genesis that pins that vault, nor a post-genesis phase that preserves those vault and bond identities (`platform/hosted/paxeer/deploy-contracts.sh:19-28`).
+
+[Home](Home.md)
