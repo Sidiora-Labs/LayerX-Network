@@ -530,6 +530,24 @@ static lxp_result canonical_complete_append(
     write_u64(complete + 5U, sequence);
     (void)memcpy(complete + 13U, receipt_digest, 32U);
     (void)memcpy(complete + 45U, state_root, 32U);
+    offset = 0U;
+    while (offset < store->canonical_log->write_offset) {
+        lxp_log_record_header header;
+        uint8_t existing[FEED_COMPLETE_BYTES];
+        status = lxp_log_read(store->canonical_log, offset, &header, NULL, 0U);
+        if (status != LXP_OK && status != LXP_ERR_LENGTH_LIMIT) return status;
+        if (header.global_sequence == sequence &&
+            header.record_kind == LXP_LOG_CHECKPOINT &&
+            header.body_length == FEED_COMPLETE_BYTES) {
+            status = lxp_log_read(store->canonical_log, offset, &header,
+                                  existing, sizeof(existing));
+            if (status != LXP_OK) return status;
+            if (lxp_ct_memcmp(existing, complete, sizeof(complete)) != 0)
+                return LXP_ERR_LOG_CORRUPT;
+            return lxp_log_write_boundary(store->canonical_log);
+        }
+        offset += LXP_LOG_HEADER_BYTES + header.body_length;
+    }
     status = lxp_log_append(store->canonical_log, LXP_LOG_CHECKPOINT,
                             sequence, complete, sizeof(complete), &offset);
     if (status == LXP_OK)
@@ -572,8 +590,14 @@ static lxp_result store_advance(void *context, const lxp_activity *activity,
     if (status != LXP_OK) return status;
     if (lxp_ct_memcmp(activity_id, receipt->activity_id, 32U) != 0)
         return LXP_FATAL_INVARIANT;
-    if (receipt->global_sequence <= store->scanned_through_sequence)
-        return head_matches(store, receipt, digest, activity_id);
+    if (receipt->global_sequence <= store->scanned_through_sequence) {
+        status = head_matches(store, receipt, digest, activity_id);
+        if (status == LXP_OK)
+            status = canonical_complete_append(
+                store, receipt->global_sequence, digest,
+                receipt->resulting_state_root);
+        return status;
+    }
     if ((store->notice_group_open &&
          (store->open_notice_sequence != receipt->global_sequence ||
           lxp_ct_memcmp(store->open_notice_receipt_digest,
@@ -997,6 +1021,19 @@ lxp_result lxp_programs_state_feed_store_anchor(
         lxp_result unlock_status = locked ? store_unlock(store) : LXP_OK;
         return status == LXP_OK ? unlock_status : status;
     }
+}
+
+lxp_result lxp_programs_state_feed_store_bind_maintenance(
+    lx_programs_state_feed_store *store, lxp_kernel *kernel)
+{
+    if (store == NULL || kernel == NULL || store->feed.context != store ||
+        store->feed.begin != store_begin || store->feed.append != store_append ||
+        store->feed.advance != store_advance || store->feed.lock != store_lock ||
+        store->feed.unlock != store_unlock ||
+        kernel->commit_observer_context != &store->feed || kernel->observe_commit == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    kernel->observe_maintenance = observe_maintenance;
+    return LXP_OK;
 }
 
 lxp_result lxp_programs_state_feed_store_recover(
