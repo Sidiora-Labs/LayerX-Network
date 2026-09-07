@@ -21,6 +21,8 @@ Default manifests:
   platform/hosted/testnet/deployment.yaml
   platform/hosted/gateway/deployment.yaml
   platform/hosted/registry/deployment.yaml
+  platform/hosted/internal/deployment.yaml
+  platform/hosted/webhooks/deployment.yaml (namespace layerx-developer)
 
 The trusted-boundary Services (node core boundary, receipt authority, agent
 boundary, identity and Paxeer boundary) are declared by the node, identity and
@@ -85,6 +87,8 @@ topology_check() {
       "$root/platform/hosted/testnet/deployment.yaml"
       "$root/platform/hosted/gateway/deployment.yaml"
       "$root/platform/hosted/registry/deployment.yaml"
+      "$root/platform/hosted/internal/deployment.yaml"
+      "$root/platform/hosted/webhooks/deployment.yaml"
     )
   fi
   if ! command -v python3 >/dev/null 2>&1; then
@@ -484,7 +488,7 @@ class Topology:
     def add(self, document, source):
         kind = text(get(document, "kind"))
         name = text(get(document, "metadata", "name"))
-        ns = text(get(document, "metadata", "namespace")) or "default"
+        ns = text(get(document, "metadata", "namespace")) or ("layerx-developer" if source.endswith("/webhooks/deployment.yaml") else "default")
         if kind == "Namespace":
             labels = labels_of(get(document, "metadata", "labels", default={}))
             labels.setdefault("kubernetes.io/metadata.name", name)
@@ -502,6 +506,8 @@ class Topology:
                 "selector": labels_of(get(document, "spec", "selector", default={})),
                 "ports": ports,
                 "source": source,
+                "type": text(get(document, "spec", "type")) or "ClusterIP",
+                "externalName": text(get(document, "spec", "externalName")),
             }
         elif kind == "ConfigMap":
             self.configmaps[(ns, name)] = {text(key): text(value) for key, value in (get(document, "data", default={}) or {}).items()}
@@ -709,6 +715,25 @@ def check(topology):
                 results.append(("FAIL", label, detail))
                 continue
             results.append(("external", label, "separately operated; %s; callee policy is not in this repository" % detail))
+            continue
+        aliases = set()
+        while service["type"] == "ExternalName":
+            if (ns, name) in aliases:
+                results.append(("FAIL", label, "ExternalName cycle at %s/%s" % (ns, name)))
+                service = None
+                break
+            aliases.add((ns, name))
+            target = SERVICE_HOST.fullmatch(service["externalName"])
+            if target is None:
+                results.append(("FAIL", label, "ExternalName %s/%s target %s has no declared in-cluster Service" % (ns, name, service["externalName"])))
+                service = None
+                break
+            ns, name = target.group(2), target.group(1)
+            service = topology.services.get((ns, name))
+            if service is None:
+                results.append(("FAIL", label, "ExternalName target Service %s/%s is not declared" % (ns, name)))
+                break
+        if service is None:
             continue
         ports = [port for port in service["ports"] if edge["port"] in (port["port"], port["name"])]
         if not ports:

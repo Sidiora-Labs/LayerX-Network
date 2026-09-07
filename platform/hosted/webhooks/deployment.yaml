@@ -7,7 +7,6 @@ data:
   LAYERX_WEBHOOKS_REDIS_URL: rediss://redis.layerx-internal.svc:6379
   LAYERX_WEBHOOKS_KMS_URL: https://kms.layerx-internal.svc
   LAYERX_WEBHOOKS_IDENTITY_URL: https://identity.layerx-internal.svc
-  LAYERX_WEBHOOKS_COMPONENT_URL: https://component.layerx-internal.svc
   LAYERX_WEBHOOKS_AUTHORITY_URL: https://authority.layerx-internal.svc
   LAYERX_WEBHOOKS_JOURNEY_SOURCE_URL: https://journeys.layerx-internal.svc
   LAYERX_WEBHOOKS_PAYMENT_SOURCE_URL: https://payments.layerx-internal.svc
@@ -69,6 +68,7 @@ spec:
           image: ghcr.io/centra-ai/layerx-webhooks:0.1.0
           envFrom: [{ configMapRef: { name: layerx-developer-hosted } }]
           env:
+            - { name: LAYERX_WEBHOOKS_COMPONENT_URL, value: "https://layerx-agent-boundary.layerx-testnet.svc:9443" }
             - name: LAYERX_WEBHOOKS_INSTANCE_ID
               valueFrom: { fieldRef: { fieldPath: metadata.uid } }
           ports: [{ name: https, containerPort: 9444 }]
@@ -89,6 +89,10 @@ spec:
           projected:
             sources:
               - secret:
+                  name: layerx-webhooks-component-client
+                  items:
+                    - { key: token, path: tokens/component }
+              - secret:
                   name: layerx-developer-hosted-runtime
                   items:
                     - { key: tls-cert.der, path: tls/server.der }
@@ -103,7 +107,6 @@ spec:
                     - { key: dashboard-redis-password, path: dashboard-redis/password }
                     - { key: kms-token, path: tokens/kms }
                     - { key: identity-token, path: tokens/identity }
-                    - { key: component-token, path: tokens/component }
                     - { key: authority-token, path: tokens/authority }
                     - { key: journey-source-token, path: tokens/journey }
                     - { key: payment-source-token, path: tokens/payment }
@@ -267,6 +270,10 @@ spec:
         - { protocol: UDP, port: 53 }
         - { protocol: TCP, port: 443 }
         - { protocol: TCP, port: 6379 }
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: layerx-testnet } }
+          podSelector: { matchLabels: { app: layerx-node } }
+      ports: [{ protocol: TCP, port: 9446 }]
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

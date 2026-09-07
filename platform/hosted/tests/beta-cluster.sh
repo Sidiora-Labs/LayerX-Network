@@ -331,6 +331,14 @@ write_token() {
     (umask 077; random_hex 32 > "$path")
 }
 
+component_secrets_generate() {
+    local directory=$1
+    mkdir -p "$directory"
+    write_token "$directory/gateway-component.token"
+    write_token "$directory/registry-node.token"
+    write_token "$directory/webhook-component.token"
+}
+
 issue_cert() {
     local name=$1 cn=$2 usage=$3 subject_alt=$4 dir
     dir="$CA_DIR/$name"
@@ -482,12 +490,11 @@ secrets_generate() {
     write_token "$d/control-admin.token"
     write_token "$d/identity-client.token"
     write_token "$d/status-publisher.token"
-    write_token "$d/gateway-component.token"
+    component_secrets_generate "$d"
     write_token "$d/gateway-authority.token"
     write_token "$d/gateway-identity.token"
     write_token "$d/registry-request.token"
     write_token "$d/registry-publication.token"
-    write_token "$d/registry-node.token"
     write_token "$d/registry-authority.token"
     write_token "$d/provisioning.key"
     write_token "$d/cursor.key"
@@ -502,7 +509,7 @@ secrets_generate() {
     printf 'layerx-dashboard' > "$d/dashboard-redis.username"
     write_token "$d/dashboard-redis.password"
     local token
-    for token in kms identity component authority journey payment approval program source-trigger operator; do
+    for token in kms identity authority journey payment approval program source-trigger operator; do
         write_token "$d/developer-$token.token"
     done
     cp "$CA_DIR/sequencer.pub.hex" "$d/sequencer-public-key"
@@ -584,6 +591,8 @@ secrets_apply() {
     apply_secret "$ns" layerx-faucet-redis-client --from-file=username="$s/faucet-redis.username" --from-file=password="$s/faucet-redis.password"
     apply_secret "$ns" layerx-gateway-server-tls --from-file=server.crt.der="$c/gateway/cert.der" --from-file=server.key.der="$c/gateway/key.der"
     apply_secret "$ns" layerx-gateway-client-identity --from-file=client.p12="$c/gateway-client/client.p12" --from-file=password="$c/gateway-client/password"
+    apply_secret "$ns" layerx-webhooks-component-client --from-file=token="$s/webhook-component.token"
+    apply_secret "$dev" layerx-webhooks-component-client --from-file=token="$s/webhook-component.token"
     apply_secret "$ns" layerx-gateway-component-client --from-file=token="$s/gateway-component.token"
     apply_secret "$ns" layerx-gateway-authority-client --from-file=token="$s/gateway-authority.token" --from-file=sequencer-public-key="$s/sequencer-public-key" \
         --from-file=sequencer-id="$s/sequencer-id" --from-file=sequencer-first-batch="$s/sequencer-first-batch" \
@@ -628,7 +637,7 @@ secrets_apply() {
         --from-file=webhook-redis-username="$s/webhook-redis.username" --from-file=webhook-redis-password="$s/webhook-redis.password" \
         --from-file=dashboard-redis-username="$s/dashboard-redis.username" --from-file=dashboard-redis-password="$s/dashboard-redis.password" \
         --from-file=kms-token="$s/developer-kms.token" --from-file=identity-token="$s/developer-identity.token" \
-        --from-file=component-token="$s/developer-component.token" --from-file=authority-token="$s/developer-authority.token" \
+        --from-file=authority-token="$s/developer-authority.token" \
         --from-file=journey-source-token="$s/developer-journey.token" --from-file=payment-source-token="$s/developer-payment.token" \
         --from-file=approval-source-token="$s/developer-approval.token" --from-file=program-source-token="$s/developer-program.token" \
         --from-file=source-trigger-token="$s/developer-source-trigger.token" --from-file=webhook-operator-token="$s/developer-operator.token" \
@@ -1354,4 +1363,6 @@ main() {
     esac
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

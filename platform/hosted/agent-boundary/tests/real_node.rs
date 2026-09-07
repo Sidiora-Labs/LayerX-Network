@@ -1023,6 +1023,7 @@ struct Cluster {
     program_token: String,
     gateway_token: String,
     registry_token: String,
+    webhook_token: String,
     state_dir: PathBuf,
     asset: [u8; 32],
     genesis_receipt_state_root: [u8; 32],
@@ -1231,19 +1232,53 @@ struct BoundarySetup {
     client: Client,
     gateway_token: String,
     registry_token: String,
+    webhook_token: String,
     state_dir: PathBuf,
     tls: TlsMaterial,
+}
+
+fn component_tokens(tokens_dir: &Path) -> (String, String, String) {
+    let status = must(
+        Command::new("bash")
+            .arg("-c")
+            .arg("source \"$1\"; component_secrets_generate \"$2\"")
+            .arg("component-secrets")
+            .arg(repository_root().join("platform/hosted/tests/beta-cluster.sh"))
+            .arg(tokens_dir)
+            .status(),
+        "generate component credentials",
+    );
+    assert!(status.success());
+    let gateway_token = must(
+        fs::read_to_string(tokens_dir.join("gateway-component.token")),
+        "gateway credential",
+    )
+    .trim_end()
+    .to_owned();
+    let registry_token = must(
+        fs::read_to_string(tokens_dir.join("registry-node.token")),
+        "registry credential",
+    )
+    .trim_end()
+    .to_owned();
+    let webhook_token = must(
+        fs::read_to_string(tokens_dir.join("webhook-component.token")),
+        "webhook credential",
+    )
+    .trim_end()
+    .to_owned();
+    (gateway_token, registry_token, webhook_token)
 }
 
 fn start_boundary(root: &Path, socket: &Path, setup: &NodeSetup) -> BoundarySetup {
     let tls = tls_material(root);
     let tokens_dir = root.join("tokens");
     make_dir(&tokens_dir, 0o755);
-    let gateway_token = token();
-    let registry_token = token();
+    let (gateway_token, registry_token, webhook_token) = component_tokens(&tokens_dir);
     for (name, value) in [
         ("gateway.token", format!("{gateway_token}\n")),
         ("registry.token", registry_token.clone()),
+        ("webhook.token", format!("{webhook_token}\r\n")),
         ("node.token", format!("{}\r\n", setup.program_token)),
     ] {
         let path = tokens_dir.join(name);
@@ -1282,6 +1317,10 @@ fn start_boundary(root: &Path, socket: &Path, setup: &NodeSetup) -> BoundarySetu
         "LAYERX_AGENT_BOUNDARY_REGISTRY_TOKEN_FILE",
         text(&tokens_dir.join("registry.token")),
     );
+    environment.insert(
+        "LAYERX_AGENT_BOUNDARY_WEBHOOK_TOKEN_FILE",
+        text(&tokens_dir.join("webhook.token")),
+    );
     environment.insert("LAYERX_AGENT_BOUNDARY_LNI_SOCKET", text(socket));
     environment.insert(
         "LAYERX_AGENT_BOUNDARY_NODE_URL",
@@ -1315,6 +1354,7 @@ fn start_boundary(root: &Path, socket: &Path, setup: &NodeSetup) -> BoundarySetu
         client,
         gateway_token,
         registry_token,
+        webhook_token,
         state_dir,
         tls,
     }
@@ -1336,8 +1376,10 @@ fn start_cluster_with_custody(custody: Option<CustodySetup>) -> Cluster {
         "the real-node harness must run as root so the boundary can run under uid {BOUNDARY_UID}"
     );
     let repository = repository_root();
-    let layerxd = repository.join("build/bin/layerxd");
-    let builder = repository.join("build/bin/layerx-genesis-build");
+    let native = std::env::var_os("LAYERX_TEST_NATIVE_BIN_DIR")
+        .map_or_else(|| repository.join("build/bin"), PathBuf::from);
+    let layerxd = native.join("layerxd");
+    let builder = native.join("layerx-genesis-build");
     assert!(layerxd.is_file(), "{} is not built", layerxd.display());
     assert!(builder.is_file(), "{} is not built", builder.display());
     let root = std::env::temp_dir().join(format!(
@@ -1382,6 +1424,7 @@ fn start_cluster_with_custody(custody: Option<CustodySetup>) -> Cluster {
         program_token: setup.program_token,
         gateway_token: boundary.gateway_token,
         registry_token: boundary.registry_token,
+        webhook_token: boundary.webhook_token,
         state_dir: boundary.state_dir,
         asset: genesis.asset,
         genesis_receipt_state_root: genesis.receipt_state_root,
@@ -1464,6 +1507,35 @@ fn check_readiness(cluster: &Cluster) {
 
 fn check_entitlements(cluster: &Cluster, signed: &[u8]) {
     let client = &cluster.client;
+    for path in [
+        "/v1/activities",
+        "/v1/programs/call",
+        "/v1/programs/deploy",
+        "/v1/programs/upgrade",
+        "/v1/programs/wind-down",
+        "/v1/programs/simulate",
+    ] {
+        let response = client.call(&Call::submit(
+            path,
+            &cluster.webhook_token,
+            "webhook-refused",
+            signed,
+        ));
+        assert_refusal(&response, 403, "entitlement_denied");
+    }
+    for path in [
+        "/v1/protocol/account-state/head".to_owned(),
+        format!("/v1/receipts/{}", "0".repeat(64)),
+        format!("/v1/programs/activities/{}", "0".repeat(64)),
+        "/v1/programs/receipts/by-idempotency/webhook-refused".to_owned(),
+        "/v1/programs/account-state/changes?after_sequence=0".to_owned(),
+    ] {
+        assert_refusal(
+            &client.get(&path, Some(&cluster.webhook_token)),
+            403,
+            "entitlement_denied",
+        );
+    }
     let anonymous = client.call(&Call {
         method: "POST",
         path: "/v1/activities",
@@ -1602,6 +1674,28 @@ fn check_receipt_routes(cluster: &Cluster, submitted: &Submitted) {
     );
     assert_eq!(internal.status, 200, "{}", internal.text());
     assert_eq!(internal.json(), receipt.json()["result"]);
+    let webhook = client.get(
+        &format!("/internal/v1/receipts/{}", submitted.activity_id),
+        Some(&cluster.webhook_token),
+    );
+    assert_eq!(webhook.status, 200, "{}", webhook.text());
+    assert_eq!(webhook.body, internal.body);
+    assert_refusal(
+        &client.get(
+            "/internal/v1/receipts/not-hex",
+            Some(&cluster.webhook_token),
+        ),
+        400,
+        "invalid_activity_id",
+    );
+    assert_refusal(
+        &client.get(
+            &format!("/internal/v1/receipts/{}?extra=1", submitted.activity_id),
+            Some(&cluster.webhook_token),
+        ),
+        404,
+        "not_found",
+    );
     let unknown = client.get(
         &format!("/v1/receipts/{}", hex(&random32())),
         Some(&cluster.gateway_token),
@@ -2343,4 +2437,69 @@ fn check_program_refusal_artifact_endpoint(cluster: &Cluster, result: &serde_jso
         http_get(cluster.program_port, &wrong_digest, &cluster.program_token).status,
         200
     );
+}
+
+#[test]
+fn webhook_credential_configuration_refuses_shared_or_invalid_material() {
+    let root = std::env::temp_dir().join(format!("webhook-admission-{}", hex(&random32())));
+    make_dir(&root, 0o700);
+    let _tokens = component_tokens(&root);
+    for (webhook_file, message) in [
+        (
+            "gateway-component.token",
+            "webhook bearer token must be distinct",
+        ),
+        (
+            "registry-node.token",
+            "webhook bearer token must be distinct",
+        ),
+        ("missing.token", "No such file"),
+    ] {
+        let output = must(
+            Command::new(env!("CARGO_BIN_EXE_layerx-agent-boundary"))
+                .env_clear()
+                .env(
+                    "LAYERX_AGENT_BOUNDARY_GATEWAY_TOKEN_FILE",
+                    root.join("gateway-component.token"),
+                )
+                .env(
+                    "LAYERX_AGENT_BOUNDARY_REGISTRY_TOKEN_FILE",
+                    root.join("registry-node.token"),
+                )
+                .env(
+                    "LAYERX_AGENT_BOUNDARY_WEBHOOK_TOKEN_FILE",
+                    root.join(webhook_file),
+                )
+                .output(),
+            "boundary credential startup",
+        );
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains(message));
+    }
+    for material in [vec![], vec![b'a'; 4097]] {
+        write(&root.join("webhook-component.token"), &material, 0o600);
+        let output = must(
+            Command::new(env!("CARGO_BIN_EXE_layerx-agent-boundary"))
+                .env_clear()
+                .env(
+                    "LAYERX_AGENT_BOUNDARY_GATEWAY_TOKEN_FILE",
+                    root.join("gateway-component.token"),
+                )
+                .env(
+                    "LAYERX_AGENT_BOUNDARY_REGISTRY_TOKEN_FILE",
+                    root.join("registry-node.token"),
+                )
+                .env(
+                    "LAYERX_AGENT_BOUNDARY_WEBHOOK_TOKEN_FILE",
+                    root.join("webhook-component.token"),
+                )
+                .output(),
+            "boundary invalid credential startup",
+        );
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("does not contain a bounded secret")
+        );
+    }
+    must(fs::remove_dir_all(&root), "credential cleanup");
 }
