@@ -3,7 +3,10 @@ use layerx_proof::merkle::Proof;
 use layerx_proof::program::{
     verify_authorized_program_execution, AuthorizedProgramExecutionExpectation,
 };
-use layerx_proof::receipt::{verify_program_outcome, verify_sequencer_signature, AuthorizedBatch};
+use layerx_proof::receipt::{
+    authorized_maintained_activity_batch, verify_program_outcome, verify_sequencer_signature,
+    AuthorizedBatch, MaintainedOutcomeEvidence,
+};
 use layerx_wire::hash::{receipt_digest, receipt_execution_batch_id, Domain};
 use layerx_wire::receipt::{decode, decode_batch_header, decode_merkle_proof, encode_unsigned};
 use serde::{Deserialize, Serialize};
@@ -26,6 +29,24 @@ pub(super) struct BatchEvidence {
     pub header_hex: String,
     pub header_signature: String,
     pub receipt_proof_hex: String,
+    #[serde(default)]
+    pub batch_identity: BatchIdentity,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(super) enum BatchIdentity {
+    Historical {},
+    OccupancyMaintenanceV2 {
+        receipt_hex: String,
+        receipt_proof_hex: String,
+    },
+}
+
+impl Default for BatchIdentity {
+    fn default() -> Self {
+        Self::Historical {}
+    }
 }
 
 #[derive(Deserialize)]
@@ -102,50 +123,13 @@ pub(super) fn verify(
     {
         return Err(error("receipt identity"));
     }
-    let header_bytes = canonical_hex(&stored.evidence.header_hex, 4096)?;
-    let header = decode_batch_header(&header_bytes).map_err(error)?;
-    if header.network_id() != network_id
-        || header.protocol_version() != PROTOCOL_VERSION
-        || protocol.global_sequence() < header.first_sequence()
-        || protocol.global_sequence() > header.last_sequence()
-    {
-        return Err(error("batch domain or sequence"));
-    }
-    let signature: [u8; 64] = canonical_hex(&stored.evidence.header_signature, 64)?
-        .try_into()
-        .map_err(error)?;
-    let wire_proof = decode_merkle_proof(&canonical_hex(&stored.evidence.receipt_proof_hex, 4096)?)
-        .map_err(error)?;
-    let proof = Proof::new(
-        wire_proof.leaf_index(),
-        wire_proof.leaf_count(),
-        wire_proof.siblings().to_vec(),
-    )
-    .map_err(error)?;
-    let authorization = SequencerAuthorization::new(header.sequencer_id(), key, 1, u64::MAX);
-    let included = verify_receipt(
-        receipt_bytes,
-        &proof,
-        &header_bytes,
-        &signature,
-        &authorization,
-    )
-    .map_err(error)?;
-    let header = included.header().header();
-    let batch_id = receipt_execution_batch_id(protocol, header).map_err(error)?;
-    if protocol.batch_id() != batch_id
-        || protocol.previous_state_root() != header.previous_state_root()
-        || protocol.resulting_state_root() != header.resulting_state_root()
+    let authority = authorized_activity_batch(&stored.evidence, receipt_bytes, key, network_id)?;
+    if protocol.batch_id() != authority.batch_id()
+        || protocol.previous_state_root() != authority.previous_state_root()
+        || protocol.resulting_state_root() != authority.resulting_state_root()
     {
         return Err(error("receipt state or batch identity"));
     }
-    let authority = AuthorizedBatch::new(
-        batch_id,
-        protocol.asset(),
-        header.previous_state_root(),
-        header.resulting_state_root(),
-        key,
-    );
     let terminal = canonical_hex(&stored.terminal_payload, MAX_ACTIVITY_BYTES)?;
     let graph = canonical_hex(&stored.call_graph, MAX_ACTIVITY_BYTES)?;
     if terminal.is_empty() && graph.is_empty() && protocol.result_code() < 0 {
@@ -182,6 +166,89 @@ pub(super) fn verify(
     Ok(())
 }
 
+fn authorized_activity_batch(
+    evidence: &BatchEvidence,
+    receipt_bytes: &[u8],
+    key: [u8; 32],
+    network_id: u32,
+) -> Result<AuthorizedBatch, String> {
+    let receipt = decode(receipt_bytes).map_err(error)?;
+    let protocol = receipt.protocol().ok_or_else(|| error("receipt shape"))?;
+    let header_bytes = canonical_hex(&evidence.header_hex, 4096)?;
+    let header = decode_batch_header(&header_bytes).map_err(error)?;
+    if header.network_id() != network_id
+        || header.protocol_version() != PROTOCOL_VERSION
+        || protocol.global_sequence() < header.first_sequence()
+        || protocol.global_sequence() > header.last_sequence()
+    {
+        return Err(error("batch domain or sequence"));
+    }
+    let signature: [u8; 64] = canonical_hex(&evidence.header_signature, 64)?
+        .try_into()
+        .map_err(error)?;
+    let wire_proof =
+        decode_merkle_proof(&canonical_hex(&evidence.receipt_proof_hex, 4096)?).map_err(error)?;
+    let proof = Proof::new(
+        wire_proof.leaf_index(),
+        wire_proof.leaf_count(),
+        wire_proof.siblings().to_vec(),
+    )
+    .map_err(error)?;
+    let authorization = SequencerAuthorization::new(header.sequencer_id(), key, 1, u64::MAX);
+    let included = verify_receipt(
+        receipt_bytes,
+        &proof,
+        &header_bytes,
+        &signature,
+        &authorization,
+    )
+    .map_err(error)?;
+    let header = included.header().header();
+    let authority = AuthorizedBatch::new(
+        protocol.batch_id(),
+        protocol.asset(),
+        header.previous_state_root(),
+        header.resulting_state_root(),
+        key,
+    );
+    match &evidence.batch_identity {
+        BatchIdentity::Historical {} => {
+            let batch_id = receipt_execution_batch_id(protocol, header).map_err(error)?;
+            if protocol.batch_id() != batch_id {
+                return Err(error("receipt state or batch identity"));
+            }
+            Ok(authority)
+        }
+        BatchIdentity::OccupancyMaintenanceV2 {
+            receipt_hex,
+            receipt_proof_hex,
+        } => {
+            let maintenance = canonical_hex(receipt_hex, MAX_ACTIVITY_BYTES)?;
+            let wire_proof =
+                decode_merkle_proof(&canonical_hex(receipt_proof_hex, 4096)?).map_err(error)?;
+            let maintenance_proof = Proof::new(
+                wire_proof.leaf_index(),
+                wire_proof.leaf_count(),
+                wire_proof.siblings().to_vec(),
+            )
+            .map_err(error)?;
+            authorized_maintained_activity_batch(
+                receipt_bytes,
+                &authority,
+                &MaintainedOutcomeEvidence {
+                    header: &header_bytes,
+                    header_signature: &signature,
+                    activity_proof: &proof,
+                    maintenance: &maintenance,
+                    maintenance_proof: &maintenance_proof,
+                    authorization: &authorization,
+                },
+            )
+            .map_err(error)
+        }
+    }
+}
+
 fn empty_call_graph_root() -> [u8; 32] {
     let mut digest = Sha256::new();
     digest.update(Domain::ContextHash.tag());
@@ -192,6 +259,156 @@ fn empty_call_graph_root() -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn must<T, E: std::fmt::Debug>(result: Result<T, E>) -> T {
+        result.unwrap_or_else(|failure| panic!("{failure:?}"))
+    }
+
+    #[test]
+    fn historical_native_evidence_retains_identity_and_root_checks() {
+        let fixture: serde_json::Value = must(serde_json::from_str(include_str!(
+            "../../authority/tests/fixtures/real-program-deploy-receipt.json"
+        )));
+        let field = |name: &str| {
+            fixture[name]
+                .as_str()
+                .unwrap_or_else(|| panic!("fixture field"))
+        };
+        assert_eq!(fixture["proof_index"], 0);
+        assert_eq!(fixture["proof_count"], 1);
+        assert_eq!(fixture["proof_siblings"], serde_json::json!([]));
+        let mut proof = layerx_wire::encode::Encoder::new(17);
+        must(proof.structure_header(0x4d50));
+        must(proof.u32(0));
+        must(proof.u32(1));
+        must(proof.u8(0));
+        must(proof.bytes(&[], 0));
+        let mut document = serde_json::json!({
+            "header_hex": field("header_hex"),
+            "header_signature": field("header_signature_hex"),
+            "receipt_proof_hex": hex(&proof.finish()),
+        });
+        let receipt_bytes = must(canonical_hex(field("receipt_hex"), MAX_ACTIVITY_BYTES));
+        let receipt = must(decode(&receipt_bytes));
+        let protocol = receipt
+            .protocol()
+            .unwrap_or_else(|| panic!("protocol receipt"));
+        let header = must(decode_batch_header(&must(canonical_hex(
+            field("header_hex"),
+            4096,
+        ))));
+        let key = parse_hex32(field("sequencer_public_key_hex")).unwrap_or_else(|| panic!("key"));
+        for explicit in [false, true] {
+            if explicit {
+                document["batch_identity"] = serde_json::json!({"kind": "historical"});
+            }
+            let evidence = must(serde_json::from_value(document.clone()));
+            let activity = must(authorized_activity_batch(
+                &evidence,
+                &receipt_bytes,
+                key,
+                header.network_id(),
+            ));
+            assert_eq!(activity.batch_id(), protocol.batch_id());
+            assert_eq!(
+                activity.previous_state_root(),
+                protocol.previous_state_root()
+            );
+            assert_eq!(
+                activity.resulting_state_root(),
+                protocol.resulting_state_root()
+            );
+            assert!(authorized_activity_batch(
+                &evidence,
+                &receipt_bytes,
+                [0; 32],
+                header.network_id()
+            )
+            .is_err());
+            assert!(authorized_activity_batch(
+                &evidence,
+                &receipt_bytes,
+                key,
+                header.network_id() + 1
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn maintained_signed_evidence_authenticates_activity_identity_and_refuses_substitution() {
+        let fixture: serde_json::Value = must(serde_json::from_str(include_str!(
+            "../../gateway/tests/fixtures/maintained-authority.json"
+        )));
+        let receipt_bytes = must(canonical_hex(
+            fixture["receipt_hex"]
+                .as_str()
+                .unwrap_or_else(|| panic!("receipt")),
+            MAX_ACTIVITY_BYTES,
+        ));
+        let key = parse_hex32(
+            fixture["sequencer_public_key"]
+                .as_str()
+                .unwrap_or_else(|| panic!("key")),
+        )
+        .unwrap_or_else(|| panic!("key encoding"));
+        let document = &fixture["authority"]["batch_evidence"];
+        let evidence: BatchEvidence = must(serde_json::from_value(document.clone()));
+        let header = must(decode_batch_header(&must(canonical_hex(
+            &evidence.header_hex,
+            4096,
+        ))));
+        let activity = must(authorized_activity_batch(
+            &evidence,
+            &receipt_bytes,
+            key,
+            header.network_id(),
+        ));
+        let receipt = must(decode(&receipt_bytes));
+        let protocol = receipt.protocol().unwrap_or_else(|| panic!("protocol"));
+        assert_eq!(activity.batch_id(), protocol.batch_id());
+        assert_eq!(
+            activity.previous_state_root(),
+            protocol.previous_state_root()
+        );
+        assert_eq!(
+            activity.resulting_state_root(),
+            protocol.resulting_state_root()
+        );
+        for case in 0..4 {
+            let mut changed = document.clone();
+            match case {
+                0 => {
+                    changed
+                        .as_object_mut()
+                        .unwrap_or_else(|| panic!("evidence"))
+                        .remove("batch_identity");
+                }
+                1 => {
+                    changed["batch_identity"] = serde_json::json!({"kind": "historical"});
+                }
+                2 => {
+                    changed["batch_identity"]["receipt_proof_hex"] =
+                        changed["receipt_proof_hex"].clone();
+                }
+                3 => {
+                    let text = changed["batch_identity"]["receipt_hex"]
+                        .as_str()
+                        .unwrap_or_else(|| panic!("maintenance"));
+                    let mut bytes = must(canonical_hex(text, MAX_ACTIVITY_BYTES));
+                    let last = bytes.len() - 1;
+                    bytes[last] ^= 1;
+                    changed["batch_identity"]["receipt_hex"] = serde_json::json!(hex(&bytes));
+                }
+                _ => unreachable!(),
+            }
+            let evidence = must(serde_json::from_value(changed));
+            assert!(
+                authorized_activity_batch(&evidence, &receipt_bytes, key, header.network_id())
+                    .is_err()
+            );
+        }
+    }
 
     #[test]
     fn artifact_documents_reject_identity_substitution_partial_pairs_and_noncanonical_hex() {
