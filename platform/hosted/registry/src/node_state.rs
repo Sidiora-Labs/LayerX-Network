@@ -54,6 +54,9 @@ struct BatchEvidence {
 }
 
 impl NodeProgramStateSource {
+    ///
+    /// # Errors
+    /// Refuses missing authority configuration and endpoints that are not distinct HTTPS or loopback URLs.
     pub fn connect(
         endpoint: &str,
         authorization: String,
@@ -105,6 +108,9 @@ impl NodeProgramStateSource {
             .is_some_and(|deadline| Instant::now() >= deadline)
     }
 
+    ///
+    /// # Errors
+    /// Returns the protocol verifier refusal for invalid or stale deployment evidence.
     pub fn verify_deployment(
         &self,
         proof: &DeploymentProof,
@@ -115,6 +121,9 @@ impl NodeProgramStateSource {
             .map_err(|error| format!("protocol deployment evidence refused: {error}"))
     }
 
+    ///
+    /// # Errors
+    /// Returns the protocol verifier refusal for invalid historical deployment evidence.
     pub fn verify_stored_deployment(
         &self,
         proof: &DeploymentProof,
@@ -124,10 +133,16 @@ impl NodeProgramStateSource {
             .map_err(|error| format!("stored protocol deployment evidence refused: {error}"))
     }
 
+    ///
+    /// # Errors
+    /// Refuses unavailable node or replica responses and invalid, unverified or stale head evidence.
     pub fn current_head(&self, now_ms: u64) -> Result<AccountStateHead, String> {
         self.parse_head(&self.get("/v1/protocol/account-state/head")?, Some(now_ms))
     }
 
+    ///
+    /// # Errors
+    /// Refuses unavailable or invalid evidence and a receipt digest different from the requested digest.
     pub fn receipt_head(&self, digest: [u8; 32]) -> Result<AccountStateHead, String> {
         let path = format!("/v1/receipts/{}/account-state", hex::encode(&digest));
         let head = self.parse_head(&self.get(&path)?, None)?;
@@ -137,6 +152,9 @@ impl NodeProgramStateSource {
         Ok(head)
     }
 
+    ///
+    /// # Errors
+    /// Refuses unavailable or malformed records, digest mismatches and records not anchored at the current head.
     pub fn program_state(
         &self,
         program: ProgramId,
@@ -174,6 +192,9 @@ impl NodeProgramStateSource {
         })
     }
 
+    ///
+    /// # Errors
+    /// Refuses unavailable or malformed feeds, invalid cursors, record bounds and inconsistent receipt evidence.
     pub fn changes(
         &self,
         after: ProgramStateCursor,

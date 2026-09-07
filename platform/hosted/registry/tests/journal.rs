@@ -150,10 +150,10 @@ fn project(mut evidence: Vec<VerifiedDeploymentEvidence>, records: Vec<Vec<u8>>)
     let resolved = ordered
         .into_iter()
         .map(|(evidence, _)| {
-            registry
-                .resolve_deployment(evidence)
-                .map(|resolved| resolved.receipt_digest())
-                .unwrap_or_else(|error| panic!("resolve deployment: {error}"))
+            registry.resolve_deployment(evidence).map_or_else(
+                |error| panic!("resolve deployment: {error}"),
+                |resolved| resolved.receipt_digest(),
+            )
         })
         .collect();
     Projection {
@@ -180,18 +180,18 @@ fn replay(journal: &FileDeploymentJournal, verifier: &ProtocolDeploymentVerifier
         .proofs()
         .unwrap_or_else(|error| panic!("replay proofs: {error}"))
     {
-        let verified = verifier
+        let deployment = verifier
             .verify_historical_deployment(&proof)
             .unwrap_or_else(|error| panic!("replay verification: {error}"));
         journal
-            .audit_projection(&verified)
+            .audit_projection(&deployment)
             .unwrap_or_else(|error| panic!("replay audit: {error}"));
         records.push(
             journal
-                .canonical_record(verified.receipt_digest())
+                .canonical_record(deployment.receipt_digest())
                 .unwrap_or_else(|error| panic!("replay record: {error}")),
         );
-        evidence.push(verified);
+        evidence.push(deployment);
     }
     project(evidence, records)
 }
@@ -431,43 +431,14 @@ fn startup_quarantines_defective_units_and_loads_the_rest() {
     let second_path = unit_path(&root, second, "envelope");
     let whole = read(&second_path);
 
-    write(&second_path, &whole[..record_frame_end(&envelope) + 3]);
-    let loaded = load(&open(&root));
-    assert_eq!(digests(&loaded), BTreeSet::from([first]));
-    assert_eq!(
-        quarantine(&loaded),
-        BTreeMap::from([(
-            second,
-            (
-                vec![second_path.clone()],
-                UnitDefect::Missing(UnitPart::Proof)
-            )
-        )])
-    );
-    assert_eq!(open(&root).proofs(), Err(UNEQUAL_SETS.to_owned()));
-    assert_eq!(
-        open(&root).canonical_record(second),
-        Err(RegistryError::JournalUnavailable)
-    );
-    assert!(open(&root)
-        .audit_projection(&evidence.upgrade)
-        .is_err_and(|error| error.contains("is corrupt")));
-
-    write(&second_path, &whole[..whole.len() - 32]);
-    let loaded = load(&open(&root));
-    assert_eq!(digests(&loaded), BTreeSet::from([first]));
-    assert_eq!(
-        quarantine(&loaded).get(&second).map(|(_, defect)| defect),
-        Some(&UnitDefect::Missing(UnitPart::Seal))
-    );
-    assert!(open(&root)
-        .proofs()
-        .is_err_and(|error| error.contains("ends before its seal")));
-
-    assert_eq!(append(&open(&root), &evidence.upgrade), second);
-    assert_eq!(
-        digests(&load(&open(&root))),
-        BTreeSet::from([first, second])
+    assert_incomplete_envelope(
+        &root,
+        &evidence,
+        first,
+        second,
+        &envelope,
+        &second_path,
+        &whole,
     );
 
     let corrupt = [0xCC; 32];
@@ -555,18 +526,7 @@ fn legacy_two_file_units_load_when_complete_and_quarantine_when_not() {
     write(&unit_path(&root, first, "deployment"), &first_record);
     write(&unit_path(&root, first, "admission"), &first_proof);
 
-    let journal = open(&root);
-    let loaded = load(&journal);
-    assert_eq!(
-        loaded.units,
-        vec![DeploymentEnvelope::from_evidence(&evidence.deploy)]
-    );
-    assert!(loaded.quarantined.is_empty());
-    assert_eq!(journal.canonical_record(first), Ok(first_record.clone()));
-    journal
-        .audit_projection(&evidence.deploy)
-        .unwrap_or_else(|error| panic!("legacy audit: {error}"));
-    assert_eq!(journal.proofs(), Ok(vec![evidence.deploy.proof().clone()]));
+    assert_complete_legacy(&root, &evidence, first, &first_record);
 
     let lone_record = unit_path(&root, second, "deployment");
     write(
@@ -685,4 +645,65 @@ fn observed_head_round_trips_and_refuses_absent_observations() {
     assert_eq!(journal.observed_head(), Ok(head));
     assert_eq!(load(&journal), JournalLoad::default());
     fs::remove_dir_all(&root).unwrap_or_else(|error| panic!("cleanup: {error}"));
+}
+
+fn assert_incomplete_envelope(
+    root: &Path,
+    evidence: &Evidence,
+    first: [u8; 32],
+    second: [u8; 32],
+    envelope: &DeploymentEnvelope,
+    second_path: &Path,
+    whole: &[u8],
+) {
+    write(second_path, &whole[..record_frame_end(envelope) + 3]);
+    let loaded = load(&open(root));
+    assert_eq!(digests(&loaded), BTreeSet::from([first]));
+    assert_eq!(
+        quarantine(&loaded),
+        BTreeMap::from([(
+            second,
+            (
+                vec![second_path.to_path_buf()],
+                UnitDefect::Missing(UnitPart::Proof)
+            )
+        )])
+    );
+    assert_eq!(open(root).proofs(), Err(UNEQUAL_SETS.to_owned()));
+    assert_eq!(
+        open(root).canonical_record(second),
+        Err(RegistryError::JournalUnavailable)
+    );
+    assert!(open(root)
+        .audit_projection(&evidence.upgrade)
+        .is_err_and(|error| error.contains("is corrupt")));
+
+    write(second_path, &whole[..whole.len() - 32]);
+    let loaded = load(&open(root));
+    assert_eq!(digests(&loaded), BTreeSet::from([first]));
+    assert_eq!(
+        quarantine(&loaded).get(&second).map(|(_, defect)| defect),
+        Some(&UnitDefect::Missing(UnitPart::Seal))
+    );
+    assert!(open(root)
+        .proofs()
+        .is_err_and(|error| error.contains("ends before its seal")));
+
+    assert_eq!(append(&open(root), &evidence.upgrade), second);
+    assert_eq!(digests(&load(&open(root))), BTreeSet::from([first, second]));
+}
+
+fn assert_complete_legacy(root: &Path, evidence: &Evidence, first: [u8; 32], first_record: &[u8]) {
+    let journal = open(root);
+    let loaded = load(&journal);
+    assert_eq!(
+        loaded.units,
+        vec![DeploymentEnvelope::from_evidence(&evidence.deploy)]
+    );
+    assert!(loaded.quarantined.is_empty());
+    assert_eq!(journal.canonical_record(first), Ok(first_record.to_vec()));
+    journal
+        .audit_projection(&evidence.deploy)
+        .unwrap_or_else(|error| panic!("legacy audit: {error}"));
+    assert_eq!(journal.proofs(), Ok(vec![evidence.deploy.proof().clone()]));
 }

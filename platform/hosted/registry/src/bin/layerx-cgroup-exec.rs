@@ -199,7 +199,7 @@ fn linux_device(device: u64) -> (u64, u64) {
     (major, minor)
 }
 
-fn supervise(limits: Limits) -> Result<ExitCode, String> {
+fn supervise(limits: &Limits) -> Result<ExitCode, String> {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|_| "system clock is unavailable".to_owned())?
@@ -282,7 +282,7 @@ fn supervise(limits: Limits) -> Result<ExitCode, String> {
 }
 
 fn main() -> ExitCode {
-    match parse().and_then(supervise) {
+    match parse().and_then(|limits| supervise(&limits)) {
         Ok(code) => code,
         Err(error) => {
             eprintln!("layerx-cgroup-exec: {error}");
