@@ -137,7 +137,8 @@ pub fn program_account_preimage(
             limit: MAX_PROGRAM_ACCOUNT_SEED_BYTES,
         });
     }
-    let seed_length = u32::try_from(seed.len()).map_err(|_| ProgramAccountError::PreimageTooLarge)?;
+    let seed_length =
+        u32::try_from(seed.len()).map_err(|_| ProgramAccountError::PreimageTooLarge)?;
     let mut preimage = Vec::with_capacity(
         PROGRAM_ACCOUNT_DOMAIN
             .len()
@@ -183,41 +184,50 @@ mod tests {
     use crate::storage::ProgramId;
 
     fn program(byte: u8) -> ProgramId {
-        ProgramId::new([byte; 32]).expect("nonzero program identifier")
+        ProgramId::new([byte; 32])
+            .unwrap_or_else(|error| panic!("nonzero program identifier: {error:?}"))
     }
 
     #[test]
     fn derivation_is_reproducible_from_public_inputs() {
-        let account_a = derive_program_account(program(1), b"vault").expect("derivation succeeds");
-        let account_b = derive_program_account(program(1), b"vault").expect("derivation succeeds");
+        let account_a = derive_program_account(program(1), b"vault")
+            .unwrap_or_else(|error| panic!("derivation succeeds: {error:?}"));
+        let account_b = derive_program_account(program(1), b"vault")
+            .unwrap_or_else(|error| panic!("derivation succeeds: {error:?}"));
         assert_eq!(account_a, account_b);
         assert_eq!(account_a.bytes(), account_b.bytes());
     }
 
     #[test]
-    fn derivation_matches_independent_preimage_hash() {
+    fn derivation_matches_independent_preimage_hash() -> Result<(), core::num::TryFromIntError> {
         let program = program(7);
         let seed = b"escrow/42";
-        let account = derive_program_account(program, seed).expect("derivation succeeds");
+        let account = derive_program_account(program, seed)
+            .unwrap_or_else(|error| panic!("derivation succeeds: {error:?}"));
 
         let mut expected_preimage = Vec::new();
         expected_preimage.extend_from_slice(PROGRAM_ACCOUNT_DOMAIN);
         expected_preimage.extend_from_slice(&program.bytes());
-        expected_preimage.extend_from_slice(&(seed.len() as u32).to_be_bytes());
+        expected_preimage.extend_from_slice(&u32::try_from(seed.len())?.to_be_bytes());
         expected_preimage.extend_from_slice(seed);
         assert_eq!(
-            program_account_preimage(program, seed).expect("preimage assembles"),
+            program_account_preimage(program, seed)
+                .unwrap_or_else(|error| panic!("preimage assembles: {error:?}")),
             expected_preimage
         );
 
-        let expected = hash_bytes(HashAlgorithm::Sha256, &expected_preimage).expect("hash succeeds");
+        let expected = hash_bytes(HashAlgorithm::Sha256, &expected_preimage)
+            .unwrap_or_else(|error| panic!("hash succeeds: {error:?}"));
         assert_eq!(account.bytes(), expected);
+        Ok(())
     }
 
     #[test]
     fn distinct_programs_derive_distinct_accounts() {
-        let left = derive_program_account(program(1), b"pool").expect("derivation succeeds");
-        let right = derive_program_account(program(2), b"pool").expect("derivation succeeds");
+        let left = derive_program_account(program(1), b"pool")
+            .unwrap_or_else(|error| panic!("derivation succeeds: {error:?}"));
+        let right = derive_program_account(program(2), b"pool")
+            .unwrap_or_else(|error| panic!("derivation succeeds: {error:?}"));
         assert_ne!(
             left.bytes(),
             right.bytes(),
@@ -228,8 +238,10 @@ mod tests {
     #[test]
     fn distinct_seeds_derive_distinct_accounts() {
         let program = program(9);
-        let first = derive_program_account(program, b"a").expect("derivation succeeds");
-        let second = derive_program_account(program, b"b").expect("derivation succeeds");
+        let first = derive_program_account(program, b"a")
+            .unwrap_or_else(|error| panic!("derivation succeeds: {error:?}"));
+        let second = derive_program_account(program, b"b")
+            .unwrap_or_else(|error| panic!("derivation succeeds: {error:?}"));
         assert_ne!(first.bytes(), second.bytes());
     }
 
@@ -238,14 +250,17 @@ mod tests {
         let program = program(3);
         // Without the length prefix, `("ab", "") and ("a", "b")`-style splits of
         // the program/seed boundary could collide. The prefix separates them.
-        let left = derive_program_account(program, b"ab").expect("derivation succeeds");
-        let right = derive_program_account(program, b"a").expect("derivation succeeds");
+        let left = derive_program_account(program, b"ab")
+            .unwrap_or_else(|error| panic!("derivation succeeds: {error:?}"));
+        let right = derive_program_account(program, b"a")
+            .unwrap_or_else(|error| panic!("derivation succeeds: {error:?}"));
         assert_ne!(left.bytes(), right.bytes());
     }
 
     #[test]
     fn empty_seed_is_admitted() {
-        let account = derive_program_account(program(5), b"").expect("derivation succeeds");
+        let account = derive_program_account(program(5), b"")
+            .unwrap_or_else(|error| panic!("derivation succeeds: {error:?}"));
         assert_eq!(account.bytes().len(), PROGRAM_ACCOUNT_BYTES);
     }
 
@@ -268,27 +283,31 @@ mod tests {
     }
 
     #[test]
-    fn domain_tag_is_bound_into_the_preimage() {
+    fn domain_tag_is_bound_into_the_preimage() -> Result<(), core::num::TryFromIntError> {
         let program = program(4);
         let seed = b"grant";
-        let preimage = program_account_preimage(program, seed).expect("preimage assembles");
+        let preimage = program_account_preimage(program, seed)
+            .unwrap_or_else(|error| panic!("preimage assembles: {error:?}"));
         assert!(preimage.starts_with(PROGRAM_ACCOUNT_DOMAIN));
         // Hashing the same fields without the domain must not reproduce the
         // account, which is what keeps derived accounts out of the principal
         // preimage space.
         let mut undomained = Vec::new();
         undomained.extend_from_slice(&program.bytes());
-        undomained.extend_from_slice(&(seed.len() as u32).to_be_bytes());
+        undomained.extend_from_slice(&u32::try_from(seed.len())?.to_be_bytes());
         undomained.extend_from_slice(seed);
-        let account = derive_program_account(program, seed).expect("derivation succeeds");
-        let undomained_digest =
-            hash_bytes(HashAlgorithm::Sha256, &undomained).expect("hash succeeds");
+        let account = derive_program_account(program, seed)
+            .unwrap_or_else(|error| panic!("derivation succeeds: {error:?}"));
+        let undomained_digest = hash_bytes(HashAlgorithm::Sha256, &undomained)
+            .unwrap_or_else(|error| panic!("hash succeeds: {error:?}"));
         assert_ne!(account.bytes(), undomained_digest);
+        Ok(())
     }
 
     #[test]
     fn matches_compares_against_raw_identifier() {
-        let account = derive_program_account(program(6), b"sub").expect("derivation succeeds");
+        let account = derive_program_account(program(6), b"sub")
+            .unwrap_or_else(|error| panic!("derivation succeeds: {error:?}"));
         let bytes = account.bytes();
         assert!(account.matches(&bytes));
         let mut altered = bytes;
@@ -298,7 +317,8 @@ mod tests {
 
     #[test]
     fn account_ordering_follows_identifier_bytes() {
-        let account = derive_program_account(program(6), b"order").expect("derivation succeeds");
+        let account = derive_program_account(program(6), b"order")
+            .unwrap_or_else(|error| panic!("derivation succeeds: {error:?}"));
         let same = account;
         assert_eq!(account.cmp(&same), core::cmp::Ordering::Equal);
     }
