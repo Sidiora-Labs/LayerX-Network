@@ -7,8 +7,9 @@ transfer sets; the module does not call `set_balance`.
 
 The C kernel lives under `src/modules/programs/`. The deterministic WASM
 runtime is `programs/crates/layerx-programs-runtime/`. Receipt-bound registry
-reads live in `programs/crates/layerx-programs-registry/`. Guest SDKs live
-under `programs/sdk/`. `platform/sdk/` holds client SDKs (dotnet, go, jvm,
+reads live in `programs/crates/layerx-programs-registry/`. Bounded leases live
+in `programs/crates/layerx-programs-sandbox/`; see [Sandbox](Sandbox.md). Guest
+SDKs live under `programs/sdk/`. `platform/sdk/` holds client SDKs (dotnet, go, jvm,
 swift, conformance, generators). CALL receipt terminal verification for
 those clients is on [SdkTerminalVerification](SdkTerminalVerification.md).
 
