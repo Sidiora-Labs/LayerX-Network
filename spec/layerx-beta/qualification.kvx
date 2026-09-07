@@ -1927,3 +1927,42 @@ symbol = "json_response authenticated reserve_operation ap2_execute history obse
 observed = "The service borrow conversions and local-variable renames compile. Reservation, adapter, trust-root, history and publication helpers preserve validation order and refusal values. Touched-file rustfmt --check, cargo test --locked --manifest-path interop/Cargo.toml --workspace, cargo clippy --locked --manifest-path interop/Cargo.toml --workspace --all-targets -- -D warnings, make interop-build and make interop-test exit 0 after rebase. Existing test names, assertion counts, ignore attributes and allow attributes are preserved. Six pre-existing migration testnet cases remain ignored by the standard workspace test command. Exact commands, exits and logs: qual-logs/au12/results.json; final gate logs: format-check.log, workspace-test.log, workspace-clippy.log, interop-build.log, interop-test.log and source-invariants.log in qual-logs/au12."
 assumption = "make interop-lint exits 2 after strict Clippy and dependency-policy.sh pass. cargo-deny reports duplicate der 0.7.10/0.8.1, getrandom 0.2.17/0.3.4/0.4.3, r-efi 5.3.0/6.0.0 and windows-sys 0.52.0/0.61.2; paste 1.0.15 is denied by RUSTSEC-2024-0436 through wasmi_core 0.13.0 and wasmi 0.31.2 in the Programs runtime dependency closure. interop/Cargo.lock, interop/deny.toml and dependency manifests remain unchanged. No policy suppression or dependency repair is included. Raw evidence: qual-logs/au12/interop-lint.log. Existing portable tests contain tautological assertions and a mismatch case accepting every result; those assertions remain unchanged, and passing this suite does not establish their advertised rejection coverage or live network certification."
 severity = "blocker"
+[observation.6.11.terminal-v4-legacy-metadata]
+task = "6.11"
+file = "agent/sdk/python/layerx_sdk/program_wire.py"
+symbol = "_decode_legacy _bind_metadata"
+observed = "The authenticated receipt-programs-principal-v4.json vector from native source 9f092ea4847065d334c1c8f01a3fa87c88526b01 fails terminal receipt metadata. Legacy decoding supplies fee zero because legacy terminal bytes contain no fee schedule, but the shared metadata check requires equality with the nonzero receipt fee schedule. Rust verified_terminal_outcome validates ABI, runtime, metering and usage for Legacy and validates fee schedule only for CandidateV4. Both existing Python functions remain intact."
+assumption = "PYTHONPATH=agent/sdk/python python3 platform/sdk/conformance/terminal-v4.test.py exits 1 in qual-logs/python-terminal-v4.log with only the principal-v4 subcase failing. The executed-v4 subcase reconstructs the applied root and verifies the V2 authority attachment; the signed mutated-leg-v4 subcase authenticates then refuses applied transfer root; executed-v3 returns recorded_terminal_root_not_locally_reconstructable. make agent-test-sdk-py passes 34 tests in qual-logs/python-sdk-final.log after packaging original V3 evidence with the existing fixture packager. Full terminal qualification remains blocked by the legacy metadata check conflict; other SDK ports are not implemented."
+severity = "blocker"
+
+[observation.6.11.terminal-v4-python-gates]
+task = "6.11"
+file = "platform/sdk/conformance/terminal-v4.test.py"
+symbol = "TerminalV4"
+observed = "CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4 make agent-test-sdk-py exits 0 with 34 tests in qual-logs/python-sdk-final.log. CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4 make programs-abi-drift exits 0 including both abi_linker tests in qual-logs/terminal-abi-drift.log. CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4 LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin make programs-check-executed-fixture exits 0 in qual-logs/terminal-executed-fixture.log. git diff --check exits 0 in qual-logs/terminal-diff-check.log."
+assumption = "These passing gates do not resolve terminal-v4-legacy-metadata. Python changes remain unqualified and uncommitted, and TypeScript, Go, JVM, Swift and .NET ports remain unimplemented. The V4 fixture regeneration gate was not run because its native producer and Rust proof sources are owned separately and were not imported."
+severity = "note"
+
+[observation.6.11.terminal-v4-legacy-metadata-reconciled]
+task = "6.11"
+file = "agent/sdk/python/layerx_sdk/program_wire.py agent/crates/layerx-proof/src/program.rs"
+symbol = "_bind_metadata verified_terminal_outcome candidate_matches"
+observed = "Python scopes fee-schedule equality to candidate ABI2 terminals, retaining ABI, runtime, metering and usage equality for every execution terminal. This matches Rust program.rs:321-336 for Legacy and program.rs:529-540 for CandidateV4. Legacy bytes encode no fee-schedule field. The fee equality remains enforced for CandidateV4; no receipt signature, usage, root or authority check changes."
+assumption = "The prior legacy metadata conflict is resolved by the reference verifier contract. Executed qualification is recorded separately."
+severity = "note"
+
+[observation.6.11.terminal-v4-python-native-producer-blocked]
+task = "6.11"
+file = "tests/programs/test_call_activity.c agent/crates/layerx-proof/tests/terminal_v4.rs Makefile platform/sdk/conformance/fixtures/generate_executed_program_v4_fixture.py"
+symbol = "TerminalV4 main programs-check-executed-v4-fixture"
+observed = "PYTHONPATH=agent/sdk/python python3 platform/sdk/conformance/terminal-v4.test.py exits 0 in qual-logs/pass4-python-terminal-v4.log, including executed-v4, principal-v4, signed mutated-leg refusal, recorded V3 outcome, truncation and trailing-byte negatives. make agent-test-sdk-py exits 0 with eight generator tests and 34 Python tests plus compileall in qual-logs/pass4-python-sdk.log. LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin make programs-check-executed-fixture exits 0 in qual-logs/pass4-executed-fixture.log. All make gates use CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4. git diff --check exits 0 in qual-logs/pass4-diff-check.log."
+assumption = "LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin make programs-check-executed-fixture programs-check-executed-v4-fixture exits 2 in qual-logs/pass4-executed-fixtures.log. The imported V4 recipe runs programs-build, make build/tests/programs_call_activity, then the generator with --encoder build/tests/programs_call_activity --check. The producer exits 1 on --stored-historical-v1 before V4 generation. Local tests/programs/test_call_activity.c lacks the imported generator's command modes, and agent/crates/layerx-proof/tests/terminal_v4.rs is absent. The generator does not read LAYERX_TEST_NATIVE_BIN_DIR; the supplied directory contains layerxd, layerx-genesis-build and layerxctl only. Native C/Rust dependencies require integration outside this ownership. Python publication and SDK mirrors remain blocked by the required V4 regeneration gate."
+severity = "blocker"
+
+[observation.6.11.terminal-v4-stored-input-qualification]
+task = "6.11"
+file = "platform/sdk/conformance/terminal-v4.test.py platform/sdk/conformance/fixtures/generate_executed_program_v4_fixture.py"
+symbol = "TerminalV4 programs-check-executed-v4-fixture"
+observed = "PYTHONPATH=agent/sdk/python python3 platform/sdk/conformance/terminal-v4.test.py, make agent-test-sdk-py, LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin make programs-check-executed-fixture, make programs-abi-drift and git diff --check each exit 0. Logs: qual-logs/pass5-python-terminal-v4.log, qual-logs/pass5-python-sdk.log, qual-logs/pass5-executed-fixture.log, qual-logs/pass5-abi-drift.log and qual-logs/pass5-diff-check.log. Make commands use CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4."
+assumption = "V4 fixtures are stored authenticated inputs. qual-logs/terminal-native-import.log establishes byte identity of the generator and executed-v4, principal-v4 and mutated-leg-v4 vectors to native 9f092ea4; V3 retains original native fields with existing packaging. programs-check-executed-v4-fixture was not run here: regeneration requires the separately owned C producer and Rust terminal_v4 proof test supplied by PR #94. PR #99 integrates after PR #94. This supersedes the local regeneration prerequisite in terminal-v4-python-native-producer-blocked; it does not assert that regeneration ran or that native qualification passed here."
+severity = "note"
