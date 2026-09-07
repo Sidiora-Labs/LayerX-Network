@@ -1365,10 +1365,9 @@ fn render_terminal(
     })
 }
 
-fn verify_terminal_commitments(
+fn verify_terminal_graph(
     detail: &layerx_programs_runtime::terminal::DecodedTerminal,
     available_graph: &[u8],
-    protocol_version: u16,
     receipt: &layerx_wire::receipt::ProgramOutcome,
 ) -> Result<(), String> {
     if available_graph.is_empty()
@@ -1382,6 +1381,16 @@ fn verify_terminal_commitments(
             return Err("embedded and separately authenticated call graphs disagree".to_owned());
         }
     }
+    Ok(())
+}
+
+fn verify_terminal_commitments(
+    detail: &layerx_programs_runtime::terminal::DecodedTerminal,
+    available_graph: &[u8],
+    protocol_version: u16,
+    receipt: &layerx_wire::receipt::ProgramOutcome,
+) -> Result<(), String> {
+    verify_terminal_graph(detail, available_graph, receipt)?;
     let candidate = matches!(
         &detail.detail,
         TerminalDetail::Execution(ExecutionTerminal::CandidateV4 { .. })
@@ -1687,6 +1696,14 @@ fn verify_simulation_evidence(
     preimage.extend_from_slice(&head.observed_at.to_be_bytes());
     preimage.push(0);
     let digest: [u8; 32] = Sha256::digest(preimage).into();
+    verify_simulation_signature(evidence, key, digest)
+}
+
+fn verify_simulation_signature(
+    evidence: &Value,
+    key: [u8; 32],
+    digest: [u8; 32],
+) -> Result<(), String> {
     let declared_key: [u8; 32] = fixed_hex(
         "simulation evidence public key",
         evidence

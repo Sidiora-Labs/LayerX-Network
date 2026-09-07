@@ -49,6 +49,10 @@ pub struct Store {
 }
 
 impl Store {
+    /// # Errors
+    /// Returns an error if a required environment variable is missing, the Redis
+    /// endpoint is invalid, the CA cannot be read or decoded, or a credential
+    /// file cannot be read or contains an empty or oversized value.
     pub fn from_environment() -> Result<Self, String> {
         let endpoint = parse_endpoint(
             &env::var("LAYERX_DASHBOARD_GATEWAY_REDIS_URL")
@@ -70,10 +74,14 @@ impl Store {
         })
     }
 
+    #[must_use]
     pub fn ready(&self) -> bool {
         matches!(self.command(&["PING"]), Ok(Resp::Simple(value)) if value == "PONG")
     }
 
+    /// # Errors
+    /// Returns [`DashboardError::CorruptStore`] if Redis communication fails or
+    /// the key set, principal binding, quota fields or usage values are invalid.
     pub fn keys(&self, principal: &Principal, now: u64) -> Result<Vec<KeyView>, DashboardError> {
         let digest = principal_digest(principal);
         let ids = self.key_ids(&digest)?;
@@ -129,10 +137,16 @@ impl Store {
         Ok(keys)
     }
 
+    /// # Errors
+    /// Returns [`DashboardError::CorruptStore`] if the principal's keys or quota
+    /// usage cannot be read and validated.
     pub fn usage(&self, principal: &Principal, now: u64) -> Result<UsageSummary, DashboardError> {
         Ok(usage_summary(&self.keys(principal, now)?))
     }
 
+    /// # Errors
+    /// Returns [`DashboardError::CorruptStore`] if Redis communication fails or
+    /// the audit response structure, required fields or timestamp are invalid.
     pub fn requests(
         &self,
         principal: &Principal,
@@ -192,6 +206,9 @@ impl Store {
         Ok(records)
     }
 
+    /// # Errors
+    /// Returns [`DashboardError::CorruptStore`] if the principal's keys, quota
+    /// usage or recent audit records cannot be read and validated.
     pub fn snapshot(
         &self,
         principal: &Principal,

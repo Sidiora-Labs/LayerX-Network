@@ -18,6 +18,9 @@ pub struct Dashboard {
 }
 
 impl Dashboard {
+    /// # Errors
+    /// Returns an error if gateway or webhook Redis configuration, credentials,
+    /// CA material or webhook retry policy is missing, unreadable or invalid.
     pub fn from_environment() -> Result<Self, String> {
         Ok(Self {
             gateway: Store::from_environment()?,
@@ -25,18 +28,28 @@ impl Dashboard {
         })
     }
 
+    #[must_use]
     pub fn ready(&self) -> bool {
         self.gateway.ready() && self.webhooks.ready()
     }
 
+    /// # Errors
+    /// Returns [`DashboardError::CorruptStore`] if gateway keys or quota values
+    /// cannot be read and validated for the principal.
     pub fn keys(&self, principal: &Principal, now: u64) -> Result<Vec<KeyView>, DashboardError> {
         self.gateway.keys(principal, now)
     }
 
+    /// # Errors
+    /// Returns [`DashboardError::CorruptStore`] if gateway keys or quota usage
+    /// cannot be read and validated for the principal.
     pub fn usage(&self, principal: &Principal, now: u64) -> Result<UsageSummary, DashboardError> {
         self.gateway.usage(principal, now)
     }
 
+    /// # Errors
+    /// Returns [`DashboardError::CorruptStore`] if gateway audit records cannot
+    /// be read and validated.
     pub fn requests(
         &self,
         principal: &Principal,
@@ -45,6 +58,11 @@ impl Dashboard {
         self.gateway.requests(principal, limit.min(MAXIMUM_PAGE))
     }
 
+    /// # Errors
+    /// Returns [`DashboardError::InvalidRequest`] for an invalid activity ID,
+    /// [`DashboardError::Webhooks`] if the webhook shard is unavailable or corrupt,
+    /// or [`DashboardError::UnknownReceipt`] if no settled payment has matching
+    /// receipt-backed activity and settlement facts.
     pub fn receipt(
         &self,
         principal: &Principal,
@@ -102,6 +120,9 @@ impl Dashboard {
         })
     }
 
+    /// # Errors
+    /// Returns [`DashboardError::Webhooks`] if the principal's webhook shard
+    /// is unavailable or corrupt.
     pub fn endpoints(
         &self,
         principal: &Principal,
@@ -113,6 +134,9 @@ impl Dashboard {
             .endpoints)
     }
 
+    /// # Errors
+    /// Returns [`DashboardError::Webhooks`] if the principal's webhook shard
+    /// is unavailable or corrupt.
     pub fn deliveries(
         &self,
         principal: &Principal,
@@ -129,6 +153,9 @@ impl Dashboard {
             .collect())
     }
 
+    /// # Errors
+    /// Returns [`DashboardError::Webhooks`] if the principal's webhook shard
+    /// is unavailable or corrupt.
     pub fn dead_letters(
         &self,
         principal: &Principal,
@@ -141,6 +168,9 @@ impl Dashboard {
             .dead_letters)
     }
 
+    /// # Errors
+    /// Returns [`DashboardError::Webhooks`] if the principal's webhook shard
+    /// is unavailable or corrupt.
     pub fn payments(
         &self,
         principal: &Principal,
@@ -157,6 +187,10 @@ impl Dashboard {
             .collect())
     }
 
+    /// # Errors
+    /// Returns [`DashboardError::CorruptStore`] if gateway records cannot be
+    /// read and validated, or [`DashboardError::Webhooks`] if the webhook shard
+    /// is unavailable or corrupt.
     pub fn overview(&self, principal: &Principal, now: u64) -> Result<Overview, DashboardError> {
         let gateway = self.gateway.snapshot(principal, now, OVERVIEW_PAGE)?;
         let webhooks = self.webhooks.snapshot(principal, now, OVERVIEW_PAGE)?;

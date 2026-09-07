@@ -390,15 +390,8 @@ fn build_state(config: &Config) -> Result<State, String> {
         vault_id: config.paxeer.vault_id.clone(),
         signer_key_handle: config.paxeer.signer_key_handle.clone(),
     };
-    let paxeer_tracker_config = build_tracker_config(&config.paxeer, timeout)?;
-    let send = ActivityType::new(ModuleId::Asset, 5)
-        .map_err(|_| "asset send activity rejected".to_owned())?;
-    let receive = ActivityType::new(ModuleId::Asset, 6)
-        .map_err(|_| "asset receive activity rejected".to_owned())?;
-    let registration = ModuleRegistration::new(ModuleId::Asset, &[send, receive])
-        .map_err(|_| "asset registry rejected".to_owned())?;
-    let registry =
-        ModuleRegistry::new(&[registration]).map_err(|_| "module registry rejected".to_owned())?;
+    let paxeer_tracker_config = tracker_config(config, timeout)?;
+    let registry = asset_registry()?;
     let mut quotes = BTreeMap::new();
     for quote in &config.quotes {
         if quotes
@@ -432,14 +425,27 @@ fn build_state(config: &Config) -> Result<State, String> {
     })
 }
 
-fn build_tracker_config(config: &PaxeerConfig, timeout: Duration) -> Result<TrackerConfig, String> {
-    let rpc_trust_anchor_der = fs::read(&config.rpc_trust_anchor_der)
+fn asset_registry() -> Result<ModuleRegistry, String> {
+    let send = ActivityType::new(ModuleId::Asset, 5)
+        .map_err(|_| "asset send activity rejected".to_owned())?;
+    let receive = ActivityType::new(ModuleId::Asset, 6)
+        .map_err(|_| "asset receive activity rejected".to_owned())?;
+    let registration = ModuleRegistration::new(ModuleId::Asset, &[send, receive])
+        .map_err(|_| "asset registry rejected".to_owned())?;
+    let registry =
+        ModuleRegistry::new(&[registration]).map_err(|_| "module registry rejected".to_owned())?;
+    Ok(registry)
+}
+
+fn tracker_config(config: &Config, timeout: Duration) -> Result<TrackerConfig, String> {
+    let rpc_trust_anchor_der = fs::read(&config.paxeer.rpc_trust_anchor_der)
         .map_err(|_| "Paxeer RPC trust anchor is unavailable".to_owned())?;
     if rpc_trust_anchor_der.is_empty() {
         return Err("Paxeer RPC trust anchor is empty".to_owned());
     }
-    Ok(TrackerConfig {
+    let paxeer_tracker_config = TrackerConfig {
         endpoints: config
+            .paxeer
             .rpc_endpoints
             .iter()
             .map(|url| EndpointConfig {
@@ -448,14 +454,15 @@ fn build_tracker_config(config: &PaxeerConfig, timeout: Duration) -> Result<Trac
                 transport: EndpointTransport::PinnedTls {
                     trust_anchor_der: rpc_trust_anchor_der.clone(),
                 },
-                expected_chain_id: config.rpc_chain_id,
+                expected_chain_id: config.paxeer.rpc_chain_id,
             })
             .collect(),
-        minimum_endpoint_agreement: config.rpc_minimum_agreement,
-        required_confirmations: config.required_confirmations,
-        poll_cadence: Duration::from_secs(config.poll_cadence_seconds),
-        delayed_after_polls: config.delayed_after_polls,
-    })
+        minimum_endpoint_agreement: config.paxeer.rpc_minimum_agreement,
+        required_confirmations: config.paxeer.required_confirmations,
+        poll_cadence: Duration::from_secs(config.paxeer.poll_cadence_seconds),
+        delayed_after_polls: config.paxeer.delayed_after_polls,
+    };
+    Ok(paxeer_tracker_config)
 }
 
 fn configured_key(value: &str, label: &str) -> Result<[u8; 32], String> {
@@ -638,7 +645,7 @@ fn route(state: &State, request: &Request) -> Result<Response, Response> {
         let mut engine = engine(state, &mut journal);
         engine
             .provider_callback(&callback, &state.provider_callback_public_key, now())
-            .map_err(|failure| map_error(&failure))?;
+            .map_err(|error| map_error(&error))?;
         return Ok(ok(json!({ "accepted": true })));
     }
     if let Some(digest) = request.path.strip_prefix("/v1/orders/") {
@@ -664,7 +671,7 @@ fn route(state: &State, request: &Request) -> Result<Response, Response> {
         })));
     }
     if request.method == "POST" && request.path == "/internal/v1/work" {
-        return run_work(state, request);
+        return perform_work(state, request);
     }
     if request.method == "POST" && request.path == "/internal/v1/rebalances" {
         return rebalance(state, request);
@@ -720,14 +727,14 @@ fn create_order(state: &State, request: &Request) -> Result<Response, Response> 
         .cloned()
         .ok_or_else(|| error(404, "quote_not_found"))?;
     let order = RampOrder::bind(create, quote, principal, state.operator.clone(), now())
-        .map_err(|failure| map_error(&failure))?;
+        .map_err(|error| map_error(&error))?;
     let snapshot = journal
         .create_order(order, now())
-        .map_err(|failure| map_error(&failure))?;
+        .map_err(|error| map_error(&error))?;
     Ok(created(snapshot.presentation()))
 }
 
-fn run_work(state: &State, request: &Request) -> Result<Response, Response> {
+fn perform_work(state: &State, request: &Request) -> Result<Response, Response> {
     require_operator(state, request)?;
     let work: Work =
         serde_json::from_slice(&request.body).map_err(|_| error(400, "work_invalid"))?;
@@ -746,7 +753,7 @@ fn run_work(state: &State, request: &Request) -> Result<Response, Response> {
         },
         WorkAction::ResolveLayerx => engine.resolve_layerx(work.order_digest, now()),
     }
-    .map_err(|failure| map_error(&failure))?;
+    .map_err(|error| map_error(&error))?;
     let snapshot = journal
         .order(&work.order_digest)
         .ok_or_else(|| error(404, "order_not_found"))?;
@@ -776,7 +783,7 @@ fn rebalance(state: &State, request: &Request) -> Result<Response, Response> {
         } => {
             let (operation_id, transaction) = rebalancer
                 .submit(asset, amount, idempotency_key, now())
-                .map_err(|failure| map_error(&failure))?;
+                .map_err(|error| map_error(&error))?;
             Ok(accepted(json!({
                 "operation_id": operation_id,
                 "transaction_hash": format!("0x{}", layerx_ramp_toolkit::clients::hex(&transaction.bytes())),
@@ -810,7 +817,7 @@ fn rebalance(state: &State, request: &Request) -> Result<Response, Response> {
             }
             let report = rebalancer
                 .poll(idempotency_key, &operation_id, tracker, now())
-                .map_err(|failure| map_error(&failure))?;
+                .map_err(|error| map_error(&error))?;
             let persisted = journal
                 .paxeer(&idempotency_key)
                 .ok_or_else(|| error(404, "rebalance_not_found"))?;
@@ -827,7 +834,7 @@ fn rebalance(state: &State, request: &Request) -> Result<Response, Response> {
         Rebalance::Reconcile { idempotency_key } => {
             let (operation_id, transaction) = rebalancer
                 .reconcile(idempotency_key, now())
-                .map_err(|failure| map_error(&failure))?;
+                .map_err(|error| map_error(&error))?;
             Ok(accepted(json!({
                 "operation_id": operation_id,
                 "transaction_hash": format!("0x{}", layerx_ramp_toolkit::clients::hex(&transaction.bytes())),

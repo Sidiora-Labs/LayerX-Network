@@ -146,6 +146,7 @@ fn import_seed(
         });
         return Err(error);
     }
+    drop(seed);
     Ok(metadata)
 }
 
@@ -310,7 +311,12 @@ mod secret_boundary_tests {
 
     #[test]
     fn stdin_secret_refuses_truncation() {
-        let oversized = vec![b'a'; MAX_STDIN_SECRET_BYTES as usize + 1];
+        let oversized = vec![
+            b'a';
+            usize::try_from(MAX_STDIN_SECRET_BYTES)
+                .unwrap_or_else(|_| panic!("secret bound fits usize"))
+                + 1
+        ];
         assert!(read_secret_from(Cursor::new(oversized)).is_err());
     }
 

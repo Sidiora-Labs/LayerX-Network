@@ -54,13 +54,15 @@ pub fn platform_install_a2a(
     let mut variables = variables()?;
     let selection = select(
         configuration,
-        request.environment.clone(),
-        request.key.clone(),
-        "a2a",
-        request.token_stdin,
-        "a2a",
-        request.read_only,
-        request.rotate,
+        super::SelectionRequest {
+            environment: request.environment.clone(),
+            key: request.key.clone(),
+            fallback_key: "a2a",
+            token_stdin: request.token_stdin,
+            component: "a2a",
+            read_only: request.read_only,
+            rotate: request.rotate,
+        },
     )?;
     variables.insert(
         "LAYERX_GATEWAY_KEY_ID".to_owned(),
@@ -99,55 +101,70 @@ pub fn platform_install_a2a(
             },
         }),
     };
+    finish_installation(
+        request,
+        Installation {
+            listen,
+            mode,
+            tools,
+            command,
+            variables,
+            selection,
+            authorization_path,
+            authorization,
+            arguments,
+            card_path,
+            card,
+            registration,
+        },
+    )
+}
+
+struct Installation {
+    listen: String,
+    mode: DeploymentMode,
+    tools: Vec<ToolDefinition>,
+    command: String,
+    variables: std::collections::BTreeMap<String, String>,
+    selection: super::Selection,
+    authorization_path: PathBuf,
+    authorization: PreparedAuthorization,
+    arguments: Vec<String>,
+    card_path: PathBuf,
+    card: Value,
+    registration: Registration,
+}
+
+fn finish_installation(request: &Request, installation: Installation) -> Result<Value, String> {
+    let Installation {
+        listen,
+        mode,
+        tools,
+        command,
+        variables,
+        selection,
+        authorization_path,
+        authorization,
+        arguments,
+        card_path,
+        card,
+        registration,
+    } = installation;
     let descriptors: Vec<Value> = tools.iter().copied().map(toolset::descriptor).collect();
-    let mut paths = vec![
-        card_path.clone(),
-        registration.path.clone(),
-        authorization_path.clone(),
-    ];
-    if let Some(root) = &request.well_known {
-        paths.push(root.join(".well-known").join(CARD_FILE));
-    }
-    let mut transaction = match FileTransaction::capture(&paths) {
-        Ok(value) => value,
-        Err(error) => return Err(error),
-    };
-    let mut published: Vec<Value> = Vec::new();
-    let applied = (|| {
-        if authorization.changed {
-            transaction.begin_publication(&authorization_path)?;
-            super::write_private(&authorization_path, authorization.value.as_str())?;
-            transaction.finish_publication(&authorization_path, true)?;
-        }
-        transaction.begin_publication(&card_path)?;
-        let card_outcome = publish(&card_path, &card)?;
-        transaction.finish_publication(&card_path, card_outcome.changed)?;
-        transaction.begin_publication(&registration.path)?;
-        let registry_outcome = apply(&registration)?;
-        transaction.finish_publication(&registration.path, registry_outcome.changed)?;
-        let mut changed = authorization.changed || card_outcome.changed || registry_outcome.changed;
-        if let Some(root) = &request.well_known {
-            let path = root.join(".well-known").join(CARD_FILE);
-            transaction.begin_publication(&path)?;
-            let outcome = publish(&path, &card)?;
-            transaction.finish_publication(&path, outcome.changed)?;
-            if outcome.changed {
-                changed = true;
-            }
-            published.push(report(&path, "document", CARD_FILE, &outcome));
-        }
-        Ok::<_, String>((card_outcome, registry_outcome, changed))
-    })();
-    let (card_outcome, registry_outcome, changed) = match applied {
-        Ok(value) => value,
-        Err(error) => {
-            let rollback = transaction.rollback();
-            return match rollback {
-                Ok(()) => Err(error),
-                Err(rollback) => Err(format!("{error}; installation rollback failed: {rollback}")),
-            };
-        }
-    };
+    let Publication {
+        transaction,
+        published,
+        card_outcome,
+        registry_outcome,
+        changed,
+    } = publish_installation(
+        request,
+        &authorization_path,
+        &authorization,
+        &card_path,
+        &card,
+        &registration,
+    )?;
     if selection.rotated_gateway_key || authorization.changed {
         if let Err(error) = crate::a2a::stop_installed() {
             let rollback = transaction.rollback();
@@ -204,6 +221,76 @@ pub fn platform_install_a2a(
         "changed": changed,
         "idempotent": true,
     }))
+}
+
+struct Publication {
+    transaction: FileTransaction,
+    published: Vec<Value>,
+    card_outcome: super::Outcome,
+    registry_outcome: super::Outcome,
+    changed: bool,
+}
+
+fn publish_installation(
+    request: &Request,
+    authorization_path: &Path,
+    authorization: &PreparedAuthorization,
+    card_path: &Path,
+    card: &Value,
+    registration: &Registration,
+) -> Result<Publication, String> {
+    let mut paths = vec![
+        card_path.to_path_buf(),
+        registration.path.clone(),
+        authorization_path.to_path_buf(),
+    ];
+    if let Some(root) = &request.well_known {
+        paths.push(root.join(".well-known").join(CARD_FILE));
+    }
+    let mut transaction = FileTransaction::capture(&paths)?;
+    let mut published: Vec<Value> = Vec::new();
+    let applied = (|| {
+        if authorization.changed {
+            transaction.begin_publication(authorization_path)?;
+            super::write_private(authorization_path, authorization.value.as_str())?;
+            transaction.finish_publication(authorization_path, true)?;
+        }
+        transaction.begin_publication(card_path)?;
+        let card_outcome = publish(card_path, card)?;
+        transaction.finish_publication(card_path, card_outcome.changed)?;
+        transaction.begin_publication(&registration.path)?;
+        let registry_outcome = apply(registration)?;
+        transaction.finish_publication(&registration.path, registry_outcome.changed)?;
+        let mut changed = authorization.changed || card_outcome.changed || registry_outcome.changed;
+        if let Some(root) = &request.well_known {
+            let path = root.join(".well-known").join(CARD_FILE);
+            transaction.begin_publication(&path)?;
+            let outcome = publish(&path, card)?;
+            transaction.finish_publication(&path, outcome.changed)?;
+            if outcome.changed {
+                changed = true;
+            }
+            published.push(report(&path, "document", CARD_FILE, &outcome));
+        }
+        Ok::<_, String>((card_outcome, registry_outcome, changed))
+    })();
+    let (card_outcome, registry_outcome, changed) = match applied {
+        Ok(value) => value,
+        Err(error) => {
+            let rollback = transaction.rollback();
+            return match rollback {
+                Ok(()) => Err(error),
+                Err(rollback) => Err(format!("{error}; installation rollback failed: {rollback}")),
+            };
+        }
+    };
+    Ok(Publication {
+        transaction,
+        published,
+        card_outcome,
+        registry_outcome,
+        changed,
+    })
 }
 
 pub fn agent_card(
@@ -348,7 +435,10 @@ fn prepare_authorization(path: &Path, rotate: bool) -> Result<PreparedAuthorizat
     getrandom::fill(random.as_mut())
         .map_err(|error| format!("operating-system randomness failed: {error}"))?;
     Ok(PreparedAuthorization {
-        value: Zeroizing::new(format!("lxa2a_{}", crate::encoding::hex_encode(random.as_ref()))),
+        value: Zeroizing::new(format!(
+            "lxa2a_{}",
+            crate::encoding::hex_encode(random.as_ref())
+        )),
         changed: true,
     })
 }
@@ -356,17 +446,19 @@ fn prepare_authorization(path: &Path, rotate: bool) -> Result<PreparedAuthorizat
 pub(crate) fn read_authorization(path: &Path) -> Result<Zeroizing<String>, String> {
     let expected = super::private_file_metadata(path)?;
     let mut source = String::new();
-    let file = File::open(path)
-        .map_err(|error| format!("could not read {}: {error}", path.display()))?;
+    let file =
+        File::open(path).map_err(|error| format!("could not read {}: {error}", path.display()))?;
     let opened = file
         .metadata()
         .map_err(|error| format!("could not inspect opened {}: {error}", path.display()))?;
     let current = super::private_file_metadata(path)?;
     if !super::same_file(&expected, &opened) || !super::same_file(&opened, &current) {
-        return Err(format!("{} changed while its credential was opened", path.display()));
+        return Err(format!(
+            "{} changed while its credential was opened",
+            path.display()
+        ));
     }
-    file
-        .take((MAX_AUTHORIZATION_BYTES + 1) as u64)
+    file.take((MAX_AUTHORIZATION_BYTES + 1) as u64)
         .read_to_string(&mut source)
         .map_err(|error| format!("could not read {}: {error}", path.display()))?;
     if source.len() > MAX_AUTHORIZATION_BYTES {

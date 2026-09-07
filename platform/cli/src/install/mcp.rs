@@ -40,13 +40,15 @@ pub fn platform_install_mcp(
     }
     let selection = select(
         configuration,
-        request.environment.clone(),
-        request.key.clone(),
-        "mcp",
-        request.token_stdin,
-        "mcp",
-        request.read_only,
-        request.rotate,
+        super::SelectionRequest {
+            environment: request.environment.clone(),
+            key: request.key.clone(),
+            fallback_key: "mcp",
+            token_stdin: request.token_stdin,
+            component: "mcp",
+            read_only: request.read_only,
+            rotate: request.rotate,
+        },
     )?;
     variables.insert(
         "LAYERX_GATEWAY_KEY_ID".to_owned(),
@@ -62,10 +64,7 @@ pub fn platform_install_mcp(
     let descriptors: Vec<Value> = tools.iter().copied().map(toolset::descriptor).collect();
     let mut pending = Vec::new();
     for host in selected_hosts {
-        let path = match host.path() {
-            Ok(path) => path,
-            Err(error) => return Err(error),
-        };
+        let path = host.path()?;
         pending.push((
             host,
             Registration {
@@ -76,18 +75,41 @@ pub fn platform_install_mcp(
             },
         ));
     }
+    let (registrations, changed) = publish_registrations(&pending)?;
+    Ok(json!({
+        "component": "mcp",
+        "transport": "stdio",
+        "environment": selection.environment,
+        "endpoint": selection.endpoint,
+        "network_id": selection.network_id,
+        "deployment_mode": toolset::mode_name(mode),
+        "server": {
+            "name": SERVER_NAME,
+            "command": command,
+            "args": arguments,
+            "env": variables,
+        },
+        "tools": descriptors,
+        "scopes": toolset::scopes(&tools),
+        "credentials": selection.credentials(),
+        "registrations": registrations,
+        "changed": changed,
+        "idempotent": true,
+    }))
+}
+
+fn publish_registrations(
+    pending: &[(super::Host, Registration)],
+) -> Result<(Vec<Value>, bool), String> {
     let paths = pending
         .iter()
         .map(|(_, registration)| registration.path.clone())
         .collect::<Vec<_>>();
-    let mut transaction = match FileTransaction::capture(&paths) {
-        Ok(value) => value,
-        Err(error) => return Err(error),
-    };
+    let mut transaction = FileTransaction::capture(&paths)?;
     let mut registrations = Vec::new();
     let mut changed = false;
     let applied = (|| {
-        for (host, registration) in &pending {
+        for (host, registration) in pending {
             transaction.begin_publication(&registration.path)?;
             let outcome = apply(registration)?;
             transaction.finish_publication(&registration.path, outcome.changed)?;
@@ -114,26 +136,7 @@ pub fn platform_install_mcp(
             Err(rollback) => Err(format!("{error}; installation rollback failed: {rollback}")),
         };
     }
-    Ok(json!({
-        "component": "mcp",
-        "transport": "stdio",
-        "environment": selection.environment,
-        "endpoint": selection.endpoint,
-        "network_id": selection.network_id,
-        "deployment_mode": toolset::mode_name(mode),
-        "server": {
-            "name": SERVER_NAME,
-            "command": command,
-            "args": arguments,
-            "env": variables,
-        },
-        "tools": descriptors,
-        "scopes": toolset::scopes(&tools),
-        "credentials": selection.credentials(),
-        "registrations": registrations,
-        "changed": changed,
-        "idempotent": true,
-    }))
+    Ok((registrations, changed))
 }
 
 pub(super) fn payment_binding(request: &Request) -> Result<Option<(String, String)>, String> {
