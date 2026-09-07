@@ -207,6 +207,14 @@ lxp_result lxp_genesis_bootstrap_verify(
     const struct lxp_snapshot_manifest_record *snapshot,
     const struct lxp_kernel *kernel, lxp_arena *arena,
     bool *activities_enabled);
+
+lxp_result lxp_genesis_initialized_verify(
+    const lxp_genesis_manifest *manifest,
+    const lxp_genesis_bootstrap_registration *registration,
+    uint32_t configured_network_id,
+    const struct lxp_snapshot_manifest_record *snapshot,
+    const struct lxp_kernel *kernel, lxp_arena *arena,
+    bool *activities_enabled);
 lxp_result lxp_genesis_main(
     const uint8_t *manifest_bytes, size_t manifest_length,
     const lxp_genesis_bootstrap_registration *registration,

@@ -12,3 +12,6 @@ done
 for occurrence in {1..4}; do
     bash tests/daemon/program-admission.sh "$build_dir" --maintenance-crash 3 "$occurrence"
 done
+for mutation in missing body signature truncated symlink zero-checkpoint; do
+    bash tests/daemon/program-admission.sh "$build_dir" --maintenance-crash 13 1 "--reject-$mutation"
+done
