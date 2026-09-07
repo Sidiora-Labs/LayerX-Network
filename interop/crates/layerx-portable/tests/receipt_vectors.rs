@@ -1,12 +1,12 @@
 //! Golden vector tests for portable receipt export and verification.
 //!
-//! These vectors prove that an external party can verify LayerX receipts
+//! These vectors prove that an external party can verify `LayerX` receipts
 //! using only the published format specification and trusted batch authorization.
 
 use layerx_portable::{
     interop_portable_verification, PortableReceipt, PortableReceiptError, PORTABLE_RECEIPT_FORMAT,
 };
-use layerx_proof::receipt::{AuthorizedBatch, VerificationFailure};
+use layerx_proof::receipt::AuthorizedBatch;
 
 const GOLDEN_RECEIPT_JSON: &str = r#"{
   "format": "layerx-receipt-proof-v1",
@@ -36,7 +36,7 @@ fn parse_golden_receipt_json() {
         parsed.is_ok(),
         "Golden vector must parse without error: {parsed:?}"
     );
-    let receipt = parsed.expect("golden vector parses");
+    let receipt = parsed.unwrap_or_else(|error| panic!("golden vector parses: {error:?}"));
     assert_eq!(receipt.format(), PORTABLE_RECEIPT_FORMAT);
 }
 
@@ -125,10 +125,11 @@ fn reject_unsupported_verification_level() {
 
 #[test]
 fn verify_requires_matching_batch_authorization() {
-    let receipt =
-        PortableReceipt::from_json(GOLDEN_RECEIPT_JSON.as_bytes()).expect("golden vector parses");
+    let receipt = PortableReceipt::from_json(GOLDEN_RECEIPT_JSON.as_bytes())
+        .unwrap_or_else(|error| panic!("golden vector parses: {error:?}"));
 
-    let trusted_batch = AuthorizedBatch::new([1u8; 32], [2u8; 32], [3u8; 32], [4u8; 32], [5u8; 32]);
+    let _trusted_batch =
+        AuthorizedBatch::new([1u8; 32], [2u8; 32], [3u8; 32], [4u8; 32], [5u8; 32]);
 
     let mismatched_batch =
         AuthorizedBatch::new([99u8; 32], [2u8; 32], [3u8; 32], [4u8; 32], [5u8; 32]);
@@ -157,12 +158,15 @@ fn roundtrip_export_and_verify() {
 
 #[test]
 fn export_and_json_roundtrip() {
-    let batch = AuthorizedBatch::new([1u8; 32], [2u8; 32], [3u8; 32], [4u8; 32], [5u8; 32]);
+    let _batch = AuthorizedBatch::new([1u8; 32], [2u8; 32], [3u8; 32], [4u8; 32], [5u8; 32]);
 
-    let parsed_original =
-        PortableReceipt::from_json(GOLDEN_RECEIPT_JSON.as_bytes()).expect("golden vector parses");
-    let json_output = parsed_original.to_json().expect("serializes to JSON");
-    let parsed_roundtrip = PortableReceipt::from_json(&json_output).expect("roundtrip parses");
+    let parsed_original = PortableReceipt::from_json(GOLDEN_RECEIPT_JSON.as_bytes())
+        .unwrap_or_else(|error| panic!("golden vector parses: {error:?}"));
+    let json_output = parsed_original
+        .to_json()
+        .unwrap_or_else(|error| panic!("serializes to JSON: {error:?}"));
+    let parsed_roundtrip = PortableReceipt::from_json(&json_output)
+        .unwrap_or_else(|error| panic!("roundtrip parses: {error:?}"));
 
     assert_eq!(
         parsed_original.format(),

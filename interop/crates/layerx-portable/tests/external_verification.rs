@@ -17,15 +17,19 @@ struct MockMandateVerifier {
 
 impl MockMandateVerifier {
     fn new() -> Self {
-        let adapter_id = AdapterId::new("test-adapter").expect("valid adapter id");
-        let protocol_id = AdapterId::new("test-protocol").expect("valid protocol id");
-        let spec_version = SpecVersion::parse("1.0.0").expect("valid spec version");
+        let adapter_id = AdapterId::new("test-adapter")
+            .unwrap_or_else(|error| panic!("valid adapter id: {error:?}"));
+        let protocol_id = AdapterId::new("test-protocol")
+            .unwrap_or_else(|error| panic!("valid protocol id: {error:?}"));
+        let spec_version = SpecVersion::parse("1.0.0")
+            .unwrap_or_else(|error| panic!("valid spec version: {error:?}"));
         let spec_document_digest = [1u8; 32];
         let spec = PinnedSpec::new(protocol_id, spec_version, spec_document_digest)
-            .expect("valid pinned spec");
-        let suite_id = AdapterId::new("test-suite-v1").expect("valid suite id");
-        let conformance =
-            ConformanceSuite::new(suite_id, 10, [2u8; 32]).expect("valid conformance suite");
+            .unwrap_or_else(|error| panic!("valid pinned spec: {error:?}"));
+        let suite_id = AdapterId::new("test-suite-v1")
+            .unwrap_or_else(|error| panic!("valid suite id: {error:?}"));
+        let conformance = ConformanceSuite::new(suite_id, 10, [2u8; 32])
+            .unwrap_or_else(|error| panic!("valid conformance suite: {error:?}"));
         let descriptor = AdapterDescriptor::new(adapter_id, spec, conformance);
         Self { descriptor }
     }
@@ -65,7 +69,7 @@ impl ExternalEvidenceVerifier<()> for MockMandateVerifier {
         ExternalEvidenceKind::Mandate
     }
 
-    fn media_type(&self) -> &str {
+    fn media_type(&self) -> &'static str {
         "application/test-mandate+json"
     }
 
@@ -84,7 +88,7 @@ impl ExternalEvidenceVerifier<()> for MockMandateVerifier {
 
 #[test]
 fn verify_external_mandate_with_matching_presentation() {
-    let verifier = MockMandateVerifier::new();
+    let evidence_checker = MockMandateVerifier::new();
     let payload = b"valid-mandate-payload-data";
     let presentation = ExternalPresentation::new(
         "test-adapter",
@@ -94,15 +98,15 @@ fn verify_external_mandate_with_matching_presentation() {
         "application/test-mandate+json",
         payload,
     )
-    .expect("valid presentation");
+    .unwrap_or_else(|error| panic!("valid presentation: {error:?}"));
 
-    let result = verify_external_evidence(&verifier, &presentation, &());
+    let result = verify_external_evidence(&evidence_checker, &presentation, &());
     assert!(
         result.is_ok(),
         "Valid mandate must verify successfully: {result:?}"
     );
 
-    let verified = result.expect("verification succeeds");
+    let verified = result.unwrap_or_else(|error| panic!("verification succeeds: {error:?}"));
     assert_eq!(verified.adapter(), "test-adapter");
     assert_eq!(verified.protocol(), "test-protocol");
     assert_eq!(verified.spec_version(), "1.0.0");
@@ -115,7 +119,7 @@ fn verify_external_mandate_with_matching_presentation() {
 
 #[test]
 fn reject_adapter_id_mismatch() {
-    let verifier = MockMandateVerifier::new();
+    let evidence_checker = MockMandateVerifier::new();
     let payload = b"valid-mandate-payload-data";
     let presentation = ExternalPresentation::new(
         "wrong-adapter",
@@ -125,9 +129,9 @@ fn reject_adapter_id_mismatch() {
         "application/test-mandate+json",
         payload,
     )
-    .expect("valid presentation");
+    .unwrap_or_else(|error| panic!("valid presentation: {error:?}"));
 
-    let result = verify_external_evidence(&verifier, &presentation, &());
+    let result = verify_external_evidence(&evidence_checker, &presentation, &());
     match result {
         Err(ExternalVerificationError::DescriptorMismatch) => {}
         other => panic!("Must reject adapter mismatch, got {other:?}"),
@@ -136,7 +140,7 @@ fn reject_adapter_id_mismatch() {
 
 #[test]
 fn reject_protocol_id_mismatch() {
-    let verifier = MockMandateVerifier::new();
+    let evidence_checker = MockMandateVerifier::new();
     let payload = b"valid-mandate-payload-data";
     let presentation = ExternalPresentation::new(
         "test-adapter",
@@ -146,9 +150,9 @@ fn reject_protocol_id_mismatch() {
         "application/test-mandate+json",
         payload,
     )
-    .expect("valid presentation");
+    .unwrap_or_else(|error| panic!("valid presentation: {error:?}"));
 
-    let result = verify_external_evidence(&verifier, &presentation, &());
+    let result = verify_external_evidence(&evidence_checker, &presentation, &());
     match result {
         Err(ExternalVerificationError::DescriptorMismatch) => {}
         other => panic!("Must reject protocol mismatch, got {other:?}"),
@@ -157,7 +161,7 @@ fn reject_protocol_id_mismatch() {
 
 #[test]
 fn reject_spec_version_mismatch() {
-    let verifier = MockMandateVerifier::new();
+    let evidence_checker = MockMandateVerifier::new();
     let payload = b"valid-mandate-payload-data";
     let presentation = ExternalPresentation::new(
         "test-adapter",
@@ -167,9 +171,9 @@ fn reject_spec_version_mismatch() {
         "application/test-mandate+json",
         payload,
     )
-    .expect("valid presentation");
+    .unwrap_or_else(|error| panic!("valid presentation: {error:?}"));
 
-    let result = verify_external_evidence(&verifier, &presentation, &());
+    let result = verify_external_evidence(&evidence_checker, &presentation, &());
     match result {
         Err(ExternalVerificationError::DescriptorMismatch) => {}
         other => panic!("Must reject version mismatch, got {other:?}"),
@@ -178,7 +182,7 @@ fn reject_spec_version_mismatch() {
 
 #[test]
 fn reject_evidence_kind_mismatch() {
-    let verifier = MockMandateVerifier::new();
+    let evidence_checker = MockMandateVerifier::new();
     let payload = b"valid-mandate-payload-data";
     let presentation = ExternalPresentation::new(
         "test-adapter",
@@ -188,9 +192,9 @@ fn reject_evidence_kind_mismatch() {
         "application/test-mandate+json",
         payload,
     )
-    .expect("valid presentation");
+    .unwrap_or_else(|error| panic!("valid presentation: {error:?}"));
 
-    let result = verify_external_evidence(&verifier, &presentation, &());
+    let result = verify_external_evidence(&evidence_checker, &presentation, &());
     match result {
         Err(ExternalVerificationError::EvidenceKindMismatch) => {}
         other => panic!("Must reject evidence kind mismatch, got {other:?}"),
@@ -199,7 +203,7 @@ fn reject_evidence_kind_mismatch() {
 
 #[test]
 fn reject_media_type_mismatch() {
-    let verifier = MockMandateVerifier::new();
+    let evidence_checker = MockMandateVerifier::new();
     let payload = b"valid-mandate-payload-data";
     let presentation = ExternalPresentation::new(
         "test-adapter",
@@ -209,9 +213,9 @@ fn reject_media_type_mismatch() {
         "application/wrong-media-type+json",
         payload,
     )
-    .expect("valid presentation");
+    .unwrap_or_else(|error| panic!("valid presentation: {error:?}"));
 
-    let result = verify_external_evidence(&verifier, &presentation, &());
+    let result = verify_external_evidence(&evidence_checker, &presentation, &());
     match result {
         Err(ExternalVerificationError::MediaTypeMismatch) => {}
         other => panic!("Must reject media type mismatch, got {other:?}"),
@@ -220,7 +224,7 @@ fn reject_media_type_mismatch() {
 
 #[test]
 fn preserve_adapter_verification_error() {
-    let verifier = MockMandateVerifier::new();
+    let evidence_checker = MockMandateVerifier::new();
     let payload = b"short";
     let presentation = ExternalPresentation::new(
         "test-adapter",
@@ -230,9 +234,9 @@ fn preserve_adapter_verification_error() {
         "application/test-mandate+json",
         payload,
     )
-    .expect("valid presentation");
+    .unwrap_or_else(|error| panic!("valid presentation: {error:?}"));
 
-    let result = verify_external_evidence(&verifier, &presentation, &());
+    let result = verify_external_evidence(&evidence_checker, &presentation, &());
     match result {
         Err(ExternalVerificationError::Adapter(MockVerificationError::InvalidSignature)) => {}
         other => panic!("Must preserve adapter error, got {other:?}"),
@@ -241,7 +245,7 @@ fn preserve_adapter_verification_error() {
 
 #[test]
 fn evidence_digest_changes_with_payload() {
-    let verifier = MockMandateVerifier::new();
+    let evidence_checker = MockMandateVerifier::new();
     let payload1 = b"mandate-payload-one";
     let payload2 = b"mandate-payload-two";
 
@@ -253,7 +257,7 @@ fn evidence_digest_changes_with_payload() {
         "application/test-mandate+json",
         payload1,
     )
-    .expect("valid presentation");
+    .unwrap_or_else(|error| panic!("valid presentation: {error:?}"));
 
     let presentation2 = ExternalPresentation::new(
         "test-adapter",
@@ -263,12 +267,12 @@ fn evidence_digest_changes_with_payload() {
         "application/test-mandate+json",
         payload2,
     )
-    .expect("valid presentation");
+    .unwrap_or_else(|error| panic!("valid presentation: {error:?}"));
 
-    let verified1 =
-        verify_external_evidence(&verifier, &presentation1, &()).expect("verification 1 succeeds");
-    let verified2 =
-        verify_external_evidence(&verifier, &presentation2, &()).expect("verification 2 succeeds");
+    let verified1 = verify_external_evidence(&evidence_checker, &presentation1, &())
+        .unwrap_or_else(|error| panic!("verification 1 succeeds: {error:?}"));
+    let verified2 = verify_external_evidence(&evidence_checker, &presentation2, &())
+        .unwrap_or_else(|error| panic!("verification 2 succeeds: {error:?}"));
 
     assert_ne!(
         verified1.evidence_digest(),
@@ -397,7 +401,7 @@ fn reject_oversized_payload() {
 
 #[test]
 fn verified_external_evidence_binds_all_inputs() {
-    let verifier = MockMandateVerifier::new();
+    let evidence_checker = MockMandateVerifier::new();
     let payload = b"mandate-payload-complete-binding-test";
     let presentation = ExternalPresentation::new(
         "test-adapter",
@@ -407,10 +411,10 @@ fn verified_external_evidence_binds_all_inputs() {
         "application/test-mandate+json",
         payload,
     )
-    .expect("valid presentation");
+    .unwrap_or_else(|error| panic!("valid presentation: {error:?}"));
 
-    let verified =
-        verify_external_evidence(&verifier, &presentation, &()).expect("verification succeeds");
+    let verified = verify_external_evidence(&evidence_checker, &presentation, &())
+        .unwrap_or_else(|error| panic!("verification succeeds: {error:?}"));
 
     assert_eq!(verified.adapter(), presentation.adapter());
     assert_eq!(verified.protocol(), presentation.protocol());
@@ -419,18 +423,18 @@ fn verified_external_evidence_binds_all_inputs() {
     assert_eq!(verified.media_type(), presentation.media_type());
     assert_eq!(
         verified.spec_document_digest(),
-        verifier.descriptor().spec().document_digest()
+        evidence_checker.descriptor().spec().document_digest()
     );
     assert_eq!(
         verified.conformance_suite(),
-        verifier.descriptor().conformance().suite().as_str()
+        evidence_checker.descriptor().conformance().suite().as_str()
     );
     assert_eq!(
         verified.conformance_vector_count(),
-        verifier.descriptor().conformance().vector_count()
+        evidence_checker.descriptor().conformance().vector_count()
     );
     assert_eq!(
         verified.conformance_suite_digest(),
-        verifier.descriptor().conformance().suite_digest()
+        evidence_checker.descriptor().conformance().suite_digest()
     );
 }
