@@ -565,6 +565,8 @@ secrets_generate() {
     ed25519_public_hex "$d/test-destination-signer.key" > "$d/test-destination-signer.pub.hex"
     TEST_SOURCE_DID=${LAYERX_BETA_TEST_SOURCE_DID:-did:layerx:beta:$(random_hex 16)}
     TEST_DESTINATION_DID=${LAYERX_BETA_TEST_DESTINATION_DID:-did:layerx:beta:$(random_hex 16)}
+    source "$REPO_ROOT/platform/hosted/human/material.sh"
+    human_secrets_generate
     [ "$TEST_SOURCE_DID" != "$TEST_DESTINATION_DID" ] || fail "the smoke source and destination DIDs must differ"
     TEST_AMOUNT=${LAYERX_BETA_TEST_AMOUNT:-1}
     [[ $TEST_AMOUNT =~ ^[1-9][0-9]*$ ]] || fail "LAYERX_BETA_TEST_AMOUNT must be a positive decimal"
@@ -607,7 +609,7 @@ secrets_apply() {
             --from-file=ca.der="$c/ca.der" --from-file=upstream-ca.der="$c/ca.der" --from-file=token="$s/developer-$token.token" \
             --from-file=credentials.json="$s/human-credentials.json"
     done
-    MISSING_INPUTS+=("Human production component configuration/material and local agentd, identity, security, movement and mTLS KMS providers; see platform/hosted/human/README.md")
+    human_secrets_apply
     MISSING_INPUTS+=("Authenticated Human principal cookies for journeys/approvals require the passkey assertion and session.open ceremony; credential maps remain empty")
     apply_secret "$ns" layerx-human-tls --from-file=server.crt.der="$c/human/cert.der" \
         --from-file=server.key.der="$c/human/key.der" --from-file=ca.crt="$c/ca.crt"
