@@ -1735,12 +1735,18 @@ test-finality-evidence: $(BUILD_DIR)/tests/lxp_test_finality_evidence
 $(BUILD_DIR)/tests/lxp_test_daemon_finality_authority: \
 		tests/daemon/lxp_test_finality_authority.c \
 		cmd/layerxd/lxp_daemon_finality_authority.c \
-		cmd/layerxd/lxp_daemon_finality_authority.h $(LIBRARY)
+		cmd/layerxd/lxp_daemon_finality_authority.h \
+		cmd/layerxd/lxp_daemon_evidence.c \
+		cmd/layerxd/lxp_daemon_receipt_authority.c $(LIBRARY) \
+		$(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) -Icmd/layerxd $(CFLAGS) \
 		tests/daemon/lxp_test_finality_authority.c \
-		cmd/layerxd/lxp_daemon_finality_authority.c $(LIBRARY) \
-		$(EXTRA_LDFLAGS) -lcrypto -pthread -o $@
+		cmd/layerxd/lxp_daemon_finality_authority.c \
+		cmd/layerxd/lxp_daemon_evidence.c \
+		cmd/layerxd/lxp_daemon_receipt_authority.c $(LIBRARY) \
+		$(PROGRAMS_RUNTIME_LIB) $(LIBRARY) \
+		$(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
 
 .PHONY: test-daemon-finality-authority
 .PHONY: test-program-artifacts
