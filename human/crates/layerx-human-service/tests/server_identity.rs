@@ -14,10 +14,11 @@ fn session_open_requires_real_device_metadata_before_minting_identifier() {
     assert_eq!(device.label(), "LayerX web app");
     assert_eq!(device.platform(), "web");
 
-    let missing = IdentityProjector::mint_session_device(&json!({
+    let Err(missing) = IdentityProjector::mint_session_device(&json!({
         "assertion_id": "asr_01j2h5p0yb2c4d6e8f0g2h4j6k"
-    }))
-    .expect_err("missing metadata must fail closed");
+    })) else {
+        panic!("missing metadata must fail closed");
+    };
     assert_eq!(missing.status, 400);
     assert_eq!(missing.field.as_deref(), Some("device"));
 }

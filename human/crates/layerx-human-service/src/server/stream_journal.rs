@@ -34,7 +34,6 @@ impl StreamJournal {
     }
 
     pub fn append(
-        &self,
         scope: &mut PrincipalScope<'_>,
         source: &str,
         kind: &str,
@@ -56,12 +55,12 @@ impl StreamJournal {
             return Err(ApiFailure::upstream_degraded());
         }
         let source_digest: [u8; 32] = Sha256::digest(source.as_bytes()).into();
-        let source_key =
-            RowKey::new(format!("stream-source-{}", hex(&source_digest))).map_err(store_failure)?;
+        let source_key = RowKey::new(format!("stream-source-{}", hex(&source_digest)))
+            .map_err(|error| store_failure(&error))?;
         if scope.get(Table::Stream, &source_key).is_some() {
             return Ok(());
         }
-        let head_key = RowKey::new(HEAD).map_err(store_failure)?;
+        let head_key = RowKey::new(HEAD).map_err(|error| store_failure(&error))?;
         let sequence = scope
             .get(Table::Stream, &head_key)
             .map(|row| decode_u64(row.bytes()))
@@ -77,11 +76,11 @@ impl StreamJournal {
             payload,
         };
         let bytes = serde_json::to_vec(&event).map_err(|_| ApiFailure::upstream_degraded())?;
-        let event_key =
-            RowKey::new(format!("stream-event-{sequence:016x}")).map_err(store_failure)?;
+        let event_key = RowKey::new(format!("stream-event-{sequence:016x}"))
+            .map_err(|error| store_failure(&error))?;
         scope
             .put(Table::Stream, event_key, observed_at, bytes)
-            .map_err(store_failure)?;
+            .map_err(|error| store_failure(&error))?;
         scope
             .put(
                 Table::Stream,
@@ -89,7 +88,7 @@ impl StreamJournal {
                 observed_at,
                 sequence.to_be_bytes().to_vec(),
             )
-            .map_err(store_failure)?;
+            .map_err(|error| store_failure(&error))?;
         scope
             .put(
                 Table::Stream,
@@ -97,24 +96,24 @@ impl StreamJournal {
                 observed_at,
                 sequence.to_be_bytes().to_vec(),
             )
-            .map_err(store_failure)
+            .map_err(|error| store_failure(&error))
     }
 
     pub fn open(&self, scope: &PrincipalScope<'_>) -> Result<Value, ApiFailure> {
-        let position = self.head(scope)?;
+        let position = Self::head(scope)?;
         Ok(json!({"cursor":self.cursor(scope,position)}))
     }
     pub fn next(&self, scope: &PrincipalScope<'_>, cursor: &str) -> Result<Value, ApiFailure> {
         let after = self.decode_cursor(scope, cursor)?;
-        let head = self.head(scope)?;
+        let head = Self::head(scope)?;
         if after > head {
             return Err(ApiFailure::invalid_request(Some("cursor")));
         }
         let mut events = Vec::new();
         let through = head.min(after.saturating_add(MAX_PAGE as u64));
         for sequence in after.saturating_add(1)..=through {
-            let key =
-                RowKey::new(format!("stream-event-{sequence:016x}")).map_err(store_failure)?;
+            let key = RowKey::new(format!("stream-event-{sequence:016x}"))
+                .map_err(|error| store_failure(&error))?;
             let row = scope
                 .get(Table::Stream, &key)
                 .ok_or_else(ApiFailure::unavailable)?;
@@ -154,8 +153,8 @@ impl StreamJournal {
         }
         Ok(json!({"events":events,"next_cursor":self.cursor(scope,through)}))
     }
-    fn head(&self, scope: &PrincipalScope<'_>) -> Result<u64, ApiFailure> {
-        let key = RowKey::new(HEAD).map_err(store_failure)?;
+    fn head(scope: &PrincipalScope<'_>) -> Result<u64, ApiFailure> {
+        let key = RowKey::new(HEAD).map_err(|error| store_failure(&error))?;
         scope
             .get(Table::Stream, &key)
             .map(|row| decode_u64(row.bytes()))
@@ -203,7 +202,7 @@ fn decode_u64(bytes: &[u8]) -> Result<u64, ApiFailure> {
             .map_err(|_| ApiFailure::upstream_degraded())?,
     ))
 }
-fn store_failure(error: StoreError) -> ApiFailure {
+fn store_failure(error: &StoreError) -> ApiFailure {
     match error {
         StoreError::Io(_) => ApiFailure::unavailable(),
         _ => ApiFailure::upstream_degraded(),

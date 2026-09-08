@@ -4853,4 +4853,114 @@ file = "platform/hosted/gateway/tests/tap_nonce.rs platform/hosted/gateway/src/m
 symbol = "module_schema_tests and Redis qualification prerequisite"
 observed = "The separate gateway cargo test command first exits 101 because redis-server is absent, after all 21 unit tests pass. Installing untracked Redis tooling and its liblzf/libjemalloc dependencies under qual-logs/hm2/redis/extracted allows cargo test --locked --manifest-path platform/Cargo.toml -p layerx-platform-gateway to exit 0 with all 23 tests passing. The rerun prepends extracted/usr/bin to PATH and sets LD_LIBRARY_PATH to extracted/usr/lib/x86_64-linux-gnu. Final cargo fmt --check and cargo clippy --locked --all-targets -- -D warnings for both authority and gateway exit 0. Evidence: qual-logs/hm2/hm2c-gateway-test-final.log, hm2c-redis-install.log, hm2c-fmt-final.log and hm2c-clippy-final.log."
 assumption = "The Redis tests start isolated loopback TLS servers on ephemeral ports and retain their original assertions. These passing local gates do not establish privileged native-node, cluster, image, or all-eight-route success."
+[observation.2.3.4]
+task = "2.3"
+file = "human/crates/layerx-human-service/src/server/movement_provider.rs human/crates/layerx-human-service/src/custody/provider.rs human/crates/layerx-human-kms/src/wire.rs"
+symbol = "PlanningRequest PrincipalKeyBinding ProviderSignRequest"
+observed = "PlanningRequest carries principal, tenant, operation, action key, JSON body, trace and time but no authenticated wallet binding, custody key reference or account/authority planning context. DepositStartRequest supplies money only; ExitStartRequest supplies confirmation only. PrincipalKeyBinding and ProviderSignRequest construction is private to custody. LXKP supports Ed25519 activity key operations and validates canonical LayerX disclosure; it has no EVM wallet resolution, secp256k1 transaction signing, nonce reservation or submission lookup operation."
+assumption = "A movement provider cannot infer principal ownership, payout binding or EVM signing authority from request aliases or an Ed25519 public key. Principal-scoped planning and EVM custody contracts must be supplied before successful planning and settlement execution can be qualified."
+severity = "blocker"
+
+[observation.2.3.5]
+task = "2.3"
+file = "human/crates/layerx-paxeer-client/src/deposit.rs human/crates/layerx-human-service/src/server/movement_provider.rs"
+symbol = "DepositProofVerifier::obtain MovementProviderRequest::CheckpointProof"
+observed = "DepositProofVerifier::obtain consumes a PublishedDepositProof but does not fetch its signed registration or inclusion path. The movement wire carries DebitExpectation for checkpoint lookup but no authenticated membership producer endpoint. Finalized exit balance evidence also needs a principal-bound producer contract."
+assumption = "Canonical decoding alone cannot authorize a receipt, custody proof or settlement outcome. The evidence-only provider reverifies private deposit candidates against fresh configured Paxeer quorum evidence; successful quote, withdrawal and exit integration remains unavailable pending producer and planning contracts."
+severity = "blocker"
+
+[observation.2.3.6]
+task = "2.3"
+file = "human/crates/layerx-human-service/src/server/production_components.rs human/crates/layerx-paxeer-client/src/finality.rs"
+symbol = "ProductionComponents::new validate_endpoint_agreement"
+observed = "The production composition constructs WithdrawalConfig with a single configured Paxeer endpoint and minimum_endpoint_agreement=1. Finality policy rejects production PinnedTls agreement below two."
+assumption = "Production composition requires multiple independent TLS endpoints and matching quorum configuration; the movement provider must not weaken the existing production quorum rule to accommodate a single endpoint."
+severity = "blocker"
+
+[observation.2.3.7]
+task = "2.3"
+file = "human/Cargo.toml human/crates/layerx-human-service programs/vendor"
+symbol = "movement_provider_qualification_dependencies"
+observed = "cargo fmt --all --check --manifest-path human/Cargo.toml exits 1 with formatting differences in 86 unowned paths; logs are qual-logs/hm5/fmt-all.log and qual-logs/hm5/fmt-all-final.log, with paths in qual-logs/hm5/fmt-all-paths.txt. cargo clippy --locked --manifest-path human/Cargo.toml -p layerx-human-movement-provider --all-targets -- -D warnings exits 101 with 436 errors in layerx-human-service before reaching the provider; complete diagnostics are in qual-logs/hm5/clippy.log and paths in qual-logs/hm5/clippy-paths.txt."
+assumption = "The requested aggregate formatting and Clippy gates remain failed. Unowned files and checks are unchanged; successful lint qualification of the provider cannot be asserted from a dependency failure."
+severity = "blocker"
+
+[observation.2.3.8]
+task = "2.3"
+file = "human/crates/layerx-human-movement-provider/src/tests.rs human/crates/layerx-paxeer-client/src/withdraw.rs human/crates/layerx-paxeer-client/src/wire.rs"
+symbol = "signed_native_checkpoint_proofs_replay_without_converting_them_to_authority"
+observed = "cargo test --locked --manifest-path human/Cargo.toml -p layerx-human-movement-provider exits 101: 11 unit tests pass, one fails and one live-Paxeer test is ignored. Log: qual-logs/hm5/test-final.log. The new negative assertion expects NativeMovementCodec::encode_response to refuse a checkpoint attestation after signature_r is altered. The encoder accepts it because CheckpointProof::validated_for_protocol checks structural fields and signature shape, while its documented contract reserves debit-specific attestation and settlement-domain checks for WithdrawalBoundary. The initial test build also found two getrandom error-conversion defects in the new test helper; those task-scoped defects were corrected before this executed test result."
+assumption = "The negative assertion and upstream structural codec are left intact. This is a conflict between the new test's assumed verification boundary and the existing documented API, not proof of a successful checkpoint verification or evidence that the upstream codec promises cryptographic authority. Full test qualification requires an explicit resolution without weakening checks."
+severity = "blocker"
+
+[observation.2.3.9]
+task = "2.3"
+file = "human/crates/layerx-human-movement-provider"
+symbol = "evidence_only_provider_partial_qualification"
+observed = "cargo fmt --check --manifest-path human/Cargo.toml -p layerx-human-movement-provider exits 0 (qual-logs/hm5/fmt-owned-verified.log). cargo test --locked --manifest-path human/Cargo.toml -p layerx-human-movement-provider --test startup exits 0 with one real executable startup-refusal test passing (qual-logs/hm5/startup-test.log). git diff --check exits 0 (qual-logs/hm5/diff-check.log). The aggregate test command remains failed as recorded separately."
+assumption = "The implementation provides evidence-only finality polling, deposit candidate re-verification, authenticated bounded Unix admission and durable read journaling. Planning, KMS wallet execution, withdrawal and exit remain unavailable; readiness is unavailable. No live-chain success, successful quote flow, full settlement execution, aggregate lint success, cluster gate or completed task is asserted."
+severity = "note"
+
+[observation.2.3.10]
+task = "2.3"
+file = "contracts/custody/LayerXVault.sol contracts/CheckpointRegistry.sol contracts/EmergencyExit.sol human/crates/layerx-paxeer-client/src/deposit.rs"
+symbol = "CustodyDeposit CheckpointRegistered executeExit DepositRootRegistration"
+observed = "CustodyDeposit publishes custody facts but no Ed25519 DepositRootRegistration or deposit inclusion ordering. CheckpointRegistered publishes state and availability commitments but no withdrawal-state membership witnesses or account balances. registerCheckpoint calldata contains guarantor attestations recoverable with standard full-block JSON-RPC, but not the absent state witnesses or Ed25519 registration. executeExit consumes balance proofs from the caller; its execution event cannot provide a first-exit planning witness."
+assumption = "Standard eth_getLogs, eth_getTransactionReceipt and eth_getBlockByNumber can authenticate custody and checkpoint registration but cannot invert state commitments or create a signature from the configured public key. Complete offline evidence remains necessary until an authentic publisher supplies the exact canonical registration and state witnesses through a specified publication interface outside the human crate ownership."
+severity = "blocker"
+
+[observation.2.3.11]
+task = "2.3"
+file = "agent/crates/layerx-agentd/src/human_runtime.rs human/crates/layerx-human-service/src/server/production_components.rs"
+symbol = "identity_resolve account_sequence resolve_planning_context"
+observed = "The authenticated identity response contains authority key kinds and bytes but no canonical active textual AuthorityRef. account_sequence checks only that actor and authority are nonempty and reads the actor sequence. The human service can verify custody key membership and binding evidence but its configured authority string is not authenticated by that lookup."
+assumption = "Complete principal-scoped planning requires the native identity interface to bind the canonical active owner authority reference to the returned key, revocation state and observed head, and sequence lookup to reject unrelated references. These native and agent paths are outside the human crate ownership. Readiness must remain unavailable until this authority contract and the missing witness publication contract are supplied."
+severity = "blocker"
+
+[observation.2.3.12]
+task = "2.3"
+file = "human/crates/layerx-paxeer-client/tests/disposable_custody.py tests/bridge/deploy_local_custody.py tests/bridge/custody_genesis.py contracts/governance/LayerXBetaTimelock.sol"
+symbol = "real_disposable_custody_over_verified_tls chain DisposableCustody"
+observed = "The unconditional Rust workspace test invokes a Python fixture that starts Anvil with chain ID 125 and funds a signer, deploys contracts, and deposits through that chain. Changing its identity constants to 31338 alone fails deploy_local_custody.py's exact chain-125 requirement and LayerXBetaTimelock's constructor block.chainid requirement. The existing missing-identity genesis refusal additionally depends on custody_genesis.py enforcing identity specifically for chain 125. These assertions and production contracts remain unchanged. No chain-125 process or transaction was initiated."
+assumption = "The workspace test cannot be executed under the explicit prohibition on all chain-125 transactions. A safe disposable-chain migration requires an authorized nonproduction timelock deployment path and preservation of the separate chain-125 identity refusal test without transacting, in bridge scripts and contract fixtures outside the human crate ownership. The wrong-chain 31337 refusal must remain distinct from a replacement disposable chain such as 31338."
+severity = "blocker"
+
+[observation.2.3.13]
+task = "2.3"
+file = "human/crates/layerx-human-service/src/server/movement_provider.rs human/crates/layerx-human-kms/src/evm.rs human/crates/layerx-human-kms/src/send.rs"
+symbol = "PlanningContext MovementExecutionIdentity EvmAuthorization"
+observed = "Movement protocol 2 carries principal-and-tenant-scoped typed planning and execution identities and refuses the former wire shape. LXKP version 3 adds custody-bound secp256k1 wallet resolution, exact EIP-1559 plan authorization with durable nonce reservation, signing, submission acknowledgement and journal recovery, plus canonical native SEND authorization and external exact-transaction signature verification. Opcodes 0 through 5 retain their existing protocol contracts. Executor certificate admission excludes plan authorization and legacy signing."
+assumption = "The human service remains the authenticated principal authority. These owned interfaces address the missing custody and planning fields recorded in observation.2.3.4; the external active textual authority-reference and witness publication contracts recorded in observations.2.3.10 and 2.3.11 remain unresolved. No ready production movement service or complete positive provider-path integration is asserted."
+severity = "note"
+
+[observation.2.3.14]
+task = "2.3"
+file = "human/crates/layerx-human-service/src/server/production_components.rs human/crates/layerx-human-movement-provider/src/tests.rs human/crates/layerx-paxeer-client/tests/withdraw.rs"
+symbol = "WithdrawalConfig ExitConfig WithdrawalBoundary"
+observed = "Production withdrawal and emergency-exit configuration now requires a JSON array of at least two independent HTTPS endpoints and minimum agreement of at least two. Hostname normalization prevents case, trailing-dot, port or path aliases from counting as independent votes. The movement codec test now checks structural round-trip only. Altered checkpoint signature rejection executes at WithdrawalBoundary using the real protocol 2 and 3 deployed-contract fixtures. cargo test --locked --manifest-path human/Cargo.toml -p layerx-paxeer-client --test withdraw exits 0 with four tests passing (qual-logs/hm5/hm5b-paxeer-withdraw-tests.log). Crate all-target Clippy with warnings denied exits 0 (qual-logs/hm5/hm5b-paxeer-clippy.log); crate formatting check exits 0 (qual-logs/hm5/hm5b-paxeer-fmt.log)."
+assumption = "The existing quorum bound and settlement checks remain intact. This resolves the owned production configuration and misplaced codec assertion conflicts recorded in observations.2.3.6 and 2.3.8. The beta deployment must provide at least two independent Paxeer RPC endpoints."
+severity = "note"
+
+[observation.2.3.15]
+task = "2.3"
+file = "human/Cargo.toml human/crates/layerx-human-service human/crates/layerx-human-test-support"
+symbol = "workspace_lint_format_and_build_qualification"
+observed = "cargo clippy --locked --manifest-path human/Cargo.toml --workspace --all-targets -- -D warnings exits 0 (qual-logs/hm5/hm5b-clippy-8.log). cargo test --locked --manifest-path human/Cargo.toml --workspace --no-run exits 0 (qual-logs/hm5/hm5b-test-build-final.log). Formatting checks for all seven owned workspace members exit 0 (qual-logs/hm5/hm5b-fmt-owned-final-check.log). cargo fmt --all --check --manifest-path human/Cargo.toml exits 1 with differences in 84 distinct dependency files outside human (qual-logs/hm5/hm5b-fmt-all-final-check.log; normalized paths in qual-logs/hm5/hm5b-fmt-paths.txt). Shared integration helpers moved into a development support crate; all 31 original service test targets and 113 test names remain identical in the rebuilt binaries, each --list exiting 0 (qual-logs/hm5/integration-final-list.json). Existing dependency package versions in human/Cargo.lock are preserved; only owned package dependency edges and the two new workspace members change."
+assumption = "The service dependency lint failure recorded in observation.2.3.7 is resolved without adding lint allowances or changing lint configuration. External formatting differences remain outside ownership. Build-only success is not execution of the full workspace tests, which remain prohibited by observation.2.3.12."
+severity = "note"
+
+[observation.2.3.16]
+task = "2.3"
+file = "human/crates/layerx-human-service human/crates/layerx-human-kms human/crates/layerx-human-movement-provider human/crates/layerx-explorer-index human/crates/layerx-paxeer-client"
+symbol = "safe_workspace_execution_qualification"
+observed = "The locked test command explicitly selecting layerx-human-service, layerx-human-kms, layerx-human-movement-provider, layerx-intents, layerx-explorer-index and layerx-human-test-support exits 0 with 194 tests passing and the existing env-gated live Paxeer test ignored (qual-logs/hm5/hm5b-safe-workspace-tests-2.log). KMS includes eight unit and real-client mutual-TLS tests covering EVM authorization refusal, nonce reservation, stable action deduplication, exact signing, acknowledgement recovery and executor privilege separation. The provider includes thirteen unit tests and one executable startup-refusal test; complete positive temp-socket coverage of every provider path is absent. The service separately passed 135 tests including documentation tests (qual-logs/hm5/hm5b-service-tests-2.log). Explicit safe Paxeer library, account_vectors, custody_evidence, deposit, exit, finality and status targets pass 40 tests (qual-logs/hm5/hm5b-paxeer-safe-tests.log); its documentation test passes (qual-logs/hm5/hm5b-paxeer-doc-tests.log). Exact commands, environment overrides and exit codes are retained in qual-logs/hm5/hm5b-gates.jsonl."
+assumption = "These are selected safe package and target results, not an executed full workspace gate. The unchanged unconditional chain-125 fixture remains unexecuted. No live-chain, cluster or complete ready movement provider success is asserted."
+severity = "note"
+
+[observation.2.3.17]
+task = "2.3"
+file = "human/crates/layerx-explorer-index/tests/verify.rs tests/explorer_fixture.c"
+symbol = "qualification_environment_prerequisites"
+observed = "The initial service test link exits 101 with No space left on device (qual-logs/hm5/hm5b-service-tests.log); its retry and final package test command pass. The initial selected package test run exits 101 because build/tests/explorer_fixture is absent (qual-logs/hm5/hm5b-safe-workspace-tests.log). make BUILD_DIR=qual-logs/hm5/native-build qual-logs/hm5/native-build/tests/explorer_fixture exits 0 (qual-logs/hm5/hm5b-explorer-native-fixture.log). Supplying that real fixture with LAYERX_EXPLORER_CORE_FIXTURE makes all seventeen explorer tests pass in the final selected package command. Bridge Python dependencies are installed only in qual-logs/hm5/bridge-venv; the real custody evidence fixture executes on disposable chain 31337."
+assumption = "No native source, test assertion, production chain or shared service was modified to satisfy these environment prerequisites. Missing qualified native daemon binaries and unavailable cluster tooling remain separate from the executed local fixture results."
 severity = "note"

@@ -41,6 +41,8 @@ pub enum EndpointConstructionError {
 
 impl Endpoint {
     /// Reconstructs a Human endpoint while enforcing its declared namespace.
+    /// # Errors
+    /// Refuses invalid canonical data, authority, or unavailable journey evidence.
     pub fn human(account: AccountId) -> Result<Self, EndpointConstructionError> {
         if account.namespace() != AccountNamespace::AgentMain {
             return Err(EndpointConstructionError::WrongAccountNamespace);
@@ -49,6 +51,8 @@ impl Endpoint {
     }
 
     /// Reconstructs an Agent endpoint while enforcing its declared namespace.
+    /// # Errors
+    /// Refuses invalid canonical data, authority, or unavailable journey evidence.
     pub fn agent(account: AccountId) -> Result<Self, EndpointConstructionError> {
         if account.namespace() != AccountNamespace::AgentMain {
             return Err(EndpointConstructionError::WrongAccountNamespace);
@@ -57,6 +61,8 @@ impl Endpoint {
     }
 
     /// Reconstructs a managed-budget endpoint while enforcing its namespace.
+    /// # Errors
+    /// Refuses invalid canonical data, authority, or unavailable journey evidence.
     pub fn agent_budget(account: AccountId) -> Result<Self, EndpointConstructionError> {
         if account.namespace() != AccountNamespace::AgentBudget {
             return Err(EndpointConstructionError::WrongAccountNamespace);
@@ -176,6 +182,8 @@ pub struct RouteRequest {
 
 impl RouteRequest {
     /// Reconstructs one wire request and proves that the complete route is valid.
+    /// # Errors
+    /// Refuses invalid canonical data, authority, or unavailable journey evidence.
     pub fn from_wire_parts(
         source: Endpoint,
         destination: Endpoint,
@@ -203,7 +211,7 @@ impl RouteRequest {
         match &self.relationship {
             Relationship::Direct(v) => {
                 out.push(1);
-                put_send(&mut out, v)
+                put_send(&mut out, v);
             }
             Relationship::ManagedBudget(v) => {
                 out.push(2);
@@ -228,7 +236,7 @@ impl RouteRequest {
             }
             Relationship::AgentAuthorized(v) => {
                 out.push(3);
-                put_send(&mut out, v)
+                put_send(&mut out, v);
             }
             Relationship::PayerGrant(v) => {
                 out.push(4);
@@ -268,6 +276,8 @@ impl RouteRequest {
     }
 
     /// Decodes canonical resolver bytes and re-runs the total resolver.
+    /// # Errors
+    /// Refuses invalid canonical data, authority, or unavailable journey evidence.
     pub fn canonical_decode(bytes: &[u8]) -> Result<Self, RouteError> {
         let mut r = RouteWire::new(bytes);
         if r.u8()? != 1 {
@@ -346,23 +356,27 @@ fn wire_error() -> RouteError {
     }
 }
 fn put_text(out: &mut Vec<u8>, v: &str) {
-    out.extend((v.len() as u16).to_be_bytes());
-    out.extend(v.as_bytes())
+    out.extend(
+        u16::try_from(v.len())
+            .unwrap_or_else(|_| unreachable!("validated canonical account length"))
+            .to_be_bytes(),
+    );
+    out.extend(v.as_bytes());
 }
 fn put_endpoint(out: &mut Vec<u8>, v: &Endpoint) {
     match v {
         Endpoint::PaxeerWallet => out.push(0),
         Endpoint::Human(a) => {
             out.push(1);
-            put_text(out, a.canonical())
+            put_text(out, a.canonical());
         }
         Endpoint::Agent(a) => {
             out.push(2);
-            put_text(out, a.canonical())
+            put_text(out, a.canonical());
         }
         Endpoint::AgentBudget(a) => {
             out.push(3);
-            put_text(out, a.canonical())
+            put_text(out, a.canonical());
         }
     }
 }
@@ -375,7 +389,7 @@ fn put_send(out: &mut Vec<u8>, v: &SendRoute) {
     out.extend(v.authorization.public_key().bytes());
     out.extend(v.authorization.signature().bytes());
     out.extend(v.network_id.value().to_be_bytes());
-    out.extend(v.protocol_version.value().to_be_bytes())
+    out.extend(v.protocol_version.value().to_be_bytes());
 }
 struct RouteWire<'a> {
     bytes: &'a [u8],

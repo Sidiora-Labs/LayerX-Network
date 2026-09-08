@@ -29,6 +29,7 @@ rustls = { version = "0.23.32", default-features = false, features = ["ring", "s
 rustix.workspace = true
 
 [dev-dependencies]
+layerx-human-test-support = { path = "../layerx-human-test-support" }
 ciborium = "=0.2.2"
 ed25519-dalek = "=2.2.0"
 layerx-agentd.workspace = true

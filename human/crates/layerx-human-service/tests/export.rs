@@ -1,4 +1,4 @@
-mod support;
+use layerx_human_test_support as support;
 
 use std::fmt::Write as _;
 
@@ -480,12 +480,14 @@ fn cached_bundle_rows_are_labelled_only_by_the_verifier() {
     assert_eq!(status.label(), "receipt-verified");
     assert_eq!(status.unverified_reason(), None);
     assert_eq!(
-        status.report().map(|report| report.verified_receipts()),
+        status
+            .report()
+            .map(layerx_human_service::activity::BundleReport::verified_receipts),
         Some(1)
     );
 
-    let feed = result(Feed::new(5), "feed");
-    let loaded = result(cached.receipt_authority(feed, &scope), "feed authority");
+    let _feed = result(Feed::new(5), "feed");
+    let loaded = result(cached.receipt_authority(&scope), "feed authority");
     let status =
         verification_status(cached.verify(digest, scope.principal(), settlement_domain(), &loaded));
     assert!(status.is_unavailable());

@@ -1,5 +1,4 @@
-#[allow(dead_code)]
-mod support;
+use layerx_human_test_support as support;
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -491,7 +490,7 @@ impl AgentBoundary for RealAgentLayer {
         let signer = SigningKey::from_bytes(&[key[0].saturating_add(4); 32]);
         let raw = support::raw_receipt_evidence(
             material.canonical_bytes.clone(),
-            material.authorised_batch.clone(),
+            material.authorised_batch,
             u64::from(key[0]),
             &signer,
         );

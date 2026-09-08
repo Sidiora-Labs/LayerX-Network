@@ -1,5 +1,4 @@
-#[allow(dead_code)]
-mod support;
+use layerx_human_test_support as support;
 
 use std::collections::BTreeMap;
 use std::fs;

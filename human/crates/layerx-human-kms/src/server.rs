@@ -63,13 +63,22 @@ fn connection(mut tcp: TcpStream, config: &Config, store: &Mutex<Store>) -> Resu
         .and_then(|chain| chain.first())
         .ok_or(Error::Refused)?;
     let observed: [u8; 32] = Sha256::digest(leaf.as_ref()).into();
-    if !layerx_crypto::ct::eq_fixed(&observed, &config.client_pin) {
+    let service = layerx_crypto::ct::eq_fixed(&observed, &config.client_pin);
+    let executor = config
+        .evm_client_pin
+        .is_some_and(|pin| layerx_crypto::ct::eq_fixed(&observed, &pin));
+    if !service && !executor {
         return Err(Error::Refused);
     }
     let mut tls = StreamOwned::new(connection, tcp);
     let frame = Zeroizing::new(read_frame(&mut tls, wire::MAX_FRAME).map_err(|_| Error::Refused)?);
     let request = Request::decode(&frame)?;
-    let answer = validate_sign(&request, config).and_then(|digest| {
+    let admission = if !service && !matches!(request.operation, 6 | 8..=10 | 12) {
+        Err(Error::Refused)
+    } else {
+        validate_sign(&request, config)
+    };
+    let answer = admission.and_then(|digest| {
         store
             .lock()
             .map_err(|_| Error::Unavailable)?
@@ -83,6 +92,21 @@ fn connection(mut tcp: TcpStream, config: &Config, store: &Mutex<Store>) -> Resu
     .map_err(|_| Error::Unavailable)
 }
 fn validate_sign(request: &Request<'_>, config: &Config) -> Result<Option<[u8; 32]>> {
+    if request.operation == 11 {
+        let value = serde_json::from_slice(request.evm).map_err(|_| Error::Refused)?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| Error::Unavailable)?
+            .as_secs();
+        return crate::send::digest(
+            &value,
+            request.binding,
+            config.network,
+            config.protocol,
+            now,
+        )
+        .map(Some);
+    }
     if request.operation != 5 {
         return Ok(None);
     }

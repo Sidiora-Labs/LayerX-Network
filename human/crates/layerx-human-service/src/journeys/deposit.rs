@@ -4,8 +4,8 @@ use std::fmt::{Display, Formatter};
 
 use layerx_agent_api::identity::{AgentDid, AuthorityRef, ContractError};
 use layerx_paxeer_client::{
-    account_address, ChainSignal, CustodyFault, DepositFailure, DepositProof, FinalityReport,
-    FinalityStage, ProofFault, TransactionHash,
+    ChainSignal, CustodyFault, DepositFailure, DepositProof, FinalityReport, FinalityStage,
+    ProofFault, TransactionHash,
 };
 use layerx_sdk::Client as AgentClient;
 use layerx_types::account::AccountId;
@@ -72,7 +72,7 @@ pub(crate) fn encode_deposit_plan(plan: &DepositPlan) -> Result<Vec<u8>, Deposit
     validate_plan(plan)?;
     let mut out = super::wire::Writer::new(1);
     out.text(plan.journey_id.as_str())
-        .map_err(|_| DepositJourneyError::InvalidPlan)?;
+        .map_err(|()| DepositJourneyError::InvalidPlan)?;
     out.fixed(&plan.idempotency_key);
     out.fixed(&plan.wallet.bytes());
     out.u32(plan.network.value());
@@ -83,79 +83,109 @@ pub(crate) fn encode_deposit_plan(plan: &DepositPlan) -> Result<Vec<u8>, Deposit
     out.fixed(&plan.asset.bytes());
     out.u128(plan.amount.value());
     out.text(plan.recipient.canonical())
-        .map_err(|_| DepositJourneyError::InvalidPlan)?;
+        .map_err(|()| DepositJourneyError::InvalidPlan)?;
     out.text(plan.reserve.canonical())
-        .map_err(|_| DepositJourneyError::InvalidPlan)?;
+        .map_err(|()| DepositJourneyError::InvalidPlan)?;
     out.text(&plan.currency)
-        .map_err(|_| DepositJourneyError::InvalidPlan)?;
+        .map_err(|()| DepositJourneyError::InvalidPlan)?;
     out.text(plan.agent.actor.as_str())
-        .map_err(|_| DepositJourneyError::InvalidPlan)?;
+        .map_err(|()| DepositJourneyError::InvalidPlan)?;
     out.text(plan.agent.authority.as_str())
-        .map_err(|_| DepositJourneyError::InvalidPlan)?;
+        .map_err(|()| DepositJourneyError::InvalidPlan)?;
     out.u64(plan.agent.account_sequence);
     out.u64(plan.agent.not_before);
     out.u64(plan.agent.not_after);
     out.u128(plan.agent.fee_limit);
     out.text(plan.agent.custody_key.as_str())
-        .map_err(|_| DepositJourneyError::InvalidPlan)?;
+        .map_err(|()| DepositJourneyError::InvalidPlan)?;
     Ok(out.finish())
 }
 
 /// Decodes and validates a canonical deposit plan, rejecting trailing bytes.
 pub(crate) fn decode_deposit_plan(bytes: &[u8]) -> Result<DepositPlan, DepositJourneyError> {
     let mut input =
-        super::wire::Reader::new(bytes, 1).map_err(|_| DepositJourneyError::InvalidPlan)?;
+        super::wire::Reader::new(bytes, 1).map_err(|()| DepositJourneyError::InvalidPlan)?;
     let plan = DepositPlan {
-        journey_id: JourneyId::new(input.text().map_err(|_| DepositJourneyError::InvalidPlan)?)
-            .map_err(|_| DepositJourneyError::InvalidPlan)?,
+        journey_id: JourneyId::new(
+            input
+                .text()
+                .map_err(|()| DepositJourneyError::InvalidPlan)?,
+        )
+        .map_err(|_| DepositJourneyError::InvalidPlan)?,
         idempotency_key: input
             .fixed()
-            .map_err(|_| DepositJourneyError::InvalidPlan)?,
+            .map_err(|()| DepositJourneyError::InvalidPlan)?,
         wallet: EvmAddress::new(
             input
                 .fixed()
-                .map_err(|_| DepositJourneyError::InvalidPlan)?,
+                .map_err(|()| DepositJourneyError::InvalidPlan)?,
         ),
-        network: NetworkId::new(input.u32().map_err(|_| DepositJourneyError::InvalidPlan)?)
+        network: NetworkId::new(input.u32().map_err(|()| DepositJourneyError::InvalidPlan)?)
             .map_err(|_| DepositJourneyError::InvalidPlan)?,
-        paxeer_chain_id: input.u64().map_err(|_| DepositJourneyError::InvalidPlan)?,
-        layerx_network: NetworkId::new(input.u32().map_err(|_| DepositJourneyError::InvalidPlan)?)
+        paxeer_chain_id: input.u64().map_err(|()| DepositJourneyError::InvalidPlan)?,
+        layerx_network: NetworkId::new(input.u32().map_err(|()| DepositJourneyError::InvalidPlan)?)
             .map_err(|_| DepositJourneyError::InvalidPlan)?,
-        layerx_protocol_version: input.u16().map_err(|_| DepositJourneyError::InvalidPlan)?,
+        layerx_protocol_version: input.u16().map_err(|()| DepositJourneyError::InvalidPlan)?,
         vault: EvmAddress::new(
             input
                 .fixed()
-                .map_err(|_| DepositJourneyError::InvalidPlan)?,
+                .map_err(|()| DepositJourneyError::InvalidPlan)?,
         ),
         asset: AssetId::new(
             input
                 .fixed()
-                .map_err(|_| DepositJourneyError::InvalidPlan)?,
+                .map_err(|()| DepositJourneyError::InvalidPlan)?,
         ),
-        amount: Amount::from_u128(input.u128().map_err(|_| DepositJourneyError::InvalidPlan)?),
-        recipient: AccountId::parse(&input.text().map_err(|_| DepositJourneyError::InvalidPlan)?)
-            .map_err(|_| DepositJourneyError::InvalidPlan)?,
-        reserve: AccountId::parse(&input.text().map_err(|_| DepositJourneyError::InvalidPlan)?)
-            .map_err(|_| DepositJourneyError::InvalidPlan)?,
-        currency: input.text().map_err(|_| DepositJourneyError::InvalidPlan)?,
+        amount: Amount::from_u128(
+            input
+                .u128()
+                .map_err(|()| DepositJourneyError::InvalidPlan)?,
+        ),
+        recipient: AccountId::parse(
+            &input
+                .text()
+                .map_err(|()| DepositJourneyError::InvalidPlan)?,
+        )
+        .map_err(|_| DepositJourneyError::InvalidPlan)?,
+        reserve: AccountId::parse(
+            &input
+                .text()
+                .map_err(|()| DepositJourneyError::InvalidPlan)?,
+        )
+        .map_err(|_| DepositJourneyError::InvalidPlan)?,
+        currency: input
+            .text()
+            .map_err(|()| DepositJourneyError::InvalidPlan)?,
         agent: DepositAgentPlan {
-            actor: AgentDid::new(input.text().map_err(|_| DepositJourneyError::InvalidPlan)?)
-                .map_err(|_| DepositJourneyError::InvalidPlan)?,
-            authority: AuthorityRef::new(
-                input.text().map_err(|_| DepositJourneyError::InvalidPlan)?,
+            actor: AgentDid::new(
+                input
+                    .text()
+                    .map_err(|()| DepositJourneyError::InvalidPlan)?,
             )
             .map_err(|_| DepositJourneyError::InvalidPlan)?,
-            account_sequence: input.u64().map_err(|_| DepositJourneyError::InvalidPlan)?,
-            not_before: input.u64().map_err(|_| DepositJourneyError::InvalidPlan)?,
-            not_after: input.u64().map_err(|_| DepositJourneyError::InvalidPlan)?,
-            fee_limit: input.u128().map_err(|_| DepositJourneyError::InvalidPlan)?,
-            custody_key: KeyId::new(input.text().map_err(|_| DepositJourneyError::InvalidPlan)?)
-                .map_err(|_| DepositJourneyError::InvalidPlan)?,
+            authority: AuthorityRef::new(
+                input
+                    .text()
+                    .map_err(|()| DepositJourneyError::InvalidPlan)?,
+            )
+            .map_err(|_| DepositJourneyError::InvalidPlan)?,
+            account_sequence: input.u64().map_err(|()| DepositJourneyError::InvalidPlan)?,
+            not_before: input.u64().map_err(|()| DepositJourneyError::InvalidPlan)?,
+            not_after: input.u64().map_err(|()| DepositJourneyError::InvalidPlan)?,
+            fee_limit: input
+                .u128()
+                .map_err(|()| DepositJourneyError::InvalidPlan)?,
+            custody_key: KeyId::new(
+                input
+                    .text()
+                    .map_err(|()| DepositJourneyError::InvalidPlan)?,
+            )
+            .map_err(|_| DepositJourneyError::InvalidPlan)?,
         },
     };
     input
         .finish()
-        .map_err(|_| DepositJourneyError::InvalidPlan)?;
+        .map_err(|()| DepositJourneyError::InvalidPlan)?;
     validate_plan(&plan)?;
     Ok(plan)
 }
@@ -165,6 +195,7 @@ pub(crate) fn decode_deposit_plan(bytes: &[u8]) -> Result<DepositPlan, DepositJo
 /// the original transaction rather than open a second signing ceremony.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WalletCustodyRequest {
+    pub identity: super::MovementExecutionIdentity,
     pub action_key: [u8; 32],
     pub wallet: EvmAddress,
     pub chain_id: u64,
@@ -196,6 +227,9 @@ pub trait DepositRuntime {
     /// custody action committed by `request`. Implementations must read the
     /// pinned Paxeer transaction and refuse mismatched sender, target, asset,
     /// beneficiary, amount, chain, or calldata.
+    /// Verifies external custody against the exact requested deposit.
+    /// # Errors
+    /// Refuses mismatched transactions or unavailable settlement evidence.
     fn verify_external_deposit(
         &mut self,
         request: &WalletCustodyRequest,
@@ -557,6 +591,9 @@ impl DepositJourney {
     /// Accepts the transaction returned by the bound wallet only after the
     /// production custody boundary verifies it against the immutable request.
     /// The verified transaction is persisted before finality polling begins.
+    /// Confirms an external transaction for this authorized deposit journey.
+    /// # Errors
+    /// Refuses inconsistent custody evidence, invalid state or storage failures.
     pub fn confirm_external_transaction<R: DepositRuntime>(
         &mut self,
         scope: &mut PrincipalScope<'_>,
@@ -572,7 +609,8 @@ impl DepositJourney {
                 DepositBoundaryError::ContractViolation,
             ));
         }
-        let verified = runtime.verify_external_deposit(&self.wallet_request(), transaction)?;
+        let verified =
+            runtime.verify_external_deposit(&self.wallet_request(scope)?, transaction)?;
         if verified != transaction || verified.bytes() == [0; 32] {
             return Err(DepositJourneyError::Boundary(
                 DepositBoundaryError::ContractViolation,
@@ -725,7 +763,7 @@ impl DepositJourney {
         match self.record.phase {
             Phase::Ready => self.transition(scope, Phase::WalletOpening, now)?,
             Phase::WalletOpening => {
-                let request = self.wallet_request();
+                let request = self.wallet_request(scope)?;
                 match runtime.submit_custody(&request)? {
                     WalletCustodyOutcome::Submitted(transaction) => {
                         if transaction.bytes() == [0; 32] {
@@ -967,20 +1005,39 @@ impl DepositJourney {
             })
     }
 
-    fn wallet_request(&self) -> WalletCustodyRequest {
+    fn wallet_request(
+        &self,
+        scope: &PrincipalScope<'_>,
+    ) -> Result<WalletCustodyRequest, DepositJourneyError> {
         let chain_id = self
             .record
             .paxeer_chain_id
             .unwrap_or_else(|| unreachable!("active current deposit has a Paxeer chain"));
-        WalletCustodyRequest {
+        let protocol = self
+            .record
+            .layerx_protocol_version
+            .ok_or(DepositJourneyError::InvalidPlan)?;
+        let beneficiary = layerx_paxeer_client::account_address_for_protocol(
+            &self.recipient_unchecked(),
+            protocol,
+        )
+        .map_err(|_| DepositJourneyError::InvalidPlan)?;
+        Ok(WalletCustodyRequest {
+            identity: super::MovementExecutionIdentity {
+                principal: scope.principal().clone(),
+                tenant: scope.tenant().clone(),
+                account: beneficiary,
+                wallet: EvmAddress::new(self.record.wallet),
+                plan_id: self.record.idempotency_key,
+            },
             action_key: self.record.wallet_action_key,
             wallet: EvmAddress::new(self.record.wallet),
             chain_id,
             vault: EvmAddress::new(self.record.vault),
             asset: AssetId::new(self.record.asset),
-            beneficiary: account_address(&self.recipient_unchecked()),
+            beneficiary,
             amount: Amount::from_u128(self.record.amount),
-        }
+        })
     }
 
     fn credit_plan(&self, proof: &DepositProof) -> Result<JourneyPlan, DepositJourneyError> {
@@ -1022,7 +1079,12 @@ impl DepositJourney {
             || proof.custody().payer.bytes() != self.record.wallet
             || proof.custody().asset.bytes() != self.record.asset
             || proof.custody().amount.value() != self.record.amount
-            || proof.custody().beneficiary != account_address(&recipient)
+            || proof.custody().beneficiary
+                != layerx_paxeer_client::account_address_for_protocol(
+                    &recipient,
+                    proof.protocol_version(),
+                )
+                .map_err(|_| DepositJourneyError::InvalidPlan)?
             || self
                 .record
                 .deposit_nullifier
@@ -1157,8 +1219,8 @@ fn validate_plan(plan: &DepositPlan) -> Result<(), DepositJourneyError> {
     Ok(())
 }
 
-fn validate_record(record: &Record) -> Result<(), DepositJourneyError> {
-    let schema_invalid = match record.schema {
+fn record_schema_invalid(record: &Record) -> bool {
+    match record.schema {
         RecordSchema::Current => {
             record.paxeer_chain_id.is_none_or(|value| value == 0)
                 || record.layerx_network_id.is_none_or(|value| value == 0)
@@ -1212,7 +1274,11 @@ fn validate_record(record: &Record) -> Result<(), DepositJourneyError> {
                     )
                 })
         }
-    };
+    }
+}
+
+fn validate_record(record: &Record) -> Result<(), DepositJourneyError> {
+    let schema_invalid = record_schema_invalid(record);
     let terminal_identity_invalid = if record.phase == Phase::Done {
         match (record.schema, record.activity.as_ref()) {
             (
@@ -1294,7 +1360,7 @@ fn decode(bytes: &[u8]) -> Result<Record, DepositJourneyError> {
     Ok(record)
 }
 
-fn migrate_legacy(legacy: LegacyRecord) -> Result<Record, DepositJourneyError> {
+fn validate_legacy(legacy: &LegacyRecord) -> Result<(), DepositJourneyError> {
     if !matches!(legacy.version, 1 | 2)
         || JourneyId::new(legacy.journey_id.clone()).is_err()
         || legacy.idempotency_key == [0; 32]
@@ -1367,6 +1433,11 @@ fn migrate_legacy(legacy: LegacyRecord) -> Result<Record, DepositJourneyError> {
         }
     }
 
+    Ok(())
+}
+
+fn migrate_legacy(legacy: LegacyRecord) -> Result<Record, DepositJourneyError> {
+    validate_legacy(&legacy)?;
     let schema = if legacy.version == 1 {
         RecordSchema::LegacyV1
     } else {
@@ -1797,7 +1868,7 @@ mod tests {
         record.schema = RecordSchema::Current;
         record.paxeer_chain_id = Some(4_294_967_312);
         record.layerx_network_id = Some(17);
-        record.layerx_protocol_version = Some(1);
+        record.layerx_protocol_version = Some(2);
         record.legacy_proof_commitment = None;
         record.legacy_phase = None;
         let encoded =
@@ -1807,6 +1878,38 @@ mod tests {
         };
         assert_eq!(current.record.binding_network_id, 17);
         assert_eq!(current.record.paxeer_chain_id, Some(4_294_967_312));
-        assert_eq!(current.wallet_request().chain_id, 4_294_967_312);
+        let root = std::env::temp_dir().join(format!("human-deposit-chain-{}", std::process::id()));
+        let principal = crate::store::PrincipalId::new("deposit-chain-test")
+            .unwrap_or_else(|error| panic!("principal: {error}"));
+        let tenant = crate::store::AgentTenantId::new("deposit-chain-tenant")
+            .unwrap_or_else(|error| panic!("tenant: {error}"));
+        let tenancy = crate::store::TenancyMap::new([(principal.clone(), tenant)])
+            .unwrap_or_else(|error| panic!("tenancy: {error}"));
+        let digest = tenancy
+            .install(&root)
+            .unwrap_or_else(|error| panic!("install: {error}"));
+        let mut store = crate::store::PrincipalStore::open(
+            &root,
+            crate::store::RetentionPolicy {
+                journeys: crate::store::RetentionPeriod::new(1000),
+                notifications: crate::store::RetentionPeriod::new(1000),
+                audit: crate::store::RetentionPeriod::new(1000),
+                telemetry: crate::store::RetentionPeriod::new(1000),
+                cache: crate::store::RetentionPeriod::new(1000),
+            },
+            digest,
+        )
+        .unwrap_or_else(|error| panic!("store: {error}"));
+        let scope = store
+            .principal(&principal)
+            .unwrap_or_else(|error| panic!("scope: {error}"));
+        assert_eq!(
+            current
+                .wallet_request(&scope)
+                .unwrap_or_else(|error| panic!("wallet request: {error}"))
+                .chain_id,
+            4_294_967_312
+        );
+        std::fs::remove_dir_all(root).unwrap_or_else(|error| panic!("cleanup: {error}"));
     }
 }
