@@ -10,6 +10,9 @@ import {Predeploys} from "./deployment/Predeploys.sol";
 import {LayerXComponent} from "./security/LayerXComponent.sol";
 
 contract CheckpointRegistry is LayerXComponent {
+    error CheckpointProposerOnly();
+    error WitnessesAlreadyPublished();
+    error InvalidWitnesses();
     error InvalidConfiguration();
     error InvalidHeader();
     error InvalidCertificate();
@@ -34,6 +37,10 @@ contract CheckpointRegistry is LayerXComponent {
     bytes32 public immutable genesisReceiptRoot;
     bytes32 public immutable genesisCheckpointId;
 
+    uint16 public constant EVIDENCE_VERSION = 1;
+    mapping(bytes32 => address) public checkpointProposer;
+    mapping(bytes32 => bytes32) public witnessesDigest;
+    mapping(bytes32 => bool) public witnessesPublished;
     mapping(bytes32 => bytes32) public finalisedStateRoot;
     mapping(uint64 => bytes32) public checkpointAtBatch;
     mapping(bytes32 => uint64) public registeredAt;
@@ -50,6 +57,8 @@ contract CheckpointRegistry is LayerXComponent {
     uint64 public finalisedLastSequence;
     uint64 public finalisedTimestamp;
     bytes32 public latestFinalisedStateRoot;
+
+    event CheckpointWitnessesPublished(bytes32 indexed checkpointHash, uint16 version, bytes32 witnessesDigest);
 
     event CheckpointRegistered(
         bytes32 indexed checkpointHash,
@@ -179,6 +188,7 @@ contract CheckpointRegistry is LayerXComponent {
             ++valid;
         }
         if (valid < threshold) revert InvalidCertificate();
+        checkpointProposer[digest] = msg.sender;
         finalisedStateRoot[digest] = header.resultingStateRoot;
         checkpointAtBatch[header.batchNumber] = digest;
         registeredAt[digest] = Arithmetic.toUint64(block.timestamp);
@@ -207,6 +217,27 @@ contract CheckpointRegistry is LayerXComponent {
             header.dataAvailabilityRoot,
             checkpointGuarantorSetVersion[digest]
         );
+    }
+
+    function publishCheckpointWitnesses(
+        bytes32 digest,
+        bytes calldata canonicalWithdrawalStateWitnesses,
+        bytes calldata canonicalBalanceWitnesses
+    ) external {
+        if (msg.sender != checkpointProposer[digest]) {
+            revert CheckpointProposerOnly();
+        }
+        if (!isCanonicalCheckpoint(digest)) revert InvalidHeader();
+        if (witnessesPublished[digest]) revert WitnessesAlreadyPublished();
+        if (
+            canonicalWithdrawalStateWitnesses.length == 0 || canonicalBalanceWitnesses.length == 0
+                || canonicalWithdrawalStateWitnesses.length + canonicalBalanceWitnesses.length > 1_000_000
+        ) revert InvalidWitnesses();
+        bytes32 commitment =
+            sha256(abi.encode(digest, EVIDENCE_VERSION, canonicalWithdrawalStateWitnesses, canonicalBalanceWitnesses));
+        witnessesPublished[digest] = true;
+        witnessesDigest[digest] = commitment;
+        emit CheckpointWitnessesPublished(digest, EVIDENCE_VERSION, commitment);
     }
 
     function isFinalised(bytes32 digest, bytes32 stateRoot) external view returns (bool) {
