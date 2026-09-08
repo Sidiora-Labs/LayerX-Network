@@ -3292,3 +3292,68 @@ $(BUILD_DIR)/bin/layerx-module-registry: cmd/layerx-module-registry/main.c cmd/l
 test-module-registry: layerx-module-registry
 	python3 cmd/layerx-module-registry/test_registry.py $(BUILD_DIR)/bin/layerx-module-registry
 	bash platform/hosted/tests/beta-cluster.sh test-retained-material
+
+GUARANTOR_SOURCES = cmd/layerx-guarantor/main.c cmd/layerx-guarantor/lni.c \
+	cmd/layerx-guarantor/producer.c cmd/layerx-guarantor/exchange.c \
+	cmd/layerx-guarantor/runtime.c cmd/layerx-guarantor/settlement.c
+GUARANTOR_OBJECTS = $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(GUARANTOR_SOURCES))
+-include $(GUARANTOR_OBJECTS:.o=.d)
+GUARANTOR_PYTHON ?= qual-logs/gp1/venv/bin/python
+.PHONY: layerx-guarantor test-daemon-guarantor test-daemon-guarantor-unit \
+	test-daemon-guarantor-integration test-daemon-guarantor-sanitize \
+	platform-hosted-guarantor-topology-check
+build: layerx-guarantor
+layerx-guarantor: $(BUILD_DIR)/bin/layerx-guarantor
+$(BUILD_DIR)/bin/layerx-guarantor: $(GUARANTOR_OBJECTS) \
+	$(filter-out $(BUILD_DIR)/obj/cmd/layerxd/main.o,$(LAYERXD_OBJECTS)) \
+	$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LIBRARY) $(EXTRA_LDFLAGS) \
+		-lssl -lcrypto -lsqlite3 -pthread -ldl -lm -o $@
+$(BUILD_DIR)/tests/lxp_test_guarantor_core: tests/daemon/guarantor-core.c \
+	cmd/layerx-guarantor/producer.c cmd/layerx-guarantor/lni.c \
+	$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) -Itests $(CFLAGS) $^ $(LIBRARY) $(EXTRA_LDFLAGS) \
+		-lcrypto -pthread -ldl -lm -o $@
+$(BUILD_DIR)/tests/lxp_test_guarantor_exchange: tests/daemon/guarantor-exchange.c \
+	cmd/layerx-guarantor/exchange.c cmd/layerx-guarantor/exchange.h
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) tests/daemon/guarantor-exchange.c \
+		cmd/layerx-guarantor/exchange.c $(EXTRA_LDFLAGS) -lssl -lcrypto -o $@
+$(BUILD_DIR)/tests/lxp_test_guarantor_integration: tests/daemon/guarantor-integration.c \
+	$(filter-out $(BUILD_DIR)/obj/cmd/layerx-guarantor/main.o,$(GUARANTOR_OBJECTS)) \
+	$(filter-out $(BUILD_DIR)/obj/cmd/layerxd/main.o,$(LAYERXD_OBJECTS)) \
+	cmd/layerx-verify/lxp_verify_main.c cmd/layerx-verify/lxp_verify_fetch.c \
+	$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LIBRARY) $(EXTRA_LDFLAGS) -lssl -lcrypto -lsqlite3 -pthread -ldl -lm -o $@
+test-daemon-guarantor-unit: $(BUILD_DIR)/tests/lxp_test_guarantor_core \
+	$(BUILD_DIR)/tests/lxp_test_guarantor_exchange
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_guarantor_core
+	python3 tests/daemon/guarantor-exchange.py $(BUILD_DIR)/tests/lxp_test_guarantor_exchange
+	$(GUARANTOR_PYTHON) tests/daemon/guarantor-settlement.py
+test-daemon-guarantor-integration: layerx-guarantor layerxd layerx-genesis-build \
+	$(BUILD_DIR)/tests/lxp_test_guarantor_integration $(BUILD_DIR)/tests/lxp_test_program_admission
+	LAYERX_TEST_BUILD_DIR=$(BUILD_DIR) $(GUARANTOR_PYTHON) tests/daemon/guarantor-integration.py \
+		$(BUILD_DIR)/tests/lxp_test_guarantor_integration
+test-daemon-guarantor: test-daemon-guarantor-unit test-daemon-guarantor-integration
+test-daemon-guarantor-sanitize:
+	$(MAKE) BUILD_DIR=build/guarantor-sanitize OPT_LEVEL=-O1 \
+		EXTRA_CFLAGS='-fsanitize=address,undefined -fno-omit-frame-pointer' \
+		EXTRA_LDFLAGS='-fsanitize=address,undefined' build test-daemon-guarantor-unit
+platform-hosted-guarantor-topology-check:
+	python3 platform/hosted/tests/topology_check.py
+platform-hosted-topology-check: platform-hosted-guarantor-topology-check
+.PHONY: test-daemon-guarantor-settlement
+test-daemon-guarantor-settlement:
+	$(GUARANTOR_PYTHON) tests/daemon/guarantor-settlement-chain.py
+test-daemon-guarantor: test-daemon-guarantor-settlement
+$(BUILD_DIR)/tests/lxp_test_guarantor_runtime: tests/daemon/guarantor-runtime.c \
+	$(BUILD_DIR)/obj/cmd/layerx-guarantor/runtime.o \
+	$(filter-out $(BUILD_DIR)/obj/cmd/layerxd/main.o,$(LAYERXD_OBJECTS)) \
+	$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LIBRARY) $(EXTRA_LDFLAGS) \
+		-lcrypto -lsqlite3 -pthread -ldl -lm -o $@
+test-daemon-guarantor-integration: $(BUILD_DIR)/tests/lxp_test_guarantor_runtime
