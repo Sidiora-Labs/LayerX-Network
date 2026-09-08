@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/layerx-human-security-provider",
     "crates/layerx-human-service",
     "crates/layerx-human-identity-provider",
     "crates/layerx-human-kms",
