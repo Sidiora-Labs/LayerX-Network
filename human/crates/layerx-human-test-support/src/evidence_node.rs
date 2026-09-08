@@ -76,6 +76,9 @@ pub struct AdmissionJournal {
 }
 
 impl AdmissionJournal {
+    /// # Panics
+    /// Panics if journal creation, permissions, persistence, or recovery fails.
+    #[must_use]
     pub fn open(directory: &Path, network_id: u32) -> Self {
         std::fs::create_dir_all(directory)
             .unwrap_or_else(|error| panic!("admission directory: {error}"));
@@ -111,6 +114,9 @@ impl AdmissionJournal {
         }
     }
 
+    /// # Panics
+    /// Panics if the journal cannot be read or its superblock does not match the network.
+    #[must_use]
     pub fn recover(directory: &Path, network_id: u32) -> Vec<AdmissionRecord> {
         let mut file = File::open(directory.join(JOURNAL_NAME))
             .unwrap_or_else(|error| panic!("recover admission journal: {error}"));
@@ -223,6 +229,9 @@ pub struct EvidenceNode {
 }
 
 impl EvidenceNode {
+    /// # Panics
+    /// Panics if queue capacity is zero or opening the admission journal fails.
+    #[must_use]
     pub fn new(
         authorised_sequencer_key: [u8; 32],
         network_id: u32,
@@ -284,6 +293,9 @@ impl EvidenceNode {
         self.fail_stopped
     }
 
+    /// # Panics
+    /// Panics if a worker cannot start; the worker panics on invalid handshakes or I/O failures.
+    #[must_use]
     pub fn serve(mut self, listener: UnixListener) -> JoinHandle<Self> {
         thread::spawn(move || {
             let (mut stream, _) = listener

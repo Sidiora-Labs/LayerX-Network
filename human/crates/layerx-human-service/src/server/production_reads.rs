@@ -20,7 +20,6 @@ use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
 
 pub(super) fn execute(
-    feed: Feed,
     settlement_domain: SettlementDomain,
     scope: &PrincipalScope<'_>,
     request: &ScopedRequest<'_>,
@@ -28,13 +27,12 @@ pub(super) fn execute(
     Some(match request.operation.name.as_str() {
         "journey.get" => journey_get(scope, settlement_domain, request),
         "journey.list" => journey_list(scope, settlement_domain),
-        "evidence.get" => evidence_get(feed, settlement_domain, scope, request),
+        "evidence.get" => evidence_get(settlement_domain, scope, request),
         _ => return None,
     })
 }
 
 pub(super) fn activity_entry(
-    feed: Feed,
     settlement_domain: SettlementDomain,
     scope: &PrincipalScope<'_>,
     request: &ScopedRequest<'_>,
@@ -47,18 +45,20 @@ pub(super) fn activity_entry(
             .ok_or_else(|| ApiFailure::invalid_request(Some("entry_id")))?,
     )
     .map_err(|_| ApiFailure::invalid_request(Some("entry_id")))?;
-    response(activity_entry_json(feed, settlement_domain, scope, &id)?)
+    Ok(response(activity_entry_json(
+        settlement_domain,
+        scope,
+        &id,
+    )?))
 }
 
 pub(super) fn activity_entry_json(
-    feed: Feed,
     settlement_domain: SettlementDomain,
     scope: &PrincipalScope<'_>,
     id: &ActivityEntryId,
 ) -> Result<Value, ApiFailure> {
-    let entry = feed
-        .entry(scope, id)
-        .map_err(feed_failure)?
+    let entry = Feed::entry(scope, id)
+        .map_err(|error| feed_failure(&error))?
         .ok_or_else(ApiFailure::not_found)?;
     let mut actuals = Vec::with_capacity(entry.receipts().len());
     let mut labels = BTreeMap::new();
@@ -125,16 +125,16 @@ fn journey_get(
     let id = JourneyId::new(value.clone())
         .map_err(|_| ApiFailure::invalid_request(Some("journey_id")))?;
     let journey = JourneyEngine::load(scope, &id)
-        .map_err(failure)?
+        .map_err(|error| failure(&error))?
         .ok_or_else(ApiFailure::not_found)?;
-    response(journey_json(scope, settlement_domain, &journey)?)
+    Ok(response(journey_json(scope, settlement_domain, &journey)?))
 }
 
 fn journey_list(
     scope: &PrincipalScope<'_>,
     settlement_domain: SettlementDomain,
 ) -> Result<BackendResponse, ApiFailure> {
-    let journeys = JourneyEngine::list(scope).map_err(failure)?;
+    let journeys = JourneyEngine::list(scope).map_err(|error| failure(&error))?;
     let mut digest = Sha256::new();
     digest.update(b"layerx-human-journey-list-cursor/v1");
     let values = journeys
@@ -145,7 +145,7 @@ fn journey_list(
             digest.update(
                 journey
                     .status()
-                    .map_err(failure)?
+                    .map_err(|error| failure(&error))?
                     .journey_id()
                     .as_str()
                     .as_bytes(),
@@ -153,13 +153,12 @@ fn journey_list(
             Ok(value)
         })
         .collect::<Result<Vec<_>, ApiFailure>>()?;
-    response(
+    Ok(response(
         json!({"journeys": values, "next_cursor": format!("cur_{}", hex(&digest.finalize().into()))}),
-    )
+    ))
 }
 
 fn evidence_get(
-    feed: Feed,
     settlement_domain: SettlementDomain,
     scope: &PrincipalScope<'_>,
     request: &ScopedRequest<'_>,
@@ -175,10 +174,10 @@ fn evidence_get(
     let export_key = crate::store::RowKey::new(format!("activity-export-{}", hex(&expected)))
         .map_err(|_| ApiFailure::invalid_request(Some("evidence_id")))?;
     if let Some(row) = scope.get(crate::store::Table::Cache, &export_key) {
-        return response(
+        return Ok(response(
             json!({"evidence_id": id, "class": "local-journey-state", "verification": "unverified",
             "content_type": "text/csv; charset=utf-8", "bytes_base64": STANDARD.encode(row.bytes())}),
-        );
+        ));
     }
     let bundle_key = crate::store::RowKey::new(format!("activity-evidence-{}", hex(&expected)))
         .map_err(|_| ApiFailure::invalid_request(Some("evidence_id")))?;
@@ -186,8 +185,8 @@ fn evidence_get(
         let bundle =
             EvidenceBundle::decode(row.bytes()).map_err(|_| ApiFailure::upstream_degraded())?;
         let receipt_authority = bundle
-            .receipt_authority(feed, scope)
-            .map_err(feed_failure)?;
+            .receipt_authority(scope)
+            .map_err(|error| feed_failure(&error))?;
         let status = verification_status(bundle.verify(
             expected,
             scope.principal(),
@@ -195,17 +194,17 @@ fn evidence_get(
             &receipt_authority,
         ));
         let verification = verification_label(&status)?;
-        return response(
+        return Ok(response(
             json!({"evidence_id":id,"class":"local-journey-state","verification":verification,"content_type":"application/vnd.layerx.evidence-bundle","bytes_base64":STANDARD.encode(row.bytes())}),
-        );
+        ));
     }
     let cache_key = crate::store::RowKey::new(format!("state-proof-{}", hex(&expected)))
         .map_err(|_| ApiFailure::invalid_request(Some("evidence_id")))?;
     if let Some(row) = scope.get(crate::store::Table::Cache, &cache_key) {
-        return response(
+        return Ok(response(
             json!({"evidence_id": id, "class": "checkpoint-proof", "verification": "checkpoint-finalised",
             "content_type": "application/vnd.layerx.state-proof", "bytes_base64": STANDARD.encode(row.bytes())}),
-        );
+        ));
     }
     if let Some((entry_id, evidence)) = journey_receipt(scope, expected)? {
         let verification = receipt_label(
@@ -218,10 +217,10 @@ fn evidence_get(
             }),
             expected,
         )?;
-        return response(
+        return Ok(response(
             json!({"evidence_id": id, "class": "layerx-receipt", "verification": verification,
             "content_type": "application/vnd.layerx.receipt", "bytes_base64": STANDARD.encode(evidence.canonical_receipt)}),
-        );
+        ));
     }
     Err(ApiFailure::not_found())
 }
@@ -231,9 +230,9 @@ pub(super) fn journey_json(
     settlement_domain: SettlementDomain,
     journey: &JourneyEngine,
 ) -> Result<Value, ApiFailure> {
-    let status = journey.status().map_err(failure)?;
-    let entry_id =
-        crate::activity::stable_entry_id(status.journey_id().as_str()).map_err(feed_failure)?;
+    let status = journey.status().map_err(|error| failure(&error))?;
+    let entry_id = crate::activity::stable_entry_id(status.journey_id().as_str())
+        .map_err(|error| feed_failure(&error))?;
     let mut references = Vec::with_capacity(status.phases().len());
     for index in 0..status.phases().len() {
         let Some(digest) = status.receipt_digests().get(index).copied().flatten() else {
@@ -332,15 +331,18 @@ fn journey_receipt(
     scope: &PrincipalScope<'_>,
     digest: [u8; 32],
 ) -> Result<Option<(ActivityEntryId, VerifiedLegEvidence)>, ApiFailure> {
-    for journey in JourneyEngine::list(scope).map_err(failure)? {
-        let status = journey.status().map_err(failure)?;
+    for journey in JourneyEngine::list(scope).map_err(|error| failure(&error))? {
+        let status = journey.status().map_err(|error| failure(&error))?;
         for index in 0..status.phases().len() {
-            let Some(evidence) = journey.verified_leg_evidence(index).map_err(failure)? else {
+            let Some(evidence) = journey
+                .verified_leg_evidence(index)
+                .map_err(|error| failure(&error))?
+            else {
                 continue;
             };
             if evidence.receipt_digest == digest {
                 let entry_id = crate::activity::stable_entry_id(status.journey_id().as_str())
-                    .map_err(feed_failure)?;
+                    .map_err(|error| feed_failure(&error))?;
                 return Ok(Some((entry_id, evidence)));
             }
         }
@@ -425,19 +427,19 @@ fn hex(value: &[u8; 32]) -> String {
     }
     out
 }
-fn response(result: Value) -> Result<BackendResponse, ApiFailure> {
-    Ok(BackendResponse {
+fn response(result: Value) -> BackendResponse {
+    BackendResponse {
         result,
         session: None,
-    })
+    }
 }
-fn failure(error: crate::journeys::JourneyError) -> ApiFailure {
+fn failure(error: &crate::journeys::JourneyError) -> ApiFailure {
     match error {
         crate::journeys::JourneyError::Store(_) => ApiFailure::unavailable(),
         _ => ApiFailure::upstream_degraded(),
     }
 }
-fn feed_failure(error: crate::activity::FeedError) -> ApiFailure {
+fn feed_failure(error: &crate::activity::FeedError) -> ApiFailure {
     match error {
         crate::activity::FeedError::Store(_) => ApiFailure::unavailable(),
         _ => ApiFailure::upstream_degraded(),
@@ -459,10 +461,8 @@ fn activity_status(value: crate::activity::ActivityStatus) -> &'static str {
         S::GettingReady => "getting-ready",
         S::Sending => "sending",
         S::Processing
-        | S::Deposit(D::ConfirmingOnPaxeer)
-        | S::Deposit(D::Crediting)
-        | S::Withdrawal(W::Processing)
-        | S::Withdrawal(W::WaitingForSettlement) => "processing",
+        | S::Deposit(D::ConfirmingOnPaxeer | D::Crediting)
+        | S::Withdrawal(W::Processing | W::WaitingForSettlement) => "processing",
         S::StillChecking => "still-checking",
         S::WaitingForYou | S::Deposit(D::WaitingForWallet) | S::Withdrawal(W::ReadyToClaim) => {
             "waiting-for-you"

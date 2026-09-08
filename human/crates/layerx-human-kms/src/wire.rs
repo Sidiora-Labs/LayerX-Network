@@ -22,6 +22,7 @@ pub(crate) struct Request<'a> {
     pub expected: Option<[u8; 32]>,
     pub digest: [u8; 32],
     pub canonical: &'a [u8],
+    pub evm: &'a [u8],
     pub disclosure: &'a [u8],
 }
 impl<'a> Request<'a> {
@@ -35,7 +36,7 @@ impl<'a> Request<'a> {
         }
         let version = u16::from_be_bytes(r.fixed()?);
         let operation = r.byte()?;
-        if !matches!(version, 1 | 2) || operation > 5 || (version == 2 && operation != 3) {
+        if !matches!((version, operation), (1, 0..=5) | (2, 3) | (3, 6..=12)) {
             return Err(Error::Refused);
         }
         let provider = std::str::from_utf8(r.blob(256)?).map_err(|_| Error::Refused)?;
@@ -54,6 +55,7 @@ impl<'a> Request<'a> {
             digest: [0; 32],
             canonical: &[],
             disclosure: &[],
+            evm: &[],
         };
         if operation != 0 {
             value.binding = r.fixed()?;
@@ -78,6 +80,9 @@ impl<'a> Request<'a> {
             if value.canonical.is_empty() || value.disclosure.is_empty() {
                 return Err(Error::Refused);
             }
+        }
+        if operation >= 7 {
+            value.evm = r.blob(MAX_FRAME)?;
         }
         if r.at != bytes.len() {
             return Err(Error::Refused);

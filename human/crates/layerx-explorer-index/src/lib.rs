@@ -194,6 +194,8 @@ impl ProtocolProgramIngestor {
         }
     }
 
+    /// # Errors
+    /// Refuses unavailable protocol state, inconsistent evidence, or index head regression.
     pub fn ingest(
         &mut self,
         index: &mut Indexer,
@@ -569,6 +571,9 @@ impl Indexer {
     /// Projects one production adapter read into the public program index.
     /// Existing rows advance with a later current-head proof, or at the exact
     /// same proven state when verified source or interface evidence arrives.
+    ///
+    /// # Errors
+    /// Refuses inconsistent or stale program evidence and conflicting or regressing index heads.
     pub fn ingest_program(
         &mut self,
         registry_read: layerx_programs::VerifiedRegistryRead,

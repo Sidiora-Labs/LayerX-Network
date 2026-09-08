@@ -1,4 +1,4 @@
-mod support;
+use layerx_human_test_support as support;
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -483,6 +483,10 @@ fn concurrent_hostile_activity_stays_inside_capability_and_budget_bounds() {
         ));
     }
 
+    assert_real_budget_reservation_bounds();
+}
+
+fn assert_real_budget_reservation_bounds() {
     let budget_bound = RealAgentLayer::new("budget-bound", 1_000, 250);
     assert_eq!(
         budget_bound.submit(7, COUNTERPARTY, ASSET, 100, [0x31; 32]),
