@@ -68,7 +68,7 @@ spec:
       automountServiceAccountToken: false
       containers:
         - name: webhooks
-          image: ghcr.io/centra-ai/layerx-webhooks:0.1.0
+          image: ghcr.io/sidiora-labs/layerx-webhooks:0.1.0
           envFrom: [{ configMapRef: { name: layerx-developer-hosted } }]
           env:
             - { name: LAYERX_WEBHOOKS_COMPONENT_URL, value: "https://layerx-agent-boundary.layerx-testnet.svc:9443" }
@@ -136,7 +136,7 @@ spec:
       automountServiceAccountToken: false
       containers:
         - name: api
-          image: ghcr.io/centra-ai/layerx-dashboard:0.1.0
+          image: ghcr.io/sidiora-labs/layerx-dashboard:0.1.0
           envFrom: [{ configMapRef: { name: layerx-developer-hosted } }]
           ports: [{ name: https, containerPort: 9445 }]
           readinessProbe: { httpGet: { scheme: HTTPS, path: /healthz, port: https }, periodSeconds: 10 }
@@ -182,7 +182,7 @@ spec:
       automountServiceAccountToken: false
       containers:
         - name: web
-          image: ghcr.io/centra-ai/layerx-dashboard-web:0.1.0
+          image: ghcr.io/sidiora-labs/layerx-dashboard-web:0.1.0
           ports: [{ name: http, containerPort: 3000 }]
           readinessProbe: { httpGet: { path: /, port: http }, periodSeconds: 10 }
           resources:
