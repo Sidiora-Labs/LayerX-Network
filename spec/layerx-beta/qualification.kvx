@@ -4813,6 +4813,12 @@ file = "human/Cargo.lock platform/Cargo.lock"
 symbol = "ureq native-tls connector dependency"
 observed = "ureq 3.4.0 gates its NativeTlsConnector on native-tls rather than native-tls-no-default. Agentd enables native-tls and adds its required transitive webpki-root-certs package to agent/Cargo.lock. The human and platform lockfiles do not contain that package and are outside the owned paths. Explicit RootCerts::Specific still excludes bundled roots from runtime trust."
 assumption = "Dependent workspace owners must regenerate their lockfiles for the enabled connector before locked builds; no unrelated package upgrade is required by the agentd change."
+[observation.6.6.10]
+task = "6.6"
+file = "human/crates/layerx-paxeer-client/tests/disposable_custody.py; tests/bridge/deploy_local_custody.py"
+symbol = "real_disposable_custody_over_verified_tls; PERSISTENT_CHAIN_ID"
+observed = "cargo test --locked --manifest-path human/Cargo.toml -p layerx-paxeer-client exits 101 because disposable_custody.py imports PERSISTENT_CHAIN_ID from deploy_local_custody.py, which does not export that symbol. The failure occurs before the disposable Paxeer chain or native builder is invoked. The existing test and bridge helper are unchanged by the settlement evidence publication implementation. Exact output is retained in qual-logs/ct1/cargo-test.log."
+assumption = "Reconcile the persistent Comet-chain identity interface between the existing test and bridge helper while preserving all persistent-chain, genesis and blueprint refusal checks, then rerun the complete client suite."
 severity = "blocker"
 
 [observation.6.4.174]

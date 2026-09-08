@@ -881,3 +881,136 @@ fn word_quantity(word: &[u8; 32], what: &str) -> Result<u64, ExitError> {
         .skip(24)
         .fold(0_u64, |quantity, byte| (quantity << 8) | u64::from(*byte)))
 }
+
+impl ExitEvidence {
+    /// Encodes balance facts with the existing canonical checkpoint proof encoding.
+    /// Entries must be strictly ordered by account, asset and recipient.
+    ///
+    /// # Errors
+    /// Refuses mismatched fields, paths, roots, ordering or canonical proof bytes.
+    pub fn encode_publication(
+        entries: &[(Self, crate::CheckpointProof)],
+        protocol_version: u16,
+    ) -> Result<Vec<u8>, crate::EndpointFault> {
+        use crate::deposit::evidence as e;
+        let mut items = Vec::new();
+        let mut previous = None;
+        for (balance, proof) in entries {
+            validate_fields(balance).map_err(|_| e::invalid())?;
+            let key = (balance.account, balance.asset_id, balance.recipient.bytes());
+            if previous.is_some_and(|value| value >= key) {
+                return Err(e::invalid());
+            }
+            previous = Some(key);
+            if balance.leaf_index != proof.leaf_index
+                || balance.siblings != proof.siblings
+                || balance.attestations
+                    != proof
+                        .attestations
+                        .iter()
+                        .map(publication_attestation)
+                        .collect::<Vec<_>>()
+            {
+                return Err(e::invalid());
+            }
+            verify_balance_proof(balance, proof.state_root).map_err(|_| e::invalid())?;
+            let mut item = balance.account.to_vec();
+            item.extend_from_slice(&balance.asset_id);
+            item.extend_from_slice(&balance.finalised_balance.to_be_bytes());
+            item.extend_from_slice(&balance.recipient.bytes());
+            item.extend_from_slice(
+                &crate::wire::encode_checkpoint_proof_for_protocol(
+                    proof,
+                    e::LIMIT,
+                    protocol_version,
+                )
+                .map_err(|_| e::invalid())?,
+            );
+            items.push(item);
+        }
+        e::vector(e::BALANCES, &items)
+    }
+
+    /// Fetches pre-settlement balance evidence; `EmergencyExit::construct_claim`
+    /// still decides eligibility, certificate standing and payout authorization.
+    ///
+    /// # Errors
+    /// Refuses malformed or displaced publication, mismatched roots and absent account facts.
+    pub fn fetch_published(
+        endpoint: &EndpointConfig,
+        registry: EvmAddress,
+        checkpoint: [u8; 32],
+        expected: ([u8; 32], [u8; 32], EvmAddress),
+        protocol_version: u16,
+        confirmations: u64,
+    ) -> Result<Self, crate::EndpointFailure> {
+        use crate::deposit::evidence as e;
+        let (_, balances, registered) =
+            e::witnesses(endpoint, registry, checkpoint, confirmations)?;
+        let decode = || {
+            let mut previous = None;
+            let mut found = None;
+            for item in e::items(e::BALANCES, &balances)? {
+                let mut r = e::Reader(item);
+                let found_account = r.array()?;
+                let found_asset = r.array()?;
+                let balance = u128::from_be_bytes(r.array()?);
+                let found_recipient = EvmAddress::new(r.array()?);
+                let key = (found_account, found_asset, found_recipient.bytes());
+                if previous.is_some_and(|value| value >= key) {
+                    return Err(e::invalid());
+                }
+                previous = Some(key);
+                let proof = crate::wire::decode_checkpoint_proof_for_protocol(
+                    r.0,
+                    e::LIMIT,
+                    protocol_version,
+                )
+                .map_err(|_| e::invalid())?;
+                e::bind(&proof, checkpoint, &registered)?;
+                let evidence = Self {
+                    account: found_account,
+                    asset_id: found_asset,
+                    finalised_balance: balance,
+                    recipient: found_recipient,
+                    leaf_index: proof.leaf_index,
+                    siblings: proof.siblings,
+                    attestations: proof
+                        .attestations
+                        .iter()
+                        .map(publication_attestation)
+                        .collect(),
+                };
+                validate_fields(&evidence).map_err(|_| e::invalid())?;
+                verify_balance_proof(&evidence, registered.state_root).map_err(|_| e::invalid())?;
+                if key == (expected.0, expected.1, expected.2.bytes()) {
+                    found = Some(evidence);
+                }
+            }
+            found.ok_or_else(e::invalid)
+        };
+        decode().map_err(|fault| e::failure(endpoint, fault))
+    }
+}
+fn publication_attestation(value: &crate::WithdrawalAttestation) -> GuarantorAttestation {
+    GuarantorAttestation {
+        protocol_version: value.protocol_version,
+        network_id: value.network_id,
+        paxeer_chain_id: value.paxeer_chain_id,
+        settlement_contract: value.settlement_contract,
+        epoch: value.epoch,
+        checkpoint_id: value.checkpoint_id,
+        checkpoint_hash: value.checkpoint_hash,
+        guarantor_id: value.guarantor_id,
+        batch_number: value.batch_number,
+        data_availability_root: value.data_availability_root,
+        replayed: value.replayed,
+        data_available: value.data_available,
+        availability_class_mask: value.availability_class_mask,
+        attested_at: value.attested_at,
+        signer: value.signer,
+        signature_r: value.signature_r,
+        signature_s: value.signature_s,
+        signature_v: value.signature_v,
+    }
+}
