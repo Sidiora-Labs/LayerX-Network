@@ -332,6 +332,26 @@ lxp_result lxp_da_recovery_from_kernel(
     return status;
 }
 
+lxp_result lxp_da_recovery_verify_kernel(
+    const lxp_kernel *kernel, uint64_t receipt_watermark,
+    uint64_t projection_watermark, lxp_byte_span encoded, lxp_arena *arena)
+{
+    lxp_byte_span recomputed;
+    size_t mark;
+    lxp_result status;
+    if (arena == NULL || (encoded.bytes == NULL && encoded.length != 0U))
+        return LXP_ERR_NON_CANONICAL;
+    mark = lxp_arena_mark(arena);
+    status = lxp_da_recovery_from_kernel(kernel, receipt_watermark,
+                                         projection_watermark, arena, &recomputed);
+    if (status == LXP_OK &&
+        (encoded.length != recomputed.length ||
+         lxp_ct_memcmp(encoded.bytes, recomputed.bytes, encoded.length) != 0))
+        status = LXP_FATAL_REPLAY_DIVERGENCE;
+    (void)lxp_arena_reset(arena, mark);
+    return status;
+}
+
 lxp_result lxp_da_receipt_section_decode(
     lxp_byte_span encoded, lxp_arena *arena,
     lxp_byte_span **receipts, size_t *receipt_count,

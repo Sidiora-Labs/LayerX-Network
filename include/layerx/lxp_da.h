@@ -90,6 +90,9 @@ typedef lxp_result (*lxp_da_chunk_fetch_fn)(
     uint32_t chunk_index, lxp_arena *arena, lxp_byte_span *response);
 
 struct lxp_kernel;
+lxp_result lxp_da_recovery_verify_kernel(
+    const struct lxp_kernel *kernel, uint64_t receipt_watermark,
+    uint64_t projection_watermark, lxp_byte_span encoded, lxp_arena *arena);
 lxp_result lxp_da_recovery_from_kernel(
     const struct lxp_kernel *kernel, uint64_t receipt_watermark,
     uint64_t projection_watermark, lxp_arena *arena, lxp_byte_span *encoded);

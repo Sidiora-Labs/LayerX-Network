@@ -2719,6 +2719,10 @@ static lxp_result recover_prepared_batch_wal(
         lxp_batch_body body;
         size_t mark = lxp_arena_mark(&process->execution_arena);
         status = lxp_daemon_batch_wal_body(view, &process->execution_arena, &body);
+        if (status == LXP_OK)
+            status = lxp_da_recovery_verify_kernel(&process->kernel,
+                header.last_sequence, header.last_sequence,
+                body.recovery_metadata, &process->execution_arena);
         if (status == LXP_OK) status = availability_store_body(process, &body);
         if (status == LXP_OK)
             status = lxp_da_log_store_body(&process->availability_log, &body, &process->execution_arena);

@@ -8,58 +8,6 @@
 
 #include <string.h>
 
-static lxp_result record_size(const lxp_replay_activity_output *record,
-                              size_t *size)
-{
-    const lxp_byte_span *fields[4];
-    size_t total = 73U;
-    size_t i;
-    fields[0] = &record->effects;
-    fields[1] = &record->resulting_balance;
-    fields[2] = &record->canonical_receipt;
-    fields[3] = &record->canonical_events;
-    for (i = 0U; i < 4U; ++i) {
-        if ((fields[i]->bytes == NULL && fields[i]->length != 0U) ||
-            fields[i]->length > LXP_MAX_REPLAY_FIELD_BYTES ||
-            fields[i]->length > SIZE_MAX - total) return LXP_ERR_LENGTH_LIMIT;
-        total += fields[i]->length;
-    }
-    *size = total;
-    return LXP_OK;
-}
-
-static lxp_result record_encode(const lxp_replay_activity_output *record,
-                                lxp_arena *arena, lxp_byte_span *encoded)
-{
-    lxp_codec_writer writer;
-    size_t size;
-    lxp_result status = record_size(record, &size);
-    if (status != LXP_OK) return status;
-    status = lxp_codec_writer_init(&writer, arena, size);
-    if (status == LXP_OK) status = lxp_codec_write_u8(&writer, 1U);
-    if (status == LXP_OK)
-        status = lxp_codec_write_i32(&writer, record->result_code);
-    if (status == LXP_OK)
-        status = lxp_codec_write_u128(&writer, record->fee_charged);
-    if (status == LXP_OK)
-        status = lxp_codec_write_bytes(&writer, record->resulting_state_root,
-                                       32U, 32U);
-#define RECORD_BYTES(span) do { \
-    if (status == LXP_OK) status = lxp_codec_write_bytes( \
-        &writer, (span).bytes, (span).length, LXP_MAX_REPLAY_FIELD_BYTES); \
-} while (0)
-    RECORD_BYTES(record->effects);
-    RECORD_BYTES(record->resulting_balance);
-    RECORD_BYTES(record->canonical_receipt);
-    RECORD_BYTES(record->canonical_events);
-#undef RECORD_BYTES
-    if (status != LXP_OK) return status;
-    if (writer.length != size) return LXP_FATAL_INVARIANT;
-    encoded->bytes = writer.bytes;
-    encoded->length = writer.length;
-    return LXP_OK;
-}
-
 lxp_result lxp_replay_engine_init(
     lxp_replay_engine *engine,
     lxp_replay_parameter_version_fn parameter_version, void *context)
@@ -315,13 +263,8 @@ static lxp_result replay_batch(lxp_replay_engine *engine, bool publication,
                             body->header.first_sequence + i, activities[i],
                             current_root, arena, &result->outputs[i]);
         if (status != LXP_OK) return status;
-        if (publication) {
-            result->encoded_receipts[i] = result->outputs[i].canonical_receipt;
-            status = result->encoded_receipts[i].length != 0U ? LXP_OK : LXP_ERR_NON_CANONICAL;
-        } else {
-            status = record_encode(&result->outputs[i], arena,
-                                   &result->encoded_receipts[i]);
-        }
+        result->encoded_receipts[i] = result->outputs[i].canonical_receipt;
+        status = result->encoded_receipts[i].length != 0U ? LXP_OK : LXP_ERR_NON_CANONICAL;
         if (status != LXP_OK) return status;
         result->encoded_events[i] = result->outputs[i].canonical_events;
         (void)memcpy(current_root,
@@ -335,14 +278,9 @@ static lxp_result replay_batch(lxp_replay_engine *engine, bool publication,
         if (status != LXP_OK) return status;
         if (result->batch_maintenance_output.canonical_events.length != 0U)
             return LXP_FATAL_INVARIANT;
-        if (publication) {
-            result->encoded_batch_maintenance_receipt =
-                result->batch_maintenance_output.canonical_receipt;
-            status = result->encoded_batch_maintenance_receipt.length != 0U ? LXP_OK : LXP_ERR_NON_CANONICAL;
-        } else {
-            status = record_encode(&result->batch_maintenance_output, arena,
-                                   &result->encoded_batch_maintenance_receipt);
-        }
+        result->encoded_batch_maintenance_receipt =
+            result->batch_maintenance_output.canonical_receipt;
+        status = result->encoded_batch_maintenance_receipt.length != 0U ? LXP_OK : LXP_ERR_NON_CANONICAL;
         if (status != LXP_OK) return status;
         result->encoded_receipts[activity_count] =
             result->encoded_batch_maintenance_receipt;
@@ -360,6 +298,10 @@ static lxp_result replay_batch(lxp_replay_engine *engine, bool publication,
         lxp_ct_memcmp(body->state_diff.bytes, result->canonical_state_diff.bytes,
                       body->state_diff.length) != 0)
         return LXP_FATAL_REPLAY_DIVERGENCE;
+    status = lxp_da_recovery_verify_kernel(engine->kernel,
+        body->header.last_sequence, body->header.last_sequence,
+        body->recovery_metadata, arena);
+    if (status != LXP_OK) return status;
     status = lxp_da_receipt_section_encode(result->encoded_receipts,
                                        receipt_count, result->encoded_events,
                                        activity_count, arena,
