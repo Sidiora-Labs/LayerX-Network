@@ -21,10 +21,12 @@ ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT / 'tests/bridge'))
 from custody_credit import Rpc, create_profile, eth_hash, unhex, write_new
 from deploy_local_custody import (command, disposable_rpc, signer, genesis_document,
-                                  PERSISTENT_CHAIN_ID, PERSISTENT_GENESIS, PERSISTENT_BLUEPRINT)
+                                  PERSISTENT_GENESIS, PERSISTENT_BLUEPRINT)
 from cryptography.hazmat.primitives.asymmetric import ec, ed25519
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
+
+PERSISTENT_COMET_CHAIN_ID = "hyperpax_125-1"
 
 def port():
     with socket.socket() as reservation:
@@ -229,7 +231,7 @@ class DisposableCustody(unittest.TestCase):
                 with self.assertRaises(OSError):
                     Rpc(url).call('eth_chainId', [])
                 for field, value in [('genesis_sha256', denied), ('chain_id', 31337),
-                                     ('comet_chain_id', PERSISTENT_CHAIN_ID),
+                                     ('comet_chain_id', PERSISTENT_COMET_CHAIN_ID),
                                      ('comet_chain_id', 'wrong-chain'),
                                      ('genesis_sha256', '0x' + 'ab' * 32),
                                      ('ca_sha256', '0x' + '00' * 32), ('rpc_origins', ['https://localhost:1'])]:
