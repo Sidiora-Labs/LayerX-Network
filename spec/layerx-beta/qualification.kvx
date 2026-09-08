@@ -7189,6 +7189,7 @@ observed = "LXIP operation 1 returns only principal, DID, recovery root, thresho
 assumption = "Complete Human evidence provisioning requires real owner-account and authority registration outputs, receipt-backed principal policies, a canonical recovery commitment verifier, preserved non-secret tenant/principal bindings, corrected bootstrap ordering and real registry journal pairs. CLI-only provider changes and a single call before human_secrets_generate cannot establish these missing facts. No commitment algorithm, authority identifier, receipt or journal is fabricated. Retained-network consumed limits and checkpoint-authority Secret publication require upstream evidence; cluster and image gates are unavailable on the build host."
 
 [observation.6.8.126]
+[observation.6.8.83]
 task = "6.8"
 severity = "blocker"
 file = "human/crates/layerx-human-identity-provider/tests/client.rs human/crates/layerx-human-service/src/server/identity_dispatch.rs"
