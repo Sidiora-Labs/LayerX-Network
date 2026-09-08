@@ -4819,3 +4819,331 @@ file = "platform/hosted/human/deployment.yaml platform/hosted/node/deployment.ya
 symbol = "human_secrets_generate human_secrets_apply start_human_owner RemoteHumanAuthority::connect"
 observed = "The Human graph is co-located with the native node, using shareProcessNamespace and its memory socket volume. The owner uses the existing authorized UID 4021 and GID 4020; the API and Unix providers use UID 4020. Human Service port 9443 targets the separate container port 9447. A Human-owned egress policy admits only journeys and approvals to that node port. Secret generation creates bounded component configuration, random keys, distinct authority audiences, a session operator secret and KMS server/client certificates with UID-owned private staging. Registered authority, recovery, module registry, real Programs probe/journal and custody contract bindings remain mandatory policy inputs. The provider image build and COPY lines remain commented until their crates land. Current agentd startup additionally requires a verified Programs reader; its Human authority client does not configure the generated private CA. Those sources are unchanged."
 assumption = "bash -n platform/hosted/tests/beta-cluster.sh platform/hosted/human/material.sh platform/hosted/human/entrypoint.sh exits 0; qual-logs/hm6/bash-n.log. make platform-hosted-topology-check exits 0 after the Human egress and YAML formatting corrections, including both parsers and existing negative regressions; qual-logs/hm6/topology-formatted.log. bash tools/ci/beta-contract-check.sh and make beta-ledger-check exit 0 before this appended observation; qual-logs/hm6/contract.log and ledger.log. git diff --check exits 0; qual-logs/hm6/diff-final.log. Both kubectl apply --dry-run=client attempts fail to retrieve OpenAPI from an unconfigured API server; qual-logs/hm6/kubectl-node.log and kubectl-human.log. Validation is not disabled. Secret generation, image builds, provider processes, peer-credential refusal, KMS exchange and cluster readiness have not been executed. Static topology is not runtime qualification."
+
+[observation.4.1.6]
+task = "4.1"
+file = "platform/sdk/go"
+symbol = "sdk-build"
+observed = "GO1: go build ./... in platform/sdk/go exits 0. Log: qual-logs/go1/sdk-build.log."
+assumption = "Module paths, imports and SDK metadata use the renamed repository; dependency versions and assertions are unchanged."
+severity = "note"
+
+[observation.4.1.7]
+task = "4.1"
+file = "platform/sdk/go"
+symbol = "sdk-vet"
+observed = "GO1: go vet ./... in platform/sdk/go exits 0. Log: qual-logs/go1/sdk-vet.log."
+assumption = "Module paths, imports and SDK metadata use the renamed repository; dependency versions and assertions are unchanged."
+severity = "note"
+
+[observation.4.1.8]
+task = "4.1"
+file = "platform/sdk/go"
+symbol = "sdk-test"
+observed = "GO1: go test ./... in platform/sdk/go exits 0. Log: qual-logs/go1/sdk-test.log."
+assumption = "Module paths, imports and SDK metadata use the renamed repository; dependency versions and assertions are unchanged."
+severity = "note"
+
+[observation.4.1.9]
+task = "4.1"
+file = "platform/docs/samples/first-payment-go"
+symbol = "sample-build"
+observed = "GO1: go build ./... in platform/docs/samples/first-payment-go exits 0. Log: qual-logs/go1/sample-build.log."
+assumption = "Module paths, imports and SDK metadata use the renamed repository; dependency versions and assertions are unchanged."
+severity = "note"
+
+[observation.4.1.10]
+task = "4.1"
+file = "platform/docs/samples/first-payment-go"
+symbol = "sample-vet"
+observed = "GO1: go vet ./... in platform/docs/samples/first-payment-go exits 0. Log: qual-logs/go1/sample-vet.log."
+assumption = "Module paths, imports and SDK metadata use the renamed repository; dependency versions and assertions are unchanged."
+severity = "note"
+
+[observation.4.1.11]
+task = "4.1"
+file = "platform/docs/samples/first-payment-go"
+symbol = "sample-test"
+observed = "GO1: go test ./... in platform/docs/samples/first-payment-go exits 0. Log: qual-logs/go1/sample-test.log. The module reports no test files."
+assumption = "Module paths, imports and SDK metadata use the renamed repository; dependency versions and assertions are unchanged."
+severity = "note"
+
+[observation.4.1.12]
+task = "4.1"
+file = "paxeer-network/hpx/registry"
+symbol = "registry-build"
+observed = "GO1: go build ./... in paxeer-network/hpx/registry exits 0. Log: qual-logs/go1/registry-build.log."
+assumption = "Module paths, imports and SDK metadata use the renamed repository; dependency versions and assertions are unchanged."
+severity = "note"
+
+[observation.4.1.13]
+task = "4.1"
+file = "paxeer-network/hpx/registry"
+symbol = "registry-vet"
+observed = "GO1: go vet ./... in paxeer-network/hpx/registry exits 0. Log: qual-logs/go1/registry-vet.log."
+assumption = "Module paths, imports and SDK metadata use the renamed repository; dependency versions and assertions are unchanged."
+severity = "note"
+
+[observation.4.1.14]
+task = "4.1"
+file = "paxeer-network/hpx/registry"
+symbol = "registry-test"
+observed = "GO1: go test ./... in paxeer-network/hpx/registry exits 0. Log: qual-logs/go1/registry-test.log. The module reports no test files."
+assumption = "Module paths, imports and SDK metadata use the renamed repository; dependency versions and assertions are unchanged."
+severity = "note"
+
+[observation.4.1.15]
+task = "4.1"
+file = "Makefile platform/Makefile.inc"
+symbol = "gofmt"
+observed = "GO1: gofmt -l platform/sdk/go/client.go platform/sdk/go/cmd/conformance/main.go platform/docs/samples/first-payment-go/main.go in . exits 0. Log: qual-logs/go1/gofmt.log. Output is empty."
+assumption = "Module paths, imports and SDK metadata use the renamed repository; dependency versions and assertions are unchanged."
+severity = "note"
+
+[observation.4.1.16]
+task = "4.1"
+file = "Makefile platform/Makefile.inc"
+symbol = "old-paths"
+observed = "GO1: git grep -n 'LayerX-Protocol' -- platform/sdk/go platform/docs/samples/first-payment-go paxeer-network/hpx/registry platform/docs/content/quickstart/go.md platform/docs/content/install.md platform/docs/content/beta.md in . exits 1. Log: qual-logs/go1/old-paths.log. No matching old repository paths remain in the owned modules or documentation."
+assumption = "Module paths, imports and SDK metadata use the renamed repository; dependency versions and assertions are unchanged."
+severity = "note"
+
+[observation.4.1.17]
+task = "4.1"
+file = "Makefile platform/Makefile.inc"
+symbol = "platform-build-all"
+observed = "GO1: make platform-build-all in . exits 2. Log: qual-logs/go1/platform-build-all.log. Missing local sample Python environment fails platform-sample-dependencies-ready; confirmed in qual-logs/go1/platform-build-all-confirm.log.    Compiling openssl-macros v0.1.1    Compiling openssl v0.10.73    Compiling serde v1.0.229    Compiling native-tls v0.2.15    Compiling ureq v3.4.0    Compiling layerx-platform-release v0.1.0 (/root/lx-lanes/gosdk/platform/release)     Finished `dev` profile [unoptimized + debuginfo] target(s) in 33.89s      Running `platform/target/debug/layerx-platform-release --check platform/release/registries.kvx`"
+assumption = "The aggregate prerequisite failure is outside the Go module rename scope; component owners must resolve it before aggregate qualification can pass."
+severity = "blocker"
+
+[observation.4.1.18]
+task = "4.1"
+file = "Makefile platform/Makefile.inc"
+symbol = "platform-test-docs"
+observed = "GO1: make platform-test-docs in . exits 2. Log: qual-logs/go1/platform-test-docs.log. Missing local sample Python environment and unresolved @sidiora/layerx-buyer-middleware prevent the Go sample recipe from running.     at ModuleLoader.resolve (node:internal/modules/esm/loader:724:38)     at ModuleLoader.getModuleJobForImport (node:internal/modules/esm/loader:320:38)     at ModuleJob._link (node:internal/modules/esm/module_job:182:49) {   code: 'ERR_MODULE_NOT_FOUND' }  Node.js v22.23.2 make: *** [platform/Makefile.inc:303: platform-test-reference-apps] Error 1"
+assumption = "The aggregate prerequisite failure is outside the Go module rename scope; component owners must resolve it before aggregate qualification can pass."
+severity = "blocker"
+
+[observation.4.1.19]
+task = "4.1"
+file = "Makefile platform/Makefile.inc"
+symbol = "beta-ledger-check"
+observed = "GO1: make beta-ledger-check in . exits 0. Log: qual-logs/go1/beta-ledger-check.log."
+assumption = "Module paths, imports and SDK metadata use the renamed repository; dependency versions and assertions are unchanged."
+severity = "note"
+
+[observation.4.1.20]
+task = "4.1"
+file = "Makefile platform/Makefile.inc"
+symbol = "diff-check"
+observed = "GO1: git diff --check in . exits 0. Log: qual-logs/go1/diff-check.log."
+assumption = "Module paths, imports and SDK metadata use the renamed repository; dependency versions and assertions are unchanged."
+severity = "note"
+
+[observation.4.1.21]
+task = "4.1"
+file = "Makefile platform/Makefile.inc"
+symbol = "platform-build-all-confirm"
+observed = "GO1: make platform-build-all in . exits 2. Log: qual-logs/go1/platform-build-all-confirm.log. Missing local sample Python environment fails platform-sample-dependencies-ready; confirmed in qual-logs/go1/platform-build-all-confirm.log. python3 platform/sdk/generators/generate_jvm.py --check /root/lx-lanes/gosdk cargo run --offline --manifest-path platform/Cargo.toml --locked -p layerx-platform-sdkgen -- --check     Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.43s      Running `platform/target/debug/layerx-platform-sdkgen --check` make[1]: Leaving directory '/root/lx-lanes/gosdk' cargo run --offline --manifest-path platform/Cargo.toml --locked -p layerx-platform-release -- --check platform/release/registries.kvx     Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.30s      Running `platform/target/debug/layerx-platform-release --check platform/release/registries.kvx`"
+assumption = "The aggregate prerequisite failure is outside the Go module rename scope; component owners must resolve it before aggregate qualification can pass."
+severity = "blocker"
+
+[observation.1.2.14]
+task = "1.2"
+file = "platform/cli/src/credential.rs platform/cli/src/file_store.rs platform/cli/tests/file_store.rs"
+symbol = "encrypted_entry_lifecycle_and_refusals"
+observed = "Explicit LAYERX_CREDENTIAL_STORE=file selects a passphrase-encrypted credential vault. cargo fmt --check --manifest-path platform/Cargo.toml -p layerx-platform-cli exits 0 (qual-logs/cli1/fmt-final.log); cargo build --locked --manifest-path platform/Cargo.toml -p layerx-platform-cli exits 0 (qual-logs/cli1/build-final.log); cargo clippy --locked --manifest-path platform/Cargo.toml -p layerx-platform-cli --all-targets -- -D warnings exits 0 (qual-logs/cli1/clippy.log); cargo test --locked --manifest-path platform/Cargo.toml -p layerx-platform-cli exits 0 with 89 tests passing (qual-logs/cli1/test.log). python3 qual-logs/cli1/binary-check.py exits 0 and proves key create quickstart, key list, auth set/status/delete and key deletion with an unavailable session bus (qual-logs/cli1/binary.log). make beta-ledger-check exits 0 (qual-logs/cli1/beta-ledger-check.log)."
+assumption = "File storage requires explicit selection and a passphrase; the OS store remains the default. Tests cover encrypted bytes, owner-only vault/directory/lock permissions, wrong passphrases, authenticated ciphertext corruption, symlink refusal, credential rotation and deletion, and persistence across real CLI processes."
+severity = "note"
+
+[observation.1.2.15]
+task = "1.2"
+file = "platform/cli/tests/common/credential_environment.rs"
+symbol = "CredentialEnvironment"
+observed = "The real Secret Service tests emit dbus-daemon Cannot initialize inotify: Too many open files messages on this host. All 89 CLI tests still pass; raw output is in qual-logs/cli1/test.log."
+assumption = "Host inotify resource pressure is independent of credential backend selection and did not prevent the isolated credential services from serving the tested operations."
+severity = "note"
+
+[observation.3.7.21]
+task = "3.7"
+file = "human/Cargo.toml human/crates/layerx-human-service/src/server/production_auth.rs human/crates/layerx-human-service/src/server/production_components.rs"
+symbol = "cargo fmt cargo clippy"
+observed = "cargo fmt --all --check --manifest-path human/Cargo.toml exits 1; qual-logs/hm3/fmt-check.log contains existing formatting differences beginning in agent/crates/layerx-agent-api/src/generated.rs. cargo clippy --locked --manifest-path human/Cargo.toml -p layerx-human-identity-provider --all-targets -- -D warnings exits 101 with 436 errors in layerx-human-service before checking the identity provider; qual-logs/hm3/clippy-retry.log. Findings include many_single_char_names, unnested_or_patterns and missing_errors_doc. No dependency source or lint configuration is changed."
+assumption = "The dependency owners must resolve the existing formatting and Clippy failures before the required aggregate commands can pass. A separate no-deps Clippy command can diagnose the provider but does not replace the required command."
+severity = "blocker"
+
+[observation.3.7.22]
+task = "3.7"
+file = "human/crates/layerx-human-service/src/server/identity_dispatch.rs human/crates/layerx-human-identity-provider/README.md"
+symbol = "RemoteIdentityProvider::provision RemoteIdentityProvider::device_for_assertion"
+observed = "LXIP v1 provisioning carries email, display name, idempotency key and timestamp but no recovery policy. Assertion-device lookup carries only principal and assertion ID, with no enrollment operation or authenticated device metadata. The provider requires an operator-supplied protected recovery policy file and exposes owner-only offline bind-device enrollment with exclusive state locking. Unknown assertion bindings are refused; recovery commitments and device attestations are never invented from request text."
+assumption = "Deployment must supply an exercisable recovery authority policy and connect the verified assertion enrollment authority to the protected provider state. The hosted HTTP identity contract is distinct. Cluster and image gates cannot run on this server because Docker, kubectl, kind and a live cluster are unavailable."
+severity = "blocker"
+
+[observation.3.7.23]
+task = "3.7"
+file = "human/crates/layerx-human-identity-provider human/crates/layerx-human-service/src/server/identity_dispatch.rs"
+symbol = "Server State RemoteIdentityProvider"
+observed = "cargo test --locked --manifest-path human/Cargo.toml -p layerx-human-identity-provider exits 0 with 11 tests passing, zero ignored; qual-logs/hm3/test-final.log. Tests compile the unchanged identity_dispatch.rs source with the actual service types and exercise its RemoteIdentityProvider over real Unix sockets. Separate real-server and real-binary tests cover malformed frames, UID refusal, atomic snapshot replay, protected file and directory refusal, committed-state corruption, missing-snapshot refusal, owner-only device enrollment, crash restart and SIGTERM. Owned Rust files pass rustfmt --check --edition 2021 --config skip_children=true; qual-logs/hm3/fmt-owned-check.log. The no-deps all-target Clippy diagnostic exits 101 solely on five existing diagnostics in the imported identity_dispatch.rs source at lines 147, 191 and 192; qual-logs/hm3/clippy-owned-final.log. No lint allowances, assertions or client source were changed."
+assumption = "Runtime tests validate the provider and original client wire exchange, not automatic enrollment integration or a deployed cluster. Required workspace formatting and dependency Clippy gates remain blocked as recorded in observation.3.7.21. Environment uses CARGO_BUILD_JOBS=16, MAKEFLAGS=-j16, the pinned Rust 1.91.1 toolchain and human/target."
+severity = "note"
+
+[observation.6.4.159]
+task = "6.4"
+file = "human/crates/layerx-human-service/src/server/production_auth.rs"
+symbol = "RemoteSecurityProvider AuthDiscoveryIndex RecoveryEvidenceProvider"
+observed = "RemoteSecurityProvider sends only LXSP opcodes 0 through 6: probe, status, begin_setup, finish_setup, disable, rotate_backup_codes and reveal_verified_receipt. Registration, assertion, step-up, account and session bindings and resolutions use the separate local AuthDiscoveryIndex. Authorization and capability consumption also use local state and send no LXSP frames. Discovery resolution is repeatable. No receipt ingestion opcode is defined."
+assumption = "A server implementation and real-client tests for remote discovery, single-use ceremony consumption, session and capability operations require a client wire extension and production caller changes outside the security-provider crate. Recovery ingestion requires a canonical receipt and verification-input contract. No server build or test gate has run."
+severity = "blocker"
+
+[observation.6.4.160]
+task = "6.4"
+file = "human/crates/layerx-human-service/src/server/production_auth.rs human/crates/layerx-human-service/src/server/production_components.rs human/crates/layerx-human-service/src/server/schema.rs"
+symbol = "RemoteSecurityProvider clippy"
+observed = "cargo clippy --locked --manifest-path human/Cargo.toml -p layerx-human-security-provider --all-targets -- -D warnings exits 101 in layerx-human-service with 436 lint errors; qual-logs/hm4/clippy.log. Examples include many_single_char_names in production_auth.rs, unnested_or_patterns in production_components.rs and schema.rs, and missing_errors_doc on existing public APIs. A duplicate invocation waiting on the same build directory was terminated with exit 143; qual-logs/hm4/clippy-initial.log."
+assumption = "The existing human-service dependency is outside the provider crate ownership. Its code and lint configuration remain unchanged. The exact required gate is not qualified."
+severity = "blocker"
+
+[observation.6.4.161]
+task = "6.4"
+file = "human/Cargo.toml human/crates/layerx-human-security-provider"
+symbol = "cargo-fmt cg-guard"
+observed = "cargo fmt --all --check --manifest-path human/Cargo.toml exits 1 with differences in 86 existing out-of-scope files and no differences in layerx-human-security-provider; qual-logs/hm4/fmt-all.log and qual-logs/hm4/fmt-paths.txt. cg brief and cg guard exit 1 because the clone is not initialized as a Codify project; qual-logs/hm4/cg-brief.log and qual-logs/hm4/cg-guard.log."
+assumption = "The workspace format command is a report gate. Out-of-scope source formatting, Codify initialization, task status changes and cluster or image gates are not performed."
+severity = "blocker"
+
+[observation.6.4.162]
+task = "6.4"
+file = "human/crates/layerx-human-security-provider human/Cargo.toml human/Cargo.lock"
+symbol = "LXSP Store RemoteSecurityProvider ingest_recovery_receipt"
+observed = "The provider implements existing LXSP operations 0 through 6, durable authenticator setup and attempt counters, TOTP verification, backup rotation, SO_PEERCRED admission, bounded I/O, signal shutdown and owner-only verified recovery ingestion. cargo test --locked --manifest-path human/Cargo.toml -p layerx-human-security-provider exits 0 twice with all 10 real-client and binary integration tests passing; qual-logs/hm4/test.log and qual-logs/hm4/test-final.log. Tests cover expiry equality, replay, missing journal tails, corruption, protected file modes and links, exclusive locking, malformed frames, wrong UID, total I/O limits, both shutdown signals, real signed receipt ingestion and reveal, signature tampering and trust-history changes. cargo fmt --check --manifest-path human/Cargo.toml -p layerx-human-security-provider exits 0; qual-logs/hm4/fmt-owned-check.log. The final locked Clippy rerun exits 101 with the same 436 existing human-service errors; qual-logs/hm4/clippy-final.log."
+assumption = "The existing client and local discovery/capability code remain unchanged. The revised operations-only scope and administrative ingestion contract supersede the client-extension dependency described in observation 6.4.159. cargo update --workspace --manifest-path human/Cargo.toml exits 0 and adds only the new member and four dependencies, preserving every previously locked package version; qual-logs/hm4/lock-minimal.log. Environment: CARGO_BUILD_JOBS=16 MAKEFLAGS=-j16 with the worktree-default human/target directory. Full qualification remains blocked by observation 6.4.160; no task status is changed."
+severity = "blocker"
+
+[observation.6.4.163]
+task = "6.4"
+file = "platform/hosted/authority/src/main.rs platform/hosted/authority/src/lib.rs agent/crates/layerx-agentd/src/human_runtime.rs"
+symbol = "Config ReplicaDocument AuthorityFacts RemoteHumanAuthority::get CoreLeaseAttestation::map"
+observed = "The receipt authority performs on-demand activity receipt and replica batch-evidence lookups. Config has no durable principal policy store or verified clock source. ReplicaDocument contains replica identity, sequencer key and batch evidence; AuthorityFacts does not contain the complete module registry, budget revocation state or checkpoint-finalised policy evidence. A historical header timestamp does not establish the future upper sequence required by CoreLeaseAttestation::map. RemoteHumanAuthority::get maps every non-success HTTP status, including 503, to Refused; only transport and body-read failures become Unavailable. The derived eight-route wire contract is recorded in platform/hosted/authority/README.md. No runtime routes, token provisioning, policy store or integration tests have been implemented."
+assumption = "Verified registry, budget and clock evidence interfaces must be supplied or specified before the full contract can be implemented without synthetic authority facts. An agent-side status mapping change is required if HTTP 503 must produce Unavailable. Runtime qualification remains unrun because implementation is incomplete. Cluster and image gates are unavailable on this host."
+severity = "blocker"
+
+[observation.6.4.164]
+task = "6.4"
+file = "platform/hosted/gateway/src/main.rs platform/hosted/authority/src/human.rs"
+symbol = "ModuleFile configured_modules registry"
+observed = "Gateway ModuleFile accepts only modules with module and ordinals and denies unknown fields; no currency metadata is available. configured_modules injects Programs ordinals 1, 2 and 7 and limits the module count to eight. Authority preserves the complete provisioned file registrations, reports SHA-256 of its bytes, and refuses balance-context with HTTP 503 when currency metadata cannot be derived."
+assumption = "The gateway owner must supply a shared currency metadata schema and reconcile enabled-set semantics. Authority must not invent currency or silently inject registrations."
+severity = "blocker"
+
+[observation.6.4.165]
+task = "6.4"
+file = "platform/hosted/authority/src/human.rs agent/crates/layerx-wire/src/receipt.rs agent/crates/layerx-agentd/src/human_runtime.rs"
+symbol = "policy_route budget account_summary RemoteHumanAuthority::get"
+observed = "ProtocolReceipt exposes account balances but no budget revocation field; ReplicaDocument supplies signed batch inclusion without checkpoint certificates or identity/capability state proofs. Provisioned bindings and verified receipt references cannot establish checkpoint-finalised state. Authority routes refuse missing state proofs and checkpoint evidence with HTTP 503; balance and budget refusals carry the actual held evidence inventory and zero balances for accounts without receipts. RemoteHumanAuthority collapses all non-2xx responses, including durable faults, to Refused."
+assumption = "Successful identity, capability, budget and key-policy responses need verifiable state and checkpoint evidence tied to the explicit provisioned bindings. No synthetic receipt, checkpoint digest, revocation sequence or verification rank may substitute for missing evidence. The client status collapse remains unchanged under the supplied decision."
+severity = "blocker"
+
+[observation.6.4.166]
+task = "6.4"
+file = "agent/crates/layerx-agentd/Cargo.toml agent/crates/layerx-agentd/src/human_runtime.rs platform/hosted/authority/tests/human_tls.rs"
+symbol = "RemoteHumanAuthority::connect real_tls_client_and_durable_refusals"
+observed = "The real RemoteHumanAuthority client panics before its first HTTPS request: uri scheme is https, provider is Rustls but feature is not enabled: rustls. The agentd ureq dependency disables default features and enables json and native-tls-no-default; RemoteHumanAuthority::connect uses the default TLS provider. cargo test --locked --manifest-path platform/Cargo.toml -p layerx-platform-authority exits 101 after 12 library/binary unit tests pass and the real-client TLS test fails. Evidence: qual-logs/hm2/test.log and qual-logs/hm2/human-tls-147340/client.log."
+assumption = "The agent owner must explicitly select the compiled native TLS provider and configure trusted CA roots, or consistently enable and configure Rustls. The authority test must retain the real-client failure; adding a test-only provider feature would hide the deployed client defect."
+severity = "blocker"
+
+[observation.6.4.167]
+task = "6.4"
+file = "platform/hosted/authority/tests/real_node.rs"
+symbol = "identity real_node_authority_serves_verified_facts_and_reflects_replica_loss real_replica_readiness_relay_and_refusals_without_sequencer"
+observed = "cargo test --locked --manifest-path platform/Cargo.toml -p layerx-platform-authority --test maintenance_identity --test real_node --no-fail-fast exits 101. All five maintenance-identity tests pass. Both real-node tests fail the existing harness assertion requiring root UID: actual 1000, expected 0. Evidence: qual-logs/hm2/existing-integration.log. The configured native binary directory and worktree build/bin also contain no layerxd or layerx-genesis-build binaries."
+assumption = "Live-node qualification needs the existing root harness prerequisite and real native binaries. The assertions remain intact. Cluster and image gates are not run because the host has no cluster or image tooling."
+severity = "blocker"
+
+[observation.6.4.168]
+task = "6.4"
+file = "platform/Cargo.toml"
+symbol = "cargo_fmt_all_check"
+observed = "cargo fmt --all --check --manifest-path platform/Cargo.toml exits 1 with formatting differences in 86 files outside platform/hosted/authority. The full 29073-line report is qual-logs/hm2/fmt-all.log and the unique file inventory is qual-logs/hm2/fmt-paths.log. cargo fmt --check --manifest-path platform/Cargo.toml -p layerx-platform-authority exits 0 in qual-logs/hm2/fmt-owned-check.log."
+assumption = "Formatting outside the authority ownership scope remains unchanged. The aggregate formatting gate is not passing."
+severity = "blocker"
+
+[observation.6.4.169]
+task = "6.4"
+file = "platform/hosted/authority/tests/human_tls.rs platform/hosted/authority/src/human.rs"
+symbol = "real_server_wire_statuses_remain_distinct"
+observed = "cargo test --locked --manifest-path platform/Cargo.toml -p layerx-platform-authority --test human_tls exits 101: the separate real-server wire-status test passes and the real RemoteHumanAuthority test retains its TLS-provider panic. The wire test verifies registry and cached authorized-batch HTTP 200, wrong-tenant and unlisted-capability HTTP 403, service-token HTTP 401, and missing or changed policy and insufficient clock evidence HTTP 503. Evidence: qual-logs/hm2/tls-final.log. Final cargo clippy --locked --manifest-path platform/Cargo.toml -p layerx-platform-authority --all-targets -- -D warnings exits 0 in qual-logs/hm2/clippy-last.log; authority-only cargo fmt --check exits 0 in qual-logs/hm2/fmt-last.log."
+assumption = "The wire test proves server behavior but does not replace the failed real-client integration or establish successful responses for the five evidence-blocked routes. Native prerequisite inspection first encounters EACCES under the ordinary UID; privileged read-only stat then confirms both advertised native binary paths are absent. Evidence: qual-logs/hm2/native-prerequisites.log and qual-logs/hm2/native-root-check.log."
+severity = "blocker"
+
+[observation.6.4.170]
+task = "6.4"
+file = "human/crates/layerx-explorer-index/src/main.rs"
+symbol = "refresh_program LayerxdProgramBalanceReader::connect"
+observed = "The Programs reader now requires ProgramAuthority containing endpoint, authorization, replica_id and explicit ca_der. The explorer caller still supplies the former three separate authority arguments and needs a required DER CA input. The caller lies outside the agentd owned paths; its exact migration is recorded in the untracked NEEDS.md."
+assumption = "The explorer owner must supply the explicit CA and migrate the caller before cross-workspace qualification. Agentd full mode reads LAYERX_AGENT_AUTHORITY_CA_DER; both agentd modes read LAYERX_AGENT_HUMAN_AUTHORITY_CA_DER."
+severity = "blocker"
+
+[observation.6.4.171]
+task = "6.4"
+file = "agent/crates/layerx-agent-api/src/generated.rs programs/vendor/wasmi-0.31.2"
+symbol = "cargo fmt --all --check --manifest-path agent/Cargo.toml"
+observed = "The required workspace formatting check exits 1 with pre-existing differences across untouched workspace and vendor files. Evidence: qual-logs/hm7/fmt.log and qual-logs/hm7/fmt.exit. Unrelated formatting changes were not retained."
+assumption = "Workspace formatting requires a separate change owned by the affected components; the Human owner task does not authorize reformatting them."
+severity = "blocker"
+
+[observation.6.4.172]
+task = "6.4"
+file = "agent/crates/layerx-agentd/tests/support/real_authority.rs"
+symbol = "real authority fixture identity and native binaries"
+observed = "cargo test --locked --manifest-path agent/Cargo.toml -p layerx-agentd exits 101 after library and health tests pass. budget_create fails at real_authority.rs:326 because the harness requires UID 0 but the process UID is 1000; four subsequent failures report a poisoned fixture lock. Evidence: qual-logs/hm7/test-qualified.log. Privileged executable checks also find neither layerxd nor layerx-genesis-build at /root/lx-lanes/native-bin or worktree build/bin; evidence: qual-logs/hm7/native-prerequisites.log."
+assumption = "The unchanged native harness requires a privileged qualification process and real native binaries. Those prerequisites must be supplied before the aggregate test gate can pass; no assertion or test was relaxed."
+severity = "blocker"
+
+[observation.6.4.173]
+task = "6.4"
+file = "human/Cargo.lock platform/Cargo.lock"
+symbol = "ureq native-tls connector dependency"
+observed = "ureq 3.4.0 gates its NativeTlsConnector on native-tls rather than native-tls-no-default. Agentd enables native-tls and adds its required transitive webpki-root-certs package to agent/Cargo.lock. The human and platform lockfiles do not contain that package and are outside the owned paths. Explicit RootCerts::Specific still excludes bundled roots from runtime trust."
+assumption = "Dependent workspace owners must regenerate their lockfiles for the enabled connector before locked builds; no unrelated package upgrade is required by the agentd change."
+severity = "blocker"
+
+[observation.6.6.10]
+task = "6.6"
+file = "human/crates/layerx-paxeer-client/tests/disposable_custody.py; tests/bridge/deploy_local_custody.py"
+symbol = "real_disposable_custody_over_verified_tls; PERSISTENT_CHAIN_ID"
+observed = "cargo test --locked --manifest-path human/Cargo.toml -p layerx-paxeer-client exits 101 because disposable_custody.py imports PERSISTENT_CHAIN_ID from deploy_local_custody.py, which does not export that symbol. The failure occurs before the disposable Paxeer chain or native builder is invoked. The existing test and bridge helper are unchanged by the settlement evidence publication implementation. Exact output is retained in qual-logs/ct1/cargo-test.log."
+assumption = "Reconcile the persistent Comet-chain identity interface between the existing test and bridge helper while preserving all persistent-chain, genesis and blueprint refusal checks, then rerun the complete client suite."
+severity = "blocker"
+
+[observation.6.4.174]
+task = "6.4"
+file = "agent/crates/layerx-agentd/src/human_runtime.rs agent/crates/layerx-proof/src/checkpoint.rs agent/crates/layerx-wire/src/receipt.rs"
+symbol = "RemoteHumanAuthority::budget_state RemoteHumanAuthority::key_rotation_policy CheckpointCertificate"
+observed = "The requested derived budget revocation sequence is zero without account-touching evidence, but the client explicitly rejects zero. Budget and key-policy readers require verification ranks 4 or 5. Retained ReplicaDocument batch evidence has one sequencer signature over a batch-header digest and proves batch inclusion; it has no bonded guarantor attestations or settlement registration. The existing wire CheckpointCertificate encodes guarantor signatures and threshold, and the proof verifier distinguishes that finality from batch inclusion. Encoding the sequencer signature as a guarantor signature or returning rank 4 without its verifier would misstate the evidence. Identity owner and capability installation also require checkpoint-finalised evidence."
+assumption = "An explicitly versioned derived-state contract across the client and authority, or actual independently verified checkpoint evidence, is required. Current finality checks and the four evidence refusals remain intact. No synthetic certificate or state proof is supplied."
+severity = "blocker"
+
+[observation.6.4.175]
+task = "6.4"
+file = "platform/hosted/tests/beta-cluster.sh platform/hosted/gateway/tests/local/lifecycle.rs"
+symbol = "module registry provisioning"
+observed = "Authority and gateway module registry readers require schema_version 2 and an assets array alongside modules. Each asset has asset, currency, decimals and symbol. Gateway main.rs contains a reader but no registry writer; provisioning writers are outside the permitted paths. The gateway eight-module bound and Programs ordinal insertion remain unchanged."
+assumption = "Registry writers must supply the actual network asset metadata in the new shape documented in platform/hosted/gateway/README.md. Old unversioned files and version 1 are refused by both readers."
+severity = "blocker"
+
+[observation.6.4.176]
+task = "6.4"
+file = "platform/hosted/authority/tests/real_node.rs platform/hosted/authority/tests/human_tls.rs"
+symbol = "real-node identity prerequisite and explicit-CA TLS client"
+observed = "cargo test --locked --manifest-path platform/Cargo.toml -p layerx-platform-authority -p layerx-platform-gateway exits 101 after 21 authority unit, TLS and maintenance tests pass. All three real-server TLS tests pass, including RemoteHumanAuthority with explicit CA DER and the successful registry-bound balance-context read. Both real-node tests fail their unchanged UID assertion: actual 1000, required 0. Gateway tests are not reached by this command. Evidence: qual-logs/hm2/hm2c-test.log and hm2c-test.exit. Native executable checks fail at both worktree and advertised binary paths in qual-logs/hm2/hm2c-prerequisites.log."
+assumption = "Real-node qualification and successful two-header clock evidence require the existing privileged native harness and actual native binaries. Cluster and image gates remain unrun because their tools and infrastructure are absent. No all-eight-route successful-client coverage is claimed."
+severity = "blocker"
+
+[observation.6.4.177]
+task = "6.4"
+file = "platform/hosted/gateway/tests/tap_nonce.rs platform/hosted/gateway/src/main.rs"
+symbol = "module_schema_tests and Redis qualification prerequisite"
+observed = "The separate gateway cargo test command first exits 101 because redis-server is absent, after all 21 unit tests pass. Installing untracked Redis tooling and its liblzf/libjemalloc dependencies under qual-logs/hm2/redis/extracted allows cargo test --locked --manifest-path platform/Cargo.toml -p layerx-platform-gateway to exit 0 with all 23 tests passing. The rerun prepends extracted/usr/bin to PATH and sets LD_LIBRARY_PATH to extracted/usr/lib/x86_64-linux-gnu. Final cargo fmt --check and cargo clippy --locked --all-targets -- -D warnings for both authority and gateway exit 0. Evidence: qual-logs/hm2/hm2c-gateway-test-final.log, hm2c-redis-install.log, hm2c-fmt-final.log and hm2c-clippy-final.log."
+assumption = "The Redis tests start isolated loopback TLS servers on ephemeral ports and retain their original assertions. These passing local gates do not establish privileged native-node, cluster, image, or all-eight-route success."
+severity = "note"

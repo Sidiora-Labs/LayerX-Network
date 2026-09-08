@@ -1322,3 +1322,454 @@ fn real_pending_challenge_reports_timing_and_upheld_challenge_cancels_without_pa
         VAULT_BALANCE
     );
 }
+
+fn publication_calldata(selector: [u8; 4], heads: &[[u8; 32]], tails: &[Vec<u8>]) -> Vec<u8> {
+    let mut words = heads.to_vec();
+    let mut offset = (heads.len() + tails.len()) * 32;
+    for tail in tails {
+        words.push(usize_word(offset));
+        offset += tail.len();
+    }
+    let mut data = call_data(selector, &words);
+    for tail in tails {
+        data.extend_from_slice(tail);
+    }
+    data
+}
+fn publication_bytes(bytes: &[u8]) -> Vec<u8> {
+    let mut out = usize_word(bytes.len()).to_vec();
+    out.extend_from_slice(bytes);
+    out.resize(out.len().div_ceil(32) * 32, 0);
+    out
+}
+fn exit_attestation(v: &WithdrawalAttestation) -> layerx_paxeer_client::GuarantorAttestation {
+    layerx_paxeer_client::GuarantorAttestation {
+        protocol_version: v.protocol_version,
+        network_id: v.network_id,
+        paxeer_chain_id: v.paxeer_chain_id,
+        settlement_contract: v.settlement_contract,
+        epoch: v.epoch,
+        checkpoint_id: v.checkpoint_id,
+        checkpoint_hash: v.checkpoint_hash,
+        guarantor_id: v.guarantor_id,
+        batch_number: v.batch_number,
+        data_availability_root: v.data_availability_root,
+        replayed: v.replayed,
+        data_available: v.data_available,
+        availability_class_mask: v.availability_class_mask,
+        attested_at: v.attested_at,
+        signer: v.signer,
+        signature_r: v.signature_r,
+        signature_s: v.signature_s,
+        signature_v: v.signature_v,
+    }
+}
+
+struct PublicationFixture {
+    anvil: Anvil,
+    vault: EvmAddress,
+    registry: EvmAddress,
+    challenge: EvmAddress,
+    claims: EvmAddress,
+    debit: DebitExpectation,
+    withdrawal: [u8; 32],
+    proof: CheckpointProof,
+    evidence: layerx_paxeer_client::ExitEvidence,
+    withdrawals: Vec<u8>,
+    balances: Vec<u8>,
+}
+fn publication_fixture() -> PublicationFixture {
+    use layerx_paxeer_client::ExitEvidence;
+    let anvil = Anvil::launch();
+    let (_, vault, bond, registry, challenge, claims) = deploy_suite_for_protocol(&anvil, 3);
+    let debit = debit_expectation(parse_address(RECIPIENT));
+    let withdrawal = withdrawal_leaf(debit);
+    let balance =
+        layerx_paxeer_client::balance_leaf(&debit.account, &ASSET, AMOUNT, debit.recipient);
+    let state_root = layerx_paxeer_client::merkle_node(&withdrawal, &balance);
+    let mut header = checkpoint_header(state_root, anvil.latest_timestamp() * 1000);
+    header.protocol_version = 3;
+    let checkpoint = checkpoint_hash(&header);
+    let attestation = signed_attestation(&header, checkpoint, bond);
+    anvil.send_checked(
+        FUNDED,
+        registry,
+        &register_checkpoint_calldata(&header, &attestation),
+        0,
+    );
+    let proof = CheckpointProof {
+        checkpoint_hash: checkpoint,
+        state_root,
+        epoch: 1,
+        batch_number: 1,
+        data_availability_root: header.data_availability_root,
+        leaf_index: 0,
+        siblings: vec![balance],
+        attestations: vec![attestation],
+    };
+    let balance_proof = CheckpointProof {
+        leaf_index: 1,
+        siblings: vec![withdrawal],
+        ..proof.clone()
+    };
+    let evidence = ExitEvidence {
+        account: debit.account,
+        asset_id: ASSET,
+        finalised_balance: AMOUNT,
+        recipient: debit.recipient,
+        leaf_index: 1,
+        siblings: vec![withdrawal],
+        attestations: vec![exit_attestation(&attestation)],
+    };
+    let withdrawals = CheckpointProof::encode_publication(&[(debit, proof.clone())], 3)
+        .unwrap_or_else(|e| panic!("withdrawals: {e:?}"));
+    let balances = ExitEvidence::encode_publication(&[(evidence.clone(), balance_proof)], 3)
+        .unwrap_or_else(|e| panic!("balances: {e:?}"));
+    PublicationFixture {
+        anvil,
+        vault,
+        registry,
+        challenge,
+        claims,
+        debit,
+        withdrawal,
+        proof,
+        evidence,
+        withdrawals,
+        balances,
+    }
+}
+
+fn verify_published_exit(
+    anvil: &Anvil,
+    registry: EvmAddress,
+    challenge: EvmAddress,
+    vault: EvmAddress,
+    fetched: layerx_paxeer_client::ExitEvidence,
+) {
+    use layerx_paxeer_client::{EmergencyExit, ExitConfig};
+    let nullifiers = anvil.deploy(
+        "WithdrawalNullifierRegistry",
+        &[
+            address_word(parse_address(FUNDED)),
+            address_word(parse_address(CHALLENGER)),
+            [0x71; 32],
+            quantity_const(1),
+        ],
+    );
+    let exit = anvil.deploy(
+        "EmergencyExit",
+        &[
+            address_word(registry),
+            address_word(challenge),
+            address_word(nullifiers),
+            address_word(vault),
+            address_word(parse_address(FUNDED)),
+            address_word(parse_address(CHALLENGER)),
+            quantity_word(&3600_u64.to_be_bytes()),
+            [0x72; 32],
+            quantity_const(1),
+        ],
+    );
+    let exit = EmergencyExit::new(ExitConfig {
+        endpoints: vec![anvil.endpoint.clone()],
+        minimum_endpoint_agreement: 1,
+        exit_contract: exit,
+        required_confirmations: 1,
+        poll_cadence: Duration::from_millis(20),
+        delayed_after_polls: 100,
+    })
+    .unwrap_or_else(|e| panic!("exit: {e:?}"));
+    anvil.advance(3601);
+    assert!(exit.construct_claim(&fetched).is_ok());
+    let mut wrong = fetched;
+    wrong.finalised_balance += 1;
+    assert!(exit.construct_claim(&wrong).is_err());
+}
+
+#[test]
+fn real_published_checkpoint_withdrawal_and_balance_witnesses() {
+    use layerx_paxeer_client::ExitEvidence;
+    let PublicationFixture {
+        anvil,
+        vault,
+        registry,
+        challenge,
+        claims,
+        debit,
+        withdrawal,
+        proof,
+        evidence,
+        withdrawals,
+        balances,
+    } = publication_fixture();
+    let checkpoint = proof.checkpoint_hash;
+    assert!(
+        CheckpointProof::fetch_published(&anvil.endpoint, registry, checkpoint, &debit, 3, 1)
+            .is_err()
+    );
+    let snapshot = anvil.call("evm_snapshot", &[]);
+    anvil.send_checked(
+        FUNDED,
+        registry,
+        &publication_calldata(
+            [0x69, 0x92, 0x97, 0x38],
+            &[checkpoint],
+            &[
+                publication_bytes(&withdrawals),
+                publication_bytes(&balances),
+            ],
+        ),
+        0,
+    );
+    assert!(
+        CheckpointProof::fetch_published(&anvil.endpoint, registry, checkpoint, &debit, 3, 2)
+            .is_err()
+    );
+    anvil.mine();
+    let fetched =
+        CheckpointProof::fetch_published(&anvil.endpoint, registry, checkpoint, &debit, 3, 2)
+            .unwrap_or_else(|e| panic!("published withdrawal: {e:?}"));
+    assert_eq!(fetched, proof);
+    let boundary = WithdrawalBoundary::new_for_protocol(
+        WithdrawalConfig {
+            endpoints: vec![anvil.endpoint.clone()],
+            minimum_endpoint_agreement: 1,
+            claims_contract: claims,
+            required_confirmations: 1,
+            poll_cadence: Duration::from_millis(20),
+            delayed_after_polls: 100,
+        },
+        3,
+    )
+    .unwrap_or_else(|e| panic!("boundary: {e:?}"));
+    let claim = boundary
+        .construct_claim(committed_debit_for_protocol(debit, 3), fetched)
+        .unwrap_or_else(|e| panic!("claim: {e:?}"));
+    assert_eq!(claim.leaf(), withdrawal);
+    let fetched = ExitEvidence::fetch_published(
+        &anvil.endpoint,
+        registry,
+        checkpoint,
+        (debit.account, ASSET, debit.recipient),
+        3,
+        2,
+    )
+    .unwrap_or_else(|e| panic!("published balance: {e:?}"));
+    assert_eq!(fetched, evidence);
+    verify_published_exit(&anvil, registry, challenge, vault, fetched);
+    assert_eq!(anvil.call("evm_revert", &[snapshot]), Json::Bool(true));
+    assert!(
+        CheckpointProof::fetch_published(&anvil.endpoint, registry, checkpoint, &debit, 3, 1)
+            .is_err()
+    );
+    let mut corrupt = withdrawals;
+    let last = corrupt.len() - 1;
+    corrupt[last] ^= 1;
+    anvil.send_checked(
+        FUNDED,
+        registry,
+        &publication_calldata(
+            [0x69, 0x92, 0x97, 0x38],
+            &[checkpoint],
+            &[publication_bytes(&corrupt), publication_bytes(&balances)],
+        ),
+        0,
+    );
+    let fetched =
+        CheckpointProof::fetch_published(&anvil.endpoint, registry, checkpoint, &debit, 3, 1);
+    if let Ok(fetched) = fetched {
+        assert!(boundary
+            .construct_claim(committed_debit_for_protocol(debit, 3), fetched)
+            .is_err());
+    }
+}
+
+fn published_custody(
+    anvil: &Anvil,
+    vault: EvmAddress,
+) -> (layerx_paxeer_client::CustodyDeposit, TransactionHash) {
+    use layerx_paxeer_client::CustodyDeposit;
+    use layerx_types::{amount::Amount, ids::AssetId};
+    let logs = anvil.call(
+        "eth_getLogs",
+        &[Json::Object(vec![
+            text_member("address", &address_hex(vault)),
+            text_member("fromBlock", "0x0"),
+            (
+                "topics".into(),
+                Json::Array(vec![Json::Text(
+                    "0x7edb71c9100c656847896d0b5b194f69f7da287eb57964a81e7f807a6a944028".into(),
+                )]),
+            ),
+        ])],
+    );
+    let Json::Array(logs) = logs else {
+        panic!("custody logs");
+    };
+    assert_eq!(logs.len(), 1);
+    let log = &logs[0];
+    let Json::Array(topics) = log.member("topics").unwrap_or_else(|| panic!("topics")) else {
+        panic!("topics");
+    };
+    let id: [u8; 32] = hex_bytes(topics[1].as_text().unwrap_or_else(|| panic!("id")))
+        .try_into()
+        .unwrap_or_else(|_| panic!("id length"));
+    let transaction = TransactionHash::from_hex(
+        log.member("transactionHash")
+            .and_then(Json::as_text)
+            .unwrap_or_else(|| panic!("tx hash")),
+    )
+    .unwrap_or_else(|e| panic!("tx: {e:?}"));
+    let custody = CustodyDeposit {
+        deposit_id: id,
+        asset: AssetId::new(ASSET),
+        payer: parse_address(FUNDED),
+        beneficiary: [0x28; 32],
+        amount: Amount::from_u128(VAULT_BALANCE),
+        nonce: 1,
+    };
+    (custody, transaction)
+}
+
+fn publish_signed_deposit(
+    anvil: &Anvil,
+    vault: EvmAddress,
+    checkpoint: [u8; 32],
+    state_root: [u8; 32],
+    custody: layerx_paxeer_client::CustodyDeposit,
+) -> (layerx_paxeer_client::DepositRootRegistration, SigningKey) {
+    use layerx_paxeer_client::{
+        deposit_leaf_bytes, deposit_root_registration_message, DepositRootRegistration,
+    };
+    let custody_reference = [0x74; 32];
+    let leaf = layerx_proof::merkle::leaf_hash(
+        &deposit_leaf_bytes(
+            custody.deposit_id,
+            custody_reference,
+            custody.asset,
+            custody.amount,
+            checkpoint,
+            NETWORK_ID,
+            3,
+        )
+        .unwrap_or_else(|e| panic!("leaf bytes: {e:?}")),
+    )
+    .unwrap_or_else(|e| panic!("leaf: {e:?}"));
+    let authority = SigningKey::from_bytes(&[0x75; 32]);
+    let mut registration = DepositRootRegistration {
+        checkpoint_id: checkpoint,
+        checkpoint_state_root: state_root,
+        deposit_root: leaf,
+        custody_reference,
+        network_id: NETWORK_ID,
+        protocol_version: 3,
+        signature: [0; 64],
+    };
+    let canonical = deposit_root_registration_message(&registration)
+        .unwrap_or_else(|e| panic!("registration: {e:?}"));
+    registration.signature = authority.sign(&canonical).to_bytes();
+    let mut ordering = quantity_const(1).to_vec();
+    ordering.extend_from_slice(&leaf);
+    anvil.send_checked(
+        FUNDED,
+        vault,
+        &publication_calldata(
+            [0x8f, 0xf1, 0xfa, 0xc9],
+            &[],
+            &[
+                publication_bytes(&canonical),
+                publication_bytes(&registration.signature),
+                ordering,
+            ],
+        ),
+        0,
+    );
+    (registration, authority)
+}
+
+#[test]
+fn real_published_deposit_registration_verifies_existing_signature_and_custody_rules() {
+    use layerx_paxeer_client::{
+        DepositProofConfig, DepositProofVerifier, FinalityTracker, PublishedDepositProof,
+        TrackerConfig,
+    };
+    use layerx_types::amount::Amount;
+    let anvil = Anvil::launch();
+    let (_, vault, bond, registry, _, _) = deploy_suite_for_protocol(&anvil, 3);
+    let header = {
+        let mut h = checkpoint_header([0x73; 32], anvil.latest_timestamp() * 1000);
+        h.protocol_version = 3;
+        h
+    };
+    let checkpoint = checkpoint_hash(&header);
+    let attestation = signed_attestation(&header, checkpoint, bond);
+    anvil.send_checked(
+        FUNDED,
+        registry,
+        &register_checkpoint_calldata(&header, &attestation),
+        0,
+    );
+    let (custody, transaction) = published_custody(&anvil, vault);
+    let (registration, authority) = publish_signed_deposit(
+        &anvil,
+        vault,
+        checkpoint,
+        header.resulting_state_root,
+        custody,
+    );
+    let custody_reference = registration.custody_reference;
+    let leaf = registration.deposit_root;
+    let fetched = PublishedDepositProof::fetch_published(
+        &anvil.endpoint,
+        vault,
+        registry,
+        checkpoint,
+        custody,
+        1,
+    )
+    .unwrap_or_else(|e| panic!("fetch deposit: {e:?}"));
+    assert_eq!(fetched.registration, registration);
+    let verifier = DepositProofVerifier::new(DepositProofConfig {
+        endpoints: vec![anvil.endpoint.clone()],
+        minimum_endpoint_agreement: 1,
+        required_confirmations: 1,
+        paxeer_chain_id: 31337,
+        paxeer_checkpoint_authority: authority.verifying_key().to_bytes(),
+        custody_reference,
+        layerx_network_id: NETWORK_ID,
+        layerx_protocol_version: 3,
+    })
+    .unwrap_or_else(|e| panic!("verifier: {e:?}"));
+    let mut tracker = FinalityTracker::new(
+        TrackerConfig {
+            endpoints: vec![anvil.endpoint.clone()],
+            minimum_endpoint_agreement: 1,
+            required_confirmations: 1,
+            poll_cadence: Duration::from_millis(20),
+            delayed_after_polls: 100,
+        },
+        transaction,
+    )
+    .unwrap_or_else(|e| panic!("tracker: {e:?}"));
+    let report = tracker.poll();
+    assert!(matches!(report.stage(), FinalityStage::Final { .. }));
+    let proof = verifier
+        .obtain(&report, vault, fetched.clone())
+        .unwrap_or_else(|e| panic!("verified deposit: {e:?}"));
+    assert_eq!(proof.deposit_root(), leaf);
+    let mut tampered = fetched;
+    tampered.registration.signature[0] ^= 1;
+    assert!(verifier.obtain(&report, vault, tampered).is_err());
+    let mut wrong = custody;
+    wrong.amount = Amount::from_u128(VAULT_BALANCE + 1);
+    assert!(PublishedDepositProof::fetch_published(
+        &anvil.endpoint,
+        vault,
+        registry,
+        checkpoint,
+        wrong,
+        1
+    )
+    .is_err());
+}

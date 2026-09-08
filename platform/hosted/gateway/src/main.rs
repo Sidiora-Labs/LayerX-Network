@@ -149,7 +149,18 @@ struct ReadinessResponse {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ModuleFile {
+    schema_version: u16,
+    assets: Vec<AssetMetadata>,
     modules: Vec<ModuleDeclaration>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AssetMetadata {
+    asset: String,
+    currency: String,
+    decimals: u8,
+    symbol: String,
 }
 
 #[derive(Deserialize)]
@@ -2760,6 +2771,33 @@ fn configured_modules() -> Result<ModuleRegistry, String> {
         .map_err(|error| error.to_string())?,
     )
     .map_err(|_| "gateway module registry is invalid".to_owned())?;
+    modules_from_file(module_file)
+}
+
+fn modules_from_file(module_file: ModuleFile) -> Result<ModuleRegistry, String> {
+    let mut assets = std::collections::BTreeSet::new();
+    if module_file.schema_version != 2
+        || module_file.assets.is_empty()
+        || module_file.assets.len() > 256
+        || module_file.assets.iter().any(|a| {
+            a.asset.len() != 64
+                || !a
+                    .asset
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                || a.asset.bytes().all(|b| b == b'0')
+                || !assets.insert(&a.asset)
+                || a.currency.is_empty()
+                || a.currency.len() > 32
+                || a.currency.chars().any(char::is_control)
+                || a.symbol.is_empty()
+                || a.symbol.len() > 32
+                || a.symbol.chars().any(char::is_control)
+                || a.decimals > 38
+        })
+    {
+        return Err("gateway asset registry is invalid".to_owned());
+    }
     if module_file.modules.is_empty() || module_file.modules.len() > 8 {
         return Err("gateway module registry is outside its bound".to_owned());
     }
@@ -3692,5 +3730,39 @@ mod authority_shape_tests {
         let mut unknown = document;
         unknown["unexpected"] = serde_json::json!(true);
         assert!(serde_json::from_value::<AuthorityResponse>(unknown).is_err());
+    }
+}
+
+#[cfg(test)]
+mod module_schema_tests {
+    use super::*;
+
+    #[test]
+    fn registry_requires_versioned_asset_metadata() {
+        let valid = serde_json::json!({"schema_version":2,"assets":[{"asset":"02".repeat(32),"currency":"USD","decimals":6,"symbol":"$"}],"modules":[{"module":9,"ordinals":[1,2,7]}]});
+        let parse = |value: serde_json::Value| -> Result<ModuleRegistry, String> {
+            modules_from_file(serde_json::from_value(value).map_err(|e| e.to_string())?)
+        };
+        assert!(parse(valid.clone()).is_ok());
+        assert!(parse(serde_json::json!({"modules":[{"module":9,"ordinals":[1,2,7]}]})).is_err());
+        for (field, value) in [
+            ("asset", serde_json::json!("00".repeat(32))),
+            ("currency", serde_json::json!("")),
+            ("symbol", serde_json::json!("\n")),
+            ("decimals", serde_json::json!(39)),
+        ] {
+            let mut document = valid.clone();
+            document["assets"][0][field] = value;
+            assert!(parse(document).is_err());
+        }
+        let mut duplicate = valid.clone();
+        duplicate["assets"]
+            .as_array_mut()
+            .unwrap_or_else(|| panic!("assets"))
+            .push(valid["assets"][0].clone());
+        assert!(parse(duplicate).is_err());
+        let mut old_version = valid;
+        old_version["schema_version"] = serde_json::json!(1);
+        assert!(parse(old_version).is_err());
     }
 }

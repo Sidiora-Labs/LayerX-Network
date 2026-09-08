@@ -443,6 +443,10 @@ phase_finalize() {
     run_script "finalize((address,address,address,address,address,address,address,address,address,address,address,address,address,address),(string,address,address,address,address,uint64,uint64,uint256,uint128,uint128,uint64,uint64,uint32,uint64,uint16,uint16,uint64,uint64,uint128,uint64,uint64,uint64,uint64,uint256,uint256),(bytes32,address,address,uint64,uint64,uint256)[],uint256)" \
         "$(addresses_tuple)" "$INPUT_TUPLE" "$GUARANTOR_TUPLES" "$(jq -r '.timelock.genesis_start_nonce' "$RECORD")"
     [ "$(call "$(jq -r '.blueprint' "$RECORD")" "deploymentsSealed()(bool)")" = "true" ] || fail "blueprint is not sealed"
+    for component in checkpoint_registry vault; do
+        [ "$(call "$(jq -r ".addresses.$component" "$RECORD")" 'EVIDENCE_VERSION()(uint16)')" = 1 ] \
+            || fail "$component evidence publication version mismatch"
+    done
     jq '.phases += ["finalize"]' "$RECORD" > "$WORK/record.json" && mv "$WORK/record.json" "$RECORD"
     echo "deploy-contracts: deployment finalized and sealed" >&2
 }

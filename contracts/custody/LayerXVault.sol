@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 pragma solidity ^0.8.24;
 
+import {CheckpointRegistry} from "../CheckpointRegistry.sol";
+import {IGuarantorEligibility} from "../interfaces/IGuarantorEligibility.sol";
 import {ILayerXAssetRegistry} from "../interfaces/ILayerXAssetRegistry.sol";
 import {SafeTransfer} from "../libraries/SafeTransfer.sol";
 import {Arithmetic} from "../libraries/Arithmetic.sol";
@@ -11,10 +13,20 @@ import {Predeploys} from "../deployment/Predeploys.sol";
 import {Constants} from "../libraries/Constants.sol";
 
 contract LayerXVault is Governed, ReentrancyLock, LayerXComponent {
+    error DepositRootProposerOnly();
+    error InvalidDepositRoot();
+    error DepositRootAlreadyRegistered();
     error InvalidDeposit();
     error InvalidRelease();
     error SettlementModuleOnly();
     error InvalidBondAccounting();
+
+    uint16 public constant EVIDENCE_VERSION = 1;
+    mapping(bytes32 => bytes32) public depositRegistrationDigest;
+    mapping(bytes32 => bool) public depositRootRegistered;
+    event DepositRootRegistered(
+        bytes32 indexed checkpointId, bytes32 indexed depositRoot, bytes32 registrationDigest, uint16 version
+    );
 
     ILayerXAssetRegistry public immutable assetRegistry;
     address public guarantorBond;
@@ -74,6 +86,43 @@ contract LayerXVault is Governed, ReentrancyLock, LayerXComponent {
         ) revert InvalidBondAccounting();
         guarantorBond = bond;
         emit GuarantorBondSet(bond);
+    }
+
+    function registerDepositRoot(
+        bytes calldata canonicalRegistration,
+        bytes calldata ed25519Signature,
+        bytes32[] calldata leafOrdering
+    ) external {
+        bytes memory domain = bytes("LX:PAXEER:DEPOSIT:ROOT:v1");
+        uint256 offset = domain.length;
+        if (
+            canonicalRegistration.length != offset + 134 || ed25519Signature.length != 64 || leafOrdering.length == 0
+                || leafOrdering.length > 4096 || keccak256(canonicalRegistration[:offset]) != keccak256(domain)
+        ) revert InvalidDepositRoot();
+        bytes32 checkpointId = bytes32(canonicalRegistration[offset:offset + 32]);
+        bytes32 stateRoot = bytes32(canonicalRegistration[offset + 32:offset + 64]);
+        bytes32 depositRoot = bytes32(canonicalRegistration[offset + 64:offset + 96]);
+        bytes32 custodyReference = bytes32(canonicalRegistration[offset + 96:offset + 128]);
+        uint32 network = uint32(bytes4(canonicalRegistration[offset + 128:offset + 132]));
+        uint16 protocol = uint16(bytes2(canonicalRegistration[offset + 132:offset + 134]));
+        if (guarantorBond == address(0)) revert DepositRootProposerOnly();
+        address authority = IGuarantorEligibility(guarantorBond).slashingAuthority();
+        if (authority.code.length == 0) revert DepositRootProposerOnly();
+        CheckpointRegistry registry = ICheckpointRegistryAuthority(authority).registry();
+        if (
+            address(registry.guarantorEligibility()) != guarantorBond
+                || registry.checkpointProposer(checkpointId) != msg.sender
+        ) revert DepositRootProposerOnly();
+        if (
+            !registry.isFinalised(checkpointId, stateRoot) || depositRoot == bytes32(0)
+                || custodyReference == bytes32(0) || network != registry.networkId()
+                || protocol != registry.protocolVersion()
+        ) revert InvalidDepositRoot();
+        if (depositRootRegistered[checkpointId]) revert DepositRootAlreadyRegistered();
+        bytes32 commitment = sha256(abi.encode(EVIDENCE_VERSION, canonicalRegistration, ed25519Signature, leafOrdering));
+        depositRootRegistered[checkpointId] = true;
+        depositRegistrationDigest[checkpointId] = commitment;
+        emit DepositRootRegistered(checkpointId, depositRoot, commitment, EVIDENCE_VERSION);
     }
 
     function deposit(bytes32 assetId, uint256 amount, bytes32 beneficiary)
@@ -146,4 +195,8 @@ interface IGuarantorBondAccounting {
     function bondToken() external view returns (address);
     function assetId() external view returns (bytes32);
     function syncCustodiedValue(uint256 value) external;
+}
+
+interface ICheckpointRegistryAuthority {
+    function registry() external view returns (CheckpointRegistry);
 }

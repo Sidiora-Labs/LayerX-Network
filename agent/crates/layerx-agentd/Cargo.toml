@@ -17,12 +17,14 @@ layerx-programs-runtime = { path = "../../../programs/crates/layerx-programs-run
 layerx-programs-protocol-adapter = { path = "../../../programs/crates/layerx-programs-protocol-adapter" }
 sha2 = "=0.10.9"
 serde_json = "=1.0.149"
-ureq = { version = "=3.4.0", default-features = false, features = ["json", "native-tls-no-default"] }
+ureq = { version = "=3.4.0", default-features = false, features = ["json", "native-tls"] }
 rustix = { version = "=1.1.4", features = ["net"] }
 zeroize = "=1.9.0"
 getrandom = "=0.3.4"
 
 [dev-dependencies]
+native-tls = "=0.2.15"
+openssl = "=0.10.73"
 ed25519-dalek = "=2.2.0"
 k256 = { version = "=0.13.4", default-features = false, features = ["ecdsa", "std"] }
 

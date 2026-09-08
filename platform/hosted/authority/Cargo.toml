@@ -19,15 +19,16 @@ layerx-wire.workspace = true
 rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 subtle.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+layerx-agentd = { path = "../../../agent/crates/layerx-agentd" }
 ed25519-dalek.workspace = true
 getrandom.workspace = true
 layerx-types.workspace = true
 native-tls.workspace = true
-sha2.workspace = true
 
 [lints]
 workspace = true
