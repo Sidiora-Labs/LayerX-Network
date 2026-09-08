@@ -6871,3 +6871,131 @@ observed = "The Human graph is co-located with the native node, using shareProce
 assumption = "bash -n platform/hosted/tests/beta-cluster.sh platform/hosted/human/material.sh platform/hosted/human/entrypoint.sh exits 0; qual-logs/hm6/bash-n.log. make platform-hosted-topology-check exits 0 after the Human egress and YAML formatting corrections, including both parsers and existing negative regressions; qual-logs/hm6/topology-formatted.log. bash tools/ci/beta-contract-check.sh and make beta-ledger-check exit 0 before this appended observation; qual-logs/hm6/contract.log and ledger.log. git diff --check exits 0; qual-logs/hm6/diff-final.log. Both kubectl apply --dry-run=client attempts fail to retrieve OpenAPI from an unconfigured API server; qual-logs/hm6/kubectl-node.log and kubectl-human.log. Validation is not disabled. Secret generation, image builds, provider processes, peer-credential refusal, KMS exchange and cluster readiness have not been executed. Static topology is not runtime qualification."
 observed = "The initial make platform-beta-cluster-down exits 2 after deleting both kind nodes and reporting teardown complete: editing the shell source while it was running caused a subsequent parse error. Repeating that command against stable source exits 0, with an empty cluster-container inventory. Logs: qual-logs/au38/down.log, down-final.log and down-containers.log. The built release layerx --json key create quickstart exits 1 with the OS Secret Service error. CLI version, auth status, project scaffold and actual WASM build each exit 0; auth remains unconfigured. Exact commands: qual-logs/au38/quickstart-local.sh."
 assumption = "The cluster and its supervised forwards are down. Hosted Quickstart steps require a successful bring-up and exported environment; no curl funding or receipt success is claimed. The existing Quickstart env_write wording discrepancy remains recorded for the documentation owner. No credential-store substitute or persistent-chain operation is used."
+
+[observation.6.8.33]
+task = "6.8"
+severity = "note"
+file = "platform/hosted/tests/beta-cluster.sh platform/hosted/paxeer/deploy-contracts.sh"
+symbol = "paxeer_contracts_deploy phase_bootstrap phase_activate"
+observed = "The transaction prohibition applies to the persistent host Paxeer chain at 127.0.0.1:18545 managed by layerx-beta-paxeer-native.service. Contract deployment, genesis activation and settlement testnet transactions are explicitly authorized on the disposable in-cluster layerx-au32 Paxeer chain, including its chain id 125."
+assumption = "The exact task 6.8 gate uses the disposable kind cluster without an owner kubeconfig override. The persistent host chain and /root/layerx-beta-runtime remain outside the qualification boundary."
+
+[observation.6.8.34]
+task = "6.8"
+severity = "blocker"
+file = "platform/hosted/paxeer/src/main.rs platform/hosted/tests/beta-cluster.sh"
+symbol = "handle_connection port_forward_supervise"
+observed = "The exact make platform-hosted-topology-check platform-beta-cluster-up platform-hosted-smoke platform-beta-cluster-down gate exits 2. All seventeen images build and load, both kind nodes become Ready, and deployment, permissions, genesis activation and both guarantor bonds complete. Forge finalization fails during an account read after the Paxeer boundary resets a connection and kubectl loses its shared forward. The Paxeer pod remains 4/4 ready with no restarts. A real read-only TLS-close probe completes 277 of 1000 requests before EOF, reset and connection-refused failures; an earlier probe without orderly TLS shutdown completes 1000 of 1000. Logs: qual-logs/au39/task-6.8-first.log, task-6.8-first.exit, tls-close-probe-before.log and tls-probe-live.log."
+assumption = "The boundary sent close_notify then immediately dropped TCP without draining the client shutdown bytes. The repair half-closes the write side and drains only transport bytes, with a one-second deadline and the existing header-byte bound. No additional HTTP request is executed. Existing admission, framing, TLS, body, response and connection-count limits remain unchanged. No signed transaction or Forge broadcast is automatically retried."
+
+[observation.6.8.35]
+task = "6.8"
+severity = "note"
+file = "platform/hosted/paxeer/src/main.rs platform/hosted/paxeer/tests/real_chain.py platform/hosted/paxeer/tests/tls_shutdown.py"
+symbol = "handle_connection real_paxd_boundary"
+observed = "The repaired boundary completes 1000 of 1000 orderly TLS-close requests against the retained disposable Paxeer node with no probe errors. cargo build --locked --manifest-path platform/Cargo.toml -p layerx-platform-paxeer-boundary exits 0. cargo test --locked --manifest-path platform/Cargo.toml -p layerx-platform-paxeer-boundary --bin layerx-paxeer-boundary --test real_chain exits 0, including the framing unit test, settlement-domain test and real Paxeer chain test with the new TLS-close regression. cargo clippy --locked --manifest-path platform/Cargo.toml -p layerx-platform-paxeer-boundary --all-targets -- -D warnings exits 0. Logs: qual-logs/au39/tls-close-probe-after.log, boundary-build.log, boundary-test.log and boundary-clippy.log."
+assumption = "The independent real-chain suite uses the paxd binary and WASM libraries extracted from the image built by the exact gate, with an isolated generated chain. The retained-cluster probe uses only eth_getBalance requests through a test-owned pod forward. Its first harness attempt selected a Service without port 8545 and failed before requests; the corrected harness selects the actual pod. The preliminary probe after the exact gate found both inherited supervisors absent and completed zero requests; retained supervisors must run independently of the transient command session."
+
+[observation.6.8.36]
+task = "6.8"
+severity = "blocker"
+file = "platform/hosted/node/deployment.yaml cmd/layerxd/lxp_daemon_lni.c"
+symbol = "layerx-node peer_credentials lxp_daemon_lni_serve_connected"
+observed = "After the TLS-close repair the exact gate still exits 2 at the payments principal key registration with status 503. The gateway readiness aggregate is degraded because the core and agent boundary containers in layerx-node-0 never become ready; both loop on LNI connection failed: Handshake(Transport(PeerShutdown)) while layerxd --serve is alive, the LNI socket is listening with the configured owner and mode, LAYERX_NODE_LNI_ALLOWED_UID and GID match the boundary containers and the bound admission journal matches the named journal file. The daemon closes each connection before writing any frame. peer_credentials refuses any SO_PEERCRED result whose pid is not positive with LXP_ERR_AUTH_SCOPE; the node pod did not set shareProcessNamespace, so the kernel reports pid 0 for a peer in a sibling container PID namespace and every boundary handshake is refused before the node-info exchange."
+assumption = "The repair sets shareProcessNamespace: true on the layerx-node pod so the daemon observes the real boundary pids, exactly as the native tests and the documented HostedNode contract assume. The credential check itself is unchanged. make platform-hosted-topology-check and tools/ci/beta-contract-check.sh exit 0 with the changed manifest."
+
+[observation.6.8.37]
+task = "6.8"
+severity = "blocker"
+file = "platform/hosted/tests/beta-cluster.sh platform/hosted/registry/src/main.rs"
+symbol = "secrets_generate apply_configmap LAYERX_REGISTRY_RECEIPT_AUTHORITY_REPLICA_ID"
+observed = "layerx-program-registry-0 is in CrashLoopBackOff with LAYERX_REGISTRY_RECEIPT_AUTHORITY_REPLICA_ID is invalid: digest is not thirty-two hexadecimal-encoded bytes. The cluster script wrote the replica id with openssl rand -hex followed by a newline and published the file verbatim through kubectl create configmap --from-file, so the environment value carried a trailing newline. The node manifest binding and the environment export strip the newline through command substitution and were unaffected."
+assumption = "The repair writes the replica id without a trailing newline so the published ConfigMap value is exactly sixty-four hexadecimal characters. The strict registry parser is unchanged."
+
+[observation.6.8.38]
+task = "6.8"
+severity = "blocker"
+file = "platform/hosted/registry/layerx-program-registry-boundary.service platform/hosted/registry/node-provision-build-boundary.sh platform/hosted/registry/src/builder.rs"
+symbol = "layerx-program-registry-boundary.service node-provision-build-boundary.sh builder quota slots"
+observed = "With the node handshake and replica id repaired the gate still exits 2 at the payments principal key registration because layerx-program-registry-0 crash-loops with no owned hard-quota build filesystem is mounted. On the kind worker the provisioning unit reports Finished, the four slot images exist, but no slot is mounted in the host namespace and every slot directory is still owned by root on the root device. The unit combined PrivateTmp, ProtectHome and ProtectSystem=strict, which give the oneshot its own mount namespace, so the loop mounts and the chown of the mounted roots were made in a namespace that disappeared when the unit exited. Re-running the unit with MountFlags=shared added did not propagate the mounts either, because the other namespacing settings implicitly disable propagation toward the host."
+assumption = "The repair removes the four namespacing directives from the unit and keeps NoNewPrivileges, the capability bounding set and root execution. Re-installing the corrected unit on the live worker mounts all four slots with owner 4030 and mode 0700 as the registry requires. The registry's own mount, ownership and device checks are unchanged."
+
+[observation.6.8.39]
+task = "6.8"
+severity = "blocker"
+file = "platform/hosted/registry/deployment.yaml programs/crates/layerx-programs-registry/src/protocol_evidence.rs"
+symbol = "layerx-program-registry trust volume from_protected_history"
+observed = "After the quota mounts appear the registry refuses to start with sequencer trust history is unavailable: canonical protected sequencer trust history is unavailable. The verifier requires the history path to be a regular file, not a symlink, with no group or other permission bits, and readable by the registry user. A Kubernetes Secret volume presents every key as a symlink into a timestamped directory owned by root, so the mounted history can never satisfy the protected-file contract regardless of defaultMode."
+assumption = "The repair adds an init container that runs as the registry user, copies the Secret's history into a memory-backed emptyDir under umask 077 and sets mode 0600; the registry mounts that emptyDir read-only at the unchanged history path. The verifier's file checks are unchanged. Applying the rendered manifest to the live cluster moves the registry past the trust-history refusal."
+
+[observation.6.8.40]
+task = "6.8"
+severity = "blocker"
+file = "platform/hosted/tests/beta-cluster.sh platform/hosted/registry/deployment.yaml platform/hosted/registry/src/node_state.rs"
+symbol = "write_token LAYERX_REGISTRY_NODE_AUTHORIZATION LAYERX_REGISTRY_RECEIPT_AUTHORITY_AUTHORIZATION"
+observed = "With the trust history accepted the registry fails its first node authority read: GET /v1/programs/account-state/changes?after_sequence=0 failed: http: failed to parse header value. The registry receives both bearer tokens through secretKeyRef environment variables and places them in an Authorization header; write_token wrote every generated token with openssl rand -hex followed by a newline, and the http crate refuses a header value containing a line feed. File-based consumers strip or tolerate the newline, so only the environment-fed registry tokens failed."
+assumption = "The repair writes every generated token without a trailing newline so file and environment consumers see identical sixty-four character values. No parser or comparison is relaxed."
+
+[observation.6.8.41]
+task = "6.8"
+severity = "blocker"
+file = "platform/hosted/registry/src/node_state.rs platform/hosted/registry/src/main.rs platform/hosted/registry/deployment.yaml platform/Cargo.toml"
+symbol = "NodeProgramStateSource::connect LAYERX_REGISTRY_OUTBOUND_CA_DER ureq::tls::TlsProvider"
+observed = "With valid tokens the registry panics on its first outbound request: ureq-3.4.0/src/unversioned/transport/mod.rs:485 uri scheme is https, provider is Rustls but feature is not enabled: rustls. The workspace compiles ureq with default-features = false and native-tls-no-default only, while the registry built its Agent from config_builder() without a TlsConfig, so ureq selected the default Rustls provider and WebPki roots that are not compiled in. The gateway and every other hosted crate use native-tls with an explicit outbound CA; the registry had no outbound CA input at all, so even a working provider would not have trusted the cluster CA that signs the agent boundary and receipt authority certificates."
+assumption = "The repair gives the registry an explicit outbound CA (LAYERX_REGISTRY_OUTBOUND_CA_DER, mounted from the layerx-internal-ca Secret already present in the pod), builds the Agent with TlsProvider::NativeTls and RootCerts::new_with_certs over that single root, and refuses an empty CA. Hostname verification and the https requirement are unchanged. The agent boundary and receipt authority verifiers allow unauthenticated clients, so the registry authenticates with its bearer tokens as before."
+
+[observation.6.8.42]
+task = "6.8"
+severity = "blocker"
+file = "platform/hosted/tests/beta-cluster.sh"
+symbol = "internal_principals_provision wait_for_pod_ready"
+observed = "internal_principals_provision issues a single POST to the gateway /v1/keys immediately after manifests_apply and the gateway port-forward, before the gateway pod reports Ready, and fails the bring-up on any non-200/201 status. The gateway readiness probe is /readyz, which requires the durable store, core agent boundary, receipt authority and program registry to be reachable, so the first request races component start-up and observed a 503 with the message gateway refused payments principal key with status 503."
+assumption = "The repair waits for the layerx-gateway pod to become Ready (bounded to six hundred seconds) before provisioning principals. No status handling is relaxed; a gateway that never becomes ready still fails the bring-up."
+
+[observation.6.8.43]
+task = "6.8"
+severity = "blocker"
+file = "platform/hosted/registry/layerx-program-registry-boundary.service platform/hosted/registry/src/main.rs"
+symbol = "delegation_quota_and_open_inode_execution_fail_closed NODE_UNIT ProtectSystem ReadWritePaths"
+observed = "The registry unit test delegation_quota_and_open_inode_execution_fail_closed asserts that the boundary unit contains ProtectSystem=strict and ReadWritePaths=/sys/fs/cgroup /var/lib/layerx-program-registry-builds. Observation 6.8.38 removed those directives because they place the oneshot in a private mount namespace whose slot mounts never reach the host namespace or the registry container. A retest on the live kind worker with ProtectSystem=strict, ReadWritePaths and MountFlags=shared retained still left zero slot mounts visible in the host namespace after a clean restart, while the unit without the sandbox directives exposes all four. The unit and the test therefore contradict each other: the hardening the test demands makes the boundary non-functional under systemd namespacing."
+assumption = "Both are left as written: the unit keeps the working configuration and the test keeps asserting the old directives, so cargo test -p layerx-platform-registry fails on that single assertion (two other tests pass; clippy passes). Deciding whether the test should assert the reduced hardening set (NoNewPrivileges plus the CAP_SYS_ADMIN CAP_CHOWN CAP_DAC_OVERRIDE bounding set) or whether a different confinement that survives propagation must be designed is recorded for wider authority rather than resolved by weakening the check."
+
+[observation.6.8.44]
+task = "6.8"
+severity = "blocker"
+file = "platform/Cargo.toml platform/Cargo.lock platform/hosted/registry/src/node_state.rs"
+symbol = "ureq native-tls native-tls-no-default TlsProvider::NativeTls"
+observed = "Selecting TlsProvider::NativeTls is not sufficient with the workspace feature set. ureq 3.4.0 gates its NativeTlsConnector on the native-tls feature, while native-tls-no-default only pulls the native-tls dependency, so an Agent configured for NativeTls still reaches the same runtime panic (provider is NativeTls but feature is not enabled). The agent workspace hit the identical condition independently."
+assumption = "The platform workspace enables ureq's native-tls feature. That feature also pulls webpki-root-certs 1.0.9 into platform/Cargo.lock; no existing package version changes. Because the registry configures RootCerts::new_with_certs with the cluster CA alone, the bundled roots are never consulted. cargo clippy -p layerx-platform-registry --all-targets -D warnings passes; cargo test fails only on the assertion recorded in observation 6.8.43."
+
+[observation.6.8.45]
+task = "6.8"
+severity = "blocker"
+file = "platform/hosted/registry/src/routes.rs platform/hosted/registry/src/node_state.rs src/modules/programs/accounts.c src/replica/lxp_history.c"
+symbol = "Registrar::open Registrar::awaits_first_protocol_head NodeProgramStateSource::current_head_or_pending classify_head_answer"
+observed = "Cluster attempt 5 reached settlement deployment and identity provisioning, then failed because app=layerx-gateway never became ready. The gateway reported program_registry unavailable; layerx-program-registry-0 crash-looped with 'node authority GET /v1/protocol/account-state/head returned HTTP 503'. Probing the agent boundary with the registry node token returned {\"error\":-903} (LXP_ERR_PROJECTION_STALE): a freshly bootstrapped network has no receipt, so the node has no current head until its first activity is sequenced. That first activity is submitted through the gateway, whose readiness required the registry, whose Registrar::open required the head. The registry has never started on a fresh network in any recorded attempt."
+assumption = "Registrar::open now returns a registry that awaits its first protocol head only when no program is registered, the program-state cursor is at its default and the node answers the head route with exactly HTTP 503 and body {\"error\":-903}; every other refusal still fails startup, reads still refuse with protocol_head_unavailable or protocol_state_unavailable until a verified head exists, and no verification rule changed. classify_head_answer is unit-tested for the exact pending shape and six refused shapes. cargo clippy -D warnings and cargo test for layerx-platform-registry pass (qual-logs/au39/registry-clippy-genesis.log, registry-test-genesis3.log)."
+
+[observation.6.8.46]
+task = "6.8"
+severity = "suspect"
+file = "platform/hosted/human/deployment.yaml platform/hosted/tests/beta-cluster.sh"
+symbol = "layerx-human-component-material"
+observed = "On the attempt-5 cluster the layerx-human pod stayed in ContainerCreating with MountVolume.SetUp failed: secret layerx-human-component-material not found. The deployment on this branch mounts that Secret, but beta-cluster.sh on this branch never creates it. The gate does not wait for app=layerx-human, so this did not stop attempt 5."
+assumption = "The Human component integration lane owns the material generation and the node-pod co-location; this branch records the gap and does not add a placeholder Secret."
+
+[observation.6.8.47]
+task = "6.8"
+severity = "note"
+file = "platform/hosted/registry/layerx-program-registry-boundary.service platform/hosted/registry/node-provision-build-boundary.sh platform/hosted/registry/src/main.rs"
+symbol = "delegation_quota_and_open_inode_execution_fail_closed systemd-mount"
+observed = "Observation 6.8.43 recorded the conflict between the boundary unit test and mount propagation. The redesign in commit 913e287d (lane/boundary-confinement) keeps ProtectSystem=strict, PrivateTmp, ProtectHome and ReadWritePaths on the provisioner, removes CAP_SYS_ADMIN, and delegates every slot mount to PID 1 through systemd-mount ordered before kubelet.service; the unit test now asserts the stronger set and additionally that the script contains no direct mount or losetup --find invocation. Those files are taken verbatim into this worktree for cluster attempt 6."
+assumption = "All layerx-platform-registry tests pass with the redesigned unit and script (qual-logs/au39/registry-test-genesis3.log). Live mount visibility on the kind worker is verified by attempt 6."
+
+[observation.6.8.48]
+task = "6.8"
+severity = "blocker"
+file = "platform/hosted/registry/src/main.rs platform/hosted/registry/deployment.yaml platform/hosted/registry/node-provision-build-boundary.sh"
+symbol = "WorkerCgroup::attach isolated_route program_registry_ready"
+observed = "Cluster attempt 6: boundary slot mounts are visible on the kind worker and the registry pod is Running, yet the gateway reports program_registry unavailable. A direct GET /healthz with the gateway-client mTLS identity returns 503 {\"error\":{\"code\":\"worker_unavailable\",\"detail\":\"the request worker could not be attached\"}}. Reproduced inside the registry container as UID 4030: mkdir and cgroup.subtree_control writes under the hostPath cgroup /run/layerx/cgroup succeed, but writing a pid into a child cgroup.procs fails with EACCES. The container runs in a private cgroup namespace whose root is the kubelet container scope (/proc/self/cgroup is 0::/ and the hostPath shows root /../../../../../layerx-program-registry), the node cgroup2 filesystem is mounted with nsdelegate, and /sys/fs/cgroup inside the container is read-only with root-owned cgroup.procs. cgroup v2 migration requires write access to cgroup.procs of the common ancestor (the host root, owned by root) and, under nsdelegate, source and destination must both lie inside the writer's cgroup namespace. A hostPath cgroup outside the container scope therefore can never receive the request worker or the layerx-cgroup-exec build jobs from an unprivileged pod, regardless of ownership; the same rule would return ENOENT even for root."
+assumption = "The isolation design must move to a cgroup subtree delegated inside the registry container's own cgroup so the namespace and common-ancestor rules hold; the node provisioner's separate cgroup delegation cannot serve a pod. Resolved by a dedicated redesign lane; every existing bound (cpu, memory, pids, io controllers, cgroup.kill boundary, 4030 ownership, stopped-worker attach) stays in force."
