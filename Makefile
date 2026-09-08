@@ -3373,4 +3373,16 @@ test-native-withdrawal-proof: $(BUILD_DIR)/tests/test_asset_withdraw_activity
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_asset_withdraw_activity
 	$(BUILD_DIR)/tests/test_asset_withdraw_activity --vectors > $(BUILD_DIR)/tests/native-withdrawal-proof.json
 	cmp $(BUILD_DIR)/tests/native-withdrawal-proof.json human/crates/layerx-paxeer-client/tests/vectors/native-withdrawal-proof.json
-	cmp $(BUILD_DIR)/tests/native-withdrawal-proof.json contracts/config/native-withdrawal-proof.json
+cmp $(BUILD_DIR)/tests/native-withdrawal-proof.json contracts/config/native-withdrawal-proof.json
+
+.PHONY: layerx-module-registry test-module-registry
+build: layerx-module-registry
+layerx-module-registry: $(BUILD_DIR)/bin/layerx-module-registry
+
+$(BUILD_DIR)/bin/layerx-module-registry: cmd/layerx-module-registry/main.c cmd/layerx-module-registry/node.c $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) cmd/layerx-module-registry/main.c cmd/layerx-module-registry/node.c $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) $(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
+
+test-module-registry: layerx-module-registry
+	python3 cmd/layerx-module-registry/test_registry.py $(BUILD_DIR)/bin/layerx-module-registry
+	bash platform/hosted/tests/beta-cluster.sh test-retained-material
