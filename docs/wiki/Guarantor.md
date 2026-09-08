@@ -132,3 +132,23 @@ candidate is an integration failure, not a skipped test or a passing gate.
 
 Local evidence lives in untracked `qual-logs/gp1/` and `STATUS.md`. No image,
 cluster or chain-125 deployment qualification is claimed on the build server.
+
+## Checkpoint authority publication
+
+The cluster genesis provisioning path generates an Ed25519 authority through
+`guarantor.sh --checkpoint-authority-public` in the first guarantor container.
+Its private key remains in the shared persistent submitter volume at
+`/var/lib/guarantor-submitter/checkpoint-authority.pem`, owned by UID 4021 with
+mode 0600. Both producer containers receive this path through
+`LAYERX_GUARANTOR_CHECKPOINT_AUTHORITY_KEY_FILE`. Concurrent provisioning and
+restarts reuse the same file. Invalid permissions, symlinks and non-Ed25519 keys
+are refused without rotating the authority.
+
+Only the public key leaves the container. The provisioning path publishes
+Secret `layerx-guarantor-checkpoint-authority` in `TESTNET_NAMESPACE`, with
+`public.hex` containing `0x` followed by 64 lowercase hexadecimal characters.
+The Human movement policy must consume that public key in its namespace.
+The private key is never placed in a Kubernetes Secret or provisioning output.
+This provisions authority identity only: settlement witness and deposit-root
+publication remain blocked by the native composite-state versus settlement
+Merkle-proof contract recorded in the qualification ledger.
