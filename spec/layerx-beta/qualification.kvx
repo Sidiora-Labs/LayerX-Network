@@ -5219,4 +5219,16 @@ file = "src/ledger/lxp_apply.c src/protocol/lxp_module_ctx.c include/layerx/lxp_
 symbol = "lxp_ledger_apply_bridge_credit lxp_ctx_bridge_credit"
 observed = "The bridge reserve top-up now invokes ledger apply after the existing authorization, supply preflight and rollback snapshot. make -j16, make test-asset-transfer, make test and make beta-ledger-check exit 0. The unchanged sole-writer check passes. BRIDGE_PYTHON=qual-logs/nat3/venv/bin/python3 bash tests/bridge/sole_writer.sh exits 0: a real custody deposit on isolated chain 31337 produces byte-identical canonical account state diffs (397 bytes) and unsigned receipt encodings (1006 bytes) through original and updated module contexts, with real signature verification, rollback stages, replay refusal and nine custody evidence tests passing. Evidence: qual-logs/nat3/build.log, asset-transfer.log, test.log, beta-ledger.log, bridge-differential-venv.log and gates.tsv."
 assumption = "The initial bridge comparison exited 1 because system Python lacked Crypto; the isolated virtual environment satisfies tests/bridge/requirements.txt. Codify inspection could not run because cg is unavailable. Cluster and image gates were not run. Task statuses are unchanged."
+file = "cmd/layerxd/lxp_daemon_lni.c agent/crates/layerx-client/tests/availability_daemon.rs tests/daemon/availability-settlement.py"
+symbol = "send_availability finalized_fetch"
+observed = "Tag 18 refuses every selected batch above latest_finalized_batch with LXP_ERR_DA_MISSING (-804), including explicit batch selection. Candidate DA is required before independent replay and attestation, while registration requires attestations. This prevents both initial checkpoint production and advancement beyond an existing finalized head. The availability harness asserts pre-registration refusal and obtains successful retrieval only after the finality fixture has already signed and registered a certificate. Source evidence: qual-logs/gp1/candidate-fetch-source.txt."
+assumption = "An additive authenticated candidate-batch fetch must expose complete durable sealed bodies before registration without weakening finalized-only consumer selectors, root checks or existing refusal assertions. Producer implementation and end-to-end qualification remain incomplete."
+severity = "blocker"
+
+[observation.6.1.32]
+task = "6.1"
+file = "docs/wiki/Guarantor.md spec/layerx-protocol/docs/guarantors.md contracts/libraries/CanonicalCheckpoint.sol tests/daemon/availability-settlement.py"
+symbol = "ATTESTATION_DOMAIN CHECKPOINT_DOMAIN registerCheckpoint"
+observed = "Beta checkpoint construction uses an empty validity proof; no generated validity proof is claimed. The intended two beta guarantors are operated by the same cluster and provide no operational independence. The guarantor specification section 5 describes the older LXP1/guarantor-attest preimage, while implemented C and Solidity domains and cross-language checkpoint vectors use LXP/v2/guarantor-attestation and LXP/v2/checkpoint-certificate with terminating NUL bytes."
+assumption = "Producer encoding follows the implemented verifiers and vectors. Production operator independence remains an onboarding requirement. Empty beta validity proofs and shared operation do not establish production independence or proof generation."
 severity = "note"
