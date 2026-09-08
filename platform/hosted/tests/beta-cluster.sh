@@ -302,8 +302,8 @@ node_boundary_install() {
     script="$REPO_ROOT/platform/hosted/registry/node-provision-build-boundary.sh"
     unit="$REPO_ROOT/platform/hosted/registry/layerx-program-registry-boundary.service"
     if [ "$(cluster_mode)" = owner ]; then
-        if [ -z "$(kube get nodes -l "$BOUNDARY_LABEL=v1" -o name)" ]; then
-            fail "no node of the owner cluster carries $BOUNDARY_LABEL=v1; the owner installs $unit and $script on the registry nodes before labelling them"
+        if [ -z "$(kube get nodes -l "$BOUNDARY_LABEL=v2" -o name)" ]; then
+            fail "no node of the owner cluster carries $BOUNDARY_LABEL=v2; the owner installs $unit and $script on the registry nodes before labelling them"
         fi
         return 0
     fi
@@ -723,7 +723,7 @@ kind: Pod
 metadata: {name: layerx-program-builder-loader, namespace: $ns, labels: {app: layerx-program-builder-loader}}
 spec:
   restartPolicy: Never
-  nodeSelector: {$BOUNDARY_LABEL: "v1"}
+  nodeSelector: {$BOUNDARY_LABEL: "v2"}
   securityContext: {runAsNonRoot: true, runAsUser: 4030, runAsGroup: 4030, fsGroup: 4030}
   containers:
     - name: loader
@@ -1450,7 +1450,7 @@ boundary_checks() {
             docker exec "$node" sh -c 'test "$(stat -c %u:%g /var/lib/layerx-program-registry-builds/slot-0)" = 4030:4030 && mountpoint -q /var/lib/layerx-program-registry-builds/slot-0'
         done
     else
-        for node in $(kube get nodes -l "$BOUNDARY_LABEL=v1" -o name); do
+        for node in $(kube get nodes -l "$BOUNDARY_LABEL=v2" -o name); do
             kube debug "$node" --profile=sysadmin --image=busybox:1.37.0 --quiet -- chroot /host sh -c \
                 'LAYERX_REGISTRY_MAX_BUILDS=4 LAYERX_REGISTRY_BUILD_QUOTA_BYTES=5368709120 LAYERX_REGISTRY_BUILD_QUOTA_INODES=65536 /usr/libexec/layerx/node-provision-build-boundary.sh && mountpoint -q /var/lib/layerx-program-registry-builds/slot-0'
         done
