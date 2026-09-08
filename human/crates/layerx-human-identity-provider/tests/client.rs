@@ -19,6 +19,41 @@ use source_client::{IdentityProviderConfig, RemoteIdentityProvider};
 
 type Result<T = ()> = std::result::Result<T, Box<dyn Error>>;
 
+trait DirectoryRead {
+    fn resolve_email(&self, email: &str) -> Result<PrincipalId>;
+    fn device_for_assertion(
+        &self,
+        principal: &PrincipalId,
+        assertion: &str,
+    ) -> Result<auth::Device>;
+}
+
+impl DirectoryRead for RemoteIdentityProvider {
+    fn resolve_email(&self, email: &str) -> Result<PrincipalId> {
+        let fields = self.call(2, &[email.as_bytes()])?;
+        let [principal] = fields.as_slice() else {
+            return Err("invalid resolve response".into());
+        };
+        Ok(PrincipalId::new(std::str::from_utf8(principal)?)?)
+    }
+
+    fn device_for_assertion(
+        &self,
+        principal: &PrincipalId,
+        assertion: &str,
+    ) -> Result<auth::Device> {
+        let fields = self.call(3, &[principal.as_str().as_bytes(), assertion.as_bytes()])?;
+        let [id, label, platform] = fields.as_slice() else {
+            return Err("invalid device response".into());
+        };
+        Ok(auth::Device::new(
+            std::str::from_utf8(id)?,
+            std::str::from_utf8(label)?,
+            std::str::from_utf8(platform)?,
+        )?)
+    }
+}
+
 fn policy() -> Policy {
     Policy {
         root: [0x43; 32],
