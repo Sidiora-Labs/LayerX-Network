@@ -1,3 +1,6 @@
+mod human;
+mod protected;
+
 use layerx_client::lni::handshake::{perform, HandshakeConfig};
 use layerx_client::lni::refusal::decode_core_refusal;
 use layerx_client::lni::schema::{decode_envelope, encode_envelope, Capability, Envelope, Version};
@@ -72,6 +75,7 @@ struct Config {
     listen: SocketAddr,
     tls: Arc<ServerConfig>,
     tokens: Vec<Zeroizing<String>>,
+    human: Option<human::Human>,
     replica_address: SocketAddr,
     replica_host: String,
     replica_token: Zeroizing<String>,
@@ -268,6 +272,7 @@ fn config() -> Result<Config, String> {
     Ok(Config {
         listen,
         tls,
+        human: human::Human::load(&tokens)?,
         tokens,
         replica_address,
         replica_host,
@@ -396,6 +401,7 @@ fn write_response(stream: &mut impl Write, response: &Response) -> Result<(), St
         200 => "OK",
         400 => "Bad Request",
         401 => "Unauthorized",
+        403 => "Forbidden",
         404 => "Not Found",
         405 => "Method Not Allowed",
         502 => "Bad Gateway",
@@ -654,6 +660,13 @@ fn by_activity(config: &Config, requested: &str) -> Response {
         };
     match authorized_batch_by_activity(activity_id, &receipt, &evidence, &config.authorization) {
         Ok(facts) => {
+            if config
+                .human
+                .as_ref()
+                .is_some_and(|human| human.retain(&receipt, &document, config).is_err())
+            {
+                return refusal(503, "state_persistence_unavailable", Some(5));
+            }
             let mut response = serde_json::json!({
                 "activity_id": requested,
                 "batch_id": hex::encode(&facts.batch_id),
@@ -734,6 +747,9 @@ fn route(config: &Config, request: &Request) -> Response {
     }
     if path == "/readyz" {
         return readiness(config);
+    }
+    if path.starts_with("/v1/agent/") {
+        return human::route(config, request);
     }
     if let Some(batch_id) = path
         .strip_prefix("/v1/batches/")
