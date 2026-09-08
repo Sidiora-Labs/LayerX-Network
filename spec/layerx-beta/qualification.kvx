@@ -4813,6 +4813,8 @@ file = "human/Cargo.lock platform/Cargo.lock"
 symbol = "ureq native-tls connector dependency"
 observed = "ureq 3.4.0 gates its NativeTlsConnector on native-tls rather than native-tls-no-default. Agentd enables native-tls and adds its required transitive webpki-root-certs package to agent/Cargo.lock. The human and platform lockfiles do not contain that package and are outside the owned paths. Explicit RootCerts::Specific still excludes bundled roots from runtime trust."
 assumption = "Dependent workspace owners must regenerate their lockfiles for the enabled connector before locked builds; no unrelated package upgrade is required by the agentd change."
+severity = "blocker"
+
 [observation.6.8.5]
 task = "6.8"
 file = "platform/hosted/internal/deployment.yaml platform/hosted/webhooks/deployment.yaml platform/hosted/gateway/deployment.yaml platform/hosted/tests/topology-check.sh"
