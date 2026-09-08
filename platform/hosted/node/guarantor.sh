@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
+if [ "${1:-}" = --checkpoint-authority-public ]; then
+    [ "$#" = 2 ] || exit 2
+    exec python3 "$(dirname "$0")/checkpoint-authority.py" "$2"
+fi
 : "${LAYERX_GUARANTOR_IDENTITY_DIR:?identity directory is required}"
 : "${LAYERX_GUARANTOR_LNI_SOCKET:?LNI socket is required}"
 : "${LAYERX_GUARANTOR_STATE_DIR:?state directory is required}"

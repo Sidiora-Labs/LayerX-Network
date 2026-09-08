@@ -922,6 +922,14 @@ wait_for_node_genesis() {
     [[ $NODE_GUARANTOR_PUBLIC_KEY =~ ^0[23][0-9a-f]{64}$ ]] || fail "node.env carries no compressed genesis guarantor public key"
     [ "$NODE_SEQUENCER_ID" = "$SEQUENCER_ID" ] || fail "the node derived sequencer id $NODE_SEQUENCER_ID but the registry trust history carries $SEQUENCER_ID"
     [ "$NODE_SEQUENCER_PUBLIC_KEY" = "$(cat "$CA_DIR/sequencer.pub.hex")" ] || fail "the node sequencer public key differs from the generated sequencer key"
+    kube -n "$TESTNET_NAMESPACE" exec layerx-node-0 -c guarantor-1 -- \
+        /opt/layerx/guarantor.sh --checkpoint-authority-public \
+        /var/lib/guarantor-submitter/checkpoint-authority.pem > "$WORK_DIR/genesis/checkpoint-authority.public.hex"
+    local checkpoint_authority
+    checkpoint_authority=$(cat "$WORK_DIR/genesis/checkpoint-authority.public.hex")
+    [[ $checkpoint_authority =~ ^0x[0-9a-f]{64}$ ]] || fail "invalid checkpoint authority public key"
+    apply_secret "$TESTNET_NAMESPACE" layerx-guarantor-checkpoint-authority \
+        --from-file=public.hex="$WORK_DIR/genesis/checkpoint-authority.public.hex"
 }
 
 paxeer_contracts_deploy() {
