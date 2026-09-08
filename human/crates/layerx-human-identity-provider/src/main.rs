@@ -27,11 +27,15 @@ fn required(name: &str) -> io::Result<String> {
 fn run() -> io::Result<()> {
     let mut args = std::env::args().skip(1);
     let command = args.next();
-    if args.next().is_some() || !matches!(command.as_deref(), None | Some("serve" | "bind-device"))
+    if args.next().is_some()
+        || !matches!(
+            command.as_deref(),
+            None | Some("serve" | "bind-device" | "provision-owner")
+        )
     {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "expected serve or bind-device",
+            "expected serve, bind-device or provision-owner",
         ));
     }
     let policy = Policy::read(&PathBuf::from(required(
@@ -41,6 +45,9 @@ fn run() -> io::Result<()> {
         &PathBuf::from(required("LAYERX_HUMAN_IDENTITY_PROVIDER_STATE_ROOT")?),
         policy,
     )?;
+    if command.as_deref() == Some("provision-owner") {
+        return state.provision_owner(io::stdin().lock(), io::stdout().lock());
+    }
     if command.as_deref() == Some("bind-device") {
         let mut bytes = Vec::new();
         io::stdin().take(16_385).read_to_end(&mut bytes)?;

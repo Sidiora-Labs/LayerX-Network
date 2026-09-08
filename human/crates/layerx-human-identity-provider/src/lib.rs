@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod provision;
 mod state;
 mod wire;
 
