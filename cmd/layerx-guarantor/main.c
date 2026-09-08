@@ -334,15 +334,16 @@ static lxp_result feedback(lxp_guarantor_lni *client, struct producer *p,
     lxp_byte_span payload, proof;
     char path[4096];
     int n;
-    requirements.checkpoint_epoch = certificate->checkpoint.header.epoch;
-    requirements.challenge_window_end_ms = registration->observed_at_ms;
-    requirements.checkpoint_deadline_ms = registration->observed_at_ms;
-    requirements.now_ms = registration->observed_at_ms;
-    requirements.threshold = p->threshold;
-    requirements.minimum_bond = p->minimum_bond;
-    requirements.availability_challenges_answered = true;
-    lxp_result status = lxp_daemon_finality_evidence_encode(certificate, &p->set, &requirements, 0U,
-                                                            registration, arena, &payload, &proof);
+    if (certificate->checkpoint.header.batch_number < p->authority.first_batch_number)
+        return LXP_ERR_BATCH_GAP;
+    lxp_result status =
+        gp_checkpoint_requirements(&certificate->checkpoint.header, registration->observed_at_ms,
+                                   p->threshold, p->minimum_bond, &requirements);
+    if (status == LXP_OK)
+        status = lxp_daemon_finality_evidence_encode(certificate, &p->set, &requirements,
+                                                     certificate->checkpoint.header.batch_number -
+                                                         p->authority.first_batch_number,
+                                                     registration, arena, &payload, &proof);
     n = snprintf(path, sizeof(path), "%s/%020llu.checkpoint", p->state,
                  (unsigned long long)certificate->checkpoint.header.batch_number);
     if (n < 0 || (size_t)n >= sizeof(path))
