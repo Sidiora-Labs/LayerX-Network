@@ -1,5 +1,6 @@
 #include "layerx/lxp_state_diff.h"
 #include "layerx/lxp_da.h"
+#include "layerx/lxp_kernel.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -142,5 +143,44 @@ int main(void)
     (void)memcpy(independent, root, 32U);
     REQUIRE(lxp_batch_availability_root(&body, &arena, independent) != LXP_OK);
     REQUIRE(memcmp(root, independent, 32U) == 0 && lxp_arena_mark(&arena) == mark);
+    {
+        static lxp_state_store state;
+        static lxp_state_journal journal;
+        static lxp_kernel kernel;
+        uint64_t parameters = 1U;
+        lxp_byte_span recovery;
+        uint8_t *copy;
+        void *memory;
+        REQUIRE(lxp_state_store_init(&state, 9U) == LXP_OK);
+        REQUIRE(lxp_state_store_bind_accounts(&state, &after) == LXP_OK);
+        REQUIRE(lxp_kernel_create(&kernel, &state, &journal, &parameters, 1U) == LXP_OK);
+        REQUIRE(lxp_da_recovery_from_kernel(&kernel, 8U, 8U, &arena, &recovery) == LXP_OK);
+        mark = lxp_arena_mark(&arena);
+        REQUIRE(lxp_da_recovery_verify_kernel(&kernel, 8U, 8U, recovery, &arena) == LXP_OK);
+        REQUIRE(lxp_arena_mark(&arena) == mark);
+        REQUIRE(lxp_arena_alloc(&arena, recovery.length + 1U, 1U, &memory) == LXP_OK);
+        copy = memory;
+        (void)memcpy(copy, recovery.bytes, recovery.length);
+        for (i = 0U; i < recovery.length; ++i) {
+            copy[i] ^= 1U;
+            mark = lxp_arena_mark(&arena);
+            REQUIRE(lxp_da_recovery_verify_kernel(&kernel, 8U, 8U,
+                (lxp_byte_span){copy, recovery.length}, &arena) == LXP_FATAL_REPLAY_DIVERGENCE);
+            REQUIRE(lxp_arena_mark(&arena) == mark);
+            copy[i] ^= 1U;
+            REQUIRE(lxp_da_recovery_verify_kernel(&kernel, 8U, 8U,
+                (lxp_byte_span){copy, i}, &arena) == LXP_FATAL_REPLAY_DIVERGENCE);
+        }
+        copy[recovery.length] = 0U;
+        REQUIRE(lxp_da_recovery_verify_kernel(&kernel, 8U, 8U,
+            (lxp_byte_span){copy, recovery.length + 1U}, &arena) == LXP_FATAL_REPLAY_DIVERGENCE);
+        ++after.accounts[0].next_sequence;
+        REQUIRE(lxp_da_recovery_verify_kernel(&kernel, 8U, 8U, recovery, &arena) == LXP_FATAL_REPLAY_DIVERGENCE);
+        --after.accounts[0].next_sequence;
+        REQUIRE(lxp_da_recovery_verify_kernel(&kernel, 8U, 7U, recovery, &arena) == LXP_FATAL_REPLAY_DIVERGENCE);
+        REQUIRE(lxp_da_recovery_verify_kernel(&kernel, 9U, 8U, recovery, &arena) == LXP_ERR_NON_CANONICAL);
+        REQUIRE(lxp_da_recovery_verify_kernel(&kernel, 8U, 9U, recovery, &arena) == LXP_ERR_NON_CANONICAL);
+        REQUIRE(lxp_state_store_destroy(&state) == LXP_OK);
+    }
     return 0;
 }
