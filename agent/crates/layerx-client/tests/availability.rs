@@ -61,10 +61,12 @@ fn tagged_record(kind: u8, bytes: &[u8]) -> Vec<u8> {
 }
 
 fn fixture() -> Fixture {
-    let activities = framed_record(b"activity");
+    let mut activities = 1_u32.to_be_bytes().to_vec();
+    activities.extend_from_slice(&framed_record(b"activity"));
     let mut receipts = tagged_record(1, b"receipt");
     receipts.extend_from_slice(&tagged_record(2, b"event"));
-    let oracle = framed_record(b"oracle");
+    let mut oracle = 1_u32.to_be_bytes().to_vec();
+    oracle.extend_from_slice(&framed_record(b"oracle"));
     let class_bytes = [
         (AvailabilityClass::Activities, activities),
         (AvailabilityClass::Receipts, receipts),

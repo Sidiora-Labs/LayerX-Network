@@ -187,8 +187,8 @@ int main(void)
     (void)memcpy(body.header.event_merkle_root,
                  built.roots.event_merkle_root, 32U);
     (void)memcpy(body.header.oracle_root, built.roots.oracle_root, 32U);
-    if (lxp_da_bundle_build(&body, 7U, &build_arena, &bundle) != LXP_OK ||
-        lxp_da_bundle_root(&bundle, &build_arena, original_root) != LXP_OK)
+    if (lxp_da_bundle_build(&body, LXP_DA_CANONICAL_CHUNK_BYTES, &build_arena, &bundle) != LXP_OK ||
+        lxp_batch_availability_root(&body, &build_arena, original_root) != LXP_OK)
         return 1;
     (void)memcpy(body.header.data_availability_root, original_root, 32U);
     if (lxp_da_store_bundle(&store, &bundle, &build_arena) != LXP_OK)

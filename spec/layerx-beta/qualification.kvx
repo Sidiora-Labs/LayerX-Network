@@ -4813,3 +4813,51 @@ symbol = "ureq native-tls connector dependency"
 observed = "ureq 3.4.0 gates its NativeTlsConnector on native-tls rather than native-tls-no-default. Agentd enables native-tls and adds its required transitive webpki-root-certs package to agent/Cargo.lock. The human and platform lockfiles do not contain that package and are outside the owned paths. Explicit RootCerts::Specific still excludes bundled roots from runtime trust."
 assumption = "Dependent workspace owners must regenerate their lockfiles for the enabled connector before locked builds; no unrelated package upgrade is required by the agentd change."
 severity = "blocker"
+
+[observation.6.1.da_commitment_conflict]
+task = "6.1"
+file = "src/replica/lxp_replay.c src/guarantor/lxp_guarantor.c src/sequencer/lxp_batch_roots.c src/network/lxp_da_bundle.c"
+symbol = "replay_batch lxp_guarantor_recompute_roots lxp_batch_roots_compute lxp_da_bundle_root"
+observed = "Publication replay computes the empty DA root using NULL/0 inputs; guarantor replay computes ordinary Merkle leaves over five complete sections; DA bundle verification computes domain-separated metadata-bound chunk digests. These are different commitments. Publishing the DA chunk root does not satisfy the existing publication and guarantor replay root assertions. Raw source evidence: qual-logs/dan1/source-blockers.log. No qualification gate ran."
+assumption = "The replay and guarantor owners must supply a common canonical commitment path while preserving root assertions before daemon DA publication can be qualified."
+severity = "blocker"
+
+[observation.6.1.da_candidate_interface]
+task = "6.1"
+file = "include/layerx/lxp_guarantor.h src/paxeer/lxp_checkpoint_cert.c cmd/layerxd/lxp_daemon_evidence.c agent/schema/lni/README.md agent/crates/layerx-client/tests/lni_schema.rs"
+symbol = "lxp_checkpoint_certificate lxp_checkpoint_certificate_hash lni_schema_and_document_cover_every_declared_message"
+observed = "The checkpoint certificate type and hash bind one header plus supplied proof bytes; the daemon evidence path receives finalized certificate material rather than producing an unfinalized checkpoint range, guarantor-set identity and validity proof. Adding a candidate message also requires its name in the schema README because the existing Rust schema test checks every message against that document, outside the permitted edit paths. Raw source evidence: qual-logs/dan1/source-blockers.log."
+assumption = "Checkpoint production must expose authoritative candidate/range material and the schema documentation owner must append the additive message entry without weakening the existing checks."
+severity = "blocker"
+
+[observation.6.1.da_canonical_commitment_decision]
+task = "6.1"
+file = "include/layerx/lxp_da.h src/network/lxp_da_bundle.c cmd/layerxd/lxp_daemon_process.c src/replica/lxp_replay.c src/guarantor/lxp_guarantor.c"
+symbol = "lxp_batch_availability_root"
+observed = "Owner-directed D1 redefines sealed data_availability_root as the Merkle root of lxp_da_bundle_build at LXP_DA_MAX_CHUNK_BYTES, 65536 bytes. Existing daemon publication and publication replay use empty availability inputs; guarantor replay uses whole-section leaves. These commitments drift from the metadata-bound DA chunk root verified by native possession and Rust availability proofs. An additive canonical root helper is written; producer and verifier integration is incomplete and no qualification gate ran."
+assumption = "Every header comparison must remain a comparison against an independently recomputed canonical bundle root; oracle commitments remain unchanged. D5 supersedes the candidate-interface observation: no new candidate tag is required and beta validity proof bytes are empty."
+severity = "blocker"
+
+[observation.6.1.da_prepared_state_access]
+task = "6.1"
+file = "src/protocol/lxp_kernel.c include/layerx/lxp_kernel.h cmd/layerxd/lxp_daemon_process.c cmd/layerxd/lxp_daemon_batch_wal.c"
+symbol = "lxp_kernel_prepared_batch commit_prepared_batch_wal"
+observed = "The signed WAL header is constructed before prepared-batch commit. The prepared base and settled kernels are private struct members in src/protocol/lxp_kernel.c, outside the permitted edit paths. Public prepared-batch accessors expose roots and receipt/event bytes but not account leaves or module state. D2 state diff and recovery metadata cannot be constructed from the settled state through that public API before WAL signing. Exact accessor request is in untracked NEEDS.md; source excerpts are in qual-logs/dan1/prepared-state-source.log."
+assumption = "Expose read-only base and settled kernel accessors or an equivalent canonical encoding API in the kernel owner file. Preserve WAL-before-commit ordering and do not encode the live pre-batch state as the settled state. Full implementation is incomplete, so phase-separated qualification has not started."
+severity = "blocker"
+
+[observation.6.1.da_prepared_state_access_resolved]
+task = "6.1"
+file = "src/protocol/lxp_kernel.c include/layerx/lxp_kernel.h src/network/lxp_da_bundle.c cmd/layerxd/lxp_daemon_lni.c"
+symbol = "lxp_kernel_prepared_batch_base_kernel lxp_kernel_prepared_batch_settled_kernel"
+observed = "The granted additive accessors return the prepared base and settled kernels as const borrowed pointers and return NULL for NULL. Their lifetime ends at prepared-batch destruction. Generic replay, guarantor and served-byte root verification now call lxp_batch_availability_root while retaining header comparisons. Tagged receipt encoding, kernel recovery metadata encoding and the tag 18 handler are written but not integrated into durable daemon publication. The prior prepared-state path restriction is resolved."
+assumption = "The implementation stage remains incomplete. No formatting, build, test or runtime qualification result is asserted. The availability capability remains disabled until a verified retained store is bound."
+severity = "note"
+
+[observation.6.1.da_body_durability]
+task = "6.1"
+file = "cmd/layerxd/lxp_daemon_process.c cmd/layerxd/lxp_daemon_batch_wal.c src/storage/lxp_da_verified.c src/network/lxp_da_bundle.c include/layerx/lxp_replica.h src/replica/lxp_replay.c agent/crates/layerx-client/src/availability.rs"
+symbol = "lxp_da_body_from_kernels lxp_daemon_batch_wal_body lxp_da_log_store_body lxp_replay_engine_bind_kernel"
+observed = "Canonical bodies derive account diffs from the actual base and settled account registries and recovery metadata from the settled kernel. Prepared WAL encoding carries those sections in version 4 under the existing byte bound. A separate da-bodies.log preserves canonical bodies for independent evidence reconstruction without modifying the header-only batch log contract. Served files reside in da under the checkpoint directory. The retention parameter defaults to 100000 and rejects values below 1024; pruning preserves the newest finalized checkpoint. Generic replay requires an explicitly bound real kernel and compares its actual roots and recomputed account diff. Rust activity and oracle sections consume the canonical sequence count; receipt sections reject reordered tags."
+assumption = "Replay-engine consumers and canonical fixtures require migration to real kernel state and canonical sections before qualification. Startup, crash recovery, retention boundaries, selector refusals and real-daemon Rust retrieval require executed integration evidence. No gate result is asserted."
+severity = "note"

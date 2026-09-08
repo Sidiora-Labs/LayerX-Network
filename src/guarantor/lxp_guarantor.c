@@ -1,4 +1,5 @@
 #include "layerx/lxp_guarantor.h"
+#include "layerx/lxp_da.h"
 
 #include "layerx/lxp_crypto.h"
 
@@ -59,7 +60,6 @@ lxp_result lxp_guarantor_recompute_roots(
 {
     lxp_byte_span *activities = NULL;
     lxp_byte_span *oracles = NULL;
-    lxp_byte_span availability[5];
     lxp_batch_root_inputs inputs;
     size_t activity_count = 0U;
     size_t oracle_count = 0U;
@@ -73,18 +73,15 @@ lxp_result lxp_guarantor_recompute_roots(
                                            &oracles, &oracle_count);
     if (status != LXP_OK || activity_count != replay->activity_count)
         return status == LXP_OK ? LXP_FATAL_REPLAY_DIVERGENCE : status;
-    availability[0] = body->activities;
-    availability[1] = replay->canonical_receipt_section;
-    availability[2] = body->oracle_inputs;
-    availability[3] = body->state_diff;
-    availability[4] = body->recovery_metadata;
     inputs = (lxp_batch_root_inputs){
         activities, activity_count,
-        replay->encoded_receipts, replay->activity_count,
+        replay->encoded_receipts, replay->receipt_count,
         replay->encoded_events, replay->activity_count,
-        oracles, oracle_count, availability, 5U
+        oracles, oracle_count, NULL, 0U
     };
     status = lxp_batch_roots_compute(&inputs, arena, roots);
+    if (status == LXP_OK)
+        status = lxp_batch_availability_root(body, arena, roots->data_availability_root);
     if (status != LXP_OK) return status;
 #define ROOT_MATCH(field) \
     (lxp_ct_memcmp(roots->field, body->header.field, 32U) == 0)

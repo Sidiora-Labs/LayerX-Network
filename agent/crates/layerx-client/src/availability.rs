@@ -590,11 +590,24 @@ fn section_bytes(chunks: &[VerifiedChunk], class: AvailabilityClass) -> Vec<u8> 
 
 fn decode_records(bytes: &[u8], tagged: bool) -> Result<Vec<(u8, Vec<u8>)>, ()> {
     let mut reader = RecordReader::new(bytes);
+    let count = if tagged { None } else { Some(reader.u32()?) };
     let mut records = Vec::new();
+    let mut previous_kind = 1;
     while !reader.finished() {
         let kind = if tagged { reader.u8()? } else { 0 };
+        if tagged && (kind < previous_kind || kind > 2) {
+            return Err(());
+        }
+        if tagged {
+            previous_kind = kind;
+        }
         let length = usize::try_from(reader.u32()?).map_err(|_| ())?;
         records.push((kind, reader.bytes(length)?.to_vec()));
+    }
+    if let Some(count) = count {
+        if usize::try_from(count).map_err(|_| ())? != records.len() {
+            return Err(());
+        }
     }
     Ok(records)
 }

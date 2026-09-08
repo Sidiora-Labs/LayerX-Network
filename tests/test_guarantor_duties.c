@@ -293,8 +293,8 @@ int main(void)
     (void)memcpy(body.header.event_merkle_root,
                  replay.roots.event_merkle_root, 32U);
     (void)memcpy(body.header.oracle_root, replay.roots.oracle_root, 32U);
-    (void)memcpy(body.header.data_availability_root,
-                 replay.roots.data_availability_root, 32U);
+    if (lxp_batch_availability_root(&body, &arena,
+            body.header.data_availability_root) != LXP_OK) goto cleanup;
     (void)memset(&sequencer_authorization, 0, sizeof(sequencer_authorization));
     sequencer_key = EVP_PKEY_new_raw_private_key(EVP_PKEY_ED25519, NULL,
                                                  sequencer_private, 32U);

@@ -1,5 +1,6 @@
 #include "layerx/lxp_hash.h"
 #include "layerx/lxp_replica.h"
+#include "layerx/lxp_da.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -97,8 +98,8 @@ static int build_batch(lxp_replay_engine *engine, lxp_batch_body *body,
     (void)memcpy(body->header.event_merkle_root,
                  built->roots.event_merkle_root, 32U);
     (void)memcpy(body->header.oracle_root, built->roots.oracle_root, 32U);
-    (void)memcpy(body->header.data_availability_root,
-                 built->roots.data_availability_root, 32U);
+    if (lxp_batch_availability_root(body, arena, body->header.data_availability_root) != LXP_OK)
+        return 13;
     return lxp_replay_verify_roots(built, body) == LXP_OK ? 0 : 13;
 }
 

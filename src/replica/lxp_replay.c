@@ -1,7 +1,10 @@
 #include "layerx/lxp_replica.h"
+#include "layerx/lxp_da.h"
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_protocol.h"
 #include "layerx/programs.h"
+#include "layerx/lxp_kernel.h"
+#include "layerx/lxp_state_diff.h"
 
 #include <string.h>
 
@@ -66,6 +69,16 @@ lxp_result lxp_replay_engine_init(
     (void)memset(engine, 0, sizeof(*engine));
     engine->parameter_version = parameter_version;
     engine->context = context;
+    return LXP_OK;
+}
+
+lxp_result lxp_replay_engine_bind_kernel(
+    lxp_replay_engine *engine, const lxp_kernel *kernel)
+{
+    if (engine == NULL || kernel == NULL || kernel->state == NULL ||
+        kernel->state->accounts == NULL || engine->kernel != NULL)
+        return LXP_ERR_NON_CANONICAL;
+    engine->kernel = kernel;
     return LXP_OK;
 }
 
@@ -189,18 +202,20 @@ static lxp_result replay_batch(lxp_replay_engine *engine, bool publication,
     lxp_replay_transition_fn transition;
     lxp_byte_span *activities;
     lxp_byte_span *oracles;
-    lxp_byte_span availability[5];
     size_t activity_count;
     size_t receipt_count;
     size_t oracle_count;
     size_t published_count = 0U;
     lxp_byte_span *published_receipts = NULL;
+    lxp_byte_span *published_events = NULL;
+    size_t published_event_count = 0U;
     bool maintenance_present;
     size_t i;
     void *memory;
     uint32_t parameter_version;
     uint8_t current_root[32];
     lxp_batch_root_inputs root_inputs;
+    lx_account_registry *before = NULL;
     lxp_result status;
     if (engine == NULL || body == NULL || starting_state_root == NULL ||
         arena == NULL || result == NULL || engine->parameter_version == NULL)
@@ -216,6 +231,17 @@ static lxp_result replay_batch(lxp_replay_engine *engine, bool publication,
     status = lxp_replay_section_decode(&body->activities, arena, &activities,
                                        &activity_count);
     if (status != LXP_OK) return status;
+    if (engine->kernel == NULL || engine->kernel->state == NULL ||
+        engine->kernel->state->accounts == NULL)
+        return LXP_ERR_MODULE_DISABLED;
+    if (lxp_ct_memcmp(engine->kernel->current_state_root,
+                      starting_state_root, 32U) != 0)
+        return LXP_FATAL_REPLAY_DIVERGENCE;
+    status = lxp_arena_alloc(arena, sizeof(*before),
+                             _Alignof(lx_account_registry), &memory);
+    if (status != LXP_OK) return status;
+    before = memory;
+    *before = *engine->kernel->state->accounts;
     transition = transition_for(engine, body->header.protocol_version);
     if (activity_count != 0U && transition == NULL)
         return LXP_ERR_VERSION_UNSUPPORTED;
@@ -223,8 +249,11 @@ static lxp_result replay_batch(lxp_replay_engine *engine, bool publication,
         return LXP_ERR_BATCH_GAP;
     maintenance_present = lxp_protocol_version_uses_occupancy(body->header.protocol_version);
     if (publication) {
-        status = lxp_replay_section_decode(&body->receipts, arena,
-            &published_receipts, &published_count);
+        status = lxp_da_receipt_section_decode(body->receipts, arena,
+            &published_receipts, &published_count,
+            &published_events, &published_event_count);
+        if (status == LXP_OK && published_event_count != activity_count)
+            status = LXP_ERR_BATCH_GAP;
         if (status != LXP_OK) return status;
         if (published_count != activity_count && published_count != activity_count + 1U)
             return LXP_ERR_BATCH_GAP;
@@ -322,8 +351,18 @@ static lxp_result replay_batch(lxp_replay_engine *engine, bool publication,
                      32U);
     }
     (void)memcpy(result->resulting_state_root, current_root, 32U);
-    status = lxp_replay_section_encode(result->encoded_receipts,
-                                       receipt_count, arena,
+    if (lxp_ct_memcmp(engine->kernel->current_state_root, current_root, 32U) != 0)
+        return LXP_FATAL_REPLAY_DIVERGENCE;
+    status = lxp_state_diff_encode(before, engine->kernel->state->accounts,
+                                   arena, &result->canonical_state_diff);
+    if (status != LXP_OK) return status;
+    if (body->state_diff.length != result->canonical_state_diff.length ||
+        lxp_ct_memcmp(body->state_diff.bytes, result->canonical_state_diff.bytes,
+                      body->state_diff.length) != 0)
+        return LXP_FATAL_REPLAY_DIVERGENCE;
+    status = lxp_da_receipt_section_encode(result->encoded_receipts,
+                                       receipt_count, result->encoded_events,
+                                       activity_count, arena,
                                        &result->canonical_receipt_section);
     if (status == LXP_OK)
         status = lxp_replay_section_encode(result->encoded_events,
@@ -333,19 +372,22 @@ static lxp_result replay_batch(lxp_replay_engine *engine, bool publication,
     status = lxp_replay_section_decode(&body->oracle_inputs, arena, &oracles,
                                        &oracle_count);
     if (status != LXP_OK) return status;
-    availability[0] = body->activities;
-    availability[1] = result->canonical_receipt_section;
-    availability[2] = body->oracle_inputs;
-    availability[3] = body->state_diff;
-    availability[4] = body->recovery_metadata;
     root_inputs = (lxp_batch_root_inputs){
         activities, activity_count,
         result->encoded_receipts, receipt_count,
         result->encoded_events, activity_count,
         oracles, oracle_count,
-        publication ? NULL : availability, publication ? 0U : 5U
+        NULL, 0U
     };
-    return lxp_batch_roots_compute(&root_inputs, arena, &result->roots);
+    status = lxp_batch_roots_compute(&root_inputs, arena, &result->roots);
+    if (status == LXP_OK) {
+        lxp_batch_body recomputed = *body;
+        recomputed.receipts = result->canonical_receipt_section;
+        recomputed.state_diff = result->canonical_state_diff;
+        status = lxp_batch_availability_root(&recomputed, arena,
+                                              result->roots.data_availability_root);
+    }
+    return status;
 }
 
 lxp_result lxp_replay_batch(lxp_replay_engine *engine,

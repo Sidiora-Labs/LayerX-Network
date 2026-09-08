@@ -264,7 +264,7 @@ test-harness: $(BUILD_DIR)/tests/lxp_test_harness
 list-tests: $(BUILD_DIR)/tests/lxp_test_harness
 	$(BUILD_DIR)/tests/lxp_test_harness --list
 
-test: test-result test-protocol test-state-commitment-transition test-program-artifacts test-daemon-maintenance-protocol test-daemon-lni-account test-arena test-harness test-codec \
+test: test-state-diff test-da-verified test-result test-protocol test-state-commitment-transition test-program-artifacts test-daemon-maintenance-protocol test-daemon-lni-account test-arena test-harness test-codec \
 	test-codec-limits test-codec-version test-codec-vectors fuzz-codec-smoke \
 	test-crypto-suite test-arith-u128 test-arith-u256 test-arith-rounding \
 	test-arith-property test-arith-nofloat test-log test-log-durability \
@@ -978,6 +978,15 @@ $(BUILD_DIR)/tests/test_da_possession: tests/test_da_possession.c $(LIBRARY)
 
 test-da-possession: $(BUILD_DIR)/tests/test_da_possession
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_da_possession
+
+$(BUILD_DIR)/tests/lxp_test_da_verified: tests/storage/lxp_test_da_verified.c $(LIBRARY)
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -o $@
+
+.PHONY: test-da-verified
+test-da-verified: $(BUILD_DIR)/tests/lxp_test_da_verified
+	@mkdir -p qual-logs/dan1
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_da_verified
 
 $(BUILD_DIR)/tests/test_da_retrieval: tests/test_da_retrieval.c \
 		cmd/layerx-verify/lxp_verify_fetch.c $(LIBRARY)
@@ -3251,3 +3260,11 @@ beta-qualify-focused:
 		'make agent-qualify-wire' \
 		'make agent-qualify-boundary' \
 		'make human-qualify-faults'
+
+.PHONY: test-state-diff
+test-state-diff: $(BUILD_DIR)/tests/lxp_test_state_diff
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_state_diff
+
+$(BUILD_DIR)/tests/lxp_test_state_diff: tests/state/lxp_test_state_diff.c $(LIBRARY)
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -o $@

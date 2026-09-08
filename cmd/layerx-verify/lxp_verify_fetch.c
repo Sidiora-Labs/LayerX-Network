@@ -234,6 +234,10 @@ lxp_result lxp_da_verify_served_bytes(
     body.oracle_inputs = classes[2];
     body.state_diff = classes[3];
     body.recovery_metadata = classes[4];
+    status = lxp_batch_availability_root(&body, arena, da_root);
+    if (status != LXP_OK) return status;
+    if (lxp_ct_memcmp(da_root, header->data_availability_root, 32U) != 0)
+        return LXP_ERR_DA_MISSING;
     status = lxp_replay_batch(engine, &body, starting_state_root, arena,
                               replayed);
     if (status != LXP_OK) return status;
@@ -244,6 +248,7 @@ lxp_result lxp_da_verify_served_bytes(
         !ROOT_MATCH(activity_merkle_root) ||
         !ROOT_MATCH(receipt_merkle_root) ||
         !ROOT_MATCH(event_merkle_root) || !ROOT_MATCH(oracle_root) ||
+        !ROOT_MATCH(data_availability_root) ||
         replayed->canonical_receipt_section.length != body.receipts.length ||
         lxp_ct_memcmp(replayed->canonical_receipt_section.bytes,
                       body.receipts.bytes, body.receipts.length) != 0)
