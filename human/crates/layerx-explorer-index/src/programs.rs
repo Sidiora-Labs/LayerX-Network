@@ -83,7 +83,7 @@ impl ExplorerProgram {
     /// than the registry head being rendered.
     pub fn from_verified(
         read: VerifiedRegistryRead,
-        balances: VerifiedProgramBalanceRead,
+        balances: &VerifiedProgramBalanceRead,
         interfaces: &[VerifiedProgramInterfaceMetadata],
         now: u64,
         staleness_limit: u64,
@@ -159,6 +159,9 @@ impl ExplorerProgram {
 
     /// Projects the exact production protocol adapter output without an
     /// intermediate caller-defined balance representation.
+    ///
+    /// # Errors
+    /// Refuses inconsistent registry, balance or interface evidence, or stale balances.
     pub fn from_protocol_state(
         read: VerifiedRegistryRead,
         state: &ProtocolProgramStateRead,
@@ -166,13 +169,7 @@ impl ExplorerProgram {
         now: u64,
         staleness_limit: u64,
     ) -> Result<Self, ExplorerProgramReadError> {
-        Self::from_verified(
-            read,
-            state.balances().clone(),
-            interfaces,
-            now,
-            staleness_limit,
-        )
+        Self::from_verified(read, state.balances(), interfaces, now, staleness_limit)
     }
 }
 
@@ -309,7 +306,7 @@ mod program_call_tests {
     fn program() -> ProgramId {
         match ProgramId::new([0x11; 32]) {
             Ok(program) => program,
-            Err(_) => panic!("nonzero program identifier rejected"),
+            Err(error) => panic!("nonzero program identifier rejected: {error:?}"),
         }
     }
 
