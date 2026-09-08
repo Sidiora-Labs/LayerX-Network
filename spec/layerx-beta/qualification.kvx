@@ -4670,3 +4670,27 @@ symbol = "CredentialEnvironment"
 observed = "The real Secret Service tests emit dbus-daemon Cannot initialize inotify: Too many open files messages on this host. All 89 CLI tests still pass; raw output is in qual-logs/cli1/test.log."
 assumption = "Host inotify resource pressure is independent of credential backend selection and did not prevent the isolated credential services from serving the tested operations."
 severity = "note"
+
+[observation.3.7.21]
+task = "3.7"
+file = "human/Cargo.toml human/crates/layerx-human-service/src/server/production_auth.rs human/crates/layerx-human-service/src/server/production_components.rs"
+symbol = "cargo fmt cargo clippy"
+observed = "cargo fmt --all --check --manifest-path human/Cargo.toml exits 1; qual-logs/hm3/fmt-check.log contains existing formatting differences beginning in agent/crates/layerx-agent-api/src/generated.rs. cargo clippy --locked --manifest-path human/Cargo.toml -p layerx-human-identity-provider --all-targets -- -D warnings exits 101 with 436 errors in layerx-human-service before checking the identity provider; qual-logs/hm3/clippy-retry.log. Findings include many_single_char_names, unnested_or_patterns and missing_errors_doc. No dependency source or lint configuration is changed."
+assumption = "The dependency owners must resolve the existing formatting and Clippy failures before the required aggregate commands can pass. A separate no-deps Clippy command can diagnose the provider but does not replace the required command."
+severity = "blocker"
+
+[observation.3.7.22]
+task = "3.7"
+file = "human/crates/layerx-human-service/src/server/identity_dispatch.rs human/crates/layerx-human-identity-provider/README.md"
+symbol = "RemoteIdentityProvider::provision RemoteIdentityProvider::device_for_assertion"
+observed = "LXIP v1 provisioning carries email, display name, idempotency key and timestamp but no recovery policy. Assertion-device lookup carries only principal and assertion ID, with no enrollment operation or authenticated device metadata. The provider requires an operator-supplied protected recovery policy file and exposes owner-only offline bind-device enrollment with exclusive state locking. Unknown assertion bindings are refused; recovery commitments and device attestations are never invented from request text."
+assumption = "Deployment must supply an exercisable recovery authority policy and connect the verified assertion enrollment authority to the protected provider state. The hosted HTTP identity contract is distinct. Cluster and image gates cannot run on this server because Docker, kubectl, kind and a live cluster are unavailable."
+severity = "blocker"
+
+[observation.3.7.23]
+task = "3.7"
+file = "human/crates/layerx-human-identity-provider human/crates/layerx-human-service/src/server/identity_dispatch.rs"
+symbol = "Server State RemoteIdentityProvider"
+observed = "cargo test --locked --manifest-path human/Cargo.toml -p layerx-human-identity-provider exits 0 with 11 tests passing, zero ignored; qual-logs/hm3/test-final.log. Tests compile the unchanged identity_dispatch.rs source with the actual service types and exercise its RemoteIdentityProvider over real Unix sockets. Separate real-server and real-binary tests cover malformed frames, UID refusal, atomic snapshot replay, protected file and directory refusal, committed-state corruption, missing-snapshot refusal, owner-only device enrollment, crash restart and SIGTERM. Owned Rust files pass rustfmt --check --edition 2021 --config skip_children=true; qual-logs/hm3/fmt-owned-check.log. The no-deps all-target Clippy diagnostic exits 101 solely on five existing diagnostics in the imported identity_dispatch.rs source at lines 147, 191 and 192; qual-logs/hm3/clippy-owned-final.log. No lint allowances, assertions or client source were changed."
+assumption = "Runtime tests validate the provider and original client wire exchange, not automatic enrollment integration or a deployed cluster. Required workspace formatting and dependency Clippy gates remain blocked as recorded in observation.3.7.21. Environment uses CARGO_BUILD_JOBS=16, MAKEFLAGS=-j16, the pinned Rust 1.91.1 toolchain and human/target."
+severity = "note"
