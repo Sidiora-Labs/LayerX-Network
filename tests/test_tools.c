@@ -234,9 +234,9 @@ int main(void)
     (void)memcpy(body.header.oracle_root,
                  built.roots.oracle_root, 32U);
     if (lxp_da_bundle_build(
-            &body, 7U, &build_arena, &bundle) != LXP_OK ||
-        lxp_da_bundle_root(
-            &bundle, &build_arena, da_root) != LXP_OK)
+            &body, LXP_DA_CANONICAL_CHUNK_BYTES, &build_arena, &bundle) != LXP_OK ||
+        lxp_batch_availability_root(
+            &body, &build_arena, da_root) != LXP_OK)
         return 1;
     (void)memcpy(body.header.data_availability_root, da_root, 32U);
     (void)memset(&checkpoint, 0, sizeof(checkpoint));

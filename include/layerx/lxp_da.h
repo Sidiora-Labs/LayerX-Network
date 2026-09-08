@@ -10,6 +10,8 @@ enum {
     LXP_DA_CLASS_COUNT = 5,
     LXP_DA_MAX_CHUNKS = 4096,
     LXP_DA_MAX_CHUNK_BYTES = 65536,
+    LXP_DA_CANONICAL_CHUNK_BYTES = LXP_DA_MAX_CHUNK_BYTES,
+    LAYERX_DA_MAX_BATCHES_PER_FETCH = 8,
     LXP_DA_MAX_MODULE_ROOTS = 256,
     LXP_DA_MAX_ACCOUNT_FRONTIER_BYTES = 1048576,
     LXP_DA_STORE_PATH_BYTES = 4096
@@ -87,11 +89,37 @@ typedef lxp_result (*lxp_da_chunk_fetch_fn)(
     void *context, const lxp_da_retrieval_request *request,
     uint32_t chunk_index, lxp_arena *arena, lxp_byte_span *response);
 
+struct lxp_kernel;
+lxp_result lxp_da_recovery_from_kernel(
+    const struct lxp_kernel *kernel, uint64_t receipt_watermark,
+    uint64_t projection_watermark, lxp_arena *arena, lxp_byte_span *encoded);
+lxp_result lxp_da_receipt_section_encode(
+    const lxp_byte_span *receipts, size_t receipt_count,
+    const lxp_byte_span *events, size_t event_count,
+    lxp_arena *arena, lxp_byte_span *encoded);
+lxp_result lxp_da_receipt_section_decode(
+    lxp_byte_span encoded, lxp_arena *arena,
+    lxp_byte_span **receipts, size_t *receipt_count,
+    lxp_byte_span **events, size_t *event_count);
+lxp_result lxp_da_body_from_kernels(
+    const lxp_batch_header *header,
+    const struct lxp_kernel *before, const struct lxp_kernel *after,
+    const lxp_byte_span *activities, size_t activity_count,
+    const lxp_byte_span *receipts, size_t receipt_count,
+    const lxp_byte_span *events, size_t event_count,
+    const lxp_byte_span *oracles, size_t oracle_count,
+    lxp_arena *arena, lxp_batch_body *body);
+
 lxp_result lxp_da_recovery_metadata_encode(
     const lxp_da_recovery_input *input, lxp_arena *arena,
     lxp_byte_span *encoded);
 lxp_result lxp_da_bundle_build(const lxp_batch_body *body, size_t chunk_size,
                                lxp_arena *arena, lxp_da_bundle *bundle);
+lxp_result lxp_batch_availability_root(const lxp_batch_body *body,
+                                       lxp_arena *arena, uint8_t root[32]);
+lxp_result lxp_da_bundle_body(const lxp_da_bundle *bundle,
+                              const lxp_batch_header *header,
+                              lxp_arena *arena, lxp_batch_body *body);
 lxp_result lxp_da_chunk_hash(lxp_da_chunk *chunk);
 lxp_result lxp_da_bundle_root(const lxp_da_bundle *bundle, lxp_arena *arena,
                               uint8_t root[32]);
@@ -104,6 +132,22 @@ lxp_result lxp_da_store_read_bundle(const lxp_da_store *store,
                                     lxp_arena *arena,
                                     lxp_da_bundle *bundle,
                                     uint8_t root[32]);
+lxp_result lxp_da_store_read_verified(const lxp_da_store *store,
+                                     uint64_t batch_number,
+                                     const uint8_t expected_root[32],
+                                     lxp_arena *arena,
+                                     lxp_da_bundle *bundle);
+lxp_result lxp_da_log_read_body(const lxp_log *log, uint64_t batch_number,
+                               lxp_arena *arena, lxp_batch_body *body);
+lxp_result lxp_da_log_store_body(lxp_log *log, const lxp_batch_body *body,
+                                lxp_arena *arena);
+lxp_result lxp_da_serve_chunk_proof(const lxp_da_store *store,
+                                   uint64_t batch_number,
+                                   uint32_t chunk_index,
+                                   const uint8_t expected_root[32],
+                                   lxp_arena *arena,
+                                   lxp_byte_span *bytes,
+                                   lxp_byte_span *proof_material);
 lxp_result lxp_da_possession_attest(
     const lxp_da_store *store, const struct lxp_guarantor_ctx *ctx,
     const struct lxp_checkpoint_certificate *checkpoint,

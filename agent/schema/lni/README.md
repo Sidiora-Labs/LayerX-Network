@@ -87,3 +87,5 @@ authentication-and-durability guarantee only when
 | 29 | `FinalityEvidenceRegisterResponse` | response | `finality_evidence_register` |
 | 30 | `SimulateRequest` | request | `simulate` |
 | 31 | `SimulateResponse` | response | `simulate` |
+
+AvailabilityFetchRequest carries only the canonical selector and empty proof material. AvailabilityChunk carries exact chunk bytes and inclusion metadata. AvailabilityEnd has empty canonical payload and empty proof material.
