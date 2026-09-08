@@ -383,7 +383,7 @@ static lxp_result validate_availability(const lxp_daemon_batch_wal_input *in)
     return status;
 }
 
-static lxp_result validate_input(const lxp_daemon_batch_wal_input *in)
+static lxp_result validate_input(const lxp_daemon_batch_wal_input *in, bool legacy)
 {
     lxp_batch_header header;
     lxp_arena signature_arena;
@@ -485,7 +485,8 @@ static lxp_result validate_input(const lxp_daemon_batch_wal_input *in)
        lxp_ct_memcmp(activity_root,header.activity_merkle_root,32U)!=0 ||
        lxp_ct_memcmp(event_root,header.event_merkle_root,32U)!=0 ||
        lxp_ct_memcmp(empty_root,header.oracle_root,32U)!=0 ||
-       validate_availability(in)!=LXP_OK)
+       (legacy ? lxp_ct_memcmp(empty_root,header.data_availability_root,32U)!=0 :
+                 validate_availability(in)!=LXP_OK))
         return LXP_ERR_ROOT_MISMATCH;
     status=validate_canonical_items(in,&header);
     if(status!=LXP_OK)return status;
@@ -509,12 +510,8 @@ static lxp_result encode_record(const lxp_daemon_batch_wal_input *in,
     size_t length=WAL_FIXED_BYTES+WAL_DIGEST_BYTES, body_length=0U;
     size_t offset=0U, i, j;
     uint8_t *bytes, digest[32];
-    uint16_t version = in != NULL && in->state_diff.length != 0U ?
-        WAL_AVAILABILITY_VERSION :
-        (in != NULL && in->maintenance.length != 0U ?
-        WAL_MAINTENANCE_VERSION :
-        (in != NULL && in->terminal_payloads != NULL ? WAL_VERSION : 1U));
-    lxp_result status=validate_input(in);
+    const uint16_t version = WAL_AVAILABILITY_VERSION;
+    lxp_result status=validate_input(in, false);
     if (status!=LXP_OK || (state!=LXP_DAEMON_BATCH_WAL_PREPARED &&
         state!=LXP_DAEMON_BATCH_WAL_ABORTED &&
         state!=LXP_DAEMON_BATCH_WAL_COMMITTED)) return status;
@@ -1014,7 +1011,7 @@ lxp_result lxp_daemon_batch_wal_load(const char *directory,
         r->view.terminal_payloads = r->terminal_payloads;
         r->view.call_graphs = r->call_graphs;
     }
-    status=validate_input(&r->view);if(status!=LXP_OK)goto fail;*out=r;return LXP_OK;
+    status=validate_input(&r->view, get_u16(r->owned + 8U) < WAL_AVAILABILITY_VERSION);if(status!=LXP_OK)goto fail;*out=r;return LXP_OK;
 fail:
     if(r!=NULL)lxp_daemon_batch_wal_destroy(r);
     if(bytes!=NULL){lxp_secure_zero(bytes,length);free(bytes);} *present=false;return status;
@@ -1060,6 +1057,10 @@ lxp_result lxp_daemon_batch_wal_transition(const char *directory,
        (state==LXP_DAEMON_BATCH_WAL_COMMITTED &&
         !boundary_equal(live,&record->view.settled)))
         return LXP_FATAL_REPLAY_DIVERGENCE;
+    if (record->owned != NULL && get_u16(record->owned + 8U) < WAL_AVAILABILITY_VERSION) {
+        record->state = state;
+        return LXP_OK;
+    }
     status=encode_record(&record->view,state,&bytes,&length);
     if(status==LXP_OK)status=durable_replace(
         directory,bytes,length,false,record->owned,record->owned_length);
@@ -1084,8 +1085,15 @@ lxp_result lxp_daemon_batch_wal_retire(const char *directory,
         (record->state!=LXP_DAEMON_BATCH_WAL_COMMITTED ||
          !boundary_equal(live,&record->view.settled)))
         return LXP_FATAL_REPLAY_DIVERGENCE;
-    status=encode_record(&record->view,record->state,
-                         &expected,&expected_length);
+    if (record->owned != NULL && get_u16(record->owned + 8U) < WAL_AVAILABILITY_VERSION) {
+        expected_length = record->owned_length;
+        expected = malloc(expected_length);
+        status = expected == NULL ? LXP_ERR_IO : LXP_OK;
+        if (status == LXP_OK) memcpy(expected, record->owned, expected_length);
+    } else {
+        status=encode_record(&record->view,record->state,
+                             &expected,&expected_length);
+    }
     if(status==LXP_OK)status=paths(directory,final);
     (void)final;
     if(status==LXP_OK) {

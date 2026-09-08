@@ -2716,7 +2716,7 @@ static lxp_result recover_prepared_batch_wal(
         status = LXP_FATAL_REPLAY_DIVERGENCE;
         goto done;
     }
-    {
+    if (view->state_diff.length != 0U) {
         lxp_batch_body body;
         size_t mark = lxp_arena_mark(&process->execution_arena);
         status = lxp_daemon_batch_wal_body(view, &process->execution_arena, &body);
@@ -3017,6 +3017,12 @@ static lxp_result recover_ranged_batch_authority(
             &process->owner_scratch, &roots);
     if (status == LXP_OK) {
         lxp_batch_body body;
+        uint8_t legacy_root[32];
+        status = lxp_merkle_leaf_hash(NULL, 0U, legacy_root);
+        if (status == LXP_OK &&
+            lxp_ct_memcmp(header->data_availability_root, legacy_root, 32U) == 0) {
+            process->owner.availability_ready = false;
+        } else if (status == LXP_OK) {
         status = lxp_da_log_read_body(&process->availability_log, header->batch_number,
                                       &process->owner_scratch, &body);
         if (status == LXP_OK)
@@ -3028,6 +3034,7 @@ static lxp_result recover_ranged_batch_authority(
         if (status == LXP_OK)
             status = lxp_batch_availability_root(&body, &process->owner_scratch,
                                                  roots.data_availability_root);
+        }
     }
     if (status == LXP_OK &&
         (lxp_ct_memcmp(roots.activity_merkle_root,
