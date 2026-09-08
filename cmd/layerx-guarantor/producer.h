@@ -15,4 +15,6 @@ lxp_result gp_attestation_accept(const lxp_checkpoint_certificate *, uint64_t, c
                                  const lxp_guarantor_set *, const lxp_guarantor_attestation *,
                                  const lxp_guarantor_attestation *, size_t, const char *,
                                  lxp_arena *);
+lxp_result gp_checkpoint_requirements(const lxp_batch_header *, uint64_t, size_t, lxp_u128,
+                                      lxp_finalisation_requirements *);
 #endif
