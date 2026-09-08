@@ -294,6 +294,10 @@ fn deleting_and_rebuilding_from_verified_boundary_evidence_is_identical() {
     assert_eq!(receipt.canonical_bytes, b"receipt-public-1");
     assert!(rebuilt.batch(8).freshness.is_current());
 
+    assert_rebuilt_public_queries(&rebuilt, checkpoint_id);
+}
+
+fn assert_rebuilt_public_queries(rebuilt: &Indexer, checkpoint_id: [u8; 32]) {
     let verifier = Verifier::new(Vec::new(), Vec::new());
     let public = rebuilt.public(&verifier);
     let checkpoints = public

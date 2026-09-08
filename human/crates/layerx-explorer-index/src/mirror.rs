@@ -46,6 +46,8 @@ impl From<MirrorVerifyError> for ExplorerMirrorError {
     }
 }
 
+/// # Errors
+/// Refuses unavailable mirror data, invalid receipt evidence, or missing provenance.
 pub fn verify_mirrored_receipt(
     sources: &MirrorSources,
     batch_number: u64,
@@ -72,6 +74,8 @@ pub fn verify_mirrored_receipt(
     })
 }
 
+/// # Errors
+/// Refuses unavailable mirror data, invalid state proofs, or missing provenance.
 pub fn verify_mirrored_state(
     sources: &MirrorSources,
     batch_number: u64,
