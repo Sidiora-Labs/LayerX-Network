@@ -75,8 +75,8 @@ static int valid_config(const gp_settlement_config *config)
 static lxp_result begin_files(const gp_settlement_config *config, gp_files *files, FILE **output)
 {
     int length, fd;
-    if (config == NULL || config->python == NULL || config->helper == NULL ||
-        config->state_dir == NULL)
+    if (config == NULL || files == NULL || output == NULL || config->python == NULL ||
+        config->helper == NULL || config->state_dir == NULL)
         return LXP_ERR_NON_CANONICAL;
     (void)memset(files, 0, sizeof(*files));
     length = snprintf(files->directory, sizeof(files->directory), "%s/settlement-XXXXXX",
