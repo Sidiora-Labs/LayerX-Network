@@ -38,6 +38,9 @@ const PROVIDER_MAGIC: &[u8; 4] = b"LXSP";
 
 pub struct IndexAuthenticationKey(Zeroizing<[u8; 32]>);
 impl IndexAuthenticationKey {
+    /// # Errors
+    ///
+    /// Refuses invalid key or provider configuration.
     pub fn new(value: [u8; 32]) -> Result<Self, ProductionAuthError> {
         if bool::from(value.ct_eq(&[0; 32])) {
             Err(ProductionAuthError::InvalidConfiguration)
@@ -79,6 +82,9 @@ pub struct AuthDiscoveryIndex {
     state: Mutex<State>,
 }
 impl AuthDiscoveryIndex {
+    /// # Errors
+    ///
+    /// Returns storage, locking, or index-authentication failures.
     pub fn open(
         root: impl AsRef<Path>,
         key: IndexAuthenticationKey,
@@ -97,6 +103,9 @@ impl AuthDiscoveryIndex {
             state: Mutex::new(state),
         })
     }
+    /// # Errors
+    ///
+    /// Refuses invalid identifiers, conflicting bindings, or unavailable authenticated storage.
     pub fn bind_registration(
         &self,
         id: &str,
@@ -105,6 +114,9 @@ impl AuthDiscoveryIndex {
     ) -> Result<(), ProductionAuthError> {
         self.bind(Kind::Registration, id, p, e)
     }
+    /// # Errors
+    ///
+    /// Refuses invalid identifiers, conflicting bindings, or unavailable authenticated storage.
     pub fn bind_assertion(
         &self,
         id: &str,
@@ -113,6 +125,9 @@ impl AuthDiscoveryIndex {
     ) -> Result<(), ProductionAuthError> {
         self.bind(Kind::Assertion, id, p, e)
     }
+    /// # Errors
+    ///
+    /// Refuses invalid identifiers, conflicting bindings, or unavailable authenticated storage.
     pub fn bind_step_up(
         &self,
         id: &str,
@@ -121,9 +136,15 @@ impl AuthDiscoveryIndex {
     ) -> Result<(), ProductionAuthError> {
         self.bind(Kind::StepUp, id, p, e)
     }
+    /// # Errors
+    ///
+    /// Refuses invalid account identifiers, conflicting bindings, or storage failures.
     pub fn bind_account(&self, email: &str, p: &PrincipalId) -> Result<(), ProductionAuthError> {
         self.bind(Kind::Assertion, &account_key(email)?, p, u64::MAX)
     }
+    /// # Errors
+    ///
+    /// Refuses invalid session identifiers, conflicting bindings, or storage failures.
     pub fn bind_session(
         &self,
         g: &SessionGrant,
@@ -131,6 +152,9 @@ impl AuthDiscoveryIndex {
     ) -> Result<(), ProductionAuthError> {
         self.bind(Kind::Session, g.session_id(), p, g.refresh_expires_at())
     }
+    /// # Errors
+    ///
+    /// Refuses absent, expired, or wrong-kind assertion bindings.
     pub fn resolve_assertion(
         &self,
         id: &str,
@@ -138,6 +162,9 @@ impl AuthDiscoveryIndex {
     ) -> Result<PrincipalId, ProductionAuthError> {
         self.resolve(Kind::Assertion, id, now)
     }
+    /// # Errors
+    ///
+    /// Refuses absent, expired, or wrong-kind registration bindings.
     pub fn resolve_registration(
         &self,
         id: &str,
@@ -145,9 +172,15 @@ impl AuthDiscoveryIndex {
     ) -> Result<PrincipalId, ProductionAuthError> {
         self.resolve(Kind::Registration, id, now)
     }
+    /// # Errors
+    ///
+    /// Refuses absent, expired, or wrong-kind step-up bindings.
     pub fn resolve_step_up(&self, id: &str, now: u64) -> Result<PrincipalId, ProductionAuthError> {
         self.resolve(Kind::StepUp, id, now)
     }
+    /// # Errors
+    ///
+    /// Refuses invalid account identifiers or missing account bindings.
     pub fn resolve_account(&self, email: &str) -> Result<PrincipalId, ProductionAuthError> {
         self.resolve(Kind::Assertion, &account_key(email)?, 0)
     }
@@ -305,6 +338,7 @@ impl AuthDiscoveryIndex {
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct AuthorizationDisclosure<'a> {
     pub operation: &'a Operation,
     pub destination: &'a str,
@@ -330,36 +364,49 @@ pub struct ExecutionCapability {
     expires_at: u64,
 }
 impl ExecutionCapability {
+    #[must_use]
     pub fn operation(&self) -> &str {
         &self.operation
     }
+    #[must_use]
     pub fn principal(&self) -> &PrincipalId {
         &self.principal
     }
+    #[must_use]
     pub fn tenant(&self) -> &AgentTenantId {
         &self.tenant
     }
+    #[must_use]
     pub fn session(&self) -> &SessionContext {
         &self.session
     }
+    #[must_use]
     pub fn destination(&self) -> &str {
         &self.destination
     }
+    #[must_use]
     pub fn trace(&self) -> &str {
         &self.trace
     }
+    #[must_use]
     pub const fn request_disclosure(&self) -> [u8; 32] {
         self.request
     }
+    #[must_use]
     pub const fn body_disclosure(&self) -> [u8; 32] {
         self.body
     }
+    #[must_use]
     pub const fn issued_at(&self) -> u64 {
         self.issued_at
     }
+    #[must_use]
     pub const fn expires_at(&self) -> u64 {
         self.expires_at
     }
+    /// # Errors
+    ///
+    /// Refuses inconsistent principal, tenant, session, or capability disclosure.
     pub fn into_context(self) -> Result<PrincipalContext, ApiFailure> {
         PrincipalContext::authorized(
             self.principal,
@@ -377,17 +424,30 @@ impl ExecutionCapability {
     }
 }
 
+#[derive(Clone, Copy)]
+pub struct ExecutionCredentials<'a> {
+    pub access: &'a str,
+    pub csrf: Option<&'a str>,
+    pub step_up: Option<&'a StepUpEvidence>,
+}
+
+/// # Errors
+///
+/// Refuses invalid disclosure, expired sessions, failed authorization, or capability storage failures.
 pub fn authorize_execution(
     store: &mut PrincipalStore,
     passkeys: &Passkeys,
     index: &AuthDiscoveryIndex,
-    access: &str,
-    csrf: Option<&str>,
-    step_up: Option<&StepUpEvidence>,
+    credentials: ExecutionCredentials<'_>,
     d: AuthorizationDisclosure<'_>,
     now: u64,
     max_age: u64,
 ) -> Result<ExecutionCapability, ProductionAuthError> {
+    let ExecutionCredentials {
+        access,
+        csrf,
+        step_up,
+    } = credentials;
     if max_age == 0
         || max_age > 60
         || !d.destination.starts_with('/')
@@ -400,7 +460,7 @@ pub fn authorize_execution(
     let principal = index.resolve_access_token(access, now)?;
     let mut scope = store.principal(&principal)?;
     let tenant = scope.tenant().clone();
-    let class = operation_class(d.operation)?;
+    let class = operation_class(d.operation);
     let body = body_hash(d.body)?;
     let request = request_hash(&d)?;
     let token_session = access
@@ -414,8 +474,7 @@ pub fn authorize_execution(
         d.operation,
         d.destination,
         d.trace,
-        request,
-        body,
+        [request, body],
     );
     let step_up_digest = class
         .requires_step_up()
@@ -470,9 +529,11 @@ pub fn authorize_execution(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// # Errors
+///
+/// Refuses invalid refresh credentials, expired sessions, or capability storage failures.
 pub fn authorize_refresh_execution(
     store: &mut PrincipalStore,
-    passkeys: &Passkeys,
     index: &AuthDiscoveryIndex,
     refresh: &str,
     csrf: &str,
@@ -486,7 +547,7 @@ pub fn authorize_refresh_execution(
     let principal = index.resolve_access_token(refresh, now)?;
     let scope = store.principal(&principal)?;
     let tenant = scope.tenant().clone();
-    let session_id = passkeys.reserve_refresh(&scope, refresh, csrf, now)?;
+    let session_id = Passkeys::reserve_refresh(&scope, refresh, csrf, now)?;
     let body = body_hash(d.body)?;
     let request = request_hash(&d)?;
     let digest = capability_digest(
@@ -496,8 +557,7 @@ pub fn authorize_refresh_execution(
         d.operation,
         d.destination,
         d.trace,
-        request,
-        body,
+        [request, body],
     );
     let expires_at = now
         .checked_add(max_age)
@@ -524,6 +584,9 @@ pub fn authorize_refresh_execution(
 /// schema-aware HTTPS boundary. This is the production component-socket seam:
 /// it never reconstructs or substitutes JSON after the router has decoded it.
 #[allow(clippy::too_many_arguments)]
+/// # Errors
+///
+/// Refuses invalid request disclosure, sensitive operations, or failed session authorization.
 pub fn authorize_prehashed(
     store: &mut PrincipalStore,
     passkeys: &Passkeys,
@@ -551,7 +614,7 @@ pub fn authorize_prehashed(
     let principal = index.resolve_access_token(access, now)?;
     let mut scope = store.principal(&principal)?;
     let tenant = scope.tenant().clone();
-    let class = operation_class(operation)?;
+    let class = operation_class(operation);
     if class.requires_step_up() {
         // A prehashed request cannot prove that its digest excluded the
         // evidence object itself. Sensitive operations must disclose their
@@ -570,8 +633,7 @@ pub fn authorize_prehashed(
         operation,
         destination,
         trace,
-        request,
-        body,
+        [request, body],
     );
     let decision = passkeys.authorize(
         &mut scope,
@@ -611,6 +673,9 @@ pub fn authorize_prehashed(
     })
 }
 
+/// # Errors
+///
+/// Refuses changed disclosure, expired capability, replay, or storage failure.
 pub fn consume_execution(
     index: &AuthDiscoveryIndex,
     capability: ExecutionCapability,
@@ -626,10 +691,15 @@ pub fn consume_execution(
     {
         return Err(ProductionAuthError::CapabilityRefused);
     }
-    index.consume(capability.nonce, capability.digest, now)
+    let result = index.consume(capability.nonce, capability.digest, now);
+    drop(capability);
+    result
 }
 
 /// Consumes the opaque capability after it crosses the authenticated component socket.
+/// # Errors
+///
+/// Refuses changed disclosure, expired capability, replay, or storage failure.
 pub fn consume_context(
     index: &AuthDiscoveryIndex,
     context: &PrincipalContext,
@@ -662,14 +732,13 @@ pub fn consume_context(
         d.operation,
         d.destination,
         d.trace,
-        request,
-        body,
+        [request, body],
     );
     index.consume(nonce, digest, now)
 }
 
-fn operation_class(op: &Operation) -> Result<OperationClass, ProductionAuthError> {
-    Ok(match op.authorization_class {
+fn operation_class(op: &Operation) -> OperationClass {
+    match op.authorization_class {
         AuthorizationClass::Read => OperationClass::Read,
         AuthorizationClass::MoneyMovement => OperationClass::MoneyMovement,
         AuthorizationClass::Approval => OperationClass::Approval,
@@ -679,7 +748,7 @@ fn operation_class(op: &Operation) -> Result<OperationClass, ProductionAuthError
         AuthorizationClass::SecretReveal => OperationClass::SecretReveal,
         AuthorizationClass::WalletRebind => OperationClass::WalletRebind,
         AuthorizationClass::AgentArchive => OperationClass::AgentArchive,
-    })
+    }
 }
 
 fn body_hash(body: &Value) -> Result<[u8; 32], ProductionAuthError> {
@@ -728,7 +797,7 @@ fn request_hash(d: &AuthorizationDisclosure<'_>) -> Result<[u8; 32], ProductionA
     put_text(&mut h, d.destination);
     for (k, v) in d.path_parameters {
         put_text(&mut h, k);
-        put_text(&mut h, v)
+        put_text(&mut h, v);
     }
     h.update((body.len() as u64).to_be_bytes());
     h.update(body);
@@ -737,31 +806,31 @@ fn request_hash(d: &AuthorizationDisclosure<'_>) -> Result<[u8; 32], ProductionA
     Ok(h.finalize().into())
 }
 fn capability_digest(
-    p: &PrincipalId,
-    t: &AgentTenantId,
-    s: &str,
-    o: &Operation,
-    d: &str,
-    tr: &str,
-    r: [u8; 32],
-    b: [u8; 32],
+    principal: &PrincipalId,
+    tenant: &AgentTenantId,
+    session: &str,
+    operation: &Operation,
+    destination: &str,
+    trace: &str,
+    disclosures: [[u8; 32]; 2],
 ) -> OperationDigest {
-    let mut h = Sha256::new();
-    h.update(DOMAIN);
-    put_text(&mut h, p.as_str());
-    put_text(&mut h, t.as_str());
-    put_text(&mut h, s);
-    put_text(&mut h, &o.name);
-    put_text(&mut h, o.authorization_class.as_str());
-    put_text(&mut h, d);
-    put_text(&mut h, tr);
-    h.update(r);
-    h.update(b);
-    OperationDigest::new(h.finalize().into())
+    let mut hash = Sha256::new();
+    hash.update(DOMAIN);
+    put_text(&mut hash, principal.as_str());
+    put_text(&mut hash, tenant.as_str());
+    put_text(&mut hash, session);
+    put_text(&mut hash, &operation.name);
+    put_text(&mut hash, operation.authorization_class.as_str());
+    put_text(&mut hash, destination);
+    put_text(&mut hash, trace);
+    hash.update(disclosures[0]);
+    hash.update(disclosures[1]);
+    OperationDigest::new(hash.finalize().into())
 }
+
 fn put_text(h: &mut Sha256, v: &str) {
     h.update((v.len() as u64).to_be_bytes());
-    h.update(v.as_bytes())
+    h.update(v.as_bytes());
 }
 
 /// Finite real provider boundary: versioned binary frames over a privileged UDS.
@@ -775,6 +844,9 @@ pub struct RemoteSecurityProvider {
     config: SecurityProviderConfig,
 }
 impl RemoteSecurityProvider {
+    /// # Errors
+    ///
+    /// Refuses invalid key or provider configuration.
     pub fn new(config: SecurityProviderConfig) -> Result<Self, ProductionAuthError> {
         if !config.socket.is_absolute()
             || config.deadline.is_zero()
@@ -785,6 +857,9 @@ impl RemoteSecurityProvider {
             Ok(Self { config })
         }
     }
+    /// # Errors
+    ///
+    /// Returns provider transport failures or invalid readiness evidence.
     pub fn probe(&self) -> Result<(), SecurityBoundaryError> {
         let fields = self.call(0, &[])?;
         if fields.is_empty() {
@@ -794,45 +869,54 @@ impl RemoteSecurityProvider {
         }
     }
     fn call(&self, op: u8, fields: &[&[u8]]) -> Result<Vec<Vec<u8>>, SecurityBoundaryError> {
-        let mut q = Vec::new();
-        q.extend_from_slice(PROVIDER_MAGIC);
-        q.push(1);
-        q.push(op);
-        push_u32(&mut q, fields.len()).map_err(|_| SecurityBoundaryError::Refused)?;
-        for f in fields {
-            push_bytes(&mut q, f).map_err(|_| SecurityBoundaryError::Refused)?
+        let mut request = Vec::new();
+        request.extend_from_slice(PROVIDER_MAGIC);
+        request.push(1);
+        request.push(op);
+        push_u32(&mut request, fields.len()).map_err(|_| SecurityBoundaryError::Refused)?;
+        for field in fields {
+            push_bytes(&mut request, field).map_err(|_| SecurityBoundaryError::Refused)?;
         }
-        if q.len() > self.config.maximum_frame_bytes {
+        if request.len() > self.config.maximum_frame_bytes {
             return Err(SecurityBoundaryError::Refused);
         }
-        let mut s = UnixStream::connect(&self.config.socket)
+        let mut stream = UnixStream::connect(&self.config.socket)
             .map_err(|_| SecurityBoundaryError::Unavailable)?;
-        s.set_read_timeout(Some(self.config.deadline))
+        stream
+            .set_read_timeout(Some(self.config.deadline))
             .map_err(|_| SecurityBoundaryError::Unavailable)?;
-        s.set_write_timeout(Some(self.config.deadline))
+        stream
+            .set_write_timeout(Some(self.config.deadline))
             .map_err(|_| SecurityBoundaryError::Unavailable)?;
-        s.write_all(&(q.len() as u32).to_be_bytes())
+        stream
+            .write_all(
+                &u32::try_from(request.len())
+                    .map_err(|_| SecurityBoundaryError::Refused)?
+                    .to_be_bytes(),
+            )
             .map_err(|_| SecurityBoundaryError::Unavailable)?;
-        let sent = s.write_all(&q);
-        q.zeroize();
+        let sent = stream.write_all(&request);
+        request.zeroize();
         sent.map_err(|_| SecurityBoundaryError::Unavailable)?;
-        let mut p = [0; 4];
-        s.read_exact(&mut p)
+        let mut prefix = [0; 4];
+        stream
+            .read_exact(&mut prefix)
             .map_err(|_| SecurityBoundaryError::Unavailable)?;
-        let n = u32::from_be_bytes(p) as usize;
-        if n == 0 || n > self.config.maximum_frame_bytes {
+        let length = u32::from_be_bytes(prefix) as usize;
+        if length == 0 || length > self.config.maximum_frame_bytes {
             return Err(SecurityBoundaryError::InvalidEvidence);
         }
-        let mut r = vec![0; n];
-        s.read_exact(&mut r)
+        let mut response = vec![0; length];
+        stream
+            .read_exact(&mut response)
             .map_err(|_| SecurityBoundaryError::Unavailable)?;
-        decode_response(&r)
+        decode_response(&response)
     }
 }
 
 impl AuthenticatorProvider for RemoteSecurityProvider {
     fn status(&self, p: &PrincipalId) -> Result<AuthenticatorStatus, SecurityBoundaryError> {
-        decode_status(self.call(1, &[p.as_str().as_bytes()])?)
+        decode_status(&self.call(1, &[p.as_str().as_bytes()])?)
     }
     fn begin_setup(
         &mut self,
@@ -892,7 +976,7 @@ impl AuthenticatorProvider for RemoteSecurityProvider {
         id: &str,
         now: u64,
     ) -> Result<AuthenticatorStatus, SecurityBoundaryError> {
-        decode_status(self.call(
+        decode_status(&self.call(
             4,
             &[p.as_str().as_bytes(), id.as_bytes(), &now.to_be_bytes()],
         )?)
@@ -934,7 +1018,7 @@ impl RecoveryEvidenceProvider for RemoteSecurityProvider {
     }
 }
 
-fn decode_status(f: Vec<Vec<u8>>) -> Result<AuthenticatorStatus, SecurityBoundaryError> {
+fn decode_status(f: &[Vec<u8>]) -> Result<AuthenticatorStatus, SecurityBoundaryError> {
     if f.len() < 2 {
         return Err(SecurityBoundaryError::InvalidEvidence);
     }
@@ -950,7 +1034,7 @@ fn decode_status(f: Vec<Vec<u8>>) -> Result<AuthenticatorStatus, SecurityBoundar
             label: text(&x[1])?,
             enabled_at: u64v(&x[2])?,
             last_used_at: opt_u64(&x[3])?,
-        })
+        });
     }
     Ok(AuthenticatorStatus {
         methods,
@@ -970,7 +1054,7 @@ fn decode_response(b: &[u8]) -> Result<Vec<Vec<u8>>, SecurityBoundaryError> {
     let n = c.u32()? as usize;
     let mut out = Vec::new();
     for _ in 0..n {
-        out.push(c.bytes()?.to_vec())
+        out.push(c.bytes()?.to_vec());
     }
     if !c.rest().is_empty() {
         return Err(SecurityBoundaryError::InvalidEvidence);
@@ -996,35 +1080,45 @@ fn reclaim_temp(root: &Path) -> Result<(), ProductionAuthError> {
     Ok(())
 }
 
+fn authenticated_index_length(
+    bytes: &[u8],
+    key: &IndexAuthenticationKey,
+) -> Result<usize, ProductionAuthError> {
+    if bytes.len() < 37 {
+        return Err(ProductionAuthError::IndexAuthentication);
+    }
+    let cut = bytes.len() - 32;
+    if !bool::from(hmac(&key.0, &bytes[..cut]).ct_eq(&bytes[cut..])) {
+        return Err(ProductionAuthError::IndexAuthentication);
+    }
+    Ok(cut)
+}
+
 fn load(root: &Path, key: &IndexAuthenticationKey) -> Result<State, ProductionAuthError> {
-    let p = root.join(FILE);
-    if !p.exists() {
+    let path = root.join(FILE);
+    if !path.exists() {
         return Ok(State::default());
     }
-    let b = fs::read(p)?;
-    if b.len() < 37 {
-        return Err(ProductionAuthError::IndexAuthentication);
-    }
-    let cut = b.len() - 32;
-    if !bool::from(hmac(&key.0, &b[..cut]).ct_eq(&b[cut..])) {
-        return Err(ProductionAuthError::IndexAuthentication);
-    }
-    let mut c = Cursor::new(&b[..cut]);
-    if c.take(4)
+    let bytes = fs::read(path)?;
+    let cut = authenticated_index_length(&bytes, key)?;
+    let mut cursor = Cursor::new(&bytes[..cut]);
+    if cursor
+        .take(4)
         .map_err(|_| ProductionAuthError::IndexAuthentication)?
         != MAGIC
-        || c.byte()
+        || cursor
+            .byte()
             .map_err(|_| ProductionAuthError::IndexAuthentication)?
             != 1
     {
         return Err(ProductionAuthError::IndexAuthentication);
     }
-    let mut s = State::default();
-    for _ in 0..c
+    let mut state = State::default();
+    for _ in 0..cursor
         .u32()
         .map_err(|_| ProductionAuthError::IndexAuthentication)?
     {
-        let kind = match c
+        let kind = match cursor
             .byte()
             .map_err(|_| ProductionAuthError::IndexAuthentication)?
         {
@@ -1035,63 +1129,67 @@ fn load(root: &Path, key: &IndexAuthenticationKey) -> Result<State, ProductionAu
             _ => return Err(ProductionAuthError::IndexAuthentication),
         };
         let id = text(
-            c.bytes()
+            cursor
+                .bytes()
                 .map_err(|_| ProductionAuthError::IndexAuthentication)?,
         )
         .map_err(|_| ProductionAuthError::IndexAuthentication)?;
-        let p = PrincipalId::new(
+        let principal = PrincipalId::new(
             text(
-                c.bytes()
+                cursor
+                    .bytes()
                     .map_err(|_| ProductionAuthError::IndexAuthentication)?,
             )
             .map_err(|_| ProductionAuthError::IndexAuthentication)?,
         )
         .map_err(|_| ProductionAuthError::IndexAuthentication)?;
-        let e = c
+        let expires_at = cursor
             .u64()
             .map_err(|_| ProductionAuthError::IndexAuthentication)?;
-        s.discoveries.insert(
+        state.discoveries.insert(
             id,
             Discovery {
                 kind,
-                principal: p,
-                expires_at: e,
+                principal,
+                expires_at,
             },
         );
     }
-    for _ in 0..c
+    for _ in 0..cursor
         .u32()
         .map_err(|_| ProductionAuthError::IndexAuthentication)?
     {
-        let mut n = [0; 32];
-        n.copy_from_slice(
-            c.take(32)
+        let mut nonce = [0; 32];
+        nonce.copy_from_slice(
+            cursor
+                .take(32)
                 .map_err(|_| ProductionAuthError::IndexAuthentication)?,
         );
-        let mut d = [0; 32];
-        d.copy_from_slice(
-            c.take(32)
+        let mut digest = [0; 32];
+        digest.copy_from_slice(
+            cursor
+                .take(32)
                 .map_err(|_| ProductionAuthError::IndexAuthentication)?,
         );
-        let i = c
+        let issued_at = cursor
             .u64()
             .map_err(|_| ProductionAuthError::IndexAuthentication)?;
-        let e = c
+        let expires_at = cursor
             .u64()
             .map_err(|_| ProductionAuthError::IndexAuthentication)?;
-        s.capabilities.insert(
-            n,
+        state.capabilities.insert(
+            nonce,
             StoredCapability {
-                digest: OperationDigest::new(d),
-                issued_at: i,
-                expires_at: e,
+                digest: OperationDigest::new(digest),
+                issued_at,
+                expires_at,
             },
         );
     }
-    if !c.rest().is_empty() {
+    if !cursor.rest().is_empty() {
         return Err(ProductionAuthError::IndexAuthentication);
     }
-    Ok(s)
+    Ok(state)
 }
 fn persist(
     root: &Path,
@@ -1106,14 +1204,14 @@ fn persist(
         b.push(v.kind as u8);
         push_bytes(&mut b, id.as_bytes())?;
         push_bytes(&mut b, v.principal.as_str().as_bytes())?;
-        b.extend_from_slice(&v.expires_at.to_be_bytes())
+        b.extend_from_slice(&v.expires_at.to_be_bytes());
     }
     push_u32(&mut b, s.capabilities.len())?;
     for (n, v) in &s.capabilities {
         b.extend_from_slice(n);
         b.extend_from_slice(&v.digest.bytes());
         b.extend_from_slice(&v.issued_at.to_be_bytes());
-        b.extend_from_slice(&v.expires_at.to_be_bytes())
+        b.extend_from_slice(&v.expires_at.to_be_bytes());
     }
     b.extend_from_slice(&hmac(&key.0, &b));
     let tmp = root.join(TEMP);
@@ -1136,21 +1234,21 @@ fn persist(
     b.zeroize();
     result
 }
-fn hmac(k: &[u8; 32], m: &[u8]) -> [u8; 32] {
-    let mut i = [0x36; 64];
-    let mut o = [0x5c; 64];
-    for x in 0..32 {
-        i[x] ^= k[x];
-        o[x] ^= k[x]
+fn hmac(key: &[u8; 32], message: &[u8]) -> [u8; 32] {
+    let mut inner_pad = [0x36; 64];
+    let mut outer_pad = [0x5c; 64];
+    for offset in 0..32 {
+        inner_pad[offset] ^= key[offset];
+        outer_pad[offset] ^= key[offset];
     }
-    let mut h = Sha256::new();
-    h.update(i);
-    h.update(m);
-    let x = h.finalize();
-    let mut h = Sha256::new();
-    h.update(o);
-    h.update(x);
-    h.finalize().into()
+    let mut hash = Sha256::new();
+    hash.update(inner_pad);
+    hash.update(message);
+    let inner_hash = hash.finalize();
+    let mut hash = Sha256::new();
+    hash.update(outer_pad);
+    hash.update(inner_hash);
+    hash.finalize().into()
 }
 fn valid_id(v: &str) -> Result<(), ProductionAuthError> {
     if v.is_empty()

@@ -50,3 +50,12 @@ pub use withdraw::{
 pub(crate) use deposit::{decode_deposit_plan, encode_deposit_plan};
 pub(crate) use exit::{decode_exit_plan, encode_exit_plan};
 pub(crate) use withdraw::{decode_withdrawal_plan, encode_withdrawal_plan};
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MovementExecutionIdentity {
+    pub principal: crate::store::PrincipalId,
+    pub tenant: crate::store::AgentTenantId,
+    pub account: [u8; 32],
+    pub wallet: layerx_types::intent::EvmAddress,
+    pub plan_id: [u8; 32],
+}

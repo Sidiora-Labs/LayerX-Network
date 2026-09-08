@@ -71,7 +71,8 @@ impl ProvisionedAccount {
     }
 
     fn identity(&self) -> Result<AccountIdentity, ApiFailure> {
-        AccountIdentity::new(self.email.clone(), self.display_name.clone()).map_err(map_auth_error)
+        AccountIdentity::new(self.email.clone(), self.display_name.clone())
+            .map_err(|error| map_auth_error(&error))
     }
 }
 
@@ -155,7 +156,7 @@ impl IdentityServices {
             .map_err(|_| ApiFailure::unavailable())?;
         let challenge = passkeys
             .begin_registration(&mut scope, &identity, &account.passkey_label, now)
-            .map_err(map_auth_error)?;
+            .map_err(|error| map_auth_error(&error))?;
         Ok(response(IdentityProjector::registration_challenge(
             &challenge,
         )))
@@ -170,7 +171,7 @@ impl IdentityServices {
     ) -> Result<BackendResponse, ApiFailure> {
         let registration_id = path(request, "registration_id")?;
         let principal = Passkeys::principal_for_registration(registration_id, store.tenancy())
-            .map_err(map_auth_error)?;
+            .map_err(|error| map_auth_error(&error))?;
         self.accounts.account(&principal)?;
         let credential = text(&request.body, "credential")?;
         let mut scope = store
@@ -178,7 +179,7 @@ impl IdentityServices {
             .map_err(|_| ApiFailure::unavailable())?;
         let passkey = passkeys
             .finish_registration(&mut scope, registration_id, credential, now)
-            .map_err(map_auth_error)?;
+            .map_err(|error| map_auth_error(&error))?;
         Ok(response(IdentityProjector::passkey(&passkey)))
     }
 
@@ -196,7 +197,7 @@ impl IdentityServices {
             .map_err(|_| ApiFailure::unavailable())?;
         let challenge = passkeys
             .begin_assertion(&mut scope, now)
-            .map_err(map_auth_error)?;
+            .map_err(|error| map_auth_error(&error))?;
         Ok(response(IdentityProjector::assertion_challenge(&challenge)))
     }
 
@@ -209,7 +210,7 @@ impl IdentityServices {
     ) -> Result<BackendResponse, ApiFailure> {
         let assertion_id = path(request, "assertion_id")?;
         let principal = Passkeys::principal_for_assertion(assertion_id, store.tenancy())
-            .map_err(map_auth_error)?;
+            .map_err(|error| map_auth_error(&error))?;
         self.accounts.account(&principal)?;
         let credential = text(&request.body, "credential")?;
         let mut scope = store
@@ -217,7 +218,7 @@ impl IdentityServices {
             .map_err(|_| ApiFailure::unavailable())?;
         let assertion = passkeys
             .finish_assertion(&mut scope, assertion_id, credential, now)
-            .map_err(map_auth_error)?;
+            .map_err(|error| map_auth_error(&error))?;
         Ok(response(IdentityProjector::assertion(&assertion)))
     }
 
@@ -230,7 +231,7 @@ impl IdentityServices {
     ) -> Result<BackendResponse, ApiFailure> {
         let assertion_id = text(&request.body, "assertion_id")?;
         let principal = Passkeys::principal_for_assertion(assertion_id, store.tenancy())
-            .map_err(map_auth_error)?;
+            .map_err(|error| map_auth_error(&error))?;
         self.accounts.account(&principal)?;
         let device = IdentityProjector::mint_session_device(&request.body)?;
         let mut scope = store
@@ -238,7 +239,7 @@ impl IdentityServices {
             .map_err(|_| ApiFailure::unavailable())?;
         let grant = passkeys
             .open_session(&mut scope, assertion_id, device, now)
-            .map_err(map_auth_error)?;
+            .map_err(|error| map_auth_error(&error))?;
         IdentityProjector::session_grant(&grant, now)
     }
 
@@ -254,13 +255,13 @@ impl IdentityServices {
                 let csrf = session.csrf_token.ok_or_else(ApiFailure::forbidden)?;
                 let grant = passkeys
                     .refresh_session(scope, session.token, csrf, now)
-                    .map_err(map_auth_error)?;
+                    .map_err(|error| map_auth_error(&error))?;
                 IdentityProjector::session_grant(&grant, now)
             }
             "session.list" => {
                 let sessions = passkeys
                     .list_sessions(scope, session.token, now)
-                    .map_err(map_auth_error)?;
+                    .map_err(|error| map_auth_error(&error))?;
                 Ok(response(IdentityProjector::sessions(&sessions)))
             }
             "session.revoke" => {
@@ -268,14 +269,14 @@ impl IdentityServices {
                 let target = path(request, "session_id")?;
                 let revoked = passkeys
                     .revoke_session(scope, session.token, csrf, target, now)
-                    .map_err(map_auth_error)?;
+                    .map_err(|error| map_auth_error(&error))?;
                 Ok(response(IdentityProjector::revocation(&revoked)))
             }
             "session.revoke-all" => {
                 let csrf = session.csrf_token.ok_or_else(ApiFailure::forbidden)?;
                 let revoked = passkeys
                     .sign_out_everywhere(scope, session.token, csrf, now)
-                    .map_err(map_auth_error)?;
+                    .map_err(|error| map_auth_error(&error))?;
                 Ok(response(IdentityProjector::revocation(&revoked)))
             }
             _ => Err(ApiFailure::unavailable()),

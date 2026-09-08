@@ -458,6 +458,10 @@ pub trait AgentCreationContract {
 /// used by controls retain the unscoped contract above; production creation
 /// adapters override this method and must not acquire a second store lock.
 pub trait ScopedAgentCreationContract: AgentCreationContract {
+    ///
+    /// # Errors
+    ///
+    /// Refuses invalid creation evidence, conflicting state, or unavailable storage.
     fn submit_protocol_scoped(
         &mut self,
         _scope: &mut PrincipalScope<'_>,
@@ -466,6 +470,10 @@ pub trait ScopedAgentCreationContract: AgentCreationContract {
         self.submit_protocol(action)
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Refuses invalid creation evidence, conflicting state, or unavailable storage.
     fn provision_session_scoped(
         &mut self,
         _scope: &mut PrincipalScope<'_>,
@@ -644,6 +652,10 @@ impl CreationJourney {
 
     /// Lists every managed-agent creation owned by this authenticated
     /// principal. Corrupt or duplicate rows refuse the whole projection.
+    ///
+    /// # Errors
+    ///
+    /// Refuses invalid creation evidence, conflicting state, or unavailable storage.
     pub fn list(scope: &PrincipalScope<'_>) -> Result<Vec<Self>, AgentCreationError> {
         let mut journeys = Vec::new();
         let mut identifiers = BTreeSet::new();

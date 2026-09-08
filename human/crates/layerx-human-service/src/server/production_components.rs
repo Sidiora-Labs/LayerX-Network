@@ -212,12 +212,17 @@ pub struct ProductionComponentsConfig {
     agent_authority: AuthorityRef,
     agent_timestamp_span_seconds: u64,
     agent_fee_limit: u128,
+    evm_gas_limit: u64,
+    evm_max_fee_per_gas: u64,
+    evm_max_priority_fee_per_gas: u64,
     binding_statement_ttl_seconds: u64,
     agent_purpose_catalog: PathBuf,
     agent_owner_account: String,
     agent_recovery_root: [u8; 32],
     agent_recovery_threshold: u16,
     paxeer_endpoint: EndpointConfig,
+    paxeer_finality_endpoints: Vec<EndpointConfig>,
+    paxeer_minimum_agreement: usize,
     exit_contract: EvmAddress,
     withdrawal_claims_contract: EvmAddress,
     exit_required_confirmations: u64,
@@ -230,6 +235,8 @@ pub struct ProductionComponentsConfig {
 }
 
 impl ProductionComponentsConfig {
+    /// # Errors
+    /// Refuses incomplete, invalid, or unsupported production dependency configuration.
     pub fn from_environment() -> Result<Self, String> {
         let bounded_limits = |prefix: &str| -> Result<Limits, String> {
             Ok(Limits {
@@ -240,7 +247,6 @@ impl ProductionComponentsConfig {
                 deadline: Duration::from_secs(number(&format!("{prefix}_DEADLINE_SECONDS"))?),
             })
         };
-        let retention = |name: &str| number(name).map(RetentionPeriod::new);
         Ok(Self {
             store_root: absolute("LAYERX_HUMAN_STORE_ROOT")?,
             custody_root: absolute("LAYERX_HUMAN_CUSTODY_ROOT")?,
@@ -248,27 +254,8 @@ impl ProductionComponentsConfig {
             tenancy_digest: secret32("LAYERX_HUMAN_TENANCY_DIGEST")?,
             auth_index_key: secret32("LAYERX_HUMAN_AUTH_INDEX_KEY")?,
             stream_cursor_key: secret32("LAYERX_HUMAN_STREAM_CURSOR_KEY")?,
-            auth: AuthConfig {
-                rp_id: required("LAYERX_HUMAN_RP_ID")?,
-                rp_name: required("LAYERX_HUMAN_RP_NAME")?,
-                origin: required("LAYERX_HUMAN_ORIGIN")?,
-                ceremony_ttl_secs: number("LAYERX_HUMAN_CEREMONY_TTL_SECONDS")?,
-                assertion_ttl_secs: number("LAYERX_HUMAN_ASSERTION_TTL_SECONDS")?,
-                session_ttl_secs: number("LAYERX_HUMAN_SESSION_TTL_SECONDS")?,
-                refresh_ttl_secs: number("LAYERX_HUMAN_REFRESH_TTL_SECONDS")?,
-                step_up_ttl_secs: number("LAYERX_HUMAN_STEP_UP_TTL_SECONDS")?,
-                rate_limit: RateLimit {
-                    attempts: number("LAYERX_HUMAN_AUTH_RATE_ATTEMPTS")?,
-                    window_secs: number("LAYERX_HUMAN_AUTH_RATE_WINDOW_SECONDS")?,
-                },
-            },
-            retention: RetentionPolicy {
-                journeys: retention("LAYERX_HUMAN_RETENTION_JOURNEYS_SECONDS")?,
-                notifications: retention("LAYERX_HUMAN_RETENTION_NOTIFICATIONS_SECONDS")?,
-                audit: retention("LAYERX_HUMAN_RETENTION_AUDIT_SECONDS")?,
-                telemetry: retention("LAYERX_HUMAN_RETENTION_TELEMETRY_SECONDS")?,
-                cache: retention("LAYERX_HUMAN_RETENTION_CACHE_SECONDS")?,
-            },
+            auth: production_passkey_config()?,
+            retention: production_retention_config()?,
             capability_ttl_seconds: number("LAYERX_HUMAN_CAPABILITY_TTL_SECONDS")?,
             agent_socket: absolute("LAYERX_HUMAN_AGENT_SOCKET")?,
             agent_limits: bounded_limits("LAYERX_HUMAN_AGENT")?,
@@ -308,6 +295,9 @@ impl ProductionComponentsConfig {
                 .map_err(|_| "LAYERX_HUMAN_AGENT_AUTHORITY is invalid".to_owned())?,
             agent_timestamp_span_seconds: number("LAYERX_HUMAN_AGENT_TIMESTAMP_SPAN_SECONDS")?,
             agent_fee_limit: number("LAYERX_HUMAN_AGENT_FEE_LIMIT")?,
+            evm_gas_limit: number("LAYERX_HUMAN_EVM_GAS_LIMIT")?,
+            evm_max_fee_per_gas: number("LAYERX_HUMAN_EVM_MAX_FEE_PER_GAS")?,
+            evm_max_priority_fee_per_gas: number("LAYERX_HUMAN_EVM_MAX_PRIORITY_FEE_PER_GAS")?,
             binding_statement_ttl_seconds: number("LAYERX_HUMAN_BINDING_STATEMENT_TTL_SECONDS")?,
             agent_purpose_catalog: absolute("LAYERX_HUMAN_AGENT_PURPOSE_CATALOG")?,
             agent_owner_account: required("LAYERX_HUMAN_AGENT_OWNER_ACCOUNT")?,
@@ -325,6 +315,8 @@ impl ProductionComponentsConfig {
                 },
                 expected_chain_id: number("LAYERX_HUMAN_PAXEER_CHAIN_ID")?,
             },
+            paxeer_finality_endpoints: finality_endpoints()?,
+            paxeer_minimum_agreement: finality_minimum_agreement()?,
             exit_contract: EvmAddress::new(hex20("LAYERX_HUMAN_PAXEER_EXIT_CONTRACT")?),
             withdrawal_claims_contract: EvmAddress::new(hex20(
                 "LAYERX_HUMAN_PAXEER_WITHDRAWAL_CLAIMS_CONTRACT",
@@ -353,7 +345,7 @@ pub struct ProductionComponents {
     agent: Mutex<AgentRuntime>,
     agent_contract: layerx_sdk::Client,
     agent_limits: Limits,
-    custody: CustodySigner,
+    custody: Arc<CustodySigner>,
     security: Mutex<RemoteSecurityProvider>,
     stream: super::stream_journal::StreamJournal,
     feed: Feed,
@@ -367,7 +359,13 @@ pub struct ProductionComponents {
     agent_authority: AuthorityRef,
     agent_timestamp_span_seconds: u64,
     agent_fee_limit: u128,
+    evm_gas_limit: u64,
+    evm_max_fee_per_gas: u64,
+    evm_max_priority_fee_per_gas: u64,
     network_id: u32,
+    protocol_version: u16,
+    settlement_chain_id: u64,
+    activity_freshness_seconds: u64,
     binding_statement_ttl_seconds: u64,
     agent_purpose_catalog: PurposePresetCatalog,
     agent_owner_account: String,
@@ -378,27 +376,12 @@ pub struct ProductionComponents {
 }
 
 impl ProductionComponents {
+    /// # Errors
+    /// Refuses unverified production dependencies or invalid configuration.
     pub fn open(config: ProductionComponentsConfig) -> Result<Self, String> {
-        let schema = ApiSchema::v1().map_err(|_| "human API schema is invalid".to_owned())?;
-        if schema.operations().len() != PRODUCTION_OPERATIONS.len()
-            || schema
-                .operations()
-                .iter()
-                .any(|operation| !PRODUCTION_OPERATIONS.contains(&operation.name.as_str()))
-        {
-            return Err("human API operation dispatch is incomplete".to_owned());
-        }
-        if !(1..=60).contains(&config.capability_ttl_seconds) {
-            return Err("LAYERX_HUMAN_CAPABILITY_TTL_SECONDS must be between 1 and 60".to_owned());
-        }
-        if config.agent_timestamp_span_seconds == 0 || config.agent_fee_limit == 0 {
-            return Err("agent preparation bounds must be non-zero".to_owned());
-        }
-        if config.continuation_unknown_deadline_seconds == 0 {
-            return Err(
-                "LAYERX_HUMAN_CONTINUATION_UNKNOWN_DEADLINE_SECONDS must be non-zero".to_owned(),
-            );
-        }
+        validate_production_configuration(&config)?;
+        let withdrawal_boundary = production_withdrawal_boundary(&config)?;
+        let provider = production_kms_provider(&config)?;
         let passkeys =
             Passkeys::new(config.auth).map_err(|_| "invalid passkey configuration".to_owned())?;
         let agent_purpose_catalog =
@@ -412,12 +395,7 @@ impl ProductionComponents {
             )
             .map_err(|_| "principal store refused startup".to_owned())?,
         ));
-        let auth_index = AuthDiscoveryIndex::open(
-            config.auth_index_root,
-            IndexAuthenticationKey::new(config.auth_index_key)
-                .map_err(|_| "authentication index key is invalid".to_owned())?,
-        )
-        .map_err(|_| "authentication index refused startup".to_owned())?;
+        let auth_index = production_auth_index(config.auth_index_root, config.auth_index_key)?;
         let agent_contract = layerx_sdk::Client::daemon(
             config.agent_socket.clone(),
             layerx_agent_api::agent_api_schema_v1().version,
@@ -425,44 +403,19 @@ impl ProductionComponents {
         .map_err(|_| "agent SDK contract refused startup".to_owned())?;
         let agent = AgentRuntime::connect(config.agent_socket, config.agent_limits)
             .map_err(|_| "agent boundary refused startup".to_owned())?;
-        let tls = mutual_tls(
-            &config.kms_root_certificate,
-            &config.kms_client_certificate,
-            &config.kms_client_private_key,
-        )?;
-        let provider = RemoteKmsProvider::new(
-            config.kms_provider_reference,
-            config.kms_endpoint,
-            config.kms_server_name,
-            tls,
-            config.kms_limits,
-        )
-        .map_err(|_| "KMS configuration was refused".to_owned())?;
         let keystore = Keystore::open_production(config.custody_root, config.network_id, provider)
             .map_err(|_| "KMS or custody storage refused startup".to_owned())?;
-        let custody = CustodySigner::new_shared(
+        let custody = Arc::new(CustodySigner::new_shared(
             keystore,
             Arc::clone(&store),
             agent.registry().clone(),
             config.signing_limits,
-        );
+        ));
         let security = RemoteSecurityProvider::new(config.security)
             .map_err(|_| "security provider configuration was refused".to_owned())?;
         let identity = RemoteIdentityProvider::new(config.identity)
             .map_err(|_| "identity provider configuration was refused".to_owned())?;
-        let withdrawal_boundary = layerx_paxeer_client::WithdrawalBoundary::new_for_protocol(
-            layerx_paxeer_client::WithdrawalConfig {
-                endpoints: vec![config.paxeer_endpoint.clone()],
-                minimum_endpoint_agreement: 1,
-                claims_contract: config.withdrawal_claims_contract,
-                required_confirmations: config.exit_required_confirmations,
-                poll_cadence: config.exit_poll_cadence,
-                delayed_after_polls: config.exit_delayed_after_polls,
-            },
-            config.protocol_version,
-        )
-        .map_err(|_| "Paxeer withdrawal boundary refused startup".to_owned())?;
-        let movement = UnixMovementProvider::new(
+        let mut movement = UnixMovementProvider::new(
             config.movement,
             Arc::new(
                 NativeMovementCodec::for_protocol(config.protocol_version)
@@ -471,11 +424,12 @@ impl ProductionComponents {
             withdrawal_boundary,
         )
         .map_err(|_| "movement provider refused startup".to_owned())?;
+        movement.attach_execution_authority(Arc::clone(&custody));
         raw_call(&config.paxeer_endpoint, "eth_chainId", &[])
             .map_err(|_| "Paxeer boundary refused startup".to_owned())?;
         let emergency_exit = EmergencyExit::new(ExitConfig {
-            endpoints: vec![config.paxeer_endpoint.clone()],
-            minimum_endpoint_agreement: 1,
+            endpoints: config.paxeer_finality_endpoints.clone(),
+            minimum_endpoint_agreement: config.paxeer_minimum_agreement,
             exit_contract: config.exit_contract,
             required_confirmations: config.exit_required_confirmations,
             poll_cadence: config.exit_poll_cadence,
@@ -510,7 +464,13 @@ impl ProductionComponents {
             agent_authority: config.agent_authority,
             agent_timestamp_span_seconds: config.agent_timestamp_span_seconds,
             agent_fee_limit: config.agent_fee_limit,
+            evm_gas_limit: config.evm_gas_limit,
+            evm_max_fee_per_gas: config.evm_max_fee_per_gas,
+            evm_max_priority_fee_per_gas: config.evm_max_priority_fee_per_gas,
             network_id: config.network_id,
+            protocol_version: config.protocol_version,
+            settlement_chain_id: config.settlement_chain_id,
+            activity_freshness_seconds: config.activity_freshness_seconds,
             binding_statement_ttl_seconds: config.binding_statement_ttl_seconds,
             agent_purpose_catalog,
             agent_owner_account: config.agent_owner_account,
@@ -555,8 +515,10 @@ impl ProductionComponents {
                 &trace,
                 self.agent_actor.clone(),
                 self.agent_authority.clone(),
-                self.agent_timestamp_span_seconds,
-                self.agent_fee_limit,
+                super::agent_creation::CreationBounds {
+                    timestamp_span: self.agent_timestamp_span_seconds,
+                    fee_limit: self.agent_fee_limit,
+                },
             )
             .map_err(|_| ApiFailure::upstream_degraded())?;
             let evidence = adapter
@@ -594,7 +556,6 @@ impl HumanApiComponents for ProductionComponents {
             let csrf = credentials.csrf_token.ok_or_else(ApiFailure::forbidden)?;
             return authorize_refresh_execution(
                 &mut store,
-                &self.passkeys,
                 &self.auth_index,
                 credentials.access_token,
                 csrf,
@@ -609,12 +570,12 @@ impl HumanApiComponents for ProductionComponents {
                 now,
                 self.capability_ttl_seconds,
             )
-            .map_err(auth_failure);
+            .map_err(|error| auth_failure(&error));
         }
         let principal = self
             .auth_index
             .resolve_access_token(credentials.access_token, now)
-            .map_err(auth_failure)?;
+            .map_err(|error| auth_failure(&error))?;
         let step_up_id = credentials
             .body
             .get("step_up")
@@ -642,9 +603,11 @@ impl HumanApiComponents for ProductionComponents {
             &mut store,
             &self.passkeys,
             &self.auth_index,
-            credentials.access_token,
-            credentials.csrf_token,
-            step_up.as_ref(),
+            super::production_auth::ExecutionCredentials {
+                access: credentials.access_token,
+                csrf: credentials.csrf_token,
+                step_up: step_up.as_ref(),
+            },
             AuthorizationDisclosure {
                 operation,
                 destination: credentials.intended_destination,
@@ -656,7 +619,7 @@ impl HumanApiComponents for ProductionComponents {
             now,
             self.capability_ttl_seconds,
         )
-        .map_err(auth_failure)?;
+        .map_err(|error| auth_failure(&error))?;
         if capability.request_disclosure() != credentials.request_digest
             || capability.body_disclosure() != credentials.disclosure_digest
         {
@@ -673,268 +636,7 @@ impl HumanApiComponents for ProductionComponents {
             });
         }
         if request.operation.is_public_bootstrap() {
-            let now = now()?;
-            let (principal, result, session) = match request.operation.name.as_str() {
-                "account.create" => {
-                    let email = text_field(&request.body, "email")?;
-                    let display_name = text_field(&request.body, "display_name")?;
-                    let provisioned = self
-                        .identity
-                        .provision(email, display_name, required_idempotency(&request)?, now)
-                        .map_err(identity_failure)?;
-                    self.auth_index
-                        .bind_account(email, &provisioned.principal)
-                        .map_err(auth_failure)?;
-                    let mut store = self.store.lock().map_err(|_| ApiFailure::unavailable())?;
-                    let mut scope = store
-                        .principal(&provisioned.principal)
-                        .map_err(|_| ApiFailure::unavailable())?;
-                    let journey =
-                        OnboardingJourney::start(&mut scope, &provisioned.onboarding, now)
-                            .map_err(|_| ApiFailure::upstream_degraded())?;
-                    identity_dispatch::update_profile(
-                        &mut scope,
-                        &json!({"display_name": display_name}),
-                        now,
-                    )
-                    .map_err(identity_failure)?;
-                    let result = json!({"account_id": provisioned.principal.as_str(),
-                        "onboarding": identity_dispatch::onboarding_status(&journey.status())});
-                    (provisioned.principal, result, None)
-                }
-                "passkey.register.begin" => {
-                    let principal =
-                        crate::store::PrincipalId::new(text_field(&request.body, "account_id")?)
-                            .map_err(|_| ApiFailure::invalid_request(Some("account_id")))?;
-                    let mut store = self.store.lock().map_err(|_| ApiFailure::unavailable())?;
-                    let mut scope = store
-                        .principal(&principal)
-                        .map_err(|_| ApiFailure::unauthenticated())?;
-                    let profile = identity_dispatch::profile(&scope).map_err(identity_failure)?;
-                    let account = AccountIdentity::new(
-                        principal.as_str(),
-                        text_field(&profile, "display_name")?,
-                    )
-                    .map_err(auth_api_failure)?;
-                    let challenge = self
-                        .passkeys
-                        .begin_registration(&mut scope, &account, "Primary passkey", now)
-                        .map_err(auth_api_failure)?;
-                    self.auth_index
-                        .bind_registration(
-                            &challenge.registration_id,
-                            &principal,
-                            challenge.expires_at,
-                        )
-                        .map_err(auth_failure)?;
-                    let result = json!({"registration_id": challenge.registration_id,
-                        "ceremony": challenge.ceremony, "expires_at": challenge.expires_at});
-                    (principal, result, None)
-                }
-                "passkey.register.finish" => {
-                    let registration_id = path(&request, "registration_id")?;
-                    let principal = self
-                        .auth_index
-                        .resolve_registration(registration_id, now)
-                        .map_err(auth_failure)?;
-                    let mut store = self.store.lock().map_err(|_| ApiFailure::unavailable())?;
-                    let mut scope = store
-                        .principal(&principal)
-                        .map_err(|_| ApiFailure::unavailable())?;
-                    let passkey = self
-                        .passkeys
-                        .finish_registration(
-                            &mut scope,
-                            registration_id,
-                            text_field(&request.body, "credential")?,
-                            now,
-                        )
-                        .map_err(auth_api_failure)?;
-                    let result = serde_json::to_value(passkey)
-                        .map_err(|_| ApiFailure::upstream_degraded())?;
-                    (principal, result, None)
-                }
-                "passkey.assert.begin" => {
-                    let email = text_field(&request.body, "email")?;
-                    let principal = self
-                        .auth_index
-                        .resolve_account(email)
-                        .map_err(auth_failure)?;
-                    let mut store = self.store.lock().map_err(|_| ApiFailure::unavailable())?;
-                    let mut scope = store
-                        .principal(&principal)
-                        .map_err(|_| ApiFailure::unauthenticated())?;
-                    let challenge = self
-                        .passkeys
-                        .begin_assertion(&mut scope, now)
-                        .map_err(auth_api_failure)?;
-                    self.auth_index
-                        .bind_assertion(&challenge.assertion_id, &principal, challenge.expires_at)
-                        .map_err(auth_failure)?;
-                    let result = json!({"assertion_id": challenge.assertion_id,
-                        "ceremony": challenge.ceremony, "expires_at": challenge.expires_at});
-                    (principal, result, None)
-                }
-                "passkey.assert.finish" => {
-                    let assertion_id = path(&request, "assertion_id")?;
-                    let principal = self
-                        .auth_index
-                        .resolve_assertion(assertion_id, now)
-                        .map_err(auth_failure)?;
-                    let mut store = self.store.lock().map_err(|_| ApiFailure::unavailable())?;
-                    let mut scope = store
-                        .principal(&principal)
-                        .map_err(|_| ApiFailure::unavailable())?;
-                    let proof = self
-                        .passkeys
-                        .finish_assertion(
-                            &mut scope,
-                            assertion_id,
-                            text_field(&request.body, "credential")?,
-                            now,
-                        )
-                        .map_err(auth_api_failure)?;
-                    let result = json!({"assertion_id": proof.assertion_id, "passkey_id": proof.passkey_id,
-                        "completed_at": now, "expires_at": proof.expires_at});
-                    (principal, result, None)
-                }
-                "session.open" => {
-                    let assertion_id = text_field(&request.body, "assertion_id")?;
-                    let principal = self
-                        .auth_index
-                        .resolve_assertion(assertion_id, now)
-                        .map_err(auth_failure)?;
-                    let device = request
-                        .body
-                        .get("device")
-                        .and_then(serde_json::Value::as_object)
-                        .ok_or_else(|| ApiFailure::invalid_request(Some("device")))?;
-                    let device_label = device
-                        .get("label")
-                        .and_then(serde_json::Value::as_str)
-                        .ok_or_else(|| ApiFailure::invalid_request(Some("device.label")))?;
-                    let device_platform = device
-                        .get("platform")
-                        .and_then(serde_json::Value::as_str)
-                        .ok_or_else(|| ApiFailure::invalid_request(Some("device.platform")))?;
-                    let idempotency = required_idempotency(&request)?;
-                    let action = action_key(idempotency);
-                    let recovery_seed = self
-                        .auth_index
-                        .browser_session_seed(&principal, assertion_id, idempotency)
-                        .map_err(auth_failure)?;
-                    let mut store = self.store.lock().map_err(|_| ApiFailure::unavailable())?;
-                    let mut scope = store
-                        .principal(&principal)
-                        .map_err(|_| ApiFailure::unavailable())?;
-                    let mut prepared = self
-                        .passkeys
-                        .prepare_open_session_replayable(
-                            &mut scope,
-                            assertion_id,
-                            device_label,
-                            device_platform,
-                            action,
-                            recovery_seed,
-                            now,
-                        )
-                        .map_err(auth_api_failure)?;
-                    let mut session_seed: [u8; 32] = Sha256::digest(
-                        [
-                            b"layerx-human/browser-session-signer/v1\0".as_slice(),
-                            recovery_seed.as_slice(),
-                        ]
-                        .concat(),
-                    )
-                    .into();
-                    let session_public_key = LocalSigner::new(session_seed).public_key();
-                    session_seed.fill(0);
-                    let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
-                    let authenticated = agent.balance().map_err(agent_failure)?;
-                    let identity = agent
-                        .identity_resolve(self.agent_actor.as_str())
-                        .map_err(agent_failure)?;
-                    let registry = agent.registry().clone();
-                    let activity_types = registry
-                        .registrations()
-                        .iter()
-                        .filter(|registration| registration.module() == ModuleId::Governance)
-                        .flat_map(|registration| registration.activity_types().iter().copied())
-                        .collect::<Vec<_>>();
-                    if activity_types.is_empty() {
-                        return Err(ApiFailure::upstream_degraded());
-                    }
-                    let issued = issue_session_key(&SessionKeyRequest {
-                        grantor: authenticated.account,
-                        session_public_key,
-                        not_before: prepared.opened_at(),
-                        expires_at: Some(prepared.refresh_expires_at()),
-                        permitted_activity_types: activity_types,
-                        revocation_sequence: Some(identity.revocation_sequence),
-                    })
-                    .map_err(|_| ApiFailure::upstream_degraded())?;
-                    let intent = Intent::v1(IntentKind::SessionGrant(
-                        ProtocolSessionGrant::new(issued.registration_payload)
-                            .map_err(|_| ApiFailure::upstream_degraded())?,
-                    ));
-                    let trace = TraceId::parse(&request.trace)
-                        .map_err(|_| ApiFailure::invalid_request(None))?;
-                    let mut adapter = ProductionAgentCreation::new(
-                        &mut agent,
-                        &self.agent_contract,
-                        &self.custody,
-                        &trace,
-                        self.agent_actor.clone(),
-                        self.agent_authority.clone(),
-                        self.agent_timestamp_span_seconds,
-                        self.agent_fee_limit,
-                    )
-                    .map_err(|_| ApiFailure::upstream_degraded())?;
-                    let evidence = adapter
-                        .submit_lifecycle_intent(
-                            &mut scope,
-                            &registry,
-                            intent,
-                            action,
-                            KeyId::new("human-primary")
-                                .map_err(|_| ApiFailure::upstream_degraded())?,
-                            prepared.opened_at(),
-                        )
-                        .map_err(|_| ApiFailure::upstream_degraded())?;
-                    ProductionAgentCreation::finalization_evidence(
-                        &evidence,
-                        ModuleId::Governance,
-                        5,
-                        now,
-                    )
-                    .map_err(|_| ApiFailure::upstream_degraded())?;
-                    prepared
-                        .bind_protocol_grant(issued.grant_id)
-                        .map_err(auth_api_failure)?;
-                    let grant = self
-                        .passkeys
-                        .commit_open_session(&mut scope, prepared, now)
-                        .map_err(auth_api_failure)?;
-                    self.auth_index
-                        .bind_session(&grant, &principal)
-                        .map_err(auth_failure)?;
-                    let session_view = grant.session();
-                    let result = json!({"session_id": grant.session_id(), "device": {"device_id": session_view.device.device_id(),
-                        "label": session_view.device.label(), "platform": session_view.device.platform()}, "opened_at": session_view.opened_at,
-                        "last_active_at": session_view.last_active_at, "current": true});
-                    let session = SessionSecrets {
-                        access_token: grant.access_token().expose().to_owned(),
-                        refresh_token: grant.refresh_token().expose().to_owned(),
-                        csrf_token: grant.csrf_token().expose().to_owned(),
-                        access_max_age_seconds: grant.access_expires_at().saturating_sub(now),
-                        refresh_max_age_seconds: grant.refresh_expires_at().saturating_sub(now),
-                    };
-                    (principal, result, Some(session))
-                }
-                _ => return Err(ApiFailure::not_found()),
-            };
-            let _ = principal;
-            return Ok(BackendResponse { result, session });
+            return self.execute_bootstrap(&request);
         }
         let context = request
             .principal
@@ -953,2209 +655,14 @@ impl HumanApiComponents for ProductionComponents {
             },
             now()?,
         )
-        .map_err(auth_failure)?;
+        .map_err(|error| auth_failure(&error))?;
         let principal = context.principal.clone();
         let session_id = context.session_id.clone();
         let mut store = self.store.lock().map_err(|_| ApiFailure::unavailable())?;
         let mut scope = store
             .principal(&principal)
             .map_err(|_| ApiFailure::unavailable())?;
-        match request.operation.name.as_str() {
-            "agent.create" => {
-                let current = now()?;
-                let limit = request
-                    .body
-                    .get("monthly_limit")
-                    .ok_or_else(|| ApiFailure::invalid_request(Some("monthly_limit")))?;
-                let amount = text_field(limit, "amount")?
-                    .parse::<u128>()
-                    .map_err(|_| ApiFailure::invalid_request(Some("monthly_limit")))?;
-                let creation = CreateAgentRequest::new(
-                    text_field(&request.body, "name")?,
-                    text_field(&request.body, "purpose")?,
-                    amount,
-                    text_field(limit, "currency")?,
-                )
-                .map_err(|_| ApiFailure::invalid_request(None))?;
-                let idempotency_key: [u8; 32] =
-                    Sha256::digest(required_idempotency(&request)?.as_bytes()).into();
-                let creation_context = CreationContext {
-                    idempotency_key,
-                    owner_account: self.agent_owner_account.clone(),
-                    human_recovery_root: self.agent_recovery_root,
-                    recovery_threshold: self.agent_recovery_threshold,
-                    network_id: self.network_id,
-                    protocol_time: current,
-                };
-                let mut journey = CreationJourney::start(
-                    &mut scope,
-                    &creation,
-                    &creation_context,
-                    &self.agent_purpose_catalog,
-                    current,
-                )
-                .map_err(agent_creation_failure)?;
-                let trace = TraceId::parse(&request.trace)
-                    .map_err(|_| ApiFailure::invalid_request(None))?;
-                let mut runtime = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
-                let registry = runtime.registry().clone();
-                let mut adapter = ProductionAgentCreation::new(
-                    &mut runtime,
-                    &self.agent_contract,
-                    &self.custody,
-                    &trace,
-                    self.agent_actor.clone(),
-                    self.agent_authority.clone(),
-                    self.agent_timestamp_span_seconds,
-                    self.agent_fee_limit,
-                )
-                .map_err(|_| ApiFailure::upstream_degraded())?;
-                let status = journey
-                    .resume(
-                        &mut scope,
-                        self.custody.creation_keystore(),
-                        &registry,
-                        &mut adapter,
-                        current,
-                    )
-                    .map_err(agent_creation_failure)?;
-                if matches!(status.state, crate::agents::CreationState::Active) {
-                    adapter
-                        .publish_creation(&journey.projection())
-                        .map_err(|_| ApiFailure::upstream_degraded())?;
-                }
-                Ok(BackendResponse {
-                    result: agent_creation_json(&journey, &status),
-                    session: None,
-                })
-            }
-            "agent.list" => {
-                let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
-                let page = agent.agent_list(None, 100).map_err(agent_failure)?;
-                Ok(BackendResponse {
-                    result: json!({"agents": page.agents.iter().map(managed_agent_json).collect::<Vec<_>>(), "next_cursor": page.next_cursor.map(|value| URL_SAFE_NO_PAD.encode(value)).unwrap_or_default()}),
-                    session: None,
-                })
-            }
-            "agent.get" => {
-                let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
-                let value = agent
-                    .agent_get(path(&request, "agent_id")?)
-                    .map_err(agent_failure)?;
-                Ok(BackendResponse {
-                    result: managed_agent_json(&value),
-                    session: None,
-                })
-            }
-            "agent.pause" | "agent.resume" => {
-                let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
-                let agent_id = path(&request, "agent_id")?;
-                if request.operation.name == "agent.resume" {
-                    let context = agent.agent_context(agent_id).map_err(agent_failure)?;
-                    let identity = agent
-                        .identity_resolve(&context.agent_did)
-                        .map_err(agent_failure)?;
-                    if identity.frozen {
-                        return Err(ApiFailure::upstream_degraded());
-                    }
-                    let operation_key = action_key(required_idempotency(&request)?);
-                    let current = now()?;
-                    let trace = TraceId::parse(&request.trace)
-                        .map_err(|_| ApiFailure::invalid_request(None))?;
-                    let registry = agent.registry().clone();
-                    let mut adapter = ProductionAgentCreation::new(
-                        &mut agent,
-                        &self.agent_contract,
-                        &self.custody,
-                        &trace,
-                        AgentDid::new(context.seed.actor.clone())
-                            .map_err(|_| ApiFailure::upstream_degraded())?,
-                        AuthorityRef::new(context.seed.primary_authority.clone())
-                            .map_err(|_| ApiFailure::upstream_degraded())?,
-                        self.agent_timestamp_span_seconds,
-                        self.agent_fee_limit,
-                    )
-                    .map_err(|_| ApiFailure::upstream_degraded())?;
-                    let lifetime = context
-                        .seed
-                        .session_expiry_unix_seconds
-                        .checked_sub(context.seed.created_at)
-                        .ok_or_else(ApiFailure::upstream_degraded)?;
-                    let expires_at = current
-                        .checked_add(lifetime)
-                        .ok_or_else(ApiFailure::upstream_degraded)?;
-                    let evidence = adapter
-                        .provision_session_scoped(
-                            &mut scope,
-                            &registry,
-                            SessionProvision {
-                                action_key: operation_key,
-                                did: Did::new(context.agent_did.as_bytes())
-                                    .map_err(|_| ApiFailure::upstream_degraded())?,
-                                activity_types: context
-                                    .seed
-                                    .activity_types
-                                    .iter()
-                                    .map(|value| {
-                                        layerx_types::payload::ActivityType::from_u32(*value)
-                                    })
-                                    .collect::<Result<Vec<_>, _>>()
-                                    .map_err(|_| ApiFailure::upstream_degraded())?,
-                                daemon_scopes: context.seed.session_scopes.clone(),
-                                expires_at,
-                                primary_authority: context.seed.custody_public_key,
-                                grantor: managed_protocol_identity(&context.seed.agent_id)?,
-                                custody_key: KeyId::new(context.seed.custody_key.clone())
-                                    .map_err(|_| ApiFailure::upstream_degraded())?,
-                                revocation_sequence: identity.revocation_sequence,
-                            },
-                        )
-                        .map_err(agent_failure_from_creation_contract)?;
-                    let (token_id, generation) = adapter
-                        .take_latest_session_credential()
-                        .map_err(agent_failure_from_creation_contract)?;
-                    let observation = agent
-                        .agent_session_bind(agent_id, operation_key, token_id, operation_key)
-                        .map_err(agent_failure)?;
-                    if observation.generation != generation {
-                        return Err(ApiFailure::upstream_degraded());
-                    }
-                    let finalization = super::agent_runtime::AgentFinalizationEvidence {
-                        action_key: operation_key,
-                        activity_id: operation_key,
-                        receipt_digest: evidence.receipt_digest,
-                        observed_sequence: evidence.observed_sequence,
-                        verification: evidence.verification_level.wire_rank(),
-                        finalized_at: current,
-                    };
-                    let value = agent
-                        .agent_control(agent_id, true, observation.evidence_digest, finalization)
-                        .map_err(agent_failure)?;
-                    return Ok(BackendResponse {
-                        result: managed_agent_json(&value),
-                        session: None,
-                    });
-                }
-                let context = agent.agent_context(agent_id).map_err(agent_failure)?;
-                let session = agent
-                    .agent_session_snapshot(agent_id)
-                    .map_err(agent_failure)?;
-                if session.agent_did != context.agent_did {
-                    return Err(ApiFailure::upstream_degraded());
-                }
-                let operation_key = action_key(required_idempotency(&request)?);
-                let effective_sequence = agent
-                    .head()
-                    .map_err(agent_failure)?
-                    .chain_sequence
-                    .checked_add(1)
-                    .ok_or_else(ApiFailure::upstream_degraded)?;
-                let intent = Intent::v1(IntentKind::SessionRevoke(
-                    SessionRevoke::new(
-                        AuthorityGrantId::new(context.protocol_grant_id),
-                        SessionRevocationReason::Paused,
-                        ProtocolSequence::from_u64(effective_sequence),
-                    )
-                    .map_err(|_| ApiFailure::upstream_degraded())?,
-                ));
-                let trace = TraceId::parse(&request.trace)
-                    .map_err(|_| ApiFailure::invalid_request(None))?;
-                let registry = agent.registry().clone();
-                let current = now()?;
-                let mut adapter = ProductionAgentCreation::new(
-                    &mut agent,
-                    &self.agent_contract,
-                    &self.custody,
-                    &trace,
-                    AgentDid::new(context.seed.actor.clone())
-                        .map_err(|_| ApiFailure::upstream_degraded())?,
-                    AuthorityRef::new(context.seed.primary_authority.clone())
-                        .map_err(|_| ApiFailure::upstream_degraded())?,
-                    self.agent_timestamp_span_seconds,
-                    self.agent_fee_limit,
-                )
-                .map_err(|_| ApiFailure::upstream_degraded())?;
-                let receipt = adapter
-                    .submit_lifecycle_intent(
-                        &mut scope,
-                        &registry,
-                        intent,
-                        operation_key,
-                        KeyId::new(context.seed.custody_key)
-                            .map_err(|_| ApiFailure::upstream_degraded())?,
-                        current,
-                    )
-                    .map_err(|_| ApiFailure::upstream_degraded())?;
-                let evidence = ProductionAgentCreation::finalization_evidence(
-                    &receipt,
-                    ModuleId::Governance,
-                    6,
-                    now()?,
-                )
-                .map_err(|_| ApiFailure::upstream_degraded())?;
-                let observation = agent
-                    .agent_session_suspend(agent_id, operation_key)
-                    .map_err(agent_failure)?;
-                let value = agent
-                    .agent_control(agent_id, false, observation.evidence_digest, evidence)
-                    .map_err(agent_failure)?;
-                Ok(BackendResponse {
-                    result: managed_agent_json(&value),
-                    session: None,
-                })
-            }
-            "agent.limit" => {
-                let (amount, currency) = money_field(&request.body, "monthly_limit")?;
-                let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
-                let agent_id = path(&request, "agent_id")?;
-                let context = agent.agent_context(agent_id).map_err(agent_failure)?;
-                if context.seed.currency != currency {
-                    return Err(ApiFailure::invalid_request(Some("monthly_limit")));
-                }
-                let operation_key = action_key(required_idempotency(&request)?);
-                let replacement_budget_id: [u8; 32] = Sha256::digest(
-                    [
-                        b"layerx-human/agent-limit-budget/v1".as_slice(),
-                        context.active_budget_id.as_slice(),
-                        operation_key.as_slice(),
-                    ]
-                    .concat(),
-                )
-                .into();
-                let intent = Intent::v1(IntentKind::BudgetCreate(
-                    BudgetCreate::new(
-                        BudgetId::new(replacement_budget_id),
-                        AccountId::parse(&context.seed.owner_account)
-                            .map_err(|_| ApiFailure::upstream_degraded())?,
-                        AccountId::parse(&context.seed.budget_account)
-                            .map_err(|_| ApiFailure::upstream_degraded())?,
-                        AssetId::new(context.seed.budget_asset),
-                        ProtocolAmount::from_u128(amount),
-                        PeriodLength::new(context.seed.budget_period_seconds)
-                            .map_err(|_| ApiFailure::upstream_degraded())?,
-                        RolloverPolicy::None,
-                        ProtocolAmount::ZERO,
-                        PurposeHash::new(context.seed.purpose_hash),
-                        TimestampSeconds::from_u64(
-                            now()?
-                                .checked_add(context.seed.budget_expiry_seconds)
-                                .ok_or_else(ApiFailure::upstream_degraded)?,
-                        ),
-                    )
-                    .map_err(|_| ApiFailure::upstream_degraded())?,
-                ));
-                let trace = TraceId::parse(&request.trace)
-                    .map_err(|_| ApiFailure::invalid_request(None))?;
-                let registry = agent.registry().clone();
-                let current = now()?;
-                let mut adapter = ProductionAgentCreation::new(
-                    &mut agent,
-                    &self.agent_contract,
-                    &self.custody,
-                    &trace,
-                    AgentDid::new(context.seed.actor.clone())
-                        .map_err(|_| ApiFailure::upstream_degraded())?,
-                    AuthorityRef::new(context.seed.primary_authority.clone())
-                        .map_err(|_| ApiFailure::upstream_degraded())?,
-                    self.agent_timestamp_span_seconds,
-                    self.agent_fee_limit,
-                )
-                .map_err(|_| ApiFailure::upstream_degraded())?;
-                let receipt = adapter
-                    .submit_lifecycle_intent(
-                        &mut scope,
-                        &registry,
-                        intent,
-                        operation_key,
-                        KeyId::new(context.seed.custody_key)
-                            .map_err(|_| ApiFailure::upstream_degraded())?,
-                        current,
-                    )
-                    .map_err(|_| ApiFailure::upstream_degraded())?;
-                let evidence = ProductionAgentCreation::finalization_evidence(
-                    &receipt,
-                    ModuleId::Budget,
-                    1,
-                    now()?,
-                )
-                .map_err(|_| ApiFailure::upstream_degraded())?;
-                let value = agent
-                    .agent_limit(agent_id, amount, currency, replacement_budget_id, evidence)
-                    .map_err(agent_failure)?;
-                Ok(BackendResponse {
-                    result: managed_agent_json(&value),
-                    session: None,
-                })
-            }
-            "agent.reclaim" => {
-                let (amount, currency) = money_field(&request.body, "money")?;
-                let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
-                let agent_id = path(&request, "agent_id")?;
-                let context = agent.agent_context(agent_id).map_err(agent_failure)?;
-                if context.seed.currency != currency {
-                    return Err(ApiFailure::invalid_request(Some("money")));
-                }
-                let operation_key = action_key(required_idempotency(&request)?);
-                let budget_state = agent
-                    .agent_budget_state(context.active_budget_id)
-                    .map_err(agent_failure)?;
-                if budget_state.asset != context.seed.budget_asset
-                    || budget_state.remaining < amount
-                {
-                    return Err(ApiFailure::invalid_request(Some("money")));
-                }
-                let intent = Intent::v1(IntentKind::BudgetDefund(
-                    BudgetDefund::new(
-                        BudgetId::new(context.active_budget_id),
-                        AccountId::parse(&context.seed.budget_account)
-                            .map_err(|_| ApiFailure::upstream_degraded())?,
-                        AccountId::parse(&context.seed.owner_account)
-                            .map_err(|_| ApiFailure::upstream_degraded())?,
-                        AssetId::new(context.seed.budget_asset),
-                        ProtocolAmount::from_u128(amount),
-                        ProtocolSequence::from_u64(budget_state.revocation_sequence),
-                        IdempotencyKey::new(operation_key),
-                    )
-                    .map_err(|_| ApiFailure::upstream_degraded())?,
-                ));
-                let trace = TraceId::parse(&request.trace)
-                    .map_err(|_| ApiFailure::invalid_request(None))?;
-                let registry = agent.registry().clone();
-                let current = now()?;
-                let mut adapter = ProductionAgentCreation::new(
-                    &mut agent,
-                    &self.agent_contract,
-                    &self.custody,
-                    &trace,
-                    AgentDid::new(context.seed.actor.clone())
-                        .map_err(|_| ApiFailure::upstream_degraded())?,
-                    AuthorityRef::new(context.seed.primary_authority.clone())
-                        .map_err(|_| ApiFailure::upstream_degraded())?,
-                    self.agent_timestamp_span_seconds,
-                    self.agent_fee_limit,
-                )
-                .map_err(|_| ApiFailure::upstream_degraded())?;
-                let receipt = adapter
-                    .submit_lifecycle_intent(
-                        &mut scope,
-                        &registry,
-                        intent,
-                        operation_key,
-                        KeyId::new(context.seed.custody_key)
-                            .map_err(|_| ApiFailure::upstream_degraded())?,
-                        current,
-                    )
-                    .map_err(|_| ApiFailure::upstream_degraded())?;
-                let evidence = ProductionAgentCreation::finalization_evidence(
-                    &receipt,
-                    ModuleId::Budget,
-                    7,
-                    now()?,
-                )
-                .map_err(|_| ApiFailure::upstream_degraded())?;
-                let post = agent
-                    .agent_budget_state(context.active_budget_id)
-                    .map_err(agent_failure)?;
-                if post.asset != budget_state.asset
-                    || post.observed_head_sequence < evidence.observed_sequence
-                {
-                    return Err(ApiFailure::upstream_degraded());
-                }
-                let value = agent
-                    .agent_reclaim(
-                        agent_id,
-                        amount,
-                        currency,
-                        budget_state.evidence_digest,
-                        post.evidence_digest,
-                        evidence,
-                    )
-                    .map_err(agent_failure)?;
-                Ok(BackendResponse {
-                    result: managed_journey_json(&value),
-                    session: None,
-                })
-            }
-            "agent.rotate" | "agent.recover" => {
-                let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
-                let agent_id = path(&request, "agent_id")?;
-                let recover = request.operation.name == "agent.recover";
-                if recover {
-                    return Err(ApiFailure::upstream_degraded());
-                }
-                let context = agent.agent_context(agent_id).map_err(agent_failure)?;
-                let policy = agent
-                    .agent_key_policy(&context.agent_did, false)
-                    .map_err(agent_failure)?;
-                let operation_key = action_key(required_idempotency(&request)?);
-                let pending_key_id =
-                    KeyId::new(format!("agent-rotation-{}", hex_bytes(&operation_key)))
-                        .map_err(|_| ApiFailure::upstream_degraded())?;
-                let pending_public_key = match self
-                    .custody
-                    .creation_keystore()
-                    .describe(&principal, &pending_key_id)
-                {
-                    Ok(descriptor) if descriptor.class == KeyClass::AgentPrimary => {
-                        descriptor.public_key
-                    }
-                    Ok(_) => return Err(ApiFailure::upstream_degraded()),
-                    Err(CustodyError::KeyNotFound) => self
-                        .custody
-                        .creation_keystore()
-                        .create(&principal, &pending_key_id, KeyClass::AgentPrimary)
-                        .map_err(|_| ApiFailure::upstream_degraded())?,
-                    Err(_) => return Err(ApiFailure::upstream_degraded()),
-                };
-                let current = now()?;
-                let effective_at = current
-                    .checked_add(policy.required_delay_seconds)
-                    .ok_or_else(ApiFailure::upstream_degraded)?;
-                let lapse_at = effective_at
-                    .checked_add(policy.required_delay_seconds)
-                    .ok_or_else(ApiFailure::upstream_degraded)?;
-                let intent = Intent::v1(IntentKind::KeyRotation(
-                    KeyRotation::new(
-                        Did::new(context.agent_did.as_bytes())
-                            .map_err(|_| ApiFailure::upstream_degraded())?,
-                        PublicKey::new(pending_public_key),
-                        TimestampBound::new(effective_at, lapse_at)
-                            .map_err(|_| ApiFailure::upstream_degraded())?,
-                        ProtocolSequence::from_u64(policy.effective_sequence),
-                    )
-                    .map_err(|_| ApiFailure::upstream_degraded())?,
-                ));
-                let trace = TraceId::parse(&request.trace)
-                    .map_err(|_| ApiFailure::invalid_request(None))?;
-                let registry = agent.registry().clone();
-                let mut adapter = ProductionAgentCreation::new(
-                    &mut agent,
-                    &self.agent_contract,
-                    &self.custody,
-                    &trace,
-                    AgentDid::new(context.seed.actor.clone())
-                        .map_err(|_| ApiFailure::upstream_degraded())?,
-                    AuthorityRef::new(context.seed.primary_authority.clone())
-                        .map_err(|_| ApiFailure::upstream_degraded())?,
-                    self.agent_timestamp_span_seconds,
-                    self.agent_fee_limit,
-                )
-                .map_err(|_| ApiFailure::upstream_degraded())?;
-                let receipt = adapter
-                    .submit_lifecycle_intent(
-                        &mut scope,
-                        &registry,
-                        intent,
-                        operation_key,
-                        KeyId::new(context.seed.custody_key)
-                            .map_err(|_| ApiFailure::upstream_degraded())?,
-                        current,
-                    )
-                    .map_err(|_| ApiFailure::upstream_degraded())?;
-                let finalized_at = now()?;
-                let evidence = ProductionAgentCreation::finalization_evidence(
-                    &receipt,
-                    ModuleId::Governance,
-                    2,
-                    finalized_at,
-                )
-                .map_err(|_| ApiFailure::upstream_degraded())?;
-                let ready_at = finalized_at
-                    .checked_add(policy.required_delay_seconds)
-                    .ok_or_else(ApiFailure::upstream_degraded)?;
-                let value = agent
-                    .agent_key_change(
-                        agent_id,
-                        false,
-                        policy.required_delay_seconds,
-                        ready_at,
-                        evidence,
-                    )
-                    .map_err(agent_failure)?;
-                Ok(BackendResponse {
-                    result: managed_challenge_json(&value),
-                    session: None,
-                })
-            }
-            "agent.archive" => {
-                let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
-                let agent_id = path(&request, "agent_id")?;
-                let confirm_name = text_field(&request.body, "confirm_name")?;
-                let context = agent.agent_context(agent_id).map_err(agent_failure)?;
-                let operation_key = action_key(required_idempotency(&request)?);
-                let pre = agent
-                    .agent_budget_state(context.active_budget_id)
-                    .map_err(agent_failure)?;
-                if pre.asset != context.seed.budget_asset {
-                    return Err(ApiFailure::upstream_degraded());
-                }
-                let trace = TraceId::parse(&request.trace)
-                    .map_err(|_| ApiFailure::invalid_request(None))?;
-                let registry = agent.registry().clone();
-                if pre.remaining != 0 {
-                    let defund_key: [u8; 32] = Sha256::digest(
-                        [
-                            b"layerx-human/agent-archive-defund/v1\0".as_slice(),
-                            operation_key.as_slice(),
-                        ]
-                        .concat(),
-                    )
-                    .into();
-                    let intent = Intent::v1(IntentKind::BudgetDefund(
-                        BudgetDefund::new(
-                            BudgetId::new(context.active_budget_id),
-                            AccountId::parse(&context.seed.budget_account)
-                                .map_err(|_| ApiFailure::upstream_degraded())?,
-                            AccountId::parse(&context.seed.owner_account)
-                                .map_err(|_| ApiFailure::upstream_degraded())?,
-                            AssetId::new(context.seed.budget_asset),
-                            ProtocolAmount::from_u128(pre.remaining),
-                            ProtocolSequence::from_u64(pre.revocation_sequence),
-                            IdempotencyKey::new(defund_key),
-                        )
-                        .map_err(|_| ApiFailure::upstream_degraded())?,
-                    ));
-                    let current = now()?;
-                    let mut adapter = ProductionAgentCreation::new(
-                        &mut agent,
-                        &self.agent_contract,
-                        &self.custody,
-                        &trace,
-                        AgentDid::new(context.seed.actor.clone())
-                            .map_err(|_| ApiFailure::upstream_degraded())?,
-                        AuthorityRef::new(context.seed.primary_authority.clone())
-                            .map_err(|_| ApiFailure::upstream_degraded())?,
-                        self.agent_timestamp_span_seconds,
-                        self.agent_fee_limit,
-                    )
-                    .map_err(|_| ApiFailure::upstream_degraded())?;
-                    let receipt = adapter
-                        .submit_lifecycle_intent(
-                            &mut scope,
-                            &registry,
-                            intent,
-                            defund_key,
-                            KeyId::new(context.seed.custody_key.clone())
-                                .map_err(|_| ApiFailure::upstream_degraded())?,
-                            current,
-                        )
-                        .map_err(|_| ApiFailure::upstream_degraded())?;
-                    ProductionAgentCreation::finalization_evidence(
-                        &receipt,
-                        ModuleId::Budget,
-                        7,
-                        now()?,
-                    )
-                    .map_err(|_| ApiFailure::upstream_degraded())?;
-                }
-                let session = agent
-                    .agent_session_snapshot(agent_id)
-                    .map_err(agent_failure)?;
-                if session.agent_did != context.agent_did {
-                    return Err(ApiFailure::upstream_degraded());
-                }
-                let effective_sequence = agent
-                    .head()
-                    .map_err(agent_failure)?
-                    .chain_sequence
-                    .checked_add(1)
-                    .ok_or_else(ApiFailure::upstream_degraded)?;
-                let intent = Intent::v1(IntentKind::SessionRevoke(
-                    SessionRevoke::new(
-                        AuthorityGrantId::new(context.protocol_grant_id),
-                        SessionRevocationReason::Archived,
-                        ProtocolSequence::from_u64(effective_sequence),
-                    )
-                    .map_err(|_| ApiFailure::upstream_degraded())?,
-                ));
-                let current = now()?;
-                let mut adapter = ProductionAgentCreation::new(
-                    &mut agent,
-                    &self.agent_contract,
-                    &self.custody,
-                    &trace,
-                    AgentDid::new(context.seed.actor.clone())
-                        .map_err(|_| ApiFailure::upstream_degraded())?,
-                    AuthorityRef::new(context.seed.primary_authority.clone())
-                        .map_err(|_| ApiFailure::upstream_degraded())?,
-                    self.agent_timestamp_span_seconds,
-                    self.agent_fee_limit,
-                )
-                .map_err(|_| ApiFailure::upstream_degraded())?;
-                let receipt = adapter
-                    .submit_lifecycle_intent(
-                        &mut scope,
-                        &registry,
-                        intent,
-                        operation_key,
-                        KeyId::new(context.seed.custody_key)
-                            .map_err(|_| ApiFailure::upstream_degraded())?,
-                        current,
-                    )
-                    .map_err(|_| ApiFailure::upstream_degraded())?;
-                let evidence = ProductionAgentCreation::finalization_evidence(
-                    &receipt,
-                    ModuleId::Governance,
-                    6,
-                    now()?,
-                )
-                .map_err(|_| ApiFailure::upstream_degraded())?;
-                let session_observation = agent
-                    .agent_session_suspend(agent_id, operation_key)
-                    .map_err(agent_failure)?;
-                let post = agent
-                    .agent_budget_state(context.active_budget_id)
-                    .map_err(agent_failure)?;
-                if post.asset != pre.asset
-                    || post.remaining != 0
-                    || post.observed_head_sequence < evidence.observed_sequence
-                {
-                    return Err(ApiFailure::upstream_degraded());
-                }
-                let value = agent
-                    .agent_archive(
-                        agent_id,
-                        confirm_name,
-                        pre.evidence_digest,
-                        post.evidence_digest,
-                        session_observation.evidence_digest,
-                        evidence,
-                    )
-                    .map_err(agent_failure)?;
-                Ok(BackendResponse {
-                    result: managed_journey_json(&value),
-                    session: None,
-                })
-            }
-            "security.action" => {
-                let digest = identity_dispatch::security_digest(
-                    &scope,
-                    text_field(&request.body, "action")?,
-                    request
-                        .body
-                        .get("target_id")
-                        .and_then(serde_json::Value::as_str),
-                )
-                .map_err(identity_failure)?;
-                Ok(BackendResponse {
-                    result: json!({"confirms": format!("opd_{}", URL_SAFE_NO_PAD.encode(digest.bytes()))}),
-                    session: None,
-                })
-            }
-            "stepup.begin" => {
-                let encoded = text_field(&request.body, "confirms")?
-                    .strip_prefix("opd_")
-                    .ok_or_else(|| ApiFailure::invalid_request(Some("confirms")))?;
-                let bytes = URL_SAFE_NO_PAD
-                    .decode(encoded)
-                    .map_err(|_| ApiFailure::invalid_request(Some("confirms")))?;
-                let digest = crate::auth::OperationDigest::new(
-                    bytes
-                        .try_into()
-                        .map_err(|_| ApiFailure::invalid_request(Some("confirms")))?,
-                );
-                let challenge = self
-                    .passkeys
-                    .begin_step_up_authorized(&mut scope, digest, now()?)
-                    .map_err(auth_api_failure)?;
-                self.auth_index
-                    .bind_step_up(&challenge.challenge_id, &principal, challenge.expires_at)
-                    .map_err(auth_failure)?;
-                Ok(BackendResponse {
-                    result: identity_dispatch::step_up_challenge(&challenge),
-                    session: None,
-                })
-            }
-            "stepup.finish" => {
-                let evidence = self
-                    .passkeys
-                    .finish_step_up(
-                        &mut scope,
-                        path(&request, "challenge_id")?,
-                        text_field(&request.body, "credential")?,
-                        now()?,
-                    )
-                    .map_err(auth_api_failure)?;
-                Ok(BackendResponse {
-                    result: identity_dispatch::step_up_evidence(&evidence),
-                    session: None,
-                })
-            }
-            "profile.get" => Ok(BackendResponse {
-                result: identity_dispatch::profile(&scope).map_err(identity_failure)?,
-                session: None,
-            }),
-            "profile.update" => Ok(BackendResponse {
-                result: identity_dispatch::update_profile(&mut scope, &request.body, now()?)
-                    .map_err(identity_failure)?,
-                session: None,
-            }),
-            "onboarding.status" => {
-                let journey = OnboardingJourney::load(&scope)
-                    .map_err(|_| ApiFailure::upstream_degraded())?
-                    .ok_or_else(ApiFailure::not_found)?;
-                Ok(BackendResponse {
-                    result: identity_dispatch::onboarding_status(&journey.status()),
-                    session: None,
-                })
-            }
-            "onboarding.resume" => {
-                let mut journey = OnboardingJourney::load(&scope)
-                    .map_err(|_| ApiFailure::upstream_degraded())?
-                    .ok_or_else(ApiFailure::not_found)?;
-                let status = self
-                    .custody
-                    .resume_onboarding_local(&mut journey, &mut scope, now()?)
-                    .map_err(|_| ApiFailure::upstream_degraded())?;
-                let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
-                let sequence = agent
-                    .account_sequence(&self.agent_actor, &self.agent_authority)
-                    .map_err(|_| ApiFailure::upstream_degraded())?;
-                let registry = agent.registry().clone();
-                let mut engine = journey
-                    .start_durable_engine(
-                        &mut scope,
-                        &registry,
-                        self.agent_actor.clone(),
-                        self.agent_authority.clone(),
-                        sequence,
-                        now()?,
-                        now()?
-                            .checked_add(self.agent_timestamp_span_seconds)
-                            .ok_or_else(ApiFailure::unavailable)?,
-                        self.agent_fee_limit,
-                        now()?,
-                    )
-                    .map_err(|_| ApiFailure::upstream_degraded())?;
-                let trace = TraceId::parse(&request.trace)
-                    .map_err(|_| ApiFailure::invalid_request(None))?;
-                let _ = super::executor::poll_once_ready(engine.advance(
-                    &mut scope,
-                    &self.agent_contract,
-                    &mut *agent,
-                    &self.custody,
-                    &registry,
-                    &trace,
-                    now()?,
-                ))
-                .map_err(|_| ApiFailure::upstream_degraded())?
-                .map_err(|_| ApiFailure::upstream_degraded())?;
-                Ok(BackendResponse {
-                    result: identity_dispatch::onboarding_status(&status),
-                    session: None,
-                })
-            }
-            "binding.statement" => {
-                let journey = OnboardingJourney::load(&scope)
-                    .map_err(|_| ApiFailure::upstream_degraded())?
-                    .ok_or_else(ApiFailure::not_found)?;
-                let did = journey.did().map_err(|_| ApiFailure::upstream_degraded())?;
-                let address = text_field(&request.body, "address")?;
-                let bytes = decode_hex_20(address)
-                    .map_err(|_| ApiFailure::invalid_request(Some("address")))?;
-                let statement = BindingJourney::issue_statement(
-                    &did,
-                    layerx_types::intent::NetworkId::new(self.network_id)
-                        .map_err(|_| ApiFailure::upstream_degraded())?,
-                    EvmAddress::new(bytes),
-                    now()?,
-                    self.binding_statement_ttl_seconds,
-                )
-                .map_err(|_| ApiFailure::invalid_request(Some("address")))?;
-                scope
-                    .put(
-                        Table::Journeys,
-                        RowKey::new("wallet-binding-issued")
-                            .map_err(|_| ApiFailure::unavailable())?,
-                        now()?,
-                        serde_json::to_vec(&statement)
-                            .map_err(|_| ApiFailure::upstream_degraded())?,
-                    )
-                    .map_err(|_| ApiFailure::unavailable())?;
-                Ok(BackendResponse {
-                    result: json!({"statement": statement.text(),
-                    "address": statement.checksummed_address(), "expires_at": statement.expires_at()}),
-                    session: None,
-                })
-            }
-            "binding.submit" => {
-                let row =
-                    RowKey::new("wallet-binding-issued").map_err(|_| ApiFailure::unavailable())?;
-                let statement: crate::binding::BindingStatement = serde_json::from_slice(
-                    scope
-                        .get(Table::Journeys, &row)
-                        .ok_or_else(ApiFailure::not_found)?
-                        .bytes(),
-                )
-                .map_err(|_| ApiFailure::upstream_degraded())?;
-                if statement.text() != text_field(&request.body, "statement")?
-                    || statement.checksummed_address() != text_field(&request.body, "address")?
-                {
-                    return Err(ApiFailure::forbidden());
-                }
-                let signature = decode_hex(text_field(&request.body, "signature")?)
-                    .map_err(|_| ApiFailure::invalid_request(Some("signature")))?;
-                let key: [u8; 32] =
-                    sha2::Sha256::digest(required_idempotency(&request)?.as_bytes()).into();
-                let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
-                let sequence = agent
-                    .account_sequence(&self.agent_actor, &self.agent_authority)
-                    .map_err(|_| ApiFailure::upstream_degraded())?;
-                let registry = agent.registry().clone();
-                let binding = BindingJourney::new(registry.clone());
-                let mut engine = binding
-                    .start_durable(
-                        &mut scope,
-                        &statement,
-                        &signature,
-                        layerx_types::ids::IdempotencyKey::new(key),
-                        self.agent_actor.clone(),
-                        self.agent_authority.clone(),
-                        sequence,
-                        now()?,
-                        now()?
-                            .checked_add(self.agent_timestamp_span_seconds)
-                            .ok_or_else(ApiFailure::unavailable)?,
-                        self.agent_fee_limit,
-                        false,
-                        now()?,
-                    )
-                    .map_err(|_| ApiFailure::upstream_degraded())?;
-                let trace = TraceId::parse(&request.trace)
-                    .map_err(|_| ApiFailure::invalid_request(None))?;
-                let status = super::executor::poll_once_ready(engine.advance(
-                    &mut scope,
-                    &self.agent_contract,
-                    &mut *agent,
-                    &self.custody,
-                    &registry,
-                    &trace,
-                    now()?,
-                ))
-                .map_err(|_| ApiFailure::upstream_degraded())?
-                .map_err(|_| ApiFailure::upstream_degraded())?;
-                Ok(BackendResponse {
-                    result: journey_status_json(&status),
-                    session: None,
-                })
-            }
-            "binding.status" => {
-                let engine = crate::journeys::JourneyEngine::list(&scope)
-                    .map_err(|_| ApiFailure::upstream_degraded())?
-                    .into_iter()
-                    .find(|value| value.kind() == crate::journeys::JourneyKind::WalletBinding);
-                match engine {
-                    Some(engine) => {
-                        let status = engine
-                            .status()
-                            .map_err(|_| ApiFailure::upstream_degraded())?;
-                        let identity = engine.verified_identity(0).map(|(submission, activity)| json!({
-                        "submission_id": submission, "activity_id": URL_SAFE_NO_PAD.encode(activity)}));
-                        Ok(BackendResponse {
-                            result: json!({"state": if identity.is_some() {"bound"} else {"binding"},
-                        "journey": journey_status_json(&status), "verified_identity": identity}),
-                            session: None,
-                        })
-                    }
-                    None => Ok(BackendResponse {
-                        result: json!({"state":"none"}),
-                        session: None,
-                    }),
-                }
-            }
-            "binding.rebind.action" => {
-                let engine = crate::journeys::JourneyEngine::list(&scope)
-                    .map_err(|_| ApiFailure::upstream_degraded())?
-                    .into_iter()
-                    .find(|value| value.kind() == crate::journeys::JourneyKind::WalletBinding)
-                    .ok_or_else(ApiFailure::not_found)?;
-                let status = engine
-                    .status()
-                    .map_err(|_| ApiFailure::upstream_degraded())?;
-                let receipt_digest = status
-                    .receipt_digests()
-                    .first()
-                    .copied()
-                    .flatten()
-                    .ok_or_else(ApiFailure::forbidden)?;
-                let prior: crate::binding::BindingStatement = serde_json::from_slice(
-                    scope
-                        .get(
-                            Table::Journeys,
-                            &RowKey::new("wallet-binding-issued")
-                                .map_err(|_| ApiFailure::unavailable())?,
-                        )
-                        .ok_or_else(ApiFailure::not_found)?
-                        .bytes(),
-                )
-                .map_err(|_| ApiFailure::upstream_degraded())?;
-                let journey = OnboardingJourney::load(&scope)
-                    .map_err(|_| ApiFailure::upstream_degraded())?
-                    .ok_or_else(ApiFailure::not_found)?;
-                let address = decode_hex_20(text_field(&request.body, "address")?)
-                    .map_err(|_| ApiFailure::invalid_request(Some("address")))?;
-                let statement = BindingJourney::issue_statement(
-                    &journey.did().map_err(|_| ApiFailure::upstream_degraded())?,
-                    layerx_types::intent::NetworkId::new(self.network_id)
-                        .map_err(|_| ApiFailure::upstream_degraded())?,
-                    EvmAddress::new(address),
-                    now()?,
-                    self.binding_statement_ttl_seconds,
-                )
-                .map_err(|_| ApiFailure::invalid_request(Some("address")))?;
-                let confirms = BindingJourney::rebind_operation_digest_verified(
-                    receipt_digest,
-                    prior.address(),
-                    &statement,
-                );
-                scope
-                    .put(
-                        Table::Journeys,
-                        RowKey::new("wallet-rebinding-issued")
-                            .map_err(|_| ApiFailure::unavailable())?,
-                        now()?,
-                        serde_json::to_vec(&(statement.clone(), confirms))
-                            .map_err(|_| ApiFailure::upstream_degraded())?,
-                    )
-                    .map_err(|_| ApiFailure::unavailable())?;
-                Ok(BackendResponse {
-                    result: json!({"binding":{"statement":statement.text(),
-                    "address":statement.checksummed_address(),"expires_at":statement.expires_at()},
-                    "confirms":format!("opd_{}",URL_SAFE_NO_PAD.encode(confirms.bytes()))}),
-                    session: None,
-                })
-            }
-            "binding.rebind" => {
-                let (statement, confirms): (
-                    crate::binding::BindingStatement,
-                    crate::auth::OperationDigest,
-                ) = serde_json::from_slice(
-                    scope
-                        .get(
-                            Table::Journeys,
-                            &RowKey::new("wallet-rebinding-issued")
-                                .map_err(|_| ApiFailure::unavailable())?,
-                        )
-                        .ok_or_else(ApiFailure::not_found)?
-                        .bytes(),
-                )
-                .map_err(|_| ApiFailure::upstream_degraded())?;
-                if statement.text() != text_field(&request.body, "statement")?
-                    || statement.checksummed_address() != text_field(&request.body, "address")?
-                {
-                    return Err(ApiFailure::forbidden());
-                }
-                let signature = decode_hex(text_field(&request.body, "signature")?)
-                    .map_err(|_| ApiFailure::invalid_request(Some("signature")))?;
-                let key: [u8; 32] =
-                    sha2::Sha256::digest(required_idempotency(&request)?.as_bytes()).into();
-                let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
-                let sequence = agent
-                    .account_sequence(&self.agent_actor, &self.agent_authority)
-                    .map_err(|_| ApiFailure::upstream_degraded())?;
-                let registry = agent.registry().clone();
-                let binding = BindingJourney::new(registry.clone());
-                let mut engine = binding
-                    .start_durable(
-                        &mut scope,
-                        &statement,
-                        &signature,
-                        layerx_types::ids::IdempotencyKey::new(key),
-                        self.agent_actor.clone(),
-                        self.agent_authority.clone(),
-                        sequence,
-                        now()?,
-                        now()?
-                            .checked_add(self.agent_timestamp_span_seconds)
-                            .ok_or_else(ApiFailure::unavailable)?,
-                        self.agent_fee_limit,
-                        true,
-                        now()?,
-                    )
-                    .map_err(|_| ApiFailure::upstream_degraded())?;
-                let trace = TraceId::parse(&request.trace)
-                    .map_err(|_| ApiFailure::invalid_request(None))?;
-                let phase = engine
-                    .status()
-                    .map_err(|_| ApiFailure::upstream_degraded())?
-                    .phases()
-                    .get(
-                        engine
-                            .status()
-                            .map_err(|_| ApiFailure::upstream_degraded())?
-                            .current_leg(),
-                    )
-                    .copied();
-                let custody_evidence = if phase == Some(crate::journeys::JourneyPhase::Prepared) {
-                    let prepared = engine
-                        .prepared_disclosure_digest(&self.agent_contract, &mut *agent, &registry)
-                        .map_err(|_| ApiFailure::upstream_degraded())?;
-                    let challenge = request
-                        .body
-                        .get("step_up")
-                        .and_then(|value| value.get("challenge_id"))
-                        .and_then(serde_json::Value::as_str)
-                        .ok_or_else(ApiFailure::forbidden)?;
-                    let auth = self
-                        .passkeys
-                        .load_step_up_evidence(&mut scope, challenge, now()?)
-                        .map_err(auth_api_failure)?;
-                    Some(
-                        self.custody
-                            .bind_authenticated_step_up(
-                                &self.passkeys,
-                                &mut scope,
-                                &auth,
-                                confirms,
-                                crate::custody::Operation::WalletRebinding,
-                                prepared,
-                                context.request_digest(),
-                                now()?,
-                            )
-                            .map_err(|_| ApiFailure::forbidden())?,
-                    )
-                } else {
-                    None
-                };
-                let status = super::executor::poll_once_ready(engine.advance_authorized(
-                    &mut scope,
-                    &self.agent_contract,
-                    &mut *agent,
-                    &self.custody,
-                    &registry,
-                    &trace,
-                    custody_evidence.as_ref(),
-                    now()?,
-                ))
-                .map_err(|_| ApiFailure::upstream_degraded())?
-                .map_err(|_| ApiFailure::upstream_degraded())?;
-                Ok(BackendResponse {
-                    result: journey_status_json(&status),
-                    session: None,
-                })
-            }
-            "move.quote" => {
-                let planning =
-                    movement_request(&request, &principal, scope.tenant().clone(), now()?)?;
-                let mut movement = self
-                    .movement
-                    .lock()
-                    .map_err(|_| ApiFailure::unavailable())?;
-                let quote = movement
-                    .quote_move(&mut scope, planning)
-                    .map_err(movement_failure)?;
-                Ok(BackendResponse {
-                    result: move_quote_json(&quote),
-                    session: None,
-                })
-            }
-            "move.commit" => {
-                let quote_id = text_field(&request.body, "quote_id")?;
-                let movement = self
-                    .movement
-                    .lock()
-                    .map_err(|_| ApiFailure::unavailable())?;
-                let plan = movement
-                    .load_move_quote(
-                        &scope,
-                        quote_id,
-                        action_key(required_idempotency(&request)?),
-                        now()?,
-                    )
-                    .map_err(movement_failure)?;
-                let registry = self
-                    .agent
-                    .lock()
-                    .map_err(|_| ApiFailure::unavailable())?
-                    .registry()
-                    .clone();
-                let mut journey = crate::journeys::MoveJourney::commit(
-                    &mut scope,
-                    &plan,
-                    crate::journeys::MoveAuthorization::Allowed,
-                    &registry,
-                    now()?,
-                )
-                .map_err(move_journey_failure)?;
-                let trace = TraceId::parse(&request.trace)
-                    .map_err(|_| ApiFailure::invalid_request(None))?;
-                let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
-                let status = super::executor::poll_once_ready(journey.advance(
-                    &mut scope,
-                    &self.agent_contract,
-                    &mut *agent,
-                    &self.custody,
-                    &registry,
-                    &trace,
-                    now()?,
-                ))
-                .map_err(|_| ApiFailure::upstream_degraded())?
-                .map_err(move_journey_failure)?;
-                schedule_continuation(&mut scope, "move", status.journey_id(), now()?)?;
-                Ok(BackendResponse {
-                    result: move_public_json(&scope, self.settlement_domain, &status, now()?)?,
-                    session: None,
-                })
-            }
-            "deposit.start" => {
-                let planning =
-                    movement_request(&request, &principal, scope.tenant().clone(), now()?)?;
-                let movement = self
-                    .movement
-                    .lock()
-                    .map_err(|_| ApiFailure::unavailable())?;
-                let plan = movement.deposit_plan(planning).map_err(movement_failure)?;
-                let binding = crate::binding::BindingJourney::new(
-                    self.agent
-                        .lock()
-                        .map_err(|_| ApiFailure::unavailable())?
-                        .registry()
-                        .clone(),
-                );
-                let journey =
-                    crate::journeys::DepositJourney::start(&mut scope, &binding, &plan, now()?)
-                        .map_err(deposit_journey_failure)?;
-                let status = journey.status().map_err(deposit_journey_failure)?;
-                Ok(BackendResponse {
-                    result: deposit_public_json(&scope, self.settlement_domain, &status, now()?)?,
-                    session: None,
-                })
-            }
-            "deposit.confirm" => {
-                let journey_id =
-                    crate::notify::JourneyId::new(path(&request, "journey_id")?.to_owned())
-                        .map_err(|_| ApiFailure::invalid_request(Some("journey_id")))?;
-                let transaction = layerx_paxeer_client::TransactionHash::new(
-                    decode_hex_32(text_field(&request.body, "wallet_transaction")?)
-                        .map_err(|_| ApiFailure::invalid_request(Some("wallet_transaction")))?,
-                );
-                let mut journey = crate::journeys::DepositJourney::load(&scope, &journey_id)
-                    .map_err(deposit_journey_failure)?
-                    .ok_or_else(ApiFailure::not_found)?;
-                let mut movement = self
-                    .movement
-                    .lock()
-                    .map_err(|_| ApiFailure::unavailable())?;
-                journey
-                    .confirm_external_transaction(&mut scope, &mut *movement, transaction, now()?)
-                    .map_err(deposit_journey_failure)?;
-                let trace = TraceId::parse(&request.trace)
-                    .map_err(|_| ApiFailure::invalid_request(None))?;
-                let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
-                let registry = agent.registry().clone();
-                let status = movement
-                    .advance_deposit(
-                        &mut scope,
-                        &mut journey,
-                        &self.agent_contract,
-                        &mut *agent,
-                        &self.custody,
-                        &registry,
-                        &trace,
-                        now()?,
-                    )
-                    .map_err(deposit_journey_failure)?;
-                schedule_continuation(&mut scope, "deposit", status.journey_id(), now()?)?;
-                Ok(BackendResponse {
-                    result: deposit_public_json(&scope, self.settlement_domain, &status, now()?)?,
-                    session: None,
-                })
-            }
-            "withdraw.start" => {
-                let planning =
-                    movement_request(&request, &principal, scope.tenant().clone(), now()?)?;
-                let challenge = request
-                    .body
-                    .get("step_up")
-                    .and_then(|value| value.get("challenge_id"))
-                    .and_then(serde_json::Value::as_str)
-                    .ok_or_else(ApiFailure::forbidden)?;
-                let step_up = self
-                    .passkeys
-                    .load_step_up_evidence(&mut scope, challenge, now()?)
-                    .map_err(auth_api_failure)?;
-                let mut movement = self
-                    .movement
-                    .lock()
-                    .map_err(|_| ApiFailure::unavailable())?;
-                let plan = movement
-                    .withdrawal_plan(planning)
-                    .map_err(movement_failure)?;
-                let trace = TraceId::parse(&request.trace)
-                    .map_err(|_| ApiFailure::invalid_request(None))?;
-                let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
-                let registry = agent.registry().clone();
-                let observed_at = now()?;
-                let mut journey = movement
-                    .start_withdrawal(&mut scope, &plan, observed_at)
-                    .map_err(withdrawal_journey_failure)?;
-                let mut status = journey.status().map_err(withdrawal_journey_failure)?;
-                for _ in 0..3 {
-                    let custody_evidence = journey
-                        .prepared_debit_disclosure_digest(
-                            &scope,
-                            &self.agent_contract,
-                            &mut *agent,
-                            &registry,
-                        )
-                        .map_err(withdrawal_journey_failure)?
-                        .map(|prepared| {
-                            self.custody.bind_authenticated_step_up(
-                                &self.passkeys,
-                                &mut scope,
-                                &step_up,
-                                step_up.confirms(),
-                                crate::custody::Operation::Withdrawal,
-                                prepared,
-                                context.request_digest(),
-                                observed_at,
-                            )
-                        })
-                        .transpose()
-                        .map_err(|_| ApiFailure::forbidden())?;
-                    status = movement
-                        .advance_withdrawal(
-                            &mut scope,
-                            &mut journey,
-                            &self.agent_contract,
-                            &mut *agent,
-                            &self.custody,
-                            &registry,
-                            &trace,
-                            custody_evidence.as_ref(),
-                            observed_at,
-                        )
-                        .map_err(withdrawal_journey_failure)?;
-                    if custody_evidence.is_some()
-                        || !matches!(status.stage(), crate::journeys::WithdrawalStage::Processing)
-                    {
-                        break;
-                    }
-                }
-                schedule_continuation(&mut scope, "withdraw", status.journey_id(), now()?)?;
-                Ok(BackendResponse {
-                    result: withdrawal_public_json(
-                        &scope,
-                        self.settlement_domain,
-                        &status,
-                        now()?,
-                    )?,
-                    session: None,
-                })
-            }
-            "withdraw.claim" => {
-                let journey_id =
-                    crate::notify::JourneyId::new(path(&request, "journey_id")?.to_owned())
-                        .map_err(|_| ApiFailure::invalid_request(Some("journey_id")))?;
-                let signature = decode_hex(text_field(&request.body, "claim_signature")?)
-                    .map_err(|_| ApiFailure::invalid_request(Some("claim_signature")))?;
-                let mut journey = crate::journeys::WithdrawalJourney::load(&mut scope, &journey_id)
-                    .map_err(withdrawal_journey_failure)?
-                    .ok_or_else(ApiFailure::not_found)?;
-                let mut movement = self
-                    .movement
-                    .lock()
-                    .map_err(|_| ApiFailure::unavailable())?;
-                let status = movement
-                    .claim_withdrawal(&mut scope, &mut journey, &signature, now()?)
-                    .map_err(withdrawal_journey_failure)?;
-                schedule_continuation(&mut scope, "withdraw", status.journey_id(), now()?)?;
-                Ok(BackendResponse {
-                    result: withdrawal_public_json(
-                        &scope,
-                        self.settlement_domain,
-                        &status,
-                        now()?,
-                    )?,
-                    session: None,
-                })
-            }
-            "exit.start" => {
-                let confirmation = crate::journeys::IrreversibleExitConfirmation::parse(
-                    text_field(&request.body, "confirmation")?,
-                )
-                .map_err(|_| ApiFailure::invalid_request(Some("confirmation")))?;
-                let trace = TraceId::parse(&request.trace)
-                    .map_err(|_| ApiFailure::invalid_request(None))?;
-                let planning =
-                    movement_request(&request, &principal, scope.tenant().clone(), now()?)?;
-                let mut movement = self
-                    .movement
-                    .lock()
-                    .map_err(|_| ApiFailure::unavailable())?;
-                let plan = movement.exit_plan(planning).map_err(movement_failure)?;
-                let status = movement
-                    .start_exit(
-                        &mut scope,
-                        &trace,
-                        &self.emergency_exit,
-                        &plan,
-                        confirmation,
-                        now()?,
-                    )
-                    .map_err(exit_journey_failure)?;
-                schedule_continuation(&mut scope, "exit", status.journey_id(), now()?)?;
-                Ok(BackendResponse {
-                    result: exit_public_json(&scope, &status, now()?)?,
-                    session: None,
-                })
-            }
-            "exit.eligibility" => {
-                let result = self
-                    .emergency_exit
-                    .eligibility()
-                    .map_err(|_| ApiFailure::upstream_degraded())?;
-                let response = match result {
-                    ExitEligibility::Eligible { .. } => {
-                        json!({"eligible": true, "copy_key": "exit.eligible", "settlement_domain": "paxeer"})
-                    }
-                    ExitEligibility::NetworkOperatingNormally { .. } => json!({"eligible": false,
-                        "copy_key": "exit.network-operating-normally", "withdraw_instead_path": "/app/withdraw",
-                        "settlement_domain": "paxeer"}),
-                    ExitEligibility::NoFinalisedCheckpoint => json!({"eligible": false,
-                        "copy_key": "exit.no-finalised-checkpoint", "settlement_domain": "paxeer"}),
-                };
-                Ok(BackendResponse {
-                    result: response,
-                    session: None,
-                })
-            }
-            "security.passkey.list" => {
-                let passkeys = self
-                    .passkeys
-                    .list_passkeys_authorized(&scope)
-                    .map_err(auth_api_failure)?;
-                Ok(BackendResponse {
-                    result: json!({"passkeys": passkeys}),
-                    session: None,
-                })
-            }
-            "security.passkey.register.begin" => {
-                let profile = identity_dispatch::profile(&scope).map_err(identity_failure)?;
-                let account =
-                    AccountIdentity::new(principal.as_str(), text_field(&profile, "display_name")?)
-                        .map_err(auth_api_failure)?;
-                let challenge = self
-                    .passkeys
-                    .begin_registration(
-                        &mut scope,
-                        &account,
-                        text_field(&request.body, "label")?,
-                        now()?,
-                    )
-                    .map_err(auth_api_failure)?;
-                self.auth_index
-                    .bind_registration(&challenge.registration_id, &principal, challenge.expires_at)
-                    .map_err(auth_failure)?;
-                Ok(BackendResponse {
-                    result: json!({"registration_id": challenge.registration_id,
-                    "ceremony": challenge.ceremony, "expires_at": challenge.expires_at}),
-                    session: None,
-                })
-            }
-            "security.passkey.register.finish" => {
-                let registration_id = path(&request, "registration_id")?;
-                if self
-                    .auth_index
-                    .resolve_registration(registration_id, now()?)
-                    .map_err(auth_failure)?
-                    != principal
-                {
-                    return Err(ApiFailure::forbidden());
-                }
-                let passkey = self
-                    .passkeys
-                    .finish_registration(
-                        &mut scope,
-                        registration_id,
-                        text_field(&request.body, "credential")?,
-                        now()?,
-                    )
-                    .map_err(auth_api_failure)?;
-                response(passkey)
-            }
-            "security.passkey.revoke" => {
-                let passkeys = self
-                    .passkeys
-                    .revoke_passkey_authorized(&mut scope, path(&request, "passkey_id")?)
-                    .map_err(auth_api_failure)?;
-                Ok(BackendResponse {
-                    result: json!({"passkeys": passkeys}),
-                    session: None,
-                })
-            }
-            "session.refresh" => {
-                let (refresh, csrf) = context
-                    .refresh_credentials()
-                    .ok_or_else(ApiFailure::unauthenticated)?;
-                let grant = self
-                    .passkeys
-                    .refresh_authorized(&mut scope, refresh, csrf, now()?)
-                    .map_err(auth_api_failure)?;
-                self.auth_index
-                    .bind_session(&grant, &principal)
-                    .map_err(auth_failure)?;
-                let current = self
-                    .passkeys
-                    .list_sessions_authorized(&scope, grant.session_id())
-                    .map_err(auth_api_failure)?
-                    .into_iter()
-                    .find(|value| value.current)
-                    .ok_or_else(ApiFailure::unavailable)?;
-                let result = json!({"session_id": grant.session_id(), "device": {"device_id": current.device.device_id(),
-                    "label": current.device.label(), "platform": current.device.platform()}, "opened_at": current.opened_at,
-                    "last_active_at": current.last_active_at, "current": true});
-                Ok(BackendResponse {
-                    result,
-                    session: Some(SessionSecrets {
-                        access_token: grant.access_token().expose().to_owned(),
-                        refresh_token: grant.refresh_token().expose().to_owned(),
-                        csrf_token: grant.csrf_token().expose().to_owned(),
-                        access_max_age_seconds: grant.access_expires_at().saturating_sub(now()?),
-                        refresh_max_age_seconds: grant.refresh_expires_at().saturating_sub(now()?),
-                    }),
-                })
-            }
-            "authenticator.status" => {
-                let provider = self
-                    .security
-                    .lock()
-                    .map_err(|_| ApiFailure::unavailable())?;
-                let status = provider
-                    .status(&principal)
-                    .map_err(|_| ApiFailure::upstream_degraded())?;
-                Ok(BackendResponse {
-                    result: authenticator_status_json(&status),
-                    session: None,
-                })
-            }
-            "authenticator.setup.begin" => {
-                let mut provider = self
-                    .security
-                    .lock()
-                    .map_err(|_| ApiFailure::unavailable())?;
-                let challenge = provider
-                    .begin_setup(&principal, text_field(&request.body, "label")?, now()?)
-                    .map_err(|_| ApiFailure::upstream_degraded())?;
-                Ok(BackendResponse {
-                    result: json!({"setup_id": challenge.setup_id,
-                    "secret": timed_secret_json(&challenge.secret), "otpauth_uri": timed_secret_json(&challenge.otpauth_uri),
-                    "expires_at": challenge.expires_at}),
-                    session: None,
-                })
-            }
-            "authenticator.setup.finish" => {
-                let mut provider = self
-                    .security
-                    .lock()
-                    .map_err(|_| ApiFailure::unavailable())?;
-                let result = provider
-                    .finish_setup(
-                        &principal,
-                        path(&request, "setup_id")?,
-                        text_field(&request.body, "code")?,
-                        now()?,
-                    )
-                    .map_err(|_| ApiFailure::upstream_degraded())?;
-                Ok(BackendResponse {
-                    result: json!({"method": authenticator_method_json(&result.method),
-                    "backup_codes": {"codes": result.backup_codes.expose(), "remask_at": result.backup_codes.remask_at(),
-                        "copyable": true}}),
-                    session: None,
-                })
-            }
-            "authenticator.disable" => {
-                let mut provider = self
-                    .security
-                    .lock()
-                    .map_err(|_| ApiFailure::unavailable())?;
-                let status = provider
-                    .disable(&principal, path(&request, "authenticator_id")?, now()?)
-                    .map_err(|_| ApiFailure::upstream_degraded())?;
-                Ok(BackendResponse {
-                    result: authenticator_status_json(&status),
-                    session: None,
-                })
-            }
-            "authenticator.backup.rotate" => {
-                let mut provider = self
-                    .security
-                    .lock()
-                    .map_err(|_| ApiFailure::unavailable())?;
-                let codes = provider
-                    .rotate_backup_codes(&principal, now()?)
-                    .map_err(|_| ApiFailure::upstream_degraded())?;
-                Ok(BackendResponse {
-                    result: json!({"codes": codes.expose(), "remask_at": codes.remask_at(),
-                    "copyable": true}),
-                    session: None,
-                })
-            }
-            "security.recovery.reveal" => {
-                let provider = self
-                    .security
-                    .lock()
-                    .map_err(|_| ApiFailure::unavailable())?;
-                let secret = provider
-                    .reveal_verified_receipt(
-                        &principal,
-                        text_field(&request.body, "evidence_id")?,
-                        now()?,
-                    )
-                    .map_err(|_| ApiFailure::upstream_degraded())?;
-                Ok(BackendResponse {
-                    result: timed_secret_json(&secret),
-                    session: None,
-                })
-            }
-            "session.list" => {
-                let sessions = self
-                    .passkeys
-                    .list_sessions_authorized(&scope, &session_id)
-                    .map_err(auth_api_failure)?;
-                let sessions = sessions.into_iter().map(|session| json!({
-                    "session_id": session.session_id,
-                    "device": {"device_id": session.device.device_id(), "label": session.device.label(),
-                        "platform": session.device.platform()},
-                    "opened_at": session.opened_at, "last_active_at": session.last_active_at,
-                    "current": session.current
-                })).collect::<Vec<_>>();
-                Ok(BackendResponse {
-                    result: json!({"sessions": sessions}),
-                    session: None,
-                })
-            }
-            "session.revoke" | "security.session.revoke" => {
-                let target = path(&request, "session_id")?;
-                let grant = self
-                    .passkeys
-                    .protocol_grant_for_session(&scope, target)
-                    .map_err(auth_api_failure)?;
-                self.revoke_browser_grants(&mut scope, &request, &[(target.to_owned(), grant)])?;
-                let revoked = self
-                    .passkeys
-                    .revoke_session_authorized(&mut scope, target, now()?)
-                    .map_err(auth_api_failure)?;
-                Ok(BackendResponse {
-                    result: json!({"revoked_session_ids": revoked.revoked_session_ids,
-                    "revoked_at": revoked.revoked_at}),
-                    session: None,
-                })
-            }
-            "session.revoke-all" | "security.session.revoke-all" => {
-                let grants = self
-                    .passkeys
-                    .active_protocol_session_grants(&scope)
-                    .map_err(auth_api_failure)?;
-                self.revoke_browser_grants(&mut scope, &request, &grants)?;
-                let revoked = self
-                    .passkeys
-                    .revoke_all_sessions_authorized(&mut scope, now()?)
-                    .map_err(auth_api_failure)?;
-                Ok(BackendResponse {
-                    result: json!({"revoked_session_ids": revoked.revoked_session_ids,
-                    "revoked_at": revoked.revoked_at}),
-                    session: None,
-                })
-            }
-            "approval.list" => {
-                let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
-                let sequence = agent
-                    .head()
-                    .map_err(|_| ApiFailure::upstream_degraded())?
-                    .chain_sequence;
-                let page = agent
-                    .approval_list(sequence, None, 100)
-                    .map_err(|_| ApiFailure::upstream_degraded())?;
-                let mut approvals = Vec::with_capacity(page.approvals.len());
-                for hold in &page.approvals {
-                    let budget = agent
-                        .verified_budget_after(hold, sequence)
-                        .map_err(|_| ApiFailure::upstream_degraded())?;
-                    let value = approval_json(hold, budget);
-                    append_approval_stream(
-                        &self.stream,
-                        &mut scope,
-                        hold,
-                        value.clone(),
-                        sequence,
-                    )?;
-                    approvals.push(value);
-                }
-                Ok(BackendResponse {
-                    result: json!({"approvals": approvals, "next_cursor": page.next_cursor.map(|value| URL_SAFE_NO_PAD.encode(value))}),
-                    session: None,
-                })
-            }
-            "approval.get" => {
-                let approval_id = decode_id(path(&request, "approval_id")?)
-                    .map_err(|_| ApiFailure::invalid_request(Some("approval_id")))?;
-                let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
-                let sequence = agent
-                    .head()
-                    .map_err(|_| ApiFailure::upstream_degraded())?
-                    .chain_sequence;
-                let hold = agent
-                    .approval_get(approval_id, sequence)
-                    .map_err(|_| ApiFailure::not_found())?;
-                let budget = agent
-                    .verified_budget_after(&hold, sequence)
-                    .map_err(|_| ApiFailure::upstream_degraded())?;
-                let value = approval_json(&hold, budget);
-                append_approval_stream(&self.stream, &mut scope, &hold, value.clone(), sequence)?;
-                Ok(BackendResponse {
-                    result: value,
-                    session: None,
-                })
-            }
-            "approval.approve" | "approval.reject" => {
-                let approval_id = decode_id(path(&request, "approval_id")?)
-                    .map_err(|_| ApiFailure::invalid_request(Some("approval_id")))?;
-                let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
-                let sequence = agent
-                    .head()
-                    .map_err(|_| ApiFailure::upstream_degraded())?
-                    .chain_sequence;
-                let hold = agent
-                    .approval_get(approval_id, sequence)
-                    .map_err(|_| ApiFailure::not_found())?;
-                let decision = agent
-                    .approval_decide(
-                        request.operation.name == "approval.approve",
-                        approval_id,
-                        hold.canonical_bytes_digest,
-                        required_idempotency(&request)?,
-                        sequence,
-                    )
-                    .map_err(|_| ApiFailure::upstream_degraded())?;
-                let state = match decision.status {
-                    AgentDecisionStatus::Approved { .. } => "approved",
-                    AgentDecisionStatus::Rejected => "rejected",
-                    AgentDecisionStatus::Expired => "expired",
-                    AgentDecisionStatus::Defective => "defective",
-                };
-                let value = json!({"approval_id": URL_SAFE_NO_PAD.encode(approval_id), "state": state,
-                    "state_copy_key": format!("approval.state.{state}"), "money_moved": false,
-                    "moved_copy_key": "approval.decision.no-money-moved", "evidence": []});
-                self.stream.append(
-                    &mut scope,
-                    &format!(
-                        "approval-decision:{}:{state}",
-                        URL_SAFE_NO_PAD.encode(approval_id)
-                    ),
-                    match state {
-                        "approved" => "approval-approved",
-                        "rejected" => "approval-rejected",
-                        _ => "approval-expired",
-                    },
-                    sequence,
-                    json!({"approval":value.clone()}),
-                )?;
-                Ok(BackendResponse {
-                    result: value,
-                    session: None,
-                })
-            }
-            "support.list" => {
-                let conversations = SupportService::list(&scope).map_err(support_failure)?;
-                Ok(BackendResponse {
-                    result: json!({"conversations": conversations}),
-                    session: None,
-                })
-            }
-            "support.create" => {
-                let mut create = CreateConversation::new(
-                    text_field(&request.body, "body")?,
-                    decode_field::<Shell>(&request.body, "shell")?,
-                )
-                .map_err(|_| ApiFailure::invalid_request(Some("body")))?;
-                if let Some(topic) = optional_decode_field::<Topic>(&request.body, "topic")? {
-                    create = create.with_topic(topic);
-                }
-                if let Some(trace) = request
-                    .body
-                    .get("trace_id")
-                    .and_then(|value| value.as_str())
-                {
-                    create = create.with_trace(
-                        TraceId::parse(trace)
-                            .map_err(|_| ApiFailure::invalid_request(Some("trace_id")))?,
-                    );
-                }
-                let value = SupportService::create(
-                    &mut scope,
-                    now()?,
-                    required_idempotency(&request)?,
-                    &create,
-                )
-                .map_err(support_failure)?;
-                response(value)
-            }
-            "support.reply" => {
-                let value = SupportService::reply(
-                    &mut scope,
-                    now()?,
-                    path(&request, "conversation_id")?,
-                    required_idempotency(&request)?,
-                    text_field(&request.body, "body")?,
-                )
-                .map_err(support_failure)?;
-                response(value)
-            }
-            "support.read" => {
-                let conversation = SupportService::mark_read(
-                    &mut scope,
-                    now()?,
-                    path(&request, "conversation_id")?,
-                    text_field(&request.body, "through_message_id")?,
-                )
-                .map_err(support_failure)?;
-                Ok(BackendResponse {
-                    result: json!({
-                        "conversation_id": conversation.conversation_id(), "state": conversation.state(),
-                        "unread_count": conversation.unread_count(), "updated_at": conversation.updated_at()
-                    }),
-                    session: None,
-                })
-            }
-            "support.status" => {
-                let conversation_id = path(&request, "conversation_id")?;
-                let (state, unread_count, updated_at) =
-                    SupportService::status(&scope, conversation_id).map_err(support_failure)?;
-                Ok(BackendResponse {
-                    result: json!({"conversation_id": conversation_id, "state": state,
-                    "unread_count": unread_count, "updated_at": updated_at}),
-                    session: None,
-                })
-            }
-            "support.feedback" => {
-                let helpful = request
-                    .body
-                    .get("helpful")
-                    .and_then(|value| value.as_bool())
-                    .ok_or_else(|| ApiFailure::invalid_request(Some("helpful")))?;
-                let value = SupportService::feedback(
-                    &mut scope,
-                    now()?,
-                    path(&request, "conversation_id")?,
-                    text_field(&request.body, "message_id")?,
-                    helpful,
-                )
-                .map_err(support_failure)?;
-                response(value)
-            }
-            "notification.list" => {
-                let inventory = DeepLinks::inventory(&scope, now()?).map_err(notify_failure)?;
-                let groups = inventory.groups().iter().map(|group| {
-                    let notifications = group.notifications().iter().map(notification_json)
-                        .collect::<Result<Vec<_>, ApiFailure>>()?;
-                    Ok(json!({"recency": group.recency().as_str(), "notifications": notifications}))
-                }).collect::<Result<Vec<_>, ApiFailure>>()?;
-                Ok(BackendResponse {
-                    result: json!({"groups": groups, "next_cursor": "cur_end", "unread_count": inventory.unread_count()}),
-                    session: None,
-                })
-            }
-            "notification.read" => {
-                let id = NotificationId::new(path(&request, "notification_id")?)
-                    .map_err(notify_failure)?;
-                let summary =
-                    DeepLinks::mark_read(&mut scope, now()?, &id).map_err(notify_failure)?;
-                let value = notification_json(&summary)?;
-                self.stream.append(
-                    &mut scope,
-                    &format!("notification-read:{}", summary.notification_id().as_str()),
-                    "notification",
-                    summary.created_at(),
-                    json!({"notification": value.clone()}),
-                )?;
-                Ok(BackendResponse {
-                    result: value,
-                    session: None,
-                })
-            }
-            "notification.preferences.get" => {
-                let preferences = Dispatcher::preferences(&scope).map_err(notify_failure)?;
-                Ok(BackendResponse {
-                    result: preferences_json(&preferences),
-                    session: None,
-                })
-            }
-            "notification.preferences.set" => {
-                let preferences = parse_preferences(&request.body)?;
-                Dispatcher::update_preferences(&mut scope, now()?, &preferences)
-                    .map_err(notify_failure)?;
-                Ok(BackendResponse {
-                    result: preferences_json(&preferences),
-                    session: None,
-                })
-            }
-            "home.summary" => {
-                let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
-                let balance = agent
-                    .balance()
-                    .map_err(|_| ApiFailure::upstream_degraded())?;
-                let mut material = Vec::with_capacity(
-                    4 + balance.canonical_bytes.len() + balance.proof_material.len(),
-                );
-                material.extend_from_slice(&(balance.observed_at.len() as u32).to_be_bytes());
-                material.extend_from_slice(balance.observed_at.as_bytes());
-                material.extend_from_slice(&balance.age_seconds.to_be_bytes());
-                material.extend_from_slice(
-                    &u32::try_from(balance.canonical_bytes.len())
-                        .map_err(|_| ApiFailure::upstream_degraded())?
-                        .to_be_bytes(),
-                );
-                material.extend_from_slice(&balance.canonical_bytes);
-                material.extend_from_slice(&balance.proof_material);
-                let evidence_digest: [u8; 32] = Sha256::digest(&material).into();
-                scope
-                    .put(
-                        Table::Cache,
-                        RowKey::new(format!("state-proof-{}", hex_bytes(&evidence_digest)))
-                            .map_err(|_| ApiFailure::upstream_degraded())?,
-                        now()?,
-                        material,
-                    )
-                    .map_err(|_| ApiFailure::unavailable())?;
-                let verification = if balance.verification >= 4 {
-                    "checkpoint-finalised"
-                } else {
-                    "receipt-verified"
-                };
-                let balance_json = json!({"account_id":format!("act_{}",hex_bytes(&balance.account)),"money":{"amount":balance.amount.to_string(),"currency":balance.currency},"verification":verification,"freshness":{"observed_at":balance.observed_at,"age_seconds":balance.age_seconds,"source_head":balance.observed_head_sequence.to_string(),"within_bound":balance.observed_head_sequence==balance.global_sequence,"checkpoint":hex_bytes(&balance.observed_checkpoint)},"evidence":[{"evidence_id":format!("evd_{}",hex_bytes(&evidence_digest)),"class":if balance.verification>=4{"checkpoint-proof"}else{"layerx-receipt"},"verification":verification}]});
-                let agents = agent
-                    .agent_list(None, 100)
-                    .map_err(agent_failure)?
-                    .agents
-                    .iter()
-                    .map(managed_agent_json)
-                    .collect::<Vec<_>>();
-                let sequence = agent.head().map_err(agent_failure)?.chain_sequence;
-                let page = agent
-                    .approval_list(sequence, None, 100)
-                    .map_err(|_| ApiFailure::upstream_degraded())?;
-                let mut approvals = Vec::with_capacity(page.approvals.len());
-                for hold in &page.approvals {
-                    approvals.push(approval_json(
-                        hold,
-                        agent
-                            .verified_budget_after(hold, sequence)
-                            .map_err(|_| ApiFailure::upstream_degraded())?,
-                    ));
-                }
-                drop(agent);
-                let filters =
-                    Feed::apply_filters(FilterDraft::new()).map_err(activity_feed_failure)?;
-                let recent_page = self
-                    .feed
-                    .page(&scope, PageRequest::new(20, filters), now()?, sequence)
-                    .map_err(activity_feed_failure)?;
-                let recent = recent_page
-                    .entries()
-                    .iter()
-                    .map(|entry| {
-                        super::production_reads::activity_entry_json(
-                            self.feed,
-                            self.settlement_domain,
-                            &scope,
-                            entry.entry_id(),
-                        )
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(BackendResponse {
-                    result: json!({"balance":balance_json,"agents":agents,"approvals":approvals,"recent_activity":recent}),
-                    session: None,
-                })
-            }
-            "account.balance" => {
-                let balance = self
-                    .agent
-                    .lock()
-                    .map_err(|_| ApiFailure::unavailable())?
-                    .balance()
-                    .map_err(|_| ApiFailure::upstream_degraded())?;
-                let mut material = Vec::with_capacity(
-                    4 + balance.canonical_bytes.len() + balance.proof_material.len(),
-                );
-                material.extend_from_slice(&(balance.observed_at.len() as u32).to_be_bytes());
-                material.extend_from_slice(balance.observed_at.as_bytes());
-                material.extend_from_slice(&balance.age_seconds.to_be_bytes());
-                material.extend_from_slice(
-                    &u32::try_from(balance.canonical_bytes.len())
-                        .map_err(|_| ApiFailure::upstream_degraded())?
-                        .to_be_bytes(),
-                );
-                material.extend_from_slice(&balance.canonical_bytes);
-                material.extend_from_slice(&balance.proof_material);
-                let evidence_digest: [u8; 32] = sha2::Sha256::digest(&material).into();
-                let evidence_id = format!("evd_{}", hex_bytes(&evidence_digest));
-                scope
-                    .put(
-                        Table::Cache,
-                        RowKey::new(format!("state-proof-{}", hex_bytes(&evidence_digest)))
-                            .map_err(|_| ApiFailure::upstream_degraded())?,
-                        now()?,
-                        material,
-                    )
-                    .map_err(|_| ApiFailure::unavailable())?;
-                let verification = if balance.verification >= 4 {
-                    "checkpoint-finalised"
-                } else {
-                    "receipt-verified"
-                };
-                Ok(BackendResponse {
-                    result: json!({"account_id": format!("act_{}", hex_bytes(&balance.account)),
-                        "money": {"amount": balance.amount.to_string(), "currency": balance.currency}, "verification": verification,
-                        "freshness": {"observed_at": balance.observed_at, "age_seconds": balance.age_seconds,
-                            "source_head": balance.observed_head_sequence.to_string(), "within_bound": balance.observed_head_sequence == balance.global_sequence,
-                            "checkpoint": hex_bytes(&balance.observed_checkpoint)},
-                        "evidence": [{"evidence_id": evidence_id, "class": if balance.verification >= 4 {"checkpoint-proof"} else {"layerx-receipt"}, "verification": verification}]
-                    }),
-                    session: None,
-                })
-            }
-            "stream.open" => Ok(BackendResponse {
-                result: self.stream.open(&scope)?,
-                session: None,
-            }),
-            "stream.next" => Ok(BackendResponse {
-                result: self.stream.next(&scope, path(&request, "cursor")?)?,
-                session: None,
-            }),
-            "activity.export.statement" => {
-                let filters = activity_filters(&request.body)?;
-                let head = self
-                    .agent
-                    .lock()
-                    .map_err(|_| ApiFailure::unavailable())?
-                    .head()
-                    .map_err(|_| ApiFailure::upstream_degraded())?;
-                let statement = EvidenceExport::new(self.feed, self.activity_export_maximum_bytes)
-                    .map_err(activity_export_failure)?
-                    .statement(&scope, &filters, now()?, head.chain_sequence)
-                    .map_err(activity_export_failure)?;
-                let digest: [u8; 32] = sha2::Sha256::digest(statement.content()).into();
-                let digest_text = hex_bytes(&digest);
-                scope
-                    .put(
-                        Table::Cache,
-                        RowKey::new(format!("activity-export-{digest_text}"))
-                            .map_err(|_| ApiFailure::upstream_degraded())?,
-                        now()?,
-                        statement.content().to_vec(),
-                    )
-                    .map_err(|_| ApiFailure::unavailable())?;
-                Ok(BackendResponse {
-                    result: json!({"export_id":format!("exp_{digest_text}"),"kind":"statement","download_path":format!("/v1/evidence/evd_{digest_text}"),"content_type":"text/csv; charset=utf-8","created_at":now()?.to_string(),"evidence":[]}),
-                    session: None,
-                })
-            }
-            "activity.export.evidence" => {
-                let filters = activity_filters(&request.body)?;
-                let ids = request
-                    .body
-                    .get("entry_ids")
-                    .and_then(serde_json::Value::as_array)
-                    .ok_or_else(|| ApiFailure::invalid_request(Some("entry_ids")))?
-                    .iter()
-                    .map(|value| {
-                        ActivityEntryId::new(
-                            value
-                                .as_str()
-                                .ok_or_else(|| ApiFailure::invalid_request(Some("entry_ids")))?
-                                .to_owned(),
-                        )
-                        .map_err(|_| ApiFailure::invalid_request(Some("entry_ids")))
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                let mut exports = Vec::new();
-                let mut entries = Vec::new();
-                for id in &ids {
-                    let entry = self
-                        .feed
-                        .entry(&scope, id)
-                        .map_err(activity_feed_failure)?
-                        .ok_or_else(ApiFailure::not_found)?;
-                    for receipt in entry.receipts() {
-                        let canonical = receipt
-                            .canonical()
-                            .ok_or_else(ApiFailure::upstream_degraded)?
-                            .to_vec();
-                        let authority = receipt
-                            .authority()
-                            .copied()
-                            .ok_or_else(ApiFailure::upstream_degraded)?;
-                        let digest: [u8; 32] = sha2::Sha256::digest(&canonical).into();
-                        if hex_bytes(&digest) != receipt.reference() {
-                            return Err(ApiFailure::upstream_degraded());
-                        }
-                        let fact = EvidenceBundle::receipt_fact(id, canonical, authority)
-                            .map_err(|_| ApiFailure::upstream_degraded())?;
-                        exports.push(OfflineExport {
-                            receipts: vec![fact],
-                            inclusions: Vec::new(),
-                            checkpoints: Vec::new(),
-                            derived_aggregates: Vec::new(),
-                        });
-                    }
-                    entries.push(entry);
-                }
-                let receipt_authority = ReceiptAuthority::from_entries(&entries);
-                let head = self
-                    .agent
-                    .lock()
-                    .map_err(|_| ApiFailure::unavailable())?
-                    .head()
-                    .map_err(|_| ApiFailure::upstream_degraded())?;
-                let (bundle, _) =
-                    EvidenceExport::new(self.feed, self.activity_export_maximum_bytes)
-                        .map_err(activity_export_failure)?
-                        .evidence(
-                            &scope,
-                            &filters,
-                            &ids,
-                            exports,
-                            self.settlement_domain,
-                            &receipt_authority,
-                            now()?,
-                            head.chain_sequence,
-                        )
-                        .map_err(activity_export_failure)?;
-                let bytes = bundle.encode().map_err(activity_export_failure)?;
-                let digest: [u8; 32] = sha2::Sha256::digest(&bytes).into();
-                let text = hex_bytes(&digest);
-                let verification = super::production_reads::verification_label(
-                    &verification_status(bundle.verify(
-                        digest,
-                        scope.principal(),
-                        self.settlement_domain,
-                        &receipt_authority,
-                    )),
-                )?;
-                scope
-                    .put(
-                        Table::Cache,
-                        RowKey::new(format!("activity-evidence-{text}"))
-                            .map_err(|_| ApiFailure::upstream_degraded())?,
-                        now()?,
-                        bytes,
-                    )
-                    .map_err(|_| ApiFailure::unavailable())?;
-                Ok(BackendResponse {
-                    result: json!({"export_id":format!("exp_{text}"),"kind":"evidence-bundle","download_path":format!("/v1/evidence/evd_{text}"),"content_type":"application/vnd.layerx.evidence-bundle","created_at":now()?.to_string(),"evidence":bundle.entries().iter().flat_map(|entry|entry.receipt_references().iter()).map(|reference|json!({"evidence_id":format!("evd_{reference}"),"class":"layerx-receipt","verification":verification})).collect::<Vec<_>>() }),
-                    session: None,
-                })
-            }
-            "activity.entry" => super::production_reads::activity_entry(
-                self.feed,
-                self.settlement_domain,
-                &scope,
-                &request,
-            ),
-            "activity.query" => {
-                let filters = activity_filters(&request.body)?;
-                let limit = request
-                    .body
-                    .get("page_limit")
-                    .and_then(serde_json::Value::as_u64)
-                    .map_or(Ok(50usize), |value| {
-                        usize::try_from(value)
-                            .map_err(|_| ApiFailure::invalid_request(Some("page_limit")))
-                    })?;
-                let mut page_request = PageRequest::new(limit, filters);
-                if let Some(cursor) = request
-                    .body
-                    .get("cursor")
-                    .and_then(serde_json::Value::as_str)
-                {
-                    page_request = page_request
-                        .after(FeedCursor::parse(cursor).map_err(activity_feed_failure)?)
-                }
-                let head = self
-                    .agent
-                    .lock()
-                    .map_err(|_| ApiFailure::unavailable())?
-                    .head()
-                    .map_err(|_| ApiFailure::upstream_degraded())?;
-                let page = self
-                    .feed
-                    .page(&scope, page_request, now()?, head.chain_sequence)
-                    .map_err(activity_feed_failure)?;
-                let mut groups = std::collections::BTreeMap::<
-                    u64,
-                    (u128, u128, String, Vec<serde_json::Value>),
-                >::new();
-                for entry in page.entries() {
-                    let mut amount = 0u128;
-                    let mut currency = None;
-                    for receipt in entry.receipts() {
-                        let bytes = receipt
-                            .canonical()
-                            .ok_or_else(ApiFailure::upstream_degraded)?;
-                        let actual =
-                            crate::activity::detail::ReceiptActual::from_verified_journey_bytes(
-                                bytes,
-                                receipt.reference(),
-                            )
-                            .map_err(|_| ApiFailure::upstream_degraded())?;
-                        amount = amount
-                            .checked_add(actual.amount())
-                            .ok_or_else(ApiFailure::upstream_degraded)?;
-                        let asset = hex_bytes(&actual.asset());
-                        if currency.as_ref().is_some_and(|value| value != &asset) {
-                            return Err(ApiFailure::upstream_degraded());
-                        }
-                        currency = Some(asset)
-                    }
-                    let bucket = entry.occurred_at() / 2_629_800;
-                    let group = groups.entry(bucket).or_insert((
-                        0,
-                        0,
-                        currency.clone().unwrap_or_default(),
-                        Vec::new(),
-                    ));
-                    if let Some(currency) = currency {
-                        if !group.2.is_empty() && group.2 != currency {
-                            return Err(ApiFailure::upstream_degraded());
-                        }
-                        group.2 = currency
-                    }
-                    match entry.kind() {
-                        crate::activity::ActivityKind::Deposit => {
-                            group.0 = group
-                                .0
-                                .checked_add(amount)
-                                .ok_or_else(ApiFailure::upstream_degraded)?
-                        }
-                        crate::activity::ActivityKind::Withdrawal => {
-                            group.1 = group
-                                .1
-                                .checked_add(amount)
-                                .ok_or_else(ApiFailure::upstream_degraded)?
-                        }
-                        _ => {
-                            if amount != 0 {
-                                return Err(ApiFailure::upstream_degraded());
-                            }
-                        }
-                    }
-                    group.3.push(json!({"entry_id":entry.entry_id().as_str(),"kind":activity_kind_label(entry.kind()),"state":activity_status_label(entry.status()),"state_copy_key":format!("activity.state.{}",activity_status_label(entry.status())),"summary_copy_key":format!("activity.summary.{}",activity_kind_label(entry.kind())),"occurred_at":entry.occurred_at()}));
-                }
-                let groups=groups.into_iter().rev().map(|(month,(incoming,outgoing,currency,entries))|json!({"month":format!("unix-month-{month}"),"subtotal_in":{"amount":incoming.to_string(),"currency":currency},"subtotal_out":{"amount":outgoing.to_string(),"currency":currency},"entries":entries})).collect::<Vec<_>>();
-                Ok(BackendResponse {
-                    result: json!({"groups":groups,"next_cursor":page.next().map(|value|value.as_str()).unwrap_or(""),"filter":{"kinds":page.applied_filters().kinds().iter().map(|value|activity_kind_label(*value)).collect::<Vec<_>>(),"agent_id":page.applied_filters().agent(),"from":page.applied_filters().from(),"to":page.applied_filters().through()}}),
-                    session: None,
-                })
-            }
-            _ => super::production_reads::execute(
-                self.feed,
-                self.settlement_domain,
-                &scope,
-                &request,
-            )
-            .unwrap_or_else(|| Err(ApiFailure::not_found())),
-        }
+        self.execute_authorized(&request, &mut scope, &principal, &session_id)
     }
 
     fn readiness(&self, _trace: &str) -> Result<Readiness, ApiFailure> {
@@ -3240,7 +747,7 @@ impl ComponentMaintenance for ProductionComponents {
         let mut principals = self
             .auth_index
             .active_principals(observed_at)
-            .map_err(auth_failure)?;
+            .map_err(|error| auth_failure(&error))?;
         let mut store = self.store.lock().map_err(|_| ApiFailure::unavailable())?;
         for principal in store.tenancy().principals() {
             if !principals.contains(&principal) {
@@ -3283,35 +790,32 @@ impl ComponentMaintenance for ProductionComponents {
                     observed_at,
                 );
                 advanced = advanced.saturating_add(1);
-                match outcome {
-                    Ok(terminal) => {
-                        continuation.updated_at = observed_at;
-                        continuation.last_error = None;
-                        continuation.unknown_since = None;
-                        continuation.unknown_deadline_at = None;
-                        continuation.terminal = terminal;
-                        continuation.next_attempt_at = if terminal {
-                            u64::MAX
-                        } else {
-                            observed_at.saturating_add(1)
-                        };
-                    }
-                    Err(_) => {
-                        continuation.attempts = continuation.attempts.saturating_add(1);
-                        continuation.updated_at = observed_at;
-                        continuation.last_error = Some("boundary-outcome-unknown".to_owned());
-                        let unknown_since = continuation.unknown_since.get_or_insert(observed_at);
-                        let deadline = unknown_since
-                            .saturating_add(self.continuation_unknown_deadline_seconds);
-                        continuation.unknown_deadline_at = Some(deadline);
-                        let exponent = continuation.attempts.min(8);
-                        let retry = 1_u64.checked_shl(exponent).unwrap_or(256).min(300);
-                        continuation.next_attempt_at = if observed_at >= deadline {
-                            observed_at.saturating_add(300)
-                        } else {
-                            observed_at.saturating_add(retry).min(deadline)
-                        };
-                    }
+                if let Ok(terminal) = outcome {
+                    continuation.updated_at = observed_at;
+                    continuation.last_error = None;
+                    continuation.unknown_since = None;
+                    continuation.unknown_deadline_at = None;
+                    continuation.terminal = terminal;
+                    continuation.next_attempt_at = if terminal {
+                        u64::MAX
+                    } else {
+                        observed_at.saturating_add(1)
+                    };
+                } else {
+                    continuation.attempts = continuation.attempts.saturating_add(1);
+                    continuation.updated_at = observed_at;
+                    continuation.last_error = Some("boundary-outcome-unknown".to_owned());
+                    let unknown_since = continuation.unknown_since.get_or_insert(observed_at);
+                    let deadline =
+                        unknown_since.saturating_add(self.continuation_unknown_deadline_seconds);
+                    continuation.unknown_deadline_at = Some(deadline);
+                    let exponent = continuation.attempts.min(8);
+                    let retry = 1_u64.checked_shl(exponent).unwrap_or(256).min(300);
+                    continuation.next_attempt_at = if observed_at >= deadline {
+                        observed_at.saturating_add(300)
+                    } else {
+                        observed_at.saturating_add(retry).min(deadline)
+                    };
                 }
                 let bytes = serde_json::to_vec(&continuation)
                     .map_err(|_| ApiFailure::upstream_degraded())?;
@@ -3414,28 +918,7 @@ impl ProductionComponents {
             }
             "exit" => {
                 drop(agent);
-                let mut journey = crate::journeys::ExitJourney::load(scope, id)
-                    .map_err(exit_journey_failure)?
-                    .ok_or_else(ApiFailure::not_found)?;
-                let mut movement = self
-                    .movement
-                    .lock()
-                    .map_err(|_| ApiFailure::unavailable())?;
-                let status = movement
-                    .advance_exit(
-                        scope,
-                        trace,
-                        &self.emergency_exit,
-                        &mut journey,
-                        observed_at,
-                    )
-                    .map_err(exit_journey_failure)?;
-                Ok(matches!(
-                    status.stage(),
-                    crate::journeys::ExitStage::Done(_)
-                        | crate::journeys::ExitStage::Failed(_)
-                        | crate::journeys::ExitStage::UnavailableWhileNetworkOperatingNormally { .. }
-                ))
+                self.advance_exit_continuation(scope, id, trace, observed_at)
             }
             _ => Err(ApiFailure::upstream_degraded()),
         }
@@ -3475,11 +958,9 @@ fn maintenance_trace(
         .concat(),
     )
     .into();
-    TraceId::mint(
-        digest[..16]
-            .try_into()
-            .expect("digest prefix has fixed length"),
-    )
+    let mut prefix = [0; 16];
+    prefix.copy_from_slice(&digest[..16]);
+    TraceId::mint(prefix)
 }
 
 fn response(value: impl serde::Serialize) -> Result<BackendResponse, ApiFailure> {
@@ -3491,7 +972,8 @@ fn response(value: impl serde::Serialize) -> Result<BackendResponse, ApiFailure>
 
 fn activity_filters(body: &serde_json::Value) -> Result<AppliedFilters, ApiFailure> {
     let Some(filter) = body.get("filter") else {
-        return Feed::apply_filters(FilterDraft::new()).map_err(activity_feed_failure);
+        return Feed::apply_filters(FilterDraft::new())
+            .map_err(|error| activity_feed_failure(&error));
     };
     let object = filter
         .as_object()
@@ -3520,10 +1002,10 @@ fn activity_filters(body: &serde_json::Value) -> Result<AppliedFilters, ApiFailu
     let from = object.get("from").and_then(serde_json::Value::as_u64);
     let through = object.get("to").and_then(serde_json::Value::as_u64);
     draft = draft.with_dates(from, through);
-    Feed::apply_filters(draft).map_err(activity_feed_failure)
+    Feed::apply_filters(draft).map_err(|error| activity_feed_failure(&error))
 }
 
-fn activity_feed_failure(error: crate::activity::FeedError) -> ApiFailure {
+fn activity_feed_failure(error: &crate::activity::FeedError) -> ApiFailure {
     match error {
         crate::activity::FeedError::Store(_) => ApiFailure::unavailable(),
         _ => ApiFailure::invalid_request(Some("filter")),
@@ -3532,8 +1014,7 @@ fn activity_feed_failure(error: crate::activity::FeedError) -> ApiFailure {
 
 fn activity_export_failure(error: crate::activity::ExportError) -> ApiFailure {
     match error {
-        crate::activity::ExportError::Feed(value) => activity_feed_failure(value),
-        crate::activity::ExportError::Audit(_) => ApiFailure::upstream_degraded(),
+        crate::activity::ExportError::Feed(value) => activity_feed_failure(&value),
         _ => ApiFailure::upstream_degraded(),
     }
 }
@@ -3553,10 +1034,8 @@ fn activity_status_label(value: crate::activity::ActivityStatus) -> &'static str
         S::GettingReady => "getting-ready",
         S::Sending => "sending",
         S::Processing
-        | S::Deposit(D::ConfirmingOnPaxeer)
-        | S::Deposit(D::Crediting)
-        | S::Withdrawal(W::Processing)
-        | S::Withdrawal(W::WaitingForSettlement) => "processing",
+        | S::Deposit(D::ConfirmingOnPaxeer | D::Crediting)
+        | S::Withdrawal(W::Processing | W::WaitingForSettlement) => "processing",
         S::StillChecking => "still-checking",
         S::WaitingForYou | S::Deposit(D::WaitingForWallet) | S::Withdrawal(W::ReadyToClaim) => {
             "waiting-for-you"
@@ -3604,33 +1083,69 @@ fn money_field<'a>(body: &'a serde_json::Value, name: &str) -> Result<(u128, &'a
 }
 
 fn movement_request(
+    components: &ProductionComponents,
     request: &ScopedRequest<'_>,
-    principal: &crate::store::PrincipalId,
-    tenant: crate::store::AgentTenantId,
+    scope: &mut crate::store::PrincipalScope<'_>,
     observed_at: u64,
 ) -> Result<super::movement_provider::PlanningRequest, ApiFailure> {
     let canonical_body =
         serde_json::to_vec(&request.body).map_err(|_| ApiFailure::invalid_request(None))?;
     let trace = TraceId::parse(&request.trace).map_err(|_| ApiFailure::invalid_request(None))?;
-    Ok(super::movement_provider::PlanningRequest {
-        principal: principal.clone(),
-        tenant,
+    let idempotency_key = request.idempotency_key.as_deref().map_or_else(
+        || {
+            action_key(&format!(
+                "{}:{}",
+                request.operation.name,
+                hex_bytes(&sha2::Sha256::digest(&canonical_body))
+            ))
+        },
+        action_key,
+    );
+    let codec =
+        NativeMovementCodec::for_protocol(components.protocol_version).map_err(movement_failure)?;
+    let key = RowKey::new(format!(
+        "movement-authority-{}",
+        hex_bytes(&idempotency_key)
+    ))
+    .map_err(|_| ApiFailure::upstream_degraded())?;
+    if let Some(existing) = scope.get(Table::Journeys, &key) {
+        let prior = super::movement_provider::MovementProviderCodec::decode_request(
+            &codec,
+            existing.bytes(),
+        )
+        .map_err(movement_failure)?;
+        let super::movement_provider::MovementProviderRequest::PlanMove(prior) = prior else {
+            return Err(ApiFailure::upstream_degraded());
+        };
+        if prior.canonical_body != canonical_body
+            || prior.operation != request.operation.name
+            || prior.principal != *scope.principal()
+            || prior.tenant != *scope.tenant()
+        {
+            return Err(ApiFailure::forbidden());
+        }
+        return Ok(prior);
+    }
+    let context = resolve_movement_context(components, request, scope, observed_at)?;
+    let planning = super::movement_provider::PlanningRequest {
+        principal: scope.principal().clone(),
+        tenant: scope.tenant().clone(),
+        context,
         operation: request.operation.name.clone(),
-        idempotency_key: request
-            .idempotency_key
-            .as_deref()
-            .map(action_key)
-            .unwrap_or_else(|| {
-                action_key(&format!(
-                    "{}:{}",
-                    request.operation.name,
-                    hex_bytes(&sha2::Sha256::digest(&canonical_body))
-                ))
-            }),
+        idempotency_key,
         canonical_body,
         trace,
         now: observed_at,
-    })
+    };
+    let encoded = super::movement_provider::MovementProviderCodec::encode_request(
+        &codec,
+        &super::movement_provider::MovementProviderRequest::PlanMove(planning.clone()),
+    )
+    .map_err(movement_failure)?;
+    scope
+        .put(Table::Journeys, key, observed_at, encoded)
+        .map_err(|_| ApiFailure::unavailable())?;
+    Ok(planning)
 }
 
 fn action_key(value: &str) -> [u8; 32] {
@@ -3651,8 +1166,7 @@ fn move_quote_json(value: &super::movement_provider::AuthorizedMovePlan) -> serd
         .route()
         .legs()
         .first()
-        .map(|leg| leg.term().as_str())
-        .unwrap_or("transfer");
+        .map_or("transfer", |leg| leg.term().as_str());
     json!({"quote_id": value.quote_id, "description_copy_key": "movement.review.resolved-route",
         "mechanism": mechanism, "money": {"amount": quote.amount().to_string(), "currency": quote.asset_label()},
         "fee_estimate": {"amount": quote.fee_estimate().to_string(), "currency": quote.asset_label()},
@@ -3750,7 +1264,7 @@ fn public_journey(
     id: &crate::notify::JourneyId,
     state: &str,
     copy: &str,
-    evidence: Vec<serde_json::Value>,
+    evidence: &[serde_json::Value],
     now: u64,
 ) -> Result<serde_json::Value, ApiFailure> {
     let (started_at, updated_at) = continuation_times(scope, kind, id, now)?;
@@ -3793,7 +1307,7 @@ fn move_public_json(
         status.journey_id(),
         state,
         "movement.stage.progress",
-        evidence,
+        &evidence,
         now,
     )
 }
@@ -3833,7 +1347,7 @@ fn deposit_public_json(
         status.journey_id(),
         state,
         copy,
-        evidence,
+        &evidence,
         now,
     )
 }
@@ -3865,7 +1379,7 @@ fn withdrawal_public_json(
         status.journey_id(),
         state,
         "withdraw.stage.progress",
-        evidence,
+        &evidence,
         now,
     )
 }
@@ -3894,7 +1408,7 @@ fn exit_public_json(
         status.journey_id(),
         state,
         "exit.stage.progress",
-        evidence,
+        &evidence,
         now,
     )
 }
@@ -3966,8 +1480,11 @@ fn required_idempotency<'a>(request: &'a ScopedRequest<'_>) -> Result<&'a str, A
         .ok_or_else(|| ApiFailure::invalid_request(Some("Idempotency-Key")))
 }
 
-fn support_failure(error: crate::support::SupportError) -> ApiFailure {
-    use crate::support::SupportError::*;
+fn support_failure(error: &crate::support::SupportError) -> ApiFailure {
+    use crate::support::SupportError::{
+        Conflict, ConversationFull, ConversationResolved, ConversationUnknown, Corrupt,
+        InvalidBody, InvalidIdempotencyKey, MessageUnknown, Store,
+    };
     match error {
         ConversationUnknown | MessageUnknown => ApiFailure::not_found(),
         Store(_) => ApiFailure::unavailable(),
@@ -3978,7 +1495,7 @@ fn support_failure(error: crate::support::SupportError) -> ApiFailure {
     }
 }
 
-fn auth_api_failure(error: crate::auth::AuthError) -> ApiFailure {
+fn auth_api_failure(error: &crate::auth::AuthError) -> ApiFailure {
     match error {
         crate::auth::AuthError::Unauthenticated => ApiFailure::unauthenticated(),
         crate::auth::AuthError::SessionExpired => ApiFailure::session_expired(),
@@ -3988,20 +1505,19 @@ fn auth_api_failure(error: crate::auth::AuthError) -> ApiFailure {
     }
 }
 
-fn agent_creation_failure(error: crate::agents::AgentCreationError) -> ApiFailure {
+fn agent_creation_failure(error: &crate::agents::AgentCreationError) -> ApiFailure {
     use crate::agents::AgentCreationError;
     match error {
         AgentCreationError::InvalidRequest
         | AgentCreationError::InvalidContext
         | AgentCreationError::UnknownPurpose => ApiFailure::invalid_request(None),
-        AgentCreationError::IdempotencyConflict | AgentCreationError::EvidenceConflict => {
+        AgentCreationError::IdempotencyConflict
+        | AgentCreationError::EvidenceConflict
+        | AgentCreationError::Agent(crate::agents::AgentFailure::Refused(_)) => {
             ApiFailure::forbidden()
         }
         AgentCreationError::Agent(crate::agents::AgentFailure::Unavailable) => {
             ApiFailure::upstream_degraded()
-        }
-        AgentCreationError::Agent(crate::agents::AgentFailure::Refused(_)) => {
-            ApiFailure::forbidden()
         }
         _ => ApiFailure::upstream_degraded(),
     }
@@ -4037,7 +1553,7 @@ fn agent_creation_json(
     })
 }
 
-fn identity_failure(error: identity_dispatch::IdentityDispatchError) -> ApiFailure {
+fn identity_failure(error: &identity_dispatch::IdentityDispatchError) -> ApiFailure {
     match error {
         identity_dispatch::IdentityDispatchError::InvalidInput => ApiFailure::invalid_request(None),
         identity_dispatch::IdentityDispatchError::NotFound => ApiFailure::not_found(),
@@ -4053,7 +1569,7 @@ fn identity_failure(error: identity_dispatch::IdentityDispatchError) -> ApiFailu
     }
 }
 
-fn notify_failure(error: crate::notify::NotifyError) -> ApiFailure {
+fn notify_failure(error: &crate::notify::NotifyError) -> ApiFailure {
     match error {
         crate::notify::NotifyError::NotificationNotFound => ApiFailure::not_found(),
         crate::notify::NotifyError::Store(_) | crate::notify::NotifyError::Audit(_) => {
@@ -4158,8 +1674,12 @@ fn timed_secret_json(secret: &crate::security::TimedSecret) -> serde_json::Value
     json!({"value": secret.expose(), "remask_at": secret.remask_at(), "copyable": secret.copyable()})
 }
 
-fn auth_failure(error: super::production_auth::ProductionAuthError) -> ApiFailure {
-    use super::production_auth::ProductionAuthError::*;
+fn auth_failure(error: &super::production_auth::ProductionAuthError) -> ApiFailure {
+    use super::production_auth::ProductionAuthError::{
+        Auth, CapabilityRefused, CapabilitySpent, Conflict, Entropy, IndexAuthentication,
+        InvalidConfiguration, InvalidDisclosure, Io, SessionExpired, Store, Unauthenticated,
+        Unavailable, UnclassifiedOperation,
+    };
     match error {
         Unauthenticated => ApiFailure::unauthenticated(),
         SessionExpired => ApiFailure::session_expired(),
@@ -4294,8 +1814,7 @@ fn approval_json(
         .counterparties
         .values()
         .first()
-        .map(|value| value.as_str())
-        .unwrap_or("unavailable");
+        .map_or("unavailable", AgentDid::as_str);
     let amount = hold
         .held_activity
         .amounts
@@ -4317,10 +1836,9 @@ fn approval_json(
 }
 
 fn append_approval_stream(
-    stream: &super::stream_journal::StreamJournal,
     scope: &mut crate::store::PrincipalScope<'_>,
     hold: &AgentApprovalRecord,
-    value: serde_json::Value,
+    value: &serde_json::Value,
     sequence: u64,
 ) -> Result<(), ApiFailure> {
     let (state, kind) = match hold.state {
@@ -4331,7 +1849,7 @@ fn append_approval_stream(
             ("expired", "approval-expired")
         }
     };
-    stream.append(
+    super::stream_journal::StreamJournal::append(
         scope,
         &format!(
             "approval:{}:{state}",
@@ -4405,4 +1923,3476 @@ fn configured_protocol() -> Result<u16, String> {
             Err("LAYERX_HUMAN_PROTOCOL_VERSION is invalid".to_owned())
         }
     }
+}
+
+fn finality_minimum_agreement() -> Result<usize, String> {
+    let minimum: usize = number("LAYERX_HUMAN_PAXEER_MINIMUM_AGREEMENT")?;
+    if minimum < 2 {
+        return Err("Paxeer finality requires at least two independent endpoints".to_owned());
+    }
+    Ok(minimum)
+}
+
+fn finality_endpoints() -> Result<Vec<EndpointConfig>, String> {
+    let urls: Vec<String> = serde_json::from_str(&required("LAYERX_HUMAN_PAXEER_RPC_URLS")?)
+        .map_err(|_| "LAYERX_HUMAN_PAXEER_RPC_URLS must be a JSON array".to_owned())?;
+    let minimum = finality_minimum_agreement()?;
+    if urls.len() < minimum {
+        return Err("Paxeer finality endpoint count is below the required agreement".to_owned());
+    }
+    let mut authorities = std::collections::BTreeSet::new();
+    let mut endpoints = Vec::with_capacity(urls.len());
+    for url in urls {
+        if !authorities.insert(finality_host(&url)?) {
+            return Err("Paxeer finality endpoints must have independent hosts".to_owned());
+        }
+        endpoints.push(EndpointConfig {
+            url,
+            request_timeout: Duration::from_secs(number(
+                "LAYERX_HUMAN_PAXEER_RPC_TIMEOUT_SECONDS",
+            )?),
+            transport: EndpointTransport::PinnedTls {
+                trust_anchor_der: read_nonempty(&absolute(
+                    "LAYERX_HUMAN_PAXEER_TRUST_ANCHOR_DER",
+                )?)?,
+            },
+            expected_chain_id: number("LAYERX_HUMAN_PAXEER_CHAIN_ID")?,
+        });
+    }
+    Ok(endpoints)
+}
+
+fn resolve_movement_context(
+    components: &ProductionComponents,
+    request: &ScopedRequest<'_>,
+    scope: &crate::store::PrincipalScope<'_>,
+    observed_at: u64,
+) -> Result<super::movement_provider::PlanningContext, ApiFailure> {
+    let (actor, account) = movement_principal_account(scope)?;
+    let key =
+        crate::custody::KeyId::new("human-primary").map_err(|_| ApiFailure::upstream_degraded())?;
+    let descriptor = components
+        .custody
+        .describe_key(scope.principal(), &key)
+        .map_err(|_| ApiFailure::forbidden())?;
+    let mut agent = components
+        .agent
+        .lock()
+        .map_err(|_| ApiFailure::unavailable())?;
+    let identity = agent
+        .identity_resolve(actor.as_str())
+        .map_err(agent_failure)?;
+    if identity.frozen
+        || identity.verification < 3
+        || !identity
+            .authorities
+            .iter()
+            .any(|(_, public)| *public == descriptor.public_key)
+        || identity.canonical_bytes.is_empty()
+    {
+        return Err(ApiFailure::forbidden());
+    }
+    let active = movement_active_binding(scope, agent.registry(), components.network_id)?;
+    let wallet = components
+        .custody
+        .evm_wallet(scope.principal(), &key)
+        .map_err(|_| ApiFailure::upstream_degraded())?;
+    if wallet != active.address() {
+        return Err(ApiFailure::forbidden());
+    }
+    let balance = agent.balance().map_err(agent_failure)?;
+    if balance.account != movement_account_address(&account, components.protocol_version)?
+        || balance.global_sequence != balance.observed_head_sequence
+        || balance.age_seconds > components.activity_freshness_seconds
+    {
+        return Err(ApiFailure::forbidden());
+    }
+    let (amount, currency) = if request.operation.name == "exit.start" {
+        (balance.amount, balance.currency.as_str())
+    } else {
+        money_field(&request.body, "money")?
+    };
+    if currency != balance.currency || amount == 0 {
+        return Err(ApiFailure::invalid_request(Some("money")));
+    }
+    let authority = components.agent_authority.clone();
+    let account_sequence = agent
+        .account_sequence(&actor, &authority)
+        .map_err(agent_failure)?;
+    let not_after = observed_at
+        .checked_add(components.agent_timestamp_span_seconds)
+        .ok_or_else(ApiFailure::unavailable)?;
+    let provider_reference = components
+        .custody
+        .evm_provider_reference(scope.principal(), &key)
+        .map_err(|_| ApiFailure::upstream_degraded())?;
+    let custody_binding = components
+        .custody
+        .evm_binding(scope.principal(), &key)
+        .map_err(|_| ApiFailure::upstream_degraded())?;
+    let mut context = super::movement_provider::PlanningContext {
+        account,
+        reserve: AccountId::parse("system:paxeer-reserve")
+            .map_err(|_| ApiFailure::upstream_degraded())?,
+        withdrawals_account: AccountId::parse("system:paxeer-withdrawals")
+            .map_err(|_| ApiFailure::upstream_degraded())?,
+        route: None,
+        amount: ProtocolAmount::from_u128(amount),
+        asset: AssetId::new(balance.asset),
+        currency: currency.to_owned(),
+        actor,
+        authority,
+        custody_key: key,
+        custody_provider_reference: provider_reference.as_bytes().to_vec(),
+        custody_binding_digest: custody_binding.digest(),
+        wallet: EvmAddress::new(wallet),
+        network: layerx_types::intent::NetworkId::new(components.network_id)
+            .map_err(|_| ApiFailure::upstream_degraded())?,
+        protocol_version: components.protocol_version,
+        paxeer_chain_id: components.settlement_chain_id,
+        account_sequence,
+        budget_grant: None,
+        fee_limit: components.agent_fee_limit,
+        evm_gas_limit: components.evm_gas_limit,
+        evm_max_fee_per_gas: components.evm_max_fee_per_gas,
+        evm_max_priority_fee_per_gas: components.evm_max_priority_fee_per_gas,
+        not_before: observed_at,
+        not_after,
+        binding_receipt_digest: active.receipt_digest(),
+        identity_authority_evidence: identity.canonical_bytes,
+        balance_evidence: balance.proof_material,
+    };
+    if request.operation.name == "move.quote" {
+        resolve_budget_movement(components, &mut context, request, scope, &mut agent)?;
+    }
+    Ok(context)
+}
+
+fn resolve_budget_movement(
+    components: &ProductionComponents,
+    context: &mut super::movement_provider::PlanningContext,
+    request: &ScopedRequest<'_>,
+    scope: &crate::store::PrincipalScope<'_>,
+    agent: &mut super::agent_runtime::AgentRuntime,
+) -> Result<(), ApiFailure> {
+    let source = text_field(&request.body, "source")?;
+    let destination = text_field(&request.body, "destination")?;
+    let account_alias = format!(
+        "act_{}",
+        hex_bytes(&movement_account_address(
+            &context.account,
+            context.protocol_version
+        )?)
+    );
+    let funding = source == account_alias || source == context.account.canonical();
+    let returning = destination == account_alias || destination == context.account.canonical();
+    if funding == returning {
+        return Err(ApiFailure::forbidden());
+    }
+    if funding && destination.starts_with("agent:") && destination.ends_with(":main") {
+        return resolve_direct_movement(components, context, destination, scope, agent);
+    }
+    let managed_alias = if funding { destination } else { source };
+    let managed_id = managed_protocol_identity(managed_alias)?;
+    if !CreationJourney::list(scope)
+        .map_err(|_| ApiFailure::upstream_degraded())?
+        .iter()
+        .any(|journey| journey.agent_id() == managed_id)
+    {
+        return Err(ApiFailure::forbidden());
+    }
+    let managed = agent.agent_context(managed_alias).map_err(agent_failure)?;
+    if managed.seed.owner_account != context.account.canonical()
+        || managed.seed.budget_asset != context.asset.bytes()
+        || managed.seed.currency != context.currency
+        || managed.protocol_grant_id == [0; 32]
+    {
+        return Err(ApiFailure::forbidden());
+    }
+    let state = agent
+        .agent_budget_state(managed.active_budget_id)
+        .map_err(agent_failure)?;
+    if state.asset != context.asset.bytes()
+        || state.age_sequences > state.maximum_age_sequences
+        || (!funding && state.remaining < context.amount.value())
+    {
+        return Err(ApiFailure::forbidden());
+    }
+    let human = crate::journeys::Endpoint::human(context.account.clone())
+        .map_err(|_| ApiFailure::upstream_degraded())?;
+    let budget = crate::journeys::Endpoint::agent_budget(
+        AccountId::parse(&managed.seed.budget_account)
+            .map_err(|_| ApiFailure::upstream_degraded())?,
+    )
+    .map_err(|_| ApiFailure::upstream_degraded())?;
+    let key = request.idempotency_key.as_deref().map_or_else(
+        || {
+            action_key(&format!(
+                "{}:{}:{}:{}",
+                source,
+                destination,
+                context.amount.value(),
+                context.currency
+            ))
+        },
+        action_key,
+    );
+    context.route = Some(
+        crate::journeys::RouteRequest::from_wire_parts(
+            if funding {
+                human.clone()
+            } else {
+                budget.clone()
+            },
+            if funding { budget } else { human },
+            crate::journeys::Relationship::ManagedBudget(crate::journeys::BudgetRoute {
+                budget_id: BudgetId::new(managed.active_budget_id),
+                idempotency_key: IdempotencyKey::new(key),
+                revocation_sequence: ProtocolSequence::from_u64(state.revocation_sequence),
+                create: None,
+            }),
+            context.asset,
+            context.amount,
+        )
+        .map_err(|_| ApiFailure::forbidden())?,
+    );
+    context.budget_grant = Some(super::movement_provider::PlanningBudgetGrant {
+        budget: BudgetId::new(managed.active_budget_id),
+        grant: AuthorityGrantId::new(managed.protocol_grant_id),
+    });
+    Ok(())
+}
+
+fn resolve_direct_movement(
+    components: &ProductionComponents,
+    context: &mut super::movement_provider::PlanningContext,
+    destination: &str,
+    scope: &crate::store::PrincipalScope<'_>,
+    agent: &mut AgentRuntime,
+) -> Result<(), ApiFailure> {
+    let to = AccountId::parse(destination)
+        .map_err(|_| ApiFailure::invalid_request(Some("destination")))?;
+    let recipient_did = destination
+        .strip_prefix("agent:")
+        .and_then(|value| value.strip_suffix(":main"))
+        .ok_or_else(ApiFailure::forbidden)?;
+    let recipient = agent
+        .identity_resolve(recipient_did)
+        .map_err(agent_failure)?;
+    if recipient.frozen || recipient.verification < 3 || recipient.canonical_bytes.is_empty() {
+        return Err(ApiFailure::forbidden());
+    }
+    let action = action_key(&format!(
+        "{}:{}:{}:{}:{}",
+        scope.principal().as_str(),
+        context.account.canonical(),
+        destination,
+        context.amount.value(),
+        context.not_before
+    ));
+    let context_hash = action_key(&format!(
+        "{}:{}",
+        scope.tenant().as_str(),
+        hex_bytes(&context.binding_receipt_digest)
+    ));
+    let signed = crate::custody::SendPlanAuthorization {
+        plan_id: action,
+        action_key: action,
+        principal: scope.principal().as_str().to_owned(),
+        tenant: scope.tenant().as_str().to_owned(),
+        binding_digest: context.custody_binding_digest,
+        from: movement_account_address(&context.account, context.protocol_version)?,
+        to: movement_account_address(&to, context.protocol_version)?,
+        asset: context.asset.bytes(),
+        amount: context.amount.value(),
+        sequence: context.account_sequence,
+        idempotency_key: action,
+        expires_at: context.not_after,
+        not_before: context.not_before,
+        not_after: context.not_after,
+        context: context_hash,
+        network: context.network.value(),
+        protocol: context.protocol_version,
+    };
+    let signature = components
+        .custody
+        .authorize_send(scope.principal(), &context.custody_key, &signed)
+        .map_err(|_| ApiFailure::forbidden())?;
+    let descriptor = components
+        .custody
+        .describe_key(scope.principal(), &context.custody_key)
+        .map_err(|_| ApiFailure::forbidden())?;
+    context.route = Some(
+        crate::journeys::RouteRequest::from_wire_parts(
+            crate::journeys::Endpoint::human(context.account.clone())
+                .map_err(|_| ApiFailure::forbidden())?,
+            crate::journeys::Endpoint::human(to).map_err(|_| ApiFailure::forbidden())?,
+            crate::journeys::Relationship::Direct(crate::journeys::SendRoute {
+                account_sequence: ProtocolSequence::from_u64(context.account_sequence),
+                idempotency_key: IdempotencyKey::new(action),
+                expires_at: TimestampSeconds::from_u64(context.not_after),
+                context_hash: layerx_types::intent::ContextHash::new(context_hash),
+                authorization: layerx_types::intent::SendAuthorization::new(
+                    layerx_types::intent::SendAuthorizationKind::Owner,
+                    PublicKey::new(descriptor.public_key),
+                    layerx_types::intent::AuthorizationSignature::new(signature),
+                ),
+                network_id: context.network,
+                protocol_version: layerx_types::intent::ProtocolVersion::new(
+                    context.protocol_version,
+                )
+                .map_err(|_| ApiFailure::forbidden())?,
+            }),
+            context.asset,
+            context.amount,
+        )
+        .map_err(|_| ApiFailure::forbidden())?,
+    );
+    Ok(())
+}
+
+impl ProductionComponents {
+    fn execute_agent_create(
+        &self,
+        request: &ScopedRequest<'_>,
+        scope: &mut crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let current = now()?;
+        let limit = request
+            .body
+            .get("monthly_limit")
+            .ok_or_else(|| ApiFailure::invalid_request(Some("monthly_limit")))?;
+        let amount = text_field(limit, "amount")?
+            .parse::<u128>()
+            .map_err(|_| ApiFailure::invalid_request(Some("monthly_limit")))?;
+        let creation = CreateAgentRequest::new(
+            text_field(&request.body, "name")?,
+            text_field(&request.body, "purpose")?,
+            amount,
+            text_field(limit, "currency")?,
+        )
+        .map_err(|_| ApiFailure::invalid_request(None))?;
+        let idempotency_key: [u8; 32] =
+            Sha256::digest(required_idempotency(request)?.as_bytes()).into();
+        let creation_context = CreationContext {
+            idempotency_key,
+            owner_account: self.agent_owner_account.clone(),
+            human_recovery_root: self.agent_recovery_root,
+            recovery_threshold: self.agent_recovery_threshold,
+            network_id: self.network_id,
+            protocol_time: current,
+        };
+        let mut journey = CreationJourney::start(
+            scope,
+            &creation,
+            &creation_context,
+            &self.agent_purpose_catalog,
+            current,
+        )
+        .map_err(|error| agent_creation_failure(&error))?;
+        let trace =
+            TraceId::parse(&request.trace).map_err(|_| ApiFailure::invalid_request(None))?;
+        let mut runtime = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
+        let registry = runtime.registry().clone();
+        let mut adapter = ProductionAgentCreation::new(
+            &mut runtime,
+            &self.agent_contract,
+            &self.custody,
+            &trace,
+            self.agent_actor.clone(),
+            self.agent_authority.clone(),
+            super::agent_creation::CreationBounds {
+                timestamp_span: self.agent_timestamp_span_seconds,
+                fee_limit: self.agent_fee_limit,
+            },
+        )
+        .map_err(|_| ApiFailure::upstream_degraded())?;
+        let status = journey
+            .resume(
+                scope,
+                self.custody.creation_keystore(),
+                &registry,
+                &mut adapter,
+                current,
+            )
+            .map_err(|error| agent_creation_failure(&error))?;
+        if matches!(status.state, crate::agents::CreationState::Active) {
+            adapter
+                .publish_creation(&journey.projection())
+                .map_err(|_| ApiFailure::upstream_degraded())?;
+        }
+        Ok(BackendResponse {
+            result: agent_creation_json(&journey, &status),
+            session: None,
+        })
+    }
+
+    fn execute_agent_list(&self) -> Result<BackendResponse, ApiFailure> {
+        let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
+        let page = agent.agent_list(None, 100).map_err(agent_failure)?;
+        Ok(BackendResponse {
+            result: json!({"agents": page.agents.iter().map(managed_agent_json).collect::<Vec<_>>(), "next_cursor": page.next_cursor.map(|value| URL_SAFE_NO_PAD.encode(value)).unwrap_or_default()}),
+            session: None,
+        })
+    }
+
+    fn execute_agent_get(
+        &self,
+        request: &ScopedRequest<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
+        let value = agent
+            .agent_get(path(request, "agent_id")?)
+            .map_err(agent_failure)?;
+        Ok(BackendResponse {
+            result: managed_agent_json(&value),
+            session: None,
+        })
+    }
+
+    fn execute_agent_pause(
+        &self,
+        request: &ScopedRequest<'_>,
+        scope: &mut crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        if request.operation.name == "agent.resume" {
+            return self.execute_agent_resume(request, scope);
+        }
+        let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
+        let agent_id = path(request, "agent_id")?;
+        let context = agent.agent_context(agent_id).map_err(agent_failure)?;
+        let session = agent
+            .agent_session_snapshot(agent_id)
+            .map_err(agent_failure)?;
+        if session.agent_did != context.agent_did {
+            return Err(ApiFailure::upstream_degraded());
+        }
+        let operation_key = action_key(required_idempotency(request)?);
+        let effective_sequence = agent
+            .head()
+            .map_err(agent_failure)?
+            .chain_sequence
+            .checked_add(1)
+            .ok_or_else(ApiFailure::upstream_degraded)?;
+        let intent = Intent::v1(IntentKind::SessionRevoke(
+            SessionRevoke::new(
+                AuthorityGrantId::new(context.protocol_grant_id),
+                SessionRevocationReason::Paused,
+                ProtocolSequence::from_u64(effective_sequence),
+            )
+            .map_err(|_| ApiFailure::upstream_degraded())?,
+        ));
+        let trace =
+            TraceId::parse(&request.trace).map_err(|_| ApiFailure::invalid_request(None))?;
+        let registry = agent.registry().clone();
+        let current = now()?;
+        let mut adapter = ProductionAgentCreation::new(
+            &mut agent,
+            &self.agent_contract,
+            &self.custody,
+            &trace,
+            AgentDid::new(context.seed.actor.clone())
+                .map_err(|_| ApiFailure::upstream_degraded())?,
+            AuthorityRef::new(context.seed.primary_authority.clone())
+                .map_err(|_| ApiFailure::upstream_degraded())?,
+            super::agent_creation::CreationBounds {
+                timestamp_span: self.agent_timestamp_span_seconds,
+                fee_limit: self.agent_fee_limit,
+            },
+        )
+        .map_err(|_| ApiFailure::upstream_degraded())?;
+        let receipt = adapter
+            .submit_lifecycle_intent(
+                scope,
+                &registry,
+                intent,
+                operation_key,
+                KeyId::new(context.seed.custody_key)
+                    .map_err(|_| ApiFailure::upstream_degraded())?,
+                current,
+            )
+            .map_err(|_| ApiFailure::upstream_degraded())?;
+        let evidence = ProductionAgentCreation::finalization_evidence(
+            &receipt,
+            ModuleId::Governance,
+            6,
+            now()?,
+        )
+        .map_err(|_| ApiFailure::upstream_degraded())?;
+        let observation = agent
+            .agent_session_suspend(agent_id, operation_key)
+            .map_err(agent_failure)?;
+        let value = agent
+            .agent_control(agent_id, false, observation.evidence_digest, evidence)
+            .map_err(agent_failure)?;
+        Ok(BackendResponse {
+            result: managed_agent_json(&value),
+            session: None,
+        })
+    }
+
+    fn execute_agent_limit(
+        &self,
+        request: &ScopedRequest<'_>,
+        scope: &mut crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let (amount, currency) = money_field(&request.body, "monthly_limit")?;
+        let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
+        let agent_id = path(request, "agent_id")?;
+        let context = agent.agent_context(agent_id).map_err(agent_failure)?;
+        if context.seed.currency != currency {
+            return Err(ApiFailure::invalid_request(Some("monthly_limit")));
+        }
+        let operation_key = action_key(required_idempotency(request)?);
+        let replacement_budget_id: [u8; 32] = Sha256::digest(
+            [
+                b"layerx-human/agent-limit-budget/v1".as_slice(),
+                context.active_budget_id.as_slice(),
+                operation_key.as_slice(),
+            ]
+            .concat(),
+        )
+        .into();
+        let intent = Intent::v1(IntentKind::BudgetCreate(
+            BudgetCreate::new(
+                BudgetId::new(replacement_budget_id),
+                AccountId::parse(&context.seed.owner_account)
+                    .map_err(|_| ApiFailure::upstream_degraded())?,
+                AccountId::parse(&context.seed.budget_account)
+                    .map_err(|_| ApiFailure::upstream_degraded())?,
+                AssetId::new(context.seed.budget_asset),
+                ProtocolAmount::from_u128(amount),
+                PeriodLength::new(context.seed.budget_period_seconds)
+                    .map_err(|_| ApiFailure::upstream_degraded())?,
+                RolloverPolicy::None,
+                ProtocolAmount::ZERO,
+                PurposeHash::new(context.seed.purpose_hash),
+                TimestampSeconds::from_u64(
+                    now()?
+                        .checked_add(context.seed.budget_expiry_seconds)
+                        .ok_or_else(ApiFailure::upstream_degraded)?,
+                ),
+            )
+            .map_err(|_| ApiFailure::upstream_degraded())?,
+        ));
+        let trace =
+            TraceId::parse(&request.trace).map_err(|_| ApiFailure::invalid_request(None))?;
+        let registry = agent.registry().clone();
+        let current = now()?;
+        let mut adapter = ProductionAgentCreation::new(
+            &mut agent,
+            &self.agent_contract,
+            &self.custody,
+            &trace,
+            AgentDid::new(context.seed.actor.clone())
+                .map_err(|_| ApiFailure::upstream_degraded())?,
+            AuthorityRef::new(context.seed.primary_authority.clone())
+                .map_err(|_| ApiFailure::upstream_degraded())?,
+            super::agent_creation::CreationBounds {
+                timestamp_span: self.agent_timestamp_span_seconds,
+                fee_limit: self.agent_fee_limit,
+            },
+        )
+        .map_err(|_| ApiFailure::upstream_degraded())?;
+        let receipt = adapter
+            .submit_lifecycle_intent(
+                scope,
+                &registry,
+                intent,
+                operation_key,
+                KeyId::new(context.seed.custody_key)
+                    .map_err(|_| ApiFailure::upstream_degraded())?,
+                current,
+            )
+            .map_err(|_| ApiFailure::upstream_degraded())?;
+        let evidence =
+            ProductionAgentCreation::finalization_evidence(&receipt, ModuleId::Budget, 1, now()?)
+                .map_err(|_| ApiFailure::upstream_degraded())?;
+        let value = agent
+            .agent_limit(agent_id, amount, currency, replacement_budget_id, evidence)
+            .map_err(agent_failure)?;
+        Ok(BackendResponse {
+            result: managed_agent_json(&value),
+            session: None,
+        })
+    }
+
+    fn execute_agent_reclaim(
+        &self,
+        request: &ScopedRequest<'_>,
+        scope: &mut crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let (amount, currency) = money_field(&request.body, "money")?;
+        let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
+        let agent_id = path(request, "agent_id")?;
+        let context = agent.agent_context(agent_id).map_err(agent_failure)?;
+        if context.seed.currency != currency {
+            return Err(ApiFailure::invalid_request(Some("money")));
+        }
+        let operation_key = action_key(required_idempotency(request)?);
+        let budget_state = agent
+            .agent_budget_state(context.active_budget_id)
+            .map_err(agent_failure)?;
+        if budget_state.asset != context.seed.budget_asset || budget_state.remaining < amount {
+            return Err(ApiFailure::invalid_request(Some("money")));
+        }
+        let intent = Intent::v1(IntentKind::BudgetDefund(
+            BudgetDefund::new(
+                BudgetId::new(context.active_budget_id),
+                AccountId::parse(&context.seed.budget_account)
+                    .map_err(|_| ApiFailure::upstream_degraded())?,
+                AccountId::parse(&context.seed.owner_account)
+                    .map_err(|_| ApiFailure::upstream_degraded())?,
+                AssetId::new(context.seed.budget_asset),
+                ProtocolAmount::from_u128(amount),
+                ProtocolSequence::from_u64(budget_state.revocation_sequence),
+                IdempotencyKey::new(operation_key),
+            )
+            .map_err(|_| ApiFailure::upstream_degraded())?,
+        ));
+        let trace =
+            TraceId::parse(&request.trace).map_err(|_| ApiFailure::invalid_request(None))?;
+        let registry = agent.registry().clone();
+        let current = now()?;
+        let mut adapter = ProductionAgentCreation::new(
+            &mut agent,
+            &self.agent_contract,
+            &self.custody,
+            &trace,
+            AgentDid::new(context.seed.actor.clone())
+                .map_err(|_| ApiFailure::upstream_degraded())?,
+            AuthorityRef::new(context.seed.primary_authority.clone())
+                .map_err(|_| ApiFailure::upstream_degraded())?,
+            super::agent_creation::CreationBounds {
+                timestamp_span: self.agent_timestamp_span_seconds,
+                fee_limit: self.agent_fee_limit,
+            },
+        )
+        .map_err(|_| ApiFailure::upstream_degraded())?;
+        let receipt = adapter
+            .submit_lifecycle_intent(
+                scope,
+                &registry,
+                intent,
+                operation_key,
+                KeyId::new(context.seed.custody_key)
+                    .map_err(|_| ApiFailure::upstream_degraded())?,
+                current,
+            )
+            .map_err(|_| ApiFailure::upstream_degraded())?;
+        let evidence =
+            ProductionAgentCreation::finalization_evidence(&receipt, ModuleId::Budget, 7, now()?)
+                .map_err(|_| ApiFailure::upstream_degraded())?;
+        let post = agent
+            .agent_budget_state(context.active_budget_id)
+            .map_err(agent_failure)?;
+        if post.asset != budget_state.asset
+            || post.observed_head_sequence < evidence.observed_sequence
+        {
+            return Err(ApiFailure::upstream_degraded());
+        }
+        let value = agent
+            .agent_reclaim(
+                agent_id,
+                amount,
+                currency,
+                budget_state.evidence_digest,
+                post.evidence_digest,
+                evidence,
+            )
+            .map_err(agent_failure)?;
+        Ok(BackendResponse {
+            result: managed_journey_json(&value),
+            session: None,
+        })
+    }
+
+    fn execute_agent_rotate(
+        &self,
+        request: &ScopedRequest<'_>,
+        scope: &mut crate::store::PrincipalScope<'_>,
+        principal: &crate::store::PrincipalId,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
+        let agent_id = path(request, "agent_id")?;
+        let recover = request.operation.name == "agent.recover";
+        if recover {
+            return Err(ApiFailure::upstream_degraded());
+        }
+        let context = agent.agent_context(agent_id).map_err(agent_failure)?;
+        let policy = agent
+            .agent_key_policy(&context.agent_did, false)
+            .map_err(agent_failure)?;
+        let operation_key = action_key(required_idempotency(request)?);
+        let pending_key_id = KeyId::new(format!("agent-rotation-{}", hex_bytes(&operation_key)))
+            .map_err(|_| ApiFailure::upstream_degraded())?;
+        let pending_public_key = match self
+            .custody
+            .creation_keystore()
+            .describe(principal, &pending_key_id)
+        {
+            Ok(descriptor) if descriptor.class == KeyClass::AgentPrimary => descriptor.public_key,
+            Err(CustodyError::KeyNotFound) => self
+                .custody
+                .creation_keystore()
+                .create(principal, &pending_key_id, KeyClass::AgentPrimary)
+                .map_err(|_| ApiFailure::upstream_degraded())?,
+            Ok(_) | Err(_) => return Err(ApiFailure::upstream_degraded()),
+        };
+        let current = now()?;
+        let effective_at = current
+            .checked_add(policy.required_delay_seconds)
+            .ok_or_else(ApiFailure::upstream_degraded)?;
+        let lapse_at = effective_at
+            .checked_add(policy.required_delay_seconds)
+            .ok_or_else(ApiFailure::upstream_degraded)?;
+        let intent = Intent::v1(IntentKind::KeyRotation(
+            KeyRotation::new(
+                Did::new(context.agent_did.as_bytes())
+                    .map_err(|_| ApiFailure::upstream_degraded())?,
+                PublicKey::new(pending_public_key),
+                TimestampBound::new(effective_at, lapse_at)
+                    .map_err(|_| ApiFailure::upstream_degraded())?,
+                ProtocolSequence::from_u64(policy.effective_sequence),
+            )
+            .map_err(|_| ApiFailure::upstream_degraded())?,
+        ));
+        let trace =
+            TraceId::parse(&request.trace).map_err(|_| ApiFailure::invalid_request(None))?;
+        let registry = agent.registry().clone();
+        let mut adapter = ProductionAgentCreation::new(
+            &mut agent,
+            &self.agent_contract,
+            &self.custody,
+            &trace,
+            AgentDid::new(context.seed.actor.clone())
+                .map_err(|_| ApiFailure::upstream_degraded())?,
+            AuthorityRef::new(context.seed.primary_authority.clone())
+                .map_err(|_| ApiFailure::upstream_degraded())?,
+            super::agent_creation::CreationBounds {
+                timestamp_span: self.agent_timestamp_span_seconds,
+                fee_limit: self.agent_fee_limit,
+            },
+        )
+        .map_err(|_| ApiFailure::upstream_degraded())?;
+        let receipt = adapter
+            .submit_lifecycle_intent(
+                scope,
+                &registry,
+                intent,
+                operation_key,
+                KeyId::new(context.seed.custody_key)
+                    .map_err(|_| ApiFailure::upstream_degraded())?,
+                current,
+            )
+            .map_err(|_| ApiFailure::upstream_degraded())?;
+        let finalized_at = now()?;
+        let evidence = ProductionAgentCreation::finalization_evidence(
+            &receipt,
+            ModuleId::Governance,
+            2,
+            finalized_at,
+        )
+        .map_err(|_| ApiFailure::upstream_degraded())?;
+        let ready_at = finalized_at
+            .checked_add(policy.required_delay_seconds)
+            .ok_or_else(ApiFailure::upstream_degraded)?;
+        let value = agent
+            .agent_key_change(
+                agent_id,
+                false,
+                policy.required_delay_seconds,
+                ready_at,
+                evidence,
+            )
+            .map_err(agent_failure)?;
+        Ok(BackendResponse {
+            result: managed_challenge_json(&value),
+            session: None,
+        })
+    }
+
+    fn execute_agent_archive(
+        &self,
+        request: &ScopedRequest<'_>,
+        scope: &mut crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
+        let agent_id = path(request, "agent_id")?;
+        let confirm_name = text_field(&request.body, "confirm_name")?;
+        let context = agent.agent_context(agent_id).map_err(agent_failure)?;
+        let operation_key = action_key(required_idempotency(request)?);
+        let pre = agent
+            .agent_budget_state(context.active_budget_id)
+            .map_err(agent_failure)?;
+        if pre.asset != context.seed.budget_asset {
+            return Err(ApiFailure::upstream_degraded());
+        }
+        let trace =
+            TraceId::parse(&request.trace).map_err(|_| ApiFailure::invalid_request(None))?;
+        let registry = agent.registry().clone();
+        if pre.remaining != 0 {
+            self.archive_defund(scope, &mut agent, &context, &pre, operation_key, &trace)?;
+        }
+        let session = agent
+            .agent_session_snapshot(agent_id)
+            .map_err(agent_failure)?;
+        if session.agent_did != context.agent_did {
+            return Err(ApiFailure::upstream_degraded());
+        }
+        let effective_sequence = agent
+            .head()
+            .map_err(agent_failure)?
+            .chain_sequence
+            .checked_add(1)
+            .ok_or_else(ApiFailure::upstream_degraded)?;
+        let intent = Intent::v1(IntentKind::SessionRevoke(
+            SessionRevoke::new(
+                AuthorityGrantId::new(context.protocol_grant_id),
+                SessionRevocationReason::Archived,
+                ProtocolSequence::from_u64(effective_sequence),
+            )
+            .map_err(|_| ApiFailure::upstream_degraded())?,
+        ));
+        let current = now()?;
+        let mut adapter = ProductionAgentCreation::new(
+            &mut agent,
+            &self.agent_contract,
+            &self.custody,
+            &trace,
+            AgentDid::new(context.seed.actor.clone())
+                .map_err(|_| ApiFailure::upstream_degraded())?,
+            AuthorityRef::new(context.seed.primary_authority.clone())
+                .map_err(|_| ApiFailure::upstream_degraded())?,
+            super::agent_creation::CreationBounds {
+                timestamp_span: self.agent_timestamp_span_seconds,
+                fee_limit: self.agent_fee_limit,
+            },
+        )
+        .map_err(|_| ApiFailure::upstream_degraded())?;
+        let receipt = adapter
+            .submit_lifecycle_intent(
+                scope,
+                &registry,
+                intent,
+                operation_key,
+                KeyId::new(context.seed.custody_key)
+                    .map_err(|_| ApiFailure::upstream_degraded())?,
+                current,
+            )
+            .map_err(|_| ApiFailure::upstream_degraded())?;
+        let evidence = ProductionAgentCreation::finalization_evidence(
+            &receipt,
+            ModuleId::Governance,
+            6,
+            now()?,
+        )
+        .map_err(|_| ApiFailure::upstream_degraded())?;
+        let session_observation = agent
+            .agent_session_suspend(agent_id, operation_key)
+            .map_err(agent_failure)?;
+        let post = agent
+            .agent_budget_state(context.active_budget_id)
+            .map_err(agent_failure)?;
+        if post.asset != pre.asset
+            || post.remaining != 0
+            || post.observed_head_sequence < evidence.observed_sequence
+        {
+            return Err(ApiFailure::upstream_degraded());
+        }
+        let value = agent
+            .agent_archive(
+                agent_id,
+                confirm_name,
+                pre.evidence_digest,
+                post.evidence_digest,
+                session_observation.evidence_digest,
+                evidence,
+            )
+            .map_err(agent_failure)?;
+        Ok(BackendResponse {
+            result: managed_journey_json(&value),
+            session: None,
+        })
+    }
+
+    fn execute_security_action(
+        request: &ScopedRequest<'_>,
+        scope: &mut crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let digest = identity_dispatch::security_digest(
+            scope,
+            text_field(&request.body, "action")?,
+            request
+                .body
+                .get("target_id")
+                .and_then(serde_json::Value::as_str),
+        )
+        .map_err(|error| identity_failure(&error))?;
+        Ok(BackendResponse {
+            result: json!({"confirms": format!("opd_{}", URL_SAFE_NO_PAD.encode(digest.bytes()))}),
+            session: None,
+        })
+    }
+
+    fn execute_stepup_begin(
+        &self,
+        request: &ScopedRequest<'_>,
+        scope: &mut crate::store::PrincipalScope<'_>,
+        principal: &crate::store::PrincipalId,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let encoded = text_field(&request.body, "confirms")?
+            .strip_prefix("opd_")
+            .ok_or_else(|| ApiFailure::invalid_request(Some("confirms")))?;
+        let bytes = URL_SAFE_NO_PAD
+            .decode(encoded)
+            .map_err(|_| ApiFailure::invalid_request(Some("confirms")))?;
+        let digest = crate::auth::OperationDigest::new(
+            bytes
+                .try_into()
+                .map_err(|_| ApiFailure::invalid_request(Some("confirms")))?,
+        );
+        let challenge = self
+            .passkeys
+            .begin_step_up_authorized(scope, digest, now()?)
+            .map_err(|error| auth_api_failure(&error))?;
+        self.auth_index
+            .bind_step_up(&challenge.challenge_id, principal, challenge.expires_at)
+            .map_err(|error| auth_failure(&error))?;
+        Ok(BackendResponse {
+            result: identity_dispatch::step_up_challenge(&challenge),
+            session: None,
+        })
+    }
+
+    fn execute_stepup_finish(
+        &self,
+        request: &ScopedRequest<'_>,
+        scope: &mut crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let evidence = self
+            .passkeys
+            .finish_step_up(
+                scope,
+                path(request, "challenge_id")?,
+                text_field(&request.body, "credential")?,
+                now()?,
+            )
+            .map_err(|error| auth_api_failure(&error))?;
+        Ok(BackendResponse {
+            result: identity_dispatch::step_up_evidence(&evidence),
+            session: None,
+        })
+    }
+
+    fn execute_profile_get(
+        scope: &mut crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        Ok(BackendResponse {
+            result: identity_dispatch::profile(scope).map_err(|error| identity_failure(&error))?,
+            session: None,
+        })
+    }
+
+    fn execute_profile_update(
+        request: &ScopedRequest<'_>,
+        scope: &mut crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        Ok(BackendResponse {
+            result: identity_dispatch::update_profile(scope, &request.body, now()?)
+                .map_err(|error| identity_failure(&error))?,
+            session: None,
+        })
+    }
+
+    fn execute_onboarding_status(
+        scope: &mut crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let journey = OnboardingJourney::load(scope)
+            .map_err(|_| ApiFailure::upstream_degraded())?
+            .ok_or_else(ApiFailure::not_found)?;
+        Ok(BackendResponse {
+            result: identity_dispatch::onboarding_status(&journey.status()),
+            session: None,
+        })
+    }
+
+    fn execute_onboarding_resume(
+        &self,
+        request: &ScopedRequest<'_>,
+        scope: &mut crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let mut journey = OnboardingJourney::load(scope)
+            .map_err(|_| ApiFailure::upstream_degraded())?
+            .ok_or_else(ApiFailure::not_found)?;
+        let status = self
+            .custody
+            .resume_onboarding_local(&mut journey, scope, now()?)
+            .map_err(|_| ApiFailure::upstream_degraded())?;
+        let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
+        let sequence = agent
+            .account_sequence(&self.agent_actor, &self.agent_authority)
+            .map_err(|_| ApiFailure::upstream_degraded())?;
+        let registry = agent.registry().clone();
+        let mut engine = journey
+            .start_durable_engine(
+                scope,
+                &registry,
+                self.agent_actor.clone(),
+                self.agent_authority.clone(),
+                sequence,
+                now()?,
+                now()?
+                    .checked_add(self.agent_timestamp_span_seconds)
+                    .ok_or_else(ApiFailure::unavailable)?,
+                self.agent_fee_limit,
+                now()?,
+            )
+            .map_err(|_| ApiFailure::upstream_degraded())?;
+        let trace =
+            TraceId::parse(&request.trace).map_err(|_| ApiFailure::invalid_request(None))?;
+        let _ = super::executor::poll_once_ready(engine.advance(
+            scope,
+            &self.agent_contract,
+            &mut *agent,
+            &self.custody,
+            &registry,
+            &trace,
+            now()?,
+        ))
+        .map_err(|_| ApiFailure::upstream_degraded())?
+        .map_err(|_| ApiFailure::upstream_degraded())?;
+        Ok(BackendResponse {
+            result: identity_dispatch::onboarding_status(&status),
+            session: None,
+        })
+    }
+
+    fn execute_binding_statement(
+        &self,
+        request: &ScopedRequest<'_>,
+        scope: &mut crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let journey = OnboardingJourney::load(scope)
+            .map_err(|_| ApiFailure::upstream_degraded())?
+            .ok_or_else(ApiFailure::not_found)?;
+        let did = journey.did().map_err(|_| ApiFailure::upstream_degraded())?;
+        let address = text_field(&request.body, "address")?;
+        let bytes =
+            decode_hex_20(address).map_err(|()| ApiFailure::invalid_request(Some("address")))?;
+        let statement = BindingJourney::issue_statement(
+            &did,
+            layerx_types::intent::NetworkId::new(self.network_id)
+                .map_err(|_| ApiFailure::upstream_degraded())?,
+            EvmAddress::new(bytes),
+            now()?,
+            self.binding_statement_ttl_seconds,
+        )
+        .map_err(|_| ApiFailure::invalid_request(Some("address")))?;
+        scope
+            .put(
+                Table::Journeys,
+                RowKey::new("wallet-binding-issued").map_err(|_| ApiFailure::unavailable())?,
+                now()?,
+                serde_json::to_vec(&statement).map_err(|_| ApiFailure::upstream_degraded())?,
+            )
+            .map_err(|_| ApiFailure::unavailable())?;
+        Ok(BackendResponse {
+            result: json!({"statement": statement.text(),
+                    "address": statement.checksummed_address(), "expires_at": statement.expires_at()}),
+            session: None,
+        })
+    }
+
+    fn execute_binding_submit(
+        &self,
+        request: &ScopedRequest<'_>,
+        scope: &mut crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let row = RowKey::new("wallet-binding-issued").map_err(|_| ApiFailure::unavailable())?;
+        let statement: crate::binding::BindingStatement = serde_json::from_slice(
+            scope
+                .get(Table::Journeys, &row)
+                .ok_or_else(ApiFailure::not_found)?
+                .bytes(),
+        )
+        .map_err(|_| ApiFailure::upstream_degraded())?;
+        if statement.text() != text_field(&request.body, "statement")?
+            || statement.checksummed_address() != text_field(&request.body, "address")?
+        {
+            return Err(ApiFailure::forbidden());
+        }
+        let signature = decode_hex(text_field(&request.body, "signature")?)
+            .map_err(|()| ApiFailure::invalid_request(Some("signature")))?;
+        let key: [u8; 32] = sha2::Sha256::digest(required_idempotency(request)?.as_bytes()).into();
+        let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
+        let sequence = agent
+            .account_sequence(&self.agent_actor, &self.agent_authority)
+            .map_err(|_| ApiFailure::upstream_degraded())?;
+        let registry = agent.registry().clone();
+        let binding = BindingJourney::new(registry.clone());
+        let mut engine = binding
+            .start_durable(
+                scope,
+                &statement,
+                &signature,
+                layerx_types::ids::IdempotencyKey::new(key),
+                self.agent_actor.clone(),
+                self.agent_authority.clone(),
+                sequence,
+                now()?,
+                now()?
+                    .checked_add(self.agent_timestamp_span_seconds)
+                    .ok_or_else(ApiFailure::unavailable)?,
+                self.agent_fee_limit,
+                false,
+                now()?,
+            )
+            .map_err(|_| ApiFailure::upstream_degraded())?;
+        let trace =
+            TraceId::parse(&request.trace).map_err(|_| ApiFailure::invalid_request(None))?;
+        let status = super::executor::poll_once_ready(engine.advance(
+            scope,
+            &self.agent_contract,
+            &mut *agent,
+            &self.custody,
+            &registry,
+            &trace,
+            now()?,
+        ))
+        .map_err(|_| ApiFailure::upstream_degraded())?
+        .map_err(|_| ApiFailure::upstream_degraded())?;
+        Ok(BackendResponse {
+            result: journey_status_json(&status),
+            session: None,
+        })
+    }
+
+    fn execute_binding_status(
+        scope: &mut crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let engine = crate::journeys::JourneyEngine::list(scope)
+            .map_err(|_| ApiFailure::upstream_degraded())?
+            .into_iter()
+            .find(|value| value.kind() == crate::journeys::JourneyKind::WalletBinding);
+        match engine {
+            Some(engine) => {
+                let status = engine
+                    .status()
+                    .map_err(|_| ApiFailure::upstream_degraded())?;
+                let identity = engine.verified_identity(0).map(|(submission, activity)| json!({
+                        "submission_id": submission, "activity_id": URL_SAFE_NO_PAD.encode(activity)}));
+                Ok(BackendResponse {
+                    result: json!({"state": if identity.is_some() {"bound"} else {"binding"},
+                        "journey": journey_status_json(&status), "verified_identity": identity}),
+                    session: None,
+                })
+            }
+            None => Ok(BackendResponse {
+                result: json!({"state":"none"}),
+                session: None,
+            }),
+        }
+    }
+
+    fn execute_binding_rebind_action(
+        &self,
+        request: &ScopedRequest<'_>,
+        scope: &mut crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let engine = crate::journeys::JourneyEngine::list(scope)
+            .map_err(|_| ApiFailure::upstream_degraded())?
+            .into_iter()
+            .find(|value| value.kind() == crate::journeys::JourneyKind::WalletBinding)
+            .ok_or_else(ApiFailure::not_found)?;
+        let status = engine
+            .status()
+            .map_err(|_| ApiFailure::upstream_degraded())?;
+        let receipt_digest = status
+            .receipt_digests()
+            .first()
+            .copied()
+            .flatten()
+            .ok_or_else(ApiFailure::forbidden)?;
+        let prior: crate::binding::BindingStatement = serde_json::from_slice(
+            scope
+                .get(
+                    Table::Journeys,
+                    &RowKey::new("wallet-binding-issued").map_err(|_| ApiFailure::unavailable())?,
+                )
+                .ok_or_else(ApiFailure::not_found)?
+                .bytes(),
+        )
+        .map_err(|_| ApiFailure::upstream_degraded())?;
+        let journey = OnboardingJourney::load(scope)
+            .map_err(|_| ApiFailure::upstream_degraded())?
+            .ok_or_else(ApiFailure::not_found)?;
+        let address = decode_hex_20(text_field(&request.body, "address")?)
+            .map_err(|()| ApiFailure::invalid_request(Some("address")))?;
+        let statement = BindingJourney::issue_statement(
+            &journey.did().map_err(|_| ApiFailure::upstream_degraded())?,
+            layerx_types::intent::NetworkId::new(self.network_id)
+                .map_err(|_| ApiFailure::upstream_degraded())?,
+            EvmAddress::new(address),
+            now()?,
+            self.binding_statement_ttl_seconds,
+        )
+        .map_err(|_| ApiFailure::invalid_request(Some("address")))?;
+        let confirms = BindingJourney::rebind_operation_digest_verified(
+            receipt_digest,
+            prior.address(),
+            &statement,
+        );
+        scope
+            .put(
+                Table::Journeys,
+                RowKey::new("wallet-rebinding-issued").map_err(|_| ApiFailure::unavailable())?,
+                now()?,
+                serde_json::to_vec(&(statement.clone(), confirms))
+                    .map_err(|_| ApiFailure::upstream_degraded())?,
+            )
+            .map_err(|_| ApiFailure::unavailable())?;
+        Ok(BackendResponse {
+            result: json!({"binding":{"statement":statement.text(),
+                    "address":statement.checksummed_address(),"expires_at":statement.expires_at()},
+                    "confirms":format!("opd_{}",URL_SAFE_NO_PAD.encode(confirms.bytes()))}),
+            session: None,
+        })
+    }
+
+    fn execute_binding_rebind(
+        &self,
+        request: &ScopedRequest<'_>,
+        scope: &mut crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let context = request
+            .principal
+            .as_ref()
+            .ok_or_else(ApiFailure::unauthenticated)?;
+        let (statement, confirms) = stored_rebinding_statement(scope)?;
+        if statement.text() != text_field(&request.body, "statement")?
+            || statement.checksummed_address() != text_field(&request.body, "address")?
+        {
+            return Err(ApiFailure::forbidden());
+        }
+        let signature = decode_hex(text_field(&request.body, "signature")?)
+            .map_err(|()| ApiFailure::invalid_request(Some("signature")))?;
+        let key: [u8; 32] = sha2::Sha256::digest(required_idempotency(request)?.as_bytes()).into();
+        let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
+        let sequence = agent
+            .account_sequence(&self.agent_actor, &self.agent_authority)
+            .map_err(|_| ApiFailure::upstream_degraded())?;
+        let registry = agent.registry().clone();
+        let binding = BindingJourney::new(registry.clone());
+        let mut engine = binding
+            .start_durable(
+                scope,
+                &statement,
+                &signature,
+                layerx_types::ids::IdempotencyKey::new(key),
+                self.agent_actor.clone(),
+                self.agent_authority.clone(),
+                sequence,
+                now()?,
+                now()?
+                    .checked_add(self.agent_timestamp_span_seconds)
+                    .ok_or_else(ApiFailure::unavailable)?,
+                self.agent_fee_limit,
+                true,
+                now()?,
+            )
+            .map_err(|_| ApiFailure::upstream_degraded())?;
+        let trace =
+            TraceId::parse(&request.trace).map_err(|_| ApiFailure::invalid_request(None))?;
+        let phase = engine
+            .status()
+            .map_err(|_| ApiFailure::upstream_degraded())?
+            .phases()
+            .get(
+                engine
+                    .status()
+                    .map_err(|_| ApiFailure::upstream_degraded())?
+                    .current_leg(),
+            )
+            .copied();
+        let custody_evidence = if phase == Some(crate::journeys::JourneyPhase::Prepared) {
+            let prepared = engine
+                .prepared_disclosure_digest(&self.agent_contract, &mut *agent, &registry)
+                .map_err(|_| ApiFailure::upstream_degraded())?;
+            let challenge = request
+                .body
+                .get("step_up")
+                .and_then(|value| value.get("challenge_id"))
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(ApiFailure::forbidden)?;
+            let auth = self
+                .passkeys
+                .load_step_up_evidence(scope, challenge, now()?)
+                .map_err(|error| auth_api_failure(&error))?;
+            Some(
+                CustodySigner::bind_authenticated_step_up(
+                    &self.passkeys,
+                    scope,
+                    &auth,
+                    confirms,
+                    crate::custody::Operation::WalletRebinding,
+                    prepared,
+                    context.request_digest(),
+                    now()?,
+                )
+                .map_err(|_| ApiFailure::forbidden())?,
+            )
+        } else {
+            None
+        };
+        let status = super::executor::poll_once_ready(engine.advance_authorized(
+            scope,
+            &self.agent_contract,
+            &mut *agent,
+            &self.custody,
+            &registry,
+            &trace,
+            custody_evidence.as_ref(),
+            now()?,
+        ))
+        .map_err(|_| ApiFailure::upstream_degraded())?
+        .map_err(|_| ApiFailure::upstream_degraded())?;
+        Ok(BackendResponse {
+            result: journey_status_json(&status),
+            session: None,
+        })
+    }
+
+    fn execute_move_quote(
+        &self,
+        request: &ScopedRequest<'_>,
+        scope: &mut crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let planning = movement_request(self, request, scope, now()?)?;
+        let mut movement = self
+            .movement
+            .lock()
+            .map_err(|_| ApiFailure::unavailable())?;
+        let quote = movement
+            .quote_move(scope, planning)
+            .map_err(movement_failure)?;
+        Ok(BackendResponse {
+            result: move_quote_json(&quote),
+            session: None,
+        })
+    }
+
+    fn execute_move_commit(
+        &self,
+        request: &ScopedRequest<'_>,
+        scope: &mut crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let quote_id = text_field(&request.body, "quote_id")?;
+        let movement = self
+            .movement
+            .lock()
+            .map_err(|_| ApiFailure::unavailable())?;
+        let plan = movement
+            .load_move_quote(
+                scope,
+                quote_id,
+                action_key(required_idempotency(request)?),
+                now()?,
+            )
+            .map_err(movement_failure)?;
+        let registry = self
+            .agent
+            .lock()
+            .map_err(|_| ApiFailure::unavailable())?
+            .registry()
+            .clone();
+        let mut journey = crate::journeys::MoveJourney::commit(
+            scope,
+            &plan,
+            crate::journeys::MoveAuthorization::Allowed,
+            &registry,
+            now()?,
+        )
+        .map_err(move_journey_failure)?;
+        let trace =
+            TraceId::parse(&request.trace).map_err(|_| ApiFailure::invalid_request(None))?;
+        let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
+        let status = super::executor::poll_once_ready(journey.advance(
+            scope,
+            &self.agent_contract,
+            &mut *agent,
+            &self.custody,
+            &registry,
+            &trace,
+            now()?,
+        ))
+        .map_err(|_| ApiFailure::upstream_degraded())?
+        .map_err(move_journey_failure)?;
+        schedule_continuation(scope, "move", status.journey_id(), now()?)?;
+        Ok(BackendResponse {
+            result: move_public_json(scope, self.settlement_domain, &status, now()?)?,
+            session: None,
+        })
+    }
+
+    fn execute_deposit_start(
+        &self,
+        request: &ScopedRequest<'_>,
+        scope: &mut crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let planning = movement_request(self, request, scope, now()?)?;
+        let movement = self
+            .movement
+            .lock()
+            .map_err(|_| ApiFailure::unavailable())?;
+        let plan = movement.deposit_plan(planning).map_err(movement_failure)?;
+        let binding = crate::binding::BindingJourney::new(
+            self.agent
+                .lock()
+                .map_err(|_| ApiFailure::unavailable())?
+                .registry()
+                .clone(),
+        );
+        let journey = crate::journeys::DepositJourney::start(scope, &binding, &plan, now()?)
+            .map_err(deposit_journey_failure)?;
+        let status = journey.status().map_err(deposit_journey_failure)?;
+        Ok(BackendResponse {
+            result: deposit_public_json(scope, self.settlement_domain, &status, now()?)?,
+            session: None,
+        })
+    }
+
+    fn execute_deposit_confirm(
+        &self,
+        request: &ScopedRequest<'_>,
+        scope: &mut crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let journey_id = crate::notify::JourneyId::new(path(request, "journey_id")?.to_owned())
+            .map_err(|_| ApiFailure::invalid_request(Some("journey_id")))?;
+        let transaction = layerx_paxeer_client::TransactionHash::new(
+            decode_hex_32(text_field(&request.body, "wallet_transaction")?)
+                .map_err(|()| ApiFailure::invalid_request(Some("wallet_transaction")))?,
+        );
+        let mut journey = crate::journeys::DepositJourney::load(scope, &journey_id)
+            .map_err(deposit_journey_failure)?
+            .ok_or_else(ApiFailure::not_found)?;
+        let mut movement = self
+            .movement
+            .lock()
+            .map_err(|_| ApiFailure::unavailable())?;
+        journey
+            .confirm_external_transaction(scope, &mut *movement, transaction, now()?)
+            .map_err(deposit_journey_failure)?;
+        let trace =
+            TraceId::parse(&request.trace).map_err(|_| ApiFailure::invalid_request(None))?;
+        let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
+        let registry = agent.registry().clone();
+        let status = movement
+            .advance_deposit(
+                scope,
+                &mut journey,
+                &self.agent_contract,
+                &mut *agent,
+                &self.custody,
+                &registry,
+                &trace,
+                now()?,
+            )
+            .map_err(deposit_journey_failure)?;
+        schedule_continuation(scope, "deposit", status.journey_id(), now()?)?;
+        Ok(BackendResponse {
+            result: deposit_public_json(scope, self.settlement_domain, &status, now()?)?,
+            session: None,
+        })
+    }
+
+    fn execute_withdraw_start(
+        &self,
+        request: &ScopedRequest<'_>,
+        scope: &mut crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let context = request
+            .principal
+            .as_ref()
+            .ok_or_else(ApiFailure::unauthenticated)?;
+        let planning = movement_request(self, request, scope, now()?)?;
+        let challenge = request
+            .body
+            .get("step_up")
+            .and_then(|value| value.get("challenge_id"))
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(ApiFailure::forbidden)?;
+        let step_up = self
+            .passkeys
+            .load_step_up_evidence(scope, challenge, now()?)
+            .map_err(|error| auth_api_failure(&error))?;
+        let mut movement = self
+            .movement
+            .lock()
+            .map_err(|_| ApiFailure::unavailable())?;
+        let plan = movement
+            .withdrawal_plan(planning)
+            .map_err(movement_failure)?;
+        let trace =
+            TraceId::parse(&request.trace).map_err(|_| ApiFailure::invalid_request(None))?;
+        let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
+        let registry = agent.registry().clone();
+        let observed_at = now()?;
+        let mut journey = movement
+            .start_withdrawal(scope, &plan, observed_at)
+            .map_err(withdrawal_journey_failure)?;
+        let mut status = journey.status().map_err(withdrawal_journey_failure)?;
+        for _ in 0..3 {
+            let custody_evidence = journey
+                .prepared_debit_disclosure_digest(
+                    scope,
+                    &self.agent_contract,
+                    &mut *agent,
+                    &registry,
+                )
+                .map_err(withdrawal_journey_failure)?
+                .map(|prepared| {
+                    CustodySigner::bind_authenticated_step_up(
+                        &self.passkeys,
+                        scope,
+                        &step_up,
+                        step_up.confirms(),
+                        crate::custody::Operation::Withdrawal,
+                        prepared,
+                        context.request_digest(),
+                        observed_at,
+                    )
+                })
+                .transpose()
+                .map_err(|_| ApiFailure::forbidden())?;
+            status = movement
+                .advance_withdrawal(
+                    scope,
+                    &mut journey,
+                    &self.agent_contract,
+                    &mut *agent,
+                    &self.custody,
+                    &registry,
+                    &trace,
+                    custody_evidence.as_ref(),
+                    observed_at,
+                )
+                .map_err(withdrawal_journey_failure)?;
+            if custody_evidence.is_some()
+                || !matches!(status.stage(), crate::journeys::WithdrawalStage::Processing)
+            {
+                break;
+            }
+        }
+        schedule_continuation(scope, "withdraw", status.journey_id(), now()?)?;
+        Ok(BackendResponse {
+            result: withdrawal_public_json(scope, self.settlement_domain, &status, now()?)?,
+            session: None,
+        })
+    }
+
+    fn execute_withdraw_claim(
+        &self,
+        request: &ScopedRequest<'_>,
+        scope: &mut crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let journey_id = crate::notify::JourneyId::new(path(request, "journey_id")?.to_owned())
+            .map_err(|_| ApiFailure::invalid_request(Some("journey_id")))?;
+        let signature = decode_hex(text_field(&request.body, "claim_signature")?)
+            .map_err(|()| ApiFailure::invalid_request(Some("claim_signature")))?;
+        let mut journey = crate::journeys::WithdrawalJourney::load(scope, &journey_id)
+            .map_err(withdrawal_journey_failure)?
+            .ok_or_else(ApiFailure::not_found)?;
+        let mut movement = self
+            .movement
+            .lock()
+            .map_err(|_| ApiFailure::unavailable())?;
+        let status = movement
+            .claim_withdrawal(scope, &mut journey, &signature, now()?)
+            .map_err(withdrawal_journey_failure)?;
+        schedule_continuation(scope, "withdraw", status.journey_id(), now()?)?;
+        Ok(BackendResponse {
+            result: withdrawal_public_json(scope, self.settlement_domain, &status, now()?)?,
+            session: None,
+        })
+    }
+
+    fn execute_exit_start(
+        &self,
+        request: &ScopedRequest<'_>,
+        scope: &mut crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let confirmation = crate::journeys::IrreversibleExitConfirmation::parse(text_field(
+            &request.body,
+            "confirmation",
+        )?)
+        .map_err(|_| ApiFailure::invalid_request(Some("confirmation")))?;
+        let trace =
+            TraceId::parse(&request.trace).map_err(|_| ApiFailure::invalid_request(None))?;
+        let planning = movement_request(self, request, scope, now()?)?;
+        let mut movement = self
+            .movement
+            .lock()
+            .map_err(|_| ApiFailure::unavailable())?;
+        let plan = movement.exit_plan(planning).map_err(movement_failure)?;
+        let status = movement
+            .start_exit(
+                scope,
+                &trace,
+                &self.emergency_exit,
+                &plan,
+                confirmation,
+                now()?,
+            )
+            .map_err(exit_journey_failure)?;
+        schedule_continuation(scope, "exit", status.journey_id(), now()?)?;
+        Ok(BackendResponse {
+            result: exit_public_json(scope, &status, now()?)?,
+            session: None,
+        })
+    }
+
+    fn execute_exit_eligibility(&self) -> Result<BackendResponse, ApiFailure> {
+        let result = self
+            .emergency_exit
+            .eligibility()
+            .map_err(|_| ApiFailure::upstream_degraded())?;
+        let response = match result {
+            ExitEligibility::Eligible { .. } => {
+                json!({"eligible": true, "copy_key": "exit.eligible", "settlement_domain": "paxeer"})
+            }
+            ExitEligibility::NetworkOperatingNormally { .. } => json!({"eligible": false,
+                        "copy_key": "exit.network-operating-normally", "withdraw_instead_path": "/app/withdraw",
+                        "settlement_domain": "paxeer"}),
+            ExitEligibility::NoFinalisedCheckpoint => json!({"eligible": false,
+                        "copy_key": "exit.no-finalised-checkpoint", "settlement_domain": "paxeer"}),
+        };
+        Ok(BackendResponse {
+            result: response,
+            session: None,
+        })
+    }
+
+    fn execute_security_passkey_list(
+        scope: &mut crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let passkeys =
+            Passkeys::list_passkeys_authorized(scope).map_err(|error| auth_api_failure(&error))?;
+        Ok(BackendResponse {
+            result: json!({"passkeys": passkeys}),
+            session: None,
+        })
+    }
+
+    fn execute_security_passkey_register_begin(
+        &self,
+        request: &ScopedRequest<'_>,
+        scope: &mut crate::store::PrincipalScope<'_>,
+        principal: &crate::store::PrincipalId,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let profile =
+            identity_dispatch::profile(scope).map_err(|error| identity_failure(&error))?;
+        let account =
+            AccountIdentity::new(principal.as_str(), text_field(&profile, "display_name")?)
+                .map_err(|error| auth_api_failure(&error))?;
+        let challenge = self
+            .passkeys
+            .begin_registration(scope, &account, text_field(&request.body, "label")?, now()?)
+            .map_err(|error| auth_api_failure(&error))?;
+        self.auth_index
+            .bind_registration(&challenge.registration_id, principal, challenge.expires_at)
+            .map_err(|error| auth_failure(&error))?;
+        Ok(BackendResponse {
+            result: json!({"registration_id": challenge.registration_id,
+                    "ceremony": challenge.ceremony, "expires_at": challenge.expires_at}),
+            session: None,
+        })
+    }
+
+    fn execute_security_passkey_register_finish(
+        &self,
+        request: &ScopedRequest<'_>,
+        scope: &mut crate::store::PrincipalScope<'_>,
+        principal: &crate::store::PrincipalId,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let registration_id = path(request, "registration_id")?;
+        if self
+            .auth_index
+            .resolve_registration(registration_id, now()?)
+            .map_err(|error| auth_failure(&error))?
+            != *principal
+        {
+            return Err(ApiFailure::forbidden());
+        }
+        let passkey = self
+            .passkeys
+            .finish_registration(
+                scope,
+                registration_id,
+                text_field(&request.body, "credential")?,
+                now()?,
+            )
+            .map_err(|error| auth_api_failure(&error))?;
+        response(passkey)
+    }
+
+    fn execute_security_passkey_revoke(
+        request: &ScopedRequest<'_>,
+        scope: &mut crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let passkeys = Passkeys::revoke_passkey_authorized(scope, path(request, "passkey_id")?)
+            .map_err(|error| auth_api_failure(&error))?;
+        Ok(BackendResponse {
+            result: json!({"passkeys": passkeys}),
+            session: None,
+        })
+    }
+
+    fn execute_session_refresh(
+        &self,
+        request: &ScopedRequest<'_>,
+        scope: &mut crate::store::PrincipalScope<'_>,
+        principal: &crate::store::PrincipalId,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let context = request
+            .principal
+            .as_ref()
+            .ok_or_else(ApiFailure::unauthenticated)?;
+        let (refresh, csrf) = context
+            .refresh_credentials()
+            .ok_or_else(ApiFailure::unauthenticated)?;
+        let grant = self
+            .passkeys
+            .refresh_authorized(scope, refresh, csrf, now()?)
+            .map_err(|error| auth_api_failure(&error))?;
+        self.auth_index
+            .bind_session(&grant, principal)
+            .map_err(|error| auth_failure(&error))?;
+        let current = Passkeys::list_sessions_authorized(scope, grant.session_id())
+            .map_err(|error| auth_api_failure(&error))?
+            .into_iter()
+            .find(|value| value.current)
+            .ok_or_else(ApiFailure::unavailable)?;
+        let result = json!({"session_id": grant.session_id(), "device": {"device_id": current.device.device_id(),
+                    "label": current.device.label(), "platform": current.device.platform()}, "opened_at": current.opened_at,
+                    "last_active_at": current.last_active_at, "current": true});
+        Ok(BackendResponse {
+            result,
+            session: Some(SessionSecrets {
+                access_token: grant.access_token().expose().to_owned(),
+                refresh_token: grant.refresh_token().expose().to_owned(),
+                csrf_token: grant.csrf_token().expose().to_owned(),
+                access_max_age_seconds: grant.access_expires_at().saturating_sub(now()?),
+                refresh_max_age_seconds: grant.refresh_expires_at().saturating_sub(now()?),
+            }),
+        })
+    }
+
+    fn execute_authenticator_status(
+        &self,
+        principal: &crate::store::PrincipalId,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let provider = self
+            .security
+            .lock()
+            .map_err(|_| ApiFailure::unavailable())?;
+        let status = provider
+            .status(principal)
+            .map_err(|_| ApiFailure::upstream_degraded())?;
+        Ok(BackendResponse {
+            result: authenticator_status_json(&status),
+            session: None,
+        })
+    }
+
+    fn execute_authenticator_setup_begin(
+        &self,
+        request: &ScopedRequest<'_>,
+        principal: &crate::store::PrincipalId,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let mut provider = self
+            .security
+            .lock()
+            .map_err(|_| ApiFailure::unavailable())?;
+        let challenge = provider
+            .begin_setup(principal, text_field(&request.body, "label")?, now()?)
+            .map_err(|_| ApiFailure::upstream_degraded())?;
+        Ok(BackendResponse {
+            result: json!({"setup_id": challenge.setup_id,
+                    "secret": timed_secret_json(&challenge.secret), "otpauth_uri": timed_secret_json(&challenge.otpauth_uri),
+                    "expires_at": challenge.expires_at}),
+            session: None,
+        })
+    }
+
+    fn execute_authenticator_setup_finish(
+        &self,
+        request: &ScopedRequest<'_>,
+        principal: &crate::store::PrincipalId,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let mut provider = self
+            .security
+            .lock()
+            .map_err(|_| ApiFailure::unavailable())?;
+        let result = provider
+            .finish_setup(
+                principal,
+                path(request, "setup_id")?,
+                text_field(&request.body, "code")?,
+                now()?,
+            )
+            .map_err(|_| ApiFailure::upstream_degraded())?;
+        Ok(BackendResponse {
+            result: json!({"method": authenticator_method_json(&result.method),
+                    "backup_codes": {"codes": result.backup_codes.expose(), "remask_at": result.backup_codes.remask_at(),
+                        "copyable": true}}),
+            session: None,
+        })
+    }
+
+    fn execute_authenticator_disable(
+        &self,
+        request: &ScopedRequest<'_>,
+        principal: &crate::store::PrincipalId,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let mut provider = self
+            .security
+            .lock()
+            .map_err(|_| ApiFailure::unavailable())?;
+        let status = provider
+            .disable(principal, path(request, "authenticator_id")?, now()?)
+            .map_err(|_| ApiFailure::upstream_degraded())?;
+        Ok(BackendResponse {
+            result: authenticator_status_json(&status),
+            session: None,
+        })
+    }
+
+    fn execute_authenticator_backup_rotate(
+        &self,
+        principal: &crate::store::PrincipalId,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let mut provider = self
+            .security
+            .lock()
+            .map_err(|_| ApiFailure::unavailable())?;
+        let codes = provider
+            .rotate_backup_codes(principal, now()?)
+            .map_err(|_| ApiFailure::upstream_degraded())?;
+        Ok(BackendResponse {
+            result: json!({"codes": codes.expose(), "remask_at": codes.remask_at(),
+                    "copyable": true}),
+            session: None,
+        })
+    }
+
+    fn execute_security_recovery_reveal(
+        &self,
+        request: &ScopedRequest<'_>,
+        principal: &crate::store::PrincipalId,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let provider = self
+            .security
+            .lock()
+            .map_err(|_| ApiFailure::unavailable())?;
+        let secret = provider
+            .reveal_verified_receipt(principal, text_field(&request.body, "evidence_id")?, now()?)
+            .map_err(|_| ApiFailure::upstream_degraded())?;
+        Ok(BackendResponse {
+            result: timed_secret_json(&secret),
+            session: None,
+        })
+    }
+
+    fn execute_session_list(
+        scope: &mut crate::store::PrincipalScope<'_>,
+        session_id: &str,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let sessions = Passkeys::list_sessions_authorized(scope, session_id)
+            .map_err(|error| auth_api_failure(&error))?;
+        let sessions = sessions.into_iter().map(|session| json!({
+                    "session_id": session.session_id,
+                    "device": {"device_id": session.device.device_id(), "label": session.device.label(),
+                        "platform": session.device.platform()},
+                    "opened_at": session.opened_at, "last_active_at": session.last_active_at,
+                    "current": session.current
+                })).collect::<Vec<_>>();
+        Ok(BackendResponse {
+            result: json!({"sessions": sessions}),
+            session: None,
+        })
+    }
+
+    fn execute_session_revoke(
+        &self,
+        request: &ScopedRequest<'_>,
+        scope: &mut crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let target = path(request, "session_id")?;
+        let grant = Passkeys::protocol_grant_for_session(scope, target)
+            .map_err(|error| auth_api_failure(&error))?;
+        self.revoke_browser_grants(scope, request, &[(target.to_owned(), grant)])?;
+        let revoked = Passkeys::revoke_session_authorized(scope, target, now()?)
+            .map_err(|error| auth_api_failure(&error))?;
+        Ok(BackendResponse {
+            result: json!({"revoked_session_ids": revoked.revoked_session_ids,
+                    "revoked_at": revoked.revoked_at}),
+            session: None,
+        })
+    }
+
+    fn execute_session_revoke_all(
+        &self,
+        request: &ScopedRequest<'_>,
+        scope: &mut crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let grants = Passkeys::active_protocol_session_grants(scope)
+            .map_err(|error| auth_api_failure(&error))?;
+        self.revoke_browser_grants(scope, request, &grants)?;
+        let revoked = Passkeys::revoke_all_sessions_authorized(scope, now()?)
+            .map_err(|error| auth_api_failure(&error))?;
+        Ok(BackendResponse {
+            result: json!({"revoked_session_ids": revoked.revoked_session_ids,
+                    "revoked_at": revoked.revoked_at}),
+            session: None,
+        })
+    }
+
+    fn execute_approval_list(
+        &self,
+        scope: &mut crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
+        let sequence = agent
+            .head()
+            .map_err(|_| ApiFailure::upstream_degraded())?
+            .chain_sequence;
+        let page = agent
+            .approval_list(sequence, None, 100)
+            .map_err(|_| ApiFailure::upstream_degraded())?;
+        let mut approvals = Vec::with_capacity(page.approvals.len());
+        for hold in &page.approvals {
+            let budget = agent
+                .verified_budget_after(hold, sequence)
+                .map_err(|_| ApiFailure::upstream_degraded())?;
+            let value = approval_json(hold, budget);
+            append_approval_stream(scope, hold, &value, sequence)?;
+            approvals.push(value);
+        }
+        Ok(BackendResponse {
+            result: json!({"approvals": approvals, "next_cursor": page.next_cursor.map(|value| URL_SAFE_NO_PAD.encode(value))}),
+            session: None,
+        })
+    }
+
+    fn execute_approval_get(
+        &self,
+        request: &ScopedRequest<'_>,
+        scope: &mut crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let approval_id = decode_id(path(request, "approval_id")?)
+            .map_err(|()| ApiFailure::invalid_request(Some("approval_id")))?;
+        let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
+        let sequence = agent
+            .head()
+            .map_err(|_| ApiFailure::upstream_degraded())?
+            .chain_sequence;
+        let hold = agent
+            .approval_get(approval_id, sequence)
+            .map_err(|_| ApiFailure::not_found())?;
+        let budget = agent
+            .verified_budget_after(&hold, sequence)
+            .map_err(|_| ApiFailure::upstream_degraded())?;
+        let value = approval_json(&hold, budget);
+        append_approval_stream(scope, &hold, &value, sequence)?;
+        Ok(BackendResponse {
+            result: value,
+            session: None,
+        })
+    }
+
+    fn execute_approval_approve(
+        &self,
+        request: &ScopedRequest<'_>,
+        scope: &mut crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let approval_id = decode_id(path(request, "approval_id")?)
+            .map_err(|()| ApiFailure::invalid_request(Some("approval_id")))?;
+        let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
+        let sequence = agent
+            .head()
+            .map_err(|_| ApiFailure::upstream_degraded())?
+            .chain_sequence;
+        let hold = agent
+            .approval_get(approval_id, sequence)
+            .map_err(|_| ApiFailure::not_found())?;
+        let decision = agent
+            .approval_decide(
+                request.operation.name == "approval.approve",
+                approval_id,
+                hold.canonical_bytes_digest,
+                required_idempotency(request)?,
+                sequence,
+            )
+            .map_err(|_| ApiFailure::upstream_degraded())?;
+        let state = match decision.status {
+            AgentDecisionStatus::Approved { .. } => "approved",
+            AgentDecisionStatus::Rejected => "rejected",
+            AgentDecisionStatus::Expired => "expired",
+            AgentDecisionStatus::Defective => "defective",
+        };
+        let value = json!({"approval_id": URL_SAFE_NO_PAD.encode(approval_id), "state": state,
+                    "state_copy_key": format!("approval.state.{state}"), "money_moved": false,
+                    "moved_copy_key": "approval.decision.no-money-moved", "evidence": []});
+        super::stream_journal::StreamJournal::append(
+            scope,
+            &format!(
+                "approval-decision:{}:{state}",
+                URL_SAFE_NO_PAD.encode(approval_id)
+            ),
+            match state {
+                "approved" => "approval-approved",
+                "rejected" => "approval-rejected",
+                _ => "approval-expired",
+            },
+            sequence,
+            json!({"approval":value.clone()}),
+        )?;
+        Ok(BackendResponse {
+            result: value,
+            session: None,
+        })
+    }
+
+    fn execute_support_list(
+        scope: &mut crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let conversations = SupportService::list(scope).map_err(|error| support_failure(&error))?;
+        Ok(BackendResponse {
+            result: json!({"conversations": conversations}),
+            session: None,
+        })
+    }
+
+    fn execute_support_create(
+        request: &ScopedRequest<'_>,
+        scope: &mut crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let mut create = CreateConversation::new(
+            text_field(&request.body, "body")?,
+            decode_field::<Shell>(&request.body, "shell")?,
+        )
+        .map_err(|_| ApiFailure::invalid_request(Some("body")))?;
+        if let Some(topic) = optional_decode_field::<Topic>(&request.body, "topic")? {
+            create = create.with_topic(topic);
+        }
+        if let Some(trace) = request
+            .body
+            .get("trace_id")
+            .and_then(|value| value.as_str())
+        {
+            create = create.with_trace(
+                TraceId::parse(trace).map_err(|_| ApiFailure::invalid_request(Some("trace_id")))?,
+            );
+        }
+        let value = SupportService::create(scope, now()?, required_idempotency(request)?, &create)
+            .map_err(|error| support_failure(&error))?;
+        response(value)
+    }
+
+    fn execute_support_reply(
+        request: &ScopedRequest<'_>,
+        scope: &mut crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let value = SupportService::reply(
+            scope,
+            now()?,
+            path(request, "conversation_id")?,
+            required_idempotency(request)?,
+            text_field(&request.body, "body")?,
+        )
+        .map_err(|error| support_failure(&error))?;
+        response(value)
+    }
+
+    fn execute_support_read(
+        request: &ScopedRequest<'_>,
+        scope: &mut crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let conversation = SupportService::mark_read(
+            scope,
+            now()?,
+            path(request, "conversation_id")?,
+            text_field(&request.body, "through_message_id")?,
+        )
+        .map_err(|error| support_failure(&error))?;
+        Ok(BackendResponse {
+            result: json!({
+                "conversation_id": conversation.conversation_id(), "state": conversation.state(),
+                "unread_count": conversation.unread_count(), "updated_at": conversation.updated_at()
+            }),
+            session: None,
+        })
+    }
+
+    fn execute_support_status(
+        request: &ScopedRequest<'_>,
+        scope: &mut crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let conversation_id = path(request, "conversation_id")?;
+        let (state, unread_count, updated_at) = SupportService::status(scope, conversation_id)
+            .map_err(|error| support_failure(&error))?;
+        Ok(BackendResponse {
+            result: json!({"conversation_id": conversation_id, "state": state,
+                    "unread_count": unread_count, "updated_at": updated_at}),
+            session: None,
+        })
+    }
+
+    fn execute_support_feedback(
+        request: &ScopedRequest<'_>,
+        scope: &mut crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let helpful = request
+            .body
+            .get("helpful")
+            .and_then(serde_json::Value::as_bool)
+            .ok_or_else(|| ApiFailure::invalid_request(Some("helpful")))?;
+        let value = SupportService::feedback(
+            scope,
+            now()?,
+            path(request, "conversation_id")?,
+            text_field(&request.body, "message_id")?,
+            helpful,
+        )
+        .map_err(|error| support_failure(&error))?;
+        response(value)
+    }
+
+    fn execute_notification_list(
+        scope: &mut crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let inventory =
+            DeepLinks::inventory(scope, now()?).map_err(|error| notify_failure(&error))?;
+        let groups = inventory
+            .groups()
+            .iter()
+            .map(|group| {
+                let notifications = group
+                    .notifications()
+                    .iter()
+                    .map(notification_json)
+                    .collect::<Result<Vec<_>, ApiFailure>>()?;
+                Ok(json!({"recency": group.recency().as_str(), "notifications": notifications}))
+            })
+            .collect::<Result<Vec<_>, ApiFailure>>()?;
+        Ok(BackendResponse {
+            result: json!({"groups": groups, "next_cursor": "cur_end", "unread_count": inventory.unread_count()}),
+            session: None,
+        })
+    }
+
+    fn execute_notification_read(
+        request: &ScopedRequest<'_>,
+        scope: &mut crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let id = NotificationId::new(path(request, "notification_id")?)
+            .map_err(|error| notify_failure(&error))?;
+        let summary =
+            DeepLinks::mark_read(scope, now()?, &id).map_err(|error| notify_failure(&error))?;
+        let value = notification_json(&summary)?;
+        super::stream_journal::StreamJournal::append(
+            scope,
+            &format!("notification-read:{}", summary.notification_id().as_str()),
+            "notification",
+            summary.created_at(),
+            json!({"notification": value.clone()}),
+        )?;
+        Ok(BackendResponse {
+            result: value,
+            session: None,
+        })
+    }
+
+    fn execute_notification_preferences_get(
+        scope: &mut crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let preferences = Dispatcher::preferences(scope).map_err(|error| notify_failure(&error))?;
+        Ok(BackendResponse {
+            result: preferences_json(&preferences),
+            session: None,
+        })
+    }
+
+    fn execute_notification_preferences_set(
+        request: &ScopedRequest<'_>,
+        scope: &mut crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let preferences = parse_preferences(&request.body)?;
+        Dispatcher::update_preferences(scope, now()?, &preferences)
+            .map_err(|error| notify_failure(&error))?;
+        Ok(BackendResponse {
+            result: preferences_json(&preferences),
+            session: None,
+        })
+    }
+
+    fn execute_home_summary(
+        &self,
+        scope: &mut crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
+        let balance = agent
+            .balance()
+            .map_err(|_| ApiFailure::upstream_degraded())?;
+        let mut material =
+            Vec::with_capacity(4 + balance.canonical_bytes.len() + balance.proof_material.len());
+        material.extend_from_slice(
+            &u32::try_from(balance.observed_at.len())
+                .map_err(|_| ApiFailure::upstream_degraded())?
+                .to_be_bytes(),
+        );
+        material.extend_from_slice(balance.observed_at.as_bytes());
+        material.extend_from_slice(&balance.age_seconds.to_be_bytes());
+        material.extend_from_slice(
+            &u32::try_from(balance.canonical_bytes.len())
+                .map_err(|_| ApiFailure::upstream_degraded())?
+                .to_be_bytes(),
+        );
+        material.extend_from_slice(&balance.canonical_bytes);
+        material.extend_from_slice(&balance.proof_material);
+        let evidence_digest: [u8; 32] = Sha256::digest(&material).into();
+        scope
+            .put(
+                Table::Cache,
+                RowKey::new(format!("state-proof-{}", hex_bytes(&evidence_digest)))
+                    .map_err(|_| ApiFailure::upstream_degraded())?,
+                now()?,
+                material,
+            )
+            .map_err(|_| ApiFailure::unavailable())?;
+        let verification = if balance.verification >= 4 {
+            "checkpoint-finalised"
+        } else {
+            "receipt-verified"
+        };
+        let balance_json = json!({"account_id":format!("act_{}",hex_bytes(&balance.account)),"money":{"amount":balance.amount.to_string(),"currency":balance.currency},"verification":verification,"freshness":{"observed_at":balance.observed_at,"age_seconds":balance.age_seconds,"source_head":balance.observed_head_sequence.to_string(),"within_bound":balance.observed_head_sequence==balance.global_sequence,"checkpoint":hex_bytes(&balance.observed_checkpoint)},"evidence":[{"evidence_id":format!("evd_{}",hex_bytes(&evidence_digest)),"class":if balance.verification>=4{"checkpoint-proof"}else{"layerx-receipt"},"verification":verification}]});
+        let agents = agent
+            .agent_list(None, 100)
+            .map_err(agent_failure)?
+            .agents
+            .iter()
+            .map(managed_agent_json)
+            .collect::<Vec<_>>();
+        let sequence = agent.head().map_err(agent_failure)?.chain_sequence;
+        let page = agent
+            .approval_list(sequence, None, 100)
+            .map_err(|_| ApiFailure::upstream_degraded())?;
+        let mut approvals = Vec::with_capacity(page.approvals.len());
+        for hold in &page.approvals {
+            approvals.push(approval_json(
+                hold,
+                agent
+                    .verified_budget_after(hold, sequence)
+                    .map_err(|_| ApiFailure::upstream_degraded())?,
+            ));
+        }
+        drop(agent);
+        let filters = Feed::apply_filters(FilterDraft::new())
+            .map_err(|error| activity_feed_failure(&error))?;
+        let recent_page = self
+            .feed
+            .page(scope, PageRequest::new(20, filters), now()?, sequence)
+            .map_err(|error| activity_feed_failure(&error))?;
+        let recent = recent_page
+            .entries()
+            .iter()
+            .map(|entry| {
+                super::production_reads::activity_entry_json(
+                    self.settlement_domain,
+                    scope,
+                    entry.entry_id(),
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(BackendResponse {
+            result: json!({"balance":balance_json,"agents":agents,"approvals":approvals,"recent_activity":recent}),
+            session: None,
+        })
+    }
+
+    fn execute_account_balance(
+        &self,
+        scope: &mut crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let balance = self
+            .agent
+            .lock()
+            .map_err(|_| ApiFailure::unavailable())?
+            .balance()
+            .map_err(|_| ApiFailure::upstream_degraded())?;
+        let mut material =
+            Vec::with_capacity(4 + balance.canonical_bytes.len() + balance.proof_material.len());
+        material.extend_from_slice(
+            &u32::try_from(balance.observed_at.len())
+                .map_err(|_| ApiFailure::upstream_degraded())?
+                .to_be_bytes(),
+        );
+        material.extend_from_slice(balance.observed_at.as_bytes());
+        material.extend_from_slice(&balance.age_seconds.to_be_bytes());
+        material.extend_from_slice(
+            &u32::try_from(balance.canonical_bytes.len())
+                .map_err(|_| ApiFailure::upstream_degraded())?
+                .to_be_bytes(),
+        );
+        material.extend_from_slice(&balance.canonical_bytes);
+        material.extend_from_slice(&balance.proof_material);
+        let evidence_digest: [u8; 32] = sha2::Sha256::digest(&material).into();
+        let evidence_id = format!("evd_{}", hex_bytes(&evidence_digest));
+        scope
+            .put(
+                Table::Cache,
+                RowKey::new(format!("state-proof-{}", hex_bytes(&evidence_digest)))
+                    .map_err(|_| ApiFailure::upstream_degraded())?,
+                now()?,
+                material,
+            )
+            .map_err(|_| ApiFailure::unavailable())?;
+        let verification = if balance.verification >= 4 {
+            "checkpoint-finalised"
+        } else {
+            "receipt-verified"
+        };
+        Ok(BackendResponse {
+            result: json!({"account_id": format!("act_{}", hex_bytes(&balance.account)),
+                "money": {"amount": balance.amount.to_string(), "currency": balance.currency}, "verification": verification,
+                "freshness": {"observed_at": balance.observed_at, "age_seconds": balance.age_seconds,
+                    "source_head": balance.observed_head_sequence.to_string(), "within_bound": balance.observed_head_sequence == balance.global_sequence,
+                    "checkpoint": hex_bytes(&balance.observed_checkpoint)},
+                "evidence": [{"evidence_id": evidence_id, "class": if balance.verification >= 4 {"checkpoint-proof"} else {"layerx-receipt"}, "verification": verification}]
+            }),
+            session: None,
+        })
+    }
+
+    fn execute_stream_open(
+        &self,
+        scope: &mut crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        Ok(BackendResponse {
+            result: self.stream.open(scope)?,
+            session: None,
+        })
+    }
+
+    fn execute_stream_next(
+        &self,
+        request: &ScopedRequest<'_>,
+        scope: &mut crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        Ok(BackendResponse {
+            result: self.stream.next(scope, path(request, "cursor")?)?,
+            session: None,
+        })
+    }
+
+    fn execute_activity_export_statement(
+        &self,
+        request: &ScopedRequest<'_>,
+        scope: &mut crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let filters = activity_filters(&request.body)?;
+        let head = self
+            .agent
+            .lock()
+            .map_err(|_| ApiFailure::unavailable())?
+            .head()
+            .map_err(|_| ApiFailure::upstream_degraded())?;
+        let statement = EvidenceExport::new(self.feed, self.activity_export_maximum_bytes)
+            .map_err(activity_export_failure)?
+            .statement(scope, &filters, now()?, head.chain_sequence)
+            .map_err(activity_export_failure)?;
+        let digest: [u8; 32] = sha2::Sha256::digest(statement.content()).into();
+        let digest_text = hex_bytes(&digest);
+        scope
+            .put(
+                Table::Cache,
+                RowKey::new(format!("activity-export-{digest_text}"))
+                    .map_err(|_| ApiFailure::upstream_degraded())?,
+                now()?,
+                statement.content().to_vec(),
+            )
+            .map_err(|_| ApiFailure::unavailable())?;
+        Ok(BackendResponse {
+            result: json!({"export_id":format!("exp_{digest_text}"),"kind":"statement","download_path":format!("/v1/evidence/evd_{digest_text}"),"content_type":"text/csv; charset=utf-8","created_at":now()?.to_string(),"evidence":[]}),
+            session: None,
+        })
+    }
+
+    fn execute_activity_export_evidence(
+        &self,
+        request: &ScopedRequest<'_>,
+        scope: &mut crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let filters = activity_filters(&request.body)?;
+        let ids = request
+            .body
+            .get("entry_ids")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| ApiFailure::invalid_request(Some("entry_ids")))?
+            .iter()
+            .map(|value| {
+                ActivityEntryId::new(
+                    value
+                        .as_str()
+                        .ok_or_else(|| ApiFailure::invalid_request(Some("entry_ids")))?
+                        .to_owned(),
+                )
+                .map_err(|_| ApiFailure::invalid_request(Some("entry_ids")))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut exports = Vec::new();
+        let mut entries = Vec::new();
+        for id in &ids {
+            let entry = Feed::entry(scope, id)
+                .map_err(|error| activity_feed_failure(&error))?
+                .ok_or_else(ApiFailure::not_found)?;
+            for receipt in entry.receipts() {
+                let canonical = receipt
+                    .canonical()
+                    .ok_or_else(ApiFailure::upstream_degraded)?
+                    .to_vec();
+                let authority = receipt
+                    .authority()
+                    .copied()
+                    .ok_or_else(ApiFailure::upstream_degraded)?;
+                let digest: [u8; 32] = sha2::Sha256::digest(&canonical).into();
+                if hex_bytes(&digest) != receipt.reference() {
+                    return Err(ApiFailure::upstream_degraded());
+                }
+                let fact = EvidenceBundle::receipt_fact(id, canonical, authority)
+                    .map_err(|_| ApiFailure::upstream_degraded())?;
+                exports.push(OfflineExport {
+                    receipts: vec![fact],
+                    inclusions: Vec::new(),
+                    checkpoints: Vec::new(),
+                    derived_aggregates: Vec::new(),
+                });
+            }
+            entries.push(entry);
+        }
+        let receipt_authority = ReceiptAuthority::from_entries(&entries);
+        let head = self
+            .agent
+            .lock()
+            .map_err(|_| ApiFailure::unavailable())?
+            .head()
+            .map_err(|_| ApiFailure::upstream_degraded())?;
+        let (bundle, _) = EvidenceExport::new(self.feed, self.activity_export_maximum_bytes)
+            .map_err(activity_export_failure)?
+            .evidence(
+                scope,
+                &filters,
+                &ids,
+                exports,
+                self.settlement_domain,
+                &receipt_authority,
+                now()?,
+                head.chain_sequence,
+            )
+            .map_err(activity_export_failure)?;
+        let bytes = bundle.encode().map_err(activity_export_failure)?;
+        let digest: [u8; 32] = sha2::Sha256::digest(&bytes).into();
+        let text = hex_bytes(&digest);
+        let verification =
+            super::production_reads::verification_label(&verification_status(bundle.verify(
+                digest,
+                scope.principal(),
+                self.settlement_domain,
+                &receipt_authority,
+            )))?;
+        scope
+            .put(
+                Table::Cache,
+                RowKey::new(format!("activity-evidence-{text}"))
+                    .map_err(|_| ApiFailure::upstream_degraded())?,
+                now()?,
+                bytes,
+            )
+            .map_err(|_| ApiFailure::unavailable())?;
+        Ok(BackendResponse {
+            result: json!({"export_id":format!("exp_{text}"),"kind":"evidence-bundle","download_path":format!("/v1/evidence/evd_{text}"),"content_type":"application/vnd.layerx.evidence-bundle","created_at":now()?.to_string(),"evidence":bundle.entries().iter().flat_map(|entry|entry.receipt_references().iter()).map(|reference|json!({"evidence_id":format!("evd_{reference}"),"class":"layerx-receipt","verification":verification})).collect::<Vec<_>>() }),
+            session: None,
+        })
+    }
+
+    fn execute_activity_entry(
+        &self,
+        request: &ScopedRequest<'_>,
+        scope: &mut crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        super::production_reads::activity_entry(self.settlement_domain, scope, request)
+    }
+
+    fn execute_activity_query(
+        &self,
+        request: &ScopedRequest<'_>,
+        scope: &mut crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let filters = activity_filters(&request.body)?;
+        let limit = request
+            .body
+            .get("page_limit")
+            .and_then(serde_json::Value::as_u64)
+            .map_or(Ok(50usize), |value| {
+                usize::try_from(value).map_err(|_| ApiFailure::invalid_request(Some("page_limit")))
+            })?;
+        let mut page_request = PageRequest::new(limit, filters);
+        if let Some(cursor) = request
+            .body
+            .get("cursor")
+            .and_then(serde_json::Value::as_str)
+        {
+            page_request = page_request
+                .after(FeedCursor::parse(cursor).map_err(|error| activity_feed_failure(&error))?);
+        }
+        let head = self
+            .agent
+            .lock()
+            .map_err(|_| ApiFailure::unavailable())?
+            .head()
+            .map_err(|_| ApiFailure::upstream_degraded())?;
+        let page = self
+            .feed
+            .page(scope, page_request, now()?, head.chain_sequence)
+            .map_err(|error| activity_feed_failure(&error))?;
+        let mut groups =
+            std::collections::BTreeMap::<u64, (u128, u128, String, Vec<serde_json::Value>)>::new();
+        for entry in page.entries() {
+            let mut amount = 0u128;
+            let mut currency = None;
+            for receipt in entry.receipts() {
+                let bytes = receipt
+                    .canonical()
+                    .ok_or_else(ApiFailure::upstream_degraded)?;
+                let actual = crate::activity::detail::ReceiptActual::from_verified_journey_bytes(
+                    bytes,
+                    receipt.reference(),
+                )
+                .map_err(|_| ApiFailure::upstream_degraded())?;
+                amount = amount
+                    .checked_add(actual.amount())
+                    .ok_or_else(ApiFailure::upstream_degraded)?;
+                let asset = hex_bytes(&actual.asset());
+                if currency.as_ref().is_some_and(|value| value != &asset) {
+                    return Err(ApiFailure::upstream_degraded());
+                }
+                currency = Some(asset);
+            }
+            let bucket = entry.occurred_at() / 2_629_800;
+            let group = groups.entry(bucket).or_insert((
+                0,
+                0,
+                currency.clone().unwrap_or_default(),
+                Vec::new(),
+            ));
+            if let Some(currency) = currency {
+                if !group.2.is_empty() && group.2 != currency {
+                    return Err(ApiFailure::upstream_degraded());
+                }
+                group.2 = currency;
+            }
+            match entry.kind() {
+                crate::activity::ActivityKind::Deposit => {
+                    group.0 = group
+                        .0
+                        .checked_add(amount)
+                        .ok_or_else(ApiFailure::upstream_degraded)?;
+                }
+                crate::activity::ActivityKind::Withdrawal => {
+                    group.1 = group
+                        .1
+                        .checked_add(amount)
+                        .ok_or_else(ApiFailure::upstream_degraded)?;
+                }
+                _ => {
+                    if amount != 0 {
+                        return Err(ApiFailure::upstream_degraded());
+                    }
+                }
+            }
+            group.3.push(json!({"entry_id":entry.entry_id().as_str(),"kind":activity_kind_label(entry.kind()),"state":activity_status_label(entry.status()),"state_copy_key":format!("activity.state.{}",activity_status_label(entry.status())),"summary_copy_key":format!("activity.summary.{}",activity_kind_label(entry.kind())),"occurred_at":entry.occurred_at()}));
+        }
+        let groups=groups.into_iter().rev().map(|(month,(incoming,outgoing,currency,entries))|json!({"month":format!("unix-month-{month}"),"subtotal_in":{"amount":incoming.to_string(),"currency":currency},"subtotal_out":{"amount":outgoing.to_string(),"currency":currency},"entries":entries})).collect::<Vec<_>>();
+        Ok(BackendResponse {
+            result: json!({"groups":groups,"next_cursor":page.next().map_or("", FeedCursor::as_str),"filter":{"kinds":page.applied_filters().kinds().iter().map(|value|activity_kind_label(*value)).collect::<Vec<_>>(),"agent_id":page.applied_filters().agent(),"from":page.applied_filters().from(),"to":page.applied_filters().through()}}),
+            session: None,
+        })
+    }
+
+    fn execute_read_projection(
+        &self,
+        request: &ScopedRequest<'_>,
+        scope: &mut crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        super::production_reads::execute(self.settlement_domain, scope, request)
+            .unwrap_or_else(|| Err(ApiFailure::not_found()))
+    }
+}
+
+impl ProductionComponents {
+    fn execute_bootstrap(
+        &self,
+        request: &ScopedRequest<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let observed_at = now()?;
+        match request.operation.name.as_str() {
+            "account.create" => self.bootstrap_account_create(request, observed_at),
+            "passkey.register.begin" => self.bootstrap_passkey_register_begin(request, observed_at),
+            "passkey.register.finish" => {
+                self.bootstrap_passkey_register_finish(request, observed_at)
+            }
+            "passkey.assert.begin" => self.bootstrap_passkey_assert_begin(request, observed_at),
+            "passkey.assert.finish" => self.bootstrap_passkey_assert_finish(request, observed_at),
+            "session.open" => self.bootstrap_session_open(request, observed_at),
+            _ => Err(ApiFailure::not_found()),
+        }
+    }
+    fn bootstrap_account_create(
+        &self,
+        request: &ScopedRequest<'_>,
+        now: u64,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let (_, result, session) = {
+            let email = text_field(&request.body, "email")?;
+            let display_name = text_field(&request.body, "display_name")?;
+            let provisioned = self
+                .identity
+                .provision(email, display_name, required_idempotency(request)?, now)
+                .map_err(|error| identity_failure(&error))?;
+            self.auth_index
+                .bind_account(email, &provisioned.principal)
+                .map_err(|error| auth_failure(&error))?;
+            let mut store = self.store.lock().map_err(|_| ApiFailure::unavailable())?;
+            let mut scope = store
+                .principal(&provisioned.principal)
+                .map_err(|_| ApiFailure::unavailable())?;
+            let journey = OnboardingJourney::start(&mut scope, &provisioned.onboarding, now)
+                .map_err(|_| ApiFailure::upstream_degraded())?;
+            identity_dispatch::update_profile(
+                &mut scope,
+                &json!({"display_name": display_name}),
+                now,
+            )
+            .map_err(|error| identity_failure(&error))?;
+            let result = json!({"account_id": provisioned.principal.as_str(),
+                        "onboarding": identity_dispatch::onboarding_status(&journey.status())});
+            (provisioned.principal, result, None)
+        };
+        Ok(BackendResponse { result, session })
+    }
+
+    fn bootstrap_passkey_register_begin(
+        &self,
+        request: &ScopedRequest<'_>,
+        now: u64,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let (_, result, session) = {
+            let principal =
+                crate::store::PrincipalId::new(text_field(&request.body, "account_id")?)
+                    .map_err(|_| ApiFailure::invalid_request(Some("account_id")))?;
+            let mut store = self.store.lock().map_err(|_| ApiFailure::unavailable())?;
+            let mut scope = store
+                .principal(&principal)
+                .map_err(|_| ApiFailure::unauthenticated())?;
+            let profile =
+                identity_dispatch::profile(&scope).map_err(|error| identity_failure(&error))?;
+            let account =
+                AccountIdentity::new(principal.as_str(), text_field(&profile, "display_name")?)
+                    .map_err(|error| auth_api_failure(&error))?;
+            let challenge = self
+                .passkeys
+                .begin_registration(&mut scope, &account, "Primary passkey", now)
+                .map_err(|error| auth_api_failure(&error))?;
+            self.auth_index
+                .bind_registration(&challenge.registration_id, &principal, challenge.expires_at)
+                .map_err(|error| auth_failure(&error))?;
+            let result = json!({"registration_id": challenge.registration_id,
+                        "ceremony": challenge.ceremony, "expires_at": challenge.expires_at});
+            (principal, result, None)
+        };
+        Ok(BackendResponse { result, session })
+    }
+
+    fn bootstrap_passkey_register_finish(
+        &self,
+        request: &ScopedRequest<'_>,
+        now: u64,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let (_, result, session) = {
+            let registration_id = path(request, "registration_id")?;
+            let principal = self
+                .auth_index
+                .resolve_registration(registration_id, now)
+                .map_err(|error| auth_failure(&error))?;
+            let mut store = self.store.lock().map_err(|_| ApiFailure::unavailable())?;
+            let mut scope = store
+                .principal(&principal)
+                .map_err(|_| ApiFailure::unavailable())?;
+            let passkey = self
+                .passkeys
+                .finish_registration(
+                    &mut scope,
+                    registration_id,
+                    text_field(&request.body, "credential")?,
+                    now,
+                )
+                .map_err(|error| auth_api_failure(&error))?;
+            let result =
+                serde_json::to_value(passkey).map_err(|_| ApiFailure::upstream_degraded())?;
+            (principal, result, None)
+        };
+        Ok(BackendResponse { result, session })
+    }
+
+    fn bootstrap_passkey_assert_begin(
+        &self,
+        request: &ScopedRequest<'_>,
+        now: u64,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let (_, result, session) = {
+            let email = text_field(&request.body, "email")?;
+            let principal = self
+                .auth_index
+                .resolve_account(email)
+                .map_err(|error| auth_failure(&error))?;
+            let mut store = self.store.lock().map_err(|_| ApiFailure::unavailable())?;
+            let mut scope = store
+                .principal(&principal)
+                .map_err(|_| ApiFailure::unauthenticated())?;
+            let challenge = self
+                .passkeys
+                .begin_assertion(&mut scope, now)
+                .map_err(|error| auth_api_failure(&error))?;
+            self.auth_index
+                .bind_assertion(&challenge.assertion_id, &principal, challenge.expires_at)
+                .map_err(|error| auth_failure(&error))?;
+            let result = json!({"assertion_id": challenge.assertion_id,
+                        "ceremony": challenge.ceremony, "expires_at": challenge.expires_at});
+            (principal, result, None)
+        };
+        Ok(BackendResponse { result, session })
+    }
+
+    fn bootstrap_passkey_assert_finish(
+        &self,
+        request: &ScopedRequest<'_>,
+        now: u64,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let (_, result, session) = {
+            let assertion_id = path(request, "assertion_id")?;
+            let principal = self
+                .auth_index
+                .resolve_assertion(assertion_id, now)
+                .map_err(|error| auth_failure(&error))?;
+            let mut store = self.store.lock().map_err(|_| ApiFailure::unavailable())?;
+            let mut scope = store
+                .principal(&principal)
+                .map_err(|_| ApiFailure::unavailable())?;
+            let proof = self
+                .passkeys
+                .finish_assertion(
+                    &mut scope,
+                    assertion_id,
+                    text_field(&request.body, "credential")?,
+                    now,
+                )
+                .map_err(|error| auth_api_failure(&error))?;
+            let result = json!({"assertion_id": proof.assertion_id, "passkey_id": proof.passkey_id,
+                        "completed_at": now, "expires_at": proof.expires_at});
+            (principal, result, None)
+        };
+        Ok(BackendResponse { result, session })
+    }
+
+    fn bootstrap_session_open(
+        &self,
+        request: &ScopedRequest<'_>,
+        now: u64,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let (_, result, session) = {
+            let assertion_id = text_field(&request.body, "assertion_id")?;
+            let principal = self
+                .auth_index
+                .resolve_assertion(assertion_id, now)
+                .map_err(|error| auth_failure(&error))?;
+            let device = request
+                .body
+                .get("device")
+                .and_then(serde_json::Value::as_object)
+                .ok_or_else(|| ApiFailure::invalid_request(Some("device")))?;
+            let device_label = device
+                .get("label")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| ApiFailure::invalid_request(Some("device.label")))?;
+            let device_platform = device
+                .get("platform")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| ApiFailure::invalid_request(Some("device.platform")))?;
+            let idempotency = required_idempotency(request)?;
+            let action = action_key(idempotency);
+            let recovery_seed = self
+                .auth_index
+                .browser_session_seed(&principal, assertion_id, idempotency)
+                .map_err(|error| auth_failure(&error))?;
+            let mut store = self.store.lock().map_err(|_| ApiFailure::unavailable())?;
+            let mut scope = store
+                .principal(&principal)
+                .map_err(|_| ApiFailure::unavailable())?;
+            let mut prepared = self
+                .passkeys
+                .prepare_open_session_replayable(
+                    &mut scope,
+                    crate::auth::ReplayableSessionRequest {
+                        assertion_id,
+                        label: device_label,
+                        platform: device_platform,
+                        action_key: action,
+                        recovery_seed,
+                        now,
+                    },
+                )
+                .map_err(|error| auth_api_failure(&error))?;
+            let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
+            let registry = agent.registry().clone();
+            let (intent, grant_id) =
+                browser_grant_intent(&mut agent, &prepared, recovery_seed, &self.agent_actor)?;
+            let trace =
+                TraceId::parse(&request.trace).map_err(|_| ApiFailure::invalid_request(None))?;
+            let mut adapter = ProductionAgentCreation::new(
+                &mut agent,
+                &self.agent_contract,
+                &self.custody,
+                &trace,
+                self.agent_actor.clone(),
+                self.agent_authority.clone(),
+                super::agent_creation::CreationBounds {
+                    timestamp_span: self.agent_timestamp_span_seconds,
+                    fee_limit: self.agent_fee_limit,
+                },
+            )
+            .map_err(|_| ApiFailure::upstream_degraded())?;
+            let evidence = adapter
+                .submit_lifecycle_intent(
+                    &mut scope,
+                    &registry,
+                    intent,
+                    action,
+                    KeyId::new("human-primary").map_err(|_| ApiFailure::upstream_degraded())?,
+                    prepared.opened_at(),
+                )
+                .map_err(|_| ApiFailure::upstream_degraded())?;
+            ProductionAgentCreation::finalization_evidence(&evidence, ModuleId::Governance, 5, now)
+                .map_err(|_| ApiFailure::upstream_degraded())?;
+            prepared
+                .bind_protocol_grant(grant_id)
+                .map_err(|error| auth_api_failure(&error))?;
+            let grant = Passkeys::commit_open_session(&mut scope, prepared, now)
+                .map_err(|error| auth_api_failure(&error))?;
+            self.auth_index
+                .bind_session(&grant, &principal)
+                .map_err(|error| auth_failure(&error))?;
+            let session_view = grant.session();
+            let result = json!({"session_id": grant.session_id(), "device": {"device_id": session_view.device.device_id(),
+                        "label": session_view.device.label(), "platform": session_view.device.platform()}, "opened_at": session_view.opened_at,
+                        "last_active_at": session_view.last_active_at, "current": true});
+            let session = SessionSecrets {
+                access_token: grant.access_token().expose().to_owned(),
+                refresh_token: grant.refresh_token().expose().to_owned(),
+                csrf_token: grant.csrf_token().expose().to_owned(),
+                access_max_age_seconds: grant.access_expires_at().saturating_sub(now),
+                refresh_max_age_seconds: grant.refresh_expires_at().saturating_sub(now),
+            };
+            (principal, result, Some(session))
+        };
+        Ok(BackendResponse { result, session })
+    }
+}
+
+impl ProductionComponents {
+    fn execute_authorized(
+        &self,
+        request: &ScopedRequest<'_>,
+        scope: &mut crate::store::PrincipalScope<'_>,
+        principal: &crate::store::PrincipalId,
+        session_id: &str,
+    ) -> Result<BackendResponse, ApiFailure> {
+        match request.operation.name.as_str() {
+            "agent.create" => self.execute_agent_create(request, scope),
+            "agent.list" => self.execute_agent_list(),
+            "agent.get" => self.execute_agent_get(request),
+            "agent.pause" | "agent.resume" => self.execute_agent_pause(request, scope),
+            "agent.limit" => self.execute_agent_limit(request, scope),
+            "agent.reclaim" => self.execute_agent_reclaim(request, scope),
+            "agent.rotate" | "agent.recover" => {
+                self.execute_agent_rotate(request, scope, principal)
+            }
+            "agent.archive" => self.execute_agent_archive(request, scope),
+            "security.action" => Self::execute_security_action(request, scope),
+            "stepup.begin" => self.execute_stepup_begin(request, scope, principal),
+            "stepup.finish" => self.execute_stepup_finish(request, scope),
+            "profile.get" => Self::execute_profile_get(scope),
+            "profile.update" => Self::execute_profile_update(request, scope),
+            "onboarding.status" => Self::execute_onboarding_status(scope),
+            "onboarding.resume" => self.execute_onboarding_resume(request, scope),
+            "binding.statement" => self.execute_binding_statement(request, scope),
+            "binding.submit" => self.execute_binding_submit(request, scope),
+            "binding.status" => Self::execute_binding_status(scope),
+            "binding.rebind.action" => self.execute_binding_rebind_action(request, scope),
+            "binding.rebind" => self.execute_binding_rebind(request, scope),
+            "move.quote" => self.execute_move_quote(request, scope),
+            "move.commit" => self.execute_move_commit(request, scope),
+            "deposit.start" => self.execute_deposit_start(request, scope),
+            "deposit.confirm" => self.execute_deposit_confirm(request, scope),
+            "withdraw.start" => self.execute_withdraw_start(request, scope),
+            "withdraw.claim" => self.execute_withdraw_claim(request, scope),
+            "exit.start" => self.execute_exit_start(request, scope),
+            "exit.eligibility" => self.execute_exit_eligibility(),
+            "security.passkey.list" => Self::execute_security_passkey_list(scope),
+            "security.passkey.register.begin" => {
+                self.execute_security_passkey_register_begin(request, scope, principal)
+            }
+            "security.passkey.register.finish" => {
+                self.execute_security_passkey_register_finish(request, scope, principal)
+            }
+            "security.passkey.revoke" => Self::execute_security_passkey_revoke(request, scope),
+            "session.refresh" => self.execute_session_refresh(request, scope, principal),
+            "authenticator.status" => self.execute_authenticator_status(principal),
+            "authenticator.setup.begin" => {
+                self.execute_authenticator_setup_begin(request, principal)
+            }
+            "authenticator.setup.finish" => {
+                self.execute_authenticator_setup_finish(request, principal)
+            }
+            "authenticator.disable" => self.execute_authenticator_disable(request, principal),
+            "authenticator.backup.rotate" => self.execute_authenticator_backup_rotate(principal),
+            "security.recovery.reveal" => self.execute_security_recovery_reveal(request, principal),
+            "session.list" => Self::execute_session_list(scope, session_id),
+            "session.revoke" | "security.session.revoke" => {
+                self.execute_session_revoke(request, scope)
+            }
+            "session.revoke-all" | "security.session.revoke-all" => {
+                self.execute_session_revoke_all(request, scope)
+            }
+            "approval.list" => self.execute_approval_list(scope),
+            "approval.get" => self.execute_approval_get(request, scope),
+            "approval.approve" | "approval.reject" => self.execute_approval_approve(request, scope),
+            "support.list" => Self::execute_support_list(scope),
+            "support.create" => Self::execute_support_create(request, scope),
+            "support.reply" => Self::execute_support_reply(request, scope),
+            "support.read" => Self::execute_support_read(request, scope),
+            "support.status" => Self::execute_support_status(request, scope),
+            "support.feedback" => Self::execute_support_feedback(request, scope),
+            "notification.list" => Self::execute_notification_list(scope),
+            "notification.read" => Self::execute_notification_read(request, scope),
+            "notification.preferences.get" => Self::execute_notification_preferences_get(scope),
+            "notification.preferences.set" => {
+                Self::execute_notification_preferences_set(request, scope)
+            }
+            "home.summary" => self.execute_home_summary(scope),
+            "account.balance" => self.execute_account_balance(scope),
+            "stream.open" => self.execute_stream_open(scope),
+            "stream.next" => self.execute_stream_next(request, scope),
+            "activity.export.statement" => self.execute_activity_export_statement(request, scope),
+            "activity.export.evidence" => self.execute_activity_export_evidence(request, scope),
+            "activity.entry" => self.execute_activity_entry(request, scope),
+            "activity.query" => self.execute_activity_query(request, scope),
+            _ => self.execute_read_projection(request, scope),
+        }
+    }
+}
+
+fn movement_account_address(account: &AccountId, protocol: u16) -> Result<[u8; 32], ApiFailure> {
+    layerx_paxeer_client::account_address_for_protocol(account, protocol)
+        .map_err(|_| ApiFailure::forbidden())
+}
+
+impl ProductionComponents {
+    fn execute_agent_resume(
+        &self,
+        request: &ScopedRequest<'_>,
+        scope: &mut crate::store::PrincipalScope<'_>,
+    ) -> Result<BackendResponse, ApiFailure> {
+        let mut agent = self.agent.lock().map_err(|_| ApiFailure::unavailable())?;
+        let agent_id = path(request, "agent_id")?;
+
+        let context = agent.agent_context(agent_id).map_err(agent_failure)?;
+        let identity = agent
+            .identity_resolve(&context.agent_did)
+            .map_err(agent_failure)?;
+        if identity.frozen {
+            return Err(ApiFailure::upstream_degraded());
+        }
+        let operation_key = action_key(required_idempotency(request)?);
+        let current = now()?;
+        let trace =
+            TraceId::parse(&request.trace).map_err(|_| ApiFailure::invalid_request(None))?;
+        let registry = agent.registry().clone();
+        let mut adapter = ProductionAgentCreation::new(
+            &mut agent,
+            &self.agent_contract,
+            &self.custody,
+            &trace,
+            AgentDid::new(context.seed.actor.clone())
+                .map_err(|_| ApiFailure::upstream_degraded())?,
+            AuthorityRef::new(context.seed.primary_authority.clone())
+                .map_err(|_| ApiFailure::upstream_degraded())?,
+            super::agent_creation::CreationBounds {
+                timestamp_span: self.agent_timestamp_span_seconds,
+                fee_limit: self.agent_fee_limit,
+            },
+        )
+        .map_err(|_| ApiFailure::upstream_degraded())?;
+        let lifetime = context
+            .seed
+            .session_expiry_unix_seconds
+            .checked_sub(context.seed.created_at)
+            .ok_or_else(ApiFailure::upstream_degraded)?;
+        let expires_at = current
+            .checked_add(lifetime)
+            .ok_or_else(ApiFailure::upstream_degraded)?;
+        let evidence = adapter
+            .provision_session_scoped(
+                scope,
+                &registry,
+                SessionProvision {
+                    action_key: operation_key,
+                    did: Did::new(context.agent_did.as_bytes())
+                        .map_err(|_| ApiFailure::upstream_degraded())?,
+                    activity_types: context
+                        .seed
+                        .activity_types
+                        .iter()
+                        .map(|value| layerx_types::payload::ActivityType::from_u32(*value))
+                        .collect::<Result<Vec<_>, _>>()
+                        .map_err(|_| ApiFailure::upstream_degraded())?,
+                    daemon_scopes: context.seed.session_scopes.clone(),
+                    expires_at,
+                    primary_authority: context.seed.custody_public_key,
+                    grantor: managed_protocol_identity(&context.seed.agent_id)?,
+                    custody_key: KeyId::new(context.seed.custody_key.clone())
+                        .map_err(|_| ApiFailure::upstream_degraded())?,
+                    revocation_sequence: identity.revocation_sequence,
+                },
+            )
+            .map_err(agent_failure_from_creation_contract)?;
+        let (token_id, generation) = adapter
+            .take_latest_session_credential()
+            .map_err(agent_failure_from_creation_contract)?;
+        let observation = agent
+            .agent_session_bind(agent_id, operation_key, token_id, operation_key)
+            .map_err(agent_failure)?;
+        if observation.generation != generation {
+            return Err(ApiFailure::upstream_degraded());
+        }
+        let finalization = super::agent_runtime::AgentFinalizationEvidence {
+            action_key: operation_key,
+            activity_id: operation_key,
+            receipt_digest: evidence.receipt_digest,
+            observed_sequence: evidence.observed_sequence,
+            verification: evidence.verification_level.wire_rank(),
+            finalized_at: current,
+        };
+        let value = agent
+            .agent_control(agent_id, true, observation.evidence_digest, finalization)
+            .map_err(agent_failure)?;
+        Ok(BackendResponse {
+            result: managed_agent_json(&value),
+            session: None,
+        })
+    }
+}
+
+impl ProductionComponents {
+    fn archive_defund(
+        &self,
+        scope: &mut crate::store::PrincipalScope<'_>,
+        agent: &mut AgentRuntime,
+        context: &super::agent_runtime::AgentLifecycleContext,
+        pre: &super::agent_runtime::AgentBudgetState,
+        operation_key: [u8; 32],
+        trace: &TraceId,
+    ) -> Result<(), ApiFailure> {
+        let registry = agent.registry().clone();
+
+        let defund_key: [u8; 32] = Sha256::digest(
+            [
+                b"layerx-human/agent-archive-defund/v1\0".as_slice(),
+                operation_key.as_slice(),
+            ]
+            .concat(),
+        )
+        .into();
+        let intent = Intent::v1(IntentKind::BudgetDefund(
+            BudgetDefund::new(
+                BudgetId::new(context.active_budget_id),
+                AccountId::parse(&context.seed.budget_account)
+                    .map_err(|_| ApiFailure::upstream_degraded())?,
+                AccountId::parse(&context.seed.owner_account)
+                    .map_err(|_| ApiFailure::upstream_degraded())?,
+                AssetId::new(context.seed.budget_asset),
+                ProtocolAmount::from_u128(pre.remaining),
+                ProtocolSequence::from_u64(pre.revocation_sequence),
+                IdempotencyKey::new(defund_key),
+            )
+            .map_err(|_| ApiFailure::upstream_degraded())?,
+        ));
+        let current = now()?;
+        let mut adapter = ProductionAgentCreation::new(
+            agent,
+            &self.agent_contract,
+            &self.custody,
+            trace,
+            AgentDid::new(context.seed.actor.clone())
+                .map_err(|_| ApiFailure::upstream_degraded())?,
+            AuthorityRef::new(context.seed.primary_authority.clone())
+                .map_err(|_| ApiFailure::upstream_degraded())?,
+            super::agent_creation::CreationBounds {
+                timestamp_span: self.agent_timestamp_span_seconds,
+                fee_limit: self.agent_fee_limit,
+            },
+        )
+        .map_err(|_| ApiFailure::upstream_degraded())?;
+        let receipt = adapter
+            .submit_lifecycle_intent(
+                scope,
+                &registry,
+                intent,
+                defund_key,
+                KeyId::new(context.seed.custody_key.clone())
+                    .map_err(|_| ApiFailure::upstream_degraded())?,
+                current,
+            )
+            .map_err(|_| ApiFailure::upstream_degraded())?;
+        ProductionAgentCreation::finalization_evidence(&receipt, ModuleId::Budget, 7, now()?)
+            .map_err(|_| ApiFailure::upstream_degraded())?;
+        Ok(())
+    }
+}
+
+fn production_passkey_config() -> Result<AuthConfig, String> {
+    Ok(AuthConfig {
+        rp_id: required("LAYERX_HUMAN_RP_ID")?,
+        rp_name: required("LAYERX_HUMAN_RP_NAME")?,
+        origin: required("LAYERX_HUMAN_ORIGIN")?,
+        ceremony_ttl_secs: number("LAYERX_HUMAN_CEREMONY_TTL_SECONDS")?,
+        assertion_ttl_secs: number("LAYERX_HUMAN_ASSERTION_TTL_SECONDS")?,
+        session_ttl_secs: number("LAYERX_HUMAN_SESSION_TTL_SECONDS")?,
+        refresh_ttl_secs: number("LAYERX_HUMAN_REFRESH_TTL_SECONDS")?,
+        step_up_ttl_secs: number("LAYERX_HUMAN_STEP_UP_TTL_SECONDS")?,
+        rate_limit: RateLimit {
+            attempts: number("LAYERX_HUMAN_AUTH_RATE_ATTEMPTS")?,
+            window_secs: number("LAYERX_HUMAN_AUTH_RATE_WINDOW_SECONDS")?,
+        },
+    })
+}
+fn production_retention_config() -> Result<RetentionPolicy, String> {
+    let retention = |name: &str| number(name).map(RetentionPeriod::new);
+    Ok(RetentionPolicy {
+        journeys: retention("LAYERX_HUMAN_RETENTION_JOURNEYS_SECONDS")?,
+        notifications: retention("LAYERX_HUMAN_RETENTION_NOTIFICATIONS_SECONDS")?,
+        audit: retention("LAYERX_HUMAN_RETENTION_AUDIT_SECONDS")?,
+        telemetry: retention("LAYERX_HUMAN_RETENTION_TELEMETRY_SECONDS")?,
+        cache: retention("LAYERX_HUMAN_RETENTION_CACHE_SECONDS")?,
+    })
+}
+
+fn validate_production_configuration(config: &ProductionComponentsConfig) -> Result<(), String> {
+    let schema = ApiSchema::v1().map_err(|_| "human API schema is invalid".to_owned())?;
+    if schema.operations().len() != PRODUCTION_OPERATIONS.len()
+        || schema
+            .operations()
+            .iter()
+            .any(|operation| !PRODUCTION_OPERATIONS.contains(&operation.name.as_str()))
+    {
+        return Err("human API operation dispatch is incomplete".to_owned());
+    }
+    if !(1..=60).contains(&config.capability_ttl_seconds) {
+        return Err("LAYERX_HUMAN_CAPABILITY_TTL_SECONDS must be between 1 and 60".to_owned());
+    }
+    if config.evm_gas_limit == 0
+        || config.evm_max_fee_per_gas == 0
+        || config.evm_max_priority_fee_per_gas > config.evm_max_fee_per_gas
+    {
+        return Err("EVM execution gas and fee bounds are invalid".to_owned());
+    }
+    if config.agent_timestamp_span_seconds == 0 || config.agent_fee_limit == 0 {
+        return Err("agent preparation bounds must be non-zero".to_owned());
+    }
+    if config.continuation_unknown_deadline_seconds == 0 {
+        return Err(
+            "LAYERX_HUMAN_CONTINUATION_UNKNOWN_DEADLINE_SECONDS must be non-zero".to_owned(),
+        );
+    }
+    Ok(())
+}
+fn production_kms_provider(
+    config: &ProductionComponentsConfig,
+) -> Result<RemoteKmsProvider, String> {
+    let tls = mutual_tls(
+        &config.kms_root_certificate,
+        &config.kms_client_certificate,
+        &config.kms_client_private_key,
+    )?;
+    let provider = RemoteKmsProvider::new(
+        config.kms_provider_reference.clone(),
+        config.kms_endpoint,
+        config.kms_server_name.clone(),
+        tls,
+        config.kms_limits,
+    )
+    .map_err(|_| "KMS configuration was refused".to_owned())?;
+    Ok(provider)
+}
+
+fn finality_host(url: &str) -> Result<String, String> {
+    let refused = || "Paxeer finality requires valid independent HTTPS hosts".to_owned();
+    let authority = url
+        .strip_prefix("https://")
+        .and_then(|rest| rest.split('/').next())
+        .filter(|value| !value.is_empty() && !value.contains(['@', '?', '#']))
+        .ok_or_else(refused)?;
+    let (host, port) = if let Some(bracketed) = authority.strip_prefix('[') {
+        let (host, suffix) = bracketed.split_once(']').ok_or_else(refused)?;
+        host.parse::<std::net::Ipv6Addr>().map_err(|_| refused())?;
+        (
+            host,
+            if suffix.is_empty() {
+                None
+            } else {
+                Some(suffix.strip_prefix(':').ok_or_else(refused)?)
+            },
+        )
+    } else {
+        match authority.split_once(':') {
+            Some((host, port)) => (host, Some(port)),
+            None => (authority, None),
+        }
+    };
+    if let Some(port) = port {
+        if port.parse::<u16>().map_err(|_| refused())? == 0 {
+            return Err(refused());
+        }
+    }
+    let canonical = host.parse::<std::net::IpAddr>().map_or_else(
+        |_| host.trim_end_matches('.').to_ascii_lowercase(),
+        |address| address.to_string(),
+    );
+    if canonical.is_empty()
+        || host.chars().any(char::is_whitespace)
+        || host.contains(['%', '/', '\\'])
+    {
+        return Err(refused());
+    }
+    Ok(canonical)
+}
+
+#[cfg(test)]
+mod finality_host_tests {
+    use super::finality_host;
+
+    #[test]
+    fn endpoint_variants_are_not_independent_votes() -> Result<(), String> {
+        for alias in [
+            "https://RPC.EXAMPLE/one",
+            "https://rpc.example.:443/two",
+            "https://rpc.example:8443/three",
+        ] {
+            assert_eq!(finality_host(alias)?, "rpc.example");
+        }
+        assert_eq!(
+            finality_host("https://[2001:0db8::1]:443/a")?,
+            finality_host("https://[2001:db8::1]:8443/b")?
+        );
+        assert_ne!(
+            finality_host("https://one.example/")?,
+            finality_host("https://two.example/")?
+        );
+        for invalid in [
+            "http://one.example",
+            "https://user@one.example",
+            "https://one.example:0",
+            "https://[invalid]:443",
+            "https://one.example:bad",
+        ] {
+            assert!(finality_host(invalid).is_err());
+        }
+        Ok(())
+    }
+}
+
+fn production_withdrawal_boundary(
+    config: &ProductionComponentsConfig,
+) -> Result<layerx_paxeer_client::WithdrawalBoundary, String> {
+    let withdrawal_boundary = layerx_paxeer_client::WithdrawalBoundary::new_for_protocol(
+        layerx_paxeer_client::WithdrawalConfig {
+            endpoints: config.paxeer_finality_endpoints.clone(),
+            minimum_endpoint_agreement: config.paxeer_minimum_agreement,
+            claims_contract: config.withdrawal_claims_contract,
+            required_confirmations: config.exit_required_confirmations,
+            poll_cadence: config.exit_poll_cadence,
+            delayed_after_polls: config.exit_delayed_after_polls,
+        },
+        config.protocol_version,
+    )
+    .map_err(|_| "Paxeer withdrawal boundary refused startup".to_owned())?;
+    Ok(withdrawal_boundary)
+}
+
+fn movement_principal_account(
+    scope: &crate::store::PrincipalScope<'_>,
+) -> Result<(AgentDid, AccountId), ApiFailure> {
+    let onboarding = OnboardingJourney::load(scope)
+        .map_err(|_| ApiFailure::upstream_degraded())?
+        .ok_or_else(ApiFailure::forbidden)?;
+    let did = onboarding
+        .did()
+        .map_err(|_| ApiFailure::upstream_degraded())?;
+    let did = std::str::from_utf8(did.as_bytes()).map_err(|_| ApiFailure::upstream_degraded())?;
+    let actor = AgentDid::new(did).map_err(|_| ApiFailure::upstream_degraded())?;
+    let account = AccountId::parse(&format!("agent:{did}:main"))
+        .map_err(|_| ApiFailure::upstream_degraded())?;
+    Ok((actor, account))
+}
+
+fn movement_active_binding(
+    scope: &crate::store::PrincipalScope<'_>,
+    registry: &layerx_types::payload::ModuleRegistry,
+    network: u32,
+) -> Result<crate::binding::ActiveBinding, ApiFailure> {
+    let binding = crate::binding::BindingJourney::new(registry.clone());
+    let (crate::binding::BindingState::Active(active)
+    | crate::binding::BindingState::Rebinding { active, .. }) = binding
+        .state(scope)
+        .map_err(|_| ApiFailure::upstream_degraded())?
+    else {
+        return Err(ApiFailure::forbidden());
+    };
+    if active.network_id() != network {
+        return Err(ApiFailure::forbidden());
+    }
+    Ok(active)
+}
+
+fn browser_grant_intent(
+    agent: &mut AgentRuntime,
+    prepared: &crate::auth::PreparedBrowserSession,
+    recovery_seed: [u8; 32],
+    actor: &AgentDid,
+) -> Result<(Intent, [u8; 32]), ApiFailure> {
+    let mut session_seed: [u8; 32] = Sha256::digest(
+        [
+            b"layerx-human/browser-session-signer/v1\0".as_slice(),
+            recovery_seed.as_slice(),
+        ]
+        .concat(),
+    )
+    .into();
+    let session_public_key = LocalSigner::new(session_seed).public_key();
+    session_seed.fill(0);
+    let authenticated = agent.balance().map_err(agent_failure)?;
+    let identity = agent
+        .identity_resolve(actor.as_str())
+        .map_err(agent_failure)?;
+    let registry = agent.registry().clone();
+    let activity_types = registry
+        .registrations()
+        .iter()
+        .filter(|registration| registration.module() == ModuleId::Governance)
+        .flat_map(|registration| registration.activity_types().iter().copied())
+        .collect::<Vec<_>>();
+    if activity_types.is_empty() {
+        return Err(ApiFailure::upstream_degraded());
+    }
+    let issued = issue_session_key(&SessionKeyRequest {
+        grantor: authenticated.account,
+        session_public_key,
+        not_before: prepared.opened_at(),
+        expires_at: Some(prepared.refresh_expires_at()),
+        permitted_activity_types: activity_types,
+        revocation_sequence: Some(identity.revocation_sequence),
+    })
+    .map_err(|_| ApiFailure::upstream_degraded())?;
+    let intent = Intent::v1(IntentKind::SessionGrant(
+        ProtocolSessionGrant::new(issued.registration_payload)
+            .map_err(|_| ApiFailure::upstream_degraded())?,
+    ));
+    Ok((intent, issued.grant_id))
+}
+
+impl ProductionComponents {
+    fn advance_exit_continuation(
+        &self,
+        scope: &mut crate::store::PrincipalScope<'_>,
+        id: &crate::notify::JourneyId,
+        trace: &TraceId,
+        observed_at: u64,
+    ) -> Result<bool, ApiFailure> {
+        let mut journey = crate::journeys::ExitJourney::load(scope, id)
+            .map_err(exit_journey_failure)?
+            .ok_or_else(ApiFailure::not_found)?;
+        let mut movement = self
+            .movement
+            .lock()
+            .map_err(|_| ApiFailure::unavailable())?;
+        let status = movement
+            .advance_exit(
+                scope,
+                trace,
+                &self.emergency_exit,
+                &mut journey,
+                observed_at,
+            )
+            .map_err(exit_journey_failure)?;
+        Ok(matches!(
+            status.stage(),
+            crate::journeys::ExitStage::Done(_)
+                | crate::journeys::ExitStage::Failed(_)
+                | crate::journeys::ExitStage::UnavailableWhileNetworkOperatingNormally { .. }
+        ))
+    }
+}
+
+fn stored_rebinding_statement(
+    scope: &crate::store::PrincipalScope<'_>,
+) -> Result<
+    (
+        crate::binding::BindingStatement,
+        crate::auth::OperationDigest,
+    ),
+    ApiFailure,
+> {
+    let (statement, confirms): (
+        crate::binding::BindingStatement,
+        crate::auth::OperationDigest,
+    ) = serde_json::from_slice(
+        scope
+            .get(
+                Table::Journeys,
+                &RowKey::new("wallet-rebinding-issued").map_err(|_| ApiFailure::unavailable())?,
+            )
+            .ok_or_else(ApiFailure::not_found)?
+            .bytes(),
+    )
+    .map_err(|_| ApiFailure::upstream_degraded())?;
+    Ok((statement, confirms))
+}
+
+fn production_auth_index(root: PathBuf, key: [u8; 32]) -> Result<AuthDiscoveryIndex, String> {
+    AuthDiscoveryIndex::open(
+        root,
+        IndexAuthenticationKey::new(key)
+            .map_err(|_| "authentication index key is invalid".to_owned())?,
+    )
+    .map_err(|_| "authentication index refused startup".to_owned())
 }

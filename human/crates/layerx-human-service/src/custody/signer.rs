@@ -294,13 +294,11 @@ impl CustodySigner {
         &self.keystore
     }
 
-    pub(crate) const fn creation_registry(&self) -> &ModuleRegistry {
-        &self.registry
-    }
-
+    /// Binds authenticated step-up evidence to an exact disclosure.
+    /// # Errors
+    /// Refuses stale evidence and mismatched operation or disclosure digests.
     #[allow(clippy::too_many_arguments)]
     pub fn bind_authenticated_step_up(
-        &self,
         passkeys: &crate::auth::Passkeys,
         scope: &mut crate::store::PrincipalScope<'_>,
         authenticated: &crate::auth::StepUpEvidence,
@@ -310,6 +308,7 @@ impl CustodySigner {
         capability_request_digest: [u8; 32],
         now: u64,
     ) -> Result<StepUpEvidence, CustodyError> {
+        use sha2::Digest as _;
         if prepared_disclosure_digest == [0; 32] || capability_request_digest == [0; 32] {
             return Err(CustodyError::InvalidEvidence);
         }
@@ -317,7 +316,6 @@ impl CustodySigner {
             .revalidate_step_up(scope, authenticated, expected_auth_operation, now)
             .map_err(|_| CustodyError::InvalidEvidence)?;
         let mut digest = sha2::Sha256::new();
-        use sha2::Digest as _;
         digest.update(b"layerx-human/auth-to-custody-step-up/v1\0");
         digest.update(scope.principal().as_str().as_bytes());
         digest.update(authenticated.challenge_id().as_bytes());
@@ -334,6 +332,9 @@ impl CustodySigner {
             authenticated.expires_at(),
         )
     }
+    /// Resumes the durable local onboarding journey.
+    /// # Errors
+    /// Returns custody and onboarding state refusals.
     pub fn resume_onboarding_local(
         &self,
         journey: &mut crate::onboarding::OnboardingJourney,
@@ -815,4 +816,63 @@ fn hex(bytes: [u8; 32]) -> String {
         output.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
     }
     output
+}
+
+impl CustodySigner {
+    /// Resolves the principal's custody-bound EVM wallet.
+    /// # Errors
+    /// Refuses invalid custody records or unavailable providers.
+    pub fn evm_wallet(
+        &self,
+        principal: &PrincipalId,
+        key: &KeyId,
+    ) -> Result<[u8; 20], CustodyError> {
+        self.keystore.evm_wallet(principal, key)
+    }
+    /// Resolves the existing principal custody binding.
+    /// # Errors
+    /// Refuses missing or mismatched custody records.
+    pub fn evm_binding(
+        &self,
+        principal: &PrincipalId,
+        key: &KeyId,
+    ) -> Result<super::PrincipalKeyBinding, CustodyError> {
+        self.keystore.evm_binding(principal, key)
+    }
+    /// Resolves the existing opaque provider key handle.
+    /// # Errors
+    /// Refuses missing or mismatched custody records.
+    pub fn evm_provider_reference(
+        &self,
+        principal: &PrincipalId,
+        key: &KeyId,
+    ) -> Result<super::ProviderKeyReference, CustodyError> {
+        self.keystore.evm_provider_reference(principal, key)
+    }
+    /// Registers a transaction derived from an authorized movement plan.
+    /// # Errors
+    /// Refuses expired plans, binding mismatch and nonce/action conflicts.
+    pub fn authorize_evm_plan(
+        &self,
+        principal: &PrincipalId,
+        key: &KeyId,
+        authorization: &super::EvmPlanAuthorization,
+    ) -> Result<super::EvmAction, CustodyError> {
+        self.keystore
+            .authorize_evm_plan(principal, key, authorization)
+    }
+}
+
+impl CustodySigner {
+    /// Signs the exact native owner SEND authorization of an approved plan.
+    /// # Errors
+    /// Refuses principal, protocol, expiry and durable action conflicts.
+    pub fn authorize_send(
+        &self,
+        principal: &PrincipalId,
+        key: &KeyId,
+        authorization: &super::SendPlanAuthorization,
+    ) -> Result<[u8; 64], CustodyError> {
+        self.keystore.authorize_send(principal, key, authorization)
+    }
 }

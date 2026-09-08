@@ -137,39 +137,7 @@ impl ComponentRequest {
                     return Err(ApiFailure::invalid_request(Some("component")));
                 }
                 if let Some(principal) = principal {
-                    if principal.principal_id.is_empty()
-                        || principal.principal_id.len() > SESSION_LIMIT
-                        || principal.tenant_id.is_empty()
-                        || principal.tenant_id.len() > SESSION_LIMIT
-                        || principal.session_id.is_empty()
-                        || principal.session_id.len() > SESSION_LIMIT
-                    {
-                        return Err(ApiFailure::invalid_request(Some("principal")));
-                    }
-                    valid_secret(&principal.capability)?;
-                    parse_digest(&principal.request_digest, "request_digest")?;
-                    parse_digest(&principal.disclosure_digest, "disclosure_digest")?;
-                    valid_operation(&principal.operation)?;
-                    if principal.destination.is_empty()
-                        || principal.destination.len() > DESTINATION_LIMIT
-                        || !principal.destination.starts_with('/')
-                        || principal.destination.starts_with("//")
-                    {
-                        return Err(ApiFailure::invalid_request(Some("principal")));
-                    }
-                    valid_trace(&principal.trace)?;
-                    if principal.expires_at <= principal.issued_at
-                        || principal.expires_at.saturating_sub(principal.issued_at) > 60
-                        || principal.refresh_token.is_some() != principal.refresh_csrf.is_some()
-                    {
-                        return Err(ApiFailure::invalid_request(Some("principal")));
-                    }
-                    if let Some(token) = &principal.refresh_token {
-                        valid_secret(token)?;
-                    }
-                    if let Some(csrf) = &principal.refresh_csrf {
-                        valid_secret(csrf)?;
-                    }
+                    validate_principal(principal)?;
                 }
                 validate_parameters(path_parameters)?;
                 if idempotency_key
@@ -514,4 +482,41 @@ fn zeroize_value(value: &mut Value) {
         Value::Object(entries) => entries.values_mut().for_each(zeroize_value),
         Value::Null | Value::Bool(_) | Value::Number(_) => {}
     }
+}
+
+fn validate_principal(principal: &WirePrincipal) -> Result<(), ApiFailure> {
+    if principal.principal_id.is_empty()
+        || principal.principal_id.len() > SESSION_LIMIT
+        || principal.tenant_id.is_empty()
+        || principal.tenant_id.len() > SESSION_LIMIT
+        || principal.session_id.is_empty()
+        || principal.session_id.len() > SESSION_LIMIT
+    {
+        return Err(ApiFailure::invalid_request(Some("principal")));
+    }
+    valid_secret(&principal.capability)?;
+    parse_digest(&principal.request_digest, "request_digest")?;
+    parse_digest(&principal.disclosure_digest, "disclosure_digest")?;
+    valid_operation(&principal.operation)?;
+    if principal.destination.is_empty()
+        || principal.destination.len() > DESTINATION_LIMIT
+        || !principal.destination.starts_with('/')
+        || principal.destination.starts_with("//")
+    {
+        return Err(ApiFailure::invalid_request(Some("principal")));
+    }
+    valid_trace(&principal.trace)?;
+    if principal.expires_at <= principal.issued_at
+        || principal.expires_at.saturating_sub(principal.issued_at) > 60
+        || principal.refresh_token.is_some() != principal.refresh_csrf.is_some()
+    {
+        return Err(ApiFailure::invalid_request(Some("principal")));
+    }
+    if let Some(token) = &principal.refresh_token {
+        valid_secret(token)?;
+    }
+    if let Some(csrf) = &principal.refresh_csrf {
+        valid_secret(csrf)?;
+    }
+    Ok(())
 }

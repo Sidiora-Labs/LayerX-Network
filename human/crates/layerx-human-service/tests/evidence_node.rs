@@ -1,4 +1,4 @@
-mod support;
+use layerx_human_test_support as support;
 
 use ed25519_dalek::{Signer as _, SigningKey};
 use layerx_agentd::boot::handshake_gate;

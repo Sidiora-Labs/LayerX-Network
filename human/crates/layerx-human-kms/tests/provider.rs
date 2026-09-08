@@ -44,7 +44,28 @@ impl Host {
             address,
             child: None,
         };
-        host.openssl(&[
+        host.provision_tls()?;
+        let mut seal = [0; 32];
+        getrandom::fill(&mut seal).map_err(|error| std::io::Error::other(error.to_string()))?;
+        fs::write(host.root.join("seal"), seal)?;
+        let kind = checked(layerx_types::payload::ActivityType::new(
+            layerx_types::payload::ModuleId::Asset,
+            5,
+        ))?;
+        fs::write(
+            host.root.join("registry.json"),
+            serde_json::to_vec(
+                &serde_json::json!({"network_id":77,"protocol_version":3,"modules":[{"module_id":layerx_types::payload::ModuleId::Asset as u16,"activity_types":[kind.value()]}]}),
+            )?,
+        )?;
+        for entry in fs::read_dir(&host.root)? {
+            fs::set_permissions(entry?.path(), fs::Permissions::from_mode(0o600))?;
+        }
+        host.start()?;
+        Ok(host)
+    }
+    fn provision_tls(&self) -> Result<()> {
+        self.openssl(&[
             "req",
             "-x509",
             "-newkey",
@@ -62,7 +83,7 @@ impl Host {
             "basicConstraints=critical,CA:TRUE",
         ])?;
         for name in ["server", "client", "foreign"] {
-            host.openssl(&[
+            self.openssl(&[
                 "req",
                 "-newkey",
                 "rsa:2048",
@@ -75,14 +96,14 @@ impl Host {
                 &format!("/CN={name}"),
             ])?;
             fs::write(
-                host.root.join("extensions"),
+                self.root.join("extensions"),
                 if name == "server" {
                     "subjectAltName=DNS:localhost\nextendedKeyUsage=serverAuth\n"
                 } else {
                     "extendedKeyUsage=clientAuth\n"
                 },
             )?;
-            host.openssl(&[
+            self.openssl(&[
                 "x509",
                 "-req",
                 "-in",
@@ -99,7 +120,7 @@ impl Host {
                 "-extfile",
                 "extensions",
             ])?;
-            host.openssl(&[
+            self.openssl(&[
                 "x509",
                 "-in",
                 &format!("{name}.pem"),
@@ -108,7 +129,7 @@ impl Host {
                 "-out",
                 &format!("{name}.der"),
             ])?;
-            host.openssl(&[
+            self.openssl(&[
                 "pkcs8",
                 "-topk8",
                 "-nocrypt",
@@ -120,23 +141,8 @@ impl Host {
                 &format!("{name}-key.der"),
             ])?;
         }
-        host.openssl(&["x509", "-in", "ca.pem", "-outform", "DER", "-out", "ca.der"])?;
-        let mut seal = [0; 32];
-        getrandom::fill(&mut seal)?;
-        fs::write(host.root.join("seal"), seal)?;
-        let kind =
-            checked(layerx_types::payload::ActivityType::new(layerx_types::payload::ModuleId::Asset, 5))?;
-        fs::write(
-            host.root.join("registry.json"),
-            serde_json::to_vec(
-                &serde_json::json!({"network_id":77,"protocol_version":3,"modules":[{"module_id":layerx_types::payload::ModuleId::Asset as u16,"activity_types":[kind.value()]}]}),
-            )?,
-        )?;
-        for entry in fs::read_dir(&host.root)? {
-            fs::set_permissions(entry?.path(), fs::Permissions::from_mode(0o600))?;
-        }
-        host.start()?;
-        Ok(host)
+        self.openssl(&["x509", "-in", "ca.pem", "-outform", "DER", "-out", "ca.der"])?;
+        Ok(())
     }
     fn openssl(&self, arguments: &[&str]) -> Result<()> {
         let result = Command::new("openssl")
@@ -158,7 +164,11 @@ impl Host {
             .env("LAYERX_HUMAN_KMS_LISTEN", self.address.to_string())
             .env("LAYERX_HUMAN_KMS_PROVIDER_REFERENCE", "beta-kms")
             .env("LAYERX_HUMAN_KMS_STATE_DIR", self.root.join("state"))
-            .env("LAYERX_HUMAN_KMS_DEADLINE_SECONDS", "2");
+            .env("LAYERX_HUMAN_KMS_DEADLINE_SECONDS", "2")
+            .env(
+                "LAYERX_HUMAN_KMS_EVM_CLIENT_CERT_DER",
+                self.root.join("foreign.der"),
+            );
         for (suffix, file) in [
             ("REGISTRY_FILE", "registry.json"),
             ("CLIENT_CA_DER", "ca.der"),
@@ -348,8 +358,12 @@ fn atomic_rotation_lost_response_restart_and_tombstones() -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         let (_, observed) = facts(&host.call(&request(2, binding, &handle, None)?)?)?;
-        if observed != original { break; }
-        if Instant::now() >= deadline { return Err("lost-response rotation was not committed".into()); }
+        if observed != original {
+            break;
+        }
+        if Instant::now() >= deadline {
+            return Err("lost-response rotation was not committed".into());
+        }
         std::thread::sleep(Duration::from_millis(20));
     }
     let committed = host.call(&rotate)?;
@@ -506,6 +520,7 @@ fn signing_request(
 }
 #[test]
 fn canonical_signing_and_disclosure_refusals() -> Result<()> {
+    use std::io::Write;
     let host = Host::new()?;
     let binding = [41; 32];
     let (handle, public) = facts(&host.call(&request(1, binding, &[], None)?)?)?;
@@ -543,8 +558,374 @@ fn canonical_signing_and_disclosure_refusals() -> Result<()> {
     trailing.push(0);
     assert!(host.call(&trailing).is_err());
     let mut tls = host.connection(Some("client"))?;
-    use std::io::Write;
     tls.write_all(&u32::try_from(MAX + 1)?.to_be_bytes())?;
     assert!(read_frame(&mut tls, MAX).is_err());
+    Ok(())
+}
+
+#[test]
+fn evm_authorization_nonce_dedup_and_acknowledgement_recovery() -> Result<()> {
+    use layerx_human_service::custody::{EvmAcknowledgement, EvmPlanAuthorization, EvmTransaction};
+    let mut host = Host::new()?;
+    let principal = PrincipalId::new("alice")?;
+    let key = KeyId::new("primary")?;
+    let store = Keystore::open_production(
+        host.root.join("evm-client"),
+        77,
+        host.remote("client", "beta-kms")?,
+    )?;
+    store.create(&principal, &key, KeyClass::HumanPrimary)?;
+    let wallet = store.evm_wallet(&principal, &key)?;
+    assert_ne!(wallet, [0; 20]);
+    assert_eq!(wallet, store.evm_wallet(&principal, &key)?);
+    let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+    let authorization = EvmPlanAuthorization {
+        plan_id: [1; 32],
+        action_key: [2; 32],
+        tenant: "tenant".into(),
+        principal: "alice".into(),
+        binding_digest: store.evm_binding(&principal, &key)?.digest(),
+        wallet,
+        not_before: now,
+        not_after: now + 600,
+        transaction: EvmTransaction {
+            chain_id: 31337,
+            nonce: 7,
+            max_priority_fee_per_gas: 1,
+            max_fee_per_gas: 2,
+            gas_limit: 21000,
+            to: [3; 20],
+            value: [0; 32],
+            calldata: vec![],
+        },
+    };
+    assert!(store
+        .sign_evm_action(&principal, &key, &authorization.action_key)
+        .is_err());
+    let reserved = store.authorize_evm_plan(&principal, &key, &authorization)?;
+    refuse_cross_scope(&store, &principal, &key, &authorization)?;
+    assert!(reserved.raw_transaction.is_empty());
+    assert_eq!(
+        reserved,
+        store.authorize_evm_plan(&principal, &key, &authorization)?
+    );
+    let mut conflict = authorization.clone();
+    conflict.action_key = [4; 32];
+    assert!(store
+        .authorize_evm_plan(&principal, &key, &conflict)
+        .is_err());
+    conflict = authorization.clone();
+    conflict.transaction.value = [5; 32];
+    assert!(store
+        .authorize_evm_plan(&principal, &key, &conflict)
+        .is_err());
+    let signed = store.sign_evm_action(&principal, &key, &authorization.action_key)?;
+    assert_eq!(signed.raw_transaction[0], 2);
+    assert_eq!(
+        signed,
+        store.sign_evm_action(&principal, &key, &authorization.action_key)?
+    );
+    host.stop();
+    host.start()?;
+    assert_eq!(
+        signed,
+        store.recover_evm_action(&principal, &key, &authorization.action_key)?
+    );
+    assert_eq!(
+        signed,
+        store.sign_evm_action(&principal, &key, &authorization.action_key)?
+    );
+    assert!(!signed.acknowledged);
+    let mut ack = EvmAcknowledgement {
+        action_key: authorization.action_key,
+        transaction_hash: [0; 32],
+    };
+    assert!(store
+        .acknowledge_evm_action(&principal, &key, &ack)
+        .is_err());
+    ack.transaction_hash = signed.transaction_hash.ok_or("missing transaction hash")?;
+    let acknowledged = store.acknowledge_evm_action(&principal, &key, &ack)?;
+    assert!(acknowledged.acknowledged);
+    host.stop();
+    host.start()?;
+    assert_eq!(
+        acknowledged,
+        store.recover_evm_action(&principal, &key, &authorization.action_key)?
+    );
+    conflict = authorization.clone();
+    conflict.action_key = [6; 32];
+    conflict.transaction.nonce = 8;
+    conflict.binding_digest = [7; 32];
+    assert!(store
+        .authorize_evm_plan(&principal, &key, &conflict)
+        .is_err());
+    conflict.binding_digest = authorization.binding_digest;
+    conflict.transaction.chain_id = 0;
+    assert!(store
+        .authorize_evm_plan(&principal, &key, &conflict)
+        .is_err());
+    Ok(())
+}
+
+#[test]
+fn executor_certificate_cannot_authorize_or_manage_keys() -> Result<()> {
+    let host = Host::new()?;
+    let binding = [81; 32];
+    let (handle, _) = facts(&host.call(&request(1, binding, &[], None)?)?)?;
+    for operation in [0, 1, 2, 4, 7, 11] {
+        let mut frame = request(
+            operation,
+            binding,
+            if operation == 1 { &[] } else { &handle },
+            None,
+        )?;
+        if operation >= 7 {
+            frame[4..6].copy_from_slice(&3_u16.to_be_bytes());
+            blob(&mut frame, b"{}")?;
+        }
+        let mut stream = host.connection(Some("foreign"))?;
+        checked(write_frame(&mut stream, &frame, MAX))?;
+        let response = checked(read_frame(&mut stream, MAX))?;
+        assert_eq!(response[7], 1);
+    }
+    let mut frame = request(6, binding, &handle, None)?;
+    frame[4..6].copy_from_slice(&3_u16.to_be_bytes());
+    let mut stream = host.connection(Some("foreign"))?;
+    checked(write_frame(&mut stream, &frame, MAX))?;
+    let response = checked(read_frame(&mut stream, MAX))?;
+    assert_eq!(response[7], 0);
+    assert_eq!(response.len(), 28);
+    Ok(())
+}
+
+#[test]
+fn native_send_authorization_is_scoped_and_durable() -> Result<()> {
+    use layerx_human_service::custody::SendPlanAuthorization;
+    use layerx_wire::encode::Encoder;
+    use sha2::{Digest, Sha256};
+    let mut host = Host::new()?;
+    let principal = PrincipalId::new("alice")?;
+    let key = KeyId::new("primary")?;
+    let store = Keystore::open_production(
+        host.root.join("send-client"),
+        77,
+        host.remote("client", "beta-kms")?,
+    )?;
+    let public = store.create(&principal, &key, KeyClass::HumanPrimary)?;
+    let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+    let authorization = SendPlanAuthorization {
+        plan_id: [1; 32],
+        action_key: [2; 32],
+        principal: "alice".into(),
+        tenant: "tenant".into(),
+        binding_digest: store.evm_binding(&principal, &key)?.digest(),
+        from: [3; 32],
+        to: [4; 32],
+        asset: [5; 32],
+        amount: 12,
+        sequence: 7,
+        idempotency_key: [6; 32],
+        expires_at: now + 600,
+        context: [7; 32],
+        network: 77,
+        protocol: 3,
+        not_before: now,
+        not_after: now + 600,
+    };
+    let signature = store.authorize_send(&principal, &key, &authorization)?;
+    let mut message = Encoder::new(512);
+    checked(message.u16(0x5301))?;
+    for value in [authorization.from, authorization.to, authorization.asset] {
+        checked(message.fixed(&value))?;
+    }
+    checked(message.u128(authorization.amount))?;
+    checked(message.u64(authorization.sequence))?;
+    checked(message.fixed(&authorization.idempotency_key))?;
+    checked(message.u64(authorization.expires_at))?;
+    checked(message.fixed(&authorization.context))?;
+    checked(message.u8(0))?;
+    checked(message.u8(1))?;
+    checked(message.fixed(&authorization.from))?;
+    checked(message.fixed(&authorization.context))?;
+    checked(message.u32(authorization.network))?;
+    checked(message.u16(authorization.protocol))?;
+    let mut hash = Sha256::new();
+    hash.update(layerx_wire::hash::Domain::SignaturePreimage.tag());
+    hash.update(message.finish());
+    checked(
+        ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519, public)
+            .verify(&hash.finalize(), &signature),
+    )?;
+    host.stop();
+    host.start()?;
+    assert_eq!(
+        signature,
+        store.authorize_send(&principal, &key, &authorization)?
+    );
+    let mut changed = authorization.clone();
+    changed.amount += 1;
+    assert!(store.authorize_send(&principal, &key, &changed).is_err());
+    changed.action_key = [8; 32];
+    changed.network = 78;
+    assert!(store.authorize_send(&principal, &key, &changed).is_err());
+    changed.network = 77;
+    changed.binding_digest = [9; 32];
+    assert!(store.authorize_send(&principal, &key, &changed).is_err());
+    Ok(())
+}
+
+fn transaction_signature(raw: &[u8]) -> Result<Vec<u8>> {
+    let mut signature = vec![0; 65];
+    let prefix = *raw.get(1).ok_or("missing RLP list")?;
+    let mut offset = if prefix >= 0xf8 {
+        2 + usize::from(prefix - 0xf7)
+    } else {
+        2
+    };
+    for index in 0..12 {
+        let prefix = *raw.get(offset).ok_or("missing RLP field")?;
+        offset += 1;
+        let value = if prefix < 0x80 {
+            std::slice::from_ref(&raw[offset - 1])
+        } else if prefix <= 0xb7 {
+            let length = usize::from(prefix - 0x80);
+            let value = raw.get(offset..offset + length).ok_or("short RLP field")?;
+            offset += length;
+            value
+        } else if prefix == 0xc0 {
+            &[]
+        } else {
+            return Err("unsupported test RLP field".into());
+        };
+        if index == 9 {
+            signature[64] = value.first().copied().unwrap_or(0);
+        }
+        if index == 10 || index == 11 {
+            if value.len() > 32 {
+                return Err("large signature field".into());
+            }
+            let end = if index == 10 { 32 } else { 64 };
+            signature[end - value.len()..end].copy_from_slice(value);
+        }
+    }
+    assert_eq!(offset, raw.len());
+    Ok(signature)
+}
+
+#[test]
+fn external_signature_verification_and_executor_journal_recovery() -> Result<()> {
+    use layerx_human_service::custody::{
+        EvmAction, EvmExternalSignature, EvmPlanAuthorization, EvmTransaction,
+    };
+    let mut host = Host::new()?;
+    let principal = PrincipalId::new("alice")?;
+    let key = KeyId::new("primary")?;
+    let store = Keystore::open_production(
+        host.root.join("external-client"),
+        77,
+        host.remote("client", "beta-kms")?,
+    )?;
+    store.create(&principal, &key, KeyClass::HumanPrimary)?;
+    let binding = store.evm_binding(&principal, &key)?;
+    let handle = store.evm_provider_reference(&principal, &key)?;
+    let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+    let authorization = EvmPlanAuthorization {
+        plan_id: [1; 32],
+        action_key: [2; 32],
+        tenant: "tenant".into(),
+        principal: "alice".into(),
+        binding_digest: binding.digest(),
+        wallet: store.evm_wallet(&principal, &key)?,
+        not_before: now,
+        not_after: now + 600,
+        transaction: EvmTransaction {
+            chain_id: 31337,
+            nonce: 0,
+            max_priority_fee_per_gas: 1,
+            max_fee_per_gas: 2,
+            gas_limit: 21000,
+            to: [4; 20],
+            value: [0; 32],
+            calldata: vec![],
+        },
+    };
+    store.authorize_evm_plan(&principal, &key, &authorization)?;
+    let signed = store.sign_evm_action(&principal, &key, &authorization.action_key)?;
+    let mut external = EvmExternalSignature {
+        action_key: authorization.action_key,
+        signature: transaction_signature(&signed.raw_transaction)?,
+    };
+    let executor = host.remote("foreign", "beta-kms")?;
+    let accepted: EvmAction = serde_json::from_slice(&checked(executor.evm_operation(
+        12,
+        &binding,
+        &handle,
+        &serde_json::to_vec(&external)?,
+    ))?)?;
+    assert_eq!(accepted, signed);
+    external.signature[64] += 27;
+    let accepted: EvmAction = serde_json::from_slice(&checked(executor.evm_operation(
+        12,
+        &binding,
+        &handle,
+        &serde_json::to_vec(&external)?,
+    ))?)?;
+    assert_eq!(accepted, signed);
+    host.stop();
+    host.start()?;
+    assert_eq!(
+        signed,
+        store.recover_evm_action(&principal, &key, &authorization.action_key)?
+    );
+    external.signature[0] ^= 1;
+    assert!(executor
+        .evm_operation(12, &binding, &handle, &serde_json::to_vec(&external)?)
+        .is_err());
+    external.signature = vec![0; 64];
+    assert!(executor
+        .evm_operation(12, &binding, &handle, &serde_json::to_vec(&external)?)
+        .is_err());
+    let foreign = k256::ecdsa::SigningKey::from_bytes((&[21; 32]).into())?;
+    let (signature, recovery) = foreign.sign_prehash_recoverable(&[22; 32])?;
+    external.signature = signature.to_bytes().to_vec();
+    external.signature.push(recovery.to_byte());
+    assert!(executor
+        .evm_operation(12, &binding, &handle, &serde_json::to_vec(&external)?)
+        .is_err());
+    external.action_key = [23; 32];
+    assert!(executor
+        .evm_operation(12, &binding, &handle, &serde_json::to_vec(&external)?)
+        .is_err());
+    Ok(())
+}
+
+fn refuse_cross_scope(
+    store: &Keystore,
+    principal: &PrincipalId,
+    key: &KeyId,
+    authorization: &layerx_human_service::custody::EvmPlanAuthorization,
+) -> Result<()> {
+    use layerx_human_service::custody::{CustodyError, KmsError};
+    let mut changed = authorization.clone();
+    "another-tenant".clone_into(&mut changed.tenant);
+    assert!(matches!(
+        store.authorize_evm_plan(principal, key, &changed),
+        Err(CustodyError::Kms(KmsError::Conflict))
+    ));
+    changed = authorization.clone();
+    "bob".clone_into(&mut changed.principal);
+    assert!(matches!(
+        store.authorize_evm_plan(principal, key, &changed),
+        Err(CustodyError::Kms(KmsError::Refused))
+    ));
+    let other = PrincipalId::new("bob")?;
+    store.create(&other, key, KeyClass::HumanPrimary)?;
+    store.evm_wallet(&other, key)?;
+    assert!(store
+        .recover_evm_action(&other, key, &authorization.action_key)
+        .is_err());
+    assert!(store
+        .sign_evm_action(&other, key, &authorization.action_key)
+        .is_err());
     Ok(())
 }

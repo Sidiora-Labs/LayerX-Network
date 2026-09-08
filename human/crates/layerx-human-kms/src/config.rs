@@ -23,6 +23,7 @@ pub(crate) struct Config {
     pub seal: Zeroizing<Vec<u8>>,
     pub tls: Arc<ServerConfig>,
     pub client_pin: [u8; 32],
+    pub evm_client_pin: Option<[u8; 32]>,
     pub deadline: Duration,
 }
 #[derive(Deserialize)]
@@ -137,7 +138,18 @@ impl Config {
         if seal.len() != 32 {
             return Err("seal secret must contain 32 random bytes".into());
         }
-        let client_pin = Sha256::digest(&*read("CLIENT_CERT_DER", 65536, false)?).into();
+        let client_pin: [u8; 32] = Sha256::digest(&*read("CLIENT_CERT_DER", 65536, false)?).into();
+        let evm_client_pin: Option<[u8; 32]> =
+            std::env::var("LAYERX_HUMAN_KMS_EVM_CLIENT_CERT_DER")
+                .ok()
+                .map(|path| {
+                    protected(Path::new(&path), 65536, false)
+                        .map(|bytes| Sha256::digest(&*bytes).into())
+                })
+                .transpose()?;
+        if evm_client_pin == Some(client_pin) {
+            return Err("executor and service identities must differ".into());
+        }
         let seconds: u64 = required("DEADLINE_SECONDS")?
             .parse()
             .map_err(|_| "deadline invalid")?;
@@ -156,6 +168,7 @@ impl Config {
             seal,
             tls: Arc::new(tls),
             client_pin,
+            evm_client_pin,
             deadline: Duration::from_secs(seconds),
         })
     }

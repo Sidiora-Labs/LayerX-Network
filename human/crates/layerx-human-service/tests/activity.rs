@@ -1,5 +1,4 @@
-#[allow(dead_code)]
-mod support;
+use layerx_human_test_support as support;
 
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
@@ -706,7 +705,7 @@ fn cached_receipt_rows_are_labelled_only_by_the_verifier() {
     let domain = SettlementDomain::new(31_337, [0x55; 20]);
     let foreign_domain = SettlementDomain::new(1, [0x66; 20]);
     let entry_id = id("act_receiptrow1");
-    let feed = text(Feed::new(5), "feed");
+    let _feed = text(Feed::new(5), "feed");
     let other_key = SigningKey::from_bytes(&[0x17; 32])
         .verifying_key()
         .to_bytes();
@@ -735,12 +734,19 @@ fn cached_receipt_rows_are_labelled_only_by_the_verifier() {
     assert_eq!(status.label(), "receipt-verified");
     assert_eq!(status.unverified_reason(), None);
     assert_eq!(
-        status.report().map(|report| report.verified_receipts()),
+        status
+            .report()
+            .map(layerx_human_service::activity::BundleReport::verified_receipts),
         Some(1)
     );
-    assert_eq!(status.report().map(|report| report.entries()), Some(1));
+    assert_eq!(
+        status
+            .report()
+            .map(layerx_human_service::activity::BundleReport::entries),
+        Some(1)
+    );
 
-    let loaded = text(cached.receipt_authority(feed, &scope), "feed authority");
+    let loaded = text(cached.receipt_authority(&scope), "feed authority");
     let status = verification_status(cached.verify(digest, scope.principal(), domain, &loaded));
     assert!(status.is_unavailable());
     assert!(!status.is_receipt_verified());

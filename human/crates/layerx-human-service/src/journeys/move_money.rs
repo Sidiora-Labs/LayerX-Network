@@ -106,6 +106,8 @@ impl MoveLegExecution {
 
     /// Reconstructs wire fields through the plan validator.
     #[allow(clippy::too_many_arguments)]
+    /// # Errors
+    /// Refuses invalid canonical data, authority, or unavailable journey evidence.
     pub fn from_wire_parts(
         action_key: [u8; 32],
         actor: AgentDid,
@@ -206,18 +208,34 @@ impl MovePlan {
         wire_text(&mut out, self.custody_key.as_str());
         wire_text(&mut out, self.operation.label());
         let route = self.request.canonical_encode();
-        out.extend((route.len() as u32).to_be_bytes());
+        out.extend(
+            u32::try_from(route.len())
+                .unwrap_or_else(|_| unreachable!("bounded canonical route"))
+                .to_be_bytes(),
+        );
         out.extend(route);
-        out.extend((self.executions.len() as u16).to_be_bytes());
+        out.extend(
+            u16::try_from(self.executions.len())
+                .unwrap_or_else(|_| unreachable!("bounded movement legs"))
+                .to_be_bytes(),
+        );
         for execution in &self.executions {
-            let (k, a, r, s, b, e, f) = execution.to_wire_parts();
-            out.extend(k);
-            wire_text(&mut out, a.as_str());
-            wire_text(&mut out, r.as_str());
-            out.extend(s.to_be_bytes());
-            out.extend(b.to_be_bytes());
-            out.extend(e.to_be_bytes());
-            out.extend(f.to_be_bytes());
+            let (
+                action_key,
+                actor,
+                authority,
+                account_sequence,
+                not_before,
+                not_after,
+                fee_ceiling,
+            ) = execution.to_wire_parts();
+            out.extend(action_key);
+            wire_text(&mut out, actor.as_str());
+            wire_text(&mut out, authority.as_str());
+            out.extend(account_sequence.to_be_bytes());
+            out.extend(not_before.to_be_bytes());
+            out.extend(not_after.to_be_bytes());
+            out.extend(fee_ceiling.to_be_bytes());
         }
         out.extend(self.quote.fee_estimate.to_be_bytes());
         wire_text(&mut out, &self.quote.asset_label);
@@ -226,6 +244,8 @@ impl MovePlan {
     }
 
     /// Decodes bounded canonical bytes and reconstructs every owner through validators.
+    /// # Errors
+    /// Refuses invalid canonical data, authority, or unavailable journey evidence.
     pub fn canonical_decode(bytes: &[u8]) -> Result<Self, MoveJourneyError> {
         if bytes.is_empty() || bytes.len() > 1_048_576 {
             return Err(MoveJourneyError::InvalidPlan);
@@ -284,19 +304,7 @@ impl MovePlan {
     }
     /// Returns every owner field needed for canonical wire encoding.
     #[must_use]
-    pub fn to_wire_parts(
-        &self,
-    ) -> (
-        &JourneyId,
-        [u8; 32],
-        &KeyId,
-        Operation,
-        &RouteRequest,
-        &[MoveLegExecution],
-        u128,
-        &str,
-        &str,
-    ) {
+    pub fn to_wire_parts(&self) -> MovePlanWireParts<'_> {
         (
             &self.journey_id,
             self.idempotency_key,
@@ -312,6 +320,8 @@ impl MovePlan {
 
     /// Reconstructs provider wire fields through route and plan validation.
     #[allow(clippy::too_many_arguments)]
+    /// # Errors
+    /// Refuses invalid canonical data, authority, or unavailable journey evidence.
     pub fn from_wire_parts(
         journey_id: JourneyId,
         idempotency_key: [u8; 32],
@@ -449,8 +459,12 @@ impl MovePlan {
 }
 
 fn wire_text(out: &mut Vec<u8>, value: &str) {
-    out.extend((value.len() as u16).to_be_bytes());
-    out.extend(value.as_bytes())
+    out.extend(
+        u16::try_from(value.len())
+            .unwrap_or_else(|_| unreachable!("bounded canonical text"))
+            .to_be_bytes(),
+    );
+    out.extend(value.as_bytes());
 }
 struct MoveWire<'a> {
     bytes: &'a [u8],
@@ -1213,3 +1227,15 @@ impl From<StoreError> for MoveJourneyError {
         Self::Store(value)
     }
 }
+
+pub type MovePlanWireParts<'a> = (
+    &'a JourneyId,
+    [u8; 32],
+    &'a KeyId,
+    Operation,
+    &'a RouteRequest,
+    &'a [MoveLegExecution],
+    u128,
+    &'a str,
+    &'a str,
+);
