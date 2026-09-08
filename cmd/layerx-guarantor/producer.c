@@ -334,3 +334,22 @@ lxp_result gp_attestation_accept(const lxp_checkpoint_certificate *checkpoint, u
         return LXP_ERR_CONTEXT_MISMATCH;
     return LXP_OK;
 }
+
+lxp_result gp_checkpoint_requirements(const lxp_batch_header *header, uint64_t observed,
+                                      size_t threshold, lxp_u128 minimum_bond,
+                                      lxp_finalisation_requirements *requirements)
+{
+    uint64_t delay = lxp_checkpoint_maximum_attestation_delay_ms();
+    if (header == NULL || requirements == NULL || observed == 0U || threshold == 0U ||
+        threshold > LXP_MAX_GUARANTOR_ATTESTATIONS || header->timestamp_ms > UINT64_MAX - delay)
+        return LXP_ERR_NON_CANONICAL;
+    memset(requirements, 0, sizeof(*requirements));
+    requirements->checkpoint_epoch = header->epoch;
+    requirements->challenge_window_end_ms = observed;
+    requirements->checkpoint_deadline_ms = header->timestamp_ms + delay;
+    requirements->now_ms = observed;
+    requirements->threshold = threshold;
+    requirements->minimum_bond = minimum_bond;
+    requirements->availability_challenges_answered = true;
+    return LXP_OK;
+}
