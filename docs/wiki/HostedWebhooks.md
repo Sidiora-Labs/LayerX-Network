@@ -28,14 +28,14 @@ dashboard.
 
 ## Deployment
 
-The image is `ghcr.io/centra-ai/layerx-webhooks:0.1.0`
+The image is `ghcr.io/sidiora-labs/layerx-webhooks:0.1.0`
 (`platform/hosted/webhooks/deployment.yaml:69`;
 `platform/hosted/tests/beta-cluster.sh:118`). Dashboard images in the
-same list also use `ghcr.io/centra-ai/...`
+same list also use `ghcr.io/sidiora-labs/...`
 (`platform/hosted/tests/beta-cluster.sh:119-120`). Testnet, gateway, faucet, registry, node, boundary, identity, and paxd
 images in that list use `ghcr.io/sidiora-labs/...`
-(`platform/hosted/tests/beta-cluster.sh:114-117, 121-128`). Those two
-registry prefixes differ. The Dockerfile builds
+(`platform/hosted/tests/beta-cluster.sh:114-117, 121-128`). These images share the same
+registry prefix. The Dockerfile builds
 `-p layerx-platform-webhooks --bin layerx-webhooks`, copies
 `/src/platform/target/release/layerx-webhooks`, sets `USER 65532:65532`,
 and entrypoint `/usr/local/bin/layerx-webhooks`

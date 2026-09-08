@@ -4813,6 +4813,12 @@ file = "human/Cargo.lock platform/Cargo.lock"
 symbol = "ureq native-tls connector dependency"
 observed = "ureq 3.4.0 gates its NativeTlsConnector on native-tls rather than native-tls-no-default. Agentd enables native-tls and adds its required transitive webpki-root-certs package to agent/Cargo.lock. The human and platform lockfiles do not contain that package and are outside the owned paths. Explicit RootCerts::Specific still excludes bundled roots from runtime trust."
 assumption = "Dependent workspace owners must regenerate their lockfiles for the enabled connector before locked builds; no unrelated package upgrade is required by the agentd change."
+[observation.6.8.5]
+task = "6.8"
+file = "platform/hosted/internal/deployment.yaml platform/hosted/webhooks/deployment.yaml platform/hosted/gateway/deployment.yaml platform/hosted/tests/topology-check.sh"
+symbol = "platform-hosted-topology-check"
+observed = "After image registry normalization, make platform-hosted-topology-check exits 2 with 20 failed edges; qual-logs/img1/topology.log. Missing layerx-human Services block journeys and approvals. Gateway ingress denies internal payments and programs. Developer egress does not admit callee pod ports 9443 and 9445, and dashboard inherits webhook URLs from the shared ConfigMap whose callees deny dashboard ingress. These failure classes are also recorded in observation.6.8.4. bash -n platform/hosted/tests/beta-cluster.sh, bash tools/ci/beta-contract-check.sh, make beta-ledger-check and git diff --check exit 0; logs shell-syntax.log, contract.log, ledger.log and diff.log under qual-logs/img1. The repository registry scan excludes historical qualification records and prints no matches, exit 1; qual-logs/img1/registry-scan.log."
+assumption = "The registry reference change preserves image names, version 0.1.0, Dockerfile mappings and manifest rewriting. Service and NetworkPolicy repairs are outside this change. No cluster is run; aggregate topology qualification remains blocked. Codify review and guard cannot run without a local graph; cortex_guard is unavailable."
 severity = "blocker"
 
 [observation.6.6.10]
