@@ -11,6 +11,7 @@ mod config;
 mod credential;
 mod emulator;
 mod encoding;
+mod file_store;
 mod http;
 mod install;
 mod mcp;
@@ -48,10 +49,10 @@ enum Command {
     /// Inspect or switch the emulator, testnet, and production endpoint.
     #[command(subcommand)]
     Environment(EnvironmentCommand),
-    /// Manage Ed25519 keys in the operating-system credential store.
+    /// Manage Ed25519 keys in the selected credential store.
     #[command(subcommand)]
     Key(KeyCommand),
-    /// Manage hosted API tokens in the operating-system credential store.
+    /// Manage hosted API tokens in the selected credential store.
     #[command(subcommand)]
     Auth(AuthCommand),
     /// Create or inspect a developer account.
@@ -785,7 +786,7 @@ fn key(command: KeyCommand) -> Result<CommandOutput, String> {
             let metadata = credential::create_key(&mut configuration, &name, did)?;
             Ok(CommandOutput::new(
                 "key.created",
-                format!("Created key {name} in operating-system credential storage"),
+                format!("Created key {name} in credential storage"),
                 json!({"name": name, "did": metadata.did, "public_key": metadata.public_key}),
             ))
         }
@@ -793,7 +794,7 @@ fn key(command: KeyCommand) -> Result<CommandOutput, String> {
             let metadata = credential::import_key(&mut configuration, &name, did)?;
             Ok(CommandOutput::new(
                 "key.imported",
-                format!("Imported key {name} into operating-system credential storage"),
+                format!("Imported key {name} into credential storage"),
                 json!({"name": name, "did": metadata.did, "public_key": metadata.public_key}),
             ))
         }
@@ -829,7 +830,7 @@ fn key(command: KeyCommand) -> Result<CommandOutput, String> {
                     "default": configuration.default_key.as_deref() == Some(&name),
                     "did": metadata.did,
                     "public_key": metadata.public_key,
-                    "secret_storage": "operating-system-credential-store",
+                    "secret_storage": credential::store_label(),
                 }),
             ))
         }
@@ -845,7 +846,7 @@ fn key(command: KeyCommand) -> Result<CommandOutput, String> {
             credential::delete_key(&mut configuration, &name)?;
             Ok(CommandOutput::new(
                 "key.deleted",
-                format!("Deleted key {name} from operating-system credential storage"),
+                format!("Deleted key {name} from credential storage"),
                 json!({"name": name}),
             ))
         }
@@ -860,8 +861,8 @@ fn auth(command: AuthCommand) -> Result<CommandOutput, String> {
             credential::set_token(&environment)?;
             Ok(CommandOutput::new(
                 "auth.saved",
-                format!("Saved {environment} API token in operating-system credential storage"),
-                json!({"environment": environment, "secret_storage": "operating-system-credential-store"}),
+                format!("Saved {environment} API token in credential storage"),
+                json!({"environment": environment, "secret_storage": credential::store_label()}),
             ))
         }
         AuthCommand::Status { environment } => {

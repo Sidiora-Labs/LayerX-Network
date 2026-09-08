@@ -2,7 +2,7 @@ use std::io::{self, Read};
 use std::sync::OnceLock;
 
 use ed25519_dalek::SigningKey;
-use keyring_core::Entry;
+use keyring_core::Entry as OsEntry;
 use zeroize::{Zeroize as _, Zeroizing};
 
 use crate::config::{Configuration, KeyMetadata};
@@ -11,51 +11,95 @@ use crate::encoding::{fixed_hex, hex_encode};
 const SERVICE: &str = "dev.layerx.cli";
 const MAX_STDIN_SECRET_BYTES: u64 = 16 * 1024;
 
-/// Environment variable used by a test-feature build to select its isolated
-/// in-memory store. Release builds reject the override rather than admitting a
-/// non-persistent credential backend into a production process.
-const MOCK_STORE_VARIABLE: &str = "LAYERX_CREDENTIAL_STORE";
-#[cfg(feature = "test-credential-store")]
-const MOCK_STORE_VALUE: &str = "mock";
+const STORE_VARIABLE: &str = "LAYERX_CREDENTIAL_STORE";
+const FILE_STORE_HELP: &str = "For headless hosts, set LAYERX_CREDENTIAL_STORE=file and supply LAYERX_CREDENTIAL_PASSPHRASE (at least 12 bytes).";
 
-/// Installs the process-wide credential store exactly once.
-///
-/// In normal operation this defers to the keyring v1 initialiser, which selects
-/// and installs the operating-system credential store (Keychain Services on
-/// macOS, Credential Manager on Windows, the Secret Service on other Unix
-/// systems). The non-persistent keyring-core store is compiled only for the
-/// command suite's explicit `test-credential-store` feature.
+pub fn store_label() -> &'static str {
+    if std::env::var(STORE_VARIABLE).as_deref() == Ok("file") {
+        "encrypted-file-credential-store"
+    } else {
+        "operating-system-credential-store"
+    }
+}
+
 fn ensure_store() -> Result<(), String> {
     static STORE: OnceLock<Result<(), String>> = OnceLock::new();
     STORE.get_or_init(install_store).clone()
 }
 
 fn install_store() -> Result<(), String> {
-    if let Ok(requested) = std::env::var(MOCK_STORE_VARIABLE) {
+    match std::env::var(STORE_VARIABLE) {
+        Ok(requested) if requested == "file" => return Ok(()),
         #[cfg(feature = "test-credential-store")]
-        if requested == MOCK_STORE_VALUE {
-            let store = keyring_core::mock::Store::new().map_err(|error| {
-                format!("could not initialise the in-memory test credential store: {error}")
-            })?;
+        Ok(requested) if requested == "mock" => {
+            let store = keyring_core::mock::Store::new().map_err(|error| error.to_string())?;
             keyring_core::set_default_store(store);
             return Ok(());
         }
-        return Err(format!(
-            "credential store override {requested} is unavailable in this binary"
-        ));
+        Ok(requested) if requested == "os" => (),
+        Err(std::env::VarError::NotPresent) => (),
+        Ok(requested) => {
+            return Err(format!(
+                "credential store override {requested} is unavailable in this binary. {FILE_STORE_HELP}"
+            ))
+        }
+        Err(_) => return Err(format!("credential store selection must be Unicode. {FILE_STORE_HELP}")),
     }
-    if let Err(error) = keyring::Entry::store_status() {
-        return Err(format!(
-            "operating-system credential storage is unavailable: {error}"
-        ));
+    keyring::Entry::store_status()
+        .as_ref()
+        .copied()
+        .map_err(|error| {
+            format!(
+                "operating-system credential storage is unavailable: {error}. {FILE_STORE_HELP}"
+            )
+        })
+}
+
+enum Entry {
+    Os(OsEntry),
+    File(crate::file_store::Entry),
+}
+
+impl Entry {
+    fn set_password(&self, value: &str) -> Result<(), keyring_core::Error> {
+        match self {
+            Self::Os(entry) => entry.set_password(value),
+            Self::File(entry) => entry.set_password(value),
+        }
     }
-    Ok(())
+
+    fn get_password(&self) -> Result<String, keyring_core::Error> {
+        match self {
+            Self::Os(entry) => entry.get_password(),
+            Self::File(entry) => entry.get_password(),
+        }
+    }
+
+    fn delete_credential(&self) -> Result<(), keyring_core::Error> {
+        match self {
+            Self::Os(entry) => entry.delete_credential(),
+            Self::File(entry) => entry.delete_credential(),
+        }
+    }
 }
 
 fn entry(kind: &str, name: &str) -> Result<Entry, String> {
     ensure_store()?;
-    Entry::new(SERVICE, &format!("{kind}:{name}"))
-        .map_err(|error| format!("operating-system credential storage is unavailable: {error}"))
+    let identity = format!("{kind}:{name}");
+    if std::env::var(STORE_VARIABLE).as_deref() == Ok("file") {
+        return crate::file_store::Entry::from_environment(identity)
+            .map(Entry::File)
+            .map_err(|error| {
+                format!("file credential storage is unavailable: {error}. {FILE_STORE_HELP}")
+            });
+    }
+    OsEntry::new(SERVICE, &identity)
+        .map(Entry::Os)
+        .map_err(|error| {
+            format!(
+                "operating-system credential storage is unavailable: {error}. {FILE_STORE_HELP}"
+            )
+        })
 }
 
 fn read_secret() -> Result<Zeroizing<String>, String> {
@@ -127,7 +171,7 @@ fn import_seed(
     entry("key", name)?
         .set_password(&encoded)
         .map_err(|error| {
-            format!("could not save key in operating-system credential storage: {error}")
+            format!("could not save key in credential storage: {error}. {FILE_STORE_HELP}")
         })?;
     encoded.zeroize();
     let metadata = KeyMetadata {
@@ -156,7 +200,7 @@ pub fn delete_key(configuration: &mut Configuration, name: &str) -> Result<(), S
     }
     entry("key", name)?
         .delete_credential()
-        .map_err(|error| format!("could not delete key from operating-system storage: {error}"))?;
+        .map_err(|error| format!("could not delete key from credential storage: {error}"))?;
     configuration.keys.remove(name);
     if configuration.default_key.as_deref() == Some(name) {
         configuration.default_key = configuration.keys.keys().next().cloned();
@@ -179,7 +223,7 @@ pub fn set_token(environment: &str) -> Result<(), String> {
     entry("token", environment)?
         .set_password(&token)
         .map_err(|error| {
-            format!("could not save token in operating-system credential storage: {error}")
+            format!("could not save token in credential storage: {error}. {FILE_STORE_HELP}")
         })?;
     token.zeroize();
     Ok(())
@@ -189,7 +233,7 @@ pub fn delete_token(environment: &str) -> Result<(), String> {
     Configuration::validate_environment_name(environment)?;
     entry("token", environment)?
         .delete_credential()
-        .map_err(|error| format!("could not delete token from operating-system storage: {error}"))
+        .map_err(|error| format!("could not delete token from credential storage: {error}"))
 }
 
 pub fn token(environment: &str) -> Result<Option<Zeroizing<String>>, String> {
@@ -201,7 +245,7 @@ pub fn token(environment: &str) -> Result<Option<Zeroizing<String>>, String> {
         }
         Err(keyring_core::Error::NoEntry) => Ok(None),
         Err(error) => Err(format!(
-            "could not read token from operating-system credential storage: {error}"
+            "could not read token from credential storage: {error}"
         )),
     }
 }
@@ -218,9 +262,9 @@ fn validate_bearer_secret(value: &str) -> Result<(), String> {
 
 pub fn key_seed(name: &str) -> Result<Zeroizing<[u8; 32]>, String> {
     validate_name(name)?;
-    let encoded = entry("key", name)?.get_password().map_err(|error| {
-        format!("could not read signing key from operating-system storage: {error}")
-    })?;
+    let encoded = entry("key", name)?
+        .get_password()
+        .map_err(|error| format!("could not read signing key from credential storage: {error}"))?;
     let encoded = Zeroizing::new(encoded);
     fixed_hex::<32>("private seed", &encoded).map(Zeroizing::new)
 }
@@ -231,7 +275,7 @@ pub fn set_gateway(alias: &str, credential: &mut Zeroizing<String>) -> Result<()
     entry("gateway", alias)?
         .set_password(credential)
         .map_err(|error| {
-            format!("could not save gateway key in operating-system credential storage: {error}")
+            format!("could not save gateway key in credential storage: {error}. {FILE_STORE_HELP}")
         })
 }
 
@@ -245,7 +289,7 @@ pub fn gateway(alias: &str) -> Result<Option<Zeroizing<String>>, String> {
         }
         Err(keyring_core::Error::NoEntry) => Ok(None),
         Err(error) => Err(format!(
-            "could not read gateway key from operating-system credential storage: {error}"
+            "could not read gateway key from credential storage: {error}"
         )),
     }
 }
@@ -255,7 +299,7 @@ pub fn delete_gateway(alias: &str) -> Result<(), String> {
     match entry("gateway", alias)?.delete_credential() {
         Ok(()) | Err(keyring_core::Error::NoEntry) => Ok(()),
         Err(error) => Err(format!(
-            "could not delete gateway key from operating-system credential storage: {error}"
+            "could not delete gateway key from credential storage: {error}"
         )),
     }
 }

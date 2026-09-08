@@ -93,6 +93,43 @@ not add one.
 
 ## Credentials
 
+## Headless credential storage
+
+The OS keyring is the default. On a headless Linux server, container, or CI
+runner, explicitly select the encrypted file store before creating a key:
+
+```bash
+export LAYERX_CREDENTIAL_STORE=file
+read -r -s -p 'Credential passphrase: ' LAYERX_CREDENTIAL_PASSPHRASE
+export LAYERX_CREDENTIAL_PASSPHRASE
+layerx --json key create quickstart
+layerx --json key list
+layerx --json auth status
+```
+
+Use a strong passphrase of 12–16384 bytes. In CI, supply
+`LAYERX_CREDENTIAL_PASSPHRASE` through the CI secret environment. Keep it
+available for subsequent CLI and MCP/A2A processes, and unset it when finished.
+Secret imports still read stdin; the passphrase does not consume that input.
+`auth status` reports whether an API token is stored, independently of keys;
+store one with `layerx auth set` using the token on stdin.
+
+The store writes `credentials/vault` beside the resolved CLI config file
+(`LAYERX_CONFIG`, otherwise `$XDG_CONFIG_HOME/layerx/config.json`, otherwise
+`$HOME/.config/layerx/config.json`). It encrypts all keys, tokens and gateway
+credentials using AES-256-GCM and PBKDF2-HMAC-SHA256 with 600,000 iterations,
+a fresh 16-byte salt and a fresh 12-byte nonce on every update. Vault and lock
+files use mode 0600 inside a mode 0700 directory. Group/world-accessible files,
+symlinks, incorrect ownership, wrong passphrases and damaged vaults are refused.
+Updates use a process lock and atomic replacement. This backend currently
+requires Unix file permissions.
+
+There is no automatic fallback or migration between stores. Unset
+`LAYERX_CREDENTIAL_STORE` (or set it to `os`) to use the OS keyring. Retain the
+passphrase and encrypted vault together in your backup procedure: a lost
+passphrase cannot be recovered. Changing the environment passphrase does not
+rotate the vault password; it makes authentication fail.
+
 Secrets are stored under keyring service `dev.layerx.cli` with entry names
 `{kind}:{name}` (`platform/cli/src/credential.rs:11, 55-59`). Kinds are
 `key`, `token`, and `gateway` (`platform/cli/src/credential.rs:127, 179,
@@ -124,8 +161,8 @@ storage (`platform/cli/src/install/mod.rs:22-32, 892-900`).
 binary is built with `test-credential-store` and the value is `mock`
 (`platform/cli/src/credential.rs:14-19, 34-45`;
 `platform/cli/Cargo.toml:8-9`). A production / `--no-default-features`
-binary refuses any override, including `mock`, with `credential store
-override {requested} is unavailable in this binary`, and writes no config
+binary accepts explicit `file` or `os` selection. It refuses `mock` with
+`credential store override mock is unavailable in this binary`, and writes no config
 (`platform/cli/src/credential.rs:43-45`;
 `platform/cli/tests/production-credential-refusal.sh:8-26`).
 
@@ -144,7 +181,7 @@ whether a seed may be typed; the import command exists.
 | `LAYERX_CONFIG` | `config::path` (`platform/cli/src/config.rs:129-131`) | Absolute or CWD-relative config JSON path |
 | `XDG_CONFIG_HOME` | `config::path` (`platform/cli/src/config.rs:133-134`) | `{XDG_CONFIG_HOME}/layerx/config.json` when `LAYERX_CONFIG` is unset |
 | `HOME` | `config::path` (`platform/cli/src/config.rs:136-139`); install host paths (`platform/cli/src/install/mod.rs:1119-1125`) | `{HOME}/.config/layerx/config.json`; agent-runtime install roots |
-| `LAYERX_CREDENTIAL_STORE` | `install_store` (`platform/cli/src/credential.rs:17, 34-45`) | `mock` admitted only with `test-credential-store`; otherwise refused |
+| `LAYERX_CREDENTIAL_STORE` | `install_store` (`platform/cli/src/credential.rs:17, 34-45`) | `file` selects encrypted storage; `os` selects OS storage; `mock` requires `test-credential-store` |
 | `LAYERX_GATEWAY_KEY_ID` | MCP/A2A runtime (`platform/cli/src/toolset.rs:63-73`); written into install env (`platform/cli/src/install/mcp.rs:53-55`; `platform/cli/src/install/a2a.rs:67-69`) | Must match the non-secret id of the stored gateway credential |
 | `LAYERX_INSTALL_ROOT` | install host path resolution (`platform/cli/src/install/mod.rs:1119-1130`) | Replaces `HOME` for host config discovery |
 | `LAYERX_REPO_ROOT` | workspace (`platform/cli/src/workspace.rs:1098`) | Repository root for workspace commands |
@@ -201,7 +238,7 @@ the detail string is `code: …` (`platform/cli/src/output.rs:62-75`;
 
 | Refusal | Condition |
 | --- | --- |
-| `credential store override … is unavailable in this binary` (`command_failed`) | `LAYERX_CREDENTIAL_STORE` set on a binary without `test-credential-store`, or to a value other than `mock` even with the feature (`platform/cli/src/credential.rs:34-45`; `platform/cli/tests/production-credential-refusal.sh:17-25`) |
+| `credential store override … is unavailable in this binary` (`command_failed`) | `LAYERX_CREDENTIAL_STORE` set to an unsupported value; `mock` requires `test-credential-store` (`platform/cli/src/credential.rs:34-45`; `platform/cli/tests/production-credential-refusal.sh:17-25`) |
 | missing credential (`command_failed`) | `token` `NoEntry` is not itself a refusal; HTTP proceeds without `Authorization` (`platform/cli/src/credential.rs:195-202`; `platform/cli/src/http.rs:46, 70-73`). Install without a stored identity session: `no {environment} identity session is held in credential storage…` (`platform/cli/src/install/mod.rs:603-606`). MCP/A2A serve without a gateway alias: `gateway credential alias … is absent; rerun layerx install…` (`platform/cli/src/toolset.rs:58-61`). Empty stdin secret (`platform/cli/src/credential.rs:77-78`). OS store unavailable (`platform/cli/src/credential.rs:47-50`) |
 | `network_id_mismatch` | `environment use emulator` supplied network id disagrees with `GET /v1/sequencer` (`platform/cli/src/emulator.rs:116, 871-876`; `platform/cli/tests/emulator.rs:910-926`) |
 | `network_id_reserved` | `--network-id 0` (`platform/cli/src/emulator.rs:113, 180, 768-769`) |
