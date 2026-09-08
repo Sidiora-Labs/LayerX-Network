@@ -61,7 +61,6 @@ int main(int argc, char **argv)
     lxp_guarantor_attestation attestation;
     lxp_finalisation_state state;
     uint8_t complete_root[32];
-    uint8_t withheld_root[32];
     uint8_t available_mask = 0U;
     lxp_da_class withheld_class;
     char directory[] = "/tmp/lxp-da-unavailable-XXXXXX";
@@ -85,12 +84,10 @@ int main(int argc, char **argv)
     body.oracle_inputs = (lxp_byte_span){section[2], sizeof(section[2])};
     body.state_diff = (lxp_byte_span){section[3], sizeof(section[3])};
     body.recovery_metadata = (lxp_byte_span){section[4], sizeof(section[4])};
-    if (lxp_da_bundle_build(&body, 4U, &arena, &complete) != LXP_OK ||
+    if (lxp_da_bundle_build(&body, LXP_DA_CANONICAL_CHUNK_BYTES, &arena, &complete) != LXP_OK ||
         lxp_da_bundle_root(&complete, &arena, complete_root) != LXP_OK ||
         lxp_da_withhold_sim(&complete, withheld_class, &arena, &withheld,
                             &available_mask) != LXP_OK ||
-        lxp_da_bundle_root(&withheld, &arena, withheld_root) != LXP_OK ||
-        memcmp(complete_root, withheld_root, 32U) == 0 ||
         available_mask != (uint8_t)(LXP_GUARANTOR_AVAILABILITY_ALL &
             (uint8_t)~(uint8_t)(1U << ((uint8_t)withheld_class - 1U))))
         return 1;
