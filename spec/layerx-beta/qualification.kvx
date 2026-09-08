@@ -4781,3 +4781,35 @@ symbol = "real_server_wire_statuses_remain_distinct"
 observed = "cargo test --locked --manifest-path platform/Cargo.toml -p layerx-platform-authority --test human_tls exits 101: the separate real-server wire-status test passes and the real RemoteHumanAuthority test retains its TLS-provider panic. The wire test verifies registry and cached authorized-batch HTTP 200, wrong-tenant and unlisted-capability HTTP 403, service-token HTTP 401, and missing or changed policy and insufficient clock evidence HTTP 503. Evidence: qual-logs/hm2/tls-final.log. Final cargo clippy --locked --manifest-path platform/Cargo.toml -p layerx-platform-authority --all-targets -- -D warnings exits 0 in qual-logs/hm2/clippy-last.log; authority-only cargo fmt --check exits 0 in qual-logs/hm2/fmt-last.log."
 assumption = "The wire test proves server behavior but does not replace the failed real-client integration or establish successful responses for the five evidence-blocked routes. Native prerequisite inspection first encounters EACCES under the ordinary UID; privileged read-only stat then confirms both advertised native binary paths are absent. Evidence: qual-logs/hm2/native-prerequisites.log and qual-logs/hm2/native-root-check.log."
 severity = "blocker"
+
+[observation.6.4.170]
+task = "6.4"
+file = "human/crates/layerx-explorer-index/src/main.rs"
+symbol = "refresh_program LayerxdProgramBalanceReader::connect"
+observed = "The Programs reader now requires ProgramAuthority containing endpoint, authorization, replica_id and explicit ca_der. The explorer caller still supplies the former three separate authority arguments and needs a required DER CA input. The caller lies outside the agentd owned paths; its exact migration is recorded in the untracked NEEDS.md."
+assumption = "The explorer owner must supply the explicit CA and migrate the caller before cross-workspace qualification. Agentd full mode reads LAYERX_AGENT_AUTHORITY_CA_DER; both agentd modes read LAYERX_AGENT_HUMAN_AUTHORITY_CA_DER."
+severity = "blocker"
+
+[observation.6.4.171]
+task = "6.4"
+file = "agent/crates/layerx-agent-api/src/generated.rs programs/vendor/wasmi-0.31.2"
+symbol = "cargo fmt --all --check --manifest-path agent/Cargo.toml"
+observed = "The required workspace formatting check exits 1 with pre-existing differences across untouched workspace and vendor files. Evidence: qual-logs/hm7/fmt.log and qual-logs/hm7/fmt.exit. Unrelated formatting changes were not retained."
+assumption = "Workspace formatting requires a separate change owned by the affected components; the Human owner task does not authorize reformatting them."
+severity = "blocker"
+
+[observation.6.4.172]
+task = "6.4"
+file = "agent/crates/layerx-agentd/tests/support/real_authority.rs"
+symbol = "real authority fixture identity and native binaries"
+observed = "cargo test --locked --manifest-path agent/Cargo.toml -p layerx-agentd exits 101 after library and health tests pass. budget_create fails at real_authority.rs:326 because the harness requires UID 0 but the process UID is 1000; four subsequent failures report a poisoned fixture lock. Evidence: qual-logs/hm7/test-qualified.log. Privileged executable checks also find neither layerxd nor layerx-genesis-build at /root/lx-lanes/native-bin or worktree build/bin; evidence: qual-logs/hm7/native-prerequisites.log."
+assumption = "The unchanged native harness requires a privileged qualification process and real native binaries. Those prerequisites must be supplied before the aggregate test gate can pass; no assertion or test was relaxed."
+severity = "blocker"
+
+[observation.6.4.173]
+task = "6.4"
+file = "human/Cargo.lock platform/Cargo.lock"
+symbol = "ureq native-tls connector dependency"
+observed = "ureq 3.4.0 gates its NativeTlsConnector on native-tls rather than native-tls-no-default. Agentd enables native-tls and adds its required transitive webpki-root-certs package to agent/Cargo.lock. The human and platform lockfiles do not contain that package and are outside the owned paths. Explicit RootCerts::Specific still excludes bundled roots from runtime trust."
+assumption = "Dependent workspace owners must regenerate their lockfiles for the enabled connector before locked builds; no unrelated package upgrade is required by the agentd change."
+severity = "blocker"
