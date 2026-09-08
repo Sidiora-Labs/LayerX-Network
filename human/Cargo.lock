@@ -325,6 +325,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "data-encoding"
+version = "2.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2a2330da5de22e8a3cb63252ce2abb30116bf5265e89c0e01bc17015ce30a476"
+
+[[package]]
 name = "der"
 version = "0.7.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -906,6 +912,29 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "zeroize",
+]
+
+[[package]]
+name = "layerx-human-security-provider"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "data-encoding",
+ "ed25519-dalek",
+ "getrandom 0.3.4",
+ "hmac",
+ "layerx-human-service",
+ "layerx-programs-registry",
+ "layerx-proof",
+ "layerx-wire",
+ "rustix",
+ "serde",
+ "serde_json",
+ "sha1",
+ "sha2",
+ "signal-hook",
+ "subtle",
  "zeroize",
 ]
 
@@ -1673,6 +1702,17 @@ dependencies = [
  "serde",
  "serde_core",
  "zmij",
+]
+
+[[package]]
+name = "sha1"
+version = "0.10.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e3bf829a2d51ab4a5ddf1352d8470c140cadc8301b2ae1789db023f01cedd6ba"
+dependencies = [
+ "cfg-if",
+ "cpufeatures",
+ "digest",
 ]
 
 [[package]]

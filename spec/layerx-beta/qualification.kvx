@@ -4694,3 +4694,34 @@ symbol = "Server State RemoteIdentityProvider"
 observed = "cargo test --locked --manifest-path human/Cargo.toml -p layerx-human-identity-provider exits 0 with 11 tests passing, zero ignored; qual-logs/hm3/test-final.log. Tests compile the unchanged identity_dispatch.rs source with the actual service types and exercise its RemoteIdentityProvider over real Unix sockets. Separate real-server and real-binary tests cover malformed frames, UID refusal, atomic snapshot replay, protected file and directory refusal, committed-state corruption, missing-snapshot refusal, owner-only device enrollment, crash restart and SIGTERM. Owned Rust files pass rustfmt --check --edition 2021 --config skip_children=true; qual-logs/hm3/fmt-owned-check.log. The no-deps all-target Clippy diagnostic exits 101 solely on five existing diagnostics in the imported identity_dispatch.rs source at lines 147, 191 and 192; qual-logs/hm3/clippy-owned-final.log. No lint allowances, assertions or client source were changed."
 assumption = "Runtime tests validate the provider and original client wire exchange, not automatic enrollment integration or a deployed cluster. Required workspace formatting and dependency Clippy gates remain blocked as recorded in observation.3.7.21. Environment uses CARGO_BUILD_JOBS=16, MAKEFLAGS=-j16, the pinned Rust 1.91.1 toolchain and human/target."
 severity = "note"
+[observation.6.4.159]
+task = "6.4"
+file = "human/crates/layerx-human-service/src/server/production_auth.rs"
+symbol = "RemoteSecurityProvider AuthDiscoveryIndex RecoveryEvidenceProvider"
+observed = "RemoteSecurityProvider sends only LXSP opcodes 0 through 6: probe, status, begin_setup, finish_setup, disable, rotate_backup_codes and reveal_verified_receipt. Registration, assertion, step-up, account and session bindings and resolutions use the separate local AuthDiscoveryIndex. Authorization and capability consumption also use local state and send no LXSP frames. Discovery resolution is repeatable. No receipt ingestion opcode is defined."
+assumption = "A server implementation and real-client tests for remote discovery, single-use ceremony consumption, session and capability operations require a client wire extension and production caller changes outside the security-provider crate. Recovery ingestion requires a canonical receipt and verification-input contract. No server build or test gate has run."
+severity = "blocker"
+
+[observation.6.4.160]
+task = "6.4"
+file = "human/crates/layerx-human-service/src/server/production_auth.rs human/crates/layerx-human-service/src/server/production_components.rs human/crates/layerx-human-service/src/server/schema.rs"
+symbol = "RemoteSecurityProvider clippy"
+observed = "cargo clippy --locked --manifest-path human/Cargo.toml -p layerx-human-security-provider --all-targets -- -D warnings exits 101 in layerx-human-service with 436 lint errors; qual-logs/hm4/clippy.log. Examples include many_single_char_names in production_auth.rs, unnested_or_patterns in production_components.rs and schema.rs, and missing_errors_doc on existing public APIs. A duplicate invocation waiting on the same build directory was terminated with exit 143; qual-logs/hm4/clippy-initial.log."
+assumption = "The existing human-service dependency is outside the provider crate ownership. Its code and lint configuration remain unchanged. The exact required gate is not qualified."
+severity = "blocker"
+
+[observation.6.4.161]
+task = "6.4"
+file = "human/Cargo.toml human/crates/layerx-human-security-provider"
+symbol = "cargo-fmt cg-guard"
+observed = "cargo fmt --all --check --manifest-path human/Cargo.toml exits 1 with differences in 86 existing out-of-scope files and no differences in layerx-human-security-provider; qual-logs/hm4/fmt-all.log and qual-logs/hm4/fmt-paths.txt. cg brief and cg guard exit 1 because the clone is not initialized as a Codify project; qual-logs/hm4/cg-brief.log and qual-logs/hm4/cg-guard.log."
+assumption = "The workspace format command is a report gate. Out-of-scope source formatting, Codify initialization, task status changes and cluster or image gates are not performed."
+severity = "blocker"
+
+[observation.6.4.162]
+task = "6.4"
+file = "human/crates/layerx-human-security-provider human/Cargo.toml human/Cargo.lock"
+symbol = "LXSP Store RemoteSecurityProvider ingest_recovery_receipt"
+observed = "The provider implements existing LXSP operations 0 through 6, durable authenticator setup and attempt counters, TOTP verification, backup rotation, SO_PEERCRED admission, bounded I/O, signal shutdown and owner-only verified recovery ingestion. cargo test --locked --manifest-path human/Cargo.toml -p layerx-human-security-provider exits 0 twice with all 10 real-client and binary integration tests passing; qual-logs/hm4/test.log and qual-logs/hm4/test-final.log. Tests cover expiry equality, replay, missing journal tails, corruption, protected file modes and links, exclusive locking, malformed frames, wrong UID, total I/O limits, both shutdown signals, real signed receipt ingestion and reveal, signature tampering and trust-history changes. cargo fmt --check --manifest-path human/Cargo.toml -p layerx-human-security-provider exits 0; qual-logs/hm4/fmt-owned-check.log. The final locked Clippy rerun exits 101 with the same 436 existing human-service errors; qual-logs/hm4/clippy-final.log."
+assumption = "The existing client and local discovery/capability code remain unchanged. The revised operations-only scope and administrative ingestion contract supersede the client-extension dependency described in observation 6.4.159. cargo update --workspace --manifest-path human/Cargo.toml exits 0 and adds only the new member and four dependencies, preserving every previously locked package version; qual-logs/hm4/lock-minimal.log. Environment: CARGO_BUILD_JOBS=16 MAKEFLAGS=-j16 with the worktree-default human/target directory. Full qualification remains blocked by observation 6.4.160; no task status is changed."
+severity = "blocker"
