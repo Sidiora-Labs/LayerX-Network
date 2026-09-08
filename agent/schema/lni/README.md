@@ -89,3 +89,5 @@ authentication-and-durability guarantee only when
 | 31 | `SimulateResponse` | response | `simulate` |
 
 AvailabilityFetchRequest carries only the canonical selector and empty proof material. AvailabilityChunk carries exact chunk bytes and inclusion metadata. AvailabilityEnd has empty canonical payload and empty proof material.
+
+AvailabilityFetchRequest selector `05 || batch:u64be` fetches one durable, sealed, header-signed candidate before finalization. It uses the same authenticated UID/GID principal set as FinalityEvidenceRegisterRequest (tag 28); other principals retain the existing unauthorized refusal. AvailabilityChunk and AvailabilityEnd encoding and all verification checks are unchanged. Selectors 01–04 remain finalized-only. Candidate retrieval does not register or finalize a checkpoint.

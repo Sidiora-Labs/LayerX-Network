@@ -4,7 +4,8 @@ use std::process::Command;
 use std::time::Duration;
 
 use layerx_client::availability::{
-    fetch, AvailabilitySelector, FetchContext, FetchOutcome, Provider, ProviderSet, RetrievalLimits,
+    fetch, fetch_sealed_candidate, AvailabilitySelector, FetchContext, FetchOutcome, Provider,
+    ProviderSet, RetrievalLimits,
 };
 use layerx_client::batch::lookup;
 use layerx_client::evidence::{register_finality_evidence, FinalityEvidenceCandidate};
@@ -38,6 +39,45 @@ fn refusal(transport: &mut Uds, payload: &[u8], expected: i32, correlation: u64)
         .unwrap_or_else(|| panic!("malformed core refusal"));
     assert_eq!(result.class, 3);
     assert_eq!(result.result.raw(), expected);
+}
+
+fn candidate_fetch(transport: &mut Uds, signed: &layerx_client::batch::SignedBatchHeader) {
+    let context = FetchContext {
+        interface_version: Version::V1_4,
+        correlation_id: 30,
+        expected_batch_number: signed.header.batch_number(),
+        data_availability_root: signed.header.data_availability_root(),
+        record_roots: RootCommitments {
+            activity: signed.header.activity_merkle_root(),
+            receipt: signed.header.receipt_merkle_root(),
+            event: signed.header.event_merkle_root(),
+            oracle: signed.header.oracle_root(),
+        },
+        limits: RetrievalLimits {
+            maximum_bytes: 16 * 1024 * 1024,
+            maximum_chunks: 1024,
+            deadline: Duration::from_secs(10),
+        },
+    };
+    let mut providers = ProviderSet::new(vec![Provider {
+        name: "real-layerxd-candidate".to_owned(),
+        transport,
+    }]);
+    let outcome = fetch_sealed_candidate(&mut providers, context, |_| {})
+        .unwrap_or_else(|error| panic!("candidate fetch: {error:?}"));
+    match outcome {
+        FetchOutcome::Complete(result) => {
+            assert!(result.chunks.len() >= 5);
+            assert_eq!(result.batch_number(), context.expected_batch_number);
+            assert_eq!(
+                result.data_availability_root(),
+                context.data_availability_root
+            );
+            assert!(!result.records().activities.is_empty());
+            assert!(!result.records().receipts.is_empty());
+        }
+        FetchOutcome::Partial(reports) => panic!("candidate incomplete: {reports:?}"),
+    }
 }
 
 fn finalized_fetch(
@@ -170,6 +210,13 @@ fn probe(socket: &Path, stage: &str) {
             .unwrap_or_else(|| panic!("availability work directory missing")),
     );
     if stage == "retained" {
+        assert_eq!(node.latest_finalised_checkpoint, [0; 32]);
+        assert!(!work.join("availability-output/checkpoint.bin").exists());
+        assert!(!work
+            .join("availability-output/available-header.bin")
+            .exists());
+        candidate_fetch(&mut transport, &first);
+        assert!(!work.join("availability-output/checkpoint.bin").exists());
         let pending = work.join("availability-output/header.pending");
         fs::write(&pending, first.canonical_bytes())
             .unwrap_or_else(|error| panic!("write signed header: {error}"));
@@ -181,12 +228,25 @@ fn probe(socket: &Path, stage: &str) {
     }
     if stage == "finalized" {
         finalized_fetch(&mut transport, &first, &work);
+        candidate_fetch(&mut transport, &last);
+        let mut unfinalized = vec![2];
+        unfinalized.extend_from_slice(&9_u64.to_be_bytes());
+        refusal(&mut transport, &unfinalized, -804, 31);
         return;
     }
     let mut batch = vec![2];
     batch.extend_from_slice(&1_u64.to_be_bytes());
     refusal(&mut transport, &batch, -804, 3);
+    if corrupt {
+        batch[0] = 5;
+        refusal(&mut transport, &batch, -804, 32);
+    }
     if !corrupt {
+        for number in [0, 10, u64::MAX] {
+            let mut candidate = vec![5];
+            candidate.extend_from_slice(&number.to_be_bytes());
+            refusal(&mut transport, &candidate, -106, 33);
+        }
         let mut unknown = vec![2];
         unknown.extend_from_slice(&u64::MAX.to_be_bytes());
         refusal(&mut transport, &unknown, -106, 4);

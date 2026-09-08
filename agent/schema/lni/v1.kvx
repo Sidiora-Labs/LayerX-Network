@@ -151,7 +151,7 @@ golden = "0001000000110000000000000000000000011100000001a5"
 name = "AvailabilityFetchRequest"
 kind = "request"
 capability = "availability_fetch"
-canonical_payload = "canonical AvailabilitySelector bytes: 01 checkpoint id, 02 batch u64be, 03 first and last global sequence u64be, or 04 activity id; no class suffix"
+canonical_payload = "canonical AvailabilitySelector bytes: 01 checkpoint id, 02 batch u64be, 03 first and last global sequence u64be, 04 activity id, or 05 sealed-candidate batch u64be; 05 resolves one durable sealed signed batch regardless of finalization, under the same authenticated LNI principal authorization as tag 28, without finalizing it; 01-04 remain finalized-only; no class suffix"
 proof_material = "empty"
 golden = "0001000000120000000000000000000000011200000000"
 
