@@ -86,6 +86,9 @@ struct Config {
     network_id: String,
     wire_version: String,
     authorization: SequencerAuthorization,
+    sequencer_id: [u8; 32],
+    first_batch: u64,
+    last_batch: u64,
     sequencer_public_key: [u8; 32],
 }
 
@@ -283,6 +286,9 @@ fn config() -> Result<Config, String> {
         protocol_network_id,
         network_id,
         wire_version,
+        sequencer_id,
+        first_batch,
+        last_batch,
         authorization: SequencerAuthorization::new(
             sequencer_id,
             sequencer_public_key,

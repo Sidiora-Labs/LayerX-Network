@@ -28,7 +28,7 @@ fn registry_uses_exact_file_bytes_and_refuses_unprotected_invalid_missing_source
     fs::create_dir(&root).unwrap_or_else(|e| panic!("directory: {e}"));
     let path = root.join("registry.json");
     assert_eq!(result_status(registry(&path)), 503);
-    let bytes = br#"{"modules":[{"module":9,"ordinals":[1,7]}]}"#;
+    let bytes = br#"{"schema_version":2,"assets":[{"asset":"0202020202020202020202020202020202020202020202020202020202020202","currency":"USD","decimals":6,"symbol":"$"}],"modules":[{"module":9,"ordinals":[1,7]}]}"#;
     fs::write(&path, bytes).unwrap_or_else(|e| panic!("registry: {e}"));
     fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
         .unwrap_or_else(|e| panic!("mode: {e}"));
@@ -153,4 +153,46 @@ fn query_decoding_rejects_duplicates_and_preserves_utf8() {
     let result =
         query(Some("did=did%3Alayerx%3A%C3%A9%20x")).unwrap_or_else(|_| panic!("valid query"));
     assert_eq!(result["did"], "did:layerx:é x");
+}
+
+#[test]
+fn registry_rejects_legacy_and_invalid_asset_metadata() {
+    let root = std::env::temp_dir().join(format!("human-assets-{}", std::process::id()));
+    fs::create_dir(&root).unwrap_or_else(|e| panic!("directory: {e:?}"));
+    let path = root.join("registry.json");
+    let valid = value!({"schema_version":2,"assets":[{"asset":hex::encode(&[2;32]),"currency":"USD","decimals":6,"symbol":"$"}],"modules":[{"module":9,"ordinals":[1,7]}]});
+    let mut invalid = Vec::new();
+    let mut legacy = valid.clone();
+    legacy
+        .as_object_mut()
+        .unwrap_or_else(|| panic!("object"))
+        .remove("schema_version");
+    invalid.push(legacy);
+    for (field, value) in [
+        ("asset", value!(hex::encode(&[0; 32]))),
+        ("currency", value!("")),
+        ("symbol", value!("\n")),
+        ("decimals", value!(39)),
+    ] {
+        let mut document = valid.clone();
+        document["assets"][0][field] = value;
+        invalid.push(document);
+    }
+    let mut duplicate = valid.clone();
+    duplicate["assets"]
+        .as_array_mut()
+        .unwrap_or_else(|| panic!("assets"))
+        .push(valid["assets"][0].clone());
+    invalid.push(duplicate);
+    for document in invalid {
+        fs::write(
+            &path,
+            serde_json::to_vec(&document).unwrap_or_else(|e| panic!("JSON: {e:?}")),
+        )
+        .unwrap_or_else(|e| panic!("write: {e:?}"));
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+            .unwrap_or_else(|e| panic!("permissions: {e:?}"));
+        assert_eq!(result_status(registry(&path)), 503);
+    }
+    fs::remove_dir_all(root).unwrap_or_else(|e| panic!("cleanup: {e:?}"));
 }
