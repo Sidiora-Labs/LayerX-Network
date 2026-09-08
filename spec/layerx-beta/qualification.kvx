@@ -4972,3 +4972,11 @@ symbol = "qualification_environment_prerequisites"
 observed = "The initial service test link exits 101 with No space left on device (qual-logs/hm5/hm5b-service-tests.log); its retry and final package test command pass. The initial selected package test run exits 101 because build/tests/explorer_fixture is absent (qual-logs/hm5/hm5b-safe-workspace-tests.log). make BUILD_DIR=qual-logs/hm5/native-build qual-logs/hm5/native-build/tests/explorer_fixture exits 0 (qual-logs/hm5/hm5b-explorer-native-fixture.log). Supplying that real fixture with LAYERX_EXPLORER_CORE_FIXTURE makes all seventeen explorer tests pass in the final selected package command. Bridge Python dependencies are installed only in qual-logs/hm5/bridge-venv; the real custody evidence fixture executes on disposable chain 31337."
 assumption = "No native source, test assertion, production chain or shared service was modified to satisfy these environment prerequisites. Missing qualified native daemon binaries and unavailable cluster tooling remain separate from the executed local fixture results."
 severity = "note"
+
+[observation.2.3.18]
+task = "2.3"
+file = "human/crates/layerx-human-movement-provider/src/tests.rs human/crates/layerx-human-movement-provider/src/listener.rs"
+symbol = "restarting_server_reobserves_instead_of_serving_archived_finality"
+observed = "After rebasing onto main the package suite passes fmt and clippy; the parallel test run on the shared workstation (load average 5 to 11 during concurrent image builds) fails this one test with Error Unavailable while the same binary passes serially (--test-threads=1) and alone, and an idle 64-core server passed 103 consecutive parallel runs of the unchanged suite (qual-logs/hm5-rebase/test-full-env.log, test-serial.log, test-rerun-1..3.log). The test listener uses a 100 ms deadline and 50 ms request timeout."
+assumption = "The failure is deadline expiry under host load, not a rebase regression or shared test state; no deadline, assertion, retry or ignore was changed. A less load-sensitive proof of the restart behaviour is left to the movement provider owner."
+severity = "note"
