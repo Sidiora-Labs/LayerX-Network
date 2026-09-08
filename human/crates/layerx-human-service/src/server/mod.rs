@@ -117,9 +117,8 @@ impl<B: HumanApiComponents> HttpsServer<B> {
         let gate = ConnectionGate::new(self.configuration.maximum_connections);
         loop {
             let (tcp, peer) = listener.accept().map_err(ServerError::Io)?;
-            let permit = match gate.acquire() {
-                Ok(permit) => permit,
-                Err(_) => continue,
+            let Ok(permit) = gate.acquire() else {
+                continue;
             };
             let router = Arc::clone(&self.router);
             let tls = Arc::clone(&tls);

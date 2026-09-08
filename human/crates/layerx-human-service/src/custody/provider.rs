@@ -108,7 +108,30 @@ pub struct PrincipalKeyBinding {
 }
 
 impl PrincipalKeyBinding {
-    pub(super) fn new(
+    /// Reconstructs a remote assertion; the KMS checks it against stored custody
+    /// and the service-authorized action. This does not grant authorization.
+    /// # Errors
+    /// Refuses zero bindings and invalid networks.
+    pub fn from_digest(
+        digest: [u8; 32],
+        network_id: u32,
+        class: KeyClass,
+    ) -> Result<Self, KmsError> {
+        if digest == [0; 32] || network_id == 0 {
+            return Err(KmsError::Refused);
+        }
+        Ok(Self {
+            identity: Vec::new(),
+            digest,
+            network_id,
+            class,
+        })
+    }
+
+    /// Derives a binding from the service's canonical custody identity.
+    /// # Errors
+    /// Refuses identities whose lengths cannot be encoded.
+    pub fn new(
         identity: Vec<u8>,
         network_id: u32,
         class: KeyClass,
@@ -338,6 +361,19 @@ pub trait KmsProvider: Debug + Send + Sync {
     /// Returns the exact availability, authentication or provider refusal.
     fn probe(&self) -> Result<(), KmsError>;
 
+    /// Executes an EVM custody operation; unsupported providers refuse.
+    /// # Errors
+    /// Returns the provider's authorization or availability refusal.
+    fn evm_operation(
+        &self,
+        _operation: u8,
+        _binding: &PrincipalKeyBinding,
+        _reference: &ProviderKeyReference,
+        _payload: &[u8],
+    ) -> Result<Vec<u8>, KmsError> {
+        Err(KmsError::Refused)
+    }
+
     /// Creates a primary key inside the provider.
     ///
     /// # Errors
@@ -497,7 +533,7 @@ impl Debug for RemoteCustodySigner {
     }
 }
 
-/// Production provider speaking the bounded LayerX KMS protocol over mutual
+/// Production provider speaking the bounded `LayerX` KMS protocol over mutual
 /// TLS to a remote KMS/HSM gateway. Every operation opens a fresh authenticated
 /// connection, so a failed connection cannot silently reuse cached authority.
 pub struct RemoteKmsProvider {
@@ -551,7 +587,7 @@ impl RemoteKmsProvider {
         })
     }
 
-    fn call(&self, operation: u8, request: Vec<u8>) -> Result<Vec<u8>, KmsError> {
+    fn call(&self, operation: u8, request: &[u8]) -> Result<Vec<u8>, KmsError> {
         self.call_version(operation, PROVIDER_VERSION, request)
     }
 
@@ -559,7 +595,7 @@ impl RemoteKmsProvider {
         &self,
         operation: u8,
         version: u16,
-        request: Vec<u8>,
+        request: &[u8],
     ) -> Result<Vec<u8>, KmsError> {
         if request.len() > self.limits.maximum_frame_bytes {
             return Err(KmsError::InvalidConfiguration);
@@ -577,7 +613,7 @@ impl RemoteKmsProvider {
             self.limits,
         )
         .map_err(map_transport)?;
-        transport.send(&request).map_err(map_transport)?;
+        transport.send(request).map_err(map_transport)?;
         let response = transport.receive().map_err(map_transport)?;
         decode_response(operation, version, &response)
     }
@@ -589,7 +625,7 @@ impl RemoteKmsProvider {
         reference: Option<&ProviderKeyReference>,
     ) -> Result<ProviderKeyDescription, KmsError> {
         let request = encode_key_request(operation, &self.provider_reference, binding, reference)?;
-        let response = self.call(operation, request)?;
+        let response = self.call(operation, &request)?;
         decode_description(&response, binding)
     }
 }
@@ -617,12 +653,39 @@ impl KmsProvider for RemoteKmsProvider {
 
     fn probe(&self) -> Result<(), KmsError> {
         let request = encode_header(OP_PROBE, &self.provider_reference)?;
-        let response = self.call(OP_PROBE, request)?;
+        let response = self.call(OP_PROBE, &request)?;
         if response.is_empty() {
             Ok(())
         } else {
             Err(KmsError::InvalidResponse)
         }
+    }
+
+    fn evm_operation(
+        &self,
+        operation: u8,
+        binding: &PrincipalKeyBinding,
+        reference: &ProviderKeyReference,
+        payload: &[u8],
+    ) -> Result<Vec<u8>, KmsError> {
+        if !(6..=12).contains(&operation) {
+            return Err(KmsError::Refused);
+        }
+        let mut frame = encode_key_request(
+            operation,
+            &self.provider_reference,
+            binding,
+            Some(reference),
+        )?;
+        frame[4..6].copy_from_slice(&3_u16.to_be_bytes());
+        if operation >= 7 {
+            let mut writer = WireWriter::from_bytes(frame);
+            writer.bytes(payload, PROVIDER_FRAME_LIMIT)?;
+            frame = writer.finish();
+        } else if !payload.is_empty() {
+            return Err(KmsError::Refused);
+        }
+        self.call_version(operation, 3, &frame)
     }
 
     fn create_key(
@@ -662,7 +725,7 @@ impl KmsProvider for RemoteKmsProvider {
         )?;
         request[4..6].copy_from_slice(&2_u16.to_be_bytes());
         request.extend_from_slice(&expected_public_key);
-        let response = self.call_version(OP_ROTATE, 2, request)?;
+        let response = self.call_version(OP_ROTATE, 2, &request)?;
         decode_description(&response, binding)
     }
 
@@ -677,7 +740,7 @@ impl KmsProvider for RemoteKmsProvider {
             binding,
             Some(reference),
         )?;
-        let response = self.call(OP_DESTROY, request)?;
+        let response = self.call(OP_DESTROY, &request)?;
         if response.is_empty() {
             Ok(())
         } else {
@@ -700,7 +763,7 @@ impl KmsProvider for RemoteKmsProvider {
                 request.canonical_bytes,
                 &validated,
             )?;
-            let response = self.call(OP_SIGN, frame)?;
+            let response = self.call(OP_SIGN, &frame)?;
             let signature: [u8; 64] = response
                 .as_slice()
                 .try_into()

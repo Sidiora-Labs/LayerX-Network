@@ -80,6 +80,10 @@ pub struct EvidenceBundle {
 
 impl EvidenceBundle {
     /// Encodes the receipt evidence bundle in a bounded canonical binary form.
+    ///
+    /// # Errors
+    ///
+    /// Refuses malformed, unbound, or oversized canonical evidence.
     pub fn encode(&self) -> Result<Vec<u8>, ExportError> {
         let mut out = Vec::new();
         out.extend_from_slice(BUNDLE_MAGIC);
@@ -117,7 +121,7 @@ impl EvidenceBundle {
         match &self.audit_export {
             Some(value) => {
                 out.push(1);
-                push_bytes(&mut out, value)?
+                push_bytes(&mut out, value)?;
             }
             None => out.push(0),
         }
@@ -126,6 +130,10 @@ impl EvidenceBundle {
     }
 
     /// Decodes the canonical bounded receipt bundle without trusting lengths.
+    ///
+    /// # Errors
+    ///
+    /// Refuses malformed, unbound, or oversized canonical evidence.
     pub fn decode(bytes: &[u8]) -> Result<Self, ExportError> {
         require_bound(bytes.len(), MAXIMUM_EXPORT_BYTES)?;
         let mut reader = BundleReader { bytes, offset: 0 };
@@ -147,7 +155,7 @@ impl EvidenceBundle {
                 refs.push(
                     String::from_utf8(reader.bytes()?.to_vec())
                         .map_err(|_| ExportError::UnboundProtocolEvidence)?,
-                )
+                );
             }
             entries.push(EvidenceEntry {
                 entry_id,
@@ -318,12 +326,11 @@ impl EvidenceBundle {
     /// Returns feed read failures.
     pub fn receipt_authority(
         &self,
-        feed: Feed,
         scope: &PrincipalScope<'_>,
     ) -> Result<ReceiptAuthority, FeedError> {
         let mut authority = ReceiptAuthority::default();
         for entry in &self.entries {
-            if let Some(entry) = feed.entry(scope, &entry.entry_id)? {
+            if let Some(entry) = Feed::entry(scope, &entry.entry_id)? {
                 authority.extend_from_entry(&entry);
             }
         }

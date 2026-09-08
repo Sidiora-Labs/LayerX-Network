@@ -349,8 +349,7 @@ fn program_json(program: &ExplorerProgram) -> String {
                 version.abi_version,
                 version
                     .interface_digest
-                    .map(|digest| format!("\"{}\"", hex::encode(&digest)))
-                    .unwrap_or_else(|| "null".to_owned()),
+                    .map_or_else(|| "null".to_owned(), |digest| format!("\"{}\"", hex::encode(&digest))),
                 source_status(&version.source),
             )
         })
@@ -532,7 +531,7 @@ fn serve_connection(
     }
 }
 
-fn serve(config: Config) -> Result<(), String> {
+fn serve(config: &Config) -> Result<(), String> {
     let head = config
         .journal
         .observed_head()
@@ -542,7 +541,7 @@ fn serve(config: Config) -> Result<(), String> {
         sealed_batch: config.observed_sealed_batch,
         finalised_checkpoint: config.finalised_checkpoint,
     });
-    refresh_program(&config, &mut index, config.probe_program, now_ms()?)
+    refresh_program(config, &mut index, config.probe_program, now_ms()?)
         .map_err(|error| format!("explorer protocol probe failed: {error}"))?;
     let listener = TcpListener::bind(&config.listen)
         .map_err(|error| format!("explorer program listener failed: {error}"))?;
@@ -552,13 +551,13 @@ fn serve(config: Config) -> Result<(), String> {
             .set_read_timeout(Some(Duration::from_secs(10)))
             .and_then(|()| stream.set_write_timeout(Some(Duration::from_secs(10))))
             .map_err(|error| format!("explorer connection timeout setup failed: {error}"))?;
-        let _ = serve_connection(&mut stream, &config, &mut index);
+        let _ = serve_connection(&mut stream, config, &mut index);
     }
     Ok(())
 }
 
 fn main() {
-    if let Err(error) = config().and_then(serve) {
+    if let Err(error) = config().and_then(|config| serve(&config)) {
         eprintln!("layerx-explorer-index: {error}");
         std::process::exit(2);
     }

@@ -88,7 +88,7 @@ pub(crate) fn encode_exit_plan(plan: &ExitPlan) -> Result<Vec<u8>, ExitJourneyEr
     validate_exit_evidence(&plan.evidence)?;
     let mut out = super::wire::Writer::new(3);
     out.text(plan.journey_id.as_str())
-        .map_err(|_| ExitJourneyError::InvalidPlan)?;
+        .map_err(|()| ExitJourneyError::InvalidPlan)?;
     out.fixed(&plan.idempotency_key);
     out.fixed(&plan.evidence.account);
     out.fixed(&plan.evidence.asset_id);
@@ -131,57 +131,61 @@ pub(crate) fn encode_exit_plan(plan: &ExitPlan) -> Result<Vec<u8>, ExitJourneyEr
 /// Decodes an exact bounded exit plan and constructs only validated evidence.
 pub(crate) fn decode_exit_plan(bytes: &[u8]) -> Result<ExitPlan, ExitJourneyError> {
     let mut input =
-        super::wire::Reader::new(bytes, 3).map_err(|_| ExitJourneyError::InvalidPlan)?;
-    let journey_id = JourneyId::new(input.text().map_err(|_| ExitJourneyError::InvalidPlan)?)
+        super::wire::Reader::new(bytes, 3).map_err(|()| ExitJourneyError::InvalidPlan)?;
+    let journey_id = JourneyId::new(input.text().map_err(|()| ExitJourneyError::InvalidPlan)?)
         .map_err(|_| ExitJourneyError::InvalidPlan)?;
-    let idempotency_key = input.fixed().map_err(|_| ExitJourneyError::InvalidPlan)?;
-    let account = input.fixed().map_err(|_| ExitJourneyError::InvalidPlan)?;
-    let asset_id = input.fixed().map_err(|_| ExitJourneyError::InvalidPlan)?;
-    let finalised_balance = input.u128().map_err(|_| ExitJourneyError::InvalidPlan)?;
-    let recipient = EvmAddress::new(input.fixed().map_err(|_| ExitJourneyError::InvalidPlan)?);
-    let leaf_index = input.u64().map_err(|_| ExitJourneyError::InvalidPlan)?;
-    let sibling_count = usize::from(input.u16().map_err(|_| ExitJourneyError::InvalidPlan)?);
+    let idempotency_key = input.fixed().map_err(|()| ExitJourneyError::InvalidPlan)?;
+    let account = input.fixed().map_err(|()| ExitJourneyError::InvalidPlan)?;
+    let asset_id = input.fixed().map_err(|()| ExitJourneyError::InvalidPlan)?;
+    let finalised_balance = input.u128().map_err(|()| ExitJourneyError::InvalidPlan)?;
+    let recipient = EvmAddress::new(input.fixed().map_err(|()| ExitJourneyError::InvalidPlan)?);
+    let leaf_index = input.u64().map_err(|()| ExitJourneyError::InvalidPlan)?;
+    let sibling_count = usize::from(input.u16().map_err(|()| ExitJourneyError::InvalidPlan)?);
     if sibling_count > super::wire::MAX_PROOF_ITEMS {
         return Err(ExitJourneyError::InvalidPlan);
     }
     let mut siblings = Vec::with_capacity(sibling_count);
     for _ in 0..sibling_count {
-        siblings.push(input.fixed().map_err(|_| ExitJourneyError::InvalidPlan)?);
+        siblings.push(input.fixed().map_err(|()| ExitJourneyError::InvalidPlan)?);
     }
-    let attestation_count = usize::from(input.u16().map_err(|_| ExitJourneyError::InvalidPlan)?);
+    let attestation_count = usize::from(input.u16().map_err(|()| ExitJourneyError::InvalidPlan)?);
     if attestation_count == 0 || attestation_count > super::wire::MAX_PROOF_ITEMS {
         return Err(ExitJourneyError::InvalidPlan);
     }
     let mut attestations = Vec::with_capacity(attestation_count);
     for _ in 0..attestation_count {
         attestations.push(GuarantorAttestation {
-            protocol_version: input.u16().map_err(|_| ExitJourneyError::InvalidPlan)?,
-            network_id: input.u32().map_err(|_| ExitJourneyError::InvalidPlan)?,
-            paxeer_chain_id: input.u64().map_err(|_| ExitJourneyError::InvalidPlan)?,
+            protocol_version: input.u16().map_err(|()| ExitJourneyError::InvalidPlan)?,
+            network_id: input.u32().map_err(|()| ExitJourneyError::InvalidPlan)?,
+            paxeer_chain_id: input.u64().map_err(|()| ExitJourneyError::InvalidPlan)?,
             settlement_contract: EvmAddress::new(
-                input.fixed().map_err(|_| ExitJourneyError::InvalidPlan)?,
+                input.fixed().map_err(|()| ExitJourneyError::InvalidPlan)?,
             ),
-            epoch: input.u64().map_err(|_| ExitJourneyError::InvalidPlan)?,
-            checkpoint_id: input.fixed().map_err(|_| ExitJourneyError::InvalidPlan)?,
-            checkpoint_hash: input.fixed().map_err(|_| ExitJourneyError::InvalidPlan)?,
-            guarantor_id: input.fixed().map_err(|_| ExitJourneyError::InvalidPlan)?,
-            batch_number: input.u64().map_err(|_| ExitJourneyError::InvalidPlan)?,
-            data_availability_root: input.fixed().map_err(|_| ExitJourneyError::InvalidPlan)?,
-            replayed: input.boolean().map_err(|_| ExitJourneyError::InvalidPlan)?,
-            data_available: input.boolean().map_err(|_| ExitJourneyError::InvalidPlan)?,
+            epoch: input.u64().map_err(|()| ExitJourneyError::InvalidPlan)?,
+            checkpoint_id: input.fixed().map_err(|()| ExitJourneyError::InvalidPlan)?,
+            checkpoint_hash: input.fixed().map_err(|()| ExitJourneyError::InvalidPlan)?,
+            guarantor_id: input.fixed().map_err(|()| ExitJourneyError::InvalidPlan)?,
+            batch_number: input.u64().map_err(|()| ExitJourneyError::InvalidPlan)?,
+            data_availability_root: input.fixed().map_err(|()| ExitJourneyError::InvalidPlan)?,
+            replayed: input
+                .boolean()
+                .map_err(|()| ExitJourneyError::InvalidPlan)?,
+            data_available: input
+                .boolean()
+                .map_err(|()| ExitJourneyError::InvalidPlan)?,
             availability_class_mask: input
                 .fixed::<1>()
-                .map_err(|_| ExitJourneyError::InvalidPlan)?[0],
-            attested_at: input.u64().map_err(|_| ExitJourneyError::InvalidPlan)?,
-            signer: EvmAddress::new(input.fixed().map_err(|_| ExitJourneyError::InvalidPlan)?),
-            signature_r: input.fixed().map_err(|_| ExitJourneyError::InvalidPlan)?,
-            signature_s: input.fixed().map_err(|_| ExitJourneyError::InvalidPlan)?,
+                .map_err(|()| ExitJourneyError::InvalidPlan)?[0],
+            attested_at: input.u64().map_err(|()| ExitJourneyError::InvalidPlan)?,
+            signer: EvmAddress::new(input.fixed().map_err(|()| ExitJourneyError::InvalidPlan)?),
+            signature_r: input.fixed().map_err(|()| ExitJourneyError::InvalidPlan)?,
+            signature_s: input.fixed().map_err(|()| ExitJourneyError::InvalidPlan)?,
             signature_v: input
                 .fixed::<1>()
-                .map_err(|_| ExitJourneyError::InvalidPlan)?[0],
+                .map_err(|()| ExitJourneyError::InvalidPlan)?[0],
         });
     }
-    input.finish().map_err(|_| ExitJourneyError::InvalidPlan)?;
+    input.finish().map_err(|()| ExitJourneyError::InvalidPlan)?;
     let plan = ExitPlan {
         journey_id,
         idempotency_key,
@@ -238,6 +242,7 @@ fn validate_exit_evidence(evidence: &ExitEvidence) -> Result<(), ExitJourneyErro
 /// for repeated calls carrying the same action key and identical claim.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExitWalletRequest {
+    pub identity: super::MovementExecutionIdentity,
     pub action_key: [u8; 32],
     pub contract: EvmAddress,
     pub calldata: Vec<u8>,
@@ -575,8 +580,13 @@ impl From<&ExitClaim> for StoredClaim {
 }
 
 impl StoredClaim {
-    fn wallet_request(&self, action_key: [u8; 32]) -> ExitWalletRequest {
+    fn wallet_request(
+        &self,
+        action_key: [u8; 32],
+        identity: super::MovementExecutionIdentity,
+    ) -> ExitWalletRequest {
         ExitWalletRequest {
+            identity,
             action_key,
             contract: EvmAddress::new(self.contract),
             calldata: self.calldata.clone(),
@@ -761,7 +771,7 @@ impl ExitJourney {
                 }
             },
             Phase::WalletOpening => {
-                let request = self.wallet_request()?;
+                let request = self.wallet_request(scope)?;
                 match wallet.submit_or_resolve(&request)? {
                     ExitWalletOutcome::Submitted(transaction) => {
                         if transaction.bytes() == [0; 32] {
@@ -882,11 +892,25 @@ impl ExitJourney {
         Ok(())
     }
 
-    fn wallet_request(&self) -> Result<ExitWalletRequest, ExitJourneyError> {
+    fn wallet_request(
+        &self,
+        scope: &PrincipalScope<'_>,
+    ) -> Result<ExitWalletRequest, ExitJourneyError> {
         self.record
             .claim
             .as_ref()
-            .map(|claim| claim.wallet_request(self.record.wallet_action_key))
+            .map(|claim| {
+                claim.wallet_request(
+                    self.record.wallet_action_key,
+                    super::MovementExecutionIdentity {
+                        principal: scope.principal().clone(),
+                        tenant: scope.tenant().clone(),
+                        account: self.record.evidence.account,
+                        wallet: EvmAddress::new(self.record.evidence.recipient),
+                        plan_id: self.record.idempotency_key,
+                    },
+                )
+            })
             .ok_or(ExitJourneyError::Corrupt("wallet stage has no claim"))
     }
 

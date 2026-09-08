@@ -7,6 +7,13 @@ import {GuarantorBond} from "../contracts/GuarantorBond.sol";
 import {Constants} from "../contracts/libraries/Constants.sol";
 
 interface CheckpointVm {
+    struct Log {
+        bytes32[] topics;
+        bytes data;
+        address emitter;
+    }
+    function recordLogs() external;
+    function getRecordedLogs() external returns (Log[] memory);
     function addr(uint256 privateKey) external returns (address);
     function deal(address account, uint256 balance) external;
     function prank(address sender) external;
@@ -776,6 +783,45 @@ contract CheckpointRegistryTest {
         require(
             registry.canonicalHeader(first).length == registry.canonicalHeader(second).length, "count leaked into size"
         );
+    }
+
+    function testInvalidatedCheckpointCannotPublishWitnesses() public {
+        CanonicalCheckpoint.HeaderCommitments memory header = _header();
+        bytes32 checkpoint = registry.checkpointHash(header, "");
+        registry.registerCheckpoint(header, "", _attestations(header, checkpoint, 2));
+        bond.setSlashingAuthority(address(this));
+        registry.invalidateCheckpoint(checkpoint);
+        vm.expectRevert(CheckpointRegistry.InvalidHeader.selector);
+        registry.publishCheckpointWitnesses(checkpoint, hex"0102", hex"0304");
+    }
+
+    function testWitnessPublicationAuthorizationDigestEventAndDuplicate() public {
+        CanonicalCheckpoint.HeaderCommitments memory header = _header();
+        bytes32 checkpoint = registry.checkpointHash(header, "");
+        registry.registerCheckpoint(header, "", _attestations(header, checkpoint, 2));
+        require(registry.checkpointProposer(checkpoint) == address(this), "proposer not bound");
+        vm.prank(address(0x1234));
+        vm.expectRevert(CheckpointRegistry.CheckpointProposerOnly.selector);
+        registry.publishCheckpointWitnesses(checkpoint, hex"0102", hex"0304");
+        vm.expectRevert(CheckpointRegistry.CheckpointProposerOnly.selector);
+        registry.publishCheckpointWitnesses(bytes32(uint256(5)), hex"0102", hex"0304");
+        vm.expectRevert(CheckpointRegistry.InvalidWitnesses.selector);
+        registry.publishCheckpointWitnesses(checkpoint, "", hex"0304");
+        vm.recordLogs();
+        registry.publishCheckpointWitnesses(checkpoint, hex"0102", hex"0304");
+        CheckpointVm.Log[] memory logs = vm.getRecordedLogs();
+        bytes32 digest = sha256(abi.encode(checkpoint, uint16(1), hex"0102", hex"0304"));
+        require(registry.witnessesDigest(checkpoint) == digest, "digest binding");
+        require(digest != sha256(abi.encode(checkpoint, uint16(1), hex"0103", hex"0304")), "withdrawal binding");
+        require(digest != sha256(abi.encode(checkpoint, uint16(1), hex"0102", hex"0305")), "balance binding");
+        require(logs.length == 1 && logs[0].emitter == address(registry), "emitter");
+        require(logs[0].topics.length == 2 && logs[0].topics[1] == checkpoint, "indexed checkpoint");
+        require(
+            logs[0].topics[0] == keccak256("CheckpointWitnessesPublished(bytes32,uint16,bytes32)"), "event signature"
+        );
+        require(keccak256(logs[0].data) == keccak256(abi.encode(uint16(1), digest)), "event data");
+        vm.expectRevert(CheckpointRegistry.WitnessesAlreadyPublished.selector);
+        registry.publishCheckpointWitnesses(checkpoint, hex"0102", hex"0304");
     }
 
     function _header() private pure returns (CanonicalCheckpoint.HeaderCommitments memory header) {

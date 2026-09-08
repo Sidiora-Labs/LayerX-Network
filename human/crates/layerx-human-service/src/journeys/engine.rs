@@ -503,6 +503,7 @@ pub struct JourneyEngine {
 impl JourneyEngine {
     /// Returns protocol identities only for a leg whose receipt has been
     /// independently verified. Pending submissions are intentionally hidden.
+    #[must_use]
     pub fn verified_identity(&self, leg: usize) -> Option<(&str, [u8; 32])> {
         let leg = self.record.legs.get(leg)?;
         if leg.phase != JourneyPhase::ReceiptVerified || leg.receipt_digest.is_none() {
@@ -514,6 +515,8 @@ impl JourneyEngine {
     /// Re-obtains and validates the agent preparation for a persisted Prepared
     /// leg, exposing only the disclosure digest needed to bridge fresh
     /// authentication into custody. No signature or submission is produced.
+    /// # Errors
+    /// Refuses invalid canonical data, authority, or unavailable journey evidence.
     pub fn prepared_disclosure_digest(
         &self,
         agent_contract: &AgentClient,

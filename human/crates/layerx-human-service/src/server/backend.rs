@@ -184,7 +184,7 @@ impl Debug for PrincipalContext {
                 "refresh_token",
                 &self.refresh_token.as_ref().map(|_| "[REDACTED]"),
             )
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -378,6 +378,10 @@ impl Readiness {
 /// real custody, journey, approval, activity, notification, explorer and agent services.
 pub trait HumanApiComponents: Send + Sync + 'static {
     /// Authenticates and tenant-binds a session using the durable passkey session service.
+    ///
+    /// # Errors
+    ///
+    /// Returns configured backend readiness or request execution failures.
     fn authorize(
         &self,
         operation: &Operation,
@@ -386,9 +390,17 @@ pub trait HumanApiComponents: Send + Sync + 'static {
     ) -> Result<PrincipalContext, ApiFailure>;
 
     /// Dispatches one already schema-decoded request into its real owning component.
+    ///
+    /// # Errors
+    ///
+    /// Returns configured backend readiness or request execution failures.
     fn execute(&self, request: ScopedRequest<'_>) -> Result<BackendResponse, ApiFailure>;
 
     /// Reads redacted component readiness without exposing endpoints or failure details.
+    ///
+    /// # Errors
+    ///
+    /// Returns configured backend readiness or request execution failures.
     fn readiness(&self, trace: &str) -> Result<Readiness, ApiFailure>;
 }
 

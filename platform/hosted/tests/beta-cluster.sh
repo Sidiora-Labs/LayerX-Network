@@ -115,9 +115,9 @@ image_source() {
         layerx-gateway) printf 'ghcr.io/sidiora-labs/layerx-gateway:0.1.0 platform/hosted/gateway/Dockerfile' ;;
         layerx-faucet) printf 'ghcr.io/sidiora-labs/layerx-faucet:0.1.0 platform/hosted/faucet/Dockerfile' ;;
         layerx-program-registry) printf 'ghcr.io/sidiora-labs/layerx-program-registry:0.1.0 platform/hosted/registry/Dockerfile' ;;
-        layerx-webhooks) printf 'ghcr.io/centra-ai/layerx-webhooks:0.1.0 platform/hosted/webhooks/Dockerfile' ;;
-        layerx-dashboard) printf 'ghcr.io/centra-ai/layerx-dashboard:0.1.0 platform/hosted/dashboard/Dockerfile' ;;
-        layerx-dashboard-web) printf 'ghcr.io/centra-ai/layerx-dashboard-web:0.1.0 platform/hosted/dashboard/web/Dockerfile' ;;
+        layerx-webhooks) printf 'ghcr.io/sidiora-labs/layerx-webhooks:0.1.0 platform/hosted/webhooks/Dockerfile' ;;
+        layerx-dashboard) printf 'ghcr.io/sidiora-labs/layerx-dashboard:0.1.0 platform/hosted/dashboard/Dockerfile' ;;
+        layerx-dashboard-web) printf 'ghcr.io/sidiora-labs/layerx-dashboard-web:0.1.0 platform/hosted/dashboard/web/Dockerfile' ;;
         layerx-node) printf 'ghcr.io/sidiora-labs/layerx-node:0.1.0 platform/hosted/node/Dockerfile' ;;
         layerx-core-boundary) printf 'ghcr.io/sidiora-labs/layerx-core-boundary:0.1.0 platform/hosted/core/Dockerfile' ;;
         layerx-receipt-authority) printf 'ghcr.io/sidiora-labs/layerx-receipt-authority:0.1.0 platform/hosted/authority/Dockerfile' ;;
