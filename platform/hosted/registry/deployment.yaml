@@ -8,7 +8,7 @@ spec:
   template:
     metadata: {labels: {app: layerx-program-registry, layerx-plane: trusted-boundary}}
     spec:
-      nodeSelector: {layerx.io/program-registry-boundary: "v1"}
+      nodeSelector: {layerx.io/program-registry-boundary: "v2"}
       securityContext: {runAsNonRoot: true, runAsUser: 4030, runAsGroup: 4030, fsGroup: 4030}
       initContainers:
         - name: trust-history
@@ -40,7 +40,7 @@ spec:
             - {name: LAYERX_REGISTRY_BUILDER_ISOLATION_RUNTIME_DIGEST, valueFrom: {configMapKeyRef: {name: layerx-program-builder-release, key: bwrap-digest}}}
             - {name: LAYERX_REGISTRY_BUILDER_JOB_SUPERVISOR, value: /usr/bin/layerx-cgroup-exec}
             - {name: LAYERX_REGISTRY_BUILDER_JOB_SUPERVISOR_DIGEST, valueFrom: {configMapKeyRef: {name: layerx-program-builder-release, key: cgroup-exec-digest}}}
-            - {name: LAYERX_REGISTRY_BUILDER_CGROUP_ROOT, value: /run/layerx/cgroup}
+            - {name: LAYERX_REGISTRY_HOST_CGROUP_MOUNT, value: /run/layerx/host-cgroup}
             - {name: LAYERX_REGISTRY_BUILD_ROOT, value: /run/layerx/quota}
             - {name: LAYERX_REGISTRY_BUILD_MEMORY_BYTES, value: "2147483648"}
             - {name: LAYERX_REGISTRY_BUILD_PROCESS_LIMIT, value: "64"}
@@ -56,9 +56,11 @@ spec:
             - {name: LAYERX_REGISTRY_RECEIPT_AUTHORITY_AUTHORIZATION, valueFrom: {secretKeyRef: {name: layerx-program-registry-authority-client, key: token}}}
             - {name: LAYERX_REGISTRY_RECEIPT_AUTHORITY_REPLICA_ID, valueFrom: {configMapKeyRef: {name: layerx-receipt-authority, key: replica-id}}}
             - {name: LAYERX_REGISTRY_SEQUENCER_TRUST_HISTORY, value: /run/layerx/trust/history}
+          # Controllers in the container root forbid new direct members: kubectl exec is refused by design.
+          # The registry lives in main and delegates workers before dropping irrevocably to 4030.
           readinessProbe: {tcpSocket: {port: registry}, periodSeconds: 5, failureThreshold: 3}
           resources: {requests: {cpu: "1", memory: 1Gi}, limits: {cpu: "4", memory: 4Gi}}
-          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}, seccompProfile: {type: RuntimeDefault}}
+          securityContext: {runAsUser: 0, runAsGroup: 0, runAsNonRoot: false, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL], add: [CHOWN, SETUID, SETGID]}, seccompProfile: {type: RuntimeDefault}}
           volumeMounts:
             - {name: state, mountPath: /var/lib/layerx-program-registry}
             - {name: request, mountPath: /run/layerx/request/token, subPath: token, readOnly: true}
@@ -68,7 +70,7 @@ spec:
             - {name: client-ca, mountPath: /run/layerx/client-ca, readOnly: true}
             - {name: trust, mountPath: /run/layerx/trust, readOnly: true}
             - {name: builder, mountPath: /opt/layerx-builder, readOnly: true}
-            - {name: cgroup, mountPath: /run/layerx/cgroup}
+            - {name: host-cgroup, mountPath: /run/layerx/host-cgroup, readOnly: false}
             - {name: quota, mountPath: /run/layerx/quota}
       volumes:
         - {name: request, secret: {secretName: layerx-program-registry-request-client, defaultMode: 0440}}
@@ -78,7 +80,7 @@ spec:
         - {name: trust-source, secret: {secretName: layerx-sequencer-trust-history, defaultMode: 0440}}
         - {name: trust, emptyDir: {medium: Memory, sizeLimit: 1Mi}}
         - {name: builder, persistentVolumeClaim: {claimName: layerx-program-builder-release}}
-        - {name: cgroup, hostPath: {path: /sys/fs/cgroup/layerx-program-registry, type: Directory}}
+        - {name: host-cgroup, hostPath: {path: /sys/fs/cgroup/kubelet.slice, type: Directory}}
         - {name: quota, hostPath: {path: /var/lib/layerx-program-registry-builds, type: Directory}}
   volumeClaimTemplates:
     - metadata: {name: state}
