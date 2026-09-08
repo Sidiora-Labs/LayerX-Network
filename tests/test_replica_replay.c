@@ -71,6 +71,18 @@ int main(void)
     ((uint8_t *)altered.receipts.bytes)[altered.receipts.length - 1U] ^= 1U;
     CHECK(lxp_replay_verify_roots(&snapshot_second, &altered) == LXP_FATAL_REPLAY_DIVERGENCE);
     ((uint8_t *)altered.receipts.bytes)[altered.receipts.length - 1U] ^= 1U;
+    for (i = 0U; i < 2U; ++i) {
+        lxp_byte_span field = i == 0U ? first.state_diff : first.recovery_metadata;
+        CHECK(field.length != 0U);
+        CHECK(lxp_state_store_destroy(&verifier->state) == LXP_OK);
+        (void)memset(verifier, 0, sizeof(*verifier));
+        CHECK(lxp_real_replay_init(verifier) == 0);
+        CHECK(lxp_arena_reset(&replay_arena, 0U) == LXP_OK);
+        ((uint8_t *)field.bytes)[field.length - 1U] ^= 1U;
+        CHECK(lxp_replay_batch(&verifier->engine, &first, genesis, &replay_arena,
+                               &replayed_first) == LXP_FATAL_REPLAY_DIVERGENCE);
+        ((uint8_t *)field.bytes)[field.length - 1U] ^= 1U;
+    }
     CHECK(lxp_state_store_destroy(&builder->state) == LXP_OK);
     CHECK(lxp_state_store_destroy(&verifier->state) == LXP_OK);
     lxp_state_snapshot_destroy(captured);

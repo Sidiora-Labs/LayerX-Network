@@ -4861,3 +4861,19 @@ symbol = "lxp_da_body_from_kernels lxp_daemon_batch_wal_body lxp_da_log_store_bo
 observed = "Canonical bodies derive account diffs from the actual base and settled account registries and recovery metadata from the settled kernel. Prepared WAL encoding carries those sections in version 4 under the existing byte bound. A separate da-bodies.log preserves canonical bodies for independent evidence reconstruction without modifying the header-only batch log contract. Served files reside in da under the checkpoint directory. The retention parameter defaults to 100000 and rejects values below 1024; pruning preserves the newest finalized checkpoint. Generic replay requires an explicitly bound real kernel and compares its actual roots and recomputed account diff. Rust activity and oracle sections consume the canonical sequence count; receipt sections reject reordered tags."
 assumption = "Replay-engine consumers and canonical fixtures require migration to real kernel state and canonical sections before qualification. Startup, crash recovery, retention boundaries, selector refusals and real-daemon Rust retrieval require executed integration evidence. No gate result is asserted."
 severity = "note"
+
+[observation.6.1.da_recovery_recomputation]
+task = "6.1"
+file = "src/network/lxp_da_bundle.c src/replica/lxp_replay.c cmd/layerxd/lxp_daemon_process.c tests/state/lxp_test_state_diff.c tests/support/lxp_real_replay.h"
+symbol = "lxp_da_recovery_verify_kernel lxp_real_replay_transition"
+observed = "Replay and settled WAL recovery now compare canonical recovery bytes with a fresh encoding of the actual kernel module roots, account frontier, sequence and watermarks. Mutation, truncation, trailing-byte, account-state and watermark refusal cases are written. Replica, retrieval, tool and guarantor replay fixtures use signed SEND activities through the asset module and kernel; occupancy fixtures derive expected bodies by finalizing an independent state snapshot. Qualification has not started."
+assumption = "Real-daemon Rust availability coverage and remaining fixture migration must be complete before phase-separated gates run. Existing WAL schema recovery assertions still require version 1 and 2 records while availability-bearing records use version 4; backward-schema coverage must be retained without relaxing those assertions."
+severity = "note"
+
+[observation.6.1.da_native_refusal_harness]
+task = "6.1"
+file = "agent/crates/layerx-client/tests/availability_daemon.rs tests/daemon/program-admission.sh tests/daemon/lxp_test_program_admission.c Makefile cmd/layerxd/lxp_daemon_process.c"
+symbol = "real_daemon_availability_refusals availability_batches availability_verify_retained availability_prune"
+observed = "The Rust integration harness launches the native sequencer and replica through the existing bootstrap harness, submits nine signed deployments, retrieves and signature-verifies headers through tag 12, and asserts typed unknown-batch, unfinalized-batch and over-eight-batch range refusals. It truncates a retained bundle, restarts the sequencer and asserts availability_fetch is withheld while signed header reads still work. Startup now checks all retained batches when no finalized checkpoint permits pruning; pruning runs for both single-activity and prepared publication. These paths are written but have not run."
+assumption = "D6 successful fetches by batch, activity and within-batch sequence require the remaining real settlement registration harness and Rust chunk verification coverage. No gate is reported as passed; implementation and qualification remain incomplete."
+severity = "note"

@@ -177,7 +177,8 @@ static void availability_verify_retained(lxp_daemon_process *process)
     uint64_t offset = 0U, seen = 0U;
     size_t mark = lxp_arena_mark(&process->owner_scratch);
     lxp_result status = LXP_OK;
-    if (checkpoint != 0U && checkpoint < low) low = checkpoint;
+    if (checkpoint == 0U) low = process->sequencer_authorization.first_batch_number;
+    else if (checkpoint < low) low = checkpoint;
     if (low < process->sequencer_authorization.first_batch_number)
         low = process->sequencer_authorization.first_batch_number;
     process->owner.availability_store = &process->availability_store;
@@ -2020,6 +2021,8 @@ static lxp_result publish_canonical_batch(
                 status = LXP_FATAL_INVARIANT;
         }
     }
+    if (status == LXP_OK)
+        status = availability_prune(process, header.batch_number);
     if (status == LXP_OK) {
         process->owner.latest_sealed_timestamp = timestamp;
         process->next_batch = process->next_batch ==
@@ -2565,8 +2568,6 @@ static lxp_result apply_canonical_batch(
                 status = LXP_FATAL_INVARIANT;
         }
     }
-    if (status == LXP_OK)
-        status = availability_prune(process, process->prepared_availability_body.header.batch_number);
     if (live_committed && status != LXP_OK) status = LXP_FATAL_INVARIANT;
     if (status == LXP_OK) *consumed_count = count;
     lxp_daemon_batch_wal_destroy(wal_record);

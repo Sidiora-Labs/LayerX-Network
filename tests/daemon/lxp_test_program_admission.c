@@ -575,6 +575,49 @@ static int maintenance_admission(int *descriptor, const signer *key, bool recove
     return 0;
 }
 
+static int availability_batches(int descriptor, const signer *key)
+{
+    uint8_t deploy[112] = {1U};
+    uint8_t encoded[ACTIVITY_CAPACITY], activity_id[32], query[33] = {1U};
+    size_t length;
+    store_u16(deploy + 32U, 1U);
+    store_u32(deploy + 100U, 8U);
+    (void)memcpy(deploy + 104U, "\0asm\1\0\0\0", 8U);
+    REQUIRE(lxp_hash_sha256(deploy + 104U, 8U, deploy + 68U) == LXP_OK);
+    for (uint64_t sequence = 0U; sequence < 9U; ++sequence) {
+        bool found = false;
+        deploy[0] = (uint8_t)(sequence + 1U);
+        REQUIRE(build_activity(key, sequence, LX_PROGRAMS_DEPLOY, 0U,
+            deploy, sizeof(deploy), encoded, sizeof(encoded), &length) == 0);
+        REQUIRE(lxp_activity_id(encoded, length, activity_id) == LXP_OK);
+        REQUIRE(send_request(descriptor, LNI_MINOR, SUBMIT_REQUEST,
+            sequence * 2U + 1U, encoded, length) == 0);
+        REQUIRE(expect_ack(descriptor, sequence * 2U + 1U,
+            encoded, length, activity_id) == 0);
+        (void)memcpy(query + 1U, activity_id, 32U);
+        for (unsigned attempt = 0U; attempt < 200U; ++attempt) {
+            wire_envelope response;
+            REQUIRE(send_request(descriptor, LNI_MINOR, 5U,
+                sequence * 2U + 2U, query, sizeof(query)) == 0);
+            REQUIRE(receive_envelope(descriptor, &response) == 0);
+            REQUIRE(response.tag == 6U && response.correlation_id == sequence * 2U + 2U);
+            if (response.payload_length != 0U) {
+                lxp_receipt receipt;
+                REQUIRE(lxp_receipt_decode(response.payload, response.payload_length, true,
+                                           &receipt) == LXP_OK);
+                REQUIRE(memcmp(receipt.activity_id, activity_id, 32U) == 0);
+                release_envelope(&response);
+                found = true;
+                break;
+            }
+            release_envelope(&response);
+            { struct timespec pause = {0, 10000000L}; (void)nanosleep(&pause, NULL); }
+        }
+        REQUIRE(found);
+    }
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     signer key;
@@ -598,6 +641,11 @@ int main(int argc, char **argv)
     descriptor = socket(AF_UNIX, SOCK_STREAM, 0);
     REQUIRE(descriptor >= 0 && connect(descriptor, (struct sockaddr *)&address, sizeof(address)) == 0);
     REQUIRE(handshake(descriptor) == 0);
+    if (argc == 3 && strcmp(argv[2], "--availability-batches") == 0) {
+        REQUIRE(availability_batches(descriptor, &key) == 0);
+        REQUIRE(close(descriptor) == 0);
+        return 0;
+    }
     if (argc == 3 && (strcmp(argv[2], "--maintenance") == 0 ||
                      strcmp(argv[2], "--maintenance-recovered") == 0 ||
                      strcmp(argv[2], "--maintenance-queue") == 0)) {

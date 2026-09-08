@@ -3268,3 +3268,9 @@ test-state-diff: $(BUILD_DIR)/tests/lxp_test_state_diff
 $(BUILD_DIR)/tests/lxp_test_state_diff: tests/state/lxp_test_state_diff.c $(LIBRARY)
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -o $@
+
+.PHONY: test-daemon-availability
+test-daemon-availability: $(BUILD_DIR)/tests/lxp_test_program_admission $(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build
+	LAYERX_TEST_NATIVE_BIN_DIR="$(CURDIR)/$(BUILD_DIR)/bin" cargo test --locked \
+		--manifest-path agent/Cargo.toml -p layerx-client --test availability_daemon \
+		-- --nocapture --test-threads=1
