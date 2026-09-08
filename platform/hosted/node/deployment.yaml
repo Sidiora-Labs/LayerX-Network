@@ -25,6 +25,23 @@ spec:
     spec:
       securityContext: {runAsNonRoot: true, runAsUser: 4020, runAsGroup: 4020, fsGroup: 4020}
       terminationGracePeriodSeconds: 60
+      initContainers:
+        - name: guarantor-storage
+          image: ghcr.io/sidiora-labs/layerx-node:0.1.0
+          imagePullPolicy: Always
+          command: [/bin/sh, -ec]
+          args:
+            - |
+              mkdir -p /var/lib/layerx/guarantor-submitter
+              chmod 2770 /var/lib/layerx/guarantor-submitter
+              for identity in 1 2; do
+                mkdir -p "/var/lib/layerx/guarantor-$identity/identity" "/var/lib/layerx/guarantor-$identity/state"
+                chmod 0750 "/var/lib/layerx/guarantor-$identity" "/var/lib/layerx/guarantor-$identity/identity"
+                chmod 2770 "/var/lib/layerx/guarantor-$identity/state"
+              done
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/layerx}
       containers:
         - name: layerxd
           image: ghcr.io/sidiora-labs/layerx-node:0.1.0
@@ -75,6 +92,64 @@ spec:
             - {name: tokens, mountPath: /run/layerx/tokens, readOnly: true}
             - {name: settlement, mountPath: /run/layerx/settlement, readOnly: true}
             - {name: tmp, mountPath: /tmp}
+        - name: guarantor-1
+          image: ghcr.io/sidiora-labs/layerx-node:0.1.0
+          imagePullPolicy: Always
+          command: [/opt/layerx/guarantor.sh]
+          securityContext: {runAsUser: 4021, runAsGroup: 4020, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          env:
+            - {name: LAYERX_GUARANTOR_IDENTITY_DIR, value: /var/lib/guarantor/identity}
+            - {name: LAYERX_GUARANTOR_STATE_DIR, value: /var/lib/guarantor/state}
+            - {name: LAYERX_GUARANTOR_LNI_SOCKET, value: /run/layerx/node/layerxd.lni.sock}
+            - {name: LAYERX_GUARANTOR_SETTLEMENT_ENV, value: /run/layerx/settlement/settlement.env}
+            - {name: LAYERX_GUARANTOR_SETTLEMENT_FILE, value: /run/layerx/settlement/checkpoint-settlement.json}
+            - {name: LAYERX_GUARANTOR_SETTLEMENT_DOMAIN, value: beta}
+            - {name: LAYERX_GUARANTOR_LISTEN_PORT, value: "9451"}
+            - {name: LAYERX_GUARANTOR_PEER_URL, value: "https://127.0.0.1:9452"}
+            - {name: LAYERX_GUARANTOR_TLS_CA_FILE, value: /run/layerx/guarantor-tls/ca.crt}
+            - {name: LAYERX_GUARANTOR_TLS_CERT_FILE, value: /run/layerx/guarantor-tls/tls.crt}
+            - {name: LAYERX_GUARANTOR_TLS_KEY_FILE, value: /run/layerx/guarantor-tls/tls.key}
+            - {name: LAYERX_GUARANTOR_SUBMITTER_KEY_FILE, value: /run/layerx/checkpoint-submitter/key}
+            - {name: LAYERX_GUARANTOR_SUBMITTER_LOCK_FILE, value: /var/lib/guarantor-submitter/submitter.lock}
+            - {name: LAYERX_GUARANTOR_PYTHON, value: /opt/layerx/guarantor/venv/bin/python3}
+          ports: [{name: guarantor-1-tls, containerPort: 9451}]
+          resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "2", memory: 1Gi}}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/guarantor, subPath: guarantor-1}
+            - {name: run, mountPath: /run/layerx}
+            - {name: settlement, mountPath: /run/layerx/settlement, readOnly: true}
+            - {name: guarantor-1-tls, mountPath: /run/layerx/guarantor-tls, readOnly: true}
+            - {name: checkpoint-submitter, mountPath: /run/layerx/checkpoint-submitter, readOnly: true}
+            - {name: data, mountPath: /var/lib/guarantor-submitter, subPath: guarantor-submitter}
+        - name: guarantor-2
+          image: ghcr.io/sidiora-labs/layerx-node:0.1.0
+          imagePullPolicy: Always
+          command: [/opt/layerx/guarantor.sh]
+          securityContext: {runAsUser: 4021, runAsGroup: 4020, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          env:
+            - {name: LAYERX_GUARANTOR_IDENTITY_DIR, value: /var/lib/guarantor/identity}
+            - {name: LAYERX_GUARANTOR_STATE_DIR, value: /var/lib/guarantor/state}
+            - {name: LAYERX_GUARANTOR_LNI_SOCKET, value: /run/layerx/node/layerxd.lni.sock}
+            - {name: LAYERX_GUARANTOR_SETTLEMENT_ENV, value: /run/layerx/settlement/settlement.env}
+            - {name: LAYERX_GUARANTOR_SETTLEMENT_FILE, value: /run/layerx/settlement/checkpoint-settlement.json}
+            - {name: LAYERX_GUARANTOR_SETTLEMENT_DOMAIN, value: beta}
+            - {name: LAYERX_GUARANTOR_LISTEN_PORT, value: "9452"}
+            - {name: LAYERX_GUARANTOR_PEER_URL, value: "https://127.0.0.1:9451"}
+            - {name: LAYERX_GUARANTOR_TLS_CA_FILE, value: /run/layerx/guarantor-tls/ca.crt}
+            - {name: LAYERX_GUARANTOR_TLS_CERT_FILE, value: /run/layerx/guarantor-tls/tls.crt}
+            - {name: LAYERX_GUARANTOR_TLS_KEY_FILE, value: /run/layerx/guarantor-tls/tls.key}
+            - {name: LAYERX_GUARANTOR_SUBMITTER_KEY_FILE, value: /run/layerx/checkpoint-submitter/key}
+            - {name: LAYERX_GUARANTOR_SUBMITTER_LOCK_FILE, value: /var/lib/guarantor-submitter/submitter.lock}
+            - {name: LAYERX_GUARANTOR_PYTHON, value: /opt/layerx/guarantor/venv/bin/python3}
+          ports: [{name: guarantor-2-tls, containerPort: 9452}]
+          resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "2", memory: 1Gi}}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/guarantor, subPath: guarantor-2}
+            - {name: run, mountPath: /run/layerx}
+            - {name: settlement, mountPath: /run/layerx/settlement, readOnly: true}
+            - {name: guarantor-2-tls, mountPath: /run/layerx/guarantor-tls, readOnly: true}
+            - {name: checkpoint-submitter, mountPath: /run/layerx/checkpoint-submitter, readOnly: true}
+            - {name: data, mountPath: /var/lib/guarantor-submitter, subPath: guarantor-submitter}
         - name: paxeer-relay
           image: ghcr.io/sidiora-labs/layerx-node:0.1.0
           imagePullPolicy: Always
@@ -222,6 +297,9 @@ spec:
             - {name: webhooks-component, mountPath: /run/layerx/webhooks-component, readOnly: true}
             - {name: registry-component, mountPath: /run/layerx/registry-component, readOnly: true}
       volumes:
+        - {name: guarantor-1-tls, secret: {secretName: layerx-guarantor-1-tls, defaultMode: 0440}}
+        - {name: guarantor-2-tls, secret: {secretName: layerx-guarantor-2-tls, defaultMode: 0440}}
+        - {name: checkpoint-submitter, secret: {secretName: paxeer-checkpoint-submitter, defaultMode: 0440}}
         - {name: run, emptyDir: {medium: Memory, sizeLimit: 16Mi}}
         - {name: tmp, emptyDir: {medium: Memory, sizeLimit: 64Mi}}
         - {name: keys, secret: {secretName: layerx-node-keys, defaultMode: 0440}}
