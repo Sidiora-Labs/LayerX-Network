@@ -3,6 +3,7 @@
 #include "layerx/lxp_guarantor.h"
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_hash.h"
+#include "support/lxp_real_replay.h"
 
 #include <fcntl.h>
 #include <openssl/evp.h>
@@ -39,54 +40,6 @@ static lxp_result sign_raw(const uint8_t private_key[32], const uint8_t *message
     EVP_MD_CTX_free(context);
     EVP_PKEY_free(key);
     return ok ? LXP_OK : LXP_ERR_BAD_SIGNATURE;
-}
-
-static lxp_result parameter_version(void *context, uint64_t epoch,
-                                    uint32_t *version)
-{
-    (void)context;
-    if (epoch > UINT32_MAX) return LXP_ERR_OVERFLOW;
-    *version = (uint32_t)epoch;
-    return LXP_OK;
-}
-
-static lxp_result transition(void *context, uint16_t transition_version,
-                             uint32_t parameter, uint64_t timestamp,
-                             uint64_t sequence, lxp_byte_span activity,
-                             const uint8_t previous_root[32], lxp_arena *arena,
-                             lxp_replay_activity_output *output)
-{
-    uint8_t *input;
-    void *memory;
-    size_t length = 54U + activity.length;
-    size_t i;
-    lxp_result status = lxp_arena_alloc(arena, length, 1U, &memory);
-    (void)context;
-    if (status != LXP_OK) return status;
-    input = (uint8_t *)memory;
-    (void)memcpy(input, previous_root, 32U);
-    input[32] = (uint8_t)(transition_version >> 8U);
-    input[33] = (uint8_t)transition_version;
-    for (i = 0U; i < 4U; ++i)
-        input[34U + 3U - i] = (uint8_t)(parameter >> (i * 8U));
-    for (i = 0U; i < 8U; ++i)
-        input[38U + 7U - i] = (uint8_t)(timestamp >> (i * 8U));
-    for (i = 0U; i < 8U; ++i)
-        input[46U + 7U - i] = (uint8_t)(sequence >> (i * 8U));
-    (void)memcpy(input + 54U, activity.bytes, activity.length);
-    status = lxp_hash_sha256(input, length, output->resulting_state_root);
-    if (status != LXP_OK) return status;
-    output->result_code = LXP_OK;
-    output->fee_charged = (lxp_u128){0U, 1U};
-    output->effects = activity;
-    output->resulting_balance = (lxp_byte_span){
-        output->resulting_state_root, 16U
-    };
-    output->canonical_receipt = (lxp_byte_span){
-        output->resulting_state_root, 32U
-    };
-    output->canonical_events = activity;
-    return LXP_OK;
 }
 
 static lxp_result verify_authority(
@@ -185,29 +138,18 @@ static int write_exact_file(const char *path, const uint8_t *bytes,
 int main(void)
 {
     uint8_t *storage = malloc(8U * 1024U * 1024U);
-    uint8_t actor_private[32] = {1U};
     uint8_t oracle_private[32] = {2U};
     uint8_t sequencer_private[32] = {3U};
-    uint8_t actor_public[32];
     uint8_t oracle_public[32];
     uint8_t oracle_signature[64];
     uint8_t oracle_item[99];
-    uint8_t actor_signature[64];
-    uint8_t preimage[32];
     uint8_t payload[] = {7U, 8U, 9U};
-    uint8_t did[] = {'d','i','d',':','l','x',':','g'};
-    uint8_t activity_copy[2048];
     uint8_t body_copy[16384];
     uint8_t stored_copy[16384];
-    lxp_activity activity;
-    lxp_byte_span activity_encoded;
     lxp_byte_span activity_item;
     lxp_byte_span oracle_span;
-    lxp_byte_span section;
-    lxp_byte_span empty;
     lxp_batch_body body;
-    lxp_replay_batch_result replay;
-    lxp_replay_engine engine;
+    static lxp_real_replay_fixture builder, verifier_kernel;
     lxp_sequencer_authorization sequencer_authorization;
     lxp_guarantor_ctx guarantor;
     lxp_arena arena;
@@ -229,72 +171,20 @@ int main(void)
         snprintf(source_path, sizeof(source_path), "%s/batch.lxb", directory) < 0 ||
         snprintf(stored_path, sizeof(stored_path), "%s/stored.lxb", directory) < 0 ||
         lxp_arena_init(&arena, storage, 8U * 1024U * 1024U) != LXP_OK ||
-        lxp_replay_engine_init(&engine, parameter_version, NULL) != LXP_OK ||
-        lxp_replay_engine_register(&engine, 1U, transition) != LXP_OK)
+        lxp_real_replay_init(&builder) != 0 ||
+        lxp_real_replay_init(&verifier_kernel) != 0)
         goto cleanup;
-    (void)memset(&activity, 0, sizeof(activity));
-    activity.protocol_version = 1U;
-    activity.network_id = 9U;
-    activity.activity_type = UINT32_C(0x00010001);
-    activity.actor_did = (lxp_byte_span){did, sizeof(did)};
-    activity.account_sequence = 1U;
-    activity.timestamp_bound.not_before = 1U;
-    activity.timestamp_bound.not_after = 2000U;
-    activity.idempotency_key[0] = 1U;
-    activity.fee_limit = (lxp_u128){0U, 10U};
-    activity.payload = (lxp_byte_span){payload, sizeof(payload)};
-    if (lxp_hash_payload(payload, sizeof(payload), activity.payload_hash) != LXP_OK ||
-        sign_raw(actor_private, payload, 0U, actor_signature, actor_public) != LXP_OK)
+    if (lxp_real_replay_activity(&builder, 0U, &arena, &activity_item) != 0)
         goto cleanup;
-    activity.authority = (lxp_byte_span){actor_public, sizeof(actor_public)};
-    if (lxp_activity_signing_preimage(&activity, preimage) != LXP_OK ||
-        sign_raw(actor_private, preimage, sizeof(preimage), actor_signature,
-                 actor_public) != LXP_OK)
-        goto cleanup;
-    activity.signature = (lxp_byte_span){actor_signature,
-                                         sizeof(actor_signature)};
-    if (lxp_activity_encode(&activity, &arena, &activity_encoded) != LXP_OK ||
-        activity_encoded.length > sizeof(activity_copy)) goto cleanup;
-    (void)memcpy(activity_copy, activity_encoded.bytes, activity_encoded.length);
-    activity_item = (lxp_byte_span){activity_copy, activity_encoded.length};
     if (sign_raw(oracle_private, payload, sizeof(payload), oracle_signature,
                  oracle_public) != LXP_OK) goto cleanup;
     (void)memcpy(oracle_item, oracle_public, 32U);
     (void)memcpy(oracle_item + 32U, oracle_signature, 64U);
     (void)memcpy(oracle_item + 96U, payload, sizeof(payload));
     oracle_span = (lxp_byte_span){oracle_item, sizeof(oracle_item)};
-    if (lxp_replay_section_encode(&activity_item, 1U, &arena, &section) != LXP_OK)
-        goto cleanup;
-    (void)memset(&body, 0, sizeof(body));
-    body.header.protocol_version = 1U;
-    body.header.network_id = 9U;
-    body.header.epoch = 2U;
-    body.header.batch_number = 4U;
-    body.header.first_sequence = 1U;
-    body.header.last_sequence = 1U;
-    body.header.timestamp_ms = 100U;
-    body.activities = section;
-    if (lxp_replay_section_encode(&oracle_span, 1U, &arena,
-                                  &body.oracle_inputs) != LXP_OK ||
-        lxp_replay_section_encode(NULL, 0U, &arena, &empty) != LXP_OK)
-        goto cleanup;
-    body.state_diff = empty;
-    body.recovery_metadata = empty;
-    if (lxp_replay_batch(&engine, &body, body.header.previous_state_root,
-                         &arena, &replay) != LXP_OK) goto cleanup;
-    body.receipts = replay.canonical_receipt_section;
-    body.events = replay.canonical_event_section;
-    (void)memcpy(body.header.resulting_state_root,
-                 replay.resulting_state_root, 32U);
-    (void)memcpy(body.header.activity_merkle_root,
-                 replay.roots.activity_merkle_root, 32U);
-    (void)memcpy(body.header.receipt_merkle_root,
-                 replay.roots.receipt_merkle_root, 32U);
-    (void)memcpy(body.header.event_merkle_root,
-                 replay.roots.event_merkle_root, 32U);
-    (void)memcpy(body.header.oracle_root, replay.roots.oracle_root, 32U);
-    if (lxp_batch_availability_root(&body, &arena,
-            body.header.data_availability_root) != LXP_OK) goto cleanup;
+    if (lxp_real_replay_build(&builder, 4U, &activity_item, 1U, &oracle_span, 1U,
+                              &arena, &body) != 0) goto cleanup;
+    verifier_kernel.execution.batch_number = 4U;
     (void)memset(&sequencer_authorization, 0, sizeof(sequencer_authorization));
     sequencer_key = EVP_PKEY_new_raw_private_key(EVP_PKEY_ED25519, NULL,
                                                  sequencer_private, 32U);
@@ -324,10 +214,11 @@ int main(void)
     guarantor.guarantor_id[0] = 4U;
     guarantor.paxeer_public_key[0] = 2U;
     guarantor.protocol_version = 1U;
-    guarantor.network_id = 9U;
+    guarantor.network_id = body.header.network_id;
     guarantor.bond_view.bonded = true;
     guarantor.bond_view.bonded_amount = (lxp_u128){0U, 100U};
-    guarantor.replay_engine = &engine;
+    guarantor.replay_engine = &verifier_kernel.engine;
+    (void)memcpy(guarantor.independent_state_root, verifier_kernel.kernel.current_state_root, 32U);
     guarantor.sequencer_authorization = &sequencer_authorization;
     guarantor.download = download_file;
     guarantor.download_context = &source;
@@ -350,7 +241,11 @@ int main(void)
         memcmp(stored_copy, body_copy, canonical_body.length) != 0)
         goto cleanup;
     verifier.reject_delegation = true;
-    (void)memset(guarantor.independent_state_root, 0, 32U);
+    if (lxp_state_store_destroy(&verifier_kernel.state) != LXP_OK) goto cleanup;
+    (void)memset(&verifier_kernel, 0, sizeof(verifier_kernel));
+    if (lxp_real_replay_init(&verifier_kernel) != 0) goto cleanup;
+    verifier_kernel.execution.batch_number = 4U;
+    (void)memcpy(guarantor.independent_state_root, verifier_kernel.kernel.current_state_root, 32U);
     if (lxp_arena_reset(&arena, 0U) != LXP_OK ||
         lxp_guarantor_process_batch(&guarantor, 4U, &arena, &ready) !=
             LXP_ERR_BAD_SIGNATURE || ready || guarantor.ready_to_sign ||

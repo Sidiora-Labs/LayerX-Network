@@ -4,6 +4,8 @@
 #include "lxp_daemon_batch_wal.h"
 #include "layerx/lxp_crypto.h"
 #include "layerx/programs.h"
+#include "layerx/lxp_da.h"
+#include "layerx/lxp_state_diff.h"
 
 #include <openssl/evp.h>
 #include <stdbool.h>
@@ -49,6 +51,8 @@ typedef struct canonical_batch_fixture {
     uint8_t canonical_events[64];
     size_t canonical_events_length;
     uint8_t canonical_header[LXP_BATCH_HEADER_ENCODED_SIZE];
+    uint8_t state_diff[4];
+    uint8_t recovery_metadata[4096];
     uint8_t sequencer_private[32];
     uint8_t actor_private[32];
 } canonical_batch_fixture;
@@ -243,6 +247,39 @@ static int build_canonical_batch(canonical_batch_fixture *fixture,
     (void)memcpy(header.data_availability_root,
                  roots.data_availability_root, 32U);
     (void)memcpy(header.oracle_root, roots.oracle_root, 32U);
+    {
+        static lxp_state_store state;
+        static lxp_state_journal journal;
+        static lxp_kernel kernel;
+        static lx_account_registry accounts;
+        uint64_t parameters = 1U;
+        lxp_batch_body body = {0};
+        lxp_byte_span diff, recovery;
+        if (lx_account_registry_init(&accounts) != LXP_OK ||
+            lxp_state_store_init(&state, TEST_FIRST_SEQUENCE + 1U) != LXP_OK ||
+            lxp_state_store_bind_accounts(&state, &accounts) != LXP_OK ||
+            lxp_kernel_create(&kernel, &state, &journal, &parameters, 3U) != LXP_OK ||
+            lxp_state_diff_encode(&accounts, &accounts, &arena, &diff) != LXP_OK ||
+            diff.length != sizeof(fixture->state_diff) ||
+            lxp_da_recovery_from_kernel(&kernel, TEST_FIRST_SEQUENCE,
+                TEST_FIRST_SEQUENCE, &arena, &recovery) != LXP_OK ||
+            recovery.length > sizeof(fixture->recovery_metadata))
+            return 1;
+        (void)memcpy(fixture->state_diff, diff.bytes, diff.length);
+        (void)memcpy(fixture->recovery_metadata, recovery.bytes, recovery.length);
+        fixture->input.state_diff = (lxp_byte_span){fixture->state_diff, diff.length};
+        fixture->input.recovery_metadata = (lxp_byte_span){fixture->recovery_metadata, recovery.length};
+        body.header = header;
+        body.state_diff = fixture->input.state_diff;
+        body.recovery_metadata = fixture->input.recovery_metadata;
+        if (lxp_replay_section_encode(fixture->activities, 1U, &arena, &body.activities) != LXP_OK ||
+            lxp_da_receipt_section_encode(fixture->receipts, 1U, fixture->events, 1U,
+                &arena, &body.receipts) != LXP_OK ||
+            lxp_replay_section_encode(NULL, 0U, &arena, &body.oracle_inputs) != LXP_OK ||
+            lxp_batch_availability_root(&body, &arena, header.data_availability_root) != LXP_OK ||
+            lxp_state_store_destroy(&state) != LXP_OK)
+            return 1;
+    }
     header.timestamp_ms = TEST_TIMESTAMP_MS;
     (void)memcpy(header.sequencer_id,
                  fixture->input.authorization.sequencer_id, 32U);
