@@ -6017,6 +6017,7 @@ assumption = "An additive authenticated candidate-batch fetch must expose comple
 severity = "blocker"
 
 [observation.6.1.82]
+[observation.6.1.32]
 task = "6.1"
 file = "docs/wiki/Guarantor.md spec/layerx-protocol/docs/guarantors.md contracts/libraries/CanonicalCheckpoint.sol tests/daemon/availability-settlement.py"
 symbol = "ATTESTATION_DOMAIN CHECKPOINT_DOMAIN registerCheckpoint"
