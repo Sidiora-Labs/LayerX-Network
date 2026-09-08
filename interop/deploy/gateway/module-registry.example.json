@@ -1,12 +1,1 @@
-{
-  "modules": [
-    {"module": 1, "ordinals": [1]},
-    {"module": 2, "ordinals": [1]},
-    {"module": 3, "ordinals": [1]},
-    {"module": 4, "ordinals": [1]},
-    {"module": 5, "ordinals": [1]},
-    {"module": 6, "ordinals": [1]},
-    {"module": 7, "ordinals": [1]},
-    {"module": 8, "ordinals": [1]}
-  ]
-}
+{"schema_version":2,"assets":[{"asset":"b5a32b12029f8ddfb905f90f280f664b46390de0fc62770fc197dd87b18cd898","symbol":"LXT","currency":"LXT","decimals":18}],"modules":[{"module":1,"ordinals":[1,2,3,4,5,6,7,8]},{"module":9,"ordinals":[1,2,3,4,5,6,7,8,9,10]}]}
