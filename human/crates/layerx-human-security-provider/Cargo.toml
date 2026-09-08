@@ -1,0 +1,27 @@
+[package]
+name = "layerx-human-security-provider"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+layerx-human-service = { path = "../layerx-human-service" }
+layerx-programs.workspace = true
+layerx-proof.workspace = true
+layerx-wire.workspace = true
+base64.workspace = true
+getrandom.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+subtle.workspace = true
+zeroize.workspace = true
+rustix = { workspace = true, features = ["fs"] }
+hmac = "=0.12.1"
+sha1 = "=0.10.6"
+data-encoding = "=2.9.0"
+signal-hook = "=0.3.18"
+
+[dev-dependencies]
+ed25519-dalek = "=2.2.0"
