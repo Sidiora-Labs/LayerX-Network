@@ -1,5 +1,4 @@
-#[allow(dead_code)]
-mod support;
+use layerx_human_test_support as support;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -244,7 +243,6 @@ impl AgentCreationContract for InProcessAgentLayer {
         verify(&receipt.receipt_bytes, &receipt.authorized_batch)
             .map_err(|_| AgentFailure::Refused("core receipt verification failed"))?;
         match action.stage {
-            CreationStage::BudgetCreation => {}
             CreationStage::BudgetFunding => {
                 let key = TenantKey::new(
                     self.tenant.clone(),
@@ -256,7 +254,9 @@ impl AgentCreationContract for InProcessAgentLayer {
                     .put_core_cache(key, receipt.receipt_bytes.clone())
                     .map_err(|_| AgentFailure::Refused("fund receipt persistence failed"))?;
             }
-            CreationStage::DidRegistration | CreationStage::RecoveryRegistration => {}
+            CreationStage::BudgetCreation
+            | CreationStage::DidRegistration
+            | CreationStage::RecoveryRegistration => {}
             CreationStage::Custody
             | CreationStage::SessionProvision
             | CreationStage::CapabilityNarrowing => {

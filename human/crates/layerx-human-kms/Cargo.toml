@@ -7,6 +7,8 @@ license.workspace = true
 
 [dependencies]
 getrandom.workspace = true
+k256.workspace = true
+sha3.workspace = true
 layerx-client.workspace = true
 layerx-crypto.workspace = true
 layerx-types.workspace = true

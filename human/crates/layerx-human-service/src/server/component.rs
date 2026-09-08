@@ -31,6 +31,10 @@ const ACCEPT_POLL: Duration = Duration::from_millis(10);
 
 /// Bounded periodic recovery/retention work owned by a concrete component graph.
 pub trait ComponentMaintenance: Send + Sync + 'static {
+    ///
+    /// # Errors
+    ///
+    /// Refuses invalid component configuration, protocol evidence, or authenticated transport.
     fn maintain(&self, maximum_items: usize, now: u64) -> Result<usize, ApiFailure>;
     fn set_maintenance_health(&self, healthy: bool);
 }
@@ -123,6 +127,10 @@ impl HumanComponentServer {
 
     /// Creates a production server whose retention/recovery maintenance is
     /// part of readiness and runs under a finite cadence and work bound.
+    ///
+    /// # Errors
+    ///
+    /// Refuses invalid component configuration, protocol evidence, or authenticated transport.
     pub fn new_maintained<B>(
         backend: Arc<B>,
         interval: Duration,
@@ -145,6 +153,10 @@ impl HumanComponentServer {
     }
 
     /// Validates the embedded schema and filesystem authority before binding.
+    ///
+    /// # Errors
+    ///
+    /// Refuses invalid component configuration, protocol evidence, or authenticated transport.
     pub fn bind(
         self,
         configuration: ComponentServerConfig,
@@ -211,6 +223,10 @@ impl BoundHumanComponentServer {
     }
 
     /// Runs a fixed worker pool and bounded admission queue until shutdown.
+    ///
+    /// # Errors
+    ///
+    /// Refuses invalid component configuration, protocol evidence, or authenticated transport.
     pub fn run(self) -> Result<(), ComponentServerError> {
         let maintenance_worker = if let Some(maintenance) = self.maintenance.clone() {
             let now = epoch_seconds()?;
@@ -252,7 +268,7 @@ impl BoundHumanComponentServer {
             let limits = self.configuration.limits;
             let allowed_uid = self.configuration.allowed_uid;
             workers.push(thread::spawn(move || {
-                worker(receiver, dispatcher, shutdown, limits, allowed_uid);
+                worker(&receiver, &dispatcher, &shutdown, limits, allowed_uid);
             }));
         }
         let accepted = accept_loop(
@@ -468,21 +484,21 @@ fn accept_loop(
 }
 
 fn worker(
-    receiver: Arc<Mutex<Receiver<UnixStream>>>,
-    dispatcher: Arc<Dispatcher>,
-    shutdown: ComponentShutdown,
+    receiver: &Arc<Mutex<Receiver<UnixStream>>>,
+    dispatcher: &Arc<Dispatcher>,
+    shutdown: &ComponentShutdown,
     limits: Limits,
     allowed_uid: u32,
 ) {
     loop {
-        let received = match receiver.lock() {
+        let incoming = match receiver.lock() {
             Ok(receiver) => receiver.try_recv(),
             Err(_) => return,
         };
-        match received {
+        match incoming {
             Ok(mut stream) => {
                 if socket_peercred(&stream).is_ok_and(|peer| peer.uid.as_raw() == allowed_uid) {
-                    let _ = serve_one(&mut stream, &dispatcher, limits);
+                    let _ = serve_one(&mut stream, dispatcher, limits);
                 }
             }
             Err(TryRecvError::Empty) if !shutdown.requested() => thread::sleep(ACCEPT_POLL),
@@ -605,20 +621,20 @@ mod tests {
     use super::{reject_buffered_second_frame, ComponentServerError, UnixStream};
 
     #[test]
-    fn second_frame_probe_is_nonblocking_and_does_not_consume_bytes() {
-        let (server, mut client) = UnixStream::pair().expect("socket pair");
-        reject_buffered_second_frame(&server).expect("empty socket");
+    fn second_frame_probe_is_nonblocking_and_does_not_consume_bytes(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let (server, mut client) = UnixStream::pair()?;
+        reject_buffered_second_frame(&server)?;
 
-        client.write_all(&[0x7f]).expect("write extra byte");
+        client.write_all(&[0x7f])?;
         assert!(matches!(
             reject_buffered_second_frame(&server),
             Err(ComponentServerError::Protocol)
         ));
 
         let mut retained = [0_u8; 1];
-        (&server)
-            .read_exact(&mut retained)
-            .expect("peek retained byte");
+        (&server).read_exact(&mut retained)?;
         assert_eq!(retained, [0x7f]);
+        Ok(())
     }
 }

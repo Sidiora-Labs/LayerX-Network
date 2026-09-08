@@ -31,7 +31,7 @@ impl Writer {
         if value.is_empty() || value.len() > MAX_TEXT_BYTES || value.len() > u16::MAX as usize {
             return Err(());
         }
-        self.u16(value.len() as u16);
+        self.u16(u16::try_from(value.len()).map_err(|_| ())?);
         self.fixed(value.as_bytes());
         Ok(())
     }

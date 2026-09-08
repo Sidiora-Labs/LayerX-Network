@@ -382,6 +382,7 @@ pub struct BindingJourney {
 }
 
 impl BindingJourney {
+    #[must_use]
     pub fn rebind_operation_digest_verified(
         receipt_digest: [u8; 32],
         active_address: [u8; 20],
@@ -397,6 +398,10 @@ impl BindingJourney {
         OperationDigest::new(hasher.finalize().into())
     }
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Errors
+    ///
+    /// Refuses mismatched wallet evidence, invalid authorization, or storage failures.
     pub fn start_durable(
         &self,
         scope: &mut PrincipalScope<'_>,

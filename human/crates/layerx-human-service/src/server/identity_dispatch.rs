@@ -5,11 +5,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::Digest as _;
 use std::io::{Read, Write};
+use std::os::unix::fs::{FileTypeExt as _, MetadataExt as _};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::auth::{Device, OperationDigest, StepUpChallenge, StepUpEvidence};
+use crate::auth::{OperationDigest, StepUpChallenge, StepUpEvidence};
 use crate::onboarding::{
     EvidenceClass, EvidenceVerification, OnboardingStage, OnboardingState, OnboardingStatus,
     StageState,
@@ -108,31 +109,6 @@ impl RemoteIdentityProvider {
         })
     }
 
-    pub fn resolve_email(&self, email: &str) -> Result<PrincipalId, IdentityDispatchError> {
-        let fields = self.call(2, &[email.as_bytes()])?;
-        if fields.len() != 1 {
-            return Err(IdentityDispatchError::ProviderEvidence);
-        }
-        PrincipalId::new(provider_text(&fields[0])?).map_err(Into::into)
-    }
-
-    pub fn device_for_assertion(
-        &self,
-        principal: &PrincipalId,
-        assertion_id: &str,
-    ) -> Result<Device, IdentityDispatchError> {
-        let fields = self.call(3, &[principal.as_str().as_bytes(), assertion_id.as_bytes()])?;
-        if fields.len() != 3 {
-            return Err(IdentityDispatchError::ProviderEvidence);
-        }
-        Device::new(
-            provider_text(&fields[0])?,
-            provider_text(&fields[1])?,
-            provider_text(&fields[2])?,
-        )
-        .map_err(|_| IdentityDispatchError::ProviderEvidence)
-    }
-
     pub fn probe(&self) -> Result<(), IdentityDispatchError> {
         if self.call(0, &[])?.is_empty() {
             Ok(())
@@ -144,7 +120,6 @@ impl RemoteIdentityProvider {
     fn call(&self, operation: u8, fields: &[&[u8]]) -> Result<Vec<Vec<u8>>, IdentityDispatchError> {
         let metadata = std::fs::symlink_metadata(&self.config.socket)
             .map_err(|_| IdentityDispatchError::ProviderUnavailable)?;
-        use std::os::unix::fs::{FileTypeExt as _, MetadataExt as _};
         if !metadata.file_type().is_socket()
             || metadata.uid() != self.config.peer_uid
             || metadata.gid() != self.config.peer_gid
@@ -188,8 +163,12 @@ impl RemoteIdentityProvider {
             .set_write_timeout(Some(self.config.deadline))
             .map_err(|_| IdentityDispatchError::ProviderUnavailable)?;
         stream
-            .write_all(&(request.len() as u32).to_be_bytes())
-            .and_then(|_| stream.write_all(&request))
+            .write_all(
+                &u32::try_from(request.len())
+                    .map_err(|_| IdentityDispatchError::InvalidInput)?
+                    .to_be_bytes(),
+            )
+            .and_then(|()| stream.write_all(&request))
             .map_err(|_| IdentityDispatchError::ProviderUnavailable)?;
         let mut length = [0; 4];
         stream
@@ -409,5 +388,22 @@ pub(crate) enum IdentityDispatchError {
 impl From<StoreError> for IdentityDispatchError {
     fn from(value: StoreError) -> Self {
         Self::Store(value)
+    }
+}
+
+impl std::fmt::Display for IdentityDispatchError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Store(error) => write!(formatter, "identity storage: {error}"),
+            other => write!(formatter, "identity dispatch: {other:?}"),
+        }
+    }
+}
+impl std::error::Error for IdentityDispatchError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Store(error) => Some(error),
+            _ => None,
+        }
     }
 }

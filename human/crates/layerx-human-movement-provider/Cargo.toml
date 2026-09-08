@@ -1,0 +1,27 @@
+[package]
+name = "layerx-human-movement-provider"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+layerx-human-service = { path = "../layerx-human-service" }
+layerx-paxeer-client.workspace = true
+layerx-types.workspace = true
+layerx-agent-api.workspace = true
+layerx-client.workspace = true
+rustls = { version = "=0.23.43", default-features = false, features = ["ring", "std", "tls12"] }
+getrandom.workspace = true
+rustix = { workspace = true, features = ["fs"] }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+sha3.workspace = true
+
+[dev-dependencies]
+ed25519-dalek = "=2.2.0"
+k256.workspace = true
+
+[lints]
+workspace = true

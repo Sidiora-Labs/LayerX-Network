@@ -530,7 +530,6 @@ impl Feed {
     ///
     /// Refuses corrupt durable projection state.
     pub fn entry(
-        self,
         scope: &PrincipalScope<'_>,
         entry_id: &ActivityEntryId,
     ) -> Result<Option<ActivityEntry>, FeedError> {
@@ -546,7 +545,11 @@ impl Feed {
     /// Returns the last agent cursor durably consumed by this projection.
     /// This is the only source head against which a local feed page can claim
     /// currency without consulting a newer agent-layer read.
-    pub fn projected_agent_head(self, scope: &PrincipalScope<'_>) -> Result<u64, FeedError> {
+    ///
+    /// # Errors
+    ///
+    /// Returns errors for corrupt or unavailable principal activity projections.
+    pub fn projected_agent_head(scope: &PrincipalScope<'_>) -> Result<u64, FeedError> {
         Ok(load_state(scope)?.last_agent_cursor.unwrap_or(0))
     }
 
@@ -693,7 +696,7 @@ impl Feed {
             .zip(status.receipt_authorities())
             .filter_map(|((digest, material), authority)| {
                 digest.map(|digest| StoredReceipt {
-                    reference: hex(&digest),
+                    reference: hex(digest),
                     level: level_code(Level::SequencerSigned),
                     canonical: material.clone(),
                     authority: authority.as_ref().map(StoredReceiptAuthority::from_public),

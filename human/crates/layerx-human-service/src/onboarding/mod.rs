@@ -501,6 +501,10 @@ pub struct OnboardingJourney {
 
 impl OnboardingJourney {
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Errors
+    ///
+    /// Refuses invalid onboarding state or failed durable-state operations.
     pub fn start_durable_engine(
         &self,
         scope: &mut PrincipalScope<'_>,
@@ -555,6 +559,10 @@ impl OnboardingJourney {
         JourneyEngine::start(scope, &plan, registry, now)
             .map_err(|_| OnboardingError::InvalidAgentContext)
     }
+    ///
+    /// # Errors
+    ///
+    /// Refuses invalid onboarding state or failed durable-state operations.
     pub fn did(&self) -> Result<Did, OnboardingError> {
         Did::new(&self.record.did).map_err(|_| OnboardingError::CorruptJourney("invalid DID"))
     }
