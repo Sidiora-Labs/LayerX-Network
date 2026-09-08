@@ -175,6 +175,7 @@ Process keys from `config()` and `tls_config()` (`platform/hosted/registry/src/m
 | `LAYERX_REGISTRY_MAX_BUILDS` | default 4; admits 1..=64 (`platform/hosted/registry/src/main.rs:319`) | `4` |
 | `LAYERX_REGISTRY_NODE_ENDPOINT` | required (`platform/hosted/registry/src/main.rs:293-294`) | `https://layerx-agent-boundary.layerx-testnet.svc.cluster.local:9443` |
 | `LAYERX_REGISTRY_NODE_AUTHORIZATION` | required env secret (`platform/hosted/registry/src/main.rs:295-296`) | Secret `layerx-program-registry-node-client` key `token` |
+| `LAYERX_REGISTRY_OUTBOUND_CA_DER` | required DER CA that the registry trusts for its outbound node-state and receipt-authority HTTPS calls (`platform/hosted/registry/src/main.rs`) | `/run/layerx/client-ca/ca.crt.der` (Secret `layerx-internal-ca`) |
 | `LAYERX_REGISTRY_RECEIPT_AUTHORITY_ENDPOINT` | required (`platform/hosted/registry/src/main.rs:297-298`) | `https://layerx-receipt-authority.layerx-testnet.svc.cluster.local:9443` |
 | `LAYERX_REGISTRY_RECEIPT_AUTHORITY_AUTHORIZATION` | required env secret (`platform/hosted/registry/src/main.rs:299-302`) | Secret `layerx-program-registry-authority-client` key `token` |
 | `LAYERX_REGISTRY_RECEIPT_AUTHORITY_REPLICA_ID` | required 32-byte hex (`platform/hosted/registry/src/main.rs:303-310`) | ConfigMap `layerx-receipt-authority` key `replica-id` |
