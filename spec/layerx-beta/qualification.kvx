@@ -6066,6 +6066,9 @@ assumption = "The guarantor aggregate exits 2 because its real-daemon integratio
 severity = "note"
 
 [observation.6.1.88]
+severity = "note"
+
+[observation.6.1.36]
 task = "6.1"
 file = "cmd/layerxd/lxp_daemon_lni.c agent/crates/layerx-client/tests/availability_daemon.rs tests/daemon/availability-settlement.py"
 symbol = "send_availability finalized_fetch"
@@ -6074,6 +6077,7 @@ assumption = "An additive authenticated candidate-batch fetch must expose comple
 severity = "blocker"
 
 [observation.6.1.89]
+[observation.6.1.37]
 task = "6.1"
 file = "docs/wiki/Guarantor.md spec/layerx-protocol/docs/guarantors.md contracts/libraries/CanonicalCheckpoint.sol tests/daemon/availability-settlement.py"
 symbol = "ATTESTATION_DOMAIN CHECKPOINT_DOMAIN registerCheckpoint"
@@ -6082,6 +6086,7 @@ assumption = "Producer encoding follows the implemented verifiers and vectors. P
 severity = "note"
 
 [observation.6.1.90]
+[observation.6.1.38]
 task = "6.1"
 file = "cmd/layerx-guarantor/lni.c tests/daemon/guarantor-integration.py cmd/layerxd/lxp_daemon_lni.c"
 symbol = "LXP_GUARANTOR_CANDIDATE_SELECTOR lxp_guarantor_lni_fetch"
@@ -6090,11 +6095,13 @@ assumption = "The additive sealed-candidate selector is required in the daemon; 
 severity = "blocker"
 
 [observation.6.1.91]
+[observation.6.1.39]
 task = "6.1"
 file = "cmd/layerx-guarantor/runtime.c cmd/layerx-guarantor/settlement.py platform/hosted/node/deployment.yaml docs/wiki/Guarantor.md"
 symbol = "gp_runtime_open gp_runtime_oracle membership"
 observed = "formerly observation.6.1.34. The independent runtime verifies genesis and executes real kernel transitions without the sequencer private key. Direct owner authority matches the node adapter. Nonempty oracle inputs and rotated signer histories lacking complete authorization reconstruction refuse explicitly. The deployed topology provisions two distinct signing identities, two mutual-TLS processes and a dedicated checkpoint submitter, but both guarantors share the cluster operator and provide no operational independence. Certificates carry empty validity proofs and use implemented v2 domain tags."
 assumption = "Production independence requires independent operator onboarding. Supporting nonempty oracle input or rotated guarantor histories requires a complete verified authority adapter; neither capability is claimed by the beta producer. Prior specification-domain drift remains recorded in observation 6.1.89."
+assumption = "Production independence requires independent operator onboarding. Supporting nonempty oracle input or rotated guarantor histories requires a complete verified authority adapter; neither capability is claimed by the beta producer. Prior specification-domain drift remains recorded in observation 6.1.32."
 severity = "note"
 
 [observation.6.1.40]
