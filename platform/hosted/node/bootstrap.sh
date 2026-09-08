@@ -366,6 +366,12 @@ openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:secp256k1 -out "$GUARAN
 GUARANTOR_PUBLIC=$(openssl ec -in "$GUARANTOR_KEY_FILE" -pubout -conv_form compressed -outform DER 2>/dev/null | tail -c 33 | bin_to_hex)
 [[ $GUARANTOR_PUBLIC =~ ^0[23][0-9a-f]{64}$ ]] || fail "could not derive a compressed secp256k1 guarantor public key"
 GUARANTOR_ID=$(printf 'layerx-beta-guarantor:%s' "$GUARANTOR_PUBLIC" | sha256_hex)
+GUARANTOR_SECOND_KEY_FILE="$DATA_DIR/secrets/guarantor-second-key.pem"
+openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:secp256k1 -out "$GUARANTOR_SECOND_KEY_FILE"
+GUARANTOR_SECOND_PUBLIC=$(openssl ec -in "$GUARANTOR_SECOND_KEY_FILE" -pubout -conv_form compressed -outform DER 2>/dev/null | tail -c 33 | bin_to_hex)
+[[ $GUARANTOR_SECOND_PUBLIC =~ ^0[23][0-9a-f]{64}$ ]] || fail "could not derive the second guarantor public key"
+GUARANTOR_SECOND_ID=$(printf 'layerx-beta-guarantor:%s' "$GUARANTOR_SECOND_PUBLIC" | sha256_hex)
+[ "$GUARANTOR_ID" != "$GUARANTOR_SECOND_ID" ] || fail "guarantor identities must differ"
 
 # --- genesis request (LXGB v1) -------------------------------------------
 PARAMETER_KEY=$(printf 'parameter-version' | bin_to_hex)
@@ -382,10 +388,12 @@ REQUEST="$DATA_DIR/work/genesis-request.lxgb"
     hex_to_bin "$(be_hex 7 2)"
     hex_to_bin "$PARAMETER_KEY"
     hex_to_bin "$PARAMETER_VALUE"
-    hex_to_bin "$(be_hex 1 2)"
-    hex_to_bin "$GUARANTOR_ID"
-    hex_to_bin "$GUARANTOR_PUBLIC"
-    hex_to_bin "$(be_hex 0 16)"
+    hex_to_bin "$(be_hex 2 2)"
+    while read -r guarantor_id guarantor_public; do
+        hex_to_bin "$guarantor_id"
+        hex_to_bin "$guarantor_public"
+        hex_to_bin "$(be_hex 0 16)"
+    done < <(printf '%s %s\n%s %s\n' "$GUARANTOR_ID" "$GUARANTOR_PUBLIC" "$GUARANTOR_SECOND_ID" "$GUARANTOR_SECOND_PUBLIC" | LC_ALL=C sort)
     hex_to_bin "$ASSET_ID"
     hex_to_bin "$(be_hex 1 4)"
     for coefficient in 1 1 1 1 1 8 8 64 8; do hex_to_bin "$(be_hex "$coefficient" 8)"; done
@@ -395,7 +403,7 @@ REQUEST="$DATA_DIR/work/genesis-request.lxgb"
     for price in 1 1 2 4 1 1 100; do hex_to_bin "$(be_hex "$price" 8)"; done
     for demand in 100 1 1 10 1 1000; do hex_to_bin "$(be_hex "$demand" 8)"; done
 } > "$REQUEST"
-[ "$(stat -c %s "$REQUEST")" -eq 395 ] || fail "genesis request has an unexpected length"
+[ "$(stat -c %s "$REQUEST")" -eq 476 ] || fail "genesis request has an unexpected length"
 
 SIGNER_KEY="$DATA_DIR/work/genesis-signer.key"
 hex_to_bin "$SEQUENCER_PRIVATE" > "$SIGNER_KEY"
@@ -523,6 +531,9 @@ LAYERX_NODE_GENESIS_RECEIPT_STATE_ROOT=$GENESIS_RECEIPT_STATE_ROOT
 LAYERX_NODE_GENESIS_GUARANTOR_ID=$GUARANTOR_ID
 LAYERX_NODE_GENESIS_GUARANTOR_PUBLIC_KEY=$GUARANTOR_PUBLIC
 LAYERX_NODE_GENESIS_GUARANTOR_KEY_FILE=$GUARANTOR_KEY_FILE
+LAYERX_NODE_SECOND_GUARANTOR_ID=$GUARANTOR_SECOND_ID
+LAYERX_NODE_SECOND_GUARANTOR_PUBLIC_KEY=$GUARANTOR_SECOND_PUBLIC
+LAYERX_NODE_SECOND_GUARANTOR_KEY_FILE=$GUARANTOR_SECOND_KEY_FILE
 LAYERX_PAXEER_GENESIS_DIR=$GENESIS_DIR
 LAYERX_NODE_TREASURY_DID=$TREASURY_DID
 LAYERX_NODE_TREASURY_PUBLIC_KEY=$TREASURY_PUBLIC
@@ -535,6 +546,36 @@ LAYERX_NODE_SEQUENCER_ENV=$DATA_DIR/sequencer.env
 LAYERX_NODE_REPLICA_ENV=$DATA_DIR/replica.env
 EOF
 chmod 0644 "$DATA_DIR/node.env"
+for identity in 1 2; do
+    producer_dir="$(dirname "$DATA_DIR")/guarantor-$identity"
+    mkdir -p "$producer_dir/identity" "$producer_dir/state"
+    chgrp "$LNI_GID" "$producer_dir" "$producer_dir/identity" "$producer_dir/state"
+    chmod 0750 "$producer_dir" "$producer_dir/identity"
+    chmod 2770 "$producer_dir/state"
+    if [ "$identity" = 1 ]; then
+        identity_key=$GUARANTOR_KEY_FILE
+        identity_id=$GUARANTOR_ID
+    else
+        identity_key=$GUARANTOR_SECOND_KEY_FILE
+        identity_id=$GUARANTOR_SECOND_ID
+    fi
+    install -m 0440 "$identity_key" "$producer_dir/identity/key.pem"
+    install -m 0440 "$SNAPSHOT" "$producer_dir/identity/genesis.lxs"
+    install -m 0440 "$MANIFEST" "$producer_dir/identity/genesis.manifest"
+    install -m 0440 "$IDENTITIES" "$producer_dir/identity/identities.txt"
+    install -m 0440 "$DATA_DIR/sequencer.conf" "$producer_dir/identity/node.conf"
+    if [ -r "$REGISTRATION" ]; then
+        install -m 0440 "$REGISTRATION" "$producer_dir/identity/genesis.registration"
+    else
+        rm -f "$producer_dir/identity/genesis.registration"
+    fi
+    printf 'LAYERX_GUARANTOR_ID=%s\nLAYERX_NODE_NETWORK_ID=%s\nLAYERX_NODE_ASSET_ID=%s\nLAYERX_NODE_SEQUENCER_ID=%s\nLAYERX_NODE_SEQUENCER_PUBLIC_KEY=%s\nLAYERX_NODE_FIRST_BATCH=1\nLAYERX_NODE_LAST_BATCH=18446744073709551615\n' \
+        "$identity_id" "$NETWORK_ID" "$ASSET_ID" "$SEQUENCER_ID" "$SEQUENCER_PUBLIC" > "$producer_dir/identity/producer.env.tmp"
+    mv "$producer_dir/identity/producer.env.tmp" "$producer_dir/identity/producer.env"
+    chgrp "$LNI_GID" "$producer_dir/identity/"*
+    chmod 0440 "$producer_dir/identity/"*
+done
+
 printf 'LAYERX_CORE_SEQUENCER_ID=%s\nLAYERX_CORE_TREASURY_ASSET=%s\n' \
     "$SEQUENCER_ID" "$ASSET_ID" > "$RUN_DIR/core.env.tmp"
 chmod 0644 "$RUN_DIR/core.env.tmp"
