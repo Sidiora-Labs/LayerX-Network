@@ -1,3 +1,6 @@
+#[path = "evidence.rs"]
+pub(crate) mod evidence;
+
 use ed25519_dalek::{Signature, VerifyingKey};
 use layerx_agent_api::error::RequestId;
 use layerx_agent_api::idempotency::{BodyDigest, IdempotentMutation, Key};
@@ -2197,4 +2200,113 @@ fn deposit_nullifier(deposit_id: [u8; 32]) -> [u8; 32] {
 
 fn deposit_inclusion(error: MerkleError) -> DepositFailure {
     DepositFailure::ProofUnavailable(ProofFault::DepositInclusion(error))
+}
+
+impl PublishedDepositProof {
+    /// Fetches pinned registration bytes and constructs their index-aware custody path.
+    /// Call `DepositProofVerifier::obtain` to admit the signature and custody finality.
+    ///
+    /// # Errors
+    /// Refuses missing, ambiguous, displaced, malformed or digest/root-mismatched publication.
+    pub fn fetch_published(
+        endpoint: &EndpointConfig,
+        vault: EvmAddress,
+        registry: EvmAddress,
+        checkpoint: [u8; 32],
+        custody: CustodyDeposit,
+        confirmations: u64,
+    ) -> Result<Self, crate::EndpointFailure> {
+        use evidence as e;
+        let registered = e::registered(endpoint, registry, checkpoint, confirmations)?;
+        let published =
+            e::publication(endpoint, vault, e::DEPOSIT_TOPIC, checkpoint, confirmations)?;
+        let decode = || {
+            if published.sender != registered.sender
+                || published.topics.len() != 3
+                || published.data.len() != 64
+                || published.data[32..] != e::word(1)?
+                || !published.input.starts_with(&e::DEPOSIT_SELECTOR)
+            {
+                return Err(e::invalid());
+            }
+            let args = &published.input[4..];
+            let canonical = e::split_dynamic(args, 3, 0)?;
+            let signature = e::split_dynamic(args, 3, 1)?;
+            let offset = e::word_number(args.get(64..96).ok_or_else(e::invalid)?)?;
+            let mut r = e::Reader(args.get(offset..).ok_or_else(e::invalid)?);
+            let count = e::word_number(r.take(32)?)?;
+            if count == 0 || count > e::MAX_ITEMS {
+                return Err(e::invalid());
+            }
+            let mut leaves = Vec::with_capacity(count);
+            for _ in 0..count {
+                leaves.push(r.array::<32>()?);
+            }
+            r.finish()?;
+            let mut ordering = e::word(count)?.to_vec();
+            for leaf in &leaves {
+                ordering.extend_from_slice(leaf);
+            }
+            let tails = [e::dynamic(canonical)?, e::dynamic(signature)?, ordering];
+            if e::abi(&[], &tails)? != args
+                || e::digest(&e::abi(&[e::word(1)?], &tails)?) != published.data[..32]
+            {
+                return Err(e::invalid());
+            }
+            let mut r = e::Reader(
+                canonical
+                    .strip_prefix(DEPOSIT_ROOT_DOMAIN)
+                    .ok_or_else(e::invalid)?,
+            );
+            let registration = DepositRootRegistration {
+                checkpoint_id: r.array()?,
+                checkpoint_state_root: r.array()?,
+                deposit_root: r.array()?,
+                custody_reference: r.array()?,
+                network_id: u32::from_be_bytes(r.array()?),
+                protocol_version: u16::from_be_bytes(r.array()?),
+                signature: signature.try_into().map_err(|_| e::invalid())?,
+            };
+            r.finish()?;
+            if registration.checkpoint_id != checkpoint
+                || registration.checkpoint_state_root != registered.state_root
+                || registration.deposit_root != published.topics[2]
+                || deposit_root_registration_message(&registration).map_err(|_| e::invalid())?
+                    != canonical
+                || layerx_proof::merkle::root_from_leaf_hashes(&leaves).map_err(|_| e::invalid())?
+                    != registration.deposit_root
+                || leaves
+                    .iter()
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .len()
+                    != leaves.len()
+            {
+                return Err(e::invalid());
+            }
+            let leaf = leaf_hash(
+                &deposit_leaf_bytes(
+                    custody.deposit_id,
+                    registration.custody_reference,
+                    custody.asset,
+                    custody.amount,
+                    checkpoint,
+                    registration.network_id,
+                    registration.protocol_version,
+                )
+                .map_err(|_| e::invalid())?,
+            )
+            .map_err(|_| e::invalid())?;
+            let index = leaves
+                .iter()
+                .position(|value| *value == leaf)
+                .ok_or_else(e::invalid)?;
+            let (inclusion_proof, _) = layerx_proof::merkle::build_leaf_hash_proof(&leaves, index)
+                .map_err(|_| e::invalid())?;
+            Ok(Self {
+                registration,
+                inclusion_proof,
+            })
+        };
+        decode().map_err(|fault| e::failure(endpoint, fault))
+    }
 }
