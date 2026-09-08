@@ -323,8 +323,8 @@ node_boundary_install() {
         docker exec "$node" systemctl enable --now layerx-program-registry-boundary.service > /dev/null 2>&1 \
             || { docker exec "$node" systemctl status --no-pager layerx-program-registry-boundary.service >&2 || true; fail "registry node boundary provisioning failed on $node"; }
         docker exec "$node" systemctl is-active --quiet layerx-program-registry-boundary.service || fail "registry node boundary unit is not active on $node"
-        docker exec "$node" test -d /sys/fs/cgroup/layerx-program-registry
-        kube label node "$node" "$BOUNDARY_LABEL=v1" --overwrite > /dev/null
+        docker exec "$node" mountpoint -q /var/lib/layerx-program-registry-builds/slot-0
+        kube label node "$node" "$BOUNDARY_LABEL=v2" --overwrite > /dev/null
     done
 }
 
@@ -1423,7 +1423,7 @@ boundary_checks() {
             case "$node" in *control-plane*) continue ;; esac
             docker exec -e LAYERX_REGISTRY_MAX_BUILDS=4 -e LAYERX_REGISTRY_BUILD_QUOTA_BYTES=5368709120 -e LAYERX_REGISTRY_BUILD_QUOTA_INODES=65536 \
                 "$node" /usr/libexec/layerx/node-provision-build-boundary.sh
-            docker exec "$node" sh -c 'test "$(stat -c %u:%g /sys/fs/cgroup/layerx-program-registry)" = 4030:4030 && mountpoint -q /var/lib/layerx-program-registry-builds/slot-0'
+            docker exec "$node" sh -c 'test "$(stat -c %u:%g /var/lib/layerx-program-registry-builds/slot-0)" = 4030:4030 && mountpoint -q /var/lib/layerx-program-registry-builds/slot-0'
         done
     else
         for node in $(kube get nodes -l "$BOUNDARY_LABEL=v1" -o name); do
