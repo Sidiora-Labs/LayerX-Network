@@ -7213,3 +7213,11 @@ file = "human/crates/layerx-human-identity-provider/tests/client.rs human/crates
 symbol = "RemoteIdentityProvider resolve_email device_for_assertion"
 observed = "The locked all-targets Clippy and locked test commands for the identity and security provider packages exit 101 because the unchanged identity-provider client integration test calls resolve_email and device_for_assertion, which are absent from RemoteIdentityProvider. Compiler E0599 points to client.rs lines 100, 105, 107, 120 and 128. Logs are qual-logs/hm9/clippy.log and qual-logs/hm9/test.log. The locked provider binary build and format check pass; python3 platform/hosted/human/test_material.py and make beta-ledger-check exit zero."
 assumption = "The incompatible client test and service interface require reconciliation outside new provisioning CLI scope. Neither side is weakened or modified. Focused CLI qualification does not replace the failed aggregate gates or prove a complete Human evidence set."
+
+[observation.6.8.84]
+task = "6.8"
+severity = "note"
+file = "human/crates/layerx-human-identity-provider/tests/client.rs human/crates/layerx-human-service/src/server/identity_dispatch.rs"
+symbol = "RemoteIdentityProvider::call DirectoryRead"
+observed = "The client integration test now uses the current authenticated LXIP transport for directory operations 2 and 3, with every original assertion retained. The shared transport is crate-visible so the source-included integration test exercises the actual implementation. Locked all-targets Clippy and locked tests for layerx-human-identity-provider, layerx-human-security-provider and layerx-human-service pass; formatting check and the locked provider binary build pass. Logs: qual-logs/hm9/hm9c-clippy.log, hm9c-test.log, hm9c-fmt-check.log and hm9c-build.log. This resolves the E0599 qualification failure recorded in observation 6.8.83."
+assumption = "Passing these package gates qualifies the client-interface reconciliation and existing provision-owner path only; it does not prove cluster execution or a complete Human evidence set."
