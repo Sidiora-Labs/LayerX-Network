@@ -508,6 +508,7 @@ static int recover_both_schemas(void)
                 view->recovery_metadata.bytes != NULL || view->recovery_metadata.length != 0U ||
                 lxp_arena_init(&arena, storage, sizeof(storage)) != LXP_OK ||
                 lxp_daemon_batch_wal_body(view, &arena, &body) != LXP_ERR_NON_CANONICAL ||
+                lxp_daemon_batch_wal_write_prepared(directory, view, digest) != LXP_ERR_ROOT_MISMATCH ||
                 lxp_da_store_init(&store, directory) != LXP_OK ||
                 lxp_batch_header_decode(view->canonical_header.bytes,
                     view->canonical_header.length, &header) != LXP_OK ||
@@ -540,6 +541,44 @@ static int recover_both_schemas(void)
                 return 1;
         }
         if (close(descriptor) != 0 || unlink(path) != 0) return 1;
+    }
+    return rmdir(directory) != 0;
+}
+
+static int retire_legacy_records(void)
+{
+    canonical_batch_fixture fixture;
+    char directory[] = "/tmp/lxp-batch-wal-legacy-retire-XXXXXX";
+    char path[160];
+    uint8_t digest[32];
+    if (build_canonical_batch(&fixture, false) != 0 || mkdtemp(directory) == NULL ||
+        snprintf(path, sizeof(path), "%s/prepared-batch.lxw", directory) < 0)
+        return 1;
+    for (unsigned version = 1U; version <= 2U; ++version) {
+        for (unsigned settled = 0U; settled <= 1U; ++settled) {
+            lxp_daemon_batch_wal_record *record = NULL, *reloaded = NULL;
+            const lxp_kernel_batch_boundary *live = settled != 0U ?
+                &fixture.input.settled : &fixture.input.base;
+            lxp_daemon_batch_wal_recovery recovery;
+            bool present = false;
+            if (lxp_daemon_batch_wal_write_prepared(directory, &fixture.input, digest) != LXP_OK ||
+                write_legacy_fixture(path, version, &fixture) != 0 ||
+                lxp_daemon_batch_wal_load(directory, &fixture.input.authorization,
+                    &record, &present) != LXP_OK || !present ||
+                lxp_daemon_batch_wal_transition(directory, record, live,
+                    settled != 0U ? LXP_DAEMON_BATCH_WAL_COMMITTED : LXP_DAEMON_BATCH_WAL_ABORTED) != LXP_OK ||
+                lxp_daemon_batch_wal_load(directory, &fixture.input.authorization,
+                    &reloaded, &present) != LXP_OK || !present ||
+                lxp_daemon_batch_wal_record_state(reloaded) != LXP_DAEMON_BATCH_WAL_PREPARED ||
+                lxp_daemon_batch_wal_classify(reloaded, live, &recovery) != LXP_OK ||
+                recovery != (settled != 0U ? LXP_DAEMON_BATCH_WAL_FINALIZE_SETTLED :
+                                            LXP_DAEMON_BATCH_WAL_DISCARD_BASE) ||
+                lxp_daemon_batch_wal_retire(directory, record, live) != LXP_OK ||
+                access(path, F_OK) == 0)
+                return 1;
+            lxp_daemon_batch_wal_destroy(reloaded);
+            lxp_daemon_batch_wal_destroy(record);
+        }
     }
     return rmdir(directory) != 0;
 }
@@ -597,6 +636,7 @@ static int sweep_interrupted_replacement(void)
 int main(void)
 {
     return recover_both_schemas() != 0 ||
+        retire_legacy_records() != 0 ||
         refuse_invalid_canonical_activity_signature() != 0 ||
         classify_recovery_matrix() != 0 ||
         refuse_malformed_record() != 0 ||

@@ -3023,17 +3023,17 @@ static lxp_result recover_ranged_batch_authority(
             lxp_ct_memcmp(header->data_availability_root, legacy_root, 32U) == 0) {
             process->owner.availability_ready = false;
         } else if (status == LXP_OK) {
-        status = lxp_da_log_read_body(&process->availability_log, header->batch_number,
-                                      &process->owner_scratch, &body);
-        if (status == LXP_OK)
-            status = lxp_replay_section_encode(activities, count, &process->owner_scratch,
-                                               &body.activities);
-        if (status == LXP_OK)
-            status = lxp_da_receipt_section_encode(receipts, receipt_count,
-                events, count, &process->owner_scratch, &body.receipts);
-        if (status == LXP_OK)
-            status = lxp_batch_availability_root(&body, &process->owner_scratch,
-                                                 roots.data_availability_root);
+            status = lxp_da_log_read_body(&process->availability_log, header->batch_number,
+                                          &process->owner_scratch, &body);
+            if (status == LXP_OK)
+                status = lxp_replay_section_encode(activities, count, &process->owner_scratch,
+                                                   &body.activities);
+            if (status == LXP_OK)
+                status = lxp_da_receipt_section_encode(receipts, receipt_count,
+                    events, count, &process->owner_scratch, &body.receipts);
+            if (status == LXP_OK)
+                status = lxp_batch_availability_root(&body, &process->owner_scratch,
+                                                     roots.data_availability_root);
         }
     }
     if (status == LXP_OK &&
