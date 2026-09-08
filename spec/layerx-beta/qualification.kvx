@@ -5097,18 +5097,6 @@ severity = "blocker"
 
 [observation.6.1.31]
 task = "6.1"
-file = "cmd/layerxd/lxp_daemon_lni.c agent/crates/layerx-client/tests/availability_daemon.rs tests/daemon/availability-settlement.py"
-symbol = "send_availability finalized_fetch"
-observed = "Tag 18 refuses every selected batch above latest_finalized_batch with LXP_ERR_DA_MISSING (-804), including explicit batch selection. Candidate DA is required before independent replay and attestation, while registration requires attestations. This prevents both initial checkpoint production and advancement beyond an existing finalized head. The availability harness asserts pre-registration refusal and obtains successful retrieval only after the finality fixture has already signed and registered a certificate. Source evidence: qual-logs/gp1/candidate-fetch-source.txt."
-assumption = "An additive authenticated candidate-batch fetch must expose complete durable sealed bodies before registration without weakening finalized-only consumer selectors, root checks or existing refusal assertions. Producer implementation and end-to-end qualification remain incomplete."
-severity = "blocker"
-
-[observation.6.1.32]
-task = "6.1"
-file = "docs/wiki/Guarantor.md spec/layerx-protocol/docs/guarantors.md contracts/libraries/CanonicalCheckpoint.sol tests/daemon/availability-settlement.py"
-symbol = "ATTESTATION_DOMAIN CHECKPOINT_DOMAIN registerCheckpoint"
-observed = "Beta checkpoint construction uses an empty validity proof; no generated validity proof is claimed. The intended two beta guarantors are operated by the same cluster and provide no operational independence. The guarantor specification section 5 describes the older LXP1/guarantor-attest preimage, while implemented C and Solidity domains and cross-language checkpoint vectors use LXP/v2/guarantor-attestation and LXP/v2/checkpoint-certificate with terminating NUL bytes."
-assumption = "Producer encoding follows the implemented verifiers and vectors. Production operator independence remains an onboarding requirement. Empty beta validity proofs and shared operation do not establish production independence or proof generation."
 file = "cmd/layerxd/lxp_daemon_batch_wal.c cmd/layerxd/lxp_daemon_process.c tests/storage/lxp_test_batch_wal_recovery.c"
 symbol = "recover_both_schemas validate_input encode_record recover_prepared_batch_wal recover_ranged_batch_authority"
 observed = "Legacy WAL records retain signature, canonical item, publication digest and historical empty availability root validation. Version 4 still requires canonical body and recomputed root validation; all new writes use version 4. Legacy transitions preserve the original durable record until guarded retirement, so interrupted recovery remains repeatable without writing obsolete versions. Recovery publishes legacy receipt evidence without inventing a body; absent bundles fail retained-store verification and withhold availability_fetch. The schema fixture materializes legacy wire layouts from signed records while preserving the version and artifact assertions. Coverage checks absent canonical body fields, body refusal, missing verified bundles and transitions without version rewriting. make test-batch-wal-recovery build/bin/layerxd exits 0; evidence: qual-logs/dan1f/item1-final.log and qual-logs/dan1f/item1-final.exit."
@@ -5125,18 +5113,6 @@ severity = "note"
 
 [observation.6.1.33]
 task = "6.1"
-file = "cmd/layerx-guarantor/lni.c tests/daemon/guarantor-integration.py cmd/layerxd/lxp_daemon_lni.c"
-symbol = "LXP_GUARANTOR_CANDIDATE_SELECTOR lxp_guarantor_lni_fetch"
-observed = "The producer requests tag 18 selector 05 followed by one big-endian uint64 batch number. A real two-guarantor genesis, Anvil chain 31337, deployed contracts, bonded identities, native sequencer and authority replica produce nine signed batches. Independent runtime replay verifies all nine batches, including maintenance receipts. Tag 12 verifies the signed first header; selector 05 then refuses with -105 and the integration exits 1 before signing or registration. Evidence: qual-logs/gp1/integration-real.log and qual-logs/gp1/runtime-repair-1.log."
-assumption = "The additive sealed-candidate selector is required in the daemon; selectors 01 through 04 and all existing finalized-only refusal assertions remain unchanged. Two-producer signing, finality feedback, tag-14 retrieval and existing verifier acceptance are asserted by the compiled integration but remain unreached until candidate retrieval succeeds."
-severity = "blocker"
-
-[observation.6.1.34]
-task = "6.1"
-file = "cmd/layerx-guarantor/runtime.c cmd/layerx-guarantor/settlement.py platform/hosted/node/deployment.yaml docs/wiki/Guarantor.md"
-symbol = "gp_runtime_open gp_runtime_oracle membership"
-observed = "The independent runtime verifies genesis and executes real kernel transitions without the sequencer private key. Direct owner authority matches the node adapter. Nonempty oracle inputs and rotated signer histories lacking complete authorization reconstruction refuse explicitly. The deployed topology provisions two distinct signing identities, two mutual-TLS processes and a dedicated checkpoint submitter, but both guarantors share the cluster operator and provide no operational independence. Certificates carry empty validity proofs and use implemented v2 domain tags."
-assumption = "Production independence requires independent operator onboarding. Supporting nonempty oracle input or rotated guarantor histories requires a complete verified authority adapter; neither capability is claimed by the beta producer. Prior specification-domain drift remains recorded in observation 6.1.32."
 file = "tests/storage/lxp_test_batch_wal_recovery.c cmd/layerxd/lxp_daemon_process.c tests/daemon/bootstrap-send.sh"
 symbol = "retire_legacy_records recover_ranged_batch_authority make test-daemon-finality-authority"
 observed = "Legacy retirement qualification covers versions 1 and 2 at base and settled boundaries, reload after an in-memory terminal transition, recovery classification from the unchanged prepared record and guarded retirement. Body-less inputs are refused by the version-4 writer. make -k test-batch-wal-recovery test-da-unavailable and make -k test exit 0 on the final source; logs: qual-logs/dan1f/focused-final.log and aggregate-final.log. make test-daemon-finality-authority initially exits 2 because its offline bootstrap build lacks webpki-root-certs 1.0.9. cargo fetch --locked --manifest-path platform/Cargo.toml exits 0 without lockfile changes; the unchanged finality target then exits 0, including the platform bootstrap authority test. Logs: qual-logs/dan1f/finality.log, platform-fetch.log and finality-retry.log. make test-daemon-availability exits 0; log: qual-logs/dan1f/availability.log. Client/proof cargo fmt --check, locked clippy with --all-targets and -D warnings, and locked cargo test exit 0; logs: qual-logs/dan1f/rust-fmt.log, rust-clippy.log and rust-test.log. Each gate has a sibling exit file."
@@ -5153,28 +5129,64 @@ severity = "note"
 
 [observation.6.1.35]
 task = "6.1"
-file = "platform/hosted/tests/topology-check.sh platform/hosted/tests/topology_check.py"
-symbol = "platform-hosted-topology-check"
-observed = "The seven added guarantor topology negative mutations pass. The aggregate hosted topology gate exits 2 with twenty existing human-service, internal, webhook and dashboard connectivity failures across its fifty-two edges. Evidence: qual-logs/gp1/hosted-topology.log. Real bootstrap verifies both genesis guarantors, both TLS identities, wrong-peer refusal, protected identity files and reset rotation; evidence: qual-logs/gp1/provision-real.log."
-assumption = "Unrelated service and network-policy owners must resolve aggregate topology failures. No Docker, image, kubectl, kind or live-cluster gate was run on the build host. Native bootstrap and static topology checks do not establish deployed cluster reachability."
-severity = "blocker"
-
-[observation.6.1.36]
-task = "6.1"
-file = "Makefile"
-symbol = "test-daemon-guarantor-sanitize"
-observed = "The new AddressSanitizer and UndefinedBehaviorSanitizer variant compiles but execution fails because the host preload places another runtime ahead of AddressSanitizer. An explicit AddressSanitizer preload attempt reaches LeakSanitizer's host ptrace refusal. The separate UndefinedBehaviorSanitizer unit and real-TLS gates pass with halt_on_error enabled. Evidence: qual-logs/gp1/sanitize.log, qual-logs/gp1/exchange-sanitize-test.log and qual-logs/gp1/ubsan.log."
-assumption = "AddressSanitizer qualification requires a compatible execution host. Runtime ordering and leak checks remain enabled; the failing sanitizer gate is not reported as passing."
-severity = "blocker"
-
-[observation.6.1.37]
-task = "6.1"
-file = "cmd/layerx-guarantor Makefile tests/daemon/guarantor-core.c tests/daemon/guarantor-settlement-chain.py"
-symbol = "gp_verify_attest gp_settlement_register test-daemon-guarantor"
-observed = "The C17 warnings-as-errors build and unit gate exit 0, including generated PEM key loading, real kernel replay, served chunk proofs, canonical encoding, root mismatch without signing, membership refusal and kind-1 evidence. Mutual-TLS positive and negative tests and eight settlement unit tests pass. Two concurrent helper processes register one certificate on real Anvil contracts through one dedicated signed submitter transaction; the other observes the same registration without another nonce. A real vault deposit establishes minimumBond 100; genuine unbonded and stale attestations are rejected. Evidence: qual-logs/gp1/build-unit-final.log, qual-logs/gp1/guarantor-settlement-chain.log and qual-logs/gp1/guarantor-aggregate.log. The full test-daemon-finality-authority gate passes when run with the required distinct-user privileges; evidence: qual-logs/gp1/finality-authority-root.log."
-assumption = "The guarantor aggregate exits 2 because its real-daemon integration exits 1 at the unimplemented candidate selector. These passing component gates do not claim completed two-producer finality feedback or deployment qualification. Existing refusal, verifier, signature, root and freshness checks remain intact."
 file = "cmd/layerxd/lxp_daemon_lni.c agent/crates/layerx-client/src/availability.rs agent/crates/layerx-client/tests/availability_daemon.rs agent/schema/lni/v1.kvx agent/schema/lni/README.md docs/wiki/DataAvailability.md"
 symbol = "send_availability fetch_sealed_candidate candidate_fetch"
 observed = "The D4 contract extension adds tag-18 selector 05 followed by batch u64be for one durable sealed signed candidate regardless of finalized head. It uses the same connection UID/GID authorization as tag 28, verified retained header scan and complete canonical bundle verification, ordered tag-19 proof stream and empty tag-20 END. Selectors 01-04 retain their finalized-head refusal. The client entry point shares chunk and record verification and rejects nonempty END proof material. Real-daemon coverage fetches batch 1 against its verified tag-12 header while the checkpoint identifier is zero and before releasing the header to certificate preparation, then fetches batch 9 above finalized batch 1. Existing finalized selectors and -804 assertions remain intact; candidate zero, unknown, unsealed-next-number and corrupt-store requests are refused. make build/bin/layerxd, make test-daemon-availability, make test-daemon-finality-authority, make -k test, cargo fmt --check --manifest-path agent/Cargo.toml -p layerx-client -p layerx-proof, cargo clippy --locked --manifest-path agent/Cargo.toml -p layerx-client -p layerx-proof --all-targets -- -D warnings, cargo test --locked --manifest-path agent/Cargo.toml -p layerx-client -p layerx-proof and make beta-ledger-check exit 0. Logs and sibling exit files: qual-logs/dan1g/build, availability, finality, aggregate, rust-fmt, rust-clippy, rust-test and ledger."
 assumption = "Candidate retrieval neither attests nor registers or finalizes a batch. Both candidate fetches require no certificate for their selected batch; guarantor replay and attestation remain separate responsibilities. Codify context commands could not run because cg is absent. Image and cluster gates were not run."
+severity = "note"
+
+[observation.6.1.36]
+task = "6.1"
+file = "cmd/layerxd/lxp_daemon_lni.c agent/crates/layerx-client/tests/availability_daemon.rs tests/daemon/availability-settlement.py"
+symbol = "send_availability finalized_fetch"
+observed = "formerly observation.6.1.31. Tag 18 refuses every selected batch above latest_finalized_batch with LXP_ERR_DA_MISSING (-804), including explicit batch selection. Candidate DA is required before independent replay and attestation, while registration requires attestations. This prevents both initial checkpoint production and advancement beyond an existing finalized head. The availability harness asserts pre-registration refusal and obtains successful retrieval only after the finality fixture has already signed and registered a certificate. Source evidence: qual-logs/gp1/candidate-fetch-source.txt."
+assumption = "An additive authenticated candidate-batch fetch must expose complete durable sealed bodies before registration without weakening finalized-only consumer selectors, root checks or existing refusal assertions. Producer implementation and end-to-end qualification remain incomplete."
+severity = "blocker"
+
+[observation.6.1.37]
+task = "6.1"
+file = "docs/wiki/Guarantor.md spec/layerx-protocol/docs/guarantors.md contracts/libraries/CanonicalCheckpoint.sol tests/daemon/availability-settlement.py"
+symbol = "ATTESTATION_DOMAIN CHECKPOINT_DOMAIN registerCheckpoint"
+observed = "formerly observation.6.1.32. Beta checkpoint construction uses an empty validity proof; no generated validity proof is claimed. The intended two beta guarantors are operated by the same cluster and provide no operational independence. The guarantor specification section 5 describes the older LXP1/guarantor-attest preimage, while implemented C and Solidity domains and cross-language checkpoint vectors use LXP/v2/guarantor-attestation and LXP/v2/checkpoint-certificate with terminating NUL bytes."
+assumption = "Producer encoding follows the implemented verifiers and vectors. Production operator independence remains an onboarding requirement. Empty beta validity proofs and shared operation do not establish production independence or proof generation."
+severity = "note"
+
+[observation.6.1.38]
+task = "6.1"
+file = "cmd/layerx-guarantor/lni.c tests/daemon/guarantor-integration.py cmd/layerxd/lxp_daemon_lni.c"
+symbol = "LXP_GUARANTOR_CANDIDATE_SELECTOR lxp_guarantor_lni_fetch"
+observed = "formerly observation.6.1.33. The producer requests tag 18 selector 05 followed by one big-endian uint64 batch number. A real two-guarantor genesis, Anvil chain 31337, deployed contracts, bonded identities, native sequencer and authority replica produce nine signed batches. Independent runtime replay verifies all nine batches, including maintenance receipts. Tag 12 verifies the signed first header; selector 05 then refuses with -105 and the integration exits 1 before signing or registration. Evidence: qual-logs/gp1/integration-real.log and qual-logs/gp1/runtime-repair-1.log."
+assumption = "The additive sealed-candidate selector is required in the daemon; selectors 01 through 04 and all existing finalized-only refusal assertions remain unchanged. Two-producer signing, finality feedback, tag-14 retrieval and existing verifier acceptance are asserted by the compiled integration but remain unreached until candidate retrieval succeeds."
+severity = "blocker"
+
+[observation.6.1.39]
+task = "6.1"
+file = "cmd/layerx-guarantor/runtime.c cmd/layerx-guarantor/settlement.py platform/hosted/node/deployment.yaml docs/wiki/Guarantor.md"
+symbol = "gp_runtime_open gp_runtime_oracle membership"
+observed = "formerly observation.6.1.34. The independent runtime verifies genesis and executes real kernel transitions without the sequencer private key. Direct owner authority matches the node adapter. Nonempty oracle inputs and rotated signer histories lacking complete authorization reconstruction refuse explicitly. The deployed topology provisions two distinct signing identities, two mutual-TLS processes and a dedicated checkpoint submitter, but both guarantors share the cluster operator and provide no operational independence. Certificates carry empty validity proofs and use implemented v2 domain tags."
+assumption = "Production independence requires independent operator onboarding. Supporting nonempty oracle input or rotated guarantor histories requires a complete verified authority adapter; neither capability is claimed by the beta producer. Prior specification-domain drift remains recorded in observation 6.1.32."
+severity = "note"
+
+[observation.6.1.40]
+task = "6.1"
+file = "platform/hosted/tests/topology-check.sh platform/hosted/tests/topology_check.py"
+symbol = "platform-hosted-topology-check"
+observed = "formerly observation.6.1.35. The seven added guarantor topology negative mutations pass. The aggregate hosted topology gate exits 2 with twenty existing human-service, internal, webhook and dashboard connectivity failures across its fifty-two edges. Evidence: qual-logs/gp1/hosted-topology.log. Real bootstrap verifies both genesis guarantors, both TLS identities, wrong-peer refusal, protected identity files and reset rotation; evidence: qual-logs/gp1/provision-real.log."
+assumption = "Unrelated service and network-policy owners must resolve aggregate topology failures. No Docker, image, kubectl, kind or live-cluster gate was run on the build host. Native bootstrap and static topology checks do not establish deployed cluster reachability."
+severity = "blocker"
+
+[observation.6.1.41]
+task = "6.1"
+file = "Makefile"
+symbol = "test-daemon-guarantor-sanitize"
+observed = "formerly observation.6.1.36. The new AddressSanitizer and UndefinedBehaviorSanitizer variant compiles but execution fails because the host preload places another runtime ahead of AddressSanitizer. An explicit AddressSanitizer preload attempt reaches LeakSanitizer's host ptrace refusal. The separate UndefinedBehaviorSanitizer unit and real-TLS gates pass with halt_on_error enabled. Evidence: qual-logs/gp1/sanitize.log, qual-logs/gp1/exchange-sanitize-test.log and qual-logs/gp1/ubsan.log."
+assumption = "AddressSanitizer qualification requires a compatible execution host. Runtime ordering and leak checks remain enabled; the failing sanitizer gate is not reported as passing."
+severity = "blocker"
+
+[observation.6.1.42]
+task = "6.1"
+file = "cmd/layerx-guarantor Makefile tests/daemon/guarantor-core.c tests/daemon/guarantor-settlement-chain.py"
+symbol = "gp_verify_attest gp_settlement_register test-daemon-guarantor"
+observed = "formerly observation.6.1.37. The C17 warnings-as-errors build and unit gate exit 0, including generated PEM key loading, real kernel replay, served chunk proofs, canonical encoding, root mismatch without signing, membership refusal and kind-1 evidence. Mutual-TLS positive and negative tests and eight settlement unit tests pass. Two concurrent helper processes register one certificate on real Anvil contracts through one dedicated signed submitter transaction; the other observes the same registration without another nonce. A real vault deposit establishes minimumBond 100; genuine unbonded and stale attestations are rejected. Evidence: qual-logs/gp1/build-unit-final.log, qual-logs/gp1/guarantor-settlement-chain.log and qual-logs/gp1/guarantor-aggregate.log. The full test-daemon-finality-authority gate passes when run with the required distinct-user privileges; evidence: qual-logs/gp1/finality-authority-root.log."
+assumption = "The guarantor aggregate exits 2 because its real-daemon integration exits 1 at the unimplemented candidate selector. These passing component gates do not claim completed two-producer finality feedback or deployment qualification. Existing refusal, verifier, signature, root and freshness checks remain intact."
 severity = "note"
