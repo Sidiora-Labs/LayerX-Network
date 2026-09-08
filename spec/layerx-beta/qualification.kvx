@@ -5838,3 +5838,19 @@ file = "human/crates/layerx-human-identity-provider/tests/client.rs human/crates
 symbol = "RemoteIdentityProvider::call DirectoryRead"
 observed = "The client integration test now uses the current authenticated LXIP transport for directory operations 2 and 3, with every original assertion retained. The shared transport is crate-visible so the source-included integration test exercises the actual implementation. Locked all-targets Clippy and locked tests for layerx-human-identity-provider, layerx-human-security-provider and layerx-human-service pass; formatting check and the locked provider binary build pass. Logs: qual-logs/hm9/hm9c-clippy.log, hm9c-test.log, hm9c-fmt-check.log and hm9c-build.log. This resolves the E0599 qualification failure recorded in observation 6.8.83."
 assumption = "Passing these package gates qualifies the client-interface reconciliation and existing provision-owner path only; it does not prove cluster execution or a complete Human evidence set."
+
+[observation.6.8.85]
+task = "6.8"
+severity = "blocker"
+file = "human/crates/layerx-human-service/src/agents/create.rs platform/hosted/gateway/src/main.rs platform/hosted/identity/src/main.rs platform/hosted/tests/beta-cluster.sh"
+symbol = "PurposePresetCatalog::validate issue_key create_principal internal_principals_provision"
+observed = "PurposePresetCatalog::validate rejects preset.counterparties.is_empty(), while the required beta catalog has no counterparties. The gateway issue_key response contains id, secret, authorization_scheme, signer_public_key, scopes and quotas but no tenant or principal. The identity create_principal response contains sub, allowed_signer_public_keys, account and audiences but no tenant. Preserving these responses cannot by itself produce the required authoritative tenant/principal pair. No counterparty identifier, tenant mapping, state proof or journal pair was invented. The parser assertion and producer interfaces remain unchanged."
+assumption = "The catalog contract and consumer must be reconciled without weakening existing checks, and a real scoped tenant binding must be supplied before full evidence provisioning can qualify. The registry journal and layerx-guarantor-checkpoint-authority Secret remain external inputs. Cluster, image and Kubernetes Job execution gates cannot run on this host."
+
+[observation.6.8.86]
+task = "6.8"
+severity = "note"
+file = "platform/hosted/human/provision.py platform/hosted/human/test_provision.py platform/hosted/human/README.md"
+symbol = "owner_registration protected_json identity"
+observed = "The owner-registration input contract is implemented at human-evidence-input/owner-registration.json with protected-file checks, duplicate-field refusal, complete nested identity schema validation and optional activity and LXIP DID binding checks. It preserves the producer authority text; the current AuthorityRef constructor specifies only nonempty text, not a separate canonical encoding. Python compilation and four input refusal tests pass, including a real provision-owner binary invocation, durable replay and refusal to treat LXIP output as protocol registration. Logs: qual-logs/hm9/hm9c-pycompile.log and hm9c-provision-test.log. Existing material tests pass in qual-logs/hm9/hm9c-material-test.log."
+assumption = "The authority has no standalone configuration-validation command; this parser mirrors the documented schema and enforces lowercase H32 text and control-character refusal. It does not verify protocol receipts or claim a generated evidence set. Positive registration integration awaits the real producer input. Recovery values must come unchanged from LXIP provision-owner; no operator recovery-key commitment derivation is required."
