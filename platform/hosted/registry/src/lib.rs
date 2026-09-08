@@ -55,6 +55,7 @@ pub struct Config {
     pub staleness_ms: u64,
     pub node_endpoint: String,
     pub node_authorization: String,
+    pub outbound_ca_der: Vec<u8>,
     pub receipt_authority_endpoint: String,
     pub receipt_authority_authorization: String,
     pub receipt_authority_replica_id: [u8; 32],
