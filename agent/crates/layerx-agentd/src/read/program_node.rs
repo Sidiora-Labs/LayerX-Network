@@ -34,6 +34,14 @@ pub struct LayerxdProgramBalanceReader {
     staleness_limit: u64,
 }
 
+/// Explicit independent authority identity and outbound trust for both read endpoints.
+pub struct ProgramAuthority<'a> {
+    pub endpoint: &'a str,
+    pub authorization: String,
+    pub replica_id: [u8; 32],
+    pub ca_der: &'a [u8],
+}
+
 impl LayerxdProgramBalanceReader {
     /// Connects the running agent route to the production node pair.
     ///
@@ -44,12 +52,16 @@ impl LayerxdProgramBalanceReader {
     pub fn connect(
         endpoint: &str,
         authorization: String,
-        authority_endpoint: &str,
-        authority_authorization: String,
-        authority_replica_id: [u8; 32],
+        authority: ProgramAuthority<'_>,
         verifier: ProtocolDeploymentVerifier,
         registry: Registry,
     ) -> Result<Self, ProtocolAdapterError> {
+        let ProgramAuthority {
+            endpoint: authority_endpoint,
+            authorization: authority_authorization,
+            replica_id: authority_replica_id,
+            ca_der,
+        } = authority;
         let endpoint = endpoint.trim_end_matches('/');
         let authority_endpoint = authority_endpoint.trim_end_matches('/');
         if authorization.is_empty()
@@ -61,7 +73,10 @@ impl LayerxdProgramBalanceReader {
         {
             return Err(ProtocolAdapterError::NonCanonicalView);
         }
+        let tls = crate::outbound_tls::private_ca(ca_der)
+            .ok_or(ProtocolAdapterError::NonCanonicalView)?;
         let config = ureq::Agent::config_builder()
+            .tls_config(tls)
             .timeout_global(Some(Duration::from_secs(30)))
             .http_status_as_error(false)
             .build();
@@ -185,14 +200,16 @@ impl LayerxdProgramBalanceReader {
         if node != independent {
             return Err(ProtocolAdapterError::NonCanonicalView);
         }
-        let verified = self.verifier.verify_current_protocol_head(
-            &receipt_bytes,
-            &independent.receipt_proof,
-            &independent.header,
-            &independent.signature,
-            now_ms,
-        )
-        .map_err(|_| ProtocolAdapterError::NonCanonicalView)?;
+        let verified = self
+            .verifier
+            .verify_current_protocol_head(
+                &receipt_bytes,
+                &independent.receipt_proof,
+                &independent.header,
+                &independent.signature,
+                now_ms,
+            )
+            .map_err(|_| ProtocolAdapterError::NonCanonicalView)?;
         if hex::decode_digest(field(&authority_document, "sequencer_public_key")?)
             .map_err(|_| ProtocolAdapterError::NonCanonicalView)?
             != verified.sequencer_public_key()
@@ -206,8 +223,7 @@ impl LayerxdProgramBalanceReader {
             != verified.receipt_digest()
             || digest != verified.receipt_digest()
             || state_root != verified.state_root()
-            || value["observed_sequence"].as_u64()
-                != Some(verified.freshness().observed_sequence)
+            || value["observed_sequence"].as_u64() != Some(verified.freshness().observed_sequence)
             || value["observed_at"].as_u64() != Some(verified.freshness().observed_at)
         {
             return Err(ProtocolAdapterError::NonCanonicalView);
