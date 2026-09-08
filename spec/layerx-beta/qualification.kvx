@@ -4694,6 +4694,7 @@ symbol = "Server State RemoteIdentityProvider"
 observed = "cargo test --locked --manifest-path human/Cargo.toml -p layerx-human-identity-provider exits 0 with 11 tests passing, zero ignored; qual-logs/hm3/test-final.log. Tests compile the unchanged identity_dispatch.rs source with the actual service types and exercise its RemoteIdentityProvider over real Unix sockets. Separate real-server and real-binary tests cover malformed frames, UID refusal, atomic snapshot replay, protected file and directory refusal, committed-state corruption, missing-snapshot refusal, owner-only device enrollment, crash restart and SIGTERM. Owned Rust files pass rustfmt --check --edition 2021 --config skip_children=true; qual-logs/hm3/fmt-owned-check.log. The no-deps all-target Clippy diagnostic exits 101 solely on five existing diagnostics in the imported identity_dispatch.rs source at lines 147, 191 and 192; qual-logs/hm3/clippy-owned-final.log. No lint allowances, assertions or client source were changed."
 assumption = "Runtime tests validate the provider and original client wire exchange, not automatic enrollment integration or a deployed cluster. Required workspace formatting and dependency Clippy gates remain blocked as recorded in observation.3.7.21. Environment uses CARGO_BUILD_JOBS=16, MAKEFLAGS=-j16, the pinned Rust 1.91.1 toolchain and human/target."
 severity = "note"
+
 [observation.6.4.159]
 task = "6.4"
 file = "human/crates/layerx-human-service/src/server/production_auth.rs"
@@ -4813,3 +4814,35 @@ symbol = "ureq native-tls connector dependency"
 observed = "ureq 3.4.0 gates its NativeTlsConnector on native-tls rather than native-tls-no-default. Agentd enables native-tls and adds its required transitive webpki-root-certs package to agent/Cargo.lock. The human and platform lockfiles do not contain that package and are outside the owned paths. Explicit RootCerts::Specific still excludes bundled roots from runtime trust."
 assumption = "Dependent workspace owners must regenerate their lockfiles for the enabled connector before locked builds; no unrelated package upgrade is required by the agentd change."
 severity = "blocker"
+
+[observation.6.4.174]
+task = "6.4"
+file = "agent/crates/layerx-agentd/src/human_runtime.rs agent/crates/layerx-proof/src/checkpoint.rs agent/crates/layerx-wire/src/receipt.rs"
+symbol = "RemoteHumanAuthority::budget_state RemoteHumanAuthority::key_rotation_policy CheckpointCertificate"
+observed = "The requested derived budget revocation sequence is zero without account-touching evidence, but the client explicitly rejects zero. Budget and key-policy readers require verification ranks 4 or 5. Retained ReplicaDocument batch evidence has one sequencer signature over a batch-header digest and proves batch inclusion; it has no bonded guarantor attestations or settlement registration. The existing wire CheckpointCertificate encodes guarantor signatures and threshold, and the proof verifier distinguishes that finality from batch inclusion. Encoding the sequencer signature as a guarantor signature or returning rank 4 without its verifier would misstate the evidence. Identity owner and capability installation also require checkpoint-finalised evidence."
+assumption = "An explicitly versioned derived-state contract across the client and authority, or actual independently verified checkpoint evidence, is required. Current finality checks and the four evidence refusals remain intact. No synthetic certificate or state proof is supplied."
+severity = "blocker"
+
+[observation.6.4.175]
+task = "6.4"
+file = "platform/hosted/tests/beta-cluster.sh platform/hosted/gateway/tests/local/lifecycle.rs"
+symbol = "module registry provisioning"
+observed = "Authority and gateway module registry readers require schema_version 2 and an assets array alongside modules. Each asset has asset, currency, decimals and symbol. Gateway main.rs contains a reader but no registry writer; provisioning writers are outside the permitted paths. The gateway eight-module bound and Programs ordinal insertion remain unchanged."
+assumption = "Registry writers must supply the actual network asset metadata in the new shape documented in platform/hosted/gateway/README.md. Old unversioned files and version 1 are refused by both readers."
+severity = "blocker"
+
+[observation.6.4.176]
+task = "6.4"
+file = "platform/hosted/authority/tests/real_node.rs platform/hosted/authority/tests/human_tls.rs"
+symbol = "real-node identity prerequisite and explicit-CA TLS client"
+observed = "cargo test --locked --manifest-path platform/Cargo.toml -p layerx-platform-authority -p layerx-platform-gateway exits 101 after 21 authority unit, TLS and maintenance tests pass. All three real-server TLS tests pass, including RemoteHumanAuthority with explicit CA DER and the successful registry-bound balance-context read. Both real-node tests fail their unchanged UID assertion: actual 1000, required 0. Gateway tests are not reached by this command. Evidence: qual-logs/hm2/hm2c-test.log and hm2c-test.exit. Native executable checks fail at both worktree and advertised binary paths in qual-logs/hm2/hm2c-prerequisites.log."
+assumption = "Real-node qualification and successful two-header clock evidence require the existing privileged native harness and actual native binaries. Cluster and image gates remain unrun because their tools and infrastructure are absent. No all-eight-route successful-client coverage is claimed."
+severity = "blocker"
+
+[observation.6.4.177]
+task = "6.4"
+file = "platform/hosted/gateway/tests/tap_nonce.rs platform/hosted/gateway/src/main.rs"
+symbol = "module_schema_tests and Redis qualification prerequisite"
+observed = "The separate gateway cargo test command first exits 101 because redis-server is absent, after all 21 unit tests pass. Installing untracked Redis tooling and its liblzf/libjemalloc dependencies under qual-logs/hm2/redis/extracted allows cargo test --locked --manifest-path platform/Cargo.toml -p layerx-platform-gateway to exit 0 with all 23 tests passing. The rerun prepends extracted/usr/bin to PATH and sets LD_LIBRARY_PATH to extracted/usr/lib/x86_64-linux-gnu. Final cargo fmt --check and cargo clippy --locked --all-targets -- -D warnings for both authority and gateway exit 0. Evidence: qual-logs/hm2/hm2c-gateway-test-final.log, hm2c-redis-install.log, hm2c-fmt-final.log and hm2c-clippy-final.log."
+assumption = "The Redis tests start isolated loopback TLS servers on ephemeral ports and retain their original assertions. These passing local gates do not establish privileged native-node, cluster, image, or all-eight-route success."
+severity = "note"
