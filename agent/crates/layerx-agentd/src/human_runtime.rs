@@ -230,6 +230,7 @@ impl RemoteHumanAuthority {
         bearer: String,
         deadline: Duration,
         maximum_response_bytes: usize,
+        ca_der: &[u8],
     ) -> Result<Self, HumanOperationError> {
         let endpoint = endpoint.trim_end_matches('/');
         if !endpoint.starts_with("https://")
@@ -240,7 +241,9 @@ impl RemoteHumanAuthority {
         {
             return Err(HumanOperationError::Refused);
         }
+        let tls = crate::outbound_tls::private_ca(ca_der).ok_or(HumanOperationError::Refused)?;
         let config = ureq::Agent::config_builder()
+            .tls_config(tls)
             .timeout_global(Some(deadline))
             .http_status_as_error(false)
             .build();
@@ -3524,3 +3527,7 @@ fn validate_capability<A: HumanAuthorityBoundary>(
     }
     Ok((capability, observed))
 }
+
+#[cfg(test)]
+#[path = "outbound_tls/tests.rs"]
+mod outbound_tls_tests;

@@ -26,7 +26,7 @@ pub use program_balances_impl::{
     program_balances_from_protocol, ProgramBalanceFreshness, ProgramBalanceRead,
     ProgramValueBalance, ProtocolProgramBalanceReader,
 };
-pub use program_node::{LayerxdProgramBalanceReader, ProgramBalanceReadRoute};
+pub use program_node::{LayerxdProgramBalanceReader, ProgramAuthority, ProgramBalanceReadRoute};
 
 /// Verifies and serves one checkpoint certificate.
 ///

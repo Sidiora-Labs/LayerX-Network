@@ -17,7 +17,7 @@ use layerx_agentd::human_runtime::{
     HumanAuthorityBoundary, ProductionHumanOperations, RemoteHumanAuthority, UnifiedAgentOwner,
 };
 use layerx_agentd::read::{
-    LayerxdProgramBalanceReader, ProgramBalanceRead, ProgramBalanceReadRoute,
+    LayerxdProgramBalanceReader, ProgramAuthority, ProgramBalanceRead, ProgramBalanceReadRoute,
 };
 use layerx_agentd::session_keys::SessionKeyRegistry;
 use layerx_agentd::store::Store;
@@ -31,6 +31,8 @@ use layerx_programs::{
     ProtocolDeploymentVerifier, Registry,
 };
 
+mod human_owner_mode;
+
 const HEADER_LIMIT: usize = 16 * 1024;
 
 struct Config {
@@ -40,6 +42,7 @@ struct Config {
     node_bearer: String,
     authority_endpoint: String,
     authority_bearer: String,
+    authority_ca_der: Vec<u8>,
     authority_replica_id: [u8; 32],
     sequencer_trust_history: String,
     staleness_ms: u64,
@@ -52,6 +55,14 @@ fn required(name: &str) -> Result<String, String> {
         .ok()
         .filter(|value| !value.is_empty())
         .ok_or_else(|| format!("{name} is required"))
+}
+
+fn read_ca(name: &str) -> Result<Vec<u8>, String> {
+    let bytes = fs::read(required(name)?).map_err(|_| format!("{name} is unreadable"))?;
+    if bytes.is_empty() {
+        return Err(format!("{name} is empty"));
+    }
+    Ok(bytes)
 }
 
 fn parse_u64(name: &str) -> Result<u64, String> {
@@ -183,6 +194,7 @@ fn connect_human_authority(
         required("LAYERX_AGENT_HUMAN_AUTHORITY_MAX_BYTES")?
             .parse()
             .map_err(|_| "human authority bound is invalid")?,
+        &read_ca("LAYERX_AGENT_HUMAN_AUTHORITY_CA_DER")?,
     )
     .map_err(|error| format!("human authority is invalid: {error:?}"))?;
     for (uid, (principal, tenant)) in peers {
@@ -317,6 +329,7 @@ fn config() -> Result<Config, String> {
         node_bearer,
         authority_endpoint: required("LAYERX_AGENT_AUTHORITY_ENDPOINT")?,
         authority_bearer,
+        authority_ca_der: read_ca("LAYERX_AGENT_AUTHORITY_CA_DER")?,
         authority_replica_id: parse_digest("LAYERX_AGENT_AUTHORITY_REPLICA_ID")?,
         sequencer_trust_history: required("LAYERX_AGENT_SEQUENCER_TRUST_HISTORY")?,
         staleness_ms,
@@ -506,9 +519,12 @@ fn serve(config: Config) -> Result<(), String> {
     let reader = LayerxdProgramBalanceReader::connect(
         &config.node_endpoint,
         config.node_bearer,
-        &config.authority_endpoint,
-        config.authority_bearer,
-        config.authority_replica_id,
+        ProgramAuthority {
+            endpoint: &config.authority_endpoint,
+            authorization: config.authority_bearer,
+            replica_id: config.authority_replica_id,
+            ca_der: &config.authority_ca_der,
+        },
         verifier,
         registry,
     )
@@ -552,7 +568,7 @@ fn serve(config: Config) -> Result<(), String> {
 }
 
 fn main() {
-    if let Err(error) = config().and_then(serve) {
+    if let Err(error) = human_owner_mode::run() {
         eprintln!("layerx-agentd: {}", Redacted::boot_diagnostic(&error));
         std::process::exit(2);
     }
