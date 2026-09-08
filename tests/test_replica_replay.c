@@ -44,14 +44,20 @@ int main(void)
     snapshot->runtime.transfer_assets = &snapshot->transfer_asset;
     CHECK(lxp_kernel_bind_module_runtime(&snapshot->kernel, LXP_MODULE_ASSET,
                                          &snapshot->runtime) == LXP_OK);
+    snapshot->programs_runtime = builder->programs_runtime;
+    snapshot->programs_runtime.accounts = lxp_state_snapshot_accounts_for_prepare(captured);
+    snapshot->programs_runtime.assets = &snapshot->transfer_asset;
+    snapshot->programs_runtime.occupancy_parameter_context = &snapshot->kernel;
+    CHECK(lxp_kernel_bind_module_runtime(&snapshot->kernel, LXP_MODULE_PROGRAMS,
+                                         &snapshot->programs_runtime) == LXP_OK);
     snapshot->execution = builder->execution;
     snapshot->execution.identities = &snapshot->identities;
     snapshot->execution.authority = &snapshot->authority;
     snapshot->execution.fee_parameters = &snapshot->fees;
     snapshot->execution.batch_number = 2U;
     CHECK(lxp_replay_engine_init(&snapshot->engine, lxp_real_replay_parameters, snapshot) == LXP_OK);
-    CHECK(lxp_replay_engine_bind_kernel(&snapshot->engine, &snapshot->kernel) == LXP_OK);
-    CHECK(lxp_replay_engine_register(&snapshot->engine, 1U, lxp_real_replay_transition) == LXP_OK);
+    CHECK(lxp_programs_replay_engine_bind(&snapshot->engine, &snapshot->kernel) == LXP_OK);
+    CHECK(lxp_replay_engine_register(&snapshot->engine, LXP_PROTOCOL_VERSION_STATE_COMMITMENT, lxp_real_replay_transition) == LXP_OK);
     CHECK(lxp_real_replay_build(builder, 2U, activities + 2U, 2U, NULL, 0U,
                                 &history_arena, &second) == 0);
     CHECK(lxp_replay_batch(&verifier->engine, &first, genesis, &replay_arena,

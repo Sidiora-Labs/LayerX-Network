@@ -106,10 +106,10 @@ int main(void)
     for (i = 0U; i < 2U; ++i)
         if (lxp_real_replay_activity(&builder, i, &build_arena, &activities[i]) != 0)
             return 1;
-    if (lxp_real_replay_build(&builder, 31U, activities, 2U, oracles, 1U,
+    if (lxp_real_replay_build(&builder, 1U, activities, 2U, oracles, 1U,
                               &build_arena, &body) != 0)
         return 1;
-    verifier.execution.batch_number = 31U;
+    verifier.execution.batch_number = 1U;
     if (lxp_da_bundle_build(&body, LXP_DA_CANONICAL_CHUNK_BYTES, &build_arena, &bundle) != LXP_OK ||
         lxp_batch_availability_root(&body, &build_arena, original_root) != LXP_OK)
         return 1;

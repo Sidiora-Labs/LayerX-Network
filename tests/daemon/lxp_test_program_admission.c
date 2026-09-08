@@ -594,6 +594,10 @@ static int availability_batches(int descriptor, const signer *key)
             sequence * 2U + 1U, encoded, length) == 0);
         REQUIRE(expect_ack(descriptor, sequence * 2U + 1U,
             encoded, length, activity_id) == 0);
+        if (sequence == 0U) {
+            for (size_t i = 0U; i < 32U; ++i) (void)printf("%02x", activity_id[i]);
+            (void)printf("\n");
+        }
         (void)memcpy(query + 1U, activity_id, 32U);
         for (unsigned attempt = 0U; attempt < 200U; ++attempt) {
             wire_envelope response;

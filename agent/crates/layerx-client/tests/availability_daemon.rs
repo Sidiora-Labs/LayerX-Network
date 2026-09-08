@@ -1,12 +1,18 @@
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
+use layerx_client::availability::{
+    fetch, AvailabilitySelector, FetchContext, FetchOutcome, Provider, ProviderSet, RetrievalLimits,
+};
 use layerx_client::batch::lookup;
+use layerx_client::evidence::{register_finality_evidence, FinalityEvidenceCandidate};
 use layerx_client::lni::handshake::{perform, HandshakeConfig};
 use layerx_client::lni::refusal::decode_core_refusal;
 use layerx_client::lni::schema::{decode_envelope, encode_envelope, Envelope, Version};
 use layerx_client::lni::transport::{ConnectionGate, FrameTransport, Limits, Uds};
+use layerx_proof::availability::RootCommitments;
 
 fn refusal(transport: &mut Uds, payload: &[u8], expected: i32, correlation: u64) {
     let encoded = encode_envelope(Envelope {
@@ -34,7 +40,83 @@ fn refusal(transport: &mut Uds, payload: &[u8], expected: i32, correlation: u64)
     assert_eq!(result.result.raw(), expected);
 }
 
-fn probe(socket: &Path, corrupt: bool) {
+fn finalized_fetch(
+    transport: &mut Uds,
+    first: &layerx_client::batch::SignedBatchHeader,
+    work: &Path,
+) {
+    let checkpoint = fs::read(work.join("availability-output/checkpoint.bin"))
+        .unwrap_or_else(|error| panic!("checkpoint bytes: {error}"));
+    let proof = fs::read(work.join("availability-output/finality.bin"))
+        .unwrap_or_else(|error| panic!("finality bytes: {error}"));
+    let candidate = FinalityEvidenceCandidate::from_exact_bytes(checkpoint, proof, 3, 77)
+        .unwrap_or_else(|error| panic!("real settlement candidate: {error:?}"));
+    let registered = register_finality_evidence(transport, &candidate, Version::V1_4, 10)
+        .unwrap_or_else(|error| panic!("daemon finality registration: {error:?}"));
+    assert_eq!(registered.batch_number, 1);
+    let text = fs::read_to_string(work.join("availability-activity-id"))
+        .unwrap_or_else(|error| panic!("activity identifier: {error}"));
+    let text = text.trim();
+    assert_eq!(text.len(), 64);
+    let mut activity = [0_u8; 32];
+    for (index, byte) in activity.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&text[index * 2..index * 2 + 2], 16)
+            .unwrap_or_else(|error| panic!("activity hex: {error}"));
+    }
+    for selector in [
+        AvailabilitySelector::Batch(1),
+        AvailabilitySelector::Activity(activity),
+        AvailabilitySelector::SequenceRange {
+            first: first.header.first_sequence(),
+            last: first.header.first_sequence(),
+        },
+        AvailabilitySelector::Checkpoint(registered.checkpoint_id),
+    ] {
+        let context = FetchContext {
+            interface_version: Version::V1_4,
+            correlation_id: 20,
+            expected_batch_number: 1,
+            data_availability_root: first.header.data_availability_root(),
+            record_roots: RootCommitments {
+                activity: first.header.activity_merkle_root(),
+                receipt: first.header.receipt_merkle_root(),
+                event: first.header.event_merkle_root(),
+                oracle: first.header.oracle_root(),
+            },
+            limits: RetrievalLimits {
+                maximum_bytes: 16 * 1024 * 1024,
+                maximum_chunks: 1024,
+                deadline: Duration::from_secs(10),
+            },
+        };
+        let mut chunks = 0;
+        let mut providers = ProviderSet::new(vec![Provider {
+            name: "real-layerxd".to_owned(),
+            transport,
+        }]);
+        let outcome = fetch(&mut providers, selector, context, |progress| {
+            assert_eq!(
+                progress.chunk.data_availability_root(),
+                context.data_availability_root
+            );
+            assert_eq!(progress.chunk.chunk().batch_number, 1);
+            chunks += 1;
+        })
+        .unwrap_or_else(|error| panic!("native availability fetch: {error:?}"));
+        match outcome {
+            FetchOutcome::Complete(result) => {
+                assert_eq!(result.chunks.len(), chunks);
+                assert!(chunks >= 5);
+            }
+            FetchOutcome::Partial(reports) => {
+                panic!("native availability incomplete: {reports:?}")
+            }
+        }
+    }
+}
+
+fn probe(socket: &Path, stage: &str) {
+    let corrupt = stage == "corrupt";
     let gate = ConnectionGate::new(1);
     let mut transport = Uds::connect(
         socket,
@@ -83,6 +165,24 @@ fn probe(socket: &Path, corrupt: bool) {
     )
     .unwrap_or_else(|error| panic!("last signed header: {error:?}"));
     assert_ne!(first.header.data_availability_root(), [0; 32]);
+    let work = PathBuf::from(
+        std::env::var_os("LAYERX_TEST_AVAILABILITY_WORK")
+            .unwrap_or_else(|| panic!("availability work directory missing")),
+    );
+    if stage == "retained" {
+        let pending = work.join("availability-output/header.pending");
+        fs::write(&pending, first.canonical_bytes())
+            .unwrap_or_else(|error| panic!("write signed header: {error}"));
+        fs::rename(
+            &pending,
+            work.join("availability-output/available-header.bin"),
+        )
+        .unwrap_or_else(|error| panic!("publish signed header: {error}"));
+    }
+    if stage == "finalized" {
+        finalized_fetch(&mut transport, &first, &work);
+        return;
+    }
     let mut batch = vec![2];
     batch.extend_from_slice(&1_u64.to_be_bytes());
     refusal(&mut transport, &batch, -804, 3);
@@ -102,12 +202,11 @@ fn real_daemon_availability_refusals() {
     if let Some(socket) = std::env::var_os("LAYERX_TEST_AVAILABILITY_SOCKET") {
         let stage = std::env::var("LAYERX_TEST_AVAILABILITY_STAGE")
             .unwrap_or_else(|error| panic!("availability stage: {error}"));
-        assert!(stage == "retained" || stage == "corrupt");
-        probe(Path::new(&socket), stage == "corrupt");
+        assert!(stage == "retained" || stage == "finalized" || stage == "corrupt");
+        probe(Path::new(&socket), &stage);
         return;
     }
-    let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../..");
+    let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let repository = repository
         .canonicalize()
         .unwrap_or_else(|error| panic!("repository path: {error}"));
@@ -115,7 +214,12 @@ fn real_daemon_availability_refusals() {
         .map_or_else(|| repository.join("build/bin"), PathBuf::from);
     assert!(binaries.join("layerxd").is_file(), "layerxd must be built");
     assert!(binaries.join("layerx-genesis-build").is_file());
-    assert!(repository.join("build/tests/lxp_test_program_admission").is_file());
+    assert!(repository
+        .join("build/tests/lxp_test_program_admission")
+        .is_file());
+    assert!(repository
+        .join("build/tests/lxp_test_daemon_finality_authority")
+        .is_file());
     let executable = std::env::current_exe()
         .unwrap_or_else(|error| panic!("Rust integration executable: {error}"));
     let status = Command::new("bash")
