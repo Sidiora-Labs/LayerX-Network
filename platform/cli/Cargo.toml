@@ -27,6 +27,8 @@ layerx-program-sdk = { path = "../../programs/sdk/rust" }
 layerx-proof = { path = "../../agent/crates/layerx-proof" }
 layerx-types = { path = "../../agent/crates/layerx-types" }
 layerx-wire = { path = "../../agent/crates/layerx-wire" }
+ring.workspace = true
+tempfile = "=3.27.0"
 rustix.workspace = true
 serde.workspace = true
 serde_json.workspace = true
