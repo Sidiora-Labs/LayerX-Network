@@ -302,8 +302,8 @@ node_boundary_install() {
     script="$REPO_ROOT/platform/hosted/registry/node-provision-build-boundary.sh"
     unit="$REPO_ROOT/platform/hosted/registry/layerx-program-registry-boundary.service"
     if [ "$(cluster_mode)" = owner ]; then
-        if [ -z "$(kube get nodes -l "$BOUNDARY_LABEL=v1" -o name)" ]; then
-            fail "no node of the owner cluster carries $BOUNDARY_LABEL=v1; the owner installs $unit and $script on the registry nodes before labelling them"
+        if [ -z "$(kube get nodes -l "$BOUNDARY_LABEL=v2" -o name)" ]; then
+            fail "no node of the owner cluster carries $BOUNDARY_LABEL=v2; the owner installs $unit and $script on the registry nodes before labelling them"
         fi
         return 0
     fi
@@ -322,8 +322,8 @@ node_boundary_install() {
         docker exec "$node" systemctl enable --now layerx-program-registry-boundary.service > /dev/null 2>&1 \
             || { docker exec "$node" systemctl status --no-pager layerx-program-registry-boundary.service >&2 || true; fail "registry node boundary provisioning failed on $node"; }
         docker exec "$node" systemctl is-active --quiet layerx-program-registry-boundary.service || fail "registry node boundary unit is not active on $node"
-        docker exec "$node" test -d /sys/fs/cgroup/layerx-program-registry
-        kube label node "$node" "$BOUNDARY_LABEL=v1" --overwrite > /dev/null
+        docker exec "$node" mountpoint -q /var/lib/layerx-program-registry-builds/slot-0
+        kube label node "$node" "$BOUNDARY_LABEL=v2" --overwrite > /dev/null
     done
 }
 
@@ -331,7 +331,7 @@ random_hex() { openssl rand -hex "$1"; }
 
 write_token() {
     local path=$1
-    (umask 077; random_hex 32 > "$path")
+    (umask 077; printf '%s' "$(random_hex 32)" > "$path")
 }
 
 component_secrets_generate() {
@@ -530,7 +530,7 @@ secrets_generate() {
     cp "$CA_DIR/sequencer.pub.hex" "$d/sequencer-public-key"
     (umask 077; encode_trust_history "$d/trust-history" "$SEQUENCER_ID" "$(cat "$CA_DIR/sequencer.pub.hex")")
     python3 "$SCRIPT_DIR/sequencer-pins.py" "$d" "$WORK_DIR/sequencer-authorization.json"
-    random_hex 32 > "$d/receipt-authority-replica-id"
+    printf '%s' "$(random_hex 32)" > "$d/receipt-authority-replica-id"
     cp "$REPO_ROOT/interop/deploy/gateway/module-registry.example.json" "$d/module-registry.json"
     (umask 077; cp "$CA_DIR/sequencer.seed.hex" "$d/node-sequencer.key")
     (umask 077; random_hex 32 > "$d/node-treasury.key")
@@ -714,7 +714,7 @@ kind: Pod
 metadata: {name: layerx-program-builder-loader, namespace: $ns, labels: {app: layerx-program-builder-loader}}
 spec:
   restartPolicy: Never
-  nodeSelector: {$BOUNDARY_LABEL: "v1"}
+  nodeSelector: {$BOUNDARY_LABEL: "v2"}
   securityContext: {runAsNonRoot: true, runAsUser: 4030, runAsGroup: 4030, fsGroup: 4030}
   containers:
     - name: loader
@@ -1419,10 +1419,10 @@ boundary_checks() {
             case "$node" in *control-plane*) continue ;; esac
             docker exec -e LAYERX_REGISTRY_MAX_BUILDS=4 -e LAYERX_REGISTRY_BUILD_QUOTA_BYTES=5368709120 -e LAYERX_REGISTRY_BUILD_QUOTA_INODES=65536 \
                 "$node" /usr/libexec/layerx/node-provision-build-boundary.sh
-            docker exec "$node" sh -c 'test "$(stat -c %u:%g /sys/fs/cgroup/layerx-program-registry)" = 4030:4030 && mountpoint -q /var/lib/layerx-program-registry-builds/slot-0'
+            docker exec "$node" sh -c 'test "$(stat -c %u:%g /var/lib/layerx-program-registry-builds/slot-0)" = 4030:4030 && mountpoint -q /var/lib/layerx-program-registry-builds/slot-0'
         done
     else
-        for node in $(kube get nodes -l "$BOUNDARY_LABEL=v1" -o name); do
+        for node in $(kube get nodes -l "$BOUNDARY_LABEL=v2" -o name); do
             kube debug "$node" --profile=sysadmin --image=busybox:1.37.0 --quiet -- chroot /host sh -c \
                 'LAYERX_REGISTRY_MAX_BUILDS=4 LAYERX_REGISTRY_BUILD_QUOTA_BYTES=5368709120 LAYERX_REGISTRY_BUILD_QUOTA_INODES=65536 /usr/libexec/layerx/node-provision-build-boundary.sh && mountpoint -q /var/lib/layerx-program-registry-builds/slot-0'
         done
@@ -1489,6 +1489,7 @@ beta_cluster_up() {
     port_forward testnet "$TESTNET_NAMESPACE" layerx-testnet-public "$TESTNET_PORT" 443
     port_forward gateway "$TESTNET_NAMESPACE" layerx-gateway "$GATEWAY_PORT" 443
     port_forward faucet "$TESTNET_NAMESPACE" layerx-faucet-public "$FAUCET_PORT" 443
+    wait_for_pod_ready "$TESTNET_NAMESPACE" app=layerx-gateway 600
     internal_principals_provision
     internal_apply
     port_forward human "$TESTNET_NAMESPACE" layerx-human 19453 9443

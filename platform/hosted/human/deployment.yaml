@@ -53,3 +53,10 @@ spec:
         - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: layerx-testnet}}
           podSelector: {matchLabels: {app: layerx-node}}
       ports: [{protocol: TCP, port: 9447}]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: layerx-human-state, namespace: layerx-testnet}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: {requests: {storage: 4Gi}}
