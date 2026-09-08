@@ -879,10 +879,10 @@ $(BUILD_DIR)/tests/test_replica_ingest: tests/test_replica_ingest.c $(LIBRARY)
 test-replica: $(BUILD_DIR)/tests/test_replica_ingest
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_replica_ingest
 
-$(BUILD_DIR)/tests/test_replica_replay: tests/test_replica_replay.c $(LIBRARY)
+$(BUILD_DIR)/tests/test_replica_replay: tests/test_replica_replay.c $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) tests/support/lxp_real_replay.h | programs-build
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(EXTRA_LDFLAGS) \
-		-lcrypto -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) $(LIBRARY) $(EXTRA_LDFLAGS) \
+		-lcrypto -pthread -ldl -lm -o $@
 
 test-replay: $(BUILD_DIR)/tests/test_replica_replay
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_replica_replay
@@ -922,10 +922,10 @@ test-wave-11: test-replica test-replay test-replica-divergence \
 		test-snapshot test-history test-replay-crossarch
 
 $(BUILD_DIR)/tests/test_guarantor_duties: \
-		tests/test_guarantor_duties.c $(LIBRARY)
+		tests/test_guarantor_duties.c $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) tests/support/lxp_real_replay.h | programs-build
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(EXTRA_LDFLAGS) \
-		-lcrypto -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) $(LIBRARY) $(EXTRA_LDFLAGS) \
+		-lcrypto -pthread -ldl -lm -o $@
 
 test-guarantor: $(BUILD_DIR)/tests/test_guarantor_duties
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_guarantor_duties
@@ -989,11 +989,11 @@ test-da-verified: $(BUILD_DIR)/tests/lxp_test_da_verified
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_da_verified
 
 $(BUILD_DIR)/tests/test_da_retrieval: tests/test_da_retrieval.c \
-		cmd/layerx-verify/lxp_verify_fetch.c $(LIBRARY)
+		cmd/layerx-verify/lxp_verify_fetch.c $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) tests/support/lxp_real_replay.h | programs-build
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) tests/test_da_retrieval.c \
-		cmd/layerx-verify/lxp_verify_fetch.c $(LIBRARY) $(EXTRA_LDFLAGS) \
-		-lcrypto -o $@
+		cmd/layerx-verify/lxp_verify_fetch.c $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) $(LIBRARY) $(EXTRA_LDFLAGS) \
+		-lcrypto -pthread -ldl -lm -o $@
 
 test-da-retrieval: $(BUILD_DIR)/tests/test_da_retrieval
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_da_retrieval
@@ -1286,10 +1286,10 @@ layerxctl:
 test-layerxctl: layerxctl
 	cargo test --locked --release --manifest-path cmd/layerxctl/Cargo.toml
 
-$(BUILD_DIR)/tests/test_tools: tests/test_tools.c $(TOOL_SOURCES) $(LIBRARY)
+$(BUILD_DIR)/tests/test_tools: tests/test_tools.c $(TOOL_SOURCES) $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) tests/support/lxp_real_replay.h | programs-build
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) tests/test_tools.c $(TOOL_SOURCES) \
-		$(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -pthread -o $@
+		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) $(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
 
 test-tools: $(BUILD_DIR)/tests/test_tools
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_tools
@@ -3265,12 +3265,12 @@ beta-qualify-focused:
 test-state-diff: $(BUILD_DIR)/tests/lxp_test_state_diff
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_state_diff
 
-$(BUILD_DIR)/tests/lxp_test_state_diff: tests/state/lxp_test_state_diff.c $(LIBRARY)
+$(BUILD_DIR)/tests/lxp_test_state_diff: tests/state/lxp_test_state_diff.c $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) $(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
 
 .PHONY: test-daemon-availability
-test-daemon-availability: $(BUILD_DIR)/tests/lxp_test_program_admission $(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build
+test-daemon-availability: $(BUILD_DIR)/tests/lxp_test_daemon_finality_authority $(BUILD_DIR)/tests/lxp_test_program_admission $(BUILD_DIR)/bin/layerxd $(BUILD_DIR)/bin/layerx-genesis-build
 	LAYERX_TEST_NATIVE_BIN_DIR="$(CURDIR)/$(BUILD_DIR)/bin" cargo test --locked \
 		--manifest-path agent/Cargo.toml -p layerx-client --test availability_daemon \
 		-- --nocapture --test-threads=1

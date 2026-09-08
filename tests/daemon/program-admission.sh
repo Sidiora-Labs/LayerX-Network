@@ -11,10 +11,10 @@ if [[ ${2:-} == --maintenance-crash ]]; then
     sequencer_binary="$root/$build_dir/tests/lxp_test_maintenance_crash"
 fi
 work=$(mktemp -d /tmp/lxp-program-admission-XXXXXX)
-replica_pid= sequencer_pid=
+replica_pid= sequencer_pid= settlement_pid=
 cleanup() {
     result=$?
-    for pid in "$sequencer_pid" "$replica_pid"; do
+    for pid in "$sequencer_pid" "$replica_pid" "$settlement_pid"; do
         if [[ -n "$pid" ]]; then kill "$pid" 2>/dev/null || true; wait "$pid" || true; fi
     done
     if [[ "$result" == 0 ]]; then rm -rf "$work"; else printf 'native admission evidence: %s\n' "$work" >&2; fi
@@ -54,11 +54,28 @@ bash platform/hosted/node/bootstrap.sh --data-dir "$work/data" --run-dir "$work/
     --lni-uid 4021 --lni-gid 4021 --program-port "$program_port" --replica-port "$replica_port" \
     --layerxd "$native_bin/layerxd" --genesis-build "$native_bin/layerx-genesis-build" \
     > "$work/bootstrap.log" 2>&1
+if [[ ${2:-} == --availability-batches ]]; then
+    mkdir "$work/availability-output"
+    chown 4021:4021 "$work/availability-output"
+    python3 tests/daemon/availability-settlement.py "$work" "$root/$build_dir/tests/lxp_test_daemon_finality_authority" > "$work/availability-settlement.log" 2>&1 &
+    settlement_pid=$!
+    for ((attempt=0; attempt<3000; attempt++)); do
+        [[ ! -f "$work/availability-chain-ready.json" ]] || break
+        kill -0 "$settlement_pid"
+        sleep 0.1
+    done
+    read -r availability_bond availability_registry availability_port < <(python3 - "$work/availability-chain-ready.json" <<'PYCHAIN'
+import json, sys
+value = json.load(open(sys.argv[1]))
+print(value['bond'], value['registry'], value['port'])
+PYCHAIN
+)
+fi
 (set -a; source "$work/data/replica.env"; export LAYERX_AUTHORITY_READY_FD="$replica_ready_fd"; exec "$native_bin/layerxd" --authority-replica "$work/data/replica.conf") > "$work/replica.log" 2>&1 &
 replica_pid=$!
 IFS= read -r -n 1 -t 20 replica_ready <&"$replica_ready_fd"
 [[ "$replica_ready" == R ]]
-(set -a; source "$work/data/sequencer.env"; exec "$sequencer_binary" --serve "$work/data/sequencer.conf") > "$work/sequencer.log" 2>&1 &
+(set -a; source "$work/data/sequencer.env"; if [[ ${2:-} == --availability-batches ]]; then export LAYERX_NODE_SETTLEMENT_CONTRACT="$availability_bond" LAYERX_NODE_CHECKPOINT_REGISTRY="$availability_registry" LAYERX_NODE_PAXEER_RPC_PORT="$availability_port"; fi; exec "$sequencer_binary" --serve "$work/data/sequencer.conf") > "$work/sequencer.log" 2>&1 &
 sequencer_pid=$!
 for ((attempt=0; attempt<200; attempt++)); do
     [[ ! -S "$work/run/layerxd.lni.sock" ]] || break
@@ -75,10 +92,19 @@ if [[ ${2:-} == --maintenance-crash ]]; then
     [[ "$result" == $((128 + $3)) ]]
     sequencer_pid=
 elif [[ ${2:-} == --availability-batches ]]; then
-    setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$work/run/layerxd.lni.sock" --availability-batches
+    setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$work/run/layerxd.lni.sock" --availability-batches > "$work/availability-activity-id"
     cp "$3" "$work/availability-test"
     chmod 0755 "$work/availability-test"
-    LAYERX_TEST_AVAILABILITY_SOCKET="$work/run/layerxd.lni.sock" LAYERX_TEST_AVAILABILITY_STAGE=retained \
+    LAYERX_TEST_AVAILABILITY_WORK="$work" LAYERX_TEST_AVAILABILITY_SOCKET="$work/run/layerxd.lni.sock" LAYERX_TEST_AVAILABILITY_STAGE=retained \
+        setpriv --reuid=4021 --regid=4021 --clear-groups "$work/availability-test" \
+        --exact real_daemon_availability_refusals --nocapture --test-threads=1
+    for ((attempt=0; attempt<3000; attempt++)); do
+        [[ ! -f "$work/availability-finality-ready" ]] || break
+        kill -0 "$settlement_pid"
+        sleep 0.1
+    done
+    [[ -f "$work/availability-finality-ready" ]]
+    LAYERX_TEST_AVAILABILITY_WORK="$work" LAYERX_TEST_AVAILABILITY_SOCKET="$work/run/layerxd.lni.sock" LAYERX_TEST_AVAILABILITY_STAGE=finalized \
         setpriv --reuid=4021 --regid=4021 --clear-groups "$work/availability-test" \
         --exact real_daemon_availability_refusals --nocapture --test-threads=1
     kill "$sequencer_pid"
@@ -91,14 +117,14 @@ with open(sys.argv[1], 'r+b') as bundle:
     bundle.flush()
     os.fsync(bundle.fileno())
 PYCORRUPT
-    (set -a; source "$work/data/sequencer.env"; exec "$sequencer_binary" --serve "$work/data/sequencer.conf") >> "$work/sequencer.log" 2>&1 &
+    (set -a; source "$work/data/sequencer.env"; if [[ ${2:-} == --availability-batches ]]; then export LAYERX_NODE_SETTLEMENT_CONTRACT="$availability_bond" LAYERX_NODE_CHECKPOINT_REGISTRY="$availability_registry" LAYERX_NODE_PAXEER_RPC_PORT="$availability_port"; fi; exec "$sequencer_binary" --serve "$work/data/sequencer.conf") >> "$work/sequencer.log" 2>&1 &
     sequencer_pid=$!
     for ((attempt=0; attempt<200; attempt++)); do
         [[ ! -S "$work/run/layerxd.lni.sock" ]] || break
         kill -0 "$sequencer_pid"
         sleep 0.1
     done
-    LAYERX_TEST_AVAILABILITY_SOCKET="$work/run/layerxd.lni.sock" LAYERX_TEST_AVAILABILITY_STAGE=corrupt \
+    LAYERX_TEST_AVAILABILITY_WORK="$work" LAYERX_TEST_AVAILABILITY_SOCKET="$work/run/layerxd.lni.sock" LAYERX_TEST_AVAILABILITY_STAGE=corrupt \
         setpriv --reuid=4021 --regid=4021 --clear-groups "$work/availability-test" \
         --exact real_daemon_availability_refusals --nocapture --test-threads=1
     exit 0
@@ -147,12 +173,12 @@ else:
     raise SystemExit('unknown marker mutation')
 PYMARKER
         result=0
-        (set -a; source "$work/data/sequencer.env"; exec "$native_bin/layerxd" --serve "$work/data/sequencer.conf") >> "$work/sequencer.log" 2>&1 || result=$?
+        (set -a; source "$work/data/sequencer.env"; if [[ ${2:-} == --availability-batches ]]; then export LAYERX_NODE_SETTLEMENT_CONTRACT="$availability_bond" LAYERX_NODE_CHECKPOINT_REGISTRY="$availability_registry" LAYERX_NODE_PAXEER_RPC_PORT="$availability_port"; fi; exec "$native_bin/layerxd" --serve "$work/data/sequencer.conf") >> "$work/sequencer.log" 2>&1 || result=$?
         [[ "$result" != 0 ]]
         rg -q 'bootstrap .* failed with result' "$work/sequencer.log"
         exit 0
     fi
-    (set -a; source "$work/data/sequencer.env"; exec "$native_bin/layerxd" --serve "$work/data/sequencer.conf") >> "$work/sequencer.log" 2>&1 &
+    (set -a; source "$work/data/sequencer.env"; if [[ ${2:-} == --availability-batches ]]; then export LAYERX_NODE_SETTLEMENT_CONTRACT="$availability_bond" LAYERX_NODE_CHECKPOINT_REGISTRY="$availability_registry" LAYERX_NODE_PAXEER_RPC_PORT="$availability_port"; fi; exec "$native_bin/layerxd" --serve "$work/data/sequencer.conf") >> "$work/sequencer.log" 2>&1 &
     sequencer_pid=$!
     python3 - "$work/run/layerxd.lni.sock" "$sequencer_pid" <<'PYWAIT'
 import os, socket, sys, time

@@ -8,6 +8,7 @@
 #include <openssl/ec.h>
 #include <openssl/obj_mac.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 typedef struct ctl_state {
@@ -130,7 +131,7 @@ int main(void)
             (lxp_byte_span){manifest, sizeof(manifest)},
             genesis_action, NULL, genesis_output) != LXP_OK ||
         memcmp(genesis_output, "LXGN\1\1", 6U) != 0)
-        return 1;
+        { (void)fprintf(stderr, "tools fixture failure at %d\n", __LINE__); return 1; }
 
     if (lxp_arena_init(
             &build_arena, build_storage,
@@ -140,20 +141,20 @@ int main(void)
             sizeof(verify_storage)) != LXP_OK ||
         lxp_real_replay_init(&builder) != 0 ||
         lxp_real_replay_init(&verifier) != 0)
-        return 1;
+        { (void)fprintf(stderr, "tools fixture failure at %d\n", __LINE__); return 1; }
     (void)memcpy(genesis_root, builder.kernel.current_state_root, 32U);
     for (i = 0U; i < 1U; ++i)
         if (lxp_real_replay_activity(&builder, i, &build_arena, &activities[i]) != 0)
-            return 1;
-    if (lxp_real_replay_build(&builder, 8U, activities, 1U, oracles, 1U,
+            { (void)fprintf(stderr, "tools fixture failure at %d\n", __LINE__); return 1; }
+    if (lxp_real_replay_build(&builder, 1U, activities, 1U, oracles, 1U,
                               &build_arena, &body) != 0)
-        return 1;
-    verifier.execution.batch_number = 8U;
+        { (void)fprintf(stderr, "tools fixture failure at %d\n", __LINE__); return 1; }
+    verifier.execution.batch_number = 1U;
     if (lxp_da_bundle_build(
             &body, LXP_DA_CANONICAL_CHUNK_BYTES, &build_arena, &bundle) != LXP_OK ||
         lxp_batch_availability_root(
             &body, &build_arena, da_root) != LXP_OK)
-        return 1;
+        { (void)fprintf(stderr, "tools fixture failure at %d\n", __LINE__); return 1; }
     (void)memcpy(body.header.data_availability_root, da_root, 32U);
     (void)memset(&checkpoint, 0, sizeof(checkpoint));
     checkpoint.header = body.header;
@@ -163,14 +164,14 @@ int main(void)
         guarantors[i].ready_to_sign = true;
         guarantors[i].possesses_availability = true;
         guarantors[i].bond_view.bonded = true;
-        guarantors[i].protocol_version = LXP_PROTOCOL_VERSION_LEGACY;
+        guarantors[i].protocol_version = body.header.protocol_version;
         guarantors[i].network_id = body.header.network_id;
         guarantors[i].paxeer_chain_id = 31337U;
         guarantors[i].paxeer_settlement_contract[0] = 0xa1U;
         if (key_pair(
                 (uint8_t)(i + 1U), guarantors[i].paxeer_private_key,
                 guarantors[i].paxeer_public_key) != 0)
-            return 1;
+            { (void)fprintf(stderr, "tools fixture failure at %d\n", __LINE__); return 1; }
         (void)memcpy(keys[i].guarantor_id,
                      guarantors[i].guarantor_id, 32U);
         (void)memcpy(keys[i].public_key,
@@ -180,12 +181,12 @@ int main(void)
                 &guarantors[i], &checkpoint, true, true,
                 2000U + i, &build_arena,
                 &attestations[i]) != LXP_OK)
-            return 1;
+            { (void)fprintf(stderr, "tools fixture failure at %d\n", __LINE__); return 1; }
     }
     if (lxp_guarantor_cert_assemble(
             &checkpoint, attestations, 2U, 2U,
             &certificate) != LXP_OK)
-        return 1;
+        { (void)fprintf(stderr, "tools fixture failure at %d\n", __LINE__); return 1; }
     run = (lxp_verify_run){
         &bundle, &body.header, &certificate, keys, 2U,
         &verifier.engine, genesis_root, &verify_arena
@@ -198,7 +199,7 @@ int main(void)
                body.header.activity_merkle_root, 32U) != 0 ||
         memcmp(verify_output + 189U,
                body.header.data_availability_root, 32U) != 0)
-        return 1;
+        { (void)fprintf(stderr, "tools fixture failure at %d\n", __LINE__); return 1; }
     ((uint8_t *)bundle.chunks[0].bytes.bytes)[0] ^= 1U;
     return lxp_verify_main(&run, verify_output) == LXP_OK ? 1 : 0;
 }

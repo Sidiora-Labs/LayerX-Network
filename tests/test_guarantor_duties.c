@@ -84,7 +84,7 @@ static lxp_result download_file(void *context, uint64_t batch_number,
     void *memory;
     int descriptor;
     ssize_t count;
-    if (batch_number != 4U) return LXP_ERR_BATCH_GAP;
+    if (batch_number != 1U) return LXP_ERR_BATCH_GAP;
     descriptor = open(source->path, O_RDONLY | O_CLOEXEC);
     if (descriptor < 0 || fstat(descriptor, &information) != 0 ||
         information.st_size <= 0 || information.st_size > INT32_MAX) {
@@ -111,7 +111,7 @@ static lxp_result store_file(void *context, uint64_t batch_number,
     const file_source *destination = (const file_source *)context;
     int descriptor;
     ssize_t count;
-    if (batch_number != 4U || body_length > INT32_MAX)
+    if (batch_number != 1U || body_length > INT32_MAX)
         return LXP_ERR_LENGTH_LIMIT;
     descriptor = open(destination->path,
                       O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
@@ -182,9 +182,9 @@ int main(void)
     (void)memcpy(oracle_item + 32U, oracle_signature, 64U);
     (void)memcpy(oracle_item + 96U, payload, sizeof(payload));
     oracle_span = (lxp_byte_span){oracle_item, sizeof(oracle_item)};
-    if (lxp_real_replay_build(&builder, 4U, &activity_item, 1U, &oracle_span, 1U,
+    if (lxp_real_replay_build(&builder, 1U, &activity_item, 1U, &oracle_span, 1U,
                               &arena, &body) != 0) goto cleanup;
-    verifier_kernel.execution.batch_number = 4U;
+    verifier_kernel.execution.batch_number = 1U;
     (void)memset(&sequencer_authorization, 0, sizeof(sequencer_authorization));
     sequencer_key = EVP_PKEY_new_raw_private_key(EVP_PKEY_ED25519, NULL,
                                                  sequencer_private, 32U);
@@ -197,8 +197,8 @@ int main(void)
                  sequencer_authorization.public_key, 32U);
     (void)memcpy(body.header.sequencer_id,
                  sequencer_authorization.sequencer_id, 32U);
-    sequencer_authorization.first_batch_number = 4U;
-    sequencer_authorization.last_batch_number = 4U;
+    sequencer_authorization.first_batch_number = 1U;
+    sequencer_authorization.last_batch_number = 1U;
     sequencer_authorization.authorized = 1U;
     if (lxp_batch_sign(&body.header, sequencer_private,
                        &sequencer_authorization, body.sequencer_signature,
@@ -213,7 +213,7 @@ int main(void)
     (void)memset(&guarantor, 0, sizeof(guarantor));
     guarantor.guarantor_id[0] = 4U;
     guarantor.paxeer_public_key[0] = 2U;
-    guarantor.protocol_version = 1U;
+    guarantor.protocol_version = body.header.protocol_version;
     guarantor.network_id = body.header.network_id;
     guarantor.bond_view.bonded = true;
     guarantor.bond_view.bonded_amount = (lxp_u128){0U, 100U};
@@ -228,7 +228,7 @@ int main(void)
     guarantor.store_availability = store_file;
     guarantor.storage_context = &destination;
     if (lxp_arena_reset(&arena, 0U) != LXP_OK ||
-        lxp_guarantor_process_batch(&guarantor, 4U, &arena, &ready) != LXP_OK ||
+        lxp_guarantor_process_batch(&guarantor, 1U, &arena, &ready) != LXP_OK ||
         !ready || !guarantor.ready_to_sign ||
         !guarantor.possesses_availability ||
         guarantor.last_completed_duty != LXP_GUARANTOR_DUTY_READY_TO_SIGN)
@@ -244,17 +244,17 @@ int main(void)
     if (lxp_state_store_destroy(&verifier_kernel.state) != LXP_OK) goto cleanup;
     (void)memset(&verifier_kernel, 0, sizeof(verifier_kernel));
     if (lxp_real_replay_init(&verifier_kernel) != 0) goto cleanup;
-    verifier_kernel.execution.batch_number = 4U;
+    verifier_kernel.execution.batch_number = 1U;
     (void)memcpy(guarantor.independent_state_root, verifier_kernel.kernel.current_state_root, 32U);
     if (lxp_arena_reset(&arena, 0U) != LXP_OK ||
-        lxp_guarantor_process_batch(&guarantor, 4U, &arena, &ready) !=
+        lxp_guarantor_process_batch(&guarantor, 1U, &arena, &ready) !=
             LXP_ERR_BAD_SIGNATURE || ready || guarantor.ready_to_sign ||
         guarantor.last_completed_duty != LXP_GUARANTOR_DUTY_DOWNLOADED)
         goto cleanup;
     verifier.reject_delegation = false;
     destination.path = directory;
     if (lxp_arena_reset(&arena, 0U) != LXP_OK ||
-        lxp_guarantor_process_batch(&guarantor, 4U, &arena, &ready) !=
+        lxp_guarantor_process_batch(&guarantor, 1U, &arena, &ready) !=
             LXP_ERR_IO || ready || guarantor.ready_to_sign ||
         guarantor.possesses_availability ||
         guarantor.last_completed_duty != LXP_GUARANTOR_DUTY_ROOTS)

@@ -4,6 +4,7 @@
 #include "layerx/lxp_kernel.h"
 #include "layerx/lxp_da.h"
 #include "layerx/programs.h"
+#include "layerx/lxp_genesis.h"
 #include "layerx/lx_asset.h"
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_hash.h"
@@ -24,6 +25,7 @@ typedef struct lxp_real_replay_fixture {
     lxp_identity_store identities;
     lx_account_registry accounts;
     lx_asset_runtime runtime;
+    lx_programs_transfer_runtime programs_runtime;
     lx_asset_record asset;
     lxp_transfer_asset_state transfer_asset;
     lxp_arena arena;
@@ -79,7 +81,7 @@ static inline int lxp_real_replay_prepare(lxp_real_replay_fixture *f, uint16_t v
     REAL_REQUIRE(lxp_state_store_init(&f->state, 1U) == LXP_OK);
     f->parameters = 1U;
     REAL_REQUIRE(lxp_kernel_create(&f->kernel, &f->state, &f->journal,
-                              &f->parameters, 0U) == LXP_OK);
+                              &f->parameters, 1U) == LXP_OK);
     REAL_REQUIRE(lxp_kernel_set_capabilities(&f->kernel, NULL,
                                         lxp_kernel_canonical_ledger_apply) == LXP_OK);
     REAL_REQUIRE(lxp_kernel_register_module(&f->kernel, lx_asset_module_iface()) == LXP_OK);
@@ -145,6 +147,7 @@ static inline int lxp_real_replay_prepare(lxp_real_replay_fixture *f, uint16_t v
     f->fees.base_fee.lo = success ? 0U : 1U;
     f->fees.multiplier_basis_points = 10000U;
     f->execution.network_id = 7U;
+    f->execution.epoch = f->kernel.epoch;
     f->execution.batch_number = 1U;
     f->execution.batch_timestamp_ms = 10U;
     f->execution.maximum_timestamp_window = 100U;
@@ -206,12 +209,73 @@ static inline lxp_result lxp_real_replay_transition(
     return status;
 }
 
+static const uint8_t fee_active_key[] = "progfee/active/v1";
+static const uint8_t fee_history_prefix[] = "progfee/history/v1/";
+static lxp_result lxp_real_seed_fee_governance(
+    lxp_kernel *kernel, const lx_programs_transfer_runtime *runtime)
+{
+    lxp_genesis_manifest manifest;
+    lx_programs_fee_genesis_parameters parameters;
+    size_t index;
+    lxp_result status;
+    if (kernel == NULL || runtime == NULL) return LXP_ERR_NON_CANONICAL;
+    (void)memset(&manifest, 0, sizeof(manifest));
+    manifest.signer_public_key[0] = 1U;
+    (void)memset(&parameters, 0, sizeof(parameters));
+    parameters.schedule = runtime->fee_schedule;
+    (void)memcpy(parameters.occupancy_asset_id,
+                 runtime->occupancy_asset_id, 32U);
+    parameters.target_occupancy_byte_batches = 3U;
+    parameters.response_denominator = 1U;
+    parameters.maximum_change_numerator = 1U;
+    parameters.maximum_change_denominator = 1U;
+    parameters.minimum_fee_units_per_occupancy_byte_batch = 1U;
+    parameters.maximum_fee_units_per_occupancy_byte_batch = 10U;
+    status = lxp_programs_fee_genesis_append(&manifest, &parameters);
+    if (status != LXP_OK) return status;
+    if (kernel->module_kv_count > LXP_KERNEL_MAX_MODULE_KV -
+                                      manifest.module_value_count)
+        return LXP_ERR_LENGTH_LIMIT;
+    for (index = 0U; index < manifest.module_value_count; ++index) {
+        const lxp_genesis_module_value *value = &manifest.module_values[index];
+        lxp_module_kv_entry *entry =
+            &kernel->module_kv[kernel->module_kv_count++];
+        size_t key_length;
+        if (memcmp(value->key, fee_active_key,
+                   sizeof(fee_active_key) - 1U) == 0)
+            key_length = sizeof(fee_active_key) - 1U;
+        else if (memcmp(value->key, fee_history_prefix,
+                        sizeof(fee_history_prefix) - 1U) == 0)
+            key_length = sizeof(fee_history_prefix) - 1U + 4U;
+        else
+            return LXP_FATAL_INVARIANT;
+        (void)memset(entry, 0, sizeof(*entry));
+        entry->module_id = value->module_id;
+        entry->key_length = (uint16_t)key_length;
+        entry->value_length = (uint32_t)value->value_length;
+        (void)memcpy(entry->key, value->key, key_length);
+        (void)memcpy(entry->value, value->value, value->value_length);
+    }
+    return LXP_OK;
+}
+
 static inline int lxp_real_replay_init(lxp_real_replay_fixture *f)
 {
-    REAL_REQUIRE(lxp_real_replay_prepare(f, LXP_PROTOCOL_VERSION_LEGACY, true) == 0);
+    REAL_REQUIRE(lxp_real_replay_prepare(f, LXP_PROTOCOL_VERSION_STATE_COMMITMENT, true) == 0);
+    f->programs_runtime.accounts = &f->accounts;
+    f->programs_runtime.assets = &f->transfer_asset;
+    f->programs_runtime.asset_count = 1U;
+    f->programs_runtime.fee_schedule = (lx_programs_fee_schedule){1U, 1U, 1U, 2U, 4U, 1U, 1U, 1U};
+    (void)memcpy(f->programs_runtime.occupancy_asset_id, f->asset.asset_id, 32U);
+    f->programs_runtime.resolve_occupancy_parameters = lxp_programs_fee_governance_resolve_runtime;
+    f->programs_runtime.occupancy_parameter_context = &f->kernel;
+    REAL_REQUIRE(lxp_kernel_register_module(&f->kernel, programs_module_registration()) == LXP_OK);
+    REAL_REQUIRE(lxp_kernel_bind_module_runtime(&f->kernel, LXP_MODULE_PROGRAMS, &f->programs_runtime) == LXP_OK);
+    REAL_REQUIRE(lxp_real_seed_fee_governance(&f->kernel, &f->programs_runtime) == LXP_OK);
+    REAL_REQUIRE(lxp_state_root(&f->kernel, f->kernel.current_state_root) == LXP_OK);
     REAL_REQUIRE(lxp_replay_engine_init(&f->engine, lxp_real_replay_parameters, f) == LXP_OK);
-    REAL_REQUIRE(lxp_replay_engine_bind_kernel(&f->engine, &f->kernel) == LXP_OK);
-    REAL_REQUIRE(lxp_replay_engine_register(&f->engine, LXP_PROTOCOL_VERSION_LEGACY,
+    REAL_REQUIRE(lxp_programs_replay_engine_bind(&f->engine, &f->kernel) == LXP_OK);
+    REAL_REQUIRE(lxp_replay_engine_register(&f->engine, LXP_PROTOCOL_VERSION_STATE_COMMITMENT,
                                              lxp_real_replay_transition) == LXP_OK);
     return 0;
 }
@@ -256,7 +320,8 @@ static inline int lxp_real_replay_build(lxp_real_replay_fixture *f,
     lxp_state_store *state = malloc(sizeof(*state));
     lx_account_registry *accounts = malloc(sizeof(*accounts));
     lxp_replay_activity_output outputs[8];
-    lxp_byte_span receipts[8], events[8];
+    lxp_byte_span receipts[9], events[8];
+    lxp_replay_activity_output maintenance;
     lxp_batch_roots roots;
     lxp_batch_header header = {0};
     size_t i;
@@ -266,12 +331,12 @@ static inline int lxp_real_replay_build(lxp_real_replay_fixture *f,
     *accounts = f->accounts;
     state->accounts = accounts;
     before->state = state;
-    header.protocol_version = LXP_PROTOCOL_VERSION_LEGACY;
+    header.protocol_version = LXP_PROTOCOL_VERSION_STATE_COMMITMENT;
     header.network_id = 7U;
     header.epoch = f->kernel.epoch;
     header.batch_number = batch;
     header.first_sequence = f->state.next_sequence;
-    header.last_sequence = header.first_sequence + count - 1U;
+    header.last_sequence = header.first_sequence + count;
     header.timestamp_ms = 10U;
     f->execution.batch_number = batch;
     (void)memcpy(header.previous_state_root, f->kernel.current_state_root, 32U);
@@ -283,15 +348,18 @@ static inline int lxp_real_replay_build(lxp_real_replay_fixture *f,
         receipts[i] = outputs[i].canonical_receipt;
         events[i] = outputs[i].canonical_events;
     }
+    REAL_REQUIRE(lxp_programs_replay_finalize(&f->kernel, &header, (uint32_t)f->parameters,
+        header.last_sequence, f->kernel.current_state_root, arena, &maintenance) == LXP_OK);
+    receipts[count] = maintenance.canonical_receipt;
     (void)memcpy(header.resulting_state_root, f->kernel.current_state_root, 32U);
     REAL_REQUIRE(lxp_batch_roots_compute(&(lxp_batch_root_inputs){activities, count,
-        receipts, count, events, count, oracles, oracle_count, NULL, 0U}, arena, &roots) == LXP_OK);
+        receipts, count + 1U, events, count, oracles, oracle_count, NULL, 0U}, arena, &roots) == LXP_OK);
     (void)memcpy(header.activity_merkle_root, roots.activity_merkle_root, 32U);
     (void)memcpy(header.receipt_merkle_root, roots.receipt_merkle_root, 32U);
     (void)memcpy(header.event_merkle_root, roots.event_merkle_root, 32U);
     (void)memcpy(header.oracle_root, roots.oracle_root, 32U);
     REAL_REQUIRE(lxp_da_body_from_kernels(&header, before, &f->kernel,
-        activities, count, receipts, count, events, count, oracles, oracle_count,
+        activities, count, receipts, count + 1U, events, count, oracles, oracle_count,
         arena, body) == LXP_OK);
     free(accounts);
     free(state);
