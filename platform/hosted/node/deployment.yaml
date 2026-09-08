@@ -24,6 +24,7 @@ spec:
     metadata: {labels: {app: layerx-node, layerx-plane: trusted-boundary}}
     spec:
       securityContext: {runAsNonRoot: true, runAsUser: 4020, runAsGroup: 4020, fsGroup: 4020}
+      shareProcessNamespace: true
       terminationGracePeriodSeconds: 60
       containers:
         - name: layerxd

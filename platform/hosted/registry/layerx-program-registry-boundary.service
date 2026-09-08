@@ -18,8 +18,8 @@ PrivateTmp=yes
 ProtectHome=yes
 ProtectSystem=strict
 ReadWritePaths=/sys/fs/cgroup /var/lib/layerx-program-registry-builds /run/lock
-CapabilityBoundingSet=CAP_SYS_ADMIN CAP_CHOWN CAP_DAC_OVERRIDE
-AmbientCapabilities=CAP_SYS_ADMIN CAP_CHOWN CAP_DAC_OVERRIDE
+CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE
+AmbientCapabilities=CAP_CHOWN CAP_DAC_OVERRIDE
 
 [Install]
 WantedBy=multi-user.target

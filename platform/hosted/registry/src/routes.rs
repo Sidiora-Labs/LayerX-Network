@@ -26,7 +26,7 @@ use sha2::{Digest as _, Sha256};
 use crate::builder::{HermeticBuilder, HermeticBuilderConfig};
 use crate::journal::{FileDeploymentJournal, QuarantinedUnit};
 use crate::mirror::{MirrorRefusal, SourceMirror};
-use crate::node_state::NodeProgramStateSource;
+use crate::node_state::{NodeProgramStateSource, ProgramStateCursor};
 use crate::program_state::FileProgramStateJournal;
 use crate::verified::{VerifiedSource, VerifiedSourceStore};
 use crate::{Authorization, Config};
@@ -123,6 +123,7 @@ impl Registrar {
             node_state: NodeProgramStateSource::connect(
                 &config.node_endpoint,
                 config.node_authorization.clone(),
+                &config.outbound_ca_der,
                 &config.receipt_authority_endpoint,
                 config.receipt_authority_authorization.clone(),
                 config.receipt_authority_replica_id,
@@ -141,8 +142,28 @@ impl Registrar {
             quarantined: Vec::new(),
         };
         registrar.rebuild()?;
+        if registrar.awaits_first_protocol_head(now)? {
+            return Ok(registrar);
+        }
         registrar.synchronize_protocol_state(None, now)?;
         Ok(registrar)
+    }
+
+    /// A registry with no registered program, no program-state cursor and no
+    /// retained head may open while the network has not yet sequenced its
+    /// first receipt; every read still refuses until a verified head exists.
+    ///
+    /// # Errors
+    /// Refuses unreadable cursors and every node refusal other than the
+    /// stale-projection answer.
+    fn awaits_first_protocol_head(&self, now: u64) -> Result<bool, String> {
+        if self.current_head.is_some()
+            || !self.registry.program_ids().is_empty()
+            || self.program_state.cursor()? != ProgramStateCursor::default()
+        {
+            return Ok(false);
+        }
+        Ok(self.node_state.current_head_or_pending(now)?.is_none())
     }
 
     /// Reports every incomplete deployment unit the journal quarantined when

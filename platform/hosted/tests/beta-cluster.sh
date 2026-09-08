@@ -331,7 +331,7 @@ random_hex() { openssl rand -hex "$1"; }
 
 write_token() {
     local path=$1
-    (umask 077; random_hex 32 > "$path")
+    (umask 077; printf '%s' "$(random_hex 32)" > "$path")
 }
 
 component_secrets_generate() {
@@ -530,7 +530,7 @@ secrets_generate() {
     cp "$CA_DIR/sequencer.pub.hex" "$d/sequencer-public-key"
     (umask 077; encode_trust_history "$d/trust-history" "$SEQUENCER_ID" "$(cat "$CA_DIR/sequencer.pub.hex")")
     python3 "$SCRIPT_DIR/sequencer-pins.py" "$d" "$WORK_DIR/sequencer-authorization.json"
-    random_hex 32 > "$d/receipt-authority-replica-id"
+    printf '%s' "$(random_hex 32)" > "$d/receipt-authority-replica-id"
     cp "$REPO_ROOT/interop/deploy/gateway/module-registry.example.json" "$d/module-registry.json"
     (umask 077; cp "$CA_DIR/sequencer.seed.hex" "$d/node-sequencer.key")
     (umask 077; random_hex 32 > "$d/node-treasury.key")
@@ -1487,6 +1487,7 @@ beta_cluster_up() {
     port_forward testnet "$TESTNET_NAMESPACE" layerx-testnet-public "$TESTNET_PORT" 443
     port_forward gateway "$TESTNET_NAMESPACE" layerx-gateway "$GATEWAY_PORT" 443
     port_forward faucet "$TESTNET_NAMESPACE" layerx-faucet-public "$FAUCET_PORT" 443
+    wait_for_pod_ready "$TESTNET_NAMESPACE" app=layerx-gateway 600
     internal_principals_provision
     internal_apply
     port_forward human "$TESTNET_NAMESPACE" layerx-human 19453 9443

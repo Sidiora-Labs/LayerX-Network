@@ -97,6 +97,8 @@ with tempfile.TemporaryDirectory(prefix='layerx-paxeer-real-') as work:
             status, data = request('POST', '/', json.dumps({'jsonrpc':'2.0', 'id':identifier, 'method':'eth_chainId', 'params':[]}))
             assert status == 200 and data['result'] == '0x7d' and data['id'] == identifier
         evm_chain_id = int(data['result'], 16)
+        run(sys.executable, str(Path(__file__).with_name('tls_shutdown.py')),
+            str(boundary_port), str(work/'ca.pem'))
         status, headers, body = raw_request('GET', '/genesis')
         assert status == 200, body
         assert headers.get_all('X-LayerX-Genesis-SHA256') == [hashlib.sha256(body).hexdigest()]
