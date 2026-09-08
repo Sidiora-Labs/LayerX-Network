@@ -96,7 +96,7 @@ spec:
       securityContext: {runAsUser: 4020, runAsGroup: 4020, fsGroup: 4020}
       containers:
         - name: kms
-          image: ghcr.io/centra-ai/layerx-internal:0.1.0
+          image: ghcr.io/sidiora-labs/layerx-internal:0.1.0
           command: [/usr/local/bin/layerx-kms]
           env:
             - {name: LAYERX_KMS_LISTEN, value: "0.0.0.0:9443"}
@@ -157,7 +157,7 @@ spec:
       securityContext: {runAsUser: 4020, runAsGroup: 4020, fsGroup: 4020}
       containers:
         - name: journeys
-          image: ghcr.io/centra-ai/layerx-internal:0.1.0
+          image: ghcr.io/sidiora-labs/layerx-internal:0.1.0
           command: [/usr/local/bin/layerx-event-source]
           env:
             - {name: LAYERX_EVENTS_LISTEN, value: "0.0.0.0:9443"}
@@ -229,7 +229,7 @@ spec:
       securityContext: {runAsUser: 4020, runAsGroup: 4020, fsGroup: 4020}
       containers:
         - name: payments
-          image: ghcr.io/centra-ai/layerx-internal:0.1.0
+          image: ghcr.io/sidiora-labs/layerx-internal:0.1.0
           command: [/usr/local/bin/layerx-event-source]
           env:
             - {name: LAYERX_EVENTS_LISTEN, value: "0.0.0.0:9443"}
@@ -301,7 +301,7 @@ spec:
       securityContext: {runAsUser: 4020, runAsGroup: 4020, fsGroup: 4020}
       containers:
         - name: approvals
-          image: ghcr.io/centra-ai/layerx-internal:0.1.0
+          image: ghcr.io/sidiora-labs/layerx-internal:0.1.0
           command: [/usr/local/bin/layerx-event-source]
           env:
             - {name: LAYERX_EVENTS_LISTEN, value: "0.0.0.0:9443"}
@@ -373,7 +373,7 @@ spec:
       securityContext: {runAsUser: 4020, runAsGroup: 4020, fsGroup: 4020}
       containers:
         - name: programs
-          image: ghcr.io/centra-ai/layerx-internal:0.1.0
+          image: ghcr.io/sidiora-labs/layerx-internal:0.1.0
           command: [/usr/local/bin/layerx-event-source]
           env:
             - {name: LAYERX_EVENTS_LISTEN, value: "0.0.0.0:9443"}

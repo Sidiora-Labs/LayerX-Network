@@ -140,7 +140,7 @@ fn seed(root: &Path) {
     );
     write(
         &root.join("modules.json"),
-        br#"{"modules":[{"module":9,"ordinals":[1,7]}]}"#,
+        br#"{"schema_version":2,"assets":[{"asset":"0202020202020202020202020202020202020202020202020202020202020202","currency":"USD","decimals":6,"symbol":"$"}],"modules":[{"module":9,"ordinals":[1,7]}]}"#,
     );
     write(
         &root.join("human.token"),
@@ -404,6 +404,7 @@ fn drive_client() {
         "human-test-token-0000000000000000000000".to_owned(),
         Duration::from_secs(5),
         1_048_576,
+        &must(fs::read(root.join("server.der"))),
     ));
     let peer = HumanPeer {
         uid: 1,
@@ -482,4 +483,58 @@ fn drive_client() {
     must(client.registry(&peer));
     write(&root.join("policy.json"), br#"{"principals":[]}"#);
     assert!(client.registry(&peer).is_err());
+}
+
+#[test]
+fn real_client_balance_context_uses_registry_and_verified_header() {
+    let root = prepare_root();
+    seed(&root);
+    let mut policy: Value = must(serde_json::from_slice(&must(fs::read(
+        root.join("policy.json"),
+    ))));
+    policy["principals"][0]["maximum_age_seconds"] = json!(315_360_000_u64);
+    write(
+        &root.join("policy.json"),
+        &must(serde_json::to_vec(&policy)),
+    );
+    let (server, address) = launch(root);
+    let mut client = must(RemoteHumanAuthority::connect(
+        &format!("https://{address}"),
+        "human-test-token-0000000000000000000000".to_owned(),
+        Duration::from_secs(5),
+        1_048_576,
+        &must(fs::read(server.root.join("server.der"))),
+    ));
+    let peer = HumanPeer {
+        uid: 1,
+        tenant: "tenant space".to_owned(),
+        principal: "principal".to_owned(),
+    };
+    let (account, asset, currency, observed_at, age, maximum_age, authorization) =
+        must(client.balance_context(&peer));
+    assert_eq!(account, [1; 32]);
+    assert_eq!(asset, [2; 32]);
+    assert_eq!(currency, "USD");
+    assert!(age <= maximum_age);
+    let fixture: Value = must(serde_json::from_str(include_str!(
+        "fixtures/real-program-deploy-receipt.json"
+    )));
+    let header = must(layerx_wire::receipt::decode_batch_header(&must(
+        hex::decode(
+            fixture["header_hex"]
+                .as_str()
+                .unwrap_or_else(|| panic!("header")),
+        ),
+    )));
+    assert_eq!(observed_at, header.timestamp_ms().to_string());
+    assert_eq!(
+        hex::encode(&authorization.public_key()),
+        fixture["sequencer_public_key_hex"]
+    );
+    write(
+        &server.root.join("modules.json"),
+        br#"{"modules":[{"module":9,"ordinals":[1,7]}]}"#,
+    );
+    assert!(client.registry(&peer).is_err());
+    assert!(client.balance_context(&peer).is_err());
 }

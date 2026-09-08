@@ -1,6 +1,11 @@
 //! KMS-backed custody for human and managed-agent signing keys.
 
+mod evm;
 mod provider;
+pub use evm::{
+    EvmAcknowledgement, EvmAction, EvmExternalSignature, EvmPlanAuthorization, EvmTransaction,
+    SendPlanAuthorization,
+};
 mod sessions;
 mod signer;
 
@@ -656,7 +661,7 @@ impl Keystore {
     ) -> Result<KeyDescriptor, CustodyError> {
         let record = self.read_record(principal, key)?;
         let binding = self.binding(principal, key, record.class)?;
-        self.require_record_binding(&binding, &record)?;
+        Self::require_record_binding(&binding, &record)?;
         let description = self
             .provider
             .describe_key(&binding, &record.provider_reference)?;
@@ -688,7 +693,7 @@ impl Keystore {
     ) -> Result<KeyDescriptor, CustodyError> {
         let record = self.read_record(principal, key)?;
         let binding = self.binding(principal, key, record.class)?;
-        self.require_record_binding(&binding, &record)?;
+        Self::require_record_binding(&binding, &record)?;
         let description = if self.provider.deployment() == ProviderDeployment::Production {
             self.provider.rotate_key_if_current(
                 &binding,
@@ -727,7 +732,7 @@ impl Keystore {
     pub fn destroy(&self, principal: &PrincipalId, key: &KeyId) -> Result<(), CustodyError> {
         let record = self.read_record(principal, key)?;
         let binding = self.binding(principal, key, record.class)?;
-        self.require_record_binding(&binding, &record)?;
+        Self::require_record_binding(&binding, &record)?;
         self.provider
             .destroy_key(&binding, &record.provider_reference)?;
         fs::remove_file(self.key_path(principal, key))?;
@@ -800,7 +805,7 @@ impl Keystore {
     ) -> Result<RemoteCustodySigner, CustodyError> {
         let record = self.read_record(principal, key)?;
         let binding = self.binding(principal, key, record.class)?;
-        self.require_record_binding(&binding, &record)?;
+        Self::require_record_binding(&binding, &record)?;
         let description = self
             .provider
             .describe_key(&binding, &record.provider_reference)?;
@@ -836,7 +841,6 @@ impl Keystore {
     }
 
     fn require_record_binding(
-        &self,
         binding: &PrincipalKeyBinding,
         record: &KeyRecord,
     ) -> Result<(), CustodyError> {
@@ -895,7 +899,7 @@ impl Keystore {
                     }
                 };
                 let binding = self.binding(&principal, &key, record.class)?;
-                if self.require_record_binding(&binding, &record).is_err() {
+                if Self::require_record_binding(&binding, &record).is_err() {
                     integrity = KeyReferenceIntegrity::Failed;
                     continue;
                 }

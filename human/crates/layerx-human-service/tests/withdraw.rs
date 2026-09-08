@@ -1,5 +1,4 @@
-#[allow(dead_code)]
-mod support;
+use layerx_human_test_support as support;
 
 mod paxeer_real {
     include!("../../layerx-paxeer-client/tests/withdraw.rs");
@@ -434,14 +433,14 @@ impl AgentBoundary for RealWithdrawalAgent {
             &material.authorised_batch,
         )
         .map_err(|_| AgentBoundaryError::CorruptResponse)?;
-        let signer = SigningKey::from_bytes(&[0x51; 32]);
+        let receipt_authority = SigningKey::from_bytes(&[0x51; 32]);
         let raw = support::raw_receipt_evidence(
             material.canonical_bytes.clone(),
-            material.authorised_batch.clone(),
+            material.authorised_batch,
             1,
-            &signer,
+            &receipt_authority,
         );
-        let verified = support::evidence_verifier(&signer)
+        let verified = support::evidence_verifier(&receipt_authority)
             .verify_receipt(&raw)
             .map_err(|_| AgentBoundaryError::CorruptResponse)?;
         self.outbox
@@ -719,6 +718,7 @@ impl Fixture {
         let agent_contract = AgentClient::daemon("/run/layerx-agentd.sock", schema.version)
             .unwrap_or_else(|error| panic!("agent SDK: {error:?}"));
         let plan = WithdrawalPlan {
+            layerx_protocol_version: 2,
             journey_id: JourneyId::new(format!("jrn_{label}"))
                 .unwrap_or_else(|error| panic!("journey id: {error}")),
             idempotency_key: [0x31; 32],

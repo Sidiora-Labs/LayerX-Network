@@ -30,6 +30,13 @@ import {Governed} from "../contracts/security/Governed.sol";
 import {UUPSNotUpgradeable} from "../contracts/security/UUPSNotUpgradeable.sol";
 
 interface IntegrationVm {
+    struct Log {
+        bytes32[] topics;
+        bytes data;
+        address emitter;
+    }
+    function recordLogs() external;
+    function getRecordedLogs() external returns (Log[] memory);
     function addr(uint256 privateKey) external returns (address);
 
     function assume(bool condition) external;
@@ -734,6 +741,54 @@ contract ContractIntegrationTest {
         address recipient = address(0x51A5);
         isolated.sweepSlashed(recipient, 2 ether);
         require(token.balanceOf(recipient) == 2 ether && isolated.slashedBalance() == 0, "slash sweep not conserved");
+    }
+
+    function testDepositRootPublicationAuthorizationDigestEventAndDuplicate() public {
+        _prepareSettlement(1_000_000_000);
+        bytes32 stateRoot = keccak256("registration-state");
+        (bytes32 checkpoint,,) = _registerCheckpoint(stateRoot);
+        bytes32 root = keccak256("deposit-root");
+        bytes memory registration = abi.encodePacked(
+            "LX:PAXEER:DEPOSIT:ROOT:v1",
+            checkpoint,
+            stateRoot,
+            root,
+            keccak256("custody-reference"),
+            checkpointRegistry.networkId(),
+            checkpointRegistry.protocolVersion()
+        );
+        bytes memory signature = new bytes(64);
+        bytes32[] memory ordering = new bytes32[](1);
+        ordering[0] = root;
+        vm.prank(address(0x1234));
+        vm.expectPartialRevert(LayerXVault.DepositRootProposerOnly.selector);
+        vault.registerDepositRoot(registration, signature, ordering);
+        vm.expectPartialRevert(LayerXVault.InvalidDepositRoot.selector);
+        vault.registerDepositRoot(registration, new bytes(63), ordering);
+        vm.expectPartialRevert(LayerXVault.InvalidDepositRoot.selector);
+        vault.registerDepositRoot(registration, signature, new bytes32[](0));
+        vm.recordLogs();
+        vault.registerDepositRoot(registration, signature, ordering);
+        IntegrationVm.Log[] memory logs = vm.getRecordedLogs();
+        bytes32 digest = sha256(abi.encode(uint16(1), registration, signature, ordering));
+        require(vault.depositRegistrationDigest(checkpoint) == digest, "registration digest");
+        require(logs.length == 1 && logs[0].emitter == address(vault), "registration emitter");
+        require(
+            logs[0].topics.length == 3 && logs[0].topics[1] == checkpoint && logs[0].topics[2] == root,
+            "registration topics"
+        );
+        require(
+            logs[0].topics[0] == keccak256("DepositRootRegistered(bytes32,bytes32,bytes32,uint16)"),
+            "registration signature"
+        );
+        require(keccak256(logs[0].data) == keccak256(abi.encode(digest, uint16(1))), "registration data");
+        signature[0] = 0x01;
+        require(digest != sha256(abi.encode(uint16(1), registration, signature, ordering)), "signature binding");
+        signature[0] = 0x00;
+        ordering[0] = keccak256("another-leaf");
+        require(digest != sha256(abi.encode(uint16(1), registration, signature, ordering)), "ordering binding");
+        vm.expectPartialRevert(LayerXVault.DepositRootAlreadyRegistered.selector);
+        vault.registerDepositRoot(registration, signature, ordering);
     }
 
     function _prepareSettlement(uint256 custody) private {

@@ -17,7 +17,7 @@ durable observe adapter behind `journeys`, `payments`, `approvals`, and
 `platform/hosted/internal/Cargo.toml:11-17`;
 `platform/hosted/internal/src/lib.rs:21-23`).
 
-The image is `ghcr.io/centra-ai/layerx-internal:0.1.0`, user
+The image is `ghcr.io/sidiora-labs/layerx-internal:0.1.0`, user
 `4020:4020`. The build produces both binaries. The image `ENTRYPOINT`
 is `/usr/local/bin/layerx-kms`; event-source Deployments set
 `command: [/usr/local/bin/layerx-event-source]`

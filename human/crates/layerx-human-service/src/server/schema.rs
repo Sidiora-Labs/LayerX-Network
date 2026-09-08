@@ -175,7 +175,7 @@ impl ApiSchema {
     pub fn v1() -> Result<Self, SchemaError> {
         let mut all_sections = Vec::new();
         for (file, source) in SCHEMA_FILES {
-            all_sections.push((file.to_string(), parse_sections(file, source)?));
+            all_sections.push(((*file).to_owned(), parse_sections(file, source)?));
         }
         let v1 = all_sections
             .first()
@@ -197,65 +197,7 @@ impl ApiSchema {
                 "the executable schema files do not match v1.kvx includes",
             ));
         }
-        let mut types = BTreeMap::new();
-        types.insert(
-            "string".to_owned(),
-            TypeDeclaration::Scalar {
-                prefix: None,
-                format: None,
-            },
-        );
-        for (file, sections) in &all_sections {
-            for (section, values) in sections {
-                if let Some(name) = section.strip_prefix("scalar.") {
-                    insert_type(
-                        &mut types,
-                        name,
-                        TypeDeclaration::Scalar {
-                            prefix: quoted(values.get("prefix")),
-                            format: quoted(values.get("format")),
-                        },
-                    )?;
-                } else if let Some(name) = section.strip_prefix("type.") {
-                    if let Some(variants) = values.get("variants") {
-                        insert_type(
-                            &mut types,
-                            name,
-                            TypeDeclaration::Variants(parse_list(variants)?.into_iter().collect()),
-                        )?;
-                    } else {
-                        insert_type(
-                            &mut types,
-                            name,
-                            TypeDeclaration::Record(record_fields(
-                                file, section, values, "required",
-                            )?),
-                        )?;
-                    }
-                } else if let Some(name) = section.strip_prefix("record.") {
-                    insert_type(
-                        &mut types,
-                        name,
-                        TypeDeclaration::Record(record_fields(file, section, values, "fields")?),
-                    )?;
-                }
-            }
-        }
-        for (type_name, declaration) in &types {
-            let TypeDeclaration::Record(fields) = declaration else {
-                continue;
-            };
-            for field in fields {
-                if !matches!(field.type_name.as_str(), "boolean" | "integer" | "object")
-                    && !types.contains_key(&field.type_name)
-                {
-                    return Err(SchemaError::new(format!(
-                        "{type_name}.{} references undeclared type {}",
-                        field.name, field.type_name
-                    )));
-                }
-            }
-        }
+        let types = embedded_types(&all_sections)?;
         let mut operations = Vec::new();
         for (file, sections) in &all_sections {
             for (section, values) in sections {
@@ -297,8 +239,7 @@ impl ApiSchema {
                     || !types.contains_key(&operation.response)
                 {
                     return Err(SchemaError::new(format!(
-                        "{}.{} references an undeclared request or response type",
-                        file, section
+                        "{file}.{section} references an undeclared request or response type"
                     )));
                 }
                 if operations.iter().any(|existing: &Operation| {
@@ -306,8 +247,7 @@ impl ApiSchema {
                         || (existing.method == operation.method && existing.path == operation.path)
                 }) {
                     return Err(SchemaError::new(format!(
-                        "{}.{} duplicates an operation name or route",
-                        file, section
+                        "{file}.{section} duplicates an operation name or route"
                     )));
                 }
                 operations.push(operation);
@@ -438,53 +378,7 @@ impl ApiSchema {
             .ok_or_else(|| SchemaError::at(at, format!("references unknown type {type_name}")))?;
         match declaration {
             TypeDeclaration::Scalar { prefix, format } => {
-                let text = value
-                    .as_str()
-                    .ok_or_else(|| SchemaError::at(at, format!("must be a {type_name} string")))?;
-                if prefix.as_ref().is_some_and(|required| {
-                    !text.starts_with(required) || text.len() == required.len()
-                }) {
-                    return Err(SchemaError::at(
-                        at,
-                        format!("must carry the {type_name} prefix"),
-                    ));
-                }
-                match format.as_deref() {
-                    Some("decimal")
-                        if text.is_empty() || !text.bytes().all(|byte| byte.is_ascii_digit()) =>
-                    {
-                        return Err(SchemaError::at(at, "must be a decimal base-unit string"));
-                    }
-                    Some("currency")
-                        if text.is_empty()
-                            || !text
-                                .bytes()
-                                .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit()) =>
-                    {
-                        return Err(SchemaError::at(at, "must be an uppercase currency code"));
-                    }
-                    Some("rfc3339-utc")
-                        if text.len() < 20
-                            || !text.ends_with('Z')
-                            || text.as_bytes().get(4) != Some(&b'-')
-                            || text.as_bytes().get(7) != Some(&b'-')
-                            || text.as_bytes().get(10) != Some(&b'T') =>
-                    {
-                        return Err(SchemaError::at(at, "must be an RFC 3339 UTC timestamp"));
-                    }
-                    Some("copy-key")
-                        if text.is_empty()
-                            || !text.bytes().all(|byte| {
-                                byte.is_ascii_lowercase()
-                                    || byte.is_ascii_digit()
-                                    || matches!(byte, b'.' | b'_' | b'-')
-                            }) =>
-                    {
-                        return Err(SchemaError::at(at, "must be a copy-catalog key"));
-                    }
-                    _ => {}
-                }
-                Ok(())
+                validate_scalar(prefix.as_deref(), format.as_deref(), type_name, value, at)
             }
             TypeDeclaration::Variants(variants) => {
                 let variant = value
@@ -576,11 +470,8 @@ fn enforce_verified_balance(balance: &Value) -> Result<(), SchemaError> {
             let level = entry.get("verification").and_then(Value::as_str);
             match verification {
                 "receipt-verified" => {
-                    matches!(class, Some("layerx-receipt") | Some("checkpoint-proof"))
-                        && matches!(
-                            level,
-                            Some("receipt-verified") | Some("checkpoint-finalised")
-                        )
+                    matches!(class, Some("layerx-receipt" | "checkpoint-proof"))
+                        && matches!(level, Some("receipt-verified" | "checkpoint-finalised"))
                 }
                 "checkpoint-finalised" => {
                     class == Some("checkpoint-proof") && level == Some("checkpoint-finalised")
@@ -613,7 +504,7 @@ fn parse_sections(
             .strip_prefix('[')
             .and_then(|value| value.strip_suffix(']'))
         {
-            current = section.to_owned();
+            section.clone_into(&mut current);
             sections.entry(current.clone()).or_default();
             continue;
         }
@@ -848,3 +739,120 @@ impl Display for SchemaError {
 }
 
 impl std::error::Error for SchemaError {}
+
+type SchemaSections = BTreeMap<String, BTreeMap<String, String>>;
+
+fn embedded_types(
+    all_sections: &[(String, SchemaSections)],
+) -> Result<BTreeMap<String, TypeDeclaration>, SchemaError> {
+    let mut types = BTreeMap::new();
+    types.insert(
+        "string".to_owned(),
+        TypeDeclaration::Scalar {
+            prefix: None,
+            format: None,
+        },
+    );
+    for (file, sections) in all_sections {
+        for (section, values) in sections {
+            if let Some(name) = section.strip_prefix("scalar.") {
+                insert_type(
+                    &mut types,
+                    name,
+                    TypeDeclaration::Scalar {
+                        prefix: quoted(values.get("prefix")),
+                        format: quoted(values.get("format")),
+                    },
+                )?;
+            } else if let Some(name) = section.strip_prefix("type.") {
+                if let Some(variants) = values.get("variants") {
+                    insert_type(
+                        &mut types,
+                        name,
+                        TypeDeclaration::Variants(parse_list(variants)?.into_iter().collect()),
+                    )?;
+                } else {
+                    insert_type(
+                        &mut types,
+                        name,
+                        TypeDeclaration::Record(record_fields(file, section, values, "required")?),
+                    )?;
+                }
+            } else if let Some(name) = section.strip_prefix("record.") {
+                insert_type(
+                    &mut types,
+                    name,
+                    TypeDeclaration::Record(record_fields(file, section, values, "fields")?),
+                )?;
+            }
+        }
+    }
+    for (type_name, declaration) in &types {
+        let TypeDeclaration::Record(fields) = declaration else {
+            continue;
+        };
+        for field in fields {
+            if !matches!(field.type_name.as_str(), "boolean" | "integer" | "object")
+                && !types.contains_key(&field.type_name)
+            {
+                return Err(SchemaError::new(format!(
+                    "{type_name}.{} references undeclared type {}",
+                    field.name, field.type_name
+                )));
+            }
+        }
+    }
+    Ok(types)
+}
+
+fn validate_scalar(
+    prefix: Option<&str>,
+    format: Option<&str>,
+    type_name: &str,
+    value: &Value,
+    at: &str,
+) -> Result<(), SchemaError> {
+    let text = value
+        .as_str()
+        .ok_or_else(|| SchemaError::at(at, format!("must be a {type_name} string")))?;
+    if prefix.is_some_and(|required| !text.starts_with(required) || text.len() == required.len()) {
+        return Err(SchemaError::at(
+            at,
+            format!("must carry the {type_name} prefix"),
+        ));
+    }
+    match format {
+        Some("decimal") if text.is_empty() || !text.bytes().all(|byte| byte.is_ascii_digit()) => {
+            return Err(SchemaError::at(at, "must be a decimal base-unit string"));
+        }
+        Some("currency")
+            if text.is_empty()
+                || !text
+                    .bytes()
+                    .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit()) =>
+        {
+            return Err(SchemaError::at(at, "must be an uppercase currency code"));
+        }
+        Some("rfc3339-utc")
+            if text.len() < 20
+                || !text.ends_with('Z')
+                || text.as_bytes().get(4) != Some(&b'-')
+                || text.as_bytes().get(7) != Some(&b'-')
+                || text.as_bytes().get(10) != Some(&b'T') =>
+        {
+            return Err(SchemaError::at(at, "must be an RFC 3339 UTC timestamp"));
+        }
+        Some("copy-key")
+            if text.is_empty()
+                || !text.bytes().all(|byte| {
+                    byte.is_ascii_lowercase()
+                        || byte.is_ascii_digit()
+                        || matches!(byte, b'.' | b'_' | b'-')
+                }) =>
+        {
+            return Err(SchemaError::at(at, "must be a copy-catalog key"));
+        }
+        _ => {}
+    }
+    Ok(())
+}

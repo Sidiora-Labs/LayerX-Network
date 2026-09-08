@@ -32,6 +32,12 @@ use super::poll_once_ready;
 const PREPARE_DOMAIN: &[u8] = b"layerx-human-journey-prepare/v1";
 const SUBMIT_DOMAIN: &[u8] = b"layerx-human-journey-submit/v1";
 
+#[derive(Clone, Copy)]
+pub struct CreationBounds {
+    pub timestamp_span: u64,
+    pub fee_limit: u128,
+}
+
 pub struct ProductionAgentCreation<'a> {
     runtime: &'a mut AgentRuntime,
     client: &'a Client,
@@ -46,6 +52,10 @@ pub struct ProductionAgentCreation<'a> {
 }
 
 impl<'a> ProductionAgentCreation<'a> {
+    ///
+    /// # Errors
+    ///
+    /// Refuses invalid protocol evidence, custody authorization, or unavailable agent state.
     pub fn new(
         runtime: &'a mut AgentRuntime,
         client: &'a Client,
@@ -53,9 +63,12 @@ impl<'a> ProductionAgentCreation<'a> {
         trace: &'a TraceId,
         actor: AgentDid,
         authority: AuthorityRef,
-        timestamp_span: u64,
-        fee_limit: u128,
+        bounds: CreationBounds,
     ) -> Result<Self, AgentFailure> {
+        let CreationBounds {
+            timestamp_span,
+            fee_limit,
+        } = bounds;
         if timestamp_span == 0 {
             return Err(AgentFailure::Refused("invalid creation preparation bounds"));
         }
@@ -73,6 +86,10 @@ impl<'a> ProductionAgentCreation<'a> {
         })
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Refuses invalid protocol evidence, custody authorization, or unavailable agent state.
     pub fn take_latest_session_credential(&mut self) -> Result<([u8; 32], u64), AgentFailure> {
         self.latest_session_credential
             .take()
@@ -80,11 +97,10 @@ impl<'a> ProductionAgentCreation<'a> {
             .ok_or(AgentFailure::Refused("session token was not provisioned"))
     }
 
-    fn submit_scoped(
+    fn prepare_action(
         &mut self,
-        scope: &mut PrincipalScope<'_>,
-        action: ProtocolAction,
-    ) -> Result<ProtocolEvidence, AgentFailure> {
+        action: &ProtocolAction,
+    ) -> Result<crate::journeys::AgentPreparation, AgentFailure> {
         let account_sequence = self
             .runtime
             .account_sequence(&self.actor, &self.authority)
@@ -139,6 +155,15 @@ impl<'a> ProductionAgentCreation<'a> {
                 "agent preparation differs from creation intent",
             ));
         }
+        Ok(prepared)
+    }
+
+    fn submit_scoped(
+        &mut self,
+        scope: &mut PrincipalScope<'_>,
+        action: &ProtocolAction,
+    ) -> Result<ProtocolEvidence, AgentFailure> {
+        let prepared = self.prepare_action(action)?;
         let principal = scope.principal().clone();
         let descriptor = self
             .custody
@@ -220,6 +245,10 @@ impl<'a> ProductionAgentCreation<'a> {
         })
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Refuses invalid protocol evidence, custody authorization, or unavailable agent state.
     pub fn submit_lifecycle_intent(
         &mut self,
         scope: &mut PrincipalScope<'_>,
@@ -235,7 +264,7 @@ impl<'a> ProductionAgentCreation<'a> {
             .map_err(|_| AgentFailure::Refused("lifecycle disclosure did not match"))?;
         self.submit_scoped(
             scope,
-            ProtocolAction {
+            &ProtocolAction {
                 stage: CreationStage::BudgetCreation,
                 action_key,
                 intent,
@@ -247,6 +276,10 @@ impl<'a> ProductionAgentCreation<'a> {
         )
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Refuses invalid protocol evidence, custody authorization, or unavailable agent state.
     pub fn finalization_evidence(
         evidence: &ProtocolEvidence,
         expected_module: layerx_types::payload::ModuleId,
@@ -287,6 +320,10 @@ impl<'a> ProductionAgentCreation<'a> {
         })
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Refuses invalid protocol evidence, custody authorization, or unavailable agent state.
     pub fn publish_creation(
         &mut self,
         projection: &CreationProjection,
@@ -358,6 +395,42 @@ impl<'a> ProductionAgentCreation<'a> {
     }
 }
 
+impl ProductionAgentCreation<'_> {
+    fn install_session_owner(
+        &mut self,
+        install: &AgentOwnerInstall,
+        action_key: [u8; 32],
+        grant_id: [u8; 32],
+        finalization: &super::agent_runtime::AgentFinalizationEvidence,
+    ) -> Result<AgentEvidence, AgentFailure> {
+        let body = install.body_digest().map_err(map_boundary)?;
+        let mut request_id = [0_u8; 8];
+        request_id.copy_from_slice(&action_key[..8]);
+        let installed = self
+            .runtime
+            .owner_install(u64::from_be_bytes(request_id), action_key, body, install)
+            .map_err(map_boundary)?;
+        if installed.session_id != install.session_id
+            || installed.observed_head_sequence < finalization.observed_sequence
+        {
+            return Err(AgentFailure::Refused(
+                "owner installation evidence differs from protocol grant",
+            ));
+        }
+        self.latest_session_credential = Some((
+            zeroize::Zeroizing::new(installed.token_id.expose()),
+            installed.generation,
+        ));
+        Ok(AgentEvidence {
+            action_key,
+            object_id: grant_id,
+            observed_sequence: installed.observed_head_sequence,
+            verification_level: VerificationLevel::CHECKPOINT_FINALISED,
+            receipt_digest: finalization.receipt_digest,
+        })
+    }
+}
+
 impl AgentCreationContract for ProductionAgentCreation<'_> {
     fn submit_protocol(
         &mut self,
@@ -379,9 +452,8 @@ impl AgentCreationContract for ProductionAgentCreation<'_> {
 
     fn narrow_capability(
         &mut self,
-        _request: CapabilityProvision,
+        request: CapabilityProvision,
     ) -> Result<AgentEvidence, AgentFailure> {
-        let request = _request;
         let agent = std::str::from_utf8(request.did.as_bytes())
             .map_err(|_| AgentFailure::Refused("agent DID is not textual"))?
             .to_owned();
@@ -441,7 +513,7 @@ impl ScopedAgentCreationContract for ProductionAgentCreation<'_> {
         scope: &mut PrincipalScope<'_>,
         action: ProtocolAction,
     ) -> Result<ProtocolEvidence, AgentFailure> {
-        self.submit_scoped(scope, action)
+        self.submit_scoped(scope, &action)
     }
 
     fn provision_session_scoped(
@@ -537,36 +609,7 @@ impl ScopedAgentCreationContract for ProductionAgentCreation<'_> {
             policy_version: self.authority.as_str().to_owned(),
             lifecycle: None,
         };
-        let body = install.body_digest().map_err(map_boundary)?;
-        let mut request_id = [0_u8; 8];
-        request_id.copy_from_slice(&request.action_key[..8]);
-        let installed = self
-            .runtime
-            .owner_install(
-                u64::from_be_bytes(request_id),
-                request.action_key,
-                body,
-                &install,
-            )
-            .map_err(map_boundary)?;
-        if installed.session_id != install.session_id
-            || installed.observed_head_sequence < finalization.observed_sequence
-        {
-            return Err(AgentFailure::Refused(
-                "owner installation evidence differs from protocol grant",
-            ));
-        }
-        self.latest_session_credential = Some((
-            zeroize::Zeroizing::new(installed.token_id.expose()),
-            installed.generation,
-        ));
-        Ok(AgentEvidence {
-            action_key: request.action_key,
-            object_id: issued.grant_id,
-            observed_sequence: installed.observed_head_sequence,
-            verification_level: VerificationLevel::CHECKPOINT_FINALISED,
-            receipt_digest: finalization.receipt_digest,
-        })
+        self.install_session_owner(&install, request.action_key, issued.grant_id, &finalization)
     }
 }
 

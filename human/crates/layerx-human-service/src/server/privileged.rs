@@ -53,6 +53,8 @@ pub struct AuthorizedSession<'credential> {
 
 /// Concrete service ownership behind the privileged component process.
 pub trait PrivilegedHumanServices: Send + 'static {
+    /// # Errors
+    /// Refuses invalid public requests or unavailable execution dependencies.
     fn execute_public(
         &mut self,
         store: &mut PrincipalStore,
@@ -61,6 +63,8 @@ pub trait PrivilegedHumanServices: Send + 'static {
         now: u64,
     ) -> Result<BackendResponse, ApiFailure>;
 
+    /// # Errors
+    /// Refuses unauthorized requests or rejected operation execution.
     fn execute_authorized(
         &mut self,
         scope: &mut PrincipalScope<'_>,
@@ -70,6 +74,8 @@ pub trait PrivilegedHumanServices: Send + 'static {
         now: u64,
     ) -> Result<BackendResponse, ApiFailure>;
 
+    /// # Errors
+    /// Refuses unavailable readiness dependencies.
     fn readiness(&mut self, store: &mut PrincipalStore, now: u64) -> Result<Readiness, ApiFailure>;
 }
 
@@ -110,6 +116,8 @@ impl Drop for AuthorizationGrant {
 }
 
 impl<S: PrivilegedHumanServices> PrivilegedHumanComponents<S> {
+    /// # Errors
+    /// Refuses invalid authorization policy.
     pub fn new(
         store: PrincipalStore,
         passkeys: Passkeys,
@@ -141,9 +149,9 @@ impl<S: PrivilegedHumanServices> HumanApiComponents for PrivilegedHumanComponent
         let now = unix_seconds()?;
         let mut state = self.state.lock().map_err(|_| ApiFailure::unavailable())?;
         let passkeys = state.passkeys.clone();
-        let principal = passkeys
-            .principal_for_token(credentials.access_token, state.store.tenancy())
-            .map_err(map_auth_error)?;
+        let principal =
+            Passkeys::principal_for_token(credentials.access_token, state.store.tenancy())
+                .map_err(|error| map_auth_error(&error))?;
         let mut scope = state
             .store
             .principal(&principal)
@@ -151,9 +159,8 @@ impl<S: PrivilegedHumanServices> HumanApiComponents for PrivilegedHumanComponent
         let tenant = scope.tenant().clone();
         let session = if credentials.refresh {
             let csrf = credentials.csrf_token.ok_or_else(ApiFailure::forbidden)?;
-            passkeys
-                .authorize_refresh(&scope, credentials.access_token, csrf, now)
-                .map_err(map_auth_error)?
+            Passkeys::authorize_refresh(&scope, credentials.access_token, csrf, now)
+                .map_err(|error| map_auth_error(&error))?
         } else {
             let operation_class = if operation.mutates() {
                 OperationClass::Mutation
@@ -173,7 +180,7 @@ impl<S: PrivilegedHumanServices> HumanApiComponents for PrivilegedHumanComponent
                     },
                     now,
                 )
-                .map_err(map_auth_error)?
+                .map_err(|error| map_auth_error(&error))?
             {
                 AccessDecision::Authorized(session) => session,
                 AccessDecision::Reauthenticate { .. } => return Err(ApiFailure::session_expired()),
@@ -265,9 +272,8 @@ impl<S: PrivilegedHumanServices> HumanApiComponents for PrivilegedHumanComponent
                 .csrf_token
                 .as_deref()
                 .ok_or_else(ApiFailure::forbidden)?;
-            passkeys
-                .authorize_refresh(&scope, &grant.token, csrf, now)
-                .map_err(map_auth_error)?
+            Passkeys::authorize_refresh(&scope, &grant.token, csrf, now)
+                .map_err(|error| map_auth_error(&error))?
         } else {
             let operation_class = if request.operation.mutates() {
                 OperationClass::Mutation
@@ -287,7 +293,7 @@ impl<S: PrivilegedHumanServices> HumanApiComponents for PrivilegedHumanComponent
                     },
                     now,
                 )
-                .map_err(map_auth_error)?
+                .map_err(|error| map_auth_error(&error))?
             {
                 AccessDecision::Authorized(session) => session,
                 AccessDecision::Reauthenticate { .. } => return Err(ApiFailure::session_expired()),
@@ -335,7 +341,7 @@ fn unix_seconds() -> Result<u64, ApiFailure> {
         .map(|duration| duration.as_secs())
 }
 
-pub(super) fn map_auth_error(error: AuthError) -> ApiFailure {
+pub(super) fn map_auth_error(error: &AuthError) -> ApiFailure {
     match error {
         AuthError::Unauthenticated | AuthError::SessionNotFound => ApiFailure::unauthenticated(),
         AuthError::SessionExpired => ApiFailure::session_expired(),

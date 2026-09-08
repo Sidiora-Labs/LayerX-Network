@@ -145,6 +145,8 @@ impl AgentSessionToken {
 }
 pub struct AgentSessionSeed(Zeroizing<[u8; 32]>);
 impl AgentSessionSeed {
+    /// # Errors
+    /// Refuses a zero session seed.
     pub fn new(seed: [u8; 32]) -> Result<Self, AgentBoundaryError> {
         if seed == [0; 32] {
             Err(AgentBoundaryError::Refused)
@@ -355,6 +357,8 @@ pub struct AgentSessionObservation {
 }
 
 impl AgentOwnerInstall {
+    /// # Errors
+    /// Refuses fields or collections exceeding the canonical encoding bounds.
     pub fn body_digest(&self) -> Result<[u8; 32], AgentBoundaryError> {
         let mut digest = sha2::Sha256::new();
         digest.update(b"layerx-human-owner-install/v2");
@@ -400,6 +404,8 @@ impl AgentOwnerInstall {
     }
 }
 impl AgentLifecycleSeed {
+    /// # Errors
+    /// Refuses fields or collections exceeding the canonical encoding bounds.
     pub fn body_digest(&self) -> Result<[u8; 32], AgentBoundaryError> {
         let mut wire = Writer::new(0);
         encode_lifecycle(&mut wire, self)?;
@@ -512,6 +518,8 @@ fn digest_lifecycle(
 }
 
 impl AgentRuntime {
+    /// # Errors
+    /// Returns a boundary refusal for invalid request fields, an unavailable transport, or a malformed response.
     pub fn publish_lifecycle(
         &mut self,
         request_id: u64,
@@ -525,12 +533,14 @@ impl AgentRuntime {
         let tag = writer.0.len();
         encode_lifecycle(&mut writer, seed)?;
         writer.0.remove(tag);
-        let mut reader = self.exchange(writer.finish())?;
+        let mut reader = self.exchange(&writer.finish())?;
         if reader.u8()? != 1 {
             return Err(AgentBoundaryError::CorruptResponse);
         }
         reader.finish()
     }
+    /// # Errors
+    /// Returns a boundary refusal for invalid request fields, an unavailable transport, or a malformed response.
     pub fn capability_install(
         &mut self,
         request: &AgentCapabilityInstall,
@@ -576,15 +586,14 @@ impl AgentRuntime {
             writer.text(value)?;
         }
         writer.u64(request.expiry_sequence);
-        let mut reader = self.exchange(writer.finish())?;
+        let mut reader = self.exchange(&writer.finish())?;
         let object_id = reader.fixed()?;
         let observed_sequence = reader.u64()?;
         let verification = reader.u8()?;
         let receipt_digest = reader.fixed()?;
         if object_id != request.capability_id
             || observed_sequence == 0
-            || verification < 2
-            || verification > 5
+            || !(2..=5).contains(&verification)
             || receipt_digest == [0; 32]
         {
             return Err(AgentBoundaryError::CorruptResponse);
@@ -592,6 +601,8 @@ impl AgentRuntime {
         reader.finish()?;
         Ok((object_id, observed_sequence, verification, receipt_digest))
     }
+    /// # Errors
+    /// Returns a boundary refusal for invalid request fields, an unavailable transport, or a malformed response.
     pub fn agent_list(
         &mut self,
         cursor: Option<[u8; 32]>,
@@ -609,7 +620,7 @@ impl AgentRuntime {
             None => writer.u8(0),
         }
         writer.u8(limit);
-        let mut reader = self.exchange(writer.finish())?;
+        let mut reader = self.exchange(&writer.finish())?;
         let count = usize::from(reader.u8()?);
         if count > usize::from(limit) {
             return Err(AgentBoundaryError::CorruptResponse);
@@ -629,21 +640,25 @@ impl AgentRuntime {
             next_cursor,
         })
     }
+    /// # Errors
+    /// Returns a boundary refusal for invalid request fields, an unavailable transport, or a malformed response.
     pub fn agent_get(&mut self, agent_id: &str) -> Result<ManagedAgentView, AgentBoundaryError> {
         let mut writer = Writer::new(AGENT_GET);
         writer.text(agent_id)?;
-        let mut reader = self.exchange(writer.finish())?;
+        let mut reader = self.exchange(&writer.finish())?;
         let value = decode_managed_agent(&mut reader)?;
         reader.finish()?;
         Ok(value)
     }
+    /// # Errors
+    /// Returns a boundary refusal for invalid request fields, an unavailable transport, or a malformed response.
     pub fn agent_context(
         &mut self,
         agent_id: &str,
     ) -> Result<AgentLifecycleContext, AgentBoundaryError> {
         let mut writer = Writer::new(AGENT_CONTEXT);
         writer.text(agent_id)?;
-        let mut reader = self.exchange(writer.finish())?;
+        let mut reader = self.exchange(&writer.finish())?;
         let seed = decode_lifecycle(&mut reader)?;
         let value = AgentLifecycleContext {
             seed,
@@ -672,6 +687,8 @@ impl AgentRuntime {
         reader.finish()?;
         Ok(value)
     }
+    /// # Errors
+    /// Returns a boundary refusal for invalid request fields, an unavailable transport, or a malformed response.
     pub fn agent_budget_state(
         &mut self,
         active_budget_id: [u8; 32],
@@ -681,7 +698,7 @@ impl AgentRuntime {
         }
         let mut writer = Writer::new(AGENT_BUDGET_STATE);
         writer.fixed(&active_budget_id);
-        let mut reader = self.exchange(writer.finish())?;
+        let mut reader = self.exchange(&writer.finish())?;
         let value = AgentBudgetState {
             active_budget_id: reader.fixed()?,
             revocation_sequence: reader.u64()?,
@@ -711,6 +728,8 @@ impl AgentRuntime {
         reader.finish()?;
         Ok(value)
     }
+    /// # Errors
+    /// Returns a boundary refusal for invalid request fields, an unavailable transport, or a malformed response.
     pub fn agent_key_policy(
         &mut self,
         agent_did: &str,
@@ -719,7 +738,7 @@ impl AgentRuntime {
         let mut writer = Writer::new(AGENT_KEY_POLICY);
         writer.text(agent_did)?;
         writer.u8(u8::from(recovery));
-        let mut reader = self.exchange(writer.finish())?;
+        let mut reader = self.exchange(&writer.finish())?;
         let value = AgentKeyPolicy {
             agent_did: reader.text()?,
             recovery: match reader.u8()? {
@@ -756,13 +775,15 @@ impl AgentRuntime {
         reader.finish()?;
         Ok(value)
     }
+    /// # Errors
+    /// Returns a boundary refusal for invalid request fields, an unavailable transport, or a malformed response.
     pub fn agent_session_snapshot(
         &mut self,
         agent_id: &str,
     ) -> Result<AgentSessionSnapshot, AgentBoundaryError> {
         let mut writer = Writer::new(AGENT_SESSION_SNAPSHOT);
         writer.text(agent_id)?;
-        let mut reader = self.exchange(writer.finish())?;
+        let mut reader = self.exchange(&writer.finish())?;
         let value = AgentSessionSnapshot {
             agent_id: reader.text()?,
             agent_did: reader.text()?,
@@ -788,6 +809,8 @@ impl AgentRuntime {
         reader.finish()?;
         Ok(value)
     }
+    /// # Errors
+    /// Returns a boundary refusal for invalid request fields, an unavailable transport, or a malformed response.
     pub fn agent_session_suspend(
         &mut self,
         agent_id: &str,
@@ -798,6 +821,8 @@ impl AgentRuntime {
         writer.fixed(&action_key);
         self.session_observation(writer, agent_id, action_key, false)
     }
+    /// # Errors
+    /// Returns a boundary refusal for invalid request fields, an unavailable transport, or a malformed response.
     pub fn agent_session_bind(
         &mut self,
         agent_id: &str,
@@ -816,6 +841,8 @@ impl AgentRuntime {
         }
         Ok(value)
     }
+    /// # Errors
+    /// Returns a boundary refusal for invalid request fields, an unavailable transport, or a malformed response.
     pub fn agent_session_restrict(
         &mut self,
         agent_id: &str,
@@ -858,7 +885,7 @@ impl AgentRuntime {
         if action_key == [0; 32] {
             return Err(AgentBoundaryError::Refused);
         }
-        let mut reader = self.exchange(writer.finish())?;
+        let mut reader = self.exchange(&writer.finish())?;
         let value = AgentSessionObservation {
             agent_id: reader.text()?,
             agent_did: reader.text()?,
@@ -886,6 +913,8 @@ impl AgentRuntime {
         reader.finish()?;
         Ok(value)
     }
+    /// # Errors
+    /// Returns a boundary refusal for invalid request fields, an unavailable transport, or a malformed response.
     pub fn agent_control(
         &mut self,
         agent_id: &str,
@@ -901,11 +930,13 @@ impl AgentRuntime {
         writer.u8(u8::from(resume));
         writer.fixed(&session_observation);
         encode_finalization(&mut writer, evidence)?;
-        let mut reader = self.exchange(writer.finish())?;
+        let mut reader = self.exchange(&writer.finish())?;
         let value = decode_managed_agent(&mut reader)?;
         reader.finish()?;
         Ok(value)
     }
+    /// # Errors
+    /// Returns a boundary refusal for invalid request fields, an unavailable transport, or a malformed response.
     pub fn agent_limit(
         &mut self,
         agent_id: &str,
@@ -923,11 +954,13 @@ impl AgentRuntime {
         writer.text(currency)?;
         writer.fixed(&replacement_budget_id);
         encode_finalization(&mut writer, evidence)?;
-        let mut reader = self.exchange(writer.finish())?;
+        let mut reader = self.exchange(&writer.finish())?;
         let value = decode_managed_agent(&mut reader)?;
         reader.finish()?;
         Ok(value)
     }
+    /// # Errors
+    /// Returns a boundary refusal for invalid request fields, an unavailable transport, or a malformed response.
     pub fn agent_reclaim(
         &mut self,
         agent_id: &str,
@@ -937,18 +970,23 @@ impl AgentRuntime {
         post_observation: [u8; 32],
         evidence: AgentFinalizationEvidence,
     ) -> Result<ManagedAgentJourney, AgentBoundaryError> {
-        self.agent_journey(
-            0,
-            agent_id,
-            amount,
-            currency,
-            0,
-            0,
-            pre_observation,
-            post_observation,
-            evidence,
-        )
+        let mut writer = Writer::new(AGENT_JOURNEY);
+        writer.u8(0);
+        writer.text(agent_id)?;
+        writer.u128(amount);
+        writer.text(currency)?;
+        writer.u64(0);
+        writer.u64(0);
+        writer.fixed(&pre_observation);
+        writer.fixed(&post_observation);
+        encode_finalization(&mut writer, evidence)?;
+        let mut reader = self.exchange(&writer.finish())?;
+        let value = decode_managed_journey(&mut reader)?;
+        reader.finish()?;
+        Ok(value)
     }
+    /// # Errors
+    /// Returns a boundary refusal for invalid request fields, an unavailable transport, or a malformed response.
     pub fn agent_key_change(
         &mut self,
         agent_id: &str,
@@ -967,11 +1005,13 @@ impl AgentRuntime {
         writer.fixed(&[0; 32]);
         writer.fixed(&[0; 32]);
         encode_finalization(&mut writer, evidence)?;
-        let mut reader = self.exchange(writer.finish())?;
+        let mut reader = self.exchange(&writer.finish())?;
         let value = decode_managed_challenge(&mut reader)?;
         reader.finish()?;
         Ok(value)
     }
+    /// # Errors
+    /// Returns a boundary refusal for invalid request fields, an unavailable transport, or a malformed response.
     pub fn agent_archive(
         &mut self,
         agent_id: &str,
@@ -991,45 +1031,21 @@ impl AgentRuntime {
         writer.fixed(&post_observation);
         writer.fixed(&session_observation);
         encode_finalization(&mut writer, evidence)?;
-        let mut reader = self.exchange(writer.finish())?;
+        let mut reader = self.exchange(&writer.finish())?;
         let value = decode_managed_journey(&mut reader)?;
         reader.finish()?;
         Ok(value)
     }
-    fn agent_journey(
-        &mut self,
-        kind: u8,
-        agent_id: &str,
-        amount: u128,
-        currency: &str,
-        delay: u64,
-        ready_at: u64,
-        pre_observation: [u8; 32],
-        post_observation: [u8; 32],
-        evidence: AgentFinalizationEvidence,
-    ) -> Result<ManagedAgentJourney, AgentBoundaryError> {
-        let mut writer = Writer::new(AGENT_JOURNEY);
-        writer.u8(kind);
-        writer.text(agent_id)?;
-        writer.u128(amount);
-        writer.text(currency)?;
-        writer.u64(delay);
-        writer.u64(ready_at);
-        writer.fixed(&pre_observation);
-        writer.fixed(&post_observation);
-        encode_finalization(&mut writer, evidence)?;
-        let mut reader = self.exchange(writer.finish())?;
-        let value = decode_managed_journey(&mut reader)?;
-        reader.finish()?;
-        Ok(value)
-    }
+
+    /// # Errors
+    /// Returns a boundary refusal for invalid request fields, an unavailable transport, or a malformed response.
     pub fn identity_resolve(
         &mut self,
         agent: &str,
     ) -> Result<AgentCoreIdentity, AgentBoundaryError> {
         let mut writer = Writer::new(IDENTITY_RESOLVE);
         writer.text(agent)?;
-        let mut reader = self.exchange(writer.finish())?;
+        let mut reader = self.exchange(&writer.finish())?;
         let head_sequence = reader.u64()?;
         let revocation_sequence = reader.u64()?;
         let verification = reader.u8()?;
@@ -1064,6 +1080,8 @@ impl AgentRuntime {
             canonical_bytes,
         })
     }
+    /// # Errors
+    /// Returns a boundary refusal for invalid request fields, an unavailable transport, or a malformed response.
     pub fn lease_map(
         &mut self,
         not_before_unix_ms: u64,
@@ -1072,7 +1090,7 @@ impl AgentRuntime {
         let mut writer = Writer::new(LEASE_MAP);
         writer.u64(not_before_unix_ms);
         writer.u64(not_after_unix_ms);
-        let mut reader = self.exchange(writer.finish())?;
+        let mut reader = self.exchange(&writer.finish())?;
         let value = AgentLease {
             not_before_sequence: reader.u64()?,
             expiry_sequence: reader.u64()?,
@@ -1087,12 +1105,16 @@ impl AgentRuntime {
         reader.finish()?;
         Ok(value)
     }
+    /// # Errors
+    /// Returns a boundary refusal for invalid request fields, an unavailable transport, or a malformed response.
     pub fn owner_validate(
         &mut self,
         request: &AgentOwnerInstall,
     ) -> Result<AgentOwnerValidation, AgentBoundaryError> {
         self.owner_exchange(OWNER_VALIDATE, None, request)
     }
+    /// # Errors
+    /// Returns a boundary refusal for invalid request fields, an unavailable transport, or a malformed response.
     pub fn owner_install(
         &mut self,
         request_id: u64,
@@ -1105,7 +1127,7 @@ impl AgentRuntime {
         writer.fixed(&key);
         writer.fixed(&body_digest);
         encode_owner(&mut writer, request)?;
-        let mut reader = self.exchange_secret(writer.finish_secret())?;
+        let mut reader = self.exchange_secret(&writer.finish_secret())?;
         let value = AgentOwnerInstalled {
             token_id: AgentSessionToken::new(reader.fixed()?)?,
             session_id: reader.fixed()?,
@@ -1136,7 +1158,7 @@ impl AgentRuntime {
             writer.fixed(&digest);
         }
         encode_owner(&mut writer, request)?;
-        let mut reader = self.exchange(writer.finish())?;
+        let mut reader = self.exchange(&writer.finish())?;
         let value = AgentOwnerValidation {
             identity_head_sequence: reader.u64()?,
             expiry_sequence: reader.u64()?,
@@ -1146,6 +1168,8 @@ impl AgentRuntime {
         reader.finish()?;
         Ok(value)
     }
+    /// # Errors
+    /// Returns a boundary refusal for invalid request fields, an unavailable transport, or a malformed response.
     pub fn account_sequence(
         &mut self,
         actor: &layerx_agent_api::identity::AgentDid,
@@ -1154,13 +1178,15 @@ impl AgentRuntime {
         let mut writer = Writer::new(ACCOUNT_SEQUENCE);
         writer.text(actor.as_str())?;
         writer.text(authority.as_str())?;
-        let mut reader = self.exchange(writer.finish())?;
+        let mut reader = self.exchange(&writer.finish())?;
         let sequence = reader.u64()?;
         reader.finish()?;
         Ok(sequence)
     }
+    /// # Errors
+    /// Returns a boundary refusal for invalid request fields, an unavailable transport, or a malformed response.
     pub fn balance(&mut self) -> Result<VerifiedBalance, AgentBoundaryError> {
-        let mut reader = self.exchange(Writer::new(BALANCE).finish())?;
+        let mut reader = self.exchange(&Writer::new(BALANCE).finish())?;
         let value = VerifiedBalance {
             account: reader.fixed()?,
             asset: reader.fixed()?,
@@ -1190,8 +1216,10 @@ impl AgentRuntime {
         Ok(value)
     }
 
+    /// # Errors
+    /// Returns a boundary refusal for invalid request fields, an unavailable transport, or a malformed response.
     pub fn head(&mut self) -> Result<AgentHead, AgentBoundaryError> {
-        let mut reader = self.exchange(Writer::new(HEAD).finish())?;
+        let mut reader = self.exchange(&Writer::new(HEAD).finish())?;
         let value = AgentHead {
             chain_sequence: reader.u64()?,
             sealed_batch: reader.u64()?,
@@ -1201,6 +1229,8 @@ impl AgentRuntime {
         Ok(value)
     }
 
+    /// # Errors
+    /// Returns a boundary refusal for invalid request fields, an unavailable transport, or a malformed response.
     pub fn evidence(
         &mut self,
         idempotency_key: [u8; 32],
@@ -1209,7 +1239,7 @@ impl AgentRuntime {
         let mut writer = Writer::new(EVIDENCE);
         writer.fixed(&idempotency_key);
         writer.fixed(&expected_activity_id);
-        let mut reader = self.exchange(writer.finish())?;
+        let mut reader = self.exchange(&writer.finish())?;
         let found = reader.u8()?;
         let value = match found {
             0 => ReceiptLookup::Absent,
@@ -1221,6 +1251,8 @@ impl AgentRuntime {
     }
     /// Repeats the authenticated registry negotiation as a live readiness
     /// probe; a lockable adapter is not itself evidence that agentd is alive.
+    /// # Errors
+    /// Returns a boundary refusal for invalid request fields, an unavailable transport, or a malformed response.
     pub fn probe(&self) -> Result<(), AgentBoundaryError> {
         let mut runtime = Self::connect(&self.endpoint, self.limits)?;
         let head = runtime.head()?;
@@ -1232,10 +1264,12 @@ impl AgentRuntime {
 
     /// Connects to the authenticated agent peer and adopts only its
     /// core-negotiated module registry.
+    /// # Errors
+    /// Returns a boundary refusal for invalid request fields, an unavailable transport, or a malformed response.
     pub fn connect(endpoint: impl AsRef<Path>, limits: Limits) -> Result<Self, AgentBoundaryError> {
         let empty = ModuleRegistry::new(&[]).map_err(|_| AgentBoundaryError::Refused)?;
         let mut runtime = Self::new(endpoint, limits, empty)?;
-        let mut reader = runtime.exchange(Writer::new(REGISTRY).finish())?;
+        let mut reader = runtime.exchange(&Writer::new(REGISTRY).finish())?;
         let module_count = usize::from(reader.u16()?);
         if module_count == 0 || module_count > 32 {
             return Err(AgentBoundaryError::CorruptResponse);
@@ -1271,6 +1305,8 @@ impl AgentRuntime {
     }
     /// Creates a runtime for an absolute agentd endpoint and a core-negotiated
     /// registry. The registry is used to derive disclosure from returned bytes.
+    /// # Errors
+    /// Refuses invalid connection limits or an empty endpoint.
     pub fn new(
         endpoint: impl AsRef<Path>,
         limits: Limits,
@@ -1289,11 +1325,11 @@ impl AgentRuntime {
         })
     }
 
-    fn exchange(&self, request: Vec<u8>) -> Result<Reader, AgentBoundaryError> {
+    fn exchange(&self, request: &[u8]) -> Result<Reader, AgentBoundaryError> {
         let mut transport = Uds::connect(&self.endpoint, &self.gate, self.limits)
             .map_err(|_| AgentBoundaryError::Unavailable)?;
         transport
-            .send(&request)
+            .send(request)
             .map_err(|_| AgentBoundaryError::Unavailable)?;
         let response = transport
             .receive()
@@ -1310,11 +1346,11 @@ impl AgentRuntime {
         }
     }
 
-    fn exchange_secret(&self, request: Zeroizing<Vec<u8>>) -> Result<Reader, AgentBoundaryError> {
+    fn exchange_secret(&self, request: &Zeroizing<Vec<u8>>) -> Result<Reader, AgentBoundaryError> {
         let mut transport = Uds::connect(&self.endpoint, &self.gate, self.limits)
             .map_err(|_| AgentBoundaryError::Unavailable)?;
         transport
-            .send(&request)
+            .send(request)
             .map_err(|_| AgentBoundaryError::Unavailable)?;
         let response = transport
             .receive()
@@ -1339,10 +1375,7 @@ impl AgentRuntime {
         writer
     }
 
-    fn decode_observation(
-        &self,
-        reader: &mut Reader,
-    ) -> Result<AgentObservation, AgentBoundaryError> {
+    fn decode_observation(reader: &mut Reader) -> Result<AgentObservation, AgentBoundaryError> {
         let activity_id = reader.fixed::<32>()?;
         if activity_id == [0; 32] {
             return Err(AgentBoundaryError::CorruptResponse);
@@ -1361,6 +1394,8 @@ impl AgentRuntime {
         })
     }
 
+    /// # Errors
+    /// Returns a boundary refusal for invalid request fields, an unavailable transport, or a malformed response.
     pub fn approval_list(
         &mut self,
         current_sequence: u64,
@@ -1377,7 +1412,7 @@ impl AgentRuntime {
             None => writer.u8(0),
         }
         writer.u8(limit);
-        let mut reader = self.exchange(writer.finish())?;
+        let mut reader = self.exchange(&writer.finish())?;
         let count = usize::from(reader.u8()?);
         if count > 100 {
             return Err(AgentBoundaryError::CorruptResponse);
@@ -1397,6 +1432,8 @@ impl AgentRuntime {
             next_cursor,
         })
     }
+    /// # Errors
+    /// Returns a boundary refusal for invalid request fields, an unavailable transport, or a malformed response.
     pub fn approval_get(
         &mut self,
         approval_id: [u8; 32],
@@ -1405,11 +1442,13 @@ impl AgentRuntime {
         let mut writer = Writer::new(APPROVAL_GET);
         writer.fixed(&approval_id);
         writer.u64(current_sequence);
-        let mut reader = self.exchange(writer.finish())?;
+        let mut reader = self.exchange(&writer.finish())?;
         let value = decode_approval(&mut reader)?;
         reader.finish()?;
         Ok(value)
     }
+    /// # Errors
+    /// Returns a boundary refusal for invalid request fields, an unavailable transport, or a malformed response.
     pub fn approval_decide(
         &mut self,
         approve: bool,
@@ -1427,7 +1466,7 @@ impl AgentRuntime {
         writer.fixed(&held_digest);
         writer.text(idempotency_key)?;
         writer.u64(current_sequence);
-        let mut reader = self.exchange(writer.finish())?;
+        let mut reader = self.exchange(&writer.finish())?;
         let outcome = reader.u8()?;
         let submission_ref = match reader.u8()? {
             0 => None,
@@ -1469,7 +1508,7 @@ fn encode_owner(
     match &request.session_seed {
         Some(seed) => writer.fixed(seed.expose()),
         None => writer.fixed(&[0; 32]),
-    };
+    }
     writer.u16(
         u16::try_from(request.permitted_activity_types.len())
             .map_err(|_| AgentBoundaryError::Refused)?,
@@ -1709,18 +1748,7 @@ fn read_fixed_list(reader: &mut Reader, max: usize) -> Result<Vec<[u8; 32]>, Age
     }
     let mut v = Vec::with_capacity(n);
     for _ in 0..n {
-        v.push(reader.fixed()?)
-    }
-    Ok(v)
-}
-fn read_u16_list(reader: &mut Reader, max: usize) -> Result<Vec<u16>, AgentBoundaryError> {
-    let n = usize::from(reader.u16()?);
-    if n == 0 || n > max {
-        return Err(AgentBoundaryError::CorruptResponse);
-    }
-    let mut v = Vec::with_capacity(n);
-    for _ in 0..n {
-        v.push(reader.u16()?)
+        v.push(reader.fixed()?);
     }
     Ok(v)
 }
@@ -1731,7 +1759,7 @@ fn read_u32_list(reader: &mut Reader, max: usize) -> Result<Vec<u32>, AgentBound
     }
     let mut v = Vec::with_capacity(n);
     for _ in 0..n {
-        v.push(reader.u32()?)
+        v.push(reader.u32()?);
     }
     Ok(v)
 }
@@ -1742,7 +1770,7 @@ fn read_text_list(reader: &mut Reader, max: usize) -> Result<Vec<String>, AgentB
     }
     let mut v = Vec::with_capacity(n);
     for _ in 0..n {
-        v.push(reader.text()?)
+        v.push(reader.text()?);
     }
     Ok(v)
 }
@@ -1807,7 +1835,7 @@ fn decode_managed_agent(reader: &mut Reader) -> Result<ManagedAgentView, AgentBo
 fn decode_managed_journey(reader: &mut Reader) -> Result<ManagedAgentJourney, AgentBoundaryError> {
     let journey_id = reader.text()?;
     let kind = reader.text()?;
-    let state = reader.u8()?;
+    let journey_state = reader.u8()?;
     let count = usize::from(reader.u8()?);
     if count == 0 || count > 16 {
         return Err(AgentBoundaryError::CorruptResponse);
@@ -1828,7 +1856,7 @@ fn decode_managed_journey(reader: &mut Reader) -> Result<ManagedAgentJourney, Ag
     let value = ManagedAgentJourney {
         journey_id,
         kind,
-        state,
+        state: journey_state,
         stages,
         started_at: reader.text()?,
         updated_at: reader.text()?,
@@ -1984,7 +2012,7 @@ impl AgentBoundary for AgentRuntime {
         writer.bytes(request.payload.as_bytes())?;
         writer.fixed(&request.payload_hash);
 
-        let mut reader = self.exchange(writer.finish())?;
+        let mut reader = self.exchange(&writer.finish())?;
         let preparation_ref =
             PreparationRef::new(reader.text()?).map_err(|_| AgentBoundaryError::CorruptResponse)?;
         let unsigned_canonical_bytes = reader.bytes()?;
@@ -2048,15 +2076,15 @@ impl AgentBoundary for AgentRuntime {
             }
             None => writer.u8(0),
         }
-        let mut reader = self.exchange(writer.finish())?;
-        self.decode_observation(&mut reader)
+        let mut reader = self.exchange(&writer.finish())?;
+        Self::decode_observation(&mut reader)
     }
 
     fn track(&mut self, call: &Call<TrackRequest>) -> Result<AgentObservation, AgentBoundaryError> {
         let mut writer = Writer::new(TRACK);
         writer.text(call.request().submission_ref.as_str())?;
-        let mut reader = self.exchange(writer.finish())?;
-        self.decode_observation(&mut reader)
+        let mut reader = self.exchange(&writer.finish())?;
+        Self::decode_observation(&mut reader)
     }
 
     fn receipt_by_idempotency_key(
@@ -2067,7 +2095,7 @@ impl AgentBoundary for AgentRuntime {
         let mut writer = Writer::new(RECEIPT_LOOKUP);
         writer.fixed(&idempotency_key);
         writer.fixed(&expected_activity_id);
-        let mut reader = self.exchange(writer.finish())?;
+        let mut reader = self.exchange(&writer.finish())?;
         let found = reader.u8()?;
         let result = match found {
             0 => ReceiptLookup::Absent,
@@ -2141,8 +2169,10 @@ impl crate::approvals::ApprovalBoundary for AgentRuntime {
         writer
             .text(&hex(&submission_ref))
             .map_err(map_approval_error)?;
-        let mut reader = self.exchange(writer.finish()).map_err(map_approval_error)?;
-        self.decode_observation(&mut reader)
+        let mut reader = self
+            .exchange(&writer.finish())
+            .map_err(map_approval_error)?;
+        Self::decode_observation(&mut reader)
             .map(|value| value.submission)
             .map_err(map_approval_error)
     }

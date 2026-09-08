@@ -93,7 +93,18 @@ struct KeyPolicy {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Registry {
+    schema_version: u16,
+    assets: Vec<CurrencyMetadata>,
     modules: Vec<Module>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CurrencyMetadata {
+    asset: String,
+    currency: String,
+    decimals: u8,
+    symbol: String,
 }
 
 #[derive(Deserialize)]
@@ -537,15 +548,7 @@ fn dispatch(config: &Config, request: &Request) -> Result<Response, Response> {
     let evidence = human.evidence(config)?;
     match name {
         "core-clock" => clock(&evidence, human.horizon),
-        "balance-context" => {
-            let summary = account_summary(p, &evidence)?;
-            let mut response = unavailable("registry_currency_metadata_unavailable");
-            let mut body = serde_json::from_slice::<Value>(&response.body)
-                .map_err(|_| unavailable("encoding_failed"))?;
-            body["evidence"] = summary;
-            response.body = body.to_string().into_bytes();
-            Ok(response)
-        }
+        "balance-context" => balance_context(p, &human.registry_path, &evidence, config),
         "budget-state" => budget(p, &params["budget_id"], &evidence),
         _ => policy_route(name, &params, p, &evidence),
     }
@@ -573,13 +576,34 @@ fn budget(p: &PrincipalPolicy, id: &str, evidence: &[Verified]) -> Result<Respon
     Ok(response)
 }
 
-fn registry(path: &Path) -> Result<Response, Response> {
+fn read_registry(path: &Path) -> Result<(Registry, Vec<u8>), Response> {
     let bytes =
         protected::read(path, MAX_FILE).map_err(|()| unavailable("module_registry_unavailable"))?;
     let registry: Registry =
         serde_json::from_slice(&bytes).map_err(|_| unavailable("module_registry_invalid"))?;
     let mut seen = BTreeSet::new();
-    if registry.modules.is_empty()
+    if registry.schema_version != 2
+        || registry.assets.is_empty()
+        || registry.assets.len() > 256
+        || registry.assets.iter().any(|a| {
+            !valid_digest(&a.asset)
+                || a.asset != a.asset.to_ascii_lowercase()
+                || a.currency.is_empty()
+                || a.currency.len() > 32
+                || a.currency.chars().any(char::is_control)
+                || a.symbol.is_empty()
+                || a.symbol.len() > 32
+                || a.symbol.chars().any(char::is_control)
+                || a.decimals > 38
+        })
+        || registry
+            .assets
+            .iter()
+            .map(|a| &a.asset)
+            .collect::<BTreeSet<_>>()
+            .len()
+            != registry.assets.len()
+        || registry.modules.is_empty()
         || registry.modules.len() > 32
         || registry.modules.iter().any(|m| {
             !(1..=9).contains(&m.module)
@@ -592,11 +616,59 @@ fn registry(path: &Path) -> Result<Response, Response> {
     {
         return Err(unavailable("module_registry_invalid"));
     }
+    Ok((registry, bytes))
+}
+
+fn registry(path: &Path) -> Result<Response, Response> {
+    let (registry, bytes) = read_registry(path)?;
     let modules: Vec<_> = registry.modules.iter().map(|m| value!({"module_id": m.module,
         "activity_types": m.ordinals.iter().map(|o| (u32::from(m.module) << 16) | u32::from(*o)).collect::<Vec<_>>() })).collect();
     Ok(json(
         200,
         &value!({"modules": modules, "revision": hex::encode(&digest(&bytes))}),
+    ))
+}
+
+fn balance_context(
+    p: &PrincipalPolicy,
+    registry_path: &Path,
+    evidence: &[Verified],
+    config: &Config,
+) -> Result<Response, Response> {
+    let (registry, bytes) = read_registry(registry_path)?;
+    let asset = registry
+        .assets
+        .iter()
+        .find(|a| a.asset == p.asset_id)
+        .ok_or_else(|| unavailable("registry_currency_metadata_unavailable"))?;
+    let head = evidence
+        .iter()
+        .max_by_key(|e| e.last_sequence)
+        .ok_or_else(|| unavailable("head_unavailable"))?;
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| unavailable("clock_unavailable"))?
+        .as_millis();
+    let age_ms = now_ms
+        .checked_sub(u128::from(head.timestamp_ms))
+        .ok_or_else(|| unavailable("head_timestamp_in_future"))?;
+    if age_ms > u128::from(p.maximum_age_seconds) * 1000 {
+        return Err(unavailable("balance_evidence_stale"));
+    }
+    Ok(json(
+        200,
+        &value!({
+            "account_id": p.account_id, "asset_id": p.asset_id,
+            "currency": asset.currency, "decimals": asset.decimals, "symbol": asset.symbol,
+            "registry_revision": hex::encode(&digest(&bytes)),
+            "observed_at": head.timestamp_ms.to_string(),
+            "age_seconds": u64::try_from(age_ms / 1000).map_err(|_| unavailable("clock_unavailable"))?,
+            "maximum_age_seconds": p.maximum_age_seconds,
+            "sequencer_id": hex::encode(&config.sequencer_id),
+            "sequencer_public_key": hex::encode(&config.sequencer_public_key),
+            "first_batch_number": config.first_batch, "last_batch_number": config.last_batch,
+            "evidence": account_summary(p, evidence)?
+        }),
     ))
 }
 

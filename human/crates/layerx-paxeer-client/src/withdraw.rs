@@ -2194,3 +2194,91 @@ fn word_u128(word: &[u8; 32], what: &str) -> Result<u128, WithdrawalError> {
     bytes.copy_from_slice(&word[16..]);
     Ok(u128::from_be_bytes(bytes))
 }
+
+impl CheckpointProof {
+    /// Encodes a bounded vector of withdrawal identities, leaf hashes and canonical proofs.
+    /// Entries must be strictly ordered by withdrawal identity.
+    ///
+    /// # Errors
+    /// Refuses noncanonical proofs, ordering, bounds or roots.
+    pub fn encode_publication(
+        entries: &[(DebitExpectation, Self)],
+        protocol_version: u16,
+    ) -> Result<Vec<u8>, crate::EndpointFault> {
+        use crate::deposit::evidence as e;
+        let mut items = Vec::new();
+        let mut previous = None;
+        for (debit, proof) in entries {
+            debit.validated().map_err(|_| e::invalid())?;
+            if previous.is_some_and(|id| id >= debit.withdrawal_id) {
+                return Err(e::invalid());
+            }
+            previous = Some(debit.withdrawal_id);
+            let leaf = withdrawal_leaf(debit);
+            if proof_root(leaf, proof.leaf_index, &proof.siblings) != proof.state_root {
+                return Err(e::invalid());
+            }
+            let mut item = debit.withdrawal_id.to_vec();
+            item.extend_from_slice(&leaf);
+            item.extend_from_slice(
+                &crate::wire::encode_checkpoint_proof_for_protocol(
+                    proof,
+                    e::LIMIT,
+                    protocol_version,
+                )
+                .map_err(|_| e::invalid())?,
+            );
+            items.push(item);
+        }
+        e::vector(e::WITHDRAWALS, &items)
+    }
+
+    /// Retrieves canonical withdrawal membership for an already verified debit.
+    /// The returned proof must still pass `WithdrawalBoundary::construct_claim`.
+    ///
+    /// # Errors
+    /// Refuses unavailable publication, noncanonical encoding and identity/root mismatches.
+    pub fn fetch_published(
+        endpoint: &EndpointConfig,
+        registry: EvmAddress,
+        checkpoint: [u8; 32],
+        debit: &DebitExpectation,
+        protocol_version: u16,
+        confirmations: u64,
+    ) -> Result<Self, crate::EndpointFailure> {
+        use crate::deposit::evidence as e;
+        let (withdrawals, _, registered) =
+            e::witnesses(endpoint, registry, checkpoint, confirmations)?;
+        let decode = || {
+            let mut previous = None;
+            let mut found = None;
+            for item in e::items(e::WITHDRAWALS, &withdrawals)? {
+                let mut r = e::Reader(item);
+                let id = r.array::<32>()?;
+                let leaf = r.array::<32>()?;
+                if previous.is_some_and(|value| value >= id) {
+                    return Err(e::invalid());
+                }
+                previous = Some(id);
+                let proof = crate::wire::decode_checkpoint_proof_for_protocol(
+                    r.0,
+                    e::LIMIT,
+                    protocol_version,
+                )
+                .map_err(|_| e::invalid())?;
+                e::bind(&proof, checkpoint, &registered)?;
+                if proof_root(leaf, proof.leaf_index, &proof.siblings) != proof.state_root {
+                    return Err(e::invalid());
+                }
+                if id == debit.withdrawal_id {
+                    if leaf != withdrawal_leaf(debit) {
+                        return Err(e::invalid());
+                    }
+                    found = Some(proof);
+                }
+            }
+            found.ok_or_else(e::invalid)
+        };
+        decode().map_err(|fault| e::failure(endpoint, fault))
+    }
+}
