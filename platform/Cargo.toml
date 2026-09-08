@@ -53,7 +53,7 @@ ring = "=0.17.14"
 rustls = { version = "=0.23.43", default-features = false, features = ["ring", "std", "tls12"] }
 sha2 = "=0.10.9"
 subtle = "=2.6.1"
-ureq = { version = "=3.4.0", default-features = false, features = ["json", "native-tls-no-default"] }
+ureq = { version = "=3.4.0", default-features = false, features = ["json", "native-tls"] }
 zeroize = "=1.9.0"
 
 [workspace.lints.rust]

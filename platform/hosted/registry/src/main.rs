@@ -294,6 +294,11 @@ fn config() -> Result<Config, String> {
             .map_err(|_| "LAYERX_REGISTRY_NODE_ENDPOINT is required".to_owned())?,
         node_authorization: env::var("LAYERX_REGISTRY_NODE_AUTHORIZATION")
             .map_err(|_| "LAYERX_REGISTRY_NODE_AUTHORIZATION is required".to_owned())?,
+        outbound_ca_der: fs::read(
+            env::var("LAYERX_REGISTRY_OUTBOUND_CA_DER")
+                .map_err(|_| "LAYERX_REGISTRY_OUTBOUND_CA_DER is required".to_owned())?,
+        )
+        .map_err(|error| format!("LAYERX_REGISTRY_OUTBOUND_CA_DER is unreadable: {error}"))?,
         receipt_authority_endpoint: env::var("LAYERX_REGISTRY_RECEIPT_AUTHORITY_ENDPOINT")
             .map_err(|_| "LAYERX_REGISTRY_RECEIPT_AUTHORITY_ENDPOINT is required".to_owned())?,
         receipt_authority_authorization: env::var(
@@ -937,12 +942,31 @@ mod tests {
             assert!(PROVISIONER_SOURCE.contains(boundary));
         }
         for boundary in [
-            "CapabilityBoundingSet=CAP_SYS_ADMIN CAP_CHOWN CAP_DAC_OVERRIDE",
+            "CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE",
+            "AmbientCapabilities=CAP_CHOWN CAP_DAC_OVERRIDE",
+            "PrivateTmp=yes",
+            "ProtectHome=yes",
+            "NoNewPrivileges=yes",
+            "Before=kubelet.service",
             "ProtectSystem=strict",
-            "ReadWritePaths=/sys/fs/cgroup /var/lib/layerx-program-registry-builds",
+            "ReadWritePaths=/sys/fs/cgroup /var/lib/layerx-program-registry-builds /run/lock",
         ] {
             assert!(NODE_UNIT.contains(boundary));
         }
+        for boundary in [
+            "systemd-mount --no-ask-password --collect --automount=no",
+            "--type=ext4 --options=loop,nosuid,nodev,noatime",
+            "--property=Before=kubelet.service",
+            "for option in rw nosuid nodev noatime",
+            "stat -c %d",
+        ] {
+            assert!(PROVISIONER_SOURCE.contains(boundary));
+        }
+        assert!(!NODE_UNIT.contains("CAP_SYS_ADMIN"));
+        assert!(!PROVISIONER_SOURCE.lines().any(|line| {
+            let command = line.trim_start();
+            command.starts_with("mount ") || command.contains("losetup --find")
+        }));
         assert!(REGISTRY_DEPLOYMENT.contains("layerx.io/program-registry-boundary: \"v1\""));
         for boundary in [
             "NonBlockingLockExclusive",

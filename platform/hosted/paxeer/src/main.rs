@@ -5,11 +5,11 @@ use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::io::{Read, Write};
-use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream};
+use std::net::{IpAddr, Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use zeroize::Zeroize;
 
 mod genesis;
@@ -564,8 +564,30 @@ fn handle_connection(config: &Arc<Config>, tcp: TcpStream) -> Result<(), String>
     );
     write_response(&mut stream, &response)?;
     stream.conn.send_close_notify();
-    let _ = stream.flush();
-    Ok(())
+    stream.flush().map_err(|error| error.to_string())?;
+    stream
+        .sock
+        .shutdown(Shutdown::Write)
+        .map_err(|error| error.to_string())?;
+    let deadline = Instant::now() + Duration::from_secs(1);
+    let mut drained = 0_usize;
+    let mut buffer = [0_u8; 4096];
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() || drained >= MAX_HEADER_BYTES {
+            return Err("TLS shutdown drain exceeded its bound".to_owned());
+        }
+        stream
+            .sock
+            .set_read_timeout(Some(remaining))
+            .map_err(|error| error.to_string())?;
+        let limit = buffer.len().min(MAX_HEADER_BYTES - drained);
+        match stream.sock.read(&mut buffer[..limit]) {
+            Ok(0) => return Ok(()),
+            Ok(count) => drained += count,
+            Err(error) => return Err(error.to_string()),
+        }
+    }
 }
 
 struct ConnectionPermit;
