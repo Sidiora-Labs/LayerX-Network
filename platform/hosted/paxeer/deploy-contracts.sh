@@ -60,6 +60,7 @@ BOUNDARY_URL=${LAYERX_PAXEER_BOUNDARY_URL:-}
 BOUNDARY_CA=${LAYERX_PAXEER_BOUNDARY_CA_DER:-}
 CHAIN_ID=${LAYERX_PAXEER_CHAIN_ID:-125}
 DEPLOYER_KEY_FILE=${LAYERX_PAXEER_DEPLOYER_KEY_FILE:-}
+CHECKPOINT_SUBMITTER_KEY_FILE=${LAYERX_PAXEER_CHECKPOINT_SUBMITTER_KEY_FILE:-}
 GENESIS_DIR=${LAYERX_PAXEER_GENESIS_DIR:-}
 INPUT_JSON=${LAYERX_PAXEER_DEPLOYMENT_INPUT:-}
 GUARANTORS_JSON=${LAYERX_PAXEER_GUARANTORS:-$SCRIPT_DIR/guarantors.beta.json}
@@ -259,6 +260,21 @@ send() {
     [ "$(jq -r '.status' "$WORK/receipt.json")" = "0x1" ] || fail "transaction failed: $(jq -c . "$WORK/receipt.json")"
 }
 
+fund_checkpoint_submitter() {
+    [ -r "$CHECKPOINT_SUBMITTER_KEY_FILE" ] || fail "LAYERX_PAXEER_CHECKPOINT_SUBMITTER_KEY_FILE is required"
+    local key address balance
+    key=$(tr -d '\r\n' < "$CHECKPOINT_SUBMITTER_KEY_FILE")
+    address=$("$CAST" wallet address --private-key "$key") || fail "invalid checkpoint submitter key"
+    [ "${address,,}" != "${DEPLOYER,,}" ] || fail "checkpoint submitter must differ from deployer"
+    if printf '%s' "$GUARANTOR_SET" | jq -e --arg address "${address,,}" 'any(.[]; (.bond_controller | ascii_downcase) == $address or (.signer | ascii_downcase) == $address)' > /dev/null; then
+        fail "checkpoint submitter must differ from guarantors and bond controllers"
+    fi
+    balance=$("$CAST" balance --rpc-url "$BOUNDARY_URL" "$address")
+    if [ "$(printf '%s\n' "$balance" "$CONTROLLER_GAS_WEI" | sort -n | head -1)" != "$CONTROLLER_GAS_WEI" ]; then
+        send "$DEPLOYER_KEY" --value "$CONTROLLER_GAS_WEI" "$address"
+    fi
+}
+
 fund_controllers() {
     local index
     for index in $(seq 0 $((GUARANTOR_COUNT - 1))); do
@@ -333,6 +349,7 @@ phase_deploy() {
     [ ! -e "$RECORD" ] || fail "deployment record $RECORD already exists"
     [ "$(call "$USDL" "decimals()(uint8)")" = "6" ] || fail "USDL token at $USDL is not the 6-decimal beta token"
     fund_controllers
+    fund_checkpoint_submitter
     GUARANTOR_BOND=$(predict_bond)
     [ -n "$GUARANTOR_BOND" ] || fail "could not predict the GuarantorBond address"
     approve_controllers

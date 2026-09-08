@@ -410,6 +410,9 @@ ca_generate() {
         "DNS:layerx-identity.$svc,DNS:layerx-identity.$TESTNET_NAMESPACE.svc,DNS:layerx-identity,DNS:identity.$internal,DNS:identity.$INTERNAL_NAMESPACE.svc,DNS:localhost,IP:127.0.0.1"
     issue_cert paxeer-boundary paxeer-boundary serverAuth \
         "DNS:paxeer-boundary.$svc,DNS:paxeer-boundary.$TESTNET_NAMESPACE.svc,DNS:paxeer-boundary,DNS:paxeer-observer-boundary.$svc,DNS:paxeer-observer-boundary.$TESTNET_NAMESPACE.svc,DNS:paxeer-observer-boundary,DNS:paxeer.$svc,DNS:localhost,IP:127.0.0.1"
+        "DNS:paxeer-boundary.$svc,DNS:paxeer-boundary.$TESTNET_NAMESPACE.svc,DNS:paxeer-boundary,DNS:paxeer.$svc,DNS:localhost,IP:127.0.0.1"
+    issue_cert guarantor-1 layerx-guarantor-1 serverAuth,clientAuth "DNS:localhost,IP:127.0.0.1"
+    issue_cert guarantor-2 layerx-guarantor-2 serverAuth,clientAuth "DNS:localhost,IP:127.0.0.1"
     issue_client_identity gateway-client layerx-gateway
     issue_client_identity developer-client layerx-developer
     if [ -n "${LAYERX_BETA_SEQUENCER_KEY_FILE:-}" ]; then
@@ -554,6 +557,8 @@ secrets_generate() {
     evm_key_generate paxeer-final-executor
     evm_key_generate paxeer-emergency-council
     evm_key_generate paxeer-guarantor-controller
+    evm_key_generate paxeer-guarantor-second-controller
+    evm_key_generate paxeer-checkpoint-submitter
     if [ -n "${LAYERX_BETA_TEST_AUTH_TOKEN_FILE:-}" ]; then
         [ -r "$LAYERX_BETA_TEST_AUTH_TOKEN_FILE" ] || fail "LAYERX_BETA_TEST_AUTH_TOKEN_FILE=$LAYERX_BETA_TEST_AUTH_TOKEN_FILE is not readable"
         (umask 077; cp "$LAYERX_BETA_TEST_AUTH_TOKEN_FILE" "$d/test-auth.token")
@@ -800,6 +805,11 @@ secrets_apply() {
     apply_secret "$ns" layerx-identity-service-tokens --from-file="$s/identity-tokens"
     apply_secret "$ns" layerx-identity-store-key --from-file=key="$s/identity-store.key"
     apply_secret "$ns" paxeer-boundary-tls --from-file=server.crt.der="$c/paxeer-boundary/cert.der" --from-file=server.key.der="$c/paxeer-boundary/key.der"
+    for identity in 1 2; do
+        apply_secret "$ns" "layerx-guarantor-$identity-tls" --from-file=tls.crt="$c/guarantor-$identity/cert.pem" \
+            --from-file=tls.key="$c/guarantor-$identity/key.pem" --from-file=ca.crt="$c/ca.crt"
+    done
+    apply_secret "$ns" paxeer-checkpoint-submitter --from-file=key="$s/paxeer-checkpoint-submitter.key"
     apply_secret "$ns" paxeer-deployer-address --from-file=address="$s/paxeer-deployer.address"
     apply_tls_secret "$ns" layerx-testnet-ingress-tls testnet-control
     apply_tls_secret "$ns" layerx-gateway-ingress-tls gateway
@@ -1118,6 +1128,11 @@ wait_for_node_genesis() {
     node_file_fetch "$data/node.env" "$WORK_DIR/genesis/node.env"
     NODE_GUARANTOR_ID=$(sed -n 's/^LAYERX_NODE_GENESIS_GUARANTOR_ID=//p' "$WORK_DIR/genesis/node.env")
     NODE_GUARANTOR_PUBLIC_KEY=$(sed -n 's/^LAYERX_NODE_GENESIS_GUARANTOR_PUBLIC_KEY=//p' "$WORK_DIR/genesis/node.env")
+    NODE_SECOND_GUARANTOR_ID=$(sed -n 's/^LAYERX_NODE_SECOND_GUARANTOR_ID=//p' "$WORK_DIR/genesis/node.env")
+    NODE_SECOND_GUARANTOR_PUBLIC_KEY=$(sed -n 's/^LAYERX_NODE_SECOND_GUARANTOR_PUBLIC_KEY=//p' "$WORK_DIR/genesis/node.env")
+    [[ $NODE_SECOND_GUARANTOR_ID =~ ^[0-9a-f]{64}$ ]] || fail "node.env carries no second guarantor id"
+    [[ $NODE_SECOND_GUARANTOR_PUBLIC_KEY =~ ^0[23][0-9a-f]{64}$ ]] || fail "node.env carries no second guarantor public key"
+    [ "$NODE_SECOND_GUARANTOR_ID" != "$NODE_GUARANTOR_ID" ] || fail "guarantor identities must differ"
     NODE_SEQUENCER_ID=$(sed -n 's/^LAYERX_NODE_SEQUENCER_ID=//p' "$WORK_DIR/genesis/node.env")
     NODE_SEQUENCER_PUBLIC_KEY=$(sed -n 's/^LAYERX_NODE_SEQUENCER_PUBLIC_KEY=//p' "$WORK_DIR/genesis/node.env")
     [[ $NODE_GUARANTOR_ID =~ ^[0-9a-f]{64}$ ]] || fail "node.env carries no genesis guarantor id"
@@ -1197,6 +1212,19 @@ paxeer_contracts_deploy() {
         (umask 077; cp "$SECRETS_DIR/$controller.key" "$dir/guarantor-keys/0x$id.controller.key")
     done
     guarantor_set_render "$dir/guarantors.jsonl" > "$dir/guarantors.json"
+
+    local second_signer
+    second_signer=$(python3 "$REPO_ROOT/platform/hosted/paxeer/settlement-domain.py" signer "0x$NODE_SECOND_GUARANTOR_PUBLIC_KEY") || fail "second guarantor signer derivation failed"
+    jq -n --arg id "0x$NODE_GUARANTOR_ID" --arg signer "$signer" --arg public_key "0x$NODE_GUARANTOR_PUBLIC_KEY" \
+        --arg controller "$(cat "$SECRETS_DIR/paxeer-guarantor-controller.address")" --arg bond "$bond_amount" \
+        --arg second_id "0x$NODE_SECOND_GUARANTOR_ID" --arg second_signer "$second_signer" \
+        --arg second_public "0x$NODE_SECOND_GUARANTOR_PUBLIC_KEY" \
+        --arg second_controller "$(cat "$SECRETS_DIR/paxeer-guarantor-second-controller.address")" \
+        '[{guarantor_id: $id, signer: $signer, public_key: $public_key, bond_controller: $controller, joined_epoch: 1, governance_sequence: 1, bond_amount: $bond},
+          {guarantor_id: $second_id, signer: $second_signer, public_key: $second_public, bond_controller: $second_controller, joined_epoch: 1, governance_sequence: 2, bond_amount: $bond}] | sort_by(.guarantor_id) | to_entries | map(.value + {governance_sequence: (.key + 1)})' \
+        > "$dir/guarantors.json"
+    (umask 077; cp "$SECRETS_DIR/paxeer-guarantor-controller.key" "$dir/guarantor-keys/0x$NODE_GUARANTOR_ID.controller.key")
+    (umask 077; cp "$SECRETS_DIR/paxeer-guarantor-second-controller.key" "$dir/guarantor-keys/0x$NODE_SECOND_GUARANTOR_ID.controller.key")
     jq --arg proposer "$(cat "$SECRETS_DIR/paxeer-final-proposer.address")" --arg executor "$(cat "$SECRETS_DIR/paxeer-final-executor.address")" \
         --arg council "$(cat "$SECRETS_DIR/paxeer-emergency-council.address")" \
         '. + {protocol_version: 3, final_proposer: $proposer, final_executor: $executor, emergency_council: $council}' \
@@ -1204,6 +1232,7 @@ paxeer_contracts_deploy() {
     cp "$REPO_ROOT/contracts/config/checkpoint-settlement.json" "$dir/checkpoint-settlement.json"
     log "deploying the settlement contracts from the node genesis through the Paxeer boundary"
     if ! LAYERX_PAXEER_BOUNDARY_URL="$PAXEER_URL" LAYERX_PAXEER_BOUNDARY_CA_DER="$CA_DIR/ca.der" LAYERX_PAXEER_CHAIN_ID="$PAXEER_CHAIN_ID" \
+        LAYERX_PAXEER_CHECKPOINT_SUBMITTER_KEY_FILE="$SECRETS_DIR/paxeer-checkpoint-submitter.key" \
         LAYERX_PAXEER_DEPLOYER_KEY_FILE="$SECRETS_DIR/paxeer-deployer.key" LAYERX_PAXEER_GENESIS_DIR="$WORK_DIR/genesis" \
         LAYERX_PAXEER_DEPLOYMENT_INPUT="$dir/deployment-input.json" LAYERX_PAXEER_GUARANTORS="$dir/guarantors.json" \
         LAYERX_PAXEER_GUARANTOR_KEYS_DIR="$dir/guarantor-keys" LAYERX_PAXEER_DEPLOYMENT_RECORD="$dir/deployment.json" \
@@ -1229,7 +1258,8 @@ settlement_publish() {
         "$PAXEER_CHAIN_ID" "$GUARANTOR_BOND" "$CHECKPOINT_REGISTRY" "$PAXEER_RELAY_PORT" > "$WORK_DIR/paxeer/settlement.env"
     bash "$REPO_ROOT/platform/hosted/node/bootstrap.sh" --check-settlement "$WORK_DIR/paxeer/settlement.env" > /dev/null \
         || fail "the settlement environment was refused by bootstrap.sh --check-settlement"
-    apply_configmap "$ns" layerx-node-settlement --from-file=settlement.env="$WORK_DIR/paxeer/settlement.env"
+    apply_configmap "$ns" layerx-node-settlement --from-file=settlement.env="$WORK_DIR/paxeer/settlement.env" \
+        --from-file=checkpoint-settlement.json="$WORK_DIR/paxeer/checkpoint-settlement.json"
     log "settlement environment published as ConfigMap $ns/layerx-node-settlement"
 }
 
@@ -1261,6 +1291,7 @@ PY
     kube -n "$TESTNET_NAMESPACE" exec -i layerx-node-0 -c layerxd -- sh -ec \
         'umask 077; cat > /var/lib/layerx/node/genesis/genesis.registration.tmp; mv /var/lib/layerx/node/genesis/genesis.registration.tmp /var/lib/layerx/node/genesis/genesis.registration' \
         < "$WORK_DIR/genesis/genesis.registration"
+    node_exec sh -ec 'for identity in 1 2; do install -m 0440 /var/lib/layerx/node/genesis/genesis.registration "/var/lib/layerx/guarantor-$identity/identity/genesis.registration"; done'
 }
 
 wait_for_pod_ready() {
@@ -1552,6 +1583,9 @@ identity_write() {
         printf 'node_network_id=%s\n' "$NODE_NETWORK_ID"
         printf 'node_asset_id=%s\n' "$NODE_ASSET_ID"
         printf 'genesis_guarantor_id=%s\n' "$NODE_GUARANTOR_ID"
+        printf 'second_guarantor_id=%s\n' "$NODE_SECOND_GUARANTOR_ID"
+        printf 'guarantor_operational_independence=false\n'
+        printf 'checkpoint_submitter=%s\n' "$(cat "$SECRETS_DIR/paxeer-checkpoint-submitter.address")"
         printf 'paxeer_chain_id=%s\n' "$PAXEER_CHAIN_ID"
         printf 'paxeer_deployer=%s\n' "$(cat "$SECRETS_DIR/paxeer-deployer.address")"
         printf 'paxeer_guarantor_bond=%s\n' "$GUARANTOR_BOND"
