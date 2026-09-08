@@ -167,6 +167,18 @@ int main(void)
     REQUIRE(gp_attestation_decode(encoded, sizeof(encoded), &decoded) != LXP_OK);
     encoded[178] = 1U;
     checkpoint = (lxp_checkpoint_certificate){body.header, {NULL, 0U}};
+    lxp_finalisation_requirements requirements;
+    REQUIRE(gp_checkpoint_requirements(&body.header, 9U, 1U, (lxp_u128){0U, 100U}, &requirements) ==
+            LXP_OK);
+    REQUIRE(requirements.checkpoint_deadline_ms ==
+            body.header.timestamp_ms + lxp_checkpoint_maximum_attestation_delay_ms());
+    REQUIRE(requirements.checkpoint_deadline_ms >= attestation.attested_at_ms &&
+            requirements.minimum_bond.lo == 100U);
+    lxp_batch_header overflow = body.header;
+    overflow.timestamp_ms = UINT64_MAX;
+    REQUIRE(gp_checkpoint_requirements(&overflow, 9U, 1U, (lxp_u128){0U, 100U}, &requirements) !=
+            LXP_OK);
+
     REQUIRE(lxp_guarantor_set_init(&set) == LXP_OK);
     memcpy(member.guarantor_id, ctx.guarantor_id, 32U);
     memcpy(member.public_key, key, 33U);
