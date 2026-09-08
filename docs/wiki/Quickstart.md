@@ -168,6 +168,10 @@ and `reset_schedule` (`platform/hosted/testnet/src/main.rs:1155-1163`;
 
 ## 3. Create a credential
 
+For hosts without an OS Secret Service, first follow the
+[headless credential setup](../../platform/cli/README.md#headless-credential-storage).
+Keep the store selection and passphrase environment available for all commands.
+
 The developer CLI binary is `layerx` (`platform/cli/Cargo.toml:11-13`;
 `platform/cli/src/main.rs:29-30`). Global `--json` emits one JSON object
 `{ok, kind, message, data}` (`platform/cli/src/main.rs:32-37`;
@@ -181,10 +185,11 @@ layerx key create quickstart
 `--did` is optional (`platform/cli/src/main.rs:113-116`). Without it the DID
 is `did:layerx:` plus the 64-hex public key
 (`platform/cli/src/credential.rs:122`). Human output is `Created key {name} in
-operating-system credential storage` plus JSON `{name, did, public_key}`
+credential storage` plus JSON `{name, did, public_key}`
 (`platform/cli/src/main.rs:786-789`). `--json` sets `kind` to `key.created`.
 
-The seed is 32 OS-random bytes stored in keyring service `dev.layerx.cli`
+The seed is 32 OS-random bytes stored in the selected credential backend.
+The default OS backend uses keyring service `dev.layerx.cli`
 (`platform/cli/src/credential.rs:11, 83-96`). Key metadata in config is `did`
 and `public_key` (`platform/cli/src/config.rs:19-23`).
 
@@ -195,9 +200,10 @@ tr -d '\r\n' < "$LAYERX_TEST_AUTH_TOKEN_FILE" | layerx auth set --environment te
 ```
 
 `auth set` reads stdin and saves it (`platform/cli/src/main.rs:135-140,
-858-865`). Human output is `Saved {environment} API token in operating-system
-credential storage` with data `{environment, secret_storage:
-operating-system-credential-store}`. `kind` is `auth.saved`.
+858-865`). Human output is `Saved {environment} API token in credential storage` with data `{environment, secret_storage:
+operating-system-credential-store}` by default, or
+`secret_storage: encrypted-file-credential-store` for the file backend.
+`kind` is `auth.saved`.
 `--environment` optional; else current (`platform/cli/src/main.rs:1350-1356`).
 Bring-up mints that token as `ses_` plus 32 hex, `.`, 64 hex when the source
 is identity-provisioning (`platform/hosted/tests/beta-cluster.sh:1020-1026`).

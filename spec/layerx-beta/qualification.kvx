@@ -4654,3 +4654,19 @@ symbol = "platform-build-all-confirm"
 observed = "GO1: make platform-build-all in . exits 2. Log: qual-logs/go1/platform-build-all-confirm.log. Missing local sample Python environment fails platform-sample-dependencies-ready; confirmed in qual-logs/go1/platform-build-all-confirm.log. python3 platform/sdk/generators/generate_jvm.py --check /root/lx-lanes/gosdk cargo run --offline --manifest-path platform/Cargo.toml --locked -p layerx-platform-sdkgen -- --check     Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.43s      Running `platform/target/debug/layerx-platform-sdkgen --check` make[1]: Leaving directory '/root/lx-lanes/gosdk' cargo run --offline --manifest-path platform/Cargo.toml --locked -p layerx-platform-release -- --check platform/release/registries.kvx     Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.30s      Running `platform/target/debug/layerx-platform-release --check platform/release/registries.kvx`"
 assumption = "The aggregate prerequisite failure is outside the Go module rename scope; component owners must resolve it before aggregate qualification can pass."
 severity = "blocker"
+
+[observation.1.2.14]
+task = "1.2"
+file = "platform/cli/src/credential.rs platform/cli/src/file_store.rs platform/cli/tests/file_store.rs"
+symbol = "encrypted_entry_lifecycle_and_refusals"
+observed = "Explicit LAYERX_CREDENTIAL_STORE=file selects a passphrase-encrypted credential vault. cargo fmt --check --manifest-path platform/Cargo.toml -p layerx-platform-cli exits 0 (qual-logs/cli1/fmt-final.log); cargo build --locked --manifest-path platform/Cargo.toml -p layerx-platform-cli exits 0 (qual-logs/cli1/build-final.log); cargo clippy --locked --manifest-path platform/Cargo.toml -p layerx-platform-cli --all-targets -- -D warnings exits 0 (qual-logs/cli1/clippy.log); cargo test --locked --manifest-path platform/Cargo.toml -p layerx-platform-cli exits 0 with 89 tests passing (qual-logs/cli1/test.log). python3 qual-logs/cli1/binary-check.py exits 0 and proves key create quickstart, key list, auth set/status/delete and key deletion with an unavailable session bus (qual-logs/cli1/binary.log). make beta-ledger-check exits 0 (qual-logs/cli1/beta-ledger-check.log)."
+assumption = "File storage requires explicit selection and a passphrase; the OS store remains the default. Tests cover encrypted bytes, owner-only vault/directory/lock permissions, wrong passphrases, authenticated ciphertext corruption, symlink refusal, credential rotation and deletion, and persistence across real CLI processes."
+severity = "note"
+
+[observation.1.2.15]
+task = "1.2"
+file = "platform/cli/tests/common/credential_environment.rs"
+symbol = "CredentialEnvironment"
+observed = "The real Secret Service tests emit dbus-daemon Cannot initialize inotify: Too many open files messages on this host. All 89 CLI tests still pass; raw output is in qual-logs/cli1/test.log."
+assumption = "Host inotify resource pressure is independent of credential backend selection and did not prevent the isolated credential services from serving the tested operations."
+severity = "note"
