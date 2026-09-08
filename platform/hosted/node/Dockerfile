@@ -31,6 +31,7 @@ COPY --from=build /src/contracts/config/checkpoint-settlement.json /opt/layerx/c
 COPY --from=build /src/platform/hosted/node/bootstrap.sh /opt/layerx/bootstrap.sh
 COPY --from=build /src/platform/hosted/node/supervisor.sh /opt/layerx/supervisor.sh
 COPY --from=build /src/platform/hosted/node/guarantor.sh /opt/layerx/guarantor.sh
+COPY --from=build /src/platform/hosted/node/checkpoint-authority.py /opt/layerx/checkpoint-authority.py
 RUN chmod 0755 /opt/layerx/bootstrap.sh /opt/layerx/supervisor.sh /opt/layerx/guarantor.sh
 USER 4020:4020
 ENTRYPOINT ["/opt/layerx/supervisor.sh"]
