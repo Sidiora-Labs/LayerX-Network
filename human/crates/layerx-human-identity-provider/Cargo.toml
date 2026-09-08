@@ -1,0 +1,23 @@
+[package]
+name = "layerx-human-identity-provider"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+layerx-human-service = { path = "../layerx-human-service" }
+layerx-types.workspace = true
+getrandom.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+rustix = { workspace = true, features = ["fs"] }
+signal-hook = "=0.3.18"
+
+[dev-dependencies]
+base64.workspace = true
+tempfile = "=3.27.0"
+
+[lints]
+workspace = true
