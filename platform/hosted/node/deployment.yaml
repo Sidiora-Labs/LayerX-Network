@@ -111,6 +111,7 @@ spec:
             - {name: LAYERX_GUARANTOR_TLS_KEY_FILE, value: /run/layerx/guarantor-tls/tls.key}
             - {name: LAYERX_GUARANTOR_SUBMITTER_KEY_FILE, value: /run/layerx/checkpoint-submitter/key}
             - {name: LAYERX_GUARANTOR_SUBMITTER_LOCK_FILE, value: /var/lib/guarantor-submitter/submitter.lock}
+            - {name: LAYERX_GUARANTOR_CHECKPOINT_AUTHORITY_KEY_FILE, value: /var/lib/guarantor-submitter/checkpoint-authority.pem}
             - {name: LAYERX_GUARANTOR_PYTHON, value: /opt/layerx/guarantor/venv/bin/python3}
           ports: [{name: guarantor-1-tls, containerPort: 9451}]
           resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "2", memory: 1Gi}}
@@ -140,6 +141,7 @@ spec:
             - {name: LAYERX_GUARANTOR_TLS_KEY_FILE, value: /run/layerx/guarantor-tls/tls.key}
             - {name: LAYERX_GUARANTOR_SUBMITTER_KEY_FILE, value: /run/layerx/checkpoint-submitter/key}
             - {name: LAYERX_GUARANTOR_SUBMITTER_LOCK_FILE, value: /var/lib/guarantor-submitter/submitter.lock}
+            - {name: LAYERX_GUARANTOR_CHECKPOINT_AUTHORITY_KEY_FILE, value: /var/lib/guarantor-submitter/checkpoint-authority.pem}
             - {name: LAYERX_GUARANTOR_PYTHON, value: /opt/layerx/guarantor/venv/bin/python3}
           ports: [{name: guarantor-2-tls, containerPort: 9452}]
           resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "2", memory: 1Gi}}
