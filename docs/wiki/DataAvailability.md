@@ -14,13 +14,16 @@ The tag-18 request has empty proof material and one canonical selector:
 - `02 || batch:u64be`: one retained batch.
 - `03 || first:u64be || last:u64be`: the inclusive sequence range.
 - `04 || activity_id[32]`: the activity's batch.
+- `05 || batch:u64be`: one durable, sealed, header-signed candidate regardless of finalization.
 
-Resolution permits at most eight batches. Because the shipped client consumes one batch per request, every multi-batch result is refused. A sequence selector must lie entirely inside its resolved batch. Batches newer than the latest finalized batch are refused.
+Resolution permits at most eight batches. Because the shipped client consumes one batch per request, every multi-batch result is refused. A sequence selector must lie entirely inside its resolved batch. Selectors 01–04 refuse batches newer than the latest finalized batch. Selector 05 permits those batches and works with no registered checkpoint. It uses exactly the same authenticated UID/GID principal set as tag 28; other principals receive the existing unauthorized refusal. Unknown, unsealed, incomplete or corrupt candidates fail closed. Candidate fetch never marks a batch finalized.
 
 Each tag-19 response carries exact chunk bytes as its canonical payload. Proof material is `batch:u64be || index:u32be || class:u8 || class_offset:u64be || chunk_hash[32] || leaf_index:u32be || leaf_count:u32be || depth:u8 || siblings[depth][32]`. Tag 20 ends the stream with empty payload and proof material.
 
-Malformed selectors return `LXP_ERR_MALFORMED_ENVELOPE`; reversed or zero-start ranges return `LXP_ERR_NON_CANONICAL`; unknown selections return `LXP_ERR_UNKNOWN_ACTIVITY`; multi-batch or over-limit resolutions return `LXP_ERR_LENGTH_LIMIT`; ranges extending beyond their resolved batch return `LXP_ERR_BATCH_GAP`; unavailable capability or unfinalized candidates return `LXP_ERR_DA_MISSING`. Storage and proof failures retain their typed refusal results.
+Malformed selectors return `LXP_ERR_MALFORMED_ENVELOPE`; reversed or zero-start ranges return `LXP_ERR_NON_CANONICAL`; unknown selections return `LXP_ERR_UNKNOWN_ACTIVITY`; multi-batch or over-limit resolutions return `LXP_ERR_LENGTH_LIMIT`; ranges extending beyond their resolved batch return `LXP_ERR_BATCH_GAP`; unavailable capability or unfinalized candidates selected by 01–04 return `LXP_ERR_DA_MISSING`. Storage and proof failures retain their typed refusal results.
 
 Checkpoint candidates use the existing tag-12 signed batch header. No tag 32 is introduced. Validity proof bytes remain opaque to verifiers; beta certificates use an empty validity proof.
 
 This implementation remains unqualified. Real-kernel replay fixture migration, daemon recovery and retention tests, and real-daemon Rust selector/corruption tests must complete before the required build, sanitizer, daemon and Rust gates can establish runtime evidence.
+
+`layerx_client::availability::fetch_sealed_candidate` uses the same chunk, five-class completeness, ordering, bounds and record-root verification as finalized retrieval. Supply commitments from the verified signed tag-12 header; the canonical chunk size remains 65,536 bytes. A guarantor must verify and replay the candidate before attesting. Retrieval alone is not replay or finality evidence.

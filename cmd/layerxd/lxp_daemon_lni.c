@@ -1459,10 +1459,11 @@ static lxp_result send_availability(lxp_daemon_lni_server *server,
     if (!((kind == 1U && request->payload_length == 33U) ||
           (kind == 2U && request->payload_length == 9U) ||
           (kind == 3U && request->payload_length == 17U) ||
-          (kind == 4U && request->payload_length == 33U)))
+          (kind == 4U && request->payload_length == 33U) ||
+          (kind == 5U && request->payload_length == 9U)))
         return send_refusal(descriptor, server->frame_bytes,
             request->correlation_id, 1U, LXP_ERR_MALFORMED_ENVELOPE, deadline);
-    if (kind == 2U) requested_batch = load_u64(request->payload + 1U);
+    if (kind == 2U || kind == 5U) requested_batch = load_u64(request->payload + 1U);
     if (kind == 3U) {
         first = load_u64(request->payload + 1U);
         last = load_u64(request->payload + 9U);
@@ -1492,7 +1493,7 @@ static lxp_result send_availability(lxp_daemon_lni_server *server,
         if (status != LXP_OK || !present) break;
         status = lxp_batch_header_decode(evidence.canonical_header.bytes,
             evidence.canonical_header.length, &header);
-        if (status == LXP_OK && (kind == 1U || kind == 2U))
+        if (status == LXP_OK && (kind == 1U || kind == 2U || kind == 5U))
             match = header.batch_number == requested_batch;
         if (status == LXP_OK && kind == 3U)
             match = header.last_sequence >= first && header.first_sequence <= last;
@@ -1520,7 +1521,7 @@ static lxp_result send_availability(lxp_daemon_lni_server *server,
     if (status == LXP_OK && kind == 3U &&
         (first < selected.first_sequence || last > selected.last_sequence))
         status = LXP_ERR_BATCH_GAP;
-    if (status == LXP_OK &&
+    if (status == LXP_OK && kind != 5U &&
         selected.batch_number > owner->evidence_store->latest_finalized_batch)
         status = LXP_ERR_DA_MISSING;
     if (status == LXP_OK) {
