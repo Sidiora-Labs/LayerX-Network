@@ -1496,7 +1496,7 @@ static lxp_result send_availability(lxp_daemon_lni_server *server,
             match = header.batch_number == requested_batch;
         if (status == LXP_OK && kind == 3U)
             match = header.last_sequence >= first && header.first_sequence <= last;
-        if (status == LXP_OK && kind == 4U) {
+        if (status == LXP_OK && kind == 4U && evidence.format_version != 3U) {
             status = lxp_receipt_decode(evidence.canonical_receipt.bytes,
                 evidence.canonical_receipt.length, true, &receipt);
             if (status == LXP_OK)
