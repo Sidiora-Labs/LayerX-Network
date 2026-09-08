@@ -6,8 +6,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends build-essential
 COPY . .
 RUN cargo build --locked --release --manifest-path human/Cargo.toml -p layerx-human-service -p layerx-human-kms --bins
 RUN cargo build --locked --release --manifest-path agent/Cargo.toml -p layerx-agentd --bin layerx-agentd
-# Enable after the three provider crates and their lockfile entries land:
-# RUN cargo build --locked --release --manifest-path human/Cargo.toml -p layerx-human-identity-provider -p layerx-human-security-provider -p layerx-human-movement-provider --bins
+RUN cargo build --locked --release --manifest-path human/Cargo.toml -p layerx-human-identity-provider -p layerx-human-security-provider -p layerx-human-movement-provider --bins
 
 FROM debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libssl3 curl \
@@ -17,10 +16,9 @@ COPY --from=build /src/human/target/release/layerx-human-service /usr/local/bin/
 COPY --from=build /src/human/target/release/layerx-human-components /usr/local/bin/layerx-human-components
 COPY --from=build /src/human/target/release/layerx-human-kms /usr/local/bin/layerx-human-kms
 COPY --from=build /src/agent/target/release/layerx-agentd /usr/local/bin/layerx-agentd
-# Enable with the provider build command above:
-# COPY --from=build /src/human/target/release/layerx-human-identity-provider /usr/local/bin/layerx-human-identity-provider
-# COPY --from=build /src/human/target/release/layerx-human-security-provider /usr/local/bin/layerx-human-security-provider
-# COPY --from=build /src/human/target/release/layerx-human-movement-provider /usr/local/bin/layerx-human-movement-provider
+COPY --from=build /src/human/target/release/layerx-human-identity-provider /usr/local/bin/layerx-human-identity-provider
+COPY --from=build /src/human/target/release/layerx-human-security-provider /usr/local/bin/layerx-human-security-provider
+COPY --from=build /src/human/target/release/layerx-human-movement-provider /usr/local/bin/layerx-human-movement-provider
 COPY --chmod=0555 platform/hosted/human/entrypoint.sh /usr/local/bin/human-entrypoint
 USER 4020:4020
 ENTRYPOINT ["/usr/local/bin/layerx-human-service"]

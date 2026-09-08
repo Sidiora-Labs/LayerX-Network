@@ -350,7 +350,7 @@ issue_cert() {
     openssl req -new -key "$dir/key.pem" -subj "/O=LayerX beta/CN=$cn" -out "$dir/csr.pem" 2>/dev/null
     {
         printf 'basicConstraints=CA:FALSE\nkeyUsage=digitalSignature,keyEncipherment\nextendedKeyUsage=%s\n' "$usage"
-        [ -n "$subject_alt" ] && printf 'subjectAltName=%s\n' "$subject_alt"
+        if [ -n "$subject_alt" ]; then printf 'subjectAltName=%s\n' "$subject_alt"; fi
     } > "$dir/ext.cnf"
     openssl x509 -req -in "$dir/csr.pem" -CA "$CA_DIR/ca.crt" -CAkey "$CA_DIR/ca.key" -CAcreateserial \
         -days 30 -sha256 -extfile "$dir/ext.cnf" -out "$dir/cert.pem" 2>/dev/null
@@ -407,7 +407,7 @@ ca_generate() {
     issue_cert identity layerx-identity serverAuth \
         "DNS:layerx-identity.$svc,DNS:layerx-identity.$TESTNET_NAMESPACE.svc,DNS:layerx-identity,DNS:identity.$internal,DNS:identity.$INTERNAL_NAMESPACE.svc,DNS:localhost,IP:127.0.0.1"
     issue_cert paxeer-boundary paxeer-boundary serverAuth \
-        "DNS:paxeer-boundary.$svc,DNS:paxeer-boundary.$TESTNET_NAMESPACE.svc,DNS:paxeer-boundary,DNS:paxeer.$svc,DNS:localhost,IP:127.0.0.1"
+        "DNS:paxeer-boundary.$svc,DNS:paxeer-boundary.$TESTNET_NAMESPACE.svc,DNS:paxeer-boundary,DNS:paxeer-observer-boundary.$svc,DNS:paxeer-observer-boundary.$TESTNET_NAMESPACE.svc,DNS:paxeer-observer-boundary,DNS:paxeer.$svc,DNS:localhost,IP:127.0.0.1"
     issue_cert guarantor-1 layerx-guarantor-1 serverAuth,clientAuth "DNS:localhost,IP:127.0.0.1"
     issue_cert guarantor-2 layerx-guarantor-2 serverAuth,clientAuth "DNS:localhost,IP:127.0.0.1"
     issue_client_identity gateway-client layerx-gateway
@@ -613,7 +613,6 @@ secrets_apply() {
             --from-file=ca.der="$c/ca.der" --from-file=upstream-ca.der="$c/ca.der" --from-file=token="$s/developer-$token.token" \
             --from-file=credentials.json="$s/human-credentials.json"
     done
-    human_secrets_apply
     MISSING_INPUTS+=("Authenticated Human principal cookies for journeys/approvals require the passkey assertion and session.open ceremony; credential maps remain empty")
     apply_secret "$ns" layerx-human-tls --from-file=server.crt.der="$c/human/cert.der" \
         --from-file=server.key.der="$c/human/key.der" --from-file=ca.crt="$c/ca.crt"
@@ -907,7 +906,10 @@ trusted_boundary_apply() {
     local ns="$TESTNET_NAMESPACE" service
     kube apply -f "$MANIFESTS_DIR/paxeer.yaml" > /dev/null
     kube apply -f "$MANIFESTS_DIR/identity.yaml" > /dev/null
-    kube apply -f "$MANIFESTS_DIR/node.yaml" > /dev/null
+    kube -n "$ns" delete deployment layerx-human --ignore-not-found --wait=true > /dev/null
+    kube apply -f "$MANIFESTS_DIR/human.yaml" > /dev/null
+    python3 "$REPO_ROOT/platform/hosted/human/bootstrap.py" "$MANIFESTS_DIR/node.yaml" "$MANIFESTS_DIR/node-bootstrap.yaml"
+    kube apply -f "$MANIFESTS_DIR/node-bootstrap.yaml" > /dev/null
     for service in "${TRUSTED_BOUNDARY_SERVICES[@]}"; do
         kube -n "$ns" get service "$service" > /dev/null 2>&1 || fail "trusted-boundary Service $ns/$service was not created by the repository manifests"
     done
@@ -1510,6 +1512,8 @@ beta_cluster_up() {
     wait_for_node_genesis
     paxeer_contracts_deploy
     settlement_publish
+    human_policy_publish
+    kube apply -f "$MANIFESTS_DIR/node.yaml" > /dev/null
     wait_for_pod_ready "$TESTNET_NAMESPACE" app=layerx-identity 300
     port_forward identity "$TESTNET_NAMESPACE" layerx-identity "$IDENTITY_PORT" 9443
     identity_provision
