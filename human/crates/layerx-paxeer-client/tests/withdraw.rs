@@ -1089,6 +1089,14 @@ fn fixture_for_protocol(protocol_version: u16) -> Fixture {
             layerx_paxeer_client::ClaimRefusal::RootMismatch { .. }
         ))
     ));
+    let mut invalid_signature = proof.clone();
+    invalid_signature.attestations[0].signature_r[0] ^= 1;
+    assert!(matches!(
+        boundary.construct_claim(debit.clone(), invalid_signature),
+        Err(WithdrawalError::Refused(
+            layerx_paxeer_client::ClaimRefusal::CertificateNotRecorded { .. }
+        ))
+    ));
     let mut wrong_version = proof.clone();
     wrong_version.attestations[0].protocol_version = if protocol_version == 3 { 2 } else { 3 };
     assert!(boundary
