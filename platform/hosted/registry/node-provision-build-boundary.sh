@@ -37,7 +37,7 @@ while [ "$slot" -lt "$SLOTS" ]; do
     mountpoint="$QUOTA_ROOT/slot-$slot"
     mkdir -p "$mountpoint"
     if mountpoint -q "$mountpoint"; then
-        loop="$(findmnt -n -o SOURCE --target "$mountpoint")"
+        loop="$(findmnt -n --first-only -o SOURCE --target "$mountpoint")"
         case "$loop" in /dev/loop[0-9]*) ;; *) exit 67 ;; esac
         test "$(losetup -j "$image" | wc -l)" = 1
         backing="$(losetup -n -O BACK-FILE "$loop" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
@@ -56,11 +56,20 @@ while [ "$slot" -lt "$SLOTS" ]; do
             mv -T "$temporary" "$image"
             trap - EXIT HUP INT TERM
         fi
-        loop="$(losetup --find --show "$image")"
-        mount -t ext4 -o nosuid,nodev,noatime "$loop" "$mountpoint"
-        losetup -d "$loop"
-        test "$(losetup -n -O AUTOCLEAR "$loop" | tr -d '[:space:]')" = 1
+        systemd-mount --no-ask-password --collect --automount=no \
+            --type=ext4 --options=loop,nosuid,nodev,noatime \
+            --property=Before=kubelet.service "$image" "$mountpoint"
+        mountpoint -q "$mountpoint"
+        loop="$(findmnt -n --first-only -o SOURCE --target "$mountpoint")"
+        case "$loop" in /dev/loop[0-9]*) ;; *) exit 67 ;; esac
     fi
+    test "$(losetup -n -O AUTOCLEAR "$loop" | tr -d '[:space:]')" = 1
+    test "$(findmnt -n --first-only -o FSTYPE --target "$mountpoint")" = ext4
+    options="$(findmnt -n --first-only -o OPTIONS --target "$mountpoint")"
+    for option in rw nosuid nodev noatime; do
+        case ",$options," in *",$option,"*) ;; *) exit 67 ;; esac
+    done
+    test "$(stat -c %d "$mountpoint")" != "$(stat -c %d "$QUOTA_ROOT")"
     tune="$(dumpe2fs -h "$image" 2>/dev/null)"
     blocks="$(printf '%s\n' "$tune" | awk -F: '/^Block count:/{gsub(/ /,"",$2);print $2}')"
     block_size="$(printf '%s\n' "$tune" | awk -F: '/^Block size:/{gsub(/ /,"",$2);print $2}')"
