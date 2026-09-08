@@ -10,6 +10,15 @@ spec:
     spec:
       nodeSelector: {layerx.io/program-registry-boundary: "v1"}
       securityContext: {runAsNonRoot: true, runAsUser: 4030, runAsGroup: 4030, fsGroup: 4030}
+      initContainers:
+        - name: trust-history
+          image: ghcr.io/sidiora-labs/layerx-program-registry:0.1.0
+          imagePullPolicy: Always
+          command: [/bin/sh, -euc, 'umask 077 && cp /run/layerx/trust-source/history /run/layerx/trust/history && chmod 0600 /run/layerx/trust/history']
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}, seccompProfile: {type: RuntimeDefault}}
+          volumeMounts:
+            - {name: trust-source, mountPath: /run/layerx/trust-source, readOnly: true}
+            - {name: trust, mountPath: /run/layerx/trust}
       containers:
         - name: registry
           image: ghcr.io/sidiora-labs/layerx-program-registry:0.1.0
@@ -42,6 +51,7 @@ spec:
             - {name: LAYERX_REGISTRY_MAX_BUILDS, value: "4"}
             - {name: LAYERX_REGISTRY_NODE_ENDPOINT, value: "https://layerx-agent-boundary.layerx-testnet.svc.cluster.local:9443"}
             - {name: LAYERX_REGISTRY_NODE_AUTHORIZATION, valueFrom: {secretKeyRef: {name: layerx-program-registry-node-client, key: token}}}
+            - {name: LAYERX_REGISTRY_OUTBOUND_CA_DER, value: /run/layerx/client-ca/ca.crt.der}
             - {name: LAYERX_REGISTRY_RECEIPT_AUTHORITY_ENDPOINT, value: "https://layerx-receipt-authority.layerx-testnet.svc.cluster.local:9443"}
             - {name: LAYERX_REGISTRY_RECEIPT_AUTHORITY_AUTHORIZATION, valueFrom: {secretKeyRef: {name: layerx-program-registry-authority-client, key: token}}}
             - {name: LAYERX_REGISTRY_RECEIPT_AUTHORITY_REPLICA_ID, valueFrom: {configMapKeyRef: {name: layerx-receipt-authority, key: replica-id}}}
@@ -65,7 +75,8 @@ spec:
         - {name: publication, secret: {secretName: layerx-program-registry-publication-operator, defaultMode: 0440}}
         - {name: server, secret: {secretName: layerx-program-registry-server-tls, defaultMode: 0440}}
         - {name: client-ca, secret: {secretName: layerx-internal-ca}}
-        - {name: trust, secret: {secretName: layerx-sequencer-trust-history}}
+        - {name: trust-source, secret: {secretName: layerx-sequencer-trust-history, defaultMode: 0440}}
+        - {name: trust, emptyDir: {medium: Memory, sizeLimit: 1Mi}}
         - {name: builder, persistentVolumeClaim: {claimName: layerx-program-builder-release}}
         - {name: cgroup, hostPath: {path: /sys/fs/cgroup/layerx-program-registry, type: Directory}}
         - {name: quota, hostPath: {path: /var/lib/layerx-program-registry-builds, type: Directory}}
