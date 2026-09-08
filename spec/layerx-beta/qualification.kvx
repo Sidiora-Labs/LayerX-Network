@@ -4853,6 +4853,16 @@ file = "platform/hosted/gateway/tests/tap_nonce.rs platform/hosted/gateway/src/m
 symbol = "module_schema_tests and Redis qualification prerequisite"
 observed = "The separate gateway cargo test command first exits 101 because redis-server is absent, after all 21 unit tests pass. Installing untracked Redis tooling and its liblzf/libjemalloc dependencies under qual-logs/hm2/redis/extracted allows cargo test --locked --manifest-path platform/Cargo.toml -p layerx-platform-gateway to exit 0 with all 23 tests passing. The rerun prepends extracted/usr/bin to PATH and sets LD_LIBRARY_PATH to extracted/usr/lib/x86_64-linux-gnu. Final cargo fmt --check and cargo clippy --locked --all-targets -- -D warnings for both authority and gateway exit 0. Evidence: qual-logs/hm2/hm2c-gateway-test-final.log, hm2c-redis-install.log, hm2c-fmt-final.log and hm2c-clippy-final.log."
 assumption = "The Redis tests start isolated loopback TLS servers on ephemeral ports and retain their original assertions. These passing local gates do not establish privileged native-node, cluster, image, or all-eight-route success."
+severity = "note"
+
+[observation.6.4.178]
+task = "6.4"
+file = "platform/hosted/gateway/tests/tap_nonce.rs platform/hosted/gateway/src/main.rs"
+symbol = "module_schema_tests and Redis qualification prerequisite"
+observed = "formerly observation.6.4.177. The separate gateway cargo test command first exits 101 because redis-server is absent, after all 21 unit tests pass. Installing untracked Redis tooling and its liblzf/libjemalloc dependencies under qual-logs/hm2/redis/extracted allows cargo test --locked --manifest-path platform/Cargo.toml -p layerx-platform-gateway to exit 0 with all 23 tests passing. The rerun prepends extracted/usr/bin to PATH and sets LD_LIBRARY_PATH to extracted/usr/lib/x86_64-linux-gnu. Final cargo fmt --check and cargo clippy --locked --all-targets -- -D warnings for both authority and gateway exit 0. Evidence: qual-logs/hm2/hm2c-gateway-test-final.log, hm2c-redis-install.log, hm2c-fmt-final.log and hm2c-clippy-final.log."
+assumption = "The Redis tests start isolated loopback TLS servers on ephemeral ports and retain their original assertions. These passing local gates do not establish privileged native-node, cluster, image, or all-eight-route success."
+severity = "blocker"
+
 [observation.2.3.4]
 task = "2.3"
 file = "human/crates/layerx-human-service/src/server/movement_provider.rs human/crates/layerx-human-service/src/custody/provider.rs human/crates/layerx-human-kms/src/wire.rs"
