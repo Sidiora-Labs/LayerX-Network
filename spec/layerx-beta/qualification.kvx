@@ -7608,3 +7608,11 @@ symbol = "collect_assets"
 observed = "Committed Asset records are decoded and overlaid with cap/supply consistency checks, but the initial account scan still synthesizes registered=true and paused=false for every balance asset. This reconstruction path is outside owned paths."
 assumption = "Remove synthesis through an authoritative bootstrap and persisted registry interface, then qualify actual daemon restart metadata and root equality. Snapshot equality alone does not establish this."
 severity = "blocker"
+
+[observation.3.7.42]
+task = "3.7"
+file = "src/protocol/lxp_module_ctx.c src/modules/asset/lx_asset_execution.h src/ledger/lx_account_id.c"
+symbol = "lxp_ctx_asset_issuance_stage issuance_find"
+observed = "Current issuance staging, prepared-account commit validation and replay use asset:<hex>:issuance. The shared account encoding does not authorize that extra namespace. The Asset requirement now specifies one explicit internal representation through module:<mod>:value:<hex64> and preserves public agent account names and conservation."
+assumption = "Module context and daemon replay changes are outside owned paths. Updating only owned lookup/parser code would split producers and consumers. Observation.3.7.24 is an accounting integration issue, not authority to weaken conservation."
+severity = "blocker"
