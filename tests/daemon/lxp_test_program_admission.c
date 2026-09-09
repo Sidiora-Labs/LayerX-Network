@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 
 #include "layerx/lxp_activity.h"
+#include "layerx/lx_asset.h"
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_arena.h"
 #include "layerx/lxp_daemon.h"
@@ -491,7 +492,7 @@ static int simulate_call(int descriptor, const signer *key)
 }
 
 
-static int maintenance_receipt(int descriptor, uint64_t sequence, const uint8_t *activity_id)
+static int checked_receipt(int descriptor, uint64_t sequence, const uint8_t *activity_id, bool success)
 {
     uint8_t query[9] = {3U};
     signer sequencer;
@@ -511,6 +512,15 @@ static int maintenance_receipt(int descriptor, uint64_t sequence, const uint8_t 
             REQUIRE(lxp_arena_init(&arena, storage, sizeof(storage)) == LXP_OK);
             REQUIRE(lxp_receipt_decode(response.payload, response.payload_length, true, &receipt) == LXP_OK);
             REQUIRE(receipt.global_sequence == sequence);
+            if (success) {
+                if (receipt.result_code != LXP_OK) fprintf(stderr, "WITHDRAW result %d\n", receipt.result_code);
+                REQUIRE(receipt.result_code == LXP_OK);
+                REQUIRE(memcmp(receipt.previous_state_root, receipt.resulting_state_root, 32U) != 0);
+                if (sequence == 3U) {
+                    REQUIRE(receipt.module_id == LXP_MODULE_ASSET);
+                    REQUIRE(receipt.module_version == lx_asset_module_iface()->abi_version);
+                }
+            }
             REQUIRE(activity_id == NULL || memcmp(receipt.activity_id, activity_id, 32U) == 0);
             REQUIRE(lxp_receipt_verify(&receipt, sequencer.public_key, &arena) == LXP_OK);
             release_envelope(&response);
@@ -543,6 +553,11 @@ static int maintenance_head(int *descriptor, uint64_t sequence, uint64_t batch)
         { const struct timespec delay = {0, 50000000}; REQUIRE(nanosleep(&delay, NULL) == 0); }
     }
     return 1;
+}
+
+static int maintenance_receipt(int descriptor, uint64_t sequence, const uint8_t *activity_id)
+{
+    return checked_receipt(descriptor, sequence, activity_id, false);
 }
 
 static int maintenance_admission(int *descriptor, const signer *key, bool recovered, bool queued)
@@ -622,6 +637,60 @@ static int availability_batches(int descriptor, const signer *key)
     return 0;
 }
 
+static int withdraw_admission(int descriptor, const signer *key, bool recovered)
+{
+    static const uint8_t asset[32] = {
+        0xb5,0xa3,0x2b,0x12,0x02,0x9f,0x8d,0xdf,0xb9,0x05,0xf9,0x0f,0x28,0x0f,0x66,0x4b,
+        0x46,0x39,0x0d,0xe0,0xfc,0x62,0x77,0x0f,0xc1,0x97,0xdd,0x87,0xb1,0x8c,0xd8,0x98
+    };
+    uint8_t payload[108] = {0}, encoded[ACTIVITY_CAPACITY], id[32];
+    size_t length;
+    if (recovered) {
+        REQUIRE(checked_receipt(descriptor, 3U, NULL, true) == 0);
+        puts("WITHDRAW receipt recovered through daemon replay");
+        return 0;
+    }
+    {
+        const char *path = getenv("LAYERX_TEST_WITHDRAW_CREDIT");
+        FILE *file;
+        REQUIRE(path != NULL && (file = fopen(path, "rb")) != NULL);
+        length = fread(encoded, 1U, sizeof(encoded), file);
+        REQUIRE(length > 0U && length < sizeof(encoded) && !ferror(file));
+        REQUIRE(fclose(file) == 0);
+        REQUIRE(lxp_activity_id(encoded, length, id) == LXP_OK);
+        REQUIRE(send_request(descriptor, LNI_MINOR, SUBMIT_REQUEST, 89U, encoded, length) == 0);
+        REQUIRE(expect_ack(descriptor, 89U, encoded, length, id) == 0);
+        REQUIRE(checked_receipt(descriptor, 1U, id, true) == 0);
+    }
+    memcpy(payload, asset, 32U);
+    payload[47] = 1U;
+    memset(payload + 48U, 0x31, 20U);
+    memset(payload + 68U, 0x42, 32U);
+    REQUIRE(build_activity(key, 1U, LX_ASSET_WITHDRAW, 0U, payload,
+        sizeof(payload) - 1U, encoded, sizeof(encoded), &length) == 0);
+    REQUIRE(send_request(descriptor, LNI_MINOR, SUBMIT_REQUEST, 90U, encoded, length) == 0);
+    REQUIRE(expect_error(descriptor, 90U, 4U, LXP_ERR_NON_CANONICAL) == 0);
+    REQUIRE(build_activity(key, 1U, LX_ASSET_WITHDRAW, 0U, payload,
+        sizeof(payload), encoded, sizeof(encoded), &length) == 0);
+    {
+        lxp_activity decoded;
+        size_t signature_offset;
+        REQUIRE(lxp_activity_decode(encoded, length, &decoded) == LXP_OK);
+        REQUIRE(decoded.signature.length == 64U);
+        signature_offset = (size_t)(decoded.signature.bytes - encoded);
+        encoded[signature_offset] ^= 1U;
+        REQUIRE(send_request(descriptor, LNI_MINOR, SUBMIT_REQUEST, 92U, encoded, length) == 0);
+        REQUIRE(expect_error(descriptor, 92U, 6U, LXP_ERR_BAD_SIGNATURE) == 0);
+        encoded[signature_offset] ^= 1U;
+    }
+    REQUIRE(lxp_activity_id(encoded, length, id) == LXP_OK);
+    REQUIRE(send_request(descriptor, LNI_MINOR, SUBMIT_REQUEST, 91U, encoded, length) == 0);
+    REQUIRE(expect_ack(descriptor, 91U, encoded, length, id) == 0);
+    REQUIRE(checked_receipt(descriptor, 3U, id, true) == 0);
+    puts("malformed WITHDRAW refused; signed WITHDRAW admitted and receipted");
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     signer key;
@@ -645,6 +714,13 @@ int main(int argc, char **argv)
     descriptor = socket(AF_UNIX, SOCK_STREAM, 0);
     REQUIRE(descriptor >= 0 && connect(descriptor, (struct sockaddr *)&address, sizeof(address)) == 0);
     REQUIRE(handshake(descriptor) == 0);
+    if (argc == 3 && (strcmp(argv[2], "--withdraw") == 0 ||
+                     strcmp(argv[2], "--withdraw-recovered") == 0)) {
+        REQUIRE(withdraw_admission(descriptor, &key,
+            strcmp(argv[2], "--withdraw-recovered") == 0) == 0);
+        REQUIRE(close(descriptor) == 0);
+        return 0;
+    }
     if (argc == 3 && strcmp(argv[2], "--availability-batches") == 0) {
         REQUIRE(availability_batches(descriptor, &key) == 0);
         REQUIRE(close(descriptor) == 0);
