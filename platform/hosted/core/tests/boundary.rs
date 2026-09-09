@@ -206,6 +206,9 @@ fn spawn(
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::from(must(fs::File::create(&stderr), "stderr file")));
+    if std::env::var_os("LAYERX_PAY_TIMING").is_some() {
+        command.env("LAYERX_PAY_TIMING", "1");
+    }
     if daemon_identity {
         command.uid(DAEMON_UID).gid(DAEMON_GID);
     }
@@ -264,7 +267,7 @@ fn lni_limits() -> Limits {
 
 fn handshake_config() -> HandshakeConfig {
     HandshakeConfig {
-        built_interface_version: Version::V1_4,
+        built_interface_version: Version::V1_5,
         expected_protocol_version: PROTOCOL_VERSION,
         expected_network_id: NETWORK_ID,
     }
@@ -839,6 +842,36 @@ fn genesis_request(asset: &[u8; 32], sequencer_key: &[u8; 32]) -> Vec<u8> {
         request.extend_from_slice(&value.to_be_bytes());
     }
     assert_eq!(request.len(), 395, "LXGB request length");
+    request[4] = 2;
+    let mut record = vec![0, 3];
+    record.extend_from_slice(asset);
+    record.extend_from_slice(&[4, b'T', b'E', b'S', b'T', 6, 1, 0, 0, 0, 10]);
+    record.extend_from_slice(b"Test asset");
+    record.extend_from_slice(&0_u128.to_be_bytes());
+    record.extend_from_slice(&sha256(&[
+        b"LXP/v1/did-id\0",
+        &32_u16.to_be_bytes(),
+        sequencer_key,
+    ]));
+    record.push(2);
+    record.extend_from_slice(&0_u128.to_be_bytes());
+    record.extend_from_slice(asset);
+    request.extend_from_slice(&1_u16.to_be_bytes());
+    request
+        .extend_from_slice(&must(u16::try_from(record.len()), "asset record length").to_be_bytes());
+    request.extend_from_slice(&record);
+    let mut schedule = vec![0, 2];
+    for value in [0_u128; 5] {
+        schedule.extend_from_slice(&value.to_be_bytes());
+    }
+    schedule.extend_from_slice(&10000_u32.to_be_bytes());
+    schedule.push(8);
+    for value in [0_u128; 8] {
+        schedule.extend_from_slice(&value.to_be_bytes());
+    }
+    assert_eq!(schedule.len(), 215);
+    request.extend_from_slice(&215_u16.to_be_bytes());
+    request.extend_from_slice(&schedule);
     request
 }
 
@@ -2840,4 +2873,39 @@ fn receipt_events_require_auth_and_bind_global_sequence() {
     assert!(json(&event)["result"]["receipt"]
         .as_str()
         .is_some_and(|value| !value.is_empty()));
+}
+
+#[test]
+fn minor_five_receipt_publication_wait_verifies_committed_receipt() {
+    let cluster = start_cluster(true);
+    let certificates = certificates(&cluster.root);
+    let boundary = start_boundary(&cluster, &certificates);
+    let mut missing = vec![1];
+    missing.extend_from_slice(&[99; 32]);
+    missing.push(1);
+    let started = Instant::now();
+    assert_eq!(
+        receipt_wait_request(&cluster.lni_socket, &missing),
+        (6, vec![])
+    );
+    assert!(started.elapsed() < Duration::from_secs(5));
+    let activity = establish_receipt_head(&boundary, &cluster);
+    let mut selector = vec![1];
+    selector.extend_from_slice(&activity);
+    selector.push(1);
+    let (tag, bytes) = receipt_wait_request(&cluster.lni_socket, &selector);
+    assert_eq!(tag, 6);
+    let receipt = must(
+        layerx_proof::receipt::verify_sequencer_signature(&bytes, cluster.sequencer_key),
+        "published receipt signature",
+    );
+    assert_eq!(
+        receipt
+            .protocol()
+            .unwrap_or_else(|| panic!("protocol receipt"))
+            .activity_id(),
+        activity
+    );
+    selector.push(1);
+    assert_eq!(receipt_wait_request(&cluster.lni_socket, &selector).0, 25);
 }

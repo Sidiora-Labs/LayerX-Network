@@ -12,3 +12,5 @@ pub mod stream;
 pub mod submit;
 
 pub use client::Client;
+
+pub mod payments;

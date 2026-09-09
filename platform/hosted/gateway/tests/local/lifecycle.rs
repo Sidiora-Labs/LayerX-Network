@@ -946,16 +946,34 @@ fn local_gateway_successful_send_latency() {
             hex_encode(&signed.activity_id)
         );
         verify_funded_receipt(&result, &cluster, &signed);
+        println!("successful_send_sample index={index} elapsed_us={elapsed}");
         samples.push(elapsed);
         last_signed = Some(signed);
     }
     samples.sort_unstable();
     println!("successful_send_submit_to_receipt_us samples=20 p50={} p99={} transport=gateway_https_json_rpc commitment=executed funding=verified_custody destination=funded_agent_main receipt_wait=commit_condition", samples[9], samples[19]);
+    print_payment_timings(&cluster);
     assert_funded_commitments(
         &http,
         &authorization,
         &last_signed.required("successful SEND"),
     );
+}
+
+fn print_payment_timings(cluster: &Cluster) {
+    for file in [
+        "sequencer.stderr",
+        "boundary.stderr",
+        "layerx-gateway.stderr",
+    ] {
+        let lines = must(fs::read_to_string(cluster.root.join(file)), "timing log");
+        for line in lines
+            .lines()
+            .filter(|line| line.contains("pay_timing") || line.starts_with("pay-native "))
+        {
+            println!("{file} {line}");
+        }
+    }
 }
 
 fn verify_funded_receipt(
@@ -972,6 +990,11 @@ fn verify_funded_receipt(
     let receipt = receipt.protocol().required("protocol SEND");
     assert_eq!(receipt.result_code(), 0);
     assert_eq!(receipt.activity_id(), signed.activity_id);
+    println!(
+        "successful_send_meter canonical_bytes={} fee_charged={}",
+        signed.canonical.len(),
+        receipt.fee_charged()
+    );
 }
 
 fn assert_funded_commitments(
@@ -1172,4 +1195,134 @@ fn local_gateway_websocket_receipt_wake() {
         &serde_json::json!({"jsonrpc":"2.0","id":3,"method":"lx_subscribe","params":["account", "00".repeat(32)]}),
     );
     assert_eq!(ws_receive(&mut stream)["error"]["code"], -32602);
+}
+
+#[test]
+fn local_gateway_committed_payment_reads() {
+    let (cluster, funding) = funding::start();
+    let certificates = certificates(&cluster.root);
+    let boundary = start_boundary(&cluster, &certificates);
+    let identity = start_local_identity(&cluster, &certificates);
+    let authority = start_local_authority(&cluster, &certificates);
+    let redis = start_local_redis(&cluster, &certificates);
+    let gateway = start_local_gateway(
+        &cluster,
+        &certificates,
+        &boundary,
+        &identity,
+        &authority,
+        &redis,
+    );
+    let http = Http {
+        port: gateway.port,
+        ca: Certificate::from_der(&certificates.ca_der).required("CA"),
+        identity: None,
+    };
+    let read = |method: &str, params: serde_json::Value| {
+        let request = serde_json::to_vec(
+            &serde_json::json!({"jsonrpc":"2.0","id":1,"method":method,"params":params}),
+        )
+        .required("read request");
+        let answer = http.request(
+            "POST",
+            "/rpc",
+            &[("Content-Type", "application/json")],
+            &request,
+        );
+        assert_eq!(answer.status, 200, "{}", answer.body);
+        json(&answer)
+    };
+    let balances = read("lx_getBalances", serde_json::json!([cluster.treasury_did]));
+    let accounts = balances["result"]["accounts"]
+        .as_array()
+        .required("committed accounts");
+    let source = layerx_platform_core::main_account(&cluster.treasury_did).required("source");
+    let account = accounts
+        .iter()
+        .find(|account| account["account_id"] == hex_encode(&source))
+        .required("funded main account");
+    assert_eq!(account["balance"], "100000000000000");
+    assert_eq!(account["asset_id"], hex_encode(&cluster.asset));
+    assert!(!account["proof_material"]
+        .as_str()
+        .required("native proof")
+        .is_empty());
+    let assets = read("lx_listAssets", serde_json::json!([]));
+    let assets = assets["result"]["assets"].as_array().required("assets");
+    assert_eq!(assets.len(), 1);
+    assert_eq!(assets[0]["asset_id"], hex_encode(&cluster.asset));
+    assert_eq!(assets[0]["symbol"], "TEST");
+    let detail = read(
+        "lx_getAsset",
+        serde_json::json!([hex_encode(&cluster.asset)]),
+    );
+    assert_eq!(detail["result"]["asset"], assets[0]);
+    assert_eq!(
+        detail["result"]["verification"],
+        "authenticated_committed_snapshot"
+    );
+    assert_committed_fee_reads(&cluster, &funding, &http, source, &read);
+}
+
+fn assert_committed_fee_reads(
+    cluster: &Cluster,
+    funding: &funding::Funding,
+    http: &Http,
+    source: [u8; 32],
+    read: &impl Fn(&str, serde_json::Value) -> serde_json::Value,
+) {
+    let signed = funding::send(
+        &cluster.treasury_seed,
+        account_sequence(&cluster.lni_socket, &cluster.treasury_did),
+        &SendRequest {
+            network_id: NETWORK_ID,
+            source_did: cluster.treasury_did.clone(),
+            destination_did: funding.recipient_did.clone(),
+            asset: cluster.asset,
+            amount: 1,
+            account_sequence: rpc_account_sequence(http, &hex_encode(&source), 2),
+            idempotency_key: random32(),
+            not_before_ms: now_ms() - 1000,
+            expires_at_ms: now_ms() + 60000,
+            fee_limit: 1_000_000_000_000,
+        },
+    )
+    .required("signed estimate activity");
+    let fee = read(
+        "lx_estimateFee",
+        serde_json::json!([hex_encode(&signed.canonical)]),
+    );
+    assert_eq!(
+        fee["result"]["fee"],
+        (signed.canonical.len() + 4).to_string()
+    );
+    assert_eq!(fee["result"]["canonical_bytes"], signed.canonical.len());
+    assert_eq!(
+        fee["result"]["canonical_schedule"]
+            .as_str()
+            .required("schedule")
+            .len(),
+        430
+    );
+    let program = signed_program_call(&cluster.treasury_seed, &cluster.treasury_did, 1, random32());
+    assert_eq!(
+        read("lx_estimateFee", serde_json::json!([hex_encode(&program)]))["error"]["code"],
+        -32001
+    );
+    assert_eq!(
+        read("lx_getAsset", serde_json::json!(["63".repeat(32)]))["error"]["code"],
+        -32001
+    );
+    assert_eq!(
+        read("lx_getAsset", serde_json::json!(["00".repeat(32)]))["error"]["code"],
+        -32602
+    );
+    assert_eq!(
+        read("lx_estimateFee", serde_json::json!(["abcd"]))["error"]["code"],
+        -32602
+    );
+    assert_eq!(
+        read("lx_getBalances", serde_json::json!(["bad/path"]))["error"]["code"],
+        -32602
+    );
 }

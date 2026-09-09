@@ -74,6 +74,10 @@ int main(void)
                              accounts_a.accounts[0].asset_id, &balance) != LXP_OK ||
         balance.lo != 10U || balance.hi != 0U)
         return 1;
+    assets_a.assets[0].salt[0] ^= 1U;
+    if (lx_asset_state_root(&assets_a, &accounts_a, root_a) != LXP_OK ||
+        memcmp(root_a, root_b, 32U) == 0) return 1;
+    assets_a.assets[0].salt[0] ^= 1U;
     accounts_a.count = LX_ACCOUNT_REGISTRY_CAPACITY + 1U;
     if (lx_asset_balance_get(&accounts_a, accounts_a.accounts[0].id,
                              accounts_a.accounts[0].asset_id, &balance) !=

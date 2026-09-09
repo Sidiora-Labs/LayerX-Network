@@ -755,3 +755,105 @@ impl<'a> Reader<'a> {
         }
     }
 }
+
+pub fn did_accounts(
+    transport: &mut dyn FrameTransport,
+    did: &layerx_types::ids::Did,
+    context: ReadContext,
+) -> Result<Vec<ReadValue>, ReadError> {
+    use sha2::{Digest, Sha256};
+    if context.root_selector != RootSelector::Latest || context.requested.level().wire_rank() > 3 {
+        return Err(ReadError::UnavailableCapability);
+    }
+    let length = u16::try_from(did.as_bytes().len()).map_err(|_| ReadError::MalformedValue)?;
+    let mut hash = Sha256::new();
+    hash.update(b"LXP/v1/did-id\0");
+    hash.update(length.to_be_bytes());
+    hash.update(did.as_bytes());
+    let mut payload = vec![0, 1, 3];
+    payload.extend_from_slice(&hash.finalize());
+    payload.push(1);
+    payload.push(context.requested.level().wire_rank());
+    transport.send(&encode_envelope(Envelope {
+        version: context.interface_version,
+        message_tag: 7,
+        correlation_id: context.correlation_id,
+        canonical_payload: &payload,
+        proof_material: &[],
+    })?)?;
+    let raw = transport.receive()?;
+    let response = decode_envelope(&raw)?;
+    if response.version.major != context.interface_version.major
+        || response.correlation_id != context.correlation_id
+        || !response.proof_material.is_empty()
+    {
+        return Err(ReadError::UnexpectedResponse);
+    }
+    if response.message_tag == ERROR_RESPONSE_TAG {
+        let refusal =
+            decode_core_refusal(response.canonical_payload).ok_or(ReadError::UnexpectedResponse)?;
+        return Err(ReadError::CoreRefusal {
+            class: refusal.class,
+            result: refusal.result,
+        });
+    }
+    if response.message_tag != 8 {
+        return Err(ReadError::UnexpectedResponse);
+    }
+    let mut bytes = response.canonical_payload;
+    fn take<'a>(bytes: &mut &'a [u8], count: usize) -> Result<&'a [u8], ReadError> {
+        if count > bytes.len() {
+            return Err(ReadError::MalformedValue);
+        }
+        let (value, tail) = bytes.split_at(count);
+        *bytes = tail;
+        Ok(value)
+    }
+    fn number(bytes: &mut &[u8], count: usize) -> Result<usize, ReadError> {
+        Ok(take(bytes, count)?
+            .iter()
+            .fold(0_usize, |value, byte| (value << 8) | usize::from(*byte)))
+    }
+    if number(&mut bytes, 2)? != 1 {
+        return Err(ReadError::MalformedValue);
+    }
+    let count = number(&mut bytes, 2)?;
+    if count > 4096 {
+        return Err(ReadError::MalformedValue);
+    }
+    let mut result = Vec::with_capacity(count);
+    let mut previous: Option<[u8; 32]> = None;
+    let mut owner_prefix = b"agent:".to_vec();
+    owner_prefix.extend_from_slice(did.as_bytes());
+    owner_prefix.push(b':');
+    for _ in 0..count {
+        let id: [u8; 32] = take(&mut bytes, 32)?
+            .try_into()
+            .map_err(|_| ReadError::MalformedValue)?;
+        if previous.is_some_and(|prior| prior >= id) {
+            return Err(ReadError::MalformedValue);
+        }
+        previous = Some(id);
+        let value_length = number(&mut bytes, 4)?;
+        let value = take(&mut bytes, value_length)?;
+        let proof_length = number(&mut bytes, 4)?;
+        let proof = take(&mut bytes, proof_length)?;
+        if proof.is_empty() {
+            return Err(ReadError::MalformedValue);
+        }
+        let account = decode_account_value(id, value).map_err(ReadError::Account)?;
+        if !account.name.starts_with(&owner_prefix) {
+            return Err(ReadError::SelectorMismatch);
+        }
+        result.push(verify_state_value(
+            value,
+            proof,
+            &StateSelector::Account { account: id },
+            context,
+        )?);
+    }
+    if !bytes.is_empty() {
+        return Err(ReadError::MalformedValue);
+    }
+    Ok(result)
+}

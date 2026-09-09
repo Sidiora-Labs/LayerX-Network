@@ -18,6 +18,8 @@ typedef struct lxp_fee_meter {
 } lxp_fee_meter;
 #define lxp_fee_meter lxp_fee_meter
 
+enum { LXP_ASSET_FEE_PRICE_COUNT = 8 };
+
 typedef struct lxp_fee_params {
     uint16_t version;
     lxp_u128 base_fee;
@@ -26,6 +28,8 @@ typedef struct lxp_fee_params {
     lxp_u128 per_execution_unit;
     lxp_u128 per_storage_unit;
     uint32_t multiplier_basis_points;
+    uint8_t asset_price_count;
+    lxp_u128 asset_prices[LXP_ASSET_FEE_PRICE_COUNT];
 } lxp_fee_params;
 #define lxp_fee_params lxp_fee_params
 
@@ -63,6 +67,14 @@ typedef struct lxp_fee_replay_entry {
 } lxp_fee_replay_entry;
 #define lxp_fee_replay_entry lxp_fee_replay_entry
 
+const char *lxp_asset_fee_name(size_t index);
+lxp_result lxp_fee_params_encode(const lxp_fee_params *parameters,
+    uint8_t *bytes, size_t capacity, size_t *length);
+lxp_result lxp_fee_params_decode(const uint8_t *bytes, size_t length,
+    lxp_fee_params *parameters);
+struct lxp_kernel;
+lxp_result lxp_fee_committed_schedule(const struct lxp_kernel *kernel,
+    uint32_t parameter_version, lxp_fee_params *schedule);
 lxp_result lxp_fee_compute(const lxp_fee_params *parameters,
                            uint32_t activity_type, lxp_fee_meter meter,
                            lxp_u128 *fee);

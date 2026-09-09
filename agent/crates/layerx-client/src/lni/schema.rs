@@ -28,6 +28,8 @@ impl Version {
     /// Additive noncommitting program simulation capability revision.
     pub const V1_4: Self = Self { major: 1, minor: 4 };
 
+    pub const V1_5: Self = Self { major: 1, minor: 5 };
+
     /// Returns whether the two peers can interpret the same stable message set.
     #[must_use]
     pub const fn is_compatible_with(self, peer: Self) -> bool {
@@ -64,6 +66,8 @@ pub enum Capability {
     PreparationState,
     FinalityEvidenceRegister,
     Simulate,
+    AssetRead,
+    FeeEstimate,
 }
 
 impl Capability {
@@ -86,6 +90,8 @@ impl Capability {
             Self::PreparationState => "preparation_state",
             Self::FinalityEvidenceRegister => "finality_evidence_register",
             Self::Simulate => "simulate",
+            Self::AssetRead => "asset_read",
+            Self::FeeEstimate => "fee_estimate",
         }
     }
 }
@@ -109,7 +115,7 @@ pub struct Schema {
     pub capabilities: &'static [Capability],
 }
 
-const CAPABILITIES: [Capability; 15] = [
+const CAPABILITIES: [Capability; 17] = [
     Capability::NodeInfo,
     Capability::Submit,
     Capability::AuthenticatedDurableSubmit,
@@ -125,6 +131,8 @@ const CAPABILITIES: [Capability; 15] = [
     Capability::PreparationState,
     Capability::FinalityEvidenceRegister,
     Capability::Simulate,
+    Capability::AssetRead,
+    Capability::FeeEstimate,
 ];
 
 const fn message(
@@ -145,7 +153,7 @@ const fn message(
     }
 }
 
-const MESSAGES: [MessageDescriptor; 31] = [
+const MESSAGES: [MessageDescriptor; 35] = [
     message(
         "NodeInfoRequest",
         1,
@@ -394,10 +402,42 @@ const MESSAGES: [MessageDescriptor; 31] = [
         true,
         true,
     ),
+    message(
+        "AssetReadRequest",
+        32,
+        MessageKind::Request,
+        Capability::AssetRead,
+        true,
+        false,
+    ),
+    message(
+        "AssetReadResponse",
+        33,
+        MessageKind::Response,
+        Capability::AssetRead,
+        true,
+        false,
+    ),
+    message(
+        "FeeEstimateRequest",
+        34,
+        MessageKind::Request,
+        Capability::FeeEstimate,
+        true,
+        false,
+    ),
+    message(
+        "FeeEstimateResponse",
+        35,
+        MessageKind::Response,
+        Capability::FeeEstimate,
+        true,
+        false,
+    ),
 ];
 
 const SCHEMA: Schema = Schema {
-    version: Version::V1_4,
+    version: Version::V1_5,
     messages: &MESSAGES,
     capabilities: &CAPABILITIES,
 };
@@ -420,7 +460,7 @@ pub struct GoldenVector {
 const NO_PROOF: &[u8] = &[];
 const PROOF: &[u8] = &[0xa5];
 
-const GOLDENS: [GoldenVector; 31] = [
+const GOLDENS: [GoldenVector; 35] = [
     GoldenVector {
         message: "NodeInfoRequest",
         payload: &[1],
@@ -607,13 +647,39 @@ const GOLDENS: [GoldenVector; 31] = [
         proof_material: PROOF,
         encoded_hex: "00010004001f0000000000000000000000011f00000001a5",
     },
+    GoldenVector {
+        message: "AssetReadRequest",
+        payload: &[32],
+        proof_material: NO_PROOF,
+        encoded_hex: "0001000500200000000000000000000000012000000000",
+    },
+    GoldenVector {
+        message: "AssetReadResponse",
+        payload: &[33],
+        proof_material: NO_PROOF,
+        encoded_hex: "0001000500210000000000000000000000012100000000",
+    },
+    GoldenVector {
+        message: "FeeEstimateRequest",
+        payload: &[34],
+        proof_material: NO_PROOF,
+        encoded_hex: "0001000500220000000000000000000000012200000000",
+    },
+    GoldenVector {
+        message: "FeeEstimateResponse",
+        payload: &[35],
+        proof_material: NO_PROOF,
+        encoded_hex: "0001000500230000000000000000000000012300000000",
+    },
 ];
 
 impl GoldenVector {
     /// Interface revision frozen into this literal vector.
     #[must_use]
     pub const fn version(self) -> Version {
-        if self.payload[0] >= 30 {
+        if self.payload[0] >= 32 {
+            Version::V1_5
+        } else if self.payload[0] >= 30 {
             Version::V1_4
         } else if self.payload[0] >= 28 {
             Version::V1_2

@@ -43,6 +43,9 @@ lxp_result lxp_ledger_receipt_build(lxp_receipt *receipt,
     (void)memcpy(receipt->to, input->to, 32U);
     receipt->to_balance_before = input->to_balance_before;
     receipt->to_balance_after = input->to_balance_after;
+    receipt->supply_binding_version = input->supply_binding_version;
+    receipt->total_units_before = input->total_units_before;
+    receipt->total_units_after = input->total_units_after;
     (void)memcpy(receipt->transfer_set_root, input->transfer_set_root, 32U);
     (void)memcpy(receipt->authorization_hash, input->authorization_hash, 32U);
     (void)memcpy(receipt->context_hash, input->context_hash, 32U);

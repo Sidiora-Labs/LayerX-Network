@@ -486,7 +486,7 @@ fn lni_limits() -> Limits {
 
 fn handshake_config(config: &Config) -> HandshakeConfig {
     HandshakeConfig {
-        built_interface_version: Version::V1_4,
+        built_interface_version: Version::V1_5,
         expected_protocol_version: layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION,
         expected_network_id: config.network_id,
     }
@@ -508,8 +508,17 @@ fn connect_client(config: &Config) -> Result<Client, String> {
 }
 
 fn connect_raw(config: &Config) -> Result<(Uds, Handshake), String> {
+    connect_raw_with_deadline(config, LNI_DEADLINE)
+}
+
+fn connect_raw_with_deadline(
+    config: &Config,
+    deadline: Duration,
+) -> Result<(Uds, Handshake), String> {
     let gate = ConnectionGate::new(1);
-    let mut transport = Uds::connect(&config.lni_socket, &gate, lni_limits())
+    let mut limits = lni_limits();
+    limits.deadline = deadline.min(limits.deadline);
+    let mut transport = Uds::connect(&config.lni_socket, &gate, limits)
         .map_err(|error| format!("LNI connection failed: {error:?}"))?;
     let handshake = perform(&mut transport, &handshake_config(config), None)
         .map_err(|error| format!("LNI handshake failed: {error:?}"))?;
@@ -521,12 +530,18 @@ fn lookup_receipt_bytes(
     handshake: &Handshake,
     activity_id: [u8; 32],
     correlation_id: u64,
-    wait_ms: u32,
+    wait_publication: bool,
 ) -> Result<Option<Vec<u8>>, String> {
     let mut selector = Vec::with_capacity(37);
     selector.push(1);
     selector.extend_from_slice(&activity_id);
-    lookup_receipt_selector(transport, handshake, selector, correlation_id, wait_ms)
+    lookup_receipt_selector(
+        transport,
+        handshake,
+        selector,
+        correlation_id,
+        wait_publication,
+    )
 }
 
 fn lookup_receipt_selector(
@@ -534,13 +549,16 @@ fn lookup_receipt_selector(
     handshake: &Handshake,
     mut selector: Vec<u8>,
     correlation_id: u64,
-    wait_ms: u32,
+    wait_publication: bool,
 ) -> Result<Option<Vec<u8>>, String> {
     if !handshake.capabilities().contains(Capability::ReceiptLookup) {
         return Err("receipt_lookup capability is unavailable".to_owned());
     }
-    if wait_ms > 0 {
-        selector.extend_from_slice(&wait_ms.to_be_bytes());
+    if wait_publication {
+        if handshake.node().interface_version.minor < 5 {
+            return Err("receipt publication wait requires LNI minor 5".to_owned());
+        }
+        selector.push(1);
     }
     let request = encode_envelope(Envelope {
         version: handshake.node().interface_version,
@@ -558,7 +576,10 @@ fn lookup_receipt_selector(
         .map_err(|error| format!("receipt lookup receive failed: {error:?}"))?;
     let response = decode_envelope(&response_bytes)
         .map_err(|error| format!("receipt lookup response is malformed: {error:?}"))?;
-    if response.correlation_id != correlation_id {
+    if response.version.major != handshake.node().interface_version.major
+        || !response.proof_material.is_empty()
+        || response.correlation_id != correlation_id
+    {
         return Err("receipt lookup response correlation mismatch".to_owned());
     }
     if response.message_tag == ERROR_RESPONSE_TAG {
@@ -624,34 +645,33 @@ fn await_receipt(
     activity_id: [u8; 32],
     deadline: Duration,
 ) -> Result<Option<ReceiptFacts>, String> {
-    let (mut transport, handshake) = connect_raw(config)?;
+    let (mut transport, handshake) = if deadline.is_zero() {
+        connect_raw(config)?
+    } else {
+        connect_raw_with_deadline(config, deadline)?
+    };
     let started = Instant::now();
-    let mut correlation = 1_u64;
-    loop {
-        if let Some(bytes) = lookup_receipt_bytes(
-            &mut transport,
-            &handshake,
-            activity_id,
-            correlation,
-            u32::try_from(
-                deadline
-                    .saturating_sub(started.elapsed())
-                    .as_millis()
-                    .min(3000),
-            )
-            .map_err(|_| "receipt deadline overflow".to_owned())?,
-        )? {
-            let facts = receipt_facts(&bytes, handshake.node().authorised_sequencer_key)?;
-            if facts.activity_id != activity_id {
-                return Err("receipt names another activity".to_owned());
-            }
-            return Ok(Some(facts));
-        }
-        if started.elapsed() >= deadline {
-            return Ok(None);
-        }
-        correlation += 1;
+    let bytes = lookup_receipt_bytes(
+        &mut transport,
+        &handshake,
+        activity_id,
+        1,
+        !deadline.is_zero(),
+    )?;
+    if std::env::var_os("LAYERX_PAY_TIMING").is_some() {
+        eprintln!(
+            "pay_timing core_receipt_wait_us={}",
+            started.elapsed().as_micros()
+        );
     }
+    let Some(bytes) = bytes else {
+        return Ok(None);
+    };
+    let facts = receipt_facts(&bytes, handshake.node().authorised_sequencer_key)?;
+    if facts.activity_id != activity_id {
+        return Err("receipt names another activity".to_owned());
+    }
+    Ok(Some(facts))
 }
 
 fn receipt_result(facts: &ReceiptFacts) -> serde_json::Value {
@@ -718,6 +738,7 @@ fn submit_activity(
                 .map_err(|_| refusal(400, "invalid_program_lifecycle", None))?;
         }
     }
+    let submit_started = Instant::now();
     let signer = signer_key(activity.authority())
         .ok_or_else(|| refusal(400, "authority_unsupported", None))?;
     let mut client = connect_client(config).map_err(|error| {
@@ -739,6 +760,12 @@ fn submit_activity(
             _ => refusal(400, "invalid_activity", None),
         })?;
     drop(client);
+    if std::env::var_os("LAYERX_PAY_TIMING").is_some() {
+        eprintln!(
+            "pay_timing core_admission_us={}",
+            submit_started.elapsed().as_micros()
+        );
+    }
     let activity_id = match submission {
         Submission::Acknowledged(acknowledgement) => acknowledgement.activity_id(),
         Submission::Unknown(unknown) => unknown.activity_id(),
@@ -931,7 +958,7 @@ fn receipt_route(config: &Config, activity_hex: &str) -> Response {
         return refusal(400, "invalid_argument", None);
     }
     let lookup = connect_raw(config).and_then(|(mut transport, handshake)| {
-        lookup_receipt_bytes(&mut transport, &handshake, activity_id, 1, 0)
+        lookup_receipt_bytes(&mut transport, &handshake, activity_id, 1, false)
     });
     match lookup {
         Ok(Some(bytes)) => success(&serde_json::json!({

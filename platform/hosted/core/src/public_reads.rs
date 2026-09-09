@@ -1,3 +1,5 @@
+use sha2::{Digest, Sha256};
+
 use super::{
     connect_client, decode_account_value, fixed_hex, hex_encode, refusal, success, Config, Request,
     Response, SequencerAuthorization, VerificationLevel,
@@ -40,23 +42,229 @@ pub(super) fn account(config: &Config, id: &str) -> Response {
     }))
 }
 
-pub(super) fn route(config: &Config, request: &Request) -> Option<Response> {
-    if request.path == "/v1/assets" || request.path.starts_with("/v1/assets/") {
-        return Some(if request.method != "GET" {
-            refusal(405, "method_not_allowed", None)
-        } else if request.query.is_some() || !request.body.is_empty() {
-            refusal(400, "invalid_request", None)
-        } else if request.path != "/v1/assets"
-            && request
+fn snapshot_context(handshake: &super::Handshake) -> layerx_client::payments::SnapshotContext {
+    layerx_client::payments::SnapshotContext {
+        interface_version: handshake.node().interface_version,
+        correlation_id: 1,
+        minimum_sequence: handshake.node().chain_head_sequence,
+    }
+}
+
+fn asset_json(asset: &layerx_client::payments::AssetMetadata) -> serde_json::Value {
+    serde_json::json!({
+        "asset_id": hex_encode(&asset.asset_id), "symbol": String::from_utf8_lossy(&asset.symbol),
+        "name": asset.name, "decimals": asset.decimals, "custody_kind": asset.custody_kind,
+        "custody_reference": hex_encode(&asset.custody_reference), "paused": asset.paused,
+        "supply_cap": asset.supply_cap.to_string(), "issuer_did": hex_encode(&asset.issuer_did),
+        "issuer_kind": asset.issuer_kind, "total_units": asset.total_units.to_string(),
+        "salt": hex_encode(&asset.salt)
+    })
+}
+
+fn assets(config: &Config, id: Option<[u8; 32]>) -> Response {
+    let Ok((mut transport, handshake)) = super::connect_raw(config) else {
+        return refusal(503, "node_unavailable", Some(5));
+    };
+    let context = snapshot_context(&handshake);
+    if let Some(id) = id {
+        return match layerx_client::payments::get_asset(&mut transport, id, context) {
+            Ok(snapshot) => success(&serde_json::json!({
+                "asset": asset_json(&snapshot.value),
+                "observed_head_sequence": snapshot.observed_sequence.to_string(),
+                "state_root": hex_encode(&snapshot.state_root),
+                "verification": "authenticated_committed_snapshot"
+            })),
+            Err(_) => refusal(503, "asset_evidence_unavailable", Some(5)),
+        };
+    }
+    match layerx_client::payments::list_assets(&mut transport, None, context) {
+        Ok(snapshot) => success(&serde_json::json!({
+            "assets": snapshot.value.iter().map(asset_json).collect::<Vec<_>>(),
+            "observed_head_sequence": snapshot.observed_sequence.to_string(),
+            "state_root": hex_encode(&snapshot.state_root),
+            "verification": "authenticated_committed_snapshot"
+        })),
+        Err(_) => refusal(503, "asset_evidence_unavailable", Some(5)),
+    }
+}
+
+fn did_accounts(config: &Config, did: &str) -> Response {
+    use layerx_client::{
+        evidence::RootSelector,
+        head::HeadTracker,
+        read::{ReadContext, Requested},
+    };
+    let Ok(did_value) = layerx_types::ids::Did::new(did.as_bytes()) else {
+        return refusal(400, "invalid_did", None);
+    };
+    let Ok((mut transport, handshake)) = super::connect_raw(config) else {
+        return refusal(503, "node_unavailable", Some(5));
+    };
+    let node = handshake.node();
+    if node.interface_version.minor < 5 {
+        return refusal(503, "did_account_listing_unavailable", Some(5));
+    }
+    let context = ReadContext {
+        interface_version: node.interface_version,
+        correlation_id: 1,
+        expected_protocol_version: node.protocol_version,
+        expected_network_id: config.network_id,
+        requested: Requested::new(VerificationLevel::UNVERIFIED),
+        head: HeadTracker::new(node).current(),
+        sequencer_authorization: SequencerAuthorization::new(
+            config.sequencer_id,
+            node.authorised_sequencer_key,
+            1,
+            u64::MAX,
+        ),
+        handshake_sequencer_key: node.authorised_sequencer_key,
+        root_selector: RootSelector::Latest,
+    };
+    let Ok(values) = layerx_client::read::did_accounts(&mut transport, &did_value, context) else {
+        return refusal(503, "did_account_listing_unavailable", Some(5));
+    };
+    let mut accounts = Vec::with_capacity(values.len());
+    for value in values {
+        let bytes = value.canonical_bytes();
+        let Some(length) = bytes
+            .get(..2)
+            .map(|v| usize::from(u16::from_be_bytes([v[0], v[1]])))
+        else {
+            return refusal(502, "invalid_account_evidence", None);
+        };
+        let Some(name) = bytes
+            .get(2..2 + length)
+            .and_then(|v| std::str::from_utf8(v).ok())
+        else {
+            return refusal(502, "invalid_account_name", None);
+        };
+        let Ok(length) = u32::try_from(name.len()) else {
+            return refusal(502, "invalid_account_name", None);
+        };
+        let mut hash = Sha256::new();
+        hash.update(b"LX:ACCOUNT:v1");
+        hash.update(length.to_be_bytes());
+        hash.update(name.as_bytes());
+        let id = hash.finalize().into();
+        let Ok(account) = decode_account_value(id, bytes) else {
+            return refusal(502, "invalid_account_evidence", None);
+        };
+        accounts.push(serde_json::json!({
+            "account_id": hex_encode(&id), "name": name,
+            "asset_id": hex_encode(&account.asset_id()), "balance": account.balance().to_string(),
+            "next_sequence": account.next_sequence.to_string(), "frozen": account.frozen,
+            "canonical_value": hex_encode(bytes), "proof_material": hex_encode(value.proof_material()),
+            "observed_head_sequence": value.freshness().observed_head_sequence.to_string(),
+            "batch_number": value.freshness().batch_number.to_string()
+        }));
+    }
+    success(&serde_json::json!({"did": did, "accounts": accounts,
+        "verification": "authenticated_node_snapshot"}))
+}
+
+fn estimate_fee(config: &Config, body: &[u8]) -> Response {
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return refusal(400, "invalid_fee_request", None);
+    };
+    let Some(hex) = value
+        .get("canonical_hex")
+        .and_then(serde_json::Value::as_str)
+    else {
+        return refusal(400, "invalid_fee_request", None);
+    };
+    let Ok(canonical) = layerx_platform_core::hex_decode(hex) else {
+        return refusal(400, "invalid_fee_request", None);
+    };
+    let operations = [1, 4, 5, 6, 7, 8, 10, 11]
+        .into_iter()
+        .map(|ordinal| super::ActivityType::new(super::ModuleId::Asset, ordinal))
+        .collect::<Result<Vec<_>, _>>();
+    let Some(registry) = operations
+        .ok()
+        .and_then(|operations| {
+            super::ModuleRegistration::new(super::ModuleId::Asset, &operations).ok()
+        })
+        .and_then(|asset| {
+            let registry = super::submission_registry().ok()?;
+            let mut registrations = registry.registrations().to_vec();
+            registrations.retain(|entry| entry.module() != super::ModuleId::Asset);
+            registrations.push(asset);
+            super::ModuleRegistry::new(&registrations).ok()
+        })
+    else {
+        return refusal(503, "registry_unavailable", Some(5));
+    };
+    let Ok(activity) = layerx_wire::activity::decode_signed(&canonical, &registry) else {
+        return refusal(400, "invalid_activity", None);
+    };
+    if activity.protocol_version() != layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION
+        || activity.network_id() != config.network_id
+    {
+        return refusal(400, "invalid_activity_domain", None);
+    }
+    if activity.activity_type().module() != super::ModuleId::Asset {
+        return refusal(503, "fee_execution_meter_unavailable", Some(5));
+    }
+    let Ok((mut transport, handshake)) = super::connect_raw(config) else {
+        return refusal(503, "node_unavailable", Some(5));
+    };
+    let kind = activity.activity_type().value();
+    match layerx_client::payments::estimate_fee(
+        &mut transport,
+        kind,
+        canonical.len() as u64,
+        0,
+        0,
+        snapshot_context(&handshake),
+    ) {
+        Ok(snapshot) => {
+            if snapshot.value.canonical_schedule[50..82]
+                .iter()
+                .any(|byte| *byte != 0)
+            {
+                return refusal(503, "fee_execution_meter_unavailable", Some(5));
+            }
+            success(&serde_json::json!({
+                "fee": snapshot.value.fee.to_string(),
+                "parameter_version": snapshot.value.parameter_version,
+                "canonical_schedule": hex_encode(&snapshot.value.canonical_schedule),
+                "canonical_bytes": canonical.len(),
+                "observed_head_sequence": snapshot.observed_sequence.to_string(),
+                "state_root": hex_encode(&snapshot.state_root),
+                "verification": "authenticated_committed_snapshot"
+            }))
+        }
+        Err(_) => refusal(503, "fee_evidence_unavailable", Some(5)),
+    }
+}
+
+fn asset_route(config: &Config, request: &Request) -> Response {
+    if request.method != "GET" {
+        refusal(405, "method_not_allowed", None)
+    } else if request.query.is_some() || !request.body.is_empty() {
+        refusal(400, "invalid_request", None)
+    } else if request.path != "/v1/assets"
+        && request
+            .path
+            .strip_prefix("/v1/assets/")
+            .and_then(|id| fixed_hex::<32>("asset_id", id).ok())
+            .is_none_or(|id| id == [0; 32])
+    {
+        refusal(400, "invalid_asset_id", None)
+    } else {
+        assets(
+            config,
+            request
                 .path
                 .strip_prefix("/v1/assets/")
-                .and_then(|id| fixed_hex::<32>("asset_id", id).ok())
-                .is_none_or(|id| id == [0; 32])
-        {
-            refusal(400, "invalid_asset_id", None)
-        } else {
-            refusal(503, "asset_evidence_unavailable", Some(30))
-        });
+                .and_then(|id| fixed_hex::<32>("asset_id", id).ok()),
+        )
+    }
+}
+
+pub(super) fn route(config: &Config, request: &Request) -> Option<Response> {
+    if request.path == "/v1/assets" || request.path.starts_with("/v1/assets/") {
+        return Some(asset_route(config, request));
     }
     if request.path == "/v1/fees/estimate" {
         return Some(if request.method != "POST" {
@@ -64,7 +272,7 @@ pub(super) fn route(config: &Config, request: &Request) -> Option<Response> {
         } else if request.query.is_some() || !valid_fee_request(&request.body) {
             refusal(400, "invalid_fee_request", None)
         } else {
-            refusal(503, "fee_evidence_unavailable", Some(30))
+            estimate_fee(config, &request.body)
         });
     }
     if request.path == "/v1/node-info" {
@@ -126,7 +334,7 @@ pub(super) fn route(config: &Config, request: &Request) -> Option<Response> {
             {
                 refusal(400, "invalid_did", None)
             } else {
-                refusal(503, "did_account_listing_unavailable", Some(30))
+                did_accounts(config, did)
             });
         }
         _ => return None,
@@ -307,7 +515,7 @@ fn receipt_event(config: &Config, request: &Request, sequence: &str) -> Response
     };
     let mut selector = vec![3];
     selector.extend_from_slice(&number.to_be_bytes());
-    match super::lookup_receipt_selector(&mut transport, &handshake, selector, 1, 3000) {
+    match super::lookup_receipt_selector(&mut transport, &handshake, selector, 1, true) {
         Ok(Some(bytes)) => {
             match super::receipt_facts(&bytes, handshake.node().authorised_sequencer_key) {
                 Ok(facts) if facts.global_sequence == number => {

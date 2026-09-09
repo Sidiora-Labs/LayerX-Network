@@ -389,7 +389,7 @@ fn submit_credit(cluster: &Cluster, signed: &[u8], seed: &[u8; 32]) {
     };
     let mut selector = vec![1];
     selector.extend_from_slice(&ack.activity_id());
-    selector.extend_from_slice(&3000_u32.to_be_bytes());
+    selector.push(1);
     drop(transport);
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
@@ -423,11 +423,11 @@ fn funded_genesis(
     let sequencer_key = SigningKey::from_bytes(sequencer_seed)
         .verifying_key()
         .to_bytes();
-    write(
-        &directory.join("request.lxgb"),
-        &genesis_request(&asset, &sequencer_key),
-        0o600,
-    );
+    let mut request = genesis_request(&asset, &sequencer_key);
+    let schedule = request.len() - 215;
+    request[schedule + 34..schedule + 50].copy_from_slice(&1_u128.to_be_bytes());
+    request[schedule + 119..schedule + 135].copy_from_slice(&4_u128.to_be_bytes());
+    write(&directory.join("request.lxgb"), &request, 0o600);
     write(&directory.join("signer.key"), sequencer_seed, 0o600);
     let artifacts = directory.join("artifacts");
     command(

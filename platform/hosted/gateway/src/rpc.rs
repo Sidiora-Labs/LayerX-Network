@@ -166,10 +166,11 @@ fn read_response(id: &Value, upstream: &OutgoingResponse) -> Value {
             json!({"jsonrpc":"2.0","id":id,"result":body["result"]})
         }
         Ok(body) => {
-            let code = if upstream.status == 429 {
-                -32005
-            } else {
-                -32001
+            let code = match upstream.status {
+                400 | 415 => -32602,
+                401 | 403 => -32002,
+                429 => -32005,
+                _ => -32001,
             };
             let mut refusal = error(id, code, "Read unavailable");
             refusal["error"]["data"] = body;
@@ -255,15 +256,23 @@ fn upstream_result(id: &Value, answer: &OutgoingResponse) -> Result<Value, Value
     Err(refused)
 }
 
+fn pay_timing(stage: &str, started: std::time::Instant) {
+    if std::env::var_os("LAYERX_PAY_TIMING").is_some() {
+        eprintln!("pay_timing {stage}={}", started.elapsed().as_micros());
+    }
+}
+
 fn send(config: &Config, request: &IncomingRequest, id: &Value, params: Option<&Value>) -> Value {
     let (canonical, commitment) = match send_params(params) {
         Ok(value) => value,
         Err(code) => return error(id, code, "Invalid params"),
     };
+    let auth_started = std::time::Instant::now();
     let record = match super::authenticate_key(config, request) {
         Ok(record) => record,
         Err(answer) => return upstream_result(id, &answer).unwrap_or_else(|value| value),
     };
+    pay_timing("gateway_auth_us", auth_started);
     if !super::permits(&record, &super::ProductionRoute::Activity) {
         return error(id, -32002, "Insufficient scope");
     }
@@ -298,6 +307,7 @@ fn send(config: &Config, request: &IncomingRequest, id: &Value, params: Option<&
         headers,
         body: canonical,
     };
+    let proxy_started = std::time::Instant::now();
     let answer = super::activity(
         config,
         &forwarded,
@@ -306,6 +316,7 @@ fn send(config: &Config, request: &IncomingRequest, id: &Value, params: Option<&
         path == "/v1/programs/call",
         true,
     );
+    pay_timing("gateway_activity_us", proxy_started);
     let mut result = match upstream_result(id, &answer) {
         Ok(result) => result,
         Err(mut error) => {
