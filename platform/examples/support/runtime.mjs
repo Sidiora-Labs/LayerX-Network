@@ -28,7 +28,7 @@ export const optionalEnvironment = (name) => {
 
 export async function loadApplicationConfig(moduleUrl, application) {
   const directory = dirname(fileURLToPath(moduleUrl));
-  const document = exactObject(JSON.parse(await readFile(resolve(directory, "layerx.example.json"), "utf8")));
+  const document = exactObject(JSON.parse(await readFile(resolve(directory, optionalEnvironment("LAYERX_EXAMPLE_CONFIG") ?? "layerx.example.json"), "utf8")));
   if (document.version !== 1 || document.application !== application) throw new Error("invalid_application_config");
   const selected = parseArguments();
   const environments = exactObject(document.environments);
