@@ -326,3 +326,44 @@ the original port, which is why the rebuild is reproducible.
 4. Does any external call need the callee to act with your authority? Narrow the
    capability explicitly; there is no ambient reach.
 5. Do you need return data from a call? Move the result into state or an event.
+
+## ERC-20, LXT-20 and native assets
+
+`programs/sdk/rust/src/lxt20.rs` defines the seven LXT-20 request encodings.
+These codecs are not a deployed token implementation. The `token-lxt20`
+settlement reference, registry publication and native deploy/call proof remain
+outstanding; do not advertise an ERC-20-compatible token based on codec tests.
+
+| ERC-20 flow | LayerX mapping |
+| --- | --- |
+| `transfer(to, amount)` | LXT-20 `Request::Transfer`; the destination is a 32-byte account ID and amounts are exact u128 units |
+| `approve(spender, amount)` | `Request::Approve`; spender is a DID identity ID, and zero explicitly revokes the program allowance |
+| `transferFrom(owner, to, amount)` | `Request::TransferFrom`; a reference must authenticate the spender, atomically decrement allowance and settle through 402 |
+| `balanceOf`, `allowance`, `totalSupply` | Corresponding request variants; codec support alone supplies no verified balance or supply fact |
+| `name`, `symbol`, `decimals` | One `Metadata` request; authoritative metadata must bind the registered asset |
+| Native value deposit and payout | `PreparedProgramAccount`, `ProgramDeposit` and `ProgramAccountPayment`; register first, then fund and spend under explicit grants |
+
+Each LXT-20 selector is `4c 58 14 method`, with method numbers 1 through 7
+in the table's operation order (balance=4, allowance=5, supply=6, metadata=7).
+It is followed by LayerX convention `01`, bytes tag `20`, a u32 big-endian
+payload length, and the method fields in declaration order. Identifiers are
+32 bytes and amounts are 16-byte big-endian integers. This is not Solidity ABI
+encoding and does not reuse ERC-20 Keccak selectors. See the committed
+`programs/sdk/rust/vectors/lxt20-requests.txt` vectors.
+
+A program allowance cannot confer kernel debit authority over another DID's
+account. A complete implementation needs authenticated ownership, registered
+program-derived custody accounts, caller-approved spend capabilities and atomic
+allowance/transfer settlement. Direct storage balance edits are not 402 payments.
+Infinite uint256 allowances, permits, rebasing and transfer-tax semantics are not
+implemented by this request interface. Values above u128 must be refused, not
+truncated. Ethereum addresses must be explicitly mapped to identities/accounts.
+
+Native issued asset IDs follow SHA-256 of `LX:ASSET:v1 || issuer_id32 || salt32`.
+An actor's per-asset account uses the existing `LX:ACCOUNT:v1` derivation over
+`agent:<DID>:asset:<lowercase asset hex>`; `agent:<DID>:main` remains the native
+asset account. Program-derived accounts use a different domain and seed rule.
+The current Programs transfer path equates principal and debit account IDs;
+DID/per-asset funding and identity sequencing are an unresolved integration seam,
+recorded in the beta qualification ledger. Never work around it by signing as an
+account ID or changing ownership checks.

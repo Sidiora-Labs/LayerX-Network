@@ -361,3 +361,43 @@ primitive, which stays a caller-supplied boundary.
    explicit protocol facts or a counted quantity and say so in published source.
 7. Publish the source, the descriptor, the toolchain manifest and the lock, and
    verify the deployment reproduces before you announce it.
+
+## SPL tokens, LXT-20 and native assets
+
+LXT-20 request codecs live in `programs/sdk/rust/src/lxt20.rs`. A runnable
+`token-lxt20` settlement reference, registry discovery and native deploy/call
+proof are still outstanding. These request types do not emulate the SPL Token
+program or make an unregistered asset spendable.
+
+| SPL flow | LayerX mapping |
+| --- | --- |
+| Transfer / transfer checked | LXT-20 `Transfer`, or `TransferFrom` for an authenticated allowance spender; exact u128 units, explicit asset binding |
+| Approve / revoke delegate | `Approve` using a spender DID identity; zero revokes the program allowance, not an unrelated kernel grant |
+| Read token account balance | `BalanceOf`; a native balance read requires receipt-bound `BalanceView` authority |
+| Read delegated amount | `Allowance` with owner and spender identities |
+| Read mint supply and metadata | `TotalSupply` and `Metadata`; the executing reference must bind native asset facts |
+| PDA custody / CPI payout | Registered program-derived account plus `ProgramSpend`; a public derivation seed is not spending authority |
+
+The seven selectors and committed request vectors are shared with the EVM guide.
+Their encoding is LayerX convention 01, bounded bytes tag 20 and a u32 big-endian
+length after the four-byte selector. Borsh's little-endian integers, eight-byte
+Anchor discriminators, Solana pubkeys and associated-token-account derivations
+must not be copied into these calls unchanged.
+
+Use `PreparedProgramAccount::registration_payload` under deployment authority,
+verify registration, then authorize the funding grant and subsequent spend grants.
+The merchant example at `programs/sdk/rust/examples/payments-merchant` shows the
+real guest bindings for a deposit and fee split. Its WASM build is not proof of
+native settlement. A token allowance alone does not authorize debiting another
+principal's account, and token storage changes cannot replace 402 settlement.
+
+Native asset registration, account opening, mint and burn are separate signed
+asset activities, not LXT-20 methods. Per-asset accounts use
+`agent:<DID>:asset:<lowercase asset hex>` and the existing `LX:ACCOUNT:v1` rule;
+program accounts use the program-account domain with a u32 big-endian seed length.
+The current Programs principal/account equality and sequence-account lookup must
+be reconciled with DID ownership before claiming this end-to-end flow works.
+
+SPL account closing/rent recovery, Token-2022 extensions, mint/freeze authority
+migration, multisig signer lists and an enumerable Anchor account context are not
+provided by the LXT-20 codecs. Refuse unsupported semantics explicitly.
