@@ -60,6 +60,7 @@ BOUNDARY_URL=${LAYERX_PAXEER_BOUNDARY_URL:-}
 BOUNDARY_CA=${LAYERX_PAXEER_BOUNDARY_CA_DER:-}
 CHAIN_ID=${LAYERX_PAXEER_CHAIN_ID:-125}
 DEPLOYER_KEY_FILE=${LAYERX_PAXEER_DEPLOYER_KEY_FILE:-}
+CHECKPOINT_SUBMITTER_KEY_FILE=${LAYERX_PAXEER_CHECKPOINT_SUBMITTER_KEY_FILE:-}
 GENESIS_DIR=${LAYERX_PAXEER_GENESIS_DIR:-}
 INPUT_JSON=${LAYERX_PAXEER_DEPLOYMENT_INPUT:-}
 GUARANTORS_JSON=${LAYERX_PAXEER_GUARANTORS:-$SCRIPT_DIR/guarantors.beta.json}
@@ -100,6 +101,7 @@ require_tools() {
     local version
     version=$("$FORGE" --version 2>/dev/null | sed -n 's/^forge Version: \([0-9.]*\).*/\1/p')
     [ "$version" = "$FOUNDRY_VERSION_PIN" ] || fail "forge $version is installed; the beta deployment pins forge $FOUNDRY_VERSION_PIN"
+    command -v timeout >/dev/null 2>&1 || fail "timeout is required"
     command -v python3 >/dev/null 2>&1 || fail "python3 is required"
     command -v jq >/dev/null 2>&1 || fail "jq is required"
     command -v openssl >/dev/null 2>&1 || fail "openssl is required"
@@ -115,7 +117,7 @@ require_endpoint() {
     openssl x509 -inform DER -in "$BOUNDARY_CA" -out "$WORK/ca.pem" >/dev/null 2>&1 || fail "boundary CA is not a DER certificate"
     export SSL_CERT_FILE="$WORK/ca.pem"
     local observed
-    observed=$("$CAST" chain-id --rpc-url "$BOUNDARY_URL") || fail "the boundary did not answer eth_chainId"
+    observed=$(rpc_read chain-id) || fail "the boundary did not answer eth_chainId"
     [ "$observed" = "$CHAIN_ID" ] || fail "the boundary serves chain $observed, expected $CHAIN_ID"
 }
 
@@ -157,6 +159,20 @@ load_timelock_profile() {
     fi
 }
 
+load_guarantors() {
+    [ -r "$GUARANTORS_JSON" ] || fail "guarantor list $GUARANTORS_JSON is not readable"
+    GUARANTOR_COUNT=$(jq 'length' "$GUARANTORS_JSON")
+    [ "$GUARANTOR_COUNT" -gt 0 ] || fail "the guarantor list is empty"
+    GUARANTOR_SET=$(jq -c '
+        to_entries | map(.value + {
+            joined_epoch: (.value.joined_epoch // 1),
+            governance_sequence: (.value.governance_sequence // (.key + 1))
+        })' "$GUARANTORS_JSON")
+    printf '%s' "$GUARANTOR_SET" | jq -e '
+        to_entries | all(.value.governance_sequence == (.key + 1))
+    ' >/dev/null || fail "guarantor governance sequences must be contiguous from 1 in member order"
+}
+
 load_inputs() {
     [ -n "$INPUT_JSON" ] && [ -r "$INPUT_JSON" ] || fail "LAYERX_PAXEER_DEPLOYMENT_INPUT must name the owned input from prepare-beta.py"
     [ -r "$GUARANTORS_JSON" ] || fail "guarantor list $GUARANTORS_JSON is not readable"
@@ -180,13 +196,7 @@ load_inputs() {
             [ "$(call "$address" 'protocolVersion()(uint16)')" = "$PROTOCOL_VERSION" ] || fail "deployed component protocol mismatch"
         done
     fi
-    GUARANTOR_COUNT=$(jq 'length' "$GUARANTORS_JSON")
-    [ "$GUARANTOR_COUNT" -gt 0 ] || fail "the guarantor list is empty"
-    GUARANTOR_SET=$(jq -c '
-        to_entries | map(.value + {
-            joined_epoch: (.value.joined_epoch // 1),
-            governance_sequence: (.value.governance_sequence // (.key + 1))
-        })' "$GUARANTORS_JSON")
+    load_guarantors
     local index
     for index in $(seq 0 $((GUARANTOR_COUNT - 1))); do
         local public_key signer expected
@@ -215,8 +225,32 @@ controller_key() {
     tr -d '\r\n' < "$path"
 }
 
+rpc_read() {
+    local deadline=$((SECONDS + 60)) remaining status
+    while :; do
+        remaining=$((deadline - SECONDS))
+        [ "$remaining" -gt 0 ] || return 1
+        status=0
+        timeout "$remaining" "$CAST" "$@" --rpc-url "$BOUNDARY_URL" > "$WORK/rpc-read.out" 2> "$WORK/rpc-read.err" || status=$?
+        if [ "$status" = 0 ]; then
+            cat "$WORK/rpc-read.out"
+            return 0
+        fi
+        if ! grep -Eqi 'connection refused|connection reset|error sending request|connection closed|channel closed|unexpected eof' "$WORK/rpc-read.err"; then
+            cat "$WORK/rpc-read.err" >&2
+            return "$status"
+        fi
+        if [ "$SECONDS" -ge "$deadline" ]; then
+            cat "$WORK/rpc-read.err" >&2
+            return "$status"
+        fi
+        printf 'deploy-contracts: RPC transport interrupted; waiting for endpoint recovery (60s budget)\n' >&2
+        sleep 1
+    done
+}
+
 call() {
-    "$CAST" call --rpc-url "$BOUNDARY_URL" "$@"
+    rpc_read call "$@"
 }
 
 send() {
@@ -224,6 +258,21 @@ send() {
     shift
     "$CAST" send --rpc-url "$BOUNDARY_URL" --chain "$CHAIN_ID" --timeout 120 --private-key "$key" --json "$@" > "$WORK/receipt.json"
     [ "$(jq -r '.status' "$WORK/receipt.json")" = "0x1" ] || fail "transaction failed: $(jq -c . "$WORK/receipt.json")"
+}
+
+fund_checkpoint_submitter() {
+    [ -r "$CHECKPOINT_SUBMITTER_KEY_FILE" ] || fail "LAYERX_PAXEER_CHECKPOINT_SUBMITTER_KEY_FILE is required"
+    local key address balance
+    key=$(tr -d '\r\n' < "$CHECKPOINT_SUBMITTER_KEY_FILE")
+    address=$("$CAST" wallet address --private-key "$key") || fail "invalid checkpoint submitter key"
+    [ "${address,,}" != "${DEPLOYER,,}" ] || fail "checkpoint submitter must differ from deployer"
+    if printf '%s' "$GUARANTOR_SET" | jq -e --arg address "${address,,}" 'any(.[]; (.bond_controller | ascii_downcase) == $address or (.signer | ascii_downcase) == $address)' > /dev/null; then
+        fail "checkpoint submitter must differ from guarantors and bond controllers"
+    fi
+    balance=$("$CAST" balance --rpc-url "$BOUNDARY_URL" "$address")
+    if [ "$(printf '%s\n' "$balance" "$CONTROLLER_GAS_WEI" | sort -n | head -1)" != "$CONTROLLER_GAS_WEI" ]; then
+        send "$DEPLOYER_KEY" --value "$CONTROLLER_GAS_WEI" "$address"
+    fi
 }
 
 fund_controllers() {
@@ -235,7 +284,7 @@ fund_controllers() {
         bond=$(printf '%s' "$GUARANTOR_SET" | jq -r ".[$index].bond_amount")
         key=$(controller_key "$guarantor_id")
         [ "$("$CAST" wallet address --private-key "$key")" = "$controller" ] || fail "controller key for $guarantor_id does not match $controller"
-        gas=$("$CAST" balance --rpc-url "$BOUNDARY_URL" "$controller")
+        gas=$(rpc_read balance "$controller")
         if [ "$(printf '%s\n' "$gas" "$CONTROLLER_GAS_WEI" | sort -n | head -1)" != "$CONTROLLER_GAS_WEI" ]; then
             send "$DEPLOYER_KEY" --value "$CONTROLLER_GAS_WEI" "$controller"
         fi
@@ -300,6 +349,7 @@ phase_deploy() {
     [ ! -e "$RECORD" ] || fail "deployment record $RECORD already exists"
     [ "$(call "$USDL" "decimals()(uint8)")" = "6" ] || fail "USDL token at $USDL is not the 6-decimal beta token"
     fund_controllers
+    fund_checkpoint_submitter
     GUARANTOR_BOND=$(predict_bond)
     [ -n "$GUARANTOR_BOND" ] || fail "could not predict the GuarantorBond address"
     approve_controllers
@@ -442,6 +492,7 @@ phase_status() {
 }
 
 case "$PHASE" in
+    check-guarantors) load_guarantors ;;
     check-profile) load_timelock_profile; printf '%s\n' "$TIMELOCK_PROFILE" ;;
     bootstrap) phase_bootstrap ;;
     deploy) phase_deploy ;;

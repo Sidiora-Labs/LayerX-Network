@@ -97,6 +97,7 @@ struct IntrospectRequest {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PrincipalRequest {
+    tenant: String,
     sub: String,
     allowed_signer_public_keys: Vec<String>,
     #[serde(default)]
@@ -144,6 +145,7 @@ struct RampShape<'a> {
 
 #[derive(Serialize)]
 struct PrincipalResponse<'a> {
+    tenant: &'a str,
     sub: &'a str,
     allowed_signer_public_keys: &'a [String],
     account: Option<&'a str>,
@@ -698,7 +700,9 @@ fn create_principal(shared: &Shared, request: &Request) -> Response {
         Ok(body) => body,
         Err(_) => return refusal(400, "invalid_argument", None),
     };
-    if !valid_sub(&body.sub)
+    if !valid_sub(&body.tenant)
+        || body.tenant.contains(':')
+        || !valid_sub(&body.sub)
         || !valid_signer_keys(&body.allowed_signer_public_keys)
         || body
             .account
@@ -730,6 +734,7 @@ fn create_principal(shared: &Shared, request: &Request) -> Response {
         return refusal(503, "store_unavailable", Some(5));
     }
     serialize(&PrincipalResponse {
+        tenant: &body.tenant,
         sub: &principal.sub,
         allowed_signer_public_keys: &principal.allowed_signer_public_keys,
         account: principal.account.as_deref(),

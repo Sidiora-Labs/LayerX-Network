@@ -42,8 +42,19 @@ data:
   LAYERX_WEBHOOKS_SEQUENCER_ID_FILE: /run/layerx/keys/sequencer-id
   LAYERX_WEBHOOKS_SEQUENCER_FIRST_BATCH_FILE: /run/layerx/keys/sequencer-first-batch
   LAYERX_WEBHOOKS_SEQUENCER_LAST_BATCH_FILE: /run/layerx/keys/sequencer-last-batch
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: layerx-dashboard-hosted
+data:
+  LAYERX_WEBHOOKS_REDIS_URL: rediss://redis.layerx-internal.svc:6379
+  LAYERX_WEBHOOKS_LEASE_SECONDS: "120"
+  LAYERX_WEBHOOKS_INTERNAL_CA_DER: /run/layerx/ca/internal.der
+  LAYERX_WEBHOOKS_REDIS_USERNAME_FILE: /run/layerx/redis/username
+  LAYERX_WEBHOOKS_REDIS_PASSWORD_FILE: /run/layerx/redis/password
   LAYERX_DASHBOARD_LISTEN: 0.0.0.0:9445
-  LAYERX_DASHBOARD_GATEWAY_REDIS_URL: rediss://redis.layerx-internal.svc:6379
+  LAYERX_DASHBOARD_GATEWAY_REDIS_URL: rediss://layerx-gateway-redis.layerx-testnet.svc.cluster.local:6379
   LAYERX_DASHBOARD_REDIS_CA_DER: /run/layerx/ca/internal.der
   LAYERX_DASHBOARD_INTERNAL_CA_DER: /run/layerx/ca/internal.der
   LAYERX_DASHBOARD_GATEWAY_REDIS_USERNAME_FILE: /run/layerx/dashboard-redis/username
@@ -137,7 +148,7 @@ spec:
       containers:
         - name: api
           image: ghcr.io/sidiora-labs/layerx-dashboard:0.1.0
-          envFrom: [{ configMapRef: { name: layerx-developer-hosted } }]
+          envFrom: [{ configMapRef: { name: layerx-dashboard-hosted } }]
           ports: [{ name: https, containerPort: 9445 }]
           readinessProbe: { httpGet: { scheme: HTTPS, path: /healthz, port: https }, periodSeconds: 10 }
           livenessProbe: { tcpSocket: { port: https }, periodSeconds: 20 }
@@ -272,6 +283,18 @@ spec:
         - namespaceSelector: { matchLabels: { layerx.internal-events: "true" } }
       ports: [{ protocol: TCP, port: 9444 }]
   egress:
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: layerx-internal}}
+          podSelector: {matchExpressions: [{key: app, operator: In, values: [layerx-internal-kms, layerx-internal-journeys, layerx-internal-payments, layerx-internal-approvals, layerx-internal-programs]}]}
+      ports: [{protocol: TCP, port: 9443}]
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: layerx-testnet}}
+          podSelector: {matchLabels: {app: layerx-node}}
+      ports: [{protocol: TCP, port: 9445}, {protocol: TCP, port: 9446}]
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: layerx-testnet}}
+          podSelector: {matchLabels: {app: layerx-identity}}
+      ports: [{protocol: TCP, port: 9443}]
     - ports:
         - { protocol: UDP, port: 53 }
         - { protocol: TCP, port: 443 }
@@ -291,6 +314,10 @@ spec:
     - from: [{ namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: ingress-nginx } } }]
       ports: [{ protocol: TCP, port: 9445 }]
   egress:
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: layerx-testnet}}
+          podSelector: {matchLabels: {app: layerx-identity}}
+      ports: [{protocol: TCP, port: 9443}]
     - ports:
         - { protocol: UDP, port: 53 }
         - { protocol: TCP, port: 443 }

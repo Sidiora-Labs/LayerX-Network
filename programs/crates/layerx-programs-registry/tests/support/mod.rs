@@ -391,6 +391,7 @@ fn fixture_in_epoch(
     state.header_signature = header_signature;
     ProtocolFixture {
         proof: DeploymentProof {
+            maintenance: None,
             activity,
             activity_proof,
             state,

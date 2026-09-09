@@ -67,4 +67,3 @@ lxp_result lxp_replay_section_decode(const lxp_byte_span *section,
     *count = item_count;
     return LXP_OK;
 }
-

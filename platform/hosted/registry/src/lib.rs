@@ -5,6 +5,7 @@
 
 mod auth;
 mod builder;
+pub mod deployment;
 mod http;
 mod journal;
 mod mirror;
@@ -36,6 +37,7 @@ pub use verified::{VerifiedSource, VerifiedSourceStore};
 pub struct Config {
     pub listen: String,
     pub journal: PathBuf,
+    pub deployment_lni_socket: Option<PathBuf>,
     pub mirror: PathBuf,
     pub verified: PathBuf,
     pub workspace: PathBuf,
@@ -55,6 +57,7 @@ pub struct Config {
     pub staleness_ms: u64,
     pub node_endpoint: String,
     pub node_authorization: String,
+    pub outbound_ca_der: Vec<u8>,
     pub receipt_authority_endpoint: String,
     pub receipt_authority_authorization: String,
     pub receipt_authority_replica_id: [u8; 32],

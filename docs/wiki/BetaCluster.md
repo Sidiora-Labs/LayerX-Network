@@ -74,3 +74,31 @@ The upload applies PVC `layerx-program-builder-release`, starts loader pod `laye
 - Custody-first genesis is not performed. Bring-up waits for node genesis artifacts and then runs `deploy-contracts.sh bootstrap` (`platform/hosted/tests/beta-cluster.sh:1251-1252`). `deploy-contracts.sh` consumes LXGD/LXRR before prediction and deployment and does not expose a pre-genesis custody deploy followed by a signed native genesis that pins that vault, nor a post-genesis phase that preserves those vault and bond identities (`platform/hosted/paxeer/deploy-contracts.sh:19-28`).
 
 [Home](Home.md)
+
+## Registry and retained material
+
+The node image must be built before rendering or provisioning material.
+`secrets_generate` runs `/usr/local/bin/layerx-module-registry generate` in that
+image with networking disabled and a read-only filesystem, supplying
+`--network-id "$NODE_NETWORK_ID" --protocol-version 3 --asset "$NODE_ASSET_ID"`
+and the symbol, currency and decimals read from node bootstrap constants.
+A configured custody profile is supplied with `--custody-profile` and validated
+by the native Bridge implementation. The example registry is a generated
+version-2 example without Bridge; it is not copied into a cluster.
+
+The rendered `registry-check` container runs the node image as UID 4021 with a
+read-only LNI volume. After node readiness, the native read-only preparation
+client compares module ids and ordinals against the actual published ConfigMap.
+No assets are compared because LNI preparation carries none. The node image
+must include the new executable; image and live-cluster qualification are
+separate gates.
+
+Use `LAYERX_BETA_RETAIN_MATERIAL=1` for another `up` against a live cluster with
+a complete prior material inventory. Existing CA, Secrets and ConfigMaps are
+reapplied after completeness, ownership, 0600/0700 permissions, profile selection,
+registry consistency and live KMS seal digest checks. Missing material or a
+seal mismatch refuses the operation. Fresh mode still generates fresh material.
+Retained `render` checks the same material and live seal and renders without
+applying resources. See [Hosted Human](HostedHuman.md). `down` still deletes
+the cluster and its PVCs, including `layerx-human-state`, and local material;
+retained mode does not survive teardown.

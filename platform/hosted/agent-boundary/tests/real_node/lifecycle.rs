@@ -1061,3 +1061,73 @@ fn escrow_operations(
         ),
     ]
 }
+
+#[test]
+fn registry_deployment_bridge_returns_native_maintained_proof() {
+    let wasm = escrow_wasm();
+    let (cluster, custody) = custody::start_funded_cluster();
+    custody.verify_evidence();
+    let program = random32();
+    let signed = signed_program_operation(
+        &cluster.actor,
+        1,
+        2,
+        FEE_LIMIT,
+        &deploy_payload(&cluster, program, &wasm),
+    );
+    let response = cluster.client.call(&Call::submit(
+        "/internal/v1/programs/deploy",
+        &cluster.registry_token,
+        &token(),
+        &signed,
+    ));
+    assert_eq!(response.status, 202, "{}", response.text());
+    let activity = must(
+        decode_signed(&signed, &program_registry()),
+        "signed deployment",
+    );
+    let id = must(activity_id(&activity), "activity id");
+    let path = format!("/internal/v1/deployment-proof/{}", hex(&id));
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let document = loop {
+        let response = cluster.client.get(&path, Some(&cluster.registry_token));
+        let document: serde_json::Value =
+            must(serde_json::from_slice(&response.body), "proof response");
+        if response.status == 200 {
+            break document;
+        }
+        assert_eq!(response.status, 503, "{}", response.text());
+        assert_eq!(document["native_result"].as_i64(), Some(-106));
+        assert!(Instant::now() < deadline, "deployment proof deadline");
+        thread::sleep(Duration::from_millis(20));
+    };
+    let proof = must(
+        layerx_programs::DeploymentProof::decode(&unhex(field(&document, "proof_hex"))),
+        "deployment proof",
+    );
+    assert_eq!(proof.activity, signed);
+    assert!(proof.maintenance.is_some());
+    let header = must(decode_batch_header(&proof.state.header), "batch header");
+    let mut history = b"LayerX/sequencer-trust-history/v1\0".to_vec();
+    history.extend_from_slice(&[0, 1, 0, 0]);
+    history.extend_from_slice(&PROTOCOL_VERSION.to_be_bytes());
+    history.extend_from_slice(&NETWORK_ID.to_be_bytes());
+    history.extend_from_slice(&header.epoch().to_be_bytes());
+    history.extend_from_slice(&header.sequencer_id());
+    history.extend_from_slice(&cluster.sequencer_key);
+    history.extend_from_slice(&FIRST_BATCH.to_be_bytes());
+    history.extend_from_slice(&LAST_BATCH.to_be_bytes());
+    history.extend_from_slice(&[0; 9]);
+    let history_path = cluster.root.join("registry-trust");
+    write(&history_path, &history, 0o600);
+    let verifier = must(
+        layerx_programs::ProtocolDeploymentVerifier::from_protected_history(&history_path, 60_000),
+        "trust",
+    );
+    let evidence = must(
+        verifier.verify_deployment(&proof, now_ms()),
+        "bridged deployment verification",
+    );
+    assert_eq!(evidence.program().bytes(), program);
+    assert_eq!(evidence.module(), wasm);
+}

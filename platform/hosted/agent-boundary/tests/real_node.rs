@@ -2503,3 +2503,37 @@ fn webhook_credential_configuration_refuses_shared_or_invalid_material() {
     }
     must(fs::remove_dir_all(&root), "credential cleanup");
 }
+
+#[test]
+fn registry_proof_forwarding_requires_its_plane_and_preserves_native_refusal() {
+    let cluster = start_cluster();
+    let path = format!("/internal/v1/deployment-proof/{}", hex(&random32()));
+    assert_eq!(cluster.client.get(&path, None).status, 401);
+    for bearer in [&cluster.gateway_token, &cluster.webhook_token] {
+        assert_eq!(cluster.client.get(&path, Some(bearer)).status, 403);
+        let request = Call::submit("/internal/v1/programs/deploy", bearer, "denied", b"invalid");
+        assert_eq!(cluster.client.call(&request).status, 403);
+    }
+    let answer = cluster.client.get(&path, Some(&cluster.registry_token));
+    assert_eq!(answer.status, 503, "{}", answer.text());
+    let document: serde_json::Value =
+        must(serde_json::from_slice(&answer.body), "native refusal JSON");
+    assert_eq!(document["native_result"].as_i64(), Some(-106));
+    for target in ["/internal/v1/deployment-proof/zero", "/internal/v1/deployment-proof/0000000000000000000000000000000000000000000000000000000000000000"] {
+        assert_eq!(cluster.client.get(target, Some(&cluster.registry_token)).status, 400);
+    }
+    assert_eq!(
+        cluster
+            .client
+            .get(&format!("{path}?selector=1"), Some(&cluster.registry_token))
+            .status,
+        404
+    );
+    let request = Call::submit(
+        "/internal/v1/programs/deploy",
+        &cluster.registry_token,
+        "invalid",
+        b"invalid",
+    );
+    assert_eq!(cluster.client.call(&request).status, 400);
+}
