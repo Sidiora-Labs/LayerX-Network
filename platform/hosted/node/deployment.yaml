@@ -28,65 +28,81 @@ spec:
       shareProcessNamespace: true
       terminationGracePeriodSeconds: 60
       initContainers:
-      - name: human-directories
-        image: ghcr.io/sidiora-labs/layerx-human:0.1.0
-        imagePullPolicy: Always
-        command:
-        - /bin/sh
-        - -ec
-        - |
-          install -d -o 4020 -g 4020 -m 0750 /run/layerx/human
-          install -d -o 4021 -g 4020 -m 0750 /run/layerx/human/owner
-          install -d -o 4020 -g 4020 -m 0700 /human-state/components
-          install -d -o 4021 -g 4020 -m 0700 /human-state/agent
-          install -d -o 4020 -g 4020 -m 0700 /human-state/identity
-          install -d -o 4020 -g 4020 -m 0700 /human-state/security
-          install -d -o 4020 -g 4020 -m 0700 /human-state/movement
-          install -d -o 4020 -g 4020 -m 0700 /human-state/movement/evidence
-          install -d -o 4021 -g 4020 -m 0700 /human-state/authority
-          install -d -o 4026 -g 4020 -m 0700 /human-state/kms
-        securityContext:
-          runAsNonRoot: false
-          runAsUser: 0
-          runAsGroup: 4020
-          allowPrivilegeEscalation: false
-          readOnlyRootFilesystem: true
-          capabilities:
-            drop:
-            - ALL
-            add:
-            - CHOWN
-            - FOWNER
-            - DAC_OVERRIDE
-        resources:
-          requests:
-            cpu: 10m
-            memory: 16Mi
-          limits:
-            cpu: 100m
-            memory: 32Mi
-        volumeMounts:
-        - name: run
-          mountPath: /run/layerx
-        - name: human-state
-          mountPath: /human-state
-      - name: human-authority-material
-        image: ghcr.io/sidiora-labs/layerx-human:0.1.0
-        imagePullPolicy: Always
-        command: [/bin/sh, -ec]
-        args:
+        - name: human-directories
+          image: ghcr.io/sidiora-labs/layerx-human:0.1.0
+          imagePullPolicy: Always
+          command:
+          - /bin/sh
+          - -ec
           - |
-            umask 077
-            install -d -m 0700 /run/authority-private/material
-            install -m 0600 /run/authority-input/authority-token /run/authority-private/material/human-agent.token
-            install -m 0600 /run/authority-input/principal-policy.json /run/authority-private/material/principal-policy.json
-            install -m 0600 /run/module-registry/registry.json /run/authority-private/material/registry.json
-        securityContext: {runAsUser: 4021, runAsGroup: 4020, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
-        resources: {requests: {cpu: 10m, memory: 16Mi}, limits: {cpu: 100m, memory: 32Mi}}
-        volumeMounts:
-          - {name: human-authority, mountPath: /run/authority-input, readOnly: true}
-          - {name: human-authority-private, mountPath: /run/authority-private}
-          - {name: human-module-registry, mountPath: /run/module-registry, readOnly: true}
+            install -d -o 4020 -g 4020 -m 0750 /run/layerx/human
+            install -d -o 4021 -g 4020 -m 0750 /run/layerx/human/owner
+            install -d -o 4020 -g 4020 -m 0700 /human-state/components
+            install -d -o 4021 -g 4020 -m 0700 /human-state/agent
+            install -d -o 4020 -g 4020 -m 0700 /human-state/identity
+            install -d -o 4020 -g 4020 -m 0700 /human-state/security
+            install -d -o 4020 -g 4020 -m 0700 /human-state/movement
+            install -d -o 4020 -g 4020 -m 0700 /human-state/movement/evidence
+            install -d -o 4021 -g 4020 -m 0700 /human-state/authority
+            install -d -o 4026 -g 4020 -m 0700 /human-state/kms
+          securityContext:
+            runAsNonRoot: false
+            runAsUser: 0
+            runAsGroup: 4020
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+              - ALL
+              add:
+              - CHOWN
+              - FOWNER
+              - DAC_OVERRIDE
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 32Mi
+          volumeMounts:
+          - name: run
+            mountPath: /run/layerx
+          - name: human-state
+            mountPath: /human-state
+        - name: human-authority-material
+          image: ghcr.io/sidiora-labs/layerx-human:0.1.0
+          imagePullPolicy: Always
+          command: [/bin/sh, -ec]
+          args:
+            - |
+              umask 077
+              install -d -m 0700 /run/authority-private/material
+              install -m 0600 /run/authority-input/authority-token /run/authority-private/material/human-agent.token
+              install -m 0600 /run/authority-input/principal-policy.json /run/authority-private/material/principal-policy.json
+              install -m 0600 /run/module-registry/registry.json /run/authority-private/material/registry.json
+          securityContext: {runAsUser: 4021, runAsGroup: 4020, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          resources: {requests: {cpu: 10m, memory: 16Mi}, limits: {cpu: 100m, memory: 32Mi}}
+          volumeMounts:
+            - {name: human-authority, mountPath: /run/authority-input, readOnly: true}
+            - {name: human-authority-private, mountPath: /run/authority-private}
+            - {name: human-module-registry, mountPath: /run/module-registry, readOnly: true}
+        - name: guarantor-storage
+          image: ghcr.io/sidiora-labs/layerx-node:0.1.0
+          imagePullPolicy: Always
+          command: [/bin/sh, -ec]
+          args:
+            - |
+              mkdir -p /var/lib/layerx/guarantor-submitter
+              chmod 2770 /var/lib/layerx/guarantor-submitter
+              for identity in 1 2; do
+                mkdir -p "/var/lib/layerx/guarantor-$identity/identity" "/var/lib/layerx/guarantor-$identity/state"
+                chmod 0750 "/var/lib/layerx/guarantor-$identity" "/var/lib/layerx/guarantor-$identity/identity"
+                chmod 2770 "/var/lib/layerx/guarantor-$identity/state"
+              done
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/layerx}
       containers:
         - name: layerxd
           image: ghcr.io/sidiora-labs/layerx-node:0.1.0
@@ -137,6 +153,66 @@ spec:
             - {name: tokens, mountPath: /run/layerx/tokens, readOnly: true}
             - {name: settlement, mountPath: /run/layerx/settlement, readOnly: true}
             - {name: tmp, mountPath: /tmp}
+        - name: guarantor-1
+          image: ghcr.io/sidiora-labs/layerx-node:0.1.0
+          imagePullPolicy: Always
+          command: [/opt/layerx/guarantor.sh]
+          securityContext: {runAsUser: 4021, runAsGroup: 4020, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          env:
+            - {name: LAYERX_GUARANTOR_IDENTITY_DIR, value: /var/lib/guarantor/identity}
+            - {name: LAYERX_GUARANTOR_STATE_DIR, value: /var/lib/guarantor/state}
+            - {name: LAYERX_GUARANTOR_LNI_SOCKET, value: /run/layerx/node/layerxd.lni.sock}
+            - {name: LAYERX_GUARANTOR_SETTLEMENT_ENV, value: /run/layerx/settlement/settlement.env}
+            - {name: LAYERX_GUARANTOR_SETTLEMENT_FILE, value: /run/layerx/settlement/checkpoint-settlement.json}
+            - {name: LAYERX_GUARANTOR_SETTLEMENT_DOMAIN, value: beta}
+            - {name: LAYERX_GUARANTOR_LISTEN_PORT, value: "9451"}
+            - {name: LAYERX_GUARANTOR_PEER_URL, value: "https://127.0.0.1:9452"}
+            - {name: LAYERX_GUARANTOR_TLS_CA_FILE, value: /run/layerx/guarantor-tls/ca.crt}
+            - {name: LAYERX_GUARANTOR_TLS_CERT_FILE, value: /run/layerx/guarantor-tls/tls.crt}
+            - {name: LAYERX_GUARANTOR_TLS_KEY_FILE, value: /run/layerx/guarantor-tls/tls.key}
+            - {name: LAYERX_GUARANTOR_SUBMITTER_KEY_FILE, value: /run/layerx/checkpoint-submitter/key}
+            - {name: LAYERX_GUARANTOR_SUBMITTER_LOCK_FILE, value: /var/lib/guarantor-submitter/submitter.lock}
+            - {name: LAYERX_GUARANTOR_CHECKPOINT_AUTHORITY_KEY_FILE, value: /var/lib/guarantor-submitter/checkpoint-authority.pem}
+            - {name: LAYERX_GUARANTOR_PYTHON, value: /opt/layerx/guarantor/venv/bin/python3}
+          ports: [{name: guarantor-1-tls, containerPort: 9451}]
+          resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "2", memory: 1Gi}}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/guarantor, subPath: guarantor-1}
+            - {name: run, mountPath: /run/layerx}
+            - {name: settlement, mountPath: /run/layerx/settlement, readOnly: true}
+            - {name: guarantor-1-tls, mountPath: /run/layerx/guarantor-tls, readOnly: true}
+            - {name: checkpoint-submitter, mountPath: /run/layerx/checkpoint-submitter, readOnly: true}
+            - {name: data, mountPath: /var/lib/guarantor-submitter, subPath: guarantor-submitter}
+        - name: guarantor-2
+          image: ghcr.io/sidiora-labs/layerx-node:0.1.0
+          imagePullPolicy: Always
+          command: [/opt/layerx/guarantor.sh]
+          securityContext: {runAsUser: 4021, runAsGroup: 4020, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          env:
+            - {name: LAYERX_GUARANTOR_IDENTITY_DIR, value: /var/lib/guarantor/identity}
+            - {name: LAYERX_GUARANTOR_STATE_DIR, value: /var/lib/guarantor/state}
+            - {name: LAYERX_GUARANTOR_LNI_SOCKET, value: /run/layerx/node/layerxd.lni.sock}
+            - {name: LAYERX_GUARANTOR_SETTLEMENT_ENV, value: /run/layerx/settlement/settlement.env}
+            - {name: LAYERX_GUARANTOR_SETTLEMENT_FILE, value: /run/layerx/settlement/checkpoint-settlement.json}
+            - {name: LAYERX_GUARANTOR_SETTLEMENT_DOMAIN, value: beta}
+            - {name: LAYERX_GUARANTOR_LISTEN_PORT, value: "9452"}
+            - {name: LAYERX_GUARANTOR_PEER_URL, value: "https://127.0.0.1:9451"}
+            - {name: LAYERX_GUARANTOR_TLS_CA_FILE, value: /run/layerx/guarantor-tls/ca.crt}
+            - {name: LAYERX_GUARANTOR_TLS_CERT_FILE, value: /run/layerx/guarantor-tls/tls.crt}
+            - {name: LAYERX_GUARANTOR_TLS_KEY_FILE, value: /run/layerx/guarantor-tls/tls.key}
+            - {name: LAYERX_GUARANTOR_SUBMITTER_KEY_FILE, value: /run/layerx/checkpoint-submitter/key}
+            - {name: LAYERX_GUARANTOR_SUBMITTER_LOCK_FILE, value: /var/lib/guarantor-submitter/submitter.lock}
+            - {name: LAYERX_GUARANTOR_CHECKPOINT_AUTHORITY_KEY_FILE, value: /var/lib/guarantor-submitter/checkpoint-authority.pem}
+            - {name: LAYERX_GUARANTOR_PYTHON, value: /opt/layerx/guarantor/venv/bin/python3}
+          ports: [{name: guarantor-2-tls, containerPort: 9452}]
+          resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "2", memory: 1Gi}}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/guarantor, subPath: guarantor-2}
+            - {name: run, mountPath: /run/layerx}
+            - {name: settlement, mountPath: /run/layerx/settlement, readOnly: true}
+            - {name: guarantor-2-tls, mountPath: /run/layerx/guarantor-tls, readOnly: true}
+            - {name: checkpoint-submitter, mountPath: /run/layerx/checkpoint-submitter, readOnly: true}
+            - {name: data, mountPath: /var/lib/guarantor-submitter, subPath: guarantor-submitter}
         - name: paxeer-relay
           image: ghcr.io/sidiora-labs/layerx-node:0.1.0
           imagePullPolicy: Always
@@ -656,7 +732,7 @@ spec:
               command:
                 - /bin/sh
                 - -ec
-                - exec curl --fail --silent --show-error --max-time 5 --config /run/human-private/agent/probe.conf http://127.0.0.1:9451/healthz
+                - exec curl --fail --silent --show-error --max-time 5 --config /run/human-private/agent/probe.conf http://127.0.0.1:9453/healthz
             timeoutSeconds: 6
             periodSeconds: 10
       volumes:
@@ -670,6 +746,9 @@ spec:
             secretName: layerx-human-authority-material
             defaultMode: 0440
         - {name: human-state, persistentVolumeClaim: {claimName: layerx-human-state}}
+        - {name: guarantor-1-tls, secret: {secretName: layerx-guarantor-1-tls, defaultMode: 0440}}
+        - {name: guarantor-2-tls, secret: {secretName: layerx-guarantor-2-tls, defaultMode: 0440}}
+        - {name: checkpoint-submitter, secret: {secretName: paxeer-checkpoint-submitter, defaultMode: 0440}}
         - {name: run, emptyDir: {medium: Memory, sizeLimit: 16Mi}}
         - {name: tmp, emptyDir: {medium: Memory, sizeLimit: 64Mi}}
         - {name: keys, secret: {secretName: layerx-node-keys, defaultMode: 0440}}

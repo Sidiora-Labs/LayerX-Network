@@ -1271,8 +1271,11 @@ lxp_result lxp_programs_replay_finalize(
 lxp_result lxp_programs_replay_engine_bind(lxp_replay_engine *engine,
                                            lxp_kernel *kernel)
 {
-    if (engine == NULL || kernel == NULL)
+    lxp_result status;
+    if (engine == NULL || kernel == NULL || engine->batch_finalize != NULL)
         return LXP_ERR_NON_CANONICAL;
+    status = lxp_replay_engine_bind_kernel(engine, kernel);
+    if (status != LXP_OK) return status;
     return lxp_replay_engine_register_batch_finalizer(
         engine, lxp_programs_replay_finalize, kernel);
 }

@@ -29,6 +29,7 @@ pub enum AvailabilitySelector {
     Batch(u64),
     SequenceRange { first: u64, last: u64 },
     Activity([u8; 32]),
+    SealedCandidate(u64),
 }
 
 impl AvailabilitySelector {
@@ -50,6 +51,10 @@ impl AvailabilitySelector {
                 bytes.push(3);
                 bytes.extend_from_slice(&first.to_be_bytes());
                 bytes.extend_from_slice(&last.to_be_bytes());
+            }
+            Self::SealedCandidate(batch) => {
+                bytes.push(5);
+                bytes.extend_from_slice(&batch.to_be_bytes());
             }
             Self::Activity(identifier) => {
                 bytes.push(4);
@@ -319,6 +324,28 @@ where
     Ok(FetchOutcome::Partial(partials))
 }
 
+/// Fetches a sealed candidate against the caller's verified signed-header commitments.
+/// This does not attest, register a checkpoint, or establish finality.
+///
+/// # Errors
+///
+/// Returns the same provider, bounds and correlation errors as [`fetch`].
+pub fn fetch_sealed_candidate<F>(
+    providers: &mut ProviderSet<'_>,
+    context: FetchContext,
+    on_chunk: F,
+) -> Result<FetchOutcome, FetchError>
+where
+    F: FnMut(Progress<'_>),
+{
+    fetch(
+        providers,
+        AvailabilitySelector::SealedCandidate(context.expected_batch_number),
+        context,
+        on_chunk,
+    )
+}
+
 fn fetch_provider<F>(
     transport: &mut dyn FrameTransport,
     provider: &str,
@@ -370,7 +397,7 @@ where
                 )?;
             }
             AVAILABILITY_END_TAG => {
-                if !response.canonical_payload.is_empty() {
+                if !response.canonical_payload.is_empty() || !response.proof_material.is_empty() {
                     return Err(report(
                         provider,
                         &chunks,
@@ -590,11 +617,24 @@ fn section_bytes(chunks: &[VerifiedChunk], class: AvailabilityClass) -> Vec<u8> 
 
 fn decode_records(bytes: &[u8], tagged: bool) -> Result<Vec<(u8, Vec<u8>)>, ()> {
     let mut reader = RecordReader::new(bytes);
+    let count = if tagged { None } else { Some(reader.u32()?) };
     let mut records = Vec::new();
+    let mut previous_kind = 1;
     while !reader.finished() {
         let kind = if tagged { reader.u8()? } else { 0 };
+        if tagged && (kind < previous_kind || kind > 2) {
+            return Err(());
+        }
+        if tagged {
+            previous_kind = kind;
+        }
         let length = usize::try_from(reader.u32()?).map_err(|_| ())?;
         records.push((kind, reader.bytes(length)?.to_vec()));
+    }
+    if let Some(count) = count {
+        if usize::try_from(count).map_err(|_| ())? != records.len() {
+            return Err(());
+        }
     }
     Ok(records)
 }

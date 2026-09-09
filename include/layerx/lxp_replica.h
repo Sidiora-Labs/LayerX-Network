@@ -83,6 +83,7 @@ typedef struct lxp_replay_engine {
     lxp_replay_batch_finalize_fn batch_finalize;
     void *batch_finalize_context;
     void *context;
+    const struct lxp_kernel *kernel;
 } lxp_replay_engine;
 #define lxp_replay_engine lxp_replay_engine
 
@@ -96,6 +97,7 @@ typedef struct lxp_replay_batch_result {
     size_t receipt_count;
     lxp_byte_span canonical_receipt_section;
     lxp_byte_span canonical_event_section;
+    lxp_byte_span canonical_state_diff;
     uint8_t resulting_state_root[32];
     lxp_batch_roots roots;
 } lxp_replay_batch_result;
@@ -114,6 +116,8 @@ lxp_result lxp_replica_ingest_batch(
 lxp_result lxp_replay_engine_init(
     lxp_replay_engine *engine,
     lxp_replay_parameter_version_fn parameter_version, void *context);
+lxp_result lxp_replay_engine_bind_kernel(
+    lxp_replay_engine *engine, const struct lxp_kernel *kernel);
 lxp_result lxp_replay_engine_register(lxp_replay_engine *engine,
                                       uint16_t version,
                                       lxp_replay_transition_fn transition);

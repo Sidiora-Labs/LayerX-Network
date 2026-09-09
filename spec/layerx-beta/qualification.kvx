@@ -5807,7 +5807,7 @@ symbol = "locate_container_cgroup initialize_cgroup_boundary delegate_container_
 observed = "formerly observation.6.8.50. formerly observation.6.8.49. Container-local delegation uses C/main and C/workers, requires the four controllers, and drops irreversibly to UID/GID 4030 before configuration reads. Discovery matches device/inode within depth 8 and 65536 visited directories, checks cgroup.procs membership, refuses multiple matches and unreadable root-owned directories, excludes non-root owner UIDs with one debug message each, and never descends into the matched cgroup. The ownership unit test uses a real non-root-owned subtree under root and tests the metadata predicate under UID 4030. The real child-cgroup test calls delegate_container_cgroup, drop_registry_privileges, WorkerCgroup::create and attach, verifies stopped-child membership, sends SIGCONT, observes continuation, kills through cgroup.kill and verifies removal. Both full cargo test invocations execute this root test; the separate non-root predicate run passes. On the rebased source, formatting, strict locked Clippy, both locked test invocations, the locked native release build, both shell syntax checks and hosted topology pass. make beta-ledger-check exits 2 because inherited observation.6.4.173 lacks severity; that record is unchanged. Exact commands, exit codes and logs: qual-logs/cgd1/gates.json. The disposable Debian container uses private cgroupns, only CHOWN/SETUID/SETGID, no-new-privileges, read-only root and the writable system.slice bind mount. Host evidence records initial UID/GID 0 with capability mask c1, then all four UID/GID columns 4030 and zero CapEff/CapPrm/CapInh; the process is observed in main, workers and its delegation files belong to 4030:4030, and C and workers enable cpu io memory pids. Host strace shows the delegation ownership operations, keepcaps disabled, supplementary group 4030, setresgid/setresuid 4030, and attempted root restoration rejected with EPERM before any token open. The release binary exits 2 with exactly: layerx-program-registry: node authority GET /v1/protocol/account-state/head failed: io: Connection refused. Proof evidence: qual-logs/cgd1/proof.py, proof-evidence.json, container.log, container-strace.log and verify-proof.log. The original shared builder root is unreadable to 4030; the disposable proof uses a private copy of the real builder environment owned by 4030, excludes account credential files and recomputes the pinned environment digest. The shared builder root is unchanged. No listener or HTTP readiness proof is claimed."
 assumption = "The container privilege/delegation proof and real WorkerCgroup attachment proof cover the prescribed two-part boundary. End-to-end healthz readiness remains a beta cluster gate after integration. Locked qualification uses supplied platform/Cargo.lock additions for nix and cfg_aliases, and topology qualification includes supplied owner-mode v2 selectors; those changes are outside the permitted publication paths and require separate integration. The inherited observation.6.4.173 severity omission blocks the ledger gate. A deployed builder environment must also be readable by UID 4030. No existing check, capability contract, bound or unrelated record was weakened."
 
-[observation.6.8.51]
+[observation.6.8.94]
 task = "6.8"
 severity = "blocker"
 file = "platform/hosted/registry/src/main.rs platform/hosted/registry/src/routes.rs platform/hosted/registry/src/builder.rs platform/hosted/gateway/src/main.rs"
@@ -5815,7 +5815,7 @@ symbol = "serve_connection isolated_route request_worker Registrar::open Hermeti
 observed = "The retained cluster has three Running gateway pods with readiness HTTP 503. A verified TLS GET /readyz reports durable_store, core_agent_boundary and independent_receipt_authority ready, and program_registry unavailable. Gateway container logs are empty. The registry TCP probe passes but direct requests with the gateway client certificate and the registry DNS name fail during TLS with curl exit 35. The registry process has 256 to 258 threads, while its configured default connection bound is 128. Live request workers are attached inside /workers/request-*/worker and read builder toolchain files under /opt/layerx-builder/rootfs; process samples show successive workers doing this repeatedly. Source inspection shows /healthz takes registrar_gate, starts an isolated worker, and calls Registrar::open, which invokes HermeticBuilder::new and environment_digest with no hashing deadline before routing healthz. Requests queue behind that work for up to 1800 seconds; the gateway outbound I/O bound is 8 seconds and its readiness probe retains the default 1-second timeout. Evidence: qual-logs/au40/gateway-readiness.log, gateway-events.log, gateway-container.log, registry-health-mtls.log, registry-health-mtls.exit and registry-process-samples.log. The previous full gate exit remains 2 in qual-logs/au39/task-6.8.exit."
 assumption = "Registry request initialization and serialized readiness must be repaired in the registry implementation while preserving builder integrity verification, worker isolation, connection bounds and request deadlines. The gateway readiness conjunction and probes remain unchanged. Connection saturation is consistent with the observed thread count and immediate TLS refusal; no instrumented active-connection counter was collected. This is a registry implementation dependency, not a qualified gateway repair. The full gate was not rerun and the retained cluster remains available for diagnosis."
 
-[observation.6.8.52]
+[observation.6.8.95]
 task = "6.8"
 severity = "blocker"
 file = "platform/hosted/registry/src/builder.rs platform/hosted/registry/src/main.rs platform/hosted/registry/src/routes.rs platform/hosted/registry/tests/readiness.py docs/wiki/Quickstart.md"
@@ -5823,7 +5823,7 @@ symbol = "HermeticBuilder::new environment_metadata Registrar::open_with_builder
 observed = "The listener retains the startup-verified builder and passes it through bounded parent-owned worker IPC; workers retain cgroup attachment, quota validation, request deadlines and per-build copied-environment and executable verification. Health bypasses the registrar serialization lock while replaying durable evidence and checking the node without writing the protocol cursor. A background metadata and inotify detector clears readiness on changed inputs and fully re-verifies against the startup digest before restoring readiness; stale monitor results refuse after two seconds. The original metadata-only mutation test failed on a rapid same-size write with identical timestamps. Its assertion is unchanged; inotify invalidation repairs this gap. Strict locked Clippy passes on the final Rust source (qual-logs/au41/clippy-watch.log, exit 0). The aggregate cargo test invocation exits 101 because root cannot allocate an inotify instance, returning EMFILE (qual-logs/au41/test-watch.log). All seven library tests pass under the actual registry UID/GID 4030 (qual-logs/au41/lib-tests-4030.log, exit 0). All five binary tests, including real stopped-child cgroup attachment and cleanup, and all six journal tests pass under root (qual-logs/au41/remaining-tests.log, exit 0). The real-binary concurrent-build latency and temporary-rootfs mutation test is written but unexecuted. Quickstart now describes the separate agent boundary export, absent-agentd unset and Human endpoint selected by env_write."
 assumption = "Deployment qualification is blocked by the existing disk preflight: 18 GiB free versus 30 GiB required, exit 1 in qual-logs/au41/cluster-preflight.log. No space bound or kernel watch limit was raised. No image was rebuilt or loaded and the retained cluster was not modified. The exact full wrapper was not run; qual-logs/au39/task-6.8.exit retains its previous failed result. The wrapper tears down the cluster and calls build_images for every image, which also conflicts with rebuilding only the changed image; the required script change is outside the granted paths and is recorded in NEEDS.md. No live health latency, rootfs mutation refusal or cluster pass is claimed. Codify review and guard each reached their 60-second limit with exit 124; no graph qualification is claimed."
 
-[observation.6.8.53]
+[observation.6.8.96]
 task = "6.8"
 severity = "blocker"
 file = "platform/hosted/tests/beta-cluster.sh"
@@ -5831,7 +5831,7 @@ symbol = "build_images beta_cluster_up beta_cluster_down"
 observed = "The unchanged 30 GiB disk preflight now passes, exit 0 in qual-logs/au41b/preflight.log. The registry-only Docker release build from tracked source at 6992e4b0 passes, exit 0 in qual-logs/au41b/build-registry.log. Image layerx-beta/layerx-program-registry:6992e4b0c3a0 has ID sha256:c8ee91e145240ef006060a9d97af5f7f27d9df67d0beb481c4fcddc695273c78 and loads into both retained kind nodes, exit 0 in qual-logs/au41b/load-registry.log. No other image was rebuilt or loaded. The exact full wrapper still invokes teardown and unconditional all-image builds; source evidence is in qual-logs/au41b/gate-blocker.log. The full gate and real-binary readiness harness remain unexecuted. The previously recorded root inotify EMFILE aggregate failure is pre-existing; no assertion, watch limit or gate was weakened."
 assumption = "Selective reuse of unchanged images requires an owning-source change in platform/hosted/tests/beta-cluster.sh outside the granted paths. Image build and load do not prove deployed readiness or cluster qualification. The retained cluster remains up with its existing deployment references. The previous task-6.8.exit remains 2 and is not a new gate result."
 
-[observation.6.8.54]
+[observation.6.8.97]
 task = "6.8"
 severity = "blocker"
 file = "platform/hosted/dashboard/web/Dockerfile platform/hosted/tests/beta-cluster.sh"
@@ -5839,7 +5839,7 @@ symbol = "build_images beta_cluster_up"
 observed = "The exact command bash qual-logs/au39/run-gate-3.sh exits 2, recorded in qual-logs/au39/task-6.8.exit. Preliminary disposable-cluster teardown exits 0. Hosted topology and its refusal tests pass. The full image loop successfully builds testnet-control, gateway, faucet, program-registry, webhooks and dashboard from revision 63aa3d253166. Dashboard-web fails resolving node:24.6.0-bookworm-slim because the Docker Hub anonymous-token request to auth.docker.io is reset by the peer over IPv6. Evidence: qual-logs/au39/task-6.8.log, qual-logs/au39/pre-down.log, qual-logs/au41c/build-layerx-dashboard-web.log and the six successful build logs under qual-logs/au41c/."
 assumption = "Docker Hub connectivity is an external build prerequisite. No Dockerfile, image reuse behavior, integrity check or bound changed. Cluster creation, hosted smoke and the final retained-cluster startup were not reached; no disposable cluster remains. The real-binary concurrent-build latency and temporary-rootfs mutation harness remains unexecuted. Registry image compilation does not prove deployed readiness. Developer credential storage remains outside this scope."
 
-[observation.6.8.55]
+[observation.6.8.98]
 task = "6.8"
 severity = "blocker"
 file = "platform/hosted/human/deployment.yaml platform/hosted/tests/beta-cluster.sh platform/hosted/registry/src/main.rs"
@@ -5908,12 +5908,15 @@ file = "platform/hosted/human/material.py platform/hosted/human/README.md"
 symbol = "HUMAN_PEERS"
 observed = "The material generator requires exactly one ordered uid=4020;tenant=<tenant>;principal=<principal> binding, validates tenant syntax and DID syntax and byte bounds, and preserves authority equality, principal policy uniqueness and existing material refusals. Python unittest discovery passes all four hosted Human tests. The real-file subprocess peer harness passes acceptance, malformed input refusal and policy binding refusal groups. Shell syntax, topology, retained-material refusal and ledger checks pass; evidence is under qual-logs/hm6f. Positional peer strings remain only in preserved Rust rejection tests, not hosted producers or documentation. This resolves the assembler incompatibility recorded in observation.6.8.84."
 assumption = "The untracked subprocess harness qualifies material parsing and file packaging only, not downstream journal semantics or complete Human policy validity. Image execution, full render and live cluster gates remain unrun because Docker, kubectl, kind and a live cluster are unavailable. Missing Human evidence producers and live readiness remain outside this repair."
+[observation.6.8.93]
+task = "6.8"
+severity = "blocker"
 file = "human/crates/layerx-human-identity-provider/src/state.rs human/crates/layerx-human-security-provider/src/state.rs platform/hosted/tests/beta-cluster.sh platform/hosted/authority/README.md platform/hosted/registry/src/routes.rs"
 symbol = "account_fields provision RecoveryReceipt::verify ingest_recovery_receipt secrets_generate internal_principals_provision deployment_proof_unavailable"
 observed = "LXIP operation 1 returns only principal, DID, recovery root, threshold and delay; it produces no protocol owner account, authority reference, capabilities or receipt-backed identity and key policies. Recovery ingest verifies canonical receipt encoding and signed historical inclusion but contains no operator Ed25519 key-set commitment derivation to reuse. human_secrets_generate executes before contracts and identity/gateway provisioning; human_policy_publish also precedes identity provisioning. Gateway key responses and identity session responses are deleted. Registry ingress refuses deployment_proof_unavailable and produces no admission/deployment journal. The authority executable has no configuration-validation mode."
 assumption = "Complete Human evidence provisioning requires real owner-account and authority registration outputs, receipt-backed principal policies, a canonical recovery commitment verifier, preserved non-secret tenant/principal bindings, corrected bootstrap ordering and real registry journal pairs. CLI-only provider changes and a single call before human_secrets_generate cannot establish these missing facts. No commitment algorithm, authority identifier, receipt or journal is fabricated. Retained-network consumed limits and checkpoint-authority Secret publication require upstream evidence; cluster and image gates are unavailable on the build host."
 
-[observation.6.8.83]
+[observation.6.8.99]
 task = "6.8"
 severity = "blocker"
 file = "human/crates/layerx-human-identity-provider/tests/client.rs human/crates/layerx-human-service/src/server/identity_dispatch.rs"
@@ -5921,15 +5924,15 @@ symbol = "RemoteIdentityProvider resolve_email device_for_assertion"
 observed = "The locked all-targets Clippy and locked test commands for the identity and security provider packages exit 101 because the unchanged identity-provider client integration test calls resolve_email and device_for_assertion, which are absent from RemoteIdentityProvider. Compiler E0599 points to client.rs lines 100, 105, 107, 120 and 128. Logs are qual-logs/hm9/clippy.log and qual-logs/hm9/test.log. The locked provider binary build and format check pass; python3 platform/hosted/human/test_material.py and make beta-ledger-check exit zero."
 assumption = "The incompatible client test and service interface require reconciliation outside new provisioning CLI scope. Neither side is weakened or modified. Focused CLI qualification does not replace the failed aggregate gates or prove a complete Human evidence set."
 
-[observation.6.8.84]
+[observation.6.8.100]
 task = "6.8"
 severity = "note"
 file = "human/crates/layerx-human-identity-provider/tests/client.rs human/crates/layerx-human-service/src/server/identity_dispatch.rs"
 symbol = "RemoteIdentityProvider::call DirectoryRead"
-observed = "The client integration test now uses the current authenticated LXIP transport for directory operations 2 and 3, with every original assertion retained. The shared transport is crate-visible so the source-included integration test exercises the actual implementation. Locked all-targets Clippy and locked tests for layerx-human-identity-provider, layerx-human-security-provider and layerx-human-service pass; formatting check and the locked provider binary build pass. Logs: qual-logs/hm9/hm9c-clippy.log, hm9c-test.log, hm9c-fmt-check.log and hm9c-build.log. This resolves the E0599 qualification failure recorded in observation 6.8.83."
+observed = "The client integration test now uses the current authenticated LXIP transport for directory operations 2 and 3, with every original assertion retained. The shared transport is crate-visible so the source-included integration test exercises the actual implementation. Locked all-targets Clippy and locked tests for layerx-human-identity-provider, layerx-human-security-provider and layerx-human-service pass; formatting check and the locked provider binary build pass. Logs: qual-logs/hm9/hm9c-clippy.log, hm9c-test.log, hm9c-fmt-check.log and hm9c-build.log. This resolves the E0599 qualification failure recorded in observation 6.8.99."
 assumption = "Passing these package gates qualifies the client-interface reconciliation and existing provision-owner path only; it does not prove cluster execution or a complete Human evidence set."
 
-[observation.6.8.85]
+[observation.6.8.101]
 task = "6.8"
 severity = "blocker"
 file = "human/crates/layerx-human-service/src/agents/create.rs platform/hosted/gateway/src/main.rs platform/hosted/identity/src/main.rs platform/hosted/tests/beta-cluster.sh"
@@ -5992,3 +5995,298 @@ file = "platform/hosted/identity/src/main.rs platform/hosted/identity/tests/serv
 symbol = "create_principal provision_account human_evidence_provision assemble"
 observed = "Identity creation requires and echoes a bounded tenant and preserves the checked request/response binding. Real identity service tests and all-targets Clippy pass. Treasury and sequencer account provisioning calls the existing protocol account derivation. The evidence assembler stages the complete protected file set and journal before publication. The Job uses the runtime identity PVC and validates receipt inclusion under the first-batch sequencer pin. The retained real native second-batch receipt is independently verified and refused for fresh limits. The generated catalog loads through PurposePresetCatalog's public re-export. Locked provider build, all-targets Clippy and tests including layerx-human-service pass, as do twelve provisioning tests, four existing material tests, formatting, shell syntax and beta-ledger-check. Exact commands, exit codes and logs are recorded in qual-logs/hm9/hm9e-gates.json."
 assumption = "Local source qualification does not resolve observations 6.8.89 through 6.8.91. No complete generated evidence set, positive first-batch live acceptance, Kubernetes Job, image or cluster qualification is claimed."
+[observation.6.1.18]
+task = "6.1"
+file = "src/replica/lxp_replay.c src/guarantor/lxp_guarantor.c src/sequencer/lxp_batch_roots.c src/network/lxp_da_bundle.c"
+symbol = "replay_batch lxp_guarantor_recompute_roots lxp_batch_roots_compute lxp_da_bundle_root"
+observed = "formerly observation.6.1.da_commitment_conflict. Publication replay computes the empty DA root using NULL/0 inputs; guarantor replay computes ordinary Merkle leaves over five complete sections; DA bundle verification computes domain-separated metadata-bound chunk digests. These are different commitments. Publishing the DA chunk root does not satisfy the existing publication and guarantor replay root assertions. Raw source evidence: qual-logs/dan1/source-blockers.log. No qualification gate ran."
+assumption = "The replay and guarantor owners must supply a common canonical commitment path while preserving root assertions before daemon DA publication can be qualified."
+severity = "blocker"
+
+[observation.6.1.19]
+task = "6.1"
+file = "include/layerx/lxp_guarantor.h src/paxeer/lxp_checkpoint_cert.c cmd/layerxd/lxp_daemon_evidence.c agent/schema/lni/README.md agent/crates/layerx-client/tests/lni_schema.rs"
+symbol = "lxp_checkpoint_certificate lxp_checkpoint_certificate_hash lni_schema_and_document_cover_every_declared_message"
+observed = "formerly observation.6.1.da_candidate_interface. The checkpoint certificate type and hash bind one header plus supplied proof bytes; the daemon evidence path receives finalized certificate material rather than producing an unfinalized checkpoint range, guarantor-set identity and validity proof. Adding a candidate message also requires its name in the schema README because the existing Rust schema test checks every message against that document, outside the permitted edit paths. Raw source evidence: qual-logs/dan1/source-blockers.log."
+assumption = "Checkpoint production must expose authoritative candidate/range material and the schema documentation owner must append the additive message entry without weakening the existing checks."
+severity = "blocker"
+
+[observation.6.1.20]
+task = "6.1"
+file = "include/layerx/lxp_da.h src/network/lxp_da_bundle.c cmd/layerxd/lxp_daemon_process.c src/replica/lxp_replay.c src/guarantor/lxp_guarantor.c"
+symbol = "lxp_batch_availability_root"
+observed = "formerly observation.6.1.da_canonical_commitment_decision. Owner-directed D1 redefines sealed data_availability_root as the Merkle root of lxp_da_bundle_build at LXP_DA_MAX_CHUNK_BYTES, 65536 bytes. Existing daemon publication and publication replay use empty availability inputs; guarantor replay uses whole-section leaves. These commitments drift from the metadata-bound DA chunk root verified by native possession and Rust availability proofs. An additive canonical root helper is written; producer and verifier integration is incomplete and no qualification gate ran."
+assumption = "Every header comparison must remain a comparison against an independently recomputed canonical bundle root; oracle commitments remain unchanged. D5 supersedes the candidate-interface observation: no new candidate tag is required and beta validity proof bytes are empty."
+severity = "blocker"
+
+[observation.6.1.21]
+task = "6.1"
+file = "src/protocol/lxp_kernel.c include/layerx/lxp_kernel.h cmd/layerxd/lxp_daemon_process.c cmd/layerxd/lxp_daemon_batch_wal.c"
+symbol = "lxp_kernel_prepared_batch commit_prepared_batch_wal"
+observed = "formerly observation.6.1.da_prepared_state_access. The signed WAL header is constructed before prepared-batch commit. The prepared base and settled kernels are private struct members in src/protocol/lxp_kernel.c, outside the permitted edit paths. Public prepared-batch accessors expose roots and receipt/event bytes but not account leaves or module state. D2 state diff and recovery metadata cannot be constructed from the settled state through that public API before WAL signing. Exact accessor request is in untracked NEEDS.md; source excerpts are in qual-logs/dan1/prepared-state-source.log."
+assumption = "Expose read-only base and settled kernel accessors or an equivalent canonical encoding API in the kernel owner file. Preserve WAL-before-commit ordering and do not encode the live pre-batch state as the settled state. Full implementation is incomplete, so phase-separated qualification has not started."
+severity = "blocker"
+
+[observation.6.1.22]
+task = "6.1"
+file = "src/protocol/lxp_kernel.c include/layerx/lxp_kernel.h src/network/lxp_da_bundle.c cmd/layerxd/lxp_daemon_lni.c"
+symbol = "lxp_kernel_prepared_batch_base_kernel lxp_kernel_prepared_batch_settled_kernel"
+observed = "formerly observation.6.1.da_prepared_state_access_resolved. The granted additive accessors return the prepared base and settled kernels as const borrowed pointers and return NULL for NULL. Their lifetime ends at prepared-batch destruction. Generic replay, guarantor and served-byte root verification now call lxp_batch_availability_root while retaining header comparisons. Tagged receipt encoding, kernel recovery metadata encoding and the tag 18 handler are written but not integrated into durable daemon publication. The prior prepared-state path restriction is resolved."
+assumption = "The implementation stage remains incomplete. No formatting, build, test or runtime qualification result is asserted. The availability capability remains disabled until a verified retained store is bound."
+severity = "note"
+
+[observation.6.1.23]
+task = "6.1"
+file = "cmd/layerxd/lxp_daemon_process.c cmd/layerxd/lxp_daemon_batch_wal.c src/storage/lxp_da_verified.c src/network/lxp_da_bundle.c include/layerx/lxp_replica.h src/replica/lxp_replay.c agent/crates/layerx-client/src/availability.rs"
+symbol = "lxp_da_body_from_kernels lxp_daemon_batch_wal_body lxp_da_log_store_body lxp_replay_engine_bind_kernel"
+observed = "formerly observation.6.1.da_body_durability. Canonical bodies derive account diffs from the actual base and settled account registries and recovery metadata from the settled kernel. Prepared WAL encoding carries those sections in version 4 under the existing byte bound. A separate da-bodies.log preserves canonical bodies for independent evidence reconstruction without modifying the header-only batch log contract. Served files reside in da under the checkpoint directory. The retention parameter defaults to 100000 and rejects values below 1024; pruning preserves the newest finalized checkpoint. Generic replay requires an explicitly bound real kernel and compares its actual roots and recomputed account diff. Rust activity and oracle sections consume the canonical sequence count; receipt sections reject reordered tags."
+assumption = "Replay-engine consumers and canonical fixtures require migration to real kernel state and canonical sections before qualification. Startup, crash recovery, retention boundaries, selector refusals and real-daemon Rust retrieval require executed integration evidence. No gate result is asserted."
+severity = "note"
+
+[observation.6.1.24]
+task = "6.1"
+file = "src/network/lxp_da_bundle.c src/replica/lxp_replay.c cmd/layerxd/lxp_daemon_process.c tests/state/lxp_test_state_diff.c tests/support/lxp_real_replay.h"
+symbol = "lxp_da_recovery_verify_kernel lxp_real_replay_transition"
+observed = "formerly observation.6.1.da_recovery_recomputation. Replay and settled WAL recovery now compare canonical recovery bytes with a fresh encoding of the actual kernel module roots, account frontier, sequence and watermarks. Mutation, truncation, trailing-byte, account-state and watermark refusal cases are written. Replica, retrieval, tool and guarantor replay fixtures use signed SEND activities through the asset module and kernel; occupancy fixtures derive expected bodies by finalizing an independent state snapshot. Qualification has not started."
+assumption = "Real-daemon Rust availability coverage and remaining fixture migration must be complete before phase-separated gates run. Existing WAL schema recovery assertions still require version 1 and 2 records while availability-bearing records use version 4; backward-schema coverage must be retained without relaxing those assertions."
+severity = "note"
+
+[observation.6.1.25]
+task = "6.1"
+file = "agent/crates/layerx-client/tests/availability_daemon.rs tests/daemon/program-admission.sh tests/daemon/lxp_test_program_admission.c Makefile cmd/layerxd/lxp_daemon_process.c"
+symbol = "real_daemon_availability_refusals availability_batches availability_verify_retained availability_prune"
+observed = "formerly observation.6.1.da_native_refusal_harness. The Rust integration harness launches the native sequencer and replica through the existing bootstrap harness, submits nine signed deployments, retrieves and signature-verifies headers through tag 12, and asserts typed unknown-batch, unfinalized-batch and over-eight-batch range refusals. It truncates a retained bundle, restarts the sequencer and asserts availability_fetch is withheld while signed header reads still work. Startup now checks all retained batches when no finalized checkpoint permits pruning; pruning runs for both single-activity and prepared publication. These paths are written but have not run."
+assumption = "D6 successful fetches by batch, activity and within-batch sequence require the remaining real settlement registration harness and Rust chunk verification coverage. No gate is reported as passed; implementation and qualification remain incomplete."
+severity = "note"
+
+[observation.6.1.26]
+task = "6.1"
+file = "spec/layerx-beta/qualification.kvx"
+symbol = "make beta-ledger-check"
+observed = "formerly observation.6.1.18. The ledger gate exits 2 because eight appended observation keys use descriptive final segments rather than numeric segments. Evidence: qual-logs/dan1/beta-ledger-check.log and qual-logs/dan1/beta-ledger-check.exit. The malformed keys range from observation.6.1.da_commitment_conflict through observation.6.1.da_native_refusal_harness."
+assumption = "Renaming existing observation keys requires authority to modify prior entries; the current ledger scope is append-only. Existing observations and the validation rule remain intact."
+severity = "blocker"
+
+[observation.6.1.27]
+task = "6.1"
+file = "tests/storage/lxp_test_batch_wal_recovery.c cmd/layerxd/lxp_daemon_batch_wal.c"
+symbol = "recover_both_schemas encode_record"
+observed = "formerly observation.6.1.19. make test-batch-wal-recovery exits 2. The recovery fixture now carries canonical state diff and recovery metadata, selecting availability WAL version 4. recover_both_schemas still asserts version 1 has NULL artifact arrays and that encoded versions are 1 and 2; version 4 preserves canonical body sections and includes artifact arrays. Diagnostic evidence: qual-logs/dan1/recovery-diagnostic.log, check at line 459."
+assumption = "The existing assertions and canonical WAL encoding remain unchanged. The legacy-schema test contract must be reconciled with mandatory canonical-body validation without relaxing version or root checks."
+severity = "blocker"
+
+[observation.6.1.28]
+task = "6.1"
+file = "tests/test_da_unavailable.c src/network/lxp_da_bundle.c"
+symbol = "lxp_da_bundle_root lxp_da_withhold_sim"
+observed = "formerly observation.6.1.20. make test-da-unavailable exits 2. The test requires root computation to succeed for a bundle with an entire availability class removed. Canonical bundle root validation requires all five ordered classes and refuses that incomplete bundle. Diagnostic evidence: qual-logs/dan1/recovery-diagnostic.log, check at line 96."
+assumption = "The existing success assertion and the canonical completeness check remain intact under the no-weakening rule. The incomplete-bundle root test contract requires reconciliation before this gate can pass."
+severity = "blocker"
+
+[observation.6.1.29]
+task = "6.1"
+file = "platform/Cargo.lock tests/daemon/bootstrap-send.sh"
+symbol = "make test-daemon-finality-authority"
+observed = "formerly observation.6.1.21. The finality JSON grammar test and real-chain registered checkpoint, wrong-chain, wrong-settlement, wrong-checkpoint, wrong-block, invalid-signature, wrong-registry, reverted-transaction and unreachable-chain checks pass. The aggregate daemon target then exits 2 because bootstrap-send invokes a locked platform Cargo build whose lockfile requires an update. Evidence: qual-logs/dan1/test-daemon-finality-authority.log and qual-logs/dan1/test-daemon-finality-authority.exit."
+assumption = "The platform workspace owner must reconcile its lockfile. Platform files are outside this change scope; locked dependency enforcement remains enabled."
+severity = "blocker"
+
+[observation.6.1.30]
+task = "6.1"
+file = "cmd/layerxd/lxp_daemon_lni.c tests/daemon/program-admission.sh agent/crates/layerx-client/tests/availability_daemon.rs tests/support/lxp_real_replay.h"
+symbol = "send_availability real_daemon_availability_refusals"
+observed = "formerly observation.6.1.22. make test-daemon-availability passes real settlement registration, signed header retrieval, verified batch/activity/sequence/checkpoint fetches, unknown and over-limit refusals, and corrupt-store restart capability withholding. make -k test, make build, the focused state-diff/store/replay/retrieval/guarantor/tools targets, occupancy replay, build-asan/build-ubsan/build-tsan, test-asan/test-ubsan/test-tsan and test-crypto-sanitizers pass. All daemon targets except the platform-lockfile-blocked finality aggregate pass, including the full maintenance crash matrix. Client/proof cargo fmt --check, locked clippy with -D warnings and locked cargo test pass. Exact commands and exit files are in STATUS.md and qual-logs/dan1; native fetch evidence is qual-logs/dan1/daemon-availability-fourth.log, Rust aggregate evidence is qual-logs/dan1/cargo-test.log and crash evidence is qual-logs/dan1/test-daemon-maintenance-crash.log."
+assumption = "These executed gates establish focused and real-daemon evidence, not complete qualification. Observations 6.1.18 through 6.1.21 retain the ledger, WAL, incomplete-bundle and platform-lockfile conflicts. No assertion or locked dependency gate was relaxed."
+severity = "blocker"
+
+[observation.6.1.31]
+task = "6.1"
+file = "cmd/layerxd/lxp_daemon_batch_wal.c cmd/layerxd/lxp_daemon_process.c tests/storage/lxp_test_batch_wal_recovery.c"
+symbol = "recover_both_schemas validate_input encode_record recover_prepared_batch_wal recover_ranged_batch_authority"
+observed = "Legacy WAL records retain signature, canonical item, publication digest and historical empty availability root validation. Version 4 still requires canonical body and recomputed root validation; all new writes use version 4. Legacy transitions preserve the original durable record until guarded retirement, so interrupted recovery remains repeatable without writing obsolete versions. Recovery publishes legacy receipt evidence without inventing a body; absent bundles fail retained-store verification and withhold availability_fetch. The schema fixture materializes legacy wire layouts from signed records while preserving the version and artifact assertions. Coverage checks absent canonical body fields, body refusal, missing verified bundles and transitions without version rewriting. make test-batch-wal-recovery build/bin/layerxd exits 0; evidence: qual-logs/dan1f/item1-final.log and qual-logs/dan1f/item1-final.exit."
+assumption = "Legacy compatibility resolves observation 6.1.27. Aggregate and real-daemon reruns remain pending."
+severity = "note"
+
+[observation.6.1.32]
+task = "6.1"
+file = "tests/test_da_unavailable.c"
+symbol = "main lxp_da_withhold_sim"
+observed = "The unavailable fixture builds all five classes with LXP_DA_CANONICAL_CHUNK_BYTES and computes the complete canonical root before removing a class from the served copy. It no longer requests a root for an incomplete bundle, whose root is undefined under the canonical commitment contract. The checkpoint retains the complete root. All availability-mask, storage refusal, possession refusal, finalisation blocking, emergency-mode and error-code assertions remain intact. make test-da-unavailable exits 0 across all five withheld classes; evidence: qual-logs/dan1f/item2.log and qual-logs/dan1f/item2.exit."
+assumption = "This fixture migration resolves observation 6.1.28 without changing canonical completeness validation."
+severity = "note"
+
+[observation.6.1.33]
+task = "6.1"
+file = "tests/storage/lxp_test_batch_wal_recovery.c cmd/layerxd/lxp_daemon_process.c tests/daemon/bootstrap-send.sh"
+symbol = "retire_legacy_records recover_ranged_batch_authority make test-daemon-finality-authority"
+observed = "Legacy retirement qualification covers versions 1 and 2 at base and settled boundaries, reload after an in-memory terminal transition, recovery classification from the unchanged prepared record and guarded retirement. Body-less inputs are refused by the version-4 writer. make -k test-batch-wal-recovery test-da-unavailable and make -k test exit 0 on the final source; logs: qual-logs/dan1f/focused-final.log and aggregate-final.log. make test-daemon-finality-authority initially exits 2 because its offline bootstrap build lacks webpki-root-certs 1.0.9. cargo fetch --locked --manifest-path platform/Cargo.toml exits 0 without lockfile changes; the unchanged finality target then exits 0, including the platform bootstrap authority test. Logs: qual-logs/dan1f/finality.log, platform-fetch.log and finality-retry.log. make test-daemon-availability exits 0; log: qual-logs/dan1f/availability.log. Client/proof cargo fmt --check, locked clippy with --all-targets and -D warnings, and locked cargo test exit 0; logs: qual-logs/dan1f/rust-fmt.log, rust-clippy.log and rust-test.log. Each gate has a sibling exit file."
+assumption = "The offline dependency miss is resolved. These are executed local gates; unavailable image and cluster gates remain unrun. Canonical root and refusal assertions remain enforced."
+severity = "note"
+
+[observation.6.1.34]
+task = "6.1"
+file = "spec/layerx-beta/qualification.kvx tests/storage/lxp_test_batch_wal_recovery.c tests/test_da_unavailable.c"
+symbol = "make beta-ledger-check recover_both_schemas"
+observed = "The final local gate table and reproducible guarantor harness commands are recorded in untracked STATUS.md, with exact command, exit and qual-logs/dan1f log paths. NEEDS.md has no outstanding continuation requests. The ledger check passes after numeric-key reconciliation; evidence: qual-logs/dan1f/ledger-final.log. Decoded-value and artifact assertions in recover_both_schemas and the unavailable fixture's storage, possession, finality and error-code assertions are preserved byte for byte; evidence: qual-logs/dan1f/assertion-preservation.log."
+assumption = "The requested local continuation gates pass. Prior sanitizer and maintenance-crash results are historical, and image and cluster gates were not run. Legacy-specific coverage is WAL decoding, unavailable storage, write refusal and retirement; native integration covers corrupt-store capability withholding."
+severity = "note"
+
+[observation.6.1.35]
+task = "6.1"
+file = "cmd/layerxd/lxp_daemon_lni.c agent/crates/layerx-client/src/availability.rs agent/crates/layerx-client/tests/availability_daemon.rs agent/schema/lni/v1.kvx agent/schema/lni/README.md docs/wiki/DataAvailability.md"
+symbol = "send_availability fetch_sealed_candidate candidate_fetch"
+observed = "The D4 contract extension adds tag-18 selector 05 followed by batch u64be for one durable sealed signed candidate regardless of finalized head. It uses the same connection UID/GID authorization as tag 28, verified retained header scan and complete canonical bundle verification, ordered tag-19 proof stream and empty tag-20 END. Selectors 01-04 retain their finalized-head refusal. The client entry point shares chunk and record verification and rejects nonempty END proof material. Real-daemon coverage fetches batch 1 against its verified tag-12 header while the checkpoint identifier is zero and before releasing the header to certificate preparation, then fetches batch 9 above finalized batch 1. Existing finalized selectors and -804 assertions remain intact; candidate zero, unknown, unsealed-next-number and corrupt-store requests are refused. make build/bin/layerxd, make test-daemon-availability, make test-daemon-finality-authority, make -k test, cargo fmt --check --manifest-path agent/Cargo.toml -p layerx-client -p layerx-proof, cargo clippy --locked --manifest-path agent/Cargo.toml -p layerx-client -p layerx-proof --all-targets -- -D warnings, cargo test --locked --manifest-path agent/Cargo.toml -p layerx-client -p layerx-proof and make beta-ledger-check exit 0. Logs and sibling exit files: qual-logs/dan1g/build, availability, finality, aggregate, rust-fmt, rust-clippy, rust-test and ledger."
+assumption = "Candidate retrieval neither attests nor registers or finalizes a batch. Both candidate fetches require no certificate for their selected batch; guarantor replay and attestation remain separate responsibilities. Codify context commands could not run because cg is absent. Image and cluster gates were not run."
+severity = "note"
+
+[observation.6.1.36]
+task = "6.1"
+file = "cmd/layerxd/lxp_daemon_lni.c agent/crates/layerx-client/tests/availability_daemon.rs tests/daemon/availability-settlement.py"
+symbol = "send_availability finalized_fetch"
+observed = "formerly observation.6.1.31. Tag 18 refuses every selected batch above latest_finalized_batch with LXP_ERR_DA_MISSING (-804), including explicit batch selection. Candidate DA is required before independent replay and attestation, while registration requires attestations. This prevents both initial checkpoint production and advancement beyond an existing finalized head. The availability harness asserts pre-registration refusal and obtains successful retrieval only after the finality fixture has already signed and registered a certificate. Source evidence: qual-logs/gp1/candidate-fetch-source.txt."
+assumption = "An additive authenticated candidate-batch fetch must expose complete durable sealed bodies before registration without weakening finalized-only consumer selectors, root checks or existing refusal assertions. Producer implementation and end-to-end qualification remain incomplete."
+severity = "blocker"
+
+[observation.6.1.37]
+task = "6.1"
+file = "docs/wiki/Guarantor.md spec/layerx-protocol/docs/guarantors.md contracts/libraries/CanonicalCheckpoint.sol tests/daemon/availability-settlement.py"
+symbol = "ATTESTATION_DOMAIN CHECKPOINT_DOMAIN registerCheckpoint"
+observed = "formerly observation.6.1.32. Beta checkpoint construction uses an empty validity proof; no generated validity proof is claimed. The intended two beta guarantors are operated by the same cluster and provide no operational independence. The guarantor specification section 5 describes the older LXP1/guarantor-attest preimage, while implemented C and Solidity domains and cross-language checkpoint vectors use LXP/v2/guarantor-attestation and LXP/v2/checkpoint-certificate with terminating NUL bytes."
+assumption = "Producer encoding follows the implemented verifiers and vectors. Production operator independence remains an onboarding requirement. Empty beta validity proofs and shared operation do not establish production independence or proof generation."
+severity = "note"
+
+[observation.6.1.38]
+task = "6.1"
+file = "cmd/layerx-guarantor/lni.c tests/daemon/guarantor-integration.py cmd/layerxd/lxp_daemon_lni.c"
+symbol = "LXP_GUARANTOR_CANDIDATE_SELECTOR lxp_guarantor_lni_fetch"
+observed = "formerly observation.6.1.33. The producer requests tag 18 selector 05 followed by one big-endian uint64 batch number. A real two-guarantor genesis, Anvil chain 31337, deployed contracts, bonded identities, native sequencer and authority replica produce nine signed batches. Independent runtime replay verifies all nine batches, including maintenance receipts. Tag 12 verifies the signed first header; selector 05 then refuses with -105 and the integration exits 1 before signing or registration. Evidence: qual-logs/gp1/integration-real.log and qual-logs/gp1/runtime-repair-1.log."
+assumption = "The additive sealed-candidate selector is required in the daemon; selectors 01 through 04 and all existing finalized-only refusal assertions remain unchanged. Two-producer signing, finality feedback, tag-14 retrieval and existing verifier acceptance are asserted by the compiled integration but remain unreached until candidate retrieval succeeds."
+severity = "blocker"
+
+[observation.6.1.39]
+task = "6.1"
+file = "cmd/layerx-guarantor/runtime.c cmd/layerx-guarantor/settlement.py platform/hosted/node/deployment.yaml docs/wiki/Guarantor.md"
+symbol = "gp_runtime_open gp_runtime_oracle membership"
+observed = "formerly observation.6.1.34. The independent runtime verifies genesis and executes real kernel transitions without the sequencer private key. Direct owner authority matches the node adapter. Nonempty oracle inputs and rotated signer histories lacking complete authorization reconstruction refuse explicitly. The deployed topology provisions two distinct signing identities, two mutual-TLS processes and a dedicated checkpoint submitter, but both guarantors share the cluster operator and provide no operational independence. Certificates carry empty validity proofs and use implemented v2 domain tags."
+assumption = "Production independence requires independent operator onboarding. Supporting nonempty oracle input or rotated guarantor histories requires a complete verified authority adapter; neither capability is claimed by the beta producer. Prior specification-domain drift remains recorded in observation 6.1.32."
+severity = "note"
+
+[observation.6.1.40]
+task = "6.1"
+file = "platform/hosted/tests/topology-check.sh platform/hosted/tests/topology_check.py"
+symbol = "platform-hosted-topology-check"
+observed = "formerly observation.6.1.35. The seven added guarantor topology negative mutations pass. The aggregate hosted topology gate exits 2 with twenty existing human-service, internal, webhook and dashboard connectivity failures across its fifty-two edges. Evidence: qual-logs/gp1/hosted-topology.log. Real bootstrap verifies both genesis guarantors, both TLS identities, wrong-peer refusal, protected identity files and reset rotation; evidence: qual-logs/gp1/provision-real.log."
+assumption = "Unrelated service and network-policy owners must resolve aggregate topology failures. No Docker, image, kubectl, kind or live-cluster gate was run on the build host. Native bootstrap and static topology checks do not establish deployed cluster reachability."
+severity = "blocker"
+
+[observation.6.1.41]
+task = "6.1"
+file = "Makefile"
+symbol = "test-daemon-guarantor-sanitize"
+observed = "formerly observation.6.1.36. The new AddressSanitizer and UndefinedBehaviorSanitizer variant compiles but execution fails because the host preload places another runtime ahead of AddressSanitizer. An explicit AddressSanitizer preload attempt reaches LeakSanitizer's host ptrace refusal. The separate UndefinedBehaviorSanitizer unit and real-TLS gates pass with halt_on_error enabled. Evidence: qual-logs/gp1/sanitize.log, qual-logs/gp1/exchange-sanitize-test.log and qual-logs/gp1/ubsan.log."
+assumption = "AddressSanitizer qualification requires a compatible execution host. Runtime ordering and leak checks remain enabled; the failing sanitizer gate is not reported as passing."
+severity = "blocker"
+
+[observation.6.1.42]
+task = "6.1"
+file = "cmd/layerx-guarantor Makefile tests/daemon/guarantor-core.c tests/daemon/guarantor-settlement-chain.py"
+symbol = "gp_verify_attest gp_settlement_register test-daemon-guarantor"
+observed = "formerly observation.6.1.37. The C17 warnings-as-errors build and unit gate exit 0, including generated PEM key loading, real kernel replay, served chunk proofs, canonical encoding, root mismatch without signing, membership refusal and kind-1 evidence. Mutual-TLS positive and negative tests and eight settlement unit tests pass. Two concurrent helper processes register one certificate on real Anvil contracts through one dedicated signed submitter transaction; the other observes the same registration without another nonce. A real vault deposit establishes minimumBond 100; genuine unbonded and stale attestations are rejected. Evidence: qual-logs/gp1/build-unit-final.log, qual-logs/gp1/guarantor-settlement-chain.log and qual-logs/gp1/guarantor-aggregate.log. The full test-daemon-finality-authority gate passes when run with the required distinct-user privileges; evidence: qual-logs/gp1/finality-authority-root.log."
+assumption = "The guarantor aggregate exits 2 because its real-daemon integration exits 1 at the unimplemented candidate selector. These passing component gates do not claim completed two-producer finality feedback or deployment qualification. Existing refusal, verifier, signature, root and freshness checks remain intact."
+severity = "note"
+
+[observation.6.1.43]
+task = "6.1"
+file = "tests/daemon/guarantor-integration.py cmd/layerx-guarantor"
+symbol = "test-daemon-guarantor"
+observed = "At revision 58597cd5, sudo -n env CARGO_BUILD_JOBS=16 MAKEFLAGS=-j16 CARGO_HOME=/home/ubuntu/.cargo RUSTUP_HOME=/home/ubuntu/.rustup PATH=/home/ubuntu/lx/ct1/qual-logs/ct1/bin:/home/ubuntu/.cargo/bin:/usr/local/bin:/usr/bin:/bin make GUARANTOR_PYTHON=/home/ubuntu/lx/gp1/qual-logs/gp1/venv/bin/python test-daemon-guarantor exits 0. Selector 05 serves the signed sealed candidate; independent replay verifies nine batches; two mutual-TLS producers attest; exactly one dedicated-submitter transaction registers and the second producer observes registration. Tag 28 accepts feedback, tag 14 matches the registered bundle, and layerx-verify accepts the real certificate and replay. Core, TLS, settlement unit and real-contract settlement tests also pass. Evidence: qual-logs/gp1/gp1d-guarantor.log."
+assumption = "This resolves the candidate-fetch integration blockers recorded in observations 6.1.36 and 6.1.38. Settlement witness publication and deposit-root publication are not exercised by this gate revision. Cluster and image qualification remain unrun."
+severity = "note"
+
+[observation.6.1.44]
+task = "6.1"
+file = "src/state/lxp_state_root.c human/crates/layerx-paxeer-client/src/exit.rs human/crates/layerx-paxeer-client/src/withdraw.rs docs/wiki/SettlementEvidence.md"
+symbol = "leaf_set lxp_state_root balance_leaf verify_balance_proof CheckpointProof::encode_publication"
+observed = "Native replay commits module-keyed composite state with LXP/v1/state-leaf and LXP/v1/state-node domains and explicit key/value lengths. Settlement balance and withdrawal publication require flat LXP/v1/merkle-leaf and LXP/v1/merkle-node paths equal to that registered resulting state root. The canonical publication proof carries only a leaf index and siblings, with no native subtree or composite-state proof layers. ExitEvidence::encode_publication and CheckpointProof::encode_publication enforce this incompatible root equality before publication. Existing native paths therefore cannot construct the requested nonempty settlement witnesses against real replayed batch roots."
+assumption = "A protocol-authorized proof representation or separate committed settlement root must be supplied by the state and settlement verifier owners. Native roots, claim verifiers and publication assertions remain intact. Publishing empty vectors for existing balances or synthetic checkpoint roots would not satisfy replay-derived settlement evidence. Settlement publication and its extended consumer-fetch integration remain unimplemented."
+severity = "blocker"
+
+[observation.6.1.45]
+task = "6.1"
+file = "platform/hosted/node/checkpoint-authority.py platform/hosted/node/guarantor.sh platform/hosted/tests/beta-cluster.sh platform/hosted/node/tests/guarantor-provision.sh"
+symbol = "public_key wait_for_node_genesis"
+observed = "The provisioning path generates or reuses one Ed25519 key in the shared persistent submitter volume, requires an owned regular 0600 file and emits only its 0x-prefixed 32-byte public key. The cluster path applies Secret layerx-guarantor-checkpoint-authority with key public.hex in TESTNET_NAMESPACE. Both containers receive the same authority file path. sudo -n env CARGO_BUILD_JOBS=16 MAKEFLAGS=-j16 bash platform/hosted/node/tests/guarantor-provision.sh exits 0, including concurrent generation, restart reuse, real Ed25519 signing and verification, public-key derivation equality, group-readable-key and symlink refusal, both genesis identities and reset. bash -n on bootstrap.sh, guarantor.sh, tests/guarantor-provision.sh, paxeer/deploy-contracts.sh and tests/beta-cluster.sh exits 0. python3 platform/hosted/tests/topology_check.py exits 0. Evidence: qual-logs/gp1/gp1d-provision.log, gp1d-shell.log and gp1d-guarantor-topology.log."
+assumption = "Secret application and Human movement-policy consumption require cluster qualification, unavailable on this host. The private key remains only in its persistent 0600 file; it is not exported as a Secret. The authority path is provisioned but producer settlement publication remains blocked by observation 6.1.44."
+severity = "note"
+
+[observation.6.1.46]
+task = "6.1"
+file = "Makefile platform/hosted/tests/topology-check.sh tests/daemon/guarantor-integration.py"
+symbol = "test-daemon-guarantor test-daemon-guarantor-sanitize platform-hosted-topology-check"
+observed = "At revision 70bf8bf3 all fourteen commands from the existing qualification table were rerun with CARGO_BUILD_JOBS=16 and MAKEFLAGS=-j16. make build, both build/unit/integration combinations, root make test-daemon-guarantor, root make test-daemon-finality-authority, the halt_on_error UBSan unit variant, the real-contract settlement script, root guarantor provisioning, shell syntax, guarantor topology, beta-ledger-check and git diff --check exit 0. make test-daemon-guarantor-sanitize exits 2 because AddressSanitizer is not first in the initial library list. make platform-hosted-topology-check exits 2 with the existing twenty non-guarantor failures across fifty-two edges; all seven guarantor negative mutations pass. Exact commands, exit codes and per-command evidence paths are retained in qual-logs/gp1/gp1d-gates.json; command logs are qual-logs/gp1/gp1d-final-*.log."
+assumption = "The real-daemon producer integration is qualified. Settlement evidence publication and its extended fetch_published tests remain blocked by observation 6.1.44; the passing settlement test covers the existing registration path only. Sanitizer checks remain enabled. Docker, image, kubectl, kind, Secret application and live-cluster gates were not run."
+severity = "note"
+
+[observation.6.8.102]
+task = "6.8"
+severity = "blocker"
+file = "platform/hosted/human/provision.py platform/hosted/human/provision.sh platform/hosted/human/provision-owner-job.yaml platform/hosted/paxeer/deploy-contracts.sh"
+symbol = "evidence_inputs human_evidence_provision movement_source"
+observed = "Fresh evidence provisioning has no producer for human-evidence-input/owner-registration.json, owner-request.json, recovery-policy.json or the registry admission/deployment journal pairs. The movement source also requires a custody_reference absent from the deployment writer; its alternate movement-config file is itself an output of evidence material assembly. The v2 registry, guarantor checkpoint authority Secret and identity tenant binding have producers ordered before the owner Job. Protected input validation refuses before Job creation, and Human runtime containers are enabled only after material publication. No input values are synthesized."
+assumption = "Protocol registration and registry publication must supply the protected producer outputs, and custody registration must supply its committed reference. Successful first-batch head acceptance, complete material assembly, Job execution, image builds and live cluster readiness remain unqualified."
+
+[observation.6.8.103]
+task = "6.8"
+severity = "blocker"
+file = "human/crates/layerx-explorer-index/src/main.rs agent/crates/layerx-agentd/src/read/program_node.rs"
+symbol = "refresh_program LayerxdProgramBalanceReader::connect ProgramAuthority"
+observed = "The locked test command for the seven touched Human crates exits 101 while compiling explorer-index main.rs:441. The caller supplies seven arguments including endpoint, bearer and replica id separately, while LayerxdProgramBalanceReader::connect requires five arguments with a ProgramAuthority value. No explorer tests execute. Raw command and compiler diagnostics are retained in qual-logs/gates.jsonl and qual-logs/human-rust.log."
+assumption = "The explorer owner must reconcile the caller with the current authority type without dropping its endpoint, credentials, replica pin or verification semantics. This interface repair is outside Human cluster sequencing."
+
+[observation.6.8.104]
+task = "6.8"
+severity = "blocker"
+file = "agent/crates/layerx-agentd/tests/availability.rs agent/crates/layerx-client/src/availability.rs platform/hosted/authority/tests/real_node.rs"
+symbol = "complete_five_class_retrieval_streams_and_emits_offline_replay_frames corruption_withholding_and_repeated_provider_failure_are_durable_evidence real_node_authority_serves_verified_facts_and_reflects_replica_loss"
+observed = "The combined locked agent tests exit 101: availability.rs:247 reports complete provider reported partial, and availability.rs:311 receives ChunkOrder instead of MissingClass. The combined locked hosted tests exit 101 at the authority real_node target because build/bin/layerxd is absent. The supplied native-bin directory is absent on this host. Earlier authority unit, boundary, Human TLS and maintenance tests pass; the aggregate command stops before all selected packages execute. Logs are qual-logs/agent-rust.log and qual-logs/platform-rust.log."
+assumption = "Availability assertions and retrieval behavior require reconciliation by their owner; both remain unchanged. Full native-dependent gates require real qualified binaries. Partial package execution does not qualify the combined suites."
+
+[observation.6.8.105]
+task = "6.8"
+severity = "blocker"
+file = "platform/hosted/tests/beta-cluster.sh platform/hosted/node/bootstrap.sh platform/hosted/node/deployment.yaml"
+symbol = "IDENTITY_FILE identity_provision identity_write GUARANTOR_COUNT"
+observed = "IDENTITY_FILE points to WORK_DIR/identity, but identity_provision creates that same path as a directory; identity_write later redirects to it as a file. The hosted topology provisions two guarantor containers while the retained threshold-driven genesis loop accepts a certificate threshold up to 32. A threshold greater than two therefore has no matching additional hosted producers."
+assumption = "The cluster identity summary path and generalized guarantor topology need separate reconciliation. The configured two-member topology is preserved, and no certificate threshold, genesis count bound or finality assertion is weakened."
+
+[observation.6.8.106]
+task = "6.8"
+severity = "blocker"
+file = "human/crates/layerx-human-identity-provider/tests/client.rs human/crates/layerx-human-movement-provider/src/tests.rs"
+symbol = "original_client_provisions_resolves_and_replays_assertion_devices malformed_proof_candidates_are_refused_over_the_real_socket restarting_server_reobserves_instead_of_serving_archived_finality real_client_refuses_unavailable_plans_and_reads_actual_endpoint_failure"
+observed = "Separate locked identity-provider tests exit 101 when original_client_provisions_resolves_and_replays_assertion_devices returns ProviderUnavailable. Separate locked movement-provider tests exit 101 with three failures: malformed proof candidates receive ProducerUnavailable instead of EvidenceSourceMismatch, and the restart and actual-endpoint tests return Unavailable. Logs are qual-logs/human-layerx-human-identity-provider.log and qual-logs/human-layerx-human-movement-provider.log."
+assumption = "The provider owners must reconcile these runtime/refusal failures. Consumer assertions and provider behavior remain unchanged; passing hosted Python provisioning checks do not establish these package gates."
+
+[observation.6.8.107]
+task = "6.8"
+severity = "blocker"
+file = "agent/crates/layerx-client/tests/availability_daemon.rs human/crates/layerx-paxeer-client/tests/disposable_custody.py"
+symbol = "real_daemon_availability_refusals comet_chain"
+observed = "The separate locked layerx-client test exits 101 because layerxd is not built. The separate locked layerx-paxeer-client test initially lacks Python cryptography; after installing cryptography and pycryptodome in qual-logs/venv, its real Anvil custody-evidence test passes but disposable_custody exits 101 because paxd is not installed. Logs are qual-logs/client-rust.log, qual-logs/human-layerx-paxeer-client.log and qual-logs/paxeer-python-dependencies-retry.log."
+assumption = "Qualified native daemon and Paxeer binaries must be supplied for the remaining real-process integration gates. No replacement binary or weakened assertion was introduced."
+
+[observation.6.8.108]
+task = "6.8"
+severity = "note"
+file = "platform/hosted/tests/beta-cluster.sh platform/hosted/human/provision.py platform/hosted/human/material.py platform/hosted/node/deployment.yaml"
+symbol = "human_evidence_provision peer_binding bootstrap human_policy_publish"
+observed = "Hosted Human pytest passes all eighteen tests with the real identity-provider binary. Hosted topology, bootstrap manifest rendering and retained-material refusal checks pass. Separate locked package tests pass for layerx-human-kms, layerx-human-service, layerx-human-test-support and layerx-platform-identity. The gateway package passes after provisioning an untracked Redis executable and libraries for its real TLS process tests. Commands, exit codes and logs are retained in qual-logs/gates.jsonl, qual-logs/followup-gates.jsonl, qual-logs/platform-remaining-gates.jsonl and qual-logs/additional-gates.json."
+assumption = "These are local source gates. The missing producer inputs and failed aggregate packages remain blockers. No complete generated evidence set, image build, Kubernetes Job, Secret application or cluster readiness is qualified."
+
+[observation.6.8.109]
+task = "6.8"
+severity = "blocker"
+file = "platform/Makefile.inc platform/tools/dependency-policy.sh platform/Cargo.lock"
+symbol = "platform-lint dependency-policy"
+observed = "The initial platform-lint attempts stop because cfg_aliases 0.2.2 is absent from the offline cache. After a locked Cargo dependency fetch, workspace all-targets Clippy with warnings denied, the platform workspace gate and marketplace wasm32 Clippy pass. The unchanged dependency policy then rejects webpki-root-certs because CDLA-Permissive-2.0 is not allowlisted; make exits 2 before cargo deny executes. Raw output is qual-logs/platform-lint-cached.log."
+assumption = "The dependency-policy owner must resolve the license-policy conflict. The allowlist, dependency graph, warning policy and checks remain unchanged; the aggregate platform-lint gate is not qualified."

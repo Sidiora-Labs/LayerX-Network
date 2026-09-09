@@ -69,7 +69,7 @@ int main(void)
     body.oracle_inputs = (lxp_byte_span){oracles, sizeof(oracles)};
     body.state_diff = (lxp_byte_span){state_diff, sizeof(state_diff)};
     body.recovery_metadata = (lxp_byte_span){recovery, sizeof(recovery)};
-    if (lxp_da_bundle_build(&body, 3U, &arena, &bundle) != LXP_OK)
+    if (lxp_da_bundle_build(&body, LXP_DA_CANONICAL_CHUNK_BYTES, &arena, &bundle) != LXP_OK)
         return 1;
     (void)memset(&checkpoint, 0, sizeof(checkpoint));
     checkpoint.header.protocol_version = 1U;
@@ -78,7 +78,7 @@ int main(void)
     checkpoint.header.batch_number = body.header.batch_number;
     checkpoint.header.first_sequence = 101U;
     checkpoint.header.last_sequence = 103U;
-    if (lxp_da_bundle_root(&bundle, &arena,
+    if (lxp_batch_availability_root(&body, &arena,
                            checkpoint.header.data_availability_root) != LXP_OK)
         return 1;
     (void)memset(&guarantor, 0, sizeof(guarantor));

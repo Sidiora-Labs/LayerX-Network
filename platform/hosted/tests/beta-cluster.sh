@@ -409,6 +409,8 @@ ca_generate() {
         "DNS:layerx-identity.$svc,DNS:layerx-identity.$TESTNET_NAMESPACE.svc,DNS:layerx-identity,DNS:identity.$internal,DNS:identity.$INTERNAL_NAMESPACE.svc,DNS:localhost,IP:127.0.0.1"
     issue_cert paxeer-boundary paxeer-boundary serverAuth \
         "DNS:paxeer-boundary.$svc,DNS:paxeer-boundary.$TESTNET_NAMESPACE.svc,DNS:paxeer-boundary,DNS:paxeer-observer-boundary.$svc,DNS:paxeer-observer-boundary.$TESTNET_NAMESPACE.svc,DNS:paxeer-observer-boundary,DNS:paxeer.$svc,DNS:localhost,IP:127.0.0.1"
+    issue_cert guarantor-1 layerx-guarantor-1 serverAuth,clientAuth "DNS:localhost,IP:127.0.0.1"
+    issue_cert guarantor-2 layerx-guarantor-2 serverAuth,clientAuth "DNS:localhost,IP:127.0.0.1"
     issue_client_identity gateway-client layerx-gateway
     issue_client_identity developer-client layerx-developer
     if [ -n "${LAYERX_BETA_SEQUENCER_KEY_FILE:-}" ]; then
@@ -553,6 +555,8 @@ secrets_generate() {
     evm_key_generate paxeer-final-executor
     evm_key_generate paxeer-emergency-council
     evm_key_generate paxeer-guarantor-controller
+    evm_key_generate paxeer-guarantor-second-controller
+    evm_key_generate paxeer-checkpoint-submitter
     if [ -n "${LAYERX_BETA_TEST_AUTH_TOKEN_FILE:-}" ]; then
         [ -r "$LAYERX_BETA_TEST_AUTH_TOKEN_FILE" ] || fail "LAYERX_BETA_TEST_AUTH_TOKEN_FILE=$LAYERX_BETA_TEST_AUTH_TOKEN_FILE is not readable"
         (umask 077; cp "$LAYERX_BETA_TEST_AUTH_TOKEN_FILE" "$d/test-auth.token")
@@ -797,6 +801,11 @@ secrets_apply() {
     apply_secret "$ns" layerx-identity-service-tokens --from-file="$s/identity-tokens"
     apply_secret "$ns" layerx-identity-store-key --from-file=key="$s/identity-store.key"
     apply_secret "$ns" paxeer-boundary-tls --from-file=server.crt.der="$c/paxeer-boundary/cert.der" --from-file=server.key.der="$c/paxeer-boundary/key.der"
+    for identity in 1 2; do
+        apply_secret "$ns" "layerx-guarantor-$identity-tls" --from-file=tls.crt="$c/guarantor-$identity/cert.pem" \
+            --from-file=tls.key="$c/guarantor-$identity/key.pem" --from-file=ca.crt="$c/ca.crt"
+    done
+    apply_secret "$ns" paxeer-checkpoint-submitter --from-file=key="$s/paxeer-checkpoint-submitter.key"
     apply_secret "$ns" paxeer-deployer-address --from-file=address="$s/paxeer-deployer.address"
     apply_tls_secret "$ns" layerx-testnet-ingress-tls testnet-control
     apply_tls_secret "$ns" layerx-gateway-ingress-tls gateway
@@ -1115,12 +1124,26 @@ wait_for_node_genesis() {
     node_file_fetch "$data/node.env" "$WORK_DIR/genesis/node.env"
     NODE_GUARANTOR_ID=$(sed -n 's/^LAYERX_NODE_GENESIS_GUARANTOR_ID=//p' "$WORK_DIR/genesis/node.env")
     NODE_GUARANTOR_PUBLIC_KEY=$(sed -n 's/^LAYERX_NODE_GENESIS_GUARANTOR_PUBLIC_KEY=//p' "$WORK_DIR/genesis/node.env")
+    NODE_SECOND_GUARANTOR_ID=$(sed -n 's/^LAYERX_NODE_SECOND_GUARANTOR_ID=//p' "$WORK_DIR/genesis/node.env")
+    NODE_SECOND_GUARANTOR_PUBLIC_KEY=$(sed -n 's/^LAYERX_NODE_SECOND_GUARANTOR_PUBLIC_KEY=//p' "$WORK_DIR/genesis/node.env")
+    [[ $NODE_SECOND_GUARANTOR_ID =~ ^[0-9a-f]{64}$ ]] || fail "node.env carries no second guarantor id"
+    [[ $NODE_SECOND_GUARANTOR_PUBLIC_KEY =~ ^0[23][0-9a-f]{64}$ ]] || fail "node.env carries no second guarantor public key"
+    [ "$NODE_SECOND_GUARANTOR_ID" != "$NODE_GUARANTOR_ID" ] || fail "guarantor identities must differ"
     NODE_SEQUENCER_ID=$(sed -n 's/^LAYERX_NODE_SEQUENCER_ID=//p' "$WORK_DIR/genesis/node.env")
     NODE_SEQUENCER_PUBLIC_KEY=$(sed -n 's/^LAYERX_NODE_SEQUENCER_PUBLIC_KEY=//p' "$WORK_DIR/genesis/node.env")
     [[ $NODE_GUARANTOR_ID =~ ^[0-9a-f]{64}$ ]] || fail "node.env carries no genesis guarantor id"
     [[ $NODE_GUARANTOR_PUBLIC_KEY =~ ^0[23][0-9a-f]{64}$ ]] || fail "node.env carries no compressed genesis guarantor public key"
     [ "$NODE_SEQUENCER_ID" = "$SEQUENCER_ID" ] || fail "the node derived sequencer id $NODE_SEQUENCER_ID but the registry trust history carries $SEQUENCER_ID"
     [ "$NODE_SEQUENCER_PUBLIC_KEY" = "$(cat "$CA_DIR/sequencer.pub.hex")" ] || fail "the node sequencer public key differs from the generated sequencer key"
+    kube -n "$TESTNET_NAMESPACE" exec layerx-node-0 -c guarantor-1 -- \
+        /opt/layerx/guarantor.sh --checkpoint-authority-public \
+        /var/lib/guarantor-submitter/checkpoint-authority.pem > "$WORK_DIR/genesis/checkpoint-authority.public.hex" \
+        || fail "$WORK_DIR/genesis/checkpoint-authority.public.hex: guarantor checkpoint authority producer failed"
+    local checkpoint_authority
+    checkpoint_authority=$(cat "$WORK_DIR/genesis/checkpoint-authority.public.hex")
+    [[ $checkpoint_authority =~ ^0x[0-9a-f]{64}$ ]] || fail "invalid checkpoint authority public key"
+    apply_secret "$TESTNET_NAMESPACE" layerx-guarantor-checkpoint-authority \
+        --from-file=public.hex="$WORK_DIR/genesis/checkpoint-authority.public.hex"
 }
 
 guarantor_set_render() {
@@ -1201,6 +1224,7 @@ paxeer_contracts_deploy() {
     cp "$REPO_ROOT/contracts/config/checkpoint-settlement.json" "$dir/checkpoint-settlement.json"
     log "deploying the settlement contracts from the node genesis through the Paxeer boundary"
     if ! LAYERX_PAXEER_BOUNDARY_URL="$PAXEER_URL" LAYERX_PAXEER_BOUNDARY_CA_DER="$CA_DIR/ca.der" LAYERX_PAXEER_CHAIN_ID="$PAXEER_CHAIN_ID" \
+        LAYERX_PAXEER_CHECKPOINT_SUBMITTER_KEY_FILE="$SECRETS_DIR/paxeer-checkpoint-submitter.key" \
         LAYERX_PAXEER_DEPLOYER_KEY_FILE="$SECRETS_DIR/paxeer-deployer.key" LAYERX_PAXEER_GENESIS_DIR="$WORK_DIR/genesis" \
         LAYERX_PAXEER_DEPLOYMENT_INPUT="$dir/deployment-input.json" LAYERX_PAXEER_GUARANTORS="$dir/guarantors.json" \
         LAYERX_PAXEER_GUARANTOR_KEYS_DIR="$dir/guarantor-keys" LAYERX_PAXEER_DEPLOYMENT_RECORD="$dir/deployment.json" \
@@ -1226,7 +1250,8 @@ settlement_publish() {
         "$PAXEER_CHAIN_ID" "$GUARANTOR_BOND" "$CHECKPOINT_REGISTRY" "$PAXEER_RELAY_PORT" > "$WORK_DIR/paxeer/settlement.env"
     bash "$REPO_ROOT/platform/hosted/node/bootstrap.sh" --check-settlement "$WORK_DIR/paxeer/settlement.env" > /dev/null \
         || fail "the settlement environment was refused by bootstrap.sh --check-settlement"
-    apply_configmap "$ns" layerx-node-settlement --from-file=settlement.env="$WORK_DIR/paxeer/settlement.env"
+    apply_configmap "$ns" layerx-node-settlement --from-file=settlement.env="$WORK_DIR/paxeer/settlement.env" \
+        --from-file=checkpoint-settlement.json="$WORK_DIR/paxeer/checkpoint-settlement.json"
     log "settlement environment published as ConfigMap $ns/layerx-node-settlement"
 }
 
@@ -1258,6 +1283,7 @@ PY
     kube -n "$TESTNET_NAMESPACE" exec -i layerx-node-0 -c layerxd -- sh -ec \
         'umask 077; cat > /var/lib/layerx/node/genesis/genesis.registration.tmp; mv /var/lib/layerx/node/genesis/genesis.registration.tmp /var/lib/layerx/node/genesis/genesis.registration' \
         < "$WORK_DIR/genesis/genesis.registration"
+    node_exec sh -ec 'for identity in 1 2; do install -m 0440 /var/lib/layerx/node/genesis/genesis.registration "/var/lib/layerx/guarantor-$identity/identity/genesis.registration"; done'
 }
 
 wait_for_pod_ready() {
@@ -1547,6 +1573,9 @@ identity_write() {
         printf 'node_network_id=%s\n' "$NODE_NETWORK_ID"
         printf 'node_asset_id=%s\n' "$NODE_ASSET_ID"
         printf 'genesis_guarantor_id=%s\n' "$NODE_GUARANTOR_ID"
+        printf 'second_guarantor_id=%s\n' "$NODE_SECOND_GUARANTOR_ID"
+        printf 'guarantor_operational_independence=false\n'
+        printf 'checkpoint_submitter=%s\n' "$(cat "$SECRETS_DIR/paxeer-checkpoint-submitter.address")"
         printf 'paxeer_chain_id=%s\n' "$PAXEER_CHAIN_ID"
         printf 'paxeer_deployer=%s\n' "$(cat "$SECRETS_DIR/paxeer-deployer.address")"
         printf 'paxeer_guarantor_bond=%s\n' "$GUARANTOR_BOND"
@@ -1676,7 +1705,12 @@ beta_cluster_up() {
     fi
     wait_for_pod_ready "$TESTNET_NAMESPACE" app=layerx-identity 300
     port_forward identity "$TESTNET_NAMESPACE" layerx-identity "$IDENTITY_PORT" 9443
-    if [ "${LAYERX_BETA_RETAIN_MATERIAL:-0}" != 1 ]; then identity_provision; fi
+    if [ "${LAYERX_BETA_RETAIN_MATERIAL:-0}" != 1 ]; then
+        identity_provision
+        human_evidence_provision
+        human_policy_publish
+    fi
+    kube apply -f "$MANIFESTS_DIR/node.yaml" > /dev/null
     manifests_apply
     port_forward testnet "$TESTNET_NAMESPACE" layerx-testnet-public "$TESTNET_PORT" 443
     port_forward gateway "$TESTNET_NAMESPACE" layerx-gateway "$GATEWAY_PORT" 443
@@ -1684,12 +1718,9 @@ beta_cluster_up() {
     wait_for_pod_ready "$TESTNET_NAMESPACE" app=layerx-gateway 600
     if [ "${LAYERX_BETA_RETAIN_MATERIAL:-0}" != 1 ]; then
         internal_principals_provision
-        human_evidence_provision
-        human_policy_publish
     else
         retained_principals_apply
     fi
-    kube apply -f "$MANIFESTS_DIR/node.yaml" > /dev/null
     internal_apply
     port_forward human "$TESTNET_NAMESPACE" layerx-human 19453 9443
     port_forward developer "$DEVELOPER_NAMESPACE" layerx-webhooks 19450 443

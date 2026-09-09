@@ -51,6 +51,9 @@ enum {
     LNI_CHECKPOINT_RESPONSE = 15,
     LNI_PROOF_BUNDLE_REQUEST = 16,
     LNI_PROOF_BUNDLE_RESPONSE = 17,
+    LNI_AVAILABILITY_FETCH = 18,
+    LNI_AVAILABILITY_CHUNK = 19,
+    LNI_AVAILABILITY_END = 20,
     LNI_ERROR_RESPONSE = 25,
     LNI_PREPARATION_STATE_REQUEST = 26,
     LNI_PREPARATION_STATE_RESPONSE = 27,
@@ -1366,7 +1369,7 @@ static lxp_result send_node_info(lxp_daemon_lni_server *server,
     size_t capability_count = 0U;
     bool simulate = simulation_available(server);
     lxp_result status = LXP_OK;
-    if (base_count + 1U > sizeof(capabilities) / sizeof(capabilities[0]))
+    if (base_count + 2U > sizeof(capabilities) / sizeof(capabilities[0]))
         return LXP_ERR_LENGTH_LIMIT;
     for (index = 0U; index < base_count; ++index) {
         if (server->owner->protocol_version !=
@@ -1381,6 +1384,15 @@ static lxp_result send_node_info(lxp_daemon_lni_server *server,
         capabilities[capability_count++] = base_capabilities[index];
     }
     if (simulate) capabilities[capability_count++] = simulate_capability;
+    if (server->owner->availability_ready && server->owner->availability_store != NULL) {
+        size_t at = capability_count;
+        while (at != 0U && strcmp(capabilities[at - 1U], "availability_fetch") > 0) {
+            capabilities[at] = capabilities[at - 1U];
+            --at;
+        }
+        capabilities[at] = "availability_fetch";
+        ++capability_count;
+    }
     for (index = 0U; index < capability_count; ++index) {
         size_t length = strlen(capabilities[index]);
         if (length > UINT16_MAX || length + 2U > sizeof(payload) - cursor)
@@ -1427,6 +1439,119 @@ static lxp_result send_node_info(lxp_daemon_lni_server *server,
         status = send_envelope(descriptor, server->frame_bytes,
                                LNI_NODE_INFO_RESPONSE, correlation_id,
                                payload, cursor, NULL, 0U, deadline);
+    return status;
+}
+
+static lxp_result send_availability(lxp_daemon_lni_server *server,
+    int descriptor, const lni_envelope *request, int64_t deadline)
+{
+    lxp_daemon_protocol_owner *owner = server->owner;
+    lxp_batch_header selected = {0};
+    uint64_t batches[LAYERX_DA_MAX_BATCHES_PER_FETCH];
+    uint64_t offset = 0U, requested_batch = 0U, first = 0U, last = 0U;
+    size_t count = 0U, mark, i;
+    uint8_t kind;
+    lxp_result status = LXP_OK;
+    if (request->proof_length != 0U || request->payload_length == 0U)
+        return send_refusal(descriptor, server->frame_bytes,
+            request->correlation_id, 1U, LXP_ERR_MALFORMED_ENVELOPE, deadline);
+    kind = request->payload[0];
+    if (!((kind == 1U && request->payload_length == 33U) ||
+          (kind == 2U && request->payload_length == 9U) ||
+          (kind == 3U && request->payload_length == 17U) ||
+          (kind == 4U && request->payload_length == 33U) ||
+          (kind == 5U && request->payload_length == 9U)))
+        return send_refusal(descriptor, server->frame_bytes,
+            request->correlation_id, 1U, LXP_ERR_MALFORMED_ENVELOPE, deadline);
+    if (kind == 2U || kind == 5U) requested_batch = load_u64(request->payload + 1U);
+    if (kind == 3U) {
+        first = load_u64(request->payload + 1U);
+        last = load_u64(request->payload + 9U);
+        if (first == 0U || last < first)
+            return send_refusal(descriptor, server->frame_bytes,
+                request->correlation_id, 1U, LXP_ERR_NON_CANONICAL, deadline);
+    }
+    if (pthread_mutex_lock(&owner->mutex) != 0) return LXP_ERR_IO;
+    mark = lxp_arena_mark(owner->scratch);
+    if (!owner->availability_ready || owner->availability_store == NULL ||
+        owner->receipt_authority == NULL || owner->evidence_store == NULL)
+        status = LXP_ERR_DA_MISSING;
+    if (status == LXP_OK && kind == 1U) {
+        lxp_daemon_finality_evidence finality;
+        status = lxp_daemon_finality_evidence_lookup(owner->evidence_store,
+            request->payload + 1U, 0U, owner->scratch, &finality);
+        if (status == LXP_OK) requested_batch = finality.batch_number;
+        (void)lxp_arena_reset(owner->scratch, mark);
+    }
+    while (status == LXP_OK) {
+        lxp_daemon_receipt_evidence evidence;
+        lxp_batch_header header;
+        lxp_receipt receipt;
+        bool present = false, match = false;
+        status = lxp_daemon_receipt_authority_scan(owner->receipt_authority,
+            &offset, owner->scratch, &evidence, &present);
+        if (status != LXP_OK || !present) break;
+        status = lxp_batch_header_decode(evidence.canonical_header.bytes,
+            evidence.canonical_header.length, &header);
+        if (status == LXP_OK && (kind == 1U || kind == 2U || kind == 5U))
+            match = header.batch_number == requested_batch;
+        if (status == LXP_OK && kind == 3U)
+            match = header.last_sequence >= first && header.first_sequence <= last;
+        if (status == LXP_OK && kind == 4U && evidence.format_version != 3U) {
+            status = lxp_receipt_decode(evidence.canonical_receipt.bytes,
+                evidence.canonical_receipt.length, true, &receipt);
+            if (status == LXP_OK)
+                match = lxp_ct_memcmp(receipt.activity_id, request->payload + 1U, 32U) == 0;
+        }
+        if (status == LXP_OK && match) {
+            for (i = 0U; i < count && batches[i] != header.batch_number; ++i) {}
+            if (i == count) {
+                if (count == LAYERX_DA_MAX_BATCHES_PER_FETCH)
+                    status = LXP_ERR_LENGTH_LIMIT;
+                else {
+                    batches[count++] = header.batch_number;
+                    selected = header;
+                }
+            }
+        }
+        (void)lxp_arena_reset(owner->scratch, mark);
+    }
+    if (status == LXP_OK && count == 0U) status = LXP_ERR_UNKNOWN_ACTIVITY;
+    if (status == LXP_OK && count != 1U) status = LXP_ERR_LENGTH_LIMIT;
+    if (status == LXP_OK && kind == 3U &&
+        (first < selected.first_sequence || last > selected.last_sequence))
+        status = LXP_ERR_BATCH_GAP;
+    if (status == LXP_OK && kind != 5U &&
+        selected.batch_number > owner->evidence_store->latest_finalized_batch)
+        status = LXP_ERR_DA_MISSING;
+    if (status == LXP_OK) {
+        lxp_da_bundle bundle;
+        status = lxp_da_store_read_verified(owner->availability_store,
+            selected.batch_number, selected.data_availability_root,
+            owner->scratch, &bundle);
+        if (status == LXP_OK) count = bundle.chunk_count;
+        (void)lxp_arena_reset(owner->scratch, mark);
+        for (i = 0U; status == LXP_OK && i < count; ++i) {
+            lxp_byte_span bytes, proof;
+            status = lxp_da_serve_chunk_proof(owner->availability_store,
+                selected.batch_number, (uint32_t)i, selected.data_availability_root,
+                owner->scratch, &bytes, &proof);
+            if (status == LXP_OK)
+                status = send_envelope(descriptor, server->frame_bytes,
+                    LNI_AVAILABILITY_CHUNK, request->correlation_id,
+                    bytes.bytes, bytes.length, proof.bytes, proof.length, deadline);
+            (void)lxp_arena_reset(owner->scratch, mark);
+        }
+    }
+    if (status == LXP_OK)
+        status = send_envelope(descriptor, server->frame_bytes,
+            LNI_AVAILABILITY_END, request->correlation_id, NULL, 0U, NULL, 0U, deadline);
+    else
+        status = send_refusal(descriptor, server->frame_bytes,
+            request->correlation_id, 3U, status, deadline);
+    (void)lxp_arena_reset(owner->scratch, mark);
+    if (pthread_mutex_unlock(&owner->mutex) != 0 && status == LXP_OK)
+        status = LXP_ERR_IO;
     return status;
 }
 
@@ -3146,6 +3271,8 @@ static lxp_result serve_connection(lxp_daemon_lni_server *server,
             status = send_receipt(server, descriptor, &request, deadline);
         } else if (request.tag == LNI_ACCOUNT_READ_REQUEST) {
             status = send_account_read(server, descriptor, &request, deadline);
+        } else if (request.tag == LNI_AVAILABILITY_FETCH) {
+            status = send_availability(server, descriptor, &request, deadline);
         } else if (request.tag == LNI_BATCH_HEADER_REQUEST) {
             status = send_batch_header(server, descriptor, &request, deadline);
         } else if (request.tag == LNI_CHECKPOINT_REQUEST) {

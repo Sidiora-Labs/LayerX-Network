@@ -380,6 +380,11 @@ lxp_result lxp_kernel_prepare_activity_batch(
     size_t *retry_prefix_count);
 size_t lxp_kernel_prepared_batch_count(
     const lxp_kernel_prepared_batch *batch);
+/* Read-only snapshots borrowed until prepared-batch destruction; NULL for NULL. */
+const lxp_kernel *lxp_kernel_prepared_batch_base_kernel(
+    const lxp_kernel_prepared_batch *batch);
+const lxp_kernel *lxp_kernel_prepared_batch_settled_kernel(
+    const lxp_kernel_prepared_batch *batch);
 const lxp_receipt *lxp_kernel_prepared_batch_receipts(
     const lxp_kernel_prepared_batch *batch);
 const lxp_byte_span *lxp_kernel_prepared_batch_events(

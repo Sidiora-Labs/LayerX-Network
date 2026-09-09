@@ -3,6 +3,9 @@
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_genesis.h"
 #include "layerx/lxp_kernel.h"
+#include "layerx/lxp_da.h"
+
+#include <stdlib.h>
 
 #include "../../src/modules/programs/storage.h"
 
@@ -78,6 +81,49 @@ static lxp_result seed_fee_governance(
     return LXP_OK;
 }
 
+static lxp_result expected_body(lxp_kernel *kernel, const lxp_batch_header *header,
+                                  uint32_t parameters, lxp_arena *arena,
+                                  lxp_batch_body *body)
+{
+    lxp_kernel *preview = malloc(sizeof(*preview));
+    lxp_state_snapshot *snapshot = NULL;
+    lxp_state_journal journal = {0};
+    lx_programs_transfer_runtime runtime;
+    lxp_replay_activity_output output;
+    lxp_batch_header sealed = *header;
+    lxp_result status;
+    if (preview == NULL) return LXP_ERR_IO;
+    status = lxp_state_snapshot_create(kernel->state, &snapshot);
+    if (status != LXP_OK) { free(preview); return status; }
+    *preview = *kernel;
+    preview->state = lxp_state_snapshot_store_for_prepare(snapshot);
+    preview->journal = &journal;
+    runtime = *(lx_programs_transfer_runtime *)kernel->module_runtime[LXP_MODULE_PROGRAMS];
+    runtime.accounts = lxp_state_snapshot_accounts_for_prepare(snapshot);
+    runtime.occupancy_parameter_context = preview;
+    status = lxp_kernel_bind_module_runtime(preview, LXP_MODULE_PROGRAMS, &runtime);
+    if (status == LXP_OK)
+        status = lxp_programs_replay_finalize(preview, header, parameters,
+            header->last_sequence, header->previous_state_root, arena, &output);
+    if (status == LXP_OK) {
+        lxp_batch_roots roots;
+        (void)memcpy(sealed.resulting_state_root, output.resulting_state_root, 32U);
+        status = lxp_batch_roots_compute(&(lxp_batch_root_inputs){NULL, 0U,
+            &output.canonical_receipt, 1U, NULL, 0U, NULL, 0U, NULL, 0U}, arena, &roots);
+        if (status == LXP_OK) {
+            (void)memcpy(sealed.activity_merkle_root, roots.activity_merkle_root, 32U);
+            (void)memcpy(sealed.receipt_merkle_root, roots.receipt_merkle_root, 32U);
+            (void)memcpy(sealed.event_merkle_root, roots.event_merkle_root, 32U);
+            (void)memcpy(sealed.oracle_root, roots.oracle_root, 32U);
+            status = lxp_da_body_from_kernels(&sealed, kernel, preview, NULL, 0U,
+                &output.canonical_receipt, 1U, NULL, 0U, NULL, 0U, arena, body);
+        }
+    }
+    lxp_state_snapshot_destroy(snapshot);
+    free(preview);
+    return status;
+}
+
 static lxp_result empty_batch(lxp_replay_engine *engine, lxp_kernel *kernel,
                               uint64_t batch_number, uint64_t sequence,
                               lxp_arena *arena,
@@ -100,6 +146,8 @@ static lxp_result empty_batch(lxp_replay_engine *engine, lxp_kernel *kernel,
     if (status != LXP_OK) return status;
     body.activities = empty;
     body.oracle_inputs = empty;
+    status = expected_body(kernel, &body.header, *(uint32_t *)engine->context, arena, &body);
+    if (status != LXP_OK) return status;
     return lxp_replay_batch(engine, &body, body.header.previous_state_root,
                             arena, result);
 }
@@ -134,7 +182,7 @@ static lxp_result seed_principal_storage(lxp_kernel *kernel, lxp_arena *arena)
 
 static int replay_publication(lxp_byte_span canonical_maintenance, bool mutate)
 {
-    static uint8_t bytes[524288];
+    static uint8_t bytes[8U * 1024U * 1024U];
     lxp_arena arena;
     lxp_state_store state;
     lxp_state_journal journal;
@@ -182,10 +230,12 @@ static int replay_publication(lxp_byte_span canonical_maintenance, bool mutate)
     body.header.timestamp_ms = 1000U;
     (void)memcpy(body.header.previous_state_root, kernel.current_state_root, 32U);
     (void)memcpy(body.header.resulting_state_root, record.resulting_state_root, 32U);
+    if (expected_body(&kernel, &body.header, parameters, &arena, &body) != LXP_OK)
+        return 1;
     if (lxp_replay_section_encode(NULL, 0U, &arena, &body.activities) != LXP_OK ||
         lxp_replay_section_encode(NULL, 0U, &arena, &body.events) != LXP_OK ||
         lxp_replay_section_encode(NULL, 0U, &arena, &body.oracle_inputs) != LXP_OK ||
-        lxp_replay_section_encode(&encoded, 1U, &arena, &body.receipts) != LXP_OK ||
+        lxp_da_receipt_section_encode(&encoded, 1U, NULL, 0U, &arena, &body.receipts) != LXP_OK ||
         lxp_batch_roots_compute(&(lxp_batch_root_inputs){NULL, 0U, &encoded, 1U,
             NULL, 0U, NULL, 0U, NULL, 0U}, &arena, &roots) != LXP_OK)
         return 1;
@@ -193,7 +243,8 @@ static int replay_publication(lxp_byte_span canonical_maintenance, bool mutate)
     (void)memcpy(body.header.receipt_merkle_root, roots.receipt_merkle_root, 32U);
     (void)memcpy(body.header.event_merkle_root, roots.event_merkle_root, 32U);
     (void)memcpy(body.header.oracle_root, roots.oracle_root, 32U);
-    (void)memcpy(body.header.data_availability_root, roots.data_availability_root, 32U);
+    if (lxp_batch_availability_root(&body, &arena, body.header.data_availability_root) != LXP_OK)
+        return 1;
     status = lxp_replay_batch_publication(&engine, &body,
         body.header.previous_state_root, &arena, &result);
     if (mutate) return status == LXP_FATAL_REPLAY_DIVERGENCE ? 0 : 1;
@@ -207,7 +258,7 @@ static int replay_publication(lxp_byte_span canonical_maintenance, bool mutate)
 
 int main(void)
 {
-    static uint8_t arena_bytes[524288];
+    static uint8_t arena_bytes[8U * 1024U * 1024U];
     lxp_arena arena;
     lxp_state_store state;
     lxp_state_journal journal;
