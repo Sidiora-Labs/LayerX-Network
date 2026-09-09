@@ -96,10 +96,25 @@ module.write_json(root / 'account-head-request.json', {
     'sequencer_id': sys.argv[4], 'public_key': sys.argv[5]})
 PYHEAD
     human_owner_provision
+    python3 "$provision" --prepare-owner-admission --work-dir "$WORK_DIR" --secrets-dir "$SECRETS_DIR"
+    human_custody_step deposit
     python3 "$provision" --validate-owner-registration --work-dir "$WORK_DIR"
     python3 "$provision" --validate-evidence-inputs --work-dir "$WORK_DIR" \
         --registry "$SECRETS_DIR/module-registry.json" --journal "$LAYERX_REGISTRY_JOURNAL"
     python3 "$provision" --assemble --work-dir "$WORK_DIR" \
         --registry "$SECRETS_DIR/module-registry.json" --asset "$NODE_ASSET_ID" \
         --journal "$LAYERX_REGISTRY_JOURNAL"
+)
+
+human_custody_step() (
+    set -euo pipefail
+    umask 077
+    export PATH="$FOUNDRY_BIN:$PATH"
+    [ "$PAXEER_URL" = 'https://localhost:19449' ] && [ "$PAXEER_OBSERVER_URL" = 'https://localhost:19452' ] \
+        || fail 'owner custody requires the disposable in-cluster Paxeer port forwards'
+    python3 "$REPO_ROOT/platform/hosted/human/owner_custody.py" "$1" \
+        --work-dir "$WORK_DIR" --rpc "$PAXEER_URL" --rpc "$PAXEER_OBSERVER_URL" \
+        --ca-bundle "$CA_DIR/ca.pem" --disposable-identity "$WORK_DIR/paxeer/rpc-origins.json" \
+        --key-file "$SECRETS_DIR/paxeer-deployer.key" --attestor-key "$SECRETS_DIR/custody-attestor.seed" \
+        --network-id "$NODE_NETWORK_ID" --asset "$NODE_ASSET_ID"
 )
