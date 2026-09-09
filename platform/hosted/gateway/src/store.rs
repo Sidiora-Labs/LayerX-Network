@@ -23,12 +23,14 @@ pub struct ReservationRequest<'a> {
     pub continuation: &'a str,
 }
 
-use native_tls::{Certificate, TlsConnector};
+use crate::pay_timing;
+use native_tls::{Certificate, TlsConnector, TlsStream};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
-use std::time::Duration;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 use zeroize::Zeroizing;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
@@ -40,6 +42,7 @@ const MAX_CONTINUATION_CHUNKS: usize = 16;
 const AUDIT_ATTEMPTS: usize = 8;
 const MAX_KEYS_PER_PRINCIPAL: u64 = 128;
 const MAX_TAP_REPLAY_SECONDS: u64 = 3_600;
+const MAX_IDLE_CONNECTIONS: usize = 16;
 
 #[derive(Clone)]
 pub struct RedisEndpoint {
@@ -80,6 +83,8 @@ pub struct RedisStore {
     ca: Certificate,
     username: Zeroizing<String>,
     password: Zeroizing<String>,
+    connector: OnceLock<Result<TlsConnector, String>>,
+    idle: Mutex<Vec<TlsStream<TcpStream>>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -171,7 +176,40 @@ impl RedisStore {
             ca,
             username,
             password,
+            connector: OnceLock::new(),
+            idle: Mutex::new(Vec::new()),
         }
+    }
+
+    fn connector(&self) -> Result<&TlsConnector, String> {
+        match self.connector.get_or_init(|| {
+            TlsConnector::builder()
+                .add_root_certificate(self.ca.clone())
+                .min_protocol_version(Some(native_tls::Protocol::Tlsv12))
+                .build()
+                .map_err(|error| error.to_string())
+        }) {
+            Ok(connector) => Ok(connector),
+            Err(error) => Err(error.clone()),
+        }
+    }
+
+    fn take_idle(&self) -> Result<Option<TlsStream<TcpStream>>, String> {
+        self.idle
+            .lock()
+            .map_err(|_| "gateway Redis connection pool is unavailable".to_owned())
+            .map(|mut idle| idle.pop())
+    }
+
+    fn retain_idle(&self, stream: TlsStream<TcpStream>) -> Result<(), String> {
+        let mut idle = self
+            .idle
+            .lock()
+            .map_err(|_| "gateway Redis connection pool is unavailable".to_owned())?;
+        if idle.len() < MAX_IDLE_CONNECTIONS {
+            idle.push(stream);
+        }
+        Ok(())
     }
 
     #[must_use]
@@ -357,6 +395,7 @@ impl RedisStore {
         record: &KeyRecord,
         request: ReservationRequest<'_>,
     ) -> Result<Reservation, String> {
+        let reserve_started = Instant::now();
         let ReservationRequest {
             idempotency_scope,
             request_digest,
@@ -377,7 +416,9 @@ impl RedisStore {
         let activity_operation = format!("gateway:activity-operation:{activity_id}");
         let retry = record.quota_window_seconds - now % record.quota_window_seconds;
         for _ in 0..AUDIT_ATTEMPTS {
+            let audit_started = Instant::now();
             let (head, chain) = self.audit_values(audit_event)?;
+            pay_timing("gateway.store.reserve.audit_head", audit_started);
             let epoch = record.epoch.to_string();
             let quota_requests = record.quota_requests.to_string();
             let retry = retry.to_string();
@@ -408,31 +449,41 @@ impl RedisStore {
                 protocol_idempotency_key,
             ];
             arguments.extend(continuation_chunks.iter().copied());
+            let command_started = Instant::now();
             let response = self.command(&arguments)?;
+            pay_timing("gateway.store.reserve.transaction", command_started);
             let Resp::Array(values) = response else {
                 return Err("gateway reservation response is invalid".to_owned());
             };
             match values.first().and_then(text).as_deref() {
                 Some("audit_retry") => {}
-                Some("reserved") => return Ok(Reservation::Reserved),
-                Some("revoked") => return Ok(Reservation::Revoked),
+                Some("reserved") => {
+                    pay_timing("gateway.store.reserve.total", reserve_started);
+                    return Ok(Reservation::Reserved);
+                }
+                Some("revoked") => {
+                    pay_timing("gateway.store.reserve.total", reserve_started);
+                    return Ok(Reservation::Revoked);
+                }
                 Some("rate_limited") => {
+                    pay_timing("gateway.store.reserve.total", reserve_started);
                     return Ok(Reservation::RateLimited {
                         retry_after_seconds: values
                             .get(1)
                             .and_then(text)
                             .and_then(|value| value.parse::<u64>().ok())
                             .ok_or_else(|| "gateway retry value is invalid".to_owned())?,
-                    })
+                    });
                 }
                 Some("existing") => {
+                    pay_timing("gateway.store.reserve.total", reserve_started);
                     return Ok(Reservation::Existing {
                         digest: values.get(1).and_then(text).unwrap_or_default(),
                         state: values.get(2).and_then(text).unwrap_or_default(),
                         response: values.get(3).and_then(text).unwrap_or_default(),
                         receipt: values.get(4).and_then(text).unwrap_or_default(),
                         principal: values.get(5).and_then(text).unwrap_or_default(),
-                    })
+                    });
                 }
                 _ => return Err("gateway reservation state is invalid".to_owned()),
             }
@@ -511,6 +562,7 @@ impl RedisStore {
     /// # Errors
     /// Returns transport, malformed store response, validation or audit contention errors.
     pub fn complete(&self, request: Completion<'_>) -> Result<(), String> {
+        let complete_started = Instant::now();
         let Completion {
             idempotency_scope,
             request_digest,
@@ -528,7 +580,10 @@ impl RedisStore {
         );
         let bind_owner = if activity_id.is_some() { "1" } else { "0" };
         for _ in 0..AUDIT_ATTEMPTS {
+            let audit_started = Instant::now();
             let (head, chain) = self.audit_values(audit_event)?;
+            pay_timing("gateway.store.complete.audit_head", audit_started);
+            let command_started = Instant::now();
             let response = self.command(&[
                 "EVAL",
                 COMPLETE_SCRIPT,
@@ -548,15 +603,18 @@ impl RedisStore {
                 bind_owner,
                 principal_digest,
             ])?;
+            pay_timing("gateway.store.complete.transaction", command_started);
             let tag = array_tag(response)?;
             if tag == "audit_retry" {
                 continue;
             }
-            return if tag == "completed" {
+            let result = if tag == "completed" {
                 Ok(())
             } else {
                 Err("gateway completion conflicted".to_owned())
             };
+            pay_timing("gateway.store.complete.total", complete_started);
+            return result;
         }
         Err("gateway audit head remained contended".to_owned())
     }
@@ -738,27 +796,46 @@ impl RedisStore {
     }
 
     fn command(&self, arguments: &[&str]) -> Result<Resp, String> {
-        let connector = TlsConnector::builder()
-            .add_root_certificate(self.ca.clone())
-            .min_protocol_version(Some(native_tls::Protocol::Tlsv12))
-            .build()
-            .map_err(|error| error.to_string())?;
-        let mut last = None;
-        for address in (self.endpoint.host.as_str(), self.endpoint.port)
+        let total_started = Instant::now();
+        let connector_started = Instant::now();
+        let connector = self.connector()?;
+        pay_timing("gateway.store.command.connector", connector_started);
+        let pool_started = Instant::now();
+        let pooled = self.take_idle()?;
+        pay_timing("gateway.store.command.pool", pool_started);
+        if let Some(mut stream) = pooled {
+            let exchange_started = Instant::now();
+            let result =
+                write_command(&mut stream, arguments).and_then(|()| read_resp(&mut stream, 0));
+            pay_timing("gateway.store.command.exchange", exchange_started);
+            if result.is_ok() {
+                self.retain_idle(stream)?;
+            }
+            pay_timing("gateway.store.command.total", total_started);
+            return result;
+        }
+        let resolve_started = Instant::now();
+        let addresses = (self.endpoint.host.as_str(), self.endpoint.port)
             .to_socket_addrs()
-            .map_err(|error| error.to_string())?
-            .take(8)
-        {
+            .map_err(|error| error.to_string())?;
+        pay_timing("gateway.store.command.resolve", resolve_started);
+        let mut last = None;
+        for address in addresses.take(8) {
+            let connect_started = Instant::now();
             match TcpStream::connect_timeout(&address, CONNECT_TIMEOUT) {
                 Ok(tcp) => {
+                    pay_timing("gateway.store.command.tcp_connect", connect_started);
                     tcp.set_nodelay(true).map_err(|error| error.to_string())?;
                     tcp.set_read_timeout(Some(IO_TIMEOUT))
                         .map_err(|error| error.to_string())?;
                     tcp.set_write_timeout(Some(IO_TIMEOUT))
                         .map_err(|error| error.to_string())?;
+                    let tls_started = Instant::now();
                     let mut stream = connector
                         .connect(&self.endpoint.host, tcp)
                         .map_err(|error| error.to_string())?;
+                    pay_timing("gateway.store.command.tls_handshake", tls_started);
+                    let auth_started = Instant::now();
                     write_command(
                         &mut stream,
                         &["AUTH", self.username.as_str(), self.password.as_str()],
@@ -766,10 +843,21 @@ impl RedisStore {
                     if !matches!(read_resp(&mut stream, 0)?, Resp::Simple(value) if value == "OK") {
                         return Err("gateway Redis authentication failed".to_owned());
                     }
+                    pay_timing("gateway.store.command.authenticate", auth_started);
+                    let exchange_started = Instant::now();
                     write_command(&mut stream, arguments)?;
-                    return read_resp(&mut stream, 0);
+                    let result = read_resp(&mut stream, 0);
+                    pay_timing("gateway.store.command.exchange", exchange_started);
+                    if result.is_ok() {
+                        self.retain_idle(stream)?;
+                    }
+                    pay_timing("gateway.store.command.total", total_started);
+                    return result;
                 }
-                Err(error) => last = Some(error),
+                Err(error) => {
+                    pay_timing("gateway.store.command.tcp_connect", connect_started);
+                    last = Some(error);
+                }
             }
         }
         Err(last.map_or_else(
@@ -1206,8 +1294,8 @@ fn array_tag(response: Resp) -> Result<String, String> {
 #[cfg(test)]
 mod continuation_tests {
     use super::{
-        continuation_chunks, durable_continuation, CONTINUATION_CHUNK_BYTES,
-        MAX_CONTINUATION_BYTES, MAX_CONTINUATION_CHUNKS,
+        CONTINUATION_CHUNK_BYTES, MAX_CONTINUATION_BYTES, MAX_CONTINUATION_CHUNKS,
+        continuation_chunks, durable_continuation,
     };
     use std::collections::BTreeMap;
 
@@ -1217,9 +1305,11 @@ mod continuation_tests {
         let chunks = continuation_chunks(&value)
             .unwrap_or_else(|error| panic!("continuation chunks: {error}"));
         assert_eq!(chunks.len(), MAX_CONTINUATION_CHUNKS);
-        assert!(chunks
-            .iter()
-            .all(|chunk| chunk.len() == CONTINUATION_CHUNK_BYTES));
+        assert!(
+            chunks
+                .iter()
+                .all(|chunk| chunk.len() == CONTINUATION_CHUNK_BYTES)
+        );
 
         let mut fields =
             BTreeMap::from([("continuation_count".to_owned(), chunks.len().to_string())]);

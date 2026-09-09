@@ -14,9 +14,10 @@ use layerx_platform_gateway::store::{
     ReservationRequest,
 };
 use layerx_platform_gateway::{
-    authenticate_gateway_key, production_route, verify_activity_operation,
-    verify_program_operation, verify_program_simulation_operation, verify_submission, AccessError,
-    AuthorityFacts, IssuedKey, PrincipalId, ProductionRoute, Quota,
+    AccessError, AuthorityFacts, IssuedKey, PrincipalId, ProductionRoute, Quota,
+    VerifiedSubmission, authenticate_gateway_key, pay_timing, production_route,
+    verify_activity_operation, verify_program_operation, verify_program_simulation_operation,
+    verify_submission,
 };
 use layerx_types::amount::Amount;
 use layerx_types::intent::{
@@ -33,16 +34,17 @@ use std::env;
 use std::fs;
 use std::io::Write;
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use subtle::ConstantTimeEq;
 use zeroize::{Zeroize, Zeroizing};
 
 const MAX_REQUEST: usize = 8 * 1024 * 1024;
 const MAX_CONNECTIONS: usize = 256;
 const MAX_IDEMPOTENCY_SECONDS: u64 = 2_592_000;
+const MAX_REQUESTS_PER_CONNECTION: usize = 128;
 static ACTIVE_CONNECTIONS: AtomicUsize = AtomicUsize::new(0);
 
 struct Config {
@@ -1177,6 +1179,8 @@ fn authority(
     activity_id: &str,
     receipt: &[u8],
 ) -> Result<AuthorityFacts, OutgoingResponse> {
+    let total_started = Instant::now();
+    let request_started = Instant::now();
     let upstream = upstream_json(
         config,
         &config.authority,
@@ -1186,6 +1190,7 @@ fn authority(
         None,
         &[],
     )?;
+    pay_timing("gateway.authority.request", request_started);
     if upstream.status != 200 || upstream.content_type != "application/json" {
         return Err(response(503, "authority_unavailable", Some(5)));
     }
@@ -1207,7 +1212,8 @@ fn authority(
         parse_hex32(&facts.sequencer_public_key)
             .map_err(|_| response(503, "authority_invalid", Some(5)))?,
     );
-    match facts.batch_evidence {
+    let evidence_started = Instant::now();
+    let result = match facts.batch_evidence {
         None => Ok(authority),
         Some(maintained) => {
             let verified = maintained
@@ -1225,7 +1231,10 @@ fn authority(
                 verified.sequencer_public_key(),
             ))
         }
-    }
+    };
+    pay_timing("gateway.authority.evidence", evidence_started);
+    pay_timing("gateway.authority.total", total_started);
+    result
 }
 
 fn verified_result(
@@ -1233,11 +1242,17 @@ fn verified_result(
     activity_id: &str,
     receipt_hex: &str,
 ) -> Result<(Vec<u8>, Vec<u8>, i32), OutgoingResponse> {
+    let total_started = Instant::now();
+    let decode_started = Instant::now();
     let expected =
         parse_hex32(activity_id).map_err(|_| response(503, "component_invalid", Some(5)))?;
     let receipt = decode_hex(receipt_hex, 256 * 1024)
         .map_err(|_| response(503, "component_invalid", Some(5)))?;
+    pay_timing("gateway.receipt.decode", decode_started);
+    let authority_started = Instant::now();
     let facts = authority(config, activity_id, &receipt)?;
+    pay_timing("gateway.receipt.authority", authority_started);
+    let verify_started = Instant::now();
     let verified = verify_activity_operation(
         &receipt,
         facts,
@@ -1245,11 +1260,14 @@ fn verified_result(
         Some(expected),
     )
     .map_err(|_| response(503, "receipt_verification_failed", Some(5)))?;
-    Ok((
+    pay_timing("gateway.receipt.verify", verify_started);
+    let result = Ok((
         verified.response().to_vec(),
         verified.receipt().to_vec(),
         verified.result_code(),
-    ))
+    ));
+    pay_timing("gateway.receipt.total", total_started);
+    result
 }
 
 fn verified_program_result(
@@ -1527,7 +1545,9 @@ fn activity(
     trace_id: &str,
     program_call: bool,
     rpc_submission: bool,
+    preverified: Option<VerifiedSubmission>,
 ) -> OutgoingResponse {
+    let total_started = Instant::now();
     let lifecycle_ordinal = program_lifecycle::ordinal(&request.path);
     let program_mutation = program_call || lifecycle_ordinal.is_some();
     let idempotency = match request.headers.get("idempotency-key") {
@@ -1542,28 +1562,37 @@ fn activity(
         }
         _ => return response(400, "idempotency_key_required", None),
     };
+    let decode_started = Instant::now();
     let (canonical, expected_program) =
         match decode_activity_request(config, request, program_call, lifecycle_ordinal) {
             Ok(value) => value,
             Err(error) => return error,
         };
+    pay_timing("gateway.activity.decode", decode_started);
     let content_type = request
         .headers
         .get("content-type")
         .map_or("", String::as_str);
     let retained_signed_activity = hex(&canonical);
-    let Ok(signer_public_key) = parse_hex32(&record.signer_public_key) else {
-        return response(503, "persistence_unavailable", Some(5));
+    let verify_started = Instant::now();
+    let verified_submission = if let Some(verified) = preverified {
+        verified
+    } else {
+        let Ok(signer_public_key) = parse_hex32(&record.signer_public_key) else {
+            return response(503, "persistence_unavailable", Some(5));
+        };
+        let Ok(verified) = verify_submission(
+            &canonical,
+            &config.modules,
+            config.protocol_version,
+            config.protocol_network_id,
+            &signer_public_key,
+        ) else {
+            return response(403, "activity_authorization_refused", None);
+        };
+        verified
     };
-    let Ok(verified_submission) = verify_submission(
-        &canonical,
-        &config.modules,
-        config.protocol_version,
-        config.protocol_network_id,
-        &signer_public_key,
-    ) else {
-        return response(403, "activity_authorization_refused", None);
-    };
+    pay_timing("gateway.activity.verify_submission", verify_started);
     if idempotency != &hex(&verified_submission.idempotency_key()) {
         return response(409, "protocol_idempotency_mismatch", None);
     }
@@ -1604,10 +1633,16 @@ fn activity(
         canonical,
         activity_id: verified_submission.activity_id(),
     };
+    let reserve_started = Instant::now();
     if let Err(error) = reserve_activity(config, record, &operation, trace_id) {
         return error;
     }
-    submit_activity(config, request, record, &operation, trace_id)
+    pay_timing("gateway.activity.reserve", reserve_started);
+    let submit_started = Instant::now();
+    let response = submit_activity(config, request, record, &operation, trace_id);
+    pay_timing("gateway.activity.submit", submit_started);
+    pay_timing("gateway.activity.total", total_started);
+    response
 }
 
 struct ActivityOperation {
@@ -1679,6 +1714,7 @@ fn reserve_activity(
     operation: &ActivityOperation,
     trace_id: &str,
 ) -> Result<(), OutgoingResponse> {
+    let total_started = Instant::now();
     let audit = audit_event(
         &record.principal_digest,
         "activity",
@@ -1760,6 +1796,7 @@ fn reserve_activity(
         }
         Reservation::Reserved => {}
     }
+    pay_timing("gateway.reserve.total", total_started);
     Ok(())
 }
 
@@ -1770,6 +1807,8 @@ fn submit_activity(
     operation: &ActivityOperation,
     trace_id: &str,
 ) -> OutgoingResponse {
+    let total_started = Instant::now();
+    let component_started = Instant::now();
     let Ok(upstream) = config.client.request(
         &config.component,
         config.component_token.as_str(),
@@ -1792,6 +1831,7 @@ fn submit_activity(
             trace_id,
         );
     };
+    pay_timing("gateway.submit.component", component_started);
     if upstream.status == 202 {
         return submitted_unknown_response(
             &operation.submitted_activity_id,
@@ -1835,6 +1875,7 @@ fn submit_activity(
             )
         };
     }
+    let decode_started = Instant::now();
     let component_document: serde_json::Value = match serde_json::from_slice(&upstream.body) {
         Ok(value) => value,
         Err(_) => return response(503, "component_invalid", Some(5)),
@@ -1843,10 +1884,15 @@ fn submit_activity(
         .get("result")
         .unwrap_or(&component_document)
         .clone();
+    pay_timing("gateway.submit.decode", decode_started);
     if operation.lifecycle_ordinal.is_some() {
         return complete_lifecycle(config, record, operation, component_value, trace_id);
     }
-    complete_activity(config, record, operation, component_value, trace_id)
+    let complete_started = Instant::now();
+    let response = complete_activity(config, record, operation, component_value, trace_id);
+    pay_timing("gateway.submit.complete", complete_started);
+    pay_timing("gateway.submit.total", total_started);
+    response
 }
 
 fn complete_lifecycle(
@@ -1921,6 +1967,8 @@ fn complete_activity(
     component_value: serde_json::Value,
     trace_id: &str,
 ) -> OutgoingResponse {
+    let total_started = Instant::now();
+    let decode_started = Instant::now();
     let component: ComponentActivity = match serde_json::from_value(component_value) {
         Ok(value) => value,
         Err(_) => return response(503, "component_invalid", Some(5)),
@@ -1940,6 +1988,8 @@ fn complete_activity(
     {
         return response(503, "component_invalid", Some(5));
     }
+    pay_timing("gateway.complete.decode", decode_started);
+    let verify_started = Instant::now();
     let (result, receipt, verified_result_code) = match operation.program_head.map_or_else(
         || verified_result(config, &component.activity_id, &component.receipt),
         |head| {
@@ -1956,6 +2006,7 @@ fn complete_activity(
         Ok(value) => value,
         Err(error) => return error,
     };
+    pay_timing("gateway.complete.receipt", verify_started);
     if !operation.program_mutation && verified_result_code != 0 {
         return complete_activity_refusal(
             config,
@@ -1979,6 +2030,7 @@ fn complete_activity(
     let Ok(stored_result) = serde_json::to_vec(&result) else {
         return response(503, "receipt_encoding_failed", Some(5));
     };
+    let persist_started = Instant::now();
     if config
         .store
         .complete(Completion {
@@ -2000,10 +2052,13 @@ fn complete_activity(
     {
         return response(503, "persistence_unavailable", Some(5));
     }
-    json_response(
+    pay_timing("gateway.complete.persist", persist_started);
+    let response = json_response(
         200,
         &serde_json::json!({ "ok": true, "result": result, "trace": trace_id }),
-    )
+    );
+    pay_timing("gateway.complete.total", total_started);
+    response
 }
 
 fn submitted_unknown_response(
@@ -2433,12 +2488,14 @@ fn route(config: &Config, request: &IncomingRequest) -> OutgoingResponse {
         };
     }
     let result = match parsed {
-        ProductionRoute::ProgramCall => activity(config, request, &record, &trace_id, true, false),
+        ProductionRoute::ProgramCall => {
+            activity(config, request, &record, &trace_id, true, false, None)
+        }
         ProductionRoute::Activity
         | ProductionRoute::ProgramDeploy
         | ProductionRoute::ProgramUpgrade
         | ProductionRoute::ProgramWindDown => {
-            activity(config, request, &record, &trace_id, false, false)
+            activity(config, request, &record, &trace_id, false, false, None)
         }
         ProductionRoute::ProgramSimulation => {
             program_simulation(config, request, &record, &trace_id)
@@ -2474,13 +2531,32 @@ fn serve(config: &Arc<Config>, tcp: TcpStream) -> Result<(), String> {
     let connection =
         ServerConnection::new(Arc::clone(&config.tls)).map_err(|error| error.to_string())?;
     let mut stream = StreamOwned::new(connection, tcp);
-    let Ok(request) = http::read_request(&mut stream, MAX_REQUEST) else {
-        return http::write_response(&mut stream, &response(400, "invalid_http_request", None));
-    };
-    if request.path == "/rpc/ws" {
-        return ws::serve(config, &request, &mut stream);
+    for request_number in 0..MAX_REQUESTS_PER_CONNECTION {
+        let request = match http::read_request(&mut stream, MAX_REQUEST) {
+            Ok(request) => request,
+            Err(_) if request_number == 0 => {
+                return http::write_response_connection(
+                    &mut stream,
+                    &response(400, "invalid_http_request", None),
+                    false,
+                );
+            }
+            Err(_) => return Ok(()),
+        };
+        if request.path == "/rpc/ws" {
+            return ws::serve(config, &request, &mut stream);
+        }
+        let keep_alive = request_number + 1 < MAX_REQUESTS_PER_CONNECTION
+            && request
+                .headers
+                .get("connection")
+                .is_none_or(|value| !value.eq_ignore_ascii_case("close"));
+        http::write_response_connection(&mut stream, &route(config, &request), keep_alive)?;
+        if !keep_alive {
+            return Ok(());
+        }
     }
-    http::write_response(&mut stream, &route(config, &request))
+    Ok(())
 }
 
 fn run() -> Result<(), String> {

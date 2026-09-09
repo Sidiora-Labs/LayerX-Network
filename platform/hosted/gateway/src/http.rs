@@ -1,14 +1,17 @@
-use native_tls::{Certificate, Identity, TlsConnector};
+use crate::pay_timing;
+use native_tls::{Certificate, Identity, TlsConnector, TlsStream};
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::net::{IpAddr, TcpStream, ToSocketAddrs};
-use std::time::Duration;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 use zeroize::Zeroize;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const IO_TIMEOUT: Duration = Duration::from_secs(8);
 const MAX_HEADERS: usize = 32 * 1024;
 const MAX_RESPONSE: usize = 8 * 1024 * 1024;
+const MAX_IDLE_CONNECTIONS_PER_ENDPOINT: usize = 8;
 
 #[derive(Clone)]
 pub struct Endpoint {
@@ -70,6 +73,8 @@ impl Endpoint {
 pub struct Client {
     ca: Certificate,
     identity: Identity,
+    connector: OnceLock<Result<TlsConnector, String>>,
+    idle: Mutex<BTreeMap<String, Vec<TlsStream<TcpStream>>>>,
 }
 
 pub struct OutboundRequest<'a> {
@@ -83,7 +88,45 @@ pub struct OutboundRequest<'a> {
 impl Client {
     #[must_use]
     pub fn new(ca: Certificate, identity: Identity) -> Self {
-        Self { ca, identity }
+        Self {
+            ca,
+            identity,
+            connector: OnceLock::new(),
+            idle: Mutex::new(BTreeMap::new()),
+        }
+    }
+
+    fn connector(&self) -> Result<&TlsConnector, String> {
+        match self.connector.get_or_init(|| {
+            TlsConnector::builder()
+                .add_root_certificate(self.ca.clone())
+                .identity(self.identity.clone())
+                .min_protocol_version(Some(native_tls::Protocol::Tlsv12))
+                .build()
+                .map_err(|error| error.to_string())
+        }) {
+            Ok(connector) => Ok(connector),
+            Err(error) => Err(error.clone()),
+        }
+    }
+
+    fn take_idle(&self, pool_key: &str) -> Result<Option<TlsStream<TcpStream>>, String> {
+        self.idle
+            .lock()
+            .map_err(|_| "gateway HTTP connection pool is unavailable".to_owned())
+            .map(|mut idle| idle.get_mut(pool_key).and_then(Vec::pop))
+    }
+
+    fn retain_idle(&self, pool_key: &str, stream: TlsStream<TcpStream>) -> Result<(), String> {
+        let mut idle = self
+            .idle
+            .lock()
+            .map_err(|_| "gateway HTTP connection pool is unavailable".to_owned())?;
+        let connections = idle.entry(pool_key.to_owned()).or_default();
+        if connections.len() < MAX_IDLE_CONNECTIONS_PER_ENDPOINT {
+            connections.push(stream);
+        }
+        Ok(())
     }
 
     /// # Errors
@@ -121,13 +164,9 @@ impl Client {
         request: &OutboundRequest<'_>,
         trace: Option<&str>,
     ) -> Result<UpstreamResponse, String> {
-        let OutboundRequest {
-            method,
-            path,
-            idempotency,
-            content_type,
-            body,
-        } = *request;
+        let total_started = Instant::now();
+        let path = request.path;
+        let body = request.body;
         if !path.starts_with('/') || path.contains(['?', '#', '\\']) || body.len() > MAX_RESPONSE {
             return Err("outbound request exceeds its boundary".to_owned());
         }
@@ -146,49 +185,63 @@ impl Client {
         }) {
             return Err("outbound trace exceeds its boundary".to_owned());
         }
-        let connector = TlsConnector::builder()
-            .add_root_certificate(self.ca.clone())
-            .identity(self.identity.clone())
-            .min_protocol_version(Some(native_tls::Protocol::Tlsv12))
-            .build()
-            .map_err(|error| error.to_string())?;
-        let mut last_error = None;
-        for address in (endpoint.host.as_str(), endpoint.port)
+        let connector_started = Instant::now();
+        let connector = self.connector()?;
+        pay_timing("gateway.http.connector", connector_started);
+        let pool_key = format!("{}:{}", endpoint.host, endpoint.port);
+        let pool_started = Instant::now();
+        let pooled = self.take_idle(&pool_key)?;
+        pay_timing("gateway.http.pool", pool_started);
+        if let Some(mut stream) = pooled {
+            let exchange_started = Instant::now();
+            let result = exchange(&mut stream, endpoint, authorization, request, trace);
+            pay_timing("gateway.http.exchange", exchange_started);
+            if result
+                .as_ref()
+                .is_ok_and(|response| !response.connection_close)
+            {
+                self.retain_idle(&pool_key, stream)?;
+            }
+            pay_timing("gateway.http.total", total_started);
+            return result;
+        }
+        let resolve_started = Instant::now();
+        let addresses = (endpoint.host.as_str(), endpoint.port)
             .to_socket_addrs()
-            .map_err(|error| error.to_string())?
-            .take(8)
-        {
+            .map_err(|error| error.to_string())?;
+        pay_timing("gateway.http.resolve", resolve_started);
+        let mut last_error = None;
+        for address in addresses.take(8) {
+            let connect_started = Instant::now();
             match TcpStream::connect_timeout(&address, CONNECT_TIMEOUT) {
                 Ok(tcp) => {
+                    pay_timing("gateway.http.tcp_connect", connect_started);
                     tcp.set_nodelay(true).map_err(|error| error.to_string())?;
                     tcp.set_read_timeout(Some(IO_TIMEOUT))
                         .map_err(|error| error.to_string())?;
                     tcp.set_write_timeout(Some(IO_TIMEOUT))
                         .map_err(|error| error.to_string())?;
+                    let tls_started = Instant::now();
                     let mut stream = connector
                         .connect(&endpoint.host, tcp)
                         .map_err(|error| error.to_string())?;
-                    let idempotency = idempotency
-                        .map_or_else(String::new, |key| format!("Idempotency-Key: {key}\r\n"));
-                    let trace =
-                        trace.map_or_else(String::new, |value| format!("X-Trace-Id: {value}\r\n"));
-                    let mut outbound = zeroize::Zeroizing::new(Vec::new());
-                    write!(
-                        outbound,
-                        "{method} {}{path} HTTP/1.1\r\nHost: {}\r\nAuthorization: {authorization}\r\nAccept: application/json\r\nContent-Type: {content_type}\r\n{idempotency}{trace}Content-Length: {}\r\nConnection: close\r\n\r\n",
-                        endpoint.base_path,
-                        endpoint.authority(),
-                        body.len()
-                    )
-                    .map_err(|error| error.to_string())?;
-                    outbound.extend_from_slice(body);
-                    stream
-                        .write_all(&outbound)
-                        .map_err(|error| error.to_string())?;
-                    stream.flush().map_err(|error| error.to_string())?;
-                    return read_response(&mut stream);
+                    pay_timing("gateway.http.tls_handshake", tls_started);
+                    let exchange_started = Instant::now();
+                    let result = exchange(&mut stream, endpoint, authorization, request, trace);
+                    pay_timing("gateway.http.exchange", exchange_started);
+                    if result
+                        .as_ref()
+                        .is_ok_and(|response| !response.connection_close)
+                    {
+                        self.retain_idle(&pool_key, stream)?;
+                    }
+                    pay_timing("gateway.http.total", total_started);
+                    return result;
                 }
-                Err(error) => last_error = Some(error),
+                Err(error) => {
+                    pay_timing("gateway.http.tcp_connect", connect_started);
+                    last_error = Some(error);
+                }
             }
         }
         Err(last_error.map_or_else(
@@ -224,6 +277,38 @@ pub struct UpstreamResponse {
     pub status: u16,
     pub content_type: String,
     pub body: Vec<u8>,
+    connection_close: bool,
+}
+
+fn exchange(
+    stream: &mut TlsStream<TcpStream>,
+    endpoint: &Endpoint,
+    authorization: &str,
+    request: &OutboundRequest<'_>,
+    trace: Option<&str>,
+) -> Result<UpstreamResponse, String> {
+    let idempotency = request
+        .idempotency
+        .map_or_else(String::new, |key| format!("Idempotency-Key: {key}\r\n"));
+    let trace = trace.map_or_else(String::new, |value| format!("X-Trace-Id: {value}\r\n"));
+    let mut outbound = zeroize::Zeroizing::new(Vec::new());
+    write!(
+        outbound,
+        "{} {}{} HTTP/1.1\r\nHost: {}\r\nAuthorization: {authorization}\r\nAccept: application/json\r\nContent-Type: {}\r\n{idempotency}{trace}Content-Length: {}\r\nConnection: keep-alive\r\n\r\n",
+        request.method,
+        endpoint.base_path,
+        request.path,
+        endpoint.authority(),
+        request.content_type,
+        request.body.len()
+    )
+    .map_err(|error| error.to_string())?;
+    outbound.extend_from_slice(request.body);
+    stream
+        .write_all(&outbound)
+        .map_err(|error| error.to_string())?;
+    stream.flush().map_err(|error| error.to_string())?;
+    read_response(stream)
 }
 
 /// # Errors
@@ -265,10 +350,14 @@ fn read_response(stream: &mut impl Read) -> Result<UpstreamResponse, String> {
         .parse::<u16>()
         .map_err(|_| "component response status is invalid".to_owned())?;
     let content_type = headers.get("content-type").cloned().unwrap_or_default();
+    let connection_close = headers
+        .get("connection")
+        .is_some_and(|value| value.eq_ignore_ascii_case("close"));
     Ok(UpstreamResponse {
         status,
         content_type,
         body,
+        connection_close,
     })
 }
 
@@ -338,6 +427,18 @@ fn read_message(stream: &mut impl Read, maximum: usize) -> Result<HttpMessage, S
 /// # Errors
 /// Returns an error when writing or flushing the response fails.
 pub fn write_response(stream: &mut impl Write, response: &OutgoingResponse) -> Result<(), String> {
+    write_response_connection(stream, response, false)
+}
+
+/// Writes a response with the bounded connection lifecycle selected by the server.
+///
+/// # Errors
+/// Returns an error when writing or flushing the response fails.
+pub fn write_response_connection(
+    stream: &mut impl Write,
+    response: &OutgoingResponse,
+    keep_alive: bool,
+) -> Result<(), String> {
     let reason = match response.status {
         200 => "OK",
         201 => "Created",
@@ -355,9 +456,10 @@ pub fn write_response(stream: &mut impl Write, response: &OutgoingResponse) -> R
     let retry = response
         .retry_after
         .map_or_else(String::new, |value| format!("Retry-After: {value}\r\n"));
+    let connection = if keep_alive { "keep-alive" } else { "close" };
     write!(
         stream,
-        "HTTP/1.1 {} {reason}\r\nContent-Type: application/json\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n{retry}Content-Length: {}\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {} {reason}\r\nContent-Type: application/json\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n{retry}Content-Length: {}\r\nConnection: {connection}\r\n\r\n",
         response.status,
         response.body.len()
     )

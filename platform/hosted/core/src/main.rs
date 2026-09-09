@@ -3,19 +3,19 @@ mod program_lifecycle;
 mod public_reads;
 
 use layerx_client::client::{Client, ClientConfig, ReconnectPolicy};
-use layerx_client::lni::handshake::{perform, Handshake, HandshakeConfig};
+use layerx_client::lni::handshake::{Handshake, HandshakeConfig, perform};
 use layerx_client::lni::refusal::decode_core_refusal;
-use layerx_client::lni::schema::{decode_envelope, encode_envelope, Capability, Envelope, Version};
+use layerx_client::lni::schema::{Capability, Envelope, Version, decode_envelope, encode_envelope};
 use layerx_client::lni::simulate::SimulateError;
 use layerx_client::lni::transport::{ConnectionGate, FrameTransport, Limits, Uds};
 use layerx_client::read::ReadError;
 use layerx_client::submit::{Submission, SubmitError};
 use layerx_platform_core::{
-    asset_registry, build_send, fixed_hex, hex_decode, hex_encode, main_account, parse_seed,
-    treasury_did, SendRequest,
+    SendRequest, asset_registry, build_send, fixed_hex, hex_decode, hex_encode, main_account,
+    parse_seed, treasury_did,
 };
 use layerx_proof::inclusion::SequencerAuthorization;
-use layerx_proof::receipt::{verify_outcome, AuthorizedBatch};
+use layerx_proof::receipt::{AuthorizedBatch, verify_outcome};
 use layerx_proof::state::decode_account_value;
 use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
 use layerx_types::program_call::NativeProgramCall;
@@ -28,7 +28,7 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::env;
 use std::fs;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::os::unix::net::UnixStream;
@@ -51,9 +51,20 @@ const WIRE_VERSION: &str = "3";
 const RECEIPT_LOOKUP_REQUEST_TAG: u16 = 5;
 const RECEIPT_LOOKUP_RESPONSE_TAG: u16 = 6;
 const ERROR_RESPONSE_TAG: u16 = 25;
+const MAX_JOURNAL_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_REQUESTS_PER_CONNECTION: usize = 128;
 
 static ACTIVE_CONNECTIONS: AtomicUsize = AtomicUsize::new(0);
 static TRACE: AtomicU64 = AtomicU64::new(1);
+
+fn pay_timing(stage: &str, started: Instant) {
+    if std::env::var_os("LAYERX_PAY_TIMING").is_some() {
+        eprintln!(
+            "pay_timing stage={stage} duration_us={}",
+            started.elapsed().as_micros()
+        );
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Plane {
@@ -448,7 +459,11 @@ fn success(result: &serde_json::Value) -> Response {
     )
 }
 
-fn write_response(stream: &mut impl Write, response: &Response) -> Result<(), String> {
+fn write_response(
+    stream: &mut impl Write,
+    response: &Response,
+    keep_alive: bool,
+) -> Result<(), String> {
     let reason = match response.status {
         200 => "OK",
         202 => "Accepted",
@@ -464,9 +479,10 @@ fn write_response(stream: &mut impl Write, response: &Response) -> Result<(), St
     let retry = response.retry_after.map_or(String::new(), |seconds| {
         format!("Retry-After: {seconds}\r\n")
     });
+    let connection = if keep_alive { "keep-alive" } else { "close" };
     write!(
         stream,
-        "HTTP/1.1 {} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nCache-Control: no-store\r\n{retry}Connection: close\r\n\r\n{}",
+        "HTTP/1.1 {} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nCache-Control: no-store\r\n{retry}Connection: {connection}\r\n\r\n{}",
         response.status,
         response.body.len(),
         response.body
@@ -694,6 +710,8 @@ fn submit_activity(
     canonical: &[u8],
     program_ordinal: Option<u16>,
 ) -> Result<Response, Response> {
+    let total_started = Instant::now();
+    let validate_started = Instant::now();
     let registry =
         submission_registry().map_err(|_| refusal(503, "registry_unavailable", Some(5)))?;
     let activity = layerx_wire::activity::decode_signed(canonical, &registry)
@@ -718,12 +736,16 @@ fn submit_activity(
                 .map_err(|_| refusal(400, "invalid_program_lifecycle", None))?;
         }
     }
+    pay_timing("core.submit.validate", validate_started);
     let signer = signer_key(activity.authority())
         .ok_or_else(|| refusal(400, "authority_unsupported", None))?;
+    let connect_started = Instant::now();
     let mut client = connect_client(config).map_err(|error| {
         eprintln!("layerx-core-boundary: {error}");
         refusal(503, "node_unavailable", Some(5))
     })?;
+    pay_timing("core.submit.connect_handshake", connect_started);
+    let admission_started = Instant::now();
     let submission = client
         .submit_signed(&registry, signer, 1, 1, canonical)
         .map_err(|error| match error {
@@ -738,12 +760,14 @@ fn submit_activity(
             SubmitError::Disconnected => refusal(503, "node_unavailable", Some(5)),
             _ => refusal(400, "invalid_activity", None),
         })?;
+    pay_timing("core.submit.admission", admission_started);
     drop(client);
     let activity_id = match submission {
         Submission::Acknowledged(acknowledgement) => acknowledgement.activity_id(),
         Submission::Unknown(unknown) => unknown.activity_id(),
     };
-    match await_receipt(config, activity_id, config.receipt_deadline) {
+    let receipt_started = Instant::now();
+    let result = match await_receipt(config, activity_id, config.receipt_deadline) {
         Ok(Some(facts)) => {
             if program_ordinal.is_some_and(|ordinal| matches!(ordinal, 1 | 2 | 7)) {
                 Ok(success(&serde_json::json!({
@@ -767,7 +791,10 @@ fn submit_activity(
             eprintln!("layerx-core-boundary: {error}");
             Err(refusal(503, "receipt_unavailable", Some(5)))
         }
-    }
+    };
+    pay_timing("core.submit.receipt", receipt_started);
+    pay_timing("core.submit.total", total_started);
+    result
 }
 
 fn simulate_activity(config: &Config, canonical: &[u8]) -> Result<Response, Response> {
@@ -880,6 +907,8 @@ fn simulate_route(config: &Config, request: &Request) -> Response {
 }
 
 fn activities_route(config: &Config, request: &Request) -> Response {
+    let total_started = Instant::now();
+    let decode_started = Instant::now();
     let ordinal = program_lifecycle::ordinal(&request.path)
         .or_else(|| (request.path == "/v1/programs/call").then_some(3));
     if program_lifecycle::ordinal(&request.path).is_some()
@@ -918,9 +947,14 @@ fn activities_route(config: &Config, request: &Request) -> Response {
             return refusal(409, "protocol_idempotency_mismatch", None);
         }
     }
-    match submit_activity(config, &canonical, ordinal) {
+    pay_timing("core.activity.decode", decode_started);
+    let submit_started = Instant::now();
+    let response = match submit_activity(config, &canonical, ordinal) {
         Ok(response) | Err(response) => response,
-    }
+    };
+    pay_timing("core.activity.submit", submit_started);
+    pay_timing("core.activity.total", total_started);
+    response
 }
 
 fn receipt_route(config: &Config, activity_hex: &str) -> Response {
@@ -1016,17 +1050,7 @@ fn readiness(config: &Config) -> Response {
             let Ok(_guard) = config.journal_lock.lock() else {
                 return refusal(503, "journal_unavailable", Some(5));
             };
-            if journal_write(
-                &config.state_dir.join("journal/ready.json"),
-                &JournalEntry {
-                    request_digest: String::new(),
-                    status: 200,
-                    body: String::new(),
-                    retry_after: None,
-                },
-            )
-            .is_err()
-            {
+            if journal_probe(&config.state_dir.join("journal/ready")).is_err() {
                 return refusal(503, "journal_unavailable", Some(5));
             }
             let node = client.handshake().node();
@@ -1322,33 +1346,84 @@ fn request_digest(request: &Request) -> String {
 
 fn journal_read(path: &Path) -> Result<Option<JournalEntry>, String> {
     match fs::read(path) {
-        Ok(bytes) => serde_json::from_slice::<JournalEntry>(&bytes)
-            .map(Some)
-            .map_err(|error| format!("journal entry is corrupt: {error}")),
+        Ok(bytes) => {
+            if bytes.len() as u64 > MAX_JOURNAL_BYTES {
+                return Err("journal entry exceeds its bound".to_owned());
+            }
+            if let Ok(entry) = serde_json::from_slice::<JournalEntry>(&bytes) {
+                return Ok(Some(entry));
+            }
+            let mut latest = None;
+            for record in bytes.split_inclusive(|byte| *byte == b'\n') {
+                if !record.ends_with(b"\n") {
+                    break;
+                }
+                let record = &record[..record.len() - 1];
+                if record.is_empty() {
+                    return Err("journal entry is corrupt: empty record".to_owned());
+                }
+                latest = Some(
+                    serde_json::from_slice::<JournalEntry>(record)
+                        .map_err(|error| format!("journal entry is corrupt: {error}"))?,
+                );
+            }
+            latest
+                .map(Some)
+                .ok_or_else(|| "journal entry is corrupt: no complete record".to_owned())
+        }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error.to_string()),
     }
 }
 
 fn journal_write(path: &Path, entry: &JournalEntry) -> Result<(), String> {
-    let bytes = serde_json::to_vec(entry).map_err(|error| error.to_string())?;
-    let temporary = path.with_extension("tmp");
+    let mut bytes = serde_json::to_vec(entry).map_err(|error| error.to_string())?;
+    bytes.push(b'\n');
+    let mut file = fs::OpenOptions::new()
+        .read(true)
+        .create(true)
+        .append(true)
+        .mode(0o600)
+        .open(path)
+        .map_err(|error| error.to_string())?;
+    let prior_len = file.metadata().map_err(|error| error.to_string())?.len();
+    if prior_len > 0 {
+        file.seek(SeekFrom::End(-1))
+            .map_err(|error| error.to_string())?;
+        let mut last = [0_u8; 1];
+        file.read_exact(&mut last)
+            .map_err(|error| error.to_string())?;
+        if last[0] != b'\n' {
+            bytes.insert(0, b'\n');
+        }
+    }
+    if prior_len.saturating_add(bytes.len() as u64) > MAX_JOURNAL_BYTES {
+        return Err("journal entry exceeds its bound".to_owned());
+    }
+    file.write_all(&bytes).map_err(|error| error.to_string())?;
+    file.sync_data().map_err(|error| error.to_string())?;
+    if prior_len == 0 {
+        let directory = path
+            .parent()
+            .ok_or_else(|| "journal path has no parent".to_owned())?;
+        fs::File::open(directory)
+            .and_then(|handle| handle.sync_all())
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+fn journal_probe(path: &Path) -> Result<(), String> {
     let mut file = fs::OpenOptions::new()
         .write(true)
         .create(true)
         .truncate(true)
         .mode(0o600)
-        .open(&temporary)
+        .open(path)
         .map_err(|error| error.to_string())?;
-    file.write_all(&bytes).map_err(|error| error.to_string())?;
-    file.sync_all().map_err(|error| error.to_string())?;
-    fs::rename(&temporary, path).map_err(|error| error.to_string())?;
-    let directory = path
-        .parent()
-        .ok_or_else(|| "journal path has no parent".to_owned())?;
-    fs::File::open(directory)
-        .and_then(|handle| handle.sync_all())
-        .map_err(|error| error.to_string())
+    file.write_all(b"ready\n")
+        .map_err(|error| error.to_string())?;
+    file.sync_data().map_err(|error| error.to_string())
 }
 
 fn stateful(
@@ -1357,6 +1432,8 @@ fn stateful(
     request: &Request,
     execute: impl FnOnce() -> Response,
 ) -> Response {
+    let total_started = Instant::now();
+    let timed = scope == "activities";
     let Some(key) = request.headers.get("idempotency-key") else {
         return if scope == "activities" {
             execute()
@@ -1367,12 +1444,21 @@ fn stateful(
     if !valid_key(key) {
         return refusal(400, "invalid_idempotency_key", None);
     }
+    let lock_started = Instant::now();
     let Ok(_guard) = config.journal_lock.lock() else {
         return refusal(503, "journal_unavailable", Some(5));
     };
+    if timed {
+        pay_timing("core.journal.lock", lock_started);
+    }
     let path = journal_path(config, scope, key);
     let digest = request_digest(request);
-    match journal_read(&path) {
+    let read_started = Instant::now();
+    let prior = journal_read(&path);
+    if timed {
+        pay_timing("core.journal.read", read_started);
+    }
+    match prior {
         Ok(Some(entry)) if entry.request_digest == digest => {
             if entry.status == 202 && program_lifecycle::ordinal(&request.path).is_some() {
                 let response = execute();
@@ -1404,6 +1490,17 @@ fn stateful(
             return refusal(503, "journal_unavailable", Some(5));
         }
     }
+    stateful_execute_new(&path, digest, scope, timed, total_started, execute)
+}
+
+fn stateful_execute_new(
+    path: &Path,
+    digest: String,
+    scope: &str,
+    timed: bool,
+    total_started: Instant,
+    execute: impl FnOnce() -> Response,
+) -> Response {
     let pending = if scope == "activities" {
         json_response(
             202,
@@ -1412,8 +1509,9 @@ fn stateful(
     } else {
         refusal(409, "outcome_unknown", Some(5))
     };
+    let pending_started = Instant::now();
     if journal_write(
-        &path,
+        path,
         &JournalEntry {
             request_digest: digest.clone(),
             status: pending.status,
@@ -1425,9 +1523,17 @@ fn stateful(
     {
         return refusal(503, "journal_unavailable", Some(5));
     }
+    if timed {
+        pay_timing("core.journal.pending_commit", pending_started);
+    }
+    let execute_started = Instant::now();
     let response = execute();
+    if timed {
+        pay_timing("core.journal.execute", execute_started);
+    }
+    let final_started = Instant::now();
     if let Err(error) = journal_write(
-        &path,
+        path,
         &JournalEntry {
             request_digest: digest,
             status: response.status,
@@ -1437,6 +1543,10 @@ fn stateful(
     ) {
         eprintln!("layerx-core-boundary: journal: {error}");
         return refusal(503, "journal_unavailable", Some(5));
+    }
+    if timed {
+        pay_timing("core.journal.final_commit", final_started);
+        pay_timing("core.journal.total", total_started);
     }
     response
 }
@@ -1739,9 +1849,21 @@ fn handle_connection(config: &Arc<Config>, plane: Plane, tcp: TcpStream) -> Resu
     };
     let connection = ServerConnection::new(Arc::clone(tls)).map_err(|error| error.to_string())?;
     let mut stream = StreamOwned::new(connection, tcp);
-    let response = parse_client_request(&mut stream).map_or_else(
-        |_| refusal(400, "invalid_request", None),
-        |request| match plane {
+    for request_number in 0..MAX_REQUESTS_PER_CONNECTION {
+        let request = match parse_client_request(&mut stream) {
+            Ok(request) => request,
+            Err(_) if request_number == 0 => {
+                write_response(&mut stream, &refusal(400, "invalid_request", None), false)?;
+                break;
+            }
+            Err(_) => break,
+        };
+        let keep_alive = request_number + 1 < MAX_REQUESTS_PER_CONNECTION
+            && request
+                .headers
+                .get("connection")
+                .is_none_or(|value| !value.eq_ignore_ascii_case("close"));
+        let response = match plane {
             Plane::Core => core_route(config, &request),
             Plane::Admin => {
                 let mut response = admin_route(config, &request);
@@ -1750,9 +1872,13 @@ fn handle_connection(config: &Arc<Config>, plane: Plane, tcp: TcpStream) -> Resu
                 }
                 response
             }
-        },
-    );
-    write_response(&mut stream, &response)?;
+        };
+        write_response(&mut stream, &response, keep_alive)?;
+        stream.flush().map_err(|error| error.to_string())?;
+        if !keep_alive {
+            break;
+        }
+    }
     stream.conn.send_close_notify();
     let _ = stream.flush();
     Ok(())
@@ -1814,5 +1940,60 @@ fn main() {
     if let Err(error) = config().and_then(platform_core) {
         eprintln!("layerx-core-boundary: {error}");
         std::process::exit(2);
+    }
+}
+
+#[cfg(test)]
+mod journal_tests {
+    use super::{JournalEntry, TRACE, journal_read, journal_write};
+    use std::fs;
+    use std::io::Write;
+    use std::sync::atomic::Ordering;
+
+    fn entry(status: u16, body: &str) -> JournalEntry {
+        JournalEntry {
+            request_digest: "request".to_owned(),
+            status,
+            body: body.to_owned(),
+            retry_after: None,
+        }
+    }
+
+    #[test]
+    fn append_journal_recovers_last_complete_transition_and_legacy_record() {
+        let path = std::env::temp_dir().join(format!(
+            "layerx-core-journal-{}-{}.json",
+            std::process::id(),
+            TRACE.fetch_add(1, Ordering::AcqRel)
+        ));
+        journal_write(&path, &entry(202, "pending"))
+            .unwrap_or_else(|error| panic!("pending journal: {error}"));
+        journal_write(&path, &entry(200, "complete"))
+            .unwrap_or_else(|error| panic!("complete journal: {error}"));
+        let mut file = fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap_or_else(|error| panic!("open journal: {error}"));
+        file.write_all(b"{\"request_digest\":")
+            .unwrap_or_else(|error| panic!("partial journal: {error}"));
+        file.sync_data()
+            .unwrap_or_else(|error| panic!("sync partial journal: {error}"));
+        let recovered = journal_read(&path)
+            .unwrap_or_else(|error| panic!("read journal: {error}"))
+            .unwrap_or_else(|| panic!("journal is missing"));
+        assert_eq!(recovered.status, 200);
+        assert_eq!(recovered.body, "complete");
+
+        let legacy = serde_json::to_vec(&entry(202, "legacy"))
+            .unwrap_or_else(|error| panic!("legacy journal: {error}"));
+        fs::write(&path, legacy).unwrap_or_else(|error| panic!("write legacy journal: {error}"));
+        journal_write(&path, &entry(200, "migrated"))
+            .unwrap_or_else(|error| panic!("migrate journal: {error}"));
+        let migrated = journal_read(&path)
+            .unwrap_or_else(|error| panic!("read migrated journal: {error}"))
+            .unwrap_or_else(|| panic!("migrated journal is missing"));
+        assert_eq!(migrated.status, 200);
+        assert_eq!(migrated.body, "migrated");
+        fs::remove_file(&path).unwrap_or_else(|error| panic!("remove journal: {error}"));
     }
 }

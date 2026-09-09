@@ -6,20 +6,21 @@ pub mod authority_evidence;
 pub mod http;
 pub mod store;
 
-use layerx_crypto::disclosure::{bind as bind_disclosure, AmountRole, CounterpartyRole};
-use layerx_crypto::{ed25519, SignatureMessage};
+use layerx_crypto::disclosure::{AmountRole, CounterpartyRole, bind as bind_disclosure};
+use layerx_crypto::{SignatureMessage, ed25519};
 use layerx_proof::program::{
-    verify_authorized_program_execution, verify_program_execution,
     AuthorizedProgramExecutionExpectation, ProgramExecutionExpectation, VerifiedProgramExecution,
+    verify_authorized_program_execution, verify_program_execution,
 };
-use layerx_proof::receipt::{verify_outcome, AuthorizedBatch, ReceiptCheck};
+use layerx_proof::receipt::{AuthorizedBatch, ReceiptCheck, verify_outcome};
 use layerx_types::intent::{ProgramCallFailure, ProgramCallOutcome, ProgramLegacyValue};
 pub use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
 use layerx_wire::activity::{decode_signed, encode_signed, encode_unsigned};
-use layerx_wire::hash::{activity_id, Domain};
+use layerx_wire::hash::{Domain, activity_id};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::fmt::{Display, Formatter};
+use std::time::Instant;
 use subtle::ConstantTimeEq;
 use zeroize::Zeroize;
 
@@ -27,6 +28,17 @@ use store::{KeyRecord, RedisStore};
 
 const KEY_PREFIX: &str = "lxp_live_";
 const KEY_BYTES: usize = 32;
+
+/// Emits one monotonic payment-path duration when qualification timing is enabled.
+#[doc(hidden)]
+pub fn pay_timing(stage: &str, started: Instant) {
+    if std::env::var_os("LAYERX_PAY_TIMING").is_some() {
+        eprintln!(
+            "pay_timing stage={stage} duration_us={}",
+            started.elapsed().as_micros()
+        );
+    }
+}
 
 /// Authentication failures shared by every hosted ingress using gateway API
 /// keys. Persistence failure is deliberately distinct from a bad credential
@@ -312,6 +324,7 @@ pub struct VerifiedOperation {
 pub struct VerifiedSubmission {
     activity_id: [u8; 32],
     idempotency_key: [u8; 32],
+    activity_type: ActivityType,
     transfer: Option<VerifiedTransfer>,
 }
 
@@ -373,6 +386,11 @@ impl VerifiedSubmission {
     #[must_use]
     pub const fn idempotency_key(self) -> [u8; 32] {
         self.idempotency_key
+    }
+
+    #[must_use]
+    pub const fn activity_type(self) -> ActivityType {
+        self.activity_type
     }
 
     #[must_use]
@@ -456,6 +474,7 @@ pub fn verify_submission(
     Ok(VerifiedSubmission {
         activity_id: activity_id(&activity).map_err(|_| GatewayError::InvalidRequest)?,
         idempotency_key: activity.idempotency_key(),
+        activity_type: activity.activity_type(),
         transfer,
     })
 }
@@ -978,7 +997,7 @@ pub fn configured_sequencer(
 
 #[cfg(test)]
 mod tests {
-    use super::{platform_gateway_program_routes, production_route, IssuedKey, ProductionRoute};
+    use super::{IssuedKey, ProductionRoute, platform_gateway_program_routes, production_route};
 
     #[test]
     fn issued_key_debug_redacts_the_credential() {
@@ -1046,11 +1065,13 @@ mod tests {
         ));
         assert!(production_route("GET", "/v1/programs/activities/aa").is_err());
         assert!(production_route("GET", "/v1/programs/activities/../state").is_err());
-        assert!(production_route(
-            "GET",
-            &format!("/v1/programs/activities/{}", "A".repeat(64))
-        )
-        .is_err());
+        assert!(
+            production_route(
+                "GET",
+                &format!("/v1/programs/activities/{}", "A".repeat(64))
+            )
+            .is_err()
+        );
         assert!(production_route("GET", "/v1/programs/registry").is_err());
     }
 }

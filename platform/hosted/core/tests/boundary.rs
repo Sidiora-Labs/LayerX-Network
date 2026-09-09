@@ -5,14 +5,14 @@
 mod lxgb_metadata;
 
 use ed25519_dalek::{Signer, SigningKey};
-use layerx_client::lni::handshake::{perform, HandshakeConfig};
-use layerx_client::lni::preparation::{preparation_state, PreparationStateContext};
+use layerx_client::lni::handshake::{HandshakeConfig, perform};
+use layerx_client::lni::preparation::{PreparationStateContext, preparation_state};
 use layerx_client::lni::schema::Version;
 use layerx_client::lni::simulate::{
-    simulation_boundary_id, simulation_evidence_digest, SimulationEvidence,
+    SimulationEvidence, simulation_boundary_id, simulation_evidence_digest,
 };
 use layerx_client::lni::transport::{ConnectionGate, Limits, Uds};
-use layerx_platform_core::{build_send, hex_encode, treasury_did, SendRequest};
+use layerx_platform_core::{SendRequest, build_send, hex_encode, treasury_did};
 use layerx_types::activity::{Authority, EnvelopeBuilder, Signature, TimestampBound};
 use layerx_types::amount::Amount;
 use layerx_types::ids::{Did, IdempotencyKey};
@@ -1070,6 +1070,10 @@ struct HttpAnswer {
 }
 
 fn parse_http(raw: &[u8]) -> HttpAnswer {
+    parse_http_with_connection(raw, "close")
+}
+
+fn parse_http_with_connection(raw: &[u8], expected_connection: &str) -> HttpAnswer {
     let position = raw
         .windows(4)
         .position(|window| window == b"\r\n\r\n")
@@ -1103,7 +1107,10 @@ fn parse_http(raw: &[u8]) -> HttpAnswer {
         headers.get("cache-control").map(String::as_str),
         Some("no-store")
     );
-    assert_eq!(headers.get("connection").map(String::as_str), Some("close"));
+    assert_eq!(
+        headers.get("connection").map(String::as_str),
+        Some(expected_connection)
+    );
     assert!(!headers.contains_key("transfer-encoding"));
     HttpAnswer {
         status,
@@ -1157,7 +1164,7 @@ impl Http {
         body: &[u8],
     ) -> HttpAnswer {
         let mut request = format!(
-            "{method} {target} HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\n",
+            "{method} {target} HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\nConnection: close\r\n",
             body.len()
         );
         for (name, value) in headers {
@@ -1844,9 +1851,11 @@ fn assert_public_reads(boundary: &Boundary, cluster: &Cluster) {
         value["result"]["sequencer_public_key"],
         serde_json::json!(hex_encode(&cluster.sequencer_key))
     );
-    assert!(value["trace"]
-        .as_str()
-        .is_some_and(|trace| trace.starts_with("core-")));
+    assert!(
+        value["trace"]
+            .as_str()
+            .is_some_and(|trace| trace.starts_with("core-"))
+    );
 
     let state = core.get("/v1/state");
     assert_eq!(state.status, 200, "{}", state.body);
@@ -2604,13 +2613,20 @@ fn receipt_latency_and_public_proofs_use_real_committed_refusals() {
                 document["result"]["signed_header"]["public_key"],
                 hex_encode(&cluster.sequencer_key)
             );
-            assert!(document["result"]["proof"]["leaf_count"]
-                .as_u64()
-                .is_some_and(|count| count > 0));
+            assert!(
+                document["result"]["proof"]["leaf_count"]
+                    .as_u64()
+                    .is_some_and(|count| count > 0)
+            );
         }
     }
     elapsed.sort_unstable();
-    println!("submit_to_receipt_us samples={} p50={} p99={} outcome=committed_refusal transport=core_https receipt_wait=commit_condition", elapsed.len(), elapsed[9], elapsed[19]);
+    println!(
+        "submit_to_receipt_us samples={} p50={} p99={} outcome=committed_refusal transport=core_https receipt_wait=commit_condition",
+        elapsed.len(),
+        elapsed[9],
+        elapsed[19]
+    );
 }
 
 #[test]
@@ -2643,7 +2659,7 @@ fn malformed_program_transfer_and_account_are_refused_before_native_admission() 
 }
 
 fn receipt_wait_request(socket: &Path, selector: &[u8]) -> (u16, Vec<u8>) {
-    use layerx_client::lni::schema::{decode_envelope, encode_envelope, Envelope};
+    use layerx_client::lni::schema::{Envelope, decode_envelope, encode_envelope};
     use layerx_client::lni::transport::FrameTransport;
     let gate = ConnectionGate::new(1);
     let mut transport = must(Uds::connect(socket, &gate, lni_limits()), "wait connection");
@@ -2738,7 +2754,7 @@ fn authenticated_receipt_wait_returns_on_commit_and_bounds_missing_receipts() {
 }
 
 fn admit_receipt_wait_send(cluster: &Cluster, canonical: &[u8], activity_id: [u8; 32]) {
-    use layerx_client::submit::{submit_signed, Submission, SubmissionContext};
+    use layerx_client::submit::{Submission, SubmissionContext, submit_signed};
     let gate = ConnectionGate::new(1);
     let mut transport = must(
         Uds::connect(&cluster.lni_socket, &gate, lni_limits()),
@@ -2851,7 +2867,9 @@ fn receipt_events_require_auth_and_bind_global_sequence() {
     let event = get("/internal/v1/receipt-events/1");
     assert_eq!(event.status, 200, "{}", event.body);
     assert_eq!(json(&event)["result"]["global_sequence"], 1);
-    assert!(json(&event)["result"]["receipt"]
-        .as_str()
-        .is_some_and(|value| !value.is_empty()));
+    assert!(
+        json(&event)["result"]["receipt"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty())
+    );
 }

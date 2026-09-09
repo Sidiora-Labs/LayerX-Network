@@ -276,7 +276,13 @@ fn start_local_redis(cluster: &Cluster, certificates: &Certificates) -> LocalRed
         "users.acl",
         &format!("user default off\nuser qualification on >{redis_password} +@all ~* &*\n"),
     );
-    let redis_config = format!("bind 127.0.0.1\nport 0\ntls-port {redis_port}\ntls-cert-file {}\ntls-key-file {}\ntls-ca-cert-file {}\ntls-auth-clients no\naclfile {acl}\nappendonly yes\nappendfsync always\ndir {}\nprotected-mode yes\n", certificates.path("core.pem").display(), certificates.path("core-key.pem").display(), certificates.path("ca.pem").display(), redis_directory.display());
+    let redis_config = format!(
+        "bind 127.0.0.1\nport 0\ntls-port {redis_port}\ntls-cert-file {}\ntls-key-file {}\ntls-ca-cert-file {}\ntls-auth-clients no\naclfile {acl}\nappendonly yes\nappendfsync always\ndir {}\nprotected-mode yes\n",
+        certificates.path("core.pem").display(),
+        certificates.path("core-key.pem").display(),
+        certificates.path("ca.pem").display(),
+        redis_directory.display()
+    );
     let redis_config_path = local_secret(&redis_directory, "redis.conf", &redis_config);
     let mut redis = spawn(
         Path::new("/usr/bin/redis-server"),
@@ -544,10 +550,17 @@ fn run_lifecycle_script(
     make_dir(&evidence_directory, 0o700);
     let authority_token =
         fs::read_to_string(authority_token_file).required("local authority token");
-    let authority_curl = local_secret(&cluster.root, "authority-curl.conf", &format!(
-        "silent\nshow-error\nfail\nmax-time = 60\nproto = \"=https\"\ncacert = \"{}\"\ncert = \"{}\"\nkey = \"{}\"\nheader = \"Authorization: Bearer {}\"\n",
-        certificates.path("ca.pem").display(), certificates.path("client.pem").display(), certificates.path("client-key.pem").display(), authority_token.trim()
-    ));
+    let authority_curl = local_secret(
+        &cluster.root,
+        "authority-curl.conf",
+        &format!(
+            "silent\nshow-error\nfail\nmax-time = 60\nproto = \"=https\"\ncacert = \"{}\"\ncert = \"{}\"\nkey = \"{}\"\nheader = \"Authorization: Bearer {}\"\n",
+            certificates.path("ca.pem").display(),
+            certificates.path("client.pem").display(),
+            certificates.path("client-key.pem").display(),
+            authority_token.trim()
+        ),
+    );
     let verifier_environment = BTreeMap::from([
         ("LAYERX_LIFECYCLE_MANIFEST", text(&manifest)),
         ("LAYERX_TEST_SEQUENCER_KEY_FILE", signer_file.clone()),
@@ -793,9 +806,11 @@ fn local_gateway_rpc() {
     );
     let first = call("lx_sendActivity", params.clone(), true);
     assert_eq!(first["result"]["commitment"], "executed", "{first}");
-    assert!(first["result"]["receipt"]
-        .as_str()
-        .is_some_and(|r| !r.is_empty()));
+    assert!(
+        first["result"]["receipt"]
+            .as_str()
+            .is_some_and(|r| !r.is_empty())
+    );
     assert_eq!(
         call("lx_sendActivity", params, true)["result"],
         first["result"]
@@ -1310,6 +1325,68 @@ fn local_gateway_grant_draw_and_subscription_renewal_latency() {
     print_payment_timings(&cluster);
 }
 
+struct PersistentGatewayHttp {
+    stream: native_tls::TlsStream<TcpStream>,
+}
+
+impl PersistentGatewayHttp {
+    fn connect(http: &Http) -> Self {
+        let tcp = must(TcpStream::connect(("127.0.0.1", http.port)), "connect");
+        must(
+            tcp.set_read_timeout(Some(Duration::from_secs(60))),
+            "read timeout",
+        );
+        Self {
+            stream: must(http.connector().connect("localhost", tcp), "TLS connect"),
+        }
+    }
+
+    fn rpc(&mut self, authorization: &str, body: &[u8]) -> HttpAnswer {
+        let request = format!(
+            "POST /rpc HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nAuthorization: {authorization}\r\nContent-Length: {}\r\nConnection: keep-alive\r\n\r\n",
+            body.len()
+        );
+        must(self.stream.write_all(request.as_bytes()), "write request");
+        must(self.stream.write_all(body), "write body");
+        must(self.stream.flush(), "flush request");
+
+        let mut raw = Vec::with_capacity(2048);
+        let mut chunk = [0_u8; 2048];
+        let header_end = loop {
+            let count = must(self.stream.read(&mut chunk), "read response headers");
+            assert!(count > 0, "gateway closed a reusable connection");
+            raw.extend_from_slice(&chunk[..count]);
+            assert!(raw.len() <= 8 * 1024 * 1024, "gateway response is bounded");
+            if let Some(position) = raw.windows(4).position(|window| window == b"\r\n\r\n") {
+                break position + 4;
+            }
+        };
+        let headers = std::str::from_utf8(&raw[..header_end]).required("response headers");
+        let content_length = headers
+            .lines()
+            .find_map(|line| {
+                line.split_once(':').and_then(|(name, value)| {
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().required("content length"))
+                })
+            })
+            .required("content-length");
+        let total = header_end + content_length;
+        assert!(total <= 8 * 1024 * 1024, "gateway response is bounded");
+        while raw.len() < total {
+            let count = must(self.stream.read(&mut chunk), "read response body");
+            assert!(count > 0, "gateway truncated a reusable response");
+            raw.extend_from_slice(&chunk[..count]);
+        }
+        assert_eq!(
+            raw.len(),
+            total,
+            "gateway response did not overrun its frame"
+        );
+        parse_http_with_connection(&raw, "keep-alive")
+    }
+}
+
 #[test]
 fn local_gateway_successful_send_latency() {
     let (cluster, funding) = funding::start();
@@ -1348,6 +1425,7 @@ fn local_gateway_successful_send_latency() {
         json(&balance)["result"]["next_sequence"],
         json(&balance)["result"]["balance"]
     );
+    let mut send_http = PersistentGatewayHttp::connect(&http);
     let mut samples = Vec::new();
     let mut last_signed = None;
     for index in 0..20 {
@@ -1376,15 +1454,7 @@ fn local_gateway_successful_send_latency() {
         )
         .required("RPC SEND");
         let started = Instant::now();
-        let answer = http.request(
-            "POST",
-            "/rpc",
-            &[
-                ("Content-Type", "application/json"),
-                ("Authorization", authorization.as_str()),
-            ],
-            &request,
-        );
+        let answer = send_http.rpc(&authorization, &request);
         let elapsed = started.elapsed().as_micros();
         assert_eq!(answer.status, 200, "{}", answer.body);
         let result = json(&answer);
@@ -1399,12 +1469,32 @@ fn local_gateway_successful_send_latency() {
         last_signed = Some(signed);
     }
     samples.sort_unstable();
-    println!("successful_send_submit_to_receipt_us samples=20 p50={} p99={} transport=gateway_https_json_rpc commitment=executed funding=verified_custody destination=funded_agent_main receipt_wait=commit_condition", samples[9], samples[19]);
+    println!(
+        "successful_send_submit_to_receipt_us samples=20 p50={} p99={} transport=gateway_https_json_rpc commitment=executed funding=verified_custody destination=funded_agent_main receipt_wait=commit_condition",
+        samples[9], samples[19]
+    );
+    print_payment_timings(&cluster);
     assert_funded_commitments(
         &http,
         &authorization,
         &last_signed.required("successful SEND"),
     );
+}
+
+fn print_payment_timings(cluster: &Cluster) {
+    for file in [
+        "sequencer.stderr",
+        "boundary.stderr",
+        "layerx-gateway.stderr",
+    ] {
+        let lines = must(fs::read_to_string(cluster.root.join(file)), "timing log");
+        for line in lines
+            .lines()
+            .filter(|line| line.contains("pay_timing") || line.starts_with("pay-native "))
+        {
+            println!("{file} {line}");
+        }
+    }
 }
 
 fn verify_funded_receipt(
@@ -1621,4 +1711,136 @@ fn local_gateway_websocket_receipt_wake() {
         &serde_json::json!({"jsonrpc":"2.0","id":3,"method":"lx_subscribe","params":["account", "00".repeat(32)]}),
     );
     assert_eq!(ws_receive(&mut stream)["error"]["code"], -32602);
+}
+
+#[test]
+fn local_gateway_committed_payment_reads() {
+    let (cluster, funding) = funding::start();
+    let certificates = certificates(&cluster.root);
+    let boundary = start_boundary(&cluster, &certificates);
+    let identity = start_local_identity(&cluster, &certificates);
+    let authority = start_local_authority(&cluster, &certificates);
+    let redis = start_local_redis(&cluster, &certificates);
+    let gateway = start_local_gateway(
+        &cluster,
+        &certificates,
+        &boundary,
+        &identity,
+        &authority,
+        &redis,
+    );
+    let http = Http {
+        port: gateway.port,
+        ca: Certificate::from_der(&certificates.ca_der).required("CA"),
+        identity: None,
+    };
+    let read = |method: &str, params: serde_json::Value| {
+        let request = serde_json::to_vec(
+            &serde_json::json!({"jsonrpc":"2.0","id":1,"method":method,"params":params}),
+        )
+        .required("read request");
+        let answer = http.request(
+            "POST",
+            "/rpc",
+            &[("Content-Type", "application/json")],
+            &request,
+        );
+        assert_eq!(answer.status, 200, "{}", answer.body);
+        json(&answer)
+    };
+    let balances = read("lx_getBalances", serde_json::json!([cluster.treasury_did]));
+    let accounts = balances["result"]["accounts"]
+        .as_array()
+        .required("committed accounts");
+    let source = layerx_platform_core::main_account(&cluster.treasury_did).required("source");
+    let account = accounts
+        .iter()
+        .find(|account| account["account_id"] == hex_encode(&source))
+        .required("funded main account");
+    assert_eq!(account["balance"], "100000000000000");
+    assert_eq!(account["asset_id"], hex_encode(&cluster.asset));
+    assert!(
+        !account["proof_material"]
+            .as_str()
+            .required("native proof")
+            .is_empty()
+    );
+    let assets = read("lx_listAssets", serde_json::json!([]));
+    let assets = assets["result"]["assets"].as_array().required("assets");
+    assert_eq!(assets.len(), 1);
+    assert_eq!(assets[0]["asset_id"], hex_encode(&cluster.asset));
+    assert_eq!(assets[0]["symbol"], "TEST");
+    let detail = read(
+        "lx_getAsset",
+        serde_json::json!([hex_encode(&cluster.asset)]),
+    );
+    assert_eq!(detail["result"]["asset"], assets[0]);
+    assert_eq!(
+        detail["result"]["verification"],
+        "authenticated_committed_snapshot"
+    );
+    assert_committed_fee_reads(&cluster, &funding, &http, source, &read);
+}
+
+fn assert_committed_fee_reads(
+    cluster: &Cluster,
+    funding: &funding::Funding,
+    http: &Http,
+    source: [u8; 32],
+    read: &impl Fn(&str, serde_json::Value) -> serde_json::Value,
+) {
+    let signed = funding::send(
+        &cluster.treasury_seed,
+        account_sequence(&cluster.lni_socket, &cluster.treasury_did),
+        &SendRequest {
+            network_id: NETWORK_ID,
+            source_did: cluster.treasury_did.clone(),
+            destination_did: funding.recipient_did.clone(),
+            asset: cluster.asset,
+            amount: 1,
+            account_sequence: rpc_account_sequence(http, &hex_encode(&source), 2),
+            idempotency_key: random32(),
+            not_before_ms: now_ms() - 1000,
+            expires_at_ms: now_ms() + 60000,
+            fee_limit: 1_000_000_000_000,
+        },
+    )
+    .required("signed estimate activity");
+    let fee = read(
+        "lx_estimateFee",
+        serde_json::json!([hex_encode(&signed.canonical)]),
+    );
+    assert_eq!(
+        fee["result"]["fee"],
+        (signed.canonical.len() + 4).to_string()
+    );
+    assert_eq!(fee["result"]["canonical_bytes"], signed.canonical.len());
+    assert_eq!(
+        fee["result"]["canonical_schedule"]
+            .as_str()
+            .required("schedule")
+            .len(),
+        430
+    );
+    let program = signed_program_call(&cluster.treasury_seed, &cluster.treasury_did, 1, random32());
+    assert_eq!(
+        read("lx_estimateFee", serde_json::json!([hex_encode(&program)]))["error"]["code"],
+        -32001
+    );
+    assert_eq!(
+        read("lx_getAsset", serde_json::json!(["63".repeat(32)]))["error"]["code"],
+        -32001
+    );
+    assert_eq!(
+        read("lx_getAsset", serde_json::json!(["00".repeat(32)]))["error"]["code"],
+        -32602
+    );
+    assert_eq!(
+        read("lx_estimateFee", serde_json::json!(["abcd"]))["error"]["code"],
+        -32602
+    );
+    assert_eq!(
+        read("lx_getBalances", serde_json::json!(["bad/path"]))["error"]["code"],
+        -32602
+    );
 }

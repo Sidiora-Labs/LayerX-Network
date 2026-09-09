@@ -1,8 +1,8 @@
 use super::{
-    json_response, media_type_is, parse_hex32, public_reads, response, Config, IncomingRequest,
-    OutgoingResponse,
+    Config, IncomingRequest, OutgoingResponse, json_response, media_type_is, parse_hex32,
+    public_reads, response,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 pub(super) fn error(id: &Value, code: i32, message: &str) -> Value {
     json!({"jsonrpc":"2.0", "id":id, "error":{"code":code,"message":message}})
@@ -29,8 +29,11 @@ fn selector(method: &str, params: Option<&Value>) -> Result<String, i32> {
         }
     }
     if method == "lx_getProof" {
-        if let [Value::String(kind), Value::String(activity), Value::String(account)] =
-            args.as_slice()
+        if let [
+            Value::String(kind),
+            Value::String(activity),
+            Value::String(account),
+        ] = args.as_slice()
         {
             if kind != "account"
                 || [activity, account]
@@ -255,31 +258,52 @@ fn upstream_result(id: &Value, answer: &OutgoingResponse) -> Result<Value, Value
     Err(refused)
 }
 
-fn send(config: &Config, request: &IncomingRequest, id: &Value, params: Option<&Value>) -> Value {
-    let (canonical, commitment) = match send_params(params) {
-        Ok(value) => value,
-        Err(code) => return error(id, code, "Invalid params"),
-    };
-    let record = match super::authenticate_key(config, request) {
-        Ok(record) => record,
-        Err(answer) => return upstream_result(id, &answer).unwrap_or_else(|value| value),
-    };
-    if !super::permits(&record, &super::ProductionRoute::Activity) {
-        return error(id, -32002, "Insufficient scope");
-    }
-    let Ok(activity) = super::decode_signed(&canonical, &config.modules) else {
-        return error(id, -32602, "Invalid canonical activity");
-    };
-    let path = match (
-        activity.activity_type().module(),
-        activity.activity_type().ordinal(),
-    ) {
+fn send_path(activity_type: layerx_types::payload::ActivityType) -> &'static str {
+    match (activity_type.module(), activity_type.ordinal()) {
         (super::ModuleId::Programs, 1) => "/v1/programs/deploy",
         (super::ModuleId::Programs, 2) => "/v1/programs/upgrade",
         (super::ModuleId::Programs, 3) => "/v1/programs/call",
         (super::ModuleId::Programs, 7) => "/v1/programs/wind-down",
         _ => "/v1/activities",
+    }
+}
+
+fn send(config: &Config, request: &IncomingRequest, id: &Value, params: Option<&Value>) -> Value {
+    let total_started = std::time::Instant::now();
+    let params_started = std::time::Instant::now();
+    let (canonical, commitment) = match send_params(params) {
+        Ok(value) => value,
+        Err(code) => return error(id, code, "Invalid params"),
     };
+    layerx_platform_gateway::pay_timing("gateway.rpc.params", params_started);
+    let auth_started = std::time::Instant::now();
+    let record = match super::authenticate_key(config, request) {
+        Ok(record) => record,
+        Err(answer) => return upstream_result(id, &answer).unwrap_or_else(|value| value),
+    };
+    layerx_platform_gateway::pay_timing("gateway.rpc.authenticate", auth_started);
+    if !super::permits(&record, &super::ProductionRoute::Activity) {
+        return error(id, -32002, "Insufficient scope");
+    }
+    let verify_started = std::time::Instant::now();
+    let Ok(signer_public_key) = super::parse_hex32(&record.signer_public_key) else {
+        return error(id, -32603, "Gateway persistence unavailable");
+    };
+    let verified = match layerx_platform_gateway::verify_submission(
+        &canonical,
+        &config.modules,
+        config.protocol_version,
+        config.protocol_network_id,
+        &signer_public_key,
+    ) {
+        Ok(verified) => verified,
+        Err(layerx_platform_gateway::GatewayError::Forbidden) => {
+            return error(id, -32002, "Activity authorization refused");
+        }
+        Err(_) => return error(id, -32602, "Invalid canonical activity"),
+    };
+    layerx_platform_gateway::pay_timing("gateway.rpc.verify_submission", verify_started);
+    let path = send_path(verified.activity_type());
     let Ok(route) = super::production_route("POST", path) else {
         return error(id, -32603, "Invalid submission route");
     };
@@ -290,7 +314,7 @@ fn send(config: &Config, request: &IncomingRequest, id: &Value, params: Option<&
     headers.insert("content-type".into(), "application/octet-stream".into());
     headers.insert(
         "idempotency-key".into(),
-        super::hex(&activity.idempotency_key()),
+        super::hex(&verified.idempotency_key()),
     );
     let forwarded = IncomingRequest {
         method: "POST".into(),
@@ -298,6 +322,7 @@ fn send(config: &Config, request: &IncomingRequest, id: &Value, params: Option<&
         headers,
         body: canonical,
     };
+    let proxy_started = std::time::Instant::now();
     let answer = super::activity(
         config,
         &forwarded,
@@ -305,7 +330,9 @@ fn send(config: &Config, request: &IncomingRequest, id: &Value, params: Option<&
         &super::trace(request),
         path == "/v1/programs/call",
         true,
+        Some(verified),
     );
+    layerx_platform_gateway::pay_timing("gateway.rpc.activity", proxy_started);
     let mut result = match upstream_result(id, &answer) {
         Ok(result) => result,
         Err(mut error) => {
@@ -331,7 +358,9 @@ fn send(config: &Config, request: &IncomingRequest, id: &Value, params: Option<&
     } else if !complete_commitment(config, &mut result, commitment) {
         return pending_commitment(id, commitment, &result);
     }
-    json!({"jsonrpc":"2.0", "id":id, "result":result})
+    let response = json!({"jsonrpc":"2.0", "id":id, "result":result});
+    layerx_platform_gateway::pay_timing("gateway.rpc.total", total_started);
+    response
 }
 
 pub(super) fn read_result(config: &Config, path: &str) -> Option<Value> {
@@ -351,48 +380,40 @@ fn complete_commitment(config: &Config, result: &mut Value, commitment: Commitme
     else {
         return false;
     };
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    loop {
-        if let Some(proof) =
-            read_result(config, &format!("/v1/proofs/receipt/{activity}")).filter(|proof| {
-                proof["activity_id"] == activity && proof["canonical_value"] == result["receipt"]
-            })
+    let Some(proof) =
+        read_result(config, &format!("/v1/proofs/receipt/{activity}")).filter(|proof| {
+            proof["activity_id"] == activity && proof["canonical_value"] == result["receipt"]
+        })
+    else {
+        return false;
+    };
+    if commitment == Commitment::Batched {
+        result["commitment"] = json!("batched");
+        result["batch_evidence"] = proof;
+        return true;
+    }
+    if let Some(node) = read_result(config, "/v1/node-info") {
+        if let Some(checkpoint) = node
+            .get("latest_finalised_checkpoint")
+            .and_then(Value::as_str)
+            .filter(|id| parse_hex32(id).is_ok() && *id != "00".repeat(32))
         {
-            if commitment == Commitment::Batched {
-                result["commitment"] = json!("batched");
-                result["batch_evidence"] = proof;
-                return true;
-            }
-            if let Some(node) = read_result(config, "/v1/node-info") {
-                if let Some(checkpoint) = node
-                    .get("latest_finalised_checkpoint")
+            if let Some(evidence) = read_result(config, &format!("/v1/checkpoints/{checkpoint}")) {
+                if evidence
+                    .get("canonical_header")
                     .and_then(Value::as_str)
-                    .filter(|id| parse_hex32(id).is_ok() && *id != "00".repeat(32))
+                    .is_some()
+                    && evidence["canonical_header"] == proof["signed_header"]["canonical_header"]
                 {
-                    if let Some(evidence) =
-                        read_result(config, &format!("/v1/checkpoints/{checkpoint}"))
-                    {
-                        if evidence
-                            .get("canonical_header")
-                            .and_then(Value::as_str)
-                            .is_some()
-                            && evidence["canonical_header"]
-                                == proof["signed_header"]["canonical_header"]
-                        {
-                            result["commitment"] = json!("finalised");
-                            result["batch_evidence"] = proof;
-                            result["checkpoint_evidence"] = evidence;
-                            return true;
-                        }
-                    }
+                    result["commitment"] = json!("finalised");
+                    result["batch_evidence"] = proof;
+                    result["checkpoint_evidence"] = evidence;
+                    return true;
                 }
             }
         }
-        if std::time::Instant::now() >= deadline {
-            return false;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(50));
     }
+    false
 }
 
 pub(super) fn route(config: &Config, request: &IncomingRequest) -> OutgoingResponse {
