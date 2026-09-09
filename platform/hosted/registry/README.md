@@ -1,5 +1,9 @@
 # Registry node build boundary
 
+Deployment ingest, the sealed journal envelope, and the Human `pairs/`
+export are documented in [RegistryDeploymentJournal.md](../../../docs/wiki/RegistryDeploymentJournal.md)
+and [HostedRegistry.md](../../../docs/wiki/HostedRegistry.md).
+
 Install `node-provision-build-boundary.sh` at `/usr/libexec/layerx/` and
 `layerx-program-registry-boundary.service` at `/etc/systemd/system/`.
 Create `/var/lib/layerx-program-registry-builds`, reload systemd, and enable
