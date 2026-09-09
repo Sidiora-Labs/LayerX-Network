@@ -5504,3 +5504,19 @@ symbol = "BridgeWithdrawRequest debit_plan"
 observed = "BridgeWithdrawRequest at vocabulary.rs:790 has no request_anchor. compile.rs:405 emits the legacy bridge ordinal 2 rather than asset WITHDRAW ordinal 9 and its canonical 108-byte signed payload. The Human debit plan still calls this real intent vocabulary. Native evidence persistence does not change the operation submitted by that compiler."
 assumption = "The intent vocabulary/compiler and any dependent provider mapping require an owned-path extension to submit native WITHDRAW with an explicit recorded request anchor. Those paths were not changed. Native daemon routing and native evidence claim support cannot alone establish the complete Human withdrawal initiation path."
 severity = "blocker"
+
+[observation.6.1.65]
+task = "6.1"
+file = "cmd/layerxd/lxp_daemon_process.c cmd/layerxd/lxp_daemon_lni.c tests/daemon/withdraw-custody.py"
+symbol = "LX_ASSET_WITHDRAW replay_execute_activity apply_canonical_activity apply_canonical_batch send_submit"
+observed = "WITHDRAW now enters daemon admission, execution and replay allowlists with the asset module ABI, exact operation ordinal authority scope, native payload decoding and account routing. CARGO_BUILD_JOBS=16 MAKEFLAGS=-j16 make layerxd layerx-genesis-build build/tests/lxp_test_program_admission build/tests/bridge/sign-credit and make test-program-admission test-daemon-lni-admission test-layerxd exit 0. Shell and Python syntax checks exit 0. Logs are qual-logs/set1/e-daemon-build.log, e-daemon-regression.log and e-daemon-script-check.log. The funded fixture uses an actual WETH deposit, distinct disposable Anvil observer, real custody signatures, signed native genesis and real CheckpointRegistry deployment; malformed payload and invalid activity signatures are refused. PATH selecting the local Python environment and Foundry with CARGO_BUILD_JOBS=16 MAKEFLAGS=-j16 python3 tests/daemon/withdraw-custody.py exits 1 at its retained successful-withdrawal receipt assertion. Raw evidence is under qual-logs/set1/e-daemon-custody-t5pl06mk/lxp-program-admission-z97MUU and e-daemon-withdraw.log."
+assumption = "Daemon routing and existing admission regressions are qualified, but a successful funded withdrawal and its crash replay remain unqualified because of the counter conflict recorded next. The success, root, ABI, signature and replay assertions remain intact."
+severity = "note"
+
+[observation.6.1.66]
+task = "6.1"
+file = "src/modules/asset/lx_asset_registry.c src/protocol/lxp_kernel.c include/layerx/lxp_kernel.h tests/modules/test_asset_withdraw_activity.c"
+symbol = "withdrawal_context lxp_kernel_bind_ledger_admission actor_sequence"
+observed = "Real custody CREDIT at global sequence 1 consumes identity sequence 0 while the newly credited beneficiary ledger account retains next_sequence 0. Mandatory batch maintenance occupies global sequence 2. WITHDRAW envelope sequence 1 passes identity admission but withdrawal_context copies it to the ledger actor_sequence, producing LXP_ERR_SEQUENCE_GAP (-300) at global sequence 3. Envelope sequence 0 instead fails identity admission with LXP_ERR_SEQUENCE_REUSED (-301). Canonical receipt decoding and daemon diagnostics are in qual-logs/set1/e-daemon-sequence-counters.log. The existing native module mode-5 assertion requires refusal of envelope sequence 1 against ledger sequence 0. Neither that assertion nor the conflicting module implementation was changed."
+assumption = "A repair requires an authenticated activity and ledger-sequence binding for WITHDRAW in src/protocol/lxp_kernel.c and include/layerx/lxp_kernel.h, analogous to the existing Programs ledger admission binding, then verification of that binding by the asset module. These kernel paths are outside the granted routing scope. Unconditionally substituting the account sequence would bypass the retained module refusal and was not done."
+severity = "blocker"
