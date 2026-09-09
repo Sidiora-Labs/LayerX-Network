@@ -48,7 +48,8 @@ PY
         --from-file=owner-request.json="$input/owner-request.json" \
         --from-file=recovery-policy.json="$input/recovery-policy.json" \
         --from-file=treasury-request.json="$input/treasury-request.json" \
-        --from-file=sequencer-request.json="$input/sequencer-request.json"
+        --from-file=sequencer-request.json="$input/sequencer-request.json" \
+        --from-file=account-head-request.json="$input/account-head-request.json"
     kube create -f "$manifest" > /dev/null
     kube -n "$TESTNET_NAMESPACE" wait --for=condition=complete --timeout=150s job/layerx-human-provision-owner > /dev/null \
         || fail 'layerx-human-provision-owner: Job did not complete; owner result not published'
@@ -56,8 +57,46 @@ PY
     python3 "$REPO_ROOT/platform/hosted/human/provision.py" --validate-owner-result \
         --work-dir "$WORK_DIR" --request "$output.pending"
     mv "$output.pending" "$output"
+    kube -n "$TESTNET_NAMESPACE" logs job/layerx-human-provision-owner -c validate-account-head > "$input/account-head-result.json"
     local account
     for account in treasury sequencer; do
         kube -n "$TESTNET_NAMESPACE" logs job/layerx-human-provision-owner -c "provision-$account" > "$input/$account.json"
     done
+)
+
+human_evidence_provision() (
+    set -euo pipefail
+    umask 077
+    local input="$WORK_DIR/human-evidence-input" status
+    local provision="$REPO_ROOT/platform/hosted/human/provision.py"
+    [ -d "$input" ] && [ ! -L "$input" ] || fail "$input: owner registration producer inputs required"
+    python3 "$provision" --validate-owner-registration --work-dir "$WORK_DIR"
+    python3 "$provision" --validate-job-input --work-dir "$WORK_DIR"
+    [ -n "${LAYERX_REGISTRY_JOURNAL:-}" ] || fail 'LAYERX_REGISTRY_JOURNAL: registry admission/deployment pairs required; deployment_proof_unavailable is not evidence'
+    kube -n "$TESTNET_NAMESPACE" get secret layerx-guarantor-checkpoint-authority \
+        -o 'jsonpath={.data.public\.hex}' > "$input/checkpoint-public.base64" \
+        || fail 'Secret layerx-guarantor-checkpoint-authority/public.hex: checkpoint producer output required'
+    python3 "$provision" --movement-source --work-dir "$WORK_DIR" --secrets-dir "$SECRETS_DIR"
+    port_forward human-account-head "$TESTNET_NAMESPACE" layerx-agent-boundary 19454 9443
+    status=$(curl --silent --show-error --max-time 30 --max-filesize 1048576 \
+        --cacert "$CA_DIR/ca.crt" --header "Authorization: Bearer $(cat "$SECRETS_DIR/registry-node.token")" \
+        --output "$input/account-head.json" --write-out '%{http_code}' \
+        'https://localhost:19454/v1/protocol/account-state/head')
+    [ "$status" = 200 ] || fail "$input/account-head.json: agent boundary refused account-state head with status $status"
+    python3 - "$provision" "$input" "$NODE_NETWORK_ID" "$NODE_SEQUENCER_ID" "$NODE_SEQUENCER_PUBLIC_KEY" <<'PYHEAD'
+import importlib.util
+from pathlib import Path
+import sys
+spec = importlib.util.spec_from_file_location('provision', sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+root = Path(sys.argv[2])
+module.write_json(root / 'account-head-request.json', {
+    'head': module.protected_json(root / 'account-head.json'), 'network_id': int(sys.argv[3]),
+    'sequencer_id': sys.argv[4], 'public_key': sys.argv[5]})
+PYHEAD
+    human_owner_provision
+    python3 "$provision" --assemble --work-dir "$WORK_DIR" \
+        --registry "$SECRETS_DIR/module-registry.json" --asset "$NODE_ASSET_ID" \
+        --journal "$LAYERX_REGISTRY_JOURNAL"
 )

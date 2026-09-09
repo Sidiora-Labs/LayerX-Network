@@ -53,6 +53,7 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd "$SCRIPT_DIR/../../.." && pwd)
+source "$REPO_ROOT/platform/hosted/human/provision.sh"
 WORK_DIR="$REPO_ROOT/build/beta-cluster"
 TOOLS_DIR="$REPO_ROOT/build/bin"
 CA_DIR="$WORK_DIR/ca"
@@ -1497,8 +1498,6 @@ beta_cluster_up() {
     wait_for_node_genesis
     paxeer_contracts_deploy
     settlement_publish
-    human_policy_publish
-    kube apply -f "$MANIFESTS_DIR/node.yaml" > /dev/null
     wait_for_pod_ready "$TESTNET_NAMESPACE" app=layerx-identity 300
     port_forward identity "$TESTNET_NAMESPACE" layerx-identity "$IDENTITY_PORT" 9443
     identity_provision
@@ -1508,6 +1507,9 @@ beta_cluster_up() {
     port_forward faucet "$TESTNET_NAMESPACE" layerx-faucet-public "$FAUCET_PORT" 443
     wait_for_pod_ready "$TESTNET_NAMESPACE" app=layerx-gateway 600
     internal_principals_provision
+    human_evidence_provision
+    human_policy_publish
+    kube apply -f "$MANIFESTS_DIR/node.yaml" > /dev/null
     internal_apply
     port_forward human "$TESTNET_NAMESPACE" layerx-human 19453 9443
     port_forward developer "$DEVELOPER_NAMESPACE" layerx-webhooks 19450 443

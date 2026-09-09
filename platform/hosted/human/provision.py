@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 import argparse
+import base64
+import shutil
+import tempfile
+import subprocess
 import json
 import os
 from pathlib import Path
@@ -288,11 +292,243 @@ def account_requests(work_dir):
         write_json(root / 'human-evidence-input' / (name + '-request.json'), {'did': 'did:layerx:' + key})
 
 
+def owner_policy():
+    path = Path(__file__).with_name('beta-owner-policy.json')
+    value = json.loads(path.read_text(), object_pairs_hook=strict_pairs)
+    fields(value, 'core-clock-horizon maximum_age_seconds maximum_age_sequences limit activities_source budgets movement', path, 'owner policy')
+    for name in ('core-clock-horizon', 'maximum_age_seconds', 'maximum_age_sequences'):
+        uint(value[name], 64, path, name, 1)
+    fields(value['limit'], 'scope scope_id_source id name ceiling', path, 'limit')
+    require(value['limit']['scope'] == 'agent' and value['limit']['scope_id_source'] == 'owner_account', path, 'owner limit scope')
+    h32(value['limit']['id'], path, 'limit.id')
+    text(value['limit']['name'], path, 'limit.name')
+    uint(value['limit']['ceiling'], 128, path, 'limit.ceiling', 1)
+    require(value['activities_source'] == 'owner-registration', path, 'activities source')
+    array(value['budgets'], path, 'budgets')
+    require(len(set(value['budgets'])) == len(value['budgets']), path, 'duplicate budgets')
+    for budget in value['budgets']:
+        h32(budget, path, 'budget')
+    fields(value['movement'], 'PAXEER_CONFIRMATIONS CHECKPOINT_INTERVAL_SECONDS PAXEER_BLOCK_SECONDS REMINDER_INTERVAL_SECONDS', path, 'movement intervals')
+    for key, interval in value['movement'].items():
+        uint(interval, 64, path, key, 1)
+    return value
+
+
+def principal_policy(binding, registration, asset, policy, path):
+    entry = registration['identity']
+    references = [entry['evidence'], entry['rotation']['evidence'], entry['recovery']['evidence']]
+    references.extend(c['evidence'] for c in entry['capabilities'])
+    activities = sorted({r['activity_id'] for r in references})
+    identity(entry, path, activities)
+    result = {'principals': [{'tenant': binding['tenant'], 'principal': binding['principal'],
+        'account_id': registration['owner_account'], 'asset_id': asset,
+        'activities': activities, 'budgets': policy['budgets'],
+        'maximum_age_seconds': policy['maximum_age_seconds'],
+        'maximum_age_sequences': policy['maximum_age_sequences'], 'identities': [entry]}]}
+    encoded = json.dumps(result, separators=(',', ':'), allow_nan=False)
+    parsed = json.loads(encoded, object_pairs_hook=strict_pairs)
+    fields(parsed, 'principals', path, 'principal policy')
+    require(len(parsed['principals']) == 1, path, 'single scoped principal')
+    principal = parsed['principals'][0]
+    fields(principal, 'tenant principal account_id asset_id activities budgets maximum_age_seconds maximum_age_sequences identities', path, 'principal policy entry')
+    h32(principal['account_id'], path, 'account_id')
+    h32(principal['asset_id'], path, 'asset_id')
+    identity(principal['identities'][0], path, principal['activities'])
+    require(parsed == result, path, 'principal policy reparse')
+    return parsed
+
+
+def protected_bytes(path, maximum=1048576):
+    path = Path(path)
+    fd = None
+    try:
+        require(path.is_absolute() and path.resolve() == path, path, 'canonical path')
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        info = os.fstat(fd)
+        require(stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid()
+                and stat.S_IMODE(info.st_mode) == 0o600 and info.st_nlink == 1
+                and 0 < info.st_size <= maximum, path, 'protected bounded file')
+        with os.fdopen(fd, 'rb') as source:
+            fd = None
+            result = source.read(maximum + 1)
+        require(0 < len(result) <= maximum, path, 'file bounds')
+        return result
+    except OSError as error:
+        raise Refused(f'{path}: required protected file unavailable') from error
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
+def journal_records(path):
+    require(path is not None, 'LAYERX_REGISTRY_JOURNAL', 'registry admission/deployment journal absent')
+    path = Path(path)
+    try:
+        info = path.lstat()
+        require(path.is_absolute() and path.resolve() == path and stat.S_ISDIR(info.st_mode)
+                and info.st_uid == os.geteuid() and not info.st_mode & 0o022,
+                path, 'protected registry journal directory')
+        paths = sorted(path.iterdir())
+    except OSError as error:
+        raise Refused(f'{path}: registry admission/deployment journal unavailable') from error
+    require(2 <= len(paths) <= 128, path, 'registry journal pair count')
+    names = {p.name for p in paths}
+    result = {}
+    total = 0
+    for record in paths:
+        require(re.fullmatch(r'[0-9a-f]{64}\.(admission|deployment)', record.name) is not None,
+                record, 'journal filename')
+        require({record.stem + '.admission', record.stem + '.deployment'} <= names,
+                record, 'registry journal pair missing')
+        data = protected_bytes(record, 524288)
+        total += len(data)
+        require(total <= 524288, path, 'journal total size')
+        result[record.name] = data
+    return result
+
+
+def assemble(work_dir, registry_path, asset, journal_path):
+    work_dir = Path(work_dir)
+    require(work_dir.is_absolute() and work_dir.resolve() == work_dir, work_dir, 'canonical work directory')
+    destination = work_dir / 'human-evidence'
+    require(not destination.exists() and not destination.is_symlink(), destination, 'existing evidence requires reconciliation')
+    inputs = work_dir / 'human-evidence-input'
+    owner = owner_result(work_dir, work_dir / 'human-owner-result.json')
+    registration = owner_registration(work_dir, owner_did=owner['did'])
+    binding_path = work_dir / 'identity/source-binding.json'
+    binding = protected_json(binding_path)
+    fields(binding, 'tenant principal', binding_path, 'tenant/principal binding')
+    require(type(binding['tenant']) is str and re.fullmatch(r'[a-z0-9_.-]{1,128}', binding['tenant']) is not None,
+            binding_path, 'tenant')
+    text(binding['principal'], binding_path, 'principal')
+    require(not any(c in binding['principal'] for c in ':,'), binding_path,
+            'principal cannot be represented by the current HUMAN_PEERS delimiter parser')
+    policy = owner_policy()
+    catalog = purpose_catalog(Path(__file__).with_name('beta-purpose-catalog.json'), registry_path,
+                              inputs / 'treasury.json', inputs / 'sequencer.json', asset)
+    head_path = inputs / 'account-head-result.json'
+    head = protected_json(head_path)
+    fields(head, 'consumed', head_path, 'verified account head result')
+    require(type(head['consumed']) is int and head['consumed'] == 0, head_path,
+            'fresh first-batch head required; retained consumed limits unavailable')
+    movement_path = inputs / 'movement-source.json'
+    movement = protected_json(movement_path)
+    fields(movement, 'CUSTODY_REFERENCE PAXEER_CHECKPOINT_AUTHORITY', movement_path, 'movement source')
+    for key, value in movement.items():
+        require(type(value) is str and re.fullmatch(r'0x[0-9a-fA-F]{64}', value) is not None
+                and int(value, 16) != 0, movement_path, key)
+    recovery = {'root': owner['recovery_root'], 'threshold': owner['recovery_threshold'],
+                'delay_seconds': owner['recovery_delay_seconds']}
+    files = {
+        'components.json': {'AGENT_ACTOR': owner['did'], 'AGENT_AUTHORITY': registration['authority'],
+            'AGENT_OWNER_ACCOUNT': registration['owner_account'],
+            'AGENT_RECOVERY_ROOT': base64.urlsafe_b64encode(bytes(recovery['root'])).decode().rstrip('='),
+            'AGENT_RECOVERY_THRESHOLD': recovery['threshold']},
+        'authority.json': dict(binding, **{'core-clock-horizon': policy['core-clock-horizon']}),
+        'agent.json': {'HUMAN_PEERS': f"4020:{binding['principal']}:{binding['tenant']}",
+            'HUMAN_LIMIT_SCOPE': policy['limit']['scope'], 'HUMAN_LIMIT_SCOPE_ID': registration['owner_account'],
+            'HUMAN_LIMIT_ID': policy['limit']['id'], 'HUMAN_LIMIT_NAME': policy['limit']['name'],
+            'HUMAN_LIMIT_CEILING': policy['limit']['ceiling'], 'HUMAN_LIMIT_CONSUMED': head['consumed']},
+        'principal-policy.json': principal_policy(binding, registration, asset, policy,
+                                                  inputs / 'owner-registration.json'),
+        'recovery-policy.json': recovery, 'purpose-catalog.json': catalog,
+        'movement-policy.json': dict(movement, **policy['movement'])}
+    records = journal_records(journal_path)
+    lock = work_dir / '.human-evidence-publish'
+    try:
+        lock.mkdir(mode=0o700)
+    except FileExistsError as error:
+        raise Refused(f'{lock}: publication already active or interrupted') from error
+    pending = None
+    try:
+        require(not destination.exists() and not destination.is_symlink(), destination, 'existing evidence')
+        pending = Path(tempfile.mkdtemp(prefix='.human-evidence-', dir=work_dir))
+        for name, value in files.items():
+            write_json(pending / name, value)
+        (pending / 'journal').mkdir(mode=0o700)
+        for name, data in records.items():
+            fd = os.open(pending / 'journal' / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, 'wb') as output:
+                output.write(data)
+                output.flush()
+                os.fsync(output.fileno())
+        for directory in (pending / 'journal', pending):
+            fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        os.rename(pending, destination)
+        pending = None
+        fd = os.open(work_dir, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    finally:
+        if pending is not None:
+            shutil.rmtree(pending)
+        lock.rmdir()
+
+
+def movement_source(work_dir, secrets_dir):
+    inputs = Path(work_dir) / 'human-evidence-input'
+    path = Path(secrets_dir) / 'human/movement-config/LAYERX_HUMAN_MOVEMENT_PROVIDER_CUSTODY_REFERENCE'
+    if path.exists() or path.is_symlink():
+        reference = protected_bytes(path, 66).decode('ascii')
+    else:
+        path = Path(work_dir) / 'paxeer/deployment.json'
+        deployment = protected_json(path)
+        require(type(deployment) is dict and 'custody_reference' in deployment, path,
+                'custody_reference missing; vault registration requires a produced reference')
+        reference = deployment['custody_reference']
+    require(type(reference) is str and re.fullmatch(r'0x[0-9a-fA-F]{64}', reference) is not None
+            and int(reference, 16) != 0, path, 'custody_reference')
+    key_path = inputs / 'checkpoint-public.base64'
+    try:
+        public = base64.b64decode(protected_bytes(key_path, 128), validate=True).decode('ascii')
+    except (ValueError, UnicodeError) as error:
+        raise Refused('Secret layerx-guarantor-checkpoint-authority/public.hex: invalid public key') from error
+    require(re.fullmatch(r'0x[0-9a-fA-F]{64}', public) is not None and int(public, 16) != 0,
+            'Secret layerx-guarantor-checkpoint-authority/public.hex', 'checkpoint public key')
+    write_json(inputs / 'movement-source.json', {'CUSTODY_REFERENCE': reference, 'PAXEER_CHECKPOINT_AUTHORITY': public})
+
+
+def qualify_generated_set(work_dir, registry_path, secrets_dir, network, chain):
+    import material
+    work_dir = Path(work_dir)
+    root = work_dir / 'human-material-check'
+    require(not root.exists(), root, 'existing material check output')
+    evidence = work_dir / 'human-evidence'
+    for name in ('components', 'agent', 'authority', 'principal-policy', 'recovery-policy', 'purpose-catalog', 'movement-policy'):
+        protected_json(evidence / (name + '.json'))
+    journal_records(evidence / 'journal')
+    root.mkdir(mode=0o700)
+    private = root / 'human'
+    private.mkdir(mode=0o700)
+    for name in ('components', 'kms', 'config', 'agent-config', 'movement-config', 'authority-config', 'authority', 'identity'):
+        (private / name).mkdir(mode=0o700)
+    replica = protected_bytes(Path(secrets_dir) / 'receipt-authority-replica-id', 128).decode('ascii').strip()
+    h32(replica, secrets_dir, 'receipt authority replica id')
+    fd = os.open(root / 'receipt-authority-replica-id', os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, 'w') as output:
+        output.write(replica)
+    policy_path = root / 'policy.json'
+    material.assemble_policy(evidence, work_dir / 'paxeer/deployment.json', registry_path,
+                             policy_path, network, chain)
+    subprocess.run(['python3', str(Path(__file__).with_name('material.py')), str(private),
+                    str(network), str(chain), str(policy_path)], check=True)
+    subprocess.run(['python3', str(Path(__file__).with_name('test_material.py'))], check=True)
+
+
 def main():
     parser = argparse.ArgumentParser()
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument('--validate-owner-registration', action='store_true')
     mode.add_argument('--catalog', action='store_true')
+    mode.add_argument('--assemble', action='store_true')
+    mode.add_argument('--movement-source', action='store_true')
+    mode.add_argument('--qualify-generated-set', action='store_true')
     mode.add_argument('--account-requests', action='store_true')
     mode.add_argument('--validate-job-input', action='store_true')
     mode.add_argument('--validate-owner-result', action='store_true')
@@ -301,12 +537,25 @@ def main():
     parser.add_argument('--treasury', type=Path)
     parser.add_argument('--sequencer', type=Path)
     parser.add_argument('--asset')
+    parser.add_argument('--journal', type=Path)
+    parser.add_argument('--secrets-dir', type=Path)
+    parser.add_argument('--network', type=int)
+    parser.add_argument('--chain', type=int)
     parser.add_argument('--request', type=Path)
     parser.add_argument('--response', type=Path)
     parser.add_argument('--output', type=Path)
     parser.add_argument('--work-dir', type=Path, required=True)
     args = parser.parse_args()
-    if args.account_requests:
+    if args.qualify_generated_set:
+        require(all((args.registry, args.secrets_dir, args.network, args.chain)), args.work_dir, 'generated set qualification arguments')
+        qualify_generated_set(args.work_dir, args.registry, args.secrets_dir, args.network, args.chain)
+    elif args.movement_source:
+        require(args.secrets_dir is not None, args.work_dir, 'secrets directory')
+        movement_source(args.work_dir, args.secrets_dir)
+    elif args.assemble:
+        require(all((args.registry, args.asset)), args.work_dir, 'registry and asset arguments')
+        assemble(args.work_dir, args.registry, args.asset, args.journal)
+    elif args.account_requests:
         account_requests(args.work_dir)
     elif args.validate_job_input:
         job_input(args.work_dir)
