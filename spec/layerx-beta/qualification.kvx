@@ -12249,3 +12249,27 @@ symbol = "verify_receipt check_checkpoint_bytes checked_checkpoint"
 observed = "Wallet receipt verifies the sequencer signature and requested activity ID but has no batched/finalised wait pipeline. The retained public RPC implementation exports receipt inclusion with signed_header and proof fields, and checkpoint/context canonical bytes. The existing checkpoint verification functions for those raw bytes are private; its public checkpoint entry point requires FrameTransport. CLI configuration contains a sequencer key pin but no independently configured sequencer identity, authorized batch range, or guarantor authority. Source evidence: qual-logs/pay3/pay3c-core-public-reads.rs and qual-logs/pay3/pay3c-checkpoint-boundary.log."
 assumption = "Commitment waiting remains incomplete. Complete CLI trust configuration and receipt/header/proof binding, then consume an exposed verifier for canonical checkpoint/context material with independently configured authority. A response commitment label or admission acknowledgement cannot establish any verification level. Wallet write confirmation cannot be qualified before the required identity and signing interfaces are available."
 severity = "blocker"
+
+[observation.6.11.137]
+task = "6.11"
+file = "agent/crates/layerx-sdk/src/rpc.rs agent/crates/layerx-sdk/src/rpc_verification.rs agent/crates/layerx-sdk/src/wallet.rs agent/sdk/typescript/src/wallet.ts"
+symbol = "RpcClient Wallet wait_for WalletRpc"
+observed = "The OpenRPC document defines eleven positional methods, including submission and three commitment selectors. Rust and TypeScript clients implement those methods and preserve JSON-RPC errors. The upstream public-core reference supplies exact sequence, receipt, inclusion and CP1/CX1 checkpoint result encodings. Wallet execution obtains independent identity and source sequences, binds full disclosure, uses the external signer and requires verified receipt evidence after submission. Batched verification checks the configured sequencer and Merkle inclusion. Finalised verification additionally pins the trusted context digest and verifies the exact CP1/CX1 certificate and matching header. The TypeScript wallet binding executes the real Rust wallet binary with an external signer socket."
+assumption = "The contract omits lx_estimateFee, lx_listAssets and lx_getAsset; lx_getBalances still returns unavailable until native DID enumeration exists. Fee ceilings and finality trust inputs remain explicit configuration. Live public-RPC wallet execution was not exercised against an integrated gateway endpoint."
+severity = "note"
+
+[observation.6.11.138]
+task = "6.11"
+file = "tests/daemon/lxp_test_program_admission.c tests/daemon/program-admission.sh agent/crates/layerx-client/tests/availability_daemon.rs"
+symbol = "availability_batches real_daemon_availability_refusals"
+observed = "After make -j16, named native binary builds and the admission/finality harness prerequisite builds, cargo test --manifest-path agent/Cargo.toml -p layerx-client exits 101. The native harness reports test_daemon_lni_admission:620: found and line 649: availability_batches(descriptor, &key) == 0 before the Rust integration test fails at line 296. Evidence: qual-logs/pay2/wallet-client-test.log and qual-logs/pay2/wallet-client-native-prerequisites.log; native diagnostics: /tmp/lxp-program-admission-M7nARO."
+assumption = "The existing native availability failure is outside the wallet client changes. No native assertion or test was altered. The full daemon suite passed with LAYERX_TEST_NATIVE_BIN_DIR=/root/lx/pay2/build/bin. Evidence: qual-logs/pay2/continuation-agentd-test.log."
+severity = "blocker"
+
+[observation.6.11.139]
+task = "6.11"
+file = "agent/crates/layerx-agentd/src/policy/eval.rs agent/crates/layerx-mcp/src/tools/wallet.rs"
+symbol = "EvaluationInput evaluate execute"
+observed = "Both public EvaluationInput constructors set the private cumulative_count field to None. Context validation requires an opaque verified budget result and an authenticated cumulative count, so no available constructor can yield a permitting context. The MCP payment backend checks bound session/capability identity, derives policy monetary fields from the prepared disclosure and invokes this evaluator before calling the real wallet signer and RPC execution."
+assumption = "Positive MCP payment execution requires the real canonical cumulative-use and protocol-budget evidence producer. Existing policy checks remain intact. Native duplicate, ownership, pause and supply-cap checks are native execution responsibilities and are not signer blockers."
+severity = "blocker"
