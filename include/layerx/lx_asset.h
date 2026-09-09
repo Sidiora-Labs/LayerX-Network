@@ -72,6 +72,11 @@ typedef enum lx_asset_custody_kind {
 typedef struct lx_asset_record {
     uint8_t asset_id[32];
     char symbol[LX_ASSET_SYMBOL_MAX + 1U];
+    uint8_t name[LX_ASSET_NAME_MAX];
+    uint8_t name_length;
+    lxp_u128 supply_cap;
+    uint8_t issuer_did32[32];
+    uint8_t issuer_kind;
     uint8_t symbol_length;
     uint8_t decimals;
     lx_asset_custody_kind custody_kind;
