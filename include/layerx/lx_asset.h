@@ -22,6 +22,7 @@ enum {
     LX_ASSET_RECEIVE = 0x00010006,
     LX_ASSET_GRANT_ISSUE = 0x00010007,
     LX_ASSET_GRANT_REVOKE = 0x00010008
+    /* 0x00010009 is reserved and must not be assigned here. */
 };
 
 typedef enum lx_asset_custody_kind {
