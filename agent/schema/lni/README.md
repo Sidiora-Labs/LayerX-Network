@@ -18,6 +18,8 @@ current head through the programs runtime without committing anything, and
 `SimulateResponse` returns the execution (activity id, sequencer-signed
 receipt, terminal payload, call graph) with sequencer-signed simulation
 evidence as proof material.
+Version 1.5 adds `asset_read`, `fee_estimate`, and event-driven receipt
+publication waiting. Clients negotiate minor 5 before using these additions.
 
 ## Authenticated durable submission
 
@@ -87,7 +89,53 @@ authentication-and-durability guarantee only when
 | 29 | `FinalityEvidenceRegisterResponse` | response | `finality_evidence_register` |
 | 30 | `SimulateRequest` | request | `simulate` |
 | 31 | `SimulateResponse` | response | `simulate` |
+| 32 | `AssetReadRequest` | request | `asset_read` |
+| 33 | `AssetReadResponse` | response | `asset_read` |
+| 34 | `FeeEstimateRequest` | request | `fee_estimate` |
+| 35 | `FeeEstimateResponse` | response | `fee_estimate` |
 
 AvailabilityFetchRequest carries only the canonical selector and empty proof material. AvailabilityChunk carries exact chunk bytes and inclusion metadata. AvailabilityEnd has empty canonical payload and empty proof material.
 
 AvailabilityFetchRequest selector `05 || batch:u64be` fetches one durable, sealed, header-signed candidate before finalization. It uses the same authenticated UID/GID principal set as FinalityEvidenceRegisterRequest (tag 28); other principals retain the existing unauthorized refusal. AvailabilityChunk and AvailabilityEnd encoding and all verification checks are unchanged. Selectors 01–04 remain finalized-only. Candidate retrieval does not register or finalize a checkpoint.
+
+## Committed reads in LNI 1.5
+
+All integers are big-endian. `AssetReadRequest` contains version u16 = 1,
+kind u8 (list = 1, get = 2), and a nonzero 32-byte asset id for get only.
+`AssetReadResponse` contains version u16 = 1, observed sequence u64,
+committed state root (32 bytes), count u16, then length-prefixed (u16)
+canonical version-3 Asset records sorted by asset id. Get returns exactly
+one record. Records preserve issuer, salt, cap, pause and circulating supply.
+The bounded list is returned in full or refused.
+
+`FeeEstimateRequest` contains version u16 = 1, activity type u32, canonical
+encoded byte count u64, execution units u64 and storage units u64.
+`FeeEstimateResponse` contains version u16 = 1, observed sequence u64,
+committed state root (32 bytes), parameter version u32, estimated fee u128,
+and a u16-length-prefixed canonical fee schedule. Version-2 schedules name
+register, account_open, send, receive, grant_issue, grant_revoke, mint and
+burn in that order. The supplied meter determines an estimate; execution
+still determines the actual charge.
+
+These responses read an authenticated same-process committed snapshot and
+carry empty proof material. Their sequence and root identify the observation;
+they do not establish a metadata Merkle proof or checkpoint finality.
+
+`AccountReadRequest` kind 3 enumerates the derived DID id32's main and
+per-asset accounts at the latest root, with requested verification rank at
+most 3. `AccountReadResponse` returns sorted account ids, canonical values
+and individual existing account evidence proofs. Clients verify each proof.
+Historical enumeration and response overflow are refused without partial
+results. Kinds 1 and 2 retain balance and account reads, including per-asset
+account ids and the selected balance asset id.
+
+## Event-driven receipt publication wait
+
+At negotiated minor 5, `ReceiptLookupRequest` may append
+`wait_publication:u8 = 1` to its canonical activity-id, idempotency-key or
+sequence selector. The daemon waits on queue and publication notifications
+until the receipt is found, the queue drains, execution fails, or the request
+deadline expires. It does not use a fixed polling interval. A successful
+lookup returns the canonical signed receipt through `ReceiptLookupResponse`;
+an admission acknowledgement is never substituted for an executed receipt.
+Legacy selectors remain supported without the trailing wait field.
