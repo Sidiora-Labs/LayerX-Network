@@ -110,21 +110,112 @@ fn assert_func_body<E>(
     E: IntoIterator<Item = Instruction>,
     <E as IntoIterator>::IntoIter: ExactSizeIterator,
 {
-    let expected_instructions = expected_instructions.into_iter();
-    let len_expected = expected_instructions.len();
-    for (index, actual, expected) in
-        expected_instructions
-            .into_iter()
-            .enumerate()
-            .map(|(index, expected)| {
-                (
-                    index,
-                    engine.resolve_instr(func_body, index).unwrap_or_else(|| {
-                        panic!("encountered missing instruction at position {index}")
-                    }),
-                    expected,
-                )
-            })
+    fn normalized_position(instructions: &[Instruction], index: usize) -> i32 {
+        i32::try_from(
+            instructions[..index]
+                .iter()
+                .filter(|instruction| !matches!(instruction, Instruction::Observe(_)))
+                .count(),
+        )
+        .expect("normalized instruction position must fit i32")
+    }
+
+    fn normalized_offset(
+        instructions: &[Instruction],
+        index: usize,
+        offset: BranchOffset,
+    ) -> BranchOffset {
+        let target = i64::try_from(index)
+            .expect("instruction position must fit i64")
+            .checked_add(i64::from(offset.to_i32()))
+            .and_then(|target| usize::try_from(target).ok())
+            .filter(|target| *target < instructions.len())
+            .expect("branch target must remain inside the compiled function");
+        BranchOffset::from(
+            normalized_position(instructions, target) - normalized_position(instructions, index),
+        )
+    }
+
+    fn normalized_instruction(
+        instructions: &[Instruction],
+        index: usize,
+        instruction: Instruction,
+    ) -> Instruction {
+        match instruction {
+            Instruction::Br(offset) => {
+                Instruction::Br(normalized_offset(instructions, index, offset))
+            }
+            Instruction::BrIfEqz(offset) => {
+                Instruction::BrIfEqz(normalized_offset(instructions, index, offset))
+            }
+            Instruction::BrIfNez(offset) => {
+                Instruction::BrIfNez(normalized_offset(instructions, index, offset))
+            }
+            Instruction::BrAdjust(offset) => {
+                Instruction::BrAdjust(normalized_offset(instructions, index, offset))
+            }
+            Instruction::BrAdjustIfNez(offset) => {
+                Instruction::BrAdjustIfNez(normalized_offset(instructions, index, offset))
+            }
+            instruction => instruction,
+        }
+    }
+
+    let expected_instructions = expected_instructions.into_iter().collect::<Vec<_>>();
+    let mut translated = Vec::new();
+    let mut index = 0usize;
+    while let Some(instruction) = engine.resolve_instr(func_body, index) {
+        translated.push(instruction);
+        index += 1;
+    }
+    let mut previous_program_counter = None;
+    let mut observed = 0usize;
+    let actual_instructions = translated
+        .iter()
+        .copied()
+        .enumerate()
+        .filter_map(|(index, instruction)| match instruction {
+            Instruction::Observe(program_counter) => {
+                let metadata = engine
+                    .resolve_instr_metadata(func_body, index)
+                    .expect("observation instruction must retain source metadata");
+                assert_eq!(metadata.program_counter, program_counter);
+                assert!(
+                    !metadata.canonical_instruction.is_empty(),
+                    "observation instruction must retain canonical source bytes"
+                );
+                if let Some(previous) = previous_program_counter {
+                    assert!(
+                        program_counter > previous,
+                        "observation program counters must be strictly increasing"
+                    );
+                }
+                previous_program_counter = Some(program_counter);
+                observed += 1;
+                None
+            }
+            instruction => {
+                assert!(
+                    engine.resolve_instr_metadata(func_body, index).is_none(),
+                    "only observation instructions may retain source metadata"
+                );
+                Some(normalized_instruction(&translated, index, instruction))
+            }
+        })
+        .collect::<Vec<_>>();
+    assert_ne!(
+        observed, 0,
+        "compiled functions must retain source observations"
+    );
+    assert_eq!(
+        actual_instructions.len(),
+        expected_instructions.len(),
+        "translated instruction count changed after removing observation boundaries"
+    );
+    for (index, (actual, expected)) in actual_instructions
+        .into_iter()
+        .zip(expected_instructions)
+        .enumerate()
     {
         assert_eq!(
             actual,
@@ -132,9 +223,6 @@ fn assert_func_body<E>(
             "encountered instruction mismatch for {:?} at position {index}",
             engine.resolve_func_type(&func_type, Clone::clone),
         );
-    }
-    if let Some(unexpected) = engine.resolve_instr(func_body, len_expected) {
-        panic!("encountered unexpected instruction at position {len_expected}: {unexpected:?}",);
     }
 }
 

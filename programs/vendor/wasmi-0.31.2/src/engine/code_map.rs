@@ -255,6 +255,22 @@ impl CodeMap {
         instrs.get(index)
     }
 
+    #[cfg(test)]
+    pub fn get_metadata(
+        &self,
+        func_body: CompiledFunc,
+        index: usize,
+    ) -> Option<&crate::execution_trace::InstructionMetadata> {
+        let header = self.header(func_body);
+        let start = header.iref.to_usize();
+        let end = self.instr_end(func_body);
+        start
+            .checked_add(index)
+            .filter(|position| *position < end)
+            .and_then(|position| self.metadata.get(position))
+            .and_then(Option::as_ref)
+    }
+
     /// Returns the `end` index of the instructions of [`CompiledFunc`].
     ///
     /// This is important to synthesize how many instructions there are in
