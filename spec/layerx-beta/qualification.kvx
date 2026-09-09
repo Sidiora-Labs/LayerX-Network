@@ -3580,7 +3580,21 @@ observed = "(renumbered after rebase) The later duplicate observation.5.1.1 head
 assumption = "No execution evidence was attached to the empty header."
 
 [observation.5.1.56]
-[observation.5.1.7]
+task = "5.1"
+file = "spec/layerx-beta/qualification.kvx"
+symbol = "observation.5.1.56"
+observed = "An empty observation header survived the main rebase with no fields. The header is retained under this unique identifier so no colliding id is reused."
+assumption = "No execution evidence was attached to the empty header."
+severity = "note"
+
+[observation.5.1.63]
+task = "5.1"
+file = "spec/layerx-beta/qualification.kvx"
+symbol = "observation.5.1.7"
+observed = "A second empty observation.5.1.7 header survived the main rebase immediately after the empty observation.5.1.56 header. It is retained under a unique identifier."
+assumption = "No execution evidence was attached to the empty header."
+severity = "note"
+
 [observation.5.1.57]
 task = "5.1"
 file = "human/Cargo.lock agent/tests/qualify/Cargo.lock agent/Cargo.lock"
@@ -5533,10 +5547,12 @@ observed = "The availability fixture uses layerx_wire::encode::Encoder for count
 assumption = "Focused qualification passes. Full qualification remains blocked by the inherited formatting differences and absent native binaries recorded separately. The canonical decoder and original assertions were not relaxed."
 severity = "note"
 [observation.6.4.179]
+task = "6.4"
 file = "spec/layerx-beta/qualification.kvx"
 symbol = "observation.5.1.1"
 observed = "formerly observation.5.1.35. (renumbered after rebase) The later duplicate observation.5.1.1 header contained no fields before the following observation.5.1.7 header. The empty header is retained under a unique identifier; all following technical records are preserved."
 assumption = "No execution evidence was attached to the empty header."
+severity = "note"
 
 [observation.5.1.45]
 task = "5.1"
@@ -6037,6 +6053,8 @@ file = "agent/crates/layerx-agentd/tests/support/real_authority.rs"
 symbol = "real authority fixture"
 observed = "cargo test --manifest-path agent/Cargo.toml --locked -p layerx-agentd exits 101 in budget_create: real_authority.rs:326 requires UID 0 to run layerxd under a distinct uid, but the process UID is 1000. Subsequent fixture users report a poisoned lock. The root assertion is unchanged."
 assumption = "Real-node integration qualification requires the harness execution privileges and native binaries; passing authority parser unit tests does not qualify that integration."
+severity = "blocker"
+
 [observation.6.8.118]
 task = "6.8"
 file = "platform/hosted/agent-boundary/Dockerfile platform/hosted/tests/beta-cluster.sh"
@@ -6229,6 +6247,13 @@ symbol = "human_secrets_generate human_secrets_apply start_human_owner RemoteHum
 observed = "The Human graph is co-located with the native node, using shareProcessNamespace and its memory socket volume. The owner uses the existing authorized UID 4021 and GID 4020; the API and Unix providers use UID 4020. Human Service port 9443 targets the separate container port 9447. A Human-owned egress policy admits only journeys and approvals to that node port. Secret generation creates bounded component configuration, random keys, distinct authority audiences, a session operator secret and KMS server/client certificates with UID-owned private staging. Registered authority, recovery, module registry, real Programs probe/journal and custody contract bindings remain mandatory policy inputs. The provider image build and COPY lines remain commented until their crates land. Current agentd startup additionally requires a verified Programs reader; its Human authority client does not configure the generated private CA. Those sources are unchanged."
 assumption = "bash -n platform/hosted/tests/beta-cluster.sh platform/hosted/human/material.sh platform/hosted/human/entrypoint.sh exits 0; qual-logs/hm6/bash-n.log. make platform-hosted-topology-check exits 0 after the Human egress and YAML formatting corrections, including both parsers and existing negative regressions; qual-logs/hm6/topology-formatted.log. bash tools/ci/beta-contract-check.sh and make beta-ledger-check exit 0 before this appended observation; qual-logs/hm6/contract.log and ledger.log. git diff --check exits 0; qual-logs/hm6/diff-final.log. Both kubectl apply --dry-run=client attempts fail to retrieve OpenAPI from an unconfigured API server; qual-logs/hm6/kubectl-node.log and kubectl-human.log. Validation is not disabled. Secret generation, image builds, provider processes, peer-credential refusal, KMS exchange and cluster readiness have not been executed. Static topology is not runtime qualification."
 [observation.6.8.119]
+task = "6.8"
+file = "spec/layerx-beta/qualification.kvx"
+symbol = "observation.6.8.119"
+observed = "An empty observation header survived the main rebase with no fields. The header is retained under this unique identifier so no colliding id is reused."
+assumption = "No execution evidence was attached to the empty header."
+severity = "note"
+
 [observation.6.8.34]
 task = "6.8"
 severity = "note"
@@ -6531,10 +6556,14 @@ file = "platform/hosted/human/deployment.yaml platform/hosted/tests/beta-cluster
 symbol = "component-material port_forward route_request"
 observed = "All literal base images used by the hosted Dockerfiles pull successfully, exit 0 in qual-logs/au41d/pull-bases.exit; the Paxeer wrapper uses the locally built paxd-node image. The exact command bash qual-logs/au39/run-gate-3.sh runs against revision 80ca83755471 and exits 2, recorded in qual-logs/au39/task-6.8.exit and qual-logs/au41d/wrapper.exit. Topology and refusal checks pass. All seventeen hosted images build and load, including dashboard-web and registry. Calico and both kind nodes become ready; the registry quota boundary service exits 0; disposable settlement bootstrap completes; the node reaches 6/6, registry 1/1 and all three gateways 1/1. Bring-up then fails because the Human port-forward does not accept TCP within its existing 60-second bound. Kubernetes reports FailedMount for volume component-material because Secret layerx-human-component-material does not exist. The Human Deployment requires that Secret, while beta-cluster.sh does not create it. Evidence: qual-logs/au39/task-6.8.log, qual-logs/au41d/human-events.log, port-forward-human.log, pods.log, boundary-status.log, images and build-*.log."
 assumption = "The Human component integration must provision the real required material before its Deployment starts. No placeholder Secret, deployment change, timeout increase or readiness bypass is applied. Hosted smoke, gate teardown and final retained startup are not reached. The disposable cluster remains running for diagnosis. The existing registry concurrency/rootfs mutation harness is not executed because the full gate did not pass; its source-build requests also require the route's mandatory Idempotency-Key header before live qualification. A direct verified-TLS GET of gateway /readyz returns HTTP 200 with program_registry, core_agent_boundary, durable_store and independent_receipt_authority ready, while principal_state_boundary is unavailable; qual-logs/au41d/gateway-direct-readiness.log and gateway-direct-readiness.exit record curl exit 0. This does not prove concurrent-build latency or mutation refusal. No registry implementation change was required by this gate run."
+
+[observation.6.8.139]
+task = "6.8"
 file = "cmd/layerx-module-registry/main.c cmd/layerx-module-registry/node.c platform/hosted/node/Dockerfile platform/hosted/tests/beta-cluster.sh"
 symbol = "module_registry_generate module_registry_verify registry_read_node"
 observed = "The native producer links the registered Asset, Programs v4 and optional validated Bridge interfaces and emits schema-version-2 assets and ascending module ordinals. Local C17 build and real-interface producer refusal tests pass. The generated example has SHA256 ae64cc538411a7833e65aba95c5c8ad4fc283394e4518419dc55c04f7927a230. The read-only preparation client and rendered registry-check container compare exact published ConfigMap bytes and node module ids and ordinals; assets cannot be compared because preparation carries none. The node Dockerfile does not yet build or install layerx-module-registry and is outside the permitted edit paths."
 assumption = "Install build/bin/layerx-module-registry at /usr/local/bin/layerx-module-registry in the node image before executing cluster bring-up. Docker, kubectl, kind and a live cluster are unavailable in this qualification environment, so image construction, successful live LNI comparison, mismatch refusal against a live node and deployment readiness remain unrun. Local commands and logs are retained under qual-logs/hm8; no live result is inferred from the producer tests."
+severity = "blocker"
 
 [observation.6.8.136]
 task = "6.8"
@@ -6559,6 +6588,9 @@ file = "platform/hosted/human/material.py platform/hosted/human/README.md"
 symbol = "HUMAN_PEERS"
 observed = "The material generator requires exactly one ordered uid=4020;tenant=<tenant>;principal=<principal> binding, validates tenant syntax and DID syntax and byte bounds, and preserves authority equality, principal policy uniqueness and existing material refusals. Python unittest discovery passes all four hosted Human tests. The real-file subprocess peer harness passes acceptance, malformed input refusal and policy binding refusal groups. Shell syntax, topology, retained-material refusal and ledger checks pass; evidence is under qual-logs/hm6f. Positional peer strings remain only in preserved Rust rejection tests, not hosted producers or documentation. This resolves the assembler incompatibility recorded in observation.6.8.84."
 assumption = "The untracked subprocess harness qualifies material parsing and file packaging only, not downstream journal semantics or complete Human policy validity. Image execution, full render and live cluster gates remain unrun because Docker, kubectl, kind and a live cluster are unavailable. Missing Human evidence producers and live readiness remain outside this repair."
+
+[observation.6.8.140]
+task = "6.8"
 file = "cmd/layerxd/lxp_daemon_lni.c agent/crates/layerx-client/tests/availability_daemon.rs tests/daemon/availability-settlement.py"
 symbol = "send_availability finalized_fetch"
 observed = "Tag 18 refuses every selected batch above latest_finalized_batch with LXP_ERR_DA_MISSING (-804), including explicit batch selection. Candidate DA is required before independent replay and attestation, while registration requires attestations. This prevents both initial checkpoint production and advancement beyond an existing finalized head. The availability harness asserts pre-registration refusal and obtains successful retrieval only after the finality fixture has already signed and registered a certificate. Source evidence: qual-logs/gp1/candidate-fetch-source.txt."
