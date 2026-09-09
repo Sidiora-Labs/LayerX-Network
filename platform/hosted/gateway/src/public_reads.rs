@@ -4,7 +4,7 @@ use std::sync::Mutex;
 static READ_WINDOW: Mutex<(u64, u32)> = Mutex::new((0, 0));
 const READS_PER_SECOND: u32 = 120;
 
-fn consume_read() -> bool {
+pub(super) fn consume_read() -> bool {
     let Ok(second) = now() else { return false };
     let Ok(mut window) = READ_WINDOW.lock() else {
         return false;

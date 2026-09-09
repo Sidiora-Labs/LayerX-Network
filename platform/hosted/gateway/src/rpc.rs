@@ -4,7 +4,7 @@ use super::{
 };
 use serde_json::{json, Value};
 
-fn error(id: &Value, code: i32, message: &str) -> Value {
+pub(super) fn error(id: &Value, code: i32, message: &str) -> Value {
     json!({"jsonrpc":"2.0", "id":id, "error":{"code":code,"message":message}})
 }
 
@@ -85,7 +85,7 @@ fn selector(method: &str, params: Option<&Value>) -> Result<String, i32> {
     Ok(format!("{prefix}{id}{suffix}"))
 }
 
-fn invalid_request(value: &Value) -> Option<Value> {
+pub(super) fn invalid_request(value: &Value) -> Option<Value> {
     let id = value.get("id").unwrap_or(&Value::Null);
     if !value.is_object()
         || value.get("jsonrpc") != Some(&json!("2.0"))
@@ -98,7 +98,7 @@ fn invalid_request(value: &Value) -> Option<Value> {
     }
 }
 
-fn dispatch(config: &Config, request: &IncomingRequest, value: &Value) -> Option<Value> {
+pub(super) fn dispatch(config: &Config, request: &IncomingRequest, value: &Value) -> Option<Value> {
     if let Some(refusal) = invalid_request(value) {
         return Some(refusal);
     }
@@ -259,7 +259,7 @@ fn send(config: &Config, request: &IncomingRequest, id: &Value, params: Option<&
     json!({"jsonrpc":"2.0", "id":id, "result":result})
 }
 
-fn read_result(config: &Config, path: &str) -> Option<Value> {
+pub(super) fn read_result(config: &Config, path: &str) -> Option<Value> {
     let answer = public_reads::read(config, path);
     if answer.status != 200 {
         return None;

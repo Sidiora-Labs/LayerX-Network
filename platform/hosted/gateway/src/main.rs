@@ -2,6 +2,8 @@ mod native_call;
 mod program_lifecycle;
 mod public_reads;
 mod rpc;
+mod ws;
+mod ws_wire;
 
 use layerx_crypto::ed25519;
 use layerx_platform_gateway::http::{
@@ -2474,6 +2476,9 @@ fn serve(config: &Arc<Config>, tcp: TcpStream) -> Result<(), String> {
     let Ok(request) = http::read_request(&mut stream, MAX_REQUEST) else {
         return http::write_response(&mut stream, &response(400, "invalid_http_request", None));
     };
+    if request.path == "/rpc/ws" {
+        return ws::serve(config, &request, &mut stream);
+    }
     http::write_response(&mut stream, &route(config, &request))
 }
 

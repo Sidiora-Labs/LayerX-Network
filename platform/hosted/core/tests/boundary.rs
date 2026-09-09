@@ -1349,10 +1349,12 @@ fn start_boundary(cluster: &Cluster, certificates: &Certificates) -> Boundary {
         "LAYERX_CORE_NODE_URL",
         format!("http://127.0.0.1:{}", cluster.program_port),
     );
-    env.insert(
+    for name in [
+        "LAYERX_CORE_RECEIPT_EVENTS_TOKEN_FILE",
         "LAYERX_CORE_NODE_BEARER_TOKEN_FILE",
-        text(&secrets.join("program-token")),
-    );
+    ] {
+        env.insert(name, text(&secrets.join("program-token")));
+    }
     env.insert(
         "LAYERX_CORE_ADMIN_TOKEN_FILE",
         text(&secrets.join("admin-token")),
@@ -2758,4 +2760,34 @@ fn account_proof_export_preserves_exact_native_verified_bytes() {
         503,
         "proof_evidence_unavailable",
     );
+}
+
+#[test]
+fn receipt_events_require_auth_and_bind_global_sequence() {
+    let cluster = start_cluster(true);
+    let certificates = certificates(&cluster.root);
+    let boundary = start_boundary(&cluster, &certificates);
+    assert_eq!(
+        boundary.core.get("/internal/v1/receipt-events/1").status,
+        401
+    );
+    let authorization = format!("Bearer {}", cluster.program_token);
+    let get = |path: &str| {
+        boundary
+            .core
+            .request("GET", path, &[("Authorization", &authorization)], &[])
+    };
+    for selector in ["0", "01", "-1", "18446744073709551616"] {
+        assert_eq!(
+            get(&format!("/internal/v1/receipt-events/{selector}")).status,
+            400
+        );
+    }
+    establish_receipt_head(&boundary, &cluster);
+    let event = get("/internal/v1/receipt-events/1");
+    assert_eq!(event.status, 200, "{}", event.body);
+    assert_eq!(json(&event)["result"]["global_sequence"], 1);
+    assert!(json(&event)["result"]["receipt"]
+        .as_str()
+        .is_some_and(|value| !value.is_empty()));
 }
