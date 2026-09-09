@@ -129,6 +129,7 @@ struct Verified {
     header_signature: [u8; 64],
     timestamp_ms: u64,
     last_sequence: u64,
+    checkpoint: Option<layerx_client::evidence::VerifiedCheckpoint>,
 }
 
 pub(super) struct Human {
@@ -435,6 +436,7 @@ fn verify(
     Ok(Verified {
         record,
         facts,
+        checkpoint: None,
         receipt_digest: locator.receipt_digest,
         timestamp_ms: header.timestamp_ms(),
         last_sequence: header.last_sequence(),
@@ -545,7 +547,12 @@ fn dispatch(config: &Config, request: &Request) -> Result<Response, Response> {
         }
         return Ok(by_activity(config, activity));
     }
-    let evidence = human.evidence(config)?;
+    let mut evidence = human.evidence(config)?;
+    if name == "identity" || name == "key-policy" {
+        for item in &mut evidence {
+            item.checkpoint = super::checkpoint_header(config, item.facts.batch_number).ok();
+        }
+    }
     match name {
         "core-clock" => clock(&evidence, human.horizon),
         "balance-context" => balance_context(p, &human.registry_path, &evidence, config),
@@ -818,6 +825,22 @@ fn policy_route(
     {
         return Err(unavailable("policy_evidence_stale"));
     }
+    let checkpoint = if name == "identity" || name == "key-policy" {
+        let checkpoint = native_checkpoint(item)?;
+        Some(checkpoint)
+    } else {
+        None
+    };
+    if name == "key-policy" {
+        return native_key_policy(
+            params["recovery"] == "true",
+            identity,
+            item,
+            evidence,
+            p,
+            checkpoint,
+        );
+    }
     if name == "identity" {
         let state = native_identity_state(item, &identity.did)?;
         let revision = native_u64(&state, 69)?;
@@ -844,7 +867,7 @@ fn policy_route(
                 "authorities": identity.authorities,
                 "canonical_core_bytes": hex::encode(&state),
                 "head_sequence": head, "revocation_sequence": revision,
-                "frozen": false, "verification_level": "batch_included"
+                "frozen": false, "verification_level": "checkpoint_finalised"
             }),
         ));
     }
@@ -853,6 +876,94 @@ fn policy_route(
         "capability-scope" => "capability_state_proof_unavailable",
         _ => "key_policy_checkpoint_evidence_unavailable",
     }))
+}
+
+fn native_checkpoint(
+    item: &Verified,
+) -> Result<&layerx_client::evidence::VerifiedCheckpoint, Response> {
+    let checkpoint = item
+        .checkpoint
+        .as_ref()
+        .ok_or_else(|| unavailable("key_policy_checkpoint_evidence_unavailable"))?;
+    if checkpoint.canonical_header() != item.header {
+        return Err(unavailable("key_policy_checkpoint_evidence_unavailable"));
+    }
+    Ok(checkpoint)
+}
+
+fn native_key_policy(
+    recovery: bool,
+    identity: &Identity,
+    item: &Verified,
+    evidence: &[Verified],
+    p: &PrincipalPolicy,
+    checkpoint: Option<&layerx_client::evidence::VerifiedCheckpoint>,
+) -> Result<Response, Response> {
+    let head = evidence
+        .iter()
+        .map(|e| e.last_sequence)
+        .max()
+        .ok_or_else(|| unavailable("head_unavailable"))?;
+    let policy = if recovery {
+        &identity.recovery
+    } else {
+        &identity.rotation
+    };
+    let state = native_identity_state(item, &identity.did)?;
+    let (revision_offset, delay_offset, maximum_offset) = if recovery {
+        (175, 183, 191)
+    } else {
+        (167, 199, 207)
+    };
+    let revision = native_u64(&state, revision_offset)?;
+    let delay = native_u64(&state, delay_offset)?;
+    let maximum = native_u64(&state, maximum_offset)?;
+    let (delay, maximum) = if recovery {
+        (delay, maximum)
+    } else {
+        (delay.div_ceil(1000), maximum / 1000)
+    };
+    if revision == 0
+        || delay == 0
+        || maximum < delay
+        || policy.policy_revision != revision
+        || policy.required_delay_seconds != delay
+        || policy.maximum_delay_seconds != maximum
+        || policy.effective_sequence != item.facts.global_sequence
+    {
+        return Err(unavailable("key_policy_checkpoint_evidence_unavailable"));
+    }
+    native_complete_suffix(item, evidence)?;
+    for later in evidence
+        .iter()
+        .filter(|e| e.facts.global_sequence > item.facts.global_sequence)
+    {
+        if let Ok(later_state) = native_identity_state(later, &identity.did) {
+            if later_state[revision_offset..revision_offset + 8]
+                != state[revision_offset..revision_offset + 8]
+                || later_state[37..77] != state[37..77]
+            {
+                return Err(unavailable("key_policy_checkpoint_evidence_unavailable"));
+            }
+        }
+    }
+    Ok(json(
+        200,
+        &value!({
+            "policy_revision": revision,
+            "required_delay_seconds": delay,
+            "maximum_delay_seconds": maximum,
+            "effective_sequence": policy.effective_sequence,
+            "observed_head_sequence": head,
+            "verification": 4,
+            "evidence_digest": hex::encode(&item.receipt_digest),
+            "checkpoint_digest": hex::encode(&checkpoint
+                .and_then(|c| c.report().evidence().checkpoint_id())
+                .ok_or_else(|| unavailable("key_policy_checkpoint_evidence_unavailable"))?),
+            "age_sequences": head - item.facts.global_sequence,
+            "maximum_age_sequences": p.maximum_age_sequences
+        }),
+    ))
 }
 
 fn native_u64(state: &[u8], offset: usize) -> Result<u64, Response> {
