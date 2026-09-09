@@ -887,6 +887,7 @@ dependencies = [
  "getrandom 0.3.4",
  "layerx-human-service",
  "layerx-types",
+ "layerx-wire",
  "rustix",
  "serde",
  "serde_json",
