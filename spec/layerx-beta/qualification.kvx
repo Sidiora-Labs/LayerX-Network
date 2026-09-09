@@ -7945,3 +7945,27 @@ symbol = "submission_registry program_accounts::validate malformed_program_trans
 observed = "Programs ordinals 5 and 6 have native decoder contracts in src/modules/programs/transfer.c and accounts.c. Core now admits them and validates exact payload lengths, transfer count 1 through 256 with 112-byte legs, LXPA1 account magic, nonzero identifiers and seed length at most 128. Decoder truncation, trailing-byte, zero-identifier, invalid-magic and bounds tests pass. The real-daemon malformed-payload test passes with unchanged chain head. Evidence: qual-logs/pay4/programs-unit.log and programs-native.log."
 assumption = "This supersedes the missing Programs decoder-contract dependency. Native state authorization remains in the native validators. Successful funded Programs transfer/account execution through gateway RPC is not established. The retained DID selector assertion conflict remains separate from this admission change."
 severity = "note"
+
+[observation.6.2.907]
+task = "6.2"
+file = "platform/hosted/core/tests/boundary.rs"
+symbol = "proof_and_sequence_reads_refuse_invalid_or_absent_real_node_evidence"
+observed = "The invalid DID fixture is an empty DID path segment, which canonical Did::new rejects. The HTTP 400 assertion and production validation remain unchanged. Formatting, strict Clippy, the focused real-daemon selector test, all core and gateway tests and beta-ledger-check exit 0. Evidence: qual-logs/pay4/did-fmt.log, did-clippy.log, did-test.log, did-all-test.log and did-ledger.log."
+assumption = "This resolves the fixture conflict in observation 6.2.903 without redefining canonical DID grammar."
+severity = "note"
+
+[observation.6.2.908]
+task = "6.2"
+file = "cmd/layerxd/lxp_daemon_lni.c cmd/layerxd/lxp_daemon_process.c platform/hosted/core/src/main.rs platform/hosted/core/tests/boundary.rs"
+symbol = "send_receipt lxp_daemon_lni_receipts_committed server_run await_receipt"
+observed = "Receipt lookup tag 5 accepts an optional trailing big-endian u32 wait_ms bounded at 30000. Waiters use a monotonic condition deadline and rescan only committed log publication. LNI peer authentication and handshake remain mandatory. Four bounded connection workers permit submissions while another authenticated connection waits; shutdown closes and joins workers. Core uses bounded receipt waits instead of the 200 ms poll. Native rebuild and the focused real-daemon commit, missing-receipt deadline, malformed-bound and already-committed tests exit 0. Evidence: qual-logs/pay4/wait-native-concurrent.log and wait-test-final.log."
+assumption = "The parallel core and gateway aggregate exits 101 because the waiting test receives deadline not-found before its concurrently submitted activity commits under aggregate load; its three-second wait and equality assertion remain intact. Evidence: qual-logs/pay4/wait-all-test.log. Focused success is not successful payment or gateway RPC latency evidence."
+severity = "note"
+
+[observation.6.2.909]
+task = "6.2"
+file = "cmd/layerxd/lxp_daemon_lni.c platform/hosted/core/tests/boundary.rs"
+symbol = "server_run authenticated_receipt_wait_returns_on_commit_and_bounds_missing_receipts"
+observed = "make test-daemon-lni-admission exits 0, preserving real admission authentication, durability, queue and crash-recovery coverage. cargo test --locked --manifest-path platform/Cargo.toml -p layerx-platform-core -p layerx-platform-gateway --no-fail-fast -- --test-threads=1 exits 0, including the unchanged receipt wait deadline and equality assertions. Formatting and strict Clippy exit 0. Evidence: qual-logs/pay4/wait-admission.log, wait-serial-test.log, wait-final-fmt.log and wait-final-clippy.log."
+assumption = "Serial qualification avoids resource contention between independent real-daemon fixtures. The parallel deadline failure remains recorded in observation 6.2.908 and is not a passing concurrency latency gate."
+severity = "note"

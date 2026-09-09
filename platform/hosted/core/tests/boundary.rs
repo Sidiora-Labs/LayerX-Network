@@ -2607,7 +2607,7 @@ fn receipt_latency_and_public_proofs_use_real_committed_refusals() {
         }
     }
     elapsed.sort_unstable();
-    println!("submit_to_receipt_us samples={} p50={} p99={} outcome=committed_refusal transport=core_https receipt_wait=200ms_poll", elapsed.len(), elapsed[9], elapsed[19]);
+    println!("submit_to_receipt_us samples={} p50={} p99={} outcome=committed_refusal transport=core_https receipt_wait=commit_condition", elapsed.len(), elapsed[9], elapsed[19]);
 }
 
 #[test]
@@ -2637,4 +2637,88 @@ fn malformed_program_transfer_and_account_are_refused_before_native_admission() 
         );
     }
     assert_eq!(chain_head(&cluster.lni_socket), before);
+}
+
+fn receipt_wait_request(socket: &Path, selector: &[u8]) -> (u16, Vec<u8>) {
+    use layerx_client::lni::schema::{decode_envelope, encode_envelope, Envelope};
+    use layerx_client::lni::transport::FrameTransport;
+    let gate = ConnectionGate::new(1);
+    let mut transport = must(Uds::connect(socket, &gate, lni_limits()), "wait connection");
+    let handshake = must(
+        perform(&mut transport, &handshake_config(), None),
+        "wait handshake",
+    );
+    let request = must(
+        encode_envelope(Envelope {
+            version: handshake.node().interface_version,
+            message_tag: 5,
+            correlation_id: 1,
+            canonical_payload: selector,
+            proof_material: &[],
+        }),
+        "wait encoding",
+    );
+    must(transport.send(&request), "wait send");
+    let bytes = must(transport.receive(), "wait receive");
+    let answer = must(decode_envelope(&bytes), "wait decode");
+    assert_eq!(answer.correlation_id, 1);
+    (answer.message_tag, answer.canonical_payload.to_vec())
+}
+
+#[test]
+fn authenticated_receipt_wait_returns_on_commit_and_bounds_missing_receipts() {
+    let cluster = start_cluster(true);
+    let certificates = certificates(&cluster.root);
+    let boundary = start_boundary(&cluster, &certificates);
+    let mut selector = vec![1];
+    selector.extend_from_slice(&[99; 32]);
+    selector.extend_from_slice(&150_u32.to_be_bytes());
+    let started = Instant::now();
+    assert_eq!(
+        receipt_wait_request(&cluster.lni_socket, &selector),
+        (6, vec![])
+    );
+    assert!(started.elapsed() >= Duration::from_millis(150));
+    assert!(started.elapsed() < Duration::from_secs(2));
+    selector[33..].copy_from_slice(&30001_u32.to_be_bytes());
+    assert_eq!(receipt_wait_request(&cluster.lni_socket, &selector).0, 25);
+    selector.push(0);
+    assert_eq!(receipt_wait_request(&cluster.lni_socket, &selector).0, 25);
+    let signed = must(
+        build_send(
+            &cluster.treasury_seed,
+            &SendRequest {
+                network_id: NETWORK_ID,
+                source_did: cluster.treasury_did.clone(),
+                destination_did: recipient().0,
+                asset: cluster.asset,
+                amount: 1,
+                account_sequence: account_sequence(&cluster.lni_socket, &cluster.treasury_did),
+                idempotency_key: random32(),
+                not_before_ms: now_ms() - 1000,
+                expires_at_ms: now_ms() + 60000,
+                fee_limit: 0,
+            },
+        ),
+        "wait SEND",
+    );
+    let mut selector = vec![1];
+    selector.extend_from_slice(&signed.activity_id);
+    selector.extend_from_slice(&3000_u32.to_be_bytes());
+    thread::scope(|scope| {
+        let waiter = scope.spawn(|| receipt_wait_request(&cluster.lni_socket, &selector));
+        thread::sleep(Duration::from_millis(100));
+        let submitted = boundary.core.request(
+            "POST",
+            "/v1/activities",
+            &[("Content-Type", "application/octet-stream")],
+            &signed.canonical,
+        );
+        assert_eq!(submitted.status, 200, "{}", submitted.body);
+        let (tag, receipt) = must(waiter.join(), "wait thread");
+        assert_eq!(tag, 6);
+        assert_eq!(hex_encode(&receipt), json(&submitted)["result"]["receipt"]);
+        let already = receipt_wait_request(&cluster.lni_socket, &selector);
+        assert_eq!(already, (6, receipt));
+    });
 }
