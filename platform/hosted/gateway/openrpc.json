@@ -261,13 +261,23 @@
             "type": "string",
             "enum": [
               "activity",
-              "receipt"
+              "receipt",
+              "account"
             ]
           }
         },
         {
           "name": "activity_id",
           "required": true,
+          "schema": {
+            "type": "string",
+            "pattern": "^[0-9a-fA-F]{64}$"
+          }
+        },
+        {
+          "name": "account_id",
+          "required": false,
+          "description": "Required only when kind is account.",
           "schema": {
             "type": "string",
             "pattern": "^[0-9a-fA-F]{64}$"
@@ -280,7 +290,7 @@
           "type": "object"
         }
       },
-      "description": "Verified inclusion proof with canonical value and signed batch header. Account proof export is not available."
+      "description": "Verified proof with canonical value and signed batch header. Account proofs export the exact verified native proof bytes without reconstruction."
     }
   ]
 }

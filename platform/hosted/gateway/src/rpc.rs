@@ -16,6 +16,18 @@ fn selector(method: &str, params: Option<&Value>) -> Result<String, i32> {
         _ => return Err(-32602),
     };
     if method == "lx_getProof" {
+        if let [Value::String(kind), Value::String(activity), Value::String(account)] =
+            args.as_slice()
+        {
+            if kind != "account"
+                || [activity, account]
+                    .iter()
+                    .any(|id| parse_hex32(id).is_err() || **id == "00".repeat(32))
+            {
+                return Err(-32602);
+            }
+            return Ok(format!("/v1/proofs/account/{activity}/{account}"));
+        }
         let [Value::String(kind), Value::String(id)] = args.as_slice() else {
             return Err(-32602);
         };
@@ -259,6 +271,18 @@ mod tests {
             json!(["receipt", "00".repeat(32)]),
             json!(["receipt", "../state"]),
             json!(["receipt", id, id]),
+        ] {
+            assert_eq!(selector("lx_getProof", Some(&args)), Err(-32602));
+        }
+        assert_eq!(
+            selector("lx_getProof", Some(&json!(["account", id, id]))),
+            Ok(format!("/v1/proofs/account/{id}/{id}"))
+        );
+        for args in [
+            json!(["account", id]),
+            json!(["account", id, "00".repeat(32)]),
+            json!(["account", "../", id]),
+            json!(["account", id, id, id]),
         ] {
             assert_eq!(selector("lx_getProof", Some(&args)), Err(-32602));
         }
