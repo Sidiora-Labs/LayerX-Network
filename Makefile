@@ -3357,3 +3357,13 @@ test-state-proof: $(BUILD_DIR)/tests/lxp_test_state_proof
 	$(BUILD_DIR)/tests/lxp_test_state_proof --vectors > $(BUILD_DIR)/tests/native-state-proofs.json
 	cmp $(BUILD_DIR)/tests/native-state-proofs.json contracts/config/native-state-proofs.json
 	cmp $(BUILD_DIR)/tests/native-state-proofs.json human/crates/layerx-paxeer-client/tests/vectors/native-state-proofs.json
+
+.PHONY: test-asset-withdraw-activity
+test-asset-withdraw-activity: $(BUILD_DIR)/tests/test_asset_withdraw_activity
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_asset_withdraw_activity
+
+$(BUILD_DIR)/tests/test_asset_withdraw_activity: tests/modules/test_asset_withdraw_activity.c \
+		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
+		$(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
