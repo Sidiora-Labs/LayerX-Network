@@ -77,8 +77,9 @@ The upload applies PVC `layerx-program-builder-release`, starts loader pod `laye
 
 ## Registry and retained material
 
-Build the native registry producer with `make layerx-module-registry`.
-`secrets_generate` invokes `build/bin/layerx-module-registry generate` with
+The node image must be built before rendering or provisioning material.
+`secrets_generate` runs `/usr/local/bin/layerx-module-registry generate` in that
+image with networking disabled and a read-only filesystem, supplying
 `--network-id "$NODE_NETWORK_ID" --protocol-version 3 --asset "$NODE_ASSET_ID"`
 and the symbol, currency and decimals read from node bootstrap constants.
 A configured custody profile is supplied with `--custody-profile` and validated
