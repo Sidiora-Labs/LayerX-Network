@@ -14,10 +14,9 @@ use layerx_platform_gateway::store::{
     ReservationRequest,
 };
 use layerx_platform_gateway::{
-    AccessError, AuthorityFacts, IssuedKey, PrincipalId, ProductionRoute, Quota,
-    VerifiedSubmission, authenticate_gateway_key, pay_timing, production_route,
-    verify_activity_operation, verify_program_operation, verify_program_simulation_operation,
-    verify_submission,
+    authenticate_gateway_key, pay_timing, production_route, verify_activity_operation,
+    verify_program_operation, verify_program_simulation_operation, verify_submission, AccessError,
+    AuthorityFacts, IssuedKey, PrincipalId, ProductionRoute, Quota, VerifiedSubmission,
 };
 use layerx_types::amount::Amount;
 use layerx_types::intent::{
@@ -34,8 +33,8 @@ use std::env;
 use std::fs;
 use std::io::Write;
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use subtle::ConstantTimeEq;
@@ -127,6 +126,7 @@ struct ComponentReceipt {
 #[serde(deny_unknown_fields)]
 struct AuthorityResponse {
     activity_id: String,
+    receipt: String,
     batch_id: String,
     asset: String,
     previous_state_root: String,
@@ -139,6 +139,11 @@ struct AuthorityResponse {
         deserialize_with = "layerx_platform_gateway::authority_evidence::present_maintained"
     )]
     batch_evidence: Option<layerx_platform_gateway::authority_evidence::MaintainedBatchDocument>,
+}
+
+struct PreparedAuthority {
+    facts: AuthorityFacts,
+    receipt: Vec<u8>,
 }
 
 #[derive(Deserialize)]
@@ -1174,23 +1179,35 @@ fn authenticate_key(
     })
 }
 
-fn authority(
+fn authority_request(
     config: &Config,
     activity_id: &str,
-    receipt: &[u8],
-) -> Result<AuthorityFacts, OutgoingResponse> {
-    let total_started = Instant::now();
-    let request_started = Instant::now();
-    let upstream = upstream_json(
+    wait_publication: bool,
+) -> Result<UpstreamResponse, OutgoingResponse> {
+    upstream_json(
         config,
         &config.authority,
         config.authority_token.as_str(),
         "GET",
-        &format!("/v1/authorized-batches/by-activity/{activity_id}"),
+        &format!(
+            "/v1/authorized-batches/{}/{activity_id}",
+            if wait_publication {
+                "wait-by-activity"
+            } else {
+                "by-activity"
+            }
+        ),
         None,
         &[],
-    )?;
-    pay_timing("gateway.authority.request", request_started);
+    )
+}
+
+fn authority_response(
+    config: &Config,
+    activity_id: &str,
+    upstream: &UpstreamResponse,
+) -> Result<PreparedAuthority, OutgoingResponse> {
+    let total_started = Instant::now();
     if upstream.status != 200 || upstream.content_type != "application/json" {
         return Err(response(503, "authority_unavailable", Some(5)));
     }
@@ -1202,6 +1219,8 @@ fn authority(
     {
         return Err(response(503, "authority_mismatch", Some(5)));
     }
+    let receipt = decode_hex(&facts.receipt, 512 * 1024)
+        .map_err(|_| response(503, "authority_invalid", Some(5)))?;
     let authority = AuthorityFacts::new(
         parse_hex32(&facts.batch_id).map_err(|_| response(503, "authority_invalid", Some(5)))?,
         parse_hex32(&facts.asset).map_err(|_| response(503, "authority_invalid", Some(5)))?,
@@ -1218,7 +1237,7 @@ fn authority(
         Some(maintained) => {
             let verified = maintained
                 .authorize(
-                    receipt,
+                    &receipt,
                     &authority.authorized(),
                     &config.sequencer_authorization,
                 )
@@ -1234,13 +1253,36 @@ fn authority(
     };
     pay_timing("gateway.authority.evidence", evidence_started);
     pay_timing("gateway.authority.total", total_started);
-    result
+    result.map(|facts| PreparedAuthority { facts, receipt })
+}
+
+fn match_authority_receipt(
+    prepared: &PreparedAuthority,
+    receipt: &[u8],
+) -> Result<AuthorityFacts, OutgoingResponse> {
+    if prepared.receipt.len() != receipt.len() || prepared.receipt.ct_eq(receipt).unwrap_u8() != 1 {
+        return Err(response(503, "authority_mismatch", Some(5)));
+    }
+    Ok(prepared.facts)
+}
+
+fn authority(
+    config: &Config,
+    activity_id: &str,
+    receipt: &[u8],
+) -> Result<AuthorityFacts, OutgoingResponse> {
+    let request_started = Instant::now();
+    let upstream = authority_request(config, activity_id, false)?;
+    pay_timing("gateway.authority.request", request_started);
+    let prepared = authority_response(config, activity_id, &upstream)?;
+    match_authority_receipt(&prepared, receipt)
 }
 
 fn verified_result(
     config: &Config,
     activity_id: &str,
     receipt_hex: &str,
+    prefetched_authority: Option<Result<PreparedAuthority, OutgoingResponse>>,
 ) -> Result<(Vec<u8>, Vec<u8>, i32), OutgoingResponse> {
     let total_started = Instant::now();
     let decode_started = Instant::now();
@@ -1250,7 +1292,10 @@ fn verified_result(
         .map_err(|_| response(503, "component_invalid", Some(5)))?;
     pay_timing("gateway.receipt.decode", decode_started);
     let authority_started = Instant::now();
-    let facts = authority(config, activity_id, &receipt)?;
+    let facts = match prefetched_authority {
+        Some(prepared) => match_authority_receipt(&prepared?, &receipt),
+        None => authority(config, activity_id, &receipt),
+    }?;
     pay_timing("gateway.receipt.authority", authority_started);
     let verify_started = Instant::now();
     let verified = verify_activity_operation(
@@ -1800,6 +1845,51 @@ fn reserve_activity(
     Ok(())
 }
 
+fn submit_upstreams(
+    config: &Config,
+    request: &IncomingRequest,
+    operation: &ActivityOperation,
+) -> (
+    Result<UpstreamResponse, String>,
+    Option<Result<PreparedAuthority, OutgoingResponse>>,
+) {
+    thread::scope(|scope| {
+        let authority = (!operation.program_mutation
+            && !operation.program_call
+            && operation.lifecycle_ordinal.is_none())
+        .then(|| {
+            scope.spawn(|| {
+                let started = Instant::now();
+                let result = authority_request(config, &operation.submitted_activity_id, true);
+                pay_timing("gateway.authority.request", started);
+                result.and_then(|upstream| {
+                    authority_response(config, &operation.submitted_activity_id, &upstream)
+                })
+            })
+        });
+        let component = config.client.request(
+            &config.component,
+            config.component_token.as_str(),
+            &http::OutboundRequest {
+                method: "POST",
+                path: if operation.program_mutation {
+                    &request.path
+                } else {
+                    "/v1/activities"
+                },
+                idempotency: Some(&operation.protocol_idempotency),
+                content_type: "application/octet-stream",
+                body: &operation.canonical,
+            },
+        );
+        let authority = authority.map(|handle| match handle.join() {
+            Ok(result) => result,
+            Err(_) => Err(response(503, "authority_unavailable", Some(5))),
+        });
+        (component, authority)
+    })
+}
+
 fn submit_activity(
     config: &Config,
     request: &IncomingRequest,
@@ -1809,21 +1899,8 @@ fn submit_activity(
 ) -> OutgoingResponse {
     let total_started = Instant::now();
     let component_started = Instant::now();
-    let Ok(upstream) = config.client.request(
-        &config.component,
-        config.component_token.as_str(),
-        &http::OutboundRequest {
-            method: "POST",
-            path: if operation.program_mutation {
-                &request.path
-            } else {
-                "/v1/activities"
-            },
-            idempotency: Some(&operation.protocol_idempotency),
-            content_type: "application/octet-stream",
-            body: &operation.canonical,
-        },
-    ) else {
+    let (upstream, prefetched_authority) = submit_upstreams(config, request, operation);
+    let Ok(upstream) = upstream else {
         return submitted_unknown_response(
             &operation.submitted_activity_id,
             &operation.protocol_idempotency,
@@ -1889,7 +1966,14 @@ fn submit_activity(
         return complete_lifecycle(config, record, operation, component_value, trace_id);
     }
     let complete_started = Instant::now();
-    let response = complete_activity(config, record, operation, component_value, trace_id);
+    let response = complete_activity(
+        config,
+        record,
+        operation,
+        component_value,
+        prefetched_authority,
+        trace_id,
+    );
     pay_timing("gateway.submit.complete", complete_started);
     pay_timing("gateway.submit.total", total_started);
     response
@@ -1965,6 +2049,7 @@ fn complete_activity(
     record: &KeyRecord,
     operation: &ActivityOperation,
     component_value: serde_json::Value,
+    prefetched_authority: Option<Result<PreparedAuthority, OutgoingResponse>>,
     trace_id: &str,
 ) -> OutgoingResponse {
     let total_started = Instant::now();
@@ -1991,7 +2076,14 @@ fn complete_activity(
     pay_timing("gateway.complete.decode", decode_started);
     let verify_started = Instant::now();
     let (result, receipt, verified_result_code) = match operation.program_head.map_or_else(
-        || verified_result(config, &component.activity_id, &component.receipt),
+        || {
+            verified_result(
+                config,
+                &component.activity_id,
+                &component.receipt,
+                prefetched_authority,
+            )
+        },
         |head| {
             verified_program_result(
                 config,
@@ -2973,7 +3065,7 @@ fn read_receipt(
     if !component.activity_id.eq_ignore_ascii_case(activity_id) {
         return response(503, "component_invalid", Some(5));
     }
-    let (_, receipt, _) = match verified_result(config, activity_id, &component.receipt) {
+    let (_, receipt, _) = match verified_result(config, activity_id, &component.receipt, None) {
         Ok(value) => value,
         Err(error) => return error,
     };
@@ -3812,7 +3904,8 @@ mod authority_shape_tests {
         let bytes = std::fs::read(path).unwrap_or_else(|error| panic!("{error}"));
         let capture: serde_json::Value =
             serde_json::from_slice(&bytes).unwrap_or_else(|error| panic!("{error}"));
-        let document = capture["authority"].clone();
+        let mut document = capture["authority"].clone();
+        document["receipt"] = capture["receipt_hex"].clone();
         assert!(serde_json::from_value::<AuthorityResponse>(document.clone()).is_ok());
         let mut historical = document.clone();
         historical

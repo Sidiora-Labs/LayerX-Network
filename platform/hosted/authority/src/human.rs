@@ -545,7 +545,7 @@ fn dispatch(config: &Config, request: &Request) -> Result<Response, Response> {
                 &value!({"batch_id": hex::encode(&held.facts.batch_id), "asset": hex::encode(&held.facts.asset), "previous_state_root": hex::encode(&held.facts.previous_state_root), "resulting_state_root": hex::encode(&held.facts.resulting_state_root), "sequencer_public_key": hex::encode(&held.facts.sequencer_public_key)}),
             ));
         }
-        return Ok(by_activity(config, activity));
+        return Ok(by_activity(config, activity, false));
     }
     let mut evidence = human.evidence(config)?;
     if matches!(name, "identity" | "key-policy" | "capability-scope") {

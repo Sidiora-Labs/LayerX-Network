@@ -806,11 +806,9 @@ fn local_gateway_rpc() {
     );
     let first = call("lx_sendActivity", params.clone(), true);
     assert_eq!(first["result"]["commitment"], "executed", "{first}");
-    assert!(
-        first["result"]["receipt"]
-            .as_str()
-            .is_some_and(|r| !r.is_empty())
-    );
+    assert!(first["result"]["receipt"]
+        .as_str()
+        .is_some_and(|r| !r.is_empty()));
     assert_eq!(
         call("lx_sendActivity", params, true)["result"],
         first["result"]
@@ -1478,6 +1476,9 @@ fn local_gateway_successful_send_latency() {
         &http,
         &authorization,
         &last_signed.required("successful SEND"),
+        &funding,
+        &cluster,
+        &boundary,
     );
 }
 
@@ -1517,8 +1518,11 @@ fn assert_funded_commitments(
     http: &Http,
     authorization: &str,
     signed: &layerx_platform_core::SignedSend,
+    funding: &funding::Funding,
+    cluster: &Cluster,
+    boundary: &Boundary,
 ) {
-    for commitment in ["batched", "finalised"] {
+    let call = |id: u64, canonical: &[u8], commitment: &str| {
         let started = Instant::now();
         let answer = http.request(
             "POST",
@@ -1528,36 +1532,78 @@ fn assert_funded_commitments(
                 ("Authorization", authorization),
             ],
             &serde_json::to_vec(&serde_json::json!({
-                "jsonrpc":"2.0", "id":21, "method":"lx_sendActivity",
-                "params":[hex_encode(&signed.canonical), commitment]
+                "jsonrpc":"2.0", "id":id, "method":"lx_sendActivity",
+                "params":[hex_encode(canonical), commitment]
             }))
             .required("commitment request"),
         );
         assert_eq!(answer.status, 200, "{}", answer.body);
-        let result = json(&answer);
-        assert_eq!(result["result"]["result_code"], 0, "{result}");
-        assert_eq!(
-            result["result"]["activity_id"],
-            hex_encode(&signed.activity_id)
-        );
-        if commitment == "batched" {
-            assert_eq!(result["result"]["commitment"], "batched", "{result}");
-            assert_eq!(
-                result["result"]["batch_evidence"]["canonical_value"],
-                result["result"]["receipt"]
-            );
-        } else {
-            assert_eq!(result["result"]["state"], "pending", "{result}");
-            assert_eq!(result["result"]["commitment"], "executed");
-            assert!(started.elapsed() < Duration::from_secs(10));
-        }
-        println!(
-            "successful_send_commitment requested={commitment} returned={} state={} elapsed_us={}",
-            result["result"]["commitment"],
-            result["result"]["state"],
-            started.elapsed().as_micros()
+        (json(&answer), started.elapsed())
+    };
+    let (batched, elapsed) = call(21, &signed.canonical, "batched");
+    assert_eq!(batched["result"]["result_code"], 0, "{batched}");
+    assert_eq!(
+        batched["result"]["activity_id"],
+        hex_encode(&signed.activity_id)
+    );
+    assert_eq!(batched["result"]["commitment"], "batched", "{batched}");
+    assert_eq!(
+        batched["result"]["batch_evidence"]["canonical_value"],
+        batched["result"]["receipt"]
+    );
+    println!(
+        "successful_send_commitment requested=batched returned={} state={} elapsed_us={}",
+        batched["result"]["commitment"],
+        batched["result"]["state"],
+        elapsed.as_micros()
+    );
+
+    let checkpoint_id = funding.finalise_first_batch(cluster);
+    let checkpoint_hex = hex_encode(&checkpoint_id);
+    let evidence = boundary
+        .core
+        .get(&format!("/v1/checkpoints/{checkpoint_hex}"));
+    assert_eq!(evidence.status, 200, "{}", evidence.body);
+    let evidence = json(&evidence);
+    assert_eq!(
+        evidence["result"]["checkpoint_id"], checkpoint_hex,
+        "{evidence}"
+    );
+    for field in ["checkpoint", "context", "canonical_header"] {
+        assert!(
+            evidence["result"][field]
+                .as_str()
+                .is_some_and(|value| !value.is_empty()),
+            "{field}: {evidence}"
         );
     }
+    let (later, elapsed) = call(22, &signed.canonical, "finalised");
+    assert_eq!(later["error"]["code"], -32001, "{later}");
+    assert_eq!(later["error"]["data"]["state"], "pending", "{later}");
+    assert_eq!(
+        later["error"]["data"]["requested_commitment"], "finalised",
+        "{later}"
+    );
+    assert_eq!(
+        later["error"]["data"]["evidence"]["activity_id"],
+        hex_encode(&signed.activity_id)
+    );
+    assert_eq!(later["error"]["data"]["evidence"]["result_code"], 0);
+    assert!(elapsed < Duration::from_secs(10));
+    println!(
+        "successful_send_commitment requested=finalised returned=pending state={} elapsed_us={}",
+        later["error"]["data"]["state"],
+        elapsed.as_micros()
+    );
+
+    println!(
+        "successful_finalised_checkpoint checkpoint_id={} evidence_bytes={}",
+        checkpoint_hex,
+        evidence["result"]["checkpoint"]
+            .as_str()
+            .required("checkpoint bytes")
+            .len()
+    );
 }
 
 fn ws_connect(
@@ -1759,12 +1805,10 @@ fn local_gateway_committed_payment_reads() {
         .required("funded main account");
     assert_eq!(account["balance"], "100000000000000");
     assert_eq!(account["asset_id"], hex_encode(&cluster.asset));
-    assert!(
-        !account["proof_material"]
-            .as_str()
-            .required("native proof")
-            .is_empty()
-    );
+    assert!(!account["proof_material"]
+        .as_str()
+        .required("native proof")
+        .is_empty());
     let assets = read("lx_listAssets", serde_json::json!([]));
     let assets = assets["result"]["assets"].as_array().required("assets");
     assert_eq!(assets.len(), 1);

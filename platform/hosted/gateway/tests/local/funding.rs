@@ -19,6 +19,7 @@ const RECIPIENT_FUNDING: &str = "1000000";
 pub(super) struct Funding {
     nodes: Vec<Daemon>,
     root: PathBuf,
+    checkpoint_output: Option<PathBuf>,
     pub(super) recipient_did: String,
     pub(super) recipient_seed: [u8; 32],
 }
@@ -91,6 +92,100 @@ impl Funding {
         self.nodes.push(daemon);
         format!("http://127.0.0.1:{port}")
     }
+
+    pub(super) fn finalise_first_batch(&self, cluster: &Cluster) -> [u8; 32] {
+        let output = self
+            .checkpoint_output
+            .as_ref()
+            .required("checkpoint output");
+        let gate = ConnectionGate::new(1);
+        let mut transport = must(
+            Uds::connect(&cluster.lni_socket, &gate, lni_limits()),
+            "checkpoint header LNI",
+        );
+        let handshake = must(
+            perform(&mut transport, &handshake_config(), None),
+            "checkpoint header handshake",
+        );
+        assert!(
+            handshake.node().latest_sealed_batch >= 1,
+            "first batch must be sealed"
+        );
+        let signed = must(
+            layerx_client::batch::lookup(
+                &mut transport,
+                handshake.node().interface_version,
+                1,
+                80,
+                handshake.node().authorised_sequencer_key,
+            ),
+            "first signed batch header",
+        );
+        drop(transport);
+        let pending = output.join("header.pending");
+        write(&pending, signed.canonical_bytes(), 0o600);
+        must(
+            fs::rename(&pending, output.join("available-header.bin")),
+            "publish checkpoint header",
+        );
+        let ready = cluster.root.join("checkpoint-finality-ready");
+        let deadline = Instant::now() + Duration::from_secs(180);
+        while !ready.is_file() {
+            assert!(Instant::now() < deadline, "settlement checkpoint deadline");
+            thread::sleep(Duration::from_millis(50));
+        }
+        let checkpoint = must(fs::read(output.join("checkpoint.bin")), "checkpoint bytes");
+        let context = must(fs::read(output.join("finality.bin")), "finality bytes");
+        let candidate = must(
+            layerx_client::evidence::FinalityEvidenceCandidate::from_exact_bytes(
+                checkpoint,
+                context,
+                PROTOCOL_VERSION,
+                NETWORK_ID,
+            ),
+            "settlement finality candidate",
+        );
+        assert_eq!(candidate.canonical_header(), signed.canonical_bytes());
+        assert_eq!(
+            must(fs::read_to_string(&ready), "checkpoint ready marker"),
+            format!("0x{}", hex_encode(&candidate.checkpoint_id()))
+        );
+        let gate = ConnectionGate::new(1);
+        let mut transport = must(
+            Uds::connect(&cluster.lni_socket, &gate, lni_limits()),
+            "finality registration LNI",
+        );
+        let handshake = must(
+            perform(&mut transport, &handshake_config(), None),
+            "finality registration handshake",
+        );
+        let registered = must(
+            layerx_client::evidence::register_finality_evidence(
+                &mut transport,
+                &candidate,
+                handshake.node().interface_version,
+                81,
+            ),
+            "durable finality registration",
+        );
+        assert_eq!(registered.batch_number, 1);
+        assert_eq!(registered.checkpoint_id, candidate.checkpoint_id());
+        drop(transport);
+        let gate = ConnectionGate::new(1);
+        let mut transport = must(
+            Uds::connect(&cluster.lni_socket, &gate, lni_limits()),
+            "finality observation LNI",
+        );
+        let observed = must(
+            perform(&mut transport, &handshake_config(), None),
+            "finality observation handshake",
+        );
+        assert_eq!(
+            observed.node().latest_finalised_checkpoint,
+            candidate.checkpoint_id()
+        );
+        candidate.checkpoint_id()
+    }
 }
 
 fn producer(script: &str, args: &[&str]) {
@@ -117,6 +212,7 @@ pub(super) fn start() -> (Cluster, Funding) {
     let mut funding = Funding {
         nodes: Vec::new(),
         root,
+        checkpoint_output: None,
         recipient_did: recipient_did.clone(),
         recipient_seed,
     };
@@ -177,7 +273,7 @@ pub(super) fn start() -> (Cluster, Funding) {
         "100000000000000",
     );
     let cluster = credit_node(
-        &funding,
+        &mut funding,
         &profile,
         &credit,
         &actor_key,
@@ -350,7 +446,7 @@ fn credit_recipient(
 }
 
 fn credit_node(
-    funding: &Funding,
+    funding: &mut Funding,
     profile: &Path,
     credit: &Path,
     actor_key: &Path,
@@ -358,7 +454,7 @@ fn credit_node(
     did: &str,
     recipient_seed: &[u8; 32],
 ) -> Cluster {
-    let cluster = start_node(profile, seed, recipient_seed);
+    let cluster = start_node(funding, profile, seed, recipient_seed);
     let signed = funding.root.join("signed-credit.bin");
     command(
         &text(&repository_root().join("build/tests/bridge/sign-credit")),
@@ -532,7 +628,12 @@ fn funded_genesis(
     }
 }
 
-fn start_node(profile: &Path, treasury_seed: [u8; 32], recipient_seed: &[u8; 32]) -> Cluster {
+fn start_node(
+    funding: &mut Funding,
+    profile: &Path,
+    treasury_seed: [u8; 32],
+    recipient_seed: &[u8; 32],
+) -> Cluster {
     assert_eq!(
         effective_uid(),
         0,
@@ -553,6 +654,7 @@ fn start_node(profile: &Path, treasury_seed: [u8; 32], recipient_seed: &[u8; 32]
         .verifying_key()
         .to_bytes();
     let genesis = funded_genesis(&root, &builder, &sequencer_seed, profile);
+    let settlement = start_checkpoint_settlement(funding, &root, &genesis);
     let replica_token = token();
     let program_token = token();
     let replica_port = free_port();
@@ -584,13 +686,18 @@ fn start_node(profile: &Path, treasury_seed: [u8; 32], recipient_seed: &[u8; 32]
     write(&identities, &configured, 0o600);
     chown_tree(&node_dir, DAEMON_UID, DAEMON_GID);
     let lni_socket = run_dir.join("layerxd.lni.sock");
-    let node_env = node_environment(
+    let mut node_env = node_environment(
         [&node_dir, &checkpoints, &logs, &migrations, &lni_socket],
         &genesis,
         [&sequencer_id, &sequencer_key, &sequencer_seed, &replica_id],
         [replica_port, program_port],
         [&replica_token, &program_token],
     );
+    node_env.insert("LAYERX_NODE_PAXEER_CHAIN_ID", "31337".to_owned());
+    node_env.insert("LAYERX_NODE_SETTLEMENT_CONTRACT", settlement.bond);
+    node_env.insert("LAYERX_NODE_CHECKPOINT_REGISTRY", settlement.registry);
+    node_env.insert("LAYERX_NODE_PAXEER_RPC_ADDRESS", "127.0.0.1".to_owned());
+    node_env.insert("LAYERX_NODE_PAXEER_RPC_PORT", settlement.port.to_string());
     let sequencer = Some({
         let mut sequencer = spawn(
             &layerxd,
@@ -616,6 +723,97 @@ fn start_node(profile: &Path, treasury_seed: [u8; 32], recipient_seed: &[u8; 32]
         treasury_seed,
         treasury_did,
         asset: genesis.asset,
+    }
+}
+
+struct Settlement {
+    bond: String,
+    registry: String,
+    port: u16,
+}
+
+fn start_checkpoint_settlement(
+    funding: &mut Funding,
+    root: &Path,
+    genesis: &Genesis,
+) -> Settlement {
+    let repository = repository_root();
+    let binary = repository.join("build/tests/lxp_test_daemon_finality_authority");
+    assert!(binary.is_file(), "real finality helper is not built");
+    let stderr = root.join("checkpoint-settlement.stderr");
+    let stdout = root.join("checkpoint-settlement.stdout");
+    let mut command = Command::new("python3");
+    command
+        .arg(repository.join("platform/hosted/gateway/tests/local/checkpoint_settlement.py"))
+        .args([
+            text(root),
+            text(&binary),
+            NETWORK_ID.to_string(),
+            text(&genesis.directory),
+        ])
+        .env_clear()
+        .env("PATH", "/root/.foundry/bin:/usr/bin:/bin")
+        .current_dir(&repository)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(must(
+            fs::File::create(&stdout),
+            "checkpoint stdout",
+        )))
+        .stderr(Stdio::from(must(
+            fs::File::create(&stderr),
+            "checkpoint stderr",
+        )))
+        .process_group(0);
+    let child = must(command.spawn(), "checkpoint settlement");
+    let mut daemon = Daemon {
+        child,
+        supervised: true,
+        stderr,
+    };
+    let ready = root.join("checkpoint-chain-ready.json");
+    let deadline = Instant::now() + Duration::from_secs(300);
+    while !ready.is_file() {
+        if let Ok(Some(status)) = daemon.child.try_wait() {
+            panic!(
+                "checkpoint settlement exited early with {status}: {}",
+                daemon.diagnostics()
+            );
+        }
+        assert!(
+            Instant::now() < deadline,
+            "checkpoint settlement readiness deadline: {}",
+            daemon.diagnostics()
+        );
+        thread::sleep(Duration::from_millis(100));
+    }
+    let document: serde_json::Value = must(
+        serde_json::from_slice(&must(fs::read(&ready), "checkpoint readiness")),
+        "checkpoint readiness JSON",
+    );
+    let bond = document["bond"]
+        .as_str()
+        .required("checkpoint bond")
+        .to_owned();
+    let registry = document["registry"]
+        .as_str()
+        .required("checkpoint registry")
+        .to_owned();
+    let port = u16::try_from(document["port"].as_u64().required("checkpoint port"))
+        .required("checkpoint port range");
+    assert!(
+        bond.starts_with("0x") && bond.len() == 42,
+        "checkpoint bond address"
+    );
+    assert!(
+        registry.starts_with("0x") && registry.len() == 42,
+        "checkpoint registry address"
+    );
+    funding.checkpoint_output = Some(root.join("checkpoint-output"));
+    funding.nodes.push(daemon);
+    Settlement {
+        bond,
+        registry,
+        port,
     }
 }
 

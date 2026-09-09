@@ -82,6 +82,7 @@ enum {
     LNI_SIMULATION_FIXED_BYTES = 2 + 32 + 4 + 4 + 4,
     LNI_SIMULATION_EVIDENCE_BYTES = 2 + 32 * 4 + 8 + 8 + 32 + 64,
     LNI_BACKLOG = 16,
+    LNI_RESPONSE_BUDGET_MS = 100,
     LNI_ADMISSION_JOURNAL_SUPERBLOCK_BYTES = 32,
     LNI_ADMISSION_JOURNAL_RECORD_BYTES = 64,
     LNI_ADMISSION_JOURNAL_VERSION = 1
@@ -2101,22 +2102,20 @@ static lxp_result send_receipt(lxp_daemon_lni_server *server, int descriptor,
     lxp_arena arena;
     uint8_t *storage;
     lxp_result status;
-    uint32_t wait_ms = 0U;
     size_t selector_length = request->payload_length;
-    struct timespec expires;
+    bool wait_publication = false;
+    int64_t wait_until;
+    struct timespec wait_deadline;
+    if (request->minor >= 5U && (selector_length == 34U || selector_length == 10U) &&
+        request->payload[selector_length - 1U] == 1U) {
+        wait_publication = true;
+        --selector_length;
+    }
     (void)memset(&query, 0, sizeof(query));
     if (request->proof_length != 0U || request->payload_length < 1U)
         return send_refusal(descriptor, server->frame_bytes,
                             request->correlation_id, 1U,
                             LXP_ERR_MALFORMED_ENVELOPE, deadline);
-    if (selector_length == 37U || selector_length == 13U) {
-        selector_length -= 4U;
-        wait_ms = load_u32(request->payload + selector_length);
-        if (wait_ms > 30000U)
-            return send_refusal(descriptor, server->frame_bytes,
-                                request->correlation_id, 1U,
-                                LXP_ERR_LENGTH_LIMIT, deadline);
-    }
     if (request->payload[0] == 1U && selector_length == 33U) {
         query.kind = LXP_RECEIPT_BY_TRANSACTION_ID;
         (void)memcpy(query.identifier, request->payload + 1U, 32U);
@@ -2133,14 +2132,10 @@ static lxp_result send_receipt(lxp_daemon_lni_server *server, int descriptor,
     }
     query.maximum_response_bytes = server->frame_bytes -
         LNI_ENVELOPE_FIXED_BYTES;
-    if (clock_gettime(CLOCK_MONOTONIC, &expires) != 0) return LXP_ERR_IO;
-    expires.tv_sec += (time_t)(wait_ms / 1000U);
-    expires.tv_nsec += (long)(wait_ms % 1000U) * 1000000L;
-    if (expires.tv_nsec >= 1000000000L) {
-        ++expires.tv_sec;
-        expires.tv_nsec -= 1000000000L;
-    }
-    deadline += wait_ms;
+    wait_until = deadline > LNI_RESPONSE_BUDGET_MS ?
+        deadline - LNI_RESPONSE_BUDGET_MS : deadline;
+    wait_deadline.tv_sec = (time_t)(wait_until / 1000);
+    wait_deadline.tv_nsec = (long)(wait_until % 1000) * 1000000L;
     storage = malloc(query.maximum_response_bytes);
     if (storage == NULL) return LXP_ERR_IO;
     if (pthread_mutex_lock(&receipt_commit_mutex) != 0) {
@@ -2164,32 +2159,32 @@ static lxp_result send_receipt(lxp_daemon_lni_server *server, int descriptor,
             return LXP_FATAL_INVARIANT;
         }
         history.log = &published_log;
-        status = lxp_arena_init(&arena, storage, query.maximum_response_bytes);
+        status = lxp_arena_init(&arena, storage,
+                                query.maximum_response_bytes);
         if (status == LXP_OK)
             status = lxp_receipt_lookup(&history, &query, &arena, &receipt);
         if (pthread_mutex_lock(&receipt_commit_mutex) != 0) {
             free(storage);
             return LXP_ERR_IO;
         }
-        if (status != LXP_ERR_UNKNOWN_ACTIVITY || wait_ms == 0U ||
-            server_stopping(server)) break;
+        if (status != LXP_ERR_UNKNOWN_ACTIVITY || !wait_publication ||
+            server_stopping(server))
+            break;
         if (generation != receipt_commit_generation) {
-            struct timespec now;
-            if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
+            int64_t now;
+            if (monotonic_milliseconds(&now) != LXP_OK) {
                 status = LXP_ERR_IO;
                 break;
             }
-            if (now.tv_sec > expires.tv_sec ||
-                (now.tv_sec == expires.tv_sec && now.tv_nsec >= expires.tv_nsec))
-                wait_ms = 0U;
+            if (now >= wait_until) wait_publication = false;
             continue;
         }
         waited = pthread_cond_clockwait(&receipt_commit_changed,
-                                       &receipt_commit_mutex,
-                                       CLOCK_MONOTONIC, &expires);
-        if (waited == ETIMEDOUT) {
-            wait_ms = 0U;
-        } else if (waited != 0) {
+                                        &receipt_commit_mutex,
+                                        CLOCK_MONOTONIC, &wait_deadline);
+        if (waited == ETIMEDOUT)
+            wait_publication = false;
+        else if (waited != 0) {
             status = LXP_ERR_IO;
             break;
         }
@@ -3509,10 +3504,12 @@ static lxp_result serve_connection(lxp_daemon_lni_server *server,
         uint8_t *frame;
         uint32_t length;
         lni_envelope request;
+        int64_t idle_deadline;
         int64_t deadline;
-        lxp_result status = request_deadline(server, &deadline);
+        lxp_result status = request_deadline(server, &idle_deadline);
         if (status == LXP_OK)
-            status = exact_read(descriptor, prefix, sizeof(prefix), deadline);
+            status = exact_read(descriptor, prefix, sizeof(prefix),
+                                idle_deadline);
         if (status == LXP_ERR_TRUNCATED) return LXP_OK;
         if (status != LXP_OK) return status;
         length = load_u32(prefix);
@@ -3520,7 +3517,8 @@ static lxp_result serve_connection(lxp_daemon_lni_server *server,
             return LXP_ERR_LENGTH_LIMIT;
         frame = (uint8_t *)malloc(length);
         if (frame == NULL) return LXP_ERR_IO;
-        status = exact_read(descriptor, frame, length, deadline);
+        status = exact_read(descriptor, frame, length, idle_deadline);
+        if (status == LXP_OK) status = request_deadline(server, &deadline);
         if (status == LXP_OK) status = decode_envelope(frame, length, &request);
         if (status != LXP_OK) {
             lxp_secure_zero(frame, length);
