@@ -116,8 +116,7 @@ fn inspections_and_unavailable_budget_reconciliation_are_audited_before_refusal(
         evidence: support::raw_receipt_at([0x44; 32], 0, 7, 90),
     }];
     assert!(matches!(
-        surface
-            .reconcile_budget_divergence(
+        surface.reconcile_budget_divergence(
             &context(2),
             [2; 32],
             &mut local,

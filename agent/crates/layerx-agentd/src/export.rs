@@ -31,8 +31,8 @@ pub fn build(
     {
         return Err(ExportBuildError::Empty);
     }
-    let local_verification = verify(&artifact, expected_settlement_domain)
-        .map_err(ExportBuildError::Verification)?;
+    let local_verification =
+        verify(&artifact, expected_settlement_domain).map_err(ExportBuildError::Verification)?;
     Ok(BuiltExport {
         artifact,
         local_verification,

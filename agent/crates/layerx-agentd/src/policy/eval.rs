@@ -196,13 +196,11 @@ impl RuleMatcher for DeterministicMatcher {
             && constraints
                 .maximum_cumulative_amount
                 .is_none_or(|maximum| cumulative_amount <= maximum)
-            && constraints
-                .maximum_cumulative_count
-                .is_none_or(|maximum| {
-                    input
-                        .authenticated_cumulative_count()
-                        .is_some_and(|count| count <= maximum)
-                })
+            && constraints.maximum_cumulative_count.is_none_or(|maximum| {
+                input
+                    .authenticated_cumulative_count()
+                    .is_some_and(|count| count <= maximum)
+            })
             && (constraints.purposes.is_empty() || constraints.purposes.contains(&request.purpose))
             && (constraints.capability_ids.is_empty()
                 || constraints.capability_ids.contains(&input.capability.id))
