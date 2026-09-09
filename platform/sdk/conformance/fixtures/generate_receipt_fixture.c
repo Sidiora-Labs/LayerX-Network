@@ -299,6 +299,12 @@ int main(int argc, char **argv)
         (void)fprintf(stderr, "fixture: receipt protocol version drifted\n");
         return 1;
     }
+    if (argc > 2) {
+        if (argc != 3 || strcmp(argv[2], "--supply") != 0) return 1;
+        receipt.supply_binding_version = 1U;
+        receipt.total_units_before = (lxp_u128){0U, fixture_payer_start};
+        receipt.total_units_after = receipt.total_units_before;
+    }
     status = lxp_receipt_sign(&receipt, sequencer_private_key, &arena);
     if (status != LXP_OK) {
         (void)fprintf(stderr, "fixture: receipt signing failed: %s\n",

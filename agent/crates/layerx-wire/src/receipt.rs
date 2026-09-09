@@ -8,6 +8,7 @@ use crate::limits::{protocol_version_uses_occupancy, MAX_MESSAGE_BYTES};
 use crate::WireError;
 
 const RECEIPT_TAG: u16 = 0x5201;
+const SUPPLY_RECEIPT_TAG: u16 = 0x5202;
 const BATCH_TAG: u16 = 0x1701;
 const BATCH_FIELDS: u8 = 15;
 const PROOF_TAG: u16 = 0x4d50;
@@ -214,11 +215,17 @@ pub struct ProtocolReceipt {
     authorization_hash: [u8; 32],
     context_hash: [u8; 32],
     timestamp: u64,
+    supply: Option<(u128, u128)>,
     program_outcome: Option<ProgramOutcome>,
     sequencer_signature: Option<[u8; 64]>,
 }
 
 impl ProtocolReceipt {
+    #[must_use]
+    pub const fn total_units(&self) -> Option<(u128, u128)> {
+        self.supply
+    }
+
     #[must_use]
     pub fn effects(&self) -> &[Effect] {
         &self.effects
@@ -647,7 +654,12 @@ fn decode_program_outcome(
 
 fn decode_protocol(bytes: &[u8]) -> Result<Receipt, WireError> {
     let mut decoder = Decoder::new(bytes, MAX_MESSAGE_BYTES);
-    let envelope_version = decoder.structure_header_version(RECEIPT_TAG)?;
+    let supply_present = bytes.get(2..4) == Some(&[0x52, 0x02]);
+    let envelope_version = decoder.structure_header_version(if supply_present {
+        SUPPLY_RECEIPT_TAG
+    } else {
+        RECEIPT_TAG
+    })?;
     let protocol_version = decoder.u16()?;
     if protocol_version != envelope_version {
         return Err(WireError::known(
@@ -685,6 +697,26 @@ fn decode_protocol(bytes: &[u8]) -> Result<Receipt, WireError> {
     let authorization_hash = bounded_array(&mut decoder)?;
     let context_hash = bounded_array(&mut decoder)?;
     let timestamp = decoder.u64()?;
+    let supply = if supply_present {
+        let before = decoder.u128()?;
+        let after = decoder.u128()?;
+        let expected = match operation {
+            1 if before == 0 => Some(0),
+            4..=8 => Some(before),
+            10 if amount > 0 => before.checked_add(amount),
+            11 if amount > 0 => before.checked_sub(amount),
+            _ => None,
+        };
+        if module_id != 1 || result_code != 0 || asset == [0; 32] || expected != Some(after) {
+            return Err(WireError::known(
+                KnownResult::NonCanonical,
+                decoder.offset(),
+            ));
+        }
+        Some((before, after))
+    } else {
+        None
+    };
     let program_outcome = if decoder.remaining() > 69 {
         Some(decode_program_outcome(&mut decoder, protocol_version)?)
     } else {
@@ -741,6 +773,7 @@ fn decode_protocol(bytes: &[u8]) -> Result<Receipt, WireError> {
         authorization_hash,
         context_hash,
         timestamp,
+        supply,
         program_outcome,
         sequencer_signature,
     })))
@@ -776,9 +809,10 @@ fn decode_replay(bytes: &[u8]) -> Result<Receipt, WireError> {
 /// Returns a typed canonical rejection with no panic path.
 pub fn decode(bytes: &[u8]) -> Result<Receipt, WireError> {
     if bytes.len() >= 4
-        && (bytes[..4] == [0, 1, 0x52, 1]
-            || bytes[..4] == [0, 2, 0x52, 1]
-            || bytes[..4] == [0, 3, 0x52, 1])
+        && bytes[0] == 0
+        && (1..=3).contains(&bytes[1])
+        && bytes[2] == 0x52
+        && (1..=2).contains(&bytes[3])
     {
         decode_protocol(bytes)
     } else {
@@ -845,7 +879,14 @@ fn encode_program_outcome(
 
 fn encode_protocol(receipt: &ProtocolReceipt) -> Result<Vec<u8>, WireError> {
     let mut encoder = Encoder::new(MAX_MESSAGE_BYTES);
-    encoder.structure_header_version(RECEIPT_TAG, receipt.protocol_version)?;
+    encoder.structure_header_version(
+        if receipt.supply.is_some() {
+            SUPPLY_RECEIPT_TAG
+        } else {
+            RECEIPT_TAG
+        },
+        receipt.protocol_version,
+    )?;
     encoder.u16(receipt.protocol_version)?;
     encoder.bytes(&receipt.activity_id, 32)?;
     encoder.u64(receipt.global_sequence)?;
@@ -876,6 +917,10 @@ fn encode_protocol(receipt: &ProtocolReceipt) -> Result<Vec<u8>, WireError> {
     encoder.bytes(&receipt.authorization_hash, 32)?;
     encoder.bytes(&receipt.context_hash, 32)?;
     encoder.u64(receipt.timestamp)?;
+    if let Some((before, after)) = receipt.supply {
+        encoder.u128(before)?;
+        encoder.u128(after)?;
+    }
     if let Some(outcome) = &receipt.program_outcome {
         encode_program_outcome(&mut encoder, outcome, receipt.protocol_version)?;
     }

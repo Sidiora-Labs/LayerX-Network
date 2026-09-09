@@ -5444,3 +5444,11 @@ symbol = "lx_asset_record_migrate_v2 migrate_asset_v2"
 observed = "The operator command layerx-genesis-build --migrate-asset-v2 input-record salt-file salt-source output-directory validates a version-2 record with an explicit 32-byte salt and emits asset-v3.bin plus salt-source.txt into an exclusive directory. Native issuer ids must match the supplied salt derivation. No salt is synthesized. Wrong native salt and exact-byte migration round trip pass in test-state-commitment-transition."
 assumption = "The command migrates record artifacts, not signed snapshot manifests, historical roots or settlement anchors. Snapshot incorporation requires an independently authorized migration boundary."
 severity = "note"
+
+[observation.3.7.49]
+task = "3.7"
+file = "include/layerx/lxp_receipt.h src/protocol/lxp_receipt.c src/protocol/lxp_module_ctx.c agent/crates/layerx-wire/src/receipt.rs"
+symbol = "lxp_receipt_validate_supply lxp_ctx_bind_asset_supply"
+observed = "Receipt structure tag 0x5202 authenticates total_units_before and total_units_after as two big-endian u128 values immediately after timestamp. Protocol version remains independent. Tag 0x5201 remains decodable. Native Asset execution binds the committed supply transition, and native and Rust codecs enforce register, conserved, mint and burn supply equations. Single-field, paired-field and downgrade signature tampering are refused by the real signed transition tests. make test-state-commitment-transition and make test passed; evidence: qual-logs/pay1/pay1f-focused.log and qual-logs/pay1/pay1f-test.log. The snapshot and signature gates do not establish historical deployment compatibility."
+assumption = "Consumers of the new receipt structure must retain the supply bytes in digest and signature verification. Existing receipt fixtures retain their legacy structure; the native fixture generator accepts --supply for the new structure."
+severity = "note"

@@ -85,6 +85,41 @@ static lxp_result asset_staged_record(const lxp_module_ctx *ctx,
     return LXP_ERR_ASSET_MISMATCH;
 }
 
+lxp_result lxp_ctx_bind_asset_supply(lxp_module_ctx *ctx,
+    const uint8_t asset_id[32], lxp_u128 before, lxp_u128 after)
+{
+    lx_asset_record record;
+    lxp_receipt check;
+    lxp_result status;
+    if (ctx == NULL || asset_id == NULL || !ctx->mutable ||
+        ctx->module_id != LXP_MODULE_ASSET || !ctx->ledger_admission.bound ||
+        memcmp(ctx->ledger_admission.activity_binding, ctx->activity_id, 32U) != 0 ||
+        ctx->ledger_receipt.supply_binding_version != 0U)
+        return LXP_ERR_NON_CANONICAL;
+    status = asset_staged_record(ctx, asset_id, &record);
+    if (status != LXP_OK || lxp_u128_cmp(record.total_units, after) != 0)
+        return LXP_FATAL_SUPPLY_MISMATCH;
+    (void)memset(&check, 0, sizeof(check));
+    check.module_id = LXP_MODULE_ASSET;
+    check.operation = (uint8_t)lxp_activity_type_ordinal(ctx->ledger_admission.activity_type);
+    check.amount = ctx->ledger_receipt.amount;
+    check.supply_binding_version = 1U;
+    check.total_units_before = before;
+    check.total_units_after = after;
+    (void)memcpy(check.asset, asset_id, 32U);
+    status = lxp_receipt_validate_supply(&check);
+    if (status != LXP_OK) return status;
+    if (ctx->ledger_receipt_present &&
+        memcmp(ctx->ledger_receipt.asset, asset_id, 32U) != 0)
+        return LXP_FATAL_SUPPLY_MISMATCH;
+    ctx->ledger_receipt.supply_binding_version = 1U;
+    ctx->ledger_receipt.total_units_before = before;
+    ctx->ledger_receipt.total_units_after = after;
+    ctx->ledger_receipt.operation = check.operation;
+    (void)memcpy(ctx->ledger_receipt.asset, asset_id, 32U);
+    return LXP_OK;
+}
+
 static lxp_result commit_account(const lxp_module_ctx *ctx,
                                  lx_account_registry *registry,
                                  const lx_account_registration *registration,

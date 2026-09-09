@@ -252,7 +252,7 @@ static lxp_result module_validate(lxp_module_ctx *ctx,
 
 #include "lx_asset_execution.h"
 
-static lxp_result module_execute(lxp_module_ctx *ctx,
+static lxp_result module_execute_impl(lxp_module_ctx *ctx,
                                  const lxp_activity *activity,
                                  const lxp_authority_resolved *authority,
                                  const void *decoded,
@@ -338,6 +338,49 @@ static lxp_result module_execute(lxp_module_ctx *ctx,
     input.timestamp = lxp_ctx_batch_timestamp_ms(ctx);
     input.leg_count = 1U;
     return lxp_ctx_bind_ledger_receipt(ctx, &input);
+}
+
+static lxp_result module_execute(lxp_module_ctx *ctx,
+    const lxp_activity *activity, const lxp_authority_resolved *authority,
+    const void *decoded, lxp_effect_buffer *effects)
+{
+    const asset_decoded *value = decoded;
+    const uint8_t *id;
+    lx_asset_record before;
+    lx_asset_record after;
+    lxp_grant_state grant;
+    lxp_result status;
+    if (ctx == NULL || value == NULL) return LXP_ERR_UNKNOWN_ACTIVITY;
+    if (value->ordinal == 2U || value->ordinal == 3U)
+        return module_execute_impl(ctx, activity, authority, decoded, effects);
+    if (value->send_present) id = value->send.asset;
+    else {
+        if (value->typed == NULL) return LXP_ERR_NON_CANONICAL;
+        switch (value->ordinal) {
+        case 1U: id = value->typed->registration.asset_id; break;
+        case 4U: id = value->typed->account_open.asset_id; break;
+        case 6U: id = value->typed->receive.asset; break;
+        case 7U: id = value->typed->grant.asset; break;
+        case 8U:
+            status = grant_load(ctx, value->typed->revocation.grant_id, &grant);
+            if (status != LXP_OK) return status;
+            id = grant.grant.asset;
+            break;
+        case 10U: case 11U: id = value->typed->supply.asset_id; break;
+        default: return LXP_ERR_UNKNOWN_ACTIVITY;
+        }
+    }
+    status = asset_load(ctx, id, &before);
+    if (value->ordinal == 1U && status == LXP_ERR_ASSET_MISMATCH) {
+        (void)memset(&before, 0, sizeof(before));
+        status = LXP_OK;
+    }
+    if (status != LXP_OK) return status;
+    status = module_execute_impl(ctx, activity, authority, decoded, effects);
+    if (status == LXP_OK) status = asset_load(ctx, id, &after);
+    if (status == LXP_OK)
+        status = lxp_ctx_bind_asset_supply(ctx, id, before.total_units, after.total_units);
+    return status;
 }
 
 static lxp_result module_epoch(lxp_module_ctx *ctx, uint64_t epoch,

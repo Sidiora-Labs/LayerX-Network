@@ -212,6 +212,24 @@ static int asset_send(unsigned refusal)
         lxp_receipt changed = f->receipt;
         changed.resulting_state_root[0] ^= 1U;
         REQUIRE(lxp_receipt_verify(&changed, f->public_key, &f->arena) != LXP_OK);
+        if (expected == LXP_OK) {
+            REQUIRE(f->receipt.supply_binding_version == 1U);
+            changed = f->receipt;
+            changed.total_units_before.lo ^= 1U;
+            REQUIRE(lxp_receipt_verify(&changed, f->public_key, &f->arena) != LXP_OK);
+            changed = f->receipt;
+            changed.total_units_after.lo ^= 1U;
+            REQUIRE(lxp_receipt_verify(&changed, f->public_key, &f->arena) != LXP_OK);
+            changed = f->receipt;
+            changed.total_units_before.lo++;
+            changed.total_units_after.lo++;
+            REQUIRE(lxp_receipt_verify(&changed, f->public_key, &f->arena) != LXP_OK);
+            changed = f->receipt;
+            changed.supply_binding_version = 0U;
+            changed.total_units_before = (lxp_u128){0U, 0U};
+            changed.total_units_after = (lxp_u128){0U, 0U};
+            REQUIRE(lxp_receipt_verify(&changed, f->public_key, &f->arena) != LXP_OK);
+        }
         if (expected == LXP_OK && f->receipt.operation != 0U) {
             changed = f->receipt;
             changed.from_balance_before.lo ^= 1U;
@@ -558,6 +576,24 @@ static int pay1_submit_bytes(fixture *f, uint16_t ordinal, const uint8_t *payloa
         lxp_receipt changed = f->receipt;
         changed.resulting_state_root[0] ^= 1U;
         REQUIRE(lxp_receipt_verify(&changed, f->public_key, &f->arena) != LXP_OK);
+        if (expected == LXP_OK) {
+            REQUIRE(f->receipt.supply_binding_version == 1U);
+            changed = f->receipt;
+            changed.total_units_before.lo ^= 1U;
+            REQUIRE(lxp_receipt_verify(&changed, f->public_key, &f->arena) != LXP_OK);
+            changed = f->receipt;
+            changed.total_units_after.lo ^= 1U;
+            REQUIRE(lxp_receipt_verify(&changed, f->public_key, &f->arena) != LXP_OK);
+            changed = f->receipt;
+            changed.total_units_before.lo++;
+            changed.total_units_after.lo++;
+            REQUIRE(lxp_receipt_verify(&changed, f->public_key, &f->arena) != LXP_OK);
+            changed = f->receipt;
+            changed.supply_binding_version = 0U;
+            changed.total_units_before = (lxp_u128){0U, 0U};
+            changed.total_units_after = (lxp_u128){0U, 0U};
+            REQUIRE(lxp_receipt_verify(&changed, f->public_key, &f->arena) != LXP_OK);
+        }
         if (expected == LXP_OK && f->receipt.operation != 0U) {
             changed = f->receipt;
             changed.from_balance_before.lo ^= 1U;
@@ -980,6 +1016,7 @@ static int pay1_issuance(uint8_t final_root[32])
     REQUIRE(lxp_u128_to_be((lxp_u128){0U, 70U}, f->payload + 66U) == LXP_OK);
     REQUIRE(pay1_submit(f, 10U, 82U, LXP_OK) == 0);
     REQUIRE(f->receipt.operation == 10U && f->receipt.from_balance_before.lo == 100U);
+    REQUIRE(f->receipt.total_units_before.lo == 0U && f->receipt.total_units_after.lo == 70U);
     REQUIRE(f->receipt.from_balance_after.lo == 30U && f->receipt.to_balance_after.lo == 70U);
     REQUIRE(f->accounts.accounts[2].balance.lo == 30U && f->accounts.accounts[3].balance.lo == 70U);
     REQUIRE(pay1_submit(f, 10U, 82U, LXP_ERR_INSUFFICIENT_BALANCE) == 0);
@@ -987,6 +1024,7 @@ static int pay1_issuance(uint8_t final_root[32])
     REQUIRE(lxp_u128_to_be((lxp_u128){0U, 20U}, f->payload + 66U) == LXP_OK);
     REQUIRE(pay1_submit(f, 11U, 82U, LXP_OK) == 0);
     REQUIRE(f->receipt.operation == 11U && f->receipt.from_balance_before.lo == 70U);
+    REQUIRE(f->receipt.total_units_before.lo == 70U && f->receipt.total_units_after.lo == 50U);
     REQUIRE(f->receipt.from_balance_after.lo == 50U && f->receipt.to_balance_after.lo == 50U);
     REQUIRE(lx_asset_record_decode(f->kernel.module_kv[0].value,
         f->kernel.module_kv[0].value_length, &record) == LXP_OK);
