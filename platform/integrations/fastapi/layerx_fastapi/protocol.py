@@ -14,6 +14,8 @@ from layerx_sdk import (
     LocalSignatureVerifier,
     PlatformSdkError,
     ReceiptVerification,
+    grant_payment_terms,
+    payment_payer,
     verify_receipt,
 )
 
@@ -435,12 +437,18 @@ def verify_payment_receipt(
 ) -> ReceiptVerification:
     try:
         verified = verify_receipt(canonical_receipt, authorized_batch, signatures)
+        payer = (
+            payment_payer(requirements.extra)
+            if requirements.scheme == "exact"
+            else grant_payment_terms(requirements.extra)[2]
+        )
     except PlatformSdkError as error:
         raise MiddlewareError(MiddlewareErrorCode.VERIFICATION_FAILURE) from error
     if (
         verified.receipt.amount != int(requirements.amount)
         or not constant_time_equal(verified.receipt.asset, parse_hex32(requirements.asset))
         or not constant_time_equal(verified.receipt.to_account, parse_hex32(requirements.pay_to))
+        or not constant_time_equal(verified.receipt.from_account, parse_hex32(payer))
     ):
         raise MiddlewareError(MiddlewareErrorCode.VERIFICATION_FAILURE)
     return verified

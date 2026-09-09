@@ -19,7 +19,9 @@ class RpcTests(unittest.TestCase):
                 expected_payer,
                 fixture.authorized,
                 fixture.signatures,
-                **fixture.offer,
+                amount=fixture.offer["amount"],
+                asset=fixture.offer["asset"],
+                pay_to=fixture.offer["pay_to"],
             )
 
         self.assertEqual(verify(result), verified)

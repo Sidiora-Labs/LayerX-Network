@@ -8,6 +8,7 @@ export interface GrantOffer {
   readonly extra: { readonly layerx: {
     readonly commitment: "executed" | "batched" | "finalised";
     readonly purposeHash: string;
+    readonly payer: string;
     readonly windowSeconds?: string;
   } };
 }
@@ -20,9 +21,11 @@ export function validateGrantDraw(wire: Uint8Array, offer: GrantOffer, idempoten
   if (!integer(offer.amount, 128) || BigInt(offer.amount) === 0n
     || !["executed", "batched", "finalised"].includes(terms.commitment)
     || !/^[0-9a-f]{64}$/u.test(terms.purposeHash) || /^0+$/u.test(terms.purposeHash)
+    || !/^[0-9a-f]{64}$/u.test(terms.payer) || /^0+$/u.test(terms.payer)
     || receive.asset !== offer.asset || receive.to !== offer.payTo || receive.amount !== offer.amount
     || receive.idempotency_key !== idempotencyKey || receive.grant_id !== grant.grant_id
-    || receive.from !== grant.from || receive.to !== grant.recipient || receive.asset !== grant.asset
+    || receive.from !== grant.from || receive.from !== terms.payer
+    || receive.to !== grant.recipient || receive.asset !== grant.asset
     || grant.purpose_hash !== terms.purposeHash || BigInt(receive.amount) > BigInt(grant.per_draw_maximum)
     || BigInt(receive.amount) > BigInt(grant.allowance) || now < 0n || now >= BigInt(grant.expiration)
     || receive.receiver_authorization.network_id !== networkId

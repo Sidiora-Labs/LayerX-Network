@@ -96,6 +96,27 @@ from .verifier import (
 from .native_program_call import NativeProgramCall, encode_native_program_call, decode_native_program_call
 
 from .programs import NativeProgramRequest
+from .x402_receive import (
+    decode_receive,
+    encode_account_open,
+    encode_asset_supply,
+    encode_grant,
+    encode_grant_revoke,
+    encode_receive,
+    encode_register,
+    grant_authorization_message,
+    native_asset_id,
+    receive_authorization_message,
+)
+from .x402 import (
+    PaymentCheckpointEvidence,
+    PaymentCommitmentEvidence,
+    grant_payment_terms,
+    payment_commitment,
+    payment_payer,
+    verify_payment_commitment_evidence,
+    verify_payment_receipt,
+)
 
 __all__ = [
     "NativeCapability", "NativeStorageRead", "NativeStorageWrite", "NativeEmitEvent", "NativeCall",
@@ -203,4 +224,21 @@ __all__ = [
     "MirrorVerification",
     "MirrorVerificationError",
     "MirrorVerifier",
+    "decode_receive",
+    "encode_account_open",
+    "encode_asset_supply",
+    "encode_grant",
+    "encode_grant_revoke",
+    "encode_receive",
+    "encode_register",
+    "grant_authorization_message",
+    "native_asset_id",
+    "receive_authorization_message",
+    "PaymentCheckpointEvidence",
+    "PaymentCommitmentEvidence",
+    "grant_payment_terms",
+    "payment_commitment",
+    "payment_payer",
+    "verify_payment_commitment_evidence",
+    "verify_payment_receipt",
 ]

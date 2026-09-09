@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { decodeReceive, encodeReceive, encodeGrant, grantAuthorizationMessage, receiveAuthorizationMessage } from "../../../../agent/sdk/typescript/dist/src/x402/receive.js";
+import { decodeReceive, encodeReceive, encodeGrant, grantAuthorizationMessage, receiveAuthorizationMessage } from "@sidiora/layerx-sdk";
 
 const fixture = readFileSync(new URL("receive.hex", import.meta.url), "utf8").trim().split("\n");
 const wire = Uint8Array.from(Buffer.from(fixture[0], "hex"));

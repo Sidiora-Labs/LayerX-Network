@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { verifyRpcPayment, verifyPaymentReceipt, PaymentRpc } from "../../seller/dist/index.js";
+import { verifyRpcPayment, verifyPaymentReceipt, PaymentRpc } from "@sidiora/layerx-seller-middleware";
 const f = JSON.parse(readFileSync(new URL("../../../sdk/conformance/fixtures/receipt-positive-v2.json", import.meta.url)));
 const b = v => Uint8Array.from(Buffer.from(v, "hex"));
 const a = f.authorized_batch;
 const authorized = { batchId: b(a.batch_id_hex), asset: b(a.asset_hex), previousStateRoot: b(a.previous_state_root_hex), resultingStateRoot: b(a.resulting_state_root_hex), sequencerPublicKey: b(a.sequencer_public_key_hex) };
-const offer = { scheme: "exact", network: "layerx:testnet", amount: f.expected.amount, asset: a.asset_hex, payTo: f.expected.to_hex, maxTimeoutSeconds: 30 };
+const offer = { scheme: "exact", network: "layerx:testnet", amount: f.expected.amount, asset: a.asset_hex, payTo: f.expected.to_hex, maxTimeoutSeconds: 30, extra: { layerx: { commitment: "executed", payer: f.expected.from_hex } } };
 test("RPC receipt response binds actual signed activity and payer; pending never succeeds", async () => {
   const verified = await verifyPaymentReceipt({ canonicalReceipt: b(f.canonical_receipt_hex), authorizedBatch: authorized }, offer);
   const activity = Buffer.from(verified.receipt.activityId).toString("hex");

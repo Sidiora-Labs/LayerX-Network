@@ -4,8 +4,9 @@ from dataclasses import replace
 from pathlib import Path
 import unittest
 
-from layerx_sdk.x402 import (
+from layerx_sdk import (
     PaymentCommitmentEvidence,
+    grant_payment_terms,
     payment_commitment,
     verify_payment_commitment_evidence,
     verify_payment_receipt,
@@ -40,6 +41,7 @@ class CommitmentTests(unittest.TestCase):
             amount=FIXTURE["expected"]["amount"],
             asset=batch["asset_hex"],
             pay_to=FIXTURE["expected"]["to_hex"],
+            payer=FIXTURE["expected"]["from_hex"],
         )
 
     def verify(self, **changes):
@@ -53,6 +55,7 @@ class CommitmentTests(unittest.TestCase):
             {"amount": "25001"},
             {"asset": "01" * 32},
             {"pay_to": "01" * 32},
+            {"payer": "01" * 32},
         ):
             with self.assertRaises(PlatformSdkError):
                 self.verify(**change)
@@ -72,6 +75,26 @@ class CommitmentTests(unittest.TestCase):
         for value in (None, [], {}, "executed"):
             with self.assertRaises(PlatformSdkError):
                 payment_commitment({"layerx": value})
+        extra = {
+            "layerx": {
+                "commitment": "executed",
+                "purposeHash": "ab" * 32,
+                "payer": FIXTURE["expected"]["from_hex"],
+            }
+        }
+        self.assertEqual(
+            grant_payment_terms(extra),
+            ("executed", "ab" * 32, FIXTURE["expected"]["from_hex"]),
+        )
+        for change in (
+            {},
+            {"layerx": {"purposeHash": "ab" * 32, "payer": FIXTURE["expected"]["from_hex"]}},
+            {"layerx": {"commitment": "executed", "payer": FIXTURE["expected"]["from_hex"]}},
+            {"layerx": {"commitment": "executed", "purposeHash": "ab" * 32}},
+            {"layerx": {"commitment": "executed", "purposeHash": "00" * 32, "payer": FIXTURE["expected"]["from_hex"]}},
+        ):
+            with self.assertRaises(PlatformSdkError):
+                grant_payment_terms(change)
 
     def test_real_signed_batch(self):
         fixture = json.loads(Path(__file__).with_name("batch.json").read_text())

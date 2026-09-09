@@ -19,6 +19,7 @@ class GrantTests(unittest.TestCase):
                 "layerx": {
                     "commitment": "executed",
                     "purposeHash": r["payer_grant"]["purpose_hash"],
+                    "payer": r["from"],
                     "windowSeconds": "3600",
                 }
             },
@@ -31,6 +32,11 @@ class GrantTests(unittest.TestCase):
             {"asset": "ab" * 32},
             {"payTo": "ab" * 32},
             {"scheme": "metered"},
+            {
+                "extra": {
+                    "layerx": offer["extra"]["layerx"] | {"payer": "ab" * 32}
+                }
+            },
         ):
             with self.assertRaises(ValueError):
                 validate_grant_draw(wire, offer | change, r["idempotency_key"], 7, 0)
@@ -60,6 +66,7 @@ class GrantTests(unittest.TestCase):
                 "layerx": {
                     "commitment": "executed",
                     "purposeHash": r["payer_grant"]["purpose_hash"],
+                    "payer": r["from"],
                     "windowSeconds": "3600",
                 }
             },

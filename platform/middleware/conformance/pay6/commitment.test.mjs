@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { paymentCommitment, verifyPaymentReceipt, verifyPaymentCommitmentEvidence } from "../../seller/dist/index.js";
+import { grantPaymentTerms as sdkGrantPaymentTerms, paymentCommitment as sdkPaymentCommitment, paymentPayer } from "@sidiora/layerx-sdk";
+import { grantPaymentTerms, paymentCommitment, verifyPaymentReceipt, verifyPaymentCommitmentEvidence } from "@sidiora/layerx-seller-middleware";
 
 const fixture = JSON.parse(readFileSync(new URL("../../../sdk/conformance/fixtures/receipt-positive-v2.json", import.meta.url), "utf8"));
 const b = (value) => Uint8Array.from(Buffer.from(value, "hex"));
@@ -17,11 +18,12 @@ const evidence = {
 const offer = {
   scheme: "exact", network: "layerx:testnet", asset: batch.asset_hex,
   amount: fixture.expected.amount, payTo: fixture.expected.to_hex, maxTimeoutSeconds: 30,
+  extra: { layerx: { commitment: "executed", payer: fixture.expected.from_hex } },
 };
 
 test("native executed receipt and amount, asset, recipient binding", async () => {
   await verifyPaymentReceipt(evidence, offer);
-  for (const change of [{ amount: "25001" }, { asset: "01".repeat(32) }, { payTo: "01".repeat(32) }]) {
+  for (const change of [{ amount: "25001" }, { asset: "01".repeat(32) }, { payTo: "01".repeat(32) }, { extra: { layerx: { commitment: "executed", payer: "01".repeat(32) } } }]) {
     await assert.rejects(verifyPaymentReceipt(evidence, { ...offer, ...change }));
   }
   const corrupt = evidence.canonicalReceipt.slice();
@@ -35,6 +37,14 @@ test("explicit commitment cannot downgrade when evidence is missing", async () =
   }
   assert.equal(paymentCommitment(), "executed");
   for (const value of [null, [], {}, "executed"]) assert.throws(() => paymentCommitment({ layerx: value }));
+  const extra = { layerx: { commitment: "executed", purposeHash: "ab".repeat(32), payer: fixture.expected.from_hex } };
+  assert.deepEqual(grantPaymentTerms(extra), { commitment: "executed", purposeHash: "ab".repeat(32), payer: fixture.expected.from_hex });
+  assert.deepEqual(sdkGrantPaymentTerms(extra), grantPaymentTerms(extra));
+  assert.equal(sdkPaymentCommitment(extra), paymentCommitment(extra));
+  assert.equal(paymentPayer(extra), fixture.expected.from_hex);
+  for (const value of [{}, { layerx: { purposeHash: "ab".repeat(32), payer: fixture.expected.from_hex } }, { layerx: { commitment: "executed", payer: fixture.expected.from_hex } }, { layerx: { commitment: "executed", purposeHash: "ab".repeat(32) } }]) {
+    assert.throws(() => grantPaymentTerms(value));
+  }
 });
 
 test("signed batch inclusion is bound to receipt, network, sequence and key", async () => {

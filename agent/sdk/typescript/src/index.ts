@@ -15,3 +15,8 @@ export * from "./native-capabilities.js";
 export * from "./rpc.js";
 
 export * from "./wallet.js";
+export * from "./x402/receive.js";
+export * from "./x402/grant.js";
+export * from "./x402/activity.js";
+export * from "./x402/draw.js";
+export * from "./x402/terms.js";

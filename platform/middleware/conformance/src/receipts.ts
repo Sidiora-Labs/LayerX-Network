@@ -148,7 +148,7 @@ export interface OfferFixture {
   readonly paymentRequired: PaymentRequired;
 }
 
-export function offerFixture(payTo: Uint8Array, asset: Uint8Array, amount: bigint): OfferFixture {
+export function offerFixture(payTo: Uint8Array, asset: Uint8Array, amount: bigint, payer: Uint8Array): OfferFixture {
   const requirements: PaymentRequirements = {
     scheme: "exact",
     network: "layerx:testnet",
@@ -156,6 +156,7 @@ export function offerFixture(payTo: Uint8Array, asset: Uint8Array, amount: bigin
     asset: toHex(asset),
     payTo: toHex(payTo),
     maxTimeoutSeconds: 120,
+    extra: { layerx: { commitment: "executed", payer: toHex(payer) } },
   };
   const paymentRequired: PaymentRequired = {
     x402Version: 2,

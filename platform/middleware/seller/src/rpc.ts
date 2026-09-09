@@ -71,7 +71,7 @@ export async function verifyRpcPayment(
   const canonicalReceipt = rpcHex(result["receipt"]);
   const commitment = paymentCommitment(requirements.extra);
   if (result["commitment"] !== undefined && result["commitment"] !== commitment) throw new MiddlewareError("verification-failure");
-  const verification = await verifyPaymentReceipt({ canonicalReceipt, authorizedBatch }, requirements, commitments);
+  const verification = await verifyPaymentReceipt({ canonicalReceipt, authorizedBatch }, requirements, commitments, expectedPayer);
   const hex = (value: Uint8Array) => Array.from(value, (byte) => byte.toString(16).padStart(2, "0")).join("");
   if (hex(verification.receipt.activityId) !== expectedActivity || hex(verification.receipt.from) !== expectedPayer) throw new MiddlewareError("verification-failure");
   return { kind: "verified", canonicalReceipt, authorizedBatch, verification };

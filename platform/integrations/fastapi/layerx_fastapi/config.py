@@ -30,6 +30,10 @@ DECLARED_KEYS = (
     "LAYERX_PRICE",
     "LAYERX_ASSET",
     "LAYERX_PAY_TO",
+    "LAYERX_PAYER",
+    "LAYERX_COMMITMENT",
+    "LAYERX_PURPOSE_HASH",
+    "LAYERX_WINDOW_SECONDS",
     "LAYERX_PAYMENT_TIMEOUT_SECONDS",
     "LAYERX_AUTHORIZED_BATCH_JSON",
     "LAYERX_WEBHOOK_PATH",
@@ -106,6 +110,22 @@ def read_declared_config(environment: Mapping[str, str] | None = None) -> Declar
     assert_no_published_secrets(values)
     scheme = _required(values, "LAYERX_X402_SCHEME")
     network = _required(values, "LAYERX_X402_NETWORK")
+    commitment = _optional(values, "LAYERX_COMMITMENT") or "executed"
+    if commitment not in ("executed", "batched", "finalised"):
+        raise IntegrationError(IntegrationErrorCode.INVALID_DECLARED_KEY)
+    layerx: dict[str, JsonValue] = {
+        "commitment": commitment,
+        "payer": _hex32(_required(values, "LAYERX_PAYER")).hex(),
+    }
+    if scheme != "exact":
+        layerx["purposeHash"] = _hex32(_required(values, "LAYERX_PURPOSE_HASH")).hex()
+        if scheme == "subscription":
+            window = _required(values, "LAYERX_WINDOW_SECONDS")
+            if fullmatch(r"[1-9][0-9]{0,19}", window) is None or int(window) >= 1 << 64:
+                raise IntegrationError(IntegrationErrorCode.INVALID_DECLARED_KEY)
+            layerx["windowSeconds"] = window
+        elif _optional(values, "LAYERX_WINDOW_SECONDS") is not None:
+            raise IntegrationError(IntegrationErrorCode.INVALID_DECLARED_KEY)
     requirements = PaymentRequirements(
         scheme=scheme,
         network=network,
@@ -113,6 +133,8 @@ def read_declared_config(environment: Mapping[str, str] | None = None) -> Declar
         asset=_required(values, "LAYERX_ASSET"),
         pay_to=_required(values, "LAYERX_PAY_TO"),
         max_timeout_seconds=_positive_integer(_required(values, "LAYERX_PAYMENT_TIMEOUT_SECONDS")),
+        extra={"layerx": layerx},
+        has_extra=True,
     )
     payment_required = PaymentRequired(
         resource=ResourceInfo(

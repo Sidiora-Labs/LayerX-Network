@@ -53,6 +53,7 @@ class DrawTests(unittest.TestCase):
                     "layerx": {
                         "commitment": "executed",
                         "purposeHash": r["payer_grant"]["purpose_hash"],
+                        "payer": r["from"],
                         "windowSeconds": "3600",
                     }
                 },

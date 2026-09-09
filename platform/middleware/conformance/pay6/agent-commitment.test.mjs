@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { verifyAgentPayment } from "../../agent/dist/index.js";
+import { verifyAgentPayment } from "@sidiora/layerx-agent-middleware";
 const f = JSON.parse(readFileSync(new URL("../../../sdk/conformance/fixtures/receipt-positive-v2.json", import.meta.url)));
 const b = v => Uint8Array.from(Buffer.from(v, "hex"));
 const a = f.authorized_batch;

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
-import { rpcCheckpointEvidence, verifyPaymentReceipt, verifyPaymentCommitmentEvidence } from "../../seller/dist/index.js";
+import { rpcCheckpointEvidence, verifyPaymentReceipt, verifyPaymentCommitmentEvidence } from "@sidiora/layerx-seller-middleware";
 const read = path => JSON.parse(readFileSync(new URL(path, import.meta.url)));
 const f = read("checkpoint.json"), b = read("batch.json"), r = read("../../../sdk/conformance/fixtures/receipt-positive-v2.json");
 const hex = v => Uint8Array.from(Buffer.from(v, "hex"));
@@ -18,11 +18,14 @@ const authority = { canonicalContext: hex(f.operator.context), requiredGuarantor
     return result.status === 0;
   } },
 };
-const offer = { scheme: "exact", network: "layerx:testnet", asset: a.asset_hex, amount: r.expected.amount, payTo: r.expected.to_hex, maxTimeoutSeconds: 30 };
+const offer = { scheme: "exact", network: "layerx:testnet", asset: a.asset_hex, amount: r.expected.amount, payTo: r.expected.to_hex, maxTimeoutSeconds: 30, extra: { layerx: { commitment: "executed", payer: r.expected.from_hex } } };
 test("published checkpoint binary verifies finalised receipt with configured authority", async () => {
   const verified = await verifyPaymentReceipt({ canonicalReceipt: hex(r.canonical_receipt_hex), authorizedBatch }, offer);
   await verifyPaymentCommitmentEvidence(verified, authorizedBatch.sequencerPublicKey, "finalised", rpcCheckpointEvidence(f, batch, authority));
   for (const change of [{ requiredGuarantors: 0 }, { requiredGuarantors: 2 }, { canonicalContext: hex("00") }]) assert.throws(() => rpcCheckpointEvidence(f, batch, { ...authority, ...change }));
   for (const change of [{ bondedSet: [] }, { expectedPaxeerChainId: 778n }, { availabilityObtained: false }]) await assert.rejects(verifyPaymentCommitmentEvidence(verified, authorizedBatch.sequencerPublicKey, "finalised", rpcCheckpointEvidence(f, batch, { ...authority, verification: { ...authority.verification, ...change } })));
   for (const field of ["checkpoint", "context", "canonical_header", "checkpoint_id"]) for (const value of ["00", f.checkpoint_evidence[field] + "00"]) assert.throws(() => rpcCheckpointEvidence({ checkpoint_evidence: { ...f.checkpoint_evidence, [field]: value } }, batch, authority));
+  const forged = Buffer.from(f.checkpoint_evidence.checkpoint, "hex");
+  forged[forged.length - 114] ^= 1;
+  await assert.rejects(verifyPaymentCommitmentEvidence(verified, authorizedBatch.sequencerPublicKey, "finalised", rpcCheckpointEvidence({ checkpoint_evidence: { ...f.checkpoint_evidence, checkpoint: forged.toString("hex") } }, batch, authority)));
 });

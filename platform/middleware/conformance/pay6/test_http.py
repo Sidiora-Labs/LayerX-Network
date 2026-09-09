@@ -32,6 +32,7 @@ class HttpTests(unittest.TestCase):
             asset=f.offer["asset"],
             payTo=f.offer["pay_to"],
             maxTimeoutSeconds=30,
+            extra={"layerx": {"commitment": "executed", "payer": f.offer["payer"]}},
         )
         self.required = dict(
             x402Version=2,

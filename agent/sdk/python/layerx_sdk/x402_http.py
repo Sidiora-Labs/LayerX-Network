@@ -9,7 +9,8 @@ from dataclasses import dataclass
 from typing import Callable
 from urllib.parse import urlsplit
 
-from .x402 import payment_commitment, verify_payment_receipt
+from .production import PlatformSdkError
+from .x402 import grant_payment_terms, payment_commitment, payment_payer, verify_payment_receipt
 from .x402_rpc import rpc_hex, verify_rpc_payment
 
 
@@ -99,10 +100,11 @@ def validate_requirements(value):
         raise ValueError("invalid-payment-timeout")
     payment_commitment(value.get("extra"))
     if value["scheme"] != "exact":
+        try:
+            grant_payment_terms(value.get("extra"))
+        except PlatformSdkError as error:
+            raise ValueError("invalid-payment-grant-terms") from error
         terms = _object(_object(value.get("extra")).get("layerx"))
-        rpc_hex(terms.get("purposeHash"), 32)
-        if terms["purposeHash"] == "00" * 32:
-            raise ValueError("invalid-payment-purpose")
         window = terms.get("windowSeconds")
         if value["scheme"] == "subscription":
             if (
@@ -114,6 +116,20 @@ def validate_requirements(value):
         elif "windowSeconds" in terms:
             raise ValueError("invalid-payment-window")
     return value
+
+
+def _offer_payer(offer, body=None):
+    if offer["scheme"] != "exact":
+        from .x402_receive import decode_receive
+
+        terms = grant_payment_terms(offer.get("extra"))
+        if body is not None:
+            receive = decode_receive(rpc_hex(body.get("receive"), 733))
+            if receive["from"] != terms[2]:
+                raise ValueError("payer-mismatch")
+            return receive["from"]
+        return terms[2]
+    return payment_payer(offer.get("extra"))
 
 
 def _extensions(value):
@@ -305,6 +321,7 @@ class SellerMiddleware:
             amount=offer["amount"],
             asset=offer["asset"],
             pay_to=offer["payTo"],
+            payer=_offer_payer(offer, body),
             commitment=payment_commitment(offer.get("extra")),
             evidence=evidence.commitment_evidence,
         )
@@ -538,6 +555,7 @@ class BuyerMiddleware:
             amount=offer["amount"],
             asset=offer["asset"],
             pay_to=offer["payTo"],
+            payer=_offer_payer(offer, payment.get("payload")),
             commitment=payment_commitment(offer.get("extra")),
             evidence=evidence.commitment_evidence,
         )

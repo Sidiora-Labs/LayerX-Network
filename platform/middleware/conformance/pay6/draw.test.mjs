@@ -2,10 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { decodeReceive } from "../../../../agent/sdk/typescript/dist/src/x402/receive.js";
-import { bindReceiveActivity } from "../../../../agent/sdk/typescript/dist/src/x402/activity.js";
-import { PreparedGrantDraws } from "../../../../agent/sdk/typescript/dist/src/x402/draw.js";
-import { PaymentRpc } from "../../seller/dist/index.js";
+import { decodeReceive, bindReceiveActivity, PreparedGrantDraws } from "@sidiora/layerx-sdk";
+import { PaymentRpc } from "@sidiora/layerx-seller-middleware";
 const fixture = readFileSync(new URL("draw.hex", import.meta.url), "utf8").trim().split("\n");
 const canonical = Uint8Array.from(Buffer.from(fixture[0], "hex"));
 const receive = Uint8Array.from(Buffer.from(readFileSync(new URL("receive.hex", import.meta.url), "utf8").split("\n")[0], "hex"));
@@ -27,7 +25,7 @@ test("persistent draw registrations preserve signed bytes and reject changed req
     store.register("payer", "ab".repeat(32), canonical, receive, key, "subscription:period:1");
     const r = decodeReceive(receive);
     const request = { principal: "payer", requestDigest: "ab".repeat(32), receive: Buffer.from(receive).toString("hex"), idempotencyKey: key,
-      requirements: { scheme: "subscription", asset: r.asset, amount: r.amount, payTo: r.to, extra: { layerx: { commitment: "executed", purposeHash: r.payer_grant.purpose_hash, windowSeconds: "3600" } } } };
+      requirements: { scheme: "subscription", asset: r.asset, amount: r.amount, payTo: r.to, extra: { layerx: { commitment: "executed", purposeHash: r.payer_grant.purpose_hash, payer: r.from, windowSeconds: "3600" } } } };
     assert.deepEqual(await store.execute(request), { kind: "pending" });
     assert.deepEqual(await store.execute(request), { kind: "pending" });
     assert.throws(() => store.register("other", "ab".repeat(32), canonical, receive, key, "subscription:period:1"));

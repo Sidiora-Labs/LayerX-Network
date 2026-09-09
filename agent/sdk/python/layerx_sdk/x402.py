@@ -39,6 +39,15 @@ def _failure() -> NoReturn:
     raise PlatformSdkError(SdkErrorCode.VERIFICATION_FAILURE, "never")
 
 
+def _layerx_terms(extra: object) -> Mapping[str, object]:
+    if not isinstance(extra, Mapping):
+        _failure()
+    layerx = extra.get("layerx")
+    if not isinstance(layerx, Mapping):
+        _failure()
+    return layerx
+
+
 def payment_commitment(extra: object = None) -> PaymentCommitment:
     if not isinstance(extra, Mapping) or "layerx" not in extra:
         return "executed"
@@ -49,6 +58,29 @@ def payment_commitment(extra: object = None) -> PaymentCommitment:
     if commitment not in ("executed", "batched", "finalised"):
         _failure()
     return commitment
+
+
+def _hex64(value: object) -> str:
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(c not in "0123456789abcdef" for c in value)
+        or value == "00" * 32
+    ):
+        _failure()
+    return value
+
+
+def payment_payer(extra: object) -> str:
+    return _hex64(_layerx_terms(extra).get("payer"))
+
+
+def grant_payment_terms(extra: object) -> tuple[PaymentCommitment, str, str]:
+    terms = _layerx_terms(extra)
+    if "commitment" not in terms:
+        _failure()
+    commitment = payment_commitment(extra)
+    return commitment, _hex64(terms.get("purposeHash")), _hex64(terms.get("payer"))
 
 
 def verify_payment_commitment_evidence(
@@ -111,6 +143,7 @@ def verify_payment_receipt(
     amount: str,
     asset: str,
     pay_to: str,
+    payer: str,
     commitment: PaymentCommitment = "executed",
     evidence: PaymentCommitmentEvidence | None = None,
 ) -> ReceiptVerification:
@@ -122,7 +155,7 @@ def verify_payment_receipt(
         or not 0 < int(amount) < 1 << 128
     ):
         _failure()
-    for identifier in (asset, pay_to):
+    for identifier in (asset, pay_to, payer):
         if (
             not isinstance(identifier, str)
             or len(identifier) != 64
@@ -134,6 +167,7 @@ def verify_payment_receipt(
         verified.receipt.amount != int(amount)
         or verified.receipt.asset.hex() != asset
         or verified.receipt.to_account.hex() != pay_to
+        or verified.receipt.from_account.hex() != payer
     ):
         _failure()
     if commitment not in ("executed", "batched", "finalised"):

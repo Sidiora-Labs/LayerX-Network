@@ -202,12 +202,13 @@ export async function runScenarios(): Promise<Suite> {
   const payTo = fixedBytes(0xaa);
   const asset = fixedBytes(0xbb);
   const amount = 250_000n;
-  const offer = offerFixture(payTo, asset, amount);
+  const from = fixedBytes(0xcc);
+  const offer = offerFixture(payTo, asset, amount, from);
   const facts = {
     asset,
     payTo,
     amount,
-    from: fixedBytes(0xcc),
+    from,
     batchId: fixedBytes(0xd1),
     previousStateRoot: fixedBytes(0xd2),
     resultingStateRoot: fixedBytes(0xd3),
@@ -319,7 +320,7 @@ export async function runScenarios(): Promise<Suite> {
     const buyer = buildBuyer(offer);
     const parsed = buyer.parseOffer(encodePaymentRequiredHeader(offer.paymentRequired));
     assert(parsed.accepted.scheme === offer.requirements.scheme, "the supported scheme must be selected");
-    const unsupported = offerFixture(payTo, asset, amount);
+    const unsupported = offerFixture(payTo, asset, amount, from);
     const other = {
       ...unsupported.paymentRequired,
       accepts: [{ ...unsupported.requirements, network: "layerx:mainnet" }],

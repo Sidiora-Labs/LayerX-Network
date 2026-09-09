@@ -22,6 +22,12 @@ class AgentBudgetTests(CommitmentTests):
             "asset": self.offer["asset"],
             "payTo": self.offer["pay_to"],
             "maxTimeoutSeconds": 30,
+            "extra": {
+                "layerx": {
+                    "commitment": "executed",
+                    "payer": self.offer["payer"],
+                }
+            },
         }
         evidence = PaymentEvidence(self.wire, self.authorized)
         with tempfile.TemporaryDirectory() as directory:
@@ -74,6 +80,7 @@ class AgentBudgetTests(CommitmentTests):
                 "layerx": {
                     "commitment": "executed",
                     "purposeHash": r["payer_grant"]["purpose_hash"],
+                    "payer": r["from"],
                     "windowSeconds": "3600",
                 }
             },

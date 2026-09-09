@@ -12,6 +12,7 @@
       "webhookKeysEnvironment": "LAYERX_EMULATOR_WEBHOOK_PUBLIC_KEYS_JSON",
       "assetEnvironment": "LAYERX_EMULATOR_ASSET",
       "payToEnvironment": "LAYERX_EMULATOR_MERCHANT",
+      "payerEnvironment": "LAYERX_EMULATOR_PAYER",
       "priceEnvironment": "LAYERX_EMULATOR_PRICE",
       "stateDirectory": "state",
       "port": 8082
@@ -26,6 +27,7 @@
       "webhookKeysEnvironment": "LAYERX_TESTNET_WEBHOOK_PUBLIC_KEYS_JSON",
       "assetEnvironment": "LAYERX_TESTNET_ASSET",
       "payToEnvironment": "LAYERX_TESTNET_MERCHANT",
+      "payerEnvironment": "LAYERX_TESTNET_PAYER",
       "priceEnvironment": "LAYERX_TESTNET_PRICE",
       "stateDirectory": "state",
       "port": 8082

@@ -1,15 +1,20 @@
 import {
   PlatformSdkError,
+  grantPaymentTerms,
+  paymentCommitment,
+  paymentPayer,
   verifyBatchInclusion,
   verifyCheckpoint,
   type CheckpointVerificationInput,
   type LocalSignatureVerifier,
   type MerkleProof,
+  type PaymentCommitment,
   type ReceiptVerification,
   type SequencerAuthorization,
 } from "@sidiora/layerx-sdk";
 
-export type PaymentCommitment = "executed" | "batched" | "finalised";
+export { grantPaymentTerms, paymentCommitment, paymentPayer };
+export type { PaymentCommitment };
 
 export interface PaymentCommitmentEvidence {
   readonly networkId: number;
@@ -30,16 +35,6 @@ export interface PaymentCommitmentResolver {
 
 function failure(): never {
   throw new PlatformSdkError({ code: "verification-failure", retry: "never" });
-}
-
-export function paymentCommitment(extra: unknown): PaymentCommitment {
-  if (extra === undefined || extra === null || typeof extra !== "object" || Array.isArray(extra)) return "executed";
-  const layerx = (extra as Record<string, unknown>)["layerx"];
-  if (layerx === undefined) return "executed";
-  if (layerx === null || typeof layerx !== "object" || Array.isArray(layerx)) return failure();
-  const commitment = (layerx as Record<string, unknown>)["commitment"];
-  if (commitment !== "executed" && commitment !== "batched" && commitment !== "finalised") return failure();
-  return commitment;
 }
 
 function equal(left: Uint8Array, right: Uint8Array): boolean {

@@ -1,7 +1,8 @@
-import { paymentCommitment, verifyPaymentCommitment, type PaymentCommitmentResolver } from "./commitment.js";
+import { grantPaymentTerms, paymentCommitment, paymentPayer, verifyPaymentCommitment, type PaymentCommitmentResolver } from "./commitment.js";
 export * from "./commitment.js";
 import {
   PlatformSdkError,
+  decodeReceive,
   verifyReceipt,
   type AuthorizedReceiptBatch,
   type ReceiptVerification,
@@ -241,12 +242,13 @@ export class SellerMiddleware<T> {
       canonicalReceipt: outcome.canonicalReceipt,
       authorizedBatch: outcome.authorizedBatch,
     };
-    const verification = await verifyPaymentReceipt(proposed, requirements, this.#commitments);
+    const payer = expectedPaymentPayer(requirements, payload);
+    const verification = await verifyPaymentReceipt(proposed, requirements, this.#commitments, payer);
     const stored = await this.#fulfillments.fulfill(proposed, release);
     if (stored.idempotencyKey !== idempotencyKey || stored.requestDigest !== requestDigest) {
       throw new MiddlewareError("fulfillment-conflict");
     }
-    const storedVerification = await verifyPaymentReceipt(stored, requirements, this.#commitments);
+    const storedVerification = await verifyPaymentReceipt(stored, requirements, this.#commitments, payer);
     if (!equalBytes(verification.receiptDigest, storedVerification.receiptDigest)) {
       throw new MiddlewareError("fulfillment-conflict");
     }
@@ -303,10 +305,35 @@ export function decodeSettlementHeader(value: string): SettlementResponse {
   return parseSettlement(decodeHeader(value));
 }
 
+function expectedPaymentPayer(requirements: PaymentRequirements, payload?: PaymentPayload): string {
+  try {
+    if (requirements.scheme !== "exact") {
+      const receiveHex = payload?.payload["receive"];
+      if (typeof receiveHex !== "string" || !/^[0-9a-f]{1466}$/u.test(receiveHex)) {
+        return grantPaymentTerms(requirements.extra).payer;
+      }
+      const receive = decodeReceive(Uint8Array.from(receiveHex.match(/../gu)!, (pair) => Number.parseInt(pair, 16)));
+      const terms = grantPaymentTerms(requirements.extra);
+      if (receive.from !== receive.payer_grant.from || receive.from !== terms.payer) {
+        throw new MiddlewareError("verification-failure");
+      }
+      if (receive.payer_grant.purpose_hash !== terms.purposeHash) {
+        throw new MiddlewareError("verification-failure");
+      }
+      return receive.from;
+    }
+    return paymentPayer(requirements.extra);
+  } catch (error) {
+    if (error instanceof PlatformSdkError) throw new MiddlewareError("verification-failure");
+    throw error;
+  }
+}
+
 export async function verifyPaymentReceipt(
   evidence: Pick<StoredFulfillment<unknown>, "canonicalReceipt" | "authorizedBatch">,
   requirements: PaymentRequirements,
   commitments?: PaymentCommitmentResolver,
+  expectedPayer?: string,
 ): Promise<ReceiptVerification> {
   let verified: ReceiptVerification;
   try {
@@ -317,10 +344,20 @@ export async function verifyPaymentReceipt(
     }
     throw error;
   }
+  let payer = expectedPayer;
+  if (payer === undefined) {
+    try {
+      payer = requirements.scheme === "exact" ? paymentPayer(requirements.extra) : grantPaymentTerms(requirements.extra).payer;
+    } catch (error) {
+      if (error instanceof PlatformSdkError) throw new MiddlewareError("verification-failure");
+      throw error;
+    }
+  }
   if (
     verified.receipt.amount !== BigInt(requirements.amount)
     || !equalBytes(verified.receipt.asset, parseHex32(requirements.asset))
     || !equalBytes(verified.receipt.to, parseHex32(requirements.payTo))
+    || !equalBytes(verified.receipt.from, parseHex32(payer))
   ) {
     throw new MiddlewareError("verification-failure");
   }
@@ -571,10 +608,21 @@ function parseRequirements(value: unknown): PaymentRequirements {
   const scheme = asIdentifier(object["scheme"], 32, "invalid-payment-required");
   if (!["exact", "metered", "subscription"].includes(scheme)) throw new MiddlewareError("unsupported-payment");
   const extra = object["extra"];
-  paymentCommitment(extra);
-  if (scheme !== "exact") {
+  if (scheme === "exact") {
+    paymentCommitment(extra);
+    if (extra !== undefined) {
+      try { paymentPayer(extra); } catch (error) {
+        if (!(error instanceof PlatformSdkError)) throw error;
+      }
+    }
+  } else {
+    try {
+      grantPaymentTerms(extra);
+    } catch (error) {
+      if (error instanceof PlatformSdkError) throw new MiddlewareError("invalid-payment-required");
+      throw error;
+    }
     const terms = asObject(asObject(extra, "invalid-payment-required")["layerx"], "invalid-payment-required");
-    if (typeof terms["purposeHash"] !== "string" || !/^[0-9a-f]{64}$/u.test(terms["purposeHash"]) || /^0+$/u.test(terms["purposeHash"])) throw new MiddlewareError("invalid-payment-required");
     const window = terms["windowSeconds"];
     if (scheme === "subscription" ? typeof window !== "string" || !/^[1-9][0-9]{0,19}$/u.test(window) || BigInt(window) > 0xffff_ffff_ffff_ffffn : window !== undefined) throw new MiddlewareError("invalid-payment-required");
   }

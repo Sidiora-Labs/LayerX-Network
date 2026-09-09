@@ -85,6 +85,10 @@ export const DECLARED_KEYS = [
   "LAYERX_PRICE",
   "LAYERX_ASSET",
   "LAYERX_PAY_TO",
+  "LAYERX_PAYER",
+  "LAYERX_COMMITMENT",
+  "LAYERX_PURPOSE_HASH",
+  "LAYERX_WINDOW_SECONDS",
   "LAYERX_PAYMENT_TIMEOUT_SECONDS",
   "LAYERX_AUTHORIZED_BATCH_JSON",
   "LAYERX_WEBHOOK_PATH",
@@ -222,6 +226,7 @@ export function readDeclaredConfig(environment: Environment): LayerXDeclaredConf
   assertNoPublishedSecrets(environment);
   const scheme = required(environment, "LAYERX_X402_SCHEME");
   const network = required(environment, "LAYERX_X402_NETWORK");
+  const extra = declaredPaymentExtra(environment, scheme);
   const requirements: PaymentRequirements = {
     scheme,
     network,
@@ -229,6 +234,7 @@ export function readDeclaredConfig(environment: Environment): LayerXDeclaredConf
     asset: required(environment, "LAYERX_ASSET"),
     payTo: required(environment, "LAYERX_PAY_TO"),
     maxTimeoutSeconds: positiveInteger(required(environment, "LAYERX_PAYMENT_TIMEOUT_SECONDS")),
+    extra,
   };
   const description = optional(environment, "LAYERX_RESOURCE_DESCRIPTION");
   const mimeType = optional(environment, "LAYERX_RESOURCE_MIME_TYPE");
@@ -543,6 +549,30 @@ function layerXEvidenceDigest(extensions: Readonly<Record<string, JsonValue>> | 
     throw new LayerXIntegrationError("receipt-not-backed");
   }
   return digest;
+}
+
+function declaredPaymentExtra(environment: Environment, scheme: string): JsonValue {
+  const commitment = optional(environment, "LAYERX_COMMITMENT") ?? "executed";
+  if (commitment !== "executed" && commitment !== "batched" && commitment !== "finalised") {
+    throw new LayerXIntegrationError("invalid-declared-key");
+  }
+  const layerx: Record<string, JsonValue> = {
+    commitment,
+    payer: toHex(parseHex32(required(environment, "LAYERX_PAYER"))),
+  };
+  if (scheme !== "exact") {
+    layerx.purposeHash = toHex(parseHex32(required(environment, "LAYERX_PURPOSE_HASH")));
+    const window = optional(environment, "LAYERX_WINDOW_SECONDS");
+    if (scheme === "subscription") {
+      if (window === undefined || !/^[1-9][0-9]{0,19}$/u.test(window) || BigInt(window) >= 1n << 64n) {
+        throw new LayerXIntegrationError("invalid-declared-key");
+      }
+      layerx.windowSeconds = window;
+    } else if (window !== undefined) {
+      throw new LayerXIntegrationError("invalid-declared-key");
+    }
+  }
+  return { layerx };
 }
 
 function required(environment: Environment, key: DeclaredKey): string {

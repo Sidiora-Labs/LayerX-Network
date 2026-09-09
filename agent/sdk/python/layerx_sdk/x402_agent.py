@@ -1,7 +1,7 @@
 import hashlib
 import sqlite3
 
-from .x402 import payment_commitment, verify_payment_receipt
+from .x402 import grant_payment_terms, payment_commitment, payment_payer, verify_payment_receipt
 from .x402_http import validate_requirements
 from .x402_rpc import rpc_hex
 
@@ -72,6 +72,9 @@ class PaymentBudget:
             amount=offer["amount"],
             asset=offer["asset"],
             pay_to=offer["payTo"],
+            payer=payment_payer(offer.get("extra"))
+            if offer.get("scheme") == "exact"
+            else grant_payment_terms(offer.get("extra"))[2],
             commitment=payment_commitment(offer.get("extra")),
             evidence=evidence.commitment_evidence,
         )
