@@ -21,7 +21,7 @@ test("RPC receipt response binds actual signed activity and payer; pending never
 test("RPC endpoint and submission bounds refuse before network access", async () => {
   for (const endpoint of ["http://example.com/rpc", "https://user:password@example.com/rpc", "https://example.com/rpc?token=1", "https://example.com/"]) assert.throws(() => new PaymentRpc(endpoint));
   const rpc = new PaymentRpc("http://127.0.0.1:1/rpc");
-  await assert.rejects(rpc.send("00", "acknowledged"));
+  for (const commitment of ["finalized", "acknowledged"]) await assert.rejects(rpc.send("00", commitment));
   await assert.rejects(rpc.send("0x00", "executed"));
 });
 

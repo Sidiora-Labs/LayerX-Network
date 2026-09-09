@@ -27,7 +27,7 @@ For an existing exact-payment offer without `extra.layerx`, the required commitm
 
 `PAYMENT-SIGNATURE` uses the same Base64/UTF-8 JSON envelope limit. The envelope contains `x402Version: 2`, the unchanged `accepted` offer, the resource and required extensions, and a `payload`.
 
-For `exact`, the payload contains the canonical receipt as standard Base64, `receiptDigest`, and `verificationLevel`. The receipt digest is SHA-256 over `LXP/v1/merkle-leaf` followed by one zero byte and the complete canonical receipt bytes. `verificationLevel` identifies the evidence supplied; it does not grant verification authority. An optional `idempotencyKey` identifies a retry of the same payment.
+For `exact`, the payload contains the canonical receipt as standard Base64, `receiptDigest`, and `verificationLevel`. The receipt digest is SHA-256 over `LXP/v1/merkle-leaf` followed by one zero byte and the complete canonical receipt bytes. `verificationLevel` identifies the base receipt evidence supplied; it does not grant verification authority. Its only accepted value is `sequencer-signed`. It never contains or aliases an RPC commitment string. The unchanged accepted offer's `extra.layerx.commitment` is passed to `lx_sendActivity` and independently selects the required evidence: `executed` requires the sequencer-signed receipt, `batched` adds authorized batch inclusion, and `finalised` adds the matching guarantor checkpoint certificate. The spelling `finalized` is invalid at both boundaries. An optional `idempotencyKey` identifies a retry of the same payment.
 
 For `metered` and `subscription`, the payload contains `receive`, the canonical signed Asset receive payload as lowercase hexadecimal, and `idempotencyKey`, the receive's 32-byte key as 64 lowercase hexadecimal characters. The signed receive contains the payer grant. A grant alone is not a payment and never releases a resource. The receiver signs the canonical receive authorization preimage and submits an Asset activity with ordinal 6. The enclosing activity is signed by the receiver's identity and binds that identity's next sequence and fee limit. The receive payload's receiver sequence retains its native account-sequence meaning; it is not a substitute for the enclosing identity sequence.
 
@@ -82,6 +82,8 @@ Asset grant issue uses ordinal 7 with the canonical grant. Grant revoke uses ord
 ## Asset accounts
 
 The per-asset account name is `agent:<DID>:asset:<lowercase hex64 asset_id>`. Its account ID follows `SHA-256("LX:ACCOUNT:v1" || name_byte_length:u32 || UTF-8(name))`. The native account remains `agent:<DID>:main`. Open the registered, unpaused asset account through Asset ordinal 4 with `version:u16=1 || asset_id32`.
+
+The asset issuance account ID is derived with the same account-ID rule from the seed `asset:<lowercase hex64 asset_id>:issuance`. That seed is not the stored display name. The ledger stores `module:asset:value:<lowercase hex64 issuance_account_id>` as the issuance account name.
 
 Natively issued asset IDs are `SHA-256("LX:ASSET:v1" || issuer_did_id32 || salt32)`. Custody asset IDs retain their registered values. Asset symbols and display names are not identifiers.
 

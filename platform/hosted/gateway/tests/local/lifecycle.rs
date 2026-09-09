@@ -853,7 +853,7 @@ fn local_gateway_rpc() {
         call("lx_getNodeInfo", serde_json::json!([]), false)["result"]["network_id"],
         NETWORK_ID
     );
-    assert_unavailable_reads(&call);
+    assert_initial_read_contracts(&call);
     let manifest = local_manifest(&cluster);
     let manifest: serde_json::Value =
         serde_json::from_slice(&fs::read(manifest).required("manifest")).required("manifest JSON");
@@ -888,8 +888,16 @@ fn local_gateway_rpc() {
         serde_json::json!([hex_encode(&signed), "finalised"]),
         true,
     );
-    assert_eq!(finalised["result"]["state"], "pending", "{finalised}");
-    assert_eq!(finalised["result"]["commitment"], "executed");
+    assert_eq!(finalised["error"]["code"], -32001, "{finalised}");
+    assert_eq!(
+        finalised["error"]["data"]["requested_commitment"], "finalised",
+        "{finalised}"
+    );
+    assert_eq!(
+        finalised["error"]["data"]["state"], "pending",
+        "{finalised}"
+    );
+    assert!(finalised.get("result").is_none(), "{finalised}");
     assert_eq!(
         call(
             "lx_sendActivity",
@@ -926,14 +934,27 @@ fn local_rpc(
     result
 }
 
-fn assert_unavailable_reads(call: &impl Fn(&str, serde_json::Value, bool) -> serde_json::Value) {
-    for (method, params) in [
-        ("lx_listAssets", serde_json::json!([])),
-        ("lx_getAsset", serde_json::json!(["ab".repeat(32)])),
-        ("lx_estimateFee", serde_json::json!(["abcd"])),
-        ("lx_getBalances", serde_json::json!(["did:layerx:alice"])),
+fn assert_initial_read_contracts(
+    call: &impl Fn(&str, serde_json::Value, bool) -> serde_json::Value,
+) {
+    let assets = call("lx_listAssets", serde_json::json!([]), false);
+    let assets = assets["result"]["assets"].as_array().required("asset list");
+    assert_eq!(assets.len(), 1);
+    assert!(assets[0]["asset_id"]
+        .as_str()
+        .is_some_and(|asset| asset.len() == 64));
+    let balances = call(
+        "lx_getBalances",
+        serde_json::json!(["did:layerx:alice"]),
+        false,
+    );
+    assert_eq!(balances["result"]["accounts"], serde_json::json!([]));
+    for (method, params, code) in [
+        ("lx_getAsset", serde_json::json!(["ab".repeat(32)]), -32001),
+        ("lx_estimateFee", serde_json::json!(["abcd"]), -32602),
     ] {
-        assert_eq!(call(method, params, false)["error"]["code"], -32001);
+        let refusal = call(method, params, false);
+        assert_eq!(refusal["error"]["code"], code, "{method}: {refusal}");
     }
     assert_eq!(
         call("lx_subscribe", serde_json::json!(["receipts"]), false)["error"]["code"],
