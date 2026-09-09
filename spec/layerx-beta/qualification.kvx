@@ -7669,3 +7669,19 @@ symbol = "produce"
 observed = "The owner-registration producer submits signed custody credit and Governance activities through the existing layerxctl real-client CLI, verifies native receipt signatures and requests authorized batch verification from the HTTPS receipt authority. It consumes custody-produced owner and rotation keys, a pre-bootstrap owner DID binding, a real signed custody credit and LXIP owner output; it does not create the custody key, vault deposit or attestation itself. python3 -m pytest platform/hosted/human -q under qual-logs/own1/venv passes 21 tests after building the real identity-provider binary. The native signature parser is checked against the retained real-program-deploy receipt and tamper cases. The complete producer flow has not run: the node snapshot registry is mismatched, no cluster is available, and deployment/custody inputs are absent. Evidence: qual-logs/own1/own1b-pytest-final.log and qual-logs/own1/own1b-producer-tests.log."
 assumption = "Structural registration validation and receipt-parser tests do not establish funded owner registration or positive checkpoint-finalised Human policy verification."
 severity = "blocker"
+
+[observation.3.7.30]
+task = "3.7"
+file = "platform/hosted/authority/src/human.rs"
+symbol = "policy_route"
+observed = "Native Governance identity snapshots can produce a batch_included response only after the existing signed-batch verification, exact DID/authority/revocation matching and complete retained execution suffix checks. Capability-scope and key-policy retain their refusal paths because authenticated checkpoint evidence and trust are not wired through the receipt authority configuration. cargo fmt --manifest-path platform/Cargo.toml -p layerx-platform-authority --check and cargo clippy --manifest-path platform/Cargo.toml --locked -p layerx-platform-authority --all-targets -- -D warnings exit 0. cargo test --manifest-path platform/Cargo.toml --locked -p layerx-platform-authority exits 101 at real_node: both tests require UID 0 and the invocation runs with UID 1000; earlier test executables pass. Evidence: qual-logs/own1/own1b-fmt-authority.log, qual-logs/own1/own1b-clippy-authority.log and qual-logs/own1/own1b-test-authority.log. No positive Governance receipt verifier integration test or checkpoint-finalised owner path has passed."
+assumption = "Authorized batch inclusion must not be relabelled checkpoint_finalised to satisfy Human key-policy or session requirements."
+severity = "blocker"
+
+[observation.3.7.31]
+task = "3.7"
+file = "cmd/layerx-genesis/lxp_genesis_builder.c"
+symbol = "materialize_snapshot"
+observed = "The registration site described in observation.3.7.28 is materialize_snapshot, not bootstrap_kernel. Its module list must match the protocol-3 daemon registry. Repeating the authority real_node test executable as root with the fresh native binaries removes the UID failure: the replica-only test passes and the sequencer test fails during startup. Evidence: qual-logs/own1/own1b-authority-real-node-root.log."
+assumption = "Changing execution privileges does not resolve the genesis and daemon module-registry mismatch."
+severity = "blocker"

@@ -818,11 +818,144 @@ fn policy_route(
     {
         return Err(unavailable("policy_evidence_stale"));
     }
+    if name == "identity" {
+        let state = native_identity_state(item, &identity.did)?;
+        let revision = native_u64(&state, 69)?;
+        if identity.frozen
+            || identity.revocation_sequence != revision
+            || identity.authorities.len() != 1
+            || identity.authorities[0].kind != "primary_key"
+            || identity.authorities[0].id != hex::encode(&state[37..69])
+        {
+            return Err(unavailable("identity_state_proof_unavailable"));
+        }
+        native_complete_suffix(item, evidence)?;
+        for later in evidence
+            .iter()
+            .filter(|e| e.facts.global_sequence > item.facts.global_sequence)
+        {
+            if native_identity_state(later, &identity.did).is_ok() {
+                return Err(unavailable("identity_state_proof_unavailable"));
+            }
+        }
+        return Ok(json(
+            200,
+            &value!({
+                "authorities": identity.authorities,
+                "canonical_core_bytes": hex::encode(&state),
+                "head_sequence": head, "revocation_sequence": revision,
+                "frozen": false, "verification_level": "batch_included"
+            }),
+        ));
+    }
     Err(unavailable(match name {
         "identity" => "identity_state_proof_unavailable",
         "capability-scope" => "capability_state_proof_unavailable",
         _ => "key_policy_checkpoint_evidence_unavailable",
     }))
+}
+
+fn native_u64(state: &[u8], offset: usize) -> Result<u64, Response> {
+    let bytes = state
+        .get(offset..offset + 8)
+        .and_then(|bytes| bytes.try_into().ok())
+        .ok_or_else(|| unavailable("identity_state_proof_unavailable"))?;
+    Ok(u64::from_be_bytes(bytes))
+}
+
+fn native_identity_state(item: &Verified, did: &str) -> Result<Vec<u8>, Response> {
+    let refused = || unavailable("identity_state_proof_unavailable");
+    if did.is_empty() || did.len() > 255 {
+        return Err(refused());
+    }
+    let mut preimage = b"LXP/v1/did-id\0".to_vec();
+    preimage.extend_from_slice(
+        &u16::try_from(did.len())
+            .map_err(|_| refused())?
+            .to_be_bytes(),
+    );
+    preimage.extend_from_slice(did.as_bytes());
+    let did_id = digest(&preimage);
+    let bytes = hex::decode(&item.record.receipt_hex).map_err(|_| refused())?;
+    let receipt = decode(&bytes).map_err(|_| refused())?;
+    let receipt = receipt.protocol().ok_or_else(refused)?;
+    if receipt.protocol_version() != 3
+        || receipt.module_id() != 7
+        || receipt.module_version() != 1
+        || receipt.result_code() != 0
+    {
+        return Err(refused());
+    }
+    let mut states = receipt
+        .effects()
+        .iter()
+        .filter(|e| e.module_id() == 7 && e.event_type() == 0x7110);
+    let effect = states.next().ok_or_else(refused)?;
+    let state = effect.body();
+    if states.next().is_some()
+        || effect.monetary()
+        || state.len() != 223
+        || &state[..5] != b"LXGI1"
+        || state[5..37] != did_id
+        || native_u64(state, 215)? != item.facts.global_sequence
+        || native_u64(state, 69)? == 0
+    {
+        return Err(refused());
+    }
+    Ok(state.to_vec())
+}
+
+fn native_complete_suffix(start: &Verified, evidence: &[Verified]) -> Result<(), Response> {
+    let refused = || unavailable("identity_state_proof_unavailable");
+    let mut batches = BTreeMap::new();
+    for item in evidence
+        .iter()
+        .filter(|e| e.facts.batch_number >= start.facts.batch_number)
+    {
+        batches
+            .entry(item.facts.batch_number)
+            .or_insert_with(Vec::new)
+            .push(item);
+    }
+    let mut next_batch = start.facts.batch_number;
+    let mut previous_root = None;
+    for (number, items) in batches {
+        if number != next_batch {
+            return Err(refused());
+        }
+        next_batch = number.checked_add(1).ok_or_else(refused)?;
+        let first = items.first().ok_or_else(refused)?;
+        let header = decode_batch_header(&first.header).map_err(|_| refused())?;
+        if previous_root.is_some_and(|root| root != header.previous_state_root()) {
+            return Err(refused());
+        }
+        previous_root = Some(header.resulting_state_root());
+        let begin = header.first_sequence().max(start.facts.global_sequence);
+        let last = header.last_sequence();
+        let maintenance = first
+            .record
+            .replica_document
+            .get("batch_evidence")
+            .and_then(|e| e.get("batch_identity"))
+            .and_then(|e| e.get("kind"))
+            .and_then(Value::as_str)
+            == Some("occupancy_maintenance_v2");
+        let end = if maintenance {
+            last.checked_sub(1).ok_or_else(refused)?
+        } else {
+            last
+        };
+        let held: BTreeSet<_> = items.iter().map(|e| e.facts.global_sequence).collect();
+        if end < begin
+            || end - begin + 1 != held.range(begin..=end).count() as u64
+            || items
+                .iter()
+                .any(|e| e.header != first.header || e.header_signature != first.header_signature)
+        {
+            return Err(refused());
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
