@@ -247,6 +247,8 @@ lxp_result lx_asset_amount_decode(const uint8_t *bytes, size_t length,
 lxp_result lx_asset_record_encode(const lx_asset_record *record,
                                   uint8_t *bytes, size_t capacity,
                                   size_t *length);
+lxp_result lx_asset_record_migrate_v2(const uint8_t *bytes, size_t length,
+    const uint8_t salt[32], uint8_t *output, size_t capacity, size_t *output_length);
 lxp_result lx_asset_record_decode(const uint8_t *bytes, size_t length,
                                   lx_asset_record *record);
 lxp_result lx_asset_transfer_state(const lx_asset_record *record,

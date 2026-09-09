@@ -941,6 +941,19 @@ static int pay1_issuance(uint8_t final_root[32])
         canonical[1] = 3U;
         REQUIRE(lx_asset_record_decode(canonical, canonical_length, &decoded) == LXP_OK);
         REQUIRE(memcmp(decoded.salt, registration + 34U, 32U) == 0);
+        {
+            uint8_t migrated[384];
+            uint8_t wrong_salt[32] = {8U};
+            size_t migrated_length;
+            canonical[1] = 2U;
+            REQUIRE(lx_asset_record_migrate_v2(canonical, canonical_length - 32U,
+                wrong_salt, migrated, sizeof(migrated), &migrated_length) == LXP_ERR_ASSET_MISMATCH);
+            REQUIRE(lx_asset_record_migrate_v2(canonical, canonical_length - 32U,
+                record.salt, migrated, sizeof(migrated), &migrated_length) == LXP_OK);
+            canonical[1] = 3U;
+            REQUIRE(migrated_length == canonical_length);
+            REQUIRE(memcmp(migrated, canonical, canonical_length) == 0);
+        }
         REQUIRE(memcmp(decoded.name, "Token", 5U) == 0 && decoded.name_length == 5U);
     }
     REQUIRE(memcmp(record.issuer_did32, f->authority.actor, 32U) == 0);

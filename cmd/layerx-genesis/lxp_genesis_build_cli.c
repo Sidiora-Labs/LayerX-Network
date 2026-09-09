@@ -3,6 +3,7 @@
 #include "layerx/lxp_genesis_builder.h"
 
 #include "layerx/lxp_crypto.h"
+#include "layerx/lx_asset.h"
 #include "layerx/lxp_protocol.h"
 
 #include <fcntl.h>
@@ -486,8 +487,54 @@ lxp_result lxp_genesis_build_artifacts(
     return build_artifacts(request_path, signer_key_path, output_directory, NULL);
 }
 
+static lxp_result migrate_asset_v2(const char *input_path, const char *salt_path,
+    const char *salt_source, const char *directory)
+{
+    uint8_t *input = NULL;
+    uint8_t *salt = NULL;
+    uint8_t output[384];
+    size_t input_length = 0U, salt_length = 0U, output_length = 0U;
+    char output_path[4096], source_path[4096];
+    bool created = false;
+    lxp_result status;
+    if (salt_source == NULL || strlen(salt_source) == 0U || strlen(salt_source) > 4096U)
+        return LXP_ERR_NON_CANONICAL;
+    status = read_regular_file(input_path, sizeof(output), false, &input, &input_length);
+    if (status == LXP_OK) status = read_regular_file(salt_path, 32U, false, &salt, &salt_length);
+    if (status == LXP_OK && salt_length != 32U) status = LXP_ERR_NON_CANONICAL;
+    if (status == LXP_OK) status = lx_asset_record_migrate_v2(input, input_length, salt,
+        output, sizeof(output), &output_length);
+    if (status == LXP_OK) status = join_path(output_path, sizeof(output_path), directory, "asset-v3.bin");
+    if (status == LXP_OK) status = join_path(source_path, sizeof(source_path), directory, "salt-source.txt");
+    if (status == LXP_OK) {
+        if (mkdir(directory, 0700) != 0) status = LXP_ERR_IO;
+        else created = true;
+    }
+    if (status == LXP_OK) status = write_exclusive(source_path,
+        (const uint8_t *)salt_source, strlen(salt_source));
+    if (status == LXP_OK) status = write_exclusive(output_path, output, output_length);
+    if (status == LXP_OK) {
+        int descriptor = open(directory, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+        if (descriptor < 0) status = LXP_ERR_IO;
+        else {
+            if (fsync(descriptor) != 0) status = LXP_ERR_IO;
+            if (close(descriptor) != 0) status = LXP_ERR_IO;
+        }
+    }
+    if (status != LXP_OK && created) {
+        (void)unlink(output_path);
+        (void)unlink(source_path);
+        (void)rmdir(directory);
+    }
+    free(input);
+    free(salt);
+    return status;
+}
+
 int lxp_genesis_builder_cli_main(int argc, char **argv)
 {
+    if (argv != NULL && argc == 6 && strcmp(argv[1], "--migrate-asset-v2") == 0)
+        return migrate_asset_v2(argv[2], argv[3], argv[4], argv[5]) == LXP_OK ? 0 : 1;
     if (argv == NULL || (argc != 4 && argc != 6) ||
         (argc == 6 && strcmp(argv[4], "--custody-profile") != 0))
         return 2;

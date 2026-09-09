@@ -7680,3 +7680,11 @@ symbol = "lxp_fee_schedule lxp_fee_compute lxp_fee_params_decode"
 observed = "Fee parameter encoding 2 carries exactly eight named Asset prices ordered register, account_open, send, receive, grant_issue, grant_revoke, mint, burn. Governance fee.encoding selects this encoding; every named price must resolve at the same parameter version. Encoding 1 retains its historical calculation. Encoding 2 uses the named Asset price, never the complete activity-type multiplier; reserved ordinal 9 is refused. Exact price, missing-price, truncated, trailing-byte and legacy round-trip checks pass in test-fees."
 assumption = "Committed fee.schedule records carry the canonical encoding. An absent committed schedule is accepted only for the existing parameter-version-1 zero-fee replay representation. New bootstrap inputs provide the explicit encoding-2 schedule."
 severity = "note"
+
+[observation.3.7.51]
+task = "3.7"
+file = "src/modules/asset/lx_asset_registry.c cmd/layerx-genesis/lxp_genesis_build_cli.c"
+symbol = "lx_asset_record_migrate_v2 migrate_asset_v2"
+observed = "The operator command layerx-genesis-build --migrate-asset-v2 input-record salt-file salt-source output-directory validates a version-2 record with an explicit 32-byte salt and emits asset-v3.bin plus salt-source.txt into an exclusive directory. Native issuer ids must match the supplied salt derivation. No salt is synthesized. Wrong native salt and exact-byte migration round trip pass in test-state-commitment-transition."
+assumption = "The command migrates record artifacts, not signed snapshot manifests, historical roots or settlement anchors. Snapshot incorporation requires an independently authorized migration boundary."
+severity = "note"
