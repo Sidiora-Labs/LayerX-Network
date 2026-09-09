@@ -1719,6 +1719,9 @@ beta_cluster_up() {
     port_forward identity "$TESTNET_NAMESPACE" layerx-identity "$IDENTITY_PORT" 9443
     if [ "${LAYERX_BETA_RETAIN_MATERIAL:-0}" != 1 ]; then
         identity_provision
+        kube apply -f "$MANIFESTS_DIR/registry.yaml" > /dev/null
+        wait_for_pod_ready "$TESTNET_NAMESPACE" app=layerx-program-registry 600
+        human_journal_deploy
         human_evidence_provision
         human_policy_publish
     fi
