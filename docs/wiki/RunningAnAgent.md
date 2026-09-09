@@ -14,7 +14,9 @@ of a `layerx` subcommand (`platform/cli/src/main.rs:42-80`).
 This is the second developer path after the testnet quickstart. It
 does not document emulator administration. MCP and A2A installation
 refuse the emulator
-(`platform/cli/src/install/mod.rs:573-577`).
+(`platform/cli/src/install/mod.rs:573-577`). Wallet, faucet, send,
+token, and 402 steps that include unmerged payment lanes are on
+[Payments developer path](PaymentsQuickstart.md).
 
 Two MCP surfaces exist and do not share a tool catalogue or a
 transport to core:

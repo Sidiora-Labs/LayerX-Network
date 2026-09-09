@@ -40,6 +40,9 @@ port-forwards `19445:443` and exports `LAYERX_FAUCET_URL`
 no Ingress object; the cluster apply path adds one. Those two
 manifests differ.
 
+The developer payments path that starts with this claim is
+[Payments developer path](PaymentsQuickstart.md).
+
 This page covers that binary, its Redis, and the claim path through
 testnet-control. It does not document treasury SEND construction.
 That path is on [Hosted core](HostedCore.md). Journey admission is on

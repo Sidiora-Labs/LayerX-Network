@@ -14,6 +14,12 @@ cited to the tree. Related pages: [CLI](Cli.md), [Beta cluster](BetaCluster.md),
 [Hosted gateway](HostedGateway.md), [Hosted identity](HostedIdentity.md),
 [Programs](Programs.md), [Finality](Finality.md).
 
+Wallet, faucet, send, token, program, and 402 steps that include surfaces
+still on unmerged payment lanes are on [Payments developer path](PaymentsQuickstart.md).
+Asset encodings: [Assets](Assets.md). Public `POST /rpc`: [Public JSON-RPC](PublicRpc.md)
+(on the testnet branch). `executed` / `batched` / `finalised`:
+[Commitment levels](CommitmentLevels.md).
+
 ---
 
 ## 1. Bring the beta cluster up

@@ -14,7 +14,9 @@ swift, conformance, generators). CALL receipt terminal verification for
 those clients is on [SdkTerminalVerification](SdkTerminalVerification.md).
 
 This page is a read of those sources. Where they disagree, both sides are
-cited.
+cited. LXT-20 request codecs and the payments-merchant example are
+**on the testnet branch** `lane/pay-programs-tokens`; see
+[Payments developer path](PaymentsQuickstart.md) and [Assets](Assets.md).
 
 Sources:
 

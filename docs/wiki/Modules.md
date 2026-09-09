@@ -43,14 +43,21 @@ Locked funds are real accounts, not hidden columns:
 
 ```
 agent:<did>:main
+agent:<did>:asset:<lowercase hex64 asset_id>
 agent:<did>:budget:<id>
 agent:<did>:escrow:<id>
 agent:<did>:stream:<id>
 agent:<did>:margin:<position>
+asset:<lowercase hex64 asset_id>:issuance
 module:programs:value:<account-id>
 system:fees
 system:paxeer-reserve
 ```
+
+`agent:<did>:asset:…` and `asset:<id>:issuance` are **on the testnet
+branch** (`lane/pay-native`, [Assets](Assets.md)). `main` parses
+`agent:<did>:main` and the budget / escrow / stream / margin forms
+(`src/ledger/lx_account_id.c`).
 
 Opening a position is a transfer into a margin account. Capturing escrow is a transfer out of an escrow account. Ordinary modules do not mint and do not burn.
 
@@ -70,7 +77,7 @@ See Payments and Fees.
 
 ## What each module is for
 
-**asset.** SEND and RECEIVE compile to the same internal transfer. RECEIVE requires a payer grant: one recipient, one account, caps, purpose, expiry. No wildcards.
+**asset.** SEND and RECEIVE compile to the same internal transfer. RECEIVE requires a payer grant: one recipient, one account, caps, purpose, expiry. No wildcards. Register, per-asset account_open, mint, and burn encodings are on [Assets](Assets.md) (on the testnet branch).
 
 **escrow.** Lock, capture, release. Terms are module state; money moves only as `402LXP` legs.
 
@@ -118,4 +125,5 @@ Each module implements `genesis`, `decode`, `validate` (read-only), `execute` (e
 - [Protocol](Protocol.md): LXC envelope, protocol 3, and the three rules
 - [Programs](Programs.md): module `0x09`, CALL vs simulate, guest ABI 2
 - [Finality](Finality.md): L0 → L4
+- [Assets](Assets.md): per-asset accounts and token ordinals
 - Design § modules

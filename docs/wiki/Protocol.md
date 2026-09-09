@@ -129,5 +129,7 @@ The public testnet exposes a gateway API and a faucet. There is no LayerX mainne
 - [Home](Home.md)
 - [Modules](Modules.md): `0x01`–`0x08` economic modules and Programs `0x09`
 - [Programs](Programs.md): DEPLOY / UPGRADE / CALL, simulate, guest ABI 2, occupancy
+- [Assets](Assets.md): per-asset accounts, issuance, register / mint / burn encodings
 - [Finality](Finality.md): L0 → L4
+- [Commitment levels](CommitmentLevels.md): `executed`, `batched`, `finalised`
 - Design § protocol
