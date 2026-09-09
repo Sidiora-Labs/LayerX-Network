@@ -5372,3 +5372,11 @@ symbol = "lxp_ctx_asset_issuance_stage issuance_find"
 observed = "Current issuance staging, prepared-account commit validation and replay use asset:<hex>:issuance. The shared account encoding does not authorize that extra namespace. The Asset requirement now specifies one explicit internal representation through module:<mod>:value:<hex64> and preserves public agent account names and conservation."
 assumption = "Module context and daemon replay changes are outside owned paths. Updating only owned lookup/parser code would split producers and consumers. Observation.3.7.24 is an accounting integration issue, not authority to weaken conservation."
 severity = "blocker"
+
+[observation.3.7.43]
+task = "3.7"
+file = "src/protocol/lxp_fee.c include/layerx/lxp_fee.h src/protocol/lxp_fee_policy.c"
+symbol = "lxp_fee_compute"
+observed = "The fee calculator still multiplies per_activity_type_unit by the full module/ordinal value. The owned policy file controls admission/refusal decisions, not the schedule. The Asset requirement now mandates canonical named prices and retracts the earlier version-1 formula as resolution."
+assumption = "Pricing types, calculation, canonical parameters and replay must change together outside the owned policy path. Existing exact-fee assertions are retained. Prior fee tests establish only current formula behavior."
+severity = "blocker"
