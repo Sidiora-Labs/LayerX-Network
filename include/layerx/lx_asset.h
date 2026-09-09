@@ -28,6 +28,8 @@ enum {
     LX_ASSET_BURN = 0x0001000b
 };
 
+/* Register issuer_kind is 1=native, 2=paxeer_custody. That numbering is not
+ * lx_asset_custody_kind (PAXEER=1) and must not be stored as custody_kind. */
 typedef struct lx_asset_register_payload {
     uint8_t asset_id[32];
     uint8_t salt[32];
@@ -46,6 +48,7 @@ typedef struct lx_asset_account_open_payload {
     uint8_t asset_id[32];
 } lx_asset_account_open_payload;
 
+/* Mint: account_id is to_account32. Burn: account_id is from_account32. */
 typedef struct lx_asset_supply_payload {
     uint8_t asset_id[32];
     uint8_t account_id[32];
@@ -57,15 +60,22 @@ typedef struct lx_asset_grant_revoke_payload {
     uint64_t revocation_sequence;
 } lx_asset_grant_revoke_payload;
 
+/* version:u16=1 || asset_id32 || salt32 || symbol_len:u8 || symbol(1..16 ASCII)
+ * || name_len:u8 || name(1..32 UTF-8) || decimals:u8<=38 || supply_cap:u128
+ * || issuer_kind:u8 || custody_ref_len:u8 || custody_ref. Integers big-endian. */
 lxp_result lx_asset_register_decode(const uint8_t *bytes, size_t length,
                                     lx_asset_register_payload *payload);
+/* version:u16=1 || asset_id32 */
 lxp_result lx_asset_account_open_decode(const uint8_t *bytes, size_t length,
                                         lx_asset_account_open_payload *payload);
+/* version:u16=1 || asset_id32 || account_id32 || amount:u128 (amount > 0) */
 lxp_result lx_asset_supply_decode(const uint8_t *bytes, size_t length,
                                   lx_asset_supply_payload *payload);
+/* version:u16=1 || grant_id32 || revocation_sequence:u64 */
 lxp_result lx_asset_grant_revoke_decode(const uint8_t *bytes, size_t length,
                                         lx_asset_grant_revoke_payload *payload);
 
+/* Persisted registry custody kind. Distinct from register issuer_kind. */
 typedef enum lx_asset_custody_kind {
     LX_ASSET_CUSTODY_PAXEER = 1
 } lx_asset_custody_kind;
