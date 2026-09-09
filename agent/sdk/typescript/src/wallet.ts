@@ -68,7 +68,7 @@ export class WalletRpc {
   public readonly grant = {
     issue: (canonicalGrant: Uint8Array, options: WalletExecutionOptions): Promise<VerifiedWalletReceipt> => this.submit(7,canonicalGrant,options),
     revoke: (grant: string, sequence: bigint, options: WalletExecutionOptions): Promise<VerifiedWalletReceipt> => this.submit(8,Buffer.concat([integer(1n,2),id(grant),integer(sequence,8)]),options),
-    draw: (request: {from:string;to:string;asset:string;amount:bigint;grant:string;contextHash:string}, options: WalletExecutionOptions): Promise<VerifiedWalletReceipt> => this.submit(6,Buffer.concat([integer(0x5201n,2),integer(8n,2),id(request.from),id(request.to),id(request.asset),integer(request.amount,16),id(request.grant),integer(0n,8),id(options.idempotencyKey),id(request.contextHash)]),options),
+    draw: (canonicalReceive: Uint8Array, options: WalletExecutionOptions): Promise<VerifiedWalletReceipt> => this.submit(6,canonicalReceive,options),
   };
   public async waitFor(activity: string, commitment: Commitment, timeoutMs = 30000): Promise<VerifiedWalletReceipt> {
     return receipt(await this.call({action:"wait",activity_id:activity,commitment,timeout_ms:checkedTimeout(timeoutMs).toString()},timeoutMs),commitment);

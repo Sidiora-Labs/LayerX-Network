@@ -84,7 +84,7 @@ fn canonical(
     h.update(payload);
     let digest: [u8; 32] = h.finalize().into();
     let mut e = Encoder::new(65536);
-    let version = layerx_wire::limits::PROTOCOL_VERSION;
+    let version = layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION;
     e.structure_header_version(0x1001, version)?;
     e.u8(11)?;
     e.tag(1, 12)?;
@@ -169,7 +169,7 @@ fn every_accepted_field_mutation_is_refused_at_the_signing_boundary(
         let disclosure = bind(&canonical, &registry)?;
         let message = SignatureMessage::new(
             Domain::SignaturePreimage,
-            layerx_wire::limits::PROTOCOL_VERSION,
+            layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION,
             17,
             &canonical,
         )
@@ -193,15 +193,9 @@ fn every_accepted_field_mutation_is_refused_at_the_signing_boundary(
 
 #[test]
 fn receive_discloses_source_sequence_independently() -> Result<(), Box<dyn std::error::Error>> {
-    let mut payment = Payment::decode(ModuleId::Asset, 6, &hex(VECTORS[2].2), ACTOR)?;
-    if let Payment::Receive { sequence, .. } = &mut payment {
-        *sequence = 23;
-    }
-    let payload = payment.encode(ACTOR)?;
-    assert_eq!(
-        payload,
-        hex(include_str!("fixtures/payments/1-6-source-sequence-23.hex"))
-    );
+    let payload = hex(include_str!("fixtures/payments/1-6-source-sequence-23.hex"));
+    let payment = Payment::decode(ModuleId::Asset, 6, &payload, ACTOR)?;
+    assert_eq!(payment.encode(ACTOR)?, payload);
     let (bytes, registry) = canonical(ModuleId::Asset, 6, &payload)?;
     let disclosure = bind(&bytes, &registry)?;
     assert_eq!(disclosure.envelope_sequence(), 7);
@@ -218,5 +212,19 @@ fn payer_grant_signature_and_identifier_are_bound() {
         let mut changed = payload.clone();
         changed[offset] ^= 1;
         assert!(Payment::decode(ModuleId::Asset, 7, &changed, ACTOR).is_err());
+    }
+}
+
+#[test]
+fn receive_rejects_forged_authorization_and_grant() {
+    let payload = hex(VECTORS[2].2);
+    assert_eq!(payload.len(), 733);
+    for offset in 0..payload.len() {
+        let mut changed = payload.clone();
+        changed[offset] ^= 1;
+        assert!(
+            Payment::decode(ModuleId::Asset, 6, &changed, ACTOR).is_err(),
+            "offset {offset}"
+        );
     }
 }

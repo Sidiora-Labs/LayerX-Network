@@ -48,6 +48,17 @@ pub struct Grant {
     pub signature: [u8; 64],
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReceiverAuthorization {
+    pub kind: u8,
+    pub controller: Id,
+    pub public_key: Id,
+    pub signature: [u8; 64],
+    pub signed_context_hash: Id,
+    pub network_id: u32,
+    pub protocol_version: u16,
+}
+
 /// One conserved Programs transfer leg (from, asset, to, amount).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TransferLeg {
@@ -73,6 +84,8 @@ pub enum Payment {
         sequence: u64,
         idempotency_key: Id,
         context_hash: Id,
+        receiver_authorization: ReceiverAuthorization,
+        payer_grant: Box<Grant>,
     },
     IssueGrant(Grant),
     RevokeGrant {
@@ -177,13 +190,7 @@ impl Payment {
                     }
                 }
             }
-            Self::Receive {
-                from, to, amount, ..
-            } => {
-                if from == to || *amount == 0 {
-                    return bad();
-                }
-            }
+            Self::Receive { .. } => self.verify_receive()?,
             Self::Mint { amount, .. } | Self::Burn { amount, .. } => {
                 if *amount == 0 {
                     return bad();
@@ -209,6 +216,72 @@ impl Payment {
             }
             Self::OpenAccount { .. } | Self::RevokeGrant { .. } => {}
         }
+        Ok(())
+    }
+
+    fn verify_receive(&self) -> Result<(), DisclosureError> {
+        let Self::Receive {
+            from,
+            to,
+            asset,
+            amount,
+            grant,
+            sequence,
+            idempotency_key,
+            context_hash,
+            receiver_authorization: auth,
+            payer_grant: g,
+        } = self
+        else {
+            return bad();
+        };
+
+        g.verify()?;
+        if from == to
+            || *amount == 0
+            || *amount > g.per_draw_maximum
+            || *from != g.from
+            || *to != g.recipient
+            || *asset != g.asset
+            || *grant != g.id
+            || !(1..=6).contains(&auth.kind)
+            || auth.controller != *to
+            || auth.signed_context_hash != *context_hash
+            || auth.network_id == 0
+            || !layerx_wire::limits::protocol_version_supported(auth.protocol_version)
+        {
+            return bad();
+        }
+        let mut h = Sha256::new();
+        h.update(layerx_wire::hash::Domain::ContextHash.tag());
+        h.update(g.purpose_hash);
+        if g.has_reference {
+            h.update(g.reference_hash);
+        }
+        let expected: Id = h.finalize().into();
+        if expected != *context_hash {
+            return bad();
+        }
+        let mut e = Encoder::new(512);
+        e.fixed(b"LXP:RECEIVE:v1")?;
+        e.fixed(from)?;
+        e.fixed(to)?;
+        e.fixed(asset)?;
+        e.u128(*amount)?;
+        e.fixed(grant)?;
+        e.u64(*sequence)?;
+        e.fixed(idempotency_key)?;
+        e.fixed(context_hash)?;
+        e.u8(auth.kind)?;
+        e.fixed(&auth.controller)?;
+        e.fixed(&auth.signed_context_hash)?;
+        e.u32(auth.network_id)?;
+        e.u16(auth.protocol_version)?;
+        let mut h = Sha256::new();
+        h.update(layerx_wire::hash::Domain::SignaturePreimage.tag());
+        h.update(e.finish());
+        crate::ed25519::verify_digest(&auth.public_key, &auth.signature, &h.finalize().into())
+            .map_err(|_| DisclosureError::MalformedPayload)?;
         Ok(())
     }
 
@@ -265,9 +338,11 @@ impl Payment {
                 sequence,
                 idempotency_key,
                 context_hash,
+                receiver_authorization: auth,
+                payer_grant,
             } => {
                 e.u16(0x5201)?;
-                e.u16(8)?;
+                e.u16(10)?;
                 e.fixed(from)?;
                 e.fixed(to)?;
                 e.fixed(asset)?;
@@ -276,6 +351,14 @@ impl Payment {
                 e.u64(*sequence)?;
                 e.fixed(idempotency_key)?;
                 e.fixed(context_hash)?;
+                e.u8(auth.kind)?;
+                e.fixed(&auth.controller)?;
+                e.fixed(&auth.public_key)?;
+                e.fixed(&auth.signature)?;
+                e.fixed(&auth.signed_context_hash)?;
+                e.u32(auth.network_id)?;
+                e.u16(auth.protocol_version)?;
+                encode_grant(&mut e, payer_grant)?;
             }
             Self::IssueGrant(g) => encode_grant(&mut e, g)?,
             Self::ProgramTransfer { program, legs } => {
@@ -345,7 +428,7 @@ impl Payment {
                 amount: d.u128()?,
             },
             (ModuleId::Asset, 6) => {
-                if d.u16()? != 0x5201 || d.u16()? != 8 {
+                if d.u16()? != 0x5201 || d.u16()? != 10 {
                     return bad();
                 }
                 Self::Receive {
@@ -357,6 +440,16 @@ impl Payment {
                     sequence: d.u64()?,
                     idempotency_key: fixed(&mut d)?,
                     context_hash: fixed(&mut d)?,
+                    receiver_authorization: ReceiverAuthorization {
+                        kind: d.u8()?,
+                        controller: fixed(&mut d)?,
+                        public_key: fixed(&mut d)?,
+                        signature: fixed(&mut d)?,
+                        signed_context_hash: fixed(&mut d)?,
+                        network_id: d.u32()?,
+                        protocol_version: d.u16()?,
+                    },
+                    payer_grant: Box::new(decode_grant(&mut d)?),
                 }
             }
             (ModuleId::Asset, 7) => Self::IssueGrant(decode_grant(&mut d)?),

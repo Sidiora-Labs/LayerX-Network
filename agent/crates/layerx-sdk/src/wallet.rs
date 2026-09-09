@@ -184,19 +184,9 @@ impl Wallet<'_> {
     /// Refuses malformed payment payloads and propagates preparation, signing and verification errors.
     pub async fn payment(
         &self,
-        mut payment: Payment,
+        payment: Payment,
         options: &PaymentOptions,
     ) -> Result<VerifiedRpcReceipt, RpcError> {
-        if let Payment::Receive {
-            from,
-            sequence,
-            idempotency_key,
-            ..
-        } = &mut payment
-        {
-            *sequence = source_sequence(self.rpc, *from)?;
-            *idempotency_key = options.idempotency_key;
-        }
         let (module, ordinal) = payment.activity_type();
         let payload = payment
             .encode(options.actor.as_bytes())
@@ -243,12 +233,16 @@ impl Wallet<'_> {
             .payload_sequence()
             .map_err(|_| RpcError::Verification)?
         {
-            let source = prepared
-                .disclosure
-                .counterparties
-                .first()
-                .ok_or(RpcError::InvalidRequest)?
-                .account;
+            let source = if let Some(Payment::Receive { to, .. }) = &prepared.disclosure.payment {
+                *to
+            } else {
+                prepared
+                    .disclosure
+                    .counterparties
+                    .first()
+                    .ok_or(RpcError::InvalidRequest)?
+                    .account
+            };
             if source_sequence(self.rpc, source)? != payload_sequence {
                 return Err(RpcError::StaleSourceSequence);
             }
@@ -389,26 +383,23 @@ mod tests {
         };
         let options = PaymentOptions {
             actor: "did:layerx:alice".into(),
-            idempotency_key: [7; 32],
+            idempotency_key: [0x71; 32],
             fee_limit: 20,
             not_before: 10,
             not_after: 100,
             commitment: Commitment::Executed,
             wait_timeout: Duration::from_secs(1),
         };
-        let payment = Payment::Receive {
-            from: [1; 32],
-            to: [2; 32],
-            asset: [3; 32],
-            amount: 5,
-            grant: [4; 32],
-            sequence: 23,
-            idempotency_key: options.idempotency_key,
-            context_hash: [6; 32],
-        };
-        let payload = payment
-            .encode(options.actor.as_bytes())
-            .map_err(|_| RpcError::InvalidRequest)?;
+        let payload =
+            include_str!("../../layerx-crypto/tests/fixtures/payments/1-6-source-sequence-23.hex")
+                .trim()
+                .as_bytes()
+                .chunks_exact(2)
+                .map(|pair| {
+                    let text = std::str::from_utf8(pair).map_err(|_| RpcError::InvalidRequest)?;
+                    u8::from_str_radix(text, 16).map_err(|_| RpcError::InvalidRequest)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
         let prepared =
             prepare_payload(ModuleId::Asset, 6, &payload, &options, &policy, [9; 32], 7)?;
         assert_eq!(prepared.disclosure().envelope_sequence(), 7);

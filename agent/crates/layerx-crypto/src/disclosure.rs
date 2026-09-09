@@ -23,8 +23,6 @@ const BUDGET_FUND_ORDINAL: u16 = 2;
 const BUDGET_FUND_WIRE_TAG: u16 = 0x4202;
 const BUDGET_FUND_FIELD_COUNT: u16 = 6;
 const ASSET_RECEIVE_ORDINAL: u16 = 6;
-const RECEIVE_WIRE_TAG: u16 = 0x5201;
-const RECEIVE_FIELD_COUNT: u16 = 8;
 const BUDGET_DEFUND_ORDINAL: u16 = 7;
 const BUDGET_DEFUND_WIRE_TAG: u16 = 0x4207;
 const BUDGET_DEFUND_FIELD_COUNT: u16 = 7;
@@ -273,20 +271,24 @@ fn decode_send(payload: &[u8], activity: &Activity) -> Result<SendSemantics, Dis
 }
 
 fn decode_receive(payload: &[u8], activity: &Activity) -> Result<SendSemantics, DisclosureError> {
-    let mut decoder = Decoder::new(payload, 0);
-    if decoder.u16()? != RECEIVE_WIRE_TAG || decoder.u16()? != RECEIVE_FIELD_COUNT {
+    let payment = Payment::decode(ModuleId::Asset, 6, payload, activity.actor_did())?;
+    let Payment::Receive {
+        from,
+        to,
+        asset,
+        amount,
+        sequence,
+        idempotency_key,
+        receiver_authorization: auth,
+        ..
+    } = payment
+    else {
         return Err(DisclosureError::MalformedPayload);
-    }
-    let from = fixed(&mut decoder)?;
-    let to = fixed(&mut decoder)?;
-    let asset = fixed(&mut decoder)?;
-    let amount = decoder.u128()?;
-    let _payer_grant: [u8; 32] = fixed(&mut decoder)?;
-    let sequence = decoder.u64()?;
-    let idempotency_key = fixed(&mut decoder)?;
-    let _context_hash: [u8; 32] = fixed(&mut decoder)?;
-    decoder.finish()?;
-    if amount == 0 || from == to || idempotency_key != activity.idempotency_key() {
+    };
+    if idempotency_key != activity.idempotency_key()
+        || auth.network_id != activity.network_id()
+        || auth.protocol_version != activity.protocol_version()
+    {
         return Err(DisclosureError::MalformedPayload);
     }
     Ok(SendSemantics {
@@ -545,10 +547,15 @@ fn payment_fields(activity: &Activity) -> Result<DisclosureFields, DisclosureErr
     }
     let payment = Payment::decode(kind.0, kind.1, activity.payload(), activity.actor_did())?;
     if let Payment::Receive {
-        idempotency_key, ..
+        idempotency_key,
+        receiver_authorization: auth,
+        ..
     } = &payment
     {
-        if *idempotency_key != activity.idempotency_key() {
+        if *idempotency_key != activity.idempotency_key()
+            || auth.network_id != activity.network_id()
+            || auth.protocol_version != activity.protocol_version()
+        {
             return Err(DisclosureError::MalformedPayload);
         }
     }
