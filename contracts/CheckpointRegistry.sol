@@ -40,6 +40,7 @@ contract CheckpointRegistry is LayerXComponent {
 
     NativePublicationVerifier public publicationVerifier = new NativePublicationVerifier();
     uint16 public constant EVIDENCE_VERSION = 2;
+    uint16 public constant CHECKPOINT_ORDER_VERSION = 2;
     mapping(bytes32 => address) public checkpointProposer;
     mapping(bytes32 => bytes32) public witnessesDigest;
     mapping(bytes32 => bool) public witnessesPublished;
@@ -362,12 +363,15 @@ contract CheckpointRegistry is LayerXComponent {
             );
     }
 
+    // Epoch names the active authority lifecycle; batchNumber is the checkpoint sequence.
+    // Consecutive batches and activity ranges prevent same-epoch replay and sequence gaps.
     function _validateHeader(CanonicalCheckpoint.HeaderCommitments calldata header) private view {
         if (firstInvalidatedBatch != 0) revert CanonicalChainInvalidated();
         if (
-            header.protocolVersion != protocolVersion || header.networkId != networkId || header.epoch <= finalisedEpoch
-                || header.batchNumber != finalisedBatchNumber + 1 || header.firstSequence != finalisedLastSequence + 1
-                || header.lastSequence < header.firstSequence || header.timestamp <= finalisedTimestamp
+            header.protocolVersion != protocolVersion || header.networkId != networkId || header.epoch == 0
+                || header.epoch < finalisedEpoch || header.batchNumber != finalisedBatchNumber + 1
+                || header.firstSequence != finalisedLastSequence + 1 || header.lastSequence < header.firstSequence
+                || header.timestamp <= finalisedTimestamp
                 || uint256(header.timestamp)
                     > uint256(_wallClockMilliseconds()) + maximumFutureTimestampDriftMilliseconds
                 || header.resultingStateRoot == bytes32(0) || header.activityMerkleRoot == bytes32(0)

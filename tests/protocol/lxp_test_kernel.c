@@ -119,6 +119,8 @@ int main(void)
         lxp_kernel_register_module(&kernel, &unterminated) !=
             LXP_ERR_LENGTH_LIMIT ||
         lxp_kernel_set_epoch(&kernel, 4U) != LXP_OK ||
+        lxp_kernel_set_epoch(&kernel, 4U) != LXP_OK ||
+        kernel.epoch != 4U ||
         lxp_kernel_register_module(&kernel, &v2) != LXP_OK ||
         lxp_kernel_module_for_activity(&kernel, v1_types[1], 3U,
                                        &registration) != LXP_OK ||
@@ -130,6 +132,7 @@ int main(void)
                                        &registration) !=
             LXP_ERR_UNKNOWN_ACTIVITY ||
         lxp_kernel_set_epoch(&kernel, 3U) != LXP_ERR_TIMESTAMP_REGRESSION ||
+        kernel.epoch != 4U ||
         lxp_state_store_destroy(&store) != LXP_OK) return 1;
     return 0;
 }

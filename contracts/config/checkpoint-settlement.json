@@ -1,6 +1,7 @@
 {
   "schema": "layerx/checkpoint-settlement/1",
   "protocol_version": 2,
+  "checkpoint_order_version": 2,
   "checkpoint_certificate_domain": "LXP/v2/checkpoint-certificate",
   "guarantor_attestation_domain": "LXP/v2/guarantor-attestation",
   "header_encoding_prefix": "0x000217010f",
