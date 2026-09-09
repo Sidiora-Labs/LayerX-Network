@@ -2,6 +2,7 @@
 
 #include "layerx/lxp_crypto.h"
 #include "layerx/lx_asset.h"
+#include "layerx/lxp_fee.h"
 #include "layerx/lxp_kernel.h"
 #include "layerx/lxp_module_ctx.h"
 #include "layerx/lxp_ledger.h"
@@ -154,12 +155,32 @@ static lxp_result build_fresh(
         encoded_manifest == NULL || snapshot == NULL ||
         (draft->protocol_version != LXP_PROTOCOL_VERSION &&
          draft->protocol_version != LXP_PROTOCOL_VERSION_STATE_COMMITMENT) ||
-        draft->account_count != 0U || draft->module_value_count != 0U ||
+        draft->account_count != 0U || draft->module_value_count > LX_ASSET_REGISTRY_CAPACITY + 1U ||
         !lxp_ct_is_zero(draft->genesis_state_root, 32U) ||
         !lxp_ct_is_zero(draft->genesis_receipt_state_root, 32U) ||
         !lxp_ct_is_zero(draft->signer_public_key, 32U) ||
         !lxp_ct_is_zero(draft->signature, 64U))
         return LXP_ERR_NON_CANONICAL;
+    if (draft->module_value_count != 0U) {
+        bool asset_present = false, schedule_present = false;
+        for (size_t i = 0U; i < draft->module_value_count; ++i) {
+            const lxp_genesis_module_value *value = &draft->module_values[i];
+            if (value->module_id == LXP_MODULE_ASSET) {
+                lx_asset_record record;
+                if (lx_asset_record_decode(value->value, value->value_length, &record) != LXP_OK ||
+                    memcmp(record.asset_id, value->key, 32U) != 0 || record.issuer_kind == 1U ||
+                    !lxp_u128_is_zero(record.total_units)) return LXP_ERR_NON_CANONICAL;
+                if (memcmp(record.asset_id, asset_id, 32U) == 0) asset_present = true;
+            } else if (value->module_id == LXP_MODULE_GOVERNANCE &&
+                memcmp(value->key, "fee.schedule", 12U) == 0 && lxp_ct_is_zero(value->key + 12U, 20U)) {
+                lxp_fee_params schedule;
+                if (schedule_present || lxp_fee_params_decode(value->value, value->value_length, &schedule) != LXP_OK ||
+                    schedule.version != 2U) return LXP_ERR_NON_CANONICAL;
+                schedule_present = true;
+            } else return LXP_ERR_NON_CANONICAL;
+        }
+        if (!asset_present || !schedule_present) return LXP_ERR_ASSET_MISMATCH;
+    }
     candidate = (lxp_genesis_manifest *)malloc(sizeof(*candidate));
     if (candidate == NULL) return LXP_ERR_IO;
     *candidate = *draft;

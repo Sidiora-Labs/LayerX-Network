@@ -3,6 +3,8 @@
 #include "layerx/lxp_genesis_builder.h"
 
 #include "layerx/lxp_crypto.h"
+#include "layerx/lx_asset.h"
+#include "layerx/lxp_fee.h"
 
 #include <fcntl.h>
 #include <stdint.h>
@@ -12,7 +14,7 @@
 #include <unistd.h>
 
 typedef struct request_writer {
-    uint8_t bytes[512];
+    uint8_t bytes[1024];
     size_t length;
 } request_writer;
 
@@ -212,6 +214,60 @@ int main(void)
             registration_request, request_length, &forged_registration) ==
                 LXP_OK)
         return 1;
+    {
+        lx_asset_record asset = {0};
+        lxp_fee_params schedule = {0};
+        uint8_t encoded[384];
+        size_t encoded_length;
+        char v2_request[160], v2_output[160], v2_manifest[192];
+        (void)memcpy(asset.asset_id, asset_id, 32U);
+        (void)memcpy(asset.symbol, "TEST", 4U); asset.symbol_length = 4U;
+        (void)memcpy(asset.name, "Test asset", 10U); asset.name_length = 10U;
+        asset.decimals = 6U; asset.custody_kind = LX_ASSET_CUSTODY_PAXEER;
+        asset.issuer_kind = 2U; asset.issuer_did32[0] = 7U; asset.salt[0] = 9U;
+        schedule.version = 2U; schedule.multiplier_basis_points = 10000U;
+        schedule.asset_price_count = LXP_ASSET_FEE_PRICE_COUNT;
+        for (size_t i = 0U; i < LXP_ASSET_FEE_PRICE_COUNT; ++i) schedule.asset_prices[i].lo = i + 1U;
+        request.bytes[4] = 2U;
+        request.bytes[5] = 0U; request.bytes[6] = 3U;
+        if (lx_asset_record_encode(&asset, encoded, sizeof(encoded), &encoded_length) != LXP_OK ||
+            append_u16(&request, 1U) != 0 || append_u16(&request, (uint16_t)encoded_length) != 0 ||
+            append(&request, encoded, encoded_length) != 0 ||
+            lxp_fee_params_encode(&schedule, encoded, sizeof(encoded), &encoded_length) != LXP_OK ||
+            append_u16(&request, (uint16_t)encoded_length) != 0 || append(&request, encoded, encoded_length) != 0 ||
+            snprintf(v2_request, sizeof(v2_request), "%s/request-v2.lxgb", base) < 0 ||
+            snprintf(v2_output, sizeof(v2_output), "%s/artifacts-v2", base) < 0 ||
+            snprintf(v2_manifest, sizeof(v2_manifest), "%s/genesis.manifest", v2_output) < 0 ||
+            write_file(v2_request, request.bytes, request.length, 0600) != 0 ||
+            lxp_genesis_build_artifacts(v2_request, key_path, v2_output) != LXP_OK ||
+            read_file(v2_manifest, manifest_bytes, sizeof(manifest_bytes), &manifest_length) != 0 ||
+            lxp_genesis_parse(manifest_bytes, manifest_length, LXP_GENESIS_INPUT_MANIFEST, &manifest) != LXP_OK)
+            return 1;
+        bool found_asset = false, found_fee = false;
+        for (size_t i = 0U; i < manifest.module_value_count; ++i) {
+            const lxp_genesis_module_value *value = &manifest.module_values[i];
+            if (value->module_id == LXP_MODULE_ASSET) {
+                lx_asset_record actual;
+                if (lx_asset_record_decode(value->value, value->value_length, &actual) != LXP_OK ||
+                    memcmp(&actual, &asset, sizeof(asset)) != 0) return 1;
+                found_asset = true;
+            }
+            if (value->module_id == LXP_MODULE_GOVERNANCE && memcmp(value->key, "fee.schedule", 12U) == 0) {
+                lxp_fee_params actual;
+                if (lxp_fee_params_decode(value->value, value->value_length, &actual) != LXP_OK ||
+                    memcmp(&actual, &schedule, sizeof(schedule)) != 0) return 1;
+                found_fee = true;
+            }
+        }
+        if (!found_asset || !found_fee) return 1;
+        static const char *const names[] = {"genesis.manifest", "00000000000000000000.lxs",
+            "paxeer-registration-request.lxrr", "paxeer-deployment-descriptor.lxgd"};
+        for (size_t i = 0U; i < 4U; ++i) {
+            char path[192];
+            if (snprintf(path, sizeof(path), "%s/%s", v2_output, names[i]) < 0 || unlink(path) != 0) return 1;
+        }
+        if (rmdir(v2_output) != 0 || unlink(v2_request) != 0) return 1;
+    }
     if (unlink(deployment_descriptor_path) != 0 ||
         unlink(registration_request_path) != 0 || unlink(snapshot_path) != 0 ||
         unlink(manifest_path) != 0 || rmdir(output_path) != 0 ||

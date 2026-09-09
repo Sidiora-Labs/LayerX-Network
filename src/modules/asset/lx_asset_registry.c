@@ -729,6 +729,53 @@ lxp_result lx_asset_record_decode(const uint8_t *bytes, size_t length,
         LXP_OK : LXP_ERR_NON_CANONICAL;
 }
 
+lxp_result lx_asset_committed_records(const lxp_kernel *kernel,
+    lx_asset_record *records, size_t capacity, size_t *count)
+{
+    size_t used = 0U;
+    if (kernel == NULL || records == NULL || count == NULL || capacity > LX_ASSET_REGISTRY_CAPACITY ||
+        kernel->module_kv_count > LXP_KERNEL_MAX_MODULE_KV) return LXP_ERR_NON_CANONICAL;
+    for (size_t pass = 0U; pass < 2U; ++pass) {
+        for (size_t i = 0U; i < kernel->module_kv_count; ++i) {
+            const lxp_module_kv_entry *entry = &kernel->module_kv[i];
+            lx_asset_record record;
+            const uint8_t *id;
+            size_t at;
+            if (entry->module_id != LXP_MODULE_ASSET) continue;
+            if (pass == 0U) {
+                if (entry->key_length != 32U) continue;
+                id = entry->key;
+            } else {
+                if (entry->key_length != 38U || memcmp(entry->key, "asset:", 6U) != 0) continue;
+                id = entry->key + 6U;
+            }
+            lxp_result status = lx_asset_record_decode(entry->value, entry->value_length, &record);
+            if (status != LXP_OK) return status;
+            if (memcmp(id, record.asset_id, 32U) != 0) return LXP_ERR_ASSET_MISMATCH;
+            for (at = 0U; at < used; ++at)
+                if (memcmp(records[at].asset_id, id, 32U) >= 0) break;
+            if (at == used || memcmp(records[at].asset_id, id, 32U) != 0) {
+                if (used == capacity) return LXP_ERR_LENGTH_LIMIT;
+                (void)memmove(records + at + 1U, records + at, (used - at) * sizeof(*records));
+                ++used;
+            }
+            if (pass == 0U) {
+                for (size_t supply = 0U; supply < kernel->module_kv_count; ++supply) {
+                    const lxp_module_kv_entry *issued = &kernel->module_kv[supply];
+                    if (issued->module_id != LXP_MODULE_BRIDGE || issued->key_length != 47U ||
+                        memcmp(issued->key, "custody-issued:", 15U) != 0 ||
+                        memcmp(issued->key + 15U, id, 32U) != 0) continue;
+                    if (issued->value_length != 16U) return LXP_ERR_NON_CANONICAL;
+                    (void)lxp_u128_from_be(issued->value, &record.total_units);
+                }
+            }
+            records[at] = record;
+        }
+    }
+    *count = used;
+    return LXP_OK;
+}
+
 lxp_result lx_asset_record_migrate_v2(const uint8_t *bytes, size_t length,
     const uint8_t salt[32], uint8_t *output, size_t capacity, size_t *output_length)
 {
