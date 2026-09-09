@@ -309,8 +309,7 @@ fn unknown_program_and_incompatible_abi_are_typed() {
 #[test]
 fn abi_upgrades_are_monotonic_and_historical_versions_remain_admitted() {
     use layerx_programs_runtime::{
-        admit_abi_upgrade, admit_abi_version, AbiVersionRefusal, ABI_V1_VERSION,
-        ABI_V2_VERSION,
+        admit_abi_upgrade, admit_abi_version, AbiVersionRefusal, ABI_V1_VERSION, ABI_V2_VERSION,
     };
 
     assert_eq!(admit_abi_version(ABI_V1_VERSION), Ok(()));

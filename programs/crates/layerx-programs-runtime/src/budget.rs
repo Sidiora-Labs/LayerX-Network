@@ -217,15 +217,7 @@ impl DeclaredBudget {
     #[must_use]
     pub const fn minimum() -> Self {
         Self {
-            resources: ResourceBudget::new_complete(
-                MIN_ACTIVITY_CPU_FUEL,
-                65_536,
-                0,
-                0,
-                1,
-                0,
-                0,
-            ),
+            resources: ResourceBudget::new_complete(MIN_ACTIVITY_CPU_FUEL, 65_536, 0, 0, 1, 0, 0),
         }
     }
 
