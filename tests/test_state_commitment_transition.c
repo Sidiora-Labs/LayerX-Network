@@ -474,6 +474,33 @@ static int pay1_snapshot_roundtrip(fixture *source)
     REQUIRE(memcmp(before, after, 32U) == 0);
     REQUIRE(restored->accounts.count == source->accounts.count);
     REQUIRE(restored->kernel.module_kv_count == source->kernel.module_kv_count);
+    for (size_t i = 0U; i < source->kernel.module_kv_count; ++i) {
+        const lxp_module_kv_entry *original = &source->kernel.module_kv[i];
+        const lxp_module_kv_entry *loaded = NULL;
+        for (size_t j = 0U; j < restored->kernel.module_kv_count; ++j) {
+            const lxp_module_kv_entry *candidate = &restored->kernel.module_kv[j];
+            if (candidate->module_id == original->module_id &&
+                candidate->key_length == original->key_length &&
+                memcmp(candidate->key, original->key, original->key_length) == 0) {
+                REQUIRE(loaded == NULL);
+                loaded = candidate;
+            }
+        }
+        REQUIRE(loaded != NULL && loaded->value_length == original->value_length);
+        REQUIRE(memcmp(loaded->value, original->value, original->value_length) == 0);
+        if (original->module_id == LXP_MODULE_ASSET && original->key_length == 38U &&
+            memcmp(original->key, "asset:", 6U) == 0) {
+            lx_asset_record before_record, after_record;
+            REQUIRE(lx_asset_record_decode(original->value, original->value_length, &before_record) == LXP_OK);
+            REQUIRE(lx_asset_record_decode(loaded->value, loaded->value_length, &after_record) == LXP_OK);
+            REQUIRE(memcmp(before_record.salt, after_record.salt, 32U) == 0);
+            REQUIRE(memcmp(before_record.issuer_did32, after_record.issuer_did32, 32U) == 0);
+            REQUIRE(before_record.issuer_kind == after_record.issuer_kind);
+            REQUIRE(before_record.paused == after_record.paused);
+            REQUIRE(lxp_u128_cmp(before_record.supply_cap, after_record.supply_cap) == 0);
+            REQUIRE(lxp_u128_cmp(before_record.total_units, after_record.total_units) == 0);
+        }
+    }
     for (size_t i = 0U; i < source->accounts.count; ++i) {
         const lx_account *original = &source->accounts.accounts[i];
         lx_account *loaded;
