@@ -257,7 +257,7 @@ async function runMerchantServiceScenarios(suite, receipt, resolver, amount, ass
       const response = await postJson(checkout, requestBody);
       offerHeader = response.headers.get("PAYMENT-REQUIRED") ?? "";
       const body = object(await response.json());
-      assert(response.status === 402 && body.kind === "payment-required", "checkout must remain payment-required");
+      assert(response.status === 402 && body.state === "payment-required", "checkout must remain payment-required");
       const order = object(body.order);
       assert(order.state === "awaiting-payment", "an unpaid order must remain awaiting payment");
       const parsed = buyer.parseOffer(offerHeader);
@@ -274,7 +274,7 @@ async function runMerchantServiceScenarios(suite, receipt, resolver, amount, ass
       const first = await postJson(checkout, requestBody, headers);
       const firstBody = object(await first.json());
       const firstOrder = object(firstBody.order);
-      assert(first.status === 200 && firstBody.kind === "paid", "a verified receipt must pay the order");
+      assert(first.status === 200 && firstBody.state === "paid", "a verified receipt must pay the order");
       assert(firstOrder.state === "paid-verified", "paid state must be explicitly receipt verified");
       assert(firstOrder.receiptDigest === receipt.receiptDigest, "the stored order must bind the verified receipt digest");
       const settlementHeader = first.headers.get("PAYMENT-RESPONSE") ?? "";
@@ -307,7 +307,7 @@ async function runMerchantServiceScenarios(suite, receipt, resolver, amount, ass
         "PAYMENT-SIGNATURE": encodePaymentPayloadHeader(payload),
       });
       const body = object(await response.json());
-      assert(response.status !== 200 && body.kind !== "paid", "tampered receipt evidence must never pay an order");
+      assert(response.status !== 200 && body.state !== "paid", "tampered receipt evidence must never pay an order");
     });
   } finally {
     if (child !== undefined) child.kill("SIGKILL");
@@ -415,7 +415,7 @@ async function runAgentServiceScenarios(suite, sequencer, receipt, amount, asset
       });
       const firstResult = lastJsonLine(first.stdout);
       assert(first.code === 0 && firstResult.kind === "verified", `verified agent spend failed: ${first.stderr}`);
-      assert(firstResult.receiptDigest === receipt.receiptDigest, "agent result must carry the locally verified receipt digest");
+      assert(firstResult.receiptDigest === receipt.verificationDigest, "agent result must carry the locally verified receipt digest");
       const second = await runExample(AGENT_ENTRY, {
         ...baseEnvironment,
         LAYERX_SPEND_REQUEST_JSON: JSON.stringify(request),
@@ -426,7 +426,7 @@ async function runAgentServiceScenarios(suite, sequencer, receipt, amount, asset
       const record = object(object(state.records)[request.idempotencyKey]);
       assert(record.state === "committed", "verified spend must durably commit its reservation");
       assert(record.amount === amount.toString() && record.asset === toHex(asset), "budget commit must preserve amount and asset");
-      assert(record.receiptDigest === receipt.receiptDigest, "budget commit must bind the verified receipt digest");
+      assert(record.receiptDigest === receipt.verificationDigest, "budget commit must bind the verified receipt digest");
     });
     await suite.check("agent service: approval refusal becomes a durable digest-bound hold", async () => {
       const request = agentSpendRequest("agent-approval", amount, asset, payTo);

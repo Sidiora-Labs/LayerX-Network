@@ -63,6 +63,7 @@ export interface SignedReceipt {
   readonly canonicalReceipt: Uint8Array;
   readonly authorizedBatch: AuthorizedReceiptBatch;
   readonly receiptDigest: string;
+  readonly verificationDigest: string;
   readonly evidence: LayerXReceiptEvidence;
 }
 
@@ -135,12 +136,13 @@ export async function buildSignedReceipt(
     sequencerPublicKey: sequencer.publicKey,
   };
   const receiptDigest = toHex(await sha256(MERKLE_LEAF_DOMAIN, canonicalReceipt));
+  const verificationDigest = toHex(digest);
   const evidence: LayerXReceiptEvidence = {
     receipt: encodeBase64(canonicalReceipt),
     receiptDigest,
     verificationLevel: "sequencer-signed",
   };
-  return { canonicalReceipt, authorizedBatch, receiptDigest, evidence };
+  return { canonicalReceipt, authorizedBatch, receiptDigest, verificationDigest, evidence };
 }
 
 export interface OfferFixture {
