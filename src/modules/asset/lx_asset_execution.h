@@ -240,18 +240,25 @@ static lxp_result asset_execute_typed(lxp_module_ctx *ctx, const lxp_activity *a
         if (status == LXP_OK) status = lxp_ctx_emit_event(ctx, 4U, account->id, 32U);
         if (status == LXP_OK) {
             lxp_ledger_receipt_input input;
+            lx_account *owner_account = NULL;
             (void)memset(&input, 0, sizeof(input));
             (void)memcpy(input.transaction_id, ctx->activity_id, 32U);
             input.operation = 4U;
             input.global_sequence = ctx->global_sequence;
             input.timestamp = lxp_ctx_batch_timestamp_ms(ctx);
             (void)memcpy(input.asset, record.asset_id, 32U);
-            lx_account *owner_account;
-            status = lxp_ctx_account_find(ctx, authority->principal, &owner_account);
-            if (status != LXP_OK) return status;
-            input.from_balance_before = owner_account->balance;
-            input.from_balance_after = owner_account->balance;
-            input.from_sequence = owner_account->next_sequence;
+            if (ctx->ledger_admission.account_present) {
+                status = lxp_ctx_account_find(
+                    ctx, authority->principal, &owner_account);
+                if (status != LXP_OK ||
+                    owner_account->next_sequence !=
+                        ctx->ledger_admission.next_sequence)
+                    return status != LXP_OK ? status :
+                                              LXP_ERR_CONTEXT_MISMATCH;
+                input.from_balance_before = owner_account->balance;
+                input.from_balance_after = owner_account->balance;
+            }
+            input.from_sequence = ctx->ledger_admission.next_sequence;
             (void)memcpy(input.from, authority->principal, 32U);
             (void)memcpy(input.to, account->id, 32U);
             (void)memcpy(input.context_hash, context, 32U);

@@ -1681,7 +1681,7 @@ lxp_result lxp_ctx_bind_ledger_receipt(
     size_t matching_effects = 0U;
     if (ctx != NULL && input != NULL && input->operation == 4U) {
         const lx_account *account;
-        lx_account *owner_account;
+        lx_account *owner_account = NULL;
         if (!ctx->mutable || ctx->module_id != LXP_MODULE_ASSET ||
             !ctx->ledger_admission.bound ||
             ctx->ledger_admission.activity_type != LX_ASSET_ACCOUNT_OPEN ||
@@ -1705,9 +1705,18 @@ lxp_result lxp_ctx_bind_ledger_receipt(
             !lxp_ct_is_zero(input->previous_state_root, 32U) ||
             !lxp_ct_is_zero(input->resulting_state_root, 32U) ||
             !lxp_ct_is_zero(input->batch_id, 32U)) return LXP_ERR_NON_CANONICAL;
-        if (lxp_ctx_account_find(ctx, input->from, &owner_account) != LXP_OK ||
-            lxp_u128_cmp(owner_account->balance, input->from_balance_before) != 0 ||
-            owner_account->next_sequence != input->from_sequence)
+        if (ctx->ledger_admission.account_present) {
+            if (lxp_ctx_account_find(ctx, input->from, &owner_account) != LXP_OK ||
+                lxp_u128_cmp(owner_account->balance,
+                             input->from_balance_before) != 0 ||
+                owner_account->next_sequence != input->from_sequence ||
+                input->from_sequence != ctx->ledger_admission.next_sequence)
+                return LXP_ERR_NON_CANONICAL;
+        } else if (!lxp_u128_is_zero(input->from_balance_before) ||
+                   input->from_sequence != 0U ||
+                   ctx->ledger_admission.next_sequence != 0U ||
+                   lxp_ctx_account_find(ctx, input->from, &owner_account) !=
+                       LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE)
             return LXP_ERR_NON_CANONICAL;
         account = &ctx->staged_accounts[0].account;
         if (account->kind != LX_ACCOUNT_AGENT_MAIN ||

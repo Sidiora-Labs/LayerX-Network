@@ -31,7 +31,8 @@ static int account_id(const uint8_t did[76], const uint8_t asset[32], uint8_t id
     hex[64] = 0;
     int length = snprintf(name, sizeof(name), "agent:%s:asset:%s", did, hex);
     REQUIRE(length > 0 && (size_t)length < sizeof(name));
-    REQUIRE(lxp_hash_account_id((const uint8_t *)name, (size_t)length, id) == LXP_OK);
+    REQUIRE(lx_account_id_from_string(
+        (const uint8_t *)name, (size_t)length, id) == LXP_OK);
     return 0;
 }
 

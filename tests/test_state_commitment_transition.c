@@ -790,7 +790,8 @@ static int pay1_receive_grant(unsigned mode)
 
 static int pay1_prepared_account(unsigned mode)
 {
-    bool issuance_mode = mode != 0U;
+    bool issuance_mode = mode == 1U || mode == 2U;
+    bool missing_main = mode == 3U;
     fixture *f = (fixture *)calloc(1U, sizeof(*f));
     lxp_module_ctx *ctx = (lxp_module_ctx *)calloc(1U, sizeof(*ctx));
     lxp_prepared_module_transition *prepared = NULL;
@@ -802,6 +803,15 @@ static int pay1_prepared_account(unsigned mode)
     uint8_t before[32], preview[32], imported[32], committed[32];
     REQUIRE(f != NULL && ctx != NULL);
     REQUIRE(prepare(f, 3U, true) == 0);
+    if (missing_main) {
+        REQUIRE(f->accounts.count == 2U &&
+                memcmp(f->accounts.accounts[0].id,
+                       f->authority.principal, 32U) == 0);
+        f->accounts.accounts[0] = f->accounts.accounts[1];
+        (void)memset(&f->accounts.accounts[1], 0,
+                     sizeof(f->accounts.accounts[1]));
+        f->accounts.count = 1U;
+    }
     f->activity.activity_type = LX_ASSET_ACCOUNT_OPEN;
     f->payload[0] = 0U; f->payload[1] = 1U;
     (void)memcpy(f->payload + 2U, f->asset.asset_id, 32U);
@@ -848,8 +858,18 @@ static int pay1_prepared_account(unsigned mode)
         REQUIRE(ctx->staged_accounts[0].account.balance.lo == (mode == 2U ? UINT64_MAX : 100U));
         REQUIRE(ctx->staged_accounts[0].account.balance.hi == (mode == 2U ? UINT64_MAX : 0U));
         REQUIRE(ctx->staged_accounts[0].account.kind == LX_ACCOUNT_MODULE_VALUE);
-    } else REQUIRE(ctx->ledger_receipt_present && ctx->ledger_receipt.operation == 4U);
-    REQUIRE(f->accounts.count == 2U && ctx->staged_account_count == 1U);
+    } else {
+        REQUIRE(ctx->ledger_receipt_present &&
+                ctx->ledger_receipt.operation == 4U);
+        if (missing_main)
+            REQUIRE(!ctx->ledger_admission.account_present &&
+                    ctx->ledger_admission.next_sequence == 0U &&
+                    lxp_u128_is_zero(ctx->ledger_receipt.from_balance_before) &&
+                    lxp_u128_is_zero(ctx->ledger_receipt.from_balance_after) &&
+                    ctx->ledger_receipt.from_sequence == 0U);
+    }
+    REQUIRE(f->accounts.count == (missing_main ? 1U : 2U) &&
+            ctx->staged_account_count == 1U);
     if (!issuance_mode) {
         lxp_ledger_receipt_input valid = ctx->ledger_receipt;
         for (unsigned mutation = 0U; mutation < 10U; ++mutation) {
@@ -866,13 +886,14 @@ static int pay1_prepared_account(unsigned mode)
             if (mutation == 8U) (void)memset(invalid.authorization_hash, 0, 32U);
             if (mutation == 9U) invalid.resulting_state_root[0] = 1U;
             REQUIRE(lxp_ctx_bind_ledger_receipt(ctx, &invalid) != LXP_OK);
-            REQUIRE(!ctx->ledger_receipt_present && f->accounts.count == 2U);
+            REQUIRE(!ctx->ledger_receipt_present &&
+                    f->accounts.count == (missing_main ? 1U : 2U));
         }
         REQUIRE(lxp_ctx_bind_ledger_receipt(ctx, &valid) == LXP_OK);
         lx_account *unexpected;
         REQUIRE(lx_account_registration_commit(&f->accounts, &ctx->staged_accounts[0],
                                                &unexpected) == LXP_FATAL_INVARIANT);
-        REQUIRE(f->accounts.count == 2U);
+        REQUIRE(f->accounts.count == (missing_main ? 1U : 2U));
     }
     REQUIRE(lxp_module_ctx_prepare_commit(ctx) == LXP_OK);
     REQUIRE(lxp_module_ctx_preview_state_root(ctx, &f->journal, preview) == LXP_OK);
@@ -880,7 +901,8 @@ static int pay1_prepared_account(unsigned mode)
     lxp_module_ctx_rollback(ctx);
     REQUIRE(lxp_state_journal_rollback(&f->journal) == LXP_OK);
     REQUIRE(lxp_state_root(&f->kernel, committed) == LXP_OK);
-    REQUIRE(memcmp(before, committed, 32U) == 0 && f->accounts.count == 2U);
+    REQUIRE(memcmp(before, committed, 32U) == 0 &&
+            f->accounts.count == (missing_main ? 1U : 2U));
     REQUIRE(lxp_state_journal_open(&f->state, 1U, &f->journal) == LXP_OK);
     REQUIRE(lxp_module_ctx_init(ctx, &f->kernel, LXP_MODULE_ASSET, 10U, 0U, 1U,
                                 10000U, &f->arena, true) == LXP_OK);
@@ -902,7 +924,8 @@ static int pay1_prepared_account(unsigned mode)
     REQUIRE(lxp_state_journal_commit(&f->journal) == LXP_OK);
     REQUIRE(lxp_module_ctx_commit(ctx) == LXP_OK);
     REQUIRE(lxp_state_root(&f->kernel, committed) == LXP_OK);
-    REQUIRE(memcmp(preview, committed, 32U) == 0 && f->accounts.count == 3U);
+    REQUIRE(memcmp(preview, committed, 32U) == 0 &&
+            f->accounts.count == (missing_main ? 2U : 3U));
     lxp_prepared_module_transition_destroy(prepared);
     REQUIRE(lxp_state_store_destroy(&f->state) == LXP_OK);
     free(ctx); free(f);
@@ -1151,6 +1174,7 @@ int main(void)
     REQUIRE(pay1_prepared_account(0U) == 0);
     REQUIRE(pay1_prepared_account(1U) == 0);
     REQUIRE(pay1_prepared_account(2U) == 0);
+    REQUIRE(pay1_prepared_account(3U) == 0);
     for (unsigned i = 0U; i < 6U; ++i) REQUIRE(asset_send(i) == 0);
     (void)puts("state commitment transition: legacy, version 3, preview, signatures and tampering passed");
     return 0;
