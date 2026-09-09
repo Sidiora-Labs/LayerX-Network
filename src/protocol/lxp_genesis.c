@@ -1,4 +1,5 @@
 #include "layerx/lxp_genesis.h"
+#include "layerx/lxp_module_ctx.h"
 
 #include "layerx/programs.h"
 #include "layerx/lx_asset.h"
@@ -507,14 +508,17 @@ lxp_result lxp_genesis_materialize(const lxp_genesis_manifest *manifest,
     if (status != LXP_OK || arena == NULL || kernel == NULL ||
         kernel->state == NULL || kernel->journal == NULL ||
         kernel->module_count != (manifest->protocol_version ==
-            LXP_PROTOCOL_VERSION_STATE_COMMITMENT ? (bridge_present ? 3U : 2U) : 1U) ||
+            LXP_PROTOCOL_VERSION_STATE_COMMITMENT ? (bridge_present ? 4U : 3U) : 1U) ||
         kernel->modules[0].module_id != LXP_MODULE_PROGRAMS ||
         kernel->modules[0].abi_version != programs_module_registration_v4()->abi_version ||
         (manifest->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT &&
          (kernel->modules[1].module_id != LXP_MODULE_ASSET ||
           kernel->modules[1].abi_version != lx_asset_module_iface()->abi_version)) ||
-        (bridge_present && (kernel->modules[2].module_id != LXP_MODULE_BRIDGE ||
-                            kernel->modules[2].abi_version != 1U)) ||
+        (manifest->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT &&
+         (kernel->modules[2].module_id != LXP_MODULE_GOVERNANCE ||
+          kernel->modules[2].abi_version != lxp_governance_module_iface()->abi_version)) ||
+        (bridge_present && (kernel->modules[3].module_id != LXP_MODULE_BRIDGE ||
+                            kernel->modules[3].abi_version != lxp_bridge_module_iface()->abi_version)) ||
         kernel->state->count != 0U || kernel->state->idempotency_count != 0U ||
         kernel->state->next_sequence != 1U ||
         kernel->module_kv_count != 0U || kernel->blob_count != 0U ||
@@ -596,6 +600,9 @@ lxp_result lxp_genesis_state_root(
     if (status == LXP_OK &&
         manifest->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT)
         status = lxp_kernel_register_module(kernel, lx_asset_module_iface());
+    if (status == LXP_OK &&
+        manifest->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT)
+        status = lxp_kernel_register_module(kernel, lxp_governance_module_iface());
     if (status == LXP_OK) {
         lxp_bridge_profile bridge;
         bool present = false;
