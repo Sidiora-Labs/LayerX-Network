@@ -608,6 +608,33 @@ static int refuse_malformed_record(void)
     return 0;
 }
 
+static int retire_prepared_when_settled(void)
+{
+    canonical_batch_fixture fixture;
+    char directory[] = "/tmp/lxp-batch-wal-prepared-retire-XXXXXX";
+    char path[160];
+    uint8_t digest[32];
+    lxp_daemon_batch_wal_record *record = NULL;
+    bool present = false;
+    if (build_canonical_batch(&fixture, false) != 0 || mkdtemp(directory) == NULL ||
+        snprintf(path, sizeof(path), "%s/prepared-batch.lxw", directory) < 0)
+        return 1;
+    if (lxp_daemon_batch_wal_write_prepared(directory, &fixture.input, digest) != LXP_OK ||
+        lxp_daemon_batch_wal_load(directory, &fixture.input.authorization,
+                                  &record, &present) != LXP_OK ||
+        !present || record == NULL ||
+        lxp_daemon_batch_wal_record_state(record) != LXP_DAEMON_BATCH_WAL_PREPARED ||
+        lxp_daemon_batch_wal_retire(directory, record, &fixture.input.base) !=
+            LXP_FATAL_REPLAY_DIVERGENCE ||
+        access(path, F_OK) != 0 ||
+        lxp_daemon_batch_wal_retire(directory, record, &fixture.input.settled) !=
+            LXP_OK ||
+        access(path, F_OK) == 0)
+        return 1;
+    lxp_daemon_batch_wal_destroy(record);
+    return rmdir(directory) != 0;
+}
+
 static int sweep_interrupted_replacement(void)
 {
     char directory[] = "/tmp/lxp-batch-wal-sweep-XXXXXX";
@@ -640,5 +667,6 @@ int main(void)
         refuse_invalid_canonical_activity_signature() != 0 ||
         classify_recovery_matrix() != 0 ||
         refuse_malformed_record() != 0 ||
+        retire_prepared_when_settled() != 0 ||
         sweep_interrupted_replacement() != 0 ? 1 : 0;
 }

@@ -10,6 +10,7 @@
 #include "layerx/lxp_genesis.h"
 #include "layerx/lxp_bridge_credit.h"
 #include "layerx/lxp_snapshot.h"
+#include "layerx/lxp_arena.h"
 #include "lxp_daemon_artifact.h"
 #include "lxp_daemon_batch_wal.h"
 #include "lxp_daemon_finality_authority.h"
@@ -37,7 +38,8 @@ static uint64_t pay_timing_us(void)
 
 enum {
     NODE_EXECUTION_ARENA_BYTES = LXP_MAX_ACTIVITY_BYTES * 3U,
-    NODE_SNAPSHOT_ARENA_BYTES = LXP_MAX_ACTIVITY_BYTES * 4U
+    NODE_SNAPSHOT_ARENA_BYTES = LXP_MAX_ACTIVITY_BYTES * 4U,
+    NODE_AVAILABILITY_ARENA_BYTES = LXP_MAX_BATCH_BODY_BYTES + 1024U * 1024U
 };
 
 typedef struct lxp_daemon_process {
@@ -85,6 +87,12 @@ typedef struct lxp_daemon_process {
     lxp_arena execution_arena;
     uint8_t *checkpoint_arena_bytes;
     lxp_arena checkpoint_arena;
+    uint8_t *availability_arena_bytes;
+    lxp_arena availability_arena;
+    lxp_batch_body availability_body;
+    pthread_t availability_thread;
+    lxp_result availability_status;
+    bool availability_thread_started;
     const char *checkpoint_directory;
     uint64_t next_batch;
     uint32_t parameter_version;
@@ -154,24 +162,104 @@ static lxp_result availability_prune(lxp_daemon_process *process, uint64_t head)
     return status;
 }
 
-static lxp_result availability_store_body(lxp_daemon_process *process,
-                                         const lxp_batch_body *body)
+static lxp_result availability_store_body_with_arena(
+    lxp_daemon_process *process, const lxp_batch_body *body, lxp_arena *arena)
 {
     lxp_da_bundle bundle;
     uint8_t root[32];
-    size_t mark = lxp_arena_mark(&process->owner_scratch);
-    lxp_result status = lxp_batch_availability_root(body, &process->owner_scratch, root);
+    size_t mark = lxp_arena_mark(arena);
+    lxp_result status = lxp_batch_availability_root(body, arena, root);
     if (status == LXP_OK &&
         lxp_ct_memcmp(root, body->header.data_availability_root, 32U) != 0)
         status = LXP_ERR_ROOT_MISMATCH;
     if (status == LXP_OK)
         status = lxp_da_bundle_build(body, LXP_DA_CANONICAL_CHUNK_BYTES,
-                                     &process->owner_scratch, &bundle);
+                                     arena, &bundle);
     if (status == LXP_OK)
         status = lxp_da_store_bundle(&process->availability_store, &bundle,
-                                     &process->owner_scratch);
-    (void)lxp_arena_reset(&process->owner_scratch, mark);
+                                     arena);
+    (void)lxp_arena_reset(arena, mark);
     return status;
+}
+
+static lxp_result availability_store_body(lxp_daemon_process *process,
+                                         const lxp_batch_body *body)
+{
+    return availability_store_body_with_arena(
+        process, body, &process->owner_scratch);
+}
+
+static lxp_result clone_availability_span(lxp_arena *arena, lxp_byte_span src,
+                                          lxp_byte_span *dst)
+{
+    void *memory;
+    lxp_result status;
+    if (src.length == 0U) {
+        *dst = (lxp_byte_span){NULL, 0U};
+        return LXP_OK;
+    }
+    if (src.bytes == NULL) return LXP_ERR_NON_CANONICAL;
+    status = lxp_arena_alloc(arena, src.length, 1U, &memory);
+    if (status != LXP_OK) return status;
+    (void)memcpy(memory, src.bytes, src.length);
+    *dst = (lxp_byte_span){(const uint8_t *)memory, src.length};
+    return LXP_OK;
+}
+
+static void *availability_store_thread(void *argument)
+{
+    lxp_daemon_process *process = (lxp_daemon_process *)argument;
+    process->availability_status = availability_store_body_with_arena(
+        process, &process->availability_body, &process->availability_arena);
+    return NULL;
+}
+
+static lxp_result availability_store_start(lxp_daemon_process *process,
+                                           const lxp_batch_body *body)
+{
+    lxp_result status;
+    if (process == NULL || body == NULL) return LXP_ERR_NON_CANONICAL;
+    if (process->availability_thread_started) return LXP_FATAL_INVARIANT;
+    status = lxp_arena_reset(&process->availability_arena, 0U);
+    if (status == LXP_OK) {
+        process->availability_body = *body;
+        status = clone_availability_span(&process->availability_arena,
+            body->activities, &process->availability_body.activities);
+    }
+    if (status == LXP_OK)
+        status = clone_availability_span(&process->availability_arena,
+            body->receipts, &process->availability_body.receipts);
+    if (status == LXP_OK)
+        status = clone_availability_span(&process->availability_arena,
+            body->events, &process->availability_body.events);
+    if (status == LXP_OK)
+        status = clone_availability_span(&process->availability_arena,
+            body->oracle_inputs, &process->availability_body.oracle_inputs);
+    if (status == LXP_OK)
+        status = clone_availability_span(&process->availability_arena,
+            body->state_diff, &process->availability_body.state_diff);
+    if (status == LXP_OK)
+        status = clone_availability_span(&process->availability_arena,
+            body->recovery_metadata, &process->availability_body.recovery_metadata);
+    if (status != LXP_OK) return status;
+    process->availability_status = LXP_ERR_IO;
+    if (pthread_create(&process->availability_thread, NULL,
+                       availability_store_thread, process) != 0)
+        return LXP_ERR_IO;
+    process->availability_thread_started = true;
+    return LXP_OK;
+}
+
+static lxp_result availability_store_finish(lxp_daemon_process *process)
+{
+    if (process == NULL) return LXP_ERR_NON_CANONICAL;
+    if (!process->availability_thread_started) return LXP_OK;
+    if (pthread_join(process->availability_thread, NULL) != 0) {
+        process->availability_thread_started = false;
+        return LXP_ERR_IO;
+    }
+    process->availability_thread_started = false;
+    return process->availability_status;
 }
 
 static void availability_verify_retained(lxp_daemon_process *process)
@@ -2372,11 +2460,18 @@ static lxp_result commit_prepared_batch_wal(
     input.state_diff = process->prepared_availability_body.state_diff;
     input.recovery_metadata = process->prepared_availability_body.recovery_metadata;
     if (maintenance.length != 0U) input.maintenance_proof = proofs[count];
-    return lxp_daemon_batch_wal_commit_kernel(
-        process->checkpoint_directory, &input,
-        &process->kernel, &process->identities,
-        decoded_activities, owned_prepared,
-        persist_prepared_batch_checkpoint, process, record);
+    if (status == LXP_OK)
+        status = availability_store_start(process,
+            &process->prepared_availability_body);
+    if (status == LXP_OK)
+        status = lxp_daemon_batch_wal_commit_kernel(
+            process->checkpoint_directory, &input,
+            &process->kernel, &process->identities,
+            decoded_activities, owned_prepared,
+            persist_prepared_batch_checkpoint, process, record);
+    if (status != LXP_OK && process->availability_thread_started)
+        (void)availability_store_finish(process);
+    return status;
 }
 
 static lxp_result apply_canonical_batch(
@@ -2395,7 +2490,7 @@ static lxp_result apply_canonical_batch(
     lxp_batch_roots scheduling_roots;
     uint8_t batch_id[32] = {0};
     uint8_t grant_id[32] = {0};
-    uint64_t timestamp;
+    uint64_t timestamp = 0U;
     size_t count = 0U;
     size_t retry_prefix_count = 0U;
     size_t kernel_consumed = 0U;
@@ -2595,7 +2690,7 @@ static lxp_result apply_canonical_batch(
     committed_us = pay_timing_us();
     if (status == LXP_OK) live_committed = true;
     if (status == LXP_OK)
-        status = availability_store_body(process, &process->prepared_availability_body);
+        status = availability_store_finish(process);
     if (status == LXP_OK)
         status = publish_canonical_batch(
             process, canonical_activities, canonical_receipts,
@@ -2606,11 +2701,6 @@ static lxp_result apply_canonical_batch(
     if (status == LXP_OK)
         status = lxp_kernel_batch_boundary_read(
             &process->kernel, &live_boundary);
-    if (status == LXP_OK)
-        status = lxp_daemon_batch_wal_transition(
-            process->checkpoint_directory, wal_record,
-            &live_boundary,
-            LXP_DAEMON_BATCH_WAL_COMMITTED);
     if (status == LXP_OK)
         status = lxp_daemon_batch_wal_retire(
             process->checkpoint_directory, wal_record, &live_boundary);
@@ -3773,6 +3863,9 @@ static void close_process(lxp_daemon_process *process)
     lxp_secure_zero(process->sequencer_private_key, 32U);
     lxp_secure_zero(process->authority_replica_token,
                     sizeof(process->authority_replica_token));
+    if (process->availability_thread_started)
+        (void)availability_store_finish(process);
+    free(process->availability_arena_bytes);
     free(process->checkpoint_arena_bytes);
     free(process->execution_arena_bytes);
     free(process->owner_scratch_bytes);
@@ -3806,10 +3899,13 @@ static lxp_result open_process(lxp_daemon_process *process,
         (uint8_t *)malloc(NODE_EXECUTION_ARENA_BYTES);
     process->checkpoint_arena_bytes =
         (uint8_t *)malloc(NODE_SNAPSHOT_ARENA_BYTES);
+    process->availability_arena_bytes =
+        (uint8_t *)malloc(NODE_AVAILABILITY_ARENA_BYTES);
     snapshot_bytes = (uint8_t *)malloc(NODE_SNAPSHOT_ARENA_BYTES);
     if (process->owner_scratch_bytes == NULL ||
         process->execution_arena_bytes == NULL ||
-        process->checkpoint_arena_bytes == NULL || snapshot_bytes == NULL) {
+        process->checkpoint_arena_bytes == NULL ||
+        process->availability_arena_bytes == NULL || snapshot_bytes == NULL) {
         free(snapshot_bytes);
         return LXP_ERR_IO;
     }
@@ -3828,6 +3924,9 @@ static lxp_result open_process(lxp_daemon_process *process,
     if (status == LXP_OK)
         status = lxp_arena_init(&process->checkpoint_arena,
             process->checkpoint_arena_bytes, NODE_SNAPSHOT_ARENA_BYTES);
+    if (status == LXP_OK)
+        status = lxp_arena_init(&process->availability_arena,
+            process->availability_arena_bytes, NODE_AVAILABILITY_ARENA_BYTES);
     if (status == LXP_OK) status = lx_account_registry_init(&process->accounts);
     if (status == LXP_OK) {
         status = lxp_state_store_init(&process->state, 1U);

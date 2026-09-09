@@ -770,21 +770,16 @@ lxp_result lxp_daemon_batch_wal_commit_kernel(
  lxp_daemon_batch_wal_record **record)
 {
     lxp_daemon_batch_wal_record *loaded=NULL;
-    lxp_daemon_batch_wal_record *preexisting=NULL;
     lxp_daemon_batch_wal_recovery recovery;
     lxp_kernel_batch_boundary live;
     uint8_t fsynced_digest[32];
-    bool present=false,preexisting_present=false,live_committed=false;
+    bool present=false,live_committed=false;
     lxp_result status;
     if(input==NULL || kernel==NULL || identities==NULL || activities==NULL ||
        prepared==NULL || checkpoint==NULL || record==NULL)
         return LXP_ERR_NON_CANONICAL;
     *record=NULL;
-    status=lxp_daemon_batch_wal_load(directory,&input->authorization,
-                                     &preexisting,&preexisting_present);
-    if(status==LXP_OK && preexisting_present)status=LXP_ERR_CONTEXT_MISMATCH;
-    lxp_daemon_batch_wal_destroy(preexisting);
-    if(status==LXP_OK)status=lxp_daemon_batch_wal_write_prepared(
+    status=lxp_daemon_batch_wal_write_prepared(
         directory,input,fsynced_digest);
     if(status==LXP_OK)status=lxp_daemon_batch_wal_load(
         directory,&input->authorization,&loaded,&present);
@@ -1083,6 +1078,8 @@ lxp_result lxp_daemon_batch_wal_retire(const char *directory,
     if((record->state!=LXP_DAEMON_BATCH_WAL_ABORTED ||
          !boundary_equal(live,&record->view.base)) &&
         (record->state!=LXP_DAEMON_BATCH_WAL_COMMITTED ||
+         !boundary_equal(live,&record->view.settled)) &&
+        (record->state!=LXP_DAEMON_BATCH_WAL_PREPARED ||
          !boundary_equal(live,&record->view.settled)))
         return LXP_FATAL_REPLAY_DIVERGENCE;
     if (record->owned != NULL && get_u16(record->owned + 8U) < WAL_AVAILABILITY_VERSION) {
