@@ -4453,3 +4453,7 @@ mod budgeted_v1_invariant_tests {
 #[cfg(test)]
 #[path = "lxt20_tests.rs"]
 mod lxt20_tests;
+
+#[cfg(test)]
+#[path = "merchant_tests.rs"]
+mod merchant_tests;
