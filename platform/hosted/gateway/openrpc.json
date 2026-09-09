@@ -3,7 +3,7 @@
   "info": {
     "title": "LayerX public JSON-RPC",
     "version": "0.1.0",
-    "description": "Public JSON-RPC reads, authenticated activity submission and scoped WebSocket subscriptions. Native DID enumeration, asset listing/detail and fee estimation are unavailable on this source; their gateway methods forward to core and return explicit upstream unavailability, never fabricated balances, metadata or fees."
+    "description": "Public JSON-RPC reads, authenticated activity submission and scoped WebSocket subscriptions. Native DID enumeration, asset listing/detail and canonical fee estimation forward to authenticated core reads; unavailable evidence is returned explicitly and balances, metadata or fees are never fabricated."
   },
   "methods": [
     {
@@ -92,7 +92,7 @@
           "type": "object"
         }
       },
-      "description": "Forwards DID account listing to GET /v1/dids/{did}/accounts. Native DID enumeration is unavailable on this source; the method returns JSON-RPC -32001 with the upstream refusal and never a fabricated balance list.",
+      "description": "Enumerates the complete bounded DID account list from LNI minor 5 committed account reads. Returns did, accounts with canonical values, native proof material and freshness, and verification=authenticated_node_snapshot. No independently verified completeness or finality claim. Unavailable or invalid native evidence returns -32001.",
       "errors": [
         {
           "code": -32602,
@@ -404,7 +404,7 @@
           "type": "object"
         }
       },
-      "description": "Requires an activity:write gateway key and the existing route scope for Programs activities. Uses activity-ID outer deduplication and preserves signed protocol idempotency. Returns a verified receipt for executed, verified inclusion for batched, and an exact matching verified checkpoint header for finalised; returns JSON-RPC -32001 with state=pending and requested_commitment when evidence is absent after the bounded wait; no success result or commitment downgrade is returned. An admission acknowledgement never establishes execution.",
+      "description": "Requires an activity:write gateway key and the existing route scope for Programs activities. Admits strictly canonical Asset register (1), account_open (4), send (5), receive (6), grant_issue (7), grant_revoke (8), mint (10) and burn (11), plus Programs deploy (1), upgrade (2), call (3), transfer (5), account registration (6) and wind-down (7). Asset pause/unpause (2/3) are excluded and Asset ordinal 9 is reserved and refused. Uses activity-ID outer deduplication and preserves signed protocol idempotency. Returns a verified receipt for executed, verified inclusion for batched, and an exact matching verified checkpoint header for finalised; returns JSON-RPC -32001 with state=pending and requested_commitment when evidence is absent after the bounded wait; no success result or commitment downgrade is returned. An admission acknowledgement never establishes execution.",
       "errors": [
         {
           "code": -32602,
@@ -468,7 +468,7 @@
           "type": "object"
         }
       },
-      "description": "Lists assets through the core read contract. Native integration remains required.",
+      "description": "Returns assets, observed_head_sequence, state_root and verification=authenticated_committed_snapshot from typed LNI minor-5 AssetRead. The complete native list is bounded to 64 records; unsupported or unavailable evidence returns -32001. Snapshot authentication is not an independent Merkle proof.",
       "errors": [
         {
           "code": -32602,
@@ -503,7 +503,7 @@
           "type": "object"
         }
       },
-      "description": "Reads native asset metadata. Native integration remains required.",
+      "description": "Returns asset metadata, observed_head_sequence, state_root and verification=authenticated_committed_snapshot from typed LNI minor-5 AssetRead. Unknown assets or unavailable evidence return -32001. Amounts are decimal strings and identifiers and custody_reference are hexadecimal.",
       "errors": [
         {
           "code": -32602,
@@ -540,7 +540,7 @@
           "type": "object"
         }
       },
-      "description": "Forwards canonical activity bytes to the core fee-estimation contract. Fee values must come from the native fee schedule; native integration remains required.",
+      "description": "Strictly decodes any activity admitted by lx_sendActivity and returns fee as a decimal string, parameter_version, canonical_schedule as hexadecimal, canonical_bytes, observed_head_sequence, state_root and verification=authenticated_committed_snapshot from native FeeEstimate. The native committed schedule determines the canonical-envelope price for Asset 1/4/5/6/7/8/10/11 and Programs 1/2/3/5/6/7. A schedule requiring unavailable execution or storage units fails closed with -32001. Asset ordinal 9 is reserved and refused. This estimate does not reserve a fee or prove execution.",
       "errors": [
         {
           "code": -32602,

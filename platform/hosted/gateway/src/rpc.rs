@@ -1,8 +1,8 @@
 use super::{
-    Config, IncomingRequest, OutgoingResponse, json_response, media_type_is, parse_hex32,
-    public_reads, response,
+    json_response, media_type_is, parse_hex32, public_reads, response, Config, IncomingRequest,
+    OutgoingResponse,
 };
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 pub(super) fn error(id: &Value, code: i32, message: &str) -> Value {
     json!({"jsonrpc":"2.0", "id":id, "error":{"code":code,"message":message}})
@@ -29,11 +29,8 @@ fn selector(method: &str, params: Option<&Value>) -> Result<String, i32> {
         }
     }
     if method == "lx_getProof" {
-        if let [
-            Value::String(kind),
-            Value::String(activity),
-            Value::String(account),
-        ] = args.as_slice()
+        if let [Value::String(kind), Value::String(activity), Value::String(account)] =
+            args.as_slice()
         {
             if kind != "account"
                 || [activity, account]
@@ -169,10 +166,11 @@ fn read_response(id: &Value, upstream: &OutgoingResponse) -> Value {
             json!({"jsonrpc":"2.0","id":id,"result":body["result"]})
         }
         Ok(body) => {
-            let code = if upstream.status == 429 {
-                -32005
-            } else {
-                -32001
+            let code = match upstream.status {
+                400 | 415 => -32602,
+                401 | 403 => -32002,
+                429 => -32005,
+                _ => -32001,
             };
             let mut refusal = error(id, code, "Read unavailable");
             refusal["error"]["data"] = body;

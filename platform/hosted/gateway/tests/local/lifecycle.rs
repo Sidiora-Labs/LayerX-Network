@@ -386,7 +386,7 @@ fn start_local_gateway(
             local_secret(
                 &cluster.root,
                 "modules.json",
-                &serde_json::json!({"schema_version":2,"assets":[{"asset":hex_encode(&cluster.asset),"currency":"NATIVE","decimals":0,"symbol":"LXR"}],"modules":[{"module":1,"ordinals":[5,6,7]},{"module":9,"ordinals":[1,2,3,5,6,7]}]}).to_string(),
+                &serde_json::json!({"schema_version":2,"assets":[{"asset":hex_encode(&cluster.asset),"currency":"NATIVE","decimals":0,"symbol":"LXR"}],"modules":[{"module":1,"ordinals":[1,4,5,6,7,8,10,11]},{"module":9,"ordinals":[1,2,3,5,6,7]}]}).to_string(),
             ),
         ),
     ]);
@@ -771,23 +771,7 @@ fn local_gateway_rpc() {
         key["key"]["secret"].as_str().required("key secret")
     );
     let call = |method: &str, params: serde_json::Value, authenticated: bool| {
-        let mut headers = vec![("Content-Type", "application/json")];
-        if authenticated {
-            headers.push(("Authorization", authorization.as_str()));
-        }
-        let answer = http.request(
-            "POST",
-            "/rpc",
-            &headers,
-            &serde_json::to_vec(
-                &serde_json::json!({"jsonrpc":"2.0","id":7,"method":method,"params":params}),
-            )
-            .required("RPC"),
-        );
-        assert_eq!(answer.status, 200, "{}", answer.body);
-        let result = json(&answer);
-        assert_eq!(result["id"], 7);
-        result
+        local_rpc(&http, &authorization, method, &params, authenticated)
     };
     assert_eq!(
         call("lx_getNodeInfo", serde_json::json!([]), false)["result"]["network_id"],
@@ -838,6 +822,32 @@ fn local_gateway_rpc() {
         )["error"]["code"],
         -32602
     );
+}
+
+fn local_rpc(
+    http: &Http,
+    authorization: &str,
+    method: &str,
+    params: &serde_json::Value,
+    authenticated: bool,
+) -> serde_json::Value {
+    let mut headers = vec![("Content-Type", "application/json")];
+    if authenticated {
+        headers.push(("Authorization", authorization));
+    }
+    let answer = http.request(
+        "POST",
+        "/rpc",
+        &headers,
+        &serde_json::to_vec(
+            &serde_json::json!({"jsonrpc":"2.0","id":7,"method":method,"params":params}),
+        )
+        .required("RPC"),
+    );
+    assert_eq!(answer.status, 200, "{}", answer.body);
+    let result = json(&answer);
+    assert_eq!(result["id"], 7);
+    result
 }
 
 fn assert_unavailable_reads(call: &impl Fn(&str, serde_json::Value, bool) -> serde_json::Value) {
@@ -1850,26 +1860,36 @@ fn assert_committed_fee_reads(
         },
     )
     .required("signed estimate activity");
-    let fee = read(
-        "lx_estimateFee",
-        serde_json::json!([hex_encode(&signed.canonical)]),
-    );
-    assert_eq!(
-        fee["result"]["fee"],
-        (signed.canonical.len() + 4).to_string()
-    );
-    assert_eq!(fee["result"]["canonical_bytes"], signed.canonical.len());
-    assert_eq!(
-        fee["result"]["canonical_schedule"]
-            .as_str()
-            .required("schedule")
-            .len(),
-        430
-    );
+    assert_canonical_fee(read, &signed.canonical, 4);
+    for (ordinal, fixture) in ASSET_FEE_FIXTURES {
+        assert_canonical_fee(
+            read,
+            &signed_fee_activity(ModuleId::Asset, ordinal, &fee_fixture(fixture)),
+            0,
+        );
+    }
     let program = signed_program_call(&cluster.treasury_seed, &cluster.treasury_did, 1, random32());
+    assert_canonical_fee(read, &program, 0);
+    for (ordinal, fixture) in PROGRAM_FEE_FIXTURES {
+        assert_canonical_fee(
+            read,
+            &signed_fee_activity(ModuleId::Programs, ordinal, &fee_fixture(fixture)),
+            0,
+        );
+    }
+    for (ordinal, payload) in program_lifecycle_fee_payloads() {
+        assert_canonical_fee(
+            read,
+            &signed_fee_activity(ModuleId::Programs, ordinal, &payload),
+            0,
+        );
+    }
+    let reserved = signed_fee_activity(ModuleId::Asset, 9, &[]);
+    let reserved = read("lx_estimateFee", serde_json::json!([hex_encode(&reserved)]));
+    assert_eq!(reserved["error"]["code"], -32001);
     assert_eq!(
-        read("lx_estimateFee", serde_json::json!([hex_encode(&program)]))["error"]["code"],
-        -32001
+        reserved["error"]["data"]["error"]["code"],
+        "asset_ordinal_reserved"
     );
     assert_eq!(
         read("lx_getAsset", serde_json::json!(["63".repeat(32)]))["error"]["code"],
@@ -1886,5 +1906,167 @@ fn assert_committed_fee_reads(
     assert_eq!(
         read("lx_getBalances", serde_json::json!(["bad/path"]))["error"]["code"],
         -32602
+    );
+}
+
+const ASSET_FEE_FIXTURES: [(u16, &str); 7] = [
+    (
+        1,
+        include_str!("../../../../../agent/crates/layerx-crypto/tests/fixtures/payments/1-1.hex"),
+    ),
+    (
+        4,
+        include_str!("../../../../../agent/crates/layerx-crypto/tests/fixtures/payments/1-4.hex"),
+    ),
+    (
+        6,
+        include_str!("../../../../../agent/crates/layerx-crypto/tests/fixtures/payments/1-6.hex"),
+    ),
+    (
+        7,
+        include_str!("../../../../../agent/crates/layerx-crypto/tests/fixtures/payments/1-7.hex"),
+    ),
+    (
+        8,
+        include_str!("../../../../../agent/crates/layerx-crypto/tests/fixtures/payments/1-8.hex"),
+    ),
+    (
+        10,
+        include_str!("../../../../../agent/crates/layerx-crypto/tests/fixtures/payments/1-10.hex"),
+    ),
+    (
+        11,
+        include_str!("../../../../../agent/crates/layerx-crypto/tests/fixtures/payments/1-11.hex"),
+    ),
+];
+
+const PROGRAM_FEE_FIXTURES: [(u16, &str); 2] = [
+    (
+        5,
+        include_str!("../../../../../agent/crates/layerx-crypto/tests/fixtures/payments/9-5.hex"),
+    ),
+    (
+        6,
+        include_str!("../../../../../agent/crates/layerx-crypto/tests/fixtures/payments/9-6.hex"),
+    ),
+];
+
+fn fee_fixture(value: &str) -> Vec<u8> {
+    value
+        .trim()
+        .as_bytes()
+        .chunks_exact(2)
+        .map(|pair| {
+            let digits = std::str::from_utf8(pair).required("fee fixture UTF-8");
+            u8::from_str_radix(digits, 16).required("fee fixture hex")
+        })
+        .collect()
+}
+
+fn signed_fee_activity(module: ModuleId, ordinal: u16, payload_bytes: &[u8]) -> Vec<u8> {
+    use ed25519_dalek::Signer as _;
+    let key = SigningKey::from_bytes(&[42; 32]);
+    let activity_type = ActivityType::new(module, ordinal).required("fee activity type");
+    let registration =
+        ModuleRegistration::new(module, &[activity_type]).required("fee module registration");
+    let registry = ModuleRegistry::new(&[registration]).required("fee registry");
+    let payload = Payload::new(&registry, activity_type, payload_bytes).required("fee payload");
+    let payload_hash = layerx_wire::hash::payload_hash_for(&payload).required("fee payload hash");
+    let mut builder = EnvelopeBuilder::new();
+    builder
+        .protocol_version(PROTOCOL_VERSION)
+        .and_then(|value| value.network_id(NETWORK_ID))
+        .and_then(|value| value.activity_type(activity_type))
+        .and_then(|value| value.actor_did(Did::new(b"did:layerx:alice").required("fee actor DID")))
+        .and_then(|value| {
+            value.authority(
+                Authority::owner(&key.verifying_key().to_bytes()).required("fee authority"),
+            )
+        })
+        .and_then(|value| value.account_sequence(7))
+        .and_then(|value| {
+            value.timestamp_bound(TimestampBound::new(1, u64::MAX).required("fee validity"))
+        })
+        .and_then(|value| value.idempotency_key(IdempotencyKey::new([0x71; 32])))
+        .and_then(|value| value.fee_limit(Amount::from_u128(1_000_000)))
+        .and_then(|value| value.payload_hash(payload_hash))
+        .and_then(|value| value.payload(payload))
+        .required("fee envelope fields");
+    let unsigned = builder.build().required("fee envelope");
+    let preimage = layerx_wire::sign::preimage_unsigned(&unsigned).required("fee signing preimage");
+    let signature = key.sign(preimage.as_bytes()).to_bytes();
+    layerx_wire::activity::encode_signed_envelope(
+        &unsigned.attach_signature(Signature::new(&signature).required("fee signature")),
+    )
+    .required("signed fee activity")
+}
+
+fn program_lifecycle_fee_payloads() -> [(u16, Vec<u8>); 3] {
+    use layerx_types::program_lifecycle::{
+        NativeProgramDeploy, NativeProgramUpgrade, NativeProgramWindDown, ProgramUpgradePolicy,
+        ProgramWindDownOperation,
+    };
+    use sha2::Digest as _;
+    let wasm = b"\0asm\x01\0\0\0";
+    let hash = sha2::Sha256::digest(wasm).into();
+    [
+        (
+            1,
+            NativeProgramDeploy {
+                program_id: ProgramId::new([1; 32]),
+                guest_abi: 2,
+                policy: ProgramUpgradePolicy::Immutable,
+                new_hash: hash,
+                interface: None,
+                wasm,
+            }
+            .encode()
+            .required("fee deploy"),
+        ),
+        (
+            2,
+            NativeProgramUpgrade {
+                program_id: ProgramId::new([1; 32]),
+                guest_abi: 2,
+                old_hash: [2; 32],
+                new_hash: hash,
+                migration_hook: &[],
+                clear_interface: false,
+                interface: None,
+                wasm,
+            }
+            .encode()
+            .required("fee upgrade"),
+        ),
+        (
+            7,
+            NativeProgramWindDown {
+                program_id: ProgramId::new([1; 32]),
+                operation: ProgramWindDownOperation::Tombstone,
+            }
+            .encode()
+            .required("fee wind-down"),
+        ),
+    ]
+}
+
+fn assert_canonical_fee(
+    read: &impl Fn(&str, serde_json::Value) -> serde_json::Value,
+    canonical: &[u8],
+    activity_price: usize,
+) {
+    let fee = read("lx_estimateFee", serde_json::json!([hex_encode(canonical)]));
+    assert_eq!(
+        fee["result"]["fee"],
+        (canonical.len() + activity_price).to_string(),
+        "{fee}"
+    );
+    assert_eq!(fee["result"]["canonical_bytes"], canonical.len());
+    assert_eq!(
+        fee["result"]["canonical_schedule"]
+            .as_str()
+            .required("schedule")
+            .len(),
+        430
     );
 }

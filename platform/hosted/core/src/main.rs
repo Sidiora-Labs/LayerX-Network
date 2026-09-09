@@ -3,19 +3,19 @@ mod program_lifecycle;
 mod public_reads;
 
 use layerx_client::client::{Client, ClientConfig, ReconnectPolicy};
-use layerx_client::lni::handshake::{Handshake, HandshakeConfig, perform};
+use layerx_client::lni::handshake::{perform, Handshake, HandshakeConfig};
 use layerx_client::lni::refusal::decode_core_refusal;
-use layerx_client::lni::schema::{Capability, Envelope, Version, decode_envelope, encode_envelope};
+use layerx_client::lni::schema::{decode_envelope, encode_envelope, Capability, Envelope, Version};
 use layerx_client::lni::simulate::SimulateError;
 use layerx_client::lni::transport::{ConnectionGate, FrameTransport, Limits, Uds};
 use layerx_client::read::ReadError;
 use layerx_client::submit::{Submission, SubmitError};
 use layerx_platform_core::{
-    SendRequest, asset_registry, build_send, fixed_hex, hex_decode, hex_encode, main_account,
-    parse_seed, treasury_did,
+    asset_registry, build_send, fixed_hex, hex_decode, hex_encode, main_account, parse_seed,
+    treasury_did, SendRequest,
 };
 use layerx_proof::inclusion::SequencerAuthorization;
-use layerx_proof::receipt::{AuthorizedBatch, verify_outcome};
+use layerx_proof::receipt::{verify_outcome, AuthorizedBatch};
 use layerx_proof::state::decode_account_value;
 use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
 use layerx_types::program_call::NativeProgramCall;
@@ -502,7 +502,7 @@ fn lni_limits() -> Limits {
 
 fn handshake_config(config: &Config) -> HandshakeConfig {
     HandshakeConfig {
-        built_interface_version: Version::V1_4,
+        built_interface_version: Version::V1_5,
         expected_protocol_version: layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION,
         expected_network_id: config.network_id,
     }
@@ -524,8 +524,17 @@ fn connect_client(config: &Config) -> Result<Client, String> {
 }
 
 fn connect_raw(config: &Config) -> Result<(Uds, Handshake), String> {
+    connect_raw_with_deadline(config, LNI_DEADLINE)
+}
+
+fn connect_raw_with_deadline(
+    config: &Config,
+    deadline: Duration,
+) -> Result<(Uds, Handshake), String> {
     let gate = ConnectionGate::new(1);
-    let mut transport = Uds::connect(&config.lni_socket, &gate, lni_limits())
+    let mut limits = lni_limits();
+    limits.deadline = deadline.min(limits.deadline);
+    let mut transport = Uds::connect(&config.lni_socket, &gate, limits)
         .map_err(|error| format!("LNI connection failed: {error:?}"))?;
     let handshake = perform(&mut transport, &handshake_config(config), None)
         .map_err(|error| format!("LNI handshake failed: {error:?}"))?;
@@ -537,12 +546,18 @@ fn lookup_receipt_bytes(
     handshake: &Handshake,
     activity_id: [u8; 32],
     correlation_id: u64,
-    wait_ms: u32,
+    wait_publication: bool,
 ) -> Result<Option<Vec<u8>>, String> {
     let mut selector = Vec::with_capacity(37);
     selector.push(1);
     selector.extend_from_slice(&activity_id);
-    lookup_receipt_selector(transport, handshake, selector, correlation_id, wait_ms)
+    lookup_receipt_selector(
+        transport,
+        handshake,
+        selector,
+        correlation_id,
+        wait_publication,
+    )
 }
 
 fn lookup_receipt_selector(
@@ -550,13 +565,16 @@ fn lookup_receipt_selector(
     handshake: &Handshake,
     mut selector: Vec<u8>,
     correlation_id: u64,
-    wait_ms: u32,
+    wait_publication: bool,
 ) -> Result<Option<Vec<u8>>, String> {
     if !handshake.capabilities().contains(Capability::ReceiptLookup) {
         return Err("receipt_lookup capability is unavailable".to_owned());
     }
-    if wait_ms > 0 {
-        selector.extend_from_slice(&wait_ms.to_be_bytes());
+    if wait_publication {
+        if handshake.node().interface_version.minor < 5 {
+            return Err("receipt publication wait requires LNI minor 5".to_owned());
+        }
+        selector.push(1);
     }
     let request = encode_envelope(Envelope {
         version: handshake.node().interface_version,
@@ -574,7 +592,10 @@ fn lookup_receipt_selector(
         .map_err(|error| format!("receipt lookup receive failed: {error:?}"))?;
     let response = decode_envelope(&response_bytes)
         .map_err(|error| format!("receipt lookup response is malformed: {error:?}"))?;
-    if response.correlation_id != correlation_id {
+    if response.version.major != handshake.node().interface_version.major
+        || !response.proof_material.is_empty()
+        || response.correlation_id != correlation_id
+    {
         return Err("receipt lookup response correlation mismatch".to_owned());
     }
     if response.message_tag == ERROR_RESPONSE_TAG {
@@ -640,34 +661,34 @@ fn await_receipt(
     activity_id: [u8; 32],
     deadline: Duration,
 ) -> Result<Option<ReceiptFacts>, String> {
-    let (mut transport, handshake) = connect_raw(config)?;
-    let started = Instant::now();
-    let mut correlation = 1_u64;
-    loop {
-        if let Some(bytes) = lookup_receipt_bytes(
-            &mut transport,
-            &handshake,
-            activity_id,
-            correlation,
-            u32::try_from(
-                deadline
-                    .saturating_sub(started.elapsed())
-                    .as_millis()
-                    .min(3000),
-            )
-            .map_err(|_| "receipt deadline overflow".to_owned())?,
-        )? {
-            let facts = receipt_facts(&bytes, handshake.node().authorised_sequencer_key)?;
-            if facts.activity_id != activity_id {
-                return Err("receipt names another activity".to_owned());
-            }
-            return Ok(Some(facts));
-        }
-        if started.elapsed() >= deadline {
-            return Ok(None);
-        }
-        correlation += 1;
+    let total_started = Instant::now();
+    let connect_started = Instant::now();
+    let (mut transport, handshake) = if deadline.is_zero() {
+        connect_raw(config)?
+    } else {
+        connect_raw_with_deadline(config, deadline)?
+    };
+    pay_timing("core.receipt.connect_handshake", connect_started);
+    let wait_started = Instant::now();
+    let bytes = lookup_receipt_bytes(
+        &mut transport,
+        &handshake,
+        activity_id,
+        1,
+        !deadline.is_zero(),
+    )?;
+    pay_timing("core.receipt.publication_wait", wait_started);
+    let Some(bytes) = bytes else {
+        return Ok(None);
+    };
+    let verify_started = Instant::now();
+    let facts = receipt_facts(&bytes, handshake.node().authorised_sequencer_key)?;
+    pay_timing("core.receipt.verify", verify_started);
+    if facts.activity_id != activity_id {
+        return Err("receipt names another activity".to_owned());
     }
+    pay_timing("core.receipt.total", total_started);
+    Ok(Some(facts))
 }
 
 fn receipt_result(facts: &ReceiptFacts) -> serde_json::Value {
@@ -690,19 +711,95 @@ fn signer_key(authority: &[u8]) -> Option<[u8; 32]> {
     }
 }
 
-fn submission_registry() -> Result<ModuleRegistry, String> {
-    let send = ActivityType::new(ModuleId::Asset, layerx_platform_core::SEND_ACTIVITY)
-        .map_err(|error| format!("send activity: {error:?}"))?;
-    let operations = [1, 2, 3, 5, 6, 7]
+const ASSET_SUBMISSION_ORDINALS: [u16; 8] = [1, 4, 5, 6, 7, 8, 10, 11];
+const PROGRAM_SUBMISSION_ORDINALS: [u16; 6] = [1, 2, 3, 5, 6, 7];
+
+fn registry_with_asset_ordinals(asset_ordinals: &[u16]) -> Result<ModuleRegistry, String> {
+    let asset_operations = asset_ordinals
+        .iter()
+        .copied()
+        .map(|ordinal| ActivityType::new(ModuleId::Asset, ordinal))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("asset activity: {error:?}"))?;
+    let program_operations = PROGRAM_SUBMISSION_ORDINALS
         .map(|ordinal| ActivityType::new(ModuleId::Programs, ordinal))
         .into_iter()
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| format!("program activity: {error:?}"))?;
-    let asset = ModuleRegistration::new(ModuleId::Asset, &[send])
+    let asset = ModuleRegistration::new(ModuleId::Asset, &asset_operations)
         .map_err(|error| format!("asset registration: {error:?}"))?;
-    let programs = ModuleRegistration::new(ModuleId::Programs, &operations)
+    let programs = ModuleRegistration::new(ModuleId::Programs, &program_operations)
         .map_err(|error| format!("program registration: {error:?}"))?;
     ModuleRegistry::new(&[asset, programs]).map_err(|error| format!("module registry: {error:?}"))
+}
+
+fn submission_registry() -> Result<ModuleRegistry, String> {
+    registry_with_asset_ordinals(&ASSET_SUBMISSION_ORDINALS)
+}
+
+fn submission_decode_registry() -> Result<ModuleRegistry, String> {
+    let mut ordinals = ASSET_SUBMISSION_ORDINALS.to_vec();
+    ordinals.push(9);
+    ordinals.sort_unstable();
+    registry_with_asset_ordinals(&ordinals)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SubmissionValidationError {
+    AssetOrdinalReserved,
+    InvalidAssetActivity,
+    InvalidProgramCall,
+    InvalidProgramAccountOperation,
+    InvalidProgramLifecycle,
+}
+
+impl SubmissionValidationError {
+    fn response(self) -> Response {
+        match self {
+            Self::AssetOrdinalReserved => refusal(422, "asset_ordinal_reserved", None),
+            Self::InvalidAssetActivity => refusal(400, "invalid_asset_activity", None),
+            Self::InvalidProgramCall => refusal(400, "invalid_program_call", None),
+            Self::InvalidProgramAccountOperation => {
+                refusal(400, "invalid_program_account_operation", None)
+            }
+            Self::InvalidProgramLifecycle => refusal(400, "invalid_program_lifecycle", None),
+        }
+    }
+}
+
+fn validate_submission_payload(
+    canonical: &[u8],
+    activity: &layerx_wire::activity::Activity,
+    registry: &ModuleRegistry,
+) -> Result<(), SubmissionValidationError> {
+    let module = activity.activity_type().module();
+    let ordinal = activity.activity_type().ordinal();
+    if module == ModuleId::Asset {
+        if ordinal == 9 {
+            return Err(SubmissionValidationError::AssetOrdinalReserved);
+        }
+        let unsigned = layerx_wire::activity::encode_unsigned(activity)
+            .map_err(|_| SubmissionValidationError::InvalidAssetActivity)?;
+        layerx_crypto::disclosure::bind(&unsigned, registry)
+            .map(|_| ())
+            .map_err(|_| SubmissionValidationError::InvalidAssetActivity)?;
+    } else if module == ModuleId::Programs {
+        if ordinal == 3 {
+            NativeProgramCall::decode(activity.payload())
+                .map_err(|_| SubmissionValidationError::InvalidProgramCall)?;
+        } else if matches!(ordinal, 5 | 6) {
+            let unsigned = layerx_wire::activity::encode_unsigned(activity)
+                .map_err(|_| SubmissionValidationError::InvalidProgramAccountOperation)?;
+            layerx_crypto::disclosure::bind(&unsigned, registry)
+                .map_err(|_| SubmissionValidationError::InvalidProgramAccountOperation)?;
+            program_accounts::validate(ordinal, activity.payload())
+                .map_err(|()| SubmissionValidationError::InvalidProgramAccountOperation)?;
+        } else {
+            program_lifecycle::validate(canonical, registry, ordinal)
+                .map_err(|_| SubmissionValidationError::InvalidProgramLifecycle)?;
+        }
+    }
+    Ok(())
 }
 
 fn submit_activity(
@@ -712,9 +809,9 @@ fn submit_activity(
 ) -> Result<Response, Response> {
     let total_started = Instant::now();
     let validate_started = Instant::now();
-    let registry =
-        submission_registry().map_err(|_| refusal(503, "registry_unavailable", Some(5)))?;
-    let activity = layerx_wire::activity::decode_signed(canonical, &registry)
+    let decode_registry =
+        submission_decode_registry().map_err(|_| refusal(503, "registry_unavailable", Some(5)))?;
+    let activity = layerx_wire::activity::decode_signed(canonical, &decode_registry)
         .map_err(|_| refusal(400, "invalid_activity", None))?;
     if let Some(ordinal) = program_ordinal {
         if activity.activity_type().module() != ModuleId::Programs
@@ -724,18 +821,10 @@ fn submit_activity(
             return Err(refusal(400, "program_route_mismatch", None));
         }
     }
-    if activity.activity_type().module() == ModuleId::Programs {
-        if activity.activity_type().ordinal() == 3 {
-            NativeProgramCall::decode(activity.payload())
-                .map_err(|_| refusal(400, "invalid_program_call", None))?;
-        } else if matches!(activity.activity_type().ordinal(), 5 | 6) {
-            program_accounts::validate(activity.activity_type().ordinal(), activity.payload())
-                .map_err(|()| refusal(400, "invalid_program_account_operation", None))?;
-        } else {
-            program_lifecycle::validate(canonical, &registry, activity.activity_type().ordinal())
-                .map_err(|_| refusal(400, "invalid_program_lifecycle", None))?;
-        }
-    }
+    validate_submission_payload(canonical, &activity, &decode_registry)
+        .map_err(SubmissionValidationError::response)?;
+    let registry =
+        submission_registry().map_err(|_| refusal(503, "registry_unavailable", Some(5)))?;
     pay_timing("core.submit.validate", validate_started);
     let signer = signer_key(activity.authority())
         .ok_or_else(|| refusal(400, "authority_unsupported", None))?;
@@ -965,7 +1054,7 @@ fn receipt_route(config: &Config, activity_hex: &str) -> Response {
         return refusal(400, "invalid_argument", None);
     }
     let lookup = connect_raw(config).and_then(|(mut transport, handshake)| {
-        lookup_receipt_bytes(&mut transport, &handshake, activity_id, 1, 0)
+        lookup_receipt_bytes(&mut transport, &handshake, activity_id, 1, false)
     });
     match lookup {
         Ok(Some(bytes)) => success(&serde_json::json!({
@@ -1944,8 +2033,206 @@ fn main() {
 }
 
 #[cfg(test)]
+mod admission_tests {
+    use super::{
+        submission_decode_registry, submission_registry, validate_submission_payload,
+        SubmissionValidationError, ASSET_SUBMISSION_ORDINALS, PROGRAM_SUBMISSION_ORDINALS,
+    };
+    use ed25519_dalek::{Signer, SigningKey};
+    use layerx_platform_core::{build_send, treasury_did, SendRequest};
+    use layerx_types::activity::{Authority, EnvelopeBuilder, Signature, TimestampBound};
+    use layerx_types::amount::Amount;
+    use layerx_types::ids::{Did, IdempotencyKey};
+    use layerx_types::payload::{ActivityType, ModuleId, Payload};
+
+    const ACTOR: &str = "did:layerx:alice";
+    const ASSET_FIXTURES: [(u16, &str); 7] = [
+        (
+            1,
+            include_str!("../../../../agent/crates/layerx-crypto/tests/fixtures/payments/1-1.hex"),
+        ),
+        (
+            4,
+            include_str!("../../../../agent/crates/layerx-crypto/tests/fixtures/payments/1-4.hex"),
+        ),
+        (
+            6,
+            include_str!("../../../../agent/crates/layerx-crypto/tests/fixtures/payments/1-6.hex"),
+        ),
+        (
+            7,
+            include_str!("../../../../agent/crates/layerx-crypto/tests/fixtures/payments/1-7.hex"),
+        ),
+        (
+            8,
+            include_str!("../../../../agent/crates/layerx-crypto/tests/fixtures/payments/1-8.hex"),
+        ),
+        (
+            10,
+            include_str!("../../../../agent/crates/layerx-crypto/tests/fixtures/payments/1-10.hex"),
+        ),
+        (
+            11,
+            include_str!("../../../../agent/crates/layerx-crypto/tests/fixtures/payments/1-11.hex"),
+        ),
+    ];
+    const PROGRAM_PAYMENT_FIXTURES: [(u16, &str); 2] = [
+        (
+            5,
+            include_str!("../../../../agent/crates/layerx-crypto/tests/fixtures/payments/9-5.hex"),
+        ),
+        (
+            6,
+            include_str!("../../../../agent/crates/layerx-crypto/tests/fixtures/payments/9-6.hex"),
+        ),
+    ];
+
+    fn required<T, E: std::fmt::Debug>(result: Result<T, E>) -> T {
+        result.unwrap_or_else(|error| panic!("{error:?}"))
+    }
+
+    fn hex(value: &str) -> Vec<u8> {
+        value
+            .trim()
+            .as_bytes()
+            .chunks_exact(2)
+            .map(|pair| {
+                let digits = std::str::from_utf8(pair).unwrap_or_else(|error| panic!("{error}"));
+                u8::from_str_radix(digits, 16).unwrap_or_else(|error| panic!("{error}"))
+            })
+            .collect()
+    }
+
+    fn signed(module: ModuleId, ordinal: u16, payload_bytes: &[u8], actor: &str) -> Vec<u8> {
+        let key = SigningKey::from_bytes(&[42; 32]);
+        let registry = required(submission_decode_registry());
+        let activity_type = required(ActivityType::new(module, ordinal));
+        let payload = required(Payload::new(&registry, activity_type, payload_bytes));
+        let payload_hash = required(layerx_wire::hash::payload_hash_for(&payload));
+        let mut builder = EnvelopeBuilder::new();
+        required(
+            builder
+                .protocol_version(layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION)
+                .and_then(|value| value.network_id(17))
+                .and_then(|value| value.activity_type(activity_type))
+                .and_then(|value| value.actor_did(required(Did::new(actor.as_bytes()))))
+                .and_then(|value| {
+                    value.authority(required(Authority::owner(&key.verifying_key().to_bytes())))
+                })
+                .and_then(|value| value.account_sequence(7))
+                .and_then(|value| value.timestamp_bound(required(TimestampBound::new(1, u64::MAX))))
+                .and_then(|value| value.idempotency_key(IdempotencyKey::new([0x71; 32])))
+                .and_then(|value| value.fee_limit(Amount::from_u128(1_000_000)))
+                .and_then(|value| value.payload_hash(payload_hash))
+                .and_then(|value| value.payload(payload)),
+        );
+        let unsigned = required(builder.build());
+        let preimage = required(layerx_wire::sign::preimage_unsigned(&unsigned));
+        let signature = key.sign(preimage.as_bytes()).to_bytes();
+        required(layerx_wire::activity::encode_signed_envelope(
+            &unsigned.attach_signature(required(Signature::new(&signature))),
+        ))
+    }
+
+    fn validate(canonical: &[u8]) -> Result<(), SubmissionValidationError> {
+        let registry = required(submission_decode_registry());
+        let activity = required(layerx_wire::activity::decode_signed(canonical, &registry));
+        validate_submission_payload(canonical, &activity, &registry)
+    }
+
+    #[test]
+    fn submission_registry_declares_only_executable_asset_and_program_types() {
+        let registry = required(submission_registry());
+        for ordinal in ASSET_SUBMISSION_ORDINALS {
+            assert!(registry.declares(required(ActivityType::new(ModuleId::Asset, ordinal))));
+        }
+        for ordinal in PROGRAM_SUBMISSION_ORDINALS {
+            assert!(registry.declares(required(ActivityType::new(ModuleId::Programs, ordinal))));
+        }
+        for ordinal in [2, 3, 9, 12] {
+            assert!(!registry.declares(required(ActivityType::new(ModuleId::Asset, ordinal))));
+        }
+    }
+
+    #[test]
+    fn every_native_asset_payload_is_strictly_admitted_and_malformed_bytes_are_refused() {
+        for (ordinal, fixture) in ASSET_FIXTURES {
+            let payload = hex(fixture);
+            let canonical = signed(ModuleId::Asset, ordinal, &payload, ACTOR);
+            assert_eq!(validate(&canonical), Ok(()), "Asset ordinal {ordinal}");
+            let malformed = signed(
+                ModuleId::Asset,
+                ordinal,
+                &payload[..payload.len() - 1],
+                ACTOR,
+            );
+            assert_eq!(
+                validate(&malformed),
+                Err(SubmissionValidationError::InvalidAssetActivity),
+                "Asset ordinal {ordinal} malformed body"
+            );
+        }
+
+        let source_seed = [9; 32];
+        let source_did = treasury_did(&source_seed);
+        let send = required(build_send(
+            &source_seed,
+            &SendRequest {
+                network_id: 17,
+                source_did: source_did.clone(),
+                destination_did: treasury_did(&[10; 32]),
+                asset: [3; 32],
+                amount: 1,
+                account_sequence: 7,
+                idempotency_key: [0x71; 32],
+                not_before_ms: 1,
+                expires_at_ms: u64::MAX,
+                fee_limit: 1_000_000,
+            },
+        ));
+        assert_eq!(validate(&send.canonical), Ok(()), "Asset ordinal 5");
+        let registry = required(submission_decode_registry());
+        let activity = required(layerx_wire::activity::decode_signed(
+            &send.canonical,
+            &registry,
+        ));
+        let malformed_payload = &activity.payload()[..activity.payload().len() - 1];
+        let malformed = signed(ModuleId::Asset, 5, malformed_payload, &source_did);
+        assert_eq!(
+            validate(&malformed),
+            Err(SubmissionValidationError::InvalidAssetActivity)
+        );
+    }
+
+    #[test]
+    fn reserved_asset_ordinal_and_program_payment_malformations_are_typed() {
+        let reserved = signed(ModuleId::Asset, 9, &[], ACTOR);
+        assert_eq!(
+            validate(&reserved),
+            Err(SubmissionValidationError::AssetOrdinalReserved)
+        );
+        for (ordinal, fixture) in PROGRAM_PAYMENT_FIXTURES {
+            let payload = hex(fixture);
+            assert_eq!(
+                validate(&signed(ModuleId::Programs, ordinal, &payload, ACTOR)),
+                Ok(())
+            );
+            assert_eq!(
+                validate(&signed(
+                    ModuleId::Programs,
+                    ordinal,
+                    &payload[..payload.len() - 1],
+                    ACTOR,
+                )),
+                Err(SubmissionValidationError::InvalidProgramAccountOperation)
+            );
+        }
+    }
+}
+
+#[cfg(test)]
 mod journal_tests {
-    use super::{JournalEntry, TRACE, journal_read, journal_write};
+    use super::{journal_read, journal_write, JournalEntry, TRACE};
     use std::fs;
     use std::io::Write;
     use std::sync::atomic::Ordering;
