@@ -48,7 +48,7 @@ pub struct ToolDefinition {
     pub evidence: &'static str,
 }
 
-const TOOL_CATALOGUE: [ToolDefinition; 11] = [
+const TOOL_CATALOGUE: [ToolDefinition; 18] = [
     ToolDefinition {
         name: "balance.get",
         kind: ToolKind::Read,
@@ -123,6 +123,55 @@ const TOOL_CATALOGUE: [ToolDefinition; 11] = [
         name: "activity.track",
         kind: ToolKind::Write,
         required_scope: "write:track",
+        mutation: "daemon-local receipt resolution state",
+        evidence: "verified receipt or honest non-terminal state",
+    },
+    ToolDefinition {
+        name: "wallet.accounts",
+        kind: ToolKind::Read,
+        required_scope: "read:wallet:accounts",
+        mutation: "none",
+        evidence: "core accounts, verification level, freshness",
+    },
+    ToolDefinition {
+        name: "wallet.balance",
+        kind: ToolKind::Read,
+        required_scope: "read:wallet:balance",
+        mutation: "none",
+        evidence: "core balance, verification level, freshness",
+    },
+    ToolDefinition {
+        name: "wallet.send",
+        kind: ToolKind::Write,
+        required_scope: "write:wallet:send",
+        mutation: "core submission through the ordinary daemon path",
+        evidence: "verified receipt or honest non-terminal state",
+    },
+    ToolDefinition {
+        name: "token.create",
+        kind: ToolKind::Write,
+        required_scope: "write:token:create",
+        mutation: "core submission through the ordinary daemon path",
+        evidence: "verified receipt or honest non-terminal state",
+    },
+    ToolDefinition {
+        name: "token.mint",
+        kind: ToolKind::Write,
+        required_scope: "write:token:mint",
+        mutation: "core submission through the ordinary daemon path",
+        evidence: "verified receipt or honest non-terminal state",
+    },
+    ToolDefinition {
+        name: "token.transfer",
+        kind: ToolKind::Write,
+        required_scope: "write:token:transfer",
+        mutation: "core submission through the ordinary daemon path",
+        evidence: "verified receipt or honest non-terminal state",
+    },
+    ToolDefinition {
+        name: "activity.wait",
+        kind: ToolKind::Write,
+        required_scope: "write:activity:wait",
         mutation: "daemon-local receipt resolution state",
         evidence: "verified receipt or honest non-terminal state",
     },
@@ -623,7 +672,8 @@ impl Server {
 
 fn tool_operation(name: &str) -> Option<Operation> {
     match name {
-        "balance.get" => Some(Operation::ReadBalance),
+        "balance.get" | "wallet.balance" => Some(Operation::ReadBalance),
+        "wallet.accounts" => Some(Operation::ReadAccount),
         "history.list" => Some(Operation::ReadHistory),
         "receipt.get" => Some(Operation::ProgramReceipt),
         "checkpoint.get" => Some(Operation::ReadCheckpoint),
@@ -631,8 +681,10 @@ fn tool_operation(name: &str) -> Option<Operation> {
         "availability.get" => Some(Operation::AvailabilityFetch),
         "activity.prepare" | "activity.disclose" => Some(Operation::Prepare),
         "activity.sign" => Some(Operation::Sign),
-        "activity.submit" => Some(Operation::Submit),
-        "activity.track" => Some(Operation::Track),
+        "activity.submit" | "wallet.send" | "token.create" | "token.mint" | "token.transfer" => {
+            Some(Operation::Submit)
+        }
+        "activity.track" | "activity.wait" => Some(Operation::Track),
         _ => None,
     }
 }
