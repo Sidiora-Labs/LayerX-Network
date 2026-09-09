@@ -5220,3 +5220,34 @@ symbol = "lxp_ledger_apply_bridge_credit lxp_ctx_bridge_credit"
 observed = "The bridge reserve top-up now invokes ledger apply after the existing authorization, supply preflight and rollback snapshot. make -j16, make test-asset-transfer, make test and make beta-ledger-check exit 0. The unchanged sole-writer check passes. BRIDGE_PYTHON=qual-logs/nat3/venv/bin/python3 bash tests/bridge/sole_writer.sh exits 0: a real custody deposit on isolated chain 31337 produces byte-identical canonical account state diffs (397 bytes) and unsigned receipt encodings (1006 bytes) through original and updated module contexts, with real signature verification, rollback stages, replay refusal and nine custody evidence tests passing. Evidence: qual-logs/nat3/build.log, asset-transfer.log, test.log, beta-ledger.log, bridge-differential-venv.log and gates.tsv."
 assumption = "The initial bridge comparison exited 1 because system Python lacked Crypto; the isolated virtual environment satisfies tests/bridge/requirements.txt. Codify inspection could not run because cg is unavailable. Cluster and image gates were not run. Task statuses are unchanged."
 severity = "note"
+[observation.3.7.24]
+task = "3.7"
+file = "platform/hosted/authority/src/human.rs"
+symbol = "policy_route"
+observed = "Identity, capability-scope and key-policy routes unconditionally return unavailable after receipt matching and freshness checks. Positive owner identity verification requires committed policy state verification in this file, outside the owner-registration owned paths. Native module registration is in cmd/layerxd/lxp_daemon_process.c and currently omits Governance. platform/hosted/human/provision.py and its claimed existing validate-owner-registration mode are absent in this checkout."
+assumption = "Real owner provisioning requires coordinated daemon registration and authenticated committed-state policy verification; unrelated authentic receipts cannot substitute for recovery state."
+severity = "blocker"
+
+[observation.3.7.25]
+task = "3.7"
+file = "agent/crates/layerx-agentd/src/human_runtime.rs"
+symbol = "ProductionHumanOperations::prepare"
+observed = "The preparation path previously passed textual authority bytes into native Authority::owner and attempted UTF-8 serialization of native authority bytes in the response. Both directions require canonical conversion. The hosted authority hex decoder accepts either case, so the report's lowercase-only claim is stricter than the current hosted parser; lowercase remains the canonical emitted form."
+assumption = "Authority encoding does not itself prove DID admission, account ownership or recovery registration."
+severity = "note"
+
+[observation.3.7.26]
+task = "3.7"
+file = "agent/crates/layerx-agentd/src/export.rs"
+symbol = "build"
+observed = "cargo fmt --manifest-path agent/Cargo.toml -p layerx-agentd --check exits 1 on existing formatting differences in src/export.rs, src/policy/eval.rs, tests/budget_unknown.rs and tests/operator.rs. The changed human_runtime.rs passes the direct rustfmt check."
+assumption = "Unrelated formatting is preserved; crate-wide formatting remains unqualified until those differences are addressed."
+severity = "blocker"
+
+[observation.3.7.27]
+task = "3.7"
+file = "agent/crates/layerx-agentd/tests/support/real_authority.rs"
+symbol = "real authority fixture"
+observed = "cargo test --manifest-path agent/Cargo.toml --locked -p layerx-agentd exits 101 in budget_create: real_authority.rs:326 requires UID 0 to run layerxd under a distinct uid, but the process UID is 1000. Subsequent fixture users report a poisoned lock. The root assertion is unchanged."
+assumption = "Real-node integration qualification requires the harness execution privileges and native binaries; passing authority parser unit tests does not qualify that integration."
+severity = "blocker"

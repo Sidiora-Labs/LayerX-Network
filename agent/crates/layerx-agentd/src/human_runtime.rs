@@ -2541,7 +2541,7 @@ impl<A: HumanAuthorityBoundary> HumanOperations for ProductionHumanOperations<A>
             .map_err(|_| HumanOperationError::Refused)?;
         let actor = Did::new(request.operation.actor.as_bytes())
             .map_err(|_| HumanOperationError::Refused)?;
-        let authority = Authority::owner(request.operation.authority.as_bytes())
+        let authority = decode_owner_authority(&request.operation.authority)
             .map_err(|_| HumanOperationError::Refused)?;
         let timestamp =
             TimestampBound::new(request.operation.not_before, request.operation.not_after)
@@ -2609,10 +2609,7 @@ impl<A: HumanAuthorityBoundary> HumanOperations for ProductionHumanOperations<A>
             std::str::from_utf8(prepared.envelope.actor_did().as_bytes())
                 .map_err(|_| HumanOperationError::Refused)?,
         )?;
-        out.text(
-            std::str::from_utf8(prepared.envelope.authority().as_bytes())
-                .map_err(|_| HumanOperationError::Refused)?,
-        )?;
+        out.text(&request.operation.authority)?;
         out.u64(prepared.envelope.account_sequence());
         out.u64(prepared.envelope.timestamp_bound().not_before());
         out.u64(prepared.envelope.timestamp_bound().not_after());
@@ -3346,6 +3343,24 @@ fn hex(bytes: &[u8]) -> String {
         .flat_map(|b| [H[(b >> 4) as usize] as char, H[(b & 15) as usize] as char])
         .collect()
 }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OwnerAuthorityError {
+    NonCanonical,
+}
+
+fn decode_owner_authority(reference: &str) -> Result<Authority, OwnerAuthorityError> {
+    let key = reference.strip_prefix("did:layerx:").unwrap_or(reference);
+    if key.len() != 64
+        || !key
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(OwnerAuthorityError::NonCanonical);
+    }
+    let bytes = digest_from_hex(key).ok_or(OwnerAuthorityError::NonCanonical)?;
+    Authority::owner(&bytes).map_err(|_| OwnerAuthorityError::NonCanonical)
+}
+
 fn digest_from_hex(value: &str) -> Option<[u8; 32]> {
     if value.len() != 64 {
         return None;
@@ -3531,3 +3546,46 @@ fn validate_capability<A: HumanAuthorityBoundary>(
 #[cfg(test)]
 #[path = "outbound_tls/tests.rs"]
 mod outbound_tls_tests;
+
+#[cfg(test)]
+mod owner_authority_tests {
+    use super::{decode_owner_authority, hex, OwnerAuthorityError};
+
+    #[test]
+    fn ed25519_authority_decodes_from_hex_and_did() {
+        let signer = ed25519_dalek::SigningKey::from_bytes(&[0x83; 32]);
+        let public_key = signer.verifying_key().to_bytes();
+        let canonical = hex(&public_key);
+        for reference in [canonical.clone(), format!("did:layerx:{canonical}")] {
+            let authority = decode_owner_authority(&reference)
+                .unwrap_or_else(|error| panic!("canonical authority: {error:?}"));
+            assert_eq!(authority.as_bytes(), public_key);
+            assert_eq!(hex(authority.as_bytes()), canonical);
+        }
+    }
+
+    #[test]
+    fn malformed_authority_is_refused_without_unicode_slicing() {
+        let canonical = "ab".repeat(32);
+        for reference in [
+            String::new(),
+            "a".repeat(63),
+            "a".repeat(65),
+            "g".repeat(64),
+            canonical.to_uppercase(),
+            format!("0x{canonical}"),
+            format!(" {canonical}"),
+            format!("{canonical}\n"),
+            format!("did:other:{canonical}"),
+            format!("did:layerx:did:layerx:{canonical}"),
+            format!("did:layerx:{canonical}#key-1"),
+            format!("a{}", "€".repeat(21)),
+        ] {
+            assert_eq!(
+                decode_owner_authority(&reference),
+                Err(OwnerAuthorityError::NonCanonical),
+                "accepted {reference:?}"
+            );
+        }
+    }
+}
