@@ -236,6 +236,19 @@ impl Journal {
         Ok(found)
     }
 
+    pub fn has_withdrawal_debit(&self, expected: &layerx_paxeer_client::DebitExpectation) -> bool {
+        if !self.healthy {
+            return false;
+        }
+        let Ok(codec) = NativeMovementCodec::for_protocol(self.protocol) else {
+            return false;
+        };
+        self.records.values().any(|record| {
+            matches!(codec.decode_request(&record.request), Ok(Request::BindWithdrawalDebit { debit, .. }) if debit == *expected)
+                && record.response.as_ref().is_some_and(|bytes| matches!(codec.decode_response(bytes), Ok(Response::Ready)))
+        })
+    }
+
     pub fn next_nonce(
         &self,
         wallet: layerx_types::intent::EvmAddress,
@@ -352,11 +365,14 @@ fn validate_response(request: &[u8], bytes: &[u8], protocol: u16) -> Result<(), 
                 Request::VerifyClaimSignature { .. },
                 Response::ClaimTransaction(_)
             )
+            | (
+                Request::BindWithdrawalDebit { .. } | Request::Readiness,
+                Response::Ready
+            )
             | (Request::CheckpointProof(_), Response::CheckpointProof(_))
             | (Request::SubmitWithdrawal(_), Response::Withdrawal(_))
             | (Request::LookupWithdrawal(_), Response::WithdrawalLookup(_))
             | (Request::SubmitExit(_), Response::Exit(_))
-            | (Request::Readiness, Response::Ready)
             | (
                 Request::PrepareEvmTransaction { .. },
                 Response::PreparedEvmTransaction(_)

@@ -172,7 +172,7 @@ use layerx_types::account::AccountId;
 use layerx_types::activity::{Authority, TimestampBound};
 use layerx_types::amount::Amount;
 use layerx_types::ids::{AssetId, Did, IdempotencyKey};
-use layerx_types::intent::{EvmAddress, NetworkId, WithdrawalId};
+use layerx_types::intent::{EvmAddress, NetworkId};
 use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
 use sha2::{Digest as _, Sha256};
 
@@ -564,10 +564,10 @@ fn encode_receipt(fields: ReceiptFields, signature: Option<[u8; 64]>) -> Vec<u8>
     bytes.extend_from_slice(&0_u32.to_be_bytes());
     bytes.extend_from_slice(&1_u128.to_be_bytes());
     push_bytes(&mut bytes, &fields.batch_id);
-    push_u16(&mut bytes, u16::from(ModuleId::Bridge as u8));
+    push_u16(&mut bytes, u16::from(ModuleId::Asset as u8));
     bytes.extend_from_slice(&1_u32.to_be_bytes());
     bytes.extend_from_slice(&1_u32.to_be_bytes());
-    bytes.push(2);
+    bytes.push(9);
     push_bytes(&mut bytes, &ASSET);
     bytes.extend_from_slice(&AMOUNT.to_be_bytes());
     push_bytes(&mut bytes, &fields.from);
@@ -628,6 +628,19 @@ impl RealRuntime {
 }
 
 impl WithdrawalRuntime for RealRuntime {
+    fn bind_debit(
+        &mut self,
+        _identity: &layerx_human_service::journeys::MovementExecutionIdentity,
+        debit: &layerx_paxeer_client::CommittedWithdrawalDebit,
+    ) -> Result<(), WithdrawalBoundaryError> {
+        let expectation = debit.expectation();
+        if expectation.activity_id != expectation.withdrawal_id {
+            return Err(WithdrawalBoundaryError::ContractViolation);
+        }
+        self.chain = JourneyChain::new(expectation);
+        Ok(())
+    }
+
     fn verify_claim_signature(
         &mut self,
         _request: &WithdrawalTransactionRequest,
@@ -725,7 +738,6 @@ impl Fixture {
             idempotency_key: [0x31; 32],
             network: NetworkId::new(NETWORK_ID)
                 .unwrap_or_else(|error| panic!("network: {error:?}")),
-            withdrawal_id: WithdrawalId::new([0x32; 32]),
             owner: account("agent:did:layerx:alice:main"),
             withdrawals_account: account("system:paxeer-withdrawals"),
             payout_address: EvmAddress::new(RECIPIENT),
@@ -772,7 +784,7 @@ impl Fixture {
         DebitExpectation {
             activity_id,
             network_id: NETWORK_ID,
-            withdrawal_id: self.plan.withdrawal_id.bytes(),
+            withdrawal_id: activity_id,
             account: account_address(&self.plan.owner),
             withdrawals_account: account_address(&self.plan.withdrawals_account),
             asset_id: ASSET,
@@ -894,6 +906,11 @@ fn drive_to_settlement(
             WithdrawalStage::WaitingForSettlement { .. }
         ) {
             assert_eq!(agent.effects.values().sum::<u32>(), 1);
+            let status = journey
+                .status()
+                .unwrap_or_else(|error| panic!("status: {error}"));
+            assert!(status.withdrawal_id().is_some());
+            assert_ne!(status.withdrawal_id(), Some([0x31; 32]));
             return (store, journey, now);
         }
     }

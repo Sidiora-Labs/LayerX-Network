@@ -15,7 +15,7 @@ use layerx_sdk::Client as AgentClient;
 use layerx_types::account::AccountId;
 use layerx_types::amount::Amount;
 use layerx_types::ids::{AssetId, CheckpointId, IdempotencyKey};
-use layerx_types::intent::{EvmAddress, NetworkId, WithdrawalId};
+use layerx_types::intent::{EvmAddress, NetworkId};
 use layerx_types::payload::ModuleRegistry;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -29,7 +29,7 @@ use crate::notify::JourneyId;
 use crate::store::{AuditDisposition, EvidenceRef, PrincipalScope, RowKey, StoreError, Table};
 use crate::trace::TraceId;
 
-const RECORD_VERSION: u8 = 3;
+const RECORD_VERSION: u8 = 4;
 const STATE_PREFIX: &str = "withdraw-state-";
 const PIN_PREFIX: &str = "withdraw-pin-";
 const PLAN_DIGEST_DOMAIN: &[u8] = b"layerx-human-withdraw-plan/v2\0";
@@ -107,7 +107,6 @@ pub struct WithdrawalPlan {
     pub network: NetworkId,
     pub layerx_protocol_version: u16,
     pub request_anchor: CheckpointId,
-    pub withdrawal_id: WithdrawalId,
     pub owner: AccountId,
     pub withdrawals_account: AccountId,
     pub payout_address: EvmAddress,
@@ -124,14 +123,13 @@ pub(crate) fn encode_withdrawal_plan(
     plan: &WithdrawalPlan,
 ) -> Result<Vec<u8>, WithdrawalJourneyError> {
     validate_plan(plan)?;
-    let mut out = super::wire::Writer::new(5);
+    let mut out = super::wire::Writer::new(6);
     out.text(plan.journey_id.as_str())
         .map_err(|()| WithdrawalJourneyError::InvalidPlan)?;
     out.fixed(&plan.idempotency_key);
     out.u32(plan.network.value());
     out.u16(plan.layerx_protocol_version);
     out.fixed(&plan.request_anchor.bytes());
-    out.fixed(&plan.withdrawal_id.bytes());
     out.text(plan.owner.canonical())
         .map_err(|()| WithdrawalJourneyError::InvalidPlan)?;
     out.text(plan.withdrawals_account.canonical())
@@ -163,7 +161,7 @@ pub(crate) fn decode_withdrawal_plan(
     bytes: &[u8],
 ) -> Result<WithdrawalPlan, WithdrawalJourneyError> {
     let mut input =
-        super::wire::Reader::new(bytes, 5).map_err(|()| WithdrawalJourneyError::InvalidPlan)?;
+        super::wire::Reader::new(bytes, 6).map_err(|()| WithdrawalJourneyError::InvalidPlan)?;
     let plan = WithdrawalPlan {
         journey_id: JourneyId::new(
             input
@@ -184,11 +182,6 @@ pub(crate) fn decode_withdrawal_plan(
             .u16()
             .map_err(|()| WithdrawalJourneyError::InvalidPlan)?,
         request_anchor: CheckpointId::new(
-            input
-                .fixed()
-                .map_err(|()| WithdrawalJourneyError::InvalidPlan)?,
-        ),
-        withdrawal_id: WithdrawalId::new(
             input
                 .fixed()
                 .map_err(|()| WithdrawalJourneyError::InvalidPlan)?,
@@ -326,6 +319,15 @@ pub enum WithdrawalBoundaryError {
 
 /// Core proof and Paxeer transaction operations consumed by the state machine.
 pub trait WithdrawalRuntime {
+    /// Persists the verified request-to-activity identity before settlement.
+    /// # Errors
+    /// Refuses unavailable storage or a conflicting receipt mapping.
+    fn bind_debit(
+        &mut self,
+        identity: &super::MovementExecutionIdentity,
+        debit: &CommittedWithdrawalDebit,
+    ) -> Result<(), WithdrawalBoundaryError>;
+
     /// Verifies a wallet signature against the exact persisted claim request
     /// and returns the complete transaction bytes authorised by that signature.
     /// # Errors
@@ -407,6 +409,7 @@ pub struct WithdrawalStatus {
     stage: WithdrawalStage,
     cancellation_policy: CancellationPolicy,
     debit_receipt_reference: Option<[u8; 32]>,
+    withdrawal_id: Option<[u8; 32]>,
     reminder_count: u64,
 }
 
@@ -429,6 +432,11 @@ impl WithdrawalStatus {
     #[must_use]
     pub const fn debit_receipt_reference(&self) -> Option<[u8; 32]> {
         self.debit_receipt_reference
+    }
+
+    #[must_use]
+    pub const fn withdrawal_id(&self) -> Option<[u8; 32]> {
+        self.withdrawal_id
     }
 
     #[must_use]
@@ -841,7 +849,7 @@ impl WithdrawalJourney {
             network_id: plan.network.value(),
             layerx_protocol_version: plan.layerx_protocol_version,
             request_anchor: plan.request_anchor.bytes(),
-            withdrawal_id: plan.withdrawal_id.bytes(),
+            withdrawal_id: [0; 32],
             owner: plan.owner.canonical().to_owned(),
             withdrawals_account: plan.withdrawals_account.canonical().to_owned(),
             payout_address: plan.payout_address.bytes(),
@@ -1037,6 +1045,17 @@ impl WithdrawalJourney {
                         &material.authorised_batch,
                         expectation,
                     )?;
+                    runtime.bind_debit(
+                        &super::MovementExecutionIdentity {
+                            principal: scope.principal().clone(),
+                            tenant: scope.tenant().clone(),
+                            account: expectation.account,
+                            wallet: expectation.recipient,
+                            plan_id: self.record.idempotency_key,
+                        },
+                        &committed,
+                    )?;
+                    self.record.withdrawal_id = committed.expectation().activity_id;
                     self.record.debit_activity_id = Some(evidence.activity_id);
                     self.record.debit_receipt = Some(material.canonical_bytes);
                     self.record.debit_batch =
@@ -1293,6 +1312,7 @@ impl WithdrawalJourney {
             stage,
             cancellation_policy: CancellationPolicy::CannotCancelAfterCommitCompleteOnly,
             debit_receipt_reference: self.record.debit_receipt_reference,
+            withdrawal_id: self.record.debit_activity_id,
             reminder_count: self.record.reminder_count,
         })
     }
@@ -1345,7 +1365,6 @@ impl WithdrawalJourney {
             CheckpointId::new(self.record.request_anchor),
             u64::try_from(self.record.fee_limit)
                 .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
-            WithdrawalId::new(self.record.withdrawal_id),
             self.owner()?,
             self.withdrawals_account()?,
             EvmAddress::new(self.record.payout_address),
@@ -1382,7 +1401,7 @@ impl WithdrawalJourney {
         Ok(DebitExpectation {
             activity_id,
             network_id: self.record.network_id,
-            withdrawal_id: self.record.withdrawal_id,
+            withdrawal_id: activity_id,
             account: layerx_paxeer_client::account_address_for_protocol(
                 &self.owner()?,
                 self.record.layerx_protocol_version,
@@ -1779,7 +1798,6 @@ fn validate_plan(plan: &WithdrawalPlan) -> Result<(), WithdrawalJourneyError> {
         || plan.idempotency_key == [0; 32]
         || plan.request_anchor.bytes() == [0; 32]
         || plan.agent.fee_limit > u128::from(u64::MAX)
-        || plan.withdrawal_id.is_zero()
         || plan.amount.value() == 0
         || plan.owner == plan.withdrawals_account
         || plan.payout_address.bytes() == [0; 20]
@@ -1798,6 +1816,19 @@ fn validate_plan(plan: &WithdrawalPlan) -> Result<(), WithdrawalJourneyError> {
     Ok(())
 }
 
+fn invalid_debit_state(record: &Record) -> bool {
+    matches!(record.phase, Phase::Processing)
+        && (record.debit_receipt.is_some()
+            || record.debit_activity_id.is_some()
+            || record.debit_batch.is_some()
+            || record.debit_receipt_reference.is_some())
+        || !matches!(record.phase, Phase::Processing)
+            && (record.debit_receipt.is_none()
+                || record.debit_batch.is_none()
+                || record.debit_activity_id.is_none()
+                || record.debit_receipt_reference.is_none())
+}
+
 fn validate_record(record: &Record) -> Result<(), WithdrawalJourneyError> {
     if record.version != RECORD_VERSION
         || !matches!(record.layerx_protocol_version, 2 | 3)
@@ -1812,7 +1843,7 @@ fn validate_record(record: &Record) -> Result<(), WithdrawalJourneyError> {
         || record.network_id == 0
         || record.request_anchor == [0; 32]
         || record.fee_limit > u128::from(u64::MAX)
-        || record.withdrawal_id == [0; 32]
+        || record.withdrawal_id != record.debit_activity_id.unwrap_or([0; 32])
         || record.payout_address == [0; 20]
         || record.asset == [0; 32]
         || record.amount == 0
@@ -1832,12 +1863,7 @@ fn validate_record(record: &Record) -> Result<(), WithdrawalJourneyError> {
         .expectation()
         .is_err()
         || record.reminder_interval_seconds == 0
-        || matches!(record.phase, Phase::Processing) && record.debit_receipt.is_some()
-        || !matches!(record.phase, Phase::Processing)
-            && (record.debit_receipt.is_none()
-                || record.debit_batch.is_none()
-                || record.debit_activity_id.is_none()
-                || record.debit_receipt_reference.is_none())
+        || invalid_debit_state(record)
         || matches!(
             record.phase,
             Phase::ClaimReady
@@ -1970,7 +1996,6 @@ fn plan_digest(plan: &WithdrawalPlan) -> [u8; 32] {
     digest.update(plan.network.value().to_be_bytes());
     digest.update(plan.layerx_protocol_version.to_be_bytes());
     digest.update(plan.request_anchor.bytes());
-    digest.update(plan.withdrawal_id.bytes());
     hash_text(&mut digest, plan.owner.canonical());
     hash_text(&mut digest, plan.withdrawals_account.canonical());
     digest.update(plan.payout_address.bytes());

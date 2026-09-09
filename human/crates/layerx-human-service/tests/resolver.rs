@@ -10,7 +10,7 @@ use layerx_types::ids::{AssetId, CheckpointId, IdempotencyKey};
 use layerx_types::intent::{
     AuthorizationSignature, BudgetId, ContextHash, DepositProofId, EvmAddress, NetworkId,
     PayerGrantId, PeriodLength, ProtocolVersion, PublicKey, PurposeHash, RolloverPolicy,
-    SendAuthorization, SendAuthorizationKind, Sequence, TimestampSeconds, WithdrawalId,
+    SendAuthorization, SendAuthorizationKind, Sequence, TimestampSeconds,
 };
 use proptest::prelude::*;
 
@@ -90,7 +90,6 @@ fn resolver_selects_every_normative_mechanism_and_vocabulary_term() {
         Relationship::Custody(CustodyRoute::Withdrawal {
             request_anchor: CheckpointId::new([18; 32]),
             fee_limit: 100,
-            withdrawal_id: WithdrawalId::new([4; 32]),
             withdrawals_account: account("system:paxeer-withdrawals"),
             payout_address: EvmAddress::new([5; 20]),
             idempotency_key: key(6),
@@ -292,7 +291,6 @@ fn relationship(selector: u8, sequence: u64, byte: u8) -> Relationship {
         _ => Relationship::Custody(CustodyRoute::Withdrawal {
             request_anchor: CheckpointId::new([18; 32]),
             fee_limit: 100,
-            withdrawal_id: WithdrawalId::new([nonzero; 32]),
             withdrawals_account: account("system:paxeer-withdrawals"),
             payout_address: EvmAddress::new([nonzero; 20]),
             idempotency_key: key(nonzero),
