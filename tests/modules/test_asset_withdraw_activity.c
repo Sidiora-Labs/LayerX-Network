@@ -31,7 +31,7 @@ static int sign_raw(const uint8_t seed[32], const uint8_t *message,
 
 #define CHECK(x) do { if (!(x)) { fprintf(stderr, "case %u line %d\n", mode, __LINE__); return 1; } } while (0)
 
-static int run(unsigned mode)
+static int run(unsigned mode, int vectors)
 {
     static uint8_t arena_bytes[1048576];
     const uint8_t seed[32] = {1U};
@@ -149,6 +149,20 @@ static int run(unsigned mode)
         CHECK(lx_withdrawal_state_decode(proof->key, proof->key_length, proof->value,
             proof->value_length, &record) == LXP_OK);
         CHECK(memcmp(value, proof->value, sizeof(value)) == 0);
+        if (vectors != 0) {
+            uint8_t *encoded = malloc(LXP_STATE_WITNESS_MAX_BYTES);
+            size_t encoded_length = 0U;
+            CHECK(encoded != NULL && lxp_state_proof_encode(proof, encoded,
+                LXP_STATE_WITNESS_MAX_BYTES, &encoded_length) == LXP_OK);
+            printf("{\"root\":\"0x");
+            for (size_t i = 0U; i < 32U; ++i) printf("%02x", after[i]);
+            printf("\",\"withdrawals_account\":\"0x");
+            for (size_t i = 0U; i < 32U; ++i) printf("%02x", to->id[i]);
+            printf("\",\"proof\":\"0x");
+            for (size_t i = 0U; i < encoded_length; ++i) printf("%02x", encoded[i]);
+            printf("\"}\n");
+            free(encoded);
+        }
         free(proof);
         CHECK(lxp_arena_init(&arena, arena_bytes, sizeof(arena_bytes)) == LXP_OK);
         CHECK(lxp_effect_buffer_init(&effects) == LXP_OK);
@@ -165,9 +179,11 @@ static int run(unsigned mode)
     return 0;
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
+    if (argc == 2 && strcmp(argv[1], "--vectors") == 0) return run(0U, 1);
+    if (argc != 1) return 1;
     for (unsigned mode = 0U; mode < 18U; ++mode)
-        if (run(mode) != 0) return 1;
+        if (run(mode, 0) != 0) return 1;
     return 0;
 }

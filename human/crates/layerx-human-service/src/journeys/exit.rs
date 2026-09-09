@@ -86,7 +86,7 @@ pub struct ExitPlan {
 pub(crate) fn encode_exit_plan(plan: &ExitPlan) -> Result<Vec<u8>, ExitJourneyError> {
     validate_plan(plan)?;
     validate_exit_evidence(&plan.evidence)?;
-    let mut out = super::wire::Writer::new(3);
+    let mut out = super::wire::Writer::new(if plan.evidence.native.is_some() { 4 } else { 3 });
     out.text(plan.journey_id.as_str())
         .map_err(|()| ExitJourneyError::InvalidPlan)?;
     out.fixed(&plan.idempotency_key);
@@ -125,13 +125,19 @@ pub(crate) fn encode_exit_plan(plan: &ExitPlan) -> Result<Vec<u8>, ExitJourneyEr
         out.fixed(&value.signature_s);
         out.fixed(&[value.signature_v]);
     }
+    if let Some(native) = &plan.evidence.native {
+        let bytes = layerx_paxeer_client::wire::encode_native_evidence(native, 1_048_576)
+            .map_err(|_| ExitJourneyError::InvalidPlan)?;
+        out.u32(u32::try_from(bytes.len()).map_err(|_| ExitJourneyError::InvalidPlan)?);
+        out.fixed(&bytes);
+    }
     Ok(out.finish())
 }
 
 /// Decodes an exact bounded exit plan and constructs only validated evidence.
 pub(crate) fn decode_exit_plan(bytes: &[u8]) -> Result<ExitPlan, ExitJourneyError> {
-    let mut input =
-        super::wire::Reader::new(bytes, 3).map_err(|()| ExitJourneyError::InvalidPlan)?;
+    let mut input = super::wire::Reader::new(bytes, if bytes.get(1) == Some(&4) { 4 } else { 3 })
+        .map_err(|()| ExitJourneyError::InvalidPlan)?;
     let journey_id = JourneyId::new(input.text().map_err(|()| ExitJourneyError::InvalidPlan)?)
         .map_err(|_| ExitJourneyError::InvalidPlan)?;
     let idempotency_key = input.fixed().map_err(|()| ExitJourneyError::InvalidPlan)?;
@@ -185,11 +191,33 @@ pub(crate) fn decode_exit_plan(bytes: &[u8]) -> Result<ExitPlan, ExitJourneyErro
                 .map_err(|()| ExitJourneyError::InvalidPlan)?[0],
         });
     }
+    let native = if bytes.get(1) == Some(&4) {
+        let count = usize::try_from(input.u32().map_err(|()| ExitJourneyError::InvalidPlan)?)
+            .map_err(|_| ExitJourneyError::InvalidPlan)?;
+        if count > 1_048_576 {
+            return Err(ExitJourneyError::InvalidPlan);
+        }
+        let mut encoded = Vec::with_capacity(count);
+        for _ in 0..count {
+            encoded.push(
+                input
+                    .fixed::<1>()
+                    .map_err(|()| ExitJourneyError::InvalidPlan)?[0],
+            );
+        }
+        Some(
+            layerx_paxeer_client::wire::decode_native_evidence(&encoded, 1_048_576)
+                .map_err(|_| ExitJourneyError::InvalidPlan)?,
+        )
+    } else {
+        None
+    };
     input.finish().map_err(|()| ExitJourneyError::InvalidPlan)?;
     let plan = ExitPlan {
         journey_id,
         idempotency_key,
         evidence: ExitEvidence {
+            native,
             account,
             asset_id,
             finalised_balance,
@@ -205,6 +233,33 @@ pub(crate) fn decode_exit_plan(bytes: &[u8]) -> Result<ExitPlan, ExitJourneyErro
 }
 
 fn validate_exit_evidence(evidence: &ExitEvidence) -> Result<(), ExitJourneyError> {
+    if let Some(native) = &evidence.native {
+        let witness = layerx_paxeer_client::state_proof::StateWitness::decode(&native.witness)
+            .map_err(|_| ExitJourneyError::InvalidPlan)?;
+        let signature = native
+            .recipient_signature
+            .as_slice()
+            .try_into()
+            .map_err(|_| ExitJourneyError::InvalidPlan)?;
+        if evidence.leaf_index != 0
+            || !evidence.siblings.is_empty()
+            || evidence.attestations.iter().any(|a| {
+                a.checkpoint_hash != native.inclusion_checkpoint
+                    || a.network_id != native.network_id
+            })
+        {
+            return Err(ExitJourneyError::InvalidPlan);
+        }
+        evidence
+            .verify_native_balance(
+                &witness,
+                witness.root().map_err(|_| ExitJourneyError::InvalidPlan)?,
+                native.network_id,
+                native.request_anchor,
+                signature,
+            )
+            .map_err(|_| ExitJourneyError::InvalidPlan)?;
+    }
     let depth = evidence.siblings.len();
     if evidence.account == [0; 32]
         || evidence.asset_id == [0; 32]
@@ -507,6 +562,8 @@ impl StoredAttestation {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 struct StoredEvidence {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    native: Option<StoredNativeEvidence>,
     account: [u8; 32],
     asset_id: [u8; 32],
     finalised_balance: u128,
@@ -519,6 +576,7 @@ struct StoredEvidence {
 impl From<&ExitEvidence> for StoredEvidence {
     fn from(value: &ExitEvidence) -> Self {
         Self {
+            native: value.native.as_ref().map(StoredNativeEvidence::from_public),
             account: value.account,
             asset_id: value.asset_id,
             finalised_balance: value.finalised_balance,
@@ -533,6 +591,7 @@ impl From<&ExitEvidence> for StoredEvidence {
 impl StoredEvidence {
     fn public(&self) -> ExitEvidence {
         ExitEvidence {
+            native: self.native.as_ref().map(StoredNativeEvidence::public),
             account: self.account,
             asset_id: self.asset_id,
             finalised_balance: self.finalised_balance,
@@ -876,6 +935,13 @@ impl ExitJourney {
         claim: &ExitClaim,
     ) -> Result<(), ExitJourneyError> {
         let evidence = &self.record.evidence;
+        if let Some(native) = &evidence.native {
+            if native.inclusion_checkpoint != claim.checkpoint
+                || native.public().decoded(claim.state_root).is_err()
+            {
+                return Err(ExitJourneyError::ClaimMismatch);
+            }
+        }
         if claim.contract != exit.contract()
             || claim.account != evidence.account
             || claim.asset_id != evidence.asset_id
@@ -1246,5 +1312,117 @@ impl From<RedactionError> for ExitJourneyError {
 impl From<ExitBoundaryError> for ExitJourneyError {
     fn from(value: ExitBoundaryError) -> Self {
         Self::Boundary(value)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub(super) struct StoredNativeEvidence {
+    request_anchor: [u8; 32],
+    inclusion_checkpoint: [u8; 32],
+    network_id: u32,
+    witness: Vec<u8>,
+    recipient_signature: Vec<u8>,
+}
+impl StoredNativeEvidence {
+    pub(super) fn from_public(value: &layerx_paxeer_client::state_proof::NativeEvidence) -> Self {
+        Self {
+            request_anchor: value.request_anchor,
+            inclusion_checkpoint: value.inclusion_checkpoint,
+            network_id: value.network_id,
+            witness: value.witness.clone(),
+            recipient_signature: value.recipient_signature.clone(),
+        }
+    }
+    pub(super) fn public(&self) -> layerx_paxeer_client::state_proof::NativeEvidence {
+        layerx_paxeer_client::state_proof::NativeEvidence {
+            request_anchor: self.request_anchor,
+            inclusion_checkpoint: self.inclusion_checkpoint,
+            network_id: self.network_id,
+            witness: self.witness.clone(),
+            recipient_signature: self.recipient_signature.clone(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod native_persistence_tests {
+    use super::*;
+    use ed25519_dalek::{Signer as _, SigningKey};
+    use layerx_paxeer_client::state_proof::{NativeEvidence, StateWitness};
+
+    #[test]
+    fn stored_exit_preserves_native_witness_and_recipient_authority(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let document: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../layerx-paxeer-client/tests/vectors/native-state-proofs.json"
+        ))?;
+        let encoded = document["vectors"][7]["proof"]
+            .as_str()
+            .ok_or("proof")?
+            .strip_prefix("0x")
+            .ok_or("hex")?;
+        let bytes = (0..encoded.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&encoded[i..i + 2], 16))
+            .collect::<Result<Vec<_>, _>>()?;
+        let witness = StateWitness::decode(&bytes)?;
+        let mut evidence = ExitEvidence {
+            native: None,
+            account: witness.key[1..].try_into()?,
+            asset_id: {
+                let mut asset = [0; 32];
+                asset[0] = 1;
+                asset
+            },
+            finalised_balance: 100,
+            recipient: EvmAddress::new([9; 20]),
+            leaf_index: 0,
+            siblings: Vec::new(),
+            attestations: Vec::new(),
+        };
+        let mut seed = [0; 32];
+        seed[0] = 1;
+        let signing = SigningKey::from_bytes(&seed);
+        let mut message = b"LX:SETTLE:RECIPIENT:v1\0".to_vec();
+        message.extend_from_slice(&7_u32.to_be_bytes());
+        message.extend_from_slice(&evidence.account);
+        message.extend_from_slice(&evidence.asset_id);
+        message.extend_from_slice(&evidence.recipient.bytes());
+        message.extend_from_slice(&[3; 32]);
+        let signature = signing.sign(&message).to_bytes();
+        evidence.native = Some(NativeEvidence {
+            request_anchor: [3; 32],
+            inclusion_checkpoint: [4; 32],
+            network_id: 7,
+            witness: bytes,
+            recipient_signature: signature.to_vec(),
+        });
+        let stored = StoredEvidence::from(&evidence);
+        let bytes = serde_json::to_vec(&stored)?;
+        let restored: StoredEvidence = serde_json::from_slice(&bytes)?;
+        let restored = restored.public();
+        assert_eq!(restored, evidence);
+        let native = restored.native.as_ref().ok_or("native")?;
+        restored
+            .verify_native_balance(
+                &witness,
+                witness.root()?,
+                native.network_id,
+                native.request_anchor,
+                &signature,
+            )
+            .map_err(|e| format!("{e:?}"))?;
+        let mut altered = restored.clone();
+        altered.recipient = EvmAddress::new([8; 20]);
+        assert!(altered
+            .verify_native_balance(
+                &witness,
+                witness.root()?,
+                native.network_id,
+                native.request_anchor,
+                &signature
+            )
+            .is_err());
+        Ok(())
     }
 }

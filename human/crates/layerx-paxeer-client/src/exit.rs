@@ -85,6 +85,7 @@ pub struct GuarantorAttestation {
 /// Published checkpoint evidence proving one account balance for the exit.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExitEvidence {
+    pub native: Option<crate::state_proof::NativeEvidence>,
     pub account: [u8; 32],
     pub asset_id: [u8; 32],
     pub finalised_balance: u128,
@@ -356,8 +357,32 @@ impl EmergencyExit {
             &call_data(SELECTOR_NETWORK_ID, &[]),
             "networkId",
         )?;
-        let withdrawal_id = self.resolved_withdrawal_id(network_id, evidence, checkpoint)?;
-        let nullifier = self.resolved_nullifier(network_id, withdrawal_id, evidence, checkpoint)?;
+        let request_anchor = if let Some(native) = &evidence.native {
+            if native.network_id != network_id || native.inclusion_checkpoint != checkpoint {
+                return Err(ExitError::Refused(ExitRefusal::RecipientNotAuthorized));
+            }
+            let registry = self.address_view(
+                self.contract,
+                &call_data(SELECTOR_REGISTRY, &[]),
+                "registry",
+            )?;
+            if !self.bool_view(
+                registry,
+                &call_data(
+                    [0x10, 0xee, 0x2d, 0x39],
+                    &[native.request_anchor, native.inclusion_checkpoint],
+                ),
+                "isRecordedAncestor",
+            )? {
+                return Err(ExitError::Refused(ExitRefusal::RecipientNotAuthorized));
+            }
+            native.request_anchor
+        } else {
+            checkpoint
+        };
+        let withdrawal_id = self.resolved_withdrawal_id(network_id, evidence, request_anchor)?;
+        let nullifier =
+            self.resolved_nullifier(network_id, withdrawal_id, evidence, request_anchor)?;
         self.verify_standing(nullifier, withdrawal_id)?;
         self.verify_recorded_certificate(checkpoint, &evidence.attestations)?;
         let calldata = execute_exit_calldata(withdrawal_id, evidence, checkpoint, state_root);
@@ -629,6 +654,7 @@ fn validate_fields(evidence: &ExitEvidence) -> Result<(), ExitError> {
     Ok(())
 }
 
+#[derive(Clone, Copy)]
 struct NativeBalanceBinding<'a> {
     witness: &'a crate::state_proof::StateWitness,
     network_id: u32,
@@ -641,59 +667,33 @@ fn verify_balance_proof(
     state_root: [u8; 32],
     native: Option<NativeBalanceBinding<'_>>,
 ) -> Result<(), ExitError> {
-    if let Some(binding) = native {
-        validate_fields(evidence)?;
-        let refused = || ExitError::Refused(ExitRefusal::NativeBalanceNotProven);
-        let witness = binding.witness;
-        witness.verify(state_root).map_err(|_| refused())?;
-        if witness.module_id != 0
-            || witness.key.len() != 33
-            || witness.key[0] != 4
-            || witness.key[1..] != evidence.account
-            || witness.account_path.is_none()
-        {
-            return Err(refused());
-        }
-        let value = &witness.value;
-        let name_length = usize::from(u16::from_be_bytes(
-            value
-                .get(..2)
-                .ok_or_else(refused)?
+    if native.is_none() {
+        if let Some(value) = &evidence.native {
+            if evidence.leaf_index != 0 || !evidence.siblings.is_empty() {
+                return Err(ExitError::Refused(ExitRefusal::NativeBalanceNotProven));
+            }
+            let witness = value
+                .decoded(state_root)
+                .map_err(|_| ExitError::Refused(ExitRefusal::NativeBalanceNotProven))?;
+            let signature = value
+                .recipient_signature
+                .as_slice()
                 .try_into()
-                .map_err(|_| refused())?,
-        ));
-        if !(1..=512).contains(&name_length) || value.len() != 103 + name_length {
-            return Err(refused());
+                .map_err(|_| ExitError::Refused(ExitRefusal::RecipientNotAuthorized))?;
+            return verify_balance_proof(
+                evidence,
+                state_root,
+                Some(NativeBalanceBinding {
+                    witness: &witness,
+                    network_id: value.network_id,
+                    request_anchor: value.request_anchor,
+                    signature,
+                }),
+            );
         }
-        let at = 2 + name_length;
-        if value[at] != 1
-            || value[at + 49] != 1
-            || value[at + 66] > 1
-            || value[at + 67] > 1
-            || value[at + 100] > 1
-            || value[at + 17..at + 49] != evidence.asset_id
-            || value[at + 1..at + 17] != evidence.finalised_balance.to_be_bytes()
-        {
-            return Err(refused());
-        }
-        if value[at + 100] != 1 || binding.network_id == 0 || binding.request_anchor == [0; 32] {
-            return Err(ExitError::Refused(ExitRefusal::RecipientNotAuthorized));
-        }
-        let key: [u8; 32] = value[at + 68..at + 100].try_into().map_err(|_| refused())?;
-        let authority = ed25519_dalek::VerifyingKey::from_bytes(&key)
-            .map_err(|_| ExitError::Refused(ExitRefusal::RecipientNotAuthorized))?;
-        let mut message = b"LX:SETTLE:RECIPIENT:v1\0".to_vec();
-        message.extend_from_slice(&binding.network_id.to_be_bytes());
-        message.extend_from_slice(&evidence.account);
-        message.extend_from_slice(&evidence.asset_id);
-        message.extend_from_slice(&evidence.recipient.bytes());
-        message.extend_from_slice(&binding.request_anchor);
-        return authority
-            .verify_strict(
-                &message,
-                &ed25519_dalek::Signature::from_bytes(binding.signature),
-            )
-            .map_err(|_| ExitError::Refused(ExitRefusal::RecipientNotAuthorized));
+    }
+    if let Some(binding) = native {
+        return verify_native_binding(evidence, state_root, binding);
     }
 
     let depth = evidence.siblings.len();
@@ -725,6 +725,65 @@ fn verify_balance_proof(
             state_root,
         }))
     }
+}
+
+fn verify_native_binding(
+    evidence: &ExitEvidence,
+    state_root: [u8; 32],
+    binding: NativeBalanceBinding<'_>,
+) -> Result<(), ExitError> {
+    validate_fields(evidence)?;
+    let refused = || ExitError::Refused(ExitRefusal::NativeBalanceNotProven);
+    let witness = binding.witness;
+    witness.verify(state_root).map_err(|_| refused())?;
+    if witness.module_id != 0
+        || witness.key.len() != 33
+        || witness.key[0] != 4
+        || witness.key[1..] != evidence.account
+        || witness.account_path.is_none()
+    {
+        return Err(refused());
+    }
+    let value = &witness.value;
+    let name_length = usize::from(u16::from_be_bytes(
+        value
+            .get(..2)
+            .ok_or_else(refused)?
+            .try_into()
+            .map_err(|_| refused())?,
+    ));
+    if !(1..=512).contains(&name_length) || value.len() != 103 + name_length {
+        return Err(refused());
+    }
+    let at = 2 + name_length;
+    if value[at] != 1
+        || value[at + 49] != 1
+        || value[at + 66] > 1
+        || value[at + 67] > 1
+        || value[at + 100] > 1
+        || value[at + 17..at + 49] != evidence.asset_id
+        || value[at + 1..at + 17] != evidence.finalised_balance.to_be_bytes()
+    {
+        return Err(refused());
+    }
+    if value[at + 100] != 1 || binding.network_id == 0 || binding.request_anchor == [0; 32] {
+        return Err(ExitError::Refused(ExitRefusal::RecipientNotAuthorized));
+    }
+    let key: [u8; 32] = value[at + 68..at + 100].try_into().map_err(|_| refused())?;
+    let authority = ed25519_dalek::VerifyingKey::from_bytes(&key)
+        .map_err(|_| ExitError::Refused(ExitRefusal::RecipientNotAuthorized))?;
+    let mut message = b"LX:SETTLE:RECIPIENT:v1\0".to_vec();
+    message.extend_from_slice(&binding.network_id.to_be_bytes());
+    message.extend_from_slice(&evidence.account);
+    message.extend_from_slice(&evidence.asset_id);
+    message.extend_from_slice(&evidence.recipient.bytes());
+    message.extend_from_slice(&binding.request_anchor);
+    authority
+        .verify_strict(
+            &message,
+            &ed25519_dalek::Signature::from_bytes(binding.signature),
+        )
+        .map_err(|_| ExitError::Refused(ExitRefusal::RecipientNotAuthorized))
 }
 
 fn proof_root(leaf: [u8; 32], leaf_index: u64, siblings: &[[u8; 32]]) -> [u8; 32] {
@@ -834,6 +893,28 @@ fn execute_exit_calldata(
     checkpoint: [u8; 32],
     state_root: [u8; 32],
 ) -> Vec<u8> {
+    if let Some(native) = &evidence.native {
+        let witness = abi_bytes(&native.witness);
+        let signature = abi_bytes(&native.recipient_signature);
+        let mut words = claim_words(withdrawal_id, evidence, native.request_anchor).to_vec();
+        words.extend_from_slice(&[
+            native.inclusion_checkpoint,
+            state_root,
+            usize_word(11 * WORD),
+            usize_word(11 * WORD + witness.len()),
+            usize_word(11 * WORD + witness.len() + signature.len()),
+        ]);
+        let mut out = call_data([0x26, 0x13, 0x09, 0x2b], &words);
+        out.extend_from_slice(&witness);
+        out.extend_from_slice(&signature);
+        out.extend_from_slice(&usize_word(evidence.attestations.len()));
+        for attestation in &evidence.attestations {
+            for word in attestation_words(attestation) {
+                out.extend_from_slice(&word);
+            }
+        }
+        return out;
+    }
     let mut words: Vec<[u8; 32]> = Vec::new();
     words.extend_from_slice(&claim_words(withdrawal_id, evidence, checkpoint));
     words.push(state_root);
@@ -987,6 +1068,13 @@ impl ExitEvidence {
         protocol_version: u16,
     ) -> Result<Vec<u8>, crate::EndpointFault> {
         use crate::deposit::evidence as e;
+        let native = entries.first().is_none_or(|entry| entry.1.native.is_some());
+        if entries
+            .iter()
+            .any(|entry| entry.1.native.is_some() != native)
+        {
+            return Err(e::invalid());
+        }
         let mut items = Vec::new();
         let mut previous = None;
         for (balance, proof) in entries {
@@ -996,7 +1084,8 @@ impl ExitEvidence {
                 return Err(e::invalid());
             }
             previous = Some(key);
-            if balance.leaf_index != proof.leaf_index
+            if balance.native != proof.native
+                || balance.leaf_index != proof.leaf_index
                 || balance.siblings != proof.siblings
                 || balance.attestations
                     != proof
@@ -1022,7 +1111,7 @@ impl ExitEvidence {
             );
             items.push(item);
         }
-        e::vector(e::BALANCES, &items)
+        e::vector(if native { e::BALANCES_V2 } else { e::BALANCES }, &items)
     }
 
     /// Fetches pre-settlement balance evidence; `EmergencyExit::construct_claim`
@@ -1044,7 +1133,8 @@ impl ExitEvidence {
         let decode = || {
             let mut previous = None;
             let mut found = None;
-            for item in e::items(e::BALANCES, &balances)? {
+            let native = balances.starts_with(e::BALANCES_V2);
+            for item in e::items(if native { e::BALANCES_V2 } else { e::BALANCES }, &balances)? {
                 let mut r = e::Reader(item);
                 let found_account = r.array()?;
                 let found_asset = r.array()?;
@@ -1061,8 +1151,12 @@ impl ExitEvidence {
                     protocol_version,
                 )
                 .map_err(|_| e::invalid())?;
+                if proof.native.is_some() != native {
+                    return Err(e::invalid());
+                }
                 e::bind(&proof, checkpoint, &registered)?;
                 let evidence = Self {
+                    native: proof.native.clone(),
                     account: found_account,
                     asset_id: found_asset,
                     finalised_balance: balance,
@@ -1108,4 +1202,11 @@ fn publication_attestation(value: &crate::WithdrawalAttestation) -> GuarantorAtt
         signature_s: value.signature_s,
         signature_v: value.signature_v,
     }
+}
+
+fn abi_bytes(value: &[u8]) -> Vec<u8> {
+    let mut out = usize_word(value.len()).to_vec();
+    out.extend_from_slice(value);
+    out.resize(WORD + value.len().div_ceil(WORD) * WORD, 0);
+    out
 }
