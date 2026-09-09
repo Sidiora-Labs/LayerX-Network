@@ -56,3 +56,36 @@ Once controllers are enabled in C, the kernel refuses new processes directly
 in C. Consequently `kubectl exec` into the registry container is refused by
 design. Readiness remains a `tcpSocket` probe; inspect cgroups and process
 identity from the host when diagnosing this boundary.
+
+The listener verifies the immutable builder environment at startup and retains
+that builder and its configured digest. Isolated workers receive it through the
+bounded parent-owned stdin pipe, then bind their own delegated build cgroup.
+Each build still copies and fully verifies its environment against the pinned
+digest before executing. Health workers replay durable registry evidence and
+check the real node without acquiring the build request serialization lock or
+updating the protocol cursor.
+
+A background monitor walks the complete rootfs metadata tree every 250 ms,
+including device, inode, mode, size, mtime and ctime with nanoseconds. Recursive
+nonblocking inotify watches additionally invalidate the fingerprint on writes,
+attribute changes, creation, removal, moves and queue overflow, including rapid
+same-size writes that retain identical filesystem timestamps. Watch installation
+and bounded event reads fail closed. This also
+detects nested writes, additions, removals and same-size replacements; it does
+not rely on an operator updating a manifest. A changed tree immediately clears
+readiness and triggers full digest verification off the request path. Readiness
+returns only if the bytes still match the startup pin and metadata stayed stable
+during verification. A failed or stalled monitor fails closed: readiness accepts
+only a successful check started less than two seconds ago. Detection is bounded
+by that freshness window; build-time byte verification remains independent.
+
+Run `tests/readiness.py` inside a disposable container with its own delegated
+cgroup, quota slots and registry state. It launches the real registry binary
+using an inherited real
+node, TLS and delegated quota/cgroup configuration and a temporary copy of the
+supplied rootfs. Supply the binary, rootfs, HTTPS URL, CA/client certificate/key,
+request token file, real registered program build route and source request body,
+and a process log path using its required arguments. It requires successful real
+build work overlapping health probes, enforces the existing one-second probe
+bound, mutates the private copy, and requires health and build refusal. It never
+changes the supplied rootfs or relaxes TLS or isolation requirements.
