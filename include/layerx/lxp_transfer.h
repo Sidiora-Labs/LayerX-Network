@@ -112,6 +112,9 @@ lxp_result lxp_ledger_bootstrap_balance(lx_account *account,
                                         const uint8_t asset_id[32],
                                         lxp_u128 balance,
                                         uint64_t next_sequence);
+lxp_result lxp_ledger_apply_bridge_credit(lx_account *reserve,
+                                           const uint8_t asset_id[32],
+                                           lxp_u128 amount);
 lxp_result lxp_ledger_restore_account_snapshot(lx_account *account,
                                                lxp_u128 balance,
                                                const uint8_t asset_id[32],

@@ -1376,7 +1376,11 @@ lxp_result lxp_ctx_bridge_credit(lxp_module_ctx *ctx,
     ctx->transfer_snapshots[0].next_sequence = reserve->next_sequence;
     (void)memcpy(ctx->transfer_snapshots[0].asset_id, reserve->asset_id, 32U);
     ctx->transfer_snapshot_count = 1U;
-    reserve->balance = next_reserve;
+    status = lxp_ledger_apply_bridge_credit(reserve, profile.bytes + 97U, amount);
+    if (status != LXP_OK) {
+        lxp_module_ctx_rollback(ctx);
+        return status;
+    }
 #ifdef LXP_TESTING
     if (ctx->bridge_credit_fail_stage == 2U) {
         lxp_module_ctx_rollback(ctx);
