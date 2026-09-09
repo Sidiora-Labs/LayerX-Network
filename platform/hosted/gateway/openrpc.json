@@ -24,7 +24,12 @@
           "type": "object"
         }
       },
+      "description": "Reads one account by 32-byte hexadecimal account id through the public core account read. Returns name, asset_id, balance, next_sequence, frozen, and authenticated node evidence. Invalid selectors are JSON-RPC -32602. Missing or unverifiable evidence is -32001; the public read rate limit is -32005.",
       "errors": [
+        {
+          "code": -32602,
+          "message": "Invalid params"
+        },
         {
           "code": -32001,
           "message": "Read unavailable"
@@ -53,7 +58,12 @@
           "type": "object"
         }
       },
+      "description": "Same core account read as lx_getAccount. Clients that need only the current units use balance and asset_id from that object.",
       "errors": [
+        {
+          "code": -32602,
+          "message": "Invalid params"
+        },
         {
           "code": -32001,
           "message": "Read unavailable"
@@ -82,7 +92,12 @@
           "type": "object"
         }
       },
+      "description": "Forwards DID account listing to GET /v1/dids/{did}/accounts. Native DID enumeration is unavailable on this source; the method returns JSON-RPC -32001 with the upstream refusal and never a fabricated balance list.",
       "errors": [
+        {
+          "code": -32602,
+          "message": "Invalid params"
+        },
         {
           "code": -32001,
           "message": "Read unavailable"
@@ -111,7 +126,12 @@
           "type": "object"
         }
       },
+      "description": "Reads the verified receipt for a 32-byte hexadecimal activity id. A successful result includes receipt bytes and result_code. Missing evidence is JSON-RPC -32001. An admission acknowledgement is never returned as success.",
       "errors": [
+        {
+          "code": -32602,
+          "message": "Invalid params"
+        },
         {
           "code": -32001,
           "message": "Read unavailable"
@@ -140,7 +160,12 @@
           "type": "object"
         }
       },
+      "description": "Same receipt read as lx_getReceipt. Activity status is the receipt result state (completed, refused, or the upstream pending/unavailable refusal), not a separate status document.",
       "errors": [
+        {
+          "code": -32602,
+          "message": "Invalid params"
+        },
         {
           "code": -32001,
           "message": "Read unavailable"
@@ -169,7 +194,12 @@
           "type": "object"
         }
       },
+      "description": "Reads a sequencer-signed batch header by nonzero decimal batch number. Leading zeros and the value 0 are invalid parameters.",
       "errors": [
+        {
+          "code": -32602,
+          "message": "Invalid params"
+        },
         {
           "code": -32001,
           "message": "Read unavailable"
@@ -198,7 +228,12 @@
           "type": "object"
         }
       },
+      "description": "Reads checkpoint evidence by 32-byte hexadecimal checkpoint id. The all-zero identifier is refused.",
       "errors": [
+        {
+          "code": -32602,
+          "message": "Invalid params"
+        },
         {
           "code": -32001,
           "message": "Read unavailable"
@@ -219,7 +254,12 @@
           "type": "object"
         }
       },
+      "description": "Handshake node information: protocol_version, network_id, chain_head_sequence, latest_sealed_batch, latest_finalised_checkpoint, authorised_sequencer_key, and advertised capabilities.",
       "errors": [
+        {
+          "code": -32602,
+          "message": "Invalid params"
+        },
         {
           "code": -32001,
           "message": "Read unavailable"
@@ -241,6 +281,16 @@
             "type": "string",
             "pattern": "^[0-9a-fA-F]{64}$"
           }
+        },
+        {
+          "name": "selector",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "identity"
+            ]
+          }
         }
       ],
       "result": {
@@ -249,7 +299,21 @@
           "type": "object"
         }
       },
-      "description": "Source account next_sequence from the authenticated node account read. The envelope uses the separate identity sequence."
+      "description": "One account_id argument reads account next_sequence. With [did, \"identity\"], reads identity.next_sequence from the authenticated native preparation snapshot for envelope signing. Account and identity sequences are independent.",
+      "errors": [
+        {
+          "code": -32602,
+          "message": "Invalid params"
+        },
+        {
+          "code": -32001,
+          "message": "Read unavailable"
+        },
+        {
+          "code": -32005,
+          "message": "Read unavailable"
+        }
+      ]
     },
     {
       "name": "lx_getProof",
@@ -291,7 +355,21 @@
           "type": "object"
         }
       },
-      "description": "Verified proof with canonical value and signed batch header. Account proofs export the exact verified native proof bytes without reconstruction."
+      "description": "Verified proof with canonical value and signed batch header. kind activity or receipt takes the activity id. kind account requires activity_id and account_id. Account proofs export the exact verified native proof bytes without reconstruction.",
+      "errors": [
+        {
+          "code": -32602,
+          "message": "Invalid params"
+        },
+        {
+          "code": -32001,
+          "message": "Read unavailable"
+        },
+        {
+          "code": -32005,
+          "message": "Read unavailable"
+        }
+      ]
     },
     {
       "name": "lx_sendActivity",
@@ -303,7 +381,8 @@
           "schema": {
             "type": "string",
             "pattern": "^([0-9a-fA-F]{2})+$",
-            "maxLength": 1048576
+            "maxLength": 1048576,
+            "description": "At most 1048576 hexadecimal characters encoding 524288 bytes. The full JSON request including envelope, parameters and batch overhead remains subject to the 8388608-byte HTTP request bound; ingress may impose a smaller body bound."
           }
         },
         {
@@ -325,7 +404,25 @@
           "type": "object"
         }
       },
-      "description": "Requires an activity:write gateway key and the existing route scope for Programs activities. Uses activity-ID outer deduplication and preserves signed protocol idempotency. Returns a verified receipt for executed, verified inclusion for batched, and an exact matching verified checkpoint header for finalised; returns pending when evidence is absent after the bounded wait. An admission acknowledgement never establishes execution."
+      "description": "Requires an activity:write gateway key and the existing route scope for Programs activities. Uses activity-ID outer deduplication and preserves signed protocol idempotency. Returns a verified receipt for executed, verified inclusion for batched, and an exact matching verified checkpoint header for finalised; returns JSON-RPC -32001 with state=pending and requested_commitment when evidence is absent after the bounded wait; no success result or commitment downgrade is returned. An admission acknowledgement never establishes execution.",
+      "errors": [
+        {
+          "code": -32602,
+          "message": "Invalid params"
+        },
+        {
+          "code": -32002,
+          "message": "Insufficient scope"
+        },
+        {
+          "code": -32001,
+          "message": "Submission unavailable"
+        },
+        {
+          "code": -32005,
+          "message": "Read unavailable"
+        }
+      ]
     },
     {
       "name": "lx_subscribe",
@@ -432,7 +529,8 @@
           "schema": {
             "type": "string",
             "pattern": "^([0-9a-fA-F]{2})+$",
-            "maxLength": 1048576
+            "maxLength": 1048576,
+            "description": "At most 1048576 hexadecimal characters encoding 524288 bytes. The full JSON request including envelope, parameters and batch overhead remains subject to the 8388608-byte HTTP request bound; ingress may impose a smaller body bound."
           }
         }
       ],
