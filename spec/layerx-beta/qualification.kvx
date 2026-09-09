@@ -7640,3 +7640,11 @@ symbol = "activity_type"
 observed = "The documentation still assigns ASSET_SEND to 0x0101. Current SEND is module 1 ordinal 5, or 0x00010005. Merged design text also presents the disputed issuance namespace and pause/unpause support without the current limits. These documentation and generated projection paths are outside ownership."
 assumption = "The documentation owner must retire the old table, retain Asset 9 reservation, correct issuance and qualification claims and regenerate projections. No generated file was hand-edited."
 severity = "blocker"
+
+[observation.3.7.47]
+task = "3.7"
+file = "cmd/layerxd/lxp_daemon_lni.c platform/hosted/core/src/public_reads.rs platform/hosted/gateway/src/rpc.rs"
+symbol = "send_did_accounts"
+observed = "Native DID enumeration exists as tag 7 kind 3 and tag 8 sorted canonical account values with proofs. The named hosted public-read and gateway files do not exist in this clone. No gateway ownership was duplicated."
+assumption = "Public RPC ownership must integrate committed Asset metadata, enumeration and canonical fee reads; method presence and decoders must not be reported as executed activities."
+severity = "blocker"
