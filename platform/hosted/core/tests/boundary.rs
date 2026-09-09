@@ -2519,7 +2519,7 @@ fn proof_and_sequence_reads_refuse_invalid_or_absent_real_node_evidence() {
         400,
         "invalid_proof_selector",
     );
-    assert_refusal(&core.get("/v1/dids/invalid/sequence"), 400, "invalid_did");
+    assert_refusal(&core.get("/v1/dids//sequence"), 400, "invalid_did");
 }
 
 #[test]
