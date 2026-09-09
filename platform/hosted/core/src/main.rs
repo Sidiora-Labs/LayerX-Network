@@ -1,4 +1,6 @@
+mod program_accounts;
 mod program_lifecycle;
+mod public_reads;
 
 use layerx_client::client::{Client, ClientConfig, ReconnectPolicy};
 use layerx_client::lni::handshake::{perform, Handshake, HandshakeConfig};
@@ -45,7 +47,6 @@ const RESET_TIMEOUT: Duration = Duration::from_secs(180);
 const MAX_CONNECTIONS: usize = 128;
 const LNI_FRAME_BYTES: usize = 1_212_416;
 const LNI_DEADLINE: Duration = Duration::from_secs(5);
-const RECEIPT_POLL: Duration = Duration::from_millis(200);
 const WIRE_VERSION: &str = "3";
 const RECEIPT_LOOKUP_REQUEST_TAG: u16 = 5;
 const RECEIPT_LOOKUP_RESPONSE_TAG: u16 = 6;
@@ -69,6 +70,7 @@ struct Config {
     network_id: u32,
     node: NodeEndpoint,
     node_token: Zeroizing<String>,
+    receipt_events_token: Option<Zeroizing<String>>,
     replica: NodeEndpoint,
     replica_token: Zeroizing<String>,
     admin_token: Zeroizing<String>,
@@ -279,6 +281,9 @@ fn config() -> Result<Config, String> {
         network_id,
         node: parse_node_url(&required("LAYERX_CORE_NODE_URL")?)?,
         node_token: read_secret("LAYERX_CORE_NODE_BEARER_TOKEN_FILE")?,
+        receipt_events_token: env::var_os("LAYERX_CORE_RECEIPT_EVENTS_TOKEN_FILE")
+            .map(|_| read_secret("LAYERX_CORE_RECEIPT_EVENTS_TOKEN_FILE"))
+            .transpose()?,
         replica: parse_node_url(&required("LAYERX_CORE_REPLICA_URL")?)?,
         replica_token: read_secret("LAYERX_CORE_REPLICA_BEARER_TOKEN_FILE")?,
         admin_token: read_secret("LAYERX_CORE_ADMIN_TOKEN_FILE")?,
@@ -481,7 +486,7 @@ fn lni_limits() -> Limits {
 
 fn handshake_config(config: &Config) -> HandshakeConfig {
     HandshakeConfig {
-        built_interface_version: Version::V1_4,
+        built_interface_version: Version::V1_5,
         expected_protocol_version: layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION,
         expected_network_id: config.network_id,
     }
@@ -503,8 +508,17 @@ fn connect_client(config: &Config) -> Result<Client, String> {
 }
 
 fn connect_raw(config: &Config) -> Result<(Uds, Handshake), String> {
+    connect_raw_with_deadline(config, LNI_DEADLINE)
+}
+
+fn connect_raw_with_deadline(
+    config: &Config,
+    deadline: Duration,
+) -> Result<(Uds, Handshake), String> {
     let gate = ConnectionGate::new(1);
-    let mut transport = Uds::connect(&config.lni_socket, &gate, lni_limits())
+    let mut limits = lni_limits();
+    limits.deadline = deadline.min(limits.deadline);
+    let mut transport = Uds::connect(&config.lni_socket, &gate, limits)
         .map_err(|error| format!("LNI connection failed: {error:?}"))?;
     let handshake = perform(&mut transport, &handshake_config(config), None)
         .map_err(|error| format!("LNI handshake failed: {error:?}"))?;
@@ -516,13 +530,36 @@ fn lookup_receipt_bytes(
     handshake: &Handshake,
     activity_id: [u8; 32],
     correlation_id: u64,
+    wait_publication: bool,
+) -> Result<Option<Vec<u8>>, String> {
+    let mut selector = Vec::with_capacity(37);
+    selector.push(1);
+    selector.extend_from_slice(&activity_id);
+    lookup_receipt_selector(
+        transport,
+        handshake,
+        selector,
+        correlation_id,
+        wait_publication,
+    )
+}
+
+fn lookup_receipt_selector(
+    transport: &mut Uds,
+    handshake: &Handshake,
+    mut selector: Vec<u8>,
+    correlation_id: u64,
+    wait_publication: bool,
 ) -> Result<Option<Vec<u8>>, String> {
     if !handshake.capabilities().contains(Capability::ReceiptLookup) {
         return Err("receipt_lookup capability is unavailable".to_owned());
     }
-    let mut selector = Vec::with_capacity(33);
-    selector.push(1);
-    selector.extend_from_slice(&activity_id);
+    if wait_publication {
+        if handshake.node().interface_version.minor < 5 {
+            return Err("receipt publication wait requires LNI minor 5".to_owned());
+        }
+        selector.push(1);
+    }
     let request = encode_envelope(Envelope {
         version: handshake.node().interface_version,
         message_tag: RECEIPT_LOOKUP_REQUEST_TAG,
@@ -539,7 +576,10 @@ fn lookup_receipt_bytes(
         .map_err(|error| format!("receipt lookup receive failed: {error:?}"))?;
     let response = decode_envelope(&response_bytes)
         .map_err(|error| format!("receipt lookup response is malformed: {error:?}"))?;
-    if response.correlation_id != correlation_id {
+    if response.version.major != handshake.node().interface_version.major
+        || !response.proof_material.is_empty()
+        || response.correlation_id != correlation_id
+    {
         return Err("receipt lookup response correlation mismatch".to_owned());
     }
     if response.message_tag == ERROR_RESPONSE_TAG {
@@ -605,25 +645,33 @@ fn await_receipt(
     activity_id: [u8; 32],
     deadline: Duration,
 ) -> Result<Option<ReceiptFacts>, String> {
-    let (mut transport, handshake) = connect_raw(config)?;
+    let (mut transport, handshake) = if deadline.is_zero() {
+        connect_raw(config)?
+    } else {
+        connect_raw_with_deadline(config, deadline)?
+    };
     let started = Instant::now();
-    let mut correlation = 1_u64;
-    loop {
-        if let Some(bytes) =
-            lookup_receipt_bytes(&mut transport, &handshake, activity_id, correlation)?
-        {
-            let facts = receipt_facts(&bytes, handshake.node().authorised_sequencer_key)?;
-            if facts.activity_id != activity_id {
-                return Err("receipt names another activity".to_owned());
-            }
-            return Ok(Some(facts));
-        }
-        if started.elapsed() >= deadline {
-            return Ok(None);
-        }
-        correlation += 1;
-        thread::sleep(RECEIPT_POLL);
+    let bytes = lookup_receipt_bytes(
+        &mut transport,
+        &handshake,
+        activity_id,
+        1,
+        !deadline.is_zero(),
+    )?;
+    if std::env::var_os("LAYERX_PAY_TIMING").is_some() {
+        eprintln!(
+            "pay_timing core_receipt_wait_us={}",
+            started.elapsed().as_micros()
+        );
     }
+    let Some(bytes) = bytes else {
+        return Ok(None);
+    };
+    let facts = receipt_facts(&bytes, handshake.node().authorised_sequencer_key)?;
+    if facts.activity_id != activity_id {
+        return Err("receipt names another activity".to_owned());
+    }
+    Ok(Some(facts))
 }
 
 fn receipt_result(facts: &ReceiptFacts) -> serde_json::Value {
@@ -649,7 +697,7 @@ fn signer_key(authority: &[u8]) -> Option<[u8; 32]> {
 fn submission_registry() -> Result<ModuleRegistry, String> {
     let send = ActivityType::new(ModuleId::Asset, layerx_platform_core::SEND_ACTIVITY)
         .map_err(|error| format!("send activity: {error:?}"))?;
-    let operations = [1, 2, 3, 7]
+    let operations = [1, 2, 3, 5, 6, 7]
         .map(|ordinal| ActivityType::new(ModuleId::Programs, ordinal))
         .into_iter()
         .collect::<Result<Vec<_>, _>>()
@@ -682,11 +730,15 @@ fn submit_activity(
         if activity.activity_type().ordinal() == 3 {
             NativeProgramCall::decode(activity.payload())
                 .map_err(|_| refusal(400, "invalid_program_call", None))?;
+        } else if matches!(activity.activity_type().ordinal(), 5 | 6) {
+            program_accounts::validate(activity.activity_type().ordinal(), activity.payload())
+                .map_err(|()| refusal(400, "invalid_program_account_operation", None))?;
         } else {
             program_lifecycle::validate(canonical, &registry, activity.activity_type().ordinal())
                 .map_err(|_| refusal(400, "invalid_program_lifecycle", None))?;
         }
     }
+    let submit_started = Instant::now();
     let signer = signer_key(activity.authority())
         .ok_or_else(|| refusal(400, "authority_unsupported", None))?;
     let mut client = connect_client(config).map_err(|error| {
@@ -708,6 +760,12 @@ fn submit_activity(
             _ => refusal(400, "invalid_activity", None),
         })?;
     drop(client);
+    if std::env::var_os("LAYERX_PAY_TIMING").is_some() {
+        eprintln!(
+            "pay_timing core_admission_us={}",
+            submit_started.elapsed().as_micros()
+        );
+    }
     let activity_id = match submission {
         Submission::Acknowledged(acknowledgement) => acknowledgement.activity_id(),
         Submission::Unknown(unknown) => unknown.activity_id(),
@@ -900,7 +958,7 @@ fn receipt_route(config: &Config, activity_hex: &str) -> Response {
         return refusal(400, "invalid_argument", None);
     }
     let lookup = connect_raw(config).and_then(|(mut transport, handshake)| {
-        lookup_receipt_bytes(&mut transport, &handshake, activity_id, 1)
+        lookup_receipt_bytes(&mut transport, &handshake, activity_id, 1, false)
     });
     match lookup {
         Ok(Some(bytes)) => success(&serde_json::json!({
@@ -1156,6 +1214,10 @@ fn unavailable_capability(path: &str) -> bool {
 }
 
 fn core_route(config: &Config, request: &Request) -> Response {
+    public_reads::route(config, request).unwrap_or_else(|| protocol_route(config, request))
+}
+
+fn protocol_route(config: &Config, request: &Request) -> Response {
     let method = request.method.as_str();
     let path = request.path.as_str();
     if let Some(key) = path.strip_prefix("/v1/programs/receipts/by-idempotency/") {
@@ -1693,6 +1755,7 @@ fn admin_route(config: &Config, request: &Request) -> Response {
 }
 
 fn handle_connection(config: &Arc<Config>, plane: Plane, tcp: TcpStream) -> Result<(), String> {
+    tcp.set_nodelay(true).map_err(|error| error.to_string())?;
     tcp.set_read_timeout(Some(IO_TIMEOUT))
         .map_err(|error| error.to_string())?;
     tcp.set_write_timeout(Some(IO_TIMEOUT))

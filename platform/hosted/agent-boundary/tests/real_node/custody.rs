@@ -219,11 +219,13 @@ fn verify_account_bundle(
     match bundle {
         VerifiedProofBundle::Account {
             canonical_bytes,
+            proof_material,
             activity_id,
             verified,
             signed_header,
         } => {
             assert_eq!(canonical_bytes, value.canonical_bytes());
+            assert_eq!(proof_material, value.proof_material());
             assert_eq!(activity_id, protocol.activity_id());
             assert_eq!(
                 verified.header().header().resulting_state_root(),
@@ -234,6 +236,7 @@ fn verify_account_bundle(
         }
         VerifiedProofBundle::MaintainedAccount {
             canonical_bytes,
+            proof_material,
             activity_id,
             activity_receipt,
             verified,
@@ -249,6 +252,7 @@ fn verify_account_bundle(
                 panic!("protocol receipt required");
             };
             assert_eq!(canonical_bytes, value.canonical_bytes());
+            assert_eq!(proof_material, value.proof_material());
             assert_eq!(activity_id, protocol.activity_id());
             assert_eq!(covered.activity_id(), protocol.activity_id());
             assert_eq!(

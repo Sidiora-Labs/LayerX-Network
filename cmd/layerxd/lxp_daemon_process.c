@@ -12,6 +12,7 @@
 #include "layerx/lxp_snapshot.h"
 #include "lxp_daemon_artifact.h"
 #include "lxp_daemon_batch_wal.h"
+#include "lxp_daemon_lni_internal.h"
 #include "lxp_daemon_finality_authority.h"
 
 #include <openssl/evp.h>
@@ -27,6 +28,13 @@
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
+
+static uint64_t pay_timing_us(void)
+{
+    struct timespec now;
+    return clock_gettime(CLOCK_MONOTONIC, &now) == 0 ?
+        (uint64_t)now.tv_sec * 1000000U + (uint64_t)now.tv_nsec / 1000U : 0U;
+}
 
 enum {
     NODE_EXECUTION_ARENA_BYTES = LXP_MAX_ACTIVITY_BYTES * 3U,
@@ -393,32 +401,72 @@ static lxp_result load_identities(const char *path,
     return status;
 }
 
+static bool asset_activity_supported(uint32_t activity_type)
+{
+    switch (activity_type) {
+    case LX_ASSET_REGISTER:
+    case LX_ASSET_ACCOUNT_OPEN:
+    case LX_ASSET_SEND:
+    case LX_ASSET_RECEIVE:
+    case LX_ASSET_GRANT_ISSUE:
+    case LX_ASSET_GRANT_REVOKE:
+    case LX_ASSET_MINT:
+    case LX_ASSET_BURN:
+        return true;
+    default:
+        return false;
+    }
+}
+
 static lxp_result collect_assets(lxp_daemon_process *process)
 {
-    size_t account_index;
-    process->asset_count = 0U;
-    for (account_index = 0U; account_index < process->accounts.count;
-         ++account_index) {
-        lx_account *account = &process->accounts.accounts[account_index];
-        size_t asset_index;
+    lxp_result status = lx_asset_committed_records(&process->kernel,
+        process->send_assets, LX_ASSET_REGISTRY_CAPACITY, &process->asset_count);
+    if (status != LXP_OK) return status;
+    if (process->asset_count == 0U) return LXP_ERR_ASSET_MISMATCH;
+    for (size_t i = 0U; i < process->accounts.count; ++i) {
+        const lx_account *account = &process->accounts.accounts[i];
+        size_t asset;
         if (!account->has_asset) continue;
-        for (asset_index = 0U; asset_index < process->asset_count;
-             ++asset_index)
-            if (lxp_ct_memcmp(process->assets[asset_index].asset_id,
-                              account->asset_id, 32U) == 0)
-                break;
-        if (asset_index != process->asset_count) continue;
-        if (process->asset_count == LX_ASSET_REGISTRY_CAPACITY)
-            return LXP_ERR_LENGTH_LIMIT;
-        (void)memcpy(process->assets[process->asset_count].asset_id,
-                     account->asset_id, 32U);
-        process->assets[process->asset_count].registered = true;
-        process->assets[process->asset_count].paused = false;
-        (void)memcpy(process->send_assets[process->asset_count].asset_id,
-                     account->asset_id, 32U);
-        ++process->asset_count;
+        for (asset = 0U; asset < process->asset_count; ++asset)
+            if (memcmp(account->asset_id, process->send_assets[asset].asset_id, 32U) == 0) break;
+        if (asset == process->asset_count) return LXP_ERR_ASSET_MISMATCH;
     }
-    return process->asset_count == 0U ? LXP_ERR_ASSET_MISMATCH : LXP_OK;
+    for (size_t asset = 0U; asset < process->asset_count; ++asset) {
+        const lx_asset_record *record = &process->send_assets[asset];
+        lxp_u128 circulating = {0U, 0U};
+        lxp_u128 initial = lxp_u128_is_zero(record->supply_cap) ?
+            (lxp_u128){UINT64_MAX, UINT64_MAX} : record->supply_cap;
+        uint8_t name[LX_ASSET_ISSUANCE_NAME_BYTES], id[32];
+        size_t issuance_count = 0U;
+        bool native_record = false;
+        status = lx_asset_issuance_name(record->asset_id, name, id);
+        if (status != LXP_OK) return status;
+        for (size_t i = 0U; i < process->kernel.module_kv_count; ++i) {
+            const lxp_module_kv_entry *entry = &process->kernel.module_kv[i];
+            if (entry->module_id == LXP_MODULE_ASSET && entry->key_length == 38U &&
+                memcmp(entry->key, "asset:", 6U) == 0 &&
+                memcmp(entry->key + 6U, record->asset_id, 32U) == 0) native_record = true;
+        }
+        for (size_t i = 0U; i < process->accounts.count; ++i) {
+            const lx_account *account = &process->accounts.accounts[i];
+            lxp_u128 issued;
+            if (!account->has_asset || memcmp(account->asset_id, record->asset_id, 32U) != 0) continue;
+            if (account->kind == LX_ACCOUNT_MODULE_VALUE && memcmp(account->id, id, 32U) == 0) {
+                if (account->name_length != sizeof(name) || memcmp(account->name, name, sizeof(name)) != 0 ||
+                    lx_account_validate_canonical(account) != LXP_OK ||
+                    lxp_u128_sub(initial, account->balance, &issued) != LXP_OK ||
+                    lxp_u128_cmp(issued, record->total_units) != 0) return LXP_FATAL_SUPPLY_MISMATCH;
+                ++issuance_count;
+            } else if (lxp_u128_add(circulating, account->balance, &circulating) != LXP_OK)
+                return LXP_FATAL_SUPPLY_MISMATCH;
+        }
+        if (issuance_count != (native_record ? 1U : 0U) ||
+            lxp_u128_cmp(circulating, record->total_units) != 0) return LXP_FATAL_SUPPLY_MISMATCH;
+        status = lx_asset_transfer_state(record, &process->assets[asset]);
+        if (status != LXP_OK) return status;
+    }
+    return LXP_OK;
 }
 
 static lxp_result occupancy_parameters(
@@ -914,12 +962,12 @@ static lxp_result replay_execute_activity(
     if (status == LXP_OK) status = lxp_activity_verify_signature(activity);
     if (status == LXP_OK &&
         lxp_activity_module_id(activity->activity_type) != LXP_MODULE_PROGRAMS &&
-        activity->activity_type != LX_ASSET_SEND &&
+        !asset_activity_supported(activity->activity_type) &&
         !(process->custody_credit_enabled && activity->activity_type == LXP_BRIDGE_CREDIT))
         status = LXP_ERR_UNKNOWN_ACTIVITY;
     if (status == LXP_OK &&
         (expected->module_id != lxp_activity_module_id(activity->activity_type) ||
-         (activity->activity_type == LX_ASSET_SEND &&
+         (asset_activity_supported(activity->activity_type) &&
           expected->module_version != lx_asset_module_iface()->abi_version) ||
          (activity->activity_type == LXP_BRIDGE_CREDIT && expected->module_version != 1U)))
         status = LXP_ERR_VERSION_UNSUPPORTED;
@@ -940,9 +988,11 @@ static lxp_result replay_execute_activity(
     if (status != LXP_OK) return status;
     (void)memset(&scope, 0, sizeof(scope));
     scope.module_mask = UINT64_C(1) << lxp_activity_module_id(activity->activity_type);
-    scope.activity_ordinal_min = activity->activity_type == LX_ASSET_SEND ? 5U : 1U;
+    scope.activity_ordinal_min = asset_activity_supported(activity->activity_type) ?
+        lxp_activity_type_ordinal(activity->activity_type) : 1U;
     scope.activity_ordinal_max = activity->activity_type == LXP_BRIDGE_CREDIT ? 1U :
-        (activity->activity_type == LX_ASSET_SEND ? 5U : 10U);
+        (asset_activity_supported(activity->activity_type) ?
+         lxp_activity_type_ordinal(activity->activity_type) : 10U);
     scope.maximum_per_activity = (lxp_u128){UINT64_MAX, UINT64_MAX};
     scope.maximum_total = (lxp_u128){UINT64_MAX, UINT64_MAX};
     scope.maximum_per_period = (lxp_u128){UINT64_MAX, UINT64_MAX};
@@ -2022,6 +2072,8 @@ static lxp_result publish_canonical_batch(
         }
     }
     if (status == LXP_OK)
+        status = lxp_daemon_lni_receipts_committed();
+    if (status == LXP_OK)
         status = availability_prune(process, header.batch_number);
     if (status == LXP_OK) {
         process->owner.latest_sealed_timestamp = timestamp;
@@ -2081,7 +2133,7 @@ static lxp_result apply_canonical_activity(
     if (status == LXP_OK) status = lxp_activity_verify_signature(&activity);
     if (status == LXP_OK &&
         lxp_activity_module_id(activity.activity_type) != LXP_MODULE_PROGRAMS &&
-        activity.activity_type != LX_ASSET_SEND &&
+        !asset_activity_supported(activity.activity_type) &&
         !(process->custody_credit_enabled && activity.activity_type == LXP_BRIDGE_CREDIT))
         status = LXP_ERR_UNKNOWN_ACTIVITY;
     if (status == LXP_OK) status = current_time_ms(&timestamp);
@@ -2103,9 +2155,11 @@ static lxp_result apply_canonical_activity(
     if (status != LXP_OK) goto finish;
     (void)memset(&scope, 0, sizeof(scope));
     scope.module_mask = UINT64_C(1) << lxp_activity_module_id(activity.activity_type);
-    scope.activity_ordinal_min = activity.activity_type == LX_ASSET_SEND ? 5U : 1U;
+    scope.activity_ordinal_min = asset_activity_supported(activity.activity_type) ?
+        lxp_activity_type_ordinal(activity.activity_type) : 1U;
     scope.activity_ordinal_max = activity.activity_type == LXP_BRIDGE_CREDIT ? 1U :
-        (activity.activity_type == LX_ASSET_SEND ? 5U : 10U);
+        (asset_activity_supported(activity.activity_type) ?
+         lxp_activity_type_ordinal(activity.activity_type) : 10U);
     scope.maximum_per_activity = (lxp_u128){UINT64_MAX, UINT64_MAX};
     scope.maximum_total = (lxp_u128){UINT64_MAX, UINT64_MAX};
     scope.maximum_per_period = (lxp_u128){UINT64_MAX, UINT64_MAX};
@@ -2134,7 +2188,7 @@ static lxp_result apply_canonical_activity(
     execution.epoch = process->kernel.epoch;
     execution.global_sequence = global_sequence;
     execution.recorded_module_version = activity.activity_type == LXP_BRIDGE_CREDIT ?
-        1U : (activity.activity_type == LX_ASSET_SEND ?
+        1U : (asset_activity_supported(activity.activity_type) ?
         lx_asset_module_iface()->abi_version : LX_PROGRAMS_SANDBOX_DESTROY_ABI_VERSION);
     execution.recorded_fee_schedule_version = 0U;
     execution.parameter_version = process->parameter_version;
@@ -2333,6 +2387,7 @@ static lxp_result apply_canonical_batch(
     const lxp_daemon_activity *offered, size_t offered_count,
     size_t *consumed_count)
 {
+    uint64_t started_us = pay_timing_us(), prepared_us = 0U, committed_us = 0U, published_us = 0U;
     lxp_daemon_process *process = (lxp_daemon_process *)context;
     lxp_activity activities[LXP_DAEMON_MAX_BATCH_ACTIVITIES];
     lxp_kernel_execution executions[LXP_DAEMON_MAX_BATCH_ACTIVITIES];
@@ -2432,14 +2487,16 @@ static lxp_result apply_canonical_batch(
         (void)memset(&scopes[i], 0, sizeof(scopes[i]));
         if (status == LXP_OK &&
             lxp_activity_module_id(activities[i].activity_type) != LXP_MODULE_PROGRAMS &&
-            activities[i].activity_type != LX_ASSET_SEND &&
+            !asset_activity_supported(activities[i].activity_type) &&
             !(process->custody_credit_enabled && activities[i].activity_type == LXP_BRIDGE_CREDIT))
             status = LXP_ERR_UNKNOWN_ACTIVITY;
         if (status == LXP_OK)
             scopes[i].module_mask = UINT64_C(1) << lxp_activity_module_id(activities[i].activity_type);
-        scopes[i].activity_ordinal_min = activities[i].activity_type == LX_ASSET_SEND ? 5U : 1U;
+        scopes[i].activity_ordinal_min = asset_activity_supported(activities[i].activity_type) ?
+            lxp_activity_type_ordinal(activities[i].activity_type) : 1U;
         scopes[i].activity_ordinal_max = activities[i].activity_type == LXP_BRIDGE_CREDIT ? 1U :
-            (activities[i].activity_type == LX_ASSET_SEND ? 5U : 10U);
+            (asset_activity_supported(activities[i].activity_type) ?
+             lxp_activity_type_ordinal(activities[i].activity_type) : 10U);
         scopes[i].maximum_per_activity =
             (lxp_u128){UINT64_MAX, UINT64_MAX};
         scopes[i].maximum_total = (lxp_u128){UINT64_MAX, UINT64_MAX};
@@ -2466,7 +2523,7 @@ static lxp_result apply_canonical_batch(
         executions[i].epoch = process->kernel.epoch;
         executions[i].global_sequence = sequence;
         executions[i].recorded_module_version = activities[i].activity_type == LXP_BRIDGE_CREDIT ?
-            1U : (activities[i].activity_type == LX_ASSET_SEND ?
+            1U : (asset_activity_supported(activities[i].activity_type) ?
             lx_asset_module_iface()->abi_version : LX_PROGRAMS_SANDBOX_DESTROY_ABI_VERSION);
         executions[i].parameter_version = process->parameter_version;
         executions[i].signature_valid = true;
@@ -2532,11 +2589,13 @@ static lxp_result apply_canonical_batch(
         status = lxp_receipt_encode(
             &prepared_receipts[i], true, &process->execution_arena,
             &canonical_receipts[i]);
+    prepared_us = pay_timing_us();
     if (status == LXP_OK)
         status = commit_prepared_batch_wal(
             process, activities, canonical_activities, canonical_receipts,
             prepared_events, prepared_receipts, count, timestamp,
             prepared_batch, &wal_record);
+    committed_us = pay_timing_us();
     if (status == LXP_OK) live_committed = true;
     if (status == LXP_OK)
         status = availability_store_body(process, &process->prepared_availability_body);
@@ -2546,6 +2605,7 @@ static lxp_result apply_canonical_batch(
             prepared_receipts, count, prepared_events, count,
             activities[0].protocol_version, timestamp, true,
             lxp_kernel_prepared_batch_maintenance(prepared_batch), NULL);
+    published_us = pay_timing_us();
     if (status == LXP_OK)
         status = lxp_kernel_batch_boundary_read(
             &process->kernel, &live_boundary);
@@ -2575,6 +2635,11 @@ static lxp_result apply_canonical_batch(
     (void)lxp_arena_reset(&process->execution_arena, mark);
     if (pthread_mutex_unlock(&process->owner.mutex) != 0 && status == LXP_OK)
         status = LXP_FATAL_INVARIANT;
+    if (getenv("LAYERX_PAY_TIMING") != NULL)
+        (void)fprintf(stderr, "pay-native sequence=%llu prepare_us=%llu commit_us=%llu publication_us=%llu total_us=%llu result=%d\n",
+            (unsigned long long)first_global_sequence,
+            (unsigned long long)(prepared_us - started_us), (unsigned long long)(committed_us - prepared_us),
+            (unsigned long long)(published_us - committed_us), (unsigned long long)(pay_timing_us() - started_us), (int)status);
     return status;
 }
 
@@ -3358,11 +3423,7 @@ static lxp_result load_schedule(lxp_daemon_process *process)
     if (parameter_version == 0U || parameter_version > UINT16_MAX)
         return LXP_ERR_VERSION_UNSUPPORTED;
     process->parameter_version = parameter_version;
-    process->fees = (lxp_fee_params){
-        (uint16_t)parameter_version, {0U, 0U}, {0U, 0U}, {0U, 0U},
-        {0U, 0U}, {0U, 0U}, 10000U
-    };
-    return LXP_OK;
+    return lxp_fee_committed_schedule(&process->kernel, parameter_version, &process->fees);
 }
 
 static lxp_result path_empty_or_absent(const char *path)

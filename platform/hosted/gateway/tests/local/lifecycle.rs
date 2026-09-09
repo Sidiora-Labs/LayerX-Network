@@ -1,3 +1,4 @@
+mod funding;
 mod required;
 use required::Required;
 
@@ -379,7 +380,7 @@ fn start_local_gateway(
             local_secret(
                 &cluster.root,
                 "modules.json",
-                r#"{"modules":[{"module":9,"ordinals":[1,2,3,7]}]}"#,
+                &serde_json::json!({"schema_version":2,"assets":[{"asset":hex_encode(&cluster.asset),"currency":"NATIVE","decimals":0,"symbol":"LXR"}],"modules":[{"module":1,"ordinals":[5]},{"module":9,"ordinals":[1,2,3,5,6,7]}]}).to_string(),
             ),
         ),
     ]);
@@ -409,12 +410,16 @@ fn gateway_upstream_environment(
     let redis_password = &redis.password;
     BTreeMap::from([
         (
+            "LAYERX_GATEWAY_PUBLIC_CORE_URL",
+            format!("https://localhost:{}", boundary.core.port),
+        ),
+        (
             "LAYERX_GATEWAY_COMPONENT_URL",
             format!("https://localhost:{}", boundary.core.port),
         ),
         (
             "LAYERX_GATEWAY_COMPONENT_TOKEN_FILE",
-            local_secret(&cluster.root, "component-token", &token()),
+            local_secret(&cluster.root, "component-token", &cluster.program_token),
         ),
         (
             "LAYERX_GATEWAY_AUTHORITY_URL",
@@ -460,6 +465,15 @@ fn issue_local_key(
     gateway: &Gateway,
     identity: &LocalIdentity,
 ) -> serde_json::Value {
+    issue_local_scoped_key(certificates, gateway, identity, &["program:call"])
+}
+
+fn issue_local_scoped_key(
+    certificates: &Certificates,
+    gateway: &Gateway,
+    identity: &LocalIdentity,
+    scopes: &[&str],
+) -> serde_json::Value {
     let gateway_port = gateway.port;
     let session_token = identity.session.as_str();
     let signer = &identity.signer;
@@ -489,21 +503,21 @@ fn issue_local_key(
         &gateway_http,
         "/v1/keys",
         session_token,
-        &serde_json::json!({"signer_public_key":hex_encode(&SigningKey::from_bytes(&random32()).verifying_key().to_bytes()),"scopes":["program:call"],"quota_requests":1000,"quota_window_seconds":60}),
+        &serde_json::json!({"signer_public_key":hex_encode(&SigningKey::from_bytes(&random32()).verifying_key().to_bytes()),"scopes":scopes,"quota_requests":1000,"quota_window_seconds":60}),
         403,
     );
     let key = local_json(
         &gateway_http,
         "/v1/keys",
         session_token,
-        &serde_json::json!({"signer_public_key":signer,"scopes":["program:call"],"quota_requests":1000,"quota_window_seconds":60}),
+        &serde_json::json!({"signer_public_key":signer,"scopes":scopes,"quota_requests":1000,"quota_window_seconds":60}),
         201,
     );
     let replayed_key = local_json(
         &gateway_http,
         "/v1/keys",
         session_token,
-        &serde_json::json!({"signer_public_key":signer,"scopes":["program:call"],"quota_requests":1000,"quota_window_seconds":60}),
+        &serde_json::json!({"signer_public_key":signer,"scopes":scopes,"quota_requests":1000,"quota_window_seconds":60}),
         200,
     );
     assert!(
@@ -708,4 +722,607 @@ fn local_manifest(cluster: &Cluster) -> PathBuf {
         0o600,
     );
     path
+}
+
+#[test]
+fn local_gateway_rpc() {
+    let cluster = start_cluster(true);
+    let certificates = certificates(&cluster.root);
+    let boundary = start_boundary(&cluster, &certificates);
+    establish_receipt_head(&boundary, &cluster);
+    let identity = start_local_identity(&cluster, &certificates);
+    let authority = start_local_authority(&cluster, &certificates);
+    let redis = start_local_redis(&cluster, &certificates);
+    let gateway = start_local_gateway(
+        &cluster,
+        &certificates,
+        &boundary,
+        &identity,
+        &authority,
+        &redis,
+    );
+    let key = issue_local_scoped_key(
+        &certificates,
+        &gateway,
+        &identity,
+        &["activity:write", "program:call"],
+    );
+    let http = Http {
+        port: gateway.port,
+        ca: Certificate::from_der(&certificates.ca_der).required("CA"),
+        identity: None,
+    };
+    let authorization = format!(
+        "LayerX-Key {}:{}",
+        key["key"]["id"].as_str().required("key id"),
+        key["key"]["secret"].as_str().required("key secret")
+    );
+    let call = |method: &str, params: serde_json::Value, authenticated: bool| {
+        let mut headers = vec![("Content-Type", "application/json")];
+        if authenticated {
+            headers.push(("Authorization", authorization.as_str()));
+        }
+        let answer = http.request(
+            "POST",
+            "/rpc",
+            &headers,
+            &serde_json::to_vec(
+                &serde_json::json!({"jsonrpc":"2.0","id":7,"method":method,"params":params}),
+            )
+            .required("RPC"),
+        );
+        assert_eq!(answer.status, 200, "{}", answer.body);
+        let result = json(&answer);
+        assert_eq!(result["id"], 7);
+        result
+    };
+    assert_eq!(
+        call("lx_getNodeInfo", serde_json::json!([]), false)["result"]["network_id"],
+        NETWORK_ID
+    );
+    assert_unavailable_reads(&call);
+    let manifest = local_manifest(&cluster);
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(manifest).required("manifest")).required("manifest JSON");
+    let signed = fs::read(manifest[0]["signed_file"].as_str().required("signed path"))
+        .required("signed bytes");
+    let params = serde_json::json!([hex_encode(&signed), "executed"]);
+    assert_eq!(
+        call("lx_sendActivity", params.clone(), false)["error"]["code"],
+        -32002
+    );
+    let first = call("lx_sendActivity", params.clone(), true);
+    assert_eq!(first["result"]["commitment"], "executed", "{first}");
+    assert!(first["result"]["receipt"]
+        .as_str()
+        .is_some_and(|r| !r.is_empty()));
+    assert_eq!(
+        call("lx_sendActivity", params, true)["result"],
+        first["result"]
+    );
+    let batched = call(
+        "lx_sendActivity",
+        serde_json::json!([hex_encode(&signed), "batched"]),
+        true,
+    );
+    assert_eq!(batched["result"]["commitment"], "batched", "{batched}");
+    assert_eq!(
+        batched["result"]["batch_evidence"]["canonical_value"],
+        first["result"]["receipt"]
+    );
+    let finalised = call(
+        "lx_sendActivity",
+        serde_json::json!([hex_encode(&signed), "finalised"]),
+        true,
+    );
+    assert_eq!(finalised["result"]["state"], "pending", "{finalised}");
+    assert_eq!(finalised["result"]["commitment"], "executed");
+    assert_eq!(
+        call(
+            "lx_sendActivity",
+            serde_json::json!([hex_encode(&signed), "ack"]),
+            true
+        )["error"]["code"],
+        -32602
+    );
+}
+
+fn assert_unavailable_reads(call: &impl Fn(&str, serde_json::Value, bool) -> serde_json::Value) {
+    for (method, params) in [
+        ("lx_listAssets", serde_json::json!([])),
+        ("lx_getAsset", serde_json::json!(["ab".repeat(32)])),
+        ("lx_estimateFee", serde_json::json!(["abcd"])),
+        ("lx_getBalances", serde_json::json!(["did:layerx:alice"])),
+    ] {
+        assert_eq!(call(method, params, false)["error"]["code"], -32001);
+    }
+    assert_eq!(
+        call("lx_subscribe", serde_json::json!(["receipts"]), false)["error"]["code"],
+        -32004
+    );
+}
+
+fn rpc_account_sequence(http: &Http, source: &str, index: u64) -> u64 {
+    let sequence_request = serde_json::to_vec(&serde_json::json!({
+        "jsonrpc":"2.0", "id":index, "method":"lx_getSequence", "params":[source]
+    }))
+    .required("account sequence request");
+    let sequence_response = http.request(
+        "POST",
+        "/rpc",
+        &[("Content-Type", "application/json")],
+        &sequence_request,
+    );
+    assert_eq!(sequence_response.status, 200, "{}", sequence_response.body);
+    json(&sequence_response)["result"]["next_sequence"]
+        .as_str()
+        .required("account sequence")
+        .parse::<u64>()
+        .required("sequence integer")
+}
+
+#[test]
+fn local_gateway_successful_send_latency() {
+    let (cluster, funding) = funding::start();
+    let certificates = certificates(&cluster.root);
+    let boundary = start_boundary(&cluster, &certificates);
+    let identity = start_local_identity(&cluster, &certificates);
+    let authority = start_local_authority(&cluster, &certificates);
+    let redis = start_local_redis(&cluster, &certificates);
+    let gateway = start_local_gateway(
+        &cluster,
+        &certificates,
+        &boundary,
+        &identity,
+        &authority,
+        &redis,
+    );
+    let key = issue_local_scoped_key(&certificates, &gateway, &identity, &["activity:write"]);
+    let http = Http {
+        port: gateway.port,
+        ca: Certificate::from_der(&certificates.ca_der).required("CA"),
+        identity: None,
+    };
+    let authorization = format!(
+        "LayerX-Key {}:{}",
+        key["key"]["id"].as_str().required("key id"),
+        key["key"]["secret"].as_str().required("secret")
+    );
+    let source =
+        hex_encode(&layerx_platform_core::main_account(&cluster.treasury_did).required("source"));
+    let balance = boundary.core.get(&format!("/v1/accounts/{source}/balance"));
+    assert_eq!(balance.status, 200, "{}", balance.body);
+    assert_eq!(json(&balance)["result"]["balance"], "100000000000000");
+    println!(
+        "funded_send_sequences identity_next={} account_next={} balance={}",
+        account_sequence(&cluster.lni_socket, &cluster.treasury_did),
+        json(&balance)["result"]["next_sequence"],
+        json(&balance)["result"]["balance"]
+    );
+    let mut samples = Vec::new();
+    let mut last_signed = None;
+    for index in 0..20 {
+        let account_next = rpc_account_sequence(&http, &source, index);
+        let identity_next = account_sequence(&cluster.lni_socket, &cluster.treasury_did);
+        let signed = funding::send(
+            &cluster.treasury_seed,
+            identity_next,
+            &SendRequest {
+                network_id: NETWORK_ID,
+                source_did: cluster.treasury_did.clone(),
+                destination_did: funding.recipient_did.clone(),
+                asset: cluster.asset,
+                amount: 1,
+                account_sequence: account_next,
+                idempotency_key: random32(),
+                not_before_ms: now_ms() - 1000,
+                expires_at_ms: now_ms() + 60000,
+                fee_limit: 1_000_000_000_000,
+            },
+        )
+        .required("real funded SEND");
+        let request = serde_json::to_vec(
+            &serde_json::json!({"jsonrpc":"2.0","id":index,"method":"lx_sendActivity",
+            "params":[hex_encode(&signed.canonical),"executed"]}),
+        )
+        .required("RPC SEND");
+        let started = Instant::now();
+        let answer = http.request(
+            "POST",
+            "/rpc",
+            &[
+                ("Content-Type", "application/json"),
+                ("Authorization", authorization.as_str()),
+            ],
+            &request,
+        );
+        let elapsed = started.elapsed().as_micros();
+        assert_eq!(answer.status, 200, "{}", answer.body);
+        let result = json(&answer);
+        assert_eq!(result["result"]["commitment"], "executed", "{result}");
+        assert_eq!(result["result"]["result_code"], 0, "{result}");
+        assert_eq!(
+            result["result"]["activity_id"],
+            hex_encode(&signed.activity_id)
+        );
+        verify_funded_receipt(&result, &cluster, &signed);
+        println!("successful_send_sample index={index} elapsed_us={elapsed}");
+        samples.push(elapsed);
+        last_signed = Some(signed);
+    }
+    samples.sort_unstable();
+    println!("successful_send_submit_to_receipt_us samples=20 p50={} p99={} transport=gateway_https_json_rpc commitment=executed funding=verified_custody destination=funded_agent_main receipt_wait=commit_condition", samples[9], samples[19]);
+    print_payment_timings(&cluster);
+    assert_funded_commitments(
+        &http,
+        &authorization,
+        &last_signed.required("successful SEND"),
+    );
+}
+
+fn print_payment_timings(cluster: &Cluster) {
+    for file in [
+        "sequencer.stderr",
+        "boundary.stderr",
+        "layerx-gateway.stderr",
+    ] {
+        let lines = must(fs::read_to_string(cluster.root.join(file)), "timing log");
+        for line in lines
+            .lines()
+            .filter(|line| line.contains("pay_timing") || line.starts_with("pay-native "))
+        {
+            println!("{file} {line}");
+        }
+    }
+}
+
+fn verify_funded_receipt(
+    result: &serde_json::Value,
+    cluster: &Cluster,
+    signed: &layerx_platform_core::SignedSend,
+) {
+    let receipt =
+        layerx_platform_core::hex_decode(result["result"]["receipt"].as_str().required("receipt"))
+            .required("receipt hex");
+    let receipt =
+        layerx_proof::receipt::verify_sequencer_signature(&receipt, cluster.sequencer_key)
+            .required("receipt signature");
+    let receipt = receipt.protocol().required("protocol SEND");
+    assert_eq!(receipt.result_code(), 0);
+    assert_eq!(receipt.activity_id(), signed.activity_id);
+    println!(
+        "successful_send_meter canonical_bytes={} fee_charged={}",
+        signed.canonical.len(),
+        receipt.fee_charged()
+    );
+}
+
+fn assert_funded_commitments(
+    http: &Http,
+    authorization: &str,
+    signed: &layerx_platform_core::SignedSend,
+) {
+    for commitment in ["batched", "finalised"] {
+        let started = Instant::now();
+        let answer = http.request(
+            "POST",
+            "/rpc",
+            &[
+                ("Content-Type", "application/json"),
+                ("Authorization", authorization),
+            ],
+            &serde_json::to_vec(&serde_json::json!({
+                "jsonrpc":"2.0", "id":21, "method":"lx_sendActivity",
+                "params":[hex_encode(&signed.canonical), commitment]
+            }))
+            .required("commitment request"),
+        );
+        assert_eq!(answer.status, 200, "{}", answer.body);
+        let result = json(&answer);
+        assert_eq!(result["result"]["result_code"], 0, "{result}");
+        assert_eq!(
+            result["result"]["activity_id"],
+            hex_encode(&signed.activity_id)
+        );
+        if commitment == "batched" {
+            assert_eq!(result["result"]["commitment"], "batched", "{result}");
+            assert_eq!(
+                result["result"]["batch_evidence"]["canonical_value"],
+                result["result"]["receipt"]
+            );
+        } else {
+            assert_eq!(result["result"]["state"], "pending", "{result}");
+            assert_eq!(result["result"]["commitment"], "executed");
+            assert!(started.elapsed() < Duration::from_secs(10));
+        }
+        println!(
+            "successful_send_commitment requested={commitment} returned={} state={} elapsed_us={}",
+            result["result"]["commitment"],
+            result["result"]["state"],
+            started.elapsed().as_micros()
+        );
+    }
+}
+
+fn ws_connect(
+    certificates: &Certificates,
+    port: u16,
+    authorization: &str,
+) -> native_tls::TlsStream<std::net::TcpStream> {
+    let tcp = std::net::TcpStream::connect(("127.0.0.1", port)).required("WS TCP");
+    tcp.set_read_timeout(Some(Duration::from_secs(15)))
+        .required("WS timeout");
+    let connector = native_tls::TlsConnector::builder()
+        .add_root_certificate(Certificate::from_der(&certificates.ca_der).required("CA"))
+        .build()
+        .required("connector");
+    let mut stream = connector.connect("localhost", tcp).required("WS TLS");
+    write!(stream, "GET /rpc/ws HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nAuthorization: {authorization}\r\n\r\n").required("upgrade");
+    stream.flush().required("flush");
+    let mut response = Vec::new();
+    while !response.ends_with(b"\r\n\r\n") {
+        let mut byte = [0];
+        stream.read_exact(&mut byte).required("upgrade response");
+        response.push(byte[0]);
+        assert!(response.len() < 4096);
+    }
+    let response = String::from_utf8(response).required("HTTP UTF8");
+    assert!(response.starts_with("HTTP/1.1 101 "), "upgrade refused");
+    assert!(response.contains("Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo="));
+    stream
+}
+
+fn ws_send(stream: &mut impl Write, body: &serde_json::Value) {
+    let body = serde_json::to_vec(body).required("WS JSON");
+    let mut frame = vec![0x81];
+    if body.len() < 126 {
+        frame.push(128 | u8::try_from(body.len()).required("length"));
+    } else {
+        frame.push(254);
+        frame.extend_from_slice(&u16::try_from(body.len()).required("length").to_be_bytes());
+    }
+    let mask = [1, 2, 3, 4];
+    frame.extend_from_slice(&mask);
+    frame.extend(body.iter().enumerate().map(|(i, b)| b ^ mask[i % 4]));
+    stream.write_all(&frame).required("WS frame");
+    stream.flush().required("flush");
+}
+
+fn ws_receive(stream: &mut impl Read) -> serde_json::Value {
+    let mut header = [0; 2];
+    stream.read_exact(&mut header).required("WS header");
+    assert_eq!(header[0], 0x81, "expected text frame");
+    assert_eq!(header[1] & 128, 0);
+    let length = match header[1] {
+        126 => {
+            let mut n = [0; 2];
+            stream.read_exact(&mut n).required("length");
+            usize::from(u16::from_be_bytes(n))
+        }
+        127 => {
+            let mut n = [0; 8];
+            stream.read_exact(&mut n).required("length");
+            usize::try_from(u64::from_be_bytes(n)).required("length")
+        }
+        n => usize::from(n),
+    };
+    assert!(length <= 1024 * 1024);
+    let mut body = vec![0; length];
+    stream.read_exact(&mut body).required("WS body");
+    serde_json::from_slice(&body).required("WS JSON")
+}
+
+#[test]
+fn local_gateway_websocket_receipt_wake() {
+    let cluster = start_cluster(true);
+    let certificates = certificates(&cluster.root);
+    let boundary = start_boundary(&cluster, &certificates);
+    let identity = start_local_identity(&cluster, &certificates);
+    let authority = start_local_authority(&cluster, &certificates);
+    let redis = start_local_redis(&cluster, &certificates);
+    let gateway = start_local_gateway(
+        &cluster,
+        &certificates,
+        &boundary,
+        &identity,
+        &authority,
+        &redis,
+    );
+    let key = issue_local_scoped_key(
+        &certificates,
+        &gateway,
+        &identity,
+        &["receipt:read", "state:read"],
+    );
+    let authorization = format!(
+        "LayerX-Key {}:{}",
+        key["key"]["id"].as_str().required("key id"),
+        key["key"]["secret"].as_str().required("key secret")
+    );
+    let http = Http {
+        port: gateway.port,
+        ca: Certificate::from_der(&certificates.ca_der).required("CA"),
+        identity: None,
+    };
+    let upgrade = [
+        ("Upgrade", "websocket"),
+        ("Connection", "Upgrade"),
+        ("Sec-WebSocket-Version", "13"),
+        ("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ=="),
+    ];
+    assert_eq!(http.request("GET", "/rpc/ws", &upgrade, &[]).status, 401);
+    let mut stream = ws_connect(&certificates, gateway.port, &authorization);
+    for (id, params) in [
+        (1, serde_json::json!(["receipts"])),
+        (2, serde_json::json!(["checkpoints"])),
+    ] {
+        ws_send(
+            &mut stream,
+            &serde_json::json!({"jsonrpc":"2.0","id":id,"method":"lx_subscribe","params":params}),
+        );
+        assert_eq!(ws_receive(&mut stream)["result"], id.to_string());
+    }
+    let account = hex_encode(
+        &layerx_wire::hash::account_id_for_protocol(
+            &layerx_types::account::AccountId::parse("system:fees").required("account"),
+            PROTOCOL_VERSION,
+        )
+        .required("account id"),
+    );
+    ws_send(
+        &mut stream,
+        &serde_json::json!({"jsonrpc":"2.0","id":3,"method":"lx_subscribe","params":["account",account]}),
+    );
+    assert_eq!(ws_receive(&mut stream)["result"], "3");
+    establish_receipt_head(&boundary, &cluster);
+    let event = ws_receive(&mut stream);
+    assert_eq!(event["method"], "lx_subscription");
+    assert_eq!(event["params"]["subscription"], "1");
+    let activity = event["params"]["result"]["activity_id"]
+        .as_str()
+        .required("activity");
+    let read = boundary.core.get(&format!("/v1/receipts/{activity}"));
+    assert_eq!(read.status, 200);
+    assert_eq!(
+        event["params"]["result"]["receipt"],
+        json(&read)["result"]["receipt"]
+    );
+    let account_event = ws_receive(&mut stream);
+    assert_eq!(account_event["params"]["subscription"], "3");
+    assert_eq!(account_event["params"]["result"]["account_id"], account);
+    ws_send(
+        &mut stream,
+        &serde_json::json!({"jsonrpc":"2.0","id":3,"method":"lx_subscribe","params":["account", "00".repeat(32)]}),
+    );
+    assert_eq!(ws_receive(&mut stream)["error"]["code"], -32602);
+}
+
+#[test]
+fn local_gateway_committed_payment_reads() {
+    let (cluster, funding) = funding::start();
+    let certificates = certificates(&cluster.root);
+    let boundary = start_boundary(&cluster, &certificates);
+    let identity = start_local_identity(&cluster, &certificates);
+    let authority = start_local_authority(&cluster, &certificates);
+    let redis = start_local_redis(&cluster, &certificates);
+    let gateway = start_local_gateway(
+        &cluster,
+        &certificates,
+        &boundary,
+        &identity,
+        &authority,
+        &redis,
+    );
+    let http = Http {
+        port: gateway.port,
+        ca: Certificate::from_der(&certificates.ca_der).required("CA"),
+        identity: None,
+    };
+    let read = |method: &str, params: serde_json::Value| {
+        let request = serde_json::to_vec(
+            &serde_json::json!({"jsonrpc":"2.0","id":1,"method":method,"params":params}),
+        )
+        .required("read request");
+        let answer = http.request(
+            "POST",
+            "/rpc",
+            &[("Content-Type", "application/json")],
+            &request,
+        );
+        assert_eq!(answer.status, 200, "{}", answer.body);
+        json(&answer)
+    };
+    let balances = read("lx_getBalances", serde_json::json!([cluster.treasury_did]));
+    let accounts = balances["result"]["accounts"]
+        .as_array()
+        .required("committed accounts");
+    let source = layerx_platform_core::main_account(&cluster.treasury_did).required("source");
+    let account = accounts
+        .iter()
+        .find(|account| account["account_id"] == hex_encode(&source))
+        .required("funded main account");
+    assert_eq!(account["balance"], "100000000000000");
+    assert_eq!(account["asset_id"], hex_encode(&cluster.asset));
+    assert!(!account["proof_material"]
+        .as_str()
+        .required("native proof")
+        .is_empty());
+    let assets = read("lx_listAssets", serde_json::json!([]));
+    let assets = assets["result"]["assets"].as_array().required("assets");
+    assert_eq!(assets.len(), 1);
+    assert_eq!(assets[0]["asset_id"], hex_encode(&cluster.asset));
+    assert_eq!(assets[0]["symbol"], "TEST");
+    let detail = read(
+        "lx_getAsset",
+        serde_json::json!([hex_encode(&cluster.asset)]),
+    );
+    assert_eq!(detail["result"]["asset"], assets[0]);
+    assert_eq!(
+        detail["result"]["verification"],
+        "authenticated_committed_snapshot"
+    );
+    assert_committed_fee_reads(&cluster, &funding, &http, source, &read);
+}
+
+fn assert_committed_fee_reads(
+    cluster: &Cluster,
+    funding: &funding::Funding,
+    http: &Http,
+    source: [u8; 32],
+    read: &impl Fn(&str, serde_json::Value) -> serde_json::Value,
+) {
+    let signed = funding::send(
+        &cluster.treasury_seed,
+        account_sequence(&cluster.lni_socket, &cluster.treasury_did),
+        &SendRequest {
+            network_id: NETWORK_ID,
+            source_did: cluster.treasury_did.clone(),
+            destination_did: funding.recipient_did.clone(),
+            asset: cluster.asset,
+            amount: 1,
+            account_sequence: rpc_account_sequence(http, &hex_encode(&source), 2),
+            idempotency_key: random32(),
+            not_before_ms: now_ms() - 1000,
+            expires_at_ms: now_ms() + 60000,
+            fee_limit: 1_000_000_000_000,
+        },
+    )
+    .required("signed estimate activity");
+    let fee = read(
+        "lx_estimateFee",
+        serde_json::json!([hex_encode(&signed.canonical)]),
+    );
+    assert_eq!(
+        fee["result"]["fee"],
+        (signed.canonical.len() + 4).to_string()
+    );
+    assert_eq!(fee["result"]["canonical_bytes"], signed.canonical.len());
+    assert_eq!(
+        fee["result"]["canonical_schedule"]
+            .as_str()
+            .required("schedule")
+            .len(),
+        430
+    );
+    let program = signed_program_call(&cluster.treasury_seed, &cluster.treasury_did, 1, random32());
+    assert_eq!(
+        read("lx_estimateFee", serde_json::json!([hex_encode(&program)]))["error"]["code"],
+        -32001
+    );
+    assert_eq!(
+        read("lx_getAsset", serde_json::json!(["63".repeat(32)]))["error"]["code"],
+        -32001
+    );
+    assert_eq!(
+        read("lx_getAsset", serde_json::json!(["00".repeat(32)]))["error"]["code"],
+        -32602
+    );
+    assert_eq!(
+        read("lx_estimateFee", serde_json::json!(["abcd"]))["error"]["code"],
+        -32602
+    );
+    assert_eq!(
+        read("lx_getBalances", serde_json::json!(["bad/path"]))["error"]["code"],
+        -32602
+    );
 }

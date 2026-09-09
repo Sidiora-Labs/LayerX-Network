@@ -1,5 +1,9 @@
 mod native_call;
 mod program_lifecycle;
+mod public_reads;
+mod rpc;
+mod ws;
+mod ws_wire;
 
 use layerx_crypto::ed25519;
 use layerx_platform_gateway::http::{
@@ -46,6 +50,7 @@ struct Config {
     tls: Arc<ServerConfig>,
     client: Client,
     component: Endpoint,
+    public_core: Option<Endpoint>,
     component_token: Zeroizing<String>,
     authority: Endpoint,
     authority_token: Zeroizing<String>,
@@ -552,6 +557,7 @@ fn config() -> Result<Config, String> {
             &env::var("LAYERX_GATEWAY_COMPONENT_URL")
                 .map_err(|_| "gateway component URL is required")?,
         )?,
+        public_core: public_reads::configured_endpoint()?,
         component_token: read_secret("LAYERX_GATEWAY_COMPONENT_TOKEN_FILE")?,
         authority: Endpoint::parse(
             &env::var("LAYERX_GATEWAY_AUTHORITY_URL")
@@ -1520,6 +1526,7 @@ fn activity(
     record: &KeyRecord,
     trace_id: &str,
     program_call: bool,
+    rpc_submission: bool,
 ) -> OutgoingResponse {
     let lifecycle_ordinal = program_lifecycle::ordinal(&request.path);
     let program_mutation = program_call || lifecycle_ordinal.is_some();
@@ -1578,7 +1585,11 @@ fn activity(
     ]);
     let scope = digest(&[
         record.principal_digest.as_bytes(),
-        protocol_idempotency.as_bytes(),
+        if rpc_submission {
+            submitted_activity_id.as_bytes()
+        } else {
+            protocol_idempotency.as_bytes()
+        },
     ]);
     let operation = ActivityOperation {
         scope,
@@ -2358,6 +2369,9 @@ fn route(config: &Config, request: &IncomingRequest) -> OutgoingResponse {
             result
         };
     }
+    if let Some(result) = public_reads::route(config, request) {
+        return result;
+    }
     if request.method == "GET" && request.path == "/internal/v1/principal" {
         return authenticate_key(config, request).map_or_else(
             |refused| refused,
@@ -2419,11 +2433,13 @@ fn route(config: &Config, request: &IncomingRequest) -> OutgoingResponse {
         };
     }
     let result = match parsed {
-        ProductionRoute::ProgramCall => activity(config, request, &record, &trace_id, true),
+        ProductionRoute::ProgramCall => activity(config, request, &record, &trace_id, true, false),
         ProductionRoute::Activity
         | ProductionRoute::ProgramDeploy
         | ProductionRoute::ProgramUpgrade
-        | ProductionRoute::ProgramWindDown => activity(config, request, &record, &trace_id, false),
+        | ProductionRoute::ProgramWindDown => {
+            activity(config, request, &record, &trace_id, false, false)
+        }
         ProductionRoute::ProgramSimulation => {
             program_simulation(config, request, &record, &trace_id)
         }
@@ -2450,6 +2466,7 @@ impl Drop for ConnectionGuard {
 }
 
 fn serve(config: &Arc<Config>, tcp: TcpStream) -> Result<(), String> {
+    tcp.set_nodelay(true).map_err(|error| error.to_string())?;
     tcp.set_read_timeout(Some(Duration::from_secs(10)))
         .map_err(|error| error.to_string())?;
     tcp.set_write_timeout(Some(Duration::from_secs(10)))
@@ -2460,6 +2477,9 @@ fn serve(config: &Arc<Config>, tcp: TcpStream) -> Result<(), String> {
     let Ok(request) = http::read_request(&mut stream, MAX_REQUEST) else {
         return http::write_response(&mut stream, &response(400, "invalid_http_request", None));
     };
+    if request.path == "/rpc/ws" {
+        return ws::serve(config, &request, &mut stream);
+    }
     http::write_response(&mut stream, &route(config, &request))
 }
 

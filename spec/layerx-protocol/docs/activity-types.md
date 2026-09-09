@@ -1,10 +1,11 @@
 # LayerX v1 Activity Type Catalogue
 
-Normative. This document defines the **complete** activity vocabulary for
-protocol version 1. An implementation that accepts a type not listed here, or
-assigns different semantics to a listed code, is not a LayerX v1 implementation.
-Key words MUST, MUST NOT, SHALL, SHOULD and MAY follow RFC 2119. The
-implementation language is C17; paths are repository-root-relative.
+The native activity type is a big-endian `u32`, `(module << 16) | ordinal`.
+The former byte-pair catalogue is retired: `0x0101` is not SEND.
+Native SEND is `0x00010005`. The current native Asset table is section 8.2;
+the remaining legacy envelope and module sketches below are historical design
+material, not wire definitions. Canonical native definitions live in
+`include/layerx/lxp_activity.h`, `include/layerx/lx_asset.h` and `spec.kvx`.
 
 ## 1. Scope decision locked for v1
 
@@ -58,16 +59,15 @@ an EVM address; `str<=N` is length-prefixed NFC UTF-8 of at most N bytes;
 
 ## 3. Type codes and module registry
 
-An activity type is a `uint16_t`: the high byte is the owning module, the low
-byte is the ordinal within that module.
+An activity type is a `uint32_t`: the high 16 bits are the owning module,
+the low 16 bits are its ordinal. Zero module and zero ordinal are invalid.
 
 ```c
-#define LX_TYPE(mod, ord) ((uint16_t)(((mod) << 8) | (ord)))
+#define LX_TYPE(mod, ord) (((uint32_t)(mod) << 16) | (uint16_t)(ord))
 ```
 
-Code `0x0000` is permanently invalid and ordinal `0x00` is reserved in every
-module. Codes are stable forever: a retired type is marked deprecated and its
-code MUST NOT be reused.
+The module assignments below are historical; native module identifiers are
+specified by `include/layerx/lxp_module.h`.
 
 | Module | ID | Owner directory | Financial authority |
 |---|---|---|---|
@@ -213,20 +213,36 @@ Paxeer-side settlement only; it grants no LayerX authority.
 
 ### 8.2 asset — module `0x01` (402LXP)
 
-| Code | Name | Payload | Authority | Module result codes | 402LXP transfers |
-|---|---|---|---|---|---|
-| `0x0101` | `ASSET_SEND` | `from acct`, `to acct`, `asset h256`, `amount u128`, `expires_at_ms u64`, `context_hash h256`, `conditions opt<blob<=256>>` | `A0`, `A1`, `A2` or `A4` controlling `from` | `LX_ERR_SELF_TRANSFER(0x8101)`, `LX_ERR_ASSET_MISMATCH(0x8102)`, `LX_ERR_CONDITION_UNMET(0x8103)`, `LX_ERR_FROZEN(0x8104)` | `from -> to : amount` |
-| `0x0102` | `ASSET_RECEIVE` | `from acct`, `to acct`, `asset h256`, `amount u128`, `grant_id h256`, `payer_grant blob<=512`, `context_hash h256` | `A3` only | `LX_ERR_GRANT_UNKNOWN(0x8105)`, `LX_ERR_GRANT_EXPIRED(0x8106)`, `LX_ERR_GRANT_EXHAUSTED(0x8107)`, `LX_ERR_GRANT_RECIPIENT(0x8108)`, `LX_ERR_GRANT_PURPOSE(0x8109)` | `from -> to : amount` |
-| `0x0103` | `ASSET_GRANT` | `recipient did`, `asset h256`, `max_amount u128`, `total_cap u128`, `window_ms u64`, `window_cap u128`, `expires_at_ms u64`, `purpose_hash h256`, `invoice_id opt<h256>` | `A0` or `A1` of the payer | `LX_ERR_EXPIRY_RANGE`, `LX_ERR_ASSET_UNKNOWN` | none |
-| `0x0104` | `ASSET_REVOKE_GRANT` | `grant_id h256` | `A0` or `A1` of the payer | `LX_ERR_OBJECT_NOT_FOUND` | none |
-| `0x0105` | `ASSET_SEND_SET` | `legs vec<{from acct, to acct, asset h256, amount u128},64>`, `context_hash h256` | one authority covering every debit leg | `LX_ERR_SET_TOO_LARGE(0x810A)`, `LX_ERR_SET_UNBALANCED(0x810B)` | every leg, atomically |
+All integers are big-endian. Actor means the envelope signer DID. Payloads
+are decoded strictly: unsupported versions, truncation and trailing bytes
+are refused; these types do not accept opaque event payloads.
 
-`0x0102` MUST NOT debit an account without a payer grant naming the recipient,
-asset, caps, expiry, purpose and revocation sequence. `0x0104` takes effect at
-its own `global_sequence`; a `RECEIVE` sequenced earlier is unaffected. `0x0105`
-is the only public multi-leg form and executes through
-`lxp_apply_transfer_set()` exactly like a module-constructed set, with per-asset
-`sum(debits) == sum(credits)` enforced before commit.
+| Native type | Ordinal | Name | Payload and transition |
+|---|---|---|---|
+| `0x00010001` | 1 | REGISTER | `u16=1`, asset id32, salt32, symbol length u8 and 1–16 ASCII bytes, name length u8 and 1–32 UTF-8 bytes, decimals u8 ≤38, cap u128, issuer kind u8, custody reference length u8 and ≤128 bytes. Creates registry metadata; issuer is actor. |
+| `0x00010002` | 2 | PAUSE | Legacy direct registry helper; authenticated daemon activity excluded. |
+| `0x00010003` | 3 | UNPAUSE | Legacy direct registry helper; authenticated daemon activity excluded. |
+| `0x00010004` | 4 | ACCOUNT_OPEN | `u16=1`, asset id32. Opens the actor's per-asset account for a registered, unpaused asset; duplicates refused. |
+| `0x00010005` | 5 | SEND | Existing canonical `lxp_send` encoding. Transfers between accounts of the registered asset with all existing authority, sequence and balance checks. |
+| `0x00010006` | 6 | RECEIVE | Existing canonical `lxp_receive` encoding. Executes a payer-grant draw with recipient, asset, caps, expiry, purpose and revocation checks. |
+| `0x00010007` | 7 | GRANT_ISSUE | Existing canonical payer-grant encoding. Verifies payer authority and persists the grant in module KV. |
+| `0x00010008` | 8 | GRANT_REVOKE | `u16=1`, grant id32, revocation sequence u64. Persists revocation at the executing global sequence. |
+| `0x00010009` | 9 | RESERVED | No payload or execution defined here; settlement owner reserves WITHDRAW. |
+| `0x0001000a` | 10 | MINT | `u16=1`, asset id32, destination account32, amount u128. Issuer only; positive amount; checked supply and cap; existing account of the asset required. |
+| `0x0001000b` | 11 | BURN | `u16=1`, asset id32, source account32, amount u128. Source owner only; positive amount and sufficient balance. |
+
+Native issuer kind 1 requires
+`asset_id32 = SHA-256("LX:ASSET:v1" || issuer_did_id32 || salt32)` and an empty
+custody reference. Paxeer custody kind 2 retains its existing asset id.
+Cap zero means uncapped. Salt is explicit and persisted, never synthesized.
+
+Public per-asset names are `agent:<DID>:asset:<lowercase hex64 asset_id>`;
+`agent:<DID>:main` remains the native-asset account. Native issuance accounts
+use `module:asset:value:<hex64 account_id>`. Mint and burn change supply and
+balances through conserved kernel transfer sets; neither writes balances
+directly. All new activities bind the identity sequence and use the canonical
+fee schedule. Supply receipt binding and named fee qualification must be
+established separately from payload decoding and transition support.
 
 ### 8.3 escrow — module `0x02`
 

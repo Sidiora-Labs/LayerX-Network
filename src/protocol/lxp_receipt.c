@@ -9,6 +9,7 @@
 
 enum {
     LXP_RECEIPT_STRUCTURE_TAG = 0x5201,
+    LXP_RECEIPT_SUPPLY_STRUCTURE_TAG = 0x5202,
     LXP_PROGRAM_OUTCOME_TAG_V1 = 0x50524731,
     LXP_PROGRAM_OUTCOME_TAG_V2 = 0x50524732,
     LXP_PROGRAM_OUTCOME_TAG_V3 = 0x50524733,
@@ -525,6 +526,41 @@ static lxp_result program_outcome_decode(lxp_codec_reader *reader,
     return lxp_program_outcome_validate(outcome);
 }
 
+lxp_result lxp_receipt_validate_supply(const lxp_receipt *receipt)
+{
+    lxp_u128 expected;
+    lxp_result status;
+    if (receipt == NULL) return LXP_ERR_NON_CANONICAL;
+    if (receipt->supply_binding_version == 0U)
+        return lxp_u128_is_zero(receipt->total_units_before) &&
+            lxp_u128_is_zero(receipt->total_units_after) ? LXP_OK : LXP_ERR_NON_CANONICAL;
+    if (receipt->supply_binding_version != 1U) return LXP_ERR_VERSION_UNSUPPORTED;
+    if (receipt->module_id != LXP_MODULE_ASSET || receipt->result_code != LXP_OK ||
+        lxp_ct_is_zero(receipt->asset, 32U)) return LXP_ERR_NON_CANONICAL;
+    switch (receipt->operation) {
+    case 10U:
+        if (lxp_u128_is_zero(receipt->amount)) return LXP_ERR_NON_CANONICAL;
+        status = lxp_u128_add(receipt->total_units_before, receipt->amount, &expected);
+        break;
+    case 11U:
+        if (lxp_u128_is_zero(receipt->amount)) return LXP_ERR_NON_CANONICAL;
+        status = lxp_u128_sub(receipt->total_units_before, receipt->amount, &expected);
+        break;
+    case 1U:
+        if (!lxp_u128_is_zero(receipt->total_units_before)) return LXP_FATAL_SUPPLY_MISMATCH;
+        expected = (lxp_u128){0U, 0U};
+        status = LXP_OK;
+        break;
+    case 4U: case 5U: case 6U: case 7U: case 8U:
+        expected = receipt->total_units_before;
+        status = LXP_OK;
+        break;
+    default: return LXP_ERR_NON_CANONICAL;
+    }
+    return status == LXP_OK && lxp_u128_cmp(expected, receipt->total_units_after) == 0 ?
+        LXP_OK : LXP_FATAL_SUPPLY_MISMATCH;
+}
+
 lxp_result lxp_receipt_encode(const lxp_receipt *receipt,
                               bool include_signature, lxp_arena *arena,
                               lxp_byte_span *encoded)
@@ -558,10 +594,14 @@ lxp_result lxp_receipt_encode(const lxp_receipt *receipt,
             return LXP_FATAL_INVARIANT;
         }
     }
+    status = lxp_receipt_validate_supply(receipt);
+    if (status != LXP_OK) return status;
     status = lxp_codec_writer_init(&writer, arena, LXP_MAX_ACTIVITY_BYTES);
     if (status == LXP_OK)
         status = lxp_codec_write_struct_header_version(
-            &writer, LXP_RECEIPT_STRUCTURE_TAG, receipt->protocol_version);
+            &writer, receipt->supply_binding_version == 1U ?
+                LXP_RECEIPT_SUPPLY_STRUCTURE_TAG : LXP_RECEIPT_STRUCTURE_TAG,
+            receipt->protocol_version);
     if (status == LXP_OK)
         status = lxp_codec_write_u16(&writer, receipt->protocol_version);
     if (status == LXP_OK)
@@ -624,6 +664,10 @@ lxp_result lxp_receipt_encode(const lxp_receipt *receipt,
                                        32U, 32U);
     if (status == LXP_OK)
         status = lxp_codec_write_u64(&writer, receipt->timestamp);
+    if (status == LXP_OK && receipt->supply_binding_version == 1U)
+        status = lxp_codec_write_u128(&writer, receipt->total_units_before);
+    if (status == LXP_OK && receipt->supply_binding_version == 1U)
+        status = lxp_codec_write_u128(&writer, receipt->total_units_after);
     if (status == LXP_OK && receipt->program_outcome.present)
         status = program_outcome_encode(&writer, &receipt->program_outcome);
     if (status == LXP_OK)
@@ -652,10 +696,14 @@ lxp_result lxp_receipt_decode(const uint8_t *bytes, size_t length,
         return LXP_ERR_NON_CANONICAL;
     (void)memset(receipt, 0, sizeof(*receipt));
     (void)memset(&decoded, 0, sizeof(decoded));
+    if (length < 4U) return LXP_ERR_NON_CANONICAL;
+    decoded.supply_binding_version = bytes[2] == 0x52U && bytes[3] == 0x02U ? 1U : 0U;
     status = lxp_codec_reader_init(&reader, bytes, length);
     if (status == LXP_OK)
         status = lxp_codec_read_struct_header_version(
-            &reader, LXP_RECEIPT_STRUCTURE_TAG, &envelope_version);
+            &reader, decoded.supply_binding_version == 1U ?
+                LXP_RECEIPT_SUPPLY_STRUCTURE_TAG : LXP_RECEIPT_STRUCTURE_TAG,
+            &envelope_version);
     if (status == LXP_OK)
         status = lxp_codec_read_u16(&reader, &decoded.protocol_version);
     if (status == LXP_OK &&
@@ -717,6 +765,11 @@ lxp_result lxp_receipt_decode(const uint8_t *bytes, size_t length,
         status = copy_exact(&reader, decoded.context_hash, 32U);
     if (status == LXP_OK)
         status = lxp_codec_read_u64(&reader, &decoded.timestamp);
+    if (status == LXP_OK && decoded.supply_binding_version == 1U)
+        status = lxp_codec_read_u128(&reader, &decoded.total_units_before);
+    if (status == LXP_OK && decoded.supply_binding_version == 1U)
+        status = lxp_codec_read_u128(&reader, &decoded.total_units_after);
+    if (status == LXP_OK) status = lxp_receipt_validate_supply(&decoded);
     if (status == LXP_OK && reader.length - reader.offset > 69U)
         status = program_outcome_decode(&reader, &decoded.program_outcome);
     if (status == LXP_OK)

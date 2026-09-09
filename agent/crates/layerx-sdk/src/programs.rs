@@ -15,7 +15,7 @@ use layerx_wire::hash::activity_id;
 pub const MAX_SIGNED_ACTIVITY_BYTES: usize = 1_048_576;
 
 #[path = "program_http.rs"]
-mod http;
+pub(crate) mod http;
 
 pub use crate::program_lifecycle::{
     programs_module_registry, verify_lifecycle_receipt, NativeProgramDeployRequest,

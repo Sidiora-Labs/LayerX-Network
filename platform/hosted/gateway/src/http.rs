@@ -160,6 +160,7 @@ impl Client {
         {
             match TcpStream::connect_timeout(&address, CONNECT_TIMEOUT) {
                 Ok(tcp) => {
+                    tcp.set_nodelay(true).map_err(|error| error.to_string())?;
                     tcp.set_read_timeout(Some(IO_TIMEOUT))
                         .map_err(|error| error.to_string())?;
                     tcp.set_write_timeout(Some(IO_TIMEOUT))
@@ -171,15 +172,19 @@ impl Client {
                         .map_or_else(String::new, |key| format!("Idempotency-Key: {key}\r\n"));
                     let trace =
                         trace.map_or_else(String::new, |value| format!("X-Trace-Id: {value}\r\n"));
+                    let mut outbound = zeroize::Zeroizing::new(Vec::new());
                     write!(
-                        stream,
+                        outbound,
                         "{method} {}{path} HTTP/1.1\r\nHost: {}\r\nAuthorization: {authorization}\r\nAccept: application/json\r\nContent-Type: {content_type}\r\n{idempotency}{trace}Content-Length: {}\r\nConnection: close\r\n\r\n",
                         endpoint.base_path,
                         endpoint.authority(),
                         body.len()
                     )
                     .map_err(|error| error.to_string())?;
-                    stream.write_all(body).map_err(|error| error.to_string())?;
+                    outbound.extend_from_slice(body);
+                    stream
+                        .write_all(&outbound)
+                        .map_err(|error| error.to_string())?;
                     stream.flush().map_err(|error| error.to_string())?;
                     return read_response(&mut stream);
                 }

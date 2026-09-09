@@ -197,7 +197,7 @@ static inline lxp_result lxp_real_replay_transition(
     f->execution.arena = arena;
     status = lxp_kernel_execute_activity(&f->kernel, &activity,
                                          &f->execution, &f->receipt);
-    if (status != LXP_OK) return status;
+    if (status != LXP_OK) { fprintf(stderr, "replay kernel activity %u sequence %llu result %d\n", activity.activity_type, (unsigned long long)sequence, status); return status; }
     (void)memset(output, 0, sizeof(*output));
     output->result_code = f->receipt.result_code;
     output->fee_charged = f->receipt.fee_charged;
@@ -206,6 +206,7 @@ static inline lxp_result lxp_real_replay_transition(
     if (status == LXP_OK)
         status = lxp_programs_project_receipt_events(&f->receipt, arena,
                                                      &output->canonical_events);
+    if (status != LXP_OK) fprintf(stderr, "replay projection activity %u result %d\n", activity.activity_type, status);
     return status;
 }
 

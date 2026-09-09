@@ -22,7 +22,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "npm run build && node dist/test/integration.test.js && node dist/test/receipt-fixture.test.js && node dist/test/agent-http.test.js && node dist/test/program-lifecycle.test.js && node dist/test/native-capabilities.test.js && node dist/test/program-executed-v3.test.js"
+    "test": "npm run build && node dist/test/integration.test.js && node dist/test/receipt-fixture.test.js && node dist/test/agent-http.test.js && node dist/test/program-lifecycle.test.js && node dist/test/native-capabilities.test.js && node dist/test/program-executed-v3.test.js && node dist/test/rpc.test.js"
   },
   "engines": {
     "node": ">=22"

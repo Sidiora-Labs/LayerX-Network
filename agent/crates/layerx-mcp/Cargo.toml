@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+layerx-sdk = { path = "../layerx-sdk" }
 layerx-types = { path = "../layerx-types" }
 layerx-agent-api = { path = "../layerx-agent-api" }
 layerx-agentd = { path = "../layerx-agentd" }

@@ -75,6 +75,7 @@ spec:
             - {name: LAYERX_GATEWAY_OUTBOUND_CA_DER, value: /run/layerx/trust/ca.crt.der}
             - {name: LAYERX_GATEWAY_CLIENT_IDENTITY_PKCS12, value: /run/layerx/client/client.p12}
             - {name: LAYERX_GATEWAY_CLIENT_IDENTITY_PASSWORD_FILE, value: /run/layerx/client/password}
+            - {name: LAYERX_GATEWAY_PUBLIC_CORE_URL, value: "https://layerx-pending-core.layerx-testnet.svc.cluster.local:9443"}
             - {name: LAYERX_GATEWAY_COMPONENT_URL, value: "https://layerx-agent-boundary.layerx-testnet.svc.cluster.local:9443"}
             - {name: LAYERX_GATEWAY_COMPONENT_TOKEN_FILE, value: /run/layerx/component/token}
             - {name: LAYERX_GATEWAY_AUTHORITY_URL, value: "https://layerx-receipt-authority.layerx-testnet.svc.cluster.local:9443"}
@@ -164,6 +165,10 @@ spec:
   policyTypes: [Ingress, Egress]
   ingress:
     - from: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ingress-nginx}}}, {podSelector: {matchLabels: {app: layerx-testnet-control}}}]
+      ports: [{protocol: TCP, port: 9443}]
+    - from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: layerx-internal}}
+          podSelector: {matchExpressions: [{key: app, operator: In, values: [layerx-internal-payments, layerx-internal-programs]}]}
       ports: [{protocol: TCP, port: 9443}]
   egress:
     - to: [{podSelector: {matchLabels: {app: layerx-gateway-redis}}}]
