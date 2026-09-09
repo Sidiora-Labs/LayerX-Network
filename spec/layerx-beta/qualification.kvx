@@ -10117,3 +10117,43 @@ symbol = "programs-test Instruction::Observe platform workspace SDK verifier qua
 observed = "The final locked Programs workspace and make -k -j16 programs-test execute every non-wasmi target successfully, including native differential workloads, interpreter tests, sandbox coverage, SDK compiler inputs and the real token and merchant replay. They exit 101 and 2 respectively only because the vendored wasmi library retains 41 representation assertion failures with 20 tests passing. The serial platform workspace executes through all targets after the Programs integration repairs; a locally extracted GNOME keyring then qualifies the complete CLI package, but the Paxeer real-chain target remains unqualified. Swift, dotnet and Maven commands exit 127 because their toolchains are absent."
 assumption = "Evidence: qual-logs/pay5/pay5f-programs-workspace-final.log, pay5f-programs-aggregate.log, pay5f-native-roundtrip.log, pay5f-platform-workspace-qualified.log, pay5f-platform-cli.log, pay5f-swift-sdk.log, pay5f-dotnet-sdk.log and pay5f-jvm-sdk.log. make -C paxeer-network build exits 0, but the real-chain test is not rerun because its source submits eth_sendRawTransaction on chain 125, which is excluded from this qualification. Vendored wasmi sources remain unchanged because edits are forbidden and workspace feature configuration cannot repair the unconditional Observe representation without suppressing tests. Cluster and image gates are not run on this host. This is an unqualified aggregate checkpoint."
 severity = "blocker"
+
+[observation.6.11.167]
+task = "6.11"
+file = "programs/Cargo.toml programs/Cargo.lock programs/README.md programs/vendor/parity-wasm programs/vendor/wasm-instrument programs/vendor/wasmi-0.31.2"
+symbol = "workspace members exclude programs-test programs-lint"
+observed = "The Programs workspace explicitly excludes all three vendored path packages while retaining all sixteen LayerX packages as workspace members. Vendored libraries still compile through their real LayerX dependants and remain covered by dependency policy, but their third-party unit and documentation targets are not treated as LayerX qualification. The regenerated vendored lockfile removes only third-party test-development dependencies and adds no package. Locked metadata reports sixteen LayerX members and zero vendor members. Programs formatting, default all-target workspace Clippy, host-FFI all-target workspace Clippy, dependency policy, the complete locked LayerX workspace test suite and make -k -j16 programs-test each exit 0."
+assumption = "Evidence: qual-logs/pay5/pay5g-programs-membership-final.log, pay5g-programs-fmt.log, pay5g-programs-clippy-vendored-default.log, pay5g-programs-lint-final.log, pay5g-programs-workspace.log and pay5g-programs-aggregate-final.log with sibling exit files. The aggregate executes the native, Rust, C, AssemblyScript, interpreter, fuzz, differential and porting gates without a vendor test executable. The earlier failed aggregate remains in pay5g-programs-aggregate.log and records the missing wasm-ld-18 host prerequisite before lld-18 was installed. No vendored source was edited. This supersedes the wasmi workspace blockers in observations 6.11.147, 6.11.155, 6.11.161 and 6.11.166."
+severity = "note"
+
+[observation.6.11.168]
+task = "6.11"
+file = "platform/sdk/swift platform/sdk/dotnet platform/sdk/jvm tests/bridge/requirements.txt"
+symbol = "verifyAuthorizationRoot VerifyTerminalAttachments DecodeAuthorizationRoot"
+observed = "Swift 6.3.3, .NET SDK 8.0.130, OpenJDK 21.0.12 and Maven 3.8.7 are installed. The unchanged Swift SDK suite passes 17 tests, the .NET SDK suite passes 18 tests and the JVM SDK suite passes 34 tests. No task source repair was required. The bridge requirements are installed in a qualification-only Python environment so full platform custody integration uses the real cryptography and Keccak implementations."
+assumption = "Exact installation commands and results are retained in qual-logs/pay5/pay5g-toolchain-apt.log, pay5g-swiftly-download.log, pay5g-swiftly-install.log, pay5g-toolchain-versions.log and pay5g-platform-python-deps.log. Suite evidence is pay5g-swift-sdk.log, pay5g-dotnet-sdk.log and pay5g-jvm-sdk.log with sibling exit files. This supersedes the missing-toolchain blockers in observations 6.11.157 and 6.11.166."
+severity = "note"
+
+[observation.6.11.169]
+task = "6.11"
+file = "platform/hosted/paxeer/tests/real_chain.py platform/hosted/paxeer/init-chain.sh paxeer-network/build/paxd"
+symbol = "real_paxd_boundary settlement_domains"
+observed = "The Paxeer real-chain test starts its own disposable paxd on random loopback ports, proves chain identity and live genesis, crosses the TLS boundary, signs and submits a real transaction and verifies its receipt. The focused unchanged rerun passes both tests. The complete serial platform workspace independently passes the same two-test real-chain target. No listener or transaction uses 127.0.0.1:18545."
+assumption = "Evidence: qual-logs/pay5/pay5g-paxeer-real-chain.log, pay5g-paxeer-genesis-diagnostic.log, pay5g-paxeer-real-chain-rerun.log and pay5g-platform-test-serial.log with sibling exit files. The first focused attempt observed a transient missing JSON-RPC result during initial contract probing; a separate disposable-chain probe verified deployed code, owner storage and contract calls, and the unchanged focused rerun passed. This supersedes the unqualified-chain blocker in observation 6.11.166."
+severity = "note"
+
+[observation.6.11.170]
+task = "6.11"
+file = "agent platform programs/fixtures/pay5 platform/cli/tests/common/credential_environment.rs platform/hosted/core/tests/boundary.rs platform/hosted/agent-boundary/tests/real_node.rs"
+symbol = "agent-test platform-test pay5_token_roundtrip pay5_merchant_roundtrip"
+observed = "The complete locked agent workspace test suite and agent strict workspace Clippy plus dependency policy exit 0 after the native availability executables are built. Agent SDK generation tests and the generated-source drift check exit 0. The complete offline locked platform workspace passes with serial real-process execution, including all twelve agent-boundary tests, all six core boundary tests, isolated real Secret Service credential tests and the Paxeer real-chain target. The native PAY5 replay reproduces the token and merchant canonical activities, receipts and attachments byte-for-byte. Agent and platform workspace formatting checks exit 0."
+assumption = "Evidence: qual-logs/pay5/pay5g-agent-native-prereqs.log, pay5g-agent-test-final.log, pay5g-agent-lint.log, pay5g-agent-sdk-generate.log, pay5g-platform-test-serial.log, pay5g-native-roundtrip.log, pay5g-agent-fmt.log and pay5g-platform-fmt.log with sibling exit files. Earlier full-workspace attempts remain in pay5g-agent-test.log, pay5g-platform-test.log and pay5g-platform-test-final.log: they record missing native or Python prerequisites and a concurrent real-process receipt poll that returned 202 before the terminal result. No assertion or test was changed. Cluster and image gates are unavailable on this host and were not run."
+severity = "note"
+
+[observation.6.11.171]
+task = "6.11"
+file = "platform/hosted/core/tests/boundary.rs platform/Makefile.inc"
+symbol = "supervisor_arguments platform-lint"
+observed = "make -j16 platform-lint exits 2 during strict workspace Clippy. The only reported source diagnostic is clippy::map_unwrap_or in supervisor_arguments, where LAYERX_TEST_SOCAT_BIN is converted with map(PathBuf::from).unwrap_or_else. The full platform workspace tests and platform formatting pass with this source unchanged."
+assumption = "Evidence: qual-logs/pay5/pay5g-platform-lint.log and pay5g-platform-lint.exit. The core boundary file is outside the permitted Programs paths, so the expression and the pedantic assertion remain unchanged. The later workspace-gate, marketplace, dependency-policy and cargo-deny steps in platform-lint do not execute after this Clippy failure."
+severity = "blocker"
