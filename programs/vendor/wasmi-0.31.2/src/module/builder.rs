@@ -1,25 +1,11 @@
 use super::{
-    export::ExternIdx,
-    import::FuncTypeIdx,
-    ConstExpr,
-    DataSegment,
-    ElementSegment,
-    ExternTypeIdx,
-    FuncIdx,
-    Global,
-    GlobalIdx,
-    Import,
-    ImportName,
-    Module,
+    export::ExternIdx, import::FuncTypeIdx, ConstExpr, DataSegment, ElementSegment, ExternTypeIdx,
+    FuncIdx, Global, GlobalIdx, Import, ImportName, Module,
 };
 use crate::{
     engine::{CompiledFunc, DedupFuncType},
     errors::ModuleError,
-    Engine,
-    FuncType,
-    GlobalType,
-    MemoryType,
-    TableType,
+    Engine, FuncType, GlobalType, MemoryType, TableType,
 };
 use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
 

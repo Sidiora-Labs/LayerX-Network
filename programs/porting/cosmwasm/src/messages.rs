@@ -23,7 +23,7 @@ use crate::hash::sha256;
 use crate::json::{FieldSchema, FieldValue, RecordSchema};
 
 /// `Env` and `MessageInfo` values sourced from authenticated ABI v2 context.
-#[cfg(target_arch="wasm32")]
+#[cfg(target_arch = "wasm32")]
 pub use layerx_porting_cosmwasm_guest as context;
 
 /// The width of every ported message variant tag.

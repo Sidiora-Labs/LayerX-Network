@@ -1,10 +1,7 @@
 use super::{into_func::WasmTypeList, Func};
 use crate::{
     engine::{CallParams, CallResults},
-    AsContext,
-    AsContextMut,
-    Error,
-    TypedResumableCall,
+    AsContext, AsContextMut, Error, TypedResumableCall,
 };
 use core::{fmt, fmt::Debug, marker::PhantomData};
 use wasmi_core::{Trap, UntypedValue};

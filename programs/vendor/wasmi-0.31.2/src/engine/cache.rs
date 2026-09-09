@@ -1,15 +1,7 @@
 use super::bytecode::{DataSegmentIdx, ElementSegmentIdx, FuncIdx, GlobalIdx, TableIdx};
 use crate::{
-    instance::InstanceEntity,
-    memory::DataSegment,
-    module::DEFAULT_MEMORY_INDEX,
-    table::TableEntity,
-    ElementSegment,
-    ElementSegmentEntity,
-    Func,
-    Instance,
-    Memory,
-    StoreInner,
+    instance::InstanceEntity, memory::DataSegment, module::DEFAULT_MEMORY_INDEX,
+    table::TableEntity, ElementSegment, ElementSegmentEntity, Func, Instance, Memory, StoreInner,
     Table,
 };
 use core::ptr::NonNull;

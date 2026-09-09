@@ -10,18 +10,8 @@
 use wasmi_core::ValueType;
 
 use crate::{
-    instance::InstanceEntity,
-    Engine,
-    Error,
-    Instance,
-    Linker,
-    Memory,
-    MemoryType,
-    Module,
-    Store,
-    Table,
-    TableType,
-    Value,
+    instance::InstanceEntity, Engine, Error, Instance, Linker, Memory, MemoryType, Module, Store,
+    Table, TableType, Value,
 };
 
 fn try_instantiate_from_wat(wat: &str) -> Result<(Store<()>, Instance), Error> {

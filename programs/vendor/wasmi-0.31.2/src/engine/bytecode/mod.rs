@@ -6,19 +6,8 @@ mod utils;
 mod tests;
 
 pub use self::utils::{
-    AddressOffset,
-    BlockFuel,
-    BranchOffset,
-    BranchTableTargets,
-    DataSegmentIdx,
-    DropKeep,
-    DropKeepError,
-    ElementSegmentIdx,
-    F64Const32,
-    FuncIdx,
-    GlobalIdx,
-    LocalDepth,
-    SignatureIdx,
+    AddressOffset, BlockFuel, BranchOffset, BranchTableTargets, DataSegmentIdx, DropKeep,
+    DropKeepError, ElementSegmentIdx, F64Const32, FuncIdx, GlobalIdx, LocalDepth, SignatureIdx,
     TableIdx,
 };
 use super::{const_pool::ConstRef, CompiledFunc, TranslationError};

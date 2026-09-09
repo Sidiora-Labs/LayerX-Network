@@ -2,8 +2,7 @@ use crate::{
     module,
     module::{ConstExpr, ElementSegmentItems},
     store::Stored,
-    AsContext,
-    AsContextMut,
+    AsContext, AsContextMut,
 };
 use wasmi_arena::ArenaIndex;
 use wasmi_core::ValueType;
