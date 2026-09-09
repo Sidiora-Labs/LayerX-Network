@@ -10,8 +10,17 @@
 static const uint32_t activity_types[] = {
     LX_ASSET_REGISTER, LX_ASSET_PAUSE, LX_ASSET_UNPAUSE,
     LX_ASSET_ACCOUNT_OPEN, LX_ASSET_SEND, LX_ASSET_RECEIVE,
-    LX_ASSET_GRANT_ISSUE, LX_ASSET_GRANT_REVOKE
+    LX_ASSET_GRANT_ISSUE, LX_ASSET_GRANT_REVOKE, LX_ASSET_MINT, LX_ASSET_BURN
 };
+
+typedef union asset_typed_payload {
+    lx_asset_register_payload registration;
+    lx_asset_account_open_payload account_open;
+    lx_asset_supply_payload supply;
+    lx_asset_grant_revoke_payload revocation;
+    lxp_receive receive;
+    lxp_payer_grant grant;
+} asset_typed_payload;
 
 typedef struct asset_decoded {
     uint16_t ordinal;
@@ -19,6 +28,7 @@ typedef struct asset_decoded {
     size_t payload_length;
     lxp_send send;
     bool send_present;
+    asset_typed_payload *typed;
 } asset_decoded;
 
 static const lx_asset_record *runtime_asset(
@@ -155,7 +165,8 @@ static lxp_result module_decode(lxp_module_ctx *ctx, uint16_t ordinal,
     asset_decoded *value;
     void *memory;
     lxp_result status;
-    if (ctx == NULL || decoded == NULL || ordinal == 0U || ordinal > 8U ||
+    if (ctx == NULL || decoded == NULL || ordinal == 0U ||
+        ordinal > 11U || ordinal == 9U ||
         (payload == NULL && payload_length != 0U)) return LXP_ERR_UNKNOWN_ACTIVITY;
     status = lxp_ctx_arena_alloc(ctx, sizeof(*value), _Alignof(asset_decoded),
                                  &memory);
@@ -170,6 +181,39 @@ static lxp_result module_decode(lxp_module_ctx *ctx, uint16_t ordinal,
         if (status != LXP_OK) return status;
         value->send_present = true;
     }
+    if (ordinal != 2U && ordinal != 3U && ordinal != 5U) {
+        status = lxp_ctx_arena_alloc(ctx, sizeof(*value->typed),
+                                     _Alignof(asset_typed_payload), &memory);
+        if (status != LXP_OK) return status;
+        value->typed = (asset_typed_payload *)memory;
+    }
+    switch (ordinal) {
+    case 1U:
+        status = lx_asset_register_decode(payload, payload_length,
+                                          &value->typed->registration);
+        break;
+    case 4U:
+        status = lx_asset_account_open_decode(payload, payload_length,
+                                              &value->typed->account_open);
+        break;
+    case 6U:
+        status = lxp_receive_decode(payload, payload_length, &value->typed->receive);
+        break;
+    case 7U:
+        status = lxp_payer_grant_decode(payload, payload_length, &value->typed->grant);
+        break;
+    case 8U:
+        status = lx_asset_grant_revoke_decode(payload, payload_length,
+                                              &value->typed->revocation);
+        break;
+    case 10U:
+    case 11U:
+        status = lx_asset_supply_decode(payload, payload_length, &value->typed->supply);
+        break;
+    default:
+        break;
+    }
+    if (status != LXP_OK) return status;
     *decoded = value;
     return LXP_OK;
 }
@@ -181,7 +225,7 @@ static lxp_result module_validate(lxp_module_ctx *ctx,
 {
     const asset_decoded *value = (const asset_decoded *)decoded;
     if (ctx == NULL || activity == NULL || authority == NULL || value == NULL ||
-        value->ordinal == 0U || value->ordinal > 8U)
+        value->ordinal == 0U || value->ordinal > 11U || value->ordinal == 9U)
         return LXP_ERR_UNKNOWN_ACTIVITY;
     if (value->send_present) {
         lxp_result status = validate_send(ctx, activity, authority,
@@ -211,6 +255,8 @@ static lxp_result module_execute(lxp_module_ctx *ctx,
     lxp_result status;
     (void)effects;
     if (ctx == NULL || value == NULL) return LXP_ERR_UNKNOWN_ACTIVITY;
+    if (!value->send_present && value->ordinal != 2U && value->ordinal != 3U)
+        return LXP_ERR_UNKNOWN_ACTIVITY;
     if (!value->send_present)
         return lxp_ctx_emit_event(ctx, value->ordinal, value->payload,
                                   value->payload_length);

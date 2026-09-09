@@ -196,6 +196,30 @@ static lxp_result read_grant(wire_cursor *wire, lxp_payer_grant *grant)
     return LXP_OK;
 }
 
+lxp_result lxp_payer_grant_encode(const lxp_payer_grant *grant,
+                                  uint8_t *bytes, size_t capacity, size_t *length)
+{
+    wire_cursor wire = { bytes, NULL, capacity, 0U };
+    lxp_result status;
+    if (grant == NULL || bytes == NULL || length == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    status = write_grant(&wire, grant);
+    if (status == LXP_OK) *length = wire.offset;
+    return status;
+}
+
+lxp_result lxp_payer_grant_decode(const uint8_t *bytes, size_t length,
+                                  lxp_payer_grant *grant)
+{
+    wire_cursor wire = { NULL, bytes, length, 0U };
+    lxp_result status;
+    if (bytes == NULL || grant == NULL) return LXP_ERR_NON_CANONICAL;
+    (void)memset(grant, 0, sizeof(*grant));
+    status = read_grant(&wire, grant);
+    return status == LXP_OK && wire.offset == length ? LXP_OK :
+           LXP_ERR_NON_CANONICAL;
+}
+
 static lxp_result write_receive_core(wire_cursor *wire,
                                      const lxp_receive *receive)
 {

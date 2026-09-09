@@ -13,6 +13,7 @@ enum {
     LX_ASSET_REGISTRY_CAPACITY = 64,
     LX_ASSET_RESERVE_LINE_CAPACITY = 128,
     LX_ASSET_SYMBOL_MAX = 16,
+    LX_ASSET_NAME_MAX = 32,
     LX_ASSET_CUSTODY_REFERENCE_MAX = 128,
     LX_ASSET_REGISTER = 0x00010001,
     LX_ASSET_PAUSE = 0x00010002,
@@ -21,8 +22,48 @@ enum {
     LX_ASSET_SEND = 0x00010005,
     LX_ASSET_RECEIVE = 0x00010006,
     LX_ASSET_GRANT_ISSUE = 0x00010007,
-    LX_ASSET_GRANT_REVOKE = 0x00010008
+    LX_ASSET_GRANT_REVOKE = 0x00010008,
+    LX_ASSET_MINT = 0x0001000a,
+    LX_ASSET_BURN = 0x0001000b
 };
+
+typedef struct lx_asset_register_payload {
+    uint8_t asset_id[32];
+    uint8_t salt[32];
+    uint8_t symbol_length;
+    uint8_t symbol[LX_ASSET_SYMBOL_MAX];
+    uint8_t name_length;
+    uint8_t name[LX_ASSET_NAME_MAX];
+    uint8_t decimals;
+    lxp_u128 supply_cap;
+    uint8_t issuer_kind;
+    uint8_t custody_reference_length;
+    uint8_t custody_reference[LX_ASSET_CUSTODY_REFERENCE_MAX];
+} lx_asset_register_payload;
+
+typedef struct lx_asset_account_open_payload {
+    uint8_t asset_id[32];
+} lx_asset_account_open_payload;
+
+typedef struct lx_asset_supply_payload {
+    uint8_t asset_id[32];
+    uint8_t account_id[32];
+    lxp_u128 amount;
+} lx_asset_supply_payload;
+
+typedef struct lx_asset_grant_revoke_payload {
+    uint8_t grant_id[32];
+    uint64_t revocation_sequence;
+} lx_asset_grant_revoke_payload;
+
+lxp_result lx_asset_register_decode(const uint8_t *bytes, size_t length,
+                                    lx_asset_register_payload *payload);
+lxp_result lx_asset_account_open_decode(const uint8_t *bytes, size_t length,
+                                        lx_asset_account_open_payload *payload);
+lxp_result lx_asset_supply_decode(const uint8_t *bytes, size_t length,
+                                  lx_asset_supply_payload *payload);
+lxp_result lx_asset_grant_revoke_decode(const uint8_t *bytes, size_t length,
+                                        lx_asset_grant_revoke_payload *payload);
 
 typedef enum lx_asset_custody_kind {
     LX_ASSET_CUSTODY_PAXEER = 1
