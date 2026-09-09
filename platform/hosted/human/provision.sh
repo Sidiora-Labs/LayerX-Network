@@ -7,6 +7,7 @@ human_owner_provision() (
     local manifest="$WORK_DIR/human-provision-owner-job.json" state="$WORK_DIR/human-provision-node.json"
     [ ! -e "$output" ] || fail "$output: existing owner result requires explicit reconciliation with retained state"
     python3 "$REPO_ROOT/platform/hosted/human/provision.py" --validate-job-input --work-dir "$WORK_DIR"
+    python3 "$REPO_ROOT/platform/hosted/human/provision.py" --account-requests --work-dir "$WORK_DIR"
     kube -n "$TESTNET_NAMESPACE" get statefulset layerx-node -o json > "$state"
     python3 - "$state" <<'PY'
 import json
@@ -45,7 +46,9 @@ with open(sys.argv[2], 'x') as output:
 PY
     apply_secret "$TESTNET_NAMESPACE" layerx-human-provision-owner-input \
         --from-file=owner-request.json="$input/owner-request.json" \
-        --from-file=recovery-policy.json="$input/recovery-policy.json"
+        --from-file=recovery-policy.json="$input/recovery-policy.json" \
+        --from-file=treasury-request.json="$input/treasury-request.json" \
+        --from-file=sequencer-request.json="$input/sequencer-request.json"
     kube create -f "$manifest" > /dev/null
     kube -n "$TESTNET_NAMESPACE" wait --for=condition=complete --timeout=150s job/layerx-human-provision-owner > /dev/null \
         || fail 'layerx-human-provision-owner: Job did not complete; owner result not published'
@@ -53,4 +56,8 @@ PY
     python3 "$REPO_ROOT/platform/hosted/human/provision.py" --validate-owner-result \
         --work-dir "$WORK_DIR" --request "$output.pending"
     mv "$output.pending" "$output"
+    local account
+    for account in treasury sequencer; do
+        kube -n "$TESTNET_NAMESPACE" logs job/layerx-human-provision-owner -c "provision-$account" > "$input/$account.json"
+    done
 )

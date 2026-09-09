@@ -139,7 +139,7 @@ def owner_registration(work_dir, activities=None, owner_did=None):
 
 
 
-def purpose_catalog(template_path, registry_path, treasury_path, faucet_path, asset):
+def purpose_catalog(template_path, registry_path, treasury_path, sequencer_path, asset):
     template_path = Path(template_path)
     template = json.loads(template_path.read_text(), object_pairs_hook=strict_pairs)
     fields(template, 'version presets', template_path, 'catalog template')
@@ -167,7 +167,7 @@ def purpose_catalog(template_path, registry_path, treasury_path, faucet_path, as
             activities.append(activity)
     require(bool(activities), registry_path, 'registered activities')
     counterparties = []
-    for path in (treasury_path, faucet_path):
+    for path in (treasury_path, sequencer_path):
         account = protected_json(path)
         require(type(account) is dict, path, 'account output')
         h32(account.get('account'), path, 'account')
@@ -262,33 +262,62 @@ def owner_result(work_dir, path):
     return value
 
 
+def account_requests(work_dir):
+    root = Path(work_dir)
+    path = root / 'genesis/node.env'
+    info = path.lstat()
+    require(path.is_absolute() and path.resolve() == path and stat.S_ISREG(info.st_mode)
+            and info.st_uid == os.geteuid() and info.st_nlink == 1 and not info.st_mode & 0o022
+            and info.st_size <= 65536, path, 'protected bootstrap output')
+    selected = {}
+    names = {'LAYERX_NODE_TREASURY_DID', 'LAYERX_NODE_TREASURY_PUBLIC_KEY',
+             'LAYERX_NODE_SEQUENCER_PUBLIC_KEY'}
+    for line in path.read_text().splitlines():
+        key, separator, value = line.partition('=')
+        if key in names:
+            require(separator and key not in selected, path, 'unique bootstrap binding')
+            selected[key] = value
+    require(set(selected) == names, path, 'treasury and sequencer exports')
+    treasury = selected['LAYERX_NODE_TREASURY_PUBLIC_KEY']
+    sequencer = selected['LAYERX_NODE_SEQUENCER_PUBLIC_KEY']
+    h32(treasury, path, 'treasury public key')
+    h32(sequencer, path, 'sequencer public key')
+    require(treasury != sequencer, path, 'distinct counterparty keys')
+    require(selected['LAYERX_NODE_TREASURY_DID'] == 'did:layerx:' + treasury, path, 'treasury DID')
+    for name, key in [('treasury', treasury), ('sequencer', sequencer)]:
+        write_json(root / 'human-evidence-input' / (name + '-request.json'), {'did': 'did:layerx:' + key})
+
+
 def main():
     parser = argparse.ArgumentParser()
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument('--validate-owner-registration', action='store_true')
     mode.add_argument('--catalog', action='store_true')
+    mode.add_argument('--account-requests', action='store_true')
     mode.add_argument('--validate-job-input', action='store_true')
     mode.add_argument('--validate-owner-result', action='store_true')
     mode.add_argument('--preserve-binding', action='store_true')
     parser.add_argument('--registry', type=Path)
     parser.add_argument('--treasury', type=Path)
-    parser.add_argument('--faucet', type=Path)
+    parser.add_argument('--sequencer', type=Path)
     parser.add_argument('--asset')
     parser.add_argument('--request', type=Path)
     parser.add_argument('--response', type=Path)
     parser.add_argument('--output', type=Path)
     parser.add_argument('--work-dir', type=Path, required=True)
     args = parser.parse_args()
-    if args.validate_job_input:
+    if args.account_requests:
+        account_requests(args.work_dir)
+    elif args.validate_job_input:
         job_input(args.work_dir)
     elif args.validate_owner_result:
         require(args.request is not None, args.work_dir, 'owner result path')
         owner_result(args.work_dir, args.request)
     elif args.catalog:
-        require(all((args.registry, args.treasury, args.faucet, args.asset, args.output)),
+        require(all((args.registry, args.treasury, args.sequencer, args.asset, args.output)),
                 args.work_dir, 'catalog input arguments')
         value = purpose_catalog(Path(__file__).with_name('beta-purpose-catalog.json'),
-                                args.registry, args.treasury, args.faucet, args.asset)
+                                args.registry, args.treasury, args.sequencer, args.asset)
         write_json(args.output, value)
     elif args.preserve_binding:
         require(all((args.request, args.response, args.output)), args.work_dir, 'binding arguments')
