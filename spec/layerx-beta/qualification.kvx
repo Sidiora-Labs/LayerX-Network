@@ -5524,3 +5524,43 @@ symbol = "submit_pay validate_reads genesis_request"
 observed = "make -j16 test-state-commitment-transition test-asset-registry test-asset-balance test-fees test-fee-replay test-genesis test-daemon-lni-admission test-daemon-lni-account exits 0 in qual-logs/pay1/pay1g-focused.log. cargo test --manifest-path agent/Cargo.toml -p layerx-wire exits 0 in pay1g-wire.log. cargo test --manifest-path agent/Cargo.toml -p layerx-client --lib --test receipt --test reads --test lni_handshake --test lni_preparation --test lni_transport --test lni_schema --test supply_receipt exits 0 in pay1g-client-focused.log. The earlier full make -j16 and make test runs exit 0 in pay1g-build.log and pay1g-test.log. Every command has an adjacent exit file."
 assumption = "The real waiting-mode rerun exits 1 at registration lookup in pay1g-runtime-wait-r2.log; runtime-g4/sequencer.log records history_us=1999357 and result=-303 with the unchanged 2000 ms LNI timeout. This does not supersede the successful polling registration/restart evidence or resolve the main-account binding blocker. The migration command, remaining activity restart matrix and 20-Send before/after comparison remain incomplete. No graph, render, cluster, image or deployment qualification is claimed."
 severity = "note"
+
+[observation.3.7.63]
+task = "3.7"
+file = "src/modules/asset/lx_asset_execution.h src/protocol/lxp_module_ctx.c tests/test_state_commitment_transition.c tests/daemon/lxp_test_pay1.c tests/daemon/pay1.py"
+symbol = "asset_execute_typed lxp_ctx_bind_ledger_receipt account_id"
+observed = "Account-open ordinal 4 now binds a signed receipt when the actor has no native main account: asset_execute_typed and lxp_ctx_bind_ledger_receipt accept unknown-namespace principal find -208 only with zero balances and from_sequence 0; a present main account still requires matching balance and sequence. The pay1 client derives per-asset destinations with lx_account_id_from_string (LX:ACCOUNT:v1) instead of the domain hash. sudo python3 tests/daemon/pay1.py --output qual-logs/pay1/runtime-h3 --bin-dir build/bin --client qual-logs/pay1/pay1-client --poll exits 0; the same harness without --poll exits 0 under runtime-h3-wait. Register, open, open-bob, mint, burn, grant-issue, grant-revoke and 20 Sends survive stop/start with matching asset, fee and DID reads. Evidence: qual-logs/pay1/pay1h-runtime-poll.log, pay1h-runtime-wait.log, pay1h-focused-gcc.log and adjacent .exit files."
+assumption = "This supersedes the signed refusal -208 in observation.3.7.59. Native binaries were built with CC=gcc. Default cc=clang-18 still fails ATOMIC_VAR_INIT in src/state/lxp_journal.c under -Werror; that compile path was not changed. Gateway JSON-RPC methods and p50/p99 remain with pay-public-rpc."
+severity = "note"
+
+[observation.3.7.64]
+task = "3.7"
+file = "src/ledger/lx_account_registry.c include/layerx/lxp_ledger.h cmd/layerx-genesis/lxp_genesis_builder.c cmd/layerx-genesis/lxp_genesis_build_cli.c include/layerx/lxp_genesis_builder.h tests/test_snapshot_issuance_migrate.c tests/ledger/test_account_id.c docs/wiki/HostedNode.md Makefile"
+symbol = "lx_account_registry_rewrite_retired_issuance lxp_genesis_issuance_migration_authorize"
+observed = "Retired stored names asset:<64-hex>:issuance are accepted for existing MODULE_VALUE accounts and rewritten to module:asset:value:<64-hex account id> while preserving the LX:ACCOUNT:v1 id, balances and every non-name field. layerx-genesis-build --migrate-issuance-names INPUT.lxs SIGNER_KEY OUTPUT_DIR signs a 301-byte LXIM authorization through the existing genesis Ed25519 path and writes the renamed snapshot plus issuance-migration.lxim. tests/test_snapshot_issuance_migrate.c builds a real signed fixture, verifies it, and refuses a tampered authorization and a snapshot with no retired name. CC=gcc make -j16 test-genesis and CC=gcc make -j16 test-ledger-accounts exit 0. The operator command is documented in docs/wiki/HostedNode.md."
+assumption = "This supersedes observation.3.7.60. The command authorizes a post-rewrite canonical root; daemon restore still binds finalized bootstrap registration independently. Cluster, image and live recovery of a migrated hosted snapshot were not run."
+severity = "note"
+
+[observation.3.7.65]
+task = "3.7"
+file = "cmd/layerxd/lxp_daemon_process.c cmd/layerxd/lxp_daemon_lni.c tests/daemon/pay1.py"
+symbol = "LAYERX_PAY_TIMING submit_pay send_receipt"
+observed = "Parent d99eed99 (parent of event-driven 508ee475) was built in /tmp/pay1-before. The current pay1 harness and client against those binaries accept registration then return account_open -208; send_count is 0 and sequencer.log has no LAYERX_PAY_TIMING lines. After HEAD poll run runtime-h3 recorded 20 Send samples at global sequences 15,17,...,53: prepare p50/p99 16359/21690 us, commit 55758/71603 us, publication 95827/134472 us, history 378/641 us. Extracted samples: qual-logs/pay1/pay1h-timing-after.json, pay1h-timing-before.json; raw after lines in runtime-h3/sequencer.log. Wait-mode runtime-h3-wait also completed 20 Sends; its history_us values are publication-wait samples (144259 to 459971 us) and are not mixed with poll history. Evidence: pay1h-runtime-before.log (exit 1), pay1h-runtime-poll.log (exit 0), pay1h-runtime-wait.log (exit 0), pay1h-timing-wait.json."
+assumption = "No before-Send microsecond comparison exists because the parent cannot open an account and does not emit LAYERX_PAY_TIMING. After numbers are native poll-mode samples on this host, not gateway p50/p99. Gateway percentiles remain with pay-public-rpc."
+severity = "note"
+
+[observation.3.7.66]
+task = "3.7"
+file = "src/state/lxp_journal.c"
+symbol = "ATOMIC_VAR_INIT"
+observed = "Default cc on this host is clang-18. Compiling src/state/lxp_journal.c with that compiler and -Werror fails on the existing ATOMIC_VAR_INIT use (deprecated-pragma). Native PAY1h build and test gates used CC=gcc and then passed. The ATOMIC_VAR_INIT source was left unchanged."
+assumption = "This is a pre-existing compiler warning under clang-18, not introduced by the account-open or issuance-migration edits. No assertion or warning flag was relaxed."
+severity = "note"
+
+[observation.3.7.67]
+task = "3.7"
+file = "agent/schema/lni/README.md platform/hosted/node/deployment.yaml"
+symbol = "AssetReadRequest FeeEstimateRequest minor_5 lx_getAccount"
+observed = "Typed LNI tags 32/33/34/35 and minor-5 receipt wait are documented and covered by the existing layerx-client lni_schema tests from observation.3.7.57. Native pay1.py exercises those tags over the Unix LNI socket. Public JSON-RPC 2.0 methods at gateway POST /rpc (lx_getAccount, lx_getBalance, lx_getBalances, lx_getSequence, lx_estimateFee, lx_sendActivity, lx_getReceipt, lx_getActivityStatus, lx_getBatchHeader, lx_getCheckpoint, lx_getProof, lx_listAssets, lx_getAsset, lx_getNodeInfo, lx_subscribe) and gateway publication p50/p99 were not implemented or measured here."
+assumption = "pay-public-rpc still owns the typed JSON-RPC surface, WebSocket subscribe, commitment-level mapping and gateway latency targets. Hosted --genesis-metadata FILE provisioning remains a deployment caller duty; the flag and LXGB v2 suffix are already documented in docs/wiki/HostedNode.md."
+severity = "note"
