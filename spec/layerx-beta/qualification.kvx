@@ -3349,7 +3349,7 @@ symbol = "developer-component.token LAYERX_AGENT_BOUNDARY_GATEWAY_TOKEN_FILE LAY
 observed = "formerly observation.6.8.developer-component-token-and-observation-producer. The bring-up generates developer-component.token and mounts it for webhooks, while node/deployment.yaml:204-205 supplies only the distinct gateway and registry component credentials that agent-boundary/src/main.rs:428-429 loads and :1668,1676 authenticates. The webhook ReceiptVerifier calls that component in trusted.rs:459-488; admitting its network edge does not authorize its separate bearer. The internal event source requires authenticated POST /internal/v1/observe at events.rs:256 to capture a resource snapshot and bind it to its principal before serving an immutable event; bringing up its Deployment alone does not provide an observation/trigger producer."
 assumption = "A dedicated webhook component credential contract and a real event observation/trigger integration need changes beyond the owned cluster-script and policy repair. No gateway or registry credential is reassigned to webhooks, no authentication check is weakened and no observation is fabricated. NEEDS.md contains the exact follow-up requests."
 severity = "blocker"
-[observation.6.8.4]
+[observation.6.8.93]
 task = "6.8"
 file = "platform/hosted/tests/beta-cluster.sh platform/hosted/internal/deployment.yaml platform/hosted/webhooks/deployment.yaml platform/hosted/gateway/deployment.yaml platform/hosted/node/deployment.yaml"
 symbol = "internal_principals_provision internal_apply manifests_render secrets_apply wait_ready"
@@ -3357,7 +3357,7 @@ observed = "formerly observation.6.8.internal-cluster-wiring. The image list and
 assumption = "bash -n platform/hosted/tests/beta-cluster.sh platform/hosted/tests/topology-check.sh exits 0 in qual-logs/au28/bash-n-final.log. ShellCheck is not installed, recorded in qual-logs/au28/shellcheck.log. bash platform/hosted/tests/beta-cluster.sh render exits 0 in qual-logs/au28/render.log. python3 qual-logs/au28/runtime-material-check.py exits 0 in qual-logs/au28/runtime-material-check-final.log after correcting the untracked harness's Lua literal extractor; the first harness invocation exited 1 in runtime-material-check.log before starting Redis. The final check validates six certificates against short/full Service DNS names, rendered internal image references, the real Redis production CAS Lua, gateway-data reads and cross-prefix/write/admin refusals. Both owned Redis processes use Unix sockets with no TCP listener and terminate. Image builds, gateway key issuance in Kubernetes and pod readiness remain unexecuted."
 severity = "note"
 
-[observation.6.8.5]
+[observation.6.8.94]
 task = "6.8"
 file = "platform/hosted/internal/deployment.yaml platform/hosted/tests/topology-check.sh platform/hosted/tests/beta-cluster.sh tools/qualification/beta_driver.py"
 symbol = "LAYERX_EVENTS_UPSTREAM_URL LAYERX_EVENTS_CREDENTIALS_FILE qualification_url STACK_FLAGS"
@@ -3365,7 +3365,7 @@ observed = "formerly observation.6.8.human-upstream-blocks-expanded-topology. ma
 assumption = "CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4 LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin; LAYERX_BETA_KUBECONFIG unset; selected disposable kind identity layerx-au28-internal; LAYERX_BETA_MIN_FREE_GIB=30. qual-logs/au28/cluster-state.json records no selected cluster containers or built images. No image digest, pod readiness or live cluster teardown proof exists because the prerequisite failed. After confirming every render image reference was unbuilt and absent, supplementary make platform-beta-cluster-down exits 0 in qual-logs/au28/render-cleanup.log with LAYERX_BETA_KEEP_TOOLS=1; it removes render-only output, not a deployed cluster. remaining-cluster-containers.log is empty. df -h / is retained in disk-before-cluster.log, disk-after-exact.log and disk-after.log; free space remains above 30 GB. No persistent Paxeer endpoint, existing Redis endpoint or shared runtime is used. The missing-host assertion and separately operated status-publisher strict refusal remain intact."
 severity = "blocker"
 
-[observation.6.8.6]
+[observation.6.8.95]
 task = "6.8"
 file = "platform/hosted/tests/topology-check.sh platform/hosted/node/deployment.yaml"
 symbol = "Topology.add check egress_admits load_builtin"
@@ -3373,7 +3373,7 @@ observed = "formerly observation.6.8.topology-model-and-existing-parser-limit. T
 assumption = "The built-in parser defect precedes these changes and is recorded without altering its assertion or broadening the parser repair. This is static topology evidence, not pod connectivity or first-payment proof. cg spec lint exits 0 with zero errors and nine existing warnings in qual-logs/au28/spec-lint.log. git diff --check exits 0 in qual-logs/au28/diff-check.log. No spec task status changes or passing full-task gate are claimed."
 severity = "blocker"
 
-[observation.6.8.7]
+[observation.6.8.96]
 task = "6.8"
 file = "platform/hosted/tests/beta-cluster.sh platform/hosted/node/deployment.yaml platform/hosted/agent-boundary/src/main.rs platform/hosted/internal/src/events.rs platform/hosted/webhooks/src/trusted.rs"
 symbol = "developer-component.token LAYERX_AGENT_BOUNDARY_GATEWAY_TOKEN_FILE LAYERX_AGENT_BOUNDARY_REGISTRY_TOKEN_FILE observe"
@@ -3452,7 +3452,7 @@ observed = "formerly observation.5.1.focused-lock-gate-results. Environment: CAR
 assumption = "The lockfiles pass locked offline resolution and their binaries build. Remaining compiler-prerequisite and Human test caller failures require their owners; no production or full wave qualification is claimed. No assertion or runner was changed."
 severity = "blocker"
 
-[observation.6.7.15]
+[observation.6.7.18]
 task = "6.7"
 file = "platform/hosted/human/deployment.yaml platform/hosted/human/Dockerfile platform/hosted/tests/beta-cluster.sh human/crates/layerx-human-service/src/server/production_components.rs human/crates/layerx-human-service/src/bin/layerx-human-components.rs human/apps/web/next.config.mjs"
 symbol = "ProductionComponentsConfig ProductionComponents::open readiness session.open"
@@ -3460,7 +3460,7 @@ observed = "formerly observation.6.7.13 (renumbered after rebase). formerly obse
 assumption = "Ready Human hosting remains blocked on the provider graph and mandatory configuration. Source references and required integration requests are recorded in platform/hosted/human/README.md and the untracked NEEDS.md. Human session.open requires an indexed verified passkey assertion and real agent authority registration; journeys/approvals cookie maps remain empty. The Next.js standalone web application needs its own Node runtime and is not served as static files by the Rust API. The beta contract checker discovers hosted directories automatically; platform/docs/content/beta.md includes hosted-human without claiming runtime or deployment proof. No spec task status is changed."
 severity = "blocker"
 
-[observation.6.8.8]
+[observation.6.8.97]
 task = "6.8"
 file = "platform/hosted/tests/topology-check.sh platform/hosted/tests/topology-regressions.py platform/hosted/node/deployment.yaml"
 symbol = "Chunk.parse_sequence Chunk.parse_block_scalar load_builtin"
@@ -3468,7 +3468,7 @@ observed = "formerly observation.6.8.topology-node-sequence-literal. The node ma
 assumption = "This is static topology and parser evidence, not runtime connectivity. The default make target now runs the built-in parser and persistent regression suite as well as PyYAML when PyYAML is installed. No assertion, bound, missing-host refusal or strict external-service refusal is removed."
 severity = "note"
 
-[observation.6.7.14]
+[observation.6.7.19]
 task = "6.7"
 file = "platform/hosted/human/Dockerfile human/Cargo.lock"
 symbol = "layerx-human-service layerx-human-components"
@@ -3476,14 +3476,14 @@ observed = "formerly observation.6.7.human-image-lockfile-refusal. docker build 
 assumption = "The Human workspace lockfile is outside the hosting paths. It is left unchanged and the Dockerfile retains --locked. bash -n platform/hosted/tests/beta-cluster.sh platform/hosted/tests/topology-check.sh exits 0 in qual-logs/au29/bash-n-final.log. bash platform/hosted/tests/beta-cluster.sh render exits 0 in render.log. python3 qual-logs/au29/check-human-manifest.py exits 0 in human-manifest.log, validating explicit env names against the service source, the readiness route, rendered images and beta CA verification for short/full Service DNS names and localhost. bash tools/ci/beta-contract-check.sh exits 0 in beta-contract.log. cg spec lint exits 0 with zero errors and nine existing warnings in spec-lint-final.log. timeout 60s cg review exits 124 in cg-review.log; cg guard exits 0 with advisory task-scope differences in cg-guard.log. These checks do not qualify a Human runtime."
 severity = "blocker"
 
-[observation.6.8.9]
+[observation.6.8.98]
 task = "6.8"
 file = "platform/hosted/tests/beta-cluster.sh platform/hosted/human/deployment.yaml"
 symbol = "beta_cluster_up build_images wait_ready qualification_url"
 observed = "formerly observation.6.8.human-cluster-disk-stop. make platform-hosted-topology-check platform-beta-cluster-up platform-beta-cluster-down passes topology with both parsers, builds layerx-testnet-control with image ID sha256:d95f0f8cbc5387a24afca7834f78d13463ee7ac587468faca36e59cb8b05e3b7, then is terminated with SIGTERM when free disk falls below 30 GiB during gateway image context loading. The process return code is -15, shell-equivalent 143. The canceled Docker build reports: ERROR: failed to build: failed to run Build function: Canceled: context canceled. Logs and results: qual-logs/au29/task-6.8.log, task-6.8-result.json, build-layerx-testnet-control.log, build-layerx-gateway.log, cluster-images.log and cluster-state.json."
 assumption = "The selected disposable identity is layerx-au29-human with no owner kubeconfig or inherited LayerX overrides. CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4, LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin, LAYERX_BETA_MIN_FREE_GIB=30 and LAYERX_BETA_FORBIDDEN_CHAIN_ID=125 apply. No kind cluster or pods are created, no Human readiness probe executes and qualification exports are not written because env_write is not reached. The guard refuses contract transactions on the forbidden chain before deploy-contracts.sh; that step is not reached. The persistent Paxeer chain, existing Redis and shared runtime are untouched. Disk evidence is in qual-logs/au29/disk-before.log, disk-before-exact.log, disk-after-exact.log and disk-after-cleanup.log. Supplementary make platform-beta-cluster-down exits 0 in qual-logs/au29/teardown.log. remaining-cluster-containers.log and remaining-kind-containers.log are both empty; this proves cleanup and absence, not teardown of a deployed cluster. No complete cluster gate or ready Human deployment is claimed."
 severity = "blocker"
-[observation.5.1.1]
+[observation.5.1.44]
 task = "5.1"
 file = "human/Cargo.lock agent/tests/qualify/Cargo.lock agent/Cargo.lock"
 symbol = "cargo update --workspace --offline"
@@ -3491,7 +3491,7 @@ observed = "formerly observation.5.1.focused-lock-reconciliation. cargo update -
 assumption = "Root requirements are agent/tests/qualify/Cargo.toml:9-12, agent/crates/layerx-sdk/Cargo.toml:12-20, agent/crates/layerx-proof/Cargo.toml:12-13 and agent/crates/layerx-client/Cargo.toml. New SDK mirror, HTTP and URL requirements and proof runtime requirements account for the new transitive closure. Feature unification adds signature to ed25519-dalek and serde_derive to serde; version-qualified references disambiguate der, getrandom and windows-sys. sha3 and keccak records are reordered without version changes. agent/Cargo.lock is unchanged. Package old/new and direct requiring manifest lines follow; cargo-registry paths are relative to /root/.cargo/registry/src/: arrayref: absent -> 0.3.9; required by blake3 ^0.3.5 at cargo-registry/index.crates.io-1949cf8c6b5b557f/blake3-1.5.0/Cargo.toml:34 | arrayvec: absent -> 0.7.8; required by blake3 ^0.7.4 at cargo-registry/index.crates.io-1949cf8c6b5b557f/blake3-1.5.0/Cargo.toml:37 | autocfg: absent -> 1.5.1; required by num-traits ^1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/num-traits-0.2.19/Cargo.toml:47 | base64: absent -> 0.23.1; required by layerx-mirror =0.23.1 at interop/crates/layerx-mirror/Cargo.toml:9 | blake3: absent -> 1.5.0; required by layerx-programs-runtime =1.5.0 at programs/crates/layerx-programs-runtime/Cargo.toml:25 | bytes: absent -> 1.12.1; required by http ^1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/http-1.5.0/Cargo.toml:58 | constant_time_eq: absent -> 0.3.1; required by blake3 ^0.3.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/blake3-1.5.0/Cargo.toml:44 | core-foundation: absent -> 0.9.4; required by security-framework ^0.9.4 at cargo-registry/index.crates.io-1949cf8c6b5b557f/security-framework-2.11.1/Cargo.toml:60 | core-foundation-sys: absent -> 0.8.7; required by security-framework ^0.8.6 at cargo-registry/index.crates.io-1949cf8c6b5b557f/security-framework-2.11.1/Cargo.toml:63 | der: absent -> 0.8.2; required by ureq ^0.8.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/ureq-3.4.0/Cargo.toml:158 | displaydoc: absent -> 0.2.7; required by icu_properties ^0.2.3 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_properties-2.3.0/Cargo.toml:104 | downcast-rs: absent -> 1.2.1; required by wasmi_core ^1.2 at cargo-registry/index.crates.io-1949cf8c6b5b557f/wasmi_core-0.13.0/Cargo.toml:40 | errno: absent -> 0.3.14; required by rustix ^0.3.10 at cargo-registry/index.crates.io-1949cf8c6b5b557f/rustix-1.1.4/Cargo.toml:211 | fastrand: absent -> 2.5.0; required by tempfile ^2.1.1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/tempfile-3.27.0/Cargo.toml:80 | form_urlencoded: absent -> 1.2.2; required by url ^1.2.2 at cargo-registry/index.crates.io-1949cf8c6b5b557f/url-2.5.8/Cargo.toml:81 | getrandom: absent -> 0.4.3; required by tempfile >=0.3.0, <0.5 at cargo-registry/index.crates.io-1949cf8c6b5b557f/tempfile-3.27.0/Cargo.toml:95 | http: absent -> 1.5.0; required by ureq-proto ^1.1.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/ureq-proto-0.6.1/Cargo.toml:58 | httparse: absent -> 1.10.1; required by ureq-proto ^1.8.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/ureq-proto-0.6.1/Cargo.toml:63 | icu_collections: absent -> 2.3.0; required by icu_normalizer ~2.3.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_normalizer-2.3.0/Cargo.toml:151 | icu_locale_core: absent -> 2.3.0; required by icu_properties ^2.3.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_properties-2.3.0/Cargo.toml:117 | icu_normalizer: absent -> 2.3.0; required by idna_adapter ^2.2 at cargo-registry/index.crates.io-1949cf8c6b5b557f/idna_adapter-1.2.2/Cargo.toml:50 | icu_normalizer_data: absent -> 2.3.0; required by icu_normalizer ~2.3.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_normalizer-2.3.0/Cargo.toml:155 | icu_properties: absent -> 2.3.0; required by idna_adapter ^2.2 at cargo-registry/index.crates.io-1949cf8c6b5b557f/idna_adapter-1.2.2/Cargo.toml:54 | icu_properties_data: absent -> 2.3.0; required by icu_properties ~2.3.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_properties-2.3.0/Cargo.toml:122 | icu_provider: absent -> 2.3.1; required by icu_normalizer ^2.3.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_normalizer-2.3.0/Cargo.toml:165 | idna: absent -> 1.1.0; required by url ^1.1.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/url-2.5.8/Cargo.toml:86 | idna_adapter: absent -> 1.2.2; required by idna ^1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/idna-1.1.0/Cargo.toml:69 | indexmap-nostd: absent -> 0.4.0; required by wasmparser-nostd ^0.4.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/wasmparser-nostd-0.100.2/Cargo.toml:35 | itoa: absent -> 1.0.18; required by serde_json ^1.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/serde_json-1.0.149/Cargo.toml:117 | layerx-mirror: absent -> 0.1.0; required by layerx-sdk * at agent/crates/layerx-sdk/Cargo.toml:15 | layerx-programs-runtime: absent -> 0.1.0; required by layerx-proof * at agent/crates/layerx-proof/Cargo.toml:12 | libm: absent -> 0.2.16; required by wasmi_core ^0.2.1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/wasmi_core-0.13.0/Cargo.toml:44 | linux-raw-sys: absent -> 0.12.1; required by rustix ^0.12 at cargo-registry/index.crates.io-1949cf8c6b5b557f/rustix-1.1.4/Cargo.toml:194 | litemap: absent -> 0.8.3; required by icu_locale_core ^0.8.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_locale_core-2.3.0/Cargo.toml:123 | log: absent -> 0.4.34; required by ureq ^0.4.25 at cargo-registry/index.crates.io-1949cf8c6b5b557f/ureq-3.4.0/Cargo.toml:179 | memchr: absent -> 2.8.3; required by serde_json ^2 at cargo-registry/index.crates.io-1949cf8c6b5b557f/serde_json-1.0.149/Cargo.toml:120 | native-tls: absent -> 0.2.15; required by ureq ^0.2.14 at cargo-registry/index.crates.io-1949cf8c6b5b557f/ureq-3.4.0/Cargo.toml:88 | num-bigint: absent -> 0.4.8; required by layerx-programs-runtime ^0.4 at programs/crates/layerx-programs-runtime/Cargo.toml:28 | num-integer: absent -> 0.1.47; required by num-bigint ^0.1.46 at cargo-registry/index.crates.io-1949cf8c6b5b557f/num-bigint-0.4.8/Cargo.toml:131 | num-traits: absent -> 0.2.19; required by num-bigint ^0.2.18 at cargo-registry/index.crates.io-1949cf8c6b5b557f/num-bigint-0.4.8/Cargo.toml:136 | openssl-probe: absent -> 0.1.6; required by native-tls ^0.1.6 at cargo-registry/index.crates.io-1949cf8c6b5b557f/native-tls-0.2.15/Cargo.toml:68 | parity-wasm: absent -> 0.45.0; required by wasm-instrument =0.45.0 at programs/vendor/wasm-instrument/Cargo.toml:42 | paste: absent -> 1.0.15; required by wasmi_core ^1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/wasmi_core-0.13.0/Cargo.toml:51 | pem-rfc7468: absent -> 1.0.0; required by der ^1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/der-0.8.2/Cargo.toml:138 | percent-encoding: absent -> 2.3.2; required by ureq ^2.3.1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/ureq-3.4.0/Cargo.toml:191 | potential_utf: absent -> 0.1.6; required by icu_collections ^0.1.3 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_collections-2.3.0/Cargo.toml:112 | r-efi: absent -> 6.0.0; required by getrandom ^6 at cargo-registry/index.crates.io-1949cf8c6b5b557f/getrandom-0.4.3/Cargo.toml:103 | rustix: absent -> 1.1.4; required by tempfile ^1.1.4 at cargo-registry/index.crates.io-1949cf8c6b5b557f/tempfile-3.27.0/Cargo.toml:91 | schannel: absent -> 0.1.29; required by native-tls ^0.1.26 at cargo-registry/index.crates.io-1949cf8c6b5b557f/native-tls-0.2.15/Cargo.toml:77 | security-framework: absent -> 2.11.1; required by native-tls ^2.11.1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/native-tls-0.2.15/Cargo.toml:83 | security-framework-sys: absent -> 2.17.0; required by native-tls ^2.15.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/native-tls-0.2.15/Cargo.toml:86 | serde_json: absent -> 1.0.149; required by layerx-sdk =1.0.149 at agent/crates/layerx-sdk/Cargo.toml:16 | smallvec: absent -> 1.16.0; required by wasmi ^1.10.0 at programs/vendor/wasmi-0.31.2/Cargo.toml:41 | spin: absent -> 0.9.9; required by wasmi ^0.9 at programs/vendor/wasmi-0.31.2/Cargo.toml:45 | stable_deref_trait: absent -> 1.2.1; required by yoke ^1.2.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/yoke-0.8.3/Cargo.toml:89 | synstructure: absent -> 0.13.2; required by yoke-derive ^0.13.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/yoke-derive-0.8.2/Cargo.toml:63 | tempfile: absent -> 3.27.0; required by native-tls ^3.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/native-tls-0.2.15/Cargo.toml:74 | tinystr: absent -> 0.8.4; required by icu_locale_core ^0.8.4 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_locale_core-2.3.0/Cargo.toml:133 | ureq: absent -> 3.4.0; required by layerx-sdk =3.4.0 at agent/crates/layerx-sdk/Cargo.toml:18 | ureq-proto: absent -> 0.6.1; required by ureq ^0.6.1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/ureq-3.4.0/Cargo.toml:231 | url: absent -> 2.5.8; required by layerx-sdk =2.5.8 at agent/crates/layerx-sdk/Cargo.toml:19 | utf8-zero: absent -> 0.8.1; required by ureq ^0.8.1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/ureq-3.4.0/Cargo.toml:241 | utf8_iter: absent -> 1.0.4; required by idna ^1.0.4 at cargo-registry/index.crates.io-1949cf8c6b5b557f/idna-1.1.0/Cargo.toml:76 | wasm-instrument: absent -> 0.4.0; required by layerx-programs-runtime * at programs/crates/layerx-programs-runtime/Cargo.toml:22 | wasmi: absent -> 0.31.2; required by layerx-programs-runtime =0.31.2 at programs/crates/layerx-programs-runtime/Cargo.toml:20 | wasmi_arena: absent -> 0.4.1; required by wasmi ^0.4.1 at programs/vendor/wasmi-0.31.2/Cargo.toml:54 | wasmi_core: absent -> 0.13.0; required by wasmi ^0.13 at programs/vendor/wasmi-0.31.2/Cargo.toml:58 | wasmparser-nostd: absent -> 0.100.2; required by layerx-programs-runtime =0.100.2 at programs/crates/layerx-programs-runtime/Cargo.toml:21 | windows-link: absent -> 0.2.1; required by windows-sys ^0.2.1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/windows-sys-0.61.2/Cargo.toml:289 | windows-sys: absent -> 0.61.2; required by schannel ^0.61 at cargo-registry/index.crates.io-1949cf8c6b5b557f/schannel-0.1.29/Cargo.toml:52 | writeable: absent -> 0.6.4; required by icu_provider ^0.6.4 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_provider-2.3.1/Cargo.toml:162 | yoke: absent -> 0.8.3; required by icu_collections ^0.8.3 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_collections-2.3.0/Cargo.toml:127 | yoke-derive: absent -> 0.8.2; required by yoke ^0.8.2 at cargo-registry/index.crates.io-1949cf8c6b5b557f/yoke-0.8.3/Cargo.toml:93 | zerofrom: absent -> 0.1.8; required by icu_collections ^0.1.6 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_collections-2.3.0/Cargo.toml:132 | zerofrom-derive: absent -> 0.1.7; required by zerofrom ^0.1.6 at cargo-registry/index.crates.io-1949cf8c6b5b557f/zerofrom-0.1.8/Cargo.toml:68 | zerotrie: absent -> 0.2.5; required by icu_properties ^0.2.5 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_properties-2.3.0/Cargo.toml:147 | zerovec: absent -> 0.11.8; required by icu_normalizer ^0.11.7 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_normalizer-2.3.0/Cargo.toml:198 | zerovec-derive: absent -> 0.11.6; required by zerovec ^0.11.5 at cargo-registry/index.crates.io-1949cf8c6b5b557f/zerovec-0.11.8/Cargo.toml:151 | zmij: absent -> 1.0.23; required by serde_json ^1.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/serde_json-1.0.149/Cargo.toml:128 | "
 severity = "note"
 
-[observation.5.1.2]
+[observation.5.1.53]
 task = "5.1"
 file = "tools/lxp_qual_replay_matrix.sh tools/lxp_replay_matrix.sh tools/ci/replay-matrix.sh .github/workflows/ci.yml .github/workflows/platform.yml .github/workflows/programs-conformance.yml"
 symbol = "clang-18"
@@ -3499,7 +3499,7 @@ observed = "formerly observation.5.1.focused-replay-compiler-prerequisite. Read-
 assumption = "Compiler provisioning is external to this repair. No compiler was installed and make qualify-replay was not rerun. The executable requirement remains intact."
 severity = "blocker"
 
-[observation.5.1.3]
+[observation.5.1.54]
 task = "5.1"
 file = "spec/layerx-beta/spec.kvx tools/qualification/release_runner.py tools/ci/beta-qualify.sh"
 symbol = "human-qualify-faults"
@@ -3507,7 +3507,7 @@ observed = "formerly observation.5.1.focused-human-real-stack-prerequisite. Read
 assumption = "Task 5.1 needs an already provisioned authorized real stack to pass this gate; its current contract does not instruct the runner to create it. Task 5.2 owns setup, creating a prerequisite ordering issue for the orchestrator. Setting the flag alone does not establish a stack. Runner and task statuses remain unchanged; make human-qualify-faults was not rerun."
 severity = "blocker"
 
-[observation.5.1.4]
+[observation.5.1.55]
 task = "5.1"
 file = "human/Cargo.lock agent/tests/qualify/Cargo.lock human/crates/layerx-human-service/tests/withdraw.rs Makefile"
 symbol = "human-build human-test-service human-test-activity human-test-unit human-test-component agent-qualify-fuzz agent-qualify-wire"
@@ -3579,9 +3579,9 @@ symbol = "observation.5.1.1"
 observed = "(renumbered after rebase) The later duplicate observation.5.1.1 header contained no fields before the following observation.5.1.7 header. The empty header is retained under a unique identifier; all following technical records are preserved."
 assumption = "No execution evidence was attached to the empty header."
 
-[observation.5.1.1]
+[observation.5.1.56]
 [observation.5.1.7]
-[observation.5.1.1]
+[observation.5.1.57]
 task = "5.1"
 file = "human/Cargo.lock agent/tests/qualify/Cargo.lock agent/Cargo.lock"
 symbol = "cargo update --workspace --offline"
@@ -3589,7 +3589,7 @@ observed = "formerly observation.5.1.focused-lock-reconciliation. cargo update -
 assumption = "Root requirements are agent/tests/qualify/Cargo.toml:9-12, agent/crates/layerx-sdk/Cargo.toml:12-20, agent/crates/layerx-proof/Cargo.toml:12-13 and agent/crates/layerx-client/Cargo.toml. New SDK mirror, HTTP and URL requirements and proof runtime requirements account for the new transitive closure. Feature unification adds signature to ed25519-dalek and serde_derive to serde; version-qualified references disambiguate der, getrandom and windows-sys. sha3 and keccak records are reordered without version changes. agent/Cargo.lock is unchanged. Package old/new and direct requiring manifest lines follow; cargo-registry paths are relative to /root/.cargo/registry/src/: arrayref: absent -> 0.3.9; required by blake3 ^0.3.5 at cargo-registry/index.crates.io-1949cf8c6b5b557f/blake3-1.5.0/Cargo.toml:34 | arrayvec: absent -> 0.7.8; required by blake3 ^0.7.4 at cargo-registry/index.crates.io-1949cf8c6b5b557f/blake3-1.5.0/Cargo.toml:37 | autocfg: absent -> 1.5.1; required by num-traits ^1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/num-traits-0.2.19/Cargo.toml:47 | base64: absent -> 0.23.1; required by layerx-mirror =0.23.1 at interop/crates/layerx-mirror/Cargo.toml:9 | blake3: absent -> 1.5.0; required by layerx-programs-runtime =1.5.0 at programs/crates/layerx-programs-runtime/Cargo.toml:25 | bytes: absent -> 1.12.1; required by http ^1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/http-1.5.0/Cargo.toml:58 | constant_time_eq: absent -> 0.3.1; required by blake3 ^0.3.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/blake3-1.5.0/Cargo.toml:44 | core-foundation: absent -> 0.9.4; required by security-framework ^0.9.4 at cargo-registry/index.crates.io-1949cf8c6b5b557f/security-framework-2.11.1/Cargo.toml:60 | core-foundation-sys: absent -> 0.8.7; required by security-framework ^0.8.6 at cargo-registry/index.crates.io-1949cf8c6b5b557f/security-framework-2.11.1/Cargo.toml:63 | der: absent -> 0.8.2; required by ureq ^0.8.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/ureq-3.4.0/Cargo.toml:158 | displaydoc: absent -> 0.2.7; required by icu_properties ^0.2.3 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_properties-2.3.0/Cargo.toml:104 | downcast-rs: absent -> 1.2.1; required by wasmi_core ^1.2 at cargo-registry/index.crates.io-1949cf8c6b5b557f/wasmi_core-0.13.0/Cargo.toml:40 | errno: absent -> 0.3.14; required by rustix ^0.3.10 at cargo-registry/index.crates.io-1949cf8c6b5b557f/rustix-1.1.4/Cargo.toml:211 | fastrand: absent -> 2.5.0; required by tempfile ^2.1.1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/tempfile-3.27.0/Cargo.toml:80 | form_urlencoded: absent -> 1.2.2; required by url ^1.2.2 at cargo-registry/index.crates.io-1949cf8c6b5b557f/url-2.5.8/Cargo.toml:81 | getrandom: absent -> 0.4.3; required by tempfile >=0.3.0, <0.5 at cargo-registry/index.crates.io-1949cf8c6b5b557f/tempfile-3.27.0/Cargo.toml:95 | http: absent -> 1.5.0; required by ureq-proto ^1.1.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/ureq-proto-0.6.1/Cargo.toml:58 | httparse: absent -> 1.10.1; required by ureq-proto ^1.8.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/ureq-proto-0.6.1/Cargo.toml:63 | icu_collections: absent -> 2.3.0; required by icu_normalizer ~2.3.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_normalizer-2.3.0/Cargo.toml:151 | icu_locale_core: absent -> 2.3.0; required by icu_properties ^2.3.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_properties-2.3.0/Cargo.toml:117 | icu_normalizer: absent -> 2.3.0; required by idna_adapter ^2.2 at cargo-registry/index.crates.io-1949cf8c6b5b557f/idna_adapter-1.2.2/Cargo.toml:50 | icu_normalizer_data: absent -> 2.3.0; required by icu_normalizer ~2.3.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_normalizer-2.3.0/Cargo.toml:155 | icu_properties: absent -> 2.3.0; required by idna_adapter ^2.2 at cargo-registry/index.crates.io-1949cf8c6b5b557f/idna_adapter-1.2.2/Cargo.toml:54 | icu_properties_data: absent -> 2.3.0; required by icu_properties ~2.3.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_properties-2.3.0/Cargo.toml:122 | icu_provider: absent -> 2.3.1; required by icu_normalizer ^2.3.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_normalizer-2.3.0/Cargo.toml:165 | idna: absent -> 1.1.0; required by url ^1.1.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/url-2.5.8/Cargo.toml:86 | idna_adapter: absent -> 1.2.2; required by idna ^1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/idna-1.1.0/Cargo.toml:69 | indexmap-nostd: absent -> 0.4.0; required by wasmparser-nostd ^0.4.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/wasmparser-nostd-0.100.2/Cargo.toml:35 | itoa: absent -> 1.0.18; required by serde_json ^1.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/serde_json-1.0.149/Cargo.toml:117 | layerx-mirror: absent -> 0.1.0; required by layerx-sdk * at agent/crates/layerx-sdk/Cargo.toml:15 | layerx-programs-runtime: absent -> 0.1.0; required by layerx-proof * at agent/crates/layerx-proof/Cargo.toml:12 | libm: absent -> 0.2.16; required by wasmi_core ^0.2.1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/wasmi_core-0.13.0/Cargo.toml:44 | linux-raw-sys: absent -> 0.12.1; required by rustix ^0.12 at cargo-registry/index.crates.io-1949cf8c6b5b557f/rustix-1.1.4/Cargo.toml:194 | litemap: absent -> 0.8.3; required by icu_locale_core ^0.8.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_locale_core-2.3.0/Cargo.toml:123 | log: absent -> 0.4.34; required by ureq ^0.4.25 at cargo-registry/index.crates.io-1949cf8c6b5b557f/ureq-3.4.0/Cargo.toml:179 | memchr: absent -> 2.8.3; required by serde_json ^2 at cargo-registry/index.crates.io-1949cf8c6b5b557f/serde_json-1.0.149/Cargo.toml:120 | native-tls: absent -> 0.2.15; required by ureq ^0.2.14 at cargo-registry/index.crates.io-1949cf8c6b5b557f/ureq-3.4.0/Cargo.toml:88 | num-bigint: absent -> 0.4.8; required by layerx-programs-runtime ^0.4 at programs/crates/layerx-programs-runtime/Cargo.toml:28 | num-integer: absent -> 0.1.47; required by num-bigint ^0.1.46 at cargo-registry/index.crates.io-1949cf8c6b5b557f/num-bigint-0.4.8/Cargo.toml:131 | num-traits: absent -> 0.2.19; required by num-bigint ^0.2.18 at cargo-registry/index.crates.io-1949cf8c6b5b557f/num-bigint-0.4.8/Cargo.toml:136 | openssl-probe: absent -> 0.1.6; required by native-tls ^0.1.6 at cargo-registry/index.crates.io-1949cf8c6b5b557f/native-tls-0.2.15/Cargo.toml:68 | parity-wasm: absent -> 0.45.0; required by wasm-instrument =0.45.0 at programs/vendor/wasm-instrument/Cargo.toml:42 | paste: absent -> 1.0.15; required by wasmi_core ^1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/wasmi_core-0.13.0/Cargo.toml:51 | pem-rfc7468: absent -> 1.0.0; required by der ^1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/der-0.8.2/Cargo.toml:138 | percent-encoding: absent -> 2.3.2; required by ureq ^2.3.1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/ureq-3.4.0/Cargo.toml:191 | potential_utf: absent -> 0.1.6; required by icu_collections ^0.1.3 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_collections-2.3.0/Cargo.toml:112 | r-efi: absent -> 6.0.0; required by getrandom ^6 at cargo-registry/index.crates.io-1949cf8c6b5b557f/getrandom-0.4.3/Cargo.toml:103 | rustix: absent -> 1.1.4; required by tempfile ^1.1.4 at cargo-registry/index.crates.io-1949cf8c6b5b557f/tempfile-3.27.0/Cargo.toml:91 | schannel: absent -> 0.1.29; required by native-tls ^0.1.26 at cargo-registry/index.crates.io-1949cf8c6b5b557f/native-tls-0.2.15/Cargo.toml:77 | security-framework: absent -> 2.11.1; required by native-tls ^2.11.1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/native-tls-0.2.15/Cargo.toml:83 | security-framework-sys: absent -> 2.17.0; required by native-tls ^2.15.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/native-tls-0.2.15/Cargo.toml:86 | serde_json: absent -> 1.0.149; required by layerx-sdk =1.0.149 at agent/crates/layerx-sdk/Cargo.toml:16 | smallvec: absent -> 1.16.0; required by wasmi ^1.10.0 at programs/vendor/wasmi-0.31.2/Cargo.toml:41 | spin: absent -> 0.9.9; required by wasmi ^0.9 at programs/vendor/wasmi-0.31.2/Cargo.toml:45 | stable_deref_trait: absent -> 1.2.1; required by yoke ^1.2.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/yoke-0.8.3/Cargo.toml:89 | synstructure: absent -> 0.13.2; required by yoke-derive ^0.13.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/yoke-derive-0.8.2/Cargo.toml:63 | tempfile: absent -> 3.27.0; required by native-tls ^3.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/native-tls-0.2.15/Cargo.toml:74 | tinystr: absent -> 0.8.4; required by icu_locale_core ^0.8.4 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_locale_core-2.3.0/Cargo.toml:133 | ureq: absent -> 3.4.0; required by layerx-sdk =3.4.0 at agent/crates/layerx-sdk/Cargo.toml:18 | ureq-proto: absent -> 0.6.1; required by ureq ^0.6.1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/ureq-3.4.0/Cargo.toml:231 | url: absent -> 2.5.8; required by layerx-sdk =2.5.8 at agent/crates/layerx-sdk/Cargo.toml:19 | utf8-zero: absent -> 0.8.1; required by ureq ^0.8.1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/ureq-3.4.0/Cargo.toml:241 | utf8_iter: absent -> 1.0.4; required by idna ^1.0.4 at cargo-registry/index.crates.io-1949cf8c6b5b557f/idna-1.1.0/Cargo.toml:76 | wasm-instrument: absent -> 0.4.0; required by layerx-programs-runtime * at programs/crates/layerx-programs-runtime/Cargo.toml:22 | wasmi: absent -> 0.31.2; required by layerx-programs-runtime =0.31.2 at programs/crates/layerx-programs-runtime/Cargo.toml:20 | wasmi_arena: absent -> 0.4.1; required by wasmi ^0.4.1 at programs/vendor/wasmi-0.31.2/Cargo.toml:54 | wasmi_core: absent -> 0.13.0; required by wasmi ^0.13 at programs/vendor/wasmi-0.31.2/Cargo.toml:58 | wasmparser-nostd: absent -> 0.100.2; required by layerx-programs-runtime =0.100.2 at programs/crates/layerx-programs-runtime/Cargo.toml:21 | windows-link: absent -> 0.2.1; required by windows-sys ^0.2.1 at cargo-registry/index.crates.io-1949cf8c6b5b557f/windows-sys-0.61.2/Cargo.toml:289 | windows-sys: absent -> 0.61.2; required by schannel ^0.61 at cargo-registry/index.crates.io-1949cf8c6b5b557f/schannel-0.1.29/Cargo.toml:52 | writeable: absent -> 0.6.4; required by icu_provider ^0.6.4 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_provider-2.3.1/Cargo.toml:162 | yoke: absent -> 0.8.3; required by icu_collections ^0.8.3 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_collections-2.3.0/Cargo.toml:127 | yoke-derive: absent -> 0.8.2; required by yoke ^0.8.2 at cargo-registry/index.crates.io-1949cf8c6b5b557f/yoke-0.8.3/Cargo.toml:93 | zerofrom: absent -> 0.1.8; required by icu_collections ^0.1.6 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_collections-2.3.0/Cargo.toml:132 | zerofrom-derive: absent -> 0.1.7; required by zerofrom ^0.1.6 at cargo-registry/index.crates.io-1949cf8c6b5b557f/zerofrom-0.1.8/Cargo.toml:68 | zerotrie: absent -> 0.2.5; required by icu_properties ^0.2.5 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_properties-2.3.0/Cargo.toml:147 | zerovec: absent -> 0.11.8; required by icu_normalizer ^0.11.7 at cargo-registry/index.crates.io-1949cf8c6b5b557f/icu_normalizer-2.3.0/Cargo.toml:198 | zerovec-derive: absent -> 0.11.6; required by zerovec ^0.11.5 at cargo-registry/index.crates.io-1949cf8c6b5b557f/zerovec-0.11.8/Cargo.toml:151 | zmij: absent -> 1.0.23; required by serde_json ^1.0 at cargo-registry/index.crates.io-1949cf8c6b5b557f/serde_json-1.0.149/Cargo.toml:128 | "
 severity = "note"
 
-[observation.5.1.2]
+[observation.5.1.58]
 task = "5.1"
 file = "tools/lxp_qual_replay_matrix.sh tools/lxp_replay_matrix.sh tools/ci/replay-matrix.sh .github/workflows/ci.yml .github/workflows/platform.yml .github/workflows/programs-conformance.yml"
 symbol = "clang-18"
@@ -3597,7 +3597,7 @@ observed = "formerly observation.5.1.focused-replay-compiler-prerequisite. Read-
 assumption = "Compiler provisioning is external to this repair. No compiler was installed and make qualify-replay was not rerun. The executable requirement remains intact."
 severity = "blocker"
 
-[observation.5.1.3]
+[observation.5.1.59]
 task = "5.1"
 file = "spec/layerx-beta/spec.kvx tools/qualification/release_runner.py tools/ci/beta-qualify.sh"
 symbol = "human-qualify-faults"
@@ -3605,7 +3605,7 @@ observed = "formerly observation.5.1.focused-human-real-stack-prerequisite. Read
 assumption = "Task 5.1 needs an already provisioned authorized real stack to pass this gate; its current contract does not instruct the runner to create it. Task 5.2 owns setup, creating a prerequisite ordering issue for the orchestrator. Setting the flag alone does not establish a stack. Runner and task statuses remain unchanged; make human-qualify-faults was not rerun."
 severity = "blocker"
 
-[observation.5.1.4]
+[observation.5.1.60]
 task = "5.1"
 file = "human/Cargo.lock agent/tests/qualify/Cargo.lock human/crates/layerx-human-service/tests/withdraw.rs Makefile"
 symbol = "human-build human-test-service human-test-activity human-test-unit human-test-component agent-qualify-fuzz agent-qualify-wire"
@@ -3757,7 +3757,7 @@ observed = "The terminal correction and all requested qualification gates pass o
 assumption = "Webhook credential integration and its conflict resolution are outside the terminal expectation and ledger normalisation scope. No webhook source or deployment conflict is resolved here. The passing local gates qualify the preserved source; current-main integration remains incomplete."
 severity = "blocker"
 
-[observation.6.8.4]
+[observation.6.8.99]
 task = "6.8"
 file = "platform/hosted/agent-boundary/src/main.rs platform/hosted/agent-boundary/tests/real_node.rs platform/hosted/node/deployment.yaml platform/hosted/webhooks/src/trusted.rs platform/hosted/webhooks/deployment.yaml platform/hosted/tests/beta-cluster.sh platform/hosted/tests/topology-check.sh"
 symbol = "Plane::Webhook authenticate receipt_route component_secrets_generate read_secret_file"
@@ -3781,7 +3781,7 @@ observed = "formerly observation.6.8.cluster-lock-reconciled-disk-stop. The lock
 assumption = "CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4 LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin; LAYERX_BETA_KUBECONFIG unset, disposable identity layerx-au30-human, LAYERX_BETA_MIN_FREE_GIB=30 and LAYERX_BETA_FORBIDDEN_CHAIN_ID=125. The repository build_context and docker build invocation are unchanged. Human is not reached and has no new image digest; no kind cluster or pod exists, no readiness probe runs and no qualification exports are written. Supplementary make platform-beta-cluster-down exits 0 in qual-logs/au30/teardown.log. remaining-cluster-containers.log and remaining-kind-containers.log are empty. This proves cleanup and absence, not teardown of a deployed cluster. df -h / reports 69G free before the exact command, 31G after the interrupted bring-up and 32G after teardown; raw logs disk-before-exact.log, disk-after-bringup-attempt.log and disk-after-teardown.log. No persistent Paxeer, host Redis or shared runtime action occurs. The chain-125 transaction guard is retained and never reached. More disk headroom is required before the Human build and exact cluster gate can finish; production Human provider and custody inputs remain unqualified. git diff --check exits 0 in qual-logs/au30/diff-check.log; cg spec lint exits 0 with zero errors and nine existing warnings in qual-logs/au30/spec-lint.log."
 severity = "blocker"
 
-[observation.6.8.10]
+[observation.6.8.100]
 task = "6.8"
 file = "human/Cargo.lock agent/tests/qualify/Cargo.lock platform/hosted/tests/beta-cluster.sh platform/hosted/human/Dockerfile"
 symbol = "build_images beta_cluster_up beta_cluster_down"
@@ -3893,7 +3893,7 @@ observed = "formerly observation.6.4.boundary-maintenance-aggregate-gates. cargo
 assumption = "The exact 6.4 failure remains open as recorded in observation.6.4.boundary-maintenance-producer-gaps. The reviewed HTTP test preserves persistence_unavailable for undecodable journal schema and program_artifacts_invalid for decodable invalid evidence. Codify review times out with exit 124; advisory guard exits 0 but selects unrelated active task 3.7 and reports the explicitly assigned consumer paths outside that task. Logs: qual-logs/n27/cg-review.log and qual-logs/n27/cg-guard.log. No task status or generated spec projection is changed."
 severity = "note"
 
-[observation.5.1.7]
+[observation.5.1.61]
 task = "5.1"
 file = "human/Cargo.lock agent/tests/qualify/Cargo.lock agent/Cargo.lock"
 symbol = "cargo update --workspace --offline"
@@ -5029,7 +5029,7 @@ observed = "ureq 3.4.0 gates its NativeTlsConnector on native-tls rather than na
 assumption = "Dependent workspace owners must regenerate their lockfiles for the enabled connector before locked builds; no unrelated package upgrade is required by the agentd change."
 severity = "blocker"
 
-[observation.6.8.5]
+[observation.6.8.101]
 task = "6.8"
 file = "platform/hosted/tests/beta-cluster.sh platform/hosted/internal/deployment.yaml platform/hosted/webhooks/deployment.yaml platform/hosted/gateway/deployment.yaml platform/hosted/node/deployment.yaml"
 symbol = "internal_principals_provision internal_apply manifests_render secrets_apply wait_ready"
@@ -5037,7 +5037,7 @@ observed = "formerly observation.6.8.4. formerly observation.6.8.internal-cluste
 assumption = "bash -n platform/hosted/tests/beta-cluster.sh platform/hosted/tests/topology-check.sh exits 0 in qual-logs/au28/bash-n-final.log. ShellCheck is not installed, recorded in qual-logs/au28/shellcheck.log. bash platform/hosted/tests/beta-cluster.sh render exits 0 in qual-logs/au28/render.log. python3 qual-logs/au28/runtime-material-check.py exits 0 in qual-logs/au28/runtime-material-check-final.log after correcting the untracked harness's Lua literal extractor; the first harness invocation exited 1 in runtime-material-check.log before starting Redis. The final check validates six certificates against short/full Service DNS names, rendered internal image references, the real Redis production CAS Lua, gateway-data reads and cross-prefix/write/admin refusals. Both owned Redis processes use Unix sockets with no TCP listener and terminate. Image builds, gateway key issuance in Kubernetes and pod readiness remain unexecuted."
 severity = "note"
 
-[observation.6.8.6]
+[observation.6.8.112]
 task = "6.8"
 file = "platform/hosted/internal/deployment.yaml platform/hosted/tests/topology-check.sh platform/hosted/tests/beta-cluster.sh tools/qualification/beta_driver.py"
 symbol = "LAYERX_EVENTS_UPSTREAM_URL LAYERX_EVENTS_CREDENTIALS_FILE qualification_url STACK_FLAGS"
@@ -5045,7 +5045,7 @@ observed = "formerly observation.6.8.5. formerly observation.6.8.human-upstream-
 assumption = "CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4 LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin; LAYERX_BETA_KUBECONFIG unset; selected disposable kind identity layerx-au28-internal; LAYERX_BETA_MIN_FREE_GIB=30. qual-logs/au28/cluster-state.json records no selected cluster containers or built images. No image digest, pod readiness or live cluster teardown proof exists because the prerequisite failed. After confirming every render image reference was unbuilt and absent, supplementary make platform-beta-cluster-down exits 0 in qual-logs/au28/render-cleanup.log with LAYERX_BETA_KEEP_TOOLS=1; it removes render-only output, not a deployed cluster. remaining-cluster-containers.log is empty. df -h / is retained in disk-before-cluster.log, disk-after-exact.log and disk-after.log; free space remains above 30 GB. No persistent Paxeer endpoint, existing Redis endpoint or shared runtime is used. The missing-host assertion and separately operated status-publisher strict refusal remain intact."
 severity = "blocker"
 
-[observation.6.8.7]
+[observation.6.8.113]
 task = "6.8"
 file = "platform/hosted/tests/topology-check.sh platform/hosted/node/deployment.yaml"
 symbol = "Topology.add check egress_admits load_builtin"
@@ -5053,7 +5053,7 @@ observed = "formerly observation.6.8.6. formerly observation.6.8.topology-model-
 assumption = "The built-in parser defect precedes these changes and is recorded without altering its assertion or broadening the parser repair. This is static topology evidence, not pod connectivity or first-payment proof. cg spec lint exits 0 with zero errors and nine existing warnings in qual-logs/au28/spec-lint.log. git diff --check exits 0 in qual-logs/au28/diff-check.log. No spec task status changes or passing full-task gate are claimed."
 severity = "blocker"
 
-[observation.6.8.8]
+[observation.6.8.114]
 task = "6.8"
 file = "platform/hosted/tests/beta-cluster.sh platform/hosted/node/deployment.yaml platform/hosted/agent-boundary/src/main.rs platform/hosted/internal/src/events.rs platform/hosted/webhooks/src/trusted.rs"
 symbol = "developer-component.token LAYERX_AGENT_BOUNDARY_GATEWAY_TOKEN_FILE LAYERX_AGENT_BOUNDARY_REGISTRY_TOKEN_FILE observe"
@@ -5061,7 +5061,7 @@ observed = "formerly observation.6.8.7. formerly observation.6.8.developer-compo
 assumption = "A dedicated webhook component credential contract and a real event observation/trigger integration need changes beyond the owned cluster-script and policy repair. No gateway or registry credential is reassigned to webhooks, no authentication check is weakened and no observation is fabricated. NEEDS.md contains the exact follow-up requests."
 severity = "blocker"
 
-[observation.6.7.14]
+[observation.6.7.21]
 task = "6.7"
 file = "platform/hosted/human/deployment.yaml platform/hosted/human/Dockerfile platform/hosted/tests/beta-cluster.sh human/crates/layerx-human-service/src/server/production_components.rs human/crates/layerx-human-service/src/bin/layerx-human-components.rs human/apps/web/next.config.mjs"
 symbol = "ProductionComponentsConfig ProductionComponents::open readiness session.open"
@@ -5069,7 +5069,7 @@ observed = "formerly observation.6.7.15. formerly observation.6.7.13 (renumbered
 assumption = "Ready Human hosting remains blocked on the provider graph and mandatory configuration. Source references and required integration requests are recorded in platform/hosted/human/README.md and the untracked NEEDS.md. Human session.open requires an indexed verified passkey assertion and real agent authority registration; journeys/approvals cookie maps remain empty. The Next.js standalone web application needs its own Node runtime and is not served as static files by the Rust API. The beta contract checker discovers hosted directories automatically; platform/docs/content/beta.md includes hosted-human without claiming runtime or deployment proof. No spec task status is changed."
 severity = "blocker"
 
-[observation.6.8.9]
+[observation.6.8.115]
 task = "6.8"
 file = "platform/hosted/tests/topology-check.sh platform/hosted/tests/topology-regressions.py platform/hosted/node/deployment.yaml"
 symbol = "Chunk.parse_sequence Chunk.parse_block_scalar load_builtin"
@@ -5077,7 +5077,7 @@ observed = "formerly observation.6.8.8. formerly observation.6.8.topology-node-s
 assumption = "This is static topology and parser evidence, not runtime connectivity. The default make target now runs the built-in parser and persistent regression suite as well as PyYAML when PyYAML is installed. No assertion, bound, missing-host refusal or strict external-service refusal is removed."
 severity = "note"
 
-[observation.6.7.15]
+[observation.6.7.22]
 task = "6.7"
 file = "platform/hosted/human/Dockerfile human/Cargo.lock"
 symbol = "layerx-human-service layerx-human-components"
@@ -5085,7 +5085,7 @@ observed = "formerly observation.6.7.14. formerly observation.6.7.human-image-lo
 assumption = "The Human workspace lockfile is outside the hosting paths. It is left unchanged and the Dockerfile retains --locked. bash -n platform/hosted/tests/beta-cluster.sh platform/hosted/tests/topology-check.sh exits 0 in qual-logs/au29/bash-n-final.log. bash platform/hosted/tests/beta-cluster.sh render exits 0 in render.log. python3 qual-logs/au29/check-human-manifest.py exits 0 in human-manifest.log, validating explicit env names against the service source, the readiness route, rendered images and beta CA verification for short/full Service DNS names and localhost. bash tools/ci/beta-contract-check.sh exits 0 in beta-contract.log. cg spec lint exits 0 with zero errors and nine existing warnings in spec-lint-final.log. timeout 60s cg review exits 124 in cg-review.log; cg guard exits 0 with advisory task-scope differences in cg-guard.log. These checks do not qualify a Human runtime."
 severity = "blocker"
 
-[observation.6.8.10]
+[observation.6.8.116]
 task = "6.8"
 file = "platform/hosted/tests/beta-cluster.sh platform/hosted/human/deployment.yaml"
 symbol = "beta_cluster_up build_images wait_ready qualification_url"
@@ -5093,7 +5093,7 @@ observed = "formerly observation.6.8.9. formerly observation.6.8.human-cluster-d
 assumption = "The selected disposable identity is layerx-au29-human with no owner kubeconfig or inherited LayerX overrides. CARGO_BUILD_JOBS=4 MAKEFLAGS=-j4, LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin, LAYERX_BETA_MIN_FREE_GIB=30 and LAYERX_BETA_FORBIDDEN_CHAIN_ID=125 apply. No kind cluster or pods are created, no Human readiness probe executes and qualification exports are not written because env_write is not reached. The guard refuses contract transactions on the forbidden chain before deploy-contracts.sh; that step is not reached. The persistent Paxeer chain, existing Redis and shared runtime are untouched. Disk evidence is in qual-logs/au29/disk-before.log, disk-before-exact.log, disk-after-exact.log and disk-after-cleanup.log. Supplementary make platform-beta-cluster-down exits 0 in qual-logs/au29/teardown.log. remaining-cluster-containers.log and remaining-kind-containers.log are both empty; this proves cleanup and absence, not teardown of a deployed cluster. No complete cluster gate or ready Human deployment is claimed."
 severity = "blocker"
 
-[observation.5.1.35]
+[observation.5.1.62]
 task = "5.1"
 severity = "note"
 file = "spec/layerx-beta/qualification.kvx"
@@ -5189,7 +5189,7 @@ observed = "formerly observation.6.4.173. ureq 3.4.0 gates its NativeTlsConnecto
 assumption = "Dependent workspace owners must regenerate their lockfiles for the enabled connector before locked builds; no unrelated package upgrade is required by the agentd change."
 severity = "blocker"
 
-[observation.6.8.5]
+[observation.6.8.117]
 task = "6.8"
 file = "platform/hosted/internal/deployment.yaml platform/hosted/webhooks/deployment.yaml platform/hosted/gateway/deployment.yaml platform/hosted/tests/topology-check.sh"
 symbol = "platform-hosted-topology-check"
@@ -5205,7 +5205,7 @@ observed = "cargo test --locked --manifest-path human/Cargo.toml -p layerx-paxee
 assumption = "Reconcile the persistent Comet-chain identity interface between the existing test and bridge helper while preserving all persistent-chain, genesis and blueprint refusal checks, then rerun the complete client suite."
 severity = "blocker"
 
-[observation.6.4.174]
+[observation.6.4.10]
 task = "6.4"
 file = "agent/crates/layerx-agentd/src/human_runtime.rs agent/crates/layerx-proof/src/checkpoint.rs agent/crates/layerx-wire/src/receipt.rs"
 symbol = "RemoteHumanAuthority::budget_state RemoteHumanAuthority::key_rotation_policy CheckpointCertificate"
@@ -5618,7 +5618,7 @@ observed = "formerly observation.5.1.43. formerly observation.5.1.39. (renumbere
 assumption = "The lockfiles pass locked offline resolution and their binaries build. Remaining compiler-prerequisite and Human test caller failures require their owners; no production or full wave qualification is claimed. No assertion or runner was changed."
 severity = "blocker"
 
-[observation.6.4.179]
+[observation.6.4.11]
 task = "6.4"
 file = "platform/hosted/gateway/tests/tap_nonce.rs platform/hosted/gateway/src/main.rs"
 symbol = "module_schema_tests and Redis qualification prerequisite"
@@ -5969,7 +5969,7 @@ observed = "cargo test --locked --manifest-path agent/Cargo.toml -p layerx-agent
 assumption = "Full package execution requires qualified native layerxd and layerx-genesis-build binaries supplied through LAYERX_TEST_NATIVE_BIN_DIR. Focused success does not qualify the full package."
 severity = "blocker"
 
-[observation.6.4.182]
+[observation.6.4.12]
 task = "6.4"
 file = "agent/crates/layerx-agentd/tests/support/real_authority.rs agent/crates/layerx-agentd/tests/budget_create.rs"
 symbol = "fixture"
@@ -6037,7 +6037,7 @@ file = "agent/crates/layerx-agentd/tests/support/real_authority.rs"
 symbol = "real authority fixture"
 observed = "cargo test --manifest-path agent/Cargo.toml --locked -p layerx-agentd exits 101 in budget_create: real_authority.rs:326 requires UID 0 to run layerxd under a distinct uid, but the process UID is 1000. Subsequent fixture users report a poisoned lock. The root assertion is unchanged."
 assumption = "Real-node integration qualification requires the harness execution privileges and native binaries; passing authority parser unit tests does not qualify that integration."
-[observation.6.8.11]
+[observation.6.8.118]
 task = "6.8"
 file = "platform/hosted/agent-boundary/Dockerfile platform/hosted/tests/beta-cluster.sh"
 symbol = "build_images beta_cluster_up beta_cluster_down"
@@ -6228,7 +6228,7 @@ file = "platform/hosted/human/deployment.yaml platform/hosted/node/deployment.ya
 symbol = "human_secrets_generate human_secrets_apply start_human_owner RemoteHumanAuthority::connect"
 observed = "The Human graph is co-located with the native node, using shareProcessNamespace and its memory socket volume. The owner uses the existing authorized UID 4021 and GID 4020; the API and Unix providers use UID 4020. Human Service port 9443 targets the separate container port 9447. A Human-owned egress policy admits only journeys and approvals to that node port. Secret generation creates bounded component configuration, random keys, distinct authority audiences, a session operator secret and KMS server/client certificates with UID-owned private staging. Registered authority, recovery, module registry, real Programs probe/journal and custody contract bindings remain mandatory policy inputs. The provider image build and COPY lines remain commented until their crates land. Current agentd startup additionally requires a verified Programs reader; its Human authority client does not configure the generated private CA. Those sources are unchanged."
 assumption = "bash -n platform/hosted/tests/beta-cluster.sh platform/hosted/human/material.sh platform/hosted/human/entrypoint.sh exits 0; qual-logs/hm6/bash-n.log. make platform-hosted-topology-check exits 0 after the Human egress and YAML formatting corrections, including both parsers and existing negative regressions; qual-logs/hm6/topology-formatted.log. bash tools/ci/beta-contract-check.sh and make beta-ledger-check exit 0 before this appended observation; qual-logs/hm6/contract.log and ledger.log. git diff --check exits 0; qual-logs/hm6/diff-final.log. Both kubectl apply --dry-run=client attempts fail to retrieve OpenAPI from an unconfigured API server; qual-logs/hm6/kubectl-node.log and kubectl-human.log. Validation is not disabled. Secret generation, image builds, provider processes, peer-credential refusal, KMS exchange and cluster readiness have not been executed. Static topology is not runtime qualification."
-[observation.6.8.33]
+[observation.6.8.119]
 [observation.6.8.34]
 task = "6.8"
 severity = "note"
@@ -6285,7 +6285,7 @@ symbol = "layerx-program-registry trust volume from_protected_history"
 observed = "formerly observation.6.8.39. After the quota mounts appear the registry refuses to start with sequencer trust history is unavailable: canonical protected sequencer trust history is unavailable. The verifier requires the history path to be a regular file, not a symlink, with no group or other permission bits, and readable by the registry user. A Kubernetes Secret volume presents every key as a symlink into a timestamped directory owned by root, so the mounted history can never satisfy the protected-file contract regardless of defaultMode."
 assumption = "The repair adds an init container that runs as the registry user, copies the Secret's history into a memory-backed emptyDir under umask 077 and sets mode 0600; the registry mounts that emptyDir read-only at the unchanged history path. The verifier's file checks are unchanged. Applying the rendered manifest to the live cluster moves the registry past the trust-history refusal."
 
-[observation.6.8.41]
+[observation.6.8.120]
 task = "6.8"
 severity = "blocker"
 file = "platform/hosted/tests/beta-cluster.sh platform/hosted/registry/deployment.yaml platform/hosted/registry/src/node_state.rs"
@@ -6293,7 +6293,7 @@ symbol = "write_token LAYERX_REGISTRY_NODE_AUTHORIZATION LAYERX_REGISTRY_RECEIPT
 observed = "formerly observation.6.8.40. With the trust history accepted the registry fails its first node authority read: GET /v1/programs/account-state/changes?after_sequence=0 failed: http: failed to parse header value. The registry receives both bearer tokens through secretKeyRef environment variables and places them in an Authorization header; write_token wrote every generated token with openssl rand -hex followed by a newline, and the http crate refuses a header value containing a line feed. File-based consumers strip or tolerate the newline, so only the environment-fed registry tokens failed."
 assumption = "The repair writes every generated token without a trailing newline so file and environment consumers see identical sixty-four character values. No parser or comparison is relaxed."
 
-[observation.6.8.42]
+[observation.6.8.121]
 task = "6.8"
 severity = "blocker"
 file = "platform/hosted/registry/src/node_state.rs platform/hosted/registry/src/main.rs platform/hosted/registry/deployment.yaml platform/Cargo.toml"
@@ -6301,7 +6301,7 @@ symbol = "NodeProgramStateSource::connect LAYERX_REGISTRY_OUTBOUND_CA_DER ureq::
 observed = "formerly observation.6.8.41. With valid tokens the registry panics on its first outbound request: ureq-3.4.0/src/unversioned/transport/mod.rs:485 uri scheme is https, provider is Rustls but feature is not enabled: rustls. The workspace compiles ureq with default-features = false and native-tls-no-default only, while the registry built its Agent from config_builder() without a TlsConfig, so ureq selected the default Rustls provider and WebPki roots that are not compiled in. The gateway and every other hosted crate use native-tls with an explicit outbound CA; the registry had no outbound CA input at all, so even a working provider would not have trusted the cluster CA that signs the agent boundary and receipt authority certificates."
 assumption = "The repair gives the registry an explicit outbound CA (LAYERX_REGISTRY_OUTBOUND_CA_DER, mounted from the layerx-internal-ca Secret already present in the pod), builds the Agent with TlsProvider::NativeTls and RootCerts::new_with_certs over that single root, and refuses an empty CA. Hostname verification and the https requirement are unchanged. The agent boundary and receipt authority verifiers allow unauthenticated clients, so the registry authenticates with its bearer tokens as before."
 
-[observation.6.8.43]
+[observation.6.8.122]
 task = "6.8"
 severity = "blocker"
 file = "platform/hosted/tests/beta-cluster.sh"
@@ -6309,7 +6309,7 @@ symbol = "internal_principals_provision wait_for_pod_ready"
 observed = "formerly observation.6.8.42. internal_principals_provision issues a single POST to the gateway /v1/keys immediately after manifests_apply and the gateway port-forward, before the gateway pod reports Ready, and fails the bring-up on any non-200/201 status. The gateway readiness probe is /readyz, which requires the durable store, core agent boundary, receipt authority and program registry to be reachable, so the first request races component start-up and observed a 503 with the message gateway refused payments principal key with status 503."
 assumption = "The repair waits for the layerx-gateway pod to become Ready (bounded to six hundred seconds) before provisioning principals. No status handling is relaxed; a gateway that never becomes ready still fails the bring-up."
 
-[observation.6.8.44]
+[observation.6.8.123]
 task = "6.8"
 severity = "blocker"
 file = "platform/hosted/registry/layerx-program-registry-boundary.service platform/hosted/registry/src/main.rs"
@@ -6317,7 +6317,7 @@ symbol = "delegation_quota_and_open_inode_execution_fail_closed NODE_UNIT Protec
 observed = "formerly observation.6.8.43. The registry unit test delegation_quota_and_open_inode_execution_fail_closed asserts that the boundary unit contains ProtectSystem=strict and ReadWritePaths=/sys/fs/cgroup /var/lib/layerx-program-registry-builds. Observation 6.8.38 removed those directives because they place the oneshot in a private mount namespace whose slot mounts never reach the host namespace or the registry container. A retest on the live kind worker with ProtectSystem=strict, ReadWritePaths and MountFlags=shared retained still left zero slot mounts visible in the host namespace after a clean restart, while the unit without the sandbox directives exposes all four. The unit and the test therefore contradict each other: the hardening the test demands makes the boundary non-functional under systemd namespacing."
 assumption = "Both are left as written: the unit keeps the working configuration and the test keeps asserting the old directives, so cargo test -p layerx-platform-registry fails on that single assertion (two other tests pass; clippy passes). Deciding whether the test should assert the reduced hardening set (NoNewPrivileges plus the CAP_SYS_ADMIN CAP_CHOWN CAP_DAC_OVERRIDE bounding set) or whether a different confinement that survives propagation must be designed is recorded for wider authority rather than resolved by weakening the check."
 
-[observation.6.8.45]
+[observation.6.8.124]
 task = "6.8"
 severity = "blocker"
 file = "platform/Cargo.toml platform/Cargo.lock platform/hosted/registry/src/node_state.rs"
@@ -6325,7 +6325,7 @@ symbol = "ureq native-tls native-tls-no-default TlsProvider::NativeTls"
 observed = "formerly observation.6.8.44. Selecting TlsProvider::NativeTls is not sufficient with the workspace feature set. ureq 3.4.0 gates its NativeTlsConnector on the native-tls feature, while native-tls-no-default only pulls the native-tls dependency, so an Agent configured for NativeTls still reaches the same runtime panic (provider is NativeTls but feature is not enabled). The agent workspace hit the identical condition independently."
 assumption = "The platform workspace enables ureq's native-tls feature. That feature also pulls webpki-root-certs 1.0.9 into platform/Cargo.lock; no existing package version changes. Because the registry configures RootCerts::new_with_certs with the cluster CA alone, the bundled roots are never consulted. cargo clippy -p layerx-platform-registry --all-targets -D warnings passes; cargo test fails only on the assertion recorded in observation 6.8.43."
 
-[observation.6.8.46]
+[observation.6.8.125]
 task = "6.8"
 severity = "blocker"
 file = "platform/hosted/registry/src/routes.rs platform/hosted/registry/src/node_state.rs src/modules/programs/accounts.c src/replica/lxp_history.c"
@@ -6333,7 +6333,7 @@ symbol = "Registrar::open Registrar::awaits_first_protocol_head NodeProgramState
 observed = "formerly observation.6.8.45. Cluster attempt 5 reached settlement deployment and identity provisioning, then failed because app=layerx-gateway never became ready. The gateway reported program_registry unavailable; layerx-program-registry-0 crash-looped with 'node authority GET /v1/protocol/account-state/head returned HTTP 503'. Probing the agent boundary with the registry node token returned {\"error\":-903} (LXP_ERR_PROJECTION_STALE): a freshly bootstrapped network has no receipt, so the node has no current head until its first activity is sequenced. That first activity is submitted through the gateway, whose readiness required the registry, whose Registrar::open required the head. The registry has never started on a fresh network in any recorded attempt."
 assumption = "Registrar::open now returns a registry that awaits its first protocol head only when no program is registered, the program-state cursor is at its default and the node answers the head route with exactly HTTP 503 and body {\"error\":-903}; every other refusal still fails startup, reads still refuse with protocol_head_unavailable or protocol_state_unavailable until a verified head exists, and no verification rule changed. classify_head_answer is unit-tested for the exact pending shape and six refused shapes. cargo clippy -D warnings and cargo test for layerx-platform-registry pass (qual-logs/au39/registry-clippy-genesis.log, registry-test-genesis3.log)."
 
-[observation.6.8.47]
+[observation.6.8.126]
 task = "6.8"
 severity = "suspect"
 file = "platform/hosted/human/deployment.yaml platform/hosted/tests/beta-cluster.sh"
@@ -6341,7 +6341,7 @@ symbol = "layerx-human-component-material"
 observed = "formerly observation.6.8.46. On the attempt-5 cluster the layerx-human pod stayed in ContainerCreating with MountVolume.SetUp failed: secret layerx-human-component-material not found. The deployment on this branch mounts that Secret, but beta-cluster.sh on this branch never creates it. The gate does not wait for app=layerx-human, so this did not stop attempt 5."
 assumption = "The Human component integration lane owns the material generation and the node-pod co-location; this branch records the gap and does not add a placeholder Secret."
 
-[observation.6.8.48]
+[observation.6.8.127]
 task = "6.8"
 severity = "note"
 file = "platform/hosted/registry/layerx-program-registry-boundary.service platform/hosted/registry/node-provision-build-boundary.sh platform/hosted/registry/src/main.rs"
@@ -6349,7 +6349,7 @@ symbol = "delegation_quota_and_open_inode_execution_fail_closed systemd-mount"
 observed = "formerly observation.6.8.47. Observation 6.8.43 recorded the conflict between the boundary unit test and mount propagation. The redesign in commit 913e287d (lane/boundary-confinement) keeps ProtectSystem=strict, PrivateTmp, ProtectHome and ReadWritePaths on the provisioner, removes CAP_SYS_ADMIN, and delegates every slot mount to PID 1 through systemd-mount ordered before kubelet.service; the unit test now asserts the stronger set and additionally that the script contains no direct mount or losetup --find invocation. Those files are taken verbatim into this worktree for cluster attempt 6."
 assumption = "All layerx-platform-registry tests pass with the redesigned unit and script (qual-logs/au39/registry-test-genesis3.log). Live mount visibility on the kind worker is verified by attempt 6."
 
-[observation.6.8.49]
+[observation.6.8.128]
 task = "6.8"
 severity = "blocker"
 file = "platform/hosted/registry/src/main.rs platform/hosted/registry/deployment.yaml platform/hosted/registry/node-provision-build-boundary.sh"
@@ -6357,7 +6357,7 @@ symbol = "WorkerCgroup::attach isolated_route program_registry_ready"
 observed = "formerly observation.6.8.48. Cluster attempt 6: boundary slot mounts are visible on the kind worker and the registry pod is Running, yet the gateway reports program_registry unavailable. A direct GET /healthz with the gateway-client mTLS identity returns 503 {\"error\":{\"code\":\"worker_unavailable\",\"detail\":\"the request worker could not be attached\"}}. Reproduced inside the registry container as UID 4030: mkdir and cgroup.subtree_control writes under the hostPath cgroup /run/layerx/cgroup succeed, but writing a pid into a child cgroup.procs fails with EACCES. The container runs in a private cgroup namespace whose root is the kubelet container scope (/proc/self/cgroup is 0::/ and the hostPath shows root /../../../../../layerx-program-registry), the node cgroup2 filesystem is mounted with nsdelegate, and /sys/fs/cgroup inside the container is read-only with root-owned cgroup.procs. cgroup v2 migration requires write access to cgroup.procs of the common ancestor (the host root, owned by root) and, under nsdelegate, source and destination must both lie inside the writer's cgroup namespace. A hostPath cgroup outside the container scope therefore can never receive the request worker or the layerx-cgroup-exec build jobs from an unprivileged pod, regardless of ownership; the same rule would return ENOENT even for root."
 assumption = "The isolation design must move to a cgroup subtree delegated inside the registry container's own cgroup so the namespace and common-ancestor rules hold; the node provisioner's separate cgroup delegation cannot serve a pod. Resolved by a dedicated redesign lane; every existing bound (cpu, memory, pids, io controllers, cgroup.kill boundary, 4030 ownership, stopped-worker attach) stays in force."
 
-[observation.6.8.50]
+[observation.6.8.129]
 task = "6.8"
 severity = "blocker"
 file = "platform/hosted/registry/src/main.rs platform/hosted/registry/deployment.yaml platform/hosted/tests/beta-cluster.sh spec/layerx-beta/qualification.kvx"
@@ -6365,7 +6365,7 @@ symbol = "locate_container_cgroup initialize_cgroup_boundary delegate_container_
 observed = "formerly observation.6.8.49. Container-local delegation uses C/main and C/workers, requires the four controllers, and drops irreversibly to UID/GID 4030 before configuration reads. Discovery matches device/inode within depth 8 and 65536 visited directories, checks cgroup.procs membership, refuses multiple matches and unreadable root-owned directories, excludes non-root owner UIDs with one debug message each, and never descends into the matched cgroup. The ownership unit test uses a real non-root-owned subtree under root and tests the metadata predicate under UID 4030. The real child-cgroup test calls delegate_container_cgroup, drop_registry_privileges, WorkerCgroup::create and attach, verifies stopped-child membership, sends SIGCONT, observes continuation, kills through cgroup.kill and verifies removal. Both full cargo test invocations execute this root test; the separate non-root predicate run passes. On the rebased source, formatting, strict locked Clippy, both locked test invocations, the locked native release build, both shell syntax checks and hosted topology pass. make beta-ledger-check exits 2 because inherited observation.6.4.173 lacks severity; that record is unchanged. Exact commands, exit codes and logs: qual-logs/cgd1/gates.json. The disposable Debian container uses private cgroupns, only CHOWN/SETUID/SETGID, no-new-privileges, read-only root and the writable system.slice bind mount. Host evidence records initial UID/GID 0 with capability mask c1, then all four UID/GID columns 4030 and zero CapEff/CapPrm/CapInh; the process is observed in main, workers and its delegation files belong to 4030:4030, and C and workers enable cpu io memory pids. Host strace shows the delegation ownership operations, keepcaps disabled, supplementary group 4030, setresgid/setresuid 4030, and attempted root restoration rejected with EPERM before any token open. The release binary exits 2 with exactly: layerx-program-registry: node authority GET /v1/protocol/account-state/head failed: io: Connection refused. Proof evidence: qual-logs/cgd1/proof.py, proof-evidence.json, container.log, container-strace.log and verify-proof.log. The original shared builder root is unreadable to 4030; the disposable proof uses a private copy of the real builder environment owned by 4030, excludes account credential files and recomputes the pinned environment digest. The shared builder root is unchanged. No listener or HTTP readiness proof is claimed."
 assumption = "The container privilege/delegation proof and real WorkerCgroup attachment proof cover the prescribed two-part boundary. End-to-end healthz readiness remains a beta cluster gate after integration. Locked qualification uses supplied platform/Cargo.lock additions for nix and cfg_aliases, and topology qualification includes supplied owner-mode v2 selectors; those changes are outside the permitted publication paths and require separate integration. The inherited observation.6.4.173 severity omission blocks the ledger gate. A deployed builder environment must also be readable by UID 4030. No existing check, capability contract, bound or unrelated record was weakened."
 
-[observation.6.8.81]
+[observation.6.8.130]
 task = "6.8"
 severity = "blocker"
 file = "platform/hosted/tests/beta-cluster.sh platform/hosted/human/material.py platform/hosted/authority/README.md human/crates/layerx-human-movement-provider/README.md"
@@ -6492,7 +6492,7 @@ symbol = "materialize_snapshot"
 observed = "The registration site described in observation.3.7.28 is materialize_snapshot, not bootstrap_kernel. Its module list must match the protocol-3 daemon registry. Repeating the authority real_node test executable as root with the fresh native binaries removes the UID failure: the replica-only test passes and the sequencer test fails during startup. Evidence: qual-logs/own1/own1b-authority-real-node-root.log."
 assumption = "Changing execution privileges does not resolve the genesis and daemon module-registry mismatch."
 severity = "blocker"
-[observation.6.8.51]
+[observation.6.8.131]
 task = "6.8"
 severity = "blocker"
 file = "platform/hosted/registry/src/main.rs platform/hosted/registry/src/routes.rs platform/hosted/registry/src/builder.rs platform/hosted/gateway/src/main.rs"
@@ -6500,7 +6500,7 @@ symbol = "serve_connection isolated_route request_worker Registrar::open Hermeti
 observed = "The retained cluster has three Running gateway pods with readiness HTTP 503. A verified TLS GET /readyz reports durable_store, core_agent_boundary and independent_receipt_authority ready, and program_registry unavailable. Gateway container logs are empty. The registry TCP probe passes but direct requests with the gateway client certificate and the registry DNS name fail during TLS with curl exit 35. The registry process has 256 to 258 threads, while its configured default connection bound is 128. Live request workers are attached inside /workers/request-*/worker and read builder toolchain files under /opt/layerx-builder/rootfs; process samples show successive workers doing this repeatedly. Source inspection shows /healthz takes registrar_gate, starts an isolated worker, and calls Registrar::open, which invokes HermeticBuilder::new and environment_digest with no hashing deadline before routing healthz. Requests queue behind that work for up to 1800 seconds; the gateway outbound I/O bound is 8 seconds and its readiness probe retains the default 1-second timeout. Evidence: qual-logs/au40/gateway-readiness.log, gateway-events.log, gateway-container.log, registry-health-mtls.log, registry-health-mtls.exit and registry-process-samples.log. The previous full gate exit remains 2 in qual-logs/au39/task-6.8.exit."
 assumption = "Registry request initialization and serialized readiness must be repaired in the registry implementation while preserving builder integrity verification, worker isolation, connection bounds and request deadlines. The gateway readiness conjunction and probes remain unchanged. Connection saturation is consistent with the observed thread count and immediate TLS refusal; no instrumented active-connection counter was collected. This is a registry implementation dependency, not a qualified gateway repair. The full gate was not rerun and the retained cluster remains available for diagnosis."
 
-[observation.6.8.52]
+[observation.6.8.132]
 task = "6.8"
 severity = "blocker"
 file = "platform/hosted/registry/src/builder.rs platform/hosted/registry/src/main.rs platform/hosted/registry/src/routes.rs platform/hosted/registry/tests/readiness.py docs/wiki/Quickstart.md"
@@ -6508,7 +6508,7 @@ symbol = "HermeticBuilder::new environment_metadata Registrar::open_with_builder
 observed = "The listener retains the startup-verified builder and passes it through bounded parent-owned worker IPC; workers retain cgroup attachment, quota validation, request deadlines and per-build copied-environment and executable verification. Health bypasses the registrar serialization lock while replaying durable evidence and checking the node without writing the protocol cursor. A background metadata and inotify detector clears readiness on changed inputs and fully re-verifies against the startup digest before restoring readiness; stale monitor results refuse after two seconds. The original metadata-only mutation test failed on a rapid same-size write with identical timestamps. Its assertion is unchanged; inotify invalidation repairs this gap. Strict locked Clippy passes on the final Rust source (qual-logs/au41/clippy-watch.log, exit 0). The aggregate cargo test invocation exits 101 because root cannot allocate an inotify instance, returning EMFILE (qual-logs/au41/test-watch.log). All seven library tests pass under the actual registry UID/GID 4030 (qual-logs/au41/lib-tests-4030.log, exit 0). All five binary tests, including real stopped-child cgroup attachment and cleanup, and all six journal tests pass under root (qual-logs/au41/remaining-tests.log, exit 0). The real-binary concurrent-build latency and temporary-rootfs mutation test is written but unexecuted. Quickstart now describes the separate agent boundary export, absent-agentd unset and Human endpoint selected by env_write."
 assumption = "Deployment qualification is blocked by the existing disk preflight: 18 GiB free versus 30 GiB required, exit 1 in qual-logs/au41/cluster-preflight.log. No space bound or kernel watch limit was raised. No image was rebuilt or loaded and the retained cluster was not modified. The exact full wrapper was not run; qual-logs/au39/task-6.8.exit retains its previous failed result. The wrapper tears down the cluster and calls build_images for every image, which also conflicts with rebuilding only the changed image; the required script change is outside the granted paths and is recorded in NEEDS.md. No live health latency, rootfs mutation refusal or cluster pass is claimed. Codify review and guard each reached their 60-second limit with exit 124; no graph qualification is claimed."
 
-[observation.6.8.53]
+[observation.6.8.133]
 task = "6.8"
 severity = "blocker"
 file = "platform/hosted/tests/beta-cluster.sh"
@@ -6516,7 +6516,7 @@ symbol = "build_images beta_cluster_up beta_cluster_down"
 observed = "The unchanged 30 GiB disk preflight now passes, exit 0 in qual-logs/au41b/preflight.log. The registry-only Docker release build from tracked source at 6992e4b0 passes, exit 0 in qual-logs/au41b/build-registry.log. Image layerx-beta/layerx-program-registry:6992e4b0c3a0 has ID sha256:c8ee91e145240ef006060a9d97af5f7f27d9df67d0beb481c4fcddc695273c78 and loads into both retained kind nodes, exit 0 in qual-logs/au41b/load-registry.log. No other image was rebuilt or loaded. The exact full wrapper still invokes teardown and unconditional all-image builds; source evidence is in qual-logs/au41b/gate-blocker.log. The full gate and real-binary readiness harness remain unexecuted. The previously recorded root inotify EMFILE aggregate failure is pre-existing; no assertion, watch limit or gate was weakened."
 assumption = "Selective reuse of unchanged images requires an owning-source change in platform/hosted/tests/beta-cluster.sh outside the granted paths. Image build and load do not prove deployed readiness or cluster qualification. The retained cluster remains up with its existing deployment references. The previous task-6.8.exit remains 2 and is not a new gate result."
 
-[observation.6.8.54]
+[observation.6.8.134]
 task = "6.8"
 severity = "blocker"
 file = "platform/hosted/dashboard/web/Dockerfile platform/hosted/tests/beta-cluster.sh"
@@ -6524,7 +6524,7 @@ symbol = "build_images beta_cluster_up"
 observed = "The exact command bash qual-logs/au39/run-gate-3.sh exits 2, recorded in qual-logs/au39/task-6.8.exit. Preliminary disposable-cluster teardown exits 0. Hosted topology and its refusal tests pass. The full image loop successfully builds testnet-control, gateway, faucet, program-registry, webhooks and dashboard from revision 63aa3d253166. Dashboard-web fails resolving node:24.6.0-bookworm-slim because the Docker Hub anonymous-token request to auth.docker.io is reset by the peer over IPv6. Evidence: qual-logs/au39/task-6.8.log, qual-logs/au39/pre-down.log, qual-logs/au41c/build-layerx-dashboard-web.log and the six successful build logs under qual-logs/au41c/."
 assumption = "Docker Hub connectivity is an external build prerequisite. No Dockerfile, image reuse behavior, integrity check or bound changed. Cluster creation, hosted smoke and the final retained-cluster startup were not reached; no disposable cluster remains. The real-binary concurrent-build latency and temporary-rootfs mutation harness remains unexecuted. Registry image compilation does not prove deployed readiness. Developer credential storage remains outside this scope."
 
-[observation.6.8.55]
+[observation.6.8.135]
 task = "6.8"
 severity = "blocker"
 file = "platform/hosted/human/deployment.yaml platform/hosted/tests/beta-cluster.sh platform/hosted/registry/src/main.rs"
@@ -6536,7 +6536,7 @@ symbol = "module_registry_generate module_registry_verify registry_read_node"
 observed = "The native producer links the registered Asset, Programs v4 and optional validated Bridge interfaces and emits schema-version-2 assets and ascending module ordinals. Local C17 build and real-interface producer refusal tests pass. The generated example has SHA256 ae64cc538411a7833e65aba95c5c8ad4fc283394e4518419dc55c04f7927a230. The read-only preparation client and rendered registry-check container compare exact published ConfigMap bytes and node module ids and ordinals; assets cannot be compared because preparation carries none. The node Dockerfile does not yet build or install layerx-module-registry and is outside the permitted edit paths."
 assumption = "Install build/bin/layerx-module-registry at /usr/local/bin/layerx-module-registry in the node image before executing cluster bring-up. Docker, kubectl, kind and a live cluster are unavailable in this qualification environment, so image construction, successful live LNI comparison, mismatch refusal against a live node and deployment readiness remain unrun. Local commands and logs are retained under qual-logs/hm8; no live result is inferred from the producer tests."
 
-[observation.6.8.83]
+[observation.6.8.136]
 task = "6.8"
 severity = "note"
 file = "platform/hosted/human/material.sh platform/hosted/tests/beta-cluster.sh"
@@ -6544,7 +6544,7 @@ symbol = "retained_material_inventory retained_material_live_check material_prep
 observed = "Retained mode validates a complete recorded CA and Secrets file set, regular types, ownership, single links, directory mode 0700 and file mode 0600 before reuse. The live KMS Secret seal is compared with disk by digest without printing either value or digest. Settlement, Human policy, builder digests and principal credentials are reused. Incomplete material refusal is exercised through the inventory, up and render entry points without cluster tooling. Shell syntax, hosted topology, beta contract and beta ledger checks pass. The initial native build lacked sqlite3.h; an untracked development package under qual-logs/hm8/deps supplies the header for the passing build through CPATH and LIBRARY_PATH."
 assumption = "Successful live retained up, live KMS seal mismatch refusal, and retained encrypted Human state readability require cluster qualification. Fresh material contents remain generated by the existing functions except the corrected registry; completed material is normalized to owner-only permissions when its inventory is saved. Retention covers repeated up against a live cluster and does not preserve the cluster or Human PVC after down."
 
-[observation.6.8.84]
+[observation.6.8.137]
 task = "6.8"
 severity = "blocker"
 file = "platform/hosted/human/material.py platform/hosted/tests/beta-cluster.sh"
@@ -6552,7 +6552,7 @@ symbol = "HUMAN_PEERS module_registry_generate"
 observed = "The hosted material assembler still requires a positional UID/principal/tenant peer binding at lines 155-164 and writes it into LAYERX_AGENT_HUMAN_PEERS. The agentd consumer now requires named fields. The cluster driver contains no peer compositions; changing the assembler is outside the permitted paths. Registry generation now invokes the node image executable with bootstrap asset metadata and refuses a manifest asset mismatch. Authority and gateway consume the same generated ConfigMap bytes. Shell syntax, hosted topology and incomplete retained-material refusal checks pass; logs are under qual-logs/hm6e."
 assumption = "The material assembler must validate and emit uid=4020;tenant=<tenant>;principal=<principal> while preserving its single-peer and authority policy binding checks. Image, render and live cluster gates are not run because Docker, kubectl, kind and a live cluster are unavailable. No image execution or complete Human bring-up is qualified."
 
-[observation.6.8.85]
+[observation.6.8.138]
 task = "6.8"
 severity = "note"
 file = "platform/hosted/human/material.py platform/hosted/human/README.md"
@@ -6565,7 +6565,7 @@ observed = "Tag 18 refuses every selected batch above latest_finalized_batch wit
 assumption = "An additive authenticated candidate-batch fetch must expose complete durable sealed bodies before registration without weakening finalized-only consumer selectors, root checks or existing refusal assertions. Producer implementation and end-to-end qualification remain incomplete."
 severity = "blocker"
 
-[observation.6.1.32]
+[observation.6.1.47]
 task = "6.1"
 file = "docs/wiki/Guarantor.md spec/layerx-protocol/docs/guarantors.md contracts/libraries/CanonicalCheckpoint.sol tests/daemon/availability-settlement.py"
 symbol = "ATTESTATION_DOMAIN CHECKPOINT_DOMAIN registerCheckpoint"
@@ -6573,7 +6573,7 @@ observed = "Beta checkpoint construction uses an empty validity proof; no genera
 assumption = "Producer encoding follows the implemented verifiers and vectors. Production operator independence remains an onboarding requirement. Empty beta validity proofs and shared operation do not establish production independence or proof generation."
 severity = "note"
 
-[observation.6.1.33]
+[observation.6.1.48]
 task = "6.1"
 file = "cmd/layerx-guarantor/lni.c tests/daemon/guarantor-integration.py cmd/layerxd/lxp_daemon_lni.c"
 symbol = "LXP_GUARANTOR_CANDIDATE_SELECTOR lxp_guarantor_lni_fetch"
@@ -6581,7 +6581,7 @@ observed = "The producer requests tag 18 selector 05 followed by one big-endian 
 assumption = "The additive sealed-candidate selector is required in the daemon; selectors 01 through 04 and all existing finalized-only refusal assertions remain unchanged. Two-producer signing, finality feedback, tag-14 retrieval and existing verifier acceptance are asserted by the compiled integration but remain unreached until candidate retrieval succeeds."
 severity = "blocker"
 
-[observation.6.1.34]
+[observation.6.1.49]
 task = "6.1"
 file = "cmd/layerx-guarantor/runtime.c cmd/layerx-guarantor/settlement.py platform/hosted/node/deployment.yaml docs/wiki/Guarantor.md"
 symbol = "gp_runtime_open gp_runtime_oracle membership"
@@ -6589,7 +6589,7 @@ observed = "The independent runtime verifies genesis and executes real kernel tr
 assumption = "Production independence requires independent operator onboarding. Supporting nonempty oracle input or rotated guarantor histories requires a complete verified authority adapter; neither capability is claimed by the beta producer. Prior specification-domain drift remains recorded in observation 6.1.32."
 severity = "note"
 
-[observation.6.1.35]
+[observation.6.1.50]
 task = "6.1"
 file = "platform/hosted/tests/topology-check.sh platform/hosted/tests/topology_check.py"
 symbol = "platform-hosted-topology-check"
@@ -6597,7 +6597,7 @@ observed = "The seven added guarantor topology negative mutations pass. The aggr
 assumption = "Unrelated service and network-policy owners must resolve aggregate topology failures. No Docker, image, kubectl, kind or live-cluster gate was run on the build host. Native bootstrap and static topology checks do not establish deployed cluster reachability."
 severity = "blocker"
 
-[observation.6.1.36]
+[observation.6.1.51]
 task = "6.1"
 file = "Makefile"
 symbol = "test-daemon-guarantor-sanitize"
@@ -6605,7 +6605,7 @@ observed = "The new AddressSanitizer and UndefinedBehaviorSanitizer variant comp
 assumption = "AddressSanitizer qualification requires a compatible execution host. Runtime ordering and leak checks remain enabled; the failing sanitizer gate is not reported as passing."
 severity = "blocker"
 
-[observation.6.1.37]
+[observation.6.1.52]
 task = "6.1"
 file = "cmd/layerx-guarantor Makefile tests/daemon/guarantor-core.c tests/daemon/guarantor-settlement-chain.py"
 symbol = "gp_verify_attest gp_settlement_register test-daemon-guarantor"
@@ -6613,7 +6613,7 @@ observed = "The C17 warnings-as-errors build and unit gate exit 0, including gen
 assumption = "The guarantor aggregate exits 2 because its real-daemon integration exits 1 at the unimplemented candidate selector. These passing component gates do not claim completed two-producer finality feedback or deployment qualification. Existing refusal, verifier, signature, root and freshness checks remain intact."
 severity = "note"
 
-[observation.6.1.36]
+[observation.6.1.53]
 task = "6.1"
 file = "cmd/layerxd/lxp_daemon_lni.c agent/crates/layerx-client/tests/availability_daemon.rs tests/daemon/availability-settlement.py"
 symbol = "send_availability finalized_fetch"
@@ -6621,7 +6621,7 @@ observed = "formerly observation.6.1.31. Tag 18 refuses every selected batch abo
 assumption = "An additive authenticated candidate-batch fetch must expose complete durable sealed bodies before registration without weakening finalized-only consumer selectors, root checks or existing refusal assertions. Producer implementation and end-to-end qualification remain incomplete."
 severity = "blocker"
 
-[observation.6.1.37]
+[observation.6.1.54]
 task = "6.1"
 file = "docs/wiki/Guarantor.md spec/layerx-protocol/docs/guarantors.md contracts/libraries/CanonicalCheckpoint.sol tests/daemon/availability-settlement.py"
 symbol = "ATTESTATION_DOMAIN CHECKPOINT_DOMAIN registerCheckpoint"
@@ -6629,7 +6629,7 @@ observed = "formerly observation.6.1.32. Beta checkpoint construction uses an em
 assumption = "Producer encoding follows the implemented verifiers and vectors. Production operator independence remains an onboarding requirement. Empty beta validity proofs and shared operation do not establish production independence or proof generation."
 severity = "note"
 
-[observation.6.1.38]
+[observation.6.1.55]
 task = "6.1"
 file = "cmd/layerx-guarantor/lni.c tests/daemon/guarantor-integration.py cmd/layerxd/lxp_daemon_lni.c"
 symbol = "LXP_GUARANTOR_CANDIDATE_SELECTOR lxp_guarantor_lni_fetch"
@@ -6637,7 +6637,7 @@ observed = "formerly observation.6.1.33. The producer requests tag 18 selector 0
 assumption = "The additive sealed-candidate selector is required in the daemon; selectors 01 through 04 and all existing finalized-only refusal assertions remain unchanged. Two-producer signing, finality feedback, tag-14 retrieval and existing verifier acceptance are asserted by the compiled integration but remain unreached until candidate retrieval succeeds."
 severity = "blocker"
 
-[observation.6.1.39]
+[observation.6.1.56]
 task = "6.1"
 file = "cmd/layerx-guarantor/runtime.c cmd/layerx-guarantor/settlement.py platform/hosted/node/deployment.yaml docs/wiki/Guarantor.md"
 symbol = "gp_runtime_open gp_runtime_oracle membership"
