@@ -1722,6 +1722,15 @@ beta_cluster_up() {
     else
         paxeer_contracts_deploy
         settlement_publish
+    fi
+    wait_for_pod_ready "$TESTNET_NAMESPACE" app=layerx-identity 300
+    port_forward identity "$TESTNET_NAMESPACE" layerx-identity "$IDENTITY_PORT" 9443
+    if [ "${LAYERX_BETA_RETAIN_MATERIAL:-0}" != 1 ]; then
+        identity_provision
+        (umask 077; mkdir -p "$WORK_DIR/human-evidence-input")
+        python3 "$REPO_ROOT/platform/hosted/human/provision.py" --prepare-owner-request \
+            --work-dir "$WORK_DIR" --secrets-dir "$SECRETS_DIR"
+        human_evidence_provision
         human_policy_publish
     fi
     kube apply -f "$MANIFESTS_DIR/node.yaml" > /dev/null
