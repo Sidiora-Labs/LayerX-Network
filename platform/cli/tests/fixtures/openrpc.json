@@ -1,0 +1,462 @@
+{
+  "openrpc": "1.3.2",
+  "info": {
+    "title": "LayerX public JSON-RPC",
+    "version": "0.1.0",
+    "description": "Public JSON-RPC reads, authenticated activity submission and scoped WebSocket subscriptions. Native DID enumeration, asset listing/detail and fee estimation are unavailable on this source; their gateway methods forward to core and return explicit upstream unavailability, never fabricated balances, metadata or fees."
+  },
+  "methods": [
+    {
+      "name": "lx_getAccount",
+      "paramStructure": "by-position",
+      "params": [
+        {
+          "name": "account_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "errors": [
+        {
+          "code": -32001,
+          "message": "Read unavailable"
+        },
+        {
+          "code": -32005,
+          "message": "Read unavailable"
+        }
+      ]
+    },
+    {
+      "name": "lx_getBalance",
+      "paramStructure": "by-position",
+      "params": [
+        {
+          "name": "account_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "errors": [
+        {
+          "code": -32001,
+          "message": "Read unavailable"
+        },
+        {
+          "code": -32005,
+          "message": "Read unavailable"
+        }
+      ]
+    },
+    {
+      "name": "lx_getBalances",
+      "paramStructure": "by-position",
+      "params": [
+        {
+          "name": "did",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "errors": [
+        {
+          "code": -32001,
+          "message": "Read unavailable"
+        },
+        {
+          "code": -32005,
+          "message": "Read unavailable"
+        }
+      ]
+    },
+    {
+      "name": "lx_getReceipt",
+      "paramStructure": "by-position",
+      "params": [
+        {
+          "name": "activity_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "errors": [
+        {
+          "code": -32001,
+          "message": "Read unavailable"
+        },
+        {
+          "code": -32005,
+          "message": "Read unavailable"
+        }
+      ]
+    },
+    {
+      "name": "lx_getActivityStatus",
+      "paramStructure": "by-position",
+      "params": [
+        {
+          "name": "activity_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "errors": [
+        {
+          "code": -32001,
+          "message": "Read unavailable"
+        },
+        {
+          "code": -32005,
+          "message": "Read unavailable"
+        }
+      ]
+    },
+    {
+      "name": "lx_getBatchHeader",
+      "paramStructure": "by-position",
+      "params": [
+        {
+          "name": "batch_number",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "errors": [
+        {
+          "code": -32001,
+          "message": "Read unavailable"
+        },
+        {
+          "code": -32005,
+          "message": "Read unavailable"
+        }
+      ]
+    },
+    {
+      "name": "lx_getCheckpoint",
+      "paramStructure": "by-position",
+      "params": [
+        {
+          "name": "checkpoint_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "errors": [
+        {
+          "code": -32001,
+          "message": "Read unavailable"
+        },
+        {
+          "code": -32005,
+          "message": "Read unavailable"
+        }
+      ]
+    },
+    {
+      "name": "lx_getNodeInfo",
+      "paramStructure": "by-position",
+      "params": [],
+      "result": {
+        "name": "result",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "errors": [
+        {
+          "code": -32001,
+          "message": "Read unavailable"
+        },
+        {
+          "code": -32005,
+          "message": "Read unavailable"
+        }
+      ]
+    },
+    {
+      "name": "lx_getSequence",
+      "paramStructure": "by-position",
+      "params": [
+        {
+          "name": "account_id",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "pattern": "^[0-9a-fA-F]{64}$"
+          }
+        }
+      ],
+      "result": {
+        "name": "snapshot",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "description": "Source account next_sequence from the authenticated node account read. The envelope uses the separate identity sequence."
+    },
+    {
+      "name": "lx_getProof",
+      "paramStructure": "by-position",
+      "params": [
+        {
+          "name": "kind",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "activity",
+              "receipt",
+              "account"
+            ]
+          }
+        },
+        {
+          "name": "activity_id",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "pattern": "^[0-9a-fA-F]{64}$"
+          }
+        },
+        {
+          "name": "account_id",
+          "required": false,
+          "description": "Required only when kind is account.",
+          "schema": {
+            "type": "string",
+            "pattern": "^[0-9a-fA-F]{64}$"
+          }
+        }
+      ],
+      "result": {
+        "name": "proof",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "description": "Verified proof with canonical value and signed batch header. Account proofs export the exact verified native proof bytes without reconstruction."
+    },
+    {
+      "name": "lx_sendActivity",
+      "paramStructure": "by-position",
+      "params": [
+        {
+          "name": "canonical_hex",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "pattern": "^([0-9a-fA-F]{2})+$",
+            "maxLength": 1048576
+          }
+        },
+        {
+          "name": "commitment",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "executed",
+              "batched",
+              "finalised"
+            ]
+          }
+        }
+      ],
+      "result": {
+        "name": "outcome",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "description": "Requires an activity:write gateway key and the existing route scope for Programs activities. Uses activity-ID outer deduplication and preserves signed protocol idempotency. Returns a verified receipt for executed, verified inclusion for batched, and an exact matching verified checkpoint header for finalised; returns pending when evidence is absent after the bounded wait. An admission acknowledgement never establishes execution."
+    },
+    {
+      "name": "lx_subscribe",
+      "paramStructure": "by-position",
+      "params": [
+        {
+          "name": "topic",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "receipts",
+              "checkpoints",
+              "account"
+            ]
+          }
+        },
+        {
+          "name": "account_id",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "pattern": "^[0-9a-fA-F]{64}$"
+          },
+          "description": "Required for account subscriptions only."
+        }
+      ],
+      "result": {
+        "name": "subscription",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "description": "Authenticated GET /rpc/ws upgrade using Authorization: LayerX-Key. receipt:read scope for receipts; state:read for checkpoints and account. Server notifications use lx_subscription with params.subscription and params.result. At most 32 connections, 8 subscriptions per connection and 16 queued receipt wakes. Slow consumers and feed loss close with 1013; key revocation closes with 1008. Reconnect and reconcile through reads after closure; notifications are live, not a durable replay. Ping every 5 seconds, idle deadline 60 seconds, connection lifetime one hour. Browser Origin requests are refused. Core requires LAYERX_CORE_RECEIPT_EVENTS_TOKEN_FILE matching the gateway component token. Receipts originate from authenticated native commit waits; checkpoints and account snapshots refresh on wakes, checkpoints also on bounded wait expiry."
+    },
+    {
+      "name": "lx_listAssets",
+      "paramStructure": "by-position",
+      "params": [],
+      "result": {
+        "name": "result",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "description": "Lists assets through the core read contract. Native integration remains required.",
+      "errors": [
+        {
+          "code": -32602,
+          "message": "Invalid params"
+        },
+        {
+          "code": -32001,
+          "message": "Read unavailable"
+        },
+        {
+          "code": -32005,
+          "message": "Read unavailable"
+        }
+      ]
+    },
+    {
+      "name": "lx_getAsset",
+      "paramStructure": "by-position",
+      "params": [
+        {
+          "name": "asset_id",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "pattern": "^[0-9a-fA-F]{64}$"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "description": "Reads native asset metadata. Native integration remains required.",
+      "errors": [
+        {
+          "code": -32602,
+          "message": "Invalid params"
+        },
+        {
+          "code": -32001,
+          "message": "Read unavailable"
+        },
+        {
+          "code": -32005,
+          "message": "Read unavailable"
+        }
+      ]
+    },
+    {
+      "name": "lx_estimateFee",
+      "paramStructure": "by-position",
+      "params": [
+        {
+          "name": "canonical_hex",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "pattern": "^([0-9a-fA-F]{2})+$",
+            "maxLength": 1048576
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "description": "Forwards canonical activity bytes to the core fee-estimation contract. Fee values must come from the native fee schedule; native integration remains required.",
+      "errors": [
+        {
+          "code": -32602,
+          "message": "Invalid params"
+        },
+        {
+          "code": -32001,
+          "message": "Read unavailable"
+        },
+        {
+          "code": -32005,
+          "message": "Read unavailable"
+        }
+      ]
+    }
+  ]
+}

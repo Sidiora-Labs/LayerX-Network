@@ -150,8 +150,14 @@ mod tests {
 
     #[test]
     fn positional_requests_match_published_contract() -> Result<(), String> {
+        let published: Value = serde_json::from_str(include_str!("../tests/fixtures/openrpc.json"))
+            .map_err(|error| error.to_string())?;
+        let methods = published["methods"]
+            .as_array()
+            .ok_or("missing contract methods")?;
         let id = "ab".repeat(32);
         for method in [
+            "lx_getAsset",
             "lx_getAccount",
             "lx_getBalance",
             "lx_getSequence",
@@ -159,12 +165,14 @@ mod tests {
             "lx_getActivityStatus",
             "lx_getCheckpoint",
         ] {
+            assert!(methods.iter().any(|entry| entry["name"] == method));
             assert_eq!(request(method, &json!([id]))?["params"], json!([id]));
             assert!(request(method, &json!({"account_id":id})).is_err());
             assert!(request(method, &json!([id, id])).is_err());
         }
         request("lx_getBalances", &json!(["did:layerx:alice"]))?;
         request("lx_getNodeInfo", &json!([]))?;
+        request("lx_listAssets", &json!([]))?;
         request("lx_getBatchHeader", &json!(["12"]))?;
         request("lx_getProof", &json!(["account", id, id]))?;
         for commitment in ["executed", "batched", "finalised"] {
@@ -178,7 +186,7 @@ mod tests {
             ("lx_sendActivity", json!(["abc", "executed"])),
             ("lx_sendActivity", json!(["abcd", "ack"])),
             ("lx_estimateFee", json!([])),
-            ("lx_getAsset", json!([id])),
+            ("lx_getAsset", json!([])),
         ] {
             assert!(request(method, &args).is_err());
         }
