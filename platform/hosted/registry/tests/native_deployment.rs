@@ -994,6 +994,7 @@ fn real_deployment_produces_verified_canonical_journal_pair() {
         evidence
     );
     assert_deployment_refusals(&cluster, &proof, &history, &verifier);
+    assert_independent_deployment(&cluster, &proof, &path);
     let journal = must(
         FileDeploymentJournal::open(cluster.root.join("journal")),
         "journal",
@@ -1015,6 +1016,78 @@ fn real_deployment_produces_verified_canonical_journal_pair() {
         );
     }
     assert_human_materialization(&cluster);
+}
+
+fn assert_independent_deployment(
+    cluster: &Cluster,
+    proof: &layerx_programs::DeploymentProof,
+    history: &Path,
+) {
+    let certificate = cluster.root.join("authority-client-ca.der");
+    let key = cluster.root.join("authority-client-ca.key");
+    command(
+        "openssl",
+        &[
+            "req",
+            "-x509",
+            "-newkey",
+            "ed25519",
+            "-nodes",
+            "-keyout",
+            &text(&key),
+            "-out",
+            &text(&certificate),
+            "-outform",
+            "DER",
+            "-subj",
+            "/CN=registry-native",
+            "-days",
+            "1",
+        ],
+    );
+    must(fs::remove_file(key), "discard CA signer");
+    let source = must(
+        layerx_platform_registry::NodeProgramStateSource::connect(
+            &format!("http://127.0.0.1:{}", cluster.program_port),
+            cluster.program_token.clone(),
+            &must(fs::read(certificate), "CA certificate"),
+            &format!("http://127.0.0.1:{}", cluster.replica_port),
+            cluster.replica_token.clone(),
+            sha256(&[
+                b"layerx-authority-replica:",
+                hex_encode(&cluster.sequencer_key).as_bytes(),
+            ]),
+            must(
+                layerx_programs::ProtocolDeploymentVerifier::from_protected_history(
+                    history, 60_000,
+                ),
+                "history",
+            ),
+        ),
+        "independent native authority",
+    );
+    source.set_request_deadline(Instant::now() + Duration::from_secs(30));
+    must(
+        source.verify_deployment_authority(proof),
+        "native authority proof codec",
+    );
+    let mut changed = proof.clone();
+    changed.state.header_signature[0] ^= 1;
+    assert!(source.verify_deployment_authority(&changed).is_err());
+    let mut changed = proof.clone();
+    changed.state.header[0] ^= 1;
+    assert!(source.verify_deployment_authority(&changed).is_err());
+    let mut changed = proof.clone();
+    let original = &proof.state.receipt_proof;
+    changed.state.receipt_proof = must(
+        layerx_proof::merkle::Proof::new(
+            original.leaf_index() ^ 1,
+            original.leaf_count(),
+            original.siblings().to_vec(),
+        ),
+        "changed inclusion index",
+    );
+    assert!(source.verify_deployment_authority(&changed).is_err());
 }
 
 fn assert_human_materialization(cluster: &Cluster) {
@@ -1333,13 +1406,28 @@ fn cluster_producer(cluster: &Cluster, artifact: &Path) -> std::process::Output 
         .unwrap_or_else(|| panic!("producer body"));
     let binaries = std::env::var_os("LAYERX_TEST_NATIVE_BIN_DIR")
         .map_or_else(|| repository_root().join("build/bin"), PathBuf::from);
+    let state = must(
+        Command::new(binaries.join("layerxctl"))
+            .arg("read-state")
+            .arg("--socket")
+            .arg(&cluster.lni_socket)
+            .arg("--network-id")
+            .arg(NETWORK_ID.to_string())
+            .arg("--protocol-version")
+            .arg("3")
+            .arg("--actor")
+            .arg(&cluster.treasury_did)
+            .output(),
+        "authenticated producer state",
+    );
+    assert!(state.status.success(), "producer state refused");
     must(
         Command::new("python3")
             .arg("-c")
             .arg(producer)
             .arg(environment)
             .arg(NETWORK_ID.to_string())
-            .arg(binaries.join("layerxctl"))
+            .arg(must(String::from_utf8(state.stdout), "producer state JSON"))
             .stdin(fs::File::open(artifact).unwrap_or_else(|error| panic!("artifact: {error}")))
             .output(),
         "real cluster producer",

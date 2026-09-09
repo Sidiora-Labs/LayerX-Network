@@ -1104,13 +1104,17 @@ manifests_apply() {
 registry_deployment_produce() (
     set -euo pipefail
     umask 077
-    local input="$WORK_DIR/human-evidence-input" temporary producer
+    local input="$WORK_DIR/human-evidence-input" temporary producer actor state
     local artifact="$REPO_ROOT/programs/sdk/rust/examples/escrow/target/wasm32-unknown-unknown/release/layerx_reference_escrow.wasm"
     make -C "$REPO_ROOT" programs-reference-escrow >&2
     mkdir -p "$input"
     [ ! -e "$input/program-deployment.lxa" ] && [ ! -L "$input/program-deployment.lxa" ] || fail 'deployment input exists; reconcile before retry'
     temporary=$(mktemp "$input/.program-deployment.XXXXXXXX")
     trap 'rm -f "$temporary"' EXIT
+    actor=$(node_exec python3 -c 'from pathlib import Path; node = dict(line.split("=", 1) for line in Path("/var/lib/layerx/node/node.env").read_text().splitlines()); print(node["LAYERX_NODE_TREASURY_DID"])')
+    state=$(kube -n "$TESTNET_NAMESPACE" exec layerx-node-0 -c guarantor-1 -- \
+        /usr/local/bin/layerxctl read-state --socket /run/layerx/node/layerxd.lni.sock \
+        --network-id "$NODE_NETWORK_ID" --protocol-version 3 --actor "$actor")
     producer=$(cat <<'PYREGDEPLOY'
 import hashlib, json, os, stat, struct, subprocess, sys, time
 from pathlib import Path
@@ -1154,8 +1158,7 @@ try:
     assert public.hex() == node['LAYERX_NODE_TREASURY_PUBLIC_KEY']
     did = node['LAYERX_NODE_TREASURY_DID'].encode()
     assert did == b'did:layerx:' + public.hex().encode()
-    state = json.loads(run([sys.argv[3], 'read-state', '--socket', node['LAYERX_NODE_LNI_SOCKET'],
-                           '--network-id', str(network), '--protocol-version', '3', '--actor', did.decode()]))
+    state = json.loads(sys.argv[3])
     assert state['network_id'] == network and state['protocol_version'] == 3
     assert state['evidence'] == 'authenticated_node_snapshot'
     sequence = state['account_sequence']
@@ -1186,7 +1189,7 @@ finally:
 PYREGDEPLOY
 )
     kube -n "$TESTNET_NAMESPACE" exec -i layerx-node-0 -c layerxd -- \
-        python3 -c "$producer" /var/lib/layerx/node/node.env "$NODE_NETWORK_ID" /usr/local/bin/layerxctl \
+        python3 -c "$producer" /var/lib/layerx/node/node.env "$NODE_NETWORK_ID" "$state" \
         < "$artifact" > "$temporary"
     python3 - "$temporary" "$input/program-deployment.lxa" <<'PYPUBLISH'
 import os, sys

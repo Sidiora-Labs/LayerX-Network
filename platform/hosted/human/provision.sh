@@ -108,7 +108,7 @@ PYJOURNAL
     trap 'kube -n "$TESTNET_NAMESPACE" delete pod "$pod" --wait=false > /dev/null; rm -rf "$stage"' EXIT
     kube -n "$TESTNET_NAMESPACE" wait --for=condition=Ready "pod/$pod" --timeout=120s > /dev/null
     mkdir -m 0700 "$stage/journal"
-    kube -n "$TESTNET_NAMESPACE" cp -c journal "$pod:/var/lib/layerx-registry-journal/." "$stage/journal"
+    kube -n "$TESTNET_NAMESPACE" cp -c journal "$pod:/var/lib/layerx-registry-journal/pairs/." "$stage/journal"
     python3 "$REPO_ROOT/platform/hosted/human/provision.py" --materialize-journal \
         --work-dir "$WORK_DIR" --journal "$stage/journal"
 )

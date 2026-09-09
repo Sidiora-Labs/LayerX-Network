@@ -5,9 +5,9 @@ use layerx_programs::{
     hex, AccountStateHead, DeploymentProof, ProgramId, ProtocolDeploymentVerifier, ReadFreshness,
     VerifiedDeploymentEvidence,
 };
-use layerx_proof::merkle::{decode_proof, Proof};
+use layerx_proof::merkle::Proof;
 use layerx_wire::hash::receipt_digest;
-use layerx_wire::receipt::{decode as decode_receipt, encode_unsigned};
+use layerx_wire::receipt::{decode as decode_receipt, decode_merkle_proof, encode_unsigned};
 use serde_json::Value;
 
 const ACCOUNT_ACTIVITY: u32 = 0x0009_0006;
@@ -604,8 +604,14 @@ fn parse_batch_evidence(value: &Value) -> Result<BatchEvidence, String> {
         .map_err(|_| "batch authority signature must be sixty-four bytes".to_owned())?;
     let proof_bytes = hex::decode(field(value, "receipt_proof_hex")?)
         .map_err(|error| format!("receipt proof is invalid: {error}"))?;
-    let receipt_proof = decode_proof(&proof_bytes)
+    let canonical = decode_merkle_proof(&proof_bytes)
         .map_err(|error| format!("receipt proof is non-canonical: {error:?}"))?;
+    let receipt_proof = Proof::new(
+        canonical.leaf_index(),
+        canonical.leaf_count(),
+        canonical.siblings().to_vec(),
+    )
+    .map_err(|error| format!("receipt proof structure is invalid: {error:?}"))?;
     Ok(BatchEvidence {
         header,
         signature,
