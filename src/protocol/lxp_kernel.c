@@ -3699,6 +3699,18 @@ size_t lxp_kernel_prepared_batch_count(
     return batch == NULL ? 0U : batch->count;
 }
 
+const lxp_kernel *lxp_kernel_prepared_batch_base_kernel(
+    const lxp_kernel_prepared_batch *batch)
+{
+    return batch == NULL ? NULL : &batch->base->kernel;
+}
+
+const lxp_kernel *lxp_kernel_prepared_batch_settled_kernel(
+    const lxp_kernel_prepared_batch *batch)
+{
+    return batch == NULL ? NULL : &batch->settled->kernel;
+}
+
 const lxp_receipt *lxp_kernel_prepared_batch_receipts(
     const lxp_kernel_prepared_batch *batch)
 {

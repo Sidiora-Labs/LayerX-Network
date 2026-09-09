@@ -104,7 +104,15 @@ static int fixture(lxp_daemon_finality_authority *authority)
     header->sequencer_id[0] = 0x88U;
     header->timestamp_ms = 1000000U;
     checkpoint.validity_proof = (lxp_byte_span){proof, sizeof(proof)};
-    store.network_id = 42U;
+    if (getenv("LAYERX_TEST_DA_HEADER_FILE") != NULL) {
+        uint8_t canonical[LXP_BATCH_HEADER_ENCODED_SIZE];
+        FILE *input = fopen(getenv("LAYERX_TEST_DA_HEADER_FILE"), "rb");
+        if (input == NULL || fread(canonical, 1U, sizeof(canonical), input) != sizeof(canonical) ||
+            fgetc(input) != EOF || fclose(input) != 0 ||
+            lxp_batch_header_decode(canonical, sizeof(canonical), header) != LXP_OK) FAIL();
+        checkpoint.validity_proof = (lxp_byte_span){NULL, 0U};
+    }
+    store.network_id = header->network_id;
     store.initialized = true;
     store.registry.finalisation.settlement_anchor[0] = 0x11U;
     if (lxp_guarantor_set_init(&bonded_set) != LXP_OK) FAIL();
@@ -115,8 +123,8 @@ static int fixture(lxp_daemon_finality_authority *authority)
         guarantor.paxeer_private_key[31] = (uint8_t)(i + 1U);
         if (decode(public_keys[i], guarantor.paxeer_public_key, 33U) != 0)
             FAIL();
-        guarantor.protocol_version = 2U;
-        guarantor.network_id = 42U;
+        guarantor.protocol_version = header->protocol_version;
+        guarantor.network_id = header->network_id;
         guarantor.paxeer_chain_id = authority->paxeer_chain_id;
         (void)memcpy(guarantor.paxeer_settlement_contract,
                      authority->settlement_contract, 20U);
@@ -132,22 +140,22 @@ static int fixture(lxp_daemon_finality_authority *authority)
         bond.bond_amount = (lxp_u128){0U, 1000U};
         if (lxp_guarantor_set_apply(&bonded_set, i * 2U + 2U, true, &bond) != LXP_OK ||
             lxp_guarantor_attest(&guarantor, &checkpoint, true, true,
-                1001000U, &arena, &attestations[i]) != LXP_OK)
+                header->timestamp_ms + 1000U, &arena, &attestations[i]) != LXP_OK)
             FAIL();
     }
     if (lxp_guarantor_cert_assemble(&checkpoint, attestations, 2U, 2U,
                                     &certificate) != LXP_OK) FAIL();
-    requirements.checkpoint_epoch = 1U;
-    requirements.challenge_window_end_ms = 1000100U;
-    requirements.checkpoint_deadline_ms = 1002000U;
-    requirements.now_ms = 1001500U;
+    requirements.checkpoint_epoch = header->epoch;
+    requirements.challenge_window_end_ms = header->timestamp_ms + 100U;
+    requirements.checkpoint_deadline_ms = header->timestamp_ms + 2000U;
+    requirements.now_ms = header->timestamp_ms + 1500U;
     requirements.threshold = 2U;
     requirements.minimum_bond = (lxp_u128){0U, 500U};
     requirements.availability_challenges_answered = true;
     registration.paxeer_chain_id = authority->paxeer_chain_id;
     (void)memcpy(registration.settlement_contract,
                  authority->settlement_contract, 20U);
-    registration.observed_at_ms = 1001500U;
+    registration.observed_at_ms = header->timestamp_ms + 1500U;
     return lxp_checkpoint_certificate_hash(&checkpoint, &arena,
         registration.checkpoint_id) == LXP_OK ? 0 : 1;
 }
@@ -160,20 +168,23 @@ static void prepare(void)
         h->data_availability_root, h->oracle_root, h->sequencer_id,
         registration.checkpoint_id};
     size_t i;
-    (void)printf("{\"header\":\"(2,42,1,1,1,1000000");
+    (void)printf("{\"header\":\"(%u,%u,%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64,
+        (unsigned)h->protocol_version, h->network_id, h->epoch, h->batch_number,
+        h->first_sequence, h->last_sequence);
     for (i = 0U; i < 7U; ++i) { (void)printf(","); hex(roots[i], 32U); }
-    (void)printf(",1000000,"); hex(roots[7], 32U);
+    (void)printf(",%" PRIu64 ",", h->timestamp_ms); hex(roots[7], 32U);
     (void)printf(")\",\"checkpoint_id\":\""); hex(roots[8], 32U);
     (void)printf("\",\"attestations\":\"[");
     for (i = 0U; i < certificate.attestation_count; ++i) {
         const lxp_guarantor_attestation *a = &certificate.attestations[i];
-        (void)printf("%s(2,42,%" PRIu64 ",", i == 0U ? "" : ",", a->paxeer_chain_id);
+        (void)printf("%s(%u,%u,%" PRIu64 ",", i == 0U ? "" : ",",
+            (unsigned)a->protocol_version, a->network_id, a->paxeer_chain_id);
         hex(a->paxeer_settlement_contract, 20U);
-        (void)printf(",1,"); hex(a->checkpoint_id, 32U);
+        (void)printf(",%" PRIu64 ",", a->epoch); hex(a->checkpoint_id, 32U);
         (void)printf(","); hex(a->checkpoint_hash, 32U);
         (void)printf(","); hex(a->guarantor_id, 32U);
-        (void)printf(",1,"); hex(a->data_availability_root, 32U);
-        (void)printf(",true,true,31,1001000,"); hex(a->signer, 20U);
+        (void)printf(",%" PRIu64 ",", a->batch_number); hex(a->data_availability_root, 32U);
+        (void)printf(",true,true,%u,%" PRIu64 ",", (unsigned)a->availability_class_mask, a->attested_at_ms); hex(a->signer, 20U);
         (void)printf(","); hex(a->signature, 32U);
         (void)printf(","); hex(a->signature + 32U, 32U);
         (void)printf(",%u)", (unsigned)a->signature_v);
@@ -204,6 +215,28 @@ int main(int argc, char **argv)
     int failed = 0;
     if (log_bootstrap() != 0 || fixture(&authority) != 0) FAIL();
     if (argc == 2 && strcmp(argv[1], "prepare") == 0) { prepare(); return 0; }
+    if (argc == 6 && strcmp(argv[1], "emit") == 0) {
+        lxp_arena arena;
+        lxp_byte_span payload, proof;
+        FILE *output;
+        char path[1024];
+        if (decode(argv[2], registration.transaction_id, 32U) != 0) FAIL();
+        registration.observed_block_number = strtoull(argv[3], NULL, 10);
+        registration.observed_at_ms = strtoull(argv[4], NULL, 10);
+        if (lxp_arena_init(&arena, memory, sizeof(memory)) != LXP_OK ||
+            lxp_daemon_finality_evidence_encode(&certificate, &bonded_set, &requirements,
+                0U, &registration, &arena, &payload, &proof) != LXP_OK) FAIL();
+        for (size_t i = 0U; i < 2U; ++i) {
+            lxp_byte_span bytes = i == 0U ? payload : proof;
+            int length = snprintf(path, sizeof(path), "%s/%s", argv[5],
+                i == 0U ? "checkpoint.bin" : "finality.bin");
+            if (length < 0 || (size_t)length >= sizeof(path)) FAIL();
+            output = fopen(path, "wb");
+            if (output == NULL || fwrite(bytes.bytes, 1U, bytes.length, output) != bytes.length ||
+                fclose(output) != 0) FAIL();
+        }
+        return 0;
+    }
     if (argc != 6 || strcmp(argv[1], "verify") != 0 ||
         decode(argv[2], registration.transaction_id, 32U) != 0) FAIL();
     registration.observed_block_number = strtoull(argv[3], NULL, 10);

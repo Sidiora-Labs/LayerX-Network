@@ -4,6 +4,7 @@
 #include "layerx/lxp_result.h"
 #include "layerx/lxp_activity.h"
 #include "layerx/lxp_batch.h"
+#include "layerx/lxp_da.h"
 #include "layerx/lxp_history.h"
 #include "layerx/lxp_guarantor.h"
 #include "layerx/lxp_kernel.h"
@@ -53,6 +54,7 @@ typedef lxp_result (*lxp_daemon_finality_authority_verify_fn)(
 
 typedef struct lxp_daemon_evidence_store {
     lxp_log *log;
+    const lxp_log *availability_log;
     lxp_checkpoint_registry_state registry;
     lxp_sequencer_authorization authorization;
     uint32_t network_id;
@@ -258,6 +260,8 @@ typedef struct lxp_daemon_protocol_owner {
     lxp_identity_store *identities;
     lx_programs_transfer_runtime *programs_runtime;
     lxp_history *history;
+    lxp_da_store *availability_store;
+    bool availability_ready;
     pthread_mutex_t receipt_mutex;
     lxp_log published_receipt_log;
     uint64_t published_batch_number;
