@@ -655,6 +655,7 @@ static lxp_result principal_authority(
     static const uint8_t prefix[] = "agent:";
     static const uint8_t suffix[] = ":main";
     uint8_t name[LX_ACCOUNT_NAME_MAX];
+    uint8_t account_id[32];
     size_t length;
     size_t index;
     lxp_result status;
@@ -670,19 +671,24 @@ static lxp_result principal_authority(
     length += activity->actor_did.length;
     (void)memcpy(name + length, suffix, sizeof(suffix) - 1U);
     length += sizeof(suffix) - 1U;
-    status = lx_account_id_from_string(name, length, principal_id);
+    status = lx_account_id_from_string(name, length, account_id);
     if (status != LXP_OK) return status;
     *fee_balance = (lxp_u128){0U, 0U};
     for (index = 0U; index < process->accounts.count; ++index) {
         const lx_account *account = &process->accounts.accounts[index];
-        if (lxp_ct_memcmp(account->id, principal_id, 32U) != 0) continue;
+        if (lxp_ct_memcmp(account->id, account_id, 32U) != 0) continue;
         if (account->kind != LX_ACCOUNT_AGENT_MAIN ||
             !account->has_authority_key ||
             lxp_ct_memcmp(account->authority_key, account_key, 32U) != 0)
             return LXP_ERR_BAD_SIGNATURE;
         *fee_balance = account->balance;
-        return LXP_OK;
+        break;
     }
+    if (activity->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT &&
+        lxp_activity_module_id(activity->activity_type) == LXP_MODULE_PROGRAMS)
+        return lxp_did_id_derive(activity->actor_did.bytes,
+                                 activity->actor_did.length, principal_id);
+    (void)memcpy(principal_id, account_id, 32U);
     return LXP_OK;
 }
 

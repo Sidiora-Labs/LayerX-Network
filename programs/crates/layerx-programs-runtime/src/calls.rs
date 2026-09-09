@@ -948,6 +948,7 @@ fn execute_nested(
     admitted_graph.enter(callee)?;
     let (
         principal,
+        payment_account,
         capabilities,
         storage,
         receipts,
@@ -964,6 +965,7 @@ fn execute_nested(
         let capabilities = abi.stage_call(callee, input, requested, callee_frame)?;
         (
             abi.principal(),
+            abi.payment_account(),
             capabilities,
             abi.storage_snapshot(),
             abi.verified_receipts(),
@@ -989,7 +991,8 @@ fn execute_nested(
             attempted: child_meter.cpu_budget().saturating_add(1),
         }));
     }
-    let authorization = AuthorizationContext::nested(principal, capabilities, callee_frame);
+    let authorization = AuthorizationContext::nested(principal, capabilities, callee_frame)
+        .with_payment_account(payment_account);
     let mut child_abi = Abi::nested(
         match expected {
             AbiRevision::V1 => crate::abi::manifest::ABI_V1_VERSION,

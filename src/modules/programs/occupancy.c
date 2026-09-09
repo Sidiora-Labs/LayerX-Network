@@ -196,9 +196,6 @@ static lxp_result activation_visit(
         (lxp_programs_occupancy_bridge *)user;
     lxp_programs_occupancy_activation_position *position;
     activation_sum sum = {0U};
-    const uint8_t *owner_record;
-    size_t owner_record_length;
-    uint8_t owner_key[40] = {'p','r','o','g','r','a','m',0};
     uint8_t namespace_length;
     lxp_result status;
     (void)value;
@@ -220,14 +217,9 @@ static lxp_result activation_visit(
     if (namespace_length == 65U) {
         (void)memcpy(position->payer, key + 41U, 32U);
     } else {
-        (void)memcpy(owner_key + 8U, key + 8U, 32U);
-        status = lxp_ctx_kv_get(bridge->ctx, owner_key, sizeof(owner_key),
-                                &owner_record, &owner_record_length);
+        status = lxp_programs_account_owner_read(
+            bridge->ctx, key + 8U, position->payer);
         if (status != LXP_OK) return status;
-        if (owner_record_length != 71U ||
-            lxp_ct_is_zero(owner_record + 1U, 32U))
-            return LXP_FATAL_INVARIANT;
-        (void)memcpy(position->payer, owner_record + 1U, 32U);
     }
     status = lxp_programs_storage_import(
         bridge->ctx, position->namespace_bytes, namespace_length,
@@ -861,6 +853,8 @@ static lxp_result finalize_occupancy_batch(
     ctx.protocol_version = protocol_version;
     ctx.batch_number = batch_number;
     status = lxp_programs_occupancy_bridge_init(&bridge, &ctx);
+    if (status == LXP_OK)
+        (void)memcpy(bridge.resolved_asset_id, occupancy_asset_id, 32U);
     if (status == LXP_OK && bridge.uninitialized) {
         bridge.finalized_batch = batch_number - 1U;
         bridge.current_batch = bridge.finalized_batch;

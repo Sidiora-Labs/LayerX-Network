@@ -325,6 +325,26 @@ lxp_result lxp_programs_account_owner_bind(
     return lxp_ctx_kv_put(ctx, key, sizeof(key), value, sizeof(value));
 }
 
+lxp_result lxp_programs_account_owner_read(
+    lxp_module_ctx *ctx, const uint8_t program_id[32], uint8_t owner[32])
+{
+    uint8_t key[sizeof(program_owner_prefix) - 1U + 32U];
+    const uint8_t *record;
+    size_t record_length;
+    lxp_result status;
+    if (ctx == NULL || program_id == NULL || owner == NULL ||
+        lxp_ct_is_zero(program_id, 32U))
+        return LXP_ERR_NON_CANONICAL;
+    owner_key(program_id, key);
+    status = lxp_ctx_kv_get(ctx, key, sizeof(key), &record, &record_length);
+    if (status != LXP_OK) return status;
+    if (record_length != PROGRAM_OWNER_RECORD_BYTES || record[0] != 1U ||
+        lxp_ct_is_zero(record + 1U, 32U))
+        return LXP_FATAL_INVARIANT;
+    (void)memcpy(owner, record + 1U, 32U);
+    return LXP_OK;
+}
+
 static lxp_result registration_authorized(
     lxp_module_ctx *ctx, const uint8_t program_id[32],
     const uint8_t principal[32])

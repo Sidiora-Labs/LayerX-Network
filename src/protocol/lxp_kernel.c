@@ -109,8 +109,9 @@ lxp_result lxp_kernel_program_payment_account(
     for (size_t i = 0U; status == LXP_OK && i < count; ++i)
         for (size_t j = 0U; j < accounts->count; ++j) {
             lx_account *candidate = &accounts->accounts[j];
-            if (memcmp(candidate->id, ids[i], 32U) != 0 ||
-                candidate->kind != LX_ACCOUNT_AGENT_MAIN ||
+            if (memcmp(candidate->id, ids[i], 32U) != 0)
+                continue;
+            if (candidate->kind != LX_ACCOUNT_AGENT_MAIN ||
                 !candidate->has_asset || memcmp(candidate->asset_id, asset, 32U) != 0)
                 continue;
             if (*account != NULL) {
@@ -175,6 +176,9 @@ lxp_result lxp_kernel_bind_ledger_admission(
             authority->principal, runtime->occupancy_asset_id,
             ctx->protocol_version, &account);
     }
+    if (status == LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE &&
+        activity_type == LX_PROGRAMS_WIND_DOWN)
+        return LXP_OK;
     if (status != LXP_OK) return status;
     (void)memcpy(ctx->ledger_admission.activity_binding, ctx->activity_id, 32U);
     (void)memcpy(ctx->ledger_admission.account_id, account->id, 32U);
@@ -2444,6 +2448,7 @@ lxp_result lxp_kernel_prepare_activity(
     lxp_program_outcome synthetic_outcome;
     lxp_byte_span encoded;
     bool module_ctx_initialized = false;
+    bool module_admitted = false;
     bool sandbox_call;
     if (snapshot == NULL || activity == NULL || execution == NULL ||
         worker_arena == NULL || prepared_out == NULL ||
@@ -2534,10 +2539,16 @@ lxp_result lxp_kernel_prepare_activity(
             status = snapshot_bind_call_admission(
                 &module_ctx, work, execution, prepared->activity_id,
                 activity->fee_limit, activity->activity_type);
+            if (status == LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE) {
+                module_result = status;
+                status = LXP_OK;
+            } else if (status == LXP_OK) {
+                module_admitted = true;
+            }
             if (status == LXP_OK)
                 status = lxp_module_ctx_bind_effects(&module_ctx, &effects);
         }
-        if (status == LXP_OK)
+        if (status == LXP_OK && module_admitted)
             status = lxp_kernel_dispatch(registration, &module_ctx, activity,
                                          execution->authority, &effects,
                                          &module_result);
@@ -2724,6 +2735,9 @@ lxp_result lxp_kernel_snapshot_apply_prepared(
             status = snapshot_bind_call_admission(
                 &module_ctx, candidate, execution, prepared->activity_id,
                 activity->fee_limit, activity->activity_type);
+            if (status == LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE &&
+                prepared->result_code == status)
+                status = LXP_OK;
             if (status == LXP_OK)
                 status = lxp_module_ctx_bind_effects(&module_ctx, &effects);
         }
@@ -3454,6 +3468,7 @@ static bool program_planning_refusal(lxp_result status)
     case LXP_ERR_UNKNOWN_FIELD:
     case LXP_ERR_VERSION_UNSUPPORTED:
     case LXP_ERR_AUTH_SCOPE:
+    case LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE:
     case LXP_ERR_PROGRAM_REFUSED:
     case LXP_ERR_GAS_EXHAUSTED:
         return true;

@@ -2436,6 +2436,10 @@ pub extern "C" fn layerx_programs_call_begin(
     r1: u64,
     r2: u64,
     r3: u64,
+    a0: u64,
+    a1: u64,
+    a2: u64,
+    a3: u64,
     h0: u64,
     h1: u64,
     h2: u64,
@@ -2551,6 +2555,10 @@ pub extern "C" fn layerx_programs_call_begin(
             .map_err(|_| NON_CANONICAL)?;
         let program = ProgramId::new(bytes([p0, p1, p2, p3])).map_err(|_| NON_CANONICAL)?;
         let payer = PrincipalId::new(bytes([r0, r1, r2, r3])).map_err(|_| NON_CANONICAL)?;
+        let payment_account = bytes([a0, a1, a2, a3]);
+        if payment_account == [0; 32] {
+            return Err(NON_CANONICAL);
+        }
         let execution_principal = sandbox_execution_principal(token, program)?.unwrap_or(payer);
         let authority = bytes([h0, h1, h2, h3]);
         if authority == [0; 32] {
@@ -2774,7 +2782,8 @@ pub extern "C" fn layerx_programs_call_begin(
             .into_iter()
             .collect();
         let receipts = CReceiptOracle { token };
-        let authorization = AuthorizationContext::new(execution_principal, capabilities);
+        let authorization = AuthorizationContext::new(execution_principal, capabilities)
+            .with_payment_account(payment_account);
         let v2_transfer = if root_module.validated().abi_revision() == AbiRevision::V2 {
             Some(
                 TransferCapability::from_root_authorization(

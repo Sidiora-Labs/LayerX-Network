@@ -417,7 +417,13 @@ static lxp_result catalog_fill_visit(const uint8_t *key, size_t key_length,
         return LXP_FATAL_INVARIANT;
     entry = &value->catalog[value->catalog_cursor];
     (void)memcpy(entry->program_id, key + 8U, 32U);
-    (void)memcpy(entry->owner, record + 1U, 32U);
+    if (lxp_protocol_version_uses_occupancy(value->ctx->protocol_version)) {
+        status = lxp_programs_account_owner_read(
+            value->ctx, entry->program_id, entry->owner);
+        if (status != LXP_OK) return status;
+    } else {
+        (void)memcpy(entry->owner, record + 1U, 32U);
+    }
     (void)memcpy(entry->code_hash, record + 33U, 32U);
     entry->abi_version = read_u16(record + 65U);
     status = lxp_programs_artifact_open(value->ctx, entry->program_id,
@@ -1376,6 +1382,7 @@ static lxp_result call_scalar_begin(const lxp_programs_call_activity *value,
     const lxp_call_admission_facts *admission = lxp_ctx_call_admission(value->ctx);
     uint64_t program[4];
     uint64_t principal[4];
+    uint64_t payment_account[4];
     uint64_t authority_hash[4];
     uint64_t binding[4];
     size_t index;
@@ -1387,6 +1394,7 @@ static lxp_result call_scalar_begin(const lxp_programs_call_activity *value,
     for (index = 0U; index < 4U; ++index) {
         program[index] = read_u64(value->program_id + index * 8U);
         principal[index] = read_u64(value->authority->principal + index * 8U);
+        payment_account[index] = read_u64(admission->payer + index * 8U);
         authority_hash[index] = read_u64(authority->authority_hash + index * 8U);
         binding[index] = read_u64(admission->activity_binding + index * 8U);
     }
@@ -1395,6 +1403,8 @@ static lxp_result call_scalar_begin(const lxp_programs_call_activity *value,
         (uint64_t)(uintptr_t)value->occupancy,
         program[0], program[1], program[2], program[3],
         principal[0], principal[1], principal[2], principal[3],
+        payment_account[0], payment_account[1], payment_account[2],
+        payment_account[3],
         authority_hash[0], authority_hash[1], authority_hash[2], authority_hash[3],
         binding[0], binding[1], binding[2], binding[3],
         admission->signed_fee_limit.hi, admission->signed_fee_limit.lo,
