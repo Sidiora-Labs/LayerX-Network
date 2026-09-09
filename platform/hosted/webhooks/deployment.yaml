@@ -303,6 +303,18 @@ spec:
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: layerx-testnet } }
           podSelector: { matchLabels: { app: layerx-node } }
       ports: [{ protocol: TCP, port: 9446 }]
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: layerx-internal } }
+          podSelector: { matchExpressions: [{ key: app, operator: In, values: [layerx-internal-kms, layerx-internal-journeys, layerx-internal-payments, layerx-internal-approvals, layerx-internal-programs] }] }
+      ports: [{ protocol: TCP, port: 9443 }]
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: layerx-testnet } }
+          podSelector: { matchLabels: { app: layerx-identity } }
+      ports: [{ protocol: TCP, port: 9443 }]
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: layerx-testnet } }
+          podSelector: { matchLabels: { app: layerx-node } }
+      ports: [{ protocol: TCP, port: 9445 }]
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -322,6 +334,10 @@ spec:
         - { protocol: UDP, port: 53 }
         - { protocol: TCP, port: 443 }
         - { protocol: TCP, port: 6379 }
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: layerx-testnet } }
+          podSelector: { matchLabels: { app: layerx-identity } }
+      ports: [{ protocol: TCP, port: 9443 }]
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
