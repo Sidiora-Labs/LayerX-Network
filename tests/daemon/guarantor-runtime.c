@@ -89,6 +89,31 @@ int main(int argc, char **argv)
         if (status != LXP_OK)
             break;
         assert(!memcmp(engine->kernel->current_state_root, body.header.resulting_state_root, 32U));
+        {
+            lxp_state_witness *proof = malloc(sizeof(*proof));
+            uint8_t *wire = malloc(LXP_STATE_WITNESS_MAX_BYTES);
+            size_t wire_length;
+            assert(proof != NULL && wire != NULL);
+            assert(gp_runtime_state_proof(runtime, 0U,
+                       (lxp_byte_span){(const uint8_t *)"account-tree", 12U}, proof) == LXP_OK);
+            assert(lxp_state_proof_verify(proof, body.header.resulting_state_root) == LXP_OK);
+            assert(lxp_state_proof_encode(proof, wire, LXP_STATE_WITNESS_MAX_BYTES,
+                                           &wire_length) == LXP_OK);
+            assert(lxp_state_proof_decode(wire, wire_length, proof) == LXP_OK);
+            assert(lxp_state_proof_verify(proof, body.header.resulting_state_root) == LXP_OK);
+            for (size_t i = 0U; i < engine->kernel->module_kv_count; ++i) {
+                const lxp_module_kv_entry *entry = &engine->kernel->module_kv[i];
+                assert(gp_runtime_state_proof(runtime, entry->module_id,
+                           (lxp_byte_span){entry->key, entry->key_length}, proof) == LXP_OK);
+                assert(lxp_state_proof_verify(proof, body.header.resulting_state_root) == LXP_OK);
+                assert(proof->value_length == entry->value_length);
+                assert(memcmp(proof->value, entry->value, entry->value_length) == 0);
+            }
+            fprintf(stdout, "state witness v2 verified batch=%lu account-tree=1 module-kv=%zu accounts=%zu\n",
+                    batch, engine->kernel->module_kv_count, engine->kernel->state->accounts->count);
+            free(wire);
+            free(proof);
+        }
         fprintf(stdout,
                 "guarantor runtime independently replayed batch=%lu activities=%zu receipts=%zu\n",
                 batch, activity_count, replay.receipt_count);

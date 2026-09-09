@@ -3345,3 +3345,15 @@ $(BUILD_DIR)/tests/lxp_test_guarantor_runtime: tests/daemon/guarantor-runtime.c 
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LIBRARY) $(EXTRA_LDFLAGS) \
 		-lcrypto -lsqlite3 -pthread -ldl -lm -o $@
 test-daemon-guarantor-integration: $(BUILD_DIR)/tests/lxp_test_guarantor_runtime
+
+.PHONY: test-state-proof
+$(BUILD_DIR)/tests/lxp_test_state_proof: tests/state/lxp_test_state_proof.c \
+	$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
+		$(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
+test-state-proof: $(BUILD_DIR)/tests/lxp_test_state_proof
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_state_proof
+	$(BUILD_DIR)/tests/lxp_test_state_proof --vectors > $(BUILD_DIR)/tests/native-state-proofs.json
+	cmp $(BUILD_DIR)/tests/native-state-proofs.json contracts/config/native-state-proofs.json
+	cmp $(BUILD_DIR)/tests/native-state-proofs.json human/crates/layerx-paxeer-client/tests/vectors/native-state-proofs.json
