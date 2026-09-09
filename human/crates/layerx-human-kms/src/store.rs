@@ -21,6 +21,10 @@ struct Record {
     seed: Option<[u8; 32]>,
     previous: Option<[u8; 32]>,
     generation: u64,
+    #[serde(default)]
+    wallet: Option<crate::evm::Wallet>,
+    #[serde(default)]
+    send_actions: BTreeMap<String, (crate::evm_types::SendPlanAuthorization, Vec<u8>)>,
 }
 impl Drop for Record {
     fn drop(&mut self) {
@@ -43,7 +47,7 @@ pub(crate) struct Store {
     healthy: bool,
     _lock: File,
 }
-fn hex(bytes: &[u8]) -> String {
+pub(crate) fn hex(bytes: &[u8]) -> String {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
     bytes
         .iter()
@@ -236,6 +240,12 @@ impl Store {
         if request.operation == 3 && request.version == 1 {
             return Err(Error::Refused);
         }
+        if request.operation == 11 {
+            return self.authorize_send(request, signing_digest.ok_or(Error::Refused)?);
+        }
+        if request.operation >= 6 {
+            return self.evm(request);
+        }
         let key = hex(&request.binding);
         let record = self.state.records.get_mut(&key).ok_or(Error::NotFound)?;
         if record.class != request.class || request.reference != record.handle {
@@ -251,6 +261,8 @@ impl Store {
             4 => {
                 record.seed.zeroize();
                 record.seed = None;
+                record.wallet = None;
+                record.send_actions.clear();
                 self.persist()?;
                 Ok(Vec::new())
             }
@@ -260,6 +272,109 @@ impl Store {
                 .to_vec()),
             _ => Err(Error::Refused),
         }
+    }
+    fn authorize_send(&mut self, request: &Request<'_>, digest: [u8; 32]) -> Result<Vec<u8>> {
+        let record = self
+            .state
+            .records
+            .get_mut(&hex(&request.binding))
+            .ok_or(Error::NotFound)?;
+        if record.class != request.class || request.reference != record.handle {
+            return Err(Error::Refused);
+        }
+        let seed = record.seed.as_ref().ok_or(Error::NotFound)?;
+        let authorization: crate::evm_types::SendPlanAuthorization =
+            serde_json::from_slice(request.evm).map_err(|_| Error::Refused)?;
+        let key = hex(&authorization.action_key);
+        if let Some((previous, signature)) = record.send_actions.get(&key) {
+            return if previous == &authorization {
+                Ok(signature.clone())
+            } else {
+                Err(Error::Conflict)
+            };
+        }
+        if record.send_actions.len() >= 4096 {
+            return Err(Error::Unavailable);
+        }
+        let signature = signing_key(seed)?.sign(&digest).as_ref().to_vec();
+        record
+            .send_actions
+            .insert(key, (authorization, signature.clone()));
+        self.persist()?;
+        Ok(signature)
+    }
+    fn evm(&mut self, request: &Request<'_>) -> Result<Vec<u8>> {
+        use crate::evm_types::{EvmAcknowledgement, EvmPlanAuthorization};
+        let record = self
+            .state
+            .records
+            .get_mut(&hex(&request.binding))
+            .ok_or(Error::NotFound)?;
+        if record.class != request.class
+            || request.reference != record.handle
+            || record.seed.is_none()
+        {
+            return Err(Error::Refused);
+        }
+        if request.operation == 6 {
+            if record.wallet.is_none() {
+                record.wallet = Some(crate::evm::Wallet::create()?);
+            }
+            let address = record.wallet.as_ref().ok_or(Error::Integrity)?.address;
+            self.persist()?;
+            return Ok(address.to_vec());
+        }
+        let wallet = record.wallet.as_mut().ok_or(Error::NotFound)?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| Error::Unavailable)?
+            .as_secs();
+        let action = match request.operation {
+            7 => {
+                let authorization: EvmPlanAuthorization =
+                    serde_json::from_slice(request.evm).map_err(|_| Error::Refused)?;
+                if authorization.binding_digest != request.binding {
+                    return Err(Error::Refused);
+                }
+                wallet.authorize(authorization, now)?
+            }
+            8 => {
+                let key: [u8; 32] =
+                    serde_json::from_slice(request.evm).map_err(|_| Error::Refused)?;
+                wallet.sign(&key, now)?
+            }
+            9 => {
+                let ack: EvmAcknowledgement =
+                    serde_json::from_slice(request.evm).map_err(|_| Error::Refused)?;
+                let action = wallet
+                    .actions
+                    .get_mut(&hex(&ack.action_key))
+                    .ok_or(Error::NotFound)?;
+                if action.transaction_hash != Some(ack.transaction_hash) {
+                    return Err(Error::Integrity);
+                }
+                action.acknowledged = true;
+                action.clone()
+            }
+            10 => {
+                let key: [u8; 32] =
+                    serde_json::from_slice(request.evm).map_err(|_| Error::Refused)?;
+                wallet
+                    .actions
+                    .get(&hex(&key))
+                    .ok_or(Error::NotFound)?
+                    .clone()
+            }
+            12 => {
+                let request: crate::evm_types::EvmExternalSignature =
+                    serde_json::from_slice(request.evm).map_err(|_| Error::Refused)?;
+                wallet.accept_external(&request.action_key, &request.signature, now)?
+            }
+            _ => return Err(Error::Refused),
+        };
+        let response = serde_json::to_vec(&action).map_err(|_| Error::Integrity)?;
+        self.persist()?;
+        Ok(response)
     }
     fn create(&mut self, request: &Request<'_>) -> Result<Vec<u8>> {
         let key = hex(&request.binding);
@@ -290,6 +405,8 @@ impl Store {
             seed: Some(*seed),
             previous: None,
             generation: 0,
+            wallet: None,
+            send_actions: BTreeMap::new(),
         };
         let response = description(&record)?;
         self.state.records.insert(key, record);
@@ -340,6 +457,14 @@ fn validate(state: &State, config: &Config) -> std::result::Result<(), String> {
             || record.previous == Some(record.public)
         {
             return Err("state invariant failed".into());
+        }
+        if let Some(wallet) = &record.wallet {
+            if record.seed.is_none() {
+                return Err("destroyed wallet invariant failed".into());
+            }
+            wallet
+                .validate(record.binding)
+                .map_err(|_| "wallet state invariant failed")?;
         }
         if let Some(seed) = &record.seed {
             if public(seed).map_err(|_| "state key invalid")? != record.public {

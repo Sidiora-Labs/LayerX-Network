@@ -900,6 +900,7 @@ name = "layerx-human-kms"
 version = "0.1.0"
 dependencies = [
  "getrandom 0.3.4",
+ "k256",
  "layerx-client",
  "layerx-crypto",
  "layerx-human-service",
@@ -912,7 +913,28 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "sha3",
  "zeroize",
+]
+
+[[package]]
+name = "layerx-human-movement-provider"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek",
+ "getrandom 0.3.4",
+ "k256",
+ "layerx-agent-api",
+ "layerx-client",
+ "layerx-human-service",
+ "layerx-paxeer-client",
+ "layerx-types",
+ "rustix",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sha3",
 ]
 
 [[package]]
@@ -951,6 +973,7 @@ dependencies = [
  "layerx-agentd",
  "layerx-client",
  "layerx-crypto",
+ "layerx-human-test-support",
  "layerx-intents",
  "layerx-paxeer-client",
  "layerx-proof",
@@ -967,6 +990,21 @@ dependencies = [
  "sha3",
  "subtle",
  "zeroize",
+]
+
+[[package]]
+name = "layerx-human-test-support"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek",
+ "layerx-agentd",
+ "layerx-client",
+ "layerx-crypto",
+ "layerx-human-service",
+ "layerx-proof",
+ "layerx-types",
+ "layerx-wire",
+ "sha2",
 ]
 
 [[package]]

@@ -1,9 +1,9 @@
 # Receipt authority and the human agent contract
 
 The binary dispatches all eight `/v1/agent/*` routes with a dedicated scoped
-credential and protected policy. Registry and authorized-batch have successful
+credential and protected policy. Registry, authorized-batch and balance-context have successful
 responses. Core-clock succeeds with two distinct retained verified headers.
-Balance-context, identity, capability-scope, budget-state and key-policy refuse
+Identity, capability-scope, budget-state and key-policy refuse
 when the sources described below cannot establish the requested facts. These
 refusals do not constitute complete successful-route coverage.
 
@@ -262,15 +262,23 @@ missing state/checkpoint proof.
 
 ## Remaining evidence refusals
 
-The canonical gateway file currently has exactly
-`{"modules":[{"module":9,"ordinals":[1,7]}]}` shape. Authority returns exactly
-these registrations, packing each activity as `(module << 16) | ordinal`, and
-`revision` is SHA-256 of the original file bytes. It does not infer registrations
-from receipts or inject Programs ordinals. The gateway currently injects
-Programs ordinals and limits registrations to eight, while the agent supports
-nine module IDs. Those differences require resolution by the gateway owner.
-There is no currency field in the gateway schema and it denies unknown fields.
-Consequently balance-context returns 503 `registry_currency_metadata_unavailable`.
+The canonical registry now requires `schema_version: 2`, `modules` and `assets`.
+Each asset contains `asset` (nonzero lowercase H32), `currency` (1..32 bytes),
+`decimals` (0..38) and `symbol` (1..32 bytes). Currency and symbol reject control
+characters. Assets must be unique, with 1..256 entries; unknown fields refuse.
+Both readers reject the old unversioned file and version 1. The authority keeps
+its existing module bounds and exact registrations; gateway retains its existing
+eight-module bound and Programs ordinal insertion. No gateway writer exists in
+`src/main.rs`; provisioning writes the file outside these owned paths.
+
+Balance-context selects currency metadata by the policy asset, requires a held
+verified header, and reports that header's timestamp as Unix milliseconds in a
+decimal string. Age is computed from the system wall clock, rejecting future
+headers and age exceeding the provisioned maximum before returning success.
+The sequencer ID, key and batch range are the same startup pins used by the
+verifier. Missing metadata or stale/missing evidence returns 503. The response
+also includes decimals, symbol, the exact registry file digest and the existing
+account evidence inventory. This endpoint returns context, not a state proof.
 
 Budget receipt fields do not encode budget revocation state. Replica documents
 provide batch inclusion, not checkpoint certificates. Budget-state returns 503
@@ -293,15 +301,18 @@ corresponding verified state and checkpoint evidence interface. The real client
 collapses these 503 statuses to Refused, as described above.
 
 The real-client TLS regression starts the real authority binary and invokes
-`RemoteHumanAuthority` in an isolated subprocess. It currently fails before the
-first request: agentd enables only ureq native TLS, while its client chooses the
-default Rustls provider, which is not compiled. No test-only dependency feature
-is added to hide this production mismatch. The agent owner must select the
-compiled provider and configure CA trust before the client assertions can run.
+`RemoteHumanAuthority` with the server's explicit private CA DER. It preserves
+refusal coverage and adds a successful balance-context read against the unchanged
+real-node receipt fixture. That historical-fixture test explicitly provisions a
+ten-year freshness window; the original short-window test still requires 503.
+The root-only real-node tests retain their prerequisites.
 
-A separate real-server wire test verifies registry and cached authorized-batch
-success from an unmodified real-node receipt fixture, all remaining route
-refusals, token separation, wrong tenant, and missing/changed policy. It does not
-replace the failing real-client regression or claim all-eight-route happy-path
-coverage. The live two-header clock test remains unqualified. See the feature
-qualification ledger and worktree `qual-logs/hm2/` for exact executed outcomes.
+The requested derived-header certificate conflicts with the existing finality
+contract. `ReplicaDocument` supplies one sequencer signature over the batch-header
+digest. `layerx_wire::receipt::CheckpointCertificate` contains guarantor
+signatures and a threshold; encoding a sequencer signature into those fields
+would not establish checkpoint finality. `layerx-proof` establishes batch
+inclusion separately from checkpoint finality. Budget and key-policy clients
+require verification rank 4 or 5; identity owner installation and capability
+installation also require checkpoint-finalised evidence. These checks are intact.
+No state-proof or checkpoint encoding is claimed for the remaining refusals.

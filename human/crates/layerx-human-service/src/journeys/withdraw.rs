@@ -5,11 +5,10 @@ use std::fmt::{Display, Formatter};
 use layerx_agent_api::identity::{AgentDid, AuthorityRef, ContractError};
 use layerx_intents::{BridgeWithdrawRequest, Intent, IntentKind};
 use layerx_paxeer_client::{
-    account_address, CancellationEvidence, CancelledFundsDisposition, ChallengeHold, ChallengeKind,
-    CheckpointProof, ClaimProgress, CommittedWithdrawalDebit, DebitExpectation, DebitFault,
-    FinalityStage, PaxeerFundsDisposition, PayoutEvidence, ProtocolDebitDisposition,
-    SubmittedWithdrawalClaim, TransactionHash, WithdrawalAttestation, WithdrawalBoundary,
-    WithdrawalError,
+    CancellationEvidence, CancelledFundsDisposition, ChallengeHold, ChallengeKind, CheckpointProof,
+    ClaimProgress, CommittedWithdrawalDebit, DebitExpectation, DebitFault, FinalityStage,
+    PaxeerFundsDisposition, PayoutEvidence, ProtocolDebitDisposition, SubmittedWithdrawalClaim,
+    TransactionHash, WithdrawalAttestation, WithdrawalBoundary, WithdrawalError,
 };
 use layerx_proof::receipt::AuthorizedBatch;
 use layerx_sdk::Client as AgentClient;
@@ -30,7 +29,7 @@ use crate::notify::JourneyId;
 use crate::store::{AuditDisposition, EvidenceRef, PrincipalScope, RowKey, StoreError, Table};
 use crate::trace::TraceId;
 
-const RECORD_VERSION: u8 = 1;
+const RECORD_VERSION: u8 = 2;
 const STATE_PREFIX: &str = "withdraw-state-";
 const PIN_PREFIX: &str = "withdraw-pin-";
 const PLAN_DIGEST_DOMAIN: &[u8] = b"layerx-human-withdraw-plan/v1\0";
@@ -106,6 +105,7 @@ pub struct WithdrawalPlan {
     pub journey_id: JourneyId,
     pub idempotency_key: [u8; 32],
     pub network: NetworkId,
+    pub layerx_protocol_version: u16,
     pub withdrawal_id: WithdrawalId,
     pub owner: AccountId,
     pub withdrawals_account: AccountId,
@@ -125,33 +125,34 @@ pub(crate) fn encode_withdrawal_plan(
     validate_plan(plan)?;
     let mut out = super::wire::Writer::new(2);
     out.text(plan.journey_id.as_str())
-        .map_err(|_| WithdrawalJourneyError::InvalidPlan)?;
+        .map_err(|()| WithdrawalJourneyError::InvalidPlan)?;
     out.fixed(&plan.idempotency_key);
     out.u32(plan.network.value());
+    out.u16(plan.layerx_protocol_version);
     out.fixed(&plan.withdrawal_id.bytes());
     out.text(plan.owner.canonical())
-        .map_err(|_| WithdrawalJourneyError::InvalidPlan)?;
+        .map_err(|()| WithdrawalJourneyError::InvalidPlan)?;
     out.text(plan.withdrawals_account.canonical())
-        .map_err(|_| WithdrawalJourneyError::InvalidPlan)?;
+        .map_err(|()| WithdrawalJourneyError::InvalidPlan)?;
     out.fixed(&plan.payout_address.bytes());
     out.fixed(&plan.asset.bytes());
     out.u128(plan.amount.value());
     out.text(&plan.currency)
-        .map_err(|_| WithdrawalJourneyError::InvalidPlan)?;
+        .map_err(|()| WithdrawalJourneyError::InvalidPlan)?;
     out.u64(plan.settlement.checkpoint_interval_seconds);
     out.u64(plan.settlement.paxeer_block_seconds);
     out.u64(plan.settlement.required_confirmations);
     out.u64(plan.reminder_interval_seconds);
     out.text(plan.agent.actor.as_str())
-        .map_err(|_| WithdrawalJourneyError::InvalidPlan)?;
+        .map_err(|()| WithdrawalJourneyError::InvalidPlan)?;
     out.text(plan.agent.authority.as_str())
-        .map_err(|_| WithdrawalJourneyError::InvalidPlan)?;
+        .map_err(|()| WithdrawalJourneyError::InvalidPlan)?;
     out.u64(plan.agent.account_sequence);
     out.u64(plan.agent.not_before);
     out.u64(plan.agent.not_after);
     out.u128(plan.agent.fee_limit);
     out.text(plan.agent.custody_key.as_str())
-        .map_err(|_| WithdrawalJourneyError::InvalidPlan)?;
+        .map_err(|()| WithdrawalJourneyError::InvalidPlan)?;
     Ok(out.finish())
 }
 
@@ -160,110 +161,119 @@ pub(crate) fn decode_withdrawal_plan(
     bytes: &[u8],
 ) -> Result<WithdrawalPlan, WithdrawalJourneyError> {
     let mut input =
-        super::wire::Reader::new(bytes, 2).map_err(|_| WithdrawalJourneyError::InvalidPlan)?;
+        super::wire::Reader::new(bytes, 2).map_err(|()| WithdrawalJourneyError::InvalidPlan)?;
     let plan = WithdrawalPlan {
         journey_id: JourneyId::new(
             input
                 .text()
-                .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
+                .map_err(|()| WithdrawalJourneyError::InvalidPlan)?,
         )
         .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
         idempotency_key: input
             .fixed()
-            .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
+            .map_err(|()| WithdrawalJourneyError::InvalidPlan)?,
         network: NetworkId::new(
             input
                 .u32()
-                .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
+                .map_err(|()| WithdrawalJourneyError::InvalidPlan)?,
         )
         .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
+        layerx_protocol_version: input
+            .u16()
+            .map_err(|()| WithdrawalJourneyError::InvalidPlan)?,
         withdrawal_id: WithdrawalId::new(
             input
                 .fixed()
-                .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
+                .map_err(|()| WithdrawalJourneyError::InvalidPlan)?,
         ),
         owner: AccountId::parse(
             &input
                 .text()
-                .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
+                .map_err(|()| WithdrawalJourneyError::InvalidPlan)?,
         )
         .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
         withdrawals_account: AccountId::parse(
             &input
                 .text()
-                .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
+                .map_err(|()| WithdrawalJourneyError::InvalidPlan)?,
         )
         .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
         payout_address: EvmAddress::new(
             input
                 .fixed()
-                .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
+                .map_err(|()| WithdrawalJourneyError::InvalidPlan)?,
         ),
         asset: AssetId::new(
             input
                 .fixed()
-                .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
+                .map_err(|()| WithdrawalJourneyError::InvalidPlan)?,
         ),
         amount: Amount::from_u128(
             input
                 .u128()
-                .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
+                .map_err(|()| WithdrawalJourneyError::InvalidPlan)?,
         ),
         currency: input
             .text()
-            .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
+            .map_err(|()| WithdrawalJourneyError::InvalidPlan)?,
         settlement: SettlementConfig {
             checkpoint_interval_seconds: input
                 .u64()
-                .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
+                .map_err(|()| WithdrawalJourneyError::InvalidPlan)?,
             paxeer_block_seconds: input
                 .u64()
-                .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
+                .map_err(|()| WithdrawalJourneyError::InvalidPlan)?,
             required_confirmations: input
                 .u64()
-                .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
+                .map_err(|()| WithdrawalJourneyError::InvalidPlan)?,
         },
         reminder_interval_seconds: input
             .u64()
-            .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
-        agent: WithdrawalAgentPlan {
-            actor: AgentDid::new(
-                input
-                    .text()
-                    .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
-            )
-            .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
-            authority: AuthorityRef::new(
-                input
-                    .text()
-                    .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
-            )
-            .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
-            account_sequence: input
-                .u64()
-                .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
-            not_before: input
-                .u64()
-                .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
-            not_after: input
-                .u64()
-                .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
-            fee_limit: input
-                .u128()
-                .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
-            custody_key: KeyId::new(
-                input
-                    .text()
-                    .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
-            )
-            .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
-        },
+            .map_err(|()| WithdrawalJourneyError::InvalidPlan)?,
+        agent: decode_withdrawal_agent(&mut input)?,
     };
     input
         .finish()
-        .map_err(|_| WithdrawalJourneyError::InvalidPlan)?;
+        .map_err(|()| WithdrawalJourneyError::InvalidPlan)?;
     validate_plan(&plan)?;
     Ok(plan)
+}
+
+fn decode_withdrawal_agent(
+    input: &mut super::wire::Reader<'_>,
+) -> Result<WithdrawalAgentPlan, WithdrawalJourneyError> {
+    Ok(WithdrawalAgentPlan {
+        actor: AgentDid::new(
+            input
+                .text()
+                .map_err(|()| WithdrawalJourneyError::InvalidPlan)?,
+        )
+        .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
+        authority: AuthorityRef::new(
+            input
+                .text()
+                .map_err(|()| WithdrawalJourneyError::InvalidPlan)?,
+        )
+        .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
+        account_sequence: input
+            .u64()
+            .map_err(|()| WithdrawalJourneyError::InvalidPlan)?,
+        not_before: input
+            .u64()
+            .map_err(|()| WithdrawalJourneyError::InvalidPlan)?,
+        not_after: input
+            .u64()
+            .map_err(|()| WithdrawalJourneyError::InvalidPlan)?,
+        fee_limit: input
+            .u128()
+            .map_err(|()| WithdrawalJourneyError::InvalidPlan)?,
+        custody_key: KeyId::new(
+            input
+                .text()
+                .map_err(|()| WithdrawalJourneyError::InvalidPlan)?,
+        )
+        .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
+    })
 }
 
 /// The only truthful cancellation promise after the `LayerX` debit commits.
@@ -285,6 +295,8 @@ pub enum PaxeerAction {
 /// when the same request is recovered after an acknowledgement gap.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WithdrawalTransactionRequest {
+    pub signed_transaction: Option<Vec<u8>>,
+    pub identity: super::MovementExecutionIdentity,
     pub action_key: [u8; 32],
     pub action: PaxeerAction,
     pub target: EvmAddress,
@@ -309,6 +321,8 @@ pub enum WithdrawalBoundaryError {
 pub trait WithdrawalRuntime {
     /// Verifies a wallet signature against the exact persisted claim request
     /// and returns the complete transaction bytes authorised by that signature.
+    /// # Errors
+    /// Refuses a signature that does not authorize the exact withdrawal transaction.
     fn verify_claim_signature(
         &mut self,
         request: &WithdrawalTransactionRequest,
@@ -675,6 +689,7 @@ struct Record {
     idempotency_key: [u8; 32],
     plan_digest: [u8; 32],
     network_id: u32,
+    layerx_protocol_version: u16,
     withdrawal_id: [u8; 32],
     owner: String,
     withdrawals_account: String,
@@ -729,6 +744,8 @@ pub struct WithdrawalJourney {
 impl WithdrawalJourney {
     /// Verifies and submits the user's external claim signature exactly once.
     /// An unknown broadcast outcome moves immediately to lookup-only recovery.
+    /// # Errors
+    /// Refuses invalid journey state, changed claim authorization, or rejected settlement submission.
     pub fn claim_external_signature<R: WithdrawalRuntime>(
         &mut self,
         scope: &mut PrincipalScope<'_>,
@@ -737,20 +754,23 @@ impl WithdrawalJourney {
         signature: &[u8],
         now: u64,
     ) -> Result<WithdrawalStatus, WithdrawalJourneyError> {
+        if boundary.protocol_version() != self.record.layerx_protocol_version {
+            return Err(WithdrawalJourneyError::InvalidPlan);
+        }
         if now < self.record.updated_at {
             return Err(WithdrawalJourneyError::TimeRegressed);
         }
         if self.record.phase != Phase::ClaimReady {
             return Err(WithdrawalJourneyError::ClaimNotReady);
         }
-        let mut request = self.claim_request(boundary)?;
+        let mut request = self.claim_request(scope, boundary)?;
         let signed = runtime.verify_claim_signature(&request, signature)?;
         if signed.is_empty() || signed == request.calldata {
             return Err(WithdrawalJourneyError::Boundary(
                 WithdrawalBoundaryError::ContractViolation,
             ));
         }
-        request.calldata = signed;
+        request.signed_transaction = Some(signed);
         match runtime.submit_or_resolve(&request) {
             Ok(PaxeerActionOutcome::Submitted(transaction)) => {
                 if transaction.bytes() == [0; 32] {
@@ -801,6 +821,7 @@ impl WithdrawalJourney {
             idempotency_key: plan.idempotency_key,
             plan_digest: digest,
             network_id: plan.network.value(),
+            layerx_protocol_version: plan.layerx_protocol_version,
             withdrawal_id: plan.withdrawal_id.bytes(),
             owner: plan.owner.canonical().to_owned(),
             withdrawals_account: plan.withdrawals_account.canonical().to_owned(),
@@ -855,6 +876,8 @@ impl WithdrawalJourney {
     /// Returns `None` until the debit reaches the prepared phase and after it
     /// has already been signed, so fresh step-up evidence is bound only at the
     /// signing boundary.
+    /// # Errors
+    /// Refuses unavailable or inconsistent prepared debit evidence.
     pub fn prepared_debit_disclosure_digest(
         &self,
         scope: &PrincipalScope<'_>,
@@ -944,6 +967,9 @@ impl WithdrawalJourney {
         step_up: Option<&StepUpEvidence>,
         now: u64,
     ) -> Result<WithdrawalStatus, WithdrawalJourneyError> {
+        if boundary.protocol_version() != self.record.layerx_protocol_version {
+            return Err(WithdrawalJourneyError::InvalidPlan);
+        }
         if now < self.record.updated_at {
             return Err(WithdrawalJourneyError::TimeRegressed);
         }
@@ -1024,7 +1050,7 @@ impl WithdrawalJourney {
                 }
             }
             Phase::ClaimSubmitting => {
-                let request = self.claim_request(boundary)?;
+                let request = self.claim_request(scope, boundary)?;
                 match runtime.submit_or_resolve(&request) {
                     Ok(PaxeerActionOutcome::Submitted(transaction)) => {
                         self.record.claim_transaction = Some(transaction.bytes());
@@ -1106,7 +1132,7 @@ impl WithdrawalJourney {
                 self.transition(scope, Phase::PayoutSubmitting, now)?;
             }
             Phase::PayoutSubmitting => {
-                let request = self.payout_request(boundary)?;
+                let request = self.payout_request(scope, boundary)?;
                 match runtime.submit_or_resolve(&request) {
                     Ok(PaxeerActionOutcome::Submitted(transaction)) => {
                         self.record.payout_transaction = Some(transaction.bytes());
@@ -1138,7 +1164,7 @@ impl WithdrawalJourney {
                 self.transition(scope, Phase::CancellationSubmitting, now)?;
             }
             Phase::CancellationSubmitting => {
-                let request = self.cancellation_request(boundary)?;
+                let request = self.cancellation_request(scope, boundary)?;
                 match runtime.submit_or_resolve(&request) {
                     Ok(PaxeerActionOutcome::Submitted(transaction)) => {
                         self.record.cancellation_transaction = Some(transaction.bytes());
@@ -1335,8 +1361,16 @@ impl WithdrawalJourney {
             activity_id,
             network_id: self.record.network_id,
             withdrawal_id: self.record.withdrawal_id,
-            account: account_address(&self.owner()?),
-            withdrawals_account: account_address(&self.withdrawals_account()?),
+            account: layerx_paxeer_client::account_address_for_protocol(
+                &self.owner()?,
+                self.record.layerx_protocol_version,
+            )
+            .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
+            withdrawals_account: layerx_paxeer_client::account_address_for_protocol(
+                &self.withdrawals_account()?,
+                self.record.layerx_protocol_version,
+            )
+            .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
             asset_id: self.record.asset,
             amount: self.record.amount,
             recipient: EvmAddress::new(self.record.payout_address),
@@ -1392,10 +1426,23 @@ impl WithdrawalJourney {
 
     fn claim_request(
         &self,
+        scope: &PrincipalScope<'_>,
         boundary: &WithdrawalBoundary,
     ) -> Result<WithdrawalTransactionRequest, WithdrawalJourneyError> {
         let claim = self.claim(boundary)?;
         Ok(WithdrawalTransactionRequest {
+            signed_transaction: None,
+            identity: super::MovementExecutionIdentity {
+                principal: scope.principal().clone(),
+                tenant: scope.tenant().clone(),
+                account: layerx_paxeer_client::account_address_for_protocol(
+                    &self.owner()?,
+                    self.record.layerx_protocol_version,
+                )
+                .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
+                wallet: EvmAddress::new(self.record.payout_address),
+                plan_id: self.record.idempotency_key,
+            },
             action_key: self.record.claim_action_key,
             action: PaxeerAction::QueueClaim,
             target: claim.contract(),
@@ -1405,10 +1452,23 @@ impl WithdrawalJourney {
 
     fn payout_request(
         &self,
+        scope: &PrincipalScope<'_>,
         boundary: &WithdrawalBoundary,
     ) -> Result<WithdrawalTransactionRequest, WithdrawalJourneyError> {
         let submitted = self.submitted_claim(boundary)?;
         Ok(WithdrawalTransactionRequest {
+            signed_transaction: None,
+            identity: super::MovementExecutionIdentity {
+                principal: scope.principal().clone(),
+                tenant: scope.tenant().clone(),
+                account: layerx_paxeer_client::account_address_for_protocol(
+                    &self.owner()?,
+                    self.record.layerx_protocol_version,
+                )
+                .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
+                wallet: EvmAddress::new(self.record.payout_address),
+                plan_id: self.record.idempotency_key,
+            },
             action_key: self.record.payout_action_key,
             action: PaxeerAction::FinalisePayout,
             target: boundary.claims_contract(),
@@ -1418,10 +1478,23 @@ impl WithdrawalJourney {
 
     fn cancellation_request(
         &self,
+        scope: &PrincipalScope<'_>,
         boundary: &WithdrawalBoundary,
     ) -> Result<WithdrawalTransactionRequest, WithdrawalJourneyError> {
         let submitted = self.submitted_claim(boundary)?;
         Ok(WithdrawalTransactionRequest {
+            signed_transaction: None,
+            identity: super::MovementExecutionIdentity {
+                principal: scope.principal().clone(),
+                tenant: scope.tenant().clone(),
+                account: layerx_paxeer_client::account_address_for_protocol(
+                    &self.owner()?,
+                    self.record.layerx_protocol_version,
+                )
+                .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
+                wallet: EvmAddress::new(self.record.payout_address),
+                plan_id: self.record.idempotency_key,
+            },
             action_key: self.record.cancellation_action_key,
             action: PaxeerAction::CancelChallengedPayout,
             target: boundary.claims_contract(),
@@ -1680,7 +1753,8 @@ fn disposition_vault(disposition: CancelledFundsDisposition) -> [u8; 20] {
 }
 
 fn validate_plan(plan: &WithdrawalPlan) -> Result<(), WithdrawalJourneyError> {
-    if plan.idempotency_key == [0; 32]
+    if !matches!(plan.layerx_protocol_version, 2 | 3)
+        || plan.idempotency_key == [0; 32]
         || plan.withdrawal_id.is_zero()
         || plan.amount.value() == 0
         || plan.owner == plan.withdrawals_account
@@ -1702,6 +1776,7 @@ fn validate_plan(plan: &WithdrawalPlan) -> Result<(), WithdrawalJourneyError> {
 
 fn validate_record(record: &Record) -> Result<(), WithdrawalJourneyError> {
     if record.version != RECORD_VERSION
+        || !matches!(record.layerx_protocol_version, 2 | 3)
         || JourneyId::new(record.journey_id.clone()).is_err()
         || record.idempotency_key == [0; 32]
         || record.plan_digest == [0; 32]
@@ -1867,6 +1942,7 @@ fn plan_digest(plan: &WithdrawalPlan) -> [u8; 32] {
     hash_text(&mut digest, plan.journey_id.as_str());
     digest.update(plan.idempotency_key);
     digest.update(plan.network.value().to_be_bytes());
+    digest.update(plan.layerx_protocol_version.to_be_bytes());
     digest.update(plan.withdrawal_id.bytes());
     hash_text(&mut digest, plan.owner.canonical());
     hash_text(&mut digest, plan.withdrawals_account.canonical());

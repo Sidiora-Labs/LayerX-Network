@@ -40,14 +40,23 @@ pub fn directory(label: &str) -> PathBuf {
     ))
 }
 
+/// # Panics
+/// Panics if the principal name is invalid.
+#[must_use]
 pub fn principal(name: &str) -> PrincipalId {
     PrincipalId::new(name).unwrap_or_else(|error| panic!("principal: {error}"))
 }
 
+/// # Panics
+/// Panics if the row key is invalid.
+#[must_use]
 pub fn row_key(name: &str) -> RowKey {
     RowKey::new(name).unwrap_or_else(|error| panic!("row key: {error}"))
 }
 
+/// # Panics
+/// Panics if any principal, tenant, or tenancy mapping is invalid.
+#[must_use]
 pub fn tenancy(pairs: &[(&str, &str)]) -> TenancyMap {
     let entries = pairs.iter().map(|(name, tenant)| {
         (
@@ -58,6 +67,7 @@ pub fn tenancy(pairs: &[(&str, &str)]) -> TenancyMap {
     TenancyMap::new(entries).unwrap_or_else(|error| panic!("tenancy map: {error}"))
 }
 
+#[must_use]
 pub fn retention_uniform(units: u64) -> RetentionPolicy {
     RetentionPolicy {
         journeys: RetentionPeriod::new(units),
@@ -68,6 +78,9 @@ pub fn retention_uniform(units: u64) -> RetentionPolicy {
     }
 }
 
+/// # Panics
+/// Panics if tenancy installation or opening the principal store fails.
+#[must_use]
 pub fn install_and_open(
     root: &Path,
     map: &TenancyMap,
@@ -81,6 +94,9 @@ pub fn install_and_open(
     (store, digest)
 }
 
+/// # Panics
+/// Panics if the fixed asset activity cannot form a valid registry.
+#[must_use]
 pub fn evidence_registry() -> ModuleRegistry {
     let activity = ActivityType::new(ModuleId::Asset, 1)
         .unwrap_or_else(|error| panic!("evidence activity type: {error:?}"));
@@ -90,6 +106,9 @@ pub fn evidence_registry() -> ModuleRegistry {
         .unwrap_or_else(|error| panic!("evidence module registry: {error:?}"))
 }
 
+/// # Panics
+/// Panics if authority-file creation or authority-gate validation fails.
+#[must_use]
 pub fn evidence_gate(receipt_signer: &SigningKey) -> Gate {
     let receipt_key = receipt_signer.verifying_key().to_bytes();
     let authority_path = directory("evidence-authority").with_extension("csv");
@@ -122,6 +141,9 @@ pub fn evidence_gate(receipt_signer: &SigningKey) -> Gate {
     Gate::new(&config).unwrap_or_else(|error| panic!("authority gate: {error:?}"))
 }
 
+/// # Panics
+/// Panics if the queue capacity is zero or the admission journal cannot open.
+#[must_use]
 pub fn evidence_node(
     receipt_signer: &SigningKey,
     label: &str,
@@ -136,6 +158,9 @@ pub fn evidence_node(
     )
 }
 
+/// # Panics
+/// Panics if binding the Unix socket fails. The returned worker can panic on protocol or I/O failure.
+#[must_use]
 pub fn serve_evidence_node(node: EvidenceNode, label: &str) -> (PathBuf, JoinHandle<EvidenceNode>) {
     let socket_path = directory(label).with_extension("sock");
     let listener = UnixListener::bind(&socket_path)
@@ -143,6 +168,9 @@ pub fn serve_evidence_node(node: EvidenceNode, label: &str) -> (PathBuf, JoinHan
     (socket_path, node.serve(listener))
 }
 
+/// # Panics
+/// Panics if connecting to the evidence socket fails.
+#[must_use]
 pub fn connect_evidence_node(socket_path: &Path) -> Uds {
     Uds::connect(
         socket_path,
@@ -158,6 +186,9 @@ pub fn connect_evidence_node(socket_path: &Path) -> Uds {
     .unwrap_or_else(|error| panic!("connect evidence node: {error:?}"))
 }
 
+/// # Panics
+/// Panics if the node handshake, evidence authority, or worker completion fails.
+#[must_use]
 pub fn evidence_verifier(receipt_signer: &SigningKey) -> EvidenceAuthority {
     let mut gate = evidence_gate(receipt_signer);
     let node = evidence_node(receipt_signer, "evidence-admission", 1);
@@ -186,6 +217,9 @@ fn encode_hex(bytes: &[u8]) -> String {
     encoded
 }
 
+/// # Panics
+/// Panics if the supplied execution fields cannot form a valid batch identifier.
+#[must_use]
 pub fn execution_batch_id(
     previous_state_root: [u8; 32],
     activity_id: [u8; 32],
@@ -195,6 +229,9 @@ pub fn execution_batch_id(
         .unwrap_or_else(|error| panic!("execution batch id: {error:?}"))
 }
 
+/// # Panics
+/// Panics if the signer differs from the authorized batch key or proof construction fails.
+#[must_use]
 pub fn raw_receipt_evidence(
     canonical_receipt: Vec<u8>,
     authorised_batch: AuthorizedBatch,
@@ -226,6 +263,9 @@ pub fn raw_receipt_evidence(
     )
 }
 
+/// # Panics
+/// Panics if the single-leaf state proof cannot be constructed.
+#[must_use]
 pub fn raw_state_leaf(canonical_state: Vec<u8>, observed_head: u64) -> RawStateEvidence {
     let leaves = [canonical_state.as_slice()];
     let (proof, state_root) =
@@ -299,7 +339,7 @@ fn batch_header_digest(header: &[u8]) -> [u8; 32] {
     digest.finalize().into()
 }
 
-#[allow(dead_code)]
+#[must_use]
 pub fn version_file_bytes(version: u32) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(8);
     bytes.extend_from_slice(b"LXHV");

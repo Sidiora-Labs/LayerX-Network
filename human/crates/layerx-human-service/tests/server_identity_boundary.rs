@@ -1,5 +1,4 @@
-#[allow(dead_code)]
-mod support;
+use layerx_human_test_support as support;
 
 use std::collections::BTreeMap;
 use std::fmt::Debug;
@@ -283,13 +282,7 @@ fn real_component_boundary_registers_asserts_opens_and_authorizes_session() {
         ),
         "privileged components",
     );
-    let socket_root = directory("identity-component-socket");
-    required(fs::create_dir_all(&socket_root), "socket directory");
-    required(
-        fs::set_permissions(&socket_root, fs::Permissions::from_mode(0o700)),
-        "socket permissions",
-    );
-    let socket_path = socket_root.join("human.sock");
+    let socket_path = component_socket_path();
     let bound = required(
         HumanComponentServer::new(Arc::new(components)).bind(ComponentServerConfig {
             socket_path: socket_path.clone(),
@@ -307,69 +300,7 @@ fn real_component_boundary_registers_asserts_opens_and_authorizes_session() {
         "component client",
     );
     let schema = required(ApiSchema::v1(), "schema");
-    let mut authenticator = SoftwareAuthenticator::new();
-
-    let registration = public_call(
-        &client,
-        &schema,
-        "passkey.register.begin",
-        BTreeMap::new(),
-        json!({ "account_id": ACCOUNT_ID }),
-    );
-    let registration_id = registration.result["registration_id"]
-        .as_str()
-        .unwrap_or_else(|| panic!("registration identifier"));
-    assert!(registration_id.starts_with("reg_"));
-    let credential = authenticator.register(
-        registration.result["ceremony"]
-            .as_str()
-            .unwrap_or_else(|| panic!("registration ceremony")),
-    );
-    public_call(
-        &client,
-        &schema,
-        "passkey.register.finish",
-        BTreeMap::from([("registration_id".to_owned(), registration_id.to_owned())]),
-        json!({ "credential": credential }),
-    );
-
-    let assertion = public_call(
-        &client,
-        &schema,
-        "passkey.assert.begin",
-        BTreeMap::new(),
-        json!({ "email": EMAIL }),
-    );
-    let assertion_id = assertion.result["assertion_id"]
-        .as_str()
-        .unwrap_or_else(|| panic!("assertion identifier"));
-    let assertion_credential = authenticator.assert(
-        assertion.result["ceremony"]
-            .as_str()
-            .unwrap_or_else(|| panic!("assertion ceremony")),
-    );
-    public_call(
-        &client,
-        &schema,
-        "passkey.assert.finish",
-        BTreeMap::from([("assertion_id".to_owned(), assertion_id.to_owned())]),
-        json!({ "credential": assertion_credential }),
-    );
-    let mut opened = public_call(
-        &client,
-        &schema,
-        "session.open",
-        BTreeMap::new(),
-        json!({
-            "assertion_id": assertion_id,
-            "device": { "label": "LayerX web app", "platform": "web" }
-        }),
-    );
-    let session = opened
-        .session
-        .take()
-        .unwrap_or_else(|| panic!("protected session secrets"));
-    assert_eq!(opened.result["device"]["platform"], "web");
+    let session = register_and_open_session(&client, &schema);
 
     let list_operation = schema
         .operation("session.list")
@@ -423,11 +354,92 @@ fn real_component_boundary_registers_asserts_opens_and_authorizes_session() {
     verify_principal_route(&socket_path, &session.access_token);
 
     shutdown.request();
-    let served = server
+    let completion = server
         .join()
         .unwrap_or_else(|_| panic!("component server panicked"));
-    required(served, "component server");
+    required(completion, "component server");
     thread::sleep(Duration::from_millis(1));
+}
+
+fn component_socket_path() -> std::path::PathBuf {
+    let socket_root = directory("identity-component-socket");
+    required(fs::create_dir_all(&socket_root), "socket directory");
+    required(
+        fs::set_permissions(&socket_root, fs::Permissions::from_mode(0o700)),
+        "socket permissions",
+    );
+    socket_root.join("human.sock")
+}
+
+fn register_and_open_session(
+    client: &UnixComponents,
+    schema: &ApiSchema,
+) -> layerx_human_service::server::backend::SessionSecrets {
+    let mut authenticator = SoftwareAuthenticator::new();
+
+    let registration = public_call(
+        client,
+        schema,
+        "passkey.register.begin",
+        BTreeMap::new(),
+        json!({ "account_id": ACCOUNT_ID }),
+    );
+    let registration_id = registration.result["registration_id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("registration identifier"));
+    assert!(registration_id.starts_with("reg_"));
+    let credential = authenticator.register(
+        registration.result["ceremony"]
+            .as_str()
+            .unwrap_or_else(|| panic!("registration ceremony")),
+    );
+    public_call(
+        client,
+        schema,
+        "passkey.register.finish",
+        BTreeMap::from([("registration_id".to_owned(), registration_id.to_owned())]),
+        json!({ "credential": credential }),
+    );
+
+    let assertion = public_call(
+        client,
+        schema,
+        "passkey.assert.begin",
+        BTreeMap::new(),
+        json!({ "email": EMAIL }),
+    );
+    let assertion_id = assertion.result["assertion_id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("assertion identifier"));
+    let assertion_credential = authenticator.assert(
+        assertion.result["ceremony"]
+            .as_str()
+            .unwrap_or_else(|| panic!("assertion ceremony")),
+    );
+    public_call(
+        client,
+        schema,
+        "passkey.assert.finish",
+        BTreeMap::from([("assertion_id".to_owned(), assertion_id.to_owned())]),
+        json!({ "credential": assertion_credential }),
+    );
+    let mut opened = public_call(
+        client,
+        schema,
+        "session.open",
+        BTreeMap::new(),
+        json!({
+            "assertion_id": assertion_id,
+            "device": { "label": "LayerX web app", "platform": "web" }
+        }),
+    );
+    let session = opened
+        .session
+        .take()
+        .unwrap_or_else(|| panic!("protected session secrets"));
+    assert_eq!(opened.result["device"]["platform"], "web");
+
+    session
 }
 
 fn verify_principal_route(socket: &std::path::Path, access_token: &str) {
@@ -443,7 +455,7 @@ fn verify_principal_route(socket: &std::path::Path, access_token: &str) {
             required(PrincipalLimits::new(100, 60, 100), "limits"),
             HttpConfig {
                 maximum_header_bytes: 32768,
-                maximum_body_bytes: 1048576,
+                maximum_body_bytes: 1_048_576,
                 allowed_origin: ORIGIN.to_owned(),
                 service_version: "test".to_owned(),
             },
@@ -459,7 +471,7 @@ fn verify_principal_route(socket: &std::path::Path, access_token: &str) {
             required(
                 shared.serve_one(&mut server, "principal-test"),
                 "route principal",
-            )
+            );
         });
         let cookie = if credential.is_empty() {
             String::new()

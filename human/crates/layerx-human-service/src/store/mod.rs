@@ -382,6 +382,10 @@ pub struct PrincipalStore {
 impl PrincipalStore {
     /// Revalidates the durable store root and installed tenancy authority.
     /// Readiness uses this to detect replacement, corruption, or loss after startup.
+    ///
+    /// # Errors
+    ///
+    /// Refuses unknown principal tenancy or unavailable principal state.
     pub fn probe(&self) -> Result<(), StoreError> {
         verify_principals_tree(&self.root)?;
         let installed = tenancy::load_installed(&self.root)?;
