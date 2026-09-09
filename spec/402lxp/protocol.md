@@ -76,7 +76,7 @@ Receiver authorization is:
 
 The receive authorization message is ASCII `LXP:RECEIVE:v1`, followed by the receive fields from `from` through `context_hash`, followed by receiver authorization without its public key or signature. The receiver signs using the native signature-preimage domain. These payload encodings do not replace the signed activity envelope.
 
-Asset grant issue uses ordinal 7 with the canonical grant. Grant revoke uses ordinal 8 and `version:u16=1 || grant_id32 || revocation_sequence:u64`. Ordinal 9 is reserved.
+Asset grant issue uses ordinal 7 with the canonical grant. Grant revoke uses ordinal 8 and `version:u16=1 || grant_id32 || revocation_sequence:u64`. Ordinal 9 is reserved. Python and TypeScript codecs for these payloads live in `agent/sdk/python/layerx_sdk/x402_receive.py` and `agent/sdk/typescript/src/x402/receive.ts`.
 
 ## Asset accounts
 
@@ -84,8 +84,16 @@ The per-asset account name is `agent:<DID>:asset:<lowercase hex64 asset_id>`. It
 
 Natively issued asset IDs are `SHA-256("LX:ASSET:v1" || issuer_did_id32 || salt32)`. Custody asset IDs retain their registered values. Asset symbols and display names are not identifiers.
 
+Asset register uses ordinal 1 and `version:u16=1 || asset_id32 || salt32 || symbol_len:u8 || symbol(1..16 ASCII) || name_len:u8 || name(1..32 UTF-8) || decimals:u8(<=38) || supply_cap:u128 (0 = uncapped) || issuer_kind:u8 (1 native, 2 paxeer_custody) || custody_ref_len:u8 || custody_ref(<=128)`. Issuer is the actor. For kind 1 the asset_id must match the derivation; custody_ref_len must be 0. Duplicates are refused.
+
+Asset mint uses ordinal 10 and `version:u16=1 || asset_id32 || to_account32 || amount:u128`. Actor must be the asset issuer; amount > 0; `total_units + amount` must not exceed `supply_cap` when the asset is capped; the destination account must exist for that asset.
+
+Asset burn uses ordinal 11 and `version:u16=1 || asset_id32 || from_account32 || amount:u128`. Actor must own `from_account`; the account must have sufficient balance.
+
+Every new activity binds sequence to `identity.next_sequence` like Send, charges the existing fee schedule, and produces a receipt that binds before/after balances and `total_units`.
+
 ## Public transport
 
-Use JSON-RPC 2.0 at gateway `POST /rpc`. The read methods are `lx_getAccount`, `lx_getBalance`, `lx_getBalances`, `lx_getSequence`, `lx_estimateFee`, `lx_getReceipt`, `lx_getActivityStatus`, `lx_getBatchHeader`, `lx_getCheckpoint`, `lx_getProof`, `lx_listAssets`, `lx_getAsset` and `lx_getNodeInfo`. Submit canonical signed activity hexadecimal with `lx_sendActivity(canonical_hex, commitment)`.
+Use JSON-RPC 2.0 at gateway `POST /rpc`. The read methods are `lx_getAccount`, `lx_getBalance`, `lx_getBalances(did)`, `lx_getSequence`, `lx_estimateFee`, `lx_getReceipt`, `lx_getActivityStatus`, `lx_getBatchHeader`, `lx_getCheckpoint`, `lx_getProof`, `lx_listAssets`, `lx_getAsset` and `lx_getNodeInfo`. Submit canonical signed activity hexadecimal with `lx_sendActivity(canonical_hex, commitment)`.
 
 WebSocket subscriptions use `GET /rpc/ws` and `lx_subscribe` for `receipts`, `checkpoints` or `account`. Treat notifications as triggers to obtain and verify evidence. JSON-RPC errors remain errors even when transported with HTTP 200. A submit acknowledgement is never reported as payment success. Faucet funding is a separate operation and must itself be confirmed before assuming that funds are spendable.
