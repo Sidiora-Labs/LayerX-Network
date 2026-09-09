@@ -4990,3 +4990,11 @@ symbol = "restarting_server_reobserves_instead_of_serving_archived_finality"
 observed = "After rebasing onto main the package suite passes fmt and clippy; the parallel test run on the shared workstation (load average 5 to 11 during concurrent image builds) fails this one test with Error Unavailable while the same binary passes serially (--test-threads=1) and alone, and an idle 64-core server passed 103 consecutive parallel runs of the unchanged suite (qual-logs/hm5-rebase/test-full-env.log, test-serial.log, test-rerun-1..3.log). The test listener uses a 100 ms deadline and 50 ms request timeout."
 assumption = "The failure is deadline expiry under host load, not a rebase regression or shared test state; no deadline, assertion, retry or ignore was changed. A less load-sensitive proof of the restart behaviour is left to the movement provider owner."
 severity = "note"
+
+[observation.3.5.3]
+task = "3.5"
+file = "platform/hosted/registry/src/routes.rs platform/hosted/registry/src/journal.rs platform/hosted/human/material.py platform/hosted/beta-cluster.sh"
+symbol = "deployment_ingress_unavailable FileDeploymentJournal::append"
+observed = "The checkout lacks platform/hosted/human/material.py and platform/hosted/beta-cluster.sh. The existing cluster script is platform/hosted/tests/beta-cluster.sh. Registry POST /__registry/deployments unconditionally returns deployment_proof_unavailable. FileDeploymentJournal::append accepts VerifiedDeploymentEvidence and publishes a sealed .envelope; the two-file .admission/.deployment shape is a legacy reader input. DeploymentProof requires the canonical activity, activity inclusion proof, receipt inclusion proof, signed batch header, Programs root proof, program leaf witness and lifecycle witness. No consumer parser is present to establish the requested exact byte compatibility."
+assumption = "Supply the Human material assembler and its tests in this checkout and identify the authorized cluster script path. The native deployment interface must provide the complete canonical DeploymentProof material required by ProtocolDeploymentVerifier before registry ingress can publish verified journal pairs. Caller-supplied projections or invented receipt evidence cannot replace that interface. No implementation or real-binary deployment qualification is claimed."
+severity = "blocker"
