@@ -6908,3 +6908,11 @@ file = "cmd/layerxd/lxp_daemon_lni.c tests/test_daemon_lni_admission.c"
 symbol = "send_submit lxp_daemon_lni_simulate test_crash_recovery"
 observed = "The full unchanged native admission suite passes at 21c96f47, the parent of the first owner checkpoint fb313efc, in scratch worktree /home/ubuntu/lx/own1-base. Unconditional Governance identity refresh introduced at the LNI boundary refused the protocol-2 crash fixture because that path has no Governance kernel. Refresh now applies only to protocol 3, matching Governance module registration; protocol-3 missing or malformed state still refuses. The fixture is unchanged. The repaired full admission and account targets, native build, real simulation gate, and real protocol-3 owner Governance lifecycle/restart gate all exit 0. Logs: qual-logs/own1/own1e-base-admission.log, own1e-fixed-admission.log, own1e-fixed-make.log, own1e-simulate.log and own1e-fixed-lifecycle.log."
 assumption = "This supersedes the unresolved crash-recovery classification in observation 3.7.44. Genesis registration remains intact; no fixture, identity, signature, sequence or replay assertion was changed."
+
+[observation.3.7.48]
+task = "3.7"
+severity = "note"
+file = "agent/crates/layerx-agentd/src/human_runtime.rs"
+symbol = "rustfmt"
+observed = "rustfmt --edition 2021 --config skip_children=true --check agent/crates/layerx-agentd/src/human_runtime.rs exits 0; raw log: qual-logs/own1/own1e-touched-fmt.log. The four unrelated files listed in observation 3.7.43 have no diff against pre-owner base 21c96f47 and remain unchanged. Formatting is restricted to touched files."
+assumption = "The earlier whole-package formatting failure remains recorded; a focused file check does not claim the whole-package gate passed."
