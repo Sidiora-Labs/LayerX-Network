@@ -86,3 +86,14 @@ lengths. Layer A proves this registry binding in module zero; the unchanged
 module wrapper and layer B then prove inclusion under the composite root.
 Balances, asset identity and account authority remain bound by the existing
 canonical account record; this extension does not change native root semantics.
+
+The native asset request stages an immutable withdrawal fact under
+`withdrawal:` (11 ASCII bytes) followed by its existing 32-byte nullifier.
+The exact 182-byte value is `version:u16=2 || network_id:u32 ||
+withdrawal_id:32 || account_id:32 || asset_id:32 || amount:u128 ||
+payout_recipient:32 || checkpoint_id:32`, all integers big-endian.
+`lx_withdrawal_state_decode` validates the complete encoding and recomputes
+its key from the real request type. Module-context commit persists the fact;
+a failed transfer rolls the staged fact back. The runtime withdrawal store
+retains its existing lookup and settlement behavior. The fact records request
+creation, not subsequent settlement status.
