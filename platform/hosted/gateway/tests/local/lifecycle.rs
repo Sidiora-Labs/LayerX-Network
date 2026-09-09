@@ -780,6 +780,7 @@ fn local_gateway_rpc() {
         call("lx_getNodeInfo", serde_json::json!([]), false)["result"]["network_id"],
         NETWORK_ID
     );
+    assert_unavailable_reads(&call);
     let manifest = local_manifest(&cluster);
     let manifest: serde_json::Value =
         serde_json::from_slice(&fs::read(manifest).required("manifest")).required("manifest JSON");
@@ -823,6 +824,21 @@ fn local_gateway_rpc() {
             true
         )["error"]["code"],
         -32602
+    );
+}
+
+fn assert_unavailable_reads(call: &impl Fn(&str, serde_json::Value, bool) -> serde_json::Value) {
+    for (method, params) in [
+        ("lx_listAssets", serde_json::json!([])),
+        ("lx_getAsset", serde_json::json!(["ab".repeat(32)])),
+        ("lx_estimateFee", serde_json::json!(["abcd"])),
+        ("lx_getBalances", serde_json::json!(["did:layerx:alice"])),
+    ] {
+        assert_eq!(call(method, params, false)["error"]["code"], -32001);
+    }
+    assert_eq!(
+        call("lx_subscribe", serde_json::json!(["receipts"]), false)["error"]["code"],
+        -32004
     );
 }
 

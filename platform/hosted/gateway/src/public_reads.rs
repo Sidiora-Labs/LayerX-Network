@@ -44,6 +44,10 @@ pub(super) fn target(path: &str) -> Result<Option<&str>, ()> {
 }
 
 pub(super) fn read(config: &Config, path: &str) -> OutgoingResponse {
+    request(config, "GET", path, &[])
+}
+
+pub(super) fn request(config: &Config, method: &str, path: &str, body: &[u8]) -> OutgoingResponse {
     if !consume_read() {
         return response(429, "public_read_rate_limit", Some(1));
     }
@@ -54,10 +58,10 @@ pub(super) fn read(config: &Config, path: &str) -> OutgoingResponse {
         config,
         endpoint,
         config.component_token.as_str(),
-        "GET",
+        method,
         path,
         None,
-        &[],
+        body,
     ) {
         Ok(upstream) => upstream,
         Err(error) => return error,

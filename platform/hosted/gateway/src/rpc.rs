@@ -39,9 +39,14 @@ fn selector(method: &str, params: Option<&Value>) -> Result<String, i32> {
         }
         return Ok(format!("/v1/proofs/{kind}/{id}"));
     }
-    if method == "lx_getNodeInfo" {
+    if matches!(method, "lx_getNodeInfo" | "lx_listAssets") {
         return if args.is_empty() {
-            Ok("/v1/node-info".into())
+            Ok(if method == "lx_getNodeInfo" {
+                "/v1/node-info"
+            } else {
+                "/v1/assets"
+            }
+            .into())
         } else {
             Err(-32602)
         };
@@ -52,6 +57,7 @@ fn selector(method: &str, params: Option<&Value>) -> Result<String, i32> {
         "lx_getReceipt" | "lx_getActivityStatus" => "/v1/receipts/",
         "lx_getBatchHeader" => "/v1/batches/",
         "lx_getCheckpoint" => "/v1/checkpoints/",
+        "lx_getAsset" => "/v1/assets/",
         _ => return Err(-32601),
     };
     let [Value::String(id)] = args.as_slice() else {
@@ -108,26 +114,26 @@ pub(super) fn dispatch(config: &Config, request: &IncomingRequest, value: &Value
         let result = send(config, request, &id, value.get("params"));
         return value.get("id").map(|_| result);
     }
-    let result = match selector(method, value.get("params")) {
-        Ok(path) => {
-            let upstream = public_reads::read(config, &path);
-            match serde_json::from_slice::<Value>(&upstream.body) {
-                Ok(body) if upstream.status == 200 && body.get("result").is_some() => {
-                    json!({"jsonrpc":"2.0","id":id,"result":body["result"]})
-                }
-                Ok(body) => {
-                    let code = if upstream.status == 429 {
-                        -32005
-                    } else {
-                        -32001
-                    };
-                    let mut refusal = error(&id, code, "Read unavailable");
-                    refusal["error"]["data"] = body;
-                    refusal
-                }
-                Err(_) => error(&id, -32603, "Invalid upstream response"),
+    if method == "lx_subscribe" {
+        return value
+            .get("id")
+            .map(|_| error(&id, -32004, "WebSocket required"));
+    }
+    if method == "lx_estimateFee" {
+        let result = match fee_params(value.get("params")) {
+            Ok(canonical) => {
+                let body = json!({"canonical_hex": super::hex(&canonical)}).to_string();
+                read_response(
+                    &id,
+                    &public_reads::request(config, "POST", "/v1/fees/estimate", body.as_bytes()),
+                )
             }
-        }
+            Err(code) => error(&id, code, "Invalid params"),
+        };
+        return value.get("id").map(|_| result);
+    }
+    let result = match selector(method, value.get("params")) {
+        Ok(path) => read_response(&id, &public_reads::read(config, &path)),
         Err(code) => error(
             &id,
             code,
@@ -139,6 +145,39 @@ pub(super) fn dispatch(config: &Config, request: &IncomingRequest, value: &Value
         ),
     };
     value.get("id").map(|_| result)
+}
+
+fn read_response(id: &Value, upstream: &OutgoingResponse) -> Value {
+    match serde_json::from_slice::<Value>(&upstream.body) {
+        Ok(body) if upstream.status == 200 && body.get("result").is_some() => {
+            json!({"jsonrpc":"2.0","id":id,"result":body["result"]})
+        }
+        Ok(body) => {
+            let code = if upstream.status == 429 {
+                -32005
+            } else {
+                -32001
+            };
+            let mut refusal = error(id, code, "Read unavailable");
+            refusal["error"]["data"] = body;
+            refusal
+        }
+        Err(_) => error(id, -32603, "Invalid upstream response"),
+    }
+}
+
+fn fee_params(params: Option<&Value>) -> Result<Vec<u8>, i32> {
+    let Some(Value::Array(args)) = params else {
+        return Err(-32602);
+    };
+    let [Value::String(canonical)] = args.as_slice() else {
+        return Err(-32602);
+    };
+    let canonical = super::decode_hex(canonical, 512 * 1024).map_err(|_| -32602)?;
+    if canonical.is_empty() {
+        return Err(-32602);
+    }
+    Ok(canonical)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -374,6 +413,99 @@ pub(super) fn route(config: &Config, request: &IncomingRequest) -> OutgoingRespo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remaining_read_selectors_and_unavailability_are_explicit() {
+        let id = "ab".repeat(32);
+        assert_eq!(selector("lx_listAssets", None), Ok("/v1/assets".into()));
+        assert_eq!(
+            selector("lx_listAssets", Some(&json!([]))),
+            Ok("/v1/assets".into())
+        );
+        assert_eq!(selector("lx_listAssets", Some(&json!([1]))), Err(-32602));
+        assert_eq!(
+            selector("lx_getAsset", Some(&json!([id]))),
+            Ok(format!("/v1/assets/{id}"))
+        );
+        for args in [
+            json!([]),
+            json!([id, id]),
+            json!(["../"]),
+            json!(["00".repeat(32)]),
+            json!({}),
+        ] {
+            assert_eq!(selector("lx_getAsset", Some(&args)), Err(-32602));
+        }
+        assert_eq!(fee_params(Some(&json!(["abcd"]))), Ok(vec![0xab, 0xcd]));
+        for args in [
+            json!([]),
+            json!([""]),
+            json!(["x1"]),
+            json!(["123"]),
+            json!(["abcd", 1]),
+            json!({}),
+        ] {
+            assert_eq!(fee_params(Some(&args)), Err(-32602));
+        }
+        assert_eq!(
+            fee_params(Some(&json!(["ab".repeat(512 * 1024 + 1)]))),
+            Err(-32602)
+        );
+        for (status, code) in [(404, -32001), (503, -32001), (429, -32005)] {
+            let answer =
+                read_response(&json!(7), &response(status, "capability_unavailable", None));
+            assert_eq!(answer["id"], 7);
+            assert_eq!(answer["error"]["code"], code);
+            assert!(answer.get("result").is_none());
+        }
+        assert_eq!(
+            read_response(
+                &json!(7),
+                &OutgoingResponse {
+                    status: 200,
+                    body: b"invalid".to_vec(),
+                    retry_after: None
+                }
+            )["error"]["code"],
+            -32603
+        );
+    }
+
+    #[test]
+    fn schema_lists_every_public_method() {
+        let schema: Value = serde_json::from_slice(include_bytes!("../openrpc.json"))
+            .unwrap_or_else(|e| panic!("{e}"));
+        let methods = schema["methods"]
+            .as_array()
+            .unwrap_or_else(|| panic!("methods missing"));
+        for name in [
+            "lx_getAccount",
+            "lx_getBalance",
+            "lx_getBalances",
+            "lx_getSequence",
+            "lx_estimateFee",
+            "lx_sendActivity",
+            "lx_getReceipt",
+            "lx_getActivityStatus",
+            "lx_getBatchHeader",
+            "lx_getCheckpoint",
+            "lx_getProof",
+            "lx_listAssets",
+            "lx_getAsset",
+            "lx_getNodeInfo",
+            "lx_subscribe",
+        ] {
+            assert_eq!(
+                methods
+                    .iter()
+                    .filter(|method| method["name"] == name)
+                    .count(),
+                1,
+                "{name}"
+            );
+        }
+        assert_eq!(methods.len(), 15);
+    }
 
     #[test]
     fn send_params_require_canonical_hex_and_an_explicit_commitment() {
