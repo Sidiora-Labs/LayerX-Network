@@ -191,6 +191,9 @@ module.write_json(root / 'account-head-request.json', {
     'sequencer_id': sys.argv[4], 'public_key': sys.argv[5]})
 PYHEAD
     human_owner_provision
+    python3 "$provision" --validate-owner-registration --work-dir "$WORK_DIR"
+    python3 "$provision" --validate-evidence-inputs --work-dir "$WORK_DIR" \
+        --registry "$SECRETS_DIR/module-registry.json" --journal "$LAYERX_REGISTRY_JOURNAL"
     python3 "$provision" --assemble --work-dir "$WORK_DIR" \
         --registry "$SECRETS_DIR/module-registry.json" --asset "$NODE_ASSET_ID" \
         --journal "$WORK_DIR/registry-journal"
