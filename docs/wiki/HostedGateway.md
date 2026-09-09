@@ -548,3 +548,20 @@ inputs appear here:
 | `platform-test-agent-install` | requires `LAYERX_GATEWAY_URL` (`platform/Makefile.inc:190-201`) |
 
 [Home](Home.md)
+
+## Version-2 module registry
+
+`make layerx-module-registry` builds the native producer. `beta-cluster.sh`
+reads `ASSET_SYMBOL`, `ASSET_CURRENCY`, and `ASSET_DECIMALS` from
+`platform/hosted/node/bootstrap.sh`, supplies the node network and asset id,
+and passes `--custody-profile` when configured. The producer links the daemon's
+actual Asset and Programs interfaces and includes Bridge only for a validated
+custody profile. It refuses malformed metadata and noncanonical declarations.
+The generated schema-version-2 bytes are published as `registry.json` in
+`layerx-core-module-registry`, shared by gateway and node consumers.
+
+After node readiness, `layerx-module-registry read-node` requests an authenticated
+LNI preparation snapshot through the node socket as UID 4021. Bring-up compares
+its module ids and ordinals with the published ConfigMap and refuses disagreement.
+Assets are not compared: preparation snapshots carry no asset metadata.
+The node image must install `/usr/local/bin/layerx-module-registry` for this gate.
