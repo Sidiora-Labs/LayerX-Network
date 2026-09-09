@@ -177,6 +177,7 @@ fn untrusted_context() -> Result<PlanningContext> {
     use layerx_human_service::custody::KeyId;
     use layerx_types::{account::AccountId, amount::Amount, ids::AssetId};
     Ok(PlanningContext {
+        request_anchor: [18; 32],
         account: checked(AccountId::parse("agent:did:layerx:alice:main"))?,
         reserve: checked(AccountId::parse("system:paxeer-reserve"))?,
         withdrawals_account: checked(AccountId::parse("system:paxeer-withdrawals"))?,
@@ -646,5 +647,36 @@ fn restarting_server_reobserves_instead_of_serving_archived_finality() -> Result
         }
         server.join().map_err(|_| "server panicked")??;
     }
+    Ok(())
+}
+
+#[test]
+fn withdrawal_mapping_preserves_anchor_and_refuses_old_plan_shape() -> Result {
+    let request = plan("withdraw.start")?;
+    let plan = checked(crate::planning::withdrawal_plan(
+        &request,
+        layerx_human_service::journeys::SettlementConfig {
+            checkpoint_interval_seconds: 10,
+            paxeer_block_seconds: 2,
+            required_confirmations: 2,
+        },
+        60,
+    ))?;
+    assert_eq!(plan.request_anchor.bytes(), request.context.request_anchor);
+    assert_eq!(plan.payout_address, request.context.wallet);
+    assert_eq!(plan.agent.fee_limit, request.context.fee_limit);
+    let codec = NativeMovementCodec::new();
+    let encoded = checked(codec.encode_response(&Response::WithdrawalPlan(plan.clone())))?;
+    assert_eq!(
+        checked(codec.decode_response(&encoded))?,
+        Response::WithdrawalPlan(plan)
+    );
+    let mut old = encoded;
+    let tag = old
+        .windows(2)
+        .position(|bytes| bytes == [1, 5])
+        .ok_or("plan tag absent")?;
+    old[tag + 1] = 2;
+    assert!(codec.decode_response(&old).is_err());
     Ok(())
 }

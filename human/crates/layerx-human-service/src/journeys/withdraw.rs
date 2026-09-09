@@ -14,7 +14,7 @@ use layerx_proof::receipt::AuthorizedBatch;
 use layerx_sdk::Client as AgentClient;
 use layerx_types::account::AccountId;
 use layerx_types::amount::Amount;
-use layerx_types::ids::{AssetId, IdempotencyKey};
+use layerx_types::ids::{AssetId, CheckpointId, IdempotencyKey};
 use layerx_types::intent::{EvmAddress, NetworkId, WithdrawalId};
 use layerx_types::payload::ModuleRegistry;
 use serde::{Deserialize, Serialize};
@@ -29,11 +29,11 @@ use crate::notify::JourneyId;
 use crate::store::{AuditDisposition, EvidenceRef, PrincipalScope, RowKey, StoreError, Table};
 use crate::trace::TraceId;
 
-const RECORD_VERSION: u8 = 2;
+const RECORD_VERSION: u8 = 3;
 const STATE_PREFIX: &str = "withdraw-state-";
 const PIN_PREFIX: &str = "withdraw-pin-";
-const PLAN_DIGEST_DOMAIN: &[u8] = b"layerx-human-withdraw-plan/v1\0";
-const DEBIT_PLAN_DOMAIN: &[u8] = b"layerx-human-withdraw-debit-plan/v1\0";
+const PLAN_DIGEST_DOMAIN: &[u8] = b"layerx-human-withdraw-plan/v2\0";
+const DEBIT_PLAN_DOMAIN: &[u8] = b"layerx-human-withdraw-debit-plan/v2\0";
 const DEBIT_ACTION_DOMAIN: &[u8] = b"layerx-human-withdraw-debit/v1\0";
 const CLAIM_ACTION_DOMAIN: &[u8] = b"layerx-human-withdraw-claim/v1\0";
 const PAYOUT_ACTION_DOMAIN: &[u8] = b"layerx-human-withdraw-payout/v1\0";
@@ -106,6 +106,7 @@ pub struct WithdrawalPlan {
     pub idempotency_key: [u8; 32],
     pub network: NetworkId,
     pub layerx_protocol_version: u16,
+    pub request_anchor: CheckpointId,
     pub withdrawal_id: WithdrawalId,
     pub owner: AccountId,
     pub withdrawals_account: AccountId,
@@ -123,12 +124,13 @@ pub(crate) fn encode_withdrawal_plan(
     plan: &WithdrawalPlan,
 ) -> Result<Vec<u8>, WithdrawalJourneyError> {
     validate_plan(plan)?;
-    let mut out = super::wire::Writer::new(2);
+    let mut out = super::wire::Writer::new(5);
     out.text(plan.journey_id.as_str())
         .map_err(|()| WithdrawalJourneyError::InvalidPlan)?;
     out.fixed(&plan.idempotency_key);
     out.u32(plan.network.value());
     out.u16(plan.layerx_protocol_version);
+    out.fixed(&plan.request_anchor.bytes());
     out.fixed(&plan.withdrawal_id.bytes());
     out.text(plan.owner.canonical())
         .map_err(|()| WithdrawalJourneyError::InvalidPlan)?;
@@ -161,7 +163,7 @@ pub(crate) fn decode_withdrawal_plan(
     bytes: &[u8],
 ) -> Result<WithdrawalPlan, WithdrawalJourneyError> {
     let mut input =
-        super::wire::Reader::new(bytes, 2).map_err(|()| WithdrawalJourneyError::InvalidPlan)?;
+        super::wire::Reader::new(bytes, 5).map_err(|()| WithdrawalJourneyError::InvalidPlan)?;
     let plan = WithdrawalPlan {
         journey_id: JourneyId::new(
             input
@@ -181,6 +183,11 @@ pub(crate) fn decode_withdrawal_plan(
         layerx_protocol_version: input
             .u16()
             .map_err(|()| WithdrawalJourneyError::InvalidPlan)?,
+        request_anchor: CheckpointId::new(
+            input
+                .fixed()
+                .map_err(|()| WithdrawalJourneyError::InvalidPlan)?,
+        ),
         withdrawal_id: WithdrawalId::new(
             input
                 .fixed()
@@ -700,6 +707,7 @@ struct Record {
     plan_digest: [u8; 32],
     network_id: u32,
     layerx_protocol_version: u16,
+    request_anchor: [u8; 32],
     withdrawal_id: [u8; 32],
     owner: String,
     withdrawals_account: String,
@@ -832,6 +840,7 @@ impl WithdrawalJourney {
             plan_digest: digest,
             network_id: plan.network.value(),
             layerx_protocol_version: plan.layerx_protocol_version,
+            request_anchor: plan.request_anchor.bytes(),
             withdrawal_id: plan.withdrawal_id.bytes(),
             owner: plan.owner.canonical().to_owned(),
             withdrawals_account: plan.withdrawals_account.canonical().to_owned(),
@@ -1333,6 +1342,9 @@ impl WithdrawalJourney {
 
     fn debit_plan(&self) -> Result<JourneyPlan, WithdrawalJourneyError> {
         let intent = BridgeWithdrawRequest::new(
+            CheckpointId::new(self.record.request_anchor),
+            u64::try_from(self.record.fee_limit)
+                .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
             WithdrawalId::new(self.record.withdrawal_id),
             self.owner()?,
             self.withdrawals_account()?,
@@ -1342,7 +1354,7 @@ impl WithdrawalJourney {
             IdempotencyKey::new(self.record.debit_action_key),
         )?;
         let leg = JourneyLeg::new(
-            Intent::v1(IntentKind::BridgeWithdrawRequest(intent)),
+            Intent::v2(IntentKind::BridgeWithdrawRequest(intent)),
             self.record.debit_action_key,
             AgentDid::new(self.record.actor.clone())?,
             AuthorityRef::new(self.record.authority.clone())?,
@@ -1765,6 +1777,8 @@ fn disposition_vault(disposition: CancelledFundsDisposition) -> [u8; 20] {
 fn validate_plan(plan: &WithdrawalPlan) -> Result<(), WithdrawalJourneyError> {
     if !matches!(plan.layerx_protocol_version, 2 | 3)
         || plan.idempotency_key == [0; 32]
+        || plan.request_anchor.bytes() == [0; 32]
+        || plan.agent.fee_limit > u128::from(u64::MAX)
         || plan.withdrawal_id.is_zero()
         || plan.amount.value() == 0
         || plan.owner == plan.withdrawals_account
@@ -1796,6 +1810,8 @@ fn validate_record(record: &Record) -> Result<(), WithdrawalJourneyError> {
         || record.payout_action_key == [0; 32]
         || record.cancellation_action_key == [0; 32]
         || record.network_id == 0
+        || record.request_anchor == [0; 32]
+        || record.fee_limit > u128::from(u64::MAX)
         || record.withdrawal_id == [0; 32]
         || record.payout_address == [0; 20]
         || record.asset == [0; 32]
@@ -1953,6 +1969,7 @@ fn plan_digest(plan: &WithdrawalPlan) -> [u8; 32] {
     digest.update(plan.idempotency_key);
     digest.update(plan.network.value().to_be_bytes());
     digest.update(plan.layerx_protocol_version.to_be_bytes());
+    digest.update(plan.request_anchor.bytes());
     digest.update(plan.withdrawal_id.bytes());
     hash_text(&mut digest, plan.owner.canonical());
     hash_text(&mut digest, plan.withdrawals_account.canonical());

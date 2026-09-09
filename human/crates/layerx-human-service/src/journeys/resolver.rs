@@ -153,6 +153,8 @@ pub enum CustodyRoute {
         idempotency_key: IdempotencyKey,
     },
     Withdrawal {
+        request_anchor: CheckpointId,
+        fee_limit: u64,
         withdrawal_id: WithdrawalId,
         withdrawals_account: AccountId,
         payout_address: EvmAddress,
@@ -258,12 +260,16 @@ impl RouteRequest {
                 out.extend(idempotency_key.bytes());
             }
             Relationship::Custody(CustodyRoute::Withdrawal {
+                request_anchor,
+                fee_limit,
                 withdrawal_id,
                 withdrawals_account,
                 payout_address,
                 idempotency_key,
             }) => {
-                out.push(6);
+                out.push(7);
+                out.extend(request_anchor.bytes());
+                out.extend(fee_limit.to_be_bytes());
                 out.extend(withdrawal_id.bytes());
                 put_text(&mut out, withdrawals_account.canonical());
                 out.extend(payout_address.bytes());
@@ -327,7 +333,9 @@ impl RouteRequest {
                 reserve: AccountId::parse(&r.text(512)?).map_err(|_| wire_error())?,
                 idempotency_key: IdempotencyKey::new(r.array()?),
             }),
-            6 => Relationship::Custody(CustodyRoute::Withdrawal {
+            7 => Relationship::Custody(CustodyRoute::Withdrawal {
+                request_anchor: CheckpointId::new(r.array()?),
+                fee_limit: r.u64()?,
                 withdrawal_id: WithdrawalId::new(r.array()?),
                 withdrawals_account: AccountId::parse(&r.text(512)?).map_err(|_| wire_error())?,
                 payout_address: EvmAddress::new(r.array()?),
@@ -796,6 +804,8 @@ impl RouteResolver {
                 Endpoint::Human(owner),
                 Endpoint::PaxeerWallet,
                 Relationship::Custody(CustodyRoute::Withdrawal {
+                    request_anchor,
+                    fee_limit,
                     withdrawal_id,
                     withdrawals_account,
                     payout_address,
@@ -806,6 +816,8 @@ impl RouteResolver {
                     MovementTerm::Withdrawal,
                     Mechanism::BridgeWithdrawRequest,
                     BridgeWithdrawRequest::new(
+                        request_anchor,
+                        fee_limit,
                         withdrawal_id,
                         owner.clone(),
                         withdrawals_account,
@@ -980,7 +992,14 @@ fn one_leg<T>(
         legs: vec![RouteLeg {
             term,
             mechanism,
-            intent: Intent::v1(wrap(value)),
+            intent: {
+                let kind = wrap(value);
+                if matches!(kind, IntentKind::BridgeWithdrawRequest(_)) {
+                    Intent::v2(kind)
+                } else {
+                    Intent::v1(kind)
+                }
+            },
         }],
     }
 }

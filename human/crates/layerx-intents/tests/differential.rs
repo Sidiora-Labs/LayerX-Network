@@ -45,7 +45,11 @@ fn registry() -> ModuleRegistry {
         .unwrap_or_else(|error| panic!("governance: {error:?}")),
         ModuleRegistration::new(
             ModuleId::Asset,
-            &[activity(ModuleId::Asset, 5), activity(ModuleId::Asset, 6)],
+            &[
+                activity(ModuleId::Asset, 5),
+                activity(ModuleId::Asset, 6),
+                activity(ModuleId::Asset, 9),
+            ],
         )
         .unwrap_or_else(|error| panic!("asset: {error:?}")),
         ModuleRegistration::new(
@@ -305,9 +309,11 @@ fn fixtures() -> Vec<Fixture> {
         },
         Fixture {
             name: "bridge_withdraw_request",
-            source: "v1 bridge_withdraw_request withdrawal=0fx32 owner=agent:did:layerx:golden:main account=system:paxeer-withdrawals payout=10x20 asset=02x32 amount=25 idempotency=03x32",
-            intent: Intent::v1(IntentKind::BridgeWithdrawRequest(
+            source: "v2 bridge_withdraw_request withdrawal=0fx32 owner=agent:did:layerx:golden:main account=system:paxeer-withdrawals payout=10x20 asset=02x32 amount=25 idempotency=03x32 request_anchor=12x32 fee_limit=100",
+            intent: Intent::v2(IntentKind::BridgeWithdrawRequest(
                 BridgeWithdrawRequest::new(
+                    CheckpointId::new([18; 32]),
+                    100,
                     WithdrawalId::new([15; 32]),
                     owner(),
                     account("system:paxeer-withdrawals"),
@@ -336,8 +342,8 @@ fn render_vectors() -> String {
     let registry = registry();
     let fixtures = fixtures();
     let mut rendered = format!(
-        "# Immutable golden vectors for IntentVersion::V1.\nintent_version = {}\nvector_count = {}\n",
-        IntentVersion::CURRENT.value(),
+        "# Immutable golden vectors for IntentVersion::V2.\nintent_version = {}\nvector_count = {}\n",
+        IntentVersion::V2.value(),
         fixtures.len()
     );
     for fixture in fixtures {
@@ -358,13 +364,13 @@ fn render_vectors() -> String {
 }
 
 #[test]
-fn v1_golden_vectors_are_byte_locked_to_the_intent_version() {
-    assert_eq!(golden::V1_VERSION, IntentVersion::CURRENT.value());
+fn v2_golden_vectors_are_byte_locked_to_the_intent_version() {
+    assert_eq!(golden::V2_VERSION, IntentVersion::V2.value());
     let rendered = render_vectors();
     if std::env::var_os("LAYERX_PRINT_INTENT_VECTORS").is_some() {
         println!("{rendered}");
     } else {
-        assert_eq!(rendered, golden::V1_SOURCE);
+        assert_eq!(rendered, golden::V2_SOURCE);
     }
 }
 

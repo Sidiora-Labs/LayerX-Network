@@ -17,6 +17,7 @@ use crate::{CompiledIntent, Intent, IntentKind};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DisclosureField {
     ActivityType,
+    Version,
     Header,
     Did,
     PrimaryKey,
@@ -52,6 +53,7 @@ pub enum DisclosureField {
     DepositProof,
     Checkpoint,
     Withdrawal,
+    FeeLimit,
     PayloadHash,
     PayloadBytes,
 }
@@ -93,6 +95,13 @@ impl DisclosureCheck {
         intent: &Intent,
         compiled: &CompiledIntent,
     ) -> Result<Self, DisclosureCheckError> {
+        if matches!(intent.kind(), IntentKind::BridgeWithdrawRequest(_))
+            && intent.version() != crate::IntentVersion::V2
+        {
+            return Err(DisclosureCheckError::FieldMismatch(
+                DisclosureField::Version,
+            ));
+        }
         let expected_type = expected_activity_type(intent)?;
         if compiled.activity_type() != expected_type
             || compiled.payload().activity_type() != expected_type
@@ -279,20 +288,14 @@ impl DisclosureCheck {
                 )?;
             }
             IntentKind::BridgeWithdrawRequest(value) => {
-                round_trip.header(0x4802, 7)?;
-                round_trip.fixed(&value.withdrawal_id.bytes(), DisclosureField::Withdrawal)?;
-                round_trip.account(&value.owner, DisclosureField::From)?;
-                round_trip.account(&value.withdrawals_account, DisclosureField::To)?;
+                round_trip.fixed(&value.asset.bytes(), DisclosureField::Asset)?;
+                round_trip.u128(value.amount.value(), DisclosureField::Amount)?;
                 round_trip.fixed(
                     &value.payout_address.bytes(),
                     DisclosureField::PayoutAddress,
                 )?;
-                round_trip.fixed(&value.asset.bytes(), DisclosureField::Asset)?;
-                round_trip.u128(value.amount.value(), DisclosureField::Amount)?;
-                round_trip.fixed(
-                    &value.idempotency_key.bytes(),
-                    DisclosureField::IdempotencyKey,
-                )?;
+                round_trip.fixed(&value.request_anchor.bytes(), DisclosureField::Checkpoint)?;
+                round_trip.u64(value.fee_limit, DisclosureField::FeeLimit)?;
             }
         }
 
@@ -565,7 +568,7 @@ fn expected_activity_type(intent: &Intent) -> Result<ActivityType, DisclosureChe
         IntentKind::BudgetFund(_) => (ModuleId::Budget, 2),
         IntentKind::BudgetDefund(_) => (ModuleId::Budget, 7),
         IntentKind::BridgeDepositCredit(_) => (ModuleId::Bridge, 1),
-        IntentKind::BridgeWithdrawRequest(_) => (ModuleId::Bridge, 2),
+        IntentKind::BridgeWithdrawRequest(_) => (ModuleId::Asset, 9),
     };
     ActivityType::new(module, ordinal).map_err(|error| DisclosureCheckError::Payload {
         field: DisclosureField::ActivityType,

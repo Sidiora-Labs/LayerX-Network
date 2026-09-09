@@ -46,7 +46,11 @@ fn registry() -> ModuleRegistry {
         activity(ModuleId::Governance, 3),
         activity(ModuleId::Governance, 4),
     ];
-    let asset = [activity(ModuleId::Asset, 5), activity(ModuleId::Asset, 6)];
+    let asset = [
+        activity(ModuleId::Asset, 5),
+        activity(ModuleId::Asset, 6),
+        activity(ModuleId::Asset, 9),
+    ];
     let budget = [
         activity(ModuleId::Budget, 1),
         activity(ModuleId::Budget, 2),
@@ -325,8 +329,10 @@ fn every_v1_intent_compiles_through_the_registered_module() {
             )
             .unwrap_or_else(|error| panic!("bridge deposit: {error:?}")),
         )),
-        Intent::v1(IntentKind::BridgeWithdrawRequest(
+        Intent::v2(IntentKind::BridgeWithdrawRequest(
             BridgeWithdrawRequest::new(
+                CheckpointId::new([18; 32]),
+                100,
                 WithdrawalId::new([15; 32]),
                 owner(),
                 account("system:paxeer-withdrawals"),
@@ -391,5 +397,85 @@ fn protocol_three_send_compilation_and_disclosure_use_native_account_ids() {
         assert_eq!(&compiled.payload().as_bytes()[36..68], destination);
         assert_eq!(&compiled.payload().as_bytes()[198..230], source);
         DisclosureCheck::verify(&intent, &compiled).unwrap_or_else(|error| panic!("{error:?}"));
+    }
+}
+
+#[test]
+fn native_withdrawal_v2_binds_recipient_anchor_and_fee_and_refuses_v1() {
+    let request = BridgeWithdrawRequest::new(
+        CheckpointId::new([18; 32]),
+        100,
+        WithdrawalId::new([15; 32]),
+        owner(),
+        account("system:paxeer-withdrawals"),
+        EvmAddress::new([16; 20]),
+        AssetId::new([2; 32]),
+        Amount::from_u128(25),
+        IdempotencyKey::new([3; 32]),
+    )
+    .unwrap_or_else(|error| panic!("withdraw request: {error:?}"));
+    let intent = Intent::v2(IntentKind::BridgeWithdrawRequest(request.clone()));
+    let compiled =
+        compile(&intent, &registry()).unwrap_or_else(|error| panic!("withdraw compile: {error:?}"));
+    assert_eq!(compiled.activity_type(), activity(ModuleId::Asset, 9));
+    let mut expected = AssetId::new([2; 32]).bytes().to_vec();
+    expected.extend(Amount::from_u128(25).value().to_be_bytes());
+    expected.extend([16; 20]);
+    expected.extend([18; 32]);
+    expected.extend(100_u64.to_be_bytes());
+    assert_eq!(expected.len(), 108);
+    assert_eq!(compiled.payload().as_bytes(), expected);
+    assert!(DisclosureCheck::verify(&intent, &compiled).is_ok());
+    let legacy = Intent::v1(IntentKind::BridgeWithdrawRequest(request));
+    assert_eq!(
+        compile(&legacy, &registry())
+            .err()
+            .unwrap_or_else(|| panic!("legacy withdrawal accepted"))
+            .field,
+        CompileField::Version
+    );
+    assert_eq!(
+        DisclosureCheck::verify(&legacy, &compiled),
+        Err(DisclosureCheckError::FieldMismatch(
+            DisclosureField::Version
+        ))
+    );
+    for (anchor, recipient, fee, field) in [
+        ([19; 32], [16; 20], 100, DisclosureField::Checkpoint),
+        ([18; 32], [17; 20], 100, DisclosureField::PayoutAddress),
+        ([18; 32], [16; 20], 101, DisclosureField::FeeLimit),
+    ] {
+        let changed = Intent::v2(IntentKind::BridgeWithdrawRequest(
+            BridgeWithdrawRequest::new(
+                CheckpointId::new(anchor),
+                fee,
+                WithdrawalId::new([15; 32]),
+                owner(),
+                account("system:paxeer-withdrawals"),
+                EvmAddress::new(recipient),
+                AssetId::new([2; 32]),
+                Amount::from_u128(25),
+                IdempotencyKey::new([3; 32]),
+            )
+            .unwrap_or_else(|error| panic!("changed withdrawal: {error:?}")),
+        ));
+        assert_eq!(
+            DisclosureCheck::verify(&changed, &compiled),
+            Err(DisclosureCheckError::FieldMismatch(field))
+        );
+    }
+    for (anchor, recipient) in [([0; 32], [16; 20]), ([18; 32], [0; 20])] {
+        assert!(BridgeWithdrawRequest::new(
+            CheckpointId::new(anchor),
+            100,
+            WithdrawalId::new([15; 32]),
+            owner(),
+            account("system:paxeer-withdrawals"),
+            EvmAddress::new(recipient),
+            AssetId::new([2; 32]),
+            Amount::from_u128(25),
+            IdempotencyKey::new([3; 32]),
+        )
+        .is_err());
     }
 }
