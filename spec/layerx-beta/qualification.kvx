@@ -7568,3 +7568,11 @@ symbol = "pay1_snapshot_roundtrip"
 observed = "Snapshot qualification now compares every restored module KV key/value byte for byte, rejects duplicate keys and checks decoded salt, issuer, issuer kind, pause, cap and supply alongside state roots and account balances. make test-state-commitment-transition test-guarantor exits 0 in qual-logs/pay1/pay1e-item10.log. Existing signed execution and negative tests remain intact."
 assumption = "Actual process restart coverage for all new ordinals and explicit receipt supply tampering remain incomplete pending the daemon and receipt interfaces. This is partial qualification, not closure of the complete test request."
 severity = "blocker"
+
+[observation.3.7.36]
+task = "3.7"
+file = "src/modules/asset/lx_asset_execution.h"
+symbol = "asset_execute_typed"
+observed = "The seven typed ordinals already execute through asset_execute_typed. Signed kernel coverage exercises duplicate registration/open, issuer and owner authority, amount/cap/asset/balance bounds and canonical grant draw and revocation. Existing checks are retained. Focused qualification exits 0 in qual-logs/pay1/pay1e-item3.log."
+assumption = "Execution exists; receipt supply schema, fees and daemon reconstruction remain separate unresolved findings."
+severity = "note"
