@@ -9,7 +9,7 @@ use layerx_wire::encode::Encoder;
 use layerx_wire::hash;
 use layerx_wire::WireError;
 
-use crate::{Intent, IntentKind};
+use crate::{Intent, IntentKind, IntentVersion};
 
 const ASSET_SEND_TAG: u16 = 0x5301;
 const ASSET_SEND_FIELD_COUNT: u16 = 10;
@@ -79,6 +79,7 @@ pub enum CompileField {
     DepositProof,
     Checkpoint,
     Withdrawal,
+    FeeLimit,
     Payload,
     PayloadHash,
 }
@@ -403,27 +404,29 @@ pub fn compile(intent: &Intent, registry: &ModuleRegistry) -> Result<CompiledInt
             finish(registry, ModuleId::Bridge, 1, encoder)
         }
         IntentKind::BridgeWithdrawRequest(value) => {
-            header(&mut encoder, 0x4802, 7)?;
-            fixed(
-                &mut encoder,
-                &value.withdrawal_id.bytes(),
-                CompileField::Withdrawal,
-            )?;
-            account(&mut encoder, &value.owner, CompileField::From)?;
-            account(&mut encoder, &value.withdrawals_account, CompileField::To)?;
+            if intent.version() != IntentVersion::V2 {
+                return Err(CompileError::wire(
+                    CompileField::Version,
+                    WireError {
+                        result: layerx_types::result::KnownResult::VersionUnsupported.into(),
+                        offset: 0,
+                    },
+                ));
+            }
+            fixed(&mut encoder, &value.asset.bytes(), CompileField::Asset)?;
+            wire(CompileField::Amount, encoder.u128(value.amount.value()))?;
             fixed(
                 &mut encoder,
                 &value.payout_address.bytes(),
                 CompileField::PayoutAddress,
             )?;
-            fixed(&mut encoder, &value.asset.bytes(), CompileField::Asset)?;
-            wire(CompileField::Amount, encoder.u128(value.amount.value()))?;
             fixed(
                 &mut encoder,
-                &value.idempotency_key.bytes(),
-                CompileField::IdempotencyKey,
+                &value.request_anchor.bytes(),
+                CompileField::Checkpoint,
             )?;
-            finish(registry, ModuleId::Bridge, 2, encoder)
+            wire(CompileField::FeeLimit, encoder.u64(value.fee_limit))?;
+            finish(registry, ModuleId::Asset, 9, encoder)
         }
     }
 }

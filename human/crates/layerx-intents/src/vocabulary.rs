@@ -24,6 +24,7 @@ const MAX_SESSION_GRANT_BYTES: usize = 1024;
 #[repr(u16)]
 pub enum IntentVersion {
     V1 = 1,
+    V2 = 2,
 }
 
 impl IntentVersion {
@@ -47,6 +48,14 @@ impl Intent {
     pub const fn v1(kind: IntentKind) -> Self {
         Self {
             version: IntentVersion::V1,
+            kind,
+        }
+    }
+
+    #[must_use]
+    pub const fn v2(kind: IntentKind) -> Self {
+        Self {
+            version: IntentVersion::V2,
             kind,
         }
     }
@@ -110,12 +119,14 @@ impl IntentKind {
             | Self::EvmPayoutBinding(_)
             | Self::SessionGrant(_)
             | Self::SessionRevoke(_) => ModuleId::Governance,
-            Self::LxpSend(_) | Self::LxpReceive(_) => ModuleId::Asset,
+            Self::LxpSend(_) | Self::LxpReceive(_) | Self::BridgeWithdrawRequest(_) => {
+                ModuleId::Asset
+            }
             Self::PayerGrantRegistration(_)
             | Self::BudgetCreate(_)
             | Self::BudgetFund(_)
             | Self::BudgetDefund(_) => ModuleId::Budget,
-            Self::BridgeDepositCredit(_) | Self::BridgeWithdrawRequest(_) => ModuleId::Bridge,
+            Self::BridgeDepositCredit(_) => ModuleId::Bridge,
         }
     }
 }
@@ -788,6 +799,8 @@ impl BridgeDepositCredit {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BridgeWithdrawRequest {
+    pub(crate) request_anchor: CheckpointId,
+    pub(crate) fee_limit: u64,
     pub(crate) withdrawal_id: WithdrawalId,
     pub(crate) owner: AccountId,
     pub(crate) withdrawals_account: AccountId,
@@ -803,6 +816,8 @@ impl BridgeWithdrawRequest {
     pub fn to_wire_parts(
         &self,
     ) -> (
+        CheckpointId,
+        u64,
         WithdrawalId,
         &AccountId,
         &AccountId,
@@ -812,6 +827,8 @@ impl BridgeWithdrawRequest {
         IdempotencyKey,
     ) {
         (
+            self.request_anchor,
+            self.fee_limit,
             self.withdrawal_id,
             &self.owner,
             &self.withdrawals_account,
@@ -828,6 +845,8 @@ impl BridgeWithdrawRequest {
     /// Refuses zero withdrawal/value and self-transfer.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
+        request_anchor: CheckpointId,
+        fee_limit: u64,
         withdrawal_id: WithdrawalId,
         owner: AccountId,
         withdrawals_account: AccountId,
@@ -836,11 +855,19 @@ impl BridgeWithdrawRequest {
         amount: Amount,
         idempotency_key: IdempotencyKey,
     ) -> Result<Self, IntentError> {
+        if request_anchor.bytes() == [0; 32] {
+            return Err(IntentError::zero(IntentField::Checkpoint));
+        }
+        if payout_address.bytes() == [0; 20] {
+            return Err(IntentError::zero(IntentField::PayoutAddress));
+        }
         movement(&owner, &withdrawals_account, amount)?;
         if withdrawal_id.is_zero() {
             return Err(IntentError::zero(IntentField::Withdrawal));
         }
         Ok(Self {
+            request_anchor,
+            fee_limit,
             withdrawal_id,
             owner,
             withdrawals_account,
@@ -855,6 +882,8 @@ impl BridgeWithdrawRequest {
 /// Field named by a failed intent construction.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum IntentField {
+    Checkpoint,
+    PayoutAddress,
     Amount,
     Allowance,
     AuthorizationKey,
@@ -1225,6 +1254,8 @@ mod tests {
             ),
             IntentKind::BridgeWithdrawRequest(
                 BridgeWithdrawRequest::new(
+                    CheckpointId::new([18; 32]),
+                    100,
                     WithdrawalId::new([16; 32]),
                     owner(),
                     withdrawals(),
@@ -1251,7 +1282,7 @@ mod tests {
                 ModuleId::Budget,
                 ModuleId::Budget,
                 ModuleId::Bridge,
-                ModuleId::Bridge,
+                ModuleId::Asset,
             ]
         );
     }

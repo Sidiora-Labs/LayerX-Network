@@ -80,11 +80,12 @@ pub(crate) fn withdrawal_plan(
     let context = &request.context;
     let id = identity(request, b"withdrawal")?;
     Ok(WithdrawalPlan {
-        journey_id: JourneyId::new(format!("withdraw-{}", hex_string(&id)))
+        journey_id: JourneyId::new(format!("jrn_{}", hex_string(&id)))
             .map_err(|_| Error::Integrity)?,
         idempotency_key: request.idempotency_key,
         network: context.network,
         layerx_protocol_version: context.protocol_version,
+        request_anchor: layerx_types::ids::CheckpointId::new(context.request_anchor),
         withdrawal_id: WithdrawalId::new(id),
         owner: context.account.clone(),
         withdrawals_account: context.withdrawals_account.clone(),

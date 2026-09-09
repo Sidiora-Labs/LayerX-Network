@@ -1962,6 +1962,14 @@ fn finality_endpoints() -> Result<Vec<EndpointConfig>, String> {
     Ok(endpoints)
 }
 
+fn withdrawal_anchor_ready(
+    request: &ScopedRequest<'_>,
+    balance: &super::agent_runtime::VerifiedBalance,
+) -> bool {
+    request.operation.name != "withdraw.start"
+        || (balance.verification >= 4 && balance.observed_checkpoint != [0; 32])
+}
+
 fn resolve_movement_context(
     components: &ProductionComponents,
     request: &ScopedRequest<'_>,
@@ -2004,6 +2012,7 @@ fn resolve_movement_context(
     if balance.account != movement_account_address(&account, components.protocol_version)?
         || balance.global_sequence != balance.observed_head_sequence
         || balance.age_seconds > components.activity_freshness_seconds
+        || !withdrawal_anchor_ready(request, &balance)
     {
         return Err(ApiFailure::forbidden());
     }
@@ -2031,6 +2040,7 @@ fn resolve_movement_context(
         .evm_binding(scope.principal(), &key)
         .map_err(|_| ApiFailure::upstream_degraded())?;
     let mut context = super::movement_provider::PlanningContext {
+        request_anchor: balance.observed_checkpoint,
         account,
         reserve: AccountId::parse("system:paxeer-reserve")
             .map_err(|_| ApiFailure::upstream_degraded())?,
