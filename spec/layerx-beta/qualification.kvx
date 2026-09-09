@@ -12207,3 +12207,19 @@ symbol = "fixture tool_operation execute_payment wait"
 observed = "cargo test --manifest-path agent/Cargo.toml -p layerx-mcp -p layerx-agentd exits 101 because build/bin/layerxd is absent; subsequent budget cases encounter the poisoned fixture lock. The advertised /root/lx-lanes/native-bin/layerxd and layerx-genesis-build binaries are also absent. Logs: qual-logs/pay2/mcp-test.log. Separate cargo test -p layerx-mcp exits 0; focused agentd tenant_resolve, tenant_leakage, tenant_store, tenant_isolation and session tests exit 0. Logs: qual-logs/pay2/mcp-test-isolated.log and qual-logs/pay2/agentd-scope-tests.log. Formatting checks and all-target Clippy with -D warnings pass for crypto, MCP and agentd. The existing TypeScript build and tests pass."
 assumption = "The named payment tools have explicit scopes, canonical daemon operation mappings and ordinary receipt-stage refusal checks. Wallet backend execution and executed/batched/finalised wait evidence remain dependent on the public RPC contract. Full agentd qualification requires real native binaries. No cluster or image gates ran."
 severity = "blocker"
+
+[observation.6.11.131]
+task = "6.11"
+file = "agent/crates/layerx-crypto/src/disclosure.rs platform/hosted/gateway/openrpc.json platform/cli/src/wallet.rs"
+symbol = "decode_send source_sequence payment_preflight"
+observed = "The merged disclosure decoder requires Send payload sequence == activity.account_sequence. The required envelope sequence is identity.next_sequence while the Send payload uses source account next_sequence. The public RPC snapshot cb795071935210c39e14c77d1361dc5f27e9bea5 specifies lx_getSequence(account_id) as an account read and contains no identity sequence read, identity registration, asset metadata/listing, or DID history method. Existing emulator GET /v1/state exposes account sequences and a global sequence, not the actor identity sequence. Raw contracts: qual-logs/pay3/openrpc.json and qual-logs/pay3/rpc-source.rs."
+assumption = "Send must retain separate sequences and complete disclosure. Writes remain refused before signing until an authenticated identity sequence interface and a compatible Send disclosure decoder exist. No account or global sequence may substitute for the identity sequence."
+severity = "blocker"
+
+[observation.6.11.132]
+task = "6.11"
+file = "spec/layerx-beta/qualification.kvx"
+symbol = "observation.6.11.130"
+observed = "make beta-ledger-check exits 2 after merging 074a399173b4632b4dfbcc160787720a2172f71f: file, symbol, observed, assumption and severity occur twice in observation.6.11.130. The appended record has no section header. Raw output: qual-logs/pay3/rpc-ledger.log."
+assumption = "The inherited records are preserved under append-only ownership. The qualification owner must restore a distinct section header for the second record before the aggregate ledger gate can pass."
+severity = "blocker"

@@ -23,6 +23,7 @@ mod receipt;
 mod register;
 mod scaffold;
 mod toolset;
+mod wallet;
 mod workspace;
 
 use config::{Configuration, Environment};
@@ -38,12 +39,26 @@ struct Cli {
         help = "Emit one JSON object instead of human presentation"
     )]
     json: bool,
+    #[arg(
+        long,
+        global = true,
+        help = "Public gateway JSON-RPC endpoint ending in /rpc"
+    )]
+    rpc: Option<String>,
+    #[arg(long, global = true, help = "Stored gateway credential alias")]
+    gateway_credential: Option<String>,
     #[command(subcommand)]
     command: Command,
 }
 
 #[derive(Subcommand)]
 enum Command {
+    /// Manage native wallet keys, accounts, transfers, and receipts.
+    #[command(subcommand)]
+    Wallet(wallet::WalletCommand),
+    /// Create and manage native tokens.
+    #[command(subcommand)]
+    Token(wallet::TokenCommand),
     /// Scaffold a deterministic Rust program project.
     New(NewArgs),
     /// Install, build, and test every repository module from one visual workspace.
@@ -489,8 +504,29 @@ pub const fn platform_cli() -> &'static str {
     "layerx-cli-v1"
 }
 
-fn run(command: Command, machine: bool) -> Result<Option<CommandOutput>, String> {
+fn validate_wallet_transport(
+    command: &Command,
+    rpc: Option<&str>,
+    gateway: Option<&str>,
+) -> Result<(), String> {
+    if (rpc.is_some() || gateway.is_some())
+        && !matches!(command, Command::Wallet(_) | Command::Token(_))
+    {
+        return Err("--rpc and --gateway-credential apply to wallet and token commands".into());
+    }
+    Ok(())
+}
+
+fn run(
+    command: Command,
+    machine: bool,
+    rpc: Option<&str>,
+    gateway: Option<&str>,
+) -> Result<Option<CommandOutput>, String> {
+    validate_wallet_transport(&command, rpc, gateway)?;
     match command {
+        Command::Wallet(command) => wallet::run_wallet(command, rpc, gateway).map(Some),
+        Command::Token(command) => wallet::run_token(command, rpc, gateway).map(Some),
         Command::New(arguments) => Ok(Some(CommandOutput::new(
             "project.created",
             format!("Created LayerX program project {}", arguments.name),
@@ -1374,7 +1410,12 @@ fn emulator_arguments(arguments: EmulatorUpArgs) -> Vec<String> {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    match run(cli.command, cli.json) {
+    match run(
+        cli.command,
+        cli.json,
+        cli.rpc.as_deref(),
+        cli.gateway_credential.as_deref(),
+    ) {
         Ok(Some(output)) => match output.emit(cli.json) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
