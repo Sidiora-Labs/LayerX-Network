@@ -31,9 +31,7 @@ const BUDGET_DEFUND_FIELD_COUNT: u16 = 7;
 const BRIDGE_DEPOSIT_CREDIT_ORDINAL: u16 = 1;
 const BRIDGE_DEPOSIT_CREDIT_WIRE_TAG: u16 = 0x4801;
 const BRIDGE_DEPOSIT_CREDIT_FIELD_COUNT: u16 = 7;
-const BRIDGE_WITHDRAW_REQUEST_ORDINAL: u16 = 2;
-const BRIDGE_WITHDRAW_REQUEST_WIRE_TAG: u16 = 0x4802;
-const BRIDGE_WITHDRAW_REQUEST_FIELD_COUNT: u16 = 7;
+const ASSET_WITHDRAW_ORDINAL: u16 = 9;
 const GOVERNANCE_EVM_BINDING_ORDINAL: u16 = 4;
 const GOVERNANCE_EVM_BINDING_WIRE_TAG: u16 = 0x7104;
 const GOVERNANCE_EVM_BINDING_FIELD_COUNT: u16 = 4;
@@ -90,6 +88,13 @@ pub struct DisclosedEvmPayoutBinding {
     pub ownership_signature_digest: [u8; 32],
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DisclosedWithdrawal {
+    pub account_sequence: u64,
+    pub evm_recipient: [u8; 20],
+    pub request_anchor: [u8; 32],
+}
+
 /// Every time bound that can make the disclosed activity expire.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Expiry {
@@ -127,6 +132,7 @@ pub struct Disclosure {
     pub idempotency_key: [u8; 32],
     /// Governance wallet-binding semantics, present only for that activity type.
     pub evm_payout_binding: Option<DisclosedEvmPayoutBinding>,
+    pub withdrawal: Option<DisclosedWithdrawal>,
     activity: Activity,
     signing_digest: [u8; 32],
 }
@@ -427,40 +433,53 @@ fn decode_bridge_deposit_credit(
     })
 }
 
-fn decode_bridge_withdraw_request(
-    payload: &[u8],
-    activity: &Activity,
-) -> Result<SendSemantics, DisclosureError> {
-    let mut decoder = Decoder::new(payload, 0);
-    if decoder.u16()? != BRIDGE_WITHDRAW_REQUEST_WIRE_TAG
-        || decoder.u16()? != BRIDGE_WITHDRAW_REQUEST_FIELD_COUNT
-    {
-        return Err(DisclosureError::MalformedPayload);
-    }
-    let withdrawal_id: [u8; 32] = fixed(&mut decoder)?;
-    let from = fixed(&mut decoder)?;
-    let to = fixed(&mut decoder)?;
-    let payout_address: [u8; 20] = fixed(&mut decoder)?;
+fn decode_withdraw(activity: &Activity) -> Result<DisclosureFields, DisclosureError> {
+    let mut decoder = Decoder::new(activity.payload(), 0);
     let asset = fixed(&mut decoder)?;
     let amount = decoder.u128()?;
-    let idempotency_key = fixed(&mut decoder)?;
+    let evm_recipient = fixed(&mut decoder)?;
+    let request_anchor = fixed(&mut decoder)?;
+    let fee_limit = decoder.u64()?;
     decoder.finish()?;
-    if withdrawal_id == [0; 32]
-        || payout_address == [0; 20]
-        || idempotency_key != activity.idempotency_key()
-        || amount == 0
-        || from == to
+    if amount == 0
+        || evm_recipient == [0; 20]
+        || request_anchor == [0; 32]
+        || u128::from(fee_limit) != activity.fee_limit()
     {
         return Err(DisclosureError::MalformedPayload);
     }
-    Ok(SendSemantics {
-        from,
-        to,
+    let actor =
+        std::str::from_utf8(activity.actor_did()).map_err(|_| DisclosureError::MalformedPayload)?;
+    let account = layerx_types::account::AccountId::parse(&format!("agent:{actor}:main"))
+        .map_err(|_| DisclosureError::MalformedPayload)?;
+    let payer = hash::account_id_for_protocol(&account, activity.protocol_version())?;
+    let bounds = activity.timestamp_bound();
+    Ok(DisclosureFields {
+        activity_type: activity.activity_type(),
+        actor: activity.actor_did().to_vec(),
+        authority: activity.authority().to_vec(),
+        counterparties: vec![Counterparty {
+            role: CounterpartyRole::Payer,
+            account: payer,
+        }],
+        amounts: vec![DisclosedAmount {
+            role: AmountRole::Transfer,
+            value: amount,
+        }],
         asset,
-        amount,
-        sequence: activity.account_sequence(),
-        idempotency_key,
-        expires_at: activity.timestamp_bound().not_after,
+        fee_limit: u128::from(fee_limit),
+        expiry: Expiry {
+            not_before: bounds.not_before,
+            not_after: bounds.not_after,
+            payload_expires_at: bounds.not_after,
+        },
+        idempotency_key: activity.idempotency_key(),
+        evm_payout_binding: None,
+        withdrawal: Some(DisclosedWithdrawal {
+            account_sequence: activity.account_sequence(),
+            evm_recipient,
+            request_anchor,
+        }),
     })
 }
 
@@ -508,14 +527,41 @@ fn semantics(activity: &Activity) -> Result<SendSemantics, DisclosureError> {
         (ModuleId::Bridge, BRIDGE_DEPOSIT_CREDIT_ORDINAL) => {
             decode_bridge_deposit_credit(activity.payload(), activity)
         }
-        (ModuleId::Bridge, BRIDGE_WITHDRAW_REQUEST_ORDINAL) => {
-            decode_bridge_withdraw_request(activity.payload(), activity)
-        }
         _ => Err(DisclosureError::UnsupportedActivity(activity_type.value())),
     }
 }
 
+fn governance_fields(
+    activity: &Activity,
+    not_before: u64,
+    not_after: u64,
+) -> Result<DisclosureFields, DisclosureError> {
+    let binding = decode_evm_payout_binding(activity.payload(), activity)?;
+    Ok(DisclosureFields {
+        activity_type: activity.activity_type(),
+        actor: activity.actor_did().to_vec(),
+        authority: activity.authority().to_vec(),
+        counterparties: Vec::new(),
+        amounts: Vec::new(),
+        asset: [0; 32],
+        fee_limit: activity.fee_limit(),
+        expiry: Expiry {
+            not_before,
+            not_after,
+            payload_expires_at: not_after,
+        },
+        idempotency_key: activity.idempotency_key(),
+        evm_payout_binding: Some(binding),
+        withdrawal: None,
+    })
+}
+
 fn decoded_fields(activity: &Activity) -> Result<DisclosureFields, DisclosureError> {
+    if activity.activity_type().module() == ModuleId::Asset
+        && activity.activity_type().ordinal() == ASSET_WITHDRAW_ORDINAL
+    {
+        return decode_withdraw(activity);
+    }
     let TimestampBound {
         not_before,
         not_after,
@@ -527,23 +573,7 @@ fn decoded_fields(activity: &Activity) -> Result<DisclosureFields, DisclosureErr
         ),
         (ModuleId::Governance, GOVERNANCE_EVM_BINDING_ORDINAL)
     ) {
-        let binding = decode_evm_payout_binding(activity.payload(), activity)?;
-        return Ok(DisclosureFields {
-            activity_type: activity.activity_type(),
-            actor: activity.actor_did().to_vec(),
-            authority: activity.authority().to_vec(),
-            counterparties: Vec::new(),
-            amounts: Vec::new(),
-            asset: [0; 32],
-            fee_limit: activity.fee_limit(),
-            expiry: Expiry {
-                not_before,
-                not_after,
-                payload_expires_at: not_after,
-            },
-            idempotency_key: activity.idempotency_key(),
-            evm_payout_binding: Some(binding),
-        });
+        return governance_fields(activity, not_before, not_after);
     }
     if matches!(
         (
@@ -580,6 +610,7 @@ fn decoded_fields(activity: &Activity) -> Result<DisclosureFields, DisclosureErr
             },
             idempotency_key: activity.idempotency_key(),
             evm_payout_binding: None,
+            withdrawal: None,
         });
     }
     let send = semantics(activity)?;
@@ -610,6 +641,7 @@ fn decoded_fields(activity: &Activity) -> Result<DisclosureFields, DisclosureErr
         },
         idempotency_key: send.idempotency_key,
         evm_payout_binding: None,
+        withdrawal: None,
     })
 }
 
@@ -624,6 +656,7 @@ struct DisclosureFields {
     expiry: Expiry,
     idempotency_key: [u8; 32],
     evm_payout_binding: Option<DisclosedEvmPayoutBinding>,
+    withdrawal: Option<DisclosedWithdrawal>,
 }
 
 impl Disclosure {
@@ -645,6 +678,7 @@ impl Disclosure {
         require_field!(fee_limit);
         require_field!(expiry);
         require_field!(idempotency_key);
+        require_field!(withdrawal);
         require_field!(evm_payout_binding);
         Ok(())
     }
@@ -676,7 +710,7 @@ impl Disclosure {
         self.validate_fields()?;
         let mut encoder = Encoder::new(MAX_TRANSPORT_DISCLOSURE_BYTES);
         encoder.structure_header(0x4453)?;
-        encoder.u8(1)?;
+        encoder.u8(if self.withdrawal.is_some() { 2 } else { 1 })?;
         encoder.u32(self.activity_type.value())?;
         encoder.bytes(&self.actor, 255)?;
         encoder.bytes(&self.authority, 524_288)?;
@@ -711,6 +745,11 @@ impl Disclosure {
                 encoder.fixed(&binding.ownership_signature_digest)?;
             }
             None => encoder.u8(0)?,
+        }
+        if let Some(withdrawal) = self.withdrawal {
+            encoder.u64(withdrawal.account_sequence)?;
+            encoder.fixed(&withdrawal.evm_recipient)?;
+            encoder.fixed(&withdrawal.request_anchor)?;
         }
         Ok(encoder.finish())
     }
@@ -757,6 +796,7 @@ impl Disclosure {
         require_field!(fee_limit);
         require_field!(expiry);
         require_field!(idempotency_key);
+        require_field!(withdrawal);
         let reencoded = self.reencode()?;
         if !ct::eq(&reencoded, canonical) {
             return Err(DisclosureError::FieldMismatch("canonical_bytes"));
@@ -801,6 +841,7 @@ pub fn bind(canonical: &[u8], registry: &ModuleRegistry) -> Result<Disclosure, D
         expiry: fields.expiry,
         idempotency_key: fields.idempotency_key,
         evm_payout_binding: fields.evm_payout_binding,
+        withdrawal: fields.withdrawal,
         activity,
         signing_digest: message.digest(),
     })

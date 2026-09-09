@@ -235,3 +235,40 @@ pub fn canonical_bridge_credit(amount: u128) -> Vec<u8> {
     assert!(activity.bytes(&payload, 524_288).is_ok());
     activity.finish()
 }
+
+pub fn canonical_native_withdraw(payload: &[u8], activity_type: u32) -> Vec<u8> {
+    let mut hasher = Sha256::new();
+    hasher.update(Domain::PayloadHash.tag());
+    hasher.update(payload);
+    let payload_hash: [u8; 32] = hasher.finalize().into();
+
+    let mut activity = Encoder::new(4096);
+    assert!(activity
+        .structure_header_version(0x1001, PROTOCOL_VERSION)
+        .is_ok());
+    assert!(activity.u8(11).is_ok());
+    assert!(activity.tag(1, 12).is_ok());
+    assert!(activity.u16(PROTOCOL_VERSION).is_ok());
+    assert!(activity.tag(2, 12).is_ok());
+    assert!(activity.u32(NETWORK_ID).is_ok());
+    assert!(activity.tag(3, 12).is_ok());
+    assert!(activity.u32(activity_type).is_ok());
+    assert!(activity.tag(4, 12).is_ok());
+    assert!(activity.bytes(b"did:layerx:alice", 255).is_ok());
+    assert!(activity.tag(5, 12).is_ok());
+    assert!(activity.bytes(&[0x55; 32], 524_288).is_ok());
+    assert!(activity.tag(6, 12).is_ok());
+    assert!(activity.u64(SEQUENCE).is_ok());
+    assert!(activity.tag(7, 12).is_ok());
+    assert!(activity.u64(NOT_BEFORE).is_ok());
+    assert!(activity.u64(EXPIRES_AT).is_ok());
+    assert!(activity.tag(8, 12).is_ok());
+    assert!(activity.bytes(&IDEMPOTENCY_KEY, 32).is_ok());
+    assert!(activity.tag(9, 12).is_ok());
+    assert!(activity.u128(FEE_LIMIT).is_ok());
+    assert!(activity.tag(10, 12).is_ok());
+    assert!(activity.bytes(&payload_hash, 32).is_ok());
+    assert!(activity.tag(11, 12).is_ok());
+    assert!(activity.bytes(payload, 524_288).is_ok());
+    activity.finish()
+}

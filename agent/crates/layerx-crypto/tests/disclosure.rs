@@ -82,21 +82,12 @@ fn bridge_deposit_credit_discloses_and_signs_the_exact_compiled_semantics() {
 }
 
 #[test]
-fn bridge_withdrawal_discloses_and_signs_the_exact_compiled_semantics() {
+fn legacy_bridge_withdrawal_is_refused() {
     let canonical = support::canonical_bridge_withdraw(25);
-    let registry = support::bridge_withdraw_registry();
-    let Ok(disclosure) = bind(&canonical, &registry) else {
-        panic!("canonical bridge withdrawal disclosure rejected");
-    };
-    assert_eq!(disclosure.activity_type.value(), 0x0008_0002);
-    assert_eq!(disclosure.counterparties[0].account, [0x11; 32]);
-    assert_eq!(disclosure.counterparties[1].account, [0x22; 32]);
-    assert_eq!(disclosure.asset, [0x33; 32]);
-    assert_eq!(disclosure.amounts[0].value, 25);
-    assert_eq!(disclosure.idempotency_key, [0x71; 32]);
-    assert_eq!(disclosure.reencode(), Ok(canonical.clone()));
-    let signer = LocalSigner::new([0xa5; 32]);
-    assert!(ready(sign_disclosed(&signer, &canonical, &disclosure, &registry)).is_ok());
+    assert!(matches!(
+        bind(&canonical, &support::bridge_withdraw_registry()),
+        Err(DisclosureError::UnsupportedActivity(_))
+    ));
 }
 
 #[test]
@@ -162,4 +153,104 @@ fn payload_commitment_mismatch_is_fail_closed() {
         bind(&corrupted, &support::registry()).err(),
         Some(DisclosureError::PayloadHash)
     );
+}
+
+fn native_withdraw(
+    payload: &[u8],
+    ordinal: u16,
+) -> (Vec<u8>, layerx_types::payload::ModuleRegistry) {
+    use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
+    let kind = ActivityType::new(ModuleId::Asset, ordinal)
+        .unwrap_or_else(|error| panic!("activity type: {error:?}"));
+    let registry = ModuleRegistry::new(&[ModuleRegistration::new(ModuleId::Asset, &[kind])
+        .unwrap_or_else(|error| panic!("module: {error:?}"))])
+    .unwrap_or_else(|error| panic!("registry: {error:?}"));
+    (
+        support::canonical_native_withdraw(payload, kind.value()),
+        registry,
+    )
+}
+
+fn withdrawal_payload() -> Vec<u8> {
+    let mut payload = vec![0x33; 32];
+    payload.extend_from_slice(&25u128.to_be_bytes());
+    payload.extend_from_slice(&[0x44; 20]);
+    payload.extend_from_slice(&[0x66; 32]);
+    payload.extend_from_slice(&20u64.to_be_bytes());
+    payload
+}
+
+#[test]
+fn native_withdrawal_discloses_every_field_and_signs_exact_bytes() {
+    let (canonical, registry) = native_withdraw(&withdrawal_payload(), 9);
+    let disclosure =
+        bind(&canonical, &registry).unwrap_or_else(|error| panic!("native disclosure: {error:?}"));
+    assert_eq!(disclosure.activity_type.value(), 0x0001_0009);
+    assert_eq!(disclosure.actor, b"did:layerx:alice");
+    assert_eq!(disclosure.authority.len(), 32);
+    assert_eq!(disclosure.counterparties.len(), 1);
+    assert_eq!(disclosure.counterparties[0].role, CounterpartyRole::Payer);
+    assert_eq!(disclosure.asset, [0x33; 32]);
+    assert_eq!(disclosure.amounts[0].value, 25);
+    assert_eq!(disclosure.fee_limit, 20);
+    assert_eq!(disclosure.idempotency_key, [0x71; 32]);
+    let withdrawal = disclosure
+        .withdrawal
+        .unwrap_or_else(|| panic!("withdrawal fields"));
+    assert_eq!(withdrawal.account_sequence, 7);
+    assert_eq!(withdrawal.evm_recipient, [0x44; 20]);
+    assert_eq!(withdrawal.request_anchor, [0x66; 32]);
+    assert_eq!(disclosure.reencode(), Ok(canonical.clone()));
+    let signer = LocalSigner::new([0xa5; 32]);
+    assert!(ready(sign_disclosed(&signer, &canonical, &disclosure, &registry)).is_ok());
+    for field in 0..3 {
+        let mut changed = disclosure.clone();
+        if field == 0 {
+            changed
+                .withdrawal
+                .as_mut()
+                .unwrap_or_else(|| panic!("fields"))
+                .evm_recipient[0] ^= 1;
+        }
+        if field == 1 {
+            changed
+                .withdrawal
+                .as_mut()
+                .unwrap_or_else(|| panic!("fields"))
+                .request_anchor[0] ^= 1;
+        }
+        if field == 2 {
+            changed.withdrawal = None;
+        }
+        assert!(ready(sign_disclosed(&signer, &canonical, &changed, &registry)).is_err());
+        assert!(changed.audit_digest().is_err());
+    }
+}
+
+#[test]
+fn native_withdrawal_refuses_old_unknown_truncated_extended_and_invalid_fields() {
+    let payload = withdrawal_payload();
+    for length in 0..payload.len() {
+        let (bytes, registry) = native_withdraw(&payload[..length], 9);
+        assert!(bind(&bytes, &registry).is_err());
+    }
+    let mut invalid = vec![vec![0; 216], payload.clone()];
+    invalid[1].push(0);
+    for range in [32..48, 48..68, 68..100] {
+        let mut altered = payload.clone();
+        altered[range].fill(0);
+        invalid.push(altered);
+    }
+    let mut fee = payload.clone();
+    fee[107] ^= 1;
+    invalid.push(fee);
+    for malformed in invalid {
+        let (bytes, registry) = native_withdraw(&malformed, 9);
+        assert!(bind(&bytes, &registry).is_err());
+    }
+    let (bytes, registry) = native_withdraw(&payload, 10);
+    assert!(matches!(
+        bind(&bytes, &registry),
+        Err(DisclosureError::UnsupportedActivity(_))
+    ));
 }
