@@ -1,8 +1,8 @@
 use super::{
-    json_response, media_type_is, parse_hex32, public_reads, response, Config, IncomingRequest,
-    OutgoingResponse,
+    Config, IncomingRequest, OutgoingResponse, json_response, media_type_is, parse_hex32,
+    public_reads, response,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 pub(super) fn error(id: &Value, code: i32, message: &str) -> Value {
     json!({"jsonrpc":"2.0", "id":id, "error":{"code":code,"message":message}})
@@ -29,8 +29,11 @@ fn selector(method: &str, params: Option<&Value>) -> Result<String, i32> {
         }
     }
     if method == "lx_getProof" {
-        if let [Value::String(kind), Value::String(activity), Value::String(account)] =
-            args.as_slice()
+        if let [
+            Value::String(kind),
+            Value::String(activity),
+            Value::String(account),
+        ] = args.as_slice()
         {
             if kind != "account"
                 || [activity, account]

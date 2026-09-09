@@ -1294,8 +1294,8 @@ fn array_tag(response: Resp) -> Result<String, String> {
 #[cfg(test)]
 mod continuation_tests {
     use super::{
-        continuation_chunks, durable_continuation, CONTINUATION_CHUNK_BYTES,
-        MAX_CONTINUATION_BYTES, MAX_CONTINUATION_CHUNKS,
+        CONTINUATION_CHUNK_BYTES, MAX_CONTINUATION_BYTES, MAX_CONTINUATION_CHUNKS,
+        continuation_chunks, durable_continuation,
     };
     use std::collections::BTreeMap;
 
@@ -1305,9 +1305,11 @@ mod continuation_tests {
         let chunks = continuation_chunks(&value)
             .unwrap_or_else(|error| panic!("continuation chunks: {error}"));
         assert_eq!(chunks.len(), MAX_CONTINUATION_CHUNKS);
-        assert!(chunks
-            .iter()
-            .all(|chunk| chunk.len() == CONTINUATION_CHUNK_BYTES));
+        assert!(
+            chunks
+                .iter()
+                .all(|chunk| chunk.len() == CONTINUATION_CHUNK_BYTES)
+        );
 
         let mut fields =
             BTreeMap::from([("continuation_count".to_owned(), chunks.len().to_string())]);
