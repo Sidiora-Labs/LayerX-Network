@@ -65,29 +65,44 @@ def main():
     parser.add_argument('--bin-dir', type=Path, required=True)
     parser.add_argument('--client', type=Path, required=True)
     parser.add_argument('--poll', action='store_true')
+    parser.add_argument('--through', choices=('grant-revoke', 'sends'),
+                        default='sends')
+    parser.add_argument('--reuse-for-sends', action='store_true')
+    parser.add_argument('--invoke-timeout', type=int, default=30)
     args = parser.parse_args()
+    assert args.invoke_timeout > 0
     work = args.output.resolve()
-    work.mkdir(mode=0o755, parents=True, exist_ok=False)
+    if args.reuse_for_sends:
+        assert work.is_dir() and args.through == 'sends'
+    else:
+        work.mkdir(mode=0o755, parents=True, exist_ok=False)
     native = args.bin_dir.resolve()
     client = args.client.resolve()
     asset = bytes.fromhex('b5a32b12029f8ddfb905f90f280f664b46390de0fc62770fc197dd87b18cd898')
     public = {}
     for name, seed in [('sequencer', 0x22), ('treasury', 0x11), ('bob', 0x12)]:
         path = work / name
-        with path.open('xb') as out:
-            os.chmod(path, 0o600)
-            out.write(bytes([seed]) * 32)
+        if not args.reuse_for_sends:
+            with path.open('xb') as out:
+                os.chmod(path, 0o600)
+                out.write(bytes([seed]) * 32)
         public[name] = Ed25519PrivateKey.from_private_bytes(bytes([seed]) * 32).public_key().public_bytes_raw()
-    salt = os.urandom(32)
-    (work / 'salt').write_bytes(salt)
-    (work / 'metadata').write_bytes(metadata(asset, public['treasury'], os.urandom(32)))
-    ports = []
-    sockets = []
-    for _ in range(3):
-        sock = socket.socket()
-        sock.bind(('127.0.0.1', 0))
-        sockets.append(sock)
-        ports.append(sock.getsockname()[1])
+    if args.reuse_for_sends:
+        salt = (work / 'salt').read_bytes()
+        ports = [int(value) for value in (work / 'ports').read_text().splitlines()]
+        sockets = []
+    else:
+        salt = os.urandom(32)
+        (work / 'salt').write_bytes(salt)
+        (work / 'metadata').write_bytes(metadata(asset, public['treasury'], os.urandom(32)))
+        ports = []
+        sockets = []
+        for _ in range(3):
+            sock = socket.socket()
+            sock.bind(('127.0.0.1', 0))
+            sockets.append(sock)
+            ports.append(sock.getsockname()[1])
+        (work / 'ports').write_text(''.join(f'{port}\n' for port in ports))
     assert 18545 not in ports and 6379 not in ports
     environment = dict(os.environ, LAYERX_NODE_PAXEER_CHAIN_ID='31337',
                        LAYERX_NODE_SETTLEMENT_CONTRACT='0x' + '1' * 40,
@@ -100,11 +115,13 @@ def main():
                  '--genesis-metadata', str(work / 'metadata'), '--lni-uid', '4021', '--lni-gid', '4021',
                  '--program-port', str(ports[0]), '--replica-port', str(ports[1]),
                  '--layerxd', str(native / 'layerxd'), '--genesis-build', str(native / 'layerx-genesis-build')]
-    with (work / 'bootstrap.log').open('wb') as log:
-        subprocess.run(bootstrap, cwd=ROOT, env=environment, stdout=log, stderr=log, check=True)
+    if not args.reuse_for_sends:
+        with (work / 'bootstrap.log').open('wb') as log:
+            subprocess.run(bootstrap, cwd=ROOT, env=environment, stdout=log, stderr=log, check=True)
     bob_did = ('did:layerx:' + public['bob'].hex()).encode()
-    with (work / 'data/identities.txt').open('a') as out:
-        out.write(f'{bob_did.hex()}:{public["bob"].hex()}:0\n')
+    if not args.reuse_for_sends:
+        with (work / 'data/identities.txt').open('a') as out:
+            out.write(f'{bob_did.hex()}:{public["bob"].hex()}:0\n')
     for sock in sockets:
         sock.close()
     processes = []
@@ -144,7 +161,8 @@ def main():
                    str(work / 'run/layerxd.lni.sock'), str(work / 'salt'), operation, str(sequence),
                    'poll' if args.poll else 'wait']
         with (work / f'{label}.log').open('wb') as log:
-            subprocess.run(command, stdout=log, stderr=log, check=True, timeout=30)
+            subprocess.run(command, stdout=log, stderr=log, check=True,
+                           timeout=args.invoke_timeout)
         return (work / f'{label}.log').read_bytes()
 
     try:
@@ -152,9 +170,14 @@ def main():
         ready(replica, port=ports[1])
         sequencer = start('sequencer')
         ready(sequencer, path=work / 'run/layerxd.lni.sock')
-        steps = [('register', 0), ('open', 1), ('open-bob', 0), ('mint', 2), ('burn', 3),
-                 ('grant-issue', 4), ('grant-revoke', 5), ('sends', 6)]
-        for index, (operation, sequence) in enumerate(steps):
+        steps = [(0, 'register', 0), (1, 'open', 1), (2, 'open-bob', 0),
+                 (3, 'mint', 2), (4, 'burn', 3), (5, 'grant-issue', 4),
+                 (6, 'grant-revoke', 5), (7, 'sends', 6)]
+        if args.reuse_for_sends:
+            steps = steps[-1:]
+        elif args.through == 'grant-revoke':
+            steps = steps[:-1]
+        for index, operation, sequence in steps:
             invoke(operation, sequence, f'{index}-{operation}')
             before = invoke('read', 0, f'{index}-before')
             validate_reads(before, salt, public['treasury'], index)
