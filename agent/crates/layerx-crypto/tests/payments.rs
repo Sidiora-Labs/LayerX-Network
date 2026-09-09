@@ -228,3 +228,26 @@ fn receive_rejects_forged_authorization_and_grant() {
         );
     }
 }
+
+#[test]
+fn native_generated_receive_and_grant_are_byte_identical() -> Result<(), Box<dyn std::error::Error>>
+{
+    let receive = hex(include_str!("fixtures/payments/native-1-6.hex"));
+    let grant = hex(include_str!("fixtures/payments/native-1-7.hex"));
+    assert_eq!(receive.len(), 733);
+    assert_eq!(grant.len(), 346);
+    assert_eq!(&receive[387..], grant);
+    for (ordinal, payload) in [(6, receive), (7, grant)] {
+        let decoded = Payment::decode(ModuleId::Asset, ordinal, &payload, ACTOR)?;
+        assert_eq!(decoded.encode(ACTOR)?, payload);
+        for offset in 0..payload.len() {
+            let mut changed = payload.clone();
+            changed[offset] ^= 1;
+            assert!(
+                Payment::decode(ModuleId::Asset, ordinal, &changed, ACTOR).is_err(),
+                "ordinal {ordinal}, offset {offset}"
+            );
+        }
+    }
+    Ok(())
+}

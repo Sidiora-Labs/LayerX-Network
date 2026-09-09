@@ -135,3 +135,30 @@ fn malformed_debits_never_reach_signing() {
     d.protocol_version = 0;
     assert!(d.authorization_message().is_err());
 }
+
+#[test]
+fn native_send_encoder_and_authorization_message_are_byte_identical(
+) -> Result<(), Box<dyn std::error::Error>> {
+    fn hex(s: &str) -> Vec<u8> {
+        s.trim()
+            .as_bytes()
+            .chunks_exact(2)
+            .map(|p| {
+                u8::from_str_radix(std::str::from_utf8(p).unwrap_or_else(|e| panic!("{e}")), 16)
+                    .unwrap_or_else(|e| panic!("{e}"))
+            })
+            .collect()
+    }
+    let d = debit();
+    assert_eq!(
+        d.authorization_message()?,
+        hex(include_str!(
+            "fixtures/payments/native-send-authorization.hex"
+        ))
+    );
+    assert_eq!(
+        run(d.sign(&LocalSigner::new([42; 32])))?,
+        hex(include_str!("fixtures/payments/native-1-5.hex"))
+    );
+    Ok(())
+}
