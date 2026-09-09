@@ -8,10 +8,14 @@ const { values } = parseArgs({ options: {
   faucet: { type: "string" }, "public-key": { type: "string" }, "claim-key": { type: "string" },
   activity: { type: "string" }, offer: { type: "string" }, authority: { type: "string" }, payer: { type: "string" },
 } });
+values.rpc ??= process.env.LAYERX_RPC_URL;
+values.faucet ??= process.env.LAYERX_FAUCET_URL;
+values.did ??= process.env.LAYERX_DID;
 if (values.help) {
-  process.stdout.write("Usage: node public-rpc.mjs --rpc https://HOST/rpc --did DID [--faucet https://HOST/v1/faucet/claims --public-key HEX32 --claim-key KEY] [--activity SIGNED_HEX_FILE --offer PAYMENT_REQUIRED_HEADER_FILE --authority TRUSTED_AUTHORITY_JSON --payer ACCOUNT_HEX32]\nUse LAYERX_RPC_TOKEN for submission and LAYERX_FAUCET_TOKEN for faucet authentication. The payment example requires executed commitment.\n");
+  process.stdout.write("Usage: node public-rpc.mjs --rpc https://HOST/rpc --did DID [--faucet https://HOST/v1/faucet/claims --public-key HEX32 --claim-key KEY] [--activity SIGNED_HEX_FILE --offer PAYMENT_REQUIRED_HEADER_FILE --authority TRUSTED_AUTHORITY_JSON --payer ACCOUNT_HEX32]\nURLs may come from LAYERX_RPC_URL and LAYERX_FAUCET_URL; DID from LAYERX_DID. Use LAYERX_RPC_TOKEN for submission and LAYERX_FAUCET_TOKEN for faucet authentication. The payment example requires executed commitment.\n");
 } else {
   if (!values.rpc || !values.did) throw new Error("rpc-and-did-required");
+  if (new URL(values.rpc).port === "18545" || (values.faucet && new URL(values.faucet).port === "18545")) throw new Error("persistent-host-chain-forbidden");
   const rpc = new PaymentRpc(values.rpc, process.env.LAYERX_RPC_TOKEN ? { authorization: `Bearer ${process.env.LAYERX_RPC_TOKEN}` } : {});
   if (values.faucet) {
     const url = new URL(values.faucet);
@@ -31,8 +35,8 @@ if (values.help) {
   if (values.activity) {
     if (!values.offer || !values.authority || !values.payer) throw new Error("offer-authority-and-payer-required");
     const required = decodePaymentRequiredHeader((await readFile(values.offer, "utf8")).trim());
-    const offer = required.accepts.find(v => v.scheme === "exact" && (v.extra?.layerx?.commitment ?? "executed") === "executed");
-    if (!offer) throw new Error("executed-exact-offer-required");
+    const offer = required.accepts.find(v => ["exact", "metered", "subscription"].includes(v.scheme) && (v.extra?.layerx?.commitment ?? "executed") === "executed");
+    if (!offer) throw new Error("executed-offer-required");
     const canonical = (await readFile(values.activity, "utf8")).trim();
     const activityId = createHash("sha256").update("LXP/v1/activity-id\0").update(rpcHex(canonical)).digest("hex");
     const configured = JSON.parse(await readFile(values.authority, "utf8"));

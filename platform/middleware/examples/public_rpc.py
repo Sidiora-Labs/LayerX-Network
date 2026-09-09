@@ -15,9 +15,9 @@ def main():
     parser = argparse.ArgumentParser(
         description="Read public RPC sequence, claim faucet funding, or verify a signed exact payment."
     )
-    parser.add_argument("--rpc", required=True)
-    parser.add_argument("--did", required=True)
-    parser.add_argument("--faucet")
+    parser.add_argument("--rpc", default=os.environ.get("LAYERX_RPC_URL"))
+    parser.add_argument("--did", default=os.environ.get("LAYERX_DID"))
+    parser.add_argument("--faucet", default=os.environ.get("LAYERX_FAUCET_URL"))
     parser.add_argument("--public-key")
     parser.add_argument("--claim-key")
     parser.add_argument("--activity")
@@ -25,6 +25,12 @@ def main():
     parser.add_argument("--authority")
     parser.add_argument("--payer")
     args = parser.parse_args()
+    if not args.rpc or not args.did:
+        parser.error("RPC URL and DID are required through arguments or environment")
+    if urllib.parse.urlsplit(args.rpc).port == 18545 or (
+        args.faucet and urllib.parse.urlsplit(args.faucet).port == 18545
+    ):
+        raise ValueError("persistent-host-chain-forbidden")
     token = os.environ.get("LAYERX_RPC_TOKEN")
     rpc = PaymentRpc(args.rpc, {"Authorization": f"Bearer {token}"} if token else {})
     if args.faucet:
@@ -72,7 +78,7 @@ def main():
         offer = next(
             v
             for v in required["accepts"]
-            if v["scheme"] == "exact"
+            if v["scheme"] in ("exact", "metered", "subscription")
             and v.get("extra", {}).get("layerx", {}).get("commitment", "executed")
             == "executed"
         )
