@@ -7882,3 +7882,18 @@ symbol = "rpcCheckpointEvidence rpc_checkpoint_evidence PaymentBudget AgentGrant
 observed = "The published checkpoint binary and canonical header map into the SDK verifier with independently configured context, guarantor keys, threshold, registration and availability. Real recoverable secp256k1 signatures qualify finalised receipt verification in both languages. No RPC checkpoint field is missing. SDK TypeScript tests, all five middleware builds, 18 TypeScript payment tests, 34 Python SDK tests, 39 Python payment tests and Python Ruff exit 0. make beta-ledger-check exits 0. Evidence: qual-logs/pay6/pay6c-final-typescript-0.log through pay6c-final-typescript-3.log, pay6c-final-python-0.log through pay6c-final-python-2.log, pay6c-final-ledger-0.log. Each log has a sibling exit file. Final example receipt-operation binding checks and lint exit 0 in pay6c-example-final-test.log and pay6c-example-final-lint.log."
 assumption = "Conformance remains 25/29 with the four base-reproduced contradictions recorded in observation.6.7.4025. Cryptographic fixtures do not prove native execution or deployment. Public endpoint runs require operator URLs and authentication; finalised integration requires authenticated operator authority and context. No public endpoint, persistent chain, image or cluster gate was run. Package-root exports and workspace lock metadata remain external changes."
 severity = "note"
+[observation.6.2.900]
+task = "6.2"
+file = "platform/hosted/core/src/main.rs platform/hosted/core/src/public_reads.rs platform/hosted/gateway/src/main.rs"
+symbol = "public_reads core_route"
+observed = "Concurrent writers modified the same worktree during public-read implementation. The core entry point contains duplicate public_reads declarations and an independently added account route; the new account-read module changed during inspection. Implementation and qualification cannot be attributed to a single stable source state."
+assumption = "Exclusive worktree ownership and reconciliation of the mixed edits are required before qualification or a checkpoint commit. No format, build, test, or ledger gate is claimed for this partial implementation."
+severity = "blocker"
+
+[observation.6.11.904]
+task = "6.11"
+file = "platform/hosted/gateway/src/main.rs platform/hosted/gateway/src/public_reads.rs platform/hosted/core/src/main.rs platform/hosted/core/src/public_reads.rs"
+symbol = "public_reads route account"
+observed = "Concurrent writes replaced the public read modules and added incompatible call sites during qualification. The gateway main module contains duplicate public_reads declarations and both bool-returning target/route and Result-returning target/read call patterns. Formatting commands exited 0 before this collision; clippy was interrupted and no test or runtime result qualifies the combined source. Partial compiler output is retained in qual-logs/pay4/clippy.log."
+assumption = "The combined source requires exclusive write ownership and reconciliation before qualification. No public RPC, complete DID account listing, receipt latency, or expanded activity admission gate is established by this partial work."
+severity = "blocker"

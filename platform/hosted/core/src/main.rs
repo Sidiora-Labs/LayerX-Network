@@ -1,4 +1,5 @@
 mod program_lifecycle;
+mod public_reads;
 
 use layerx_client::client::{Client, ClientConfig, ReconnectPolicy};
 use layerx_client::lni::handshake::{perform, Handshake, HandshakeConfig};
@@ -1156,6 +1157,9 @@ fn unavailable_capability(path: &str) -> bool {
 }
 
 fn core_route(config: &Config, request: &Request) -> Response {
+    if let Some(response) = public_reads::route(config, request) {
+        return response;
+    }
     let method = request.method.as_str();
     let path = request.path.as_str();
     if let Some(key) = path.strip_prefix("/v1/programs/receipts/by-idempotency/") {
@@ -1179,6 +1183,11 @@ fn core_route(config: &Config, request: &Request) -> Response {
     }
     if request.query.is_some() {
         return refusal(400, "invalid_request", None);
+    }
+    if method == "GET" {
+        if let Some(rest) = path.strip_prefix("/v1/accounts/") {
+            return public_reads::account(config, rest.strip_suffix("/balance").unwrap_or(rest));
+        }
     }
     match (method, path) {
         ("GET", "/livez") => json_response(200, &serde_json::json!({ "live": true })),
