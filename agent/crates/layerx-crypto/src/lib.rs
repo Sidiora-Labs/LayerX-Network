@@ -1,4 +1,4 @@
-//! Key custody and disclosure-bound `LayerX` signing.
+//! Key custody and disclosure-bound `LayerX` signing, including payment payload codecs.
 
 #[cfg(feature = "custody")]
 pub mod ct;

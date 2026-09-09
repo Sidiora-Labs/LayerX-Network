@@ -1,3 +1,13 @@
+//! Canonical payment and Programs payload codecs used by signer disclosure.
+//!
+//! Integers are big-endian. Native asset identifiers are
+//! `SHA-256("LX:ASSET:v1" || issuer_did_id32 || salt32)`, where
+//! `issuer_did_id32` is the existing `lxp_did_id_derive` identity
+//! (`SHA-256("LXP/v1/did-id\0" || u16be(len) || did)`). Asset ordinal 9
+//! (WITHDRAW) is refused. Receive and grant-issue bytes match the
+//! existing activity payloads (`0x5201` / 8 fields and `0x2001` grant
+//! structure). See [`crate::disclosure`].
+
 use layerx_types::payload::ModuleId;
 use layerx_wire::{decode::Decoder, encode::Encoder};
 use sha2::{Digest as _, Sha256};
@@ -6,6 +16,7 @@ use crate::disclosure::DisclosureError;
 
 type Id = [u8; 32];
 
+/// Asset registration fields for Asset ordinal 1.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Registration {
     pub asset: Id,
@@ -18,6 +29,7 @@ pub struct Registration {
     pub custody_ref: Vec<u8>,
 }
 
+/// Existing authority-grant structure used by Asset ordinal 7.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Grant {
     pub grantor: Id,
@@ -44,6 +56,7 @@ pub struct Grant {
     pub signature: [u8; 64],
 }
 
+/// One conserved Programs transfer leg (from, asset, to, amount).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TransferLeg {
     pub from: Id,
@@ -52,6 +65,7 @@ pub struct TransferLeg {
     pub amount: u128,
 }
 
+/// Complete payment or Programs payload bound into a disclosure.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Payment {
     Register(Registration),
@@ -129,6 +143,7 @@ fn actor_id(actor: &[u8]) -> Result<Id, DisclosureError> {
     Ok(h.finalize().into())
 }
 
+/// Derives a natively issued asset identifier from issuer identity and salt.
 #[must_use]
 pub fn asset_id(issuer: &Id, salt: &Id) -> Id {
     let mut h = Sha256::new();

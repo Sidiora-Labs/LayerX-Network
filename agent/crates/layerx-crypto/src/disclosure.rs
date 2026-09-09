@@ -133,6 +133,7 @@ pub struct Disclosure {
     /// Governance wallet-binding semantics, present only for that activity type.
     pub evm_payout_binding: Option<DisclosedEvmPayoutBinding>,
     pub withdrawal: Option<DisclosedWithdrawal>,
+    /// Decoded payment or Programs payload, present for those activity types.
     pub payment: Option<Payment>,
     activity: Activity,
     signing_digest: [u8; 32],
