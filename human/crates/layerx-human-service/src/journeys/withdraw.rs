@@ -556,6 +556,8 @@ impl StoredAttestation {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 struct StoredProof {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    native: Option<super::exit::StoredNativeEvidence>,
     checkpoint_hash: [u8; 32],
     state_root: [u8; 32],
     epoch: u64,
@@ -569,6 +571,10 @@ struct StoredProof {
 impl StoredProof {
     fn from_public(value: &CheckpointProof) -> Self {
         Self {
+            native: value
+                .native
+                .as_ref()
+                .map(super::exit::StoredNativeEvidence::from_public),
             checkpoint_hash: value.checkpoint_hash,
             state_root: value.state_root,
             epoch: value.epoch,
@@ -586,6 +592,10 @@ impl StoredProof {
 
     fn public(&self) -> CheckpointProof {
         CheckpointProof {
+            native: self
+                .native
+                .as_ref()
+                .map(super::exit::StoredNativeEvidence::public),
             checkpoint_hash: self.checkpoint_hash,
             state_root: self.state_root,
             epoch: self.epoch,
@@ -2083,5 +2093,56 @@ impl From<DebitFault> for WithdrawalJourneyError {
 impl From<layerx_paxeer_client::TrackerConfigError> for WithdrawalJourneyError {
     fn from(value: layerx_paxeer_client::TrackerConfigError) -> Self {
         Self::Tracker(value)
+    }
+}
+
+#[cfg(test)]
+mod native_persistence_tests {
+    use super::*;
+    use layerx_paxeer_client::state_proof::{NativeEvidence, StateWitness};
+
+    #[test]
+    fn stored_withdrawal_preserves_request_anchor_and_inclusion_checkpoint(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let document: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../layerx-paxeer-client/tests/vectors/native-withdrawal-proof.json"
+        ))?;
+        let encoded = document["proof"]
+            .as_str()
+            .ok_or("proof")?
+            .strip_prefix("0x")
+            .ok_or("hex")?;
+        let bytes = (0..encoded.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&encoded[i..i + 2], 16))
+            .collect::<Result<Vec<_>, _>>()?;
+        let witness = StateWitness::decode(&bytes)?;
+        let anchor = witness.value[150..182].try_into()?;
+        let proof = CheckpointProof {
+            native: Some(NativeEvidence {
+                request_anchor: anchor,
+                inclusion_checkpoint: [4; 32],
+                network_id: 7,
+                witness: bytes,
+                recipient_signature: Vec::new(),
+            }),
+            checkpoint_hash: [4; 32],
+            state_root: witness.root()?,
+            epoch: 1,
+            batch_number: 1,
+            data_availability_root: [5; 32],
+            leaf_index: 0,
+            siblings: Vec::new(),
+            attestations: Vec::new(),
+        };
+        let stored = StoredProof::from_public(&proof);
+        let bytes = serde_json::to_vec(&stored)?;
+        let restored: StoredProof = serde_json::from_slice(&bytes)?;
+        assert_eq!(restored.public(), proof);
+        let restored = restored.public();
+        let native = restored.native.ok_or("native")?;
+        assert_ne!(native.request_anchor, native.inclusion_checkpoint);
+        native.decoded(restored.state_root)?;
+        Ok(())
     }
 }

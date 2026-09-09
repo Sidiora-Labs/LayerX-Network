@@ -3367,3 +3367,10 @@ $(BUILD_DIR)/tests/test_asset_withdraw_activity: tests/modules/test_asset_withdr
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
 		$(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
+
+.PHONY: test-native-withdrawal-proof
+test-native-withdrawal-proof: $(BUILD_DIR)/tests/test_asset_withdraw_activity
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_asset_withdraw_activity
+	$(BUILD_DIR)/tests/test_asset_withdraw_activity --vectors > $(BUILD_DIR)/tests/native-withdrawal-proof.json
+	cmp $(BUILD_DIR)/tests/native-withdrawal-proof.json human/crates/layerx-paxeer-client/tests/vectors/native-withdrawal-proof.json
+	cmp $(BUILD_DIR)/tests/native-withdrawal-proof.json contracts/config/native-withdrawal-proof.json

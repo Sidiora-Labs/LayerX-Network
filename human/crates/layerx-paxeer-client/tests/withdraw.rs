@@ -1071,6 +1071,7 @@ fn fixture_for_protocol(protocol_version: u16) -> Fixture {
     )
     .unwrap_or_else(|error| panic!("withdrawal boundary: {error:?}"));
     let proof = CheckpointProof {
+        native: None,
         checkpoint_hash,
         state_root: leaf,
         epoch: header.epoch,
@@ -1406,6 +1407,7 @@ fn publication_fixture() -> PublicationFixture {
         0,
     );
     let proof = CheckpointProof {
+        native: None,
         checkpoint_hash: checkpoint,
         state_root,
         epoch: 1,
@@ -1416,11 +1418,13 @@ fn publication_fixture() -> PublicationFixture {
         attestations: vec![attestation],
     };
     let balance_proof = CheckpointProof {
+        native: None,
         leaf_index: 1,
         siblings: vec![withdrawal],
         ..proof.clone()
     };
     let evidence = ExitEvidence {
+        native: None,
         account: debit.account,
         asset_id: ASSET,
         finalised_balance: AMOUNT,
@@ -1665,6 +1669,15 @@ fn publish_signed_deposit(
     )
     .unwrap_or_else(|e| panic!("leaf: {e:?}"));
     let authority = SigningKey::from_bytes(&[0x75; 32]);
+    anvil.send_checked(
+        FUNDED,
+        vault,
+        &call_data(
+            [0xe9, 0x46, 0x5c, 0x84],
+            &[authority.verifying_key().to_bytes()],
+        ),
+        0,
+    );
     let mut registration = DepositRootRegistration {
         checkpoint_id: checkpoint,
         checkpoint_state_root: state_root,
@@ -1780,4 +1793,87 @@ fn real_published_deposit_registration_verifies_existing_signature_and_custody_r
         1
     )
     .is_err());
+}
+
+#[test]
+fn native_checkpoint_wire_preserves_c_record_and_refuses_version_confusion() {
+    use layerx_paxeer_client::{
+        state_proof::{NativeEvidence, StateWitness},
+        wire,
+    };
+    let document =
+        layerx_paxeer_client::parse_json(include_str!("vectors/native-withdrawal-proof.json"))
+            .unwrap_or_else(|e| panic!("native vector: {e:?}"));
+    let encoded = document
+        .member("proof")
+        .and_then(Json::as_text)
+        .unwrap_or_else(|| panic!("proof"));
+    let encoded = encoded.strip_prefix("0x").unwrap_or_else(|| panic!("hex"));
+    let encoded = (0..encoded.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&encoded[i..i + 2], 16).unwrap_or_else(|e| panic!("hex: {e}")))
+        .collect::<Vec<_>>();
+    let witness = StateWitness::decode(&encoded).unwrap_or_else(|e| panic!("witness: {e}"));
+    let state_root = witness.root().unwrap_or_else(|e| panic!("root: {e}"));
+    let mut header = checkpoint_header(state_root, 1_000);
+    header.network_id = 7;
+    let checkpoint = checkpoint_hash(&header);
+    let proof = CheckpointProof {
+        native: Some(NativeEvidence {
+            request_anchor: witness.value[150..182]
+                .try_into()
+                .unwrap_or_else(|_| panic!("anchor")),
+            inclusion_checkpoint: checkpoint,
+            network_id: 7,
+            witness: encoded,
+            recipient_signature: Vec::new(),
+        }),
+        checkpoint_hash: checkpoint,
+        state_root,
+        epoch: header.epoch,
+        batch_number: header.batch_number,
+        data_availability_root: header.data_availability_root,
+        leaf_index: 0,
+        siblings: Vec::new(),
+        attestations: vec![signed_attestation(
+            &header,
+            checkpoint,
+            parse_address(FUNDED),
+        )],
+    };
+    verify_checkpoint_codec(&proof, header.protocol_version);
+    let encoded =
+        wire::encode_checkpoint_proof_for_protocol(&proof, 65_536, header.protocol_version)
+            .unwrap_or_else(|e| panic!("encode: {e:?}"));
+    assert_eq!(&encoded[..2], &[2, 2]);
+    for length in 0..encoded.len() {
+        assert!(wire::decode_checkpoint_proof_for_protocol(
+            &encoded[..length],
+            65_536,
+            header.protocol_version
+        )
+        .is_err());
+    }
+    let mut changed = encoded.clone();
+    changed[0] = 1;
+    assert!(
+        wire::decode_checkpoint_proof_for_protocol(&changed, 65_536, header.protocol_version)
+            .is_err()
+    );
+    changed = encoded.clone();
+    changed.push(0);
+    assert!(
+        wire::decode_checkpoint_proof_for_protocol(&changed, 65_536, header.protocol_version)
+            .is_err()
+    );
+    let mut changed = proof.clone();
+    changed
+        .native
+        .as_mut()
+        .unwrap_or_else(|| panic!("native"))
+        .inclusion_checkpoint[0] ^= 1;
+    assert!(
+        wire::encode_checkpoint_proof_for_protocol(&changed, 65_536, header.protocol_version)
+            .is_err()
+    );
 }

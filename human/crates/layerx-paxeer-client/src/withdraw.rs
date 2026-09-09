@@ -235,6 +235,7 @@ pub struct WithdrawalAttestation {
 /// Finalised checkpoint and state-membership material required by `queueClaim`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CheckpointProof {
+    pub native: Option<crate::state_proof::NativeEvidence>,
     pub checkpoint_hash: [u8; 32],
     pub state_root: [u8; 32],
     pub epoch: u64,
@@ -254,7 +255,8 @@ impl CheckpointProof {
     /// # Errors
     /// Refuses empty fields, invalid proof bounds, and mismatched attestations.
     pub fn validated(self) -> Result<Self, ClaimRefusal> {
-        Self::validated_for_protocol(
+        let native = self.native;
+        let mut value = Self::validated_for_protocol(
             layerx_wire::limits::PROTOCOL_VERSION,
             self.checkpoint_hash,
             self.state_root,
@@ -264,7 +266,20 @@ impl CheckpointProof {
             self.leaf_index,
             self.siblings,
             self.attestations,
-        )
+        )?;
+        value.native = native;
+        if let Some(native) = &value.native {
+            if native.inclusion_checkpoint != value.checkpoint_hash
+                || value.leaf_index != 0
+                || !value.siblings.is_empty()
+            {
+                return Err(ClaimRefusal::EmptyCheckpointField("native_evidence"));
+            }
+            native
+                .decoded(value.state_root)
+                .map_err(|_| ClaimRefusal::EmptyCheckpointField("native_evidence"))?;
+        }
+        Ok(value)
     }
 
     /// Constructs structurally canonical checkpoint material whose guarantor
@@ -373,6 +388,7 @@ impl CheckpointProof {
             previous = Some(attestation.guarantor_id);
         }
         Ok(Self {
+            native: None,
             checkpoint_hash,
             state_root,
             epoch,
@@ -756,6 +772,75 @@ impl WithdrawalBoundary {
         })
     }
 
+    fn verify_registered_checkpoint(
+        &self,
+        proof: &CheckpointProof,
+        network_id: u32,
+    ) -> Result<(), WithdrawalError> {
+        let registry = self.address_view(
+            self.claims_contract,
+            &call_data(SELECTOR_REGISTRY, &[]),
+            "registry",
+        )?;
+        if let Some(native) = &proof.native {
+            if !self.bool_view(
+                registry,
+                &call_data(
+                    [0x10, 0xee, 0x2d, 0x39],
+                    &[native.request_anchor, native.inclusion_checkpoint],
+                ),
+                "isRecordedAncestor",
+            )? {
+                return Err(WithdrawalError::Refused(
+                    ClaimRefusal::EmptyCheckpointField("request_anchor_ancestry"),
+                ));
+            }
+        }
+        let settlement_contract = self.address_view(
+            registry,
+            &call_data(SELECTOR_GUARANTOR_ELIGIBILITY, &[]),
+            "guarantorEligibility",
+        )?;
+        let protocol_version = self.u32_view(
+            registry,
+            &call_data(SELECTOR_PROTOCOL_VERSION, &[]),
+            "protocolVersion",
+        )?;
+        let chain_id = quantity(&self.rpc("eth_chainId", &[])?, "eth_chainId")?;
+        validate_attestation_domain(
+            proof,
+            protocol_version,
+            network_id,
+            chain_id,
+            settlement_contract,
+        )?;
+        let registered_root = self.word_view(
+            registry,
+            &call_data(SELECTOR_FINALISED_STATE_ROOT, &[proof.checkpoint_hash]),
+            "finalisedStateRoot",
+        )?;
+        if registered_root != proof.state_root {
+            return Err(WithdrawalError::Refused(
+                ClaimRefusal::CheckpointNotFinalised {
+                    checkpoint: proof.checkpoint_hash,
+                },
+            ));
+        }
+        let recorded = self.bool_view(
+            registry,
+            &recorded_certificate_calldata(proof.checkpoint_hash, &proof.attestations),
+            "isRecordedCertificate",
+        )?;
+        if !recorded {
+            return Err(WithdrawalError::Refused(
+                ClaimRefusal::CertificateNotRecorded {
+                    checkpoint: proof.checkpoint_hash,
+                },
+            ));
+        }
+        Ok(())
+    }
+
     #[must_use]
     pub const fn claims_contract(&self) -> EvmAddress {
         self.claims_contract
@@ -790,7 +875,11 @@ impl WithdrawalBoundary {
                 paxeer: paxeer_network,
             }));
         }
-        let withdrawal_words = withdrawal_words(&debit.expectation, proof.checkpoint_hash);
+        let request_anchor = proof
+            .native
+            .as_ref()
+            .map_or(proof.checkpoint_hash, |native| native.request_anchor);
+        let withdrawal_words = withdrawal_words(&debit.expectation, request_anchor);
         let local_leaf = withdrawal_leaf(&debit.expectation);
         let declared_leaf = self.word_view(
             self.claims_contract,
@@ -806,7 +895,7 @@ impl WithdrawalBoundary {
             ));
         }
         let local_nullifier =
-            withdrawal_nullifier(paxeer_network, &debit.expectation, proof.checkpoint_hash);
+            withdrawal_nullifier(paxeer_network, &debit.expectation, request_anchor);
         let declared_nullifier = self.word_view(
             self.claims_contract,
             &call_data(SELECTOR_WITHDRAWAL_NULLIFIER, &withdrawal_words),
@@ -820,53 +909,7 @@ impl WithdrawalBoundary {
                 },
             ));
         }
-        let registry = self.address_view(
-            self.claims_contract,
-            &call_data(SELECTOR_REGISTRY, &[]),
-            "registry",
-        )?;
-        let settlement_contract = self.address_view(
-            registry,
-            &call_data(SELECTOR_GUARANTOR_ELIGIBILITY, &[]),
-            "guarantorEligibility",
-        )?;
-        let protocol_version = self.u32_view(
-            registry,
-            &call_data(SELECTOR_PROTOCOL_VERSION, &[]),
-            "protocolVersion",
-        )?;
-        let chain_id = quantity(&self.rpc("eth_chainId", &[])?, "eth_chainId")?;
-        validate_attestation_domain(
-            &proof,
-            protocol_version,
-            debit.expectation.network_id,
-            chain_id,
-            settlement_contract,
-        )?;
-        let registered_root = self.word_view(
-            registry,
-            &call_data(SELECTOR_FINALISED_STATE_ROOT, &[proof.checkpoint_hash]),
-            "finalisedStateRoot",
-        )?;
-        if registered_root != proof.state_root {
-            return Err(WithdrawalError::Refused(
-                ClaimRefusal::CheckpointNotFinalised {
-                    checkpoint: proof.checkpoint_hash,
-                },
-            ));
-        }
-        let recorded = self.bool_view(
-            registry,
-            &recorded_certificate_calldata(proof.checkpoint_hash, &proof.attestations),
-            "isRecordedCertificate",
-        )?;
-        if !recorded {
-            return Err(WithdrawalError::Refused(
-                ClaimRefusal::CertificateNotRecorded {
-                    checkpoint: proof.checkpoint_hash,
-                },
-            ));
-        }
+        self.verify_registered_checkpoint(&proof, debit.expectation.network_id)?;
         let calldata = queue_claim_calldata(&debit.expectation, &proof);
         Ok(WithdrawalClaim {
             contract: self.claims_contract,
@@ -1632,7 +1675,14 @@ fn validate_checkpoint_proof(
         ));
     }
     let leaf = withdrawal_leaf(&debit.expectation);
-    let computed = proof_root(leaf, proof.leaf_index, &proof.siblings);
+    let computed = if proof.native.is_some() {
+        proof
+            .verify_native_withdrawal(&debit.expectation)
+            .map_err(WithdrawalError::Refused)?;
+        proof.state_root
+    } else {
+        proof_root(leaf, proof.leaf_index, &proof.siblings)
+    };
     if computed != proof.state_root {
         return Err(WithdrawalError::Refused(ClaimRefusal::RootMismatch {
             computed,
@@ -1807,6 +1857,28 @@ fn withdrawal_words(expectation: &DebitExpectation, checkpoint_hash: [u8; 32]) -
 }
 
 fn queue_claim_calldata(expectation: &DebitExpectation, proof: &CheckpointProof) -> Vec<u8> {
+    if let Some(native) = &proof.native {
+        let witness = abi_bytes(&native.witness);
+        let mut words = withdrawal_words(expectation, native.request_anchor).to_vec();
+        words.extend_from_slice(&[
+            native.inclusion_checkpoint,
+            proof.state_root,
+            quantity_word(&proof.epoch.to_be_bytes()),
+            quantity_word(&proof.batch_number.to_be_bytes()),
+            proof.data_availability_root,
+        ]);
+        words.push(usize_word(13 * WORD));
+        words.push(usize_word(13 * WORD + witness.len()));
+        let mut out = call_data([0x9c, 0x6b, 0x4b, 0xce], &words);
+        out.extend_from_slice(&witness);
+        out.extend_from_slice(&usize_word(proof.attestations.len()));
+        for attestation in &proof.attestations {
+            for word in attestation_words(attestation) {
+                out.extend_from_slice(&word);
+            }
+        }
+        return out;
+    }
     let mut words = Vec::<[u8; 32]>::new();
     words.extend_from_slice(&withdrawal_words(expectation, proof.checkpoint_hash));
     words.push(proof.state_root);
@@ -2206,6 +2278,13 @@ impl CheckpointProof {
         protocol_version: u16,
     ) -> Result<Vec<u8>, crate::EndpointFault> {
         use crate::deposit::evidence as e;
+        let native = entries.first().is_none_or(|entry| entry.1.native.is_some());
+        if entries
+            .iter()
+            .any(|entry| entry.1.native.is_some() != native)
+        {
+            return Err(e::invalid());
+        }
         let mut items = Vec::new();
         let mut previous = None;
         for (debit, proof) in entries {
@@ -2215,7 +2294,11 @@ impl CheckpointProof {
             }
             previous = Some(debit.withdrawal_id);
             let leaf = withdrawal_leaf(debit);
-            if proof_root(leaf, proof.leaf_index, &proof.siblings) != proof.state_root {
+            if proof.native.is_some() {
+                proof
+                    .verify_native_withdrawal(debit)
+                    .map_err(|_| e::invalid())?;
+            } else if proof_root(leaf, proof.leaf_index, &proof.siblings) != proof.state_root {
                 return Err(e::invalid());
             }
             let mut item = debit.withdrawal_id.to_vec();
@@ -2230,7 +2313,14 @@ impl CheckpointProof {
             );
             items.push(item);
         }
-        e::vector(e::WITHDRAWALS, &items)
+        e::vector(
+            if native {
+                e::WITHDRAWALS_V2
+            } else {
+                e::WITHDRAWALS
+            },
+            &items,
+        )
     }
 
     /// Retrieves canonical withdrawal membership for an already verified debit.
@@ -2252,7 +2342,15 @@ impl CheckpointProof {
         let decode = || {
             let mut previous = None;
             let mut found = None;
-            for item in e::items(e::WITHDRAWALS, &withdrawals)? {
+            let native = withdrawals.starts_with(e::WITHDRAWALS_V2);
+            for item in e::items(
+                if native {
+                    e::WITHDRAWALS_V2
+                } else {
+                    e::WITHDRAWALS
+                },
+                &withdrawals,
+            )? {
                 let mut r = e::Reader(item);
                 let id = r.array::<32>()?;
                 let leaf = r.array::<32>()?;
@@ -2266,13 +2364,25 @@ impl CheckpointProof {
                     protocol_version,
                 )
                 .map_err(|_| e::invalid())?;
+                if proof.native.is_some() != native {
+                    return Err(e::invalid());
+                }
                 e::bind(&proof, checkpoint, &registered)?;
-                if proof_root(leaf, proof.leaf_index, &proof.siblings) != proof.state_root {
+                if proof.native.is_some() {
+                    if proof.native_withdrawal_fact().map_err(|_| e::invalid())? != (id, leaf) {
+                        return Err(e::invalid());
+                    }
+                } else if proof_root(leaf, proof.leaf_index, &proof.siblings) != proof.state_root {
                     return Err(e::invalid());
                 }
                 if id == debit.withdrawal_id {
                     if leaf != withdrawal_leaf(debit) {
                         return Err(e::invalid());
+                    }
+                    if proof.native.is_some() {
+                        proof
+                            .verify_native_withdrawal(debit)
+                            .map_err(|_| e::invalid())?;
                     }
                     found = Some(proof);
                 }
@@ -2280,5 +2390,86 @@ impl CheckpointProof {
             found.ok_or_else(e::invalid)
         };
         decode().map_err(|fault| e::failure(endpoint, fault))
+    }
+}
+
+fn abi_bytes(value: &[u8]) -> Vec<u8> {
+    let mut out = usize_word(value.len()).to_vec();
+    out.extend_from_slice(value);
+    out.resize(WORD + value.len().div_ceil(WORD) * WORD, 0);
+    out
+}
+
+impl CheckpointProof {
+    fn native_withdrawal_fact(&self) -> Result<([u8; 32], [u8; 32]), ClaimRefusal> {
+        let refused = || ClaimRefusal::EmptyCheckpointField("native_withdrawal");
+        let native = self.native.as_ref().ok_or_else(refused)?;
+        let witness = native.decoded(self.state_root).map_err(|_| refused())?;
+        let v = &witness.value;
+        if native.inclusion_checkpoint != self.checkpoint_hash
+            || !native.recipient_signature.is_empty()
+            || self.leaf_index != 0
+            || !self.siblings.is_empty()
+            || witness.module_id != 1
+            || witness.account_path.is_some()
+            || witness.key.len() != 43
+            || !witness.key.starts_with(b"withdrawal:")
+            || v.len() != 182
+            || v[..2] != [0, 2]
+            || v[2..6] != native.network_id.to_be_bytes()
+            || v[150..182] != native.request_anchor
+            || v[118..130] != [0; 12]
+            || v[6..38] == [0; 32]
+            || v[38..70] == [0; 32]
+            || v[70..102] == [0; 32]
+            || v[102..118] == [0; 16]
+            || v[130..150] == [0; 20]
+        {
+            return Err(refused());
+        }
+        let nullifier = digest_parts(&[WITHDRAWAL_DOMAIN, &v[2..118], &v[150..182]]);
+        if witness.key[11..] != nullifier {
+            return Err(refused());
+        }
+        let leaf = digest_parts(&[MERKLE_LEAF_DOMAIN, &v[6..150]]);
+        Ok((v[6..38].try_into().map_err(|_| refused())?, leaf))
+    }
+
+    /// # Errors
+    /// Refuses any native record, domain, witness or checkpoint mismatch.
+    pub fn verify_native_withdrawal(&self, debit: &DebitExpectation) -> Result<(), ClaimRefusal> {
+        let refused = || ClaimRefusal::EmptyCheckpointField("native_withdrawal");
+        let native = self.native.as_ref().ok_or_else(refused)?;
+        if native.inclusion_checkpoint != self.checkpoint_hash
+            || self.leaf_index != 0
+            || !self.siblings.is_empty()
+            || native.network_id != debit.network_id
+            || !native.recipient_signature.is_empty()
+        {
+            return Err(refused());
+        }
+        let witness = native.decoded(self.state_root).map_err(|_| refused())?;
+        let mut value = 2_u16.to_be_bytes().to_vec();
+        value.extend_from_slice(&debit.network_id.to_be_bytes());
+        value.extend_from_slice(&debit.withdrawal_id);
+        value.extend_from_slice(&debit.account);
+        value.extend_from_slice(&debit.asset_id);
+        value.extend_from_slice(&debit.amount.to_be_bytes());
+        value.extend_from_slice(&address_word(debit.recipient));
+        value.extend_from_slice(&native.request_anchor);
+        let mut key = b"withdrawal:".to_vec();
+        key.extend_from_slice(&withdrawal_nullifier(
+            debit.network_id,
+            debit,
+            native.request_anchor,
+        ));
+        if witness.module_id != 1
+            || witness.account_path.is_some()
+            || witness.key != key
+            || witness.value != value
+        {
+            return Err(refused());
+        }
+        Ok(())
     }
 }

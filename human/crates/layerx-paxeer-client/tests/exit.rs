@@ -383,6 +383,7 @@ impl Topology {
             0,
         );
         ExitEvidence {
+            native: None,
             account: ACCOUNT,
             asset_id: ASSET,
             finalised_balance: BALANCE,
