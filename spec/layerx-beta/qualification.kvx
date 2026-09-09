@@ -5411,3 +5411,83 @@ symbol = "pay5_token_roundtrip pay5_merchant_roundtrip layerx_programs_call_tran
 observed = "Real native kernel fixtures deploy the committed LXT-20 and merchant WASM, register program accounts, fund custody and settle authorized payouts. LXT-20 exercises all seven methods, allowance revocation, missing-grant refusal and paused-asset settlement rollback. Merchant funding and its two payouts settle atomically; missing authority and paused-asset refusal leave every payment balance intact. Envelopes consume signer identity sequences independently from native-fee and per-asset payment account sequences. Every execution checks exact fee and account balances and verifies its encoded signed receipt. The deployed token interface state equals the committed registry value. Canonical activities, receipts and terminal attachments are committed under programs/fixtures/pay5/native-token and native-merchant."
 assumption = "python3 programs/fixtures/pay5/run_native_roundtrip.py --write-fixtures exits 0; exact native compilation and execution commands, exit codes and logs are in qual-logs/pay5/gates.tsv and pay5c-native-generate-*.log. python3 programs/fixtures/pay5/run_native_roundtrip.py exits 0 and confirms byte-for-byte equality of both complete artifact sets; evidence is qual-logs/pay5/pay5c-native-final-replay.log. These isolated kernel fixtures do not certify a live deployment or the external wallet verifiers identified in observation.6.11.143. The aggregate wind-down fixture conflict in observation.6.11.142 remains outside the granted test scope. No cluster or image gates were run."
 severity = "blocker"
+
+[observation.6.11.145]
+task = "6.11"
+file = "tests/programs/test_winddown.c"
+symbol = "activity_dispatch wind_down_lifecycle"
+observed = "Protocol-3 wind-down fixtures use signer DID principals, canonical agent DID main names, an explicit payment asset binding and independently resolved account IDs for ledger sequence checks. Legacy protocol fixtures retain their historical principal representation. Every admission, sequence separation, stale binding, account mutation, rollback, prepared import and receipt assertion remains. make -j16 programs-core-test exits 0."
+assumption = "Evidence: qual-logs/pay5/pay5d-core-final.log and pay5d-core-final.exit. The first attempt exposed a missing fixture occupancy_asset_id binding and remains in pay5d-core.log. This resolves the fixture conflict recorded in observation.6.11.142 without changing runtime checks."
+severity = "note"
+
+[observation.6.11.146]
+task = "6.11"
+file = "programs/vendor/parity-wasm/res/cases/v1 programs/vendor/parity-wasm/src/elements/module.rs programs/vendor/parity-wasm/src/elements/name_section.rs programs/vendor/parity-wasm/src/elements/reloc_section.rs programs/vendor/parity-wasm/src/elements/section.rs"
+symbol = "integration_tests"
+observed = "The sixteen resource files referenced by existing parity-wasm tests are restored byte-for-byte from upstream revision 0e9519711970b75d2c0e0a9ce0040417ba3b8a3d, the revision in the vendored cargo metadata. cargo test --locked --manifest-path programs/Cargo.toml -p parity-wasm exits 0. No test or assertion was removed or replaced."
+assumption = "Evidence: qual-logs/pay5/pay5d-parity-final.log and pay5d-parity-final.exit. The upstream archive is retained untracked at qual-logs/pay5/parity-wasm-upstream.tar.gz. This repairs the missing inputs in observation.6.11.132; it does not assert the full workspace passes."
+severity = "note"
+
+[observation.6.11.147]
+task = "6.11"
+file = "programs/vendor/wasmi-0.31.2/src/engine/bytecode/tests.rs programs/vendor/wasmi-0.31.2/src/engine/tests.rs programs/vendor/wasmi-0.31.2/src/engine/bytecode/mod.rs"
+symbol = "size_of_instruction assert_func_body Observe"
+observed = "Locked workspace tests reproduce 41 wasmi assertion failures after parity-wasm resources are restored. The instruction size is 16 rather than the asserted 8 bytes; metering emits Observe instructions where existing tests require the earlier instruction stream. Both failing test source files are byte-identical to continuation base 5e308756, whose bytecode enum already contains Observe."
+assumption = "Evidence: qual-logs/pay5/pay5d-workspace-test.log, pay5d-workspace-final.log and pay5d-wasmi-inherited.log. Both workspace runs exit 101. The code and assertions remain intact. Removing metering, filtering Observe from comparisons or increasing the expected size merely to pass would violate the no-weakening contract. An agreed instruction representation and assertion contract is required."
+severity = "blocker"
+
+[observation.6.11.148]
+task = "6.11"
+file = "agent/crates/layerx-agent-api/src/generated.rs agent/crates/layerx-agent-api/tests interop/crates/layerx-ap2 interop/crates/layerx-interop-gateway interop/crates/layerx-ucp interop/crates/layerx-visa-tap platform/tools/kvx platform/tools/workspace-gate"
+symbol = "workspace_formatting"
+observed = "cargo fmt --manifest-path programs/Cargo.toml --all --check exits 1 before and after repairing all Programs-owned formatting differences. The remaining differences are in agent, interop and platform dependency sources outside the granted paths. Touched Programs files pass rustfmt --check with edition 2021 and skip_children=true."
+assumption = "Evidence: qual-logs/pay5/pay5d-fmt.log, pay5d-fmt-final.log, pay5d-owned-fmt.log and adjacent exit files. Exact remaining file locations are in pay5d-fmt-final.log. No formatting check is suppressed and no out-of-scope source is modified."
+severity = "blocker"
+
+[observation.6.11.149]
+task = "6.11"
+file = "platform/Cargo.lock platform/Cargo.toml platform/Makefile.inc"
+symbol = "platform-test platform-test-registry platform-test-core"
+observed = "make -k platform-test platform-test-registry platform-test-core exits 2. Each underlying offline locked Cargo command exits 101 before executing tests because platform/Cargo.lock requires an update. The platform lockfile and manifests were not modified."
+assumption = "Evidence: qual-logs/pay5/pay5d-hosted.log and pay5d-hosted.exit. Lockfile reconciliation belongs to the platform paths; removing --locked would weaken the gate. Hosted workspace, registry and core runtime qualification remain unproven. Cluster, image and live-chain gates were not run because this host has no cluster or image tooling and the persistent chain is excluded."
+severity = "blocker"
+
+[observation.6.11.150]
+task = "6.11"
+file = "programs/crates/layerx-programs-runtime/src/dynamic_spend.rs programs/crates/layerx-programs-runtime/src/lxt20_tests.rs programs/crates/layerx-programs-runtime/src/merchant_tests.rs programs/crates/layerx-programs-registry/src/lxt20.rs programs/fixtures/pay5 programs/porting/evm/MIGRATION.md programs/porting/solana/MIGRATION.md"
+symbol = "CallerAuthorizedSpend::constrain_grants reference_interface pay5_token_roundtrip pay5_merchant_roundtrip"
+observed = "QA source reconciliation finds authenticated dynamic recipient descriptors, exact imported capability masks, descriptor and caller ceiling intersection, distinct AccountId recipients and Principal owners, token settlement and merchant atomic funding/payout implementations already present. python3 programs/fixtures/pay5/run_native_roundtrip.py exits 0: real native token and merchant execution reproduce every committed canonical activity, receipt and attachment byte-for-byte, including the deployed token registry interface value."
+assumption = "Evidence: qual-logs/pay5/pay5d-native-replay.log and pay5d-native-replay.exit; underlying commands retain the runner's pay5c-native-replay log names. Guides retain the distinction between program calldata and native Asset/RPC operations. Asset ordinal 9 remains reserved and unchanged. Removing ownership checks, relaxing masks or spend ceilings, coercing identities to account IDs, or adding an ordinal-9 prefix is rejected as incompatible with the authority and shared encoding contracts. No unused merchant helper is introduced; the supplied QA has no concrete contract for the suggested helper. External wallet account-bound evidence decoding remains unqualified as in observation.6.11.143."
+severity = "note"
+
+[observation.6.11.151]
+task = "6.11"
+file = "src/protocol/lxp_kernel.c programs/tests/differential/parallel.c"
+symbol = "kernel_snapshot_payer_balance lxp_kernel_prepare_activity_batch execute_workload"
+observed = "make -j16 programs-test reaches native parallel differential execution and exits 2 on the low-conflict workload. A diagnostic build retaining every assertion reports LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE (-208) before the checkpoint callback. kernel_snapshot_payer_balance hardcodes protocol 3 DID lookup although this fixture deliberately executes protocol 2 with legacy account principals. Canonical DID account names alone do not repair the failure; that temporary fixture edit was reverted."
+assumption = "Evidence: qual-logs/pay5/pay5d-programs-aggregate-final.log, pay5d-differential-final.log and pay5d-differential-diagnostic2.log through pay5d-differential-diagnostic4.log. Propagate the actual activity protocol version into snapshot payer lookup while preserving both legacy account-principal and protocol-3 signer-DID ownership checks. src/protocol/lxp_kernel.c is outside the granted paths. This is a binding integration regression from the preceding implementation, not an inherited unrelated defect. Do not migrate the legacy fixture to protocol 3 merely to conceal the regression."
+severity = "blocker"
+
+[observation.6.11.152]
+task = "6.11"
+file = "programs/crates/layerx-programs-sandbox/src/escrow.rs programs/crates/layerx-programs-sandbox/src/lease.rs programs/crates/layerx-programs-sandbox/src/usage.rs"
+symbol = "projected_spend record_host_settlement_reserved record_expiry_usage"
+observed = "Default-feature workspace Clippy reproduces unused host settlement helpers. The helpers now use the same host-ffi feature boundary as their actual consumers; helpers exercised by unit tests also remain enabled under cfg(test). No public API, assertion, settlement validation or test is removed. Locked workspace all-target Clippy with -D warnings exits 0 for both default and host-ffi feature configurations. Serialized cargo test --locked --manifest-path programs/Cargo.toml -p layerx-programs-sandbox --all-features exits 0, including unit, integration and doctest phases."
+assumption = "Evidence: qual-logs/pay5/pay5d-default-qualified.log, pay5d-host-qualified.log and pay5d-sandbox-serial.log with exits recorded in pay5d-gates.tsv. The initial concurrent sandbox run passed executable tests but rustdoc exited 1 with crate-resolution errors; its raw output remains in pay5d-sandbox-qualified.log. The serialized rerun passed without suppressing doctests. Earlier attribute-formatting Clippy failures were repaired and retained in pay5d-clippy-repair.log."
+severity = "note"
+
+[observation.6.11.153]
+task = "6.11"
+file = "Makefile programs/deny.toml programs/tools/dependency-policy.sh"
+symbol = "programs-lint"
+observed = "make programs-lint passes workspace Clippy and the dependency policy, then exits 2 because cargo-deny was unavailable. A local cargo-deny 0.20.2 executable was provisioned from its official release. Advisory and source checks exit 0. The Makefile form check bans --exclude-dev exits 2 because --exclude-dev is a global option; cargo deny --manifest-path programs/Cargo.toml --locked --exclude-dev check bans exits 0 with the same dependency exclusion."
+assumption = "Evidence: qual-logs/pay5/pay5d-programs-lint.log, pay5d-deny-advisories.log, pay5d-deny-bans.log and pay5d-deny-bans-canonical.log with adjacent exit files. Tool provenance is in qual-logs/pay5/cargo-deny/provenance.json. The root Makefile is outside granted paths; move the option before check in its owning scope. No dependency ban, advisory or source rule was relaxed."
+severity = "blocker"
+
+[observation.6.11.154]
+task = "6.11"
+file = "programs tests/programs platform/Makefile.inc spec/layerx-beta/qualification.kvx"
+symbol = "programs-test programs-core-test beta-ledger-check"
+observed = "Final native make -j16 exits 0. The dependency-provisioned make -j16 programs-test rerun exits 2 at the unchanged protocol-2 differential payer lookup regression in observation.6.11.151; C and AssemblyScript SDK gates now execute successfully. Core fixtures, native replay, default and host-ffi workspace Clippy, parity-wasm tests and serialized sandbox tests pass as individually recorded. Full locked workspace tests still fail the inherited wasmi assertions, full formatting still fails outside-scope files, and hosted gates stop on the platform lockfile."
+assumption = "Exact aggregate command results are in qual-logs/pay5/pay5d-gates.tsv; final aggregate output is pay5d-aggregate-qualified.log. Initial missing asc and wasm-ld-18 failures remain in pay5d-programs-test.log. Dependencies were installed only as untracked local artifacts. make beta-ledger-check passes after the appended observations. This is a partial aggregate qualification, not deployment or full-system certification. Cluster, image and live-chain gates were not run."
+severity = "blocker"
