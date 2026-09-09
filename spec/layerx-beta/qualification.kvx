@@ -8519,3 +8519,35 @@ symbol = "decode_send payload_sequence EvaluationInput execute_payment wait"
 observed = "SEND disclosure independently binds the source-account and envelope identity sequences and verifies the inner authorization signature. RECEIVE independently binds the receiver-account sequence, both embedded signatures, grant identifier, purpose context and envelope network/protocol. Direct exported MCP payment and wait tests retain unrelated-scope refusal. Both EvaluationInput constructors still set private cumulative_count to None while context validation requires authenticated cumulative use and verified budget reconciliation."
 assumption = "A permitting MCP payment requires the canonical cumulative-use and budget producer. Positive funded SEND through the assembled wallet/RPC stack and positive MCP evidence completion remain unqualified; fabricated transcripts cannot supply that evidence."
 severity = "blocker"
+
+[observation.6.11.137]
+task = "6.11"
+file = "agent/crates/layerx-crypto/src/send.rs agent/crates/layerx-crypto/src/signer.rs agent/crates/layerx-crypto/tests/native_payment_vectors.c"
+symbol = "SendDebit signing_request encode_send_envelope"
+observed = "SendDebit exposes every inner debit field and creates a disclosure-bound SigningRequest for the exact lxp_send_authorization_message preimage under SignaturePreimage. The shared envelope encoder separately binds identity_sequence; the source sequence is not required to equal it. Native C fixture generation uses explicit field values, native authorization messages, domain hashes, OpenSSL Ed25519 signatures and lxp_receive_encode/lxp_send_encode. Command: bash agent/crates/layerx-crypto/tests/generate-native-payments.sh. Evidence: qual-logs/pay2/d-native-command.log, d-native-tests.log and d-x402-check.log. Rust and the separate 402 codec reproduce the native receive and payer-grant bytes exactly."
+assumption = "This native source has no public lxp_payer_grant_encode symbol; the committed 346-byte grant fixture is the exact grant segment emitted by lxp_receive_encode. The native public grant encoder must be integrated from its owning source before that exact named entry point can be independently qualified. Shared crypto signing is qualified separately from funded gateway execution."
+severity = "note"
+
+[observation.6.11.138]
+task = "6.11"
+file = "agent/crates/layerx-sdk/src/rpc.rs agent/crates/layerx-sdk/src/wallet.rs platform/hosted/gateway/openrpc.json"
+symbol = "get_asset list_assets get_balances estimate_fee prepare_payload"
+observed = "The read-only reference at /root/lx/pay4-ref/platform/hosted/gateway/openrpc.json specifies the four read results only as object, without field schemas. Distinct Rust AssetSnapshot, AssetListSnapshot, BalancesSnapshot and FeeEstimate types preserve these unverified object fields and upstream errors. The reference lx_getSequence accepts a 64-hex account identifier and routes to /v1/accounts/{id}/balance. Wallet preparation currently requests a DID and requires an authenticated identity next_sequence snapshot; those contracts do not match."
+assumption = "The gateway must expose a separate authenticated identity next_sequence read, or specify its existing public transport route. Account sequence must not substitute for identity sequence. Complete typed monetary and metadata fields require the gateway result schemas. Native-backed enumeration, asset reads and fee estimation remain explicitly unavailable in the reference. No live wallet completion is claimed."
+severity = "blocker"
+
+[observation.6.11.139]
+task = "6.11"
+file = "agent/crates/layerx-wire/src/account.rs agent/crates/layerx-proof/src/state.rs src/state/lxp_identity.c src/ledger/lx_account_id.c src/ledger/lx_account_registry.c"
+symbol = "account_name_for_asset account_kind account_namespace_valid"
+observed = "The SDK uses the wire-exported shared account_name_for_asset builder backed by AccountId::for_asset, preserving native main names, lowercase asset suffixes and mismatch refusal. Native admission still lacks asset account namespaces. The proof account_kind decoder also lacks an asset suffix case; admitting a guessed numeric kind would not establish compatibility with native canonical account values."
+assumption = "Native account admission must define and emit the per-asset account kind and canonical state values, including suffix-to-held-asset consistency. The proof decoder then requires real native fixtures and mismatch coverage for that exact format. Existing proof checks remain intact."
+severity = "blocker"
+
+[observation.6.11.140]
+task = "6.11"
+file = "agent/crates/layerx-agentd/src/policy/eval.rs agent/crates/layerx-mcp/src/server.rs agent/crates/layerx-mcp/src/tools/wallet.rs agent/crates/layerx-mcp/tests/write.rs"
+symbol = "EvaluationInput Operation::Wait execute_payment wait"
+observed = "activity.wait remains bound to Operation::Wait and the tenant write:activity:wait alias. Direct exported payment and wait refusal cases and the existing submit/track evidence assertions are retained. Both EvaluationInput constructors still initialize the private cumulative_count to None, and validate_context requires authenticated cumulative use and verified protocol budget evidence."
+assumption = "Positive MCP payment and evidence completion require the canonical cumulative-use and budget evidence producer. Supplying invented usage, bypassing policy, returning an acknowledgement as a receipt, removing signature verification or conflating account and identity sequences would weaken existing checks and is rejected."
+severity = "blocker"
