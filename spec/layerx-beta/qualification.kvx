@@ -6812,3 +6812,11 @@ file = "platform/hosted/authority/src/human.rs platform/hosted/authority/src/mai
 symbol = "checkpoint_header native_key_policy policy_route session"
 observed = "Identity and rotation/recovery policy responses now require tag-14 checkpoint evidence from the authenticated node, independently verified by the real client and byte-matched to the receipt batch header. Authority format, all-targets Clippy with warnings denied and locked crate tests pass including both real-node tests; logs: qual-logs/own1/own1c-authority-fmt.log, own1c-authority-clippy-qualified.log and own1c-authority-test.log in the same directory. Positive Human checkpoint responses are not exercised by those existing tests. Capability verification remains refused: native session grants encode not_before/not_after timestamps while the hosted capability contract requires an expiry_sequence and action-key binding without a demonstrated protocol mapping."
 assumption = "No timestamp-to-sequence conversion or assertion-only capability evidence is accepted. Positive checkpoint Human integration, capability mapping, real-client authority adapter coverage and complete Governance lifecycle/restart negative coverage remain required."
+
+[observation.3.7.36]
+task = "3.7"
+severity = "note"
+file = "platform/hosted/human/guardians.py platform/hosted/tests/beta-cluster.sh"
+symbol = "generate"
+observed = "Beta recovery guardians are three dedicated random Ed25519 keys with threshold two, bound individually to the two genesis guarantor identities and the sequencer. They are cluster-operated and non-independent, never derived from secp256k1 custody keys. The public binding manifest is published as layerx-human-guardian-bindings; separate protected guardian Secrets hold the private seeds."
+assumption = "Independent guardian operation is a production onboarding property. Cluster Secret publication requires live cluster qualification."
