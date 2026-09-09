@@ -9,7 +9,13 @@ run_class() {
         activities|receipts|oracle|state-diff|recovery) ;;
         *) echo "unknown DA class: $1" >&2; exit 2 ;;
     esac
-    "$binary" "$1"
+    if "$binary" "$1"; then
+        printf 'DA class %s: passed (exit 0)\n' "$1"
+    else
+        status=$?
+        printf 'DA class %s: %s failed (exit %s)\n' "$1" "$binary" "$status" >&2
+        exit "$status"
+    fi
 }
 
 if [ "$mode" = all ]; then
