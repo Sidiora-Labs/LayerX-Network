@@ -5448,3 +5448,27 @@ symbol = "isRecordedAncestor"
 observed = "The registry exposes request-anchor ancestry using its recorded canonical batch order. Both checkpoints must be canonical recorded entries and the anchor batch must be no later than the inclusion batch. Existing registration already enforces consecutive batches, activity-sequence continuity and previous-root continuity. The real registry test covers unrecorded equality, recorded equality, an earlier anchor, future anchor, zero and unknown checkpoints, unrecorded genesis, invalid inclusion, invalid anchor and preserved canonical predecessors. forge fmt --check and forge test exit 0; all 150 Solidity tests pass in qual-logs/set1/anchor-forge-test.log. The nullifier domain and existing claim checks are unchanged."
 assumption = "This qualifies the registry relationship primitive, not the two-field consumer rollout. WithdrawalClaims.Withdrawal and the public Rust CheckpointProof transport still use their version-1 checkpoint field. Native withdrawal claim verification, request-anchor/inclusion-checkpoint transport, publication codecs, producer publication and the three version-2 fetch_published integrations remain incomplete. Human service stored proof and plan adapters construct CheckpointProof directly in human/crates/layerx-human-service/src/journeys/withdraw.rs and tests; carrying the new fields requires coordinated changes outside the owned crate."
 severity = "blocker"
+
+[observation.6.1.58]
+task = "6.1"
+file = "human/crates/layerx-paxeer-client/tests/disposable_custody.py"
+symbol = "real_disposable_custody_over_verified_tls"
+observed = "make -C paxeer-network build exits 0 and produces paxeer-network/build/paxd from the repository sources. Foundry v1.7.1 is installed under qual-logs/set1/bin; Python test dependencies are installed under qual-logs/set1/venv. With PAXD pointing to that binary and LAYERX_TEST_NATIVE_BIN_DIR pointing to build/bin after building layerx-genesis-build, both disposable custody tests pass on fresh fixture processes, including chain 125. The full cargo test --locked --manifest-path human/Cargo.toml -p layerx-paxeer-client exits 0. The standalone guarantor-settlement-chain.py exits 0. Logs are qual-logs/set1/paxd-build.log, disposable-custody-native-ready.log, final-rust-test.log and settlement-chain.log, with adjacent exit files. Earlier attempts failed for missing Python dependencies or the relocated genesis-builder path; one initial blueprint eth_call also failed and subsequent complete runs pass without changing its assertion."
+assumption = "The tests exercise disposable processes only and retain the persistent-endpoint refusal. This removes the missing-paxd and disposable-chain execution blockers from observation 6.1.54. It is not production chain or version-2 settlement-publication evidence. Cluster and image gates are not run because this server has no corresponding tooling."
+severity = "note"
+
+[observation.6.1.59]
+task = "6.1"
+file = "tests/daemon/guarantor-integration.py"
+symbol = "client_identity"
+observed = "After installing eth_abi and eth_account, make test-daemon-guarantor GUARANTOR_PYTHON=/root/lx/set1/qual-logs/set1/venv/bin/python exits 2 at the real admission client Unix-socket connect. The child runs as UID 4021 and cannot traverse /root, whose permissions are 0700. The original failure is in qual-logs/gp1/guarantor-daemon-yptuynkb/admission.log; the same diagnostic and path permissions are retained in qual-logs/set1/guarantor-admission.log and guarantor-path-permissions.log. Aggregate output is qual-logs/set1/guarantor-ready.log. No host permission or client-identity check was changed."
+assumption = "The real nine-batch guarantor replay gate remains unqualified on this server until the distinct-identity fixture has authorized traversal to the checkout. The standalone checkpoint settlement-chain gate passes but does not replace replay. WITHDRAW daemon routing remains a separate owned-path dependency."
+severity = "blocker"
+
+[observation.6.1.60]
+task = "6.1"
+file = "tools/lxp_check_sole_writer.sh"
+symbol = "ERR_BALANCE_BYPASS"
+observed = "make test-asset-transfer exits 2 after build/tests/test_asset_transfer runs successfully. The subsequent sole-writer check reports balance writers in both src/ledger/lxp_apply.c and src/protocol/lxp_module_ctx.c. Neither file nor the check was modified by this lane. Exact output is qual-logs/set1/asset-transfer.log."
+assumption = "The existing sole-writer assertion and module-context balance writes conflict outside the owned paths. Neither side was weakened or repaired. The asset-transfer target as a whole is not a pass even though its native test binary succeeds."
+severity = "blocker"
