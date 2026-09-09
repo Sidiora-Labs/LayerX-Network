@@ -5,6 +5,8 @@ use sha2::{Digest as _, Sha256};
 pub(crate) const LIMIT: usize = 1_048_576;
 pub(crate) const MAX_ITEMS: usize = 4096;
 pub(crate) const WITHDRAWALS: &[u8] = b"LXP/Paxeer/withdrawal-witnesses/v1\0";
+pub(crate) const WITHDRAWALS_V2: &[u8] = b"LXP/Paxeer/withdrawal-witnesses/v2\0";
+pub(crate) const BALANCES_V2: &[u8] = b"LXP/Paxeer/balance-witnesses/v2\0";
 pub(crate) const BALANCES: &[u8] = b"LXP/Paxeer/balance-witnesses/v1\0";
 
 pub(crate) fn invalid() -> EndpointFault {
@@ -329,7 +331,7 @@ pub(crate) fn witnesses(
         if published.sender != registered.sender
             || published.topics.len() != 2
             || published.data.len() != 64
-            || published.data[..32] != word(1)?
+            || !matches!(word_number(&published.data[..32])?, 1 | 2)
             || !published.input.starts_with(&WITNESSES_SELECTOR)
         {
             return Err(invalid());
@@ -340,9 +342,17 @@ pub(crate) fn witnesses(
         }
         let withdrawals = split_dynamic(args, 3, 1)?;
         let balances = split_dynamic(args, 3, 2)?;
+        let version = word_number(&published.data[..32])?;
+        let tags = if version == 2 {
+            (WITHDRAWALS_V2, BALANCES_V2)
+        } else {
+            (WITHDRAWALS, BALANCES)
+        };
+        items(tags.0, withdrawals)?;
+        items(tags.1, balances)?;
         let tails = [dynamic(withdrawals)?, dynamic(balances)?];
         if abi(&[checkpoint], &tails)? != args
-            || digest(&abi(&[checkpoint, word(1)?], &tails)?) != published.data[32..]
+            || digest(&abi(&[checkpoint, word(version)?], &tails)?) != published.data[32..]
         {
             return Err(invalid());
         }
