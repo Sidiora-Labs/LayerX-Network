@@ -9,6 +9,7 @@
 #include "layerx/lxp_fee.h"
 #include "layerx/lxp_genesis.h"
 #include "layerx/lxp_hash.h"
+#include "layerx/lxp_module_ctx.h"
 #include "layerx/lxp_snapshot.h"
 #include <errno.h>
 #include <fcntl.h>
@@ -298,6 +299,7 @@ static lxp_result replay_execute_activity(gp_runtime *process, uint64_t global_s
         expected->global_sequence != global_sequence)
         return LXP_ERR_SEQUENCE_GAP;
     if ((expected->module_id != LXP_MODULE_PROGRAMS && expected->module_id != LXP_MODULE_ASSET &&
+         expected->module_id != LXP_MODULE_GOVERNANCE &&
          !(process->custody_credit_enabled && expected->module_id == LXP_MODULE_BRIDGE)) ||
         expected->module_version == 0U ||
         expected->parameter_version != process->parameter_version ||
@@ -316,17 +318,21 @@ static lxp_result replay_execute_activity(gp_runtime *process, uint64_t global_s
         lxp_activity_module_id(activity->activity_type) != LXP_MODULE_PROGRAMS &&
         activity->activity_type != LX_ASSET_SEND &&
         activity->activity_type != LX_ASSET_WITHDRAW &&
+        !lxp_governance_activity(activity->activity_type) &&
         !(process->custody_credit_enabled && activity->activity_type == LXP_BRIDGE_CREDIT))
         status = LXP_ERR_UNKNOWN_ACTIVITY;
     if (status == LXP_OK &&
         (expected->module_id != lxp_activity_module_id(activity->activity_type) ||
          ((activity->activity_type == LX_ASSET_SEND || activity->activity_type == LX_ASSET_WITHDRAW) &&
           expected->module_version != lx_asset_module_iface()->abi_version) ||
-         (activity->activity_type == LXP_BRIDGE_CREDIT && expected->module_version != 1U)))
+         ((activity->activity_type == LXP_BRIDGE_CREDIT ||
+           lxp_governance_activity(activity->activity_type)) && expected->module_version != 1U)))
         status = LXP_ERR_VERSION_UNSUPPORTED;
     if (status == LXP_OK)
         status = lxp_identity_resolve(&process->identities, activity->actor_did.bytes,
                                       activity->actor_did.length, &identity);
+    if (status == LXP_OK)
+        status = lxp_governance_identity_refresh(&process->kernel, identity);
     if (status == LXP_OK &&
         (activity->authority.length != 32U ||
          !lxp_identity_key_valid(identity, activity->authority.bytes, timestamp, global_sequence)))
@@ -340,7 +346,8 @@ static lxp_result replay_execute_activity(gp_runtime *process, uint64_t global_s
     (void)memset(&scope, 0, sizeof(scope));
     scope.module_mask = UINT64_C(1) << lxp_activity_module_id(activity->activity_type);
     scope.activity_ordinal_min = (activity->activity_type == LX_ASSET_SEND || activity->activity_type == LX_ASSET_WITHDRAW) ? lxp_activity_type_ordinal(activity->activity_type) : 1U;
-    scope.activity_ordinal_max = activity->activity_type == LXP_BRIDGE_CREDIT
+    scope.activity_ordinal_max = (activity->activity_type == LXP_BRIDGE_CREDIT ||
+                                  lxp_governance_activity(activity->activity_type))
                                      ? 1U
                                      : ((activity->activity_type == LX_ASSET_SEND || activity->activity_type == LX_ASSET_WITHDRAW) ? lxp_activity_type_ordinal(activity->activity_type) : 10U);
     scope.maximum_per_activity = (lxp_u128){UINT64_MAX, UINT64_MAX};
@@ -839,6 +846,8 @@ lxp_result gp_runtime_open(gp_runtime **output, const char *configuration,
         status = lxp_kernel_register_module(&runtime->kernel, programs_module_registration_v4());
     if (status == LXP_OK && runtime->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT)
         status = lxp_kernel_register_module(&runtime->kernel, lx_asset_module_iface());
+    if (status == LXP_OK && runtime->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT)
+        status = lxp_kernel_register_module(&runtime->kernel, lxp_governance_module_iface());
     if (status == LXP_OK && runtime->custody_credit_enabled)
         status = lxp_kernel_register_module(&runtime->kernel, lxp_bridge_module_iface());
     if (status == LXP_OK)
@@ -989,6 +998,8 @@ lxp_result gp_runtime_authority(void *context, const lxp_activity *activity,
     if (status == LXP_OK)
         status = lxp_identity_resolve(&runtime->identities, activity->actor_did.bytes,
                                       activity->actor_did.length, &identity);
+    if (status == LXP_OK)
+        status = lxp_governance_identity_refresh(&runtime->kernel, identity);
     if (status == LXP_OK &&
         (activity->authority.length != 32U ||
          !lxp_identity_key_valid(identity, activity->authority.bytes, runtime->prepared_timestamp,
