@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Display};
 use std::fs::{self, File, OpenOptions};
 use std::io::Write as _;
+use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 
 use layerx_programs::{
@@ -503,6 +504,39 @@ impl FileDeploymentJournal {
         Ok(envelope.receipt_digest())
     }
 
+    /// Exports canonical Human-consumer bytes from an already committed, verified unit.
+    /// # Errors
+    /// Refuses a differing committed projection and failed durable pair publication.
+    pub fn export_pair(&self, evidence: &VerifiedDeploymentEvidence) -> Result<(), String> {
+        self.audit_projection(evidence)?;
+        let root = self.root.join("pairs");
+        match fs::DirBuilder::new().mode(0o700).create(&root) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                let metadata = fs::symlink_metadata(&root).map_err(|error| error.to_string())?;
+                if !metadata.is_dir() || metadata.permissions().mode() & 0o777 != 0o700 {
+                    return Err("deployment export directory is not protected".to_owned());
+                }
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+        File::open(&self.root)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|error| error.to_string())?;
+        for (suffix, bytes) in [
+            (ADMISSION_SUFFIX, evidence.proof().canonical_encoding()),
+            (RECORD_SUFFIX, evidence.record().canonical_encoding()),
+        ] {
+            let path = root.join(format!(
+                "{}.{}",
+                hex::encode(&evidence.receipt_digest()),
+                suffix
+            ));
+            protected_replace(&path, &bytes)?;
+        }
+        Ok(())
+    }
+
     fn publish(&self, envelope: &DeploymentEnvelope) -> Result<(), String> {
         let digest = envelope.receipt_digest();
         let path = self.unit_path(digest, ENVELOPE_SUFFIX);
@@ -510,11 +544,15 @@ impl FileDeploymentJournal {
         let (record_frame, proof_frame, seal) = envelope.frames();
         self.reach(WriteStep::CreateTemporary)?;
         let mut file = OpenOptions::new()
+            .mode(0o600)
+            .custom_flags(nix::libc::O_NOFOLLOW)
             .create(true)
             .truncate(true)
             .write(true)
             .open(&temporary)
             .map_err(|error| format!("could not stage {}: {error}", temporary.display()))?;
+        file.set_permissions(fs::Permissions::from_mode(0o600))
+            .map_err(|error| format!("could not protect {}: {error}", temporary.display()))?;
         self.reach(WriteStep::WriteRecord)?;
         file.write_all(&record_frame)
             .map_err(|error| format!("could not stage {}: {error}", temporary.display()))?;
@@ -762,4 +800,36 @@ impl DeploymentJournal for FileDeploymentJournal {
                 .map_err(|_| RegistryError::JournalUnavailable)?,
         })
     }
+}
+
+fn protected_replace(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let journal = path
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| "deployment export has no journal".to_owned())?;
+    let temporary = journal.join(format!(
+        ".pair-{}-{}.tmp",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let mut output = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&temporary)
+        .map_err(|error| error.to_string())?;
+    output
+        .write_all(bytes)
+        .and_then(|()| output.sync_all())
+        .map_err(|error| error.to_string())?;
+    drop(output);
+    fs::rename(&temporary, path).map_err(|error| error.to_string())?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| "deployment export has no parent".to_owned())?;
+    File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|error| error.to_string())
 }

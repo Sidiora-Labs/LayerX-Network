@@ -17,6 +17,7 @@
 #include "lxp_daemon_batch_wal.h"
 #include "lxp_daemon_lni_internal.h"
 #include "lxp_daemon_lni_account.h"
+#include "lxp_daemon_deployment.h"
 
 #include <openssl/evp.h>
 
@@ -2998,9 +2999,9 @@ static lxp_result send_proof_bundle(
             deadline);
     kind = request->payload[2U];
     target_activity_id = request->payload + 3U;
-    if (((kind == 1U || kind == 3U) && request->payload_length != 35U) ||
+    if (((kind == 1U || kind == 3U || kind == 4U) && request->payload_length != 35U) ||
         (kind == 2U && request->payload_length != 67U) ||
-        (kind != 1U && kind != 2U && kind != 3U) ||
+        (kind != 1U && kind != 2U && kind != 3U && kind != 4U) ||
         lxp_ct_is_zero(target_activity_id, 32U) ||
         (kind == 2U && lxp_ct_is_zero(request->payload + 35U, 32U)))
         return send_refusal(descriptor, server->frame_bytes,
@@ -3028,10 +3029,16 @@ static lxp_result send_proof_bundle(
         status = lxp_daemon_activity_evidence_lookup(
             server->owner->evidence_store, target_activity_id,
             server->owner->scratch, &activity);
-        if (status == LXP_OK)
+        if (status == LXP_OK && kind == 4U) {
+            status = lxp_daemon_deployment_encode(server->owner->kernel,
+                &activity, server->owner->receipt_authority, server->owner->network_id,
+                server->owner->scratch, &canonical_value);
+            proof_material = (lxp_byte_span){NULL, 0U};
+        } else if (status == LXP_OK) {
             status = lxp_daemon_activity_evidence_wire_encode(
                 &activity, server->owner->network_id, kind,
                 server->owner->scratch, &canonical_value, &proof_material);
+        }
     }
     if (status == LXP_OK)
         status = send_envelope(

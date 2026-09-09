@@ -8,6 +8,8 @@ license.workspace = true
 [dependencies]
 layerx-human-service = { path = "../layerx-human-service" }
 layerx-types.workspace = true
+layerx-wire.workspace = true
+layerx-proof.workspace = true
 getrandom.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -18,6 +18,8 @@ name = "layerx-cgroup-exec"
 path = "src/bin/layerx-cgroup-exec.rs"
 
 [dependencies]
+layerx-client.workspace = true
+layerx-types.workspace = true
 nix = { version = "=0.29.0", features = ["user", "process", "fs"] }
 layerx-programs = { package = "layerx-programs-registry", path = "../../../programs/crates/layerx-programs-registry" }
 layerx-programs-protocol-adapter = { path = "../../../programs/crates/layerx-programs-protocol-adapter" }
@@ -35,7 +37,6 @@ zeroize.workspace = true
 [dev-dependencies]
 ed25519-dalek.workspace = true
 layerx-programs-runtime = { path = "../../../programs/crates/layerx-programs-runtime" }
-layerx-types.workspace = true
 
 [lints]
 workspace = true

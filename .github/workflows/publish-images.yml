@@ -1,0 +1,40 @@
+name: Publish beta images
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-beta-images
+  cancel-in-progress: false
+
+env:
+  CARGO_BUILD_JOBS: '4'
+  MAKEFLAGS: -j4
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Build all beta images using the shared cluster image table and contexts
+        run: bash platform/hosted/tests/beta-cluster.sh images
+      - name: Authenticate to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_ACTOR: ${{ github.actor }}
+        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GHCR_ACTOR" --password-stdin
+      - name: Publish SHA and beta tags and verify registry digests
+        run: bash platform/hosted/tests/beta-cluster.sh publish-images
+      - name: Log out of GHCR
+        if: always()
+        run: docker logout ghcr.io

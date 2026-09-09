@@ -128,6 +128,91 @@ impl NodeProgramStateSource {
         })
     }
 
+    /// # Errors
+    /// Refuses native admission, unavailable proof material and mismatched activity bytes.
+    pub fn deploy(&self, canonical: &[u8], deadline: Instant) -> Result<DeploymentProof, String> {
+        self.set_request_deadline(deadline);
+        let registration = layerx_types::payload::ModuleRegistration::new(
+            layerx_types::payload::ModuleId::Programs,
+            &[1, 2]
+                .map(|ordinal| {
+                    layerx_types::payload::ActivityType::new(
+                        layerx_types::payload::ModuleId::Programs,
+                        ordinal,
+                    )
+                })
+                .into_iter()
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| format!("{error:?}"))?,
+        )
+        .map_err(|error| format!("{error:?}"))?;
+        let registry = layerx_types::payload::ModuleRegistry::new(&[registration])
+            .map_err(|error| format!("{error:?}"))?;
+        let activity = layerx_wire::activity::decode_signed(canonical, &registry)
+            .map_err(|error| format!("deployment activity: {error:?}"))?;
+        let id = layerx_wire::hash::activity_id(&activity).map_err(|error| format!("{error:?}"))?;
+        let operation = if activity.activity_type().ordinal() == 1 {
+            "deploy"
+        } else {
+            "upgrade"
+        };
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .filter(|duration| !duration.is_zero())
+            .ok_or_else(|| "deployment deadline expired".to_owned())?;
+        let mut response = self
+            .agent
+            .post(format!(
+                "{}/internal/v1/programs/{operation}",
+                self.endpoint
+            ))
+            .header("Authorization", &format!("Bearer {}", self.authorization))
+            .header("Content-Type", "application/octet-stream")
+            .config()
+            .timeout_global(Some(remaining))
+            .build()
+            .send(canonical)
+            .map_err(|error| format!("deployment submission: {error}"))?;
+        if response.status().as_u16() != 202 {
+            return Err(format!(
+                "deployment admission returned HTTP {}",
+                response.status()
+            ));
+        }
+        let body = response
+            .body_mut()
+            .read_to_string()
+            .map_err(|error| error.to_string())?;
+        let acknowledgement: Value =
+            serde_json::from_str(&body).map_err(|error| error.to_string())?;
+        if hex::decode_digest(field(&acknowledgement, "activity_id")?)
+            .map_err(|error| error.to_string())?
+            != id
+        {
+            return Err("deployment acknowledgement names a different activity".to_owned());
+        }
+        let path = format!("/internal/v1/deployment-proof/{}", hex::encode(&id));
+        loop {
+            let (status, document) = self.fetch_from(&self.endpoint, &self.authorization, &path)?;
+            if status == 200 {
+                let bytes = hex::decode(field(&document, "proof_hex")?)
+                    .map_err(|error| error.to_string())?;
+                let proof = DeploymentProof::decode(&bytes).map_err(|error| error.to_string())?;
+                if proof.activity != canonical {
+                    return Err("deployment proof names different activity bytes".to_owned());
+                }
+                return Ok(proof);
+            }
+            if status != 503 || document["native_result"].as_i64() != Some(-106) {
+                return Err(format!("deployment evidence refused with HTTP {status}"));
+            }
+            let remaining = deadline
+                .checked_duration_since(Instant::now())
+                .ok_or_else(|| "deployment outcome unavailable at deadline".to_owned())?;
+            std::thread::sleep(remaining.min(Duration::from_millis(20)));
+        }
+    }
+
     pub fn set_request_deadline(&self, deadline: Instant) {
         self.request_deadline.set(Some(deadline));
     }
@@ -187,6 +272,40 @@ impl NodeProgramStateSource {
                 Err(format!("node authority GET {path} returned HTTP {status}"))
             }
         }
+    }
+
+    /// # Errors
+    /// Refuses deployment evidence that differs from the independent receipt authority.
+    pub fn verify_deployment_authority(&self, proof: &DeploymentProof) -> Result<(), String> {
+        let decoded = decode_receipt(&proof.state.receipt)
+            .map_err(|_| "deployment receipt decoding failed".to_owned())?;
+        let protocol = decoded
+            .protocol()
+            .ok_or_else(|| "deployment receipt shape".to_owned())?;
+        let digest = proof
+            .claimed_receipt_digest()
+            .map_err(|error| error.to_string())?;
+        let path = format!(
+            "/v1/batches/{}/receipt-authority?receipt_digest={}",
+            hex::encode(&protocol.batch_id()),
+            hex::encode(&digest)
+        );
+        let document = self.get_authority(&path)?;
+        let independent = parse_batch_evidence(&document["batch_evidence"])?;
+        if independent.header != proof.state.header
+            || independent.signature != proof.state.header_signature
+            || independent.receipt_proof != proof.state.receipt_proof
+            || hex::decode_digest(field(&document, "authority_replica_id")?)
+                .map_err(|error| error.to_string())?
+                != self.authority_replica_id
+        {
+            return Err("deployment evidence disagrees with independent authority".to_owned());
+        }
+        let key = hex::decode_digest(field(&document, "sequencer_public_key")?)
+            .map_err(|error| error.to_string())?;
+        layerx_proof::receipt::verify_sequencer_signature(&proof.state.receipt, key)
+            .map_err(|error| format!("independent authority sequencer key refused: {error:?}"))?;
+        Ok(())
     }
 
     ///
