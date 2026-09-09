@@ -233,6 +233,7 @@ pub enum VerifiedProofBundle {
     },
     MaintainedAccount {
         canonical_bytes: Vec<u8>,
+        proof_material: Vec<u8>,
         activity_id: [u8; 32],
         activity_receipt: Vec<u8>,
         verified: Box<VerifiedMaintenanceAccountState>,
@@ -240,6 +241,7 @@ pub enum VerifiedProofBundle {
     },
     Account {
         canonical_bytes: Vec<u8>,
+        proof_material: Vec<u8>,
         activity_id: [u8; 32],
         verified: Box<VerifiedAccountState>,
         signed_header: SignedHeader,
@@ -704,6 +706,7 @@ fn account_proof_bundle(
         }
         return Ok(VerifiedProofBundle::MaintainedAccount {
             canonical_bytes: response.payload,
+            proof_material: response.proof,
             activity_id,
             activity_receipt,
             verified: Box::new(verified),
@@ -723,6 +726,7 @@ fn account_proof_bundle(
     }
     Ok(VerifiedProofBundle::Account {
         canonical_bytes: response.payload,
+        proof_material: response.proof,
         activity_id: target_activity_id,
         verified: Box::new(verified),
         signed_header: decoded.signed_header,

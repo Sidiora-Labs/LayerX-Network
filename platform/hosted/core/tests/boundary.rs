@@ -2388,7 +2388,7 @@ fn wait_for_supervisor(socket: &Path, supervisor: &mut Daemon) {
     }
 }
 
-fn establish_receipt_head(boundary: &Boundary, cluster: &Cluster) {
+fn establish_receipt_head(boundary: &Boundary, cluster: &Cluster) -> [u8; 32] {
     let mut request = SendRequest {
         network_id: NETWORK_ID,
         source_did: cluster.treasury_did.clone(),
@@ -2461,6 +2461,7 @@ fn establish_receipt_head(boundary: &Boundary, cluster: &Cluster) {
             .status,
         200
     );
+    signed.activity_id
 }
 
 #[test]
@@ -2721,4 +2722,54 @@ fn authenticated_receipt_wait_returns_on_commit_and_bounds_missing_receipts() {
         let already = receipt_wait_request(&cluster.lni_socket, &selector);
         assert_eq!(already, (6, receipt));
     });
+}
+
+#[test]
+fn account_proof_export_preserves_exact_native_verified_bytes() {
+    let cluster = start_cluster(true);
+    let certificates = certificates(&cluster.root);
+    let boundary = start_boundary(&cluster, &certificates);
+    let activity = hex_encode(&establish_receipt_head(&boundary, &cluster));
+    let account = must(
+        layerx_types::account::AccountId::parse("system:fees"),
+        "system account",
+    );
+    let account = hex_encode(&must(
+        layerx_wire::hash::account_id_for_protocol(&account, PROTOCOL_VERSION),
+        "account id",
+    ));
+    let value = boundary
+        .core
+        .get(&format!("/v1/accounts/{account}/balance"));
+    assert_eq!(value.status, 200, "{}", value.body);
+    let exported = boundary
+        .core
+        .get(&format!("/v1/proofs/account/{activity}/{account}"));
+    assert_eq!(exported.status, 200, "{}", exported.body);
+    let exported = json(&exported);
+    assert_eq!(
+        exported["result"]["canonical_value"],
+        json(&value)["result"]["canonical_value"]
+    );
+    assert_eq!(
+        exported["result"]["proof"]["canonical_bytes"],
+        json(&value)["result"]["proof_material"]
+    );
+    assert_eq!(exported["result"]["account_id"], account);
+    for account in ["invalid".to_owned(), "00".repeat(32)] {
+        assert_refusal(
+            &boundary
+                .core
+                .get(&format!("/v1/proofs/account/{activity}/{account}")),
+            400,
+            "invalid_proof_selector",
+        );
+    }
+    assert_refusal(
+        &boundary
+            .core
+            .get(&format!("/v1/proofs/account/{}/{account}", "63".repeat(32))),
+        503,
+        "proof_evidence_unavailable",
+    );
 }
