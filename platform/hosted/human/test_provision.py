@@ -96,6 +96,22 @@ class RegistrationInputTests(unittest.TestCase):
         self.assertIn(str(request), str(caught.exception))
         self.assertFalse(output.exists())
 
+    def test_binding_requires_matching_response_tenant_and_principal(self):
+        request = self.input / 'request.json'
+        response = self.input / 'response.json'
+        output = self.input / 'binding.json'
+        provision.write_json(request, {'tenant': 'beta', 'sub': 'owner'})
+        for value in ({'sub': 'owner'}, {'tenant': 'other', 'sub': 'owner'},
+                      {'tenant': 'beta', 'sub': 'other'}):
+            provision.write_json(response, value)
+            with self.assertRaises(provision.Refused):
+                provision.preserve_binding(request, response, output)
+            self.assertFalse(output.exists())
+            response.unlink()
+        provision.write_json(response, {'tenant': 'beta', 'sub': 'owner'})
+        provision.preserve_binding(request, response, output)
+        self.assertEqual(provision.protected_json(output), {'tenant': 'beta', 'principal': 'owner'})
+
     def test_catalog_refuses_missing_registry_before_output(self):
         template = Path(provision.__file__).with_name('beta-purpose-catalog.json')
         with self.assertRaises(provision.Refused) as caught:
