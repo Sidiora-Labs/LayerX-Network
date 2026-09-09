@@ -18,8 +18,8 @@ fn vendored_ap2_specification_matches_the_compiled_pin() {
     let document = std::fs::read(VENDORED_SPEC).unwrap_or_else(|error| {
         panic!("vendored AP2 specification for commit {AP2_SPEC_COMMIT} must exist: {error}")
     });
-    let descriptor = ap2_adapter_descriptor(conformance())
-        .unwrap_or_else(|error| panic!("descriptor: {error}"));
+    let descriptor =
+        ap2_adapter_descriptor(conformance()).unwrap_or_else(|error| panic!("descriptor: {error}"));
     assert_eq!(descriptor.spec().document_digest(), AP2_SPEC_SHA256);
     descriptor
         .spec()
@@ -34,8 +34,8 @@ fn altered_ap2_specification_bytes_are_refused() {
     let mut document = std::fs::read(VENDORED_SPEC)
         .unwrap_or_else(|error| panic!("vendored AP2 specification must exist: {error}"));
     document.push(b'\n');
-    let descriptor = ap2_adapter_descriptor(conformance())
-        .unwrap_or_else(|error| panic!("descriptor: {error}"));
+    let descriptor =
+        ap2_adapter_descriptor(conformance()).unwrap_or_else(|error| panic!("descriptor: {error}"));
     assert_eq!(
         descriptor.spec().verify_document(&document),
         Err(AdapterError::DocumentDigestMismatch)

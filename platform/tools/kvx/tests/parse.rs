@@ -2,7 +2,8 @@ use layerx_platform_kvx::{parse, quote, string_list, unquote};
 
 #[test]
 fn parses_sections_keys_and_quoted_keys() {
-    let source = "\n[alpha]\nname = \"one\"\n\"a b.c\" = \"two\"\n\n[beta]\nitems = [\"x\", \"y\"]\n";
+    let source =
+        "\n[alpha]\nname = \"one\"\n\"a b.c\" = \"two\"\n\n[beta]\nitems = [\"x\", \"y\"]\n";
     let document = parse(source).unwrap_or_else(|error| panic!("parse: {error}"));
     assert_eq!(document.sections(), vec!["alpha", "beta"]);
     assert_eq!(document.get("alpha", "name"), Some("\"one\""));
