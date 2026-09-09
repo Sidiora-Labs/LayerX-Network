@@ -916,15 +916,7 @@ fn native_deployment_proof_binds_real_activity_receipt_and_state() {
     let protocol = receipt
         .protocol()
         .unwrap_or_else(|| panic!("protocol receipt"));
-    must(
-        verify_state_membership(
-            &9_u16.to_be_bytes(),
-            &proof.state.programs_root,
-            &proof.state.programs_root_proof,
-            protocol.resulting_state_root(),
-        ),
-        "Programs root",
-    );
+    assert_maintained_root(&proof, protocol, &authorization);
     let record = &proof.state.program_record;
     must(
         verify_state_membership(
@@ -994,6 +986,14 @@ fn real_deployment_produces_verified_canonical_journal_pair() {
         verifier.verify_deployment(&proof, now_ms()),
         "real deployment verification",
     );
+    assert_eq!(
+        must(
+            verifier.verify_historical_deployment(&proof),
+            "historical deployment"
+        ),
+        evidence
+    );
+    assert_deployment_refusals(&cluster, &proof, &history, &verifier);
     let journal = must(
         FileDeploymentJournal::open(cluster.root.join("journal")),
         "journal",
@@ -1140,4 +1140,109 @@ fn diagnose_signed_deployment(cluster: &Cluster, signed: &[u8]) {
     eprintln!("native deployment evidence: receipt sequence {}, batch last sequence {}, receipt count {}, receipt root equals signed header root: {}",
         receipt.global_sequence(), header.last_sequence(), inclusion.leaf_count(),
         receipt.resulting_state_root() == header.resulting_state_root());
+}
+
+fn assert_deployment_refusals(
+    cluster: &Cluster,
+    proof: &layerx_programs::DeploymentProof,
+    history: &[u8],
+    verifier: &layerx_programs::ProtocolDeploymentVerifier,
+) {
+    use layerx_programs::ProtocolDeploymentVerifier;
+    for version in [0_u16, 1, 2, 4] {
+        let mut other = history.to_vec();
+        let offset = b"LayerX/sequencer-trust-history/v1\0".len() + 4;
+        other[offset..offset + 2].copy_from_slice(&version.to_be_bytes());
+        let other_path = cluster.root.join(format!("trust-{version}"));
+        write(&other_path, &other, 0o600);
+        let result = ProtocolDeploymentVerifier::from_protected_history(&other_path, 60_000);
+        if matches!(version, 1 | 2) {
+            let legacy = must(result, "legacy history remains supported");
+            assert!(legacy.verify_deployment(proof, now_ms()).is_err());
+        } else {
+            assert!(result.is_err());
+        }
+    }
+    let mut mutations = Vec::new();
+    let mut changed = proof.clone();
+    changed.maintenance = None;
+    mutations.push(changed);
+    let mut changed = proof.clone();
+    changed.state.receipt[40] ^= 1;
+    mutations.push(changed);
+    let mut changed = proof.clone();
+    changed.state.header_signature[0] ^= 1;
+    mutations.push(changed);
+    let mut changed = proof.clone();
+    changed.state.programs_root[0] ^= 1;
+    mutations.push(changed);
+    let mut changed = proof.clone();
+    changed.state.receipt_proof = proof
+        .maintenance
+        .as_ref()
+        .unwrap_or_else(|| panic!("maintenance"))
+        .receipt_proof
+        .clone();
+    mutations.push(changed);
+    let mut changed = proof.clone();
+    changed
+        .maintenance
+        .as_mut()
+        .unwrap_or_else(|| panic!("maintenance"))
+        .receipt[10] ^= 1;
+    mutations.push(changed);
+    let mut changed = proof.clone();
+    changed
+        .maintenance
+        .as_mut()
+        .unwrap_or_else(|| panic!("maintenance"))
+        .receipt_proof = proof.state.receipt_proof.clone();
+    mutations.push(changed);
+    for changed in mutations {
+        assert!(verifier.verify_deployment(&changed, now_ms()).is_err());
+        assert!(verifier.verify_historical_deployment(&changed).is_err());
+    }
+}
+
+fn assert_maintained_root(
+    proof: &layerx_programs::DeploymentProof,
+    protocol: &layerx_wire::receipt::ProtocolReceipt,
+    authorization: &layerx_proof::inclusion::SequencerAuthorization,
+) {
+    use layerx_programs::verify_state_membership;
+    use layerx_proof::inclusion::verify_receipt;
+    let header = must(
+        layerx_wire::receipt::decode_batch_header(&proof.state.header),
+        "header",
+    );
+    assert_ne!(
+        protocol.resulting_state_root(),
+        header.resulting_state_root()
+    );
+    let maintenance = proof
+        .maintenance
+        .as_ref()
+        .unwrap_or_else(|| panic!("maintenance missing"));
+    must(
+        verify_receipt(
+            &maintenance.receipt,
+            &maintenance.receipt_proof,
+            &proof.state.header,
+            &proof.state.header_signature,
+            authorization,
+        ),
+        "maintenance inclusion",
+    );
+    assert_eq!(proof.state.receipt_proof.leaf_index(), 0);
+    assert_eq!(proof.state.receipt_proof.leaf_count(), 2);
+    assert_eq!(maintenance.receipt_proof.leaf_index(), 1);
+    must(
+        verify_state_membership(
+            &9_u16.to_be_bytes(),
+            &proof.state.programs_root,
+            &proof.state.programs_root_proof,
+            header.resulting_state_root(),
+        ),
+        "Programs root",
+    );
 }

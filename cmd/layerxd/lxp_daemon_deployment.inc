@@ -54,9 +54,14 @@ static lxp_result deployment_witness(evidence_writer *writer,
 
 lxp_result lxp_daemon_deployment_encode(
     const lxp_kernel *kernel, const lxp_daemon_activity_evidence *evidence,
+    const lxp_daemon_receipt_authority_store *receipts,
     uint32_t network_id, lxp_arena *arena, lxp_byte_span *encoded)
 {
     static const uint8_t domain[] = "LayerX/programs/deployment-proof/v1";
+    static const uint8_t maintained_domain[] = "LayerX/programs/deployment-proof/v2";
+    lxp_daemon_receipt_evidence retained, maintenance;
+    lxp_batch_header header;
+    bool maintained = false;
     deployment_leaf record = {{0}, 40U, NULL, 0U};
     deployment_leaf target = {{0}, 43U, NULL, 0U};
     deployment_leaf lower = {{0}, 0U, NULL, 0U};
@@ -86,7 +91,21 @@ lxp_result lxp_daemon_deployment_encode(
         return LXP_ERR_UNKNOWN_ACTIVITY;
     status = lxp_state_root_proof(kernel, 9U, root, &root_proof);
     if (status != LXP_OK) return status;
-    if (memcmp(root, receipt.resulting_state_root, 32U) != 0)
+    status = lxp_batch_header_decode(evidence->signed_header.canonical_header.bytes,
+        evidence->signed_header.canonical_header.length, &header);
+    if (status != LXP_OK) return status;
+    if (header.protocol_version == 3U) {
+        if (receipts == NULL) return LXP_ERR_UNKNOWN_FIELD;
+        status = lxp_daemon_receipt_authority_lookup(receipts,
+            evidence->receipt_digest, arena, &retained);
+        if (status == LXP_OK)
+            status = lxp_daemon_receipt_authority_batch_maintenance(receipts,
+                &retained, arena, &maintenance, &maintained);
+        if (status != LXP_OK) return status;
+        if (!maintained) return LXP_ERR_UNKNOWN_FIELD;
+    }
+    if (memcmp(root, maintained ? header.resulting_state_root :
+               receipt.resulting_state_root, 32U) != 0)
         return LXP_ERR_PROJECTION_STALE;
     status = lxp_state_subtree_root(kernel, 9U, programs_root);
     if (status != LXP_OK) return status;
@@ -125,12 +144,12 @@ lxp_result lxp_daemon_deployment_encode(
     capacity = sizeof(domain) + evidence->canonical_activity.length +
         evidence->canonical_receipt.length + evidence->signed_header.canonical_header.length +
         record.value_length + lower.value_length + upper.value_length +
-        present.value_length + 8192U;
+        present.value_length + (maintained ? maintenance.canonical_receipt.length : 0U) + 8192U;
     if (capacity > 40U * 1024U * 1024U) return LXP_ERR_LENGTH_LIMIT;
     status = lxp_arena_alloc(arena, capacity, _Alignof(uint64_t), &allocation);
     if (status != LXP_OK) return status;
     writer = (evidence_writer){allocation, capacity, 0U};
-    status = writer_bytes(&writer, domain, sizeof(domain));
+    status = writer_bytes(&writer, maintained ? maintained_domain : domain, sizeof(domain));
     if (status == LXP_OK) status = deployment_frame(&writer,
         evidence->canonical_activity.bytes, evidence->canonical_activity.length);
     if (status == LXP_OK) status = deployment_merkle(&writer, &evidence->activity_proof);
@@ -155,6 +174,11 @@ lxp_result lxp_daemon_deployment_encode(
         if (status == LXP_OK && upper.key_length != 0U)
             status = deployment_witness(&writer, kernel, &upper, programs_root);
     }
+    if (status == LXP_OK && maintained)
+        status = deployment_frame(&writer, maintenance.canonical_receipt.bytes,
+            maintenance.canonical_receipt.length);
+    if (status == LXP_OK && maintained)
+        status = deployment_merkle(&writer, &maintenance.receipt_proof);
     if (status == LXP_OK) *encoded = (lxp_byte_span){writer.bytes, writer.cursor};
     return status;
 }
