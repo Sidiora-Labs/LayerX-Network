@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from typing import Mapping
 
 _CORE = (
@@ -190,3 +191,91 @@ def encode_asset_supply(asset: str, account: str, amount: str) -> bytes:
     if int(amount) == 0:
         raise ValueError("invalid-asset-amount")
     return b"\x00\x01" + body
+
+
+def _id32(value: object) -> bytes:
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(c not in "0123456789abcdef" for c in value)
+    ):
+        raise ValueError("invalid-register")
+    return bytes.fromhex(value)
+
+
+def native_asset_id(issuer_did_id32: str, salt: str) -> str:
+    return hashlib.sha256(
+        b"LX:ASSET:v1" + _id32(issuer_did_id32) + _id32(salt)
+    ).hexdigest()
+
+
+def encode_register(value: Mapping[str, object]) -> bytes:
+    source = _record(value)
+    required = {
+        "issuer_did_id32",
+        "salt",
+        "symbol",
+        "name",
+        "decimals",
+        "supply_cap",
+        "issuer_kind",
+        "custody_ref",
+    }
+    if not required <= set(source) <= required | {"asset_id"}:
+        raise ValueError("invalid-register")
+    issuer = _id32(source["issuer_did_id32"])
+    salt = _id32(source["salt"])
+    symbol = source["symbol"]
+    name = source["name"]
+    decimals = source["decimals"]
+    issuer_kind = source["issuer_kind"]
+    custody_ref = source["custody_ref"]
+    if (
+        not isinstance(symbol, str)
+        or not 1 <= len(symbol) <= 16
+        or not symbol.isascii()
+    ):
+        raise ValueError("invalid-register")
+    if not isinstance(name, str):
+        raise ValueError("invalid-register")
+    name_bytes = name.encode("utf-8")
+    if not 1 <= len(name_bytes) <= 32:
+        raise ValueError("invalid-register")
+    if type(decimals) is not int or not 0 <= decimals <= 38:
+        raise ValueError("invalid-register")
+    if type(issuer_kind) is not int or issuer_kind not in (1, 2):
+        raise ValueError("invalid-register")
+    if (
+        not isinstance(custody_ref, str)
+        or len(custody_ref) % 2 != 0
+        or len(custody_ref) > 256
+        or any(c not in "0123456789abcdef" for c in custody_ref)
+    ):
+        raise ValueError("invalid-register")
+    custody = bytes.fromhex(custody_ref)
+    derived = hashlib.sha256(b"LX:ASSET:v1" + issuer + salt).digest()
+    if issuer_kind == 1:
+        if custody:
+            raise ValueError("invalid-register")
+        asset = derived
+        if "asset_id" in source and _id32(source["asset_id"]) != asset:
+            raise ValueError("invalid-register")
+    else:
+        if "asset_id" not in source:
+            raise ValueError("invalid-register")
+        asset = _id32(source["asset_id"])
+    output = bytearray(b"\x00\x01")
+    output.extend(asset)
+    output.extend(salt)
+    output.append(len(symbol))
+    output.extend(symbol.encode("ascii"))
+    output.append(len(name_bytes))
+    output.extend(name_bytes)
+    output.append(decimals)
+    output.extend(
+        _encode({"supply_cap": source["supply_cap"]}, (("supply_cap", "integer", 16),))
+    )
+    output.append(issuer_kind)
+    output.append(len(custody))
+    output.extend(custody)
+    return bytes(output)

@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 export interface PayerGrant {
   readonly grant_id: string;
   readonly from: string;
@@ -151,4 +153,76 @@ export function encodeAssetSupply(asset: string, account: string, amount: string
   const body = encode({ asset, account, amount }, [["asset", "hex", 32], ["account", "hex", 32], ["amount", "integer", 16]]);
   if (BigInt(amount) === 0n) throw new Error("invalid-asset-amount");
   return concatenate(new Uint8Array([0, 1]), body);
+}
+
+function id32(value: unknown): Uint8Array {
+  if (typeof value !== "string" || !/^[0-9a-f]{64}$/u.test(value)) throw new Error("invalid-register");
+  return encode({ value }, [["value", "hex", 32]]);
+}
+
+function sha256(bytes: Uint8Array): Uint8Array {
+  return Uint8Array.from(createHash("sha256").update(bytes).digest());
+}
+
+export function nativeAssetId(issuerDidId32: string, salt: string): string {
+  return Array.from(
+    sha256(concatenate(new TextEncoder().encode("LX:ASSET:v1"), id32(issuerDidId32), id32(salt))),
+    (byte) => byte.toString(16).padStart(2, "0"),
+  ).join("");
+}
+
+export interface AssetRegister {
+  readonly issuer_did_id32: string;
+  readonly salt: string;
+  readonly symbol: string;
+  readonly name: string;
+  readonly decimals: number;
+  readonly supply_cap: string;
+  readonly issuer_kind: 1 | 2;
+  readonly custody_ref: string;
+  readonly asset_id?: string;
+}
+
+export function encodeRegister(value: AssetRegister): Uint8Array {
+  const keys = ["issuer_did_id32", "salt", "symbol", "name", "decimals", "supply_cap", "issuer_kind", "custody_ref"] as const;
+  exact(value, value.asset_id === undefined ? keys : [...keys, "asset_id"]);
+  if (typeof value.symbol !== "string" || value.symbol.length < 1 || value.symbol.length > 16
+    || !/^[\x00-\x7f]+$/u.test(value.symbol)) throw new Error("invalid-register");
+  const nameBytes = new TextEncoder().encode(value.name);
+  if (typeof value.name !== "string" || nameBytes.length < 1 || nameBytes.length > 32) throw new Error("invalid-register");
+  if (typeof value.decimals !== "number" || !Number.isSafeInteger(value.decimals) || value.decimals < 0 || value.decimals > 38) {
+    throw new Error("invalid-register");
+  }
+  if (value.issuer_kind !== 1 && value.issuer_kind !== 2) throw new Error("invalid-register");
+  if (typeof value.custody_ref !== "string" || value.custody_ref.length % 2 !== 0 || value.custody_ref.length > 256
+    || (value.custody_ref.length > 0 && !/^[0-9a-f]+$/u.test(value.custody_ref))) throw new Error("invalid-register");
+  const custody = value.custody_ref.length === 0 ? new Uint8Array() : encode({ custody_ref: value.custody_ref }, [["custody_ref", "hex", value.custody_ref.length / 2]]);
+  const derived = sha256(concatenate(new TextEncoder().encode("LX:ASSET:v1"), id32(value.issuer_did_id32), id32(value.salt)));
+  let asset: Uint8Array;
+  if (value.issuer_kind === 1) {
+    if (custody.length !== 0) throw new Error("invalid-register");
+    asset = derived;
+    if (value.asset_id !== undefined && !equalBytes(id32(value.asset_id), asset)) throw new Error("invalid-register");
+  } else {
+    if (value.asset_id === undefined) throw new Error("invalid-register");
+    asset = id32(value.asset_id);
+  }
+  const cap = encode({ supply_cap: value.supply_cap }, [["supply_cap", "integer", 16]]);
+  return concatenate(
+    new Uint8Array([0, 1]),
+    asset,
+    id32(value.salt),
+    Uint8Array.from([value.symbol.length]),
+    new TextEncoder().encode(value.symbol),
+    Uint8Array.from([nameBytes.length]),
+    nameBytes,
+    Uint8Array.from([value.decimals]),
+    cap,
+    Uint8Array.from([value.issuer_kind, custody.length]),
+    custody,
+  );
+}
+
+function equalBytes(left: Uint8Array, right: Uint8Array): boolean {
+  return left.length === right.length && left.every((byte, index) => byte === right[index]);
 }
