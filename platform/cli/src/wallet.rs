@@ -42,7 +42,13 @@ pub enum WalletCommand {
         did: Option<String>,
     },
     /// Verify an executed receipt using the configured sequencer key.
-    Receipt { activity_id: String },
+    Receipt {
+        activity_id: String,
+        #[arg(long, value_enum, default_value = "executed")]
+        wait: Commitment,
+        #[arg(long)]
+        receipt_policy: Option<std::path::PathBuf>,
+    },
     /// Open the selected wallet's account for an asset.
     OpenAccount {
         #[arg(long)]
@@ -303,40 +309,18 @@ pub fn run_wallet(
                 result,
             ))
         }
-        WalletCommand::Receipt { activity_id } => {
-            let activity = fixed_hex::<32>("activity id", &activity_id)?;
-            let transport = Transport::new(&config, rpc, gateway)?;
-            let response = transport.read(
-                "lx_getReceipt",
-                &json!([hex_encode(&activity)]),
-                &format!("/v1/receipts/{}", hex_encode(&activity)),
-            )?;
-            let key = config
-                .active_environment()?
-                .1
-                .sequencer_trust_anchor
-                .as_deref()
-                .ok_or("configure a sequencer trust anchor before verifying receipts")?;
-            let receipt =
-                verify_receipt(&response, activity, fixed_hex("sequencer public key", key)?)?;
-            let code = receipt["result_code"]
-                .as_i64()
-                .ok_or("receipt result missing")?;
-            if code != 0 {
-                return Err(format!(
-                    "activity {}: receipt result {code}; commitment reached executed",
-                    hex_encode(&activity)
-                ));
-            }
-            Ok(CommandOutput::new(
-                "wallet.receipt",
-                format!(
-                    "Activity {}: receipt result {code}; commitment reached executed",
-                    hex_encode(&activity)
-                ),
-                receipt,
-            ))
-        }
+        WalletCommand::Receipt {
+            activity_id,
+            wait,
+            receipt_policy,
+        } => wallet_receipt(
+            &config,
+            rpc,
+            gateway,
+            &activity_id,
+            wait,
+            receipt_policy.as_deref(),
+        ),
         WalletCommand::History { did } => {
             let did = selected_did(&config, did.as_deref())?;
             Err(format!("wallet_history_unavailable: no DID activity-history method or REST route is published for {did}"))
@@ -354,6 +338,64 @@ pub fn run_wallet(
             )
         }
     }
+}
+
+fn wallet_receipt(
+    config: &Configuration,
+    rpc: Option<&str>,
+    gateway: Option<&str>,
+    activity_id: &str,
+    wait: Commitment,
+    receipt_policy: Option<&std::path::Path>,
+) -> Result<CommandOutput, String> {
+    if rpc.is_some() {
+        let client = sdk_rpc(config, rpc, gateway)?;
+        let policy = read_policy(receipt_policy, config)?;
+        return verified_output(
+            &client
+                .wait_for(
+                    fixed_hex("activity id", activity_id)?,
+                    sdk_commitment(wait),
+                    &policy,
+                    std::time::Duration::from_secs(60),
+                )
+                .map_err(rpc_error)?,
+        );
+    }
+    if !matches!(wait, Commitment::Executed) {
+        return Err("verified commitment waits require --rpc and --receipt-policy".into());
+    }
+    let activity = fixed_hex::<32>("activity id", activity_id)?;
+    let transport = Transport::new(config, rpc, gateway)?;
+    let response = transport.read(
+        "lx_getReceipt",
+        &json!([hex_encode(&activity)]),
+        &format!("/v1/receipts/{}", hex_encode(&activity)),
+    )?;
+    let key = config
+        .active_environment()?
+        .1
+        .sequencer_trust_anchor
+        .as_deref()
+        .ok_or("configure a sequencer trust anchor before verifying receipts")?;
+    let receipt = verify_receipt(&response, activity, fixed_hex("sequencer public key", key)?)?;
+    let code = receipt["result_code"]
+        .as_i64()
+        .ok_or("receipt result missing")?;
+    if code != 0 {
+        return Err(format!(
+            "activity {}: receipt result {code}; commitment reached executed",
+            hex_encode(&activity)
+        ));
+    }
+    Ok(CommandOutput::new(
+        "wallet.receipt",
+        format!(
+            "Activity {}: receipt result {code}; commitment reached executed",
+            hex_encode(&activity)
+        ),
+        receipt,
+    ))
 }
 
 pub fn run_token(
@@ -474,6 +516,118 @@ fn transfer(
         Commitment::Finalised => "finalised",
     };
     Err(format!("identity_sequence_unavailable: source account next_sequence={source_sequence}; envelope sequence unavailable because the gateway contract has no identity.next_sequence read. Requested commitment {commitment}; no activity signed or submitted"))
+}
+
+fn sdk_commitment(value: Commitment) -> layerx_sdk::rpc::Commitment {
+    match value {
+        Commitment::Executed => layerx_sdk::rpc::Commitment::Executed,
+        Commitment::Batched => layerx_sdk::rpc::Commitment::Batched,
+        Commitment::Finalised => layerx_sdk::rpc::Commitment::Finalised,
+    }
+}
+
+fn rpc_error(error: layerx_sdk::rpc::RpcError) -> String {
+    match error {
+        layerx_sdk::rpc::RpcError::Remote {
+            code,
+            message,
+            data,
+        } => json!({"code":code,"message":message,"data":data}).to_string(),
+        layerx_sdk::rpc::RpcError::Pending { activity_id } => format!(
+            "activity {}: receipt result unavailable; requested commitment not reached",
+            hex_encode(&activity_id)
+        ),
+        other => format!("wallet RPC failed: {other:?}"),
+    }
+}
+
+fn sdk_rpc(
+    config: &Configuration,
+    rpc: Option<&str>,
+    gateway: Option<&str>,
+) -> Result<layerx_sdk::rpc::RpcClient, String> {
+    let endpoint = rpc.unwrap_or(&config.active_environment()?.1.endpoint);
+    let credential = gateway
+        .map(|alias| {
+            let stored =
+                crate::credential::gateway(alias)?.ok_or("gateway credential does not exist")?;
+            let (id, secret) = stored
+                .split_once(':')
+                .ok_or("gateway credential is malformed")?;
+            let secret = layerx_sdk::production::SecretBytes::new(secret.as_bytes())
+                .map_err(|_| "gateway credential is malformed")?;
+            layerx_sdk::programs::LayerXKeyCredential::new(id, secret)
+                .map_err(|_| "gateway credential is malformed".to_owned())
+        })
+        .transpose()?;
+    layerx_sdk::rpc::RpcClient::connect(endpoint, credential).map_err(rpc_error)
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WalletPolicy {
+    protocol_version: u16,
+    network_id: u32,
+    sequencer_id: String,
+    sequencer_key: String,
+    first_batch: u64,
+    last_batch: u64,
+    checkpoint_context_digest: Option<String>,
+}
+
+fn read_policy(
+    path: Option<&std::path::Path>,
+    config: &Configuration,
+) -> Result<layerx_sdk::rpc_verification::ReceiptPolicy, String> {
+    let path = path.ok_or(
+        "provide --receipt-policy with independently trusted sequencer and checkpoint authority",
+    )?;
+    let bytes = std::fs::read(path).map_err(|e| format!("cannot read receipt policy: {e}"))?;
+    let policy: WalletPolicy =
+        serde_json::from_slice(&bytes).map_err(|e| format!("invalid receipt policy: {e}"))?;
+    if policy.protocol_version != 3
+        || policy.network_id != config.active_environment()?.1.network_id
+        || policy.first_batch == 0
+        || policy.last_batch < policy.first_batch
+    {
+        return Err("receipt policy scope or batch range is invalid".into());
+    }
+    Ok(layerx_sdk::rpc_verification::ReceiptPolicy {
+        protocol_version: policy.protocol_version,
+        network_id: policy.network_id,
+        sequencer: layerx_proof::inclusion::SequencerAuthorization::new(
+            fixed_hex("sequencer id", &policy.sequencer_id)?,
+            fixed_hex("sequencer key", &policy.sequencer_key)?,
+            policy.first_batch,
+            policy.last_batch,
+        ),
+        trusted_checkpoint_context_digest: policy
+            .checkpoint_context_digest
+            .as_deref()
+            .map(|s| fixed_hex("checkpoint context digest", s))
+            .transpose()?,
+    })
+}
+
+fn verified_output(
+    receipt: &layerx_sdk::rpc_verification::VerifiedRpcReceipt,
+) -> Result<CommandOutput, String> {
+    let facts = receipt
+        .receipt()
+        .protocol()
+        .ok_or("verified receipt omitted protocol facts")?;
+    let id = hex_encode(&facts.activity_id());
+    let code = facts.result_code();
+    let commitment = receipt.commitment().as_str();
+    let message = format!("Activity {id}: receipt result {code}; commitment reached {commitment}");
+    if code != 0 {
+        return Err(message);
+    }
+    Ok(CommandOutput::new(
+        "wallet.receipt",
+        message,
+        json!({"activity_id":id,"result_code":code,"commitment":commitment,"receipt":hex_encode(receipt.canonical_bytes())}),
+    ))
 }
 
 fn metadata<'a>(config: &'a Configuration, key: Option<&str>) -> Result<&'a KeyMetadata, String> {

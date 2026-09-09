@@ -12273,3 +12273,11 @@ symbol = "EvaluationInput evaluate execute"
 observed = "Both public EvaluationInput constructors set the private cumulative_count field to None. Context validation requires an opaque verified budget result and an authenticated cumulative count, so no available constructor can yield a permitting context. The MCP payment backend checks bound session/capability identity, derives policy monetary fields from the prepared disclosure and invokes this evaluator before calling the real wallet signer and RPC execution."
 assumption = "Positive MCP payment execution requires the real canonical cumulative-use and protocol-budget evidence producer. Existing policy checks remain intact. Native duplicate, ownership, pause and supply-cap checks are native execution responsibilities and are not signer blockers."
 severity = "blocker"
+
+[observation.6.11.140]
+task = "6.11"
+file = "agent/crates/layerx-crypto/src/signer.rs agent/crates/layerx-crypto/src/payments.rs agent/crates/layerx-sdk/src/wallet.rs platform/cli/src/wallet.rs"
+symbol = "SigningRequest sign_disclosed Wallet::send"
+observed = "Revision 98733556 supplies transport disclosure version 3 and independently disclosed identity and source sequences. The public signer still accepts only a request whose digest matches a complete activity Disclosure. It exports no separate native Send debit-authorization signing entry point. The shared Payment enum has no Send variant; Wallet::send takes an already authorized canonical payload. Source inventory: qual-logs/pay3/pay3d-signer-api.log and pay3d-signer-exports.log."
+assumption = "Send and token transfer cannot construct the inner authorization through the required shared signer. Supply a public disclosed native debit-authorization API and shared Send encoder. The CLI-local Send encoder remains a differential fixture; raw private-key signing is not a substitute for the missing boundary."
+severity = "blocker"
