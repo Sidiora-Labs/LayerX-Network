@@ -857,7 +857,8 @@ lxp_result lxp_kernel_batch_schedule_item(
 
 static lxp_result kernel_snapshot_payer_balance(
     const lxp_kernel_batch_snapshot *snapshot,
-    const lxp_authority_resolved *authority, lxp_u128 *balance)
+    const lxp_authority_resolved *authority, uint16_t protocol_version,
+    lxp_u128 *balance)
 {
     lx_account *account;
     lxp_result status;
@@ -865,8 +866,7 @@ static lxp_result kernel_snapshot_payer_balance(
         return LXP_ERR_NON_CANONICAL;
     status = lxp_kernel_program_payment_account(
         snapshot->programs_runtime.accounts, authority->principal,
-        snapshot->occupancy_asset_id, LXP_PROTOCOL_VERSION_STATE_COMMITMENT,
-        &account);
+        snapshot->occupancy_asset_id, protocol_version, &account);
     if (status == LXP_OK) *balance = account->balance;
     return status;
 }
@@ -3648,6 +3648,7 @@ lxp_result lxp_kernel_prepare_activity_batch(
             size_t activity_index = level_indices[index];
             status = kernel_snapshot_payer_balance(
                 settled, normalized[activity_index].authority,
+                activities[activity_index].protocol_version,
                 &normalized[activity_index].fee_balance);
         }
         while (status == LXP_OK && cursor < level_count) {
