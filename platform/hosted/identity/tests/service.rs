@@ -374,14 +374,14 @@ fn provision(fixture: &Fixture, server: &Server) -> (String, String, String) {
         "/v1/principals",
         Some(&token_for("provisioning")),
         Some(&format!(
-            "{{\"sub\":\"{SUB}\",\"allowed_signer_public_keys\":[\"{SIGNER_KEY}\"],\"account\":\"{ACCOUNT}\",\"audiences\":[\"ramp-reference\"]}}"
+            "{{\"tenant\":\"beta\",\"sub\":\"{SUB}\",\"allowed_signer_public_keys\":[\"{SIGNER_KEY}\"],\"account\":\"{ACCOUNT}\",\"audiences\":[\"ramp-reference\"]}}"
         )),
     );
     assert_eq!(principal.status, 200, "{}", principal.body);
     assert_eq!(
         principal.body,
         format!(
-            "{{\"sub\":\"{SUB}\",\"allowed_signer_public_keys\":[\"{SIGNER_KEY}\"],\"account\":\"{ACCOUNT}\",\"audiences\":[\"ramp-reference\"]}}"
+            "{{\"tenant\":\"beta\",\"sub\":\"{SUB}\",\"allowed_signer_public_keys\":[\"{SIGNER_KEY}\"],\"account\":\"{ACCOUNT}\",\"audiences\":[\"ramp-reference\"]}}"
         )
     );
     let session = fixture.request(
@@ -646,7 +646,7 @@ fn wrong_service_tokens_are_refused() {
             "/v1/principals",
             Some(&token_for(service)),
             Some(&format!(
-                "{{\"sub\":\"{SUB}\",\"allowed_signer_public_keys\":[]}}"
+                "{{\"tenant\":\"beta\",\"sub\":\"{SUB}\",\"allowed_signer_public_keys\":[]}}"
             )),
         );
         assert_eq!(
@@ -688,7 +688,7 @@ fn wrong_service_tokens_are_refused() {
         "POST",
         "/v1/principals",
         Some(&token_for("provisioning")),
-        Some("{\"sub\":\"Upper:Case\",\"allowed_signer_public_keys\":[]}"),
+        Some("{\"tenant\":\"beta\",\"sub\":\"Upper:Case\",\"allowed_signer_public_keys\":[]}"),
     );
     assert_eq!(invalid_sub.status, 400);
     let invalid_key = fixture.request(
@@ -696,7 +696,7 @@ fn wrong_service_tokens_are_refused() {
         "POST",
         "/v1/principals",
         Some(&token_for("provisioning")),
-        Some("{\"sub\":\"did:key:other\",\"allowed_signer_public_keys\":[\"abc\"]}"),
+        Some("{\"tenant\":\"beta\",\"sub\":\"did:key:other\",\"allowed_signer_public_keys\":[\"abc\"]}"),
     );
     assert_eq!(invalid_key.status, 400);
 }
@@ -868,4 +868,48 @@ fn state_survives_a_restart() {
     drop(server);
     let server = fixture.spawn(&state);
     assert_inactive(&fixture, &server, &token);
+}
+
+#[test]
+fn principal_tenant_is_required_bounded_and_echoed() {
+    let fixture = fixture("tenant");
+    let server = fixture.spawn(&fixture.root.join("state"));
+    for tenant in [
+        None,
+        Some(serde_json::json!("")),
+        Some(serde_json::json!("a".repeat(129))),
+        Some(serde_json::json!("Upper")),
+        Some(serde_json::json!("a:b")),
+        Some(serde_json::json!("a/b")),
+        Some(serde_json::json!("a b")),
+        Some(serde_json::json!("é")),
+        Some(serde_json::json!("a\n")),
+        Some(serde_json::json!(42)),
+    ] {
+        let mut body = serde_json::json!({"sub": SUB, "allowed_signer_public_keys": [SIGNER_KEY]});
+        if let Some(tenant) = tenant {
+            body["tenant"] = tenant;
+        }
+        let reply = fixture.request(
+            &server,
+            "POST",
+            "/v1/principals",
+            Some(&token_for("provisioning")),
+            Some(&body.to_string()),
+        );
+        assert_eq!(reply.status, 400, "{}", reply.body);
+    }
+    for tenant in ["beta-tenant_1.prod".to_owned(), "a".repeat(128)] {
+        let body = serde_json::json!({"tenant": tenant, "sub": SUB, "allowed_signer_public_keys": [SIGNER_KEY]});
+        let reply = fixture.request(
+            &server,
+            "POST",
+            "/v1/principals",
+            Some(&token_for("provisioning")),
+            Some(&body.to_string()),
+        );
+        assert_eq!(reply.status, 200, "{}", reply.body);
+        assert_eq!(json(&reply)["tenant"], tenant);
+        assert_eq!(json(&reply)["sub"], SUB);
+    }
 }

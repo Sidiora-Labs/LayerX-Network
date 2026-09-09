@@ -214,9 +214,11 @@ def preserve_binding(request_path, response_path, output_path):
     require(type(request) is dict, request_path, 'principal request')
     require(type(response) is dict, response_path, 'principal response')
     text(request.get('tenant'), request_path, 'tenant absent from principal creation request')
+    require(type(request['tenant']) is str and re.fullmatch(r'[a-z0-9_.-]{1,128}', request['tenant']) is not None, request_path, 'tenant')
+    require(response.get('tenant') == request['tenant'], response_path, 'returned tenant binding')
     text(response.get('sub'), response_path, 'returned principal sub')
     require(request.get('sub') == response['sub'], response_path, 'requested principal binding')
-    write_json(output_path, {'tenant': request['tenant'], 'principal': response['sub']})
+    write_json(output_path, {'tenant': response['tenant'], 'principal': response['sub']})
 
 
 
