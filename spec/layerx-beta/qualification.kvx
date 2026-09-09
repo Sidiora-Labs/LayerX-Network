@@ -5219,13 +5219,17 @@ file = "src/ledger/lxp_apply.c src/protocol/lxp_module_ctx.c include/layerx/lxp_
 symbol = "lxp_ledger_apply_bridge_credit lxp_ctx_bridge_credit"
 observed = "The bridge reserve top-up now invokes ledger apply after the existing authorization, supply preflight and rollback snapshot. make -j16, make test-asset-transfer, make test and make beta-ledger-check exit 0. The unchanged sole-writer check passes. BRIDGE_PYTHON=qual-logs/nat3/venv/bin/python3 bash tests/bridge/sole_writer.sh exits 0: a real custody deposit on isolated chain 31337 produces byte-identical canonical account state diffs (397 bytes) and unsigned receipt encodings (1006 bytes) through original and updated module contexts, with real signature verification, rollback stages, replay refusal and nine custody evidence tests passing. Evidence: qual-logs/nat3/build.log, asset-transfer.log, test.log, beta-ledger.log, bridge-differential-venv.log and gates.tsv."
 assumption = "The initial bridge comparison exited 1 because system Python lacked Crypto; the isolated virtual environment satisfies tests/bridge/requirements.txt. Codify inspection could not run because cg is unavailable. Cluster and image gates were not run. Task statuses are unchanged."
+severity = "note"
+
+[observation.6.1.40]
+task = "6.1"
 file = "cmd/layerxd/lxp_daemon_lni.c agent/crates/layerx-client/tests/availability_daemon.rs tests/daemon/availability-settlement.py"
 symbol = "send_availability finalized_fetch"
 observed = "Tag 18 refuses every selected batch above latest_finalized_batch with LXP_ERR_DA_MISSING (-804), including explicit batch selection. Candidate DA is required before independent replay and attestation, while registration requires attestations. This prevents both initial checkpoint production and advancement beyond an existing finalized head. The availability harness asserts pre-registration refusal and obtains successful retrieval only after the finality fixture has already signed and registered a certificate. Source evidence: qual-logs/gp1/candidate-fetch-source.txt."
 assumption = "An additive authenticated candidate-batch fetch must expose complete durable sealed bodies before registration without weakening finalized-only consumer selectors, root checks or existing refusal assertions. Producer implementation and end-to-end qualification remain incomplete."
 severity = "blocker"
 
-[observation.6.1.32]
+[observation.6.1.41]
 task = "6.1"
 file = "docs/wiki/Guarantor.md spec/layerx-protocol/docs/guarantors.md contracts/libraries/CanonicalCheckpoint.sol tests/daemon/availability-settlement.py"
 symbol = "ATTESTATION_DOMAIN CHECKPOINT_DOMAIN registerCheckpoint"
@@ -5233,7 +5237,7 @@ observed = "Beta checkpoint construction uses an empty validity proof; no genera
 assumption = "Producer encoding follows the implemented verifiers and vectors. Production operator independence remains an onboarding requirement. Empty beta validity proofs and shared operation do not establish production independence or proof generation."
 severity = "note"
 
-[observation.6.1.33]
+[observation.6.1.42]
 task = "6.1"
 file = "cmd/layerx-guarantor/lni.c tests/daemon/guarantor-integration.py cmd/layerxd/lxp_daemon_lni.c"
 symbol = "LXP_GUARANTOR_CANDIDATE_SELECTOR lxp_guarantor_lni_fetch"
@@ -5241,7 +5245,7 @@ observed = "The producer requests tag 18 selector 05 followed by one big-endian 
 assumption = "The additive sealed-candidate selector is required in the daemon; selectors 01 through 04 and all existing finalized-only refusal assertions remain unchanged. Two-producer signing, finality feedback, tag-14 retrieval and existing verifier acceptance are asserted by the compiled integration but remain unreached until candidate retrieval succeeds."
 severity = "blocker"
 
-[observation.6.1.34]
+[observation.6.1.43]
 task = "6.1"
 file = "cmd/layerx-guarantor/runtime.c cmd/layerx-guarantor/settlement.py platform/hosted/node/deployment.yaml docs/wiki/Guarantor.md"
 symbol = "gp_runtime_open gp_runtime_oracle membership"
@@ -5249,7 +5253,7 @@ observed = "The independent runtime verifies genesis and executes real kernel tr
 assumption = "Production independence requires independent operator onboarding. Supporting nonempty oracle input or rotated guarantor histories requires a complete verified authority adapter; neither capability is claimed by the beta producer. Prior specification-domain drift remains recorded in observation 6.1.32."
 severity = "note"
 
-[observation.6.1.35]
+[observation.6.1.44]
 task = "6.1"
 file = "platform/hosted/tests/topology-check.sh platform/hosted/tests/topology_check.py"
 symbol = "platform-hosted-topology-check"
@@ -5257,7 +5261,7 @@ observed = "The seven added guarantor topology negative mutations pass. The aggr
 assumption = "Unrelated service and network-policy owners must resolve aggregate topology failures. No Docker, image, kubectl, kind or live-cluster gate was run on the build host. Native bootstrap and static topology checks do not establish deployed cluster reachability."
 severity = "blocker"
 
-[observation.6.1.36]
+[observation.6.1.45]
 task = "6.1"
 file = "Makefile"
 symbol = "test-daemon-guarantor-sanitize"
@@ -5265,7 +5269,7 @@ observed = "The new AddressSanitizer and UndefinedBehaviorSanitizer variant comp
 assumption = "AddressSanitizer qualification requires a compatible execution host. Runtime ordering and leak checks remain enabled; the failing sanitizer gate is not reported as passing."
 severity = "blocker"
 
-[observation.6.1.37]
+[observation.6.1.46]
 task = "6.1"
 file = "cmd/layerx-guarantor Makefile tests/daemon/guarantor-core.c tests/daemon/guarantor-settlement-chain.py"
 symbol = "gp_verify_attest gp_settlement_register test-daemon-guarantor"
@@ -5273,7 +5277,7 @@ observed = "The C17 warnings-as-errors build and unit gate exit 0, including gen
 assumption = "The guarantor aggregate exits 2 because its real-daemon integration exits 1 at the unimplemented candidate selector. These passing component gates do not claim completed two-producer finality feedback or deployment qualification. Existing refusal, verifier, signature, root and freshness checks remain intact."
 severity = "note"
 
-[observation.6.1.36]
+[observation.6.1.47]
 task = "6.1"
 file = "cmd/layerxd/lxp_daemon_lni.c agent/crates/layerx-client/tests/availability_daemon.rs tests/daemon/availability-settlement.py"
 symbol = "send_availability finalized_fetch"
@@ -5281,7 +5285,7 @@ observed = "formerly observation.6.1.31. Tag 18 refuses every selected batch abo
 assumption = "An additive authenticated candidate-batch fetch must expose complete durable sealed bodies before registration without weakening finalized-only consumer selectors, root checks or existing refusal assertions. Producer implementation and end-to-end qualification remain incomplete."
 severity = "blocker"
 
-[observation.6.1.37]
+[observation.6.1.48]
 task = "6.1"
 file = "docs/wiki/Guarantor.md spec/layerx-protocol/docs/guarantors.md contracts/libraries/CanonicalCheckpoint.sol tests/daemon/availability-settlement.py"
 symbol = "ATTESTATION_DOMAIN CHECKPOINT_DOMAIN registerCheckpoint"
@@ -5289,7 +5293,7 @@ observed = "formerly observation.6.1.32. Beta checkpoint construction uses an em
 assumption = "Producer encoding follows the implemented verifiers and vectors. Production operator independence remains an onboarding requirement. Empty beta validity proofs and shared operation do not establish production independence or proof generation."
 severity = "note"
 
-[observation.6.1.38]
+[observation.6.1.49]
 task = "6.1"
 file = "cmd/layerx-guarantor/lni.c tests/daemon/guarantor-integration.py cmd/layerxd/lxp_daemon_lni.c"
 symbol = "LXP_GUARANTOR_CANDIDATE_SELECTOR lxp_guarantor_lni_fetch"
@@ -5297,7 +5301,7 @@ observed = "formerly observation.6.1.33. The producer requests tag 18 selector 0
 assumption = "The additive sealed-candidate selector is required in the daemon; selectors 01 through 04 and all existing finalized-only refusal assertions remain unchanged. Two-producer signing, finality feedback, tag-14 retrieval and existing verifier acceptance are asserted by the compiled integration but remain unreached until candidate retrieval succeeds."
 severity = "blocker"
 
-[observation.6.1.39]
+[observation.6.1.50]
 task = "6.1"
 file = "cmd/layerx-guarantor/runtime.c cmd/layerx-guarantor/settlement.py platform/hosted/node/deployment.yaml docs/wiki/Guarantor.md"
 symbol = "gp_runtime_open gp_runtime_oracle membership"
@@ -5305,7 +5309,7 @@ observed = "formerly observation.6.1.34. The independent runtime verifies genesi
 assumption = "Production independence requires independent operator onboarding. Supporting nonempty oracle input or rotated guarantor histories requires a complete verified authority adapter; neither capability is claimed by the beta producer. Prior specification-domain drift remains recorded in observation 6.1.32."
 severity = "note"
 
-[observation.6.1.40]
+[observation.6.1.51]
 task = "6.1"
 file = "platform/hosted/tests/topology-check.sh platform/hosted/tests/topology_check.py"
 symbol = "platform-hosted-topology-check"
@@ -5313,7 +5317,7 @@ observed = "formerly observation.6.1.35. The seven added guarantor topology nega
 assumption = "Unrelated service and network-policy owners must resolve aggregate topology failures. No Docker, image, kubectl, kind or live-cluster gate was run on the build host. Native bootstrap and static topology checks do not establish deployed cluster reachability."
 severity = "blocker"
 
-[observation.6.1.41]
+[observation.6.1.52]
 task = "6.1"
 file = "Makefile"
 symbol = "test-daemon-guarantor-sanitize"
@@ -5321,7 +5325,7 @@ observed = "formerly observation.6.1.36. The new AddressSanitizer and UndefinedB
 assumption = "AddressSanitizer qualification requires a compatible execution host. Runtime ordering and leak checks remain enabled; the failing sanitizer gate is not reported as passing."
 severity = "blocker"
 
-[observation.6.1.42]
+[observation.6.1.53]
 task = "6.1"
 file = "cmd/layerx-guarantor Makefile tests/daemon/guarantor-core.c tests/daemon/guarantor-settlement-chain.py"
 symbol = "gp_verify_attest gp_settlement_register test-daemon-guarantor"
@@ -5329,7 +5333,7 @@ observed = "formerly observation.6.1.37. The C17 warnings-as-errors build and un
 assumption = "The guarantor aggregate exits 2 because its real-daemon integration exits 1 at the unimplemented candidate selector. These passing component gates do not claim completed two-producer finality feedback or deployment qualification. Existing refusal, verifier, signature, root and freshness checks remain intact."
 severity = "note"
 
-[observation.6.1.43]
+[observation.6.1.54]
 task = "6.1"
 file = "tests/daemon/guarantor-integration.py cmd/layerx-guarantor"
 symbol = "test-daemon-guarantor"
@@ -5337,7 +5341,7 @@ observed = "At revision 58597cd5, sudo -n env CARGO_BUILD_JOBS=16 MAKEFLAGS=-j16
 assumption = "This resolves the candidate-fetch integration blockers recorded in observations 6.1.36 and 6.1.38. Settlement witness publication and deposit-root publication are not exercised by this gate revision. Cluster and image qualification remain unrun."
 severity = "note"
 
-[observation.6.1.44]
+[observation.6.1.55]
 task = "6.1"
 file = "src/state/lxp_state_root.c human/crates/layerx-paxeer-client/src/exit.rs human/crates/layerx-paxeer-client/src/withdraw.rs docs/wiki/SettlementEvidence.md"
 symbol = "leaf_set lxp_state_root balance_leaf verify_balance_proof CheckpointProof::encode_publication"
@@ -5345,7 +5349,7 @@ observed = "Native replay commits module-keyed composite state with LXP/v1/state
 assumption = "A protocol-authorized proof representation or separate committed settlement root must be supplied by the state and settlement verifier owners. Native roots, claim verifiers and publication assertions remain intact. Publishing empty vectors for existing balances or synthetic checkpoint roots would not satisfy replay-derived settlement evidence. Settlement publication and its extended consumer-fetch integration remain unimplemented."
 severity = "blocker"
 
-[observation.6.1.45]
+[observation.6.1.56]
 task = "6.1"
 file = "platform/hosted/node/checkpoint-authority.py platform/hosted/node/guarantor.sh platform/hosted/tests/beta-cluster.sh platform/hosted/node/tests/guarantor-provision.sh"
 symbol = "public_key wait_for_node_genesis"
@@ -5353,7 +5357,7 @@ observed = "The provisioning path generates or reuses one Ed25519 key in the sha
 assumption = "Secret application and Human movement-policy consumption require cluster qualification, unavailable on this host. The private key remains only in its persistent 0600 file; it is not exported as a Secret. The authority path is provisioned but producer settlement publication remains blocked by observation 6.1.44."
 severity = "note"
 
-[observation.6.1.46]
+[observation.6.1.57]
 task = "6.1"
 file = "Makefile platform/hosted/tests/topology-check.sh tests/daemon/guarantor-integration.py"
 symbol = "test-daemon-guarantor test-daemon-guarantor-sanitize platform-hosted-topology-check"
