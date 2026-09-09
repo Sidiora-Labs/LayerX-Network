@@ -104,6 +104,23 @@ lxp_result lxp_ledger_bootstrap_balance(lx_account *account,
     return LXP_OK;
 }
 
+lxp_result lxp_ledger_apply_bridge_credit(lx_account *reserve,
+                                           const uint8_t asset_id[32],
+                                           lxp_u128 amount)
+{
+    lxp_u128 next_balance;
+    lxp_result status;
+    if (reserve == NULL || asset_id == NULL) return LXP_ERR_NON_CANONICAL;
+    if (reserve->kind != LX_ACCOUNT_SYSTEM_PAXEER_RESERVE || reserve->frozen ||
+        !reserve->has_asset || memcmp(reserve->asset_id, asset_id, 32U) != 0 ||
+        reserve->next_sequence == UINT64_MAX)
+        return LXP_ERR_UNAUTHORIZED_DEBIT;
+    status = lxp_u128_add(reserve->balance, amount, &next_balance);
+    if (status != LXP_OK) return status;
+    reserve->balance = next_balance;
+    return LXP_OK;
+}
+
 lxp_result lxp_ledger_restore_account_snapshot(lx_account *account,
                                                lxp_u128 balance,
                                                const uint8_t asset_id[32],

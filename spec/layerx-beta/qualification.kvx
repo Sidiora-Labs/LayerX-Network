@@ -5205,3 +5205,18 @@ symbol = "main test-guarantor-bond test-wave-12"
 observed = "make test-wave-12 exits 2 because build/tests/test_guarantor_bond exits 1; reproduced after the Programs runtime build completes. Logs: qual-logs/nat2/wave12.log and qual-logs/nat2/wave12-final.log with sibling exit files. make test-guarantor test-da-retrieval test-da-unavailable exits 0, including both real Programs runtime links and every withheld DA class. make -j16 and make test exit 0. Logs: qual-logs/nat2/focused.log, build.log and test.log with sibling exit files."
 assumption = "The bond fixture or its native implementation requires separate diagnosis and repair in its owning scope. The historical link and canonical DA fixture fixes are present in the checkout. DA refusal predicates and exit codes remain unchanged; assertion reporting identifies individual failures. Image and cluster gates were not run."
 severity = "blocker"
+[observation.6.11.127]
+task = "6.11"
+file = "tests/modules/test_asset_deposit.c src/modules/asset/lx_asset_custody.c Makefile"
+symbol = "test-asset-deposit"
+observed = "make test-asset-balance test-asset-deposit test-asset-withdraw exits 2 because build/tests/test_asset_deposit exits 1 without an assertion diagnostic. Relinking the same test against the original src/protocol/lxp_module_ctx.c from 97444fe2a9849672715ca1dc559dcd19ccac7a8e also exits 1. The balance and withdrawal targets pass separately. Evidence: qual-logs/nat3/asset-regressions.log, deposit-baseline-build.log, deposit-baseline.log, asset-balance-withdraw.log and gates.tsv."
+assumption = "The existing deposit-test failure requires separate asset-custody diagnosis. The ledger ownership change and the original module-context implementation produce the same failure; existing assertions remain unchanged."
+severity = "blocker"
+
+[observation.6.11.128]
+task = "6.11"
+file = "src/ledger/lxp_apply.c src/protocol/lxp_module_ctx.c include/layerx/lxp_transfer.h tests/bridge/sole_writer.sh tests/bridge/test_credit.c tests/bridge/qualify_credit.py tests/modules/test_asset_transfer.c"
+symbol = "lxp_ledger_apply_bridge_credit lxp_ctx_bridge_credit"
+observed = "The bridge reserve top-up now invokes ledger apply after the existing authorization, supply preflight and rollback snapshot. make -j16, make test-asset-transfer, make test and make beta-ledger-check exit 0. The unchanged sole-writer check passes. BRIDGE_PYTHON=qual-logs/nat3/venv/bin/python3 bash tests/bridge/sole_writer.sh exits 0: a real custody deposit on isolated chain 31337 produces byte-identical canonical account state diffs (397 bytes) and unsigned receipt encodings (1006 bytes) through original and updated module contexts, with real signature verification, rollback stages, replay refusal and nine custody evidence tests passing. Evidence: qual-logs/nat3/build.log, asset-transfer.log, test.log, beta-ledger.log, bridge-differential-venv.log and gates.tsv."
+assumption = "The initial bridge comparison exited 1 because system Python lacked Crypto; the isolated virtual environment satisfies tests/bridge/requirements.txt. Codify inspection could not run because cg is unavailable. Cluster and image gates were not run. Task statuses are unchanged."
+severity = "note"
