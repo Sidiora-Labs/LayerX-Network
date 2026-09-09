@@ -1,7 +1,9 @@
-use layerx_programs_runtime::test_support::{import_section, module, type_section, TYPE_I32, TYPE_I64};
+use layerx_programs_runtime::test_support::{
+    import_section, module, type_section, TYPE_I32, TYPE_I64,
+};
 use layerx_programs_runtime::{
-    HostFunction, ValidationRefusal, WasmEngine, ABI_MODULE, ABI_V2_HOST_FUNCTIONS,
-    ABI_V2_MODULE, HOST_FUNCTIONS,
+    HostFunction, ValidationRefusal, WasmEngine, ABI_MODULE, ABI_V2_HOST_FUNCTIONS, ABI_V2_MODULE,
+    HOST_FUNCTIONS,
 };
 
 fn value_types(signature: &str) -> (Vec<u8>, Vec<u8>) {
@@ -74,7 +76,11 @@ fn wrong_signatures_duplicates_and_extra_imports_are_rejected() {
     let engine = WasmEngine::declared().unwrap_or_else(|error| panic!("engine: {error}"));
     let function = ABI_V2_HOST_FUNCTIONS[0];
     let (parameters, results) = value_types(function.signature);
-    let wrong_result = if results == [TYPE_I32] { TYPE_I64 } else { TYPE_I32 };
+    let wrong_result = if results == [TYPE_I32] {
+        TYPE_I64
+    } else {
+        TYPE_I32
+    };
     let wrong = module(&[
         type_section(&[(&parameters, &[wrong_result])]),
         import_section(&[(ABI_V2_MODULE, function.name, 0)]),
