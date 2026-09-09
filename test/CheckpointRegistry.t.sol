@@ -907,6 +907,89 @@ contract CheckpointRegistryTest {
         );
     }
 
+    function _registerOrdered(CanonicalCheckpoint.HeaderCommitments memory header) private returns (bytes32 digest) {
+        digest = registry.checkpointHash(header, "");
+        registry.registerCheckpoint(header, "", _attestations(header, digest, 2));
+    }
+
+    function _nextHeader(CanonicalCheckpoint.HeaderCommitments memory previous)
+        private
+        pure
+        returns (CanonicalCheckpoint.HeaderCommitments memory header)
+    {
+        header = previous;
+        header.batchNumber += 1;
+        header.firstSequence = previous.lastSequence + 1;
+        header.lastSequence = header.firstSequence;
+        header.previousStateRoot = previous.resultingStateRoot;
+        header.resultingStateRoot = keccak256(abi.encode(previous.resultingStateRoot, header.batchNumber));
+        header.timestamp += 1;
+    }
+
+    function testEqualEpochConsecutiveBatchesRegisterAndPreserveAncestry() public {
+        CanonicalCheckpoint.HeaderCommitments memory header = _header();
+        bytes32 first = _registerOrdered(header);
+        header = _nextHeader(header);
+        bytes32 second = _registerOrdered(header);
+        require(registry.CHECKPOINT_ORDER_VERSION() == 2, "ordering version");
+        require(registry.finalisedEpoch() == 1 && registry.finalisedBatchNumber() == 2, "equal epoch progression");
+        require(registry.isRecordedAncestor(first, second), "consecutive ancestry");
+    }
+
+    function _refuseOrdered(CanonicalCheckpoint.HeaderCommitments memory header) private {
+        bytes32 digest = registry.checkpointHash(header, "");
+        CanonicalCheckpoint.GuarantorAttestation[] memory attestations = _attestations(header, digest, 2);
+        vm.expectRevert(CheckpointRegistry.InvalidHeader.selector);
+        registry.registerCheckpoint(header, "", attestations);
+    }
+
+    function testEpochRegressionRefusedWithConsecutiveSequence() public {
+        CanonicalCheckpoint.HeaderCommitments memory header = _header();
+        header.epoch = 2;
+        _registerOrdered(header);
+        header = _nextHeader(header);
+        header.epoch = 1;
+        _refuseOrdered(header);
+        require(registry.finalisedEpoch() == 2 && registry.finalisedBatchNumber() == 1, "regression mutated state");
+    }
+
+    function testCheckpointSequenceGapRefusedAtEqualAndHigherEpoch() public {
+        CanonicalCheckpoint.HeaderCommitments memory header = _header();
+        _registerOrdered(header);
+        header = _nextHeader(header);
+        header.batchNumber += 1;
+        _refuseOrdered(header);
+        header.epoch += 1;
+        _refuseOrdered(header);
+        require(registry.finalisedBatchNumber() == 1, "gap mutated state");
+    }
+
+    function testEqualEpochReplayAndRepeatedActivityRangeRefused() public {
+        CanonicalCheckpoint.HeaderCommitments memory header = _header();
+        _registerOrdered(header);
+        _refuseOrdered(header);
+        header = _nextHeader(header);
+        _registerOrdered(header);
+        _refuseOrdered(header);
+        header.batchNumber += 1;
+        header.timestamp += 1;
+        header.previousStateRoot = header.resultingStateRoot;
+        _refuseOrdered(header);
+        require(registry.finalisedBatchNumber() == 2, "replay mutated state");
+    }
+
+    function testZeroEpochAndActivitySequenceGapRefused() public {
+        CanonicalCheckpoint.HeaderCommitments memory header = _header();
+        header.epoch = 0;
+        _refuseOrdered(header);
+        header.epoch = 1;
+        _registerOrdered(header);
+        header = _nextHeader(header);
+        header.firstSequence += 1;
+        header.lastSequence = header.firstSequence;
+        _refuseOrdered(header);
+    }
+
     function _header() private pure returns (CanonicalCheckpoint.HeaderCommitments memory header) {
         header = CanonicalCheckpoint.HeaderCommitments({
             protocolVersion: 2,
