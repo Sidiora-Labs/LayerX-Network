@@ -290,6 +290,9 @@ lxp_result lx_account_open(lx_account_registry *registry,
                            uint64_t global_sequence,
                            lx_account_open_authority authority,
                            lxp_log *activity_log, lx_account **account);
+enum { LX_ASSET_ISSUANCE_NAME_BYTES = 83 };
+lxp_result lx_asset_issuance_name(const uint8_t asset_id[32],
+    uint8_t name[LX_ASSET_ISSUANCE_NAME_BYTES], uint8_t account_id[32]);
 lxp_result lx_account_module_value_prepare(
     lx_account_registry *registry, const uint8_t *module_name,
     size_t module_name_length, const uint8_t account_id[LX_ACCOUNT_ID_BYTES],

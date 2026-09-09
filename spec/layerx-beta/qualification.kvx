@@ -5420,3 +5420,11 @@ symbol = "activity_type"
 observed = "The obsolete byte-pair catalogue is retired as a native wire authority. Native types use (module << 16) | ordinal; SEND is 0x00010005. The Asset table identifies native register, account_open, receive, grant_issue, grant_revoke, mint and burn, preserves reserved ordinal 9, and excludes authenticated pause/unpause execution."
 assumption = "The retained non-Asset sketches are explicitly historical and do not redefine the native module registry or envelope."
 severity = "note"
+
+[observation.3.7.50]
+task = "3.7"
+file = "src/ledger/lx_account_id.c src/modules/asset/lx_asset_execution.h src/protocol/lxp_module_ctx.c cmd/layerxd/lxp_daemon_process.c"
+symbol = "lx_asset_issuance_name"
+observed = "New issuance staging, lookup, commit validation, supply summation and reconstruction share module:asset:value:<hex64 account_id>. The account id retains the prior LX:ACCOUNT:v1 seed derivation; the former asset:<hex>:issuance name is no longer accepted by the general account parser. Account-name roots change even though account ids remain stable."
+assumption = "Existing snapshots with the retired account name require an explicit operator migration and a newly authorized root; rewriting a name in an already signed snapshot is invalid."
+severity = "note"

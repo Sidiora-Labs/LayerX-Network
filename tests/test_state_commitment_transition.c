@@ -910,6 +910,17 @@ static int pay1_issuance(uint8_t final_root[32])
     REQUIRE(pay1_submit(f, 1U, length, LXP_OK) == 0);
     REQUIRE(f->accounts.count == 3U);
     REQUIRE(f->accounts.accounts[2].balance.lo == 100U);
+    {
+        uint8_t name[LX_ASSET_ISSUANCE_NAME_BYTES];
+        uint8_t issuance_id[32];
+        uint8_t parsed_id[32];
+        REQUIRE(lx_asset_issuance_name(id, name, issuance_id) == LXP_OK);
+        REQUIRE(lx_account_id_from_string(name, sizeof(name), parsed_id) == LXP_OK);
+        REQUIRE(memcmp(parsed_id, issuance_id, 32U) == 0);
+        REQUIRE(f->accounts.accounts[2].name_length == sizeof(name));
+        REQUIRE(memcmp(f->accounts.accounts[2].name, name, sizeof(name)) == 0);
+        REQUIRE(memcmp(f->accounts.accounts[2].id, issuance_id, 32U) == 0);
+    }
     REQUIRE(f->kernel.module_kv_count == 1U);
     REQUIRE(lx_asset_record_decode(f->kernel.module_kv[0].value,
         f->kernel.module_kv[0].value_length, &record) == LXP_OK);

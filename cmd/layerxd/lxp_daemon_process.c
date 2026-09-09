@@ -460,8 +460,13 @@ static lxp_result collect_assets(lxp_daemon_process *process)
             for (size_t i = 0U; i < process->accounts.count; ++i) {
                 const lx_account *account = &process->accounts.accounts[i];
                 if (!account->has_asset || memcmp(account->asset_id, record.asset_id, 32U) != 0) continue;
-                if (account->kind == LX_ACCOUNT_MODULE_VALUE && account->name_length == 79U &&
-                    memcmp(account->name, "asset:", 6U) == 0) {
+                uint8_t issuance_name[LX_ASSET_ISSUANCE_NAME_BYTES], issuance_id[32];
+                if (lx_asset_issuance_name(record.asset_id, issuance_name, issuance_id) != LXP_OK)
+                    return LXP_FATAL_SUPPLY_MISMATCH;
+                if (account->kind == LX_ACCOUNT_MODULE_VALUE && memcmp(account->id, issuance_id, 32U) == 0) {
+                    if (account->name_length != sizeof(issuance_name) ||
+                        memcmp(account->name, issuance_name, sizeof(issuance_name)) != 0)
+                        return LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE;
                     if (lx_account_validate_canonical(account) != LXP_OK ||
                         lxp_u128_sub(initial, account->balance, &issued) != LXP_OK ||
                         lxp_u128_cmp(issued, record.total_units) != 0)
