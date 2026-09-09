@@ -20,6 +20,7 @@ static bool dump_executed_v4;
 static bool dump_principal_v4;
 static bool dump_mutated_leg_v4;
 static bool post_upgrade_batch_regression;
+static bool per_asset_call;
 static const uint8_t executed_sequencer_seed[32] = {0x45U};
 static int lifecycle_vector_signature(lxp_activity *activity,
                                       uint8_t public_key[32], uint8_t signature[64]);
@@ -951,7 +952,7 @@ static lxp_result execute_artifact_fixture_activity(
     size_t mark = lxp_arena_mark(execution->arena);
     lxp_result reset_status;
     lxp_result status;
-    if (dump_executed_v3) {
+    if (activity->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT) {
         signed_activity = *activity;
         signed_activity.signature = (lxp_byte_span){signature, sizeof(signature)};
         if (lifecycle_vector_signature(&signed_activity, public_key, signature) != 0)
@@ -1256,7 +1257,10 @@ static int deploy_and_upgrade_artifacts_case(uint16_t protocol_version,
     static const uint8_t success_entry[] = {0x41U, 0U, 0x0bU};
     static const uint8_t upgraded_entry[] = {0x41U, 7U, 0x0bU};
     static const uint8_t did[] = "did:lxp:program-call";
-    static const uint8_t actor_name[] = "agent:program-call:main";
+    const uint8_t *actor_name = (const uint8_t *)(per_asset_call ?
+        "agent:did:lxp:program-call:asset:0900000000000000000000000000000000000000000000000000000000000000" :
+        "agent:did:lxp:program-call:main");
+    const size_t actor_name_length = strlen((const char *)actor_name);
     static const uint8_t treasury_name[] = "system:fees";
     uint8_t program_id[32];
     uint8_t primary_key[32] = {1U};
@@ -1332,17 +1336,17 @@ static int deploy_and_upgrade_artifacts_case(uint16_t protocol_version,
     uint8_t original_root[32];
     uint8_t restored_root[32];
     (void)memset(program_id, 0x31, sizeof(program_id));
-    if (dump_executed_v3 || post_upgrade_batch_regression) {
+    if (composite || dump_executed_v3 || post_upgrade_batch_regression) {
         static const uint8_t actor_seed[32] = {0x33U};
         if (executed_public_key(actor_seed, primary_key) != 0) return 1;
     }
     (void)memset(&authority, 0, sizeof(authority));
     if (lx_account_registry_init(&accounts) != LXP_OK ||
-        lx_account_id_from_string(actor_name, sizeof(actor_name) - 1U,
+        lx_account_id_from_string(actor_name, actor_name_length,
                                   actor_id) != LXP_OK ||
         lx_account_id_from_string(treasury_name, sizeof(treasury_name) - 1U,
                                   treasury_id) != LXP_OK ||
-        lx_account_open(&accounts, actor_name, sizeof(actor_name) - 1U,
+        lx_account_open(&accounts, actor_name, actor_name_length,
                         actor_id, 1U, LX_ACCOUNT_OPEN_GENESIS, NULL, &actor) != LXP_OK ||
         lx_account_open(&accounts, treasury_name, sizeof(treasury_name) - 1U,
                         treasury_id, 2U, LX_ACCOUNT_OPEN_GENESIS, NULL,
@@ -1352,9 +1356,12 @@ static int deploy_and_upgrade_artifacts_case(uint16_t protocol_version,
         lxp_ledger_bootstrap_balance(treasury, fee_asset,
                                      (lxp_u128){0U, 0U}, 0U) != LXP_OK)
         return artifact_fixture_failure(protocol_version, __LINE__);
-    (void)memcpy(authority.principal, actor_id, sizeof(actor_id));
+    if (composite) {
+        if (lxp_did_id_derive(did, sizeof(did) - 1U, authority.principal) != LXP_OK)
+            return 1;
+    } else (void)memcpy(authority.principal, actor_id, sizeof(actor_id));
     if (separate_counters) {
-        static const uint8_t recipient_name[] = "agent:counter-recipient:main";
+        static const uint8_t recipient_name[] = "agent:did:lxp:counter-recipient:main";
         if (lx_account_id_from_string(recipient_name, sizeof(recipient_name) - 1U,
                                       counter_recipient_id) != LXP_OK ||
             lx_account_open(&accounts, recipient_name, sizeof(recipient_name) - 1U,
@@ -1412,7 +1419,7 @@ static int deploy_and_upgrade_artifacts_case(uint16_t protocol_version,
          lxp_state_root(&kernel, kernel.current_state_root) != LXP_OK))
         return artifact_fixture_failure(protocol_version, __LINE__);
     (void)memset(&execution, 0, sizeof(execution));
-    if (dump_executed_v3 || post_upgrade_batch_regression) {
+    if (composite || dump_executed_v3 || post_upgrade_batch_regression) {
         const uint8_t grant_id[32] = {0};
         executed_scope.module_mask = UINT64_C(1) << LXP_MODULE_PROGRAMS;
         executed_scope.activity_ordinal_min = 1U;
@@ -1520,6 +1527,37 @@ static int deploy_and_upgrade_artifacts_case(uint16_t protocol_version,
         execution.fee_balance = actor->balance;
         execution.global_sequence = 3U;
         ledger_before = actor->next_sequence;
+        if (composite) {
+            lxp_u128 unchanged_actor = actor->balance;
+            lxp_u128 unchanged_treasury = treasury->balance;
+            uint8_t saved_principal[32], unchanged_root[32];
+            (void)memcpy(saved_principal, authority.principal, 32U);
+            (void)memcpy(unchanged_root, kernel.current_state_root, 32U);
+            (void)memcpy(authority.principal, actor_id, 32U);
+            if (lxp_arena_reset(&arena, 0U) != LXP_OK ||
+                execute_artifact_fixture_activity(&kernel, &activity, &execution, &receipt) !=
+                    LXP_ERR_AUTH_SCOPE)
+                return artifact_fixture_failure(protocol_version, __LINE__);
+            (void)memcpy(authority.principal, saved_principal, 32U);
+            authority.actor[0] ^= 1U;
+            if (lxp_arena_reset(&arena, 0U) != LXP_OK ||
+                execute_artifact_fixture_activity(&kernel, &activity, &execution, &receipt) !=
+                    LXP_ERR_AUTH_SCOPE)
+                return artifact_fixture_failure(protocol_version, __LINE__);
+            authority.actor[0] ^= 1U;
+            activity.account_sequence = ledger_before;
+            if (lxp_arena_reset(&arena, 0U) != LXP_OK ||
+                execute_artifact_fixture_activity(&kernel, &activity, &execution, &receipt) !=
+                    LXP_ERR_SEQUENCE_REUSED)
+                return artifact_fixture_failure(protocol_version, __LINE__);
+            activity.account_sequence = 2U;
+            if (actor->next_sequence != ledger_before || identity->next_sequence != 2U ||
+                state.next_sequence != 3U || counter_recipient->balance.lo != 0U ||
+                lxp_u128_cmp(actor->balance, unchanged_actor) != 0 ||
+                lxp_u128_cmp(treasury->balance, unchanged_treasury) != 0 ||
+                memcmp(kernel.current_state_root, unchanged_root, 32U) != 0)
+                return artifact_fixture_failure(protocol_version, __LINE__);
+        }
         if (lxp_u128_cmp(actor->balance, activity.fee_limit) <= 0 ||
             ledger_before == activity.account_sequence ||
             ledger_before == execution.global_sequence ||
@@ -1688,7 +1726,7 @@ static int deploy_and_upgrade_artifacts_case(uint16_t protocol_version,
                                     &manifest) != LXP_OK ||
         lx_account_registry_init(&restored_accounts) != LXP_OK ||
         lx_account_open(&restored_accounts, actor_name,
-                        sizeof(actor_name) - 1U, actor_id, 1U,
+                        actor_name_length, actor_id, 1U,
                         LX_ACCOUNT_OPEN_GENESIS, NULL,
                         &restored_actor) != LXP_OK ||
         lx_account_open(&restored_accounts, treasury_name,
@@ -2012,7 +2050,7 @@ static int deploy_and_upgrade_persist_exact_artifacts(void)
 static int qualify_porting_reference(const char *path, uint8_t marker)
 {
     static const uint8_t did[] = "did:lxp:porting-v2";
-    static const uint8_t actor_name[] = "agent:porting-v2:main";
+    static const uint8_t actor_name[] = "agent:did:lxp:porting-v2:main";
     static const uint8_t treasury_name[] = "system:fees";
     static uint8_t wasm[LXP_MAX_ACTIVITY_BYTES];
     static uint8_t payload[LXP_MAX_ACTIVITY_BYTES];
@@ -2567,6 +2605,12 @@ int main(int argc, char **argv)
     if ((argc == 1 || (argc == 2 && strcmp(argv[1], "--post-upgrade-batch") == 0)) &&
         stored_historical_receipt("platform/sdk/conformance/fixtures/receipt-programs-executed-v3.json", 3U) != 0)
         return 1;
+    if (argc == 2 && strcmp(argv[1], "--dump-asset-account-v4") == 0) {
+        per_asset_call = true;
+        dump_executed_v3 = true;
+        dump_executed_v4 = true;
+        return deploy_and_upgrade_artifacts_case(LXP_PROTOCOL_VERSION_STATE_COMMITMENT, true);
+    }
     if (argc == 2 && strcmp(argv[1], "--post-upgrade-batch") == 0) {
         if (deploy_and_upgrade_artifacts_case(
                 LXP_PROTOCOL_VERSION_STATE_COMMITMENT, false) != 0) return 1;
@@ -2591,6 +2635,10 @@ int main(int argc, char **argv)
         return dump_lifecycle_vectors();
     if (deploy_and_upgrade_artifacts_case(
             LXP_PROTOCOL_VERSION_STATE_COMMITMENT, true) != 0) return 1;
+    per_asset_call = true;
+    if (deploy_and_upgrade_artifacts_case(
+            LXP_PROTOCOL_VERSION_STATE_COMMITMENT, true) != 0) return 1;
+    per_asset_call = false;
     if (malformed_call_payloads() != 0) return 1;
     if (maximum_capability_transport_only_boundary() != 0) return 1;
     if (call_access_declaration_is_activity_bound() != 0) return 1;
