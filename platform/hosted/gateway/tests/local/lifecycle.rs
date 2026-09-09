@@ -863,7 +863,7 @@ fn rpc_account_sequence(http: &Http, source: &str, index: u64) -> u64 {
 
 #[test]
 fn local_gateway_successful_send_latency() {
-    let (cluster, _funding) = funding::start();
+    let (cluster, funding) = funding::start();
     let certificates = certificates(&cluster.root);
     let boundary = start_boundary(&cluster, &certificates);
     let identity = start_local_identity(&cluster, &certificates);
@@ -900,6 +900,7 @@ fn local_gateway_successful_send_latency() {
         json(&balance)["result"]["balance"]
     );
     let mut samples = Vec::new();
+    let mut last_signed = None;
     for index in 0..20 {
         let account_next = rpc_account_sequence(&http, &source, index);
         let identity_next = account_sequence(&cluster.lni_socket, &cluster.treasury_did);
@@ -909,7 +910,7 @@ fn local_gateway_successful_send_latency() {
             &SendRequest {
                 network_id: NETWORK_ID,
                 source_did: cluster.treasury_did.clone(),
-                destination_did: String::new(),
+                destination_did: funding.recipient_did.clone(),
                 asset: cluster.asset,
                 amount: 1,
                 account_sequence: account_next,
@@ -944,20 +945,80 @@ fn local_gateway_successful_send_latency() {
             result["result"]["activity_id"],
             hex_encode(&signed.activity_id)
         );
-        let receipt = layerx_platform_core::hex_decode(
-            result["result"]["receipt"].as_str().required("receipt"),
-        )
-        .required("receipt hex");
-        let receipt =
-            layerx_proof::receipt::verify_sequencer_signature(&receipt, cluster.sequencer_key)
-                .required("receipt signature");
-        let receipt = receipt.protocol().required("protocol SEND");
-        assert_eq!(receipt.result_code(), 0);
-        assert_eq!(receipt.activity_id(), signed.activity_id);
+        verify_funded_receipt(&result, &cluster, &signed);
         samples.push(elapsed);
+        last_signed = Some(signed);
     }
     samples.sort_unstable();
-    println!("successful_send_submit_to_receipt_us samples=20 p50={} p99={} transport=gateway_https_json_rpc commitment=executed funding=verified_custody destination=system_fees receipt_wait=commit_condition", samples[9], samples[19]);
+    println!("successful_send_submit_to_receipt_us samples=20 p50={} p99={} transport=gateway_https_json_rpc commitment=executed funding=verified_custody destination=funded_agent_main receipt_wait=commit_condition", samples[9], samples[19]);
+    assert_funded_commitments(
+        &http,
+        &authorization,
+        &last_signed.required("successful SEND"),
+    );
+}
+
+fn verify_funded_receipt(
+    result: &serde_json::Value,
+    cluster: &Cluster,
+    signed: &layerx_platform_core::SignedSend,
+) {
+    let receipt =
+        layerx_platform_core::hex_decode(result["result"]["receipt"].as_str().required("receipt"))
+            .required("receipt hex");
+    let receipt =
+        layerx_proof::receipt::verify_sequencer_signature(&receipt, cluster.sequencer_key)
+            .required("receipt signature");
+    let receipt = receipt.protocol().required("protocol SEND");
+    assert_eq!(receipt.result_code(), 0);
+    assert_eq!(receipt.activity_id(), signed.activity_id);
+}
+
+fn assert_funded_commitments(
+    http: &Http,
+    authorization: &str,
+    signed: &layerx_platform_core::SignedSend,
+) {
+    for commitment in ["batched", "finalised"] {
+        let started = Instant::now();
+        let answer = http.request(
+            "POST",
+            "/rpc",
+            &[
+                ("Content-Type", "application/json"),
+                ("Authorization", authorization),
+            ],
+            &serde_json::to_vec(&serde_json::json!({
+                "jsonrpc":"2.0", "id":21, "method":"lx_sendActivity",
+                "params":[hex_encode(&signed.canonical), commitment]
+            }))
+            .required("commitment request"),
+        );
+        assert_eq!(answer.status, 200, "{}", answer.body);
+        let result = json(&answer);
+        assert_eq!(result["result"]["result_code"], 0, "{result}");
+        assert_eq!(
+            result["result"]["activity_id"],
+            hex_encode(&signed.activity_id)
+        );
+        if commitment == "batched" {
+            assert_eq!(result["result"]["commitment"], "batched", "{result}");
+            assert_eq!(
+                result["result"]["batch_evidence"]["canonical_value"],
+                result["result"]["receipt"]
+            );
+        } else {
+            assert_eq!(result["result"]["state"], "pending", "{result}");
+            assert_eq!(result["result"]["commitment"], "executed");
+            assert!(started.elapsed() < Duration::from_secs(10));
+        }
+        println!(
+            "successful_send_commitment requested={commitment} returned={} state={} elapsed_us={}",
+            result["result"]["commitment"],
+            result["result"]["state"],
+            started.elapsed().as_micros()
+        );
+    }
 }
 
 fn ws_connect(

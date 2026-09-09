@@ -2466,6 +2466,7 @@ impl Drop for ConnectionGuard {
 }
 
 fn serve(config: &Arc<Config>, tcp: TcpStream) -> Result<(), String> {
+    tcp.set_nodelay(true).map_err(|error| error.to_string())?;
     tcp.set_read_timeout(Some(Duration::from_secs(10)))
         .map_err(|error| error.to_string())?;
     tcp.set_write_timeout(Some(Duration::from_secs(10)))

@@ -751,6 +751,7 @@ impl RedisStore {
         {
             match TcpStream::connect_timeout(&address, CONNECT_TIMEOUT) {
                 Ok(tcp) => {
+                    tcp.set_nodelay(true).map_err(|error| error.to_string())?;
                     tcp.set_read_timeout(Some(IO_TIMEOUT))
                         .map_err(|error| error.to_string())?;
                     tcp.set_write_timeout(Some(IO_TIMEOUT))
@@ -1027,14 +1028,16 @@ fn digest(parts: &[&[u8]]) -> String {
 }
 
 fn write_command(stream: &mut impl Write, arguments: &[&str]) -> Result<(), String> {
-    write!(stream, "*{}\r\n", arguments.len()).map_err(|error| error.to_string())?;
+    let mut command = Zeroizing::new(Vec::new());
+    write!(command, "*{}\r\n", arguments.len()).map_err(|error| error.to_string())?;
     for argument in arguments {
-        write!(stream, "${}\r\n", argument.len()).map_err(|error| error.to_string())?;
-        stream
-            .write_all(argument.as_bytes())
-            .map_err(|e| e.to_string())?;
-        stream.write_all(b"\r\n").map_err(|e| e.to_string())?;
+        write!(command, "${}\r\n", argument.len()).map_err(|error| error.to_string())?;
+        command.extend_from_slice(argument.as_bytes());
+        command.extend_from_slice(b"\r\n");
     }
+    stream
+        .write_all(&command)
+        .map_err(|error| error.to_string())?;
     stream.flush().map_err(|error| error.to_string())
 }
 

@@ -2073,11 +2073,17 @@ static bool server_stopping(lxp_daemon_lni_server *server);
 
 static pthread_mutex_t receipt_commit_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t receipt_commit_changed = PTHREAD_COND_INITIALIZER;
+static uint64_t receipt_commit_generation;
 
 lxp_result lxp_daemon_lni_receipts_committed(void)
 {
     int result;
     if (pthread_mutex_lock(&receipt_commit_mutex) != 0) return LXP_ERR_IO;
+    if (receipt_commit_generation == UINT64_MAX) {
+        (void)pthread_mutex_unlock(&receipt_commit_mutex);
+        return LXP_FATAL_INVARIANT;
+    }
+    ++receipt_commit_generation;
     result = pthread_cond_broadcast(&receipt_commit_changed);
     if (pthread_mutex_unlock(&receipt_commit_mutex) != 0)
         return LXP_FATAL_INVARIANT;
@@ -2143,21 +2149,41 @@ static lxp_result send_receipt(lxp_daemon_lni_server *server, int descriptor,
     }
     for (;;) {
         int waited;
+        uint64_t generation = receipt_commit_generation;
+        if (pthread_mutex_unlock(&receipt_commit_mutex) != 0) {
+            free(storage);
+            return LXP_FATAL_INVARIANT;
+        }
         if (pthread_mutex_lock(&server->owner->receipt_mutex) != 0) {
-            status = LXP_ERR_IO;
-            break;
+            free(storage);
+            return LXP_ERR_IO;
         }
         published_log = server->owner->published_receipt_log;
         if (pthread_mutex_unlock(&server->owner->receipt_mutex) != 0) {
-            status = LXP_FATAL_INVARIANT;
-            break;
+            free(storage);
+            return LXP_FATAL_INVARIANT;
         }
         history.log = &published_log;
         status = lxp_arena_init(&arena, storage, query.maximum_response_bytes);
         if (status == LXP_OK)
             status = lxp_receipt_lookup(&history, &query, &arena, &receipt);
+        if (pthread_mutex_lock(&receipt_commit_mutex) != 0) {
+            free(storage);
+            return LXP_ERR_IO;
+        }
         if (status != LXP_ERR_UNKNOWN_ACTIVITY || wait_ms == 0U ||
             server_stopping(server)) break;
+        if (generation != receipt_commit_generation) {
+            struct timespec now;
+            if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
+                status = LXP_ERR_IO;
+                break;
+            }
+            if (now.tv_sec > expires.tv_sec ||
+                (now.tv_sec == expires.tv_sec && now.tv_nsec >= expires.tv_nsec))
+                wait_ms = 0U;
+            continue;
+        }
         waited = pthread_cond_clockwait(&receipt_commit_changed,
                                        &receipt_commit_mutex,
                                        CLOCK_MONOTONIC, &expires);

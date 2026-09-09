@@ -15,6 +15,7 @@ use layerx_wire::hash::Domain;
 pub(super) struct Funding {
     nodes: Vec<Daemon>,
     root: PathBuf,
+    pub(super) recipient_did: String,
 }
 
 impl Drop for Funding {
@@ -88,14 +89,16 @@ pub(super) fn start() -> (Cluster, Funding) {
     let root =
         std::env::temp_dir().join(format!("pay4-funding-{}-{}", std::process::id(), now_ms()));
     make_dir(&root, 0o700);
+    let recipient_seed = random32();
+    let recipient_did = treasury_did(&recipient_seed);
     let mut funding = Funding {
         nodes: Vec::new(),
         root,
+        recipient_did: recipient_did.clone(),
     };
     let seed = random32();
     let did = treasury_did(&seed);
     let account = must(main_account(&did), "funding account");
-    let key = SigningKey::from_bytes(&seed).verifying_key().to_bytes();
     let primary = funding.anvil(None);
     let asset = format!("0x{}", hex_encode(&random32()));
     let beneficiary = format!("0x{}", hex_encode(&account));
@@ -125,19 +128,76 @@ pub(super) fn start() -> (Cluster, Funding) {
         "deployment JSON",
     );
     assert_eq!(deployment["chain_id"], 31337);
+    let recipient_deployment = deposit_recipient(&funding, &primary, &recipient_did);
     let secondary = funding.anvil(Some((
         &primary,
-        deployment["fork_block"].as_u64().required("fork block"),
+        recipient_deployment["fork_block"]
+            .as_u64()
+            .required("fork block"),
     )));
     let profile = funding.root.join("profile.bin");
+    custody_profile(
+        [&primary, &secondary],
+        [&profile, &attestor_key],
+        &deployment,
+        &asset,
+    );
+    let credit = funding.root.join("credit.bin");
+    attest_credit(
+        [&primary, &secondary],
+        [&profile, &attestor_key, &credit],
+        &seed,
+        &did,
+        deployment["transaction"].as_str().required("transaction"),
+        "100000000000000",
+    );
+    let cluster = credit_node(
+        &funding,
+        &profile,
+        &credit,
+        &actor_key,
+        seed,
+        &did,
+        &recipient_seed,
+    );
+    let recipient_credit = funding.root.join("recipient-credit.bin");
+    attest_credit(
+        [&primary, &secondary],
+        [&profile, &attestor_key, &recipient_credit],
+        &recipient_seed,
+        &recipient_did,
+        recipient_deployment["transaction"]
+            .as_str()
+            .required("recipient transaction"),
+        "1",
+    );
+    credit_recipient(
+        &funding,
+        &cluster,
+        &profile,
+        &recipient_credit,
+        &recipient_seed,
+        &recipient_did,
+    );
+    (cluster, funding)
+}
+
+fn custody_profile(
+    rpcs: [&str; 2],
+    paths: [&Path; 2],
+    deployment: &serde_json::Value,
+    asset: &str,
+) {
+    let [primary, secondary] = rpcs;
+    let [profile, attestor_key] = paths;
     producer(
         "custody_credit.py",
         &[
             "profile",
             "--rpc",
-            &primary,
+            primary,
             "--rpc",
-            &secondary,
+            secondary,
             "--network-id",
             &NETWORK_ID.to_string(),
             "--chain-id",
@@ -147,44 +207,115 @@ pub(super) fn start() -> (Cluster, Funding) {
             "--runtime-sha256",
             deployment["runtime_sha256"].as_str().required("runtime"),
             "--asset",
-            &asset,
+            asset,
             "--confirmations",
             "64",
             "--attestor-key",
-            &text(&attestor_key),
+            &text(attestor_key),
             "--output",
-            &text(&profile),
+            &text(profile),
         ],
     );
-    let credit = funding.root.join("credit.bin");
+}
+
+fn deposit_recipient(funding: &Funding, primary: &str, recipient_did: &str) -> serde_json::Value {
+    let recipient_deployment = funding.root.join("recipient-deployment.json");
+    let output = Command::new("python3")
+        .arg(repository_root().join("platform/hosted/gateway/tests/local/deposit_recipient.py"))
+        .args([
+            primary,
+            &text(&funding.root.join("deployment.json")),
+            &format!(
+                "0x{}",
+                hex_encode(&main_account(recipient_did).required("recipient account"))
+            ),
+            &text(&recipient_deployment),
+        ])
+        .output()
+        .required("recipient custody deposit");
+    assert!(
+        output.status.success(),
+        "recipient deposit: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let recipient_deployment: serde_json::Value =
+        serde_json::from_slice(&fs::read(&recipient_deployment).required("recipient deployment"))
+            .required("recipient JSON");
+    recipient_deployment
+}
+
+fn attest_credit(
+    rpcs: [&str; 2],
+    paths: [&Path; 3],
+    seed: &[u8; 32],
+    did: &str,
+    transaction: &str,
+    amount: &str,
+) {
+    let [primary, secondary] = rpcs;
+    let [profile, attestor_key, output] = paths;
     producer(
         "custody_credit.py",
         &[
             "attest",
             "--rpc",
-            &primary,
+            primary,
             "--rpc",
-            &secondary,
+            secondary,
             "--profile",
-            &text(&profile),
+            &text(profile),
             "--network-id",
             &NETWORK_ID.to_string(),
             "--transaction",
-            deployment["transaction"].as_str().required("transaction"),
+            transaction,
             "--beneficiary",
-            &beneficiary,
+            &format!(
+                "0x{}",
+                hex_encode(&main_account(did).required("beneficiary"))
+            ),
             "--beneficiary-key",
-            &format!("0x{}", hex_encode(&key)),
+            &format!(
+                "0x{}",
+                hex_encode(&SigningKey::from_bytes(seed).verifying_key().to_bytes())
+            ),
             "--expected-amount",
-            "100000000000000",
+            amount,
             "--attestor-key",
-            &text(&attestor_key),
+            &text(attestor_key),
             "--output",
-            &text(&credit),
+            &text(output),
         ],
     );
-    let cluster = credit_node(&funding, &profile, &credit, &actor_key, seed, &did);
-    (cluster, funding)
+}
+
+fn credit_recipient(
+    funding: &Funding,
+    cluster: &Cluster,
+    profile: &Path,
+    recipient_credit: &Path,
+    recipient_seed: &[u8; 32],
+    recipient_did: &str,
+) {
+    let recipient_key = funding.root.join("recipient.key");
+    write(&recipient_key, recipient_seed, 0o600);
+    let signed = funding.root.join("signed-recipient-credit.bin");
+    command(
+        &text(&repository_root().join("build/tests/bridge/sign-credit")),
+        &[
+            &text(profile),
+            &text(recipient_credit),
+            recipient_did,
+            &text(&recipient_key),
+            &account_sequence(&cluster.lni_socket, recipient_did).to_string(),
+            &now_ms().saturating_sub(1000).to_string(),
+            &text(&signed),
+        ],
+    );
+    submit_credit(
+        cluster,
+        &fs::read(&signed).required("recipient credit"),
+        recipient_seed,
+    );
 }
 
 fn credit_node(
@@ -194,8 +325,9 @@ fn credit_node(
     actor_key: &Path,
     seed: [u8; 32],
     did: &str,
+    recipient_seed: &[u8; 32],
 ) -> Cluster {
-    let cluster = start_node(profile, seed);
+    let cluster = start_node(profile, seed, recipient_seed);
     let signed = funding.root.join("signed-credit.bin");
     command(
         &text(&repository_root().join("build/tests/bridge/sign-credit")),
@@ -209,11 +341,15 @@ fn credit_node(
             &text(&signed),
         ],
     );
-    submit_credit(&cluster, &must(fs::read(&signed), "signed custody credit"));
+    submit_credit(
+        &cluster,
+        &must(fs::read(&signed), "signed custody credit"),
+        &seed,
+    );
     cluster
 }
 
-fn submit_credit(cluster: &Cluster, signed: &[u8]) {
+fn submit_credit(cluster: &Cluster, signed: &[u8], seed: &[u8; 32]) {
     use layerx_client::submit::{submit_signed, Submission, SubmissionContext};
     let gate = ConnectionGate::new(1);
     let mut transport = must(
@@ -241,9 +377,7 @@ fn submit_credit(cluster: &Cluster, signed: &[u8]) {
                 protocol_version: PROTOCOL_VERSION,
                 network_id: NETWORK_ID,
                 correlation_id: 1,
-                signer_public_key: SigningKey::from_bytes(&cluster.treasury_seed)
-                    .verifying_key()
-                    .to_bytes(),
+                signer_public_key: SigningKey::from_bytes(seed).verifying_key().to_bytes(),
                 attempt: 1,
             },
             signed,
@@ -325,7 +459,7 @@ fn funded_genesis(
     }
 }
 
-fn start_node(profile: &Path, treasury_seed: [u8; 32]) -> Cluster {
+fn start_node(profile: &Path, treasury_seed: [u8; 32], recipient_seed: &[u8; 32]) -> Cluster {
     assert_eq!(
         effective_uid(),
         0,
@@ -360,6 +494,22 @@ fn start_node(profile: &Path, treasury_seed: [u8; 32]) -> Cluster {
     );
     let (node_dir, checkpoints, logs, run_dir) =
         node_storage(&root, &genesis, &treasury_did, &treasury_key);
+    let identities = node_dir.join("identities.txt");
+    let mut configured = fs::read(&identities).required("bootstrap identities");
+    configured.extend_from_slice(
+        format!(
+            "{}:{}:0\n",
+            hex_encode(layerx_platform_core::treasury_did(recipient_seed).as_bytes()),
+            hex_encode(
+                &SigningKey::from_bytes(recipient_seed)
+                    .verifying_key()
+                    .to_bytes()
+            )
+        )
+        .as_bytes(),
+    );
+    write(&identities, &configured, 0o600);
+    chown_tree(&node_dir, DAEMON_UID, DAEMON_GID);
     let lni_socket = run_dir.join("layerxd.lni.sock");
     let node_env = node_environment(
         [&node_dir, &checkpoints, &logs, &migrations, &lni_socket],
@@ -410,7 +560,8 @@ pub(super) fn send(
     let signing_key = SigningKey::from_bytes(seed);
     let public_key = signing_key.verifying_key().to_bytes();
     let source = main_account(&request.source_did)?;
-    let target = AccountId::parse("system:fees").map_err(|e| format!("account: {e:?}"))?;
+    let target = AccountId::parse(&format!("agent:{}:main", request.destination_did))
+        .map_err(|e| format!("account: {e:?}"))?;
     let destination = layerx_wire::hash::account_id_for_protocol(&target, PROTOCOL_VERSION)
         .map_err(|e| format!("account id: {e:?}"))?;
     let context = send_context_hash(
@@ -476,7 +627,7 @@ pub(super) fn send(
     let unsigned_bytes = layerx_wire::activity::encode_unsigned_envelope(&unsigned)
         .map_err(|error| format!("send signing bytes are invalid: {error:?}"))?;
     let digest = domain_hash(Domain::SignaturePreimage, &unsigned_bytes);
-    let signature = signing_key.sign(&digest).to_bytes();
+    let signature = disclosed_signature(seed, &unsigned_bytes, &registry)?;
     layerx_crypto::ed25519::verify_digest(&public_key, &signature, &digest)
         .map_err(|error| format!("send signature does not verify: {error:?}"))?;
     let signed = unsigned.attach_signature(
@@ -497,6 +648,26 @@ pub(super) fn send(
         signer_public_key: public_key,
         idempotency_key: request.idempotency_key,
     })
+}
+
+fn disclosed_signature(
+    seed: &[u8; 32],
+    canonical: &[u8],
+    registry: &ModuleRegistry,
+) -> Result<[u8; 64], String> {
+    let disclosure = layerx_crypto::disclosure::bind(canonical, registry)
+        .map_err(|error| format!("send disclosure is invalid: {error:?}"))?;
+    let local_key = layerx_crypto::signer::LocalSigner::new(*seed);
+    let mut future =
+        layerx_crypto::signer::sign_disclosed(&local_key, canonical, &disclosure, registry);
+    let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+    let signature = match std::future::Future::poll(future.as_mut(), &mut context) {
+        std::task::Poll::Ready(result) => *result
+            .map_err(|error| format!("send signer refused: {error:?}"))?
+            .as_bytes(),
+        std::task::Poll::Pending => return Err("local signer unexpectedly pending".into()),
+    };
+    Ok(signature)
 }
 
 fn send_authorization(

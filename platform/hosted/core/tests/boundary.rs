@@ -2711,6 +2711,15 @@ fn authenticated_receipt_wait_returns_on_commit_and_bounds_missing_receipts() {
     thread::scope(|scope| {
         let waiter = scope.spawn(|| receipt_wait_request(&cluster.lni_socket, &selector));
         thread::sleep(Duration::from_millis(100));
+        admit_receipt_wait_send(&cluster, &signed.canonical, signed.activity_id);
+        let concurrent = (0..3)
+            .map(|_| scope.spawn(|| receipt_wait_request(&cluster.lni_socket, &selector)))
+            .collect::<Vec<_>>();
+        let (tag, receipt) = must(waiter.join(), "wait thread");
+        let concurrent = concurrent
+            .into_iter()
+            .map(|reader| must(reader.join(), "concurrent receipt reader"))
+            .collect::<Vec<_>>();
         let submitted = boundary.core.request(
             "POST",
             "/v1/activities",
@@ -2718,12 +2727,53 @@ fn authenticated_receipt_wait_returns_on_commit_and_bounds_missing_receipts() {
             &signed.canonical,
         );
         assert_eq!(submitted.status, 200, "{}", submitted.body);
-        let (tag, receipt) = must(waiter.join(), "wait thread");
         assert_eq!(tag, 6);
         assert_eq!(hex_encode(&receipt), json(&submitted)["result"]["receipt"]);
+        for reader in concurrent {
+            assert_eq!(reader, (6, receipt.clone()));
+        }
         let already = receipt_wait_request(&cluster.lni_socket, &selector);
         assert_eq!(already, (6, receipt));
     });
+}
+
+fn admit_receipt_wait_send(cluster: &Cluster, canonical: &[u8], activity_id: [u8; 32]) {
+    use layerx_client::submit::{submit_signed, Submission, SubmissionContext};
+    let gate = ConnectionGate::new(1);
+    let mut transport = must(
+        Uds::connect(&cluster.lni_socket, &gate, lni_limits()),
+        "wait admission LNI",
+    );
+    let handshake = must(
+        perform(&mut transport, &handshake_config(), None),
+        "wait admission handshake",
+    );
+    let (registry, _) = must(
+        layerx_platform_core::asset_registry(),
+        "wait admission registry",
+    );
+    let submitted = must(
+        submit_signed(
+            &mut transport,
+            &registry,
+            SubmissionContext {
+                interface_version: handshake.node().interface_version,
+                protocol_version: PROTOCOL_VERSION,
+                network_id: NETWORK_ID,
+                correlation_id: 1,
+                signer_public_key: SigningKey::from_bytes(&cluster.treasury_seed)
+                    .verifying_key()
+                    .to_bytes(),
+                attempt: 1,
+            },
+            canonical,
+        ),
+        "wait durable admission",
+    );
+    let Submission::Acknowledged(ack) = submitted else {
+        panic!("wait admission unknown")
+    };
+    assert_eq!(ack.activity_id(), activity_id);
 }
 
 #[test]
