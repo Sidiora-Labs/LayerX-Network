@@ -624,6 +624,7 @@ impl LeaseStateWitness {
 }
 
 impl Lease {
+    #[cfg(any(feature = "host-ffi", test))]
     pub(crate) fn record_expiry_usage(
         &mut self,
         usage: LeaseUsage,
@@ -678,6 +679,7 @@ impl Lease {
         )
     }
 
+    #[cfg(any(feature = "host-ffi", test))]
     pub(crate) fn terminalize_by_sweep(
         &mut self,
         activity_id: [u8; 32],
@@ -814,6 +816,7 @@ impl Lease {
         Ok(receipt)
     }
 
+    #[cfg(any(feature = "host-ffi", test))]
     pub(crate) fn apply_host_activity(
         &mut self,
         activity: LeaseActivity,
