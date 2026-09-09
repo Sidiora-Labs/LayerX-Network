@@ -5412,3 +5412,11 @@ symbol = "lx_asset_register_decode"
 observed = "The merged payload comments used dotted numeric ranges that matched the existing consensus floating-point scanner. make test exited 2 at test-arith-nofloat; evidence: qual-logs/pay1/pay1e-test.log. Spelling the same bounds as 1 to 16 and 1 to 32 fixes the comment-only diagnostic without altering payload bounds or the scanner. make test-arith-nofloat exits 0; evidence: qual-logs/pay1/pay1e-qa-comments.log and pay1e-qa-comments.exit."
 assumption = "This is a merge-introduced comment failure, not an inherited implementation failure. No test, scanner rule or protocol check was weakened."
 severity = "note"
+
+[observation.3.7.54]
+task = "3.7"
+file = "spec/layerx-protocol/docs/activity-types.md"
+symbol = "activity_type"
+observed = "The obsolete byte-pair catalogue is retired as a native wire authority. Native types use (module << 16) | ordinal; SEND is 0x00010005. The Asset table identifies native register, account_open, receive, grant_issue, grant_revoke, mint and burn, preserves reserved ordinal 9, and excludes authenticated pause/unpause execution."
+assumption = "The retained non-Asset sketches are explicitly historical and do not redefine the native module registry or envelope."
+severity = "note"
