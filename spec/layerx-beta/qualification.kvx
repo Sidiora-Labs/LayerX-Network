@@ -7632,3 +7632,11 @@ symbol = "asset_activity_supported module_execute"
 observed = "Pause/unpause are explicitly excluded from supported authenticated Asset activity execution in the Asset requirement. Daemon admission excludes ordinals 2 and 3. The module table retains legacy constants and direct registry helpers; its event-only path does not establish execution support."
 assumption = "No new ordinal 2/3 encoding or authority rule is introduced. Paused-state refusal checks remain required and unchanged."
 severity = "note"
+
+[observation.3.7.46]
+task = "3.7"
+file = "spec/layerx-protocol/docs/activity-types.md docs/wiki/Modules.md spec/layerx-protocol/design.body.md"
+symbol = "activity_type"
+observed = "The documentation still assigns ASSET_SEND to 0x0101. Current SEND is module 1 ordinal 5, or 0x00010005. Merged design text also presents the disputed issuance namespace and pause/unpause support without the current limits. These documentation and generated projection paths are outside ownership."
+assumption = "The documentation owner must retire the old table, retain Asset 9 reservation, correct issuance and qualification claims and regenerate projections. No generated file was hand-edited."
+severity = "blocker"
