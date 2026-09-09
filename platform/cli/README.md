@@ -92,6 +92,18 @@ the configured sequencer key and binds the receipt to the requested activity.
 It reports the receipt result and `executed` commitment; a failed receipt exits
 nonzero. It does not assert batch inclusion or finality.
 
+| Commitment | Required evidence |
+| --- | --- |
+| `executed` | A sequencer-signed receipt bound to the activity ID |
+| `batched` | Receipt inclusion in an authorized, signed batch header |
+| `finalised` | A verified guarantor checkpoint certificate for that same header |
+
+Choosing `--wait` does not make an unavailable write executable. None of the
+write commands currently reaches these confirmation stages. Retain the
+activity ID whenever a service returns one, even if its outcome is pending;
+an activity ID alone is not a successful payment. A receipt with a nonzero
+result is a failed operation even when its execution is verified.
+
 ### Public JSON-RPC
 
 Select a configured testnet profile, then pass the complete RPC endpoint:
