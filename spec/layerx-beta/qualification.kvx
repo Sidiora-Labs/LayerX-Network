@@ -6174,6 +6174,8 @@ observed = "Human policy assembly can derive deployed custody addresses and tran
 assumption = "The missing real evidence producers and the canonical version-2 registry must be integrated before human_policy_publish can succeed. Material assembly refuses absent or incompatible inputs. No bound, proof check or readiness refusal is weakened; full cluster qualification remains external to this deployment change."
 [observation.6.4.182]
 task = "6.4"
+[observation.6.4.179]
+task = "6.4"
 file = "platform/hosted/beta-cluster.sh agent/crates/layerx-agentd/src/human_peer_config.rs docs/wiki/RunningAnAgent.md"
 symbol = "LAYERX_AGENT_HUMAN_PEERS"
 observed = "The checkout has no platform/hosted/beta-cluster.sh and no hosted manifest carrying LAYERX_AGENT_HUMAN_PEERS. bash -n platform/hosted/beta-cluster.sh exits 127 because the file is absent (qual-logs/ag3/bash.log). The consumer requires uid=<u32>;tenant=<tenant>;principal=<did>, with comma-separated entries and indexed typed configuration refusals."
