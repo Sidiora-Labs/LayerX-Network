@@ -1792,6 +1792,21 @@ beta_cluster_up() {
     else
         builder_release_publish
     fi
+    kube apply -f "$MANIFESTS_DIR/paxeer.yaml" > /dev/null
+    PAXEER_URL="https://localhost:19449"
+    PAXEER_OBSERVER_URL="https://localhost:19452"
+    wait_for_pod_ready "$TESTNET_NAMESPACE" app=paxeer 600
+    port_forward paxeer-boundary "$TESTNET_NAMESPACE" paxeer-boundary 19449 9443
+    port_forward paxeer-observer-boundary "$TESTNET_NAMESPACE" paxeer-observer-boundary 19452 9443
+    paxeer_origins_write
+    if [ "${LAYERX_BETA_RETAIN_MATERIAL:-0}" != 1 ]; then
+        [ -z "$CUSTODY_PROFILE" ] || fail 'fresh owner custody must be generated against this disposable cluster before genesis'
+        human_custody_step bootstrap
+        CUSTODY_PROFILE="$WORK_DIR/human-evidence-input/custody.profile"
+        cp "$CUSTODY_PROFILE" "$SECRETS_DIR/custody.profile"
+        apply_configmap "$TESTNET_NAMESPACE" layerx-node-custody-profile --from-file=profile="$CUSTODY_PROFILE"
+        manifests_render
+    fi
     trusted_boundary_apply
     TESTNET_URL="https://localhost:$TESTNET_PORT"
     GATEWAY_URL="https://localhost:$GATEWAY_PORT"
@@ -1803,10 +1818,6 @@ beta_cluster_up() {
     PAXEER_OBSERVER_URL="https://localhost:19452"
     IDENTITY_URL="https://localhost:$IDENTITY_PORT"
     HUMAN_URL="https://localhost:19453"
-    wait_for_pod_ready "$TESTNET_NAMESPACE" app=paxeer 600
-    port_forward paxeer-boundary "$TESTNET_NAMESPACE" paxeer-boundary 19449 9443
-    port_forward paxeer-observer-boundary "$TESTNET_NAMESPACE" paxeer-observer-boundary 19452 9443
-    paxeer_origins_write
     wait_for_node_genesis
     if [ "${LAYERX_BETA_RETAIN_MATERIAL:-0}" = 1 ]; then
         apply_configmap "$TESTNET_NAMESPACE" layerx-node-settlement --from-file=settlement.env="$WORK_DIR/paxeer/settlement.env"
