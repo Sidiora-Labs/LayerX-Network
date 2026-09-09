@@ -995,7 +995,7 @@ public final class ProgramsClient {
                     || !MessageDigest.isEqual(attachments.transferRoot(), receipt.transferRoot())) {
                 throw new IllegalArgumentException();
             }
-            if (receipt.encodingVersion() == 4 && !starts(attachments.authorization(), "LayerX/programs/402LXP/transfer-set/v2\0")) throw new IllegalArgumentException();
+            if (receipt.encodingVersion() == 4 && !authorizationV2(attachments.authorization())) throw new IllegalArgumentException();
             verifyAuthorizationRoot(attachments.authorization(), attachments.transferRoot());
         }
         if (protocolVersion != 1 && protocolVersion != 2 && protocolVersion != 3) throw new IllegalArgumentException();
@@ -1030,9 +1030,35 @@ public final class ProgramsClient {
         return new TerminalAttachments(current, occupancy, authorization, transferRoot);
     }
 
+    private static boolean authorizationV2(byte[] encoded) {
+        byte[] domain = "LayerX/programs/402LXP/account-bound-set/v1\0".getBytes(StandardCharsets.UTF_8);
+        if (starts(encoded, domain)) encoded = new TerminalCursor(encoded, domain.length).sized32(MAX_CALLDATA_BYTES);
+        return starts(encoded, TRANSFER_SET_V2_DOMAIN);
+    }
+
+    private static byte[] principalPaymentAccount(byte[] principal, byte[] asset, byte[] name) {
+        if (name.length > 512) throw new IllegalArgumentException();
+        for (byte b : name) if (!(b >= 'a' && b <= 'z' || b >= '0' && b <= '9' || b == '.' || b == '_' || b == '-' || b == ':')) throw new IllegalArgumentException();
+        String text = new String(name, StandardCharsets.US_ASCII);
+        if (!text.startsWith("agent:") || text.contains("::")) throw new IllegalArgumentException();
+        String suffix = text.endsWith(":main") ? ":main" : ":asset:" + java.util.HexFormat.of().formatHex(asset);
+        if (!text.endsWith(suffix) || text.length() <= 6 + suffix.length()) throw new IllegalArgumentException();
+        byte[] did = text.substring(6, text.length() - suffix.length()).getBytes(StandardCharsets.US_ASCII);
+        if (did[0] == ':' || did[did.length - 1] == ':' || !MessageDigest.isEqual(sha256(
+                "LXP/v1/did-id\0".getBytes(StandardCharsets.UTF_8), fixedUnsigned(BigInteger.valueOf(did.length), 2), did), principal)) throw new IllegalArgumentException();
+        return sha256("LX:ACCOUNT:v1".getBytes(StandardCharsets.UTF_8), fixedUnsigned(BigInteger.valueOf(name.length), 4), name);
+    }
+
     static void verifyAuthorizationRoot(byte[] encoded, byte[] expected) {
         if (encoded == null || encoded.length == 0 || encoded.length > MAX_CALLDATA_BYTES
                 || expected == null || expected.length != 32) throw new IllegalArgumentException();
+        byte[] boundDomain = "LayerX/programs/402LXP/account-bound-set/v1\0".getBytes(StandardCharsets.UTF_8);
+        TerminalCursor names = null;
+        if (starts(encoded, boundDomain)) {
+            names = new TerminalCursor(encoded, boundDomain.length);
+            encoded = names.sized32(MAX_CALLDATA_BYTES);
+            if (starts(encoded, boundDomain)) throw new IllegalArgumentException();
+        }
         boolean candidate = starts(encoded, TRANSFER_SET_V2_DOMAIN);
         byte[] domain = candidate ? TRANSFER_SET_V2_DOMAIN : TRANSFER_SET_V1_DOMAIN;
         TerminalCursor cursor = new TerminalCursor(encoded, 0);
@@ -1101,11 +1127,17 @@ public final class ProgramsClient {
                     || !MessageDigest.isEqual(funding.asset(), asset))) {
                 throw new IllegalArgumentException();
             }
+            if (names != null) {
+                byte[] name = names.take(names.u16());
+                if (authority != null) { if (name.length != 0) throw new IllegalArgumentException(); }
+                else source = principalPaymentAccount(source, asset, name);
+            }
             total = checkedU128Add(total, amount);
             kernelLegs.add(concatenate(new byte[] {0}, source, destination, asset,
                 fixedUnsigned(amount, 16), fixedUnsigned(BigInteger.ONE, 2)));
         }
         cursor.finish();
+        if (names != null) names.finish();
         if (!MessageDigest.isEqual(merkleRoot(kernelLegs), expected)) {
             throw new IllegalArgumentException();
         }

@@ -716,7 +716,7 @@ private func verifyTerminalAttachments(_ attachments: TerminalAttachments, candi
     }
     if let authorization = attachments.authorization {
         guard !authorization.isEmpty, attachments.transferRoot == receipt.transferRoot else { throw programVerification() }
-        guard receipt.encodingVersion != 4 || starts(authorization, "LayerX/programs/402LXP/transfer-set/v2\0") else { throw programVerification() }
+        guard try receipt.encodingVersion != 4 || authorizationV2(authorization) else { throw programVerification() }
         try verifyAuthorizationRoot(authorization, expected: receipt.transferRoot)
     }
     return recorded ? "recorded_terminal_root_not_locally_reconstructable" : "reconstructed"
@@ -726,7 +726,37 @@ private func verifyAuthorizationRoot(_ encoded: Data, expected: Data) throws {
     guard try decodeAuthorizationRoot(encoded) == expected else { throw programVerification() }
 }
 
-private func decodeAuthorizationRoot(_ encoded: Data) throws -> Data {
+private func authorizationV2(_ encoded: Data) throws -> Bool {
+    let domain = Data("LayerX/programs/402LXP/account-bound-set/v1\0".utf8)
+    var original = encoded
+    if starts(encoded, domain) {
+        var cursor = try TerminalCursor(encoded, offset: domain.count)
+        original = try cursor.sized32()
+    }
+    return starts(original, "LayerX/programs/402LXP/transfer-set/v2\0")
+}
+
+private func principalPaymentAccount(_ principal: Data, asset: Data, name: Data) throws -> Data {
+    guard name.count <= 512, name.allSatisfy({ ($0 >= 97 && $0 <= 122) || ($0 >= 48 && $0 <= 57) || [46, 95, 45, 58].contains($0) }),
+          let text = String(data: name, encoding: .ascii), text.hasPrefix("agent:"), !text.contains("::") else { throw programVerification() }
+    let suffix = text.hasSuffix(":main") ? ":main" : ":asset:" + asset.map { String(format: "%02x", $0) }.joined()
+    guard text.hasSuffix(suffix), text.utf8.count > 6 + suffix.utf8.count else { throw programVerification() }
+    let did = Data(text.utf8.dropFirst(6).dropLast(suffix.utf8.count))
+    guard did.first != 58, did.last != 58,
+          digest(Data("LXP/v1/did-id\0".utf8), bigEndian(UInt16(did.count)), did) == principal else { throw programVerification() }
+    return digest(Data("LX:ACCOUNT:v1".utf8), bigEndian(UInt32(name.count)), name)
+}
+
+private func decodeAuthorizationRoot(_ input: Data) throws -> Data {
+    var encoded = input
+    let boundDomain = Data("LayerX/programs/402LXP/account-bound-set/v1\0".utf8)
+    var names: TerminalCursor?
+    if starts(encoded, boundDomain) {
+        var wrapper = try TerminalCursor(encoded, offset: boundDomain.count)
+        encoded = try wrapper.sized32()
+        guard !starts(encoded, boundDomain) else { throw programVerification() }
+        names = wrapper
+    }
     let v1 = Data("LayerX/programs/402LXP/transfer-set/v1\0".utf8)
     let v2 = Data("LayerX/programs/402LXP/transfer-set/v2\0".utf8)
     let candidate = starts(encoded, v2); let domain = candidate ? v2 : v1
@@ -773,10 +803,17 @@ private func decodeAuthorizationRoot(_ encoded: Data) throws -> Data {
                 throw programVerification()
             }
         }
+        if var wrapper = names {
+            let length = try wrapper.u16()
+            let name = try wrapper.take(Int(length))
+            if authority != nil { guard name.isEmpty else { throw programVerification() } }
+            else { source = try principalPaymentAccount(source, asset: asset, name: name) }
+            names = wrapper
+        }
         total = try checkedAdd(total, amount)
         kernelLegs.append(concatenated([Data([0]), source, destination, asset, bigEndian128(amount), bigEndian(UInt16(1))]))
     }
-    try cursor.finish(); _ = total
+    try cursor.finish(); try names?.finish(); _ = total
     return merkleRoot(kernelLegs)
 }
 

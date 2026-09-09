@@ -16,10 +16,19 @@ import static org.junit.jupiter.api.Assertions.*;
 final class TerminalV4Test {
     private static byte[] bytes(JsonNode node, String name) { return HexFormat.of().parseHex(node.get(name).asText()); }
 
+    @Test void nativeAccountAuthorizationVectors() throws Exception {
+        JsonNode vectors = new ObjectMapper().readTree(Files.readString(Path.of(System.getProperty("layerx.repo.root", "../../.."), "programs/fixtures/pay5/account-authorization-vectors.json")));
+        for (JsonNode vector : vectors) {
+            byte[] encoded = bytes(vector, "encoded"), root = bytes(vector, "root");
+            if (vector.get("accept").asBoolean()) assertDoesNotThrow(() -> ProgramsClient.verifyAuthorizationRoot(encoded, root), vector.get("name").asText());
+            else assertThrows(IllegalArgumentException.class, () -> ProgramsClient.verifyAuthorizationRoot(encoded, root), vector.get("name").asText());
+        }
+    }
+
     @Test void signedSharedVectors() throws Exception {
         ObjectMapper json = new ObjectMapper();
-        for (String name : new String[]{"executed-v4", "principal-v4", "mutated-leg-v4", "executed-v3"}) {
-            JsonNode vector = json.readTree(Files.readString(Path.of(System.getProperty("layerx.repo.root", "../../.."), "platform/sdk/conformance/fixtures/receipt-programs-" + name + ".json")));
+        for (String name : new String[]{"executed-v4", "principal-v4", "mutated-leg-v4", "executed-v3", "account-bound-v4"}) {
+            JsonNode vector = json.readTree(Files.readString(Path.of(System.getProperty("layerx.repo.root", "../../.."), name.equals("account-bound-v4") ? "programs/fixtures/pay5/receipt-account-bound-v4.json" : "platform/sdk/conformance/fixtures/receipt-programs-" + name + ".json")));
             JsonNode batch = vector.get("authorized_batch");
             var authority = new LocalVerifier.AuthorizedReceiptBatch(bytes(batch, "batch_id_hex"), bytes(batch, "asset_hex"), bytes(batch, "previous_state_root_hex"), bytes(batch, "resulting_state_root_hex"), bytes(batch, "sequencer_public_key_hex"));
             var verified = LocalVerifier.verifyReceipt(bytes(vector, "canonical_receipt_hex"), authority, 3);
@@ -42,7 +51,7 @@ final class TerminalV4Test {
             } else {
                 assertEquals(name.equals("executed-v3") ? "recorded_terminal_root_not_locally_reconstructable" : "reconstructed", ProgramsClient.verifyTerminal(terminal, graph, program, outcome, 3, receipt));
             }
-            if (name.equals("executed-v4")) {
+            if (name.equals("executed-v4") || name.equals("account-bound-v4")) {
                 for (int length = 0; length < terminal.length; length++) {
                     byte[] truncated = Arrays.copyOf(terminal, length);
                     assertThrows(PlatformSdkException.class, () -> ProgramsClient.verifyTerminal(truncated, graph, program, outcome, 3, receipt));
