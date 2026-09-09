@@ -2,6 +2,8 @@
 #include "layerx/lxp_kernel.h"
 #include "layerx/lxp_receipt.h"
 #include "layerx/lxp_state.h"
+#include "layerx/lxp_state_proof.h"
+#include <stdlib.h>
 
 #include <string.h>
 
@@ -342,6 +344,35 @@ int main(void)
         memcmp(before + 32, after + 32, 32U) == 0 ||
         memcmp(before + 64, after + 64, 32U) != 0 ||
         conserved_both(f, 40U, 0U, 0U, 0U) != 0) return 1;
+
+    {
+        uint8_t key[LX_WITHDRAWAL_STATE_KEY_BYTES];
+        uint8_t value[LX_WITHDRAWAL_STATE_VALUE_BYTES];
+        lx_withdrawal_record decoded;
+        lxp_state_witness *proof = malloc(sizeof(*proof));
+        uint8_t committed[32];
+        if (proof == NULL ||
+            lx_withdrawal_state_encode(&withdrawal_a, key, value) != LXP_OK ||
+            lx_withdrawal_state_decode(key, sizeof(key), value, sizeof(value), &decoded) != LXP_OK ||
+            memcmp(decoded.nullifier, nullifier_a, 32U) != 0 || decoded.settled ||
+            lxp_module_ctx_commit(&f->ctx) != LXP_OK ||
+            lxp_state_root(&f->kernel, committed) != LXP_OK ||
+            lxp_state_proof_build(&f->kernel, LXP_MODULE_ASSET,
+                (lxp_byte_span){key, sizeof(key)}, proof) != LXP_OK ||
+            lxp_state_proof_verify(proof, committed) != LXP_OK ||
+            memcmp(proof->value, value, sizeof(value)) != 0) return 1;
+        for (size_t n = 0U; n < sizeof(value); ++n)
+            if (lx_withdrawal_state_decode(key, sizeof(key), value, n, &decoded) == LXP_OK) return 1;
+        value[1] = 1U;
+        if (lx_withdrawal_state_decode(key, sizeof(key), value, sizeof(value), &decoded) == LXP_OK) return 1;
+        value[1] = 2U;
+        key[11] ^= 1U;
+        if (lx_withdrawal_state_decode(key, sizeof(key), value, sizeof(value), &decoded) == LXP_OK) return 1;
+        key[11] ^= 1U;
+        value[102] ^= 1U;
+        if (lx_withdrawal_state_decode(key, sizeof(key), value, sizeof(value), &decoded) == LXP_OK) return 1;
+        free(proof);
+    }
 
     crossed = withdrawal_a;
     crossed.withdrawal_id[0] = 9U;
