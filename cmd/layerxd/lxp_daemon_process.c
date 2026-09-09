@@ -491,6 +491,35 @@ static lxp_result occupancy_parameters(
         occupancy_asset_id);
 }
 
+static bool programs_protocol3_signer(const lxp_activity *activity)
+{
+    return activity != NULL &&
+           activity->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT &&
+           lxp_activity_module_id(activity->activity_type) == LXP_MODULE_PROGRAMS;
+}
+
+static lxp_result payment_account_fee_balance(
+    lx_account_registry *accounts, const lxp_activity *activity,
+    const uint8_t occupancy_asset[32], const uint8_t principal[32],
+    lxp_u128 *fee_balance)
+{
+    lx_account *account = NULL;
+    lxp_result status;
+    if (accounts == NULL || activity == NULL || occupancy_asset == NULL ||
+        principal == NULL || fee_balance == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    *fee_balance = (lxp_u128){0U, 0U};
+    status = lxp_kernel_program_payment_account(
+        accounts, principal, occupancy_asset, activity->protocol_version,
+        &account);
+    if (status != LXP_OK) return status;
+    if (account->has_authority_key &&
+        lxp_ct_memcmp(account->authority_key, activity->authority.bytes, 32U) != 0)
+        return LXP_ERR_BAD_SIGNATURE;
+    *fee_balance = account->balance;
+    return LXP_OK;
+}
+
 static lxp_result principal_authority(
     lxp_daemon_process *process, const lxp_activity *activity,
     uint8_t principal_id[32], lxp_u128 *fee_balance)
@@ -498,6 +527,8 @@ static lxp_result principal_authority(
     static const uint8_t prefix[] = "agent:";
     static const uint8_t suffix[] = ":main";
     uint8_t name[LX_ACCOUNT_NAME_MAX];
+    uint8_t occupancy_asset[32];
+    lx_programs_fee_schedule schedule;
     size_t length;
     size_t index;
     lxp_result status;
@@ -506,6 +537,17 @@ static lxp_result principal_authority(
         activity->actor_did.length == 0U || activity->authority.length != 32U ||
         activity->actor_did.length > sizeof(name) - sizeof(prefix) - sizeof(suffix) + 2U)
         return LXP_ERR_NON_CANONICAL;
+    if (programs_protocol3_signer(activity)) {
+        status = lxp_did_id_derive(activity->actor_did.bytes,
+                                   activity->actor_did.length, principal_id);
+        if (status != LXP_OK) return status;
+        status = occupancy_parameters(process, 0U, &schedule, occupancy_asset);
+        if (status != LXP_OK) return status;
+        return payment_account_fee_balance(
+            process->programs.accounts != NULL ? process->programs.accounts :
+                                                 &process->accounts,
+            activity, occupancy_asset, principal_id, fee_balance);
+    }
     length = sizeof(prefix) - 1U;
     (void)memcpy(name, prefix, length);
     (void)memcpy(name + length, activity->actor_did.bytes, activity->actor_did.length);
@@ -4075,6 +4117,9 @@ static lxp_result open_process(lxp_daemon_process *process,
         uint8_t occupancy_asset_id[32];
         status = lxp_programs_fee_governance_resolve_runtime(
             &process->kernel, 0U, &fee_schedule, occupancy_asset_id);
+        if (status == LXP_OK)
+            (void)memcpy(process->programs.occupancy_asset_id,
+                         occupancy_asset_id, 32U);
     }
     if (status == LXP_OK) stage = "replica recovery";
     if (status == LXP_OK) status = replicate_authority_history(process);

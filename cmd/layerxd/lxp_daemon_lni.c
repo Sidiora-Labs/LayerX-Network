@@ -1743,8 +1743,9 @@ static lxp_result fail_stop_submit_daemon(lxp_daemon *daemon,
 }
 
 static lxp_result lni_principal(
-    const lx_account_registry *accounts, const lxp_activity *activity,
-    uint8_t principal_id[32], lxp_u128 *fee_balance)
+    lx_account_registry *accounts, const lxp_activity *activity,
+    uint8_t principal_id[32], lxp_u128 *fee_balance,
+    const uint8_t *occupancy_asset)
 {
     static const uint8_t prefix[] = "agent:";
     static const uint8_t suffix[] = ":main";
@@ -1759,6 +1760,25 @@ static lxp_result lni_principal(
         activity->actor_did.length >
             sizeof(name) - sizeof(prefix) - sizeof(suffix) + 2U)
         return LXP_ERR_NON_CANONICAL;
+    if (occupancy_asset != NULL &&
+        activity->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT &&
+        lxp_activity_module_id(activity->activity_type) == LXP_MODULE_PROGRAMS) {
+        lx_account *account = NULL;
+        status = lxp_did_id_derive(activity->actor_did.bytes,
+                                   activity->actor_did.length, principal_id);
+        if (status != LXP_OK) return status;
+        *fee_balance = (lxp_u128){0U, 0U};
+        status = lxp_kernel_program_payment_account(
+            accounts, principal_id, occupancy_asset,
+            activity->protocol_version, &account);
+        if (status != LXP_OK) return status;
+        if (account->has_authority_key &&
+            lxp_ct_memcmp(account->authority_key, activity->authority.bytes,
+                          32U) != 0)
+            return LXP_ERR_BAD_SIGNATURE;
+        *fee_balance = account->balance;
+        return LXP_OK;
+    }
     length = sizeof(prefix) - 1U;
     (void)memcpy(name, prefix, length);
     (void)memcpy(name + length, activity->actor_did.bytes,
@@ -1815,7 +1835,8 @@ static lxp_result program_admission_decode(
         status = lxp_bridge_credit_verify(&profile, &credit, owner->network_id,
                                           activity->protocol_version, nullifier);
         if (status == LXP_OK)
-            status = lni_principal(owner->kernel->state->accounts, activity, principal, &balance);
+            status = lni_principal(owner->kernel->state->accounts, activity,
+                                  principal, &balance, NULL);
         if (status == LXP_OK &&
             (lxp_ct_memcmp(nullifier, activity->idempotency_key, 32U) != 0 ||
              lxp_ct_memcmp(principal, credit.bytes + 107U, 32U) != 0 ||
@@ -1958,7 +1979,7 @@ static lxp_result send_submit(lxp_daemon_lni_server *server, int descriptor,
         else
             status = lni_principal(
                 server->owner->kernel->state->accounts, &activity,
-                principal_id, &fee_balance);
+                principal_id, &fee_balance, NULL);
         if (status == LXP_OK &&
             lxp_u128_cmp(fee_balance, activity.fee_limit) < 0)
             status = LXP_ERR_FEE_UNPAYABLE;
@@ -2586,7 +2607,8 @@ lxp_result lxp_daemon_lni_simulate(
         status = LXP_ERR_BAD_SIGNATURE;
     if (status == LXP_OK)
         status = lni_principal(owner->programs_runtime->accounts,
-                                      &activity, principal_id, &fee_balance);
+                                      &activity, principal_id, &fee_balance,
+                                      owner->programs_runtime->occupancy_asset_id);
     if (status == LXP_OK)
         status = simulation_schedule(owner->kernel, &parameter_version,
                                      &fees);
