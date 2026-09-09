@@ -11,14 +11,35 @@ namespace LayerX.Sdk.Tests;
 public sealed class ReceiptFixtureTests
 {
     [Fact]
+    public void NativeAccountAuthorizationVectors()
+    {
+        using var document = JsonDocument.Parse(File.ReadAllText(FixturePath("../../../../programs/fixtures/pay5/account-authorization-vectors.json")));
+        var decode = typeof(ProgramsClient).GetMethod("DecodeAuthorizationRoot", BindingFlags.NonPublic | BindingFlags.Static)!;
+        foreach (var vector in document.RootElement.EnumerateArray())
+        {
+            var encoded = HexField(vector, "encoded"); var root = HexField(vector, "root");
+            if (vector.GetProperty("accept").GetBoolean()) Assert.Equal(root, (byte[])decode.Invoke(null, new object[] { encoded })!);
+            else
+            {
+                var error = Record.Exception(() => {
+                    var actual = (byte[])decode.Invoke(null, new object[] { encoded })!;
+                    if (!actual.SequenceEqual(root)) throw new InvalidDataException();
+                });
+                Assert.NotNull(error);
+                Assert.True(error is InvalidDataException || error is TargetInvocationException { InnerException: InvalidDataException });
+            }
+        }
+    }
+
+    [Fact]
     public async Task SignedTerminalV4Vectors()
     {
         var verify = typeof(ProgramsClient).GetMethod("VerifyTerminal", BindingFlags.NonPublic | BindingFlags.Static)!;
         var unwrap = typeof(ProgramsClient).GetMethod("UnwrapAppliedTerminal", BindingFlags.NonPublic | BindingFlags.Static)!;
         var applied = typeof(ProgramsClient).GetMethod("VerifyAppliedLegs", BindingFlags.NonPublic | BindingFlags.Static)!;
-        foreach (var name in new[] { "executed-v4", "principal-v4", "mutated-leg-v4", "executed-v3" })
+        foreach (var name in new[] { "executed-v4", "principal-v4", "mutated-leg-v4", "executed-v3", "account-bound-v4" })
         {
-            using var document = JsonDocument.Parse(File.ReadAllText(FixturePath("receipt-programs-" + name + ".json")));
+            using var document = JsonDocument.Parse(File.ReadAllText(FixturePath(name == "account-bound-v4" ? "../../../../programs/fixtures/pay5/receipt-account-bound-v4.json" : "receipt-programs-" + name + ".json")));
             var vector = document.RootElement; var batch = vector.GetProperty("authorized_batch");
             var authority = new AuthorizedReceiptBatch(HexField(batch, "batch_id_hex"), HexField(batch, "asset_hex"),
                 HexField(batch, "previous_state_root_hex"), HexField(batch, "resulting_state_root_hex"), HexField(batch, "sequencer_public_key_hex"));
@@ -43,7 +64,7 @@ public sealed class ReceiptFixtureTests
                 Reject(terminal);
             }
             else Assert.Equal(name == "executed-v3" ? "recorded_terminal_root_not_locally_reconstructable" : "reconstructed", Verify(terminal));
-            if (name == "executed-v4")
+            if (name == "executed-v4" || name == "account-bound-v4")
             {
                 for (var length = 0; length < terminal.Length; length++) Reject(terminal[..length]);
                 Reject(terminal.Concat(new byte[] { 0 }).ToArray());

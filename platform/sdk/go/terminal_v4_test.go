@@ -10,9 +10,13 @@ import (
 )
 
 func TestSignedTerminalV4Vectors(t *testing.T) {
-	for _, name := range []string{"executed-v4", "principal-v4", "mutated-leg-v4", "executed-v3"} {
+	for _, name := range []string{"executed-v4", "principal-v4", "mutated-leg-v4", "executed-v3", "account-bound-v4"} {
 		t.Run(name, func(t *testing.T) {
-			raw, err := os.ReadFile("../conformance/fixtures/receipt-programs-" + name + ".json")
+			path := "../conformance/fixtures/receipt-programs-" + name + ".json"
+			if name == "account-bound-v4" {
+				path = "../../../programs/fixtures/pay5/receipt-account-bound-v4.json"
+			}
+			raw, err := os.ReadFile(path)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -76,7 +80,7 @@ func TestSignedTerminalV4Vectors(t *testing.T) {
 			if result.TransferVerification != expected {
 				t.Fatalf("status %q", result.TransferVerification)
 			}
-			if name == "executed-v4" {
+			if name == "executed-v4" || name == "account-bound-v4" {
 				for length := 0; length < len(terminal); length++ {
 					if _, err := verifyProgramTerminal(execution, verified.Receipt, terminal[:length], graph); err == nil {
 						t.Fatalf("accepted truncation %d", length)
@@ -99,5 +103,27 @@ func TestAppliedEmptyLegsRequireZeroRoot(t *testing.T) {
 	outcome.TransferRoot[0] = 1
 	if _, err := unwrapAppliedProgramTerminal(encoded, outcome); err == nil {
 		t.Fatal("accepted nonzero empty root")
+	}
+}
+
+func TestNativeAccountAuthorizationVectors(t *testing.T) {
+	raw, err := os.ReadFile("../../../programs/fixtures/pay5/account-authorization-vectors.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var vectors []struct {
+		Name    string
+		Encoded string
+		Root    string
+		Accept  bool
+	}
+	if err := json.Unmarshal(raw, &vectors); err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range vectors {
+		err := verifyProgramTransferAuthorization(fixtureBytes(t, v.Encoded), fixture32(t, v.Root))
+		if (err == nil) != v.Accept {
+			t.Fatalf("%s: accept=%v error=%v", v.Name, v.Accept, err)
+		}
 	}
 }
