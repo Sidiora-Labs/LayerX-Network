@@ -298,6 +298,24 @@ export class BuyerMiddleware {
     return grantPaymentHeader(offer.required, offer.accepted, receiveHex);
   }
 
+  public async fetchGrant(input: RequestInfo | URL, init: RequestInit, receiveHex: string, expectedActivity: string): Promise<{ readonly response: Response; readonly settlement?: CapturedSettlement }> {
+    const initial = await this.#fetch(input, init);
+    if (initial.status !== 402) return { response: initial };
+    const required = initial.headers.get(PAYMENT_REQUIRED_HEADER);
+    await initial.body?.cancel();
+    if (required === null) throw new MiddlewareError("invalid-payment-required");
+    const paymentHeader = this.grantHeader(required, receiveHex);
+    if (!/^[0-9a-f]{64}$/u.test(expectedActivity)) throw new MiddlewareError("invalid-payment-payload");
+    const headers = new Headers(init.headers);
+    headers.set(PAYMENT_SIGNATURE_HEADER, paymentHeader);
+    const response = await this.#fetch(input, { ...init, headers });
+    if (response.status === 202) return { response };
+    const responseHeader = response.headers.get(PAYMENT_RESPONSE_HEADER);
+    if (responseHeader === null) { await response.body?.cancel(); throw new MiddlewareError("verification-failure"); }
+    const settlement = await this.captureGrantSettlement(responseHeader, paymentHeader, expectedActivity);
+    return { response, settlement };
+  }
+
   public async captureGrantSettlement(responseHeader: string, paymentHeader: string, expectedActivity: string): Promise<CapturedSettlement> {
     const payload = decodePaymentPayloadHeader(paymentHeader);
     const receive = payload.payload["receive"];
