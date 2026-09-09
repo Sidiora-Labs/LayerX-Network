@@ -637,6 +637,72 @@ static int availability_batches(int descriptor, const signer *key)
     return 0;
 }
 
+static int governance_registration(int descriptor, const signer *key)
+{
+    uint8_t payload[86] = {0x71U, 1U, 0U, 2U};
+    uint8_t encoded[ACTIVITY_CAPACITY], activity_id[32], query[33] = {1U};
+    uint8_t root[32];
+    size_t length;
+    signer guardian;
+    REQUIRE(signer_init(&guardian, 0x33U) == 0);
+    REQUIRE(lxp_hash_sha256(guardian.public_key, 32U, root) == LXP_OK);
+    REQUIRE(lxp_did_id_derive(REGISTERED_DID, sizeof(REGISTERED_DID) - 1U, payload + 4U) == LXP_OK);
+    memcpy(payload + 36U, key->public_key, 32U);
+    for (uint64_t operation = 0U; operation < 3U; ++operation) {
+        if (operation != 0U) {
+            payload[1] = 3U;
+            payload[3] = 5U;
+            memcpy(payload + 36U, root, 32U);
+            store_u16(payload + 68U, operation == 1U ? 1U : 0U);
+            store_u64(payload + 70U, 60U);
+            store_u64(payload + 78U, 120U);
+        }
+        REQUIRE(build_activity(key, operation, operation == 0U ? 0x00070001U : 0x00070003U,
+            0U, payload, operation == 0U ? 68U : sizeof(payload), encoded, sizeof(encoded), &length) == 0);
+        REQUIRE(lxp_activity_id(encoded, length, activity_id) == LXP_OK);
+        REQUIRE(send_request(descriptor, LNI_MINOR, SUBMIT_REQUEST, 100U + operation, encoded, length) == 0);
+        REQUIRE(expect_ack(descriptor, 100U + operation, encoded, length, activity_id) == 0);
+        memcpy(query + 1U, activity_id, 32U);
+        bool found = false;
+        for (unsigned attempt = 0U; attempt < 200U; ++attempt) {
+            wire_envelope response;
+            REQUIRE(send_request(descriptor, LNI_MINOR, 5U, 200U + operation, query, sizeof(query)) == 0);
+            REQUIRE(receive_envelope(descriptor, &response) == 0);
+            REQUIRE(response.tag == 6U && response.correlation_id == 200U + operation);
+            if (response.payload_length != 0U) {
+                lxp_receipt receipt;
+                signer sequencer;
+                static uint8_t storage[2U * LXP_MAX_ACTIVITY_BYTES];
+                lxp_arena arena;
+                REQUIRE(signer_init(&sequencer, 0x22U) == 0);
+                REQUIRE(lxp_arena_init(&arena, storage, sizeof(storage)) == LXP_OK);
+                REQUIRE(lxp_receipt_decode(response.payload, response.payload_length, true, &receipt) == LXP_OK);
+                REQUIRE(lxp_receipt_verify(&receipt, sequencer.public_key, &arena) == LXP_OK);
+                REQUIRE(receipt.module_id == 7U && receipt.module_version == 1U);
+                REQUIRE(memcmp(receipt.activity_id, activity_id, 32U) == 0);
+                if (operation < 2U) {
+                    REQUIRE(receipt.result_code == LXP_OK && receipt.effects.count == 1U);
+                    REQUIRE(receipt.effects.effects[0].event_type == 0x7110U);
+                    REQUIRE(receipt.effects.effects[0].body_length == 223U);
+                    REQUIRE(memcmp(receipt.effects.effects[0].body, "LXGI1", 5U) == 0);
+                    if (operation == 1U) {
+                        REQUIRE(memcmp(receipt.effects.effects[0].body + 77U, root, 32U) == 0);
+                        REQUIRE(load_u16(receipt.effects.effects[0].body + 109U) == 1U);
+                    }
+                } else REQUIRE(receipt.result_code == LXP_ERR_AUTH_SCOPE && receipt.effects.count == 0U);
+                found = true;
+                release_envelope(&response);
+                break;
+            }
+            release_envelope(&response);
+            const struct timespec delay = {0, 50000000};
+            REQUIRE(nanosleep(&delay, NULL) == 0);
+        }
+        REQUIRE(found);
+    }
+    return 0;
+}
+
 static int withdraw_admission(int descriptor, const signer *key, bool recovered)
 {
     static const uint8_t asset[32] = {
@@ -753,6 +819,11 @@ int main(int argc, char **argv)
     }
     if (argc == 3 && strcmp(argv[2], "--availability-batches") == 0) {
         REQUIRE(availability_batches(descriptor, &key) == 0);
+        REQUIRE(close(descriptor) == 0);
+        return 0;
+    }
+    if (argc == 3 && strcmp(argv[2], "--governance") == 0) {
+        REQUIRE(governance_registration(descriptor, &key) == 0);
         REQUIRE(close(descriptor) == 0);
         return 0;
     }
