@@ -8,7 +8,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "conformance": "node run.mjs",
-    "test:payments": "node --test pay6/receive.test.mjs pay6/commitment.test.mjs"
+    "test:payments": "node --test pay6/*.test.mjs"
   },
   "dependencies": {
     "@sidiora/layerx-agent-middleware": "0.1.0",
