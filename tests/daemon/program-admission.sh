@@ -94,10 +94,10 @@ done
 cp "$build_dir/tests/lxp_test_program_admission" "$work/client"
 chmod 0755 "$work/client"
 if [[ ${2:-} == --owner-authority ]]; then
+    export LAYERX_TEST_OWNER_AUTHORITY_SOCKET="$runtime/layerxd.lni.sock"
     "${LAYERX_TEST_PYTHON:-python3}" tests/daemon/post-lxip.py "$work" --prepare-only
     cp "$3" "$work/owner-authority-test"
     chmod 0755 "$work/owner-authority-test"
-    export LAYERX_TEST_OWNER_AUTHORITY_SOCKET="$work/run/layerxd.lni.sock"
     LAYERX_TEST_OWNER_AUTHORITY_PUBLIC=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["public_key"])' "$work/human-evidence-input/owner-admission.json")
     LAYERX_TEST_OWNER_AUTHORITY_DID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["did"])' "$work/human-evidence-input/owner-admission.json")
     LAYERX_TEST_OWNER_AUTHORITY_ASSET=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["asset"])' "$work/data/treasury.json")
@@ -108,6 +108,7 @@ if [[ ${2:-} == --owner-authority ]]; then
         --exact human_runtime::owner_authority_tests::real_owner_authority_prepares_over_temp_socket --nocapture --test-threads=1
     exit 0
 elif [[ ${2:-} == --post-lxip ]]; then
+    export LAYERX_TEST_OWNER_AUTHORITY_SOCKET="$runtime/layerxd.lni.sock"
     "${LAYERX_TEST_PYTHON:-python3}" tests/daemon/post-lxip.py "$work"
     exit 0
 elif [[ ${2:-} == --maintenance-crash ]]; then

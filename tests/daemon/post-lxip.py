@@ -18,7 +18,8 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 work = Path(sys.argv[1])
 provider = repo / 'human/target/debug/layerx-human-identity-provider'
 cli = repo / 'cmd/layerxctl/target/debug/layerxctl'
-socket = work / 'run/layerxd.lni.sock'
+socket = Path(os.environ.get('LAYERX_TEST_OWNER_AUTHORITY_SOCKET',
+                             work / 'run/layerxd.lni.sock'))
 shutil.copyfile(cli, work / 'native-cli')
 cli = work / 'native-cli'
 cli.chmod(0o755)

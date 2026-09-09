@@ -487,8 +487,7 @@ def assemble(work_dir, registry_path, asset, journal_path):
     require(type(binding['tenant']) is str and re.fullmatch(r'[a-z0-9_.-]{1,128}', binding['tenant']) is not None,
             binding_path, 'tenant')
     text(binding['principal'], binding_path, 'principal')
-    require(not any(c in binding['principal'] for c in ':,'), binding_path,
-            'principal cannot be represented by the current HUMAN_PEERS delimiter parser')
+    peers = peer_binding(binding, binding_path)
     policy = owner_policy()
     catalog = purpose_catalog(Path(__file__).with_name('beta-purpose-catalog.json'), registry_path,
                               inputs / 'treasury.json', inputs / 'sequencer.json', asset)
@@ -511,7 +510,7 @@ def assemble(work_dir, registry_path, asset, journal_path):
             'AGENT_RECOVERY_ROOT': base64.urlsafe_b64encode(bytes(recovery['root'])).decode().rstrip('='),
             'AGENT_RECOVERY_THRESHOLD': recovery['threshold']},
         'authority.json': dict(binding, **{'core-clock-horizon': policy['core-clock-horizon']}),
-        'agent.json': {'HUMAN_PEERS': f"4020:{binding['principal']}:{binding['tenant']}",
+        'agent.json': {'HUMAN_PEERS': peers,
             'HUMAN_LIMIT_SCOPE': policy['limit']['scope'], 'HUMAN_LIMIT_SCOPE_ID': registration['owner_account'],
             'HUMAN_LIMIT_ID': policy['limit']['id'], 'HUMAN_LIMIT_NAME': policy['limit']['name'],
             'HUMAN_LIMIT_CEILING': policy['limit']['ceiling'], 'HUMAN_LIMIT_CONSUMED': head['consumed']},
