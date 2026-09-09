@@ -14,7 +14,8 @@ The producer pins the sequencer id, public key, network and batch range from
 bootstrap configuration. LNI tag 12 supplies the header and signature. Tag 18
 requests `05 || batch:u64be`; the selector is the single named constant
 `LXP_GUARANTOR_CANDIDATE_SELECTOR`. Selectors 01–04 remain finalized-only.
-The additive selector-05 daemon implementation is an external dependency.
+The additive selector-05 daemon implementation supplies sealed candidates
+without changing the finalized-only behavior of selectors 01 through 04.
 The producer does not register a fixture certificate to unlock retrieval.
 
 Every tag-19 response must match the request correlation, batch, global chunk
@@ -130,7 +131,7 @@ to register, the second to observe registration, tag-14 evidence equality
 and acceptance by the existing `lxp_verify_main` entry point. A refused
 candidate is an integration failure, not a skipped test or a passing gate.
 
-Local evidence lives in untracked `qual-logs/gp1/` and `STATUS.md`. No image,
+Qualification evidence is retained outside the published source tree. No image,
 cluster or chain-125 deployment qualification is claimed on the build server.
 
 ## Checkpoint authority publication
