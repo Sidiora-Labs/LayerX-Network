@@ -482,7 +482,7 @@ through them.
 
 - [ ] 10. Build the asset module over the ledger kernel
   - [x] 10.1 Implement the asset registry with integer decimals
-    - Register the asset module as module id 1 through the kernel module interface, declaring exactly the activity types asset.register, asset.pause, asset.unpause, asset.account_open, asset.send, asset.receive, asset.grant_issue and asset.grant_revoke.
+    - Register the asset module as module id 1 through the kernel module interface, declaring exactly the activity types asset.register, asset.pause, asset.unpause, asset.account_open, asset.send, asset.receive, asset.grant_issue, asset.grant_revoke, asset.mint and asset.burn, at ordinals 1 through 8, 10 and 11; ordinal 9 is reserved.
     - Implement lx_asset_register recording asset_id, symbol, decimals, custody kind and the Paxeer custody reference, rejecting a duplicate asset id with ASSET_ALREADY_REGISTERED while still consuming the sequence and charging the metered fee.
     - Treat decimals strictly as display metadata: every amount is an unsigned fixed-width integer count of the smallest indivisible unit, and any amount encoded as a decimal fraction, an exponent form or a floating point value is rejected with INVALID_AMOUNT.
     - Implement lx_asset_pause and lx_asset_unpause so a paused asset fails the ledger precondition for every leg naming it, and expose lx_asset_lookup for the ledger to resolve asset existence and paused state.

@@ -444,8 +444,8 @@ struct lx_asset {
     uint8_t     symbol[16];    /* ASCII, zero-padded, not consensus-parsed  */
     uint8_t     decimals;      /* scaling exponent; amounts stay integers   */
     uint8_t     paused;
-    uint8_t     custody_kind;  /* 0 = Paxeer-custodied, 1 = protocol-native */
-    lx_u128     total_units;   /* must equal the sum of all balances        */
+    uint8_t     custody_kind;  /* persisted LX_ASSET_CUSTODY_PAXEER = 1; not register issuer_kind */
+    lx_u128     total_units;   /* Paxeer-custody: sum of balances; native: derived from issuance */
 };
 struct lx_account {
     lx_account_id account_id;
@@ -864,22 +864,39 @@ attached by the kernel and is omitted from the tables below.
 
 ### 12.1 `asset` (module 1)
 
-**State.** Asset registry (`lx_asset`), account registry (`lx_account`), the
-balance tree keyed by `(account_id, asset_id)`, and per-asset `total_units` used
-for reserve reconciliation.
+**State.** Asset registry (`lx_asset`), account registry (`lx_account`), and the
+balance tree keyed by `(account_id, asset_id)`. Each registered asset records
+id, symbol, name, decimals, supply cap, issuer identity, issuer kind, pause
+state and, for Paxeer-custody assets, the custody reference. Native asset ids
+are `SHA-256("LX:ASSET:v1" || issuer_did_id32 || salt32)`; Paxeer-custody assets
+keep their existing ids. Register `issuer_kind` is `1` native and `2`
+`paxeer_custody` — that numbering is not `lx_asset_custody_kind`
+(`LX_ASSET_CUSTODY_PAXEER = 1`) and must not be copied into `custody_kind`.
 
-**Activities.** `asset.register`, `asset.pause`, `asset.unpause`,
-`asset.account_open`, `asset.send`, `asset.receive`, `asset.grant_issue`,
-`asset.grant_revoke`.
+Per-asset agent accounts use `agent:<DID>:asset:<lowercase hex64 asset_id>`
+and the existing `LX:ACCOUNT:v1` id rule; `agent:<DID>:main` remains the
+native-asset account. Registration also creates
+`asset:<lowercase hex64 asset_id>:issuance` as a module-value account.
+Paxeer-custody circulating supply stays reserve-reconciled. Native circulating
+supply is initial issuance units minus the current issuance balance.
+
+**Activities.** `asset.register` (1), `asset.pause` (2), `asset.unpause` (3),
+`asset.account_open` (4), `asset.send` (5), `asset.receive` (6),
+`asset.grant_issue` (7), `asset.grant_revoke` (8), `asset.mint` (10) and
+`asset.burn` (11). Ordinal 9 is reserved (withdraw) and is not defined here.
+Payload encodings are requirement 14 in `spec/layerx-protocol/spec.kvx`.
 
 | Activity | Legs |
 |---|---|
-| `asset.send` | `agent:<from>:main` → `agent:<to>:main` (`PAYMENT`) |
+| `asset.send` | `agent:<from>:main` or `agent:<from>:asset:<id>` → the matching `agent:<to>:main` or per-asset account (`PAYMENT`) |
 | `asset.receive` | `<payer_account>` → `agent:<recipient>:main` (`PAYMENT`) |
+| `asset.mint` | `asset:<id>:issuance` → destination account (`PAYMENT`) |
+| `asset.burn` | owned source account → `asset:<id>:issuance` (`PAYMENT`) |
 | all others | none |
 
 `asset` holds the registry, not a privilege: it calls the same
-`lxp_apply_transfer_set` as every other module.
+`lxp_apply_transfer_set` as every other module. Mint and burn do not assign
+balances; they transfer against the issuance account.
 
 ### 12.2 `escrow` (module 2)
 
