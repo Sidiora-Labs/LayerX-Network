@@ -221,13 +221,60 @@ fn id32(value: &str) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    fn assert_published_native_methods(methods: &[Value]) -> Result<(), String> {
+        assert_eq!(
+            methods
+                .iter()
+                .filter_map(|entry| entry["name"].as_str())
+                .collect::<Vec<_>>(),
+            [
+                "lx_getAccount",
+                "lx_getBalance",
+                "lx_getBalances",
+                "lx_getReceipt",
+                "lx_getActivityStatus",
+                "lx_getBatchHeader",
+                "lx_getCheckpoint",
+                "lx_getNodeInfo",
+                "lx_getSequence",
+                "lx_getProof",
+                "lx_sendActivity",
+                "lx_subscribe",
+                "lx_listAssets",
+                "lx_getAsset",
+                "lx_estimateFee",
+            ]
+        );
+        let description = |method: &str| -> Result<&str, String> {
+            methods
+                .iter()
+                .find(|entry| entry["name"] == method)
+                .and_then(|entry| entry["description"].as_str())
+                .ok_or_else(|| format!("{method} description missing"))
+        };
+        assert!(description("lx_getBalances")?.contains("LNI minor 5"));
+        assert!(description("lx_listAssets")?.contains("bounded to 64 records"));
+        assert!(description("lx_getAsset")?.contains("authenticated_committed_snapshot"));
+        let fee_description = description("lx_estimateFee")?;
+        assert!(fee_description.contains("Asset 1/4/5/6/7/8/10/11"));
+        assert!(fee_description.contains("Programs 1/2/3/5/6/7"));
+        let submission_description = description("lx_sendActivity")?;
+        assert!(submission_description.contains("Asset ordinal 9 is reserved and refused"));
+        assert!(submission_description
+            .contains("An admission acknowledgement never establishes execution"));
+        Ok(())
+    }
+
     #[test]
     fn positional_requests_match_published_contract() -> Result<(), String> {
-        let published: Value = serde_json::from_str(include_str!("../tests/fixtures/openrpc.json"))
-            .map_err(|error| error.to_string())?;
+        let fixture = include_str!("../tests/fixtures/openrpc.json");
+        let published_source = include_str!("../../hosted/gateway/openrpc.json");
+        assert_eq!(fixture, published_source);
+        let published: Value = serde_json::from_str(fixture).map_err(|error| error.to_string())?;
         let methods = published["methods"]
             .as_array()
             .ok_or("missing contract methods")?;
+        assert_published_native_methods(methods)?;
         let id = "ab".repeat(32);
         for method in [
             "lx_getAsset",

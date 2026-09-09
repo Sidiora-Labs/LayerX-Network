@@ -386,7 +386,18 @@ pub fn run_wallet(
         WalletCommand::Balance { did, asset } => {
             let did = selected_did(&config, did.as_deref())?;
             let transport = Transport::new(&config, rpc, gateway)?;
-            let result = if let Some(asset) = asset {
+            let result = if rpc.is_some() {
+                let balances = sdk_rpc(&config, rpc, gateway)?
+                    .get_balances(&did)
+                    .map_err(rpc_error)?
+                    .into_value();
+                if let Some(asset) = asset {
+                    filter_rpc_balances(balances, &did, fixed_hex::<32>("asset", &asset)?)?
+                } else {
+                    validated_account_records(&balances, &did)?;
+                    balances
+                }
+            } else if let Some(asset) = asset {
                 let asset = fixed_hex::<32>("asset", &asset)?;
                 let account = account(&did, &asset)?;
                 if transport.emulator {
@@ -396,11 +407,6 @@ pub fn run_wallet(
                         .ok_or("accounts missing")?;
                     accounts.retain(|a| a["id"] == account);
                     balances
-                } else if rpc.is_some() {
-                    sdk_rpc(&config, rpc, gateway)?
-                        .wallet(native_asset())
-                        .balance(&did, asset)
-                        .map_err(rpc_error)?
                 } else {
                     transport.read(
                         "lx_getBalance",
@@ -408,11 +414,6 @@ pub fn run_wallet(
                         &format!("/v1/accounts/{account}/balance"),
                     )?
                 }
-            } else if rpc.is_some() {
-                sdk_rpc(&config, rpc, gateway)?
-                    .get_balances(&did)
-                    .map_err(rpc_error)?
-                    .into_value()
             } else {
                 transport.balances(&did)?
             };
@@ -557,14 +558,13 @@ pub fn run_token(
             write,
         } => {
             let asset = fixed_hex("asset", &asset)?;
-            let to = destination(&to, &asset)?;
-            execute_payment(
+            execute_write(
                 &config,
                 rpc,
                 gateway,
                 key.as_deref(),
                 &write,
-                &Payment::Mint {
+                WriteRequest::Mint {
                     asset,
                     to,
                     amount: units(&amount, true)?,
@@ -577,18 +577,15 @@ pub fn run_token(
             key,
             write,
         } => {
-            let owner = metadata(&config, key.as_deref())?;
             let asset = fixed_hex("asset", &asset)?;
-            let from = fixed_hex("source account", &account(&owner.did, &asset)?)?;
-            execute_payment(
+            execute_write(
                 &config,
                 rpc,
                 gateway,
                 key.as_deref(),
                 &write,
-                &Payment::Burn {
+                WriteRequest::Burn {
                     asset,
-                    from,
                     amount: units(&amount, true)?,
                 },
             )
@@ -631,7 +628,32 @@ fn execute_payment(
     write: &WriteOptions,
     payment: &Payment,
 ) -> Result<CommandOutput, String> {
-    execute_write(config, rpc, gateway, key, write, Some(payment), None)
+    execute_write(
+        config,
+        rpc,
+        gateway,
+        key,
+        write,
+        WriteRequest::Payment(payment),
+    )
+}
+
+enum WriteRequest<'a> {
+    Payment(&'a Payment),
+    Send {
+        asset: [u8; 32],
+        to: String,
+        amount: u128,
+    },
+    Mint {
+        asset: [u8; 32],
+        to: String,
+        amount: u128,
+    },
+    Burn {
+        asset: [u8; 32],
+        amount: u128,
+    },
 }
 
 fn execute_write(
@@ -640,8 +662,7 @@ fn execute_write(
     gateway: Option<&str>,
     key: Option<&str>,
     write: &WriteOptions,
-    payment: Option<&Payment>,
-    transfer: Option<([u8; 32], [u8; 32], u128)>,
+    request: WriteRequest<'_>,
 ) -> Result<CommandOutput, String> {
     use layerx_crypto::signer::{LocalSigner, Signer as _};
     use layerx_platform_cli::wallet_signing::{PreparedPayment, SigningFacts};
@@ -687,12 +708,27 @@ fn execute_write(
         fee_limit: units(&write.fee_limit, false)?,
         idempotency_key,
     };
-    let prepared = match (payment, transfer) {
-        (Some(payment), None) => PreparedPayment::new(payment, &facts)?,
-        (None, Some((asset, to, amount))) => {
+    let prepared = match request {
+        WriteRequest::Payment(payment) => PreparedPayment::new(payment, &facts)?,
+        WriteRequest::Send { asset, to, amount } => {
+            let to = destination(&client, &to, asset)?;
             prepare_send(&client, &signer, &facts, asset, to, amount)?
         }
-        _ => return Err("invalid payment selection".into()),
+        WriteRequest::Mint { asset, to, amount } => {
+            let to = destination(&client, &to, asset)?;
+            PreparedPayment::new(&Payment::Mint { asset, to, amount }, &facts)?
+        }
+        WriteRequest::Burn { asset, amount } => {
+            let from = account_for_asset(&client, facts.actor, asset)?;
+            PreparedPayment::new(
+                &Payment::Burn {
+                    asset,
+                    from,
+                    amount,
+                },
+                &facts,
+            )?
+        }
     };
     print_disclosure(&prepared.confirmation())?;
     let (canonical, activity) = prepared.sign_with_id(&signer)?;
@@ -725,10 +761,16 @@ fn prepare_send(
     to: [u8; 32],
     amount: u128,
 ) -> Result<layerx_platform_cli::wallet_signing::PreparedPayment, String> {
-    let from = fixed_hex("source account", &account(facts.actor, &asset)?)?;
+    let from = account_for_asset(client, facts.actor, asset)?;
+    if from == to {
+        return Err("source and destination accounts must differ".into());
+    }
     let snapshot = client.get_account(&hex_encode(&from)).map_err(rpc_error)?;
     if snapshot["account_id"] != hex_encode(&from) {
         return Err("source account snapshot mismatch".into());
+    }
+    if snapshot["asset_id"] != hex_encode(&asset) {
+        return Err("source account asset mismatch".into());
     }
     if !snapshot["next_sequence"].is_string() {
         return Err("source snapshot omitted canonical sequence".into());
@@ -805,13 +847,9 @@ fn transfer(
     let owner = metadata(config, args.key.as_deref())?;
     let asset = fixed_hex("asset", &args.asset)?;
     let amount = units(&args.amount, true)?;
-    let to = destination(&args.to, &asset)?;
-    let source = account(&owner.did, &asset)?;
-    if hex_encode(&to) == source {
-        return Err("source and destination accounts must differ".into());
-    }
     let transport = Transport::new(config, rpc, gateway)?;
     if transport.emulator {
+        let source = account(&owner.did, &asset)?;
         let source_sequence = transport.source_sequence(&source)?;
         return Err(format!("identity_sequence_unavailable: emulator source next_sequence={source_sequence}; hosted identity preparation requires --rpc; no activity signed or submitted"));
     }
@@ -831,8 +869,11 @@ fn transfer(
         gateway,
         args.key.as_deref(),
         &write,
-        None,
-        Some((asset, to, amount)),
+        WriteRequest::Send {
+            asset,
+            to: args.to.clone(),
+            amount,
+        },
     )
 }
 
@@ -989,9 +1030,153 @@ fn account(did: &str, asset: &[u8; 32]) -> Result<String, String> {
         .map_err(|e| format!("invalid account: {e:?}"))
 }
 
-fn destination(to: &str, asset: &[u8; 32]) -> Result<[u8; 32], String> {
+fn validated_account_records<'a>(snapshot: &'a Value, did: &str) -> Result<&'a [Value], String> {
+    if snapshot["did"] != did || snapshot["verification"] != "authenticated_node_snapshot" {
+        return Err(
+            "wallet_accounts_unavailable: authenticated DID snapshot binding missing".into(),
+        );
+    }
+    let accounts = snapshot["accounts"]
+        .as_array()
+        .filter(|accounts| accounts.len() <= 64)
+        .ok_or("wallet_accounts_unavailable: bounded account list missing")?;
+    let prefix = format!("agent:{did}:");
+    let mut identifiers = std::collections::BTreeSet::new();
+    for record in accounts {
+        let name = record["name"]
+            .as_str()
+            .and_then(|name| name.strip_prefix(&prefix).map(|tail| (name, tail)))
+            .ok_or("wallet_accounts_unavailable: account name is not bound to the DID")?;
+        let namespace = name.1;
+        let valid_namespace = namespace == "main"
+            || ["asset:", "budget:", "escrow:", "margin:"]
+                .iter()
+                .any(|marker| {
+                    namespace.strip_prefix(marker).is_some_and(|component| {
+                        !component.is_empty()
+                            && !component.contains(':')
+                            && (*marker != "asset:"
+                                || (component.len() == 64
+                                    && component.bytes().all(|byte| {
+                                        byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)
+                                    })))
+                    })
+                });
+        if !valid_namespace {
+            return Err("wallet_accounts_unavailable: unsupported account namespace".into());
+        }
+        let parsed = layerx_types::account::AccountId::parse(name.0)
+            .map_err(|e| format!("wallet_accounts_unavailable: invalid account name: {e:?}"))?;
+        let expected = account_id_for_protocol(&parsed, 3)
+            .map_err(|e| format!("wallet_accounts_unavailable: invalid account id: {e:?}"))?;
+        let id = record["account_id"]
+            .as_str()
+            .ok_or("wallet_accounts_unavailable: account id missing")?;
+        let decoded = fixed_hex::<32>("account id", id)?;
+        if decoded != expected || id != hex_encode(&decoded) || !identifiers.insert(decoded) {
+            return Err("wallet_accounts_unavailable: account id binding is invalid".into());
+        }
+        let asset = record["asset_id"]
+            .as_str()
+            .ok_or("wallet_accounts_unavailable: asset id missing")?;
+        let decoded_asset = fixed_hex::<32>("asset id", asset)?;
+        if asset != hex_encode(&decoded_asset)
+            || !canonical_u128(&record["balance"])
+            || !canonical_u64(&record["next_sequence"])
+            || !canonical_u64(&record["observed_head_sequence"])
+            || !canonical_u64(&record["batch_number"])
+            || !canonical_hex_bytes(&record["canonical_value"])
+            || !canonical_hex_bytes(&record["proof_material"])
+        {
+            return Err("wallet_accounts_unavailable: account evidence is noncanonical".into());
+        }
+    }
+    Ok(accounts)
+}
+
+fn account_for_asset(
+    client: &layerx_sdk::rpc::RpcClient,
+    did: &str,
+    asset: [u8; 32],
+) -> Result<[u8; 32], String> {
+    let snapshot = client.get_balances(did).map_err(rpc_error)?.into_value();
+    account_for_asset_in_snapshot(&snapshot, did, asset)
+}
+
+fn account_for_asset_in_snapshot(
+    snapshot: &Value,
+    did: &str,
+    asset: [u8; 32],
+) -> Result<[u8; 32], String> {
+    let expected_asset = hex_encode(&asset);
+    let main = format!("agent:{did}:main");
+    let per_asset = format!("agent:{did}:asset:{expected_asset}");
+    let mut selected = validated_account_records(snapshot, did)?
+        .iter()
+        .filter(|record| {
+            record["asset_id"] == expected_asset
+                && matches!(record["name"].as_str(), Some(name) if name == main || name == per_asset)
+        })
+        .map(|record| {
+            fixed_hex::<32>(
+                "account id",
+                record["account_id"]
+                    .as_str()
+                    .ok_or("wallet account id missing")?,
+            )
+        });
+    let account = selected
+        .next()
+        .transpose()?
+        .ok_or("wallet_account_unavailable: no account exists for the requested asset")?;
+    if selected.next().is_some() {
+        return Err("wallet_account_unavailable: multiple source accounts match the asset".into());
+    }
+    Ok(account)
+}
+
+fn filter_rpc_balances(mut snapshot: Value, did: &str, asset: [u8; 32]) -> Result<Value, String> {
+    let expected = hex_encode(&asset);
+    let selected = validated_account_records(&snapshot, did)?
+        .iter()
+        .filter(|record| record["asset_id"] == expected)
+        .cloned()
+        .collect();
+    snapshot["accounts"] = Value::Array(selected);
+    Ok(snapshot)
+}
+
+fn canonical_u64(value: &Value) -> bool {
+    value.as_str().is_some_and(|text| {
+        text.parse::<u64>()
+            .is_ok_and(|number| number.to_string() == text)
+    })
+}
+
+fn canonical_u128(value: &Value) -> bool {
+    value.as_str().is_some_and(|text| {
+        text.parse::<u128>()
+            .is_ok_and(|number| number.to_string() == text)
+    })
+}
+
+fn canonical_hex_bytes(value: &Value) -> bool {
+    value.as_str().is_some_and(|text| {
+        !text.is_empty()
+            && text.len().is_multiple_of(2)
+            && text
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    })
+}
+
+fn destination(
+    client: &layerx_sdk::rpc::RpcClient,
+    to: &str,
+    asset: [u8; 32],
+) -> Result<[u8; 32], String> {
     if to.starts_with("did:") {
-        fixed_hex("destination", &account(to, asset)?)
+        account_for_asset(client, to, asset)
     } else {
         fixed_hex("destination account", to)
     }
@@ -1034,6 +1219,35 @@ fn verify_receipt(response: &Value, activity: [u8; 32], key: [u8; 32]) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn account_record(did: &str, name: &str, asset: [u8; 32], sequence: u64) -> Value {
+        let parsed = layerx_types::account::AccountId::parse(name)
+            .unwrap_or_else(|error| panic!("invalid test account: {error:?}"));
+        let account = account_id_for_protocol(&parsed, 3)
+            .unwrap_or_else(|error| panic!("invalid test account id: {error:?}"));
+        assert!(name.starts_with(&format!("agent:{did}:")));
+        json!({
+            "account_id": hex_encode(&account),
+            "name": name,
+            "asset_id": hex_encode(&asset),
+            "balance": "100",
+            "next_sequence": sequence.to_string(),
+            "canonical_value": "0102",
+            "proof_material": "0304",
+            "observed_head_sequence": "7",
+            "batch_number": "3",
+        })
+    }
+
+    fn account_snapshot(did: &str, accounts: Vec<Value>) -> Value {
+        let mut snapshot = json!({
+            "did": did,
+            "accounts": [],
+            "verification": "authenticated_node_snapshot",
+        });
+        snapshot["accounts"] = Value::Array(accounts);
+        snapshot
+    }
 
     #[test]
     fn identity_snapshot_requires_exact_actor_authentication_and_sequence() -> Result<(), String> {
@@ -1116,10 +1330,6 @@ mod tests {
     fn namespaces_and_sequence_bounds() -> Result<(), String> {
         let did = "did:layerx:alice";
         assert_ne!(account(did, &native_asset())?, account(did, &[1; 32])?);
-        assert_eq!(
-            hex_encode(&destination(did, &[1; 32])?),
-            account(did, &[1; 32])?
-        );
         assert_eq!(sequence(&json!(u64::MAX.to_string()))?, u64::MAX);
         for bad in [
             json!(-1),
@@ -1134,6 +1344,73 @@ mod tests {
         assert!(units("1.5", true).is_err());
         assert_eq!(units("0", false)?, 0);
         Ok(())
+    }
+
+    #[test]
+    fn authenticated_account_resolution_uses_the_deployed_native_asset() -> Result<(), String> {
+        let did = "did:layerx:alice";
+        let native = [0x44; 32];
+        let token = [0x55; 32];
+        let main_name = format!("agent:{did}:main");
+        let token_name = format!("agent:{did}:asset:{}", hex_encode(&token));
+        let main = account_record(did, &main_name, native, 7);
+        let token_account = account_record(did, &token_name, token, 9);
+        let snapshot = account_snapshot(did, vec![main.clone(), token_account.clone()]);
+
+        assert_eq!(
+            hex_encode(&account_for_asset_in_snapshot(&snapshot, did, native)?),
+            main["account_id"]
+        );
+        assert_eq!(
+            hex_encode(&account_for_asset_in_snapshot(&snapshot, did, token)?),
+            token_account["account_id"]
+        );
+        let filtered = filter_rpc_balances(snapshot.clone(), did, token)?;
+        assert_eq!(filtered["accounts"], json!([token_account]));
+        assert!(account_for_asset_in_snapshot(&snapshot, did, [0x66; 32]).is_err());
+
+        let duplicate = account_record(
+            did,
+            &format!("agent:{did}:asset:{}", hex_encode(&native)),
+            native,
+            10,
+        );
+        assert!(account_for_asset_in_snapshot(
+            &account_snapshot(did, vec![main, duplicate]),
+            did,
+            native,
+        )
+        .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn authenticated_account_resolution_refuses_unbound_or_noncanonical_evidence() {
+        let did = "did:layerx:alice";
+        let asset = [0x44; 32];
+        let name = format!("agent:{did}:main");
+        let good = account_record(did, &name, asset, 7);
+        for (field, value) in [
+            ("account_id", json!("11".repeat(32))),
+            ("asset_id", json!("AA".repeat(32))),
+            ("balance", json!("0100")),
+            ("next_sequence", json!(7)),
+            ("canonical_value", json!("")),
+            ("proof_material", json!("xyz")),
+            ("observed_head_sequence", json!("07")),
+            ("batch_number", json!(null)),
+        ] {
+            let mut changed = good.clone();
+            changed[field] = value;
+            assert!(validated_account_records(&account_snapshot(did, vec![changed]), did).is_err());
+        }
+        let mut wrong_did = account_snapshot(did, vec![good.clone()]);
+        wrong_did["did"] = json!("did:layerx:bob");
+        assert!(validated_account_records(&wrong_did, did).is_err());
+
+        let mut wrong_verification = account_snapshot(did, vec![good]);
+        wrong_verification["verification"] = json!("unverified");
+        assert!(validated_account_records(&wrong_verification, did).is_err());
     }
 
     #[test]
