@@ -612,6 +612,44 @@ fn lookup_receipt(config: &Config, activity_id: [u8; 32]) -> ReceiptSource {
     }
 }
 
+fn checkpoint_header(
+    config: &Config,
+    batch: u64,
+) -> Result<layerx_client::evidence::VerifiedCheckpoint, ()> {
+    use layerx_client::evidence::{checkpoint, CheckpointSelector, EvidenceContext};
+    let limits = Limits {
+        maximum_frame_bytes: LNI_FRAME_BYTES,
+        maximum_connections: MAX_LNI_CONNECTIONS,
+        maximum_streams: 1,
+        maximum_queued_bytes: LNI_FRAME_BYTES,
+        deadline: IO_TIMEOUT,
+    };
+    let mut transport =
+        Uds::connect(&config.lni_socket, &config.lni_gate, limits).map_err(|_| ())?;
+    let expected = HandshakeConfig {
+        built_interface_version: Version::V1_3,
+        expected_protocol_version: PROTOCOL_VERSION,
+        expected_network_id: config.protocol_network_id,
+    };
+    let handshake = perform(&mut transport, &expected, None).map_err(|_| ())?;
+    if handshake.node().authorised_sequencer_key != config.sequencer_public_key {
+        return Err(());
+    }
+    let verified = checkpoint(
+        &mut transport,
+        CheckpointSelector::Batch(batch),
+        EvidenceContext {
+            interface_version: Version::V1_3,
+            correlation_id: CORRELATION.fetch_add(1, Ordering::AcqRel),
+            expected_protocol_version: PROTOCOL_VERSION,
+            expected_network_id: config.protocol_network_id,
+            handshake_sequencer_key: config.sequencer_public_key,
+        },
+    )
+    .map_err(|_| ())?;
+    Ok(verified)
+}
+
 fn evidence_refusal(refusal_kind: &EvidenceRefusal) -> Response {
     eprintln!("layerx-receipt-authority refused replica evidence: {refusal_kind:?}");
     refusal(502, "evidence_refused", None)
