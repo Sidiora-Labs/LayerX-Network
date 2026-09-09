@@ -169,3 +169,24 @@ def decode_receive(value: bytes) -> dict[str, object]:
     if offset != len(value):
         raise ValueError("invalid-receive")
     return result
+
+
+def encode_account_open(asset: str) -> bytes:
+    return b"\x00\x01" + _encode({"asset": asset}, (("asset", "hex", 32),))
+
+
+def encode_grant_revoke(grant_id: str, revocation_sequence: str) -> bytes:
+    return b"\x00\x01" + _encode(
+        {"grant_id": grant_id, "revocation_sequence": revocation_sequence},
+        (("grant_id", "hex", 32), ("revocation_sequence", "integer", 8)),
+    )
+
+
+def encode_asset_supply(asset: str, account: str, amount: str) -> bytes:
+    body = _encode(
+        {"asset": asset, "account": account, "amount": amount},
+        (("asset", "hex", 32), ("account", "hex", 32), ("amount", "integer", 16)),
+    )
+    if int(amount) == 0:
+        raise ValueError("invalid-asset-amount")
+    return b"\x00\x01" + body

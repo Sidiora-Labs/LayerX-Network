@@ -138,3 +138,17 @@ export function decodeReceive(bytes: Uint8Array): Receive {
   if (offset !== bytes.length) throw new Error("invalid-receive");
   return { ...core, receiver_authorization, payer_grant } as unknown as Receive;
 }
+
+export function encodeAccountOpen(asset: string): Uint8Array {
+  return concatenate(new Uint8Array([0, 1]), encode({ asset }, [["asset", "hex", 32]]));
+}
+
+export function encodeGrantRevoke(grant_id: string, revocation_sequence: string): Uint8Array {
+  return concatenate(new Uint8Array([0, 1]), encode({ grant_id, revocation_sequence }, [["grant_id", "hex", 32], ["revocation_sequence", "integer", 8]]));
+}
+
+export function encodeAssetSupply(asset: string, account: string, amount: string): Uint8Array {
+  const body = encode({ asset, account, amount }, [["asset", "hex", 32], ["account", "hex", 32], ["amount", "integer", 16]]);
+  if (BigInt(amount) === 0n) throw new Error("invalid-asset-amount");
+  return concatenate(new Uint8Array([0, 1]), body);
+}
