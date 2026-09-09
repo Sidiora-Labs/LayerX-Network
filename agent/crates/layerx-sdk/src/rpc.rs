@@ -114,7 +114,7 @@ pub fn wallet_account(
     asset: [u8; 32],
     native_asset: [u8; 32],
 ) -> Result<[u8; 32], RpcError> {
-    let account = layerx_types::account::AccountId::for_asset(did, asset, native_asset)
+    let account = layerx_wire::account::account_name_for_asset(did, asset, native_asset)
         .map_err(|_| RpcError::InvalidRequest)?;
     layerx_wire::hash::account_id_for_protocol(
         &account,

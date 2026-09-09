@@ -1,5 +1,6 @@
 //! Byte-exact canonical `LayerX` wire encoding.
 
+pub mod account;
 pub mod activity;
 pub mod decode;
 pub mod encode;
