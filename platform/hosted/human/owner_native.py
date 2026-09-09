@@ -162,6 +162,10 @@ def _produce(work_dir):
     did_id = digest(b'did-id', struct.pack('>H', len(did)) + did)
     name = b'agent:' + did + b':main'
     account = hashlib.sha256(b'LX:ACCOUNT:v1' + span(name)).digest()
+    admission_path = root / 'owner-admission.json'
+    admission = protected_json(admission_path)
+    require(admission == dict(did=did.decode(), public_key=public.hex(), owner_account=account.hex()),
+            admission_path, 'post-LXIP owner admission binding')
     policy_path = root / 'recovery-policy.json'
     policy = protected_json(policy_path)
     from provision import recovery_policy, owner_registration
@@ -276,3 +280,24 @@ def produce(work_dir):
         raise
     except (OSError, ValueError, KeyError, TypeError, OverflowError) as error:
         raise Refused(f'{Path(work_dir) / "human-evidence-input/owner-native.json"}: native provisioning refused; preserve owner-native-run for reconciliation') from error
+
+
+def prepare_admission(work_dir, secrets_dir):
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from cryptography.hazmat.primitives.serialization import Encoding, PrivateFormat, PublicFormat, NoEncryption
+    from provision import owner_result
+    root = Path(work_dir) / 'human-evidence-input'
+    owner = owner_result(work_dir, Path(work_dir) / 'human-owner-result.json')
+    did = owner['did'].encode('ascii')
+    require(0 < len(did) <= 255 and did.startswith(b'did:layerx:act_'), root, 'exact LXIP DID')
+    custody = Path(secrets_dir) / 'human-owner'
+    custody.mkdir(mode=0o700)
+    public = None
+    for name in ('owner', 'pending'):
+        key = Ed25519PrivateKey.generate()
+        protected_write(custody / (name + '.seed'), key.private_bytes(Encoding.Raw, PrivateFormat.Raw, NoEncryption()))
+        if name == 'owner':
+            public = key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+    account = hashlib.sha256(b'LX:ACCOUNT:v1' + span(b'agent:' + did + b':main')).hexdigest()
+    write_json(root / 'owner-admission.json', dict(did=did.decode(), public_key=public.hex(), owner_account=account))
+    protected_write(root / 'owner-admission.txt', did.hex().encode() + b':' + public.hex().encode() + b':0\n')

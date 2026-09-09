@@ -341,15 +341,11 @@ static lxp_result decode_hex(const char *text, uint8_t *output,
     return LXP_OK;
 }
 
-static lxp_result load_identities(const char *path,
-                                  lxp_identity_store *identities)
+static lxp_result read_identities(FILE *file, lxp_identity_store *identities)
 {
-    FILE *file;
     char line[4096];
     lxp_result status = LXP_OK;
-    if (path == NULL || identities == NULL) return LXP_ERR_NON_CANONICAL;
-    file = fopen(path, "rb");
-    if (file == NULL) return LXP_ERR_IO;
+    if (file == NULL || identities == NULL) return LXP_ERR_NON_CANONICAL;
     (void)memset(identities, 0, sizeof(*identities));
     while (status == LXP_OK && fgets(line, sizeof(line), file) != NULL) {
         char *key_separator = strchr(line, ':');
@@ -390,7 +386,54 @@ static lxp_result load_identities(const char *path,
     if (status == LXP_OK && ferror(file)) status = LXP_ERR_IO;
     if (status == LXP_OK && identities->count == 0U)
         status = LXP_ERR_UNKNOWN_DID;
+    return status;
+}
+
+static lxp_result load_identities(const char *path, lxp_identity_store *identities)
+{
+    if (path == NULL || identities == NULL) return LXP_ERR_NON_CANONICAL;
+    FILE *file = fopen(path, "rb");
+    if (file == NULL) return LXP_ERR_IO;
+    lxp_result status = read_identities(file, identities);
     if (fclose(file) != 0 && status == LXP_OK) status = LXP_ERR_IO;
+    return status;
+}
+
+static lxp_result admit_provisioned_identities(lxp_daemon_process *process)
+{
+    lxp_result status = LXP_OK;
+    if (pthread_mutex_lock(&process->owner.mutex) != 0) return LXP_ERR_IO;
+    if (process->protocol_version != 3U || process->state.next_sequence != 1U)
+        goto finish;
+    const char *path = required_environment("LAYERX_NODE_IDENTITIES");
+    int fd = path == NULL ? -1 : open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
+    struct stat info;
+    if (fd < 0) { status = LXP_ERR_IO; goto finish; }
+    if (fstat(fd, &info) != 0 || !S_ISREG(info.st_mode) ||
+        info.st_uid != geteuid() || (info.st_mode & 0777U) != 0600U ||
+        info.st_nlink != 1 || info.st_size <= 0 || info.st_size > 1048576) {
+        (void)close(fd);
+        status = LXP_ERR_NON_CANONICAL;
+        goto finish;
+    }
+    FILE *file = fdopen(fd, "rb");
+    if (file == NULL) { (void)close(fd); status = LXP_ERR_IO; goto finish; }
+    lxp_identity_store *next = malloc(sizeof(*next));
+    status = next == NULL ? LXP_ERR_IO : read_identities(file, next);
+    if (fclose(file) != 0 && status == LXP_OK) status = LXP_ERR_IO;
+    if (status == LXP_OK && next->count < process->identities.count)
+        status = LXP_ERR_AUTH_SCOPE;
+    for (size_t i = 0U; status == LXP_OK && i < process->identities.count; ++i)
+        if (memcmp(&next->identities[i], &process->identities.identities[i],
+                   sizeof(lxp_identity)) != 0) status = LXP_ERR_AUTH_SCOPE;
+    for (size_t i = process->identities.count; status == LXP_OK && i < next->count; ++i)
+        if (next->identities[i].next_sequence != 0U ||
+            !lxp_ed25519_pubkey_is_canonical(next->identities[i].primary_key))
+            status = LXP_ERR_AUTH_SCOPE;
+    if (status == LXP_OK) process->identities = *next;
+    free(next);
+finish:
+    if (pthread_mutex_unlock(&process->owner.mutex) != 0) status = LXP_ERR_IO;
     return status;
 }
 
@@ -4173,7 +4216,8 @@ lxp_result lxp_daemon_serve(const char *configuration_path)
     }
     while (status == LXP_OK && !stop_requested) {
         struct timespec interval = {0, 100000000L};
-        status = lxp_daemon_lni_status(&process->lni);
+        status = admit_provisioned_identities(process);
+        if (status == LXP_OK) status = lxp_daemon_lni_status(&process->lni);
         if (status == LXP_OK && nanosleep(&interval, NULL) != 0 &&
             errno != EINTR)
             status = LXP_ERR_IO;
