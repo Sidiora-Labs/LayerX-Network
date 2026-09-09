@@ -578,14 +578,23 @@ secrets_generate() {
 }
 
 module_registry_generate() {
-    local bootstrap="$REPO_ROOT/platform/hosted/node/bootstrap.sh" symbol currency decimals
+    local bootstrap="$REPO_ROOT/platform/hosted/node/bootstrap.sh" asset symbol currency decimals
+    asset=$(sed -n 's/^ASSET_ID="\([0-9a-f]*\)"$/\1/p' "$bootstrap")
+    [ "$NODE_ASSET_ID" = "$asset" ] || fail "node manifest asset differs from bootstrap asset"
     symbol=$(sed -n 's/^ASSET_SYMBOL=//p' "$bootstrap")
     currency=$(sed -n 's/^ASSET_CURRENCY=//p' "$bootstrap")
     decimals=$(sed -n 's/^ASSET_DECIMALS=//p' "$bootstrap")
     local -a args=(generate --network-id "$NODE_NETWORK_ID" --protocol-version 3
         --asset "$NODE_ASSET_ID" --symbol "$symbol" --currency "$currency" --decimals "$decimals")
-    if [ -n "$CUSTODY_PROFILE" ]; then args+=(--custody-profile "$CUSTODY_PROFILE"); fi
-    "$REPO_ROOT/build/bin/layerx-module-registry" "${args[@]}"
+    local -a mounts=()
+    if [ -n "$CUSTODY_PROFILE" ]; then
+        mounts+=(--mount "type=bind,src=$(realpath "$CUSTODY_PROFILE"),dst=/run/custody.profile,readonly")
+        args+=(--custody-profile /run/custody.profile)
+    fi
+    docker run --rm --network none --read-only --user "$(id -u):$(id -g)" \
+        --cap-drop ALL --security-opt no-new-privileges \
+        "${mounts[@]}" --entrypoint /usr/local/bin/layerx-module-registry \
+        "$(image_ref layerx-node)" "${args[@]}"
 }
 
 module_registry_verify() {
@@ -623,7 +632,6 @@ material_prepare() {
     source "$REPO_ROOT/platform/hosted/human/material.sh"
     case "${LAYERX_BETA_RETAIN_MATERIAL:-0}" in
         0)
-            make -C "$REPO_ROOT" layerx-module-registry
             ca_generate
             secrets_generate
             ;;
@@ -1749,7 +1757,7 @@ beta_cluster_render() {
         source "$REPO_ROOT/platform/hosted/human/material.sh"
         retained_material_inventory check || fail "retained material refused: inventory validation failed"
     fi
-    require_tool openssl jq python3 git
+    require_tool docker openssl jq python3 git
     require_foundry
     custody_profile_validate
     MISSING_INPUTS=()

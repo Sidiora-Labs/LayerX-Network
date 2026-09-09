@@ -551,14 +551,16 @@ inputs appear here:
 
 ## Version-2 module registry
 
-`make layerx-module-registry` builds the native producer. `beta-cluster.sh`
+`beta-cluster.sh` runs `/usr/local/bin/layerx-module-registry generate` from the
+node image with networking disabled and a read-only filesystem. It
 reads `ASSET_SYMBOL`, `ASSET_CURRENCY`, and `ASSET_DECIMALS` from
 `platform/hosted/node/bootstrap.sh`, supplies the node network and asset id,
 and passes `--custody-profile` when configured. The producer links the daemon's
 actual Asset and Programs interfaces and includes Bridge only for a validated
 custody profile. It refuses malformed metadata and noncanonical declarations.
 The generated schema-version-2 bytes are published as `registry.json` in
-`layerx-core-module-registry`, shared by gateway and node consumers.
+`layerx-core-module-registry`, shared by gateway and receipt authority. The authority init container installs
+those same canonical bytes into its private `registry.json` file.
 
 After node readiness, `layerx-module-registry read-node` requests an authenticated
 LNI preparation snapshot through the node socket as UID 4021. Bring-up compares
