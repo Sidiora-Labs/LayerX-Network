@@ -7845,3 +7845,19 @@ file = "platform/hosted/human/native_manifest.py platform/hosted/human/provision
 symbol = "configure human_native_provision _produce"
 observed = "Native producer configuration, protected Secret mounts, exact LXIP admission propagation, custody credit input and producer invocation are wired before owner-registration validation. The producer uses the real authenticated LNI peer uid, retains all signed activities and receipts, retrieves authenticated replica evidence and publishes records to the authority-owned state volume. Human owner environment exports derive only from produced registration and recovery files."
 assumption = "Live StatefulSet rollout, mounted producer execution and Human evidence Job qualification require the cluster."
+
+[observation.3.7.40]
+task = "3.7"
+severity = "note"
+file = "src/modules/governance/lxp_governance.c platform/hosted/authority/src/human.rs"
+symbol = "session native_capability_scope"
+observed = "Governance session payload version one commits expiry_sequence and action_key in module state and an LXGS2 receipt effect; old payload shape is refused. Hosted capability evidence checks those commitments, owner identity and revocation state, complete receipt suffix and authenticated node checkpoint evidence. Unsupported module scope and uncommitted monetary bounds remain refused."
+assumption = "Positive evidence describes the committed grant; empty monetary scope does not meet the separate Human capability installation contract."
+
+[observation.3.7.41]
+task = "3.7"
+severity = "blocker"
+file = "cmd/layerx-guarantor/runtime.c"
+symbol = "gp_runtime_open gp_runtime_authority"
+observed = "Real native owner checkpoint qualification reaches two bonded guarantor producers using deployed GuarantorBond and CheckpointRegistry, but both refuse startup with configuration result -902. The independent runtime registers Programs, Asset and optional Bridge while the genesis registry also contains Governance; its replay admission excludes Governance activities. Raw evidence is qual-logs/own1/own1d-session-real-checkpoint-domain.log."
+assumption = "Governance registry, admission and identity refresh must be implemented in the guarantor replay runtime before positive Human checkpoint policy qualification can pass. Snapshot and replay equality checks remain intact."
