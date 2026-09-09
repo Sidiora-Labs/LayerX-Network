@@ -31,3 +31,16 @@ for the produced account and invokes `tests/bridge/custody_credit.py` attestatio
 Both RPC origins must prove the disposable genesis and CA identity; protected
 host endpoints remain refused. `custody-bootstrap.started` and
 `custody-deposit.started` prevent blind repetition after unknown outcomes.
+
+`owner-native.json` supplies `node_socket`, `network_id`, `owner_seed_file`,
+`pending_seed_file`, `sequencer_public_key`, `layerxctl`, `fee_limit`,
+`authority_url`, `authority_token_file`, `authority_ca_file` and
+`authority_state_root`. The cluster produces it with container-local paths.
+The `owner-producer` container uses UID 4021 for the authenticated LNI peer;
+Secret `layerx-human-native-input` supplies the protected inputs, copied into
+private mode-0600 files. Authenticated replica records go into the authority's
+existing protected state volume. Public activities and receipts are retained
+under `owner-native-run`. `human-owner.env` exports the exact produced
+`LAYERX_HUMAN_AGENT_ACTOR`, `_AUTHORITY`, `_OWNER_ACCOUNT`, `_RECOVERY_ROOT` and
+`_RECOVERY_THRESHOLD`. Never repeat an interrupted producer without reconciling
+`owner-native.started` and the retained execution evidence.

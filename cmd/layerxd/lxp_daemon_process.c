@@ -50,6 +50,7 @@ typedef struct lxp_daemon_process {
     size_t asset_count;
     lx_programs_transfer_runtime programs;
     lxp_identity_store identities;
+    uint8_t admitted_identity_digest[32];
     lxp_fee_params fees;
     lxp_log feed_log;
     lxp_log canonical_log;
@@ -97,6 +98,10 @@ typedef struct lxp_daemon_process {
 } lxp_daemon_process;
 
 static lxp_result resume_batch_number(lxp_daemon_process *process);
+static lxp_result initialized_genesis_marker_identity(
+    lxp_daemon_process *process, bool create, bool *present,
+    const uint8_t identity_digest[32]);
+
 static lxp_result availability_prune(lxp_daemon_process *process, uint64_t head)
 {
     uint64_t low = head >= process->availability_retain_batches ?
@@ -420,6 +425,17 @@ static lxp_result admit_provisioned_identities(lxp_daemon_process *process)
     if (file == NULL) { (void)close(fd); status = LXP_ERR_IO; goto finish; }
     lxp_identity_store *next = malloc(sizeof(*next));
     status = next == NULL ? LXP_ERR_IO : read_identities(file, next);
+    uint8_t digest[32];
+    uint8_t *bytes = NULL;
+    if (status == LXP_OK && next->count != process->identities.count) {
+        bytes = malloc((size_t)info.st_size);
+        if (bytes == NULL || fseek(file, 0, SEEK_SET) != 0 ||
+            fread(bytes, 1U, (size_t)info.st_size, file) != (size_t)info.st_size)
+            status = LXP_ERR_IO;
+        if (status == LXP_OK)
+            status = lxp_hash_sha256(bytes, (size_t)info.st_size, digest);
+        free(bytes);
+    }
     if (fclose(file) != 0 && status == LXP_OK) status = LXP_ERR_IO;
     if (status == LXP_OK && next->count < process->identities.count)
         status = LXP_ERR_AUTH_SCOPE;
@@ -430,7 +446,18 @@ static lxp_result admit_provisioned_identities(lxp_daemon_process *process)
         if (next->identities[i].next_sequence != 0U ||
             !lxp_ed25519_pubkey_is_canonical(next->identities[i].primary_key))
             status = LXP_ERR_AUTH_SCOPE;
-    if (status == LXP_OK) process->identities = *next;
+    if (status == LXP_OK && next->count != process->identities.count) {
+        bool present = false;
+        status = initialized_genesis_marker_identity(process, false, &present,
+                                                      process->admitted_identity_digest);
+        if (status == LXP_OK && !present) status = LXP_ERR_ROOT_MISMATCH;
+        if (status == LXP_OK)
+            status = initialized_genesis_marker_identity(process, true, &present, digest);
+        if (status == LXP_OK) {
+            (void)memcpy(process->admitted_identity_digest, digest, sizeof(digest));
+            process->identities = *next;
+        }
+    }
     free(next);
 finish:
     if (pthread_mutex_unlock(&process->owner.mutex) != 0) status = LXP_ERR_IO;
@@ -3521,8 +3548,9 @@ static lxp_result load_genesis_registration(
     return status;
 }
 
-static lxp_result initialized_genesis_marker(
-    lxp_daemon_process *process, bool create, bool *present)
+static lxp_result initialized_genesis_marker_identity(
+    lxp_daemon_process *process, bool create, bool *present,
+    const uint8_t identity_digest[32])
 {
     static const uint8_t domain[] = "LXP/initialized-genesis/v1";
     static const char *const inputs[] = {
@@ -3571,10 +3599,16 @@ static lxp_result initialized_genesis_marker(
         uint8_t *bytes = NULL;
         size_t count = 0U;
         const char *path = required_environment(inputs[index]);
-        status = lxp_daemon_artifact_read(path, NODE_SNAPSHOT_ARENA_BYTES,
-                                          0U, &bytes, &count);
-        if (status == LXP_OK)
-            status = lxp_hash_sha256(bytes, count, record + offset);
+        if (index == 3U && identity_digest != NULL) {
+            (void)memcpy(record + offset, identity_digest, 32U);
+        } else {
+            status = lxp_daemon_artifact_read(path, NODE_SNAPSHOT_ARENA_BYTES,
+                                              0U, &bytes, &count);
+            if (status == LXP_OK)
+                status = lxp_hash_sha256(bytes, count, record + offset);
+            if (status == LXP_OK && index == 3U)
+                (void)memcpy(process->admitted_identity_digest, record + offset, 32U);
+        }
         free(bytes);
         offset += 32U;
     }
@@ -3646,6 +3680,12 @@ static lxp_result initialized_genesis_marker(
     }
     if (status == LXP_OK) *present = true;
     return status;
+}
+
+static lxp_result initialized_genesis_marker(
+    lxp_daemon_process *process, bool create, bool *present)
+{
+    return initialized_genesis_marker_identity(process, create, present, NULL);
 }
 
 static lxp_result verify_bootstrap_genesis(

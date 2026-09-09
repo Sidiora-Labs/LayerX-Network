@@ -7837,3 +7837,11 @@ file = "platform/hosted/human/owner_custody.py platform/hosted/human/provision.s
 symbol = "bootstrap deposit human_custody_step"
 observed = "Fresh cluster ordering now starts disposable Paxeer before native genesis, deploys real wrapped-native custody contracts and generates the immutable custody profile through the existing bridge verifier. After exact LXIP owner/key production, the owner deposit invokes real collateral wrapping, vault approval and deposit, then custody_credit.py attest with two verified disposable RPC origins. Protected host endpoints remain refused. Durable start markers prevent blind resubmission after unknown outcomes."
 assumption = "Paxd cluster execution and image gates require the live cluster and remain unrun on the build server."
+
+[observation.3.7.39]
+task = "3.7"
+severity = "note"
+file = "platform/hosted/human/native_manifest.py platform/hosted/human/provision.sh platform/hosted/human/owner_native.py"
+symbol = "configure human_native_provision _produce"
+observed = "Native producer configuration, protected Secret mounts, exact LXIP admission propagation, custody credit input and producer invocation are wired before owner-registration validation. The producer uses the real authenticated LNI peer uid, retains all signed activities and receipts, retrieves authenticated replica evidence and publishes records to the authority-owned state volume. Human owner environment exports derive only from produced registration and recovery files."
+assumption = "Live StatefulSet rollout, mounted producer execution and Human evidence Job qualification require the cluster."
