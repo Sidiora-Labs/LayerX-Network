@@ -1,2 +1,3 @@
 eth-account>=0.13,<0.14
 eth-abi>=5.2,<6
+cryptography>=44,<47

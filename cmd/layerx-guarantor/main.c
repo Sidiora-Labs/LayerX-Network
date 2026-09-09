@@ -599,7 +599,7 @@ int main(int argc, char **argv)
             if (status == LXP_OK) {
                 field = "checkpoint registration";
                 (void)pthread_mutex_lock(&p->mutex);
-                status = gp_settlement_register(&p->settlement, &certificate, &registration,
+                status = gp_settlement_register(&p->settlement, &certificate, runtime, &registration,
                                                 &already, &registered_version);
                 if (status != LXP_OK) {
                     (void)pthread_mutex_unlock(&p->mutex);
