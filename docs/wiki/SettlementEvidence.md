@@ -125,3 +125,14 @@ its key from the real request type. Module-context commit persists the fact;
 a failed transfer rolls the staged fact back. The runtime withdrawal store
 retains its existing lookup and settlement behavior. The fact records request
 creation, not subsequent settlement status.
+
+The request checkpoint and inclusion checkpoint are separate settlement fields:
+`request_anchor` is the record's existing `checkpoint_id` and remains in the
+nullifier domain; `inclusion_checkpoint` selects the registered root proving
+that record. `CheckpointRegistry::isRecordedAncestor(requestAnchor,
+inclusionCheckpoint)` requires both checkpoints to remain canonical and checks
+their recorded batch order. Registration already enforces consecutive batches,
+sequence continuity and state-root continuity. Unknown, future and invalidated
+anchors or inclusion checkpoints are refused. The consumer rollout must carry
+both fields and enforce this predicate together with `isFinalised` for the
+inclusion root; the existing version-1 proof transport has not yet been migrated.
