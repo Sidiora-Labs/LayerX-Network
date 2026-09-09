@@ -1,4 +1,5 @@
 #include "layerx/lxp_kernel.h"
+#include "layerx/lxp_snapshot.h"
 #include "layerx/lx_asset.h"
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_hash.h"
@@ -207,6 +208,19 @@ static int asset_send(unsigned refusal)
         (void)fprintf(stderr, "asset send case %u: expected %d got %d\n",
             refusal, (int)expected, (int)f->receipt.result_code);
     REQUIRE(f->receipt.result_code == expected);
+    {
+        lxp_receipt changed = f->receipt;
+        changed.resulting_state_root[0] ^= 1U;
+        REQUIRE(lxp_receipt_verify(&changed, f->public_key, &f->arena) != LXP_OK);
+        if (expected == LXP_OK && f->receipt.operation != 0U) {
+            changed = f->receipt;
+            changed.from_balance_before.lo ^= 1U;
+            REQUIRE(lxp_receipt_verify(&changed, f->public_key, &f->arena) != LXP_OK);
+            changed = f->receipt;
+            changed.to_balance_after.lo ^= 1U;
+            REQUIRE(lxp_receipt_verify(&changed, f->public_key, &f->arena) != LXP_OK);
+        }
+    }
     REQUIRE(lxp_receipt_verify(&f->receipt, f->public_key, &f->arena) == LXP_OK);
     REQUIRE(lxp_state_root(&f->kernel, root) == LXP_OK);
     REQUIRE(memcmp(root, f->receipt.resulting_state_root, 32U) == 0);
@@ -442,6 +456,39 @@ static int preview_commit(void)
     return 0;
 }
 
+static int pay1_snapshot_roundtrip(fixture *source)
+{
+    fixture *restored = calloc(1U, sizeof(*restored));
+    lxp_snapshot_manifest_record manifest;
+    lxp_byte_span snapshot;
+    uint8_t before[32], after[32];
+    REQUIRE(restored != NULL && prepare(restored, 3U, true) == 0);
+    REQUIRE(lxp_state_root(&source->kernel, before) == LXP_OK);
+    REQUIRE(lxp_arena_reset(&restored->arena, 0U) == LXP_OK);
+    REQUIRE(lxp_snapshot_write(&source->kernel, source->state.next_sequence - 1U,
+        &restored->arena, &snapshot) == LXP_OK);
+    REQUIRE(lxp_snapshot_manifest_build(snapshot.bytes, snapshot.length,
+        source->state.next_sequence - 1U, before, source->kernel.current_state_root, &manifest) == LXP_OK);
+    REQUIRE(lxp_snapshot_load(snapshot.bytes, snapshot.length, &manifest, &restored->kernel) == LXP_OK);
+    REQUIRE(lxp_state_root(&restored->kernel, after) == LXP_OK);
+    REQUIRE(memcmp(before, after, 32U) == 0);
+    REQUIRE(restored->accounts.count == source->accounts.count);
+    REQUIRE(restored->kernel.module_kv_count == source->kernel.module_kv_count);
+    for (size_t i = 0U; i < source->accounts.count; ++i) {
+        const lx_account *original = &source->accounts.accounts[i];
+        lx_account *loaded;
+        REQUIRE(lx_account_lookup(&restored->accounts, original->name, original->name_length,
+            original->id, &loaded) == LXP_OK);
+        REQUIRE(memcmp(loaded->id, original->id, 32U) == 0);
+        REQUIRE(lxp_u128_cmp(loaded->balance, original->balance) == 0);
+        REQUIRE(loaded->next_sequence == original->next_sequence);
+        REQUIRE(memcmp(loaded->asset_id, original->asset_id, 32U) == 0);
+    }
+    REQUIRE(lxp_state_store_destroy(&restored->state) == LXP_OK);
+    free(restored);
+    return 0;
+}
+
 static int pay1_submit_bytes(fixture *f, uint16_t ordinal, const uint8_t *payload, size_t length, lxp_result expected)
 {
     uint8_t digest[32];
@@ -458,12 +505,41 @@ static int pay1_submit_bytes(fixture *f, uint16_t ordinal, const uint8_t *payloa
     REQUIRE(lxp_activity_signing_preimage(&f->activity, digest) == LXP_OK);
     REQUIRE(sign_digest(digest, f->signature, f->public_key) == 0);
     REQUIRE(lxp_state_root(&f->kernel, f->kernel.current_state_root) == LXP_OK);
+    lx_account_registry *before_accounts = malloc(sizeof(*before_accounts));
+    size_t before_kv_count = f->kernel.module_kv_count;
+    void *before_kv = malloc(sizeof(f->kernel.module_kv));
+    REQUIRE(before_accounts != NULL && before_kv != NULL);
+    *before_accounts = f->accounts;
+    memcpy(before_kv, f->kernel.module_kv, sizeof(f->kernel.module_kv));
+    uint64_t before_sequence = actor_identity->next_sequence;
     lxp_result result = lxp_kernel_execute_activity(&f->kernel, &f->activity, &f->execution, &f->receipt);
+    REQUIRE(actor_identity->next_sequence == before_sequence + 1U);
+    if (expected != LXP_OK) {
+        REQUIRE(f->accounts.count == before_accounts->count);
+        for (size_t i = 0U; i < f->accounts.count; ++i)
+            REQUIRE(lxp_u128_cmp(f->accounts.accounts[i].balance, before_accounts->accounts[i].balance) == 0);
+        REQUIRE(f->kernel.module_kv_count == before_kv_count);
+        REQUIRE(memcmp(before_kv, f->kernel.module_kv, before_kv_count * sizeof(f->kernel.module_kv[0])) == 0);
+    }
+    free(before_kv); free(before_accounts);
     if (result != LXP_OK || f->receipt.result_code != expected)
         (void)fprintf(stderr, "PAY1 ordinal %u kernel %d receipt %d expected %d\n",
                       ordinal, result, f->receipt.result_code, expected);
     REQUIRE(result == LXP_OK);
     REQUIRE(f->receipt.result_code == expected);
+    {
+        lxp_receipt changed = f->receipt;
+        changed.resulting_state_root[0] ^= 1U;
+        REQUIRE(lxp_receipt_verify(&changed, f->public_key, &f->arena) != LXP_OK);
+        if (expected == LXP_OK && f->receipt.operation != 0U) {
+            changed = f->receipt;
+            changed.from_balance_before.lo ^= 1U;
+            REQUIRE(lxp_receipt_verify(&changed, f->public_key, &f->arena) != LXP_OK);
+            changed = f->receipt;
+            changed.to_balance_after.lo ^= 1U;
+            REQUIRE(lxp_receipt_verify(&changed, f->public_key, &f->arena) != LXP_OK);
+        }
+    }
     REQUIRE(lxp_receipt_verify(&f->receipt, f->public_key, &f->arena) == LXP_OK);
     REQUIRE(lxp_state_root(&f->kernel, root) == LXP_OK);
     REQUIRE(memcmp(root, f->receipt.resulting_state_root, 32U) == 0);
@@ -487,7 +563,7 @@ static int pay1_submit(fixture *f, uint16_t ordinal, size_t length, lxp_result e
     return pay1_submit_bytes(f, ordinal, f->payload, length, expected);
 }
 
-static int pay1_receive_grant(void)
+static int pay1_receive_grant(unsigned mode)
 {
     fixture *f = (fixture *)calloc(1U, sizeof(*f));
     lxp_receive receive;
@@ -511,24 +587,108 @@ static int pay1_receive_grant(void)
     receive.payer_grant.per_draw_maximum.lo = 2U;
     receive.payer_grant.allowance.lo = 3U;
     receive.payer_grant.expiration = 100U;
+    receive.payer_grant.recurring = mode == 1U;
+    receive.payer_grant.window_length = mode == 1U ? 10U : 0U;
+    receive.payer_grant.has_reference = mode == 2U;
+    receive.payer_grant.reference_hash[0] = mode == 2U ? 8U : 0U;
     receive.payer_grant.purpose_hash[0] = 9U;
     (void)memcpy(receive.payer_grant.public_key, f->public_key, 32U);
     REQUIRE(lxp_grant_authorization_message(&receive.payer_grant, message, sizeof(message), &message_length) == LXP_OK);
     REQUIRE(lxp_hash_authority(message, message_length, receive.payer_grant.grant_id) == LXP_OK);
     REQUIRE(lxp_hash_domain(LXP_DOMAIN_AUTHORITY_HASH, message, message_length, digest) == LXP_OK);
     REQUIRE(sign_digest(digest, receive.payer_grant.signature, f->public_key) == 0);
+    for (unsigned mutation = 0U; mutation < 12U; ++mutation) {
+        lxp_payer_grant invalid = receive.payer_grant;
+        lxp_result expected = LXP_ERR_MALFORMED_GRANT;
+        if (mutation == 0U) invalid.per_draw_maximum.lo = 0U;
+        if (mutation == 1U) invalid.allowance.lo = 0U;
+        if (mutation == 2U) invalid.expiration = 0U;
+        if (mutation == 3U) { invalid.recurring = true; invalid.window_length = 0U; }
+        if (mutation == 4U) { invalid.recurring = false; invalid.window_length = 1U; }
+        if (mutation == 5U) memset(invalid.recipient, 0, 32U);
+        if (mutation == 6U) memset(invalid.purpose_hash, 0, 32U);
+        if (mutation == 7U) invalid.grant_id[0] ^= 1U;
+        if (mutation == 8U) { invalid.signature[0] ^= 1U; expected = LXP_ERR_BAD_SIGNATURE; }
+        if (mutation == 9U) { invalid.public_key[0] ^= 1U; expected = LXP_ERR_UNAUTHORIZED_DEBIT; }
+        if (mutation == 10U) { invalid.asset[0] ^= 1U; expected = LXP_ERR_ASSET_MISMATCH; }
+        if (mutation == 11U) { invalid.from[0] ^= 1U; expected = LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE; }
+        REQUIRE(lxp_payer_grant_encode(&invalid, payload, sizeof(payload), &length) == LXP_OK);
+        REQUIRE(pay1_submit_bytes(f, 7U, payload, length, expected) == 0);
+    }
+    f->asset.paused = true;
+    REQUIRE(lxp_payer_grant_encode(&receive.payer_grant, payload, sizeof(payload), &length) == LXP_OK);
+    REQUIRE(pay1_submit_bytes(f, 7U, payload, length, LXP_ERR_ASSET_PAUSED) == 0);
+    f->asset.paused = false;
     REQUIRE(lxp_payer_grant_encode(&receive.payer_grant, f->payload, sizeof(f->payload), &length) == LXP_OK);
     REQUIRE(pay1_submit(f, 7U, length, LXP_OK) == 0);
     REQUIRE(pay1_submit(f, 7U, length, LXP_ERR_SEQUENCE_REUSED) == 0);
+    {
+        static const uint8_t other_did[] = "did:key:bob";
+        lxp_identity *other;
+        uint8_t original_actor[32];
+        memcpy(original_actor, f->authority.actor, 32U);
+        REQUIRE(lxp_identity_register(&f->identities, other_did, sizeof(other_did) - 1U,
+            f->public_key, &other) == LXP_OK);
+        f->activity.actor_did = (lxp_byte_span){other_did, sizeof(other_did) - 1U};
+        memcpy(f->authority.actor, other->did_id, 32U);
+        payload[0] = 0U; payload[1] = 1U;
+        memcpy(payload + 2U, receive.payer_grant.grant_id, 32U);
+        memset(payload + 34U, 0, 8U);
+        REQUIRE(pay1_submit_bytes(f, 8U, payload, 42U, LXP_ERR_UNAUTHORIZED_DEBIT) == 0);
+        lxp_payer_grant unauthorized = receive.payer_grant;
+        unauthorized.grant_id[0] ^= 1U;
+        REQUIRE(lxp_payer_grant_encode(&unauthorized, payload, sizeof(payload), &length) == LXP_OK);
+        REQUIRE(pay1_submit_bytes(f, 7U, payload, length, LXP_ERR_UNAUTHORIZED_DEBIT) == 0);
+        f->activity.actor_did = (lxp_byte_span){did, sizeof(did) - 1U};
+        memcpy(f->authority.actor, original_actor, 32U);
+    }
+
     (void)memcpy(receive.grant_id, receive.payer_grant.grant_id, 32U);
     receive.amount.lo = 2U;
-    REQUIRE(lxp_hash_context_value(receive.payer_grant.purpose_hash, 32U, receive.context_hash) == LXP_OK);
+    memcpy(message, receive.payer_grant.purpose_hash, 32U);
+    memcpy(message + 32U, receive.payer_grant.reference_hash, 32U);
+    REQUIRE(lxp_hash_context_value(message, mode == 2U ? 64U : 32U, receive.context_hash) == LXP_OK);
     receive.receiver_authorization.kind = LXP_AUTH_OWNER;
     receive.receiver_authorization.network_id = 7U;
     receive.receiver_authorization.protocol_version = 3U;
     (void)memcpy(receive.receiver_authorization.controller, receive.to, 32U);
     (void)memcpy(receive.receiver_authorization.public_key, f->public_key, 32U);
     (void)memcpy(receive.receiver_authorization.signed_context_hash, receive.context_hash, 32U);
+    for (unsigned mutation = 0U; mutation < 18U; ++mutation) {
+        lxp_receive invalid = receive;
+        lxp_result expected = LXP_ERR_UNAUTHORIZED_DEBIT;
+        invalid.idempotency_key[0] = (uint8_t)(f->identities.identities[0].next_sequence + 40U);
+        if (mutation == 0U) { invalid.grant_id[0] ^= 1U; expected = LXP_ERR_NO_PAYER_GRANT; }
+        if (mutation == 1U) { invalid.asset[0] ^= 1U; expected = LXP_ERR_ASSET_MISMATCH; }
+        if (mutation == 2U) { invalid.from[0] ^= 1U; expected = LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE; }
+        if (mutation == 3U) { invalid.to[0] ^= 1U; expected = LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE; }
+        if (mutation == 4U) { invalid.amount.lo = 3U; expected = LXP_ERR_GRANT_SCOPE_VIOLATION; }
+        if (mutation == 5U) { invalid.context_hash[0] ^= 1U; expected = LXP_ERR_PURPOSE_MISMATCH; }
+        if (mutation == 6U) { invalid.receiver_sequence = 1U; expected = LXP_ERR_SEQUENCE_MISMATCH; }
+        if (mutation == 7U) { invalid.receiver_authorization.signed_context_hash[0] ^= 1U; expected = LXP_ERR_CONTEXT_MISMATCH; }
+        if (mutation == 8U) invalid.receiver_authorization.network_id++;
+        if (mutation == 9U) invalid.receiver_authorization.controller[0] ^= 1U;
+        if (mutation == 10U) invalid.receiver_authorization.public_key[0] ^= 1U;
+        if (mutation == 11U) invalid.idempotency_key[1] = 1U;
+        if (mutation == 12U) memcpy(invalid.to, invalid.from, 32U);
+        if (mutation == 13U) { invalid.amount.lo = 0U; expected = LXP_ERR_ZERO_AMOUNT; }
+        if (mutation == 14U) { f->asset.paused = true; expected = LXP_ERR_ASSET_PAUSED; }
+        if (mutation == 16U) { invalid.payer_grant.grant_id[0] ^= 1U; expected = LXP_ERR_GRANT_SCOPE_VIOLATION; }
+        if (mutation == 17U) {
+            f->execution.batch_timestamp_ms = 101U;
+            f->activity.timestamp_bound = (lxp_timestamp_bound){100U, 150U};
+            expected = LXP_ERR_GRANT_EXPIRED;
+        }
+        REQUIRE(lxp_receive_authorization_message(&invalid, message, sizeof(message), &message_length) == LXP_OK);
+        REQUIRE(lxp_hash_domain(LXP_DOMAIN_SIGNATURE_PREIMAGE, message, message_length, digest) == LXP_OK);
+        REQUIRE(sign_digest(digest, invalid.receiver_authorization.signature, f->public_key) == 0);
+        if (mutation == 15U) invalid.receiver_authorization.signature[0] ^= 1U;
+        REQUIRE(lxp_receive_encode(&invalid, payload, sizeof(payload), &length) == LXP_OK);
+        REQUIRE(pay1_submit_bytes(f, 6U, payload, length, expected) == 0);
+        f->asset.paused = false;
+        f->execution.batch_timestamp_ms = 10U;
+        f->activity.timestamp_bound = (lxp_timestamp_bound){1U, 100U};
+    }
     for (unsigned draw = 0U; draw < 2U; ++draw) {
         receive.receiver_sequence = f->accounts.accounts[2].next_sequence;
         receive.idempotency_key[0] = (uint8_t)(f->identities.identities[0].next_sequence + 40U);
@@ -536,16 +696,21 @@ static int pay1_receive_grant(void)
         REQUIRE(lxp_hash_domain(LXP_DOMAIN_SIGNATURE_PREIMAGE, message, message_length, digest) == LXP_OK);
         REQUIRE(sign_digest(digest, receive.receiver_authorization.signature, f->public_key) == 0);
         REQUIRE(lxp_receive_encode(&receive, payload, sizeof(payload), &length) == LXP_OK);
-        REQUIRE(pay1_submit_bytes(f, 6U, payload, length, draw == 0U ? LXP_OK : LXP_ERR_GRANT_EXHAUSTED) == 0);
+        REQUIRE(pay1_submit_bytes(f, 6U, payload, length, draw == 0U ? LXP_OK : mode == 2U ? LXP_ERR_INVOICE_ALREADY_SETTLED : LXP_ERR_GRANT_EXHAUSTED) == 0);
         REQUIRE(f->accounts.accounts[0].balance.lo == 8U);
         REQUIRE(f->accounts.accounts[2].balance.lo == 2U);
         if (draw == 0U) REQUIRE(f->receipt.operation == 6U && f->receipt.amount.lo == 2U);
     }
     f->payload[0] = 0U; f->payload[1] = 1U;
     (void)memcpy(f->payload + 2U, receive.grant_id, 32U);
+    REQUIRE(pay1_submit(f, 8U, 42U, LXP_ERR_STALE_REVOCATION) == 0);
+    f->payload[2U] ^= 1U;
+    REQUIRE(pay1_submit(f, 8U, 42U, LXP_ERR_NO_PAYER_GRANT) == 0);
+    f->payload[2U] ^= 1U;
     for (size_t i = 0U; i < 8U; ++i)
         f->payload[34U + i] = (uint8_t)(f->identities.identities[0].next_sequence >> (56U - i * 8U));
     REQUIRE(pay1_submit(f, 8U, 42U, LXP_OK) == 0);
+    REQUIRE(pay1_submit(f, 8U, 42U, LXP_ERR_STALE_REVOCATION) == 0);
     receive.amount.lo = 1U;
     receive.idempotency_key[0] = (uint8_t)(f->identities.identities[0].next_sequence + 40U);
     REQUIRE(lxp_receive_authorization_message(&receive, message, sizeof(message), &message_length) == LXP_OK);
@@ -554,6 +719,7 @@ static int pay1_receive_grant(void)
     REQUIRE(lxp_receive_encode(&receive, payload, sizeof(payload), &length) == LXP_OK);
     REQUIRE(pay1_submit_bytes(f, 6U, payload, length, LXP_ERR_GRANT_REVOKED) == 0);
     REQUIRE(f->accounts.accounts[0].balance.lo == 8U && f->accounts.accounts[2].balance.lo == 2U);
+    REQUIRE(pay1_snapshot_roundtrip(f) == 0);
     REQUIRE(lxp_state_store_destroy(&f->state) == LXP_OK);
     free(f);
     return 0;
@@ -711,6 +877,9 @@ static int pay1_issuance(uint8_t final_root[32])
     f->payload[length++] = 1U; f->payload[length++] = 0U;
     registration_length = length;
     (void)memcpy(registration, f->payload, length);
+    f->payload[2U] ^= 1U;
+    REQUIRE(pay1_submit(f, 1U, length, LXP_ERR_ASSET_MISMATCH) == 0);
+    f->payload[2U] ^= 1U;
     REQUIRE(pay1_submit(f, 1U, length, LXP_OK) == 0);
     REQUIRE(f->accounts.count == 3U);
     REQUIRE(f->accounts.accounts[2].balance.lo == 100U);
@@ -782,6 +951,7 @@ static int pay1_issuance(uint8_t final_root[32])
         if (refusal == 3U) { f->accounts.accounts[3].frozen = true; expected = LXP_ERR_ACCOUNT_FROZEN; }
         if (refusal == 4U) { (void)memset(f->payload + 66U, 0, 16U); expected = LXP_ERR_INVALID_AMOUNT; }
         REQUIRE(pay1_submit(f, 10U, 82U, expected) == 0);
+        REQUIRE(pay1_submit(f, 11U, 82U, expected) == 0);
         REQUIRE(f->accounts.accounts[2].balance.lo == 50U && f->accounts.accounts[3].balance.lo == 50U);
         f->accounts.accounts[3].frozen = false;
     }
@@ -803,7 +973,61 @@ static int pay1_issuance(uint8_t final_root[32])
         f->activity.actor_did = (lxp_byte_span){did, sizeof(did) - 1U};
         (void)memcpy(f->authority.actor, issuer, 32U);
     }
+    {
+        lxp_module_kv_entry *entry = &f->kernel.module_kv[0];
+        size_t encoded_length;
+        REQUIRE(lx_asset_record_decode(entry->value, entry->value_length, &record) == LXP_OK);
+        record.paused = true;
+        REQUIRE(lx_asset_record_encode(&record, entry->value, sizeof(entry->value), &encoded_length) == LXP_OK);
+        entry->value_length = (uint32_t)encoded_length;
+        REQUIRE(lxp_u128_to_be((lxp_u128){0U, 1U}, f->payload + 66U) == LXP_OK);
+        REQUIRE(pay1_submit(f, 10U, 82U, LXP_ERR_ASSET_PAUSED) == 0);
+        REQUIRE(pay1_submit(f, 11U, 82U, LXP_ERR_ASSET_PAUSED) == 0);
+        record.paused = false;
+        REQUIRE(lx_asset_record_encode(&record, entry->value, sizeof(entry->value), &encoded_length) == LXP_OK);
+        entry->value_length = (uint32_t)encoded_length;
+    }
+    memcpy(f->payload + 2U, id, 32U);
+    memcpy(f->payload + 34U, account_id, 32U);
+    REQUIRE(lxp_u128_to_be((lxp_u128){0U, 50U}, f->payload + 66U) == LXP_OK);
+    REQUIRE(pay1_submit(f, 10U, 82U, LXP_OK) == 0);
+    REQUIRE(f->accounts.accounts[2].balance.lo == 0U && f->accounts.accounts[3].balance.lo == 100U);
+    REQUIRE(lxp_u128_to_be((lxp_u128){0U, 1U}, f->payload + 66U) == LXP_OK);
+    REQUIRE(pay1_submit(f, 10U, 82U, LXP_ERR_INSUFFICIENT_BALANCE) == 0);
+    REQUIRE(lxp_u128_to_be((lxp_u128){0U, 100U}, f->payload + 66U) == LXP_OK);
+    REQUIRE(pay1_submit(f, 11U, 82U, LXP_OK) == 0);
+    REQUIRE(f->accounts.accounts[2].balance.lo == 100U && f->accounts.accounts[3].balance.lo == 0U);
+    REQUIRE(lxp_u128_to_be((lxp_u128){0U, 1U}, f->payload + 66U) == LXP_OK);
+    REQUIRE(pay1_submit(f, 11U, 82U, LXP_ERR_UNDERFLOW) == 0);
+    REQUIRE(pay1_snapshot_roundtrip(f) == 0);
     REQUIRE(lxp_state_root(&f->kernel, final_root) == LXP_OK);
+    REQUIRE(lxp_state_store_destroy(&f->state) == LXP_OK);
+    free(f);
+    return 0;
+}
+
+static int pay1_malformed(void)
+{
+    static const uint16_t ordinals[] = {1U, 4U, 6U, 7U, 8U, 10U, 11U};
+    for (size_t i = 0U; i < sizeof(ordinals) / sizeof(ordinals[0]); ++i) {
+        fixture *f = calloc(1U, sizeof(*f));
+        REQUIRE(f != NULL && prepare(f, 3U, true) == 0);
+        f->payload[0] = 0U;
+        REQUIRE(pay1_submit(f, ordinals[i], 1U,
+            ordinals[i] == 6U ? LXP_ERR_MALFORMED_RECEIVE :
+            LXP_ERR_NON_CANONICAL) == 0);
+        REQUIRE(lxp_state_store_destroy(&f->state) == LXP_OK);
+        free(f);
+    }
+    fixture *f = calloc(1U, sizeof(*f));
+    REQUIRE(f != NULL && prepare(f, 3U, true) == 0);
+    f->payload[0] = 0U; f->payload[1] = 1U;
+    memcpy(f->payload + 2U, f->asset.asset_id, 32U);
+    f->asset.paused = true;
+    REQUIRE(pay1_submit(f, 4U, 34U, LXP_ERR_ASSET_PAUSED) == 0);
+    f->asset.paused = false;
+    f->payload[2U] ^= 1U;
+    REQUIRE(pay1_submit(f, 4U, 34U, LXP_ERR_ASSET_MISMATCH) == 0);
     REQUIRE(lxp_state_store_destroy(&f->state) == LXP_OK);
     free(f);
     return 0;
@@ -828,7 +1052,10 @@ int main(void)
         REQUIRE(pay1_issuance(replay) == 0);
         REQUIRE(memcmp(first, replay, 32U) == 0);
     }
-    REQUIRE(pay1_receive_grant() == 0);
+    REQUIRE(pay1_receive_grant(0U) == 0);
+    REQUIRE(pay1_receive_grant(1U) == 0);
+    REQUIRE(pay1_receive_grant(2U) == 0);
+    REQUIRE(pay1_malformed() == 0);
     REQUIRE(pay1_prepared_account(0U) == 0);
     REQUIRE(pay1_prepared_account(1U) == 0);
     REQUIRE(pay1_prepared_account(2U) == 0);
