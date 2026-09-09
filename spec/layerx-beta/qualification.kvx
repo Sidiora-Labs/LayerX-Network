@@ -7584,3 +7584,11 @@ symbol = "asset_execute_typed"
 observed = "Native registration recomputes SHA-256 over LX:ASSET:v1, resolved actor identity id32 and salt32, and refuses a differing asset id. The kind-2 branch retains the supplied custody id. The signed invalid-derivation test passes in qual-logs/pay1/pay1e-item3.log."
 assumption = "No encoding or derivation change is needed."
 severity = "note"
+
+[observation.3.7.39]
+task = "3.7"
+file = "src/modules/asset/lx_asset_registry.c src/modules/asset/lx_asset_decode.c"
+symbol = "symbol_valid lx_asset_register_decode"
+observed = "The typed registration decoder and issuer_kind nonzero stored-record validation accept 1..16 ASCII bytes consistently. UTF-8 name, decimals, custody lengths, truncation and trailing-byte refusals pass in qual-logs/pay1/pay1e-item3.log. The legacy issuer_kind zero registry helper retains its uppercase/digit check."
+assumption = "Broadening the legacy helper check is not required for shared native activity encoding and would relax an existing check; it is left intact."
+severity = "note"
