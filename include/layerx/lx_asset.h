@@ -121,6 +121,17 @@ typedef struct lx_withdrawal_record {
     bool settled;
 } lx_withdrawal_record;
 
+enum {
+    LX_WITHDRAWAL_STATE_KEY_BYTES = 43,
+    LX_WITHDRAWAL_STATE_VALUE_BYTES = 182
+};
+
+lxp_result lx_withdrawal_state_encode(const lx_withdrawal_request *request,
+    uint8_t key[LX_WITHDRAWAL_STATE_KEY_BYTES],
+    uint8_t value[LX_WITHDRAWAL_STATE_VALUE_BYTES]);
+lxp_result lx_withdrawal_state_decode(const uint8_t *key, size_t key_length,
+    const uint8_t *value, size_t value_length, lx_withdrawal_record *record);
+
 typedef struct lx_withdrawal_store {
     lx_withdrawal_record records[LX_DEPOSIT_NULLIFIER_CAPACITY];
     size_t count;
