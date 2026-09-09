@@ -21,7 +21,7 @@ contract NativeStateProofTest {
 
     function testNativeVectorsAndRefusals() external {
         string memory vectors = vm.readFile("contracts/config/native-state-proofs.json");
-        for (uint256 i; i < 7; ++i) {
+        for (uint256 i; i < 10; ++i) {
             string memory base = string.concat(".vectors[", vm.toString(i), "]");
             bytes memory proof = vm.parseJsonBytes(vectors, string.concat(base, ".proof"));
             bytes32 root = vm.parseJsonBytes32(vectors, string.concat(base, ".root"));

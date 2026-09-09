@@ -60,6 +60,11 @@ static lxp_result fold(uint8_t node[32], const lxp_state_proof *path)
     return level == path->depth ? LXP_OK : LXP_ERR_NON_CANONICAL;
 }
 
+static bool account_witness(const lxp_state_witness *proof)
+{
+    return proof->module_id == 0U && proof->key_length == 33U && proof->key[0] == 4U;
+}
+
 static lxp_result root(const lxp_state_witness *proof, uint8_t out[32])
 {
     uint8_t module[2];
@@ -74,6 +79,11 @@ static lxp_result root(const lxp_state_witness *proof, uint8_t out[32])
         proof->layer_b.leaf_count > LXP_MODULE_RESERVED_COUNT + 1U)
         return LXP_ERR_NON_CANONICAL;
     status = leaf(proof->key, proof->key_length, proof->value, proof->value_length, out);
+    if (status == LXP_OK && account_witness(proof)) {
+        status = fold(out, &proof->account_path);
+        if (status == LXP_OK)
+            status = leaf((const uint8_t *)"account-tree", 12U, out, 32U, out);
+    }
     if (status == LXP_OK) status = fold(out, &proof->layer_a);
     put(module, proof->module_id, 2U);
     if (status == LXP_OK) status = leaf(module, 2U, out, 32U, out);
@@ -190,11 +200,30 @@ lxp_result lxp_state_proof_build(const lxp_kernel *state, uint16_t module_id,
     candidate->module_id = module_id;
     candidate->key_length = (uint32_t)key.length;
     memcpy(candidate->key, key.bytes, key.length);
-    status = lxp_state_subtree_proof(state, module_id, key.bytes, key.length,
+    lxp_byte_span subtree_key = key;
+    if (account_witness(candidate))
+        subtree_key = (lxp_byte_span){(const uint8_t *)"account-tree", 12U};
+    status = lxp_state_subtree_proof(state, module_id, subtree_key.bytes, subtree_key.length,
                                      subtree, &candidate->layer_a);
     if (status == LXP_OK)
         status = lxp_state_root_proof(state, module_id, state_root, &candidate->layer_b);
-    if (status == LXP_OK) status = material(state, key, candidate);
+    if (status == LXP_OK && account_witness(candidate)) {
+        status = LXP_ERR_UNKNOWN_FIELD;
+        if (state->state->accounts != NULL && state->state->account_root_required) {
+            const lx_account_registry *registry = state->state->accounts;
+            for (size_t i = 0U; i < registry->count; ++i) {
+                if (memcmp(registry->accounts[i].id, key.bytes + 1U, 32U) != 0) continue;
+                size_t value_length = 0U;
+                status = lx_account_state_leaf_material(&registry->accounts[i],
+                    candidate->key, candidate->value, &value_length);
+                candidate->value_length = (uint32_t)value_length;
+                if (status == LXP_OK)
+                    status = lx_account_registry_proof(registry, key.bytes + 1U,
+                        subtree, &candidate->account_path);
+                break;
+            }
+        }
+    } else if (status == LXP_OK) status = material(state, key, candidate);
     if (status == LXP_OK) status = lxp_state_proof_verify(candidate, state_root);
     if (status == LXP_OK) memcpy(proof, candidate, sizeof(*proof));
     free(candidate);
@@ -213,6 +242,7 @@ lxp_result lxp_state_proof_encode(const lxp_state_witness *proof,
     if (status != LXP_OK) return status;
     required = 26U + proof->key_length + proof->value_length +
                32U * ((size_t)proof->layer_a.depth + proof->layer_b.depth);
+    if (account_witness(proof)) required += 9U + 32U * proof->account_path.depth;
     if (capacity < required) return LXP_ERR_LENGTH_LIMIT;
     put(bytes, proof->version, 2U);
     put(bytes + 2U, proof->module_id, 2U);
@@ -224,6 +254,14 @@ lxp_result lxp_state_proof_encode(const lxp_state_witness *proof,
     cursor += 4U;
     memcpy(bytes + cursor, proof->value, proof->value_length);
     cursor += proof->value_length;
+    if (account_witness(proof)) {
+        put(bytes + cursor, proof->account_path.leaf_index, 4U);
+        put(bytes + cursor + 4U, proof->account_path.leaf_count, 4U);
+        cursor += 8U;
+        bytes[cursor++] = proof->account_path.depth;
+        memcpy(bytes + cursor, proof->account_path.siblings, 32U * proof->account_path.depth);
+        cursor += 32U * proof->account_path.depth;
+    }
     put(bytes + cursor, proof->layer_a.leaf_index, 4U);
     put(bytes + cursor + 4U, proof->layer_a.leaf_count, 4U);
     cursor += 8U;
@@ -265,6 +303,17 @@ lxp_result lxp_state_proof_decode(const uint8_t *bytes, size_t length,
         candidate->value_length > length - cursor) goto done;
     memcpy(candidate->value, bytes + cursor, candidate->value_length);
     cursor += candidate->value_length;
+    if (account_witness(candidate)) {
+        if (length - cursor < 9U) goto done;
+        candidate->account_path.leaf_index = get32(bytes + cursor);
+        candidate->account_path.leaf_count = get32(bytes + cursor + 4U);
+        cursor += 8U;
+        candidate->account_path.depth = bytes[cursor++];
+        if (candidate->account_path.depth > LXP_STATE_PROOF_MAX_DEPTH ||
+            32U * candidate->account_path.depth > length - cursor) goto done;
+        memcpy(candidate->account_path.siblings, bytes + cursor, 32U * candidate->account_path.depth);
+        cursor += 32U * candidate->account_path.depth;
+    }
     if (length - cursor < 8U) goto done;
     candidate->layer_a.leaf_index = get32(bytes + cursor);
     candidate->layer_a.leaf_count = get32(bytes + cursor + 4U);

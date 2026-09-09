@@ -75,3 +75,14 @@ The leaf hash is SHA256(`LXP/v1/state-leaf\0 || key_len:u32 || value_len:u32 || 
 This generic proof does not yet enable version-2 settlement publication. Native account balances are inside a third account-registry tree under module-zero `account-tree`, with no EVM recipient field, and the withdrawal store is not committed as module KV. A proof of the account-tree root is not a proof of a particular account balance. The standalone asset balance root is not the composite checkpoint root. These gaps must be resolved without inventing settlement leaves or accepting an unsigned recipient binding.
 
 The required rollout sequence remains: independently replay the checkpoint; decode committed settlement facts and build their proofs and deposit leaf ordering; register the checkpoint; publish the withdrawal and balance witness vectors; register the signed deposit root; fetch through `PublishedDepositProof::fetch_published`, `CheckpointProof::fetch_published` and `ExitEvidence::fetch_published`; then apply the existing custody, debit, certificate, nullifier and eligibility checks. The claim consumers and publication contracts still use version 1 until this entire sequence can carry real facts. A coordinated rollout must change both `EVIDENCE_VERSION` constants and the deployment finalization expectation to 2. The generic vectors are not settlement balance or withdrawal vectors.
+
+For module zero and a 33-byte key beginning with `04`, version 2 carries the
+canonical account leaf from `lx_account_state_leaf_material`. Immediately after
+`value`, the encoding adds `account_index:u32 || account_count:u32 ||
+account_depth:u8 || account_siblings[32]*`. Other keys have no account segment.
+The account path hashes to the account registry root. That root is the value of
+`account-tree` (12 bytes), hashed with the native state-leaf domain and both
+lengths. Layer A proves this registry binding in module zero; the unchanged
+module wrapper and layer B then prove inclusion under the composite root.
+Balances, asset identity and account authority remain bound by the existing
+canonical account record; this extension does not change native root semantics.

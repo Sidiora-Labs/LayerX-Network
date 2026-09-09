@@ -7,8 +7,8 @@ enum {
     LXP_STATE_WITNESS_VERSION = 2,
     LXP_STATE_WITNESS_MAX_KEY = LXP_MODULE_MAX_KEY_BYTES + 1,
     LXP_STATE_WITNESS_MAX_VALUE = LXP_KERNEL_MAX_BLOB_BYTES,
-    LXP_STATE_WITNESS_MAX_BYTES = 26 + LXP_STATE_WITNESS_MAX_KEY +
-        LXP_STATE_WITNESS_MAX_VALUE + 64 * LXP_STATE_PROOF_MAX_DEPTH
+    LXP_STATE_WITNESS_MAX_BYTES = 35 + LXP_STATE_WITNESS_MAX_KEY +
+        LXP_STATE_WITNESS_MAX_VALUE + 96 * LXP_STATE_PROOF_MAX_DEPTH
 };
 
 typedef struct lxp_state_witness {
@@ -18,6 +18,7 @@ typedef struct lxp_state_witness {
     uint32_t value_length;
     uint8_t key[LXP_STATE_WITNESS_MAX_KEY];
     uint8_t value[LXP_STATE_WITNESS_MAX_VALUE];
+    lxp_state_proof account_path;
     lxp_state_proof layer_a;
     lxp_state_proof layer_b;
 } lxp_state_witness;

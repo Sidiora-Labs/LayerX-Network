@@ -26,7 +26,9 @@ static void check(const lxp_kernel *kernel, uint16_t module, lxp_byte_span key, 
     assert(lxp_state_proof_verify(proof, root) == LXP_OK);
     assert(lxp_state_proof_encode(proof, wire, LXP_STATE_WITNESS_MAX_BYTES, &length) == LXP_OK);
     assert(length == 26U + proof->key_length + proof->value_length +
-           32U * ((size_t)proof->layer_a.depth + proof->layer_b.depth));
+           32U * ((size_t)proof->layer_a.depth + proof->layer_b.depth) +
+           ((module == 0U && key.length == 33U && key.bytes[0] == 4U)
+                ? 9U + 32U * proof->account_path.depth : 0U));
     assert(lxp_state_proof_decode(wire, length, decoded) == LXP_OK);
     assert(lxp_state_proof_verify(decoded, root) == LXP_OK);
     assert(lxp_state_proof_encode(proof, wire, length - 1U, &length) == LXP_ERR_LENGTH_LIMIT);
@@ -112,6 +114,20 @@ int main(int argc, char **argv)
            == LXP_ERR_UNKNOWN_FIELD);
     assert(lxp_state_proof_build(kernel, 10U, (lxp_byte_span){(const uint8_t *)"x", 1U}, proof)
            != LXP_OK);
+    for (size_t i = 0U; i < 3U; ++i) {
+        const char *names[] = {"agent:did:key:a:main", "agent:did:key:b:main", "agent:did:key:c:main"};
+        uint8_t id[32], asset[32] = {1U};
+        lx_account *account = NULL;
+        assert(lx_account_id_from_string((const uint8_t *)names[i], strlen(names[i]), id) == LXP_OK);
+        assert(lx_account_open(accounts, (const uint8_t *)names[i], strlen(names[i]), id,
+            1U, LX_ACCOUNT_OPEN_CREDIT, NULL, &account) == LXP_OK);
+        assert(lxp_ledger_bootstrap_balance(account, asset, (lxp_u128){0U, 100U + i}, 0U) == LXP_OK);
+    }
+    for (size_t i = 0U; i < accounts->count; ++i) {
+        uint8_t key[33] = {4U};
+        memcpy(key + 1U, accounts->accounts[i].id, 32U);
+        check(kernel, 0U, (lxp_byte_span){key, sizeof(key)}, output, &first);
+    }
     if (output) printf("\n]}\n");
     assert(lxp_state_store_destroy(state) == LXP_OK);
     free(accounts);
