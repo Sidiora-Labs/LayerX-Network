@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import runpy
+import shutil
 import signal
 import socket
 import subprocess
@@ -49,14 +50,41 @@ def main():
     build = Path(os.environ.get("LAYERX_TEST_BUILD_DIR", ROOT / "build"))
     probe = Path(sys.argv[1]).resolve() if len(sys.argv) == 2 else build / "tests/lxp_test_guarantor_integration"
     admission = build / "tests/lxp_test_program_admission"
-    for binary in (native / "layerxd", native / "layerx-genesis-build", probe, admission):
+    for binary in (native / "layerxd", native / "layerx-genesis-build",
+                   native / "layerx-guarantor", probe, admission):
         if not binary.is_file():
             raise RuntimeError(f"required real binary not built: {binary}")
     logs = ROOT / "qual-logs/gp1"
     logs.mkdir(parents=True, exist_ok=True)
-    work = Path(tempfile.mkdtemp(prefix="guarantor-daemon-", dir=logs))
+    evidence = Path(tempfile.mkdtemp(prefix="guarantor-daemon-", dir=logs))
+    work_context = tempfile.TemporaryDirectory(prefix="guarantor-daemon-")
+    work = Path(work_context.name)
     work.chmod(0o755)
-    print(f"guarantor-integration: evidence {work}", flush=True)
+    runtime_context = tempfile.TemporaryDirectory(prefix="guarantor-run-")
+    runtime = Path(runtime_context.name)
+    support_context = tempfile.TemporaryDirectory(prefix="guarantor-support-")
+    support = Path(support_context.name)
+    support.chmod(0o755)
+    executable_dir = support / "bin"
+    executable_dir.mkdir(mode=0o755)
+    for source, name in ((probe, "guarantor-integration"), (admission, "program-admission"),
+                         (native / "layerx-guarantor", "layerx-guarantor")):
+        destination = executable_dir / name
+        shutil.copy2(source, destination)
+        destination.chmod(0o755)
+    probe = executable_dir / "guarantor-integration"
+    admission = executable_dir / "program-admission"
+    guarantor = executable_dir / "layerx-guarantor"
+    helper_dir = support / "helper"
+    helper_dir.mkdir(mode=0o755)
+    for name in ("settlement.py", "publication.py"):
+        shutil.copy2(ROOT / "cmd/layerx-guarantor" / name, helper_dir / name)
+    python = Path(sys.executable)
+    if sys.prefix != sys.base_prefix:
+        virtualenv = support / "venv"
+        shutil.copytree(sys.prefix, virtualenv, symlinks=True)
+        python = virtualenv / "bin" / Path(sys.executable).name
+    print(f"guarantor-integration: evidence {evidence}", flush=True)
     processes = []
     handles = []
 
@@ -87,7 +115,7 @@ def main():
             (work / name).chmod(0o600)
         program_port, replica_port = COMMON["free_port"](), COMMON["free_port"]()
         with (work / "bootstrap.log").open("w") as log:
-            subprocess.run(["bash", str(ROOT / "platform/hosted/node/bootstrap.sh"), "--data-dir", str(work / "data"), "--run-dir", str(work / "run"), "--network-id", "77", "--sequencer-key", str(work / "sequencer"), "--treasury-key", str(work / "treasury"), "--lni-uid", "4021", "--lni-gid", "4021", "--program-port", str(program_port), "--replica-port", str(replica_port), "--layerxd", str(native / "layerxd"), "--genesis-build", str(native / "layerx-genesis-build"), "--settlement-env", str(work / "settlement.env")], cwd=ROOT, stdout=log, stderr=log, check=True)
+            subprocess.run(["bash", str(ROOT / "platform/hosted/node/bootstrap.sh"), "--data-dir", str(work / "data"), "--run-dir", str(runtime), "--network-id", "77", "--sequencer-key", str(work / "sequencer"), "--treasury-key", str(work / "treasury"), "--lni-uid", "4021", "--lni-gid", "4021", "--program-port", str(program_port), "--replica-port", str(replica_port), "--layerxd", str(native / "layerxd"), "--genesis-build", str(native / "layerx-genesis-build"), "--settlement-env", str(work / "settlement.env")], cwd=ROOT, stdout=log, stderr=log, check=True)
         node = read_env(work / "data/node.env")
         asset = run("cast", "keccak", "USDL")
         bond = chain.deploy(json.loads((artifacts / "GuarantorBond.sol/GuarantorBond.json").read_text()), "constructor(address,address,address,address,bytes32,uint16,uint32,uint32,uint64,bytes32,uint192)", [ADMIN, ADMIN, USDL, USDL, asset, "3", "77", "1000", "86400", COMMON["word"]("a1"), str(1 << 128)])
@@ -121,7 +149,7 @@ def main():
         await_condition(replica_ready, [anvil, replica], "real receipt authority")
         daemon_env = os.environ | read_env(work / "data/sequencer.env") | settlement
         daemon = launch([str(native / "layerxd"), "--serve", str(work / "data/sequencer.conf")], "daemon.log", env=daemon_env)
-        lni_socket = str(work / "run/layerxd.lni.sock")
+        lni_socket = str(runtime / "layerxd.lni.sock")
         await_condition(lambda: Path(lni_socket).is_socket(), [anvil, replica, daemon], "real sequencer LNI")
         with (work / "admission.log").open("w") as log:
             subprocess.run([str(admission), lni_socket, "--availability-batches"], cwd=ROOT, preexec_fn=client_identity, stdout=log, stderr=log, check=True, timeout=60)
@@ -190,15 +218,15 @@ for identity in 1 2; do chmod 0440 "$CA_DIR/guarantor-$identity/key.pem"; done
                 "LAYERX_GUARANTOR_SETTLEMENT_DOMAIN": "beta",
                 "LAYERX_GUARANTOR_SUBMITTER_KEY_FILE": str(submitter_file),
                 "LAYERX_GUARANTOR_SUBMITTER_LOCK_FILE": str(shared / "submitter.lock"),
-                "LAYERX_GUARANTOR_PYTHON": sys.executable,
-                "LAYERX_GUARANTOR_SETTLEMENT_HELPER": str(ROOT / "cmd/layerx-guarantor/settlement.py"),
+                "LAYERX_GUARANTOR_PYTHON": str(python),
+                "LAYERX_GUARANTOR_SETTLEMENT_HELPER": str(helper_dir / "settlement.py"),
                 "LAYERX_GUARANTOR_LISTEN_PORT": str(ports[index]),
                 "LAYERX_GUARANTOR_PEER_URL": f"https://127.0.0.1:{ports[1-index]}",
                 "LAYERX_GUARANTOR_TLS_CA_FILE": str(work / "ca/ca.crt"),
                 "LAYERX_GUARANTOR_TLS_CERT_FILE": str(work / f"ca/guarantor-{index + 1}/cert.pem"),
                 "LAYERX_GUARANTOR_TLS_KEY_FILE": str(work / f"ca/guarantor-{index + 1}/key.pem"),
             }
-            producer_processes.append(launch([str(native / "layerx-guarantor"), "--once"], f"producer-{index + 1}.log", env=producer_env, preexec_fn=client_identity))
+            producer_processes.append(launch([str(guarantor), "--once"], f"producer-{index + 1}.log", env=producer_env, preexec_fn=client_identity))
         for process in producer_processes:
             if process.wait(timeout=120) != 0:
                 raise RuntimeError("guarantor --once refused; inspect producer logs")
@@ -241,6 +269,13 @@ for identity in 1 2; do chmod 0440 "$CA_DIR/guarantor-$identity/key.pem"; done
                     process.wait(timeout=10)
         for handle in handles:
             handle.close()
+        for path in work.rglob("*"):
+            if path.is_fifo() or path.is_socket():
+                path.unlink()
+        shutil.copytree(work, evidence, dirs_exist_ok=True)
+        runtime_context.cleanup()
+        support_context.cleanup()
+        work_context.cleanup()
 
 
 def terminate(signum, _frame):

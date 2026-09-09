@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import runpy
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -56,45 +57,54 @@ def main():
         return
     assert os.geteuid() == 0
     logs = ROOT / 'qual-logs/set1'
-    work = Path(tempfile.mkdtemp(prefix='e-daemon-custody-', dir=logs))
-    work.chmod(0o755)
-    print('withdraw custody evidence:', work, flush=True)
-    seed = bytes([0x11]) * 32
-    public = Ed25519PrivateKey.from_private_bytes(seed).public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
-    did = 'did:layerx:' + public.hex()
-    name = ('agent:' + did + ':main').encode()
-    beneficiary = hashlib.sha256(b'LX:ACCOUNT:v1' + len(name).to_bytes(4, 'big') + name).hexdigest()
-    for name, value in [('actor', seed), ('attestor', bytes([0x55]) * 32)]:
-        (work / name).write_bytes(value)
-        (work / name).chmod(0o600)
-    run('forge', 'build', 'contracts/GuarantorBond.sol', 'contracts/CheckpointRegistry.sol',
-        'platform/hosted/paxeer/contracts/BetaUsdl.sol', 'contracts/challenge/CheckpointChallengeManager.sol', '--out', 'build/withdraw-contracts/artifacts',
-        '--cache-path', 'build/withdraw-contracts/cache')
-    with chain(work, 'custody') as first:
-        run(sys.executable, 'tests/bridge/deploy_local_custody.py', '--allow-local-chain', '--rpc', first,
-            '--asset', '0x' + ASSET, '--beneficiary', '0x' + beneficiary,
-            '--amount', '1000000', '--output', work / 'custody.json')
-        custody = json.loads((work / 'custody.json').read_text())
-        with chain(work, 'observer', first, custody['fork_block']) as second:
-            pair = ['--rpc', first, '--rpc', second]
-            run(sys.executable, 'tests/bridge/custody_credit.py', 'profile', *pair, '--chain-id', '31337',
-                '--network-id', '77', '--vault', custody['vault'], '--runtime-sha256', custody['runtime_sha256'],
-                '--asset', '0x' + ASSET, '--confirmations', '2', '--attestor-key', work / 'attestor', '--output', work / 'profile')
-            run(sys.executable, 'tests/bridge/custody_credit.py', 'attest', *pair, '--profile', work / 'profile',
-                '--network-id', '77', '--transaction', custody['transaction'], '--beneficiary', '0x' + beneficiary,
-                '--beneficiary-key', '0x' + public.hex(), '--expected-amount', '1000000',
-                '--attestor-key', work / 'attestor', '--output', work / 'credit')
-            run('build/tests/bridge/sign-credit', work / 'profile', work / 'credit', did, work / 'actor',
-                '0', str(int(time.time() * 1000)), work / 'activity')
-            (work / 'activity').chmod(0o644)
-            env = os.environ | {'LAYERX_TEST_WITHDRAW_PROFILE': str(work / 'profile'),
-                'LAYERX_TEST_WITHDRAW_CREDIT': str(work / 'activity'), 'LAYERX_TEST_WITHDRAW_RPC': first,
-                'LAYERX_TEST_ADMISSION_LOG_DIR': str(work)}
-            if os.environ.get('LAYERX_TEST_SETTLEMENT_PUBLICATION') == '1':
-                module = runpy.run_path(str(ROOT / 'tests/daemon/guarantor-publication-chain.py'))
-                module['drive'](work, env, first)
-            else:
-                run('bash', 'tests/daemon/program-admission.sh', 'build', '--withdraw', env=env)
+    logs.mkdir(parents=True, exist_ok=True)
+    evidence = Path(tempfile.mkdtemp(prefix='e-daemon-custody-', dir=logs))
+    with tempfile.TemporaryDirectory(prefix='e-daemon-custody-') as directory:
+        work = Path(directory)
+        work.chmod(0o755)
+        print('withdraw custody evidence:', evidence, flush=True)
+        try:
+            seed = bytes([0x11]) * 32
+            public = Ed25519PrivateKey.from_private_bytes(seed).public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+            did = 'did:layerx:' + public.hex()
+            name = ('agent:' + did + ':main').encode()
+            beneficiary = hashlib.sha256(b'LX:ACCOUNT:v1' + len(name).to_bytes(4, 'big') + name).hexdigest()
+            for name, value in [('actor', seed), ('attestor', bytes([0x55]) * 32)]:
+                (work / name).write_bytes(value)
+                (work / name).chmod(0o600)
+            run('forge', 'build', 'contracts/GuarantorBond.sol', 'contracts/CheckpointRegistry.sol',
+                'platform/hosted/paxeer/contracts/BetaUsdl.sol', 'contracts/challenge/CheckpointChallengeManager.sol', '--out', 'build/withdraw-contracts/artifacts',
+                '--cache-path', 'build/withdraw-contracts/cache')
+            with chain(work, 'custody') as first:
+                run(sys.executable, 'tests/bridge/deploy_local_custody.py', '--allow-local-chain', '--rpc', first,
+                    '--asset', '0x' + ASSET, '--beneficiary', '0x' + beneficiary,
+                    '--amount', '1000000', '--output', work / 'custody.json')
+                custody = json.loads((work / 'custody.json').read_text())
+                with chain(work, 'observer', first, custody['fork_block']) as second:
+                    pair = ['--rpc', first, '--rpc', second]
+                    run(sys.executable, 'tests/bridge/custody_credit.py', 'profile', *pair, '--chain-id', '31337',
+                        '--network-id', '77', '--vault', custody['vault'], '--runtime-sha256', custody['runtime_sha256'],
+                        '--asset', '0x' + ASSET, '--confirmations', '2', '--attestor-key', work / 'attestor', '--output', work / 'profile')
+                    run(sys.executable, 'tests/bridge/custody_credit.py', 'attest', *pair, '--profile', work / 'profile',
+                        '--network-id', '77', '--transaction', custody['transaction'], '--beneficiary', '0x' + beneficiary,
+                        '--beneficiary-key', '0x' + public.hex(), '--expected-amount', '1000000',
+                        '--attestor-key', work / 'attestor', '--output', work / 'credit')
+                    run('build/tests/bridge/sign-credit', work / 'profile', work / 'credit', did, work / 'actor',
+                        '0', str(int(time.time() * 1000)), work / 'activity')
+                    (work / 'activity').chmod(0o644)
+                    env = os.environ | {'LAYERX_TEST_WITHDRAW_PROFILE': str(work / 'profile'),
+                        'LAYERX_TEST_WITHDRAW_CREDIT': str(work / 'activity'), 'LAYERX_TEST_WITHDRAW_RPC': first,
+                        'LAYERX_TEST_ADMISSION_LOG_DIR': str(work)}
+                    if os.environ.get('LAYERX_TEST_SETTLEMENT_PUBLICATION') == '1':
+                        module = runpy.run_path(str(ROOT / 'tests/daemon/guarantor-publication-chain.py'))
+                        module['drive'](work, env, first)
+                    else:
+                        run('bash', 'tests/daemon/program-admission.sh', 'build', '--withdraw', env=env)
+        finally:
+            for path in work.rglob('*'):
+                if path.is_fifo() or path.is_socket():
+                    path.unlink()
+            shutil.copytree(work, evidence, dirs_exist_ok=True)
     print('custody-funded WITHDRAW execution and crash replay passed')
 
 
