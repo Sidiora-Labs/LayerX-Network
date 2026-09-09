@@ -351,6 +351,10 @@ payload length, and the method fields in declaration order. Identifiers are
 encoding and does not reuse ERC-20 Keccak selectors. See the committed
 `programs/sdk/rust/vectors/lxt20-requests.txt` vectors.
 
+The merchant example at `programs/sdk/rust/examples/payments-merchant` shows the
+real guest bindings for a deposit and fee split. Its WASM build is not proof of
+native settlement.
+
 A program allowance cannot confer kernel debit authority over another DID's
 account. A complete implementation needs authenticated ownership, registered
 program-derived custody accounts, caller-approved spend capabilities and atomic
@@ -359,10 +363,14 @@ Infinite uint256 allowances, permits, rebasing and transfer-tax semantics are no
 implemented by this request interface. Values above u128 must be refused, not
 truncated. Ethereum addresses must be explicitly mapped to identities/accounts.
 
-Native issued asset IDs follow SHA-256 of `LX:ASSET:v1 || issuer_id32 || salt32`.
-An actor's per-asset account uses the existing `LX:ACCOUNT:v1` derivation over
-`agent:<DID>:asset:<lowercase asset hex>`; `agent:<DID>:main` remains the native
-asset account. Program-derived accounts use a different domain and seed rule.
+Native issued asset IDs are
+`asset_id32 = SHA-256("LX:ASSET:v1" || issuer_did_id32 || salt32)`.
+Paxeer-custody assets keep their existing ids. An actor's per-asset account
+name is `agent:<DID>:asset:<lowercase hex64 asset_id>`; the account id uses
+the existing `LX:ACCOUNT:v1` rule. `agent:<DID>:main` stays the native-asset
+account. Program-derived accounts use a different domain and seed rule. Asset
+activity ordinal 9 is reserved for WITHDRAW and is not defined here; it is not
+an LXT-20 method and is not the ABI-v2 ProgramSpend capability tag.
 The current Programs transfer path equates principal and debit account IDs;
 DID/per-asset funding and identity sequencing are an unresolved integration seam,
 recorded in the beta qualification ledger. Never work around it by signing as an

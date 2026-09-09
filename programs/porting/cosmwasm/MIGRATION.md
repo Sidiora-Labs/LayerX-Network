@@ -422,3 +422,49 @@ caller-supplied boundary.
 7. Replace every `Map::range` with a key you can address directly.
 8. Publish the source, the descriptor, the toolchain manifest and the lock, and
    verify the deployment reproduces before you announce it.
+
+## CW20, LXT-20 and native assets
+
+LXT-20 request codecs live in `programs/sdk/rust/src/lxt20.rs`. A runnable
+`token-lxt20` settlement reference, registry discovery and native deploy/call
+proof are still outstanding. These request types do not emulate CW20 or make an
+unregistered asset spendable.
+
+| CW20 flow | LayerX mapping |
+| --- | --- |
+| `Transfer` / `Send` | LXT-20 `Transfer`; the destination is a 32-byte account ID and amounts are exact u128 units |
+| `IncreaseAllowance` / `DecreaseAllowance` / revoke | `Approve` using a spender DID identity; zero revokes the program allowance |
+| `TransferFrom` / `SendFrom` | `TransferFrom` when a reference authenticates the spender; third-party allowance spend remains `DelegatedSpend` |
+| `Balance` | `BalanceOf`; a native balance read requires receipt-bound `BalanceView` authority |
+| `Allowance` | `Allowance` with owner and spender identities |
+| `TokenInfo` | `TotalSupply` and `Metadata`; the executing reference must bind native asset facts |
+| Contract-held CW20 / bank payout | Registered program-derived account plus `ProgramSpend`; a public derivation seed is not spending authority |
+
+The seven selectors and committed request vectors are shared with the EVM and
+Solana guides. Their encoding is LayerX convention 01, bounded bytes tag 20 and
+a u32 big-endian length after the four-byte selector. CosmWasm JSON messages,
+bech32 addresses and `cw-storage-plus` keys must not be copied into these calls
+unchanged.
+
+Use `PreparedProgramAccount::registration_payload` under deployment authority,
+verify registration, then authorize the funding grant and subsequent spend grants.
+The merchant example at `programs/sdk/rust/examples/payments-merchant` shows the
+real guest bindings for a deposit and fee split. Its WASM build is not proof of
+native settlement. A token allowance alone does not authorize debiting another
+principal's account, and token storage changes cannot replace 402 settlement.
+
+Native asset registration, account opening, mint and burn are separate signed
+asset activities, not LXT-20 methods. Native issued asset IDs are
+`asset_id32 = SHA-256("LX:ASSET:v1" || issuer_did_id32 || salt32)`;
+Paxeer-custody assets keep their existing ids. Per-asset accounts use
+`agent:<DID>:asset:<lowercase hex64 asset_id>` and the existing `LX:ACCOUNT:v1`
+rule; `agent:<DID>:main` stays the native-asset account. Program accounts use
+the program-account domain with a u32 big-endian seed length. Asset activity
+ordinal 9 is reserved for WITHDRAW and is not defined here; it is not an LXT-20
+method and is not the ABI-v2 ProgramSpend capability tag.
+The current Programs principal/account equality and sequence-account lookup must
+be reconciled with DID ownership before claiming this end-to-end flow works.
+
+CW20 marketing, logo, mint/minter updates, enumerable holder lists and IBC
+token transfers are not provided by the LXT-20 codecs. Refuse unsupported
+semantics explicitly.

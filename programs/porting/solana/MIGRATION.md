@@ -392,9 +392,14 @@ native settlement. A token allowance alone does not authorize debiting another
 principal's account, and token storage changes cannot replace 402 settlement.
 
 Native asset registration, account opening, mint and burn are separate signed
-asset activities, not LXT-20 methods. Per-asset accounts use
-`agent:<DID>:asset:<lowercase asset hex>` and the existing `LX:ACCOUNT:v1` rule;
-program accounts use the program-account domain with a u32 big-endian seed length.
+asset activities, not LXT-20 methods. Native issued asset IDs are
+`asset_id32 = SHA-256("LX:ASSET:v1" || issuer_did_id32 || salt32)`;
+Paxeer-custody assets keep their existing ids. Per-asset accounts use
+`agent:<DID>:asset:<lowercase hex64 asset_id>` and the existing `LX:ACCOUNT:v1`
+rule; `agent:<DID>:main` stays the native-asset account. Program accounts use
+the program-account domain with a u32 big-endian seed length. Asset activity
+ordinal 9 is reserved for WITHDRAW and is not defined here; it is not an LXT-20
+method and is not the ABI-v2 ProgramSpend capability tag.
 The current Programs principal/account equality and sequence-account lookup must
 be reconciled with DID ownership before claiming this end-to-end flow works.
 
