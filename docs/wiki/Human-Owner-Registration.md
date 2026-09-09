@@ -1,3 +1,4 @@
+# Human owner registration provisioning
 
 Beta recovery uses three dedicated, randomly generated Ed25519 guardian keys,
 threshold two. Each public key is bound to one genesis guarantor identity or the

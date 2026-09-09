@@ -12,11 +12,11 @@ The Human service consumes these configuration inputs:
 
 The node bootstrap input `LAYERX_NODE_IDENTITIES` names a file with rows `hex(DID-UTF8):hex(public-key32):next_sequence`. Bootstrap admission does not create an account, install a recovery policy or produce a registration receipt. Never place private key material in this file.
 
-The producer output is `$WORK_DIR/human-evidence-input/owner-registration.json`, with native H32 `owner_account`, textual `authority` and `identity`. `platform/hosted/human/provision.py` provides producer and validator modes. The local flow is qualified through a real vault deposit, native credit, Governance receipts, authenticated replica evidence and restart. Live cluster execution and positive checkpoint qualification remain outstanding.
+The producer output is `$WORK_DIR/human-evidence-input/owner-registration.json`, with native H32 `owner_account`, textual `authority` and `identity`. `platform/hosted/human/provision.py` provides producer and validator modes. The local flow is qualified through a real vault deposit, native credit, Governance receipts, authenticated replica evidence and restart. Live cluster execution remains outstanding.
 
 Hosted principal policy `identities[]` requires evidence `{activity_id, receipt_digest}` linked to the same principal's `activities[]`. The digest is the canonical unsigned protocol receipt digest. Retained evidence includes `receipt_hex` and `replica_document`; verification authenticates the sequencer, batch and receipt inclusion. Identity, capability, rotation and recovery assertions additionally require committed state evidence. The hosted authority requires node-verified guarantor checkpoint certificates for positive identity, capability and key-policy responses; absent or mismatched certificates remain refused.
 
-The native daemon and genesis builder register Governance ABI 1 for protocol 3 in matching order. The independent guarantor runtime still omits Governance and refuses this genesis with result -902; its snapshot check remains intact.
+The native daemon, genesis builder and independent guarantor runtime register Governance ABI 1 for protocol 3 in matching order. Snapshot checks remain intact.
 
 ## Native Governance registration encoding
 
@@ -30,7 +30,7 @@ Governance stages its state through module KV writes. The identity key is did_id
 
 `provision.py --produce-owner-registration --work-dir PATH` consumes protected `human-evidence-input/owner-native.json`, custody key references, `custody-credit.bin`, `recovery-policy.json`, `recovery-guardians.json` and the LXIP `human-owner-result.json`. It uses the real `layerxctl read-state`/`submit` client, checks successful signed native receipts, asks the HTTPS receipt authority to verify and retain their authorized batches, and validates the output with the existing owner-registration contract. Preserve its exclusive `owner-native-run` directory for reconciliation after failure. The cluster script generates and mounts these inputs in the ordered provisioning flow; its live rollout has not run on this build server.
 
-The hosted identity verifier reports `checkpoint_finalised` only for matching native snapshots, complete retained receipt coverage and authenticated native checkpoint evidence. The positive test is blocked by the guarantor runtime's missing Governance registration; registration JSON validation alone does not prove this level.
+The hosted identity verifier reports `checkpoint_finalised` only for matching native snapshots, complete retained receipt coverage and authenticated native checkpoint evidence. Registration JSON validation alone does not prove this level. `tests/daemon/owner_checkpoint.py` exercises the positive guarantor-replay path; live cluster checkpoint publication remains a separate gate.
 
 `owner-native.json` has exactly `node_socket`, `network_id`, `owner_seed_file`, `pending_seed_file`, `sequencer_public_key`, `layerxctl`, `fee_limit`, `authority_url`, `authority_token_file`, `authority_ca_file` and `authority_state_root`. The producer requires owner-only regular input files (0600), a real local node socket, an absolute CLI path and HTTPS authority with a trusted CA. Key files contain custody-produced seed32 and must already match the exact post-LXIP admission binding. The LXIP result and recovery-policy file must agree exactly.
 
