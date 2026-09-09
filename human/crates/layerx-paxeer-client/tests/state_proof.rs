@@ -84,3 +84,118 @@ fn native_generated_vectors_and_refusals() -> TestResult {
     }
     Ok(())
 }
+
+#[test]
+fn native_recipient_authority_and_signed_domain_refusals() -> TestResult {
+    use ed25519_dalek::{Signer as _, SigningKey};
+    use layerx_paxeer_client::{ExitError, ExitRefusal};
+    use layerx_types::intent::EvmAddress;
+
+    let document = parse_json(include_str!("vectors/native-state-proofs.json"))
+        .map_err(|e| format!("{e:?}"))?;
+    let Some(Json::Array(vectors)) = document.member("vectors") else {
+        return Err("missing vectors".into());
+    };
+    let mut seed = [0; 32];
+    seed[0] = 1;
+    let key = SigningKey::from_bytes(&seed);
+    for (index, vector) in vectors.iter().enumerate().skip(7) {
+        let witness = StateWitness::decode(&bytes(vector, "proof")?)?;
+        let root: [u8; 32] = bytes(vector, "root")?.try_into().map_err(|_| "root")?;
+        let evidence = native_exit_evidence(&witness, index)?;
+        let anchor = [3; 32];
+        let mut message = b"LX:SETTLE:RECIPIENT:v1\x00".to_vec();
+        message.extend_from_slice(&7_u32.to_be_bytes());
+        message.extend_from_slice(&evidence.account);
+        message.extend_from_slice(&evidence.asset_id);
+        message.extend_from_slice(&evidence.recipient.bytes());
+        message.extend_from_slice(&anchor);
+        let signature = key.sign(&message).to_bytes();
+        if index == 9 {
+            assert_eq!(
+                evidence.verify_native_balance(&witness, root, 7, anchor, &signature),
+                Err(ExitError::Refused(ExitRefusal::RecipientNotAuthorized))
+            );
+            continue;
+        }
+        evidence
+            .verify_native_balance(&witness, root, 7, anchor, &signature)
+            .map_err(|e| format!("{e:?}"))?;
+        for position in 0..signature.len() {
+            let mut changed = signature;
+            changed[position] ^= 1;
+            assert!(evidence
+                .verify_native_balance(&witness, root, 7, anchor, &changed)
+                .is_err());
+        }
+        for network in [0, 8] {
+            assert!(evidence
+                .verify_native_balance(&witness, root, network, anchor, &signature)
+                .is_err());
+        }
+        for anchor in [[0; 32], [4; 32]] {
+            assert!(evidence
+                .verify_native_balance(&witness, root, 7, anchor, &signature)
+                .is_err());
+        }
+        let mut changed = evidence.clone();
+        changed.recipient = EvmAddress::new([8; 20]);
+        assert!(changed
+            .verify_native_balance(&witness, root, 7, anchor, &signature)
+            .is_err());
+        changed = evidence.clone();
+        changed.account[0] ^= 1;
+        assert!(changed
+            .verify_native_balance(&witness, root, 7, anchor, &signature)
+            .is_err());
+        changed = evidence.clone();
+        changed.asset_id[0] ^= 1;
+        assert!(changed
+            .verify_native_balance(&witness, root, 7, anchor, &signature)
+            .is_err());
+        changed = evidence.clone();
+        changed.finalised_balance += 1;
+        assert!(changed
+            .verify_native_balance(&witness, root, 7, anchor, &signature)
+            .is_err());
+        let mut wrong_root = root;
+        wrong_root[0] ^= 1;
+        assert!(evidence
+            .verify_native_balance(&witness, wrong_root, 7, anchor, &signature)
+            .is_err());
+        let other_key = SigningKey::from_bytes(&[2; 32]);
+        assert!(evidence
+            .verify_native_balance(
+                &witness,
+                root,
+                7,
+                anchor,
+                &other_key.sign(&message).to_bytes()
+            )
+            .is_err());
+        message.remove(b"LX:SETTLE:RECIPIENT:v1".len());
+        assert!(evidence
+            .verify_native_balance(&witness, root, 7, anchor, &key.sign(&message).to_bytes())
+            .is_err());
+    }
+    Ok(())
+}
+
+fn native_exit_evidence(
+    witness: &StateWitness,
+    index: usize,
+) -> Result<layerx_paxeer_client::ExitEvidence, Box<dyn std::error::Error>> {
+    Ok(layerx_paxeer_client::ExitEvidence {
+        account: witness.key[1..].try_into().map_err(|_| "account")?,
+        asset_id: {
+            let mut id = [0; 32];
+            id[0] = 1;
+            id
+        },
+        finalised_balance: 100 + u128::try_from(index - 7)?,
+        recipient: layerx_types::intent::EvmAddress::new([9; 20]),
+        leaf_index: 0,
+        siblings: Vec::new(),
+        attestations: Vec::new(),
+    })
+}

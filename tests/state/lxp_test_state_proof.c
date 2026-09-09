@@ -3,6 +3,7 @@
 #include "layerx/programs.h"
 
 #include <assert.h>
+#include <openssl/evp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -122,6 +123,16 @@ int main(int argc, char **argv)
         assert(lx_account_open(accounts, (const uint8_t *)names[i], strlen(names[i]), id,
             1U, LX_ACCOUNT_OPEN_CREDIT, NULL, &account) == LXP_OK);
         assert(lxp_ledger_bootstrap_balance(account, asset, (lxp_u128){0U, 100U + i}, 0U) == LXP_OK);
+    }
+    for (size_t i = 0U; i < 2U; ++i) {
+        uint8_t seed[32] = {1U};
+        size_t length = 32U;
+        EVP_PKEY *key = EVP_PKEY_new_raw_private_key(EVP_PKEY_ED25519, NULL, seed, sizeof(seed));
+        assert(key != NULL);
+        assert(EVP_PKEY_get_raw_public_key(key, accounts->accounts[i].authority_key, &length) == 1);
+        assert(length == 32U);
+        accounts->accounts[i].has_authority_key = true;
+        EVP_PKEY_free(key);
     }
     for (size_t i = 0U; i < accounts->count; ++i) {
         uint8_t key[33] = {4U};

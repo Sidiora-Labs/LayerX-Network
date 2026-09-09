@@ -118,6 +118,8 @@ pub enum ExitRefusal {
     EmptyAsset,
     ZeroBalance,
     ZeroRecipient,
+    NativeBalanceNotProven,
+    RecipientNotAuthorized,
     ProofTooDeep {
         depth: usize,
     },
@@ -348,7 +350,7 @@ impl EmergencyExit {
             }
         };
         let state_root = self.finalised_state_root(checkpoint)?;
-        verify_balance_proof(evidence, state_root)?;
+        verify_balance_proof(evidence, state_root, None)?;
         let network_id = self.u32_view(
             self.contract,
             &call_data(SELECTOR_NETWORK_ID, &[]),
@@ -627,7 +629,73 @@ fn validate_fields(evidence: &ExitEvidence) -> Result<(), ExitError> {
     Ok(())
 }
 
-fn verify_balance_proof(evidence: &ExitEvidence, state_root: [u8; 32]) -> Result<(), ExitError> {
+struct NativeBalanceBinding<'a> {
+    witness: &'a crate::state_proof::StateWitness,
+    network_id: u32,
+    request_anchor: [u8; 32],
+    signature: &'a [u8; 64],
+}
+
+fn verify_balance_proof(
+    evidence: &ExitEvidence,
+    state_root: [u8; 32],
+    native: Option<NativeBalanceBinding<'_>>,
+) -> Result<(), ExitError> {
+    if let Some(binding) = native {
+        validate_fields(evidence)?;
+        let refused = || ExitError::Refused(ExitRefusal::NativeBalanceNotProven);
+        let witness = binding.witness;
+        witness.verify(state_root).map_err(|_| refused())?;
+        if witness.module_id != 0
+            || witness.key.len() != 33
+            || witness.key[0] != 4
+            || witness.key[1..] != evidence.account
+            || witness.account_path.is_none()
+        {
+            return Err(refused());
+        }
+        let value = &witness.value;
+        let name_length = usize::from(u16::from_be_bytes(
+            value
+                .get(..2)
+                .ok_or_else(refused)?
+                .try_into()
+                .map_err(|_| refused())?,
+        ));
+        if !(1..=512).contains(&name_length) || value.len() != 103 + name_length {
+            return Err(refused());
+        }
+        let at = 2 + name_length;
+        if value[at] != 1
+            || value[at + 49] != 1
+            || value[at + 66] > 1
+            || value[at + 67] > 1
+            || value[at + 100] > 1
+            || value[at + 17..at + 49] != evidence.asset_id
+            || value[at + 1..at + 17] != evidence.finalised_balance.to_be_bytes()
+        {
+            return Err(refused());
+        }
+        if value[at + 100] != 1 || binding.network_id == 0 || binding.request_anchor == [0; 32] {
+            return Err(ExitError::Refused(ExitRefusal::RecipientNotAuthorized));
+        }
+        let key: [u8; 32] = value[at + 68..at + 100].try_into().map_err(|_| refused())?;
+        let authority = ed25519_dalek::VerifyingKey::from_bytes(&key)
+            .map_err(|_| ExitError::Refused(ExitRefusal::RecipientNotAuthorized))?;
+        let mut message = b"LX:SETTLE:RECIPIENT:v1\0".to_vec();
+        message.extend_from_slice(&binding.network_id.to_be_bytes());
+        message.extend_from_slice(&evidence.account);
+        message.extend_from_slice(&evidence.asset_id);
+        message.extend_from_slice(&evidence.recipient.bytes());
+        message.extend_from_slice(&binding.request_anchor);
+        return authority
+            .verify_strict(
+                &message,
+                &ed25519_dalek::Signature::from_bytes(binding.signature),
+            )
+            .map_err(|_| ExitError::Refused(ExitRefusal::RecipientNotAuthorized));
+    }
+
     let depth = evidence.siblings.len();
     if depth > MAX_PROOF_DEPTH {
         return Err(ExitError::Refused(ExitRefusal::ProofTooDeep { depth }));
@@ -883,6 +951,32 @@ fn word_quantity(word: &[u8; 32], what: &str) -> Result<u64, ExitError> {
 }
 
 impl ExitEvidence {
+    /// Verifies a native account inclusion and the authority's exact recipient binding.
+    /// The caller supplies the expected network and request anchor. Registry standing,
+    /// anchor ancestry and certificate verification remain settlement-boundary checks.
+    ///
+    /// # Errors
+    /// Refuses a different account, asset, balance, root, authority or signed recipient domain.
+    pub fn verify_native_balance(
+        &self,
+        witness: &crate::state_proof::StateWitness,
+        state_root: [u8; 32],
+        network_id: u32,
+        request_anchor: [u8; 32],
+        signature: &[u8; 64],
+    ) -> Result<(), ExitError> {
+        verify_balance_proof(
+            self,
+            state_root,
+            Some(NativeBalanceBinding {
+                witness,
+                network_id,
+                request_anchor,
+                signature,
+            }),
+        )
+    }
+
     /// Encodes balance facts with the existing canonical checkpoint proof encoding.
     /// Entries must be strictly ordered by account, asset and recipient.
     ///
@@ -913,7 +1007,7 @@ impl ExitEvidence {
             {
                 return Err(e::invalid());
             }
-            verify_balance_proof(balance, proof.state_root).map_err(|_| e::invalid())?;
+            verify_balance_proof(balance, proof.state_root, None).map_err(|_| e::invalid())?;
             let mut item = balance.account.to_vec();
             item.extend_from_slice(&balance.asset_id);
             item.extend_from_slice(&balance.finalised_balance.to_be_bytes());
@@ -982,7 +1076,8 @@ impl ExitEvidence {
                         .collect(),
                 };
                 validate_fields(&evidence).map_err(|_| e::invalid())?;
-                verify_balance_proof(&evidence, registered.state_root).map_err(|_| e::invalid())?;
+                verify_balance_proof(&evidence, registered.state_root, None)
+                    .map_err(|_| e::invalid())?;
                 if key == (expected.0, expected.1, expected.2.bytes()) {
                     found = Some(evidence);
                 }
