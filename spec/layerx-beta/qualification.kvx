@@ -7712,3 +7712,11 @@ symbol = "send_asset_read send_fee_estimate lni_schema_and_document_cover_every_
 observed = "LNI minor 5 adds AssetReadRequest/Response tags 32/33 and FeeEstimateRequest/Response tags 34/35. Typed client calls decode committed metadata and canonical fee schedule snapshots; DID enumeration verifies each existing account proof. Native compilation, existing LNI account evidence and durable admission gates pass. The Rust schema gate fails because the boundary README does not list the new message names; the exact NODE_BOUNDARY assertion is unchanged. Evidence: qual-logs/pay1/pay1f-schema.log. The README is outside the granted schema file path."
 assumption = "This is a new integration requirement, not an inherited failure. Add the four message names and snapshot semantics to agent/schema/lni/README.md, then rerun cargo test --manifest-path agent/Cargo.toml -p layerx-client --test lni_schema. New metadata/fee handlers still need a real daemon client integration matrix."
 severity = "blocker"
+
+[observation.3.7.56]
+task = "3.7"
+file = "cmd/layerxd/lxp_daemon_process.c cmd/layerxd/lxp_daemon_main.c cmd/layerxd/lxp_daemon_lni.c agent/crates/layerx-client/src/receipt.rs platform/hosted/node/bootstrap.sh"
+symbol = "executor_run apply_canonical_batch send_receipt resolve_unknown"
+observed = "The native executor already waits on queue_changed. LNI minor 5 permits a publication-wait selector that waits on queue/publication notifications up to the request deadline. Minor-5 unknown resolution makes one waiting lookup without a sleep/retry interval; legacy peer behavior remains replay-compatible. Optional LAYERX_PAY_TIMING records native preparation, commit, publication and history microseconds. No before/after native microsecond samples or hosted funded-SEND percentile rerun were obtained. Existing hosted bootstrap generators still emit the old metadata-free genesis request."
+assumption = "The supplied hosted latency baseline is not reproduced by local kernel tests. The hosted owner must provide a version-2 bootstrap request with explicit asset metadata and named fee schedule, then run the funded SEND publication/history path and daemon restart matrix. Instrumentation and source removal of polling do not qualify the latency target."
+severity = "blocker"

@@ -36,6 +36,13 @@
 #include <time.h>
 #include <unistd.h>
 
+static uint64_t pay_timing_us(void)
+{
+    struct timespec now;
+    return clock_gettime(CLOCK_MONOTONIC, &now) == 0 ?
+        (uint64_t)now.tv_sec * 1000000U + (uint64_t)now.tv_nsec / 1000U : 0U;
+}
+
 enum {
     LNI_VERSION_MAJOR = 1,
     LNI_VERSION_MINOR = 5,
@@ -2065,6 +2072,7 @@ static lxp_result receipt_refusal(int descriptor, uint32_t maximum,
 static lxp_result send_receipt(lxp_daemon_lni_server *server, int descriptor,
                                const lni_envelope *request, int64_t deadline)
 {
+    uint64_t started_us = pay_timing_us();
     lxp_receipt_query query;
     lxp_byte_span receipt;
     lxp_log published_log;
@@ -2072,18 +2080,25 @@ static lxp_result send_receipt(lxp_daemon_lni_server *server, int descriptor,
     lxp_arena arena;
     uint8_t *storage;
     lxp_result status;
+    size_t selector_length = request->payload_length;
+    bool wait_publication = false;
+    if (request->minor >= 5U && (selector_length == 34U || selector_length == 10U) &&
+        request->payload[selector_length - 1U] == 1U) {
+        wait_publication = true;
+        --selector_length;
+    }
     (void)memset(&query, 0, sizeof(query));
     if (request->proof_length != 0U || request->payload_length < 1U)
         return send_refusal(descriptor, server->frame_bytes,
                             request->correlation_id, 1U,
                             LXP_ERR_MALFORMED_ENVELOPE, deadline);
-    if (request->payload[0] == 1U && request->payload_length == 33U) {
+    if (request->payload[0] == 1U && selector_length == 33U) {
         query.kind = LXP_RECEIPT_BY_TRANSACTION_ID;
         (void)memcpy(query.identifier, request->payload + 1U, 32U);
-    } else if (request->payload[0] == 2U && request->payload_length == 33U) {
+    } else if (request->payload[0] == 2U && selector_length == 33U) {
         query.kind = LXP_RECEIPT_BY_IDEMPOTENCY_KEY;
         (void)memcpy(query.identifier, request->payload + 1U, 32U);
-    } else if (request->payload[0] == 3U && request->payload_length == 9U) {
+    } else if (request->payload[0] == 3U && selector_length == 9U) {
         query.kind = LXP_RECEIPT_BY_GLOBAL_SEQUENCE;
         query.global_sequence = load_u64(request->payload + 1U);
     } else {
@@ -2093,16 +2108,37 @@ static lxp_result send_receipt(lxp_daemon_lni_server *server, int descriptor,
     }
     query.maximum_response_bytes = server->frame_bytes -
         LNI_ENVELOPE_FIXED_BYTES;
-    if (pthread_mutex_lock(&server->owner->receipt_mutex) != 0) return LXP_ERR_IO;
-    published_log = server->owner->published_receipt_log;
-    if (pthread_mutex_unlock(&server->owner->receipt_mutex) != 0)
-        return LXP_FATAL_INVARIANT;
-    history.log = &published_log;
     storage = malloc(query.maximum_response_bytes);
     if (storage == NULL) return LXP_ERR_IO;
     status = lxp_arena_init(&arena, storage, query.maximum_response_bytes);
-    if (status == LXP_OK)
-        status = lxp_receipt_lookup(&history, &query, &arena, &receipt);
+    if (status == LXP_OK && pthread_mutex_lock(&server->daemon->mutex) != 0) status = LXP_ERR_IO;
+    if (status == LXP_OK) {
+        for (;;) {
+            if (pthread_mutex_lock(&server->owner->receipt_mutex) != 0) { status = LXP_ERR_IO; break; }
+            published_log = server->owner->published_receipt_log;
+            if (pthread_mutex_unlock(&server->owner->receipt_mutex) != 0) { status = LXP_FATAL_INVARIANT; break; }
+            history.log = &published_log;
+            status = lxp_arena_reset(&arena, 0U);
+            if (status == LXP_OK) status = lxp_receipt_lookup(&history, &query, &arena, &receipt);
+            if (status != LXP_ERR_UNKNOWN_ACTIVITY || !wait_publication ||
+                server->daemon->queue_count == 0U || server->daemon->stop_requested ||
+                server->daemon->failure != LXP_OK) break;
+            int64_t now;
+            struct timespec until;
+            if (monotonic_milliseconds(&now) != LXP_OK || clock_gettime(CLOCK_REALTIME, &until) != 0) {
+                status = LXP_ERR_IO; break;
+            }
+            if (now >= deadline) break;
+            int64_t remaining = deadline - now;
+            until.tv_sec += remaining / 1000;
+            until.tv_nsec += (long)(remaining % 1000) * 1000000L;
+            if (until.tv_nsec >= 1000000000L) { ++until.tv_sec; until.tv_nsec -= 1000000000L; }
+            int waited = pthread_cond_timedwait(&server->daemon->queue_changed, &server->daemon->mutex, &until);
+            if (waited == ETIMEDOUT) break;
+            if (waited != 0) { status = LXP_ERR_IO; break; }
+        }
+        if (pthread_mutex_unlock(&server->daemon->mutex) != 0) status = LXP_FATAL_INVARIANT;
+    }
     if (status == LXP_ERR_UNKNOWN_ACTIVITY)
         status = send_envelope(descriptor, server->frame_bytes,
                                LNI_RECEIPT_LOOKUP_RESPONSE,
@@ -2117,6 +2153,9 @@ static lxp_result send_receipt(lxp_daemon_lni_server *server, int descriptor,
     else
         status = receipt_refusal(descriptor, server->frame_bytes,
                                  request->correlation_id, status, deadline);
+    if (getenv("LAYERX_PAY_TIMING") != NULL)
+        (void)fprintf(stderr, "pay-native history_us=%llu result=%d\n",
+            (unsigned long long)(pay_timing_us() - started_us), (int)status);
     free(storage);
     return status;
 }
