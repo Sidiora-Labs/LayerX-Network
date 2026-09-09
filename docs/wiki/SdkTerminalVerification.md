@@ -118,9 +118,28 @@ Occupancy is required iff `protocol_version in (2, 3)` and the terminal
 is successful (`program_wire.py:255-257`). Transfer authority is
 required for a candidate (`/v4`) body, or for encoding 4 on a
 successful terminal, unless the historical recorded path applies
-(`program_wire.py:272-276`). Encoding 4 authority bytes must start with
-`LayerX/programs/402LXP/transfer-set/v2\0` (`program_wire.py:25, 280-281`).
+(`program_wire.py:272-276`). The Python and TypeScript decoders on the testnet
+branch require encoding-4 authority bytes to start directly with
+`LayerX/programs/402LXP/transfer-set/v2\0`
+(`agent/sdk/python/layerx_sdk/program_wire.py:24-25, 278-281`;
+`agent/sdk/typescript/src/program-wire.ts:18-19, 240-247`).
 `protocol_version` must be 1, 2, or 3 (`program_wire.py:283-284`).
+
+The runtime and the Go, JVM, Swift, and .NET SDKs on the testnet branch also
+accept `LayerX/programs/402LXP/account-bound-set/v1\0`. That wrapper contains
+the u32 length and bytes of the original transfer set, followed by one
+u16-length-prefixed canonical account name per leg. Verification refuses a
+nested wrapper or trailing bytes, recomputes principal/program-funding source
+accounts from those names, requires an empty name for a program-account debit,
+rebuilds the 115-byte applied legs, and compares their Merkle root with the
+receipt transfer root
+(`programs/crates/layerx-programs-runtime/src/transfer.rs:882-955`;
+`platform/sdk/go/programs.go:1212-1275`;
+`platform/sdk/jvm/src/main/java/com/sidiora/layerx/sdk/ProgramsClient.java:1034-1072`;
+`platform/sdk/swift/Sources/LayerXSDK/Programs.swift:730-769`;
+`platform/sdk/dotnet/Programs.cs:727-766`). The original set inside the wrapper
+retains the signer principal and invocation authority; the account names bind
+the actual debit endpoints.
 
 `recorded` is true when `encoding_version != 4`, no authority wrapper
 is present, and `transfer_root` is nonzero. That path returns
@@ -164,6 +183,7 @@ checker use these boundaries:
 | `transfer authority presence` | authority wrapper presence disagrees with `transfer_root` outside the recorded path (`program_wire.py:272-276`) |
 | `transfer authority root` | empty authority bytes, or wrapper root ≠ `transfer_root` (`program_wire.py:278-279`) |
 | `V2 transfer authority required` | encoding 4 authority that does not start with transfer-set v2 (`program_wire.py:280-281`) |
+| `account-bound transfer authority` | nested wrapper, malformed original-set length, missing/extra account names, invalid canonical account name, nonempty program-debit name, trailing bytes, or rebuilt root mismatch (`programs/crates/layerx-programs-runtime/src/transfer.rs:882-955`) |
 | `program receipt protocol` | `protocol_version` not in `(1, 2, 3)` (`program_wire.py:283-284`) |
 | `terminal receipt metadata` | runtime, ABI, fee schedule, metering, or usage disagrees with the receipt (`program_wire.py:484-486`) |
 
@@ -225,9 +245,12 @@ receipt; it loads `executed-v3` for the historical recorded path
 
 ## Shared fixtures
 
-Tests load `platform/sdk/conformance/fixtures/receipt-programs-{name}.json`
-for `executed-v4`, `principal-v4`, `mutated-leg-v4`, and `executed-v3`
-(`terminal-v4.test.py:18-21`). Each V4 file carries
+The Python/TypeScript conformance tests load
+`platform/sdk/conformance/fixtures/receipt-programs-{name}.json` for
+`executed-v4`, `principal-v4`, `mutated-leg-v4`, and `executed-v3`
+(`terminal-v4.test.py:18-21`). The Go, JVM, Swift, and .NET receipt tests on the
+testnet branch additionally load
+`programs/fixtures/pay5/receipt-account-bound-v4.json`. Each V4 file carries
 `canonical_receipt_hex`, `signed_activity_hex`, `program_id_hex`,
 `receipt_digest_hex`, `terminal_payload_hex`, `call_graph_hex`,
 `authorized_batch`, and `provenance`
@@ -239,6 +262,7 @@ for `executed-v4`, `principal-v4`, `mutated-leg-v4`, and `executed-v3`
 | `receipt-programs-principal-v4.json` | Encoding 4 CALL whose inner body is the ABI-1 legacy path (`legacy_completed` in JVM/Swift/.NET; Python `/v2` or `/v3` requires `abi_version == 1`). `transfer_verification == "reconstructed"` (`terminal-v4.test.py:18, 33`; `platform/sdk/jvm/src/test/java/com/sidiora/layerx/sdk/TerminalV4Test.java:34-36`; `program_wire.py:209-217`; provenance `--dump-principal-v4` at `receipt-programs-principal-v4.json:18-20`). |
 | `receipt-programs-mutated-leg-v4.json` | Encoding 4 CALL whose applied amount byte was toggled after execution; applied and terminal digests were recomputed and the receipt signed again; `transfer_root` retained. Decoder refuses `applied transfer root` (`receipt-programs-mutated-leg-v4.json:18-20`; `terminal-v4.test.py:29-31`). |
 | `receipt-programs-executed-v3.json` | Stored encoding 3 CALL, ABI 2, module 9 version 4, operation 3. Verified without regeneration. `transfer_verification == "recorded_terminal_root_not_locally_reconstructable"` (`receipt-programs-executed-v3.json:2-6, 26-28, 35, 37`; `terminal-v4.test.py:19, 33`). |
+| `programs/fixtures/pay5/receipt-account-bound-v4.json` | Encoding 4 CALL with a native per-Asset account name bound into transfer authority. The four platform SDK test suites accept the source vector, then require reconstructed transfer verification (`platform/sdk/go/terminal_v4_test.go:12-18, 83-85`; `platform/sdk/jvm/src/test/java/com/sidiora/layerx/sdk/TerminalV4Test.java:30-31, 54-56`; `platform/sdk/swift/Tests/LayerXSDKTests/ReceiptFixtureTests.swift:24-25, 56-58`; `platform/sdk/dotnet/tests/LayerX.Sdk.Tests/ReceiptFixtureTests.cs:40-42, 67-69`). |
 
 ---
 
@@ -281,6 +305,10 @@ Status strings match Go `ProgramTransfersReconstructed` /
 3. Python occupancy uses the `protocol_version` argument
    (`program_wire.py:169, 255`). Go occupancy uses
    `receipt.ProtocolVersion` (`programs.go:502`).
+4. Go, JVM, Swift, and .NET recognize the account-bound transfer-authority
+   wrapper on the testnet branch. Python and TypeScript still require direct
+   `transfer-set/v2` authority bytes, so the account-bound fixture is not in
+   their shared-vector loop.
 
 Sources:
 
@@ -299,5 +327,8 @@ Sources:
 - `platform/sdk/conformance/fixtures/receipt-programs-mutated-leg-v4.json:18-20`
 - `platform/sdk/conformance/fixtures/receipt-programs-executed-v3.json:2-6, 26-28, 35, 37`
 - `platform/sdk/conformance/fixtures/generate_executed_program_fixture.py:55-72, 114-117`
+- `programs/crates/layerx-programs-runtime/src/transfer.rs:882-955`
+- `programs/fixtures/pay5/receipt-account-bound-v4.json`
+- `programs/fixtures/pay5/account-authorization-vectors.json`
 
 [Home](Home.md)

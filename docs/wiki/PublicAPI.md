@@ -24,6 +24,60 @@ admission acknowledgement or a weaker commitment is not returned as success.
 Canonical activities, identifiers, proof bytes, and receipt bytes are
 hexadecimal. Amounts and balances in read results are decimal strings.
 
+## Complete published method set
+
+The testnet branch's embedded OpenRPC document publishes these 15 method
+names. Parameters are positional; the alternatives shown for sequence, proof,
+and subscription are part of the same method contract
+(`platform/hosted/gateway/openrpc.json`;
+`platform/hosted/gateway/src/rpc.rs:11-105`).
+
+| Method | Exact positional parameters | Result |
+| --- | --- | --- |
+| `lx_getAccount` | `[account_id]` | Authenticated account snapshot |
+| `lx_getBalance` | `[account_id]` | Same account object; read `balance` and `asset_id` |
+| `lx_getBalances` | `[did]` | Complete bounded DID account list |
+| `lx_getReceipt` | `[activity_id]` | Verified receipt and result code |
+| `lx_getActivityStatus` | `[activity_id]` | Completed/refused receipt state, or an unavailable error |
+| `lx_getBatchHeader` | `[batch_number]` | Sequencer-signed batch header; number is a canonical nonzero decimal u64 string |
+| `lx_getCheckpoint` | `[checkpoint_id]` | Checkpoint evidence |
+| `lx_getNodeInfo` | `[]` or no `params` | Protocol/network handshake and current heads |
+| `lx_getSequence` | `[account_id]` | Account `next_sequence` |
+| `lx_getSequence` | `[did, "identity"]` | Independent identity `next_sequence` for envelope signing |
+| `lx_getProof` | `["activity", activity_id]` | Activity proof and signed header |
+| `lx_getProof` | `["receipt", activity_id]` | Receipt proof and signed header |
+| `lx_getProof` | `["account", activity_id, account_id]` | Exact verified native account-proof bytes |
+| `lx_sendActivity` | `[canonical_hex, "executed"|"batched"|"finalised"]` | Verified outcome at exactly the requested commitment |
+| `lx_subscribe` | `["receipts"]`, `["checkpoints"]`, or `["account", account_id]` | WebSocket subscription id string |
+| `lx_listAssets` | `[]` or no `params` | Complete Asset registry snapshot |
+| `lx_getAsset` | `[asset_id]` | One Asset metadata record |
+| `lx_estimateFee` | `[canonical_hex]` | Committed-schedule estimate; it does not reserve a fee or prove execution |
+
+Account, activity, checkpoint, and Asset identifiers are nonzero 32-byte hex.
+`lx_getProof` permits only the three selectors above. `lx_subscribe` is served
+only over `GET /rpc/ws`; sending it to HTTPS `POST /rpc` returns:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "error": {"code": -32004, "message": "WebSocket required"}
+}
+```
+
+All JSON-RPC failures have `error.code` and `error.message`. Invalid positional
+parameters are `-32602`; unknown methods are `-32601`; authentication or scope
+refusals are `-32002`; read/submission unavailability is `-32001`; rate or
+capacity refusal is `-32005`; invalid upstream data is `-32603`. Proxied
+failures also retain the typed upstream body in `error.data`
+(`platform/hosted/gateway/src/rpc.rs:148-179, 242-256`). If the requested
+commitment is not yet available, `-32001` carries `data.state: "pending"`, the
+`requested_commitment`, and the evidence or upstream pending body
+(`platform/hosted/gateway/src/rpc.rs:214-219, 334-357`). A DID account-listing
+failure is `-32001` with
+`error.data.error.code: "did_account_listing_unavailable"`; it is not a partial
+account list.
+
 ## Exact real-process transcript
 
 The values below are copied without shortening from one disposable native-node

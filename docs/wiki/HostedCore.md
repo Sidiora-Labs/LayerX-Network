@@ -1,6 +1,22 @@
 # Hosted core
 
-`layerx-platform-core` is the crate; `layerx-core-boundary` is the binary (`platform/hosted/core/Cargo.toml:2`, `platform/hosted/core/Cargo.toml:8-14`). It is the TLS HTTP boundary in front of `layerxd`. It binds two listeners, one core plane and one admin plane (`platform/hosted/core/src/main.rs:57-61`, `platform/hosted/core/src/main.rs:1764-1771`). The core listener default is `0.0.0.0:9443`; the admin listener default is `0.0.0.0:9444` (`platform/hosted/core/src/main.rs:266-267`). Both planes speak TLS. The core plane loads `LAYERX_CORE_TLS_CERT_DER` and `LAYERX_CORE_TLS_KEY_DER`. When `LAYERX_CORE_CLIENT_CA_DER` is set, that plane installs a client-certificate verifier that also `allow_unauthenticated`; when the variable is unset, the core plane uses no client authentication (`platform/hosted/core/src/main.rs:180-209`, `platform/hosted/core/src/main.rs:236-238`, `platform/hosted/core/src/main.rs:268-272`). The admin plane loads `LAYERX_CORE_ADMIN_TLS_CERT_DER` and `LAYERX_CORE_ADMIN_TLS_KEY_DER` and always uses no client authentication (`platform/hosted/core/src/main.rs:273-277`). Core routes run on the core port. Admin routes run on the admin port.
+`layerx-platform-core` is the crate; `layerx-core-boundary` is the binary
+(`platform/hosted/core/Cargo.toml:2`,
+`platform/hosted/core/Cargo.toml:8-14`). It is the TLS HTTP boundary in front
+of `layerxd`. `platform_core` binds the core and admin listeners separately
+(`platform/hosted/core/src/main.rs:2025-2032`). `config` parses their defaults
+as `0.0.0.0:9443` and `0.0.0.0:9444`
+(`platform/hosted/core/src/main.rs:279-280`). Both planes speak TLS. The core
+plane loads `LAYERX_CORE_TLS_CERT_DER` and `LAYERX_CORE_TLS_KEY_DER`. When
+`LAYERX_CORE_CLIENT_CA_DER` is set, that plane installs a client-certificate
+verifier that also `allow_unauthenticated`; when the variable is unset, the
+core plane uses no client authentication
+(`platform/hosted/core/src/main.rs:193-222, 248-252, 281-285`). The admin plane
+loads `LAYERX_CORE_ADMIN_TLS_CERT_DER` and
+`LAYERX_CORE_ADMIN_TLS_KEY_DER` and always uses no client authentication
+(`platform/hosted/core/src/main.rs:286-290`). Core routes run on the core port.
+Admin routes run on the admin port. The testnet branch's public JSON-RPC method
+and payment transcript are documented in [Public payment API](PublicAPI.md).
 
 The image is `layerx-core-boundary` from `platform/hosted/core/Dockerfile`. The build produces `/usr/local/bin/layerx-core-boundary` and the runtime image sets `ENTRYPOINT` to that binary (`platform/hosted/core/Dockerfile:5`, `platform/hosted/core/Dockerfile:9-11`). The Dockerfile creates user `4020:4020` and `USER 4020:4020` (`platform/hosted/core/Dockerfile:8-10`). The node StatefulSet runs the same binary as container `core-boundary` with `runAsUser: 4021` and `runAsGroup: 4020` (`platform/hosted/node/deployment.yaml:106-119`). Those two identities differ.
 
@@ -16,29 +32,29 @@ The hosted testnet treats core as dependency `Core` and the admin listener as `C
 
 | Variable | Role |
 | --- | --- |
-| `LAYERX_CORE_LISTEN` | Core TLS bind; default `0.0.0.0:9443` (`platform/hosted/core/src/main.rs:266`) |
-| `LAYERX_CORE_ADMIN_LISTEN` | Admin TLS bind; default `0.0.0.0:9444` (`platform/hosted/core/src/main.rs:267`) |
-| `LAYERX_CORE_TLS_CERT_DER` | Core server certificate DER (`platform/hosted/core/src/main.rs:268-270`) |
-| `LAYERX_CORE_TLS_KEY_DER` | Core PKCS#8 key DER (`platform/hosted/core/src/main.rs:268-270`) |
-| `LAYERX_CORE_ADMIN_TLS_CERT_DER` | Admin server certificate DER (`platform/hosted/core/src/main.rs:273-275`) |
-| `LAYERX_CORE_ADMIN_TLS_KEY_DER` | Admin PKCS#8 key DER (`platform/hosted/core/src/main.rs:273-275`) |
-| `LAYERX_CORE_CLIENT_CA_DER` | Optional core client CA DER; unset means no client authentication (`platform/hosted/core/src/main.rs:236-238`, `platform/hosted/core/src/main.rs:193-205`) |
-| `LAYERX_CORE_NETWORK_ID` | Required non-zero `u32` (`platform/hosted/core/src/main.rs:240-245`) |
-| `LAYERX_CORE_LNI_SOCKET` | Unix socket to `layerxd` LNI (`platform/hosted/core/src/main.rs:278`) |
-| `LAYERX_CORE_NODE_URL` | Loopback `http://` host:port with no path (`platform/hosted/core/src/main.rs:212-232`, `platform/hosted/core/src/main.rs:280`) |
-| `LAYERX_CORE_NODE_BEARER_TOKEN_FILE` | Bearer secret for node HTTP (`platform/hosted/core/src/main.rs:281`) |
-| `LAYERX_CORE_REPLICA_URL` | Parsed by the same `parse_node_url` as the node URL; the error strings in that function name `LAYERX_CORE_NODE_URL` (`platform/hosted/core/src/main.rs:212-232`, `platform/hosted/core/src/main.rs:282`) |
-| `LAYERX_CORE_REPLICA_BEARER_TOKEN_FILE` | Bearer secret for replica HTTP (`platform/hosted/core/src/main.rs:283`) |
-| `LAYERX_CORE_ADMIN_TOKEN_FILE` | Admin `Authorization: Bearer` secret (`platform/hosted/core/src/main.rs:284`) |
-| `LAYERX_CORE_TREASURY_KEY_FILE` | 32-byte hex Ed25519 seed (`platform/hosted/core/src/main.rs:246-247`, `platform/hosted/core/src/lib.rs:292-294`) |
-| `LAYERX_CORE_TREASURY_ASSET` | Non-zero 32-byte hex asset id (`platform/hosted/core/src/main.rs:248-254`) |
-| `LAYERX_CORE_SEQUENCER_ID` | 32-byte hex sequencer id (`platform/hosted/core/src/main.rs:255-258`) |
-| `LAYERX_CORE_SUPERVISOR_SOCKET` | Unix socket for admin reset (`platform/hosted/core/src/main.rs:289`) |
-| `LAYERX_CORE_STATE_DIR` | Creates `journal/` mode `0o700` (`platform/hosted/core/src/main.rs:259-264`) |
-| `LAYERX_CORE_FEE_LIMIT` | SEND fee limit; default `1000` (`platform/hosted/core/src/main.rs:291`) |
-| `LAYERX_CORE_RECEIPT_DEADLINE_MS` | Receipt poll deadline; default `15000` (`platform/hosted/core/src/main.rs:292-295`) |
+| `LAYERX_CORE_LISTEN` | Core TLS bind; default `0.0.0.0:9443` (`platform/hosted/core/src/main.rs:169-174, 279`) |
+| `LAYERX_CORE_ADMIN_LISTEN` | Admin TLS bind; default `0.0.0.0:9444` (`platform/hosted/core/src/main.rs:169-174, 280`) |
+| `LAYERX_CORE_TLS_CERT_DER` | Core server certificate DER (`platform/hosted/core/src/main.rs:193-222, 281-285`) |
+| `LAYERX_CORE_TLS_KEY_DER` | Core PKCS#8 key DER (`platform/hosted/core/src/main.rs:193-222, 281-285`) |
+| `LAYERX_CORE_ADMIN_TLS_CERT_DER` | Admin server certificate DER (`platform/hosted/core/src/main.rs:286-290`) |
+| `LAYERX_CORE_ADMIN_TLS_KEY_DER` | Admin PKCS#8 key DER (`platform/hosted/core/src/main.rs:286-290`) |
+| `LAYERX_CORE_CLIENT_CA_DER` | Optional core client CA DER; unset means no client authentication (`platform/hosted/core/src/main.rs:193-219, 248-252`) |
+| `LAYERX_CORE_NETWORK_ID` | Required non-zero `u32` (`platform/hosted/core/src/main.rs:253-257`) |
+| `LAYERX_CORE_LNI_SOCKET` | Unix socket to `layerxd` LNI (`platform/hosted/core/src/main.rs:291`) |
+| `LAYERX_CORE_NODE_URL` | Loopback `http://` host:port with no path (`platform/hosted/core/src/main.rs:225-245, 293`) |
+| `LAYERX_CORE_NODE_BEARER_TOKEN_FILE` | Bearer secret for node HTTP (`platform/hosted/core/src/main.rs:294`) |
+| `LAYERX_CORE_REPLICA_URL` | Parsed by the same `parse_node_url` as the node URL; the error strings in that function name `LAYERX_CORE_NODE_URL` (`platform/hosted/core/src/main.rs:225-245, 298`) |
+| `LAYERX_CORE_REPLICA_BEARER_TOKEN_FILE` | Bearer secret for replica HTTP (`platform/hosted/core/src/main.rs:299`) |
+| `LAYERX_CORE_ADMIN_TOKEN_FILE` | Admin `Authorization: Bearer` secret (`platform/hosted/core/src/main.rs:300`) |
+| `LAYERX_CORE_TREASURY_KEY_FILE` | 32-byte hex Ed25519 seed (`platform/hosted/core/src/main.rs:259-260`) |
+| `LAYERX_CORE_TREASURY_ASSET` | Non-zero 32-byte hex asset id (`platform/hosted/core/src/main.rs:261-267`) |
+| `LAYERX_CORE_SEQUENCER_ID` | 32-byte hex sequencer id (`platform/hosted/core/src/main.rs:268-271`) |
+| `LAYERX_CORE_SUPERVISOR_SOCKET` | Unix socket for admin reset (`platform/hosted/core/src/main.rs:305`) |
+| `LAYERX_CORE_STATE_DIR` | Creates `journal/` mode `0o700` (`platform/hosted/core/src/main.rs:272-277, 306`) |
+| `LAYERX_CORE_FEE_LIMIT` | SEND fee limit; default `1000` (`platform/hosted/core/src/main.rs:307`) |
+| `LAYERX_CORE_RECEIPT_DEADLINE_MS` | Receipt poll deadline; default `15000` (`platform/hosted/core/src/main.rs:308-311`) |
 
-Secret files are read, trailing CR/LF stripped, and refused when empty or longer than 4096 bytes (`platform/hosted/core/src/main.rs:139-149`). Node and replica URLs must be plaintext `http://` on `127.0.0.1` or `localhost` with a port and no path (`platform/hosted/core/src/main.rs:212-232`).
+Secret files are read, trailing CR/LF stripped, and refused when empty or longer than 4096 bytes (`platform/hosted/core/src/main.rs:152-162`). Node and replica URLs must be plaintext `http://` on `127.0.0.1` or `localhost` with a port and no path (`platform/hosted/core/src/main.rs:225-245`).
 
 ---
 

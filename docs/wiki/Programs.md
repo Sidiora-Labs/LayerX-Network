@@ -14,7 +14,7 @@ swift, conformance, generators). CALL receipt terminal verification for
 those clients is on [SdkTerminalVerification](SdkTerminalVerification.md).
 
 This page is a read of those sources. Where they disagree, both sides are
-cited. LXT20 request codecs and the payments-merchant example are on the
+cited. LXT-20 request codecs and the payments-merchant example are on the
 testnet branch; see
 [Payments developer path](PaymentsQuickstart.md) and [Assets](Assets.md).
 
@@ -138,9 +138,9 @@ Sources:
 
 ---
 
-## LXT20 on the testnet branch
+## LXT-20 on the testnet branch
 
-The Rust guest SDK's LXT20 example is an ABI-v2 state machine backed by one
+The Rust guest SDK's LXT-20 example is an ABI-v2 state machine backed by one
 native Asset. Token balances and allowances are program storage; the backing
 units move only through `402LXP`. The reference program fixes its Asset,
 supply, and ceiling at build time. It has no mint, burn, permit, or nested-call
@@ -200,8 +200,22 @@ separate bounded `ProgramSpend` capability. Derivation is not registration,
 funding, or debit authority.
 
 Deploy with ABI version 2 and include the generated interface that binds all
-eight selectors, input/output bounds, and transfer capability offsets.
-`transfer` and `transfer_from` are caller-authorized dynamic-spend entries. A
+eight selectors, input/output bounds, and transfer capability offsets. Because
+`transfer` and `transfer_from` carry `CallerAuthorizedSpend`, the canonical
+interface uses `LayerX/program-interface/v2\0`; the v1 interface encoding and
+guest ABI 1 refuse that descriptor
+(`programs/crates/layerx-programs-registry/src/interface.rs:13-14, 306-320,
+820-835`).
+
+The reference descriptor binds the backing Asset and per-call ceiling, with
+recipient/amount offsets `10`/`42` for `transfer` and `42`/`74` for
+`transfer_from`
+(`programs/crates/layerx-programs-registry/src/lxt20.rs:68-70, 89-100`). It
+does not grant spending authority. Admission extracts the recipient and u128
+amount from canonical calldata, refuses zero or over-ceiling values, and
+requires a matching caller `ProgramSpend` grant bound to this program, its
+derived source account, Asset, recipient, and amount
+(`programs/crates/layerx-programs-runtime/src/dynamic_spend.rs:11-47`). A
 registry source/state record alone is not proof that the native deploy
 activity executed; require its verified receipt.
 
@@ -247,6 +261,19 @@ The SDK refuses any other length, malformed field, or digest different from
 the requested receipt. The merchant example therefore consumes verified,
 explicitly granted payment evidence rather than trusting a caller-supplied
 receipt description.
+
+When a principal or program-funding leg resolves a named native account, the
+runtime wraps the original transfer authorization with
+`LayerX/programs/402LXP/account-bound-set/v1\0`, the u32 length and bytes of
+that authorization, then one u16-length-prefixed account name per leg. Program
+spend legs require an empty name; principal and funding legs recompute the
+source account from the supplied canonical name. The resulting 115-byte kernel
+legs and transfer root therefore commit the actual account endpoints while the
+original authorization retains the signer principal and invocation authority
+(`programs/crates/layerx-programs-runtime/src/transfer.rs:882-918, 921-955`).
+Nested wrappers, trailing data, forged names, or a recomputed root mismatch are
+refused; the testnet branch carries positive native per-Asset evidence and
+negative vectors in `programs/fixtures/pay5/account-authorization-vectors.json`.
 
 ---
 

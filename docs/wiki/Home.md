@@ -76,6 +76,8 @@ See `docs/MONOREPO.md` for build boundaries, workflow naming, and tag convention
 - [SDK terminal verification](SdkTerminalVerification.md)
 - [Portable receipt verifier](PortableVerifier.md)
 - [x402 transport](X402Transport.md)
+- [402LXP protocol (testnet branch)](https://github.com/Sidiora-Labs/LayerX-Network/blob/d50ca217812128e487188ad52823ad1e6addf338/spec/402lxp/protocol.md)
+- [402LXP RPC verification guide (testnet branch)](https://github.com/Sidiora-Labs/LayerX-Network/blob/d50ca217812128e487188ad52823ad1e6addf338/spec/402lxp/README.md)
 - [Agentd](Agentd.md)
 - [CLI](Cli.md)
 - [Hosted core](HostedCore.md)

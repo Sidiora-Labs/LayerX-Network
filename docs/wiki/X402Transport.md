@@ -154,8 +154,12 @@ Each draw is pre-registered durably by idempotency key with its principal,
 request digest, exact canonical activity, receive bytes, and activity id. A
 conflicting registration is refused. The first attempt submits the stored
 activity through `lx_sendActivity`; later attempts recover its receipt by the
-same activity id. Pending or indeterminate settlement returns HTTP 202 and
-does not fulfill the resource.
+same activity id. Only JSON-RPC `-32001` with object `data` whose `state` is
+`pending`, or a result whose `state` is `pending`, remains retryable and maps to
+HTTP 202. Other RPC, HTTP, parse, or protocol failures remain errors; they do
+not fulfill the resource and are not relabeled as pending
+(`agent/sdk/python/layerx_sdk/x402_draw.py:81-100`;
+`agent/sdk/typescript/src/x402/draw.ts:33-42, 55-60`).
 
 Every subscription period uses a distinct period key and a newly signed
 receive with current sequences. The recurring grant is reused within its
