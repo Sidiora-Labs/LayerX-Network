@@ -38,7 +38,7 @@
 
 enum {
     LNI_VERSION_MAJOR = 1,
-    LNI_VERSION_MINOR = 4,
+    LNI_VERSION_MINOR = 5,
     LNI_NODE_INFO_REQUEST = 1,
     LNI_NODE_INFO_RESPONSE = 2,
     LNI_SUBMIT_REQUEST = 3,
@@ -63,6 +63,10 @@ enum {
     LNI_FINALITY_EVIDENCE_REGISTER_RESPONSE = 29,
     LNI_SIMULATE_REQUEST = 30,
     LNI_SIMULATE_RESPONSE = 31,
+    LNI_ASSET_READ_REQUEST = 32,
+    LNI_ASSET_READ_RESPONSE = 33,
+    LNI_FEE_ESTIMATE_REQUEST = 34,
+    LNI_FEE_ESTIMATE_RESPONSE = 35,
     LNI_ENVELOPE_FIXED_BYTES = 22,
     LNI_NODE_INFO_FIXED_BYTES = 93,
     LNI_PREPARATION_STATE_MAX_BYTES = 4096,
@@ -1317,26 +1321,26 @@ static lxp_result send_node_info(lxp_daemon_lni_server *server,
                                  int64_t deadline)
 {
     static const char *sequencer_capabilities[] = {
-        "authenticated_durable_submit", "batch_header", "node_info",
+        "asset_read", "authenticated_durable_submit", "batch_header", "fee_estimate", "node_info",
         "preparation_state",
         "receipt_lookup", "submit"
     };
     static const char *evidence_capabilities[] = {
-        "account_read", "authenticated_durable_submit", "batch_header",
-        "checkpoint", "historical_proofs", "node_info",
+        "account_read", "asset_read", "authenticated_durable_submit", "batch_header",
+        "checkpoint", "fee_estimate", "historical_proofs", "node_info",
         "preparation_state", "proof_bundle", "receipt_lookup", "submit"
     };
     static const char *finalizer_capabilities[] = {
-        "account_read", "authenticated_durable_submit", "batch_header",
-        "checkpoint", "finality_evidence_register", "historical_proofs",
+        "account_read", "asset_read", "authenticated_durable_submit", "batch_header",
+        "checkpoint", "fee_estimate", "finality_evidence_register", "historical_proofs",
         "node_info", "preparation_state", "proof_bundle", "receipt_lookup",
         "submit"
     };
     static const char *reader_capabilities[] = {
-        "batch_header", "node_info", "receipt_lookup"
+        "asset_read", "batch_header", "fee_estimate", "node_info", "receipt_lookup"
     };
     static const char *evidence_reader_capabilities[] = {
-        "account_read", "batch_header", "checkpoint", "historical_proofs",
+        "account_read", "asset_read", "batch_header", "checkpoint", "fee_estimate", "historical_proofs",
         "node_info", "proof_bundle", "receipt_lookup"
     };
     static const char simulate_capability[] = "simulate";
@@ -2117,6 +2121,58 @@ static lxp_result send_receipt(lxp_daemon_lni_server *server, int descriptor,
     return status;
 }
 
+static lxp_result evidence_refusal(lxp_daemon_lni_server *server, int descriptor,
+    uint64_t correlation_id, lxp_result status, int64_t deadline);
+
+static lxp_result send_asset_read(lxp_daemon_lni_server *server, int descriptor,
+    const lni_envelope *request, int64_t deadline)
+{
+    lx_asset_record records[LX_ASSET_REGISTRY_CAPACITY];
+    uint8_t *payload;
+    size_t count = 0U, cursor = 44U;
+    uint16_t returned = 0U;
+    lxp_result status;
+    if (request->minor < 5U || request->proof_length != 0U || request->correlation_id == 0U ||
+        request->payload_length < 3U || load_u16(request->payload) != 1U ||
+        !((request->payload[2] == 1U && request->payload_length == 3U) ||
+          (request->payload[2] == 2U && request->payload_length == 35U &&
+           !lxp_ct_is_zero(request->payload + 3U, 32U))))
+        return send_refusal(descriptor, server->frame_bytes, request->correlation_id,
+            1U, LXP_ERR_NON_CANONICAL, deadline);
+    payload = malloc(server->frame_bytes);
+    if (payload == NULL) return LXP_ERR_IO;
+    if (pthread_mutex_lock(&server->owner->mutex) != 0) { free(payload); return LXP_ERR_IO; }
+    const lxp_kernel *kernel = server->owner->kernel;
+    status = lx_asset_committed_records(kernel, records, LX_ASSET_REGISTRY_CAPACITY, &count);
+    if (status == LXP_OK && server->frame_bytes < cursor + LNI_ENVELOPE_FIXED_BYTES) status = LXP_ERR_LENGTH_LIMIT;
+    if (status == LXP_OK) {
+        store_u16(payload, 1U);
+        store_u64(payload + 2U, kernel->state->next_sequence - 1U);
+        (void)memcpy(payload + 10U, kernel->current_state_root, 32U);
+        for (size_t i = 0U; i < count && status == LXP_OK; ++i) {
+            uint8_t encoded[384];
+            size_t length;
+            if (request->payload[2] == 2U && memcmp(request->payload + 3U, records[i].asset_id, 32U) != 0) continue;
+            status = lx_asset_record_encode(&records[i], encoded, sizeof(encoded), &length);
+            if (status == LXP_OK && (cursor + 2U + length + LNI_ENVELOPE_FIXED_BYTES > server->frame_bytes))
+                status = LXP_ERR_LENGTH_LIMIT;
+            if (status == LXP_OK) {
+                store_u16(payload + cursor, (uint16_t)length); cursor += 2U;
+                (void)memcpy(payload + cursor, encoded, length); cursor += length;
+                ++returned;
+            }
+        }
+        store_u16(payload + 42U, returned);
+        if (status == LXP_OK && request->payload[2] == 2U && returned != 1U) status = LXP_ERR_ASSET_MISMATCH;
+    }
+    if (pthread_mutex_unlock(&server->owner->mutex) != 0) status = LXP_FATAL_INVARIANT;
+    if (status == LXP_OK) status = send_envelope(descriptor, server->frame_bytes,
+        LNI_ASSET_READ_RESPONSE, request->correlation_id, payload, cursor, NULL, 0U, deadline);
+    else status = evidence_refusal(server, descriptor, request->correlation_id, status, deadline);
+    free(payload);
+    return status;
+}
+
 static bool registration_active(
     const lxp_module_registration *registration, uint64_t epoch)
 {
@@ -2361,6 +2417,44 @@ static lxp_result simulation_schedule(const lxp_kernel *kernel,
         return LXP_ERR_VERSION_UNSUPPORTED;
     *parameter_version = version;
     return lxp_fee_committed_schedule(kernel, version, fees);
+}
+
+static lxp_result send_fee_estimate(lxp_daemon_lni_server *server, int descriptor,
+    const lni_envelope *request, int64_t deadline)
+{
+    lxp_fee_params fees;
+    lxp_fee_meter meter = {0};
+    lxp_u128 fee;
+    uint32_t version;
+    uint8_t payload[279];
+    size_t length;
+    lxp_result status;
+    if (request->minor < 5U || request->proof_length != 0U || request->correlation_id == 0U ||
+        request->payload_length != 30U || load_u16(request->payload) != 1U)
+        return send_refusal(descriptor, server->frame_bytes, request->correlation_id,
+            1U, LXP_ERR_NON_CANONICAL, deadline);
+    meter.canonical_encoded_bytes = load_u64(request->payload + 6U);
+    meter.execution_units = load_u64(request->payload + 14U);
+    meter.storage_units = load_u64(request->payload + 22U);
+    if (meter.canonical_encoded_bytes > LXP_MAX_ACTIVITY_BYTES)
+        return send_refusal(descriptor, server->frame_bytes, request->correlation_id,
+            1U, LXP_ERR_LENGTH_LIMIT, deadline);
+    if (pthread_mutex_lock(&server->owner->mutex) != 0) return LXP_ERR_IO;
+    status = simulation_schedule(server->owner->kernel, &version, &fees);
+    if (status == LXP_OK) status = lxp_fee_compute(&fees, load_u32(request->payload + 2U), meter, &fee);
+    if (status == LXP_OK) {
+        store_u16(payload, 1U);
+        store_u64(payload + 2U, server->owner->kernel->state->next_sequence - 1U);
+        (void)memcpy(payload + 10U, server->owner->kernel->current_state_root, 32U);
+        store_u32(payload + 42U, version);
+        (void)lxp_u128_to_be(fee, payload + 46U);
+        status = lxp_fee_params_encode(&fees, payload + 64U, sizeof(payload) - 64U, &length);
+        if (status == LXP_OK) store_u16(payload + 62U, (uint16_t)length);
+    }
+    if (pthread_mutex_unlock(&server->owner->mutex) != 0) status = LXP_FATAL_INVARIANT;
+    return status == LXP_OK ? send_envelope(descriptor, server->frame_bytes,
+        LNI_FEE_ESTIMATE_RESPONSE, request->correlation_id, payload, 64U + length, NULL, 0U, deadline) :
+        evidence_refusal(server, descriptor, request->correlation_id, status, deadline);
 }
 
 static lxp_result simulation_batch_number(
@@ -3358,6 +3452,10 @@ static lxp_result serve_connection(lxp_daemon_lni_server *server,
                                  credential, deadline);
         } else if (request.tag == LNI_RECEIPT_LOOKUP_REQUEST) {
             status = send_receipt(server, descriptor, &request, deadline);
+        } else if (request.tag == LNI_ASSET_READ_REQUEST) {
+            status = send_asset_read(server, descriptor, &request, deadline);
+        } else if (request.tag == LNI_FEE_ESTIMATE_REQUEST) {
+            status = send_fee_estimate(server, descriptor, &request, deadline);
         } else if (request.tag == LNI_ACCOUNT_READ_REQUEST) {
             status = send_account_read(server, descriptor, &request, deadline);
         } else if (request.tag == LNI_AVAILABILITY_FETCH) {
