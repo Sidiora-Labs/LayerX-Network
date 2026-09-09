@@ -15,25 +15,32 @@ This crate lives in the agent workspace (`agent/`). Related surfaces:
 
 ## Tools in this crate
 
-Read tools are absent from the list when the bound scope does not include them:
+Read tools are absent from the list when the bound scope does not include them. Wallet and token writes reuse the ordinary submit path; `activity.wait` reuses the ordinary track path. Operator walkthrough: [`docs/wiki/RunningAnAgent.md`](../../../docs/wiki/RunningAnAgent.md).
 
-| Tool | Kind |
-| --- | --- |
-| `balance.get` | read |
-| `history.list` | read |
-| `receipt.get` | read |
-| `checkpoint.get` | read |
-| `proof.get` | read |
-| `availability.get` | read |
-| `activity.prepare` | write |
-| `activity.disclose` | write |
-| `activity.sign` | write |
-| `activity.submit` | write |
-| `activity.track` | write |
+| Tool | Kind | Required scope | Daemon operation |
+| --- | --- | --- | --- |
+| `balance.get` | read | `read:balance` | `ReadBalance` |
+| `wallet.balance` | read | `read:wallet:balance` | `ReadBalance` |
+| `wallet.accounts` | read | `read:wallet:accounts` | `ReadAccount` |
+| `history.list` | read | `read:history` | `ReadHistory` |
+| `receipt.get` | read | `read:receipt` | `ProgramReceipt` |
+| `checkpoint.get` | read | `read:checkpoint` | `ReadCheckpoint` |
+| `proof.get` | read | `read:proof` | `ReadProofBundle` |
+| `availability.get` | read | `read:availability` | `AvailabilityFetch` |
+| `activity.prepare` | write | `write:prepare` | `Prepare` |
+| `activity.disclose` | write | `write:disclose` | `Prepare` |
+| `activity.sign` | write | `write:sign` | `Sign` |
+| `activity.submit` | write | `write:submit` | `Submit` |
+| `wallet.send` | write | `write:wallet:send` | `Submit` |
+| `token.create` | write | `write:token:create` | `Submit` |
+| `token.mint` | write | `write:token:mint` | `Submit` |
+| `token.transfer` | write | `write:token:transfer` | `Submit` |
+| `activity.track` | write | `write:track` | `Track` |
+| `activity.wait` | write | `write:activity:wait` | `Track` |
 
-Write tools follow the ordinary daemon path: prepare, disclose, sign, submit, track. Outcomes are evidence-shaped (`Executed` + receipt, `Unknown`, or `Failed`). Read-only deployment omits write tools entirely.
+Write tools follow the ordinary daemon path: prepare, disclose, sign, submit, track. Outcomes are evidence-shaped (`Executed` + receipt, `Unknown`, or `Failed`). Read-only deployment omits write tools entirely. This catalogue is not the CLI `layerx mcp serve` surface (`receipt.get` / `activity.submit` only).
 
-Untrusted tool arguments cannot change tenant, scope, or counterparty. See `src/untrusted.rs` and `src/validate.rs`.
+Untrusted tool arguments cannot change tenant, scope, or counterparty. See `src/untrusted.rs` and `src/validate.rs`. Payment payload bytes bound at disclose/sign live in `layerx-crypto` (`payments` / `disclosure`).
 
 ## Test
 
