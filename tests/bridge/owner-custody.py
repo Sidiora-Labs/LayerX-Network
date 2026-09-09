@@ -53,6 +53,12 @@ with tempfile.TemporaryDirectory(prefix='owner-custody-') as directory:
                 ca_bundle=None, disposable_identity=None, key_file=str(keyfile), attestor_key=str(work / 'attestor.seed'),
                 network_id=77, asset='01' * 32, amount=1000000000000000000)
             bootstrap(args)
+            clock_rpc = Rpc(args.rpc[0])
+            assert clock_rpc.call('eth_chainId', []) == '0x7a69'
+            wall_clock = int(time.time())
+            clock_rpc.call('evm_setNextBlockTimestamp', [wall_clock], allow_missing=True)
+            clock_rpc.call('evm_mine', [], allow_missing=True)
+            assert int(clock_rpc.call('eth_getBlockByNumber', ['latest', False])['timestamp'], 16) == wall_clock
             generate(work, work, [bytes([i]).hex() * 32 for i in (1, 2, 3)])
             request = dict(email='owner@example.com', display_name='Owner', idempotency_key='custody-owner', now=1)
             env = dict(os.environ, LAYERX_HUMAN_IDENTITY_PROVIDER_STATE_ROOT=str(work / 'lxip'),
