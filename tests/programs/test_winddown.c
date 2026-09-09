@@ -74,6 +74,12 @@ static int activity_dispatch(lxp_kernel *kernel,
         kernel->module_runtime[LXP_MODULE_PROGRAMS];
     sequence_account = runtime == NULL ? NULL :
         account_by_id(runtime->accounts, authority->principal);
+    if (runtime != NULL &&
+        registration->abi_version == LX_PROGRAMS_SANDBOX_DESTROY_ABI_VERSION &&
+        lxp_kernel_program_payment_account(runtime->accounts, authority->principal,
+            runtime->assets[0].asset_id, LXP_PROTOCOL_VERSION_STATE_COMMITMENT,
+            &sequence_account) != LXP_OK)
+        return wind_down_failure(__LINE__);
     if (sequence_account == NULL) return wind_down_failure(__LINE__);
     ledger_before = sequence_account->next_sequence;
     (void)memset(&activity, 0, sizeof(activity));
@@ -95,7 +101,7 @@ static int activity_dispatch(lxp_kernel *kernel,
             lxp_kernel_bind_ledger_admission(&ctx, authority, activity.activity_type) != LXP_OK ||
             ctx.call_admission.present ||
             lxp_ctx_ledger_execution_sequence(
-                &ctx, authority->principal, activity.account_sequence,
+                &ctx, sequence_account->id, activity.account_sequence,
                 &captured) != LXP_OK || captured != sequence_account->next_sequence ||
             captured == activity.account_sequence || captured == sequence ||
             lxp_kernel_bind_ledger_admission(&ctx, authority, activity.activity_type) != LXP_ERR_CONTEXT_MISMATCH)
@@ -103,31 +109,31 @@ static int activity_dispatch(lxp_kernel *kernel,
         saved = ctx.ledger_admission;
         ctx.ledger_admission.bound = false;
         if (lxp_ctx_ledger_execution_sequence(
-                &ctx, authority->principal, activity.account_sequence,
+                &ctx, sequence_account->id, activity.account_sequence,
                 &captured) != LXP_ERR_CONTEXT_MISMATCH)
             return wind_down_failure(__LINE__);
         ctx.ledger_admission = saved;
         ctx.ledger_admission.account_id[0] ^= 1U;
         if (lxp_ctx_ledger_execution_sequence(
-                &ctx, authority->principal, activity.account_sequence,
+                &ctx, sequence_account->id, activity.account_sequence,
                 &captured) != LXP_ERR_CONTEXT_MISMATCH)
             return wind_down_failure(__LINE__);
         ctx.ledger_admission = saved;
         ctx.ledger_admission.next_sequence++;
         if (lxp_ctx_ledger_execution_sequence(
-                &ctx, authority->principal, activity.account_sequence,
+                &ctx, sequence_account->id, activity.account_sequence,
                 &captured) != LXP_ERR_CONTEXT_MISMATCH)
             return wind_down_failure(__LINE__);
         ctx.ledger_admission = saved;
         ctx.ledger_admission.account_present = false;
         if (lxp_ctx_ledger_execution_sequence(
-                &ctx, authority->principal, activity.account_sequence,
+                &ctx, sequence_account->id, activity.account_sequence,
                 &captured) != LXP_ERR_CONTEXT_MISMATCH)
             return wind_down_failure(__LINE__);
         ctx.ledger_admission = saved;
         ctx.ledger_admission.activity_binding[0] ^= 1U;
         if (lxp_ctx_ledger_execution_sequence(
-                &ctx, authority->principal, activity.account_sequence,
+                &ctx, sequence_account->id, activity.account_sequence,
                 &captured) != LXP_ERR_CONTEXT_MISMATCH)
             return wind_down_failure(__LINE__);
         ctx.ledger_admission = saved;
@@ -372,9 +378,9 @@ static int wind_down_lifecycle(bool separate_counters)
     static const uint8_t program_prefix[] = "program\0";
     static const uint8_t owner_prefix[] = "program-owner\0";
     static const char *names[3] = {
-        "agent:did:key:wind-owner:main",
-        "agent:did:key:wind-one:main",
-        "agent:did:key:wind-two:main"
+        "agent:did:lxp:wind-owner:main",
+        "agent:did:lxp:wind-one:main",
+        "agent:did:lxp:wind-two:main"
     };
     static const uint8_t seeds[2][3] = {{'o','n','e'}, {'t','w','o'}};
     uint8_t program[32], ids[3][32], program_accounts[2][32];
@@ -428,6 +434,7 @@ static int wind_down_lifecycle(bool separate_counters)
                                      (lxp_u128){0U, 0U}, 0U) != LXP_OK)
         return wind_down_failure(__LINE__);
     runtime.accounts = &accounts;
+    (void)memcpy(runtime.occupancy_asset_id, assets[0].asset_id, 32U);
     runtime.assets = assets;
     runtime.asset_count = 2U;
     if (lxp_state_store_init(&state, 7U) != LXP_OK ||
@@ -445,20 +452,26 @@ static int wind_down_lifecycle(bool separate_counters)
         lxp_kernel_set_capabilities(
             &kernel, NULL, lxp_kernel_canonical_ledger_apply) != LXP_OK)
         return wind_down_failure(__LINE__);
-    (void)memcpy(authority.principal, ids[0], 32U);
+    if (separate_counters) {
+        if (lxp_did_id_derive((const uint8_t *)"did:lxp:wind-owner",
+                sizeof("did:lxp:wind-owner") - 1U, authority.principal) != LXP_OK)
+            return wind_down_failure(__LINE__);
+    } else {
+        (void)memcpy(authority.principal, ids[0], 32U);
+    }
     (void)memset(authority.authority_hash, 0x51, 32U);
     (void)memcpy(program_key, program_prefix, sizeof(program_prefix) - 1U);
     (void)memcpy(program_key + sizeof(program_prefix) - 1U, program, 32U);
     (void)memcpy(owner_key, owner_prefix, sizeof(owner_prefix) - 1U);
     (void)memcpy(owner_key + sizeof(owner_prefix) - 1U, program, 32U);
     program_record[0] = 1U;
-    (void)memcpy(program_record + 1U, ids[0], 32U);
+    (void)memcpy(program_record + 1U, authority.principal, 32U);
     (void)memset(program_record + 33U, 0x61, 32U);
     program_record[66] = 2U;
     program_record[68] = 1U;
     program_record[70] = 1U;
     owner_record[0] = 1U;
-    (void)memcpy(owner_record + 1U, ids[0], 32U);
+    (void)memcpy(owner_record + 1U, authority.principal, 32U);
     if (lxp_state_journal_open(&state, 7U, &journal) != LXP_OK ||
         lxp_arena_init(&arena, arena_bytes, sizeof(arena_bytes)) != LXP_OK ||
         lxp_module_ctx_init(&ctx, &kernel, LXP_MODULE_PROGRAMS, 7U, 1U, 7U,
