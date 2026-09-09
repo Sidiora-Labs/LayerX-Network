@@ -8049,9 +8049,18 @@ symbol = "LAYERX_GATEWAY_PUBLIC_CORE_URL session topology_check"
 observed = "The gateway manifest now configures the public core endpoint. WebSocket heartbeats run every five seconds, within the unchanged ten-second ingress read timeout. Formatting, strict core/gateway Clippy, gateway package tests and the real receipt/account WebSocket test pass: qual-logs/pay4/f-config-fmt.log, f-config-clippy.log, f-config-tests.log and f-config-real.log. The topology checker admits the new gateway-to-core edge through both network policies and DNS, but the aggregate command exits 2 with twenty existing failures involving internal human event sources, payments/programs ingress and developer-plane policies. Raw evidence: qual-logs/pay4/f-config-topology.log."
 assumption = "No deployment was run. The core container still needs an outside-owned receipt-events token mount matching the gateway component token. Existing unrelated topology failures are retained without broadening policy access or changing other manifests. Positive checkpoint notification delivery and successful SEND latency remain unqualified."
 [observation.6.11.pay2_rpc_contract]
+[observation.6.11.129]
 task = "6.11"
 file = "agent/crates/layerx-sdk/src/lib.rs agent/sdk/typescript/src/agent-http.ts platform/ src/"
 symbol = "lx_getAccount lx_getBalances lx_sendActivity lx_getActivityStatus lx_getReceipt"
 observed = "Source search for the public wallet JSON-RPC methods finds no implementations. Existing SDK transports expose the typed node boundary and Programs HTTP routes, but no public wallet RPC result schema binds canonical receipts, inclusion proofs and guarantor certificates for the executed, batched and finalised commitment levels. Search evidence: qual-logs/pay2/rpc-contract-search.log; rg exit 1."
 assumption = "Wallet execution and commitment verification require the gateway request/result and proof transport contracts. An admission acknowledgement cannot substitute for verified receipt evidence."
+severity = "blocker"
+
+[observation.6.11.130]
+task = "6.11"
+file = "agent/crates/layerx-agentd/tests/support/real_authority.rs agent/crates/layerx-agentd/tests/budget_create.rs agent/crates/layerx-mcp/src/server.rs agent/crates/layerx-mcp/src/tools/write.rs"
+symbol = "fixture tool_operation execute_payment wait"
+observed = "cargo test --manifest-path agent/Cargo.toml -p layerx-mcp -p layerx-agentd exits 101 because build/bin/layerxd is absent; subsequent budget cases encounter the poisoned fixture lock. The advertised /root/lx-lanes/native-bin/layerxd and layerx-genesis-build binaries are also absent. Logs: qual-logs/pay2/mcp-test.log. Separate cargo test -p layerx-mcp exits 0; focused agentd tenant_resolve, tenant_leakage, tenant_store, tenant_isolation and session tests exit 0. Logs: qual-logs/pay2/mcp-test-isolated.log and qual-logs/pay2/agentd-scope-tests.log. Formatting checks and all-target Clippy with -D warnings pass for crypto, MCP and agentd. The existing TypeScript build and tests pass."
+assumption = "The named payment tools have explicit scopes, canonical daemon operation mappings and ordinary receipt-stage refusal checks. Wallet backend execution and executed/batched/finalised wait evidence remain dependent on the public RPC contract. Full agentd qualification requires real native binaries. No cluster or image gates ran."
 severity = "blocker"
