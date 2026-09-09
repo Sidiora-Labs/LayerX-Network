@@ -64,6 +64,14 @@ typedef struct lxp_daemon_batch_wal_record
 typedef lxp_result (*lxp_daemon_batch_wal_checkpoint_fn)(
     void *context, const lxp_kernel_batch_boundary *settled);
 
+typedef struct lxp_daemon_batch_wal_timing {
+    uint64_t pre_sync_us;
+    uint64_t sync_us;
+    uint64_t verify_us;
+    uint64_t kernel_commit_us;
+    uint64_t total_us;
+} lxp_daemon_batch_wal_timing;
+
 lxp_result lxp_daemon_batch_wal_initialize(
     const char *checkpoint_directory);
 
@@ -87,6 +95,13 @@ lxp_result lxp_daemon_batch_wal_commit_kernel(
     lxp_daemon_batch_wal_checkpoint_fn checkpoint,
     void *checkpoint_context,
     lxp_daemon_batch_wal_record **record);
+lxp_result lxp_daemon_batch_wal_commit_kernel_deferred(
+    const char *checkpoint_directory,
+    const lxp_daemon_batch_wal_input *input,
+    lxp_kernel *kernel, lxp_identity_store *identities,
+    lxp_kernel_prepared_batch *prepared,
+    lxp_daemon_batch_wal_record **record,
+    lxp_daemon_batch_wal_timing *timing);
 lxp_result lxp_daemon_batch_wal_load(
     const char *checkpoint_directory,
     const lxp_sequencer_authorization *authorization,

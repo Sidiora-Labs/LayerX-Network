@@ -99,6 +99,7 @@ typedef struct state_leaf {
     uint8_t key[LXP_MODULE_MAX_KEY_BYTES + 4U];
     size_t key_length;
     uint8_t hash[32];
+    size_t original_index;
 } state_leaf;
 
 static int bytes_compare(const uint8_t *left, size_t left_length,
@@ -350,6 +351,78 @@ lxp_result lx_account_registry_proof(
     target[0] = 4U;
     (void)memcpy(target + 1U, account_id, 32U);
     return leaves_proof(leaves, count, target, sizeof(target), root, proof);
+}
+
+lxp_result lx_account_registry_proofs(
+    const lx_account_registry *registry, uint8_t root[32],
+    lxp_state_proof proofs[LX_ACCOUNT_REGISTRY_CAPACITY])
+{
+    state_leaf leaves[LX_ACCOUNT_REGISTRY_CAPACITY];
+    uint8_t levels[LXP_STATE_PROOF_MAX_DEPTH + 1U]
+                  [LX_ACCOUNT_REGISTRY_CAPACITY][32];
+    size_t level_counts[LXP_STATE_PROOF_MAX_DEPTH + 1U] = {0};
+    size_t count;
+    size_t index;
+    size_t prior;
+    size_t depth = 0U;
+    lxp_result status;
+    if (registry == NULL || root == NULL || proofs == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    if (registry->count == 0U ||
+        registry->count > LX_ACCOUNT_REGISTRY_CAPACITY)
+        return LXP_ERR_LENGTH_LIMIT;
+    count = registry->count;
+    for (index = 0U; index < count; ++index) {
+        uint8_t key[LX_ACCOUNT_STATE_LEAF_KEY_BYTES];
+        uint8_t value[LX_ACCOUNT_STATE_LEAF_VALUE_MAX_BYTES];
+        size_t value_length;
+        for (prior = 0U; prior < index; ++prior)
+            if (memcmp(registry->accounts[prior].id,
+                       registry->accounts[index].id, 32U) == 0)
+                return LXP_ERR_NON_CANONICAL;
+        status = lx_account_state_leaf_material(
+            &registry->accounts[index], key, value, &value_length);
+        if (status == LXP_OK)
+            status = leaf_set(&leaves[index], key, sizeof(key), value,
+                              value_length);
+        if (status != LXP_OK) return status;
+        leaves[index].original_index = index;
+    }
+    leaves_sort(leaves, count);
+    level_counts[0] = count;
+    for (index = 0U; index < count; ++index)
+        (void)memcpy(levels[0][index], leaves[index].hash, 32U);
+    while (level_counts[depth] > 1U) {
+        size_t next_count = (level_counts[depth] + 1U) / 2U;
+        if (depth == LXP_STATE_PROOF_MAX_DEPTH)
+            return LXP_ERR_LENGTH_LIMIT;
+        for (index = 0U; index < next_count; ++index) {
+            size_t right = index * 2U + 1U;
+            if (right >= level_counts[depth]) right = index * 2U;
+            status = state_node_hash(levels[depth][index * 2U],
+                                     levels[depth][right],
+                                     levels[depth + 1U][index]);
+            if (status != LXP_OK) return status;
+        }
+        level_counts[++depth] = next_count;
+    }
+    (void)memcpy(root, levels[depth][0], 32U);
+    for (index = 0U; index < count; ++index) {
+        size_t at = index;
+        size_t level;
+        lxp_state_proof *proof = &proofs[leaves[index].original_index];
+        (void)memset(proof, 0, sizeof(*proof));
+        proof->leaf_index = (uint32_t)index;
+        proof->leaf_count = (uint32_t)count;
+        proof->depth = (uint8_t)depth;
+        for (level = 0U; level < depth; ++level) {
+            size_t sibling = at ^ 1U;
+            if (sibling >= level_counts[level]) sibling = at;
+            (void)memcpy(proof->siblings[level], levels[level][sibling], 32U);
+            at /= 2U;
+        }
+    }
+    return LXP_OK;
 }
 
 static lxp_result leaf_set(state_leaf *leaf, const uint8_t *key,

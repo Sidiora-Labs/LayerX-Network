@@ -122,8 +122,15 @@ lxp_result lxp_snapshot_store_write(const char *directory,
             lxp_fault_inject_point(LXP_FAULT_CHECKPOINT_BODY_WRITTEN);
     }
     if (status == LXP_OK) {
-        if (fdatasync(descriptor) != 0) status = LXP_ERR_IO;
-        else lxp_fault_inject_point(LXP_FAULT_CHECKPOINT_FILE_SYNCED);
+        if (lxp_durability_group_defer_descriptor(descriptor)) {
+            if (!lxp_durability_group_defer_fault(
+                    LXP_FAULT_CHECKPOINT_FILE_SYNCED))
+                status = LXP_ERR_CONTEXT_MISMATCH;
+        } else if (fdatasync(descriptor) != 0) {
+            status = LXP_ERR_IO;
+        } else {
+            lxp_fault_inject_point(LXP_FAULT_CHECKPOINT_FILE_SYNCED);
+        }
     }
     if (close(descriptor) != 0 && status == LXP_OK) status = LXP_ERR_IO;
     if (status == LXP_OK) {
@@ -132,11 +139,17 @@ lxp_result lxp_snapshot_store_write(const char *directory,
     }
     directory_descriptor = status == LXP_OK ?
         open(directory, O_RDONLY | O_DIRECTORY | O_CLOEXEC) : -1;
-    if (status == LXP_OK) {
-        if (directory_descriptor < 0 || fsync(directory_descriptor) != 0)
-            status = LXP_ERR_IO;
-        else
-            lxp_fault_inject_point(LXP_FAULT_CHECKPOINT_DIRECTORY_SYNCED);
+    if (status == LXP_OK && directory_descriptor < 0)
+        status = LXP_ERR_IO;
+    else if (status == LXP_OK &&
+             lxp_durability_group_defer_descriptor(directory_descriptor)) {
+        if (!lxp_durability_group_defer_fault(
+                LXP_FAULT_CHECKPOINT_DIRECTORY_SYNCED))
+            status = LXP_ERR_CONTEXT_MISMATCH;
+    } else if (status == LXP_OK && fsync(directory_descriptor) != 0) {
+        status = LXP_ERR_IO;
+    } else if (status == LXP_OK) {
+        lxp_fault_inject_point(LXP_FAULT_CHECKPOINT_DIRECTORY_SYNCED);
     }
     if (directory_descriptor >= 0) (void)close(directory_descriptor);
     if (status != LXP_OK) (void)unlink(temporary);

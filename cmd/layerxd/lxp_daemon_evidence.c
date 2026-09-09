@@ -1891,6 +1891,16 @@ lxp_result lxp_daemon_evidence_bind_finality_authority(
     return LXP_OK;
 }
 
+typedef struct account_evidence_paths {
+    const lx_account *account;
+    const uint8_t *account_root;
+    const lxp_state_proof *account_proof;
+    const uint8_t *universal_root;
+    const lxp_state_proof *account_tree_proof;
+    const uint8_t *resulting_state_root;
+    const lxp_state_proof *universal_root_proof;
+} account_evidence_paths;
+
 static lxp_result account_evidence_build(
     uint16_t format_version, const lxp_kernel *kernel, uint32_t network_id,
     const uint8_t account_id[32],
@@ -1899,7 +1909,8 @@ static lxp_result account_evidence_build(
     const lxp_merkle_proof *receipt_proof,
     const lxp_sequencer_authorization *authorization,
     lxp_byte_span canonical_header, const uint8_t header_signature[64],
-    lxp_arena *arena, lxp_daemon_account_evidence *evidence)
+    const account_evidence_paths *paths, lxp_arena *arena,
+    lxp_daemon_account_evidence *evidence)
 {
     const lx_account_registry *accounts;
     const lx_account *account = NULL;
@@ -1917,12 +1928,23 @@ static lxp_result account_evidence_build(
     accounts = kernel->state->accounts;
     if (accounts->count > LX_ACCOUNT_REGISTRY_CAPACITY)
         return LXP_ERR_LENGTH_LIMIT;
-    for (index = 0U; index < accounts->count; ++index)
-        if (lxp_ct_memcmp(accounts->accounts[index].id,
-                          account_id, 32U) == 0) {
-            if (account != NULL) return LXP_FATAL_INVARIANT;
-            account = &accounts->accounts[index];
-        }
+    if (paths != NULL) {
+        if (paths->account == NULL || paths->account_root == NULL ||
+            paths->account_proof == NULL || paths->universal_root == NULL ||
+            paths->account_tree_proof == NULL ||
+            paths->resulting_state_root == NULL ||
+            paths->universal_root_proof == NULL ||
+            lxp_ct_memcmp(paths->account->id, account_id, 32U) != 0)
+            return LXP_ERR_NON_CANONICAL;
+        account = paths->account;
+    } else {
+        for (index = 0U; index < accounts->count; ++index)
+            if (lxp_ct_memcmp(accounts->accounts[index].id,
+                              account_id, 32U) == 0) {
+                if (account != NULL) return LXP_FATAL_INVARIANT;
+                account = &accounts->accounts[index];
+            }
+    }
     if (account == NULL) return LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE;
     (void)memset(evidence, 0, sizeof(*evidence));
     evidence->format_version = format_version;
@@ -1949,26 +1971,37 @@ static lxp_result account_evidence_build(
             evidence->account_leaf_value,
             &evidence->account_leaf_value_length);
     }
-    if (status == LXP_OK)
-        status = lx_account_registry_proof(
-            accounts, account_id, evidence->account_root,
-            &evidence->account_proof);
-    if (status == LXP_OK)
-        status = lxp_state_subtree_proof(
-            kernel, 0U, account_tree_key, sizeof(account_tree_key) - 1U,
-            evidence->universal_root, &evidence->account_tree_proof);
-    if (status == LXP_OK)
-        status = lxp_state_root_proof(
-            kernel, 0U, evidence->resulting_state_root,
-            &evidence->universal_root_proof);
-    if (status == LXP_OK)
-        status = lxp_state_root(kernel, candidate_root);
+    if (status == LXP_OK && paths != NULL) {
+        (void)memcpy(evidence->account_root, paths->account_root, 32U);
+        evidence->account_proof = *paths->account_proof;
+        (void)memcpy(evidence->universal_root, paths->universal_root, 32U);
+        evidence->account_tree_proof = *paths->account_tree_proof;
+        (void)memcpy(evidence->resulting_state_root,
+                     paths->resulting_state_root, 32U);
+        evidence->universal_root_proof = *paths->universal_root_proof;
+        (void)memcpy(candidate_root, paths->resulting_state_root, 32U);
+    } else {
+        if (status == LXP_OK)
+            status = lx_account_registry_proof(
+                accounts, account_id, evidence->account_root,
+                &evidence->account_proof);
+        if (status == LXP_OK)
+            status = lxp_state_subtree_proof(
+                kernel, 0U, account_tree_key, sizeof(account_tree_key) - 1U,
+                evidence->universal_root, &evidence->account_tree_proof);
+        if (status == LXP_OK)
+            status = lxp_state_root_proof(
+                kernel, 0U, evidence->resulting_state_root,
+                &evidence->universal_root_proof);
+        if (status == LXP_OK)
+            status = lxp_state_root(kernel, candidate_root);
+    }
     if (status == LXP_OK &&
         (lxp_ct_memcmp(candidate_root, kernel->current_state_root, 32U) != 0 ||
          lxp_ct_memcmp(evidence->resulting_state_root,
                        kernel->current_state_root, 32U) != 0))
         status = LXP_FATAL_INVARIANT;
-    if (status == LXP_OK)
+    if (status == LXP_OK && paths == NULL)
         status = verify_account_evidence(evidence, header.network_id, arena);
     return status;
 }
@@ -1984,7 +2017,8 @@ lxp_result lxp_daemon_account_evidence_build(
 {
     return account_evidence_build(1U, kernel, network_id, account_id,
         receipt_digest, observed_at_ms, canonical_receipt, receipt_proof,
-        authorization, canonical_header, header_signature, arena, evidence);
+        authorization, canonical_header, header_signature, NULL, arena,
+        evidence);
 }
 
 lxp_result lxp_daemon_account_evidence_publish(
@@ -2039,6 +2073,13 @@ static lxp_result account_evidence_publish_batch(
     lxp_batch_header header;
     lxp_receipt receipt;
     const lx_account_registry *accounts;
+    lxp_state_proof *account_proofs;
+    lxp_state_proof account_tree_proof;
+    lxp_state_proof universal_root_proof;
+    uint8_t account_root[32];
+    uint8_t universal_root[32];
+    uint8_t resulting_state_root[32];
+    uint8_t candidate_state_root[32];
     uint8_t receipt_digest[32];
     size_t index;
     size_t mark;
@@ -2057,6 +2098,9 @@ static lxp_result account_evidence_publish_batch(
     if (accounts->count == 0U ||
         accounts->count > LX_ACCOUNT_REGISTRY_CAPACITY)
         return LXP_ERR_PROJECTION_STALE;
+    account_proofs = (lxp_state_proof *)calloc(
+        LX_ACCOUNT_REGISTRY_CAPACITY, sizeof(*account_proofs));
+    if (account_proofs == NULL) return LXP_ERR_IO;
     mark = lxp_arena_mark(arena);
     status = lxp_batch_header_decode(canonical_header.bytes,
                                      canonical_header.length, &header);
@@ -2094,20 +2138,42 @@ static lxp_result account_evidence_publish_batch(
          kernel->state->next_sequence - 1U != header.last_sequence))
         status = LXP_ERR_PROJECTION_STALE;
     }
+    if (status == LXP_OK)
+        status = lx_account_registry_proofs(
+            accounts, account_root, account_proofs);
+    if (status == LXP_OK)
+        status = lxp_state_subtree_proof(
+            kernel, 0U, account_tree_key, sizeof(account_tree_key) - 1U,
+            universal_root, &account_tree_proof);
+    if (status == LXP_OK)
+        status = lxp_state_root_proof(
+            kernel, 0U, resulting_state_root, &universal_root_proof);
+    if (status == LXP_OK)
+        status = lxp_state_root(kernel, candidate_state_root);
+    if (status == LXP_OK &&
+        (lxp_ct_memcmp(resulting_state_root, candidate_state_root, 32U) != 0 ||
+         lxp_ct_memcmp(resulting_state_root,
+                       kernel->current_state_root, 32U) != 0))
+        status = LXP_FATAL_INVARIANT;
     for (index = 0U; status == LXP_OK && index < accounts->count; ++index) {
         lxp_daemon_account_evidence evidence;
+        const account_evidence_paths paths = {
+            &accounts->accounts[index], account_root, &account_proofs[index],
+            universal_root, &account_tree_proof, resulting_state_root,
+            &universal_root_proof};
         size_t item_mark = lxp_arena_mark(arena);
         status = account_evidence_build(
             format_version, kernel, store->network_id, accounts->accounts[index].id,
             receipt_digest, format_version == 2U ? header.timestamp_ms : receipt.timestamp,
             canonical_head_receipt,
             head_receipt_proof, authorization, canonical_header,
-            header_signature, arena, &evidence);
+            header_signature, &paths, arena, &evidence);
         if (status == LXP_OK)
             status = lxp_daemon_account_evidence_publish(
                 store, &evidence, arena, NULL);
         (void)lxp_arena_reset(arena, item_mark);
     }
+    free(account_proofs);
     (void)lxp_arena_reset(arena, mark);
     return status;
 }

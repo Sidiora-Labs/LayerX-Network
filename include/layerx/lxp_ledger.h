@@ -282,6 +282,9 @@ lxp_result lx_account_registry_proof(
     const lx_account_registry *registry,
     const uint8_t account_id[LX_ACCOUNT_ID_BYTES], uint8_t root[32],
     lxp_state_proof *proof);
+lxp_result lx_account_registry_proofs(
+    const lx_account_registry *registry, uint8_t root[32],
+    lxp_state_proof proofs[LX_ACCOUNT_REGISTRY_CAPACITY]);
 lxp_result lx_account_lookup(lx_account_registry *registry,
                              const uint8_t *name, size_t name_length,
                              const uint8_t presented_id[LX_ACCOUNT_ID_BYTES],

@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #define _POSIX_C_SOURCE 200809L
 
 #include "layerx/lxp_storage.h"
@@ -6,12 +7,16 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+
+static _Thread_local lxp_durability_group *active_durability_group;
+static atomic_bool prepared_recovery_allowed;
 
 enum {
     LXP_LOG_DURABLE_MARKER_MAGIC = 0x4c585044,
@@ -162,7 +167,8 @@ static bool durable_marker_decode(
     return true;
 }
 
-static lxp_result durable_marker_store(lxp_log *log, uint64_t generation)
+static lxp_result durable_marker_write(lxp_log *log, uint64_t generation,
+                                       bool synchronize)
 {
     uint8_t encoded[LXP_LOG_DURABLE_MARKER_SLOT_BYTES];
     uint64_t slot = generation & UINT64_C(1);
@@ -170,13 +176,20 @@ static lxp_result durable_marker_store(lxp_log *log, uint64_t generation)
     durable_marker_encode(log, generation, encoded);
     status = write_exact(log->descriptor, encoded, sizeof(encoded),
                          log->capacity + slot * sizeof(encoded));
-    if (status != LXP_OK || fdatasync(log->descriptor) != 0)
+    if (status != LXP_OK || (synchronize && fdatasync(log->descriptor) != 0))
         return status != LXP_OK ? status : LXP_ERR_IO;
-    log->durable_offset = log->write_offset;
-    log->durable_previous_record_offset = log->previous_record_offset;
-    log->durable_next_sequence = log->next_sequence;
-    log->durable_generation = generation;
+    if (synchronize) {
+        log->durable_offset = log->write_offset;
+        log->durable_previous_record_offset = log->previous_record_offset;
+        log->durable_next_sequence = log->next_sequence;
+        log->durable_generation = generation;
+    }
     return LXP_OK;
+}
+
+static lxp_result durable_marker_store(lxp_log *log, uint64_t generation)
+{
+    return durable_marker_write(log, generation, true);
 }
 
 static lxp_result durable_marker_load(lxp_log *log, uint64_t physical_capacity)
@@ -214,6 +227,14 @@ static lxp_result durable_marker_load(lxp_log *log, uint64_t physical_capacity)
     log->durable_previous_record_offset = previous[selected];
     log->durable_next_sequence = next[selected];
     log->has_durable_marker = true;
+    if (valid[selected ^ 1U]) {
+        size_t fallback = selected ^ 1U;
+        log->fallback_durable_generation = generation[fallback];
+        log->fallback_durable_offset = offset[fallback];
+        log->fallback_durable_previous_record_offset = previous[fallback];
+        log->fallback_durable_next_sequence = next[fallback];
+        log->has_fallback_durable_marker = true;
+    }
     return LXP_OK;
 }
 
@@ -249,7 +270,13 @@ lxp_result lxp_log_segment_create(lxp_log *log, const char *directory,
     log->durable_previous_record_offset = 0U;
     log->durable_next_sequence = 0U;
     log->durable_generation = 0U;
+    log->fallback_durable_offset = 0U;
+    log->fallback_durable_previous_record_offset = 0U;
+    log->fallback_durable_next_sequence = 0U;
+    log->fallback_durable_generation = 0U;
     log->has_durable_marker = true;
+    log->has_fallback_durable_marker = false;
+    log->allow_fallback_durable_marker = false;
     if (durable_marker_store(log, 0U) != LXP_OK) {
         (void)close(descriptor);
         (void)unlink(path);
@@ -272,7 +299,15 @@ static lxp_result log_open_descriptor(lxp_log *log, int descriptor,
     log->durable_previous_record_offset = 0U;
     log->durable_next_sequence = 0U;
     log->durable_generation = 0U;
+    log->fallback_durable_offset = 0U;
+    log->fallback_durable_previous_record_offset = 0U;
+    log->fallback_durable_next_sequence = 0U;
+    log->fallback_durable_generation = 0U;
     log->has_durable_marker = false;
+    log->has_fallback_durable_marker = false;
+    log->allow_fallback_durable_marker =
+        atomic_load_explicit(&prepared_recovery_allowed,
+                             memory_order_acquire);
     {
         lxp_result status = durable_marker_load(
             log, physical_size);
@@ -429,6 +464,21 @@ lxp_result lxp_log_close(lxp_log *log)
 lxp_result lxp_log_sync(lxp_log *log)
 {
     if (log == NULL || log->descriptor < 0) return LXP_ERR_NON_CANONICAL;
+    if (active_durability_group != NULL &&
+        active_durability_group->active) {
+        size_t index;
+        for (index = 0U; index < active_durability_group->log_count; ++index)
+            if (active_durability_group->logs[index] == log)
+                return LXP_OK;
+        if (active_durability_group->log_count ==
+            LXP_DURABILITY_GROUP_MAX_LOGS)
+            return LXP_ERR_LENGTH_LIMIT;
+        if (!lxp_durability_group_defer_descriptor(log->descriptor))
+            return LXP_ERR_CONTEXT_MISMATCH;
+        active_durability_group->logs[
+            active_durability_group->log_count++] = log;
+        return LXP_OK;
+    }
     if (fdatasync(log->descriptor) != 0) return LXP_ERR_IO;
     if (log->has_durable_marker) {
         if (log->durable_generation == UINT64_MAX)
@@ -446,6 +496,144 @@ lxp_result lxp_log_sync(lxp_log *log)
 lxp_result lxp_log_write_boundary(lxp_log *log)
 {
     return lxp_log_sync(log);
+}
+
+lxp_result lxp_durability_group_begin(lxp_durability_group *group)
+{
+    if (group == NULL || active_durability_group != NULL)
+        return LXP_ERR_NON_CANONICAL;
+    (void)memset(group, 0, sizeof(*group));
+    group->active = true;
+    active_durability_group = group;
+    return LXP_OK;
+}
+
+bool lxp_durability_group_defer_descriptor(int descriptor)
+{
+    struct stat information;
+    size_t index;
+    int duplicate;
+    lxp_durability_group *group = active_durability_group;
+    if (group == NULL || !group->active || descriptor < 0 ||
+        fstat(descriptor, &information) != 0)
+        return false;
+    for (index = 0U; index < group->descriptor_count; ++index) {
+        struct stat existing;
+        if (fstat(group->descriptors[index], &existing) != 0) return false;
+        if (existing.st_dev == information.st_dev &&
+            existing.st_ino == information.st_ino)
+            return true;
+    }
+    if (group->descriptor_count == LXP_DURABILITY_GROUP_MAX_DESCRIPTORS)
+        return false;
+    duplicate = fcntl(descriptor, F_DUPFD_CLOEXEC, 0);
+    if (duplicate < 0) return false;
+    group->descriptors[group->descriptor_count] = duplicate;
+    ++group->descriptor_count;
+    return true;
+}
+
+bool lxp_durability_group_defer_fault(uint32_t fault_point)
+{
+    lxp_durability_group *group = active_durability_group;
+    if (group == NULL || !group->active || fault_point == 0U ||
+        group->fault_point_count == LXP_DURABILITY_GROUP_MAX_LOGS)
+        return false;
+    group->fault_points[group->fault_point_count++] = fault_point;
+    return true;
+}
+
+bool lxp_durability_group_contains(const lxp_log *log)
+{
+    size_t index;
+    lxp_durability_group *group = active_durability_group;
+    if (group == NULL || !group->active || log == NULL) return false;
+    for (index = 0U; index < group->log_count; ++index)
+        if (group->logs[index] == log) return true;
+    return false;
+}
+
+static void durability_group_clear(lxp_durability_group *group)
+{
+    size_t index;
+    if (active_durability_group == group) active_durability_group = NULL;
+    if (group != NULL) {
+        for (index = 0U; index < group->descriptor_count; ++index)
+            (void)close(group->descriptors[index]);
+        group->active = false;
+        group->descriptor_count = 0U;
+    }
+}
+
+static lxp_result durability_group_sync(lxp_durability_group *group)
+{
+    struct stat filesystem;
+    size_t index;
+    int result;
+    if (group == NULL || group->descriptor_count == 0U)
+        return LXP_ERR_NON_CANONICAL;
+    if (fstat(group->descriptors[0], &filesystem) != 0)
+        return LXP_ERR_IO;
+    for (index = 1U; index < group->descriptor_count; ++index) {
+        struct stat candidate;
+        if (fstat(group->descriptors[index], &candidate) != 0 ||
+            candidate.st_dev != filesystem.st_dev)
+            return LXP_ERR_IO;
+    }
+    do {
+        result = syncfs(group->descriptors[0]);
+    } while (result != 0 && errno == EINTR);
+    return result == 0 ? LXP_OK : LXP_ERR_IO;
+}
+
+lxp_result lxp_durability_group_commit(lxp_durability_group *group)
+{
+    uint64_t generations[LXP_DURABILITY_GROUP_MAX_LOGS];
+    size_t index;
+    lxp_result status = LXP_OK;
+    if (group == NULL || group != active_durability_group ||
+        !group->active || group->descriptor_count == 0U)
+        return LXP_ERR_NON_CANONICAL;
+    for (index = 0U; status == LXP_OK && index < group->log_count; ++index) {
+        lxp_log *log = group->logs[index];
+        if (log == NULL || log->descriptor < 0 ||
+            log->durable_generation == UINT64_MAX)
+            status = LXP_ERR_LENGTH_LIMIT;
+        else if (log->has_durable_marker) {
+            generations[index] = log->durable_generation + 1U;
+            status = durable_marker_write(log, generations[index], false);
+        } else {
+            generations[index] = 0U;
+        }
+    }
+    if (status == LXP_OK) status = durability_group_sync(group);
+    if (status == LXP_OK)
+        for (index = 0U; index < group->fault_point_count; ++index)
+            lxp_fault_inject_point(group->fault_points[index]);
+    if (status == LXP_OK)
+        for (index = 0U; index < group->log_count; ++index) {
+            lxp_log *log = group->logs[index];
+            log->durable_offset = log->write_offset;
+            log->durable_previous_record_offset =
+                log->previous_record_offset;
+            log->durable_next_sequence = log->next_sequence;
+            if (log->has_durable_marker)
+                log->durable_generation = generations[index];
+            lxp_fault_inject_point(LXP_FAULT_LOG_SYNCED);
+        }
+    durability_group_clear(group);
+    return status;
+}
+
+void lxp_durability_group_abort(lxp_durability_group *group)
+{
+    durability_group_clear(group);
+}
+
+void lxp_log_set_prepared_recovery(bool allowed)
+{
+    atomic_store_explicit(&prepared_recovery_allowed, allowed,
+                          memory_order_release);
 }
 
 bool lxp_log_fault_point(uint32_t boundary, uint32_t abort_boundary)

@@ -255,6 +255,14 @@ typedef struct lxp_daemon_receipt_evidence {
     uint64_t global_sequence;
 } lxp_daemon_receipt_evidence;
 
+typedef struct lxp_daemon_pending_receipt {
+    const uint8_t *bytes;
+    size_t length;
+    uint8_t activity_id[32];
+    uint8_t idempotency_key[32];
+    uint64_t global_sequence;
+} lxp_daemon_pending_receipt;
+
 typedef struct lxp_daemon_protocol_owner {
     lxp_kernel *kernel;
     lxp_identity_store *identities;
@@ -264,6 +272,9 @@ typedef struct lxp_daemon_protocol_owner {
     bool availability_ready;
     pthread_mutex_t receipt_mutex;
     lxp_log published_receipt_log;
+    lxp_daemon_pending_receipt
+        pending_receipts[LXP_DAEMON_MAX_BATCH_ACTIVITIES];
+    size_t pending_receipt_count;
     uint64_t published_batch_number;
     uint8_t published_checkpoint_id[32];
     lxp_verified_receipt_index *verified_receipts;

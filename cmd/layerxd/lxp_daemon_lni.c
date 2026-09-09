@@ -2069,6 +2069,39 @@ static lxp_result receipt_refusal(int descriptor, uint32_t maximum,
                         public_result, deadline);
 }
 
+static lxp_result pending_receipt_lookup(
+    const lxp_daemon_protocol_owner *owner,
+    const lxp_receipt_query *query, lxp_arena *arena,
+    lxp_byte_span *receipt)
+{
+    size_t index;
+    if (owner == NULL || query == NULL || arena == NULL || receipt == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    for (index = 0U; index < owner->pending_receipt_count; ++index) {
+        const lxp_daemon_pending_receipt *entry =
+            &owner->pending_receipts[index];
+        bool match = query->kind == LXP_RECEIPT_BY_GLOBAL_SEQUENCE ?
+            query->global_sequence == entry->global_sequence :
+            lxp_ct_memcmp(query->identifier,
+                query->kind == LXP_RECEIPT_BY_TRANSACTION_ID ?
+                    entry->activity_id : entry->idempotency_key,
+                32U) == 0;
+        if (match) {
+            void *bytes = NULL;
+            lxp_result status;
+            if (entry->length == 0U ||
+                entry->length > query->maximum_response_bytes)
+                return LXP_ERR_LENGTH_LIMIT;
+            status = lxp_arena_alloc(arena, entry->length, 1U, &bytes);
+            if (status != LXP_OK) return status;
+            (void)memcpy(bytes, entry->bytes, entry->length);
+            *receipt = (lxp_byte_span){bytes, entry->length};
+            return LXP_OK;
+        }
+    }
+    return LXP_ERR_UNKNOWN_ACTIVITY;
+}
+
 static lxp_result send_receipt(lxp_daemon_lni_server *server, int descriptor,
                                const lni_envelope *request, int64_t deadline)
 {
@@ -2114,12 +2147,19 @@ static lxp_result send_receipt(lxp_daemon_lni_server *server, int descriptor,
     if (status == LXP_OK && pthread_mutex_lock(&server->daemon->mutex) != 0) status = LXP_ERR_IO;
     if (status == LXP_OK) {
         for (;;) {
-            if (pthread_mutex_lock(&server->owner->receipt_mutex) != 0) { status = LXP_ERR_IO; break; }
-            published_log = server->owner->published_receipt_log;
-            if (pthread_mutex_unlock(&server->owner->receipt_mutex) != 0) { status = LXP_FATAL_INVARIANT; break; }
-            history.log = &published_log;
             status = lxp_arena_reset(&arena, 0U);
-            if (status == LXP_OK) status = lxp_receipt_lookup(&history, &query, &arena, &receipt);
+            if (status != LXP_OK) break;
+            if (pthread_mutex_lock(&server->owner->receipt_mutex) != 0) { status = LXP_ERR_IO; break; }
+            status = pending_receipt_lookup(
+                server->owner, &query, &arena, &receipt);
+            if (status == LXP_ERR_UNKNOWN_ACTIVITY)
+                published_log = server->owner->published_receipt_log;
+            if (pthread_mutex_unlock(&server->owner->receipt_mutex) != 0) { status = LXP_FATAL_INVARIANT; break; }
+            if (status == LXP_ERR_UNKNOWN_ACTIVITY) {
+                history.log = &published_log;
+                status = lxp_receipt_lookup(
+                    &history, &query, &arena, &receipt);
+            }
             if (status != LXP_ERR_UNKNOWN_ACTIVITY || !wait_publication ||
                 server->daemon->queue_count == 0U || server->daemon->stop_requested ||
                 server->daemon->failure != LXP_OK) break;
