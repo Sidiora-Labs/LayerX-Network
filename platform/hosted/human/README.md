@@ -37,7 +37,7 @@ With the identity provider stopped, `layerx-human-identity-provider provision-ow
 
 Compact JSON stdout contains exactly `principal`, `did`, `recovery_root` (32-byte array), `recovery_threshold`, and `recovery_delay_seconds`. These are all five fields returned by LXIP op 1. It does not return an authority reference, protocol owner account, capability evidence or rotation/recovery key-policy receipts because the underlying operation creates none. Its output therefore cannot by itself produce `components.json` or `principal-policy.json`. Preserve the same state for the runtime provider; a host-only state root is not a deployed identity.
 
-Recovery receipt ingest verifies signed historical receipt inclusion; no operator key-set derivation is required for provisioning. The cluster's `human_secrets_generate` call precedes contract deployment and identity/gateway provisioning, and key-creation responses are deleted. The provisioning driver and corrected hook are not yet implemented. The current key-creation response has no tenant or principal fields; identity principal responses carry `sub` but no tenant. The required no-counterparty purpose catalog also conflicts with the existing parser's nonempty-counterparty assertion. These integration conflicts and the external journal prevent a complete evidence set.
+Recovery receipt ingest verifies signed historical receipt inclusion; no operator key-set derivation is required for provisioning. The corrected provisioning hook runs after identity/gateway provisioning and before policy publication. Identity principal responses now echo the required tenant. The catalog uses treasury and sequencer authority accounts. Missing external producer inputs still prevent a complete evidence set.
 
 ## Owner registration input contract
 
@@ -49,12 +49,75 @@ Recovery root, threshold and delay must be copied exactly from `provision-owner`
 
 ## Protected catalog and Job staging
 
-`provision.py --catalog --work-dir "$WORK_DIR" --registry "$SECRETS_DIR/module-registry.json" --treasury "$WORK_DIR/human-evidence-input/treasury.json" --faucet "$WORK_DIR/human-evidence-input/faucet.json" --asset "$LAYERX_NODE_ASSET_ID" --output "$WORK_DIR/purpose-catalog.json"` generates a catalog from the identifier-free `beta-purpose-catalog.json` template. All three runtime input files must satisfy the protected JSON contract. The registry must be version 2, register the selected asset, and supply nonzero ordinals in the closed protocol module set. Both account outputs must contain distinct nonzero lowercase H32 `account` fields. No hash, account conversion or identifier substitution is performed. The checked-in template is not itself a loadable purpose catalog. Generated-catalog Rust loadability and deployment-backed positive tests remain outstanding.
+`provision.py --catalog --work-dir "$WORK_DIR" --registry "$SECRETS_DIR/module-registry.json" --treasury "$WORK_DIR/human-evidence-input/treasury.json" --sequencer "$WORK_DIR/human-evidence-input/sequencer.json" --asset "$LAYERX_NODE_ASSET_ID" --output "$WORK_DIR/purpose-catalog.json"` generates the runtime catalog from its identifier-free template. Inputs must satisfy the protected-file checks; the v2 registry must contain the selected asset. Account IDs come from the existing protocol derivation. The checked-in template is not itself a loadable catalog.
 
-In this checkout, bootstrap `treasury.json` contains a textual `agent:did:layerx:…:main` account and is mode 0644 inside the node. The cluster does not export a protected H32 treasury account or a faucet account file. These producer gaps prevent catalog generation from current cluster outputs; an arbitrary conversion to H32 is not authorized.
+The provisioning Job converts the exported treasury and sequencer DIDs through the real protocol account function and saves separate protected `treasury.json` and `sequencer.json` files. It does not modify node bootstrap.
 
 Source `provision.sh` and invoke `human_owner_provision` in the cluster script's environment to stage the real `provision-owner-job.yaml`. Before any cluster mutation it validates protected `human-evidence-input/owner-request.json` and `human-evidence-input/recovery-policy.json`; the latter is the provider's established policy, not a derived operator key set. The request has exactly the four fields documented above. The function refuses existing result files, enabled Human runtime containers, multiple bootstrap pods and unscheduled bootstrap pods. It pins the Job to the bootstrap pod's node to use its ReadWriteOnce PVC and uses the runtime's identical `identity` subPath and state-root environment. The provider's exclusive state lock remains authoritative. Job retries are disabled. It waits for completion, captures the result privately, checks the exact five-field single-line result and recovery-policy equality, then publishes `$WORK_DIR/human-owner-result.json`. No Job logs or input values are printed. Failed or repeated attempts require explicit state reconciliation; the function does not delete a Job or overwrite a result.
 
-The Job requires the bootstrap initializer to have created the PVC identity directory. Its input Secret is `layerx-human-provision-owner-input`; its image comes from the cluster's `image_ref layerx-human`. The Job function is implemented but not wired into bring-up, and Kubernetes execution has not run on the build server. Provisioning still needs an upstream established recovery policy before LXIP can open state; copying the returned policy does not eliminate this initial input.
+The Job requires the bootstrap initializer to have created the PVC identity directory. Its input Secret is `layerx-human-provision-owner-input`; its image comes from `image_ref layerx-human`. The established recovery policy is required before LXIP opens state. Kubernetes execution remains unqualified on the build server.
 
-`provision.py --preserve-binding --work-dir "$WORK_DIR" --request REQUEST --response RESPONSE --output OUTPUT` preserves only the request's tenant and the response's matching sub, with protected-file checks and exclusive output creation. The current identity principal request schema rejects unknown fields and has no tenant field. The current cluster principal request likewise supplies none. This command therefore refuses that request with its exact path; no tenant is inferred from sub, account, audience or a gateway credential. Call-site integration awaits reconciliation of that producer contract.
+`provision.py --preserve-binding --work-dir "$WORK_DIR" --request REQUEST --response RESPONSE --output OUTPUT` preserves the response tenant and matching sub only after checking both against the creation request. All files must be protected and output creation is exclusive.
+
+## Evidence provisioning
+
+`human_evidence_provision` runs after identity and gateway provisioning and before
+`human_policy_publish` and enabling the Human node containers. The owner Job uses
+the same PVC subPath and identity state root as the runtime. It refuses an already
+enabled Human runtime. Recovery is taken unchanged from the established input
+policy and LXIP result; no recovery key-set derivation is performed.
+
+The protected `human-evidence-input/owner-registration.json` and
+`recovery-policy.json` must be supplied by the protocol registration producer,
+along with `owner-request.json`. The assembler validates the registration's complete
+identity entry, DID binding and evidence references. The authority currently has
+no independent config-validation command: the Python validator reparses the exact
+serialized principal policy against its documented schema. It does not certify
+registration receipt evidence.
+
+| Published file | Source |
+| --- | --- |
+| `components.json` | LXIP owner DID/recovery plus registration authority/account |
+| `authority.json` | Identity response binding and beta owner clock horizon |
+| `agent.json` | Same binding, beta owner limit, registration account and verified first-batch head |
+| `principal-policy.json` | Registration identity and its evidence activities, configured budgets, deployed asset |
+| `recovery-policy.json` | Unchanged LXIP root, threshold and delay |
+| `purpose-catalog.json` | Identifier-free template, v2 module registry, node asset and treasury/sequencer accounts |
+| `movement-policy.json` | Protected movement custody reference, guarantor public key and owner timing policy |
+| `journal/` | Unmodified pairs from `LAYERX_REGISTRY_JOURNAL` |
+
+`beta-owner-policy.json` defines an agent-scoped limit with the registration account
+as scope ID. Its limit ID names configuration, not a deployed budget. Its activity
+selector includes only activity IDs supplied by registration evidence; the empty
+budget allowlist grants no budgets.
+
+`provision-account` reads `{"did":"did:layerx:<public key>"}` on stdin and calls
+`layerx_wire::hash::account_id_for_protocol` with protocol 3. The Job invokes it
+separately for the treasury and sequencer keys from the bootstrap exports; it
+writes no key material to logs. `validate-account-head` verifies the head's receipt
+inclusion and signed header against the bootstrap sequencer pin, network and first
+batch. It emits only `{"consumed":0}`; later batches refuse. The fetch uses the
+agent boundary `/v1/protocol/account-state/head` with the registry bearer token.
+
+Custody is read from
+`$SECRETS_DIR/human/movement-config/LAYERX_HUMAN_MOVEMENT_PROVIDER_CUSTODY_REFERENCE`.
+If absent, `deployment.json` must contain a produced `custody_reference`; contract
+addresses are not converted into references. The guarantor source is Secret
+`layerx-guarantor-checkpoint-authority`, key `public.hex`. Missing journal pairs,
+custody, registration or first-batch evidence refuse without publishing a partial
+`human-evidence` directory. Existing sets are never overwritten. Publication uses
+a private sibling staging directory, fsync and one rename under an exclusive lock.
+
+Run local generated-set material integration only against a complete real input set:
+
+```sh
+python3 platform/hosted/human/provision.py --qualify-generated-set \
+  --work-dir "$WORK_DIR" --registry "$SECRETS_DIR/module-registry.json" \
+  --secrets-dir "$SECRETS_DIR" --network "$NODE_NETWORK_ID" --chain "$PAXEER_CHAIN_ID"
+```
+
+This runs the unchanged material assembler and reader on the generated set, followed
+by `test_material.py`. Absence is a failure, not a skipped test. The generated-catalog
+Rust test uses freshly generated Ed25519 keys, the real protocol derivation and the
+production module list with test-owned v2 registry metadata; it proves parser
+loadability, not deployed registry availability.

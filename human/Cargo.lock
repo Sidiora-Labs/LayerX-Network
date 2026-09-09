@@ -886,6 +886,7 @@ dependencies = [
  "base64 0.22.1",
  "getrandom 0.3.4",
  "layerx-human-service",
+ "layerx-proof",
  "layerx-types",
  "layerx-wire",
  "rustix",
