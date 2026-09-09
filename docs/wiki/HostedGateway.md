@@ -160,6 +160,9 @@ Writes consume quota inside Redis `reserve`; reads consume it in
 
 ## Public routes
 
+The hosted gateway serves the `/v1` HTTPS routes below. It does not expose
+`POST /rpc`, `GET /rpc/ws`, or `lx_*` JSON-RPC methods.
+
 `production_route` is the production path set shared with the emulator
 (`platform/hosted/gateway/src/lib.rs:809-881`). Program identifiers in
 that parser are 64 lowercase hex characters; `GET /v1/receipts/{id}`

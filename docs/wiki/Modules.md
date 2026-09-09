@@ -50,11 +50,14 @@ agent:<did>:margin:<position>
 module:programs:value:<account-id>
 system:fees
 system:paxeer-reserve
+system:paxeer-withdrawals
 ```
+
+`agent:<did>:main` is the native-asset account. The reserved per-asset account name is `agent:<did>:asset:<lowercase hex64 asset_id>`; the account id is derived by the existing `LX:ACCOUNT:v1` rule. Asset activity ordinal 9 is reserved and is not assigned in `include/layerx/lx_asset.h`.
 
 Opening a position is a transfer into a margin account. Capturing escrow is a transfer out of an escrow account. Ordinary modules do not mint and do not burn.
 
-See Payments and Fees.
+See [Custody](Custody.md) and [Settlement evidence](SettlementEvidence.md).
 
 ---
 
@@ -70,7 +73,7 @@ See Payments and Fees.
 
 ## What each module is for
 
-**asset.** SEND and RECEIVE compile to the same internal transfer. RECEIVE requires a payer grant: one recipient, one account, caps, purpose, expiry. No wildcards.
+**asset.** SEND and RECEIVE compile to the same internal transfer. RECEIVE requires a payer grant: one recipient, one account, caps, purpose, expiry. No wildcards. Defined activity ordinals in `include/layerx/lx_asset.h` are 1 register, 2 pause, 3 unpause, 4 account_open, 5 send, 6 receive, 7 grant_issue, 8 grant_revoke. Ordinal 9 is reserved.
 
 **escrow.** Lock, capture, release. Terms are module state; money moves only as `402LXP` legs.
 
@@ -117,5 +120,7 @@ Each module implements `genesis`, `decode`, `validate` (read-only), `execute` (e
 - [Home](Home.md)
 - [Protocol](Protocol.md): LXC envelope, protocol 3, and the three rules
 - [Programs](Programs.md): module `0x09`, CALL vs simulate, guest ABI 2
+- [Custody](Custody.md): authenticated custody credit
+- [Settlement evidence](SettlementEvidence.md): publication version 1 encodings
 - [Finality](Finality.md): L0 → L4
 - Design § modules

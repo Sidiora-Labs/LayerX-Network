@@ -66,7 +66,7 @@ Failed activities still consume sequence, still pay the fee, and still occupy a 
 ## Three design rules
 
 1. **One canonical history.** Every accepted or failed activity receives a global sequence. State roots chain per activity, not only per batch. The append-only activity log is authoritative. Indexes are disposable projections and can be rebuilt by replay.
-2. **One financial doorway.** `402LXP` is the only component allowed to write balances. Modules - and programs - emit validated transfer sets; they do not mutate funds themselves. See Payments and Fees.
+2. **One financial doorway.** `402LXP` is the only component allowed to write balances. Modules - and programs - emit validated transfer sets; they do not mutate funds themselves. See [Custody](Custody.md) and [Settlement evidence](SettlementEvidence.md).
 3. **One reproducible result.** Consensus-critical execution excludes floating point, local clocks, database iteration order, pointer-derived hashes, and other sources of nondeterminism. Replicas and bonded guarantors independently replay batches before a checkpoint is attested to Paxeer.
 
 ---
@@ -114,7 +114,7 @@ Per activity the kernel, in fixed order:
 
 Receipts are evidence produced by the protocol. No receipt field is supplied by a client. A `layerx-receipt-proof-v1` object is verified against independently trusted batch facts without a node; see [Portable receipt verifier](PortableVerifier.md). Interop adapters translate foreign payment protocols into that receipt evidence without writing balances; x402 v2 over HTTP, MCP, and A2A is in [x402 transport](X402Transport.md). The non-authoritative agent daemon consumes those receipts as protocol evidence and never mints balances or budgets from local state; see [Agentd](Agentd.md).
 
-You pay for the work an activity does - bytes, signatures, state - not a zero-fee line. The specified base fee is 5,000 µUSDX per activity (about half a cent). See Payments and Fees.
+You pay for the work an activity does - bytes, signatures, state - not a zero-fee line. The specified base fee is 5,000 µUSDX per activity (about half a cent). See [Custody](Custody.md).
 
 ---
 
@@ -129,5 +129,8 @@ The public testnet exposes a gateway API and a faucet. There is no LayerX mainne
 - [Home](Home.md)
 - [Modules](Modules.md): `0x01`–`0x08` economic modules and Programs `0x09`
 - [Programs](Programs.md): DEPLOY / UPGRADE / CALL, simulate, guest ABI 2, occupancy
+- [Custody](Custody.md): authenticated custody credit
+- [Settlement evidence](SettlementEvidence.md): publication version 1 encodings
+- [Data availability](DataAvailability.md): sealed candidates and withheld classes
 - [Finality](Finality.md): L0 → L4
 - Design § protocol
