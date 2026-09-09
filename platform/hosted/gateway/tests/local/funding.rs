@@ -396,7 +396,11 @@ fn start_node(profile: &Path, treasury_seed: [u8; 32]) -> Cluster {
     }
 }
 
-pub(super) fn send(seed: &[u8; 32], request: &SendRequest) -> Result<SignedSend, String> {
+pub(super) fn send(
+    seed: &[u8; 32],
+    identity_sequence: u64,
+    request: &SendRequest,
+) -> Result<SignedSend, String> {
     if request.amount == 0 {
         return Err("amount must be greater than zero".into());
     }
@@ -459,7 +463,7 @@ pub(super) fn send(seed: &[u8; 32], request: &SendRequest) -> Result<SignedSend,
         .and_then(|value| value.activity_type(activity_type))
         .and_then(|value| value.actor_did(actor))
         .and_then(|value| value.authority(authority))
-        .and_then(|value| value.account_sequence(request.account_sequence))
+        .and_then(|value| value.account_sequence(identity_sequence))
         .and_then(|value| value.timestamp_bound(timestamp))
         .and_then(|value| value.idempotency_key(IdempotencyKey::new(request.idempotency_key)))
         .and_then(|value| value.fee_limit(Amount::from_u128(request.fee_limit)))

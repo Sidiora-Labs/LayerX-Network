@@ -235,10 +235,11 @@
       "paramStructure": "by-position",
       "params": [
         {
-          "name": "did",
+          "name": "account_id",
           "required": true,
           "schema": {
-            "type": "string"
+            "type": "string",
+            "pattern": "^[0-9a-fA-F]{64}$"
           }
         }
       ],
@@ -248,7 +249,7 @@
           "type": "object"
         }
       },
-      "description": "Next sequence from the authenticated atomic node preparation snapshot; not a Merkle proof."
+      "description": "Source account next_sequence from the authenticated node account read. The envelope uses the separate identity sequence."
     },
     {
       "name": "lx_getProof",

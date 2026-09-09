@@ -7993,3 +7993,27 @@ symbol = "local_gateway_successful_send_latency lxp_send_validate"
 observed = "The real disposable custody producer credits 100000000000000 units successfully. The funded account reports next_sequence 0 while the authenticated identity preparation snapshot reports next_sequence 1. The first canonical gateway RPC SEND using identity sequence 1 receives signed native refusal -305. Native SEND compares the payload sequence against from->next_sequence in src/ledger/lxp_send.c. The successful receipt assertion remains unchanged. cargo test --locked --manifest-path platform/hosted/gateway/tests/local/Cargo.toml --test lifecycle local_gateway_successful_send_latency -- --nocapture exits 101. Evidence: qual-logs/pay4/latency-sequence-conflict.log. Standalone formatting and strict all-targets Clippy exit 0: latency-fmt-final.log and latency-clippy-qualified.log."
 assumption = "Successful gateway SEND p50 and p99 are unavailable: zero successful samples. Native identity-bound SEND sequencing requires changes outside the receipt-notification grant. This benchmark is an unqualified checkpoint and must pass unchanged after native reconciliation. WebSocket transport still needs a coordinated platform/Cargo.lock dependency update outside owned paths; native asset metadata, fee estimation and complete Asset execution contracts remain unavailable. DID account enumeration remains explicitly unavailable pending its native implementation."
 severity = "blocker"
+
+[observation.6.2.913]
+task = "6.2"
+file = "platform/hosted/gateway/src/rpc.rs platform/hosted/gateway/tests/local/funding.rs platform/hosted/gateway/tests/local/lifecycle.rs agent/crates/layerx-crypto/src/disclosure.rs"
+symbol = "local_gateway_successful_send_latency verify_submission send_semantics"
+observed = "lx_getSequence now accepts an account ID and uses the account balance read for next_sequence. The funded SEND fixture reads that value through gateway RPC and independently reads identity sequence for the envelope. Lower-level canonical encoders and the same test key sign separate sequence domains. With the existing receipt-wait-enabled worktree binaries, custody funding succeeds and the first SEND reaches gateway authorization, which returns JSON-RPC -32002 with activity_authorization_refused. verify_submission calls verified_transfer and bind_disclosure; the SEND disclosure parser still requires payload sequence equal envelope sequence. The unchanged successful execution assertion fails. Evidence: qual-logs/pay4/e-latency-local.log, exit 101."
+assumption = "This supersedes the native-sequence diagnosis in observation 6.2.912: the kernel correctly uses two sequence domains. The disclosure equality correction is outside owned paths and is required in production verification as well as signing. No production disclosure bypass is permitted or implemented. Successful gateway SEND samples remain zero; p50 and p99 are unavailable."
+severity = "blocker"
+
+[observation.6.2.914]
+task = "6.2"
+file = "platform/hosted/gateway/tests/local/funding.rs cmd/layerxd/lxp_daemon_lni.c"
+symbol = "submit_credit receipt_wait_request"
+observed = "The supplied native binary directory identifies source c63b80eee91589422a9ecc6891c57b4dfa9a73aa. Running the corrected SEND latency gate with LAYERX_TEST_NATIVE_BIN_DIR=/root/lx-lanes/native-bin fails during custody receipt lookup: response tag 25 differs from required receipt tag 6. Evidence: qual-logs/pay4/e-latency.log, exit 101."
+assumption = "The supplied producer cannot qualify the receipt-wait path. The worktree producer reaches gateway SEND authorization, as recorded in observation 6.2.913. Native producer integration and the disclosure correction are separate dependencies. WebSocket subscriptions remain blocked on an outside-owned platform/Cargo.lock dependency update; asset and fee reads lack native client contracts; DID account listing remains unavailable."
+severity = "blocker"
+
+[observation.6.2.915]
+task = "6.2"
+file = "platform/hosted/gateway/src/rpc.rs platform/hosted/gateway/openrpc.json platform/hosted/gateway/tests/local/lifecycle.rs platform/hosted/gateway/tests/local/funding.rs"
+symbol = "selector rpc_account_sequence"
+observed = "The account sequence selector and OpenRPC account_id contract pass gateway unit and integration package tests. Core and gateway cargo fmt --check, strict all-targets Clippy and full serial package tests exit 0. Standalone local harness formatting and strict all-targets Clippy exit 0. Evidence: qual-logs/pay4/e-fmt-final.log, e-local-fmt-final.log, e-clippy-final.log, e-local-clippy-final.log, e-tests.log and e-gateway-final.log. Initial duplicate-match-arm and function-length Clippy failures were fixed within touched paths without lint suppression."
+assumption = "These gates qualify the selector and fixture source; they do not establish successful gateway SEND latency. The disclosure dependency and producer incompatibility remain in observations 6.2.913 and 6.2.914."
+severity = "note"
