@@ -19,6 +19,14 @@ The command groups in this tree are `new`, `workspace`, `environment`, `key`,
 canonical activity, and record the activity id so an uncertain outcome can be
 recovered rather than retried blindly (`platform/cli/src/payment.rs:5-37`).
 
+## MCP payment surface
+
+The MCP payment tools currently expose `wallet.send`, `token.create`,
+`token.mint` and `token.transfer` through the daemon's ordinary signing and
+scope checks. MCP does not expose the CLI's burn, open-account, token info or
+token list operations through that payment surface. CLI and MCP command
+availability differ; installing MCP does not enable these missing tools.
+
 ## Headless credential storage
 
 The OS keyring is the default. On a headless Linux server, container, or CI
