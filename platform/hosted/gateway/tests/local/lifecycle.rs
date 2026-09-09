@@ -866,9 +866,11 @@ fn local_gateway_rpc() {
     );
     let first = call("lx_sendActivity", params.clone(), true);
     assert_eq!(first["result"]["commitment"], "executed", "{first}");
-    assert!(first["result"]["receipt"]
-        .as_str()
-        .is_some_and(|r| !r.is_empty()));
+    assert!(
+        first["result"]["receipt"]
+            .as_str()
+            .is_some_and(|r| !r.is_empty())
+    );
     assert_eq!(
         call("lx_sendActivity", params, true)["result"],
         first["result"]
@@ -2129,10 +2131,12 @@ fn local_gateway_committed_payment_reads() {
         .required("funded main account");
     assert_eq!(account["balance"], "100000000000000");
     assert_eq!(account["asset_id"], hex_encode(&cluster.asset));
-    assert!(!account["proof_material"]
-        .as_str()
-        .required("native proof")
-        .is_empty());
+    assert!(
+        !account["proof_material"]
+            .as_str()
+            .required("native proof")
+            .is_empty()
+    );
     let assets = read("lx_listAssets", serde_json::json!([]));
     let assets = assets["result"]["assets"].as_array().required("assets");
     assert_eq!(assets.len(), 1);
