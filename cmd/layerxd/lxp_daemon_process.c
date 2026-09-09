@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 
+#include "layerx/lxp_module_ctx.h"
 #include "layerx/lxp_daemon.h"
 
 #include "layerx/lxp_activity.h"
@@ -897,6 +898,7 @@ static lxp_result replay_execute_activity(
         return LXP_ERR_SEQUENCE_GAP;
     if ((expected->module_id != LXP_MODULE_PROGRAMS &&
          expected->module_id != LXP_MODULE_ASSET &&
+         expected->module_id != LXP_MODULE_GOVERNANCE &&
          !(process->custody_credit_enabled && expected->module_id == LXP_MODULE_BRIDGE)) ||
         expected->module_version == 0U ||
         expected->parameter_version != process->parameter_version ||
@@ -916,6 +918,7 @@ static lxp_result replay_execute_activity(
         lxp_activity_module_id(activity->activity_type) != LXP_MODULE_PROGRAMS &&
         activity->activity_type != LX_ASSET_SEND &&
         activity->activity_type != LX_ASSET_WITHDRAW &&
+        !lxp_governance_activity(activity->activity_type) &&
         !(process->custody_credit_enabled && activity->activity_type == LXP_BRIDGE_CREDIT))
         status = LXP_ERR_UNKNOWN_ACTIVITY;
     if (status == LXP_OK &&
@@ -929,6 +932,7 @@ static lxp_result replay_execute_activity(
         status = lxp_identity_resolve(&process->identities,
                                       activity->actor_did.bytes,
                                       activity->actor_did.length, &identity);
+    if (status == LXP_OK) status = lxp_governance_identity_refresh(&process->kernel, identity);
     if (status == LXP_OK &&
         (activity->authority.length != 32U ||
          !lxp_identity_key_valid(identity, activity->authority.bytes,
@@ -944,7 +948,8 @@ static lxp_result replay_execute_activity(
     scope.module_mask = UINT64_C(1) << lxp_activity_module_id(activity->activity_type);
     scope.activity_ordinal_min = (activity->activity_type == LX_ASSET_SEND || activity->activity_type == LX_ASSET_WITHDRAW) ?
         lxp_activity_type_ordinal(activity->activity_type) : 1U;
-    scope.activity_ordinal_max = activity->activity_type == LXP_BRIDGE_CREDIT ? 1U :
+    scope.activity_ordinal_max = (activity->activity_type == LXP_BRIDGE_CREDIT ||
+        lxp_governance_activity(activity->activity_type)) ? 1U :
         ((activity->activity_type == LX_ASSET_SEND || activity->activity_type == LX_ASSET_WITHDRAW) ?
         lxp_activity_type_ordinal(activity->activity_type) : 10U);
     scope.maximum_per_activity = (lxp_u128){UINT64_MAX, UINT64_MAX};
@@ -2087,6 +2092,7 @@ static lxp_result apply_canonical_activity(
         lxp_activity_module_id(activity.activity_type) != LXP_MODULE_PROGRAMS &&
         activity.activity_type != LX_ASSET_SEND &&
         activity.activity_type != LX_ASSET_WITHDRAW &&
+        !lxp_governance_activity(activity.activity_type) &&
         !(process->custody_credit_enabled && activity.activity_type == LXP_BRIDGE_CREDIT))
         status = LXP_ERR_UNKNOWN_ACTIVITY;
     if (status == LXP_OK) status = current_time_ms(&timestamp);
@@ -2094,6 +2100,7 @@ static lxp_result apply_canonical_activity(
         status = lxp_identity_resolve(&process->identities,
                                       activity.actor_did.bytes,
                                       activity.actor_did.length, &identity);
+    if (status == LXP_OK) status = lxp_governance_identity_refresh(&process->kernel, identity);
     if (status == LXP_OK &&
         (activity.authority.length != 32U ||
          !lxp_identity_key_valid(identity, activity.authority.bytes,
@@ -2110,7 +2117,8 @@ static lxp_result apply_canonical_activity(
     scope.module_mask = UINT64_C(1) << lxp_activity_module_id(activity.activity_type);
     scope.activity_ordinal_min = (activity.activity_type == LX_ASSET_SEND || activity.activity_type == LX_ASSET_WITHDRAW) ?
         lxp_activity_type_ordinal(activity.activity_type) : 1U;
-    scope.activity_ordinal_max = activity.activity_type == LXP_BRIDGE_CREDIT ? 1U :
+    scope.activity_ordinal_max = (activity.activity_type == LXP_BRIDGE_CREDIT ||
+        lxp_governance_activity(activity.activity_type)) ? 1U :
         ((activity.activity_type == LX_ASSET_SEND || activity.activity_type == LX_ASSET_WITHDRAW) ?
         lxp_activity_type_ordinal(activity.activity_type) : 10U);
     scope.maximum_per_activity = (lxp_u128){UINT64_MAX, UINT64_MAX};
@@ -2140,7 +2148,8 @@ static lxp_result apply_canonical_activity(
     execution.maximum_timestamp_window = UINT64_C(300000);
     execution.epoch = process->kernel.epoch;
     execution.global_sequence = global_sequence;
-    execution.recorded_module_version = activity.activity_type == LXP_BRIDGE_CREDIT ?
+    execution.recorded_module_version = (activity.activity_type == LXP_BRIDGE_CREDIT ||
+        lxp_governance_activity(activity.activity_type)) ?
         1U : ((activity.activity_type == LX_ASSET_SEND || activity.activity_type == LX_ASSET_WITHDRAW) ?
         lx_asset_module_iface()->abi_version : LX_PROGRAMS_SANDBOX_DESTROY_ABI_VERSION);
     execution.recorded_fee_schedule_version = 0U;
@@ -2428,6 +2437,7 @@ static lxp_result apply_canonical_batch(
             status = lxp_identity_resolve(
                 &process->identities, activities[i].actor_did.bytes,
                 activities[i].actor_did.length, &identity);
+        if (status == LXP_OK) status = lxp_governance_identity_refresh(&process->kernel, identity);
         if (status == LXP_OK &&
             (activities[i].authority.length != 32U ||
              !lxp_identity_key_valid(identity,
@@ -2441,13 +2451,15 @@ static lxp_result apply_canonical_batch(
             lxp_activity_module_id(activities[i].activity_type) != LXP_MODULE_PROGRAMS &&
             activities[i].activity_type != LX_ASSET_SEND &&
             activities[i].activity_type != LX_ASSET_WITHDRAW &&
+            !lxp_governance_activity(activities[i].activity_type) &&
             !(process->custody_credit_enabled && activities[i].activity_type == LXP_BRIDGE_CREDIT))
             status = LXP_ERR_UNKNOWN_ACTIVITY;
         if (status == LXP_OK)
             scopes[i].module_mask = UINT64_C(1) << lxp_activity_module_id(activities[i].activity_type);
         scopes[i].activity_ordinal_min = (activities[i].activity_type == LX_ASSET_SEND || activities[i].activity_type == LX_ASSET_WITHDRAW) ?
             lxp_activity_type_ordinal(activities[i].activity_type) : 1U;
-        scopes[i].activity_ordinal_max = activities[i].activity_type == LXP_BRIDGE_CREDIT ? 1U :
+        scopes[i].activity_ordinal_max = (activities[i].activity_type == LXP_BRIDGE_CREDIT ||
+            lxp_governance_activity(activities[i].activity_type)) ? 1U :
             ((activities[i].activity_type == LX_ASSET_SEND || activities[i].activity_type == LX_ASSET_WITHDRAW) ?
             lxp_activity_type_ordinal(activities[i].activity_type) : 10U);
         scopes[i].maximum_per_activity =
@@ -2475,7 +2487,8 @@ static lxp_result apply_canonical_batch(
         executions[i].maximum_timestamp_window = UINT64_C(300000);
         executions[i].epoch = process->kernel.epoch;
         executions[i].global_sequence = sequence;
-        executions[i].recorded_module_version = activities[i].activity_type == LXP_BRIDGE_CREDIT ?
+        executions[i].recorded_module_version = (activities[i].activity_type == LXP_BRIDGE_CREDIT ||
+            lxp_governance_activity(activities[i].activity_type)) ?
             1U : ((activities[i].activity_type == LX_ASSET_SEND || activities[i].activity_type == LX_ASSET_WITHDRAW) ?
             lx_asset_module_iface()->abi_version : LX_PROGRAMS_SANDBOX_DESTROY_ABI_VERSION);
         executions[i].parameter_version = process->parameter_version;
@@ -3800,6 +3813,9 @@ static lxp_result open_process(lxp_daemon_process *process,
         process->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT)
         status = lxp_kernel_register_module(
             &process->kernel, lx_asset_module_iface());
+    if (status == LXP_OK &&
+        process->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT)
+        status = lxp_kernel_register_module(&process->kernel, lxp_governance_module_iface());
     if (status == LXP_OK && process->custody_credit_enabled)
         status = lxp_kernel_register_module(&process->kernel, lxp_bridge_module_iface());
     if (status == LXP_OK)
