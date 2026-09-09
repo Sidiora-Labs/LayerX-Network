@@ -167,7 +167,8 @@ impl OperationClass {
     #[must_use]
     pub const fn authorized_scopes(operation: Operation) -> &'static [&'static str] {
         match operation {
-            Operation::ReadBalance => &["read", "read:balance"],
+            Operation::ReadBalance => &["read", "read:balance", "read:wallet:balance"],
+            Operation::ReadAccount => &["read", "read:wallet:accounts"],
             Operation::ReadHistory => &["read", "read:history"],
             Operation::ProgramDiscover
             | Operation::ProgramInterface
@@ -183,8 +184,15 @@ impl OperationClass {
             Operation::AvailabilityFetch => &["read", "read:availability"],
             Operation::Prepare => &["prepare", "write:prepare", "write:disclose"],
             Operation::Sign => &["write", "write:sign"],
-            Operation::Submit => &["write", "write:submit"],
-            Operation::Track => &["write", "write:track"],
+            Operation::Submit => &[
+                "write",
+                "write:submit",
+                "write:wallet:send",
+                "write:token:create",
+                "write:token:mint",
+                "write:token:transfer",
+            ],
+            Operation::Track => &["write", "write:track", "write:activity:wait"],
             operation => match Self::for_operation(operation) {
                 Some(Self::Read) => &["read"],
                 Some(Self::Subscribe) => &["subscribe"],

@@ -10,6 +10,8 @@ pub mod keystore;
 #[cfg(feature = "custody")]
 pub mod local;
 #[cfg(feature = "custody")]
+pub mod payments;
+#[cfg(feature = "custody")]
 pub mod redact;
 #[cfg(feature = "custody")]
 pub mod remote;
