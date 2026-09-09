@@ -190,6 +190,27 @@ impl Drop for Daemon {
     }
 }
 
+fn discover_socat() -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(path) = std::env::var_os("LAYERX_TEST_SOCAT") {
+        candidates.push(PathBuf::from(path));
+    }
+    candidates.push(PathBuf::from("/usr/bin/socat"));
+    candidates.push(PathBuf::from("/bin/socat"));
+    if let Ok(root) = std::env::current_dir() {
+        candidates.push(root.join("qual-logs/pay5/socat/usr/bin/socat"));
+    }
+    if let Ok(path) = std::env::var("PATH") {
+        for directory in path.split(':') {
+            if directory.is_empty() {
+                continue;
+            }
+            candidates.push(PathBuf::from(directory).join("socat"));
+        }
+    }
+    candidates.into_iter().find(|path| path.is_file())
+}
+
 fn spawn(
     program: &Path,
     arguments: &[&str],
@@ -197,15 +218,24 @@ fn spawn(
     daemon_identity: bool,
     stderr: PathBuf,
 ) -> Daemon {
+    let socat = discover_socat();
+    let mut isolated_path = String::from("/usr/bin:/bin");
+    if let Some(directory) = socat.as_ref().and_then(|path| path.parent()) {
+        isolated_path.push(':');
+        isolated_path.push_str(&directory.display().to_string());
+    }
     let mut command = Command::new(program);
     command
         .args(arguments)
         .env_clear()
-        .env("PATH", "/usr/bin:/bin")
+        .env("PATH", &isolated_path)
         .envs(environment.iter().map(|(key, value)| (key, value.as_str())))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::from(must(fs::File::create(&stderr), "stderr file")));
+    if let Some(socat) = socat {
+        command.env("SOCAT", socat);
+    }
     if daemon_identity {
         command.uid(DAEMON_UID).gid(DAEMON_GID);
     }
