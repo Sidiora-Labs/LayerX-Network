@@ -8033,3 +8033,11 @@ symbol = "module_decode module_execute AccountReadRequest PreparationState"
 observed = "The native Asset decoder accepts ordinals only through eight, strictly decodes only SEND, and executes non-SEND operations by emitting an event without the required asset or account transition. AccountReadRequest has only account-ID balance and account selectors. PreparationState has no fee table, and the checked-in LNI capability set has no asset listing, asset detail, fee estimation or DID account enumeration contract."
 assumption = "Widening core admission on this source could expose signed event-only receipts as successful Asset operations. Native strict decoders and real state transitions must be integrated before expanding that admission. Native read schemas and client methods are outside the owned source grant. Programs 5 and 6 retain their existing strict payload validation; successful funded execution remains unqualified."
 severity = "blocker"
+
+[observation.6.2.918]
+task = "6.2"
+file = "platform/hosted/gateway/src/rpc.rs platform/hosted/gateway/src/public_reads.rs platform/hosted/gateway/openrpc.json"
+symbol = "selector fee_params schema_lists_every_public_method"
+observed = "The gateway recognizes lx_listAssets, lx_getAsset and lx_estimateFee with bounded positional parameters and forwards them through the rate-limited authenticated core client. OpenRPC lists all fifteen public methods exactly once. HTTP lx_subscribe returns WebSocket required. The real gateway test proves missing asset, fee and DID enumeration backends return JSON-RPC -32001 rather than fabricated result objects or Method not found. Evidence: qual-logs/pay4/f-reads-real.log, exit 0."
+assumption = "These changes qualify the gateway method boundary and upstream refusal behavior only. The checked-in core and native schema still lack the corresponding read implementations. Gateway contracts are GET /v1/assets, GET /v1/assets/{asset_id}, POST /v1/fees/estimate with canonical_hex JSON, and GET /v1/dids/{did}/accounts. Native/client integration remains necessary before positive asset, fee or DID enumeration results can be qualified."
+severity = "blocker"
