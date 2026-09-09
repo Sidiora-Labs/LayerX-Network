@@ -13,7 +13,7 @@ use crate::output::CommandOutput;
 
 #[derive(Subcommand)]
 pub enum WalletCommand {
-    /// Generate a key, register its identity, and open its main account.
+    /// Generate a key and, on the emulator only, register its identity and main account.
     Create {
         name: String,
         #[arg(long)]
@@ -34,9 +34,9 @@ pub enum WalletCommand {
         #[arg(long)]
         asset: Option<String>,
     },
-    /// Submit a transfer with independent identity and source sequences.
+    /// Validate a transfer; refuses before signing because identity sequence is unpublished.
     Send(TransferArgs),
-    /// Read the selected DID's activity history.
+    /// Report that DID activity history is unpublished.
     History {
         #[arg(long)]
         did: Option<String>,
@@ -95,7 +95,7 @@ pub struct WriteOptions {
 
 #[derive(Subcommand)]
 pub enum TokenCommand {
-    /// Register a natively issued token.
+    /// Validate a native token registration; refuses before signing because identity sequence is unpublished.
     Create {
         #[arg(long)]
         symbol: String,
@@ -112,7 +112,7 @@ pub enum TokenCommand {
         #[command(flatten)]
         write: WriteOptions,
     },
-    /// Mint units to an existing asset account.
+    /// Validate a mint payload; refuses before signing because identity sequence is unpublished.
     Mint {
         #[arg(long)]
         asset: String,
@@ -125,7 +125,7 @@ pub enum TokenCommand {
         #[command(flatten)]
         write: WriteOptions,
     },
-    /// Burn units from the selected wallet's asset account.
+    /// Validate a burn payload; refuses before signing because identity sequence is unpublished.
     Burn {
         #[arg(long)]
         asset: String,
@@ -136,11 +136,11 @@ pub enum TokenCommand {
         #[command(flatten)]
         write: WriteOptions,
     },
-    /// Transfer token units.
+    /// Validate a token transfer; refuses before signing because identity sequence is unpublished.
     Transfer(TransferArgs),
-    /// Read token metadata.
+    /// Read token metadata through public RPC; refuses when the method is unpublished.
     Info { asset: String },
-    /// List registered tokens.
+    /// List registered tokens through public RPC; refuses when the method is unpublished.
     List,
 }
 

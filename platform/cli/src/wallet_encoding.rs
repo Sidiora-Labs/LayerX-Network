@@ -1,3 +1,8 @@
+//! Fixture encoders for version-one native asset payloads.
+//!
+//! `Register` encodes issuer kind 1 with an empty custody reference. Other
+//! operations delegate to [`layerx_crypto::payments::Payment`].
+
 pub use layerx_crypto::payments::asset_id;
 use layerx_crypto::payments::Payment;
 
