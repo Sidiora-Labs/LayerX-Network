@@ -7925,3 +7925,11 @@ file = "agent/crates/layerx-agentd/tests/availability.rs agent/crates/layerx-cli
 symbol = "decode_records complete_five_class_retrieval_streams_and_emits_offline_replay_frames corruption_withholding_and_repeated_provider_failure_are_durable_evidence"
 observed = "The identical cargo test --locked --manifest-path agent/Cargo.toml -p layerx-agentd --test availability command passes both tests at pre-owner base 21c96f47 (exit 0), fails both at merged-branch commit d1aea653 (exit 101), and fails identically on the current lane (exit 101). The merged commit changes canonical record decoding to require the record count and ordered tagged classes. Both failures are complete provider reported partial and ChunkOrder versus MissingClass. The test file is unchanged from base. Raw logs: qual-logs/own1/own1e-base-availability.log, own1e-merged-availability.log and own1e-current-availability.log."
 assumption = "This is inherited from the merged availability branch, not introduced by owner-registration implementation. Keep both decoder and assertions intact; the availability owner must reconcile the canonical fixture contract. Scratch comparisons use separate local targets and no fetch, merge or rebase."
+
+[observation.3.7.50]
+task = "3.7"
+severity = "blocker"
+file = "platform/hosted/tests/beta-cluster.sh platform/hosted/human/provision.sh platform/hosted/human/native_manifest.py"
+symbol = "beta_cluster_up human_evidence_provision human_native_provision"
+observed = "Local real owner production and Governance lifecycle/restart pass; both bonded configurations replay all ten owner batches. Live image builds, Secret mounts, disposable in-cluster paxd execution, StatefulSet rollout, owner provisioning Job, authenticated finality and journey readiness have not run on this build server. The actual owner Job is layerx-human-provision-owner; subsequent evidence assembly executes in human_evidence_provision."
+assumption = "Cluster qualification follows fold-in using operator-controlled owner-email, real registry admission/deployment journals and a produced movement custody reference. Preserve unknown-outcome markers, exact LXIP admission ordering, dedicated threshold-two guardians and all receipt/checkpoint checks. Independent replay does not resolve the recorded settlement RPC refusal."
