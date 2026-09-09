@@ -10,7 +10,10 @@ use layerx_proof::inclusion::{
     verify_activity, verify_receipt as verify_receipt_inclusion, SequencerAuthorization,
 };
 use layerx_proof::merkle::{decode_proof, encode_proof, Proof};
-use layerx_proof::receipt::{verify_program_state, AuthorizedBatch};
+use layerx_proof::receipt::{
+    verify_program_state, verify_program_state_maintained, AuthorizedBatch,
+    MaintainedOutcomeEvidence,
+};
 use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
 use layerx_wire::activity::{decode_signed, encode_signed};
 use layerx_wire::hash::{activity_id, execution_batch_id, payload_hash, receipt_digest};
@@ -30,6 +33,7 @@ const WASM_HEADER: &[u8; 8] = b"\0asm\x01\0\0\0";
 const MAX_MODULE_BYTES: usize = 32 * 1024 * 1024;
 const MAX_EVIDENCE_BYTES: usize = 40 * 1024 * 1024;
 const EVIDENCE_DOMAIN: &[u8] = b"LayerX/programs/deployment-proof/v1\0";
+const MAINTAINED_EVIDENCE_DOMAIN: &[u8] = b"LayerX/programs/deployment-proof/v2\0";
 const TRUST_HISTORY_DOMAIN: &[u8] = b"LayerX/sequencer-trust-history/v1\0";
 const TRUST_ANCHOR_BYTES: usize = 103;
 const MAX_TRUST_ANCHORS: usize = 64;
@@ -75,6 +79,13 @@ pub struct DeploymentProof {
     pub activity: Vec<u8>,
     pub activity_proof: Proof,
     pub state: ProgramStateProof,
+    pub maintenance: Option<DeploymentMaintenanceProof>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeploymentMaintenanceProof {
+    pub receipt: Vec<u8>,
+    pub receipt_proof: Proof,
 }
 
 /// Exact cryptographic refusal returned before deployment state is trusted.
@@ -485,7 +496,7 @@ impl ProtocolDeploymentVerifier {
         }
         let activity_identifier =
             activity_id(&activity).map_err(|_| ProtocolEvidenceError::CanonicalActivity)?;
-        let head = self.verify_program_head(&proof.state, EvidenceMoment::Current(now_ms))?;
+        let head = self.verify_deployment_head(proof, EvidenceMoment::Current(now_ms))?;
         let anchor = self.anchors[head.anchor_index];
         verify_activity_domain(&activity, anchor)?;
         let included = verify_activity(
@@ -541,7 +552,7 @@ impl ProtocolDeploymentVerifier {
         }
         let activity_identifier =
             activity_id(&activity).map_err(|_| ProtocolEvidenceError::CanonicalActivity)?;
-        let head = self.verify_program_head(&proof.state, EvidenceMoment::Historical)?;
+        let head = self.verify_deployment_head(proof, EvidenceMoment::Historical)?;
         let anchor = self.anchors[head.anchor_index];
         verify_activity_domain(&activity, anchor)?;
         let included = verify_activity(
@@ -686,6 +697,94 @@ impl ProtocolDeploymentVerifier {
             &proof.header_signature,
             moment,
         )?;
+        Self::bind_program_head(proof, &receipt)
+    }
+
+    fn verify_deployment_head(
+        &self,
+        proof: &DeploymentProof,
+        moment: EvidenceMoment,
+    ) -> Result<VerifiedHeadClaims, ProtocolEvidenceError> {
+        let Some(maintenance) = &proof.maintenance else {
+            return self.verify_program_head(&proof.state, moment);
+        };
+        let state = &proof.state;
+        let selected = self.select_anchor(&state.header, moment)?;
+        let anchor = self.anchors[selected];
+        if anchor.protocol_version != 3 {
+            return Err(ProtocolEvidenceError::ProtocolDomain);
+        }
+        let header = decode_batch_header(&state.header)
+            .map_err(|_| ProtocolEvidenceError::ReceiptInclusion)?;
+        let decoded = decode_receipt(&state.receipt).map_err(|_| ProtocolEvidenceError::Receipt)?;
+        let protocol = decoded.protocol().ok_or(ProtocolEvidenceError::Receipt)?;
+        let authorization = anchor.authorization();
+        let included = verify_receipt_inclusion(
+            &state.receipt,
+            &state.receipt_proof,
+            &state.header,
+            &state.header_signature,
+            &authorization,
+        )
+        .map_err(|_| ProtocolEvidenceError::ReceiptInclusion)?;
+        let authorized = AuthorizedBatch::new(
+            protocol.batch_id(),
+            protocol.asset(),
+            header.previous_state_root(),
+            header.resulting_state_root(),
+            anchor.sequencer_public_key,
+        );
+        let verified = verify_program_state_maintained(
+            &state.receipt,
+            &authorized,
+            &MaintainedOutcomeEvidence {
+                header: &state.header,
+                header_signature: &state.header_signature,
+                activity_proof: &state.receipt_proof,
+                maintenance: &maintenance.receipt,
+                maintenance_proof: &maintenance.receipt_proof,
+                authorization: &authorization,
+            },
+        )
+        .map_err(|_| ProtocolEvidenceError::Receipt)?;
+        if protocol.protocol_version() != header.protocol_version()
+            || protocol.timestamp() != header.timestamp_ms()
+            || protocol.activity_root() != header.activity_merkle_root()
+        {
+            return Err(ProtocolEvidenceError::StateRoot);
+        }
+        if protocol.timestamp() == 0 {
+            return Err(ProtocolEvidenceError::Stale);
+        }
+        if let EvidenceMoment::Current(now_ms) = moment {
+            if now_ms == 0
+                || now_ms < protocol.timestamp()
+                || now_ms.saturating_sub(protocol.timestamp()) > self.staleness_limit_ms
+            {
+                return Err(ProtocolEvidenceError::Stale);
+            }
+        }
+        let unsigned =
+            encode_unsigned(verified.receipt()).map_err(|_| ProtocolEvidenceError::Receipt)?;
+        let claims = VerifiedReceiptClaims {
+            activity_id: protocol.activity_id(),
+            receipt_digest: receipt_digest(&unsigned)
+                .map_err(|_| ProtocolEvidenceError::Receipt)?,
+            batch_header_digest: included.header().digest(),
+            state_root: header.resulting_state_root(),
+            freshness: ReadFreshness {
+                observed_sequence: protocol.global_sequence(),
+                observed_at: protocol.timestamp(),
+            },
+            anchor_index: selected,
+        };
+        Self::bind_program_head(state, &claims)
+    }
+
+    fn bind_program_head(
+        proof: &ProgramStateProof,
+        receipt: &VerifiedReceiptClaims,
+    ) -> Result<VerifiedHeadClaims, ProtocolEvidenceError> {
         if proof.programs_root == [0; 32] {
             return Err(ProtocolEvidenceError::StateRoot);
         }
@@ -1493,10 +1592,18 @@ impl DeploymentProof {
     #[must_use]
     pub fn canonical_encoding(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
-        bytes.extend_from_slice(EVIDENCE_DOMAIN);
+        bytes.extend_from_slice(if self.maintenance.is_some() {
+            MAINTAINED_EVIDENCE_DOMAIN
+        } else {
+            EVIDENCE_DOMAIN
+        });
         put_bytes(&mut bytes, &self.activity);
         put_bytes(&mut bytes, &encode_proof(&self.activity_proof));
         encode_program_state(&mut bytes, &self.state);
+        if let Some(maintenance) = &self.maintenance {
+            put_bytes(&mut bytes, &maintenance.receipt);
+            put_bytes(&mut bytes, &encode_proof(&maintenance.receipt_proof));
+        }
         bytes
     }
 
@@ -1506,8 +1613,10 @@ impl DeploymentProof {
     ///
     /// Refuses malformed, oversized or non-canonical deployment proof encodings.
     pub fn decode(bytes: &[u8]) -> Result<Self, ProtocolEvidenceError> {
+        let maintained =
+            bytes.get(..MAINTAINED_EVIDENCE_DOMAIN.len()) == Some(MAINTAINED_EVIDENCE_DOMAIN);
         if bytes.len() > MAX_EVIDENCE_BYTES
-            || bytes.get(..EVIDENCE_DOMAIN.len()) != Some(EVIDENCE_DOMAIN)
+            || (!maintained && bytes.get(..EVIDENCE_DOMAIN.len()) != Some(EVIDENCE_DOMAIN))
         {
             return Err(ProtocolEvidenceError::Encoding);
         }
@@ -1516,6 +1625,15 @@ impl DeploymentProof {
         let activity_proof = decode_proof(&take_bytes(bytes, &mut cursor, 1_034)?)
             .map_err(|_| ProtocolEvidenceError::Encoding)?;
         let state = decode_program_state(bytes, &mut cursor)?;
+        let maintenance = if maintained {
+            Some(DeploymentMaintenanceProof {
+                receipt: take_bytes(bytes, &mut cursor, MAX_EVIDENCE_BYTES)?,
+                receipt_proof: decode_proof(&take_bytes(bytes, &mut cursor, 1_034)?)
+                    .map_err(|_| ProtocolEvidenceError::Encoding)?,
+            })
+        } else {
+            None
+        };
         if cursor != bytes.len() {
             return Err(ProtocolEvidenceError::Encoding);
         }
@@ -1523,6 +1641,7 @@ impl DeploymentProof {
             activity,
             activity_proof,
             state,
+            maintenance,
         };
         if proof.canonical_encoding() != bytes {
             return Err(ProtocolEvidenceError::Encoding);

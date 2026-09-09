@@ -189,6 +189,40 @@ impl NodeProgramStateSource {
         }
     }
 
+    /// # Errors
+    /// Refuses deployment evidence that differs from the independent receipt authority.
+    pub fn verify_deployment_authority(&self, proof: &DeploymentProof) -> Result<(), String> {
+        let decoded = decode_receipt(&proof.state.receipt)
+            .map_err(|_| "deployment receipt decoding failed".to_owned())?;
+        let protocol = decoded
+            .protocol()
+            .ok_or_else(|| "deployment receipt shape".to_owned())?;
+        let digest = proof
+            .claimed_receipt_digest()
+            .map_err(|error| error.to_string())?;
+        let path = format!(
+            "/v1/batches/{}/receipt-authority?receipt_digest={}",
+            hex::encode(&protocol.batch_id()),
+            hex::encode(&digest)
+        );
+        let document = self.get_authority(&path)?;
+        let independent = parse_batch_evidence(&document["batch_evidence"])?;
+        if independent.header != proof.state.header
+            || independent.signature != proof.state.header_signature
+            || independent.receipt_proof != proof.state.receipt_proof
+            || hex::decode_digest(field(&document, "authority_replica_id")?)
+                .map_err(|error| error.to_string())?
+                != self.authority_replica_id
+        {
+            return Err("deployment evidence disagrees with independent authority".to_owned());
+        }
+        let key = hex::decode_digest(field(&document, "sequencer_public_key")?)
+            .map_err(|error| error.to_string())?;
+        layerx_proof::receipt::verify_sequencer_signature(&proof.state.receipt, key)
+            .map_err(|error| format!("independent authority sequencer key refused: {error:?}"))?;
+        Ok(())
+    }
+
     ///
     /// # Errors
     /// Refuses unavailable or invalid evidence and a receipt digest different from the requested digest.

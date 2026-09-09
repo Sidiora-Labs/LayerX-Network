@@ -767,7 +767,7 @@ impl Registrar {
             Ok(evidence) => evidence,
             Err(error) => return refusal(422, "deployment_proof_refused", &error),
         };
-        if let Err(error) = self.node_state.receipt_head(evidence.receipt_digest()) {
+        if let Err(error) = self.node_state.verify_deployment_authority(&proof) {
             return refusal(503, "receipt_authority_unavailable", &error);
         }
         let mut candidate = self.registry.clone();
