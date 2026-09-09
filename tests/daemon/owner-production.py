@@ -216,7 +216,8 @@ def run(work, asset, rpc_port):
         assert len(list((inputs / 'owner-native-run').glob('*.receipt'))) == 4
         if '--checkpoint' in sys.argv:
             checkpoint(work, public, settlement, rpc, account, start, key, cert, 10)
-            hosted(work, config, authority_env, start, service)
+            if '--settlement-only' not in sys.argv:
+                hosted(work, config, authority_env, start, service)
         sequencer.terminate()
         assert sequencer.wait(timeout=15) == 0
         start(native_command, 'sequencer-restart', env)

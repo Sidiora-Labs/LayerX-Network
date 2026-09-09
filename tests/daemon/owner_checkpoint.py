@@ -1,7 +1,9 @@
 import datetime
+import importlib.util
 import json
 import os
 from pathlib import Path
+import shutil
 import socket
 import subprocess
 import ssl
@@ -12,11 +14,81 @@ import urllib.parse
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.asymmetric import ed25519, rsa
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
-from deploy_local_custody import send, calldata
+from deploy_local_custody import send, calldata, deploy, govern
 from custody_credit import eth_hash
 from owner_native import Reader, digest
+
+
+def load(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def decode_header(settlement, encoded):
+    value = settlement.raw(encoded)
+    assert len(value) == 354 and value[2:5] == b'\x17\x01\x0f'
+    result, offset = [], 5
+    for index, kind in enumerate(settlement.HEADER_TYPES, 1):
+        assert value[offset] == index
+        offset += 1
+        if kind == 'bytes32':
+            assert int.from_bytes(value[offset:offset + 4], 'big') == 32
+            offset += 4
+            result.append(value[offset:offset + 32])
+            offset += 32
+        else:
+            width = int(kind[4:]) // 8
+            result.append(int.from_bytes(value[offset:offset + width], 'big'))
+            offset += width
+    assert offset == len(value) and result[0].to_bytes(2, 'big') == value[:2]
+    return result
+
+
+def authorize_publication(export, inputs, recipient, vault, signing_keys, deposit_key, settlement, publication):
+    header = decode_header(settlement, export['canonical_header'])
+    checkpoint_id = settlement.checkpoint_hash(header, b'')
+    encoded_header = [publication.hx(value) if isinstance(value, bytes) else value for value in header]
+    request = dict(chain_id=31337, header=encoded_header, checkpoint_id=publication.hx(checkpoint_id),
+        native_facts=export['native_facts'])
+    balances, _, deposits, profile = publication.native_request(settlement, request, header, checkpoint_id)
+    authorities = {key.public_key().public_bytes(serialization.Encoding.Raw,
+        serialization.PublicFormat.Raw): key for key in signing_keys}
+    bindings = []
+    for fact in balances:
+        key = authorities.get(fact['authority'])
+        assert key is not None, 'settlement balance authority unavailable'
+        message = (b'LX:SETTLE:RECIPIENT:v1\0' + header[1].to_bytes(4, 'big') + fact['account'] +
+            fact['asset'] + recipient + checkpoint_id)
+        bindings.append(dict(account=publication.hx(fact['account']), asset=publication.hx(fact['asset']),
+            recipient=publication.hx(recipient), request_anchor=publication.hx(checkpoint_id),
+            signature=publication.hx(key.sign(message))))
+    deposit_registration = None
+    if deposits:
+        assert profile is not None and profile[13:33] == bytes.fromhex(vault[2:])
+        reference = bytes(12) + bytes.fromhex(vault[2:])
+        ordering = []
+        for fact in deposits:
+            leaf = (b'LX:PAXEER:DEPOSIT:LEAF:v1' + fact['identity'] + reference + fact['asset'] +
+                fact['amount'] + checkpoint_id + header[1].to_bytes(4, 'big') + header[0].to_bytes(2, 'big'))
+            ordering.append(publication.sha(b'LXP/v1/merkle-leaf\0' + leaf))
+        level = list(ordering)
+        while len(level) > 1:
+            level = [publication.sha(b'LXP/v1/merkle-internal\0' + level[index] +
+                level[min(index + 1, len(level) - 1)]) for index in range(0, len(level), 2)]
+        registration = (b'LX:PAXEER:DEPOSIT:ROOT:v1' + checkpoint_id + header[7] + level[0] +
+            reference + header[1].to_bytes(4, 'big') + header[0].to_bytes(2, 'big'))
+        deposit_registration = dict(vault=vault, custody_reference=publication.hx(reference),
+            signature=publication.hx(deposit_key.sign(registration)))
+    document = dict(version=2, checkpoint_id=publication.hx(checkpoint_id), recipient_bindings=bindings,
+        deposit_registration=deposit_registration)
+    destination = inputs / (checkpoint_id.hex() + '.json')
+    publication.atomic_json(destination, document)
+    os.chown(destination, 0, 4021)
+    destination.chmod(0o440)
 
 
 def checkpoint(work, public, settlement, rpc, account, launch, ca_key, ca_cert, last_batch):
@@ -44,6 +116,47 @@ def checkpoint(work, public, settlement, rpc, account, launch, ca_key, ca_cert, 
     config = work / 'checkpoint-settlement.json'
     config.write_text(json.dumps(domain))
     config.chmod(0o644)
+    custody = json.loads((work / 'human-evidence-input/owner-custody.json').read_text())
+    deposit_key = ed25519.Ed25519PrivateKey.from_private_bytes((work / 'attestor.seed').read_bytes())
+    deposit_public = deposit_key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+    assert (work / 'human-evidence-input/custody.profile').read_bytes()[65:97] == deposit_public
+    manager = deploy(rpc, account, 'contracts/challenge/CheckpointChallengeManager.sol:CheckpointChallengeManager',
+        registry, bond, account, account, 3600, 1, '0x' + 'ac' * 32, 1)
+    send(rpc, account, bond, calldata('setSlashingAuthority(address)', manager))
+    for signature, value in (('setGuarantorBond(address)', bond),
+                             ('setDepositRootAuthority(bytes32)', '0x' + deposit_public.hex())):
+        operation = calldata(signature, value)
+        govern(rpc, account, custody['timelock'], custody['timelock'],
+            calldata('setCallPermission(address,bytes4,bool)', custody['vault'], operation[:10], 'true'))
+        govern(rpc, account, custody['timelock'], custody['vault'], operation)
+    assert rpc.call('eth_call', [dict(to=bond, data=calldata('slashingAuthority()')), 'latest'])[-40:].lower() == manager[2:].lower()
+    assert rpc.call('eth_call', [dict(to=custody['vault'], data=calldata('guarantorBond()')), 'latest'])[-40:].lower() == bond[2:].lower()
+    assert bytes.fromhex(rpc.call('eth_call', [dict(to=custody['vault'],
+        data=calldata('depositRootAuthority()')), 'latest'])[2:]) == deposit_public
+    inputs = work / 'checkpoint-publication-inputs'
+    inputs.mkdir(mode=0o750)
+    os.chown(inputs, 0, 4021)
+    inputs.chmod(0o750)
+    exports = work / 'checkpoint-publication-exports'
+    exports.mkdir(mode=0o700)
+    settlement_codec = load('owner_checkpoint_settlement', repo / 'cmd/layerx-guarantor/settlement.py')
+    publication = load('owner_checkpoint_publication', repo / 'cmd/layerx-guarantor/publication.py')
+    signing_keys = [ed25519.Ed25519PrivateKey.from_private_bytes((work / path).read_bytes())
+        for path in ('human-owner/owner.seed', 'human-owner/pending.seed', 'treasury.seed')]
+    recipient = bytes.fromhex(account[2:])
+    support = work / 'checkpoint-support'
+    support.mkdir(mode=0o755)
+    support.chmod(0o755)
+    helper = support / 'helper'
+    helper.mkdir(mode=0o755)
+    helper.chmod(0o755)
+    for name in ('settlement.py', 'publication.py'):
+        shutil.copy2(repo / 'cmd/layerx-guarantor' / name, helper / name)
+    python = Path(sys.executable)
+    if sys.prefix != sys.base_prefix:
+        virtualenv = support / 'venv'
+        shutil.copytree(sys.prefix, virtualenv, symlinks=True)
+        python = virtualenv / 'bin' / Path(sys.executable).name
     os.chown(work / 'payer.key', 4021, 4021)
     ports = []
     for _ in range(2):
@@ -93,21 +206,43 @@ def checkpoint(work, public, settlement, rpc, account, launch, ca_key, ca_cert, 
             LAYERX_GUARANTOR_SETTLEMENT_FILE=str(config), LAYERX_GUARANTOR_SETTLEMENT_DOMAIN='beta',
             LAYERX_GUARANTOR_SUBMITTER_KEY_FILE=str(work / 'payer.key'),
             LAYERX_GUARANTOR_SUBMITTER_LOCK_FILE=str(work / 'tls/submitter.lock'),
-            LAYERX_GUARANTOR_PYTHON=sys.executable,
-            LAYERX_GUARANTOR_SETTLEMENT_HELPER=str(repo / 'cmd/layerx-guarantor/settlement.py'),
+            LAYERX_GUARANTOR_PUBLICATION_INPUTS_DIR=str(inputs),
+            LAYERX_GUARANTOR_PYTHON=str(python),
+            LAYERX_GUARANTOR_SETTLEMENT_HELPER=str(helper / 'settlement.py'),
             LAYERX_GUARANTOR_LISTEN_PORT=str(ports[index - 1]),
             LAYERX_GUARANTOR_PEER_URL=f'https://127.0.0.1:{ports[2 - index]}',
             LAYERX_GUARANTOR_TLS_CA_FILE=str(tls / 'ca.pem'),
             LAYERX_GUARANTOR_TLS_CERT_FILE=str(tls / 'cert.pem'), LAYERX_GUARANTOR_TLS_KEY_FILE=str(tls / 'key.pem'))
+        if index == 1:
+            invalid_state = work / 'checkpoint-invalid-settlement'
+            invalid_state.mkdir(mode=0o700)
+            os.chown(invalid_state, 4021, 4021)
+            invalid_env = dict(env, LAYERX_GUARANTOR_STATE_DIR=str(invalid_state),
+                LAYERX_NODE_SETTLEMENT_CONTRACT='0x' + (int(bond, 16) ^ 1).to_bytes(20, 'big').hex())
+            invalid = launch(['setpriv', '--reuid=4021', '--regid=4021',
+                '--groups=' + str(repo.stat().st_gid), str(repo / 'build/bin/layerx-guarantor'), '--once'],
+                'checkpoint-invalid-settlement', invalid_env)
+            assert invalid.wait(timeout=15) != 0, 'mismatched settlement binding accepted'
+            invalid_log = (work / 'checkpoint-invalid-settlement.log').read_text()
+            assert 'settlement refusal: settlement bond environment mismatch' in invalid_log
+            assert 'configuration refused (-213)' in invalid_log
+            print('mismatched settlement binding refused with -213', flush=True)
         replay_state = work / f'governance-replay-{index}'
         replay_state.mkdir(mode=0o700)
         os.chown(replay_state, 4021, 4021)
         replay_log = work / f'governance-replay-{index}.log'
+        replay_env = dict(env)
+        if index == 1:
+            replay_env['LAYERX_TEST_PUBLICATION_EXPORT_DIR'] = str(exports)
         with replay_log.open('wb') as output:
             subprocess.run([str(repo / 'build/tests/lxp_test_guarantor_runtime'),
                 str(identity / 'node.conf'), str(replay_state),
                 str(work / 'node/checkpoints/da-bodies.log'), str(last_batch)],
-                env=env, stdout=output, stderr=output, check=True, timeout=120)
+                env=replay_env, stdout=output, stderr=output, check=True, timeout=120)
+        if index == 1:
+            for batch in range(1, last_batch + 1):
+                authorize_publication(json.loads((exports / f'{batch}.json').read_text()), inputs,
+                    recipient, custody['vault'], signing_keys, deposit_key, settlement_codec, publication)
         print(f'bonded guarantor {index} independently replayed all {last_batch} owner batches', flush=True)
         producers.append(launch(['setpriv', '--reuid=4021', '--regid=4021',
             '--groups=' + str(repo.stat().st_gid), str(repo / 'build/bin/layerx-guarantor')], f'checkpoint-producer-{index}', env))
@@ -119,7 +254,11 @@ def checkpoint(work, public, settlement, rpc, account, launch, ca_key, ca_cert, 
         time.sleep(0.2)
     else:
         raise AssertionError('real checkpoint producer deadline')
-    print('real bonded guarantors independently replayed and registered checkpoint certificates', flush=True)
+    for batch in range(1, last_batch + 1):
+        result = rpc.call('eth_call', [dict(to=registry,
+            data=calldata('checkpointAtBatch(uint64)', batch)), 'latest'])
+        assert int(result, 16) != 0, f'checkpoint batch {batch} not registered'
+    print(f'real bonded guarantors independently replayed and registered all {last_batch} checkpoint certificates', flush=True)
 
 
 def hosted(work, config, environment, launch, service):
