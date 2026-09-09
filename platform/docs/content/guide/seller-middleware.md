@@ -30,6 +30,8 @@ The four decisions are total. There is no fallthrough.
 
 Your resource handler runs at step 4 and only at step 4. There is no code path that releases the resource before verification.
 
+An offer may carry `extra.layerx.commitment` as `executed`, `batched` or `finalised`. An exact-payment offer without `extra.layerx` requires `executed`. `batched` and `finalised` need a `PaymentCommitmentResolver` that supplies signed batch-inclusion evidence, and `finalised` also needs the guarantor checkpoint covering that batch. Missing or invalid evidence is `verification-failure`; the middleware does not fall back to a weaker commitment. Offer fields, grant draws and the three commitment levels are specified in `spec/402lxp/protocol.md`.
+
 ## The two things you supply
 
 **The authorised batch resolver.** Verification is meaningless if the facts you verify against come from the same party that gave you the receipt. `staticAuthorizedBatches` is right for a single-batch test; in production resolve the batch from a source you trust independently.

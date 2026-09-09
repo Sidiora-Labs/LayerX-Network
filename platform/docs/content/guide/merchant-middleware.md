@@ -10,12 +10,12 @@
 |---|---|
 | Empty cart, more than 256 lines, duplicate SKU, non-positive or non-integer quantity | `invalid-cart` |
 | A SKU the catalog does not have | `catalog-item-missing` |
-| Two lines whose asset, `payTo`, scheme or network differ | `mixed-payment-facts` |
+| Two lines whose asset, `payTo`, scheme, network or `extra` differ | `mixed-payment-facts` |
 | A total that would exceed the 128-bit amount range | `amount-overflow` |
 
 Amounts are integer strings and are multiplied and summed as `bigint`. No line total is ever computed in floating point, and no rounding step exists to argue about.
 
-`mixed-payment-facts` is the rule people are surprised by. A cart is one payment; a payment has one asset and one recipient. If your catalog mixes them, split the cart into separate checkouts.
+`mixed-payment-facts` is the rule people are surprised by. A cart is one payment; a payment has one asset, one recipient and one `extra` (including any `extra.layerx.commitment`). If your catalog mixes them, split the cart into separate checkouts.
 
 ## Checking out
 
@@ -30,7 +30,7 @@ Amounts are integer strings and are multiplied and summed as `bigint`. No line t
 
 The order store is asked to `open` the order before the seller decision, and every store response is re-checked: if `open`, `markPaid` or `markRefused` returns an order whose `checkoutKey` or `requestDigest` does not match, the middleware raises `order-conflict` rather than continuing on a mismatched row. Your store cannot quietly swap the order under it.
 
-The request digest is computed over the quote itself - lines, total, asset, recipient, scheme, network, timeout. Re-quoting the same cart against an unchanged catalog gives the same digest and therefore the same order. A catalog price change gives a different digest, so it is a different order, which is what you want.
+The request digest is computed over the quote itself - lines, total, asset, recipient, scheme, network, timeout and the `paymentRequired` envelope, so a change to `extra` (including commitment) is a different order. Re-quoting the same cart against an unchanged catalog gives the same digest and therefore the same order. A catalog price change gives a different digest, so it is a different order, which is what you want.
 
 ## Late settlement
 

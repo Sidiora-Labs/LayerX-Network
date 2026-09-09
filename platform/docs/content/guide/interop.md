@@ -30,7 +30,7 @@ Evidence enters through `verify_external_evidence`. The adapter keeps ownership 
 
 x402 is the case most people meet first, because it is what the seller and buyer middleware speak over HTTP. The three headers are `PAYMENT-REQUIRED` on the `402`, `PAYMENT-SIGNATURE` on the retry, and `PAYMENT-RESPONSE` on the settled reply. The Rust crate exposes the same three roles - `Buyer`, `Seller`, `Facilitator` - for services that are not Node.
 
-The relationship between the layers is worth stating plainly: x402 is the transport for the offer and the proof. It is not the settlement. The settlement is the LayerX move, and the thing that makes the settlement true is the receipt carried in the payment's extensions.
+The relationship between the layers is worth stating plainly: x402 is the transport for the offer and the proof. It is not the settlement. The settlement is the LayerX move, and the thing that makes the settlement true is the receipt carried in the payment's extensions. The LayerX offer fields, grant-draw payloads and commitment levels the seller and buyer middleware enforce are specified in `spec/402lxp/protocol.md`.
 
 ## Agent transports: MCP and A2A
 

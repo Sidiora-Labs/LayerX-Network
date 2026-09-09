@@ -8,7 +8,7 @@
 
 1. Issues the request.
 2. If the response is `402`, parses the `PAYMENT-REQUIRED` header into a typed offer.
-3. Checks the offer against the kinds you declared as supported. An unsupported scheme, network or asset is refused here - before any money moves - as `unsupported-payment`.
+3. Checks the offer against the kinds you declared as supported. An unsupported scheme, network or asset is refused here - before any money moves - as `unsupported-payment`. An offer that names `batched` or `finalised` is also `unsupported-payment` unless you supplied a `PaymentCommitmentResolver`; the buyer does not accept a weaker commitment than the selected alternative asked for.
 4. Quotes and commits the move through the SDK under an idempotency key derived from the request, then waits for the journey to settle.
 5. Retries the original request with a `PAYMENT-SIGNATURE` header carrying the receipt evidence.
 6. Reads the `PAYMENT-RESPONSE` header and returns the response together with the captured settlement.
@@ -34,7 +34,7 @@ The retry policy is configurable and validated: non-integer or non-positive atte
 
 ## Verification is not optional here either
 
-A settlement the buyer captures is checked against the receipt evidence, not merely read from the header. A seller that returns a `PAYMENT-RESPONSE` claiming success without a receipt behind it does not produce a verified settlement.
+A settlement the buyer captures is checked against the receipt evidence, not merely read from the header. A seller that returns a `PAYMENT-RESPONSE` claiming success without a receipt behind it does not produce a verified settlement. When the accepted offer asked for `batched` or `finalised`, capture also verifies that evidence through the same commitment resolver; it does not treat an executed receipt as enough. See `spec/402lxp/protocol.md`.
 
 ## Enforced by
 
