@@ -1,0 +1,62 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: layerx-human
+  namespace: layerx-testnet
+spec:
+  selector:
+    app: layerx-node
+  ports:
+  - name: https
+    port: 9443
+    targetPort: human-https
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: layerx-human
+  namespace: layerx-testnet
+spec:
+  podSelector:
+    matchLabels:
+      app: layerx-node
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: layerx-internal
+      podSelector:
+        matchExpressions:
+        - key: app
+          operator: In
+          values:
+          - layerx-internal-journeys
+          - layerx-internal-approvals
+    - podSelector:
+        matchLabels:
+          app: layerx-qualification
+    ports:
+    - protocol: TCP
+      port: human-https
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: human-adapter-egress, namespace: layerx-internal}
+spec:
+  podSelector:
+    matchExpressions: [{key: app, operator: In, values: [layerx-internal-journeys, layerx-internal-approvals]}]
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: layerx-testnet}}
+          podSelector: {matchLabels: {app: layerx-node}}
+      ports: [{protocol: TCP, port: 9447}]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: layerx-human-state, namespace: layerx-testnet}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: {requests: {storage: 4Gi}}

@@ -3280,3 +3280,15 @@ test-daemon-availability: $(BUILD_DIR)/tests/lxp_test_daemon_finality_authority 
 	LAYERX_TEST_NATIVE_BIN_DIR="$(CURDIR)/$(BUILD_DIR)/bin" cargo test --locked \
 		--manifest-path agent/Cargo.toml -p layerx-client --test availability_daemon \
 		-- --nocapture --test-threads=1
+
+.PHONY: layerx-module-registry test-module-registry
+build: layerx-module-registry
+layerx-module-registry: $(BUILD_DIR)/bin/layerx-module-registry
+
+$(BUILD_DIR)/bin/layerx-module-registry: cmd/layerx-module-registry/main.c cmd/layerx-module-registry/node.c $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) cmd/layerx-module-registry/main.c cmd/layerx-module-registry/node.c $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) $(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
+
+test-module-registry: layerx-module-registry
+	python3 cmd/layerx-module-registry/test_registry.py $(BUILD_DIR)/bin/layerx-module-registry
+	bash platform/hosted/tests/beta-cluster.sh test-retained-material

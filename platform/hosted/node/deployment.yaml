@@ -24,7 +24,69 @@ spec:
     metadata: {labels: {app: layerx-node, layerx-plane: trusted-boundary}}
     spec:
       securityContext: {runAsNonRoot: true, runAsUser: 4020, runAsGroup: 4020, fsGroup: 4020}
+      automountServiceAccountToken: false
+      shareProcessNamespace: true
       terminationGracePeriodSeconds: 60
+      initContainers:
+      - name: human-directories
+        image: ghcr.io/sidiora-labs/layerx-human:0.1.0
+        imagePullPolicy: Always
+        command:
+        - /bin/sh
+        - -ec
+        - |
+          install -d -o 4020 -g 4020 -m 0750 /run/layerx/human
+          install -d -o 4021 -g 4020 -m 0750 /run/layerx/human/owner
+          install -d -o 4020 -g 4020 -m 0700 /human-state/components
+          install -d -o 4021 -g 4020 -m 0700 /human-state/agent
+          install -d -o 4020 -g 4020 -m 0700 /human-state/identity
+          install -d -o 4020 -g 4020 -m 0700 /human-state/security
+          install -d -o 4020 -g 4020 -m 0700 /human-state/movement
+          install -d -o 4020 -g 4020 -m 0700 /human-state/movement/evidence
+          install -d -o 4021 -g 4020 -m 0700 /human-state/authority
+          install -d -o 4026 -g 4020 -m 0700 /human-state/kms
+        securityContext:
+          runAsNonRoot: false
+          runAsUser: 0
+          runAsGroup: 4020
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+            add:
+            - CHOWN
+            - FOWNER
+            - DAC_OVERRIDE
+        resources:
+          requests:
+            cpu: 10m
+            memory: 16Mi
+          limits:
+            cpu: 100m
+            memory: 32Mi
+        volumeMounts:
+        - name: run
+          mountPath: /run/layerx
+        - name: human-state
+          mountPath: /human-state
+      - name: human-authority-material
+        image: ghcr.io/sidiora-labs/layerx-human:0.1.0
+        imagePullPolicy: Always
+        command: [/bin/sh, -ec]
+        args:
+          - |
+            umask 077
+            install -d -m 0700 /run/authority-private/material
+            install -m 0600 /run/authority-input/authority-token /run/authority-private/material/human-agent.token
+            install -m 0600 /run/authority-input/principal-policy.json /run/authority-private/material/principal-policy.json
+            install -m 0600 /run/module-registry/registry.json /run/authority-private/material/registry.json
+        securityContext: {runAsUser: 4021, runAsGroup: 4020, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+        resources: {requests: {cpu: 10m, memory: 16Mi}, limits: {cpu: 100m, memory: 32Mi}}
+        volumeMounts:
+          - {name: human-authority, mountPath: /run/authority-input, readOnly: true}
+          - {name: human-authority-private, mountPath: /run/authority-private}
+          - {name: human-module-registry, mountPath: /run/module-registry, readOnly: true}
       containers:
         - name: layerxd
           image: ghcr.io/sidiora-labs/layerx-node:0.1.0
@@ -171,6 +233,13 @@ spec:
             - {name: LAYERX_AUTHORITY_TLS_CERT_DER, value: /run/layerx/authority-tls/server.crt.der}
             - {name: LAYERX_AUTHORITY_TLS_KEY_DER, value: /run/layerx/authority-tls/server.key.der}
             - {name: LAYERX_AUTHORITY_CLIENT_CA_DER, value: /run/layerx/trust/ca.crt.der}
+            - {name: LAYERX_AUTHORITY_HUMAN_AGENT_TOKEN_FILE, value: /run/authority-private/material/human-agent.token}
+            - {name: LAYERX_AUTHORITY_HUMAN_AGENT_TENANT, valueFrom: {secretKeyRef: {name: layerx-human-authority-config, key: tenant}}}
+            - {name: LAYERX_AUTHORITY_HUMAN_AGENT_PRINCIPAL, valueFrom: {secretKeyRef: {name: layerx-human-authority-config, key: principal}}}
+            - {name: LAYERX_AUTHORITY_PRINCIPAL_POLICY_FILE, value: /run/authority-private/material/principal-policy.json}
+            - {name: LAYERX_AUTHORITY_MODULE_REGISTRY_FILE, value: /run/authority-private/material/registry.json}
+            - {name: LAYERX_AUTHORITY_CORE_CLOCK_HORIZON, valueFrom: {secretKeyRef: {name: layerx-human-authority-config, key: core-clock-horizon}}}
+            - {name: LAYERX_AUTHORITY_STATE_ROOT, value: /var/lib/layerx/human/authority}
             - {name: LAYERX_AUTHORITY_TOKEN_FILES, value: /run/layerx/gateway-authority/token:/run/layerx/registry-authority/token:/run/layerx/webhooks-authority/token}
             - {name: LAYERX_AUTHORITY_REPLICA_URL, value: "http://127.0.0.1:9402"}
             - {name: LAYERX_AUTHORITY_REPLICA_BEARER_TOKEN_FILE, value: /run/layerx/tokens/replica-token}
@@ -190,6 +259,8 @@ spec:
             - {name: gateway-authority, mountPath: /run/layerx/gateway-authority, readOnly: true}
             - {name: registry-authority, mountPath: /run/layerx/registry-authority, readOnly: true}
             - {name: webhooks-authority, mountPath: /run/layerx/webhooks-authority, readOnly: true}
+            - {name: human-authority-private, mountPath: /run/authority-private, readOnly: true}
+            - {name: human-state, mountPath: /var/lib/layerx/human/authority, subPath: authority}
         - name: agent-boundary
           image: ghcr.io/sidiora-labs/layerx-agent-boundary:0.1.0
           imagePullPolicy: Always
@@ -221,7 +292,384 @@ spec:
             - {name: gateway-component, mountPath: /run/layerx/gateway-component, readOnly: true}
             - {name: webhooks-component, mountPath: /run/layerx/webhooks-component, readOnly: true}
             - {name: registry-component, mountPath: /run/layerx/registry-component, readOnly: true}
+        - name: human
+          image: ghcr.io/sidiora-labs/layerx-human:0.1.0
+          imagePullPolicy: Always
+          env:
+            - name: LAYERX_HUMAN_BIND
+              value: 0.0.0.0:9447
+            - name: LAYERX_HUMAN_TLS_CERT_DER
+              value: /run/layerx/tls/server.crt.der
+            - name: LAYERX_HUMAN_TLS_KEY_DER
+              value: /run/layerx/tls/server.key.der
+            - name: LAYERX_HUMAN_COMPONENT_SOCKET
+              value: /run/layerx/human/components.sock
+            - name: LAYERX_HUMAN_WEB_ORIGIN
+              value: https://human.testnet.layerx.network
+          ports:
+            - name: human-https
+              containerPort: 9447
+          readinessProbe:
+            exec:
+              command:
+                - curl
+                - --fail
+                - --silent
+                - --show-error
+                - --max-time
+                - '5'
+                - --cacert
+                - /run/layerx/tls/ca.crt
+                - https://localhost:9447/readyz
+            timeoutSeconds: 6
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: human-https
+              scheme: HTTPS
+            initialDelaySeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: '1'
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+            runAsUser: 4020
+            runAsGroup: 4020
+          volumeMounts:
+            - name: human-tls
+              mountPath: /run/layerx/tls
+              readOnly: true
+            - name: run
+              mountPath: /run/layerx/human
+              subPath: human
+          command:
+            - /usr/local/bin/layerx-human-service
+        - name: components
+          image: ghcr.io/sidiora-labs/layerx-human:0.1.0
+          imagePullPolicy: Always
+          command:
+            - /usr/local/bin/human-entrypoint
+            - components
+          envFrom:
+            - secretRef:
+                name: layerx-human-components-config
+          env:
+            - name: LAYERX_HUMAN_COMPONENT_SOCKET
+              value: /run/layerx/human/components.sock
+            - name: LAYERX_HUMAN_COMPONENT_ALLOWED_UID
+              value: '4020'
+            - name: LAYERX_HUMAN_COMPONENT_WORKERS
+              value: '4'
+            - name: LAYERX_HUMAN_COMPONENT_QUEUE_CAPACITY
+              value: '4'
+            - name: LAYERX_HUMAN_MAINTENANCE_INTERVAL_SECONDS
+              value: '10'
+            - name: LAYERX_HUMAN_MAINTENANCE_MAXIMUM_ITEMS
+              value: '100'
+            - name: LAYERX_HUMAN_STORE_ROOT
+              value: /var/lib/layerx/human/store
+            - name: LAYERX_HUMAN_CUSTODY_ROOT
+              value: /var/lib/layerx/human/custody
+            - name: LAYERX_HUMAN_AUTH_INDEX_ROOT
+              value: /var/lib/layerx/human/auth-index
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: '1'
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+            runAsUser: 4020
+            runAsGroup: 4020
+          volumeMounts:
+            - name: run
+              mountPath: /run/layerx/human
+              subPath: human
+            - name: human-state
+              mountPath: /var/lib/layerx/human
+              subPath: components
+            - name: human-components-material
+              mountPath: /run/human-material
+              readOnly: true
+            - name: human-components-private
+              mountPath: /run/human-private
+        - name: human-identity
+          image: ghcr.io/sidiora-labs/layerx-human:0.1.0
+          imagePullPolicy: Always
+          command:
+            - /usr/local/bin/human-entrypoint
+            - identity
+          env:
+            - name: LAYERX_HUMAN_IDENTITY_PROVIDER_SOCKET
+              value: /run/layerx/human/identity.sock
+            - name: LAYERX_HUMAN_IDENTITY_PROVIDER_STATE_ROOT
+              value: /var/lib/layerx/human/identity
+            - name: LAYERX_HUMAN_IDENTITY_PROVIDER_ALLOWED_UID
+              value: '4020'
+            - name: LAYERX_HUMAN_IDENTITY_PROVIDER_RECOVERY_POLICY_FILE
+              value: /run/human-private/identity/recovery-policy.json
+            - name: LAYERX_HUMAN_IDENTITY_PROVIDER_DEADLINE_SECONDS
+              value: '5'
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: '1'
+              memory: 512Mi
+          securityContext:
+            runAsUser: 4020
+            runAsGroup: 4020
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: run
+              mountPath: /run/layerx/human
+              subPath: human
+            - name: human-state
+              mountPath: /var/lib/layerx/human
+              subPath: identity
+            - name: human-identity-private
+              mountPath: /run/human-private
+            - name: human-identity-material
+              mountPath: /run/human-material
+              readOnly: true
+          readinessProbe:
+            exec:
+              command:
+                - /usr/local/bin/layerx-human-identity-provider
+                - probe
+            timeoutSeconds: 6
+            periodSeconds: 10
+        - name: human-security
+          image: ghcr.io/sidiora-labs/layerx-human:0.1.0
+          imagePullPolicy: Always
+          command:
+            - /usr/local/bin/human-entrypoint
+            - security
+          env:
+            - name: LAYERX_HUMAN_SECURITY_PROVIDER_SOCKET
+              value: /run/layerx/human/security.sock
+            - name: LAYERX_HUMAN_SECURITY_PROVIDER_STATE_ROOT
+              value: /var/lib/layerx/human/security
+            - name: LAYERX_HUMAN_SECURITY_PROVIDER_ALLOWED_UID
+              value: '4020'
+            - name: LAYERX_HUMAN_SECURITY_PROVIDER_TRUST_HISTORY
+              value: /run/human-private/security/trust-history
+            - name: LAYERX_HUMAN_SECURITY_PROVIDER_DEADLINE_SECONDS
+              value: '5'
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: '1'
+              memory: 512Mi
+          securityContext:
+            runAsUser: 4020
+            runAsGroup: 4020
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: run
+              mountPath: /run/layerx/human
+              subPath: human
+            - name: human-state
+              mountPath: /var/lib/layerx/human
+              subPath: security
+            - name: human-security-private
+              mountPath: /run/human-private
+            - name: human-security-material
+              mountPath: /run/human-material
+              readOnly: true
+          readinessProbe:
+            exec:
+              command:
+                - /usr/local/bin/layerx-human-security-provider
+                - probe
+            timeoutSeconds: 6
+            periodSeconds: 10
+        - name: human-movement
+          image: ghcr.io/sidiora-labs/layerx-human:0.1.0
+          imagePullPolicy: Always
+          command:
+            - /usr/local/bin/human-entrypoint
+            - movement
+          envFrom:
+            - secretRef: {name: layerx-human-movement-config}
+          env:
+            - name: LAYERX_HUMAN_MOVEMENT_PROVIDER_SOCKET
+              value: /run/layerx/human/movement.sock
+            - name: LAYERX_HUMAN_MOVEMENT_PROVIDER_STATE_ROOT
+              value: /var/lib/layerx/human/movement
+            - name: LAYERX_HUMAN_MOVEMENT_PROVIDER_ALLOWED_UID
+              value: '4020'
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: '1'
+              memory: 512Mi
+          securityContext:
+            runAsUser: 4020
+            runAsGroup: 4020
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: run
+              mountPath: /run/layerx/human
+              subPath: human
+            - name: human-state
+              mountPath: /var/lib/layerx/human
+              subPath: movement
+            - name: human-movement-private
+              mountPath: /run/human-private
+            - name: human-movement-material
+              mountPath: /run/human-material
+              readOnly: true
+          readinessProbe:
+            exec:
+              command:
+                - /usr/local/bin/layerx-human-movement-provider
+                - probe
+            timeoutSeconds: 6
+            periodSeconds: 10
+        - name: human-kms
+          image: ghcr.io/sidiora-labs/layerx-human:0.1.0
+          imagePullPolicy: Always
+          command:
+            - /usr/local/bin/human-entrypoint
+            - kms
+          env:
+            - name: LAYERX_HUMAN_KMS_LISTEN
+              value: 127.0.0.1:9450
+            - name: LAYERX_HUMAN_KMS_STATE_DIR
+              value: /var/lib/layerx/human/kms
+            - name: LAYERX_HUMAN_KMS_PROVIDER_REFERENCE
+              value: layerx-human-kms
+            - name: LAYERX_HUMAN_KMS_REGISTRY_FILE
+              value: /run/human-private/kms/registry.json
+            - name: LAYERX_HUMAN_KMS_TLS_CERT_DER
+              value: /run/human-private/kms/kms-server.der
+            - name: LAYERX_HUMAN_KMS_TLS_KEY_DER
+              value: /run/human-private/kms/kms-server-key.der
+            - name: LAYERX_HUMAN_KMS_CLIENT_CA_DER
+              value: /run/human-private/kms/ca.der
+            - name: LAYERX_HUMAN_KMS_CLIENT_CERT_DER
+              value: /run/human-private/kms/kms-client.der
+            - name: LAYERX_HUMAN_KMS_EVM_CLIENT_CERT_DER
+              value: /run/human-private/kms/kms-executor.der
+            - name: LAYERX_HUMAN_KMS_SEAL_SECRET_FILE
+              value: /run/human-private/kms/kms-seal
+            - name: LAYERX_HUMAN_KMS_DEADLINE_SECONDS
+              value: '10'
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: '1'
+              memory: 512Mi
+          securityContext:
+            runAsUser: 4026
+            runAsGroup: 4020
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: human-state
+              mountPath: /var/lib/layerx/human
+              subPath: kms
+            - name: human-kms-private
+              mountPath: /run/human-private
+            - name: human-kms-material
+              mountPath: /run/human-material
+              readOnly: true
+        - name: human-owner
+          image: ghcr.io/sidiora-labs/layerx-human:0.1.0
+          imagePullPolicy: Always
+          command:
+            - /usr/local/bin/human-entrypoint
+            - agent
+          env: []
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: '1'
+              memory: 512Mi
+          securityContext:
+            runAsUser: 4021
+            runAsGroup: 4020
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: run
+              mountPath: /run/layerx
+            - name: human-state
+              mountPath: /var/lib/layerx/human
+              subPath: agent
+            - name: human-agent-private
+              mountPath: /run/human-private
+            - name: human-agent-material
+              mountPath: /run/human-material
+              readOnly: true
+            - name: human-agent-journal
+              mountPath: /run/human-journal
+              readOnly: true
+          envFrom:
+            - secretRef:
+                name: layerx-human-agent-config
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -ec
+                - exec curl --fail --silent --show-error --max-time 5 --config /run/human-private/agent/probe.conf http://127.0.0.1:9451/healthz
+            timeoutSeconds: 6
+            periodSeconds: 10
       volumes:
+        - {name: human-authority-private, emptyDir: {medium: Memory, sizeLimit: 32Mi}}
+        - {name: human-module-registry, configMap: {name: layerx-core-module-registry}}
+        - {name: human-identity-material, secret: {secretName: layerx-human-identity-material, defaultMode: 0440}}
+        - {name: human-security-material, secret: {secretName: layerx-human-security-material, defaultMode: 0440}}
+        - {name: human-movement-material, secret: {secretName: layerx-human-movement-material, defaultMode: 0440}}
+        - name: human-authority
+          secret:
+            secretName: layerx-human-authority-material
+            defaultMode: 0440
+        - {name: human-state, persistentVolumeClaim: {claimName: layerx-human-state}}
         - {name: run, emptyDir: {medium: Memory, sizeLimit: 16Mi}}
         - {name: tmp, emptyDir: {medium: Memory, sizeLimit: 64Mi}}
         - {name: keys, secret: {secretName: layerx-node-keys, defaultMode: 0440}}
@@ -239,6 +687,50 @@ spec:
         - {name: gateway-component, secret: {secretName: layerx-gateway-component-client}}
         - {name: webhooks-component, secret: {secretName: layerx-webhooks-component-client}}
         - {name: registry-component, secret: {secretName: layerx-program-registry-node-client}}
+        - name: human-tls
+          secret:
+            secretName: layerx-human-tls
+            defaultMode: 288
+        - name: human-components-material
+          secret:
+            secretName: layerx-human-component-material
+            defaultMode: 288
+        - name: human-kms-material
+          secret:
+            secretName: layerx-human-kms-material
+            defaultMode: 288
+        - name: human-agent-material
+          secret:
+            secretName: layerx-human-agent-material
+            defaultMode: 288
+        - name: human-agent-journal
+          secret:
+            secretName: layerx-human-agent-journal
+            defaultMode: 288
+        - name: human-components-private
+          emptyDir:
+            medium: Memory
+            sizeLimit: 4Mi
+        - name: human-kms-private
+          emptyDir:
+            medium: Memory
+            sizeLimit: 4Mi
+        - name: human-agent-private
+          emptyDir:
+            medium: Memory
+            sizeLimit: 4Mi
+        - name: human-identity-private
+          emptyDir:
+            medium: Memory
+            sizeLimit: 4Mi
+        - name: human-security-private
+          emptyDir:
+            medium: Memory
+            sizeLimit: 4Mi
+        - name: human-movement-private
+          emptyDir:
+            medium: Memory
+            sizeLimit: 4Mi
   volumeClaimTemplates:
     - metadata: {name: data}
       spec: {accessModes: [ReadWriteOnce], resources: {requests: {storage: 50Gi}}}
@@ -270,6 +762,8 @@ spec:
   podSelector: {matchLabels: {app: layerx-node}}
   policyTypes: [Ingress]
   ingress:
+    - from: [{podSelector: {matchLabels: {app: layerx-node}}}]
+      ports: [{protocol: TCP, port: 9445}]
     - from: [{podSelector: {matchLabels: {app: layerx-testnet-control}}}]
       ports: [{protocol: TCP, port: 9443}, {protocol: TCP, port: 9444}, {protocol: TCP, port: 9445}]
     - from: [{podSelector: {matchLabels: {app: layerx-gateway}}}]
@@ -290,7 +784,11 @@ spec:
   podSelector: {matchLabels: {app: layerx-node}}
   policyTypes: [Egress]
   egress:
-    - to: [{namespaceSelector: {}}]
+    - to: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}, podSelector: {matchLabels: {k8s-app: kube-dns}}}]
       ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]
     - to: [{podSelector: {matchLabels: {app: paxeer}}}]
       ports: [{protocol: TCP, port: 9443}]
+    - to: [{podSelector: {matchLabels: {app: paxeer}}}]
+      ports: [{protocol: TCP, port: 9444}]
+    - to: [{podSelector: {matchLabels: {app: layerx-node}}}]
+      ports: [{protocol: TCP, port: 9445}]
