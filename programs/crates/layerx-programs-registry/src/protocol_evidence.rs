@@ -924,7 +924,7 @@ fn decode_trust_history(
             .get(entry_start..cursor)
             .ok_or(ProtocolEvidenceError::InvalidTrustAnchor)?;
         if previous_entry.is_some_and(|previous| previous >= entry)
-            || !matches!(protocol_version, 1 | 2)
+            || !matches!(protocol_version, 1..=3)
             || network_id == 0
             || epoch == 0
             || sequencer_id == [0; 32]
