@@ -7917,3 +7917,11 @@ file = "agent/crates/layerx-agentd/src/human_runtime.rs"
 symbol = "rustfmt"
 observed = "rustfmt --edition 2021 --config skip_children=true --check agent/crates/layerx-agentd/src/human_runtime.rs exits 0; raw log: qual-logs/own1/own1e-touched-fmt.log. The four unrelated files listed in observation 3.7.43 have no diff against pre-owner base 21c96f47 and remain unchanged. Formatting is restricted to touched files."
 assumption = "The earlier whole-package formatting failure remains recorded; a focused file check does not claim the whole-package gate passed."
+
+[observation.3.7.49]
+task = "3.7"
+severity = "blocker"
+file = "agent/crates/layerx-agentd/tests/availability.rs agent/crates/layerx-client/src/availability.rs"
+symbol = "decode_records complete_five_class_retrieval_streams_and_emits_offline_replay_frames corruption_withholding_and_repeated_provider_failure_are_durable_evidence"
+observed = "The identical cargo test --locked --manifest-path agent/Cargo.toml -p layerx-agentd --test availability command passes both tests at pre-owner base 21c96f47 (exit 0), fails both at merged-branch commit d1aea653 (exit 101), and fails identically on the current lane (exit 101). The merged commit changes canonical record decoding to require the record count and ordered tagged classes. Both failures are complete provider reported partial and ChunkOrder versus MissingClass. The test file is unchanged from base. Raw logs: qual-logs/own1/own1e-base-availability.log, own1e-merged-availability.log and own1e-current-availability.log."
+assumption = "This is inherited from the merged availability branch, not introduced by owner-registration implementation. Keep both decoder and assertions intact; the availability owner must reconcile the canonical fixture contract. Scratch comparisons use separate local targets and no fetch, merge or rebase."
