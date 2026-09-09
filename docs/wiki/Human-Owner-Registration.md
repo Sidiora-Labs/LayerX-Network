@@ -9,3 +9,15 @@ All three guardians are cluster-operated and non-independent. Independent
 operation is a production onboarding requirement. The recovery commitment is
 SHA-256 of `LX:HUMAN:RECOVERY:v1` plus NUL, big-endian u16 threshold and count,
 then sorted Ed25519 public keys. Existing material is refused instead of replaced.
+
+Run LXIP `provision-owner` first. It returns the exact `did:layerx:act_...` and
+recovery policy, not a signing key. `--prepare-owner-admission` then generates
+protected owner and pending Ed25519 seeds, and exports the exact DID/key binding
+in `owner-admission.txt` and its native account in `owner-admission.json`.
+The operator atomically appends the public admission row to the node's protected
+`LAYERX_NODE_IDENTITIES` file. A protocol-3 daemon at genesis admits additions
+only: existing identities cannot change, new sequences must be zero, and keys
+must be canonical Ed25519. Admission closes at the first execution. The producer
+must observe the exact DID through native preparation before submitting credit.
+The retained identity file remains necessary for restart and replay; checkpoint
+identity matching is unchanged.

@@ -84,7 +84,10 @@ for ((attempt=0; attempt<200; attempt++)); do
 done
 cp "$build_dir/tests/lxp_test_program_admission" "$work/client"
 chmod 0755 "$work/client"
-if [[ ${2:-} == --maintenance-crash ]]; then
+if [[ ${2:-} == --post-lxip ]]; then
+    "${LAYERX_TEST_PYTHON:-python3}" tests/daemon/post-lxip.py "$work"
+    exit 0
+elif [[ ${2:-} == --maintenance-crash ]]; then
     setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$work/run/layerxd.lni.sock" --maintenance-queue
     printf G >&"$apply_gate_fd"
     result=0

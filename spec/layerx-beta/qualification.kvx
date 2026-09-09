@@ -6820,3 +6820,11 @@ file = "platform/hosted/human/guardians.py platform/hosted/tests/beta-cluster.sh
 symbol = "generate"
 observed = "Beta recovery guardians are three dedicated random Ed25519 keys with threshold two, bound individually to the two genesis guarantor identities and the sequencer. They are cluster-operated and non-independent, never derived from secp256k1 custody keys. The public binding manifest is published as layerx-human-guardian-bindings; separate protected guardian Secrets hold the private seeds."
 assumption = "Independent guardian operation is a production onboarding property. Cluster Secret publication requires live cluster qualification."
+
+[observation.3.7.37]
+task = "3.7"
+severity = "note"
+file = "cmd/layerxd/lxp_daemon_process.c platform/hosted/human/owner_native.py"
+symbol = "admit_provisioned_identities prepare_admission"
+observed = "LXIP provision-owner returns the exact DID and recovery fields but no signing key. Post-LXIP preparation generates protected owner and pending Ed25519 seeds and the exact public admission row. At genesis, protocol-3 native admission reads only an owner-controlled regular single-link 0600 identity file, preserves every existing identity byte-for-byte and permits only canonical zero-sequence additions. Admission closes once execution starts; signature, active-key, sequence, replay and checkpoint checks remain intact."
+assumption = "Cluster orchestration must append the produced public row atomically before the first native execution and retain it across restart. Live wiring and complete owner production still require qualification."
