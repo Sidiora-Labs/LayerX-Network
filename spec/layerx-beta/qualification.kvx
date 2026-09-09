@@ -7861,3 +7861,35 @@ file = "cmd/layerx-guarantor/runtime.c"
 symbol = "gp_runtime_open gp_runtime_authority"
 observed = "Real native owner checkpoint qualification reaches two bonded guarantor producers using deployed GuarantorBond and CheckpointRegistry, but both refuse startup with configuration result -902. The independent runtime registers Programs, Asset and optional Bridge while the genesis registry also contains Governance; its replay admission excludes Governance activities. Raw evidence is qual-logs/own1/own1d-session-real-checkpoint-domain.log."
 assumption = "Governance registry, admission and identity refresh must be implemented in the guarantor replay runtime before positive Human checkpoint policy qualification can pass. Snapshot and replay equality checks remain intact."
+
+[observation.3.7.42]
+task = "3.7"
+severity = "note"
+file = "agent/crates/layerx-agentd/src/human_runtime.rs tests/daemon/governance_lifecycle.py tests/daemon/owner-production.py"
+symbol = "real_owner_authority_prepares_over_temp_socket lifecycle"
+observed = "Authority decoding is exercised through the real client and ProductionCorePreparationBoundary over a distinct-uid temporary native socket. Native Governance qualification covers signed rotation key, time, sequence, DID and encoding refusals, unauthorized signers, pending-policy integrity, revoke reason, sequence, missing-grant and duplicate refusals, stale grants, and replay-preserved refusals after daemon restart."
+assumption = "Positive hosted checkpoint and full cluster qualification remain dependent on the separate guarantor replay runtime repair."
+
+[observation.3.7.43]
+task = "3.7"
+severity = "blocker"
+file = "agent/crates/layerx-agentd/src/export.rs agent/crates/layerx-agentd/src/policy/eval.rs agent/crates/layerx-agentd/tests/budget_unknown.rs agent/crates/layerx-agentd/tests/operator.rs"
+symbol = "cargo fmt"
+observed = "The whole agentd package formatting gate reports pre-existing formatting differences in untouched export, policy evaluation and test files. The owner-authority source is formatted without changing those unrelated files. Raw output is qual-logs/own1/own1d-agentd-fmt.log."
+assumption = "The aggregate formatting gate remains failed until the owning work reconciles these existing formatting differences; no formatting assertion was removed."
+
+[observation.3.7.44]
+task = "3.7"
+severity = "blocker"
+file = "tests/test_daemon_lni_admission.c cmd/layerxd/lxp_daemon_lni.c"
+symbol = "test_crash_recovery"
+observed = "The aggregate native admission test fails at phase_status == 0 in test_crash_recovery, before its restart phase. The same unchanged test also fails in an isolated rerun. Raw outputs are qual-logs/own1/own1d-native-tests.log and qual-logs/own1/own1d-lni-admission-isolated.log. The real owner daemon pipeline and restart test pass separately."
+assumption = "The aggregate admission gate remains failed; its fixture or admission-boundary conflict requires separate diagnosis without weakening either check."
+
+[observation.3.7.45]
+task = "3.7"
+severity = "blocker"
+file = "agent/crates/layerx-agentd/tests/availability.rs agent/crates/layerx-agentd/src/read/availability.rs agent/crates/layerx-client/src/availability.rs agent/crates/layerx-proof/src/availability.rs"
+symbol = "complete_five_class_retrieval_streams_and_emits_offline_replay_frames corruption_withholding_and_repeated_provider_failure_are_durable_evidence"
+observed = "The unchanged aggregate availability tests fail with complete provider reported partial at line 247 and ChunkOrder versus the required MissingClass at line 311. The owner-authority real-client test passes in the same aggregate execution. Raw evidence is qual-logs/own1/own1d-agentd-tests-final.log and qual-logs/own1/own1d-agentd-tests-all.log."
+assumption = "The availability fixture and verifier contract require separate diagnosis; neither assertion nor verification ordering is changed by owner-registration work."

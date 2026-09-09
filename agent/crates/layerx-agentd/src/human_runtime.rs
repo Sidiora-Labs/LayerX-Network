@@ -3551,6 +3551,194 @@ mod outbound_tls_tests;
 mod owner_authority_tests {
     use super::{decode_owner_authority, hex, OwnerAuthorityError};
 
+    fn native_send(
+        actor: &str,
+        key: &ed25519_dalek::SigningKey,
+        asset: [u8; 32],
+        expiry: u64,
+    ) -> Result<Vec<u8>, String> {
+        use ed25519_dalek::Signer;
+        use sha2::{Digest, Sha256};
+        let name = format!("agent:{actor}:main");
+        let mut account = Sha256::new();
+        account.update(b"LX:ACCOUNT:v1");
+        account.update(
+            u32::try_from(name.len())
+                .map_err(|error| format!("account length: {error:?}"))?
+                .to_be_bytes(),
+        );
+        account.update(name.as_bytes());
+        let source: [u8; 32] = account.finalize().into();
+        let idempotency = [0x83; 32];
+        let mut context = Sha256::new();
+        context.update(b"LXP/v1/context-hash\0");
+        context.update(source);
+        context.update(source);
+        context.update(asset);
+        context.update(1_u128.to_be_bytes());
+        context.update(idempotency);
+        let context: [u8; 32] = context.finalize().into();
+        let mut common = Vec::new();
+        common.extend_from_slice(&source);
+        common.extend_from_slice(&source);
+        common.extend_from_slice(&asset);
+        common.extend_from_slice(&1_u128.to_be_bytes());
+        common.extend_from_slice(&0_u64.to_be_bytes());
+        common.extend_from_slice(&idempotency);
+        common.extend_from_slice(&expiry.to_be_bytes());
+        common.extend_from_slice(&context);
+        common.push(0);
+        let mut tail = context.to_vec();
+        tail.extend_from_slice(&77_u32.to_be_bytes());
+        tail.extend_from_slice(&3_u16.to_be_bytes());
+        let mut authorization = b"LXP/v1/signature-preimage\0".to_vec();
+        authorization.extend_from_slice(&0x5301_u16.to_be_bytes());
+        authorization.extend_from_slice(&common);
+        authorization.push(1);
+        authorization.extend_from_slice(&source);
+        authorization.extend_from_slice(&tail);
+        let signature = key.sign(&Sha256::digest(&authorization));
+        let mut payload = vec![0x53, 1, 0, 10];
+        payload.extend_from_slice(&common);
+        payload.push(1);
+        payload.extend_from_slice(&source);
+        payload.extend_from_slice(&key.verifying_key().to_bytes());
+        payload.extend_from_slice(&signature.to_bytes());
+        payload.extend_from_slice(&tail);
+        Ok(payload)
+    }
+
+    fn native_client(socket: String) -> Result<layerx_client::Client, String> {
+        use layerx_client::client::{Client, ClientConfig, ReconnectPolicy};
+        use layerx_client::lni::handshake::HandshakeConfig;
+        use layerx_client::lni::schema::Version;
+        use layerx_client::lni::transport::Limits;
+        use std::path::PathBuf;
+        use std::time::Duration;
+        Client::connect(ClientConfig {
+            endpoint: PathBuf::from(socket),
+            handshake: HandshakeConfig {
+                built_interface_version: Version::V1_3,
+                expected_protocol_version: 3,
+                expected_network_id: 77,
+            },
+            limits: Limits {
+                maximum_frame_bytes: 1_212_416,
+                maximum_connections: 1,
+                maximum_streams: 4,
+                maximum_queued_bytes: 4_849_664,
+                deadline: Duration::from_secs(10),
+            },
+            reconnect: ReconnectPolicy {
+                maximum_attempts: 1,
+                base_delay: Duration::from_millis(50),
+                maximum_delay: Duration::from_millis(50),
+                jitter_percent: 0,
+            },
+        })
+        .map_err(|error| format!("authenticated native client: {error:?}"))
+    }
+
+    #[test]
+    fn real_owner_authority_prepares_over_temp_socket() -> Result<(), String> {
+        use super::{
+            prepare_activity_for_protocol, ActivityType, Amount, Did, IdempotencyKey,
+            PreparationDefaults, PrepareRequest, ProductionCorePreparationBoundary,
+        };
+        use std::path::PathBuf;
+        let Ok(socket) = std::env::var("LAYERX_TEST_OWNER_AUTHORITY_SOCKET") else {
+            let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
+            let status = std::process::Command::new("bash")
+                .arg(repo.join("tests/daemon/program-admission.sh"))
+                .args(["build", "--owner-authority"])
+                .arg(
+                    std::env::current_exe()
+                        .map_err(|error| format!("current test binary: {error:?}"))?,
+                )
+                .status()
+                .map_err(|error| format!("real daemon harness: {error:?}"))?;
+            assert!(
+                status.success(),
+                "real authority preparation harness refused"
+            );
+            return Ok(());
+        };
+        let public = std::env::var("LAYERX_TEST_OWNER_AUTHORITY_PUBLIC")
+            .map_err(|error| format!("native public key: {error:?}"))?;
+        let actor = std::env::var("LAYERX_TEST_OWNER_AUTHORITY_DID")
+            .map_err(|error| format!("native DID: {error:?}"))?;
+        let mut client = native_client(socket)?;
+        let key = super::digest_from_hex(&public)
+            .ok_or_else(|| "native public key encoding".to_owned())?;
+        let key_file = std::env::var("LAYERX_TEST_OWNER_AUTHORITY_KEY_FILE")
+            .map_err(|error| format!("native signing key path: {error:?}"))?;
+        let seed: [u8; 32] = std::fs::read(key_file)
+            .map_err(|error| format!("native signing key file: {error:?}"))?
+            .try_into()
+            .map_err(|_| "native signing key length".to_owned())?;
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
+        assert_eq!(signing_key.verifying_key().to_bytes(), key);
+        let asset = std::env::var("LAYERX_TEST_OWNER_AUTHORITY_ASSET")
+            .map_err(|error| format!("native asset: {error:?}"))?;
+        let asset =
+            super::digest_from_hex(&asset).ok_or_else(|| "native asset encoding".to_owned())?;
+        let native_actor =
+            Did::new(actor.as_bytes()).map_err(|error| format!("native actor: {error:?}"))?;
+        let now = client
+            .preparation_state(&native_actor, 100)
+            .map_err(|error| format!("native clock: {error:?}"))?
+            .protocol_timestamp;
+        let expires = now
+            .checked_add(30_000)
+            .ok_or_else(|| "test clock overflow".to_owned())?;
+        let payload = native_send(&actor, &signing_key, asset, expires)?;
+        for (index, reference) in [public.clone(), format!("did:layerx:{public}")]
+            .iter()
+            .enumerate()
+        {
+            let mut boundary = ProductionCorePreparationBoundary::new(
+                &mut client,
+                u64::try_from(index + 1).map_err(|error| format!("correlation: {error:?}"))?,
+            )
+            .map_err(|error| format!("production adapter: {error:?}"))?;
+            let authority = decode_owner_authority(reference)
+                .map_err(|error| format!("canonical authority: {error:?}"))?;
+            let prepared = prepare_activity_for_protocol(
+                &mut boundary,
+                PreparationDefaults {
+                    timestamp_span: 60_000,
+                    fee_limit: Amount::ZERO,
+                    maximum_payload_bytes: 1024,
+                },
+                PrepareRequest {
+                    actor: Did::new(actor.as_bytes())
+                        .map_err(|error| format!("native actor: {error:?}"))?,
+                    authority,
+                    activity_type: ActivityType::from_u32(0x0001_0005)
+                        .map_err(|error| format!("Asset SEND: {error:?}"))?,
+                    expected_account_sequence: Some(0),
+                    timestamp_bound: Some(
+                        super::TimestampBound::new(now.saturating_sub(1000), expires)
+                            .map_err(|error| format!("native timestamp bound: {error:?}"))?,
+                    ),
+                    fee_limit: Some(Amount::ZERO),
+                    idempotency_key: IdempotencyKey::new([0x83; 32]),
+                    payload: payload.clone(),
+                    declared_payload_limit: 1024,
+                },
+                3,
+            )
+            .map_err(|error| format!("real node preparation: {error:?}"))?;
+            assert_eq!(prepared.envelope.authority().as_bytes(), key);
+            assert_eq!(prepared.envelope.authority().as_bytes().len(), 32);
+            assert!(!prepared
+                .canonical_bytes
+                .windows(public.len())
+                .any(|window| window == public.as_bytes()));
+        }
+        Ok(())
+    }
+
     #[test]
     fn ed25519_authority_decodes_from_hex_and_did() {
         let signer = ed25519_dalek::SigningKey::from_bytes(&[0x83; 32]);
