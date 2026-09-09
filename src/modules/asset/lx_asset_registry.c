@@ -563,6 +563,35 @@ lxp_result lx_asset_record_decode(const uint8_t *bytes, size_t length,
         LXP_OK : LXP_ERR_NON_CANONICAL;
 }
 
+lxp_result lx_asset_record_migrate_v2(const uint8_t *bytes, size_t length,
+    const uint8_t salt[32], uint8_t *output, size_t capacity, size_t *output_length)
+{
+    uint8_t candidate[384];
+    lx_asset_record record;
+    lxp_hash_context hash;
+    uint8_t expected[32];
+    lxp_result status;
+    if (bytes == NULL || salt == NULL || output == NULL || output_length == NULL ||
+        length < 2U || length > sizeof(candidate) - 32U ||
+        bytes[0] != 0U || bytes[1] != 2U)
+        return LXP_ERR_NON_CANONICAL;
+    (void)memcpy(candidate, bytes, length);
+    candidate[1] = 3U;
+    (void)memcpy(candidate + length, salt, 32U);
+    status = lx_asset_record_decode(candidate, length + 32U, &record);
+    if (status != LXP_OK) return status;
+    if (record.issuer_kind == 1U) {
+        lxp_hash_init(&hash);
+        status = lxp_hash_update(&hash, (const uint8_t *)"LX:ASSET:v1", 11U);
+        if (status == LXP_OK) status = lxp_hash_update(&hash, record.issuer_did32, 32U);
+        if (status == LXP_OK) status = lxp_hash_update(&hash, salt, 32U);
+        if (status == LXP_OK) status = lxp_hash_final(&hash, expected);
+        if (status != LXP_OK) return status;
+        if (memcmp(expected, record.asset_id, 32U) != 0) return LXP_ERR_ASSET_MISMATCH;
+    }
+    return lx_asset_record_encode(&record, output, capacity, output_length);
+}
+
 lxp_result lx_asset_transfer_state(const lx_asset_record *record,
                                    lxp_transfer_asset_state *state)
 {
