@@ -28,63 +28,71 @@ spec:
       shareProcessNamespace: true
       terminationGracePeriodSeconds: 60
       initContainers:
-      - name: human-directories
-        image: ghcr.io/sidiora-labs/layerx-human:0.1.0
+        - name: human-directories
+          image: ghcr.io/sidiora-labs/layerx-human:0.1.0
           imagePullPolicy: Always
-        command:
-        - /bin/sh
-        - -ec
-            - |
-          install -d -o 4020 -g 4020 -m 0750 /run/layerx/human
-          install -d -o 4021 -g 4020 -m 0750 /run/layerx/human/owner
-          install -d -o 4020 -g 4020 -m 0700 /human-state/components
-          install -d -o 4021 -g 4020 -m 0700 /human-state/agent
-          install -d -o 4020 -g 4020 -m 0700 /human-state/identity
-          install -d -o 4020 -g 4020 -m 0700 /human-state/security
-          install -d -o 4020 -g 4020 -m 0700 /human-state/movement
-          install -d -o 4020 -g 4020 -m 0700 /human-state/movement/evidence
-          install -d -o 4021 -g 4020 -m 0700 /human-state/authority
-          install -d -o 4026 -g 4020 -m 0700 /human-state/kms
-        securityContext:
-          runAsNonRoot: false
-          runAsUser: 0
-          runAsGroup: 4020
-          allowPrivilegeEscalation: false
-          readOnlyRootFilesystem: true
-          capabilities:
-            drop:
-            - ALL
-            add:
-            - CHOWN
-            - FOWNER
-            - DAC_OVERRIDE
-        resources:
-          requests:
-            cpu: 10m
-            memory: 16Mi
-          limits:
-            cpu: 100m
-            memory: 32Mi
+          command:
+          - /bin/sh
+          - -ec
+          - |
+            install -d -o 4020 -g 4020 -m 0750 /run/layerx/human
+            install -d -o 4021 -g 4020 -m 0750 /run/layerx/human/owner
+            install -d -o 4020 -g 4020 -m 0700 /human-state/components
+            install -d -o 4021 -g 4020 -m 0700 /human-state/agent
+            install -d -o 4020 -g 4020 -m 0700 /human-state/identity
+            install -d -o 4020 -g 4020 -m 0700 /human-state/security
+            install -d -o 4020 -g 4020 -m 0700 /human-state/movement
+            install -d -o 4020 -g 4020 -m 0700 /human-state/movement/evidence
+            install -d -o 4021 -g 4020 -m 0700 /human-state/authority
+            install -d -o 4026 -g 4020 -m 0700 /human-state/kms
+          securityContext:
+            runAsNonRoot: false
+            runAsUser: 0
+            runAsGroup: 4020
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+              - ALL
+              add:
+              - CHOWN
+              - FOWNER
+              - DAC_OVERRIDE
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 32Mi
           volumeMounts:
-        - name: run
-          mountPath: /run/layerx
-        - name: human-state
-          mountPath: /human-state
-      - name: human-authority-material
+          - name: run
+            mountPath: /run/layerx
+          - name: human-state
+            mountPath: /human-state
+        - name: human-authority-material
+          image: ghcr.io/sidiora-labs/layerx-human:0.1.0
+          imagePullPolicy: Always
           command: [/bin/sh, -ec]
           args:
-            umask 077
-            install -d -m 0700 /run/authority-private/material
-            install -m 0600 /run/authority-input/authority-token /run/authority-private/material/human-agent.token
-            install -m 0600 /run/authority-input/principal-policy.json /run/authority-private/material/principal-policy.json
-            install -m 0600 /run/module-registry/registry.json /run/authority-private/material/registry.json
-        securityContext: {runAsUser: 4021, runAsGroup: 4020, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
-        resources: {requests: {cpu: 10m, memory: 16Mi}, limits: {cpu: 100m, memory: 32Mi}}
-          - {name: human-authority, mountPath: /run/authority-input, readOnly: true}
-          - {name: human-authority-private, mountPath: /run/authority-private}
-          - {name: human-module-registry, mountPath: /run/module-registry, readOnly: true}
+            - |
+              umask 077
+              install -d -m 0700 /run/authority-private/material
+              install -m 0600 /run/authority-input/authority-token /run/authority-private/material/human-agent.token
+              install -m 0600 /run/authority-input/principal-policy.json /run/authority-private/material/principal-policy.json
+              install -m 0600 /run/module-registry/registry.json /run/authority-private/material/registry.json
+          securityContext: {runAsUser: 4021, runAsGroup: 4020, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          resources: {requests: {cpu: 10m, memory: 16Mi}, limits: {cpu: 100m, memory: 32Mi}}
+          volumeMounts:
+            - {name: human-authority, mountPath: /run/authority-input, readOnly: true}
+            - {name: human-authority-private, mountPath: /run/authority-private}
+            - {name: human-module-registry, mountPath: /run/module-registry, readOnly: true}
         - name: guarantor-storage
           image: ghcr.io/sidiora-labs/layerx-node:0.1.0
+          imagePullPolicy: Always
+          command: [/bin/sh, -ec]
+          args:
+            - |
               mkdir -p /var/lib/layerx/guarantor-submitter
               chmod 2770 /var/lib/layerx/guarantor-submitter
               for identity in 1 2; do
@@ -93,6 +101,7 @@ spec:
                 chmod 2770 "/var/lib/layerx/guarantor-$identity/state"
               done
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts:
             - {name: data, mountPath: /var/lib/layerx}
       containers:
         - name: layerxd
@@ -723,7 +732,7 @@ spec:
               command:
                 - /bin/sh
                 - -ec
-                - exec curl --fail --silent --show-error --max-time 5 --config /run/human-private/agent/probe.conf http://127.0.0.1:9451/healthz
+                - exec curl --fail --silent --show-error --max-time 5 --config /run/human-private/agent/probe.conf http://127.0.0.1:9453/healthz
             timeoutSeconds: 6
             periodSeconds: 10
       volumes:
@@ -737,6 +746,9 @@ spec:
             secretName: layerx-human-authority-material
             defaultMode: 0440
         - {name: human-state, persistentVolumeClaim: {claimName: layerx-human-state}}
+        - {name: guarantor-1-tls, secret: {secretName: layerx-guarantor-1-tls, defaultMode: 0440}}
+        - {name: guarantor-2-tls, secret: {secretName: layerx-guarantor-2-tls, defaultMode: 0440}}
+        - {name: checkpoint-submitter, secret: {secretName: paxeer-checkpoint-submitter, defaultMode: 0440}}
         - {name: run, emptyDir: {medium: Memory, sizeLimit: 16Mi}}
         - {name: tmp, emptyDir: {medium: Memory, sizeLimit: 64Mi}}
         - {name: keys, secret: {secretName: layerx-node-keys, defaultMode: 0440}}
