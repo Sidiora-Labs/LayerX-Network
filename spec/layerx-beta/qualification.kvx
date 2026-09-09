@@ -5227,26 +5227,32 @@ file = "agent/crates/layerx-types/src/account.rs agent/crates/layerx-wire/src/ha
 symbol = "AccountId::parse account_id_for_protocol semantics create production_route"
 observed = "Per-asset account names are absent from the closed account namespace and protocol-3 hash validator. The disclosure signer supports Asset SEND and RECEIVE but refuses new asset ordinals as UnsupportedActivity. Hosted CLI account creation submits only email and display_name to the Human account endpoint; it does not register the local signing DID and main account. The gateway route set lacks the specified lx_* RPC surface and typed wallet query/commitment contracts. Source excerpts are retained in qual-logs/pay3/integration-blockers.log."
 assumption = "Wallet registration, per-asset sending, token mutation and commitment verification require the owning account, disclosure and gateway interfaces. CLI-local payload fixtures do not establish signing, execution, receipt verification or public testnet compatibility. No signer bypass, acknowledgement success, account namespace widening or invented RPC evidence schema is introduced."
+severity = "blocker"
+
+[observation.6.11.130]
+task = "6.11"
 file = "agent/crates/layerx-sdk/src/lib.rs agent/sdk/typescript/src/agent-http.ts platform/ src/"
 symbol = "lx_getAccount lx_getBalances lx_sendActivity lx_getActivityStatus lx_getReceipt"
 observed = "Source search for the public wallet JSON-RPC methods finds no implementations. Existing SDK transports expose the typed node boundary and Programs HTTP routes, but no public wallet RPC result schema binds canonical receipts, inclusion proofs and guarantor certificates for the executed, batched and finalised commitment levels. Search evidence: qual-logs/pay2/rpc-contract-search.log; rg exit 1."
 assumption = "Wallet execution and commitment verification require the gateway request/result and proof transport contracts. An admission acknowledgement cannot substitute for verified receipt evidence."
 severity = "blocker"
 
-[observation.6.11.130]
+[observation.6.11.131]
 task = "6.11"
 file = "platform/cli/src/wallet_encoding.rs platform/cli/tests/wallet_encoding.rs platform/cli/tests/fixtures/wallet-assets-v1.json"
 symbol = "AssetOperation::encode asset_id canonical_asset_vectors"
 observed = "CLI-local native asset register, account-open, grant-revoke, mint and burn encoders match retained big-endian fixtures, including a UTF-8 name, maximum supply cap and amounts above u64. Boundary and zero-amount refusal tests pass. cargo fmt --manifest-path platform/cli/Cargo.toml --check, cargo clippy --manifest-path platform/cli/Cargo.toml --all-targets -- -D warnings, cargo test --manifest-path platform/cli/Cargo.toml --test wallet_encoding and cargo test --manifest-path platform/cli/Cargo.toml each exit 0. Logs: qual-logs/pay3/fmt-qualified.log, clippy-qualified.log, wallet-encoding.log and test-private-profile.log, with sibling exit files and exact environment setup in commands.txt."
 assumption = "Qualification uses worktree-local SQLite and real GNOME Keyring packages plus umask 077. Earlier attempts exposed missing sqlite3.h, missing gnome-keyring-daemon and writable temporary profile ancestors; these environment requirements were supplied without changing existing checks. This is payload qualification only: wallet commands, disclosed signing of new ordinals, RPC commitment verification and their quickstart remain incomplete pending the recorded shared interfaces. Cluster and image gates were not run; cg is unavailable."
 severity = "note"
+[observation.6.11.132]
+task = "6.11"
 file = "agent/crates/layerx-agentd/tests/support/real_authority.rs agent/crates/layerx-agentd/tests/budget_create.rs agent/crates/layerx-mcp/src/server.rs agent/crates/layerx-mcp/src/tools/write.rs"
 symbol = "fixture tool_operation execute_payment wait"
 observed = "cargo test --manifest-path agent/Cargo.toml -p layerx-mcp -p layerx-agentd exits 101 because build/bin/layerxd is absent; subsequent budget cases encounter the poisoned fixture lock. The advertised /root/lx-lanes/native-bin/layerxd and layerx-genesis-build binaries are also absent. Logs: qual-logs/pay2/mcp-test.log. Separate cargo test -p layerx-mcp exits 0; focused agentd tenant_resolve, tenant_leakage, tenant_store, tenant_isolation and session tests exit 0. Logs: qual-logs/pay2/mcp-test-isolated.log and qual-logs/pay2/agentd-scope-tests.log. Formatting checks and all-target Clippy with -D warnings pass for crypto, MCP and agentd. The existing TypeScript build and tests pass."
 assumption = "The named payment tools have explicit scopes, canonical daemon operation mappings and ordinary receipt-stage refusal checks. Wallet backend execution and executed/batched/finalised wait evidence remain dependent on the public RPC contract. Full agentd qualification requires real native binaries. No cluster or image gates ran."
 severity = "blocker"
 
-[observation.6.11.131]
+[observation.6.11.133]
 task = "6.11"
 file = "agent/crates/layerx-crypto/src/disclosure.rs platform/hosted/gateway/openrpc.json platform/cli/src/wallet.rs"
 symbol = "decode_send source_sequence payment_preflight"
@@ -5254,7 +5260,7 @@ observed = "The merged disclosure decoder requires Send payload sequence == acti
 assumption = "Send must retain separate sequences and complete disclosure. Writes remain refused before signing until an authenticated identity sequence interface and a compatible Send disclosure decoder exist. No account or global sequence may substitute for the identity sequence."
 severity = "blocker"
 
-[observation.6.11.132]
+[observation.6.11.134]
 task = "6.11"
 file = "spec/layerx-beta/qualification.kvx"
 symbol = "observation.6.11.130"
