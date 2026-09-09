@@ -50,3 +50,17 @@ responses retain native refusals or carry canonical proof bytes as `proof_hex`.
 The existing node bearer and outbound CA settings authenticate this bridge.
 The registry network policies allow only its required boundary port 9443.
 The evidence assembler still runs on the invoking host and needs journal export. Protocol-3 trust histories are accepted explicitly alongside legacy versions 1/2.
+
+The registry StatefulSet and the existing Human owner-provisioning Job mount
+`layerx-registry-journal` PVC, subpath `journal`, at
+`/var/lib/layerx-registry-journal`; both declare that path as
+`LAYERX_REGISTRY_JOURNAL`. The registry initializes it as UID 4030, mode 0700.
+The Job mount is read-only. Registry pod affinity keeps this ReadWriteOnce
+volume on the node pod's host, where the owner Job is already pinned.
+
+This mount does not implement host export. The current owner Job provisions
+identity and account material; the Python evidence assembler runs on the host
+before registry application. Its input must be a protected local copy of
+`pairs/`, owned by its executing user. UID 4020 cannot read UID 4030 mode-0600
+journal files directly. An authorized export/materialization step and corrected
+registry startup order remain required; file modes must not be widened.

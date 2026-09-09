@@ -26,6 +26,8 @@ spec:
               install -m 0600 /run/provision-input/recovery-policy.json /run/provision-private/recovery-policy.json
               exec /usr/local/bin/layerx-human-identity-provider provision-owner < /run/provision-input/owner-request.json
           env:
+            - name: LAYERX_REGISTRY_JOURNAL
+              value: /var/lib/layerx-registry-journal
             - name: LAYERX_HUMAN_IDENTITY_PROVIDER_STATE_ROOT
               value: /var/lib/layerx/human/identity
             - name: LAYERX_HUMAN_IDENTITY_PROVIDER_RECOVERY_POLICY_FILE
@@ -41,6 +43,7 @@ spec:
             requests: {cpu: 100m, memory: 64Mi}
             limits: {cpu: '1', memory: 256Mi}
           volumeMounts:
+            - {name: registry-journal, mountPath: /var/lib/layerx-registry-journal, subPath: journal, readOnly: true}
             - name: state
               mountPath: /var/lib/layerx/human
               subPath: identity
@@ -122,7 +125,11 @@ spec:
           volumeMounts:
             - name: private
               mountPath: /private
+            - {name: registry-journal, mountPath: /var/lib/layerx-registry-journal, subPath: journal, readOnly: true}
       volumes:
+        - name: registry-journal
+          persistentVolumeClaim:
+            claimName: layerx-registry-journal
         - name: state
           persistentVolumeClaim:
             claimName: layerx-human-state

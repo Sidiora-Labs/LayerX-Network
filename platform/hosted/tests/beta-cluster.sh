@@ -1047,6 +1047,7 @@ PYREG
     paxeer_observer_render
     render_manifest "$REPO_ROOT/platform/hosted/testnet/deployment.yaml" "$MANIFESTS_DIR/testnet.yaml"
     render_manifest "$REPO_ROOT/platform/hosted/gateway/deployment.yaml" "$MANIFESTS_DIR/gateway.yaml"
+    render_manifest "$REPO_ROOT/platform/hosted/registry/journal-pvc.yaml" "$MANIFESTS_DIR/registry-journal.yaml"
     render_manifest "$REPO_ROOT/platform/hosted/registry/deployment.yaml" "$MANIFESTS_DIR/registry.yaml"
     render_manifest "$REPO_ROOT/platform/hosted/human/deployment.yaml" "$MANIFESTS_DIR/human.yaml"
     render_manifest "$REPO_ROOT/platform/hosted/internal/deployment.yaml" "$MANIFESTS_DIR/internal.yaml"
@@ -1075,6 +1076,7 @@ EOF
 
 trusted_boundary_apply() {
     local ns="$TESTNET_NAMESPACE" service
+    kube apply -f "$MANIFESTS_DIR/registry-journal.yaml" > /dev/null
     kube apply -f "$MANIFESTS_DIR/paxeer.yaml" > /dev/null
     kube apply -f "$MANIFESTS_DIR/identity.yaml" > /dev/null
     kube -n "$ns" delete deployment layerx-human --ignore-not-found --wait=true > /dev/null
