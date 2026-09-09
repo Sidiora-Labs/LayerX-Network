@@ -666,6 +666,36 @@ static int withdraw_admission(int descriptor, const signer *key, bool recovered)
     payload[47] = 1U;
     memset(payload + 48U, 0x31, 20U);
     memset(payload + 68U, 0x42, 32U);
+    if (getenv("LAYERX_TEST_WITHDRAW_ANCHOR_FILE") != NULL) {
+        const char *anchor_path = getenv("LAYERX_TEST_WITHDRAW_ANCHOR_FILE");
+        char ready[4096];
+        FILE *file = NULL;
+        struct sockaddr_un peer = {0};
+        socklen_t peer_length = sizeof(peer);
+        int reopened;
+        REQUIRE(getpeername(descriptor, (struct sockaddr *)&peer, &peer_length) == 0);
+        REQUIRE(close(descriptor) == 0);
+        int written = snprintf(ready, sizeof(ready), "%s.ready", anchor_path);
+        REQUIRE(written > 0 && (size_t)written < sizeof(ready));
+        file = fopen(ready, "wx");
+        REQUIRE(file != NULL && fclose(file) == 0);
+        for (unsigned attempt = 0U; attempt < 600U; ++attempt) {
+            file = fopen(anchor_path, "rb");
+            if (file != NULL) break;
+            usleep(100000U);
+        }
+        REQUIRE(file != NULL);
+        REQUIRE(fread(payload + 68U, 1U, 32U, file) == 32U);
+        REQUIRE(fgetc(file) == EOF && !ferror(file) && fclose(file) == 0);
+        reopened = socket(AF_UNIX, SOCK_STREAM, 0);
+        REQUIRE(reopened >= 0);
+        if (reopened != descriptor) {
+            REQUIRE(dup2(reopened, descriptor) == descriptor);
+            REQUIRE(close(reopened) == 0);
+        }
+        REQUIRE(connect(descriptor, (struct sockaddr *)&peer, peer_length) == 0);
+        REQUIRE(handshake(descriptor) == 0);
+    }
     REQUIRE(build_activity(key, 1U, LX_ASSET_WITHDRAW, 0U, payload,
         sizeof(payload) - 1U, encoded, sizeof(encoded), &length) == 0);
     REQUIRE(send_request(descriptor, LNI_MINOR, SUBMIT_REQUEST, 90U, encoded, length) == 0);

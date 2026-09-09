@@ -315,11 +315,12 @@ static lxp_result replay_execute_activity(gp_runtime *process, uint64_t global_s
     if (status == LXP_OK &&
         lxp_activity_module_id(activity->activity_type) != LXP_MODULE_PROGRAMS &&
         activity->activity_type != LX_ASSET_SEND &&
+        activity->activity_type != LX_ASSET_WITHDRAW &&
         !(process->custody_credit_enabled && activity->activity_type == LXP_BRIDGE_CREDIT))
         status = LXP_ERR_UNKNOWN_ACTIVITY;
     if (status == LXP_OK &&
         (expected->module_id != lxp_activity_module_id(activity->activity_type) ||
-         (activity->activity_type == LX_ASSET_SEND &&
+         ((activity->activity_type == LX_ASSET_SEND || activity->activity_type == LX_ASSET_WITHDRAW) &&
           expected->module_version != lx_asset_module_iface()->abi_version) ||
          (activity->activity_type == LXP_BRIDGE_CREDIT && expected->module_version != 1U)))
         status = LXP_ERR_VERSION_UNSUPPORTED;
@@ -338,10 +339,10 @@ static lxp_result replay_execute_activity(gp_runtime *process, uint64_t global_s
         return status;
     (void)memset(&scope, 0, sizeof(scope));
     scope.module_mask = UINT64_C(1) << lxp_activity_module_id(activity->activity_type);
-    scope.activity_ordinal_min = activity->activity_type == LX_ASSET_SEND ? 5U : 1U;
+    scope.activity_ordinal_min = (activity->activity_type == LX_ASSET_SEND || activity->activity_type == LX_ASSET_WITHDRAW) ? lxp_activity_type_ordinal(activity->activity_type) : 1U;
     scope.activity_ordinal_max = activity->activity_type == LXP_BRIDGE_CREDIT
                                      ? 1U
-                                     : (activity->activity_type == LX_ASSET_SEND ? 5U : 10U);
+                                     : ((activity->activity_type == LX_ASSET_SEND || activity->activity_type == LX_ASSET_WITHDRAW) ? lxp_activity_type_ordinal(activity->activity_type) : 10U);
     scope.maximum_per_activity = (lxp_u128){UINT64_MAX, UINT64_MAX};
     scope.maximum_total = (lxp_u128){UINT64_MAX, UINT64_MAX};
     scope.maximum_per_period = (lxp_u128){UINT64_MAX, UINT64_MAX};
@@ -1018,4 +1019,75 @@ lxp_result gp_runtime_state_proof(gp_runtime *runtime, uint16_t module_id,
 {
     if (runtime == NULL) return LXP_ERR_NON_CANONICAL;
     return lxp_state_proof_build(&runtime->kernel, module_id, key, proof);
+}
+
+static lxp_result settlement_witness(gp_runtime *runtime, FILE *output,
+                                     uint16_t module_id, lxp_byte_span key)
+{
+    lxp_state_witness *proof = malloc(sizeof(*proof));
+    uint8_t *wire = malloc(LXP_STATE_WITNESS_MAX_BYTES);
+    size_t length = 0U;
+    lxp_result status = proof == NULL || wire == NULL ? LXP_ERR_ARENA_EXHAUSTED : LXP_OK;
+    if (status == LXP_OK) status = gp_runtime_state_proof(runtime, module_id, key, proof);
+    if (status == LXP_OK) status = lxp_state_proof_verify(proof, runtime->kernel.current_state_root);
+    if (status == LXP_OK) status = lxp_state_proof_encode(proof, wire, LXP_STATE_WITNESS_MAX_BYTES, &length);
+    if (status == LXP_OK) {
+        (void)fputs("\"0x", output);
+        for (size_t i = 0U; i < length; ++i) (void)fprintf(output, "%02x", wire[i]);
+        (void)fputc('"', output);
+        if (ferror(output)) status = LXP_ERR_IO;
+    }
+    free(wire);
+    free(proof);
+    return status;
+}
+
+lxp_result gp_runtime_settlement_facts(gp_runtime *runtime, FILE *output)
+{
+    lxp_result status = LXP_OK;
+    size_t count = 0U;
+    if (runtime == NULL || output == NULL || runtime->poisoned)
+        return LXP_ERR_NON_CANONICAL;
+    (void)fputs("{\"balances\":[", output);
+    for (size_t i = 0U; status == LXP_OK && i < runtime->accounts.count; ++i) {
+        const lx_account *account = &runtime->accounts.accounts[i];
+        uint8_t key[33] = {4U};
+        if (account->kind != LX_ACCOUNT_AGENT_MAIN || !account->has_asset) continue;
+        if (!account->has_authority_key) return LXP_ERR_UNAUTHORIZED_DEBIT;
+        if (count++ != 0U) (void)fputc(',', output);
+        (void)memcpy(key + 1U, account->id, 32U);
+        status = settlement_witness(runtime, output, 0U, (lxp_byte_span){key, sizeof(key)});
+    }
+    (void)fputs("],\"withdrawals\":[", output);
+    count = 0U;
+    for (size_t i = 0U; status == LXP_OK && i < runtime->kernel.module_kv_count; ++i) {
+        const lxp_module_kv_entry *entry = &runtime->kernel.module_kv[i];
+        lx_withdrawal_record record;
+        if (entry->module_id != LXP_MODULE_ASSET || entry->key_length != LX_WITHDRAWAL_STATE_KEY_BYTES ||
+            memcmp(entry->key, "withdrawal:", 11U) != 0) continue;
+        status = lx_withdrawal_state_decode(entry->key, entry->key_length, entry->value,
+                                             entry->value_length, &record);
+        if (status != LXP_OK) break;
+        if (count++ != 0U) (void)fputc(',', output);
+        status = settlement_witness(runtime, output, entry->module_id,
+                                    (lxp_byte_span){entry->key, entry->key_length});
+    }
+    (void)fputs("],\"deposits\":[", output);
+    count = 0U;
+    for (size_t i = 0U; status == LXP_OK && i < runtime->kernel.module_kv_count; ++i) {
+        const lxp_module_kv_entry *entry = &runtime->kernel.module_kv[i];
+        if (entry->module_id != LXP_MODULE_BRIDGE || entry->key_length != 50U ||
+            memcmp(entry->key, "deposit-nullifier:", 18U) != 0) continue;
+        if (entry->value_length != LXP_BRIDGE_CREDIT_BYTES) return LXP_ERR_NON_CANONICAL;
+        if (count++ != 0U) (void)fputc(',', output);
+        status = settlement_witness(runtime, output, entry->module_id,
+                                    (lxp_byte_span){entry->key, entry->key_length});
+    }
+    (void)fputs("],\"profile\":", output);
+    if (runtime->custody_credit_enabled && status == LXP_OK)
+        status = settlement_witness(runtime, output, LXP_MODULE_BRIDGE,
+                                    (lxp_byte_span){lxp_bridge_profile_key, 32U});
+    else (void)fputs("null", output);
+    (void)fputc('}', output);
+    return ferror(output) ? LXP_ERR_IO : status;
 }

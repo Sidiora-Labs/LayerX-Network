@@ -297,7 +297,7 @@ static void attestation_json(FILE *file, const lxp_guarantor_attestation *a)
     (void)fprintf(file, ",%u]", (unsigned)a->signature_v);
 }
 lxp_result gp_settlement_register(const gp_settlement_config *config,
-                                  const lxp_guarantor_cert *certificate,
+                                  const lxp_guarantor_cert *certificate, gp_runtime *runtime,
                                   lxp_daemon_settlement_registration_evidence *registration,
                                   bool *already_registered, uint64_t *registered_set_version)
 {
@@ -339,6 +339,17 @@ lxp_result gp_settlement_register(const gp_settlement_config *config,
         attestation_json(input, &certificate->attestations[i]);
     }
     (void)fputc(']', input);
+    if (runtime != NULL) {
+        (void)fputs(",\"publication_state_dir\":", input);
+        quoted(input, config->state_dir);
+        if (config->publication_inputs_dir != NULL) {
+            (void)fputs(",\"publication_inputs_dir\":", input);
+            quoted(input, config->publication_inputs_dir);
+        }
+        (void)fputs(",\"native_facts\":", input);
+        status = gp_runtime_settlement_facts(runtime, input);
+        if (status != LXP_OK) { (void)fclose(input); cleanup(&files); return status; }
+    }
     status = execute(config, "register", &files, input, wire, sizeof(wire), &length);
     cleanup(&files);
     if (status != LXP_OK)
@@ -385,6 +396,7 @@ lxp_result gp_settlement_config_from_env(gp_settlement_config *config, const cha
     config->helper = getenv("LAYERX_GUARANTOR_SETTLEMENT_HELPER");
     config->submitter_key_file = getenv("LAYERX_GUARANTOR_SUBMITTER_KEY_FILE");
     config->submitter_lock_file = getenv("LAYERX_GUARANTOR_SUBMITTER_LOCK_FILE");
+    config->publication_inputs_dir = getenv("LAYERX_GUARANTOR_PUBLICATION_INPUTS_DIR");
     if (config->python == NULL)
         config->python = "python3";
     if (config->helper == NULL)

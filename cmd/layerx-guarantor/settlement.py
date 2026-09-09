@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import fcntl
+import importlib.util
 import hashlib
 import http.client
 import json
@@ -196,6 +197,14 @@ def register(rpc, request):
     return {'already_registered': registered, 'checkpoint_id': '0x' + digest.hex(), 'transaction_id': transaction, 'observed_block_number': block, 'paxeer_chain_id': request['chain_id'], 'settlement_contract': request['settlement_contract'], 'set_version': version, 'observed_at_ms': observed_at_ms, 'members': state['members']}
 
 
+def publish_native(rpc, request):
+    module_spec = importlib.util.spec_from_file_location('guarantor_publication', Path(__file__).with_name('publication.py'))
+    module = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(module)
+    from types import SimpleNamespace
+    return module.publish(SimpleNamespace(**globals()), rpc, request)
+
+
 def wire_encode(mode, result):
     if mode == 'config':
         output = struct.pack('>QI', result['chain_id'], result['network_id']) + raw(result['settlement_contract'], 20) + raw(result['checkpoint_registry'], 20) + struct.pack('>I', len(result['members']))
@@ -253,6 +262,8 @@ def main():
         with os.fdopen(lock_fd, 'r+') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             result = register_with_race_recovery(RPC(request['rpc_url']), request)
+            if 'native_facts' in request:
+                result['publication'] = publish_native(RPC(request['rpc_url']), request)
     if 'wire_output' in request:
         descriptor = os.open(request['wire_output'], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(descriptor, 'wb') as wire:
