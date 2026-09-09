@@ -6,17 +6,17 @@ pub mod authority_evidence;
 pub mod http;
 pub mod store;
 
-use layerx_crypto::disclosure::{AmountRole, CounterpartyRole, bind as bind_disclosure};
-use layerx_crypto::{SignatureMessage, ed25519};
+use layerx_crypto::disclosure::{bind as bind_disclosure, AmountRole, CounterpartyRole};
+use layerx_crypto::{ed25519, SignatureMessage};
 use layerx_proof::program::{
-    AuthorizedProgramExecutionExpectation, ProgramExecutionExpectation, VerifiedProgramExecution,
     verify_authorized_program_execution, verify_program_execution,
+    AuthorizedProgramExecutionExpectation, ProgramExecutionExpectation, VerifiedProgramExecution,
 };
-use layerx_proof::receipt::{AuthorizedBatch, ReceiptCheck, verify_outcome};
+use layerx_proof::receipt::{verify_outcome, AuthorizedBatch, ReceiptCheck};
 use layerx_types::intent::{ProgramCallFailure, ProgramCallOutcome, ProgramLegacyValue};
 pub use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
 use layerx_wire::activity::{decode_signed, encode_signed, encode_unsigned};
-use layerx_wire::hash::{Domain, activity_id};
+use layerx_wire::hash::{activity_id, Domain};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::fmt::{Display, Formatter};
@@ -997,7 +997,7 @@ pub fn configured_sequencer(
 
 #[cfg(test)]
 mod tests {
-    use super::{IssuedKey, ProductionRoute, platform_gateway_program_routes, production_route};
+    use super::{platform_gateway_program_routes, production_route, IssuedKey, ProductionRoute};
 
     #[test]
     fn issued_key_debug_redacts_the_credential() {
@@ -1065,13 +1065,11 @@ mod tests {
         ));
         assert!(production_route("GET", "/v1/programs/activities/aa").is_err());
         assert!(production_route("GET", "/v1/programs/activities/../state").is_err());
-        assert!(
-            production_route(
-                "GET",
-                &format!("/v1/programs/activities/{}", "A".repeat(64))
-            )
-            .is_err()
-        );
+        assert!(production_route(
+            "GET",
+            &format!("/v1/programs/activities/{}", "A".repeat(64))
+        )
+        .is_err());
         assert!(production_route("GET", "/v1/programs/registry").is_err());
     }
 }
