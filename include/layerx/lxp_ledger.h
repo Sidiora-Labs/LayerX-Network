@@ -310,6 +310,10 @@ lxp_result lxp_send_build_transfer_set(const lxp_send *send,
 lxp_result lxp_send_execute(const lxp_send *send,
                             lxp_send_environment *environment,
                             lxp_send_receipt_projection *receipt);
+lxp_result lxp_payer_grant_encode(const lxp_payer_grant *grant,
+                                  uint8_t *bytes, size_t capacity, size_t *length);
+lxp_result lxp_payer_grant_decode(const uint8_t *bytes, size_t length,
+                                  lxp_payer_grant *grant);
 lxp_result lxp_grant_authorization_message(const lxp_payer_grant *grant,
                                            uint8_t *bytes, size_t capacity,
                                            size_t *length);
