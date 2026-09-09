@@ -1,4 +1,5 @@
-use sha2::{Digest as _, Sha256};
+pub use layerx_crypto::payments::asset_id;
+use layerx_crypto::payments::Payment;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AssetRegistration<'a> {
@@ -70,40 +71,48 @@ impl AssetOperation<'_> {
                 bytes.extend_from_slice(&registration.supply_cap.to_be_bytes());
                 bytes.extend_from_slice(&[1, 0]);
             }
-            Self::OpenAccount { asset } => bytes.extend_from_slice(asset),
+            Self::OpenAccount { asset } => {
+                return Payment::OpenAccount { asset: *asset }
+                    .encode(&[])
+                    .map_err(|e| e.to_string())
+            }
             Self::RevokeGrant { grant, sequence } => {
-                bytes.extend_from_slice(grant);
-                bytes.extend_from_slice(&sequence.to_be_bytes());
+                return Payment::RevokeGrant {
+                    grant: *grant,
+                    revocation_sequence: *sequence,
+                }
+                .encode(&[])
+                .map_err(|e| e.to_string())
             }
             Self::Mint {
                 asset,
                 account,
                 amount,
+            } => {
+                return Payment::Mint {
+                    asset: *asset,
+                    to: *account,
+                    amount: *amount,
+                }
+                .encode(&[])
+                .map_err(|e| e.to_string())
             }
-            | Self::Burn {
+            Self::Burn {
                 asset,
                 account,
                 amount,
             } => {
-                if *amount == 0 {
-                    return Err("asset amount must be greater than zero".into());
+                return Payment::Burn {
+                    asset: *asset,
+                    from: *account,
+                    amount: *amount,
                 }
-                bytes.extend_from_slice(asset);
-                bytes.extend_from_slice(account);
-                bytes.extend_from_slice(&amount.to_be_bytes());
+                .encode(&[])
+                .map_err(|e| e.to_string())
             }
         }
         Ok(bytes)
     }
-}
-
-#[must_use]
-pub fn asset_id(issuer: &[u8; 32], salt: &[u8; 32]) -> [u8; 32] {
-    let mut hash = Sha256::new();
-    hash.update(b"LX:ASSET:v1");
-    hash.update(issuer);
-    hash.update(salt);
-    hash.finalize().into()
 }
 
 fn bounded_length(value: &str, maximum: u8, field: &str) -> Result<u8, String> {
