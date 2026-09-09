@@ -28,6 +28,7 @@ k256.workspace = true
 num-bigint.workspace = true
 
 [dev-dependencies]
+layerx-program-sdk = { path = "../../sdk/rust" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 hex = "0.4"

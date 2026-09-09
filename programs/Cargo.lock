@@ -798,6 +798,7 @@ dependencies = [
  "ed25519-dalek",
  "hex",
  "k256",
+ "layerx-program-sdk",
  "num-bigint",
  "serde",
  "serde_json",
