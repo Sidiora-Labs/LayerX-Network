@@ -774,6 +774,7 @@ version = "0.1.0"
 dependencies = [
  "layerx-agent-api",
  "layerx-agentd",
+ "layerx-sdk",
  "layerx-types",
  "sha2",
 ]
