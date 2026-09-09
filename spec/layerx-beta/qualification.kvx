@@ -6780,3 +6780,35 @@ file = "platform/hosted/registry/tests/readiness.py platform/hosted/registry/REA
 symbol = "main request beta_cluster_up manifests_apply"
 observed = "The readiness harness now supplies a fresh valid Idempotency-Key for each real build request; every concurrency, successful-build, latency and rootfs mutation assertion is unchanged. Python syntax validation passes. Live kubectl lookup of statefulset layerx-program-registry exits 1 with NotFound: the full gate refuses Human evidence before manifests_apply deploys the registry. No real registered-program source request or admission/deployment journal pair is produced by this retained bring-up. Readiness concurrency and mutation execution remains blocked and was not run. Evidence: qual-logs/au42/readiness-syntax.log, readiness-syntax.exit, readiness-registry-prerequisite.log, readiness-registry-prerequisite.exit, material-inspection.log and pods.log."
 assumption = "The real-process harness requires an isolated registry process with delegated cgroups, quota slots, private writable rootfs and state, live protocol authority, and a real registered program with published matching source. Those inputs must be provisioned before running its successful-build assertion. Syntax validation and successful image compilation do not establish concurrent readiness latency or mutation refusal."
+
+[observation.3.7.32]
+task = "3.7"
+severity = "note"
+file = "cmd/layerx-genesis/lxp_genesis_builder.c src/protocol/lxp_genesis.c tests/test_genesis_manifest.c"
+symbol = "materialize_snapshot lxp_genesis_materialize"
+observed = "Fresh protocol-3 genesis now requires Programs, Asset, Governance and optional Bridge in daemon registration order, preserving exact module-count and ABI checks. Genesis, identity, grants, rotation, revocation and module-context targets pass. The real-daemon Governance registration, recovery registration and invalid-threshold refusal test passes. Logs: qual-logs/own1/own1c-native-registry.log and qual-logs/own1/own1c-governance-final.log."
+assumption = "This closes the demonstrated Governance genesis mismatch. It does not establish full owner production, restart recovery or checkpoint-finalised Human integration."
+
+[observation.3.7.33]
+task = "3.7"
+severity = "blocker"
+file = "platform/hosted/node/bootstrap.sh platform/hosted/human/owner_native.py platform/hosted/human/provision.sh human/crates/layerx-human-identity-provider/src/state.rs"
+symbol = "GUARANTOR_KEY_FILE human_owner_provision _produce"
+observed = "The merged bootstrap generates secp256k1 guarantor identity keys with 33-byte compressed public keys; it supplies no per-guarantor Ed25519 keys. The Human recovery guardian commitment accepts unique 32-byte Ed25519 public keys. LXIP generates a new did:layerx:act_ identifier only when provisioning, while native production requires that exact DID and owner key already admitted by node startup. Supplying a different key algorithm or substituting a derived key DID cannot satisfy these bindings."
+assumption = "Recovery guardian custody requires an explicit Ed25519 identity binding for each existing guarantor, and native owner admission must bind the actual LXIP DID before first owner activity. Guardian registration as cluster-operated non-independent identities and end-to-end custody-key provisioning remain incomplete."
+
+[observation.3.7.34]
+task = "3.7"
+severity = "blocker"
+file = "platform/hosted/tests/beta-cluster.sh platform/hosted/paxeer/deploy-contracts.sh tests/bridge/custody_credit.py platform/hosted/human/owner_native.py"
+symbol = "paxeer_contracts_deploy custody_registration_publish _produce"
+observed = "The merged cluster script contains settlement deployment, genesis bond deposits and custody genesis registration, but no owner vault deposit or custody_credit.py attest invocation. The owner producer still consumes a protected 427-byte custody-credit.bin. No deposit was executed and no custody credit was produced. Owner request creation now reads only the protected operator owner-email file, and LXIP provisioning precedes registration validation. Hosted Human pytest passes 25 tests and shell syntax checks pass; logs: qual-logs/own1/own1c-human-pytest-final.log and qual-logs/own1/own1c-shell.log."
+assumption = "Complete owner-native.json, recovery-policy.json, recovery-guardians.json and actual in-cluster custody deposit/attestation wiring remain required. No cluster or image gates ran; the build server lacks Docker, Kubernetes and a live cluster."
+
+[observation.3.7.35]
+task = "3.7"
+severity = "blocker"
+file = "platform/hosted/authority/src/human.rs platform/hosted/authority/src/main.rs src/modules/governance/lxp_governance.c agent/crates/layerx-agentd/src/human_runtime.rs"
+symbol = "checkpoint_header native_key_policy policy_route session"
+observed = "Identity and rotation/recovery policy responses now require tag-14 checkpoint evidence from the authenticated node, independently verified by the real client and byte-matched to the receipt batch header. Authority format, all-targets Clippy with warnings denied and locked crate tests pass including both real-node tests; logs: qual-logs/own1/own1c-authority-fmt.log, own1c-authority-clippy-qualified.log and own1c-authority-test.log in the same directory. Positive Human checkpoint responses are not exercised by those existing tests. Capability verification remains refused: native session grants encode not_before/not_after timestamps while the hosted capability contract requires an expiry_sequence and action-key binding without a demonstrated protocol mapping."
+assumption = "No timestamp-to-sequence conversion or assertion-only capability evidence is accepted. Positive checkpoint Human integration, capability mapping, real-client authority adapter coverage and complete Governance lifecycle/restart negative coverage remain required."
