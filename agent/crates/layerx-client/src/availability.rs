@@ -570,6 +570,14 @@ struct Sections {
 
 impl Sections {
     fn from_chunks(chunks: &[VerifiedChunk]) -> Result<Self, AvailabilityFailure> {
+        let classes = class_report(chunks);
+        if !classes.missing.is_empty() {
+            return Err(AvailabilityFailure {
+                check: AvailabilityCheck::MissingClass,
+                classes,
+                ..malformed(chunks)
+            });
+        }
         let activities = section_bytes(chunks, AvailabilityClass::Activities);
         let receipts = section_bytes(chunks, AvailabilityClass::Receipts);
         let oracle = section_bytes(chunks, AvailabilityClass::Oracle);
@@ -730,5 +738,36 @@ impl<'a> RecordReader<'a> {
     fn u32(&mut self) -> Result<u32, ()> {
         let bytes: [u8; 4] = self.bytes(4)?.try_into().map_err(|_| ())?;
         Ok(u32::from_be_bytes(bytes))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decode_records;
+    use crate::availability::Sections;
+    use layerx_wire::encode::Encoder;
+
+    #[test]
+    fn counted_sequences_and_tagged_receipts_remain_canonical() {
+        let mut sequence = Encoder::new(1024);
+        assert_eq!(sequence.sequence_length(1, 1), Ok(()));
+        assert_eq!(sequence.bytes(b"activity", 1024), Ok(()));
+        let bytes = sequence.finish();
+        assert_eq!(
+            decode_records(&bytes, false),
+            Ok(vec![(0, b"activity".to_vec())])
+        );
+        assert_eq!(decode_records(&bytes[4..], false), Err(()));
+        assert_eq!(decode_records(&[], false), Err(()));
+        let mut wrong_count = bytes.clone();
+        wrong_count[..4].copy_from_slice(&2_u32.to_be_bytes());
+        assert_eq!(decode_records(&wrong_count, false), Err(()));
+        let mut receipts = Encoder::new(1024);
+        for (kind, record) in [(2, b"event".as_slice()), (1, b"receipt".as_slice())] {
+            assert_eq!(receipts.u8(kind), Ok(()));
+            assert_eq!(receipts.bytes(record, 1024), Ok(()));
+        }
+        assert_eq!(decode_records(&receipts.finish(), true), Err(()));
+        assert!(Sections::from_chunks(&[]).is_err());
     }
 }

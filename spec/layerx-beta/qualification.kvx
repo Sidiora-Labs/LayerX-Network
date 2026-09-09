@@ -5134,3 +5134,27 @@ symbol = "send_availability fetch_sealed_candidate candidate_fetch"
 observed = "The D4 contract extension adds tag-18 selector 05 followed by batch u64be for one durable sealed signed candidate regardless of finalized head. It uses the same connection UID/GID authorization as tag 28, verified retained header scan and complete canonical bundle verification, ordered tag-19 proof stream and empty tag-20 END. Selectors 01-04 retain their finalized-head refusal. The client entry point shares chunk and record verification and rejects nonempty END proof material. Real-daemon coverage fetches batch 1 against its verified tag-12 header while the checkpoint identifier is zero and before releasing the header to certificate preparation, then fetches batch 9 above finalized batch 1. Existing finalized selectors and -804 assertions remain intact; candidate zero, unknown, unsealed-next-number and corrupt-store requests are refused. make build/bin/layerxd, make test-daemon-availability, make test-daemon-finality-authority, make -k test, cargo fmt --check --manifest-path agent/Cargo.toml -p layerx-client -p layerx-proof, cargo clippy --locked --manifest-path agent/Cargo.toml -p layerx-client -p layerx-proof --all-targets -- -D warnings, cargo test --locked --manifest-path agent/Cargo.toml -p layerx-client -p layerx-proof and make beta-ledger-check exit 0. Logs and sibling exit files: qual-logs/dan1g/build, availability, finality, aggregate, rust-fmt, rust-clippy, rust-test and ledger."
 assumption = "Candidate retrieval neither attests nor registers or finalizes a batch. Both candidate fetches require no certificate for their selected batch; guarantor replay and attestation remain separate responsibilities. Codify context commands could not run because cg is absent. Image and cluster gates were not run."
 severity = "note"
+
+[observation.6.1.36]
+task = "6.1"
+file = "agent/crates/layerx-agentd/src/export.rs agent/crates/layerx-agentd/src/policy/eval.rs agent/crates/layerx-agentd/tests/budget_unknown.rs agent/crates/layerx-agentd/tests/operator.rs"
+symbol = "cargo fmt"
+observed = "cargo fmt --check --manifest-path agent/Cargo.toml -p layerx-client -p layerx-agentd exits 1 with inherited formatting differences in these four untouched files. rustfmt --check --edition 2021 agent/crates/layerx-client/src/availability.rs agent/crates/layerx-agentd/tests/availability.rs exits 0. Evidence: qual-logs/dan2/fmt.log, fmt.exit, fmt-touched.log and fmt-touched.exit."
+assumption = "The formatting differences require the owning scope to repair; touched-file formatting passes without modifying unrelated files."
+severity = "blocker"
+
+[observation.6.1.37]
+task = "6.1"
+file = "agent/crates/layerx-agentd/tests/support/real_authority.rs agent/crates/layerx-agentd/tests/budget_create.rs build/bin/layerxd"
+symbol = "fixture failed_creation_leaves_no_daemon_budget_record"
+observed = "cargo test --locked --manifest-path agent/Cargo.toml -p layerx-client -p layerx-agentd exits 101 at budget_create because build/bin/layerxd is absent. Four further failures report the poisoned real-authority fixture lock. The shared /root/lx-lanes/native-bin directory is also absent. The aggregate stops before completing all package targets. Evidence: qual-logs/dan2/test.log and test.exit."
+assumption = "Provide real native layerxd, layerx-genesis-build and required companion binaries through LAYERX_TEST_NATIVE_BIN_DIR, then rerun the unchanged aggregate gate. No native implementation or test assertion was changed. Image and cluster gates were not run."
+severity = "blocker"
+
+[observation.6.1.38]
+task = "6.1"
+file = "agent/crates/layerx-client/src/availability.rs agent/crates/layerx-agentd/tests/availability.rs"
+symbol = "Sections::from_chunks decode_records class_presence_precedes_decoding_and_complete_chunks_require_order"
+observed = "The availability fixture uses layerx_wire::encode::Encoder for count-prefixed activity/oracle sequences and tagged length-prefixed receipts, matching src/replica/lxp_replay_section.c and src/network/lxp_da_bundle.c. Class presence is checked before record decoding so a withheld oracle section reports MissingClass rather than treating absent bytes as malformed framing. Complete responses retain record decoding, chunk ordering and root verification. Both original daemon assertions remain unchanged. Regression coverage pins empty and withheld responses, missing classes with reordered chunks, complete reordered refusal, successful canonical retrieval, omitted and incorrect sequence counts, and reversed receipt/event tags. Touched-file rustfmt check, locked all-target clippy with -D warnings, daemon availability tests (3), client availability tests (4), and the focused decoder test (1) exit 0. Evidence: qual-logs/dan2/fmt-touched.log, clippy.log, focused.log, client-availability.log and decoder.log with sibling exit files."
+assumption = "Focused qualification passes. Full qualification remains blocked by the inherited formatting differences and absent native binaries recorded separately. The canonical decoder and original assertions were not relaxed."
+severity = "note"
