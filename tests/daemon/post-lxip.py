@@ -2,6 +2,7 @@ import json
 import os
 from pathlib import Path
 import struct
+import shutil
 import subprocess
 import sys
 import time
@@ -18,6 +19,9 @@ work = Path(sys.argv[1])
 provider = repo / 'human/target/debug/layerx-human-identity-provider'
 cli = repo / 'cmd/layerxctl/target/debug/layerxctl'
 socket = work / 'run/layerxd.lni.sock'
+shutil.copyfile(cli, work / 'native-cli')
+cli = work / 'native-cli'
+cli.chmod(0o755)
 generate(work, work, [digest(b'operator', bytes([i])).hex() for i in range(3)])
 root = work / 'human-evidence-input'
 request = dict(email='owner@example.com', display_name='Owner', idempotency_key='native-admission', now=1)
@@ -50,6 +54,9 @@ for _ in range(100):
 assert state.returncode == 0, 'post-LXIP native preparation refused'
 state = json.loads(state.stdout)
 assert state['account_sequence'] == 0 and state['global_sequence'] == 0
+if '--prepare-only' in sys.argv:
+    print('real LXIP owner and protected post-bootstrap native admission prepared')
+    sys.exit(0)
 actor = owner['did'].encode()
 now = time.time_ns() // 1000000
 payload = b'\x71\1\0\2' + digest(b'did-id', struct.pack('>H', len(actor)) + actor) + public
