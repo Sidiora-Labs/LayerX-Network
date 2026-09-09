@@ -670,6 +670,7 @@ dependencies = [
  "ed25519-dalek",
  "layerx-client",
  "layerx-crypto",
+ "layerx-intents",
  "layerx-platform-authority",
  "layerx-platform-core",
  "layerx-programs-registry",

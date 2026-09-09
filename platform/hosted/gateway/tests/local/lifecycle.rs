@@ -1,3 +1,4 @@
+mod funding;
 mod required;
 use required::Required;
 
@@ -823,4 +824,100 @@ fn local_gateway_rpc() {
         )["error"]["code"],
         -32602
     );
+}
+
+#[test]
+fn local_gateway_successful_send_latency() {
+    let (cluster, _funding) = funding::start();
+    let certificates = certificates(&cluster.root);
+    let boundary = start_boundary(&cluster, &certificates);
+    let identity = start_local_identity(&cluster, &certificates);
+    let authority = start_local_authority(&cluster, &certificates);
+    let redis = start_local_redis(&cluster, &certificates);
+    let gateway = start_local_gateway(
+        &cluster,
+        &certificates,
+        &boundary,
+        &identity,
+        &authority,
+        &redis,
+    );
+    let key = issue_local_scoped_key(&certificates, &gateway, &identity, &["activity:write"]);
+    let http = Http {
+        port: gateway.port,
+        ca: Certificate::from_der(&certificates.ca_der).required("CA"),
+        identity: None,
+    };
+    let authorization = format!(
+        "LayerX-Key {}:{}",
+        key["key"]["id"].as_str().required("key id"),
+        key["key"]["secret"].as_str().required("secret")
+    );
+    let source =
+        hex_encode(&layerx_platform_core::main_account(&cluster.treasury_did).required("source"));
+    let balance = boundary.core.get(&format!("/v1/accounts/{source}/balance"));
+    assert_eq!(balance.status, 200, "{}", balance.body);
+    assert_eq!(json(&balance)["result"]["balance"], "100000000000000");
+    println!(
+        "funded_send_sequences identity_next={} account_next={} balance={}",
+        account_sequence(&cluster.lni_socket, &cluster.treasury_did),
+        json(&balance)["result"]["next_sequence"],
+        json(&balance)["result"]["balance"]
+    );
+    let mut samples = Vec::new();
+    for index in 0..20 {
+        let signed = funding::send(
+            &cluster.treasury_seed,
+            &SendRequest {
+                network_id: NETWORK_ID,
+                source_did: cluster.treasury_did.clone(),
+                destination_did: String::new(),
+                asset: cluster.asset,
+                amount: 1,
+                account_sequence: account_sequence(&cluster.lni_socket, &cluster.treasury_did),
+                idempotency_key: random32(),
+                not_before_ms: now_ms() - 1000,
+                expires_at_ms: now_ms() + 60000,
+                fee_limit: 1_000_000_000_000,
+            },
+        )
+        .required("real funded SEND");
+        let request = serde_json::to_vec(
+            &serde_json::json!({"jsonrpc":"2.0","id":index,"method":"lx_sendActivity",
+            "params":[hex_encode(&signed.canonical),"executed"]}),
+        )
+        .required("RPC SEND");
+        let started = Instant::now();
+        let answer = http.request(
+            "POST",
+            "/rpc",
+            &[
+                ("Content-Type", "application/json"),
+                ("Authorization", authorization.as_str()),
+            ],
+            &request,
+        );
+        let elapsed = started.elapsed().as_micros();
+        assert_eq!(answer.status, 200, "{}", answer.body);
+        let result = json(&answer);
+        assert_eq!(result["result"]["commitment"], "executed", "{result}");
+        assert_eq!(result["result"]["result_code"], 0, "{result}");
+        assert_eq!(
+            result["result"]["activity_id"],
+            hex_encode(&signed.activity_id)
+        );
+        let receipt = layerx_platform_core::hex_decode(
+            result["result"]["receipt"].as_str().required("receipt"),
+        )
+        .required("receipt hex");
+        let receipt =
+            layerx_proof::receipt::verify_sequencer_signature(&receipt, cluster.sequencer_key)
+                .required("receipt signature");
+        let receipt = receipt.protocol().required("protocol SEND");
+        assert_eq!(receipt.result_code(), 0);
+        assert_eq!(receipt.activity_id(), signed.activity_id);
+        samples.push(elapsed);
+    }
+    samples.sort_unstable();
+    println!("successful_send_submit_to_receipt_us samples=20 p50={} p99={} transport=gateway_https_json_rpc commitment=executed funding=verified_custody destination=system_fees receipt_wait=commit_condition", samples[9], samples[19]);
 }
