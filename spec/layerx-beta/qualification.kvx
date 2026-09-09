@@ -12297,3 +12297,27 @@ symbol = "execute_payment wallet_receipt read_policy rpc_error"
 observed = "Token registration, mint, burn and account opening prepare canonical shared payments, print disclosure before shared signing, submit through the SDK and require verified receipt commitments bound to the locally computed activity ID. RPC receipt waits accept independently supplied sequencer scope and checkpoint context pins. DID listing errors retain code, message and data. Formatting and all-target Clippy with -D warnings exit 0. cargo test --manifest-path platform/cli/Cargo.toml --no-fail-fast exits 101 solely at the retained lx_getAsset local-rejection assertion; all other tests pass, including the real encrypted credential store, emulator wallet paths, native Send differential fixture, policy bounds and error-preservation tests. Logs: qual-logs/pay3/pay3d-final-fmt.log, pay3d-final-clippy.log, pay3d-final-test.log and pay3d-readme-syntax.log."
 assumption = "Send and token transfer still require the missing shared debit-authorization API. Token metadata/list reads use the CLI RPC transport because typed SDK methods are absent. These source and local-test results do not establish successful integrated public-RPC token execution or finality. Workspace Cargo.lock dependency regeneration is outside the owned CLI crate and is requested separately. No cluster, image or persistent-chain gates were run."
 severity = "blocker"
+
+[observation.6.11.143]
+task = "6.11"
+file = "agent/crates/layerx-sdk/src/wallet.rs platform/cli/src/wallet.rs platform/cli/tests/fixtures/openrpc.json"
+symbol = "prepare_payload execute_payment transfer"
+observed = "The published gateway OpenRPC snapshot dfbb7bf42241a74b2a59fe61323250f7b2865a0e specifies lx_getSequence(account_id) as a source-account snapshot. SDK prepare_payload calls get_sequence with options.actor DID and requires authenticated_node_snapshot identity state. The published gateway rejects that selector, so token create, mint, burn and open-account cannot reach signing through this contract. The CLI preserves upstream refusal; it does not substitute source-account sequence for identity.next_sequence. Raw comparison: qual-logs/pay3/pay3e-identity-contract.log. Independent disclosure source 7 and envelope 19 signing and byte-substitution refusal pass in qual-logs/pay3/pay3e-independent-sequences.log."
+assumption = "A separately specified authenticated identity-sequence read must be coordinated between gateway and SDK owners. Send additionally requires the queued inner debit-authorization signer and shared encoder. Funded unequal-sequence CLI SEND and live token execution have not run."
+severity = "blocker"
+
+[observation.6.11.144]
+task = "6.11"
+file = "agent/crates/layerx-crypto/src/payments.rs agent/crates/layerx-mcp/src/tools/write.rs platform/cli/README.md"
+symbol = "encode_grant PaymentTool"
+observed = "Shared ordinal-6 Receive still emits the legacy 0x5201 structure without the canonical 733-byte authorization and payer grant; encode_grant still uses structure_header(0x2001) instead of the required 346-byte ordinal-7 payer grant. No Receive or IssueGrant CLI write is enabled; current CLI payment construction uses Register, OpenAccount, Mint and Burn. Asset 9 remains reserved. MCP payment tools expose wallet.send, token.create, token.mint and token.transfer; burn, open-account, info and list are absent from that surface. README explicitly documents the smaller MCP surface. Evidence: qual-logs/pay3/pay3e-payment-codecs.log and pay3e-mcp-surface.log."
+assumption = "Signer/native/payment integration owners must correct ordinals 6 and 7 with differential interoperability evidence before enabling those shared write paths. Missing MCP operations require existing daemon signing/read and scope enforcement; CLI/MCP parity is not established."
+severity = "blocker"
+
+[observation.6.11.145]
+task = "6.11"
+file = "platform/cli/src/rpc.rs platform/cli/src/rpc_subscription.rs platform/cli/src/wallet.rs platform/cli/tests/fixtures/openrpc.json platform/Cargo.lock"
+symbol = "positional_requests_match_published_contract subscribe wallet_receipt"
+observed = "The retained OpenRPC fixture is refreshed verbatim from dfbb7bf42241a74b2a59fe61323250f7b2865a0e. Existing assertion logic is retained, with valid lx_getAsset moved to positive inputs and missing asset arguments retained as negative inputs. Fee estimation and authenticated receipt/checkpoint/account WebSocket requests use the published transport. Subscription identifiers and notifications are correlated; notifications are explicitly unverified and establish no commitment. HTTP subscription requests, missing credentials, malformed responses and upstream errors fail closed. Wallet history is hidden from help and retains wallet_history_unavailable. The CLI SDK and WebSocket dependencies are recorded in platform/Cargo.lock. Final format, all-target Clippy with -D warnings, locked full CLI tests and ledger check pass; SDK exact-checkpoint/wrong-header and ack-refusal tests pass. Logs: qual-logs/pay3/pay3e-final-fmt.log, pay3e-final-clippy.log, pay3e-final-test.log, pay3e-final-ledger.log, pay3e-rpc-focused.log and pay3e-sdk-evidence.log."
+assumption = "Hosted DID registration/history have no published backend. Live authenticated gateway fee/asset reads, subscription delivery and token execution remain unqualified. No public deployment, cluster or image gate is implied by local tests."
+severity = "note"
