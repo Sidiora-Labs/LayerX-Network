@@ -330,17 +330,20 @@ the original port, which is why the rebuild is reproducible.
 ## ERC-20, LXT-20 and native assets
 
 `programs/sdk/rust/src/lxt20.rs` defines the seven LXT-20 request encodings.
-These codecs are not a deployed token implementation. The `token-lxt20`
-settlement reference, registry publication and native deploy/call proof remain
-outstanding; do not advertise an ERC-20-compatible token based on codec tests.
+The runnable `programs/sdk/rust/examples/token-lxt20` guest implements the seven
+methods over registered program-derived backing accounts. Its runtime tests
+cover methods, allowances and refusal rollback. The bound interface and registry
+state-value inputs are committed under `programs/fixtures/pay5`; they are not a
+native deployment receipt. Native deploy/call and settlement proof remain blocked
+on the signer-DID/account admission integration recorded in `NEEDS.md`.
 
 | ERC-20 flow | LayerX mapping |
 | --- | --- |
 | `transfer(to, amount)` | LXT-20 `Request::Transfer`; the destination is a 32-byte account ID and amounts are exact u128 units |
 | `approve(spender, amount)` | `Request::Approve`; spender is a DID identity ID, and zero explicitly revokes the program allowance |
-| `transferFrom(owner, to, amount)` | `Request::TransferFrom`; a reference must authenticate the spender, atomically decrement allowance and settle through 402 |
-| `balanceOf`, `allowance`, `totalSupply` | Corresponding request variants; codec support alone supplies no verified balance or supply fact |
-| `name`, `symbol`, `decimals` | One `Metadata` request; authoritative metadata must bind the registered asset |
+| `transferFrom(owner, to, amount)` | `Request::TransferFrom`; the reference checks the spender allowance and stages its decrement with the 402 payment |
+| `balanceOf`, `allowance`, `totalSupply` | Corresponding request variants; the reference returns its token balances and fixed funded supply, while native balance evidence is a separate read |
+| `name`, `symbol`, `decimals` | One `Metadata` request returns configured token metadata; query the native asset registry separately for backing-asset metadata |
 | Native value deposit and payout | `PreparedProgramAccount`, `ProgramDeposit` and `ProgramAccountPayment`; register first, then fund and spend under explicit grants |
 
 Each LXT-20 selector is `4c 58 14 method`, with method numbers 1 through 7
@@ -350,6 +353,19 @@ payload length, and the method fields in declaration order. Identifiers are
 32 bytes and amounts are 16-byte big-endian integers. This is not Solidity ABI
 encoding and does not reuse ERC-20 Keccak selectors. See the committed
 `programs/sdk/rust/vectors/lxt20-requests.txt` vectors.
+
+The reference's recipient account must be derived from the recipient DID id32
+under this program. The recipient first calls `approve` (zero is sufficient),
+and the deployment authority registers the native program account. The configured
+issuer calls `initialize` once with a funding grant for the complete supply.
+Transfers do not mint or burn units. Every `transfer_from` decrements allowance,
+including u128::MAX; each payment also respects the configured per-call ceiling.
+
+Discovery uses interface encoding v2. Its dynamic-spend descriptor contains the
+backing asset, ceiling and calldata offsets for the recipient and amount. Native
+admission checks each call against actual caller-authorized ProgramSpend grants;
+the descriptor itself grants no authority. `ProgramPaymentCapabilities` combines
+funding, spending and ordinary grants in canonical runtime key order.
 
 A program allowance cannot confer kernel debit authority over another DID's
 account. A complete implementation needs authenticated ownership, registered
