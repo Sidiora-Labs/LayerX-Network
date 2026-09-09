@@ -2,18 +2,18 @@
 
 /// Helper trait to allow chaining
 pub trait Invoke<A> {
-	type Result;
+    type Result;
 
-	fn invoke(self, arg: A) -> Self::Result;
+    fn invoke(self, arg: A) -> Self::Result;
 }
 
 /// Identity chain element
 pub struct Identity;
 
 impl<A> Invoke<A> for Identity {
-	type Result = A;
+    type Result = A;
 
-	fn invoke(self, arg: A) -> A {
-		arg
-	}
+    fn invoke(self, arg: A) -> A {
+        arg
+    }
 }

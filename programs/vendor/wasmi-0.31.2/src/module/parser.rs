@@ -3,21 +3,12 @@ use super::{
     export::ExternIdx,
     global::Global,
     import::{FuncTypeIdx, Import},
-    DataSegment,
-    ElementSegment,
-    FuncIdx,
-    Module,
-    ModuleBuilder,
-    ModuleError,
-    ModuleResources,
+    DataSegment, ElementSegment, FuncIdx, Module, ModuleBuilder, ModuleError, ModuleResources,
     Read,
 };
 use crate::{
     engine::{CompiledFunc, FuncTranslatorAllocations},
-    Engine,
-    FuncType,
-    MemoryType,
-    TableType,
+    Engine, FuncType, MemoryType, TableType,
 };
 use alloc::{boxed::Box, vec::Vec};
 use core::{
@@ -25,23 +16,10 @@ use core::{
     ops::Range,
 };
 use wasmparser::{
-    Chunk,
-    DataSectionReader,
-    ElementSectionReader,
-    Encoding,
-    ExportSectionReader,
-    FuncValidatorAllocations,
-    FunctionBody,
-    FunctionSectionReader,
-    GlobalSectionReader,
-    ImportSectionReader,
-    MemorySectionReader,
-    Parser as WasmParser,
-    Payload,
-    TableSectionReader,
-    TypeSectionReader,
-    Validator,
-    WasmFeatures,
+    Chunk, DataSectionReader, ElementSectionReader, Encoding, ExportSectionReader,
+    FuncValidatorAllocations, FunctionBody, FunctionSectionReader, GlobalSectionReader,
+    ImportSectionReader, MemorySectionReader, Parser as WasmParser, Payload, TableSectionReader,
+    TypeSectionReader, Validator, WasmFeatures,
 };
 
 /// Parses and validates the given Wasm bytecode stream.

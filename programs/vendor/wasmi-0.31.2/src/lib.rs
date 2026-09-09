@@ -89,8 +89,8 @@ mod foreach_tuple;
 
 mod engine;
 mod error;
-mod externref;
 mod execution_trace;
+mod externref;
 mod func;
 mod global;
 mod instance;
@@ -120,31 +120,24 @@ pub mod errors {
     };
 }
 
+pub use self::execution_trace::{
+    ExecutionControlFrame, ExecutionControlKind, ExecutionDataSegment, ExecutionElementSegment,
+    ExecutionFrame as ExecutionTraceFrame, ExecutionFunctionRef,
+    ExecutionGlobal as ExecutionTraceGlobal, ExecutionInstanceState, ExecutionMemory,
+    ExecutionMeteredUsage, ExecutionObserverError, ExecutionSnapshot, ExecutionSupplement,
+    ExecutionTable, ExecutionTransition, ExecutionValue as ExecutionTraceValue, ExecutionValueType,
+    ObservationCharge,
+};
 pub use self::{
     engine::{
-        Config,
-        Engine,
-        FuelConsumptionMode,
-        ResumableCall,
-        ResumableInvocation,
-        StackLimits,
-        TypedResumableCall,
-        TypedResumableInvocation,
+        Config, Engine, FuelConsumptionMode, ResumableCall, ResumableInvocation, StackLimits,
+        TypedResumableCall, TypedResumableInvocation,
     },
     error::Error,
     externref::ExternRef,
     func::{
-        Caller,
-        Func,
-        FuncRef,
-        FuncType,
-        IntoFunc,
-        TypedFunc,
-        WasmParams,
-        WasmResults,
-        WasmRet,
-        WasmType,
-        WasmTypeList,
+        Caller, Func, FuncRef, FuncType, IntoFunc, TypedFunc, WasmParams, WasmResults, WasmRet,
+        WasmType, WasmTypeList,
     },
     global::{Global, GlobalType, Mutability},
     instance::{Export, ExportsIter, Extern, ExternType, Instance},
@@ -152,25 +145,11 @@ pub use self::{
     linker::Linker,
     memory::{Memory, MemoryType},
     module::{
-        ExportType,
-        ImportType,
-        InstancePre,
-        Module,
-        ModuleExportsIter,
-        ModuleImportsIter,
-        Read,
+        ExportType, ImportType, InstancePre, Module, ModuleExportsIter, ModuleImportsIter, Read,
     },
     store::{AsContext, AsContextMut, Store, StoreContext, StoreContextMut},
     table::{Table, TableType},
     value::Value,
-};
-pub use self::execution_trace::{
-    ExecutionFrame as ExecutionTraceFrame, ExecutionGlobal as ExecutionTraceGlobal,
-    ExecutionControlFrame, ExecutionControlKind, ExecutionDataSegment, ExecutionElementSegment,
-    ExecutionFunctionRef, ExecutionInstanceState, ExecutionMemory, ExecutionMeteredUsage,
-    ExecutionObserverError, ExecutionSnapshot, ExecutionSupplement, ExecutionTable,
-    ExecutionTransition, ExecutionValue as ExecutionTraceValue, ObservationCharge,
-    ExecutionValueType,
 };
 use self::{
     func::{FuncEntity, FuncIdx},

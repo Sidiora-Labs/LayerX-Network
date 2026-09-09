@@ -8,9 +8,7 @@ mod translator;
 mod value_stack;
 
 use self::{
-    control_frame::ControlFrame,
-    control_stack::ControlFlowStack,
-    translator::FuncTranslator,
+    control_frame::ControlFrame, control_stack::ControlFlowStack, translator::FuncTranslator,
 };
 pub use self::{
     error::{TranslationError, TranslationErrorInner},
@@ -123,19 +121,39 @@ impl<'parser> FuncBuilder<'parser> {
         let control_stack = (0..self.validator.control_stack_height() as usize)
             .rev()
             .map(|depth| {
-                let frame = self.validator.get_control_frame(depth).expect("validator control frame must exist");
+                let frame = self
+                    .validator
+                    .get_control_frame(depth)
+                    .expect("validator control frame must exist");
                 let kind = match frame.kind {
-                    wasmparser::FrameKind::Block => crate::execution_trace::ExecutionControlKind::Block,
+                    wasmparser::FrameKind::Block => {
+                        crate::execution_trace::ExecutionControlKind::Block
+                    }
                     wasmparser::FrameKind::If => crate::execution_trace::ExecutionControlKind::If,
-                    wasmparser::FrameKind::Else => crate::execution_trace::ExecutionControlKind::Else,
-                    wasmparser::FrameKind::Loop => crate::execution_trace::ExecutionControlKind::Loop,
-                    _ => return Err(TranslationError::unsupported_value_type(wasmparser::ValType::V128)),
+                    wasmparser::FrameKind::Else => {
+                        crate::execution_trace::ExecutionControlKind::Else
+                    }
+                    wasmparser::FrameKind::Loop => {
+                        crate::execution_trace::ExecutionControlKind::Loop
+                    }
+                    _ => {
+                        return Err(TranslationError::unsupported_value_type(
+                            wasmparser::ValType::V128,
+                        ))
+                    }
                 };
-                Ok(crate::execution_trace::ExecutionControlFrame { kind, operand_stack_height: frame.height.try_into().map_err(|_| TranslationError::new(TranslationErrorInner::BranchOffsetOutOfBounds))?, unreachable: frame.unreachable })
+                Ok(crate::execution_trace::ExecutionControlFrame {
+                    kind,
+                    operand_stack_height: frame.height.try_into().map_err(|_| {
+                        TranslationError::new(TranslationErrorInner::BranchOffsetOutOfBounds)
+                    })?,
+                    unreachable: frame.unreachable,
+                })
             })
             .collect::<Result<alloc::vec::Vec<_>, TranslationError>>()?;
         validate(&mut self.validator)?;
-        self.translator.begin_operator(self.pos, operand_types, control_stack)?;
+        self.translator
+            .begin_operator(self.pos, operand_types, control_stack)?;
         translate(&mut self.translator)?;
         Ok(())
     }

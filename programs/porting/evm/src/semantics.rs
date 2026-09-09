@@ -11,7 +11,7 @@ use crate::keccak::{keccak256, selector};
 use crate::value::Word;
 
 /// Solidity execution vocabulary read directly from authenticated ABI v2 facts.
-#[cfg(target_arch="wasm32")]
+#[cfg(target_arch = "wasm32")]
 pub use layerx_porting_evm_guest as context;
 
 const MAX_SIGNATURE_BYTES: usize = 256;
