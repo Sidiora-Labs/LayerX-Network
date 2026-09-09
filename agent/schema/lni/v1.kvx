@@ -47,7 +47,7 @@ golden = "0001000000040000000000000000000000010400000001a5"
 name = "ReceiptLookupRequest"
 kind = "request"
 capability = "receipt_lookup"
-canonical_payload = "canonical activity-id, idempotency-key, or sequence selector bytes"
+canonical_payload = "selector kind:u8 plus identity: kind 1 activity_id32, kind 2 idempotency_key32, or kind 3 global_sequence:u64be; optional trailing wait_ms:u32be (0..30000). All integers big-endian. Omitting the suffix is wait_ms 0. wait_ms above 30000 is refused."
 proof_material = "empty"
 golden = "0001000000050000000000000000000000010500000000"
 

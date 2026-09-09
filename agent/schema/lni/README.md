@@ -62,6 +62,14 @@ authentication-and-durability guarantee only when
 | 4 | `SubmitResponse` | response | `submit` |
 | 5 | `ReceiptLookupRequest` | request | `receipt_lookup` |
 | 6 | `ReceiptLookupResponse` | response | `receipt_lookup` |
+
+`ReceiptLookupRequest` payload is selector kind `1` plus `activity_id32`,
+kind `2` plus `idempotency_key32`, or kind `3` plus
+`global_sequence:u64be`, optionally followed by `wait_ms:u32be` in
+`0..=30000`. Integers are big-endian. Omitting the suffix is a
+non-blocking lookup. The daemon waits on the commit condition up to
+that bound and still returns an empty tag-6 payload when the receipt
+is absent.
 | 7 | `AccountReadRequest` | request | `account_read` |
 | 8 | `AccountReadResponse` | response | `account_read` |
 | 9 | `HistoryRangeRequest` | request | `history_range` |
