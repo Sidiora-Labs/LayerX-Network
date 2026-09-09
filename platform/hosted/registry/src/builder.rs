@@ -42,7 +42,7 @@ impl Drop for QuotaWorkspace {
 }
 
 /// Sandbox that executes exactly one declared build command per attempt.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct HermeticBuilder {
     workspace: PathBuf,
     builder_image_digest: [u8; 32],
@@ -57,6 +57,8 @@ pub struct HermeticBuilder {
     memory_bytes: u64,
     process_limit: u32,
     file_size_bytes: u64,
+    environment_metadata: [u8; 32],
+    #[serde(skip)]
     request_deadline: std::sync::Arc<Mutex<Option<Instant>>>,
 }
 
@@ -117,7 +119,10 @@ impl HermeticBuilder {
         }
         let environment_root = fs::canonicalize(&environment_root)
             .map_err(|error| format!("builder environment is unavailable: {error}"))?;
-        if environment_digest(&environment_root, None)? != builder_image_digest {
+        let environment_metadata = environment_metadata(&environment_root)?;
+        if environment_digest(&environment_root, None)? != builder_image_digest
+            || self::environment_metadata(&environment_root)? != environment_metadata
+        {
             return Err(
                 "builder environment bytes do not match the configured immutable digest".to_owned(),
             );
@@ -158,8 +163,46 @@ impl HermeticBuilder {
             memory_bytes,
             process_limit,
             file_size_bytes,
+            environment_metadata,
             request_deadline: std::sync::Arc::new(Mutex::new(None)),
         })
+    }
+
+    /// Restores the parent-verified builder inside the isolated worker boundary.
+    ///
+    /// # Errors
+    /// Refuses an unusable delegated cgroup or workspace boundary.
+    pub fn bind_worker(mut self, config: &crate::Config) -> Result<Self, String> {
+        self.cgroup_root =
+            fs::canonicalize(&config.builder_cgroup_root).map_err(|error| error.to_string())?;
+        self.workspace = validate_build_boundary(&config.workspace, &self.cgroup_root)?;
+        Ok(self)
+    }
+
+    /// Checks the complete metadata tree without reading environment file contents.
+    ///
+    /// # Errors
+    /// Refuses changed or inaccessible builder inputs.
+    pub fn check_environment_metadata(&self) -> Result<(), String> {
+        if environment_metadata(&self.environment_root)? != self.environment_metadata {
+            return Err("builder environment metadata changed".to_owned());
+        }
+        Ok(())
+    }
+
+    /// Re-verifies changed inputs off the request path before restoring readiness.
+    ///
+    /// # Errors
+    /// Refuses bytes that differ from the startup pin or change during verification.
+    pub fn reverify_environment(&mut self) -> Result<(), String> {
+        let metadata = environment_metadata(&self.environment_root)?;
+        if environment_digest(&self.environment_root, None)? != self.builder_image_digest
+            || environment_metadata(&self.environment_root)? != metadata
+        {
+            return Err("builder environment differs from its startup pin".to_owned());
+        }
+        self.environment_metadata = metadata;
+        Ok(())
     }
 
     /// Binds subsequent attempts to the monotonic ingress deadline.
@@ -547,6 +590,105 @@ fn verified_executable_fd(path: &Path, expected: [u8; 32], label: &str) -> Resul
     Ok(file)
 }
 
+struct EnvironmentWatch {
+    descriptor: std::os::fd::OwnedFd,
+    generation: u64,
+}
+
+static ENVIRONMENT_WATCHES: std::sync::OnceLock<
+    Mutex<std::collections::BTreeMap<PathBuf, EnvironmentWatch>>,
+> = std::sync::OnceLock::new();
+
+fn environment_metadata(root: &Path) -> Result<[u8; 32], String> {
+    use rustix::fs::inotify::{self, CreateFlags, WatchFlags};
+    use std::os::unix::fs::MetadataExt as _;
+
+    let mut watches = ENVIRONMENT_WATCHES
+        .get_or_init(|| Mutex::new(std::collections::BTreeMap::new()))
+        .lock()
+        .map_err(|_| "builder change detector lock is unavailable".to_owned())?;
+    if !watches.contains_key(root) {
+        let descriptor = inotify::init(CreateFlags::NONBLOCK | CreateFlags::CLOEXEC)
+            .map_err(|error| format!("builder change detector is unavailable: {error}"))?;
+        watches.insert(
+            root.to_path_buf(),
+            EnvironmentWatch {
+                descriptor,
+                generation: 0,
+            },
+        );
+    }
+    let watch = watches
+        .get_mut(root)
+        .ok_or("builder change detector is unavailable")?;
+    let mut pending = vec![root.to_path_buf()];
+    let mut entries = Vec::new();
+    while let Some(path) = pending.pop() {
+        let metadata = fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
+        if metadata.is_dir() {
+            inotify::add_watch(
+                &watch.descriptor,
+                &path,
+                WatchFlags::MODIFY
+                    | WatchFlags::ATTRIB
+                    | WatchFlags::CREATE
+                    | WatchFlags::DELETE
+                    | WatchFlags::DELETE_SELF
+                    | WatchFlags::MOVE_SELF
+                    | WatchFlags::MOVED_FROM
+                    | WatchFlags::MOVED_TO,
+            )
+            .map_err(|error| format!("builder directory watch is unavailable: {error}"))?;
+            for entry in fs::read_dir(&path).map_err(|error| error.to_string())? {
+                pending.push(entry.map_err(|error| error.to_string())?.path());
+            }
+        } else if !metadata.is_file() {
+            return Err("builder environment contains a non-regular object".to_owned());
+        }
+        entries.push((path, metadata));
+        if entries.len().saturating_add(pending.len()) > MAX_ENVIRONMENT_FILES {
+            return Err("builder environment exceeds its file bound".to_owned());
+        }
+    }
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+    let mut digest = Sha256::new();
+    for (path, metadata) in entries {
+        let name = path.as_os_str().as_encoded_bytes();
+        digest.update((name.len() as u64).to_be_bytes());
+        digest.update(name);
+        for value in [
+            metadata.dev(),
+            metadata.ino(),
+            metadata.size(),
+            u64::from(metadata.mode()),
+            metadata.mtime().cast_unsigned(),
+            metadata.mtime_nsec().cast_unsigned(),
+            metadata.ctime().cast_unsigned(),
+            metadata.ctime_nsec().cast_unsigned(),
+        ] {
+            digest.update(value.to_be_bytes());
+        }
+    }
+    let mut events = [0_u8; 8192];
+    for _ in 0..128 {
+        match rustix::io::read(&watch.descriptor, &mut events) {
+            Ok(0) => return Err("builder change detector closed".to_owned()),
+            Ok(_) => {
+                watch.generation = watch
+                    .generation
+                    .checked_add(1)
+                    .ok_or("builder change generation overflowed")?;
+            }
+            Err(rustix::io::Errno::WOULDBLOCK) => {
+                digest.update(watch.generation.to_be_bytes());
+                return Ok(digest.finalize().into());
+            }
+            Err(error) => return Err(format!("builder change detector failed: {error}")),
+        }
+    }
+    Err("builder change detector event bound exceeded".to_owned())
+}
+
 fn environment_digest(root: &Path, deadline: Option<Instant>) -> Result<[u8; 32], String> {
     let mut pending = vec![root.to_path_buf()];
     let mut entries = Vec::new();
@@ -804,4 +946,37 @@ struct BuildCommand<'a, 'b> {
     isolation_runtime: &'a File,
     remaining: Duration,
     log: File,
+}
+
+#[cfg(test)]
+mod readiness_tests {
+    use super::*;
+
+    #[test]
+    fn metadata_detects_nested_same_size_writes_replacements_and_removal(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let root = std::env::temp_dir().join(format!("registry-metadata-{}", std::process::id()));
+        fs::create_dir_all(root.join("nested"))?;
+        let file = root.join("nested/tool");
+        fs::write(&file, b"first")?;
+        let initial = environment_metadata(&root)?;
+        assert_eq!(environment_metadata(&root)?, initial);
+        let original = environment_digest(&root, None)?;
+        fs::write(&file, b"other")?;
+        assert_ne!(environment_metadata(&root)?, initial);
+        assert_ne!(environment_digest(&root, None)?, original);
+        fs::write(&file, b"first")?;
+        assert_eq!(environment_digest(&root, None)?, original);
+        let restored = environment_metadata(&root)?;
+        fs::write(root.join("replacement"), b"first")?;
+        fs::rename(root.join("replacement"), &file)?;
+        assert_ne!(environment_metadata(&root)?, restored);
+        let replaced = environment_metadata(&root)?;
+        fs::remove_file(&file)?;
+        assert_ne!(environment_metadata(&root)?, replaced);
+        std::os::unix::fs::symlink("/dev/null", &file)?;
+        assert!(environment_metadata(&root).is_err());
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
 }

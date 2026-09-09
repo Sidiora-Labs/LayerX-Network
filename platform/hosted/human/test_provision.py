@@ -210,6 +210,32 @@ class RegistrationInputTests(unittest.TestCase):
         self.assertIn('deployment.json: invalid custody_reference missing', str(caught.exception))
         self.assertFalse((self.input / 'movement-source.json').exists())
 
+    def test_named_peer_binding_preserves_identity_did_and_refuses_delimiters(self):
+        request = self.input / 'request.json'
+        response = self.input / 'response.json'
+        output = self.input / 'binding.json'
+        binding = {'tenant': 'beta', 'sub': 'did:layerx:beta:owner'}
+        provision.write_json(request, binding)
+        provision.write_json(response, binding)
+        provision.preserve_binding(request, response, output)
+        self.assertEqual(provision.peer_binding(provision.protected_json(output), output),
+                         'uid=4020;tenant=beta;principal=did:layerx:beta:owner')
+        for principal in ('owner', 'did::owner', 'did:layerx:', 'did:layerx:a;b',
+                          'did:layerx:a,b', 'did:layerx:a b', 'did:layerx:a\x00b',
+                          'did:layerx:' + 'a' * 246):
+            with self.assertRaises(provision.Refused):
+                provision.peer_binding({'tenant': 'beta', 'principal': principal}, output)
+        for tenant in ('beta.prod', 'beta;prod', 'beta,prod', 'beta prod', ''):
+            with self.assertRaises(provision.Refused):
+                provision.peer_binding({'tenant': tenant, 'principal': binding['sub']}, output)
+
+    def test_evidence_preflight_names_missing_registration_before_job(self):
+        with self.assertRaises(provision.Refused) as caught:
+            provision.evidence_inputs(self.root, self.root / 'module-registry.json', None)
+        self.assertIn(str(self.path), str(caught.exception))
+        self.assertFalse((self.root / 'human-owner-result.json').exists())
+        self.assertFalse((self.root / 'human-evidence').exists())
+
     def run_cli(self):
         return subprocess.run(['python3', str(Path(provision.__file__).resolve()),
                                '--validate-owner-registration', '--work-dir', str(self.root)],

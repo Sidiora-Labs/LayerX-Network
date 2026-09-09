@@ -144,6 +144,9 @@ NETWORK_ID=""
 SEQUENCER_KEY_FILE=""
 TREASURY_KEY_FILE=""
 ASSET_ID="b5a32b12029f8ddfb905f90f280f664b46390de0fc62770fc197dd87b18cd898"
+ASSET_SYMBOL=LXT
+ASSET_CURRENCY=LXT
+ASSET_DECIMALS=18
 TREASURY_BALANCE=0
 PROGRAM_PORT=9401
 REPLICA_PORT=9402
@@ -386,6 +389,11 @@ for ((index = 0; index < GUARANTOR_COUNT; index++)); do
     id=$(printf 'layerx-beta-guarantor:%s' "$public" | sha256_hex)
     GUARANTOR_ENTRIES+=("$id $public")
     if [ "$index" -eq 0 ]; then GUARANTOR_ID=$id; GUARANTOR_PUBLIC=$public; fi
+    if [ "$index" -eq 1 ]; then
+        GUARANTOR_SECOND_KEY_FILE=$key_file
+        GUARANTOR_SECOND_ID=$id
+        GUARANTOR_SECOND_PUBLIC=$public
+    fi
 done
 mapfile -t GUARANTOR_ENTRIES < <(printf '%s\n' "${GUARANTOR_ENTRIES[@]}" | LC_ALL=C sort)
 previous_id=""
@@ -394,6 +402,8 @@ for entry in "${GUARANTOR_ENTRIES[@]}"; do
     [[ $id > $previous_id ]] || fail "guarantor identifiers must be strictly ascending"
     previous_id=$id
 done
+[ "$GUARANTOR_COUNT" -ge 2 ] || fail "hosted guarantor producers require two distinct genesis members"
+[ "$GUARANTOR_ID" != "$GUARANTOR_SECOND_ID" ] || fail "guarantor identities must differ"
 
 # --- genesis request (LXGB v1) -------------------------------------------
 PARAMETER_KEY=$(printf 'parameter-version' | bin_to_hex)
@@ -539,6 +549,9 @@ umask 022
 cat > "$DATA_DIR/node.env.tmp" <<EOF
 LAYERX_NODE_NETWORK_ID=$NETWORK_ID
 LAYERX_NODE_ASSET_ID=$ASSET_ID
+LAYERX_NODE_ASSET_SYMBOL=$ASSET_SYMBOL
+LAYERX_NODE_ASSET_CURRENCY=$ASSET_CURRENCY
+LAYERX_NODE_ASSET_DECIMALS=$ASSET_DECIMALS
 LAYERX_NODE_LNI_SOCKET=$LNI_SOCKET
 LAYERX_NODE_SUPERVISOR_SOCKET=$SUPERVISOR_SOCKET
 LAYERX_NODE_PROGRAM_URL=http://127.0.0.1:$PROGRAM_PORT
@@ -553,6 +566,9 @@ LAYERX_NODE_GENESIS_RECEIPT_STATE_ROOT=$GENESIS_RECEIPT_STATE_ROOT
 LAYERX_NODE_GENESIS_GUARANTOR_ID=$GUARANTOR_ID
 LAYERX_NODE_GENESIS_GUARANTOR_PUBLIC_KEY=$GUARANTOR_PUBLIC
 LAYERX_NODE_GENESIS_GUARANTOR_KEY_FILE=$GUARANTOR_KEY_FILE
+LAYERX_NODE_SECOND_GUARANTOR_ID=$GUARANTOR_SECOND_ID
+LAYERX_NODE_SECOND_GUARANTOR_PUBLIC_KEY=$GUARANTOR_SECOND_PUBLIC
+LAYERX_NODE_SECOND_GUARANTOR_KEY_FILE=$GUARANTOR_SECOND_KEY_FILE
 LAYERX_PAXEER_GENESIS_DIR=$GENESIS_DIR
 LAYERX_NODE_TREASURY_DID=$TREASURY_DID
 LAYERX_NODE_TREASURY_PUBLIC_KEY=$TREASURY_PUBLIC
@@ -572,6 +588,36 @@ for ((index = 0; index < GUARANTOR_COUNT; index++)); do
 done
 chmod 0644 "$DATA_DIR/node.env.tmp"
 mv "$DATA_DIR/node.env.tmp" "$DATA_DIR/node.env"
+for identity in 1 2; do
+    producer_dir="$(dirname "$DATA_DIR")/guarantor-$identity"
+    mkdir -p "$producer_dir/identity" "$producer_dir/state"
+    chgrp "$LNI_GID" "$producer_dir" "$producer_dir/identity" "$producer_dir/state"
+    chmod 0750 "$producer_dir" "$producer_dir/identity"
+    chmod 2770 "$producer_dir/state"
+    if [ "$identity" = 1 ]; then
+        identity_key=$GUARANTOR_KEY_FILE
+        identity_id=$GUARANTOR_ID
+    else
+        identity_key=$GUARANTOR_SECOND_KEY_FILE
+        identity_id=$GUARANTOR_SECOND_ID
+    fi
+    install -m 0440 "$identity_key" "$producer_dir/identity/key.pem"
+    install -m 0440 "$SNAPSHOT" "$producer_dir/identity/genesis.lxs"
+    install -m 0440 "$MANIFEST" "$producer_dir/identity/genesis.manifest"
+    install -m 0440 "$IDENTITIES" "$producer_dir/identity/identities.txt"
+    install -m 0440 "$DATA_DIR/sequencer.conf" "$producer_dir/identity/node.conf"
+    if [ -r "$REGISTRATION" ]; then
+        install -m 0440 "$REGISTRATION" "$producer_dir/identity/genesis.registration"
+    else
+        rm -f "$producer_dir/identity/genesis.registration"
+    fi
+    printf 'LAYERX_GUARANTOR_ID=%s\nLAYERX_NODE_NETWORK_ID=%s\nLAYERX_NODE_ASSET_ID=%s\nLAYERX_NODE_SEQUENCER_ID=%s\nLAYERX_NODE_SEQUENCER_PUBLIC_KEY=%s\nLAYERX_NODE_FIRST_BATCH=1\nLAYERX_NODE_LAST_BATCH=18446744073709551615\n' \
+        "$identity_id" "$NETWORK_ID" "$ASSET_ID" "$SEQUENCER_ID" "$SEQUENCER_PUBLIC" > "$producer_dir/identity/producer.env.tmp"
+    mv "$producer_dir/identity/producer.env.tmp" "$producer_dir/identity/producer.env"
+    chgrp "$LNI_GID" "$producer_dir/identity/"*
+    chmod 0440 "$producer_dir/identity/"*
+done
+
 printf 'LAYERX_CORE_SEQUENCER_ID=%s\nLAYERX_CORE_TREASURY_ASSET=%s\n' \
     "$SEQUENCER_ID" "$ASSET_ID" > "$RUN_DIR/core.env.tmp"
 chmod 0644 "$RUN_DIR/core.env.tmp"

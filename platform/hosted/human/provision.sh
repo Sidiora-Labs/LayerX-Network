@@ -69,10 +69,11 @@ human_evidence_provision() (
     umask 077
     local input="$WORK_DIR/human-evidence-input" status
     local provision="$REPO_ROOT/platform/hosted/human/provision.py"
-    [ -d "$input" ] && [ ! -L "$input" ] || fail "$input: owner registration producer inputs required"
     python3 "$provision" --validate-owner-registration --work-dir "$WORK_DIR"
     python3 "$provision" --validate-job-input --work-dir "$WORK_DIR"
-    [ -n "${LAYERX_REGISTRY_JOURNAL:-}" ] || fail 'LAYERX_REGISTRY_JOURNAL: registry admission/deployment pairs required; deployment_proof_unavailable is not evidence'
+    [ -n "${LAYERX_REGISTRY_JOURNAL:-}" ] || fail 'LAYERX_REGISTRY_JOURNAL: required directory of <program-id>.admission and <program-id>.deployment files is not configured'
+    python3 "$provision" --validate-evidence-inputs --work-dir "$WORK_DIR" \
+        --registry "$SECRETS_DIR/module-registry.json" --journal "$LAYERX_REGISTRY_JOURNAL"
     kube -n "$TESTNET_NAMESPACE" get secret layerx-guarantor-checkpoint-authority \
         -o 'jsonpath={.data.public\.hex}' > "$input/checkpoint-public.base64" \
         || fail 'Secret layerx-guarantor-checkpoint-authority/public.hex: checkpoint producer output required'

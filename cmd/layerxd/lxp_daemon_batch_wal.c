@@ -10,6 +10,9 @@
 #include "layerx/lxp_protocol.h"
 #include "layerx/lxp_receipt.h"
 #include "layerx/programs.h"
+#include "layerx/lxp_da.h"
+#include "layerx/lxp_replica.h"
+#include "layerx/lxp_state_diff.h"
 
 #include <errno.h>
 #include <dirent.h>
@@ -27,6 +30,7 @@
 enum {
     WAL_VERSION = 2,
     WAL_MAINTENANCE_VERSION = 3,
+    WAL_AVAILABILITY_VERSION = 4,
     WAL_FIXED_BYTES = 762,
     WAL_PROOF_BYTES = 1033,
     WAL_DIGEST_BYTES = 32,
@@ -320,7 +324,66 @@ static lxp_result validate_canonical_items(
     return status;
 }
 
-static lxp_result validate_input(const lxp_daemon_batch_wal_input *in)
+lxp_result lxp_daemon_batch_wal_body(
+    const lxp_daemon_batch_wal_input *in, lxp_arena *arena, lxp_batch_body *body)
+{
+    lxp_batch_body built = {0};
+    lxp_byte_span receipts[LXP_DAEMON_BATCH_WAL_MAX_ITEMS + 1U];
+    lxp_state_diff_entry *entries;
+    size_t count, entry_count, i, mark;
+    uint8_t root[32];
+    lxp_result status;
+    if (in == NULL || arena == NULL || body == NULL ||
+        in->count > LXP_DAEMON_BATCH_WAL_MAX_ITEMS ||
+        in->receipts == NULL || in->state_diff.length == 0U ||
+        in->recovery_metadata.length == 0U)
+        return LXP_ERR_NON_CANONICAL;
+    mark = lxp_arena_mark(arena);
+    status = lxp_batch_header_decode(in->canonical_header.bytes,
+                                      in->canonical_header.length, &built.header);
+    count = in->count;
+    for (i = 0U; i < count; ++i) receipts[i] = in->receipts[i];
+    if (in->maintenance.length != 0U) receipts[count++] = in->maintenance;
+    if (status == LXP_OK)
+        status = lxp_replay_section_encode(in->activities, in->count, arena, &built.activities);
+    if (status == LXP_OK)
+        status = lxp_da_receipt_section_encode(receipts, count, in->events,
+                                               in->count, arena, &built.receipts);
+    if (status == LXP_OK)
+        status = lxp_replay_section_encode(in->events, in->count, arena, &built.events);
+    if (status == LXP_OK)
+        status = lxp_replay_section_encode(NULL, 0U, arena, &built.oracle_inputs);
+    built.state_diff = in->state_diff;
+    built.recovery_metadata = in->recovery_metadata;
+    (void)memcpy(built.sequencer_signature, in->header_signature, 64U);
+    if (status == LXP_OK)
+        status = lxp_state_diff_decode(built.state_diff, arena, &entries, &entry_count);
+    if (status == LXP_OK)
+        status = lxp_batch_availability_root(&built, arena, root);
+    if (status == LXP_OK && lxp_ct_memcmp(root, built.header.data_availability_root, 32U) != 0)
+        status = LXP_ERR_ROOT_MISMATCH;
+    if (status != LXP_OK) {
+        (void)lxp_arena_reset(arena, mark);
+        return status;
+    }
+    *body = built;
+    return LXP_OK;
+}
+
+static lxp_result validate_availability(const lxp_daemon_batch_wal_input *in)
+{
+    lxp_arena arena;
+    lxp_batch_body body;
+    uint8_t *bytes = malloc(WAL_MAX_BYTES);
+    lxp_result status;
+    if (bytes == NULL) return LXP_ERR_IO;
+    status = lxp_arena_init(&arena, bytes, WAL_MAX_BYTES);
+    if (status == LXP_OK) status = lxp_daemon_batch_wal_body(in, &arena, &body);
+    free(bytes);
+    return status;
+}
+
+static lxp_result validate_input(const lxp_daemon_batch_wal_input *in, bool legacy)
 {
     lxp_batch_header header;
     lxp_arena signature_arena;
@@ -422,7 +485,8 @@ static lxp_result validate_input(const lxp_daemon_batch_wal_input *in)
        lxp_ct_memcmp(activity_root,header.activity_merkle_root,32U)!=0 ||
        lxp_ct_memcmp(event_root,header.event_merkle_root,32U)!=0 ||
        lxp_ct_memcmp(empty_root,header.oracle_root,32U)!=0 ||
-       lxp_ct_memcmp(empty_root,header.data_availability_root,32U)!=0)
+       (legacy ? lxp_ct_memcmp(empty_root,header.data_availability_root,32U)!=0 :
+                 validate_availability(in)!=LXP_OK))
         return LXP_ERR_ROOT_MISMATCH;
     status=validate_canonical_items(in,&header);
     if(status!=LXP_OK)return status;
@@ -446,10 +510,8 @@ static lxp_result encode_record(const lxp_daemon_batch_wal_input *in,
     size_t length=WAL_FIXED_BYTES+WAL_DIGEST_BYTES, body_length=0U;
     size_t offset=0U, i, j;
     uint8_t *bytes, digest[32];
-    uint16_t version = in != NULL && in->maintenance.length != 0U ?
-        WAL_MAINTENANCE_VERSION :
-        (in != NULL && in->terminal_payloads != NULL ? WAL_VERSION : 1U);
-    lxp_result status=validate_input(in);
+    const uint16_t version = WAL_AVAILABILITY_VERSION;
+    lxp_result status=validate_input(in, false);
     if (status!=LXP_OK || (state!=LXP_DAEMON_BATCH_WAL_PREPARED &&
         state!=LXP_DAEMON_BATCH_WAL_ABORTED &&
         state!=LXP_DAEMON_BATCH_WAL_COMMITTED)) return status;
@@ -492,9 +554,18 @@ static lxp_result encode_record(const lxp_daemon_batch_wal_input *in,
             !add_size(&length,in->events[i].length) ||
             !add_size(&length,WAL_PROOF_BYTES)) return LXP_ERR_LENGTH_LIMIT;
     }
-    if (version == WAL_MAINTENANCE_VERSION &&
+    if (version >= WAL_MAINTENANCE_VERSION &&
         (!add_size(&length, 4U + WAL_PROOF_BYTES) ||
          !add_size(&length, in->maintenance.length))) return LXP_ERR_LENGTH_LIMIT;
+    if (version == WAL_AVAILABILITY_VERSION) {
+        if (in->state_diff.length > LXP_MAX_BATCH_BODY_BYTES - body_length)
+            return LXP_ERR_LENGTH_LIMIT;
+        body_length += in->state_diff.length;
+        if (in->recovery_metadata.length > LXP_MAX_BATCH_BODY_BYTES - body_length ||
+            !add_size(&length, 8U) || !add_size(&length, in->state_diff.length) ||
+            !add_size(&length, in->recovery_metadata.length))
+            return LXP_ERR_LENGTH_LIMIT;
+    }
     bytes=(uint8_t *)calloc(1U,length);
     if(bytes==NULL)return LXP_ERR_IO;
 #define COPY(src,n) do { (void)memcpy(bytes+offset,(src),(n)); offset+=(n); } while(0)
@@ -544,14 +615,20 @@ static lxp_result encode_record(const lxp_daemon_batch_wal_input *in,
         bytes[offset++]=in->receipt_proofs[i].depth;
         for(j=0U;j<LXP_MERKLE_MAX_DEPTH;++j) COPY(in->receipt_proofs[i].siblings[j],32U);
     }
-    if (version == WAL_MAINTENANCE_VERSION) {
+    if (version >= WAL_MAINTENANCE_VERSION) {
         put_u32(bytes + offset, (uint32_t)in->maintenance.length); offset += 4U;
-        COPY(in->maintenance.bytes, in->maintenance.length);
+        if (in->maintenance.length != 0U) COPY(in->maintenance.bytes, in->maintenance.length);
         put_u32(bytes + offset, in->maintenance_proof.leaf_index); offset += 4U;
         put_u32(bytes + offset, in->maintenance_proof.leaf_count); offset += 4U;
         bytes[offset++] = in->maintenance_proof.depth;
         for (j = 0U; j < LXP_MERKLE_MAX_DEPTH; ++j)
             COPY(in->maintenance_proof.siblings[j], 32U);
+    }
+    if (version == WAL_AVAILABILITY_VERSION) {
+        put_u32(bytes + offset, (uint32_t)in->state_diff.length); offset += 4U;
+        COPY(in->state_diff.bytes, in->state_diff.length);
+        put_u32(bytes + offset, (uint32_t)in->recovery_metadata.length); offset += 4U;
+        COPY(in->recovery_metadata.bytes, in->recovery_metadata.length);
     }
 #undef COPY
     if(offset+WAL_DIGEST_BYTES!=length || wal_digest(bytes,offset,digest)!=LXP_OK) {
@@ -822,7 +899,7 @@ lxp_result lxp_daemon_batch_wal_load(const char *directory,
     if(authorization==NULL||out==NULL||present==NULL)return LXP_ERR_NON_CANONICAL;
     *out=NULL; *present=false; status=read_record(directory,&bytes,&length,present);
     if(status!=LXP_OK||!*present)return status;
-    if(memcmp(bytes,wal_magic,8U)!=0 || (get_u16(bytes+8U)!=1U && get_u16(bytes+8U)!=WAL_VERSION && get_u16(bytes+8U)!=WAL_MAINTENANCE_VERSION) ||
+    if(memcmp(bytes,wal_magic,8U)!=0 || (get_u16(bytes+8U)!=1U && get_u16(bytes+8U)!=WAL_VERSION && get_u16(bytes+8U)!=WAL_MAINTENANCE_VERSION && get_u16(bytes+8U)!=WAL_AVAILABILITY_VERSION) ||
        bytes[11U]!=0U ||
        get_u64(bytes+12U)!=(uint64_t)length ||
        wal_digest(bytes,length-32U,digest)!=LXP_OK ||
@@ -893,13 +970,13 @@ lxp_result lxp_daemon_batch_wal_load(const char *directory,
         r->proofs[i].leaf_index=get_u32(r->owned+offset);offset+=4U;r->proofs[i].leaf_count=get_u32(r->owned+offset);offset+=4U;r->proofs[i].depth=r->owned[offset++];
         for(j=0U;j<LXP_MERKLE_MAX_DEPTH;++j){(void)memcpy(r->proofs[i].siblings[j],r->owned+offset,32U);offset+=32U;}
     }
-    if (get_u16(r->owned + 8U) == WAL_MAINTENANCE_VERSION) {
+    if (get_u16(r->owned + 8U) >= WAL_MAINTENANCE_VERSION) {
         uint32_t maintenance_length;
         if (length - 32U - offset < 4U + WAL_PROOF_BYTES) {
             status = LXP_ERR_LOG_TRUNCATED; goto fail;
         }
         maintenance_length = get_u32(r->owned + offset); offset += 4U;
-        if (maintenance_length == 0U ||
+        if ((maintenance_length == 0U && get_u16(r->owned + 8U) == WAL_MAINTENANCE_VERSION) ||
             maintenance_length > length - 32U - offset - WAL_PROOF_BYTES) {
             status = LXP_ERR_LOG_TRUNCATED; goto fail;
         }
@@ -913,13 +990,28 @@ lxp_result lxp_daemon_batch_wal_load(const char *directory,
             offset += 32U;
         }
     }
+    if (get_u16(r->owned + 8U) == WAL_AVAILABILITY_VERSION) {
+        lxp_byte_span *fields[2] = {&r->view.state_diff, &r->view.recovery_metadata};
+        for (i = 0U; i < 2U; ++i) {
+            uint32_t field_length;
+            if (offset > length - 32U || length - 32U - offset < 4U) {
+                status = LXP_ERR_LOG_TRUNCATED; goto fail;
+            }
+            field_length = get_u32(r->owned + offset); offset += 4U;
+            if (field_length == 0U || field_length > length - 32U - offset) {
+                status = LXP_ERR_LOG_TRUNCATED; goto fail;
+            }
+            *fields[i] = (lxp_byte_span){r->owned + offset, field_length};
+            offset += field_length;
+        }
+    }
     if(offset!=length-32U){status=LXP_ERR_TRAILING_BYTES;goto fail;}
     r->view.activities=r->activities;r->view.receipts=r->receipts;r->view.events=r->events;r->view.receipt_proofs=r->proofs;
     if (get_u16(r->owned + 8U) >= WAL_VERSION) {
         r->view.terminal_payloads = r->terminal_payloads;
         r->view.call_graphs = r->call_graphs;
     }
-    status=validate_input(&r->view);if(status!=LXP_OK)goto fail;*out=r;return LXP_OK;
+    status=validate_input(&r->view, get_u16(r->owned + 8U) < WAL_AVAILABILITY_VERSION);if(status!=LXP_OK)goto fail;*out=r;return LXP_OK;
 fail:
     if(r!=NULL)lxp_daemon_batch_wal_destroy(r);
     if(bytes!=NULL){lxp_secure_zero(bytes,length);free(bytes);} *present=false;return status;
@@ -965,6 +1057,10 @@ lxp_result lxp_daemon_batch_wal_transition(const char *directory,
        (state==LXP_DAEMON_BATCH_WAL_COMMITTED &&
         !boundary_equal(live,&record->view.settled)))
         return LXP_FATAL_REPLAY_DIVERGENCE;
+    if (record->owned != NULL && get_u16(record->owned + 8U) < WAL_AVAILABILITY_VERSION) {
+        record->state = state;
+        return LXP_OK;
+    }
     status=encode_record(&record->view,state,&bytes,&length);
     if(status==LXP_OK)status=durable_replace(
         directory,bytes,length,false,record->owned,record->owned_length);
@@ -989,8 +1085,15 @@ lxp_result lxp_daemon_batch_wal_retire(const char *directory,
         (record->state!=LXP_DAEMON_BATCH_WAL_COMMITTED ||
          !boundary_equal(live,&record->view.settled)))
         return LXP_FATAL_REPLAY_DIVERGENCE;
-    status=encode_record(&record->view,record->state,
-                         &expected,&expected_length);
+    if (record->owned != NULL && get_u16(record->owned + 8U) < WAL_AVAILABILITY_VERSION) {
+        expected_length = record->owned_length;
+        expected = malloc(expected_length);
+        status = expected == NULL ? LXP_ERR_IO : LXP_OK;
+        if (status == LXP_OK) memcpy(expected, record->owned, expected_length);
+    } else {
+        status=encode_record(&record->view,record->state,
+                             &expected,&expected_length);
+    }
     if(status==LXP_OK)status=paths(directory,final);
     (void)final;
     if(status==LXP_OK) {

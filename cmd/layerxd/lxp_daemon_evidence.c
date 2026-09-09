@@ -2767,6 +2767,18 @@ lxp_result lxp_daemon_activity_evidence_recover_batch(
             &(lxp_batch_root_inputs){activities, count, receipts, receipt_count,
                                      events, count, NULL, 0U, NULL, 0U},
             arena, &roots);
+    if (status == LXP_OK) {
+        lxp_batch_body body;
+        status = lxp_da_log_read_body(store->availability_log, header.batch_number,
+                                      arena, &body);
+        if (status == LXP_OK)
+            status = lxp_replay_section_encode(activities, count, arena, &body.activities);
+        if (status == LXP_OK)
+            status = lxp_da_receipt_section_encode(receipts, receipt_count,
+                                                   events, count, arena, &body.receipts);
+        if (status == LXP_OK)
+            status = lxp_batch_availability_root(&body, arena, roots.data_availability_root);
+    }
     if (status == LXP_OK &&
         (lxp_ct_memcmp(roots.activity_merkle_root,
                        header.activity_merkle_root, 32U) != 0 ||

@@ -593,7 +593,7 @@ The binary reads a disjoint `LAYERX_AGENT_*` set
 | `LAYERX_AGENT_HUMAN_SOCKET` | Absolute Human Unix socket |
 | `LAYERX_AGENT_HUMAN_SESSION_KEY_ROOT` | Absolute session-key root |
 | `LAYERX_AGENT_HUMAN_SESSION_OPERATOR_SECRET_FILE` | Protected operator secret |
-| `LAYERX_AGENT_HUMAN_PEERS` | `uid:principal:tenant` map |
+| `LAYERX_AGENT_HUMAN_PEERS` | Comma-separated `uid=<u32>;tenant=<tenant>;principal=<did>` entries, e.g. `uid=4020;tenant=beta;principal=did:layerx:beta:alice`. Tenant: 1–128 ASCII letters, digits, `-` or `_`. Values cannot contain `;`, commas, whitespace or control characters. Principals require `did:<method>:<id>` within the protocol DID byte bound. Positional entries and duplicate UIDs are refused with a zero-based entry index. |
 | `LAYERX_AGENT_HUMAN_LIMIT_ID` | 16-byte `LimitId` |
 | `LAYERX_AGENT_HUMAN_LIMIT_SCOPE` | `tenant` / `agent` / `session` / `capability` / `counterparty` |
 | `LAYERX_AGENT_HUMAN_LIMIT_SCOPE_ID` | 32-byte hex scope identity |

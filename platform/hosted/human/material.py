@@ -7,6 +7,7 @@ import re
 import secrets
 import stat
 import sys
+import unicodedata
 
 
 def write(directory, name, value):
@@ -122,7 +123,7 @@ def main():
         'HUMAN_RECONNECT_JITTER_PERCENT': 10,
         'HUMAN_AUTHORITY_ENDPOINT': 'https://layerx-receipt-authority.layerx-testnet.svc.cluster.local:9443',
         'HUMAN_AUTHORITY_MAX_BYTES': 1048576,
-        'PROGRAM_LISTEN': '127.0.0.1:9451', 'PROGRAM_MAX_STALENESS_MS': 60000,
+        'PROGRAM_LISTEN': '127.0.0.1:9453', 'PROGRAM_MAX_STALENESS_MS': 60000,
         'NODE_ENDPOINT': 'http://127.0.0.1:9401',
         'AUTHORITY_ENDPOINT': 'https://layerx-receipt-authority.layerx-testnet.svc.cluster.local:9443',
         'AUTHORITY_REPLICA_ID': (root.parent / 'receipt-authority-replica-id').read_text().strip(),
@@ -152,15 +153,22 @@ def main():
                 raise ValueError('Human custody contract binding refused')
         if policy['registry']['network_id'] != network or policy['registry']['protocol_version'] != 3:
             raise ValueError('Human registry network or protocol mismatch')
-        peers = policy['agent']['HUMAN_PEERS'].split(',')
-        if len(peers) != 1 or len(peers[0].split(':', 2)) != 3 or not peers[0].startswith('4020:'):
+        peers = policy['agent']['HUMAN_PEERS']
+        if not isinstance(peers, str):
+            raise ValueError('Human peer policy fields refused')
+        peer = re.fullmatch(r'uid=(4020);tenant=([A-Za-z0-9_-]{1,128});principal=(did:[a-z0-9]+:[^;,]+)', peers)
+        if peer is None:
             raise ValueError('Human peer policy must authorize only component UID 4020')
+        tenant, principal = peer.group(2, 3)
+        if (len(principal.encode('utf-8')) > 255
+                or any(c.isspace() or unicodedata.category(c) == 'Cc' for c in principal)):
+            raise ValueError('Human peer principal refused')
         authority = policy['authority']
         if set(authority) != {'tenant', 'principal', 'core-clock-horizon'}:
             raise ValueError('Human authority fields refused')
         if int(authority['core-clock-horizon']) <= 0:
             raise ValueError('Human core clock horizon refused')
-        if peers != [f"4020:{authority['principal']}:{authority['tenant']}"]:
+        if tenant != authority['tenant'] or principal != authority['principal']:
             raise ValueError('Human authority peer binding differs')
         principals = policy['principal_policy']['principals']
         bound = [p for p in principals if p['tenant'] == authority['tenant']
