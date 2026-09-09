@@ -19,3 +19,12 @@ test("offer parsing requires explicit grant terms and rejects unknown schemes", 
   header(offer);
   for (const change of [{ scheme: "unknown" }, { extra: {} }, { extra: { layerx: { ...offer.extra.layerx, windowSeconds: "0" } } }]) assert.throws(() => header({ ...offer, ...change }));
 });
+
+test("buyer grant header preserves the selected terms and native idempotency key", async () => {
+  const { grantPaymentHeader } = await import("../../buyer/dist/index.js");
+  const required = { x402Version: 2, resource: { url: "https://example.com/paid" }, accepts: [offer] };
+  const payload = JSON.parse(Buffer.from(grantPaymentHeader(required, offer, Buffer.from(wire).toString("hex")), "base64"));
+  assert.deepEqual(payload.accepted, offer);
+  assert.equal(payload.payload.idempotencyKey, r.idempotency_key);
+  assert.throws(() => grantPaymentHeader(required, { ...offer, amount: "1" }, Buffer.from(wire).toString("hex")));
+});

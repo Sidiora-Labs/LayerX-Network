@@ -384,6 +384,49 @@ class BuyerMiddleware:
             }
         )
 
+    def grant_header(self, header, receive_hex):
+        required, offer = self.parse_offer(header)
+        return grant_payment_header(required, offer, receive_hex)
+
+    def capture_grant_settlement(self, header, payment_header, expected_activity):
+        from .x402_receive import decode_receive
+
+        rpc_hex(expected_activity, 32)
+        payment = validate_payload(decode_header(payment_header))
+        receive = decode_receive(rpc_hex(payment["payload"]["receive"], 733))
+        offer = payment["accepted"]
+        settlement = _object(decode_header(header))
+        body = _object(_object(settlement.get("extensions")).get("layerx"))
+        if (
+            settlement.get("success") is not True
+            or settlement.get("network") != offer["network"]
+            or settlement.get("amount") != offer["amount"]
+            or body.get("verificationLevel") != "sequencer-signed"
+        ):
+            raise ValueError("settlement-mismatch")
+        receipt = base64.b64decode(body["receipt"], validate=True)
+        digest = hashlib.sha256(b"LXP/v1/merkle-leaf\0" + receipt).hexdigest()
+        if (
+            body.get("receiptDigest") != digest
+            or settlement.get("transaction") != "lxp:" + digest
+        ):
+            raise ValueError("settlement-receipt-mismatch")
+        evidence = self.resolve_receipt(receipt, offer)
+        if evidence.canonical_receipt != receipt:
+            raise ValueError("receipt-mismatch")
+        return verify_rpc_payment(
+            {"activity_id": expected_activity, "receipt": receipt.hex()},
+            expected_activity,
+            receive["from"],
+            evidence.authorized_batch,
+            self.signatures,
+            amount=offer["amount"],
+            asset=offer["asset"],
+            pay_to=offer["payTo"],
+            commitment=payment_commitment(offer.get("extra")),
+            evidence=evidence.commitment_evidence,
+        )
+
     def capture_settlement(self, header, payment_header):
         settlement = _object(decode_header(header))
         payment = validate_payload(decode_header(payment_header))
@@ -433,3 +476,31 @@ class ConfiguredReceiptAuthority:
     def __call__(self, receipt, offer):
         validate_requirements(offer)
         return PaymentEvidence(receipt, self.authorized_batch, self.commitment_evidence)
+
+
+def grant_payment_header(required, accepted, receive_hex):
+    from .x402_receive import decode_receive
+
+    validate_required(required)
+    validate_requirements(accepted)
+    receive = decode_receive(rpc_hex(receive_hex, 733))
+    if (
+        accepted["scheme"] not in ("metered", "subscription")
+        or accepted not in required["accepts"]
+        or receive["to"] != accepted["payTo"]
+        or receive["asset"] != accepted["asset"]
+        or receive["amount"] != accepted["amount"]
+    ):
+        raise ValueError("requirements-mismatch")
+    return encode_header(
+        {
+            "x402Version": 2,
+            "resource": required["resource"],
+            "accepted": accepted,
+            "extensions": required.get("extensions", {}),
+            "payload": {
+                "receive": receive_hex,
+                "idempotencyKey": receive["idempotency_key"],
+            },
+        }
+    )

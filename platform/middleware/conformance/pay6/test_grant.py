@@ -41,3 +41,34 @@ class GrantTests(unittest.TestCase):
         ):
             with self.assertRaises(ValueError):
                 validate_grant_draw(wire, offer, key, network, now)
+
+    def test_buyer_grant_header(self):
+        from layerx_sdk.x402_http import grant_payment_header, decode_header
+
+        wire = bytes.fromhex(
+            Path(__file__).with_name("receive.hex").read_text().splitlines()[0]
+        )
+        r = decode_receive(wire)
+        offer = dict(
+            scheme="subscription",
+            network="layerx:testnet",
+            maxTimeoutSeconds=30,
+            asset=r["asset"],
+            amount=r["amount"],
+            payTo=r["to"],
+            extra={
+                "layerx": {
+                    "commitment": "executed",
+                    "purposeHash": r["payer_grant"]["purpose_hash"],
+                    "windowSeconds": "3600",
+                }
+            },
+        )
+        required = dict(
+            x402Version=2, resource={"url": "https://example.com/paid"}, accepts=[offer]
+        )
+        payload = decode_header(grant_payment_header(required, offer, wire.hex()))
+        self.assertEqual(payload["accepted"], offer)
+        self.assertEqual(payload["payload"]["idempotencyKey"], r["idempotency_key"])
+        with self.assertRaises(ValueError):
+            grant_payment_header(required, offer | {"amount": "1"}, wire.hex())
