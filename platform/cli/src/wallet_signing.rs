@@ -30,7 +30,8 @@ pub struct PreparedPayment {
     envelope: UnsignedEnvelope,
     canonical: Vec<u8>,
     registry: ModuleRegistry,
-    disclosure: Disclosure,
+    disclosure: Option<Disclosure>,
+    send_disclosure: Option<Value>,
     public_key: [u8; 32],
     identity_next_sequence: u64,
 }
@@ -39,18 +40,27 @@ impl PreparedPayment {
     /// # Errors
     /// Uses the shared canonical encoder and refuses incomplete disclosure before signing.
     pub fn new(payment: &Payment, facts: &SigningFacts<'_>) -> Result<Self, String> {
+        let (module, ordinal) = payment.activity_type();
+        let kind = ActivityType::new(module, ordinal).map_err(debug)?;
+        let encoded = payment.encode(facts.actor.as_bytes()).map_err(debug)?;
+        Self::from_encoded(kind, &encoded, facts, None)
+    }
+
+    pub(crate) fn from_encoded(
+        kind: ActivityType,
+        encoded: &[u8],
+        facts: &SigningFacts<'_>,
+        send_disclosure: Option<Value>,
+    ) -> Result<Self, String> {
         if facts.expires_at_ms <= facts.not_before_ms
             || facts.expires_at_ms - facts.not_before_ms > 300_000
         {
             return Err("wallet validity must be nonempty and at most 300000 milliseconds".into());
         }
-        let (module, ordinal) = payment.activity_type();
-        let kind = ActivityType::new(module, ordinal).map_err(debug)?;
         let registry =
-            ModuleRegistry::new(&[ModuleRegistration::new(module, &[kind]).map_err(debug)?])
+            ModuleRegistry::new(&[ModuleRegistration::new(kind.module(), &[kind]).map_err(debug)?])
                 .map_err(debug)?;
-        let encoded = payment.encode(facts.actor.as_bytes()).map_err(debug)?;
-        let payload = Payload::new(&registry, kind, &encoded).map_err(debug)?;
+        let payload = Payload::new(&registry, kind, encoded).map_err(debug)?;
         let hash = payload_hash_for(&payload).map_err(debug)?;
         let actor = Did::new(facts.actor.as_bytes()).map_err(debug)?;
         let mut builder = EnvelopeBuilder::new();
@@ -74,33 +84,61 @@ impl PreparedPayment {
             .map_err(debug)?;
         let envelope = builder.build().map_err(debug)?;
         let canonical = encode_unsigned_envelope(&envelope).map_err(debug)?;
-        let disclosure = bind(&canonical, &registry).map_err(debug)?;
+        let disclosure = if send_disclosure.is_none() {
+            Some(bind(&canonical, &registry).map_err(debug)?)
+        } else {
+            None
+        };
         Ok(Self {
             envelope,
             canonical,
             registry,
             disclosure,
+            send_disclosure,
             public_key: facts.public_key,
             identity_next_sequence: facts.identity_next_sequence,
         })
     }
 
     #[must_use]
+    pub fn canonical_unsigned(&self) -> &[u8] {
+        &self.canonical
+    }
+
+    #[must_use]
     pub fn confirmation(&self) -> Value {
+        if let Some(disclosure) = &self.disclosure {
+            return json!({
+                "envelope_sequence": self.identity_next_sequence,
+                "actor": String::from_utf8_lossy(&disclosure.actor),
+                "activity_type": disclosure.activity_type.value(),
+                "authority": hex(&disclosure.authority),
+                "asset": hex(&disclosure.asset),
+                "fee_limit": disclosure.fee_limit.to_string(),
+                "not_before_ms": disclosure.expiry.not_before.to_string(),
+                "expires_at_ms": disclosure.expiry.not_after.to_string(),
+                "idempotency_key": hex(&disclosure.idempotency_key),
+                "payment": format!("{:?}", disclosure.payment),
+                "canonical_unsigned": hex(&self.canonical),
+                "counterparties": disclosure.counterparties.iter().map(|p| json!({"role":format!("{:?}", p.role),"account":hex(&p.account)})).collect::<Vec<_>>(),
+                "amounts": disclosure.amounts.iter().map(|a| json!({"role":format!("{:?}", a.role),"value":a.value.to_string()})).collect::<Vec<_>>(),
+            });
+        }
         json!({
+            "protocol_version": 3,
+            "network_id": self.envelope.network_id(),
             "envelope_sequence": self.identity_next_sequence,
-            "actor": String::from_utf8_lossy(&self.disclosure.actor),
-            "activity_type": self.disclosure.activity_type.value(),
-            "authority": hex(&self.disclosure.authority),
-            "asset": hex(&self.disclosure.asset),
-            "fee_limit": self.disclosure.fee_limit.to_string(),
-            "not_before_ms": self.disclosure.expiry.not_before.to_string(),
-            "expires_at_ms": self.disclosure.expiry.not_after.to_string(),
-            "idempotency_key": hex(&self.disclosure.idempotency_key),
-            "payment": format!("{:?}", self.disclosure.payment),
+            "actor": String::from_utf8_lossy(self.envelope.actor_did().as_bytes()),
+            "activity_type": self.envelope.activity_type().value(),
+            "authority_kind": "owner",
+            "authority": hex(self.envelope.authority().as_bytes()),
+            "payload_hash": hex(&self.envelope.payload_hash()),
+            "fee_limit": self.envelope.fee_limit().value().to_string(),
+            "not_before_ms": self.envelope.timestamp_bound().not_before().to_string(),
+            "expires_at_ms": self.envelope.timestamp_bound().not_after().to_string(),
+            "idempotency_key": hex(&self.envelope.idempotency_key().bytes()),
+            "payment": self.send_disclosure,
             "canonical_unsigned": hex(&self.canonical),
-            "counterparties": self.disclosure.counterparties.iter().map(|p| json!({"role":format!("{:?}", p.role),"account":hex(&p.account)})).collect::<Vec<_>>(),
-            "amounts": self.disclosure.amounts.iter().map(|a| json!({"role":format!("{:?}", a.role),"value":a.value.to_string()})).collect::<Vec<_>>(),
         })
     }
 
@@ -110,10 +148,11 @@ impl PreparedPayment {
         if signer.public_key() != self.public_key {
             return Err("wallet signer does not match the disclosed owner".into());
         }
+        let disclosure = bind(&self.canonical, &self.registry).map_err(debug)?;
         let signature = complete(sign_disclosed(
             signer,
             &self.canonical,
-            &self.disclosure,
+            &disclosure,
             &self.registry,
         ))
         .map_err(debug)?;
