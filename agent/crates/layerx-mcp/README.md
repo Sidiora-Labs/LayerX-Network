@@ -15,7 +15,7 @@ This crate lives in the agent workspace (`agent/`). Related surfaces:
 
 ## Tools in this crate
 
-Read tools are absent from the list when the bound scope does not include them. Wallet and token writes reuse the ordinary submit path; `activity.wait` reuses the ordinary track path. Operator walkthrough: [`docs/wiki/RunningAnAgent.md`](../../../docs/wiki/RunningAnAgent.md).
+Read tools are absent from the list when the bound scope does not include them. Wallet and token writes reuse the ordinary submit path; `activity.wait` uses the `Wait` operation and the existing receipt tracking stages. Operator walkthrough: [`docs/wiki/RunningAnAgent.md`](../../../docs/wiki/RunningAnAgent.md).
 
 | Tool | Kind | Required scope | Daemon operation |
 | --- | --- | --- | --- |
@@ -36,7 +36,7 @@ Read tools are absent from the list when the bound scope does not include them. 
 | `token.mint` | write | `write:token:mint` | `Submit` |
 | `token.transfer` | write | `write:token:transfer` | `Submit` |
 | `activity.track` | write | `write:track` | `Track` |
-| `activity.wait` | write | `write:activity:wait` | `Track` |
+| `activity.wait` | write | `write:activity:wait` | `Wait` |
 
 Write tools follow the ordinary daemon path: prepare, disclose, sign, submit, track. Outcomes are evidence-shaped (`Executed` + receipt, `Unknown`, or `Failed`). Read-only deployment omits write tools entirely. This catalogue is not the CLI `layerx mcp serve` surface (`receipt.get` / `activity.submit` only).
 

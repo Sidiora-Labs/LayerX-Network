@@ -684,7 +684,8 @@ fn tool_operation(name: &str) -> Option<Operation> {
         "activity.submit" | "wallet.send" | "token.create" | "token.mint" | "token.transfer" => {
             Some(Operation::Submit)
         }
-        "activity.track" | "activity.wait" => Some(Operation::Track),
+        "activity.track" => Some(Operation::Track),
+        "activity.wait" => Some(Operation::Wait),
         _ => None,
     }
 }

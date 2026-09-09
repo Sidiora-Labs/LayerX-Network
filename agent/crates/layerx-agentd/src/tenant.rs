@@ -192,7 +192,8 @@ impl OperationClass {
                 "write:token:mint",
                 "write:token:transfer",
             ],
-            Operation::Track => &["write", "write:track", "write:activity:wait"],
+            Operation::Track => &["write", "write:track"],
+            Operation::Wait => &["write", "write:activity:wait"],
             operation => match Self::for_operation(operation) {
                 Some(Self::Read) => &["read"],
                 Some(Self::Subscribe) => &["subscribe"],
@@ -481,5 +482,20 @@ mod lifecycle_scope_tests {
             assert!(!OperationClass::authorized_scopes(operation).contains(&"read"));
             assert!(!OperationClass::authorized_scopes(operation).contains(&"program:call"));
         }
+    }
+    #[test]
+    fn wait_alias_does_not_authorize_track_or_other_operations() {
+        assert_eq!(
+            OperationClass::for_operation(Operation::Wait),
+            Some(OperationClass::Write)
+        );
+        assert_eq!(
+            OperationClass::authorized_scopes(Operation::Wait),
+            &["write", "write:activity:wait"]
+        );
+        for operation in [Operation::Track, Operation::Submit, Operation::ReadBalance] {
+            assert!(!OperationClass::authorized_scopes(operation).contains(&"write:activity:wait"));
+        }
+        assert!(!OperationClass::authorized_scopes(Operation::Wait).contains(&"write:track"));
     }
 }
