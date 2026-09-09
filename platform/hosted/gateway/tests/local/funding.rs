@@ -1,4 +1,6 @@
 use super::*;
+use layerx_crypto::payments::{Grant, Payment, ReceiverAuthorization};
+use layerx_crypto::send::{encode_payment_envelope, EnvelopeOptions};
 use layerx_intents::{compile, Intent, IntentKind, LxpSend};
 use layerx_platform_core::{
     asset_registry, domain_hash, main_account, send_context_hash, SignedSend,
@@ -12,10 +14,31 @@ use layerx_types::intent::{
 use layerx_wire::encode::Encoder;
 use layerx_wire::hash::Domain;
 
+const RECIPIENT_FUNDING: &str = "1000000";
+
 pub(super) struct Funding {
     nodes: Vec<Daemon>,
     root: PathBuf,
     pub(super) recipient_did: String,
+    pub(super) recipient_seed: [u8; 32],
+}
+
+pub(super) struct SignedPayment {
+    pub(super) canonical: Vec<u8>,
+    pub(super) activity_id: [u8; 32],
+}
+
+pub(super) struct GrantRequest<'a> {
+    pub(super) payer_seed: &'a [u8; 32],
+    pub(super) payer_did: &'a str,
+    pub(super) recipient_did: &'a str,
+    pub(super) asset: [u8; 32],
+    pub(super) per_draw_maximum: u128,
+    pub(super) allowance: u128,
+    pub(super) recurring_window: Option<u64>,
+    pub(super) expiration: u64,
+    pub(super) purpose_hash: [u8; 32],
+    pub(super) revocation_sequence: u64,
 }
 
 impl Drop for Funding {
@@ -95,6 +118,7 @@ pub(super) fn start() -> (Cluster, Funding) {
         nodes: Vec::new(),
         root,
         recipient_did: recipient_did.clone(),
+        recipient_seed,
     };
     let seed = random32();
     let did = treasury_did(&seed);
@@ -128,7 +152,8 @@ pub(super) fn start() -> (Cluster, Funding) {
         "deployment JSON",
     );
     assert_eq!(deployment["chain_id"], 31337);
-    let recipient_deployment = deposit_recipient(&funding, &primary, &recipient_did);
+    let recipient_deployment =
+        deposit_recipient(&funding, &primary, &recipient_did, RECIPIENT_FUNDING);
     let secondary = funding.anvil(Some((
         &primary,
         recipient_deployment["fork_block"]
@@ -169,7 +194,7 @@ pub(super) fn start() -> (Cluster, Funding) {
         recipient_deployment["transaction"]
             .as_str()
             .required("recipient transaction"),
-        "1",
+        RECIPIENT_FUNDING,
     );
     credit_recipient(
         &funding,
@@ -218,7 +243,12 @@ fn custody_profile(
     );
 }
 
-fn deposit_recipient(funding: &Funding, primary: &str, recipient_did: &str) -> serde_json::Value {
+fn deposit_recipient(
+    funding: &Funding,
+    primary: &str,
+    recipient_did: &str,
+    amount: &str,
+) -> serde_json::Value {
     let recipient_deployment = funding.root.join("recipient-deployment.json");
     let output = Command::new("python3")
         .arg(repository_root().join("platform/hosted/gateway/tests/local/deposit_recipient.py"))
@@ -229,6 +259,7 @@ fn deposit_recipient(funding: &Funding, primary: &str, recipient_did: &str) -> s
                 "0x{}",
                 hex_encode(&main_account(recipient_did).required("recipient account"))
             ),
+            amount,
             &text(&recipient_deployment),
         ])
         .output()
@@ -391,9 +422,20 @@ fn submit_credit(cluster: &Cluster, signed: &[u8], seed: &[u8; 32]) {
     selector.extend_from_slice(&ack.activity_id());
     selector.extend_from_slice(&3000_u32.to_be_bytes());
     drop(transport);
+    thread::sleep(Duration::from_millis(100));
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
-        let (tag, bytes) = receipt_wait_request(&cluster.lni_socket, &selector);
+        let (tag, bytes) = match receipt_wait(&cluster.lni_socket, &selector) {
+            Ok(value) => value,
+            Err(error) => {
+                assert!(
+                    Instant::now() < deadline,
+                    "credit receipt deadline after transport refusal: {error}"
+                );
+                thread::sleep(Duration::from_millis(50));
+                continue;
+            }
+        };
         assert_eq!(tag, 6);
         if !bytes.is_empty() {
             let receipt = must(
@@ -406,7 +448,38 @@ fn submit_credit(cluster: &Cluster, signed: &[u8], seed: &[u8; 32]) {
             return;
         }
         assert!(Instant::now() < deadline, "credit receipt deadline");
+        thread::sleep(Duration::from_millis(50));
     }
+}
+
+fn receipt_wait(socket: &Path, selector: &[u8]) -> Result<(u16, Vec<u8>), String> {
+    use layerx_client::lni::schema::{decode_envelope, encode_envelope, Envelope};
+    use layerx_client::lni::transport::FrameTransport;
+
+    let gate = ConnectionGate::new(1);
+    let mut transport = Uds::connect(socket, &gate, lni_limits())
+        .map_err(|error| format!("wait connection: {error:?}"))?;
+    let handshake = perform(&mut transport, &handshake_config(), None)
+        .map_err(|error| format!("wait handshake: {error:?}"))?;
+    let request = encode_envelope(Envelope {
+        version: handshake.node().interface_version,
+        message_tag: 5,
+        correlation_id: 1,
+        canonical_payload: selector,
+        proof_material: &[],
+    })
+    .map_err(|error| format!("wait encoding: {error:?}"))?;
+    transport
+        .send(&request)
+        .map_err(|error| format!("wait send: {error:?}"))?;
+    let bytes = transport
+        .receive()
+        .map_err(|error| format!("wait receive: {error:?}"))?;
+    let answer = decode_envelope(&bytes).map_err(|error| format!("wait decode: {error:?}"))?;
+    if answer.correlation_id != 1 {
+        return Err("wait correlation mismatch".into());
+    }
+    Ok((answer.message_tag, answer.canonical_payload.to_vec()))
 }
 
 fn funded_genesis(
@@ -647,6 +720,154 @@ pub(super) fn send(
         destination_account: destination,
         signer_public_key: public_key,
         idempotency_key: request.idempotency_key,
+    })
+}
+
+pub(super) fn payer_grant(request: &GrantRequest<'_>) -> Result<Grant, String> {
+    let signing_key = SigningKey::from_bytes(request.payer_seed);
+    let public_key = signing_key.verifying_key().to_bytes();
+    let from = main_account(request.payer_did)?;
+    let recipient = main_account(request.recipient_did)?;
+    let recurring = request.recurring_window.is_some();
+    let window_length = request.recurring_window.unwrap_or(0);
+    let mut message = Encoder::new(384);
+    message
+        .fixed(b"LXP:GRANT:v1")
+        .and_then(|()| message.fixed(&from))
+        .and_then(|()| message.fixed(&recipient))
+        .and_then(|()| message.fixed(&request.asset))
+        .and_then(|()| message.u128(request.per_draw_maximum))
+        .and_then(|()| message.u128(request.allowance))
+        .and_then(|()| message.u8(u8::from(recurring)))
+        .and_then(|()| message.u64(window_length))
+        .and_then(|()| message.u64(request.expiration))
+        .and_then(|()| message.fixed(&request.purpose_hash))
+        .and_then(|()| message.u8(0))
+        .and_then(|()| message.fixed(&[0; 32]))
+        .and_then(|()| message.u64(request.revocation_sequence))
+        .and_then(|()| message.fixed(&public_key))
+        .map_err(|error| format!("grant authorization is too large: {error:?}"))?;
+    let id = domain_hash(Domain::AuthorityHash, &message.finish());
+    Ok(Grant {
+        id,
+        from,
+        recipient,
+        asset: request.asset,
+        per_draw_maximum: request.per_draw_maximum,
+        allowance: request.allowance,
+        recurring,
+        window_length,
+        expiration: request.expiration,
+        purpose_hash: request.purpose_hash,
+        has_reference: false,
+        reference_hash: [0; 32],
+        revocation_sequence: request.revocation_sequence,
+        public_key,
+        signature: signing_key.sign(&id).to_bytes(),
+    })
+}
+
+pub(super) fn receive(
+    recipient_seed: &[u8; 32],
+    grant: &Grant,
+    receiver_sequence: u64,
+    idempotency_key: [u8; 32],
+    amount: u128,
+) -> Result<Payment, String> {
+    let signing_key = SigningKey::from_bytes(recipient_seed);
+    let public_key = signing_key.verifying_key().to_bytes();
+    let mut purpose = Vec::with_capacity(64);
+    purpose.extend_from_slice(&grant.purpose_hash);
+    if grant.has_reference {
+        purpose.extend_from_slice(&grant.reference_hash);
+    }
+    let context_hash = domain_hash(Domain::ContextHash, &purpose);
+    let mut message = Encoder::new(512);
+    message
+        .fixed(b"LXP:RECEIVE:v1")
+        .and_then(|()| message.fixed(&grant.from))
+        .and_then(|()| message.fixed(&grant.recipient))
+        .and_then(|()| message.fixed(&grant.asset))
+        .and_then(|()| message.u128(amount))
+        .and_then(|()| message.fixed(&grant.id))
+        .and_then(|()| message.u64(receiver_sequence))
+        .and_then(|()| message.fixed(&idempotency_key))
+        .and_then(|()| message.fixed(&context_hash))
+        .and_then(|()| message.u8(1))
+        .and_then(|()| message.fixed(&grant.recipient))
+        .and_then(|()| message.fixed(&context_hash))
+        .and_then(|()| message.u32(NETWORK_ID))
+        .and_then(|()| message.u16(PROTOCOL_VERSION))
+        .map_err(|error| format!("receive authorization is too large: {error:?}"))?;
+    let signature = signing_key
+        .sign(&domain_hash(Domain::SignaturePreimage, &message.finish()))
+        .to_bytes();
+    Ok(Payment::Receive {
+        from: grant.from,
+        to: grant.recipient,
+        asset: grant.asset,
+        amount,
+        grant: grant.id,
+        sequence: receiver_sequence,
+        idempotency_key,
+        context_hash,
+        receiver_authorization: ReceiverAuthorization {
+            kind: 1,
+            controller: grant.recipient,
+            public_key,
+            signature,
+            signed_context_hash: context_hash,
+            network_id: NETWORK_ID,
+            protocol_version: PROTOCOL_VERSION,
+        },
+        payer_grant: Box::new(grant.clone()),
+    })
+}
+
+pub(super) fn payment(
+    seed: &[u8; 32],
+    actor: &str,
+    identity_sequence: u64,
+    idempotency_key: [u8; 32],
+    payment: &Payment,
+) -> Result<SignedPayment, String> {
+    let public_key = SigningKey::from_bytes(seed).verifying_key().to_bytes();
+    let (module, ordinal) = payment.activity_type();
+    let payload = payment
+        .encode(actor.as_bytes())
+        .map_err(|error| format!("payment payload: {error:?}"))?;
+    let now = now_ms();
+    let encoded = encode_payment_envelope(
+        module,
+        ordinal,
+        &payload,
+        &EnvelopeOptions {
+            actor,
+            public_key,
+            protocol_version: PROTOCOL_VERSION,
+            network_id: NETWORK_ID,
+            identity_sequence,
+            idempotency_key,
+            fee_limit: 1_000_000_000_000,
+            not_before: now.saturating_sub(1_000),
+            not_after: now.saturating_add(60_000),
+        },
+    )
+    .map_err(|error| format!("payment envelope: {error:?}"))?;
+    let signature = disclosed_signature(seed, &encoded.canonical, &encoded.registry)?;
+    let signed = encoded.envelope.attach_signature(
+        Signature::new(&signature)
+            .map_err(|error| format!("payment signature is invalid: {error:?}"))?,
+    );
+    let canonical = layerx_wire::activity::encode_signed_envelope(&signed)
+        .map_err(|error| format!("signed payment is invalid: {error:?}"))?;
+    let decoded = layerx_wire::activity::decode_signed(&canonical, &encoded.registry)
+        .map_err(|error| format!("signed payment does not decode: {error:?}"))?;
+    let activity_id = layerx_wire::hash::activity_id(&decoded)
+        .map_err(|error| format!("payment activity id is invalid: {error:?}"))?;
+    Ok(SignedPayment {
+        canonical,
+        activity_id,
     })
 }
 

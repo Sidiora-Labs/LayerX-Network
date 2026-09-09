@@ -380,7 +380,7 @@ fn start_local_gateway(
             local_secret(
                 &cluster.root,
                 "modules.json",
-                &serde_json::json!({"schema_version":2,"assets":[{"asset":hex_encode(&cluster.asset),"currency":"NATIVE","decimals":0,"symbol":"LXR"}],"modules":[{"module":1,"ordinals":[5]},{"module":9,"ordinals":[1,2,3,5,6,7]}]}).to_string(),
+                &serde_json::json!({"schema_version":2,"assets":[{"asset":hex_encode(&cluster.asset),"currency":"NATIVE","decimals":0,"symbol":"LXR"}],"modules":[{"module":1,"ordinals":[5,6,7]},{"module":9,"ordinals":[1,2,3,5,6,7]}]}).to_string(),
             ),
         ),
     ]);
@@ -859,6 +859,455 @@ fn rpc_account_sequence(http: &Http, source: &str, index: u64) -> u64 {
         .required("account sequence")
         .parse::<u64>()
         .required("sequence integer")
+}
+
+fn gateway_rpc(
+    http: &Http,
+    authorization: &str,
+    id: u64,
+    method: &str,
+    params: &serde_json::Value,
+) -> serde_json::Value {
+    let request = serde_json::to_vec(
+        &serde_json::json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}),
+    )
+    .required("gateway RPC request");
+    let answer = http.request(
+        "POST",
+        "/rpc",
+        &[
+            ("Content-Type", "application/json"),
+            ("Authorization", authorization),
+        ],
+        &request,
+    );
+    assert_eq!(answer.status, 200, "{}", answer.body);
+    let value = json(&answer);
+    assert_eq!(value["id"], id);
+    value
+}
+
+fn rpc_account_balance(http: &Http, authorization: &str, account: &[u8; 32], id: u64) -> u128 {
+    gateway_rpc(
+        http,
+        authorization,
+        id,
+        "lx_getAccount",
+        &serde_json::json!([hex_encode(account)]),
+    )["result"]["balance"]
+        .as_str()
+        .required("account balance")
+        .parse()
+        .required("account balance integer")
+}
+
+fn send_payment(
+    http: &Http,
+    authorization: &str,
+    id: u64,
+    signed: &funding::SignedPayment,
+    commitment: &str,
+) -> (serde_json::Value, u128) {
+    let started = Instant::now();
+    let result = gateway_rpc(
+        http,
+        authorization,
+        id,
+        "lx_sendActivity",
+        &serde_json::json!([hex_encode(&signed.canonical), commitment]),
+    );
+    let elapsed = started.elapsed().as_micros();
+    assert!(result.get("error").is_none(), "{result}");
+    (result, elapsed)
+}
+
+struct PaymentReceiptEvidence {
+    bytes: Vec<u8>,
+    timestamp: u64,
+    settlement_reference: String,
+}
+
+fn verify_payment_receipt(
+    result: &serde_json::Value,
+    cluster: &Cluster,
+    signed: &funding::SignedPayment,
+    commitment: &str,
+    expected_result: i32,
+    draw: Option<(&layerx_crypto::payments::Grant, u128)>,
+) -> PaymentReceiptEvidence {
+    assert_eq!(result["result"]["commitment"], commitment, "{result}");
+    assert_eq!(
+        result["result"]["activity_id"],
+        hex_encode(&signed.activity_id)
+    );
+    assert_eq!(result["result"]["result_code"], expected_result, "{result}");
+    let bytes = layerx_platform_core::hex_decode(
+        result["result"]["receipt"]
+            .as_str()
+            .required("canonical payment receipt"),
+    )
+    .required("payment receipt hex");
+    let receipt = layerx_proof::receipt::verify_sequencer_signature(&bytes, cluster.sequencer_key)
+        .required("payment receipt signature");
+    let protocol = receipt.protocol().required("protocol payment receipt");
+    assert_eq!(protocol.activity_id(), signed.activity_id);
+    assert_eq!(protocol.result_code(), expected_result);
+    assert_eq!(protocol.protocol_version(), PROTOCOL_VERSION);
+    if let Some((grant, amount)) = draw {
+        assert_eq!(protocol.module_id(), ModuleId::Asset as u16);
+        assert_eq!(protocol.operation(), 6);
+        assert_eq!(protocol.asset(), grant.asset);
+        assert_eq!(protocol.amount(), amount);
+        assert_eq!(protocol.from(), grant.from);
+        assert_eq!(protocol.to(), grant.recipient);
+        assert_eq!(
+            protocol.debit_balance_before().checked_sub(amount),
+            Some(protocol.debit_balance_after())
+        );
+        assert_eq!(
+            protocol.credit_balance_before().checked_add(amount),
+            Some(protocol.credit_balance_after())
+        );
+        let mut purpose = Vec::with_capacity(64);
+        purpose.extend_from_slice(&grant.purpose_hash);
+        if grant.has_reference {
+            purpose.extend_from_slice(&grant.reference_hash);
+        }
+        assert_eq!(
+            protocol.context_hash(),
+            layerx_platform_core::domain_hash(layerx_wire::hash::Domain::ContextHash, &purpose)
+        );
+        assert!(protocol.fee_charged() > 0);
+    }
+    let settlement_reference = format!(
+        "lxp:{}",
+        hex_encode(&layerx_wire::hash::merkle_leaf(&bytes).required("settlement receipt digest"))
+    );
+    assert_eq!(settlement_reference.len(), 68);
+    PaymentReceiptEvidence {
+        bytes,
+        timestamp: protocol.timestamp(),
+        settlement_reference,
+    }
+}
+
+fn verify_batch_inclusion(result: &serde_json::Value, cluster: &Cluster, receipt: &[u8]) {
+    let evidence = &result["result"]["batch_evidence"];
+    assert_eq!(evidence["kind"], "receipt");
+    assert_eq!(evidence["activity_id"], result["result"]["activity_id"]);
+    assert_eq!(evidence["canonical_value"], result["result"]["receipt"]);
+    let proof = &evidence["proof"];
+    let siblings = proof["siblings"]
+        .as_array()
+        .required("receipt proof siblings")
+        .iter()
+        .map(|value| {
+            layerx_platform_core::hex_decode(value.as_str().required("receipt proof sibling"))
+                .required("receipt proof sibling hex")
+                .try_into()
+                .required("receipt proof sibling size")
+        })
+        .collect::<Vec<[u8; 32]>>();
+    let proof = layerx_proof::merkle::Proof::new(
+        u32::try_from(proof["leaf_index"].as_u64().required("receipt proof index"))
+            .required("receipt proof index bound"),
+        u32::try_from(proof["leaf_count"].as_u64().required("receipt proof count"))
+            .required("receipt proof count bound"),
+        siblings,
+    )
+    .required("receipt proof shape");
+    let header = layerx_platform_core::hex_decode(
+        evidence["signed_header"]["canonical_header"]
+            .as_str()
+            .required("signed batch header"),
+    )
+    .required("signed batch header hex");
+    let signature: [u8; 64] = layerx_platform_core::hex_decode(
+        evidence["signed_header"]["signature"]
+            .as_str()
+            .required("signed batch signature"),
+    )
+    .required("signed batch signature hex")
+    .try_into()
+    .required("signed batch signature size");
+    let authorization = layerx_proof::inclusion::SequencerAuthorization::new(
+        cluster.sequencer_id,
+        cluster.sequencer_key,
+        1,
+        u64::MAX,
+    );
+    let included = layerx_proof::inclusion::verify_receipt(
+        receipt,
+        &proof,
+        &header,
+        &signature,
+        &authorization,
+    )
+    .required("signed batch receipt inclusion");
+    assert_eq!(included.header().header().network_id(), NETWORK_ID);
+    assert_eq!(
+        included.header().header().protocol_version(),
+        PROTOCOL_VERSION
+    );
+}
+
+fn signed_draw(
+    cluster: &Cluster,
+    funding: &funding::Funding,
+    http: &Http,
+    grant: &layerx_crypto::payments::Grant,
+    amount: u128,
+    id: u64,
+) -> funding::SignedPayment {
+    let recipient = hex_encode(&grant.recipient);
+    let identity_sequence = account_sequence(&cluster.lni_socket, &funding.recipient_did);
+    let receiver_sequence = rpc_account_sequence(http, &recipient, id);
+    assert_eq!(identity_sequence, receiver_sequence);
+    let idempotency_key = random32();
+    let receive = funding::receive(
+        &funding.recipient_seed,
+        grant,
+        receiver_sequence,
+        idempotency_key,
+        amount,
+    )
+    .required("canonical receive");
+    funding::payment(
+        &funding.recipient_seed,
+        &funding.recipient_did,
+        identity_sequence,
+        idempotency_key,
+        &receive,
+    )
+    .required("signed receive")
+}
+
+fn wait_for_next_grant_window(timestamp: u64, window: u64) {
+    let boundary = timestamp
+        .checked_sub(timestamp % window)
+        .and_then(|start| start.checked_add(window))
+        .required("grant window boundary");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while now_ms() <= boundary {
+        assert!(
+            Instant::now() < deadline,
+            "grant renewal window did not advance"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn run_metered_draws(
+    cluster: &Cluster,
+    funding: &funding::Funding,
+    http: &Http,
+    authorization: &str,
+) {
+    const SAMPLES: u64 = 20;
+    let payer_sequence = account_sequence(&cluster.lni_socket, &cluster.treasury_did);
+    let metered_grant = funding::payer_grant(&funding::GrantRequest {
+        payer_seed: &cluster.treasury_seed,
+        payer_did: &cluster.treasury_did,
+        recipient_did: &funding.recipient_did,
+        asset: cluster.asset,
+        per_draw_maximum: 1,
+        allowance: u128::from(SAMPLES),
+        recurring_window: None,
+        expiration: now_ms().saturating_add(300_000),
+        purpose_hash: random32(),
+        revocation_sequence: payer_sequence,
+    })
+    .required("metered grant");
+    let grant_key = random32();
+    let signed_grant = funding::payment(
+        &cluster.treasury_seed,
+        &cluster.treasury_did,
+        payer_sequence,
+        grant_key,
+        &layerx_crypto::payments::Payment::IssueGrant(metered_grant.clone()),
+    )
+    .required("signed metered grant");
+    let (grant_result, _) = send_payment(http, authorization, 100, &signed_grant, "executed");
+    verify_payment_receipt(&grant_result, cluster, &signed_grant, "executed", 0, None);
+
+    let mut samples = Vec::new();
+    for index in 0..SAMPLES {
+        let signed = signed_draw(cluster, funding, http, &metered_grant, 1, 200 + index);
+        let payer_before =
+            rpc_account_balance(http, authorization, &metered_grant.from, 300 + index * 3);
+        let (result, elapsed) =
+            send_payment(http, authorization, 301 + index * 3, &signed, "executed");
+        let evidence = verify_payment_receipt(
+            &result,
+            cluster,
+            &signed,
+            "executed",
+            0,
+            Some((&metered_grant, 1)),
+        );
+        let payer_after =
+            rpc_account_balance(http, authorization, &metered_grant.from, 302 + index * 3);
+        assert_eq!(payer_before.checked_sub(1), Some(payer_after));
+        if index == 0 {
+            let replay = gateway_rpc(
+                http,
+                authorization,
+                400,
+                "lx_sendActivity",
+                &serde_json::json!([hex_encode(&signed.canonical), "executed"]),
+            );
+            assert_eq!(replay["result"], result["result"]);
+            assert_eq!(
+                rpc_account_balance(http, authorization, &metered_grant.from, 401),
+                payer_after
+            );
+        }
+        println!(
+            "metered_draw_sample index={index} elapsed_us={elapsed} settlement_reference={}",
+            evidence.settlement_reference
+        );
+        samples.push(elapsed);
+    }
+    samples.sort_unstable();
+    println!(
+        "metered_draw_submit_to_receipt_us samples={SAMPLES} p50={} p99={} transport=gateway_https_json_rpc commitment=executed funding=verified_custody receipt_wait=commit_condition",
+        samples[9], samples[19]
+    );
+}
+
+fn run_subscription_renewal(
+    cluster: &Cluster,
+    funding: &funding::Funding,
+    http: &Http,
+    authorization: &str,
+) {
+    const SUBSCRIPTION_WINDOW_MS: u64 = 1_000;
+    let subscription_issue_sequence = account_sequence(&cluster.lni_socket, &cluster.treasury_did);
+    let subscription_grant = funding::payer_grant(&funding::GrantRequest {
+        payer_seed: &cluster.treasury_seed,
+        payer_did: &cluster.treasury_did,
+        recipient_did: &funding.recipient_did,
+        asset: cluster.asset,
+        per_draw_maximum: 1,
+        allowance: 1,
+        recurring_window: Some(SUBSCRIPTION_WINDOW_MS),
+        expiration: now_ms().saturating_add(300_000),
+        purpose_hash: random32(),
+        revocation_sequence: subscription_issue_sequence,
+    })
+    .required("subscription grant");
+    let subscription_key = random32();
+    let signed_subscription = funding::payment(
+        &cluster.treasury_seed,
+        &cluster.treasury_did,
+        subscription_issue_sequence,
+        subscription_key,
+        &layerx_crypto::payments::Payment::IssueGrant(subscription_grant.clone()),
+    )
+    .required("signed subscription grant");
+    let (subscription_result, _) =
+        send_payment(http, authorization, 500, &signed_subscription, "executed");
+    verify_payment_receipt(
+        &subscription_result,
+        cluster,
+        &signed_subscription,
+        "executed",
+        0,
+        None,
+    );
+    let first_draw = signed_draw(cluster, funding, http, &subscription_grant, 1, 501);
+    let (first_result, _) = send_payment(http, authorization, 502, &first_draw, "executed");
+    let first_evidence = verify_payment_receipt(
+        &first_result,
+        cluster,
+        &first_draw,
+        "executed",
+        0,
+        Some((&subscription_grant, 1)),
+    );
+    wait_for_next_grant_window(first_evidence.timestamp, SUBSCRIPTION_WINDOW_MS);
+    let renewal = signed_draw(cluster, funding, http, &subscription_grant, 1, 503);
+    assert_eq!(
+        gateway_rpc(
+            http,
+            authorization,
+            504,
+            "lx_sendActivity",
+            &serde_json::json!([hex_encode(&renewal.canonical), "ack"]),
+        )["error"]["code"],
+        -32602
+    );
+    let (renewal_result, renewal_elapsed) =
+        send_payment(http, authorization, 505, &renewal, "batched");
+    let renewal_evidence = verify_payment_receipt(
+        &renewal_result,
+        cluster,
+        &renewal,
+        "batched",
+        0,
+        Some((&subscription_grant, 1)),
+    );
+    assert!(
+        renewal_evidence.timestamp / SUBSCRIPTION_WINDOW_MS
+            > first_evidence.timestamp / SUBSCRIPTION_WINDOW_MS
+    );
+    verify_batch_inclusion(&renewal_result, cluster, &renewal_evidence.bytes);
+    for (id, method) in [(506, "lx_getActivityStatus"), (507, "lx_getReceipt")] {
+        let recovered = gateway_rpc(
+            http,
+            authorization,
+            id,
+            method,
+            &serde_json::json!([hex_encode(&renewal.activity_id)]),
+        );
+        assert_eq!(
+            recovered["result"]["activity_id"],
+            hex_encode(&renewal.activity_id)
+        );
+        assert_eq!(
+            recovered["result"]["receipt"],
+            renewal_result["result"]["receipt"]
+        );
+        assert_eq!(recovered["result"]["result_code"], 0);
+    }
+    println!(
+        "subscription_renewal elapsed_us={renewal_elapsed} first_window={} renewal_window={} commitment=batched settlement_reference={}",
+        first_evidence.timestamp / SUBSCRIPTION_WINDOW_MS,
+        renewal_evidence.timestamp / SUBSCRIPTION_WINDOW_MS,
+        renewal_evidence.settlement_reference
+    );
+}
+
+#[test]
+fn local_gateway_grant_draw_and_subscription_renewal_latency() {
+    let (cluster, funding) = funding::start();
+    let certificates = certificates(&cluster.root);
+    let boundary = start_boundary(&cluster, &certificates);
+    let identity = start_local_identity(&cluster, &certificates);
+    let authority = start_local_authority(&cluster, &certificates);
+    let redis = start_local_redis(&cluster, &certificates);
+    let gateway = start_local_gateway(
+        &cluster,
+        &certificates,
+        &boundary,
+        &identity,
+        &authority,
+        &redis,
+    );
+    let key = issue_local_scoped_key(&certificates, &gateway, &identity, &["activity:write"]);
+    let http = Http {
+        port: gateway.port,
+        ca: Certificate::from_der(&certificates.ca_der).required("CA"),
+        identity: None,
+    };
+    let authorization = format!(
+        "LayerX-Key {}:{}",
+        key["key"]["id"].as_str().required("key id"),
+        key["key"]["secret"].as_str().required("key secret")
+    );
+    run_metered_draws(&cluster, &funding, &http, &authorization);
+    run_subscription_renewal(&cluster, &funding, &http, &authorization);
+    print_payment_timings(&cluster);
 }
 
 #[test]

@@ -8584,3 +8584,27 @@ symbol = "local_gateway_rpc start_local_redis"
 observed = "The current-source local gateway RPC and gateway package commands both exit 101 under --locked because their committed unowned Cargo.lock files require dependency reconciliation after the signer merge. The hosted lifecycle requires a TLS-enabled executable specifically at /usr/bin/redis-server; it is absent, redis-server is absent from PATH, and repository tooling contains no executable Redis binary. Hosted manifests reference Redis images, but no container or cluster gate is available on this host. The existing local RPC harness exercises signed Programs and SEND activities and contains no funded grant-issue, metered receive or later-period renewal case. Evidence: qual-logs/pay6/pay6e-hosted-rpc.log, pay6e-gateway-unit.log and pay6e-redis-prerequisite.log."
 assumption = "Updating either unowned lockfile, substituting a fake Redis process or claiming SEND coverage as a payer-grant draw would violate the qualification boundary. A real hosted metered draw and renewal remain unrun."
 severity = "blocker"
+
+[observation.6.7.4035]
+task = "6.7"
+file = "platform/middleware/merchant/src/index.ts platform/middleware/conformance/src/receipts.ts platform/middleware/conformance/service.mjs"
+symbol = "MerchantSettlementWebhooks buildSignedReceipt runMerchantServiceScenarios runAgentServiceScenarios"
+observed = "Merchant webhook settlement now derives the complete-receipt Merkle-leaf digest from the verified canonical receipt while retaining the SDK signing-domain digest for receipt verification. Conformance fixtures expose both digests explicitly, merchant service checks use the maintained state field, and agent checks bind the SDK verification digest. All five middleware TypeScript builds and the aggregate 29 of 29 conformance checks pass. TypeScript and Python payment suites pass 21 and 42 tests. Evidence: qual-logs/pay6/pay6f-middleware-build.log, pay6f-conformance.log, pay6f-payments-typescript.log and pay6f-payments-python.log."
+assumption = "Local conformance qualifies the owned contract reconciliation. It does not establish funded native execution, a deployed public endpoint or production settlement."
+severity = "note"
+
+[observation.6.7.4036]
+task = "6.7"
+file = "platform/Cargo.lock platform/hosted/gateway/tests/local/Cargo.lock platform/hosted/gateway/tests/local/funding.rs platform/hosted/gateway/tests/local/lifecycle.rs platform/hosted/core/src/main.rs"
+symbol = "submission_registry payer_grant signed_draw local_gateway_grant_draw_and_subscription_renewal_latency"
+observed = "Both Cargo lockfiles now contain only the packages and dependency disambiguation required by the workspace's pinned tungstenite dependency; locked hosted service builds and 37 gateway tests pass. A real TLS Redis 7.0.15 executable was installed at /usr/bin/redis-server and its system service is disabled and inactive. The local harness uses its existing certificate generator and an isolated TLS Redis process. The added disposable-custody fixture funds both principals, signs canonical Asset grant and Receive activities with real keys, requires executed and batched commitments, rejects ack, verifies receipts and batch inclusion, checks replay without a second debit, and records draw latency only after twenty successful draws. Strict standalone Clippy passes. Runtime reaches the real gateway after both custody credits, but platform/hosted/core/src/main.rs submission_registry registers only Asset ordinal 5; the gateway forwards ordinal 7 to /v1/activities and core returns invalid_activity before native admission. No draw executes and no p50 or p99 is claimed. Evidence: qual-logs/pay6/pay6f-redis-install.log, pay6f-redis-disable.log, pay6f-redis-state.log, pay6f-hosted-service-build.log, pay6f-gateway-tests.log, pay6f-hosted-clippy-rerun.log and pay6f-hosted-grant-draw-renewal-receipt-retry.log."
+assumption = "The hosted core registry must admit the native Asset grant and Receive ordinals without bypassing canonical decoding. That core path is outside this lane's ownership. Cluster, image, deployed endpoint and production gates remain unrun."
+severity = "blocker"
+
+[observation.6.7.4037]
+task = "6.7"
+file = "agent/sdk/python/layerx_sdk/generated/__init__.py agent/sdk/python/layerx_sdk/native_capabilities.py agent/sdk/python/layerx_sdk/program_wire.py agent/sdk/python/layerx_sdk/programs.py agent/sdk/python/tests"
+symbol = "package-wide Ruff format and lint"
+observed = "Python SDK unit discovery passes all 34 tests, and the nine owned x402 modules pass Ruff format and lint. Package-wide ruff format --check exits 1 with 31 pre-existing files requiring formatting. Package-wide ruff check exits 1 with 239 pre-existing diagnostics, including wildcard generated exports, multiple statements per line and test-only style findings. None of the reported files changed in this continuation. Evidence: qual-logs/pay6/pay6f-sdk-python.log, pay6f-python-x402-format.log, pay6f-python-x402-lint.log, pay6f-python-format.log and pay6f-python-lint.log."
+assumption = "Package-wide Python formatting and lint require their owning paths. Reformatting or repairing unrelated Programs, generated and test code is outside this lane; the focused x402 Python surface remains qualified."
+severity = "blocker"
