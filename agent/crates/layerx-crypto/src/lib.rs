@@ -17,6 +17,8 @@ pub mod redact;
 pub mod remote;
 pub mod secp256k1;
 #[cfg(feature = "custody")]
+pub mod send;
+#[cfg(feature = "custody")]
 pub mod session;
 #[cfg(feature = "custody")]
 pub mod signer;

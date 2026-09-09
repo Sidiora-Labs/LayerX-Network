@@ -1,18 +1,15 @@
 use std::time::Duration;
 
-use layerx_crypto::disclosure::{bind, Disclosure};
+use layerx_crypto::disclosure::Disclosure;
 pub use layerx_crypto::payments::{Grant, Payment, Registration};
+pub use layerx_crypto::send::SendDebit;
+use layerx_crypto::send::{encode_payment_envelope, EnvelopeOptions};
 use layerx_crypto::signer::{sign_disclosed, Signer};
-use layerx_types::activity::{
-    Authority, EnvelopeBuilder, Signature, TimestampBound, UnsignedEnvelope,
-};
-use layerx_types::amount::Amount;
-use layerx_types::ids::{Did, IdempotencyKey};
-use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry, Payload};
-use layerx_wire::activity::{decode_signed, encode_signed_envelope, encode_unsigned_envelope};
-use layerx_wire::hash::{activity_id, Domain};
+use layerx_types::activity::{Signature, UnsignedEnvelope};
+use layerx_types::payload::{ModuleId, ModuleRegistry};
+use layerx_wire::activity::{decode_signed, encode_signed_envelope};
+use layerx_wire::hash::activity_id;
 use serde_json::Value;
-use sha2::{Digest as _, Sha256};
 
 use crate::rpc::{Commitment, RpcClient, RpcError};
 use crate::rpc_verification::{ReceiptPolicy, VerifiedRpcReceipt};
@@ -81,6 +78,26 @@ impl Wallet<'_> {
         let prepared = self.prepare_payload(ModuleId::Asset, 5, canonical_send_payload, options)?;
         self.execute(prepared, options).await
     }
+    /// # Errors
+    /// Refuses scope mismatches, stale account state, signer refusal or missing receipt evidence.
+    pub async fn send_debit(
+        &self,
+        debit: &SendDebit,
+        options: &PaymentOptions,
+    ) -> Result<VerifiedRpcReceipt, RpcError> {
+        if debit.network_id != self.policy.network_id
+            || debit.protocol_version != self.policy.protocol_version
+            || debit.idempotency_key != options.idempotency_key
+        {
+            return Err(RpcError::InvalidRequest);
+        }
+        if source_sequence(self.rpc, debit.from)? != debit.source_sequence {
+            return Err(RpcError::StaleSourceSequence);
+        }
+        let payload = debit.sign(self.signer).await.map_err(RpcError::Signing)?;
+        self.send(&payload, options).await
+    }
+
     /// # Errors
     /// Preserves prepare, signing, submission and verification refusals.
     pub async fn open_account(
@@ -314,58 +331,28 @@ fn prepare_payload(
     public_key: [u8; 32],
     identity_sequence: u64,
 ) -> Result<PreparedPayment, RpcError> {
-    let kind = ActivityType::new(module, ordinal).map_err(|_| RpcError::InvalidRequest)?;
-    let registered =
-        ModuleRegistration::new(module, &[kind]).map_err(|_| RpcError::InvalidRequest)?;
-    let registry = ModuleRegistry::new(&[registered]).map_err(|_| RpcError::InvalidRequest)?;
-    let mut hash = Sha256::new();
-    hash.update(Domain::PayloadHash.tag());
-    hash.update(payload);
-    let mut builder = EnvelopeBuilder::new();
-    builder
-        .protocol_version(policy.protocol_version)
-        .map_err(|_| RpcError::InvalidRequest)?;
-    builder
-        .network_id(policy.network_id)
-        .map_err(|_| RpcError::InvalidRequest)?;
-    builder
-        .activity_type(kind)
-        .map_err(|_| RpcError::InvalidRequest)?;
-    builder
-        .actor_did(Did::new(options.actor.as_bytes()).map_err(|_| RpcError::InvalidRequest)?)
-        .map_err(|_| RpcError::InvalidRequest)?;
-    builder
-        .authority(Authority::owner(&public_key).map_err(|_| RpcError::InvalidRequest)?)
-        .map_err(|_| RpcError::InvalidRequest)?;
-    builder
-        .account_sequence(identity_sequence)
-        .map_err(|_| RpcError::InvalidRequest)?;
-    builder
-        .timestamp_bound(
-            TimestampBound::new(options.not_before, options.not_after)
-                .map_err(|_| RpcError::InvalidRequest)?,
-        )
-        .map_err(|_| RpcError::InvalidRequest)?;
-    builder
-        .idempotency_key(IdempotencyKey::new(options.idempotency_key))
-        .map_err(|_| RpcError::InvalidRequest)?;
-    builder
-        .fee_limit(Amount::from_u128(options.fee_limit))
-        .map_err(|_| RpcError::InvalidRequest)?;
-    builder
-        .payload_hash(hash.finalize().into())
-        .map_err(|_| RpcError::InvalidRequest)?;
-    builder
-        .payload(Payload::new(&registry, kind, payload).map_err(|_| RpcError::InvalidRequest)?)
-        .map_err(|_| RpcError::InvalidRequest)?;
-    let envelope = builder.build().map_err(|_| RpcError::InvalidRequest)?;
-    let canonical = encode_unsigned_envelope(&envelope).map_err(|_| RpcError::InvalidRequest)?;
-    let disclosure = bind(&canonical, &registry).map_err(|_| RpcError::Verification)?;
+    let encoded = encode_payment_envelope(
+        module,
+        ordinal,
+        payload,
+        &EnvelopeOptions {
+            actor: &options.actor,
+            public_key,
+            protocol_version: policy.protocol_version,
+            network_id: policy.network_id,
+            identity_sequence,
+            idempotency_key: options.idempotency_key,
+            fee_limit: options.fee_limit,
+            not_before: options.not_before,
+            not_after: options.not_after,
+        },
+    )
+    .map_err(|_| RpcError::Verification)?;
     Ok(PreparedPayment {
-        envelope,
-        registry,
-        canonical,
-        disclosure,
+        envelope: encoded.envelope,
+        registry: encoded.registry,
+        canonical: encoded.canonical,
+        disclosure: encoded.disclosure,
     })
 }
 
