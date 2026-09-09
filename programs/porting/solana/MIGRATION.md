@@ -367,9 +367,10 @@ primitive, which stays a caller-supplied boundary.
 LXT-20 request codecs live in `programs/sdk/rust/src/lxt20.rs`. The real
 `programs/sdk/rust/examples/token-lxt20` WASM reference executes all seven methods
 in runtime tests. Its bound interface and registry state-value inputs live in
-`programs/fixtures/pay5`; they do not prove native publication or settlement.
-Merchant/token native deploy/call proof remains blocked on signer-DID/account
-admission integration. The reference does not emulate the SPL Token program or
+`programs/fixtures/pay5`, alongside signed native deployment/call receipts.
+Run `python3 programs/fixtures/pay5/run_native_roundtrip.py` to replay the isolated
+native token and merchant settlements and compare canonical artifacts byte for
+byte. These fixtures do not certify a live deployment. The reference does not emulate the SPL Token program or
 make an unregistered backing account spendable.
 
 | SPL flow | LayerX mapping |
@@ -399,16 +400,21 @@ backing asset and ceiling; native admission resolves recipient and amount from
 calldata and checks actual caller grants on every call. Descriptors grant no
 spending authority.
 The merchant example at `programs/sdk/rust/examples/payments-merchant` shows the
-real guest bindings for a deposit and fee split. Its WASM build is not proof of
-native settlement. A token allowance alone does not authorize debiting another
+real guest bindings for a deposit and fee split. The native fixture checks its
+funding and payouts atomically, including settlement refusal rollback. A token
+allowance alone does not authorize debiting another
 principal's account, and token storage changes cannot replace 402 settlement.
 
 Native asset registration, account opening, mint and burn are separate signed
 asset activities, not LXT-20 methods. Per-asset accounts use
 `agent:<DID>:asset:<lowercase asset hex>` and the existing `LX:ACCOUNT:v1` rule;
 program accounts use the program-account domain with a u32 big-endian seed length.
-The current Programs principal/account equality and sequence-account lookup must
-be reconciled with DID ownership before claiming this end-to-end flow works.
+Programs envelopes bind the signer DID and identity sequence separately from
+the canonical payment account and its sequence. Native fees can use a different
+account from token funding. Account-bound terminal evidence commits actual
+account endpoints while retaining signer authorization. Go, Swift, .NET and JVM
+terminal verifiers still need support for that encoding; their integration is
+not qualified.
 
 SPL account closing/rent recovery, Token-2022 extensions, mint/freeze authority
 migration, multisig signer lists and an enumerable Anchor account context are not
