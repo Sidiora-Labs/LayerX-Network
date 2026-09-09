@@ -7933,3 +7933,11 @@ file = "platform/hosted/tests/beta-cluster.sh platform/hosted/human/provision.sh
 symbol = "beta_cluster_up human_evidence_provision human_native_provision"
 observed = "Local real owner production and Governance lifecycle/restart pass; both bonded configurations replay all ten owner batches. Live image builds, Secret mounts, disposable in-cluster paxd execution, StatefulSet rollout, owner provisioning Job, authenticated finality and journey readiness have not run on this build server. The actual owner Job is layerx-human-provision-owner; subsequent evidence assembly executes in human_evidence_provision."
 assumption = "Cluster qualification follows fold-in using operator-controlled owner-email, real registry admission/deployment journals and a produced movement custody reference. Preserve unknown-outcome markers, exact LXIP admission ordering, dedicated threshold-two guardians and all receipt/checkpoint checks. Independent replay does not resolve the recorded settlement RPC refusal."
+
+[observation.3.7.51]
+task = "3.7"
+severity = "blocker"
+file = "tests/test_guarantor_bond.c src/paxeer/lxp_finalisation.c"
+symbol = "refused lxp_checkpoint_finalisable"
+observed = "At pre-owner base 21c96f47 and current 7af7be05, test-guarantor-bond exits 2 from make and its binary exits 1. Diagnostic copies preserve every assertion and print the return path: successful finalisation returns 0 at implementation line 195, then checkpoint_epoch 8 versus certificate epoch 7 returns LXP_ERR_NON_CANONICAL (-3) at line 127 before clearing the output flag at line 130. refused initializes finalisable=true and requires false; main consequently returns 1 at test line 164. Both source files are identical to base. Logs: qual-logs/own1/own1f-base-bond.log, own1f-bond-base.log, own1f-bond-current.log."
+assumption = "Inherited output-flag contract conflict; implementation and assertions remain unchanged. The broader test-guarantor/test-guarantor-cert/test-guarantor-bond command exits 2 on both checkouts, but the base aggregate also has unresolved Programs linkage and is not a successful aggregate comparison. Raw logs: qual-logs/own1/own1f-base-native.log and own1f-current-native.log."
