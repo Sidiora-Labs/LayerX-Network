@@ -16,6 +16,25 @@ struct Hub {
 }
 static HUB: OnceLock<Mutex<Hub>> = OnceLock::new();
 static WORKER: std::sync::Once = std::sync::Once::new();
+static SOCKETS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+struct SocketGuard;
+impl SocketGuard {
+    fn acquire() -> Option<Self> {
+        use std::sync::atomic::Ordering;
+        SOCKETS
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+                (count < MAX_SUBSCRIBERS).then_some(count + 1)
+            })
+            .ok()
+            .map(|_| Self)
+    }
+}
+impl Drop for SocketGuard {
+    fn drop(&mut self) {
+        SOCKETS.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+    }
+}
 
 impl Hub {
     fn register(&mut self) -> Result<(u64, mpsc::Receiver<Value>), String> {
@@ -262,6 +281,9 @@ pub(super) fn serve(
     {
         return http::write_response(stream, &super::response(403, "insufficient_scope", None));
     }
+    let Some(_socket) = SocketGuard::acquire() else {
+        return http::write_response(stream, &super::response(429, "subscription_limit", Some(1)));
+    };
     let (id, receiver) = {
         let mut hub = HUB
             .get_or_init(Mutex::default)
@@ -362,7 +384,7 @@ fn session(
             }
             Err(mpsc::TryRecvError::Empty) => (),
         }
-        if last_ping.elapsed() >= Duration::from_secs(15) {
+        if last_ping.elapsed() >= Duration::from_secs(5) {
             if super::authenticate_key(config, request).is_err() {
                 return ws_wire::write(stream, 8, &1008_u16.to_be_bytes());
             }
@@ -375,6 +397,16 @@ fn session(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn socket_capacity_is_held_until_connection_closes() {
+        let sockets: Vec<_> = (0..MAX_SUBSCRIBERS)
+            .map(|_| SocketGuard::acquire().unwrap_or_else(|| panic!("slot")))
+            .collect();
+        assert!(SocketGuard::acquire().is_none());
+        drop(sockets);
+        assert!(SocketGuard::acquire().is_some());
+    }
+
     #[test]
     fn bounded_fanout_disconnects_slow_consumers() {
         let mut hub = Hub::default();
