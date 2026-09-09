@@ -15,7 +15,9 @@ lxp_result lx_account_list_did(const lx_account_registry *registry,
         uint8_t owner[32];
         size_t length;
         lxp_result status;
-        if (account->kind < LX_ACCOUNT_AGENT_MAIN || account->kind > LX_ACCOUNT_AGENT_MARGIN) continue;
+        if ((account->kind < LX_ACCOUNT_AGENT_MAIN ||
+             account->kind > LX_ACCOUNT_AGENT_MARGIN) &&
+            account->kind != LX_ACCOUNT_AGENT_ASSET) continue;
         status = lx_account_validate_canonical(account);
         if (status != LXP_OK) return status;
         if (account->name_length > 11U &&

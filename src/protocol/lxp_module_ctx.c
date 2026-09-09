@@ -155,7 +155,7 @@ static lxp_result commit_account(const lxp_module_ctx *ctx,
     if (ctx->module_id == LXP_MODULE_ASSET &&
         ctx->ledger_admission.bound &&
         ctx->ledger_admission.activity_type == LX_ASSET_ACCOUNT_OPEN &&
-        registration->account.kind == LX_ACCOUNT_AGENT_MAIN &&
+        registration->account.kind == LX_ACCOUNT_AGENT_ASSET &&
         lx_account_validate_canonical(&registration->account) == LXP_OK &&
         lxp_u128_is_zero(registration->account.balance) &&
         registration->account.next_sequence == 0U)
@@ -545,7 +545,7 @@ lxp_result lxp_ctx_asset_account_stage(
         candidate->name[cursor++] = hex[payload.asset_id[i] & 15U];
     }
     candidate->name_length = (uint16_t)cursor;
-    candidate->kind = LX_ACCOUNT_AGENT_MAIN;
+    candidate->kind = LX_ACCOUNT_AGENT_ASSET;
     candidate->has_asset = true;
     (void)memcpy(candidate->asset_id, payload.asset_id, 32U);
     candidate->has_authority_key = true;
@@ -1719,7 +1719,7 @@ lxp_result lxp_ctx_bind_ledger_receipt(
                        LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE)
             return LXP_ERR_NON_CANONICAL;
         account = &ctx->staged_accounts[0].account;
-        if (account->kind != LX_ACCOUNT_AGENT_MAIN ||
+        if (account->kind != LX_ACCOUNT_AGENT_ASSET ||
             lx_account_validate_canonical(account) != LXP_OK ||
             !lxp_u128_is_zero(account->balance) ||
             memcmp(account->id, input->to, 32U) != 0 ||

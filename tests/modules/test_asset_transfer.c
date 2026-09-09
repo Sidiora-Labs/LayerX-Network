@@ -149,8 +149,10 @@ int main(void)
     lx_account_registry accounts;
     lx_account *from;
     lx_account *to;
-    const char *from_name = "agent:did:key:a:main";
-    const char *to_name = "agent:did:key:b:main";
+    const char *from_name =
+        "agent:did:key:a:asset:0100000000000000000000000000000000000000000000000000000000000000";
+    const char *to_name =
+        "agent:did:key:b:asset:0100000000000000000000000000000000000000000000000000000000000000";
     uint8_t from_id[32];
     uint8_t to_id[32];
     uint8_t public_key[32];
@@ -178,6 +180,10 @@ int main(void)
     asset.asset_id[0] = 1U;
     asset.symbol_length = 1U;
     (void)memcpy(asset.symbol, "A", 2U);
+    asset.name[0] = (uint8_t)'A';
+    asset.name_length = 1U;
+    asset.issuer_kind = 2U;
+    asset.issuer_did32[0] = 1U;
     asset.custody_kind = LX_ASSET_CUSTODY_PAXEER;
     asset.custody_reference[0] = 1U;
     asset.custody_reference_length = 1U;
@@ -196,6 +202,8 @@ int main(void)
                                      (lxp_u128){ 0U, 100U }, 0U) != LXP_OK ||
         lxp_ledger_bootstrap_balance(to, asset.asset_id,
                                      (lxp_u128){ 0U, 0U }, 0U) != LXP_OK ||
+        from->kind != LX_ACCOUNT_AGENT_ASSET ||
+        to->kind != LX_ACCOUNT_AGENT_ASSET ||
         lxp_state_store_init(&state, 0U) != LXP_OK ||
         lxp_state_store_bind_accounts(&state, &accounts) != LXP_OK ||
         lxp_state_store_require_account_root(&state) != LXP_OK ||

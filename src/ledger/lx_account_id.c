@@ -160,7 +160,7 @@ lxp_result lx_account_name_parse(const uint8_t *name, size_t name_length,
              memcmp(name + name_length - 5U, ":main", 5U) == 0)
         kind = LX_ACCOUNT_AGENT_MAIN;
     else if (agent_asset(name, name_length))
-        kind = LX_ACCOUNT_AGENT_MAIN;
+        kind = LX_ACCOUNT_AGENT_ASSET;
     else if (has_agent_shape(name, name_length, ":budget:"))
         kind = LX_ACCOUNT_AGENT_BUDGET;
     else if (has_agent_shape(name, name_length, ":escrow:"))

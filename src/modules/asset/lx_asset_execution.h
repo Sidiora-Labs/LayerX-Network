@@ -214,7 +214,7 @@ static lxp_result asset_execute_typed(lxp_module_ctx *ctx, const lxp_activity *a
         record.issuer_kind = p->issuer_kind;
         (void)memcpy(record.salt, p->salt, 32U);
         (void)memcpy(record.issuer_did32, authority->actor, 32U);
-        record.custody_kind = LX_ASSET_CUSTODY_PAXEER;
+        record.custody_kind = (lx_asset_custody_kind)p->issuer_kind;
         record.custody_reference_length = p->custody_reference_length;
         (void)memcpy(record.custody_reference, p->custody_reference, p->custody_reference_length);
         if (p->issuer_kind == 1U) {
@@ -278,7 +278,7 @@ static lxp_result asset_execute_typed(lxp_module_ctx *ctx, const lxp_activity *a
         if (status == LXP_OK) status = issuance_find(ctx, p->asset_id, &issuance);
         if (status != LXP_OK) return status;
         if (record.paused) return LXP_ERR_ASSET_PAUSED;
-        if (account->kind != LX_ACCOUNT_AGENT_MAIN || !account->has_asset ||
+        if (account->kind != LX_ACCOUNT_AGENT_ASSET || !account->has_asset ||
             memcmp(account->asset_id, p->asset_id, 32U) != 0) return LXP_ERR_ASSET_MISMATCH;
         if ((value->ordinal == 10U && memcmp(record.issuer_did32, authority->actor, 32U) != 0) ||
             (value->ordinal == 11U && (!source_matches_actor(account, activity) ||

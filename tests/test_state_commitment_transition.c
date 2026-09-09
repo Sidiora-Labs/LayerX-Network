@@ -986,6 +986,9 @@ static int pay1_issuance(uint8_t final_root[32])
     REQUIRE(lx_asset_record_decode(f->kernel.module_kv[0].value,
         f->kernel.module_kv[0].value_length, &record) == LXP_OK);
     REQUIRE(record.total_units.lo == 0U && record.supply_cap.lo == 100U);
+    REQUIRE(record.issuer_kind == 1U &&
+            record.custody_kind == LX_ASSET_CUSTODY_NATIVE &&
+            record.custody_reference_length == 0U);
     {
         uint8_t canonical[384];
         size_t canonical_length;
@@ -1034,6 +1037,7 @@ static int pay1_issuance(uint8_t final_root[32])
         REQUIRE(lx_account_list_did(&f->accounts, other, ids, 4U, &count) == LXP_OK && count == 0U);
     }
     REQUIRE(f->accounts.accounts[3].has_authority_key);
+    REQUIRE(f->accounts.accounts[3].kind == LX_ACCOUNT_AGENT_ASSET);
     (void)memcpy(account_id, f->accounts.accounts[3].id, 32U);
     REQUIRE(memcmp(f->receipt.to, account_id, 32U) == 0);
     REQUIRE(pay1_submit(f, 4U, 34U, LXP_ERR_CONTEXT_MISMATCH) == 0);

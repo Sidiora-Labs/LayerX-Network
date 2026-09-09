@@ -298,6 +298,8 @@ int main(void)
     (void)memset(f, 0, sizeof(*f));
     f->asset_a.asset_id[0] = 1U;
     (void)memcpy(f->asset_a.symbol, "A", 2U); f->asset_a.symbol_length = 1U;
+    f->asset_a.name[0] = (uint8_t)'A'; f->asset_a.name_length = 1U;
+    f->asset_a.issuer_kind = 2U; f->asset_a.issuer_did32[0] = 1U;
     f->asset_a.custody_kind = LX_ASSET_CUSTODY_PAXEER;
     f->asset_a.custody_reference[0] = 1U; f->asset_a.custody_reference_length = 1U;
     f->asset_b = f->asset_a;

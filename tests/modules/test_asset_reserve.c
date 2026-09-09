@@ -49,9 +49,12 @@ int main(void)
     lxp_transfer_asset_state asset_state;
     lx_asset_custody_attestation attestation;
     lx_asset_reserve_report_record report;
-    const char *names[4] = { "system:paxeer-reserve", "agent:did:key:a:main",
-                             "agent:did:key:b:main",
-                             "system:paxeer-withdrawals" };
+    const char *names[4] = {
+        "system:paxeer-reserve",
+        "agent:did:key:a:asset:0100000000000000000000000000000000000000000000000000000000000000",
+        "agent:did:key:b:main",
+        "system:paxeer-withdrawals"
+    };
     lx_account **opened[4] = { &reserve, &agent, &other, &withdrawals };
     lx_account_open_authority authority[4] = {
         LX_ACCOUNT_OPEN_GENESIS, LX_ACCOUNT_OPEN_CREDIT,
@@ -61,7 +64,9 @@ int main(void)
 
     (void)memset(&asset, 0, sizeof(asset));
     asset.asset_id[0] = 1U; (void)memcpy(asset.symbol, "A", 2U);
-    asset.symbol_length = 1U; asset.custody_kind = LX_ASSET_CUSTODY_PAXEER;
+    asset.symbol_length = 1U; asset.name[0] = (uint8_t)'A';
+    asset.name_length = 1U; asset.issuer_kind = 2U;
+    asset.issuer_did32[0] = 1U; asset.custody_kind = LX_ASSET_CUSTODY_PAXEER;
     asset.custody_reference[0] = 1U; asset.custody_reference_length = 1U;
     if (lx_asset_registry_init(&assets, 0U) != LXP_OK ||
         lx_asset_register(&assets, &asset, 0U, (lxp_u128){ 0U, 0U }) != LXP_OK ||
@@ -73,6 +78,7 @@ int main(void)
             return 1;
     if (lxp_ledger_bootstrap_balance(reserve, asset.asset_id,
                                      (lxp_u128){ 0U, 100U }, 0U) != LXP_OK ||
+        agent->kind != LX_ACCOUNT_AGENT_ASSET ||
         lx_asset_transfer_state(&asset, &asset_state) != LXP_OK) return 1;
     (void)memset(&attestation, 0, sizeof(attestation));
     (void)memcpy(attestation.asset_id, asset.asset_id, 32U);

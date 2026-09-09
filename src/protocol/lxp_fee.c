@@ -174,7 +174,8 @@ lxp_result lxp_fee_charge(
     lxp_result status;
     if (actor_main == NULL || treasury == NULL || asset_id == NULL ||
         context == NULL || receipt == NULL || transfer_result == NULL ||
-        actor_main->kind != LX_ACCOUNT_AGENT_MAIN ||
+        (actor_main->kind != LX_ACCOUNT_AGENT_MAIN &&
+         actor_main->kind != LX_ACCOUNT_AGENT_ASSET) ||
         treasury->kind != LX_ACCOUNT_SYSTEM_FEES || lxp_u128_is_zero(fee))
         return LXP_ERR_NON_CANONICAL;
     status = lxp_fee_limit_check(fee, fee_limit, actor_main->balance);

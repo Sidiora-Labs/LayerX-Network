@@ -10157,3 +10157,11 @@ symbol = "supervisor_arguments platform-lint"
 observed = "make -j16 platform-lint exits 2 during strict workspace Clippy. The only reported source diagnostic is clippy::map_unwrap_or in supervisor_arguments, where LAYERX_TEST_SOCAT_BIN is converted with map(PathBuf::from).unwrap_or_else. The full platform workspace tests and platform formatting pass with this source unchanged."
 assumption = "Evidence: qual-logs/pay5/pay5g-platform-lint.log and pay5g-platform-lint.exit. The core boundary file is outside the permitted Programs paths, so the expression and the pedantic assertion remain unchanged. The later workspace-gate, marketplace, dependency-policy and cargo-deny steps in platform-lint do not execute after this Clippy failure."
 severity = "blocker"
+
+[observation.6.11.172]
+task = "6.11"
+file = "tests/modules/test_escrow_open.c src/modules/escrow/lx_escrow_timeout.c src/protocol/lxp_kernel.c"
+symbol = "lx_escrow_open_execute lx_escrow_epoch_begin lxp_kernel_apply_transfer_set"
+observed = "The focused test-escrow-open target exits 1 because its owner-to-escrow transfer reaches lxp_kernel_apply_transfer_set with source_authorities unset and receives LXP_ERR_NON_CANONICAL before the configured ledger capability runs. The escrow epoch timeout path constructs the same zero-source-authority transfer context."
+assumption = "The kernel requires one or more explicit source authorities at src/protocol/lxp_kernel.c. Repairing the escrow transfer and source-authority path is outside the enumerated PAY5 review defects; the metadata-only asset fixture update does not alter this transfer assertion. The kernel requirement and assertion remain unchanged."
+severity = "blocker"

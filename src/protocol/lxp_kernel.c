@@ -111,7 +111,8 @@ lxp_result lxp_kernel_program_payment_account(
             lx_account *candidate = &accounts->accounts[j];
             if (memcmp(candidate->id, ids[i], 32U) != 0)
                 continue;
-            if (candidate->kind != LX_ACCOUNT_AGENT_MAIN ||
+            if ((candidate->kind != LX_ACCOUNT_AGENT_MAIN &&
+                 candidate->kind != LX_ACCOUNT_AGENT_ASSET) ||
                 !candidate->has_asset || memcmp(candidate->asset_id, asset, 32U) != 0)
                 continue;
             if (*account != NULL) {
