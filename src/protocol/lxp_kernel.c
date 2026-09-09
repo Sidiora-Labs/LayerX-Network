@@ -73,22 +73,27 @@ lxp_result lxp_kernel_bind_ledger_admission(
     if (ctx == NULL || ctx->kernel == NULL || authority == NULL)
         return LXP_ERR_NON_CANONICAL;
     if (ctx->ledger_admission.bound) return LXP_ERR_CONTEXT_MISMATCH;
-    if (ctx->module_id == LXP_MODULE_ASSET && activity_type == LX_ASSET_WITHDRAW) {
-        if (!lxp_protocol_version_uses_occupancy(ctx->protocol_version))
+    if (ctx->module_id == LXP_MODULE_ASSET) {
+        if (activity_type == LX_ASSET_WITHDRAW &&
+            !lxp_protocol_version_uses_occupancy(ctx->protocol_version))
             return LXP_ERR_VERSION_UNSUPPORTED;
-    } else {
-        if (ctx->module_id != LXP_MODULE_PROGRAMS ||
-            ctx->protocol_version != LXP_PROTOCOL_VERSION_STATE_COMMITMENT)
-            return LXP_OK;
-        status = lxp_kernel_module_by_id(ctx->kernel, ctx->module_id,
-                                         ctx->epoch, &registration);
-        if (status != LXP_OK) return status;
-        if (registration->abi_version != LX_PROGRAMS_SANDBOX_DESTROY_ABI_VERSION)
-            return LXP_OK;
         ctx->ledger_admission.activity_type = activity_type;
-        if (activity_type != LX_PROGRAMS_CALL && activity_type != LX_PROGRAMS_WIND_DOWN)
-            return LXP_OK;
+        (void)memcpy(ctx->ledger_admission.activity_binding, ctx->activity_id, 32U);
+        (void)memcpy(ctx->ledger_admission.account_id, authority->principal, 32U);
+        ctx->ledger_admission.bound = true;
+        return LXP_OK;
     }
+    if (ctx->module_id != LXP_MODULE_PROGRAMS ||
+        ctx->protocol_version != LXP_PROTOCOL_VERSION_STATE_COMMITMENT)
+        return LXP_OK;
+    status = lxp_kernel_module_by_id(ctx->kernel, ctx->module_id,
+                                     ctx->epoch, &registration);
+    if (status != LXP_OK) return status;
+    if (registration->abi_version != LX_PROGRAMS_SANDBOX_DESTROY_ABI_VERSION)
+        return LXP_OK;
+    ctx->ledger_admission.activity_type = activity_type;
+    if (activity_type != LX_PROGRAMS_CALL && activity_type != LX_PROGRAMS_WIND_DOWN)
+        return LXP_OK;
     ctx->ledger_admission.activity_type = activity_type;
     (void)memcpy(ctx->ledger_admission.actor, authority->actor, 32U);
     (void)memcpy(ctx->ledger_admission.verified_key, authority->verified_key, 32U);
@@ -1267,6 +1272,17 @@ lxp_result lxp_kernel_dispatch(const lxp_module_registration *registration,
     if (registration == NULL || ctx == NULL || activity == NULL ||
         authority == NULL || effects == NULL || module_result == NULL)
         return LXP_ERR_NON_CANONICAL;
+    if (ctx->module_id == LXP_MODULE_ASSET) {
+        if (lxp_activity_module_id(activity->activity_type) != LXP_MODULE_ASSET)
+            return LXP_ERR_UNKNOWN_ACTIVITY;
+        if (!ctx->ledger_admission.bound) {
+            status = lxp_kernel_bind_ledger_admission(ctx, authority, activity->activity_type);
+            if (status != LXP_OK) return status;
+        }
+        if (ctx->ledger_admission.activity_type != activity->activity_type ||
+            memcmp(ctx->ledger_admission.activity_binding, ctx->activity_id, 32U) != 0)
+            return LXP_ERR_CONTEXT_MISMATCH;
+    }
     status = registration->iface->decode(
         ctx, lxp_activity_type_ordinal(activity->activity_type),
         activity->payload.bytes, activity->payload.length, &decoded);
@@ -4388,7 +4404,7 @@ lxp_result lxp_kernel_execute_activity(lxp_kernel *kernel,
         if (status == LXP_OK &&
             (activity->activity_type == LX_PROGRAMS_CALL ||
              activity->activity_type == LX_PROGRAMS_WIND_DOWN ||
-             activity->activity_type == LX_ASSET_WITHDRAW))
+             lxp_activity_module_id(activity->activity_type) == LXP_MODULE_ASSET))
             status = lxp_kernel_bind_ledger_admission(
                 &module_ctx, execution->authority, activity->activity_type);
         if (status == LXP_OK && programs_call) {

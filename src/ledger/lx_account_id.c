@@ -60,6 +60,16 @@ static bool agent_asset(const uint8_t *name, size_t length)
     return true;
 }
 
+static bool asset_issuance(const uint8_t *name, size_t length)
+{
+    if (length != 79U || memcmp(name, "asset:", 6U) != 0 ||
+        memcmp(name + 70U, ":issuance", 9U) != 0) return false;
+    for (size_t i = 6U; i < 70U; ++i)
+        if (!((name[i] >= '0' && name[i] <= '9') ||
+              (name[i] >= 'a' && name[i] <= 'f'))) return false;
+    return true;
+}
+
 static bool system_funding(const uint8_t *name, size_t length,
                            const char *suffix)
 {
@@ -159,7 +169,7 @@ lxp_result lx_account_name_parse(const uint8_t *name, size_t name_length,
         kind = LX_ACCOUNT_AGENT_STREAM;
     else if (has_agent_shape(name, name_length, ":margin:"))
         kind = LX_ACCOUNT_AGENT_MARGIN;
-    else if (module_value(name, name_length))
+    else if (module_value(name, name_length) || asset_issuance(name, name_length))
         kind = LX_ACCOUNT_MODULE_VALUE;
     else return LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE;
     parsed->bytes = name;
@@ -191,7 +201,7 @@ lxp_result lx_account_id_from_string(const uint8_t *name, size_t name_length,
         return LXP_ERR_NON_CANONICAL;
     status = lx_account_name_parse(name, name_length, &parsed);
     if (status != LXP_OK) return status;
-    if (parsed.kind == LX_ACCOUNT_MODULE_VALUE) {
+    if (parsed.kind == LX_ACCOUNT_MODULE_VALUE && !asset_issuance(name, name_length)) {
         const uint8_t *encoded = name + name_length - 64U;
         size_t i;
         for (i = 0U; i < 32U; ++i)
