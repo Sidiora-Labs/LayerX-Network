@@ -1,3 +1,5 @@
+import { paymentCommitment, verifyPaymentCommitment, type PaymentCommitmentResolver } from "./commitment.js";
+export * from "./commitment.js";
 import {
   paymentCommitment,
   paymentPayer,

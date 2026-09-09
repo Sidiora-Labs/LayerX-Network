@@ -32,7 +32,7 @@ test("native executed receipt and amount, asset, recipient binding", async () =>
 });
 
 test("explicit commitment cannot downgrade when evidence is missing", async () => {
-  for (const commitment of ["batched", "finalised", "acknowledged", null, 1]) {
+  for (const commitment of ["batched", "finalised", "finalized", "acknowledged", null, 1]) {
     await assert.rejects(verifyPaymentReceipt(evidence, { ...offer, extra: { layerx: { commitment } } }));
   }
   assert.equal(paymentCommitment(), "executed");
