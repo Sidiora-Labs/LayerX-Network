@@ -64,6 +64,7 @@ The native witness codec is independent of the publication envelope and the chec
 
 ```
 version:u16=2 || module_id:u16 || key_len:u32 || key || value_len:u32 || value
+|| [account_index:u32 || account_count:u32 || account_depth:u8 || account_siblings[32]*]
 || leaf_index_a:u32 || leaf_count_a:u32 || depth_a:u8 || siblings_a[32]*
 || leaf_count_b:u32 || depth_b:u8 || siblings_b[32]*
 ```
@@ -72,9 +73,23 @@ The leaf hash is SHA256(`LXP/v1/state-leaf\0 || key_len:u32 || value_len:u32 || 
 
 `lxp_state_proof_build` composes the existing native subtree and root constructors and verifies the result before returning it. `lxp_state_proof_encode`, `lxp_state_proof_decode` and `lxp_state_proof_verify` share that representation. Allocate `lxp_state_witness` on the heap: it owns up to one MiB of blob value material. `gp_runtime_state_proof` exposes the same constructor over the guarantor's independently replayed kernel. Rust `state_proof::StateWitness` and Solidity `NativeStateProof` verify the identical bytes. `build/tests/lxp_test_state_proof --vectors` emits the shared fixtures under `contracts/config/native-state-proofs.json` and the paxeer-client test vectors directory.
 
-This generic proof does not yet enable version-2 settlement publication. Native account balances are inside a third account-registry tree under module-zero `account-tree`, with no EVM recipient field, and the withdrawal store is not committed as module KV. A proof of the account-tree root is not a proof of a particular account balance. The standalone asset balance root is not the composite checkpoint root. These gaps must be resolved without inventing settlement leaves or accepting an unsigned recipient binding.
+The account segment is present exactly when `module_id == 0`, `key_len == 33`
+and the first key byte is `04`. It proves the canonical account record into the
+account registry; layer A then proves the `account-tree` binding, and layer B
+proves the preserved module wrapper under the composite root. All other leaves
+omit that segment. The shared C vectors include three real account balances.
 
-The required rollout sequence remains: independently replay the checkpoint; decode committed settlement facts and build their proofs and deposit leaf ordering; register the checkpoint; publish the withdrawal and balance witness vectors; register the signed deposit root; fetch through `PublishedDepositProof::fetch_published`, `CheckpointProof::fetch_published` and `ExitEvidence::fetch_published`; then apply the existing custody, debit, certificate, nullifier and eligibility checks. The claim consumers and publication contracts still use version 1 until this entire sequence can carry real facts. A coordinated rollout must change both `EVIDENCE_VERSION` constants and the deployment finalization expectation to 2. The generic vectors are not settlement balance or withdrawal vectors.
+Version-2 payout publication remains incomplete. The account record authenticates
+an Ed25519 authority but contains no EVM recipient or signed recipient binding.
+The real withdrawal request is now committed in asset KV, but its checkpoint ID
+is part of the nullifier. That request anchor must be distinguished from the
+later checkpoint proving inclusion: embedding the inclusion checkpoint's own
+hash in its committed state would be circular. The registered asset activity
+interface also needs a signed withdrawal dispatch before replay can create
+these records. The direct module request test proves KV inclusion; it does not
+prove signed activity replay or payout authorization.
+
+The required rollout sequence remains: independently replay the checkpoint; decode committed settlement facts and build their proofs and deposit leaf ordering; register the checkpoint; publish the withdrawal and balance witness vectors; register the signed deposit root; fetch through `PublishedDepositProof::fetch_published`, `CheckpointProof::fetch_published` and `ExitEvidence::fetch_published`; then apply the existing custody, debit, certificate, nullifier and eligibility checks. The claim consumers and publication contracts still use version 1 until this entire sequence can carry real facts. A coordinated rollout must change both `EVIDENCE_VERSION` constants and the deployment finalization expectation to 2. The account vectors prove balances but do not authorize EVM payouts.
 
 For module zero and a 33-byte key beginning with `04`, version 2 carries the
 canonical account leaf from `lx_account_state_leaf_material`. Immediately after
