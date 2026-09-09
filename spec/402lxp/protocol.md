@@ -114,3 +114,13 @@ Supply the gateway `/rpc` URL and your DID explicitly. Optional faucet claims re
 To submit an exact payment, provide a signed canonical activity hex file, a Base64 `PAYMENT-REQUIRED` header file, the payer account ID and a trusted authority JSON file. The authority file contains hexadecimal `batchId`, `asset`, `previousStateRoot`, `resultingStateRoot` and `sequencerPublicKey`. Obtain these from your configured network authority. The examples select executed commitment, verify the signed receipt and print the `lxp:` settlement reference. They report pending with exit code 2. Python payment verification additionally requires the `cryptography` package.
 
 A faucet HTTP success does not independently prove a spendable balance. Read and verify the funded account before preparing a payment activity. Prepare activities with current identity sequences; retain the same signed bytes for uncertain-result recovery.
+
+### Prepared grant draws
+
+The Node SDK `PreparedGrantDraws` and Python `PreparedGrantDraws` persist signed receive activities in SQLite. Register the authenticated principal, seller request digest, canonical signed activity, canonical receive payload and its idempotency key before accepting a draw. Subscription registrations additionally require a stable, unique subscription-period key. Registration rejects an existing key with different request ownership or signed activity.
+
+Compose the Node executor with `GrantPaymentAuthority` and the normal seller receipt verifier; configure commitment resolution for batched or finalised offers. Python supplies the executor as the seller's `draw` callable. The executor binds Asset ordinal 6, receiver DID, network, payload hash and idempotency key, and verifies returned payment facts before returning receipt evidence. The ledger remains responsible for signature authority, current sequence, fees, grant revocation, allowance and asset-state checks.
+
+An attempt is persisted before submission. After an uncertain result, retrying the request performs `lx_getReceipt` for the same activity ID rather than creating another debit. Missing evidence stays pending. A crash before the first network write can therefore leave a registered request pending; reconcile that exact activity before taking further action. Never replace its key to bypass uncertainty.
+
+Buyers use `grantHeader`/`grant_header` to preserve the selected offer and signed receive bytes, then `captureGrantSettlement`/`capture_grant_settlement` with the expected enclosing activity ID. The HTTP helpers verify settlement before returning paid content. Grant payments do not enter the quote-and-transfer path.
