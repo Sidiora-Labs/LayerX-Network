@@ -915,11 +915,13 @@ static lxp_result replay_execute_activity(
     if (status == LXP_OK &&
         lxp_activity_module_id(activity->activity_type) != LXP_MODULE_PROGRAMS &&
         activity->activity_type != LX_ASSET_SEND &&
+        activity->activity_type != LX_ASSET_WITHDRAW &&
         !(process->custody_credit_enabled && activity->activity_type == LXP_BRIDGE_CREDIT))
         status = LXP_ERR_UNKNOWN_ACTIVITY;
     if (status == LXP_OK &&
         (expected->module_id != lxp_activity_module_id(activity->activity_type) ||
-         (activity->activity_type == LX_ASSET_SEND &&
+         ((activity->activity_type == LX_ASSET_SEND ||
+          activity->activity_type == LX_ASSET_WITHDRAW) &&
           expected->module_version != lx_asset_module_iface()->abi_version) ||
          (activity->activity_type == LXP_BRIDGE_CREDIT && expected->module_version != 1U)))
         status = LXP_ERR_VERSION_UNSUPPORTED;
@@ -940,9 +942,11 @@ static lxp_result replay_execute_activity(
     if (status != LXP_OK) return status;
     (void)memset(&scope, 0, sizeof(scope));
     scope.module_mask = UINT64_C(1) << lxp_activity_module_id(activity->activity_type);
-    scope.activity_ordinal_min = activity->activity_type == LX_ASSET_SEND ? 5U : 1U;
+    scope.activity_ordinal_min = (activity->activity_type == LX_ASSET_SEND || activity->activity_type == LX_ASSET_WITHDRAW) ?
+        lxp_activity_type_ordinal(activity->activity_type) : 1U;
     scope.activity_ordinal_max = activity->activity_type == LXP_BRIDGE_CREDIT ? 1U :
-        (activity->activity_type == LX_ASSET_SEND ? 5U : 10U);
+        ((activity->activity_type == LX_ASSET_SEND || activity->activity_type == LX_ASSET_WITHDRAW) ?
+        lxp_activity_type_ordinal(activity->activity_type) : 10U);
     scope.maximum_per_activity = (lxp_u128){UINT64_MAX, UINT64_MAX};
     scope.maximum_total = (lxp_u128){UINT64_MAX, UINT64_MAX};
     scope.maximum_per_period = (lxp_u128){UINT64_MAX, UINT64_MAX};
@@ -2082,6 +2086,7 @@ static lxp_result apply_canonical_activity(
     if (status == LXP_OK &&
         lxp_activity_module_id(activity.activity_type) != LXP_MODULE_PROGRAMS &&
         activity.activity_type != LX_ASSET_SEND &&
+        activity.activity_type != LX_ASSET_WITHDRAW &&
         !(process->custody_credit_enabled && activity.activity_type == LXP_BRIDGE_CREDIT))
         status = LXP_ERR_UNKNOWN_ACTIVITY;
     if (status == LXP_OK) status = current_time_ms(&timestamp);
@@ -2103,9 +2108,11 @@ static lxp_result apply_canonical_activity(
     if (status != LXP_OK) goto finish;
     (void)memset(&scope, 0, sizeof(scope));
     scope.module_mask = UINT64_C(1) << lxp_activity_module_id(activity.activity_type);
-    scope.activity_ordinal_min = activity.activity_type == LX_ASSET_SEND ? 5U : 1U;
+    scope.activity_ordinal_min = (activity.activity_type == LX_ASSET_SEND || activity.activity_type == LX_ASSET_WITHDRAW) ?
+        lxp_activity_type_ordinal(activity.activity_type) : 1U;
     scope.activity_ordinal_max = activity.activity_type == LXP_BRIDGE_CREDIT ? 1U :
-        (activity.activity_type == LX_ASSET_SEND ? 5U : 10U);
+        ((activity.activity_type == LX_ASSET_SEND || activity.activity_type == LX_ASSET_WITHDRAW) ?
+        lxp_activity_type_ordinal(activity.activity_type) : 10U);
     scope.maximum_per_activity = (lxp_u128){UINT64_MAX, UINT64_MAX};
     scope.maximum_total = (lxp_u128){UINT64_MAX, UINT64_MAX};
     scope.maximum_per_period = (lxp_u128){UINT64_MAX, UINT64_MAX};
@@ -2134,7 +2141,7 @@ static lxp_result apply_canonical_activity(
     execution.epoch = process->kernel.epoch;
     execution.global_sequence = global_sequence;
     execution.recorded_module_version = activity.activity_type == LXP_BRIDGE_CREDIT ?
-        1U : (activity.activity_type == LX_ASSET_SEND ?
+        1U : ((activity.activity_type == LX_ASSET_SEND || activity.activity_type == LX_ASSET_WITHDRAW) ?
         lx_asset_module_iface()->abi_version : LX_PROGRAMS_SANDBOX_DESTROY_ABI_VERSION);
     execution.recorded_fee_schedule_version = 0U;
     execution.parameter_version = process->parameter_version;
@@ -2433,13 +2440,16 @@ static lxp_result apply_canonical_batch(
         if (status == LXP_OK &&
             lxp_activity_module_id(activities[i].activity_type) != LXP_MODULE_PROGRAMS &&
             activities[i].activity_type != LX_ASSET_SEND &&
+            activities[i].activity_type != LX_ASSET_WITHDRAW &&
             !(process->custody_credit_enabled && activities[i].activity_type == LXP_BRIDGE_CREDIT))
             status = LXP_ERR_UNKNOWN_ACTIVITY;
         if (status == LXP_OK)
             scopes[i].module_mask = UINT64_C(1) << lxp_activity_module_id(activities[i].activity_type);
-        scopes[i].activity_ordinal_min = activities[i].activity_type == LX_ASSET_SEND ? 5U : 1U;
+        scopes[i].activity_ordinal_min = (activities[i].activity_type == LX_ASSET_SEND || activities[i].activity_type == LX_ASSET_WITHDRAW) ?
+            lxp_activity_type_ordinal(activities[i].activity_type) : 1U;
         scopes[i].activity_ordinal_max = activities[i].activity_type == LXP_BRIDGE_CREDIT ? 1U :
-            (activities[i].activity_type == LX_ASSET_SEND ? 5U : 10U);
+            ((activities[i].activity_type == LX_ASSET_SEND || activities[i].activity_type == LX_ASSET_WITHDRAW) ?
+            lxp_activity_type_ordinal(activities[i].activity_type) : 10U);
         scopes[i].maximum_per_activity =
             (lxp_u128){UINT64_MAX, UINT64_MAX};
         scopes[i].maximum_total = (lxp_u128){UINT64_MAX, UINT64_MAX};
@@ -2466,7 +2476,7 @@ static lxp_result apply_canonical_batch(
         executions[i].epoch = process->kernel.epoch;
         executions[i].global_sequence = sequence;
         executions[i].recorded_module_version = activities[i].activity_type == LXP_BRIDGE_CREDIT ?
-            1U : (activities[i].activity_type == LX_ASSET_SEND ?
+            1U : ((activities[i].activity_type == LX_ASSET_SEND || activities[i].activity_type == LX_ASSET_WITHDRAW) ?
             lx_asset_module_iface()->abi_version : LX_PROGRAMS_SANDBOX_DESTROY_ABI_VERSION);
         executions[i].parameter_version = process->parameter_version;
         executions[i].signature_valid = true;

@@ -10,14 +10,14 @@ sequencer_binary="$native_bin/layerxd"
 if [[ ${2:-} == --maintenance-crash ]]; then
     sequencer_binary="$root/$build_dir/tests/lxp_test_maintenance_crash"
 fi
-work=$(mktemp -d /tmp/lxp-program-admission-XXXXXX)
+work=$(mktemp -d "${LAYERX_TEST_ADMISSION_LOG_DIR:-/tmp}/lxp-program-admission-XXXXXX")
 replica_pid= sequencer_pid= settlement_pid=
 cleanup() {
     result=$?
     for pid in "$sequencer_pid" "$replica_pid" "$settlement_pid"; do
         if [[ -n "$pid" ]]; then kill "$pid" 2>/dev/null || true; wait "$pid" || true; fi
     done
-    if [[ "$result" == 0 ]]; then rm -rf "$work"; else printf 'native admission evidence: %s\n' "$work" >&2; fi
+    if [[ "$result" == 0 && -z ${LAYERX_TEST_ADMISSION_LOG_DIR:-} ]]; then rm -rf "$work"; else printf 'native admission evidence: %s\n' "$work" >&2; fi
 }
 trap cleanup EXIT
 chmod 0755 "$work"
@@ -45,6 +45,10 @@ if [[ ${2:-} == --maintenance-crash ]]; then
     exec {apply_gate_fd}<>"$work/apply-gate"
     export LXP_TEST_APPLY_GATE_FD="$apply_gate_fd" LXP_TEST_CRASH_BOUNDARY="$3" LXP_TEST_CRASH_OCCURRENCE="$4"
 fi
+bootstrap_extra=()
+if [[ ${2:-} == --withdraw ]]; then
+    bootstrap_extra+=(--custody-profile "$LAYERX_TEST_WITHDRAW_PROFILE")
+fi
 LAYERX_NODE_PAXEER_CHAIN_ID=31337 \
 LAYERX_NODE_SETTLEMENT_CONTRACT=0x1111111111111111111111111111111111111111 \
 LAYERX_NODE_CHECKPOINT_REGISTRY=0x2222222222222222222222222222222222222222 \
@@ -52,8 +56,11 @@ LAYERX_NODE_PAXEER_RPC_ADDRESS=127.0.0.1 LAYERX_NODE_PAXEER_RPC_PORT="$rpc_port"
 bash platform/hosted/node/bootstrap.sh --data-dir "$work/data" --run-dir "$work/run" \
     --network-id 77 --sequencer-key "$work/sequencer" --treasury-key "$work/treasury" \
     --lni-uid 4021 --lni-gid 4021 --program-port "$program_port" --replica-port "$replica_port" \
-    --layerxd "$native_bin/layerxd" --genesis-build "$native_bin/layerx-genesis-build" \
+    --layerxd "$native_bin/layerxd" --genesis-build "$native_bin/layerx-genesis-build" "${bootstrap_extra[@]}" \
     > "$work/bootstrap.log" 2>&1
+if [[ ${2:-} == --withdraw ]]; then
+    python3 tests/daemon/withdraw-custody.py --register "$work" "$LAYERX_TEST_WITHDRAW_RPC"
+fi
 if [[ ${2:-} == --availability-batches ]]; then
     mkdir "$work/availability-output"
     chown 4021:4021 "$work/availability-output"
@@ -133,7 +140,7 @@ else
     kill -0 "$sequencer_pid"
 fi
 
-if [[ ${2:-} == --maintenance || ${2:-} == --maintenance-crash ]]; then
+if [[ ${2:-} == --maintenance || ${2:-} == --maintenance-crash || ${2:-} == --withdraw ]]; then
     if [[ -n "$sequencer_pid" ]]; then
         kill -KILL "$sequencer_pid"
         wait "$sequencer_pid" || true
@@ -193,8 +200,12 @@ for attempt in range(200):
 else:
     raise SystemExit("restarted daemon did not accept LNI connections")
 PYWAIT
-    setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$work/run/layerxd.lni.sock" --maintenance-recovered
+    recovered_mode=--maintenance-recovered
+    if [[ ${2:-} == --withdraw ]]; then recovered_mode=--withdraw-recovered; fi
+    setpriv --reuid=4021 --regid=4021 --clear-groups "$work/client" "$work/run/layerxd.lni.sock" "$recovered_mode"
     kill -0 "$sequencer_pid"
     kill -0 "$replica_pid"
-    (set -a; source "$work/data/replica.env"; python3 tests/daemon/maintenance-evidence.py)
+    if [[ ${2:-} != --withdraw ]]; then
+        (set -a; source "$work/data/replica.env"; python3 tests/daemon/maintenance-evidence.py)
+    fi
 fi
