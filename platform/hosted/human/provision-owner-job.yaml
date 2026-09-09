@@ -49,6 +49,44 @@ spec:
               readOnly: true
             - name: private
               mountPath: /run/provision-private
+        - name: provision-treasury
+          image: ghcr.io/sidiora-labs/layerx-human:0.1.0
+          command: [/bin/sh, -ec]
+          args:
+            - exec /usr/local/bin/layerx-human-identity-provider provision-account < /run/provision-input/treasury-request.json
+          securityContext:
+            runAsUser: 4020
+            runAsGroup: 4020
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests: {cpu: 100m, memory: 32Mi}
+            limits: {cpu: '1', memory: 64Mi}
+          volumeMounts:
+            - name: input
+              mountPath: /run/provision-input
+              readOnly: true
+        - name: provision-sequencer
+          image: ghcr.io/sidiora-labs/layerx-human:0.1.0
+          command: [/bin/sh, -ec]
+          args:
+            - exec /usr/local/bin/layerx-human-identity-provider provision-account < /run/provision-input/sequencer-request.json
+          securityContext:
+            runAsUser: 4020
+            runAsGroup: 4020
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests: {cpu: 100m, memory: 32Mi}
+            limits: {cpu: '1', memory: 64Mi}
+          volumeMounts:
+            - name: input
+              mountPath: /run/provision-input
+              readOnly: true
       initContainers:
         - name: private-directory
           image: ghcr.io/sidiora-labs/layerx-human:0.1.0
