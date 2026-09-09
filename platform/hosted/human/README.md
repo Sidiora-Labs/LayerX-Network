@@ -15,7 +15,7 @@ Agentd explicitly uses `human-owner` mode and the cluster DER CA for both author
 `material.py --assemble EVIDENCE_DIR DEPLOYMENT REGISTRY OUTPUT NETWORK CHAIN` takes contract addresses from the actual deployment record and translates the rendered version-2 registry to the KMS module snapshot. It requires these protected, owner-owned 0600 JSON evidence files under `$WORK_DIR/human-evidence`:
 
 - `components.json`: `AGENT_ACTOR`, `AGENT_AUTHORITY`, `AGENT_OWNER_ACCOUNT`, `AGENT_RECOVERY_ROOT` (unpadded base64url), `AGENT_RECOVERY_THRESHOLD`.
-- `agent.json`: `HUMAN_PEERS`, `HUMAN_LIMIT_SCOPE`, `HUMAN_LIMIT_SCOPE_ID`, `HUMAN_LIMIT_ID`, `HUMAN_LIMIT_NAME`, `HUMAN_LIMIT_CEILING`, `HUMAN_LIMIT_CONSUMED`. The peer must exactly match `4020:principal:tenant` from the authority binding.
+- `agent.json`: `HUMAN_PEERS`, `HUMAN_LIMIT_SCOPE`, `HUMAN_LIMIT_SCOPE_ID`, `HUMAN_LIMIT_ID`, `HUMAN_LIMIT_NAME`, `HUMAN_LIMIT_CEILING`, `HUMAN_LIMIT_CONSUMED`. The single peer must exactly match `uid=4020;tenant=<tenant>;principal=<principal>` from the authority binding, in that field order. Tenant is 1–128 ASCII letters, digits, hyphens or underscores. Principal requires `did:<method>:<id>` with a nonempty lowercase ASCII letter/digit method and nonempty identifier, at most 255 UTF-8 bytes. Whitespace, control characters, commas, semicolons, extra or duplicate fields, positional entries and additional peers are refused.
 - `authority.json`: `tenant`, `principal`, `core-clock-horizon` (positive sequence horizon).
 - `principal-policy.json`: the authority README's complete principal-policy schema. It must contain the scoped tenant/principal.
 - `recovery-policy.json`: the identity README's established recovery `root` (32-byte integer array), positive `threshold` and `delay_seconds`. Root and threshold must match components.
@@ -27,6 +27,6 @@ Contract fields are derived from `paxeer/deployment.json`: vault, checkpoint reg
 
 ## Remaining integration inputs
 
-The current cluster script does not produce the evidence files listed above or a version-2 live module registry; its existing example-registry copy is incompatible with the authority. These missing producers prevent `human_policy_publish` from succeeding. Movement also documents an incomplete online deposit/withdrawal/exit evidence producer, and several authority routes deliberately refuse absent state/checkpoint proofs. Provider packaging cannot close those source gaps. No complete Human readiness or cluster execution is claimed.
+The cluster script generates the version-2 module registry using the node image tool and bootstrap asset metadata. It does not produce the evidence files listed above; those missing producers prevent `human_policy_publish` from succeeding. Registry image execution remains unqualified here. Movement also documents an incomplete online deposit/withdrawal/exit evidence producer, and several authority routes deliberately refuse absent state/checkpoint proofs. Provider packaging cannot close those source gaps. No complete Human readiness or cluster execution is claimed.
 
 The image builds all real providers, components, service, KMS and agentd. API readiness requires the real component graph; provider probes use real binaries; KMS readiness is exercised through LXKP. `human/apps/web` remains a separate website and is not deployed by this pod.
