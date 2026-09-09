@@ -43,6 +43,7 @@ Locked funds are real accounts, not hidden columns:
 
 ```
 agent:<did>:main
+agent:<did>:asset:<lowercase hex64 asset_id>
 agent:<did>:budget:<id>
 agent:<did>:escrow:<id>
 agent:<did>:stream:<id>

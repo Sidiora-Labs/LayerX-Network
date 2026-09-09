@@ -22,6 +22,9 @@ no floating-point path (`interop/crates/layerx-x402/src/model.rs:1-3,
 
 This page covers that crate, the gateway routes that mount it, and the
 local conformance matrix. It does not cover AP2, UCP, Visa TAP, or fiat.
+Native 402LXP HTTP offers, grant draws, commitments and asset payload
+encodings are specified in `spec/402lxp/protocol.md`; that document is
+not this interop adapter.
 
 ---
 
