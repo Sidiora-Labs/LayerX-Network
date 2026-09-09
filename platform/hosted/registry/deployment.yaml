@@ -9,8 +9,20 @@ spec:
     metadata: {labels: {app: layerx-program-registry, layerx-plane: trusted-boundary}}
     spec:
       nodeSelector: {layerx.io/program-registry-boundary: "v2"}
-      securityContext: {runAsNonRoot: true, runAsUser: 4030, runAsGroup: 4030, fsGroup: 4030}
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector: {matchLabels: {app: layerx-node}}
+              topologyKey: kubernetes.io/hostname
+      securityContext: {runAsNonRoot: true, runAsUser: 4030, runAsGroup: 4030, fsGroup: 4030, fsGroupChangePolicy: OnRootMismatch}
       initContainers:
+        - name: journal-directory
+          image: ghcr.io/sidiora-labs/layerx-program-registry:0.1.0
+          imagePullPolicy: Always
+          command: [/bin/sh, -euc, 'umask 077 && mkdir -p /run/layerx/journal-volume/journal && chmod 0700 /run/layerx/journal-volume/journal']
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}, seccompProfile: {type: RuntimeDefault}}
+          volumeMounts:
+            - {name: journal, mountPath: /run/layerx/journal-volume}
         - name: trust-history
           image: ghcr.io/sidiora-labs/layerx-program-registry:0.1.0
           imagePullPolicy: Always
@@ -28,6 +40,7 @@ spec:
           env:
             - {name: LAYERX_REGISTRY_LISTEN, value: "0.0.0.0:9420"}
             - {name: LAYERX_REGISTRY_STATE, value: /var/lib/layerx-program-registry}
+            - {name: LAYERX_REGISTRY_JOURNAL, value: /var/lib/layerx-registry-journal}
             - {name: LAYERX_REGISTRY_REQUEST_TOKEN_FILE, value: /run/layerx/request/token}
             - {name: LAYERX_REGISTRY_PUBLICATION_TOKEN_FILE, value: /run/layerx/publication/token}
             - {name: LAYERX_REGISTRY_TLS_CERT_DER, value: /run/layerx/server/tls.crt.der}
@@ -63,6 +76,7 @@ spec:
           securityContext: {runAsUser: 0, runAsGroup: 0, runAsNonRoot: false, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL], add: [CHOWN, SETUID, SETGID]}, seccompProfile: {type: RuntimeDefault}}
           volumeMounts:
             - {name: state, mountPath: /var/lib/layerx-program-registry}
+            - {name: journal, mountPath: /var/lib/layerx-registry-journal, subPath: journal}
             - {name: request, mountPath: /run/layerx/request/token, subPath: token, readOnly: true}
             - {name: publication, mountPath: /run/layerx/publication/token, subPath: token, readOnly: true}
             - {name: server, mountPath: /run/layerx/server/tls.crt.der, subPath: tls.crt.der, readOnly: true}
@@ -73,6 +87,7 @@ spec:
             - {name: host-cgroup, mountPath: /run/layerx/host-cgroup, readOnly: false}
             - {name: quota, mountPath: /run/layerx/quota}
       volumes:
+        - {name: journal, persistentVolumeClaim: {claimName: layerx-registry-journal}}
         - {name: request, secret: {secretName: layerx-program-registry-request-client, defaultMode: 0440}}
         - {name: publication, secret: {secretName: layerx-program-registry-publication-operator, defaultMode: 0440}}
         - {name: server, secret: {secretName: layerx-program-registry-server-tls, defaultMode: 0440}}
