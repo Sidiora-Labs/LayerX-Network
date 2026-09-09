@@ -5219,13 +5219,17 @@ file = "src/ledger/lxp_apply.c src/protocol/lxp_module_ctx.c include/layerx/lxp_
 symbol = "lxp_ledger_apply_bridge_credit lxp_ctx_bridge_credit"
 observed = "The bridge reserve top-up now invokes ledger apply after the existing authorization, supply preflight and rollback snapshot. make -j16, make test-asset-transfer, make test and make beta-ledger-check exit 0. The unchanged sole-writer check passes. BRIDGE_PYTHON=qual-logs/nat3/venv/bin/python3 bash tests/bridge/sole_writer.sh exits 0: a real custody deposit on isolated chain 31337 produces byte-identical canonical account state diffs (397 bytes) and unsigned receipt encodings (1006 bytes) through original and updated module contexts, with real signature verification, rollback stages, replay refusal and nine custody evidence tests passing. Evidence: qual-logs/nat3/build.log, asset-transfer.log, test.log, beta-ledger.log, bridge-differential-venv.log and gates.tsv."
 assumption = "The initial bridge comparison exited 1 because system Python lacked Crypto; the isolated virtual environment satisfies tests/bridge/requirements.txt. Codify inspection could not run because cg is unavailable. Cluster and image gates were not run. Task statuses are unchanged."
+severity = "note"
+
+[observation.6.1.81]
+task = "6.1"
 file = "cmd/layerxd/lxp_daemon_lni.c agent/crates/layerx-client/tests/availability_daemon.rs tests/daemon/availability-settlement.py"
 symbol = "send_availability finalized_fetch"
 observed = "Tag 18 refuses every selected batch above latest_finalized_batch with LXP_ERR_DA_MISSING (-804), including explicit batch selection. Candidate DA is required before independent replay and attestation, while registration requires attestations. This prevents both initial checkpoint production and advancement beyond an existing finalized head. The availability harness asserts pre-registration refusal and obtains successful retrieval only after the finality fixture has already signed and registered a certificate. Source evidence: qual-logs/gp1/candidate-fetch-source.txt."
 assumption = "An additive authenticated candidate-batch fetch must expose complete durable sealed bodies before registration without weakening finalized-only consumer selectors, root checks or existing refusal assertions. Producer implementation and end-to-end qualification remain incomplete."
 severity = "blocker"
 
-[observation.6.1.32]
+[observation.6.1.82]
 task = "6.1"
 file = "docs/wiki/Guarantor.md spec/layerx-protocol/docs/guarantors.md contracts/libraries/CanonicalCheckpoint.sol tests/daemon/availability-settlement.py"
 symbol = "ATTESTATION_DOMAIN CHECKPOINT_DOMAIN registerCheckpoint"
@@ -5233,7 +5237,7 @@ observed = "Beta checkpoint construction uses an empty validity proof; no genera
 assumption = "Producer encoding follows the implemented verifiers and vectors. Production operator independence remains an onboarding requirement. Empty beta validity proofs and shared operation do not establish production independence or proof generation."
 severity = "note"
 
-[observation.6.1.33]
+[observation.6.1.83]
 task = "6.1"
 file = "cmd/layerx-guarantor/lni.c tests/daemon/guarantor-integration.py cmd/layerxd/lxp_daemon_lni.c"
 symbol = "LXP_GUARANTOR_CANDIDATE_SELECTOR lxp_guarantor_lni_fetch"
@@ -5241,15 +5245,15 @@ observed = "The producer requests tag 18 selector 05 followed by one big-endian 
 assumption = "The additive sealed-candidate selector is required in the daemon; selectors 01 through 04 and all existing finalized-only refusal assertions remain unchanged. Two-producer signing, finality feedback, tag-14 retrieval and existing verifier acceptance are asserted by the compiled integration but remain unreached until candidate retrieval succeeds."
 severity = "blocker"
 
-[observation.6.1.34]
+[observation.6.1.84]
 task = "6.1"
 file = "cmd/layerx-guarantor/runtime.c cmd/layerx-guarantor/settlement.py platform/hosted/node/deployment.yaml docs/wiki/Guarantor.md"
 symbol = "gp_runtime_open gp_runtime_oracle membership"
 observed = "The independent runtime verifies genesis and executes real kernel transitions without the sequencer private key. Direct owner authority matches the node adapter. Nonempty oracle inputs and rotated signer histories lacking complete authorization reconstruction refuse explicitly. The deployed topology provisions two distinct signing identities, two mutual-TLS processes and a dedicated checkpoint submitter, but both guarantors share the cluster operator and provide no operational independence. Certificates carry empty validity proofs and use implemented v2 domain tags."
-assumption = "Production independence requires independent operator onboarding. Supporting nonempty oracle input or rotated guarantor histories requires a complete verified authority adapter; neither capability is claimed by the beta producer. Prior specification-domain drift remains recorded in observation 6.1.32."
+assumption = "Production independence requires independent operator onboarding. Supporting nonempty oracle input or rotated guarantor histories requires a complete verified authority adapter; neither capability is claimed by the beta producer. Prior specification-domain drift remains recorded in observation 6.1.82."
 severity = "note"
 
-[observation.6.1.35]
+[observation.6.1.85]
 task = "6.1"
 file = "platform/hosted/tests/topology-check.sh platform/hosted/tests/topology_check.py"
 symbol = "platform-hosted-topology-check"
@@ -5257,7 +5261,7 @@ observed = "The seven added guarantor topology negative mutations pass. The aggr
 assumption = "Unrelated service and network-policy owners must resolve aggregate topology failures. No Docker, image, kubectl, kind or live-cluster gate was run on the build host. Native bootstrap and static topology checks do not establish deployed cluster reachability."
 severity = "blocker"
 
-[observation.6.1.36]
+[observation.6.1.86]
 task = "6.1"
 file = "Makefile"
 symbol = "test-daemon-guarantor-sanitize"
@@ -5265,7 +5269,7 @@ observed = "The new AddressSanitizer and UndefinedBehaviorSanitizer variant comp
 assumption = "AddressSanitizer qualification requires a compatible execution host. Runtime ordering and leak checks remain enabled; the failing sanitizer gate is not reported as passing."
 severity = "blocker"
 
-[observation.6.1.37]
+[observation.6.1.87]
 task = "6.1"
 file = "cmd/layerx-guarantor Makefile tests/daemon/guarantor-core.c tests/daemon/guarantor-settlement-chain.py"
 symbol = "gp_verify_attest gp_settlement_register test-daemon-guarantor"
@@ -5273,7 +5277,7 @@ observed = "The C17 warnings-as-errors build and unit gate exit 0, including gen
 assumption = "The guarantor aggregate exits 2 because its real-daemon integration exits 1 at the unimplemented candidate selector. These passing component gates do not claim completed two-producer finality feedback or deployment qualification. Existing refusal, verifier, signature, root and freshness checks remain intact."
 severity = "note"
 
-[observation.6.1.36]
+[observation.6.1.88]
 task = "6.1"
 file = "cmd/layerxd/lxp_daemon_lni.c agent/crates/layerx-client/tests/availability_daemon.rs tests/daemon/availability-settlement.py"
 symbol = "send_availability finalized_fetch"
@@ -5281,7 +5285,7 @@ observed = "formerly observation.6.1.31. Tag 18 refuses every selected batch abo
 assumption = "An additive authenticated candidate-batch fetch must expose complete durable sealed bodies before registration without weakening finalized-only consumer selectors, root checks or existing refusal assertions. Producer implementation and end-to-end qualification remain incomplete."
 severity = "blocker"
 
-[observation.6.1.37]
+[observation.6.1.89]
 task = "6.1"
 file = "docs/wiki/Guarantor.md spec/layerx-protocol/docs/guarantors.md contracts/libraries/CanonicalCheckpoint.sol tests/daemon/availability-settlement.py"
 symbol = "ATTESTATION_DOMAIN CHECKPOINT_DOMAIN registerCheckpoint"
@@ -5289,7 +5293,7 @@ observed = "formerly observation.6.1.32. Beta checkpoint construction uses an em
 assumption = "Producer encoding follows the implemented verifiers and vectors. Production operator independence remains an onboarding requirement. Empty beta validity proofs and shared operation do not establish production independence or proof generation."
 severity = "note"
 
-[observation.6.1.38]
+[observation.6.1.90]
 task = "6.1"
 file = "cmd/layerx-guarantor/lni.c tests/daemon/guarantor-integration.py cmd/layerxd/lxp_daemon_lni.c"
 symbol = "LXP_GUARANTOR_CANDIDATE_SELECTOR lxp_guarantor_lni_fetch"
@@ -5297,12 +5301,12 @@ observed = "formerly observation.6.1.33. The producer requests tag 18 selector 0
 assumption = "The additive sealed-candidate selector is required in the daemon; selectors 01 through 04 and all existing finalized-only refusal assertions remain unchanged. Two-producer signing, finality feedback, tag-14 retrieval and existing verifier acceptance are asserted by the compiled integration but remain unreached until candidate retrieval succeeds."
 severity = "blocker"
 
-[observation.6.1.39]
+[observation.6.1.91]
 task = "6.1"
 file = "cmd/layerx-guarantor/runtime.c cmd/layerx-guarantor/settlement.py platform/hosted/node/deployment.yaml docs/wiki/Guarantor.md"
 symbol = "gp_runtime_open gp_runtime_oracle membership"
 observed = "formerly observation.6.1.34. The independent runtime verifies genesis and executes real kernel transitions without the sequencer private key. Direct owner authority matches the node adapter. Nonempty oracle inputs and rotated signer histories lacking complete authorization reconstruction refuse explicitly. The deployed topology provisions two distinct signing identities, two mutual-TLS processes and a dedicated checkpoint submitter, but both guarantors share the cluster operator and provide no operational independence. Certificates carry empty validity proofs and use implemented v2 domain tags."
-assumption = "Production independence requires independent operator onboarding. Supporting nonempty oracle input or rotated guarantor histories requires a complete verified authority adapter; neither capability is claimed by the beta producer. Prior specification-domain drift remains recorded in observation 6.1.32."
+assumption = "Production independence requires independent operator onboarding. Supporting nonempty oracle input or rotated guarantor histories requires a complete verified authority adapter; neither capability is claimed by the beta producer. Prior specification-domain drift remains recorded in observation 6.1.82."
 severity = "note"
 
 [observation.6.1.40]
@@ -5333,8 +5337,8 @@ severity = "note"
 task = "6.1"
 file = "tests/daemon/guarantor-integration.py cmd/layerx-guarantor"
 symbol = "test-daemon-guarantor"
-observed = "At revision 58597cd5, sudo -n env CARGO_BUILD_JOBS=16 MAKEFLAGS=-j16 CARGO_HOME=/home/ubuntu/.cargo RUSTUP_HOME=/home/ubuntu/.rustup PATH=/home/ubuntu/lx/ct1/qual-logs/ct1/bin:/home/ubuntu/.cargo/bin:/usr/local/bin:/usr/bin:/bin make GUARANTOR_PYTHON=/home/ubuntu/lx/gp1/qual-logs/gp1/venv/bin/python test-daemon-guarantor exits 0. Selector 05 serves the signed sealed candidate; independent replay verifies nine batches; two mutual-TLS producers attest; exactly one dedicated-submitter transaction registers and the second producer observes registration. Tag 28 accepts feedback, tag 14 matches the registered bundle, and layerx-verify accepts the real certificate and replay. Core, TLS, settlement unit and real-contract settlement tests also pass. Evidence: qual-logs/gp1/gp1d-guarantor.log."
-assumption = "This resolves the candidate-fetch integration blockers recorded in observations 6.1.36 and 6.1.38. Settlement witness publication and deposit-root publication are not exercised by this gate revision. Cluster and image qualification remain unrun."
+observed = "At revision 58597cd5, make test-daemon-guarantor exits 0. Selector 05 serves the signed sealed candidate; independent replay verifies nine batches; two mutual-TLS producers attest; exactly one dedicated-submitter transaction registers and the second producer observes registration. Tag 28 accepts feedback, tag 14 matches the registered bundle, and layerx-verify accepts the real certificate and replay. Core, TLS, settlement unit and real-contract settlement tests also pass. Evidence: qual-logs/gp1/gp1d-guarantor.log."
+assumption = "This resolves the candidate-fetch integration blockers recorded in observations 6.1.88 and 6.1.90. Settlement witness publication and deposit-root publication are not exercised by this gate revision. Cluster and image qualification remain unrun."
 severity = "note"
 
 [observation.6.1.44]
@@ -5349,7 +5353,7 @@ severity = "blocker"
 task = "6.1"
 file = "platform/hosted/node/checkpoint-authority.py platform/hosted/node/guarantor.sh platform/hosted/tests/beta-cluster.sh platform/hosted/node/tests/guarantor-provision.sh"
 symbol = "public_key wait_for_node_genesis"
-observed = "The provisioning path generates or reuses one Ed25519 key in the shared persistent submitter volume, requires an owned regular 0600 file and emits only its 0x-prefixed 32-byte public key. The cluster path applies Secret layerx-guarantor-checkpoint-authority with key public.hex in TESTNET_NAMESPACE. Both containers receive the same authority file path. sudo -n env CARGO_BUILD_JOBS=16 MAKEFLAGS=-j16 bash platform/hosted/node/tests/guarantor-provision.sh exits 0, including concurrent generation, restart reuse, real Ed25519 signing and verification, public-key derivation equality, group-readable-key and symlink refusal, both genesis identities and reset. bash -n on bootstrap.sh, guarantor.sh, tests/guarantor-provision.sh, paxeer/deploy-contracts.sh and tests/beta-cluster.sh exits 0. python3 platform/hosted/tests/topology_check.py exits 0. Evidence: qual-logs/gp1/gp1d-provision.log, gp1d-shell.log and gp1d-guarantor-topology.log."
+observed = "The provisioning path generates or reuses one Ed25519 key in the shared persistent submitter volume, requires an owned regular 0600 file and emits only its 0x-prefixed 32-byte public key. The cluster path applies Secret layerx-guarantor-checkpoint-authority with key public.hex in TESTNET_NAMESPACE. Both containers receive the same authority file path. bash platform/hosted/node/tests/guarantor-provision.sh exits 0, including concurrent generation, restart reuse, real Ed25519 signing and verification, public-key derivation equality, group-readable-key and symlink refusal, both genesis identities and reset. bash -n on bootstrap.sh, guarantor.sh, tests/guarantor-provision.sh, paxeer/deploy-contracts.sh and tests/beta-cluster.sh exits 0. python3 platform/hosted/tests/topology_check.py exits 0. Evidence: qual-logs/gp1/gp1d-provision.log, gp1d-shell.log and gp1d-guarantor-topology.log."
 assumption = "Secret application and Human movement-policy consumption require cluster qualification, unavailable on this host. The private key remains only in its persistent 0600 file; it is not exported as a Secret. The authority path is provisioned but producer settlement publication remains blocked by observation 6.1.44."
 severity = "note"
 
@@ -5430,7 +5434,7 @@ task = "6.1"
 file = "src/modules/asset/lx_asset_registry.c"
 symbol = "execute_withdrawal"
 observed = "The asset module advertises WITHDRAW at ordinal 9. Its exact 108-byte payload contains asset, u128 amount, 20-byte recipient, request anchor and u64 fee limit. Module validation verifies the signed activity and payload hash, binds the account authority and actor, requires the signed fee limit to match the envelope, and executes the existing withdrawal request path with owner transfer authority. The canonical record uses the activity ID as withdrawal ID and preserves the request anchor and nullifier domain. Eighteen real module-dispatch cases cover success, signature and payload tampering, absent and mismatched authority, fee mismatch and overflow, sequence, balance, asset, pause, freeze, zero amount, zero recipient, zero anchor and exact payload length; repeated signed requests are refused against committed KV. Successful execution proves the strict-decoded withdrawal record against the composite root. make -j16, make test-asset-withdraw-activity test-asset-registry test-asset-withdraw test-state-proof, the additional negative-case target, the focused Rust state_proof test, forge fmt --check, forge build and forge test exit 0. All 149 Solidity tests pass. Logs and exit files are under qual-logs/set1, including withdraw-activity-build, withdraw-activity-final, withdraw-activity-negative, rust-state-proof and forge-test. Native vectors were regenerated because the registered module activity table is part of the composite commitment."
-assumption = "This qualifies the native module path, not WITHDRAW admission or replay through the daemon. cmd/layerxd/lxp_daemon_process.c and cmd/layerxd/lxp_daemon_lni.c explicitly recognize SEND and remain outside the granted paths. Admission, authority-scope, ABI-selection and replay changes are required there. The invocation-local withdrawal store retains the existing type and request API; committed KV supplies durable duplicate detection. The aggregate guarantor invocation initially exits 2 for missing eth_abi; it does not qualify daemon replay."
+assumption = "This qualifies the native module path, not WITHDRAW admission or replay through the daemon. cmd/layerxd/lxp_daemon_process.c and cmd/layerxd/lxp_daemon_lni.c still recognize SEND only; admission, authority-scope, ABI-selection and replay changes are required there. The invocation-local withdrawal store retains the existing type and request API; committed KV supplies durable duplicate detection. The aggregate guarantor invocation initially exits 2 for missing eth_abi; it does not qualify daemon replay."
 severity = "blocker"
 
 [observation.6.1.56]
@@ -5461,8 +5465,8 @@ severity = "note"
 task = "6.1"
 file = "tests/daemon/guarantor-integration.py"
 symbol = "client_identity"
-observed = "After installing eth_abi and eth_account, make test-daemon-guarantor GUARANTOR_PYTHON=/root/lx/set1/qual-logs/set1/venv/bin/python exits 2 at the real admission client Unix-socket connect. The child runs as UID 4021 and cannot traverse /root, whose permissions are 0700. The original failure is in qual-logs/gp1/guarantor-daemon-yptuynkb/admission.log; the same diagnostic and path permissions are retained in qual-logs/set1/guarantor-admission.log and guarantor-path-permissions.log. Aggregate output is qual-logs/set1/guarantor-ready.log. No host permission or client-identity check was changed."
-assumption = "The real nine-batch guarantor replay gate remains unqualified on this server until the distinct-identity fixture has authorized traversal to the checkout. The standalone checkpoint settlement-chain gate passes but does not replace replay. WITHDRAW daemon routing remains a separate owned-path dependency."
+observed = "After installing eth_abi and eth_account, make test-daemon-guarantor with the isolated Python interpreter override exits 2 at the real admission client Unix-socket connect. The distinct-identity client UID cannot traverse the checkout parent directory. The original failure is in qual-logs/gp1/guarantor-daemon-yptuynkb/admission.log; the same diagnostic and path permissions are retained in qual-logs/set1/guarantor-admission.log and guarantor-path-permissions.log. Aggregate output is qual-logs/set1/guarantor-ready.log. No host permission or client-identity check was changed."
+assumption = "The real nine-batch guarantor replay gate remains unqualified on this server until the distinct-identity fixture has authorized traversal to the checkout. The standalone checkpoint settlement-chain gate passes but does not replace replay. WITHDRAW daemon routing remains a separate change."
 severity = "blocker"
 
 [observation.6.1.60]
@@ -5477,7 +5481,7 @@ severity = "blocker"
 task = "6.1"
 file = "tests/daemon/guarantor-integration.py"
 symbol = "client_identity"
-observed = "With /root mode 0711, PATH selecting qual-logs/set1/bin and qual-logs/set1/venv/bin, CARGO_BUILD_JOBS=16 MAKEFLAGS=-j16 make test-daemon-guarantor GUARANTOR_PYTHON=/root/lx/set1/qual-logs/set1/venv/bin/python exits 0. The distinct UID 4021 client connects; all nine batches replay with all three account witnesses and module witnesses verified, two mutually authenticated producers attest, one registers, and feedback and certificate verification succeed. Exact output and exit are qual-logs/set1/e-fixture-guarantor.log and e-fixture-guarantor.exit; permissions are in e-fixture-permissions.log."
+observed = "With the checkout parent directory traversable by the distinct-identity UID, make test-daemon-guarantor with the isolated Python interpreter override exits 0. The distinct UID 4021 client connects; all nine batches replay with all three account witnesses and module witnesses verified, two mutually authenticated producers attest, one registers, and feedback and certificate verification succeed. Exact output and exit are qual-logs/set1/e-fixture-guarantor.log and e-fixture-guarantor.exit; permissions are in e-fixture-permissions.log."
 assumption = "This resolves the traversal failure in observation 6.1.59. It qualifies the existing real replay fixture, not the incomplete version-2 consumer publication rollout."
 severity = "note"
 
@@ -5502,7 +5506,7 @@ task = "6.1"
 file = "human/crates/layerx-intents/src/vocabulary.rs human/crates/layerx-intents/src/compile.rs human/crates/layerx-human-service/src/journeys/withdraw.rs"
 symbol = "BridgeWithdrawRequest debit_plan"
 observed = "BridgeWithdrawRequest at vocabulary.rs:790 has no request_anchor. compile.rs:405 emits the legacy bridge ordinal 2 rather than asset WITHDRAW ordinal 9 and its canonical 108-byte signed payload. The Human debit plan still calls this real intent vocabulary. Native evidence persistence does not change the operation submitted by that compiler."
-assumption = "The intent vocabulary/compiler and any dependent provider mapping require an owned-path extension to submit native WITHDRAW with an explicit recorded request anchor. Those paths were not changed. Native daemon routing and native evidence claim support cannot alone establish the complete Human withdrawal initiation path."
+assumption = "The intent vocabulary/compiler and any dependent provider mapping must submit native WITHDRAW with an explicit recorded request anchor. Those paths were not changed in this observation. Native daemon routing and native evidence claim support cannot alone establish the complete Human withdrawal initiation path."
 severity = "blocker"
 
 [observation.6.1.65]
@@ -5518,7 +5522,7 @@ task = "6.1"
 file = "src/modules/asset/lx_asset_registry.c src/protocol/lxp_kernel.c include/layerx/lxp_kernel.h tests/modules/test_asset_withdraw_activity.c"
 symbol = "withdrawal_context lxp_kernel_bind_ledger_admission actor_sequence"
 observed = "Real custody CREDIT at global sequence 1 consumes identity sequence 0 while the newly credited beneficiary ledger account retains next_sequence 0. Mandatory batch maintenance occupies global sequence 2. WITHDRAW envelope sequence 1 passes identity admission but withdrawal_context copies it to the ledger actor_sequence, producing LXP_ERR_SEQUENCE_GAP (-300) at global sequence 3. Envelope sequence 0 instead fails identity admission with LXP_ERR_SEQUENCE_REUSED (-301). Canonical receipt decoding and daemon diagnostics are in qual-logs/set1/e-daemon-sequence-counters.log. The existing native module mode-5 assertion requires refusal of envelope sequence 1 against ledger sequence 0. Neither that assertion nor the conflicting module implementation was changed."
-assumption = "A repair requires an authenticated activity and ledger-sequence binding for WITHDRAW in src/protocol/lxp_kernel.c and include/layerx/lxp_kernel.h, analogous to the existing Programs ledger admission binding, then verification of that binding by the asset module. These kernel paths are outside the granted routing scope. Unconditionally substituting the account sequence would bypass the retained module refusal and was not done."
+assumption = "A repair requires an authenticated activity and ledger-sequence binding for WITHDRAW in src/protocol/lxp_kernel.c and include/layerx/lxp_kernel.h, analogous to the existing Programs ledger admission binding, then verification of that binding by the asset module. The kernel admission binding was not yet implemented in this observation. Unconditionally substituting the account sequence would bypass the retained module refusal and was not done."
 severity = "blocker"
 
 [observation.6.1.67]
@@ -5541,7 +5545,7 @@ severity = "blocker"
 task = "6.1"
 file = "tests/daemon/guarantor-integration.py tests/daemon/guarantor-settlement-chain.py tests/state/lxp_test_state_proof.c"
 symbol = "gp_runtime_state_proof client_identity"
-observed = "On the final settlement source, CARGO_BUILD_JOBS=16 MAKEFLAGS=-j16 make -j16, make test-state-proof test-native-withdrawal-proof, make test-daemon-guarantor GUARANTOR_PYTHON=/root/lx/set1/qual-logs/set1/venv/bin/python, and qual-logs/set1/venv/bin/python tests/daemon/guarantor-settlement-chain.py all exit 0. Logs and companion exit files are qual-logs/set1/e-final-native-build.log, e-final-native-state.log, e-final-native-guarantor.log and e-final-native-chain.log. The initial aggregate attempt used an absent default interpreter and exited 2; the preserved failure is e-final-native-guarantor-initial.log. The successful rerun supplies the existing supported interpreter override without source or permission changes."
+observed = "On the final settlement source, CARGO_BUILD_JOBS=16 MAKEFLAGS=-j16 make -j16, make test-state-proof test-native-withdrawal-proof, make test-daemon-guarantor with the isolated Python interpreter override, and python3 tests/daemon/guarantor-settlement-chain.py all exit 0. Logs and companion exit files are qual-logs/set1/e-final-native-build.log, e-final-native-state.log, e-final-native-guarantor.log and e-final-native-chain.log. The initial aggregate attempt used an absent default interpreter and exited 2; the preserved failure is e-final-native-guarantor-initial.log. The successful rerun supplies the existing supported interpreter override without source or permission changes."
 assumption = "The final source preserves distinct-identity nine-batch replay and real checkpoint settlement registration. It does not resolve the separate funded WITHDRAW identity/ledger counter conflict or establish autonomous version-2 publication. Cluster and image gates were not run because the required tooling is unavailable."
 severity = "note"
 
@@ -5566,7 +5570,7 @@ task = "6.1"
 file = "agent/crates/layerx-crypto/src/disclosure.rs human/crates/layerx-human-service/src/journeys/withdraw.rs"
 symbol = "semantics decode_bridge_withdraw_request WithdrawalPlan debit_expectation"
 observed = "The agent signer semantics matcher has no asset ordinal 9 case and its withdrawal decoder expects the retired bridge header and account fields. Native WITHDRAW uses its canonical signed activity ID as withdrawal_id, while the Human plan and movement provider preassign a separate withdrawal ID before signing. The new 108-byte payload deliberately does not encode that preassigned ID. These remaining signing-disclosure and receipt-to-native-withdrawal identity interfaces prevent claiming a complete Human initiation and settlement journey."
-assumption = "The signer needs explicit scope to decode and authorize the native signed recipient, request anchor and fee and to bind them to custody disclosure. Native activity ID must then be carried from the signed debit receipt into settlement expectation without weakening receipt, idempotency or user approval checks. Existing assertions and the unsupported-activity refusal remain intact."
+assumption = "The signer must decode and authorize the native signed recipient, request anchor and fee and bind them to custody disclosure. Native activity ID must then be carried from the signed debit receipt into settlement expectation without weakening receipt, idempotency or user approval checks. Existing assertions and the unsupported-activity refusal remain intact."
 severity = "blocker"
 
 [observation.6.1.73]
@@ -5589,7 +5593,7 @@ severity = "blocker"
 task = "6.1"
 file = "tests/daemon/guarantor-settlement-chain.py human/crates/layerx-paxeer-client/examples/native_publication_fetch.rs"
 symbol = "drive fetch_deposit_balance CheckpointProof::fetch_published"
-observed = "Final make -j1 test-daemon-guarantor GUARANTOR_PYTHON=/root/lx/set1/qual-logs/set1/venv/bin/python exits 2 in qual-logs/set1/f3-guarantor-serial.log: core, mTLS exchange, twelve settlement unit cases and the nine-batch distinct-identity integration pass before the funded publication fixture reaches the retained second-checkpoint epoch refusal. Direct qual-logs/set1/venv/bin/python tests/daemon/guarantor-settlement-chain.py exits 1 in f3-chain-final.log at the same refusal. Its first checkpoint passes real native deposit and signed balance Rust fetch, invalid owner and deposit signatures send no publication transactions, and retry sends no transactions. Final raw evidence is qual-logs/set1/e-daemon-custody-2s_sj_yn/, including checkpoint-order-observed.json, publication-2.log, rust-deposit-balance-fetch.log and publication-state/. Full cargo test --locked --manifest-path human/Cargo.toml -p layerx-paxeer-client exits 0 in f3-client-test.log. cargo fmt --check --manifest-path human/Cargo.toml -p layerx-paxeer-client exits 0 in f3-fmt-check.log; forge fmt --check and forge build exit 0 in f3-forge-fmt.log and f3-forge-build.log."
+observed = "Final make -j1 test-daemon-guarantor GUARANTOR_PYTHON=the isolated Python interpreter exits 2 in qual-logs/set1/f3-guarantor-serial.log: core, mTLS exchange, twelve settlement unit cases and the nine-batch distinct-identity integration pass before the funded publication fixture reaches the retained second-checkpoint epoch refusal. Direct python3 tests/daemon/guarantor-settlement-chain.py exits 1 in f3-chain-final.log at the same refusal. Its first checkpoint passes real native deposit and signed balance Rust fetch, invalid owner and deposit signatures send no publication transactions, and retry sends no transactions. Final raw evidence is qual-logs/set1/e-daemon-custody-2s_sj_yn/, including checkpoint-order-observed.json, publication-2.log, rust-deposit-balance-fetch.log and publication-state/. Full cargo test --locked --manifest-path human/Cargo.toml -p layerx-paxeer-client exits 0 in f3-client-test.log. cargo fmt --check --manifest-path human/Cargo.toml -p layerx-paxeer-client exits 0 in f3-fmt-check.log; forge fmt --check and forge build exit 0 in f3-forge-fmt.log and f3-forge-build.log."
 assumption = "The default native_publication_fetch consumer retains all three fetch requirements, distinct request/inclusion checkpoints and missing-withdrawal refusal. Its explicit deposit-balance-only mode qualifies the first checkpoint, whose real replay contains no withdrawal. Full native withdrawal fetch and subsequent claim remain unrun because the second registration cannot pass. Existing Rust legacy-chain tests passing are not evidence that this native inclusion path passed. The initial parallel aggregate additionally hit the unchanged admission timing assertion; the serial rerun passed that fixture. The inherited sole-writer source and assertion are unchanged from 5098f6dd, as recorded by the empty f3-sole-writer-unchanged.log."
 severity = "note"
 
@@ -5621,8 +5625,8 @@ severity = "note"
 task = "6.1"
 file = "tests/daemon/guarantor-settlement-chain.py tests/daemon/guarantor-publication-chain.py human/crates/layerx-paxeer-client/examples/native_publication_fetch.rs"
 symbol = "publish CheckpointProof::fetch_published ExitEvidence::fetch_published PublishedDepositProof::fetch_published"
-observed = "make -j1 test-daemon-guarantor GUARANTOR_PYTHON=/root/lx/set1/qual-logs/set1/venv/bin/python exits 0 in qual-logs/set1/g3-guarantor.log. The nine-batch distinct-identity replay and authenticated guarantor exchange pass, followed by actual funded CREDIT and WITHDRAW replay, owner recipient and independent deposit-authority signing, complete version-2 publication, all three Rust native fetch consumers, missing-withdrawal and wrong-recipient refusals, and transaction-free retries. The native records prove batch 1 epoch 1 and batch 2 epoch 1. Raw aggregate evidence is qual-logs/set1/e-daemon-custody-mvdfqsfg/ with checkpoint-order-observed.json and rust-native-fetch.log. Direct qual-logs/set1/venv/bin/python tests/daemon/guarantor-settlement-chain.py also exits 0 in g3-chain.log, with raw evidence in e-daemon-custody-hbp7cxzq/. Full cargo test --locked --manifest-path human/Cargo.toml -p layerx-paxeer-client exits 0 in g3-client-test-qualified.log; formatting and strict all-target Clippy pass in g3-client-fmt.log and g3-client-clippy.log."
-assumption = "All chain processes were fixture-owned disposable instances. Commands used CARGO_BUILD_JOBS=16, MAKEFLAGS=-j16, the worktree venv and Foundry/Paxeer PATH entries, PAXD=/root/lx/set1/paxeer-network/build/paxd and LAYERX_TEST_NATIVE_BIN_DIR=/root/lx/set1/build/bin. The initial client suite lacked the venv PATH and exited 101 on a missing Crypto Python import in g3-client-test.log; the full rerun with the existing venv passed. The native funded fixture proves publication and fetch verification; it does not broadcast a native-proof withdrawal claim. Actual payout and cancellation are covered separately by the Human and Rust contract journey suites. Cluster and image gates remain unrun because those tools are unavailable."
+observed = "make -j1 test-daemon-guarantor GUARANTOR_PYTHON=the isolated Python interpreter exits 0 in qual-logs/set1/g3-guarantor.log. The nine-batch distinct-identity replay and authenticated guarantor exchange pass, followed by actual funded CREDIT and WITHDRAW replay, owner recipient and independent deposit-authority signing, complete version-2 publication, all three Rust native fetch consumers, missing-withdrawal and wrong-recipient refusals, and transaction-free retries. The native records prove batch 1 epoch 1 and batch 2 epoch 1. Raw aggregate evidence is qual-logs/set1/e-daemon-custody-mvdfqsfg/ with checkpoint-order-observed.json and rust-native-fetch.log. Direct python3 tests/daemon/guarantor-settlement-chain.py also exits 0 in g3-chain.log, with raw evidence in e-daemon-custody-hbp7cxzq/. Full cargo test --locked --manifest-path human/Cargo.toml -p layerx-paxeer-client exits 0 in g3-client-test-qualified.log; formatting and strict all-target Clippy pass in g3-client-fmt.log and g3-client-clippy.log."
+assumption = "All chain processes were fixture-owned disposable instances. Commands used CARGO_BUILD_JOBS=16, MAKEFLAGS=-j16, the worktree venv and Foundry/Paxeer PATH entries, PAXD=the repository-built paxd and LAYERX_TEST_NATIVE_BIN_DIR=the repository native binary directory. The initial client suite lacked the venv PATH and exited 101 on a missing Crypto Python import in g3-client-test.log; the full rerun with the existing venv passed. The native funded fixture proves publication and fetch verification; it does not broadcast a native-proof withdrawal claim. Actual payout and cancellation are covered separately by the Human and Rust contract journey suites. Cluster and image gates remain unrun because those tools are unavailable."
 severity = "note"
 
 [observation.6.1.80]
