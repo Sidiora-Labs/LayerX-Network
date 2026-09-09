@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 pragma solidity ^0.8.24;
 
+import {NativePublicationVerifier} from "./libraries/NativePublicationVerifier.sol";
 import {CanonicalCheckpoint} from "./libraries/CanonicalCheckpoint.sol";
 import {Constants} from "./libraries/Constants.sol";
 import {CryptographyPrimitives} from "./libraries/CryptographyPrimitives.sol";
@@ -37,7 +38,8 @@ contract CheckpointRegistry is LayerXComponent {
     bytes32 public immutable genesisReceiptRoot;
     bytes32 public immutable genesisCheckpointId;
 
-    uint16 public constant EVIDENCE_VERSION = 1;
+    NativePublicationVerifier public publicationVerifier = new NativePublicationVerifier();
+    uint16 public constant EVIDENCE_VERSION = 2;
     mapping(bytes32 => address) public checkpointProposer;
     mapping(bytes32 => bytes32) public witnessesDigest;
     mapping(bytes32 => bool) public witnessesPublished;
@@ -233,11 +235,31 @@ contract CheckpointRegistry is LayerXComponent {
             canonicalWithdrawalStateWitnesses.length == 0 || canonicalBalanceWitnesses.length == 0
                 || canonicalWithdrawalStateWitnesses.length + canonicalBalanceWitnesses.length > 1_000_000
         ) revert InvalidWitnesses();
+        uint16 version = 1;
+        bytes memory domain = bytes("LXP/Paxeer/withdrawal-witnesses/v2\x00");
+        if (
+            canonicalWithdrawalStateWitnesses.length >= domain.length
+                && keccak256(canonicalWithdrawalStateWitnesses[:domain.length]) == keccak256(domain)
+        ) {
+            version = EVIDENCE_VERSION;
+            publicationVerifier.verify(digest, canonicalWithdrawalStateWitnesses, false);
+            publicationVerifier.verify(digest, canonicalBalanceWitnesses, true);
+        } else {
+            bytes memory legacyWithdrawals = bytes("LXP/Paxeer/withdrawal-witnesses/v1\x00");
+            bytes memory legacyBalances = bytes("LXP/Paxeer/balance-witnesses/v1\x00");
+            if (
+                canonicalWithdrawalStateWitnesses.length < legacyWithdrawals.length + 4
+                    || canonicalBalanceWitnesses.length < legacyBalances.length + 4
+                    || keccak256(canonicalWithdrawalStateWitnesses[:legacyWithdrawals.length])
+                        != keccak256(legacyWithdrawals)
+                    || keccak256(canonicalBalanceWitnesses[:legacyBalances.length]) != keccak256(legacyBalances)
+            ) revert InvalidWitnesses();
+        }
         bytes32 commitment =
-            sha256(abi.encode(digest, EVIDENCE_VERSION, canonicalWithdrawalStateWitnesses, canonicalBalanceWitnesses));
+            sha256(abi.encode(digest, version, canonicalWithdrawalStateWitnesses, canonicalBalanceWitnesses));
         witnessesPublished[digest] = true;
         witnessesDigest[digest] = commitment;
-        emit CheckpointWitnessesPublished(digest, EVIDENCE_VERSION, commitment);
+        emit CheckpointWitnessesPublished(digest, version, commitment);
     }
 
     function isFinalised(bytes32 digest, bytes32 stateRoot) external view returns (bool) {

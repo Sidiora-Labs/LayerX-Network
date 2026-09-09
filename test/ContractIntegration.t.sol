@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 pragma solidity ^0.8.24;
 
+import {NativeStateProof} from "../contracts/libraries/NativeStateProof.sol";
+import {Ed25519Signer} from "./Ed25519Signer.sol";
+
 import {AssetRegistry} from "../contracts/custody/AssetRegistry.sol";
 import {ILayerXAssetRegistry} from "../contracts/interfaces/ILayerXAssetRegistry.sol";
 import {LayerXVault} from "../contracts/custody/LayerXVault.sol";
@@ -30,6 +33,10 @@ import {Governed} from "../contracts/security/Governed.sol";
 import {UUPSNotUpgradeable} from "../contracts/security/UUPSNotUpgradeable.sol";
 
 interface IntegrationVm {
+    function readFile(string calldata path) external view returns (string memory);
+    function parseJsonBytes(string calldata json, string calldata key) external pure returns (bytes memory);
+    function parseJsonBytes32(string calldata json, string calldata key) external pure returns (bytes32);
+
     struct Log {
         bytes32[] topics;
         bytes data;
@@ -611,6 +618,228 @@ contract ContractIntegrationTest {
         emergencyExit.executeExit(exitClaim, stateRoot, proof, attestations);
     }
 
+    function testNativeWitnessPublicationAuthenticatesVersionRootAnchorAndSignature() public {
+        _prepareSettlement(1_000_000_000);
+        string memory json = vm.readFile("contracts/config/native-state-proofs.json");
+        bytes memory witness = vm.parseJsonBytes(json, ".vectors[7].proof");
+        bytes32 root = vm.parseJsonBytes32(json, ".vectors[7].root");
+        (bytes32 anchor,,) = _registerCheckpoint(keccak256("publication-request-anchor"));
+        (
+            bytes32 inclusion,
+            CanonicalCheckpoint.HeaderCommitments memory header,
+            CanonicalCheckpoint.GuarantorAttestation[] memory attestations
+        ) = _registerCheckpoint(root);
+        bytes memory balanceVector = _nativeBalancePublication(anchor, inclusion, header, attestations, witness);
+        bytes memory withdrawals = abi.encodePacked("LXP/Paxeer/withdrawal-witnesses/v2\x00", uint32(0));
+        uint256 wireOffset = bytes("LXP/Paxeer/balance-witnesses/v2\x00").length + 8 + 100;
+        balanceVector[balanceVector.length - 1] ^= 0x01;
+        vm.expectPartialRevert(NativeStateProof.InvalidEncoding.selector);
+        checkpointRegistry.publishCheckpointWitnesses(inclusion, withdrawals, balanceVector);
+        balanceVector[balanceVector.length - 1] ^= 0x01;
+        balanceVector[wireOffset + 34] ^= 0x01;
+        vm.expectPartialRevert(CheckpointRegistry.InvalidWitnesses.selector);
+        checkpointRegistry.publishCheckpointWitnesses(inclusion, withdrawals, balanceVector);
+        balanceVector[wireOffset + 34] ^= 0x01;
+        uint256 anchorOffset = balanceVector.length - 64 - 2 - witness.length - 72;
+        balanceVector[anchorOffset] ^= 0x01;
+        vm.expectPartialRevert(CheckpointRegistry.InvalidWitnesses.selector);
+        checkpointRegistry.publishCheckpointWitnesses(inclusion, withdrawals, balanceVector);
+        balanceVector[anchorOffset] ^= 0x01;
+        balanceVector[wireOffset] = 0x01;
+        vm.expectPartialRevert(CheckpointRegistry.InvalidWitnesses.selector);
+        checkpointRegistry.publishCheckpointWitnesses(inclusion, withdrawals, balanceVector);
+        balanceVector[wireOffset] = 0x02;
+        vm.expectPartialRevert(CheckpointRegistry.InvalidWitnesses.selector);
+        checkpointRegistry.publishCheckpointWitnesses(
+            inclusion, withdrawals, abi.encodePacked("LXP/Paxeer/balance-witnesses/v2\x00", uint32(0))
+        );
+        require(!checkpointRegistry.witnessesPublished(inclusion), "refusal published witnesses");
+        vm.recordLogs();
+        checkpointRegistry.publishCheckpointWitnesses(inclusion, withdrawals, balanceVector);
+        IntegrationVm.Log[] memory logs = vm.getRecordedLogs();
+        bytes32 digest = sha256(abi.encode(inclusion, uint16(2), withdrawals, balanceVector));
+        require(checkpointRegistry.witnessesPublished(inclusion), "native witnesses unpublished");
+        require(checkpointRegistry.witnessesDigest(inclusion) == digest, "native witnesses digest");
+        require(logs.length == 1 && logs[0].emitter == address(checkpointRegistry), "native publication emitter");
+        require(logs[0].topics.length == 2 && logs[0].topics[1] == inclusion, "native publication checkpoint");
+        require(
+            logs[0].topics[0] == keccak256("CheckpointWitnessesPublished(bytes32,uint16,bytes32)"),
+            "native publication event"
+        );
+        require(keccak256(logs[0].data) == keccak256(abi.encode(uint16(2), digest)), "native publication version");
+        vm.expectPartialRevert(CheckpointRegistry.WitnessesAlreadyPublished.selector);
+        checkpointRegistry.publishCheckpointWitnesses(inclusion, withdrawals, balanceVector);
+    }
+
+    function _nativeBalancePublication(
+        bytes32 anchor,
+        bytes32 inclusion,
+        CanonicalCheckpoint.HeaderCommitments memory header,
+        CanonicalCheckpoint.GuarantorAttestation[] memory attestations,
+        bytes memory witness
+    ) private pure returns (bytes memory) {
+        bytes32 account = hex"2ccf29968539d08041119d67d9223a7043a84cd2dc88ab6126595e52e8a99855";
+        bytes32 asset = bytes32(uint256(1) << 248);
+        address recipient = address(0xE914);
+        (, bytes memory signature) = Ed25519Signer.sign(
+            bytes32(uint256(1) << 248),
+            abi.encodePacked("LX:SETTLE:RECIPIENT:v1", bytes1(0), header.networkId, account, asset, recipient, anchor)
+        );
+        bytes memory wire = abi.encodePacked(
+            hex"0202",
+            inclusion,
+            header.resultingStateRoot,
+            header.epoch,
+            header.batchNumber,
+            header.dataAvailabilityRoot,
+            uint64(0),
+            uint16(0),
+            uint32(attestations.length)
+        );
+        for (uint256 i; i < attestations.length; ++i) {
+            wire = bytes.concat(wire, _packedNativeAttestation(attestations[i]));
+        }
+        wire = bytes.concat(
+            wire,
+            abi.encodePacked(
+                anchor,
+                inclusion,
+                header.networkId,
+                uint32(witness.length),
+                witness,
+                uint16(signature.length),
+                signature
+            )
+        );
+        bytes memory item = abi.encodePacked(account, asset, uint128(100), recipient, wire);
+        return abi.encodePacked("LXP/Paxeer/balance-witnesses/v2\x00", uint32(1), uint32(item.length), item);
+    }
+
+    function _packedNativeAttestation(CanonicalCheckpoint.GuarantorAttestation memory a)
+        private
+        pure
+        returns (bytes memory)
+    {
+        return bytes.concat(
+            abi.encodePacked(
+                a.protocolVersion, a.networkId, a.paxeerChainId, a.settlementContract, a.epoch, a.checkpointId
+            ),
+            abi.encodePacked(
+                a.checkpointHash, a.guarantorId, a.batchNumber, a.dataAvailabilityRoot, a.replayed, a.dataAvailable
+            ),
+            abi.encodePacked(a.availabilityClassMask, a.attestedAt, a.signer, a.r, a.s, a.v)
+        );
+    }
+
+    function testNativeEmergencyExitSignedRecipientAndAnchorExactlyOnce() public {
+        _prepareSettlement(1_000_000_000);
+        string memory json = vm.readFile("contracts/config/native-state-proofs.json");
+        bytes memory witness = vm.parseJsonBytes(json, ".vectors[7].proof");
+        bytes32 stateRoot = vm.parseJsonBytes32(json, ".vectors[7].root");
+        bytes32 asset = bytes32(uint256(1) << 248);
+        IntegrationToken nativeToken = new IntegrationToken(address(this));
+        _governanceCall(
+            address(assetRegistry),
+            abi.encodeCall(
+                AssetRegistry.registerAsset, (asset, address(nativeToken), uint8(6), uint128(1), uint128(1_000_000))
+            )
+        );
+        nativeToken.mint(address(this), 100);
+        nativeToken.approve(address(vault), 100);
+        vault.deposit(asset, 100, keccak256("native-exit-custody"));
+        (bytes32 anchor,,) = _registerCheckpoint(keccak256("native-request-anchor"));
+        (bytes32 inclusion,, CanonicalCheckpoint.GuarantorAttestation[] memory attestations) =
+            _registerCheckpoint(stateRoot);
+        EmergencyExit.NativeExitClaim memory claim = EmergencyExit.NativeExitClaim({
+            withdrawalId: bytes32(0),
+            account: hex"2ccf29968539d08041119d67d9223a7043a84cd2dc88ab6126595e52e8a99855",
+            assetId: asset,
+            finalisedBalance: 100,
+            recipient: address(0xE912),
+            requestAnchor: anchor,
+            inclusionCheckpoint: inclusion
+        });
+        claim.withdrawalId = emergencyExit.requiredWithdrawalId(claim.account, asset, anchor);
+        (, bytes memory signature) = Ed25519Signer.sign(
+            bytes32(uint256(1) << 248),
+            abi.encodePacked(
+                "LX:SETTLE:RECIPIENT:v1",
+                bytes1(0),
+                checkpointRegistry.networkId(),
+                claim.account,
+                asset,
+                claim.recipient,
+                anchor
+            )
+        );
+        vm.expectPartialRevert(EmergencyExit.ExitNotEligible.selector);
+        emergencyExit.executeExit(claim, stateRoot, witness, signature, attestations);
+        vm.prank(EMERGENCY_COUNCIL);
+        emergencyExit.emergencyCouncilDeclare();
+        signature[0] ^= 0x01;
+        vm.expectPartialRevert(NativeStateProof.InvalidEncoding.selector);
+        emergencyExit.executeExit(claim, stateRoot, witness, signature, attestations);
+        signature[0] ^= 0x01;
+        claim.recipient = address(0xE913);
+        vm.expectPartialRevert(NativeStateProof.InvalidEncoding.selector);
+        emergencyExit.executeExit(claim, stateRoot, witness, signature, attestations);
+        claim.recipient = address(0xE912);
+        claim.requestAnchor = inclusion;
+        claim.withdrawalId = emergencyExit.requiredWithdrawalId(claim.account, asset, inclusion);
+        vm.expectPartialRevert(NativeStateProof.InvalidEncoding.selector);
+        emergencyExit.executeExit(claim, stateRoot, witness, signature, attestations);
+        claim.requestAnchor = keccak256("unknown-future-anchor");
+        claim.withdrawalId = emergencyExit.requiredWithdrawalId(claim.account, asset, claim.requestAnchor);
+        vm.expectPartialRevert(EmergencyExit.InvalidExitClaim.selector);
+        emergencyExit.executeExit(claim, stateRoot, witness, signature, attestations);
+        claim.requestAnchor = anchor;
+        claim.withdrawalId = emergencyExit.requiredWithdrawalId(claim.account, asset, anchor);
+        bytes32 nullifier = PaxeerWithdrawalCodec.nullifier(
+            checkpointRegistry.networkId(), claim.withdrawalId, claim.account, asset, 100, anchor
+        );
+        require(
+            nullifierRegistry.status(nullifier) == WithdrawalNullifierRegistry.Status.None,
+            "refused exit consumed nullifier"
+        );
+        emergencyExit.executeExit(claim, stateRoot, witness, signature, attestations);
+        require(nativeToken.balanceOf(claim.recipient) == 100, "native emergency balance unpaid");
+        require(
+            nullifierRegistry.status(nullifier) == WithdrawalNullifierRegistry.Status.Consumed,
+            "native exit nullifier open"
+        );
+        require(nullifierRegistry.withdrawalIdUsed(claim.withdrawalId), "native withdrawal id reusable");
+        vm.expectPartialRevert(EmergencyExit.ExitAlreadyConsumed.selector);
+        emergencyExit.executeExit(claim, stateRoot, witness, signature, attestations);
+        require(nativeToken.balanceOf(claim.recipient) == 100, "native emergency paid twice");
+        require(emergencyExit.balanceConsumed(claim.account, asset, inclusion), "native balance consumption absent");
+        claim.requestAnchor = inclusion;
+        claim.withdrawalId = emergencyExit.requiredWithdrawalId(claim.account, asset, inclusion);
+        require(!nullifierRegistry.withdrawalIdUsed(claim.withdrawalId), "alternate anchor withdrawal already used");
+        (, bytes memory secondSignature) = Ed25519Signer.sign(
+            bytes32(uint256(1) << 248),
+            abi.encodePacked(
+                "LX:SETTLE:RECIPIENT:v1",
+                bytes1(0),
+                checkpointRegistry.networkId(),
+                claim.account,
+                asset,
+                claim.recipient,
+                inclusion
+            )
+        );
+        bytes32 secondNullifier = PaxeerWithdrawalCodec.nullifier(
+            checkpointRegistry.networkId(), claim.withdrawalId, claim.account, asset, 100, inclusion
+        );
+        require(secondNullifier != nullifier, "alternate anchor nullifier unchanged");
+        vm.expectPartialRevert(EmergencyExit.ExitAlreadyConsumed.selector);
+        emergencyExit.executeExit(claim, stateRoot, witness, secondSignature, attestations);
+        require(nativeToken.balanceOf(claim.recipient) == 100, "alternate anchor paid twice");
+        require(
+            nullifierRegistry.status(secondNullifier) == WithdrawalNullifierRegistry.Status.None,
+            "refused alternate anchor consumed nullifier"
+        );
+    }
+
     function testUpheldLatestCheckpointCannotAuthorizeEmergencyExit() public {
         _prepareSettlement(1_000_000_000);
         bytes32 assetId = Constants.USDL_ASSET_ID;
@@ -757,7 +986,9 @@ contract ContractIntegrationTest {
             checkpointRegistry.networkId(),
             checkpointRegistry.protocolVersion()
         );
-        bytes memory signature = new bytes(64);
+        (bytes32 registrationAuthority, bytes memory signature) =
+            Ed25519Signer.sign(hex"9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60", registration);
+        _governanceCall(address(vault), abi.encodeCall(LayerXVault.setDepositRootAuthority, (registrationAuthority)));
         bytes32[] memory ordering = new bytes32[](1);
         ordering[0] = root;
         vm.prank(address(0x1234));
@@ -767,10 +998,23 @@ contract ContractIntegrationTest {
         vault.registerDepositRoot(registration, new bytes(63), ordering);
         vm.expectPartialRevert(LayerXVault.InvalidDepositRoot.selector);
         vault.registerDepositRoot(registration, signature, new bytes32[](0));
+        (, bytes memory wrongKeySignature) = Ed25519Signer.sign(bytes32(uint256(123)), registration);
+        vm.expectPartialRevert(LayerXVault.InvalidDepositRoot.selector);
+        vault.registerDepositRoot(registration, wrongKeySignature, ordering);
+        bytes1 originalSignatureByte = signature[0];
+        signature[0] ^= 0x01;
+        vm.expectPartialRevert(LayerXVault.InvalidDepositRoot.selector);
+        vault.registerDepositRoot(registration, signature, ordering);
+        signature[0] = originalSignatureByte;
+        uint256 custodyOffset = bytes("LX:PAXEER:DEPOSIT:ROOT:v1").length + 96;
+        registration[custodyOffset] ^= 0x01;
+        vm.expectPartialRevert(LayerXVault.InvalidDepositRoot.selector);
+        vault.registerDepositRoot(registration, signature, ordering);
+        registration[custodyOffset] ^= 0x01;
         vm.recordLogs();
         vault.registerDepositRoot(registration, signature, ordering);
         IntegrationVm.Log[] memory logs = vm.getRecordedLogs();
-        bytes32 digest = sha256(abi.encode(uint16(1), registration, signature, ordering));
+        bytes32 digest = sha256(abi.encode(uint16(2), registration, signature, ordering));
         require(vault.depositRegistrationDigest(checkpoint) == digest, "registration digest");
         require(logs.length == 1 && logs[0].emitter == address(vault), "registration emitter");
         require(
@@ -781,12 +1025,12 @@ contract ContractIntegrationTest {
             logs[0].topics[0] == keccak256("DepositRootRegistered(bytes32,bytes32,bytes32,uint16)"),
             "registration signature"
         );
-        require(keccak256(logs[0].data) == keccak256(abi.encode(digest, uint16(1))), "registration data");
-        signature[0] = 0x01;
-        require(digest != sha256(abi.encode(uint16(1), registration, signature, ordering)), "signature binding");
-        signature[0] = 0x00;
+        require(keccak256(logs[0].data) == keccak256(abi.encode(digest, uint16(2))), "registration data");
+        signature[0] ^= 0x01;
+        require(digest != sha256(abi.encode(uint16(2), registration, signature, ordering)), "signature binding");
+        signature[0] = originalSignatureByte;
         ordering[0] = keccak256("another-leaf");
-        require(digest != sha256(abi.encode(uint16(1), registration, signature, ordering)), "ordering binding");
+        require(digest != sha256(abi.encode(uint16(2), registration, signature, ordering)), "ordering binding");
         vm.expectPartialRevert(LayerXVault.DepositRootAlreadyRegistered.selector);
         vault.registerDepositRoot(registration, signature, ordering);
     }
@@ -970,8 +1214,8 @@ contract ContractIntegrationTest {
     }
 
     function _bootstrapGovernance() private {
-        address[] memory targets = new address[](21);
-        bytes4[] memory selectors = new bytes4[](21);
+        address[] memory targets = new address[](22);
+        bytes4[] memory selectors = new bytes4[](22);
         uint256 index;
         targets[index] = address(assetRegistry);
         selectors[index++] = AssetRegistry.registerAsset.selector;
@@ -983,6 +1227,8 @@ contract ContractIntegrationTest {
         selectors[index++] = LayerXVault.setSettlementModule.selector;
         targets[index] = address(vault);
         selectors[index++] = LayerXVault.setGuarantorBond.selector;
+        targets[index] = address(vault);
+        selectors[index++] = LayerXVault.setDepositRootAuthority.selector;
         targets[index] = address(guarantorBond);
         selectors[index++] = GuarantorBond.setSlashingAuthority.selector;
         targets[index] = address(guarantorBond);

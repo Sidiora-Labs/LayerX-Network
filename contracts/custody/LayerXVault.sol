@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 pragma solidity ^0.8.24;
 
+import {Ed25519Verifier} from "../crypto/Ed25519.sol";
 import {CheckpointRegistry} from "../CheckpointRegistry.sol";
 import {IGuarantorEligibility} from "../interfaces/IGuarantorEligibility.sol";
 import {ILayerXAssetRegistry} from "../interfaces/ILayerXAssetRegistry.sol";
@@ -21,7 +22,7 @@ contract LayerXVault is Governed, ReentrancyLock, LayerXComponent {
     error SettlementModuleOnly();
     error InvalidBondAccounting();
 
-    uint16 public constant EVIDENCE_VERSION = 1;
+    uint16 public constant EVIDENCE_VERSION = 2;
     mapping(bytes32 => bytes32) public depositRegistrationDigest;
     mapping(bytes32 => bool) public depositRootRegistered;
     event DepositRootRegistered(
@@ -88,6 +89,16 @@ contract LayerXVault is Governed, ReentrancyLock, LayerXComponent {
         emit GuarantorBondSet(bond);
     }
 
+    Ed25519Verifier public depositVerifier = new Ed25519Verifier();
+    bytes32 public depositRootAuthority;
+    event DepositRootAuthoritySet(bytes32 authority);
+
+    function setDepositRootAuthority(bytes32 authority) external onlyGovernance {
+        if (authority == bytes32(0)) revert InvalidDepositRoot();
+        depositRootAuthority = authority;
+        emit DepositRootAuthoritySet(authority);
+    }
+
     function registerDepositRoot(
         bytes calldata canonicalRegistration,
         bytes calldata ed25519Signature,
@@ -119,6 +130,10 @@ contract LayerXVault is Governed, ReentrancyLock, LayerXComponent {
                 || protocol != registry.protocolVersion()
         ) revert InvalidDepositRoot();
         if (depositRootRegistered[checkpointId]) revert DepositRootAlreadyRegistered();
+        if (
+            depositRootAuthority == bytes32(0)
+                || !depositVerifier.verify(depositRootAuthority, canonicalRegistration, ed25519Signature)
+        ) revert InvalidDepositRoot();
         bytes32 commitment = sha256(abi.encode(EVIDENCE_VERSION, canonicalRegistration, ed25519Signature, leafOrdering));
         depositRootRegistered[checkpointId] = true;
         depositRegistrationDigest[checkpointId] = commitment;
