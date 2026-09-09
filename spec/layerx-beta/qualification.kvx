@@ -5284,3 +5284,11 @@ symbol = "rustfmt"
 observed = "cargo fmt --manifest-path programs/Cargo.toml -p layerx-programs-runtime -p layerx-programs-registry -p layerx-program-sdk --check initially reports inherited formatting in the owned runtime and SDK packages. Running that same package-scoped formatter changes only whitespace/import ordering in budget.rs, lifecycle.rs, abi_linker.rs, execution_trace.rs, tests/lifecycle.rs, sdk/rust/src/host.rs and sdk/rust/src/lib.rs. The scoped check then exits 0. No vendor or external dependency source was formatted."
 assumption = "The final-source scoped tests, all-target Clippy and native build/core tests recorded in observation 6.11.135 include this formatting. Evidence: qual-logs/pay5/scoped-fmt-before.log, scoped-fmt-final.log, scoped-test-final.log and scoped-clippy-final.log. Workspace-wide formatting remains inherited as recorded in observation 6.11.133."
 severity = "note"
+
+[observation.6.11.137]
+task = "6.11"
+file = "programs/sdk/rust/src/payments.rs programs/sdk/rust/src/capability.rs programs/crates/layerx-programs-runtime/tests/payment_preparation.rs"
+symbol = "ProgramPaymentCapabilities PaymentGrant"
+observed = "The SDK now builds one canonical mixed grant set containing ordinary capabilities, funding grants and multiple ProgramSpend payouts. Ordering matches runtime authority keys, including lexicographic seed bytes rather than the encoded length prefix. Duplicate keys are refused even with different ceilings. Zero ceilings, local capacity overflow, protocol grant-count overflow and short output buffers are refused without changing the set or short output. Maximum-length seeds at the full grant count decode through the real ABI-v2 runtime decoder."
+assumption = "cargo test --locked --manifest-path programs/Cargo.toml -p layerx-programs-runtime --test payment_preparation exits 0 (4 tests). SDK/runtime all-target Clippy with -D warnings and package-scoped cargo fmt --check exit 0. Evidence: qual-logs/pay5/mixed-grants-qualified-test.log, mixed-grants-qualified-clippy.log and mixed-grants-qualified-fmt.log. This completes grant composition but does not resolve native signer/account admission or establish native settlement."
+severity = "note"

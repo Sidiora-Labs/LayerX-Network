@@ -128,6 +128,10 @@ impl Capability {
         }
     }
 
+    pub(crate) fn authority_key_cmp(self, other: Self) -> Ordering {
+        self.key().cmp(&other.key())
+    }
+
     const fn key(self) -> CapabilityKey {
         match self {
             Self::StorageRead => CapabilityKey::StorageRead,
