@@ -5460,3 +5460,11 @@ symbol = "lx_asset_committed_records collect_assets parse_request"
 observed = "Daemon reconstruction requires committed Asset records and refuses account assets without metadata. Bootstrap records use the manifest asset-id key; native updates use asset: plus asset-id. Custody bootstrap supply is read from committed custody-issued metadata when present. Issuer, salt, cap and pause come from decoded records. LXGB request version 2 appends explicit Asset records and a canonical named fee schedule; version 1 remains parseable but cannot create missing authoritative metadata. Genesis version-2 artifact round trip passes in test-genesis."
 assumption = "Existing external bootstrap request generators must provide the new metadata and schedule. The actual daemon restart matrix for funded native register/open/mint/burn/grants remains unqualified."
 severity = "note"
+
+[observation.3.7.55]
+task = "3.7"
+file = "agent/schema/lni/v1.kvx agent/schema/lni/README.md agent/crates/layerx-client/tests/lni_schema.rs cmd/layerxd/lxp_daemon_lni.c"
+symbol = "send_asset_read send_fee_estimate lni_schema_and_document_cover_every_declared_message"
+observed = "LNI minor 5 adds AssetReadRequest/Response tags 32/33 and FeeEstimateRequest/Response tags 34/35. Typed client calls decode committed metadata and canonical fee schedule snapshots; DID enumeration verifies each existing account proof. Native compilation, existing LNI account evidence and durable admission gates pass. The Rust schema gate fails because the boundary README does not list the new message names; the exact NODE_BOUNDARY assertion is unchanged. Evidence: qual-logs/pay1/pay1f-schema.log. The README is outside the granted schema file path."
+assumption = "This is a new integration requirement, not an inherited failure. Add the four message names and snapshot semantics to agent/schema/lni/README.md, then rerun cargo test --manifest-path agent/Cargo.toml -p layerx-client --test lni_schema. New metadata/fee handlers still need a real daemon client integration matrix."
+severity = "blocker"

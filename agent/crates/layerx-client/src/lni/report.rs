@@ -140,5 +140,7 @@ const fn absent_behavior(capability: Capability) -> &'static str {
         Capability::PreparationState => "preparation_unavailable",
         Capability::FinalityEvidenceRegister => "finality_evidence_registration_unavailable",
         Capability::Simulate => "program_simulation_unavailable",
+        Capability::AssetRead => "committed_asset_read_unavailable",
+        Capability::FeeEstimate => "canonical_fee_estimate_unavailable",
     }
 }
