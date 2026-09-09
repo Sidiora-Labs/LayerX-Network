@@ -3,6 +3,7 @@
 #include "layerx/lxp_crypto.h"
 #include "layerx/lx_asset.h"
 #include "layerx/lxp_kernel.h"
+#include "layerx/lxp_module_ctx.h"
 #include "layerx/lxp_ledger.h"
 #include "layerx/lxp_state.h"
 
@@ -87,6 +88,9 @@ static lxp_result materialize_snapshot(
     if (status == LXP_OK &&
         manifest->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT)
         status = lxp_kernel_register_module(kernel, lx_asset_module_iface());
+    if (status == LXP_OK &&
+        manifest->protocol_version == LXP_PROTOCOL_VERSION_STATE_COMMITMENT)
+        status = lxp_kernel_register_module(kernel, lxp_governance_module_iface());
     if (status == LXP_OK) {
         lxp_bridge_profile bridge;
         bool present = false;

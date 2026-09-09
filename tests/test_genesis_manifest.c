@@ -4,6 +4,7 @@
 #include "layerx/lx_asset.h"
 #include "layerx/lxp_hash.h"
 #include "layerx/lxp_kernel.h"
+#include "layerx/lxp_module_ctx.h"
 #include "layerx/lxp_ledger.h"
 #include "layerx/lxp_state.h"
 
@@ -177,6 +178,9 @@ static int check_version(uint16_t protocol_version)
         REQUIRE(lxp_snapshot_load(snapshot.bytes, snapshot.length,
                                   &snapshot_manifest, &kernel) != LXP_OK);
         REQUIRE(lxp_kernel_register_module(&kernel, lx_asset_module_iface()) == LXP_OK);
+        REQUIRE(lxp_snapshot_load(snapshot.bytes, snapshot.length,
+                                  &snapshot_manifest, &kernel) != LXP_OK);
+        REQUIRE(lxp_kernel_register_module(&kernel, lxp_governance_module_iface()) == LXP_OK);
     }
     REQUIRE(lxp_snapshot_load(snapshot.bytes, snapshot.length,
                               &snapshot_manifest, &kernel) == LXP_OK);
