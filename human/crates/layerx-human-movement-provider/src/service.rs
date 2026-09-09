@@ -198,9 +198,40 @@ impl EvidenceService {
         Response::VerifiedDeposit(transaction)
     }
 
+    fn bind_debit(
+        &self,
+        identity: &layerx_human_service::journeys::MovementExecutionIdentity,
+        debit: &layerx_paxeer_client::DebitExpectation,
+    ) -> Response {
+        let Ok(plan) = self.journal.authorized_plan(identity) else {
+            return Response::ContractViolation;
+        };
+        let context = plan.context;
+        if plan.operation != "withdraw.start"
+            || debit.activity_id != debit.withdrawal_id
+            || debit.network_id != context.network.value()
+            || debit.account != identity.account
+            || debit.recipient != context.wallet
+            || debit.asset_id != context.asset.bytes()
+            || debit.amount != context.amount.value()
+            || layerx_paxeer_client::account_address_for_protocol(
+                &context.withdrawals_account,
+                context.protocol_version,
+            )
+            .ok()
+                != Some(debit.withdrawals_account)
+        {
+            return Response::ContractViolation;
+        }
+        Response::Ready
+    }
+
     fn execute(&mut self, request: &Request) -> Response {
         match request {
             Request::CheckpointProof(debit) => self.checkpoint(debit),
+            Request::BindWithdrawalDebit {
+                identity, debit, ..
+            } => self.bind_debit(identity, debit),
             Request::PollDepositFinality(transaction) => self
                 .poll(*transaction)
                 .map_or(Response::Unavailable, Response::DepositFinality),
@@ -404,7 +435,7 @@ impl EvidenceService {
     }
 
     fn checkpoint(&self, debit: &layerx_paxeer_client::DebitExpectation) -> Response {
-        if debit.validated().is_err() {
+        if debit.validated().is_err() || !self.journal.has_withdrawal_debit(debit) {
             return Response::ContractViolation;
         }
         let file = self.evidence_root.join(format!(
@@ -444,6 +475,19 @@ impl MovementProviderService for EvidenceService {
                     return Response::ContractViolation;
                 };
                 hex_string(&key)
+            }
+            Request::BindWithdrawalDebit { identity, .. } => {
+                let mut hash = Sha256::new();
+                hash.update(b"lxmp-withdrawal-receipt/v1\0");
+                for value in [
+                    identity.principal.as_str().as_bytes(),
+                    identity.tenant.as_str().as_bytes(),
+                    &identity.plan_id,
+                ] {
+                    hash.update((value.len() as u64).to_be_bytes());
+                    hash.update(value);
+                }
+                hex_string(&hash.finalize())
             }
             Request::PrepareEvmTransaction { action_key, .. } => {
                 action_key_hash(b"prepare", action_key)

@@ -8,7 +8,7 @@ use layerx_types::intent::{
     ApprovalThreshold, AuthorityGrantId, BudgetId, ContextHash, DepositProofId, EvmAddress,
     GrantSchedule, NetworkId, PayerGrantId, PeriodLength, ProtocolVersion, PublicKey, PurposeHash,
     RecoveryRoot, RolloverPolicy, SendAuthorization, Sequence, SessionRevocationReason,
-    TimestampSeconds, WithdrawalId,
+    TimestampSeconds,
 };
 #[cfg(test)]
 use layerx_types::intent::{AuthorizationSignature, SendAuthorizationKind};
@@ -801,7 +801,6 @@ impl BridgeDepositCredit {
 pub struct BridgeWithdrawRequest {
     pub(crate) request_anchor: CheckpointId,
     pub(crate) fee_limit: u64,
-    pub(crate) withdrawal_id: WithdrawalId,
     pub(crate) owner: AccountId,
     pub(crate) withdrawals_account: AccountId,
     pub(crate) payout_address: EvmAddress,
@@ -818,7 +817,6 @@ impl BridgeWithdrawRequest {
     ) -> (
         CheckpointId,
         u64,
-        WithdrawalId,
         &AccountId,
         &AccountId,
         EvmAddress,
@@ -829,7 +827,6 @@ impl BridgeWithdrawRequest {
         (
             self.request_anchor,
             self.fee_limit,
-            self.withdrawal_id,
             &self.owner,
             &self.withdrawals_account,
             self.payout_address,
@@ -847,7 +844,6 @@ impl BridgeWithdrawRequest {
     pub fn new(
         request_anchor: CheckpointId,
         fee_limit: u64,
-        withdrawal_id: WithdrawalId,
         owner: AccountId,
         withdrawals_account: AccountId,
         payout_address: EvmAddress,
@@ -862,13 +858,9 @@ impl BridgeWithdrawRequest {
             return Err(IntentError::zero(IntentField::PayoutAddress));
         }
         movement(&owner, &withdrawals_account, amount)?;
-        if withdrawal_id.is_zero() {
-            return Err(IntentError::zero(IntentField::Withdrawal));
-        }
         Ok(Self {
             request_anchor,
             fee_limit,
-            withdrawal_id,
             owner,
             withdrawals_account,
             payout_address,
@@ -1256,7 +1248,6 @@ mod tests {
                 BridgeWithdrawRequest::new(
                     CheckpointId::new([18; 32]),
                     100,
-                    WithdrawalId::new([16; 32]),
                     owner(),
                     withdrawals(),
                     EvmAddress::new([17; 20]),

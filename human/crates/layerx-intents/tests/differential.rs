@@ -13,7 +13,7 @@ use layerx_types::intent::{
     ApprovalThreshold, AuthorityGrantId, AuthorizationSignature, BudgetId, ContextHash,
     DepositProofId, EvmAddress, GrantSchedule, NetworkId, PayerGrantId, PeriodLength,
     ProtocolVersion, PublicKey, PurposeHash, RecoveryRoot, RolloverPolicy, SendAuthorization,
-    SendAuthorizationKind, Sequence, SessionRevocationReason, TimestampSeconds, WithdrawalId,
+    SendAuthorizationKind, Sequence, SessionRevocationReason, TimestampSeconds,
 };
 use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
 use proptest::prelude::*;
@@ -314,7 +314,6 @@ fn fixtures() -> Vec<Fixture> {
                 BridgeWithdrawRequest::new(
                     CheckpointId::new([18; 32]),
                     100,
-                    WithdrawalId::new([15; 32]),
                     owner(),
                     account("system:paxeer-withdrawals"),
                     EvmAddress::new([16; 20]),

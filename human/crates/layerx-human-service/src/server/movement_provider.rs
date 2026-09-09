@@ -315,6 +315,11 @@ pub enum MovementProviderRequest {
         signature: Vec<u8>,
     },
     CheckpointProof(DebitExpectation),
+    BindWithdrawalDebit {
+        identity: crate::journeys::MovementExecutionIdentity,
+        debit: DebitExpectation,
+        receipt_reference: [u8; 32],
+    },
     SubmitWithdrawal(WithdrawalTransactionRequest),
     LookupWithdrawal([u8; 32]),
     SubmitExit(ExitWalletRequest),
@@ -458,6 +463,27 @@ impl MovementProviderCodec for NativeMovementCodec {
                 w.withdrawal_request(request)?;
                 w.blob(signature, 262_144)?;
             }
+            MovementProviderRequest::BindWithdrawalDebit {
+                identity,
+                debit,
+                receipt_reference,
+            } => {
+                if debit.activity_id != debit.withdrawal_id
+                    || *receipt_reference == [0; 32]
+                    || identity.account != debit.account
+                    || identity.wallet != debit.recipient
+                {
+                    return Err(MovementProviderError::ContractViolation);
+                }
+                w.tag(16);
+                w.execution_identity(identity)?;
+                w.blob(
+                    &layerx_paxeer_client::wire::encode_debit_expectation(debit, 4096)
+                        .map_err(|_| MovementProviderError::ContractViolation)?,
+                    4096,
+                )?;
+                w.fixed(receipt_reference);
+            }
             MovementProviderRequest::CheckpointProof(v) => {
                 w.tag(10);
                 w.blob(
@@ -528,6 +554,12 @@ impl MovementProviderCodec for NativeMovementCodec {
                 action_key: r.fixed()?,
                 target: layerx_types::intent::EvmAddress::new(r.fixed()?),
                 calldata: r.blob(262_144)?.to_vec(),
+            },
+            16 => MovementProviderRequest::BindWithdrawalDebit {
+                identity: r.execution_identity()?,
+                debit: layerx_paxeer_client::wire::decode_debit_expectation(r.blob(4096)?, 4096)
+                    .map_err(|_| MovementProviderError::ContractViolation)?,
+                receipt_reference: r.fixed()?,
             },
             _ => return Err(MovementProviderError::ContractViolation),
         };
@@ -1842,6 +1874,24 @@ impl DepositRuntime for UnixMovementProvider {
 }
 
 impl WithdrawalRuntime for UnixMovementProvider {
+    fn bind_debit(
+        &mut self,
+        identity: &crate::journeys::MovementExecutionIdentity,
+        debit: &layerx_paxeer_client::CommittedWithdrawalDebit,
+    ) -> Result<(), WithdrawalBoundaryError> {
+        match self
+            .call(&MovementProviderRequest::BindWithdrawalDebit {
+                identity: identity.clone(),
+                debit: debit.expectation(),
+                receipt_reference: debit.receipt_reference(),
+            })
+            .map_err(withdrawal_error)?
+        {
+            MovementProviderResponse::Ready => Ok(()),
+            _ => Err(WithdrawalBoundaryError::ContractViolation),
+        }
+    }
+
     fn verify_claim_signature(
         &mut self,
         request: &WithdrawalTransactionRequest,
