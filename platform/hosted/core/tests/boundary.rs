@@ -16,7 +16,7 @@ use layerx_types::ids::{Did, IdempotencyKey};
 use layerx_types::intent::ProgramId;
 use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry, Payload};
 use layerx_types::program_call::{NativeProgramCall, Resources};
-use native_tls::{Certificate, Identity, TlsConnector};
+use native_tls::{Certificate, Identity, TlsConnector, TlsStream};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Write as _};
@@ -29,6 +29,7 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -1131,7 +1132,11 @@ fn parse_http(raw: &[u8]) -> HttpAnswer {
         headers.get("cache-control").map(String::as_str),
         Some("no-store")
     );
-    assert_eq!(headers.get("connection").map(String::as_str), Some("close"));
+    let connection = headers.get("connection").map(String::as_str);
+    assert!(
+        connection == Some("close") || connection == Some("keep-alive"),
+        "connection header {connection:?}"
+    );
     assert!(!headers.contains_key("transfer-encoding"));
     HttpAnswer {
         status,
@@ -1144,9 +1149,19 @@ struct Http {
     port: u16,
     ca: Certificate,
     identity: Option<Identity>,
+    stream: Mutex<Option<TlsStream<TcpStream>>>,
 }
 
 impl Http {
+    fn new(port: u16, ca: Certificate, identity: Option<Identity>) -> Self {
+        Self {
+            port,
+            ca,
+            identity,
+            stream: Mutex::new(None),
+        }
+    }
+
     fn connector(&self) -> TlsConnector {
         let mut builder = TlsConnector::builder();
         builder.add_root_certificate(self.ca.clone());
@@ -1156,25 +1171,82 @@ impl Http {
         must(builder.build(), "tls connector")
     }
 
-    fn raw(&self, request: &str, body: &[u8]) -> Result<HttpAnswer, String> {
+    fn open(&self) -> Result<TlsStream<TcpStream>, String> {
         let tcp = must(TcpStream::connect(("127.0.0.1", self.port)), "connect");
         must(
             tcp.set_read_timeout(Some(Duration::from_secs(60))),
             "read timeout",
         );
-        let mut stream = self
-            .connector()
+        must(
+            tcp.set_write_timeout(Some(Duration::from_secs(60))),
+            "write timeout",
+        );
+        self.connector()
             .connect("localhost", tcp)
-            .map_err(|error| error.to_string())?;
-        must(stream.write_all(request.as_bytes()), "write request");
-        must(stream.write_all(body), "write body");
-        let mut raw = Vec::new();
-        if let Err(error) = stream.read_to_end(&mut raw) {
-            if raw.is_empty() {
-                return Err(error.to_string());
+            .map_err(|error| error.to_string())
+    }
+
+    fn read_message(stream: &mut TlsStream<TcpStream>) -> Result<Vec<u8>, String> {
+        let mut bytes = Vec::new();
+        let mut chunk = [0_u8; 2048];
+        let header_end = loop {
+            let count = stream.read(&mut chunk).map_err(|error| error.to_string())?;
+            if count == 0 {
+                return Err("HTTP message is empty".to_owned());
             }
+            bytes.extend_from_slice(&chunk[..count]);
+            if let Some(position) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+                break position + 4;
+            }
+            if bytes.len() > 32 * 1024 {
+                return Err("HTTP headers exceed their bound".to_owned());
+            }
+        };
+        let head = std::str::from_utf8(&bytes[..header_end]).map_err(|error| error.to_string())?;
+        let length = head
+            .split("\r\n")
+            .filter_map(|line| line.split_once(':'))
+            .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+            .and_then(|(_, value)| value.trim().parse::<usize>().ok())
+            .ok_or_else(|| "content-length missing".to_owned())?;
+        while bytes.len() < header_end + length {
+            let count = stream.read(&mut chunk).map_err(|error| error.to_string())?;
+            if count == 0 {
+                return Err("HTTP body is truncated".to_owned());
+            }
+            bytes.extend_from_slice(&chunk[..count]);
         }
-        Ok(parse_http(&raw))
+        bytes.truncate(header_end + length);
+        Ok(bytes)
+    }
+
+    fn raw(&self, request: &str, body: &[u8]) -> Result<HttpAnswer, String> {
+        let mut stream = self
+            .stream
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+            .map_or_else(|| self.open(), Ok)?;
+        if stream
+            .write_all(request.as_bytes())
+            .and_then(|()| stream.write_all(body))
+            .and_then(|()| stream.flush())
+            .is_err()
+        {
+            stream = self.open()?;
+            must(stream.write_all(request.as_bytes()), "write request");
+            must(stream.write_all(body), "write body");
+            must(stream.flush(), "flush request");
+        }
+        let raw = Self::read_message(&mut stream)?;
+        let answer = parse_http(&raw);
+        if answer.headers.get("connection").map(String::as_str) != Some("close") {
+            *self
+                .stream
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(stream);
+        }
+        Ok(answer)
     }
 
     fn request(
@@ -1185,7 +1257,7 @@ impl Http {
         body: &[u8],
     ) -> HttpAnswer {
         let mut request = format!(
-            "{method} {target} HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\n",
+            "{method} {target} HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\nConnection: keep-alive\r\n",
             body.len()
         );
         for (name, value) in headers {
@@ -1363,6 +1435,7 @@ fn start_boundary(cluster: &Cluster, certificates: &Certificates) -> Boundary {
     let admin_port = free_port();
     let mut env = BTreeMap::new();
     env.insert("LAYERX_CORE_LISTEN", format!("127.0.0.1:{core_port}"));
+    env.insert("LAYERX_PAY_TIMING", "1".to_owned());
     env.insert(
         "LAYERX_CORE_ADMIN_LISTEN",
         format!("127.0.0.1:{admin_port}"),
@@ -1419,16 +1492,8 @@ fn start_boundary(cluster: &Cluster, certificates: &Certificates) -> Boundary {
     );
     Boundary {
         process,
-        core: Http {
-            port: core_port,
-            ca: ca.clone(),
-            identity: None,
-        },
-        admin: Http {
-            port: admin_port,
-            ca,
-            identity: None,
-        },
+        core: Http::new(core_port, ca.clone(), None),
+        admin: Http::new(admin_port, ca, None),
         admin_token,
         supervisor_socket,
     }
@@ -1767,21 +1832,21 @@ fn admin_dependency_refusals_are_four_xx_and_survive_restart() {
 }
 
 fn assert_client_certificates(core: &Http, certificates: &Certificates) {
-    let with_client = Http {
-        port: core.port,
-        ca: core.ca.clone(),
-        identity: Some(certificates.client_identity("client")),
-    };
+    let with_client = Http::new(
+        core.port,
+        core.ca.clone(),
+        Some(certificates.client_identity("client")),
+    );
     assert_eq!(
         with_client.get("/livez").status,
         200,
         "client certificate chained to the CA is accepted"
     );
-    let rogue = Http {
-        port: core.port,
-        ca: core.ca.clone(),
-        identity: Some(certificates.client_identity("rogue")),
-    };
+    let rogue = Http::new(
+        core.port,
+        core.ca.clone(),
+        Some(certificates.client_identity("rogue")),
+    );
     let rogue_request = "GET /livez HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\n\r\n";
     assert!(
         rogue.raw(rogue_request, &[]).is_err(),

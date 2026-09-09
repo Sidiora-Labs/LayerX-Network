@@ -23,12 +23,13 @@ pub struct ReservationRequest<'a> {
     pub continuation: &'a str,
 }
 
-use native_tls::{Certificate, TlsConnector};
+use native_tls::{Certificate, TlsConnector, TlsStream};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
-use std::time::Duration;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 use zeroize::Zeroizing;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
@@ -40,6 +41,16 @@ const MAX_CONTINUATION_CHUNKS: usize = 16;
 const AUDIT_ATTEMPTS: usize = 8;
 const MAX_KEYS_PER_PRINCIPAL: u64 = 128;
 const MAX_TAP_REPLAY_SECONDS: u64 = 3_600;
+const MAX_POOLED_CONNECTIONS: usize = 8;
+
+fn pay_timing(stage: &str, started: Instant) {
+    if std::env::var_os("LAYERX_PAY_TIMING").is_some() {
+        eprintln!(
+            "pay_timing stage={stage} elapsed_us={}",
+            started.elapsed().as_micros()
+        );
+    }
+}
 
 #[derive(Clone)]
 pub struct RedisEndpoint {
@@ -80,6 +91,11 @@ pub struct RedisStore {
     ca: Certificate,
     username: Zeroizing<String>,
     password: Zeroizing<String>,
+    pool: Mutex<Vec<TlsStream<TcpStream>>>,
+}
+
+struct RedisSession {
+    stream: TlsStream<TcpStream>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -171,6 +187,7 @@ impl RedisStore {
             ca,
             username,
             password,
+            pool: Mutex::new(Vec::new()),
         }
     }
 
@@ -179,46 +196,128 @@ impl RedisStore {
         matches!(self.command(&["PING"]), Ok(Resp::Simple(value)) if value == "PONG")
     }
 
+    fn checkout(&self) -> Result<TlsStream<TcpStream>, String> {
+        if let Some(stream) = self
+            .pool
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .pop()
+        {
+            return Ok(stream);
+        }
+        self.connect_authenticated()
+    }
+
+    fn checkin(&self, stream: TlsStream<TcpStream>) {
+        let mut pool = self
+            .pool
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if pool.len() < MAX_POOLED_CONNECTIONS {
+            pool.push(stream);
+        }
+    }
+
+    fn connect_authenticated(&self) -> Result<TlsStream<TcpStream>, String> {
+        let started = Instant::now();
+        let connector = TlsConnector::builder()
+            .add_root_certificate(self.ca.clone())
+            .min_protocol_version(Some(native_tls::Protocol::Tlsv12))
+            .build()
+            .map_err(|error| error.to_string())?;
+        let mut last = None;
+        for address in (self.endpoint.host.as_str(), self.endpoint.port)
+            .to_socket_addrs()
+            .map_err(|error| error.to_string())?
+            .take(8)
+        {
+            match TcpStream::connect_timeout(&address, CONNECT_TIMEOUT) {
+                Ok(tcp) => {
+                    tcp.set_nodelay(true).map_err(|error| error.to_string())?;
+                    tcp.set_read_timeout(Some(IO_TIMEOUT))
+                        .map_err(|error| error.to_string())?;
+                    tcp.set_write_timeout(Some(IO_TIMEOUT))
+                        .map_err(|error| error.to_string())?;
+                    let mut stream = connector
+                        .connect(&self.endpoint.host, tcp)
+                        .map_err(|error| error.to_string())?;
+                    write_command(
+                        &mut stream,
+                        &["AUTH", self.username.as_str(), self.password.as_str()],
+                    )?;
+                    if !matches!(read_resp(&mut stream, 0)?, Resp::Simple(value) if value == "OK") {
+                        return Err("gateway Redis authentication failed".to_owned());
+                    }
+                    pay_timing("store_connect_us", started);
+                    return Ok(stream);
+                }
+                Err(error) => last = Some(error),
+            }
+        }
+        Err(last.map_or_else(
+            || "gateway Redis did not resolve".to_owned(),
+            |error| error.to_string(),
+        ))
+    }
+
+    fn with_session<T, F>(&self, operation: F) -> Result<T, String>
+    where
+        F: FnOnce(&mut RedisSession) -> Result<T, String>,
+    {
+        let mut session = RedisSession {
+            stream: self.checkout()?,
+        };
+        match operation(&mut session) {
+            Ok(value) => {
+                self.checkin(session.stream);
+                Ok(value)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     /// # Errors
     /// Returns transport, malformed store response, validation or audit contention errors.
     pub fn issue_key(&self, record: &KeyRecord, audit_event: &str) -> Result<(), String> {
         let key = format!("gateway:key:{}", record.key_id);
         let principal_keys = format!("gateway:principal:{}:keys", record.principal_digest);
-        for _ in 0..AUDIT_ATTEMPTS {
-            let (head, chain) = self.audit_values(audit_event)?;
-            let response = self.command(&[
-                "EVAL",
-                ISSUE_SCRIPT,
-                "4",
-                &key,
-                &principal_keys,
-                "gateway:audit",
-                "gateway:audit:head",
-                &record.key_id,
-                &record.principal_digest,
-                &record.salt,
-                &record.secret_digest,
-                &record.signer_public_key,
-                &record.scopes,
-                &record.quota_requests.to_string(),
-                &record.quota_window_seconds.to_string(),
-                &record.epoch.to_string(),
-                &MAX_KEYS_PER_PRINCIPAL.to_string(),
-                audit_event,
-                &head,
-                &chain,
-            ])?;
-            let tag = array_tag(response)?;
-            if tag == "audit_retry" {
-                continue;
+        self.with_session(|session| {
+            for _ in 0..AUDIT_ATTEMPTS {
+                let (head, chain) = session.audit_values(audit_event)?;
+                let response = session.command(&[
+                    "EVAL",
+                    ISSUE_SCRIPT,
+                    "4",
+                    &key,
+                    &principal_keys,
+                    "gateway:audit",
+                    "gateway:audit:head",
+                    &record.key_id,
+                    &record.principal_digest,
+                    &record.salt,
+                    &record.secret_digest,
+                    &record.signer_public_key,
+                    &record.scopes,
+                    &record.quota_requests.to_string(),
+                    &record.quota_window_seconds.to_string(),
+                    &record.epoch.to_string(),
+                    &MAX_KEYS_PER_PRINCIPAL.to_string(),
+                    audit_event,
+                    &head,
+                    &chain,
+                ])?;
+                let tag = array_tag(response)?;
+                if tag == "audit_retry" {
+                    continue;
+                }
+                return if tag == "issued" {
+                    Ok(())
+                } else {
+                    Err("gateway key issue conflicted".to_owned())
+                };
             }
-            return if tag == "issued" {
-                Ok(())
-            } else {
-                Err("gateway key issue conflicted".to_owned())
-            };
-        }
-        Err("gateway audit head remained contended".to_owned())
+            Err("gateway audit head remained contended".to_owned())
+        })
     }
 
     /// # Errors
@@ -279,43 +378,45 @@ impl RedisStore {
         let old_key = format!("gateway:key:{}", old.key_id);
         let new_key = format!("gateway:key:{}", replacement.key_id);
         let principal_keys = format!("gateway:principal:{}:keys", old.principal_digest);
-        for _ in 0..AUDIT_ATTEMPTS {
-            let (head, chain) = self.audit_values(audit_event)?;
-            let response = self.command(&[
-                "EVAL",
-                ROTATE_SCRIPT,
-                "5",
-                &old_key,
-                &new_key,
-                &principal_keys,
-                "gateway:audit",
-                "gateway:audit:head",
-                &old.principal_digest,
-                &old.epoch.to_string(),
-                &replacement.key_id,
-                &replacement.salt,
-                &replacement.secret_digest,
-                &replacement.signer_public_key,
-                &replacement.scopes,
-                &replacement.quota_requests.to_string(),
-                &replacement.quota_window_seconds.to_string(),
-                &replacement.epoch.to_string(),
-                audit_event,
-                &head,
-                &chain,
-                &MAX_KEYS_PER_PRINCIPAL.to_string(),
-            ])?;
-            let tag = array_tag(response)?;
-            if tag == "audit_retry" {
-                continue;
+        self.with_session(|session| {
+            for _ in 0..AUDIT_ATTEMPTS {
+                let (head, chain) = session.audit_values(audit_event)?;
+                let response = session.command(&[
+                    "EVAL",
+                    ROTATE_SCRIPT,
+                    "5",
+                    &old_key,
+                    &new_key,
+                    &principal_keys,
+                    "gateway:audit",
+                    "gateway:audit:head",
+                    &old.principal_digest,
+                    &old.epoch.to_string(),
+                    &replacement.key_id,
+                    &replacement.salt,
+                    &replacement.secret_digest,
+                    &replacement.signer_public_key,
+                    &replacement.scopes,
+                    &replacement.quota_requests.to_string(),
+                    &replacement.quota_window_seconds.to_string(),
+                    &replacement.epoch.to_string(),
+                    audit_event,
+                    &head,
+                    &chain,
+                    &MAX_KEYS_PER_PRINCIPAL.to_string(),
+                ])?;
+                let tag = array_tag(response)?;
+                if tag == "audit_retry" {
+                    continue;
+                }
+                return if tag == "rotated" {
+                    Ok(())
+                } else {
+                    Err("gateway key rotation conflicted".to_owned())
+                };
             }
-            return if tag == "rotated" {
-                Ok(())
-            } else {
-                Err("gateway key rotation conflicted".to_owned())
-            };
-        }
-        Err("gateway audit head remained contended".to_owned())
+            Err("gateway audit head remained contended".to_owned())
+        })
     }
 
     /// # Errors
@@ -327,27 +428,29 @@ impl RedisStore {
         audit_event: &str,
     ) -> Result<bool, String> {
         let key = format!("gateway:key:{key_id}");
-        for _ in 0..AUDIT_ATTEMPTS {
-            let (head, chain) = self.audit_values(audit_event)?;
-            let response = self.command(&[
-                "EVAL",
-                REVOKE_SCRIPT,
-                "3",
-                &key,
-                "gateway:audit",
-                "gateway:audit:head",
-                principal_digest,
-                audit_event,
-                &head,
-                &chain,
-            ])?;
-            let tag = array_tag(response)?;
-            if tag == "audit_retry" {
-                continue;
+        self.with_session(|session| {
+            for _ in 0..AUDIT_ATTEMPTS {
+                let (head, chain) = session.audit_values(audit_event)?;
+                let response = session.command(&[
+                    "EVAL",
+                    REVOKE_SCRIPT,
+                    "3",
+                    &key,
+                    "gateway:audit",
+                    "gateway:audit:head",
+                    principal_digest,
+                    audit_event,
+                    &head,
+                    &chain,
+                ])?;
+                let tag = array_tag(response)?;
+                if tag == "audit_retry" {
+                    continue;
+                }
+                return Ok(tag == "revoked" || tag == "already_revoked");
             }
-            return Ok(tag == "revoked" || tag == "already_revoked");
-        }
-        Err("gateway audit head remained contended".to_owned())
+            Err("gateway audit head remained contended".to_owned())
+        })
     }
 
     /// # Errors
@@ -376,68 +479,73 @@ impl RedisStore {
         let owner = format!("gateway:activity:{activity_id}");
         let activity_operation = format!("gateway:activity-operation:{activity_id}");
         let retry = record.quota_window_seconds - now % record.quota_window_seconds;
-        for _ in 0..AUDIT_ATTEMPTS {
-            let (head, chain) = self.audit_values(audit_event)?;
-            let epoch = record.epoch.to_string();
-            let quota_requests = record.quota_requests.to_string();
-            let retry = retry.to_string();
-            let retention_seconds = retention_seconds.to_string();
-            let now = now.to_string();
-            let mut arguments = vec![
-                "EVAL",
-                RESERVE_SCRIPT,
-                "8",
-                key.as_str(),
-                usage.as_str(),
-                idem.as_str(),
-                "gateway:audit",
-                "gateway:audit:head",
-                "gateway:pending",
-                owner.as_str(),
-                activity_operation.as_str(),
-                epoch.as_str(),
-                quota_requests.as_str(),
-                retry.as_str(),
-                retention_seconds.as_str(),
-                request_digest,
-                audit_event,
-                now.as_str(),
-                head.as_str(),
-                chain.as_str(),
-                principal_digest,
-                protocol_idempotency_key,
-            ];
-            arguments.extend(continuation_chunks.iter().copied());
-            let response = self.command(&arguments)?;
-            let Resp::Array(values) = response else {
-                return Err("gateway reservation response is invalid".to_owned());
-            };
-            match values.first().and_then(text).as_deref() {
-                Some("audit_retry") => {}
-                Some("reserved") => return Ok(Reservation::Reserved),
-                Some("revoked") => return Ok(Reservation::Revoked),
-                Some("rate_limited") => {
-                    return Ok(Reservation::RateLimited {
-                        retry_after_seconds: values
-                            .get(1)
-                            .and_then(text)
-                            .and_then(|value| value.parse::<u64>().ok())
-                            .ok_or_else(|| "gateway retry value is invalid".to_owned())?,
-                    })
+        let started = Instant::now();
+        let reserved = self.with_session(|session| {
+            for _ in 0..AUDIT_ATTEMPTS {
+                let (head, chain) = session.audit_values(audit_event)?;
+                let epoch = record.epoch.to_string();
+                let quota_requests = record.quota_requests.to_string();
+                let retry = retry.to_string();
+                let retention_seconds = retention_seconds.to_string();
+                let now = now.to_string();
+                let mut arguments = vec![
+                    "EVAL",
+                    RESERVE_SCRIPT,
+                    "8",
+                    key.as_str(),
+                    usage.as_str(),
+                    idem.as_str(),
+                    "gateway:audit",
+                    "gateway:audit:head",
+                    "gateway:pending",
+                    owner.as_str(),
+                    activity_operation.as_str(),
+                    epoch.as_str(),
+                    quota_requests.as_str(),
+                    retry.as_str(),
+                    retention_seconds.as_str(),
+                    request_digest,
+                    audit_event,
+                    now.as_str(),
+                    head.as_str(),
+                    chain.as_str(),
+                    principal_digest,
+                    protocol_idempotency_key,
+                ];
+                arguments.extend(continuation_chunks.iter().copied());
+                let response = session.command(&arguments)?;
+                let Resp::Array(values) = response else {
+                    return Err("gateway reservation response is invalid".to_owned());
+                };
+                match values.first().and_then(text).as_deref() {
+                    Some("audit_retry") => {}
+                    Some("reserved") => return Ok(Reservation::Reserved),
+                    Some("revoked") => return Ok(Reservation::Revoked),
+                    Some("rate_limited") => {
+                        return Ok(Reservation::RateLimited {
+                            retry_after_seconds: values
+                                .get(1)
+                                .and_then(text)
+                                .and_then(|value| value.parse::<u64>().ok())
+                                .ok_or_else(|| "gateway retry value is invalid".to_owned())?,
+                        })
+                    }
+                    Some("existing") => {
+                        return Ok(Reservation::Existing {
+                            digest: values.get(1).and_then(text).unwrap_or_default(),
+                            state: values.get(2).and_then(text).unwrap_or_default(),
+                            response: values.get(3).and_then(text).unwrap_or_default(),
+                            receipt: values.get(4).and_then(text).unwrap_or_default(),
+                            principal: values.get(5).and_then(text).unwrap_or_default(),
+                        })
+                    }
+                    _ => return Err("gateway reservation state is invalid".to_owned()),
                 }
-                Some("existing") => {
-                    return Ok(Reservation::Existing {
-                        digest: values.get(1).and_then(text).unwrap_or_default(),
-                        state: values.get(2).and_then(text).unwrap_or_default(),
-                        response: values.get(3).and_then(text).unwrap_or_default(),
-                        receipt: values.get(4).and_then(text).unwrap_or_default(),
-                        principal: values.get(5).and_then(text).unwrap_or_default(),
-                    })
-                }
-                _ => return Err("gateway reservation state is invalid".to_owned()),
             }
-        }
-        Err("gateway audit head remained contended".to_owned())
+            Err("gateway audit head remained contended".to_owned())
+        });
+        pay_timing("store_reserve_us", started);
+        reserved
     }
 
     /// # Errors
@@ -477,35 +585,37 @@ impl RedisStore {
         let window = now / record.quota_window_seconds;
         let usage = format!("gateway:quota:{}:{window}", record.key_id);
         let retry = record.quota_window_seconds - now % record.quota_window_seconds;
-        for _ in 0..AUDIT_ATTEMPTS {
-            let (head, chain) = self.audit_values(audit_event)?;
-            let response = self.command(&[
-                "EVAL",
-                CONSUME_SCRIPT,
-                "4",
-                &key,
-                &usage,
-                "gateway:audit",
-                "gateway:audit:head",
-                &record.epoch.to_string(),
-                &record.quota_requests.to_string(),
-                &retry.to_string(),
-                audit_event,
-                &head,
-                &chain,
-            ])?;
-            let Resp::Array(values) = response else {
-                return Err("gateway quota response is invalid".to_owned());
-            };
-            match values.first().and_then(text).as_deref() {
-                Some("audit_retry") => {}
-                Some("consumed") => return Ok(None),
-                Some("rate_limited") => return Ok(Some(retry)),
-                Some("revoked") => return Err("gateway key was revoked".to_owned()),
-                _ => return Err("gateway quota state is invalid".to_owned()),
+        self.with_session(|session| {
+            for _ in 0..AUDIT_ATTEMPTS {
+                let (head, chain) = session.audit_values(audit_event)?;
+                let response = session.command(&[
+                    "EVAL",
+                    CONSUME_SCRIPT,
+                    "4",
+                    &key,
+                    &usage,
+                    "gateway:audit",
+                    "gateway:audit:head",
+                    &record.epoch.to_string(),
+                    &record.quota_requests.to_string(),
+                    &retry.to_string(),
+                    audit_event,
+                    &head,
+                    &chain,
+                ])?;
+                let Resp::Array(values) = response else {
+                    return Err("gateway quota response is invalid".to_owned());
+                };
+                match values.first().and_then(text).as_deref() {
+                    Some("audit_retry") => {}
+                    Some("consumed") => return Ok(None),
+                    Some("rate_limited") => return Ok(Some(retry)),
+                    Some("revoked") => return Err("gateway key was revoked".to_owned()),
+                    _ => return Err("gateway quota state is invalid".to_owned()),
+                }
             }
-        }
-        Err("gateway audit head remained contended".to_owned())
+            Err("gateway audit head remained contended".to_owned())
+        })
     }
 
     /// # Errors
@@ -527,38 +637,43 @@ impl RedisStore {
             |activity_id| format!("gateway:activity:{activity_id}"),
         );
         let bind_owner = if activity_id.is_some() { "1" } else { "0" };
-        for _ in 0..AUDIT_ATTEMPTS {
-            let (head, chain) = self.audit_values(audit_event)?;
-            let response = self.command(&[
-                "EVAL",
-                COMPLETE_SCRIPT,
-                "5",
-                &idem,
-                "gateway:pending",
-                "gateway:audit",
-                "gateway:audit:head",
-                &owner,
-                request_digest,
-                state,
-                response_hex,
-                receipt_hex,
-                audit_event,
-                &head,
-                &chain,
-                bind_owner,
-                principal_digest,
-            ])?;
-            let tag = array_tag(response)?;
-            if tag == "audit_retry" {
-                continue;
+        let started = Instant::now();
+        let completed = self.with_session(|session| {
+            for _ in 0..AUDIT_ATTEMPTS {
+                let (head, chain) = session.audit_values(audit_event)?;
+                let response = session.command(&[
+                    "EVAL",
+                    COMPLETE_SCRIPT,
+                    "5",
+                    &idem,
+                    "gateway:pending",
+                    "gateway:audit",
+                    "gateway:audit:head",
+                    &owner,
+                    request_digest,
+                    state,
+                    response_hex,
+                    receipt_hex,
+                    audit_event,
+                    &head,
+                    &chain,
+                    bind_owner,
+                    principal_digest,
+                ])?;
+                let tag = array_tag(response)?;
+                if tag == "audit_retry" {
+                    continue;
+                }
+                return if tag == "completed" {
+                    Ok(())
+                } else {
+                    Err("gateway completion conflicted".to_owned())
+                };
             }
-            return if tag == "completed" {
-                Ok(())
-            } else {
-                Err("gateway completion conflicted".to_owned())
-            };
-        }
-        Err("gateway audit head remained contended".to_owned())
+            Err("gateway audit head remained contended".to_owned())
+        });
+        pay_timing("store_complete_us", started);
+        completed
     }
 
     /// # Errors
@@ -635,48 +750,50 @@ impl RedisStore {
         let nonce_key = format!("gateway:tap:nonce:{nonce_scope}");
         let binding_key = format!("gateway:tap:binding:{binding_digest}");
         let ttl = replay_until - now;
-        for _ in 0..AUDIT_ATTEMPTS {
-            let (head, chain) = self.audit_values(audit_event)?;
-            let response = self.command(&[
-                "EVAL",
-                TAP_CONSUME_SCRIPT,
-                "4",
-                &nonce_key,
-                &binding_key,
-                "gateway:audit",
-                "gateway:audit:head",
-                &ttl.to_string(),
-                &binding_digest,
-                &record.principal_digest,
-                &record.key_id,
-                &record.layerx_agent,
-                &record.trusted_agent_id,
-                &record.trusted_agent_domain,
-                &record.intent,
-                &record.evidence_digest,
-                activity_id,
-                &record.signer_public_key,
-                &record.target_authority,
-                &record.target_path,
-                &record.operation_identity,
-                &record.credential_expires_at.to_string(),
-                &now.to_string(),
-                audit_event,
-                &head,
-                &chain,
-            ])?;
-            let tag = array_tag(response)?;
-            if tag == "audit_retry" {
-                continue;
+        self.with_session(|session| {
+            for _ in 0..AUDIT_ATTEMPTS {
+                let (head, chain) = session.audit_values(audit_event)?;
+                let response = session.command(&[
+                    "EVAL",
+                    TAP_CONSUME_SCRIPT,
+                    "4",
+                    &nonce_key,
+                    &binding_key,
+                    "gateway:audit",
+                    "gateway:audit:head",
+                    &ttl.to_string(),
+                    &binding_digest,
+                    &record.principal_digest,
+                    &record.key_id,
+                    &record.layerx_agent,
+                    &record.trusted_agent_id,
+                    &record.trusted_agent_domain,
+                    &record.intent,
+                    &record.evidence_digest,
+                    activity_id,
+                    &record.signer_public_key,
+                    &record.target_authority,
+                    &record.target_path,
+                    &record.operation_identity,
+                    &record.credential_expires_at.to_string(),
+                    &now.to_string(),
+                    audit_event,
+                    &head,
+                    &chain,
+                ])?;
+                let tag = array_tag(response)?;
+                if tag == "audit_retry" {
+                    continue;
+                }
+                return match tag.as_str() {
+                    "consumed" => Ok(TapNonceConsumption::Consumed { binding_digest }),
+                    "existing" => Ok(TapNonceConsumption::AlreadyConsumed { binding_digest }),
+                    "replay" => Ok(TapNonceConsumption::Replay),
+                    _ => Err("gateway TAP nonce transition conflicted".to_owned()),
+                };
             }
-            return match tag.as_str() {
-                "consumed" => Ok(TapNonceConsumption::Consumed { binding_digest }),
-                "existing" => Ok(TapNonceConsumption::AlreadyConsumed { binding_digest }),
-                "replay" => Ok(TapNonceConsumption::Replay),
-                _ => Err("gateway TAP nonce transition conflicted".to_owned()),
-            };
-        }
-        Err("gateway audit head remained contended".to_owned())
+            Err("gateway audit head remained contended".to_owned())
+        })
     }
 
     /// Reads one credential-to-activity binding previously committed by the
@@ -721,7 +838,21 @@ impl RedisStore {
         }
     }
 
-    fn audit_values(&self, event: &str) -> Result<(String, String), String> {
+    fn command(&self, arguments: &[&str]) -> Result<Resp, String> {
+        self.with_session(|session| session.command(arguments))
+    }
+}
+
+impl RedisSession {
+    fn command(&mut self, arguments: &[&str]) -> Result<Resp, String> {
+        let started = Instant::now();
+        write_command(&mut self.stream, arguments)?;
+        let response = read_resp(&mut self.stream, 0)?;
+        pay_timing("store_command_us", started);
+        Ok(response)
+    }
+
+    fn audit_values(&mut self, event: &str) -> Result<(String, String), String> {
         let head = match self.command(&["GET", "gateway:audit:head"])? {
             Resp::Bulk(Some(value)) => {
                 String::from_utf8(value).map_err(|_| "gateway audit head is invalid".to_owned())?
@@ -735,47 +866,6 @@ impl RedisStore {
         digest.update((event.len() as u64).to_be_bytes());
         digest.update(event.as_bytes());
         Ok((head, format!("{:x}", digest.finalize())))
-    }
-
-    fn command(&self, arguments: &[&str]) -> Result<Resp, String> {
-        let connector = TlsConnector::builder()
-            .add_root_certificate(self.ca.clone())
-            .min_protocol_version(Some(native_tls::Protocol::Tlsv12))
-            .build()
-            .map_err(|error| error.to_string())?;
-        let mut last = None;
-        for address in (self.endpoint.host.as_str(), self.endpoint.port)
-            .to_socket_addrs()
-            .map_err(|error| error.to_string())?
-            .take(8)
-        {
-            match TcpStream::connect_timeout(&address, CONNECT_TIMEOUT) {
-                Ok(tcp) => {
-                    tcp.set_nodelay(true).map_err(|error| error.to_string())?;
-                    tcp.set_read_timeout(Some(IO_TIMEOUT))
-                        .map_err(|error| error.to_string())?;
-                    tcp.set_write_timeout(Some(IO_TIMEOUT))
-                        .map_err(|error| error.to_string())?;
-                    let mut stream = connector
-                        .connect(&self.endpoint.host, tcp)
-                        .map_err(|error| error.to_string())?;
-                    write_command(
-                        &mut stream,
-                        &["AUTH", self.username.as_str(), self.password.as_str()],
-                    )?;
-                    if !matches!(read_resp(&mut stream, 0)?, Resp::Simple(value) if value == "OK") {
-                        return Err("gateway Redis authentication failed".to_owned());
-                    }
-                    write_command(&mut stream, arguments)?;
-                    return read_resp(&mut stream, 0);
-                }
-                Err(error) => last = Some(error),
-            }
-        }
-        Err(last.map_or_else(
-            || "gateway Redis did not resolve".to_owned(),
-            |error| error.to_string(),
-        ))
     }
 }
 

@@ -9,7 +9,7 @@ use layerx_client::lni::schema::{decode_envelope, encode_envelope, Capability, E
 use layerx_client::lni::simulate::SimulateError;
 use layerx_client::lni::transport::{ConnectionGate, FrameTransport, Limits, Uds};
 use layerx_client::read::ReadError;
-use layerx_client::submit::{Submission, SubmitError};
+use layerx_client::submit::{submit_signed, Submission, SubmissionContext, SubmitError};
 use layerx_platform_core::{
     asset_registry, build_send, fixed_hex, hex_decode, hex_encode, main_account, parse_seed,
     treasury_did, SendRequest,
@@ -84,6 +84,7 @@ struct Config {
     receipt_deadline: Duration,
     admin_lock: Mutex<()>,
     journal_lock: Mutex<()>,
+    lni_pool: Mutex<Vec<(Uds, Handshake)>>,
 }
 
 #[derive(Clone)]
@@ -300,6 +301,7 @@ fn config() -> Result<Config, String> {
         )?),
         admin_lock: Mutex::new(()),
         journal_lock: Mutex::new(()),
+        lni_pool: Mutex::new(Vec::new()),
     })
 }
 
@@ -448,7 +450,31 @@ fn success(result: &serde_json::Value) -> Response {
     )
 }
 
-fn write_response(stream: &mut impl Write, response: &Response) -> Result<(), String> {
+fn pay_timing(stage: &str, started: Instant) {
+    if env::var_os("LAYERX_PAY_TIMING").is_some() {
+        eprintln!(
+            "pay_timing stage={stage} elapsed_us={}",
+            started.elapsed().as_micros()
+        );
+    }
+}
+
+fn http_keepalive(headers: &BTreeMap<String, String>) -> bool {
+    match headers
+        .get("connection")
+        .map(|value| value.to_ascii_lowercase())
+    {
+        Some(value) if value.split(',').any(|part| part.trim() == "close") => false,
+        Some(value) if value.split(',').any(|part| part.trim() == "keep-alive") => true,
+        _ => true,
+    }
+}
+
+fn write_response(
+    stream: &mut impl Write,
+    response: &Response,
+    keepalive: bool,
+) -> Result<(), String> {
     let reason = match response.status {
         200 => "OK",
         202 => "Accepted",
@@ -464,9 +490,10 @@ fn write_response(stream: &mut impl Write, response: &Response) -> Result<(), St
     let retry = response.retry_after.map_or(String::new(), |seconds| {
         format!("Retry-After: {seconds}\r\n")
     });
+    let connection = if keepalive { "keep-alive" } else { "close" };
     write!(
         stream,
-        "HTTP/1.1 {} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nCache-Control: no-store\r\n{retry}Connection: close\r\n\r\n{}",
+        "HTTP/1.1 {} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nCache-Control: no-store\r\n{retry}Connection: {connection}\r\n\r\n{}",
         response.status,
         response.body.len(),
         response.body
@@ -515,6 +542,7 @@ fn connect_raw_with_deadline(
     config: &Config,
     deadline: Duration,
 ) -> Result<(Uds, Handshake), String> {
+    let started = Instant::now();
     let gate = ConnectionGate::new(1);
     let mut limits = lni_limits();
     limits.deadline = deadline.min(limits.deadline);
@@ -522,7 +550,30 @@ fn connect_raw_with_deadline(
         .map_err(|error| format!("LNI connection failed: {error:?}"))?;
     let handshake = perform(&mut transport, &handshake_config(config), None)
         .map_err(|error| format!("LNI handshake failed: {error:?}"))?;
+    pay_timing("core_lni_connect_us", started);
     Ok((transport, handshake))
+}
+
+fn checkout_lni(config: &Config, deadline: Duration) -> Result<(Uds, Handshake), String> {
+    if let Some(connection) = config
+        .lni_pool
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .pop()
+    {
+        return Ok(connection);
+    }
+    connect_raw_with_deadline(config, deadline)
+}
+
+fn checkin_lni(config: &Config, connection: (Uds, Handshake)) {
+    let mut pool = config
+        .lni_pool
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if pool.len() < 4 {
+        pool.push(connection);
+    }
 }
 
 fn lookup_receipt_bytes(
@@ -645,29 +696,36 @@ fn await_receipt(
     activity_id: [u8; 32],
     deadline: Duration,
 ) -> Result<Option<ReceiptFacts>, String> {
-    let (mut transport, handshake) = if deadline.is_zero() {
-        connect_raw(config)?
-    } else {
-        connect_raw_with_deadline(config, deadline)?
-    };
-    let started = Instant::now();
-    let bytes = lookup_receipt_bytes(
-        &mut transport,
-        &handshake,
-        activity_id,
-        1,
-        !deadline.is_zero(),
+    let (mut transport, handshake) = checkout_lni(
+        config,
+        if deadline.is_zero() {
+            LNI_DEADLINE
+        } else {
+            deadline
+        },
     )?;
-    if std::env::var_os("LAYERX_PAY_TIMING").is_some() {
-        eprintln!(
-            "pay_timing core_receipt_wait_us={}",
-            started.elapsed().as_micros()
-        );
+    let facts = await_receipt_on(&mut transport, &handshake, activity_id, deadline);
+    if facts.is_ok() {
+        checkin_lni(config, (transport, handshake));
     }
+    facts
+}
+
+fn await_receipt_on(
+    transport: &mut Uds,
+    handshake: &Handshake,
+    activity_id: [u8; 32],
+    deadline: Duration,
+) -> Result<Option<ReceiptFacts>, String> {
+    let started = Instant::now();
+    let bytes = lookup_receipt_bytes(transport, handshake, activity_id, 1, !deadline.is_zero())?;
+    pay_timing("core_receipt_wait_us", started);
     let Some(bytes) = bytes else {
         return Ok(None);
     };
+    let verify_started = Instant::now();
     let facts = receipt_facts(&bytes, handshake.node().authorised_sequencer_key)?;
+    pay_timing("core_receipt_verify_us", verify_started);
     if facts.activity_id != activity_id {
         return Err("receipt names another activity".to_owned());
     }
@@ -709,6 +767,67 @@ fn submission_registry() -> Result<ModuleRegistry, String> {
     ModuleRegistry::new(&[asset, programs]).map_err(|error| format!("module registry: {error:?}"))
 }
 
+type AdmissionWait = Result<Option<ReceiptFacts>, String>;
+
+fn admit_and_await(
+    config: &Config,
+    registry: &ModuleRegistry,
+    signer: [u8; 32],
+    canonical: &[u8],
+) -> Result<([u8; 32], AdmissionWait), Response> {
+    let (mut transport, handshake) =
+        checkout_lni(config, config.receipt_deadline).map_err(|error| {
+            eprintln!("layerx-core-boundary: {error}");
+            refusal(503, "node_unavailable", Some(5))
+        })?;
+    if !handshake.capabilities().contains(Capability::Submit)
+        || !handshake
+            .capabilities()
+            .contains(Capability::AuthenticatedDurableSubmit)
+    {
+        checkin_lni(config, (transport, handshake));
+        return Err(refusal(503, "capability_unavailable", Some(30)));
+    }
+    let context = SubmissionContext {
+        interface_version: handshake.node().interface_version,
+        protocol_version: layerx_wire::limits::STATE_COMMITMENT_PROTOCOL_VERSION,
+        network_id: config.network_id,
+        correlation_id: 1,
+        signer_public_key: signer,
+        attempt: 1,
+    };
+    let submit_started = Instant::now();
+    let submission = submit_signed(&mut transport, registry, context, canonical).map_err(
+        |error| match error {
+            SubmitError::CoreRefusal { class, result } => {
+                eprintln!(
+                    "layerx-core-boundary: submission refused class {class} result {}",
+                    result.raw()
+                );
+                refusal(422, "submission_refused", None)
+            }
+            SubmitError::UnavailableCapability => refusal(503, "capability_unavailable", Some(30)),
+            SubmitError::Disconnected => refusal(503, "node_unavailable", Some(5)),
+            _ => refusal(400, "invalid_activity", None),
+        },
+    )?;
+    pay_timing("core_admission_us", submit_started);
+    let activity_id = match submission {
+        Submission::Acknowledged(acknowledgement) => acknowledgement.activity_id(),
+        Submission::Unknown(unknown) => unknown.activity_id(),
+    };
+    let waited = await_receipt_on(
+        &mut transport,
+        &handshake,
+        activity_id,
+        config.receipt_deadline,
+    );
+    if waited.is_ok() {
+        checkin_lni(config, (transport, handshake));
+    }
+    Ok((activity_id, waited))
+}
+
 fn submit_activity(
     config: &Config,
     canonical: &[u8],
@@ -738,39 +857,10 @@ fn submit_activity(
                 .map_err(|_| refusal(400, "invalid_program_lifecycle", None))?;
         }
     }
-    let submit_started = Instant::now();
     let signer = signer_key(activity.authority())
         .ok_or_else(|| refusal(400, "authority_unsupported", None))?;
-    let mut client = connect_client(config).map_err(|error| {
-        eprintln!("layerx-core-boundary: {error}");
-        refusal(503, "node_unavailable", Some(5))
-    })?;
-    let submission = client
-        .submit_signed(&registry, signer, 1, 1, canonical)
-        .map_err(|error| match error {
-            SubmitError::CoreRefusal { class, result } => {
-                eprintln!(
-                    "layerx-core-boundary: submission refused class {class} result {}",
-                    result.raw()
-                );
-                refusal(422, "submission_refused", None)
-            }
-            SubmitError::UnavailableCapability => refusal(503, "capability_unavailable", Some(30)),
-            SubmitError::Disconnected => refusal(503, "node_unavailable", Some(5)),
-            _ => refusal(400, "invalid_activity", None),
-        })?;
-    drop(client);
-    if std::env::var_os("LAYERX_PAY_TIMING").is_some() {
-        eprintln!(
-            "pay_timing core_admission_us={}",
-            submit_started.elapsed().as_micros()
-        );
-    }
-    let activity_id = match submission {
-        Submission::Acknowledged(acknowledgement) => acknowledgement.activity_id(),
-        Submission::Unknown(unknown) => unknown.activity_id(),
-    };
-    match await_receipt(config, activity_id, config.receipt_deadline) {
+    let (activity_id, waited) = admit_and_await(config, &registry, signer, canonical)?;
+    match waited {
         Ok(Some(facts)) => {
             if program_ordinal.is_some_and(|ordinal| matches!(ordinal, 1 | 2 | 7)) {
                 Ok(success(&serde_json::json!({
@@ -1766,20 +1856,30 @@ fn handle_connection(config: &Arc<Config>, plane: Plane, tcp: TcpStream) -> Resu
     };
     let connection = ServerConnection::new(Arc::clone(tls)).map_err(|error| error.to_string())?;
     let mut stream = StreamOwned::new(connection, tcp);
-    let response = parse_client_request(&mut stream).map_or_else(
-        |_| refusal(400, "invalid_request", None),
-        |request| match plane {
-            Plane::Core => core_route(config, &request),
-            Plane::Admin => {
-                let mut response = admin_route(config, &request);
-                if response.status >= 500 && request.path != "/readyz" && request.path != "/livez" {
+    for _ in 0..64 {
+        let (response, keepalive) = match parse_client_request(&mut stream) {
+            Ok(request) => {
+                let keepalive = http_keepalive(&request.headers);
+                let mut response = match plane {
+                    Plane::Core => core_route(config, &request),
+                    Plane::Admin => admin_route(config, &request),
+                };
+                if plane == Plane::Admin
+                    && response.status >= 500
+                    && request.path != "/readyz"
+                    && request.path != "/livez"
+                {
                     response.status = 422;
                 }
-                response
+                (response, keepalive)
             }
-        },
-    );
-    write_response(&mut stream, &response)?;
+            Err(_) => (refusal(400, "invalid_request", None), false),
+        };
+        write_response(&mut stream, &response, keepalive)?;
+        if !keepalive {
+            break;
+        }
+    }
     stream.conn.send_close_notify();
     let _ = stream.flush();
     Ok(())

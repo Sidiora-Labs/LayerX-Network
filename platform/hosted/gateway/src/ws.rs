@@ -269,20 +269,29 @@ pub(super) fn serve(
         return http::write_response(
             stream,
             &super::response(400, "invalid_websocket_upgrade", None),
+            false,
         );
     };
     let record = match super::authenticate_key(config, request) {
         Ok(record) => record,
-        Err(answer) => return http::write_response(stream, &answer),
+        Err(answer) => return http::write_response(stream, &answer, false),
     };
     if ![Topic::Receipts, Topic::Checkpoints]
         .iter()
         .any(|topic| allowed(&record.scopes, topic))
     {
-        return http::write_response(stream, &super::response(403, "insufficient_scope", None));
+        return http::write_response(
+            stream,
+            &super::response(403, "insufficient_scope", None),
+            false,
+        );
     }
     let Some(_socket) = SocketGuard::acquire() else {
-        return http::write_response(stream, &super::response(429, "subscription_limit", Some(1)));
+        return http::write_response(
+            stream,
+            &super::response(429, "subscription_limit", Some(1)),
+            false,
+        );
     };
     let (id, receiver) = {
         let mut hub = HUB
@@ -295,6 +304,7 @@ pub(super) fn serve(
                 return http::write_response(
                     stream,
                     &super::response(429, "subscription_limit", Some(1)),
+                    false,
                 )
             }
         }

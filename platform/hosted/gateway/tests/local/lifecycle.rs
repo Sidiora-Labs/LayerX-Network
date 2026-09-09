@@ -155,11 +155,11 @@ fn start_local_identity(cluster: &Cluster, certificates: &Certificates) -> Local
         ("LAYERX_IDENTITY_SESSION_TTL_SECONDS", "3600".to_owned()),
     ]);
     let identity_process = local_service(cluster, "layerx-identity", identity_port, &identity_env);
-    let identity_http = Http {
-        port: identity_port,
-        ca: Certificate::from_der(&certificates.ca_der).required("CA"),
-        identity: None,
-    };
+    let identity_http = Http::new(
+        identity_port,
+        Certificate::from_der(&certificates.ca_der).required("CA"),
+        None,
+    );
     let signer = hex_encode(
         &SigningKey::from_bytes(&cluster.treasury_seed)
             .verifying_key()
@@ -251,6 +251,7 @@ fn start_local_authority(cluster: &Cluster, certificates: &Certificates) -> Loca
         ),
         ("LAYERX_AUTHORITY_FIRST_BATCH", "1".to_owned()),
         ("LAYERX_AUTHORITY_LAST_BATCH", u64::MAX.to_string()),
+        ("LAYERX_PAY_TIMING", "1".to_owned()),
     ]);
     let authority_process = local_service(
         cluster,
@@ -326,6 +327,7 @@ fn start_local_gateway(
         &hex_encode(&cluster.sequencer_key),
     );
     let mut gateway_env = BTreeMap::from([
+        ("LAYERX_PAY_TIMING", "1".to_owned()),
         ("LAYERX_GATEWAY_LISTEN", format!("127.0.0.1:{gateway_port}")),
         (
             "LAYERX_GATEWAY_TLS_CERT_DER",
@@ -477,19 +479,19 @@ fn issue_local_scoped_key(
     let gateway_port = gateway.port;
     let session_token = identity.session.as_str();
     let signer = &identity.signer;
-    let gateway_http = Http {
-        port: gateway_port,
-        ca: Certificate::from_der(&certificates.ca_der).required("CA"),
-        identity: None,
-    };
-    let untrusted = Http {
-        port: gateway_port,
-        ca: Certificate::from_der(
+    let gateway_http = Http::new(
+        gateway_port,
+        Certificate::from_der(&certificates.ca_der).required("CA"),
+        None,
+    );
+    let untrusted = Http::new(
+        gateway_port,
+        Certificate::from_der(
             &fs::read(certificates.path("rogue-ca.der")).required("unrelated CA"),
         )
         .required("unrelated certificate"),
-        identity: None,
-    };
+        None,
+    );
     assert!(
         untrusted
             .raw(
@@ -747,11 +749,11 @@ fn local_gateway_rpc() {
         &identity,
         &["activity:write", "program:call"],
     );
-    let http = Http {
-        port: gateway.port,
-        ca: Certificate::from_der(&certificates.ca_der).required("CA"),
-        identity: None,
-    };
+    let http = Http::new(
+        gateway.port,
+        Certificate::from_der(&certificates.ca_der).required("CA"),
+        None,
+    );
     let authorization = format!(
         "LayerX-Key {}:{}",
         key["key"]["id"].as_str().required("key id"),
@@ -878,11 +880,11 @@ fn local_gateway_successful_send_latency() {
         &redis,
     );
     let key = issue_local_scoped_key(&certificates, &gateway, &identity, &["activity:write"]);
-    let http = Http {
-        port: gateway.port,
-        ca: Certificate::from_der(&certificates.ca_der).required("CA"),
-        identity: None,
-    };
+    let http = Http::new(
+        gateway.port,
+        Certificate::from_der(&certificates.ca_der).required("CA"),
+        None,
+    );
     let authorization = format!(
         "LayerX-Key {}:{}",
         key["key"]["id"].as_str().required("key id"),
@@ -961,10 +963,12 @@ fn local_gateway_successful_send_latency() {
 }
 
 fn print_payment_timings(cluster: &Cluster) {
+    let mut stages: BTreeMap<String, Vec<u128>> = BTreeMap::new();
     for file in [
         "sequencer.stderr",
         "boundary.stderr",
         "layerx-gateway.stderr",
+        "layerx-receipt-authority.stderr",
     ] {
         let lines = must(fs::read_to_string(cluster.root.join(file)), "timing log");
         for line in lines
@@ -972,8 +976,47 @@ fn print_payment_timings(cluster: &Cluster) {
             .filter(|line| line.contains("pay_timing") || line.starts_with("pay-native "))
         {
             println!("{file} {line}");
+            for (stage, micros) in parse_pay_timing(line) {
+                stages.entry(stage).or_default().push(micros);
+            }
         }
     }
+    println!("pay_timing_stage_table stage n p50_us p99_us");
+    for (stage, mut samples) in stages {
+        samples.sort_unstable();
+        let p50 = samples[samples.len() / 2];
+        let p99 = samples[samples.len().saturating_sub(1)];
+        println!(
+            "pay_timing_stage_table {stage} {} {p50} {p99}",
+            samples.len()
+        );
+    }
+}
+
+fn parse_pay_timing(line: &str) -> Vec<(String, u128)> {
+    if let (Some(stage), Some(micros)) = (
+        line.split_whitespace()
+            .find_map(|part| part.strip_prefix("stage=")),
+        line.split_whitespace()
+            .find_map(|part| part.strip_prefix("elapsed_us="))
+            .and_then(|value| value.parse().ok()),
+    ) {
+        return vec![(stage.to_owned(), micros)];
+    }
+    let mut fields = Vec::new();
+    for part in line.split_whitespace() {
+        let Some((name, value)) = part.split_once('=') else {
+            continue;
+        };
+        if !name.ends_with("_us") {
+            continue;
+        }
+        let Ok(micros) = value.parse() else {
+            continue;
+        };
+        fields.push((format!("native_{name}"), micros));
+    }
+    fields
 }
 
 fn verify_funded_receipt(
@@ -1139,11 +1182,11 @@ fn local_gateway_websocket_receipt_wake() {
         key["key"]["id"].as_str().required("key id"),
         key["key"]["secret"].as_str().required("key secret")
     );
-    let http = Http {
-        port: gateway.port,
-        ca: Certificate::from_der(&certificates.ca_der).required("CA"),
-        identity: None,
-    };
+    let http = Http::new(
+        gateway.port,
+        Certificate::from_der(&certificates.ca_der).required("CA"),
+        None,
+    );
     let upgrade = [
         ("Upgrade", "websocket"),
         ("Connection", "Upgrade"),
@@ -1213,11 +1256,11 @@ fn local_gateway_committed_payment_reads() {
         &authority,
         &redis,
     );
-    let http = Http {
-        port: gateway.port,
-        ca: Certificate::from_der(&certificates.ca_der).required("CA"),
-        identity: None,
-    };
+    let http = Http::new(
+        gateway.port,
+        Certificate::from_der(&certificates.ca_der).required("CA"),
+        None,
+    );
     let read = |method: &str, params: serde_json::Value| {
         let request = serde_json::to_vec(
             &serde_json::json!({"jsonrpc":"2.0","id":1,"method":method,"params":params}),

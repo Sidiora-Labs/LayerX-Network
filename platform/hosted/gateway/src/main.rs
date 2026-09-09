@@ -36,7 +36,7 @@ use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use subtle::ConstantTimeEq;
 use zeroize::{Zeroize, Zeroizing};
 
@@ -44,6 +44,15 @@ const MAX_REQUEST: usize = 8 * 1024 * 1024;
 const MAX_CONNECTIONS: usize = 256;
 const MAX_IDEMPOTENCY_SECONDS: u64 = 2_592_000;
 static ACTIVE_CONNECTIONS: AtomicUsize = AtomicUsize::new(0);
+
+fn pay_timing(stage: &str, started: Instant) {
+    if std::env::var_os("LAYERX_PAY_TIMING").is_some() {
+        eprintln!(
+            "pay_timing stage={stage} elapsed_us={}",
+            started.elapsed().as_micros()
+        );
+    }
+}
 
 struct Config {
     listen: SocketAddr,
@@ -1172,31 +1181,48 @@ fn authenticate_key(
     })
 }
 
-fn authority(
-    config: &Config,
+fn fetch_authority_response(
+    client: &Client,
+    endpoint: &Endpoint,
+    token: &str,
     activity_id: &str,
-    receipt: &[u8],
-) -> Result<AuthorityFacts, OutgoingResponse> {
-    let upstream = upstream_json(
-        config,
-        &config.authority,
-        config.authority_token.as_str(),
-        "GET",
-        &format!("/v1/authorized-batches/by-activity/{activity_id}"),
-        None,
-        &[],
-    )?;
+    network_id: &str,
+    wire_version: &str,
+    wait_publication: bool,
+) -> Result<AuthorityResponse, OutgoingResponse> {
+    let path = format!("/v1/authorized-batches/by-activity/{activity_id}");
+    let request = http::OutboundRequest {
+        method: "GET",
+        path: &path,
+        idempotency: None,
+        content_type: "application/json",
+        body: &[],
+    };
+    let upstream = if wait_publication {
+        client.request_waiting_publication(endpoint, token, &request)
+    } else {
+        client.request(endpoint, token, &request)
+    }
+    .map_err(|_| response(503, "component_unavailable", Some(5)))?;
     if upstream.status != 200 || upstream.content_type != "application/json" {
         return Err(response(503, "authority_unavailable", Some(5)));
     }
     let facts: AuthorityResponse = serde_json::from_slice(&upstream.body)
         .map_err(|_| response(503, "authority_invalid", Some(5)))?;
     if !facts.activity_id.eq_ignore_ascii_case(activity_id)
-        || facts.network_id != config.network_id
-        || facts.wire_version != config.wire_version
+        || facts.network_id != network_id
+        || facts.wire_version != wire_version
     {
         return Err(response(503, "authority_mismatch", Some(5)));
     }
+    Ok(facts)
+}
+
+fn bind_authority_facts(
+    config: &Config,
+    facts: AuthorityResponse,
+    receipt: &[u8],
+) -> Result<AuthorityFacts, OutgoingResponse> {
     let authority = AuthorityFacts::new(
         parse_hex32(&facts.batch_id).map_err(|_| response(503, "authority_invalid", Some(5)))?,
         parse_hex32(&facts.asset).map_err(|_| response(503, "authority_invalid", Some(5)))?,
@@ -1228,16 +1254,42 @@ fn authority(
     }
 }
 
+fn authority(
+    config: &Config,
+    activity_id: &str,
+    receipt: &[u8],
+) -> Result<AuthorityFacts, OutgoingResponse> {
+    let started = Instant::now();
+    let document = fetch_authority_response(
+        &config.client,
+        &config.authority,
+        config.authority_token.as_str(),
+        activity_id,
+        &config.network_id,
+        &config.wire_version,
+        false,
+    )?;
+    let facts = bind_authority_facts(config, document, receipt);
+    pay_timing("gateway_authority_us", started);
+    facts
+}
+
 fn verified_result(
     config: &Config,
     activity_id: &str,
     receipt_hex: &str,
+    prefetched: Option<AuthorityResponse>,
 ) -> Result<(Vec<u8>, Vec<u8>, i32), OutgoingResponse> {
     let expected =
         parse_hex32(activity_id).map_err(|_| response(503, "component_invalid", Some(5)))?;
     let receipt = decode_hex(receipt_hex, 256 * 1024)
         .map_err(|_| response(503, "component_invalid", Some(5)))?;
-    let facts = authority(config, activity_id, &receipt)?;
+    let facts = match prefetched {
+        Some(document) => bind_authority_facts(config, document, &receipt)
+            .or_else(|_| authority(config, activity_id, &receipt))?,
+        None => authority(config, activity_id, &receipt)?,
+    };
+    let verify_started = Instant::now();
     let verified = verify_activity_operation(
         &receipt,
         facts,
@@ -1245,6 +1297,7 @@ fn verified_result(
         Some(expected),
     )
     .map_err(|_| response(503, "receipt_verification_failed", Some(5)))?;
+    pay_timing("gateway_verify_receipt_us", verify_started);
     Ok((
         verified.response().to_vec(),
         verified.receipt().to_vec(),
@@ -1555,6 +1608,7 @@ fn activity(
     let Ok(signer_public_key) = parse_hex32(&record.signer_public_key) else {
         return response(503, "persistence_unavailable", Some(5));
     };
+    let verify_started = Instant::now();
     let Ok(verified_submission) = verify_submission(
         &canonical,
         &config.modules,
@@ -1564,6 +1618,7 @@ fn activity(
     ) else {
         return response(403, "activity_authorization_refused", None);
     };
+    pay_timing("gateway_verify_submission_us", verify_started);
     if idempotency != &hex(&verified_submission.idempotency_key()) {
         return response(409, "protocol_idempotency_mismatch", None);
     }
@@ -1604,7 +1659,16 @@ fn activity(
         canonical,
         activity_id: verified_submission.activity_id(),
     };
-    if let Err(error) = reserve_activity(config, record, &operation, trace_id) {
+    let reserved = thread::scope(|scope| {
+        let warm = scope.spawn(|| {
+            let _ = config.client.warm(&config.component);
+            let _ = config.client.warm(&config.authority);
+        });
+        let reserved = reserve_activity(config, record, &operation, trace_id);
+        let _ = warm.join();
+        reserved
+    });
+    if let Err(error) = reserved {
         return error;
     }
     submit_activity(config, request, record, &operation, trace_id)
@@ -1679,6 +1743,7 @@ fn reserve_activity(
     operation: &ActivityOperation,
     trace_id: &str,
 ) -> Result<(), OutgoingResponse> {
+    let started = Instant::now();
     let audit = audit_event(
         &record.principal_digest,
         "activity",
@@ -1760,7 +1825,31 @@ fn reserve_activity(
         }
         Reservation::Reserved => {}
     }
+    pay_timing("gateway_reserve_us", started);
     Ok(())
+}
+
+fn start_authority_wait(
+    config: &Config,
+    activity_id: &str,
+) -> thread::JoinHandle<Result<AuthorityResponse, OutgoingResponse>> {
+    let client = config.client.clone();
+    let endpoint = config.authority.clone();
+    let token = config.authority_token.clone();
+    let activity_id = activity_id.to_owned();
+    let network_id = config.network_id.clone();
+    let wire_version = config.wire_version.clone();
+    thread::spawn(move || {
+        fetch_authority_response(
+            &client,
+            &endpoint,
+            token.as_str(),
+            &activity_id,
+            &network_id,
+            &wire_version,
+            true,
+        )
+    })
 }
 
 fn submit_activity(
@@ -1770,6 +1859,8 @@ fn submit_activity(
     operation: &ActivityOperation,
     trace_id: &str,
 ) -> OutgoingResponse {
+    let pending_authority = start_authority_wait(config, &operation.submitted_activity_id);
+    let submit_started = Instant::now();
     let Ok(upstream) = config.client.request(
         &config.component,
         config.component_token.as_str(),
@@ -1792,6 +1883,7 @@ fn submit_activity(
             trace_id,
         );
     };
+    pay_timing("gateway_submit_core_us", submit_started);
     if upstream.status == 202 {
         return submitted_unknown_response(
             &operation.submitted_activity_id,
@@ -1843,10 +1935,25 @@ fn submit_activity(
         .get("result")
         .unwrap_or(&component_document)
         .clone();
+    let prefetched = pending_authority.join().ok().and_then(Result::ok);
     if operation.lifecycle_ordinal.is_some() {
-        return complete_lifecycle(config, record, operation, component_value, trace_id);
+        return complete_lifecycle(
+            config,
+            record,
+            operation,
+            component_value,
+            prefetched,
+            trace_id,
+        );
     }
-    complete_activity(config, record, operation, component_value, trace_id)
+    complete_activity(
+        config,
+        record,
+        operation,
+        component_value,
+        prefetched,
+        trace_id,
+    )
 }
 
 fn complete_lifecycle(
@@ -1854,6 +1961,7 @@ fn complete_lifecycle(
     record: &KeyRecord,
     operation: &ActivityOperation,
     component_value: serde_json::Value,
+    prefetched: Option<AuthorityResponse>,
     trace_id: &str,
 ) -> OutgoingResponse {
     let component: LifecycleActivity = match serde_json::from_value(component_value) {
@@ -1866,7 +1974,12 @@ fn complete_lifecycle(
     let Ok(receipt) = decode_hex(&component.receipt, 1_048_576) else {
         return response(503, "component_invalid", Some(5));
     };
-    let facts = match authority(config, &component.activity_id, &receipt) {
+    let facts = match prefetched {
+        Some(document) => bind_authority_facts(config, document, &receipt)
+            .or_else(|_| authority(config, &component.activity_id, &receipt)),
+        None => authority(config, &component.activity_id, &receipt),
+    };
+    let facts = match facts {
         Ok(value) => value,
         Err(error) => return error,
     };
@@ -1919,6 +2032,7 @@ fn complete_activity(
     record: &KeyRecord,
     operation: &ActivityOperation,
     component_value: serde_json::Value,
+    prefetched: Option<AuthorityResponse>,
     trace_id: &str,
 ) -> OutgoingResponse {
     let component: ComponentActivity = match serde_json::from_value(component_value) {
@@ -1941,7 +2055,14 @@ fn complete_activity(
         return response(503, "component_invalid", Some(5));
     }
     let (result, receipt, verified_result_code) = match operation.program_head.map_or_else(
-        || verified_result(config, &component.activity_id, &component.receipt),
+        || {
+            verified_result(
+                config,
+                &component.activity_id,
+                &component.receipt,
+                prefetched,
+            )
+        },
         |head| {
             verified_program_result(
                 config,
@@ -2474,13 +2595,24 @@ fn serve(config: &Arc<Config>, tcp: TcpStream) -> Result<(), String> {
     let connection =
         ServerConnection::new(Arc::clone(&config.tls)).map_err(|error| error.to_string())?;
     let mut stream = StreamOwned::new(connection, tcp);
-    let Ok(request) = http::read_request(&mut stream, MAX_REQUEST) else {
-        return http::write_response(&mut stream, &response(400, "invalid_http_request", None));
-    };
-    if request.path == "/rpc/ws" {
-        return ws::serve(config, &request, &mut stream);
+    for _ in 0..http::MAX_KEEPALIVE_REQUESTS {
+        let Ok(request) = http::read_request(&mut stream, MAX_REQUEST) else {
+            return http::write_response(
+                &mut stream,
+                &response(400, "invalid_http_request", None),
+                false,
+            );
+        };
+        if request.path == "/rpc/ws" {
+            return ws::serve(config, &request, &mut stream);
+        }
+        let keepalive = http::http_keepalive(&request.headers);
+        http::write_response(&mut stream, &route(config, &request), keepalive)?;
+        if !keepalive {
+            break;
+        }
     }
-    http::write_response(&mut stream, &route(config, &request))
+    Ok(())
 }
 
 fn run() -> Result<(), String> {
@@ -2897,7 +3029,7 @@ fn read_receipt(
     if !component.activity_id.eq_ignore_ascii_case(activity_id) {
         return response(503, "component_invalid", Some(5));
     }
-    let (_, receipt, _) = match verified_result(config, activity_id, &component.receipt) {
+    let (_, receipt, _) = match verified_result(config, activity_id, &component.receipt, None) {
         Ok(value) => value,
         Err(error) => return error,
     };

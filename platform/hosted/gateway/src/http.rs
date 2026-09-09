@@ -1,14 +1,42 @@
-use native_tls::{Certificate, Identity, TlsConnector};
+use native_tls::{Certificate, Identity, TlsConnector, TlsStream};
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::net::{IpAddr, TcpStream, ToSocketAddrs};
-use std::time::Duration;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 use zeroize::Zeroize;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const IO_TIMEOUT: Duration = Duration::from_secs(8);
 const MAX_HEADERS: usize = 32 * 1024;
 const MAX_RESPONSE: usize = 8 * 1024 * 1024;
+const MAX_POOLED_CONNECTIONS: usize = 8;
+pub const MAX_KEEPALIVE_REQUESTS: usize = 64;
+
+type PooledStreams = Vec<TlsStream<TcpStream>>;
+type HttpPool = Mutex<BTreeMap<(String, u16), PooledStreams>>;
+type SharedPool = std::sync::Arc<HttpPool>;
+
+fn pay_timing(stage: &str, started: Instant) {
+    if std::env::var_os("LAYERX_PAY_TIMING").is_some() {
+        eprintln!(
+            "pay_timing stage={stage} elapsed_us={}",
+            started.elapsed().as_micros()
+        );
+    }
+}
+
+#[must_use]
+pub fn http_keepalive(headers: &BTreeMap<String, String>) -> bool {
+    match headers
+        .get("connection")
+        .map(|value| value.to_ascii_lowercase())
+    {
+        Some(value) if value.split(',').any(|part| part.trim() == "close") => false,
+        Some(value) if value.split(',').any(|part| part.trim() == "keep-alive") => true,
+        _ => true,
+    }
+}
 
 #[derive(Clone)]
 pub struct Endpoint {
@@ -70,6 +98,17 @@ impl Endpoint {
 pub struct Client {
     ca: Certificate,
     identity: Identity,
+    pool: SharedPool,
+}
+
+impl Clone for Client {
+    fn clone(&self) -> Self {
+        Self {
+            ca: self.ca.clone(),
+            identity: self.identity.clone(),
+            pool: std::sync::Arc::clone(&self.pool),
+        }
+    }
 }
 
 pub struct OutboundRequest<'a> {
@@ -83,7 +122,83 @@ pub struct OutboundRequest<'a> {
 impl Client {
     #[must_use]
     pub fn new(ca: Certificate, identity: Identity) -> Self {
-        Self { ca, identity }
+        Self {
+            ca,
+            identity,
+            pool: std::sync::Arc::new(Mutex::new(BTreeMap::new())),
+        }
+    }
+
+    fn checkout(&self, endpoint: &Endpoint) -> Option<TlsStream<TcpStream>> {
+        self.pool
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get_mut(&(endpoint.host.clone(), endpoint.port))
+            .and_then(Vec::pop)
+    }
+
+    fn checkin(&self, endpoint: &Endpoint, stream: TlsStream<TcpStream>) {
+        let mut pool = self
+            .pool
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let streams = pool
+            .entry((endpoint.host.clone(), endpoint.port))
+            .or_default();
+        if streams.len() < MAX_POOLED_CONNECTIONS {
+            streams.push(stream);
+        }
+    }
+
+    fn connect_tls(&self, endpoint: &Endpoint) -> Result<TlsStream<TcpStream>, String> {
+        let started = Instant::now();
+        let connector = TlsConnector::builder()
+            .add_root_certificate(self.ca.clone())
+            .identity(self.identity.clone())
+            .min_protocol_version(Some(native_tls::Protocol::Tlsv12))
+            .build()
+            .map_err(|error| error.to_string())?;
+        let mut last_error = None;
+        for address in (endpoint.host.as_str(), endpoint.port)
+            .to_socket_addrs()
+            .map_err(|error| error.to_string())?
+            .take(8)
+        {
+            match TcpStream::connect_timeout(&address, CONNECT_TIMEOUT) {
+                Ok(tcp) => {
+                    tcp.set_nodelay(true).map_err(|error| error.to_string())?;
+                    tcp.set_read_timeout(Some(IO_TIMEOUT))
+                        .map_err(|error| error.to_string())?;
+                    tcp.set_write_timeout(Some(IO_TIMEOUT))
+                        .map_err(|error| error.to_string())?;
+                    let stream = connector
+                        .connect(&endpoint.host, tcp)
+                        .map_err(|error| error.to_string())?;
+                    pay_timing("http_connect_us", started);
+                    return Ok(stream);
+                }
+                Err(error) => last_error = Some(error),
+            }
+        }
+        Err(last_error.map_or_else(
+            || "component endpoint did not resolve".to_owned(),
+            |error| error.to_string(),
+        ))
+    }
+
+    /// Establishes one warm TLS session for a later request on the same endpoint.
+    ///
+    /// # Errors
+    /// Refuses TLS or resolution failures.
+    pub fn warm(&self, endpoint: &Endpoint) -> Result<(), String> {
+        if self.checkout(endpoint).is_some_and(|stream| {
+            self.checkin(endpoint, stream);
+            true
+        }) {
+            return Ok(());
+        }
+        self.checkin(endpoint, self.connect_tls(endpoint)?);
+        Ok(())
     }
 
     /// # Errors
@@ -121,6 +236,36 @@ impl Client {
         request: &OutboundRequest<'_>,
         trace: Option<&str>,
     ) -> Result<UpstreamResponse, String> {
+        self.dispatch_authorized(endpoint, authorization, request, trace, None)
+    }
+
+    /// Sends one bounded request and asks the peer to wait for publication.
+    ///
+    /// # Errors
+    /// Refuses requests outside the configured bounds and TLS or HTTP failures.
+    pub fn request_waiting_publication(
+        &self,
+        endpoint: &Endpoint,
+        bearer: &str,
+        request: &OutboundRequest<'_>,
+    ) -> Result<UpstreamResponse, String> {
+        self.dispatch_authorized(
+            endpoint,
+            &format!("Bearer {bearer}"),
+            request,
+            None,
+            Some(("X-LayerX-Receipt-Wait", "1")),
+        )
+    }
+
+    fn dispatch_authorized(
+        &self,
+        endpoint: &Endpoint,
+        authorization: &str,
+        request: &OutboundRequest<'_>,
+        trace: Option<&str>,
+        extra_header: Option<(&str, &str)>,
+    ) -> Result<UpstreamResponse, String> {
         let OutboundRequest {
             method,
             path,
@@ -139,6 +284,18 @@ impl Client {
         {
             return Err("outbound authorization exceeds its boundary".to_owned());
         }
+        if extra_header.is_some_and(|(name, value)| {
+            name.is_empty()
+                || name.len() > 64
+                || value.is_empty()
+                || value.len() > 64
+                || name
+                    .bytes()
+                    .any(|byte| matches!(byte, b'\r' | b'\n' | b':' | 0))
+                || value.bytes().any(|byte| matches!(byte, b'\r' | b'\n' | 0))
+        }) {
+            return Err("outbound header exceeds its boundary".to_owned());
+        }
         if trace.is_some_and(|value| {
             value.is_empty()
                 || value.len() > 64
@@ -146,55 +303,45 @@ impl Client {
         }) {
             return Err("outbound trace exceeds its boundary".to_owned());
         }
-        let connector = TlsConnector::builder()
-            .add_root_certificate(self.ca.clone())
-            .identity(self.identity.clone())
-            .min_protocol_version(Some(native_tls::Protocol::Tlsv12))
-            .build()
-            .map_err(|error| error.to_string())?;
-        let mut last_error = None;
-        for address in (endpoint.host.as_str(), endpoint.port)
-            .to_socket_addrs()
-            .map_err(|error| error.to_string())?
-            .take(8)
+        let idempotency =
+            idempotency.map_or_else(String::new, |key| format!("Idempotency-Key: {key}\r\n"));
+        let extra =
+            extra_header.map_or_else(String::new, |(name, value)| format!("{name}: {value}\r\n"));
+        let trace = trace.map_or_else(String::new, |value| format!("X-Trace-Id: {value}\r\n"));
+        let mut outbound = zeroize::Zeroizing::new(Vec::new());
+        write!(
+            outbound,
+            "{method} {}{path} HTTP/1.1\r\nHost: {}\r\nAuthorization: {authorization}\r\nAccept: application/json\r\nContent-Type: {content_type}\r\n{idempotency}{extra}{trace}Content-Length: {}\r\nConnection: keep-alive\r\n\r\n",
+            endpoint.base_path,
+            endpoint.authority(),
+            body.len()
+        )
+        .map_err(|error| error.to_string())?;
+        outbound.extend_from_slice(body);
+        let mut stream = match self.checkout(endpoint) {
+            Some(stream) => stream,
+            None => self.connect_tls(endpoint)?,
+        };
+        if stream
+            .write_all(&outbound)
+            .and_then(|()| stream.flush())
+            .is_err()
         {
-            match TcpStream::connect_timeout(&address, CONNECT_TIMEOUT) {
-                Ok(tcp) => {
-                    tcp.set_nodelay(true).map_err(|error| error.to_string())?;
-                    tcp.set_read_timeout(Some(IO_TIMEOUT))
-                        .map_err(|error| error.to_string())?;
-                    tcp.set_write_timeout(Some(IO_TIMEOUT))
-                        .map_err(|error| error.to_string())?;
-                    let mut stream = connector
-                        .connect(&endpoint.host, tcp)
-                        .map_err(|error| error.to_string())?;
-                    let idempotency = idempotency
-                        .map_or_else(String::new, |key| format!("Idempotency-Key: {key}\r\n"));
-                    let trace =
-                        trace.map_or_else(String::new, |value| format!("X-Trace-Id: {value}\r\n"));
-                    let mut outbound = zeroize::Zeroizing::new(Vec::new());
-                    write!(
-                        outbound,
-                        "{method} {}{path} HTTP/1.1\r\nHost: {}\r\nAuthorization: {authorization}\r\nAccept: application/json\r\nContent-Type: {content_type}\r\n{idempotency}{trace}Content-Length: {}\r\nConnection: close\r\n\r\n",
-                        endpoint.base_path,
-                        endpoint.authority(),
-                        body.len()
-                    )
-                    .map_err(|error| error.to_string())?;
-                    outbound.extend_from_slice(body);
-                    stream
-                        .write_all(&outbound)
-                        .map_err(|error| error.to_string())?;
-                    stream.flush().map_err(|error| error.to_string())?;
-                    return read_response(&mut stream);
-                }
-                Err(error) => last_error = Some(error),
-            }
+            stream = self.connect_tls(endpoint)?;
+            stream
+                .write_all(&outbound)
+                .map_err(|error| error.to_string())?;
+            stream.flush().map_err(|error| error.to_string())?;
         }
-        Err(last_error.map_or_else(
-            || "component endpoint did not resolve".to_owned(),
-            |error| error.to_string(),
-        ))
+        match read_response(&mut stream) {
+            Ok((response, keepalive)) => {
+                if keepalive {
+                    self.checkin(endpoint, stream);
+                }
+                Ok(response)
+            }
+            Err(error) => Err(error),
+        }
     }
 }
 
@@ -253,7 +400,7 @@ pub fn read_request(stream: &mut impl Read, maximum: usize) -> Result<IncomingRe
     })
 }
 
-fn read_response(stream: &mut impl Read) -> Result<UpstreamResponse, String> {
+fn read_response(stream: &mut impl Read) -> Result<(UpstreamResponse, bool), String> {
     let (start, headers, body) = read_message(stream, MAX_RESPONSE)?;
     let mut parts = start.split_whitespace();
     if parts.next() != Some("HTTP/1.1") {
@@ -265,11 +412,14 @@ fn read_response(stream: &mut impl Read) -> Result<UpstreamResponse, String> {
         .parse::<u16>()
         .map_err(|_| "component response status is invalid".to_owned())?;
     let content_type = headers.get("content-type").cloned().unwrap_or_default();
-    Ok(UpstreamResponse {
-        status,
-        content_type,
-        body,
-    })
+    Ok((
+        UpstreamResponse {
+            status,
+            content_type,
+            body,
+        },
+        http_keepalive(&headers),
+    ))
 }
 
 type HttpMessage = (String, BTreeMap<String, String>, Vec<u8>);
@@ -337,7 +487,12 @@ fn read_message(stream: &mut impl Read, maximum: usize) -> Result<HttpMessage, S
 
 /// # Errors
 /// Returns an error when writing or flushing the response fails.
-pub fn write_response(stream: &mut impl Write, response: &OutgoingResponse) -> Result<(), String> {
+pub fn write_response(
+    stream: &mut impl Write,
+    response: &OutgoingResponse,
+    keepalive: bool,
+) -> Result<(), String> {
+    let connection = if keepalive { "keep-alive" } else { "close" };
     let reason = match response.status {
         200 => "OK",
         201 => "Created",
@@ -357,7 +512,7 @@ pub fn write_response(stream: &mut impl Write, response: &OutgoingResponse) -> R
         .map_or_else(String::new, |value| format!("Retry-After: {value}\r\n"));
     write!(
         stream,
-        "HTTP/1.1 {} {reason}\r\nContent-Type: application/json\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n{retry}Content-Length: {}\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {} {reason}\r\nContent-Type: application/json\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n{retry}Content-Length: {}\r\nConnection: {connection}\r\n\r\n",
         response.status,
         response.body.len()
     )

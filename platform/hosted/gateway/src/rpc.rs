@@ -258,7 +258,10 @@ fn upstream_result(id: &Value, answer: &OutgoingResponse) -> Result<Value, Value
 
 fn pay_timing(stage: &str, started: std::time::Instant) {
     if std::env::var_os("LAYERX_PAY_TIMING").is_some() {
-        eprintln!("pay_timing {stage}={}", started.elapsed().as_micros());
+        eprintln!(
+            "pay_timing stage={stage} elapsed_us={}",
+            started.elapsed().as_micros()
+        );
     }
 }
 
@@ -268,17 +271,20 @@ fn send(config: &Config, request: &IncomingRequest, id: &Value, params: Option<&
         Err(code) => return error(id, code, "Invalid params"),
     };
     let auth_started = std::time::Instant::now();
-    let record = match super::authenticate_key(config, request) {
-        Ok(record) => record,
-        Err(answer) => return upstream_result(id, &answer).unwrap_or_else(|value| value),
+    let (record, activity) = match std::thread::scope(|scope| {
+        let auth = scope.spawn(|| super::authenticate_key(config, request));
+        let decoded = super::decode_signed(&canonical, &config.modules);
+        match (auth.join(), decoded) {
+            (Ok(Ok(record)), Ok(activity)) => Ok((record, activity)),
+            (Ok(Err(answer)), _) => Err(upstream_result(id, &answer).unwrap_or_else(|value| value)),
+            (Err(_), _) => Err(error(id, -32603, "Authentication join failed")),
+            (_, Err(_)) => Err(error(id, -32602, "Invalid canonical activity")),
+        }
+    }) {
+        Ok(value) => value,
+        Err(value) => return value,
     };
     pay_timing("gateway_auth_us", auth_started);
-    if !super::permits(&record, &super::ProductionRoute::Activity) {
-        return error(id, -32002, "Insufficient scope");
-    }
-    let Ok(activity) = super::decode_signed(&canonical, &config.modules) else {
-        return error(id, -32602, "Invalid canonical activity");
-    };
     let path = match (
         activity.activity_type().module(),
         activity.activity_type().ordinal(),
@@ -355,6 +361,20 @@ pub(super) fn read_result(config: &Config, path: &str) -> Option<Value> {
 }
 
 fn complete_commitment(config: &Config, result: &mut Value, commitment: Commitment) -> bool {
+    let started = std::time::Instant::now();
+    let completed = bind_commitment(config, result, commitment);
+    pay_timing(
+        match commitment {
+            Commitment::Batched => "gateway_commitment_batched_us",
+            Commitment::Finalised => "gateway_commitment_finalised_us",
+            Commitment::Executed => "gateway_commitment_executed_us",
+        },
+        started,
+    );
+    completed
+}
+
+fn bind_commitment(config: &Config, result: &mut Value, commitment: Commitment) -> bool {
     let Some(activity) = result
         .get("activity_id")
         .and_then(Value::as_str)
@@ -362,48 +382,44 @@ fn complete_commitment(config: &Config, result: &mut Value, commitment: Commitme
     else {
         return false;
     };
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    loop {
-        if let Some(proof) =
-            read_result(config, &format!("/v1/proofs/receipt/{activity}")).filter(|proof| {
-                proof["activity_id"] == activity && proof["canonical_value"] == result["receipt"]
-            })
-        {
-            if commitment == Commitment::Batched {
-                result["commitment"] = json!("batched");
-                result["batch_evidence"] = proof;
-                return true;
-            }
-            if let Some(node) = read_result(config, "/v1/node-info") {
-                if let Some(checkpoint) = node
-                    .get("latest_finalised_checkpoint")
-                    .and_then(Value::as_str)
-                    .filter(|id| parse_hex32(id).is_ok() && *id != "00".repeat(32))
-                {
-                    if let Some(evidence) =
-                        read_result(config, &format!("/v1/checkpoints/{checkpoint}"))
-                    {
-                        if evidence
-                            .get("canonical_header")
-                            .and_then(Value::as_str)
-                            .is_some()
-                            && evidence["canonical_header"]
-                                == proof["signed_header"]["canonical_header"]
-                        {
-                            result["commitment"] = json!("finalised");
-                            result["batch_evidence"] = proof;
-                            result["checkpoint_evidence"] = evidence;
-                            return true;
-                        }
-                    }
-                }
-            }
-        }
-        if std::time::Instant::now() >= deadline {
-            return false;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(50));
+    let Some(proof) =
+        read_result(config, &format!("/v1/proofs/receipt/{activity}")).filter(|proof| {
+            proof["activity_id"] == activity && proof["canonical_value"] == result["receipt"]
+        })
+    else {
+        return false;
+    };
+    if commitment == Commitment::Batched {
+        result["commitment"] = json!("batched");
+        result["batch_evidence"] = proof;
+        return true;
     }
+    let Some(node) = read_result(config, "/v1/node-info") else {
+        return false;
+    };
+    let Some(checkpoint) = node
+        .get("latest_finalised_checkpoint")
+        .and_then(Value::as_str)
+        .filter(|id| parse_hex32(id).is_ok() && *id != "00".repeat(32))
+        .map(str::to_owned)
+    else {
+        return false;
+    };
+    let Some(evidence) = read_result(config, &format!("/v1/checkpoints/{checkpoint}")) else {
+        return false;
+    };
+    if evidence
+        .get("canonical_header")
+        .and_then(Value::as_str)
+        .is_some()
+        && evidence["canonical_header"] == proof["signed_header"]["canonical_header"]
+    {
+        result["commitment"] = json!("finalised");
+        result["batch_evidence"] = proof;
+        result["checkpoint_evidence"] = evidence;
+        return true;
+    }
+    false
 }
 
 pub(super) fn route(config: &Config, request: &IncomingRequest) -> OutgoingResponse {
