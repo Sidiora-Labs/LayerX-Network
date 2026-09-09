@@ -5220,3 +5220,19 @@ symbol = "lxp_ledger_apply_bridge_credit lxp_ctx_bridge_credit"
 observed = "The bridge reserve top-up now invokes ledger apply after the existing authorization, supply preflight and rollback snapshot. make -j16, make test-asset-transfer, make test and make beta-ledger-check exit 0. The unchanged sole-writer check passes. BRIDGE_PYTHON=qual-logs/nat3/venv/bin/python3 bash tests/bridge/sole_writer.sh exits 0: a real custody deposit on isolated chain 31337 produces byte-identical canonical account state diffs (397 bytes) and unsigned receipt encodings (1006 bytes) through original and updated module contexts, with real signature verification, rollback stages, replay refusal and nine custody evidence tests passing. Evidence: qual-logs/nat3/build.log, asset-transfer.log, test.log, beta-ledger.log, bridge-differential-venv.log and gates.tsv."
 assumption = "The initial bridge comparison exited 1 because system Python lacked Crypto; the isolated virtual environment satisfies tests/bridge/requirements.txt. Codify inspection could not run because cg is unavailable. Cluster and image gates were not run. Task statuses are unchanged."
 severity = "note"
+
+[observation.6.2.900]
+task = "6.2"
+file = "platform/hosted/core/src/main.rs platform/hosted/core/src/public_reads.rs platform/hosted/gateway/src/main.rs"
+symbol = "public_reads core_route"
+observed = "Concurrent writers modified the same worktree during public-read implementation. The core entry point contains duplicate public_reads declarations and an independently added account route; the new account-read module changed during inspection. Implementation and qualification cannot be attributed to a single stable source state."
+assumption = "Exclusive worktree ownership and reconciliation of the mixed edits are required before qualification or a checkpoint commit. No format, build, test, or ledger gate is claimed for this partial implementation."
+severity = "blocker"
+
+[observation.6.11.904]
+task = "6.11"
+file = "platform/hosted/gateway/src/main.rs platform/hosted/gateway/src/public_reads.rs platform/hosted/core/src/main.rs platform/hosted/core/src/public_reads.rs"
+symbol = "public_reads route account"
+observed = "Concurrent writes replaced the public read modules and added incompatible call sites during qualification. The gateway main module contains duplicate public_reads declarations and both bool-returning target/route and Result-returning target/read call patterns. Formatting commands exited 0 before this collision; clippy was interrupted and no test or runtime result qualifies the combined source. Partial compiler output is retained in qual-logs/pay4/clippy.log."
+assumption = "The combined source requires exclusive write ownership and reconciliation before qualification. No public RPC, complete DID account listing, receipt latency, or expanded activity admission gate is established by this partial work."
+severity = "blocker"
