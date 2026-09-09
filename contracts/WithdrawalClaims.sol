@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 pragma solidity ^0.8.24;
 
+import {NativeStateProof} from "./libraries/NativeStateProof.sol";
 import {CanonicalCheckpoint} from "./libraries/CanonicalCheckpoint.sol";
 import {CheckpointRegistry} from "./CheckpointRegistry.sol";
 import {LayerXVault} from "./custody/LayerXVault.sol";
@@ -148,6 +149,68 @@ contract WithdrawalClaims is ReentrancyLock, LayerXComponent {
             claimId,
             nullifier,
             withdrawal.checkpointHash,
+            withdrawal.assetId,
+            withdrawal.recipient,
+            withdrawal.amount,
+            availableAt
+        );
+    }
+
+    function queueClaim(
+        Withdrawal calldata withdrawal,
+        bytes32 inclusionCheckpoint,
+        bytes32 stateRoot,
+        uint64 epoch,
+        uint64 batchNumber,
+        bytes32 dataAvailabilityRoot,
+        bytes calldata witness,
+        CanonicalCheckpoint.GuarantorAttestation[] calldata attestations
+    ) external nonReentrant returns (bytes32 claimId) {
+        bytes32 nullifier = withdrawalNullifier(withdrawal);
+        if (nullifierRegistry.status(nullifier) != WithdrawalNullifierRegistry.Status.None) {
+            revert NullifierAlreadyUsed();
+        }
+        if (
+            withdrawal.withdrawalId == bytes32(0) || withdrawal.account == bytes32(0)
+                || withdrawal.assetId == bytes32(0) || withdrawal.amount == 0 || withdrawal.recipient == address(0)
+                || !registry.isRecordedAncestor(withdrawal.checkpointHash, inclusionCheckpoint)
+                || !registry.isFinalised(inclusionCheckpoint, stateRoot)
+                || !registry.verifyRegisteredCertificate(
+                    inclusionCheckpoint, stateRoot, epoch, batchNumber, dataAvailabilityRoot, attestations
+                )
+        ) revert InvalidClaim();
+        NativeStateProof.verifyWithdrawal(
+            witness,
+            stateRoot,
+            networkId,
+            withdrawal.withdrawalId,
+            withdrawal.account,
+            withdrawal.assetId,
+            withdrawal.amount,
+            withdrawal.recipient,
+            withdrawal.checkpointHash,
+            nullifier
+        );
+        uint64 availableAt = challengeManager.windowClosesAt(inclusionCheckpoint);
+        claimId = sha256(
+            abi.encode("LXP/Paxeer/withdrawal-claim/v1", block.chainid, address(this), nullifier, withdrawal.recipient)
+        );
+        if (claim[claimId].status != ClaimStatus.None) revert InvalidClaim();
+        claim[claimId] = Claim(
+            nullifier,
+            inclusionCheckpoint,
+            withdrawal.assetId,
+            withdrawal.recipient,
+            withdrawal.amount,
+            availableAt,
+            ClaimStatus.Pending
+        );
+        pendingAmount[withdrawal.assetId] = Arithmetic.add(pendingAmount[withdrawal.assetId], withdrawal.amount);
+        nullifierRegistry.reserve(nullifier, withdrawal.withdrawalId, claimId);
+        emit ClaimQueued(
+            claimId,
+            nullifier,
+            inclusionCheckpoint,
             withdrawal.assetId,
             withdrawal.recipient,
             withdrawal.amount,
