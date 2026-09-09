@@ -7893,3 +7893,11 @@ file = "agent/crates/layerx-agentd/tests/availability.rs agent/crates/layerx-age
 symbol = "complete_five_class_retrieval_streams_and_emits_offline_replay_frames corruption_withholding_and_repeated_provider_failure_are_durable_evidence"
 observed = "The unchanged aggregate availability tests fail with complete provider reported partial at line 247 and ChunkOrder versus the required MissingClass at line 311. The owner-authority real-client test passes in the same aggregate execution. Raw evidence is qual-logs/own1/own1d-agentd-tests-final.log and qual-logs/own1/own1d-agentd-tests-all.log."
 assumption = "The availability fixture and verifier contract require separate diagnosis; neither assertion nor verification ordering is changed by owner-registration work."
+
+[observation.3.7.46]
+task = "3.7"
+severity = "blocker"
+file = "cmd/layerx-guarantor/runtime.c tests/daemon/owner_checkpoint.py cmd/layerx-guarantor/settlement.py"
+symbol = "gp_runtime_open replay_execute_activity gp_runtime_authority checkpoint"
+observed = "Governance ABI 1 is registered in protocol-3 genesis order and replay admits exactly ordinals 1, 2, 3, 5 and 6 with committed identity refresh. Both bonded guarantor configurations independently replay all ten real owner and Governance batches with receipt and state-root equality checks. Both producers subsequently attest batch one, but settlement RPC rejects eth_estimateGas and checkpoint registration returns -213. Positive hosted checkpoint queries remain unreached. make -j16 and the genesis, identity, grants, rotation, revocation and module-context targets pass. Raw logs: qual-logs/own1/own1e-make.log, own1e-native-owner.log, own1e-replay-build.log and own1e-checkpoint-replay-final.log."
+assumption = "The complete checkpoint command exits 1; successful independent replay is not successful settlement or hosted finality. The broader native command also exits 2 at test-guarantor-bond, a test that does not link the changed runtime; raw log: qual-logs/own1/own1e-native-focused.log. No assertion or contract check was weakened."

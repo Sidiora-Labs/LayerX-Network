@@ -99,6 +99,16 @@ def checkpoint(work, public, settlement, rpc, account, launch, ca_key, ca_cert, 
             LAYERX_GUARANTOR_PEER_URL=f'https://127.0.0.1:{ports[2 - index]}',
             LAYERX_GUARANTOR_TLS_CA_FILE=str(tls / 'ca.pem'),
             LAYERX_GUARANTOR_TLS_CERT_FILE=str(tls / 'cert.pem'), LAYERX_GUARANTOR_TLS_KEY_FILE=str(tls / 'key.pem'))
+        replay_state = work / f'governance-replay-{index}'
+        replay_state.mkdir(mode=0o700)
+        os.chown(replay_state, 4021, 4021)
+        replay_log = work / f'governance-replay-{index}.log'
+        with replay_log.open('wb') as output:
+            subprocess.run([str(repo / 'build/tests/lxp_test_guarantor_runtime'),
+                str(identity / 'node.conf'), str(replay_state),
+                str(work / 'node/checkpoints/da-bodies.log'), str(last_batch)],
+                env=env, stdout=output, stderr=output, check=True, timeout=120)
+        print(f'bonded guarantor {index} independently replayed all {last_batch} owner batches', flush=True)
         producers.append(launch(['setpriv', '--reuid=4021', '--regid=4021',
             '--groups=' + str(repo.stat().st_gid), str(repo / 'build/bin/layerx-guarantor')], f'checkpoint-producer-{index}', env))
     deadline = time.monotonic() + 120
