@@ -13,9 +13,7 @@ fn hex(bytes: &[u8]) -> String {
 
 fn registration<'a>() -> AssetRegistration<'a> {
     AssetRegistration {
-        issuer: core::array::from_fn(|index| {
-            u8::try_from(index).unwrap_or_else(|error| panic!("fixture index: {error}"))
-        }),
+        issuer: "did:layerx:alice",
         salt: core::array::from_fn(|index| {
             u8::try_from(index + 32).unwrap_or_else(|error| panic!("fixture index: {error}"))
         }),
@@ -31,12 +29,13 @@ fn canonical_asset_vectors() -> Result<(), String> {
     let fixture: Value = serde_json::from_str(include_str!("fixtures/wallet-assets-v1.json"))
         .map_err(|error| error.to_string())?;
     let registration = registration();
-    let asset = asset_id(&registration.issuer, &registration.salt);
+    let issuer = layerx_platform_cli::wallet_encoding::native_issuer_id(registration.issuer)?;
+    let asset = asset_id(&issuer, &registration.salt);
     let account = core::array::from_fn(|index| {
         u8::try_from(index + 64).unwrap_or_else(|error| panic!("fixture index: {error}"))
     });
     let amount = (1_u128 << 127) + 257;
-    assert_eq!(hex(&registration.issuer), fixture["issuer"]);
+    assert_eq!(hex(&issuer), fixture["issuer"]);
     assert_eq!(hex(&registration.salt), fixture["salt"]);
     assert_eq!(hex(&asset), fixture["asset_id"]);
     assert_eq!(hex(&account), fixture["account"]);
@@ -120,14 +119,26 @@ fn exact_bounds_uncapped_and_domain_separation() -> Result<(), String> {
     assert_eq!(&encoded[117..133], &[0; 16]);
     assert_eq!(&encoded[133..], &[1, 0]);
     assert_ne!(
-        asset_id(&value.issuer, &value.salt),
-        asset_id(&value.salt, &value.issuer)
+        asset_id(
+            &layerx_platform_cli::wallet_encoding::native_issuer_id(value.issuer)?,
+            &value.salt
+        ),
+        asset_id(
+            &value.salt,
+            &layerx_platform_cli::wallet_encoding::native_issuer_id(value.issuer)?
+        )
     );
     let mut salt = value.salt;
     salt[31] ^= 1;
     assert_ne!(
-        asset_id(&value.issuer, &value.salt),
-        asset_id(&value.issuer, &salt)
+        asset_id(
+            &layerx_platform_cli::wallet_encoding::native_issuer_id(value.issuer)?,
+            &value.salt
+        ),
+        asset_id(
+            &layerx_platform_cli::wallet_encoding::native_issuer_id(value.issuer)?,
+            &salt
+        )
     );
     Ok(())
 }

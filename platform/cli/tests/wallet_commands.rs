@@ -94,3 +94,40 @@ fn unavailable_rpc_asset_methods_fail_closed() {
         "rpc_method_unavailable"
     );
 }
+
+#[test]
+fn unpublished_registration_and_history_preserve_local_keys() {
+    let cli = Cli::new();
+    let before = cli.run(&["--json", "wallet", "list"]);
+    assert!(before.status.success());
+    let create = cli.run(&[
+        "--json",
+        "--rpc",
+        "http://127.0.0.1:1/rpc",
+        "wallet",
+        "create",
+        "unpublished",
+        "--did",
+        "did:layerx:unpublished",
+    ]);
+    assert!(!create.status.success());
+    assert_eq!(
+        error_envelope(&create)["error"]["code"],
+        "wallet_registration_unavailable"
+    );
+    let history = cli.run(&[
+        "--json",
+        "wallet",
+        "history",
+        "--did",
+        "did:layerx:unpublished",
+    ]);
+    assert!(!history.status.success());
+    assert_eq!(
+        error_envelope(&history)["error"]["code"],
+        "wallet_history_unavailable"
+    );
+    let after = cli.run(&["--json", "wallet", "list"]);
+    assert!(after.status.success());
+    assert_eq!(envelope(&before)["data"], envelope(&after)["data"]);
+}

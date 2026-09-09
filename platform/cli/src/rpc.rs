@@ -59,7 +59,6 @@ pub fn request(method: &str, params: &Value) -> Result<Value, String> {
         "lx_getAsset"
         | "lx_getAccount"
         | "lx_getBalance"
-        | "lx_getSequence"
         | "lx_getReceipt"
         | "lx_getActivityStatus"
         | "lx_getCheckpoint" => {
@@ -68,6 +67,7 @@ pub fn request(method: &str, params: &Value) -> Result<Value, String> {
             };
             id32(id)?;
         }
+        "lx_getSequence" => sequence_params(args)?,
         "lx_getBatchHeader" => {
             let [Value::String(number)] = args.as_slice() else {
                 return Err("lx_getBatchHeader requires one decimal string".into());
@@ -183,6 +183,19 @@ pub fn decode_response(method: &str, response: &Value) -> Result<Value, String> 
         .ok_or_else(|| format!("{method} returned a non-object result"))
 }
 
+fn sequence_params(args: &[Value]) -> Result<(), String> {
+    match args {
+        [Value::String(account)] => id32(account)?,
+        [Value::String(did), Value::String(selector)] if selector == "identity" => {
+            layerx_types::ids::Did::new(did.as_bytes())
+                .map_err(|e| format!("invalid DID: {e:?}"))?;
+            crate::http::validate_resource_id(did, "DID")?;
+        }
+        _ => return Err("lx_getSequence requires account_id or DID and identity selector".into()),
+    }
+    Ok(())
+}
+
 fn canonical_hex(value: &str) -> Result<(), String> {
     if value.is_empty()
         || value.len() > 1_048_576
@@ -230,6 +243,19 @@ mod tests {
             assert!(request(method, &json!({"account_id":id})).is_err());
             assert!(request(method, &json!([id, id])).is_err());
         }
+        let sequence = methods
+            .iter()
+            .find(|entry| entry["name"] == "lx_getSequence")
+            .ok_or("sequence contract missing")?;
+        assert_eq!(sequence["params"][1]["name"], "selector");
+        assert_eq!(sequence["params"][1]["schema"]["enum"], json!(["identity"]));
+        assert!(sequence["description"]
+            .as_str()
+            .ok_or("description missing")?
+            .contains("[did, \"identity\"]"));
+        request("lx_getSequence", &json!(["did:layerx:alice", "identity"]))?;
+        assert!(request("lx_getSequence", &json!(["did:layerx:alice", "account"])).is_err());
+        assert!(request("lx_getSequence", &json!(["../alice", "identity"])).is_err());
         request("lx_getBalances", &json!(["did:layerx:alice"]))?;
         request("lx_getNodeInfo", &json!([]))?;
         request("lx_listAssets", &json!([]))?;

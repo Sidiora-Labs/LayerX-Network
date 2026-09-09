@@ -8,7 +8,7 @@ use layerx_crypto::payments::Payment;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AssetRegistration<'a> {
-    pub issuer: [u8; 32],
+    pub issuer: &'a str,
     pub salt: [u8; 32],
     pub symbol: &'a str,
     pub name: &'a str,
@@ -55,75 +55,66 @@ impl AssetOperation<'_> {
     /// # Errors
     /// Refuses invalid metadata bounds, decimals above 38, and zero amounts.
     pub fn encode(&self) -> Result<Vec<u8>, String> {
-        let mut bytes = 1_u16.to_be_bytes().to_vec();
         match self {
             Self::Register(registration) => {
-                let symbol_len = bounded_length(registration.symbol, 16, "symbol")?;
-                let name_len = bounded_length(registration.name, 32, "name")?;
-                if !registration.symbol.is_ascii() {
-                    return Err("asset symbol must be ASCII".into());
-                }
-                if registration.decimals > 38 {
-                    return Err("asset decimals must be at most 38".into());
-                }
-                bytes.extend_from_slice(&asset_id(&registration.issuer, &registration.salt));
-                bytes.extend_from_slice(&registration.salt);
-                bytes.push(symbol_len);
-                bytes.extend_from_slice(registration.symbol.as_bytes());
-                bytes.push(name_len);
-                bytes.extend_from_slice(registration.name.as_bytes());
-                bytes.push(registration.decimals);
-                bytes.extend_from_slice(&registration.supply_cap.to_be_bytes());
-                bytes.extend_from_slice(&[1, 0]);
-            }
-            Self::OpenAccount { asset } => {
-                return Payment::OpenAccount { asset: *asset }
-                    .encode(&[])
-                    .map_err(|e| e.to_string())
-            }
-            Self::RevokeGrant { grant, sequence } => {
-                return Payment::RevokeGrant {
-                    grant: *grant,
-                    revocation_sequence: *sequence,
-                }
-                .encode(&[])
+                let issuer = native_issuer_id(registration.issuer)?;
+                Payment::Register(layerx_crypto::payments::Registration {
+                    asset: asset_id(&issuer, &registration.salt),
+                    salt: registration.salt,
+                    symbol: registration.symbol.into(),
+                    name: registration.name.into(),
+                    decimals: registration.decimals,
+                    supply_cap: registration.supply_cap,
+                    issuer_kind: 1,
+                    custody_ref: Vec::new(),
+                })
+                .encode(registration.issuer.as_bytes())
                 .map_err(|e| e.to_string())
             }
+            Self::OpenAccount { asset } => Payment::OpenAccount { asset: *asset }
+                .encode(&[])
+                .map_err(|e| e.to_string()),
+            Self::RevokeGrant { grant, sequence } => Payment::RevokeGrant {
+                grant: *grant,
+                revocation_sequence: *sequence,
+            }
+            .encode(&[])
+            .map_err(|e| e.to_string()),
             Self::Mint {
                 asset,
                 account,
                 amount,
-            } => {
-                return Payment::Mint {
-                    asset: *asset,
-                    to: *account,
-                    amount: *amount,
-                }
-                .encode(&[])
-                .map_err(|e| e.to_string())
+            } => Payment::Mint {
+                asset: *asset,
+                to: *account,
+                amount: *amount,
             }
+            .encode(&[])
+            .map_err(|e| e.to_string()),
             Self::Burn {
                 asset,
                 account,
                 amount,
-            } => {
-                return Payment::Burn {
-                    asset: *asset,
-                    from: *account,
-                    amount: *amount,
-                }
-                .encode(&[])
-                .map_err(|e| e.to_string())
+            } => Payment::Burn {
+                asset: *asset,
+                from: *account,
+                amount: *amount,
             }
+            .encode(&[])
+            .map_err(|e| e.to_string()),
         }
-        Ok(bytes)
     }
 }
 
-fn bounded_length(value: &str, maximum: u8, field: &str) -> Result<u8, String> {
-    let length = u8::try_from(value.len()).map_err(|_| format!("asset {field} is too long"))?;
-    if length == 0 || length > maximum {
-        return Err(format!("asset {field} must contain 1..{maximum} bytes"));
-    }
-    Ok(length)
+/// # Errors
+/// Requires a valid DID before deriving the native identity identifier.
+pub fn native_issuer_id(did: &str) -> Result<[u8; 32], String> {
+    use sha2::Digest as _;
+    layerx_types::ids::Did::new(did.as_bytes()).map_err(|e| format!("invalid DID: {e:?}"))?;
+    let length = u16::try_from(did.len()).map_err(|e| e.to_string())?;
+    let mut hash = sha2::Sha256::new();
+    hash.update(b"LXP/v1/did-id\0");
+    hash.update(length.to_be_bytes());
+    hash.update(did.as_bytes());
+    Ok(hash.finalize().into())
 }

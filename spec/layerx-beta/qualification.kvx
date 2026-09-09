@@ -12321,3 +12321,91 @@ symbol = "positional_requests_match_published_contract subscribe wallet_receipt"
 observed = "The retained OpenRPC fixture is refreshed verbatim from dfbb7bf42241a74b2a59fe61323250f7b2865a0e. Existing assertion logic is retained, with valid lx_getAsset moved to positive inputs and missing asset arguments retained as negative inputs. Fee estimation and authenticated receipt/checkpoint/account WebSocket requests use the published transport. Subscription identifiers and notifications are correlated; notifications are explicitly unverified and establish no commitment. HTTP subscription requests, missing credentials, malformed responses and upstream errors fail closed. Wallet history is hidden from help and retains wallet_history_unavailable. The CLI SDK and WebSocket dependencies are recorded in platform/Cargo.lock. Final format, all-target Clippy with -D warnings, locked full CLI tests and ledger check pass; SDK exact-checkpoint/wrong-header and ack-refusal tests pass. Logs: qual-logs/pay3/pay3e-final-fmt.log, pay3e-final-clippy.log, pay3e-final-test.log, pay3e-final-ledger.log, pay3e-rpc-focused.log and pay3e-sdk-evidence.log."
 assumption = "Hosted DID registration/history have no published backend. Live authenticated gateway fee/asset reads, subscription delivery and token execution remain unqualified. No public deployment, cluster or image gate is implied by local tests."
 severity = "note"
+
+[observation.6.11.160]
+task = "6.11"
+file = "src/state/lxp_identity.c agent/crates/layerx-types/src/account.rs agent/crates/layerx-wire/src/hash.rs agent/crates/layerx-sdk/src/rpc.rs"
+symbol = "account_namespace_valid AccountId::for_asset account_id_for_protocol wallet_account"
+observed = "The shared Rust account builder admits exactly 64 lowercase hexadecimal asset suffixes, preserves native main accounts, and rejects mismatched asset selections. Wire hashing uses LX:ACCOUNT:v1 with the big-endian name length. Native account_namespace_valid still has no asset suffix branch. Native source is outside the authorized paths."
+assumption = "Native identity and ledger account admission must accept the same per-asset names and reject malformed or mismatched suffixes before end-to-end per-asset account qualification."
+severity = "blocker"
+
+[observation.6.11.161]
+task = "6.11"
+file = "agent/crates/layerx-sdk/src/rpc.rs agent/sdk/typescript/src/rpc.ts agent/crates/layerx-sdk/src/rpc_verification.rs"
+symbol = "estimate_fee list_assets get_asset wait_for"
+observed = "The refreshed OpenRPC document supplies positional lx_estimateFee, lx_listAssets and lx_getAsset contracts. Both HTTP clients now expose them, retaining native errors and unverified read status. Signed receipt, batch inclusion and exact CP1/CX1 checkpoint verification remain required for commitment waits; acknowledgements do not establish success. The contract still marks native asset and fee integration as required."
+assumption = "Live assembled gateway execution and authenticated WebSocket subscription qualification have not run. Native-backed read availability must be qualified by the gateway integration path."
+severity = "note"
+
+[observation.6.11.162]
+task = "6.11"
+file = "agent/crates/layerx-crypto/src/disclosure.rs agent/crates/layerx-sdk/src/wallet.rs agent/crates/layerx-agentd/src/policy/eval.rs agent/crates/layerx-mcp/tests/write.rs"
+symbol = "decode_send payload_sequence EvaluationInput execute_payment wait"
+observed = "SEND disclosure independently binds the source-account and envelope identity sequences and verifies the inner authorization signature. RECEIVE independently binds the receiver-account sequence, both embedded signatures, grant identifier, purpose context and envelope network/protocol. Direct exported MCP payment and wait tests retain unrelated-scope refusal. Both EvaluationInput constructors still set private cumulative_count to None while context validation requires authenticated cumulative use and verified budget reconciliation."
+assumption = "A permitting MCP payment requires the canonical cumulative-use and budget producer. Positive funded SEND through the assembled wallet/RPC stack and positive MCP evidence completion remain unqualified; fabricated transcripts cannot supply that evidence."
+severity = "blocker"
+
+[observation.6.11.163]
+task = "6.11"
+file = "agent/crates/layerx-crypto/src/send.rs agent/crates/layerx-crypto/src/signer.rs agent/crates/layerx-crypto/tests/native_payment_vectors.c"
+symbol = "SendDebit signing_request encode_send_envelope"
+observed = "SendDebit exposes every inner debit field and creates a disclosure-bound SigningRequest for the exact lxp_send_authorization_message preimage under SignaturePreimage. The shared envelope encoder separately binds identity_sequence; the source sequence is not required to equal it. Native C fixture generation uses explicit field values, native authorization messages, domain hashes, OpenSSL Ed25519 signatures and lxp_receive_encode/lxp_send_encode. Command: bash agent/crates/layerx-crypto/tests/generate-native-payments.sh. Evidence: qual-logs/pay2/d-native-command.log, d-native-tests.log and d-x402-check.log. Rust and the separate 402 codec reproduce the native receive and payer-grant bytes exactly."
+assumption = "This native source has no public lxp_payer_grant_encode symbol; the committed 346-byte grant fixture is the exact grant segment emitted by lxp_receive_encode. The native public grant encoder must be integrated from its owning source before that exact named entry point can be independently qualified. Shared crypto signing is qualified separately from funded gateway execution."
+severity = "note"
+
+[observation.6.11.164]
+task = "6.11"
+file = "agent/crates/layerx-sdk/src/rpc.rs agent/crates/layerx-sdk/src/wallet.rs platform/hosted/gateway/openrpc.json"
+symbol = "get_asset list_assets get_balances estimate_fee prepare_payload"
+observed = "The read-only reference at /root/lx/pay4-ref/platform/hosted/gateway/openrpc.json specifies the four read results only as object, without field schemas. Distinct Rust AssetSnapshot, AssetListSnapshot, BalancesSnapshot and FeeEstimate types preserve these unverified object fields and upstream errors. The reference lx_getSequence accepts a 64-hex account identifier and routes to /v1/accounts/{id}/balance. Wallet preparation currently requests a DID and requires an authenticated identity next_sequence snapshot; those contracts do not match."
+assumption = "The gateway must expose a separate authenticated identity next_sequence read, or specify its existing public transport route. Account sequence must not substitute for identity sequence. Complete typed monetary and metadata fields require the gateway result schemas. Native-backed enumeration, asset reads and fee estimation remain explicitly unavailable in the reference. No live wallet completion is claimed."
+severity = "blocker"
+
+[observation.6.11.165]
+task = "6.11"
+file = "agent/crates/layerx-wire/src/account.rs agent/crates/layerx-proof/src/state.rs src/state/lxp_identity.c src/ledger/lx_account_id.c src/ledger/lx_account_registry.c"
+symbol = "account_name_for_asset account_kind account_namespace_valid"
+observed = "The SDK uses the wire-exported shared account_name_for_asset builder backed by AccountId::for_asset, preserving native main names, lowercase asset suffixes and mismatch refusal. Native admission still lacks asset account namespaces. The proof account_kind decoder also lacks an asset suffix case; admitting a guessed numeric kind would not establish compatibility with native canonical account values."
+assumption = "Native account admission must define and emit the per-asset account kind and canonical state values, including suffix-to-held-asset consistency. The proof decoder then requires real native fixtures and mismatch coverage for that exact format. Existing proof checks remain intact."
+severity = "blocker"
+
+[observation.6.11.166]
+task = "6.11"
+file = "agent/crates/layerx-agentd/src/policy/eval.rs agent/crates/layerx-mcp/src/server.rs agent/crates/layerx-mcp/src/tools/wallet.rs agent/crates/layerx-mcp/tests/write.rs"
+symbol = "EvaluationInput Operation::Wait execute_payment wait"
+observed = "activity.wait remains bound to Operation::Wait and the tenant write:activity:wait alias. Direct exported payment and wait refusal cases and the existing submit/track evidence assertions are retained. Both EvaluationInput constructors still initialize the private cumulative_count to None, and validate_context requires authenticated cumulative use and verified protocol budget evidence."
+assumption = "Positive MCP payment and evidence completion require the canonical cumulative-use and budget evidence producer. Supplying invented usage, bypassing policy, returning an acknowledgement as a receipt, removing signature verification or conflating account and identity sequences would weaken existing checks and is rejected."
+severity = "blocker"
+
+[observation.6.11.167]
+task = "6.11"
+file = "agent/crates/layerx-sdk/src/rpc.rs agent/crates/layerx-sdk/src/wallet.rs platform/cli/src/rpc.rs platform/cli/src/wallet.rs platform/cli/tests/fixtures/openrpc.json"
+symbol = "get_sequence prepare_payload execute_write positional_requests_match_published_contract"
+observed = "The SDK get_sequence method at a1cb3cda still emits one selector argument, while the public OpenRPC description at 75049011 requires DID plus identity selector for identity.next_sequence. The CLI explicitly sends lx_getSequence with [did, identity], requires matching DID, authenticated_node_snapshot and canonical decimal next_sequence, and uses shared envelope/disclosure signing plus SDK submission and commitment verification. Source-account sequence remains independently read and bound. The retained contract first-parameter schema still says hex64 despite its described DID identity form. Single-DID requests remain refused."
+assumption = "SDK Wallet callers require a separate typed identity-sequence method and the published schema must express the conditional selector. Account sequence cannot substitute for identity sequence."
+severity = "blocker"
+
+[observation.6.11.168]
+task = "6.11"
+file = "platform/Cargo.lock agent/crates/layerx-sdk/Cargo.toml platform/cli/src/wallet.rs agent/crates/layerx-mcp/src/tools/write.rs"
+symbol = "create_wallet WalletCommand::History sdk_rpc"
+observed = "The merged SDK adds tungstenite 0.30.0 and requires a platform workspace lock refresh outside the CLI path. The generated lock is retained only as an untracked review artifact. Public DID registration, main-account creation and DID history remain absent from the published RPC contract; CLI typed refusals remain and history is hidden from working help. MCP payment operations still omit burn, open-account, asset info and asset list."
+assumption = "Workspace lock maintenance, published authenticated registration/history schemas and MCP scope-preserving implementations require their owning paths. No funded authenticated public Send, deployed topic delivery or cluster/image qualification is established by local fixture tests."
+severity = "blocker"
+
+[observation.6.11.169]
+task = "6.11"
+file = "platform/cli/src/wallet.rs platform/cli/src/wallet_send.rs platform/cli/src/wallet_signing.rs platform/cli/src/wallet_encoding.rs platform/cli/tests/wallet_send.rs platform/cli/tests/fixtures/native-send.c"
+symbol = "execute_write prepare_send PreparedPayment::from_send Send::encode native_send_and_authorization_bytes_match"
+observed = "CLI Send and token transfer use the disclosed shared native debit signer, then the shared canonical envelope encoder with an independently authenticated identity sequence. Token writes use the shared Payment codec; local duplicate Send, registration and envelope byte encoders are removed. The shared wire account-name builder is used. Typed SDK balance, asset and fee reads retain upstream errors; typed submission errors are not consumed as admission success. Activity identifiers are derived locally from signed bytes and output before submission. Success requires SDK receipt verification at the requested commitment. The native C differential fixture now signs its original large-amount and sequence vector with OpenSSL Ed25519; Rust compares the complete bytes and authorization message, verifies the signed envelope, and retains every bound and binding refusal. Receive and payer-grant fixtures remain 733 and 346 bytes. CLI full tests, fmt --check and all-target Clippy with -D warnings pass. Crypto, SDK, wire and types full tests, fmt --check and all-target Clippy pass from the agent workspace. Evidence: qual-logs/pay3/pay3f-tests-final.log, pay3f-wallet-fixtures.log, pay3f-cli-fmt-final.log, pay3f-cli-clippy-final.log, pay3f-agent-tests.log, pay3f-agent-fmt.log and pay3f-agent-clippy.log."
+assumption = "Qualification uses the generated platform lock retained outside version control pending workspace-owner integration. The published contract fixture is verbatim 75049011. No funded public Send, authenticated deployed token execution or live subscription delivery is implied by local qualification."
+severity = "note"
+
+[observation.6.11.170]
+task = "6.11"
+file = "platform/Cargo.lock platform/cli/tests/wallet_commands.rs agent/crates/layerx-sdk/src/rpc_verification.rs"
+symbol = "unpublished_registration_and_history_preserve_local_keys acknowledgement_is_not_inclusion finality_requires_the_exact_trusted_context_and_header"
+observed = "The added CLI command test confirms unpublished registration and history return their typed errors without changing local key metadata. SDK evidence tests retain acknowledgement refusal and exact trusted-context/header finality checks. After passing source qualification with the generated lock, the tracked platform lock was restored. cargo check --manifest-path platform/cli/Cargo.toml --locked exits 101 because that lock needs an update. Generated lock and binary patch remain in qual-logs/pay3/pay3f-platform-Cargo.lock and pay3f-platform-lock.patch. Scoped cargo clean exits zero; worktree target size is recorded in pay3f-disk.log. Logs: pay3f-wallet-commands-final.log, pay3f-sdk-verification.log, pay3f-locked-check.log and pay3f-clean.log."
+assumption = "The workspace lock update is required before locked reproducibility can be claimed. Source test success is not a public deployment or funded execution claim."
+severity = "blocker"

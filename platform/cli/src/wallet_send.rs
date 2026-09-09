@@ -33,52 +33,39 @@ impl Send {
     /// Refuses invalid bounds, conditions, amounts, or authorization bindings.
     pub fn encode(&self) -> Result<Vec<u8>, String> {
         self.validate()?;
-        let mut bytes = Vec::with_capacity(436);
-        bytes.extend_from_slice(&0x5301_u16.to_be_bytes());
-        bytes.extend_from_slice(&10_u16.to_be_bytes());
-        self.common(&mut bytes)?;
-        bytes.push(self.authorization.kind);
-        bytes.extend_from_slice(&self.authorization.controller);
-        bytes.extend_from_slice(&self.authorization.public_key);
-        bytes.extend_from_slice(&self.authorization.signature);
-        self.authorization_scope(&mut bytes);
-        Ok(bytes)
+        self.debit()
+            .encode_signed(self.authorization.public_key, self.authorization.signature)
+            .map_err(|e| format!("{e:?}"))
     }
 
     /// # Errors
-    /// Refuses an invalid Send before constructing the native debit authorization preimage.
+    /// Refuses invalid source and context bindings before using the shared encoder.
     pub fn authorization_message(&self) -> Result<Vec<u8>, String> {
         self.validate()?;
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(&0x5301_u16.to_be_bytes());
-        self.common(&mut bytes)?;
-        bytes.push(self.authorization.kind);
-        bytes.extend_from_slice(&self.authorization.controller);
-        self.authorization_scope(&mut bytes);
-        Ok(bytes)
+        self.debit()
+            .authorization_message()
+            .map_err(|e| format!("{e:?}"))
     }
 
-    fn common(&self, bytes: &mut Vec<u8>) -> Result<(), String> {
-        bytes.extend_from_slice(&self.from);
-        bytes.extend_from_slice(&self.to);
-        bytes.extend_from_slice(&self.asset);
-        bytes.extend_from_slice(&self.amount.to_be_bytes());
-        bytes.extend_from_slice(&self.source_next_sequence.to_be_bytes());
-        bytes.extend_from_slice(&self.idempotency_key);
-        bytes.extend_from_slice(&self.expires_at.to_be_bytes());
-        bytes.extend_from_slice(&self.context_hash);
-        bytes.push(u8::try_from(self.conditions.len()).map_err(|e| e.to_string())?);
-        for (kind, timestamp) in &self.conditions {
-            bytes.push(*kind);
-            bytes.extend_from_slice(&timestamp.to_be_bytes());
+    fn debit(&self) -> layerx_crypto::send::SendDebit {
+        layerx_crypto::send::SendDebit {
+            from: self.from,
+            to: self.to,
+            asset: self.asset,
+            amount: self.amount,
+            source_sequence: self.source_next_sequence,
+            idempotency_key: self.idempotency_key,
+            expires_at: self.expires_at,
+            context_hash: self.context_hash,
+            conditions: self
+                .conditions
+                .iter()
+                .map(|&(kind, timestamp)| layerx_crypto::send::SendCondition { kind, timestamp })
+                .collect(),
+            authorization_kind: self.authorization.kind,
+            network_id: self.authorization.network_id,
+            protocol_version: self.authorization.protocol_version,
         }
-        Ok(())
-    }
-
-    fn authorization_scope(&self, bytes: &mut Vec<u8>) {
-        bytes.extend_from_slice(&self.authorization.signed_context_hash);
-        bytes.extend_from_slice(&self.authorization.network_id.to_be_bytes());
-        bytes.extend_from_slice(&self.authorization.protocol_version.to_be_bytes());
     }
 
     fn validate(&self) -> Result<(), String> {

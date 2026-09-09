@@ -4,7 +4,7 @@ use std::path::Path;
 use std::process::Command;
 
 fn vector() -> Send {
-    Send {
+    let mut send = Send {
         from: [1; 32],
         to: [2; 32],
         asset: [3; 32],
@@ -23,7 +23,21 @@ fn vector() -> Send {
             network_id: 402,
             protocol_version: 3,
         },
-    }
+    };
+    resign(&mut send).unwrap_or_else(|error| panic!("{error}"));
+    send
+}
+
+fn resign(send: &mut Send) -> Result<(), String> {
+    use ed25519_dalek::Signer as _;
+    use sha2::Digest as _;
+    let key = ed25519_dalek::SigningKey::from_bytes(&[6; 32]);
+    send.authorization.public_key = key.verifying_key().to_bytes();
+    let mut hash = sha2::Sha256::new();
+    hash.update(layerx_wire::hash::Domain::SignaturePreimage.tag());
+    hash.update(send.authorization_message()?);
+    send.authorization.signature = key.sign(&hash.finalize()).to_bytes();
+    Ok(())
 }
 
 #[test]
@@ -47,6 +61,7 @@ fn native_send_and_authorization_bytes_match() -> Result<(), Box<dyn std::error:
         .arg(cli.join("tests/fixtures/native-send.c"))
         .arg(root.join("src/ledger/lxp_send.c"))
         .arg(root.join("src/protocol/lxp_u128.c"))
+        .arg("-lcrypto")
         .arg("-o")
         .arg(&binary)
         .output()?;
@@ -70,7 +85,7 @@ fn envelope_and_payload_sequences_are_independent() -> Result<(), String> {
     let send = vector();
     let facts = SigningFacts {
         actor: "did:layerx:alice",
-        public_key: [6; 32],
+        public_key: send.authorization.public_key,
         network_id: 402,
         identity_next_sequence: 17,
         not_before_ms: 1000,
@@ -100,13 +115,46 @@ fn envelope_and_payload_sequences_are_independent() -> Result<(), String> {
         send.source_next_sequence.to_string()
     );
     assert_eq!(disclosure["payment"], send.disclosure());
+    let signer = layerx_crypto::signer::LocalSigner::new([6; 32]);
+    let (canonical, id) = prepared.sign_with_id(&signer)?;
+    let decoded = layerx_wire::activity::decode_signed(&canonical, &registry)
+        .map_err(|e| format!("{e:?}"))?;
+    assert_eq!(
+        layerx_wire::hash::activity_id(&decoded).map_err(|e| format!("{e:?}"))?,
+        id
+    );
+    assert_eq!(decoded.account_sequence(), 17);
+    let digest = layerx_wire::sign::preimage(&decoded).map_err(|e| format!("{e:?}"))?;
+    let signature = decoded
+        .signature()
+        .ok_or("missing signature")?
+        .try_into()
+        .map_err(|e| format!("{e:?}"))?;
+    layerx_crypto::ed25519::verify_digest(
+        &send.authorization.public_key,
+        &signature,
+        digest.as_bytes(),
+    )
+    .map_err(|e| format!("{e:?}"))?;
+    let shared =
+        layerx_platform_cli::wallet_signing::PreparedPayment::from_send(&send.encode()?, &facts)?;
+    assert_eq!(
+        shared.confirmation()["source_account_sequence"],
+        send.source_next_sequence.to_string()
+    );
+    assert_eq!(shared.confirmation()["envelope_sequence"], 17);
     let mut changed = send.clone();
     changed.source_next_sequence = u64::MAX;
+    assert!(changed.encode().is_err());
+    resign(&mut changed)?;
     assert_ne!(send.encode()?, changed.encode()?);
     assert_eq!(
         changed.prepare(&facts)?.confirmation()["envelope_sequence"],
         17
     );
+    let mut wrong_actor = facts;
+    wrong_actor.public_key = [8; 32];
+    assert!(send.prepare(&wrong_actor).is_err());
     Ok(())
 }
 
@@ -138,6 +186,7 @@ fn send_bounds_and_bindings_are_checked() -> Result<(), String> {
     bounds.amount = u128::MAX;
     bounds.source_next_sequence = u64::MAX;
     bounds.conditions = vec![(2, u64::MAX); 8];
+    resign(&mut bounds)?;
     assert_eq!(bounds.encode()?.len(), 436);
     Ok(())
 }

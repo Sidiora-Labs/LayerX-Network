@@ -4,15 +4,11 @@ use std::task::{Context, Poll, Wake};
 
 use layerx_crypto::disclosure::{bind, Disclosure};
 use layerx_crypto::payments::Payment;
+use layerx_crypto::send::{encode_payment_envelope, EnvelopeOptions};
 use layerx_crypto::signer::{sign_disclosed, Signer};
-use layerx_types::activity::{
-    Authority, EnvelopeBuilder, Signature, TimestampBound, UnsignedEnvelope,
-};
-use layerx_types::amount::Amount;
-use layerx_types::ids::{Did, IdempotencyKey};
-use layerx_types::payload::{ActivityType, ModuleRegistration, ModuleRegistry, Payload};
-use layerx_wire::activity::{encode_signed_envelope, encode_unsigned_envelope};
-use layerx_wire::hash::payload_hash_for;
+use layerx_types::activity::{Signature, UnsignedEnvelope};
+use layerx_types::payload::{ActivityType, ModuleRegistry};
+use layerx_wire::activity::encode_signed_envelope;
 use serde_json::{json, Value};
 
 pub struct SigningFacts<'a> {
@@ -34,6 +30,7 @@ pub struct PreparedPayment {
     send_disclosure: Option<Value>,
     public_key: [u8; 32],
     identity_next_sequence: u64,
+    source_next_sequence: Option<u64>,
 }
 
 impl PreparedPayment {
@@ -44,6 +41,13 @@ impl PreparedPayment {
         let kind = ActivityType::new(module, ordinal).map_err(debug)?;
         let encoded = payment.encode(facts.actor.as_bytes()).map_err(debug)?;
         Self::from_encoded(kind, &encoded, facts, None)
+    }
+
+    /// # Errors
+    /// Requires a valid shared Send payload and full canonical disclosure.
+    pub fn from_send(payload: &[u8], facts: &SigningFacts<'_>) -> Result<Self, String> {
+        let kind = ActivityType::new(layerx_types::payload::ModuleId::Asset, 5).map_err(debug)?;
+        Self::from_encoded(kind, payload, facts, None)
     }
 
     pub(crate) fn from_encoded(
@@ -57,35 +61,29 @@ impl PreparedPayment {
         {
             return Err("wallet validity must be nonempty and at most 300000 milliseconds".into());
         }
-        let registry =
-            ModuleRegistry::new(&[ModuleRegistration::new(kind.module(), &[kind]).map_err(debug)?])
-                .map_err(debug)?;
-        let payload = Payload::new(&registry, kind, encoded).map_err(debug)?;
-        let hash = payload_hash_for(&payload).map_err(debug)?;
-        let actor = Did::new(facts.actor.as_bytes()).map_err(debug)?;
-        let mut builder = EnvelopeBuilder::new();
-        builder
-            .protocol_version(3)
-            .and_then(|b| b.network_id(facts.network_id))
-            .and_then(|b| b.activity_type(kind))
-            .and_then(|b| b.actor_did(actor))
-            .and_then(|b| b.authority(Authority::owner(&facts.public_key)?))
-            .and_then(|b| b.account_sequence(facts.identity_next_sequence))
-            .and_then(|b| {
-                b.timestamp_bound(TimestampBound::new(
-                    facts.not_before_ms,
-                    facts.expires_at_ms,
-                )?)
-            })
-            .and_then(|b| b.idempotency_key(IdempotencyKey::new(facts.idempotency_key)))
-            .and_then(|b| b.fee_limit(Amount::from_u128(facts.fee_limit)))
-            .and_then(|b| b.payload_hash(hash))
-            .and_then(|b| b.payload(payload))
-            .map_err(debug)?;
-        let envelope = builder.build().map_err(debug)?;
-        let canonical = encode_unsigned_envelope(&envelope).map_err(debug)?;
+        let encoded = encode_payment_envelope(
+            kind.module(),
+            kind.ordinal(),
+            encoded,
+            &EnvelopeOptions {
+                actor: facts.actor,
+                public_key: facts.public_key,
+                protocol_version: 3,
+                network_id: facts.network_id,
+                identity_sequence: facts.identity_next_sequence,
+                idempotency_key: facts.idempotency_key,
+                fee_limit: facts.fee_limit,
+                not_before: facts.not_before_ms,
+                not_after: facts.expires_at_ms,
+            },
+        )
+        .map_err(debug)?;
+        let source_next_sequence = encoded.disclosure.payload_sequence().map_err(debug)?;
+        let envelope = encoded.envelope;
+        let canonical = encoded.canonical;
+        let registry = encoded.registry;
         let disclosure = if send_disclosure.is_none() {
-            Some(bind(&canonical, &registry).map_err(debug)?)
+            Some(encoded.disclosure)
         } else {
             None
         };
@@ -97,6 +95,7 @@ impl PreparedPayment {
             send_disclosure,
             public_key: facts.public_key,
             identity_next_sequence: facts.identity_next_sequence,
+            source_next_sequence,
         })
     }
 
@@ -109,6 +108,10 @@ impl PreparedPayment {
     pub fn confirmation(&self) -> Value {
         if let Some(disclosure) = &self.disclosure {
             return json!({
+                "protocol_version": self.envelope.protocol_version(),
+                "network_id": self.envelope.network_id(),
+                "source_account_sequence": self.source_next_sequence.map(|n| n.to_string()),
+                "payload_expires_at": disclosure.expiry.payload_expires_at.to_string(),
                 "envelope_sequence": self.identity_next_sequence,
                 "actor": String::from_utf8_lossy(&disclosure.actor),
                 "activity_type": disclosure.activity_type.value(),
@@ -145,6 +148,12 @@ impl PreparedPayment {
     /// # Errors
     /// Requires the exact disclosed owner and validates disclosure again inside the shared signer.
     pub fn sign(self, signer: &dyn Signer) -> Result<Vec<u8>, String> {
+        self.sign_with_id(signer).map(|(bytes, _)| bytes)
+    }
+
+    /// # Errors
+    /// Verifies disclosure and derives the activity identifier from the signed envelope.
+    pub fn sign_with_id(self, signer: &dyn Signer) -> Result<(Vec<u8>, [u8; 32]), String> {
         if signer.public_key() != self.public_key {
             return Err("wallet signer does not match the disclosed owner".into());
         }
@@ -159,7 +168,11 @@ impl PreparedPayment {
         let envelope = self
             .envelope
             .attach_signature(Signature::new(signature.as_bytes()).map_err(debug)?);
-        encode_signed_envelope(&envelope).map_err(debug)
+        let bytes = encode_signed_envelope(&envelope).map_err(debug)?;
+        let decoded =
+            layerx_wire::activity::decode_signed(&bytes, &self.registry).map_err(debug)?;
+        let id = layerx_wire::hash::activity_id(&decoded).map_err(debug)?;
+        Ok((bytes, id))
     }
 }
 
@@ -201,7 +214,7 @@ mod tests {
     use super::*;
     use layerx_crypto::local::LocalSigner;
     use layerx_crypto::payments::{asset_id, Registration};
-    use layerx_types::payload::ModuleId;
+    use layerx_types::payload::{ModuleId, ModuleRegistration};
     use layerx_wire::activity::decode_signed;
     use sha2::Digest as _;
 

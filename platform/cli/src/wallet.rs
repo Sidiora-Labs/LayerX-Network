@@ -1,10 +1,8 @@
 use clap::{Args, Subcommand, ValueEnum};
 use layerx_crypto::payments::{asset_id, Payment, Registration};
 use layerx_platform_cli::rpc::RpcClient;
-use layerx_types::account::AccountId;
 use layerx_wire::hash::account_id_for_protocol;
 use serde_json::{json, Value};
-use sha2::{Digest as _, Sha256};
 
 use crate::config::{Configuration, KeyMetadata};
 use crate::encoding::{fixed_hex, hex_decode, hex_encode};
@@ -95,8 +93,20 @@ pub struct TransferArgs {
     amount: String,
     #[arg(long)]
     key: Option<String>,
+    #[command(flatten)]
+    write: TransferWriteOptions,
+}
+
+#[derive(Args)]
+pub struct TransferWriteOptions {
+    #[arg(long)]
+    receipt_policy: Option<std::path::PathBuf>,
+    #[arg(long)]
+    fee_limit: Option<String>,
     #[arg(long, value_enum, default_value = "executed")]
     wait: Commitment,
+    #[arg(long, default_value_t = 60, value_parser = clap::value_parser!(u64).range(1..=300))]
+    timeout_seconds: u64,
 }
 
 #[derive(Args)]
@@ -305,11 +315,11 @@ fn estimate_fee(
     gateway: Option<&str>,
     canonical: &str,
 ) -> Result<CommandOutput, String> {
-    let transport = Transport::new(config, rpc, gateway)?;
-    let client = transport
-        .rpc
-        .ok_or("rpc_transport_required: fee estimation requires --rpc")?;
-    let result = client.call("lx_estimateFee", &json!([canonical]))?;
+    let canonical = hex_decode("canonical activity", canonical)?;
+    let result = sdk_rpc(config, rpc, gateway)?
+        .estimate_fee(&canonical)
+        .map_err(rpc_error)?
+        .into_value();
     Ok(CommandOutput::new(
         "wallet.fee",
         "Read native fee estimate",
@@ -402,6 +412,7 @@ pub fn run_wallet(
                 sdk_rpc(&config, rpc, gateway)?
                     .get_balances(&did)
                     .map_err(rpc_error)?
+                    .into_value()
             } else {
                 transport.balances(&did)?
             };
@@ -427,9 +438,7 @@ pub fn run_wallet(
             let did = selected_did(&config, did.as_deref())?;
             Err(format!("wallet_history_unavailable: no DID activity-history method or REST route is published for {did}"))
         }
-        WalletCommand::Send(args) => {
-            transfer(&config, &Transport::new(&config, rpc, gateway)?, &args)
-        }
+        WalletCommand::Send(args) => transfer(&config, rpc, gateway, &args),
         WalletCommand::OpenAccount { asset, key, write } => execute_payment(
             &config,
             rpc,
@@ -515,9 +524,7 @@ pub fn run_token(
         TokenCommand::List => {
             unavailable_asset_read(&config, rpc, gateway, "lx_listAssets", &json!([]))
         }
-        TokenCommand::Transfer(args) => {
-            transfer(&config, &Transport::new(&config, rpc, gateway)?, &args)
-        }
+        TokenCommand::Transfer(args) => transfer(&config, rpc, gateway, &args),
         TokenCommand::Create {
             symbol,
             name,
@@ -596,13 +603,24 @@ fn unavailable_asset_read(
     method: &str,
     params: &Value,
 ) -> Result<CommandOutput, String> {
-    if let Some(rpc) = Transport::new(config, rpc, gateway)?.rpc {
-        let value = rpc
-            .call(method, params)
-            .map_err(|e| format!("rpc_method_unavailable: {e}"))?;
-        return Ok(CommandOutput::new("token.read", "Read token data", value));
+    let client = sdk_rpc(config, rpc, gateway)?;
+    let value = match method {
+        "lx_getAsset" => client
+            .get_asset(fixed_hex(
+                "asset",
+                params[0].as_str().ok_or("asset missing")?,
+            )?)
+            .map(layerx_sdk::rpc::AssetSnapshot::into_value),
+        "lx_listAssets" => client
+            .list_assets()
+            .map(layerx_sdk::rpc::AssetListSnapshot::into_value),
+        _ => return Err("rpc_method_unavailable: asset method not published".into()),
     }
-    Err(format!("rpc_method_unavailable: {method} and its REST equivalent are absent from the published gateway contract"))
+    .map_err(|error| match error {
+        layerx_sdk::rpc::RpcError::Remote { .. } => rpc_error(error),
+        other => format!("rpc_method_unavailable: {}", rpc_error(other)),
+    })?;
+    Ok(CommandOutput::new("token.read", "Read token data", value))
 }
 
 fn execute_payment(
@@ -613,17 +631,39 @@ fn execute_payment(
     write: &WriteOptions,
     payment: &Payment,
 ) -> Result<CommandOutput, String> {
+    execute_write(config, rpc, gateway, key, write, Some(payment), None)
+}
+
+fn execute_write(
+    config: &Configuration,
+    rpc: Option<&str>,
+    gateway: Option<&str>,
+    key: Option<&str>,
+    write: &WriteOptions,
+    payment: Option<&Payment>,
+    transfer: Option<([u8; 32], [u8; 32], u128)>,
+) -> Result<CommandOutput, String> {
     use layerx_crypto::signer::{LocalSigner, Signer as _};
-    use layerx_sdk::wallet::{PaymentOptions, Wallet};
-    use std::io::Write as _;
+    use layerx_platform_cli::wallet_signing::{PreparedPayment, SigningFacts};
     let owner = metadata(config, key)?;
     let policy = read_policy(Some(&write.receipt_policy), config)?;
-    let fee_limit = units(&write.fee_limit, false)?;
+    if matches!(write.wait, Commitment::Finalised)
+        && policy.trusted_checkpoint_context_digest.is_none()
+    {
+        return Err(rpc_error(layerx_sdk::rpc::RpcError::MissingFinalityTrust));
+    }
     let client = sdk_rpc(config, rpc, gateway)?;
-    let key_name = key
-        .or(config.default_key.as_deref())
-        .ok_or("select a wallet key")?;
-    let seed = crate::credential::key_seed(key_name)?;
+    let transport = Transport::new(config, rpc, gateway)?;
+    let identity = transport
+        .rpc
+        .as_ref()
+        .ok_or("rpc_transport_required: writes require --rpc")?
+        .call("lx_getSequence", &json!([owner.did, "identity"]))?;
+    let identity_sequence = identity_sequence(&identity, &owner.did)?;
+    let seed = crate::credential::key_seed(
+        key.or(config.default_key.as_deref())
+            .ok_or("select a wallet key")?,
+    )?;
     let signer = LocalSigner::new(*seed);
     drop(seed);
     if signer.public_key() != fixed_hex::<32>("wallet public key", &owner.public_key)? {
@@ -633,59 +673,109 @@ fn execute_payment(
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|e| e.to_string())?;
     let not_before = u64::try_from(now.as_millis()).map_err(|e| e.to_string())?;
-    let not_after = not_before
-        .checked_add(300_000)
-        .ok_or("wallet validity overflow")?;
     let mut idempotency_key = [0; 32];
     getrandom::fill(&mut idempotency_key).map_err(|_| "wallet randomness unavailable")?;
-    let options = PaymentOptions {
-        actor: owner.did.clone(),
+    let facts = SigningFacts {
+        actor: &owner.did,
+        public_key: signer.public_key(),
+        network_id: policy.network_id,
+        identity_next_sequence: identity_sequence,
+        not_before_ms: not_before,
+        expires_at_ms: not_before
+            .checked_add(300_000)
+            .ok_or("wallet validity overflow")?,
+        fee_limit: units(&write.fee_limit, false)?,
         idempotency_key,
-        fee_limit,
-        not_before,
-        not_after,
-        commitment: sdk_commitment(write.wait),
-        wait_timeout: std::time::Duration::from_secs(write.timeout_seconds),
     };
-    let wallet = Wallet {
-        rpc: &client,
-        signer: &signer,
-        policy: &policy,
-        native_asset: native_asset(),
+    let prepared = match (payment, transfer) {
+        (Some(payment), None) => PreparedPayment::new(payment, &facts)?,
+        (None, Some((asset, to, amount))) => {
+            prepare_send(&client, &signer, &facts, asset, to, amount)?
+        }
+        _ => return Err("invalid payment selection".into()),
     };
-    let (module, ordinal) = payment.activity_type();
-    let payload = payment
-        .encode(owner.did.as_bytes())
-        .map_err(|e| e.to_string())?;
-    let prepared = wallet
-        .prepare_payload(module, ordinal, &payload, &options)
-        .map_err(rpc_error)?;
-    let disclosure = prepared.disclosure();
-    let confirmation = json!({
-        "protocol_version":policy.protocol_version,"network_id":policy.network_id,
-        "actor":String::from_utf8_lossy(&disclosure.actor),
-        "activity_type":disclosure.activity_type.value(),"authority":hex_encode(&disclosure.authority),
-        "envelope_sequence":disclosure.envelope_sequence().to_string(),
-        "source_account_sequence":disclosure.payload_sequence().map_err(|e| e.to_string())?.map(|n| n.to_string()),
-        "asset":hex_encode(&disclosure.asset),"fee_limit":disclosure.fee_limit.to_string(),
-        "not_before_ms":disclosure.expiry.not_before.to_string(),"not_after_ms":disclosure.expiry.not_after.to_string(),
-        "payload_expires_at":disclosure.expiry.payload_expires_at.to_string(),
-        "idempotency_key":hex_encode(&disclosure.idempotency_key),
-        "payment":format!("{:?}", disclosure.payment),
-        "counterparties":disclosure.counterparties.iter().map(|p| json!({"role":format!("{:?}",p.role),"account":hex_encode(&p.account)})).collect::<Vec<_>>(),
-        "amounts":disclosure.amounts.iter().map(|a| json!({"role":format!("{:?}",a.role),"value":a.value.to_string()})).collect::<Vec<_>>(),
-        "canonical_unsigned":hex_encode(prepared.canonical_bytes()),"requested_commitment":options.commitment.as_str(),
-    });
+    print_disclosure(&prepared.confirmation())?;
+    let (canonical, activity) = prepared.sign_with_id(&signer)?;
+    print_disclosure(
+        &json!({"activity_id":hex_encode(&activity),"receipt_result":null,"commitment_reached":null}),
+    )?;
+    match client.send_activity(&canonical, sdk_commitment(write.wait)) {
+        Ok(_)
+        | Err(layerx_sdk::rpc::RpcError::Transport | layerx_sdk::rpc::RpcError::InvalidResponse) => {
+        }
+        Err(error) => return Err(rpc_error(error)),
+    }
+    verified_output(
+        &client
+            .wait_for(
+                activity,
+                sdk_commitment(write.wait),
+                &policy,
+                std::time::Duration::from_secs(write.timeout_seconds),
+            )
+            .map_err(rpc_error)?,
+    )
+}
+
+fn prepare_send(
+    client: &layerx_sdk::rpc::RpcClient,
+    signer: &dyn layerx_crypto::signer::Signer,
+    facts: &layerx_platform_cli::wallet_signing::SigningFacts<'_>,
+    asset: [u8; 32],
+    to: [u8; 32],
+    amount: u128,
+) -> Result<layerx_platform_cli::wallet_signing::PreparedPayment, String> {
+    let from = fixed_hex("source account", &account(facts.actor, &asset)?)?;
+    let snapshot = client.get_account(&hex_encode(&from)).map_err(rpc_error)?;
+    if snapshot["account_id"] != hex_encode(&from) {
+        return Err("source account snapshot mismatch".into());
+    }
+    if !snapshot["next_sequence"].is_string() {
+        return Err("source snapshot omitted canonical sequence".into());
+    }
+    let source_sequence = sequence(&snapshot["next_sequence"])?;
+    let debit = layerx_crypto::send::SendDebit {
+        from,
+        to,
+        asset,
+        amount,
+        source_sequence,
+        idempotency_key: facts.idempotency_key,
+        expires_at: facts.expires_at_ms,
+        context_hash: [0; 32],
+        conditions: Vec::new(),
+        authorization_kind: 1,
+        network_id: facts.network_id,
+        protocol_version: 3,
+    };
+    print_disclosure(
+        &json!({"native_debit":format!("{debit:?}"),"actor":facts.actor,"public_key":hex_encode(&facts.public_key),"identity_sequence":facts.identity_next_sequence}),
+    )?;
+    let payload =
+        complete(debit.sign(signer)).map_err(|e| format!("send_signing_failed: {e:?}"))?;
+    layerx_platform_cli::wallet_signing::PreparedPayment::from_send(&payload, facts)
+}
+
+fn identity_sequence(snapshot: &Value, did: &str) -> Result<u64, String> {
+    if snapshot["did"] != did || snapshot["verification"] != "authenticated_node_snapshot" {
+        return Err("identity_sequence_unavailable: identity snapshot binding missing".into());
+    }
+    if !snapshot["next_sequence"].is_string() {
+        return Err("identity_sequence_unavailable: canonical sequence missing".into());
+    }
+    sequence(&snapshot["next_sequence"])
+}
+
+fn print_disclosure(value: &Value) -> Result<(), String> {
+    use std::io::Write as _;
     let mut stderr = std::io::stderr().lock();
     writeln!(
         stderr,
         "{}",
-        serde_json::to_string_pretty(&confirmation).map_err(|e| e.to_string())?
+        serde_json::to_string_pretty(value).map_err(|e| e.to_string())?
     )
     .map_err(|e| e.to_string())?;
-    stderr.flush().map_err(|e| e.to_string())?;
-    drop(stderr);
-    verified_output(&complete(wallet.execute(prepared, &options)).map_err(rpc_error)?)
+    stderr.flush().map_err(|e| e.to_string())
 }
 
 struct ThreadWake(std::thread::Thread);
@@ -708,27 +798,42 @@ fn complete<F: std::future::Future>(future: F) -> F::Output {
 
 fn transfer(
     config: &Configuration,
-    transport: &Transport,
+    rpc: Option<&str>,
+    gateway: Option<&str>,
     args: &TransferArgs,
 ) -> Result<CommandOutput, String> {
     let owner = metadata(config, args.key.as_deref())?;
     let asset = fixed_hex("asset", &args.asset)?;
-    let _amount = units(&args.amount, true)?;
-    let destination = destination(&args.to, &asset)?;
+    let amount = units(&args.amount, true)?;
+    let to = destination(&args.to, &asset)?;
     let source = account(&owner.did, &asset)?;
-    if hex_encode(&destination) == source {
+    if hex_encode(&to) == source {
         return Err("source and destination accounts must differ".into());
     }
-    if !transport.emulator {
-        return Err("send_signing_unavailable: the shared signer exposes no disclosed native Send debit-authorization signing API; no activity signed or submitted".into());
+    let transport = Transport::new(config, rpc, gateway)?;
+    if transport.emulator {
+        let source_sequence = transport.source_sequence(&source)?;
+        return Err(format!("identity_sequence_unavailable: emulator source next_sequence={source_sequence}; hosted identity preparation requires --rpc; no activity signed or submitted"));
     }
-    let source_sequence = transport.source_sequence(&source)?;
-    let commitment = match args.wait {
-        Commitment::Executed => "executed",
-        Commitment::Batched => "batched",
-        Commitment::Finalised => "finalised",
+    let write = WriteOptions {
+        receipt_policy: args
+            .write
+            .receipt_policy
+            .clone()
+            .ok_or("provide --receipt-policy with independently trusted authority")?,
+        fee_limit: args.write.fee_limit.clone().ok_or("provide --fee-limit")?,
+        wait: args.write.wait,
+        timeout_seconds: args.write.timeout_seconds,
     };
-    Err(format!("identity_sequence_unavailable: source account next_sequence={source_sequence}; envelope sequence unavailable because the gateway contract has no identity.next_sequence read. Requested commitment {commitment}; no activity signed or submitted"))
+    execute_write(
+        config,
+        rpc,
+        gateway,
+        args.key.as_deref(),
+        &write,
+        None,
+        Some((asset, to, amount)),
+    )
 }
 
 fn sdk_commitment(value: Commitment) -> layerx_sdk::rpc::Commitment {
@@ -877,12 +982,8 @@ fn native_asset() -> [u8; 32] {
 }
 
 fn account(did: &str, asset: &[u8; 32]) -> Result<String, String> {
-    let name = if *asset == native_asset() {
-        format!("agent:{did}:main")
-    } else {
-        format!("agent:{did}:asset:{}", hex_encode(asset))
-    };
-    let parsed = AccountId::parse(&name).map_err(|e| format!("invalid account: {e:?}"))?;
+    let parsed = layerx_wire::account::account_name_for_asset(did, *asset, native_asset())
+        .map_err(|e| format!("invalid account: {e:?}"))?;
     account_id_for_protocol(&parsed, 3)
         .map(|id| hex_encode(&id))
         .map_err(|e| format!("invalid account: {e:?}"))
@@ -897,13 +998,7 @@ fn destination(to: &str, asset: &[u8; 32]) -> Result<[u8; 32], String> {
 }
 
 fn issuer_id(did: &str) -> Result<[u8; 32], String> {
-    layerx_types::ids::Did::new(did.as_bytes()).map_err(|e| format!("invalid DID: {e:?}"))?;
-    let length = u16::try_from(did.len()).map_err(|e| e.to_string())?;
-    let mut hash = Sha256::new();
-    hash.update(b"LXP/v1/did-id\0");
-    hash.update(length.to_be_bytes());
-    hash.update(did.as_bytes());
-    Ok(hash.finalize().into())
+    layerx_platform_cli::wallet_encoding::native_issuer_id(did)
 }
 
 fn sequence(value: &Value) -> Result<u64, String> {
@@ -939,6 +1034,24 @@ fn verify_receipt(response: &Value, activity: [u8; 32], key: [u8; 32]) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn identity_snapshot_requires_exact_actor_authentication_and_sequence() -> Result<(), String> {
+        let good = json!({"did":"did:layerx:alice","verification":"authenticated_node_snapshot","next_sequence":"19"});
+        assert_eq!(identity_sequence(&good, "did:layerx:alice")?, 19);
+        for (field, value) in [
+            ("did", json!("did:layerx:bob")),
+            ("verification", json!("unverified")),
+            ("next_sequence", json!("019")),
+            ("next_sequence", json!(19)),
+            ("next_sequence", json!(null)),
+        ] {
+            let mut bad = good.clone();
+            bad[field] = value;
+            assert!(identity_sequence(&bad, "did:layerx:alice").is_err());
+        }
+        Ok(())
+    }
 
     #[test]
     fn sdk_remote_error_retains_every_field() -> Result<(), String> {
