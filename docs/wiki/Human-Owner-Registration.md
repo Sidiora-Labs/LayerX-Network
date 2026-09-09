@@ -21,3 +21,13 @@ must be canonical Ed25519. Admission closes at the first execution. The producer
 must observe the exact DID through native preparation before submitting credit.
 The retained identity file remains necessary for restart and replay; checkpoint
 identity matching is unchanged.
+
+The cluster starts disposable Paxeer before native genesis. `owner_custody.py
+bootstrap` deploys the real governance timelock, asset registry, wrapped native
+token and LayerXVault, then invokes the bridge custody-profile verifier. The
+native genesis pins that exact profile. After LXIP and owner-key provisioning,
+`deposit` wraps real disposable-chain native funds, approves the vault, deposits
+for the produced account and invokes `tests/bridge/custody_credit.py` attestation.
+Both RPC origins must prove the disposable genesis and CA identity; protected
+host endpoints remain refused. `custody-bootstrap.started` and
+`custody-deposit.started` prevent blind repetition after unknown outcomes.
