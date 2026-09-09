@@ -419,7 +419,7 @@ fn gateway_upstream_environment(
         ),
         (
             "LAYERX_GATEWAY_COMPONENT_TOKEN_FILE",
-            local_secret(&cluster.root, "component-token", &token()),
+            local_secret(&cluster.root, "component-token", &cluster.program_token),
         ),
         (
             "LAYERX_GATEWAY_AUTHORITY_URL",
@@ -942,4 +942,157 @@ fn local_gateway_successful_send_latency() {
     }
     samples.sort_unstable();
     println!("successful_send_submit_to_receipt_us samples=20 p50={} p99={} transport=gateway_https_json_rpc commitment=executed funding=verified_custody destination=system_fees receipt_wait=commit_condition", samples[9], samples[19]);
+}
+
+fn ws_connect(
+    certificates: &Certificates,
+    port: u16,
+    authorization: &str,
+) -> native_tls::TlsStream<std::net::TcpStream> {
+    let tcp = std::net::TcpStream::connect(("127.0.0.1", port)).required("WS TCP");
+    tcp.set_read_timeout(Some(Duration::from_secs(15)))
+        .required("WS timeout");
+    let connector = native_tls::TlsConnector::builder()
+        .add_root_certificate(Certificate::from_der(&certificates.ca_der).required("CA"))
+        .build()
+        .required("connector");
+    let mut stream = connector.connect("localhost", tcp).required("WS TLS");
+    write!(stream, "GET /rpc/ws HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nAuthorization: {authorization}\r\n\r\n").required("upgrade");
+    stream.flush().required("flush");
+    let mut response = Vec::new();
+    while !response.ends_with(b"\r\n\r\n") {
+        let mut byte = [0];
+        stream.read_exact(&mut byte).required("upgrade response");
+        response.push(byte[0]);
+        assert!(response.len() < 4096);
+    }
+    let response = String::from_utf8(response).required("HTTP UTF8");
+    assert!(response.starts_with("HTTP/1.1 101 "), "upgrade refused");
+    assert!(response.contains("Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo="));
+    stream
+}
+
+fn ws_send(stream: &mut impl Write, body: &serde_json::Value) {
+    let body = serde_json::to_vec(body).required("WS JSON");
+    let mut frame = vec![0x81];
+    if body.len() < 126 {
+        frame.push(128 | u8::try_from(body.len()).required("length"));
+    } else {
+        frame.push(254);
+        frame.extend_from_slice(&u16::try_from(body.len()).required("length").to_be_bytes());
+    }
+    let mask = [1, 2, 3, 4];
+    frame.extend_from_slice(&mask);
+    frame.extend(body.iter().enumerate().map(|(i, b)| b ^ mask[i % 4]));
+    stream.write_all(&frame).required("WS frame");
+    stream.flush().required("flush");
+}
+
+fn ws_receive(stream: &mut impl Read) -> serde_json::Value {
+    let mut header = [0; 2];
+    stream.read_exact(&mut header).required("WS header");
+    assert_eq!(header[0], 0x81, "expected text frame");
+    assert_eq!(header[1] & 128, 0);
+    let length = match header[1] {
+        126 => {
+            let mut n = [0; 2];
+            stream.read_exact(&mut n).required("length");
+            usize::from(u16::from_be_bytes(n))
+        }
+        127 => {
+            let mut n = [0; 8];
+            stream.read_exact(&mut n).required("length");
+            usize::try_from(u64::from_be_bytes(n)).required("length")
+        }
+        n => usize::from(n),
+    };
+    assert!(length <= 1024 * 1024);
+    let mut body = vec![0; length];
+    stream.read_exact(&mut body).required("WS body");
+    serde_json::from_slice(&body).required("WS JSON")
+}
+
+#[test]
+fn local_gateway_websocket_receipt_wake() {
+    let cluster = start_cluster(true);
+    let certificates = certificates(&cluster.root);
+    let boundary = start_boundary(&cluster, &certificates);
+    let identity = start_local_identity(&cluster, &certificates);
+    let authority = start_local_authority(&cluster, &certificates);
+    let redis = start_local_redis(&cluster, &certificates);
+    let gateway = start_local_gateway(
+        &cluster,
+        &certificates,
+        &boundary,
+        &identity,
+        &authority,
+        &redis,
+    );
+    let key = issue_local_scoped_key(
+        &certificates,
+        &gateway,
+        &identity,
+        &["receipt:read", "state:read"],
+    );
+    let authorization = format!(
+        "LayerX-Key {}:{}",
+        key["key"]["id"].as_str().required("key id"),
+        key["key"]["secret"].as_str().required("key secret")
+    );
+    let http = Http {
+        port: gateway.port,
+        ca: Certificate::from_der(&certificates.ca_der).required("CA"),
+        identity: None,
+    };
+    let upgrade = [
+        ("Upgrade", "websocket"),
+        ("Connection", "Upgrade"),
+        ("Sec-WebSocket-Version", "13"),
+        ("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ=="),
+    ];
+    assert_eq!(http.request("GET", "/rpc/ws", &upgrade, &[]).status, 401);
+    let mut stream = ws_connect(&certificates, gateway.port, &authorization);
+    for (id, params) in [
+        (1, serde_json::json!(["receipts"])),
+        (2, serde_json::json!(["checkpoints"])),
+    ] {
+        ws_send(
+            &mut stream,
+            &serde_json::json!({"jsonrpc":"2.0","id":id,"method":"lx_subscribe","params":params}),
+        );
+        assert_eq!(ws_receive(&mut stream)["result"], id.to_string());
+    }
+    let account = hex_encode(
+        &layerx_wire::hash::account_id_for_protocol(
+            &layerx_types::account::AccountId::parse("system:fees").required("account"),
+            PROTOCOL_VERSION,
+        )
+        .required("account id"),
+    );
+    ws_send(
+        &mut stream,
+        &serde_json::json!({"jsonrpc":"2.0","id":3,"method":"lx_subscribe","params":["account",account]}),
+    );
+    assert_eq!(ws_receive(&mut stream)["result"], "3");
+    establish_receipt_head(&boundary, &cluster);
+    let event = ws_receive(&mut stream);
+    assert_eq!(event["method"], "lx_subscription");
+    assert_eq!(event["params"]["subscription"], "1");
+    let activity = event["params"]["result"]["activity_id"]
+        .as_str()
+        .required("activity");
+    let read = boundary.core.get(&format!("/v1/receipts/{activity}"));
+    assert_eq!(read.status, 200);
+    assert_eq!(
+        event["params"]["result"]["receipt"],
+        json(&read)["result"]["receipt"]
+    );
+    let account_event = ws_receive(&mut stream);
+    assert_eq!(account_event["params"]["subscription"], "3");
+    assert_eq!(account_event["params"]["result"]["account_id"], account);
+    ws_send(
+        &mut stream,
+        &serde_json::json!({"jsonrpc":"2.0","id":3,"method":"lx_subscribe","params":["account", "00".repeat(32)]}),
+    );
+    assert_eq!(ws_receive(&mut stream)["error"]["code"], -32602);
 }

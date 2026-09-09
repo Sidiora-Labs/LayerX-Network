@@ -70,6 +70,7 @@ struct Config {
     network_id: u32,
     node: NodeEndpoint,
     node_token: Zeroizing<String>,
+    receipt_events_token: Option<Zeroizing<String>>,
     replica: NodeEndpoint,
     replica_token: Zeroizing<String>,
     admin_token: Zeroizing<String>,
@@ -280,6 +281,9 @@ fn config() -> Result<Config, String> {
         network_id,
         node: parse_node_url(&required("LAYERX_CORE_NODE_URL")?)?,
         node_token: read_secret("LAYERX_CORE_NODE_BEARER_TOKEN_FILE")?,
+        receipt_events_token: env::var_os("LAYERX_CORE_RECEIPT_EVENTS_TOKEN_FILE")
+            .map(|_| read_secret("LAYERX_CORE_RECEIPT_EVENTS_TOKEN_FILE"))
+            .transpose()?,
         replica: parse_node_url(&required("LAYERX_CORE_REPLICA_URL")?)?,
         replica_token: read_secret("LAYERX_CORE_REPLICA_BEARER_TOKEN_FILE")?,
         admin_token: read_secret("LAYERX_CORE_ADMIN_TOKEN_FILE")?,
@@ -519,12 +523,22 @@ fn lookup_receipt_bytes(
     correlation_id: u64,
     wait_ms: u32,
 ) -> Result<Option<Vec<u8>>, String> {
+    let mut selector = Vec::with_capacity(37);
+    selector.push(1);
+    selector.extend_from_slice(&activity_id);
+    lookup_receipt_selector(transport, handshake, selector, correlation_id, wait_ms)
+}
+
+fn lookup_receipt_selector(
+    transport: &mut Uds,
+    handshake: &Handshake,
+    mut selector: Vec<u8>,
+    correlation_id: u64,
+    wait_ms: u32,
+) -> Result<Option<Vec<u8>>, String> {
     if !handshake.capabilities().contains(Capability::ReceiptLookup) {
         return Err("receipt_lookup capability is unavailable".to_owned());
     }
-    let mut selector = Vec::with_capacity(33);
-    selector.push(1);
-    selector.extend_from_slice(&activity_id);
     if wait_ms > 0 {
         selector.extend_from_slice(&wait_ms.to_be_bytes());
     }

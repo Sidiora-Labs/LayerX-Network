@@ -8017,3 +8017,19 @@ symbol = "selector rpc_account_sequence"
 observed = "The account sequence selector and OpenRPC account_id contract pass gateway unit and integration package tests. Core and gateway cargo fmt --check, strict all-targets Clippy and full serial package tests exit 0. Standalone local harness formatting and strict all-targets Clippy exit 0. Evidence: qual-logs/pay4/e-fmt-final.log, e-local-fmt-final.log, e-clippy-final.log, e-local-clippy-final.log, e-tests.log and e-gateway-final.log. Initial duplicate-match-arm and function-length Clippy failures were fixed within touched paths without lint suppression."
 assumption = "These gates qualify the selector and fixture source; they do not establish successful gateway SEND latency. The disclosure dependency and producer incompatibility remain in observations 6.2.913 and 6.2.914."
 severity = "note"
+
+[observation.6.2.916]
+task = "6.2"
+file = "platform/hosted/gateway/src/ws.rs platform/hosted/gateway/src/ws_wire.rs platform/hosted/core/src/public_reads.rs"
+symbol = "receipt_event local_gateway_websocket_receipt_wake"
+observed = "GET /rpc/ws authenticates gateway keys and enforces receipt:read or state:read scopes. A single gateway receipt feed consumes authenticated core global-sequence waits backed by the native receipt commit condition. Fan-out is bounded to 32 connections, eight subscriptions per connection and 16 queued wakes; slow consumers and lost feeds disconnect, and delivery rechecks key authorization. The real daemon test receives the exact core receipt after submission outside the gateway and receives the existing system:fees account snapshot. Anonymous upgrades are refused. Core global-sequence reads require an explicit receipt-events bearer token and verify signed receipts. Evidence: qual-logs/pay4/f-ws-real-qualified.log and f-ws-tests.log."
+assumption = "The native receipt-wait producer is the worktree build/bin bundle. Successful checkpoint notification delivery still requires a finalised certificate fixture. The transport has no additional Cargo dependency, so the prior WebSocket lockfile dependency is superseded. The core receipt-events token must be configured to match the gateway component token. Live notifications require read reconciliation after disconnect and do not claim durable replay. Successful SEND latency remains dependent on the shared signer disclosure correction."
+severity = "note"
+
+[observation.6.2.917]
+task = "6.2"
+file = "src/modules/asset/lx_asset_registry.c agent/schema/lni/v1.kvx agent/crates/layerx-client/src/lni/preparation.rs"
+symbol = "module_decode module_execute AccountReadRequest PreparationState"
+observed = "The native Asset decoder accepts ordinals only through eight, strictly decodes only SEND, and executes non-SEND operations by emitting an event without the required asset or account transition. AccountReadRequest has only account-ID balance and account selectors. PreparationState has no fee table, and the checked-in LNI capability set has no asset listing, asset detail, fee estimation or DID account enumeration contract."
+assumption = "Widening core admission on this source could expose signed event-only receipts as successful Asset operations. Native strict decoders and real state transitions must be integrated before expanding that admission. Native read schemas and client methods are outside the owned source grant. Programs 5 and 6 retain their existing strict payload validation; successful funded execution remains unqualified."
+severity = "blocker"

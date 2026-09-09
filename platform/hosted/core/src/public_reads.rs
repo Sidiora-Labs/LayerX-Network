@@ -50,6 +50,9 @@ pub(super) fn route(config: &Config, request: &Request) -> Option<Response> {
             node_info(config)
         });
     }
+    if let Some(sequence) = request.path.strip_prefix("/internal/v1/receipt-events/") {
+        return Some(receipt_event(config, request, sequence));
+    }
     let parts: Vec<_> = request.path.split('/').collect();
     let target = match parts.as_slice() {
         ["", "v1", "accounts", id, "balance"] | ["", "v1", "accounts", id] => Some(*id),
@@ -245,4 +248,49 @@ fn proof(config: &Config, kind: &str, id: &str, account: Option<&str>) -> Respon
             "first_batch_number": header.first_batch_number.to_string(),
             "last_batch_number": header.last_batch_number.to_string()}
     }))
+}
+
+fn receipt_event(config: &Config, request: &Request, sequence: &str) -> Response {
+    use subtle::ConstantTimeEq;
+    let Some(token) = &config.receipt_events_token else {
+        return refusal(503, "receipt_events_not_configured", None);
+    };
+    let supplied = request
+        .headers
+        .get("authorization")
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .unwrap_or("");
+    if !bool::from(supplied.as_bytes().ct_eq(token.as_bytes())) {
+        return refusal(401, "unauthorized", None);
+    }
+    if request.method != "GET" {
+        return refusal(405, "method_not_allowed", None);
+    }
+    let Ok(number) = sequence.parse::<u64>() else {
+        return refusal(400, "invalid_sequence", None);
+    };
+    if number == 0
+        || number.to_string() != sequence
+        || request.query.is_some()
+        || !request.body.is_empty()
+    {
+        return refusal(400, "invalid_sequence", None);
+    }
+    let Ok((mut transport, handshake)) = super::connect_raw(config) else {
+        return refusal(503, "node_unavailable", Some(5));
+    };
+    let mut selector = vec![3];
+    selector.extend_from_slice(&number.to_be_bytes());
+    match super::lookup_receipt_selector(&mut transport, &handshake, selector, 1, 3000) {
+        Ok(Some(bytes)) => {
+            match super::receipt_facts(&bytes, handshake.node().authorised_sequencer_key) {
+                Ok(facts) if facts.global_sequence == number => {
+                    success(&super::receipt_result(&facts))
+                }
+                _ => refusal(502, "invalid_receipt_event", None),
+            }
+        }
+        Ok(None) => super::json_response(202, &serde_json::json!({"result":{"state":"pending"}})),
+        Err(_) => refusal(503, "receipt_events_unavailable", Some(5)),
+    }
 }
