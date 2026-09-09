@@ -776,6 +776,38 @@ contract CheckpointRegistryTest {
         registry.registerCheckpoint(header, "", descendantAttestations);
     }
 
+    function testRecordedRequestAnchorOrderAndInvalidation() public {
+        CanonicalCheckpoint.HeaderCommitments memory header = _header();
+        bytes32 anchor = registry.checkpointHash(header, "");
+        require(!registry.isRecordedAncestor(anchor, anchor), "unrecorded equality accepted");
+        registry.registerCheckpoint(header, "", _attestations(header, anchor, 2));
+        require(registry.isRecordedAncestor(anchor, anchor), "recorded equality refused");
+        header.epoch = 2;
+        header.batchNumber = 2;
+        header.firstSequence = header.lastSequence + 1;
+        header.lastSequence = header.firstSequence;
+        header.previousStateRoot = header.resultingStateRoot;
+        header.resultingStateRoot = bytes32(uint256(0x99) << 248);
+        header.timestamp += 1;
+        bytes32 inclusion = registry.checkpointHash(header, "");
+        require(!registry.isRecordedAncestor(anchor, inclusion), "unrecorded inclusion accepted");
+        registry.registerCheckpoint(header, "", _attestations(header, inclusion, 2));
+        require(registry.isRecordedAncestor(anchor, inclusion), "recorded ancestor refused");
+        require(registry.isRecordedAncestor(inclusion, inclusion), "inclusion equality refused");
+        require(!registry.isRecordedAncestor(inclusion, anchor), "future anchor accepted");
+        require(!registry.isRecordedAncestor(bytes32(0), inclusion), "zero anchor accepted");
+        require(!registry.isRecordedAncestor(registry.genesisCheckpointId(), inclusion), "unrecorded genesis accepted");
+        require(!registry.isRecordedAncestor(anchor, bytes32(uint256(123))), "unknown inclusion accepted");
+        bond.setSlashingAuthority(address(this));
+        registry.invalidateCheckpoint(inclusion);
+        require(!registry.isRecordedAncestor(anchor, inclusion), "invalid inclusion accepted");
+        require(!registry.isRecordedAncestor(inclusion, inclusion), "invalid equality accepted");
+        require(registry.isRecordedAncestor(anchor, anchor), "canonical predecessor refused");
+        registry.invalidateCheckpoint(anchor);
+        require(!registry.isRecordedAncestor(anchor, inclusion), "invalid anchor accepted");
+        require(!registry.isRecordedAncestor(anchor, anchor), "invalid anchor equality accepted");
+    }
+
     function testPayloadSizeIndependentOfActivityCount() public view {
         CanonicalCheckpoint.HeaderCommitments memory first = _header();
         CanonicalCheckpoint.HeaderCommitments memory second = first;
