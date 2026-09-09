@@ -3298,7 +3298,7 @@ GUARANTOR_SOURCES = cmd/layerx-guarantor/main.c cmd/layerx-guarantor/lni.c \
 	cmd/layerx-guarantor/runtime.c cmd/layerx-guarantor/settlement.c
 GUARANTOR_OBJECTS = $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(GUARANTOR_SOURCES))
 -include $(GUARANTOR_OBJECTS:.o=.d)
-GUARANTOR_PYTHON ?= qual-logs/gp1/venv/bin/python
+GUARANTOR_PYTHON ?= python3
 .PHONY: layerx-guarantor test-daemon-guarantor test-daemon-guarantor-unit \
 	test-daemon-guarantor-integration test-daemon-guarantor-sanitize \
 	platform-hosted-guarantor-topology-check

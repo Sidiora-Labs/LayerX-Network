@@ -130,8 +130,8 @@ to register, the second to observe registration, tag-14 evidence equality
 and acceptance by the existing `lxp_verify_main` entry point. A refused
 candidate is an integration failure, not a skipped test or a passing gate.
 
-Local evidence lives in untracked `qual-logs/gp1/` and `STATUS.md`. No image,
-cluster or chain-125 deployment qualification is claimed on the build server.
+These make targets do not claim image, cluster, or chain-125 deployment
+qualification.
 
 ## Checkpoint authority publication
 

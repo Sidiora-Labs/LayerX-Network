@@ -3,8 +3,7 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/../../../.." && pwd)
 cd "$ROOT"
 . "$ROOT/platform/hosted/tests/beta-cluster.sh"
-mkdir -p "$ROOT/qual-logs/gp1"
-WORK_DIR=$(mktemp -d "$ROOT/qual-logs/gp1/guarantor-provision.XXXXXX")
+WORK_DIR=$(mktemp -d "${TMPDIR:-/tmp}/guarantor-provision.XXXXXX")
 CA_DIR="$WORK_DIR/ca"
 SECRETS_DIR="$WORK_DIR/secrets"
 mkdir -p "$WORK_DIR/authority"
