@@ -128,6 +128,18 @@ lxp_result lx_account_validate_canonical(const lx_account *account)
          bytes_zero(account->authority_key,
                     sizeof(account->authority_key))))
         return status != LXP_OK ? status : LXP_ERR_NON_CANONICAL;
+    if (account->name_length > 77U &&
+        memcmp(account->name, "agent:", 6U) == 0 &&
+        memcmp(account->name + account->name_length - 71U, ":asset:", 7U) == 0 &&
+        account->has_asset) {
+        static const uint8_t hex[] = "0123456789abcdef";
+        size_t i;
+        const uint8_t *encoded = account->name + account->name_length - 64U;
+        for (i = 0U; i < 32U; ++i)
+            if (encoded[i * 2U] != hex[account->asset_id[i] >> 4U] ||
+                encoded[i * 2U + 1U] != hex[account->asset_id[i] & 15U])
+                return LXP_ERR_ASSET_MISMATCH;
+    }
     return LXP_OK;
 }
 

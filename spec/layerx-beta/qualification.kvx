@@ -5220,3 +5220,27 @@ symbol = "lxp_ledger_apply_bridge_credit lxp_ctx_bridge_credit"
 observed = "The bridge reserve top-up now invokes ledger apply after the existing authorization, supply preflight and rollback snapshot. make -j16, make test-asset-transfer, make test and make beta-ledger-check exit 0. The unchanged sole-writer check passes. BRIDGE_PYTHON=qual-logs/nat3/venv/bin/python3 bash tests/bridge/sole_writer.sh exits 0: a real custody deposit on isolated chain 31337 produces byte-identical canonical account state diffs (397 bytes) and unsigned receipt encodings (1006 bytes) through original and updated module contexts, with real signature verification, rollback stages, replay refusal and nine custody evidence tests passing. Evidence: qual-logs/nat3/build.log, asset-transfer.log, test.log, beta-ledger.log, bridge-differential-venv.log and gates.tsv."
 assumption = "The initial bridge comparison exited 1 because system Python lacked Crypto; the isolated virtual environment satisfies tests/bridge/requirements.txt. Codify inspection could not run because cg is unavailable. Cluster and image gates were not run. Task statuses are unchanged."
 severity = "note"
+
+[observation.3.7.24]
+task = "3.7"
+file = "src/ledger/lxp_journal.c"
+symbol = "lxp_conservation_check lxp_apply_transfer_set"
+observed = "Native mint and burn require a change in total account units, but the transfer set unconditionally rejects unequal per-asset debit and credit totals. The current balance primitive applies both endpoints. These checks are identical to the branch base; see qual-logs/pay1/integration-base-comparison.log."
+assumption = "An authenticated issuance and destruction invariant must be specified before altering the existing conservation check; a direct balance write or fabricated reserve does not satisfy the contract."
+severity = "blocker"
+
+[observation.3.7.25]
+task = "3.7"
+file = "cmd/layerxd/lxp_daemon_process.c"
+symbol = "collect_assets verify replay admission"
+observed = "Daemon asset admission and replay allow only LX_ASSET_SEND. Runtime registry reconstruction collects asset ids from accounts without issuer, cap, name or pause metadata. The file is outside the permitted account-read changes and identical to the branch base; see qual-logs/pay1/integration-base-comparison.log."
+assumption = "Extend daemon admission and replay to the assigned asset ordinals and reconstruct the committed asset registry without synthesizing metadata from balances."
+severity = "blocker"
+
+[observation.3.7.26]
+task = "3.7"
+file = "include/layerx/lxp_receipt.h"
+symbol = "lxp_receipt lxp_ledger_receipt_input"
+observed = "The existing canonical ledger receipt fields have balances but no total_units before and after. The receipt schema and protocol codecs are outside the permitted asset dispatch paths and identical to the branch base; see qual-logs/pay1/integration-base-comparison.log."
+assumption = "Define and implement a versioned supply receipt binding across native encoding, decoding, signing and replay before qualifying native mint and burn."
+severity = "blocker"

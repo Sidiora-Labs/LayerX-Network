@@ -47,6 +47,19 @@ static bool has_agent_shape(const uint8_t *name, size_t length,
     return false;
 }
 
+static bool agent_asset(const uint8_t *name, size_t length)
+{
+    size_t i;
+    if (length <= 77U || memcmp(name, "agent:", 6U) != 0 ||
+        memcmp(name + length - 71U, ":asset:", 7U) != 0)
+        return false;
+    for (i = length - 64U; i < length; ++i)
+        if (!((name[i] >= (uint8_t)'0' && name[i] <= (uint8_t)'9') ||
+              (name[i] >= (uint8_t)'a' && name[i] <= (uint8_t)'f')))
+            return false;
+    return true;
+}
+
 static bool system_funding(const uint8_t *name, size_t length,
                            const char *suffix)
 {
@@ -135,6 +148,8 @@ lxp_result lx_account_name_parse(const uint8_t *name, size_t name_length,
         kind = LX_ACCOUNT_SYSTEM_FUNDING_SHORT;
     else if (name_length > 11U && memcmp(name, "agent:", 6U) == 0 &&
              memcmp(name + name_length - 5U, ":main", 5U) == 0)
+        kind = LX_ACCOUNT_AGENT_MAIN;
+    else if (agent_asset(name, name_length))
         kind = LX_ACCOUNT_AGENT_MAIN;
     else if (has_agent_shape(name, name_length, ":budget:"))
         kind = LX_ACCOUNT_AGENT_BUDGET;
