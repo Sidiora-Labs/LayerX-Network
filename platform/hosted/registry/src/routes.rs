@@ -745,10 +745,14 @@ impl Registrar {
             }
             return deployment_response(&evidence);
         }
-        let Some(socket) = &self.deployment_lni_socket else {
+        if body.is_empty() {
             return deployment_ingress_unavailable(body);
+        }
+        let result = match &self.deployment_lni_socket {
+            Some(socket) => crate::deployment::deploy(socket, body, deadline),
+            None => self.node_state.deploy(body, deadline),
         };
-        let proof = match crate::deployment::deploy(socket, body, deadline) {
+        let proof = match result {
             Ok(proof) => proof,
             Err(error) => return refusal(503, "deployment_proof_unavailable", &error),
         };

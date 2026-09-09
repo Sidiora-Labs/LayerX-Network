@@ -1335,6 +1335,7 @@ dependencies = [
  "ed25519-dalek",
  "getrandom 0.4.3",
  "layerx-client",
+ "layerx-programs-registry",
  "layerx-programs-runtime",
  "layerx-proof",
  "layerx-types",
