@@ -5220,3 +5220,11 @@ symbol = "lxp_ledger_apply_bridge_credit lxp_ctx_bridge_credit"
 observed = "The bridge reserve top-up now invokes ledger apply after the existing authorization, supply preflight and rollback snapshot. make -j16, make test-asset-transfer, make test and make beta-ledger-check exit 0. The unchanged sole-writer check passes. BRIDGE_PYTHON=qual-logs/nat3/venv/bin/python3 bash tests/bridge/sole_writer.sh exits 0: a real custody deposit on isolated chain 31337 produces byte-identical canonical account state diffs (397 bytes) and unsigned receipt encodings (1006 bytes) through original and updated module contexts, with real signature verification, rollback stages, replay refusal and nine custody evidence tests passing. Evidence: qual-logs/nat3/build.log, asset-transfer.log, test.log, beta-ledger.log, bridge-differential-venv.log and gates.tsv."
 assumption = "The initial bridge comparison exited 1 because system Python lacked Crypto; the isolated virtual environment satisfies tests/bridge/requirements.txt. Codify inspection could not run because cg is unavailable. Cluster and image gates were not run. Task statuses are unchanged."
 severity = "note"
+
+[observation.6.11.pay2_rpc_contract]
+task = "6.11"
+file = "agent/crates/layerx-sdk/src/lib.rs agent/sdk/typescript/src/agent-http.ts platform/ src/"
+symbol = "lx_getAccount lx_getBalances lx_sendActivity lx_getActivityStatus lx_getReceipt"
+observed = "Source search for the public wallet JSON-RPC methods finds no implementations. Existing SDK transports expose the typed node boundary and Programs HTTP routes, but no public wallet RPC result schema binds canonical receipts, inclusion proofs and guarantor certificates for the executed, batched and finalised commitment levels. Search evidence: qual-logs/pay2/rpc-contract-search.log; rg exit 1."
+assumption = "Wallet execution and commitment verification require the gateway request/result and proof transport contracts. An admission acknowledgement cannot substitute for verified receipt evidence."
+severity = "blocker"
