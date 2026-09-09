@@ -60,6 +60,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--build-dir', default='build')
     parser.add_argument('--maintenance', action='store_true')
+    parser.add_argument('--compare-baseline', type=Path)
     args = parser.parse_args()
     build = (ROOT / args.build_dir).resolve()
     evidence = ROOT / 'build' / 'custody-qualification'
@@ -113,6 +114,19 @@ def main():
                     work / 'actor', '0', timestamp, work / 'activity')
                 run(build / 'tests/bridge/test-credit', work / 'genesis-output/genesis.manifest',
                     work / 'activity', work / 'actor')
+                if args.compare_baseline:
+                    inputs = [work / 'genesis-output/genesis.manifest', work / 'activity', work / 'actor']
+                    run(args.compare_baseline.resolve(), *inputs, work / 'before.bin')
+                    run(build / 'tests/bridge/test-credit', *inputs, work / 'after.bin')
+                    before = (work / 'before.bin').read_bytes()
+                    after = (work / 'after.bin').read_bytes()
+                    if before != after:
+                        raise AssertionError('bridge-credit state diff or receipt bytes changed')
+                    diff_size = int.from_bytes(before[:8], 'big')
+                    receipt_size = int.from_bytes(before[8:16], 'big')
+                    if not diff_size or not receipt_size or len(before) != 16 + diff_size + receipt_size:
+                        raise AssertionError('invalid comparison framing')
+                    print(f'byte-identical bridge-credit state diff ({diff_size}) and receipt ({receipt_size})')
                 if args.maintenance:
                     run(build / 'tests/lxp_test_maintenance_publication',
                         work / 'genesis-output/genesis.manifest', work / 'activity')

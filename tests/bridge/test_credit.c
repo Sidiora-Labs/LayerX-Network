@@ -3,6 +3,7 @@
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_hash.h"
 #include "layerx/lxp_kernel.h"
+#include "layerx/lxp_state_diff.h"
 #include "layerx/lx_asset.h"
 #include "layerx/programs.h"
 #include "files.h"
@@ -152,8 +153,8 @@ int main(int argc, char **argv)
     size_t value_length;
     uint8_t supply_key[47] = "custody-issued:";
     uint8_t replay_key[50] = "deposit-nullifier:";
-    if (argc != 4) {
-        (void)fprintf(stderr, "usage: test-credit genesis.manifest signed-credit.activity actor-key\n");
+    if (argc != 4 && argc != 5) {
+        (void)fprintf(stderr, "usage: test-credit genesis.manifest signed-credit.activity actor-key [comparison-output]\n");
         return 2;
     }
     CHECK(arena_bytes && manifest && state && journal && kernel && accounts && before && ctx && effects);
@@ -314,6 +315,24 @@ int main(int argc, char **argv)
     CHECK(lxp_state_root_proof(kernel, LXP_MODULE_BRIDGE, root, &proof) == LXP_OK);
     CHECK(prove_leaf(bridge_key, sizeof(bridge_key), bridge_root, 32U, &proof, root) == 0);
     CHECK(memcmp(root, funding_receipt.resulting_state_root, 32U) == 0);
+    if (argc == 5) {
+        lxp_byte_span diff_bytes;
+        lxp_byte_span receipt_bytes;
+        CHECK(lxp_state_diff_encode(before, accounts, &arena, &diff_bytes) == LXP_OK);
+        CHECK(lxp_receipt_encode(&funding_receipt, false, &arena, &receipt_bytes) == LXP_OK);
+        CHECK(diff_bytes.length > 0U && receipt_bytes.length > 0U);
+        FILE *output = fopen(argv[4], "wbx");
+        CHECK(output != NULL);
+        uint8_t lengths[16];
+        for (size_t index = 0U; index < 8U; ++index) {
+            lengths[index] = (uint8_t)((uint64_t)diff_bytes.length >> (56U - index * 8U));
+            lengths[8U + index] = (uint8_t)((uint64_t)receipt_bytes.length >> (56U - index * 8U));
+        }
+        CHECK(fwrite(lengths, 1U, sizeof(lengths), output) == sizeof(lengths));
+        CHECK(fwrite(diff_bytes.bytes, 1U, diff_bytes.length, output) == diff_bytes.length);
+        CHECK(fwrite(receipt_bytes.bytes, 1U, receipt_bytes.length, output) == receipt_bytes.length);
+        CHECK(fclose(output) == 0);
+    }
     CHECK(begin(ctx, kernel, &arena, effects, state->next_sequence) == 0);
     altered_activity = activity;
     ++altered_activity.account_sequence;
