@@ -548,7 +548,7 @@ fn dispatch(config: &Config, request: &Request) -> Result<Response, Response> {
         return Ok(by_activity(config, activity));
     }
     let mut evidence = human.evidence(config)?;
-    if name == "identity" || name == "key-policy" {
+    if matches!(name, "identity" | "key-policy" | "capability-scope") {
         for item in &mut evidence {
             item.checkpoint = super::checkpoint_header(config, item.facts.batch_number).ok();
         }
@@ -825,7 +825,7 @@ fn policy_route(
     {
         return Err(unavailable("policy_evidence_stale"));
     }
-    let checkpoint = if name == "identity" || name == "key-policy" {
+    let checkpoint = if matches!(name, "identity" | "key-policy" | "capability-scope") {
         let checkpoint = native_checkpoint(item)?;
         Some(checkpoint)
     } else {
@@ -840,6 +840,9 @@ fn policy_route(
             p,
             checkpoint,
         );
+    }
+    if name == "capability-scope" {
+        return native_capability_scope(identity, params, item, evidence, head);
     }
     if name == "identity" {
         let state = native_identity_state(item, &identity.did)?;
@@ -876,6 +879,99 @@ fn policy_route(
         "capability-scope" => "capability_state_proof_unavailable",
         _ => "key_policy_checkpoint_evidence_unavailable",
     }))
+}
+
+fn native_capability_scope(
+    identity: &Identity,
+    params: &BTreeMap<String, String>,
+    item: &Verified,
+    evidence: &[Verified],
+    head: u64,
+) -> Result<Response, Response> {
+    let refused = || unavailable("capability_state_proof_unavailable");
+    let scope = identity
+        .capabilities
+        .iter()
+        .find(|scope| {
+            scope.authority == params["authority"]
+                && scope.action_key == params["action_key"]
+                && scope.capability_id == params["capability_id"]
+        })
+        .ok_or_else(refused)?;
+    let state = native_identity_state(item, &identity.did)?;
+    let bytes = hex::decode(&item.record.receipt_hex).map_err(|_| refused())?;
+    let receipt = decode(&bytes).map_err(|_| refused())?;
+    let protocol = receipt.protocol().ok_or_else(refused)?;
+    let summaries: Vec<_> = protocol
+        .effects()
+        .iter()
+        .filter(|effect| effect.module_id() == 7 && effect.event_type() == 0x7145)
+        .collect();
+    if summaries.len() != 1 || summaries[0].monetary() || summaries[0].kind() != 3 {
+        return Err(refused());
+    }
+    let summary = summaries[0].body();
+    if summary.len() != 209
+        || &summary[..5] != b"LXGS2"
+        || hex::encode(&summary[5..37]) != scope.capability_id
+        || summary[37..69] != state[5..37]
+        || hex::encode(&summary[69..101]) != scope.authority
+        || summary[69..101] != state[37..69]
+        || hex::encode(&summary[101..133]) != scope.action_key
+        || summary[101..133] == [0; 32]
+        || native_u64(summary, 165)? != scope.expiry_sequence
+        || scope.expiry_sequence <= head
+        || native_u64(summary, 173)? != 2
+        || native_u64(summary, 201)? != native_u64(&state, 69)?
+        || identity.revocation_sequence != native_u64(&state, 69)?
+        || identity.frozen
+        || !scope.counterparties.is_empty()
+        || !scope.assets.is_empty()
+        || scope.amount_ceiling != "0"
+        || !scope.enforceable_dimensions.is_empty()
+    {
+        return Err(refused());
+    }
+    let minimum = u16::from_be_bytes([summary[181], summary[182]]);
+    let maximum = u16::from_be_bytes([summary[183], summary[184]]);
+    if minimum == 0
+        || minimum > maximum
+        || scope.activity_types != (minimum..=maximum).collect::<Vec<_>>()
+    {
+        return Err(refused());
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| refused())?
+        .as_millis();
+    if now < u128::from(native_u64(summary, 185)?) || now >= u128::from(native_u64(summary, 193)?) {
+        return Err(refused());
+    }
+    native_complete_suffix(item, evidence)?;
+    for later in evidence
+        .iter()
+        .filter(|later| later.facts.global_sequence > item.facts.global_sequence)
+    {
+        if let Ok(later_state) = native_identity_state(later, &identity.did) {
+            if later_state[37..77] != state[37..77] || later_state[111..183] != state[111..183] {
+                return Err(refused());
+            }
+        }
+    }
+    let checkpoint = native_checkpoint(item)?;
+    Ok(json(
+        200,
+        &value!({
+            "activity_types": scope.activity_types, "native_module_mask": 2,
+            "counterparties": [], "assets": [], "amount_ceiling": "0",
+            "expiry_sequence": scope.expiry_sequence, "action_key": scope.action_key,
+            "capability_id": scope.capability_id, "authority": scope.authority,
+            "enforceable_dimensions": [], "observed_sequence": head, "verification": 4,
+            "evidence_digest": hex::encode(&item.receipt_digest),
+            "canonical_core_bytes": hex::encode(summary),
+            "checkpoint_digest": hex::encode(&checkpoint.report().evidence().checkpoint_id().ok_or_else(refused)?)
+        }),
+    ))
 }
 
 fn native_checkpoint(

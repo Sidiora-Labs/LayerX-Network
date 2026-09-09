@@ -18,6 +18,9 @@ repo = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(repo / 'platform/hosted/human'))
 from provision import write_json
 from owner_native import produce
+sys.path.insert(0, str(repo / "tests/daemon"))
+from governance_lifecycle import session
+from owner_checkpoint import checkpoint, hosted
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from custody_credit import Rpc, unhex
 from deploy_local_custody import signer, deploy, calldata, command
@@ -177,6 +180,8 @@ def run(work, asset, rpc_port):
                 os.setuid(4021)
                 try:
                     produce(work)
+                    if "--governance" in sys.argv:
+                        session(work)
                 except BaseException:
                     traceback.print_exc()
                     sys.stderr.flush()
@@ -199,6 +204,9 @@ def run(work, asset, rpc_port):
         assert registration['identity']['did'] == binding['did']
         assert len(list(authority.glob('*.json'))) == 4
         assert len(list((inputs / 'owner-native-run').glob('*.receipt'))) == 4
+        if '--checkpoint' in sys.argv:
+            checkpoint(work, public, settlement, rpc, account, start, key, cert, 10)
+            hosted(work, config, authority_env, start, service)
         sequencer.terminate()
         assert sequencer.wait(timeout=15) == 0
         start(native_command, 'sequencer-restart', env)
@@ -208,7 +216,8 @@ def run(work, asset, rpc_port):
             if state.returncode == 0:
                 break
             time.sleep(0.1)
-        assert state.returncode == 0 and json.loads(state.stdout)['account_sequence'] == 4
+        expected_sequence = 10 if '--governance' in sys.argv else 4
+        assert state.returncode == 0 and json.loads(state.stdout)['account_sequence'] == expected_sequence
         print('real native credit, identity, rotation and recovery producer passed with authenticated replica evidence and restart')
     finally:
         for process in reversed(processes):
