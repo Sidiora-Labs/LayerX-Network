@@ -7720,3 +7720,11 @@ symbol = "executor_run apply_canonical_batch send_receipt resolve_unknown"
 observed = "The native executor already waits on queue_changed. LNI minor 5 permits a publication-wait selector that waits on queue/publication notifications up to the request deadline. Minor-5 unknown resolution makes one waiting lookup without a sleep/retry interval; legacy peer behavior remains replay-compatible. Optional LAYERX_PAY_TIMING records native preparation, commit, publication and history microseconds. No before/after native microsecond samples or hosted funded-SEND percentile rerun were obtained. Existing hosted bootstrap generators still emit the old metadata-free genesis request."
 assumption = "The supplied hosted latency baseline is not reproduced by local kernel tests. The hosted owner must provide a version-2 bootstrap request with explicit asset metadata and named fee schedule, then run the funded SEND publication/history path and daemon restart matrix. Instrumentation and source removal of polling do not qualify the latency target."
 severity = "blocker"
+
+[observation.3.7.57]
+task = "3.7"
+file = "agent/schema/lni/README.md agent/crates/layerx-client/tests/lni_schema.rs"
+symbol = "lni_schema_and_document_cover_every_declared_message"
+observed = "The LNI boundary document now indexes AssetReadRequest/Response and FeeEstimateRequest/Response, describes minor-5 committed snapshot semantics, DID account proofs and event-driven receipt publication waiting. cargo test --manifest-path agent/Cargo.toml -p layerx-client --test lni_schema exits 0 with all three tests passing. Evidence: qual-logs/pay1/pay1g-schema.log and pay1g-schema.exit."
+assumption = "This resolves the documentation assertion in observation.3.7.55; daemon restart and latency qualification remain separate requirements."
+severity = "note"
