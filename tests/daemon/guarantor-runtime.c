@@ -101,6 +101,18 @@ int main(int argc, char **argv)
                                            &wire_length) == LXP_OK);
             assert(lxp_state_proof_decode(wire, wire_length, proof) == LXP_OK);
             assert(lxp_state_proof_verify(proof, body.header.resulting_state_root) == LXP_OK);
+            for (size_t i = 0U; i < engine->kernel->state->accounts->count; ++i) {
+                const lx_account *account = &engine->kernel->state->accounts->accounts[i];
+                uint8_t key[33] = {4U};
+                memcpy(key + 1U, account->id, 32U);
+                assert(gp_runtime_state_proof(runtime, 0U,
+                    (lxp_byte_span){key, sizeof(key)}, proof) == LXP_OK);
+                assert(lxp_state_proof_verify(proof, body.header.resulting_state_root) == LXP_OK);
+                assert(lxp_state_proof_encode(proof, wire, LXP_STATE_WITNESS_MAX_BYTES,
+                    &wire_length) == LXP_OK);
+                assert(lxp_state_proof_decode(wire, wire_length, proof) == LXP_OK);
+                assert(lxp_state_proof_verify(proof, body.header.resulting_state_root) == LXP_OK);
+            }
             for (size_t i = 0U; i < engine->kernel->module_kv_count; ++i) {
                 const lxp_module_kv_entry *entry = &engine->kernel->module_kv[i];
                 assert(gp_runtime_state_proof(runtime, entry->module_id,
@@ -109,7 +121,7 @@ int main(int argc, char **argv)
                 assert(proof->value_length == entry->value_length);
                 assert(memcmp(proof->value, entry->value, entry->value_length) == 0);
             }
-            fprintf(stdout, "state witness v2 verified batch=%lu account-tree=1 module-kv=%zu accounts=%zu\n",
+            fprintf(stdout, "state witness v2 verified batch=%lu account-tree=1 account-proofs=all module-kv=%zu accounts=%zu\n",
                     batch, engine->kernel->module_kv_count, engine->kernel->state->accounts->count);
             free(wire);
             free(proof);
