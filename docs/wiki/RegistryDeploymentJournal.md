@@ -12,8 +12,16 @@ and its inclusion path, signed batch header, Programs subtree root and outer
 membership path, exact program-record leaf and membership path, and lifecycle
 membership or adjacent absence witnesses. The node derives all witnesses from
 its real kernel and retained batch evidence. It refuses a failed deployment or
-a live state root different from the deployment receipt root. Historical state
+a live state root different from the authenticated proof root. Historical state
 reconstruction is not provided by this selector.
+
+Protocol 3 uses `LayerX/programs/deployment-proof/v2\0`: the v1 fields followed
+by a length-prefixed occupancy-maintenance receipt and length-prefixed Merkle
+proof. Both receipts must be included in the same signed header at their exact
+indices and count. The maintained-outcome verifier binds the activity transition
+to occupancy maintenance; Programs witnesses bind to the signed final root.
+The deployment receipt root need not equal that final root. Legacy v1 encoding
+and protocol 1/2 refusal checks remain unchanged.
 
 The registry verifies the full proof with its protected sequencer history and
 checks the receipt against the independent receipt authority before publishing.
@@ -36,5 +44,4 @@ Configure the Human assembler's journal input to the exported `pairs/`
 directory, not the internal journal containing envelopes and head metadata.
 The current hosted topology still requires a transport and shared-volume
 integration: its registry pod has no node LNI mount and its evidence assembler
-runs on the invoking host. Protocol-3 trust-history support in the Programs
-verifier is also required before version-3 journal publication can succeed.
+runs on the invoking host. Protocol-3 trust histories are accepted explicitly alongside legacy versions 1/2.

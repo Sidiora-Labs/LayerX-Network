@@ -3031,8 +3031,8 @@ static lxp_result send_proof_bundle(
             server->owner->scratch, &activity);
         if (status == LXP_OK && kind == 4U) {
             status = lxp_daemon_deployment_encode(server->owner->kernel,
-                &activity, server->owner->network_id, server->owner->scratch,
-                &canonical_value);
+                &activity, server->owner->receipt_authority, server->owner->network_id,
+                server->owner->scratch, &canonical_value);
             proof_material = (lxp_byte_span){NULL, 0U};
         } else if (status == LXP_OK) {
             status = lxp_daemon_activity_evidence_wire_encode(
