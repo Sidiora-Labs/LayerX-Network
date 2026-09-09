@@ -11,7 +11,7 @@ use layerx_wire::encode::Encoder;
 use layerx_wire::hash;
 use layerx_wire::WireError;
 
-use crate::{ct, SignatureMessage};
+use crate::{ct, payments::Payment, SignatureMessage};
 
 const ASSET_SEND_ORDINAL: u16 = 5;
 const SEND_WIRE_TAG: u16 = 0x5301;
@@ -127,6 +127,7 @@ pub struct Disclosure {
     pub idempotency_key: [u8; 32],
     /// Governance wallet-binding semantics, present only for that activity type.
     pub evm_payout_binding: Option<DisclosedEvmPayoutBinding>,
+    pub payment: Option<Payment>,
     activity: Activity,
     signing_digest: [u8; 32],
 }
@@ -249,7 +250,6 @@ fn decode_send(payload: &[u8], activity: &Activity) -> Result<SendSemantics, Dis
         || signed_context_hash != context_hash
         || network_id != activity.network_id()
         || protocol_version != activity.protocol_version()
-        || sequence != activity.account_sequence()
         || idempotency_key != activity.idempotency_key()
     {
         return Err(DisclosureError::MalformedPayload);
@@ -279,11 +279,7 @@ fn decode_receive(payload: &[u8], activity: &Activity) -> Result<SendSemantics, 
     let idempotency_key = fixed(&mut decoder)?;
     let _context_hash: [u8; 32] = fixed(&mut decoder)?;
     decoder.finish()?;
-    if amount == 0
-        || from == to
-        || sequence != activity.account_sequence()
-        || idempotency_key != activity.idempotency_key()
-    {
+    if amount == 0 || from == to || idempotency_key != activity.idempotency_key() {
         return Err(DisclosureError::MalformedPayload);
     }
     Ok(SendSemantics {
@@ -515,18 +511,119 @@ fn semantics(activity: &Activity) -> Result<SendSemantics, DisclosureError> {
     }
 }
 
+fn payment_fields(activity: &Activity) -> Result<DisclosureFields, DisclosureError> {
+    let TimestampBound {
+        not_before,
+        not_after,
+    } = activity.timestamp_bound();
+    let kind = (
+        activity.activity_type().module(),
+        activity.activity_type().ordinal(),
+    );
+    if kind == (ModuleId::Programs, 6)
+        && !layerx_wire::limits::protocol_version_uses_occupancy(activity.protocol_version())
+    {
+        return Err(DisclosureError::MalformedPayload);
+    }
+    let payment = Payment::decode(kind.0, kind.1, activity.payload(), activity.actor_did())?;
+    if let Payment::Receive {
+        idempotency_key, ..
+    } = &payment
+    {
+        if *idempotency_key != activity.idempotency_key() {
+            return Err(DisclosureError::MalformedPayload);
+        }
+    }
+    let mut counterparties = Vec::new();
+    let mut amounts = Vec::new();
+    let asset = match &payment {
+        Payment::Register(r) => r.asset,
+        Payment::OpenAccount { asset } | Payment::ProgramAccount { asset, .. } => *asset,
+        Payment::Receive {
+            from,
+            to,
+            asset,
+            amount,
+            ..
+        } => {
+            counterparties.push(Counterparty {
+                role: CounterpartyRole::Payer,
+                account: *from,
+            });
+            counterparties.push(Counterparty {
+                role: CounterpartyRole::Recipient,
+                account: *to,
+            });
+            amounts.push(DisclosedAmount {
+                role: AmountRole::Transfer,
+                value: *amount,
+            });
+            *asset
+        }
+        Payment::Mint { asset, to, amount } => {
+            counterparties.push(Counterparty {
+                role: CounterpartyRole::Recipient,
+                account: *to,
+            });
+            amounts.push(DisclosedAmount {
+                role: AmountRole::Transfer,
+                value: *amount,
+            });
+            *asset
+        }
+        Payment::Burn {
+            asset,
+            from,
+            amount,
+        } => {
+            counterparties.push(Counterparty {
+                role: CounterpartyRole::Payer,
+                account: *from,
+            });
+            amounts.push(DisclosedAmount {
+                role: AmountRole::Transfer,
+                value: *amount,
+            });
+            *asset
+        }
+        Payment::IssueGrant(g) => g.asset,
+        Payment::RevokeGrant { .. } | Payment::ProgramTransfer { .. } => [0; 32],
+    };
+    Ok(DisclosureFields {
+        activity_type: activity.activity_type(),
+        actor: activity.actor_did().to_vec(),
+        authority: activity.authority().to_vec(),
+        counterparties,
+        amounts,
+        asset,
+        fee_limit: activity.fee_limit(),
+        expiry: Expiry {
+            not_before,
+            not_after,
+            payload_expires_at: not_after,
+        },
+        idempotency_key: activity.idempotency_key(),
+        evm_payout_binding: None,
+        payment: Some(payment),
+    })
+}
+
 fn decoded_fields(activity: &Activity) -> Result<DisclosureFields, DisclosureError> {
     let TimestampBound {
         not_before,
         not_after,
     } = activity.timestamp_bound();
+    let kind = (
+        activity.activity_type().module(),
+        activity.activity_type().ordinal(),
+    );
     if matches!(
-        (
-            activity.activity_type().module(),
-            activity.activity_type().ordinal()
-        ),
-        (ModuleId::Governance, GOVERNANCE_EVM_BINDING_ORDINAL)
+        kind,
+        (ModuleId::Asset, 1 | 4 | 6 | 7 | 8 | 10 | 11) | (ModuleId::Programs, 5 | 6)
     ) {
+        return payment_fields(activity);
+    }
+    if kind == (ModuleId::Governance, GOVERNANCE_EVM_BINDING_ORDINAL) {
         let binding = decode_evm_payout_binding(activity.payload(), activity)?;
         return Ok(DisclosureFields {
             activity_type: activity.activity_type(),
@@ -543,15 +640,10 @@ fn decoded_fields(activity: &Activity) -> Result<DisclosureFields, DisclosureErr
             },
             idempotency_key: activity.idempotency_key(),
             evm_payout_binding: Some(binding),
+            payment: None,
         });
     }
-    if matches!(
-        (
-            activity.activity_type().module(),
-            activity.activity_type().ordinal()
-        ),
-        (ModuleId::Budget, BUDGET_CREATE_ORDINAL)
-    ) {
+    if kind == (ModuleId::Budget, BUDGET_CREATE_ORDINAL) {
         let budget = decode_budget_create(activity.payload())?;
         return Ok(DisclosureFields {
             activity_type: activity.activity_type(),
@@ -580,6 +672,7 @@ fn decoded_fields(activity: &Activity) -> Result<DisclosureFields, DisclosureErr
             },
             idempotency_key: activity.idempotency_key(),
             evm_payout_binding: None,
+            payment: None,
         });
     }
     let send = semantics(activity)?;
@@ -610,6 +703,7 @@ fn decoded_fields(activity: &Activity) -> Result<DisclosureFields, DisclosureErr
         },
         idempotency_key: send.idempotency_key,
         evm_payout_binding: None,
+        payment: None,
     })
 }
 
@@ -624,9 +718,32 @@ struct DisclosureFields {
     expiry: Expiry,
     idempotency_key: [u8; 32],
     evm_payout_binding: Option<DisclosedEvmPayoutBinding>,
+    payment: Option<Payment>,
 }
 
 impl Disclosure {
+    #[must_use]
+    pub const fn envelope_sequence(&self) -> u64 {
+        self.activity.account_sequence()
+    }
+
+    /// # Errors
+    /// Returns a payload decoding error for malformed canonical semantics.
+    pub fn payload_sequence(&self) -> Result<Option<u64>, DisclosureError> {
+        if let Some(payment) = &self.payment {
+            return Ok(match payment {
+                Payment::Receive { sequence, .. } => Some(*sequence),
+                _ => None,
+            });
+        }
+        match (self.activity_type.module(), self.activity_type.ordinal()) {
+            (ModuleId::Asset, 5 | 6) | (ModuleId::Budget, 7) => {
+                Ok(Some(semantics(&self.activity)?.sequence))
+            }
+            _ => Ok(None),
+        }
+    }
+
     fn validate_fields(&self) -> Result<(), DisclosureError> {
         let expected = decoded_fields(&self.activity)?;
         macro_rules! require_field {
@@ -646,6 +763,7 @@ impl Disclosure {
         require_field!(expiry);
         require_field!(idempotency_key);
         require_field!(evm_payout_binding);
+        require_field!(payment);
         Ok(())
     }
 
@@ -676,7 +794,15 @@ impl Disclosure {
         self.validate_fields()?;
         let mut encoder = Encoder::new(MAX_TRANSPORT_DISCLOSURE_BYTES);
         encoder.structure_header(0x4453)?;
-        encoder.u8(1)?;
+        encoder.u8(3)?;
+        encoder.u64(self.envelope_sequence())?;
+        match self.payload_sequence()? {
+            Some(sequence) => {
+                encoder.u8(1)?;
+                encoder.u64(sequence)?;
+            }
+            None => encoder.u8(0)?,
+        }
         encoder.u32(self.activity_type.value())?;
         encoder.bytes(&self.actor, 255)?;
         encoder.bytes(&self.authority, 524_288)?;
@@ -711,6 +837,9 @@ impl Disclosure {
                 encoder.fixed(&binding.ownership_signature_digest)?;
             }
             None => encoder.u8(0)?,
+        }
+        if let Some(payment) = &self.payment {
+            encoder.bytes(&payment.encode(&self.actor)?, 32768)?;
         }
         Ok(encoder.finish())
     }
@@ -801,6 +930,7 @@ pub fn bind(canonical: &[u8], registry: &ModuleRegistry) -> Result<Disclosure, D
         expiry: fields.expiry,
         idempotency_key: fields.idempotency_key,
         evm_payout_binding: fields.evm_payout_binding,
+        payment: fields.payment,
         activity,
         signing_digest: message.digest(),
     })
