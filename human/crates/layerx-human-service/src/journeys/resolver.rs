@@ -12,7 +12,6 @@ use layerx_types::ids::{AssetId, CheckpointId, IdempotencyKey};
 use layerx_types::intent::{
     BudgetId, ContextHash, DepositProofId, EvmAddress, NetworkId, PayerGrantId, PeriodLength,
     ProtocolVersion, PurposeHash, RolloverPolicy, SendAuthorization, Sequence, TimestampSeconds,
-    WithdrawalId,
 };
 
 /// The only source and destination kinds accepted by the movement API.
@@ -155,7 +154,6 @@ pub enum CustodyRoute {
     Withdrawal {
         request_anchor: CheckpointId,
         fee_limit: u64,
-        withdrawal_id: WithdrawalId,
         withdrawals_account: AccountId,
         payout_address: EvmAddress,
         idempotency_key: IdempotencyKey,
@@ -262,15 +260,13 @@ impl RouteRequest {
             Relationship::Custody(CustodyRoute::Withdrawal {
                 request_anchor,
                 fee_limit,
-                withdrawal_id,
                 withdrawals_account,
                 payout_address,
                 idempotency_key,
             }) => {
-                out.push(7);
+                out.push(8);
                 out.extend(request_anchor.bytes());
                 out.extend(fee_limit.to_be_bytes());
-                out.extend(withdrawal_id.bytes());
                 put_text(&mut out, withdrawals_account.canonical());
                 out.extend(payout_address.bytes());
                 out.extend(idempotency_key.bytes());
@@ -333,10 +329,9 @@ impl RouteRequest {
                 reserve: AccountId::parse(&r.text(512)?).map_err(|_| wire_error())?,
                 idempotency_key: IdempotencyKey::new(r.array()?),
             }),
-            7 => Relationship::Custody(CustodyRoute::Withdrawal {
+            8 => Relationship::Custody(CustodyRoute::Withdrawal {
                 request_anchor: CheckpointId::new(r.array()?),
                 fee_limit: r.u64()?,
-                withdrawal_id: WithdrawalId::new(r.array()?),
                 withdrawals_account: AccountId::parse(&r.text(512)?).map_err(|_| wire_error())?,
                 payout_address: EvmAddress::new(r.array()?),
                 idempotency_key: IdempotencyKey::new(r.array()?),
@@ -806,7 +801,6 @@ impl RouteResolver {
                 Relationship::Custody(CustodyRoute::Withdrawal {
                     request_anchor,
                     fee_limit,
-                    withdrawal_id,
                     withdrawals_account,
                     payout_address,
                     idempotency_key,
@@ -818,7 +812,6 @@ impl RouteResolver {
                     BridgeWithdrawRequest::new(
                         request_anchor,
                         fee_limit,
-                        withdrawal_id,
                         owner.clone(),
                         withdrawals_account,
                         payout_address,

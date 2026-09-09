@@ -10,7 +10,7 @@ use layerx_human_service::journeys::{
     DepositAgentPlan, DepositPlan, SettlementConfig, WithdrawalAgentPlan, WithdrawalPlan,
 };
 use layerx_paxeer_client::DepositProofConfig;
-use layerx_types::intent::{EvmAddress, WithdrawalId};
+use layerx_types::intent::EvmAddress;
 
 pub(crate) fn identity(request: &PlanningRequest, purpose: &[u8]) -> Result<[u8; 32], Error> {
     let mut digest = Sha256::new();
@@ -86,7 +86,6 @@ pub(crate) fn withdrawal_plan(
         network: context.network,
         layerx_protocol_version: context.protocol_version,
         request_anchor: layerx_types::ids::CheckpointId::new(context.request_anchor),
-        withdrawal_id: WithdrawalId::new(id),
         owner: context.account.clone(),
         withdrawals_account: context.withdrawals_account.clone(),
         payout_address: context.wallet,

@@ -16,7 +16,7 @@ use layerx_types::intent::{
     ApprovalThreshold, AuthorizationSignature, BudgetId, ContextHash, DepositProofId, EvmAddress,
     GrantSchedule, NetworkId, PayerGrantId, PeriodLength, ProtocolVersion, PublicKey, PurposeHash,
     RecoveryRoot, RolloverPolicy, SendAuthorization, SendAuthorizationKind, Sequence,
-    TimestampSeconds, WithdrawalId,
+    TimestampSeconds,
 };
 use layerx_types::payload::{
     ActivityType, ModuleId, ModuleRegistration, ModuleRegistry, PayloadError,
@@ -333,7 +333,6 @@ fn every_v1_intent_compiles_through_the_registered_module() {
             BridgeWithdrawRequest::new(
                 CheckpointId::new([18; 32]),
                 100,
-                WithdrawalId::new([15; 32]),
                 owner(),
                 account("system:paxeer-withdrawals"),
                 EvmAddress::new([16; 20]),
@@ -405,7 +404,6 @@ fn native_withdrawal_v2_binds_recipient_anchor_and_fee_and_refuses_v1() {
     let request = BridgeWithdrawRequest::new(
         CheckpointId::new([18; 32]),
         100,
-        WithdrawalId::new([15; 32]),
         owner(),
         account("system:paxeer-withdrawals"),
         EvmAddress::new([16; 20]),
@@ -449,7 +447,6 @@ fn native_withdrawal_v2_binds_recipient_anchor_and_fee_and_refuses_v1() {
             BridgeWithdrawRequest::new(
                 CheckpointId::new(anchor),
                 fee,
-                WithdrawalId::new([15; 32]),
                 owner(),
                 account("system:paxeer-withdrawals"),
                 EvmAddress::new(recipient),
@@ -468,7 +465,6 @@ fn native_withdrawal_v2_binds_recipient_anchor_and_fee_and_refuses_v1() {
         assert!(BridgeWithdrawRequest::new(
             CheckpointId::new(anchor),
             100,
-            WithdrawalId::new([15; 32]),
             owner(),
             account("system:paxeer-withdrawals"),
             EvmAddress::new(recipient),
