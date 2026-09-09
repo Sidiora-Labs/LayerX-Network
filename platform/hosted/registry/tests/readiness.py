@@ -14,6 +14,7 @@ import time
 import urllib.error
 import urllib.request
 import urllib.parse
+import uuid
 
 
 def main():
@@ -41,8 +42,11 @@ def main():
     body = Path(args.build_body).read_bytes()
 
     def request(path, data=None):
+        headers = {'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'}
+        if data is not None:
+            headers['Idempotency-Key'] = str(uuid.uuid4())
         req = urllib.request.Request(args.url + path, data=data,
-            headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'})
+            headers=headers)
         started = time.monotonic()
         try:
             with urllib.request.urlopen(req, context=context, timeout=1800 if data is not None else 8) as response:

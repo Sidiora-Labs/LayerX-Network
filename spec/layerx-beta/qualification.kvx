@@ -6700,3 +6700,83 @@ symbol = "test-daemon-guarantor test-daemon-guarantor-sanitize platform-hosted-t
 observed = "At revision 70bf8bf3 all fourteen commands from the existing qualification table were rerun with CARGO_BUILD_JOBS=16 and MAKEFLAGS=-j16. make build, both build/unit/integration combinations, root make test-daemon-guarantor, root make test-daemon-finality-authority, the halt_on_error UBSan unit variant, the real-contract settlement script, root guarantor provisioning, shell syntax, guarantor topology, beta-ledger-check and git diff --check exit 0. make test-daemon-guarantor-sanitize exits 2 because AddressSanitizer is not first in the initial library list. make platform-hosted-topology-check exits 2 with the existing twenty non-guarantor failures across fifty-two edges; all seven guarantor negative mutations pass. Exact commands, exit codes and per-command evidence paths are retained in qual-logs/gp1/gp1d-gates.json; command logs are qual-logs/gp1/gp1d-final-*.log."
 assumption = "The real-daemon producer integration is qualified. Settlement evidence publication and its extended fetch_published tests remain blocked by observation 6.1.44; the passing settlement test covers the existing registration path only. Sanitizer checks remain enabled. Docker, image, kubectl, kind, Secret application and live-cluster gates were not run."
 severity = "note"
+
+[observation.6.8.102]
+task = "6.8"
+severity = "blocker"
+file = "platform/hosted/human/provision.py platform/hosted/human/provision.sh platform/hosted/human/provision-owner-job.yaml platform/hosted/paxeer/deploy-contracts.sh"
+symbol = "evidence_inputs human_evidence_provision movement_source"
+observed = "Fresh evidence provisioning has no producer for human-evidence-input/owner-registration.json, owner-request.json, recovery-policy.json or the registry admission/deployment journal pairs. The movement source also requires a custody_reference absent from the deployment writer; its alternate movement-config file is itself an output of evidence material assembly. The v2 registry, guarantor checkpoint authority Secret and identity tenant binding have producers ordered before the owner Job. Protected input validation refuses before Job creation, and Human runtime containers are enabled only after material publication. No input values are synthesized."
+assumption = "Protocol registration and registry publication must supply the protected producer outputs, and custody registration must supply its committed reference. Successful first-batch head acceptance, complete material assembly, Job execution, image builds and live cluster readiness remain unqualified."
+
+[observation.6.8.103]
+task = "6.8"
+severity = "blocker"
+file = "human/crates/layerx-explorer-index/src/main.rs agent/crates/layerx-agentd/src/read/program_node.rs"
+symbol = "refresh_program LayerxdProgramBalanceReader::connect ProgramAuthority"
+observed = "The locked test command for the seven touched Human crates exits 101 while compiling explorer-index main.rs:441. The caller supplies seven arguments including endpoint, bearer and replica id separately, while LayerxdProgramBalanceReader::connect requires five arguments with a ProgramAuthority value. No explorer tests execute. Raw command and compiler diagnostics are retained in qual-logs/gates.jsonl and qual-logs/human-rust.log."
+assumption = "The explorer owner must reconcile the caller with the current authority type without dropping its endpoint, credentials, replica pin or verification semantics. This interface repair is outside Human cluster sequencing."
+
+[observation.6.8.104]
+task = "6.8"
+severity = "blocker"
+file = "agent/crates/layerx-agentd/tests/availability.rs agent/crates/layerx-client/src/availability.rs platform/hosted/authority/tests/real_node.rs"
+symbol = "complete_five_class_retrieval_streams_and_emits_offline_replay_frames corruption_withholding_and_repeated_provider_failure_are_durable_evidence real_node_authority_serves_verified_facts_and_reflects_replica_loss"
+observed = "The combined locked agent tests exit 101: availability.rs:247 reports complete provider reported partial, and availability.rs:311 receives ChunkOrder instead of MissingClass. The combined locked hosted tests exit 101 at the authority real_node target because build/bin/layerxd is absent. The supplied native-bin directory is absent on this host. Earlier authority unit, boundary, Human TLS and maintenance tests pass; the aggregate command stops before all selected packages execute. Logs are qual-logs/agent-rust.log and qual-logs/platform-rust.log."
+assumption = "Availability assertions and retrieval behavior require reconciliation by their owner; both remain unchanged. Full native-dependent gates require real qualified binaries. Partial package execution does not qualify the combined suites."
+
+[observation.6.8.105]
+task = "6.8"
+severity = "blocker"
+file = "platform/hosted/tests/beta-cluster.sh platform/hosted/node/bootstrap.sh platform/hosted/node/deployment.yaml"
+symbol = "IDENTITY_FILE identity_provision identity_write GUARANTOR_COUNT"
+observed = "IDENTITY_FILE points to WORK_DIR/identity, but identity_provision creates that same path as a directory; identity_write later redirects to it as a file. The hosted topology provisions two guarantor containers while the retained threshold-driven genesis loop accepts a certificate threshold up to 32. A threshold greater than two therefore has no matching additional hosted producers."
+assumption = "The cluster identity summary path and generalized guarantor topology need separate reconciliation. The configured two-member topology is preserved, and no certificate threshold, genesis count bound or finality assertion is weakened."
+
+[observation.6.8.106]
+task = "6.8"
+severity = "blocker"
+file = "human/crates/layerx-human-identity-provider/tests/client.rs human/crates/layerx-human-movement-provider/src/tests.rs"
+symbol = "original_client_provisions_resolves_and_replays_assertion_devices malformed_proof_candidates_are_refused_over_the_real_socket restarting_server_reobserves_instead_of_serving_archived_finality real_client_refuses_unavailable_plans_and_reads_actual_endpoint_failure"
+observed = "Separate locked identity-provider tests exit 101 when original_client_provisions_resolves_and_replays_assertion_devices returns ProviderUnavailable. Separate locked movement-provider tests exit 101 with three failures: malformed proof candidates receive ProducerUnavailable instead of EvidenceSourceMismatch, and the restart and actual-endpoint tests return Unavailable. Logs are qual-logs/human-layerx-human-identity-provider.log and qual-logs/human-layerx-human-movement-provider.log."
+assumption = "The provider owners must reconcile these runtime/refusal failures. Consumer assertions and provider behavior remain unchanged; passing hosted Python provisioning checks do not establish these package gates."
+
+[observation.6.8.107]
+task = "6.8"
+severity = "blocker"
+file = "agent/crates/layerx-client/tests/availability_daemon.rs human/crates/layerx-paxeer-client/tests/disposable_custody.py"
+symbol = "real_daemon_availability_refusals comet_chain"
+observed = "The separate locked layerx-client test exits 101 because layerxd is not built. The separate locked layerx-paxeer-client test initially lacks Python cryptography; after installing cryptography and pycryptodome in qual-logs/venv, its real Anvil custody-evidence test passes but disposable_custody exits 101 because paxd is not installed. Logs are qual-logs/client-rust.log, qual-logs/human-layerx-paxeer-client.log and qual-logs/paxeer-python-dependencies-retry.log."
+assumption = "Qualified native daemon and Paxeer binaries must be supplied for the remaining real-process integration gates. No replacement binary or weakened assertion was introduced."
+
+[observation.6.8.108]
+task = "6.8"
+severity = "note"
+file = "platform/hosted/tests/beta-cluster.sh platform/hosted/human/provision.py platform/hosted/human/material.py platform/hosted/node/deployment.yaml"
+symbol = "human_evidence_provision peer_binding bootstrap human_policy_publish"
+observed = "Hosted Human pytest passes all eighteen tests with the real identity-provider binary. Hosted topology, bootstrap manifest rendering and retained-material refusal checks pass. Separate locked package tests pass for layerx-human-kms, layerx-human-service, layerx-human-test-support and layerx-platform-identity. The gateway package passes after provisioning an untracked Redis executable and libraries for its real TLS process tests. Commands, exit codes and logs are retained in qual-logs/gates.jsonl, qual-logs/followup-gates.jsonl, qual-logs/platform-remaining-gates.jsonl and qual-logs/additional-gates.json."
+assumption = "These are local source gates. The missing producer inputs and failed aggregate packages remain blockers. No complete generated evidence set, image build, Kubernetes Job, Secret application or cluster readiness is qualified."
+
+[observation.6.8.109]
+task = "6.8"
+severity = "blocker"
+file = "platform/Makefile.inc platform/tools/dependency-policy.sh platform/Cargo.lock"
+symbol = "platform-lint dependency-policy"
+observed = "The initial platform-lint attempts stop because cfg_aliases 0.2.2 is absent from the offline cache. After a locked Cargo dependency fetch, workspace all-targets Clippy with warnings denied, the platform workspace gate and marketplace wasm32 Clippy pass. The unchanged dependency policy then rejects webpki-root-certs because CDLA-Permissive-2.0 is not allowlisted; make exits 2 before cargo deny executes. Raw output is qual-logs/platform-lint-cached.log."
+assumption = "The dependency-policy owner must resolve the license-policy conflict. The allowlist, dependency graph, warning policy and checks remain unchanged; the aggregate platform-lint gate is not qualified."
+
+[observation.6.8.110]
+task = "6.8"
+severity = "blocker"
+file = "platform/hosted/tests/beta-cluster.sh platform/hosted/human/provision.sh platform/hosted/human/provision.py"
+symbol = "beta_cluster_up module_registry_generate identity_provision human_evidence_provision owner_registration"
+observed = "The full bash qual-logs/au39/run-gate-3.sh wrapper exits 2 on merged revision 6f11b38a7468 with the registry readiness request-header correction. All nine discovered hosted base images pull successfully and all seventeen hosted images build and load. Calico and both kind nodes become ready; the registry quota boundary service reports Result=success and ExecMainStatus=0. Disposable settlement deployment and publication complete. The generated module registry has schema_version 2 with assets and modules, the guarantor checkpoint authority Secret exists, and both provisioned identities preserve the requested tenant binding. Human evidence validation then refuses exactly: /root/lx-lanes/authority/build/beta-cluster/human-evidence-input/owner-registration.json: required protected JSON unavailable or invalid. Evidence: qual-logs/au39/task-6.8.log and task-6.8.exit; qual-logs/au42/wrapper.log, wrapper.exit, pull-bases.log, pull-bases.exit, build-*.log, images, boundary-status.log, guarantor-secret.log and material-inspection.log."
+assumption = "The retained disposable cluster remains running. owner-registration.json, owner-request.json and recovery-policy.json are absent, and no admission/deployment journal pairs exist under its work directory. The protected evidence producers remain required. Human Job execution, material publication, runtime startup, hosted smoke and successful full-gate completion are not qualified."
+
+[observation.6.8.111]
+task = "6.8"
+severity = "blocker"
+file = "platform/hosted/registry/tests/readiness.py platform/hosted/registry/README.md platform/hosted/tests/beta-cluster.sh"
+symbol = "main request beta_cluster_up manifests_apply"
+observed = "The readiness harness now supplies a fresh valid Idempotency-Key for each real build request; every concurrency, successful-build, latency and rootfs mutation assertion is unchanged. Python syntax validation passes. Live kubectl lookup of statefulset layerx-program-registry exits 1 with NotFound: the full gate refuses Human evidence before manifests_apply deploys the registry. No real registered-program source request or admission/deployment journal pair is produced by this retained bring-up. Readiness concurrency and mutation execution remains blocked and was not run. Evidence: qual-logs/au42/readiness-syntax.log, readiness-syntax.exit, readiness-registry-prerequisite.log, readiness-registry-prerequisite.exit, material-inspection.log and pods.log."
+assumption = "The real-process harness requires an isolated registry process with delegated cgroups, quota slots, private writable rootfs and state, live protocol authority, and a real registered program with published matching source. Those inputs must be provisioned before running its successful-build assertion. Syntax validation and successful image compilation do not establish concurrent readiness latency or mutation refusal."
