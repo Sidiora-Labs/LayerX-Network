@@ -88,8 +88,7 @@ DEVELOPER_NAMESPACE=layerx-developer
 IMAGE_LABEL=io.layerx.beta-cluster
 BOUNDARY_LABEL=layerx.io/program-registry-boundary
 
-IMAGE_NAMES=(layerx-testnet-control layerx-gateway layerx-faucet layerx-program-registry layerx-webhooks layerx-dashboard layerx-dashboard-web
-    layerx-internal layerx-human layerx-node layerx-core-boundary layerx-receipt-authority layerx-agent-boundary layerx-identity layerx-paxeer-boundary paxd-node paxd)
+source "$SCRIPT_DIR/beta-images.sh"
 TRUSTED_BOUNDARY_SERVICES=(layerx-pending-core layerx-pending-core-admin paxeer-boundary layerx-identity layerx-receipt-authority layerx-agent-boundary)
 INTERNAL_NAMESPACE=layerx-internal
 FOUNDRY_BIN=${LAYERX_BETA_FOUNDRY_BIN:-/root/.foundry/bin}
@@ -111,31 +110,19 @@ require_tool() {
     done
 }
 
-image_source() {
-    case "$1" in
-        layerx-testnet-control) printf 'ghcr.io/sidiora-labs/layerx-testnet-control:0.1.0 platform/hosted/testnet/Dockerfile' ;;
-        layerx-gateway) printf 'ghcr.io/sidiora-labs/layerx-gateway:0.1.0 platform/hosted/gateway/Dockerfile' ;;
-        layerx-faucet) printf 'ghcr.io/sidiora-labs/layerx-faucet:0.1.0 platform/hosted/faucet/Dockerfile' ;;
-        layerx-program-registry) printf 'ghcr.io/sidiora-labs/layerx-program-registry:0.1.0 platform/hosted/registry/Dockerfile' ;;
-        layerx-webhooks) printf 'ghcr.io/sidiora-labs/layerx-webhooks:0.1.0 platform/hosted/webhooks/Dockerfile' ;;
-        layerx-dashboard) printf 'ghcr.io/sidiora-labs/layerx-dashboard:0.1.0 platform/hosted/dashboard/Dockerfile' ;;
-        layerx-dashboard-web) printf 'ghcr.io/sidiora-labs/layerx-dashboard-web:0.1.0 platform/hosted/dashboard/web/Dockerfile' ;;
-        layerx-internal) printf 'ghcr.io/sidiora-labs/layerx-internal:0.1.0 platform/hosted/internal/Dockerfile' ;;
-        layerx-human) printf 'ghcr.io/sidiora-labs/layerx-human:0.1.0 platform/hosted/human/Dockerfile' ;;
-        layerx-node) printf 'ghcr.io/sidiora-labs/layerx-node:0.1.0 platform/hosted/node/Dockerfile' ;;
-        layerx-core-boundary) printf 'ghcr.io/sidiora-labs/layerx-core-boundary:0.1.0 platform/hosted/core/Dockerfile' ;;
-        layerx-receipt-authority) printf 'ghcr.io/sidiora-labs/layerx-receipt-authority:0.1.0 platform/hosted/authority/Dockerfile' ;;
-        layerx-agent-boundary) printf 'ghcr.io/sidiora-labs/layerx-agent-boundary:0.1.0 platform/hosted/agent-boundary/Dockerfile' ;;
-        layerx-identity) printf 'ghcr.io/sidiora-labs/layerx-identity:0.1.0 platform/hosted/identity/Dockerfile' ;;
-        layerx-paxeer-boundary) printf 'ghcr.io/sidiora-labs/layerx-paxeer-boundary:0.1.0 platform/hosted/paxeer/Dockerfile' ;;
-        paxd-node) printf 'ghcr.io/sidiora-labs/paxd-node:0.1.0 platform/hosted/paxeer/Dockerfile.paxd-node' ;;
-        paxd) printf 'ghcr.io/sidiora-labs/paxd:0.1.0 platform/hosted/paxeer/Dockerfile.paxd' ;;
-        *) fail "unknown image $1" ;;
-    esac
-}
-
 revision() {
     local rev
+    case "${LAYERX_BETA_IMAGE_SOURCE:-build}" in
+        build) ;;
+        ghcr)
+            [ "$(cluster_mode)" = kind ] || fail "GHCR image source requires a kind cluster"
+            rev=${LAYERX_BETA_IMAGE_TAG:-beta}
+            [[ $rev =~ ^[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}$ ]] || fail "invalid LAYERX_BETA_IMAGE_TAG"
+            printf '%s' "$rev"
+            return
+            ;;
+        *) fail "LAYERX_BETA_IMAGE_SOURCE must be build or ghcr" ;;
+    esac
     rev=$(git -C "$REPO_ROOT" rev-parse --short=12 HEAD)
     if [ -n "$(git -C "$REPO_ROOT" status --porcelain --untracked-files=no -- platform)" ]; then
         rev="$rev-dirty"
@@ -144,7 +131,9 @@ revision() {
 }
 
 image_ref() {
-    printf '%s/%s:%s' "${LAYERX_BETA_IMAGE_REGISTRY:-layerx-beta}" "$1" "$REVISION"
+    local registry=${LAYERX_BETA_IMAGE_REGISTRY:-layerx-beta}
+    if [ "${LAYERX_BETA_IMAGE_SOURCE:-build}" = ghcr ]; then registry=layerx-beta; fi
+    printf '%s/%s:%s' "$registry" "$1" "$REVISION"
 }
 
 cluster_mode() {
@@ -223,15 +212,6 @@ build_context() {
         | tar --null --files-from - -cf "$WORK_DIR/context.tar")
 }
 
-image_build_args() {
-    case "$1" in
-        layerx-node) printf -- '--build-arg LXP_REVISION=%s' "$REVISION" ;;
-        paxd-node) printf -- '--build-arg PAX_CHAIN_REF=%s' "$REVISION" ;;
-        paxd) printf -- '--build-arg PAXD_IMAGE=%s' "$(image_ref paxd-node)" ;;
-        *) ;;
-    esac
-}
-
 build_images() {
     local name canonical dockerfile ref id
     local -a build_args
@@ -248,6 +228,36 @@ build_images() {
         id=$(docker image inspect --format '{{.Id}}' "$ref")
         printf '%s %s %s %s\n' "$name" "$canonical" "$ref" "$id" >> "$WORK_DIR/images"
     done
+}
+
+pull_images() {
+    local name canonical dockerfile remote digest ref id
+    mkdir -p "$LOG_DIR"
+    : > "$WORK_DIR/images"
+    for name in "${IMAGE_NAMES[@]}"; do
+        read -r canonical dockerfile <<<"$(image_source "$name")"
+        remote="ghcr.io/sidiora-labs/$name"
+        digest=$(registry_image_digest "$remote:$REVISION")
+        log "pulling $remote:$REVISION at $digest"
+        docker pull "$remote@$digest" > "$LOG_DIR/pull-$name.log" 2>&1 \
+            || fail "image pull failed for $name (log $LOG_DIR/pull-$name.log)"
+        docker image inspect "$remote@$digest" --format '{{json .RepoDigests}}' \
+            | jq -e --arg expected "$remote@$digest" 'index($expected) != null' >/dev/null \
+            || fail "pulled digest differs from registry manifest for $name"
+        ref=$(image_ref "$name")
+        docker tag "$remote@$digest" "$ref"
+        id=$(docker image inspect --format '{{.Id}}' "$ref")
+        printf '%s %s %s %s\n' "$name" "$canonical" "$ref" "$id" >> "$WORK_DIR/images"
+        printf '%s %s\n' "$remote:$REVISION" "$digest" >> "$LOG_DIR/pulled-digests.log"
+    done
+}
+
+prepare_images() {
+    case "${LAYERX_BETA_IMAGE_SOURCE:-build}" in
+        build) build_images ;;
+        ghcr) require_tool jq; pull_images ;;
+        *) fail "LAYERX_BETA_IMAGE_SOURCE must be build or ghcr" ;;
+    esac
 }
 
 kind_nodes() {
@@ -1665,7 +1675,7 @@ beta_cluster_up() {
     [ "$(cluster_mode)" = owner ] && PULL_POLICY=Always
     preflight_disk
     tools_install
-    build_images
+    prepare_images
     cluster_create
     load_images
     node_boundary_install
@@ -1797,7 +1807,10 @@ main() {
             require_tool docker git tar
             REVISION=$(revision)
             preflight_disk
-            build_images
+            prepare_images
+            ;;
+        publish-images)
+            bash "$SCRIPT_DIR/publish-images.sh" "$@"
             ;;
         up)
             for argument in "$@"; do

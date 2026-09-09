@@ -6306,3 +6306,19 @@ file = "platform/hosted/registry/tests/readiness.py platform/hosted/registry/REA
 symbol = "main request beta_cluster_up manifests_apply"
 observed = "The readiness harness now supplies a fresh valid Idempotency-Key for each real build request; every concurrency, successful-build, latency and rootfs mutation assertion is unchanged. Python syntax validation passes. Live kubectl lookup of statefulset layerx-program-registry exits 1 with NotFound: the full gate refuses Human evidence before manifests_apply deploys the registry. No real registered-program source request or admission/deployment journal pair is produced by this retained bring-up. Readiness concurrency and mutation execution remains blocked and was not run. Evidence: qual-logs/au42/readiness-syntax.log, readiness-syntax.exit, readiness-registry-prerequisite.log, readiness-registry-prerequisite.exit, material-inspection.log and pods.log."
 assumption = "The real-process harness requires an isolated registry process with delegated cgroups, quota slots, private writable rootfs and state, live protocol authority, and a real registered program with published matching source. Those inputs must be provisioned before running its successful-build assertion. Syntax validation and successful image compilation do not establish concurrent readiness latency or mutation refusal."
+
+[observation.6.8.112]
+task = "6.8"
+severity = "blocker"
+file = "platform/hosted/tests/publish-images.sh .github/workflows/publish-images.yml platform/hosted/tests/beta-cluster.sh"
+symbol = "publish_images registry_image_digest pull_images"
+observed = "Docker manifest inspection of ghcr.io/sidiora-labs/layerx-node:beta exits 1 with denied: denied. The local build inventory contains seventeen images tagged 6f11b38a7468-dirty. Live GHCR publication and package visibility mutation were not attempted. Registry pull, kind loading of published images and workflow execution remain unqualified."
+assumption = "The operator must authenticate Docker to GHCR before live publication. SHA publication tags identify the build inventory base commit; dirty build provenance is retained in publisher output. Successful source checks do not establish remote image availability or anonymous access."
+
+[observation.6.8.113]
+task = "6.8"
+severity = "note"
+file = "platform/hosted/tests/beta-images.sh platform/hosted/tests/publish-images.sh platform/hosted/tests/beta-cluster.sh .github/workflows/publish-images.yml"
+symbol = "IMAGE_NAMES image_source image_build_args publish_images prepare_images"
+observed = "Bash syntax checks pass separately for all three scripts. Publisher read-only inventory validation matches all seventeen recorded image IDs against real Docker images. Shared table and build argument checks, GHCR alias selection, invalid mode and tag refusals, owner-cluster refusal, incomplete inventory refusal, absent local image refusal and changed image ID refusal pass. Workflow YAML parsing verifies main push and manual triggers, packages write permission and the cluster build/publication entry points. actionlint is unavailable and was not run. Evidence is qual-logs/pub2/syntax-all.log, local-images.log, image-checks.log and workflow.log."
+assumption = "These checks establish source syntax and local inventory refusal behavior. Authentication denial prevents qualification of registry pushes, remote digest verification, anonymous package pulls and kind loading of published images."
