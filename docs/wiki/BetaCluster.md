@@ -90,7 +90,7 @@ The rendered `registry-check` container runs the node image as UID 4021 with a
 read-only LNI volume. After node readiness, the native read-only preparation
 client compares module ids and ordinals against the actual published ConfigMap.
 No assets are compared because LNI preparation carries none. The node image
-must include the new executable; image and live-cluster qualification are
+must include `/usr/local/bin/layerx-module-registry`; image and live-cluster qualification are
 separate gates.
 
 Use `LAYERX_BETA_RETAIN_MATERIAL=1` for another `up` against a live cluster with

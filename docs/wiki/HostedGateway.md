@@ -8,12 +8,14 @@ LayerX Network (`platform/hosted/gateway/src/lib.rs:1`;
 platform string is `tls-receipt-verifying-multi-instance-hosted-gateway`
 (`platform/hosted/gateway/src/lib.rs:885-887`).
 
-It is the only hosted surface serving `/v1` routes to humans and SDKs.
-No in-cluster human service exists
-(`platform/hosted/tests/beta-cluster.sh:1130`). Qualification binds
-that URL as `LAYERX_QUALIFICATION_HUMAN_URL` / the SDK and CLI
-`LAYERX_API_URL`
-(`platform/hosted/tests/beta-cluster.sh:1129-1130`).
+It is the only hosted surface serving public `/v1` routes to humans and SDKs.
+The in-cluster Human HTTPS API is Service `layerx-human` on the node pod
+(`platform/hosted/human/deployment.yaml:1-12`). Qualification binds that
+API as `LAYERX_QUALIFICATION_HUMAN_URL`
+(`platform/hosted/tests/beta-cluster.sh:1516-1517`,
+`platform/hosted/tests/beta-cluster.sh:1655`). The gateway URL is
+`LAYERX_GATEWAY_URL`
+(`platform/hosted/tests/beta-cluster.sh:1492`).
 
 The image is `ghcr.io/sidiora-labs/layerx-gateway:0.1.0`, user
 `4020:4020`, entrypoint `/usr/local/bin/layerx-gateway`

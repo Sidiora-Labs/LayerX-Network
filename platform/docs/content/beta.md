@@ -61,7 +61,7 @@ The reached rung of a surface is raised only by a `[gate.*]` record in the evide
 | hosted-registry | hosted program registry | hosted | deployment_proven | source_present | platform/hosted/registry |
 | hosted-webhooks | signed webhook deliveries | hosted | deployment_proven | source_present | platform/hosted/webhooks |
 | hosted-dashboard | developer dashboard API and web | hosted | deployment_proven | source_present | platform/hosted/dashboard |
-| hosted-node | layerxd StatefulSet with bootstrap, supervisor and settlement binding; hosts the core, receipt-authority and agent-boundary containers | hosted | deployment_proven | source_present | platform/hosted/node |
+| hosted-node | layerxd StatefulSet with bootstrap, supervisor and settlement binding; hosts the core, receipt-authority, agent-boundary and Human provider containers | hosted | deployment_proven | source_present | platform/hosted/node |
 | hosted-core | core boundary: layerx-pending-core and layerx-pending-core-admin over the node LNI socket | hosted | deployment_proven | source_present | platform/hosted/core |
 | hosted-authority | independent receipt authority replica: layerx-receipt-authority | hosted | deployment_proven | source_present | platform/hosted/authority |
 | hosted-agent-boundary | agent boundary: layerx-agent-boundary LNI submissions for the gateway and the registry | hosted | deployment_proven | source_present | platform/hosted/agent-boundary |

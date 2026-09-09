@@ -229,8 +229,12 @@ on create, and verifies the signature against the returned public key
 | `payments` | `https://layerx-gateway.layerx-testnet.svc` (`platform/hosted/internal/deployment.yaml:241-242`) | `/v1/receipts/{resource}` (`platform/hosted/internal/src/events.rs:41`) | `Authorization: LayerX-Key …` (`platform/hosted/internal/src/events.rs:52-56`) |
 | `programs` | `https://layerx-gateway.layerx-testnet.svc` (`platform/hosted/internal/deployment.yaml:385-386`) | `/v1/programs/registry/{resource}` (`platform/hosted/internal/src/events.rs:42`) | `Authorization: LayerX-Key …` |
 
-No `layerx-human` workload is declared under `platform/hosted` other
-than as that NetworkPolicy peer and those two upstream URLs.
+Service `layerx-human` selects the node pod and forwards HTTPS to the
+Human API container port (`platform/hosted/human/deployment.yaml:1-12`).
+Human provider, owner, KMS and API processes run in that node pod
+(`platform/hosted/node/deployment.yaml`). Journeys and approvals reach
+the node through the Human adapter egress policy
+(`platform/hosted/human/deployment.yaml:44-55`).
 
 | Method and path | Input | Success |
 | --- | --- | --- |
