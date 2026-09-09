@@ -1,3 +1,8 @@
+# Hosted gateway
+
+Receipt-verifying public ingress. Routes, scopes, and TLS are on
+[`docs/wiki/HostedGateway.md`](../../../docs/wiki/HostedGateway.md).
+
 # Public JSON-RPC
 
 `POST /rpc` is JSON-RPC 2.0. `GET /rpc/schema` serves
@@ -20,6 +25,9 @@ Programs deploy (1), upgrade (2), call (3), transfer (5), account registration
 and prices their canonical envelope bytes against the authenticated committed
 schedule; it fails closed if the schedule requires execution or storage units
 that the request cannot supply.
+
+Method list: [`docs/wiki/PublicRpc.md`](../../../docs/wiki/PublicRpc.md).
+Commitment parameter: [`docs/wiki/CommitmentLevels.md`](../../../docs/wiki/CommitmentLevels.md).
 
 # Canonical module registry
 

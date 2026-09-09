@@ -1,5 +1,12 @@
 # LayerX developer CLI
 
+Binary `layerx` (`platform/cli`). Commands, refusals, and receipt verify
+are on [`docs/wiki/Cli.md`](../../docs/wiki/Cli.md). The payments path
+(create a key, faucet, send, token, program, 402) is
+[`docs/wiki/PaymentsQuickstart.md`](../../docs/wiki/PaymentsQuickstart.md).
+There is no `layerx token` or `layerx wallet` command, and
+`lane/pay-wallet-cli` is not a remote branch.
+
 ## Headless credential storage
 
 The OS keyring is the default. On a headless Linux server, container, or CI

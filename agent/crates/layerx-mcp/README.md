@@ -42,6 +42,8 @@ Read tools are absent from the list when the bound scope does not include them. 
 
 Write tools follow the ordinary daemon path: prepare, disclose, sign, submit, track. Outcomes are evidence-shaped (`Executed` + receipt, `Unknown`, or `Failed`). Read-only deployment omits write tools entirely. This catalogue is not the CLI `layerx mcp serve` surface (`receipt.get` / `activity.submit` only).
 
+The wallet and token tools (`wallet.accounts`, `wallet.balance`, `wallet.send`, `token.create`, `token.mint`, `token.transfer`) are registered in `src/server.rs` and implemented in `src/tools/wallet.rs` and `src/tools/write.rs`. Payment walkthrough: [`docs/wiki/PaymentsQuickstart.md`](../../../docs/wiki/PaymentsQuickstart.md).
+
 Untrusted tool arguments cannot change tenant, scope, or counterparty. See `src/untrusted.rs` and `src/validate.rs`. Payment payload bytes bound at disclose/sign live in `layerx-crypto` (`payments` / `disclosure`).
 
 ## Test
