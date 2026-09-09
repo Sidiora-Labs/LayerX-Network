@@ -24,6 +24,10 @@ def run(*args, **kwargs):
 
 
 def register(work, url):
+    if os.environ.get('LAYERX_TEST_SETTLEMENT_PUBLICATION') == '1':
+        module = runpy.run_path(str(ROOT / 'tests/daemon/guarantor-publication-chain.py'))
+        module['setup'](work, url)
+        return
     request = (work / 'data/genesis/paxeer-registration-request.lxrr').read_bytes()
     assert len(request) == 73
     manifest = hashlib.sha256((work / 'data/genesis/genesis.manifest').read_bytes()).hexdigest()
@@ -64,7 +68,7 @@ def main():
         (work / name).write_bytes(value)
         (work / name).chmod(0o600)
     run('forge', 'build', 'contracts/GuarantorBond.sol', 'contracts/CheckpointRegistry.sol',
-        'platform/hosted/paxeer/contracts/BetaUsdl.sol', '--out', 'build/withdraw-contracts/artifacts',
+        'platform/hosted/paxeer/contracts/BetaUsdl.sol', 'contracts/challenge/CheckpointChallengeManager.sol', '--out', 'build/withdraw-contracts/artifacts',
         '--cache-path', 'build/withdraw-contracts/cache')
     with chain(work, 'custody') as first:
         run(sys.executable, 'tests/bridge/deploy_local_custody.py', '--allow-local-chain', '--rpc', first,
@@ -86,7 +90,11 @@ def main():
             env = os.environ | {'LAYERX_TEST_WITHDRAW_PROFILE': str(work / 'profile'),
                 'LAYERX_TEST_WITHDRAW_CREDIT': str(work / 'activity'), 'LAYERX_TEST_WITHDRAW_RPC': first,
                 'LAYERX_TEST_ADMISSION_LOG_DIR': str(work)}
-            run('bash', 'tests/daemon/program-admission.sh', 'build', '--withdraw', env=env)
+            if os.environ.get('LAYERX_TEST_SETTLEMENT_PUBLICATION') == '1':
+                module = runpy.run_path(str(ROOT / 'tests/daemon/guarantor-publication-chain.py'))
+                module['drive'](work, env, first)
+            else:
+                run('bash', 'tests/daemon/program-admission.sh', 'build', '--withdraw', env=env)
     print('custody-funded WITHDRAW execution and crash replay passed')
 
 

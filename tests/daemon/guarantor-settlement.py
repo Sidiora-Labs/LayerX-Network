@@ -119,5 +119,78 @@ class SettlementTests(unittest.TestCase):
         s.RPC('http://127.0.0.1:12345')
 
 
+class NativePublicationTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location('native_publication', ROOT / 'cmd/layerx-guarantor/publication.py')
+        cls.p = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.p)
+
+    def test_c_witness_vectors_and_noncanonical_paths(self):
+        for vector in json.loads((ROOT / 'contracts/config/native-state-proofs.json').read_text())['vectors']:
+            root, proof = s.raw(vector['root']), s.raw(vector['proof'])
+            self.p.witness(vector['proof'], root)
+            for position in (0, 3, 7, len(proof) - 1):
+                altered = bytearray(proof)
+                altered[position] ^= 1
+                with self.subTest(position=position), self.assertRaises(ValueError):
+                    self.p.witness(self.p.hx(altered), root)
+            for altered in (proof[:-1], proof + b'\0'):
+                with self.assertRaises(ValueError):
+                    self.p.witness(self.p.hx(altered), root)
+            with self.assertRaises(ValueError):
+                self.p.witness(vector['proof'], bytes(32))
+
+    def test_native_withdrawal_strict_record_and_network(self):
+        vector = json.loads((ROOT / 'contracts/config/native-withdrawal-proof.json').read_text())
+        fact = self.p.withdrawal_fact(vector['proof'], s.raw(vector['root']), 7)
+        self.assertEqual(len(fact['identity']), 32)
+        self.assertEqual(fact['amount'], (25).to_bytes(16, 'big'))
+        self.assertEqual(fact['anchor'], bytes([3]) + bytes(31))
+        with self.assertRaises(ValueError):
+            self.p.withdrawal_fact(vector['proof'], s.raw(vector['root']), 8)
+        with self.assertRaises(ValueError):
+            self.p.balance_fact(vector['proof'], s.raw(vector['root']))
+
+    def test_independent_ed25519_authorities_and_mutations(self):
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+        owner, authority = Ed25519PrivateKey.generate(), Ed25519PrivateKey.generate()
+        public = owner.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+        message = b'LX:SETTLE:RECIPIENT:v1\0' + (77).to_bytes(4, 'big') + bytes([1]) * 32 + bytes([2]) * 32 + bytes([3]) * 20 + bytes([4]) * 32
+        signed = owner.sign(message)
+        self.p.signature(public, message, signed)
+        with self.assertRaises(ValueError):
+            self.p.signature(public, message, authority.sign(message))
+        for index in range(len(signed)):
+            altered = bytearray(signed)
+            altered[index] ^= 1
+            with self.assertRaises(ValueError):
+                self.p.signature(public, message, bytes(altered))
+        for index in (20, 24, 56, 88, len(message) - 1):
+            altered = bytearray(message)
+            altered[index] ^= 1
+            with self.assertRaises(ValueError):
+                self.p.signature(public, bytes(altered), signed)
+
+    def test_atomic_evidence_retry_and_authorization_file_refusals(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'checkpoint.json'
+            abandoned = Path(str(path) + '.tmp')
+            abandoned.write_bytes(b'interrupted write')
+            self.p.atomic_json(path, {'version': 2})
+            self.p.atomic_json(path, {'version': 2, 'complete': True})
+            self.assertEqual(self.p.read_authorizations(path), {'version': 2, 'complete': True})
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            link = Path(directory) / 'linked'
+            link.symlink_to(path)
+            with self.assertRaises(OSError):
+                self.p.read_authorizations(link)
+            link.unlink()
+            os.link(path, link)
+            with self.assertRaises(ValueError):
+                self.p.read_authorizations(path)
+
+
 if __name__ == '__main__':
     unittest.main()
