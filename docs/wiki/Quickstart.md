@@ -572,11 +572,12 @@ Failure text is `receipt verification failed at {:?}`
 
 ## 9. Observe finality against the Paxeer boundary
 
-There is no CLI command that opens a `layerxd` node RPC. The CLI talks HTTP
-to the active environment endpoint (`platform/cli/src/main.rs:44-84, 1344-1347`;
-`platform/cli/src/http.rs:22-47`). `layerx receipt verify` is local
-`layerx_proof` against caller-supplied batch facts
-(`platform/cli/src/receipt.rs:4, 25-34`).
+The CLI talks HTTP to the active environment endpoint
+(`platform/cli/src/main.rs:1381-1385`; `platform/cli/src/http.rs:24-50`).
+`layerx --rpc <url> wallet|token …` POSTs JSON-RPC 2.0 to the gateway `/rpc`
+surface (`platform/cli/src/rpc.rs:23-26`). That is not a `layerxd` node
+admin socket. `layerx receipt verify` is local `layerx_proof` against
+caller-supplied batch facts (`platform/cli/src/receipt.rs:4, 25-34`).
 
 The Paxeer boundary is `$LAYERX_PAXEER_BOUNDARY_URL` (default
 `https://localhost:19449`). Routes (`platform/hosted/paxeer/src/main.rs:477-493`):
