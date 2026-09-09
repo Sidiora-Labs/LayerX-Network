@@ -1617,6 +1617,7 @@ dependencies = [
 name = "layerx-programs-registry"
 version = "0.1.0"
 dependencies = [
+ "layerx-program-sdk",
  "layerx-programs-runtime",
  "layerx-proof",
  "layerx-types",
