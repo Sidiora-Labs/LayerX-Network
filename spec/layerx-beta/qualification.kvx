@@ -5220,3 +5220,35 @@ symbol = "lxp_ledger_apply_bridge_credit lxp_ctx_bridge_credit"
 observed = "The bridge reserve top-up now invokes ledger apply after the existing authorization, supply preflight and rollback snapshot. make -j16, make test-asset-transfer, make test and make beta-ledger-check exit 0. The unchanged sole-writer check passes. BRIDGE_PYTHON=qual-logs/nat3/venv/bin/python3 bash tests/bridge/sole_writer.sh exits 0: a real custody deposit on isolated chain 31337 produces byte-identical canonical account state diffs (397 bytes) and unsigned receipt encodings (1006 bytes) through original and updated module contexts, with real signature verification, rollback stages, replay refusal and nine custody evidence tests passing. Evidence: qual-logs/nat3/build.log, asset-transfer.log, test.log, beta-ledger.log, bridge-differential-venv.log and gates.tsv."
 assumption = "The initial bridge comparison exited 1 because system Python lacked Crypto; the isolated virtual environment satisfies tests/bridge/requirements.txt. Codify inspection could not run because cg is unavailable. Cluster and image gates were not run. Task statuses are unchanged."
 severity = "note"
+
+[observation.6.11.129]
+task = "6.11"
+file = "src/modules/programs/call.c programs/crates/layerx-programs-runtime/src/transfer.rs include/layerx/lxp_transfer.h src/protocol/lxp_module_ctx.c src/ledger/lxp_apply.c"
+symbol = "transfer_source_validate layerx_programs_call_transfer_apply TransferSource::account"
+observed = "Principal-funded Programs transfers compare leg.from.id to authority.principal, look up the sequence account by authority.principal and encode principal bytes as the source account. The shared payments contract instead identifies the actor by signer DID and derives native/per-asset accounts independently. SDK preparation now produces the existing native registration payload, program-account derivation and bounded funding/spend requests, but does not reconcile this identity/account boundary."
+assumption = "Complete DID/per-asset program funding requires an authenticated owner-to-account mapping and identity.next_sequence integration across the module context, ledger, Programs transfer evidence and native call tests. Do not substitute an account ID for the signer DID or relax source ownership assertions. The merchant guest is built but its settlement round trip remains unqualified."
+severity = "blocker"
+
+[observation.6.11.130]
+task = "6.11"
+file = "programs/crates/layerx-programs-registry/src/interface.rs programs/crates/layerx-programs-runtime/src/validate.rs programs/sdk/rust/src/lxt20.rs"
+symbol = "InterfaceCapability ProgramInterface::bind exact_interface_capability_mask"
+observed = "The LXT-20 request codec covers transfer, approve, transfer_from, balance_of, allowance, total_supply and metadata with committed canonical calldata vectors. Registry interfaces currently encode concrete ProgramSpend destinations and ceilings and require exact imported capability masks. No generic dynamic-recipient interface representation, published LXT-20 interface hash, token-lxt20 settlement reference or token native deploy/call evidence was produced. Codec/parser tests are not execution tests."
+assumption = "A complete token interface needs agreed canonical discovery semantics for caller-authorized dynamic recipients, native consumer conformance and a real settlement reference with atomic allowances and refusal coverage. Existing interface bounds and exact capability checks remain intact."
+severity = "blocker"
+
+[observation.6.11.131]
+task = "6.11"
+file = "programs/crates/layerx-programs-sandbox/src/lease.rs programs/crates/layerx-programs-sandbox/src/escrow.rs programs/crates/layerx-programs-sandbox/src/usage.rs agent/crates/layerx-agent-api/src/generated.rs programs/vendor/wasmi-0.31.2/src/engine/executor.rs"
+symbol = "record_expiry_usage terminalize_by_sweep apply_host_activity projected_spend record_host_settlement_reserved"
+observed = "cargo clippy --manifest-path programs/Cargo.toml --workspace --all-targets -- -D warnings exits 101 on unused sandbox methods and settlement helpers. cargo fmt --all --check from programs exits 1 on existing workspace/dependency formatting differences, including agent and vendor sources. The initial cargo fmt --check --manifest-path programs/Cargo.toml invocation exits 1 because it does not discover targets. Logs: qual-logs/pay5/programs-clippy.log, fmt-all.log and fmt.log, with sibling exit files."
+assumption = "These aggregate gates remain failed. Unrelated sandbox code and dependency formatting were not modified or suppressed. Codify inspection was unavailable because cg is not installed. Cluster and image gates were not run."
+severity = "blocker"
+
+[observation.6.11.132]
+task = "6.11"
+file = "programs/vendor/parity-wasm/src/elements/module.rs programs/vendor/parity-wasm/src/elements/name_section.rs programs/vendor/parity-wasm/src/elements/reloc_section.rs programs/vendor/parity-wasm/src/elements/section.rs programs/crates/layerx-programs-runtime/tests/interpreter_program.rs"
+symbol = "integration_tests artifact"
+observed = "cargo test --manifest-path programs/Cargo.toml --workspace initially exits 101 because LAYERX_INTERPRETER_WASM is unset. Building layerx-programs-interpreter for wasm32-unknown-unknown release exits 0. Repeating locked workspace tests with LAYERX_INTERPRETER_WASM pointing to that built artifact exits 101 at vendored parity-wasm: 23 tests fail because their input fixture files are absent. Logs: qual-logs/pay5/programs-test.log, interpreter-build.log and programs-test-final.log with sibling exit files."
+assumption = "Workspace tests remain failed; no vendored test was skipped or replaced. Native make -j16 and make -j16 programs-core-test exit 0 (native-build.log and native-programs.log). The payment_preparation and lxt20_encoding tests, SDK/runtime all-target Clippy with warnings denied and new-file rustfmt checks exit 0 (focused-final.log, focused-clippy-final.log and focused-fmt-final.log). Merchant WASM release build, package formatting and WASM release Clippy exit 0 (merchant-build.log, merchant-fmt.log and merchant-clippy.log). These focused gates do not qualify token settlement, registry discovery or a merchant/token deploy/call round trip."
+severity = "blocker"
