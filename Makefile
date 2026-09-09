@@ -2971,7 +2971,7 @@ programs-lint: programs-module-boundaries
 	cd programs && $(PROGRAMS_CARGO) clippy --locked --workspace --all-targets --features layerx-programs-sandbox/host-ffi -- -D warnings
 	sh programs/tools/dependency-policy.sh
 	cd programs && $(PROGRAMS_CARGO) deny check advisories sources
-	cd programs && $(PROGRAMS_CARGO) deny check bans --exclude-dev
+	cd programs && $(PROGRAMS_CARGO) deny --exclude-dev check bans
 
 programs-module-boundaries:
 	sh programs/tools/runtime-module-boundaries.sh
