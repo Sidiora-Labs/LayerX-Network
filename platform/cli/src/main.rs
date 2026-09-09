@@ -51,10 +51,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Manage native wallet keys, accounts, transfers, and receipts.
+    /// Read local wallet keys and accounts, and verify executed receipts.
     #[command(subcommand)]
     Wallet(wallet::WalletCommand),
-    /// Create and manage native tokens.
+    /// Validate native token payloads; writes refuse without an identity sequence.
     #[command(subcommand)]
     Token(wallet::TokenCommand),
     /// Scaffold a deterministic Rust program project.

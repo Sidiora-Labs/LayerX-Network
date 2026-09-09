@@ -1,16 +1,23 @@
 # LayerX developer CLI
 
+Command inventory, refusals, and credential rules for this binary are in
+[`docs/wiki/Cli.md`](../../docs/wiki/Cli.md). Local emulator bootstrap is the
+published sequence in [`platform/docs/content/install.md`](../docs/content/install.md).
+
 ## Wallet quickstart
 
 Build with `cargo build --manifest-path platform/cli/Cargo.toml`. The executable
 is `platform/target/debug/layerx`; put that directory on your PATH.
 
-Local wallet creation, imports, listing, balance reads, and signed receipt
-verification are available. Transfers and token writes currently stop before
-signing because the gateway does not publish the identity sequence read they
-require. Public wallet registration, token metadata/listing, and history are
-also unavailable in the current API. The commands report these limitations with
-a nonzero exit code.
+Wallet import, listing, emulator and RPC balance reads, and signed receipt
+verification are available. `wallet create` registers a DID and main account
+on the emulator only; against any other environment it exits nonzero and
+does not generate a key. Transfers, account-open, and token writes stop
+before signing because the gateway does not publish the identity sequence
+read they require. Public wallet registration, token metadata/listing, and
+DID history are also unpublished. The commands report these limitations with
+a nonzero exit code. Optional `--key` selects a stored wallet; global
+`--gateway-credential` uses a stored gateway alias instead of a bearer token.
 
 ### Create a local wallet
 
@@ -37,10 +44,12 @@ layerx wallet balance
 ```
 
 Creation registers the local DID and opens its main account with zero units.
-If registration fails after key creation, the key is retained; retry using the
+It refuses on a non-emulator environment before generating a key. If
+registration fails after key creation, the key is retained; retry using the
 same wallet name. Import an existing 32-byte hexadecimal seed with
 `layerx wallet import alice`, supplying the seed on stdin. Importing does not
-register or fund an identity.
+register or fund an identity. `layerx wallet history` always exits nonzero:
+no DID activity-history method or REST route is published.
 
 ### Request testnet funds
 
@@ -66,8 +75,11 @@ A failed or indeterminate claim is not funding confirmation.
 ### Send and create a token
 
 Amounts are integer base units. `ASSET_ID` is the asset's 64-character
-hexadecimal identifier; `RECIPIENT_DID` is the recipient's DID.
-The recipient's account must already exist for that asset.
+lowercase hexadecimal identifier; `RECIPIENT_DID` is the recipient's DID.
+The native asset id is `01` followed by 62 zero hex digits and maps to
+`agent:<DID>:main`. Every other asset id maps to
+`agent:<DID>:asset:<lowercase hex64>`. The recipient's account must already
+exist for that asset.
 
 ```bash
 layerx wallet send --to "$RECIPIENT_DID" --asset "$ASSET_ID" \
