@@ -384,6 +384,81 @@ class BuyerMiddleware:
             }
         )
 
+    def fetch(
+        self,
+        url,
+        payment_header,
+        *,
+        method="GET",
+        data=None,
+        headers=None,
+        expected_activity=None,
+    ):
+        import urllib.request
+        import urllib.error
+        from .x402_rpc import _NoRedirect
+
+        _url(url)
+        opener = urllib.request.build_opener(_NoRedirect())
+
+        def request(extra):
+            try:
+                response = opener.open(
+                    urllib.request.Request(
+                        url,
+                        data=data,
+                        headers={**(headers or {}), **extra},
+                        method=method,
+                    ),
+                    timeout=30,
+                )
+            except urllib.error.HTTPError as error:
+                response = error
+            with response:
+                body = response.read(8388609)
+                if len(body) > 8388608:
+                    raise ValueError("http-body-too-large")
+                return response.status, dict(response.headers), body
+
+        initial = request({})
+        if initial[0] != 402:
+            return initial
+        required_header = next(
+            (
+                value
+                for name, value in initial[1].items()
+                if name.lower() == "payment-required"
+            ),
+            None,
+        )
+        required, offer = self.parse_offer(required_header)
+        payment = validate_payload(decode_header(payment_header))
+        if (
+            payment["accepted"] != offer
+            or payment.get("resource") != required["resource"]
+        ):
+            raise ValueError("requirements-mismatch")
+        if offer["scheme"] != "exact" and expected_activity is None:
+            raise ValueError("expected-activity-required")
+        paid = request({"PAYMENT-SIGNATURE": payment_header})
+        if paid[0] == 202:
+            return paid
+        settlement = next(
+            (
+                value
+                for name, value in paid[1].items()
+                if name.lower() == "payment-response"
+            ),
+            None,
+        )
+        if settlement is None:
+            raise ValueError("missing-payment-response")
+        if offer["scheme"] == "exact":
+            self.capture_settlement(settlement, payment_header)
+        else:
+            self.capture_grant_settlement(settlement, payment_header, expected_activity)
+        return paid
+
     def grant_header(self, header, receive_hex):
         required, offer = self.parse_offer(header)
         return grant_payment_header(required, offer, receive_hex)

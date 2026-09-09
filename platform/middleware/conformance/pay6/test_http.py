@@ -114,3 +114,45 @@ class HttpTests(unittest.TestCase):
                 validate_required(
                     self.required | {"accepts": [self.offer | {"scheme": scheme}]}
                 )
+
+    def test_real_http_402_retry(self):
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        import threading
+
+        seller = self.seller
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                status, headers, body = seller.handle(
+                    "payer", self.headers.get("PAYMENT-SIGNATURE"), lambda: b"resource"
+                )
+                self.send_response(status)
+                for name, value in headers.items():
+                    self.send_header(name, value)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, format, *args):
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            buyer = BuyerMiddleware(
+                PaymentRpc("http://127.0.0.1:1/rpc"),
+                self.fixture.signatures,
+                self.authority,
+                [("exact", "layerx:testnet")],
+            )
+            response = buyer.fetch(
+                f"http://127.0.0.1:{server.server_port}/paid",
+                encode_header(self.payload),
+            )
+            self.assertEqual(response[0], 200)
+            self.assertEqual(response[2], b"resource")
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
