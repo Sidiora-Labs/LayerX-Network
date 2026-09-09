@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 pragma solidity ^0.8.24;
 
+import {Ed25519Verifier} from "../crypto/Ed25519.sol";
+
 library NativeStateProof {
     error WrongVersion();
     error WrongModule();
@@ -42,6 +44,71 @@ library NativeStateProof {
         (node, cursor) = fold(proof, cursor + 4, node, moduleId, count);
         if (cursor != proof.length) revert InvalidEncoding();
         return node;
+    }
+
+    function verifyBalance(
+        Ed25519Verifier verifier,
+        bytes calldata proof,
+        bytes32 stateRoot,
+        bytes32 account,
+        bytes32 asset,
+        uint128 balance,
+        uint32 network,
+        address recipient,
+        bytes32 requestAnchor,
+        bytes calldata signature
+    ) internal view {
+        verify(proof, 0, stateRoot);
+        if (uint32(bytes4(proof[4:8])) != 33 || proof[8] != 0x04 || bytes32(proof[9:41]) != account) {
+            revert InvalidEncoding();
+        }
+        uint256 length = number(proof, 41);
+        bytes calldata value = proof[45:45 + length];
+        if (value.length < 2) revert InvalidEncoding();
+        uint256 nameLength = uint16(bytes2(value[:2]));
+        if (nameLength == 0 || nameLength > 512 || value.length != 103 + nameLength) revert InvalidEncoding();
+        uint256 at = 2 + nameLength;
+        if (
+            value[at] != 0x01 || value[at + 49] != 0x01 || uint8(value[at + 66]) > 1 || uint8(value[at + 67]) > 1
+                || value[at + 100] != 0x01 || uint128(bytes16(value[at + 1:at + 17])) != balance
+                || bytes32(value[at + 17:at + 49]) != asset || network == 0 || recipient == address(0)
+                || requestAnchor == bytes32(0)
+        ) revert InvalidEncoding();
+        bytes32 authority = bytes32(value[at + 68:at + 100]);
+        if (!verifier.verify(
+                authority,
+                abi.encodePacked(
+                    "LX:SETTLE:RECIPIENT:v1", bytes1(0), network, account, asset, recipient, requestAnchor
+                ),
+                signature
+            )) revert InvalidEncoding();
+    }
+
+    function verifyWithdrawal(
+        bytes calldata proof,
+        bytes32 stateRoot,
+        uint32 network,
+        bytes32 withdrawalId,
+        bytes32 account,
+        bytes32 asset,
+        uint128 amount,
+        address recipient,
+        bytes32 requestAnchor,
+        bytes32 nullifier
+    ) internal pure {
+        verify(proof, 1, stateRoot);
+        if (
+            number(proof, 4) != 43 || keccak256(proof[8:19]) != keccak256("withdrawal:")
+                || bytes32(proof[19:51]) != nullifier || number(proof, 51) != 182
+        ) revert InvalidEncoding();
+        bytes calldata value = proof[55:237];
+        if (
+            uint16(bytes2(value[:2])) != 2 || uint32(bytes4(value[2:6])) != network
+                || bytes32(value[6:38]) != withdrawalId || bytes32(value[38:70]) != account
+                || bytes32(value[70:102]) != asset || uint128(bytes16(value[102:118])) != amount
+                || bytes32(value[118:150]) != bytes32(uint256(uint160(recipient)))
+                || bytes32(value[150:182]) != requestAnchor
+        ) revert InvalidEncoding();
     }
 
     function number(bytes calldata proof, uint256 cursor) private pure returns (uint32) {

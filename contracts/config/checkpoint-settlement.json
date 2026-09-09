@@ -32,5 +32,21 @@
         }
       ]
     }
+  },
+  "evidence_version": 2,
+  "native_state_vectors": "contracts/config/native-state-proofs.json",
+  "ed25519_vectors": "contracts/config/ed25519-vectors.json",
+  "recipient_binding": {
+    "domain": "LX:SETTLE:RECIPIENT:v1",
+    "separator": "0x00",
+    "fields": [
+      "network_id:u32be",
+      "account_id:bytes32",
+      "asset:bytes32",
+      "evm_recipient:bytes20",
+      "request_anchor:bytes32"
+    ],
+    "authority": "committed account Ed25519 authority",
+    "verification": "RFC8032 cofactorless"
   }
 }

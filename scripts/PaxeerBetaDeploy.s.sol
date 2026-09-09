@@ -188,7 +188,7 @@ contract PaxeerBetaDeploy {
         uint256 firstNonce = LayerXTimelock(payable(addresses.timelock)).operationNonce();
         _schedulePermissions(addresses, input.timelockDelay);
         emit BetaSuiteDeployed(configHash, address(blueprint), addresses);
-        emit BetaGovernancePhase("PERMISSIONS_SCHEDULED", address(blueprint), firstNonce, 21);
+        emit BetaGovernancePhase("PERMISSIONS_SCHEDULED", address(blueprint), firstNonce, 22);
         vm.stopBroadcast();
     }
 
@@ -239,6 +239,41 @@ contract PaxeerBetaDeploy {
         vm.stopBroadcast();
     }
 
+    function scheduleDepositRootAuthority(
+        Addresses calldata addresses,
+        PaxeerBetaDeploymentValidator.Input calldata input,
+        bytes32 publicKey
+    ) external {
+        _requireBootstrap(addresses, input);
+        if (publicKey == bytes32(0)) revert InvalidDeploymentState();
+        LayerXTimelock timelock = LayerXTimelock(payable(addresses.timelock));
+        bytes memory data = abi.encodeCall(LayerXVault.setDepositRootAuthority, (publicKey));
+        uint256 nonce = timelock.operationNonce();
+        vm.startBroadcast(vm.envUint("EVM_WALLET_PRIVATE_KEY"));
+        timelock.schedule(
+            addresses.vault, 0, data, _salt("DEPOSIT_AUTHORITY", 0, addresses.vault, data), input.timelockDelay
+        );
+        emit BetaGovernancePhase("DEPOSIT_AUTHORITY_SCHEDULED", addresses.blueprint, nonce, 1);
+        vm.stopBroadcast();
+    }
+
+    function executeDepositRootAuthority(
+        Addresses calldata addresses,
+        PaxeerBetaDeploymentValidator.Input calldata input,
+        bytes32 publicKey,
+        uint256 nonce
+    ) external {
+        _requireBootstrap(addresses, input);
+        if (publicKey == bytes32(0)) revert InvalidDeploymentState();
+        LayerXTimelock timelock = LayerXTimelock(payable(addresses.timelock));
+        bytes memory data = abi.encodeCall(LayerXVault.setDepositRootAuthority, (publicKey));
+        vm.startBroadcast(vm.envUint("EVM_WALLET_PRIVATE_KEY"));
+        _execute(timelock, addresses.vault, data, _salt("DEPOSIT_AUTHORITY", 0, addresses.vault, data), nonce);
+        if (LayerXVault(payable(addresses.vault)).depositRootAuthority() != publicKey) revert InvalidDeploymentState();
+        emit BetaGovernancePhase("DEPOSIT_AUTHORITY_EXECUTED", addresses.blueprint, nonce, 1);
+        vm.stopBroadcast();
+    }
+
     function finalize(
         Addresses calldata addresses,
         PaxeerBetaDeploymentValidator.Input calldata input,
@@ -246,6 +281,9 @@ contract PaxeerBetaDeploy {
         uint256 genesisStartNonce
     ) external {
         _requireBootstrap(addresses, input);
+        if (LayerXVault(payable(addresses.vault)).depositRootAuthority() == bytes32(0)) {
+            revert InvalidDeploymentState();
+        }
         GuarantorBond bond = GuarantorBond(payable(addresses.guarantorBond));
         for (uint256 i = 0; i < guarantors.length; ++i) {
             if (bond.bondRecord(guarantors[i].guarantorId).amount != guarantors[i].bondAmount) {
@@ -711,8 +749,8 @@ contract PaxeerBetaDeploy {
         pure
         returns (address[] memory targets, bytes4[] memory selectors)
     {
-        targets = new address[](21);
-        selectors = new bytes4[](21);
+        targets = new address[](22);
+        selectors = new bytes4[](22);
         uint256 i;
         targets[i] = a.assetRegistry;
         selectors[i++] = AssetRegistry.registerAsset.selector;
@@ -756,7 +794,9 @@ contract PaxeerBetaDeploy {
         selectors[i++] = ManagerMigrator.stageMigration.selector;
         targets[i] = a.managerMigrator;
         selectors[i++] = ManagerMigrator.cancelMigration.selector;
-        if (i != 21) revert InvalidDeploymentState();
+        targets[i] = a.vault;
+        selectors[i++] = LayerXVault.setDepositRootAuthority.selector;
+        if (i != 22) revert InvalidDeploymentState();
     }
 
     function _schedulePermissions(Addresses memory a, uint64 delay) private {
@@ -966,6 +1006,7 @@ contract PaxeerBetaDeploy {
                 || !manager.initialized() || !manager.genesisFinalized() || manager.deploymentId() == bytes32(0)
                 || manager.migrator() != a.managerMigrator || bond.genesisBondedSetCommitment() == bytes32(0)
                 || bond.genesisBondedSetVersion() != bond.membershipVersion()
+                || LayerXVault(payable(a.vault)).depositRootAuthority() == bytes32(0)
         ) revert InvalidDeploymentState();
         for (uint256 i = 0; i < Predeploys.COUNT; ++i) {
             bytes32 role = Predeploys.roleAt(i);

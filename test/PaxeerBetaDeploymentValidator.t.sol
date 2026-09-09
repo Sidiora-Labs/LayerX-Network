@@ -237,16 +237,22 @@ contract PaxeerBetaDeploymentValidatorTest {
         vm.expectPartialRevert(PaxeerBetaDeploy.InvalidDeploymentState.selector);
         runner.finalize(addresses, _input(), guarantors, 0);
         vm.expectPartialRevert(PaxeerBetaDeploy.InvalidDeploymentState.selector);
+        runner.scheduleDepositRootAuthority(addresses, _input(), bytes32(uint256(1)));
+        vm.expectPartialRevert(PaxeerBetaDeploy.InvalidDeploymentState.selector);
+        runner.executeDepositRootAuthority(addresses, _input(), bytes32(uint256(1)), 0);
+        vm.expectPartialRevert(PaxeerBetaDeploy.InvalidDeploymentState.selector);
         runner.depositGenesisBond(address(0), bytes32(0), 0);
     }
 
     function testRunnerPhaseSelectorsAreStableAndDistinct() public pure {
-        bytes4[5] memory selectors = [
+        bytes4[7] memory selectors = [
             PaxeerBetaDeploy.deploy.selector,
             PaxeerBetaDeploy.executePermissionsAndScheduleGenesis.selector,
             PaxeerBetaDeploy.executeGenesisActivation.selector,
             PaxeerBetaDeploy.depositGenesisBond.selector,
-            PaxeerBetaDeploy.finalize.selector
+            PaxeerBetaDeploy.finalize.selector,
+            PaxeerBetaDeploy.scheduleDepositRootAuthority.selector,
+            PaxeerBetaDeploy.executeDepositRootAuthority.selector
         ];
         for (uint256 i = 0; i < selectors.length; ++i) {
             require(selectors[i] != bytes4(0), "zero selector");
