@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import stat
+import unicodedata
 
 
 class Refused(ValueError):
@@ -387,6 +388,72 @@ def journal_records(path):
     return result
 
 
+def materialize_journal(work_dir, source):
+    work_dir = Path(work_dir)
+    require(work_dir.is_absolute() and work_dir.resolve() == work_dir,
+            work_dir, 'canonical work directory')
+    records = journal_records(source)
+    destination = work_dir / 'registry-journal'
+    lock = work_dir / '.registry-journal-publish'
+    try:
+        lock.mkdir(mode=0o700)
+    except FileExistsError as error:
+        raise Refused(f'{lock}: publication already active or interrupted') from error
+    pending = None
+    try:
+        require(not destination.exists() and not destination.is_symlink(),
+                destination, 'existing journal requires reconciliation')
+        pending = Path(tempfile.mkdtemp(prefix='.registry-journal-', dir=work_dir))
+        for name, data in records.items():
+            fd = os.open(pending / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(fd, 'wb') as output:
+                output.write(data)
+                output.flush()
+                os.fsync(output.fileno())
+        require(journal_records(pending) == records, pending, 'copied journal bytes')
+        fd = os.open(pending, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.rename(pending, destination)
+        pending = None
+        fd = os.open(work_dir, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    finally:
+        if pending is not None:
+            shutil.rmtree(pending)
+        lock.rmdir()
+
+
+def peer_binding(binding, path):
+    fields(binding, 'tenant principal', path, 'tenant/principal binding')
+    tenant = binding['tenant']
+    principal = binding['principal']
+    require(type(tenant) is str and re.fullmatch(r'[a-z0-9_-]{1,128}', tenant) is not None,
+            path, 'tenant representable by identity and Human peer consumers')
+    require(type(principal) is str and re.fullmatch(r'did:[a-z0-9]+:[^;,]+', principal) is not None
+            and len(principal.encode('utf-8')) <= 255
+            and not any(c.isspace() or unicodedata.category(c) == 'Cc' for c in principal),
+            path, 'principal representable by Human peer consumer')
+    return f"uid=4020;tenant={tenant};principal={principal}"
+
+
+def evidence_inputs(work_dir, registry_path, journal_path):
+    root = Path(work_dir)
+    owner_registration(root)
+    job_input(root)
+    binding_path = root / 'identity/source-binding.json'
+    peer_binding(protected_json(binding_path), binding_path)
+    registry = protected_json(registry_path)
+    require(type(registry) is dict and registry.get('schema_version') == 2,
+            registry_path, 'version 2 module registry')
+    journal_records(journal_path)
+
+
 def assemble(work_dir, registry_path, asset, journal_path):
     work_dir = Path(work_dir)
     require(work_dir.is_absolute() and work_dir.resolve() == work_dir, work_dir, 'canonical work directory')
@@ -524,6 +591,8 @@ def qualify_generated_set(work_dir, registry_path, secrets_dir, network, chain):
 def main():
     parser = argparse.ArgumentParser()
     mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument('--validate-evidence-inputs', action='store_true')
+    mode.add_argument('--materialize-journal', action='store_true')
     mode.add_argument('--validate-owner-registration', action='store_true')
     mode.add_argument('--catalog', action='store_true')
     mode.add_argument('--assemble', action='store_true')
@@ -546,7 +615,12 @@ def main():
     parser.add_argument('--output', type=Path)
     parser.add_argument('--work-dir', type=Path, required=True)
     args = parser.parse_args()
-    if args.qualify_generated_set:
+    if args.materialize_journal:
+        materialize_journal(args.work_dir, args.journal)
+    elif args.validate_evidence_inputs:
+        require(args.registry is not None, args.work_dir, 'module registry path')
+        evidence_inputs(args.work_dir, args.registry, args.journal)
+    elif args.qualify_generated_set:
         require(all((args.registry, args.secrets_dir, args.network, args.chain)), args.work_dir, 'generated set qualification arguments')
         qualify_generated_set(args.work_dir, args.registry, args.secrets_dir, args.network, args.chain)
     elif args.movement_source:
