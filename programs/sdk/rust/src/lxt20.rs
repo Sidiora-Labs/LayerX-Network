@@ -157,3 +157,13 @@ fn nonzero(amount: Amount) -> Result<(), ProgramError> {
         Ok(())
     }
 }
+
+pub const REFERENCE_ASSET: [u8; 32] = [0x44; 32];
+pub const REFERENCE_ISSUER_DID: &str = "did:lxp:token-issuer";
+pub const REFERENCE_ISSUER: [u8; 32] = [
+    169, 78, 156, 227, 126, 170, 174, 185, 0, 3, 18, 206, 26, 39, 12, 168, 40, 21, 203, 244, 203,
+    82, 107, 199, 155, 197, 120, 202, 151, 153, 242, 143,
+];
+pub const REFERENCE_SUPPLY: u128 = 1_000_000;
+pub const REFERENCE_CEILING: u128 = 100_000;
+pub const REFERENCE_METADATA: &[u8] = b"LXT-20 settlement reference|LXT|18";
