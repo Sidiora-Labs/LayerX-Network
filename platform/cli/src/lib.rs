@@ -3,3 +3,5 @@ pub mod rpc;
 pub mod wallet_encoding;
 pub mod wallet_send;
 pub mod wallet_signing;
+
+mod rpc_subscription;

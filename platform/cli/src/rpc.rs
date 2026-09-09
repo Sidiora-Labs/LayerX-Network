@@ -4,6 +4,8 @@ use crate::http::Client;
 
 pub struct RpcClient {
     client: Client,
+    url: String,
+    credential: Option<zeroize::Zeroizing<String>>,
 }
 
 impl RpcClient {
@@ -11,18 +13,38 @@ impl RpcClient {
     /// Requires the gateway's explicit /rpc endpoint and the HTTP client's TLS rules.
     pub fn new(url: &str, credential: Option<zeroize::Zeroizing<String>>) -> Result<Self, String> {
         let base = url.strip_suffix("/rpc").ok_or("RPC URL must end in /rpc")?;
-        let client = match credential {
+        let client = match credential.clone() {
             Some(value) => Client::new_gateway(base, value)?,
             None => Client::new(base, None)?,
         };
-        Ok(Self { client })
+        Ok(Self {
+            client,
+            url: url.to_owned(),
+            credential,
+        })
     }
 
     /// # Errors
     /// Refuses unsupported methods, invalid parameters, transport failures and RPC errors.
     pub fn call(&self, method: &str, params: &Value) -> Result<Value, String> {
+        if method == "lx_subscribe" {
+            return Err(
+                "rpc_transport_required: lx_subscribe requires authenticated WebSocket transport"
+                    .into(),
+            );
+        }
         let request = request(method, params)?;
         decode_response(method, &self.client.post("/rpc", &request, None)?)
+    }
+
+    /// # Errors
+    /// Requires a gateway credential and a valid live subscription; notifications are unverified.
+    pub fn subscribe(&self, params: &Value, timeout: std::time::Duration) -> Result<Value, String> {
+        let credential = self
+            .credential
+            .as_ref()
+            .ok_or("gateway_credential_required: subscriptions require --gateway-credential")?;
+        crate::rpc_subscription::next(&self.url, credential, params, timeout)
     }
 }
 
@@ -84,6 +106,22 @@ pub fn request(method: &str, params: &Value) -> Result<Value, String> {
                     .into(),
             ),
         },
+        "lx_estimateFee" => {
+            let [Value::String(canonical)] = args.as_slice() else {
+                return Err("lx_estimateFee requires canonical_hex".into());
+            };
+            canonical_hex(canonical)?;
+        }
+        "lx_subscribe" => match args.as_slice() {
+            [Value::String(topic)] if matches!(topic.as_str(), "receipts" | "checkpoints") => {}
+            [Value::String(topic), Value::String(account)] if topic == "account" => id32(account)?,
+            _ => {
+                return Err(
+                    "lx_subscribe requires receipts, checkpoints, or account with account_id"
+                        .into(),
+                )
+            }
+        },
         "lx_sendActivity" => {
             let [Value::String(canonical), Value::String(commitment)] = args.as_slice() else {
                 return Err("lx_sendActivity requires canonical_hex and commitment".into());
@@ -127,11 +165,33 @@ pub fn decode_response(method: &str, response: &Value) -> Result<Value, String> 
             .ok_or("malformed RPC error message")?;
         return Err(json!({"code":code,"message":message,"data":error.get("data")}).to_string());
     }
+    if method == "lx_subscribe" {
+        return response
+            .get("result")
+            .filter(|value| {
+                value
+                    .as_str()
+                    .is_some_and(|id| !id.is_empty() && id.len() <= 128)
+            })
+            .cloned()
+            .ok_or_else(|| "invalid subscription identifier".to_owned());
+    }
     response
         .get("result")
         .filter(|value| value.is_object())
         .cloned()
         .ok_or_else(|| format!("{method} returned a non-object result"))
+}
+
+fn canonical_hex(value: &str) -> Result<(), String> {
+    if value.is_empty()
+        || value.len() > 1_048_576
+        || !value.len().is_multiple_of(2)
+        || !value.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err("invalid canonical activity hex".into());
+    }
+    Ok(())
 }
 
 fn id32(value: &str) -> Result<(), String> {
@@ -173,6 +233,10 @@ mod tests {
         request("lx_getBalances", &json!(["did:layerx:alice"]))?;
         request("lx_getNodeInfo", &json!([]))?;
         request("lx_listAssets", &json!([]))?;
+        request("lx_estimateFee", &json!(["abcd"]))?;
+        request("lx_subscribe", &json!(["receipts"]))?;
+        request("lx_subscribe", &json!(["checkpoints"]))?;
+        request("lx_subscribe", &json!(["account", id]))?;
         request("lx_getBatchHeader", &json!(["12"]))?;
         request("lx_getProof", &json!(["account", id, id]))?;
         for commitment in ["executed", "batched", "finalised"] {
@@ -186,10 +250,48 @@ mod tests {
             ("lx_sendActivity", json!(["abc", "executed"])),
             ("lx_sendActivity", json!(["abcd", "ack"])),
             ("lx_estimateFee", json!([])),
+            ("lx_estimateFee", json!(["abc"])),
+            ("lx_subscribe", json!(["account"])),
+            ("lx_subscribe", json!(["receipts", id])),
+            ("lx_subscribe", json!(["unknown"])),
             ("lx_getAsset", json!([])),
         ] {
             assert!(request(method, &args).is_err());
         }
+        Ok(())
+    }
+
+    #[test]
+    fn subscriptions_require_authenticated_websocket_and_string_ack() -> Result<(), String> {
+        let client = RpcClient::new("http://127.0.0.1:1/rpc", None)?;
+        assert!(client.call("lx_subscribe", &json!(["receipts"])).is_err());
+        assert!(client
+            .subscribe(&json!(["receipts"]), std::time::Duration::from_secs(1))
+            .is_err());
+        assert!(RpcClient::new("http://example.com/rpc", None).is_err());
+        let response = json!({"jsonrpc":"2.0","id":1,"result":"1"});
+        assert_eq!(decode_response("lx_subscribe", &response)?, "1");
+        assert!(decode_response("lx_getReceipt", &response).is_err());
+        for result in [json!(null), json!({}), json!(""), json!(1)] {
+            assert!(decode_response(
+                "lx_subscribe",
+                &json!({"jsonrpc":"2.0","id":1,"result":result})
+            )
+            .is_err());
+        }
+        let error = json!({"code":-32005,"message":"feed unavailable","data":{"reason":"native_feed_unavailable"}});
+        assert_eq!(
+            serde_json::from_str::<Value>(
+                &decode_response(
+                    "lx_subscribe",
+                    &json!({"jsonrpc":"2.0","id":1,"error":error})
+                )
+                .err()
+                .ok_or("error lost")?
+            )
+            .map_err(|e| e.to_string())?,
+            error
+        );
         Ok(())
     }
 

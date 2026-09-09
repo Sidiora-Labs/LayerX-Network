@@ -41,7 +41,18 @@ pub enum WalletCommand {
         #[arg(long)]
         did: Option<String>,
     },
-    /// Verify an executed receipt using the configured sequencer key.
+    /// Read one live notification; use receipt verification to establish commitment.
+    Watch {
+        #[arg(value_enum)]
+        topic: SubscriptionTopic,
+        #[arg(long)]
+        account_id: Option<String>,
+        #[arg(long, default_value_t = 60, value_parser = clap::value_parser!(u64).range(1..=300))]
+        timeout_seconds: u64,
+    },
+    /// Estimate fees from canonical activity bytes using the native fee schedule.
+    EstimateFee { canonical_hex: String },
+    /// Verify receipt evidence at the requested commitment.
     Receipt {
         activity_id: String,
         #[arg(long, value_enum, default_value = "executed")]
@@ -58,6 +69,13 @@ pub enum WalletCommand {
         #[command(flatten)]
         write: WriteOptions,
     },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+pub enum SubscriptionTopic {
+    Receipts,
+    Checkpoints,
+    Account,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -281,6 +299,53 @@ fn create_wallet(
     ))
 }
 
+fn estimate_fee(
+    config: &Configuration,
+    rpc: Option<&str>,
+    gateway: Option<&str>,
+    canonical: &str,
+) -> Result<CommandOutput, String> {
+    let transport = Transport::new(config, rpc, gateway)?;
+    let client = transport
+        .rpc
+        .ok_or("rpc_transport_required: fee estimation requires --rpc")?;
+    let result = client.call("lx_estimateFee", &json!([canonical]))?;
+    Ok(CommandOutput::new(
+        "wallet.fee",
+        "Read native fee estimate",
+        result,
+    ))
+}
+
+fn watch(
+    config: &Configuration,
+    rpc: Option<&str>,
+    gateway: Option<&str>,
+    topic: SubscriptionTopic,
+    account_id: Option<String>,
+    timeout_seconds: u64,
+) -> Result<CommandOutput, String> {
+    let topic = match topic {
+        SubscriptionTopic::Receipts => "receipts",
+        SubscriptionTopic::Checkpoints => "checkpoints",
+        SubscriptionTopic::Account => "account",
+    };
+    let params = match account_id {
+        Some(account) => json!([topic, account]),
+        None => json!([topic]),
+    };
+    let transport = Transport::new(config, rpc, gateway)?;
+    let client = transport
+        .rpc
+        .ok_or("rpc_transport_required: subscriptions require --rpc")?;
+    let result = client.subscribe(&params, std::time::Duration::from_secs(timeout_seconds))?;
+    Ok(CommandOutput::new(
+        "wallet.notification",
+        "Received unverified live notification; verify receipts separately",
+        result,
+    ))
+}
+
 pub fn run_wallet(
     command: WalletCommand,
     rpc: Option<&str>,
@@ -288,6 +353,14 @@ pub fn run_wallet(
 ) -> Result<CommandOutput, String> {
     let mut config = Configuration::load()?;
     match command {
+        WalletCommand::EstimateFee { canonical_hex } => {
+            estimate_fee(&config, rpc, gateway, &canonical_hex)
+        }
+        WalletCommand::Watch {
+            topic,
+            account_id,
+            timeout_seconds,
+        } => watch(&config, rpc, gateway, topic, account_id, timeout_seconds),
         WalletCommand::List => crate::key(crate::KeyCommand::List),
         WalletCommand::Import { name, did } => {
             let metadata = crate::credential::import_key(&mut config, &name, did)?;
