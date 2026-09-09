@@ -98,7 +98,7 @@ static int run(unsigned mode, int vectors)
     if (mode == 2U) payload[48] = 0U;
     if (mode == 3U) payload[68] = 0U;
     if (mode == 4U) activity.fee_limit.lo = 99U;
-    if (mode == 5U) activity.account_sequence = 1U;
+    if (mode == 5U || mode >= 18U) activity.account_sequence = 1U;
     if (mode == 6U) payload[47] = 101U;
     if (mode == 7U) payload[0] = 2U;
     if (mode == 8U) activity.payload.length = 107U;
@@ -122,10 +122,24 @@ static int run(unsigned mode, int vectors)
     CHECK(lxp_module_ctx_init(&ctx, &kernel, LXP_MODULE_ASSET, 10U, 0U, 1U, 100000U, &arena, true) == LXP_OK);
     ctx.protocol_version = LXP_PROTOCOL_VERSION_OCCUPANCY; ctx.batch_number = 1U;
     CHECK(lxp_activity_id(wire.bytes, wire.length, ctx.activity_id) == LXP_OK);
+    if (mode >= 18U) {
+        memcpy(authority.principal, from->id, 32U);
+        authority.actor[0] = 7U;
+        CHECK(lxp_kernel_bind_ledger_admission(&ctx, &authority, LX_ASSET_WITHDRAW) == LXP_OK);
+        CHECK(lxp_kernel_bind_ledger_admission(&ctx, &authority, LX_ASSET_WITHDRAW) == LXP_ERR_CONTEXT_MISMATCH);
+        if (mode == 19U) ctx.ledger_admission.activity_binding[0] ^= 1U;
+        if (mode == 20U) ctx.ledger_admission.account_id[0] ^= 1U;
+        if (mode == 21U) ctx.ledger_admission.actor[0] ^= 1U;
+        if (mode == 22U) ctx.ledger_admission.verified_key[0] ^= 1U;
+        if (mode == 23U) ctx.ledger_admission.next_sequence++;
+        if (mode == 24U) ctx.ledger_admission.account_present = false;
+        if (mode == 25U) ctx.ledger_admission.activity_type = LX_ASSET_SEND;
+        if (mode == 26U) authority.principal[0] ^= 1U;
+    }
     CHECK(lxp_module_ctx_bind_effects(&ctx, &effects) == LXP_OK);
     CHECK(lxp_state_root(&kernel, before) == LXP_OK);
     status = lxp_kernel_dispatch(registration, &ctx, &activity, &authority, &effects, &result);
-    if (mode != 0U) {
+    if (mode != 0U && mode != 18U) {
         CHECK(status != LXP_OK || result != LXP_OK);
         CHECK(from->balance.lo == 100U && to->balance.lo == 0U && from->next_sequence == 0U);
         CHECK(lxp_state_root(&kernel, after) == LXP_OK && memcmp(before, after, 32U) == 0);
@@ -183,7 +197,7 @@ int main(int argc, char **argv)
 {
     if (argc == 2 && strcmp(argv[1], "--vectors") == 0) return run(0U, 1);
     if (argc != 1) return 1;
-    for (unsigned mode = 0U; mode < 18U; ++mode)
+    for (unsigned mode = 0U; mode < 27U; ++mode)
         if (run(mode, 0) != 0) return 1;
     return 0;
 }

@@ -61,6 +61,8 @@ typedef struct lxp_module_account_snapshot {
 } lxp_module_account_snapshot;
 
 typedef struct lxp_ledger_admission_facts {
+    uint8_t actor[32];
+    uint8_t verified_key[32];
     uint8_t activity_binding[32];
     uint8_t account_id[32];
     uint32_t activity_type;
@@ -268,6 +270,9 @@ const uint8_t *lxp_ctx_activity_id(const lxp_module_ctx *ctx);
 lxp_result lxp_kernel_bind_ledger_admission(
     lxp_module_ctx *ctx, const lxp_authority_resolved *authority,
     uint32_t activity_type);
+lxp_result lxp_kernel_withdraw_execution_sequence(
+    lxp_module_ctx *ctx, const lxp_authority_resolved *authority,
+    const uint8_t account_id[32], uint64_t legacy_sequence, uint64_t *sequence);
 lxp_result lxp_ctx_ledger_execution_sequence(
     lxp_module_ctx *ctx, const uint8_t principal[32],
     uint64_t legacy_sequence, uint64_t *sequence);
