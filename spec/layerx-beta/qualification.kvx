@@ -7600,3 +7600,11 @@ symbol = "lxp_receipt lxp_ledger_receipt_input"
 observed = "Canonical receipt structures still lack before/after total_units. The Asset requirement now mandates explicit versioned authenticated supply binding and rejects the earlier no-new-schema claim. Receipt structs, wire codecs and verification are outside owned paths."
 assumption = "Endpoint tamper tests do not qualify supply tamper refusal. A coordinated receipt interface and verifier change is required; the earlier resolution in observation.3.7.27 does not close this finding."
 severity = "blocker"
+
+[observation.3.7.41]
+task = "3.7"
+file = "cmd/layerxd/lxp_daemon_process.c"
+symbol = "collect_assets"
+observed = "Committed Asset records are decoded and overlaid with cap/supply consistency checks, but the initial account scan still synthesizes registered=true and paused=false for every balance asset. This reconstruction path is outside owned paths."
+assumption = "Remove synthesis through an authoritative bootstrap and persisted registry interface, then qualify actual daemon restart metadata and root equality. Snapshot equality alone does not establish this."
+severity = "blocker"
