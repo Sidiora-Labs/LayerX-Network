@@ -173,5 +173,49 @@ fn parse_agent(agent: &str) -> Result<AccountNamespace, AccountError> {
             };
         }
     }
+    if let Some((did, asset)) = agent.rsplit_once(":asset:") {
+        if did.is_empty() || did.len() > MAX_DID_BYTES {
+            return Err(AccountError::EmptyComponent);
+        }
+        if asset.len() == 64
+            && asset
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        {
+            return Ok(AccountNamespace::AgentAsset);
+        }
+    }
     Err(AccountError::UnknownNamespace)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn per_asset_namespace_is_exact() {
+        let valid = format!("agent:did:layerx:alice:asset:{}", "ab".repeat(32));
+        assert_eq!(
+            AccountId::parse(&valid).map(|a| a.namespace()),
+            Ok(AccountNamespace::AgentAsset)
+        );
+        for asset in [
+            "ab".repeat(31),
+            "ab".repeat(33),
+            "AB".repeat(32),
+            "gg".repeat(32),
+            format!("{}:extra", "ab".repeat(32)),
+        ] {
+            assert!(AccountId::parse(&format!("agent:did:layerx:alice:asset:{asset}")).is_err());
+        }
+        assert!(AccountId::parse(&format!("agent::asset:{}", "ab".repeat(32))).is_err());
+        assert!(AccountId::parse(&format!(
+            "agent:{}:asset:{}",
+            "a".repeat(MAX_DID_BYTES + 1),
+            "ab".repeat(32)
+        ))
+        .is_err());
+        assert!(AccountId::parse("agent:did:layerx:alice:main").is_ok());
+        assert!(AccountId::parse("agent:did:layerx:alice:unknown:abc").is_err());
+    }
 }
