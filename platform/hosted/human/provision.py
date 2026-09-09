@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import stat
 import unicodedata
+import time
 
 
 class Refused(ValueError):
@@ -236,6 +237,24 @@ def recovery_policy(value, path):
     require(any(value['root']), path, 'nonzero root')
     uint(value['threshold'], 16, path, 'threshold', 1)
     uint(value['delay_seconds'], 64, path, 'delay_seconds', 1)
+
+
+def owner_request(work_dir, secrets_dir):
+    path = Path(secrets_dir) / 'owner-email'
+    raw = protected_bytes(path, 320)
+    try:
+        email = raw.decode('utf-8').removesuffix('\n')
+    except UnicodeDecodeError as error:
+        raise Refused(f'{path}: invalid owner email encoding') from error
+    require(bool(email) and email == email.strip() and email.count('@') == 1
+            and not any(c.isspace() or unicodedata.category(c) == 'Cc' for c in email),
+            path, 'owner email')
+    output = Path(work_dir) / 'human-evidence-input/owner-request.json'
+    try:
+        write_json(output, {'email': email, 'display_name': 'Beta owner',
+                            'idempotency_key': os.urandom(32).hex(), 'now': int(time.time())})
+    except OSError as error:
+        raise Refused(f'{output}: owner request publication refused; reconcile existing output') from error
 
 
 def job_input(work_dir):
@@ -591,6 +610,7 @@ def qualify_generated_set(work_dir, registry_path, secrets_dir, network, chain):
 def main():
     parser = argparse.ArgumentParser()
     mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument('--prepare-owner-request', action='store_true')
     mode.add_argument('--validate-evidence-inputs', action='store_true')
     mode.add_argument('--materialize-journal', action='store_true')
     mode.add_argument('--validate-owner-registration', action='store_true')
@@ -616,7 +636,10 @@ def main():
     parser.add_argument('--output', type=Path)
     parser.add_argument('--work-dir', type=Path, required=True)
     args = parser.parse_args()
-    if args.produce_owner_registration:
+    if args.prepare_owner_request:
+        require(args.secrets_dir is not None, args.work_dir, 'secrets directory')
+        owner_request(args.work_dir, args.secrets_dir)
+    elif args.produce_owner_registration:
         from owner_native import produce
         produce(args.work_dir)
     elif args.materialize_journal:

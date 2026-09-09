@@ -1823,6 +1823,9 @@ beta_cluster_up() {
         wait_for_pod_ready "$TESTNET_NAMESPACE" app=layerx-program-registry 600
         registry_deployment_produce
         human_journal_deploy
+        (umask 077; mkdir -p "$WORK_DIR/human-evidence-input")
+        python3 "$REPO_ROOT/platform/hosted/human/provision.py" --prepare-owner-request \
+            --work-dir "$WORK_DIR" --secrets-dir "$SECRETS_DIR"
         human_evidence_provision
         human_policy_publish
     fi
