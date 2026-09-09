@@ -45,3 +45,5 @@ pub use withdraw::{
 
 /// Stable identity of the Paxeer custody-boundary client.
 pub const CRATE_IDENTITY: &str = "layerx-paxeer-client";
+
+pub mod state_proof;
