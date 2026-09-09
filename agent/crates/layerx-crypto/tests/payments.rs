@@ -1,4 +1,4 @@
-use layerx_crypto::disclosure::{bind, DisclosureError};
+use layerx_crypto::disclosure::{bind, AmountRole, CounterpartyRole, DisclosureError};
 use layerx_crypto::payments::Payment;
 use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
 use layerx_wire::{encode::Encoder, hash::Domain};
@@ -132,6 +132,75 @@ fn fixtures_roundtrip_and_bind_all_fields() -> Result<(), Box<dyn std::error::Er
         let mut extra = payload;
         extra.push(0);
         assert!(Payment::decode(module, ordinal, &extra, ACTOR).is_err());
+    }
+    Ok(())
+}
+
+#[test]
+fn monetary_disclosures_name_every_limit_and_transfer_party(
+) -> Result<(), Box<dyn std::error::Error>> {
+    for &(module, ordinal, fixture) in VECTORS {
+        let payload = hex(fixture);
+        let (canonical, registry) = canonical(module, ordinal, &payload)?;
+        let disclosure = bind(&canonical, &registry)?;
+        match disclosure.payment.as_ref() {
+            Some(Payment::Register(registration)) => assert_eq!(
+                disclosure.amounts,
+                [layerx_crypto::disclosure::DisclosedAmount {
+                    role: AmountRole::SupplyCap,
+                    value: registration.supply_cap,
+                }]
+            ),
+            Some(Payment::Receive {
+                from,
+                to,
+                amount,
+                payer_grant,
+                ..
+            }) => {
+                assert_eq!(disclosure.expiry.payload_expires_at, payer_grant.expiration);
+                assert_eq!(disclosure.counterparties.len(), 2);
+                assert_eq!(disclosure.counterparties[0].role, CounterpartyRole::Payer);
+                assert_eq!(disclosure.counterparties[0].account, *from);
+                assert_eq!(
+                    disclosure.counterparties[1].role,
+                    CounterpartyRole::Recipient
+                );
+                assert_eq!(disclosure.counterparties[1].account, *to);
+                assert_eq!(
+                    disclosure
+                        .amounts
+                        .iter()
+                        .map(|entry| entry.value)
+                        .collect::<Vec<_>>(),
+                    [*amount, payer_grant.per_draw_maximum, payer_grant.allowance]
+                );
+            }
+            Some(Payment::IssueGrant(grant)) => {
+                assert_eq!(disclosure.expiry.payload_expires_at, grant.expiration);
+                assert_eq!(disclosure.counterparties.len(), 2);
+                assert_eq!(disclosure.counterparties[0].account, grant.from);
+                assert_eq!(disclosure.counterparties[1].account, grant.recipient);
+                assert_eq!(
+                    disclosure
+                        .amounts
+                        .iter()
+                        .map(|entry| entry.value)
+                        .collect::<Vec<_>>(),
+                    [grant.per_draw_maximum, grant.allowance]
+                );
+            }
+            Some(Payment::ProgramTransfer { legs, .. }) => {
+                assert_eq!(disclosure.counterparties.len(), legs.len() * 2);
+                assert_eq!(disclosure.amounts.len(), legs.len());
+                for (index, leg) in legs.iter().enumerate() {
+                    assert_eq!(disclosure.counterparties[index * 2].account, leg.from);
+                    assert_eq!(disclosure.counterparties[index * 2 + 1].account, leg.to);
+                    assert_eq!(disclosure.amounts[index].value, leg.amount);
+                }
+            }
+            _ => {}
+        }
     }
     Ok(())
 }

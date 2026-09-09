@@ -338,6 +338,8 @@ fn exported_payment_and_wait_paths_refuse_unrelated_scopes_before_execution() {
         PaymentTool::Create,
         PaymentTool::Mint,
         PaymentTool::Transfer,
+        PaymentTool::IssueGrant,
+        PaymentTool::DrawGrant,
     ] {
         assert!(matches!(
             execute_payment(

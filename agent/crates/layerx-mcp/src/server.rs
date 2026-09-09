@@ -48,7 +48,7 @@ pub struct ToolDefinition {
     pub evidence: &'static str,
 }
 
-const TOOL_CATALOGUE: [ToolDefinition; 18] = [
+const TOOL_CATALOGUE: [ToolDefinition; 20] = [
     ToolDefinition {
         name: "balance.get",
         kind: ToolKind::Read,
@@ -165,6 +165,20 @@ const TOOL_CATALOGUE: [ToolDefinition; 18] = [
         name: "token.transfer",
         kind: ToolKind::Write,
         required_scope: "write:token:transfer",
+        mutation: "core submission through the ordinary daemon path",
+        evidence: "verified receipt or honest non-terminal state",
+    },
+    ToolDefinition {
+        name: "grant.issue",
+        kind: ToolKind::Write,
+        required_scope: "write:grant:issue",
+        mutation: "core submission through the ordinary daemon path",
+        evidence: "verified receipt or honest non-terminal state",
+    },
+    ToolDefinition {
+        name: "grant.draw",
+        kind: ToolKind::Write,
+        required_scope: "write:grant:draw",
         mutation: "core submission through the ordinary daemon path",
         evidence: "verified receipt or honest non-terminal state",
     },
@@ -681,9 +695,8 @@ fn tool_operation(name: &str) -> Option<Operation> {
         "availability.get" => Some(Operation::AvailabilityFetch),
         "activity.prepare" | "activity.disclose" => Some(Operation::Prepare),
         "activity.sign" => Some(Operation::Sign),
-        "activity.submit" | "wallet.send" | "token.create" | "token.mint" | "token.transfer" => {
-            Some(Operation::Submit)
-        }
+        "activity.submit" | "wallet.send" | "token.create" | "token.mint" | "token.transfer"
+        | "grant.issue" | "grant.draw" => Some(Operation::Submit),
         "activity.track" => Some(Operation::Track),
         "activity.wait" => Some(Operation::Wait),
         _ => None,

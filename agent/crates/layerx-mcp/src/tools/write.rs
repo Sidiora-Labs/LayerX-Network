@@ -93,6 +93,8 @@ pub enum PaymentTool {
     Create,
     Mint,
     Transfer,
+    IssueGrant,
+    DrawGrant,
 }
 
 impl PaymentTool {
@@ -103,6 +105,8 @@ impl PaymentTool {
             Self::Create => "token.create",
             Self::Mint => "token.mint",
             Self::Transfer => "token.transfer",
+            Self::IssueGrant => "grant.issue",
+            Self::DrawGrant => "grant.draw",
         }
     }
 }

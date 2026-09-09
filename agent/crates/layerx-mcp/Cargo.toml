@@ -10,6 +10,7 @@ layerx-sdk = { path = "../layerx-sdk" }
 layerx-types = { path = "../layerx-types" }
 layerx-agent-api = { path = "../layerx-agent-api" }
 layerx-agentd = { path = "../layerx-agentd" }
+layerx-crypto = { path = "../layerx-crypto" }
 sha2 = "0.10"
 
 [lints]

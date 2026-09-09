@@ -11,7 +11,11 @@ use layerx_wire::encode::Encoder;
 use layerx_wire::hash;
 use layerx_wire::WireError;
 
-use crate::{ct, payments::Payment, SignatureMessage};
+use crate::{
+    ct,
+    payments::{Grant, Payment},
+    SignatureMessage,
+};
 
 const ASSET_SEND_ORDINAL: u16 = 5;
 const SEND_WIRE_TAG: u16 = 0x5301;
@@ -62,6 +66,12 @@ pub enum AmountRole {
     Transfer,
     /// Maximum spend permitted in one configured budget period.
     SpendingLimit,
+    /// Maximum units that can ever be issued for a registered asset.
+    SupplyCap,
+    /// Maximum units one payer-grant draw may transfer.
+    PerDrawMaximum,
+    /// Total units authorized by one payer grant.
+    GrantAllowance,
 }
 
 /// One complete amount entry decoded from a module payload.
@@ -542,6 +552,89 @@ fn semantics(activity: &Activity) -> Result<SendSemantics, DisclosureError> {
     }
 }
 
+fn disclose_party(
+    counterparties: &mut Vec<Counterparty>,
+    role: CounterpartyRole,
+    account: [u8; 32],
+) {
+    counterparties.push(Counterparty { role, account });
+}
+
+fn disclose_amount(amounts: &mut Vec<DisclosedAmount>, role: AmountRole, value: u128) {
+    amounts.push(DisclosedAmount { role, value });
+}
+
+fn disclose_grant(
+    grant: &Grant,
+    counterparties: &mut Vec<Counterparty>,
+    amounts: &mut Vec<DisclosedAmount>,
+) {
+    disclose_party(counterparties, CounterpartyRole::Payer, grant.from);
+    disclose_party(counterparties, CounterpartyRole::Recipient, grant.recipient);
+    disclose_grant_amounts(grant, amounts);
+}
+
+fn disclose_grant_amounts(grant: &Grant, amounts: &mut Vec<DisclosedAmount>) {
+    disclose_amount(amounts, AmountRole::PerDrawMaximum, grant.per_draw_maximum);
+    disclose_amount(amounts, AmountRole::GrantAllowance, grant.allowance);
+}
+
+fn payment_monetary_fields(
+    payment: &Payment,
+) -> (Vec<Counterparty>, Vec<DisclosedAmount>, [u8; 32]) {
+    let mut counterparties = Vec::new();
+    let mut amounts = Vec::new();
+    let asset = match payment {
+        Payment::Register(registration) => {
+            disclose_amount(&mut amounts, AmountRole::SupplyCap, registration.supply_cap);
+            registration.asset
+        }
+        Payment::OpenAccount { asset } | Payment::ProgramAccount { asset, .. } => *asset,
+        Payment::Receive {
+            from,
+            to,
+            asset,
+            amount,
+            payer_grant,
+            ..
+        } => {
+            disclose_party(&mut counterparties, CounterpartyRole::Payer, *from);
+            disclose_party(&mut counterparties, CounterpartyRole::Recipient, *to);
+            disclose_amount(&mut amounts, AmountRole::Transfer, *amount);
+            disclose_grant_amounts(payer_grant, &mut amounts);
+            *asset
+        }
+        Payment::Mint { asset, to, amount } => {
+            disclose_party(&mut counterparties, CounterpartyRole::Recipient, *to);
+            disclose_amount(&mut amounts, AmountRole::Transfer, *amount);
+            *asset
+        }
+        Payment::Burn {
+            asset,
+            from,
+            amount,
+        } => {
+            disclose_party(&mut counterparties, CounterpartyRole::Payer, *from);
+            disclose_amount(&mut amounts, AmountRole::Transfer, *amount);
+            *asset
+        }
+        Payment::IssueGrant(grant) => {
+            disclose_grant(grant, &mut counterparties, &mut amounts);
+            grant.asset
+        }
+        Payment::ProgramTransfer { legs, .. } => {
+            for leg in legs {
+                disclose_party(&mut counterparties, CounterpartyRole::Payer, leg.from);
+                disclose_party(&mut counterparties, CounterpartyRole::Recipient, leg.to);
+                disclose_amount(&mut amounts, AmountRole::Transfer, leg.amount);
+            }
+            [0; 32]
+        }
+        Payment::RevokeGrant { .. } => [0; 32],
+    };
+    (counterparties, amounts, asset)
+}
+
 fn payment_fields(activity: &Activity) -> Result<DisclosureFields, DisclosureError> {
     let TimestampBound {
         not_before,
@@ -570,60 +663,11 @@ fn payment_fields(activity: &Activity) -> Result<DisclosureFields, DisclosureErr
             return Err(DisclosureError::MalformedPayload);
         }
     }
-    let mut counterparties = Vec::new();
-    let mut amounts = Vec::new();
-    let asset = match &payment {
-        Payment::Register(r) => r.asset,
-        Payment::OpenAccount { asset } | Payment::ProgramAccount { asset, .. } => *asset,
-        Payment::Receive {
-            from,
-            to,
-            asset,
-            amount,
-            ..
-        } => {
-            counterparties.push(Counterparty {
-                role: CounterpartyRole::Payer,
-                account: *from,
-            });
-            counterparties.push(Counterparty {
-                role: CounterpartyRole::Recipient,
-                account: *to,
-            });
-            amounts.push(DisclosedAmount {
-                role: AmountRole::Transfer,
-                value: *amount,
-            });
-            *asset
-        }
-        Payment::Mint { asset, to, amount } => {
-            counterparties.push(Counterparty {
-                role: CounterpartyRole::Recipient,
-                account: *to,
-            });
-            amounts.push(DisclosedAmount {
-                role: AmountRole::Transfer,
-                value: *amount,
-            });
-            *asset
-        }
-        Payment::Burn {
-            asset,
-            from,
-            amount,
-        } => {
-            counterparties.push(Counterparty {
-                role: CounterpartyRole::Payer,
-                account: *from,
-            });
-            amounts.push(DisclosedAmount {
-                role: AmountRole::Transfer,
-                value: *amount,
-            });
-            *asset
-        }
-        Payment::IssueGrant(g) => g.asset,
-        Payment::RevokeGrant { .. } | Payment::ProgramTransfer { .. } => [0; 32],
+    let (counterparties, amounts, asset) = payment_monetary_fields(&payment);
+    let payload_expires_at = match &payment {
+        Payment::Receive { payer_grant, .. } => payer_grant.expiration,
+        Payment::IssueGrant(grant) => grant.expiration,
+        _ => not_after,
     };
     Ok(DisclosureFields {
         activity_type: activity.activity_type(),
@@ -636,7 +680,7 @@ fn payment_fields(activity: &Activity) -> Result<DisclosureFields, DisclosureErr
         expiry: Expiry {
             not_before,
             not_after,
-            payload_expires_at: not_after,
+            payload_expires_at,
         },
         idempotency_key: activity.idempotency_key(),
         evm_payout_binding: None,
@@ -874,6 +918,9 @@ impl Disclosure {
             encoder.u8(match amount.role {
                 AmountRole::Transfer => 1,
                 AmountRole::SpendingLimit => 2,
+                AmountRole::SupplyCap => 3,
+                AmountRole::PerDrawMaximum => 4,
+                AmountRole::GrantAllowance => 5,
             })?;
             encoder.u128(amount.value)?;
         }

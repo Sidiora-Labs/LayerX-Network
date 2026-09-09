@@ -298,7 +298,9 @@ impl Wallet<'_> {
             ) => {}
             Err(error) => return Err(error),
         }
-        self.wait_for(id, options.commitment, options.wait_timeout)
+        let mut receipt = self.wait_for(id, options.commitment, options.wait_timeout)?;
+        receipt.bind_canonical_activity(canonical);
+        Ok(receipt)
     }
 }
 

@@ -9,10 +9,13 @@ use layerx_proof::inclusion::{
 };
 use layerx_proof::merkle::Proof;
 use layerx_proof::receipt::{
-    verify_outcome, AuthorizedBatch, ReceiptCheck, VerificationFailure,
+    verify_outcome, verify_sequencer_signature, AuthorizedBatch, ReceiptCheck, VerificationFailure,
     VerifiedReceipt as ProofVerifiedReceipt,
 };
-use layerx_wire::hash::receipt_execution_batch_id;
+use layerx_types::ids::Did;
+use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
+use layerx_wire::activity::decode_signed;
+use layerx_wire::hash::{activity_id, receipt_execution_batch_id};
 use layerx_wire::receipt::{decode, decode_batch_header, BatchHeader};
 use sha2::{Digest, Sha256};
 
@@ -20,6 +23,7 @@ use crate::config::{read_protected_source, ProtectedSourceError, StartupConfig};
 
 const MAX_AUTHORITY_SOURCE_BYTES: usize = 65_536;
 const AUTHORITY_SOURCE_VERSION: &str = "layerx-sequencer-authority-v1";
+const MAX_CUMULATIVE_EVIDENCE_ITEMS: usize = 4_096;
 
 /// One sequencer key and validity interval installed by trusted daemon configuration.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -369,9 +373,48 @@ impl ProtocolEvidenceVerifier {
             global_sequence: protocol.global_sequence(),
             result_code: protocol.result_code(),
             amount: protocol.amount(),
+            module_id: protocol.module_id(),
+            operation: protocol.operation(),
             verified,
             inclusion,
         })
+    }
+
+    fn verify_signed_receipt_inclusion(
+        &self,
+        raw: &RawReceiptEvidence,
+    ) -> Result<VerifiedCumulativeReceipt, ReceiptEvidenceError> {
+        let (header, authorization) = self
+            .authorization_for(&raw.canonical_header)
+            .map_err(ReceiptEvidenceError::Policy)?;
+        verify_receipt_inclusion(
+            &raw.canonical_receipt,
+            &raw.proof,
+            &raw.canonical_header,
+            &raw.header_signature,
+            &authorization,
+        )
+        .map_err(ReceiptEvidenceError::Inclusion)?;
+        let receipt =
+            verify_sequencer_signature(&raw.canonical_receipt, authorization.public_key())
+                .map_err(ReceiptEvidenceError::Receipt)?;
+        let protocol =
+            receipt
+                .protocol()
+                .ok_or(ReceiptEvidenceError::Receipt(VerificationFailure {
+                    check: ReceiptCheck::ReceiptShape,
+                }))?;
+        if protocol.protocol_version() != header.protocol_version() {
+            return Err(ReceiptEvidenceError::ProtocolVersion);
+        }
+        if protocol.global_sequence() < header.first_sequence()
+            || protocol.global_sequence() > header.last_sequence()
+        {
+            return Err(ReceiptEvidenceError::SequenceRange);
+        }
+        Ok(VerifiedCumulativeReceipt::from_protocol(
+            protocol, header, &raw.proof,
+        ))
     }
 
     /// Verifies a raw state leaf and issues an opaque state token.
@@ -463,6 +506,153 @@ impl EvidenceAuthority {
         raw: &RawStateEvidence,
     ) -> Result<VerifiedStateEvidence, StateEvidenceError> {
         self.verifier.verify_state(raw)
+    }
+
+    fn verify_cumulative_window(
+        &self,
+        window: CumulativeUseWindow,
+        entries: &[RawActivityReceiptEvidence],
+    ) -> Result<Vec<VerifiedCumulativeReceipt>, CumulativeUseError> {
+        let length = window
+            .last
+            .checked_sub(window.first)
+            .and_then(|distance| distance.checked_add(1))
+            .and_then(|length| usize::try_from(length).ok())
+            .ok_or(CumulativeUseError::InvalidWindow)?;
+        if length == 0 || length > MAX_CUMULATIVE_EVIDENCE_ITEMS {
+            return Err(CumulativeUseError::InvalidWindow);
+        }
+        if entries.is_empty() || entries.len() > length {
+            return Err(CumulativeUseError::IncompleteWindow);
+        }
+        let mut receipt_refs = BTreeSet::new();
+        let mut activity_ids = BTreeSet::new();
+        let mut previous_header: Option<BatchHeader> = None;
+        let mut current_header: Option<BatchHeader> = None;
+        let mut expected_leaf = 0_u32;
+        let mut activity_count = 0_u32;
+        let mut covered_until = window.first;
+        let mut verified = Vec::with_capacity(entries.len());
+        for entry in entries {
+            let receipt = match &entry.receipt {
+                CumulativeReceiptEvidence::Outcome(raw) => self
+                    .verify_receipt(raw)
+                    .map(|value| VerifiedCumulativeReceipt::from_verified(&value, raw.proof()))
+                    .map_err(CumulativeUseError::Receipt)?,
+                CumulativeReceiptEvidence::SignedInclusion(raw) => self
+                    .verifier
+                    .verify_signed_receipt_inclusion(raw)
+                    .map_err(CumulativeUseError::Receipt)?,
+            };
+            let receipt_ref: [u8; 32] = Sha256::digest(entry.receipt().canonical_receipt()).into();
+            if !receipt_refs.insert(receipt_ref) || !activity_ids.insert(receipt.activity_id()) {
+                return Err(CumulativeUseError::Duplicate);
+            }
+            let header = receipt.header();
+            if current_header.as_ref() != Some(header) {
+                if expected_leaf != activity_count || header.first_sequence() != covered_until {
+                    return Err(CumulativeUseError::IncompleteWindow);
+                }
+                if previous_header.as_ref().is_some_and(|previous| {
+                    previous.batch_number().checked_add(1) != Some(header.batch_number())
+                        || header.previous_state_root() != previous.resulting_state_root()
+                }) {
+                    return Err(CumulativeUseError::BatchChain);
+                }
+                activity_count = header
+                    .last_sequence()
+                    .checked_sub(header.first_sequence())
+                    .and_then(|value| u32::try_from(value).ok())
+                    .filter(|value| *value > 0)
+                    .ok_or(CumulativeUseError::Sequence)?;
+                expected_leaf = 0;
+                current_header = Some(header.clone());
+            }
+            let expected_leaf_count = activity_count
+                .checked_add(1)
+                .ok_or(CumulativeUseError::InvalidWindow)?;
+            if receipt.leaf_count() != expected_leaf_count
+                || receipt.leaf_index() != expected_leaf
+                || receipt.global_sequence()
+                    != header
+                        .first_sequence()
+                        .checked_add(u64::from(expected_leaf))
+                        .ok_or(CumulativeUseError::Sequence)?
+            {
+                return Err(CumulativeUseError::IncompleteWindow);
+            }
+            expected_leaf = expected_leaf
+                .checked_add(1)
+                .ok_or(CumulativeUseError::InvalidWindow)?;
+            if expected_leaf == activity_count {
+                covered_until = header
+                    .last_sequence()
+                    .checked_add(1)
+                    .ok_or(CumulativeUseError::InvalidWindow)?;
+                previous_header = Some(header.clone());
+            }
+            verified.push(receipt);
+        }
+        if expected_leaf != activity_count
+            || covered_until
+                != window
+                    .last
+                    .checked_add(1)
+                    .ok_or(CumulativeUseError::InvalidWindow)?
+        {
+            return Err(CumulativeUseError::IncompleteWindow);
+        }
+        Ok(verified)
+    }
+
+    /// Authenticates a complete protocol-sequence window and derives cumulative
+    /// successful activity use for one actor from the exact executed activities.
+    ///
+    /// # Errors
+    ///
+    /// Refuses empty, oversized, incomplete, duplicated, noncanonical, forked,
+    /// or receipt/activity-mismatched windows before issuing cumulative facts.
+    pub fn authenticate_cumulative_use(
+        &self,
+        actor: &Did,
+        window: CumulativeUseWindow,
+        entries: &[RawActivityReceiptEvidence],
+    ) -> Result<AuthenticatedCumulativeUse, CumulativeUseError> {
+        let receipts = self.verify_cumulative_window(window, entries)?;
+        let mut amount = 0_u128;
+        let mut count = 0_u64;
+        for (entry, receipt) in entries.iter().zip(receipts) {
+            let module = ModuleId::from_u16(receipt.module_id())
+                .map_err(|_| CumulativeUseError::Activity)?;
+            let kind = ActivityType::new(module, u16::from(receipt.operation()))
+                .map_err(|_| CumulativeUseError::Activity)?;
+            let registration = ModuleRegistration::new(module, &[kind])
+                .map_err(|_| CumulativeUseError::Activity)?;
+            let registry =
+                ModuleRegistry::new(&[registration]).map_err(|_| CumulativeUseError::Activity)?;
+            let activity = decode_signed(&entry.canonical_activity, &registry)
+                .map_err(|_| CumulativeUseError::Activity)?;
+            if activity_id(&activity).map_err(|_| CumulativeUseError::Activity)?
+                != receipt.activity_id()
+                || activity.activity_type() != kind
+            {
+                return Err(CumulativeUseError::ActivityReceiptMismatch);
+            }
+            if receipt.result_code() == 0 && activity.actor_did() == actor.as_bytes() {
+                amount = amount
+                    .checked_add(receipt.amount())
+                    .ok_or(CumulativeUseError::AmountOverflow)?;
+                count = count
+                    .checked_add(1)
+                    .ok_or(CumulativeUseError::CountOverflow)?;
+            }
+        }
+        Ok(AuthenticatedCumulativeUse {
+            actor: actor.clone(),
+            window,
+            amount,
+            count,
+        })
     }
 
     pub(crate) fn receipt_replay_guard() -> ReceiptReplayGuard {
@@ -559,6 +749,184 @@ pub enum ReceiptEvidenceError {
     BatchIdentity,
 }
 
+/// Inclusive global-sequence window covered by cumulative-use evidence.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CumulativeUseWindow {
+    pub first: u64,
+    pub last: u64,
+}
+
+/// One exact signed activity paired with its independently authenticated receipt.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RawActivityReceiptEvidence {
+    canonical_activity: Vec<u8>,
+    receipt: CumulativeReceiptEvidence,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum CumulativeReceiptEvidence {
+    Outcome(RawReceiptEvidence),
+    SignedInclusion(RawReceiptEvidence),
+}
+
+impl RawActivityReceiptEvidence {
+    #[must_use]
+    pub fn new(canonical_activity: Vec<u8>, receipt: RawReceiptEvidence) -> Self {
+        Self {
+            canonical_activity,
+            receipt: CumulativeReceiptEvidence::Outcome(receipt),
+        }
+    }
+
+    /// Admits the gateway proof shape: exact sequencer-signed receipt bytes
+    /// included in an independently authenticated signed batch header.
+    #[must_use]
+    pub fn from_signed_inclusion(canonical_activity: Vec<u8>, receipt: RawReceiptEvidence) -> Self {
+        Self {
+            canonical_activity,
+            receipt: CumulativeReceiptEvidence::SignedInclusion(receipt),
+        }
+    }
+
+    #[must_use]
+    pub fn canonical_activity(&self) -> &[u8] {
+        &self.canonical_activity
+    }
+
+    #[must_use]
+    pub const fn receipt(&self) -> &RawReceiptEvidence {
+        match &self.receipt {
+            CumulativeReceiptEvidence::Outcome(receipt)
+            | CumulativeReceiptEvidence::SignedInclusion(receipt) => receipt,
+        }
+    }
+}
+
+struct VerifiedCumulativeReceipt {
+    activity_id: [u8; 32],
+    global_sequence: u64,
+    result_code: i32,
+    amount: u128,
+    module_id: u16,
+    operation: u8,
+    header: BatchHeader,
+    leaf_index: u32,
+    leaf_count: u32,
+}
+
+impl VerifiedCumulativeReceipt {
+    fn from_verified(receipt: &VerifiedReceiptEvidence, proof: &Proof) -> Self {
+        let header = receipt.inclusion.header().header().clone();
+        Self {
+            activity_id: receipt.activity_id(),
+            global_sequence: receipt.global_sequence(),
+            result_code: receipt.result_code(),
+            amount: receipt.amount(),
+            module_id: receipt.module_id(),
+            operation: receipt.operation(),
+            header,
+            leaf_index: proof.leaf_index(),
+            leaf_count: proof.leaf_count(),
+        }
+    }
+
+    fn from_protocol(
+        protocol: &layerx_wire::receipt::ProtocolReceipt,
+        header: BatchHeader,
+        proof: &Proof,
+    ) -> Self {
+        Self {
+            activity_id: protocol.activity_id(),
+            global_sequence: protocol.global_sequence(),
+            result_code: protocol.result_code(),
+            amount: protocol.amount(),
+            module_id: protocol.module_id(),
+            operation: protocol.operation(),
+            header,
+            leaf_index: proof.leaf_index(),
+            leaf_count: proof.leaf_count(),
+        }
+    }
+
+    const fn activity_id(&self) -> [u8; 32] {
+        self.activity_id
+    }
+
+    const fn global_sequence(&self) -> u64 {
+        self.global_sequence
+    }
+
+    const fn result_code(&self) -> i32 {
+        self.result_code
+    }
+
+    const fn amount(&self) -> u128 {
+        self.amount
+    }
+
+    const fn module_id(&self) -> u16 {
+        self.module_id
+    }
+
+    const fn operation(&self) -> u8 {
+        self.operation
+    }
+
+    const fn header(&self) -> &BatchHeader {
+        &self.header
+    }
+
+    const fn leaf_index(&self) -> u32 {
+        self.leaf_index
+    }
+
+    const fn leaf_count(&self) -> u32 {
+        self.leaf_count
+    }
+}
+
+/// Opaque cumulative facts issued only for a complete authenticated window.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuthenticatedCumulativeUse {
+    actor: Did,
+    window: CumulativeUseWindow,
+    amount: u128,
+    count: u64,
+}
+
+impl AuthenticatedCumulativeUse {
+    pub(crate) const fn actor(&self) -> &Did {
+        &self.actor
+    }
+
+    pub(crate) const fn window(&self) -> CumulativeUseWindow {
+        self.window
+    }
+
+    pub(crate) const fn amount(&self) -> u128 {
+        self.amount
+    }
+
+    pub(crate) const fn count(&self) -> u64 {
+        self.count
+    }
+}
+
+/// Exact refusal while producing authenticated cumulative-use facts.
+#[derive(Debug)]
+pub enum CumulativeUseError {
+    InvalidWindow,
+    IncompleteWindow,
+    Receipt(ReceiptEvidenceError),
+    Duplicate,
+    Sequence,
+    Activity,
+    ActivityReceiptMismatch,
+    BatchChain,
+    AmountOverflow,
+    CountOverflow,
+}
+
 /// Receipt facts available only after configured policy and canonical proof verification.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VerifiedReceiptEvidence {
@@ -569,6 +937,8 @@ pub struct VerifiedReceiptEvidence {
     global_sequence: u64,
     result_code: i32,
     amount: u128,
+    module_id: u16,
+    operation: u8,
 }
 
 impl VerifiedReceiptEvidence {
@@ -605,6 +975,16 @@ impl VerifiedReceiptEvidence {
     #[must_use]
     pub fn amount(&self) -> u128 {
         self.amount
+    }
+
+    #[must_use]
+    pub const fn module_id(&self) -> u16 {
+        self.module_id
+    }
+
+    #[must_use]
+    pub const fn operation(&self) -> u8 {
+        self.operation
     }
 }
 

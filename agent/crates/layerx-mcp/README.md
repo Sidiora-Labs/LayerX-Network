@@ -35,6 +35,8 @@ Read tools are absent from the list when the bound scope does not include them. 
 | `token.create` | write | `write:token:create` | `Submit` |
 | `token.mint` | write | `write:token:mint` | `Submit` |
 | `token.transfer` | write | `write:token:transfer` | `Submit` |
+| `grant.issue` | write | `write:grant:issue` | `Submit` |
+| `grant.draw` | write | `write:grant:draw` | `Submit` |
 | `activity.track` | write | `write:track` | `Track` |
 | `activity.wait` | write | `write:activity:wait` | `Wait` |
 

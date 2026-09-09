@@ -19,6 +19,15 @@ pub struct VerifiedRpcReceipt {
     receipt: Receipt,
     commitment: Commitment,
     canonical: Vec<u8>,
+    batch_evidence: Option<VerifiedBatchEvidence>,
+    canonical_activity: Option<Vec<u8>>,
+}
+
+/// Exact inclusion material retained after SDK verification for daemon evidence ingress.
+pub struct VerifiedBatchEvidence {
+    proof: Proof,
+    canonical_header: Vec<u8>,
+    header_signature: [u8; 64],
 }
 
 impl VerifiedRpcReceipt {
@@ -33,6 +42,39 @@ impl VerifiedRpcReceipt {
     #[must_use]
     pub fn canonical_bytes(&self) -> &[u8] {
         &self.canonical
+    }
+
+    #[must_use]
+    pub const fn batch_evidence(&self) -> Option<&VerifiedBatchEvidence> {
+        self.batch_evidence.as_ref()
+    }
+
+    /// Returns the exact submitted signed activity when this receipt came from
+    /// a wallet execution rather than an independent receipt lookup.
+    #[must_use]
+    pub fn canonical_activity(&self) -> Option<&[u8]> {
+        self.canonical_activity.as_deref()
+    }
+
+    pub(crate) fn bind_canonical_activity(&mut self, canonical: Vec<u8>) {
+        self.canonical_activity = Some(canonical);
+    }
+}
+
+impl VerifiedBatchEvidence {
+    #[must_use]
+    pub const fn proof(&self) -> &Proof {
+        &self.proof
+    }
+
+    #[must_use]
+    pub fn canonical_header(&self) -> &[u8] {
+        &self.canonical_header
+    }
+
+    #[must_use]
+    pub const fn header_signature(&self) -> [u8; 64] {
+        self.header_signature
     }
 }
 
@@ -113,12 +155,14 @@ impl RpcClient {
         {
             return Err(RpcError::Verification);
         }
-        if commitment != Commitment::Executed {
+        let batch_evidence = if commitment == Commitment::Executed {
+            None
+        } else {
             if Instant::now() >= deadline {
                 return Ok(None);
             }
             let proof = self.get_proof("receipt", id, None)?;
-            let header = verify_rpc_inclusion(&proof, id, &canonical, policy)?;
+            let evidence = verify_rpc_inclusion(&proof, id, &canonical, policy)?;
             if commitment == Commitment::Finalised {
                 if Instant::now() >= deadline {
                     return Ok(None);
@@ -132,13 +176,16 @@ impl RpcClient {
                     return Ok(None);
                 }
                 let checkpoint = self.get_checkpoint(checkpoint_id)?;
-                verify_rpc_checkpoint(&checkpoint, &header, policy)?;
+                verify_rpc_checkpoint(&checkpoint, evidence.canonical_header(), policy)?;
             }
-        }
+            Some(evidence)
+        };
         Ok(Some(VerifiedRpcReceipt {
             receipt,
             commitment,
             canonical,
+            batch_evidence,
+            canonical_activity: None,
         }))
     }
 }
@@ -148,7 +195,7 @@ fn verify_rpc_inclusion(
     id: &str,
     receipt: &[u8],
     policy: &ReceiptPolicy,
-) -> Result<Vec<u8>, RpcError> {
+) -> Result<VerifiedBatchEvidence, RpcError> {
     if value["kind"] != "receipt"
         || value["activity_id"] != id
         || hex_field(value, "canonical_value", 1_048_576)? != receipt
@@ -190,7 +237,11 @@ fn verify_rpc_inclusion(
     let proof = Proof::new(index, count, siblings).map_err(|_| RpcError::Verification)?;
     verify_receipt(receipt, &proof, &header, &signature, &policy.sequencer)
         .map_err(|_| RpcError::Verification)?;
-    Ok(header)
+    Ok(VerifiedBatchEvidence {
+        proof,
+        canonical_header: header,
+        header_signature: signature,
+    })
 }
 
 fn verify_rpc_checkpoint(

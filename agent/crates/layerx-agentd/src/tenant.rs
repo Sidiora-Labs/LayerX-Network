@@ -191,6 +191,8 @@ impl OperationClass {
                 "write:token:create",
                 "write:token:mint",
                 "write:token:transfer",
+                "write:grant:issue",
+                "write:grant:draw",
             ],
             Operation::Track => &["write", "write:track"],
             Operation::Wait => &["write", "write:activity:wait"],
@@ -497,5 +499,15 @@ mod lifecycle_scope_tests {
             assert!(!OperationClass::authorized_scopes(operation).contains(&"write:activity:wait"));
         }
         assert!(!OperationClass::authorized_scopes(Operation::Wait).contains(&"write:track"));
+    }
+
+    #[test]
+    fn grant_aliases_authorize_submit_only() {
+        for scope in ["write:grant:issue", "write:grant:draw"] {
+            assert!(OperationClass::authorized_scopes(Operation::Submit).contains(&scope));
+            for operation in [Operation::Wait, Operation::Track, Operation::ReadBalance] {
+                assert!(!OperationClass::authorized_scopes(operation).contains(&scope));
+            }
+        }
     }
 }

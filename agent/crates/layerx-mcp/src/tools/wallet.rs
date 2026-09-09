@@ -5,6 +5,8 @@ use std::task::{Context, Poll, Wake, Waker};
 use std::time::Duration;
 
 use layerx_agentd::policy::{evaluate, EvaluationInput, Outcome, PolicySet};
+use layerx_agentd::protocol_evidence::{RawActivityReceiptEvidence, RawReceiptEvidence};
+use layerx_crypto::payments::Payment;
 use layerx_sdk::rpc::{Commitment, RpcError, RpcValue};
 use layerx_sdk::rpc_verification::VerifiedRpcReceipt;
 use layerx_sdk::wallet::{PaymentOptions, Wallet};
@@ -20,6 +22,7 @@ pub enum WalletToolError {
     Policy,
     Scope,
     Arguments,
+    Evidence,
 }
 
 pub struct PaymentExecution<'a> {
@@ -52,6 +55,8 @@ pub fn execute(
         PaymentTool::Send | PaymentTool::Transfer => 5,
         PaymentTool::Create => 1,
         PaymentTool::Mint => 10,
+        PaymentTool::IssueGrant => 7,
+        PaymentTool::DrawGrant => 6,
     };
     server
         .execute_committed(
@@ -70,31 +75,8 @@ pub fn execute(
                     .map_err(WalletToolError::Rpc)
                     .and_then(|prepared| {
                         let disclosure = prepared.disclosure();
-                        let (amount, asset, counterparty) = match tool {
-                            PaymentTool::Create => (
-                                execution.options.fee_limit,
-                                execution.wallet.native_asset,
-                                layerx_sdk::rpc::wallet_account(
-                                    &execution.options.actor,
-                                    execution.wallet.native_asset,
-                                    execution.wallet.native_asset,
-                                )
-                                .map_err(WalletToolError::Rpc)?,
-                            ),
-                            _ => (
-                                disclosure
-                                    .amounts
-                                    .iter()
-                                    .try_fold(0_u128, |sum, a| sum.checked_add(a.value))
-                                    .ok_or(WalletToolError::Arguments)?,
-                                disclosure.asset,
-                                disclosure
-                                    .counterparties
-                                    .last()
-                                    .ok_or(WalletToolError::Arguments)?
-                                    .account,
-                            ),
-                        };
+                        let (amount, asset, counterparty) =
+                            policy_dimensions(tool, disclosure, execution)?;
                         if input.request.amount != amount
                             || input.request.asset != asset
                             || input.request.counterparty != counterparty
@@ -114,6 +96,76 @@ pub fn execute(
             },
         )
         .map_err(WalletToolError::Server)?
+}
+
+fn policy_dimensions(
+    tool: PaymentTool,
+    disclosure: &layerx_crypto::disclosure::Disclosure,
+    execution: &PaymentExecution<'_>,
+) -> Result<(u128, [u8; 32], [u8; 32]), WalletToolError> {
+    match (tool, disclosure.payment.as_ref()) {
+        (PaymentTool::Create, Some(Payment::Register(_))) => Ok((
+            execution.options.fee_limit,
+            execution.wallet.native_asset,
+            layerx_sdk::rpc::wallet_account(
+                &execution.options.actor,
+                execution.wallet.native_asset,
+                execution.wallet.native_asset,
+            )
+            .map_err(WalletToolError::Rpc)?,
+        )),
+        (PaymentTool::Mint, Some(Payment::Mint { asset, to, amount })) => {
+            Ok((*amount, *asset, *to))
+        }
+        (PaymentTool::IssueGrant, Some(Payment::IssueGrant(grant))) => {
+            Ok((grant.allowance, grant.asset, grant.recipient))
+        }
+        (
+            PaymentTool::DrawGrant,
+            Some(Payment::Receive {
+                from,
+                asset,
+                amount,
+                ..
+            }),
+        ) => Ok((*amount, *asset, *from)),
+        (PaymentTool::Send | PaymentTool::Transfer, None) => Ok((
+            disclosure
+                .amounts
+                .iter()
+                .try_fold(0_u128, |sum, amount| sum.checked_add(amount.value))
+                .ok_or(WalletToolError::Arguments)?,
+            disclosure.asset,
+            disclosure
+                .counterparties
+                .last()
+                .ok_or(WalletToolError::Arguments)?
+                .account,
+        )),
+        _ => Err(WalletToolError::Arguments),
+    }
+}
+
+/// Converts a wallet-produced batch-verified receipt into daemon cumulative-use ingress.
+///
+/// # Errors
+/// Refuses independent receipt lookups, executed-only receipts, or missing inclusion material.
+pub fn cumulative_evidence(
+    receipt: &VerifiedRpcReceipt,
+) -> Result<RawActivityReceiptEvidence, WalletToolError> {
+    let activity = receipt
+        .canonical_activity()
+        .ok_or(WalletToolError::Evidence)?;
+    let batch = receipt.batch_evidence().ok_or(WalletToolError::Evidence)?;
+    Ok(RawActivityReceiptEvidence::from_signed_inclusion(
+        activity.to_vec(),
+        RawReceiptEvidence::new(
+            receipt.canonical_bytes().to_vec(),
+            batch.proof().clone(),
+            batch.canonical_header().to_vec(),
+            batch.header_signature(),
+        ),
+    ))
 }
 
 /// # Errors
@@ -225,9 +277,12 @@ fn classify(result: &Result<VerifiedRpcReceipt, WalletToolError>) -> InvocationO
         Err(WalletToolError::Rpc(RpcError::Pending { .. } | RpcError::Transport)) => {
             InvocationOutcome::Unknown
         }
-        Err(WalletToolError::Policy | WalletToolError::Scope | WalletToolError::Arguments) => {
-            InvocationOutcome::Refused
-        }
+        Err(
+            WalletToolError::Policy
+            | WalletToolError::Scope
+            | WalletToolError::Arguments
+            | WalletToolError::Evidence,
+        ) => InvocationOutcome::Refused,
         Err(_) => InvocationOutcome::Failed,
     }
 }
